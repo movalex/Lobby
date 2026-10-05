@@ -5,8 +5,10 @@
 // row first, deletes the membership and sweeps the grants) left a new board with an owner grant for a
 // person who is no member any more: an orphan grant, alive again if they ever join the workspace again.
 //
-// The fix is the order: the workspace row first, the role read after it (access.ts, the lock order), so a
-// removal either waits for the creation and sweeps its grant, or goes first and the creation finds nobody.
+// The fix is the order: the workspace row first, the role read after it (access.ts, the lock order,
+// requireCreatingRoleLocked), so a removal either waits for the creation and sweeps its grant, or goes
+// first and the creation finds nobody. A stranger, a guest and a malformed workspace id are answered from
+// an unlocked peek, without the lock (a malformed id without any SQL at all: a plain 404, as before).
 //
 // PGlite has one connection, so two transactions never wait for each other here. These tests check what can
 // be seen on it: the order of a transaction's statements (statement-log.ts), and, with a removal injected
@@ -30,6 +32,7 @@ afterEach(async () => {
 // the first statement that takes the workspace row: the new lock, or (before the fix) assertBoardRoom's
 const WORKSPACE_LOCK = /FROM workspaces .*FOR NO KEY UPDATE/
 const ROLE_READ = /FROM workspace_members WHERE workspace_id = \$1 AND user_id = \$2/
+const ANY_ROW_LOCK = /FOR (NO KEY )?UPDATE|FOR SHARE/
 
 /**
  * A Db that, once, runs `act` on a transaction's own connection right before the first statement of any
@@ -144,13 +147,16 @@ describe('board creation: the workspace row is locked before the creator role is
     expect(tx, 'the creation ran in one transaction').toBeDefined()
     if (!tx) return
     const lock = indexOfStatement(tx, WORKSPACE_LOCK)
-    const role = indexOfStatement(tx, ROLE_READ)
     const grant = indexOfStatement(tx, /INSERT INTO board_members/)
     expect(lock, tx.statements.join('\n')).toBeGreaterThanOrEqual(0)
-    expect(role, tx.statements.join('\n')).toBeGreaterThanOrEqual(0)
-    // Before the fix the role was read first (unlocked): the lock came with assertBoardRoom, after it.
-    expect(lock).toBeLessThan(role)
+    // The role read that decides comes after the lock. Before the fix the only role read came before it
+    // (the first lock was assertBoardRoom's, after that read), so there is none after the lock to find.
+    const role = indexOfStatement(tx, ROLE_READ, lock + 1)
+    expect(role, tx.statements.join('\n')).toBeGreaterThan(lock)
     expect(role).toBeLessThan(grant)
+    // the unlocked peek opens the transaction, and nothing locks a row before the workspace row
+    expect(indexOfStatement(tx, ROLE_READ)).toBe(0)
+    expect(indexOfStatement(tx, ANY_ROW_LOCK)).toBe(lock)
   })
 
   it('a creator whose membership is gone when the lock is granted gets a 404: no board, no owner grant', async () => {
@@ -172,7 +178,22 @@ describe('board creation: the workspace row is locked before the creator role is
     expect(await boardsMadeBy(w.api, w.bob)).toEqual([w.board])
   })
 
-  it('locks the workspace row for a member and for nobody else (a stranger gets a 404 without the lock)', async () => {
+  it('a malformed workspace id (a NUL byte, say) is a plain 404, not a database error (500)', async () => {
+    // Postgres rejects a NUL byte in a parameter, so any statement that took the raw id from the URL
+    // before the id was checked answered 500 INTERNAL here (requireWorkspaceRole's guard answers 404).
+    for (const wid of ['%00', 'a%00b', 'wsp_%00', 'wsp_%00%00', '%00wsp_DoesNotExist0000000000']) {
+      const res = await create(w.bob, 'Nowhere', wid)
+      expect(res.statusCode, `${wid}: ${res.body}`).toBe(404)
+    }
+    // and none of them ran a single SQL statement against the workspace row
+    expect(
+      w.log.transactions.flatMap((t) => t.statements).filter((s) => WORKSPACE_LOCK.test(s)),
+      'a malformed id must not reach the lock',
+    ).toEqual([])
+    expect(await boardsMadeBy(w.api, w.bob)).toEqual([w.board])
+  })
+
+  it('locks the workspace row for a member who may create and for nobody else (a stranger gets a 404 without the lock)', async () => {
     const lockedBy = async () =>
       (
         await w.api.db.one<{ x: string }>('SELECT xmax::text AS x FROM workspaces WHERE id = $1', [
@@ -184,6 +205,38 @@ describe('board creation: the workspace row is locked before the creator role is
     expect(await lockedBy(), 'a stranger must not be able to take the workspace row').toBe(before)
     expect((await create(w.bob)).statusCode).toBe(201)
     expect(await lockedBy()).not.toBe(before)
+  })
+
+  it('a guest-role member is refused (403) without taking the workspace row', async () => {
+    await w.api.db.query(
+      "UPDATE workspace_members SET role = 'guest' WHERE workspace_id = $1 AND user_id = $2",
+      [DEV_STUDIO, w.bob.userId],
+    )
+    w.log.reset()
+    const lockedBy = async () =>
+      (
+        await w.api.db.one<{ x: string }>('SELECT xmax::text AS x FROM workspaces WHERE id = $1', [
+          DEV_STUDIO,
+        ])
+      ).x
+    const before = await lockedBy()
+    const res = await create(w.bob, 'Guest board')
+    expect(res.statusCode, res.body).toBe(403)
+    expect(await lockedBy(), 'a guest must not be able to take the workspace row').toBe(before)
+    expect(w.log.transactions.flatMap((t) => t.statements).filter((s) => ANY_ROW_LOCK.test(s))).toEqual([])
+    expect(await boardsMadeBy(w.api, w.bob)).toEqual([w.board])
+  })
+
+  it('a creator demoted to a guest while the lock was awaited gets a 403 from the role read under the lock', async () => {
+    w.inject.arm(WORKSPACE_LOCK, async (tx) => {
+      await tx.query("UPDATE workspace_members SET role = 'guest' WHERE workspace_id = $1 AND user_id = $2", [
+        DEV_STUDIO,
+        w.bob.userId,
+      ])
+    })
+    const res = await create(w.bob, 'Demoted')
+    expect(res.statusCode, res.body).toBe(403)
+    expect(await boardsMadeBy(w.api, w.bob)).toEqual([w.board])
   })
 
   it('a plain member still creates a board and owns it', async () => {
@@ -212,12 +265,13 @@ describe('createBoardFrom (duplicate, restore as new, import): same order for th
     expect(tx, 'the copy ran in one transaction').toBeDefined()
     if (!tx) return
     const lock = indexOfStatement(tx, WORKSPACE_LOCK)
-    const role = indexOfStatement(tx, ROLE_READ)
     const grant = indexOfStatement(tx, /INSERT INTO board_members/)
     expect(lock, tx.statements.join('\n')).toBeGreaterThanOrEqual(0)
-    expect(role, tx.statements.join('\n')).toBeGreaterThanOrEqual(0)
-    expect(lock).toBeLessThan(role)
+    const role = indexOfStatement(tx, ROLE_READ, lock + 1)
+    expect(role, tx.statements.join('\n')).toBeGreaterThan(lock)
     expect(role).toBeLessThan(grant)
+    expect(indexOfStatement(tx, ROLE_READ)).toBe(0)
+    expect(indexOfStatement(tx, ANY_ROW_LOCK)).toBe(lock)
   })
 
   it('a creator whose membership is gone when the lock is granted gets a 404: no copy, no owner grant', async () => {
@@ -226,6 +280,18 @@ describe('createBoardFrom (duplicate, restore as new, import): same order for th
     expect(res.statusCode, res.body).toBe(404)
     expect(await boardsMadeBy(w.api, w.bob)).toEqual([w.board])
     expect(await orphans(w.api, w.bob)).toEqual([])
+  })
+
+  it('a creator demoted to a guest while the lock was awaited gets a 403: no copy, no owner grant', async () => {
+    w.inject.arm(WORKSPACE_LOCK, async (tx) => {
+      await tx.query("UPDATE workspace_members SET role = 'guest' WHERE workspace_id = $1 AND user_id = $2", [
+        DEV_STUDIO,
+        w.bob.userId,
+      ])
+    })
+    const res = await duplicate(w.bob, w.board)
+    expect(res.statusCode, res.body).toBe(403)
+    expect(await boardsMadeBy(w.api, w.bob)).toEqual([w.board])
   })
 
   it('a member still duplicates a board and owns the copy', async () => {

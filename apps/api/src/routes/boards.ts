@@ -8,7 +8,6 @@ import {
   type BoardStatus,
   type BoardVisibility,
   can,
-  canCreateInWorkspace,
   resolveBoardRole,
 } from '@draftroom/permissions'
 import type { FastifyInstance } from 'fastify'
@@ -19,6 +18,7 @@ import {
   type BoardRow,
   isBoardId,
   requireBoardAction,
+  requireCreatingRoleLocked,
   requireProjectInWorkspace,
   requireVisibleBoard,
   requireWorkspaceRole,
@@ -96,20 +96,10 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
     // Bridge release R0's contract: a board created on the new canvas is marked so (canvas-engine.ts)
     const newCanvas = await onNewCanvas(ctx)
     const row = await db.transaction(async (tx) => {
-      // Lock order (access.ts): the workspace row FIRST, the creator's role after it. A member removal takes
-      // the workspace row, deletes the membership and sweeps the leaver's grants; reading the role before
-      // this lock let a removal that ran in full in between leave this board with an owner grant for
-      // someone who is no member. Locked, the removal either waits and sweeps the grant written below, or
-      // went first and the read after the lock finds nobody (404). Only members take the lock.
-      await tx.query(
-        `SELECT w.id FROM workspaces w
-          WHERE w.id = $1
-            AND EXISTS (SELECT 1 FROM workspace_members m WHERE m.workspace_id = w.id AND m.user_id = $2)
-            FOR NO KEY UPDATE OF w`,
-        [wid, user.id],
-      )
-      const workspaceRole = await requireWorkspaceRole(tx, wid, user.id)
-      if (!canCreateInWorkspace(workspaceRole)) throw forbidden()
+      // Lock order (access.ts): the workspace row FIRST, the creator's role after it, so a member removal
+      // cannot leave this board with an owner grant for someone who is no member. A stranger, a guest and a
+      // malformed workspace id are answered (404/403) without the lock.
+      await requireCreatingRoleLocked(tx, wid, user.id)
       // Domain access: only creators create boards (every template, sample board and "Untitled").
       await ctx.identity.requireCreator(tx, user.id, 'create', {
         route: req.routeOptions.url ?? '',

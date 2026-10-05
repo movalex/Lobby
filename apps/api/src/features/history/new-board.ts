@@ -14,11 +14,11 @@
 
 import { NEW_CANVAS_BOARD_MESSAGE, NEW_CANVAS_ERROR } from '@draftroom/contracts'
 import { newBoardId, type Queryable } from '@draftroom/db'
-import { type BoardVisibility, canCreateInWorkspace } from '@draftroom/permissions'
-import { BOARD_RETURNING, type BoardRow, requireWorkspaceRole } from '../../access.ts'
+import type { BoardVisibility } from '@draftroom/permissions'
+import { BOARD_RETURNING, type BoardRow, requireCreatingRoleLocked } from '../../access.ts'
 import { audit } from '../../audit.ts'
 import { onNewCanvas } from '../../canvas-engine.ts'
-import { ApiError, forbidden } from '../../errors.ts'
+import { ApiError } from '../../errors.ts'
 import { assertBoardRoom } from '../../files/usage.ts'
 import {
   type LobbySeed,
@@ -139,20 +139,10 @@ export async function createBoardFrom(
   try {
     return await ctx.db.transaction(async (tx) => {
       // Membership can change while the seed ran: decide again, inside the transaction. Lock order
-      // (access.ts): the workspace row FIRST, the creator's role after it. A member removal takes the
-      // workspace row, deletes the membership and sweeps the leaver's grants; with the role read before
-      // this lock, a removal that ran in full in between left the copy with an owner grant for someone
-      // who is no member. Locked, the removal either waits and sweeps the grant written below, or went
-      // first and the read after the lock finds nobody (404). Only members take the lock.
-      await tx.query(
-        `SELECT w.id FROM workspaces w
-          WHERE w.id = $1
-            AND EXISTS (SELECT 1 FROM workspace_members m WHERE m.workspace_id = w.id AND m.user_id = $2)
-            FOR NO KEY UPDATE OF w`,
-        [plan.workspaceId, plan.userId],
-      )
-      const role = await requireWorkspaceRole(tx, plan.workspaceId, plan.userId)
-      if (!canCreateInWorkspace(role)) throw forbidden()
+      // (access.ts): the workspace row FIRST, the creator's role after it (requireCreatingRoleLocked), so a
+      // member removal cannot leave the copy with an owner grant for someone who is no member: it waits and
+      // sweeps the grant written below, or went first and the creator is found gone (404).
+      await requireCreatingRoleLocked(tx, plan.workspaceId, plan.userId)
       await ctx.identity.requireCreator(tx, plan.userId, 'create', {
         route: `createBoardFrom:${plan.via}`,
         by: 'route',
@@ -198,9 +188,10 @@ export async function createBoardFrom(
         // nothing, but it comes back to life if they ever join again, so a source grant that already
         // outlived its membership is not copied. A member removal (routes/workspaces.ts: the workspace row,
         // then the membership, then a sweep of their grants) cannot run between this read and the insert:
-        // assertBoardRoom above holds the workspace row, and these row locks keep it so for any path that
-        // deletes a membership without that row (it waits for this transaction and sweeps the copy's grant
-        // too). Sorted by user, so two copies lock the rows in one order.
+        // the workspace row, locked first in this transaction (requireCreatingRoleLocked), holds it off, and
+        // these row locks keep it so for any path that deletes a membership without that row (it waits for
+        // this transaction and sweeps the copy's grant too). Sorted by user, so two copies lock the rows in
+        // one order.
         const grants = await tx.query<{ user_id: string }>(
           `SELECT bm.user_id FROM board_members bm
              JOIN boards src ON src.id = bm.board_id AND src.workspace_id = $3

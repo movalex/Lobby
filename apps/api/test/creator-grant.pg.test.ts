@@ -8,11 +8,23 @@
 // workspace row first, deletes the membership and sweeps the leaver's grants, so one that ran in full between
 // that read and assertBoardRoom's workspace-row lock (FOR NO KEY UPDATE) left a new board with an owner grant
 // for a person who is no member (wave F's follow-up, wave I item I2). The creation now takes the workspace
-// row first and reads the role after it, as the removal does (access.ts, the lock order).
+// row first and decides the role after it, as the removal does (access.ts requireCreatingRoleLocked: an
+// unlocked peek that lets strangers and guests leave without the lock, then the workspace row, then the role
+// again).
 //
 // Each test below stops the REAL route midway (the paused Db in race-support.ts), runs the REAL removal
 // against it, lets the first go on and checks the outcome. The duplicate stands for createBoardFrom (restore
 // as new and import call the same function). The last two race them at random.
+//
+// Which tests fail on the old code (the unlocked role read, then assertBoardRoom's lock): the two "runs in
+// full" tests (the removal commits between the creation's role read and its lock: the old code answered 201
+// with an owner grant for a non-member) and the board creation's "waits at the workspace row, then finds
+// nobody" outcome. The two "holds the workspace row" tests, the guest test and the copy's "early room check"
+// test pass on the old code as well: they keep the guarantees that did not change (a removal that comes later
+// waits and sweeps; the early room check) or check the new one (a guest takes no lock).
+//
+// NOT RUN where this was written (no Postgres, no Docker on the dev machine): run this file once against a
+// Postgres 18 (the CI postgres job, or the NAS container) before relying on the waiting claims below.
 
 import { openTestDb } from '@draftroom/db/testing'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -90,17 +102,32 @@ async function resetBob(w: World) {
   )
 }
 
-// the creator's role read (requireWorkspaceRole): the first thing the old code did in the transaction
+// The creator's role read (requireWorkspaceRole): the first statement of the creation's transaction. With
+// the fix it is a peek that holds no lock; the lock statement follows (requireCreatingRoleLocked), then the
+// same read again.
 const ROLE_READ = /SELECT role FROM workspace_members WHERE workspace_id = \$1 AND user_id = \$2/
+// the creator's lock on the workspace row (requireCreatingRoleLocked, assertBoardRoom: the removal's differs)
+const WORKSPACE_LOCK = /SELECT id FROM workspaces WHERE id = \$1 FOR NO KEY UPDATE/
+
+/** Whether another connection can take the workspace row right now (false: somebody holds it). */
+async function rowIsFree(api: TestApi): Promise<boolean> {
+  try {
+    await api.db.query('SELECT id FROM workspaces WHERE id = $1 FOR NO KEY UPDATE NOWAIT', [DEV_STUDIO])
+    return true
+  } catch (e) {
+    if ((e as { code?: string }).code === '55P03') return false // lock_not_available
+    throw e
+  }
+}
 
 describe.skipIf(!PG)('board creation against a member removal (real Postgres)', () => {
-  it('the removal is under way (membership deleted, grants not yet swept): the creation waits, then finds nobody (404)', async () => {
+  it('the removal is under way (membership deleted, grants not yet swept): the creation waits at the workspace row, then finds nobody (404)', async () => {
     const w = await world()
     const pause = w.paused.arm(/DELETE FROM workspace_members/, 'after')
     const removing = remove(w.alice, w.bob.userId)
     const pid = await pause.reached
-    // The removal holds the workspace row and has deleted bob's membership (not committed): bob's creation
-    // still sees the member row, so it asks for the workspace row and must wait there, then re-read.
+    // The removal holds the workspace row and has deleted bob's membership (not committed): bob's peek still
+    // sees the member row, so the creation asks for the workspace row and must wait there, then read again.
     const creating = create(w.bob)
     try {
       expect(await waitedOrFinished(w.api.db, pid, creating)).toBe('waited')
@@ -118,15 +145,37 @@ describe.skipIf(!PG)('board creation against a member removal (real Postgres)', 
     expect(await grantsOf(w.api, w.bob.userId)).toEqual([])
   })
 
-  it('the creation read the role and holds the workspace row (nothing written yet): the removal waits, then sweeps the new owner grant', async () => {
+  it("a removal runs in full right after the creator's first look at their role: the creation then finds nobody (404)", async () => {
     const w = await world()
     const pause = w.paused.arm(ROLE_READ, 'after')
     const creating = create(w.bob)
     const pid = await pause.reached
+    // The peek holds no lock, so the removal is not held up: it commits (membership deleted, grants swept).
     const removing = remove(w.alice, w.bob.userId)
     try {
-      // Before the fix the role read took no lock: the removal ran in full (membership, sweep) right here and
-      // the owner grant was written after it.
+      expect(await waitedOrFinished(w.api.db, pid, removing)).toBe('finished')
+    } finally {
+      pause.release()
+    }
+    const [created, removed] = await Promise.all([creating, removing])
+    expect(removed.statusCode, removed.body).toBe(200)
+    // Before the fix this is the orphan: the role read said member, the removal ran in full, and the creation
+    // then took the workspace row and wrote a board and an owner grant (201).
+    expect(created.statusCode, created.body).toBe(404)
+    expect(await orphans(w.api, w.bob.userId)).toEqual([])
+    expect(await membership(w.api, w.bob.userId)).toBeNull()
+    expect(await boardsMadeBy(w.api, w.bob.userId)).toEqual([])
+    expect(await grantsOf(w.api, w.bob.userId)).toEqual([])
+  })
+
+  it('the creation holds the workspace row (nothing written yet): the removal waits, then sweeps the new owner grant', async () => {
+    const w = await world()
+    const pause = w.paused.arm(WORKSPACE_LOCK, 'after')
+    const creating = create(w.bob)
+    const pid = await pause.reached
+    expect(await rowIsFree(w.api), 'a creator holds the workspace row from here on').toBe(false)
+    const removing = remove(w.alice, w.bob.userId)
+    try {
       expect(await waitedOrFinished(w.api.db, pid, removing)).toBe('waited')
     } finally {
       pause.release()
@@ -138,6 +187,25 @@ describe.skipIf(!PG)('board creation against a member removal (real Postgres)', 
     expect(await membership(w.api, w.bob.userId)).toBeNull()
     expect(await grantsOf(w.api, w.bob.userId)).toEqual([])
     expect(await sweptCount(w.api)).toBe(1) // the owner grant the creation wrote, swept by the removal that waited
+  })
+
+  it('a guest-role member never holds the workspace row: it is free while their request is stopped after its role read', async () => {
+    const w = await world()
+    await w.api.db.query(
+      "UPDATE workspace_members SET role = 'guest' WHERE workspace_id = $1 AND user_id = $2",
+      [DEV_STUDIO, w.bob.userId],
+    )
+    const pause = w.paused.arm(ROLE_READ, 'after')
+    const creating = create(w.bob)
+    await pause.reached
+    try {
+      expect(await rowIsFree(w.api), 'a guest must not hold up everyone else in the workspace').toBe(true)
+    } finally {
+      pause.release()
+    }
+    const created = await creating
+    expect(created.statusCode, created.body).toBe(403)
+    expect(await boardsMadeBy(w.api, w.bob.userId)).toEqual([])
   })
 
   it('creates against removals at random: nothing answers 5xx (no deadlock) and no orphan grant is left', async () => {
@@ -161,14 +229,16 @@ describe.skipIf(!PG)('board creation against a member removal (real Postgres)', 
 })
 
 describe.skipIf(!PG)('createBoardFrom (a duplicate) against a member removal (real Postgres)', () => {
-  it('the removal is under way (membership deleted, grants not yet swept): the copy waits, then finds nobody (404)', async () => {
+  it('the removal is under way (membership deleted, grants not yet swept): the copy waits at the early room check, then finds nobody (404)', async () => {
     const w = await world()
     const pause = w.paused.arm(/DELETE FROM workspace_members/, 'after')
     const removing = remove(w.alice, w.bob.userId)
     const pid = await pause.reached
     const copying = duplicate(w.bob, w.source)
     try {
-      // the copy first asks for room in the workspace (assertBoardRoom, before the seed): the row the removal holds
+      // The copy first asks for room in the workspace (assertBoardRoom, before the seed): the row the removal
+      // holds. It waits there, so by the time its transaction reads the role the removal has committed: the
+      // same answer as before the fix (this keeps the early check honest; it does not prove the new order).
       expect(await waitedOrFinished(w.api.db, pid, copying)).toBe('waited')
     } finally {
       pause.release()
@@ -181,16 +251,38 @@ describe.skipIf(!PG)('createBoardFrom (a duplicate) against a member removal (re
     expect(await grantsOf(w.api, w.bob.userId)).toEqual([])
   })
 
-  it('the copy read the role and holds the workspace row (nothing written yet): the removal waits, then sweeps the new owner grant', async () => {
+  it("a removal runs in full right after the first look at the creator's role inside the copy's transaction: the copy then finds nobody (404)", async () => {
     const w = await world()
-    // the first transaction statement of the copy that reads the creator's role: after the seed, inside the transaction
+    // the first transaction statement of the copy that reads the creator's role: after the seed
     const pause = w.paused.arm(ROLE_READ, 'after')
     const copying = duplicate(w.bob, w.source)
     const pid = await pause.reached
+    // The peek holds no lock, so the removal is not held up: it commits (membership deleted, grants swept).
     const removing = remove(w.alice, w.bob.userId)
     try {
-      // Before the fix the role read took no lock: the removal ran in full here, and the copy's owner grant
-      // was written after it, for someone who is no member.
+      expect(await waitedOrFinished(w.api.db, pid, removing)).toBe('finished')
+    } finally {
+      pause.release()
+    }
+    const [copied, removed] = await Promise.all([copying, removing])
+    expect(removed.statusCode, removed.body).toBe(200)
+    // Before the fix: 201, with a copy and an owner grant for someone who is no member.
+    expect(copied.statusCode, copied.body).toBe(404)
+    expect(await orphans(w.api, w.bob.userId)).toEqual([])
+    expect(await boardsMadeBy(w.api, w.bob.userId)).toEqual([])
+    expect(await grantsOf(w.api, w.bob.userId)).toEqual([])
+  })
+
+  it('the copy holds the workspace row (nothing written yet): the removal waits, then sweeps the new owner grant', async () => {
+    const w = await world()
+    // the first transaction statement that takes the workspace row: the copy's, inside its transaction (the
+    // early room check runs outside one)
+    const pause = w.paused.arm(WORKSPACE_LOCK, 'after')
+    const copying = duplicate(w.bob, w.source)
+    const pid = await pause.reached
+    expect(await rowIsFree(w.api), 'a creator holds the workspace row from here on').toBe(false)
+    const removing = remove(w.alice, w.bob.userId)
+    try {
       expect(await waitedOrFinished(w.api.db, pid, removing)).toBe('waited')
     } finally {
       pause.release()
