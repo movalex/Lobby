@@ -256,3 +256,8 @@ on the sync disk (§6).
       origin, and the api has `DRAFTROOM_EVENTS_ORIGIN`; both were applied through the Render API, and `render.yaml` drift is 0.
   - After wave H, live smoke: 39 passed, 0 failed. The owner's stream stayed open more than 74 s with no reconnect (before:
     one every 40 s). **A vote started by the owner reached the guest's page in 283 ms** (before: up to 40 s).
+- **2026-10-05 check clean (16:47Z, about 92 h after the switch):**
+  - api, sync and web return 200; maintenance off.
+  - Backups: last pass 16:35Z, `failuresTotal` 0, 6 boards (the 4 real ones plus the 2 trashed test boards) with 0 failures and 0 pending.
+  - 0 `error`/`FATAL` lines on api and sync in 24 h.
+  - No Render service event besides the lead's own deploys (api/web `0e970a2` at 09:16Z; sync `54ea729` unchanged): no restart or out-of-memory event.
