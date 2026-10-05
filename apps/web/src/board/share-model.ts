@@ -383,20 +383,47 @@ export const WORKSHOP_LINK_GUESTS_DEFAULT = false
 /**
  * The line under "Share with a client". It follows the guest option, which sits above the Create
  * button and applies to the link it creates: it never says "after signing in" while guests may join
- * with just a name.
+ * with just a name. `nextLink` (G2): a link is already open, so this line, like the box, is about the
+ * NEXT link and says so, in one short line (a link that exists changes through its own box in the list).
  */
-export function clientLinkHint(role: 'viewer' | 'commenter', allowGuests: boolean): string {
+export function clientLinkHint(role: 'viewer' | 'commenter', allowGuests: boolean, nextLink = false): string {
   const verb = role === 'commenter' ? 'comment' : 'view'
+  if (nextLink)
+    return `The next link is for clients and reviewers to ${verb}, never edit. ${allowGuests ? 'No account needed.' : 'They sign in to open it.'}`
   return allowGuests
     ? `One link for clients and reviewers to ${verb}, never edit. No account needed; their access ends with the link.`
     : `One link for clients and reviewers to ${verb}, never edit. They sign in to open it; their access ends with the link.`
 }
 
-/** The line under "Workshop link" (R15): "after signing in" only when guests are not allowed. */
-export function workshopLinkHint(allowGuests: boolean): string {
+/**
+ * The line under "Workshop link" (R15): "after signing in" only when guests are not allowed. `nextLink`
+ * (G2): a workshop link is already open, so the line describes the next one, in one short line.
+ */
+export function workshopLinkHint(allowGuests: boolean, nextLink = false): string {
+  const who = allowGuests ? 'with just a name or an account' : 'after signing in'
+  if (nextLink) return `The next workshop link: anyone with it can edit for a few hours, ${who}.`
+  return `For a live session: anyone with the link can edit for a few hours, ${who}. Their edit access ends with the link.`
+}
+
+/**
+ * G2: the "join with just a name" box above Create. It is a choice for the link Create makes: ticking it
+ * after a link exists used to read as if it changed that link (it did not). With a link already open the
+ * label and the sentence under the box say so, and the link's own box (GUESTS_TOGGLE_LABEL) changes it.
+ */
+export function guestsOptionLabel(openLinks: number): string {
+  return openLinks > 0
+    ? 'For the next link: anyone with it can join with just a name (no account)'
+    : 'Anyone with the link can join with just a name (no account)'
+}
+
+/** The box on a link that exists (G2): it applies to that link and nothing else. */
+export const GUESTS_TOGGLE_LABEL = 'Anyone with this link can join with just a name (no account)'
+
+/** What a link's own guest box says after it changed, for the status line under it. */
+export function guestsToggleSaying(allowGuests: boolean): string {
   return allowGuests
-    ? 'For a live session: anyone with the link can edit for a few hours, with just a name or an account. Their edit access ends with the link.'
-    : 'For a live session: anyone with the link can edit for a few hours, after signing in. Their edit access ends with the link.'
+    ? 'Anyone with this link can now join with just a name.'
+    : 'No new guests can join this link with just a name. People who already joined keep their access until the link ends or is revoked.'
 }
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`

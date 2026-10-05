@@ -291,3 +291,109 @@ test('R2-11, R2-08: the retro link path in Share opens the workshop link with gu
     )
   })
 })
+
+// G2 (found on staging, owner in Brave with the window not focused): with a workshop link already open, a
+// second "Create workshop link" stayed on "Creating…" for good although the api answered 201 in 12 ms. The
+// dialog awaited navigator.clipboard.writeText before it showed the new link, and that call can reject (no
+// permission, no focus) or never settle at all. The link and the button must not depend on it.
+test('G2: Create never waits on the clipboard: a write that never answers or is refused still lists the link, frees the button, and says "Couldn’t copy — use Copy"', async ({
+  board,
+  canvasSession,
+  users,
+}) => {
+  const a = await canvasSession('alice')
+  const page = a.page
+  await page.setViewportSize({ width: 1440, height: 900 })
+  const aliceApi = await users.api('alice')
+  const dialog = () => shareDialog(page)
+
+  /** What the next clipboard write does: never answers, refuses (like an unfocused window), or works. */
+  const stubClipboard = (mode: 'never' | 'refuse' | 'ok') =>
+    page.evaluate((m) => {
+      const w = window as unknown as { __copied?: string[] }
+      w.__copied = []
+      Object.defineProperty(navigator.clipboard, 'writeText', {
+        configurable: true,
+        value: (text: string) => {
+          if (m === 'never') return new Promise<void>(() => {})
+          if (m === 'refuse')
+            return Promise.reject(new DOMException('Document is not focused.', 'NotAllowedError'))
+          w.__copied?.push(text)
+          return Promise.resolve()
+        },
+      })
+    }, mode)
+  const serverLinks = async () =>
+    (
+      (await (await aliceApi.fetch('GET', `/api/boards/${board}/invitations`)).json()) as {
+        invitations: { kind: string; role: string }[]
+      }
+    ).invitations.filter((i) => i.kind === 'review' && i.role === 'editor')
+
+  await openShareFromButton(page)
+  await openMoreWaysToShare(page)
+  const workshop = dialog().getByTestId('workshop-links')
+  const create = workshop.getByTestId('workshop-link-create')
+  const status = workshop.getByTestId('workshop-link-status')
+  const rows = workshop.getByTestId('workshop-link-row')
+
+  await test.step('the first link: a write that never answers does not hold "Creating…"', async () => {
+    await stubClipboard('never')
+    await create.click()
+    // The link is listed and the button is free again while the copy is still unanswered (the copy is
+    // given up after a moment: share-copy.ts), then the dialog says it could not copy.
+    await expect(rows).toHaveCount(1)
+    await expect(create).toHaveText('Create workshop link')
+    await expect(create).not.toHaveAttribute('aria-busy', 'true')
+    await expect(rows.first().getByTestId('review-link-url')).toHaveValue(/\/invite\/[A-Za-z0-9_-]{43}$/)
+    await expect(rows.first().getByTestId('review-link-copy-failed')).toHaveText('Couldn’t copy — use Copy.')
+    await expect(status).toHaveText('Workshop link created. Couldn’t copy it: use Copy in the list below.')
+    await expect(rows.first().getByTestId('review-link-copy')).toHaveText('Copy')
+    expect(await serverLinks()).toHaveLength(1)
+  })
+
+  await test.step('a second link with one already open (the staging case), the write refused: listed, free, told', async () => {
+    await stubClipboard('refuse')
+    await create.click()
+    await expect(rows).toHaveCount(2)
+    await expect(create).toHaveText('Create workshop link')
+    await expect(create).not.toHaveAttribute('aria-busy', 'true')
+    await expect(workshop.getByTestId('review-link-copy-failed')).toHaveCount(2)
+    await expect(status).toContainText('Couldn’t copy it')
+    expect(await serverLinks()).toHaveLength(2)
+  })
+
+  await test.step('Copy on a row works once the browser lets it, and the note goes away', async () => {
+    await stubClipboard('ok')
+    const row = rows.nth(0)
+    const url = await row.getByTestId('review-link-url').inputValue()
+    await row.getByTestId('review-link-copy').click()
+    await expect(row.getByTestId('review-link-copy')).toHaveText('Copied')
+    await expect(row.getByTestId('review-link-copy-failed')).toHaveCount(0)
+    expect(await page.evaluate(() => (window as unknown as { __copied?: string[] }).__copied)).toEqual([url])
+    // the other row is untouched
+    await expect(rows.nth(1).getByTestId('review-link-copy-failed')).toBeVisible()
+  })
+
+  await test.step('a Copy that never answers says so too (no silent button)', async () => {
+    await stubClipboard('never')
+    const row = rows.nth(1)
+    await row.getByTestId('review-link-copy').click()
+    await expect(row.getByTestId('review-link-copy-failed')).toBeVisible()
+    await expect(row.getByTestId('review-link-copy')).toHaveText('Copy')
+  })
+
+  await test.step('the client link behaves the same (it shares the flow)', async () => {
+    await closeShare(page)
+    await openShareFromButton(page)
+    const client = dialog().getByTestId('share-client')
+    await stubClipboard('never')
+    await client.getByTestId('review-link-create').click()
+    await expect(client.getByTestId('review-link-row')).toHaveCount(1)
+    await expect(client.getByTestId('review-link-create')).toHaveText('Create and copy link')
+    await expect(client.getByTestId('review-link-status')).toHaveText(
+      'Client link created. Couldn’t copy it: use Copy in the list below.',
+    )
+    await expect(client.getByTestId('review-link-copy-failed')).toBeVisible()
+  })
+})

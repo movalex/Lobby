@@ -9,7 +9,8 @@
 // comment, 14 days, join with just a name, created and copied by one button), then "Invite people",
 // pending requests, "More ways to share" (collapsed: workshop link, invite by email, one-time invite
 // links), then the settings (workspace access, export) and who has access. Every guest option sits
-// above its Create button and applies to the link that button makes.
+// above its Create button and applies to the link that button makes (once a link is open, the box says
+// "for the next link"); a link that exists has its own box in its row (G2: PATCH review-links/:id).
 
 import {
   type AccessRequest,
@@ -21,6 +22,7 @@ import {
   ListWorkspaceMembersResponse,
   type PendingInvitation,
   type RequestableRole,
+  type ReviewLinkCreated,
   type ShareState,
   type WorkspaceMember,
 } from '@draftroom/contracts'
@@ -46,7 +48,7 @@ import { RequestAccess } from '../features/sharing/RequestAccess.tsx'
 import '../features/sharing/sharing.css'
 import { fetchBoardGuests, useIsGuest } from '../invite/guest.tsx'
 import { splitGuestMarker } from '../invite/model.ts'
-import { absoluteUrl, copyText } from '../lib/clipboard.ts'
+import { absoluteUrl } from '../lib/clipboard.ts'
 import { formatDateTime, formatRelativeTime } from '../lib/format.ts'
 import { initialsFor, safeColor } from '../lib/identity.ts'
 import {
@@ -59,6 +61,7 @@ import {
 import { boardPath } from '../lib/routing.ts'
 import { useResource } from '../lib/useResource.ts'
 import { Dialog } from '../ui/Dialog.tsx'
+import { copyBounded } from './share-copy.ts'
 import {
   type AccessDetail,
   ADD_MEMBER_ROLES,
@@ -70,7 +73,10 @@ import {
   type EmailInviteOutcome,
   emailInviteHint,
   emailInviteOutcome,
+  GUESTS_TOGGLE_LABEL,
   grantEditable,
+  guestsOptionLabel,
+  guestsToggleSaying,
   invitePlan,
   inviteRoleOptions,
   isOwnAddress,
@@ -631,7 +637,7 @@ function InvitePeople({
         const inv: InvitationCreated = await api.createBoardInvitation(boardId, { role, email: plan.email })
         const url = inv.url.startsWith('/') ? absoluteUrl(inv.url) : inv.url
         setLink({ url, email: plan.email, role, expiresAt: inv.expiresAt })
-        setCopied(await copyText(url))
+        setCopied(await copyBounded(url))
         onLinkCreated()
       }
       setText('')
@@ -744,7 +750,7 @@ function InvitePeople({
             <button
               type="button"
               className="dr-btn"
-              onClick={async () => setCopied(await copyText(link.url))}
+              onClick={async () => setCopied(await copyBounded(link.url))}
             >
               {copied ? 'Copied' : 'Copy'}
             </button>
@@ -1010,7 +1016,7 @@ function EmailInvite({
             type="button"
             className="dr-btn"
             data-testid="share-email-copy"
-            onClick={async () => setCopied(await copyText(link))}
+            onClick={async () => setCopied(await copyBounded(link))}
           >
             {copied ? 'Copied' : 'Copy link'}
           </button>
@@ -1666,7 +1672,7 @@ function InviteLinkSection({
       const inv = await api.createBoardInvitation(boardId, { role, email: checked.email })
       setCreated({ ...inv, email: checked.email, role })
       setEmail('')
-      setCopied(await copyText(inv.url.startsWith('/') ? absoluteUrl(inv.url) : inv.url))
+      setCopied(await copyBounded(inv.url.startsWith('/') ? absoluteUrl(inv.url) : inv.url))
       onChange()
     } catch (e) {
       // A 400 (or 409 INVITATION_TO_SELF, another address of the caller's) is about the address (the
@@ -1785,7 +1791,7 @@ function InviteLinkSection({
               type="button"
               className="dr-btn"
               data-testid="invite-copy"
-              onClick={async () => setCopied(await copyText(url))}
+              onClick={async () => setCopied(await copyBounded(url))}
             >
               {copied ? 'Copied' : 'Copy'}
             </button>
@@ -1856,7 +1862,8 @@ function WorkshopLinksSection({
   const [allowGuests, setAllowGuests] = useState<boolean>(WORKSHOP_LINK_GUESTS_DEFAULT)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [justCreated, setJustCreated] = useState<{ id: string; copied: boolean } | null>(null)
+  // copied: null while the copy is being tried (it never blocks the link from showing: share-copy.ts).
+  const [justCreated, setJustCreated] = useState<{ id: string; copied: boolean | null } | null>(null)
   // A11Y-01: what a screen reader hears after Create (the button keeps the keyboard).
   const [said, setSaid] = useState('')
   const sectionRef = useRef<HTMLElement>(null)
@@ -1879,21 +1886,26 @@ function WorkshopLinksSection({
     setPending(true)
     setError(null)
     setSaid('')
+    let link: ReviewLinkCreated
     try {
-      const link = await sharing.createReviewLink(boardId, {
+      link = await sharing.createReviewLink(boardId, {
         role: 'editor',
         expiresInHours: hours,
         allowGuests,
       })
-      const copied = await copyText(link.url)
-      setJustCreated({ id: link.id, copied })
-      setSaid(createdSaying('Workshop link', copied))
-      onChange()
     } catch (e) {
       setError(isApiError(e) ? e.message : 'The workshop link could not be created.')
+      return
     } finally {
       setPending(false)
     }
+    // G2: the link exists. Show it now; the clipboard (which can refuse or never answer when this window
+    // is not focused) only decides which sentence goes with it, never whether Create has finished.
+    setJustCreated({ id: link.id, copied: null })
+    onChange()
+    const copied = await copyBounded(link.url)
+    setJustCreated({ id: link.id, copied })
+    setSaid(createdSaying('Workshop link', copied))
   }
 
   return (
@@ -1909,10 +1921,16 @@ function WorkshopLinksSection({
       {canCreate && (
         <>
           <p className="dr-share__hint" data-testid="workshop-link-hint">
-            {workshopLinkHint(allowGuests)}
+            {workshopLinkHint(allowGuests, links.length > 0)}
           </p>
-          {/* R15: the guest choice comes before Create, and applies to the link it makes. */}
-          <GuestsOption testId="workshop-link-guests" checked={allowGuests} onChange={setAllowGuests} />
+          {/* R15: the guest choice comes before Create, and applies to the link it makes (G2: the next one
+              once a link is open; a link that exists has its own box in its row). */}
+          <GuestsOption
+            testId="workshop-link-guests"
+            checked={allowGuests}
+            onChange={setAllowGuests}
+            openLinks={links.length}
+          />
         </>
       )}
       {canCreate && (
@@ -1963,7 +1981,7 @@ function WorkshopLinksSection({
               link={l}
               workshop
               canShare={canCreate}
-              copiedOnCreate={justCreated?.id === l.id && justCreated.copied}
+              copiedOnCreate={justCreated?.id === l.id ? justCreated.copied : null}
               onChange={onChange}
             />
           ))}
@@ -1997,7 +2015,8 @@ function ClientLinkSection({
   const [allowGuests, setAllowGuests] = useState<boolean>(CLIENT_LINK_DEFAULTS.allowGuests)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [justCreated, setJustCreated] = useState<{ id: string; copied: boolean } | null>(null)
+  // copied: null while the copy is being tried (it never blocks the link from showing: share-copy.ts).
+  const [justCreated, setJustCreated] = useState<{ id: string; copied: boolean | null } | null>(null)
   // A11Y-01: what a screen reader hears after Create (the button keeps the keyboard).
   const [said, setSaid] = useState('')
 
@@ -2006,20 +2025,24 @@ function ClientLinkSection({
     setPending(true)
     setError(null)
     setSaid('')
+    let link: ReviewLinkCreated
     try {
-      const link = await sharing.createReviewLink(boardId, { role, expiresInDays: days, allowGuests })
-      const copied = await copyText(link.url)
-      setJustCreated({ id: link.id, copied })
-      setSaid(createdSaying('Client link', copied))
-      onChange()
-      // DANA2-01: the first client link may have turned exporting off. The board event says so too,
-      // but this dialog also opens from the dashboard, where no board events arrive.
-      refreshExportPolicy(api, boardId).catch(() => {})
+      link = await sharing.createReviewLink(boardId, { role, expiresInDays: days, allowGuests })
     } catch (e) {
       setError(isApiError(e) ? e.message : 'The review link could not be created.')
+      return
     } finally {
       setPending(false)
     }
+    // G2: the link exists. Show it now; the clipboard only decides which sentence goes with it.
+    setJustCreated({ id: link.id, copied: null })
+    onChange()
+    // DANA2-01: the first client link may have turned exporting off. The board event says so too,
+    // but this dialog also opens from the dashboard, where no board events arrive.
+    refreshExportPolicy(api, boardId).catch(() => {})
+    const copied = await copyBounded(link.url)
+    setJustCreated({ id: link.id, copied })
+    setSaid(createdSaying('Client link', copied))
   }
 
   return (
@@ -2034,9 +2057,14 @@ function ClientLinkSection({
       {canCreate && (
         <>
           <p className="dr-share__hint" data-testid="review-link-hint">
-            {clientLinkHint(role, allowGuests)}
+            {clientLinkHint(role, allowGuests, links.length > 0)}
           </p>
-          <GuestsOption testId="review-link-guests" checked={allowGuests} onChange={setAllowGuests} />
+          <GuestsOption
+            testId="review-link-guests"
+            checked={allowGuests}
+            onChange={setAllowGuests}
+            openLinks={links.length}
+          />
           <ClientExportLine boardId={boardId} />
         </>
       )}
@@ -2099,7 +2127,7 @@ function ClientLinkSection({
               boardId={boardId}
               link={l}
               canShare={canCreate}
-              copiedOnCreate={justCreated?.id === l.id && justCreated.copied}
+              copiedOnCreate={justCreated?.id === l.id ? justCreated.copied : null}
               onChange={onChange}
             />
           ))}
@@ -2185,14 +2213,21 @@ function GuestsOption({
   testId,
   checked,
   onChange,
+  openLinks = 0,
 }: {
   testId: string
   checked: boolean
   onChange(next: boolean): void
+  /**
+   * G2: links of this kind that are already open. The box is for the link Create makes, so with one open
+   * it says "next link" (a link that exists has its own box in its row) instead of reading as if ticking
+   * it changed the link that is already shared.
+   */
+  openLinks?: number
 }) {
   const hintId = useId()
   return (
-    <div className="dr-sharing__guests">
+    <div className="dr-sharing__guests" data-next-link={openLinks > 0 || undefined}>
       <label className="dr-sharing__check">
         <input
           type="checkbox"
@@ -2201,7 +2236,7 @@ function GuestsOption({
           aria-describedby={hintId}
           onChange={(e) => onChange(e.target.checked)}
         />
-        Anyone with the link can join with just a name (no account)
+        {guestsOptionLabel(openLinks)}
       </label>
       <p id={hintId} className="dr-share__hint">
         Guests show as “Name (guest)”, reach only this board, and lose access when the link ends or is
@@ -2221,7 +2256,11 @@ function ReviewLinkRow({
 }: {
   boardId: string
   link: PendingInvitation
-  copiedOnCreate: boolean
+  /**
+   * What happened to the copy Create tried for this link: true copied, false did not (G2: it said so and
+   * the Copy button is right here), null not tried (or still trying: the link shows without waiting).
+   */
+  copiedOnCreate: boolean | null
   /** A workshop (edit) link: ends at a time of day, and offers "+1 h". */
   workshop?: boolean
   /**
@@ -2231,12 +2270,51 @@ function ReviewLinkRow({
   canShare: boolean
   onChange(): void
 }) {
-  const [copied, setCopied] = useState(copiedOnCreate)
+  const [copied, setCopied] = useState(copiedOnCreate === true)
+  const [copyFailed, setCopyFailed] = useState(copiedOnCreate === false)
   const [confirming, setConfirming] = useState(false)
   const [removeAccess, setRemoveAccess] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // G2: this link's own "join with just a name" box. `guestsAsked` is what was just chosen, held until the
+  // list reloads with the server's answer (the box must not jump back while that request is in flight).
+  const [guestsAsked, setGuestsAsked] = useState<boolean | null>(null)
+  const [guestsBusy, setGuestsBusy] = useState(false)
+  const [guestsSaid, setGuestsSaid] = useState('')
+  const guestsOn = guestsAsked ?? link.allowGuests
+  const guestsHintId = useId()
+  useEffect(() => {
+    setGuestsAsked(null)
+  }, [link.allowGuests])
+  // The copy Create tried finishes after this row appeared (the link shows without waiting for it).
+  useEffect(() => {
+    if (copiedOnCreate === null) return
+    setCopied(copiedOnCreate)
+    setCopyFailed(!copiedOnCreate)
+  }, [copiedOnCreate])
   const kindName = workshop ? 'workshop link' : 'review link'
+  const copy = async () => {
+    const ok = await copyBounded(link.url ?? '')
+    setCopied(ok)
+    setCopyFailed(!ok)
+  }
+  const setGuests = async (next: boolean) => {
+    if (guestsBusy) return
+    setGuestsBusy(true)
+    setGuestsAsked(next)
+    setGuestsSaid('')
+    setError(null)
+    try {
+      await sharing.setReviewLinkGuests(boardId, link.id, next)
+      setGuestsSaid(guestsToggleSaying(next))
+      onChange()
+    } catch (e) {
+      setGuestsAsked(null)
+      setError(isApiError(e) ? e.message : 'The link could not be changed.')
+    } finally {
+      setGuestsBusy(false)
+    }
+  }
   const revoke = async () => {
     setBusy(true)
     setError(null)
@@ -2267,7 +2345,7 @@ function ReviewLinkRow({
       data-testid={workshop ? 'workshop-link-row' : 'review-link-row'}
       data-invitation-id={link.id}
       data-expires-at={link.expiresAt}
-      data-allow-guests={link.allowGuests}
+      data-allow-guests={guestsOn}
     >
       <div className="dr-sharing__link-main">
         {/* F13: what the link is, then its actions on the same line ("+1 h" and "Revoke…" at their own
@@ -2277,7 +2355,7 @@ function ReviewLinkRow({
             <strong>{ROLE_OPTION_LABEL[link.role]}</strong> · until{' '}
             {workshop ? shortTime(link.expiresAt) : shortDate(link.expiresAt)} · {joined}
             {link.maxUses ? ` (max ${link.maxUses})` : ''}
-            {link.allowGuests && (
+            {guestsOn && (
               <>
                 {' · '}
                 <span data-testid="link-guests-allowed">guests can join with a name</span>
@@ -2327,13 +2405,43 @@ function ReviewLinkRow({
               type="button"
               className="dr-btn dr-btn--sm"
               data-testid="review-link-copy"
-              onClick={async () => setCopied(await copyText(link.url ?? ''))}
+              onClick={() => void copy()}
             >
               {copied ? 'Copied' : 'Copy'}
             </button>
           </div>
         ) : (
           <span className="dr-share__hint">This link can’t be shown again. Create a new one to share.</span>
+        )}
+        {canShare && link.url && copyFailed && (
+          <span className="dr-share__hint" data-testid="review-link-copy-failed">
+            Couldn’t copy — use Copy.
+          </span>
+        )}
+        {/* G2: this link's own guest box. Turning it on lets anyone with the link in with just a name, so
+            only people who may share can; any manager can turn it off. The server checks both. */}
+        {(canShare || guestsOn) && (
+          <div className="dr-sharing__guests dr-sharing__guests--link">
+            <label className="dr-sharing__check">
+              <input
+                type="checkbox"
+                data-testid="review-link-guests-toggle"
+                checked={guestsOn}
+                disabled={guestsBusy || (!canShare && !guestsOn)}
+                aria-describedby={guestsHintId}
+                onChange={(e) => void setGuests(e.target.checked)}
+              />
+              {GUESTS_TOGGLE_LABEL}
+            </label>
+            <span
+              id={guestsHintId}
+              className="dr-share__hint"
+              role="status"
+              data-testid="review-link-guests-note"
+            >
+              {guestsSaid}
+            </span>
+          </div>
         )}
         {confirming && (
           <fieldset className="dr-sharing__confirm">
@@ -2382,7 +2490,7 @@ function CopyBoardLink({ boardId }: { boardId: string }) {
         type="button"
         className="dr-btn"
         data-testid="share-copy-link"
-        onClick={async () => setCopied(await copyText(url))}
+        onClick={async () => setCopied(await copyBounded(url))}
       >
         <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
           <path

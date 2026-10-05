@@ -17,6 +17,7 @@ import {
   ReviewLinkCreated,
   ReviewLinkExtended,
   ReviewLinkRevoked,
+  ReviewLinkUpdated,
   ShareState,
 } from '@draftroom/contracts'
 import type { ApiClient } from '../../api/client.ts'
@@ -89,6 +90,15 @@ export function sharingApi(api: ApiClient) {
      */
     inviteByEmail: (boardId: string, input: EmailInviteInput) =>
       r('POST', `/api/boards/${enc(boardId)}/invitations/email`, { body: input, schema: EmailInviteResult }),
+    /**
+     * G2: lets people join a link that already exists with just a name (or stops new name-only joins).
+     * Only that flag; the server keeps the link's role, and people who joined keep their access.
+     */
+    setReviewLinkGuests: (boardId: string, invitationId: string, allowGuests: boolean) =>
+      r('PATCH', `/api/boards/${enc(boardId)}/review-links/${enc(invitationId)}`, {
+        body: { allowGuests },
+        schema: ReviewLinkUpdated,
+      }),
     /** "+1 h" on an open (workshop) link, capped by the server at its role's maximum. */
     extendReviewLink: (boardId: string, invitationId: string, hours = 1) =>
       r('POST', `/api/boards/${enc(boardId)}/review-links/${enc(invitationId)}/extend`, {

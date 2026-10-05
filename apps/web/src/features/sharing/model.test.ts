@@ -84,7 +84,9 @@ describe('board header sharing badge (PRS-03)', () => {
 
   it('A11Y-01: says what Create did', () => {
     expect(createdSaying('Client link', true)).toBe('Client link created and copied to the clipboard.')
-    expect(createdSaying('Workshop link', false)).toBe('Workshop link created. Copy it from the list below.')
+    expect(createdSaying('Workshop link', false)).toBe(
+      'Workshop link created. Couldn’t copy it: use Copy in the list below.',
+    )
   })
 
   it('carries the pending request count for owners only', () => {
