@@ -9,6 +9,7 @@ import { SESSION_TTL_MS } from '../src/auth/session.ts'
 import { EventHub } from '../src/events/hub.ts'
 import { EVENTS_TICKET_TTL_MS } from '../src/events/tickets.ts'
 import { guestLinkCapSettings } from '../src/features/guests/link-caps.ts'
+import { HAND_DISCONNECT_GRACE_MS } from '../src/features/workshops/hands.ts'
 import { type GuestClient, guestLink, joinAsGuest } from './features/guests/support.ts'
 import {
   type Client,
@@ -225,6 +226,26 @@ describe('GET /api/boards/:bid/events with a ticket (the direct origin)', () => 
     await s.waitFor('hello')
     w.t.clock.advance(SESSION_TTL_MS + 1_000)
     await s.waitFor('session-ended', 3_000)
+  })
+
+  it('the workshops’ raised-hand tracking sees the ticket’s person: a hand stays up while that stream is open', async () => {
+    const w = await world()
+    const carol = await w.invite('carol')
+    const s = await w.direct((await w.minted(carol)).ticket)
+    await s.waitFor('hello')
+    expect((await carol.req('POST', `/api/boards/${w.boardId}/hand`, { raised: true })).statusCode).toBe(200)
+    // Past the grace: a hand whose owner has no open stream (as far as the tracking knows) is lowered.
+    w.t.clock.advance(HAND_DISCONNECT_GRACE_MS * 3)
+    const hands = () =>
+      w.owner
+        .req('GET', `/api/boards/${w.boardId}/workshop`)
+        .then((r) => (r.json() as { hands: { userId: string }[] }).hands.map((h) => h.userId))
+    expect(await hands()).toEqual([carol.userId])
+    // The stream closes for good: after the grace, the hand goes down.
+    await s.close()
+    await new Promise((r) => setTimeout(r, 100))
+    w.t.clock.advance(HAND_DISCONNECT_GRACE_MS)
+    expect(await hands()).toEqual([])
   })
 
   it('counts against the same per-person caps as cookie streams (the oldest is replaced)', async () => {
