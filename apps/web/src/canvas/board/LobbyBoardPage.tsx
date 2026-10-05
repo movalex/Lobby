@@ -50,6 +50,7 @@ import {
 import type { LobbyCanvas } from '../api/lobby-canvas.ts'
 import { ExcalidrawHost, type ExcalidrawHostProps, type HostWiring } from '../engine/ExcalidrawHost.tsx'
 import { parseFileKey } from '../files/loader.ts'
+import { releaseGuestQueueSoon } from '../sync/adapter/offline-guest.ts'
 import {
   BoardPeople,
   CanvasDock,
@@ -128,6 +129,27 @@ function LobbyBoardShell({ initial }: { initial: BoardDetail }) {
       document.title = 'Lobby'
     }
   }, [board.title])
+
+  // I2 (wave I): the page left this board: a guest's page queue with nothing unsent goes with it
+  // (canvas/sync/adapter/offline-guest.ts; one with an unsent edit stays for their return). Not on a Retry
+  // or a role change: those keep this shell, and only the session under it restarts. The release is DEFERRED
+  // (`releaseGuestQueueSoon`): React runs an unmounting tree's passive cleanups from the parent down, so this
+  // cleanup comes before the session's `dispose` (LobbyBoardView), whose `persistNow()` makes one last save;
+  // a release made here would drop the queue and that save would make it again. A mount before the timer
+  // runs (StrictMode's simulated unmount and remount in `vite dev`) cancels it.
+  const boardId = board.id
+  const uid = me.user.id
+  const pendingRelease = useRef<{ boardId: string; uid: string; cancel: () => void } | null>(null)
+  useEffect(() => {
+    const p = pendingRelease.current
+    if (p && p.boardId === boardId && p.uid === uid) {
+      p.cancel()
+      pendingRelease.current = null
+    }
+    return () => {
+      pendingRelease.current = { boardId, uid, cancel: releaseGuestQueueSoon({ boardId, uid }) }
+    }
+  }, [boardId, uid])
 
   if (accessLost) return <NoAccessScreen revoked previousRole={role} />
   // A fresh key = a fresh session (socket, engine core, canvas): the way out of a terminal close.
