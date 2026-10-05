@@ -6,6 +6,16 @@
 // replaces a stream that has been silent for a while (a proxy can keep the browser's side open after
 // this process died).
 //
+// Reaching the browser live: the stream is the one long-lived response that crosses the static site's
+// /api/* rewrite (Render's edge, Cloudflare in front), and measured on staging 2026-10-05 an
+// intermediary held it, so events only arrived through the 40 s stale-stream reconnect. Three things
+// here keep an intermediary from sitting on it: `cache-control: no-cache, no-transform` (no-transform
+// forbids compressing or rewriting the body, and a compressor is the likeliest thing that buffers),
+// headers flushed at once, and a comment of STREAM_PADDING bytes before the hello (a buffer that waits
+// for a minimum amount before it forwards has that much to chew on). The padding is an SSE comment: the
+// browser's parser discards it, so it never reaches features/events.ts. The api compresses nothing
+// itself (no compression plugin), so there is nothing to exclude here.
+//
 // The server ends a stream with one last event (docs/SECURITY-REVIEW-2026-09-27.md authz-003/005):
 // - 'access-lost': the person can no longer view the board (checked at once when access changes,
 //   and for every stream at least every ACCESS_RECHECK_MS);
@@ -30,6 +40,13 @@ export const ACCESS_RECHECK_MS = 10_000
 /** The browser's reconnect delay after 'replaced'. */
 const REPLACED_RETRY_MS = 60_000
 const BUSY_RETRY_AFTER_S = 30
+/**
+ * The first bytes of every stream: one SSE comment line of about 2 KB, then the blank line that ends
+ * the field block. A comment (a line starting with ':') is dropped by every SSE parser, EventSource
+ * included, and the blank line after it dispatches nothing (no data). It is padding for a proxy that
+ * buffers up to some size before forwarding; see the header comment.
+ */
+export const STREAM_PADDING = `:${' '.repeat(2048)}\n\n`
 
 export function registerEventRoutes(app: FastifyInstance, ctx: FeatureContext) {
   const hub = ctx.events
@@ -144,12 +161,19 @@ export function registerEventRoutes(app: FastifyInstance, ctx: FeatureContext) {
     reply.hijack()
     res.writeHead(200, {
       'content-type': 'text/event-stream; charset=utf-8',
-      'cache-control': 'no-store',
+      // no-transform: no intermediary may compress or rewrite the body (a compressing proxy holds an
+      // event stream back to fill its blocks); no-store, which this was, says nothing about that.
+      // no-cache: a stored copy is never reused without asking the api again.
+      'cache-control': 'no-cache, no-transform',
       'x-content-type-options': 'nosniff',
-      // disables response buffering in nginx-style proxies (Render's edge included, UNVERIFIED)
+      // disables response buffering in nginx-style proxies (not enough on its own behind Render's edge,
+      // measured 2026-10-05)
       'x-accel-buffering': 'no',
       connection: 'keep-alive',
     })
+    // Send the status line and headers now instead of with the first write, then the padding, then hello.
+    res.flushHeaders()
+    write(STREAM_PADDING)
     send({ type: 'hello', data: { serverNow: ctx.now().toISOString(), role: connectionRole(access) } })
 
     const heartbeat = setInterval(() => send({ type: 'ping', data: null }), HEARTBEAT_MS)

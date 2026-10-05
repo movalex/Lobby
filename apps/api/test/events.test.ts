@@ -1,8 +1,9 @@
 import type { AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EventHub } from '../src/events/hub.ts'
-import { HEARTBEAT_MS } from '../src/events/routes.ts'
+import { HEARTBEAT_MS, STREAM_PADDING } from '../src/events/routes.ts'
 import { createBoard, createTestApi, ORIGIN, type TestApi } from './helpers.ts'
+import { openSse } from './sse.ts'
 
 let api: TestApi | undefined
 afterEach(async () => {
@@ -101,6 +102,79 @@ describe('board event stream', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('keeps an intermediary from buffering or compressing the stream: no-transform, flushed headers, no content-encoding', async () => {
+    api = await createTestApi()
+    const alice = await api.login('alice')
+    const boardId = await createBoard(alice, alice.personalWorkspaceId)
+    await api.app.listen({ host: '127.0.0.1', port: 0 })
+    const base = `http://127.0.0.1:${(api.app.server.address() as AddressInfo).port}`
+
+    const s = await openStream(base, boardId, alice.cookie)
+    // fetch() resolves once the status line and headers are in; the hello is only checked afterwards.
+    expect(s.res.status).toBe(200)
+    expect(s.res.headers.get('content-type')).toBe('text/event-stream; charset=utf-8')
+    // Directive by directive: no-transform forbids compressing/rewriting, no-cache forbids reuse.
+    const cacheControl = (s.res.headers.get('cache-control') ?? '').split(',').map((d) => d.trim())
+    expect(cacheControl).toEqual(['no-cache', 'no-transform'])
+    expect(s.res.headers.get('x-accel-buffering')).toBe('no')
+    expect(s.res.headers.get('x-content-type-options')).toBe('nosniff')
+    // The api compresses nothing itself, even when the client offers every encoding.
+    expect(s.res.headers.get('content-encoding')).toBeNull()
+    await s.waitFor('hello')
+    await s.close()
+
+    const offered = await fetch(`${base}/api/boards/${boardId}/events`, {
+      headers: { cookie: alice.cookie, origin: ORIGIN, 'accept-encoding': 'gzip, deflate, br, zstd' },
+    })
+    expect(offered.status).toBe(200)
+    expect(offered.headers.get('content-encoding')).toBeNull()
+    expect(offered.headers.get('cache-control')).toBe('no-cache, no-transform')
+    await offered.body?.cancel()
+  })
+
+  it('starts with the SSE comment padding, then the hello; a client parser sees only the hello', async () => {
+    api = await createTestApi()
+    const alice = await api.login('alice')
+    const boardId = await createBoard(alice, alice.personalWorkspaceId)
+    await api.app.listen({ host: '127.0.0.1', port: 0 })
+    const base = `http://127.0.0.1:${(api.app.server.address() as AddressInfo).port}`
+
+    // The raw bytes, not parsed events: read until the hello frame is complete.
+    const controller = new AbortController()
+    const res = await fetch(`${base}/api/boards/${boardId}/events`, {
+      headers: { cookie: alice.cookie, origin: ORIGIN },
+      signal: controller.signal,
+    })
+    const reader = res.body?.getReader()
+    if (!reader) throw new Error('no body')
+    const dec = new TextDecoder()
+    let raw = ''
+    while (!raw.includes('"type":"hello"') || !raw.endsWith('\n\n')) {
+      const { value, done } = await reader.read()
+      if (done) throw new Error(`the stream ended before the hello: ${JSON.stringify(raw.slice(0, 80))}`)
+      raw += dec.decode(value, { stream: true })
+    }
+    controller.abort()
+
+    // About 2 KB of comment first (a ':' line and the blank line), nothing before it.
+    expect(STREAM_PADDING.length).toBeGreaterThanOrEqual(2048)
+    expect(STREAM_PADDING.startsWith(':')).toBe(true)
+    expect(STREAM_PADDING.endsWith('\n\n')).toBe(true)
+    expect(STREAM_PADDING.slice(1, -2).trim()).toBe('') // padding is spaces only: no data, no field
+    expect(raw.startsWith(STREAM_PADDING)).toBe(true)
+    // Then the hello, as the only data frame.
+    const rest = raw.slice(STREAM_PADDING.length)
+    expect(rest.startsWith('data: {"type":"hello"')).toBe(true)
+    expect(rest.match(/^data: /gm)).toHaveLength(1)
+
+    // The parser the other tests use (data:/retry: lines only, like a browser) yields the hello alone.
+    const parsed = await openSse(base, boardId, alice.cookie)
+    expect((await parsed.waitFor('hello')).data).toMatchObject({ role: 'owner' })
+    expect(parsed.events.map((e) => e.type)).toEqual(['hello'])
+    expect(parsed.retries).toEqual([])
+    await parsed.close()
   })
 
   it('ends open streams when the app closes, so a deploy does not wait on connected clients', async () => {
