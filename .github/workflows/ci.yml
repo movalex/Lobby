@@ -4,10 +4,11 @@
 # push to main ran the whole set: it ran on GitHub on the pushes of 2026-10-03 and 04 (878f8d93's message: about 15 pushes
 # on the deploy day, 1,800 of 2,000 free Actions minutes). The run logs were not available afterwards; two jobs were
 # red, the Postgres shard 3 of 3 and the unit shard 4 of 4, and their causes were found and fixed in the tests (b44a8b43,
-# 42a51def, 59a30ac7; docs/PROGRESS.md, "CI red on GitHub"). It has not run on GitHub since those fixes. A manual run
-# starts the 12 job instances below that have no `if:` (checks, 4 unit, 3 postgres, probes, audit, xbrowser, build-gates);
-# e2e-smoke and e2e are skipped, because their `if:` names the pull_request and push events. The per-event lists below
-# say what each job does when the owner puts those triggers back.
+# 42a51def; docs/PROGRESS.md, "CI red on GitHub"); 59a30ac7 repaired a third failure that the switch to manual itself
+# caused (scripts/ci-workflow.test.ts still required the removed triggers). It has not run on GitHub since those
+# fixes. A manual run starts the 12 job instances below that have no `if:` (checks, 4 unit, 3 postgres, probes, audit,
+# xbrowser, build-gates); e2e-smoke and e2e are skipped, because their `if:` names the pull_request and push events.
+# The per-event lists below say what each job does when the owner puts those triggers back.
 #
 #   every push to main and every pull request
 #     checks      the quick static gate: lint, licences, typecheck (the node-safety and engine-probe tsconfigs included).
