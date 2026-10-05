@@ -138,7 +138,19 @@ export async function createBoardFrom(
   const newId = boardId
   try {
     return await ctx.db.transaction(async (tx) => {
-      // Membership can change while the seed ran: decide again, inside the transaction.
+      // Membership can change while the seed ran: decide again, inside the transaction. Lock order
+      // (access.ts): the workspace row FIRST, the creator's role after it. A member removal takes the
+      // workspace row, deletes the membership and sweeps the leaver's grants; with the role read before
+      // this lock, a removal that ran in full in between left the copy with an owner grant for someone
+      // who is no member. Locked, the removal either waits and sweeps the grant written below, or went
+      // first and the read after the lock finds nobody (404). Only members take the lock.
+      await tx.query(
+        `SELECT w.id FROM workspaces w
+          WHERE w.id = $1
+            AND EXISTS (SELECT 1 FROM workspace_members m WHERE m.workspace_id = w.id AND m.user_id = $2)
+            FOR NO KEY UPDATE OF w`,
+        [plan.workspaceId, plan.userId],
+      )
       const role = await requireWorkspaceRole(tx, plan.workspaceId, plan.userId)
       if (!canCreateInWorkspace(role)) throw forbidden()
       await ctx.identity.requireCreator(tx, plan.userId, 'create', {

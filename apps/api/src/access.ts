@@ -93,6 +93,13 @@ function toAccess(row: AccessRow): BoardAccess {
 // With a real Postgres pool, requests run on separate connections at once, and two transactions that
 // lock the same rows in opposite orders deadlock: Postgres then fails one of them (a 500). So every
 // transaction that locks more than one of these takes them top-down, never bottom-up:
+//   0. the workspace row: FOR NO KEY UPDATE (assertBoardRoom, uploads, a member change or removal). It is
+//      taken first, before ANY read that decides whether the transaction may hand out a grant, the
+//      caller's own membership included: a board's creator gets an owner grant for themselves
+//      (routes/boards.ts, features/history/new-board.ts createBoardFrom), so both lock the workspace row,
+//      and only then read the creator's role. A member removal holds that row from its first statement, so
+//      with an unlocked role read before it a removal could run in full between the read and the lock, and
+//      the new board's owner grant would outlive the creator's membership;
 //   1. the board row: FOR UPDATE (requireBoardAction/loadBoardAccess `forUpdate`, lockBoardRow). Note
 //      that inserting a row that references a board (board_members, comments, invitation_redemptions,
 //      ...) takes a key-share lock on the board row, which waits for FOR UPDATE: that is step 1 too;

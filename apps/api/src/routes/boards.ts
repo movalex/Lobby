@@ -96,6 +96,18 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
     // Bridge release R0's contract: a board created on the new canvas is marked so (canvas-engine.ts)
     const newCanvas = await onNewCanvas(ctx)
     const row = await db.transaction(async (tx) => {
+      // Lock order (access.ts): the workspace row FIRST, the creator's role after it. A member removal takes
+      // the workspace row, deletes the membership and sweeps the leaver's grants; reading the role before
+      // this lock let a removal that ran in full in between leave this board with an owner grant for
+      // someone who is no member. Locked, the removal either waits and sweeps the grant written below, or
+      // went first and the read after the lock finds nobody (404). Only members take the lock.
+      await tx.query(
+        `SELECT w.id FROM workspaces w
+          WHERE w.id = $1
+            AND EXISTS (SELECT 1 FROM workspace_members m WHERE m.workspace_id = w.id AND m.user_id = $2)
+            FOR NO KEY UPDATE OF w`,
+        [wid, user.id],
+      )
       const workspaceRole = await requireWorkspaceRole(tx, wid, user.id)
       if (!canCreateInWorkspace(workspaceRole)) throw forbidden()
       // Domain access: only creators create boards (every template, sample board and "Untitled").
