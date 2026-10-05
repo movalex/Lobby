@@ -98,12 +98,15 @@ services:
       # it here and on the service together. Changing it needs no rebuild; a static-site Rollback does NOT
       # roll it back (docs/DEPLOY.md). Render applies these headers to the site's own files only, not to
       # responses rewritten to the api (the api's /files answers keep their own sandbox CSP).
+      # connect-src names the api's own origin for the board event stream (wave H1): the page fetches it
+      # straight from the api (DRAFTROOM_EVENTS_ORIGIN below) because this site's /api/* rewrite holds a
+      # streamed response until it ends. Without it the page falls back to the rewrite (no live events).
       - path: /*
         name: Content-Security-Policy
         value: >-
           default-src 'self';
           script-src 'self' https://splendid-flamingo-3744.clerk.accounts.dev https://challenges.cloudflare.com https://*.protect.clerk.com;
-          connect-src 'self' blob: https://draftroom-staging-sync.onrender.com wss://draftroom-staging-sync.onrender.com https://splendid-flamingo-3744.clerk.accounts.dev https://clerk-telemetry.com https://*.protect.clerk.com:*;
+          connect-src 'self' blob: https://draftroom-staging-api.onrender.com https://draftroom-staging-sync.onrender.com wss://draftroom-staging-sync.onrender.com https://splendid-flamingo-3744.clerk.accounts.dev https://clerk-telemetry.com https://*.protect.clerk.com:*;
           img-src 'self' blob: data: https://img.clerk.com;
           font-src 'self';
           style-src 'self' 'unsafe-inline';
@@ -190,6 +193,15 @@ services:
         # The static site's URL (Origin checks, Secure cookie, invite links). Confirm the hostname
         # Render assigns on first creation and update it here if it differs.
         value: https://draftroom-staging-web.onrender.com
+      - key: DRAFTROOM_EVENTS_ORIGIN
+        # This api's own public URL (wave H1, apps/api/src/events/tickets.ts). Pages mint a 30 s single-use
+        # ticket through the web origin and open the board event stream straight from here, because the
+        # static site's /api/* rewrite holds a streamed response until it ends (measured 2026-10-05: first
+        # byte 0.23 s direct, 3.25 s = the whole response through the rewrite). The api then answers CORS
+        # for PUBLIC_ORIGIN on that one route. The web's CSP connect-src must name the same origin. Unset =
+        # pages use the rewrite (events only arrive with the 40 s stale-stream reconnect). Runtime only: a
+        # change needs an api restart, never a web rebuild.
+        value: https://draftroom-staging-api.onrender.com
       - key: DRAFTROOM_SYNC_INTERNAL_URL
         # host:port on the private network (e.g. draftroom-staging-sync-xxxx:10000); the api builds
         # http://host:port. Under NODE_ENV=production the api refuses to start without it, or with a
