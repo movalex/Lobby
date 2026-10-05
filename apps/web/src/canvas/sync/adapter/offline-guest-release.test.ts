@@ -6,6 +6,7 @@ import { createHarness } from '../testing/harness.ts'
 import type { OfflineEntry, OfflineQueueStore } from '../types.ts'
 import {
   guestOfflineQueue,
+  guestQueueLeaver,
   purgeGuestQueuesOf,
   releaseGuestQueue,
   releaseGuestQueueSoon,
@@ -116,6 +117,62 @@ describe('releaseGuestQueueSoon: the release waits for the rest of the unmount',
     cancel()
     vi.runAllTimers()
     expect(known(board, gwen), 'the board is still open: its mark stays').toBe(true)
+  })
+})
+
+describe('guestQueueLeaver: what the shell’s effect does (arrive on mount, leave on cleanup)', () => {
+  it('a real unmount releases the idle queue once the tick has passed', () => {
+    const gwen = freshUser('gwen')
+    const board = freshBoard()
+    guestOn(board, gwen)
+    const leaver = guestQueueLeaver()
+    leaver.arrive({ boardId: board, uid: gwen })
+    leaver.leave({ boardId: board, uid: gwen })
+    expect(known(board, gwen), 'the rest of the unmount runs first').toBe(true)
+    vi.runAllTimers()
+    expect(known(board, gwen)).toBe(false)
+  })
+
+  it('StrictMode’s simulated unmount and remount keeps the queue, and the real unmount after it still releases it', () => {
+    const gwen = freshUser('gwen')
+    const board = freshBoard()
+    guestOn(board, gwen)
+    const leaver = guestQueueLeaver()
+    leaver.arrive({ boardId: board, uid: gwen }) // mount
+    leaver.leave({ boardId: board, uid: gwen }) // simulated unmount
+    leaver.arrive({ boardId: board, uid: gwen }) // simulated remount, before the timer
+    vi.runAllTimers()
+    expect(known(board, gwen), 'the board is still open: its mark stays').toBe(true)
+    leaver.leave({ boardId: board, uid: gwen }) // the page really moves on
+    vi.runAllTimers()
+    expect(known(board, gwen)).toBe(false)
+  })
+
+  it('a mount on another board, or by another person, does not cancel the release', () => {
+    const gwen = freshUser('gwen')
+    const gus = freshUser('gus')
+    const board = freshBoard()
+    guestOn(board, gwen)
+    const leaver = guestQueueLeaver()
+    leaver.leave({ boardId: board, uid: gwen })
+    leaver.arrive({ boardId: freshBoard(), uid: gwen })
+    leaver.arrive({ boardId: board, uid: gus })
+    vi.runAllTimers()
+    expect(known(board, gwen)).toBe(false)
+  })
+
+  it('a queue that gets an unsent edit between the unmount and the tick stays (the order React runs the cleanups in)', async () => {
+    const gwen = freshUser('gwen')
+    const board = freshBoard()
+    const q = guestOn(board, gwen)
+    const leaver = guestQueueLeaver()
+    leaver.arrive({ boardId: board, uid: gwen })
+    leaver.leave({ boardId: board, uid: gwen }) // the shell's cleanup: parents first
+    await q.save([entry('r1', 5)]) // the session's dispose, after it
+    vi.runAllTimers()
+    const back = guestOfflineQueue({ boardId: board, uid: gwen })
+    expect(back.known).toBe(true)
+    expect((await back.load()).map((e) => e.element.id)).toEqual(['r1'])
   })
 })
 

@@ -126,6 +126,32 @@ export function releaseGuestQueueSoon(o: { readonly boardId: string; readonly ui
 }
 
 /**
+ * The board page's side of `releaseGuestQueueSoon`, one per mounted shell (LobbyBoardShell holds it in state
+ * and calls it from an effect, so the logic that cannot be seen from outside a browser is tested here):
+ * `leave` (the effect's cleanup) starts the deferred release and remembers its cancel; `arrive` (the effect)
+ * cancels it when the page is mounted again on the SAME board by the SAME person before the timer ran
+ * (React StrictMode's simulated unmount and remount, in `vite dev`). A mount on another board, or by
+ * another person, leaves the release running.
+ */
+export function guestQueueLeaver(): {
+  arrive(o: { readonly boardId: string; readonly uid: string }): void
+  leave(o: { readonly boardId: string; readonly uid: string }): void
+} {
+  let pending: { readonly boardId: string; readonly uid: string; readonly cancel: () => void } | null = null
+  return {
+    arrive(o) {
+      if (pending && pending.boardId === o.boardId && pending.uid === o.uid) {
+        pending.cancel()
+        pending = null
+      }
+    },
+    leave(o) {
+      pending = { boardId: o.boardId, uid: o.uid, cancel: releaseGuestQueueSoon(o) }
+    },
+  }
+}
+
+/**
  * Drops every guest queue `uid` has on this page (the person's own sign-out, CRIT-18, as
  * `purgeOfflineQueuesOf` does for a member's device queues); returns how many there were.
  */
