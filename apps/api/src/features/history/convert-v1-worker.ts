@@ -39,11 +39,8 @@ function run({ json, now, maxResultBytes }: WorkerInput): WorkerOutput {
 if (parentPort) {
   try {
     parentPort.postMessage(run(workerData as WorkerInput))
-  } catch (e) {
-    parentPort.postMessage({
-      ok: false,
-      reason: 'failed',
-      detail: (e as Error)?.name ?? 'Error',
-    } satisfies WorkerOutput)
+  } catch {
+    // a converter bug: no detail (nothing of the board in it), the caller answers as for any failure
+    parentPort.postMessage({ ok: false, reason: 'failed' } satisfies WorkerOutput)
   }
 }

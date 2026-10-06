@@ -8,7 +8,10 @@
 //    board of a duplicate, a v2 archive). Live elements only (tombstones are dropped).
 //  - `{ snapshot: { schema, documents } }`: tldraw records, the body today's api sends (a v1 checkpoint, a
 //    v1 archive import). They are migrated and converted with the same converter the board conversion
-//    uses (packages/tldraw-import, §5.5 "converted on read"), and `lb_doc.import` records it.
+//    uses (packages/tldraw-import, §5.5 "converted on read"), and `lb_doc.import` records it. The conversion
+//    runs in a worker thread with limits (./convert-v1.ts, J4), never on this server's event loop: a body past
+//    them is refused 413 IMPORT_TOO_LARGE (records, bytes) or 422 IMPORT_TOO_COMPLEX (time, heap), and 503 BUSY
+//    when the one conversion place and its short queue are taken. Nothing is created for a refused body.
 //
 // Either way every element passes the room's own per-element check (canvas-schema checkElement: the strict
 // schema, byte limits, the customData registry) and the cross-element invariants (§2.4.4), the board caps
@@ -23,21 +26,15 @@ import { existsSync, rmSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { docValueProblem } from '@draftroom/canvas-schema/doc'
 import { checkElement, type WireElement } from '@draftroom/canvas-schema/elements'
-import {
-  compareByIndex,
-  indexKeysBetween,
-  installedServerTextMetrics,
-  installServerTextMetrics,
-  isValidIndexKey,
-} from '@draftroom/canvas-schema/engine'
+import { compareByIndex, indexKeysBetween, isValidIndexKey } from '@draftroom/canvas-schema/engine'
 import { checkInvariants } from '@draftroom/canvas-schema/invariants'
 import { MAX_ITEMS, MAX_LIVE_ELEMENTS, MAX_TAG_DEFS } from '@draftroom/canvas-schema/limits'
-import { convertBoard, lossyCounts, migrateRecords, type TlRecord } from '@draftroom/tldraw-import'
 import type { InternalRoute, RoomExtensionContext, ServerWriteChange } from '../engine-switch.ts'
 import { readJson } from '../http/body.ts'
 import { HttpError, sendJson } from '../http/respond.ts'
 import { importDoc } from '../room/migrate/convert-board.ts'
 import { boardParam, boardPath, writeBoard } from './board.ts'
+import { convertForSeed, seedRefusalError } from './convert-v1.ts'
 import { type El, isLabel, isObject } from './elements.ts'
 
 /** A board is JSON of every element; generous, but bounded before parsing (as the tldraw seed). */
@@ -50,12 +47,8 @@ export interface SeedContent {
 
 const invalid = (message: string) => new HttpError(400, 'bad-request', message)
 
-function metrics() {
-  return installedServerTextMetrics() ?? installServerTextMetrics()
-}
-
-/** tldraw records → elements and doc values, with the converter (§5.5). */
-function fromTldraw(snapshot: unknown, now: number): SeedContent {
+/** tldraw records → elements and doc values, with the converter (§5.5), in a worker thread (./convert-v1.ts). */
+async function fromTldraw(snapshot: unknown, now: number): Promise<SeedContent> {
   if (!isObject(snapshot) || !Array.isArray(snapshot.documents))
     throw invalid('snapshot.documents is required.')
   const records: unknown[] = []
@@ -63,19 +56,15 @@ function fromTldraw(snapshot: unknown, now: number): SeedContent {
     if (!isObject(d) || !isObject(d.state)) throw invalid('snapshot.documents[].state must be a record.')
     records.push(d.state)
   }
-  const migrated = migrateRecords(records, snapshot.schema)
-  if (!migrated.ok) throw invalid(`The tldraw records cannot be read (${migrated.reason}).`)
-  const conv = convertBoard(migrated.records as TlRecord[], { updatedAt: now, metrics: metrics() })
-  if (conv.failures.length)
-    throw invalid(
-      `The board cannot be converted (${[...new Set(conv.failures.map((f) => f.code))].join(', ')}).`,
-    )
+  const out = await convertForSeed({ records, schema: snapshot.schema, now })
+  if (!out.ok) throw seedRefusalError(out.reason, out.detail)
+  const { converted } = out
   const doc: Record<string, unknown> = {}
-  if (conv.doc.startView) doc.startView = conv.doc.startView
-  if (conv.doc.workshop) doc.workshop = conv.doc.workshop
-  for (const [key, def] of Object.entries(conv.doc.tagDefs)) doc[`tagDef:${key}`] = def
-  doc.import = importDoc(now, conv.legacyPages, conv.legacyIds, lossyCounts(conv.lossy))
-  return { elements: conv.elements, doc }
+  if (converted.doc.startView) doc.startView = converted.doc.startView
+  if (converted.doc.workshop) doc.workshop = converted.doc.workshop
+  for (const [key, def] of Object.entries(converted.doc.tagDefs)) doc[`tagDef:${key}`] = def
+  doc.import = importDoc(now, converted.legacyPages, converted.legacyIds, converted.lossy)
+  return { elements: converted.elements as unknown as WireElement[], doc }
 }
 
 /**
@@ -150,9 +139,9 @@ export function prepareSeedContent(raw: SeedContent): SeedContent {
 }
 
 /** The request body as content (either format). */
-export function parseSeedBody(body: unknown, now: number): SeedContent {
+export async function parseSeedBody(body: unknown, now: number): Promise<SeedContent> {
   if (!isObject(body)) throw invalid('Expected a JSON object.')
-  if (body.snapshot !== undefined) return fromTldraw(body.snapshot, now)
+  if (body.snapshot !== undefined) return await fromTldraw(body.snapshot, now)
   if (body.format !== 'lobby-elements' || !Array.isArray(body.elements))
     throw invalid('Expected { format: "lobby-elements", elements, doc } or { snapshot }.')
   const doc = body.doc === undefined ? {} : body.doc
@@ -163,7 +152,7 @@ export function parseSeedBody(body: unknown, now: number): SeedContent {
 async function handleSeed(ctx: RoomExtensionContext, req: IncomingMessage, res: ServerResponse, raw: string) {
   const boardId = boardParam(raw)
   const now = ctx.deps.now?.() ?? Date.now()
-  const content = prepareSeedContent(parseSeedBody(await readJson(req, SEED_LIMIT_BYTES), now))
+  const content = prepareSeedContent(await parseSeedBody(await readJson(req, SEED_LIMIT_BYTES), now))
   const path = boardPath(ctx, boardId)
   if (existsSync(path) || ctx.service.roomIfOpen(boardId))
     throw new HttpError(
