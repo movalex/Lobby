@@ -129,6 +129,111 @@ describe('open email sign-in', () => {
   })
 })
 
+// Wave J's outsider features on the theater (docs/OPEN-SIGNIN.md): the open lookup makes everyone who
+// signs in a creator, so nobody there is "External", no board is "Shared outside" because of who signs
+// in, the owner hears no "outsider joined", the Share dialog asks no outside confirm, and the built-in
+// owner of the shared workspace (it never signs in) neither reads 'unconfirmed' nor makes every board's
+// composer start "Team only". Name-only guests stay guests.
+describe('wave J outside markers under open sign-in', () => {
+  it('labels nobody outside: tags, shared outside, the joined notice, the address check, team only', async () => {
+    const dana = await emailLogin('dana@example.com', 'Dana')
+    const sam = await emailLogin('sam@another.test', 'Sam')
+    const create = await dana.req('POST', `/api/workspaces/${SHARED_WORKSPACE_ID}/boards`, { title: 'Set' })
+    expect(create.statusCode).toBe(201)
+    const id = (create.json() as { id: string }).id
+    expect((await dana.req('PATCH', `/api/boards/${id}`, { visibility: 'workspace_edit' })).statusCode).toBe(
+      200,
+    )
+
+    // Sam opens it (a ticket): the owner hears nothing.
+    expect((await sam.req('POST', `/api/boards/${id}/ticket`)).statusCode).toBe(200)
+    await new Promise((r) => setTimeout(r, 200))
+    const joined = await api.db.one<{ n: number }>(
+      "SELECT count(*)::int AS n FROM notifications WHERE kind = 'outsider_joined'",
+    )
+    expect(joined.n).toBe(0)
+
+    // The board's outside people and the "Shared outside" marker, for a manager and for an editor.
+    for (const c of [dana, sam]) {
+      const outside = await c.req('GET', `/api/boards/${id}/sharing/outside`)
+      expect(outside.statusCode, outside.body).toBe(200)
+      expect(outside.json()).toMatchObject({ sharedOutside: false, people: [] })
+    }
+    const list = await dana.req('GET', `/api/workspaces/${SHARED_WORKSPACE_ID}/boards`)
+    const listed = (list.json() as { boards: { id: string; sharedOutside?: boolean }[] }).boards
+    expect(listed.find((b) => b.id === id)?.sharedOutside).toBe(false)
+
+    // The people picker (a manager of the board): every member, the built-in owner included, is inside.
+    const members = await dana.req('GET', `/api/workspaces/${SHARED_WORKSPACE_ID}/members?boardId=${id}`)
+    expect(members.statusCode, members.body).toBe(200)
+    const outsideOf = Object.fromEntries(
+      (members.json() as { members: { user: { id: string }; outside?: unknown }[] }).members.map((m) => [
+        m.user.id,
+        m.outside,
+      ]),
+    )
+    expect(outsideOf).toEqual({ [SHARED_OWNER_ID]: false, [dana.userId]: false, [sam.userId]: false })
+
+    // The Share dialog's address check: any address is inside (everyone who signs in is a creator).
+    const check = await dana.req('POST', `/api/boards/${id}/sharing/address-check`, {
+      email: 'new.person@elsewhere.test',
+    })
+    expect(check.statusCode, check.body).toBe(200)
+    expect(check.json()).toMatchObject({ outside: false, internalOnly: null })
+
+    // Comments: no author is External, and the composer does not start "Team only".
+    const posted = await sam.req('POST', `/api/boards/${id}/threads`, {
+      anchor: { kind: 'point', x: 0, y: 0 },
+      body: 'Hello',
+    })
+    expect(posted.statusCode, posted.body).toBe(201)
+    const threads = await dana.req('GET', `/api/boards/${id}/threads`)
+    const body = threads.json() as {
+      threads: { comments: { author: { external?: boolean } }[] }[]
+      privacy: { teamOnly: boolean; teamOnlyDefault: boolean }
+    }
+    expect(body.threads.flatMap((t) => t.comments).map((c) => c.author.external)).toEqual([false])
+    expect(body.privacy).toEqual({ teamOnly: true, teamOnlyDefault: false })
+  })
+
+  it('feedback: anyone signed in sends it, nobody reads the inbox through the app (J5)', async () => {
+    const dana = await emailLogin('dana@example.com', 'Dana')
+    const sent = await dana.req('POST', '/api/feedback', { text: 'The stage plot is upside down' })
+    expect(sent.statusCode, sent.body).toBe(201)
+    expect((await dana.req('GET', '/api/feedback/access')).json()).toEqual({ admin: false })
+    expect((await dana.req('GET', '/api/feedback')).statusCode).toBe(404)
+  })
+
+  it('a sign-in on a shared computer ends the previous person’s session, and the sync hears it (J3 RT-01)', async () => {
+    const first = await api.anon('POST', '/api/auth/email/login', { email: 'dana@example.com', name: 'Dana' })
+    const cookie = first.cookies.find((c) => c.name === 'dr_session')?.value
+    const danaId = (first.json() as Me).user.id
+    const board = await api.anon(
+      'POST',
+      `/api/workspaces/${SHARED_WORKSPACE_ID}/boards`,
+      { title: 'Notes' },
+      { cookie: `dr_session=${cookie}` },
+    )
+    expect(board.statusCode).toBe(201)
+    const boardId = (board.json() as { id: string }).id
+    api.sessionEnds.length = 0
+    const next = await api.anon(
+      'POST',
+      '/api/auth/email/login',
+      { email: 'sam@example.com', name: 'Sam' },
+      { cookie: `dr_session=${cookie}` },
+    )
+    expect(next.statusCode).toBe(200)
+    expect(api.sessionEnds).toEqual([danaId])
+    const access = await api.app.inject({
+      method: 'GET',
+      url: `/internal/access?boardId=${boardId}&userId=${danaId}`,
+      headers: { 'x-draftroom-internal': INTERNAL_SECRET },
+    })
+    expect(access.json()).toMatchObject({ role: 'owner', signedInSince: null })
+  })
+})
+
 describe('partner boards', () => {
   it('creates the board for a key once, then returns the same one (renaming it when the title changed)', async () => {
     const first = await partner('theaitre:production:42', { title: 'James and the Giant Peach' })
@@ -216,6 +321,13 @@ describe('open sign-in configuration', () => {
       /requires AUTH_PROVIDER=email/,
     )
     expect(() => loadConfig(env({ ...OPEN_ENV, DRAFTROOM_OPEN_SIGNIN: 'yes' }))).toThrow(/must be 1/)
+  })
+
+  it('refuses feedback inbox readers (J5): their addresses could not be verified', () => {
+    expect(() => loadConfig(env({ ...OPEN_ENV, DRAFTROOM_FEEDBACK_ADMINS: 'lead@example.com' }))).toThrow(
+      /DRAFTROOM_FEEDBACK_ADMINS needs a provider that verifies addresses/,
+    )
+    expect(loadConfig(env({ ...OPEN_ENV, DRAFTROOM_FEEDBACK_ADMINS: '' })).feedbackAdmins).toEqual([])
   })
 
   it('keeps the partner token apart from every other secret', () => {

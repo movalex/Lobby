@@ -97,10 +97,21 @@ export const userParams = (lookup: CreatorLookup, now: Date): unknown[] => [
 
 // ---- wave J (outside markers): what is known about an account, for the manager-only fields ---------
 
-/** `alias` has a stored address of the running provider that qualifies (any age); params from `first`. */
+/**
+ * `alias` has a stored address of the running provider that qualifies (any age); params from `first`.
+ * The same address test as userColumns, the open lookup's "*" included (open email sign-in: any address).
+ */
 const qualifiesSql = (alias: string, first: number) =>
   `EXISTS (SELECT 1 FROM user_emails e WHERE e.user_id = ${alias}.id AND e.source = $${first}::text
-      AND (e.domain = ANY($${first + 1}::text[]) OR e.email = ANY($${first + 2}::text[])))`
+      AND (e.domain = ANY($${first + 1}::text[]) OR e.email = ANY($${first + 2}::text[])
+        OR '*' = ANY($${first + 1}::text[])))`
+
+/**
+ * Open email sign-in (docs/OPEN-SIGNIN.md): everyone who signs in is a creator, so an account is never
+ * "unconfirmed" there. The only never-checked account is the shared workspace's built-in owner, which
+ * cannot sign in (auth/shared-workspace.ts): it is not someone outside.
+ */
+export const isOpenLookup = (lookup: CreatorLookup): boolean => lookup.domains.includes(OPEN_CREATOR_DOMAIN)
 
 /**
  * The columns behind an account's OutsideInfo (@draftroom/contracts outside.ts) for a `users u` row,

@@ -59,6 +59,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { isBoardId, isUserId, isWorkspaceId, loadBoardAccess, requireBoardAction } from '../../access.ts'
 import {
   type CreatorLookup,
+  isOpenLookup,
   knownOutsideSql,
   matchParams,
   originColumns,
@@ -93,12 +94,13 @@ export interface OutsideDeps {
 /** The invite page's mask (routes/invitations.ts maskEmail): `jane@client.example` → `j•••@client.example`. */
 const maskAddress = (email: string) => `${email.slice(0, 1)}•••@${emailDomain(email)}`
 
-function toInfo(r: OriginRow): OutsideInfo {
+function toInfo(r: OriginRow, open: boolean): OutsideInfo {
   if (r.o_kind === 'guest') return { outside: true, emailDomain: null, emailHint: null }
   const email = r.o_email
   // A stale account whose addresses qualify: false (see the header); never checked: 'unconfirmed'.
+  // Open email sign-in: no account is outside or unconfirmed (creator-sql.ts isOpenLookup).
   const outside: OutsideInfo['outside'] =
-    r.o_creator || (r.o_checked_at !== null && r.o_qualifies)
+    open || r.o_creator || (r.o_checked_at !== null && r.o_qualifies)
       ? false
       : r.o_checked_at !== null
         ? true
@@ -123,7 +125,8 @@ export async function originAmong(
     `SELECT ${originColumns(2)} FROM users u WHERE u.id = ANY($1::text[])`,
     [ids, ...userParams(deps.identity.lookup, deps.now())],
   )
-  for (const r of rows.rows) out.set(r.o_id, toInfo(r))
+  const open = isOpenLookup(deps.identity.lookup)
+  for (const r of rows.rows) out.set(r.o_id, toInfo(r, open))
   return out
 }
 

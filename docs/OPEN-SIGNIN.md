@@ -28,6 +28,11 @@ verification.**
 - Domain-access code paths are unchanged. The open policy is the creator lookup for the `email` provider only
   (`creator-sql.ts`: domain `*`, which `DRAFTROOM_CREATOR_DOMAINS` can never contain), and `user_emails` rows with
   source `email` count only while the server runs the email provider.
+- **Wave J's outside markers** (External tags, Shared outside, the one-time outside confirm, Internal only, the
+  owner's "outsider joined" notice) never fire because of the open policy: every account that signs in qualifies
+  (`creator-sql.ts` `qualifiesSql` and `isOpenLookup`), and the built-in owner is neither "unconfirmed" nor a reason to
+  start comments "Team only". Name-only guests from links are still guests. `DRAFTROOM_FEEDBACK_ADMINS` is refused at
+  startup with the email provider (anyone could type a reader's address); feedback can still be sent.
 
 ## Configuration (api)
 
@@ -89,8 +94,11 @@ board to run the new Lobby. Nothing is copied into theaitre-bot.
 
 - `apps/api/test/open-signin.test.ts`: sign-in, the shared workspace, creators past the 24-hour grace period, no personal
   workspace (also through `GET /api/me`), partner idempotence and the concurrent first call, the partner refusals, and
-  the configuration rules.
-- `packages/db/test/open-signin-0025.test.ts`: the migration's constraints and the upgrade from 0024.
+  the configuration rules. Wave J under open sign-in: nobody outside (tags, Shared outside, the notice, the address
+  check, Team only), feedback sent but no inbox readers, a sign-in on a shared computer ending the previous person's
+  session for the sync (RT-01).
+- `packages/db/test/open-signin-0025.test.ts`: the migration's constraints and the upgrade from 0024;
+  `packages/db/test/outside-markers-0026.test.ts` applies wave J's 0026 and 0027 on top of it.
 - `apps/api/test/features/domain-access/creation-matrix.test.ts` lists the new INSERT sites
   (`auth/shared-workspace.ts`, `routes/partner.ts`).
 - Checked by hand in a browser on a local stack (api 6859, sync 6858, web 6173): theaitre-bot's "Open board" →

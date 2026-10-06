@@ -494,6 +494,14 @@ export function loadConfig(env: Env = process.env): ApiConfig {
     openSignin = { workspaceName, partnerToken }
   }
 
+  // The inbox readers are matched against verified addresses; open email sign-in verifies none (anyone
+  // could type a reader's address), so the two never run together.
+  const feedbackAdmins = parseFeedbackAdmins(env)
+  if (authProvider === 'email' && feedbackAdmins.length)
+    throw new Error(
+      'DRAFTROOM_FEEDBACK_ADMINS needs a provider that verifies addresses: AUTH_PROVIDER=email lets anyone sign in as any address',
+    )
+
   const dataDir = resolveDataDir(env)
   return {
     production,
@@ -544,6 +552,6 @@ export function loadConfig(env: Env = process.env): ApiConfig {
     ai: parseAiConfig(env, production),
     creators: parseCreatorPolicy(env),
     linkPreviewTestOrigins: parseLinkPreviewTestOrigins(env, devAuth),
-    feedbackAdmins: parseFeedbackAdmins(env),
+    feedbackAdmins,
   }
 }

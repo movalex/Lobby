@@ -18,7 +18,8 @@ import type { AppContext } from '../../context.ts'
 export type AdminCheck = (req: FastifyRequest, user: SessionUser) => Promise<boolean>
 
 export function createAdminCheck(ctx: AppContext): AdminCheck {
-  const admins = new Set(ctx.config.feedbackAdmins)
+  // Never under open email sign-in, whose addresses are typed, not verified (config.ts refuses the pair).
+  const admins = new Set(ctx.identity.lookup.source === 'email' ? [] : ctx.config.feedbackAdmins)
   const listed = async (user: SessionUser) =>
     (await storedEmails(ctx.db, user.id, ctx.identity.lookup.source)).some((e) => admins.has(e))
 

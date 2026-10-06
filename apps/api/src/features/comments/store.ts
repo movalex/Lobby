@@ -22,6 +22,7 @@ import { type BoardRole, can, resolveBoardRole, type WorkspaceRole } from '@draf
 import type { BoardRow } from '../../access.ts'
 import {
   type CreatorLookup,
+  isOpenLookup,
   knownOutsideSql,
   matchParams,
   userColumns,
@@ -345,7 +346,10 @@ export async function hasOutsideAccess(
          LEFT JOIN board_members bm ON bm.board_id = $1 AND bm.user_id = wm.user_id
         WHERE wm.workspace_id = $2
           AND (wm.role IN ('owner', 'admin') OR bm.role IS NOT NULL OR (wm.role = 'member' AND $4::text <> 'private'))
-          AND (${knownOutsideSql('u', 5)} OR (u.kind = 'account' AND u.identity_checked_at IS NULL))
+          AND (${knownOutsideSql('u', 5)}${
+            // never checked: not on the team; under open sign-in only the built-in owner, who never signs in
+            isOpenLookup(lookup) ? '' : " OR (u.kind = 'account' AND u.identity_checked_at IS NULL)"
+          })
      )) AS outside`,
     [board.id, board.workspace_id, at, board.visibility, ...matchParams(lookup)],
   )
