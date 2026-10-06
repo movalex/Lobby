@@ -93,7 +93,8 @@ describe('RT-01: an ended sign-in closes the person’s board sockets', () => {
     await stillOpen(again)
     expect((await again.create([rect('reconnected')])).r[0]).toMatchObject({ ok: true })
     // and a ticket the ended session got just before the end, presented now, is sent away on admission
-    const late = await st.client({
+    // (a socket only: the re-check can close it before its welcome would come)
+    const late = await st.socket({
       boardId: b,
       user: 'alice',
       tab: 'late-old-ticket',
