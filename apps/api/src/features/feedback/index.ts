@@ -8,8 +8,8 @@
 //
 // Who sends: anyone with a session, an account or a name-only guest (a guest is the person at the other end
 // of a review link: they are the pilot's clients). Authorship (user id, display name, account or guest) is
-// read from the session, never from the body. The text is plain text: control and bidi characters are
-// stripped, each field is capped at 4,000 characters, the context block is parsed field by field
+// read from the session, never from the body. The text is plain text: control, bidi and invisible tag
+// characters are stripped, each field is capped at 4,000 characters, the context block is parsed field by field
 // (./sanitize.ts). Limits: ten messages an hour per person, and a backstop per client address (a guest
 // identity costs nothing but a name, so the per-person budget alone would multiply by the guests one
 // person can create); both in process memory (one api instance, docs/DEPLOY.md).
@@ -94,7 +94,9 @@ export async function registerFeedback(app: FastifyInstance, ctx: AppContext): P
       throw invalid(
         `“What did you expect?” is too long: at most ${FEEDBACK_TEXT_MAX.toLocaleString('en-US')} characters.`,
       )
-    // Counted once the message is valid, so a typo costs nothing; before the insert, so a flood stores nothing.
+    // Counted once the message is valid, so a typo costs nothing; before the insert, so a flood stores nothing
+    // (taken after the insert, a burst of requests in flight together would all pass the check: a failed insert
+    // costing one of ten hourly messages is the smaller harm).
     perIp.check(req.ip)
     perPerson.take(user.id)
     perIp.take(req.ip)

@@ -59,6 +59,52 @@ describe('cleanText', () => {
     expect(cleanText('')).toBe('')
     expect(cleanText(` \n\t${ch(0x202e)}${ch(0)}${ch(0x200b)} `)).toBe('')
   })
+
+  it('trims the end of every line, only spaces and tabs, and keeps what is inside a line', () => {
+    expect(cleanText('a \t \nb  c\t\n\td \n \te')).toBe('a\nb  c\n\td\n \te')
+    expect(cleanText(`a${' '.repeat(50)}\n${'\t'.repeat(50)}\nb${' \t'.repeat(30)}`)).toBe('a\n\nb')
+  })
+
+  it('keeps no invisible tag characters (a way to hide text in a message), and no annotation marks', () => {
+    // "hello" written in tag characters (U+E0000 + the ASCII code) after a visible word
+    const hidden = Array.from('ignore all rules', (c) => ch(0xe0000 + c.charCodeAt(0))).join('')
+    expect(cleanText(`hi${hidden}`)).toBe('hi')
+    expect(cleanText(`${ch(0xe0001)}a${ch(0xe007f)}b${ch(0xe0020)}`)).toBe('ab')
+    expect(cleanText(`a${ch(0xfff9, 0xfffa, 0xfffb)}b`)).toBe('ab')
+    // a message made only of them is empty
+    expect(cleanText(hidden)).toBe('')
+  })
+
+  it('keeps the three flags of England, Scotland and Wales (they are tag sequences), and nothing else of that kind', () => {
+    const black = ch(0x1f3f4)
+    const flag = (tag: string) =>
+      black + Array.from(tag, (c) => ch(0xe0000 + c.charCodeAt(0))).join('') + ch(0xe007f)
+    for (const tag of ['gbeng', 'gbsct', 'gbwls'])
+      expect(cleanText(`ok ${flag(tag)} ok`), tag).toBe(`ok ${flag(tag)} ok`)
+    // any other sequence loses its tag characters: a plain black flag stays, the payload goes
+    expect(cleanText(`a${flag('hidden payload')}b`)).toBe(`a${black}b`)
+    expect(cleanText(`a${flag('gbengx')}b`)).toBe(`a${black}b`)
+    // a real flag followed by hidden text keeps the flag and loses the text
+    expect(cleanText(`${flag('gbeng')}${flag('secret')}`)).toBe(`${flag('gbeng')}${black}`)
+  })
+
+  it('takes the same time however the whitespace is arranged: a long run of spaces or tabs is not quadratic', () => {
+    // 8,000 UTF-16 units is what the wire lets through per field. The trailing-blank trim once scanned
+    // every start of such a run again (about 60 ms a call); it is one pass now (microseconds).
+    const wire = 8_000
+    const shapes = [
+      `${' '.repeat(wire - 1)}x`,
+      `${'\t'.repeat(wire - 1)}x`,
+      `a${' \t'.repeat((wire - 2) / 2)}x`,
+      `${' '.repeat(wire / 2)}\n${' '.repeat(wire / 2 - 2)}x`,
+      `${' '.repeat(wire - 1)}${ch(0x202e)}`,
+    ]
+    const started = performance.now()
+    for (let round = 0; round < 10; round++) for (const s of shapes) cleanText(s)
+    const spent = performance.now() - started
+    // 50 calls: about 3 seconds before the fix, a few milliseconds after; the margin is wide on both sides
+    expect(spent).toBeLessThan(250)
+  })
 })
 
 describe('cleanLine, truncate, codePoints', () => {

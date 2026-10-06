@@ -12,9 +12,12 @@ import type { FeedbackContext } from '@draftroom/contracts'
 /**
  * Code point ranges removed from every field: the controls except tab and newline (NUL included), DEL, the
  * C1 controls, the Arabic letter mark, the Mongolian vowel separator, the zero-width space, the left-to-right
- * and right-to-left marks, the bidi embeddings and overrides, the word joiner, the bidi isolates and the
- * byte-order mark. Zero-width joiners and non-joiners stay: emoji sequences and several scripts need them.
- * Written as numbers (not escapes) so no invisible character ever sits in this file.
+ * and right-to-left marks, the bidi embeddings and overrides, the word joiner, the bidi isolates, the
+ * byte-order mark, the interlinear annotation marks and the tag characters (U+E0000-U+E007F: they draw
+ * nothing, so a message can carry hidden text in them, which the lead's triage tooling would read; the
+ * three flag emoji that are made of them are kept, see SUBDIVISION_FLAGS). Zero-width joiners and
+ * non-joiners stay: emoji sequences and several scripts need them. Written as numbers (not escapes) so no
+ * invisible character ever sits in this file.
  */
 export const STRIPPED_RANGES: readonly (readonly [number, number])[] = [
   [0x0000, 0x0008],
@@ -28,6 +31,8 @@ export const STRIPPED_RANGES: readonly (readonly [number, number])[] = [
   [0x2060, 0x2060],
   [0x2066, 0x2069],
   [0xfeff, 0xfeff],
+  [0xfff9, 0xfffb],
+  [0xe0000, 0xe007f],
 ]
 
 const inClass = ([from, to]: readonly [number, number]) =>
@@ -53,12 +58,45 @@ export function truncate(s: string, max: number): string {
   return Array.from(s).slice(0, max).join('')
 }
 
-const strip = (s: string) => s.replace(STRIP, '').replace(LONE_SURROGATE, '')
+/**
+ * The only tag sequences that are text people write: the black flag, the letters of a region code in tag
+ * characters and the cancel tag make the flags of England, Scotland and Wales. They are kept whole; any
+ * other run of tag characters (including one wearing a black flag) is stripped.
+ */
+const SUBDIVISION_FLAGS = new RegExp(
+  `(${String.fromCodePoint(0x1f3f4)}(?:${['gbeng', 'gbsct', 'gbwls']
+    .map((region) => Array.from(region, (c) => String.fromCodePoint(0xe0000 + c.charCodeAt(0))).join(''))
+    .join('|')})${String.fromCodePoint(0xe007f)})`,
+  'u',
+)
+
+/** The unwanted characters out of every stretch of text between the flags above (split keeps the flags). */
+const strip = (s: string) =>
+  s
+    .split(SUBDIVISION_FLAGS)
+    .map((part, i) => (i % 2 === 1 ? part : part.replace(STRIP, '').replace(LONE_SURROGATE, '')))
+    .join('')
+
+/**
+ * Spaces and tabs off the end of every line, in one pass. (A multiline regex replace for a run of blanks
+ * before the end of a line does the same but rescans the run from every position inside it: quadratic,
+ * about 60 ms for the 8,000 units the wire allows, on a route that refuses a message before it spends
+ * the person's budget.)
+ */
+function trimLineEnds(s: string): string {
+  return s
+    .split('\n')
+    .map((line) => {
+      let end = line.length
+      while (end > 0 && (line.charCodeAt(end - 1) === 0x20 || line.charCodeAt(end - 1) === 0x09)) end--
+      return end === line.length ? line : line.slice(0, end)
+    })
+    .join('\n')
+}
 
 /** Multi-line plain text: line breaks normalised, blank runs capped at two lines, edges trimmed. */
 export function cleanText(raw: string): string {
-  return strip(raw.replace(BREAKS, '\n'))
-    .replace(/[ \t]+$/gm, '')
+  return trimLineEnds(strip(raw.replace(BREAKS, '\n')))
     .replace(/\n{4,}/g, '\n\n\n')
     .trim()
 }
