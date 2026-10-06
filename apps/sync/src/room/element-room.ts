@@ -936,8 +936,23 @@ export class ElementRoom {
   // ---- presence and lease ticks -------------------------------------------------------------------
 
   private presenceTick(): void {
-    // a peer's join reaches everyone before its first cursor does
-    this.rosterBatch.flush()
+    // a peer's join reaches everyone before its first cursor does. CAP-L1: when there are roster events, their
+    // frames go out in this task and the cursors in the next one (both write to every session: in a reconnect
+    // storm, one task doing both was the longest of the tick's)
+    if (this.rosterBatch.queued) {
+      this.rosterBatch.flush()
+      setImmediate(() => {
+        if (!this.closed) this.presenceTickNow()
+      })
+      return
+    }
+    this.presenceTickNow()
+  }
+
+  /** The presence tick's frames (presence.ts tick), to every welcomed session. */
+  private presenceTickNow(): void {
+    // a join queued meanwhile still goes first (the order above holds in every case)
+    if (this.rosterBatch.queued) this.rosterBatch.flush()
     const recipients = [...this.sessions]
       .filter((s) => s.welcomed && !s.closed)
       .map((s) => ({
