@@ -66,25 +66,42 @@ function parseServer(text: string): ServerMessage {
   return r.data
 }
 
+/**
+ * Where a forge socket's ticket goes (L7-tail): `protocol` (the default), the offered subprotocol
+ * `lobby.ticket.<ticket>` next to `lobby.board.v1`, as the board page sends it; `url`, the old `?ticket=`
+ * (no subprotocol), which the server still reads for one more release, only for the checks of that transport.
+ */
+export interface ForgeSocketOptions {
+  readonly ticketIn?: 'protocol' | 'url'
+}
+
 /** Opens a raw socket on `boardId` in `page`, with the page's own ticket. Sends nothing. */
-export async function forgeSocket(page: Page, boardId: string): Promise<O3ForgeSocket> {
+export async function forgeSocket(
+  page: Page,
+  boardId: string,
+  opts: ForgeSocketOptions = {},
+): Promise<O3ForgeSocket> {
   const key = `f${++seq}-${Date.now().toString(36)}`
   const tab = `${FORGE_SESSION_PREFIX}${key}`
+  const inUrl = opts.ticketIn === 'url'
   const opened = await page.evaluate(
-    async ({ boardId, key, tab }) => {
+    async ({ boardId, key, tab, inUrl }) => {
       const res = await fetch(`/api/boards/${encodeURIComponent(boardId)}/ticket`, {
         method: 'POST',
         credentials: 'same-origin',
       })
       if (res.status !== 200) return { ok: false as const, status: res.status }
       const body = (await res.json()) as { ticket: string; role: string; user: { id: string } }
-      // the ticket in the offered subprotocol, as the board page sends it (L7), never in the URL
+      // the ticket in the offered subprotocol, as the board page sends it (L7), never in the URL; `inUrl`: the
+      // old transport (?ticket=, no subprotocol)
       const url = `${location.origin.replace(/^http/, 'ws')}/connect/${encodeURIComponent(boardId)}?${new URLSearchParams(
-        { sessionId: tab },
+        inUrl ? { sessionId: tab, ticket: body.ticket } : { sessionId: tab },
       )}`
       const w = window as unknown as { __o3Forge?: Record<string, ForgeWindowState> }
       w.__o3Forge ??= {}
-      const ws = new WebSocket(url, ['lobby.board.v1', `lobby.ticket.${body.ticket}`])
+      const ws = inUrl
+        ? new WebSocket(url)
+        : new WebSocket(url, ['lobby.board.v1', `lobby.ticket.${body.ticket}`])
       ws.binaryType = 'arraybuffer'
       const st: ForgeWindowState = { ws, inbox: [], closed: null, opened: false, error: null }
       w.__o3Forge[key] = st
@@ -118,7 +135,7 @@ export async function forgeSocket(page: Page, boardId: string): Promise<O3ForgeS
       })
       return { ok: true as const, opened: st.opened, role: body.role, uid: body.user.id }
     },
-    { boardId, key, tab },
+    { boardId, key, tab, inUrl },
   )
   if (!opened.ok)
     throw new Error(`forge socket: the api refused a ticket for this page (HTTP ${opened.status})`)
@@ -234,8 +251,9 @@ export function freshHello(tab: string): Extract<ClientMessage, { type: 'hello' 
 export async function forgeSession(
   page: Page,
   boardId: string,
+  opts: ForgeSocketOptions = {},
 ): Promise<{ socket: O3ForgeSocket; welcome: Welcome }> {
-  const socket = await forgeSocket(page, boardId)
+  const socket = await forgeSocket(page, boardId, opts)
   await socket.send(freshHello(socket.tab))
   const welcome = (await socket.next('welcome', 30_000)) as Welcome
   return { socket, welcome }
