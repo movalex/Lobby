@@ -43,6 +43,7 @@ import { isSecretToken, newSecretToken, sha256hex } from '../auth/session.ts'
 import { storedEmails, userKind } from '../auth/users.ts'
 import type { AppContext, Params } from '../context.ts'
 import { ApiError, badRequest, forbidden, gone, notFound, parse } from '../errors.ts'
+import { assertInviteAllowed } from '../features/dashboard/outside.ts'
 import { assertGuestRoomOnLink } from '../features/guests/limits.ts'
 import { keyedLimit } from '../rate-limit.ts'
 
@@ -176,6 +177,9 @@ export async function createInvitation(
   // the running provider, as accepting would count it).
   if ((await storedEmails(tx, input.userId, ctx.identity.lookup.source)).includes(email))
     throw invitationToSelf()
+  // Wave J: while the board's workspace or project (a workspace invitation: the workspace) is internal
+  // only, an address that is not a creator address is refused (409 INTERNAL_ONLY).
+  await assertInviteAllowed(tx, ctx, { boardId: input.boardId, workspaceId: input.workspaceId }, email)
   const token = newSecretToken()
   const id = newId('inv')
   const createdAt = ctx.now()

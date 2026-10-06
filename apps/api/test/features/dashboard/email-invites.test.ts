@@ -253,6 +253,23 @@ describe('invite by email with Clerk sign-in (UNVERIFIED against a live Clerk; f
     expect(w.api.notifications.slice(before)).toHaveLength(2)
   })
 
+  it('wave J: an internal-only workspace refuses the "granted" path for an outside address before Clerk is asked', async () => {
+    const bob = await w.signIn('bob')
+    clerk.users = [verified(clerkIdOf('bob'), 'bob@example.com')]
+    await w.api.db.query('UPDATE workspaces SET internal_only = true WHERE id = $1', [
+      alice.personalWorkspaceId,
+    ])
+    const { res } = await sendInvite(alice, board, 'bob@example.com', 'commenter')
+    expect(res.statusCode, res.body).toBe(409)
+    expect((res.json() as { error: { code: string } }).error.code).toBe('INTERNAL_ONLY')
+    expect(clerk.lookups).toEqual([])
+    expect(await boardRole(bob, board)).toBeNull()
+    // A creator address is still invited (the lookup runs as before).
+    clerk.users = []
+    const ok = await sendInvite(alice, board, 'lobby-test-ana@darkburn.com', 'commenter')
+    expect(ok.res.statusCode, ok.res.body).toBe(201)
+  })
+
   it('a new person gets a single-use invitation emailed by Clerk (right redirect URL), locked to that address; nothing is granted until they accept, once', async () => {
     const { res, body } = await sendInvite(alice, board, 'Erin@Client.Example.Test', 'viewer')
     expect(res.statusCode, res.body).toBe(201)

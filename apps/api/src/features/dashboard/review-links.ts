@@ -38,6 +38,7 @@ import type { FeatureContext } from '../context.ts'
 import { publishExportPolicy } from '../export-control/index.ts'
 import { limitExportForClientLink } from '../export-control/policy.ts'
 import { extendGuestSessions } from '../guests/sessions.ts'
+import { assertLinksAllowed } from './outside.ts'
 import { publishSharingChanged } from './shared.ts'
 
 /** Open review links per board (a runaway client cannot fill the table). */
@@ -278,6 +279,8 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
         route: req.routeOptions.url ?? '',
         by: 'route',
       })
+      // Wave J: none while the board's workspace or project is internal only (409 INTERNAL_ONLY).
+      await assertLinksAllowed(tx, bid)
       const at = now()
       const open = await tx.one<{ n: number }>(
         `SELECT count(*)::int AS n FROM invitations
