@@ -329,6 +329,14 @@ const ALLOWED_INSERTS: Record<string, number> = {
   'auth/users.ts workspace_members': 1,
   'auth/dev.ts workspaces': 1,
   'auth/dev.ts workspace_members': 1,
+  // open email sign-in only (docs/OPEN-SIGNIN.md, AUTH_PROVIDER=email + DRAFTROOM_OPEN_SIGNIN=1, where every
+  // account is a creator): the shared workspace, its built-in owner, and each signed-in account as a member
+  'auth/shared-workspace.ts workspaces': 1,
+  'auth/shared-workspace.ts workspace_members': 2,
+  // open email sign-in only: partner boards (Bearer DRAFTROOM_PARTNER_TOKEN, no session), owned by the
+  // shared workspace's built-in owner
+  'routes/partner.ts boards': 1,
+  'routes/partner.ts board_members': 1,
   // gated: POST /api/workspaces/:wid/boards (the board and its creator's owner grant)
   'routes/boards.ts boards': 1,
   'routes/boards.ts board_members': 1,

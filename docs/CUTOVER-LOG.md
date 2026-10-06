@@ -261,3 +261,19 @@ on the sync disk (§6).
   - Backups: last pass 16:35Z, `failuresTotal` 0, 6 boards (the 4 real ones plus the 2 trashed test boards) with 0 failures and 0 pending.
   - 0 `error`/`FATAL` lines on api and sync in 24 h.
   - No Render service event besides the lead's own deploys (api/web `0e970a2` at 09:16Z; sync `54ea729` unchanged): no restart or out-of-memory event.
+- **2026-10-06 03:55Z, wave I deployed:** api and web `edf27c2`, sync `54ea729` unchanged. Wave I covered live-update
+  robustness, the private-notes retry, the creator-grant lock order and the guest queue release (PROGRESS.md). Live smoke passed.
+- **2026-10-06 check clean (19:19Z, about 5 days after the switch):**
+  - api, sync and web return 200; maintenance off.
+  - Backups: last pass 19:05Z, `failuresTotal` 0, 9 boards with 0 failures and 0 pending.
+  - 0 `error`/`FATAL` lines on api and sync in 24 h.
+  - No Render service event besides the lead's 03:55Z deploy: no restart or out-of-memory event.
+- **2026-10-06, `trailerpark.com` became a creator domain and sign-up stays in Lobby (owner's requests).** Two sessions did this
+  at the same time.
+  - 19:21Z (this watch): `DRAFTROOM_CREATOR_DOMAINS=darkburn.com,trailerparkgroup.com,trailerpark.com` was set on the api
+    through the Render API, and the api was restarted at `edf27c2` (`dep-db2kk6navr4c73edo7m0`). Its startup line listed
+    the three domains and 1 exception.
+  - 19:29Z (the other session, PROGRESS.md): api then web were deployed at `eb96ba46`. That release has `trailerpark.com` in
+    the code default (43b193a5), Clerk's sign-in-or-up flow (`<SignIn withSignUp>`) and the additive migration
+    `0025_open_signin`.
+  - The variable was then removed again, so unset means the default, the same three domains.

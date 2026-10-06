@@ -411,8 +411,8 @@ describe('blob store and worker token (docs/M3-STORAGE-CONTRACTS.md §6)', () =>
 })
 
 describe('domain access policy (docs/DOMAIN-ACCESS-CONTRACTS.md §2)', () => {
-  it('defaults to the two built-in domains and no exceptions, in development and production', () => {
-    const expected = { domains: ['darkburn.com', 'trailerparkgroup.com'], emails: [] }
+  it('defaults to the three built-in domains and no exceptions, in development and production', () => {
+    const expected = { domains: ['darkburn.com', 'trailerparkgroup.com', 'trailerpark.com'], emails: [] }
     expect(loadConfig(base).creators).toEqual(expected)
     // Neither variable is required in production: the api starts with the default policy.
     expect(loadConfig(prod).creators).toEqual(expected)
@@ -431,7 +431,7 @@ describe('domain access policy (docs/DOMAIN-ACCESS-CONTRACTS.md §2)', () => {
     expect(
       loadConfig({ ...base, DRAFTROOM_CREATOR_DOMAINS: ' ', DRAFTROOM_CREATOR_EMAILS: '' }).creators,
     ).toEqual({
-      domains: ['darkburn.com', 'trailerparkgroup.com'],
+      domains: ['darkburn.com', 'trailerparkgroup.com', 'trailerpark.com'],
       emails: [],
     })
   })
@@ -460,7 +460,10 @@ describe('domain access policy (docs/DOMAIN-ACCESS-CONTRACTS.md §2)', () => {
     })
     try {
       const entry = lines.map((l) => JSON.parse(l) as Record<string, unknown>).find((l) => 'creators' in l)
-      expect(entry?.creators).toEqual({ domains: ['darkburn.com', 'trailerparkgroup.com'], exceptions: 2 })
+      expect(entry?.creators).toEqual({
+        domains: ['darkburn.com', 'trailerparkgroup.com', 'trailerpark.com'],
+        exceptions: 2,
+      })
       expect(lines.join('\n')).not.toContain('personal.example.test')
     } finally {
       await api.close()

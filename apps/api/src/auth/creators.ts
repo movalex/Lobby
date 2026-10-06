@@ -1,7 +1,7 @@
 // Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §2): who is a "creator". Pure: no I/O, no clock.
 //
 // A creator has a verified sign-in address whose domain is exactly one of the creator domains
-// (default darkburn.com and trailerparkgroup.com), or an address on the exceptions list. Matching is
+// (default darkburn.com, trailerparkgroup.com and trailerpark.com), or an address on the exceptions list. Matching is
 // exact ASCII string equality on the text after the LAST "@": no suffixes, no subdomains, no Unicode
 // case folding (U+212A KELVIN SIGN lowercases to "k"), and never a Clerk test-mode "+clerk_test"
 // address. Every source of addresses goes through normalizeEmail: Clerk profiles, dev logins,
@@ -18,9 +18,15 @@ export interface CreatorPolicy {
   emails: readonly string[]
 }
 
-export const DEFAULT_CREATOR_DOMAINS = ['darkburn.com', 'trailerparkgroup.com'] as const
+// trailerpark.com: added by the owner 2026-10-06 (Trailer Park Group's other domain).
+export const DEFAULT_CREATOR_DOMAINS = ['darkburn.com', 'trailerparkgroup.com', 'trailerpark.com'] as const
 /** Counts as a creator domain only while the api RUNS the dev provider (D8). Never configurable. */
 export const DEV_CREATOR_DOMAIN = 'dev.invalid'
+/**
+ * Every domain: the policy of the open email provider only (docs/OPEN-SIGNIN.md), built in code by
+ * creatorLookup. Never configurable: DOMAIN_RE refuses "*" in DRAFTROOM_CREATOR_DOMAINS.
+ */
+export const OPEN_CREATOR_DOMAIN = '*'
 /** At most this many exceptions (DRAFTROOM_CREATOR_EMAILS). */
 export const MAX_CREATOR_EMAILS = 50
 
@@ -68,7 +74,7 @@ export function creatorMatch(
   devDomain: string | null,
 ): CreatorMatch | null {
   const domain = emailDomain(email)
-  if (policy.domains.includes(domain)) return 'domain'
+  if (policy.domains.includes(domain) || policy.domains.includes(OPEN_CREATOR_DOMAIN)) return 'domain'
   if (policy.emails.includes(email)) return 'exception'
   if (devDomain !== null && domain === devDomain) return 'dev'
   return null

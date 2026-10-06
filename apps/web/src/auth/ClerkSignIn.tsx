@@ -138,6 +138,9 @@ function ClerkExchange({ onDone, appearance }: { onDone(): void; appearance: Cle
       />
     )
   }
-  // Hash routing keeps Clerk's multi-step flow inside /signin without touching our router.
-  return <SignIn routing="hash" appearance={appearance} />
+  // Hash routing keeps Clerk's multi-step flow inside /signin without touching our router. withSignUp
+  // (Clerk's sign-in-or-up flow): an address with no account goes on to create one here, email code
+  // included, instead of "Sign up" leaving for Clerk's Account Portal, which had no way back to Lobby.
+  // The new account then lands in the exchange above like any sign-in.
+  return <SignIn routing="hash" withSignUp appearance={appearance} />
 }

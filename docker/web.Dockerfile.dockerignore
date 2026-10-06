@@ -1,0 +1,37 @@
+# Build context for docker/web.Dockerfile only (BuildKit reads <Dockerfile>.dockerignore instead of the
+# root .dockerignore). The same rules, except that this image needs the web app's sources, which the root
+# file leaves out because every other image runs without them.
+
+**/node_modules
+**/dist
+**/.data
+**/.data-*
+**/*.tsbuildinfo
+**/coverage
+
+**/.env
+**/.env.*
+**/dev.env
+
+.git
+.github
+.vscode
+.idea
+
+docs
+*.md
+render.yaml
+
+tests
+**/*.test.ts
+**/*.test.tsx
+apps/*/test
+packages/*/test
+apps/worker/scripts
+e2e/tests
+e2e/test-results
+e2e/playwright-report
+e2e/blob-report
+**/test-results
+**/playwright-report
+**/*.log

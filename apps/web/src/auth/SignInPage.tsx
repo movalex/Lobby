@@ -20,6 +20,10 @@ const ClerkSignIn = lazy(() => import('./ClerkSignIn.tsx'))
 export const SIGN_IN_TAGLINE =
   'Shared boards for sketching, planning and reviewing work together, with a lobby for each DBC project.'
 
+/** Open email sign-in (docs/OPEN-SIGNIN.md): the same promise, without DBC, for the shared workspace. */
+export const openSignInTagline = (workspaceName: string | undefined) =>
+  `Shared boards for sketching and planning together${workspaceName ? ` at ${workspaceName}` : ''}.`
+
 export function SignInPage() {
   const { config, configStatus, retryConfig, state } = useSession()
   const returnTo = safeReturnTo(new URLSearchParams(location.search).get('returnTo'))
@@ -48,6 +52,8 @@ export function SignInPage() {
     )
   } else if (config.providers.includes('dev')) {
     body = <DevSignIn onDone={done} heading={heading} />
+  } else if (config.providers.includes('email')) {
+    body = <EmailSignIn onDone={done} heading={heading} />
   } else if (config.providers.includes('clerk') && config.clerkPublishableKey) {
     body = (
       <Suspense
@@ -74,6 +80,8 @@ export function SignInPage() {
     )
   }
 
+  // Open email sign-in serves a shared workspace that is not DBC's: no DBC lockup or DBC tagline.
+  const open = config?.providers.includes('email') === true
   return (
     <main className="dr-signin" data-testid="signin-page">
       <div className="dr-signin__inner">
@@ -87,9 +95,9 @@ export function SignInPage() {
             alt=""
             draggable={false}
           />
-          <Wordmark size="lg" variant="dbc" mark={false} />
+          <Wordmark size="lg" variant={open ? 'short' : 'dbc'} mark={false} />
           <p className="dr-home__tagline" data-testid="signin-tagline">
-            {SIGN_IN_TAGLINE}
+            {open ? openSignInTagline(config?.sharedWorkspaceName) : SIGN_IN_TAGLINE}
           </p>
         </header>
         <section className="dr-card dr-signin__card">
@@ -297,6 +305,119 @@ function DevSignIn({ onDone, heading }: { onDone(): void; heading: string }) {
         >
           {pending !== null ? 'Signing in…' : 'Sign in'}
         </button>
+      </form>
+    </>
+  )
+}
+
+/**
+ * Open email sign-in (docs/OPEN-SIGNIN.md): an address and a name, nothing verified. The address is the
+ * account (the same address next time finds the same boards); the name is what other people see.
+ */
+function EmailSignIn({ onDone, heading }: { onDone(): void; heading: string }) {
+  const { refresh } = useSession()
+  const emailId = useId()
+  const nameId = useId()
+  const errorId = useId()
+  const [email, setEmail] = useState('')
+  const [name, setName] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [pending, setPending] = useState(false)
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault()
+    const checked = AccountEmail.safeParse(email)
+    if (!checked.success) {
+      setError(checked.error.issues[0]?.message ?? 'Enter a valid email address.')
+      return
+    }
+    const n = name.trim()
+    if (!n) {
+      setError('Enter your name, so people know who is on the board.')
+      return
+    }
+    if (n.length > 80) {
+      setError('Names can be at most 80 characters.')
+      return
+    }
+    setPending(true)
+    setError(null)
+    try {
+      await api.emailLogin({ email: checked.data, name: n })
+      const me = await refresh()
+      if (!me) throw new Error('no session after sign-in')
+      signedOutMarks.clear()
+      onDone()
+    } catch (err) {
+      setError(isApiError(err) ? err.message : 'Sign-in failed. Try again.')
+      setPending(false)
+    }
+  }
+
+  return (
+    <>
+      <h1 className="dr-card__title" data-testid="signin-heading">
+        {heading}
+      </h1>
+      <form
+        className="dr-signin__form"
+        data-testid="email-signin-form"
+        onSubmit={(e) => void submit(e)}
+        noValidate
+      >
+        <label htmlFor={emailId}>Email</label>
+        <input
+          id={emailId}
+          type="email"
+          inputMode="email"
+          className="dr-input dr-input--block"
+          data-testid="email-signin-email"
+          value={email}
+          onChange={(e) => {
+            setEmail(e.target.value)
+            setError(null)
+          }}
+          placeholder="you@example.com"
+          // biome-ignore lint/a11y/noAutofocus: the page exists to type an address
+          autoFocus
+          autoComplete="email"
+          autoCapitalize="none"
+          spellCheck={false}
+          required
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? errorId : undefined}
+        />
+        <label htmlFor={nameId}>Your name</label>
+        <input
+          id={nameId}
+          className="dr-input dr-input--block"
+          data-testid="email-signin-name"
+          value={name}
+          onChange={(e) => {
+            setName(e.target.value)
+            setError(null)
+          }}
+          placeholder="e.g. Dana Rivera"
+          autoComplete="name"
+          maxLength={80}
+          required
+        />
+        {error && (
+          <p id={errorId} className="dr-field-error" data-testid="signin-error" role="alert">
+            {error}
+          </p>
+        )}
+        <button
+          type="submit"
+          className="dr-btn dr-btn--primary dr-btn--lg dr-signin__submit"
+          data-testid="email-signin-submit"
+          disabled={pending}
+        >
+          {pending ? 'Signing in…' : 'Continue'}
+        </button>
+        <p className="dr-muted" data-testid="email-signin-note">
+          No password. Use the same email next time to get back to your boards.
+        </p>
       </form>
     </>
   )

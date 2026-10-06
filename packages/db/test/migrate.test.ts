@@ -235,6 +235,7 @@ describe('shipped migrations', () => {
       '0022_engine_migration',
       '0023_export_policy_guests',
       '0024_vote_selection_access_granted',
+      '0025_open_signin',
       '0025_outside_markers',
       '0026_feedback',
     ])
@@ -267,6 +268,7 @@ describe('shipped migrations', () => {
       '0022_engine_migration',
       '0023_export_policy_guests',
       '0024_vote_selection_access_granted',
+      '0025_open_signin',
       '0025_outside_markers',
       '0026_feedback',
     ])
@@ -363,6 +365,7 @@ describe('shipped migrations', () => {
       '0022_engine_migration',
       '0023_export_policy_guests',
       '0024_vote_selection_access_granted',
+      '0025_open_signin',
       '0025_outside_markers',
       '0026_feedback',
     ])

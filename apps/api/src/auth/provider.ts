@@ -55,6 +55,11 @@ export interface SignInContext {
 
 export interface AuthProvider {
   readonly id: AuthProviderId
+  /**
+   * false: creators never get a personal workspace, at sign-in or later (GET /api/me). Open email sign-in
+   * (docs/OPEN-SIGNIN.md), where everyone works in the one shared workspace. Absent = they do.
+   */
+  readonly personalWorkspaces?: boolean
   publicConfig(): AuthConfig
   register(app: FastifyInstance, ctx: SignInContext): void
   /**

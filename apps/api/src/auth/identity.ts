@@ -156,6 +156,7 @@ export function createIdentityService(deps: Deps): IdentityService {
   }
 
   async function ensureWorkspace(userId: string, name: string): Promise<void> {
+    if (provider.personalWorkspaces === false) return // open email sign-in: the shared workspace only
     const has = await db.maybeOne('SELECT 1 AS ok FROM workspaces WHERE personal_of = $1', [userId])
     if (has) return
     await db.transaction((tx) => ensurePersonalWorkspace(tx, userId, name, now()))

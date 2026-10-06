@@ -1,0 +1,247 @@
+// Open email sign-in and partner boards (docs/OPEN-SIGNIN.md): the provider, the shared workspace,
+// the partner route's guard and idempotence, and the config rules that keep it off every other server.
+
+import { AuthConfig, Me, PartnerBoard } from '@draftroom/contracts'
+import type { LightMyRequestResponse } from 'fastify'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { SHARED_OWNER_ID, SHARED_WORKSPACE_ID } from '../src/auth/shared-workspace.ts'
+import { loadConfig } from '../src/config.ts'
+import {
+  createTestApi,
+  INTERNAL_SECRET,
+  ORIGIN,
+  type TestApi,
+  TICKET_SECRET,
+  testEnv,
+  WORKER_TOKEN,
+} from './helpers.ts'
+
+const PARTNER_TOKEN = 'test-partner-token-0123456789abcdefghijkl'
+const OPEN_ENV = {
+  DRAFTROOM_DEV_AUTH: '0',
+  AUTH_PROVIDER: 'email',
+  DRAFTROOM_OPEN_SIGNIN: '1',
+  DRAFTROOM_SHARED_WORKSPACE_NAME: 'Banzerini House',
+  DRAFTROOM_PARTNER_TOKEN: PARTNER_TOKEN,
+}
+
+interface EmailClient {
+  me: Me
+  userId: string
+  req(method: 'GET' | 'POST' | 'PUT' | 'PATCH', url: string, body?: unknown): Promise<LightMyRequestResponse>
+}
+
+let api: TestApi
+beforeEach(async () => {
+  api = await createTestApi({ env: OPEN_ENV })
+})
+afterEach(() => api.close())
+
+async function emailLogin(email: string, name: string): Promise<EmailClient> {
+  const res = await api.anon('POST', '/api/auth/email/login', { email, name })
+  if (res.statusCode !== 200) throw new Error(`email login failed: ${res.statusCode} ${res.body}`)
+  const cookie = res.cookies.find((c) => c.name === 'dr_session')
+  if (!cookie) throw new Error('no session cookie')
+  const me = Me.parse(res.json())
+  return {
+    me,
+    userId: me.user.id,
+    req: (method, url, body) => api.anon(method, url, body, { cookie: `dr_session=${cookie.value}` }),
+  }
+}
+
+const partner = (ref: string, body: unknown, headers: Record<string, string> = {}) =>
+  api.app.inject({
+    method: 'PUT',
+    url: `/api/partner/boards/${ref}`,
+    payload: body as object,
+    // No Origin: a server-to-server call (the Origin check exempts the partner prefix).
+    headers: { authorization: `Bearer ${PARTNER_TOKEN}`, ...headers },
+  })
+
+describe('open email sign-in', () => {
+  it('advertises the email provider and the shared workspace name', async () => {
+    const res = await api.anon('GET', '/api/auth/config')
+    expect(res.statusCode).toBe(200)
+    expect(AuthConfig.parse(res.json())).toEqual({
+      providers: ['email'],
+      sharedWorkspaceName: 'Banzerini House',
+    })
+  })
+
+  it('signs anyone in with an address and a name: a creator in the shared workspace, no personal one', async () => {
+    const dana = await emailLogin('Dana@Example.com', 'Dana Rivera')
+    expect(dana.me.user).toMatchObject({ name: 'Dana Rivera', handle: null })
+    expect(dana.me.access).toEqual({ creator: true, reason: 'domain', email: 'dana@example.com' })
+    expect(dana.me.workspaces).toEqual([{ id: SHARED_WORKSPACE_ID, name: 'Banzerini House', role: 'member' }])
+
+    // The same address (any case) is the same account; the name follows the latest sign-in.
+    const again = await emailLogin('dana@example.com', 'Dana R.')
+    expect(again.userId).toBe(dana.userId)
+    expect(again.me.user.name).toBe('Dana R.')
+    expect(again.me.workspaces.map((w) => w.id)).toEqual([SHARED_WORKSPACE_ID])
+
+    const sam = await emailLogin('sam@another.test', 'Sam')
+    expect(sam.userId).not.toBe(dana.userId)
+    expect(sam.me.workspaces).toEqual([{ id: SHARED_WORKSPACE_ID, name: 'Banzerini House', role: 'member' }])
+  })
+
+  it('stays a creator after the 24-hour grace period (the refresh only re-stamps)', async () => {
+    const dana = await emailLogin('dana@example.com', 'Dana')
+    api.clock.advance(25 * 60 * 60 * 1000)
+    const me = await dana.req('GET', '/api/me')
+    expect(me.statusCode).toBe(200)
+    // GET /api/me gives a creator without one a personal workspace, except under open sign-in.
+    expect((me.json() as Me).workspaces.map((w) => w.id)).toEqual([SHARED_WORKSPACE_ID])
+    await api.identity.settled()
+    const create = await dana.req('POST', `/api/workspaces/${SHARED_WORKSPACE_ID}/boards`, { title: 'Ideas' })
+    expect(create.statusCode).toBe(201)
+  })
+
+  it('refuses a missing name, a bad address and the dev route', async () => {
+    expect(
+      (await api.anon('POST', '/api/auth/email/login', { email: 'a@b.test', name: '  ' })).statusCode,
+    ).toBe(400)
+    expect(
+      (await api.anon('POST', '/api/auth/email/login', { email: 'not-an-email', name: 'A' })).statusCode,
+    ).toBe(400)
+    expect(
+      (await api.anon('POST', '/api/auth/email/login', { email: 'a+clerk_test@b.test', name: 'A' }))
+        .statusCode,
+    ).toBe(400)
+    expect((await api.anon('POST', '/api/auth/dev/login', { handle: 'alice' })).statusCode).toBe(404)
+  })
+
+  it('members create boards in the shared workspace (private until shared, like any board)', async () => {
+    const dana = await emailLogin('dana@example.com', 'Dana')
+    const sam = await emailLogin('sam@example.com', 'Sam')
+    const create = await dana.req('POST', `/api/workspaces/${SHARED_WORKSPACE_ID}/boards`, {
+      title: 'Set ideas',
+    })
+    expect(create.statusCode).toBe(201)
+    const id = (create.json() as { id: string }).id
+    expect((await sam.req('GET', `/api/boards/${id}`)).statusCode).toBe(404)
+    const share = await dana.req('PATCH', `/api/boards/${id}`, { visibility: 'workspace_edit' })
+    expect(share.statusCode).toBe(200)
+    const seen = await sam.req('GET', `/api/boards/${id}`)
+    expect(seen.statusCode).toBe(200)
+    expect(seen.json()).toMatchObject({ role: 'editor' })
+  })
+})
+
+describe('partner boards', () => {
+  it('creates the board for a key once, then returns the same one (renaming it when the title changed)', async () => {
+    const first = await partner('theaitre:production:42', { title: 'James and the Giant Peach' })
+    expect(first.statusCode).toBe(201)
+    const board = PartnerBoard.parse(first.json())
+    expect(board).toMatchObject({
+      ref: 'theaitre:production:42',
+      title: 'James and the Giant Peach',
+      created: true,
+    })
+    expect(board.url).toBe(`${ORIGIN}/b/${board.boardId}`)
+
+    const again = await partner('theaitre:production:42', { title: 'James and the Giant Peach' })
+    expect(again.statusCode).toBe(200)
+    expect(again.json()).toMatchObject({ boardId: board.boardId, created: false })
+
+    const renamed = await partner('theaitre:production:42', { title: 'James & the Giant Peach' })
+    expect(renamed.json()).toMatchObject({ boardId: board.boardId, title: 'James & the Giant Peach' })
+
+    const other = await partner('theaitre:production:43', { title: 'Frog and Toad' })
+    expect(other.statusCode).toBe(201)
+    expect((other.json() as PartnerBoard).boardId).not.toBe(board.boardId)
+  })
+
+  it('two first calls for one key at once make one board', async () => {
+    const [a, b] = await Promise.all([
+      partner('theaitre:production:7', { title: 'Seven' }),
+      partner('theaitre:production:7', { title: 'Seven' }),
+    ])
+    expect([a.statusCode, b.statusCode].sort()).toEqual([200, 201])
+    expect((a.json() as PartnerBoard).boardId).toBe((b.json() as PartnerBoard).boardId)
+  })
+
+  it('every signed-in person edits a partner board; nobody but its built-in owner can trash it', async () => {
+    const { boardId } = PartnerBoard.parse(
+      (await partner('theaitre:production:42', { title: 'Peach' })).json(),
+    )
+    const dana = await emailLogin('dana@example.com', 'Dana')
+    const opened = await dana.req('GET', `/api/boards/${boardId}`)
+    expect(opened.statusCode).toBe(200)
+    expect(opened.json()).toMatchObject({
+      role: 'editor',
+      board: { visibility: 'workspace_edit', title: 'Peach' },
+    })
+    expect((await dana.req('POST', `/api/boards/${boardId}/ticket`)).statusCode).toBe(200)
+    expect((await dana.req('POST', `/api/boards/${boardId}/trash`)).statusCode).toBe(403)
+    const owner = await api.db.one<{ user_id: string }>(
+      "SELECT user_id FROM board_members WHERE board_id = $1 AND role = 'owner'",
+      [boardId],
+    )
+    expect(owner.user_id).toBe(SHARED_OWNER_ID)
+    const list = await dana.req('GET', `/api/workspaces/${SHARED_WORKSPACE_ID}/boards`)
+    expect((list.json() as { boards: { id: string }[] }).boards.map((b) => b.id)).toContain(boardId)
+  })
+
+  it('refuses no token, a wrong token, a browser cookie and a bad key', async () => {
+    const body = { title: 'Peach' }
+    const none = await api.app.inject({ method: 'PUT', url: '/api/partner/boards/x1', payload: body })
+    expect(none.statusCode).toBe(401)
+    expect(none.headers['www-authenticate']).toBe('Bearer')
+    expect((await partner('x1', body, { authorization: `Bearer ${WORKER_TOKEN}` })).statusCode).toBe(401)
+    const dana = await emailLogin('dana@example.com', 'Dana')
+    const withCookie = await dana.req('PUT', '/api/partner/boards/x1', body)
+    expect(withCookie.statusCode).toBe(403)
+    expect((await partner('x1', body, { cookie: 'dr_session=abc' })).statusCode).toBe(403)
+    expect((await partner('Has-Capitals', body)).statusCode).toBe(400)
+    expect((await partner('x1', { title: '' })).statusCode).toBe(400)
+    const count = await api.db.one<{ n: number }>('SELECT count(*)::int AS n FROM boards')
+    expect(count.n).toBe(0)
+  })
+})
+
+describe('open sign-in configuration', () => {
+  const env = (extra: Record<string, string>) => testEnv('/tmp/dr-open-config', extra)
+
+  it('needs the explicit flag, and the flag and its settings need the email provider', () => {
+    expect(() => loadConfig(env({ DRAFTROOM_DEV_AUTH: '0', AUTH_PROVIDER: 'email' }))).toThrow(
+      /requires DRAFTROOM_OPEN_SIGNIN=1/,
+    )
+    expect(() => loadConfig(env({ DRAFTROOM_OPEN_SIGNIN: '1' }))).toThrow(/requires AUTH_PROVIDER=email/)
+    expect(() => loadConfig(env({ DRAFTROOM_PARTNER_TOKEN: PARTNER_TOKEN }))).toThrow(
+      /DRAFTROOM_PARTNER_TOKEN requires AUTH_PROVIDER=email/,
+    )
+    expect(() => loadConfig(env({ DRAFTROOM_SHARED_WORKSPACE_NAME: 'X' }))).toThrow(
+      /requires AUTH_PROVIDER=email/,
+    )
+    expect(() => loadConfig(env({ ...OPEN_ENV, DRAFTROOM_OPEN_SIGNIN: 'yes' }))).toThrow(/must be 1/)
+  })
+
+  it('keeps the partner token apart from every other secret', () => {
+    for (const same of [TICKET_SECRET, INTERNAL_SECRET, WORKER_TOKEN])
+      expect(() => loadConfig(env({ ...OPEN_ENV, DRAFTROOM_PARTNER_TOKEN: same }))).toThrow(/must differ/)
+    expect(() => loadConfig(env({ ...OPEN_ENV, DRAFTROOM_PARTNER_TOKEN: 'short' }))).toThrow(/at least/)
+  })
+
+  it('is allowed in production, and partner routes exist only with a token', () => {
+    const config = loadConfig(env({ ...OPEN_ENV, DRAFTROOM_PARTNER_TOKEN: '' }))
+    expect(config.openSignin).toEqual({ workspaceName: 'Banzerini House', partnerToken: null })
+    expect(config.authProvider).toBe('email')
+  })
+
+  it('has no partner routes without a token', async () => {
+    const without = await createTestApi({ env: { ...OPEN_ENV, DRAFTROOM_PARTNER_TOKEN: '' } })
+    try {
+      const res = await without.app.inject({
+        method: 'PUT',
+        url: '/api/partner/boards/x1',
+        payload: { title: 'Peach' },
+        headers: { authorization: `Bearer ${PARTNER_TOKEN}`, origin: ORIGIN },
+      })
+      expect(res.statusCode).toBe(404)
+    } finally {
+      await without.close()
+    }
+  })
+})

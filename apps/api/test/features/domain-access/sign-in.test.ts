@@ -60,15 +60,16 @@ describe('dev sign-in', () => {
     expect(probe.access).toEqual(me.access)
   })
 
-  it.each([['lobby-test-a@darkburn.com'], ['lobby-test-b@trailerparkgroup.com']])(
-    '%s is a creator by domain',
-    async (email) => {
-      const c = await api.login('worker', undefined, { email })
-      expect(c.me.access).toEqual({ creator: true, reason: 'domain', email })
-      expect(c.personalWorkspaceId).not.toBe('')
-      expect(c.me.workspaces.map((w) => w.id)).toContain(DEV_STUDIO)
-    },
-  )
+  it.each([
+    ['lobby-test-a@darkburn.com'],
+    ['lobby-test-b@trailerparkgroup.com'],
+    ['lobby-test-c@trailerpark.com'],
+  ])('%s is a creator by domain', async (email) => {
+    const c = await api.login('worker', undefined, { email })
+    expect(c.me.access).toEqual({ creator: true, reason: 'domain', email })
+    expect(c.personalWorkspaceId).not.toBe('')
+    expect(c.me.workspaces.map((w) => w.id)).toContain(DEV_STUDIO)
+  })
 
   it('a subdomain of a creator domain is an outsider', async () => {
     const c = await api.login('sub', undefined, { email: 'lobby-test@sub.darkburn.com' })
