@@ -127,7 +127,11 @@ async function search(
     query: parsed,
     boards: opts.limit,
     perBoard: SEARCH_HITS_PER_BOARD,
-    team: await isTeamMember(ctx.db, opts.workspaceId, opts.userId),
+    // Wave J (AUTHZ-TEAM-OUTSIDER): on the team = a workspace role AND a confirmed creator, as in comments.
+    team: await isTeamMember(ctx.db, opts.workspaceId, opts.userId, {
+      lookup: ctx.identity.lookup,
+      now: ctx.now(),
+    }),
   })
   // Rows come board by board, best board first, each board's hits best first.
   const grouped = new Map<string, RankedRow[]>()

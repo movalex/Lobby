@@ -14,6 +14,13 @@
 // notifications only reach the team, its board events are delivered to the team's streams only, and
 // search leaves its text out for them (search/store.ts). Outside the team, a person can only start
 // 'everyone' threads, and resolve or reopen only the threads they started.
+//
+// Wave J (AUTHZ-TEAM-OUTSIDER): the team is a workspace owner, admin or member who is a CONFIRMED
+// creator (store.ts onTeam), so an outside account invited as a workspace member is outside the team,
+// and an account whose addresses Lobby cannot confirm fails closed. The same rule decides the bell
+// (notifications.ts), the per-audience board events (publishTo) and search (search/index.ts). GET
+// threads confirms the caller's own addresses like /api/me does (identity.freshenThen), so a person who
+// keeps a board open past a day stays on the team. Authors carry `external` (the "External" tag).
 
 import {
   COMMENT_BODY_MAX,
@@ -37,6 +44,7 @@ import {
 import { isId, newId, type Queryable } from '@draftroom/db'
 import type { FastifyInstance } from 'fastify'
 import { type BoardAccess, type BoardRow, requireBoardAction } from '../../access.ts'
+import type { CreatorLookup } from '../../auth/creator-sql.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, badRequest, conflict, forbidden, notFound, parse } from '../../errors.ts'
 import type { BoardEvent } from '../../events/hub.ts'
@@ -65,6 +73,7 @@ import {
   MAX_COMMENTS_PER_THREAD,
   MAX_THREADS_PER_BOARD,
   markRead,
+  type TeamRule,
   type ThreadRow,
   teamAmong,
   viewersAmong,
@@ -79,9 +88,10 @@ type BoardRef = Pick<BoardRow, 'id' | 'workspace_id' | 'visibility' | 'status'>
 /**
  * Keeps mention tokens only for people who can view the board (with their real name) and turns the
  * rest into plain "@Name" text, so an unauthorized or fake mention neither notifies nor renders as one.
- * F10: in a team-only thread, only people on the team can be mentioned.
+ * F10: in a team-only thread (`team`: the rule of who is on the team), only people on the team can be
+ * mentioned.
  */
-async function resolveMentions(tx: Queryable, board: BoardRef, body: string, team: boolean) {
+async function resolveMentions(tx: Queryable, board: BoardRef, body: string, team: TeamRule | null) {
   const requested = mentionedUserIds(body)
   if (requested.length > MAX_MENTIONS_PER_COMMENT)
     throw badRequest(`A comment can mention at most ${MAX_MENTIONS_PER_COMMENT} people.`)
@@ -119,7 +129,7 @@ async function recipientsFor(
   actorId: string,
   mentioned: readonly string[],
   followers: readonly string[],
-  opts: { owners?: readonly string[]; team: boolean },
+  opts: { owners?: readonly string[]; team: TeamRule | null },
 ): Promise<NewNotification[]> {
   const owners = opts.owners ?? []
   const candidates = [...new Set([...mentioned, ...followers, ...owners])].filter((id) => id !== actorId)
@@ -141,8 +151,13 @@ async function touchThread(tx: Queryable, threadId: string, at: Date) {
   await tx.query('UPDATE comment_threads SET updated_at = $2 WHERE id = $1', [threadId, at])
 }
 
-async function mustLoadThread(tx: Queryable, board: BoardRef, threadId: string): Promise<CommentThread> {
-  const thread = await loadThread(tx, board, threadId)
+async function mustLoadThread(
+  tx: Queryable,
+  board: BoardRef,
+  threadId: string,
+  lookup: CreatorLookup,
+): Promise<CommentThread> {
+  const thread = await loadThread(tx, board, threadId, lookup)
   if (!thread) throw notFound()
   return thread
 }
@@ -157,14 +172,18 @@ async function mustLoadVisibleThread(
   board: BoardRef,
   threadId: string,
   team: boolean,
+  lookup: CreatorLookup,
 ): Promise<CommentThread> {
-  const thread = await mustLoadThread(tx, board, threadId)
+  const thread = await mustLoadThread(tx, board, threadId, lookup)
   if (thread.visibility === 'team' && !team) throw notFound()
   return thread
 }
 
 export async function registerComments(app: FastifyInstance, ctx: FeatureContext): Promise<void> {
   const { db, now, events } = ctx
+  const lookup = ctx.identity.lookup
+  /** Who is on the team now (wave J: a workspace role AND a confirmed creator). */
+  const rule = (): TeamRule => ({ lookup, now: now() })
   const limiter = createWriteLimiter({ max: WRITES_PER_MINUTE, windowMs: 60_000, now })
   const spend = (userId: string) => {
     if (!limiter.take(userId))
@@ -185,7 +204,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
     const row = await loadThreadRow(tx, threadId)
     if (!row) throw notFound()
     // Team-only threads do not exist for people outside the team: 404 before any 403.
-    const team = await isTeamMember(tx, row.workspace_id, userId)
+    const team = await isTeamMember(tx, row.workspace_id, userId, rule())
     if (row.visibility === 'team' && !team) throw notFound()
     const access = await requireBoardAction(tx, row.board_id, userId, action)
     if (access.board.workspace_id !== row.workspace_id) throw notFound()
@@ -203,7 +222,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
     if (!comment || comment.deleted_at) throw notFound()
     const thread = await loadThreadRow(tx, comment.thread_id)
     if (!thread) throw notFound()
-    const team = await isTeamMember(tx, comment.workspace_id, userId)
+    const team = await isTeamMember(tx, comment.workspace_id, userId, rule())
     if (thread.visibility === 'team' && !team) throw notFound()
     // 404 first for people who cannot see the board at all; 403 for viewers.
     const access = await requireBoardAction(tx, comment.board_id, userId, 'comment')
@@ -227,7 +246,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
       .map((s) => s.userId)
     let team: Set<string>
     try {
-      team = await teamAmong(db, board.workspace_id, open)
+      team = await teamAmong(db, board.workspace_id, open, rule())
     } catch {
       return
     }
@@ -253,15 +272,20 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
     const query = parse(ListThreadsQuery, req.query)
     const access = await requireBoardAction(db, bid, user.id, 'view')
     const status = query.status === 'all' || !query.status ? undefined : query.status
-    const team = await isTeamMember(db, access.board.workspace_id, user.id)
-    const threads = await loadThreads(db, access.board, { status, team })
-    const reads = await loadReads(
-      db,
-      user.id,
-      threads.map((t) => t.id),
-    )
-    const teamOnlyDefault = team && (await hasOutsideAccess(db, access.board, now()))
-    return { threads, reads, privacy: { teamOnly: team, teamOnlyDefault } }
+    // Wave J: the caller's own addresses are confirmed like at /api/me (awaited when unknown or older
+    // than a day, else in the background after an hour, after the answer), so the team rule decides
+    // on fresh data for people who keep a board open; after the permission check above.
+    return ctx.identity.freshenThen(req, user, async (fresh) => {
+      const team = await isTeamMember(db, access.board.workspace_id, fresh.id, rule())
+      const threads = await loadThreads(db, access.board, { status, team, lookup })
+      const reads = await loadReads(
+        db,
+        fresh.id,
+        threads.map((t) => t.id),
+      )
+      const teamOnlyDefault = team && (await hasOutsideAccess(db, access.board, now(), lookup))
+      return { threads, reads, privacy: { teamOnly: team, teamOnlyDefault } }
+    })
   })
 
   app.post('/api/boards/:bid/threads', async (req, reply) => {
@@ -272,7 +296,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
     const teamOnly = visibility === 'team'
     const { thread, board: ref } = await db.transaction(async (tx) => {
       const access = await requireBoardAction(tx, bid, user.id, 'comment')
-      if (teamOnly && !(await isTeamMember(tx, access.board.workspace_id, user.id)))
+      if (teamOnly && !(await isTeamMember(tx, access.board.workspace_id, user.id, rule())))
         throw forbidden('Only people on the team can start a team-only comment.')
       spend(user.id)
       const board = access.board
@@ -284,7 +308,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
       )
       if (count.n >= MAX_THREADS_PER_BOARD)
         throw conflict('TOO_MANY_THREADS', 'This board has reached its limit of comment threads.')
-      const { body, mentioned } = await resolveMentions(tx, board, input.body, teamOnly)
+      const { body, mentioned } = await resolveMentions(tx, board, input.body, teamOnly ? rule() : null)
       const at = now()
       const threadId = newId('thr')
       const commentId = newId('cmt')
@@ -304,14 +328,14 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
       // capped per author and per board so neither a guest nor a crowd of guests can flood their bell.
       const recipients = await recipientsFor(tx, board, user.id, mentioned, [], {
         owners: await boardOwners(tx, board.id),
-        team: teamOnly,
+        team: teamOnly ? rule() : null,
       })
       await insertNotifications(
         tx,
         { workspaceId: board.workspace_id, boardId: board.id, threadId, commentId, actorId: user.id, at },
         await withinNotificationCaps(tx, { boardId: board.id, actorId: user.id, at }, recipients),
       )
-      return { thread: await mustLoadThread(tx, board, threadId), board }
+      return { thread: await mustLoadThread(tx, board, threadId, lookup), board }
     })
     await publishThread(ref, thread)
     return reply.code(201).send({ thread })
@@ -343,7 +367,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
       if (count.n >= MAX_COMMENTS_PER_THREAD)
         throw conflict('THREAD_FULL', 'This thread has too many replies. Start a new comment instead.')
       const followers = await threadFollowers(tx, row.id)
-      const { body, mentioned } = await resolveMentions(tx, board, input.body, teamOnly)
+      const { body, mentioned } = await resolveMentions(tx, board, input.body, teamOnly ? rule() : null)
       const at = now()
       const commentId = newId('cmt')
       await tx.query(
@@ -372,10 +396,10 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
         await withinNotificationCaps(
           tx,
           { boardId: board.id, actorId: user.id, at },
-          await recipientsFor(tx, board, user.id, mentioned, followers, { team: teamOnly }),
+          await recipientsFor(tx, board, user.id, mentioned, followers, { team: teamOnly ? rule() : null }),
         ),
       )
-      return { thread: await mustLoadThread(tx, board, row.id), board }
+      return { thread: await mustLoadThread(tx, board, row.id, lookup), board }
     })
     await publishThread(ref, thread)
     return reply.code(201).send({ thread })
@@ -393,7 +417,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
       const teamOnly = row.visibility === 'team'
       // NC-V3/NC-V4: before the comment's row lock (the UPDATE below).
       if (mayMention(input.body)) await lockBoardNotifications(tx, board.id)
-      const { body, mentioned } = await resolveMentions(tx, board, input.body, teamOnly)
+      const { body, mentioned } = await resolveMentions(tx, board, input.body, teamOnly ? rule() : null)
       const at = now()
       const before = await tx.query<{ user_id: string }>(
         'SELECT user_id FROM comment_mentions WHERE comment_id = $1',
@@ -423,10 +447,10 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
         await withinNotificationCaps(
           tx,
           { boardId: board.id, actorId: user.id, at },
-          await recipientsFor(tx, board, user.id, added, [], { team: teamOnly }),
+          await recipientsFor(tx, board, user.id, added, [], { team: teamOnly ? rule() : null }),
         ),
       )
-      return { thread: await mustLoadVisibleThread(tx, board, comment.thread_id, team), board }
+      return { thread: await mustLoadVisibleThread(tx, board, comment.thread_id, team, lookup), board }
     })
     await publishThread(ref, thread)
     return { thread }
@@ -510,14 +534,14 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
                 [row.id, at],
               )
         const changed = updated.rowCount > 0
-        const thread = await mustLoadVisibleThread(tx, board, row.id, team)
+        const thread = await mustLoadVisibleThread(tx, board, row.id, team, lookup)
         if (changed && action === 'resolve') {
           const followers = await threadFollowers(tx, row.id)
           const viewers = await viewersAmong(
             tx,
             board,
             followers.filter((id) => id !== user.id),
-            { team: thread.visibility === 'team' },
+            { team: thread.visibility === 'team' ? rule() : null },
           )
           await insertNotifications(
             tx,
@@ -557,7 +581,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
         'UPDATE comment_threads SET visibility = $2, updated_at = $3 WHERE id = $1 AND visibility <> $2',
         [row.id, input.visibility, now()],
       )
-      return { thread: await mustLoadThread(tx, board, row.id), changed: updated.rowCount > 0, board }
+      return { thread: await mustLoadThread(tx, board, row.id, lookup), changed: updated.rowCount > 0, board }
     })
     if (changed) {
       await publishThread(ref, thread)
@@ -591,7 +615,13 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
     const query = parse(ListNotificationsQuery, req.query)
     // What the caller's web build can parse (0024's access_granted only from LOBBY_CLIENT_REV 1).
     const rev = clientRevOf(req.headers[LOBBY_CLIENT_HEADER])
-    return listNotifications(db, user.id, { unreadOnly: query.unread !== undefined, rev })
+    // Wave J: the bell leaves team-only threads out for anyone not on the team (a confirmed creator).
+    return listNotifications(db, user.id, {
+      unreadOnly: query.unread !== undefined,
+      rev,
+      creator: await ctx.identity.isCreatorUser(db, user.id),
+      emailSource: lookup.source,
+    })
   })
 
   app.post('/api/me/notifications/read', async (req, reply) => {

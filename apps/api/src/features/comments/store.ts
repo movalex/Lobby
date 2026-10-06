@@ -1,5 +1,12 @@
 // SQL for the comments feature: loading threads/comments and shaping them into the public
 // CommentThread contract. Every board-scoped query filters by board AND workspace.
+//
+// Wave J (AUTHZ-TEAM-OUTSIDER, docs/DOMAIN-ACCESS-CONTRACTS.md §15): "the team" of F10's team-only
+// threads is a workspace owner, admin or member WHO IS A CONFIRMED CREATOR (auth/creator-sql.ts: a
+// verified Dark Burn / TPG address, or an exception, confirmed within 24 hours). An outside account
+// invited as a workspace member is not on the team, and an account Lobby cannot confirm fails closed
+// (it is not on the team until a refresh confirms it). Comment authors carry `external` (the
+// "External" tag) when Lobby knows the account is outside.
 
 import {
   CommentAnchor,
@@ -12,6 +19,22 @@ import {
 import type { Queryable } from '@draftroom/db'
 import { type BoardRole, can, resolveBoardRole, type WorkspaceRole } from '@draftroom/permissions'
 import type { BoardRow } from '../../access.ts'
+import {
+  type CreatorLookup,
+  knownOutsideSql,
+  matchParams,
+  userColumns,
+  userParams,
+} from '../../auth/creator-sql.ts'
+
+/**
+ * What decides who is on the team besides the workspace role: the running provider's creator policy
+ * (ctx.identity.lookup) and the clock (`now`: an identity older than 24 hours is unconfirmed).
+ */
+export interface TeamRule {
+  lookup: CreatorLookup
+  now: Date
+}
 
 export const MAX_THREADS_LISTED = 5_000
 export const MAX_COMMENTS_PER_THREAD = 1_000
@@ -72,17 +95,35 @@ interface UserRefRow {
   id: string
   name: string
   color: string
+  external: boolean | null
 }
 
-async function userRefs(q: Queryable, ids: Iterable<string>): Promise<Map<string, CommentUserRef>> {
+/**
+ * The people a thread names. With `lookup`, each carries `external` (wave J): Lobby knows the account
+ * is outside Dark Burn / TPG (never for name-only guests, whose names carry " (guest)").
+ */
+async function userRefs(
+  q: Queryable,
+  ids: Iterable<string>,
+  lookup?: CreatorLookup,
+): Promise<Map<string, CommentUserRef>> {
   const list = [...new Set(ids)]
   const out = new Map<string, CommentUserRef>()
   if (list.length === 0) return out
   const rows = await q.query<UserRefRow>(
-    'SELECT id, name, color FROM users WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb))',
-    [idList(list)],
+    lookup
+      ? `SELECT u.id, u.name, u.color, ${knownOutsideSql('u', 2)} AS external FROM users u
+          WHERE u.id IN (SELECT jsonb_array_elements_text($1::jsonb))`
+      : 'SELECT id, name, color, NULL AS external FROM users WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb))',
+    lookup ? [idList(list), ...matchParams(lookup)] : [idList(list)],
   )
-  for (const r of rows.rows) out.set(r.id, { id: r.id, name: r.name, color: r.color })
+  for (const r of rows.rows)
+    out.set(r.id, {
+      id: r.id,
+      name: r.name,
+      color: r.color,
+      ...(r.external === null ? {} : { external: r.external === true }),
+    })
   return out
 }
 
@@ -96,7 +137,13 @@ const unknownUser = (id: string): CommentUserRef => ({ id, name: 'Unknown', colo
 export async function loadThreads(
   q: Queryable,
   board: { id: string; workspace_id: string },
-  opts: { status?: CommentThreadStatus; ids?: readonly string[]; team: boolean },
+  opts: {
+    status?: CommentThreadStatus
+    ids?: readonly string[]
+    team: boolean
+    /** Wave J: the creator policy, for the authors' `external` (omitted: no `external`). */
+    lookup?: CreatorLookup
+  },
 ): Promise<CommentThread[]> {
   const threads = await q.query<ThreadRow>(
     `SELECT ${THREAD_COLUMNS}
@@ -134,10 +181,14 @@ export async function loadThreads(
       mentions.set(r.comment_id, list)
     }
   }
-  const users = await userRefs(q, [
-    ...threads.rows.flatMap((t) => (t.resolved_by ? [t.created_by, t.resolved_by] : [t.created_by])),
-    ...comments.rows.map((c) => c.author_id),
-  ])
+  const users = await userRefs(
+    q,
+    [
+      ...threads.rows.flatMap((t) => (t.resolved_by ? [t.created_by, t.resolved_by] : [t.created_by])),
+      ...comments.rows.map((c) => c.author_id),
+    ],
+    opts.lookup,
+  )
   const ref = (id: string) => users.get(id) ?? unknownUser(id)
   const byThread = new Map<string, ThreadComment[]>()
   for (const c of comments.rows) {
@@ -181,8 +232,9 @@ export async function loadThread(
   q: Queryable,
   board: { id: string; workspace_id: string },
   threadId: string,
+  lookup?: CreatorLookup,
 ): Promise<CommentThread | null> {
-  return (await loadThreads(q, board, { ids: [threadId], team: true }))[0] ?? null
+  return (await loadThreads(q, board, { ids: [threadId], team: true, lookup }))[0] ?? null
 }
 
 /** The caller's read marks for the given threads. */
@@ -218,43 +270,60 @@ export async function markRead(
 // ---- F10: the team -------------------------------------------------------------------------------
 
 /**
- * On the team: a workspace owner, admin or member with an account. Workspace guests (people who came
- * in through a board link, review-link visitors) and name-only guests (users.kind = 'guest') are not.
+ * The workspace-role half of being on the team: a workspace owner, admin or member with an account.
+ * Workspace guests (people who came in through a board link, review-link visitors) and name-only
+ * guests (users.kind = 'guest') are not. Wave J: the team ALSO needs a confirmed creator (onTeam).
  */
 export const isTeamRole = (role: WorkspaceRole | null | undefined, kind: string | null | undefined) =>
   (role === 'owner' || role === 'admin' || role === 'member') && kind !== 'guest'
 
-/** Of `userIds`, the ones on the team of the workspace (see isTeamRole). */
+/** On the team: isTeamRole and a confirmed creator (an unconfirmed account fails closed). */
+export const onTeam = (
+  role: WorkspaceRole | null | undefined,
+  kind: string | null | undefined,
+  creator: boolean | null | undefined,
+) => isTeamRole(role, kind) && creator === true
+
+/** Of `userIds`, the ones on the team of the workspace (see onTeam). */
 export async function teamAmong(
   q: Queryable,
   workspaceId: string,
   userIds: readonly string[],
+  rule: TeamRule,
 ): Promise<Set<string>> {
   const ids = [...new Set(userIds)]
   if (ids.length === 0) return new Set()
-  const rows = await q.query<{ id: string; role: WorkspaceRole; kind: string }>(
-    `SELECT u.id, wm.role, u.kind FROM users u
+  const rows = await q.query<{ id: string; role: WorkspaceRole; kind: string; creator: boolean }>(
+    `SELECT ${userColumns(3)}, wm.role FROM users u
        JOIN workspace_members wm ON wm.workspace_id = $1 AND wm.user_id = u.id
       WHERE u.id IN (SELECT jsonb_array_elements_text($2::jsonb))`,
-    [workspaceId, idList(ids)],
+    [workspaceId, idList(ids), ...userParams(rule.lookup, rule.now)],
   )
-  return new Set(rows.rows.filter((r) => isTeamRole(r.role, r.kind)).map((r) => r.id))
+  return new Set(rows.rows.filter((r) => onTeam(r.role, r.kind, r.creator)).map((r) => r.id))
 }
 
 /** Whether this person is on the team of the workspace. */
-export async function isTeamMember(q: Queryable, workspaceId: string, userId: string): Promise<boolean> {
-  return (await teamAmong(q, workspaceId, [userId])).has(userId)
+export async function isTeamMember(
+  q: Queryable,
+  workspaceId: string,
+  userId: string,
+  rule: TeamRule,
+): Promise<boolean> {
+  return (await teamAmong(q, workspaceId, [userId], rule)).has(userId)
 }
 
 /**
  * Whether people outside the team can open this board now: a guest holds a grant on it (a workspace
- * guest or a name-only guest), or a board link that has not ended could let one in. The composer then
- * starts with "Team only" on.
+ * guest or a name-only guest), a board link that has not ended could let one in, or (wave J) an
+ * account Lobby knows is outside Dark Burn / TPG can open it (a grant, or a workspace role that
+ * reaches it: owner, admin, or member while it is not private). The composer then starts with "Team
+ * only" on.
  */
 export async function hasOutsideAccess(
   q: Queryable,
-  board: { id: string; workspace_id: string },
+  board: Pick<BoardRow, 'id' | 'workspace_id' | 'visibility'>,
   at: Date,
+  lookup: CreatorLookup,
 ): Promise<boolean> {
   const r = await q.one<{ outside: boolean }>(
     `SELECT (EXISTS (
@@ -266,8 +335,15 @@ export async function hasOutsideAccess(
        SELECT 1 FROM invitations i
         WHERE i.board_id = $1 AND i.workspace_id = $2 AND i.revoked_at IS NULL AND i.expires_at > $3
           AND (i.multi_use OR i.redeemed_by IS NULL)
+     ) OR EXISTS (
+       SELECT 1 FROM workspace_members wm
+         JOIN users u ON u.id = wm.user_id
+         LEFT JOIN board_members bm ON bm.board_id = $1 AND bm.user_id = wm.user_id
+        WHERE wm.workspace_id = $2
+          AND (wm.role IN ('owner', 'admin') OR bm.role IS NOT NULL OR (wm.role = 'member' AND $4::text <> 'private'))
+          AND ${knownOutsideSql('u', 5)}
      )) AS outside`,
-    [board.id, board.workspace_id, at],
+    [board.id, board.workspace_id, at, board.visibility, ...matchParams(lookup)],
   )
   return r.outside === true
 }
@@ -275,30 +351,40 @@ export async function hasOutsideAccess(
 /**
  * Of `userIds`, the ones who can view the board right now (same rules as every other access
  * decision: @draftroom/permissions over membership, grant, visibility and status), with their names.
- * F10: with `team: true` (a team-only thread), only the ones on the team.
+ * F10: with `team` (a team-only thread), only the ones on the team (wave J: confirmed creators).
  */
 export async function viewersAmong(
   q: Queryable,
   board: Pick<BoardRow, 'id' | 'workspace_id' | 'visibility' | 'status'>,
   userIds: readonly string[],
-  opts: { team?: boolean } = {},
+  opts: { team?: TeamRule | null } = {},
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>()
   const ids = [...new Set(userIds)]
   if (ids.length === 0) return out
+  const rule = opts.team ?? null
   const rows = await q.query<{
     id: string
     name: string
     kind: string
+    creator: boolean
     workspace_role: WorkspaceRole
     board_grant: BoardRole | null
   }>(
-    `SELECT u.id, u.name, u.kind, wm.role AS workspace_role, bm.role AS board_grant
-       FROM users u
-       JOIN workspace_members wm ON wm.workspace_id = $2 AND wm.user_id = u.id
-       LEFT JOIN board_members bm ON bm.board_id = $1 AND bm.user_id = u.id
-      WHERE u.id IN (SELECT jsonb_array_elements_text($3::jsonb))`,
-    [board.id, board.workspace_id, idList(ids)],
+    rule
+      ? `SELECT ${userColumns(4)}, wm.role AS workspace_role, bm.role AS board_grant
+           FROM users u
+           JOIN workspace_members wm ON wm.workspace_id = $2 AND wm.user_id = u.id
+           LEFT JOIN board_members bm ON bm.board_id = $1 AND bm.user_id = u.id
+          WHERE u.id IN (SELECT jsonb_array_elements_text($3::jsonb))`
+      : `SELECT u.id, u.name, u.kind, false AS creator, wm.role AS workspace_role, bm.role AS board_grant
+           FROM users u
+           JOIN workspace_members wm ON wm.workspace_id = $2 AND wm.user_id = u.id
+           LEFT JOIN board_members bm ON bm.board_id = $1 AND bm.user_id = u.id
+          WHERE u.id IN (SELECT jsonb_array_elements_text($3::jsonb))`,
+    rule
+      ? [board.id, board.workspace_id, idList(ids), ...userParams(rule.lookup, rule.now)]
+      : [board.id, board.workspace_id, idList(ids)],
   )
   for (const r of rows.rows) {
     const role = resolveBoardRole({
@@ -306,7 +392,7 @@ export async function viewersAmong(
       boardGrant: r.board_grant,
       visibility: board.visibility,
     })
-    if (opts.team && !isTeamRole(r.workspace_role, r.kind)) continue
+    if (rule && !onTeam(r.workspace_role, r.kind, r.creator)) continue
     if (can(role, 'view', board.status)) out.set(r.id, r.name)
   }
   return out
