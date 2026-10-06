@@ -12,7 +12,7 @@ import { type CreatorPolicy, parseCreatorPolicy } from './auth/creators.ts'
 import { type AiConfig, parseAiConfig } from './features/ai/config.ts'
 import { parseStorageConfig, type StorageConfig } from './files/storage-config.ts'
 
-export type AuthProviderId = 'dev' | 'clerk'
+export type AuthProviderId = 'dev' | 'clerk' | 'email'
 
 /**
  * Fastify's `trustProxy` option, ready to pass through: `false` (default: the socket peer is the client),
@@ -58,6 +58,12 @@ export interface ApiConfig {
   devAuth: boolean
   authProvider: AuthProviderId
   clerk: { secretKey: string; publishableKey: string } | null
+  /**
+   * Open email sign-in (docs/OPEN-SIGNIN.md), set exactly when AUTH_PROVIDER=email: the shared workspace
+   * everyone joins (DRAFTROOM_SHARED_WORKSPACE_NAME) and the partner token (DRAFTROOM_PARTNER_TOKEN, null
+   * when unset: no /api/partner routes).
+   */
+  openSignin: { workspaceName: string; partnerToken: string | null } | null
   /** Exact browser origin (scheme://host[:port]) for Origin checks, cookie `Secure` and invite links. */
   publicOrigin: string
   /**
@@ -362,6 +368,37 @@ export function parseEventsOrigin(env: Env, production: boolean): string | null 
   return url.origin
 }
 
+/**
+ * Open email sign-in (docs/OPEN-SIGNIN.md). AUTH_PROVIDER=email lets anyone sign in as any address, so it
+ * needs DRAFTROOM_OPEN_SIGNIN=1 as well (and the flag means nothing without it). It is allowed in
+ * production on purpose: it is for a deployment with nothing private on it. The partner token is read
+ * here and checked with the other secrets in loadConfig. null for every other provider.
+ */
+export function parseOpenSignin(
+  env: Env,
+  authProvider: AuthProviderId,
+): { workspaceName: string; partnerTokenRaw: string | undefined } | null {
+  const flag = read(env, 'DRAFTROOM_OPEN_SIGNIN')
+  if (flag !== undefined && flag !== '1' && flag !== '0')
+    throw new Error('DRAFTROOM_OPEN_SIGNIN must be 1 (anyone may sign in as any email address) or unset')
+  const open = flag === '1'
+  const nameRaw = read(env, 'DRAFTROOM_SHARED_WORKSPACE_NAME')
+  const partnerTokenRaw = read(env, 'DRAFTROOM_PARTNER_TOKEN')
+  if (authProvider !== 'email') {
+    if (open) throw new Error('DRAFTROOM_OPEN_SIGNIN=1 requires AUTH_PROVIDER=email')
+    if (nameRaw !== undefined) throw new Error('DRAFTROOM_SHARED_WORKSPACE_NAME requires AUTH_PROVIDER=email')
+    if (partnerTokenRaw !== undefined) throw new Error('DRAFTROOM_PARTNER_TOKEN requires AUTH_PROVIDER=email')
+    return null
+  }
+  if (!open)
+    throw new Error(
+      'AUTH_PROVIDER=email lets anyone sign in as any email address: it requires DRAFTROOM_OPEN_SIGNIN=1',
+    )
+  const workspaceName = nameRaw ?? 'Lobby'
+  if (workspaceName.length > 120) throw new Error('DRAFTROOM_SHARED_WORKSPACE_NAME must be 1-120 characters')
+  return { workspaceName, partnerTokenRaw }
+}
+
 /** Parses and validates the API environment. Throws an operator-facing message on bad input. */
 export function loadConfig(env: Env = process.env): ApiConfig {
   const nodeEnv = parseNodeEnv(env)
@@ -378,7 +415,8 @@ export function loadConfig(env: Env = process.env): ApiConfig {
     throw new Error('DRAFTROOM_ALLOW_NEWER_SCHEMA must be 1 (a rollback, docs/DEPLOY.md) or unset')
 
   const providerRaw = read(env, 'AUTH_PROVIDER') ?? (devAuth ? 'dev' : 'clerk')
-  if (providerRaw !== 'dev' && providerRaw !== 'clerk') throw new Error('AUTH_PROVIDER must be dev or clerk')
+  if (providerRaw !== 'dev' && providerRaw !== 'clerk' && providerRaw !== 'email')
+    throw new Error('AUTH_PROVIDER must be dev, clerk or email')
   const authProvider: AuthProviderId = providerRaw
   if (authProvider === 'dev' && production)
     throw new Error('AUTH_PROVIDER=dev is refused when NODE_ENV=production')
@@ -392,6 +430,8 @@ export function loadConfig(env: Env = process.env): ApiConfig {
       throw new Error('AUTH_PROVIDER=clerk requires CLERK_SECRET_KEY and CLERK_PUBLISHABLE_KEY')
     clerk = { secretKey, publishableKey }
   }
+
+  const openSigninRaw = parseOpenSignin(env, authProvider)
 
   // No default in production: the local default would make every mutation a 403 (Origin check) and
   // write loopback invite links.
@@ -432,6 +472,22 @@ export function loadConfig(env: Env = process.env): ApiConfig {
       'DRAFTROOM_WORKER_TOKEN must differ from DRAFTROOM_TICKET_SECRET and DRAFTROOM_INTERNAL_SECRET',
     )
 
+  let openSignin: ApiConfig['openSignin'] = null
+  if (openSigninRaw) {
+    const { workspaceName, partnerTokenRaw } = openSigninRaw
+    let partnerToken: string | null = null
+    if (partnerTokenRaw !== undefined) {
+      partnerToken = checkSecret('DRAFTROOM_PARTNER_TOKEN', partnerTokenRaw, production)
+      // A partner app holds this token on another server: it must not also mint tickets, call sync or
+      // act as a preview worker.
+      if (partnerToken === ticketSecret || partnerToken === internalSecret || partnerToken === workerToken)
+        throw new Error(
+          'DRAFTROOM_PARTNER_TOKEN must differ from DRAFTROOM_TICKET_SECRET, DRAFTROOM_INTERNAL_SECRET and DRAFTROOM_WORKER_TOKEN',
+        )
+    }
+    openSignin = { workspaceName, partnerToken }
+  }
+
   const dataDir = resolveDataDir(env)
   return {
     production,
@@ -445,6 +501,7 @@ export function loadConfig(env: Env = process.env): ApiConfig {
     devAuth,
     authProvider,
     clerk,
+    openSignin,
     publicOrigin: origin.origin,
     eventsOrigin,
     ticketSecret,

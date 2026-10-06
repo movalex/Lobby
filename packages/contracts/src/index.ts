@@ -112,10 +112,40 @@ export const WORKSPACE_MEMBER_CODES = {
 // ---- auth ----------------------------------------------------------------------------------------
 
 export const AuthConfig = z.object({
-  providers: z.array(z.enum(['dev', 'clerk'])),
+  providers: z.array(z.enum(['dev', 'clerk', 'email'])),
   clerkPublishableKey: z.string().optional(),
+  /** Open email sign-in only (docs/OPEN-SIGNIN.md): the shared workspace everyone joins. */
+  sharedWorkspaceName: z.string().optional(),
 })
 export type AuthConfig = z.infer<typeof AuthConfig>
+
+/**
+ * Open email sign-in (docs/OPEN-SIGNIN.md): any address and a display name, no verification. Only on a
+ * server started with AUTH_PROVIDER=email and DRAFTROOM_OPEN_SIGNIN=1.
+ */
+export const EmailLoginInput = z.object({
+  email: AccountEmail,
+  name: Name,
+})
+export type EmailLoginInput = z.infer<typeof EmailLoginInput>
+
+/**
+ * Partner boards (docs/OPEN-SIGNIN.md): an outside app's stable key for one board in the shared
+ * workspace, e.g. `theaitre:production:42`. Lowercase, so it never depends on how the caller spells it.
+ */
+export const PARTNER_REF_PATTERN = /^[a-z0-9][a-z0-9:._-]{0,119}$/
+export const PartnerBoardInput = z.object({ title: Title })
+export type PartnerBoardInput = z.infer<typeof PartnerBoardInput>
+export const PartnerBoard = z.object({
+  boardId: BoardId,
+  ref: z.string().regex(PARTNER_REF_PATTERN),
+  title: z.string(),
+  /** The board page on PUBLIC_ORIGIN. */
+  url: z.string(),
+  /** True when this call created the board. */
+  created: z.boolean(),
+})
+export type PartnerBoard = z.infer<typeof PartnerBoard>
 
 /**
  * `email` (domain access, docs/DOMAIN-ACCESS-CONTRACTS.md §3.3): trusted as verified, by the dev-guarded

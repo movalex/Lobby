@@ -7,7 +7,7 @@
 // A leaf module (policy + SQL text only), so session.ts, users.ts and identity.ts can all use it
 // without an import cycle. The freshness constants live here and are re-exported by identity.ts.
 
-import { type CreatorPolicy, devDomainFor } from './creators.ts'
+import { type CreatorPolicy, devDomainFor, OPEN_CREATOR_DOMAIN } from './creators.ts'
 
 const HOUR_MS = 60 * 60 * 1000
 
@@ -32,7 +32,7 @@ export const CLOCK_SKEW_TOLERANCE_MS = 60 * 1000
 export const isFutureCheck = (checkedAt: Date | null, now: Date): boolean =>
   checkedAt !== null && checkedAt.getTime() > now.getTime() + CLOCK_SKEW_TOLERANCE_MS
 
-export type EmailSource = 'dev' | 'clerk'
+export type EmailSource = 'dev' | 'clerk' | 'email'
 
 /** Which stored addresses make a creator, for the provider the api RUNS (never the AUTH_PROVIDER variable). */
 export interface CreatorLookup {
@@ -49,6 +49,12 @@ export interface CreatorLookup {
 }
 
 export function creatorLookup(policy: CreatorPolicy, providerId: EmailSource): CreatorLookup {
+  // Open email sign-in (docs/OPEN-SIGNIN.md): every signed-in account is a creator. The configured
+  // policy does not apply; the typed addresses are never verified, so no domain could mean anything.
+  if (providerId === 'email') {
+    const open: CreatorPolicy = { domains: [OPEN_CREATOR_DOMAIN], emails: [] }
+    return { source: 'email', domains: open.domains, emails: [], policy: open, devDomain: null }
+  }
   const devDomain = devDomainFor(providerId)
   return {
     source: providerId,
@@ -78,7 +84,8 @@ export function userColumns(first: number): string {
   return `u.id, u.name, u.handle, u.color, u.avatar_url, u.kind, u.identity_checked_at,
     COALESCE(u.kind = 'account' AND u.identity_checked_at >= ${cutoff}::timestamptz AND EXISTS (
       SELECT 1 FROM user_emails e WHERE e.user_id = u.id AND e.source = ${source}::text
-         AND (e.domain = ANY(${domains}::text[]) OR e.email = ANY(${emails}::text[]))), false) AS creator`
+         AND (e.domain = ANY(${domains}::text[]) OR e.email = ANY(${emails}::text[])
+           OR '*' = ANY(${domains}::text[]))), false) AS creator`
 }
 
 export const userParams = (lookup: CreatorLookup, now: Date): unknown[] => [

@@ -180,6 +180,11 @@ export interface IdentityInput {
   fetchedAt: Date
   /** The dev login: `emails` replace the stored ones whatever their check time (SnapshotWrite.always). */
   authoritative?: boolean
+  /**
+   * false: a creator gets no personal workspace (open email sign-in, docs/OPEN-SIGNIN.md, where everyone
+   * works in the one shared workspace). Default true.
+   */
+  personalWorkspace?: boolean
 }
 
 export interface ProvisionResult {
@@ -264,7 +269,11 @@ export async function findOrCreateUser(
     })
   let user = await loadSessionUser(tx, userId, creators, now)
   if (!user) throw new Error('provisioned user not found')
-  if (user.creator && (await ensurePersonalWorkspace(tx, userId, user.name, now)))
+  if (
+    user.creator &&
+    input.personalWorkspace !== false &&
+    (await ensurePersonalWorkspace(tx, userId, user.name, now))
+  )
     user = (await loadSessionUser(tx, userId, creators, now)) ?? user
   return { user, created }
 }

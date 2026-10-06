@@ -21,6 +21,11 @@ export interface CreatorPolicy {
 export const DEFAULT_CREATOR_DOMAINS = ['darkburn.com', 'trailerparkgroup.com'] as const
 /** Counts as a creator domain only while the api RUNS the dev provider (D8). Never configurable. */
 export const DEV_CREATOR_DOMAIN = 'dev.invalid'
+/**
+ * Every domain: the policy of the open email provider only (docs/OPEN-SIGNIN.md), built in code by
+ * creatorLookup. Never configurable: DOMAIN_RE refuses "*" in DRAFTROOM_CREATOR_DOMAINS.
+ */
+export const OPEN_CREATOR_DOMAIN = '*'
 /** At most this many exceptions (DRAFTROOM_CREATOR_EMAILS). */
 export const MAX_CREATOR_EMAILS = 50
 
@@ -68,7 +73,7 @@ export function creatorMatch(
   devDomain: string | null,
 ): CreatorMatch | null {
   const domain = emailDomain(email)
-  if (policy.domains.includes(domain)) return 'domain'
+  if (policy.domains.includes(domain) || policy.domains.includes(OPEN_CREATOR_DOMAIN)) return 'domain'
   if (policy.emails.includes(email)) return 'exception'
   if (devDomain !== null && domain === devDomain) return 'dev'
   return null

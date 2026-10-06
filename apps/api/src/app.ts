@@ -19,6 +19,7 @@ import Fastify, {
 import { createClerkAuthProvider } from './auth/clerk.ts'
 import { creatorLookup } from './auth/creator-sql.ts'
 import { createDevAuthProvider } from './auth/dev.ts'
+import { createEmailAuthProvider } from './auth/email.ts'
 import { createIdentityService, type IdentityService } from './auth/identity.ts'
 import type { AuthProvider, RouteRateLimit, SignInContext } from './auth/provider.ts'
 import { createSessionStore } from './auth/session.ts'
@@ -47,6 +48,7 @@ import {
 } from './routes/engine-internal.ts'
 import { registerInvitationRoutes } from './routes/invitations.ts'
 import { registerMemberRoutes } from './routes/members.ts'
+import { PARTNER_PREFIX, partnerPlugin } from './routes/partner.ts'
 import { registerTicketRoutes } from './routes/tickets.ts'
 import { registerWorkspaceRoutes } from './routes/workspaces.ts'
 import { sessionUserToUser } from './serialize.ts'
@@ -261,6 +263,10 @@ export function registerRequestTimeouts(app: FastifyInstance, t: RequestTimeouts
 
 function defaultProvider(config: ApiConfig): AuthProvider {
   if (config.authProvider === 'dev') return createDevAuthProvider()
+  if (config.authProvider === 'email') {
+    if (!config.openSignin) throw new Error('AUTH_PROVIDER=email requires DRAFTROOM_OPEN_SIGNIN=1')
+    return createEmailAuthProvider({ workspaceName: config.openSignin.workspaceName })
+  }
   if (!config.clerk) throw new Error('AUTH_PROVIDER=clerk requires Clerk keys')
   return createClerkAuthProvider({ ...config.clerk, publicOrigin: config.publicOrigin })
 }
@@ -352,7 +358,9 @@ async function buildServer(
   const identity = createIdentityService({ db, sessions, provider, lookup: creators, now, log: app.log })
   // Never an address: the domains and how many exceptions there are.
   app.log.info(
-    { creators: { domains: [...config.creators.domains], exceptions: config.creators.emails.length } },
+    provider.id === 'email'
+      ? { creators: 'everyone (open email sign-in, docs/OPEN-SIGNIN.md)' }
+      : { creators: { domains: [...config.creators.domains], exceptions: config.creators.emails.length } },
     'domain access policy',
   )
   const authRateLimit = deps.authRateLimit ?? { max: provider.id === 'dev' ? 600 : 60, timeWindow: 60_000 }
@@ -444,6 +452,8 @@ async function buildServer(
   // route pattern, never by the raw URL, so no path spelling can borrow the exemption for another route.
   app.addHook('onRequest', async (req, reply) => {
     if (req.routeOptions.url?.startsWith(WORKER_PREFIX)) return
+    // Partner boards (routes/partner.ts): Bearer token, cookies refused; registered only with open sign-in.
+    if (req.routeOptions.url?.startsWith(PARTNER_PREFIX)) return
     if (req.method === 'POST' && INTERNAL_CHECKPOINT_POSTS.has(req.routeOptions.url ?? '')) return
     if (MUTATING.has(req.method) && req.headers.origin !== config.publicOrigin) {
       return reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'Cross-origin request refused.' } })
@@ -520,6 +530,13 @@ async function buildServer(
   provider.register(app, signIn)
   registerWorkspaceRoutes(app, ctx)
   registerBoardRoutes(app, ctx)
+  // Partner boards (docs/OPEN-SIGNIN.md): only with open email sign-in and DRAFTROOM_PARTNER_TOKEN.
+  if (config.openSignin?.partnerToken)
+    await app.register(partnerPlugin, {
+      ctx,
+      token: config.openSignin.partnerToken,
+      workspaceName: config.openSignin.workspaceName,
+    })
   registerMemberRoutes(app, ctx)
   registerInvitationRoutes(app, ctx)
   registerTicketRoutes(app, ctx)

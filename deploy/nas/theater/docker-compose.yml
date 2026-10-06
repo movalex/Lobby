@@ -1,0 +1,160 @@
+# The theater Lobby on the NAS (deploy/nas/theater/README.md, docs/OPEN-SIGNIN.md). Copied to
+# /volume3/Apps/lobby-theater/ by deploy-theater.sh; the sources are under ./src, the secrets under
+# ./secrets (mode 600, created on the NAS), LOBBY_ORIGIN in ./.env.
+#
+# No published ports: the only way in is the Cloudflare Tunnel (the `tunnel` service, profile `tunnel`,
+# started once secrets/tunnel.env exists), which reaches `web:8080`. Data lives in named volumes on the
+# NAS's own disks: Postgres, the board rooms (SQLite, never on a network share) and uploaded files.
+
+name: lobby-theater
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+x-node-health: &node-health
+  interval: 30s
+  timeout: 5s
+  retries: 3
+  start_period: 60s
+
+services:
+  db:
+    <<: *hardening
+    image: postgres:18-alpine
+    env_file: ./secrets/db.env # POSTGRES_PASSWORD
+    environment:
+      POSTGRES_USER: lobby
+      POSTGRES_DB: lobby
+    volumes:
+      - pg:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U lobby -d lobby"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    mem_limit: 512m
+    cpus: 1
+
+  api:
+    <<: *hardening
+    image: lobby-theater-api:latest
+    build:
+      context: ./src
+      dockerfile: docker/api.Dockerfile
+    env_file:
+      - ./secrets/shared.env # DRAFTROOM_TICKET_SECRET, DRAFTROOM_INTERNAL_SECRET
+      - ./secrets/api.env # DATABASE_URL, DRAFTROOM_WORKER_TOKEN, DRAFTROOM_PARTNER_TOKEN
+    environment:
+      NODE_ENV: production
+      PORT: "5859"
+      DRAFTROOM_DATA_DIR: /var/data
+      DRAFTROOM_BLOB_STORE: fs # uploads under /var/data/blobs, on the `files` volume
+      PUBLIC_ORIGIN: ${LOBBY_ORIGIN:?LOBBY_ORIGIN missing from .env}
+      DRAFTROOM_SYNC_INTERNAL_URL: http://sync:5858
+      TRUST_PROXY: "2" # nginx (the socket peer) and the tunnel container
+      AUTH_PROVIDER: email
+      DRAFTROOM_OPEN_SIGNIN: "1"
+      DRAFTROOM_SHARED_WORKSPACE_NAME: ${LOBBY_WORKSPACE_NAME:-Banzerini House}
+    volumes:
+      - files:/var/data
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      <<: *node-health
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5859/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+    mem_limit: 768m
+    cpus: 2
+
+  sync:
+    <<: *hardening
+    image: lobby-theater-sync:latest
+    build:
+      context: ./src
+      dockerfile: docker/sync.Dockerfile
+    env_file:
+      - ./secrets/shared.env
+    environment:
+      NODE_ENV: production
+      PORT: "5858"
+      DRAFTROOM_DATA_DIR: /var/data # rooms/board-<id>.sqlite
+      DRAFTROOM_API_INTERNAL_URL: http://api:5859
+      ALLOWED_ORIGINS: ${LOBBY_ORIGIN:?LOBBY_ORIGIN missing from .env}
+      ACCESS_RECHECK_MS: "10000"
+      DRAFTROOM_ENGINE: excalidraw
+    volumes:
+      - rooms:/var/data
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      <<: *node-health
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5858/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+    stop_grace_period: 30s
+    mem_limit: 768m
+    cpus: 2
+
+  web:
+    <<: *hardening
+    image: lobby-theater-web:latest
+    build:
+      context: ./src
+      dockerfile: docker/web.Dockerfile
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m
+    depends_on:
+      - api
+      - sync
+    mem_limit: 128m
+    cpus: 1
+
+  # Thumbnails, PDF pages and video posters (Office documents stay downloadable without a preview).
+  worker:
+    <<: *hardening
+    image: lobby-theater-worker:latest
+    build:
+      context: ./src
+      dockerfile: docker/worker.Dockerfile
+    env_file: ./secrets/worker.env # DRAFTROOM_WORKER_TOKEN, nothing else
+    environment:
+      NODE_ENV: production
+      DRAFTROOM_API_URL: http://api:5859
+      WORKER_ID: nas-theater-1
+      WORKER_CONCURRENCY: "1"
+      WORKER_PDF_HEAP_MB: "384"
+      WORKER_OFFICE: "off"
+    user: node
+    init: true
+    entrypoint: ["node", "apps/worker/src/worker.ts"]
+    depends_on:
+      api:
+        condition: service_healthy
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 1000m
+    memswap_limit: 1000m
+    cpus: 2
+
+  tunnel:
+    <<: *hardening
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    command: tunnel --no-autoupdate run
+    env_file: ./secrets/tunnel.env # TUNNEL_TOKEN (Cloudflare Zero Trust -> Tunnels)
+    depends_on:
+      - web
+    mem_limit: 128m
+
+volumes:
+  pg:
+  rooms:
+  files:

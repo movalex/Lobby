@@ -3,6 +3,7 @@ import {
   Board,
   BoardDetail,
   type DevLoginInput,
+  type EmailLoginInput,
   ErrorBody,
   InvitationAccepted,
   InvitationCreated,
@@ -168,6 +169,9 @@ export function createApiClient(opts: ApiClientOptions = {}) {
     authConfig: (signal?: AbortSignal) => request('GET', '/api/auth/config', { schema: AuthConfig, signal }),
     /** Sets the session cookie; callers re-read the session with me(). */
     devLogin: (input: DevLoginInput) => request('POST', '/api/auth/dev/login', { body: input, schema: null }),
+    /** Open email sign-in (docs/OPEN-SIGNIN.md): sets the session cookie like devLogin. */
+    emailLogin: (input: EmailLoginInput) =>
+      request('POST', '/api/auth/email/login', { body: input, schema: null }),
     logout: () => request('POST', '/api/auth/logout', { schema: null }),
     /**
      * SCA-4 "Sign out everywhere": revokes every Draftroom session of the signed-in user, on every
