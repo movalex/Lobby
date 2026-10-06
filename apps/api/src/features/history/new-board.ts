@@ -61,7 +61,7 @@ export const syncUnavailable = () =>
 
 /**
  * The sync server's seed refused the CONTENT (J4: it converts a v1 body in a worker with limits, and answers 413
- * past its record, byte or answer limits and 422 past its time or heap budget), as opposed to being unreachable:
+ * past its record, byte, answer or heap limits and 422 past its time budget), as opposed to being unreachable:
  * the person is told why, instead of "the board server is not reachable, try again" for a board that will never
  * convert. The api's sync client reports every failed seed as a SyncUnavailable whose message ends in the status
  * ("seed failed with 413"; `status` is read first, for a client that sets it). Null for anything else.
@@ -72,7 +72,7 @@ export function seedRefusal(e: SyncUnavailable): ApiError | null {
     return new ApiError(
       413,
       'IMPORT_TOO_LARGE',
-      'This board is too large to convert for the new canvas, so it can’t be imported or restored as a new board.',
+      'This board is too large or complex to convert for the new canvas, so it can’t be imported or restored as a new board.',
     )
   if (status === 422)
     return new ApiError(

@@ -39,8 +39,14 @@ function run({ json, now, maxResultBytes }: WorkerInput): WorkerOutput {
 if (parentPort) {
   try {
     parentPort.postMessage(run(workerData as WorkerInput))
-  } catch {
-    // a converter bug: no detail (nothing of the board in it), the caller answers as for any failure
-    parentPort.postMessage({ ok: false, reason: 'failed' } satisfies WorkerOutput)
+  } catch (e) {
+    // a converter bug: no detail (nothing of the board in it), the caller answers as for any failure; the
+    // error's NAME (never its message, which could quote the board) is the cause the caller may log
+    const cause = typeof (e as Error | null)?.name === 'string' ? (e as Error).name.slice(0, 64) : undefined
+    parentPort.postMessage({
+      ok: false,
+      reason: 'failed',
+      ...(cause ? { cause } : {}),
+    } satisfies WorkerOutput)
   }
 }

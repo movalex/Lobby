@@ -10,8 +10,9 @@
 //    v1 archive import). They are migrated and converted with the same converter the board conversion
 //    uses (packages/tldraw-import, §5.5 "converted on read"), and `lb_doc.import` records it. The conversion
 //    runs in a worker thread with limits (./convert-v1.ts, J4), never on this server's event loop: a body past
-//    them is refused 413 IMPORT_TOO_LARGE (records, bytes) or 422 IMPORT_TOO_COMPLEX (time, heap), and 503 BUSY
-//    when the one conversion place and its short queue are taken. Nothing is created for a refused body.
+//    them is refused 413 IMPORT_TOO_LARGE (records, bytes, heap) or 422 IMPORT_TOO_COMPLEX (time), and 503 BUSY
+//    when the one conversion place and its short queue are taken, or the process has no memory to spare for a
+//    worker just now. Nothing is created for a refused body.
 //
 // Either way every element passes the room's own per-element check (canvas-schema checkElement: the strict
 // schema, byte limits, the customData registry) and the cross-element invariants (§2.4.4), the board caps

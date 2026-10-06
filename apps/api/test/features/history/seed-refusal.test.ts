@@ -19,7 +19,7 @@ afterEach(async () => {
 })
 
 describe('seedRefusal', () => {
-  it('413 is too large, 422 too complex; anything else (and a sync that did not answer) is not a refusal of the content', () => {
+  it('413 is too large or complex (past a size limit or the heap), 422 takes too long; anything else (and a sync that did not answer) is not a refusal of the content', () => {
     expect(seedRefusal(new SyncUnavailable('seed failed with 413'))).toMatchObject({
       status: 413,
       code: 'IMPORT_TOO_LARGE',
@@ -55,7 +55,7 @@ describe('restoring a v1 checkpoint as a new board when the sync server refuses 
   }
 
   for (const [status, code, text] of [
-    [413, 'IMPORT_TOO_LARGE', /too large to convert/],
+    [413, 'IMPORT_TOO_LARGE', /too large or complex to convert/],
     [422, 'IMPORT_TOO_COMPLEX', /takes too long to convert/],
   ] as const) {
     it(`${status}: ${code} with a message that says why, not "not reachable"`, async () => {
