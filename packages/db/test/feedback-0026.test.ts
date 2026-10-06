@@ -1,7 +1,7 @@
 // 0026_feedback (wave J5): the table behind the "Send feedback" button. The database refuses what the api
 // never writes (a bad id, a kind or status it does not know, an empty or over-long text, a context that is
 // not a small JSON object); the table has no foreign keys, so a message outlives its sender; and an upgrade
-// from 0024 changes no existing table.
+// from 0025 changes no existing table.
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { type Db, loadMigrations, migrate, openPglite, pgErrorCode } from '../src/index.ts'
@@ -49,12 +49,12 @@ function insert(q: Db, c: Cols = {}) {
 }
 
 describe('0026_feedback', () => {
-  it('is a migration of its own, after 0024, and creates only the feedback table', async () => {
+  it('is a migration of its own, after 0025, and creates only the feedback table', async () => {
     const all = loadMigrations()
     expect(all.find((m) => m.version === 26)?.name).toBe('0026_feedback')
     const d = await openPglite()
     db = d
-    await migrate(d, { migrations: all.filter((m) => m.version <= 24) })
+    await migrate(d, { migrations: all.filter((m) => m.version <= 25) })
     const tables = async () =>
       (
         await d.query<{ table_name: string }>(
