@@ -3,7 +3,7 @@
 // address does: nothing says the inbox exists. Newest first, Open / Done / All, mark done or reopen, load more.
 // Every message is plain text, shown as text (line breaks kept, never rendered as markup).
 import type { FeedbackItem, FeedbackStatus } from '@draftroom/contracts'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { isApiError } from '../../api/client.ts'
 import { Wordmark } from '../../brand/Wordmark.tsx'
 import { formatDateTime, formatRelativeTime } from '../../lib/format.ts'
@@ -32,10 +32,14 @@ export default function FeedbackPage() {
   const [busy, setBusy] = useState<string | null>(null)
   const [moreBusy, setMoreBusy] = useState(false)
   const [attempt, setAttempt] = useState(0)
+  // The "Load more" request in flight, if any: it belongs to the list that was on screen when it started, so
+  // a switch of the filter (or a retry) drops it. Without that, a page of Open would be appended to Done.
+  const moreRequest = useRef<AbortController | null>(null)
 
   useEffect(() => {
     void attempt // run again on retry
     const controller = new AbortController()
+    setMoreBusy(false) // a "Load more" of the list that is leaving was dropped by the cleanup below
     setPhase('loading')
     setMessage(null)
     feedbackApi()
@@ -54,21 +58,32 @@ export default function FeedbackPage() {
           setPhase('error')
         },
       )
-    return () => controller.abort()
+    return () => {
+      controller.abort()
+      moreRequest.current?.abort()
+      moreRequest.current = null
+    }
   }, [filter, attempt])
 
   const loadMore = useCallback(async () => {
     if (!next || moreBusy) return
+    const controller = new AbortController()
+    moreRequest.current = controller
     setMoreBusy(true)
     setMessage(null)
     try {
-      const page = await feedbackApi().list({ status: filter, cursor: next, limit: PAGE })
+      const page = await feedbackApi().list({ status: filter, cursor: next, limit: PAGE }, controller.signal)
+      if (controller.signal.aborted) return // another list is on screen now: this page is not its
       setItems((cur) => [...cur, ...page.items.filter((i) => !cur.some((c) => c.id === i.id))])
       setNext(page.next)
     } catch (e) {
+      if (controller.signal.aborted) return
       setMessage(isApiError(e) ? e.message : 'Lobby could not load more.')
     } finally {
-      setMoreBusy(false)
+      if (moreRequest.current === controller) {
+        moreRequest.current = null
+        setMoreBusy(false)
+      }
     }
   }, [next, moreBusy, filter])
 

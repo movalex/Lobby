@@ -377,3 +377,97 @@ test('when sending fails the text stays in the dialog, the reason is shown, and 
     await context.close()
   }
 })
+
+test('the inbox: a "Load more" that is still on its way when the filter changes never lands in the other list', async ({
+  browser,
+  users,
+}) => {
+  const aliceUser = await users.get('alice')
+  const base = {
+    userId: 'u-sender',
+    name: 'Sender',
+    kind: 'account' as const,
+    expected: null,
+    statusAt: null,
+    context: {
+      path: '/w/x',
+      boardId: null,
+      boardTitle: null,
+      userAgent: 'Mozilla/5.0',
+      viewport: { width: 1280, height: 800 },
+      build: 'test',
+      at: '2026-10-05T10:00:00.000Z',
+    },
+  }
+  const item = (id: string, status: 'open' | 'done', text: string) => ({
+    ...base,
+    id: `fbk_${id.padEnd(12, 'x')}`,
+    createdAt: '2026-10-05T10:00:00.000Z',
+    status,
+    text,
+  })
+  // Open: one message and a next page that is held; Done: one message and a next page of one more.
+  let release: () => void = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const pages = (status: string | null, cursor: string | null) => {
+    if (status === 'open')
+      return cursor
+        ? { items: [item('openlate', 'open', 'OPEN-LATE')], next: null }
+        : { items: [item('openfirst', 'open', 'OPEN-FIRST')], next: 'cursor-open' }
+    return cursor
+      ? { items: [item('donemore', 'done', 'DONE-MORE')], next: null }
+      : { items: [item('donefirst', 'done', 'DONE-FIRST')], next: 'cursor-done' }
+  }
+
+  const context = await browser.newContext({ viewport: { width: 1280, height: 820 } })
+  try {
+    await signInContext(context, aliceUser.handle, aliceUser.name)
+    const p = await context.newPage()
+    let openCursorRequests = 0
+    await p.route(/\/api\/feedback\?/, async (route) => {
+      const url = new URL(route.request().url())
+      const status = url.searchParams.get('status')
+      const cursor = url.searchParams.get('cursor')
+      if (status === 'open' && cursor) {
+        openCursorRequests++
+        await held
+      }
+      // by then the page may have dropped the request: nothing is left to answer
+      await route.fulfill({ json: pages(status, cursor) }).catch(() => {})
+    })
+    await p.goto('/feedback')
+    await expect(p.getByTestId('feedback-item')).toHaveCount(1)
+    await expect(p.getByText('OPEN-FIRST')).toBeVisible()
+
+    await test.step('Load more on Open, then Done before the page arrives', async () => {
+      await p.getByTestId('feedback-more').click()
+      await expect.poll(() => openCursorRequests).toBe(1)
+      await expect(p.getByTestId('feedback-more')).toBeDisabled()
+      await p.getByTestId('feedback-filter-done').click()
+      await expect(p.getByText('DONE-FIRST')).toBeVisible()
+      // the button belongs to the Done list now: not stuck on the Open request
+      await expect(p.getByTestId('feedback-more')).toBeEnabled()
+    })
+
+    await test.step('the late Open page never shows up under Done; paging goes on from Done’s own cursor', async () => {
+      release()
+      // give the held answer time to arrive and be (wrongly) applied
+      await p.waitForTimeout(500)
+      await expect(p.getByText('OPEN-LATE')).toHaveCount(0)
+      await expect(p.getByTestId('feedback-item')).toHaveCount(1)
+      await p.getByTestId('feedback-more').click()
+      await expect(p.getByText('DONE-MORE')).toBeVisible()
+      await expect(p.getByTestId('feedback-item')).toHaveCount(2)
+      const statuses = await p
+        .getByTestId('feedback-item')
+        .evaluateAll((els) => els.map((el) => el.getAttribute('data-status')))
+      expect(statuses).toEqual(['done', 'done'])
+      await expect(p.getByTestId('feedback-more')).toHaveCount(0)
+      await expect(p.getByText('OPEN-LATE')).toHaveCount(0)
+    })
+  } finally {
+    await context.close()
+  }
+})

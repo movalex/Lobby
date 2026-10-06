@@ -3,6 +3,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { APP_BUILD } from './build-info.ts'
 import { FeedbackDialog } from './FeedbackDialog.tsx'
 import { closeFeedback, feedbackRequest, openFeedback } from './state.ts'
 
@@ -46,7 +47,7 @@ describe('the dialog', () => {
     expect(html).toContain(UA)
     expect(html).toContain('1280 × 720')
     expect(html).toContain('data-testid="feedback-context-build"')
-    expect(html).toContain('>dev<')
+    expect(html).toContain(`>${APP_BUILD}<`)
     expect(html).toContain('data-testid="feedback-context-time"')
     // off a board there is no board row
     expect(html).not.toContain('feedback-context-board')

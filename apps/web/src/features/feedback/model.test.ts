@@ -140,7 +140,8 @@ describe('sendErrorMessage', () => {
 })
 
 describe('build-info', () => {
-  it('reads "dev" where the build did not define a commit (tests, an undefined define)', () => {
-    expect(APP_BUILD).toBe('dev')
+  it('is "dev" where nothing defined a commit (a test run from the repository root), else the build’s own commit', () => {
+    // apps/web's own vite config defines the commit (a run from inside apps/web sees it): both are right
+    expect(APP_BUILD).toMatch(/^(dev|unknown|[0-9a-f]{7,40})$/)
   })
 })
