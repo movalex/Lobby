@@ -133,7 +133,7 @@ describe('0024 on a database at 0023', () => {
     const d = await openPglite()
     db = d
     const all = loadMigrations()
-    expect(all.at(-1)?.name).toBe('0024_vote_selection_access_granted')
+    expect(all.find((m) => m.version === 24)?.name).toBe('0024_vote_selection_access_granted')
     await migrate(d, { migrations: all.filter((m) => m.version <= 23) })
     await seedTenant(d)
     await insertVote(d, { scope: 'frame', frame_id: 'shape:f' })
@@ -143,7 +143,10 @@ describe('0024 on a database at 0023', () => {
     await closeAll(d)
     expect(await sqlstate(insertVote(d, { scope: 'selection' }))).toBe('23514')
 
-    expect((await migrate(d)).applied).toEqual(['0024_vote_selection_access_granted'])
+    // (0025 and later are not this test's business)
+    expect((await migrate(d, { migrations: all.filter((m) => m.version <= 24) })).applied).toEqual([
+      '0024_vote_selection_access_granted',
+    ])
     expect(
       await d.one('SELECT scope, frame_id, selection FROM vote_sessions WHERE board_id = $1', [b1]),
     ).toEqual({ scope: 'frame', frame_id: 'shape:f', selection: null })
