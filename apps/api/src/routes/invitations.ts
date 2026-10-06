@@ -95,8 +95,8 @@ export const boardInTrash = () => new ApiError(409, BOARD_IN_TRASH.code, BOARD_I
 
 /**
  * The invitation behind `token`, locked FOR UPDATE for redeeming it (accepting, joining as a guest),
- * or null when there is none. A board invitation's board row (a workspace invitation's workspace row:
- * IO-3) is locked first (the lock order in access.ts): a revoke or "+1 h" holds the board and then takes the link, so taking the link first and
+ * or null when there is none. The workspace row, then a board invitation's board row, are locked first
+ * (the lock order in access.ts): a revoke or "+1 h" holds the board and then takes the link, so taking the link first and
  * then the board (which redeeming needs: its grant references the board) deadlocks with them. The
  * board is found through an unlocked read (an invitation's board never changes), and the row is read
  * again under the lock, so the caller always decides on its current state.
@@ -108,10 +108,13 @@ export async function lockInvitation(tx: Queryable, token: string): Promise<Invi
     [tokenHash],
   )
   if (!found) return null
+  // IO-3, and the real-Postgres race test (internal-only-locks.pg.test.ts): every redemption, a board
+  // invitation's and a guest link's included, is decided under the workspace row lock (step 0 of the lock
+  // order, before the board row) that the Internal only switch, a move and a visibility raise take
+  // (outside.ts assertRedeemAllowed). With the board row alone, a switch turned on between the redeem's
+  // read of it and its commit let an outside account or a name-only guest in.
+  await tx.query('SELECT id FROM workspaces WHERE id = $1 FOR NO KEY UPDATE', [found.workspace_id])
   if (found.board_id !== null) await lockBoardRow(tx, found.board_id)
-  // IO-3: a workspace invitation is decided under the workspace row lock (step 0 of the lock order) the
-  // Internal only switch and a visibility raise take (outside.ts assertRedeemAllowed).
-  else await tx.query('SELECT id FROM workspaces WHERE id = $1 FOR NO KEY UPDATE', [found.workspace_id])
   return tx.maybeOne<InvitationRow>(
     `SELECT ${INVITATION_COLUMNS} FROM invitations i WHERE i.id = $1 AND i.token_hash = $2 FOR UPDATE`,
     [found.id, tokenHash],

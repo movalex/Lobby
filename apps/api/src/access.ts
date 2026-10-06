@@ -94,7 +94,8 @@ function toAccess(row: AccessRow): BoardAccess {
 // With a real Postgres pool, requests run on separate connections at once, and two transactions that
 // lock the same rows in opposite orders deadlock: Postgres then fails one of them (a 500). So every
 // transaction that locks more than one of these takes them top-down, never bottom-up:
-//   0. the workspace row: FOR NO KEY UPDATE (assertBoardRoom, uploads, a member change or removal). It is
+//   0. the workspace row: FOR NO KEY UPDATE (assertBoardRoom, uploads, a member change or removal, the
+//      Internal only switch, and every redemption: accepting an invitation, joining through a link). It is
 //      taken first, before ANY read that decides whether the transaction may hand out a grant, the
 //      caller's own membership included: a board's creator gets an owner grant for themselves
 //      (routes/boards.ts, features/history/new-board.ts createBoardFrom), so both go through
@@ -118,7 +119,8 @@ function toAccess(row: AccessRow): BoardAccess {
 //      which locks nothing) deadlocks with a removal, or leaves a grant that outlives the membership;
 //   5. board_members and sessions rows.
 // A transaction that only knows a step-2 row (joining through a link, accepting an invitation, the
-// expired-link sweeper) reads it WITHOUT a lock first, locks the board, then locks and re-reads it.
+// expired-link sweeper) reads it WITHOUT a lock first, locks the board (a redemption: the workspace row,
+// then the board; routes/invitations.ts lockInvitation), then locks and re-reads it.
 // Safe exception: a reply locks its comment thread, then inserts the comment (whose key-share lock on
 // the board comes after that thread lock), because no transaction that holds a board lock ever waits
 // for a thread's lock. Keep it that way, or lock the board first there too.

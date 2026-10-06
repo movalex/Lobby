@@ -87,19 +87,22 @@ describe.skipIf(!PG)('removing a member while they are given access (real Postgr
     // ... the removal now deletes the membership and goes for the grant rows.
     const removing = remove(w.alice, w.bob.userId)
     try {
-      // The accept holds nothing the removal needs yet (only the board and the link), so the removal runs to
-      // its end. Before the fix it waited for the grant row the accept held: the two deadlocked.
-      expect(await waitedOrFinished(w.api.db, pid, removing)).toBe('finished')
+      // The accept holds the workspace row (lockInvitation takes it first for every redemption since the
+      // Internal only race test, internal-only-locks.pg.test.ts), the board and the link, and nothing the
+      // removal would need after them: the removal waits at the workspace row, its first lock, holding
+      // nothing. Before D4's fix it waited for the grant row the accept held while the accept waited for the
+      // membership: the two deadlocked. (Between those two fixes the removal ran to its end here.)
+      expect(await waitedOrFinished(w.api.db, pid, removing)).toBe('waited')
     } finally {
       pause.release()
     }
     const [removed, accepted] = await Promise.all([removing, accepting])
     expect(removed.statusCode, removed.body).toBe(200)
     expect(accepted.statusCode, accepted.body).toBe(200)
-    // The accept came after the removal and joined bob again as a guest, with the link's grant: nothing orphaned
+    // The removal came after the accept and swept what it gave: bob is out, with nothing orphaned
     expect(await orphans(w.api, w.bob.userId)).toEqual([])
-    expect(await membership(w.api, w.bob.userId)).toEqual({ role: 'guest' })
-    expect(await grantOf(w.api, w.board, w.bob.userId)).toEqual({ role: 'viewer' })
+    expect(await membership(w.api, w.bob.userId)).toBeNull()
+    expect(await grantOf(w.api, w.board, w.bob.userId)).toBeNull()
   })
 
   it('the removal held first: it has deleted the membership but not swept the grants, and the same person accepts: the accept waits, then both finish and nothing is orphaned', async () => {

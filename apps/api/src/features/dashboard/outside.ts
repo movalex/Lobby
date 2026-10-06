@@ -319,8 +319,9 @@ export async function assertRaiseAllowed(
  * internal only, only a confirmed creator may redeem it, however old the invitation is. Stored status
  * (the accept route confirmed the caller's addresses before its transaction for an email-locked one);
  * call in the transaction. Removes nothing. A workspace invitation as member is also refused while it
- * would reach a board of an internal-only project (IO-3, assertMemberRaiseAllowed); lockInvitation took
- * the workspace row for it, so a switch change or a visibility raise cannot slip past.
+ * would reach a board of an internal-only project (IO-3, assertMemberRaiseAllowed). lockInvitation took
+ * the workspace row for every invitation (a board's too), so a switch change, a move or a visibility raise
+ * cannot slip past.
  */
 export async function assertRedeemAllowed(
   q: Queryable,
