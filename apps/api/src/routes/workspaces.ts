@@ -16,6 +16,10 @@
 //   - single-use invitations they SENT that nobody has used yet: revoked (an unused link from someone
 //     who is gone is an open door nobody answers for; the invitee asks the workspace again). Used ones
 //     stand: those grants are the invitee's own;
+//   - single-use invitations SENT TO them (J2 / INV-3: locked to one of their stored addresses), to a board
+//     of this workspace or to the workspace, that they have not used yet: revoked, or the removed person
+//     opens one they still hold and is back (a guest with that board's role, or a member again) without
+//     anyone deciding it. (Multi-use links are bearer links, addressed to nobody: see below);
 //   - access requests they MADE that are still pending: denied (approving one later would hand a removed
 //     person a fresh guest membership and board grant). It is a decision like any other, so the usual
 //     one-day pause before asking again applies;
@@ -28,8 +32,9 @@
 // Locks: the workspace row first, FOR NO KEY UPDATE (as uploads and board creation take it), so the
 // member changes of one workspace run one at a time (the last-owner count) while rows that reference the
 // workspace are not blocked. A removal then takes the leaver's pending request rows and unused invitation
-// rows (an approval that holds a request finishes first; one that comes later finds it answered), then
-// their workspace_members row (the DELETE), and only then their board_members rows. The membership goes
+// rows, the ones they sent and the ones sent to them (an approval or an accept that holds such a row
+// finishes first, and the removal then finds it answered or used; one that comes later finds it closed),
+// then their workspace_members row (the DELETE), and only then their board_members rows. The membership goes
 // before the grants because a grant given to "a member" holds the membership row until it commits
 // (members.ts `loadTarget` reads it FOR SHARE): the removal waits for it and then sweeps what it added,
 // or goes first and the grant finds nobody (404). With the grants first, such a grant could land after the
@@ -76,6 +81,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { isBoardId, isUserId, isWorkspaceId, loadBoardAccess, requireWorkspaceRole } from '../access.ts'
 import { audit } from '../audit.ts'
 import { roleRequiresCreator } from '../auth/identity.ts'
+import { storedEmails } from '../auth/users.ts'
 import type { AppContext, Params } from '../context.ts'
 import { ApiError, badRequest, conflict, forbidden, notFound, parse } from '../errors.ts'
 import {
@@ -167,6 +173,8 @@ const MAX_LINKS_NAMED = 20
 interface Offboarded {
   /** Their unused single-use invitations, revoked. */
   invitations: { id: string; boardId: string | null }[]
+  /** Unused single-use invitations addressed to them (J2 / INV-3), revoked. */
+  invitationsToThem: { id: string; boardId: string | null }[]
   /** Their pending access requests, denied. */
   requests: { id: string; boardId: string }[]
   /** Multi-use links they made that stay open (the count, and the first MAX_LINKS_NAMED ids). */
@@ -221,6 +229,29 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
         detail: { boardId: inv.board_id, via: 'member_removed', userId: uid },
         at,
       })
+    // J2 / INV-3: unused single-use invitations SENT TO them (locked to one of their stored addresses of
+    // the running provider, the addresses accepting would count), to a board of this workspace or to the
+    // workspace itself: revoked. Otherwise the removed person opens one they still hold and is back (a
+    // workspace guest with that board's role, or a member again), with nobody deciding it.
+    const emails = await storedEmails(tx, uid, ctx.identity.lookup.source)
+    const toThem = emails.length
+      ? await tx.query<{ id: string; board_id: string | null }>(
+          `UPDATE invitations SET revoked_at = $3
+            WHERE workspace_id = $1 AND invited_email = ANY($2::text[]) AND NOT multi_use
+              AND redeemed_by IS NULL AND revoked_at IS NULL AND expires_at > $3
+            RETURNING id, board_id`,
+          [wid, emails, at],
+        )
+      : { rows: [] }
+    for (const inv of toThem.rows)
+      await audit(tx, {
+        workspaceId: wid,
+        actorId,
+        action: 'invitation.revoke',
+        target: inv.id,
+        detail: { boardId: inv.board_id, via: 'member_removed', userId: uid, invitee: true },
+        at,
+      })
     // Their multi-use links stay open (see the top of this file); only counted and named.
     const links = await tx.query<{ id: string; total: number }>(
       `SELECT id, count(*) OVER ()::int AS total FROM invitations
@@ -230,6 +261,7 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
     )
     return {
       invitations: invitations.rows.map((r) => ({ id: r.id, boardId: r.board_id })),
+      invitationsToThem: toThem.rows.map((r) => ({ id: r.id, boardId: r.board_id })),
       requests: requests.rows.map((r) => ({ id: r.id, boardId: r.board_id })),
       linksKept: { count: links.rows[0]?.total ?? 0, ids: links.rows.map((r) => r.id) },
     }
@@ -515,6 +547,9 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
           previousRole: targetRole,
           boardGrantsRemoved: grants.rows.length,
           invitationsRevoked: left.invitations.length,
+          ...(left.invitationsToThem.length
+            ? { invitationsToThemRevoked: left.invitationsToThem.length }
+            : {}),
           accessRequestsDenied: left.requests.length,
           // multi-use links stay: who made them is on each row and here, so a manager can revoke them
           linksKept: left.linksKept.count,

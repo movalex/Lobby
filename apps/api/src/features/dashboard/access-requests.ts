@@ -45,6 +45,15 @@ import { DAY_MS, newAccessRequestId, publishSharingChanged, trySavepoint, UserRa
 
 /** Per user, across all boards: 10 requests per 10 minutes. */
 export const ACCESS_REQUEST_USER_LIMIT = { max: 10, windowMs: 10 * 60 * 1000 }
+/**
+ * J2 / INV-6: per board, across everyone who asks: at most this many NEW requests in any 24 hours. The
+ * per-user limit cannot see a crowd of accounts (verified sign-ups are cheap: plus-addressing), and each
+ * new requester is a pending row and a bell item for every owner. Past it a new request is swallowed like
+ * the per-board denial pause (the same 202, nothing written, nobody notified), so the owners' list and
+ * bell stay readable; a request that is already pending is still updated (its re-notification is limited
+ * per person). Counted under the board row lock, so simultaneous requests cannot all slip past it.
+ */
+export const ACCESS_REQUEST_BOARD_LIMIT = { max: 50, windowMs: DAY_MS }
 /** Owners hear about the same person's request on one board at most this often (unless the role rises). */
 const RENOTIFY_MS = DAY_MS
 /** After a denial, new requests from that person for that board are ignored this long. */
@@ -232,6 +241,11 @@ export function registerAccessRequestRoutes(app: FastifyInstance, ctx: FeatureCo
         [bid, user.id, new Date(at.getTime() - DENIED_COOLDOWN_MS)],
       )
       if (denied) return false
+      const recent = await tx.one<{ n: number }>(
+        'SELECT count(*)::int AS n FROM access_requests WHERE board_id = $1 AND created_at > $2',
+        [bid, new Date(at.getTime() - ACCESS_REQUEST_BOARD_LIMIT.windowMs)],
+      )
+      if (recent.n >= ACCESS_REQUEST_BOARD_LIMIT.max) return false
       await tx.query(
         `INSERT INTO access_requests (id, workspace_id, board_id, user_id, role_requested, message,
                                       created_at, updated_at, notified_at)

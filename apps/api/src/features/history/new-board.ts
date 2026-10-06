@@ -2,10 +2,11 @@
 //
 // Always a NEW, PRIVATE board owned by the caller (PRF-08): no grants, no invitation/review links, no
 // workspace visibility are inherited, except the explicit "keep sharing settings" duplicate, which
-// copies people grants and visibility (never links, never name-only guests, never someone who no longer
-// belongs to the workspace) and needs manage_access on the source. Domain access (D5): a copied grant of
-// someone who is not a creator is at most `editor` (nobody makes an outsider a board owner), and the caller
-// must still be a creator when the row is written (the seed can take a while).
+// copies people grants and visibility (never links nor the access a link gave, never name-only guests,
+// never someone who no longer belongs to the workspace) and needs manage_access on the source. Domain
+// access (D5): a copied grant of someone who is not a creator is at most `editor` (nobody makes an
+// outsider a board owner), and the caller must still be a creator when the row is written (the seed can
+// take a while).
 //
 // Order: seed the canvas first, then commit the board row. Until the row exists nobody can get a
 // ticket for the id, so nothing can race the seed; a seed conflict (the id already has canvas data:
@@ -14,7 +15,7 @@
 
 import { NEW_CANVAS_BOARD_MESSAGE, NEW_CANVAS_ERROR } from '@draftroom/contracts'
 import { newBoardId, type Queryable } from '@draftroom/db'
-import type { BoardVisibility } from '@draftroom/permissions'
+import type { BoardRole, BoardVisibility } from '@draftroom/permissions'
 import { BOARD_RETURNING, type BoardRow, requireCreatingRoleLocked } from '../../access.ts'
 import { audit } from '../../audit.ts'
 import { onNewCanvas } from '../../canvas-engine.ts'
@@ -192,27 +193,50 @@ export async function createBoardFrom(
         // these row locks keep it so for any path that deletes a membership without that row (it waits for
         // this transaction and sweeps the copy's grant too). Sorted by user, so two copies lock the rows in
         // one order.
-        const grants = await tx.query<{ user_id: string }>(
-          `SELECT bm.user_id FROM board_members bm
+        //
+        // Access that a review or workshop link gave (J2 / INV-4) is no "people" setting either: it ends with
+        // its link on the source (the link sweep), and a copied grant would be tied to no link and last for
+        // good. So a grant a multi-use link of the source CREATED (the link sweep's own test, review-links.ts
+        // `created_by_link`: a redemption at the grant's creation time through a link with the grant's role)
+        // is not copied, and nobody is locked for it; a grant an open workshop (edit) link RAISED is copied at
+        // the role it goes back to when that link ends (the redemption's previous_role). A review link's
+        // raise stays on the source, so it is copied as it is.
+        const grants = await tx.query<{ user_id: string; role: BoardRole }>(
+          `SELECT bm.user_id,
+                  COALESCE((
+                    SELECT r.previous_role FROM invitation_redemptions r JOIN invitations i ON i.id = r.invitation_id
+                     WHERE r.board_id = bm.board_id AND r.user_id = bm.user_id AND i.multi_use
+                       AND i.swept_at IS NULL AND i.role = 'editor' AND bm.role = 'editor'
+                       AND r.previous_role IS NOT NULL
+                     ORDER BY array_position(ARRAY['viewer', 'commenter', 'editor']::text[], r.previous_role) DESC
+                     LIMIT 1
+                  ), bm.role) AS role
+             FROM board_members bm
              JOIN boards src ON src.id = bm.board_id AND src.workspace_id = $3
              JOIN workspace_members wm ON wm.workspace_id = $3 AND wm.user_id = bm.user_id
              JOIN users u ON u.id = bm.user_id AND u.kind <> 'guest'
             WHERE bm.board_id = $1 AND bm.user_id <> $2
+              AND NOT EXISTS (
+                SELECT 1 FROM invitation_redemptions r JOIN invitations i ON i.id = r.invitation_id
+                 WHERE r.board_id = bm.board_id AND r.user_id = bm.user_id AND i.multi_use
+                   AND r.redeemed_at = bm.created_at AND i.role = bm.role)
             ORDER BY bm.user_id
               FOR SHARE OF wm`,
           [plan.shareLike.boardId, plan.userId, plan.workspaceId],
         )
         const people = grants.rows.map((g) => g.user_id)
         const creators = await ctx.identity.creatorsAmong(tx, people)
+        // D5: a copied owner grant of someone who is not a creator is at most editor.
+        const roles = grants.rows.map((g) =>
+          g.role === 'owner' && !creators.has(g.user_id) ? 'editor' : g.role,
+        )
         await tx.query(
           `INSERT INTO board_members (board_id, user_id, role, added_by, created_at)
-           SELECT $1, bm.user_id,
-                  CASE WHEN bm.role = 'owner' AND NOT (bm.user_id = ANY($6::text[])) THEN 'editor' ELSE bm.role END,
-                  $3, $4
-             FROM board_members bm
-            WHERE bm.board_id = $2 AND bm.user_id = ANY($5::text[]) AND bm.user_id <> $3
+           SELECT $1, g.user_id, g.role, $2, $3
+             FROM unnest($4::text[], $5::text[]) AS g(user_id, role)
+            WHERE g.user_id <> $2
            ON CONFLICT DO NOTHING`,
-          [newId, plan.shareLike.boardId, plan.userId, at, people, [...creators]],
+          [newId, plan.userId, at, people, roles],
         )
       }
       await insertLinks(tx, plan.workspaceId, newId, plan.files, at)

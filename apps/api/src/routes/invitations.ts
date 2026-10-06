@@ -335,10 +335,34 @@ export async function redeemInvitation(
         [inv.id, userId, at],
       )
     } else if (rank.indexOf(prior) < rank.indexOf(inv.role)) {
-      await tx.query(
-        'UPDATE invitation_redemptions SET previous_role = $3 WHERE invitation_id = $1 AND user_id = $2',
-        [inv.id, userId, prior],
+      // J2 / MISS-1: a raise of a grant that a multi-use link of this board CREATED (the link sweep's own
+      // test, review-links.ts `created_by_link`: a redemption stamped with the grant's creation time,
+      // through a link with the grant's role) is no raise of someone's own access: the grant is still the
+      // links'. Stamp this redemption as the grant's creator too (the grant's creation time, nothing to go
+      // back to), so the link sweep ends it with the last of those links (removeReviewLinkGrants' keeper),
+      // instead of finding a grant no link created and leaving it for good. (The grant row was raised
+      // above; its created_at is still the one it was created with.)
+      const linkMade = await tx.maybeOne<{ ok: boolean }>(
+        `SELECT true AS ok FROM invitation_redemptions r
+           JOIN invitations i ON i.id = r.invitation_id
+           JOIN board_members bm ON bm.board_id = r.board_id AND bm.user_id = r.user_id
+          WHERE r.board_id = $1 AND r.user_id = $2 AND r.invitation_id <> $3 AND i.multi_use
+            AND r.redeemed_at = bm.created_at AND i.role = $4
+          LIMIT 1`,
+        [inv.board_id, userId, inv.id, prior],
       )
+      if (linkMade)
+        await tx.query(
+          `UPDATE invitation_redemptions r SET redeemed_at = bm.created_at, previous_role = NULL
+             FROM board_members bm
+            WHERE r.invitation_id = $1 AND r.user_id = $2 AND bm.board_id = $3 AND bm.user_id = $2`,
+          [inv.id, userId, inv.board_id],
+        )
+      else
+        await tx.query(
+          'UPDATE invitation_redemptions SET previous_role = $3 WHERE invitation_id = $1 AND user_id = $2',
+          [inv.id, userId, prior],
+        )
     }
   }
   await audit(tx, {
