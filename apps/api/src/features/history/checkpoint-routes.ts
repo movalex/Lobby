@@ -22,33 +22,39 @@
 // stored body never rewritten. The answer is a lobby-elements payload marked `converted`. A body the
 // converter cannot read keeps the v1 answer (the records), and so does an api on the tldraw sync.
 //
-// The conversion runs on the api's event loop, and what it costs grows with what is in the records (about
-// 90 microseconds per record, 65 ms per MiB of strokes, 5 ms per thousand characters of a sticky note's
-// label: the measurements are at `previewSettings`), so it is bounded three ways: a v1 body of more
-// than `previewSettings.maxRecords` records, or whose stored body is larger than
-// `previewSettings.maxBodyBytes`, or whose labels hold more than `previewSettings.maxTextChars`
-// characters of text, is not converted at all and answers "too large to preview" (the v1 shape with no
-// records and no format, which the web already shows as "can't be previewed here yet; restoring it as a new
-// board still works"). The first two are decided from the row's own record_count and size_bytes before the
-// body is even read (the body's own size and count are checked again once it is, in case a row was wrong);
-// the text is summed once the body is parsed. What was converted is kept in a small LRU by checkpoint id (a
-// preview opened again, by anyone who may open it, is not converted again), and so is the too-large answer.
-// Both are decided after the access checks, so nothing is served to someone who may not see it.
+// What the conversion costs grows with what is in the records (about 90 microseconds per record, 65 ms per
+// MiB of strokes, 5 ms per thousand characters of a sticky note's label: the measurements are at
+// `previewSettings`), so it is bounded three ways: a v1 body of more than `previewSettings.maxRecords`
+// records, or whose stored body is larger than `previewSettings.maxBodyBytes`, or whose labels hold more than
+// `previewSettings.maxTextChars` characters of text, is not converted at all and answers "too large to
+// preview" (the v1 shape with no records and no format, which the web already shows as "can't be previewed
+// here yet; restoring it as a new board still works"). The first two are decided from the row's own
+// record_count and size_bytes before the body is even read (the body's own size and count are checked again
+// once it is, in case a row was wrong); the text is summed once the body is parsed. What was converted is kept
+// in a small LRU by checkpoint id (a preview opened again, by anyone who may open it, is not converted
+// again), and so is the too-large answer. Both are decided after the access checks, so nothing is served to
+// someone who may not see it.
+//
+// The conversion itself runs in a worker thread (./convert-v1.ts, J4 CONV-1), never on the api's event loop:
+// whatever the bounds above let through, a body that takes the worker longer than
+// `previewSettings.workerTimeoutMs` (or more heap than `workerHeapMb`) is stopped there and answers "too large
+// to preview" like the others (and is remembered, so it is not started again). When every worker place and
+// the short queue behind them are taken the answer is 503 PREVIEW_BUSY (nothing is remembered for it).
 
-import { installedServerTextMetrics, installServerTextMetrics } from '@draftroom/canvas-schema/engine'
 import { ELEMENT_SCHEMA_VERSION } from '@draftroom/canvas-schema/protocol'
 import { type CheckpointContent, SNAPSHOT_ID_PATTERN } from '@draftroom/contracts'
 import { can, canCreateInWorkspace } from '@draftroom/permissions'
-import { convertBoard, migrateRecords, type TlRecord } from '@draftroom/tldraw-import'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { z } from 'zod'
 import { type BoardAccess, isBoardId, requireBoardAction } from '../../access.ts'
 import { userKind } from '../../auth/users.ts'
 import { onNewCanvas } from '../../canvas-engine.ts'
 import type { Params } from '../../context.ts'
-import { forbidden, gone, notFound, parse } from '../../errors.ts'
+import { ApiError, forbidden, gone, notFound, parse } from '../../errors.ts'
 import type { FeatureContext } from '../context.ts'
+import { Gate } from '../link-preview/gate.ts'
 import type { CheckpointService } from './checkpoints.ts'
+import { type ConvertV1Refusal, convertV1InWorker } from './convert-v1.ts'
 import {
   isNewCanvasRow,
   newCanvasCheckpoint,
@@ -66,25 +72,54 @@ export const SESSION_ENDED_ROUTE = '/internal/boards/:bid/session-ended'
 
 const AtQuery = z.object({ at: z.coerce.number().int().min(0).max(8.64e15).optional() })
 
+/** What converting a v1 body for the preview came to. */
+export type V1Preview =
+  | {
+      kind: 'converted'
+      elements: Record<string, unknown>[]
+      doc: Record<string, unknown>
+      /** the conversion itself, in the worker (not its start-up) */
+      ms: number
+    }
+  /** the converter cannot read the records (a schema newer than it, a record it refuses): the records answer */
+  | { kind: 'unreadable' }
+  /** past a limit of the worker (time, heap, size): "too large to preview", remembered */
+  | { kind: 'too-costly'; why: ConvertV1Refusal }
+  /** every worker place and the queue are taken: 503, nothing remembered */
+  | { kind: 'busy' }
+
 /**
- * A v1 body's records as the new canvas's elements and board document, for the preview (PARITY-5.5), or
- * null when the converter cannot read them (a schema newer than it, a record it refuses): the preview then
- * answers the records as before. Codes only, never board content, reach the log.
+ * A v1 body's records as the new canvas's elements and board document, for the preview (PARITY-5.5), made in
+ * a worker thread (./convert-v1.ts). Codes only, never board content, reach the log.
  */
-export function convertV1ForPreview(
+export async function convertV1ForPreview(
   body: { readonly schema: unknown; readonly records: readonly Record<string, unknown>[] },
   now: number,
-): { elements: Record<string, unknown>[]; doc: Record<string, unknown> } | null {
-  const migrated = migrateRecords(body.records, body.schema)
-  if (!migrated.ok) return null
-  const metrics = installedServerTextMetrics() ?? installServerTextMetrics()
-  const conv = convertBoard(migrated.records as TlRecord[], { updatedAt: now, metrics })
-  if (conv.failures.length) return null
+  gate: Gate,
+): Promise<V1Preview> {
+  const out = await convertV1InWorker(
+    { records: body.records, schema: body.schema, now },
+    {
+      maxRecords: previewSettings.maxRecords,
+      // the stored body is bounded already (maxBodyBytes); its JSON here holds the records and the schema only
+      maxBytes: previewSettings.maxBodyBytes + 1024 * 1024,
+      maxResultBytes: previewSettings.maxResultBytes,
+      timeoutMs: previewSettings.workerTimeoutMs,
+      maxHeapMb: previewSettings.workerHeapMb,
+    },
+    gate,
+  )
+  if (!out.ok) {
+    if (out.reason === 'busy') return { kind: 'busy' }
+    if (out.reason === 'unreadable' || out.reason === 'failed') return { kind: 'unreadable' }
+    return { kind: 'too-costly', why: out.reason }
+  }
+  const { doc: made } = out.converted
   const doc: Record<string, unknown> = {}
-  if (conv.doc.startView) doc.startView = conv.doc.startView
-  if (conv.doc.workshop) doc.workshop = conv.doc.workshop
-  for (const [key, def] of Object.entries(conv.doc.tagDefs)) doc[`tagDef:${key}`] = def
-  return { elements: conv.elements as unknown as Record<string, unknown>[], doc }
+  if (made.startView) doc.startView = made.startView
+  if (made.workshop) doc.workshop = made.workshop
+  for (const [key, def] of Object.entries(made.tagDefs)) doc[`tagDef:${key}`] = def
+  return { kind: 'converted', elements: out.converted.elements, doc, ms: out.conversionMs }
 }
 
 /**
@@ -156,6 +191,19 @@ export const previewSettings = {
   maxRecords: 1_000,
   maxBodyBytes: 2.5 * 1024 * 1024,
   maxTextChars: 35_000,
+  /**
+   * The worker's limits (J4): wall clock from its start, which includes about 0.25 s of loading the converter,
+   * so a body inside the bounds above (under 0.5 s of work) has ten times its time; its heap (the heaviest
+   * board measured, 4,922 records, peaked at 65 MB, and the preview bounds are a fifth of that); the size of its
+   * answer (about 1.9 times the stored body, 5 MiB at most).
+   */
+  workerTimeoutMs: 5_000,
+  workerHeapMb: 128,
+  maxResultBytes: 16 * 1024 * 1024,
+  /** conversions at once, and how many may wait for a place (for at most `queueWaitMs`); past it: 503 */
+  maxConcurrent: 2,
+  maxQueue: 8,
+  queueWaitMs: 5_000,
   cacheEntries: 8,
   cacheBytes: 16 * 1024 * 1024,
   /** A conversion slower than this is logged (counts only), so staging shows whether the cap is right. */
@@ -225,6 +273,12 @@ export function registerCheckpointRoutes(
 ): void {
   const { db } = ctx
   const previews = new PreviewCache()
+  // the conversion workers' places (previewSettings is read when the app is built, so tests can lower it)
+  const convertGate = new Gate({
+    concurrent: previewSettings.maxConcurrent,
+    maxQueue: previewSettings.maxQueue,
+    maxWaitMs: previewSettings.queueWaitMs,
+  })
 
   /** The time a sync report names, never later than this server's clock (like the touched route). */
   const reportedAt = (req: FastifyRequest): Date => {
@@ -308,12 +362,14 @@ export function registerCheckpointRoutes(
     req: FastifyRequest,
     snapshot: CheckpointContent['snapshot'],
     row: SnapshotRow,
-    size: { records: number; bytes: number; textChars?: number },
+    size: { records: number; bytes: number; textChars?: number; why?: ConvertV1Refusal },
   ): CheckpointContent {
     previews.set(row.id, row.storage_key, 1, { kind: 'too-large' })
     req.log.info(
       {
         evt: 'checkpoint.preview.too_large',
+        // set when a limit of the worker decided (time, heap, the answer's size); absent when a bound did
+        ...(size.why ? { why: size.why } : {}),
         records: size.records,
         bytes: size.bytes,
         // the label text, known only once the body is parsed (undefined when the row's own size decided)
@@ -384,19 +440,21 @@ export function registerCheckpointRoutes(
       // a concurrent request may have converted it while this one read the body
       const known = previews.get(row.id, row.storage_key)
       if (known) return v1Answer(snapshot, known)
-      let converted: ReturnType<typeof convertV1ForPreview> = null
-      const started = performance.now()
+      let converted: V1Preview = { kind: 'unreadable' }
       try {
-        converted = convertV1ForPreview(body, ctx.now().getTime())
+        converted = await convertV1ForPreview(body, ctx.now().getTime(), convertGate)
       } catch (e) {
         req.log.warn({ err: { name: (e as Error)?.name } }, 'v1 checkpoint preview not converted')
       }
-      const ms = Math.round(performance.now() - started)
-      if (ms > previewSettings.slowMs)
+      if (converted.kind === 'busy')
+        throw new ApiError(503, 'PREVIEW_BUSY', 'Previews are busy right now. Try again in a moment.')
+      if (converted.kind === 'too-costly')
+        return tooLargeToPreview(req, snapshot, row, { ...size, textChars, why: converted.why })
+      if (converted.kind === 'converted' && converted.ms > previewSettings.slowMs)
         req.log.warn(
           {
             evt: 'checkpoint.preview.slow',
-            ms,
+            ms: converted.ms,
             records: body.records.length,
             bytes: rawBytes,
             textChars: Math.round(textChars),
@@ -406,8 +464,12 @@ export function registerCheckpointRoutes(
           },
           'v1 checkpoint preview conversion was slow',
         )
-      if (converted) {
-        const outcome: PreviewOutcome = { kind: 'converted', ...converted }
+      if (converted.kind === 'converted') {
+        const outcome: PreviewOutcome = {
+          kind: 'converted',
+          elements: converted.elements,
+          doc: converted.doc,
+        }
         previews.set(row.id, row.storage_key, 2 * (Number(row.size_bytes) || raw.length), outcome)
         return v1Answer(snapshot, outcome)
       }
