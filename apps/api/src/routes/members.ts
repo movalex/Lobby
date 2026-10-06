@@ -25,6 +25,7 @@ import { roleRequiresCreator } from '../auth/identity.ts'
 import { storedEmails } from '../auth/users.ts'
 import type { AppContext, Params } from '../context.ts'
 import { conflict, notFound, parse } from '../errors.ts'
+import { assertRaiseAllowed, lockBoardWorkspace } from '../features/dashboard/outside.ts'
 import { actorOf } from '../notifier.ts'
 import { toUser, type UserRow } from '../serialize.ts'
 
@@ -192,6 +193,13 @@ export function registerMemberRoutes(app: FastifyInstance, ctx: AppContext): voi
       if (await ctx.identity.isCreatorUser(db, user.id)) await ctx.identity.refreshTarget(uid)
     }
     const result = await db.transaction(async (tx) => {
+      // Internal only (wave J second review): a new or higher grant is decided below under the workspace
+      // row lock the switch and a move into a project take (step 0, before the board row). The unlocked
+      // check first, so only a manager of the board ever takes it.
+      if (role !== 'owner') {
+        await requireBoardAction(tx, bid, user.id, 'manage_access')
+        await lockBoardWorkspace(tx, bid)
+      }
       const access = await requireBoardAction(tx, bid, user.id, 'manage_access', { forUpdate: true })
       if (!isUserId(uid)) throw notFound()
       const target = await loadTarget(tx, access, uid)
@@ -203,8 +211,12 @@ export function registerMemberRoutes(app: FastifyInstance, ctx: AppContext): voi
         throw conflict('LAST_OWNER', LAST_OWNER_MESSAGE)
       // D4: lowering a direct grant is open to every manager; adding or raising one needs a creator.
       const lowering = target.board_grant !== null && RANK[role] < RANK[target.board_grant]
-      if (changed && !lowering)
+      if (changed && !lowering) {
         await ctx.identity.requireCreator(tx, user.id, 'share', { route, by: 'route' })
+        // Wave J: only a confirmed creator while the board's workspace or project is internal only (the
+        // root hook in outside.ts answers first and confirms a stale target; this decides, locked).
+        if (role !== 'owner') await assertRaiseAllowed(tx, ctx, bid, uid)
+      }
       if (changed) {
         const at = now()
         await tx.query(

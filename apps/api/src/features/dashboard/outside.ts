@@ -30,7 +30,13 @@
 //   (assertProjectMoveAllowed, in PATCH /api/boards/:bid under the switch's workspace row lock; IO-1).
 //   Raising a board's visibility there is refused while it would raise a workspace member who is not
 //   inside (assertVisibilityRaiseAllowed, same lock; IO-2b), and "Duplicate, keep sharing" into an
-//   internal-only scope copies only confirmed creators' grants (history/new-board.ts; IO-2a).
+//   internal-only scope copies only confirmed creators' grants (history/new-board.ts; IO-2a). Making an
+//   account a workspace member (a guest raised, a workspace invitation created or accepted) is refused
+//   while that would reach a board of an internal-only project that is not private (IO-3,
+//   assertMemberRaiseAllowed, under the same lock). The hooks are early answers: PUT board members, the
+//   email invite's grant, PATCH workspace members and an access-request approval decide again in their
+//   transactions under the workspace row lock (lockBoardWorkspace), so a switch-on or a move cannot slip
+//   between the hook's read and the grant.
 
 import {
   AddressCheckInput,
@@ -271,18 +277,26 @@ export const internalOnlyScopeOf = (
 /**
  * createInvitation's guard (routes/invitations.ts; every single-use invitation, the email route's
  * links included): an address that is not a creator address cannot be invited while the scope is
- * internal only. `email` is already normalised.
+ * internal only, nor as a workspace member while that reaches a board of an internal-only project
+ * (IO-3, memberRoleReachesProject). `email` is already normalised. An early answer: accepting decides
+ * again (assertRedeemAllowed).
  */
 export async function assertInviteAllowed(
   q: Queryable,
   deps: Pick<OutsideDeps, 'identity'>,
-  target: { boardId: string | null; workspaceId: string },
+  target: { boardId: string | null; workspaceId: string; role: string },
   email: string,
 ): Promise<void> {
   const { policy, devDomain } = deps.identity.lookup
   if (isCreatorEmail(email, policy, devDomain)) return
   const scope = await invitationScope(q, target)
   if (scope) throw internalOnlyRefused(scope)
+  if (
+    target.boardId === null &&
+    target.role === 'member' &&
+    (await memberRoleReachesProject(q, target.workspaceId, null))
+  )
+    throw internalOnlyRefused('project')
 }
 
 /**
@@ -304,14 +318,18 @@ export async function assertRaiseAllowed(
  * the same check): while its board's workspace or project (a workspace invitation: the workspace) is
  * internal only, only a confirmed creator may redeem it, however old the invitation is. Stored status
  * (the accept route confirmed the caller's addresses before its transaction for an email-locked one);
- * call in the transaction. Removes nothing.
+ * call in the transaction. Removes nothing. A workspace invitation as member is also refused while it
+ * would reach a board of an internal-only project (IO-3, assertMemberRaiseAllowed); lockInvitation took
+ * the workspace row for it, so a switch change or a visibility raise cannot slip past.
  */
 export async function assertRedeemAllowed(
   q: Queryable,
   deps: Pick<OutsideDeps, 'identity'> | null,
-  inv: { board_id: string | null; workspace_id: string },
+  inv: { board_id: string | null; workspace_id: string; role: string },
   userId: string,
 ): Promise<void> {
+  if (deps && inv.board_id === null && inv.role === 'member')
+    return assertMemberRaiseAllowed(q, deps, inv.workspace_id, userId)
   const scope = await internalOnlyScopeOf(q, inv)
   if (!scope) return
   // deps null: a name-only guest (never a creator).
@@ -430,6 +448,87 @@ export async function assertVisibilityRaiseAllowed(
   const scope = await scopeIn(q, board.workspaceId, board.projectId)
   if (scope && (await visibilityReachesOutside(q, deps, board.id, board.workspaceId, to)))
     throw internalOnlyRefused(scope)
+}
+
+/**
+ * IO-3 (wave J second review): a workspace role of 'member' gives the visibility's role on EVERY board of
+ * the workspace (permissions resolveBoardRole), whatever its project. So making an account a member (a
+ * guest raised to member, or a workspace invitation as member, created or accepted) reaches every board of
+ * an internal-only project that is not private. Whether doing so would give `userId` (null: an address
+ * with no account yet) more than they have on such a board: they are not a member or higher already, and
+ * their own grant there is below the visibility's role. Boards in the trash count too (a restore would
+ * open them). Stored data only.
+ */
+export async function memberRoleReachesProject(
+  q: Queryable,
+  workspaceId: string,
+  userId: string | null,
+): Promise<boolean> {
+  if (userId !== null) {
+    const now = await q.maybeOne<{ role: WorkspaceRole }>(
+      'SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2',
+      [workspaceId, userId],
+    )
+    if (now && now.role !== 'guest') return false
+  }
+  const hit = await q.maybeOne(
+    `SELECT 1 AS hit
+       FROM boards b JOIN projects p ON p.id = b.project_id AND p.workspace_id = b.workspace_id
+       LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = $2::text
+      WHERE b.workspace_id = $1 AND p.internal_only AND b.visibility <> 'private'
+        AND (bm.role IS NULL OR array_position($3::text[], bm.role) <
+             array_position($3::text[], CASE b.visibility WHEN 'workspace_view' THEN 'viewer' ELSE 'editor' END))
+      LIMIT 1`,
+    [workspaceId, userId, [...BOARD_ROLES_UP]],
+  )
+  return hit !== null
+}
+
+/**
+ * IO-3: making `userId` a workspace member (from guest, or new) while the workspace is internal only
+ * (its 409), or while that would reach a board of an internal-only project (memberRoleReachesProject: the
+ * project's 409): only for a confirmed creator. Stored status. Call in the transaction that changes the
+ * role, under the workspace row lock the switch takes (FOR NO KEY UPDATE), so neither a switch change nor
+ * a visibility raise (assertVisibilityRaiseAllowed, which reads the members under the same lock) can slip
+ * between this read and the change.
+ */
+export async function assertMemberRaiseAllowed(
+  q: Queryable,
+  deps: Pick<OutsideDeps, 'identity'>,
+  workspaceId: string,
+  userId: string,
+): Promise<void> {
+  if (await deps.identity.isCreatorUser(q, userId)) return
+  if (await workspaceInternalOnly(q, workspaceId)) throw internalOnlyRefused('workspace')
+  if (await memberRoleReachesProject(q, workspaceId, userId)) throw internalOnlyRefused('project')
+}
+
+/** Whether the workspace or any of its projects is internal only (an early answer: who to confirm first). */
+export async function anyInternalOnlyIn(q: Queryable, workspaceId: string): Promise<boolean> {
+  if (!isWorkspaceId(workspaceId)) return false
+  const row = await q.maybeOne<{ on: boolean }>(
+    `SELECT (w.internal_only OR EXISTS (SELECT 1 FROM projects p WHERE p.workspace_id = w.id AND p.internal_only)) AS on
+       FROM workspaces w WHERE w.id = $1`,
+    [workspaceId],
+  )
+  return row?.on === true
+}
+
+/**
+ * Minor (wave J second review): a direct grant (PUT board members, the email invite's "granted" path, an
+ * access-request approval) decides the switch in its own transaction, under the workspace row lock the
+ * switch and a move take, so a switch-on or a move into an internal-only project cannot slip between the
+ * read and the grant. Lock order (access.ts): the workspace row (step 0) before the board row (step 1),
+ * so call this before the transaction locks the board. Returns nothing; a board that does not exist locks
+ * nothing (the route answers 404 itself).
+ */
+export async function lockBoardWorkspace(q: Queryable, boardId: string): Promise<void> {
+  if (!isBoardId(boardId)) return
+  await q.query(
+    `SELECT w.id FROM workspaces w WHERE w.id = (SELECT b.workspace_id FROM boards b WHERE b.id = $1)
+       FOR NO KEY UPDATE`,
+    [boardId],
+  )
 }
 
 /** Review, workshop and guest links: none while the board is internal only. */

@@ -40,7 +40,14 @@ import { ApiError, conflict, notFound, parse } from '../../errors.ts'
 import { actorOf } from '../../notifier.ts'
 import { toUser } from '../../serialize.ts'
 import type { FeatureContext } from '../context.ts'
-import { assertRaiseAllowed, boardInternalOnly, cleanName, originAmong, outsideFieldsOf } from './outside.ts'
+import {
+  assertRaiseAllowed,
+  boardInternalOnly,
+  cleanName,
+  lockBoardWorkspace,
+  originAmong,
+  outsideFieldsOf,
+} from './outside.ts'
 import { DAY_MS, newAccessRequestId, publishSharingChanged, trySavepoint, UserRateLimiter } from './shared.ts'
 
 /** Per user, across all boards: 10 requests per 10 minutes. */
@@ -331,6 +338,13 @@ export function registerAccessRequestRoutes(app: FastifyInstance, ctx: FeatureCo
           [id],
         )
         if (!found) throw notFound()
+        // Approving: the workspace row first (wave J second review: the lock the Internal only switch and a
+        // move take, so neither slips between assertRaiseAllowed below and the commit), after an unlocked
+        // check so only a manager takes it.
+        if (decision === 'approve') {
+          await requireBoardAction(tx, found.board_id, user.id, 'manage_access')
+          await lockBoardWorkspace(tx, found.board_id)
+        }
         // Board first (the lock order of every other access change), then the request row. Someone who
         // cannot manage the board gets the same 404/403 as for the board itself.
         const access = await requireBoardAction(tx, found.board_id, user.id, 'manage_access', {

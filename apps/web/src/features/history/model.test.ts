@@ -187,6 +187,17 @@ describe('messages', () => {
         outsideLeftOut: 1,
       }),
     ).toBe(`Made “Pitch (v1)”. 1 file could not be carried over. ${leftOut}`)
+    // Wave J second review: a keep-sharing copy the server made private still has colleagues' grants on
+    // it, so it is not "only you can see".
+    const madePrivate =
+      'This project is internal only and its workspace has members who are not confirmed as Dark Burn Creative or Trailer Park Group, so the copy is private.'
+    expect(
+      createdSummary(
+        'duplicate',
+        { ...created, droppedFiles: 0, warnings: [madePrivate], outsideLeftOut: 0 },
+        { keptSharing: true },
+      ),
+    ).toBe(`Made “Pitch (v1)”, a private copy. ${madePrivate}`)
   })
 })
 

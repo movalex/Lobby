@@ -166,12 +166,21 @@ export function restoreSummary(r: RestoreDeletedResponse): string {
   return `${parts.join(', ')}.`
 }
 
-/** One line after restore-as-new / duplicate. */
-export function createdSummary(kind: 'restore' | 'duplicate', created: HistoryBoardCreated): string {
+/**
+ * One line after restore-as-new / duplicate. `keptSharing`: a duplicate that kept sharing has the
+ * original's people on it, also when it is private (a private original, or a copy the server made private
+ * in an internal-only scope: IO-2a), so it is never "only you can see".
+ */
+export function createdSummary(
+  kind: 'restore' | 'duplicate',
+  created: HistoryBoardCreated,
+  opts: { keptSharing?: boolean } = {},
+): string {
+  const privately = opts.keptSharing ? ', a private copy' : ', a private copy only you can see'
   const head =
     kind === 'restore'
       ? `Restored as “${created.board.title}”, a new board only you can see.`
-      : `Made “${created.board.title}”${created.board.visibility === 'private' ? ', a private copy only you can see' : ''}.`
+      : `Made “${created.board.title}”${created.board.visibility === 'private' ? privately : ''}.`
   const files =
     created.droppedFiles > 0 ? ` ${pluralize(created.droppedFiles, 'file')} could not be carried over.` : ''
   // What keep sharing left out of a copy in an internal-only scope (wave J pre-deploy review IO-2a), in the

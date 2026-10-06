@@ -32,6 +32,7 @@ import { type BoardRole, resolveBoardRole, roleAtLeast } from '@draftroom/permis
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { loadBoardAccess, requireBoardAction } from '../../access.ts'
 import { audit } from '../../audit.ts'
+import { isCreatorEmail, normalizeEmail } from '../../auth/creators.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, notFound, parse } from '../../errors.ts'
 import { actorOf } from '../../notifier.ts'
@@ -39,6 +40,7 @@ import { createInvitation, INVITATION_TTL_MS } from '../../routes/invitations.ts
 import { toUser, type UserRow } from '../../serialize.ts'
 import type { FeatureContext } from '../context.ts'
 import { classifyClerkError, createClerkDirectory } from './clerk-directory.ts'
+import { boardInternalOnly, internalOnlyRefused, lockBoardWorkspace } from './outside.ts'
 import { DAY_MS, publishSharingChanged, UserRateLimiter } from './shared.ts'
 
 /** Per inviter, across all boards: 20 email invitations an hour (email costs, and address probing). */
@@ -88,9 +90,20 @@ export function registerEmailInviteRoutes(app: FastifyInstance, ctx: FeatureCont
     })
 
   /** Gives someone who already uses Draftroom the role now (never lowering what they have). */
-  const grant = (boardId: string, actorId: string, userId: string, role: RequestableRole, route: string) =>
+  const grant = (
+    boardId: string,
+    actorId: string,
+    userId: string,
+    role: RequestableRole,
+    route: string,
+    email: string,
+  ) =>
     db.transaction(async (tx) => {
-      // The board row lock orders this with every other access change (members.ts, access requests).
+      // Internal only (wave J second review): the workspace row lock the switch and a move take (step 0),
+      // taken after an unlocked check, then the board row lock, which orders this with every other access
+      // change (members.ts, access requests).
+      await requireBoardAction(tx, boardId, actorId, 'manage_access')
+      await lockBoardWorkspace(tx, boardId)
       const access = await requireBoardAction(tx, boardId, actorId, 'manage_access', { forUpdate: true })
       await ctx.identity.requireCreator(tx, actorId, 'share', { route, by: 'route' })
       const target = await loadBoardAccess(tx, boardId, userId)
@@ -102,6 +115,14 @@ export function registerEmailInviteRoutes(app: FastifyInstance, ctx: FeatureCont
       let after: BoardRole | null = target.role
       let changed = false
       if (!roleAtLeast(target.role, role)) {
+        // Wave J: while the board is internal only, only for a creator address (the root hook in
+        // outside.ts answers the same before the Clerk lookups; this decides, locked). The address is the
+        // one Clerk verified on this account.
+        const { policy, devDomain } = ctx.identity.lookup
+        if (!isCreatorEmail(normalizeEmail(email) ?? email, policy, devDomain)) {
+          const scope = await boardInternalOnly(tx, boardId)
+          if (scope) throw internalOnlyRefused(scope)
+        }
         const at = now()
         // An outsider becomes a workspace guest (guests see only boards granted to them), exactly
         // as accepting a board invitation makes them. The DO UPDATE changes nothing but locks an existing
@@ -183,7 +204,7 @@ export function registerEmailInviteRoutes(app: FastifyInstance, ctx: FeatureCont
           [clerkIds],
         )
         if (!linked) return asLink('existing_account')
-        const g = await grant(bid, me.id, linked.user_id, role, route)
+        const g = await grant(bid, me.id, linked.user_id, role, route, email)
         req.log.info({ ...log, mode: 'granted', changed: g.changed }, 'board email invitation')
         if (g.changed) {
           // REVIEW-6: the inviter is named to the person given access (the session's user)

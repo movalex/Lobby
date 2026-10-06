@@ -85,6 +85,8 @@ import { storedEmails } from '../auth/users.ts'
 import type { AppContext, Params } from '../context.ts'
 import { ApiError, badRequest, conflict, forbidden, notFound, parse } from '../errors.ts'
 import {
+  anyInternalOnlyIn,
+  assertMemberRaiseAllowed,
   auditInternalOnly,
   cleanName,
   originAmong,
@@ -474,9 +476,10 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
     // status. Their stored addresses are confirmed first when unknown or stale (outside any transaction,
     // never throwing), and only for a creator's request, so nobody else makes Lobby call the provider
     // from here.
+    // IO-3 (Internal only): a raise to member needs it too while a switch is on in this workspace.
     if (
-      (role === 'admin' || role === 'owner') &&
       WS_RANK[role] < WS_RANK[seen.role] &&
+      (role === 'admin' || role === 'owner' || (await anyInternalOnlyIn(db, wid))) &&
       (await ctx.identity.isCreatorUser(db, user.id))
     )
       await ctx.identity.refreshTarget(uid)
@@ -491,6 +494,11 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
         await ctx.identity.requireCreator(tx, user.id, 'share', { route, by: 'route' })
         if ((role === 'admin' || role === 'owner') && !(await ctx.identity.isCreatorUser(tx, uid)))
           throw roleRequiresCreator()
+        // IO-3 (Internal only): a member sees every board of the workspace at its visibility, whatever its
+        // project, so a guest raised to member must not be outside while the workspace is internal only or
+        // a board of an internal-only project is not private (decided here, under the workspace row lock
+        // lockAndLoad took: the switch, a move and a visibility raise take it too).
+        if (role === 'member') await assertMemberRaiseAllowed(tx, ctx, wid, uid)
       }
       const boards = await boardsWithGrant(tx, wid, uid)
       await tx.query('UPDATE workspace_members SET role = $3 WHERE workspace_id = $1 AND user_id = $2', [

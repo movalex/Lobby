@@ -95,20 +95,23 @@ export const boardInTrash = () => new ApiError(409, BOARD_IN_TRASH.code, BOARD_I
 
 /**
  * The invitation behind `token`, locked FOR UPDATE for redeeming it (accepting, joining as a guest),
- * or null when there is none. A board invitation's board row is locked first (the lock order in
- * access.ts): a revoke or "+1 h" holds the board and then takes the link, so taking the link first and
+ * or null when there is none. A board invitation's board row (a workspace invitation's workspace row:
+ * IO-3) is locked first (the lock order in access.ts): a revoke or "+1 h" holds the board and then takes the link, so taking the link first and
  * then the board (which redeeming needs: its grant references the board) deadlocks with them. The
  * board is found through an unlocked read (an invitation's board never changes), and the row is read
  * again under the lock, so the caller always decides on its current state.
  */
 export async function lockInvitation(tx: Queryable, token: string): Promise<InvitationRow | null> {
   const tokenHash = sha256hex(token)
-  const found = await tx.maybeOne<{ id: string; board_id: string | null }>(
-    'SELECT id, board_id FROM invitations WHERE token_hash = $1',
+  const found = await tx.maybeOne<{ id: string; board_id: string | null; workspace_id: string }>(
+    'SELECT id, board_id, workspace_id FROM invitations WHERE token_hash = $1',
     [tokenHash],
   )
   if (!found) return null
   if (found.board_id !== null) await lockBoardRow(tx, found.board_id)
+  // IO-3: a workspace invitation is decided under the workspace row lock (step 0 of the lock order) the
+  // Internal only switch and a visibility raise take (outside.ts assertRedeemAllowed).
+  else await tx.query('SELECT id FROM workspaces WHERE id = $1 FOR NO KEY UPDATE', [found.workspace_id])
   return tx.maybeOne<InvitationRow>(
     `SELECT ${INVITATION_COLUMNS} FROM invitations i WHERE i.id = $1 AND i.token_hash = $2 FOR UPDATE`,
     [found.id, tokenHash],
@@ -183,7 +186,12 @@ export async function createInvitation(
     throw invitationToSelf()
   // Wave J: while the board's workspace or project (a workspace invitation: the workspace) is internal
   // only, an address that is not a creator address is refused (409 INTERNAL_ONLY).
-  await assertInviteAllowed(tx, ctx, { boardId: input.boardId, workspaceId: input.workspaceId }, email)
+  await assertInviteAllowed(
+    tx,
+    ctx,
+    { boardId: input.boardId, workspaceId: input.workspaceId, role: input.role },
+    email,
+  )
   const token = newSecretToken()
   const id = newId('inv')
   const createdAt = ctx.now()

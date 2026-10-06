@@ -218,7 +218,7 @@ export function HistoryPanel({ ctx }: { ctx: CanvasFeatureContext; close(): void
       try {
         const created = await api.duplicate(board.id, keepSharing ? { keepSharing: true } : {})
         setStatus({
-          text: createdSummary('duplicate', created),
+          text: createdSummary('duplicate', created, { keptSharing: keepSharing }),
           tone: 'info',
           openBoardId: created.board.id,
           openTitle: created.board.title,
