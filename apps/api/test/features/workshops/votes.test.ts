@@ -1,5 +1,6 @@
 import type { VoteResult, VoteSessionSummary, WorkshopState, WorkshopVoteState } from '@draftroom/contracts'
 import { afterEach, describe, expect, it } from 'vitest'
+import { VOTE_TALLY_WINDOW_MS } from '../../../src/features/workshops/vote-tally.ts'
 import type { Client } from '../../helpers.ts'
 import { expectStatus, json, note, setupWorld, type World } from './support.ts'
 
@@ -141,6 +142,9 @@ describe('casting', () => {
       [v.session.id, w.commenter.userId],
     )
     expect(row.n).toBe(5)
+    // RT-03: the counts move once the counting window is over (the caller's own ballot at once)
+    expect((await state(w.commenter)).vote).toMatchObject({ myRemaining: 0, totalVotesCast: 0 })
+    w.clock.advance(VOTE_TALLY_WINDOW_MS)
     expect((await state(w.commenter)).vote).toMatchObject({ myRemaining: 0, totalVotesCast: 5 })
     // the same burst on ONE object with one-per-object: exactly one lands
   })
@@ -215,12 +219,16 @@ describe('casting', () => {
     expectStatus(await cast(w.commenter, vid, 'shape:n2'), 200)
     const done = await w.viewer.req('POST', `/api/votes/${vid}/done`)
     expectStatus(done, 200)
-    expect(json<WorkshopVoteState>(done)).toMatchObject({ done: true, participantsDone: 1, participants: 2 })
+    // RT-03: the caller's own "done" at once; everyone's counts once the counting window is over
+    expect(json<WorkshopVoteState>(done)).toMatchObject({ done: true, participantsDone: 0, participants: 0 })
     expectStatus(await w.viewer.req('POST', `/api/votes/${vid}/done`, {}), 200) // idempotent
+    w.clock.advance(VOTE_TALLY_WINDOW_MS)
     const f = (await state(w.owner)).vote
     expect(f).toMatchObject({ participantsDone: 1, participants: 2, totalVotesCast: 2, done: false })
     const undone = await w.viewer.req('POST', `/api/votes/${vid}/done`, { done: false })
-    expect(json<WorkshopVoteState>(undone)).toMatchObject({ done: false, participantsDone: 0 })
+    expect(json<WorkshopVoteState>(undone)).toMatchObject({ done: false, participantsDone: 1 })
+    w.clock.advance(VOTE_TALLY_WINDOW_MS)
+    expect((await state(w.owner)).vote).toMatchObject({ participantsDone: 0, participants: 2 })
     // outsiders cannot even see that the vote exists
     expectStatus(await cast(w.outsider, vid, 'shape:n1'), 404)
     expectStatus(await w.outsider.req('POST', `/api/votes/${vid}/done`), 404)

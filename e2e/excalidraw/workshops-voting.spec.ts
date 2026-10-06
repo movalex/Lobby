@@ -525,7 +525,12 @@ test('end without results: casting stops, results stay hidden and the vote is li
     }
     const v = (await workshopState(a.api, board)).vote as ApiVoteState
     expect(v.session.status).toBe('open')
-    expect(v.totalVotesCast).toBe(2)
+    // RT-03 (wave J3): an open vote's counts move once per counting window (5 s), not at each cast
+    await expect
+      .poll(async () => ((await workshopState(a.api, board)).vote as ApiVoteState).totalVotesCast, {
+        timeout: 15_000,
+      })
+      .toBe(2)
     expect((await workshopState(a.api, board)).timer).toBeNull()
   })
 

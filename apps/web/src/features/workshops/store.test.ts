@@ -187,6 +187,43 @@ describe('WorkshopStore', () => {
     })
   })
 
+  it('RT-03: an answer to a request sent before a vote event keeps the event’s counts, and its own ballot', async () => {
+    const h = harness({ timer: null, vote: voteState(), serverNow: ISO(0) })
+    await h.store.refresh()
+    let release: () => void = () => {}
+    // the server answered this cast with the counts of the window before (0), and the answer is slow
+    h.next(
+      () =>
+        new Promise((res) => {
+          release = () => res(voteState({ myVotes: { 'shape:a': 1 }, myRemaining: 2, totalVotesCast: 0 }))
+        }),
+    )
+    const p = h.store.cast('shape:a', 1)
+    await flush()
+    // meanwhile the window ends: its event (this cast and someone else's) arrives first
+    h.events.emit('workshop.vote', {
+      sessionId: SID,
+      status: 'open',
+      totalVotesCast: 2,
+      participants: 2,
+      participantsDone: 1,
+      endsAt: null,
+    })
+    release()
+    await p
+    expect(h.store.getSnapshot().vote).toMatchObject({
+      myVotes: { 'shape:a': 1 },
+      myRemaining: 2,
+      totalVotesCast: 2,
+      participants: 2,
+      participantsDone: 1,
+    })
+    // a request sent after the event applies its own counts again
+    h.next(() => voteState({ myVotes: { 'shape:a': 2 }, myRemaining: 1, totalVotesCast: 3, participants: 2 }))
+    await h.store.cast('shape:a', 1)
+    expect(h.store.getSnapshot().vote).toMatchObject({ totalVotesCast: 3, myRemaining: 1 })
+  })
+
   it('casts are optimistic, sent one at a time in order, and reconciled with the server', async () => {
     const h = harness({ timer: null, vote: voteState(), serverNow: ISO(0) })
     await h.store.refresh()
