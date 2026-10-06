@@ -6,7 +6,7 @@ import { request as httpRequest, type IncomingMessage } from 'node:http'
 import { request as httpsRequest } from 'node:https'
 import { isIP, type LookupFunction } from 'node:net'
 import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib'
-import { checkUrl, type Lookup, type Policy, vetAddress } from './ssrf.ts'
+import { checkUrl, LOOKUP_TIMEOUT_MS, type Lookup, type Policy, vetAddress } from './ssrf.ts'
 
 export interface FetchLimits {
   /** total time for every hop of one fetch */
@@ -29,6 +29,8 @@ export interface Fetched {
 export interface FetchDeps {
   readonly policy: Policy
   readonly lookup: Lookup
+  /** the longest one DNS lookup may take (LOOKUP_TIMEOUT_MS), and never past the fetch's own deadline */
+  readonly lookupTimeoutMs?: number
   /** test seam: the request function (http and https alike) */
   readonly request?: typeof httpRequest
 }
@@ -107,7 +109,18 @@ function decoded(res: IncomingMessage): NodeJS.ReadableStream {
   return res
 }
 
-/** Reads at most `max` bytes (stopping early once `enough(sofar)` says so), then drops the connection. */
+/**
+ * How often `enough` is asked while the body grows: once per this many new bytes. The server chooses its
+ * chunks (a byte at a time is its to send), so asking after every chunk would rescan the whole body for
+ * each one: the square of the body's size in work on the event loop (J4).
+ */
+const ENOUGH_STEP_BYTES = 4096
+
+/**
+ * Reads at most `max` bytes (stopping early once `enough(sofar)` says so), then drops the connection.
+ * The bytes are copied into ONE buffer allocated up front (never a list of the server's chunks, which it
+ * could make as many and as small as it likes), and `enough` sees a view of it, not a copy.
+ */
 function readCapped(
   res: IncomingMessage,
   max: number,
@@ -116,15 +129,17 @@ function readCapped(
 ): Promise<{ body: Buffer; truncated: boolean }> {
   return new Promise((resolve, reject) => {
     const stream = decoded(res)
-    const parts: Buffer[] = []
+    const buf = Buffer.allocUnsafe(max)
     let size = 0
+    let checked = 0
     let settled = false
     const finish = (truncated: boolean) => {
       if (settled) return
       settled = true
       clearTimeout(timer)
       res.destroy()
-      resolve({ body: Buffer.concat(parts, size), truncated })
+      // a copy of what was read: the page's limit-sized buffer is not kept
+      resolve({ body: Buffer.from(buf.subarray(0, size)), truncated })
     }
     const timer = setTimeout(
       () => {
@@ -137,12 +152,14 @@ function readCapped(
     )
     stream.on('data', (chunk: Buffer) => {
       if (settled) return
-      const room = max - size
-      const take = chunk.length > room ? chunk.subarray(0, room) : chunk
-      parts.push(take)
-      size += take.length
+      const take = Math.min(chunk.length, max - size)
+      chunk.copy(buf, size, 0, take)
+      size += take
       if (size >= max) return finish(true)
-      if (enough(Buffer.concat(parts, size))) finish(true)
+      if (size - checked >= ENOUGH_STEP_BYTES) {
+        checked = size
+        if (enough(buf.subarray(0, size))) finish(true)
+      }
     })
     stream.on('end', () => finish(false))
     stream.on('error', () => {
@@ -170,7 +187,13 @@ export async function guardedFetch(
   for (let hop = 0; hop <= limits.maxRedirects; hop++) {
     const target = checkUrl(current, deps.policy)
     if (target === 'invalid' || target === 'blocked') throw new FetchRefused(target)
-    const address = await vetAddress(target, deps.lookup)
+    const left = deadline - Date.now()
+    if (left <= 0) throw new FetchRefused('timeout')
+    const address = await vetAddress(
+      target,
+      deps.lookup,
+      Math.min(deps.lookupTimeoutMs ?? LOOKUP_TIMEOUT_MS, left),
+    )
     if (address === 'blocked') throw new FetchRefused('blocked')
     const { res, done } = await oneHop(deps, target.url, address, accept, deadline)
     const status = res.statusCode ?? 0
