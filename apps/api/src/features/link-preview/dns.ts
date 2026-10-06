@@ -20,10 +20,13 @@ export interface SystemLookupOptions {
   readonly tries?: number
   /** name servers to ask instead of the system's (tests; `host:port` forms are accepted) */
   readonly servers?: readonly string[]
+  /** how long the other family is waited for once one has answered with addresses; default 300 ms */
+  readonly graceMs?: number
 }
 
 export const DNS_TRY_TIMEOUT_MS = 1_500
 export const DNS_TRIES = 2
+export const DNS_GRACE_MS = 300
 
 export function makeSystemLookup(opts: SystemLookupOptions = {}): Lookup {
   return async (host, signal) => {
@@ -37,14 +40,39 @@ export function makeSystemLookup(opts: SystemLookupOptions = {}): Lookup {
     if (signal?.aborted) abandon()
     signal?.addEventListener('abort', abandon, { once: true })
     try {
-      const [v4, v6] = await Promise.allSettled([resolver.resolve4(host), resolver.resolve6(host)])
-      const found: LookupAddress[] = []
-      if (v4.status === 'fulfilled') for (const address of v4.value) found.push({ address, family: 4 })
-      if (v6.status === 'fulfilled') for (const address of v6.value) found.push({ address, family: 6 })
+      const answers: { v4: LookupAddress[]; v6: LookupAddress[] } = { v4: [], v6: [] }
+      const done4 = resolver.resolve4(host).then(
+        (list) => {
+          answers.v4 = list.map((address) => ({ address, family: 4 }))
+        },
+        () => {},
+      )
+      const done6 = resolver.resolve6(host).then(
+        (list) => {
+          answers.v6 = list.map((address) => ({ address, family: 6 }))
+        },
+        () => {},
+      )
+      await Promise.race([done4, done6])
+      const both = Promise.all([done4, done6])
+      if (answers.v4.length || answers.v6.length) {
+        // one family answered: the other gets a moment more, not its whole time limit (a resolver that drops
+        // AAAA queries must not cost the name its A records; the connection goes to the IPv4 address anyway)
+        let timer: ReturnType<typeof setTimeout> | undefined
+        await Promise.race([
+          both,
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, opts.graceMs ?? DNS_GRACE_MS)
+          }),
+        ])
+        clearTimeout(timer)
+      } else await both
+      const found = [...answers.v4, ...answers.v6]
       if (!found.length) throw new Error('the name has no address')
       return found
     } finally {
       signal?.removeEventListener('abort', abandon)
+      resolver.cancel() // a query still waiting (the grace ran out) is not left to run to its time limit
     }
   }
 }

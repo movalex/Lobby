@@ -470,6 +470,37 @@ describe('LP-DNS-1: a DNS lookup has a time limit', () => {
       await expect(lookup('nothing.example.com')).rejects.toThrow()
     })
 
+    it('a name server that drops the AAAA query (or the A query) does not cost the name the family that answered', async () => {
+      // answers A at once, never AAAA: the lookup returns the A records after the grace, not after c-ares gives up
+      answer = (q, from) => {
+        if (qtype(q) === 1)
+          dns.send(respond(q, [{ type: 1, rdata: Buffer.from([93, 184, 216, 34]) }]), from.port, from.address)
+      }
+      const lookup = makeSystemLookup({
+        servers: [`127.0.0.1:${port}`],
+        timeoutMs: 10_000,
+        tries: 3,
+        graceMs: 150,
+      })
+      const t0 = performance.now()
+      expect(await lookup('dropsaaaa.example.com')).toEqual([{ address: '93.184.216.34', family: 4 }])
+      expect(performance.now() - t0).toBeLessThan(1_500)
+      // the other way round: only AAAA answers
+      answer = (q, from) => {
+        if (qtype(q) === 28)
+          dns.send(
+            respond(q, [{ type: 28, rdata: Buffer.from('26062800022000010248189325c81946', 'hex') }]),
+            from.port,
+            from.address,
+          )
+      }
+      const t1 = performance.now()
+      expect(await lookup('dropsa.example.com')).toEqual([
+        { address: '2606:2800:220:1:248:1893:25c8:1946', family: 6 },
+      ])
+      expect(performance.now() - t1).toBeLessThan(1_500)
+    })
+
     it('a name server that never answers: the lookup gives up by itself, and by the caller’s limit sooner', async () => {
       const own = makeSystemLookup({ servers: [`127.0.0.1:${port}`], timeoutMs: 150, tries: 1 })
       const t0 = performance.now()

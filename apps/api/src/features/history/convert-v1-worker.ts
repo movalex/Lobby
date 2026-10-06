@@ -14,7 +14,7 @@ function run({ json, now, maxResultBytes }: WorkerInput): WorkerOutput {
   const metrics = installedServerTextMetrics() ?? installServerTextMetrics()
   const conv = convertBoard(migrated.records as TlRecord[], { updatedAt: now, metrics })
   if (conv.failures.length)
-    return { ok: false, reason: 'failed', detail: [...new Set(conv.failures.map((f) => f.code))].join(',') }
+    return { ok: false, reason: 'failed', detail: [...new Set(conv.failures.map((f) => f.code))].join(', ') }
   const converted: ConvertedV1 = {
     elements: conv.elements as unknown as Record<string, unknown>[],
     doc: {
