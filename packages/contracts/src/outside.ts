@@ -20,14 +20,15 @@ import { AccountEmail } from './domain-access.ts'
 // ---- whether an account is outside ---------------------------------------------------------------
 
 /**
- * - `false`: a creator (a verified address at a creator domain or on the exceptions list, confirmed
- *   within the last 24 hours);
+ * - `false`: at Dark Burn / TPG: a verified address at a creator domain or on the exceptions list, at
+ *   the account's last check (however long ago: a colleague who has not opened Lobby for a day is not
+ *   marked or asked about; the server re-checks a stale account whenever its status decides something:
+ *   a grant, an internal-only scope, the team of team-only comments);
  * - `true`: outside: Lobby has checked this account's addresses and none of them qualifies (however
  *   long ago it checked: a later check can only make it a creator by finding a new address), or a
  *   name-only guest;
- * - `'unconfirmed'`: Lobby cannot tell: the addresses were never checked, or they qualify but were
- *   last confirmed more than 24 hours ago (the person may have left). Treated as outside the team
- *   (team-only comments), never shown as "External" to everyone.
+ * - `'unconfirmed'`: Lobby cannot tell: the account's addresses were never checked. Treated as outside
+ *   the team (team-only comments), never shown as "External" to everyone.
  */
 export const OutsideStatus = z.union([z.boolean(), z.literal('unconfirmed')])
 export type OutsideStatus = z.infer<typeof OutsideStatus>

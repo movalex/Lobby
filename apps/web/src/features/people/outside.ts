@@ -217,7 +217,7 @@ export function externalTagTitle(domain: string | null | undefined): string {
 
 /**
  * A manager list's tag for an OutsideStatus: External (with the domain), "Not confirmed" when Lobby
- * cannot tell, nothing for creators, for an older api (undefined) and for name-only guests.
+ * never checked the account, nothing for creators, for an older api (undefined) and for name-only guests.
  */
 export function outsideTag(
   outside: OutsideStatus | undefined,
@@ -229,9 +229,10 @@ export function outsideTag(
     return {
       kind: 'unconfirmed',
       text: 'Not confirmed',
+      // 'unconfirmed' means never checked (a colleague who is merely stale reads false).
       title: domain
-        ? `Lobby hasn’t confirmed this person’s email recently (last known: ${domain})`
-        : 'Lobby hasn’t confirmed this person’s email recently',
+        ? `Lobby hasn’t checked this person’s email yet (stored: ${domain})`
+        : 'Lobby hasn’t checked this person’s email yet',
     }
   return { kind: 'external', text: externalTagText(domain), title: externalTagTitle(domain) }
 }

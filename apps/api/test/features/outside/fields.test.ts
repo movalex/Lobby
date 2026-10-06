@@ -145,8 +145,9 @@ describe('the Share dialog and the workspace member lists', () => {
     expect(rows[bob.userId]).toMatchObject({ outside: false, canOwn: true })
     // The exceptions-list address is a creator, whatever its domain.
     expect(rows[oscar.userId]).toMatchObject({ outside: false, emailDomain: 'personal.example.test' })
-    // carol's company address is stale: canOwn stays true (the server refreshes at PUT), outside says so.
-    expect(rows[carol.userId]).toMatchObject({ outside: 'unconfirmed', canOwn: true })
+    // carol's company address is a day old: still a colleague here (no tag, no confirm; the server
+    // refreshes her at PUT), canOwn true.
+    expect(rows[carol.userId]).toMatchObject({ outside: false, canOwn: true, emailDomain: 'dev.invalid' })
     // A name-only guest: outside (no address), and canOwn false.
     expect(rows[dana.userId]).toMatchObject({ outside: true, emailDomain: null, canOwn: false })
     // Not a manager: no access to the list at all (as before).

@@ -92,11 +92,13 @@ const maskAddress = (email: string) => `${email.slice(0, 1)}•••@${emailDom
 function toInfo(r: OriginRow): OutsideInfo {
   if (r.o_kind === 'guest') return { outside: true, emailDomain: null, emailHint: null }
   const email = r.o_email
-  const outside: OutsideInfo['outside'] = r.o_creator
-    ? false
-    : r.o_checked_at !== null && !r.o_qualifies
-      ? true
-      : 'unconfirmed'
+  // A stale account whose addresses qualify: false (see the header); never checked: 'unconfirmed'.
+  const outside: OutsideInfo['outside'] =
+    r.o_creator || (r.o_checked_at !== null && r.o_qualifies)
+      ? false
+      : r.o_checked_at !== null
+        ? true
+        : 'unconfirmed'
   return {
     outside,
     emailDomain: email ? emailDomain(email) : null,
