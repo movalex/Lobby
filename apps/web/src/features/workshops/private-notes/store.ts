@@ -4,7 +4,10 @@
 //
 // Authority: the API. The only draft texts this store ever holds are the caller's own (`myNotes`, from
 // the caller's own responses); events carry the session and counts only, so a new or changed session
-// triggers a refetch of the caller's own view, and every (re)connect refetches.
+// triggers a refetch of the caller's own view, and every (re)connect refetches. A refetch that fails is
+// tried again with a backoff until one succeeds (wave I1, as workshops/store.ts does since G1): the event
+// that asked for it does not come twice, so without the retry a brainstorm started while this person's
+// request failed never reached them until a reload.
 
 import {
   type AddPrivateNoteInput,
@@ -18,6 +21,7 @@ import {
   type UpdatePrivateNoteInput,
 } from '@draftroom/contracts'
 import type { z } from 'zod'
+import { REFRESH_RETRY_MAX_MS, REFRESH_RETRY_MIN_MS, retryableError } from '../store.ts'
 
 type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE'
 /** The subset of ApiClient['request'] the store needs (tests pass a fake). */
@@ -112,6 +116,13 @@ export class PrivateNotesStore {
   private busy: PrivateNotesSnapshot['busy'] = null
   private seq = 0
   private appliedSeq = 0
+  /** The highest request seq the server answered (a refetch or an action): older failures lost nothing. */
+  private confirmedSeq = 0
+  /** The highest refetch seq that failed: an older answer does not make the store current again. */
+  private failedSeq = 0
+  private retryTimer: ReturnType<typeof setTimeout> | null = null
+  private retryMs = REFRESH_RETRY_MIN_MS
+  private disposed = false
   /** Sessions whose end was already announced (the event and a response can both report it). */
   private readonly announced = new Set<string>()
   private readonly revealedHere = new Set<string>()
@@ -142,6 +153,8 @@ export class PrivateNotesStore {
   }
 
   dispose() {
+    this.disposed = true
+    this.clearRetry()
     for (const u of this.unsubscribers.splice(0)) u()
     this.listeners.clear()
     this.endListeners.clear()
@@ -151,6 +164,8 @@ export class PrivateNotesStore {
 
   subscribe = (fn: () => void) => {
     this.listeners.add(fn)
+    // A retry that found nobody showing this store was dropped: whoever shows it now needs the truth.
+    if (this.stale && !this.retryTimer) this.scheduleRetry()
     return () => void this.listeners.delete(fn)
   }
   getSnapshot = () => this.snap
@@ -236,11 +251,45 @@ export class PrivateNotesStore {
         schema: PrivateBrainstormState,
       })
       this.apply(s, seq)
-      this.stale = false
-    } catch {
+      this.confirmed(seq)
+    } catch (e) {
+      // A later request already got the server's answer: nothing is missing.
+      if (seq < this.confirmedSeq) return
+      this.failedSeq = Math.max(this.failedSeq, seq)
       this.stale = true
+      if (retryableError(e)) this.scheduleRetry()
     }
     this.emit()
+  }
+
+  /** The server answered request `seq`: what this store shows is current (unless a newer refetch failed). */
+  private confirmed(seq: number) {
+    this.confirmedSeq = Math.max(this.confirmedSeq, seq)
+    // A refetch sent after this answer's request failed: this answer may predate what it was asked for.
+    if (seq < this.failedSeq) return
+    this.stale = false
+    this.clearRetry()
+    this.retryMs = REFRESH_RETRY_MIN_MS
+  }
+
+  /**
+   * One retry at a time, each failure doubling the wait (1, 2, 4, 8 s, then 15 s); nobody showing the store
+   * (the board was left) means no retry. Refusals (signed out, no access, gone) are never retried.
+   */
+  private scheduleRetry() {
+    if (this.disposed || this.retryTimer) return
+    const ms = this.retryMs
+    this.retryMs = Math.min(this.retryMs * 2, REFRESH_RETRY_MAX_MS)
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null
+      if (this.disposed || this.listeners.size === 0) return
+      void this.refresh()
+    }, ms)
+  }
+
+  private clearRetry() {
+    if (this.retryTimer) clearTimeout(this.retryTimer)
+    this.retryTimer = null
   }
 
   /** Applies a state from any response, unless a newer request's answer is already in. */
@@ -290,6 +339,7 @@ export class PrivateNotesStore {
     try {
       const s = await this.request(method, path, { body, schema: PrivateBrainstormState })
       this.apply(s, seq)
+      this.confirmed(seq) // the answer is this person's whole view, as a refetch's is
       this.emit()
       return { ok: true }
     } catch (e) {
