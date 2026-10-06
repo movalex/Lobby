@@ -1,5 +1,6 @@
 import { type BoardWithRole, NEW_CANVAS_CARD_NOTE, thumbnailPath } from '@draftroom/contracts'
 import { type CSSProperties, useEffect, useId, useState } from 'react'
+import { SharedOutsideMarker } from '../features/people/SharedOutside.tsx'
 import { onThumbnailUpdated } from '../features/thumbnails/card-events.ts'
 import { formatRelativeTime } from '../lib/format.ts'
 import { can } from '../lib/permissions.ts'
@@ -263,7 +264,9 @@ export function BoardThumb({ boardId }: { boardId: string }) {
   )
 }
 
-export function BoardCard<B extends BoardWithRole & { starred?: boolean; thumbnailVersion?: string | null }>({
+export function BoardCard<
+  B extends BoardWithRole & { starred?: boolean; thumbnailVersion?: string | null; sharedOutside?: boolean },
+>({
   board,
   renaming,
   busy,
@@ -399,6 +402,10 @@ export function BoardCard<B extends BoardWithRole & { starred?: boolean; thumbna
               </span>
             )}
             {layout === 'list' && projectName && <span className="dr-bcard__project">{projectName}</span>}
+            {/* Wave J: someone outside Dark Burn / TPG, a guest or an open link can open it. */}
+            {board.sharedOutside && board.status !== 'trashed' && (
+              <SharedOutsideMarker testId="board-card-shared-outside" />
+            )}
             <span className="dr-role" data-role={board.role}>
               {ROLE_LABEL[board.role]}
             </span>

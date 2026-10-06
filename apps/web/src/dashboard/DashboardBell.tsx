@@ -5,6 +5,8 @@ import type { ListNotificationsResponse, NotificationItem } from '@draftroom/con
 import { type CSSProperties, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../api/client.ts'
+import { ExternalTag } from '../features/people/ExternalTag.tsx'
+import { outsiderJoinedText } from '../features/people/outside.ts'
 import { formatRelativeTime } from '../lib/format.ts'
 import { navigate } from '../lib/routing.ts'
 import {
@@ -195,9 +197,19 @@ export function DashboardBell({ inbox, refresh, markRead }: DashboardInbox) {
                       {!n.readAt && <span className="dr-dbell__dot" aria-hidden="true" />}
                       {!n.readAt && <span className="dr-sr-only">Unread: </span>}
                       <span className="dr-dbell__text">
-                        <span>
-                          <strong>{n.actor?.name ?? 'Someone'}</strong> {KIND_TEXT[n.kind]} on {n.boardTitle}
-                        </span>
+                        {n.kind === 'outsider_joined' ? (
+                          // Wave J: "Pat Client [External · client.com] opened Launch for the first time"
+                          <span data-testid="dashboard-notification-outsider">
+                            <strong>{n.actor?.name ?? 'Someone'}</strong>
+                            <ExternalTag domain={n.outsiderJoined?.emailDomain ?? null} />{' '}
+                            {outsiderJoinedText(n, false)}
+                          </span>
+                        ) : (
+                          <span>
+                            <strong>{n.actor?.name ?? 'Someone'}</strong> {KIND_TEXT[n.kind]} on{' '}
+                            {n.boardTitle}
+                          </span>
+                        )}
                         {n.kind === 'access_request' && n.accessRequest && (
                           <span className="dr-dbell__request">
                             {REQUEST_TEXT[n.accessRequest.role]}

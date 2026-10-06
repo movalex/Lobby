@@ -764,3 +764,58 @@
   flex: 1 1 14em;
   min-width: 0;
 }
+
+/* ---- Wave J: "Internal only" (the workspace switch in the sidebar, the project chip) ------------- */
+.dr-internal {
+  display: grid;
+  gap: 6px;
+  margin: 4px 12px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--dr-line);
+  border-radius: 8px;
+  background: var(--dr-inset);
+  font-size: 12.5px;
+}
+.dr-internal[data-on="true"] {
+  border-color: var(--dr-accent-line);
+  background: var(--dr-accent-tint);
+}
+.dr-internal__switch {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+.dr-internal__switch input {
+  flex: none;
+  margin-top: 2px;
+}
+.dr-internal__text {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  color: var(--dr-ink-2);
+  line-height: 1.4;
+}
+.dr-internal__text strong {
+  color: var(--dr-ink);
+}
+.dr-internal__projects {
+  margin: 0;
+  color: var(--dr-ink-2);
+}
+.dr-internal__review {
+  justify-self: start;
+  text-align: start;
+}
+.dr-nav__internal {
+  flex: none;
+  margin-inline-start: auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 16px;
+}

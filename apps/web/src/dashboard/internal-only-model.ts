@@ -1,0 +1,67 @@
+// Wave J: what the dashboard's "Internal only" UI says (pure; unit-tested in Node). The server sends the
+// workspace's outside access once (GET /api/workspaces/:wid/internal-only); a project's view is the part
+// of it that reaches that project's boards.
+import type { InternalOnlySettings, OutsideAccessLink, OutsideAccessPerson } from '@draftroom/contracts'
+
+export type OutsideScope = { kind: 'workspace' } | { kind: 'project'; projectId: string }
+
+export interface OutsideAccess {
+  people: OutsideAccessPerson[]
+  links: OutsideAccessLink[]
+}
+
+/**
+ * The outside access in a scope: the whole workspace, or one project (its boards' grants and links,
+ * and the outside members whose workspace role reaches its boards).
+ */
+export function outsideAccessIn(settings: InternalOnlySettings, scope: OutsideScope): OutsideAccess {
+  const all = settings.outsideAccess ?? { people: [], links: [] }
+  if (scope.kind === 'workspace') return { people: [...all.people], links: [...all.links] }
+  const inProject = <T extends { projectId: string | null }>(x: T) => x.projectId === scope.projectId
+  const people: OutsideAccessPerson[] = []
+  for (const p of all.people) {
+    const boards = p.boards.filter(inProject)
+    if (boards.length || p.workspaceRole !== 'guest') people.push({ ...p, boards })
+  }
+  return { people, links: all.links.filter(inProject) }
+}
+
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
+
+/** "2 outside people and 1 link still have access. Review" (null when nothing reaches the scope). */
+export function outsideAccessSummary(access: OutsideAccess): string | null {
+  const { people, links } = access
+  if (!people.length && !links.length) return null
+  const parts = [
+    people.length ? count(people.length, 'outside person', 'outside people') : null,
+    links.length ? count(links.length, 'link', 'links') : null,
+  ].filter(Boolean)
+  const total = people.length + links.length
+  return `${parts.join(' and ')} still ${total === 1 ? 'has' : 'have'} access. Review`
+}
+
+/** Whether this project is internal only (false for an unknown one, or before the settings load). */
+export function projectInternalOnly(settings: InternalOnlySettings | null, projectId: string): boolean {
+  return settings?.projects.some((p) => p.projectId === projectId && p.internalOnly) ?? false
+}
+
+export type ProjectMenuAction = 'rename' | 'internal-on' | 'internal-off' | 'internal-review'
+
+/** The project menu: rename (creators), and the switch for owners and admins (off: creators too). */
+export function projectMenuItems(opts: {
+  canRename: boolean
+  settings: InternalOnlySettings | null
+  projectId: string
+}): { action: ProjectMenuAction; label: string }[] {
+  const items: { action: ProjectMenuAction; label: string }[] = []
+  if (opts.canRename) items.push({ action: 'rename', label: 'Rename' })
+  const s = opts.settings
+  if (!s?.canChange) return items
+  if (!projectInternalOnly(s, opts.projectId))
+    items.push({ action: 'internal-on', label: 'Make internal only' })
+  else {
+    if (s.canTurnOff) items.push({ action: 'internal-off', label: 'Allow sharing outside' })
+    if (s.outsideAccess) items.push({ action: 'internal-review', label: 'Review outside access' })
+  }
+  return items
+}
