@@ -8,6 +8,7 @@ import { useEffect, useId, useMemo } from 'react'
 import { type CanvasFeatureContext, SINGLE_PAGE_ID } from '../../../canvas/api/index.ts'
 import { formatRelativeTime } from '../../../lib/format.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { ExternalTag } from '../../people/ExternalTag.tsx'
 import {
   anchorLabel,
   isThreadFilter,
@@ -193,6 +194,7 @@ function ThreadRow({
         <span className="dr-cpanel__rowmain">
           <span className="dr-cpanel__rowhead">
             <strong>{thread.createdBy.name}</strong>
+            {thread.createdBy.external && <ExternalTag compact />}
             <time dateTime={last?.createdAt}>{formatRelativeTime(last?.createdAt)}</time>
             {(state === 'unread' || state === 'mentioned') && (
               <span className={`dr-cpanel__badge dr-cpanel__badge--${state}`}>

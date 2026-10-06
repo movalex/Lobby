@@ -3,6 +3,8 @@
 // (or 'new' for a new comment) until it is posted, even when the composer is closed.
 
 import { type KeyboardEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { ExternalTag } from '../people/ExternalTag.tsx'
+import { useBoardOutside } from '../people/outside.ts'
 import {
   activeMentionQuery,
   applyMention,
@@ -49,6 +51,8 @@ export function Composer({
   const listId = useId()
   const hintId = useId()
   const people = store.signals.useValue(store.mentionables)
+  // Wave J: the picker tags people outside Dark Burn / TPG (the board's outside list).
+  const { snap: outside } = useBoardOutside(store.boardId)
   /** Caret to restore right after the next render (a picked mention changes the text under it). */
   const caretAfterRender = useRef<number | null>(null)
   useLayoutEffect(() => {
@@ -196,6 +200,9 @@ export function Composer({
                 onPointerEnter={() => setActive(i)}
               >
                 <span className="dr-cmention-list__name">{p.name}</span>
+                {outside.people.has(p.userId) && (
+                  <ExternalTag domain={outside.people.get(p.userId) ?? null} />
+                )}
                 {p.userId === store.meId && <span className="dr-cmention-list__meta">you</span>}
                 {p.handle && p.userId !== store.meId && (
                   <span className="dr-cmention-list__meta">@{p.handle}</span>

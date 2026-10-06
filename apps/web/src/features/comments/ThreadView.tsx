@@ -6,6 +6,8 @@ import { useState } from 'react'
 import { ownName } from '../../invite/model.ts'
 import { formatDateTime, formatRelativeTime } from '../../lib/format.ts'
 import { initialsFor, safeColor } from '../../lib/identity.ts'
+import { ExternalTag } from '../people/ExternalTag.tsx'
+import { useBoardOutside } from '../people/outside.ts'
 import { Composer } from './Composer.tsx'
 import { CheckIcon, CloseIcon } from './icons.tsx'
 import { bodySegments, draftFromBody } from './mentions.ts'
@@ -65,6 +67,10 @@ function CommentItem({
   const mine = comment.author.id === store.meId
   const canEdit = canComment && mine
   const canDelete = canComment && (mine || isOwner)
+  // Wave J: the server marks an author outside Dark Burn / TPG; the board's outside list adds the domain
+  // for people who manage access (and tags an author whose thread came from an older api).
+  const { snap: outside } = useBoardOutside(store.boardId)
+  const external = comment.author.external ?? outside.people.has(comment.author.id)
   return (
     <li className="dr-ccomment" data-testid="comment-item" data-comment-id={comment.id}>
       <Avatar name={comment.author.name} color={comment.author.color} id={comment.author.id} />
@@ -72,6 +78,7 @@ function CommentItem({
         <div className="dr-ccomment__head">
           <span className="dr-ccomment__author">
             {mine ? ownName(comment.author.name) : comment.author.name}
+            {external && <ExternalTag domain={outside.people.get(comment.author.id) ?? null} />}
           </span>
           <time
             className="dr-ccomment__time"
@@ -233,8 +240,8 @@ export function ThreadView({
       {canComment && privacy.teamOnly && (teamOnly || privacy.teamOnlyDefault) && (
         <p className="dr-cthread__privacy" data-testid="thread-privacy">
           {teamOnly
-            ? 'Guests and client links can’t see this thread.'
-            : 'Guests and client links can see this.'}{' '}
+            ? 'People outside Dark Burn / TPG can’t see this thread.'
+            : 'People outside Dark Burn / TPG can see this.'}{' '}
           <button
             type="button"
             className="dr-linkbtn"

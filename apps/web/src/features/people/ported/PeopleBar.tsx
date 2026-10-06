@@ -11,6 +11,8 @@
 // The roster (the server's sessions, uncapped) says who is here, with each person's role; presence adds
 // their view and idle. Reads are serialized, so cursor movement re-renders nothing here; the list's frame
 // and idle details are computed only while it is open.
+// Wave J: an account outside Dark Burn / TPG gets an "External" tag in the list (with its domain where
+// this viewer manages access) and says so on its avatar (../outside.ts, the server's outside list).
 
 import { type CSSProperties, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -25,6 +27,7 @@ import { namesText } from '../../present-export/live/words.ts'
 import { PersonName } from '../../workshops/Hands.tsx'
 import { summonScreen } from '../../workshops/ported/camera.ts'
 import { WorkshopStore, workshopStoreFor } from '../../workshops/store.ts'
+import { ExternalTag } from '../ExternalTag.tsx'
 import {
   buildPeople,
   type FrameBox,
@@ -33,6 +36,7 @@ import {
   type PersonRow,
   statusText,
 } from '../model.ts'
+import { externalTagTitle, useBoardOutside } from '../outside.ts'
 import { frameBoxesOf, presenceLikes, presenceUsers, ROLE_LABEL, rosterMap } from './presence.ts'
 import '../people.css'
 
@@ -124,6 +128,9 @@ export function PeopleTopBar({ ctx }: { ctx: CanvasFeatureContext }) {
     [canvas, selfUserId],
   )
   const users = useMemo(() => JSON.parse(key) as ReturnType<typeof presenceUsers>, [key])
+  const { store: outside, snap: outsideSnap } = useBoardOutside(ctx.board.id)
+  // a newcomer may be an outsider who just joined: the outside list refetches (rate-limited)
+  useEffect(() => outside?.noticeUsers(users.map((u) => u.userId)), [outside, users])
   const following = useFollowingUser(ctx)
   const followers = useFollowersOfMe(ctx)
   const focusMode = useValue('dr-people-focus', () => canvas.settings.get().focusMode, [canvas])
@@ -145,21 +152,24 @@ export function PeopleTopBar({ ctx }: { ctx: CanvasFeatureContext }) {
       <ul className="dr-presence" data-testid="presence-list" aria-label="People on this board">
         {shown.map((u) => {
           const isFollowing = following === u.userId
+          const external = !u.guest && outsideSnap.people.has(u.userId)
+          const who = external ? `${u.name} (${externalTagTitle(null)})` : u.name
           return (
             <li
               key={u.userId}
               data-testid="presence-user"
               data-user-id={u.userId}
               data-guest={u.guest || undefined}
-              title={u.name}
+              data-external={external || undefined}
+              title={who}
             >
               <button
                 type="button"
                 className="dr-avatar"
                 style={{ background: u.color }}
                 aria-pressed={isFollowing}
-                aria-label={isFollowing ? `Stop following ${u.name}` : `Follow ${u.name}`}
-                title={isFollowing ? `Following ${u.name}` : u.name}
+                aria-label={isFollowing ? `Stop following ${who}` : `Follow ${who}`}
+                title={isFollowing ? `Following ${who}` : who}
                 onClick={() => {
                   if (isFollowing) canvas.follow.stop()
                   else canvas.follow.start(u.followSid)
@@ -363,6 +373,7 @@ function PeoplePanel({
   const sidOf = useMemo(() => new Map(JSON.parse(followSids) as [string, string][]), [followSids])
   const following = useFollowingUser(ctx)
   const others = rows.length - 1
+  const { snap: outsideSnap } = useBoardOutside(ctx.board.id)
 
   const bring = async (row: PersonRow | null) => {
     const r = await workshopsOf(ctx).summon(row?.userId, summonScreen(ctx.canvas))
@@ -432,6 +443,9 @@ function PeoplePanel({
               <div className="dr-people-row__main">
                 <div className="dr-people-row__name">
                   <PersonName name={r.name} suffix={r.self ? ' (you)' : undefined} />
+                  {!r.guest && outsideSnap.people.has(r.userId) && (
+                    <ExternalTag domain={outsideSnap.people.get(r.userId) ?? null} />
+                  )}
                   {r.role && (
                     <span className="dr-people-role" data-testid="people-role" data-role={r.role}>
                       {ROLE_LABEL[r.role]}

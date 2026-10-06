@@ -1,0 +1,83 @@
+/* Wave J: the "External" tag, the "Not confirmed" tag and the "Shared outside" marker. The warning
+   tokens keep them readable in both themes (AA on their own background). */
+.dr-ext-tag {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  max-width: 100%;
+  margin-inline-start: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--dr-warn-line);
+  border-radius: 999px;
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 16px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+.dr-ext-tag--compact {
+  margin-inline-start: 4px;
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 14px;
+}
+.dr-ext-tag--unconfirmed {
+  border-style: dashed;
+  border-color: var(--dr-line-strong);
+  background: var(--dr-chip);
+  color: var(--dr-ink-2);
+}
+
+/* The board top bar's and the dashboard card's marker. */
+.dr-shared-outside {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid var(--dr-warn-line);
+  border-radius: 999px;
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+  font-size: 11.5px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.dr-shared-outside svg {
+  flex: none;
+}
+
+/* The one-time confirm before inviting, approving or raising someone outside (Share dialog). */
+.dr-outside-confirm {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--dr-warn-line);
+  border-radius: 8px;
+  background: var(--dr-warn-bg);
+  color: var(--dr-ink);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.dr-outside-confirm__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* The people bar: an outside account's avatar carries an amber ring (its name says why). */
+.dr-presence [data-external] .dr-avatar {
+  box-shadow:
+    0 0 0 2px var(--dr-surface),
+    0 0 0 4px var(--dr-amber);
+}
+
+/* A cursor label's " · External". */
+.lobby-cursor__ext {
+  font-weight: 700;
+}

@@ -24,6 +24,7 @@ import {
 } from 'react'
 import { frameAt } from '../../features/canvas-ux/ported/notes.ts'
 import { FeatureDockView, TopBarOverflowRow } from '../../features/FeatureHostCore.tsx'
+import { cursorExternalSuffix, useBoardOutside } from '../../features/people/outside.ts'
 import { initialsFor, safeColor } from '../../lib/identity.ts'
 import { can } from '../../lib/permissions.ts'
 import { useValue } from '../../lib/signals.ts'
@@ -247,7 +248,7 @@ export function OverlayRoot({
         {port && !focusMode ? c0.map((l) => <l.component key={l.id} port={port} />) : null}
         <DragArrows canvas={ctx.canvas} session={session} />
         <RemoteSelections canvas={ctx.canvas} registries={r} session={session} focusMode={focusMode} />
-        <Cursors canvas={ctx.canvas} registries={r} />
+        <Cursors canvas={ctx.canvas} registries={r} boardId={ctx.board.id} />
       </div>
       <div data-lobby-layer="screen" style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
         {shown
@@ -499,8 +500,21 @@ function TypingBadges({ canvas }: { canvas: LobbyCanvas }) {
   )
 }
 
-/** Remote cursors with name tags (§2.7), filtered by `cursorVisible` (present mode, "hide cursors"). */
-function Cursors({ canvas, registries }: { canvas: LobbyCanvas; registries: FeatureRegistries }) {
+/**
+ * Remote cursors with name tags (§2.7), filtered by `cursorVisible` (present mode, "hide cursors"). Wave J:
+ * an account outside Dark Burn / TPG gets " · External" after its name (the board's outside list,
+ * features/people/outside.ts); name-only guests keep their " (guest)".
+ */
+function Cursors({
+  canvas,
+  registries,
+  boardId,
+}: {
+  canvas: LobbyCanvas
+  registries: FeatureRegistries
+  boardId: string
+}) {
+  const { store: outside, snap: outsideSnap } = useBoardOutside(boardId)
   // a new cursor filter (a registry change) recomputes the list
   const version = useRegistries(registries)
   const cursors = useValue(
@@ -512,6 +526,8 @@ function Cursors({ canvas, registries }: { canvas: LobbyCanvas; registries: Feat
         .map((p) => ({ ...p, at: canvas.sceneToOverlay(p.point as { x: number; y: number }) })),
     [canvas, registries, version],
   )
+  // someone the outside list does not know yet may have just joined: it refetches (rate-limited)
+  useEffect(() => outside?.noticeUsers(cursors.map((p) => p.uid)), [outside, cursors])
   return (
     <>
       {cursors.map((p) => (
@@ -522,6 +538,7 @@ function Cursors({ canvas, registries }: { canvas: LobbyCanvas; registries: Feat
           data-sid={p.sid}
           data-uid={p.uid}
           data-name={p.name}
+          data-external={outsideSnap.people.has(p.uid) || undefined}
           style={{ position: 'absolute', left: p.at.x, top: p.at.y, transform: 'translate(-2px, -2px)' }}
         >
           <svg width="14" height="18" viewBox="0 0 14 18" aria-hidden="true">
@@ -534,6 +551,11 @@ function Cursors({ canvas, registries }: { canvas: LobbyCanvas; registries: Feat
           </svg>
           <span className="lobby-cursor__name" style={{ background: safeColor(p.color, p.uid) }}>
             {p.name}
+            {cursorExternalSuffix(outsideSnap, p.uid, p.guest) && (
+              <span className="lobby-cursor__ext" data-testid="cursor-external">
+                {cursorExternalSuffix(outsideSnap, p.uid, p.guest)}
+              </span>
+            )}
           </span>
         </div>
       ))}
