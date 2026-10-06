@@ -133,7 +133,7 @@ describe('0024 on a database at 0023', () => {
     const d = await openPglite()
     db = d
     const all = loadMigrations()
-    // Up to 0024 only: later migrations (main's 0025_open_signin and wave J's) are not what this test is about.
+    // Up to 0024 only: later migrations (0025_open_signin, 0026_outside_markers, 0027_feedback, …) are not what this test is about.
     expect(all.find((m) => m.version === 24)?.name).toBe('0024_vote_selection_access_granted')
     await migrate(d, { migrations: all.filter((m) => m.version <= 23) })
     await seedTenant(d)

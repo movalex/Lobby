@@ -1,4 +1,4 @@
-// The feedback table (migration 0026): inserts, the keyset-paged list and the status change. SQL only; the
+// The feedback table (migration 0027): inserts, the keyset-paged list and the status change. SQL only; the
 // routes (./index.ts) decide who may call what. Nothing here logs: rows hold what people typed.
 
 import {

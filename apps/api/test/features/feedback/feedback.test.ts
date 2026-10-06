@@ -1,4 +1,4 @@
-// "Send feedback" (wave J5, migration 0026): who may send (a session, a name-only guest), what is kept
+// "Send feedback" (wave J5, migration 0027): who may send (a session, a name-only guest), what is kept
 // (plain text, capped, cleaned, authorship from the session), the limits, who may read the inbox
 // (DRAFTROOM_FEEDBACK_ADMINS, checked on the server) and the internal read for the lead's tooling.
 import {

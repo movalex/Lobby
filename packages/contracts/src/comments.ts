@@ -232,7 +232,7 @@ export const CommentsDeletedEvent = z.object({ threadId: CommentThreadId, commen
  * new_comment (DANA-02): someone started a thread on a board you own (at most a few unread per author);
  * access_granted (PRI-09b, 0024): a board owner (the actor) approved your access request. The api lists
  * access_granted only to a web build that declares LOBBY_CLIENT_REV >= 1 (client-rev.ts);
- * outsider_joined (wave J, 0025): an account outside Dark Burn / TPG (the actor) opened one of your
+ * outsider_joined (wave J, 0026): an account outside Dark Burn / TPG (the actor) opened one of your
  * boards for the first time; listed only to a web build that declares LOBBY_CLIENT_REV >= 2.
  */
 export const NotificationKind = z.enum([
@@ -247,7 +247,7 @@ export const NotificationKind = z.enum([
 export type NotificationKind = z.infer<typeof NotificationKind>
 /** Kinds a web build from before 0024 cannot parse: left out of its list and unread count. */
 export const NOTIFICATION_KINDS_SINCE_REV1: readonly NotificationKind[] = ['access_granted']
-/** Kinds a web build from before 0025 (revision 1) cannot parse. */
+/** Kinds a web build from before 0026 (revision 1) cannot parse. */
 export const NOTIFICATION_KINDS_SINCE_REV2: readonly NotificationKind[] = ['outsider_joined']
 
 /** What an access-request notification asks for (the request itself, as it stands now). */

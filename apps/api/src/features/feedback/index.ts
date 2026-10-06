@@ -1,4 +1,4 @@
-// Feature module: "Send feedback" (wave J5, the pilot's feedback channel; migration 0026).
+// Feature module: "Send feedback" (wave J5, the pilot's feedback channel; migration 0027).
 //
 //   POST  /api/feedback         {text, expected?, context}  ->  201 {id, createdAt}
 //   GET   /api/feedback/access                              ->  {admin}

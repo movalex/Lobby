@@ -1,7 +1,7 @@
-// 0026_feedback (wave J5): the table behind the "Send feedback" button. The database refuses what the api
+// 0027_feedback (wave J5): the table behind the "Send feedback" button. The database refuses what the api
 // never writes (a bad id, a kind or status it does not know, an empty or over-long text, a context that is
 // not a small JSON object); the table has no foreign keys, so a message outlives its sender; and an upgrade
-// from 0025 changes no existing table.
+// from 0026 changes no existing table.
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { type Db, loadMigrations, migrate, openPglite, pgErrorCode } from '../src/index.ts'
@@ -48,13 +48,13 @@ function insert(q: Db, c: Cols = {}) {
   )
 }
 
-describe('0026_feedback', () => {
-  it('is a migration of its own, after 0025, and creates only the feedback table', async () => {
+describe('0027_feedback', () => {
+  it('is a migration of its own, after 0026, and creates only the feedback table', async () => {
     const all = loadMigrations()
-    expect(all.find((m) => m.version === 26)?.name).toBe('0026_feedback')
+    expect(all.find((m) => m.version === 27)?.name).toBe('0027_feedback')
     const d = await openPglite()
     db = d
-    await migrate(d, { migrations: all.filter((m) => m.version <= 25) })
+    await migrate(d, { migrations: all.filter((m) => m.version <= 26) })
     const tables = async () =>
       (
         await d.query<{ table_name: string }>(
@@ -69,8 +69,8 @@ describe('0026_feedback', () => {
         )
       ).rows.map((r) => r.k)
     const before = { tables: await tables(), columns: await columns() }
-    expect((await migrate(d, { migrations: all.filter((m) => m.version <= 26) })).applied).toEqual([
-      '0026_feedback',
+    expect((await migrate(d, { migrations: all.filter((m) => m.version <= 27) })).applied).toEqual([
+      '0027_feedback',
     ])
     expect((await tables()).filter((t) => !before.tables.includes(t))).toEqual(['feedback'])
     expect(await columns()).toEqual(before.columns) // no existing table changed

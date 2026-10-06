@@ -4,7 +4,7 @@
 // notifications (and their comment snippets) immediately.
 // The kinds a web build from before 0024 cannot parse (NOTIFICATION_KINDS_SINCE_REV1) are left out of its
 // list and its unread count (`rev`, @draftroom/contracts client-rev.ts), and so are the kinds a build
-// from before 0025 cannot (NOTIFICATION_KINDS_SINCE_REV2: wave J's 'outsider_joined').
+// from before 0026 cannot (NOTIFICATION_KINDS_SINCE_REV2: wave J's 'outsider_joined').
 //
 // Wave J: a team-only thread's items are shown only to someone on the team, which now needs a confirmed
 // creator (store.ts onTeam; the caller's status comes in as `creator`). 'outsider_joined' (an account
@@ -337,7 +337,7 @@ function toItem(r: NotificationRow): NotificationItem {
 
 /**
  * The caller's notifications, newest first. `rev` is the caller's web build revision
- * (@draftroom/contracts client-rev.ts; 0 when omitted): a build from before 0024 (or 0025) gets no kind
+ * (@draftroom/contracts client-rev.ts; 0 when omitted): a build from before 0024 (or 0026) gets no kind
  * it cannot parse, in the list or in the count. `creator`: the caller is a confirmed creator (wave J:
  * team-only threads' items need it; omitted = not one, which fails closed). `emailSource`: the running
  * provider (whose stored address gives an outsider notice its domain).

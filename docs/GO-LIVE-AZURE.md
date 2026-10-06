@@ -513,8 +513,8 @@ Subtotal: about 6–9 days.
 
 - a new `apps/api/src/auth/oidc.ts` using the `openid-client` library (MIT licence; 6.8.8 is the latest on npm as of 2026-10-05, to be
   pinned exactly in the catalog);
-- migration `0025`, which allows the new provider names (both `identities.provider` and `user_emails.source` have CHECK
-  constraints that list only `dev` and `clerk` today) and adds the identity columns and a sign-in transaction table;
+- the next free migration (`0028` once wave J's `0026`/`0027` ship; `0025` is the open sign-in one), which allows the new provider names (both `identities.provider` and `user_emails.source` have CHECK
+  constraints that list only `dev`, `clerk` and `email` today) and adds the identity columns and a sign-in transaction table;
 - creator status from several providers, with the trust rule from [section 3](#who-can-do-what), in
   `apps/api/src/auth/creator-sql.ts`;
 - encrypted refresh tokens for the hourly check;
@@ -613,7 +613,7 @@ The commands are the existing ones from `docs/DEPLOY.md` "Backups" and `docs/EXC
       `pg_dump -Fc --no-owner --no-privileges`, then
       `pg_restore --no-owner --no-privileges --exit-on-error` into a fresh UTF8 database on Flexible Server.
    3. Put Render's allow-list back to empty.
-   4. Start the Azure api. It applies migration `0025` by itself. Migrations `0001`–`0024` must be byte-identical, or the
+   4. Start the Azure api. It applies the new sign-in migration by itself. Every earlier migration (`0001`–`0027` after wave J) must be byte-identical, or the
       api stops on a checksum mismatch.
 6. **Boards.**
    1. Start the Azure sync **in maintenance** (`DRAFTROOM_BOOT_MAINTENANCE=1`).

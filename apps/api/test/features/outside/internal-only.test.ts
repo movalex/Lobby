@@ -1,4 +1,4 @@
-// Wave J ("Internal only", migration 0025): a workspace or a project can be switched to internal only
+// Wave J ("Internal only", migration 0026): a workspace or a project can be switched to internal only
 // (owners and admins; default off). While it is on, the server refuses everything that hands access out
 // to people outside Dark Burn / TPG there: invitations to an outside address (board, workspace, the
 // email route's links and its "granted" path), approving an outside account's request, a new or higher

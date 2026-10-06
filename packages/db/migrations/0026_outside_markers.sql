@@ -1,4 +1,4 @@
--- 0025_outside_markers (wave J, J1: markers for people outside Dark Burn Creative and Trailer Park Group;
+-- 0026_outside_markers (wave J, J1: markers for people outside Dark Burn Creative and Trailer Park Group;
 -- owner decisions 2026-10-05). Shipped migrations are never edited.
 --
 --   workspaces.internal_only, projects.internal_only
@@ -17,7 +17,7 @@
 -- Additive: no existing row changes meaning, the new columns have constant defaults (an older build's
 -- INSERTs leave them false), and the previous build's queries and inserts still run (it never writes
 -- the new kind). The api lists 'outsider_joined' only to a web build that declares LOBBY_CLIENT_REV >= 2
--- (@draftroom/contracts client-rev.ts). Rollback of the api to a build before 0025: that build lists
+-- (@draftroom/contracts client-rev.ts). Rollback of the api to a build before 0026: that build lists
 -- every kind it finds, and the web of its time cannot parse 'outsider_joined' (its whole bell would stop
 -- updating), so run `DELETE FROM notifications WHERE kind = 'outsider_joined'` first; it also ignores
 -- internal_only (outside sharing is then allowed again until the roll-forward).

@@ -1,4 +1,4 @@
-// Wave J (migration 0025): the board's owners get a bell item ('outsider_joined', actor = the outsider)
+// Wave J (migration 0026): the board's owners get a bell item ('outsider_joined', actor = the outsider)
 // the first time an account outside Dark Burn / TPG opens one of their boards (its first connection
 // ticket). Once per board and person; never for creators, name-only guests or unconfirmed accounts;
 // listed only while the recipient manages access there, with the outsider's email domain, and only to a
@@ -72,7 +72,7 @@ describe('outsider_joined', () => {
     expect(await joinedRows()).toEqual([{ user_id: bob.userId, actor_id: pat.userId }])
   })
 
-  it('a web build from before 0025 (revision 1 or none) never sees the kind, in the list or the count', async () => {
+  it('a web build from before 0026 (revision 1 or none) never sees the kind, in the list or the count', async () => {
     await ticket(pat)
     await vi.waitFor(async () => expect(await joinedRows()).toHaveLength(1))
     expect((await bell(bob, '2')).unreadCount).toBe(1)

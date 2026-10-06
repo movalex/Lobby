@@ -1,4 +1,4 @@
--- 0026_feedback (wave J5: the pilot's "Send feedback" button). Shipped migrations are never edited.
+-- 0027_feedback (wave J5: the pilot's "Send feedback" button). Shipped migrations are never edited.
 --
 -- One table, `feedback`: what people typed into the board menu's or the account menu's feedback dialog.
 -- Written by POST /api/feedback (apps/api/src/features/feedback), read by the inbox page (people named in

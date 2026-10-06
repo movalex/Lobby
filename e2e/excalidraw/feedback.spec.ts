@@ -1,4 +1,4 @@
-// Wave J5: the "Send feedback" button, in a real browser against the real api (migration 0026).
+// Wave J5: the "Send feedback" button, in a real browser against the real api (migration 0027).
 //   - from a board: Menu -> Send feedback; the dialog lists what is attached (page, board, browser, window,
 //     build, time) BEFORE sending; the keys typed into it never reach the canvas; the message arrives with
 //     its context and its author taken from the session;

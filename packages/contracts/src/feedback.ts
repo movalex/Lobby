@@ -5,7 +5,7 @@
 //
 // Anyone signed in, a name-only guest included, sends plain-text feedback from the board menu or the
 // dashboard's account menu: POST /api/feedback { text, expected?, context }. The api cleans the text
-// (control and bidi characters out), caps it, rate limits per person and stores it (migration 0026).
+// (control and bidi characters out), caps it, rate limits per person and stores it (migration 0027).
 // People named in DRAFTROOM_FEEDBACK_ADMINS (verified email, checked on the server) read the list and mark
 // items done: GET /api/feedback, PATCH /api/feedback/:id, and GET /api/feedback/access tells the web whether
 // to show the inbox link. The lead's triage tooling reads GET /internal/feedback (the internal secret).

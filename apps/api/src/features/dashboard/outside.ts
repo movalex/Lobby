@@ -14,7 +14,7 @@
 //   team rule, the internal-only refusals).
 // - The plain "External" list (no domain unless the caller manages access) is for everyone who can
 //   view the board: cursors, the people list, the @mention picker (RT-02).
-// - "Internal only" (0025): while a workspace or a project is internal only, inviting an outside
+// - "Internal only" (0026): while a workspace or a project is internal only, inviting an outside
 //   address, approving an outside account's request, giving an outside account a grant or a higher
 //   role, and creating, extending or opening to guests a review, workshop or guest link are refused
 //   with 409 INTERNAL_ONLY, and so is accepting an invitation or a link there (an older one included)
