@@ -26,6 +26,8 @@
 //   checks and only for a creator caller (a non-creator is refused by the route itself, so the hook
 //   reveals nothing new);
 //   createInvitation, review-link creation and access-request approval check in their transactions.
+//   Taking a board OUT of an internal-only project is for the people who may turn the switch off
+//   (assertProjectMoveAllowed, in PATCH /api/boards/:bid under the switch's workspace row lock; IO-1).
 
 import {
   AddressCheckInput,
@@ -309,6 +311,38 @@ export async function assertRedeemAllowed(
   if (!scope) return
   // deps null: a name-only guest (never a creator).
   if (!deps || !(await deps.identity.isCreatorUser(q, userId))) throw internalOnlyRefused(scope)
+}
+
+/**
+ * IO-1 (wave J pre-deploy review): every refusal reads the board's CURRENT project, so taking a board
+ * OUT of an internal-only project (to no project, or to a project that is not internal only) would
+ * open every outside-sharing path on it again. Only the people who may turn the switch off may do it:
+ * a workspace owner or admin who is a creator (routes/workspaces.ts setSwitch). Moving into an
+ * internal-only project, between two of them, or not moving at all is open to whoever may move the
+ * board. The project's 409 INTERNAL_ONLY otherwise. Call in the transaction that moves the board, under
+ * the workspace row lock the switch takes (FOR NO KEY UPDATE), so a switch change cannot slip between
+ * this read and the move.
+ */
+export async function assertProjectMoveAllowed(
+  q: Queryable,
+  deps: Pick<OutsideDeps, 'identity'>,
+  move: { workspaceId: string; userId: string; from: string | null; to: string | null },
+): Promise<void> {
+  const { workspaceId, userId, from, to } = move
+  if (from === null || from === to) return
+  const ids = to === null ? [from] : [from, to]
+  const rows = await q.query<{ id: string; internal_only: boolean }>(
+    'SELECT id, internal_only FROM projects WHERE workspace_id = $1 AND id = ANY($2::text[])',
+    [workspaceId, ids],
+  )
+  const on = (id: string | null) => id !== null && rows.rows.some((r) => r.id === id && r.internal_only)
+  if (!on(from) || on(to)) return
+  const member = await q.maybeOne<{ role: WorkspaceRole }>(
+    'SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2',
+    [workspaceId, userId],
+  )
+  if (canManageWorkspace(member?.role ?? null) && (await deps.identity.isCreatorUser(q, userId))) return
+  throw internalOnlyRefused('project')
 }
 
 /** Review, workshop and guest links: none while the board is internal only. */

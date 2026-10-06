@@ -20,13 +20,16 @@ import { expect, test } from '../tests/support/canvas.ts'
 import { commentsApi, openCommentsPanel } from '../tests/support/comments.ts'
 import {
   accessRequests,
+  chooseFromMenu,
   closeShare,
   freshHandle,
   invitations,
+  inviteToken,
   mainCard,
   memberRow,
   openDashboard,
   openShareFromButton,
+  personalWorkspace,
   requestRow,
   shareDialog,
   signedInContext,
@@ -458,5 +461,68 @@ test('Internal only on the workspace: outside invites, approvals and links refus
     await aliceApi.fetch('PUT', `/api/workspaces/${ws}/internal-only`, { internalOnly: false })
     await quinn.context.close()
     await rex.context.close()
+  }
+})
+
+/** A fresh creator's own workspace with `who` as plain members (email-locked invitations, accepted). */
+async function workspaceWith(owner: Api, wid: string, who: { api: Api; email: string }[]) {
+  for (const p of who) {
+    const inv = await owner.fetch('POST', `/api/workspaces/${wid}/invitations`, {
+      role: 'member',
+      email: p.email,
+    })
+    expect(inv.status(), await inv.text()).toBe(201)
+    const token = inviteToken(((await inv.json()) as { url: string }).url)
+    const accepted = await p.api.fetch('POST', `/api/invitations/${token}/accept`)
+    expect(accepted.status(), await accepted.text()).toBe(200)
+  }
+}
+
+test('Internal only on a project (pre-deploy review IO-1, IO-2b): a board cannot be moved out of it to share it outside; the dialogs say why', async ({
+  browser,
+}) => {
+  // A workspace of its own (a fresh creator's), so no other test sees its members or its switch.
+  const olga = await signedInContext(browser, freshHandle('olga'), { name: 'Olga Owner' })
+  const mia = await signedInContext(browser, freshHandle('mia'), { name: 'Mia Member' })
+  const olgaApi = new Api(olga.context.request)
+  const miaApi = new Api(mia.context.request)
+  const wid = personalWorkspace(olga.me)
+  try {
+    await workspaceWith(olgaApi, wid, [{ api: miaApi, email: mia.me.access?.email ?? '' }])
+    const project = (
+      (await (await olgaApi.fetch('POST', `/api/workspaces/${wid}/projects`, { name: 'Pitch' })).json()) as {
+        id: string
+      }
+    ).id
+    const board = (await miaApi.createBoard(wid, 'Pitch deck')).id
+    expect((await miaApi.fetch('PATCH', `/api/boards/${board}`, { projectId: project })).status()).toBe(200)
+    expect(
+      (await olgaApi.fetch('PUT', `/api/projects/${project}/internal-only`, { internalOnly: true })).status(),
+    ).toBe(200)
+
+    await test.step('mia (a creator, a plain member) moves it to No project: refused with the project’s words', async () => {
+      await openDashboard(mia.page, wid)
+      const card = mainCard(mia.page, board)
+      await chooseFromMenu(card, 'move')
+      const dialog = mia.page.getByTestId('move-dialog')
+      await dialog.getByTestId('move-project').selectOption('')
+      await dialog.getByTestId('move-submit').click()
+      await expect(dialog.getByRole('alert')).toHaveText(
+        'This project is internal only: only people at Dark Burn Creative or Trailer Park Group can be invited or given access to its boards, and review, workshop and guest links are off. A workspace owner or admin can turn this off.',
+      )
+      await expect(dialog).toBeVisible()
+      const detail = (await (await miaApi.fetch('GET', `/api/boards/${board}`)).json()) as {
+        board: { projectId: string | null }
+      }
+      expect(detail.board.projectId).toBe(project)
+      await dialog.getByRole('button', { name: 'Cancel' }).click()
+    })
+
+    await test.step('olga (the owner) can move it out', async () => {
+      expect((await olgaApi.fetch('PATCH', `/api/boards/${board}`, { projectId: null })).status()).toBe(200)
+    })
+  } finally {
+    await olga.context.close()
+    await mia.context.close()
   }
 })

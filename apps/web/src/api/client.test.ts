@@ -1,3 +1,4 @@
+import { INTERNAL_ONLY_CODE, INTERNAL_ONLY_MESSAGES } from '@draftroom/contracts'
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, createApiClient, isNoAccess, kindForStatus } from './client.ts'
 import { BOARD_ID, makeBoard, makeMe, makeUser, member, WS_ID } from './test-fixtures.ts'
@@ -207,6 +208,20 @@ describe('api client: error mapping', () => {
       code: 'INVITATION_EXPIRED',
       message: 'This invitation has expired.',
     })
+  })
+
+  it('a move or a visibility raise refused by Internal only keeps the scope’s words (the dialogs show them)', async () => {
+    // Wave J pre-deploy review (IO-1, IO-2b): the move dialog and the Share dialog show err.message, so
+    // the refusal must survive the client's length cap (a longer message would turn generic).
+    for (const scope of ['project', 'workspace'] as const) {
+      const { fetchImpl } = fakeFetch(() => errorBody(409, INTERNAL_ONLY_CODE, INTERNAL_ONLY_MESSAGES[scope]))
+      const api = createApiClient({ fetchImpl })
+      const moved = await caught(api.patchBoard(BOARD_ID, { projectId: null }))
+      expect(moved).toMatchObject({ kind: 'conflict', status: 409, code: INTERNAL_ONLY_CODE })
+      expect(moved.message).toBe(INTERNAL_ONLY_MESSAGES[scope])
+      const raised = await caught(api.patchBoard(BOARD_ID, { visibility: 'workspace_view' }))
+      expect(raised.message).toBe(INTERNAL_ONLY_MESSAGES[scope])
+    }
   })
 
   it("surfaces the server's user-safe message (e.g. last-owner protection)", async () => {

@@ -15,6 +15,7 @@ import { z } from 'zod'
 import {
   BOARD_COLUMNS,
   BOARD_RETURNING,
+  type BoardAccess,
   type BoardRow,
   isBoardId,
   requireBoardAction,
@@ -28,6 +29,7 @@ import { audit } from '../audit.ts'
 import { onNewCanvas } from '../canvas-engine.ts'
 import type { AppContext, Params } from '../context.ts'
 import { conflict, forbidden, notFound, parse } from '../errors.ts'
+import { assertProjectMoveAllowed } from '../features/dashboard/outside.ts'
 import { assertBoardRoom } from '../files/usage.ts'
 import { actorOf } from '../notifier.ts'
 import { type BoardMarks, toBoard, toBoardWithRole } from '../serialize.ts'
@@ -155,12 +157,26 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const input = parse(PatchBoardInput, req.body)
-    const result = await db.transaction(async (tx) => {
-      const access = await requireVisibleBoard(tx, bid, user.id, 'view', { forUpdate: true })
-      const { status, workspace_id } = access.board
+    const permitted = (access: BoardAccess) => {
+      const { status } = access.board
       if ((input.title !== undefined || input.projectId !== undefined) && !can(access.role, 'rename', status))
         throw forbidden()
       if (input.visibility !== undefined && !can(access.role, 'change_visibility', status)) throw forbidden()
+    }
+    const result = await db.transaction(async (tx) => {
+      // "Internal only" (IO-1, IO-2b): a move or a visibility change is decided under the workspace row
+      // lock the switch takes (routes/workspaces.ts setSwitch), so neither can slip past a switch change.
+      // Lock order (access.ts): the workspace row before the board row. The unlocked read and the route's
+      // own checks come first, so a stranger, a viewer or a malformed id gets the route's own answer and
+      // never takes the row. (A board never changes workspace, so the peeked one is the board's.)
+      if (input.projectId !== undefined || input.visibility !== undefined) {
+        const peek = await requireVisibleBoard(tx, bid, user.id, 'view')
+        permitted(peek)
+        await tx.query('SELECT id FROM workspaces WHERE id = $1 FOR NO KEY UPDATE', [peek.board.workspace_id])
+      }
+      const access = await requireVisibleBoard(tx, bid, user.id, 'view', { forUpdate: true })
+      const { workspace_id } = access.board
+      permitted(access)
       // Domain access (D4): raising the visibility hands out access, so only a creator may; lowering
       // (or keeping it) stays open to whoever may change it.
       if (
@@ -172,6 +188,13 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
           by: 'route',
         })
       if (input.projectId) await requireProjectInWorkspace(tx, input.projectId, workspace_id)
+      if (input.projectId !== undefined)
+        await assertProjectMoveAllowed(tx, ctx, {
+          workspaceId: workspace_id,
+          userId: user.id,
+          from: access.board.project_id,
+          to: input.projectId,
+        })
       const at = now()
       const row = await tx.one<BoardRow>(
         `UPDATE boards
