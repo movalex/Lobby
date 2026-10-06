@@ -223,6 +223,12 @@ services:
         sync: false
       - key: CLERK_PUBLISHABLE_KEY
         sync: false
+      # Wave J5: who reads the feedback inbox (/feedback) and marks items done: comma-separated exact verified
+      # sign-in addresses, at most 25 (docs/DEPLOY.md "Send feedback"). `sync: false` ON PURPOSE, like the creator
+      # exceptions: an address is personal data and never goes in git; the lead sets it in the Dashboard. Unset:
+      # nobody reads the inbox through the app (GET /internal/feedback, behind the internal secret, still works).
+      - key: DRAFTROOM_FEEDBACK_ADMINS
+        sync: false
       # AI on the board (apps/api/src/features/ai). The key has NO spending cap at OpenAI: the api's own
       # limits (per call, per person, per workspace, global per day; DRAFTROOM_AI_* in .env.example,
       # contract defaults when unset) are the only brake. Without a key the feature is hidden.
