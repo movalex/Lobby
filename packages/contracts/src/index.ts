@@ -135,7 +135,8 @@ export type AuthConfig = z.infer<typeof AuthConfig>
  */
 export const EmailLoginInput = z.object({
   email: AccountEmail,
-  name: Name,
+  /** Wave J: control, bidi and zero-width characters are removed on input (outside.ts cleanDisplayText). */
+  name: z.string().transform(cleanDisplayText).pipe(Name),
 })
 export type EmailLoginInput = z.infer<typeof EmailLoginInput>
 

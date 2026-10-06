@@ -199,6 +199,13 @@ describe('wave J outside markers under open sign-in', () => {
     expect(body.privacy).toEqual({ teamOnly: true, teamOnlyDefault: false })
   })
 
+  it('display names lose control, bidi and zero-width characters on input (J1-8)', async () => {
+    const eve = await emailLogin('eve@example.com', 'Eve‮ nimdA​')
+    expect(eve.me.user.name).toBe('Eve nimdA')
+    const invisible = await api.anon('POST', '/api/auth/email/login', { email: 'x@example.com', name: '​‮' })
+    expect(invisible.statusCode).toBe(400)
+  })
+
   it('feedback: anyone signed in sends it, nobody reads the inbox through the app (J5)', async () => {
     const dana = await emailLogin('dana@example.com', 'Dana')
     const sent = await dana.req('POST', '/api/feedback', { text: 'The stage plot is upside down' })
@@ -428,6 +435,18 @@ describe('open sign-in with Google', () => {
       expect((await g.anon('POST', '/api/auth/google/login', {})).statusCode).toBe(400)
       const noName = Me.parse((await googleLogin(g, 'good:sam@school.example:')).json())
       expect(noName.user.name).toBe('sam')
+    } finally {
+      await g.close()
+    }
+  })
+
+  it('a Google profile name is cleaned like a typed one (wave J, J1-8)', async () => {
+    const g = await withGoogle(['google'], GOOGLE_ENV)
+    try {
+      expect(Me.parse((await googleLogin(g, 'good:dana@gmail.com:Dana‮ Rivera')).json()).user.name).toBe(
+        'Dana Rivera',
+      )
+      expect(Me.parse((await googleLogin(g, 'good:sam@school.example:​')).json()).user.name).toBe('sam')
     } finally {
       await g.close()
     }

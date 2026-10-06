@@ -12,7 +12,7 @@
 // (creator-sql.ts: the open policy) and joins the one shared workspace (shared-workspace.ts) as a member.
 // Nobody gets a personal workspace.
 
-import { EmailLoginInput, GoogleLoginInput } from '@draftroom/contracts'
+import { cleanDisplayText, EmailLoginInput, GoogleLoginInput } from '@draftroom/contracts'
 import type { Queryable } from '@draftroom/db'
 import type { OpenSigninMethod } from '../config.ts'
 import { ApiError, parse } from '../errors.ts'
@@ -107,7 +107,11 @@ export function createEmailAuthProvider(opts: EmailProviderOptions): AuthProvide
           }
           const email = normalizeEmail(identity.email)
           if (!email) throw googleRefused()
-          const name = (identity.name ?? email.slice(0, email.indexOf('@'))).slice(0, 80)
+          // Wave J: the profile name without control, bidi or zero-width characters, like a typed one.
+          const name = (cleanDisplayText(identity.name ?? '') || email.slice(0, email.indexOf('@'))).slice(
+            0,
+            80,
+          )
           return ctx.signIn(req, reply, provision(ctx, email, name))
         })
     },
