@@ -40,6 +40,36 @@ describe('cleanDisplayText', () => {
     expect(cleanDisplayText(ch(0x202e, 0x200b))).toBe('')
   })
 
+  it('keeps the joiners (ZWJ, ZWNJ) that are part of emoji and non-Latin spelling; drops the rest', () => {
+    const zwj = ch(0x200d)
+    const zwnj = ch(0x200c)
+    // Emoji sequences: a person and a laptop, a skin tone, a flag with its variation selector.
+    for (const emoji of [
+      ch(0x1f469, 0x200d, 0x1f4bb),
+      ch(0x1f469, 0x1f3fd, 0x200d, 0x1f4bb),
+      ch(0x1f3f3, 0xfe0f, 0x200d, 0x1f308),
+      ch(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467),
+    ])
+      expect(cleanDisplayText(`Ana ${emoji}`)).toBe(`Ana ${emoji}`)
+    // Persian (ZWNJ inside a word) and Devanagari (ZWJ, ZWNJ after a virama).
+    const persian = ch(0x0645, 0x06cc, 0x200c, 0x062e, 0x0648, 0x0627, 0x0647, 0x0645)
+    expect(cleanDisplayText(persian)).toBe(persian)
+    const devanagari = `${ch(0x0915, 0x094d)}${zwj}${ch(0x0937)} ${ch(0x0915, 0x094d)}${zwnj}${ch(0x0937)}`
+    expect(cleanDisplayText(devanagari)).toBe(devanagari)
+    // Inside a Latin look-alike, at an end, next to a space or another invisible character: removed.
+    expect(cleanDisplayText(`Bo${zwj}b`)).toBe('Bob')
+    expect(cleanDisplayText(`Bo${zwnj}b`)).toBe('Bob')
+    expect(cleanDisplayText(`${zwj}${ch(0x1f4bb)}${zwj}`)).toBe(ch(0x1f4bb))
+    expect(cleanDisplayText(`${ch(0x1f469)} ${zwj}${ch(0x1f4bb)}`)).toBe(`${ch(0x1f469)} ${ch(0x1f4bb)}`)
+    // A bidi control between the two goes; the joiner then joins them, once.
+    expect(cleanDisplayText(`${ch(0x1f469)}${ch(0x202e)}${zwj}${ch(0x1f4bb)}`)).toBe(
+      `${ch(0x1f469)}${zwj}${ch(0x1f4bb)}`,
+    )
+    expect(cleanDisplayText(`${ch(0x1f469)}${zwj}${zwj}${ch(0x1f4bb)}`)).toBe(
+      `${ch(0x1f469)}${zwj}${ch(0x1f4bb)}`,
+    )
+  })
+
   it('applies to an access request message and to a dev sign-in name on input', () => {
     expect(CreateAccessRequestInput.parse({ message: `  lost ${ch(0x202e)}access ` })).toEqual({
       role: 'editor',

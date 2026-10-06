@@ -20,6 +20,7 @@ import {
   type AccessRequest as ApiAccessRequest,
   ApproveAccessRequestInput,
   CreateAccessRequestInput,
+  cleanDisplayText,
   type OutsideInfo,
 } from '@draftroom/contracts'
 import type { Queryable } from '@draftroom/db'
@@ -107,7 +108,8 @@ function serialize(
       avatar_url: r.u_avatar_url,
     }),
     roleRequested: r.role_requested,
-    message: r.message,
+    // Stored before messages were cleaned on input (wave J): cleaned on the way out too.
+    message: r.message === null ? null : cleanDisplayText(r.message) || null,
     status: r.status,
     createdAt: r.created_at.toISOString(),
     updatedAt: r.updated_at.toISOString(),

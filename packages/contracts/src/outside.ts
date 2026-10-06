@@ -177,26 +177,57 @@ export type InternalOnlySettings = z.infer<typeof InternalOnlySettings>
 
 // C0 and C1 controls, the bidi controls that make text read differently on screen than it is stored
 // (U+061C, U+200E/F, U+202A-E, U+2066-9), the line and paragraph separators (U+2028/9) and the
-// zero-width characters that hide inside look-alike names (U+200B-D, U+2060, U+FEFF). Listed as code
+// zero-width characters that hide inside look-alike names (U+200B, U+2060, U+FEFF). Listed as code
 // points (no escapes or literals in source) and checked one code point at a time.
 const INVISIBLE = new Set([
-  0x061c, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2060, 0x2066,
-  0x2067, 0x2068, 0x2069, 0x2028, 0x2029, 0xfeff,
+  0x061c, 0x200b, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2060, 0x2066, 0x2067, 0x2068,
+  0x2069, 0x2028, 0x2029, 0xfeff,
 ])
+/** ZWNJ and ZWJ (U+200C, U+200D): kept only where they join two characters of a non-Latin text. */
+const JOINERS = new Set([0x200c, 0x200d])
+const WHITESPACE = /\s/u
+
+const isControl = (cp: number) => cp < 0x20 || (cp >= 0x7f && cp <= 0x9f)
+
+/**
+ * Whether a joiner next to this character can do something: an emoji sequence (a person and a laptop,
+ * a skin tone, a flag's variation selector) or a script that uses joiners in its spelling (Persian,
+ * Arabic, the Indic scripts). Never next to ASCII (inside a Latin look-alike, "Bo" + ZWJ + "b", it only
+ * hides), whitespace, a control or another invisible character.
+ */
+const joinable = (ch: string | undefined): boolean => {
+  if (ch === undefined) return false
+  const cp = ch.codePointAt(0) ?? 0
+  return cp > 0x9f && !INVISIBLE.has(cp) && !JOINERS.has(cp) && !WHITESPACE.test(ch)
+}
 
 /**
  * Text a person typed for others to read (a display name, an access request's message): every
  * control, bidi and zero-width character removed (tabs and line breaks become one space), runs of
- * spaces folded and the ends trimmed. Ordinary non-ASCII text (accents, right-to-left scripts, emoji)
- * stays.
+ * spaces folded and the ends trimmed. Ordinary non-ASCII text stays: accents, right-to-left scripts,
+ * and the joiners (ZWJ, ZWNJ) that sit between two such characters, so emoji sequences and Persian or
+ * Indic spelling are unchanged; a joiner anywhere else (next to ASCII, a space or an end) is removed.
  */
 export function cleanDisplayText(raw: string): string {
+  const chars = [...raw]
   let out = ''
-  for (const ch of raw) {
+  let last: string | undefined
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i] as string
     const cp = ch.codePointAt(0) ?? 0
-    if (cp === 0x09 || cp === 0x0a || cp === 0x0d) out += ' '
-    else if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f) || INVISIBLE.has(cp)) continue
-    else out += ch
+    if (cp === 0x09 || cp === 0x0a || cp === 0x0d) {
+      out += ' '
+      last = ' '
+    } else if (JOINERS.has(cp)) {
+      if (joinable(last) && joinable(chars[i + 1])) {
+        out += ch
+        last = ch
+      }
+    } else if (isControl(cp) || INVISIBLE.has(cp)) continue
+    else {
+      out += ch
+      last = ch
+    }
   }
   return out.replace(/ {2,}/g, ' ').trim()
 }

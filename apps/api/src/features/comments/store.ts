@@ -14,6 +14,7 @@ import {
   type CommentThreadStatus,
   type CommentThreadVisibility,
   type CommentUserRef,
+  cleanDisplayText,
   type ThreadComment,
 } from '@draftroom/contracts'
 import type { Queryable } from '@draftroom/db'
@@ -120,7 +121,8 @@ async function userRefs(
   for (const r of rows.rows)
     out.set(r.id, {
       id: r.id,
-      name: r.name,
+      // Without control, bidi or zero-width characters (names stored before wave J cleaned them).
+      name: cleanDisplayText(r.name) || 'Someone',
       color: r.color,
       ...(r.external === null ? {} : { external: r.external === true }),
     })

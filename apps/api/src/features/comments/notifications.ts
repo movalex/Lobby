@@ -9,9 +9,12 @@
 // Wave J: a team-only thread's items are shown only to someone on the team, which now needs a confirmed
 // creator (store.ts onTeam; the caller's status comes in as `creator`). 'outsider_joined' (an account
 // outside Dark Burn / TPG opened one of the recipient's boards for the first time) is listed only while
-// the recipient may manage access there, with the outsider's email domain.
+// the recipient may manage access there, with the outsider's email domain. The actor's name and an
+// access request's message are shown without control, bidi or zero-width characters (stored before
+// they were cleaned on input; the owner decides on an access request from the bell).
 
 import {
+  cleanDisplayText,
   commentPlainText,
   knowsRev1,
   knowsRev2,
@@ -310,7 +313,7 @@ function toItem(r: NotificationRow): NotificationItem {
       r.actor_id && r.actor_name !== null
         ? {
             id: r.actor_id,
-            name: r.actor_name,
+            name: cleanDisplayText(r.actor_name) || 'Someone',
             color: r.actor_color ?? '#888888',
             // the outsider of an outsider_joined notice is outside by construction (wave J)
             ...(r.kind === 'outsider_joined' ? { external: true } : {}),
@@ -319,7 +322,11 @@ function toItem(r: NotificationRow): NotificationItem {
     snippet: snippetOf(r.comment_body),
     accessRequest:
       r.kind === 'access_request' && r.request_role && r.request_status
-        ? { role: r.request_role, message: r.request_message, status: r.request_status }
+        ? {
+            role: r.request_role,
+            message: r.request_message === null ? null : cleanDisplayText(r.request_message) || null,
+            status: r.request_status,
+          }
         : null,
     accessGranted: r.kind === 'access_granted' && r.granted_role ? { role: r.granted_role } : null,
     ...(r.kind === 'outsider_joined' ? { outsiderJoined: { emailDomain: r.actor_domain } } : {}),
