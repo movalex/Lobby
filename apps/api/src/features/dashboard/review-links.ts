@@ -72,11 +72,14 @@ const LINK_COLUMNS =
 
 const RANK: Record<string, number> = { viewer: 1, commenter: 2, editor: 3, owner: 4 }
 const higher = (a: string | null, b: string | null) => ((RANK[b ?? ''] ?? 0) > (RANK[a ?? ''] ?? 0) ? b : a)
+const lower = (a: string, b: string) => ((RANK[b] ?? 0) < (RANK[a] ?? 0) ? b : a)
 
 interface JoinedRow {
   user_id: string
   grant: ReviewLinkRole | 'owner'
   previous_role: ReviewLinkRole | null
+  /** A name-only guest (users.kind 'guest', wave 3): their grants on a board come only from its links. */
+  guest: boolean
   /** The grant was created by a multi-use link of this board (any) and still has that link's role. */
   created_by_link: boolean
   /** Other open multi-use links of this board the person joined through. */
@@ -85,17 +88,24 @@ interface JoinedRow {
 
 /**
  * Ends the access that multi-use links gave the people who joined through `link`:
- * - a grant a link CREATED (still at that link's role) is removed;
+ * - a grant a link CREATED (still at that link's role) is removed. A grant a link created that a later
+ *   link raised counts as created by a link too (redeemInvitation stamps the raise so: J2 / MISS-1), so
+ *   it ends when the last of those links ends instead of staying for good;
  * - a grant a workshop (edit) link RAISED goes back to the role it had before (0006 previous_role),
  *   so a viewer who joined a workshop is a viewer again afterwards. (A review link's raise stays, as
  *   before: those links never go above comment.)
- * Another open link the person joined through keeps them at that link's role instead. Grants that
- * changed since (the owner gave another role) are left alone. Returns the affected user ids. Call
- * inside the transaction that marks the link swept, with the board row locked.
+ * Another open link the person joined through keeps them at that link's role instead. Grants of people
+ * with an account that changed since (the owner gave another role) are left alone.
+ * A name-only guest (J2 / INV-2) is different: a guest reaches a board only through its guest links
+ * (guard.ts), so whatever role their grant has now (an owner may have lowered or raised it), it lasts
+ * only while one of their links on this board is open: it is lowered to the best open link's role (never
+ * raised back above what an owner left), or removed when none is left, and the guest sweep then signs
+ * out a guest left with no grant at all. Returns the affected user ids. Call inside the transaction that
+ * marks the link swept, with the board row locked.
  */
 export async function removeReviewLinkGrants(tx: Queryable, link: LinkRow, at: Date): Promise<string[]> {
   const rows = await tx.query<JoinedRow>(
-    `SELECT r.user_id, bm.role AS grant, r.previous_role,
+    `SELECT r.user_id, bm.role AS grant, r.previous_role, u.kind = 'guest' AS guest,
             EXISTS (
               SELECT 1 FROM invitation_redemptions r3 JOIN invitations i3 ON i3.id = r3.invitation_id
                WHERE r3.board_id = r.board_id AND r3.user_id = r.user_id AND i3.multi_use
@@ -107,19 +117,28 @@ export async function removeReviewLinkGrants(tx: Queryable, link: LinkRow, at: D
             ) AS others
        FROM invitation_redemptions r
        JOIN board_members bm ON bm.board_id = r.board_id AND bm.user_id = r.user_id
+       JOIN users u ON u.id = r.user_id
       WHERE r.invitation_id = $1 AND r.board_id = $2`,
     [link.id, link.board_id, at],
   )
   const affected: string[] = []
   for (const row of rows.rows) {
-    if (row.grant !== link.role) continue // changed since: an explicit decision the link must not undo
-    const raised = !row.created_by_link && link.role === 'editor' && row.previous_role !== null
-    if (!row.created_by_link && !raised) continue // the grant predates the link
-    const fallback = row.created_by_link ? null : row.previous_role
     let keeper: { id: string; role: ReviewLinkRole } | null = null
     for (const o of row.others ?? [])
       if (!keeper || (RANK[o.role] ?? 0) > (RANK[keeper.role] ?? 0)) keeper = o
-    const target = higher(fallback, keeper?.role ?? null)
+    let fallback: string | null = null
+    let target: string | null
+    if (row.guest) {
+      // Only another open link keeps a guest in; what they had before this link (previous_role) came
+      // from a link too, and that one counts only while it is open (it is then `keeper`).
+      target = keeper ? lower(row.grant, keeper.role) : null
+    } else {
+      if (row.grant !== link.role) continue // changed since: an explicit decision the link must not undo
+      const raised = !row.created_by_link && link.role === 'editor' && row.previous_role !== null
+      if (!row.created_by_link && !raised) continue // the grant predates the link
+      fallback = row.created_by_link ? null : row.previous_role
+      target = higher(fallback, keeper?.role ?? null)
+    }
     if (target === row.grant) continue // another open link keeps this role
     if (target === null) {
       await tx.query('DELETE FROM board_members WHERE board_id = $1 AND user_id = $2', [
