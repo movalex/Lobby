@@ -36,10 +36,15 @@
 // someone who may not see it.
 //
 // The conversion itself runs in a worker thread (./convert-v1.ts, J4 CONV-1), never on the api's event loop:
-// whatever the bounds above let through, a body that takes the worker longer than
-// `previewSettings.workerTimeoutMs` (or more heap than `workerHeapMb`) is stopped there and answers "too large
-// to preview" like the others (and is remembered, so it is not started again). When every worker place and
-// the short queue behind them are taken the answer is 503 PREVIEW_BUSY (nothing is remembered for it).
+// whatever the bounds above let through, a body that needs more heap than the worker may have (it gets 48 MB
+// plus 64 MB per MiB of the body; `workerHeapMb` is only the ceiling, which the bounds never reach) or takes it
+// longer than `previewSettings.workerTimeoutMs` is stopped there and answers "too large to preview" like the
+// others. A refusal for size or heap is remembered, so it is not started again; one for TIME is not (a body
+// inside the bounds takes well under a second here, so a slow answer is a loaded or slow machine, and it may
+// preview when asked again). When every worker place and the short queue behind them are taken the answer is
+// 503 PREVIEW_BUSY (nothing is remembered for it). A conversion the worker could not make at all (it failed or
+// its thread died) answers with the records, as for a body the converter cannot read, and is logged
+// (`checkpoint.preview.worker_failed`: the reason and codes, never board content).
 
 import { ELEMENT_SCHEMA_VERSION } from '@draftroom/canvas-schema/protocol'
 import { type CheckpointContent, SNAPSHOT_ID_PATTERN } from '@draftroom/contracts'
@@ -81,9 +86,12 @@ export type V1Preview =
       /** the conversion itself, in the worker (not its start-up) */
       ms: number
     }
-  /** the converter cannot read the records (a schema newer than it, a record it refuses): the records answer */
-  | { kind: 'unreadable' }
-  /** past a limit of the worker (time, heap, size): "too large to preview", remembered */
+  /**
+   * the converter cannot read the records (a schema newer than it, a record it refuses), or the worker failed
+   * (`reason`; the codes are the migration's or the converter's, or the worker's error NAME): the records answer
+   */
+  | { kind: 'unreadable'; reason: 'unreadable' | 'failed'; detail?: string; cause?: string }
+  /** past a limit of the worker (time, heap, size): "too large to preview", remembered unless it was the time */
   | { kind: 'too-costly'; why: ConvertV1Refusal }
   /** every worker place and the queue are taken: 503, nothing remembered */
   | { kind: 'busy' }
@@ -102,7 +110,8 @@ export async function convertV1ForPreview(
     {
       maxRecords: previewSettings.maxRecords,
       // the stored body is bounded already (maxBodyBytes); its JSON here holds the records and the schema only
-      maxBytes: previewSettings.maxBodyBytes + 1024 * 1024,
+      // (the slack is for the schema), and the worker's heap for the most this lets through is under its ceiling
+      maxBytes: previewSettings.maxBodyBytes + 64 * 1024,
       maxResultBytes: previewSettings.maxResultBytes,
       timeoutMs: previewSettings.workerTimeoutMs,
       maxHeapMb: previewSettings.workerHeapMb,
@@ -111,7 +120,13 @@ export async function convertV1ForPreview(
   )
   if (!out.ok) {
     if (out.reason === 'busy') return { kind: 'busy' }
-    if (out.reason === 'unreadable' || out.reason === 'failed') return { kind: 'unreadable' }
+    if (out.reason === 'unreadable' || out.reason === 'failed')
+      return {
+        kind: 'unreadable',
+        reason: out.reason,
+        ...(out.detail ? { detail: out.detail } : {}),
+        ...(out.cause ? { cause: out.cause } : {}),
+      }
     return { kind: 'too-costly', why: out.reason }
   }
   const { doc: made } = out.converted
@@ -192,16 +207,27 @@ export const previewSettings = {
   maxBodyBytes: 2.5 * 1024 * 1024,
   maxTextChars: 35_000,
   /**
-   * The worker's limits (J4): wall clock from its start, which includes about 0.25 s of loading the converter,
-   * so a body inside the bounds above (under 0.5 s of work) has ten times its time; its heap (the heaviest
-   * board measured, 4,922 records, peaked at 65 MB, and the preview bounds are a fifth of that); the size of its
-   * answer (about 1.9 times the stored body, 5 MiB at most).
+   * The worker's limits (J4). Wall clock from its start, which includes about 0.25 s of loading the converter:
+   * a body inside the bounds above takes under 0.5 s of work (the heaviest, 2.4 MiB of strokes, 0.9 s with the
+   * start) on a 64-core desktop, and the hosted api is a fraction of one core, so it is 8 s (nobody measured the
+   * plan: `checkpoint.preview.slow` and the refusals that are not remembered show whether it is short).
+   * The heap CEILING: a worker gets 48 MB plus 64 MB per MiB of the body (`workerHeapMb`), and what a stroke
+   * board needs is 32 MB plus 48 MB per MiB (measured: 1.5 MiB 96 MB, 2.4 MiB 144 MB), so a body at the size
+   * bound (2.5 MiB) needs about 155 MB of the 212 it is given, and nothing inside the bounds reaches the
+   * ceiling (a body must be over 3.25 MiB to). The first version of this setting capped the heap at 128 MB on
+   * the belief that the record and byte bounds kept it under that, which strokes disprove: they cost heap by
+   * their points, and 2.4 MiB of them (302 records, inside every bound) did not fit. The size of its answer
+   * (about 1.9 times the stored body, 5 MiB at most).
    */
-  workerTimeoutMs: 5_000,
-  workerHeapMb: 128,
+  workerTimeoutMs: 8_000,
+  workerHeapMb: 256,
   maxResultBytes: 16 * 1024 * 1024,
-  /** conversions at once, and how many may wait for a place (for at most `queueWaitMs`); past it: 503 */
-  maxConcurrent: 2,
+  /**
+   * Conversions at once, and how many may wait for a place (for at most `queueWaitMs`); past it: 503. One at a
+   * time: a worker may hold 150 MB or more, and the api runs on a 512 MB plan; the others wait their turn (a
+   * preview is a second or so).
+   */
+  maxConcurrent: 1,
   maxQueue: 8,
   queueWaitMs: 5_000,
   cacheEntries: 8,
@@ -355,8 +381,8 @@ export function registerCheckpointRoutes(
 
   /**
    * "Too large to preview": the v1 shape with nothing in it (no format, no records, no schema), which the
-   * web shows as "can't be previewed here yet; restoring it as a new board still works". Remembered, so
-   * the next request does not even read the body. Counts only reach the log.
+   * web shows as "can't be previewed here yet; restoring it as a new board still works". Remembered (except
+   * after a time-out), so the next request does not even read the body. Counts only reach the log.
    */
   function tooLargeToPreview(
     req: FastifyRequest,
@@ -364,7 +390,8 @@ export function registerCheckpointRoutes(
     row: SnapshotRow,
     size: { records: number; bytes: number; textChars?: number; why?: ConvertV1Refusal },
   ): CheckpointContent {
-    previews.set(row.id, row.storage_key, 1, { kind: 'too-large' })
+    // a refusal for TIME is not remembered (a loaded machine, not the body: it may preview when asked again)
+    if (size.why !== 'time') previews.set(row.id, row.storage_key, 1, { kind: 'too-large' })
     req.log.info(
       {
         evt: 'checkpoint.preview.too_large',
@@ -440,14 +467,29 @@ export function registerCheckpointRoutes(
       // a concurrent request may have converted it while this one read the body
       const known = previews.get(row.id, row.storage_key)
       if (known) return v1Answer(snapshot, known)
-      let converted: V1Preview = { kind: 'unreadable' }
+      let converted: V1Preview
       try {
         converted = await convertV1ForPreview(body, ctx.now().getTime(), convertGate)
       } catch (e) {
-        req.log.warn({ err: { name: (e as Error)?.name } }, 'v1 checkpoint preview not converted')
+        // the error's NAME only (its message could quote the board); logged below like any failed conversion
+        converted = { kind: 'unreadable', reason: 'failed', cause: String((e as Error)?.name ?? 'Error') }
       }
       if (converted.kind === 'busy')
         throw new ApiError(503, 'PREVIEW_BUSY', 'Previews are busy right now. Try again in a moment.')
+      // codes and counts only: a systematic worker failure (the worker file not loading, a thread that dies)
+      // would otherwise degrade every v1 preview to the records without a trace
+      if (converted.kind === 'unreadable')
+        req.log.warn(
+          {
+            evt: 'checkpoint.preview.worker_failed',
+            reason: converted.reason,
+            ...(converted.detail ? { detail: converted.detail } : {}),
+            ...(converted.cause ? { cause: converted.cause } : {}),
+            records: size.records,
+            bytes: size.bytes,
+          },
+          'v1 checkpoint preview not converted',
+        )
       if (converted.kind === 'too-costly')
         return tooLargeToPreview(req, snapshot, row, { ...size, textChars, why: converted.why })
       if (converted.kind === 'converted' && converted.ms > previewSettings.slowMs)

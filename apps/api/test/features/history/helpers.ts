@@ -3,6 +3,7 @@
 
 import type { AssetVersionMeta } from '@draftroom/dev-assets'
 import { draftroomSchema } from '@draftroom/tldraw-import/schema'
+import { b64Vecs } from '@draftroom/tldraw-import/tldraw'
 import type { EventHub } from '../../../src/events/hub.ts'
 import { type RoomSnapshotJson, SyncSeedConflict, SyncUnavailable } from '../../../src/sync-internal.ts'
 import type { Client, TestApi } from '../../helpers.ts'
@@ -134,6 +135,66 @@ export function noteRec(id: string, text: string, index = 'a1'): Rec {
       textLastEditedBy: null,
     },
   }
+}
+
+const B62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
+/** The n-th fractional index key in order (a0..az, b00..bzz, c000...): valid tldraw IndexKeys. */
+function nthIndex(n: number): string {
+  let head = 'a'
+  let width = 1
+  let span = 62
+  let k = n
+  while (k >= span) {
+    k -= span
+    head = String.fromCharCode(head.charCodeAt(0) + 1)
+    width++
+    span = 62 ** width
+  }
+  let out = ''
+  for (let i = 0; i < width; i++) {
+    out = (B62[k % 62] as string) + out
+    k = Math.floor(k / 62)
+  }
+  return head + out
+}
+
+/**
+ * `n` freehand strokes of `points` points each (a deterministic random walk: the path does not compress), the
+ * records of a stroke-heavy board. What converting them HOLDS grows with the points, about 48 MB of heap for
+ * every MiB of body (a fifth of that for the same bytes of notes), which the record and byte bounds of a preview
+ * do not see: 300 strokes of 1,500 points are 302 records and 2.4 MiB.
+ */
+export function strokeRecords(n: number, points: number): Rec[] {
+  let seed = 7
+  const rnd = () => {
+    seed = (seed * 1664525 + 1013904223) >>> 0
+    return seed / 2 ** 32
+  }
+  return Array.from({ length: n }, (_, i) => {
+    let x = 0
+    let y = 0
+    const path = Array.from({ length: points }, () => {
+      x += rnd() * 6 - 3
+      y += rnd() * 6 - 3
+      return { x, y, z: 0.5 }
+    })
+    return {
+      ...shapeBase(`s${i}`, 'draw', nthIndex(i + 1), (i % 30) * 400, Math.floor(i / 30) * 400),
+      props: {
+        color: 'violet',
+        fill: 'none',
+        dash: 'draw',
+        size: 'm',
+        segments: [{ type: 'free', path: b64Vecs.encodePoints(path, 2), dim: 2 }],
+        isComplete: true,
+        isClosed: false,
+        isPen: false,
+        scale: 1,
+        scaleX: 1,
+        scaleY: 1,
+      },
+    }
+  })
 }
 
 export function imageAssetRec(id: string, assetId: string, versionId: string): Rec {
