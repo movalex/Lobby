@@ -39,6 +39,7 @@ import { isObject } from '../../canvas/lobby-elements.ts'
 import { onNewCanvas } from '../../canvas-engine.ts'
 import { SyncNewCanvasBoard } from '../../sync-internal.ts'
 import type { FeatureContext } from '../context.ts'
+import { boardCheckpointBytes, checkpointByteCaps } from './checkpoint-caps.ts'
 import { planRetention, type RetentionPolicy, SAFETY_REASONS } from './retention.ts'
 import {
   checkpointBodyOf,
@@ -376,6 +377,17 @@ export function createCheckpointService(
       await prune(boardId)
       if ((await count()) >= limit) {
         log.warn(`board ${boardId} has ${limit} automatic checkpoints; not saving a ${reason} one`)
+        return { status: 'skipped', why: 'limit' }
+      }
+    }
+    // J4 CKPT-FLOOD: and a board's checkpoints (manual and automatic) may not take more than
+    // checkpointByteCaps.totalBytesPerBoard (checkpoint-caps.ts); retention first, then skipped like the count cap.
+    const overBytes = async () =>
+      (await boardCheckpointBytes(db, boardId)).total + made.sizeBytes > checkpointByteCaps.totalBytesPerBoard
+    if (await overBytes()) {
+      await prune(boardId)
+      if (await overBytes()) {
+        log.warn(`board ${boardId} has reached its checkpoint size limit; not saving a ${reason} one`)
         return { status: 'skipped', why: 'limit' }
       }
     }

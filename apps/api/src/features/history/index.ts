@@ -35,6 +35,7 @@ import { DELETED_GUESTS, guestRefused } from '../guests/guard.ts'
 import { exportLobbyArchive, importLobbyArchive, isLobbyArchive } from './archive-v2.ts'
 import { ArchiveError, exportBoardArchive, importBoardArchive, type SerializedSchema } from './board-ops.ts'
 import { registerCheckpointAllRoutes } from './checkpoint-all.ts'
+import { CHECKPOINT_CAP_MESSAGES, manualCheckpointRefusal } from './checkpoint-caps.ts'
 import { registerCheckpointRoutes } from './checkpoint-routes.ts'
 import {
   type CheckpointService,
@@ -63,7 +64,10 @@ import {
 import { snapshotBodies, snapshotStorageKey } from './snapshot-store.ts'
 import { createDeletedApi } from './sync-deleted.ts'
 
-/** Manual checkpoints kept per board (automatic ones are bounded by retention instead). */
+/**
+ * Manual checkpoints kept per board (automatic ones are bounded by retention instead). Their bytes are capped
+ * too: checkpoint-caps.ts (a per-board and a per-workspace cap, 409 SNAPSHOT_BYTES_LIMIT).
+ */
 export const MAX_SNAPSHOTS_PER_BOARD = MAX_MANUAL_CHECKPOINTS
 /** Every manual checkpoint (≤ 500) and every automatic one retention keeps (well under 1,000). */
 const MAX_LISTED = 1_500
@@ -150,6 +154,12 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     )
     if (n >= MAX_SNAPSHOTS_PER_BOARD)
       throw conflict('SNAPSHOT_LIMIT', `A board keeps at most ${MAX_SNAPSHOTS_PER_BOARD} checkpoints.`)
+    // J4 CKPT-FLOOD: bytes are capped as well as counts (checkpoint-caps.ts). Asked once before the board is
+    // read from the sync server (a board already at a cap costs it nothing), and again, exactly, below.
+    const capIds = { boardId: bid, workspaceId }
+    const quota = ctx.config.uploads.workspaceQuotaBytes
+    const full = await manualCheckpointRefusal(db, capIds, 0, quota)
+    if (full) throw conflict('SNAPSHOT_BYTES_LIMIT', CHECKPOINT_CAP_MESSAGES[full])
 
     const snap = await viaSync(() => ctx.sync.snapshot(bid))
     const made = checkpointBodyOf(bid, snap)
@@ -158,24 +168,33 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     await bodies.write(key, made.json)
     let row: SnapshotRow
     try {
-      const inserted = await db.one<{ id: string }>(
-        `INSERT INTO board_snapshots (id, workspace_id, board_id, name, kind, created_by, created_at, document_clock, record_count, size_bytes, storage_key, content_hash, body_version)
+      const inserted = await db.transaction(async (tx) => {
+        // One workspace's saves one after the other from here to the insert, so that two at once cannot both
+        // take the last of the room (an advisory lock: no row of its own to lock, and no other lock is held)
+        await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `checkpoint-bytes:${workspaceId}`,
+        ])
+        const refusal = await manualCheckpointRefusal(tx, capIds, made.sizeBytes, quota)
+        if (refusal) throw conflict('SNAPSHOT_BYTES_LIMIT', CHECKPOINT_CAP_MESSAGES[refusal])
+        return tx.one<{ id: string }>(
+          `INSERT INTO board_snapshots (id, workspace_id, board_id, name, kind, created_by, created_at, document_clock, record_count, size_bytes, storage_key, content_hash, body_version)
          VALUES ($1, $2, $3, $4, 'manual', $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
-        [
-          id,
-          workspaceId,
-          bid,
-          input.name,
-          user.id,
-          ctx.now(),
-          made.documentClock,
-          made.recordCount,
-          made.sizeBytes,
-          key,
-          made.contentHash,
-          made.body.version, // R0's contract: 2 for a body made on the new canvas
-        ],
-      )
+          [
+            id,
+            workspaceId,
+            bid,
+            input.name,
+            user.id,
+            ctx.now(),
+            made.documentClock,
+            made.recordCount,
+            made.sizeBytes,
+            key,
+            made.contentHash,
+            made.body.version, // R0's contract: 2 for a body made on the new canvas
+          ],
+        )
+      })
       row = await db.one<SnapshotRow>(`SELECT ${SNAPSHOT_COLUMNS} FROM ${SNAPSHOT_FROM} WHERE s.id = $1`, [
         inserted.id,
       ])

@@ -13,11 +13,16 @@
 // canvas never asks for them anyway (a guest's links must be Lobby-relative). The guests feature's root
 // guard (features/guests/guard.ts GUEST_REFUSED_ROUTES) refuses them first; this route checks again, so a
 // renamed route cannot slip past that list. Limits: 30 fresh fetches a minute per person (answers from
-// the cache are free), 6 fetches at once for the whole api, results cached for an hour (10 minutes when
-// nothing could be read). A refused or unreachable page answers like a page with no title (all null),
-// so the answer says nothing about the api's own network. Nothing here logs a URL (a link can be
-// private content).
-import { lookup as dnsLookup } from 'node:dns/promises'
+// the cache are free), 6 fetches at once for the whole api and at most 24 more waiting (a caller waits at
+// most 8 s; past either it is refused 503 LINK_PREVIEW_BUSY, not queued without end), results cached for an
+// hour (10 minutes when nothing could be read). A refused or unreachable page answers like a page with no
+// title (all null), so the answer says nothing about the api's own network. Nothing here logs a URL (a link
+// can be private content).
+//
+// What bounds the work one hostile page or name server can cause (J4, LP-REDOS and LP-DNS-1): the head is
+// read by a linear scan of a bounded prefix (parse.ts), a DNS lookup has its own time limit and does not
+// use libuv's thread pool (dns.ts, ssrf.ts), the body is read into one buffer (fetch.ts), and the slots
+// and their queue are bounded (gate.ts).
 import {
   LINK_PREVIEW_ICON_MAX_BYTES,
   LINK_PREVIEW_ROUTE,
@@ -32,12 +37,18 @@ import { ApiError, parse } from '../../errors.ts'
 import { keyedLimit } from '../../rate-limit.ts'
 import type { FeatureContext } from '../context.ts'
 import { guestRefused, LINK_PREVIEW_GUESTS } from '../guests/guard.ts'
+import { makeSystemLookup } from './dns.ts'
 import { type FetchDeps, FetchRefused, guardedFetch } from './fetch.ts'
+import { Gate, GateFull } from './gate.ts'
 import { decodeHtml, iconCandidates, iconType, parseHead } from './parse.ts'
-import { checkUrl, type Lookup, type Policy } from './ssrf.ts'
+import { checkUrl, LOOKUP_TIMEOUT_MS, type Lookup, type Policy } from './ssrf.ts'
 
 export { LINK_PREVIEW_ROUTE }
 
+/**
+ * Read when the route is registered (and by readPreview at each call): a plain object, like the history
+ * feature's `checkpointSettings`, so tests can lower it before they build an app.
+ */
 export const LINK_PREVIEW_LIMITS = {
   pageTimeoutMs: 5_000,
   iconTimeoutMs: 3_000,
@@ -47,24 +58,26 @@ export const LINK_PREVIEW_LIMITS = {
   maxRedirects: 4,
   perUserPerMinute: 30,
   concurrent: 6,
+  /** fetches that may wait for one of the `concurrent` places (past it: 503 LINK_PREVIEW_BUSY) */
+  maxQueue: 24,
+  /** the longest a request waits for a place */
+  queueWaitMs: 8_000,
   cacheEntries: 1_000,
   cacheMs: 60 * 60_000,
   emptyCacheMs: 10 * 60_000,
-} as const
+  /** the longest one DNS lookup is waited for (ssrf.ts vetAddress); also bounded by the fetch's own time */
+  lookupTimeoutMs: LOOKUP_TIMEOUT_MS,
+}
 
 const EMPTY: LinkPreview = { title: null, siteName: null, icon: null }
 const invalidLink = () => new ApiError(400, 'INVALID_LINK', 'That link can’t be shown as a card.')
+const busy = () =>
+  new ApiError(503, 'LINK_PREVIEW_BUSY', 'Link cards are busy right now. Try again in a moment.')
 
 export interface LinkPreviewDeps {
   readonly lookup?: Lookup
   readonly request?: FetchDeps['request']
 }
-
-const systemLookup: Lookup = async (host) =>
-  (await dnsLookup(host, { all: true, verbatim: true })).map((a) => ({
-    address: a.address,
-    family: a.family,
-  }))
 
 /** A bounded map with time-limited entries (least recently used first out). */
 class TtlCache<V> {
@@ -143,7 +156,12 @@ export async function registerLinkPreview(
   // the e2e fixture origins (config.ts DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS, behind the local-dev guard)
   const seam = ctx.config.devAuth && !ctx.config.production ? ctx.config.linkPreviewTestOrigins : []
   const policy: Policy = { allowOrigins: new Set(seam) }
-  const fetchDeps: FetchDeps = { policy, lookup: deps.lookup ?? systemLookup, request: deps.request }
+  const fetchDeps: FetchDeps = {
+    policy,
+    lookup: deps.lookup ?? makeSystemLookup(),
+    request: deps.request,
+    lookupTimeoutMs: L.lookupTimeoutMs,
+  }
   const perUser = keyedLimit(
     { max: L.perUserPerMinute, timeWindow: 60_000 },
     ctx.now,
@@ -151,20 +169,7 @@ export async function registerLinkPreview(
   )
   const cache = new TtlCache<LinkPreview>(L.cacheEntries)
   const inFlight = new Map<string, Promise<LinkPreview>>()
-  let running = 0
-  const waiting: (() => void)[] = []
-  const slot = async () => {
-    if (running < L.concurrent) {
-      running++
-      return
-    }
-    await new Promise<void>((resolve) => waiting.push(resolve))
-    running++
-  }
-  const release = () => {
-    running--
-    waiting.shift()?.()
-  }
+  const gate = new Gate({ concurrent: L.concurrent, maxQueue: L.maxQueue, maxWaitMs: L.queueWaitMs })
 
   app.post(LINK_PREVIEW_ROUTE, { bodyLimit: 4096 }, async (req): Promise<LinkPreview> => {
     const user = await ctx.requireUser(req)
@@ -183,14 +188,12 @@ export async function registerLinkPreview(
     let pending = inFlight.get(key)
     if (!pending) {
       perUser.take(user.id)
-      pending = (async () => {
-        await slot()
-        try {
-          return await readPreview(fetchDeps, key)
-        } finally {
-          release()
-        }
-      })()
+      pending = gate
+        .run(() => readPreview(fetchDeps, key))
+        .catch((e: unknown) => {
+          // no place within the queue's bounds: refused, and nothing is cached for it
+          throw e instanceof GateFull ? busy() : e
+        })
       inFlight.set(key, pending)
       void pending
         .then((value) => {

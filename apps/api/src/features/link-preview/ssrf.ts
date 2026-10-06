@@ -136,20 +136,41 @@ export interface LookupAddress {
   readonly address: string
   readonly family: number
 }
-export type Lookup = (host: string) => Promise<readonly LookupAddress[]>
+/** A lookup the caller may abandon: `signal` aborts when the answer is no longer wanted (the time ran out). */
+export type Lookup = (host: string, signal?: AbortSignal) => Promise<readonly LookupAddress[]>
+
+/** The longest one DNS lookup is waited for (a name server that never answers must not hold a fetch slot). */
+export const LOOKUP_TIMEOUT_MS = 3_000
 
 /**
- * The one address the api connects to for `target`, or `blocked` when the host does not resolve or any
- * of its addresses is not public (a name that also points inside is refused as a whole).
+ * The one address the api connects to for `target`, or `blocked` when the host does not resolve (or not within
+ * `timeoutMs`: the same answer as a host that does not exist) or any of its addresses is not public (a name
+ * that also points inside is refused as a whole).
  */
-export async function vetAddress(target: Target, lookup: Lookup): Promise<LookupAddress | 'blocked'> {
+export async function vetAddress(
+  target: Target,
+  lookup: Lookup,
+  timeoutMs: number = LOOKUP_TIMEOUT_MS,
+): Promise<LookupAddress | 'blocked'> {
   const literal = isIP(target.host)
   if (literal) return { address: target.host, family: literal }
   let found: readonly LookupAddress[]
+  const ctl = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    found = await lookup(target.host)
+    found = await Promise.race([
+      lookup(target.host, ctl.signal),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          ctl.abort()
+          reject(new Error('lookup timed out'))
+        }, timeoutMs)
+      }),
+    ])
   } catch {
     return 'blocked'
+  } finally {
+    clearTimeout(timer)
   }
   if (!found.length) return 'blocked'
   if (!target.seam && found.some((a) => !isPublicAddress(a.address))) return 'blocked'

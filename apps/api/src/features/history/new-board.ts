@@ -60,6 +60,30 @@ const SEED_ATTEMPTS = 4
 export const syncUnavailable = () =>
   new ApiError(503, 'SYNC_UNAVAILABLE', 'The board server is not reachable right now. Try again in a moment.')
 
+/**
+ * The sync server's seed refused the CONTENT (J4: it converts a v1 body in a worker with limits, and answers 413
+ * past its record, byte, answer or heap limits and 422 past its time budget), as opposed to being unreachable:
+ * the person is told why, instead of "the board server is not reachable, try again" for a board that will never
+ * convert. The api's sync client reports every failed seed as a SyncUnavailable whose message ends in the status
+ * ("seed failed with 413"; `status` is read first, for a client that sets it). Null for anything else.
+ */
+export function seedRefusal(e: SyncUnavailable): ApiError | null {
+  const status = e.status ?? Number(/^seed failed with (\d{3})$/.exec(e.message)?.[1])
+  if (status === 413)
+    return new ApiError(
+      413,
+      'IMPORT_TOO_LARGE',
+      'This board is too large or complex to convert for the new canvas, so it can’t be imported or restored as a new board.',
+    )
+  if (status === 422)
+    return new ApiError(
+      422,
+      'IMPORT_TOO_COMPLEX',
+      'This board takes too long to convert for the new canvas, so it can’t be imported or restored as a new board.',
+    )
+  return null
+}
+
 /** Bridge release R0: the board was made on the new canvas (409; the message says when it works again). */
 export const newCanvasBoard = () => new ApiError(409, NEW_CANVAS_ERROR, NEW_CANVAS_BOARD_MESSAGE)
 
@@ -126,7 +150,7 @@ export async function createBoardFrom(
       boardId = id
     } catch (e) {
       if (e instanceof SyncSeedConflict) continue // that id already has canvas data: draw another
-      if (e instanceof SyncUnavailable) throw syncUnavailable()
+      if (e instanceof SyncUnavailable) throw seedRefusal(e) ?? syncUnavailable()
       throw e
     }
   }
