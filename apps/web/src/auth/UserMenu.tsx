@@ -1,7 +1,9 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import { FeedbackMenuEntries } from '../features/feedback/FeedbackMenu.tsx'
 import { useIsGuest } from '../invite/guest.tsx'
 import '../invite/invite.css'
 import { initialsFor, safeColor } from '../lib/identity.ts'
+import { matchRoute } from '../lib/routing.ts'
 import { ThemePicker } from '../theme/ThemePicker.tsx'
 import { type SignOutOptions, useMe, useSession } from './session.tsx'
 
@@ -122,6 +124,10 @@ export function UserMenu({ compact = false }: { compact?: boolean }) {
             </p>
           )}
           <ThemePicker />
+          {/* Wave J5: Send feedback (and the inbox for its readers). A board has it in its own menu. */}
+          {matchRoute(location.pathname).name !== 'board' && (
+            <FeedbackMenuEntries userId={user.id} guest={guest} onDone={() => setOpen(false)} />
+          )}
           {guest ? (
             <div className="dr-account__actions dr-account__actions--guest">
               <button

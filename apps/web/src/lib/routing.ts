@@ -14,6 +14,8 @@ export type Route =
   | { name: 'workspace'; workspaceId: string; section: DashboardSection }
   | { name: 'board'; boardId: string }
   | { name: 'invite'; token: string }
+  /** Wave J5: the feedback inbox (features/feedback/FeedbackPage.tsx); the api decides who may read it. */
+  | { name: 'feedback' }
   | { name: 'invalid-board'; raw: string }
   | { name: 'not-found' }
 
@@ -39,6 +41,7 @@ export function matchRoute(pathname: string): Route {
   const path = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname
   if (path === '/' || path === '') return { name: 'root' }
   if (path === '/signin') return { name: 'signin' }
+  if (path === '/feedback') return { name: 'feedback' }
 
   const parts = path.split('/').slice(1)
   const [head, a, b, c] = parts
