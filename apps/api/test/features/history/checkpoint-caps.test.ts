@@ -4,7 +4,7 @@
 // manual ones, per board for all of them, and per workspace for the manual ones. Each test fails on the code
 // before J4, where every save under 500 succeeds whatever it weighs.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { checkpointByteCaps } from '../../../src/features/history/checkpoint-caps.ts'
+import { checkpointByteCaps, workspaceCheckpointCap } from '../../../src/features/history/checkpoint-caps.ts'
 import { type CheckpointService, checkpointSettings } from '../../../src/features/history/checkpoints.ts'
 import { checkpointServices } from '../../../src/features/history/index.ts'
 import { type Client, createBoard, createTestApi, DEV_STUDIO, type TestApi } from '../../helpers.ts'
@@ -35,6 +35,7 @@ async function start(env: Record<string, string> = {}) {
 }
 beforeEach(() => start())
 afterEach(async () => {
+  vi.unstubAllEnvs()
   Object.assign(checkpointSettings, savedSettings)
   Object.assign(checkpointByteCaps, savedCaps)
   await api.close()
@@ -222,6 +223,30 @@ describe('a workspace’s manual checkpoints', () => {
     const third = await save('Three') // 1.2 MB of a 1 MiB allowance
     expect(third.statusCode, third.body).toBe(409)
     expect(third.json().error.code).toBe('SNAPSHOT_BYTES_LIMIT')
+  })
+
+  it('DRAFTROOM_CHECKPOINT_WORKSPACE_MB sets the allowance on its own: raising the upload quota does not raise it', async () => {
+    vi.stubEnv('DRAFTROOM_CHECKPOINT_WORKSPACE_MB', '1')
+    await api.close()
+    await start({ DRAFTROOM_WORKSPACE_QUOTA_MB: '5000' }) // a big upload quota
+    expect(checkpointByteCaps.manualBytesPerWorkspace).toBe(0)
+    sync.setBoard(boardId, [...baseRecords(), noteRec('big', 'word '.repeat(80_000))]) // about 400 kB
+    expect((await save('One')).statusCode).toBe(201)
+    expect((await save('Two')).statusCode).toBe(201)
+    const third = await save('Three') // 1.2 MB of the 1 MiB the variable allows
+    expect(third.statusCode, third.body).toBe(409)
+    expect(third.json().error.code).toBe('SNAPSHOT_BYTES_LIMIT')
+  })
+
+  it('the variable is a whole number of MB in 1 to 1,048,576, else the upload quota applies; the setting wins over both', () => {
+    const quota = 2048 * MiB
+    expect(workspaceCheckpointCap(quota, {})).toBe(quota)
+    expect(workspaceCheckpointCap(quota, { DRAFTROOM_CHECKPOINT_WORKSPACE_MB: '512' })).toBe(512 * MiB)
+    expect(workspaceCheckpointCap(quota, { DRAFTROOM_CHECKPOINT_WORKSPACE_MB: ' 4096 ' })).toBe(4096 * MiB)
+    for (const bad of ['', '0', '-5', '12x', '1.5', '2000000', 'lots'])
+      expect(workspaceCheckpointCap(quota, { DRAFTROOM_CHECKPOINT_WORKSPACE_MB: bad }), bad).toBe(quota)
+    checkpointByteCaps.manualBytesPerWorkspace = 7 * MiB
+    expect(workspaceCheckpointCap(quota, { DRAFTROOM_CHECKPOINT_WORKSPACE_MB: '512' })).toBe(7 * MiB)
   })
 
   it('automatic checkpoints are not capped per workspace (they are the safety net)', async () => {

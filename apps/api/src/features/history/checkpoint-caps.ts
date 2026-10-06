@@ -10,10 +10,15 @@
 //   manualBytesPerBoard    the manual checkpoints of ONE board (what an editor can fill on purpose);
 //   totalBytesPerBoard     every checkpoint of one board, manual and automatic (a bug or a flood that got
 //                          past the others: automatic ones skip with `limit` like at maxAutoPerBoard);
-//   manualBytesPerWorkspace the manual checkpoints of one workspace. 0 (the default) means the workspace's
-//                          upload quota (config uploads.workspaceQuotaBytes, 2 GiB by default): checkpoints
-//                          count against an allowance of that size, kept apart from uploads so that a
-//                          workspace full of uploads can still save a checkpoint (and the reverse).
+//   manualBytesPerWorkspace the manual checkpoints of one workspace. 0 (the default) means the environment's
+//                          DRAFTROOM_CHECKPOINT_WORKSPACE_MB if it is set (whole MB, 1 to 1,048,576), else
+//                          the workspace's upload quota (config uploads.workspaceQuotaBytes, 2 GiB by
+//                          default): checkpoints count against an allowance of their own, kept apart from
+//                          uploads so that a workspace full of uploads can still save a checkpoint (and the
+//                          reverse), and a large workspace (hundreds of people saving checkpoints) can be
+//                          given more room for them without giving more to uploads. A workspace at it
+//                          answers every manual save 409 SNAPSHOT_BYTES_LIMIT until checkpoints are deleted
+//                          (the board's owners can: DELETE /api/snapshots/:sid).
 //
 // Automatic checkpoints are not capped per workspace: they are the safety net (before a restore, a reveal,
 // an AI regroup) and retention already bounds them per board. A mutable object, like `checkpointSettings`,
@@ -62,6 +67,24 @@ export async function workspaceManualCheckpointBytes(q: Queryable, workspaceId: 
   return Number(r.bytes)
 }
 
+/**
+ * What one workspace's manual checkpoints may weigh: the setting, else DRAFTROOM_CHECKPOINT_WORKSPACE_MB (read at
+ * each save, like the setting), else the upload quota. The variable is a whole number of MB in 1 to 1,048,576;
+ * anything else is ignored (the quota applies).
+ */
+export function workspaceCheckpointCap(
+  quotaBytes: number,
+  env: Record<string, string | undefined> = process.env,
+): number {
+  if (checkpointByteCaps.manualBytesPerWorkspace > 0) return checkpointByteCaps.manualBytesPerWorkspace
+  const raw = env.DRAFTROOM_CHECKPOINT_WORKSPACE_MB?.trim()
+  if (raw && /^\d+$/.test(raw)) {
+    const mb = Number(raw)
+    if (mb >= 1 && mb <= 1_048_576) return mb * MiB
+  }
+  return quotaBytes
+}
+
 /** `used` plus `add` is over `cap` (with nothing to add: `used` is already at it). */
 const past = (used: number, add: number, cap: number) => (add === 0 ? used >= cap : used + add > cap)
 
@@ -91,8 +114,7 @@ export async function manualCheckpointRefusal(
   const board = await boardCheckpointBytes(q, ids.boardId)
   if (past(board.manual, newBytes, caps.manualBytesPerBoard)) return 'board-manual'
   if (past(board.total, newBytes, caps.totalBytesPerBoard)) return 'board-total'
-  const workspaceCap = caps.manualBytesPerWorkspace > 0 ? caps.manualBytesPerWorkspace : workspaceQuotaBytes
   const workspace = await workspaceManualCheckpointBytes(q, ids.workspaceId)
-  if (past(workspace, newBytes, workspaceCap)) return 'workspace'
+  if (past(workspace, newBytes, workspaceCheckpointCap(workspaceQuotaBytes))) return 'workspace'
   return null
 }
