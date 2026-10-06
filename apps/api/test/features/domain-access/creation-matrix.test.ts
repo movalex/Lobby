@@ -371,6 +371,8 @@ const ALLOWED_RAISES: Record<string, number> = {
   'features/dashboard/sharing.ts board_members': 1,
   // PATCH visibility: raising gated in-route; lowering open
   'routes/boards.ts boards': 1,
+  // lowering: a keep-sharing copy in an internal-only scope is made private (wave J pre-deploy review IO-2a)
+  'features/history/new-board.ts boards': 1,
   // authz-006 PATCH workspace members: raising gated in-route (a creator caller; admin and owner only for a
   // creator target); lowering open
   'routes/workspaces.ts workspace_members': 1,

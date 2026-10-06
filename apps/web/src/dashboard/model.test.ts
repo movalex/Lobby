@@ -7,6 +7,7 @@ import {
   boardMenuItems,
   boardsQueryForSection,
   dashboardAccess,
+  duplicatedToast,
   duplicateTitle,
   emptyState,
   filterBoards,
@@ -196,6 +197,17 @@ describe('owner filter, stars and duplicate names', () => {
     const long = duplicateTitle('x'.repeat(120))
     expect(long.length).toBeLessThanOrEqual(120)
     expect(long.endsWith('… (copy)')).toBe(true)
+  })
+
+  it('the duplicate toast says every note the server sent (IO-2a: who keep sharing left out, then files)', () => {
+    const board = { title: 'Retro (copy)' }
+    expect(duplicatedToast({ board, warnings: [] })).toBe('Duplicated as “Retro (copy)”')
+    const leftOut =
+      'This project is internal only, so 2 people who are not confirmed as Dark Burn Creative or Trailer Park Group were not given access to the copy.'
+    const files = '1 referenced file(s) could not be carried over to the new board and show as missing.'
+    expect(duplicatedToast({ board, warnings: [leftOut, files] })).toBe(
+      `Duplicated as “Retro (copy)” (${leftOut} ${files})`,
+    )
   })
 
   it('sorts by date created', () => {

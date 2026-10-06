@@ -174,7 +174,10 @@ export function createdSummary(kind: 'restore' | 'duplicate', created: HistoryBo
       : `Made “${created.board.title}”${created.board.visibility === 'private' ? ', a private copy only you can see' : ''}.`
   const files =
     created.droppedFiles > 0 ? ` ${pluralize(created.droppedFiles, 'file')} could not be carried over.` : ''
-  return `${head}${files}`
+  // What keep sharing left out of a copy in an internal-only scope (wave J pre-deploy review IO-2a), in the
+  // server's words. The files are said above from droppedFiles, so their notes ("file(s)") are skipped.
+  const sharing = created.warnings.filter((w) => !w.includes('file(s)')).map((w) => ` ${w}`)
+  return `${head}${files}${sharing.join('')}`
 }
 
 /** "Pitch v2.lobby.json": the board title with characters file systems reject replaced. */

@@ -478,17 +478,27 @@ async function workspaceWith(owner: Api, wid: string, who: { api: Api; email: st
   }
 }
 
-test('Internal only on a project (pre-deploy review IO-1, IO-2b): a board cannot be moved out of it to share it outside; the dialogs say why', async ({
+const PROJECT_REFUSAL =
+  'This project is internal only: only people at Dark Burn Creative or Trailer Park Group can be invited or given access to its boards, and review, workshop and guest links are off. A workspace owner or admin can turn this off.'
+
+test('Internal only on a project (pre-deploy review IO-1, IO-2): no moving a board out, no workspace visibility, keep sharing leaves the outsider out; the dialogs say why', async ({
   browser,
 }) => {
   // A workspace of its own (a fresh creator's), so no other test sees its members or its switch.
   const olga = await signedInContext(browser, freshHandle('olga'), { name: 'Olga Owner' })
   const mia = await signedInContext(browser, freshHandle('mia'), { name: 'Mia Member' })
+  const otto = await signedInContext(browser, freshHandle('otto'), {
+    name: 'Otto Client',
+    email: 'otto@client.example.test',
+  })
   const olgaApi = new Api(olga.context.request)
   const miaApi = new Api(mia.context.request)
   const wid = personalWorkspace(olga.me)
   try {
-    await workspaceWith(olgaApi, wid, [{ api: miaApi, email: mia.me.access?.email ?? '' }])
+    await workspaceWith(olgaApi, wid, [
+      { api: miaApi, email: mia.me.access?.email ?? '' },
+      { api: new Api(otto.context.request), email: 'otto@client.example.test' },
+    ])
     const project = (
       (await (await olgaApi.fetch('POST', `/api/workspaces/${wid}/projects`, { name: 'Pitch' })).json()) as {
         id: string
@@ -496,6 +506,9 @@ test('Internal only on a project (pre-deploy review IO-1, IO-2b): a board cannot
     ).id
     const board = (await miaApi.createBoard(wid, 'Pitch deck')).id
     expect((await miaApi.fetch('PATCH', `/api/boards/${board}`, { projectId: project })).status()).toBe(200)
+    // Before the switch: otto (outside, a plain workspace member) may view the board.
+    const granted = await miaApi.putMember(board, otto.me.user.id, 'viewer')
+    expect(granted.members.some((m) => m.user.id === otto.me.user.id && m.role === 'viewer')).toBe(true)
     expect(
       (await olgaApi.fetch('PUT', `/api/projects/${project}/internal-only`, { internalOnly: true })).status(),
     ).toBe(200)
@@ -507,9 +520,7 @@ test('Internal only on a project (pre-deploy review IO-1, IO-2b): a board cannot
       const dialog = mia.page.getByTestId('move-dialog')
       await dialog.getByTestId('move-project').selectOption('')
       await dialog.getByTestId('move-submit').click()
-      await expect(dialog.getByRole('alert')).toHaveText(
-        'This project is internal only: only people at Dark Burn Creative or Trailer Park Group can be invited or given access to its boards, and review, workshop and guest links are off. A workspace owner or admin can turn this off.',
-      )
+      await expect(dialog.getByRole('alert')).toHaveText(PROJECT_REFUSAL)
       await expect(dialog).toBeVisible()
       const detail = (await (await miaApi.fetch('GET', `/api/boards/${board}`)).json()) as {
         board: { projectId: string | null }
@@ -518,11 +529,41 @@ test('Internal only on a project (pre-deploy review IO-1, IO-2b): a board cannot
       await dialog.getByRole('button', { name: 'Cancel' }).click()
     })
 
+    await test.step('IO-2a: mia duplicates it keeping sharing: otto is left out, and the toast says so', async () => {
+      await chooseFromMenu(mainCard(mia.page, board), 'duplicate')
+      const dialog = mia.page.getByTestId('duplicate-dialog')
+      await dialog.getByTestId('duplicate-keep-sharing').check()
+      await dialog.getByTestId('duplicate-submit').click()
+      await expect(mia.page.getByTestId('dashboard-toast')).toContainText(
+        'This project is internal only, so 1 person who is not confirmed as Dark Burn Creative or Trailer Park Group was not given access to the copy.',
+      )
+      const copies = (await miaApi.listBoards(wid)).filter(
+        (b) => b.id !== board && b.title.startsWith('Pitch deck'),
+      )
+      expect(copies).toHaveLength(1)
+      const people = await miaApi.members(copies[0]?.id ?? '')
+      expect(people.some((m) => m.user.id === otto.me.user.id && m.source === 'grant')).toBe(false)
+    })
+
+    await test.step('IO-2b: mia lets the workspace edit it in the Share dialog: refused with the project’s words (otto would be raised)', async () => {
+      await mia.page.goto(`/b/${board}`)
+      await waitForLobbyBoard(mia.page)
+      await openShareFromButton(mia.page)
+      await shareDialog(mia.page).getByTestId('visibility-select').selectOption('workspace_edit')
+      await expect(shareDialog(mia.page).getByTestId('share-error')).toHaveText(PROJECT_REFUSAL)
+      const detail = (await (await miaApi.fetch('GET', `/api/boards/${board}`)).json()) as {
+        board: { visibility: string }
+      }
+      expect(detail.board.visibility).toBe('private')
+      await closeShare(mia.page)
+    })
+
     await test.step('olga (the owner) can move it out', async () => {
       expect((await olgaApi.fetch('PATCH', `/api/boards/${board}`, { projectId: null })).status()).toBe(200)
     })
   } finally {
     await olga.context.close()
     await mia.context.close()
+    await otto.context.close()
   }
 })

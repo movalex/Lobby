@@ -29,7 +29,7 @@ import { audit } from '../audit.ts'
 import { onNewCanvas } from '../canvas-engine.ts'
 import type { AppContext, Params } from '../context.ts'
 import { conflict, forbidden, notFound, parse } from '../errors.ts'
-import { assertProjectMoveAllowed } from '../features/dashboard/outside.ts'
+import { assertProjectMoveAllowed, assertVisibilityRaiseAllowed } from '../features/dashboard/outside.ts'
 import { assertBoardRoom } from '../files/usage.ts'
 import { actorOf } from '../notifier.ts'
 import { type BoardMarks, toBoard, toBoardWithRole } from '../serialize.ts'
@@ -195,6 +195,18 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
           from: access.board.project_id,
           to: input.projectId,
         })
+      if (input.visibility !== undefined)
+        await assertVisibilityRaiseAllowed(
+          tx,
+          ctx,
+          {
+            id: bid,
+            workspaceId: workspace_id,
+            projectId: input.projectId !== undefined ? input.projectId : access.board.project_id,
+          },
+          access.board.visibility,
+          input.visibility,
+        )
       const at = now()
       const row = await tx.one<BoardRow>(
         `UPDATE boards

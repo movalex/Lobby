@@ -417,6 +417,16 @@ export const duplicateTitle = (title: string) => {
   return t.length <= 120 ? t : `${title.slice(0, 112).trimEnd()}… (copy)`
 }
 
+/**
+ * The dashboard's toast after a duplicate: every note the server sent, not just the first (wave J
+ * pre-deploy review IO-2a: a keep-sharing copy in an internal-only scope says who it left out, and that
+ * note comes before a missing-files one).
+ */
+export function duplicatedToast(created: { board: { title: string }; warnings: readonly string[] }): string {
+  const notes = created.warnings.filter((w) => w.trim().length > 0)
+  return `Duplicated as “${created.board.title}”${notes.length ? ` (${notes.join(' ')})` : ''}`
+}
+
 // ---- thumbnails ----------------------------------------------------------------------------------
 
 /** Paper-and-ink pairs that sit well next to the navy/amber brand. */

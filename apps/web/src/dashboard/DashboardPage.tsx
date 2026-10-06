@@ -23,6 +23,7 @@ import {
   type BoardSort,
   boardsQueryForSection,
   dashboardAccess,
+  duplicatedToast,
   duplicateTitle,
   emptyState,
   filterBoards,
@@ -792,7 +793,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
             boards.reload()
             notify({
               key: `duplicate:${dialog.board.id}`,
-              text: `Duplicated as “${created.board.title}”${created.warnings.length ? ` (${created.warnings[0]})` : ''}`,
+              text: duplicatedToast(created),
               testId: 'dashboard-toast',
             })
           }}

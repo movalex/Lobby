@@ -171,6 +171,22 @@ describe('messages', () => {
         board: { ...created.board, visibility: 'workspace_view' },
       }),
     ).toBe('Made “Pitch (v1)”.')
+    // IO-2a (wave J pre-deploy review): keep sharing into an internal-only scope says, in the server's
+    // words, whom it left out (and when the copy was made private); the files are said once, from
+    // droppedFiles.
+    const leftOut =
+      'This project is internal only, so 1 person who is not confirmed as Dark Burn Creative or Trailer Park Group was not given access to the copy.'
+    expect(
+      createdSummary('duplicate', {
+        ...created,
+        board: { ...created.board, visibility: 'workspace_view' },
+        warnings: [
+          leftOut,
+          '1 referenced file(s) could not be carried over to the new board and show as missing.',
+        ],
+        outsideLeftOut: 1,
+      }),
+    ).toBe(`Made “Pitch (v1)”. 1 file could not be carried over. ${leftOut}`)
   })
 })
 

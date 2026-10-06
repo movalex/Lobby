@@ -8,12 +8,16 @@
 // outsider a board owner), and the caller must still be a creator when the row is written (the seed can
 // take a while).
 //
+// "Internal only" (wave J pre-deploy review IO-2a): when the copy's workspace or project is internal
+// only, "keep sharing" copies only confirmed creators' grants, and the copy is private when its copied
+// workspace visibility would reach a member who is not inside; the response says both (KeptSharing).
+//
 // Order: seed the canvas first, then commit the board row. Until the row exists nobody can get a
 // ticket for the id, so nothing can race the seed; a seed conflict (the id already has canvas data:
 // an id collision or a leftover from an earlier failed attempt) just draws a new id. If the row
 // insert fails after a successful seed, the canvas file is an orphan nobody can open (logged).
 
-import { NEW_CANVAS_BOARD_MESSAGE, NEW_CANVAS_ERROR } from '@draftroom/contracts'
+import { type InternalOnlyScope, NEW_CANVAS_BOARD_MESSAGE, NEW_CANVAS_ERROR } from '@draftroom/contracts'
 import { newBoardId, type Queryable } from '@draftroom/db'
 import type { BoardRole, BoardVisibility } from '@draftroom/permissions'
 import { BOARD_RETURNING, type BoardRow, requireCreatingRoleLocked } from '../../access.ts'
@@ -29,6 +33,7 @@ import {
   SyncUnavailable,
 } from '../../sync-internal.ts'
 import type { FeatureContext } from '../context.ts'
+import { scopeIn, visibilityReachesOutside } from '../dashboard/outside.ts'
 import type { FileRef } from './files.ts'
 
 /**
@@ -56,6 +61,41 @@ export interface NewBoardPlan {
 }
 
 const SEED_ATTEMPTS = 4
+
+/**
+ * What "keep sharing" could not carry over because the copy's scope is internal only (IO-2a, wave J
+ * pre-deploy review): the people left out (not confirmed creators) and whether the copy was made private.
+ */
+export interface KeptSharing {
+  scope: InternalOnlyScope
+  outsideLeftOut: number
+  madePrivate: boolean
+}
+
+/** The board a createBoardFrom made, and (keep sharing into an internal-only scope) what it left out. */
+export interface NewBoard {
+  row: BoardRow
+  kept: KeptSharing | null
+}
+
+/** The person-safe notes on a copy that left something out (HistoryBoardCreated.warnings). */
+export function keptSharingWarnings(kept: KeptSharing | null): string[] {
+  if (!kept) return []
+  const where = kept.scope === 'workspace' ? 'This workspace' : 'This project'
+  const out: string[] = []
+  const n = kept.outsideLeftOut
+  if (n > 0) {
+    const who = n === 1 ? '1 person who is' : `${n} people who are`
+    out.push(
+      `${where} is internal only, so ${who} not confirmed as Dark Burn Creative or Trailer Park Group ${n === 1 ? 'was' : 'were'} not given access to the copy.`,
+    )
+  }
+  if (kept.madePrivate)
+    out.push(
+      `${where} is internal only and its workspace has members who are not confirmed as Dark Burn Creative or Trailer Park Group, so the copy is private.`,
+    )
+  return out
+}
 
 export const syncUnavailable = () =>
   new ApiError(503, 'SYNC_UNAVAILABLE', 'The board server is not reachable right now. Try again in a moment.')
@@ -128,7 +168,7 @@ export async function createBoardFrom(
   ctx: FeatureContext,
   plan: NewBoardPlan,
   log?: (message: string) => void,
-): Promise<BoardRow> {
+): Promise<NewBoard> {
   const content = plan.content
   const snapshot: RoomSnapshotJson | LobbySeed =
     content.format === 'lobby-elements'
@@ -181,8 +221,10 @@ export async function createBoardFrom(
         ])
         if (!p) projectId = null
       }
+      // IO-2a: the copy's internal-only scope, read under the workspace row lock the switch takes.
+      const scope = plan.shareLike ? await scopeIn(tx, plan.workspaceId, projectId) : null
       const at = ctx.now()
-      const row = await tx.maybeOne<BoardRow>(
+      let row = await tx.maybeOne<BoardRow>(
         `INSERT INTO boards (id, workspace_id, project_id, title, visibility, created_by, created_at, updated_at, new_canvas)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8) ON CONFLICT (id) DO NOTHING RETURNING ${BOARD_RETURNING}`,
         [
@@ -197,6 +239,7 @@ export async function createBoardFrom(
         ],
       )
       if (!row) throw new Error('board id already taken after seeding')
+      let kept: KeptSharing | null = null
       await tx.query(
         "INSERT INTO board_members (board_id, user_id, role, added_by, created_at) VALUES ($1, $2, 'owner', $2, $3)",
         [newId, plan.userId, at],
@@ -248,12 +291,17 @@ export async function createBoardFrom(
               FOR SHARE OF wm`,
           [plan.shareLike.boardId, plan.userId, plan.workspaceId],
         )
-        const people = grants.rows.map((g) => g.user_id)
-        const creators = await ctx.identity.creatorsAmong(tx, people)
-        // D5: a copied owner grant of someone who is not a creator is at most editor.
-        const roles = grants.rows.map((g) =>
-          g.role === 'owner' && !creators.has(g.user_id) ? 'editor' : g.role,
+        const creators = await ctx.identity.creatorsAmong(
+          tx,
+          grants.rows.map((g) => g.user_id),
         )
+        // IO-2a (wave J pre-deploy review): while the copy's workspace or project is internal only, nobody
+        // outside is given new access there, so only confirmed creators' grants are copied (an account
+        // whose addresses are unconfirmed is left out too, failing closed); the response says how many.
+        const copied = scope ? grants.rows.filter((g) => creators.has(g.user_id)) : grants.rows
+        const people = copied.map((g) => g.user_id)
+        // D5: a copied owner grant of someone who is not a creator is at most editor.
+        const roles = copied.map((g) => (g.role === 'owner' && !creators.has(g.user_id) ? 'editor' : g.role))
         await tx.query(
           `INSERT INTO board_members (board_id, user_id, role, added_by, created_at)
            SELECT $1, g.user_id, g.role, $2, $3
@@ -262,6 +310,19 @@ export async function createBoardFrom(
            ON CONFLICT DO NOTHING`,
           [newId, plan.userId, at, people, roles],
         )
+        if (scope) {
+          // IO-2b's rule on the copy: its workspace visibility would give a member who is not inside new
+          // access, so the copy is private (and the response says so).
+          const madePrivate =
+            row.visibility !== 'private' &&
+            (await visibilityReachesOutside(tx, ctx, newId, plan.workspaceId, row.visibility))
+          if (madePrivate)
+            row = await tx.one<BoardRow>(
+              `UPDATE boards SET visibility = 'private' WHERE id = $1 RETURNING ${BOARD_RETURNING}`,
+              [newId],
+            )
+          kept = { scope, outsideLeftOut: grants.rows.length - copied.length, madePrivate }
+        }
       }
       await insertLinks(tx, plan.workspaceId, newId, plan.files, at)
       // AIPV-04: a copy of a board with AI off (an NDA client's board) keeps AI off; a copy never falls
@@ -284,11 +345,12 @@ export async function createBoardFrom(
           ...(plan.from?.boardId ? { fromBoard: plan.from.boardId } : {}),
           ...(plan.from?.snapshotId ? { fromSnapshot: plan.from.snapshotId } : {}),
           keepSharing: !!plan.shareLike,
+          ...(kept ? { outsideLeftOut: kept.outsideLeftOut, madePrivate: kept.madePrivate } : {}),
           files: plan.files.length,
         },
         at,
       })
-      return row
+      return { row, kept }
     })
   } catch (e) {
     log?.(`board ${newId} was seeded but its row was not created; its canvas file is unused`)

@@ -28,6 +28,9 @@
 //   createInvitation, review-link creation and access-request approval check in their transactions.
 //   Taking a board OUT of an internal-only project is for the people who may turn the switch off
 //   (assertProjectMoveAllowed, in PATCH /api/boards/:bid under the switch's workspace row lock; IO-1).
+//   Raising a board's visibility there is refused while it would raise a workspace member who is not
+//   inside (assertVisibilityRaiseAllowed, same lock; IO-2b), and "Duplicate, keep sharing" into an
+//   internal-only scope copies only confirmed creators' grants (history/new-board.ts; IO-2a).
 
 import {
   AddressCheckInput,
@@ -51,7 +54,9 @@ import {
 import type { Queryable } from '@draftroom/db'
 import {
   BOARD_ROLES,
+  BOARD_VISIBILITIES,
   type BoardRole,
+  type BoardVisibility,
   can,
   canManageWorkspace,
   WORKSPACE_ROLES,
@@ -343,6 +348,88 @@ export async function assertProjectMoveAllowed(
   )
   if (canManageWorkspace(member?.role ?? null) && (await deps.identity.isCreatorUser(q, userId))) return
   throw internalOnlyRefused('project')
+}
+
+/**
+ * The internal-only scope a board in `projectId` (null: no project) of this workspace falls in: the
+ * workspace's first, then the project's (as boardInternalOnly reads it for a board that exists).
+ */
+export async function scopeIn(
+  q: Queryable,
+  workspaceId: string,
+  projectId: string | null,
+): Promise<InternalOnlyScope | null> {
+  const row = await q.maybeOne<{ ws: boolean; prj: boolean | null }>(
+    `SELECT w.internal_only AS ws,
+            (SELECT p.internal_only FROM projects p WHERE p.id = $2 AND p.workspace_id = w.id) AS prj
+       FROM workspaces w WHERE w.id = $1`,
+    [workspaceId, projectId],
+  )
+  if (!row) return null
+  return row.ws ? 'workspace' : row.prj ? 'project' : null
+}
+
+const BOARD_ROLES_UP = ['viewer', 'commenter', 'editor', 'owner'] as const
+const VISIBILITY_ROLE: Record<BoardVisibility, BoardRole | null> = {
+  private: null,
+  workspace_view: 'viewer',
+  workspace_edit: 'editor',
+}
+
+/**
+ * IO-2b (wave J pre-deploy review): whether board `boardId` at visibility `to` gives a HIGHER role to a
+ * workspace member (role 'member': owners and admins see every board already, and a workspace guest gets
+ * nothing from the visibility) who is not inside: a name-only guest, a known outside account, or an
+ * account whose addresses were never confirmed (the OutsideInfo rule, toInfo: a stale account whose
+ * stored addresses qualify is inside). Under open email sign-in only a name-only guest is outside. A
+ * member whose own grant already reaches the new role is not raised. Stored data only.
+ */
+export async function visibilityReachesOutside(
+  q: Queryable,
+  deps: OutsideDeps,
+  boardId: string,
+  workspaceId: string,
+  to: BoardVisibility,
+): Promise<boolean> {
+  const role = VISIBILITY_ROLE[to]
+  if (!role) return false
+  const { lookup } = deps.identity
+  const outside = isOpenLookup(lookup)
+    ? `o.o_kind = 'guest'`
+    : `o.o_kind = 'guest' OR NOT (o.o_creator OR (o.o_checked_at IS NOT NULL AND o.o_qualifies))`
+  const hit = await q.maybeOne(
+    `SELECT 1 AS hit FROM (
+       SELECT ${originColumns(5)}
+         FROM workspace_members wm
+         JOIN users u ON u.id = wm.user_id
+         LEFT JOIN board_members bm ON bm.board_id = $1 AND bm.user_id = wm.user_id
+        WHERE wm.workspace_id = $2 AND wm.role = 'member'
+          AND (bm.role IS NULL OR array_position($3::text[], bm.role) < array_position($3::text[], $4::text))
+     ) o
+     WHERE ${outside}
+     LIMIT 1`,
+    [boardId, workspaceId, [...BOARD_ROLES_UP], role, ...userParams(lookup, deps.now())],
+  )
+  return hit !== null
+}
+
+/**
+ * IO-2b: raising a board's visibility while its scope (the project it is in after this change) is
+ * internal only, when that would raise a member who is not inside (visibilityReachesOutside): the
+ * scope's 409 INTERNAL_ONLY. Lowering, or keeping it, is never refused. Call in the transaction that
+ * changes it, under the workspace row lock the switch takes.
+ */
+export async function assertVisibilityRaiseAllowed(
+  q: Queryable,
+  deps: OutsideDeps,
+  board: { id: string; workspaceId: string; projectId: string | null },
+  from: BoardVisibility,
+  to: BoardVisibility,
+): Promise<void> {
+  if (BOARD_VISIBILITIES.indexOf(to) <= BOARD_VISIBILITIES.indexOf(from)) return
+  const scope = await scopeIn(q, board.workspaceId, board.projectId)
+  if (scope && (await visibilityReachesOutside(q, deps, board.id, board.workspaceId, to)))
+    throw internalOnlyRefused(scope)
 }
 
 /** Review, workshop and guest links: none while the board is internal only. */

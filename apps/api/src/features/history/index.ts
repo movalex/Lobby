@@ -50,7 +50,13 @@ import {
   referencedElementFiles,
   referencedFiles,
 } from './files.ts'
-import { type BoardContent, createBoardFrom, newCanvasBoard, viaSync } from './new-board.ts'
+import {
+  type BoardContent,
+  createBoardFrom,
+  keptSharingWarnings,
+  newCanvasBoard,
+  viaSync,
+} from './new-board.ts'
 import {
   checkpointBodyOf,
   isNewCanvasRow,
@@ -250,7 +256,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
       snapshot.board_id,
       body.version === 2 ? await referencedElementFiles(db, body.elements) : referencedFiles(body.records),
     )
-    const board = await createBoardFrom(
+    const { row: board } = await createBoardFrom(
       ctx,
       {
         userId: user.id,
@@ -289,7 +295,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
       bid,
       lobby ? await referencedElementFiles(db, lobby.elements) : referencedFiles(recordsOf(snap)),
     )
-    const board = await createBoardFrom(
+    const { row: board, kept } = await createBoardFrom(
       ctx,
       {
         userId: user.id,
@@ -307,7 +313,13 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     // export-control: the same people on the copy stay under the same export policy.
     if (input.keepSharing) await copyExportPolicy(db, bid, board, user.id, ctx.now())
     reply.code(201)
-    return created(board, shown.length, notShown, await onNewCanvas(ctx))
+    const made = created(board, shown.length, notShown, await onNewCanvas(ctx))
+    // IO-2a: what keep sharing left out of a copy in an internal-only scope, said plainly (first).
+    return {
+      ...made,
+      warnings: [...keptSharingWarnings(kept), ...made.warnings],
+      outsideLeftOut: kept?.outsideLeftOut ?? 0,
+    }
   })
 
   // ---- portable archive (PRS-06 export part, PRS-11) --------------------------------------------
@@ -407,7 +419,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
         warnings.push(
           `${limited.length} file(s) in this archive are on boards whose owner turned off downloads for viewers, so they were not carried over and show as missing.`,
         )
-      const board = await createBoardFrom(
+      const { row: board } = await createBoardFrom(
         ctx,
         {
           userId: user.id,

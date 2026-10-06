@@ -58,6 +58,9 @@ export type RestoreSnapshotInput = z.infer<typeof RestoreSnapshotInput>
  * POST /api/boards/:bid/duplicate (view + workspace member). The copy is private to the caller unless
  * `keepSharing` is set, which also needs manage_access on the source: it then copies the board's
  * workspace visibility and its people grants (never invitation/review links).
+ * Into an internal-only workspace or project (wave J), only confirmed creators' grants are copied and
+ * the copy is private while its visibility would reach a member who is not inside; the 201 says so in
+ * `warnings` and `outsideLeftOut`.
  */
 export const DuplicateBoardInput = z.object({
   title: NewBoardTitle.optional(),
@@ -94,6 +97,12 @@ export const HistoryBoardCreated = z.object({
   linkedFiles: z.number().int().nonnegative(),
   /** Referenced file versions that were NOT carried over (the caller could not view them). */
   droppedFiles: z.number().int().nonnegative(),
+  /**
+   * Duplicate with `keepSharing` into an internal-only workspace or project (wave J pre-deploy review,
+   * IO-2a): the people whose grants were not copied because they are not confirmed creators (the
+   * warnings say so in words). 0, or absent from an older api, otherwise.
+   */
+  outsideLeftOut: z.number().int().nonnegative().optional(),
 })
 export type HistoryBoardCreated = z.infer<typeof HistoryBoardCreated>
 
