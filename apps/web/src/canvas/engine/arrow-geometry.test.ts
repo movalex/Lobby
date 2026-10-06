@@ -18,15 +18,21 @@
 // Numbers (the default 2 px stroke, Lobby's "medium"): an orbit end sits 2 px off the outline (was 6: 5 + 2 / 2),
 // which is 1 px clear of the target's own 2 px stroke; the "arrow" head's barbs are 12.5 px (was 25), the triangle,
 // bar and dot 7.5 (was 15). The 4 px stroke keeps the engine's sizes, the 1 px stroke is floored at 0.4 of them.
+
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import * as engineApi from '@draftroom/canvas-schema/engine'
+import * as element from '@excalidraw/element'
 import { describe, expect, it } from 'vitest'
 
 // biome-ignore lint/suspicious/noExplicitAny: the engine module, one per build, typed loosely on purpose
 type Engine = any
 // biome-ignore lint/suspicious/noExplicitAny: Excalidraw's own element objects
 type El = any
+
+/** The workspace's own import of the engine (what the page and the room call), typed loosely like the builds below. */
+const X0: Engine = element
 
 const require = createRequire(import.meta.url)
 /** `dist/` of the @excalidraw/element copy the workspace resolves (the patched one). */
@@ -395,5 +401,67 @@ describe('W5-53, the two builds agree', () => {
       if (a && b) worst = Math.max(worst, Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]))
     }
     expect(worst).toBeLessThan(0.001)
+  })
+})
+
+// The room is the other writer of a bound end: its re-snap (canvas-schema's `resnapArrow`, run on every arrow path
+// write and every move of a target) must land where the page's own follow does, or each side would keep
+// undoing the other's ends. Both resolve the one patched @excalidraw/element copy, so they agree.
+describe('W5-53, the sync room’s re-snap agrees with the page', () => {
+  const { resnapArrow } = engineApi
+  /** The scene x of the last point of a re-snapped path unit. */
+  const endX = (path: { x: number; points: readonly (readonly number[])[] }) =>
+    path.x + ((path.points[path.points.length - 1] as readonly number[])[0] ?? Number.NaN)
+  const target = (strokeWidth: number) =>
+    X0.newElement({ ...STYLE, type: 'rectangle', strokeWidth, x: 600, y: 100, width: 200, height: 120 })
+  /** A stored arrow from (180, 160) to `endX` on the connector's row, its end bound (orbit) to the target. */
+  const stored = (t: El, endX: number, strokeWidth = 2) => {
+    const arrow = X0.newArrowElement({
+      ...STYLE,
+      type: 'arrow',
+      strokeWidth,
+      x: 180,
+      y: 160,
+      width: endX - 180,
+      height: 0,
+      points: [
+        [0, 0],
+        [endX - 180, 0],
+      ],
+      endArrowhead: 'arrow',
+    })
+    return { ...arrow, endBinding: { elementId: t.id, fixedPoint: [0.5, 0.5], mode: 'orbit' } }
+  }
+
+  it('an end the old gap put 6 px off is brought to 2 px (what a stale client’s write becomes in the room)', () => {
+    const t = target(2)
+    const old = stored(t, 600 - 6)
+    const r = resnapArrow(old as never, new Map([[t.id, t as never]]))
+    expect(r.changed).toBe(true)
+    const end = endX(r.path)
+    expect(end).toBeCloseTo(600 - X0.getOrbitBindingGap({ strokeWidth: 2 }), 2)
+  })
+
+  it('the re-snapped arrow is at rest: the room writes nothing more for it (no ping-pong with a client resting on the same points)', () => {
+    const t = target(2)
+    const first = resnapArrow(stored(t, 600 - 6) as never, new Map([[t.id, t as never]]))
+    expect(first.changed).toBe(true)
+    const rested = { ...stored(t, 600 - 6), ...first.path }
+    expect(resnapArrow(rested as never, new Map([[t.id, t as never]])).changed).toBe(false)
+  })
+
+  it('the room’s result is where the page’s own updateBoundPoint puts the end, for each stroke', () => {
+    for (const strokeWidth of STROKES) {
+      const t = target(strokeWidth)
+      const arrow = stored(t, 600 - 6, strokeWidth)
+      const map = new Map<string, El>([
+        [t.id, t],
+        [arrow.id, arrow],
+      ])
+      const page = X0.updateBoundPoint(arrow, 'endBinding', arrow.endBinding, t, map)
+      const r = resnapArrow(arrow as never, new Map([[t.id, t as never]]))
+      const end = endX(r.path)
+      expect(end, `stroke ${strokeWidth}`).toBeCloseTo(arrow.x + ((page as number[])[0] ?? Number.NaN), 2)
+    }
   })
 })
