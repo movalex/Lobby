@@ -12,6 +12,10 @@
 //    same-origin cookie stream (live events still arrive): never worse than before H1.
 //  - an api restart (tickets live in its memory): the page mints a new ticket and is live again.
 //  - an api without the mint route (a rollback to a build before H1): the cookie stream, live.
+//  - wave I1: the fallback is temporary (when the mint route is back, or the network changes, the page returns
+//    to the direct stream; under a CSP that still blocks it, one attempt is made and the page stays live on the
+//    cookie stream), and a page whose network returns opens a fresh stream at once instead of waiting for the
+//    stale-stream timer (up to 40 s) or a reconnect backoff (up to 30 s).
 //
 //   E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e excalidraw events-direct
 import { readFileSync } from 'node:fs'
@@ -66,6 +70,8 @@ interface Watched extends CanvasSession {
   directResponses: Record<string, string>[]
   /** Everything the page printed to its console. */
   consoleLines: string[]
+  /** What the ticket route answers: `missing` = 404, as an api from before H1 does (settable while the page runs). */
+  mint: { missing: boolean }
 }
 
 /**
@@ -94,15 +100,17 @@ async function openWatched(
       await route.fulfill({ response: res, headers: { ...res.headers(), 'content-security-policy': csp } })
     })
   }
-  if (opts.noMintRoute)
-    // What an api from before H1 answers (no such route): the same 404 as any unknown path.
-    await context.route(`${WEB_URL}/api/boards/*/events/ticket`, (route) =>
-      route.fulfill({
-        status: 404,
-        contentType: 'application/json; charset=utf-8',
-        body: JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Not found.' } }),
-      }),
-    )
+  const mint = { missing: Boolean(opts.noMintRoute) }
+  // What an api from before H1 answers while `missing` (no such route): the same 404 as any unknown path.
+  await context.route(`${WEB_URL}/api/boards/*/events/ticket`, (route) =>
+    mint.missing
+      ? route.fulfill({
+          status: 404,
+          contentType: 'application/json; charset=utf-8',
+          body: JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Not found.' } }),
+        })
+      : route.fallback(),
+  )
   await context.addInitScript(() => {
     const list: { directive: string; blocked: string }[] = []
     Object.defineProperty(window, '__h1Csp', { value: list })
@@ -143,6 +151,7 @@ async function openWatched(
     seen,
     directResponses,
     consoleLines,
+    mint,
   }
 }
 
@@ -296,6 +305,107 @@ test('an api without the mint route (a rollback to a build before H1): the page 
     await expectLiveComment(a, bob, board, 'Rolled back, still live', '1')
     // Quietly: an older api is not a failure.
     expect(a.consoleLines.some((l) => l.includes("live board updates use the page's own origin"))).toBe(false)
+  } finally {
+    await a.context.close()
+  }
+})
+
+/** What the browser does when the network returns (and what a laptop waking up does). */
+const fireOnline = (page: Page) => page.evaluate(() => window.dispatchEvent(new Event('online')))
+
+test('wave I1: the cookie fallback is temporary: once the ticket route is back, the page returns to the direct stream (on "online"), still live', async ({
+  browser,
+  board,
+  users,
+}) => {
+  const aliceComments = commentsApi(await users.api('alice'))
+  await aliceComments.markAllNotificationsRead()
+  await users.grant(board, 'bob', 'commenter')
+  const bob = commentsApi(await users.api('bob'))
+  const a = await openWatched(browser, board, await users.get('alice'), { noMintRoute: true })
+  try {
+    // An api without the mint route: the same-origin stream, live.
+    await expect.poll(() => a.seen.filter((s) => s.url === sameOriginUrl(board)).length).toBeGreaterThan(0)
+    await expectLiveComment(a, bob, board, 'On the cookie stream', '1')
+    expect(a.directResponses).toEqual([])
+    // The api gets its route back (a redeploy); the network changes: the page tries the direct stream again.
+    a.mint.missing = false
+    await fireOnline(a.page)
+    await expect
+      .poll(() => a.directResponses.length, { timeout: LIVE_MS, message: 'back on the direct stream' })
+      .toBeGreaterThan(0)
+    const sameOrigin = a.seen.filter((s) => s.url === sameOriginUrl(board)).length
+    await expectLiveComment(a, bob, board, 'Back on the direct stream', '2')
+    // It stays there: no second same-origin stream.
+    expect(a.seen.filter((s) => s.url === sameOriginUrl(board)).length).toBe(sameOrigin)
+  } finally {
+    await a.context.close()
+  }
+})
+
+test('wave I1: under a CSP that still blocks the api origin, a retry is one blocked attempt and the page stays live on the cookie stream', async ({
+  browser,
+  board,
+  users,
+}) => {
+  test.setTimeout(180_000)
+  const aliceComments = commentsApi(await users.api('alice'))
+  await aliceComments.markAllNotificationsRead()
+  await users.grant(board, 'bob', 'commenter')
+  const bob = commentsApi(await users.api('bob'))
+  const a = await openWatched(browser, board, await users.get('alice'), { csp: await stagingCsp(false) })
+  try {
+    const blockedCount = async () =>
+      (await cspViolations(a.page)).filter(
+        (v) => v.directive === 'connect-src' && v.blocked.startsWith(API_URL),
+      ).length
+    await expect
+      .poll(() => a.seen.filter((s) => s.url === sameOriginUrl(board)).length, { timeout: 20_000 })
+      .toBeGreaterThan(0)
+    expect(await blockedCount()).toBe(3)
+    await expectLiveComment(a, bob, board, 'Fallen back', '1')
+    const cookieStreams = a.seen.filter((s) => s.url === sameOriginUrl(board)).length
+    // The network changed: one retry (a ticket, then one blocked fetch), then the cookie stream again.
+    await fireOnline(a.page)
+    await expect.poll(blockedCount, { timeout: 10_000 }).toBe(4)
+    await expect
+      .poll(() => a.seen.filter((s) => s.url === sameOriginUrl(board)).length, { timeout: 10_000 })
+      .toBe(cookieStreams + 1)
+    await expectLiveComment(a, bob, board, 'Still live after the retry', '2')
+    // Nothing more is tried: not a retry loop.
+    await a.page.waitForTimeout(4_000)
+    expect(await blockedCount()).toBe(4)
+    expect(a.directResponses).toEqual([])
+  } finally {
+    await a.context.close()
+  }
+})
+
+test('wave I1: when the network returns the page opens a fresh stream at once (not after the stale-stream timer), and it is live', async ({
+  browser,
+  board,
+  users,
+}) => {
+  const aliceComments = commentsApi(await users.api('alice'))
+  await aliceComments.markAllNotificationsRead()
+  await users.grant(board, 'bob', 'commenter')
+  const bob = commentsApi(await users.api('bob'))
+  const a = await openWatched(browser, board, await users.get('alice'))
+  try {
+    await expect.poll(() => a.directResponses.length).toBeGreaterThan(0)
+    const before = a.directResponses.length
+    // Offline: the open stream goes quiet; nothing tells the page (a dropped network sends no close), so
+    // before I1 it noticed only when the stale-stream timer fired, up to 40 s after the last ping.
+    await a.context.setOffline(true)
+    await a.page.waitForTimeout(3_000)
+    expect(a.directResponses.length, 'no new stream while offline').toBe(before)
+    await a.context.setOffline(false)
+    await expect
+      .poll(() => a.directResponses.length, { timeout: 5_000, message: 'a fresh direct stream at once' })
+      .toBeGreaterThan(before)
+    await expectLiveComment(a, bob, board, 'Right after the network came back', '1')
+    // The direct transport was kept: going offline is not the origin's fault.
+    expect(a.seen.filter((s) => s.url === sameOriginUrl(board))).toEqual([])
   } finally {
     await a.context.close()
   }

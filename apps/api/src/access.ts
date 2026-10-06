@@ -9,6 +9,7 @@ import {
   type BoardStatus,
   type BoardVisibility,
   can,
+  canCreateInWorkspace,
   resolveBoardRole,
   type WorkspaceRole,
 } from '@draftroom/permissions'
@@ -93,6 +94,14 @@ function toAccess(row: AccessRow): BoardAccess {
 // With a real Postgres pool, requests run on separate connections at once, and two transactions that
 // lock the same rows in opposite orders deadlock: Postgres then fails one of them (a 500). So every
 // transaction that locks more than one of these takes them top-down, never bottom-up:
+//   0. the workspace row: FOR NO KEY UPDATE (assertBoardRoom, uploads, a member change or removal). It is
+//      taken first, before ANY read that decides whether the transaction may hand out a grant, the
+//      caller's own membership included: a board's creator gets an owner grant for themselves
+//      (routes/boards.ts, features/history/new-board.ts createBoardFrom), so both go through
+//      requireCreatingRoleLocked below: the workspace row first, the creator's role read after it (a
+//      guest or a stranger never takes the row). A member removal holds that row from its first statement, so
+//      with an unlocked role read before it a removal could run in full between the read and the lock, and
+//      the new board's owner grant would outlive the creator's membership;
 //   1. the board row: FOR UPDATE (requireBoardAction/loadBoardAccess `forUpdate`, lockBoardRow). Note
 //      that inserting a row that references a board (board_members, comments, invitation_redemptions,
 //      ...) takes a key-share lock on the board row, which waits for FOR UPDATE: that is step 1 too;
@@ -254,6 +263,32 @@ export async function requireWorkspaceRole(
   )
   if (!row) throw notFound()
   return row.role
+}
+
+/**
+ * A creator's own owner grant (a new board, a copy: routes/boards.ts, features/history/new-board.ts) must
+ * not outlive their membership, so the transaction that writes it decides the creator's role UNDER the
+ * workspace row lock (step 0 of the lock order above), as a member removal does:
+ *   1. an unlocked peek. A stranger (404), a malformed workspace id (404, before any SQL that would reject
+ *      it as a parameter) and a member who may not create (403: a guest, say) leave here and never take
+ *      the lock, so none of them can hold the workspace row up for others;
+ *   2. the workspace row FOR NO KEY UPDATE. A removal that is under way holds it, so this waits for it;
+ *   3. the role again, after the lock, and that read decides: a removal that committed in between left
+ *      no row (404), a role change left the new role (maybe 403). A removal that comes later waits for
+ *      this transaction's lock and sweeps the owner grant it writes.
+ * Returns the role read under the lock. Call it before anything else in the transaction takes a lock.
+ */
+export async function requireCreatingRoleLocked(
+  q: Queryable,
+  workspaceId: string,
+  userId: string,
+): Promise<WorkspaceRole> {
+  const peek = await requireWorkspaceRole(q, workspaceId, userId)
+  if (!canCreateInWorkspace(peek)) throw forbidden()
+  await q.query('SELECT id FROM workspaces WHERE id = $1 FOR NO KEY UPDATE', [workspaceId])
+  const role = await requireWorkspaceRole(q, workspaceId, userId)
+  if (!canCreateInWorkspace(role)) throw forbidden()
+  return role
 }
 
 /** The resolved role of a board the caller was already allowed to see (never null past the checks). */
