@@ -333,15 +333,24 @@ test('a selection vote, ended, then a board vote: the guest, an editor who voted
     })
 
     await test.step('the server holds each ballot in the board vote', async () => {
-      expect(await storedBallot(a, boardId)).toEqual({
-        sid: second,
-        myVotes: { [ref(ID.p1)]: 1, [ref(ID.loose)]: 1, [ref(ID.w1)]: 1 },
-      })
-      expect(await storedBallot(b, boardId)).toEqual({ sid: second, myVotes: { [ref(ID.loose)]: 1 } })
-      expect(await storedBallot(guest, boardId)).toEqual({
-        sid: second,
-        myVotes: { [ref(ID.loose)]: 1, [ref(ID.p1)]: 1 },
-      })
+      // polled: `votesOn` returns when the page shows the dot, and the cast reaches the server a moment
+      // later, so one read right after the last click can miss it (wave I's flake; its integrator ran this
+      // poll 30 of 30)
+      await expect
+        .poll(() => storedBallot(a, boardId), { timeout: 15_000 })
+        .toEqual({
+          sid: second,
+          myVotes: { [ref(ID.p1)]: 1, [ref(ID.loose)]: 1, [ref(ID.w1)]: 1 },
+        })
+      await expect
+        .poll(() => storedBallot(b, boardId), { timeout: 15_000 })
+        .toEqual({ sid: second, myVotes: { [ref(ID.loose)]: 1 } })
+      await expect
+        .poll(() => storedBallot(guest, boardId), { timeout: 15_000 })
+        .toEqual({
+          sid: second,
+          myVotes: { [ref(ID.loose)]: 1, [ref(ID.p1)]: 1 },
+        })
     })
   } finally {
     await guest.context.close()

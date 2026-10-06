@@ -1,5 +1,5 @@
 // OWNER: 3a. W5-11: a connector's `inside` ends move onto their shapes' outlines (./connector-outline.ts).
-import { newArrowElement, newElement, newFrameElement } from '@excalidraw/element'
+import { getOrbitBindingGap, newArrowElement, newElement, newFrameElement } from '@excalidraw/element'
 import type { ExcalidrawElement } from '@excalidraw/element/types'
 import { describe, expect, it } from 'vitest'
 import { connectorOutlinePatch } from './connector-outline.ts'
@@ -14,6 +14,9 @@ const style = {
   opacity: 100,
   roundness: null,
 } as const
+
+/** W5-53: how far an orbit end sits off its shape (the patched engine's 1 + stroke / 2; the boxes' stroke is 2). */
+const GAP = getOrbitBindingGap({ strokeWidth: style.strokeWidth })
 
 /** Two filled boxes, A at x 100-300 and B at x 600-800, both y 100-220. */
 function boxes() {
@@ -69,11 +72,10 @@ describe('connectorOutlinePatch (W5-11)', () => {
     expect(patch.endBinding).toMatchObject({ elementId: b.id, fixedPoint: [0.6, 0.58], mode: 'orbit' })
     const [sx, sy] = scenePoint(patch, 0)
     const [ex, ey] = scenePoint(patch, -1)
-    // A's right side (x 300) and B's left side (x 600), each a gap (5 + stroke / 2) outside the shape
-    expect(sx).toBeGreaterThan(300)
-    expect(sx).toBeLessThan(310)
-    expect(ex).toBeLessThan(600)
-    expect(ex).toBeGreaterThan(590)
+    // A's right side (x 300) and B's left side (x 600), each the orbit gap (W5-53: 1 + stroke / 2 = 2, was 6) outside
+    expect(GAP).toBe(2)
+    expect(sx).toBeCloseTo(300 + GAP, 2)
+    expect(ex).toBeCloseTo(600 - GAP, 2)
     expect(sy).toBeGreaterThan(100)
     expect(sy).toBeLessThan(220)
     expect(ey).toBeGreaterThan(100)
@@ -92,8 +94,7 @@ describe('connectorOutlinePatch (W5-11)', () => {
     if (!patch) return
     expect(scenePoint(patch, 0)).toEqual([450, 160])
     const [ex] = scenePoint(patch, -1)
-    expect(ex).toBeLessThan(600)
-    expect(ex).toBeGreaterThan(590)
+    expect(ex).toBeCloseTo(600 - GAP, 2)
     expect(patch.startBinding).toBeNull()
     expect(patch.endBinding?.mode).toBe('orbit')
   })
@@ -105,8 +106,7 @@ describe('connectorOutlinePatch (W5-11)', () => {
     expect(patch).not.toBeNull()
     if (!patch) return
     const [sx] = scenePoint(patch, 0)
-    expect(sx).toBeGreaterThan(300)
-    expect(sx).toBeLessThan(310)
+    expect(sx).toBeCloseTo(300 + GAP, 2)
     expect(scenePoint(patch, -1)[0]).toBeCloseTo(595, 5)
   })
 
