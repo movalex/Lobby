@@ -200,5 +200,15 @@ describe('outsider_joined and the texts', () => {
         outsideAccess: null,
       }).outsideAccess,
     ).toBeNull()
+    // The pending outside invitations came later: an answer without them reads as none.
+    expect(
+      InternalOnlySettings.parse({
+        workspace: true,
+        projects: [],
+        canChange: true,
+        canTurnOff: true,
+        outsideAccess: { people: [], links: [] },
+      }).outsideAccess?.invitations,
+    ).toEqual([])
   })
 })

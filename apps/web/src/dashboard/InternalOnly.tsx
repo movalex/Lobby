@@ -3,11 +3,9 @@
 // decides: 403 otherwise, its message shown as is). While one is on, the server refuses outside
 // invitations, approvals, raises and links there (409 INTERNAL_ONLY); it removes nothing, so the outside
 // access that remains is listed here for the owners to remove (people from the workspace or a board,
-// links revoked), never removed by the switch itself. Default off.
+// links and pending outside invitations revoked), never removed by the switch itself. Default off.
 import {
   type InternalOnlySettings,
-  type OutsideAccessLink,
-  type OutsideAccessPerson,
   type Project,
   InternalOnlySettings as SettingsSchema,
 } from '@draftroom/contracts'
@@ -15,7 +13,12 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { ExternalTag } from '../features/people/ExternalTag.tsx'
 import { Dialog } from '../ui/Dialog.tsx'
-import { type OutsideScope, outsideAccessIn, outsideAccessSummary } from './internal-only-model.ts'
+import {
+  type OutsideAccess,
+  type OutsideScope,
+  outsideAccessIn,
+  outsideAccessSummary,
+} from './internal-only-model.ts'
 
 const enc = encodeURIComponent
 
@@ -190,7 +193,7 @@ export function OutsideAccessDialog({
 }: {
   workspaceId: string
   title: string
-  access: { people: OutsideAccessPerson[]; links: OutsideAccessLink[] }
+  access: OutsideAccess
   onChanged(): void
   onClose(): void
 }) {
@@ -220,7 +223,7 @@ export function OutsideAccessDialog({
           {error}
         </p>
       )}
-      {access.people.length === 0 && access.links.length === 0 && (
+      {access.people.length === 0 && access.links.length === 0 && access.invitations.length === 0 && (
         <p className="dr-muted" data-testid="outside-access-empty">
           Nobody outside Dark Burn and Trailer Park Group has access here now.
         </p>
@@ -316,6 +319,44 @@ export function OutsideAccessDialog({
                         body: { removeAccess: true },
                         schema: null,
                       }),
+                    )
+                  }
+                >
+                  Revoke
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {access.invitations.length > 0 && (
+        <ul className="dr-members" data-testid="outside-access-invitations">
+          {access.invitations.map((i) => (
+            <li
+              key={i.id}
+              className="dr-member"
+              data-testid="outside-access-invitation"
+              data-invitation-id={i.id}
+            >
+              <div className="dr-member__text">
+                <span className="dr-member__name">
+                  Invitation to {i.emailHint}
+                  <ExternalTag domain={i.emailDomain} />
+                </span>
+                <span className="dr-member__sub">
+                  {i.boardTitle ?? 'The workspace'} · not accepted · until{' '}
+                  {new Date(i.expiresAt).toLocaleString()}
+                </span>
+              </div>
+              <div className="dr-member__actions">
+                <button
+                  type="button"
+                  className="dr-btn dr-btn--sm"
+                  data-testid="outside-access-revoke-invitation"
+                  disabled={busy !== null}
+                  onClick={() =>
+                    void run(i.id, () =>
+                      api.request('DELETE', `/api/invitations/${enc(i.id)}`, { schema: null }),
                     )
                   }
                 >

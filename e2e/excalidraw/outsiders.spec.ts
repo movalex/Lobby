@@ -8,7 +8,8 @@
 //   guest link is open, and off again when that ends;
 // - the owner's bell notice the first time the outside account opens the board;
 // - "Internal only" on the workspace: the server refuses outside invites, approvals and links (the dialog
-//   says why), the outside access that remains is listed for the owner, and nothing is removed.
+//   says why), the outside access that remains is listed for the owner (a pending outside invitation
+//   with a Revoke), and nothing is removed.
 //
 // The dev provider trusts the dev sign-in's `email`; outside addresses go only to fresh handles. Every
 // address is a reserved example (or a `lobby-test-` local part at a creator domain).
@@ -20,6 +21,7 @@ import {
   accessRequests,
   closeShare,
   freshHandle,
+  invitations,
   mainCard,
   memberRow,
   openDashboard,
@@ -253,12 +255,19 @@ test('Internal only on the workspace: outside invites, approvals and links refus
   const quinnApi = new Api(quinn.context.request)
   const rexApi = new Api(rex.context.request)
   try {
-    await test.step('before: quinn has the board (an approved request)', async () => {
+    let pendingId = ''
+    await test.step('before: quinn has the board (an approved request); an invitation for z@ is pending', async () => {
       expect(
         (await quinnApi.fetch('POST', `/api/boards/${board}/access-requests`, { role: 'viewer' })).status(),
       ).toBe(202)
       const [req] = await accessRequests(aliceApi, board)
       expect((await aliceApi.fetch('POST', `/api/access-requests/${req?.id}/approve`, {})).status()).toBe(200)
+      const inv = await aliceApi.fetch('POST', `/api/boards/${board}/invitations`, {
+        role: 'viewer',
+        email: 'z@client.example.test',
+      })
+      expect(inv.status()).toBe(201)
+      pendingId = ((await inv.json()) as { id: string }).id
     })
 
     const a = await canvasSession('alice')
@@ -277,7 +286,16 @@ test('Internal only on the workspace: outside invites, approvals and links refus
       )
       await expect(person.getByTestId('external-tag')).toHaveText('External · vendor.example.test')
       await expect(person.getByTestId('outside-access-remove-board')).toBeVisible()
+      // the invitation sent before the switch: nobody outside can accept it now; listed with a Revoke
+      const pending = dialog.locator(
+        `[data-testid="outside-access-invitation"][data-invitation-id="${pendingId}"]`,
+      )
+      await expect(pending).toContainText('z•••@client.example.test')
+      await expect(pending.getByTestId('external-tag')).toHaveText('External · client.example.test')
       await capture('outsiders-internal-only-review.png', a.page, testInfo)
+      await pending.getByTestId('outside-access-revoke-invitation').click()
+      await expect(pending).toHaveCount(0)
+      expect((await invitations(aliceApi, board)).some((i) => i.id === pendingId)).toBe(false)
       await a.page.keyboard.press('Escape')
       // nothing was removed
       expect((await quinnApi.fetch('GET', `/api/boards/${board}`)).status()).toBe(200)

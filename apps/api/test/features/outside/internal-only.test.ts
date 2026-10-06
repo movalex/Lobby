@@ -3,18 +3,24 @@
 // to people outside Dark Burn / TPG there: invitations to an outside address (board, workspace, the
 // email route's links and its "granted" path), approving an outside account's request, a new or higher
 // grant (or workspace role) for an outside account, and review, workshop and guest links (created,
-// extended, or opened to guests): 409 INTERNAL_ONLY. Creators are unaffected. Turning it on removes
-// nothing: the remaining outside access is listed for the owners. Turning it off needs a creator.
+// extended, or opened to guests): 409 INTERNAL_ONLY. Accepting an invitation or a link there, one from
+// before the switch included, is refused the same way for anyone who is not a confirmed creator (a
+// name-only guest joining a guest link too); nothing is redeemed. Creators are unaffected. Turning it on
+// removes nothing: the remaining outside access (pending outside invitations included) is listed for
+// the owners, only while a switch is on. Turning it off needs a creator.
 
 import {
   INTERNAL_ONLY_CODE,
   INTERNAL_ONLY_MESSAGES,
   InternalOnlySettings,
+  InvitationCreated,
   ReviewLinkCreated,
 } from '@draftroom/contracts'
 import type { LightMyRequestResponse } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { assertHookRoutes } from '../../../src/features/dashboard/outside.ts'
 import { type Client, createBoard, createTestApi, DEV_STUDIO, devEmail, type TestApi } from '../../helpers.ts'
+import { freshIp, joinRequest, tokenOf } from '../guests/support.ts'
 
 const code = (res: LightMyRequestResponse) => (res.json() as { error?: { code?: string } }).error?.code
 const message = (res: LightMyRequestResponse) =>
@@ -65,6 +71,8 @@ describe('the switch', () => {
   it('is off by default; owners and admins turn it on; members read it; turning off needs a creator', async () => {
     const before = await settings(alice)
     expect(before).toMatchObject({ workspace: false, canChange: true, canTurnOff: true })
+    // The review list is computed only while a switch is on.
+    expect(before.outsideAccess).toBeNull()
     expect((await settings(bob)).canChange).toBe(false)
     expect((await settings(bob)).outsideAccess).toBeNull()
     expect((await setWorkspace(bob, true)).statusCode).toBe(403)
@@ -111,8 +119,130 @@ describe('the switch', () => {
       }),
     ])
     expect(s.outsideAccess?.links.map((l) => l.id)).toEqual([link.id])
-    // pat still has the board; the link still works.
+    expect(s.outsideAccess?.invitations).toEqual([])
+    // pat still has the board; the link still exists (it admits creators only while the switch is on).
     expect((await pat.req('GET', `/api/boards/${board}`)).statusCode).toBe(200)
+    expect(await api.db.one('SELECT revoked_at FROM invitations WHERE id = $1', [link.id])).toEqual({
+      revoked_at: null,
+    })
+  })
+})
+
+describe('invitations and links from before the switch', () => {
+  const invite = async (email: string) => {
+    const res = await bob.req('POST', `/api/boards/${board}/invitations`, { role: 'commenter', email })
+    expect(res.statusCode, res.body).toBe(201)
+    return InvitationCreated.parse(res.json())
+  }
+  const accept = (c: Client, url: string) => c.req('POST', `/api/invitations/${tokenOf(url)}/accept`)
+  const grantOf = async (userId: string) =>
+    (
+      await api.db.maybeOne<{ role: string }>(
+        'SELECT role FROM board_members WHERE board_id = $1 AND user_id = $2',
+        [board, userId],
+      )
+    )?.role ?? null
+
+  it('an outside account cannot accept one while it is on; it is listed, revocable, and works once off', async () => {
+    const forQuinn = await invite('quinn@client.example.test')
+    const forStranger = await invite('stranger@client.example.test')
+    // A creator address is not outside: never listed.
+    await invite('lobby-test-b@darkburn.com')
+    expect((await setWorkspace(alice, true)).statusCode).toBe(200)
+
+    refused(await accept(quinn, forQuinn.url))
+    expect(await grantOf(quinn.userId)).toBeNull()
+    expect(await api.db.one('SELECT redeemed_by FROM invitations WHERE id = $1', [forQuinn.id])).toEqual({
+      redeemed_by: null,
+    })
+    expect(
+      await api.db.maybeOne(
+        'SELECT 1 AS ok FROM workspace_members WHERE workspace_id = $1 AND user_id = $2',
+        [DEV_STUDIO, quinn.userId],
+      ),
+    ).toBeNull()
+
+    const listed = (await settings(alice)).outsideAccess?.invitations ?? []
+    expect(listed.map((i) => i.id).sort()).toEqual([forQuinn.id, forStranger.id].sort())
+    expect(listed.find((i) => i.id === forQuinn.id)).toEqual({
+      id: forQuinn.id,
+      boardId: board,
+      boardTitle: 'Internal plan',
+      projectId: null,
+      role: 'commenter',
+      expiresAt: forQuinn.expiresAt,
+      emailDomain: 'client.example.test',
+      emailHint: 'q•••@client.example.test',
+    })
+    expect(JSON.stringify(listed)).not.toContain('quinn@client.example.test')
+    // The owner revokes one from the list (the workspace's owner manages every board here).
+    expect((await alice.req('DELETE', `/api/invitations/${forStranger.id}`)).statusCode).toBe(204)
+    expect((await settings(alice)).outsideAccess?.invitations.map((i) => i.id)).toEqual([forQuinn.id])
+
+    // Off again: the invitation was never used up, so it works.
+    expect((await setWorkspace(alice, false)).statusCode).toBe(200)
+    expect((await accept(quinn, forQuinn.url)).statusCode).toBe(200)
+    expect(await grantOf(quinn.userId)).toBe('commenter')
+  })
+
+  it('a workspace invitation, and a project that is internal only, refuse the same way', async () => {
+    const res = await alice.req('POST', `/api/workspaces/${DEV_STUDIO}/invitations`, {
+      role: 'member',
+      email: 'quinn@client.example.test',
+    })
+    expect(res.statusCode, res.body).toBe(201)
+    const wsInvite = InvitationCreated.parse(res.json())
+    const project = (
+      await bob.req('POST', `/api/workspaces/${DEV_STUDIO}/projects`, { name: 'Secret' })
+    ).json() as { id: string }
+    expect((await bob.req('PATCH', `/api/boards/${board}`, { projectId: project.id })).statusCode).toBe(200)
+    const boardInvite = await invite('quinn@client.example.test')
+    expect(
+      (await alice.req('PUT', `/api/projects/${project.id}/internal-only`, { internalOnly: true }))
+        .statusCode,
+    ).toBe(200)
+    // The project covers the board, not the workspace invitation.
+    refused(await accept(quinn, boardInvite.url), 'project')
+    const listed = (await settings(alice)).outsideAccess?.invitations ?? []
+    expect(listed.map((i) => [i.id, i.boardId])).toEqual(
+      expect.arrayContaining([
+        [wsInvite.id, null],
+        [boardInvite.id, board],
+      ]),
+    )
+    expect((await accept(quinn, wsInvite.url)).statusCode).toBe(200)
+    // The whole workspace: a workspace invitation is refused too.
+    const olga = await api.login('olga', 'Olga', { email: 'olga@client.example.test' })
+    const forOlga = await alice.req('POST', `/api/workspaces/${DEV_STUDIO}/invitations`, {
+      role: 'member',
+      email: 'olga@client.example.test',
+    })
+    expect(forOlga.statusCode, forOlga.body).toBe(201)
+    expect((await setWorkspace(alice, true)).statusCode).toBe(200)
+    refused(await accept(olga, InvitationCreated.parse(forOlga.json()).url))
+  })
+
+  it('links: outside accounts and name-only guests are refused; a creator (stale too) still joins', async () => {
+    const link = ReviewLinkCreated.parse(
+      (await reviewLink(bob, { role: 'commenter', allowGuests: true })).json(),
+    )
+    expect((await setWorkspace(alice, true)).statusCode).toBe(200)
+    refused(await accept(quinn, link.url))
+    refused(await joinRequest(api, tokenOf(link.url), { name: 'Gail' }, { ip: freshIp() }))
+    // Nothing was created for the guest who was turned away.
+    expect(await api.db.maybeOne("SELECT 1 AS ok FROM users WHERE kind = 'guest'")).toBeNull()
+    // A creator who is not in the workspace accepts; one whose addresses are a day old is confirmed first.
+    const ana = await api.login('ana', 'Ana', { email: 'lobby-test-ana@darkburn.com' })
+    await api.db.query('DELETE FROM workspace_members WHERE workspace_id = $1 AND user_id = $2', [
+      DEV_STUDIO,
+      ana.userId,
+    ])
+    await api.db.query("UPDATE users SET identity_checked_at = now() - interval '25 hours' WHERE id = $1", [
+      ana.userId,
+    ])
+    const ok = await accept(ana, link.url)
+    expect(ok.statusCode, ok.body).toBe(200)
+    expect(await grantOf(ana.userId)).toBe('commenter')
   })
 })
 
@@ -242,6 +372,25 @@ describe('while the workspace is internal only', () => {
     expect(
       (await bob.req('PUT', `/api/boards/${board}/members/${carol.userId}`, { role: 'editor' })).statusCode,
     ).toBe(200)
+  })
+})
+
+describe('the guards on other workstreams’ routes', () => {
+  it('the api refuses to start when a route a hook keys on is not registered (a rename cannot turn one off)', () => {
+    // This api started, so every real key matched (assertHookRoutes runs at ready time).
+    expect(() =>
+      assertHookRoutes(api.app, [
+        'PUT /api/boards/:bid/members/:uid',
+        'PATCH /api/workspaces/:wid/members/:uid',
+        'POST /api/boards/:bid/invitations/email',
+        'POST /api/boards/:bid/review-links/:id/extend',
+        'PATCH /api/boards/:bid/review-links/:id',
+        'POST /api/boards/:bid/ticket',
+      ]),
+    ).not.toThrow()
+    expect(() =>
+      assertHookRoutes(api.app, ['PUT /api/boards/:bid/members/:uid', 'PUT /api/boards/:bid/people/:uid']),
+    ).toThrow('hooked routes are not registered: PUT /api/boards/:bid/people/:uid')
   })
 })
 

@@ -52,6 +52,28 @@ const settings = (over: Partial<InternalOnlySettings> = {}): InternalOnlySetting
         allowGuests: true,
       },
     ],
+    invitations: [
+      {
+        id: 'inv_ws',
+        boardId: null,
+        boardTitle: null,
+        projectId: null,
+        role: 'member',
+        expiresAt: '2026-10-10T00:00:00.000Z',
+        emailDomain: 'client.example',
+        emailHint: 'x•••@client.example',
+      },
+      {
+        id: 'inv_a',
+        boardId: 'b-in-a',
+        boardTitle: 'In A',
+        projectId: 'prj_a',
+        role: 'viewer',
+        expiresAt: '2026-10-10T00:00:00.000Z',
+        emailDomain: 'client.example',
+        emailHint: 'y•••@client.example',
+      },
+    ],
   },
   ...over,
 })
@@ -69,15 +91,33 @@ describe('outside access in a scope', () => {
     expect(outsideAccessIn(s, { kind: 'project', projectId: 'prj_b' }).links.map((l) => l.id)).toEqual([
       'inv_1',
     ])
+    // Pending outside invitations: a board's belongs to its project, a workspace invitation to the
+    // workspace only.
+    expect(a.invitations.map((i) => i.id)).toEqual(['inv_a'])
+    expect(outsideAccessIn(s, { kind: 'project', projectId: 'prj_b' }).invitations).toEqual([])
+    expect(outsideAccessIn(s, { kind: 'workspace' }).invitations.map((i) => i.id)).toEqual([
+      'inv_ws',
+      'inv_a',
+    ])
   })
 
   it('summarises it, and says nothing when nothing reaches the scope', () => {
     expect(outsideAccessSummary(outsideAccessIn(settings(), { kind: 'workspace' }))).toBe(
+      '2 outside people, 1 link and 2 invitations still have access. Review',
+    )
+    expect(outsideAccessSummary({ people: [], links: [], invitations: [] })).toBeNull()
+    const one = settings().outsideAccess?.links ?? []
+    expect(outsideAccessSummary({ people: [], links: one, invitations: [] })).toBe(
+      '1 link still has access. Review',
+    )
+    const people = settings().outsideAccess?.people ?? []
+    expect(outsideAccessSummary({ people, links: one, invitations: [] })).toBe(
       '2 outside people and 1 link still have access. Review',
     )
-    expect(outsideAccessSummary({ people: [], links: [] })).toBeNull()
-    const one = settings().outsideAccess?.links ?? []
-    expect(outsideAccessSummary({ people: [], links: one })).toBe('1 link still has access. Review')
+    const invitations = settings().outsideAccess?.invitations.slice(0, 1) ?? []
+    expect(outsideAccessSummary({ people: [], links: [], invitations })).toBe(
+      '1 invitation still has access. Review',
+    )
   })
 })
 

@@ -143,7 +143,7 @@ export const OutsideAccessPerson = z.object({
 })
 export type OutsideAccessPerson = z.infer<typeof OutsideAccessPerson>
 
-/** An open review, workshop or guest link in the scope (revoke it in the board's Share dialog). */
+/** An open review, workshop or guest link in the scope (revoked from the review dialog). */
 export const OutsideAccessLink = z.object({
   id: z.string(),
   boardId: z.string(),
@@ -156,10 +156,29 @@ export const OutsideAccessLink = z.object({
 export type OutsideAccessLink = z.infer<typeof OutsideAccessLink>
 
 /**
+ * A pending single-use invitation in the scope to an address outside Dark Burn / TPG (sent before the
+ * switch went on). While the scope is internal only nobody outside can accept it (409 INTERNAL_ONLY);
+ * it is listed so a manager can revoke it (DELETE /api/invitations/:id). `boardId` null: a workspace
+ * invitation. `emailHint` is the masked address, never the full one.
+ */
+export const OutsideAccessInvitation = z.object({
+  id: z.string(),
+  boardId: z.string().nullable(),
+  boardTitle: z.string().nullable(),
+  projectId: z.string().nullable(),
+  role: z.string(),
+  expiresAt: z.string(),
+  emailDomain: z.string(),
+  emailHint: z.string(),
+})
+export type OutsideAccessInvitation = z.infer<typeof OutsideAccessInvitation>
+
+/**
  * GET /api/workspaces/:wid/internal-only (members and above). `outsideAccess` only for owners and
- * admins (null for everyone else): the outside accounts and open links that still reach the
- * workspace's boards, so a manager can remove them after turning the switch on (the switch never
- * removes anything by itself).
+ * admins, and only while the workspace or one of its projects is internal only (null otherwise): the
+ * outside accounts, open links and pending outside invitations that still reach the workspace's
+ * boards, so a manager can remove them after turning a switch on (the switch never removes anything by
+ * itself). `invitations` is absent from an api before the J1 review fixes (read as none).
  */
 export const InternalOnlySettings = z.object({
   workspace: z.boolean(),
@@ -168,7 +187,11 @@ export const InternalOnlySettings = z.object({
   canChange: z.boolean(),
   canTurnOff: z.boolean(),
   outsideAccess: z
-    .object({ people: z.array(OutsideAccessPerson), links: z.array(OutsideAccessLink) })
+    .object({
+      people: z.array(OutsideAccessPerson),
+      links: z.array(OutsideAccessLink),
+      invitations: z.array(OutsideAccessInvitation).default([]),
+    })
     .nullable(),
 })
 export type InternalOnlySettings = z.infer<typeof InternalOnlySettings>

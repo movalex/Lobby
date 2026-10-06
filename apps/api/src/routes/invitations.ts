@@ -43,7 +43,11 @@ import { isSecretToken, newSecretToken, sha256hex } from '../auth/session.ts'
 import { storedEmails, userKind } from '../auth/users.ts'
 import type { AppContext, Params } from '../context.ts'
 import { ApiError, badRequest, forbidden, gone, notFound, parse } from '../errors.ts'
-import { assertInviteAllowed } from '../features/dashboard/outside.ts'
+import {
+  assertInviteAllowed,
+  assertRedeemAllowed,
+  internalOnlyScopeOf,
+} from '../features/dashboard/outside.ts'
 import { assertGuestRoomOnLink } from '../features/guests/limits.ts'
 import { keyedLimit } from '../rate-limit.ts'
 
@@ -272,6 +276,9 @@ export async function redeemInvitation(
   at: Date,
   opts: { via?: 'guest' } = {},
 ): Promise<void> {
+  // Wave J: no name-only guest joins a board while its workspace or project is internal only, through a
+  // link from before the switch included (409 INTERNAL_ONLY; the accept route checks accounts itself).
+  if (opts.via === 'guest') await assertRedeemAllowed(tx, null, inv, userId)
   // Lock order (access.ts): the board and this link are locked; then the workspace_members row, THEN the
   // board_members row. A member removal (routes/workspaces.ts) deletes the membership and then sweeps the
   // grants, so a redeem that took the grant row first and the membership after (or never locked the
@@ -473,14 +480,20 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
     // Domain access, BEFORE any transaction (no provider call ever happens while the board or
     // invitation lock is held): an unlocked read of the lock, then the caller's addresses at most
     // 5 minutes old (503 IDENTITY_UNAVAILABLE otherwise, with nothing redeemed).
-    const lock = await db.maybeOne<{ invited_email: string | null }>(
-      'SELECT invited_email FROM invitations WHERE token_hash = $1',
-      [sha256hex(token)],
-    )
+    const lock = await db.maybeOne<{
+      invited_email: string | null
+      board_id: string | null
+      workspace_id: string
+    }>('SELECT invited_email, board_id, workspace_id FROM invitations WHERE token_hash = $1', [
+      sha256hex(token),
+    ])
     let callerEmails: ReadonlySet<string> = new Set()
     if (lock?.invited_email) {
       user = await ctx.identity.freshen(req, user, 'accept')
       callerEmails = new Set(await storedEmails(db, user.id, ctx.identity.lookup.source))
+    } else if (lock && (await internalOnlyScopeOf(db, lock))) {
+      // Wave J: an internal-only scope admits confirmed creators only: confirm a stale caller first.
+      user = await ctx.identity.freshen(req, user, 'me')
     }
     const caller = user
     const result = await db.transaction(async (tx) => {
@@ -519,6 +532,10 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
         !(await ctx.identity.isCreatorUser(tx, caller.id))
       )
         throw roleRequiresCreator()
+      // Wave J: while the board's workspace or project (a workspace invitation: the workspace) is internal
+      // only, only a confirmed creator accepts, however old the invitation (409 INTERNAL_ONLY; nothing is
+      // redeemed, so it works again if the switch is turned off before it expires).
+      await assertRedeemAllowed(tx, ctx, inv, caller.id)
       // The same per-link guest cap and rate as joining through POST /api/invitations/:token/guest.
       if (guest) await assertGuestRoomOnLink(tx, inv.id, caller.id, at)
       await redeemInvitation(tx, inv, caller.id, at)

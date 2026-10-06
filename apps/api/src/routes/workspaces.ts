@@ -321,12 +321,14 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
       [wid],
     )
     const manager = canManageWorkspace(role)
+    // The review list is only shown while a switch is on: computed only then.
+    const anyOn = ws.internal_only || projects.rows.some((p) => p.internal_only)
     return {
       workspace: ws.internal_only,
       projects: projects.rows.map((p) => ({ projectId: p.id, internalOnly: p.internal_only })),
       canChange: manager,
       canTurnOff: manager && (await ctx.identity.isCreatorUser(q, userId)),
-      outsideAccess: manager ? await outsideAccessIn(q, ctx, wid) : null,
+      outsideAccess: manager && anyOn ? await outsideAccessIn(q, ctx, wid) : null,
     }
   }
 

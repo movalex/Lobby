@@ -14,10 +14,14 @@
 // - "Internal only" (0025): while a workspace or a project is internal only, inviting an outside
 //   address, approving an outside account's request, giving an outside account a grant or a higher
 //   role, and creating, extending or opening to guests a review, workshop or guest link are refused
-//   with 409 INTERNAL_ONLY. Nothing that exists is removed. The refusals for routes this workstream
-//   does not own (PUT board members, PATCH workspace members, the email invite, a link's extend and
-//   PATCH) sit in root preHandler hooks below, after the route's own permission checks and only for a
-//   creator caller (a non-creator is refused by the route itself, so the hook reveals nothing new);
+//   with 409 INTERNAL_ONLY, and so is accepting an invitation or a link there (an older one included)
+//   by anyone who is not a confirmed creator (routes/invitations.ts). Nothing that exists is removed:
+//   the remaining outside access, pending outside invitations included, is listed for the owners.
+//   The refusals for routes this workstream does not own (PUT board members, PATCH workspace members,
+//   the email invite, a link's extend and PATCH) sit in root preHandler hooks below (the api refuses
+//   to start if one of their routes is missing: assertHookRoutes), after the route's own permission
+//   checks and only for a creator caller (a non-creator is refused by the route itself, so the hook
+//   reveals nothing new);
 //   createInvitation, review-link creation and access-request approval check in their transactions.
 
 import {
@@ -31,6 +35,7 @@ import {
   INTERNAL_ONLY_CODE,
   INTERNAL_ONLY_MESSAGES,
   type InternalOnlyScope,
+  type OutsideAccessInvitation,
   type OutsideAccessLink,
   type OutsideAccessPerson,
   type OutsideInfo,
@@ -240,6 +245,13 @@ async function invitationScope(
   return (await workspaceInternalOnly(q, target.workspaceId)) ? 'workspace' : null
 }
 
+/** The internal-only scope an invitation row falls in (null: none is on). */
+export const internalOnlyScopeOf = (
+  q: Queryable,
+  inv: { board_id: string | null; workspace_id: string },
+): Promise<InternalOnlyScope | null> =>
+  invitationScope(q, { boardId: inv.board_id, workspaceId: inv.workspace_id })
+
 /**
  * createInvitation's guard (routes/invitations.ts; every single-use invitation, the email route's
  * links included): an address that is not a creator address cannot be invited while the scope is
@@ -271,6 +283,25 @@ export async function assertRaiseAllowed(
   if (scope && !(await deps.identity.isCreatorUser(q, userId))) throw internalOnlyRefused(scope)
 }
 
+/**
+ * Accepting an invitation or a link (routes/invitations.ts; joining as a name-only guest goes through
+ * the same check): while its board's workspace or project (a workspace invitation: the workspace) is
+ * internal only, only a confirmed creator may redeem it, however old the invitation is. Stored status
+ * (the accept route confirmed the caller's addresses before its transaction for an email-locked one);
+ * call in the transaction. Removes nothing.
+ */
+export async function assertRedeemAllowed(
+  q: Queryable,
+  deps: Pick<OutsideDeps, 'identity'> | null,
+  inv: { board_id: string | null; workspace_id: string },
+  userId: string,
+): Promise<void> {
+  const scope = await internalOnlyScopeOf(q, inv)
+  if (!scope) return
+  // deps null: a name-only guest (never a creator).
+  if (!deps || !(await deps.identity.isCreatorUser(q, userId))) throw internalOnlyRefused(scope)
+}
+
 /** Review, workshop and guest links: none while the board is internal only. */
 export async function assertLinksAllowed(q: Queryable, boardId: string): Promise<void> {
   const scope = await boardInternalOnly(q, boardId)
@@ -287,7 +318,11 @@ export async function outsideAccessIn(
   q: Queryable,
   deps: OutsideDeps,
   workspaceId: string,
-): Promise<{ people: OutsideAccessPerson[]; links: OutsideAccessLink[] }> {
+): Promise<{
+  people: OutsideAccessPerson[]
+  links: OutsideAccessLink[]
+  invitations: OutsideAccessInvitation[]
+}> {
   const { lookup } = deps.identity
   const members = await q.query<UserRow & { role: WorkspaceRole }>(
     `SELECT u.id, u.name, u.handle, u.color, u.avatar_url, wm.role
@@ -338,8 +373,44 @@ export async function outsideAccessIn(
       LIMIT 200`,
     [workspaceId, deps.now()],
   )
+  // Pending single-use invitations (locked to an address) whose address is outside: nobody outside can
+  // accept them while the scope is internal only, and they are listed to be revoked. Board invitations
+  // (not in the trash) and workspace invitations; the policy decides in code (the exceptions list).
+  const pending = await q.query<{
+    id: string
+    board_id: string | null
+    title: string | null
+    project_id: string | null
+    role: string
+    expires_at: Date
+    invited_email: string
+  }>(
+    `SELECT i.id, i.board_id, b.title, b.project_id, i.role, i.expires_at, i.invited_email
+       FROM invitations i LEFT JOIN boards b ON b.id = i.board_id AND b.workspace_id = i.workspace_id
+      WHERE i.workspace_id = $1 AND NOT i.multi_use AND i.invited_email IS NOT NULL
+        AND i.redeemed_by IS NULL AND i.revoked_at IS NULL AND i.expires_at > $2
+        AND (i.board_id IS NULL OR (b.id IS NOT NULL AND b.status <> 'trashed'))
+      ORDER BY i.expires_at, i.id
+      LIMIT 500`,
+    [workspaceId, deps.now()],
+  )
+  const { policy, devDomain } = lookup
+  const invitations: OutsideAccessInvitation[] = pending.rows
+    .filter((i) => !isCreatorEmail(i.invited_email, policy, devDomain))
+    .slice(0, 200)
+    .map((i) => ({
+      id: i.id,
+      boardId: i.board_id,
+      boardTitle: i.title,
+      projectId: i.project_id,
+      role: i.role,
+      expiresAt: i.expires_at.toISOString(),
+      emailDomain: emailDomain(i.invited_email),
+      emailHint: maskAddress(i.invited_email),
+    }))
   return {
     people,
+    invitations,
     links: links.rows.map((l) => ({
       id: l.id,
       boardId: l.board_id,
@@ -565,6 +636,14 @@ export function registerOutsideRoutes(app: FastifyInstance, ctx: FeatureContext)
     return identity.isCreatorUser(db, userId)
   }
 
+  app.addHook('onReady', async () => {
+    assertHookRoutes(app, [
+      ...Object.keys(INTERNAL_ONLY_HOOKS),
+      ...[...BOARD_LISTS].map((url) => `GET ${url}`),
+      `POST ${TICKET_ROUTE}`,
+    ])
+  })
+
   const INTERNAL_ONLY_HOOKS: Record<string, (req: FastifyRequest, callerId: string) => Promise<void>> = {
     // A new or higher board grant for an outside account (lowering, keeping and owner are the route's).
     'PUT /api/boards/:bid/members/:uid': async (req, callerId) => {
@@ -633,3 +712,18 @@ export function registerOutsideRoutes(app: FastifyInstance, ctx: FeatureContext)
 
 /** For callers outside this module (createInvitation) that only have an AppContext. */
 export const outsideDepsOf = (ctx: AppContext): OutsideDeps => ({ identity: ctx.identity, now: ctx.now })
+
+/**
+ * The routes this module's root hooks key on, by `METHOD pattern`, other workstreams' routes among them:
+ * the api refuses to start when one of them is not registered (a rename would otherwise turn a guard
+ * off without a sound). Checked at ready time, when every route exists.
+ */
+export function assertHookRoutes(app: FastifyInstance, keys: readonly string[]): void {
+  const missing = keys.filter((key) => {
+    const space = key.indexOf(' ')
+    const method = key.slice(0, space) as 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+    return !app.hasRoute({ method, url: key.slice(space + 1) })
+  })
+  if (missing.length)
+    throw new Error(`outside markers: hooked routes are not registered: ${missing.join(', ')}`)
+}
