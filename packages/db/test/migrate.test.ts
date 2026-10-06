@@ -235,6 +235,7 @@ describe('shipped migrations', () => {
       '0022_engine_migration',
       '0023_export_policy_guests',
       '0024_vote_selection_access_granted',
+      '0026_feedback',
     ])
   })
 
@@ -265,6 +266,7 @@ describe('shipped migrations', () => {
       '0022_engine_migration',
       '0023_export_policy_guests',
       '0024_vote_selection_access_granted',
+      '0026_feedback',
     ])
     expect(await migrate(db)).toEqual({ applied: [], newer: [] })
     expect(await tableNames()).toEqual([
@@ -295,6 +297,7 @@ describe('shipped migrations', () => {
       'comment_reads',
       'comment_threads',
       'comments',
+      'feedback',
       'identities',
       'invitation_redemptions',
       'invitations',
@@ -358,6 +361,7 @@ describe('shipped migrations', () => {
       '0022_engine_migration',
       '0023_export_policy_guests',
       '0024_vote_selection_access_granted',
+      '0026_feedback',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))
     const inv = await db.one<{ multi_use: boolean; use_count: number }>(

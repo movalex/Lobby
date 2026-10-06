@@ -30,6 +30,7 @@ import { badRequest, toErrorResponse, unauthenticated } from './errors.ts'
 import { EventHub } from './events/hub.ts'
 import { registerEventRoutes } from './events/routes.ts'
 import type { FeatureContext } from './features/context.ts'
+import { registerFeedback } from './features/feedback/index.ts'
 import { INTERNAL_CHECKPOINT_POSTS } from './features/history/checkpoint-all.ts'
 import { registerFeatures } from './features/index.ts'
 import type { BlobStore } from './files/blobs.ts'
@@ -612,6 +613,8 @@ async function buildServer(
   }
   registerEventRoutes(app, features)
   await registerFeatures(app, features, { domainAccessGuard: deps.domainAccessGuard !== false })
+  // Wave J5: the Send feedback button's routes (POST /api/feedback, the inbox, GET /internal/feedback)
+  await registerFeedback(app, ctx)
   // Workspace storage and the unreferenced-file collector (UPL-1; DRAFTROOM_ASSET_GC, report-only by default).
   registerStorage(app, ctx, { blobs, sync: features.sync, dataRoot: layout.root })
 
