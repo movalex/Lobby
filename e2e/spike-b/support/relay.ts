@@ -8,6 +8,8 @@
 //    are HELD: the route accepts them without connecting to the server, never answers, and records what
 //    the page sends on them (D5's "the old page pushed nothing after the cut"). `mode: 'refuse'` closes
 //    each reconnect at once instead;
+//  - drops every frame from the server to the page while armed (`dropDown`, RCPT-2): the page's pushes still
+//    reach the room, their acks and the room's `changes` never reach the page (a lost ack);
 //  - restores it (`restoreSocket`): new sockets go through again. By default the held sockets are closed
 //    too, so the page reconnects now (L7); `release: false` leaves them held until the page unloads
 //    (D5: "the route holds the old page's reconnect until the page unloads", so a reload must restore
@@ -47,6 +49,8 @@ export interface RelayStats {
   readonly held: number
   /** what the page sent on held sockets since the last cut */
   readonly framesWhileCut: readonly HeldFrame[]
+  /** server frames dropped by `dropDown` (their types; bodies may carry board text) */
+  readonly droppedDown: readonly string[]
 }
 
 interface Queue {
@@ -74,6 +78,9 @@ interface RelayState {
   heldConnects: number
   refusedConnects: number
   cuts: number
+  /** drop every server frame to the page while true (RCPT-2) */
+  dropDown: boolean
+  droppedDown: string[]
 }
 
 const states = new WeakMap<Page, RelayState>()
@@ -180,7 +187,12 @@ function relay(st: RelayState, ws: WebSocketRoute): void {
   )
   server.onMessage((m) =>
     schedule(st, conn, 'down', () => {
-      if (conn.open) ws.send(m)
+      if (!conn.open) return
+      if (st.dropDown) {
+        st.droppedDown.push(frameType(m))
+        return
+      }
+      ws.send(m)
     }),
   )
   ws.onClose((code, reason) =>
@@ -213,6 +225,8 @@ export async function attachRelay(page: Page): Promise<void> {
     heldConnects: 0,
     refusedConnects: 0,
     cuts: 0,
+    dropDown: false,
+    droppedDown: [],
   }
   states.set(page, st)
   await page.routeWebSocket(CONNECT_URL, (ws) => {
@@ -281,6 +295,17 @@ export async function restore(page: Page, opts: { release?: boolean } = {}): Pro
   }
 }
 
+/**
+ * RCPT-2: while `on`, every frame the server sends this page's board socket is dropped (the page's own frames
+ * still go up): a push lands and its ack is lost. Returns the types dropped so far.
+ */
+export function dropDown(page: Page, on: boolean): readonly string[] {
+  const st = stateOf(page)
+  st.dropDown = on
+  if (on) st.droppedDown = []
+  return [...st.droppedDown]
+}
+
 export function relayStats(page: Page): RelayStats {
   const st = stateOf(page)
   const conns = [...st.conns]
@@ -294,5 +319,6 @@ export function relayStats(page: Page): RelayStats {
     live: conns.filter((c) => !c.held).length,
     held: conns.filter((c) => c.held).length,
     framesWhileCut: [...st.framesWhileCut],
+    droppedDown: [...st.droppedDown],
   }
 }

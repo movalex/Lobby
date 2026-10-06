@@ -29,6 +29,7 @@ export type SpikeBOwner =
   | 'engine-int'
   | 'wave-c5'
   | 'wave-c6'
+  | 'wave-j6b'
 
 /** §8.6.5: each owner's range. */
 export const PORT_RANGES: Readonly<Record<SpikeBOwner, readonly [number, number]>> = {
@@ -50,6 +51,8 @@ export const PORT_RANGES: Readonly<Record<SpikeBOwner, readonly [number, number]
   'wave-c5': [7460, 7499],
   /** wave C, workstream C6 (measurement: the perf harness, B9's workstation half on this machine) */
   'wave-c6': [7800, 7839],
+  /** wave J, workstream J6b (sync and capacity: the RCPT-2 and DRAG-1 browser checks, j6-receipts-drag.spec.ts) */
+  'wave-j6b': [7540, 7579],
 }
 
 /** §8.6.5: the named stacks (the base of each; sync = base, api = base + 1, web = base + 2). */
