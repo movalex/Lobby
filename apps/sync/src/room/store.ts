@@ -14,6 +14,7 @@ import {
   ensureLbSchema,
   ensureReceiptsSchema,
   type Gclock,
+  LB_META_RECEIPT_GAPS,
   LB_PRAGMAS,
   LB_SCHEMA_VERSION,
   parseGclock,
@@ -320,6 +321,31 @@ export class BoardStore {
     this.st.setMeta.run('horizon', String(horizon))
   }
 
+  /**
+   * The receipt gaps lb_meta keeps (schema.ts LB_META_RECEIPT_GAPS, RCPT-1): per user, the highest clock whose
+   * receipt is missing. Empty when there are none; an unreadable value counts as none and is logged by the
+   * caller's count only (it holds no content).
+   */
+  receiptGapsMeta(): Map<string, number> {
+    const out = new Map<string, number>()
+    const row = this.st.getMeta.get(LB_META_RECEIPT_GAPS) as { value: string } | undefined
+    if (!row) return out
+    try {
+      const v = JSON.parse(row.value) as unknown
+      if (v && typeof v === 'object' && !Array.isArray(v))
+        for (const [uid, clock] of Object.entries(v as Record<string, unknown>))
+          if (typeof clock === 'number' && Number.isSafeInteger(clock) && clock >= 0) out.set(uid, clock)
+    } catch {
+      // not JSON: none
+    }
+    return out
+  }
+  /** Writes lb_meta's receipt gaps (`gaps` empty: removes the key). Inside a batch that advances the clock. */
+  setReceiptGapsMeta(gaps: ReadonlyMap<string, number>): void {
+    if (!gaps.size) this.st.delMeta.run(LB_META_RECEIPT_GAPS)
+    else this.st.setMeta.run(LB_META_RECEIPT_GAPS, JSON.stringify(Object.fromEntries(gaps)))
+  }
+
   // ---- doc -------------------------------------------------------------------------------------
 
   /** Every doc key with a value (null = removed keys are left out). */
@@ -597,6 +623,8 @@ function prepareStatements(db: DatabaseSync) {
       'SELECT sum(CASE WHEN deleted = 0 THEN 1 ELSE 0 END) AS live, sum(deleted) AS dead FROM lb_elements',
     childrenOfFrame: "SELECT id FROM lb_elements WHERE deleted = 0 AND json_extract(data, '$.frameId') = ?",
     setMeta: 'INSERT OR REPLACE INTO lb_meta (key, value) VALUES (?, ?)',
+    getMeta: 'SELECT value FROM lb_meta WHERE key = ?',
+    delMeta: 'DELETE FROM lb_meta WHERE key = ?',
     docAll: 'SELECT key, clock, value FROM lb_doc',
     docGet: 'SELECT key, clock, value FROM lb_doc WHERE key = ?',
     docSet: 'INSERT OR REPLACE INTO lb_doc (key, clock, value) VALUES (?, ?, ?)',

@@ -96,7 +96,22 @@ export function ensureReceiptsSchema(db: DatabaseSync): void {
 
 // ---- lb_meta ---------------------------------------------------------------------------------------
 
-export const LB_META_KEYS = ['clock', 'horizon', 'epoch', 'schemaVersion', 'converted_from'] as const
+/**
+ * `receipt_gaps` (RCPT-1, wave J): JSON `{uid: clock}`, per user the highest clock of a committed push whose
+ * receipt this board could not record and whose marker row (lb_receipts, `rid` = '') could not be written
+ * either (element-room.ts recordReceipts). Written in a batch that advances the clock, like the markers; moved
+ * into marker rows, and removed, once lb_receipts takes writes again. A build that does not know the key
+ * ignores it (every key is read by name).
+ */
+export const LB_META_RECEIPT_GAPS = 'receipt_gaps'
+export const LB_META_KEYS = [
+  'clock',
+  'horizon',
+  'epoch',
+  'schemaVersion',
+  'converted_from',
+  LB_META_RECEIPT_GAPS,
+] as const
 export type LbMetaKey = (typeof LB_META_KEYS)[number]
 
 /**

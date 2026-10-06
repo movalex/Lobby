@@ -64,6 +64,37 @@ const FAIL_ALL = `CREATE TRIGGER d2_fail_all_i BEFORE INSERT ON lb_receipts
   CREATE TRIGGER d2_fail_all_u BEFORE UPDATE ON lb_receipts
   BEGIN SELECT RAISE(ABORT, 'd2: injected receipt failure'); END`
 
+/** lb_meta's receipt gaps can not be written either (RCPT-1's last fallback: memory only). */
+const FAIL_GAP_META = `CREATE TRIGGER j6_fail_gap_meta BEFORE INSERT ON lb_meta WHEN NEW.key = 'receipt_gaps'
+  BEGIN SELECT RAISE(ABORT, 'j6: injected lb_meta failure'); END`
+
+/** Reads one value of the board file through a second, read-only connection. */
+function readFile<T>(dataDir: string, boardId: string, sql: string, ...args: string[]): T | undefined {
+  const db = new DatabaseSync(boardDbPath(join(dataDir, 'rooms'), boardId), { readOnly: true })
+  try {
+    return db.prepare(sql).get(...args) as T | undefined
+  } finally {
+    db.close()
+  }
+}
+/** lb_meta's `receipt_gaps` (RCPT-1), or null when the key is absent. */
+const metaGaps = (dataDir: string, boardId: string): Record<string, number> | null => {
+  const row = readFile<{ value: string }>(
+    dataDir,
+    boardId,
+    "SELECT value FROM lb_meta WHERE key = 'receipt_gaps'",
+  )
+  return row ? (JSON.parse(row.value) as Record<string, number>) : null
+}
+/** `uid`'s marker row in lb_receipts (`rid` = ''), or null. */
+const markerOf = (dataDir: string, boardId: string, uid: string): number | null =>
+  readFile<{ clock: number }>(
+    dataDir,
+    boardId,
+    "SELECT clock FROM lb_receipts WHERE uid = ? AND rid = ''",
+    uid,
+  )?.clock ?? null
+
 async function metric(st: ElementStack, line: string): Promise<number> {
   const text = await (await callInternal(st.server.url, 'GET', '/internal/metrics')).text()
   const hit = text.split('\n').find((l) => l.startsWith(`${line} `))
@@ -121,7 +152,7 @@ describe('the receipt gap (wave D2): a push whose receipt was not recorded is ne
   )
 
   it(
-    'the marker cannot be written either: the open room keeps the gap in memory',
+    'the marker cannot be written either: the gap goes to lb_meta and holds after a SIGKILL and a restart (RCPT-1); with lb_receipts back it moves into a marker row',
     async () => {
       const dataDir = h.dataDir()
       const st = await h.stack({ dataDir })
@@ -135,10 +166,56 @@ describe('the receipt gap (wave D2): a push whose receipt was not recorded is ne
       expect(r.landed).toEqual({})
       expect(r.from).toBe(ack.clock + 1)
       expect(base + 1 >= r.from).toBe(false)
-      expect(await metric(st, 'lobby_receipts_unrecorded_total{gap="memory"}')).toBe(1)
+      // where the gap went (soft: the run goes on to the restart, the case RCPT-1 is about)
+      expect.soft(await metric(st, 'lobby_receipts_unrecorded_total{gap="meta"}')).toBe(1)
+      expect.soft(await metric(st, 'lobby_receipts_unrecorded_total{gap="memory"}')).toBe(0)
       // a later push of the same user moves the gap with it while the writes keep failing
       const ack2 = await pushRid(a, 'gp.3', [move(a, 'r1', 71)])
       expect((await ask(a, ['gp.3'])).from).toBe(ack2.clock + 1)
+      expect.soft(metaGaps(dataDir, b)).toEqual({ alice: ack2.clock })
+      // before RCPT-1 the gap lived in this process only: after the restart gp.3 read "never landed" (from 0)
+      await st.server.kill('SIGKILL')
+      await st.server.restart()
+      const again = await st.client({ boardId: b, user: 'alice', tab: 'tab-a' })
+      expect(await ask(again, ['gp.2', 'gp.3'])).toMatchObject({ landed: {}, from: ack2.clock + 1 })
+      // lb_receipts takes writes again: the next recorded receipt moves the gap into alice's marker row
+      onFile(dataDir, b, 'DROP TRIGGER d2_fail_all_i; DROP TRIGGER d2_fail_all_u')
+      const later = await pushRid(again, 'gp.4', [move(again, 'r1', 72)])
+      expect(metaGaps(dataDir, b)).toBeNull()
+      expect(markerOf(dataDir, b, 'alice')).toBe(ack2.clock)
+      expect(await ask(again, ['gp.3', 'gp.4'])).toMatchObject({
+        landed: { 'gp.4': later.clock },
+        from: ack2.clock + 1,
+      })
+    },
+    T,
+  )
+
+  it(
+    'neither the marker nor lb_meta can be written: the open room keeps the gap in memory and the next writing batch puts it in the file (RCPT-1), so a restart keeps it',
+    async () => {
+      const dataDir = h.dataDir()
+      const st = await h.stack({ dataDir })
+      const b = newBoardId()
+      const a = await board(st, b)
+      onFile(dataDir, b, `${FAIL_ALL}; ${FAIL_GAP_META}`)
+      const ack = await pushRid(a, 'gp.2', [move(a, 'r1', 70)])
+      expect(ack.r[0]).toMatchObject({ ok: true })
+      expect(await ask(a, ['gp.2'])).toMatchObject({ landed: {}, from: ack.clock + 1 })
+      expect.soft(await metric(st, 'lobby_receipts_unrecorded_total{gap="memory"}')).toBe(1)
+      expect.soft(metaGaps(dataDir, b)).toBeNull()
+      // lb_meta takes the key again (lb_receipts still fails): the next push that writes, any one, carries it
+      onFile(dataDir, b, 'DROP TRIGGER j6_fail_gap_meta')
+      const next = await a.push([move(a, 'r1', 75)])
+      expect(next.r[0]).toMatchObject({ ok: true })
+      expect.soft(metaGaps(dataDir, b)).toEqual({ alice: ack.clock })
+      await st.server.kill('SIGKILL')
+      await st.server.restart()
+      const again = await st.client({ boardId: b, user: 'alice', tab: 'tab-a' })
+      const after = await ask(again, ['gp.2'])
+      expect(after.landed).toEqual({})
+      // before: from 0 here, so the client took gp.2 for a push that never landed
+      expect(after.from).toBe(ack.clock + 1)
     },
     T,
   )
