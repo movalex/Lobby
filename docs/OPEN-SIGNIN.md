@@ -29,10 +29,12 @@ verification.**
   (`creator-sql.ts`: domain `*`, which `DRAFTROOM_CREATOR_DOMAINS` can never contain), and `user_emails` rows with
   source `email` count only while the server runs the email provider.
 - **Wave J's outside markers** (External tags, Shared outside, the one-time outside confirm, Internal only, the
-  owner's "outsider joined" notice) never fire because of the open policy: every account that signs in qualifies
-  (`creator-sql.ts` `qualifiesSql` and `isOpenLookup`), and the built-in owner is neither "unconfirmed" nor a reason to
-  start comments "Team only". Name-only guests from links are still guests. `DRAFTROOM_FEEDBACK_ADMINS` is refused at
-  startup with the email provider (anyone could type a reader's address); feedback can still be sent.
+  owner's "outsider joined" notice) never fire because of the open policy, whichever way people sign in (typed
+  address or Google): every account that signs in qualifies (`creator-sql.ts` `qualifiesSql` and `isOpenLookup`), and
+  the built-in owner is neither "unconfirmed" nor a reason to start comments "Team only". Name-only guests from links
+  are still guests. Display names, typed or from Google, lose control, bidi and zero-width characters on input (J1's
+  `cleanDisplayText`). `DRAFTROOM_FEEDBACK_ADMINS` is refused at startup with the email provider, whatever the methods
+  (a typed address is never verified); feedback can still be sent.
 
 ## Configuration (api)
 
@@ -116,7 +118,7 @@ board to run the new Lobby. Nothing is copied into theaitre-bot.
   workspace (also through `GET /api/me`), partner idempotence and the concurrent first call, the partner refusals, and
   the configuration rules. Wave J under open sign-in: nobody outside (tags, Shared outside, the notice, the address
   check, Team only), feedback sent but no inbox readers, a sign-in on a shared computer ending the previous person's
-  session for the sync (RT-01).
+  session for the sync (RT-01), and display names cleaned on input (typed and Google).
 - `packages/db/test/open-signin-0025.test.ts`: the migration's constraints and the upgrade from 0024;
   `packages/db/test/outside-markers-0026.test.ts` applies wave J's 0026 and 0027 on top of it.
 - `apps/api/test/features/domain-access/creation-matrix.test.ts` lists the new INSERT sites
