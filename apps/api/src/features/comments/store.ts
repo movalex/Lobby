@@ -317,9 +317,11 @@ export async function isTeamMember(
 /**
  * Whether people outside the team can open this board now: a guest holds a grant on it (a workspace
  * guest or a name-only guest), a board link that has not ended could let one in, or (wave J) an
- * account Lobby knows is outside Dark Burn / TPG can open it (a grant, or a workspace role that
- * reaches it: owner, admin, or member while it is not private). The composer then starts with "Team
- * only" on.
+ * account that is not known to be at Dark Burn / TPG can open it (a grant, or a workspace role that
+ * reaches it: owner, admin, or member while it is not private): one Lobby knows is outside, or one
+ * whose addresses were never checked (it is not on the team either). An account whose stored addresses
+ * qualify but are older than a day is not counted (a colleague who has not opened Lobby for a day; the
+ * team rule re-checks them). The composer then starts with "Team only" on.
  */
 export async function hasOutsideAccess(
   q: Queryable,
@@ -343,7 +345,7 @@ export async function hasOutsideAccess(
          LEFT JOIN board_members bm ON bm.board_id = $1 AND bm.user_id = wm.user_id
         WHERE wm.workspace_id = $2
           AND (wm.role IN ('owner', 'admin') OR bm.role IS NOT NULL OR (wm.role = 'member' AND $4::text <> 'private'))
-          AND ${knownOutsideSql('u', 5)}
+          AND (${knownOutsideSql('u', 5)} OR (u.kind = 'account' AND u.identity_checked_at IS NULL))
      )) AS outside`,
     [board.id, board.workspace_id, at, board.visibility, ...matchParams(lookup)],
   )

@@ -18,9 +18,13 @@
 // Wave J (AUTHZ-TEAM-OUTSIDER): the team is a workspace owner, admin or member who is a CONFIRMED
 // creator (store.ts onTeam), so an outside account invited as a workspace member is outside the team,
 // and an account whose addresses Lobby cannot confirm fails closed. The same rule decides the bell
-// (notifications.ts), the per-audience board events (publishTo) and search (search/index.ts). GET
-// threads confirms the caller's own addresses like /api/me does (identity.freshenThen), so a person who
-// keeps a board open past a day stays on the team. Authors carry `external` (the "External" tag).
+// (notifications.ts), the per-audience board events (publishTo) and search (search/index.ts). Every
+// thread route and the bell confirm the caller's own addresses like /api/me does (identity.freshen:
+// awaited only when unknown or older than a day, else in the background after an hour; no provider
+// call inside a transaction), so a person who keeps a board open past a day stays on the team. The
+// per-audience events decide on stored status: a staff tab idle for more than a day misses team-only
+// events until its next thread request or bell poll confirms it (the board's refetch then shows them).
+// Authors carry `external` (the "External" tag).
 
 import {
   COMMENT_BODY_MAX,
@@ -42,7 +46,7 @@ import {
   SetThreadVisibilityInput,
 } from '@draftroom/contracts'
 import { isId, newId, type Queryable } from '@draftroom/db'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { type BoardAccess, type BoardRow, requireBoardAction } from '../../access.ts'
 import type { CreatorLookup } from '../../auth/creator-sql.ts'
 import type { Params } from '../../context.ts'
@@ -184,6 +188,8 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
   const lookup = ctx.identity.lookup
   /** Who is on the team now (wave J: a workspace role AND a confirmed creator). */
   const rule = (): TeamRule => ({ lookup, now: now() })
+  /** The caller, confirmed first like /api/me (wave J: the team rule then decides on fresh data). */
+  const caller = async (req: FastifyRequest) => ctx.identity.freshen(req, await ctx.requireUser(req), 'me')
   const limiter = createWriteLimiter({ max: WRITES_PER_MINUTE, windowMs: 60_000, now })
   const spend = (userId: string) => {
     if (!limiter.take(userId))
@@ -289,7 +295,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
   })
 
   app.post('/api/boards/:bid/threads', async (req, reply) => {
-    const user = await ctx.requireUser(req)
+    const user = await caller(req)
     const { bid = '' } = req.params as Params
     const input = parse(CreateThreadInput, req.body)
     const visibility = input.visibility ?? 'everyone'
@@ -342,7 +348,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
   })
 
   app.post('/api/threads/:tid/comments', async (req, reply) => {
-    const user = await ctx.requireUser(req)
+    const user = await caller(req)
     const { tid = '' } = req.params as Params
     const input = parse(CreateCommentInput, req.body)
     const { thread, board: ref } = await db.transaction(async (tx) => {
@@ -406,7 +412,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
   })
 
   app.patch('/api/comments/:cid', async (req) => {
-    const user = await ctx.requireUser(req)
+    const user = await caller(req)
     const { cid = '' } = req.params as Params
     const input = parse(EditCommentInput, req.body)
     const { thread, board: ref } = await db.transaction(async (tx) => {
@@ -457,7 +463,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
   })
 
   app.delete('/api/comments/:cid', async (req, reply) => {
-    const user = await ctx.requireUser(req)
+    const user = await caller(req)
     const { cid = '' } = req.params as Params
     const result = await db.transaction(async (tx) => {
       const { comment, thread, access } = await commentAccess(tx, cid, user.id)
@@ -505,7 +511,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
 
   for (const action of ['resolve', 'reopen'] as const) {
     app.post(`/api/threads/:tid/${action}`, async (req) => {
-      const user = await ctx.requireUser(req)
+      const user = await caller(req)
       const { tid = '' } = req.params as Params
       const {
         thread,
@@ -565,7 +571,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
 
   // F10: a team member makes a thread team-only, or visible to everyone again.
   app.post('/api/threads/:tid/visibility', async (req) => {
-    const user = await ctx.requireUser(req)
+    const user = await caller(req)
     const { tid = '' } = req.params as Params
     const input = parse(SetThreadVisibilityInput, req.body)
     const {
@@ -593,7 +599,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
   })
 
   app.post('/api/threads/:tid/read', async (req) => {
-    const user = await ctx.requireUser(req)
+    const user = await caller(req)
     const { tid = '' } = req.params as Params
     return db.transaction(async (tx) => {
       const { row } = await threadAccess(tx, tid, user.id, 'view')
@@ -615,13 +621,17 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
     const query = parse(ListNotificationsQuery, req.query)
     // What the caller's web build can parse (0024's access_granted only from LOBBY_CLIENT_REV 1).
     const rev = clientRevOf(req.headers[LOBBY_CLIENT_HEADER])
-    // Wave J: the bell leaves team-only threads out for anyone not on the team (a confirmed creator).
-    return listNotifications(db, user.id, {
-      unreadOnly: query.unread !== undefined,
-      rev,
-      creator: await ctx.identity.isCreatorUser(db, user.id),
-      emailSource: lookup.source,
-    })
+    // Wave J: the bell leaves team-only threads out for anyone not on the team (a confirmed creator),
+    // decided after the caller's own addresses are confirmed like at /api/me (the list from one stored
+    // state, then any due background refresh).
+    return ctx.identity.freshenThen(req, user, async (fresh) =>
+      listNotifications(db, fresh.id, {
+        unreadOnly: query.unread !== undefined,
+        rev,
+        creator: await ctx.identity.isCreatorUser(db, fresh.id),
+        emailSource: lookup.source,
+      }),
+    )
   })
 
   app.post('/api/me/notifications/read', async (req, reply) => {

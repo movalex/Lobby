@@ -2,8 +2,11 @@
 // member who is a CONFIRMED creator. An outside account invited as a workspace member (D5 allows it)
 // used to count as the team: it read "Team only" threads, got their text in search, the bell and the
 // per-audience board events, and could start team-only threads. An account Lobby cannot confirm fails
-// closed. hasOutsideAccess now also counts outside accounts with a workspace role or a grant, so the
-// composer's "Team only" default turns on for such boards. Comment authors carry `external`.
+// closed. hasOutsideAccess now also counts outside accounts (and accounts never checked) with a
+// workspace role or a grant, so the composer's "Team only" default turns on for such boards. Every
+// thread route and the bell confirm the caller first (like /api/me), so a staff tab idle for a day is
+// back on the team at its next request; the per-audience events decide on stored status (fail closed).
+// Comment authors carry `external`.
 
 import {
   COMMENTS_THREAD_EVENT,
@@ -147,19 +150,74 @@ describe('the team is creators with a workspace role (an outside workspace membe
     expect(after.notifications).toEqual([])
   })
 
-  it('an account Lobby cannot confirm fails closed (not on the team until a refresh confirms it)', async () => {
+  it('a caller idle for a day is confirmed first by every thread route (the dev provider always confirms)', async () => {
     const team = await created(member, 'stale but internal', 'team')
-    // mia's addresses were last confirmed more than a day ago: no longer a confirmed creator.
+    const stale = () =>
+      api.db.query("UPDATE users SET identity_checked_at = now() - interval '25 hours' WHERE id = $1", [
+        member.userId,
+      ])
+    // mia's addresses were last confirmed more than a day ago: on stored data, no longer a creator.
+    await stale()
+    expect(
+      await api.db.one(
+        "SELECT identity_checked_at < now() - interval '1 day' AS old FROM users WHERE id = $1",
+        [member.userId],
+      ),
+    ).toEqual({ old: true })
+    // Starting a team-only thread confirms her first, then decides: allowed.
+    expect((await create(member, 'again', 'team')).statusCode).toBe(201)
+    await stale()
+    expect((await member.req('POST', `/api/threads/${team.id}/comments`, { body: 'x' })).statusCode).toBe(201)
+    await stale()
+    expect(
+      (await member.req('POST', `/api/threads/${team.id}/visibility`, { visibility: 'everyone' })).statusCode,
+    ).toBe(200)
+    await stale()
+    expect((await member.req('POST', `/api/threads/${team.id}/resolve`)).statusCode).toBe(200)
+  })
+
+  it('the bell confirms its caller too, so a team-only mention stays in a day-old tab’s bell', async () => {
+    await created(owner, `budget ${mention(member)}`, 'team')
+    expect((await bell(member)).notifications.map((n) => n.kind)).toEqual(['mention'])
     await api.db.query("UPDATE users SET identity_checked_at = now() - interval '25 hours' WHERE id = $1", [
       member.userId,
     ])
-    // Routes that decide without refreshing: starting a team-only thread, replying to one.
-    expect((await create(member, 'again', 'team')).statusCode).toBe(403)
-    expect((await member.req('POST', `/api/threads/${team.id}/comments`, { body: 'x' })).statusCode).toBe(404)
-    // GET threads confirms the caller first (like /api/me; the dev provider always confirms), so mia is
-    // back on the team there, and so on every route after it.
-    expect((await list(member)).threads.map((t) => t.id)).toContain(team.id)
-    expect((await member.req('POST', `/api/threads/${team.id}/comments`, { body: 'x' })).statusCode).toBe(201)
+    const after = await bell(member)
+    expect(after.notifications.map((n) => n.kind)).toEqual(['mention'])
+    expect(after.unreadCount).toBe(1)
+  })
+
+  it('board events fail closed for a stale stream until its next request confirms the person', async () => {
+    await api.db.query("UPDATE users SET identity_checked_at = now() - interval '25 hours' WHERE id = $1", [
+      member.userId,
+    ])
+    const miaGot = streamOf(member.userId)
+    const count = () => miaGot.filter((e) => e.type === COMMENTS_THREAD_EVENT).length
+    await created(owner, 'first team-only', 'team')
+    expect(count()).toBe(0)
+    // Any request of hers (the bell poll, a thread list) confirms her: the next one reaches her.
+    await bell(member)
+    await created(owner, 'second team-only', 'team')
+    expect(count()).toBe(1)
+  })
+
+  it('"Team only" starts on for an account never checked, not for a colleague who is merely stale', async () => {
+    expect((await owner.req('DELETE', `/api/boards/${boardId}/members/${pat.userId}`)).statusCode).toBe(200)
+    expect((await list(owner)).privacy).toEqual({ teamOnly: true, teamOnlyDefault: false })
+    // mia (a creator with a grant) has not been seen for a day: still a colleague here.
+    await api.db.query("UPDATE users SET identity_checked_at = now() - interval '25 hours' WHERE id = $1", [
+      member.userId,
+    ])
+    expect((await list(owner)).privacy).toEqual({ teamOnly: true, teamOnlyDefault: false })
+    // nina's addresses were never checked: Lobby cannot tell, and she is not on the team either.
+    const nina = await api.login('nina', 'Nina', { email: 'nina@darkburn.com' })
+    await api.db.query('UPDATE users SET identity_checked_at = NULL WHERE id = $1', [nina.userId])
+    expect(
+      (await owner.req('PUT', `/api/boards/${boardId}/members/${nina.userId}`, { role: 'viewer' }))
+        .statusCode,
+    ).toBe(200)
+    await api.db.query('UPDATE users SET identity_checked_at = NULL WHERE id = $1', [nina.userId])
+    expect((await list(owner)).privacy).toEqual({ teamOnly: true, teamOnlyDefault: true })
   })
 
   it('"Team only" starts on for a board an outside account can open (a grant or a workspace role)', async () => {
