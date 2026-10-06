@@ -9,7 +9,9 @@ sha="${1:?usage: nas-copy.sh <commit>}"
 REPO="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 git -C "$REPO" cat-file -e "${sha}^{commit}"
 sha="$(git -C "$REPO" rev-parse "$sha")"
-PATHS=(package.json pnpm-lock.yaml pnpm-workspace.yaml patches .node-version apps packages e2e)
+PATHS=(package.json pnpm-lock.yaml pnpm-workspace.yaml .node-version apps packages e2e)
+# patches/ (pnpm patchedDependencies, wave J) when the commit has it: the frozen install reads every patch file
+git -C "$REPO" cat-file -e "${sha}:patches" 2>/dev/null && PATHS+=(patches)
 
 listing="$(git -C "$REPO" archive --format=tar "$sha" -- "${PATHS[@]}" | tar -t)"
 if grep -nE '(^|/)(\.env[^/]*|\.data|node_modules|test-results)(/|$)|spike-b8|dr-restore-drill' <<<"$listing"; then
