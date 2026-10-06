@@ -604,9 +604,12 @@ describe.skipIf(!PG_URL)('every migration after 0008 on a real Postgres holding 
     const anyOf = (col: string, list: string[]) =>
       `(${col} = ANY (ARRAY[${list.map((k) => `'${k}'::text`).join(', ')}]))`
     // 0026 (wave J) widens both notification CHECKs again ('outsider_joined', no thread either).
+    // 0025_open_signin widens the M1 identities.provider CHECK ('email'; user_emails is from 0021, so its
+    // source CHECK is not an existing object here).
     const m1Kinds = ['mention', 'reply', 'resolved', 'access_request']
     expect([...changed].sort()).toEqual(
       [
+        `constraint identities.identities_provider_check: CHECK (${anyOf('provider', ['dev', 'clerk'])}) -> CHECK (${anyOf('provider', ['dev', 'clerk', 'email'])})`,
         `constraint notifications.notifications_kind_check: CHECK (${anyOf('kind', m1Kinds)}) -> CHECK (${anyOf('kind', [...m1Kinds, 'new_comment', 'access_granted', 'outsider_joined'])})`,
         `constraint notifications.notifications_check: CHECK (((kind = 'access_request'::text) OR (thread_id IS NOT NULL))) -> CHECK ((${anyOf('kind', ['access_request', 'access_granted', 'outsider_joined'])} OR (thread_id IS NOT NULL)))`,
         `constraint vote_sessions.vote_sessions_scope_check: CHECK (${anyOf('scope', ['board', 'frame'])}) -> CHECK (${anyOf('scope', ['board', 'frame', 'selection'])})`,
