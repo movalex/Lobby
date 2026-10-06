@@ -2,7 +2,12 @@
 // build that declares LOBBY_CLIENT_REV >= 1 is sent (client-rev.ts).
 import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { ListNotificationsResponse, NOTIFICATION_KINDS_SINCE_REV1, NotificationKind } from './index.ts'
+import {
+  ListNotificationsResponse,
+  NOTIFICATION_KINDS_SINCE_REV1,
+  NOTIFICATION_KINDS_SINCE_REV2,
+  NotificationKind,
+} from './index.ts'
 
 describe('notification kind access_granted', () => {
   const item = {
@@ -31,7 +36,8 @@ describe('notification kind access_granted', () => {
     const before = z.enum(['mention', 'reply', 'resolved', 'access_request', 'new_comment'])
     const old = z.object({ notifications: z.array(z.object({ kind: before })), unreadCount: z.number() })
     expect(old.safeParse({ notifications: [item], unreadCount: 1 }).success).toBe(false)
-    for (const k of NotificationKind.options)
-      expect(before.safeParse(k).success, k).toBe(!NOTIFICATION_KINDS_SINCE_REV1.includes(k))
+    // (wave J's 'outsider_joined' came later still: revision 2)
+    const later = [...NOTIFICATION_KINDS_SINCE_REV1, ...NOTIFICATION_KINDS_SINCE_REV2]
+    for (const k of NotificationKind.options) expect(before.safeParse(k).success, k).toBe(!later.includes(k))
   })
 })

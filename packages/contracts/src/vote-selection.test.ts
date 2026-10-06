@@ -120,7 +120,7 @@ describe('isVoteEligible: scope selection', () => {
 describe('the web build revision header', () => {
   it('reads a small integer; anything else is revision 0', () => {
     expect(LOBBY_CLIENT_HEADER).toBe('x-lobby-client')
-    expect(LOBBY_CLIENT_REV).toBe(1)
+    expect(LOBBY_CLIENT_REV).toBe(2)
     expect(clientRevOf(undefined)).toBe(0)
     expect(clientRevOf('1')).toBe(1)
     expect(clientRevOf(' 2 ')).toBe(2)

@@ -10,6 +10,7 @@ import { BOARD_ROLES, BOARD_VISIBILITIES, WORKSPACE_ROLES } from '@draftroom/per
 import { z } from 'zod'
 import { ACCOUNT_EMAIL_MAX_LENGTH, AccountEmail } from './domain-access.ts'
 import { BoardWithRole, InvitationId, User, UserId } from './index.ts'
+import { cleanDisplayText, OutsideFields } from './outside.ts'
 
 const IsoDate = z.string()
 const Role = z.enum(BOARD_ROLES)
@@ -27,7 +28,9 @@ export type StarResponse = z.infer<typeof StarResponse>
 /**
  * `GET /api/workspaces/:wid/boards` answers M1's list with a `starred` flag on every board (added by
  * the dashboard feature); `GET /api/workspaces/:wid/boards/starred` answers only the starred ones.
- * `starred` defaults to false so an older server's response still parses.
+ * `starred` defaults to false so an older server's response still parses. (The dashboard parses them
+ * with thumbnails.ts ListBoardsWithThumbnailsResponse, which adds `thumbnailVersion` and wave J's
+ * `sharedOutside`.)
  */
 export const ListBoardsWithStarsResponse = z.object({
   get boards() {
@@ -46,8 +49,11 @@ export const ACCESS_REQUEST_MESSAGE_MAX = 300
 
 export const CreateAccessRequestInput = z.object({
   role: RequestableRole.default('editor'),
-  /** Optional note for the owners; blank means none. */
-  message: z.string().trim().max(ACCESS_REQUEST_MESSAGE_MAX).optional(),
+  /**
+   * Optional note for the owners; blank means none. Control, bidi and zero-width characters are removed
+   * on input (wave J, web-ops: the owner reads it next to Approve), then trimmed.
+   */
+  message: z.string().transform(cleanDisplayText).pipe(z.string().max(ACCESS_REQUEST_MESSAGE_MAX)).optional(),
 })
 export type CreateAccessRequestInput = z.input<typeof CreateAccessRequestInput>
 
@@ -75,6 +81,8 @@ export const AccessRequest = z.object({
   currentRole: Role.nullable(),
   decidedAt: IsoDate.nullable(),
   roleGranted: RequestableRole.nullable(),
+  /** Wave J: whether the requester is outside Dark Burn / TPG, with their domain (managers only). */
+  ...OutsideFields,
 })
 export type AccessRequest = z.infer<typeof AccessRequest>
 
@@ -253,6 +261,12 @@ export const ShareState = z.object({
   directCount: z.number().int(),
   /** Pending access requests; only for people who may manage access (else null). */
   pendingRequests: z.number().int().nullable(),
+  /**
+   * Wave J: the board's "Shared outside" marker: an account outside Dark Burn / TPG or a name-only guest
+   * holds access, or a review, workshop or guest link is open. Absent from an older api (read it as false;
+   * optional, not defaulted, so code that builds a ShareState of its own keeps compiling).
+   */
+  sharedOutside: z.boolean().optional(),
 })
 export type ShareState = z.infer<typeof ShareState>
 
@@ -276,6 +290,8 @@ export const ShareMember = z.object({
    * older api omits it and still allows owner, so the default is true. The server decides either way.
    */
   canOwn: z.boolean().default(true),
+  /** Wave J: whether this person is outside Dark Burn / TPG, with their domain (./outside.ts). */
+  ...OutsideFields,
 })
 export type ShareMember = z.infer<typeof ShareMember>
 

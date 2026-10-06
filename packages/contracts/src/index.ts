@@ -4,6 +4,7 @@
 import { BOARD_ROLES, BOARD_STATUSES, BOARD_VISIBILITIES, WORKSPACE_ROLES } from '@draftroom/permissions'
 import { z } from 'zod'
 import { AccountEmail, ME_ACCESS_LEGACY, MeAccess } from './domain-access.ts'
+import { cleanDisplayText, OutsideFields } from './outside.ts'
 
 export const BoardRole = z.enum(BOARD_ROLES)
 export const WorkspaceRole = z.enum(WORKSPACE_ROLES)
@@ -78,7 +79,11 @@ export const BoardMember = z.object({
 })
 export type BoardMember = z.infer<typeof BoardMember>
 
-export const WorkspaceMember = z.object({ user: User, role: WorkspaceRole })
+/**
+ * Wave J (./outside.ts): `outside`, `emailDomain` and `emailHint` only for callers who manage the
+ * workspace (owners and admins), the "pick someone from the workspace" list's External tag.
+ */
+export const WorkspaceMember = z.object({ user: User, role: WorkspaceRole, ...OutsideFields })
 export type WorkspaceMember = z.infer<typeof WorkspaceMember>
 
 /**
@@ -124,7 +129,8 @@ export type AuthConfig = z.infer<typeof AuthConfig>
  */
 export const DevLoginInput = z.object({
   handle: DevHandle,
-  name: Name.optional(),
+  /** Wave J: control, bidi and zero-width characters are removed on input (outside.ts cleanDisplayText). */
+  name: z.string().transform(cleanDisplayText).pipe(Name).optional(),
   email: AccountEmail.optional(),
 })
 export type DevLoginInput = z.infer<typeof DevLoginInput>
@@ -266,6 +272,7 @@ export * from './guests.ts'
 export * from './history.ts'
 export * from './link-preview.ts'
 export * from './mindmap.ts'
+export * from './outside.ts'
 export * from './present-live.ts'
 export * from './search.ts'
 export * from './storage.ts'
