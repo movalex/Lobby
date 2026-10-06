@@ -89,7 +89,7 @@ describe('s1 client side (groups.ts only)', () => {
       expect(isDerivedArrowChange(C.get(A.id), conf.get(A.id), C, conf)).toBe(false)
     })
 
-  it("rotated arrow: the literal rebase formula moves the free end 14.2 px, Excalidraw's movePoints 0 (negative control)", () => {
+  it("rotated arrow: the literal rebase formula moves the free end about 12 px (14.2 px at the old 6 px gap, W5-53), Excalidraw's movePoints 0 (negative control)", () => {
     const { X, A } = setup('rot')
     const S: Scene = new Map([
       [X.id, X],
@@ -117,7 +117,7 @@ describe('s1 client side (groups.ts only)', () => {
       [L.id, L],
     ])
     expect(dist(glob(E, -1, Sm), freeBefore)).toBeLessThan(1e-6)
-    expect(dist(glob(L, -1, Lm), freeBefore)).toBeGreaterThan(14)
+    expect(dist(glob(L, -1, Lm), freeBefore)).toBeGreaterThan(10)
   })
 })
 

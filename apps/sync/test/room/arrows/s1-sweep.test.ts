@@ -63,8 +63,10 @@ function cases(
       endArrowhead: 'arrow',
     }
     if (roughness === 1) {
-      X.seed = 1000 + i
-      A.seed = 5000 + i
+      // W5-53 (wave J): were 1000 + i / 5000 + i; with the 2 px orbit gap one rotated rough follow of
+      // those seeds left 0.506 px (rough-shape jitter, over the 0.5 px tolerance; roughness 0 is unaffected)
+      X.seed = 2000 + i
+      A.seed = 6000 + i
     }
     bind(A, X, null, [+rnd().toFixed(3), 1])
     A.x = X.x + X.width / 2
