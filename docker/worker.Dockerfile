@@ -23,12 +23,14 @@
 # 2026-09-26. Bump the tag and digest together with .node-version.
 FROM node:24.19.0-trixie-slim@sha256:ab3eebe934147fee049b5eb83c570f68c849a13c930bdfa482de99fcdfa3b3de AS base
 
-# Only the package manifests + lockfile, so the dependency layer below stays cached until one changes.
+# Only the package manifests + lockfile (+ patches/: pnpm hashes every patchedDependencies file at install
+# start, even under --filter), so the dependency layer below stays cached until one changes.
 FROM base AS manifests
 COPY . /src
 RUN mkdir /out && cd /src \
   && find . -name package.json -not -path '*/node_modules/*' -exec cp --parents {} /out \; \
-  && cp pnpm-lock.yaml pnpm-workspace.yaml /out/
+  && cp pnpm-lock.yaml pnpm-workspace.yaml /out/ \
+  && cp -r patches /out/patches
 
 FROM base AS deps
 ENV NPM_CONFIG_UPDATE_NOTIFIER=false

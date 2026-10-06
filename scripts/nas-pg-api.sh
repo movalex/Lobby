@@ -113,7 +113,7 @@ U="$(if [[ "$DRY_RUN" != "0" ]]; then echo '<uid>:<gid>'; else nas 'echo "$(id -
 # 2. the commit's tracked source
 REPO="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 sha="$(git -C "$REPO" rev-parse "${SHA}^{commit}")"
-PATHS=(package.json pnpm-lock.yaml pnpm-workspace.yaml .node-version tsconfig.base.json vitest.config.ts apps packages e2e scripts)
+PATHS=(package.json pnpm-lock.yaml pnpm-workspace.yaml patches .node-version tsconfig.base.json vitest.config.ts apps packages e2e scripts)
 listing="$(git -C "$REPO" archive --format=tar "$sha" -- "${PATHS[@]}" | tar -t)"
 if grep -nE '(^|/)(\.env[^/]*|\.data|node_modules|test-results)(/|$)' <<<"$listing"; then
   log "REFUSED: the archive would contain a forbidden path (above)"; exit 1

@@ -100,7 +100,7 @@ make_bundle() {
       --exclude=node_modules --exclude='.env' --exclude='.env.*' --exclude='dev.env' \
       --exclude='*.test.ts' --exclude='apps/worker/test' --exclude='apps/worker/scripts' \
       --exclude='packages/*/test' --exclude='.data' --exclude='*.log' --exclude='*.tsbuildinfo' \
-      package.json pnpm-lock.yaml pnpm-workspace.yaml .dockerignore .node-version \
+      package.json pnpm-lock.yaml pnpm-workspace.yaml patches .dockerignore .node-version \
       docker packages apps/worker "${manifests[@]}"
   )
   # (No `tar | grep -q` here: under pipefail an early grep exit SIGPIPEs tar and hides the match.)
