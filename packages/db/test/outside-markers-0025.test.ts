@@ -79,7 +79,8 @@ describe('0025: notification kind outsider_joined', () => {
       expect(await sqlstate(insertNotification(d, kind)), kind).toBe('23514')
     expect(await sqlstate(insertNotification(d, 'outsider_left'))).toBe('23514')
     const idx = await d.one<{ def: string }>(
-      "SELECT indexdef AS def FROM pg_indexes WHERE indexname = 'notifications_outsider_joined_idx'",
+      // this schema's (real Postgres runs every test in a schema of its own, side by side)
+      "SELECT indexdef AS def FROM pg_indexes WHERE indexname = 'notifications_outsider_joined_idx' AND schemaname = current_schema()",
     )
     expect(idx.def).toContain('(board_id, actor_id)')
     expect(idx.def).toContain("'outsider_joined'")
