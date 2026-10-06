@@ -95,3 +95,21 @@ overrides:
   # Excalidraw's own pin has moved past it.
   'nanoid@3.3.3': 3.3.19
   'lodash-es@4.17.21': 4.18.1
+
+# W5-53 (wave J, J6a): ONE patch of the pinned engine, @excalidraw/element (MIT; the licence text and notice stay in
+# the package, `pnpm licence:check` is unchanged). The key is the exact catalog version above; bump the two together.
+# What it changes (patches/@excalidraw__element@0.18.0-1118751.patch; dist/dev, dist/prod and the two .d.ts files):
+#   - an orbit-mode bound end sits `getOrbitBindingGap` = 1 + strokeWidth / 2 off its target's outline in
+#     `updateBoundPoint` (was getBindingGap = 5 + strokeWidth / 2, so connectors stopped 4-6 px short). Nothing else
+#     reads it: getBindingGap, BASE_BINDING_GAP and the elbow router's paired padding are untouched.
+#   - `getArrowheadPoints` multiplies a head's size by `getArrowheadStrokeScale` = clamp(strokeWidth / 4, 0.4, 1), so the
+#     default 2 px stroke gets an arrow head of 12.5 px (was 25, about twice tldraw's) and a 4 px stroke the engine's 25.
+# Both are exported (and typed) so the tests can read them: apps/web/src/canvas/engine/arrow-geometry.test.ts fails
+# when the patch is not applied. Every consumer that places a bound end (the web engine's live follow, the sync room's
+# re-snap, the history roll-forward) resolves this one patched copy, so they agree to the pixel; an unpatched copy of
+# any of them would re-snap arrows back to the old gap. Images that install from a manifests-only layer
+# (docker/*.Dockerfile, deploy/nas/deploy-worker.sh, scripts/nas-pg-api.sh) must copy patches/ next to this file.
+# After any @excalidraw/element bump, regenerate the patch (`pnpm patch @excalidraw/element@<version>`, redo the
+# edits listed in the test's header, `pnpm patch-commit`; then restore this file's comments, patch-commit rewrites it).
+patchedDependencies:
+  '@excalidraw/element@0.18.0-1118751': patches/@excalidraw__element@0.18.0-1118751.patch

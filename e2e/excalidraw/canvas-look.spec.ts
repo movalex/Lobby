@@ -6,6 +6,9 @@
 //  - W5-55: a note being typed into is outlined;
 //  - W5-51: zoomed out to 14 %, no frame name runs into a neighbouring frame; at 100 % a frame inside another
 //    keeps its name (and can be renamed by a double-click on it);
+//  - W5-53 (wave J, J6a): a connector drawn between two shapes ends 1 to 2 px off the shape it joins (the engine
+//    patch: it stopped 5 px short) and its arrowhead is about 12 px at the default stroke (it was 25), measured on
+//    the canvas's pixels; the sync room's re-snap agrees with the page;
 //  - R13: on a phone, other people's cursors show without their name tags;
 //  - PLAN-wave4 mermaid stub: a pasted chart definition stays plain text.
 //
@@ -29,6 +32,7 @@ import {
   TEXT_EDITOR,
   test,
   tool,
+  updateItem,
 } from '../tests/support/canvas.ts'
 import { focusBoard, settled } from './board-kit.ts'
 import { waitForCanvasUx } from './canvas-ux-kit.ts'
@@ -298,6 +302,167 @@ test('W5-55: a note being typed into is outlined in the accent; the outline goes
   )
   await stopTextEditing(a.page)
   await expect(a.page.getByTestId('editing-outline')).toHaveCount(0)
+})
+
+/**
+ * The engine's static canvas (the elements, no selection) in a screen box, as rows of "ink" flags: an opaque pixel
+ * that is dark (the strokes are Lobby's near-black ink on a light canvas; the boxes here are not filled).
+ */
+const inkRows = (page: Page, box: { x: number; y: number; width: number; height: number }) =>
+  page.evaluate((box) => {
+    const c = document.querySelector<HTMLCanvasElement>(
+      '.lobby-board-canvas canvas.excalidraw__canvas.static',
+    )
+    if (!c) throw new Error('no static canvas')
+    const r = c.getBoundingClientRect()
+    const sx = c.width / r.width
+    const sy = c.height / r.height
+    if (sx !== 1 || sy !== 1) throw new Error(`device pixel ratio ${sx} x ${sy}: this probe reads 1:1`)
+    const ctx = c.getContext('2d')
+    if (!ctx) throw new Error('no 2d context')
+    const x = Math.round(box.x - r.left)
+    const y = Math.round(box.y - r.top)
+    const w = Math.round(box.width)
+    const h = Math.round(box.height)
+    const data = ctx.getImageData(x, y, w, h).data
+    const rows: boolean[][] = []
+    for (let j = 0; j < h; j++) {
+      const row: boolean[] = []
+      for (let i = 0; i < w; i++) {
+        const k = (j * w + i) * 4
+        const lum = 0.2126 * (data[k] ?? 255) + 0.7152 * (data[k + 1] ?? 255) + 0.0722 * (data[k + 2] ?? 255)
+        row.push((data[k + 3] ?? 0) > 128 && lum < 150)
+      }
+      rows.push(row)
+    }
+    return { rows, x: x + r.left, y: y + r.top }
+  }, box)
+
+test('W5-53: a connector drawn between two shapes ends 1 to 2 px off the second one, with an arrowhead of about 12 px, on the canvas and in the room', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  const b = await canvasSession('bob')
+  await waitForCanvasUx(a.page)
+  // two outlined boxes (a 2 px stroke, no fill), so nothing but strokes is on the row the connector crosses
+  const hollow = { backgroundColor: 'transparent', strokeWidth: 2 }
+  const r1 = await settled(
+    a.page,
+    createItem(a.page, 'rectangle', { x: 100, y: 100, width: 200, height: 120, ...hollow }),
+  )
+  const r2 = await settled(
+    a.page,
+    createItem(a.page, 'rectangle', { x: 600, y: 100, width: 200, height: 120, ...hollow }),
+  )
+  expect(r1).not.toBe(r2)
+  await setViewport(a.page, { x: 0, y: 0, zoom: 1 })
+  await focusBoard(a.page)
+  await a.page.keyboard.press('l')
+  await expect.poll(() => tool(a.page)).toBe('arrow')
+  const s = await sceneToScreen(a.page, { x: 180, y: 160 })
+  const e = await sceneToScreen(a.page, { x: 720, y: 160 })
+  await a.page.mouse.move(s.x, s.y)
+  await a.page.mouse.down()
+  await a.page.mouse.move(e.x, e.y, { steps: 12 })
+  // held still inside the second box: the engine's precise ("inside") binding, then the outline write on release
+  await expect
+    .poll(
+      async () =>
+        (
+          (await items(a.page)).find((x) => x.type === 'arrow') as
+            | { endBinding?: { mode?: string } }
+            | undefined
+        )?.endBinding?.mode,
+      { timeout: 5_000 },
+    )
+    .toBe('inside')
+  await a.page.mouse.up()
+  const arrowId = ((await items(a.page)).find((x) => x.type === 'arrow') as { id: string }).id
+  type Linear = { x: number; y: number; points: [number, number][] }
+  const endsOf = async (page: Page) => {
+    const el = (await item(page, arrowId)) as unknown as Linear | null
+    if (!el) return null
+    const p0 = el.points[0] as [number, number]
+    const p1 = el.points[el.points.length - 1] as [number, number]
+    return { startX: el.x + p0[0], endX: el.x + p1[0] }
+  }
+  // the orbit gap of the patched engine: 1 + stroke / 2 = 2 (it was 5 + stroke / 2 = 6)
+  const GAP = 2
+  const atGap = async (page: Page) => {
+    const t = await endsOf(page)
+    return t
+      ? { start: Math.abs(t.startX - (300 + GAP)) < 0.3, end: Math.abs(t.endX - (600 - GAP)) < 0.3 }
+      : null
+  }
+
+  await test.step('both ends sit the orbit gap off the outlines (alice, then bob: the room re-snapped with the same rule)', async () => {
+    // held: the state is not monotonic on the way (the start is left where the press was until the outline write)
+    let since: number | null = null
+    await expect
+      .poll(
+        async () => {
+          const ok = JSON.stringify(await atGap(a.page)) === JSON.stringify({ start: true, end: true })
+          if (!ok) {
+            since = null
+            return 'not there yet'
+          }
+          since ??= Date.now()
+          return Date.now() - since >= 600 ? 'holds' : 'settling'
+        },
+        { timeout: 20_000, intervals: [100, 150, 200, 250] },
+      )
+      .toBe('holds')
+    await expectSaved(a.page)
+    expect(await atGap(a.page)).toEqual({ start: true, end: true })
+    await expect.poll(() => atGap(b.page), { timeout: 20_000 }).toEqual({ start: true, end: true })
+  })
+
+  await test.step('on the canvas: at most 2 clear pixels between the arrowhead and the box, and a head about 12 px across (was 5 and 19)', async () => {
+    await selectNone(a.page)
+    await a.page.mouse.move(10, 10) // no hover outline over the row
+    const row = await sceneToScreen(a.page, { x: 0, y: 160 })
+    const left = await sceneToScreen(a.page, { x: 540, y: 0 })
+    const stroke = (await sceneToScreen(a.page, { x: 600, y: 0 })).x // the box's stroke covers [stroke - 1, stroke + 1)
+    const { rows } = await inkRows(a.page, { x: left.x, y: row.y - 14, width: 90, height: 29 })
+    const mid = 14
+    const col = (x: number) => Math.round(x - left.x)
+    // the box's stroke is ink on the connector's row, and the arrowhead's tip is the last ink before it
+    const strokeStart = col(stroke - 1)
+    expect(rows[mid]?.[strokeStart], 'the box’s own stroke is where it should be').toBe(true)
+    let tip = strokeStart - 1
+    while (tip >= 0 && !rows[mid]?.[tip]) tip--
+    expect(tip, 'ink left of the box on the connector’s row').toBeGreaterThan(0)
+    const clear = strokeStart - 1 - tip
+    expect(
+      clear,
+      `clear pixels between the tip and the box (tip column ${tip}, box column ${strokeStart})`,
+    ).toBeGreaterThanOrEqual(0)
+    expect(clear).toBeLessThanOrEqual(2)
+    test.info().annotations.push({ type: 'W5-53 clear pixels (tip to box)', description: String(clear) })
+    // the head: the tallest run of ink in the 16 columns behind the tip (the shaft alone is 2 rows)
+    let tallest = 0
+    for (let c = Math.max(0, tip - 16); c <= tip; c++) {
+      const ys = rows.map((r, j) => (r[c] ? j : -1)).filter((j) => j >= 0)
+      if (ys.length) tallest = Math.max(tallest, (ys[ys.length - 1] as number) - (ys[0] as number) + 1)
+    }
+    expect(
+      tallest,
+      'the arrowhead is about 12 px across (barbs of 4.3 px each way plus the stroke)',
+    ).toBeGreaterThanOrEqual(8)
+    expect(tallest).toBeLessThanOrEqual(13)
+    test.info().annotations.push({ type: 'W5-53 head height px', description: String(tallest) })
+  })
+
+  await test.step('moving the second box keeps the gap (the follow, here and in the room)', async () => {
+    await updateItem(a.page, r2, { x: 640 })
+    await expectSaved(a.page)
+    const follow = async (page: Page) => {
+      const t = await endsOf(page)
+      return t ? Math.abs(t.endX - (640 - GAP)) < 0.3 : null
+    }
+    await expect.poll(() => follow(a.page), { timeout: 20_000 }).toBe(true)
+    await expect.poll(() => follow(b.page), { timeout: 20_000 }).toBe(true)
+  })
 })
 
 /** The frame names drawn now (visible), each with its frame id and screen box. */

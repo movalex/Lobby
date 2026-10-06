@@ -6,12 +6,13 @@
  * in `inside` mode: the end sits at the anchor itself, so a connector drawn from inside one note to inside
  * another runs centre to centre through both, and exports look the same. Its `orbit` mode keeps the same
  * anchor (`fixedPoint`, the point the connector aims at) but ends the line on the shape's outline, one
- * binding gap out. So, once the gesture has ended (and for pasted connectors), an `inside` end becomes an
- * `orbit` end with the same anchor, and its point moves to where Excalidraw's own `updateBoundPoint` puts an
- * orbit end. Excalidraw also leaves the start of a connector drawn out of a shape where the press was,
- * inside it, until something re-routes it: that end moves onto the outline the same way. The server re-snaps
- * bound ends with the same code on the arrow's `path` write (plan §2.4.3 step 9), so every tab ends up with
- * these points.
+ * orbit gap out (W5-53: 1 + stroke / 2, 2 px for the default stroke; the pnpm patch of @excalidraw/element in
+ * patches/ made it, the engine's own was 5 + stroke / 2). So, once the gesture has ended (and for pasted
+ * connectors), an `inside` end becomes an `orbit` end with the same anchor, and its point moves to where
+ * Excalidraw's own `updateBoundPoint` puts an orbit end. Excalidraw also leaves the start of a connector
+ * drawn out of a shape where the press was, inside it, until something re-routes it: that end moves onto the
+ * outline the same way. The server re-snaps bound ends with the same code on the arrow's `path` write (plan
+ * §2.4.3 step 9), so every tab ends up with these points.
  *
  * Left as they are: elbow connectors (they route by fixed points), rotated ones, an end bound to a frame
  * (a connector pointing at a spot inside a frame keeps pointing there), and a connector whose two ends are
