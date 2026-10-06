@@ -145,16 +145,21 @@ export async function revealedResults(q: Queryable, sessionId: string): Promise<
   return rankVoteResults(rows.rows.map((r) => ({ shapeId: r.shape_id, count: r.n })))
 }
 
+/**
+ * The caller's view of a vote. `shown`: the counts the caller may see (RT-03, vote-tally.ts: an open
+ * vote's counts as of the last window boundary); omitted, the live ones.
+ */
 export async function voteState(
   q: Queryable,
   row: SessionRow,
   userId: string,
   now: Date,
   rev: number,
+  shown?: Aggregates,
 ): Promise<WorkshopVoteState> {
   const session = toVoteSession(row, now, rev)
   const [agg, mine, done] = [
-    await aggregates(q, row.id),
+    shown ?? (await aggregates(q, row.id)),
     await myBallot(q, row.id, userId),
     await q.maybeOne('SELECT 1 AS ok FROM vote_done WHERE session_id = $1 AND user_id = $2', [
       row.id,
@@ -182,11 +187,16 @@ export function voteEvent(row: SessionRow, agg: Aggregates, now: Date): Workshop
   }
 }
 
+/**
+ * The board's votes, newest first. `shown` (RT-03, vote-tally.ts): the counts anyone may see of an OPEN
+ * vote (the last finished window's); omitted, the live ones.
+ */
 export async function summaries(
   q: Queryable,
   boardId: string,
   now: Date,
   rev: number,
+  shown?: (row: SessionRow) => Promise<Aggregates>,
 ): Promise<VoteSessionSummary[]> {
   const rows = await q.query<SessionRow & { total: number; participants: number }>(
     `SELECT ${SESSION_COLUMNS.split(', ')
@@ -200,11 +210,16 @@ export async function summaries(
       ORDER BY s.created_at DESC, s.id DESC LIMIT 50`,
     [boardId],
   )
-  return rows.rows.map(({ total, participants, ...row }) => ({
-    ...toVoteSession(row, now, rev),
-    totalVotesCast: total,
-    participants,
-  }))
+  const out: VoteSessionSummary[] = []
+  for (const { total, participants, ...row } of rows.rows) {
+    const agg = shown && effectiveStatus(row, now) === 'open' ? await shown(row) : null
+    out.push({
+      ...toVoteSession(row, now, rev),
+      totalVotesCast: agg ? agg.totalVotesCast : total,
+      participants: agg ? agg.participants : participants,
+    })
+  }
+  return out
 }
 
 export type CastOutcome = 'added' | 'removed'

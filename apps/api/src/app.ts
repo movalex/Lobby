@@ -22,6 +22,7 @@ import { createDevAuthProvider } from './auth/dev.ts'
 import { createIdentityService, type IdentityService } from './auth/identity.ts'
 import type { AuthProvider, RouteRateLimit, SignInContext } from './auth/provider.ts'
 import { createSessionStore } from './auth/session.ts'
+import { createHttpSessionEndNotifier, type SessionEndNotifier } from './auth/session-sync.ts'
 import { listUserWorkspaces } from './auth/users.ts'
 import { type CanvasEngine, createCanvasEngineProbe } from './canvas-engine.ts'
 import type { ApiConfig } from './config.ts'
@@ -87,6 +88,8 @@ export interface ApiDeps {
   /** A migrated-or-empty database the caller owns (it is migrated here, never closed here). */
   db?: Db
   notifier?: SyncNotifier
+  /** RT-01: tells the sync server whose sessions ended (auth/session-sync.ts; tests record instead). */
+  sessionEnds?: SessionEndNotifier
   now?: () => Date
   logger?: FastifyServerOptions['logger']
   /** Replaces the provider chosen by config (tests inject a Clerk provider with fake verification). */
@@ -350,6 +353,15 @@ async function buildServer(
     creators,
   })
   const identity = createIdentityService({ db, sessions, provider, lookup: creators, now, log: app.log })
+  // RT-01: an ended session closes its person's board sockets (auth/session-sync.ts)
+  const sessionEnds =
+    deps.sessionEnds ??
+    createHttpSessionEndNotifier({
+      baseUrl: config.syncInternalUrl,
+      secret: config.internalSecret,
+      log: app.log,
+    })
+  sessions.onRevoked((_ids, userIds) => sessionEnds.ended(userIds))
   // Never an address: the domains and how many exceptions there are.
   app.log.info(
     { creators: { domains: [...config.creators.domains], exceptions: config.creators.emails.length } },
@@ -631,7 +643,7 @@ async function buildServer(
     },
     async close() {
       await app.close()
-      await notifier.drain()
+      await Promise.all([notifier.drain(), sessionEnds.drain()])
       if (ownsDb) await db.close()
     },
   }

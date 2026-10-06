@@ -169,6 +169,13 @@ export class WorkshopStore {
   private queue: Promise<unknown> = Promise.resolve()
   private seq = 0
   private appliedSeq = 0
+  /**
+   * RT-03 (wave J3): the seq taken when the last vote event's counts arrived. The server moves an open
+   * vote's counts once per counting window, and a response to a request that started before that event
+   * can carry the window before it: its counts must not undo the event's (no later event would fix them
+   * when nothing else changes). The caller's own ballot in such a response still applies.
+   */
+  private countsSeq = 0
   private summoned: WorkshopSnapshot['summonedBy'] = null
   private hiddenResults = new Set<string>()
   private readonly memo = new Map<string, Participation>()
@@ -338,8 +345,9 @@ export class WorkshopStore {
       if (seq < this.appliedSeq) return
       this.appliedSeq = seq
       const timer = this.newerTimer(s.timer) ? s.timer : (this.state?.timer ?? null)
-      this.setVote(s.vote)
-      this.state = { ...s, timer }
+      const vote = this.withNewerCounts(s.vote, seq)
+      this.setVote(vote)
+      this.state = { ...s, timer, vote }
       this.applyHands(s.hands, s.handsVersion)
       this.loaded = true
       this.stale = false
@@ -418,6 +426,7 @@ export class WorkshopStore {
         session: { ...vote.session, status: p.data.status, endsAt: p.data.endsAt },
       },
     }
+    this.countsSeq = ++this.seq // RT-03: answers to requests sent before this keep these counts
     this.emit()
     // Ended or revealed: fetch the final view (results come only from the server's own response).
     if (statusChanged) void this.refresh()
@@ -488,10 +497,26 @@ export class WorkshopStore {
     return true
   }
 
+  /**
+   * RT-03: `vote` from an answer to the request `seq`, with the shared counts this tab already has when a
+   * vote event brought them after that request was sent (the same vote only).
+   */
+  private withNewerCounts<V extends WorkshopVoteState | null>(vote: V, seq: number): V {
+    const cur = this.state?.vote
+    if (!vote || !cur || seq > this.countsSeq || cur.session.id !== vote.session.id) return vote
+    return {
+      ...vote,
+      totalVotesCast: cur.totalVotesCast,
+      participants: cur.participants,
+      participantsDone: cur.participantsDone,
+    }
+  }
+
   /** Applies the caller's vote state from a mutation response (ordered by request start). */
-  private applyVote(vote: WorkshopVoteState, seq: number) {
+  private applyVote(answer: WorkshopVoteState, seq: number) {
     if (seq < this.appliedSeq) return
     this.appliedSeq = seq
+    const vote = this.withNewerCounts(answer, seq)
     const base = this.state ?? {
       timer: null,
       vote: null,

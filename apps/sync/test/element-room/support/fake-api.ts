@@ -22,6 +22,11 @@ export interface ElementFakeApi {
   setWorkshop(boardId: string, s: { voteOpen: boolean; anonymous: boolean }): void
   workshopMode: 'ok' | 'error'
   setRole(boardId: string, userId: string, role: TicketRole | null): void
+  /**
+   * RT-01: the access answer's `signedInSince` for `userId` (the start of their oldest live session, or
+   * null for none). Never set: the answer has no such field (an api from before J3).
+   */
+  setSignedInSince(userId: string, since: number | null): void
   close(): Promise<void>
 }
 
@@ -30,6 +35,7 @@ export async function startElementFakeApi(secret = TEST_INTERNAL_SECRET): Promis
   const foreign = new Set<string>()
   const workshops = new Map<string, { voteOpen: boolean; anonymous: boolean }>()
   const roles = new Map<string, TicketRole | null>()
+  const signedInSince = new Map<string, number | null>()
   const hanging = new Set<ServerResponse>()
   const json = (res: ServerResponse, status: number, body: unknown) =>
     res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body))
@@ -43,9 +49,13 @@ export async function startElementFakeApi(secret = TEST_INTERNAL_SECRET): Promis
       return res.writeHead(204).end()
     }
     if (url.pathname === '/internal/access') {
-      const k = `${url.searchParams.get('boardId')}\n${url.searchParams.get('userId')}`
+      const userId = url.searchParams.get('userId') ?? ''
+      const k = `${url.searchParams.get('boardId')}\n${userId}`
       if (!roles.has(k)) return json(res, 404, { error: { code: 'NOT_FOUND' } })
-      return json(res, 200, { role: roles.get(k) })
+      return json(res, 200, {
+        role: roles.get(k),
+        ...(signedInSince.has(userId) ? { signedInSince: signedInSince.get(userId) } : {}),
+      })
     }
     const m = /^\/internal\/boards\/([^/]+)\/(file-refs|workshop-state)$/.exec(url.pathname)
     if (!m) return res.writeHead(404).end()
@@ -85,6 +95,7 @@ export async function startElementFakeApi(secret = TEST_INTERNAL_SECRET): Promis
     addForeign: (v) => void foreign.add(v),
     setWorkshop: (b, s) => void workshops.set(b, s),
     setRole: (b, u, r) => void roles.set(`${b}\n${u}`, r),
+    setSignedInSince: (u, since) => void signedInSince.set(u, since),
     async close() {
       for (const r of hanging) r.destroy()
       server.closeAllConnections()

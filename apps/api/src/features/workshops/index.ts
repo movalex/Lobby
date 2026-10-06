@@ -10,6 +10,8 @@
 //   commenters take part; the person is always the signed-in user. Lowering your own hand: `view`.
 // Events are published only after the transaction commits, and carry aggregates only. Reactions and
 // hands are in-memory (hands.ts, reactions.ts): nothing about them is stored.
+// RT-03 (wave J3): an open vote's counts, in events and in answers, are those of the last finished
+// counting window (vote-tally.ts): a cast or an "I'm done" no longer publishes anything by itself.
 // A vote session in an answer is shaped for the caller's web build (votes.ts toVoteSession, `revOf`).
 
 import {
@@ -47,6 +49,7 @@ import { allowedNow, registerPrivateNotes } from './private-notes.ts'
 import { REACTIONS_PER_BOARD_MAX, SlidingWindowLimiter } from './reactions.ts'
 import { createShapeIndex, type ShapeIndex } from './shapes.ts'
 import { applyTimerAction, TimerRuleError, type TimerState, timerHolder, timerView } from './timer.ts'
+import { VoteTally } from './vote-tally.ts'
 import {
   aggregates,
   castInLockedSession,
@@ -77,6 +80,8 @@ export interface WorkshopOptions {
   reactionsPerBoardMax?: number
   /** A2 (Excalidraw engine): tells sync whether a dot vote is open (injected in tests). */
   workshopState?: WorkshopStatePusher
+  /** RT-03: the counting window of open votes (default VOTE_TALLY_WINDOW_MS, vote-tally.ts). */
+  voteTallyWindowMs?: number
 }
 
 /** The board event stream route (apps/api/src/events/routes.ts): raised hands follow its lifetime. */
@@ -147,10 +152,25 @@ export function registerWorkshopRoutes(
   // A2: every change of "is a dot vote open" reaches sync after it commits (workshop-state.ts).
   const workshopState =
     opts.workshopState ?? createWorkshopStatePusher({ db, sync: ctx.sync, now, log: app.log })
+  // RT-03: what anyone is shown of an open vote's counts, and when the board hears them (vote-tally.ts)
+  const tally = new VoteTally({
+    now,
+    load: (id) => findSession(db, id),
+    publish: (row, agg, at) =>
+      events.publish(row.board_id, { type: WORKSHOP_EVENTS.vote, data: voteEvent(row, agg, at) }),
+    log: app.log,
+    ...(opts.voteTallyWindowMs !== undefined ? { windowMs: opts.voteTallyWindowMs } : {}),
+  })
   app.addHook('onClose', async () => {
     workshopState.close()
-    await workshopState.drain()
+    tally.close()
+    await Promise.all([workshopState.drain(), tally.drain()])
   })
+  /** The counts the caller may see of `row` (an open vote: the last finished window's). */
+  const shownOf = (row: SessionRow, at: Date) => tally.view(row, at, () => aggregates(db, row.id))
+  /** The caller's view of a vote, with the counts they may see. */
+  const stateOf = async (row: SessionRow, userId: string, at: Date, rev: number) =>
+    voteState(db, row, userId, at, rev, await shownOf(row, at))
   const hands = new HandRegistry({
     now,
     publish: (boardId, data) => events.publish(boardId, { type: WORKSHOP_EVENTS.hand, data }),
@@ -204,7 +224,7 @@ export function registerWorkshopRoutes(
     const row = await currentSession(db, access.board.id)
     const body: WorkshopState = {
       timer: timer ? timerView(timer, at) : null,
-      vote: row ? await voteState(db, row, user.id, at, revOf(req)) : null,
+      vote: row ? await stateOf(row, user.id, at, revOf(req)) : null,
       hands: hands.list(access.board.id),
       handsVersion: hands.version(),
       serverNow: at.toISOString(),
@@ -340,11 +360,10 @@ export function registerWorkshopRoutes(
         throw conflict('VOTE_ALREADY_OPEN', 'A vote is already running on this board. End it first.')
       throw e
     }
-    const state = await voteState(db, row, user.id, at, revOf(req))
-    events.publish(row.board_id, {
-      type: WORKSHOP_EVENTS.vote,
-      data: voteEvent(row, await aggregates(db, row.id), at),
-    })
+    const agg = await aggregates(db, row.id)
+    tally.started(row, agg)
+    const state = await voteState(db, row, user.id, at, revOf(req), agg)
+    events.publish(row.board_id, { type: WORKSHOP_EVENTS.vote, data: voteEvent(row, agg, at) })
     workshopState.changed(row.board_id)
     return reply.code(201).send(state)
   })
@@ -353,7 +372,9 @@ export function registerWorkshopRoutes(
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'view')
-    return { sessions: await summaries(db, access.board.id, now(), revOf(req)) }
+    const at = now()
+    // RT-03: the open vote's counts as anyone may see them (the last finished window's)
+    return { sessions: await summaries(db, access.board.id, at, revOf(req), (row) => shownOf(row, at)) }
   })
 
   app.get('/api/votes/:vid/results', async (req) => {
@@ -402,11 +423,13 @@ export function registerWorkshopRoutes(
       ])
       return true
     })
+    // casting has stopped: the final counts are shown as they are (RT-03)
+    tally.ended(row.id)
     if (changed) {
       events.publish(row.board_id, { type: WORKSHOP_EVENTS.vote, data: voteEvent(row, agg, at) })
       workshopState.changed(row.board_id)
     }
-    return voteState(db, row, user.id, at, revOf(req))
+    return stateOf(row, user.id, at, revOf(req))
   })
 
   app.post('/api/votes/:vid/reveal', async (req) => {
@@ -420,6 +443,7 @@ export function registerWorkshopRoutes(
       )
       return true
     })
+    tally.ended(row.id)
     if (changed) {
       workshopState.changed(row.board_id)
       const results = await revealedResults(db, row.id)
@@ -434,13 +458,13 @@ export function registerWorkshopRoutes(
         },
       })
     }
-    return voteState(db, row, user.id, at, revOf(req))
+    return stateOf(row, user.id, at, revOf(req))
   })
 
   app.post('/api/votes/:vid/extend', async (req) => {
     const user = await ctx.requireUser(req)
     const { addMs } = parse(ExtendVoteInput, req.body)
-    const { row, changed, agg, at } = await facilitate(req, user.id, async (tx, r, t) => {
+    const { row, changed, at } = await facilitate(req, user.id, async (tx, r, t) => {
       if (r.status !== 'open') throw voteClosed()
       if (!r.ends_at) throw conflict('NO_END_TIME', 'This vote has no end time to extend.')
       const base = Math.max(r.ends_at.getTime(), t.getTime())
@@ -450,11 +474,13 @@ export function registerWorkshopRoutes(
       await tx.query('UPDATE vote_sessions SET ends_at = $2 WHERE id = $1', [r.id, next])
       return true
     })
+    // the vote is still open: its counts stay those of the last finished window (RT-03)
+    const shown = await shownOf(row, at)
     if (changed) {
-      events.publish(row.board_id, { type: WORKSHOP_EVENTS.vote, data: voteEvent(row, agg, at) })
+      events.publish(row.board_id, { type: WORKSHOP_EVENTS.vote, data: voteEvent(row, shown, at) })
       workshopState.changed(row.board_id) // re-arms the end timer
     }
-    return voteState(db, row, user.id, at, revOf(req))
+    return voteState(db, row, user.id, at, revOf(req), shown)
   })
 
   // ---- votes: taking part ------------------------------------------------------------------------
@@ -479,13 +505,16 @@ export function registerWorkshopRoutes(
       if (!ok) throw notEligible()
     }
     const at = now()
-    const { row, agg } = await db.transaction(async (tx) => {
+    const { row, agg, mark } = await db.transaction(async (tx) => {
       const locked = await lockSession(tx, found.id)
       await castInLockedSession(tx, locked, user.id, shapeId, delta, at)
-      return { row: locked, agg: await aggregates(tx, found.id) }
+      const agg = await aggregates(tx, found.id)
+      // RT-03: taken under the row lock, so the tally knows the commit order
+      return { row: locked, agg, mark: tally.mark() }
     })
-    events.publish(row.board_id, { type: WORKSHOP_EVENTS.vote, data: voteEvent(row, agg, at) })
-    return voteState(db, row, user.id, at, revOf(req))
+    // RT-03: nothing goes to the board now; the window's counts go out when it is over (vote-tally.ts)
+    tally.changed(row, agg, mark)
+    return stateOf(row, user.id, at, revOf(req))
   })
 
   app.post('/api/votes/:vid/done', async (req) => {
@@ -494,7 +523,7 @@ export function registerWorkshopRoutes(
     const { row: found, access } = await sessionFor(req, user.id, 'view')
     if (access.board.status !== 'active') throw readOnlyBoard()
     const at = now()
-    const { row, agg, changed } = await db.transaction(async (tx) => {
+    const { row, agg, changed, mark } = await db.transaction(async (tx) => {
       const locked = await lockSession(tx, found.id)
       if (effectiveStatus(locked, at) !== 'open') throw voteClosed()
       const r = done
@@ -504,10 +533,12 @@ export function registerWorkshopRoutes(
             [locked.id, locked.workspace_id, user.id, at],
           )
         : await tx.query('DELETE FROM vote_done WHERE session_id = $1 AND user_id = $2', [locked.id, user.id])
-      return { row: locked, changed: r.rowCount > 0, agg: await aggregates(tx, found.id) }
+      const agg = await aggregates(tx, found.id)
+      return { row: locked, changed: r.rowCount > 0, agg, mark: tally.mark() }
     })
-    if (changed) events.publish(row.board_id, { type: WORKSHOP_EVENTS.vote, data: voteEvent(row, agg, at) })
-    return voteState(db, row, user.id, at, revOf(req))
+    // RT-03: as a cast ("I'm done" moves the same counts)
+    if (changed) tally.changed(row, agg, mark)
+    return stateOf(row, user.id, at, revOf(req))
   })
 
   // ---- gather everyone -----------------------------------------------------------------------------

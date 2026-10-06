@@ -538,7 +538,8 @@ export class ElementRoom {
         s.identity.sid,
         s.identity.readonly,
         msg,
-        this.workshop?.voteOpen === true,
+        // RT-03: an open vote drops `sel`; an anonymous one also hides the button (presence.ts)
+        this.workshop ?? false,
         s.key,
       )
       if (ok) {

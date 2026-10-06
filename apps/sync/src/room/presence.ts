@@ -3,7 +3,12 @@
 //  - Input: `{pointer, button, sel, view, idle, editing, drag?}` at most 20 Hz per session (excess
 //    dropped). No identity fields: `sid`, `uid`, `name`, `color`, `guest` come from the ticket (the
 //    roster). Pointer coordinates are rounded to integers, drag deltas to 0.1. While a dot vote is open,
-//    `sel` is dropped.
+//    `sel` is dropped; while it is anonymous (every open vote today), `button` is relayed as 'up' (RT-03,
+//    wave J3: a dot is cast with a click on an object, so a peer's button going down there, next to the
+//    vote's live counts, told everyone who voted for what). The pointer itself still moves: hiding it
+//    over objects needs a hit test per message (not cheap), and the vote's counts now change once per
+//    window only (apps/api/src/features/workshops/vote-tally.ts), so a cursor resting on an object no
+//    longer lines up with one ballot unless its owner was the only one voting in that window.
 //  - `presence` out at 10 Hz, changed peers only. With 41 sessions or fewer, nobody is capped and one
 //    frame (serialized once) serves everyone whose own presence did not change; a recipient whose own
 //    entry is in the batch gets a copy without it. Above that, each recipient gets at most 40 cursors
@@ -268,11 +273,21 @@ export class PresenceHub {
   }
 
   /**
-   * One presence message from a session. Returns false when it was dropped by the 20 Hz cap. `voteOpen`
-   * drops `sel`. `key` is the sending socket's handle: a message with `f` (null included) makes that
-   * socket a rev-10 reader, also when the 20 Hz cap drops the rest of the message.
+   * One presence message from a session. Returns false when it was dropped by the 20 Hz cap. `vote`: an
+   * open vote drops `sel`; an open ANONYMOUS one also relays `button` as 'up' (RT-03). A boolean means an
+   * open anonymous vote, or none (every open vote is anonymous today, workshop-state.ts). `key` is the
+   * sending socket's handle: a message with `f` (null included) makes that socket a rev-10 reader, also
+   * when the 20 Hz cap drops the rest of the message.
    */
-  input(sid: string, readonly: boolean, msg: PresenceIn, voteOpen: boolean, key?: number): boolean {
+  input(
+    sid: string,
+    readonly: boolean,
+    msg: PresenceIn,
+    vote: boolean | { readonly voteOpen: boolean; readonly anonymous: boolean },
+    key?: number,
+  ): boolean {
+    const voteOpen = typeof vote === 'boolean' ? vote : vote.voteOpen
+    const secretBallot = typeof vote === 'boolean' ? vote : vote.voteOpen && vote.anonymous
     const p = this.peer(sid, readonly)
     if (key !== undefined && msg.f !== undefined) {
       const r = this.recipient(key)
@@ -295,7 +310,8 @@ export class PresenceHub {
     p.presence = {
       sid,
       pointer: msg.pointer ? { x: Math.round(msg.pointer.x), y: Math.round(msg.pointer.y) } : null,
-      button: msg.button,
+      // RT-03: casting a dot is a click on an object; a peer's button going down there is a ballot
+      button: secretBallot ? 'up' : msg.button,
       sel: voteOpen ? null : msg.sel,
       view: msg.view,
       idle: msg.idle,

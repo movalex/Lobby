@@ -35,13 +35,29 @@ const ACCESS_CHANGED_LIMIT = 16 * 1024
 
 const badRequest = (message: string) => new HttpError(400, 'BAD_REQUEST', message)
 
+const validUserId = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= 128
+
+/**
+ * POST /internal/access-changed. `{ boardId }`: everyone's access to that board may have changed;
+ * `{ boardId, userId }`: one person's. RT-01 (wave J3): `{ userId }` alone: the api ended sessions of
+ * that person (sign out, sign out everywhere, a ban or a deleted account), so they are re-checked on
+ * every open board (access.ts: no live session closes their sockets 4099 NOT_AUTHENTICATED). A sync
+ * from before J3 answers that body 400, and its periodic round still applies the api's answer.
+ */
 export async function handleAccessChanged(req: IncomingMessage, res: ServerResponse, deps: InternalDeps) {
   const body = (await readJson(req, ACCESS_CHANGED_LIMIT)) as { boardId?: unknown; userId?: unknown } | null
   const boardId = body?.boardId
   const userId = body?.userId
+  if (boardId === undefined && userId !== undefined) {
+    if (!validUserId(userId)) throw badRequest('userId is invalid.')
+    // Answer at once, as below.
+    void deps.monitor
+      .userChanged(userId)
+      .catch((e: unknown) => deps.log('[access] re-check error', errorSummary(e)))
+    return void res.writeHead(204, { 'Cache-Control': 'no-store' }).end()
+  }
   if (typeof boardId !== 'string' || !BOARD_ID_RE.test(boardId)) throw badRequest('boardId is invalid.')
-  if (userId !== undefined && (typeof userId !== 'string' || userId.length === 0 || userId.length > 128))
-    throw badRequest('userId is invalid.')
+  if (userId !== undefined && !validUserId(userId)) throw badRequest('userId is invalid.')
   // Answer at once: the re-check calls back into the API, which is waiting on this response.
   void deps.monitor
     .accessChanged(boardId, userId)
