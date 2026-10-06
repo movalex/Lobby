@@ -192,6 +192,8 @@ export class WorkshopStore {
   private retryMs = REFRESH_RETRY_MIN_MS
   /** The request seq of the last refetch that succeeded. */
   private refreshedSeq = 0
+  /** The highest refetch seq that failed: an older answer does not make the store current again (as private-notes/store.ts). */
+  private failedSeq = 0
   private disposed = false
 
   constructor(deps: {
@@ -342,14 +344,19 @@ export class WorkshopStore {
       this.state = { ...s, timer }
       this.applyHands(s.hands, s.handsVersion)
       this.loaded = true
-      this.stale = false
       this.refreshedSeq = seq
       this.confirmedAt = this.nowMs()
-      this.clearRetry()
-      this.retryMs = REFRESH_RETRY_MIN_MS
+      // A refetch sent after this one failed: this answer may predate what that one was asked for (a vote
+      // that started meanwhile). It is shown, but the store stays stale and its retry keeps running.
+      if (seq >= this.failedSeq) {
+        this.stale = false
+        this.clearRetry()
+        this.retryMs = REFRESH_RETRY_MIN_MS
+      }
     } catch (e) {
       // A later refetch already succeeded: nothing is missing.
       if (seq < this.refreshedSeq) return
+      this.failedSeq = Math.max(this.failedSeq, seq)
       this.stale = true
       if (retryableError(e)) this.scheduleRetry()
     }

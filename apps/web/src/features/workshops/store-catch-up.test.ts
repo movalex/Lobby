@@ -261,6 +261,76 @@ describe('G1: a failed refetch is tried again', () => {
     expect(h.gets.length).toBe(n)
   })
 
+  it('an answer older than a refetch that failed does not make the store current: it is shown, the store stays stale and the retry still runs (wave I note: failedSeq, as private-notes)', async () => {
+    const h = harness(state(selectionVote()))
+    await h.store.refresh()
+    // a refetch hangs; the next one (sent after it, when a board vote had started) fails; then the hung one
+    // answers with what the server had when it was asked: the selection vote
+    let answer: (s: z.output<typeof WorkshopState>) => void = () => {}
+    const slow = new Promise<z.output<typeof WorkshopState>>((resolve) => {
+      answer = resolve
+    })
+    const realRequest = (h.store as unknown as { request: RequestFn }).request
+    let first = true
+    ;(h.store as unknown as { request: RequestFn }).request = ((...args: Parameters<RequestFn>) => {
+      if (first) {
+        first = false
+        return slow
+      }
+      return realRequest(...args)
+    }) as RequestFn
+    const older = WorkshopState.parse(state(selectionVote()))
+    const p1 = h.store.refresh()
+    h.setServer(state(vote(S2)))
+    h.plan.push(offline())
+    await h.store.refresh()
+    expect(h.store.getSnapshot().stale).toBe(true)
+    answer(older)
+    await p1
+    // the old answer is applied (it is the newest state this tab has), but the tab is not caught up
+    expect(h.store.getSnapshot()).toMatchObject({ stale: true, vote: { session: { id: S1 } } })
+    // so acting on it still asks the server first, however recent that answer was
+    const asked = h.gets.length
+    await h.store.confirm(60_000)
+    expect(h.gets.length).toBe(asked + 1)
+    expect(h.store.getSnapshot()).toMatchObject({ stale: false, vote: { session: { id: S2 } } })
+  })
+
+  it('...and without a confirm the retry brings the vote that started meanwhile, then stops', async () => {
+    const h = harness(state(selectionVote()))
+    await h.store.refresh()
+    let answer: (s: z.output<typeof WorkshopState>) => void = () => {}
+    const slow = new Promise<z.output<typeof WorkshopState>>((resolve) => {
+      answer = resolve
+    })
+    const realRequest = (h.store as unknown as { request: RequestFn }).request
+    let first = true
+    ;(h.store as unknown as { request: RequestFn }).request = ((...args: Parameters<RequestFn>) => {
+      if (first) {
+        first = false
+        return slow
+      }
+      return realRequest(...args)
+    }) as RequestFn
+    const p1 = h.store.refresh()
+    h.setServer(state(vote(S2)))
+    h.plan.push(offline())
+    await h.store.refresh()
+    answer(WorkshopState.parse(state(selectionVote())))
+    await p1
+    expect(h.store.getSnapshot().stale).toBe(true)
+    const n = h.gets.length
+    await vi.advanceTimersByTimeAsync(REFRESH_RETRY_MIN_MS)
+    expect(h.gets.length).toBe(n + 1)
+    expect(h.store.getSnapshot()).toMatchObject({
+      stale: false,
+      vote: { session: { id: S2, scope: 'board' } },
+    })
+    // caught up: no more retries
+    await vi.advanceTimersByTimeAsync(REFRESH_RETRY_MAX_MS * 4)
+    expect(h.gets.length).toBe(n + 1)
+  })
+
   it('nobody showing the store (the board was left): the retry stops; someone showing it again resumes it', async () => {
     const h = harness(state(vote(S2)))
     await h.store.refresh()
