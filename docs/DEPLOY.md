@@ -242,7 +242,7 @@ Every variable is documented with a safe placeholder in `.env.example`. Where ea
 | `DRAFTROOM_BACKUP_STORE`, `DRAFTROOM_BACKUP_INTERVAL_MS` | sync | `sync: false` / default ([backups](#backups)): `r2` on staging, set together with the sync's `R2_*`. |
 | `DATABASE_URL` | api | `fromDatabase … connectionString` (the internal URL). Internal connections don't require TLS. For `sslmode=require`, append it by hand; `verify-full` isn't supported internally. |
 | `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY` | api | `sync: false` |
-| `DRAFTROOM_CREATOR_DOMAINS` | api | not in `render.yaml`: unset means `darkburn.com,trailerparkgroup.com` ([domain access](#domain-access)) |
+| `DRAFTROOM_CREATOR_DOMAINS` | api | not in `render.yaml`: unset means `darkburn.com,trailerparkgroup.com,trailerpark.com` ([domain access](#domain-access)) |
 | `DRAFTROOM_CREATOR_EMAILS` | api | not in `render.yaml`: set by the lead in the Render Dashboard only, never in git ([domain access](#domain-access)) |
 | `DRAFTROOM_SYNC_INTERNAL_URL` | api | `fromService: {type: web, name: draftroom-staging-sync, property: hostport}` → `draftroom-staging-sync-xxxx:10000` → `http://…`. Required, non-loopback in production. |
 | `DRAFTROOM_API_INTERNAL_URL` | sync | `fromService: {type: web, name: draftroom-staging-api, property: hostport}`. Same rules. |
@@ -276,7 +276,7 @@ A creator has a **verified** sign-in address (primary or secondary) whose domain
 
 | Variable | Unset or blank | Set |
 |---|---|---|
-| `DRAFTROOM_CREATOR_DOMAINS` | `darkburn.com,trailerparkgroup.com` (every environment, production included) | Comma-separated exact ASCII domains, replacing the default. Punycode for internationalised domains. Subdomains are separate entries. `*.invalid` is refused. |
+| `DRAFTROOM_CREATOR_DOMAINS` | `darkburn.com,trailerparkgroup.com,trailerpark.com` (every environment, production included; `trailerpark.com` since 2026-10-06) | Comma-separated exact ASCII domains, replacing the default. Punycode for internationalised domains. Subdomains are separate entries. `*.invalid` is refused. |
 | `DRAFTROOM_CREATOR_EMAILS` | no exceptions | Comma-separated exact addresses, at most 50, never `+clerk_test`. Gmail dots and `+tags` are **not** normalised: list the exact address Clerk verified. |
 
 - **Fail closed.** No value turns the rule off. An invalid value stops the api at startup, with a message that names the variable and the entry number, never the value. The startup log shows `{ creators: { domains, exceptions: <count> } }` and never an address.
@@ -305,7 +305,7 @@ SELECT i.id, i.board_id, i.role, i.expires_at, i.created_by
    AND NOT EXISTS (
      SELECT 1 FROM user_emails e
       WHERE e.user_id = i.created_by AND e.source = 'clerk'
-        AND (e.domain IN ('darkburn.com', 'trailerparkgroup.com')
+        AND (e.domain IN ('darkburn.com', 'trailerparkgroup.com', 'trailerpark.com')
              OR e.email = ANY (string_to_array('<the DRAFTROOM_CREATOR_EMAILS value>', ','))));
 ```
 

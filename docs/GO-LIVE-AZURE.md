@@ -266,7 +266,7 @@ as first written). **UNVERIFIED for DBC:** check them in the Azure Pricing Calcu
 
 | Person | Signs in with | Becomes |
 |---|---|---|
-| DBC or Trailer Park Group staff | Okta | **Creator**: a verified `darkburn.com` or `trailerparkgroup.com` address from DBC's Okta |
+| DBC or Trailer Park Group staff | Okta | **Creator**: a verified `darkburn.com`, `trailerparkgroup.com` or `trailerpark.com` address from DBC's Okta |
 | DBC staff using their Microsoft work account | Microsoft | **Creator** only if DBC IT lists DBC's tenant ID, the person is a member (not a guest) of that tenant, and Microsoft marks the email's domain as verified (`xms_edov` = true) |
 | Outside reviewer with a work Microsoft account | Microsoft | **Invited outsider**: sees only what they are invited to. Email-locked invitations match their verified address. |
 | Outside reviewer with a personal Microsoft account (outlook.com, or one created with any email address) | Microsoft | **Invited outsider**. Whether an email-locked invitation can match a personal account is **UNVERIFIED**, see below. |
@@ -478,7 +478,7 @@ board tickets, the worker protocol, the backup and restore tools, and the AI fea
 | `VITE_TLDRAW_LICENSE_KEY` | removed (unused since the Excalidraw cut-over) |
 | `DRAFTROOM_DATA_DIR` | sync: `/var/data` on the managed disk; api: a scratch path |
 | `AUTH_PROVIDER` + the new Okta/Microsoft variables | once the sign-in code exists |
-| `DRAFTROOM_CREATOR_DOMAINS` | default (`darkburn.com,trailerparkgroup.com`) |
+| `DRAFTROOM_CREATOR_DOMAINS` | default (`darkburn.com,trailerparkgroup.com,trailerpark.com`) |
 | `DRAFTROOM_CREATOR_EMAILS` | in Key Vault only, never in git |
 | Blob and backup store | files: `R2_*` carried over, or the new Azure values. Backups: `DRAFTROOM_BACKUP_STORE` with its **own new** bucket and credentials (`DRAFTROOM_BACKUP_R2_*` until the Azure driver exists), never Render's bucket |
 | Worker | `DRAFTROOM_API_URL=http://api:<port>`, a new `DRAFTROOM_WORKER_TOKEN` and `WORKER_ID` |

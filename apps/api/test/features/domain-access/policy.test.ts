@@ -27,7 +27,7 @@ const creator = (raw: string, devDomain: string | null = null) => {
 }
 
 describe('creator matching (exact, ASCII, last "@")', () => {
-  it.each(['lobby-test-a@darkburn.com', 'lobby-test-b@trailerparkgroup.com'])(
+  it.each(['lobby-test-a@darkburn.com', 'lobby-test-b@trailerparkgroup.com', 'lobby-test-c@trailerpark.com'])(
     '%s is a creator address',
     (email) => {
       expect(creator(email)).toBe(true)
@@ -46,6 +46,8 @@ describe('creator matching (exact, ASCII, last "@")', () => {
     ['a suffix', 'lobby-test@darkburn.com.evil.test'],
     ['a shorter TLD', 'lobby-test@darkburn.co'],
     ['a trailing dot', 'lobby-test@darkburn.com.'],
+    ['a subdomain of trailerpark.com', 'lobby-test@sub.trailerpark.com'],
+    ['a suffix of trailerpark.com', 'lobby-test@trailerpark.com.evil.test'],
     ['a quoted local part carrying the domain', '"x@darkburn.com"@evil.test'],
     ['two "@"', 'a@b@evil.test'],
   ])('%s is refused (%s)', (_what, email) => {
@@ -118,8 +120,8 @@ describe('creator matching (exact, ASCII, last "@")', () => {
 })
 
 describe('parseCreatorPolicy', () => {
-  it('defaults: the two built-in domains, no exceptions (unset or blank)', () => {
-    const expected = { domains: ['darkburn.com', 'trailerparkgroup.com'], emails: [] }
+  it('defaults: the three built-in domains, no exceptions (unset or blank)', () => {
+    const expected = { domains: ['darkburn.com', 'trailerparkgroup.com', 'trailerpark.com'], emails: [] }
     expect(parseCreatorPolicy({})).toEqual(expected)
     expect(parseCreatorPolicy({ DRAFTROOM_CREATOR_DOMAINS: '  ', DRAFTROOM_CREATOR_EMAILS: '' })).toEqual(
       expected,
