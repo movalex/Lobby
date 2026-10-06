@@ -35,7 +35,9 @@ export type OutsideStatus = z.infer<typeof OutsideStatus>
 
 /**
  * The manager-only fields on AccessRequest, ShareMember and WorkspaceMember (absent for everyone else,
- * and from an api before wave J; the web then shows no tag and asks nothing).
+ * and from an api before wave J; the web then shows no tag and asks nothing). WorkspaceMember carries
+ * them for the workspace's owners and admins, and, with `?boardId=`, for a manager of that board (the
+ * Share dialog's people picker).
  * - `emailDomain`: the domain of the account's primary verified address (null: none stored);
  * - `emailHint`: that address masked ("c•••@client.example"), never the full one.
  */

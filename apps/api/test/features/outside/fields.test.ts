@@ -1,22 +1,31 @@
 // Wave J (AUTHZ-NO-OUTSIDER-SIGNAL / INV-1 / BRW-1, security audit 2026-10-05): whoever decides on
 // access sees, from the server, whether a person is outside Dark Burn / TPG: `outside` (true, false or
 // 'unconfirmed', from the stored creator status), the verified email domain and the masked address, on
-// access requests, the Share dialog's member list and the workspace member list (owners and admins
-// only). User JSON stays clean, and nobody else gets the fields. canOwn is NOT the signal (a name-only
-// guest and an unconfirmed creator both differ from it). The board's "External" list goes to everyone
+// access requests, the Share dialog's member list and the workspace member list (owners and admins,
+// and with ?boardId= a manager of that board: the Share dialog's picker for a board owner who is a
+// plain member). User JSON stays clean, and nobody else gets the fields. canOwn is NOT the signal (a
+// name-only guest and a never-checked account both differ from it). A colleague whose addresses are
+// merely stale reads outside: false (no tag, no confirm). The board's "External" list goes to everyone
 // who can view it, without the domain unless they manage access. The address check answers with the
-// server's policy (the exceptions list included) to creators who manage the board only.
+// server's policy (the exceptions list included) to creators who manage the board only, at most
+// ADDRESS_CHECKS_PER_USER times per window.
 
 import {
   AccessRequest,
   AddressCheckResult,
   BoardOutsidePeople,
+  ListNotificationsResponse,
   ListShareMembersResponse,
+  ListThreadsResponse,
   ListWorkspaceMembersResponse,
+  LOBBY_CLIENT_HEADER,
+  LOBBY_CLIENT_REV,
   User,
 } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { ADDRESS_CHECKS_PER_USER } from '../../../src/features/dashboard/outside.ts'
 import { type Client, createBoard, createTestApi, DEV_STUDIO, type TestApi } from '../../helpers.ts'
+import { point } from '../comments/fixture.ts'
 import { guestLink, joinAsGuest } from '../guests/support.ts'
 
 const EXCEPTION = 'owner@personal.example.test'
@@ -66,8 +75,8 @@ const members = async (c: Client) => {
   expect(res.statusCode, res.body).toBe(200)
   return ListShareMembersResponse.parse(res.json()).members
 }
-const wsMembers = async (c: Client) => {
-  const res = await c.req('GET', `/api/workspaces/${DEV_STUDIO}/members`)
+const wsMembers = async (c: Client, query = '') => {
+  const res = await c.req('GET', `/api/workspaces/${DEV_STUDIO}/members${query}`)
   expect(res.statusCode, res.body).toBe(200)
   return ListWorkspaceMembersResponse.parse(res.json()).members
 }
@@ -154,15 +163,49 @@ describe('the Share dialog and the workspace member lists', () => {
     expect((await carol.req('GET', `/api/boards/${board}/sharing/members`)).statusCode).toBe(403)
   })
 
-  it('workspace members: owners and admins get the fields, members do not', async () => {
+  it('workspace members: owners and admins get the fields; members do not, unless they manage ?boardId=', async () => {
+    // pat, an outside client, joined ANOTHER board of the workspace (alice's): a workspace guest now,
+    // the person bob might pick for his board.
+    const other = await createBoard(alice, DEV_STUDIO, 'Other pitch')
+    await api.db.query(
+      "INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES ($1, $2, 'guest', now())",
+      [DEV_STUDIO, pat.userId],
+    )
+    expect(
+      (await alice.req('PUT', `/api/boards/${other}/members/${pat.userId}`, { role: 'viewer' })).statusCode,
+    ).toBe(200)
     const forAlice = Object.fromEntries((await wsMembers(alice)).map((m) => [m.user.id, m]))
     expect(forAlice[sam.userId]).toMatchObject({ outside: true, emailDomain: 'vendor.example.test' })
     expect(forAlice[bob.userId]).toMatchObject({ outside: false })
-    for (const m of await wsMembers(bob)) {
-      expect(m.outside).toBeUndefined()
-      expect(m.emailDomain).toBeUndefined()
-      expect(m.emailHint).toBeUndefined()
+    const none = (list: Awaited<ReturnType<typeof wsMembers>>) => {
+      for (const m of list) {
+        expect(m.outside).toBeUndefined()
+        expect(m.emailDomain).toBeUndefined()
+        expect(m.emailHint).toBeUndefined()
+      }
     }
+    none(await wsMembers(bob))
+    // bob (a plain member) owns `board`: as its manager, his picker learns who is outside.
+    const forBob = Object.fromEntries((await wsMembers(bob, `?boardId=${board}`)).map((m) => [m.user.id, m]))
+    expect(forBob[pat.userId]).toMatchObject({
+      outside: true,
+      emailDomain: 'client.example.test',
+      emailHint: 'p•••@client.example.test',
+    })
+    expect(forBob[sam.userId]).toMatchObject({ outside: true, emailDomain: 'vendor.example.test' })
+    expect(forBob[carol.userId]).toMatchObject({ outside: false })
+    expect(Object.keys(forBob[pat.userId]?.user ?? {}).sort()).toEqual(Object.keys(User.shape).sort())
+    // Not for a board he cannot manage (alice's), nor for nonsense, nor for carol (a viewer of `board`).
+    none(await wsMembers(bob, `?boardId=${other}`))
+    none(await wsMembers(bob, '?boardId=not-a-board'))
+    none(await wsMembers(carol, `?boardId=${board}`))
+    // A board of another workspace (bob's personal one) gives nothing here either.
+    const personal = await api.db.one<{ id: string }>(
+      "SELECT w.id FROM workspaces w JOIN workspace_members m ON m.workspace_id = w.id WHERE m.user_id = $1 AND m.role = 'owner' AND w.id <> $2 LIMIT 1",
+      [bob.userId, DEV_STUDIO],
+    )
+    const elsewhere = await createBoard(bob, personal.id, 'Mine')
+    none(await wsMembers(bob, `?boardId=${elsewhere}`))
   })
 
   it('display names in those lists lose control, bidi and zero-width characters', async () => {
@@ -173,6 +216,46 @@ describe('the Share dialog and the workspace member lists', () => {
     const row = (await members(bob)).find((m) => m.user.id === sam.userId)
     expect(row?.user.name).toBe('Bob')
     expect((await wsMembers(alice)).find((m) => m.user.id === sam.userId)?.user.name).toBe('Bob')
+    // Everyone's list, not only the managers'.
+    expect((await wsMembers(carol)).find((m) => m.user.id === sam.userId)?.user.name).toBe('Bob')
+    // A joiner inside an emoji sequence or Persian spelling is part of the name, and stays.
+    const persian = `Mi${ch(0x200c)}x ${ch(0x0645, 0x06cc, 0x200c, 0x062e)} ${ch(0x1f469, 0x200d, 0x1f4bb)}`
+    await api.db.query('UPDATE users SET name = $2 WHERE id = $1', [sam.userId, persian])
+    expect((await members(bob)).find((m) => m.user.id === sam.userId)?.user.name).toBe(
+      `Mix ${ch(0x0645, 0x06cc, 0x200c, 0x062e)} ${ch(0x1f469, 0x200d, 0x1f4bb)}`,
+    )
+  })
+
+  it('names and messages stored before the cleaning are cleaned where an owner reads them: the bell, comments', async () => {
+    const raw = `Sam${ch(0x202e)} Vendor${ch(0x200b)}`
+    await api.db.query('UPDATE users SET name = $2 WHERE id = $1', [pat.userId, raw])
+    expect(
+      (await pat.req('POST', `/api/boards/${board}/access-requests`, { role: 'viewer' })).statusCode,
+    ).toBe(202)
+    // A message stored before the input cleaning (written directly).
+    await api.db.query('UPDATE access_requests SET message = $2 WHERE user_id = $1', [
+      pat.userId,
+      `please${ch(0x202e)} let me in${ch(0x0007)}`,
+    ])
+    const [req] = await requests(bob)
+    expect(req).toMatchObject({ message: 'please let me in', user: { name: 'Sam Vendor' } })
+    const bell = await bob.req('GET', '/api/me/notifications', undefined, {
+      [LOBBY_CLIENT_HEADER]: String(LOBBY_CLIENT_REV),
+    })
+    expect(bell.statusCode, bell.body).toBe(200)
+    const item = ListNotificationsResponse.parse(bell.json()).notifications.find(
+      (n) => n.kind === 'access_request',
+    )
+    expect(item?.actor?.name).toBe('Sam Vendor')
+    expect(item?.accessRequest?.message).toBe('please let me in')
+    // A comment author.
+    await api.db.query('UPDATE users SET name = $2 WHERE id = $1', [sam.userId, raw])
+    const posted = await sam.req('POST', `/api/boards/${board}/threads`, { anchor: point(), body: 'hello' })
+    expect(posted.statusCode, posted.body).toBe(201)
+    const threads = ListThreadsResponse.parse(
+      (await bob.req('GET', `/api/boards/${board}/threads?status=all`)).json(),
+    ).threads
+    expect(threads[0]?.comments[0]?.author.name).toBe('Sam Vendor')
   })
 })
 
@@ -228,5 +311,17 @@ describe('the address check (the Share dialog asks before it invites)', () => {
     expect(res.statusCode).toBe(403)
     expect((res.json() as { error: { code: string } }).error.code).toBe('CREATOR_REQUIRED')
     expect((await check(bob, 'not an address')).statusCode).toBe(400)
+  })
+
+  it('is rate limited per caller (no walking a list of addresses against the policy)', async () => {
+    for (let i = 0; i < ADDRESS_CHECKS_PER_USER.max; i++)
+      expect((await check(bob, `p${i}@client.example.test`)).statusCode).toBe(200)
+    const over = await check(bob, 'one-more@client.example.test')
+    expect(over.statusCode).toBe(429)
+    expect((over.json() as { error: { code: string } }).error.code).toBe('RATE_LIMITED')
+    // Per caller: alice (who also manages the board) still checks.
+    expect((await check(alice, 'x@client.example.test')).statusCode).toBe(200)
+    // Refused callers are not counted, and learn nothing from the limit (carol: 403 as before).
+    expect((await check(carol, 'x@client.example.test')).statusCode).toBe(403)
   })
 })

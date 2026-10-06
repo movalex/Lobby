@@ -14,10 +14,12 @@
 //
 // Wave J (outside markers): people outside Dark Burn / TPG carry an "External" tag with their verified
 // email domain (the server's manager-only fields) in every list here: who has access, access requests,
-// the workspace picker and the workspace members; an account Lobby cannot confirm says "Not confirmed".
-// Before inviting an outside address (the server's address check decides, exceptions list included),
-// approving an outside account's request or giving one a grant or a higher role, the dialog asks once
-// per person while it is open. While the board's workspace or project is internal only it says so and
+// the workspace picker and the workspace members; an account Lobby never checked says "Not confirmed".
+// The picker (and a typed @handle) gets the fields as this board's manager (?boardId=), so a board
+// owner who is a plain workspace member sees them too. Before inviting an outside address (the
+// server's address check decides, exceptions list included; when the check fails, nothing is
+// invited), approving an outside account's request or giving one a grant or a higher role, the dialog
+// asks once per person while it is open. While the board's workspace or project is internal only it says so and
 // offers no link to create; the server refuses the rest (409 INTERNAL_ONLY, its message shown as is).
 
 import {
@@ -79,6 +81,7 @@ import { copyBounded } from './share-copy.ts'
 import {
   type AccessDetail,
   ADD_MEMBER_ROLES,
+  ADDRESS_CHECK_FAILED,
   ASK_EMAIL_PROMPT,
   accessSource,
   asksBeforeGiving,
@@ -177,29 +180,45 @@ function useOutsideAsk() {
   return { confirm, box }
 }
 
-/** The server's word on an address (null: an older api or an error; then nothing is asked). */
-async function checkAddress(boardId: string, email: string): Promise<AddressCheckResult | null> {
+/** The server's word on an address: its answer, an api from before wave J, or a failed check. */
+type AddressAnswer =
+  | { kind: 'checked'; result: AddressCheckResult }
+  | { kind: 'older-api' }
+  | { kind: 'failed'; message: string }
+
+async function checkAddress(boardId: string, email: string): Promise<AddressAnswer> {
   try {
-    return await api.request('POST', `/api/boards/${encodeURIComponent(boardId)}/sharing/address-check`, {
-      body: { email },
-      schema: AddressCheckResult,
-    })
-  } catch {
-    return null
+    const result = await api.request(
+      'POST',
+      `/api/boards/${encodeURIComponent(boardId)}/sharing/address-check`,
+      { body: { email }, schema: AddressCheckResult },
+    )
+    return { kind: 'checked', result }
+  } catch (e) {
+    // Only an api without the route (404) asks nothing: it predates the rule. Anything else (429,
+    // 503, the network) is said, and nothing is invited, so the question is never skipped silently.
+    if (isApiError(e) && e.kind === 'not-found') return { kind: 'older-api' }
+    const message =
+      isApiError(e) && e.kind !== 'network' && e.kind !== 'server' ? e.message : ADDRESS_CHECK_FAILED
+    return { kind: 'failed', message }
   }
 }
 
 /**
  * Before an invitation to an address: asks when it is outside (once per address); says why when the
- * board is internal only (the server would refuse it). `ok: false` means: create nothing.
+ * board is internal only (the server would refuse it) or the check failed. `ok: false` means: create
+ * nothing (`refused`: what to say instead).
  */
 async function confirmAddress(
   boardId: string,
   email: string,
   confirm: ReturnType<typeof useOutsideAsk>['confirm'],
 ): Promise<{ ok: boolean; refused: string | null }> {
-  const r = await checkAddress(boardId, email)
-  if (!r?.outside) return { ok: true, refused: null }
+  const answer = await checkAddress(boardId, email)
+  if (answer.kind === 'older-api') return { ok: true, refused: null }
+  if (answer.kind === 'failed') return { ok: false, refused: answer.message }
+  const r = answer.result
+  if (!r.outside) return { ok: true, refused: null }
   if (r.internalOnly) return { ok: false, refused: INTERNAL_ONLY_MESSAGES[r.internalOnly] }
   return {
     ok: await confirm(`email:${r.email}`, outsideConfirmText(r.email), 'Invite anyway'),
@@ -308,10 +327,15 @@ export function ShareDialog({
     [board.id, canManage],
   )
   const boardGuests = useResource(guestsLoad)
+  // Wave J: as this board's manager (`boardId`), the people come with their outside fields (the
+  // picker's External tag and the confirm before adding one); an older api ignores the parameter.
   const wsLoad = useCallback(
-    (signal: AbortSignal): Promise<WorkspaceMember[]> =>
-      canManage ? api.listWorkspaceMembers(workspace.id, signal) : Promise.resolve([]),
-    [canManage, workspace.id],
+    async (signal: AbortSignal): Promise<WorkspaceMember[]> => {
+      if (!canManage) return []
+      const path = `/api/workspaces/${encodeURIComponent(workspace.id)}/members?boardId=${encodeURIComponent(board.id)}`
+      return (await api.request('GET', path, { schema: ListWorkspaceMembersResponse, signal })).members
+    },
+    [board.id, canManage, workspace.id],
   )
   const wsMembers = useResource(wsLoad)
   const requestsLoad = useCallback(

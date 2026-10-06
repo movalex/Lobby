@@ -3,7 +3,8 @@
 // - an "External" tag (with the verified domain where the viewer manages access) in the Share dialog's
 //   lists, the people bar and list, cursor labels, comment authors; name-only guests keep "(guest)";
 // - a one-time confirm before approving an outside account's request and before inviting an outside
-//   address (never for a creator address);
+//   address (never for a creator address), and before a board owner who is a plain workspace member adds
+//   an outside workspace guest from the picker or by @handle (the picker's External tag);
 // - "Shared outside" on the board top bar and the dashboard card while an outside account has access or a
 //   guest link is open, and off again when that ends;
 // - the owner's bell notice the first time the outside account opens the board;
@@ -163,7 +164,10 @@ test('an outside account: External tags, the one-time confirms, Shared outside o
 
     await test.step('alice’s bell: pat opened this board for the first time (with the domain)', async () => {
       await a.page.getByTestId('notifications-bell').click()
-      const item = a.page.locator('[data-testid="notification-item"][data-kind="outsider_joined"]')
+      // This board's notice (other specs' outsiders may have opened alice's other boards in this stack).
+      const item = a.page
+        .locator('[data-testid="notification-item"][data-kind="outsider_joined"]')
+        .filter({ hasText: 'opened this board for the first time' })
       await expect(item).toHaveCount(1)
       await expect(item.getByTestId('notification-outsider')).toContainText('Pat Client')
       await expect(item.getByTestId('notification-outsider')).toContainText(
@@ -192,6 +196,105 @@ test('an outside account: External tags, the one-time confirms, Shared outside o
     })
   } finally {
     await pat.context.close()
+  }
+})
+
+test('a board owner who is a plain member: the picker and a typed @handle tag an outside workspace guest and ask first', async ({
+  browser,
+  users,
+  board,
+}, testInfo) => {
+  const aliceApi = await users.api('alice')
+  const bobApi = await users.api('bob')
+  // bob (a plain Dev Studio member) owns a board of his own.
+  const bobBoard = (await bobApi.createBoard(users.devStudioId, 'Bob’s pitch')).id
+  const pat = await signedInContext(browser, freshHandle('pat'), {
+    name: 'Pat Client',
+    email: 'pat@client.example.test',
+  })
+  const bob = await signedInContext(browser, 'bob')
+  const patApi = new Api(pat.context.request)
+  const hint = 'p•••@client.example.test'
+  const patGrant = async () =>
+    (
+      (await (await bobApi.fetch('GET', `/api/boards/${bobBoard}/members`)).json()) as {
+        members: { user: { id: string }; role: string }[]
+      }
+    ).members.find((m) => m.user.id === pat.me.user.id)?.role ?? null
+  try {
+    await test.step('pat, an outside client, joins ANOTHER board of the workspace (alice’s)', async () => {
+      expect(
+        (await patApi.fetch('POST', `/api/boards/${board}/access-requests`, { role: 'viewer' })).status(),
+      ).toBe(202)
+      const req = (await accessRequests(aliceApi, board)).find((r) => r.status === 'pending')
+      expect((await aliceApi.fetch('POST', `/api/access-requests/${req?.id}/approve`, {})).status()).toBe(200)
+    })
+
+    await test.step('bob’s picker says External · client.example.test; Add asks first, Cancel adds nothing', async () => {
+      await bob.page.goto(`/b/${bobBoard}`)
+      await waitForLobbyBoard(bob.page)
+      await openShareFromButton(bob.page)
+      const dialog = shareDialog(bob.page)
+      const option = dialog.locator(`[data-testid="share-add-member"] option[value="${pat.me.user.id}"]`)
+      await expect(option).toHaveAttribute('data-external', 'true')
+      await expect(option).toContainText('External · client.example.test')
+      await dialog.getByTestId('share-add-member').selectOption(pat.me.user.id)
+      await dialog.getByTestId('share-add-submit').click()
+      await expect(confirmBox(bob.page).getByTestId('outside-confirm-text')).toHaveText(
+        outsideSentence(`Pat Client (${hint})`),
+      )
+      await capture('outsiders-picker-confirm.png', bob.page, testInfo)
+      await confirmBox(bob.page).getByTestId('outside-confirm-no').click()
+      await expect(confirmBox(bob.page)).toHaveCount(0)
+      expect(await patGrant()).toBeNull()
+    })
+
+    await test.step('when the address check fails, the dialog says so and invites nothing (no silent skip)', async () => {
+      const dialog = shareDialog(bob.page)
+      const failCheck = '**/api/boards/*/sharing/address-check'
+      await bob.page.route(failCheck, (route) =>
+        route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({ error: { code: 'IDENTITY_UNAVAILABLE', message: 'Try again.' } }),
+        }),
+      )
+      try {
+        await dialog.getByTestId('share-invite-input').fill('w@client.example.test')
+        await dialog.getByTestId('share-invite-submit').click()
+        await expect(dialog.getByTestId('share-invite-notice')).toHaveText(
+          'Lobby couldn’t check that address just now, so nothing was sent. Try again.',
+        )
+        await expect(confirmBox(bob.page)).toHaveCount(0)
+        await expect(dialog.getByTestId('share-invite-link')).toHaveCount(0)
+        expect((await invitations(bobApi, bobBoard)).length).toBe(0)
+      } finally {
+        await bob.page.unroute(failCheck)
+      }
+      await dialog.getByTestId('share-invite-input').fill('')
+    })
+
+    await test.step('typing @pat asks too; Give access adds them, tagged External', async () => {
+      const dialog = shareDialog(bob.page)
+      await dialog.getByTestId('share-invite-input').fill(`@${pat.handle}`)
+      await expect(dialog.getByTestId('share-invite-hint')).toContainText('Pat Client is in Dev Studio')
+      await dialog.getByTestId('share-invite-submit').click()
+      await expect(confirmBox(bob.page).getByTestId('outside-confirm-text')).toHaveText(
+        outsideSentence(`Pat Client (${hint})`),
+      )
+      await expect(confirmBox(bob.page).getByTestId('outside-confirm-yes')).toHaveText('Give access')
+      await confirmBox(bob.page).getByTestId('outside-confirm-yes').click()
+      await expect(dialog.getByTestId('share-invite-notice')).toContainText(
+        'Pat Client can now open this board',
+      )
+      await expect.poll(patGrant).not.toBeNull()
+      await expect(memberRow(bob.page, pat.me.user.id).getByTestId('external-tag')).toHaveText(
+        'External · client.example.test',
+      )
+    })
+  } finally {
+    await pat.context.close()
+    await bob.context.close()
   }
 })
 

@@ -6,9 +6,12 @@
 // (auth/creator-sql.ts), never from a request:
 // - OutsideInfo (outside: true | false | 'unconfirmed', the primary address's domain and its masked
 //   form) goes only to callers who may manage access: the access-request list, the Share dialog's
-//   member list, the workspace member list for owners and admins, the address check. `User` stays
-//   clean, and `canOwn` was already the same signal to the same people (the audit's
-//   AUTHZ-NO-OUTSIDER-SIGNAL / INV-1 / BRW-1).
+//   member list, the workspace member list for owners and admins and (with ?boardId=) for a manager of
+//   that board, the address check. `User` stays clean. `canOwn` is NOT the signal (a name-only guest
+//   and a never-checked account both differ from it; the audit's AUTHZ-NO-OUTSIDER-SIGNAL / INV-1 /
+//   BRW-1). A stale account whose stored addresses qualify reads `false` (no tag, no confirm for a
+//   colleague who has not opened Lobby for a day): every decision re-checks it (refreshTarget, the
+//   team rule, the internal-only refusals).
 // - The plain "External" list (no domain unless the caller manages access) is for everyone who can
 //   view the board: cursors, the people list, the @mention picker (RT-02).
 // - "Internal only" (0025): while a workspace or a project is internal only, inviting an outside
@@ -65,6 +68,7 @@ import { emailDomain, isCreatorEmail, normalizeEmail } from '../../auth/creators
 import type { IdentityService } from '../../auth/identity.ts'
 import type { AppContext, Params } from '../../context.ts'
 import { ApiError, parse } from '../../errors.ts'
+import { keyedLimit, type RouteRateLimit } from '../../rate-limit.ts'
 import { toUser, type UserRow } from '../../serialize.ts'
 import type { FeatureContext } from '../context.ts'
 import { trySavepoint } from './shared.ts'
@@ -521,10 +525,22 @@ const BOARD_RANK = Object.fromEntries(BOARD_ROLES.map((r, i) => [r, BOARD_ROLES.
 const BOARD_LISTS = new Set(['/api/workspaces/:wid/boards', '/api/workspaces/:wid/boards/starred'])
 const TICKET_ROUTE = '/api/boards/:bid/ticket'
 
+/**
+ * Address checks per caller (a creator who manages some board): the dialog asks once per address, so
+ * this is far above real use and keeps anyone from walking a list of addresses against the policy
+ * (the exceptions list). 429 RATE_LIMITED past it; the web then says so and invites nothing.
+ */
+export const ADDRESS_CHECKS_PER_USER: RouteRateLimit = { max: 30, timeWindow: 10 * 60_000 }
+
 const routeKey = (req: FastifyRequest) => `${req.method} ${req.routeOptions.url ?? ''}`
 
 export function registerOutsideRoutes(app: FastifyInstance, ctx: FeatureContext): void {
   const { db, now, identity, sessions } = ctx
+  const addressChecks = keyedLimit(
+    ADDRESS_CHECKS_PER_USER,
+    now,
+    'Too many address checks just now. Wait a few minutes and try again.',
+  )
 
   // Everyone who can view the board: who on it is an outside account (the "External" tags), whether it
   // is shared outside, and whether it is internal only. The domain only for people who manage access.
@@ -551,6 +567,8 @@ export function registerOutsideRoutes(app: FastifyInstance, ctx: FeatureContext)
     const { email: typed } = parse(AddressCheckInput, req.body ?? {})
     const access = await requireBoardAction(db, bid, user.id, 'manage_access')
     await identity.requireCreator(db, user.id, 'share', { route: req.routeOptions.url ?? '', by: 'route' })
+    // Counted only for callers who may ask (after both checks), so nobody else learns anything from it.
+    addressChecks.take(user.id)
     const email = normalizeEmail(typed) ?? typed
     const { policy, devDomain } = identity.lookup
     const outside = !isCreatorEmail(email, policy, devDomain)

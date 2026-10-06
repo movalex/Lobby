@@ -543,6 +543,13 @@ export function emailInviteOutcome(
 export const asksBeforeGiving = (outside: OutsideStatus | undefined): boolean =>
   outside === true || outside === 'unconfirmed'
 
+/**
+ * Said instead of inviting when the server's address check failed (the network, the server, a 503):
+ * the dialog never skips its question silently. A 4xx says the server's own words (429: too many checks).
+ */
+export const ADDRESS_CHECK_FAILED =
+  'Lobby couldn’t check that address just now, so nothing was sent. Try again.'
+
 /** How the confirm names an account: with its masked address when the server sent one. */
 export const outsideWho = (name: string, emailHint: string | null | undefined): string =>
   emailHint ? `${name} (${emailHint})` : name

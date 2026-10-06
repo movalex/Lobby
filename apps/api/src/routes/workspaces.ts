@@ -44,8 +44,10 @@
 // goes first and the grant finds nobody (the lock order is in access.ts).
 //
 // Wave J (outside markers, features/dashboard/outside.ts): GET members tells owners and admins who is
-// outside Dark Burn / TPG (with the verified email domain and the masked address; nobody else gets
-// them), and the "Internal only" switches of the workspace and its projects live here: owners and admins
+// outside Dark Burn / TPG (with the verified email domain and the masked address), and so does
+// GET members?boardId=<board> to someone who manages that board of this workspace (the Share dialog's
+// picker and typed @handles: a board owner is usually a plain member); nobody else gets them. The
+// "Internal only" switches of the workspace and its projects live here: owners and admins
 // turn one on; turning one off hands outside sharing back, so it also needs a creator. Turning one on
 // removes nothing: GET …/internal-only lists the outside access that remains, for the owners to remove.
 
@@ -63,6 +65,7 @@ import { newId, type Queryable } from '@draftroom/db'
 import {
   type BoardRole,
   type BoardVisibility,
+  can,
   canCreateInWorkspace,
   canManageWorkspace,
   resolveBoardRole,
@@ -70,7 +73,7 @@ import {
   type WorkspaceRole,
 } from '@draftroom/permissions'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
-import { isUserId, isWorkspaceId, requireWorkspaceRole } from '../access.ts'
+import { isBoardId, isUserId, isWorkspaceId, loadBoardAccess, requireWorkspaceRole } from '../access.ts'
 import { audit } from '../audit.ts'
 import { roleRequiresCreator } from '../auth/identity.ts'
 import type { AppContext, Params } from '../context.ts'
@@ -287,22 +290,34 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
     const { wid = '' } = req.params as Params
     const role = await requireWorkspaceRole(db, wid, user.id)
     if (!canCreateInWorkspace(role)) throw forbidden()
-    const members = await listWorkspaceMembers(db, wid)
-    if (!canManageWorkspace(role)) return { members }
-    // Wave J: owners and admins see who is outside Dark Burn / TPG (the people picker's External tag).
+    // Names without control, bidi or zero-width characters for everyone (names stored before wave J).
+    const members = (await listWorkspaceMembers(db, wid)).map((m) => ({
+      ...m,
+      user: { ...m.user, name: cleanName(m.user.name) },
+    }))
+    if (!canManageWorkspace(role) && !(await managesBoardIn(wid, user.id, req.query))) return { members }
+    // Wave J: owners and admins, and a manager of the board the picker is for, see who is outside Dark
+    // Burn / TPG (the people picker's External tag and the one-time confirm before adding them).
     const origin = await originAmong(
       db,
       ctx,
       members.map((m) => m.user.id),
     )
-    return {
-      members: members.map((m) => ({
-        ...m,
-        user: { ...m.user, name: cleanName(m.user.name) },
-        ...outsideFieldsOf(origin.get(m.user.id)),
-      })),
-    }
+    return { members: members.map((m) => ({ ...m, ...outsideFieldsOf(origin.get(m.user.id)) })) }
   })
+
+  /**
+   * `?boardId=` names a board of this workspace that the caller may manage access to (any other value,
+   * or none: false, the same answer as before, so it reveals nothing about other boards).
+   */
+  async function managesBoardIn(wid: string, userId: string, query: unknown): Promise<boolean> {
+    const boardId = (query as { boardId?: unknown } | null)?.boardId
+    if (typeof boardId !== 'string' || !isBoardId(boardId)) return false
+    const access = await loadBoardAccess(db, boardId, userId)
+    return (
+      !!access && access.board.workspace_id === wid && can(access.role, 'manage_access', access.board.status)
+    )
+  }
 
   // ---- Wave J: "Internal only" (a workspace, and each of its projects) --------------------------------
 

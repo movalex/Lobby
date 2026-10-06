@@ -81,7 +81,8 @@ export type BoardMember = z.infer<typeof BoardMember>
 
 /**
  * Wave J (./outside.ts): `outside`, `emailDomain` and `emailHint` only for callers who manage the
- * workspace (owners and admins), the "pick someone from the workspace" list's External tag.
+ * workspace (owners and admins), or who manage the board named by `?boardId=` (the Share dialog's
+ * "pick someone from the workspace" list and typed @handles: the External tag and the one-time confirm).
  */
 export const WorkspaceMember = z.object({ user: User, role: WorkspaceRole, ...OutsideFields })
 export type WorkspaceMember = z.infer<typeof WorkspaceMember>
