@@ -176,10 +176,12 @@ export function meteredWebSocket(
   Base: WsCtor = globalThis.WebSocket,
 ): new (
   url: string,
+  protocols?: string | string[],
 ) => WebSocket {
   return class MeteredWebSocket extends Base {
-    constructor(url: string) {
-      super(url)
+    // the offered subprotocols go through (L7-tail: the board ticket travels in one, session.ts)
+    constructor(url: string, protocols?: string | string[]) {
+      super(url, protocols)
       this.addEventListener('message', (e: MessageEvent) => meter.received(e.data))
       this.addEventListener('close', (e: CloseEvent) => meter.closed(e.code))
     }

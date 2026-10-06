@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { mintTicket, TEST_INTERNAL_SECRET } from '../harness/tickets.ts'
+import { boardSocketTarget, mintTicket, TEST_INTERNAL_SECRET } from '../harness/tickets.ts'
 import { req, startServer, type TestServer, waitFor } from './helpers.ts'
 
 let t: TestServer
@@ -77,12 +77,19 @@ describe('routing', () => {
       headers: secret,
     })
     await req(t.port, { path: `/files/x/y/original?board=board-a&token=abc` })
-    // a refused connection (ticket for another board) is logged by reason, without the ticket
+    // a refused connection (ticket for another board) is logged by reason, without the ticket: in the URL
+    // (the old transport, still read for one more release; where a log that keeps URLs would see it) and in
+    // the offered subprotocol (as browsers send it, L7)
     const ws = new WebSocket(`${t.wsUrl}/connect/board-a?sessionId=tab1&ticket=${ticket}`)
     await new Promise((resolve) => {
       ws.onclose = resolve
     })
-    await waitFor(() => t.logs.length >= 3)
+    const target = boardSocketTarget(`${t.wsUrl}/connect/board-a?sessionId=tab2`, ticket)
+    const ws2 = new WebSocket(target.url, target.protocols)
+    await new Promise((resolve) => {
+      ws2.onclose = resolve
+    })
+    await waitFor(() => t.logs.filter((l) => /wrong_board/.test(l)).length >= 2)
     // a board without a file is opened as an empty one by the snapshot route (W4d 2A; before: 404). The
     // room it opens pulls the workshop state from an api this stack does not have, and logs that failure
     // on its own line (never with a query string or a ticket: the loop below reads every line)

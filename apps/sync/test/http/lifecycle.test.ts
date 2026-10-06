@@ -1,6 +1,6 @@
 import { createServer } from 'node:net'
 import { describe, expect, it } from 'vitest'
-import { mintTicket, TEST_INTERNAL_SECRET } from '../harness/tickets.ts'
+import { mintTicket, TEST_INTERNAL_SECRET, ticketInProtocol } from '../harness/tickets.ts'
 import { listFiles, rawExchange, startServer, waitFor } from './helpers.ts'
 
 const portIsFree = (port: number) =>
@@ -10,15 +10,20 @@ const portIsFree = (port: number) =>
     s.listen(port, '127.0.0.1', () => s.close(() => resolve(true)))
   })
 
-const upgradeRequest = (path: string) =>
+/** A raw upgrade request; `ticket` goes in the offered subprotocol, as browsers send it (L7). */
+const upgradeRequest = (path: string, ticket?: string) =>
   `GET ${path} HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n` +
+  (ticket ? `Sec-WebSocket-Protocol: lobby.board.v1, lobby.ticket.${ticket}\r\n` : '') +
   'Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n'
+
+/** Node's WebSocket with the ticket moved from the URL into the offered subprotocol (the web's wrapper). */
+const BoardSocket = ticketInProtocol(WebSocket)
 
 describe('createSyncServer lifecycle', () => {
   it('close() drops live WebSockets and in-flight requests, seeds nothing and frees the port', async () => {
     const t = await startServer()
     const ticket = mintTicket('board-life', 'alice')
-    const ws = new WebSocket(`${t.wsUrl}/connect/board-life?sessionId=tab1&ticket=${ticket}`)
+    const ws = new BoardSocket(`${t.wsUrl}/connect/board-life?sessionId=tab1&ticket=${ticket}`)
     await new Promise<void>((resolve, reject) => {
       ws.onopen = () => resolve()
       ws.onerror = () => reject(new Error('ws failed'))
@@ -56,9 +61,7 @@ describe('createSyncServer lifecycle', () => {
         s.on('data', (d) => {
           if (d.toString('latin1').startsWith('HTTP/1.1 101')) upgraded = true
         })
-        s.write(
-          upgradeRequest(`/connect/board-life?sessionId=tab1&ticket=${mintTicket('board-life', 'alice')}`),
-        )
+        s.write(upgradeRequest('/connect/board-life?sessionId=tab1', mintTicket('board-life', 'alice')))
         // ...and then never reads/answers a frame: ws would wait 30 s for our close frame
       },
       20_000,
@@ -83,9 +86,7 @@ describe('createSyncServer lifecycle', () => {
       expect(listFiles(t.roomsDir)).toEqual([])
 
       const raw = await rawExchange(t.port, (s) =>
-        s.write(
-          upgradeRequest(`/connect/Board-Life?sessionId=tab1&ticket=${mintTicket('Board-Life', 'alice')}`),
-        ),
+        s.write(upgradeRequest('/connect/Board-Life?sessionId=tab1', mintTicket('Board-Life', 'alice'))),
       )
       expect(raw).toMatch(/^HTTP\/1\.1 400 Bad Request/)
       expect(t.server.elementRooms.roomIfOpen('Board-Life')).toBeNull()

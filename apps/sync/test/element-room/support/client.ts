@@ -1,5 +1,6 @@
 // A raw WebSocket speaker of the ElementRoom protocol (packages/canvas-schema protocol.ts) for the room's
-// protocol tests against the REAL server process: it opens `/connect/:boardId?sessionId=&ticket=`, says
+// protocol tests against the REAL server process: it opens `/connect/:boardId?sessionId=` with the ticket in
+// the offered subprotocol (as browsers send it since L7; `ticketIn: 'url'` for the old `?ticket=`), says
 // hello, keeps the server's copy of every element (the gzip snapshot, catch-ups and `changes`, applied
 // with canvas-schema's `overlayPatch`), and validates EVERY server message with the frozen schemas. It
 // pushes exactly what a test gives it, so it can also forge frames (B5, B6). O2's headless client (the
@@ -21,7 +22,7 @@ import {
   type Welcome,
 } from '@draftroom/canvas-schema/protocol'
 import WebSocket from 'ws'
-import { TEST_TICKET_SECRET } from '../../harness/tickets.ts'
+import { boardSocketTarget, TEST_TICKET_SECRET, type TicketIn } from '../../harness/tickets.ts'
 import type { El } from './elements.ts'
 
 export interface ClientOptions {
@@ -33,6 +34,8 @@ export interface ClientOptions {
   readonly tab?: string
   /** a ticket to use as is (forgeries) */
   readonly ticket?: string
+  /** where the ticket goes (default: the offered subprotocol, as browsers send it; harness/tickets.ts) */
+  readonly ticketIn?: TicketIn
   /** say hello on open (default true) */
   readonly hello?: boolean
   readonly since?: number
@@ -96,9 +99,12 @@ export class RawClient {
     if (opts.since) this.clock = opts.since
     const ticket =
       opts.ticket ?? ticketFor(opts.boardId, opts.user, opts.role ?? 'editor', opts.guest ?? false)
-    this.ws = new WebSocket(
-      `${opts.wsUrl}/connect/${opts.boardId}?sessionId=${encodeURIComponent(this.tab)}&ticket=${encodeURIComponent(ticket)}`,
+    const target = boardSocketTarget(
+      `${opts.wsUrl}/connect/${opts.boardId}?sessionId=${encodeURIComponent(this.tab)}`,
+      ticket,
+      opts.ticketIn,
     )
+    this.ws = target.protocols ? new WebSocket(target.url, target.protocols) : new WebSocket(target.url)
     this.opened = new Promise((resolve, reject) => {
       this.ws.once('open', () => resolve())
       this.ws.once('error', reject)

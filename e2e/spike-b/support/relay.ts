@@ -20,7 +20,10 @@
 // never cut. Timing-gated measurements (B9's visibility, §8.4) launch without the relay.
 import type { Page, WebSocketRoute } from '@playwright/test'
 
-/** A board socket's URL: `/connect/:boardId?sessionId=…&ticket=…` (the ticket never leaves this module). */
+/**
+ * A board socket's URL: `/connect/:boardId?sessionId=…` (the board page and the forge sockets send the ticket in
+ * the offered subprotocol since L7; an old-style `&ticket=…` would match too, and never leaves this module).
+ */
 export const CONNECT_URL = /\/connect\/[^/?#]+(?:[?#]|$)/
 export const FORGE_SESSION_PREFIX = 'forge-'
 

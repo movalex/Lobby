@@ -10,6 +10,7 @@
 // visibility is joined across sessions by run.ts). Editors keep an acked ledger of their own notes (each
 // editor owns disjoint notes) for the acked-but-missing check.
 
+import { ticketInProtocol } from '../../apps/web/src/board/ticket-protocol.ts'
 import type {
   HeadlessClient,
   HeadlessClientOptions,
@@ -33,9 +34,13 @@ export type ClientFactory = (opts: HeadlessClientOptions & { meter: Meter }) => 
  */
 export const HARNESS_RECONNECT_AFTER_MS = 12_000
 
-/** The real factory: O2's headless client with a metered WebSocket. */
+/**
+ * The real factory: O2's headless client with a metered WebSocket. The client builds its connect URL with
+ * `?ticket=`; the board page's wrapper (apps/web/src/board/ticket-protocol.ts, L7) moves the ticket into the
+ * offered subprotocol before the socket opens, as in a browser (L7-tail: no load client uses `?ticket=`).
+ */
 export function realClientFactory(create: (opts: HeadlessClientOptions) => HeadlessClient): ClientFactory {
-  return ({ meter, ...opts }) => create({ ...opts, WebSocketImpl: meteredWebSocket(meter) })
+  return ({ meter, ...opts }) => create({ ...opts, WebSocketImpl: ticketInProtocol(meteredWebSocket(meter)) })
 }
 
 export interface SessionPlan {

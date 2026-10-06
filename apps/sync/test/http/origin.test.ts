@@ -9,7 +9,12 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { WebSocket } from 'ws'
 import { createSyncServer } from '../../src/app.ts'
 import { loadConfig } from '../../src/config.ts'
-import { mintTicket, TEST_INTERNAL_SECRET, TEST_TICKET_SECRET } from '../harness/tickets.ts'
+import {
+  boardSocketTarget,
+  mintTicket,
+  TEST_INTERNAL_SECRET,
+  TEST_TICKET_SECRET,
+} from '../harness/tickets.ts'
 import { listFiles, req, startServer, type TestServer } from './helpers.ts'
 
 const WEB = 'https://draftroom-staging-web.onrender.com'
@@ -19,8 +24,11 @@ type Outcome = { kind: 'open' } | { kind: 'http'; status: number } | { kind: 'cl
 /** Opens a board socket with an explicit Origin (or none) and reports what the server did. */
 function attempt(wsUrl: string, boardId: string, origin: string | null, ticket: string): Promise<Outcome> {
   return new Promise((resolve) => {
+    // the ticket in the offered subprotocol, as browsers send it (L7)
+    const target = boardSocketTarget(`${wsUrl}/connect/${boardId}?sessionId=tab1`, ticket)
     const ws = new WebSocket(
-      `${wsUrl}/connect/${boardId}?sessionId=tab1&ticket=${encodeURIComponent(ticket)}`,
+      target.url,
+      target.protocols,
       origin === null ? {} : { headers: { Origin: origin } },
     )
     let settled = false

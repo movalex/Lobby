@@ -25,12 +25,13 @@ async function pageSocket(page: Page, boardId: string, tab: string) {
     async ({ boardId, tab }) => {
       const res = await fetch(`/api/boards/${encodeURIComponent(boardId)}/ticket`, { method: 'POST' })
       const { ticket } = (await res.json()) as { ticket: string }
-      const url = `${location.origin.replace(/^http/, 'ws')}/connect/${boardId}?${new URLSearchParams({ sessionId: tab, ticket })}`
+      // the ticket in the offered subprotocol, as the board page sends it (L7), never in the URL
+      const url = `${location.origin.replace(/^http/, 'ws')}/connect/${boardId}?${new URLSearchParams({ sessionId: tab })}`
       const w = window as unknown as {
         __st?: Record<string, { ws: WebSocket; got: { at: number; data: string }[]; closed: number | null }>
       }
       w.__st ??= {}
-      const ws = new WebSocket(url)
+      const ws = new WebSocket(url, ['lobby.board.v1', `lobby.ticket.${ticket}`])
       const st = { ws, got: [] as { at: number; data: string }[], closed: null as number | null }
       w.__st[tab] = st
       ws.onmessage = (e) => st.got.push({ at: Date.now(), data: String(e.data) })

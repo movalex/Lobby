@@ -78,12 +78,13 @@ export async function forgeSocket(page: Page, boardId: string): Promise<O3ForgeS
       })
       if (res.status !== 200) return { ok: false as const, status: res.status }
       const body = (await res.json()) as { ticket: string; role: string; user: { id: string } }
+      // the ticket in the offered subprotocol, as the board page sends it (L7), never in the URL
       const url = `${location.origin.replace(/^http/, 'ws')}/connect/${encodeURIComponent(boardId)}?${new URLSearchParams(
-        { sessionId: tab, ticket: body.ticket },
+        { sessionId: tab },
       )}`
       const w = window as unknown as { __o3Forge?: Record<string, ForgeWindowState> }
       w.__o3Forge ??= {}
-      const ws = new WebSocket(url)
+      const ws = new WebSocket(url, ['lobby.board.v1', `lobby.ticket.${body.ticket}`])
       ws.binaryType = 'arraybuffer'
       const st: ForgeWindowState = { ws, inbox: [], closed: null, opened: false, error: null }
       w.__o3Forge[key] = st

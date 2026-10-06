@@ -1,5 +1,6 @@
 // A raw WebSocket speaker of the Excalidraw-engine protocol (packages/canvas-schema protocol.ts, §2.4.2) for
-// protocol tests against the REAL server process. It opens `/connect/:boardId?sessionId=&ticket=`, says
+// protocol tests against the REAL server process. It opens `/connect/:boardId?sessionId=` with the ticket
+// in the offered subprotocol (as browsers send it since L7; `ticketIn: 'url'` for the old `?ticket=`), says
 // hello, keeps the server's copy of every element (the gzip snapshot, catch-ups and `changes`, applied with
 // canvas-schema's `overlayPatch`), and validates EVERY server message with the frozen schemas (a message
 // that does not match is recorded in `schemaErrors`, and the harness self-test fails on any). It sends
@@ -26,7 +27,7 @@ import {
 } from '@draftroom/canvas-schema/protocol'
 import WebSocket from 'ws'
 import type { El } from './elements.ts'
-import { mintTicket } from './tickets.ts'
+import { boardSocketTarget, mintTicket, type TicketIn } from './tickets.ts'
 
 export interface ProtocolClientOptions {
   readonly wsUrl: string
@@ -39,6 +40,8 @@ export interface ProtocolClientOptions {
   readonly tab?: string
   /** a ticket to use as is (forgeries); default: a correctly signed one */
   readonly ticket?: string
+  /** where the ticket goes (default: the offered subprotocol, as browsers send it; tickets.ts) */
+  readonly ticketIn?: TicketIn
   /** say hello on open (default true) */
   readonly hello?: boolean
   readonly since?: number
@@ -108,9 +111,12 @@ export class ProtocolClient {
     for (const [k, v] of opts.confirmed ?? []) this.confirmed.set(k, structuredClone(v))
     if (opts.since) this.clock = opts.since
     const ticket = opts.ticket ?? elementTicket(opts.boardId, opts.user, opts.role, opts.guest)
-    this.ws = new WebSocket(
-      `${opts.wsUrl}/connect/${encodeURIComponent(opts.boardId)}?${new URLSearchParams({ sessionId: this.tab, ticket })}`,
+    const target = boardSocketTarget(
+      `${opts.wsUrl}/connect/${encodeURIComponent(opts.boardId)}?${new URLSearchParams({ sessionId: this.tab })}`,
+      ticket,
+      opts.ticketIn,
     )
+    this.ws = target.protocols ? new WebSocket(target.url, target.protocols) : new WebSocket(target.url)
     this.opened = new Promise((resolve, reject) => {
       this.ws.once('open', () => resolve())
       this.ws.once('error', reject)

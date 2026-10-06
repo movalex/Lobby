@@ -8,6 +8,7 @@ import { createLobbyHeadlessClient } from '../../../web/src/canvas/sync/headless
 import { ticketFor } from '../element-room/support/client.ts'
 import { rect } from '../element-room/support/elements.ts'
 import { newBoardId, useElementHarness } from '../element-room/support/stack.ts'
+import { TicketWebSocket } from '../harness/tickets.ts'
 import { sleep, until, vlog } from './support.ts'
 
 const h = useElementHarness()
@@ -25,6 +26,7 @@ describe('V1 a dirty group overtaken by the same remote value', () => {
         boardId: b,
         tab: `tab-a${rep}`,
         ticket: ticketFor(b, 'alice'),
+        WebSocketImpl: TicketWebSocket,
         // manual timers: coalesced flushes (and the rest) run only when the test says
         setTimer: (fn: () => void) => {
           pending.push(fn)

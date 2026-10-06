@@ -33,7 +33,7 @@ import { type ElementApi, startElementApi } from './element-api.ts'
 import { elementTicket, ProtocolClient, type ProtocolClientOptions } from './element-client.ts'
 import type { El } from './elements.ts'
 import { type SyncServer, spawnSyncServer } from './server-process.ts'
-import { callInternal } from './tickets.ts'
+import { callInternal, TicketWebSocket } from './tickets.ts'
 import { sleep } from './wait.ts'
 
 /** The sync env every Excalidraw-engine stack starts with (a test's `env` goes on top). */
@@ -153,6 +153,8 @@ export async function createElementStack(opts: ElementStackOptions = {}): Promis
         tab: o.tab ?? `hl-${o.user}`,
         ticket: elementTicket(o.boardId, o.user, o.role, o.guest),
         refreshTicket: async () => elementTicket(o.boardId, o.user, o.role, o.guest),
+        // L7-tail: the ticket in the offered subprotocol, as the browsers send it
+        WebSocketImpl: TicketWebSocket,
       })
       headless.push(c)
       const withHash = Object.assign(c, { hash: () => hashElements(c.core.elements().values()) })

@@ -5,11 +5,12 @@ import { tagWrite } from '../../../web/src/canvas/spike/features/model.ts'
 import { LobbyEngineCore } from '../../../web/src/canvas/sync/core/engine.ts'
 import { createMemoryOfflineStore } from '../../../web/src/canvas/sync/core/offline-memory.ts'
 import { bump, createMapScene } from '../../../web/src/canvas/sync/headless/scene.ts'
-import { createSocketTransport, type WebSocketCtor } from '../../../web/src/canvas/sync/transport/socket.ts'
+import { createSocketTransport } from '../../../web/src/canvas/sync/transport/socket.ts'
 import type { OfflineEntry, SceneElement } from '../../../web/src/canvas/sync/types.ts'
 import { ticketFor } from '../element-room/support/client.ts'
 import { note } from '../element-room/support/elements.ts'
 import { newBoardId, useElementHarness } from '../element-room/support/stack.ts'
+import { TicketWebSocket } from '../harness/tickets.ts'
 import { sleep, startProxy, until, vlog } from './support.ts'
 
 const h = useElementHarness()
@@ -28,7 +29,7 @@ function makeCore(
   const transport = createSocketTransport({
     url: async () =>
       `${base}/connect/${boardId}?${new URLSearchParams({ sessionId: tab, ticket: ticketFor(boardId, user) })}`,
-    WebSocketImpl: (globalThis as { WebSocket: unknown }).WebSocket as WebSocketCtor,
+    WebSocketImpl: TicketWebSocket,
     backoffMs: [50, 100, 200],
   })
   const core = new LobbyEngineCore({ transport, scene, tab, offline: store })

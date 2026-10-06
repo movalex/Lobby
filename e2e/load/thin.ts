@@ -14,6 +14,7 @@
 // Measurement is the meter's, at the socket, as for full sessions: bytes by channel, closes, welcomes,
 // `changes` arrivals (A→B visibility) and the probe's cursor (presence delay).
 
+import { ticketProtocols } from '../../apps/web/src/board/ticket-protocol.ts'
 import { jitteredDelay } from '../../apps/web/src/canvas/sync/transport/socket.ts'
 import type { HeadlessClient, HeadlessClientOptions } from '../../apps/web/src/canvas/sync/types.ts'
 import {
@@ -32,7 +33,13 @@ export const thinClientFactory: ClientFactory = (o) => createThinClient(o)
 export function createThinClient(o: HeadlessClientOptions & { meter: Meter }): HeadlessClient {
   const Ws = meteredWebSocket(o.meter)
   const received: ServerMessage[] = []
-  const url = `${o.syncUrl.replace(/^http/, 'ws').replace(/\/+$/, '')}/connect/${encodeURIComponent(o.boardId)}?${new URLSearchParams({ sessionId: o.tab, ticket: o.ticket })}`
+  // the ticket in the offered subprotocol, as a browser sends it (L7-tail); `?ticket=` only for a ticket that
+  // cannot be one (never a signed ticket)
+  const protocols = ticketProtocols(o.ticket)
+  const query: Record<string, string> = protocols
+    ? { sessionId: o.tab }
+    : { sessionId: o.tab, ticket: o.ticket }
+  const url = `${o.syncUrl.replace(/^http/, 'ws').replace(/\/+$/, '')}/connect/${encodeURIComponent(o.boardId)}?${new URLSearchParams(query)}`
   let ws: WebSocket | null = null
   let clock = 0
   let epoch: string | null = null
@@ -44,7 +51,7 @@ export function createThinClient(o: HeadlessClientOptions & { meter: Meter }): H
   let onTerminal: ((e: Error) => void) | null = null
 
   const open = () => {
-    const s = new Ws(url)
+    const s = protocols ? new Ws(url, protocols) : new Ws(url)
     s.binaryType = 'arraybuffer'
     ws = s
     welcomed = false

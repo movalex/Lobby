@@ -7,6 +7,7 @@ import {
   type LobbyHeadlessClient,
 } from '../../../web/src/canvas/sync/headless/index.ts'
 import { ticketFor } from '../element-room/support/client.ts'
+import { TicketWebSocket } from '../harness/tickets.ts'
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -51,7 +52,18 @@ export async function startProxy(upstreamWs: string): Promise<Proxy> {
     },
   }
   wss.on('connection', (client, req) => {
-    const up = new WebSocket(upstreamWs + (req.url ?? ''))
+    // the offered subprotocols go upstream as the client offered them (L7: the ticket travels in one)
+    const offered = req.headers['sec-websocket-protocol']
+    const protocols =
+      typeof offered === 'string'
+        ? offered
+            .split(',')
+            .map((p) => p.trim())
+            .filter(Boolean)
+        : []
+    const up = protocols.length
+      ? new WebSocket(upstreamWs + (req.url ?? ''), protocols)
+      : new WebSocket(upstreamWs + (req.url ?? ''))
     const pending: [WebSocket.RawData, boolean][] = []
     conns.push({ client, up })
     up.on('open', () => {
@@ -100,6 +112,8 @@ export function headless(
     tab,
     ticket: ticketFor(boardId, user),
     refreshTicket: async () => ticketFor(boardId, user),
+    // L7-tail: the ticket in the offered subprotocol, as the browsers send it
+    WebSocketImpl: TicketWebSocket,
   })
 }
 

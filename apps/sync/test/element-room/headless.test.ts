@@ -15,6 +15,7 @@ import { checkInvariants } from '@draftroom/canvas-schema/invariants'
 import { describe, expect, it } from 'vitest'
 import { createHeadlessClient } from '../../../web/src/canvas/sync/headless/index.ts'
 import type { HeadlessClient, SceneElement } from '../../../web/src/canvas/sync/types.ts'
+import { TicketWebSocket } from '../harness/tickets.ts'
 import { ticketFor } from './support/client.ts'
 import { arrow, bindArrow, type El, note, rect } from './support/elements.ts'
 import { newBoardId, useElementHarness } from './support/stack.ts'
@@ -55,6 +56,7 @@ describe.skipIf(!available)('the headless client (O2) against the room', () => {
       boardId,
       tab: `tab-${user}`,
       ticket: ticketFor(boardId, user),
+      WebSocketImpl: TicketWebSocket,
     })
     clients.push(c)
     await c.connect()
