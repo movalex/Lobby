@@ -17,8 +17,16 @@
  * A queue with nothing in it holds no content, only the `known` mark, which a later session of the SAME
  * board still needs (a Retry); so it stays until the page moves on. Another board's session starting here
  * sweeps the others (`guestOfflineQueue`); `releaseGuestQueue` is the call for the board page's own unmount
- * (the page does not make it yet: LobbyBoardPage.tsx). Until then a board left for a page that is not a board
- * keeps only that empty mark, until the next board session here, a sign-out, or a reload.
+ * (LobbyBoardShell makes it through `releaseGuestQueueSoon`, I2, wave I), so a board left for a page that is
+ * not a board does not keep even that empty mark until the next board session here, a sign-out, or a reload.
+ *
+ * Why "soon", not at once (I2): React runs the passive cleanups of an unmounting tree from the parent down
+ * (react-dom 19.3), so the shell's cleanup runs BEFORE the session's `dispose`, whose `persistNow()` makes
+ * one last save (an edit the debounce had not written yet). A release made first dropped the queue, and
+ * that late save made a new one with no guest mark: a later session of the board did not route to it (it
+ * read the device queue, which a guest never has) and the unsent edit was stranded. So the release waits for
+ * the rest of the unmount (a timer), and, whatever the order, a save of something is a guest's save: it
+ * makes the queue with the guest mark (only a session that knows it is a guest writes here).
  *
  * NODE-SAFE (CONTRACTS.md): plain memory, no DOM.
  */
@@ -72,8 +80,16 @@ export function guestOfflineQueue(o: { readonly boardId: string; readonly uid: s
     // only a save of something makes the page's queue (a member's session reads and clears nothing here, and
     // the empty save a session's dispose makes after its queue was released must not bring it back)
     load: () => pages.get(key)?.store.load() ?? Promise.resolve([]),
-    save: (entries) =>
-      entries.length === 0 && !pages.has(key) ? Promise.resolve() : page().store.save(entries),
+    save: (entries) => {
+      if (entries.length === 0 && !pages.has(key)) return Promise.resolve()
+      const p = page()
+      // Only a session that knows it is a guest saves here (session.ts routes by `guest`), so a queue made by
+      // a save of something is a guest's, marked as one even when the page released it a moment before (the
+      // last save of a session's dispose: see the header). Unmarked it would be stranded: the next session of
+      // this board would read the device queue, not this one.
+      if (entries.length > 0) p.guest = true
+      return p.store.save(entries)
+    },
     clear: () => pages.get(key)?.store.clear() ?? Promise.resolve(),
   }
 }
@@ -90,6 +106,49 @@ export function releaseGuestQueue(o: { readonly boardId: string; readonly uid: s
   if (!p || !idle(p)) return false
   pages.delete(key)
   return true
+}
+
+/**
+ * `releaseGuestQueue` for the board page's unmount, run after the rest of the unmount (a timer): the shell's
+ * effect cleanup runs before the session's `dispose` (parents first, react-dom 19.3), and that dispose's
+ * `persistNow()` still saves what the debounce had not written. Released first, an idle queue would go and the
+ * late save would make it again; released after, the queue holds the edit and stays (see the header).
+ *
+ * Returns the cancel: the page was mounted again on the same board before the timer ran (React StrictMode's
+ * simulated unmount and remount), so the queue is still wanted. Whether anything was dropped is not told
+ * (the call is made on unmount, nobody waits for it).
+ */
+export function releaseGuestQueueSoon(o: { readonly boardId: string; readonly uid: string }): () => void {
+  const timer = setTimeout(() => {
+    releaseGuestQueue(o)
+  }, 0)
+  return () => clearTimeout(timer)
+}
+
+/**
+ * The board page's side of `releaseGuestQueueSoon`, one per mounted shell (LobbyBoardShell holds it in state
+ * and calls it from an effect, so the logic that cannot be seen from outside a browser is tested here):
+ * `leave` (the effect's cleanup) starts the deferred release and remembers its cancel; `arrive` (the effect)
+ * cancels it when the page is mounted again on the SAME board by the SAME person before the timer ran
+ * (React StrictMode's simulated unmount and remount, in `vite dev`). A mount on another board, or by
+ * another person, leaves the release running.
+ */
+export function guestQueueLeaver(): {
+  arrive(o: { readonly boardId: string; readonly uid: string }): void
+  leave(o: { readonly boardId: string; readonly uid: string }): void
+} {
+  let pending: { readonly boardId: string; readonly uid: string; readonly cancel: () => void } | null = null
+  return {
+    arrive(o) {
+      if (pending && pending.boardId === o.boardId && pending.uid === o.uid) {
+        pending.cancel()
+        pending = null
+      }
+    },
+    leave(o) {
+      pending = { boardId: o.boardId, uid: o.uid, cancel: releaseGuestQueueSoon(o) }
+    },
+  }
 }
 
 /**
