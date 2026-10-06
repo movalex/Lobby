@@ -1,24 +1,30 @@
 // The restart's warm start (CAP-L1, wave J; docs/research/excalidraw/spike-b/B9.md "Wave J"): work every
-// reconnect after a crash pays for at once, done before the port opens instead (server-main.ts calls this
-// between building the server and `listen()`, after the staged restores are known and before any socket).
+// reconnect after a crash pays for at once, done in the gap between the port opening and the first
+// reconnects instead of inside them (server-main.ts starts it right after `listen()`, so the staged
+// restores have run and no room is open yet).
 //
 // After a SIGKILL (an OOM kill, a host restart) every board that was open left its WAL file next to it
-// (SQLite removes it when the last connection closes cleanly). Its sessions are reconnecting already. B9's
-// restart profile (L1: 260 sessions on 21 boards) put the first second after `listen` at about 500 ms of
-// main-thread work on the workstation, at the whole 0.5 CPU quota on the NAS, and the report's event-loop
-// value is that second's: the rooms opened by their first joiner (file open, compaction, the caches: about
-// 90 ms, the 4,000-element board alone 30-40 ms in one task), zod compiling every client message schema on
-// its first parse (about 100 ms), the first `fetch` to the api loading undici and node:dns (about 30 ms),
-// and the presence relay's first ranks (PRES-2 shares those). So, before the port opens:
+// (SQLite removes it when the last connection closes cleanly). Its sessions are reconnecting already, on
+// their backoff (250 ms, 500 ms, 1 s, 2 s, ... jittered: socket.ts), so the restarted process usually has a
+// moment before the first of them is back. B9's restart profile (L1: 260 sessions on 21 boards) put the first
+// second of reconnects at about 500 ms of main-thread work on the workstation (the whole 0.5 CPU quota on the
+// NAS; the report's event-loop value is that second's): the rooms opened by their first joiner (the WAL's
+// recovery, compaction, the caches: about 90 ms, the 4,000-element board alone 30-40 ms in one task), zod
+// compiling every client message schema on its first parse (about 100 ms), the first `fetch` to the api
+// loading undici and node:dns (about 30 ms), and the presence relay's first ranks (PRES-2 shares those). So:
 //
-//  - `crashedBoards`: the boards whose WAL is still there, newest first, at most WARM_START.maxBoards; a
-//    board with a staged restore is left alone (the restore runs at listen, with no room open), and so is
-//    one that needs a conversion (a tldraw file: its first joiner starts that, as before);
-//  - each one's room is opened through the service (`prepareBoard`, as an internal route opens a board):
-//    the same open as a joiner's, evicted after IDLE_EVICT_MS when nobody comes back;
-//  - `warmParsers`: every client message type through the same zod schemas the room parses with, the ops
-//    built from up to WARM_START.elementsPerType stored elements of each type of those boards;
-//  - `warmFetch`: node:dns and the global fetch (undici) loaded.
+//  - `warmFetch` and `warmParsers` (every client message type through the zod schemas the room parses with)
+//    first, in one task;
+//  - then `crashedBoards` (the boards whose WAL is still there, newest first, at most WARM_START.maxBoards;
+//    not one that needs a conversion: its first joiner starts that, as before), one board per macrotask:
+//    its room opened through the service (`prepareBoard`, as an internal route opens a board; evicted after
+//    IDLE_EVICT_MS when nobody comes back), and the create and patch ops of one stored element of each type
+//    it has not seen yet through the parsers. A reconnect that arrives meanwhile is served between two boards,
+//    and opens its board itself if the warm start has not reached it.
+//
+// Not before `listen()`: done there (the first version), the 21 boards' WAL recovery held the port closed
+// for 0.6 s on the workstation, which pushed the clients' backoff a step further: in a local L1 rehearsal all
+// 260 sessions were back after 12.2 s instead of 2.4 s, and the reconnect storm came in denser bursts.
 //
 // Bounded by WARM_START.budgetMs (boards past it open on demand, as before). Off with
 // DRAFTROOM_WARM_START=off. Nothing here is written to a board (opening one is what a joiner does) and
@@ -44,7 +50,7 @@ export const WARM_START = {
   budgetMs: 3_000,
   /** stored elements of each type whose create and patch ops warm the parsers */
   elementsPerType: 1,
-  /** stored elements sampled in all (the schemas compile per element type, not per element) */
+  /** element types sampled in all (the schemas compile per element type, not per element) */
   maxSamples: 24,
 } as const
 
@@ -179,14 +185,18 @@ export interface WarmStartReport {
   readonly opened: number
   readonly skipped: number
   readonly parsed: number
-  /** of `ms`, the rooms' opening (and the samples' reads) */
+  /** of `ms`, the rooms' opening and their samples' parsing, from the first board on */
   readonly opensMs: number
   readonly ms: number
 }
 
+/** The next macrotask: a reconnect waiting in the loop is served before the next board. */
+const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve))
+
 /**
- * The warm start (the header): opens the rooms a crash left (`open`, the service's `prepareBoard`), skipping
- * `staged` boards and files that need a conversion, then warms the parsers and fetch. Never throws.
+ * The warm start (the header): warms fetch and the parsers, then opens the rooms a crash left (`open`, the
+ * service's `prepareBoard`), one per macrotask, skipping `staged` boards and files that need a conversion.
+ * Never throws.
  */
 export async function warmStart(o: {
   roomsDir: string
@@ -199,13 +209,22 @@ export async function warmStart(o: {
   const t0 = now()
   let opened = 0
   let skipped = 0
-  const samples: Record<string, unknown>[] = []
+  let parsed = 0
+  try {
+    await warmFetch()
+    parsed += warmParsers([])
+  } catch (e) {
+    o.log('[room] warm start: warm-up failed', (e as Error)?.name ?? 'error')
+  }
+  const seenTypes = new Set<string>()
   const boards = o.open ? crashedBoards(o.roomsDir).slice(0, WARM_START.maxBoards) : []
+  const t1 = now()
   for (const id of boards) {
     if (now() - t0 > WARM_START.budgetMs) {
       skipped++
       continue
     }
+    await nextTurn()
     const path = join(o.roomsDir, `board-${id}.sqlite`)
     const state = o.staged.has(id) ? 'staged' : boardFileState(path)
     if (state !== 'element' && state !== 'converted') {
@@ -215,21 +234,21 @@ export async function warmStart(o: {
     try {
       // the room opens synchronously in this call (an element file needs no preparation)
       if (await (o.open as (b: string) => Promise<boolean>)(id)) opened++
-      if (samples.length < WARM_START.maxSamples)
-        samples.push(...sampleElements(path, WARM_START.elementsPerType))
+      if (seenTypes.size < WARM_START.maxSamples) {
+        const fresh = sampleElements(path, WARM_START.elementsPerType).filter((el) => {
+          const t = String(el.type)
+          if (seenTypes.has(t)) return false
+          seenTypes.add(t)
+          return true
+        })
+        if (fresh.length) parsed += warmParsers(fresh)
+      }
     } catch (e) {
       skipped++
       o.log('[room] warm start: a board did not open', (e as Error)?.name ?? 'error')
     }
   }
-  const opensMs = Math.round(now() - t0)
-  let parsed = 0
-  try {
-    parsed = warmParsers(samples)
-    await warmFetch()
-  } catch (e) {
-    o.log('[room] warm start: warm-up failed', (e as Error)?.name ?? 'error')
-  }
+  const opensMs = Math.round(now() - t1)
   const report = { boards: boards.length, opened, skipped, parsed, opensMs, ms: Math.round(now() - t0) }
   o.log(
     `[room] warm start: ${opened} of ${boards.length} boards a crash left open opened, ${skipped} skipped, ${parsed} messages parsed, ${report.ms} ms (opening ${opensMs})`,

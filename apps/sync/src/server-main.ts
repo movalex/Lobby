@@ -27,27 +27,9 @@ try {
   console.error(`sync: cannot start: ${(e as Error).message}`)
   process.exit(1)
 }
-// CAP-L1 (wave J, room/warm-start.ts): after a crash, the rooms it left open are opened and the parsers
-// warmed BEFORE the port opens, not inside the reconnect storm; a board with a staged restore is left
-// alone (the restore runs in listen(), with no room open). DRAFTROOM_WARM_START=off turns it off.
-if (process.env.DRAFTROOM_WARM_START !== 'off' && !server.maintenance.on()) {
-  try {
-    const { warmStart } = await import('./room/warm-start.ts')
-    const { listStagedRestores } = await import('./backup/staged-restore.ts')
-    const staged = new Set(listStagedRestores(config.dataDir).map((r) => r.boardId))
-    const rooms = server.elementRooms
-    await warmStart({
-      roomsDir: dataLayout(config.dataDir).rooms,
-      open: rooms.prepareBoard
-        ? (boardId) => rooms.prepareBoard?.(boardId) ?? Promise.resolve(false)
-        : undefined,
-      staged,
-      log: (...a: unknown[]) => console.log(...a),
-    })
-  } catch (e) {
-    console.error(`sync: warm start skipped: ${(e as Error).name}`)
-  }
-}
+// CAP-L1 (wave J, room/warm-start.ts): loaded now, run right after the port opens (below)
+const warm =
+  process.env.DRAFTROOM_WARM_START === 'off' ? null : (await import('./room/warm-start.ts')).warmStart
 let port: number
 try {
   ;({ port } = await server.listen())
@@ -57,6 +39,22 @@ try {
 }
 // Tests spawning this process parse this exact line (and the real port when PORT=0).
 console.log(`sync listening on ${config.host}:${port} (data: ${config.dataDir})`)
+
+// CAP-L1 (wave J, room/warm-start.ts): after a crash, the parsers are warmed and the rooms it left open are
+// opened (one per macrotask) in the moment before the reconnects are back, not inside their storm; not before
+// the port opens (that kept the clients' backoff waiting longer). The staged restores ran in listen(). Not in
+// maintenance (no board is joined then). DRAFTROOM_WARM_START=off turns it off.
+if (warm && !server.maintenance.on()) {
+  const rooms = server.elementRooms
+  warm({
+    roomsDir: dataLayout(config.dataDir).rooms,
+    open: rooms.prepareBoard
+      ? (boardId) => rooms.prepareBoard?.(boardId) ?? Promise.resolve(false)
+      : undefined,
+    staged: new Set(),
+    log: (...a: unknown[]) => console.log(...a),
+  }).catch((e: unknown) => console.error(`sync: warm start stopped: ${(e as Error)?.name ?? 'error'}`))
+}
 
 let stopping = false
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {

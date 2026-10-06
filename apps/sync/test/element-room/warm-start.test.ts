@@ -1,6 +1,7 @@
-// CAP-L1 (wave J, apps/sync/src/room/warm-start.ts): after a crash the restarted sync opens the rooms the crash
-// left open (their WAL is still there) and warms the parsers BEFORE its port opens, so that work is not inside
-// the reconnect storm (B9's restarted process's first event-loop scrape). A board with a staged restore and a
+// CAP-L1 (wave J, apps/sync/src/room/warm-start.ts): after a crash the restarted sync warms the parsers and opens
+// the rooms the crash left open (their WAL is still there) right after its port opens, one per macrotask, in the
+// moment before the reconnects are back, so that work is not inside their storm (B9's restarted process's first
+// event-loop scrape). A board with a staged restore and a
 // file that needs a conversion are left alone; a clean shutdown leaves no WAL, so nothing is opened then.
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -15,6 +16,18 @@ import { newBoardId, useElementHarness } from './support/stack.ts'
 
 const h = useElementHarness()
 const T = 120_000
+
+/** The warm start's one log line (counts and times only). */
+const WARM_LINE = /\[room\] warm start: \d+ of \d+ boards/
+
+/** Polls `test` (every 20 ms, up to 10 s). */
+async function waitFor(test: () => boolean, what: string): Promise<void> {
+  const until = Date.now() + 10_000
+  while (!test()) {
+    if (Date.now() > until) throw new Error(`timeout: ${what}`)
+    await new Promise((r) => setTimeout(r, 20))
+  }
+}
 
 const dirs: string[] = []
 afterEach(() => {
@@ -90,7 +103,8 @@ describe('the warm start (CAP-L1)', () => {
       await a.create([rect('r1'), rect('r2', { x: 200 })])
       await st.server.kill('SIGKILL')
       await st.server.restart()
-      // nobody reconnected yet: the warm start opened it
+      // nobody reconnected yet: the warm start (right after the port opened) opened it
+      await waitFor(() => WARM_LINE.test(st.server.logs()), 'the warm start')
       expect(await roomsOpen(st.server.url)).toBe(1)
       expect(st.server.logs()).toMatch(/\[room\] warm start: 1 of 1 boards a crash left open opened/)
       // and it serves the board as before
@@ -99,7 +113,10 @@ describe('the warm start (CAP-L1)', () => {
       again.close()
       // a clean stop closes the board file (SQLite removes its WAL): the next start opens nothing
       await st.server.kill('SIGTERM')
+      const logged = st.server.logs().length
       await st.server.restart()
+      await waitFor(() => WARM_LINE.test(st.server.logs().slice(logged)), 'the warm start')
+      expect(st.server.logs().slice(logged)).toMatch(/warm start: 0 of 0 boards/)
       expect(await roomsOpen(st.server.url)).toBe(0)
     },
     T,
@@ -114,6 +131,7 @@ describe('the warm start (CAP-L1)', () => {
       await a.create([rect('r1')])
       await st.server.kill('SIGKILL')
       await st.server.restart()
+      await new Promise((r) => setTimeout(r, 300))
       expect(await roomsOpen(st.server.url)).toBe(0)
       expect(st.server.logs()).not.toMatch(/warm start/)
     },
