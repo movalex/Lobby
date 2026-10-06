@@ -962,11 +962,11 @@ docker run --rm -e DRAFTROOM_DATA_DIR=/var/data --tmpfs /var/data:mode=0755 -e P
 
 ## CI
 
-`.github/workflows/ci.yml` is one workflow of 9 jobs on `ubuntu-24.04`, all behind Node from `.node-version` (24.19.0), pnpm from `packageManager` (10.34.5) and `pnpm install --frozen-lockfile`. Actions are pinned to commit SHAs. The workflow's own header comment has the time budget and the per-job reasoning. The jobs:
+`.github/workflows/ci.yml` is one workflow of 9 jobs on `ubuntu-24.04`, all on Node from `.node-version` (24.19.0) and pnpm from `packageManager` (10.34.5); every job except `audit` installs with `pnpm install --frozen-lockfile` (`audit` runs `pnpm audit:prod` straight after setup, with no install). Actions are pinned to commit SHAs. The workflow's own header comment has the time budget and the per-job reasoning. The jobs:
 
 | Job | What it runs |
 | --- | --- |
-| `checks` | `pnpm lint`, `pnpm licence:check`, `pnpm typecheck` (which includes `apps/sync/tsconfig.node-safe.json` and the engine-probe tsconfig). The browser jobs wait for this one and for nothing else. |
+| `checks` | `pnpm lint`, `pnpm licence:check`, `pnpm typecheck` (which includes `apps/sync/tsconfig.node-safe.json` and the engine-probe tsconfig). `xbrowser`, `build-gates` and the two e2e jobs wait for this one and for nothing else; `probes`, also a browser job, has no `needs`. |
 | `unit` (4 shards) | `pnpm vitest run --shard=i/4` over every vitest project, after apt `ffmpeg` and `pnpm fixtures`. The `*.pg.test.ts` files skip here. |
 | `postgres` (3 shards) | The whole api project against a real Postgres 18 service (UTF8, a server per shard): `pnpm vitest run --project api --shard=i/3` with `DRAFTROOM_TEST_DATABASE_URL` set, so the migrations, lock-order, concurrency and skip-locked tests and every route run on a real `pg.Pool`. |
 | `probes` | The engine probes in a browser: `probe:engine` and, allowed to fail, the A3 text-layout probe. |

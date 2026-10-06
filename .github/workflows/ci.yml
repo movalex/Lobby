@@ -41,7 +41,8 @@
 # with a Postgres service of its own, and 40 minutes each. A ceiling costs nothing unless a job hangs, so these are
 # generous. The first design ran lint, types and every unit test in one 30 minute job that the other jobs waited for:
 # one timeout would have skipped the whole pipeline. `checks` is now only lint, licences and types (about a minute of
-# work after the install), and the browser jobs wait for it alone, so a slow or red unit shard blocks nothing but itself.
+# work after the install). xbrowser, build-gates and the two e2e jobs wait for it alone (probes does not wait at all),
+# so a slow or red unit shard blocks nothing but itself.
 #
 # The default browser suite is 509 tests and took 30.6 minutes on one worker on the development PC; the suite shares
 # fixed ports and kills servers on purpose, so it cannot run in parallel inside one machine. It is split across
