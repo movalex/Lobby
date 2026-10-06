@@ -1,0 +1,200 @@
+/* "Send feedback" (wave J5): the dialog and the inbox page. Tokens from styles.css, so the dark theme applies. */
+
+.dr-fb {
+  min-width: 0;
+}
+.dr-fb__area {
+  height: auto;
+  min-height: 84px;
+  padding: 8px 10px;
+  line-height: 1.45;
+  resize: vertical;
+  font-family: var(--dr-font);
+}
+.dr-fb__count {
+  margin: 4px 0 0;
+  font-size: 12px;
+  text-align: right;
+}
+.dr-fb__context {
+  margin: 16px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--dr-line);
+  border-radius: 10px;
+  background: var(--dr-inset);
+}
+.dr-fb__context-title {
+  margin: 0 0 6px;
+  color: var(--dr-ink);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+.dr-fb__rows {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+}
+.dr-fb__row {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr);
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.dr-fb__row dt {
+  color: var(--dr-ink-2);
+}
+.dr-fb__row dd {
+  margin: 0;
+  color: var(--dr-ink);
+  overflow-wrap: anywhere;
+}
+
+/* ---- the inbox page (FeedbackPage.tsx) ---------------------------------------------------------- */
+
+.dr-fbp {
+  min-height: 100%;
+  background: var(--dr-paper);
+  color: var(--dr-ink);
+}
+.dr-fbp__bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--dr-line);
+  background: var(--dr-surface);
+}
+.dr-fbp__main {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+}
+.dr-fbp__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.dr-fbp__title {
+  margin: 0;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+}
+.dr-fbp__tabs {
+  display: inline-flex;
+  min-width: 0;
+  margin: 0;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 9px;
+  background: var(--dr-inset);
+}
+.dr-fbp__tab {
+  height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--dr-ink-2);
+  font: 500 13px / 1 var(--dr-font);
+  cursor: pointer;
+}
+.dr-fbp__tab[aria-pressed="true"] {
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font-weight: 650;
+  box-shadow: 0 0 0 1px var(--dr-line-strong);
+}
+.dr-fbp__list {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-fbp__item {
+  padding: 14px 16px;
+  border: 1px solid var(--dr-line);
+  border-radius: 12px;
+  background: var(--dr-surface);
+}
+.dr-fbp__item[data-status="done"] {
+  background: var(--dr-inset);
+}
+.dr-fbp__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-bottom: 8px;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+}
+.dr-fbp__who {
+  color: var(--dr-ink);
+  font-weight: 650;
+}
+.dr-fbp__chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--dr-chip);
+  color: var(--dr-ink-2);
+  font-size: 11.5px;
+}
+.dr-fbp__chip[data-status="done"] {
+  background: var(--dr-live-bg);
+  color: var(--dr-live);
+}
+.dr-fbp__label {
+  margin: 10px 0 2px;
+  color: var(--dr-ink-2);
+  font-size: 12px;
+  font-weight: 650;
+}
+/* Plain text: line breaks kept, never rendered as markup. */
+.dr-fbp__text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 14.5px;
+  line-height: 1.5;
+}
+.dr-fbp__details {
+  margin-top: 10px;
+  font-size: 12.5px;
+}
+.dr-fbp__details summary {
+  color: var(--dr-ink-2);
+  cursor: pointer;
+}
+.dr-fbp__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.dr-fbp__empty,
+.dr-fbp__note {
+  padding: 32px 16px;
+  text-align: center;
+}
+
+/* ---- the account menu's entries (FeedbackMenu.tsx) ---------------------------------------------- */
+
+.dr-account__feedback {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.dr-account__feedback .dr-btn {
+  flex: 1;
+  justify-content: center;
+  padding: 0 8px;
+  font-size: 13px;
+  text-align: center;
+  text-decoration: none;
+  white-space: nowrap;
+}

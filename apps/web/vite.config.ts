@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 import { defineConfig, type ProxyOptions } from 'vite'
@@ -25,6 +26,23 @@ const proxy: Record<string, ProxyOptions> = {
 }
 
 /**
+ * The commit this build is made from, for the feedback dialog's context block (src/features/feedback/build-info.ts):
+ * Render's RENDER_GIT_COMMIT during its build, else the local git HEAD, else 'unknown'. Never read at run time.
+ */
+function buildCommit(): string {
+  const fromEnv = (process.env.RENDER_GIT_COMMIT ?? process.env.GIT_COMMIT ?? '').trim()
+  if (/^[0-9a-f]{7,40}$/i.test(fromEnv)) return fromEnv.slice(0, 12)
+  try {
+    return execFileSync('git', ['rev-parse', '--short=12', 'HEAD'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+  } catch {
+    return 'unknown'
+  }
+}
+
+/**
  * PLAN-wave4 (docs/EXCALIDRAW-MIGRATION.md §2.2): the engine's Mermaid converter is never used on a Lobby board
  * (its dialog is off; a pasted chart definition stays plain text), so it is a stub module and Mermaid, its
  * parser, d3 and the rest stay out of the build (./build/mermaid-to-excalidraw-stub.ts).
@@ -33,6 +51,7 @@ export const MERMAID_STUB = fileURLToPath(new URL('./build/mermaid-to-excalidraw
 
 export default defineConfig({
   plugins: [react(), excalidrawAssets(), excalidrawHostRewrite()],
+  define: { __LOBBY_COMMIT__: JSON.stringify(buildCommit()) },
   resolve: {
     alias: [{ find: /^@excalidraw\/mermaid-to-excalidraw$/, replacement: MERMAID_STUB }],
   },

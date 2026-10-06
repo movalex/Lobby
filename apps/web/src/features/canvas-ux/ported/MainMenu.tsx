@@ -24,6 +24,7 @@ import {
 } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { getTheme, THEME_PREFERENCES, type ThemePreference } from '../../../theme/theme.ts'
+import { openFeedback } from '../../feedback/state.ts'
 import { EXPORT_OFF_ENTRY, gatedEntries } from './ContextMenu.tsx'
 import { CMD } from './commands.ts'
 import { MenuIcon } from './icons.tsx'
@@ -168,7 +169,18 @@ export function mainMenuRows(ctx: CanvasFeatureContext): MenuRow[][] {
       uxState(ctx.canvas).shortcutsOpen.set(true)
     },
   }
-  return [top, ...middle, [prefs, help]]
+  // Wave J5: Send feedback, for every role (a viewer or a guest has things to report too)
+  const feedback: MenuRow = {
+    id: 'feedback',
+    label: 'Send feedback',
+    disabled: false,
+    // the keyboard goes back to the board when the dialog closes
+    run: () =>
+      openFeedback({ id: ctx.board.id, title: ctx.board.title }, () =>
+        ctx.canvas.focus({ preventScroll: true }),
+      ),
+  }
+  return [top, ...middle, [prefs, help, feedback]]
 }
 
 export function MainMenu({ ctx }: { ctx: CanvasFeatureContext }) {

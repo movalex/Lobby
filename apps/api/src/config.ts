@@ -10,6 +10,7 @@ import { checkSecret } from '@draftroom/auth-tickets'
 import { resolveDataDir } from '@draftroom/dev-assets'
 import { type CreatorPolicy, parseCreatorPolicy } from './auth/creators.ts'
 import { type AiConfig, parseAiConfig } from './features/ai/config.ts'
+import { parseFeedbackAdmins } from './features/feedback/admins.ts'
 import { parseStorageConfig, type StorageConfig } from './files/storage-config.ts'
 
 export type AuthProviderId = 'dev' | 'clerk'
@@ -102,6 +103,11 @@ export interface ApiConfig {
    * refuse otherwise. Local development only: it requires DRAFTROOM_DEV_AUTH=1 (refused in production).
    */
   linkPreviewTestOrigins: readonly string[]
+  /**
+   * DRAFTROOM_FEEDBACK_ADMINS (wave J5, features/feedback/admins.ts): normalised verified addresses of the
+   * people who read the feedback inbox and mark items done. Empty (unset): nobody does through the app.
+   */
+  feedbackAdmins: readonly string[]
 }
 
 export interface UploadLimitsConfig {
@@ -481,5 +487,6 @@ export function loadConfig(env: Env = process.env): ApiConfig {
     ai: parseAiConfig(env, production),
     creators: parseCreatorPolicy(env),
     linkPreviewTestOrigins: parseLinkPreviewTestOrigins(env, devAuth),
+    feedbackAdmins: parseFeedbackAdmins(env),
   }
 }

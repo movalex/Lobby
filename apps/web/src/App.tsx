@@ -4,6 +4,7 @@ import { SessionProvider, useSession } from './auth/session.tsx'
 import { createSignOutPurge } from './canvas/sync/adapter/offline-idb.ts'
 import { DashboardPage } from './dashboard/DashboardPage.tsx'
 import { landingWorkspace, noWorkspaceCopy } from './dashboard/model.ts'
+import { FeedbackHost } from './features/feedback/FeedbackHost.tsx'
 import { GuestEndedScreen } from './invite/GuestEndedScreen.tsx'
 import { GuestKindProvider, wasGuestTab } from './invite/guest.tsx'
 import { InvitePage } from './invite/InvitePage.tsx'
@@ -25,6 +26,10 @@ const SpikeRoute =
 // Spike B's board page behind ?page=spike stays under the dev-auth guard (route.tsx).
 const BoardRoute = lazy(() => import('./canvas/board/route.tsx'))
 
+// Wave J5: the feedback inbox at /feedback (its readers only; the api answers 404 to everybody else, and the
+// page then shows the unknown-address screen). A small page, loaded when it is opened.
+const FeedbackRoute = lazy(() => import('./features/feedback/FeedbackPage.tsx'))
+
 export function App() {
   if (SpikeRoute && location.pathname.startsWith('/spike/')) {
     return (
@@ -36,6 +41,8 @@ export function App() {
   return (
     <SessionProvider>
       <PurgeOfflineOnSignOut />
+      {/* Wave J5: the Send feedback dialog, opened by the board's menu and the account menu */}
+      <FeedbackHost />
       {/* Wave 3: who is signed in, an account or a name-only guest (GET /api/me `kind`). */}
       <GuestKindProvider>
         <Routes />
@@ -69,6 +76,14 @@ function Routes() {
         <RequireSession>
           <Suspense fallback={<LoadingScreen label="Opening board…" testId="board-loading" />}>
             <BoardRoute boardId={route.boardId} />
+          </Suspense>
+        </RequireSession>
+      )
+    case 'feedback':
+      return (
+        <RequireSession>
+          <Suspense fallback={<LoadingScreen label="Loading feedback…" testId="feedback-loading" />}>
+            <FeedbackRoute />
           </Suspense>
         </RequireSession>
       )

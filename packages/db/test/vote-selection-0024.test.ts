@@ -143,7 +143,7 @@ describe('0024 on a database at 0023', () => {
     await closeAll(d)
     expect(await sqlstate(insertVote(d, { scope: 'selection' }))).toBe('23514')
 
-    // (0025 and later are not this test's business)
+    // up to 0024 only: later migrations (0025_outside_markers, 0026_feedback) are not what this test is about
     expect((await migrate(d, { migrations: all.filter((m) => m.version <= 24) })).applied).toEqual([
       '0024_vote_selection_access_granted',
     ])

@@ -38,6 +38,13 @@ describe('matchRoute', () => {
     expect(matchRoute('/invite/AbC_-123xyz')).toEqual({ name: 'invite', token: 'AbC_-123xyz' })
   })
 
+  it('maps /feedback (the inbox; the api decides who may read it) and nothing under it', () => {
+    expect(matchRoute('/feedback')).toEqual({ name: 'feedback' })
+    expect(matchRoute('/feedback/')).toEqual({ name: 'feedback' })
+    expect(matchRoute('/feedback/fbk_x')).toEqual({ name: 'not-found' })
+    expect(matchRoute('/Feedback')).toEqual({ name: 'not-found' })
+  })
+
   it('flags bad board ids instead of opening a room (mixed case would split rooms on NTFS)', () => {
     expect(matchRoute('/b/Board1')).toEqual({ name: 'invalid-board', raw: 'Board1' })
     expect(matchRoute('/b/%E0%A4%A').name).toBe('invalid-board')

@@ -9,6 +9,7 @@ import {
   type MenuEntrySpec,
   type MenuTarget,
 } from '../../../canvas/api/index.ts'
+import { closeFeedback, feedbackRequest } from '../../feedback/state.ts'
 import { CONTEXT_MENU_ENTRIES, EXPORT_OFF_ENTRY, gatedEntries } from './ContextMenu.tsx'
 import { COMMANDS } from './commands.ts'
 import { applySnapDefault, SNAP_DEFAULT_KEY, startToolFor } from './defaults.ts'
@@ -248,7 +249,7 @@ describe('menus', () => {
     expect(allowed).not.toContain(EXPORT_OFF_ENTRY.id)
   })
 
-  it('the board menu: Board, Edit, then Preferences and Keyboard shortcuts; no Language, no debug mode', () => {
+  it('the board menu: Board, Edit, then Preferences, Keyboard shortcuts and Send feedback; no Language, no debug mode', () => {
     const ctx = ctxWith()
     ctx.registries.mainMenu.register({
       id: 'dr-go-to-start-view',
@@ -259,7 +260,7 @@ describe('menus', () => {
     })
     const rows = mainMenuRows(ctx)
     const top = rows.flat().map((r) => r.id)
-    expect(top).toEqual(['dr-board', 'preferences', 'keyboard-shortcuts'])
+    expect(top).toEqual(['dr-board', 'preferences', 'keyboard-shortcuts', 'feedback'])
     const prefs = rows
       .flat()
       .find((r) => r.id === 'preferences')
@@ -278,5 +279,31 @@ describe('menus', () => {
       ['input-device-trackpad', 'Trackpad (the wheel pans)', false],
     ])
     expect(JSON.stringify(rows)).not.toMatch(/language|debug/i)
+  })
+})
+
+// Wave J5: the Send feedback button, in the board menu for everybody (a viewer or a commenter has things to report).
+describe('the board menu’s Send feedback', () => {
+  it('opens the feedback dialog for this board, enabled for every role, and gives the keyboard back to the board', () => {
+    for (const readOnly of [false, true]) {
+      const ctx = ctxWith({ readOnly })
+      let focused = 0
+      ;(ctx.canvas as unknown as { focus(): void }).focus = () => {
+        focused++
+      }
+      ;(ctx.board as { title?: string }).title = 'Q4 plan'
+      const row = mainMenuRows(ctx)
+        .flat()
+        .find((r) => r.id === 'feedback')
+      expect(row?.label, String(readOnly)).toBe('Send feedback')
+      expect(row?.disabled).toBe(false)
+      expect(feedbackRequest.get()).toBeNull()
+      row?.run?.()
+      expect(feedbackRequest.get()?.board).toEqual({ id: ctx.board.id, title: 'Q4 plan' })
+      expect(focused).toBe(0)
+      feedbackRequest.get()?.restoreFocus?.()
+      expect(focused).toBe(1)
+      closeFeedback()
+    }
   })
 })
