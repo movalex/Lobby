@@ -74,6 +74,7 @@ test('invite by email without Clerk: a wrong address is refused at the field, th
     await input.fill('  Sam@Client.Example.test ')
     await section.getByTestId('share-email-role').selectOption('viewer')
     await section.getByTestId('share-email-submit').click()
+    await section.getByTestId('outside-confirm-yes').click()
     const result = section.getByTestId('share-email-result')
     await expect(result).toHaveAttribute('data-mode', 'link')
     await expect(result).toContainText('Couldn’t email — copy this link instead.')

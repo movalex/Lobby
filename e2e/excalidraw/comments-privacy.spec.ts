@@ -89,7 +89,7 @@ test('team-only comments: on by default while a client link is live, never shown
     const toggle = newCommentPopover(a).getByTestId('new-comment-team-only')
     await expect(toggle).toBeChecked()
     await expect(newCommentPopover(a).getByTestId('new-comment-team-only-row')).toContainText(
-      'Guests and client links won’t see it',
+      'People outside Dark Burn / TPG won’t see it',
     )
     await a.keyboard.press('Escape')
     await expect(newCommentPopover(a)).toHaveCount(0)
