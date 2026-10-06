@@ -1,8 +1,10 @@
-// roster-batch.ts: the roster events of one macrotask go out as one frame per recipient, in order; a
-// session whose join is in the batch gets the frame without its own join; the batch flushes on demand.
+// roster-batch.ts: the roster events of one batch (at most ROSTER_FLUSH_MS, or until the room's presence tick
+// flushes it) go out as one frame per recipient, in order; a session whose join is in the batch gets the frame
+// without its own join; the batch flushes on demand; a join spread over time (CAP-L1) still costs one frame per
+// recipient per 100 ms.
 
-import { describe, expect, it } from 'vitest'
-import { RosterBatch, type RosterRecipient } from './roster-batch.ts'
+import { describe, expect, it, vi } from 'vitest'
+import { ROSTER_FLUSH_MS, RosterBatch, type RosterRecipient } from './roster-batch.ts'
 
 const entry = (sid: string) => ({
   sid,
@@ -114,5 +116,37 @@ describe('roster batch', () => {
     expect(isScheduled()).toBe(true) // the fake scheduler cannot be cancelled; the real one is cleared
     runScheduled()
     expect(w.frames).toHaveLength(1)
+  })
+})
+
+describe('roster batch timing (CAP-L1)', () => {
+  it('joins spread over time (a restart’s reconnects coming back with their backoff) go out at most once per ROSTER_FLUSH_MS, not once per join; each within it', () => {
+    vi.useFakeTimers()
+    try {
+      const old = { sid: 'old:1', frames: [] as string[] }
+      const batch = new RosterBatch(() => [{ sid: old.sid, send: (f: string) => old.frames.push(f) }])
+      // 40 joins, one every 5 ms (200 ms): before, each went out alone (40 frames to every recipient)
+      for (let i = 0; i < 40; i++) {
+        batch.push({ k: 'join', p: entry(`j${i}:1`) })
+        vi.advanceTimersByTime(5)
+      }
+      vi.advanceTimersByTime(ROSTER_FLUSH_MS)
+      expect(sids(old.frames)).toEqual(Array.from({ length: 40 }, (_, i) => `+j${i}:1`))
+      expect(old.frames.length).toBeLessThanOrEqual(Math.ceil(200 / ROSTER_FLUSH_MS) + 1)
+      // a lone join is seen at most ROSTER_FLUSH_MS later
+      const before = old.frames.length
+      batch.push({ k: 'leave', sid: 'j0:1' })
+      vi.advanceTimersByTime(ROSTER_FLUSH_MS - 1)
+      expect(old.frames).toHaveLength(before)
+      vi.advanceTimersByTime(1)
+      expect(sids(old.frames.slice(before))).toEqual(['-j0:1'])
+      // close() cancels the pending flush
+      batch.push({ k: 'leave', sid: 'j1:1' })
+      batch.close()
+      vi.advanceTimersByTime(ROSTER_FLUSH_MS * 2)
+      expect(old.frames).toHaveLength(before + 1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

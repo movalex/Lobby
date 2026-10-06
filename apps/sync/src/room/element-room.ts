@@ -818,7 +818,7 @@ export class ElementRoom {
       )
       s.welcomed = true
       this.deps.metrics.inc('lobby_joins_total')
-      // one `roster` frame per hello slice for everyone (the joiner's welcome names it already)
+      // one `roster` frame per 100 ms at most for everyone (roster-batch.ts; the joiner's welcome names it already)
       if (!already) this.rosterBatch.push({ k: 'join', p: rosterEntry(s.identity) })
     }
     const meta = this.store.meta
