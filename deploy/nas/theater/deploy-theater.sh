@@ -63,7 +63,8 @@ validate_tunnel() {
 }
 
 # Every workspace manifest + the lockfile (the frozen, filtered installs check them all), docker/, the
-# packages, the four apps the images build, and this folder's nginx.conf. No tests, env files, local data
+# packages, the four apps the images build, patches/ (the engine patch: every image's pnpm install reads
+# pnpm-workspace.yaml's patchedDependencies) and this folder's nginx.conf. No tests, env files, local data
 # or node_modules.
 make_bundle() {
   local out=$1 manifests=()
@@ -76,7 +77,7 @@ make_bundle() {
       --exclude='packages/*/test' --exclude='.data' --exclude='.data-*' --exclude='dist' \
       --exclude='*.log' --exclude='*.tsbuildinfo' \
       package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json .dockerignore .node-version \
-      docker packages apps/api apps/sync apps/web apps/worker deploy/nas/theater/nginx.conf "${manifests[@]}"
+      patches docker packages apps/api apps/sync apps/web apps/worker deploy/nas/theater/nginx.conf "${manifests[@]}"
   )
   local names
   names=$(tar -tzf "$out")
