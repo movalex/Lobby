@@ -106,7 +106,7 @@ test('the board socket carries its ticket in the handshake, never in the URL, on
   })
 
   await test.step('a tab still on the old transport (?ticket=, no subprotocol) connects and is welcomed', async () => {
-    const { socket, welcome } = await forgeSession(a.page, board)
+    const { socket, welcome } = await forgeSession(a.page, board, { ticketIn: 'url' })
     expect(welcome.type).toBe('welcome')
     const old = boardSockets(tap.list).find(
       (h) => new URL(h.url).searchParams.get('sessionId') === socket.tab,
