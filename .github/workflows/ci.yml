@@ -1,5 +1,15 @@
 # Lobby (Draftroom) CI. What a run does, and what it costs:
 #
+# State, as of 2026-10-05. The only trigger is workflow_dispatch (see `on:` below; 878f8d93, 2026-10-04). Before that, every
+# push to main ran the whole set: it ran on GitHub on the pushes of 2026-10-03 and 04 (878f8d93's message: about 15 pushes
+# on the deploy day, 1,800 of 2,000 free Actions minutes). The run logs were not available afterwards; two jobs were
+# red, the Postgres shard 3 of 3 and the unit shard 4 of 4, and their causes were found and fixed in the tests (b44a8b43,
+# 42a51def; docs/PROGRESS.md, "CI red on GitHub"); 59a30ac7 repaired a third failure that the switch to manual itself
+# caused (scripts/ci-workflow.test.ts still required the removed triggers). It has not run on GitHub since those
+# fixes. A manual run starts the 12 job instances below that have no `if:` (checks, 4 unit, 3 postgres, probes, audit,
+# xbrowser, build-gates); e2e-smoke and e2e are skipped, because their `if:` names the pull_request and push events.
+# The per-event lists below say what each job does when the owner puts those triggers back.
+#
 #   every push to main and every pull request
 #     checks      the quick static gate: lint, licences, typecheck (the node-safety and engine-probe tsconfigs included).
 #                 The jobs below that need a green static gate wait for this one and for nothing else.
@@ -7,8 +17,10 @@
 #                 scripts), split into 4 shards by file
 #     postgres    the WHOLE api project against a real Postgres 18, not only the *.pg.test.ts files (they skip without
 #                 one), in 3 shards. Wave B's workspace-members tests ran on a real Postgres for the first time on
-#                 2026-10-03 (Postgres 18.4 on the development PC: the three shards passed, 1,158 tests); this job has still
-#                 never run on a runner, and it blocks, so a red mark here is a finding, not necessarily a CI mistake.
+#                 2026-10-03 (Postgres 18.4 on the development PC: the three shards passed, 1,158 tests). On GitHub, shard
+#                 3 of 3 was red on the pushes of 2026-10-03/04 (grant-paths.test.ts compared grants in the database's
+#                 collation order; fixed in b44a8b43); it has not run on a runner since, and it blocks, so a red mark here
+#                 is a finding, not necessarily a CI mistake.
 #     probes      the browser half of the engine probe suite (docs/EXCALIDRAW-MIGRATION.md section 6.5): `pnpm probe:browser`, as probe:engine and probe:layout
 #     audit       `pnpm audit --prod` against the 5 advisories the owner has been told about (scripts/audit-check.mjs)
 #     xbrowser    the cross-browser smoke on WebKit and Firefox (e2e/excalidraw/xbrowser-smoke.spec.ts)
@@ -29,7 +41,8 @@
 # with a Postgres service of its own, and 40 minutes each. A ceiling costs nothing unless a job hangs, so these are
 # generous. The first design ran lint, types and every unit test in one 30 minute job that the other jobs waited for:
 # one timeout would have skipped the whole pipeline. `checks` is now only lint, licences and types (about a minute of
-# work after the install), and the browser jobs wait for it alone, so a slow or red unit shard blocks nothing but itself.
+# work after the install). xbrowser, build-gates and the two e2e jobs wait for it alone (probes does not wait at all),
+# so a slow or red unit shard blocks nothing but itself.
 #
 # The default browser suite is 509 tests and took 30.6 minutes on one worker on the development PC; the suite shares
 # fixed ports and kills servers on purpose, so it cannot run in parallel inside one machine. It is split across
@@ -51,13 +64,14 @@
 #   - sharp's libvips (LGPL, worker only) is the Linux binary here, the one the worker images use; the licence check
 #     allowlists it by name and version.
 #
-# Allowed to fail (continue-on-error), because they have never run on a runner and a red mark must not block a merge
-# before anyone has looked at them: `audit` (advisories appear on the registry's schedule, not with a change),
-# `xbrowser` (nobody has run WebKit or Firefox against Lobby yet) and the A3 step. They still show red when they fail.
-# Remove the flag from each once it has been green.
+# Allowed to fail (continue-on-error), because a red mark must not block a merge before anyone has looked at them:
+# `audit` (advisories appear on the registry's schedule, not with a change), `xbrowser` (no Firefox result exists from
+# the development PC, and WebKit has passed there only locally) and the A3 step. They still show red when they fail. They
+# ran on GitHub on 2026-10-03/04, but those results were not recorded (the logs were not available), so none of the
+# three has a known green run on a runner. Remove the flag from each once it has been green (docs/BACKLOG.md, CI-1).
 #
-# It has never run (docs/DEPLOY.md, "CI"): it starts when the repository is on GitHub and the owner agrees to the
-# Actions minutes. Actions are pinned to full commit SHAs (tag in the comment) so a moved tag cannot change a build.
+# Running it costs the owner's Actions minutes (docs/DEPLOY.md, "CI"): putting the push and pull_request triggers back is
+# the owner's decision. Actions are pinned to full commit SHAs (tag in the comment) so a moved tag cannot change a build.
 name: CI
 
 # MANUAL ONLY since 2026-10-04: every push to main ran the whole set (about 20 jobs, roughly 100 runner-minutes),

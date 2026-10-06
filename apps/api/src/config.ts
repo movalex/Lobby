@@ -99,7 +99,7 @@ export interface ApiConfig {
   ai: AiConfig
   /**
    * Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §2): DRAFTROOM_CREATOR_DOMAINS (default darkburn.com,
-   * trailerparkgroup.com) and DRAFTROOM_CREATOR_EMAILS (the exceptions; default none). Always on.
+   * trailerparkgroup.com, trailerpark.com) and DRAFTROOM_CREATOR_EMAILS (the exceptions; default none). Always on.
    */
   creators: CreatorPolicy
   /**

@@ -3,10 +3,14 @@ import {
   type BoardEventsOptions,
   createBoardEvents,
   createSseParser,
+  DIRECT_RETRY_MAX_MS,
+  DIRECT_RETRY_MS,
   type EventsTicket,
   MAX_DIRECT_FAILURES,
+  MINT_TROUBLE_MS,
   MintError,
   mintEventsTicket,
+  PROBE_HELLO_MS,
   STALE_STREAM_MS,
 } from './events.ts'
 
@@ -250,10 +254,20 @@ type Outcome = 'stream' | 'reject' | number
 
 const DIRECT_URL = 'https://api.example/api/boards/b-1/events'
 
-function direct(opts: { outcomes?: Outcome[]; mints?: (EventsTicket | MintError)[]; staleMs?: number } = {}) {
+function direct(
+  opts: {
+    outcomes?: Outcome[]
+    mints?: (EventsTicket | MintError)[]
+    /** Decides mint number `call` (1-based) once `mints` is used up: an answer, or undefined for a good ticket. */
+    mintWhen?: (call: number) => EventsTicket | MintError | undefined
+    staleMs?: number
+  } = {},
+) {
   let minted = 0
+  let mintCalls = 0
   const mint = vi.fn(async (_boardId: string, _signal: AbortSignal): Promise<EventsTicket> => {
-    const next = opts.mints?.shift()
+    mintCalls++
+    const next = opts.mints?.shift() ?? opts.mintWhen?.(mintCalls)
     if (next instanceof Error) throw next
     if (next) return next
     minted++
@@ -516,6 +530,643 @@ describe('createBoardEvents (the direct stream, wave H1)', () => {
     slow.close()
     await advance(60_000)
     expect(aborted).toBe(true)
+    expect(FakeEventSource.all).toHaveLength(0)
+  })
+})
+
+// ---- wave I1: mints that keep failing, a fallback that is temporary, a page that wakes up ----------------------
+
+/** What the page sees of the browser: 'online' on the window, 'visibilitychange' on the document. */
+function stubPage() {
+  const win = new EventTarget()
+  const doc = Object.assign(new EventTarget(), { visibilityState: 'visible' })
+  vi.stubGlobal('window', win)
+  vi.stubGlobal('document', doc)
+  return {
+    win,
+    doc,
+    online: () => win.dispatchEvent(new Event('online')),
+    visibility(state: 'visible' | 'hidden') {
+      doc.visibilityState = state
+      doc.dispatchEvent(new Event('visibilitychange'))
+    },
+  }
+}
+
+/** Three rejected direct attempts (a CSP, CORS, DNS): the cookie stream, hello'd, with the page waiting to retry. */
+async function fallenBack(opts: Parameters<typeof direct>[0] = {}) {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  // A long stale timeout: the cookie stream is left alone for as long as the test runs.
+  const d = direct({
+    ...opts,
+    staleMs: opts.staleMs ?? 3_600_000,
+    outcomes: ['reject', 'reject', 'reject', ...(opts.outcomes ?? [])],
+  })
+  const resync = vi.fn()
+  d.events.onResync(resync)
+  await settle()
+  await advance(1_000)
+  await advance(2_000)
+  expect(d.events.transport()).toBe('cookie')
+  const cookie = FakeEventSource.all[0] as FakeEventSource
+  cookie.send('hello', hello)
+  expect(resync).toHaveBeenCalledTimes(1)
+  return { ...d, warn, resync, cookie }
+}
+
+describe('createBoardEvents: a mint that keeps failing (wave I1)', () => {
+  beforeEach(() => {
+    vi.useRealTimers()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+  })
+
+  it('a mint refused in a way a retry will not fix (400, 405, 415) counts like a failed direct attempt: the third in a row is the cookie stream', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const d = direct({ mints: [new MintError(405), new MintError(400), new MintError(415)] })
+    await settle()
+    expect(d.mint).toHaveBeenCalledTimes(1)
+    expect(FakeEventSource.all).toHaveLength(0)
+    await advance(1_000)
+    expect(d.mint).toHaveBeenCalledTimes(2)
+    await advance(2_000)
+    expect(d.mint).toHaveBeenCalledTimes(3)
+    expect(d.calls).toHaveLength(0)
+    expect(d.events.transport()).toBe('cookie')
+    expect(FakeEventSource.all).toHaveLength(1)
+    expect(FakeEventSource.all[0]?.url).toBe('/api/boards/b-1/events')
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0]?.[0])).toContain('the ticket route answered 415')
+    d.events.close()
+  })
+
+  it('a good ticket and a hello reset that count: refused twice, then fine, then refused twice again stays direct', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const mints: (EventsTicket | MintError)[] = [new MintError(405), new MintError(405)]
+    const d = direct({ mints })
+    await settle()
+    await advance(1_000)
+    await advance(2_000) // the third mint is good
+    expect(d.calls).toHaveLength(1)
+    d.last()?.push(frame('hello', hello))
+    await settle()
+    mints.push(new MintError(405), new MintError(405))
+    d.last()?.end()
+    await advance(1_000)
+    await advance(2_000)
+    await advance(4_000)
+    expect(d.events.transport()).toBe('direct')
+    expect(FakeEventSource.all).toHaveLength(0)
+    expect(d.calls).toHaveLength(2)
+    d.events.close()
+  })
+
+  it(`a 5xx that lasts ${MINT_TROUBLE_MS / 1000} s with no good mint (a full ticket store, a broken route) is the cookie stream; a shorter one (an api restart) is waited out`, async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const d = direct({ mintWhen: () => new MintError(503) })
+    await settle()
+    await advance(MINT_TROUBLE_MS - 20_000)
+    expect(d.mint.mock.calls.length).toBeGreaterThan(5)
+    expect(d.events.transport()).toBe('direct')
+    expect(FakeEventSource.all).toHaveLength(0)
+    await advance(60_000)
+    expect(d.events.transport()).toBe('cookie')
+    expect(FakeEventSource.all).toHaveLength(1)
+    expect(d.calls).toHaveLength(0)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0]?.[0])).toContain('the ticket route keeps failing (503)')
+    d.events.close()
+  })
+
+  it('a good mint (and a hello) restart the window: restarts that add up to more than it never fall back', async () => {
+    let failing = true
+    const d = direct({ mintWhen: () => (failing ? new MintError(502) : undefined) })
+    const resync = vi.fn()
+    d.events.onResync(resync)
+    await settle()
+    await advance(MINT_TROUBLE_MS - 20_000) // the api is restarting
+    failing = false
+    await advance(30_000) // the next retry mints
+    d.last()?.push(frame('hello', hello))
+    await settle()
+    expect(resync).toHaveBeenCalledTimes(1)
+    // a second restart: its own run, though more than MINT_TROUBLE_MS have passed since the first failure
+    failing = true
+    d.last()?.end()
+    await advance(MINT_TROUBLE_MS - 20_000)
+    expect(d.events.transport()).toBe('direct')
+    expect(FakeEventSource.all).toHaveLength(0)
+    failing = false
+    await advance(30_000)
+    d.last()?.push(frame('hello', hello))
+    await settle()
+    expect(resync).toHaveBeenCalledTimes(2)
+    d.events.close()
+  })
+
+  it('a good mint restarts the window even when its stream then fails before a hello', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let failing = true
+    const d = direct({ mintWhen: () => (failing ? new MintError(503) : undefined), outcomes: ['reject'] })
+    await settle()
+    await advance(MINT_TROUBLE_MS - 20_000)
+    failing = false
+    await advance(30_000) // a good mint; its direct fetch is refused (counted once, no hello)
+    expect(d.calls).toHaveLength(1)
+    failing = true
+    await advance(MINT_TROUBLE_MS - 20_000)
+    expect(d.events.transport()).toBe('direct')
+    expect(FakeEventSource.all).toHaveLength(0)
+    d.events.close()
+  })
+
+  it('no response, signed out and busy are never counted, however long they last', async () => {
+    const d = direct({ mintWhen: (n) => new MintError([0, 401, 429][n % 3] as number) })
+    await settle()
+    await advance(10 * 60_000)
+    expect(d.mint.mock.calls.length).toBeGreaterThan(20)
+    expect(d.events.transport()).toBe('direct')
+    expect(FakeEventSource.all).toHaveLength(0)
+    d.events.close()
+  })
+
+  it('a mint answered 403 or 404 is still the cookie stream at once, quietly', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const d = direct({ mints: [new MintError(403)] })
+    await settle()
+    expect(d.events.transport()).toBe('cookie')
+    expect(FakeEventSource.all).toHaveLength(1)
+    expect(warn).not.toHaveBeenCalled()
+    d.events.close()
+  })
+
+  it('a resync listener that throws is that feature’s problem: the stream is not failed, no fallback', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const d = direct()
+    const fine = vi.fn()
+    d.events.onResync(() => {
+      throw new Error('a feature broke')
+    })
+    d.events.onResync(fine)
+    const got = vi.fn()
+    d.events.on('comments.thread', got)
+    await settle()
+    for (let i = 0; i < MAX_DIRECT_FAILURES + 1; i++) {
+      d.last()?.push(frame('hello', hello) + frame('comments.thread', { id: `thr_${i}` }))
+      await settle()
+      expect(fine).toHaveBeenCalledTimes(i + 1)
+      expect(got).toHaveBeenCalledTimes(i + 1)
+      d.last()?.end()
+      await advance(1_000)
+    }
+    expect(error).toHaveBeenCalled()
+    expect(d.events.transport()).toBe('direct')
+    expect(FakeEventSource.all).toHaveLength(0)
+    d.events.close()
+  })
+})
+
+describe('createBoardEvents: the cookie fallback is temporary (wave I1)', () => {
+  beforeEach(() => {
+    vi.useRealTimers()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+  })
+
+  it('after the cool-down the ticket is minted first (the cookie stream runs on), then the page swaps to the direct stream and keeps it', async () => {
+    let cookieStreamsWhileMinting = -1
+    const f = await fallenBack({
+      mintWhen: (n) => {
+        if (n === 4) cookieStreamsWhileMinting = openStreams().length
+        return undefined
+      },
+    })
+    await advance(DIRECT_RETRY_MS - 1)
+    expect(f.mint).toHaveBeenCalledTimes(3)
+    expect(f.cookie.readyState).toBe(FakeEventSource.OPEN)
+    await advance(1)
+    expect(f.mint).toHaveBeenCalledTimes(4)
+    expect(cookieStreamsWhileMinting).toBe(1)
+    // minted, so swapped: one direct attempt with that ticket
+    expect(f.cookie.readyState).toBe(FakeEventSource.CLOSED)
+    expect(f.calls).toHaveLength(4)
+    expect(((f.calls[3]?.init.headers ?? {}) as Record<string, string>).authorization).toBe('Bearer evt_4')
+    expect(f.events.transport()).toBe('direct')
+    f.last()?.push(STREAM_PADDING + frame('hello', hello))
+    await settle()
+    expect(f.resync).toHaveBeenCalledTimes(2)
+    expect(openStreams()).toHaveLength(0)
+    // and it stays: the next reconnect mints again, no cookie stream
+    f.last()?.end()
+    await advance(1_000)
+    expect(f.mint).toHaveBeenCalledTimes(5)
+    expect(f.calls).toHaveLength(5)
+    expect(FakeEventSource.all).toHaveLength(1)
+    expect(f.warn).toHaveBeenCalledTimes(1)
+    expect(String(f.warn.mock.calls[0]?.[0])).toContain('tried again later')
+    f.events.close()
+  })
+
+  it('a retry that fails goes back to the cookie stream after ONE failure, quietly, and the next retry waits twice as long', async () => {
+    const f = await fallenBack({ outcomes: ['reject'] })
+    await advance(DIRECT_RETRY_MS)
+    expect(f.calls).toHaveLength(4)
+    expect(f.events.transport()).toBe('cookie')
+    expect(FakeEventSource.all).toHaveLength(2)
+    expect(openStreams()).toHaveLength(1)
+    expect(f.warn).toHaveBeenCalledTimes(1) // said once, not by every retry
+    FakeEventSource.all[1]?.send('hello', hello)
+    await advance(2 * DIRECT_RETRY_MS - 1)
+    expect(f.mint).toHaveBeenCalledTimes(4)
+    await advance(1)
+    expect(f.mint).toHaveBeenCalledTimes(5)
+    expect(f.events.transport()).toBe('direct')
+    f.events.close()
+  })
+
+  it(`the wait doubles per failed retry, up to ${DIRECT_RETRY_MAX_MS / 60_000} minutes`, async () => {
+    const f = await fallenBack({ outcomes: Array.from({ length: 12 }, () => 'reject' as const) })
+    const waits: number[] = []
+    for (let i = 0; i < 5; i++) {
+      const before = f.mint.mock.calls.length
+      // the next mint comes when the cool-down ends: find it to the second
+      let ms = 0
+      while (f.mint.mock.calls.length === before && ms < 2 * DIRECT_RETRY_MAX_MS) {
+        await advance(1_000)
+        ms += 1_000
+      }
+      waits.push(ms)
+      await settle()
+    }
+    // each wait is measured from the fallback before it (the retry itself takes no time here)
+    expect(waits).toEqual([
+      DIRECT_RETRY_MS,
+      2 * DIRECT_RETRY_MS,
+      4 * DIRECT_RETRY_MS,
+      DIRECT_RETRY_MAX_MS,
+      DIRECT_RETRY_MAX_MS,
+    ])
+    f.events.close()
+  })
+
+  it('a retried stream that never says hello is given up on after PROBE_HELLO_MS, not after the stale timeout', async () => {
+    const f = await fallenBack({ outcomes: ['stream'] })
+    await advance(DIRECT_RETRY_MS)
+    expect(f.calls).toHaveLength(4)
+    f.last()?.push(STREAM_PADDING) // a buffering proxy: the padding at best
+    await advance(PROBE_HELLO_MS - 1)
+    expect(f.events.transport()).toBe('direct')
+    expect(openStreams()).toHaveLength(0)
+    await advance(1)
+    expect(f.wires[0]?.aborted).toBe(true)
+    expect(f.events.transport()).toBe('cookie')
+    expect(openStreams()).toHaveLength(1)
+    expect(f.warn).toHaveBeenCalledTimes(1)
+    f.events.close()
+  })
+
+  it('a retried stream the api answers with an error status goes back at once too (no backoff with no stream at all)', async () => {
+    const f = await fallenBack({ outcomes: [503] })
+    await advance(DIRECT_RETRY_MS)
+    expect(f.calls).toHaveLength(4)
+    expect(f.events.transport()).toBe('cookie')
+    expect(openStreams()).toHaveLength(1)
+    // not a retry loop: nothing more is asked until the next cool-down
+    await advance(60_000)
+    expect(f.mint).toHaveBeenCalledTimes(4)
+    f.events.close()
+  })
+
+  it('a retry whose mint finds no direct origin, fails, or hangs leaves the cookie stream untouched', async () => {
+    const answers: (EventsTicket | MintError | 'hang')[] = [
+      { url: null },
+      new MintError(503),
+      new MintError(0),
+      'hang',
+    ]
+    for (const answer of answers) {
+      FakeEventSource.all = []
+      const f = await fallenBack({
+        staleMs: 10 * 60_000,
+        mintWhen: (n) => (n === 4 && answer !== 'hang' ? answer : undefined),
+      })
+      if (answer === 'hang')
+        f.mint.mockImplementationOnce(
+          (_b, signal) =>
+            new Promise((_resolve, reject) =>
+              signal.addEventListener('abort', () => reject(new MintError(0))),
+            ),
+        )
+      await advance(DIRECT_RETRY_MS)
+      expect(f.mint).toHaveBeenCalledTimes(4)
+      // the cookie stream keeps getting its pings, and a mint that hangs is abandoned after the stale timeout
+      const quiet = async (minutes: number) => {
+        for (let i = 0; i < minutes; i++) {
+          await advance(60_000)
+          f.cookie.send('ping')
+        }
+      }
+      await quiet(answer === 'hang' ? 10 : 4)
+      expect(f.cookie.readyState).toBe(FakeEventSource.OPEN)
+      expect(FakeEventSource.all).toHaveLength(1)
+      expect(f.calls).toHaveLength(3)
+      expect(f.events.transport()).toBe('cookie')
+      expect(f.mint).toHaveBeenCalledTimes(4)
+      // the page tries again at the next cool-down: twice the first wait, counted from the retry that found nothing
+      await quiet(10)
+      expect(f.mint).toHaveBeenCalledTimes(5)
+      f.events.close()
+    }
+  })
+
+  it('a ticket route that failed for minutes and recovered starts a fresh window: the next restart is waited out, not an instant fallback', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let failing = true
+    const d = direct({ mintWhen: () => (failing ? new MintError(503) : undefined), staleMs: 3_600_000 })
+    await settle()
+    await advance(MINT_TROUBLE_MS + 30_000) // the fallback came at 121 s (an attempt every 30 s by then)
+    expect(d.events.transport()).toBe('cookie') // the route stayed broken: the cookie stream
+    failing = false
+    await advance(DIRECT_RETRY_MS - 25_000) // 4 s past the retry (at 421 s): its mint works, swapped to direct
+    expect(d.events.transport()).toBe('direct')
+    d.last()?.push(frame('hello', hello))
+    await settle()
+    failing = true
+    d.last()?.end()
+    await advance(30_000) // the first failures of a new run, long after the old one began
+    expect(d.events.transport()).toBe('direct')
+    expect(warn).toHaveBeenCalledTimes(1)
+    d.events.close()
+  })
+
+  it('a successful direct stream starts the count over: the next fallback is retried after the first wait again', async () => {
+    const f = await fallenBack({ outcomes: ['stream', 'reject', 'reject', 'reject'] })
+    await advance(DIRECT_RETRY_MS)
+    f.last()?.push(frame('hello', hello))
+    await settle()
+    expect(f.events.transport()).toBe('direct')
+    f.last()?.end()
+    await advance(1_000) // attempt 5
+    await advance(1_000) // 6
+    await advance(2_000) // 7: the third failure since the hello
+    expect(f.events.transport()).toBe('cookie')
+    const mints = f.mint.mock.calls.length
+    await advance(DIRECT_RETRY_MS - 1)
+    expect(f.mint).toHaveBeenCalledTimes(mints)
+    await advance(1)
+    expect(f.mint).toHaveBeenCalledTimes(mints + 1)
+    f.events.close()
+  })
+
+  it('a page with no direct transport never retries, and close() cancels a retry that is waiting', async () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const cookieOnly = createBoardEvents('b-1', { mintTicket: null, staleMs: 3_600_000 })
+    await advance(3 * 3_600_000)
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(openStreams()).toHaveLength(1)
+    cookieOnly.close()
+
+    FakeEventSource.all = []
+    const f = await fallenBack()
+    f.events.close()
+    await advance(3 * DIRECT_RETRY_MAX_MS)
+    expect(f.mint).toHaveBeenCalledTimes(3)
+    expect(f.calls).toHaveLength(3)
+  })
+
+  it("'online' retries the direct stream at once; the tab becoming visible does too, but only once the cool-down is over", async () => {
+    const page = stubPage()
+    const a = await fallenBack()
+    page.visibility('hidden')
+    page.visibility('visible')
+    await settle()
+    expect(a.mint).toHaveBeenCalledTimes(3) // cool-down not over: leave it
+    page.online() // the network changed: try the direct stream now
+    await settle()
+    expect(a.mint).toHaveBeenCalledTimes(4)
+    expect(a.events.transport()).toBe('direct')
+    a.events.close()
+
+    FakeEventSource.all = []
+    const b = await fallenBack()
+    // the page slept: the clock moved on, the timer did not fire
+    vi.setSystemTime(Date.now() + DIRECT_RETRY_MS + 1)
+    page.visibility('visible')
+    await settle()
+    expect(b.mint).toHaveBeenCalledTimes(4)
+    expect(b.events.transport()).toBe('direct')
+    b.events.close()
+  })
+})
+
+describe("createBoardEvents: 'online' on a page that fell back (wave I1)", () => {
+  beforeEach(() => {
+    vi.useRealTimers()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+  })
+
+  it('a retry that swaps the stream replaces the cookie stream once; one that finds no direct origin replaces it with a fresh cookie stream', async () => {
+    const page = stubPage()
+    const a = await fallenBack({ mintWhen: (n) => (n === 4 ? { url: null } : undefined) })
+    await advance(10_000)
+    page.online()
+    await settle()
+    expect(a.mint).toHaveBeenCalledTimes(4)
+    expect(a.cookie.readyState).toBe(FakeEventSource.CLOSED)
+    expect(FakeEventSource.all).toHaveLength(2)
+    expect(openStreams()).toHaveLength(1)
+    expect(a.events.transport()).toBe('cookie')
+    a.events.close()
+
+    FakeEventSource.all = []
+    const b = await fallenBack()
+    await advance(10_000)
+    page.online()
+    await settle()
+    expect(b.mint).toHaveBeenCalledTimes(4)
+    expect(b.cookie.readyState).toBe(FakeEventSource.CLOSED)
+    expect(b.events.transport()).toBe('direct')
+    expect(FakeEventSource.all).toHaveLength(1) // no cookie stream was made on the way
+    b.events.close()
+  })
+})
+
+describe('createBoardEvents: a page that wakes up does not sit out the backoff (wave I1)', () => {
+  beforeEach(() => {
+    vi.useRealTimers()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+  })
+
+  it("'online' reconnects the direct stream at once instead of waiting out a 30 s backoff, and the backoff starts over", async () => {
+    const page = stubPage()
+    const d = direct({ mintWhen: () => new MintError(0) }) // offline: no response
+    await settle()
+    // attempts at 0, 1, 3, 7, 15, 31 s; the next would be at 61 s
+    await advance(31_000)
+    expect(d.mint).toHaveBeenCalledTimes(6)
+    await advance(5_000)
+    expect(d.mint).toHaveBeenCalledTimes(6)
+    page.online()
+    await settle()
+    expect(d.mint).toHaveBeenCalledTimes(7)
+    await advance(1_000)
+    expect(d.mint).toHaveBeenCalledTimes(8)
+    d.events.close()
+  })
+
+  it('the tab becoming visible does the same; becoming hidden does nothing', async () => {
+    const page = stubPage()
+    const d = direct({ mintWhen: (n) => (n < 9 ? new MintError(0) : undefined) })
+    await settle()
+    await advance(31_000)
+    await advance(10_000)
+    const before = d.mint.mock.calls.length
+    page.visibility('hidden')
+    await settle()
+    expect(d.mint).toHaveBeenCalledTimes(before)
+    page.visibility('visible')
+    await settle()
+    expect(d.mint).toHaveBeenCalledTimes(before + 1)
+    d.events.close()
+  })
+
+  it('a connected stream is replaced when the network returns (it may be dead: nothing told the page), by a fresh ticket and a fresh hello', async () => {
+    const page = stubPage()
+    const d = direct()
+    const resync = vi.fn()
+    d.events.onResync(resync)
+    await settle()
+    d.last()?.push(frame('hello', hello))
+    await settle()
+    await advance(10_000)
+    page.online()
+    await settle()
+    expect(d.wires[0]?.aborted).toBe(true)
+    expect(d.mint).toHaveBeenCalledTimes(2)
+    expect(d.calls).toHaveLength(2)
+    d.last()?.push(frame('hello', hello))
+    await settle()
+    expect(resync).toHaveBeenCalledTimes(2)
+    expect(d.events.transport()).toBe('direct')
+    d.events.close()
+  })
+
+  it('the cookie stream too: an open one is replaced when the network returns', () => {
+    vi.useRealTimers()
+    vi.useFakeTimers()
+    const page = stubPage()
+    const events = createBoardEvents('b-1', { ...COOKIE_ONLY, staleMs: 60_000 })
+    const first = FakeEventSource.all[0]
+    first?.send('hello', hello)
+    vi.advanceTimersByTime(10_000)
+    page.online()
+    expect(first?.readyState).toBe(FakeEventSource.CLOSED)
+    expect(FakeEventSource.all).toHaveLength(2)
+    expect(openStreams()).toHaveLength(1)
+    events.close()
+  })
+
+  it('the tab becoming visible leaves a stream that delivers pings alone, and replaces one that went silent while the page slept', async () => {
+    const page = stubPage()
+    const d = direct()
+    await settle()
+    d.last()?.push(frame('hello', hello))
+    await settle()
+    await advance(10_000)
+    d.last()?.push(frame('ping'))
+    await settle()
+    await advance(10_000)
+    page.visibility('visible')
+    await settle()
+    expect(d.mint).toHaveBeenCalledTimes(1)
+    // the laptop slept: the clock moved on, no timer fired and nothing arrived
+    vi.setSystemTime(Date.now() + STALE_STREAM_MS)
+    page.visibility('visible')
+    await settle()
+    expect(d.wires[0]?.aborted).toBe(true)
+    expect(d.mint).toHaveBeenCalledTimes(2)
+    d.events.close()
+  })
+
+  it('a stream the server told to wait ("replaced", 60 s) is left alone', async () => {
+    const page = stubPage()
+    const d = direct()
+    await settle()
+    d.last()?.push(frame('hello', hello))
+    await settle()
+    // 'replaced': the person has another tab; coming back must not push that one out in turn
+    d.last()?.push(`retry: 60000\n${frame('replaced')}`)
+    d.last()?.end()
+    await advance(5_000)
+    page.online()
+    page.visibility('visible')
+    await settle()
+    expect(d.mint).toHaveBeenCalledTimes(1)
+    await advance(55_000)
+    expect(d.mint).toHaveBeenCalledTimes(2)
+    d.events.close()
+  })
+
+  it('a connection opened less than a second ago is not reopened (a flapping tab is not a storm)', async () => {
+    const page = stubPage()
+    const d = direct({ mintWhen: () => new MintError(0) })
+    await settle()
+    page.online() // attempt 1 is 0 ms old
+    await settle()
+    expect(d.mint).toHaveBeenCalledTimes(1)
+    await advance(1_000) // attempt 2 at 1 s; the next regular one would be at 3 s
+    expect(d.mint).toHaveBeenCalledTimes(2)
+    await advance(500)
+    page.online()
+    await settle()
+    expect(d.mint).toHaveBeenCalledTimes(2)
+    await advance(500)
+    page.online()
+    await settle()
+    expect(d.mint).toHaveBeenCalledTimes(3) // at 2 s, not 3
+    d.events.close()
+  })
+
+  it('the cookie stream too: after an HTTP error it reopens at once when the page wakes up', () => {
+    vi.useRealTimers()
+    vi.useFakeTimers()
+    const page = stubPage()
+    const events = createBoardEvents('b-1', { ...COOKIE_ONLY, staleMs: 60_000 })
+    FakeEventSource.all[0]?.fail(FakeEventSource.CLOSED)
+    vi.advanceTimersByTime(1_000)
+    FakeEventSource.all[1]?.fail(FakeEventSource.CLOSED)
+    vi.advanceTimersByTime(2_000)
+    FakeEventSource.all[2]?.fail(FakeEventSource.CLOSED)
+    // 4 s of backoff, 1 s in
+    vi.advanceTimersByTime(1_000)
+    expect(FakeEventSource.all).toHaveLength(3)
+    page.online()
+    expect(FakeEventSource.all).toHaveLength(4)
+    expect(openStreams()).toHaveLength(1)
+    // one stream at a time: the old backoff timer must not open another
+    vi.advanceTimersByTime(10_000)
+    expect(FakeEventSource.all).toHaveLength(4)
+    events.close()
+  })
+
+  it('close() stops listening: the listeners are removed, and a closed stream never reopens', async () => {
+    const page = stubPage()
+    const added = vi.spyOn(page.win, 'addEventListener')
+    const addedDoc = vi.spyOn(page.doc, 'addEventListener')
+    const removed = vi.spyOn(page.win, 'removeEventListener')
+    const removedDoc = vi.spyOn(page.doc, 'removeEventListener')
+    const d = direct({ mintWhen: () => new MintError(0) })
+    await settle()
+    expect(added).toHaveBeenCalledWith('online', expect.any(Function))
+    expect(addedDoc).toHaveBeenCalledWith('visibilitychange', expect.any(Function))
+    d.events.close()
+    expect(removed).toHaveBeenCalledWith('online', added.mock.calls[0]?.[1])
+    expect(removedDoc).toHaveBeenCalledWith('visibilitychange', addedDoc.mock.calls[0]?.[1])
+    await advance(5_000)
+    page.online()
+    page.visibility('visible')
+    await settle()
+    expect(d.mint).toHaveBeenCalledTimes(1)
     expect(FakeEventSource.all).toHaveLength(0)
   })
 })

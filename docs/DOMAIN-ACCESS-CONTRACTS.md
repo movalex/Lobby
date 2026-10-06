@@ -17,7 +17,7 @@ This work adds no dependency, does not touch the lockfile and does not change `r
 
 | Who | How we know | May sign in | Gets on first sign-in | May create workspaces, projects, boards | May invite, create links or raise access |
 |---|---|---|---|---|---|
-| **Creator** | a verified email whose domain is exactly `darkburn.com` or `trailerparkgroup.com`, or an address on the exceptions list. Never a Clerk test-mode address (`+clerk_test`). | yes | a personal workspace (plus Dev Studio, dev only) | yes, where their workspace role allows it (owner/admin/member) | yes, where their board or workspace role allows it |
+| **Creator** | a verified email whose domain is exactly `darkburn.com`, `trailerparkgroup.com` or `trailerpark.com` (added 2026-10-06, decision 6), or an address on the exceptions list. Never a Clerk test-mode address (`+clerk_test`). | yes | a personal workspace (plus Dev Studio, dev only) | yes, where their workspace role allows it (owner/admin/member) | yes, where their board or workspace role allows it |
 | **Outside account** | any other signed-in account | yes | nothing | never, anywhere | never. They may still lower or remove access and revoke links |
 | **Name-only guest** (wave 3) | `users.kind = 'guest'` | through guest links | n/a | never (unchanged) | never (unchanged) |
 
@@ -27,6 +27,7 @@ Owner decisions, restated:
 3. An invitation to an email address works only for an account that has that verified address. Name-only guest links stay exactly as they are.
 4. Existing accounts keep every membership, grant and ownership they have today. Nothing is removed. The owner's personal account keeps creator rights through the exceptions list.
 5. Rollout: branch `next` → full gate → independent security review → staging deploy (the lead deploys).
+6. (2026-10-06) `trailerpark.com` is a creator domain too (Trailer Park Group's other domain), in the code default, so every environment that leaves `DRAFTROOM_CREATOR_DOMAINS` unset gets it.
 
 ## 1. Decisions this document makes
 
@@ -70,7 +71,7 @@ export interface CreatorPolicy {
   /** Exact, ASCII, lowercase addresses (the exceptions list). */
   emails: readonly string[]
 }
-export const DEFAULT_CREATOR_DOMAINS = ['darkburn.com', 'trailerparkgroup.com'] as const
+export const DEFAULT_CREATOR_DOMAINS = ['darkburn.com', 'trailerparkgroup.com', 'trailerpark.com'] as const // trailerpark.com: decision 6
 /** Counts as a creator domain only while the api RUNS the dev provider (D8). Never configurable. */
 export const DEV_CREATOR_DOMAIN = 'dev.invalid'
 ```

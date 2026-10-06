@@ -242,7 +242,7 @@ Every variable is documented with a safe placeholder in `.env.example`. Where ea
 | `DRAFTROOM_BACKUP_STORE`, `DRAFTROOM_BACKUP_INTERVAL_MS` | sync | `sync: false` / default ([backups](#backups)): `r2` on staging, set together with the sync's `R2_*`. |
 | `DATABASE_URL` | api | `fromDatabase … connectionString` (the internal URL). Internal connections don't require TLS. For `sslmode=require`, append it by hand; `verify-full` isn't supported internally. |
 | `CLERK_SECRET_KEY`, `CLERK_PUBLISHABLE_KEY` | api | `sync: false` |
-| `DRAFTROOM_CREATOR_DOMAINS` | api | not in `render.yaml`: unset means `darkburn.com,trailerparkgroup.com` ([domain access](#domain-access)) |
+| `DRAFTROOM_CREATOR_DOMAINS` | api | not in `render.yaml`: unset means `darkburn.com,trailerparkgroup.com,trailerpark.com` ([domain access](#domain-access)) |
 | `DRAFTROOM_CREATOR_EMAILS` | api | not in `render.yaml`: set by the lead in the Render Dashboard only, never in git ([domain access](#domain-access)) |
 | `DRAFTROOM_SYNC_INTERNAL_URL` | api | `fromService: {type: web, name: draftroom-staging-sync, property: hostport}` → `draftroom-staging-sync-xxxx:10000` → `http://…`. Required, non-loopback in production. |
 | `DRAFTROOM_API_INTERNAL_URL` | sync | `fromService: {type: web, name: draftroom-staging-api, property: hostport}`. Same rules. |
@@ -276,7 +276,7 @@ A creator has a **verified** sign-in address (primary or secondary) whose domain
 
 | Variable | Unset or blank | Set |
 |---|---|---|
-| `DRAFTROOM_CREATOR_DOMAINS` | `darkburn.com,trailerparkgroup.com` (every environment, production included) | Comma-separated exact ASCII domains, replacing the default. Punycode for internationalised domains. Subdomains are separate entries. `*.invalid` is refused. |
+| `DRAFTROOM_CREATOR_DOMAINS` | `darkburn.com,trailerparkgroup.com,trailerpark.com` (every environment, production included; `trailerpark.com` since 2026-10-06) | Comma-separated exact ASCII domains, replacing the default. Punycode for internationalised domains. Subdomains are separate entries. `*.invalid` is refused. |
 | `DRAFTROOM_CREATOR_EMAILS` | no exceptions | Comma-separated exact addresses, at most 50, never `+clerk_test`. Gmail dots and `+tags` are **not** normalised: list the exact address Clerk verified. |
 
 - **Fail closed.** No value turns the rule off. An invalid value stops the api at startup, with a message that names the variable and the entry number, never the value. The startup log shows `{ creators: { domains, exceptions: <count> } }` and never an address.
@@ -305,7 +305,7 @@ SELECT i.id, i.board_id, i.role, i.expires_at, i.created_by
    AND NOT EXISTS (
      SELECT 1 FROM user_emails e
       WHERE e.user_id = i.created_by AND e.source = 'clerk'
-        AND (e.domain IN ('darkburn.com', 'trailerparkgroup.com')
+        AND (e.domain IN ('darkburn.com', 'trailerparkgroup.com', 'trailerpark.com')
              OR e.email = ANY (string_to_array('<the DRAFTROOM_CREATOR_EMAILS value>', ','))));
 ```
 
@@ -962,17 +962,23 @@ docker run --rm -e DRAFTROOM_DATA_DIR=/var/data --tmpfs /var/data:mode=0755 -e P
 
 ## CI
 
-`.github/workflows/ci.yml` runs the same gate as `pnpm verify` on `ubuntu-24.04`:
+`.github/workflows/ci.yml` is one workflow of 9 jobs on `ubuntu-24.04`, all on Node from `.node-version` (24.19.0) and pnpm from `packageManager` (10.34.5); every job except `audit` installs with `pnpm install --frozen-lockfile` (`audit` runs `pnpm audit:prod` straight after setup, with no install). Actions are pinned to commit SHAs. The workflow's own header comment has the time budget and the per-job reasoning. The jobs:
 
-1. Node from `.node-version` (24.19.0), pnpm from `packageManager` (10.34.5).
-2. `pnpm install --frozen-lockfile`.
-3. apt `ffmpeg`.
-4. `pnpm lint`, `pnpm typecheck`, `pnpm fixtures`, `pnpm test`.
-5. The Playwright chromium headless shell plus branded Google Chrome for the `@chrome` tests (H.264 playback).
-6. `pnpm e2e`.
-7. Test results uploaded on failure.
+| Job | What it runs |
+| --- | --- |
+| `checks` | `pnpm lint`, `pnpm licence:check`, `pnpm typecheck` (which includes `apps/sync/tsconfig.node-safe.json` and the engine-probe tsconfig). `xbrowser`, `build-gates` and the two e2e jobs wait for this one and for nothing else; `probes`, also a browser job, has no `needs`. |
+| `unit` (4 shards) | `pnpm vitest run --shard=i/4` over every vitest project, after apt `ffmpeg` and `pnpm fixtures`. The `*.pg.test.ts` files skip here. |
+| `postgres` (3 shards) | The whole api project against a real Postgres 18 service (UTF8, a server per shard): `pnpm vitest run --project api --shard=i/3` with `DRAFTROOM_TEST_DATABASE_URL` set, so the migrations, lock-order, concurrency and skip-locked tests and every route run on a real `pg.Pool`. |
+| `probes` | The engine probes in a browser: `probe:engine` and, allowed to fail, the A3 text-layout probe. |
+| `audit` | `pnpm audit:prod` against the allowlisted advisories (`scripts/audit-check.mjs`). Allowed to fail. |
+| `xbrowser` | The WebKit and Firefox smoke (`e2e/excalidraw/xbrowser-smoke.spec.ts`). Allowed to fail. |
+| `build-gates` | The production-build, StrictMode and CSP gates (`excalidraw:prod`, `excalidraw:dev`, `csp:cutover`). |
+| `e2e-smoke` | Ten browser spec files on chromium. Only for `pull_request` events. |
+| `e2e` (6 shards) | The whole browser suite on chromium, plus Google Chrome for the `@chrome` H.264 playback test (`media-video.spec.ts`). Only for `push` events. |
 
-Actions are pinned to commit SHAs. **It has never run**: it starts working once the repository is published to GitHub. Expect to fix environment differences on the first run. The opt-in live R2 test never runs in CI (no `.env.deploy.local` there).
+**State (2026-10-05).** The only trigger is `workflow_dispatch` (Actions tab, "Run workflow"), since 878f8d93 on 2026-10-04. Pushes to `main` used 1,800 of the account's 2,000 free Actions minutes on 2026-10-03 (about 15 pushes on the deploy day, each running about 20 jobs); putting the `push` or `pull_request` triggers back is the owner's decision. A manual run starts 12 job instances (everything except `e2e-smoke` and `e2e`, whose `if:` names the pull-request and push events), so the whole browser e2e suite does not run in CI until the triggers change; it runs in each wave's integration gate on the development PC (chromium, two shards, one worker each; `docs/PROGRESS.md`).
+
+**It has run on GitHub; two jobs were red.** The workflow ran on GitHub on every push to `main` of 2026-10-03 and 04. The run logs were not available afterwards, so no job's result was recorded except that two were red: the unit shard 4 of 4 and the Postgres shard 3 of 3. Both were reproduced elsewhere and fixed in the tests (b44a8b43: `grant-paths.test.ts` compared grants in the database's collation order, and the `postgres:18` image's `en_US.utf8` differs from PGlite's bytewise order; 42a51def: a race in the sync tests' raw protocol clients, the likeliest cause of the unit shard, not proven; `docs/PROGRESS.md`, "CI red on GitHub"). 59a30ac7 repaired a third failure that 878f8d93 itself caused: `scripts/ci-workflow.test.ts` still required the removed triggers. **No run has been seen green since.** The `audit`, `xbrowser` and A3 jobs are `continue-on-error` and stay so until one is green (`docs/BACKLOG.md`, CI-1). The opt-in live R2 test never runs in CI (no `.env.deploy.local` there).
 
 ## Sources (read 2026-09-26/27)
 
