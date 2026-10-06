@@ -3,12 +3,23 @@
 // re-checks board access for every row, so a person who lost access to a board stops seeing that board's
 // notifications (and their comment snippets) immediately.
 // The kinds a web build from before 0024 cannot parse (NOTIFICATION_KINDS_SINCE_REV1) are left out of its
-// list and its unread count (`rev`, @draftroom/contracts client-rev.ts).
+// list and its unread count (`rev`, @draftroom/contracts client-rev.ts), and so are the kinds a build
+// from before 0025 cannot (NOTIFICATION_KINDS_SINCE_REV2: wave J's 'outsider_joined').
+//
+// Wave J: a team-only thread's items are shown only to someone on the team, which now needs a confirmed
+// creator (store.ts onTeam; the caller's status comes in as `creator`). 'outsider_joined' (an account
+// outside Dark Burn / TPG opened one of the recipient's boards for the first time) is listed only while
+// the recipient may manage access there, with the outsider's email domain. The actor's name and an
+// access request's message are shown without control, bidi or zero-width characters (stored before
+// they were cleaned on input; the owner decides on an access request from the bell).
 
 import {
+  cleanDisplayText,
   commentPlainText,
   knowsRev1,
+  knowsRev2,
   NOTIFICATION_KINDS_SINCE_REV1,
+  NOTIFICATION_KINDS_SINCE_REV2,
   type NotificationItem,
   type NotificationKind,
 } from '@draftroom/contracts'
@@ -21,7 +32,7 @@ import {
   resolveBoardRole,
   type WorkspaceRole,
 } from '@draftroom/permissions'
-import { idList, isTeamRole } from './store.ts'
+import { idList, onTeam } from './store.ts'
 
 export const MAX_NOTIFICATIONS_LISTED = 100
 const MAX_UNREAD_COUNTED = 1_000
@@ -52,7 +63,10 @@ export const MENTION_CAP_WINDOW_MS = 60 * 60_000
 /** pg_advisory_xact_lock namespace (the two-key form) of one board's capped notifications ("DRNC"). */
 export const NOTIFY_LOCK_NS = 0x44524e43
 
-type CommentNotificationKind = Exclude<NotificationKind, 'access_request' | 'access_granted'>
+type CommentNotificationKind = Exclude<
+  NotificationKind,
+  'access_request' | 'access_granted' | 'outsider_joined'
+>
 
 export interface NewNotification {
   userId: string
@@ -218,16 +232,24 @@ interface NotificationRow {
   /** F10: the thread's visibility (null: no thread), and the recipient's kind of user. */
   thread_visibility: 'everyone' | 'team' | null
   recipient_kind: string | null
+  /** outsider_joined: the actor's primary stored address's domain (wave J). */
+  actor_domain: string | null
 }
 
-const SELECT = `SELECT n.id, n.kind, n.board_id, n.thread_id, n.comment_id, n.created_at, n.read_at,
+/** The list query's SELECT; `source` is the parameter that holds the running provider (wave J). */
+const selectSql = (
+  source: string,
+) => `SELECT n.id, n.kind, n.board_id, n.thread_id, n.comment_id, n.created_at, n.read_at,
        b.title AS board_title, b.visibility, b.status,
        wm.role AS workspace_role, bm.role AS board_grant,
        a.id AS actor_id, a.name AS actor_name, a.color AS actor_color,
        c.body AS comment_body, c.deleted_at AS comment_deleted_at,
        ar.role_requested AS request_role, ar.message AS request_message, ar.status AS request_status,
        ag.role_granted AS granted_role,
-       t.visibility AS thread_visibility, ru.kind AS recipient_kind
+       t.visibility AS thread_visibility, ru.kind AS recipient_kind,
+       CASE WHEN n.kind = 'outsider_joined' THEN (
+         SELECT e.domain FROM user_emails e WHERE e.user_id = n.actor_id AND e.source = ${source}::text
+          ORDER BY e.is_primary DESC, e.seen_at, e.email LIMIT 1) END AS actor_domain
   FROM notifications n
   JOIN boards b ON b.id = n.board_id AND b.workspace_id = n.workspace_id
   LEFT JOIN users ru ON ru.id = n.user_id
@@ -249,8 +271,11 @@ const SELECT = `SELECT n.id, n.kind, n.board_id, n.thread_id, n.comment_id, n.cr
      ORDER BY r.decided_at DESC LIMIT 1
   ) ag ON true`
 
-/** Whether the recipient may still see this notification: board access now, comment not deleted. */
-function visible(r: NotificationRow): boolean {
+/**
+ * Whether the recipient may still see this notification: board access now, comment not deleted.
+ * `creator`: the recipient is a confirmed creator (wave J: needed to be on the team).
+ */
+function visible(r: NotificationRow, creator: boolean): boolean {
   const role = resolveBoardRole({
     workspaceRole: r.workspace_role,
     boardGrant: r.board_grant,
@@ -259,10 +284,14 @@ function visible(r: NotificationRow): boolean {
   if (r.comment_id && (r.comment_body === null || r.comment_deleted_at)) return false
   // F10: a team-only thread (made team-only after this was sent, or its thread is gone) is never
   // shown to someone outside the team: not in the bell, not in the count.
-  if (r.thread_id && r.thread_visibility !== 'everyone' && !isTeamRole(r.workspace_role, r.recipient_kind))
+  if (
+    r.thread_id &&
+    r.thread_visibility !== 'everyone' &&
+    !onTeam(r.workspace_role, r.recipient_kind, creator)
+  )
     return false
-  // Access requests are for people who can act on them.
-  if (r.kind === 'access_request') return can(role, 'manage_access', r.status)
+  // Access requests are for people who can act on them, and so is the notice about an outside account.
+  if (r.kind === 'access_request' || r.kind === 'outsider_joined') return can(role, 'manage_access', r.status)
   return can(role, 'view', r.status)
 }
 
@@ -282,14 +311,25 @@ function toItem(r: NotificationRow): NotificationItem {
     commentId: r.comment_id,
     actor:
       r.actor_id && r.actor_name !== null
-        ? { id: r.actor_id, name: r.actor_name, color: r.actor_color ?? '#888888' }
+        ? {
+            id: r.actor_id,
+            name: cleanDisplayText(r.actor_name) || 'Someone',
+            color: r.actor_color ?? '#888888',
+            // the outsider of an outsider_joined notice is outside by construction (wave J)
+            ...(r.kind === 'outsider_joined' ? { external: true } : {}),
+          }
         : null,
     snippet: snippetOf(r.comment_body),
     accessRequest:
       r.kind === 'access_request' && r.request_role && r.request_status
-        ? { role: r.request_role, message: r.request_message, status: r.request_status }
+        ? {
+            role: r.request_role,
+            message: r.request_message === null ? null : cleanDisplayText(r.request_message) || null,
+            status: r.request_status,
+          }
         : null,
     accessGranted: r.kind === 'access_granted' && r.granted_role ? { role: r.granted_role } : null,
+    ...(r.kind === 'outsider_joined' ? { outsiderJoined: { emailDomain: r.actor_domain } } : {}),
     createdAt: r.created_at.toISOString(),
     readAt: r.read_at ? r.read_at.toISOString() : null,
   }
@@ -297,33 +337,41 @@ function toItem(r: NotificationRow): NotificationItem {
 
 /**
  * The caller's notifications, newest first. `rev` is the caller's web build revision
- * (@draftroom/contracts client-rev.ts; 0 when omitted): a build from before 0024 gets no kind it cannot
- * parse, in the list or in the count.
+ * (@draftroom/contracts client-rev.ts; 0 when omitted): a build from before 0024 (or 0025) gets no kind
+ * it cannot parse, in the list or in the count. `creator`: the caller is a confirmed creator (wave J:
+ * team-only threads' items need it; omitted = not one, which fails closed). `emailSource`: the running
+ * provider (whose stored address gives an outsider notice its domain).
  */
 export async function listNotifications(
   q: Queryable,
   userId: string,
-  opts: { unreadOnly?: boolean; rev?: number } = {},
+  opts: { unreadOnly?: boolean; rev?: number; creator?: boolean; emailSource?: string } = {},
 ): Promise<{ notifications: NotificationItem[]; unreadCount: number }> {
-  const hidden = idList(knowsRev1(opts.rev ?? 0) ? [] : NOTIFICATION_KINDS_SINCE_REV1)
+  const rev = opts.rev ?? 0
+  const hidden = idList([
+    ...(knowsRev1(rev) ? [] : NOTIFICATION_KINDS_SINCE_REV1),
+    ...(knowsRev2(rev) ? [] : NOTIFICATION_KINDS_SINCE_REV2),
+  ])
+  const creator = opts.creator === true
+  const isVisible = (r: NotificationRow) => visible(r, creator)
   const rows = await q.query<NotificationRow>(
-    `${SELECT}
+    `${selectSql('$4')}
       WHERE n.user_id = $1 AND ($2::boolean = false OR n.read_at IS NULL)
         AND n.kind NOT IN (SELECT jsonb_array_elements_text($3::jsonb))
       ORDER BY n.seq DESC
       LIMIT ${MAX_NOTIFICATIONS_LISTED * 3}`,
-    [userId, opts.unreadOnly === true, hidden],
+    [userId, opts.unreadOnly === true, hidden, opts.emailSource ?? 'dev'],
   )
-  const notifications = rows.rows.filter(visible).slice(0, MAX_NOTIFICATIONS_LISTED).map(toItem)
+  const notifications = rows.rows.filter(isVisible).slice(0, MAX_NOTIFICATIONS_LISTED).map(toItem)
   const unread = await q.query<NotificationRow>(
-    `${SELECT}
+    `${selectSql('$3')}
       WHERE n.user_id = $1 AND n.read_at IS NULL
         AND n.kind NOT IN (SELECT jsonb_array_elements_text($2::jsonb))
       ORDER BY n.seq DESC
       LIMIT ${MAX_UNREAD_COUNTED}`,
-    [userId, hidden],
+    [userId, hidden, opts.emailSource ?? 'dev'],
   )
-  return { notifications, unreadCount: unread.rows.filter(visible).length }
+  return { notifications, unreadCount: unread.rows.filter(isVisible).length }
 }
 
 /** Marks the caller's own notifications read; ids of other people's notifications are ignored. */

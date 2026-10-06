@@ -7,6 +7,8 @@ import { type ReactNode, type RefObject, useLayoutEffect, useRef, useState } fro
 import { flushSync } from 'react-dom'
 import { UserMenu } from '../auth/UserMenu.tsx'
 import { Mark } from '../brand/Wordmark.tsx'
+import { useBoardOutside } from '../features/people/outside.ts'
+import { SharedOutsideMarker } from '../features/people/SharedOutside.tsx'
 import { useIsGuest } from '../invite/guest.tsx'
 import { type BoardRole, can } from '../lib/permissions.ts'
 import { linkClick, workspacePath } from '../lib/routing.ts'
@@ -82,6 +84,9 @@ export function TopBarFrame({
   // DANA-11 / F14 / PRI-18: viewers, commenters and guests cannot hand out access: "People", not primary.
   const share = shareButtonView(role, useIsGuest())
   const pillIcon = board.status !== 'archived' && can(role, 'comment', board.status) ? 'comment' : 'eye'
+  // Wave J: "Shared outside" while someone outside Dark Burn / TPG, a guest or an open link can open the
+  // board (the server's flag on the board's outside list, refetched when sharing changes).
+  const { snap: outside } = useBoardOutside(board.id)
   // PRI-02: at 768 px and below the feature controls (present, export, timer, sharing badge) move
   // into a "⋯" menu; at 480 px and below the people list and the account button do too. The title,
   // the bell and Share always stay in the bar.
@@ -160,6 +165,7 @@ export function TopBarFrame({
           <span className="dr-pill__label">{pill.label}</span>
         </button>
       )}
+      {outside.sharedOutside && <SharedOutsideMarker testId="topbar-shared-outside" compact={phone} />}
       <div className="dr-topbar__spacer" />
       {/* Wave 4 (present-live): rejoin a presentation to everyone; the people list (features/people). */}
       {liveChip}

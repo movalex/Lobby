@@ -10,7 +10,7 @@
 // the overlay root sits under the host slots, so a sheet in it was covered by the tools and the ≡ button
 // (W5-07). Beside their marker, popovers also end above the toolbar's row (`toolbarBand`).
 
-import type { CommentThread } from '@draftroom/contracts'
+import { type CommentThread, TEAM_ONLY_HINT } from '@draftroom/contracts'
 import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -25,6 +25,7 @@ import { createPortal } from 'react-dom'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { initialsFor, safeColor } from '../../../lib/identity.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { ExternalTag } from '../../people/ExternalTag.tsx'
 import { Composer } from '../Composer.tsx'
 import { CheckIcon, CloseIcon } from '../icons.tsx'
 import { PIN_SIZE as PIN, type PopoverLayout, popoverLayout } from '../layout.ts'
@@ -289,6 +290,7 @@ function HoverPreview({ ctx, pins }: { ctx: CanvasFeatureContext; pins: PlacedPi
     >
       <div className="dr-cpreview__head">
         <strong>{shown?.author.name ?? thread.createdBy.name}</strong>
+        {(shown?.author ?? thread.createdBy).external && <ExternalTag compact />}
         {thread.status === 'resolved' && <span className="dr-cpreview__tag">Resolved</span>}
         {pin.state === 'mentioned' && (
           <span className="dr-cpreview__tag dr-cpreview__tag--at">Mentions you</span>
@@ -417,9 +419,7 @@ function NewThreadComposer({ ctx, host }: { ctx: CanvasFeatureContext; host: HTM
               <span className="dr-cteamtoggle__track" aria-hidden="true" />
               <span className="dr-cteamtoggle__text">
                 <strong>Team only</strong>
-                <span>
-                  {teamOnly ? 'Guests and client links won’t see it' : 'Everyone on the board sees it'}
-                </span>
+                <span>{teamOnly ? TEAM_ONLY_HINT : 'Everyone on the board sees it'}</span>
               </span>
             </label>
           )}

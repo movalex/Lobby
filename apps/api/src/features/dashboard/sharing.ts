@@ -1,5 +1,8 @@
 // Sharing state for the board header badge (PRS-03), the detailed "who has access and why" list for
-// the Share dialog (PRS-02), and transfer of ownership.
+// the Share dialog (PRS-02), and transfer of ownership. Wave J (outside markers, ./outside.ts): the
+// badge's state says whether the board is shared outside Dark Burn / TPG, and the member list (a
+// manager-only list) says who is outside, with their email domain; the outside routes and hooks are
+// registered from here.
 
 import { type ShareMember, TransferOwnershipInput } from '@draftroom/contracts'
 import {
@@ -19,6 +22,13 @@ import { actorOf } from '../../notifier.ts'
 import { listBoardMembers, loadTarget } from '../../routes/members.ts'
 import { toUser, type UserRow } from '../../serialize.ts'
 import type { FeatureContext } from '../context.ts'
+import {
+  cleanName,
+  originAmong,
+  outsideFieldsOf,
+  registerOutsideRoutes,
+  sharedOutsideAmong,
+} from './outside.ts'
 import { publishSharingChanged } from './shared.ts'
 
 const RANK = Object.fromEntries(BOARD_ROLES.map((r, i) => [r, BOARD_ROLES.length - i])) as Record<
@@ -35,6 +45,7 @@ const M1_SHARING_ROUTES: Record<string, (method: string, body: unknown) => boole
 
 export function registerSharingRoutes(app: FastifyInstance, ctx: FeatureContext): void {
   const { db, now, notifier } = ctx
+  registerOutsideRoutes(app, ctx)
 
   // M1's visibility and member routes publish nothing, so everyone else's header badge would wait
   // for its slow refresh. A root hook (bound to every route at ready time, like the starred flag in
@@ -73,11 +84,13 @@ export function registerSharingRoutes(app: FastifyInstance, ctx: FeatureContext)
       )
       pendingRequests = row.n
     }
+    const shared = await sharedOutsideAmong(db, ctx.identity.lookup, now(), [board.id])
     return {
       visibility: board.visibility,
       links: links.rows.map((l) => ({ role: l.role, expiresAt: l.expires_at.toISOString() })),
       directCount: direct.n,
       pendingRequests,
+      sharedOutside: shared.has(board.id),
     }
   })
 
@@ -122,6 +135,12 @@ export function registerSharingRoutes(app: FastifyInstance, ctx: FeatureContext)
         db,
         rows.rows.map((r) => r.id),
       )
+      // Wave J: who is outside Dark Burn / TPG, with their domain (this list is for managers only).
+      const origin = await originAmong(
+        db,
+        ctx,
+        rows.rows.map((r) => r.id),
+      )
       const members: ShareMember[] = []
       for (const { workspace_role, board_grant, via_link, link_ends_at, ...u } of rows.rows) {
         const role = resolveBoardRole({
@@ -132,7 +151,7 @@ export function registerSharingRoutes(app: FastifyInstance, ctx: FeatureContext)
         if (!role) continue
         const viaReviewLink = board_grant !== null && via_link
         members.push({
-          user: toUser(u),
+          user: { ...toUser(u), name: cleanName(u.name) },
           role,
           source: board_grant && board_grant === role ? 'grant' : 'workspace',
           grant: board_grant,
@@ -145,6 +164,7 @@ export function registerSharingRoutes(app: FastifyInstance, ctx: FeatureContext)
           viaReviewLink,
           linkEndsAt: viaReviewLink && link_ends_at ? link_ends_at.toISOString() : null,
           canOwn: canOwn.get(u.id) ?? false,
+          ...outsideFieldsOf(origin.get(u.id)),
         })
       }
       members.sort((a, b) => RANK[b.role] - RANK[a.role] || a.user.name.localeCompare(b.user.name))

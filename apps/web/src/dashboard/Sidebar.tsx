@@ -5,6 +5,18 @@ import { Wordmark } from '../brand/Wordmark.tsx'
 import { type DashboardSection, linkClick, navigate, workspacePath } from '../lib/routing.ts'
 import { MenuButton } from '../ui/Menu.tsx'
 import { RenameInput } from '../ui/RenameInput.tsx'
+import {
+  InternalOnlySection,
+  type InternalOnlyState,
+  OutsideAccessDialog,
+  useInternalOnly,
+} from './InternalOnly.tsx'
+import {
+  outsideAccessIn,
+  type ProjectMenuAction,
+  projectInternalOnly,
+  projectMenuItems,
+} from './internal-only-model.ts'
 
 const WS_ROLE_LABEL: Record<WorkspaceSummary['role'], string> = {
   owner: 'Owner',
@@ -51,6 +63,8 @@ export function Sidebar({
   const toggleRef = useRef<HTMLButtonElement>(null)
   // Guests reach only the boards shared with them: Archived and Trash hold nothing of theirs to act on.
   const guest = workspace.role === 'guest'
+  // Wave J: the "Internal only" switches (members and above read them; owners and admins change them).
+  const internal = useInternalOnly(workspace.id, canSeeProjects)
 
   useEffect(() => {
     if (!open) return
@@ -117,6 +131,12 @@ export function Sidebar({
       </div>
       <div className="dr-side__body" id={bodyId}>
         <WorkspaceSwitcher workspace={workspace} workspaces={workspaces} />
+        <InternalOnlySection
+          workspaceId={workspace.id}
+          workspaceName={workspace.name}
+          projects={projects}
+          state={internal}
+        />
         <nav aria-label="Boards">
           <ul className="dr-nav">
             {link(
@@ -156,6 +176,7 @@ export function Sidebar({
             navClick={navClick}
             onCreateProject={onCreateProject}
             onRenameProject={onRenameProject}
+            internal={internal}
           />
         </nav>
         {/* Guests do not see the workspace's storage (the api answers them 403). */}
@@ -184,6 +205,7 @@ function SidebarProjects({
   navClick,
   onCreateProject,
   onRenameProject,
+  internal,
 }: {
   workspaceId: string
   section: DashboardSection
@@ -199,7 +221,9 @@ function SidebarProjects({
   navClick(href: string): (e: MouseEvent<HTMLAnchorElement>) => void
   onCreateProject(name: string): Promise<void>
   onRenameProject(project: Project, name: string): Promise<void>
+  internal: InternalOnlyState
 }) {
+  const [reviewing, setReviewing] = useState<Project | null>(null)
   // Guests cannot list projects; they only reach the boards shared with them.
   if (!canSeeProjects) return null
   return (
@@ -246,6 +270,8 @@ function SidebarProjects({
               canRename={canRenameProjects}
               onNavigate={navClick}
               onRename={() => setRenaming(p.id)}
+              internal={internal}
+              onReview={() => setReviewing(p)}
             />
           ),
         )}
@@ -265,6 +291,15 @@ function SidebarProjects({
         <p className="dr-nav__hint">
           {projectsError ?? (canCreateProjects ? PROJECTS_HINT : PROJECTS_HINT_NO_CREATE)}
         </p>
+      )}
+      {reviewing && internal.settings?.outsideAccess && (
+        <OutsideAccessDialog
+          workspaceId={workspaceId}
+          title={`Outside access to ${reviewing.name}`}
+          access={outsideAccessIn(internal.settings, { kind: 'project', projectId: reviewing.id })}
+          onChanged={internal.reload}
+          onClose={() => setReviewing(null)}
+        />
       )}
     </>
   )
@@ -442,6 +477,8 @@ function ProjectLink({
   canRename,
   onNavigate,
   onRename,
+  internal,
+  onReview,
 }: {
   project: Project
   href: string
@@ -449,7 +486,17 @@ function ProjectLink({
   canRename: boolean
   onNavigate(href: string): (e: MouseEvent<HTMLAnchorElement>) => void
   onRename(): void
+  internal: InternalOnlyState
+  onReview(): void
 }) {
+  const items = projectMenuItems({ canRename, settings: internal.settings, projectId: project.id })
+  const isInternal = projectInternalOnly(internal.settings, project.id)
+  const onSelect = (action: ProjectMenuAction) => {
+    if (action === 'rename') onRename()
+    else if (action === 'internal-on') void internal.setProject(project.id, true)
+    else if (action === 'internal-off') void internal.setProject(project.id, false)
+    else onReview()
+  }
   return (
     <li className="dr-nav__row" data-testid="project-item" data-project-id={project.id}>
       <a
@@ -460,12 +507,17 @@ function ProjectLink({
       >
         <span className="dr-nav__swatch" aria-hidden="true" />
         <span className="dr-nav__label">{project.name}</span>
+        {isInternal && (
+          <span className="dr-nav__internal" data-testid="project-internal-only" title="Internal only">
+            Internal
+          </span>
+        )}
       </a>
-      {canRename && (
+      {items.length > 0 && (
         <MenuButton
           label={`Project options for ${project.name}`}
-          items={[{ action: 'rename', label: 'Rename' }]}
-          onSelect={onRename}
+          items={items}
+          onSelect={onSelect}
           className="dr-iconbtn dr-iconbtn--sm dr-nav__more"
           testId="project-menu"
         >

@@ -140,7 +140,18 @@ export function rewriteMentionTokens(body: string, keep: (userId: string) => str
 
 // ---- entities ------------------------------------------------------------------------------------
 
-export const CommentUserRef = z.object({ id: userIdSchema, name: z.string(), color: z.string() })
+/**
+ * Wave J (outside markers): `external` is true for an account outside Dark Burn Creative and Trailer Park
+ * Group (the "External" tag next to a comment's author; name-only guests carry " (guest)" in their name
+ * instead). The same for every viewer (threads are published as board events), and never a domain.
+ * Absent from an older api.
+ */
+export const CommentUserRef = z.object({
+  id: userIdSchema,
+  name: z.string(),
+  color: z.string(),
+  external: z.boolean().optional(),
+})
 export type CommentUserRef = z.infer<typeof CommentUserRef>
 
 export const ThreadComment = z.object({
@@ -220,7 +231,9 @@ export const CommentsDeletedEvent = z.object({ threadId: CommentThreadId, commen
  * follow was resolved; access_request: someone asked for access (other features insert these);
  * new_comment (DANA-02): someone started a thread on a board you own (at most a few unread per author);
  * access_granted (PRI-09b, 0024): a board owner (the actor) approved your access request. The api lists
- * access_granted only to a web build that declares LOBBY_CLIENT_REV >= 1 (client-rev.ts).
+ * access_granted only to a web build that declares LOBBY_CLIENT_REV >= 1 (client-rev.ts);
+ * outsider_joined (wave J, 0025): an account outside Dark Burn / TPG (the actor) opened one of your
+ * boards for the first time; listed only to a web build that declares LOBBY_CLIENT_REV >= 2.
  */
 export const NotificationKind = z.enum([
   'mention',
@@ -229,10 +242,13 @@ export const NotificationKind = z.enum([
   'access_request',
   'new_comment',
   'access_granted',
+  'outsider_joined',
 ])
 export type NotificationKind = z.infer<typeof NotificationKind>
 /** Kinds a web build from before 0024 cannot parse: left out of its list and unread count. */
 export const NOTIFICATION_KINDS_SINCE_REV1: readonly NotificationKind[] = ['access_granted']
+/** Kinds a web build from before 0025 (revision 1) cannot parse. */
+export const NOTIFICATION_KINDS_SINCE_REV2: readonly NotificationKind[] = ['outsider_joined']
 
 /** What an access-request notification asks for (the request itself, as it stands now). */
 export const NotificationAccessRequest = z.object({
@@ -260,6 +276,11 @@ export const NotificationItem = z.object({
   accessRequest: NotificationAccessRequest.nullable().optional(),
   /** access_granted only: the role the approved request gave (absent from an api before 0024). */
   accessGranted: NotificationAccessGranted.nullable().optional(),
+  /**
+   * outsider_joined only (wave J): the verified email domain of the outside account that joined (the
+   * recipient owns the board, so may see it); null when none is stored.
+   */
+  outsiderJoined: z.object({ emailDomain: z.string().nullable() }).nullable().optional(),
   createdAt: isoDate,
   readAt: isoDate.nullable(),
 })

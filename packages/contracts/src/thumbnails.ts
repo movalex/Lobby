@@ -58,10 +58,19 @@ export type ThumbnailMetaResponse = z.infer<typeof ThumbnailMetaResponse>
  */
 export const BoardThumbnailFields = { thumbnailVersion: ThumbnailVersion.nullable().default(null) }
 
-/** The dashboard's board list: M1's list with the dashboard's `starred` and this `thumbnailVersion`. */
+/**
+ * The dashboard's board list: M1's list with the dashboard's `starred`, this `thumbnailVersion` and (wave
+ * J, ./outside.ts) `sharedOutside`: the card's "Shared outside" marker (absent from an older server: read
+ * it as false; optional, not defaulted, so code that builds a board of its own keeps compiling).
+ */
 export const ListBoardsWithThumbnailsResponse = z.object({
   get boards() {
-    return z.array(ListBoardsWithStarsResponse.shape.boards.element.extend(BoardThumbnailFields))
+    return z.array(
+      ListBoardsWithStarsResponse.shape.boards.element.extend({
+        ...BoardThumbnailFields,
+        sharedOutside: z.boolean().optional(),
+      }),
+    )
   },
 })
 export type BoardWithThumbnail = z.infer<typeof ListBoardsWithThumbnailsResponse>['boards'][number]

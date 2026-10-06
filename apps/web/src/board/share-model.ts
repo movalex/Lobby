@@ -3,7 +3,11 @@ import {
   DOMAIN_ACCESS_MESSAGES,
   type EmailInviteFallbackReason,
   type EmailInviteResult,
+  type InternalOnlyScope,
   InviteEmail,
+  type OutsideStatus,
+  outsideConfirmText,
+  unconfirmedConfirmText,
   type WorkspaceMember,
 } from '@draftroom/contracts'
 import { BOARD_ROLES, type BoardRole, type BoardVisibility, roleAtLeast } from '../lib/permissions.ts'
@@ -528,4 +532,48 @@ export function emailInviteOutcome(
         link: result.url,
       }
   }
+}
+
+// ---- wave J: people outside Dark Burn / TPG (@draftroom/contracts outside.ts) -----------------------
+
+/**
+ * Whether giving this person access asks first: they are outside, or Lobby cannot tell. Creators, and
+ * an api from before wave J (no field), ask nothing; the server decides either way.
+ */
+export const asksBeforeGiving = (outside: OutsideStatus | undefined): boolean =>
+  outside === true || outside === 'unconfirmed'
+
+/**
+ * Said instead of inviting when the server's address check failed (the network, the server, a 503):
+ * the dialog never skips its question silently. A 4xx says the server's own words (429: too many checks).
+ */
+export const ADDRESS_CHECK_FAILED =
+  'Lobby couldn’t check that address just now, so nothing was sent. Try again.'
+
+/** How the confirm names an account: with its masked address when the server sent one. */
+export const outsideWho = (name: string, emailHint: string | null | undefined): string =>
+  emailHint ? `${name} (${emailHint})` : name
+
+/** The confirm's words for this person or address (the owner's sentence; a softer one when unknown). */
+export const outsideConfirmFor = (who: string, outside: OutsideStatus | undefined): string =>
+  outside === 'unconfirmed' ? unconfirmedConfirmText(who) : outsideConfirmText(who)
+
+/** A new grant, or a higher one; lowering or keeping a role never asks. */
+export function raisesAccess(current: BoardRole | null | undefined, next: BoardRole): boolean {
+  if (!current) return true
+  return BOARD_ROLES.indexOf(next) < BOARD_ROLES.indexOf(current)
+}
+
+/** "Or pick someone from the workspace…" options: an outside account says so in its option text. */
+export function pickerOptionText(m: WorkspaceMember): string {
+  const base = `${m.user.name}${m.user.handle ? ` (@${m.user.handle})` : ''}`
+  if (m.outside !== true) return base
+  return `${base} · ${m.emailDomain ? `External · ${m.emailDomain}` : 'External'}`
+}
+
+/** The Share dialog's note while the board's workspace or project is internal only. */
+export function internalOnlyNote(scope: InternalOnlyScope): string {
+  return scope === 'workspace'
+    ? 'This workspace is internal only: invite people at Dark Burn Creative or Trailer Park Group only. Review, workshop and guest links are off.'
+    : 'This board’s project is internal only: invite people at Dark Burn Creative or Trailer Park Group only. Review, workshop and guest links are off.'
 }

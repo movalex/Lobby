@@ -42,12 +42,22 @@
 // duplicate; accepting an invitation, an email invite and approving an access request insert it with a
 // no-op DO UPDATE that locks an existing row), so a removal either waits for the grant and sweeps it, or
 // goes first and the grant finds nobody (the lock order is in access.ts).
+//
+// Wave J (outside markers, features/dashboard/outside.ts): GET members tells owners and admins who is
+// outside Dark Burn / TPG (with the verified email domain and the masked address), and so does
+// GET members?boardId=<board> to someone who manages that board of this workspace (the Share dialog's
+// picker and typed @handles: a board owner is usually a plain member); nobody else gets them. The
+// "Internal only" switches of the workspace and its projects live here: owners and admins
+// turn one on; turning one off hands outside sharing back, so it also needs a creator. Turning one on
+// removes nothing: GET …/internal-only lists the outside access that remains, for the owners to remove.
 
 import {
   CreateProjectInput,
+  type InternalOnlySettings,
   PatchProjectInput,
   PatchWorkspaceMemberInput,
   ProjectId,
+  SetInternalOnlyInput,
   WORKSPACE_MEMBER_CODES,
   type WorkspaceMember,
 } from '@draftroom/contracts'
@@ -55,6 +65,7 @@ import { newId, type Queryable } from '@draftroom/db'
 import {
   type BoardRole,
   type BoardVisibility,
+  can,
   canCreateInWorkspace,
   canManageWorkspace,
   resolveBoardRole,
@@ -62,11 +73,18 @@ import {
   type WorkspaceRole,
 } from '@draftroom/permissions'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
-import { isUserId, isWorkspaceId, requireWorkspaceRole } from '../access.ts'
+import { isBoardId, isUserId, isWorkspaceId, loadBoardAccess, requireWorkspaceRole } from '../access.ts'
 import { audit } from '../audit.ts'
 import { roleRequiresCreator } from '../auth/identity.ts'
 import type { AppContext, Params } from '../context.ts'
 import { ApiError, badRequest, conflict, forbidden, notFound, parse } from '../errors.ts'
+import {
+  auditInternalOnly,
+  cleanName,
+  originAmong,
+  outsideAccessIn,
+  outsideFieldsOf,
+} from '../features/dashboard/outside.ts'
 import { type AccessActor, actorOf } from '../notifier.ts'
 import { type ProjectRow, toProject, toUser, type UserRow } from '../serialize.ts'
 
@@ -272,7 +290,140 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
     const { wid = '' } = req.params as Params
     const role = await requireWorkspaceRole(db, wid, user.id)
     if (!canCreateInWorkspace(role)) throw forbidden()
-    return { members: await listWorkspaceMembers(db, wid) }
+    // Names without control, bidi or zero-width characters for everyone (names stored before wave J).
+    const members = (await listWorkspaceMembers(db, wid)).map((m) => ({
+      ...m,
+      user: { ...m.user, name: cleanName(m.user.name) },
+    }))
+    if (!canManageWorkspace(role) && !(await managesBoardIn(wid, user.id, req.query))) return { members }
+    // Wave J: owners and admins, and a manager of the board the picker is for, see who is outside Dark
+    // Burn / TPG (the people picker's External tag and the one-time confirm before adding them).
+    const origin = await originAmong(
+      db,
+      ctx,
+      members.map((m) => m.user.id),
+    )
+    return { members: members.map((m) => ({ ...m, ...outsideFieldsOf(origin.get(m.user.id)) })) }
+  })
+
+  /**
+   * `?boardId=` names a board of this workspace that the caller may manage access to (any other value,
+   * or none: false, the same answer as before, so it reveals nothing about other boards).
+   */
+  async function managesBoardIn(wid: string, userId: string, query: unknown): Promise<boolean> {
+    const boardId = (query as { boardId?: unknown } | null)?.boardId
+    if (typeof boardId !== 'string' || !isBoardId(boardId)) return false
+    const access = await loadBoardAccess(db, boardId, userId)
+    return (
+      !!access && access.board.workspace_id === wid && can(access.role, 'manage_access', access.board.status)
+    )
+  }
+
+  // ---- Wave J: "Internal only" (a workspace, and each of its projects) --------------------------------
+
+  /** The switches as the caller may see them; the outside access that remains for owners and admins. */
+  async function internalOnlySettings(
+    q: Queryable,
+    wid: string,
+    userId: string,
+    role: WorkspaceRole,
+  ): Promise<InternalOnlySettings> {
+    const ws = await q.one<{ internal_only: boolean }>('SELECT internal_only FROM workspaces WHERE id = $1', [
+      wid,
+    ])
+    const projects = await q.query<{ id: string; internal_only: boolean }>(
+      'SELECT id, internal_only FROM projects WHERE workspace_id = $1 ORDER BY created_at, id',
+      [wid],
+    )
+    const manager = canManageWorkspace(role)
+    // The review list is only shown while a switch is on: computed only then.
+    const anyOn = ws.internal_only || projects.rows.some((p) => p.internal_only)
+    return {
+      workspace: ws.internal_only,
+      projects: projects.rows.map((p) => ({ projectId: p.id, internalOnly: p.internal_only })),
+      canChange: manager,
+      canTurnOff: manager && (await ctx.identity.isCreatorUser(q, userId)),
+      outsideAccess: manager && anyOn ? await outsideAccessIn(q, ctx, wid) : null,
+    }
+  }
+
+  app.get('/api/workspaces/:wid/internal-only', async (req) => {
+    const user = await ctx.requireUser(req)
+    const { wid = '' } = req.params as Params
+    const role = await requireWorkspaceRole(db, wid, user.id)
+    if (!canCreateInWorkspace(role)) throw forbidden()
+    return internalOnlySettings(db, wid, user.id, role)
+  })
+
+  /**
+   * One switch's change, under the workspace row's lock (FOR NO KEY UPDATE, as member changes take it):
+   * owners and admins only; turning it OFF hands outside sharing back, so it is creator-only (D4).
+   */
+  async function setSwitch(
+    tx: Queryable,
+    input: { wid: string; userId: string; route: string; on: boolean; projectId: string | null },
+  ): Promise<WorkspaceRole> {
+    const ws = await tx.maybeOne('SELECT id FROM workspaces WHERE id = $1 FOR NO KEY UPDATE', [input.wid])
+    if (!ws) throw notFound()
+    const role = await requireWorkspaceRole(tx, input.wid, input.userId)
+    if (!canManageWorkspace(role)) throw forbidden()
+    const current = input.projectId
+      ? await tx.maybeOne<{ internal_only: boolean }>(
+          'SELECT internal_only FROM projects WHERE id = $1 AND workspace_id = $2 FOR UPDATE',
+          [input.projectId, input.wid],
+        )
+      : await tx.one<{ internal_only: boolean }>('SELECT internal_only FROM workspaces WHERE id = $1', [
+          input.wid,
+        ])
+    if (!current) throw notFound()
+    if (current.internal_only === input.on) return role
+    if (!input.on)
+      await ctx.identity.requireCreator(tx, input.userId, 'share', { route: input.route, by: 'route' })
+    if (input.projectId)
+      await tx.query('UPDATE projects SET internal_only = $2 WHERE id = $1', [input.projectId, input.on])
+    else await tx.query('UPDATE workspaces SET internal_only = $2 WHERE id = $1', [input.wid, input.on])
+    await auditInternalOnly(tx, {
+      workspaceId: input.wid,
+      actorId: input.userId,
+      scope: input.projectId ? 'project' : 'workspace',
+      target: input.projectId ?? input.wid,
+      on: input.on,
+      at: now(),
+    })
+    return role
+  }
+
+  app.put('/api/workspaces/:wid/internal-only', async (req) => {
+    const user = await ctx.requireUser(req)
+    const { wid = '' } = req.params as Params
+    const { internalOnly } = parse(SetInternalOnlyInput, req.body)
+    if (!isWorkspaceId(wid)) throw notFound()
+    return db.transaction(async (tx) => {
+      const route = req.routeOptions.url ?? ''
+      const role = await setSwitch(tx, { wid, userId: user.id, route, on: internalOnly, projectId: null })
+      return internalOnlySettings(tx, wid, user.id, role)
+    })
+  })
+
+  app.put('/api/projects/:pid/internal-only', async (req) => {
+    const user = await ctx.requireUser(req)
+    const { pid = '' } = req.params as Params
+    const { internalOnly } = parse(SetInternalOnlyInput, req.body)
+    if (!ProjectId.safeParse(pid).success) throw notFound()
+    const project = await db.maybeOne<{ workspace_id: string; role: WorkspaceRole | null }>(
+      `SELECT p.workspace_id, m.role FROM projects p
+         LEFT JOIN workspace_members m ON m.workspace_id = p.workspace_id AND m.user_id = $2
+        WHERE p.id = $1`,
+      [pid, user.id],
+    )
+    // Guests cannot list projects, so for them a project id is as invisible as another tenant's.
+    if (!project || !canCreateInWorkspace(project.role)) throw notFound()
+    const wid = project.workspace_id
+    return db.transaction(async (tx) => {
+      const route = req.routeOptions.url ?? ''
+      const role = await setSwitch(tx, { wid, userId: user.id, route, on: internalOnly, projectId: pid })
+      return internalOnlySettings(tx, wid, user.id, role)
+    })
   })
 
   app.patch('/api/workspaces/:wid/members/:uid', async (req) => {

@@ -6,12 +6,22 @@
 // Privacy: POST answers the same 202 whether or not the board exists, whether a row was written, and
 // whether a per-board limit swallowed it, so a request never reveals a board. Only the per-user
 // limit (independent of the board) answers 429.
+//
+// Wave J (outside markers, ./outside.ts): every request the owners see says whether the requester is
+// outside Dark Burn / TPG, with their verified email domain and masked address (these lists are for
+// managers only), so a self-chosen name cannot pass for a colleague's (the audit's
+// AUTHZ-NO-OUTSIDER-SIGNAL); the web asks once before approving an outside account. The message is
+// cleaned of control, bidi and zero-width characters on input (contracts), and so is the name shown.
+// While the board's workspace or project is internal only, approving anyone who is not a confirmed
+// creator is refused (409 INTERNAL_ONLY); denying stays open.
 
 import {
   AccessRequestId,
   type AccessRequest as ApiAccessRequest,
   ApproveAccessRequestInput,
   CreateAccessRequestInput,
+  cleanDisplayText,
+  type OutsideInfo,
 } from '@draftroom/contracts'
 import type { Queryable } from '@draftroom/db'
 import {
@@ -30,6 +40,7 @@ import { ApiError, conflict, notFound, parse } from '../../errors.ts'
 import { actorOf } from '../../notifier.ts'
 import { toUser } from '../../serialize.ts'
 import type { FeatureContext } from '../context.ts'
+import { assertRaiseAllowed, boardInternalOnly, cleanName, originAmong, outsideFieldsOf } from './outside.ts'
 import { DAY_MS, newAccessRequestId, publishSharingChanged, trySavepoint, UserRateLimiter } from './shared.ts'
 
 /** Per user, across all boards: 10 requests per 10 minutes. */
@@ -81,19 +92,24 @@ const RANK: Record<BoardRole, number> = { viewer: 1, commenter: 2, editor: 3, ow
 const boardRank = (column: string) =>
   `array_position(ARRAY['viewer', 'commenter', 'editor', 'owner']::text[], ${column})`
 
-function serialize(r: ListedRow, visibility: BoardVisibility): ApiAccessRequest {
+function serialize(
+  r: ListedRow,
+  visibility: BoardVisibility,
+  origin: ReadonlyMap<string, OutsideInfo>,
+): ApiAccessRequest {
   return {
     id: r.id,
     boardId: r.board_id,
     user: toUser({
       id: r.user_id,
-      name: r.u_name,
+      name: cleanName(r.u_name),
       handle: r.u_handle,
       color: r.u_color,
       avatar_url: r.u_avatar_url,
     }),
     roleRequested: r.role_requested,
-    message: r.message,
+    // Stored before messages were cleaned on input (wave J): cleaned on the way out too.
+    message: r.message === null ? null : cleanDisplayText(r.message) || null,
     status: r.status,
     createdAt: r.created_at.toISOString(),
     updatedAt: r.updated_at.toISOString(),
@@ -104,6 +120,7 @@ function serialize(r: ListedRow, visibility: BoardVisibility): ApiAccessRequest 
     }),
     decidedAt: r.decided_at ? r.decided_at.toISOString() : null,
     roleGranted: r.role_granted,
+    ...outsideFieldsOf(origin.get(r.user_id)),
   }
 }
 
@@ -164,6 +181,13 @@ export async function notifyGranted(
 export function registerAccessRequestRoutes(app: FastifyInstance, ctx: FeatureContext): void {
   const { db, now, notifier } = ctx
   const limiter = new UserRateLimiter({ ...ACCESS_REQUEST_USER_LIMIT, now: () => now().getTime() })
+
+  /** Unlocked: the caller may approve on this board (manage_access and a creator). */
+  async function canApprove(boardId: string, userId: string): Promise<boolean> {
+    const access = await loadBoardAccess(db, boardId, userId)
+    if (!access || !can(access.role, 'manage_access', access.board.status)) return false
+    return ctx.identity.isCreatorUser(db, userId)
+  }
 
   app.post('/api/boards/:bid/access-requests', async (req, reply) => {
     const user = await ctx.requireUser(req)
@@ -256,7 +280,12 @@ export function registerAccessRequestRoutes(app: FastifyInstance, ctx: FeatureCo
         LIMIT ${MAX_LISTED}`,
       [bid, access.board.workspace_id],
     )
-    return { requests: rows.rows.map((r) => serialize(r, access.board.visibility)) }
+    const origin = await originAmong(
+      db,
+      ctx,
+      rows.rows.map((r) => r.user_id),
+    )
+    return { requests: rows.rows.map((r) => serialize(r, access.board.visibility, origin)) }
   })
 
   for (const decision of ['approve', 'deny'] as const) {
@@ -265,6 +294,23 @@ export function registerAccessRequestRoutes(app: FastifyInstance, ctx: FeatureCo
       const { id = '' } = req.params as Params
       if (!AccessRequestId.safeParse(id).success) throw notFound()
       const asked = decision === 'approve' ? parse(ApproveAccessRequestInput, req.body ?? {}).role : undefined
+      // Wave J: approving on an internal-only board needs a confirmed creator as the requester. When the
+      // requester's addresses are unknown or stale they are confirmed first (identity.refreshTarget:
+      // never throws, no lock held), and only for a creator who manages the board, so nobody else makes
+      // Lobby call the provider from here. The transaction below decides on stored data.
+      if (decision === 'approve') {
+        const seen = await db.maybeOne<{ board_id: string; user_id: string }>(
+          'SELECT board_id, user_id FROM access_requests WHERE id = $1',
+          [id],
+        )
+        if (
+          seen &&
+          (await boardInternalOnly(db, seen.board_id)) &&
+          (await canApprove(seen.board_id, user.id)) &&
+          !(await ctx.identity.isCreatorUser(db, seen.user_id))
+        )
+          await ctx.identity.refreshTarget(seen.user_id)
+      }
       const result = await db.transaction(async (tx) => {
         const found = await tx.maybeOne<{ board_id: string }>(
           'SELECT board_id FROM access_requests WHERE id = $1',
@@ -288,6 +334,7 @@ export function registerAccessRequestRoutes(app: FastifyInstance, ctx: FeatureCo
         )
         if (r.status !== 'pending')
           throw conflict('ALREADY_DECIDED', 'Someone already answered this request.')
+        if (decision === 'approve') await assertRaiseAllowed(tx, ctx, r.board_id, r.user_id)
         const at = now()
         const role: RequestRole | null = decision === 'approve' ? (asked ?? r.role_requested) : null
         if (role) {
@@ -331,7 +378,8 @@ export function registerAccessRequestRoutes(app: FastifyInstance, ctx: FeatureCo
             at,
           })
         const row = await tx.one<ListedRow>(`${LISTED_SELECT} WHERE r.id = $1`, [id])
-        return { request: serialize(row, access.board.visibility), granted: role !== null }
+        const origin = await originAmong(tx, ctx, [row.user_id])
+        return { request: serialize(row, access.board.visibility, origin), granted: role !== null }
       })
       // REVIEW-6: the approver is named to the person approved (the session's user)
       if (result.granted)

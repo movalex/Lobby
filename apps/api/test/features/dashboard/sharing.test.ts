@@ -34,6 +34,7 @@ describe('sharing state (board header badge)', () => {
       links: [],
       directCount: 1,
       pendingRequests: 0,
+      sharedOutside: false,
     })
     const link = ReviewLinkCreated.parse(
       (

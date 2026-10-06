@@ -88,6 +88,44 @@ export const userParams = (lookup: CreatorLookup, now: Date): unknown[] => [
   new Date(now.getTime() - IDENTITY_GRACE_MS),
 ]
 
+// ---- wave J (outside markers): what is known about an account, for the manager-only fields ---------
+
+/** `alias` has a stored address of the running provider that qualifies (any age); params from `first`. */
+const qualifiesSql = (alias: string, first: number) =>
+  `EXISTS (SELECT 1 FROM user_emails e WHERE e.user_id = ${alias}.id AND e.source = $${first}::text
+      AND (e.domain = ANY($${first + 1}::text[]) OR e.email = ANY($${first + 2}::text[])))`
+
+/**
+ * The columns behind an account's OutsideInfo (@draftroom/contracts outside.ts) for a `users u` row,
+ * with the same four parameters as userColumns, starting at `$first`: `o_creator` is exactly
+ * userColumns' `creator` (the same predicate), `o_qualifies` the same test at any age, `o_email` the
+ * primary stored address of the running provider (else the oldest), never logged.
+ */
+export function originColumns(first: number): string {
+  const cutoff = `$${first + 3}`
+  return `u.id AS o_id, u.kind AS o_kind, u.identity_checked_at AS o_checked_at,
+    COALESCE(u.kind = 'account' AND u.identity_checked_at >= ${cutoff}::timestamptz AND ${qualifiesSql('u', first)}, false) AS o_creator,
+    COALESCE(${qualifiesSql('u', first)}, false) AS o_qualifies,
+    (SELECT e.email FROM user_emails e WHERE e.user_id = u.id AND e.source = $${first}::text
+      ORDER BY e.is_primary DESC, e.seen_at, e.email LIMIT 1) AS o_email`
+}
+
+/**
+ * SQL that is true for an account Lobby KNOWS is outside: its addresses were checked at least once and
+ * none qualifies (however long ago: a later check can only make it a creator by finding a new
+ * address). Never-checked accounts, and accounts whose qualifying addresses are only stale, are
+ * 'unconfirmed', not this. Three parameters from `first` (matchParams).
+ */
+export const knownOutsideSql = (alias: string, first: number): string =>
+  `(${alias}.kind = 'account' AND ${alias}.identity_checked_at IS NOT NULL AND NOT ${qualifiesSql(alias, first)})`
+
+/** The parameters of knownOutsideSql: source, domains, emails (userParams without the cutoff). */
+export const matchParams = (lookup: CreatorLookup): unknown[] => [
+  lookup.source,
+  [...lookup.domains],
+  [...lookup.emails],
+]
+
 /** Confirmed = checked at or after now - IDENTITY_GRACE_MS (the same boundary as the SQL above). */
 export const isConfirmed = (checkedAt: Date | null, now: Date): boolean =>
   checkedAt !== null && checkedAt.getTime() >= now.getTime() - IDENTITY_GRACE_MS

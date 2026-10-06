@@ -9,6 +9,7 @@ import {
   type NotificationItem,
 } from '@draftroom/contracts'
 import type { ApiClient } from '../api/client.ts'
+import { OUTSIDER_JOINED_KIND_TEXT } from '../features/people/outside.ts'
 import { boardPath } from '../lib/routing.ts'
 
 export function notificationsApi(api: ApiClient) {
@@ -29,6 +30,8 @@ export const KIND_TEXT: Record<NotificationItem['kind'], string> = {
   new_comment: 'commented',
   // PRI-09b: a board owner approved the request you sent ("Ada approved your access request on …").
   access_granted: 'approved your access request',
+  // Wave J: an account outside Dark Burn / TPG opened a board you own for the first time.
+  outsider_joined: OUTSIDER_JOINED_KIND_TEXT,
 }
 
 /** PRI-09b: what the approved request gave. */

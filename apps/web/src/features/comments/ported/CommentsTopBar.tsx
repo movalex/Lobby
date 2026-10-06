@@ -14,6 +14,8 @@ import { formatRelativeTime } from '../../../lib/format.ts'
 import { boardPath, navigate } from '../../../lib/routing.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { onFocusLeave } from '../../../ui/focus.ts'
+import { ExternalTag } from '../../people/ExternalTag.tsx'
+import { OUTSIDER_JOINED_KIND_TEXT, outsiderJoinedText } from '../../people/outside.ts'
 import { BellIcon, CommentIcon } from '../icons.tsx'
 import { COMMENT_TOOL_ID, canCommentIn, controllerFor, focusThread, selectCommentTool } from './controller.ts'
 
@@ -58,6 +60,7 @@ const KIND_TEXT: Record<NotificationItem['kind'], string> = {
   access_request: 'asked for access',
   new_comment: 'commented', // DANA-02: a new thread on a board you own
   access_granted: 'approved your access request', // PRI-09b
+  outsider_joined: OUTSIDER_JOINED_KIND_TEXT, // wave J (rendered with the name's External tag)
 }
 
 const REQUEST_TEXT: Record<NotificationAccessRequest['role'], string> = {
@@ -134,7 +137,7 @@ function NotificationsBell({ ctx }: { ctx: CanvasFeatureContext }) {
       )
       return
     }
-    if (n.kind === 'access_request') {
+    if (n.kind === 'access_request' || n.kind === 'outsider_joined') {
       window.dispatchEvent(new CustomEvent('draftroom:open-share'))
       return
     }
@@ -216,10 +219,18 @@ function NotificationsBell({ ctx }: { ctx: CanvasFeatureContext }) {
                       {!n.readAt && <span className="dr-cbell__dot" aria-hidden="true" />}
                       {!n.readAt && <span className="dr-sr-only">Unread: </span>}
                       <span className="dr-cbell__text">
-                        <span>
-                          <strong>{n.actor?.name ?? 'Someone'}</strong> {KIND_TEXT[n.kind]}
-                          {n.boardId !== ctx.board.id ? ` on ${n.boardTitle}` : ''}
-                        </span>
+                        {n.kind === 'outsider_joined' ? (
+                          <span data-testid="notification-outsider">
+                            <strong>{n.actor?.name ?? 'Someone'}</strong>
+                            <ExternalTag domain={n.outsiderJoined?.emailDomain ?? null} />{' '}
+                            {outsiderJoinedText(n, n.boardId === ctx.board.id)}
+                          </span>
+                        ) : (
+                          <span>
+                            <strong>{n.actor?.name ?? 'Someone'}</strong> {KIND_TEXT[n.kind]}
+                            {n.boardId !== ctx.board.id ? ` on ${n.boardTitle}` : ''}
+                          </span>
+                        )}
                         {n.kind === 'access_request' && n.accessRequest && (
                           <span className="dr-cbell__request" data-testid="notification-request">
                             {REQUEST_TEXT[n.accessRequest.role]}

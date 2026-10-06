@@ -11,6 +11,8 @@
 //   'access_granted' with `NotificationItem.accessGranted` (PRI-09b). For revision 0 the api answers a
 //   selection vote as a board vote (it still applies the selection to every cast, so a stale tab's click
 //   outside it is refused with NOT_ELIGIBLE) and lists no access_granted item (nor counts it as unread).
+// - rev 2 (0025, wave J outside markers): NotificationKind 'outsider_joined' with
+//   `NotificationItem.outsiderJoined`. Revisions 0 and 1 get no outsider_joined item (nor its count).
 //
 // Raise LOBBY_CLIENT_REV when an enum of a response gains a value; the api keeps answering older
 // revisions what they can read.
@@ -18,7 +20,7 @@
 /** The request header (lower case, as Node exposes it) that carries the web build's revision. */
 export const LOBBY_CLIENT_HEADER = 'x-lobby-client'
 /** This build's revision (see the list above). */
-export const LOBBY_CLIENT_REV = 1
+export const LOBBY_CLIENT_REV = 2
 
 /** The revision a request declares: 0 without the header, or for a value that is not a small integer. */
 export function clientRevOf(value: string | readonly string[] | undefined): number {
@@ -29,3 +31,6 @@ export function clientRevOf(value: string | readonly string[] | undefined): numb
 
 /** A revision that knows the 0024 values (vote scope 'selection', notification kind 'access_granted'). */
 export const knowsRev1 = (rev: number) => rev >= 1
+
+/** A revision that knows the 0025 value (notification kind 'outsider_joined'). */
+export const knowsRev2 = (rev: number) => rev >= 2
