@@ -6,6 +6,7 @@ import { fetchInvitation, type GuestAwarePreview } from '../invite/guest.tsx'
 import { signInHeading } from '../invite/model.ts'
 import { colorForUser, DEV_HANDLE_RE, DEV_QUICK_PICKS, initialsFor } from '../lib/identity.ts'
 import { matchRoute, navigate, safeReturnTo } from '../lib/routing.ts'
+import { GoogleSignIn } from './GoogleSignIn.tsx'
 import { useSession } from './session.tsx'
 import { signedOutMarks } from './signOutMark.ts'
 
@@ -53,7 +54,33 @@ export function SignInPage() {
   } else if (config.providers.includes('dev')) {
     body = <DevSignIn onDone={done} heading={heading} />
   } else if (config.providers.includes('email')) {
-    body = <EmailSignIn onDone={done} heading={heading} />
+    // Open sign-in (docs/OPEN-SIGNIN.md): Google and/or a typed address, as the server offers.
+    const methods = config.openSigninMethods ?? ['email']
+    const google = methods.includes('google') && config.googleClientId ? config.googleClientId : null
+    const typed = methods.includes('email')
+    body = (
+      <>
+        {google && (
+          <>
+            <h1 className="dr-card__title" data-testid="signin-heading">
+              {heading}
+            </h1>
+            <GoogleSignIn clientId={google} onDone={done} />
+            {!typed && (
+              <p className="dr-muted" data-testid="google-signin-note">
+                Use any Google account. Your boards are waiting under the same account next time.
+              </p>
+            )}
+          </>
+        )}
+        {google && typed && (
+          <div className="dr-divider">
+            <span>or</span>
+          </div>
+        )}
+        {typed && <EmailSignIn onDone={done} heading={google ? null : heading} />}
+      </>
+    )
   } else if (config.providers.includes('clerk') && config.clerkPublishableKey) {
     body = (
       <Suspense
@@ -314,7 +341,7 @@ function DevSignIn({ onDone, heading }: { onDone(): void; heading: string }) {
  * Open email sign-in (docs/OPEN-SIGNIN.md): an address and a name, nothing verified. The address is the
  * account (the same address next time finds the same boards); the name is what other people see.
  */
-function EmailSignIn({ onDone, heading }: { onDone(): void; heading: string }) {
+function EmailSignIn({ onDone, heading }: { onDone(): void; heading: string | null }) {
   const { refresh } = useSession()
   const emailId = useId()
   const nameId = useId()
@@ -356,9 +383,11 @@ function EmailSignIn({ onDone, heading }: { onDone(): void; heading: string }) {
 
   return (
     <>
-      <h1 className="dr-card__title" data-testid="signin-heading">
-        {heading}
-      </h1>
+      {heading && (
+        <h1 className="dr-card__title" data-testid="signin-heading">
+          {heading}
+        </h1>
+      )}
       <form
         className="dr-signin__form"
         data-testid="email-signin-form"

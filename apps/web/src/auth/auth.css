@@ -55,3 +55,18 @@
   color: var(--dr-warn);
   font-size: 13px;
 }
+
+/* Open sign-in with Google (GoogleSignIn.tsx): Google draws the button inside this slot. */
+.dr-google-signin {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+
+.dr-google-signin__button {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+}

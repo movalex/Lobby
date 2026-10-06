@@ -5,6 +5,7 @@ import {
   type DevLoginInput,
   type EmailLoginInput,
   ErrorBody,
+  type GoogleLoginInput,
   InvitationAccepted,
   InvitationCreated,
   InvitationPreview,
@@ -172,6 +173,9 @@ export function createApiClient(opts: ApiClientOptions = {}) {
     /** Open email sign-in (docs/OPEN-SIGNIN.md): sets the session cookie like devLogin. */
     emailLogin: (input: EmailLoginInput) =>
       request('POST', '/api/auth/email/login', { body: input, schema: null }),
+    /** Open sign-in with Google: trades Google's ID token for the session cookie. */
+    googleLogin: (input: GoogleLoginInput) =>
+      request('POST', '/api/auth/google/login', { body: input, schema: null }),
     logout: () => request('POST', '/api/auth/logout', { schema: null }),
     /**
      * SCA-4 "Sign out everywhere": revokes every Draftroom session of the signed-in user, on every

@@ -4,6 +4,8 @@
 import { AuthConfig, Me, PartnerBoard } from '@draftroom/contracts'
 import type { LightMyRequestResponse } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { createEmailAuthProvider } from '../src/auth/email.ts'
+import { type GoogleIdentity, GoogleTokenError } from '../src/auth/google-id-token.ts'
 import { SHARED_OWNER_ID, SHARED_WORKSPACE_ID } from '../src/auth/shared-workspace.ts'
 import { loadConfig } from '../src/config.ts'
 import {
@@ -66,6 +68,7 @@ describe('open email sign-in', () => {
     expect(AuthConfig.parse(res.json())).toEqual({
       providers: ['email'],
       sharedWorkspaceName: 'Banzerini House',
+      openSigninMethods: ['email'],
     })
   })
 
@@ -226,7 +229,12 @@ describe('open sign-in configuration', () => {
 
   it('is allowed in production, and partner routes exist only with a token', () => {
     const config = loadConfig(env({ ...OPEN_ENV, DRAFTROOM_PARTNER_TOKEN: '' }))
-    expect(config.openSignin).toEqual({ workspaceName: 'Banzerini House', partnerToken: null })
+    expect(config.openSignin).toEqual({
+      workspaceName: 'Banzerini House',
+      partnerToken: null,
+      methods: ['email'],
+      googleClientId: null,
+    })
     expect(config.authProvider).toBe('email')
   })
 
@@ -243,5 +251,112 @@ describe('open sign-in configuration', () => {
     } finally {
       await without.close()
     }
+  })
+})
+
+describe('open sign-in with Google', () => {
+  const CLIENT_ID = '1234567890-abcdef.apps.googleusercontent.com'
+  const GOOGLE_ENV = {
+    ...OPEN_ENV,
+    DRAFTROOM_OPEN_SIGNIN_METHODS: 'google',
+    DRAFTROOM_GOOGLE_CLIENT_ID: CLIENT_ID,
+  }
+  // Stands in for Google: "good:<email>:<name>" verifies, anything else is refused.
+  const fakeVerify = async (credential: string): Promise<GoogleIdentity> => {
+    const [kind, email, name] = credential.split(':')
+    if (kind !== 'good' || !email) throw new GoogleTokenError('bad signature')
+    return { sub: `sub-${email}`, email, name: name || null }
+  }
+  const withGoogle = (methods: ('email' | 'google')[], env: Record<string, string>) =>
+    createTestApi({
+      env,
+      deps: {
+        authProvider: createEmailAuthProvider({
+          workspaceName: 'Banzerini House',
+          methods,
+          googleClientId: CLIENT_ID,
+          verifyGoogle: fakeVerify,
+        }),
+      },
+    })
+  const googleLogin = (t: TestApi, credential: string) =>
+    t.anon('POST', '/api/auth/google/login', { credential })
+
+  it('Google only: the page is told to show the Google button; the typed-address route is gone', async () => {
+    const g = await withGoogle(['google'], GOOGLE_ENV)
+    try {
+      expect(AuthConfig.parse((await g.anon('GET', '/api/auth/config')).json())).toEqual({
+        providers: ['email'],
+        sharedWorkspaceName: 'Banzerini House',
+        openSigninMethods: ['google'],
+        googleClientId: CLIENT_ID,
+      })
+      expect(
+        (await g.anon('POST', '/api/auth/email/login', { email: 'a@b.test', name: 'A' })).statusCode,
+      ).toBe(404)
+      const res = await googleLogin(g, 'good:Dana.Rivera@gmail.com:Dana Rivera')
+      expect(res.statusCode).toBe(200)
+      const me = Me.parse(res.json())
+      expect(me.user.name).toBe('Dana Rivera')
+      expect(me.access).toEqual({ creator: true, reason: 'domain', email: 'dana.rivera@gmail.com' })
+      expect(me.workspaces).toEqual([{ id: SHARED_WORKSPACE_ID, name: 'Banzerini House', role: 'member' }])
+      expect(res.cookies.some((c) => c.name === 'dr_session')).toBe(true)
+    } finally {
+      await g.close()
+    }
+  })
+
+  it('a refused token is a 401 with no session; a missing name falls back to the address', async () => {
+    const g = await withGoogle(['google'], GOOGLE_ENV)
+    try {
+      const refused = await googleLogin(g, 'forged')
+      expect(refused.statusCode).toBe(401)
+      expect(refused.json()).toMatchObject({ error: { code: 'GOOGLE_SIGN_IN_FAILED' } })
+      expect(refused.cookies.some((c) => c.name === 'dr_session')).toBe(false)
+      expect((await g.anon('POST', '/api/auth/google/login', {})).statusCode).toBe(400)
+      const noName = Me.parse((await googleLogin(g, 'good:sam@school.example:')).json())
+      expect(noName.user.name).toBe('sam')
+    } finally {
+      await g.close()
+    }
+  })
+
+  it('both ways in: the same address is the same account', async () => {
+    const g = await withGoogle(['email', 'google'], {
+      ...GOOGLE_ENV,
+      DRAFTROOM_OPEN_SIGNIN_METHODS: 'email,google',
+    })
+    try {
+      const typed = await g.anon('POST', '/api/auth/email/login', { email: 'dana@example.com', name: 'Dana' })
+      const viaGoogle = await googleLogin(g, 'good:Dana@Example.com:Dana R.')
+      expect(Me.parse(viaGoogle.json()).user.id).toBe(Me.parse(typed.json()).user.id)
+    } finally {
+      await g.close()
+    }
+  })
+
+  it('configuration: google needs a client id, a client id needs google, methods are email/google only', () => {
+    const env = (extra: Record<string, string>) => testEnv('/tmp/dr-open-google', { ...OPEN_ENV, ...extra })
+    expect(
+      loadConfig(env({ DRAFTROOM_OPEN_SIGNIN_METHODS: 'google', DRAFTROOM_GOOGLE_CLIENT_ID: CLIENT_ID }))
+        .openSignin,
+    ).toMatchObject({ methods: ['google'], googleClientId: CLIENT_ID })
+    expect(() => loadConfig(env({ DRAFTROOM_OPEN_SIGNIN_METHODS: 'google' }))).toThrow(
+      /needs DRAFTROOM_GOOGLE_CLIENT_ID/,
+    )
+    expect(() =>
+      loadConfig(
+        env({ DRAFTROOM_OPEN_SIGNIN_METHODS: 'google', DRAFTROOM_GOOGLE_CLIENT_ID: 'not-a-client-id' }),
+      ),
+    ).toThrow(/needs DRAFTROOM_GOOGLE_CLIENT_ID/)
+    expect(() => loadConfig(env({ DRAFTROOM_GOOGLE_CLIENT_ID: CLIENT_ID }))).toThrow(
+      /does not include google/,
+    )
+    expect(() => loadConfig(env({ DRAFTROOM_OPEN_SIGNIN_METHODS: 'facebook' }))).toThrow(
+      /email and\/or google/,
+    )
+    expect(() =>
+      loadConfig(testEnv('/tmp/dr-open-google', { DRAFTROOM_OPEN_SIGNIN_METHODS: 'google' })),
+    ).toThrow(/requires AUTH_PROVIDER=email/)
   })
 })

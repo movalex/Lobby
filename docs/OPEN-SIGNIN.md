@@ -36,11 +36,31 @@ verification.**
 | `AUTH_PROVIDER` | `email` |
 | `DRAFTROOM_OPEN_SIGNIN` | `1`. Required with `AUTH_PROVIDER=email` (and refused without it), so open sign-in is never one typo away. Allowed under `NODE_ENV=production` on purpose. |
 | `DRAFTROOM_SHARED_WORKSPACE_NAME` | the shared workspace's name, 1-120 characters (default `Lobby`), e.g. `Banzerini House`. Shown on the sign-in page. |
+| `DRAFTROOM_OPEN_SIGNIN_METHODS` | `email` (default), `google`, or `email,google` ([Google](#google-continue-with-google)). |
+| `DRAFTROOM_GOOGLE_CLIENT_ID` | required exactly when the methods include `google`: `<number>-<id>.apps.googleusercontent.com`. |
 | `DRAFTROOM_PARTNER_TOKEN` | optional, at least 32 characters, different from the ticket, internal and worker secrets. Unset: no `/api/partner` routes. |
 
 `CLERK_*` and `DRAFTROOM_CREATOR_*` are not used. Everything else (Postgres, R2, sync, worker token) is as on staging
 (`docs/DEPLOY.md`). The web build needs nothing new: it reads the provider and the workspace name from
 `GET /api/auth/config`.
+
+## Google ("Continue with Google")
+
+`DRAFTROOM_OPEN_SIGNIN_METHODS` chooses the ways in: `email` (type any address and a name; the default), `google`, or
+both. With `google` the sign-in page shows Google's own "Continue with Google" button (Google Identity Services,
+`apps/web/src/auth/GoogleSignIn.tsx`). Google hands the page an ID token, and `POST /api/auth/google/login` verifies
+it (`apps/api/src/auth/google-id-token.ts`: RS256 against Google's published keys, `aud` = our client id, issuer,
+expiry, `email_verified`; no dependency, no client secret). **Any Google account from any domain** is accepted.
+
+- The account is keyed by the verified address, the same key as a typed address, so a person who signed in by email
+  before lands in the same account with Google.
+- Google-only (`DRAFTROOM_OPEN_SIGNIN_METHODS=google`) closes the typed-address route (404), so nobody can sign in as
+  someone else.
+- `DRAFTROOM_GOOGLE_CLIENT_ID`: a **Web application** OAuth client whose *Authorized JavaScript origins* include the
+  Lobby's origin. It is public by design; no client secret and no redirect URI are used. The OAuth consent screen must
+  be *In production* (in *Testing* only listed test users can sign in). Only the basic scopes are asked for (openid,
+  email, profile), which need no Google verification.
+- The page's CSP allows exactly `https://accounts.google.com/gsi/*` (script, button frame, style).
 
 ## Partner API
 

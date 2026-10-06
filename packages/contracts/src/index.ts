@@ -116,6 +116,10 @@ export const AuthConfig = z.object({
   clerkPublishableKey: z.string().optional(),
   /** Open email sign-in only (docs/OPEN-SIGNIN.md): the shared workspace everyone joins. */
   sharedWorkspaceName: z.string().optional(),
+  /** Open sign-in only: which ways in the page offers (a typed address and/or Google). */
+  openSigninMethods: z.array(z.enum(['email', 'google'])).optional(),
+  /** Open sign-in with Google: the public OAuth client id for Google Identity Services. */
+  googleClientId: z.string().optional(),
 })
 export type AuthConfig = z.infer<typeof AuthConfig>
 
@@ -128,6 +132,10 @@ export const EmailLoginInput = z.object({
   name: Name,
 })
 export type EmailLoginInput = z.infer<typeof EmailLoginInput>
+
+/** Open sign-in with Google (docs/OPEN-SIGNIN.md "Google"): the ID token Google Identity Services gave the page. */
+export const GoogleLoginInput = z.object({ credential: z.string().min(1).max(4096) })
+export type GoogleLoginInput = z.infer<typeof GoogleLoginInput>
 
 /**
  * Partner boards (docs/OPEN-SIGNIN.md): an outside app's stable key for one board in the shared

@@ -10,6 +10,9 @@
 #   deploy/nas/theater/deploy-theater.sh stop|start     stop / start the whole project without rebuilding
 #   deploy/nas/theater/deploy-theater.sh bundle OUT     local dry run: build and check the upload bundle
 #
+# Settings (address, workspace name, sign-in methods, Google client id) live in settings.env next to
+# this script: not secret, committed, uploaded as the project's .env on every deploy.
+#
 # Isolation: every remote docker command names the compose project `lobby-theater` and its own folder
 # NAS_DIR. Nothing here lists, stops, prunes or edits another project (theaitre, draftroom-worker, ctboyd).
 #
@@ -25,10 +28,10 @@ PROJECT=lobby-theater
 NAS=${NAS:-chase@192.168.10.1}
 NAS_KEY=${NAS_KEY:-$HOME/.ssh/ugreen_nas}
 NAS_DIR=${NAS_DIR:-/volume3/Apps/lobby-theater}
-LOBBY_ORIGIN=${LOBBY_ORIGIN:-https://lobby.banzerinihouse.org}
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$SCRIPT_DIR/../../.." && pwd)
 COMPOSE_FILE=$SCRIPT_DIR/docker-compose.yml
+SETTINGS_FILE=$SCRIPT_DIR/settings.env # non-secret, committed; uploaded as the project's .env
 TUNNEL_FILE=${TUNNEL_ENV_FILE:-$SCRIPT_DIR/.env.tunnel}
 
 die() {
@@ -40,7 +43,32 @@ say() { printf '==> %s\n' "$*"; }
 [[ $NAS_DIR =~ ^/[A-Za-z0-9/_.-]+/lobby-theater$ ]] || die "NAS_DIR must be an absolute path ending in /lobby-theater"
 [[ $NAS_DIR != *theaitre* && $NAS_DIR != *..* ]] || die "refusing NAS_DIR $NAS_DIR"
 [[ $NAS =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.:_-]+$ ]] || die "NAS must look like user@host"
-[[ $LOBBY_ORIGIN =~ ^https://[a-z0-9.-]+$ ]] || die "LOBBY_ORIGIN must be https://host (lowercase, no port or path)"
+
+# settings.env: only the four known keys, checked so a typo fails here and not as a crash-looping api.
+validate_settings() {
+  local line key val origin='' methods='' client=''
+  [ -f "$SETTINGS_FILE" ] || die "missing $SETTINGS_FILE"
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    case $line in '' | '#'*) continue ;; esac
+    key=${line%%=*}
+    val=${line#*=}
+    case $key in
+      LOBBY_ORIGIN) origin=$val ;;
+      LOBBY_WORKSPACE_NAME) [[ -n $val && ${#val} -le 120 ]] || die "settings.env: LOBBY_WORKSPACE_NAME must be 1-120 characters" ;;
+      LOBBY_SIGNIN_METHODS) methods=$val ;;
+      LOBBY_GOOGLE_CLIENT_ID) client=$val ;;
+      *) die "settings.env: unknown setting $key" ;;
+    esac
+  done <"$SETTINGS_FILE"
+  [[ $origin =~ ^https://[a-z0-9.-]+$ ]] || die "settings.env: LOBBY_ORIGIN must be https://host (lowercase, no port or path)"
+  [[ $methods =~ ^(email|google)(,(email|google))?$ ]] || die "settings.env: LOBBY_SIGNIN_METHODS must be email, google or both"
+  if [[ $methods == *google* ]]; then
+    [[ $client =~ ^[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com$ ]] ||
+      die "settings.env: google sign-in needs LOBBY_GOOGLE_CLIENT_ID (<number>-<id>.apps.googleusercontent.com)"
+  fi
+}
+validate_settings
 
 remote() {
   [ -f "$NAS_KEY" ] || die "ssh key $NAS_KEY not found (set NAS_KEY)"
@@ -199,7 +227,7 @@ REMOTE
   say "uploading"
   remote "cat > '$NAS_DIR/bundle.tgz.part' && mv '$NAS_DIR/bundle.tgz.part' '$NAS_DIR/bundle.tgz'" <"$bundle"
   remote "cat > '$NAS_DIR/docker-compose.yml.part' && mv '$NAS_DIR/docker-compose.yml.part' '$NAS_DIR/docker-compose.yml'" <"$COMPOSE_FILE"
-  printf 'LOBBY_ORIGIN=%s\n' "$LOBBY_ORIGIN" | remote "cat > '$NAS_DIR/.env'"
+  tr -d '\r' <"$SETTINGS_FILE" | remote "cat > '$NAS_DIR/.env.part' && mv '$NAS_DIR/.env.part' '$NAS_DIR/.env'"
   if [ "$have_tunnel" = 1 ]; then
     tr -d '\r' <"$TUNNEL_FILE" | remote "umask 077 && cat > '$NAS_DIR/secrets/tunnel.env.part' && mv '$NAS_DIR/secrets/tunnel.env.part' '$NAS_DIR/secrets/tunnel.env'"
   fi
