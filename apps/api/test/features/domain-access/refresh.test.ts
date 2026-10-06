@@ -145,6 +145,8 @@ describe('identity refresh with Clerk', () => {
     expect(res.statusCode).toBe(401)
     expect(await liveSessions(w.api, a.userId)).toBe(0)
     expect((await second.req('GET', '/api/me')).statusCode).toBe(401)
+    // RT-01 (wave J3): the sync server is told, so the person's open board sockets close too
+    expect(w.api.sessionEnds).toContain(a.userId)
     // Stored addresses are left as they are.
     expect(await count(w.api, 'user_emails WHERE user_id = $1', [a.userId])).toBe(1)
   })
@@ -156,6 +158,7 @@ describe('identity refresh with Clerk', () => {
     expect((await a.req('GET', '/api/me')).statusCode).toBe(200) // stored data, refresh in the background
     await w.api.identity.settled()
     expect((await a.req('GET', '/api/me')).statusCode).toBe(401)
+    expect(w.api.sessionEnds).toContain(a.userId) // RT-01
   })
 
   it.each([
@@ -185,6 +188,7 @@ describe('identity refresh with Clerk', () => {
     w.api.clock.advance(25 * HOUR)
     expect((await a.req('GET', '/api/me')).statusCode).toBe(401)
     expect(await liveSessions(w.api, a.userId)).toBe(0)
+    expect(w.api.sessionEnds).toContain(a.userId) // RT-01: the board sockets close too
   })
 
   it('unavailable while confirmed (under 24 h): the stored status stands', async () => {

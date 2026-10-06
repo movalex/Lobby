@@ -56,6 +56,11 @@ export function registerTicketRoutes(app: FastifyInstance, ctx: AppContext): voi
   app.get('/internal/access', async (req) => {
     const { boardId, userId } = parse(AccessQuery, req.query)
     // Unknown board or user: null, the same as "no access" (the caller only needs to know whether to close).
-    return { role: connectionRole(await loadBoardAccess(db, boardId, userId)) }
+    // RT-01: `signedInSince` (auth/session.ts): the start of the person's oldest live session, or null
+    // when they have none; the sync server closes their sockets whose sign-in has ended.
+    return {
+      role: connectionRole(await loadBoardAccess(db, boardId, userId)),
+      signedInSince: await ctx.sessions.signedInSince(userId),
+    }
   })
 }

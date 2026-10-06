@@ -12,6 +12,7 @@ import { openTestDb } from '@draftroom/db/testing'
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify'
 import { type ApiDeps, createApiServer } from '../src/app.ts'
 import type { IdentityService } from '../src/auth/identity.ts'
+import { createRecordingSessionEndNotifier } from '../src/auth/session-sync.ts'
 import { type ApiConfig, loadConfig } from '../src/config.ts'
 import { type AccessChange, createRecordingNotifier } from '../src/notifier.ts'
 
@@ -63,6 +64,8 @@ export interface TestApi {
   blobs: BlobStore
   config: ApiConfig
   notifications: AccessChange[]
+  /** RT-01: every person whose sessions ended, as the sync server would be told (auth/session-sync.ts). */
+  sessionEnds: string[]
   clock: { advance(ms: number): void; now(): Date }
   /** Domain access: creator status and refreshes (await identity.settled() for background ones). */
   identity: IdentityService
@@ -96,11 +99,13 @@ export async function createTestApi(
   const ownsDb = !opts.db
   const db = opts.db ?? (await openTestDb())
   const notifier = createRecordingNotifier()
+  const sessionEnds = createRecordingSessionEndNotifier()
   let offset = 0
   const now = () => new Date(Date.now() + offset)
   const server = await createApiServer(config, {
     db,
     notifier,
+    sessionEnds,
     now,
     ...(opts.domainAccessGuard === false ? { domainAccessGuard: false } : {}),
     ...opts.deps,
@@ -126,6 +131,7 @@ export async function createTestApi(
     blobs: server.blobs,
     config,
     notifications: notifier.calls,
+    sessionEnds: sessionEnds.calls,
     clock: {
       advance: (ms) => {
         offset += ms

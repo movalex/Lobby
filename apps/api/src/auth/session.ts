@@ -63,13 +63,26 @@ export interface SessionStore {
   revokeAll(userId: string): Promise<string[]>
   /** Of these session ids, the ones still valid (not revoked, not expired). */
   activeIds(ids: readonly string[]): Promise<Set<string>>
-  /** Called with the ids of sessions revoked through this store (after the revocation committed). */
-  onRevoked(listener: (ids: readonly string[]) => void): () => void
+  /**
+   * RT-01 (wave J3): when the user's oldest live session started (epoch ms), or null when they have
+   * none (signed out everywhere, every session expired). The sync server's access re-check reads it
+   * (GET /internal/access `signedInSince`): null closes the person's board sockets (NOT_AUTHENTICATED);
+   * a socket whose ticket is older than every live session of its person came from a session that has
+   * ended, and is sent to reconnect (its new ticket needs a live session).
+   */
+  signedInSince(userId: string): Promise<number | null>
+  /**
+   * Called with the ids of sessions revoked through this store (after the revocation committed) and,
+   * RT-01, the users they belonged to when the store knows them (the sync server closes their board
+   * sockets: auth/session-sync.ts).
+   */
+  onRevoked(listener: (ids: readonly string[], userIds: readonly string[]) => void): () => void
   /**
    * Tells the onRevoked listeners about sessions revoked inside a caller's own transaction (a guest's
    * sessions end with their last board grant: apps/api/src/features/guests). Call after it committed.
+   * `userIds`: whose sessions they were (omitted: the listeners hear the ids only).
    */
-  announceRevoked(ids: readonly string[]): void
+  announceRevoked(ids: readonly string[], userIds?: readonly string[]): void
   setCookie(reply: FastifyReply, token: string, expiresAt: Date): void
   clearCookie(reply: FastifyReply): void
 }
@@ -132,12 +145,13 @@ export function createSessionStore(opts: {
 
   const cookieBase = { path: '/', httpOnly: true, sameSite: 'lax' as const, secure: opts.secureCookies }
 
-  const listeners = new Set<(ids: readonly string[]) => void>()
-  const announce = (ids: readonly string[]) => {
+  const listeners = new Set<(ids: readonly string[], userIds: readonly string[]) => void>()
+  const announce = (ids: readonly string[], userIds: readonly string[] = []) => {
     if (!ids.length) return
+    const users = [...new Set(userIds)]
     for (const l of [...listeners]) {
       try {
-        l(ids)
+        l(ids, users)
       } catch {
         // a listener's failure never undoes or hides a revocation
       }
@@ -186,11 +200,14 @@ export function createSessionStore(opts: {
       cache.delete(req)
       if (!token) return null
       const id = sha256hex(token)
-      const r = await db.query<{ id_hash: string }>(
-        'UPDATE sessions SET revoked_at = $2 WHERE id_hash = $1 AND revoked_at IS NULL RETURNING id_hash',
+      const r = await db.query<{ id_hash: string; user_id: string }>(
+        'UPDATE sessions SET revoked_at = $2 WHERE id_hash = $1 AND revoked_at IS NULL RETURNING id_hash, user_id',
         [id, now()],
       )
-      announce(r.rows.map((x) => x.id_hash))
+      announce(
+        r.rows.map((x) => x.id_hash),
+        r.rows.map((x) => x.user_id),
+      )
       return r.rows.length ? id : null
     },
     async revokeAll(userId) {
@@ -199,7 +216,7 @@ export function createSessionStore(opts: {
         [userId, now()],
       )
       const ids = r.rows.map((x) => x.id_hash)
-      announce(ids)
+      announce(ids, [userId])
       return ids
     },
     async activeIds(ids) {
@@ -211,12 +228,21 @@ export function createSessionStore(opts: {
       )
       return new Set(r.rows.map((x) => x.id_hash))
     },
+    async signedInSince(userId) {
+      // the oldest LIVE session (sessions_user_idx): a ticket older than it came from one that ended
+      const row = await db.maybeOne<{ since: Date | null }>(
+        `SELECT min(created_at) AS since FROM sessions
+          WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > $2`,
+        [userId, now()],
+      )
+      return row?.since ? new Date(row.since).getTime() : null
+    },
     onRevoked(listener) {
       listeners.add(listener)
       return () => void listeners.delete(listener)
     },
-    announceRevoked(ids) {
-      announce(ids)
+    announceRevoked(ids, userIds) {
+      announce(ids, userIds)
     },
     setCookie(reply, token, expiresAt) {
       // The cookie ends with the session (a guest's session can be much shorter than 30 days).
