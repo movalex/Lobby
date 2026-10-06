@@ -11,15 +11,27 @@
 // links), then the settings (workspace access, export) and who has access. Every guest option sits
 // above its Create button and applies to the link that button makes (once a link is open, the box says
 // "for the next link"); a link that exists has its own box in its row (G2: PATCH review-links/:id).
+//
+// Wave J (outside markers): people outside Dark Burn / TPG carry an "External" tag with their verified
+// email domain (the server's manager-only fields) in every list here: who has access, access requests,
+// the workspace picker and the workspace members; an account Lobby cannot confirm says "Not confirmed".
+// Before inviting an outside address (the server's address check decides, exceptions list included),
+// approving an outside account's request or giving one a grant or a higher role, the dialog asks once
+// per person while it is open. While the board's workspace or project is internal only it says so and
+// offers no link to create; the server refuses the rest (409 INTERNAL_ONLY, its message shown as is).
 
 import {
   type AccessRequest,
+  AddressCheckResult,
   type Board,
   type BoardMember,
   DOMAIN_ACCESS_CODES,
   type EmailInviteResult,
+  INTERNAL_ONLY_MESSAGES,
   type InvitationCreated,
   ListWorkspaceMembersResponse,
+  type OutsideStatus,
+  outsideConfirmText,
   type PendingInvitation,
   type RequestableRole,
   type ReviewLinkCreated,
@@ -29,6 +41,8 @@ import {
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { useSession } from '../auth/session.tsx'
+import { OutsideConfirm, OutsideStatusTag } from '../features/people/ExternalTag.tsx'
+import { useBoardOutside } from '../features/people/outside.ts'
 import { announceShareChanged, SHARE_REMOTE_EVENT, sharingApi } from '../features/sharing/api.ts'
 import {
   canExtend,
@@ -67,6 +81,7 @@ import {
   ADD_MEMBER_ROLES,
   ASK_EMAIL_PROMPT,
   accessSource,
+  asksBeforeGiving,
   CLIENT_LINK_DEFAULTS,
   checkInviteEmail,
   clientLinkHint,
@@ -77,6 +92,7 @@ import {
   grantEditable,
   guestsOptionLabel,
   guestsToggleSaying,
+  internalOnlyNote,
   invitePlan,
   inviteRoleOptions,
   isOwnAddress,
@@ -90,9 +106,13 @@ import {
   OWNER_NEEDS_CREATOR,
   OWNER_NEEDS_CREATOR_NOTE,
   type OwnerNoteRow,
+  outsideConfirmFor,
+  outsideWho,
   parseInviteTarget,
   pendingInviteLabel,
+  pickerOptionText,
   ROLE_OPTION_LABEL,
+  raisesAccess,
   removalNote,
   removeConfirmText,
   rowNeedsOwnerNote,
@@ -107,8 +127,99 @@ import {
 
 const sharing = sharingApi(api)
 
-/** A person with access; managers get the detailed fields (grant, workspace role, links, canOwn). */
-type Row = BoardMember & Partial<Omit<AccessDetail, 'user' | 'role' | 'source'>> & { canOwn?: boolean }
+/**
+ * A person with access; managers get the detailed fields (grant, workspace role, links, canOwn) and,
+ * from wave J, whether they are outside Dark Burn / TPG.
+ */
+type Row = BoardMember &
+  Partial<Omit<AccessDetail, 'user' | 'role' | 'source'>> & {
+    canOwn?: boolean
+    outside?: OutsideStatus
+    emailDomain?: string | null
+    emailHint?: string | null
+  }
+
+// ---- wave J: the one-time confirm before giving someone outside access -----------------------------
+
+/**
+ * People (`user:<id>`) and addresses (`email:<address>`) the open Share dialog already asked about. One
+ * dialog is open at a time; it empties the set when it opens and when it closes.
+ */
+const askedInDialog = new Set<string>()
+
+/**
+ * `confirm(key, text, yes)` shows the confirm (`box`, where the section renders it) and resolves with the
+ * answer; at once with true for someone this dialog already asked about.
+ */
+function useOutsideAsk() {
+  const asked = askedInDialog
+  const [ask, setAsk] = useState<{ text: string; yes: string; done(ok: boolean): void } | null>(null)
+  const confirm = useCallback(
+    (key: string, text: string, yes: string): Promise<boolean> => {
+      if (asked.has(key)) return Promise.resolve(true)
+      return new Promise<boolean>((resolve) =>
+        setAsk({
+          text,
+          yes,
+          done: (ok) => {
+            setAsk(null)
+            if (ok) asked.add(key)
+            resolve(ok)
+          },
+        }),
+      )
+    },
+    [asked],
+  )
+  const box = ask ? (
+    <OutsideConfirm text={ask.text} yes={ask.yes} onYes={() => ask.done(true)} onNo={() => ask.done(false)} />
+  ) : null
+  return { confirm, box }
+}
+
+/** The server's word on an address (null: an older api or an error; then nothing is asked). */
+async function checkAddress(boardId: string, email: string): Promise<AddressCheckResult | null> {
+  try {
+    return await api.request('POST', `/api/boards/${encodeURIComponent(boardId)}/sharing/address-check`, {
+      body: { email },
+      schema: AddressCheckResult,
+    })
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Before an invitation to an address: asks when it is outside (once per address); says why when the
+ * board is internal only (the server would refuse it). `ok: false` means: create nothing.
+ */
+async function confirmAddress(
+  boardId: string,
+  email: string,
+  confirm: ReturnType<typeof useOutsideAsk>['confirm'],
+): Promise<{ ok: boolean; refused: string | null }> {
+  const r = await checkAddress(boardId, email)
+  if (!r?.outside) return { ok: true, refused: null }
+  if (r.internalOnly) return { ok: false, refused: INTERNAL_ONLY_MESSAGES[r.internalOnly] }
+  return {
+    ok: await confirm(`email:${r.email}`, outsideConfirmText(r.email), 'Invite anyway'),
+    refused: null,
+  }
+}
+
+/** Before giving an account access (a grant, a higher role, an approval): asks when it is outside. */
+function confirmPerson(
+  confirm: ReturnType<typeof useOutsideAsk>['confirm'],
+  person: { user: { id: string; name: string }; outside?: OutsideStatus; emailHint?: string | null },
+  yes: string,
+): Promise<boolean> {
+  if (!asksBeforeGiving(person.outside)) return Promise.resolve(true)
+  return confirm(
+    `user:${person.user.id}`,
+    outsideConfirmFor(outsideWho(person.user.name, person.emailHint), person.outside),
+    yes,
+  )
+}
 
 /** A manager's detailed row (grant, workspace role, links), else null (the M1 list). */
 function rowDetail(member: Row): AccessDetail | null {
@@ -170,6 +281,15 @@ export function ShareDialog({
   const creatorNote = shareCreatorNote(access)
   // A name-only guest (wave 3) cannot ask for more access; the dialog says what they can do instead.
   const guest = useIsGuest()
+  // Wave J: whom this dialog already asked about (asked once per person while it is open), and whether
+  // the board is internal only (the board's outside list; null from an older api).
+  useEffect(() => {
+    askedInDialog.clear()
+    return () => askedInDialog.clear()
+  }, [])
+  const { snap: outsideState } = useBoardOutside(board.id)
+  const internalOnly = outsideState.internalOnly
+  const mayCreateLinks = canShare && !internalOnly
 
   // Managers get the detailed list (grant, workspace role, fallback, review-link joins); everyone else
   // the M1 list.
@@ -305,6 +425,12 @@ export function ShareDialog({
       size="lg"
     >
       <div className="dr-share dr-sharing">
+        {/* Wave J: an internal-only workspace or project says so (the server refuses outside sharing). */}
+        {canManage && internalOnly && (
+          <p className="dr-share__note" role="note" data-testid="share-internal-only-note">
+            {internalOnlyNote(internalOnly)}
+          </p>
+        )}
         {/* Domain access: a manager who is not a creator is told why nothing here hands out access. */}
         {reduceOnly && (
           <p
@@ -320,11 +446,11 @@ export function ShareDialog({
         {/* DANA-03 / F3: the one obvious path for a client, first. A review link that lets people
             comment for 14 days and join with just a name; one button creates and copies it. Someone
             who may only reduce access sees the open links, to revoke them. */}
-        {canManage && (canShare || reviewLinks.length > 0) && (
+        {canManage && (mayCreateLinks || reviewLinks.length > 0) && (
           <ClientLinkSection
             boardId={board.id}
             links={reviewLinks}
-            canCreate={canShare}
+            canCreate={mayCreateLinks}
             onChange={() => {
               invitations.reload()
               members.reload()
@@ -333,7 +459,7 @@ export function ShareDialog({
           />
         )}
 
-        {canShare && invitations.data && workshopLinks.length === 0 && (
+        {mayCreateLinks && invitations.data && workshopLinks.length === 0 && (
           <WorkshopShortcut onOpen={() => setWorkshopAsk((n) => n + 1)} />
         )}
 
@@ -376,7 +502,7 @@ export function ShareDialog({
               boardId={board.id}
               focusAsk={workshopAsk}
               links={workshopLinks}
-              canCreate
+              canCreate={!internalOnly}
               onChange={() => {
                 invitations.reload()
                 members.reload()
@@ -594,6 +720,7 @@ function InvitePeople({
   )
   const [copied, setCopied] = useState(false)
   const target = parseInviteTarget(text, workspaceMembers, boardMembers)
+  const { confirm, box } = useOutsideAsk()
   // Fixer round 3 (§21): said at once, while typing, and nothing is created for it.
   const ownAddress = target.kind === 'email' && isOwnAddress(target.email, ownEmail)
 
@@ -626,6 +753,16 @@ function InvitePeople({
       case 'own-address':
         setNotice({ tone: 'error', text: plan.message })
         return
+    }
+    // Wave J: someone outside Dark Burn / TPG is asked about first (once per person or address).
+    if (plan.kind === 'grant' && !(await confirmPerson(confirm, plan.member, 'Give access'))) return
+    if (plan.kind === 'locked-link') {
+      const asked = await confirmAddress(boardId, plan.email, confirm)
+      if (asked.refused) {
+        setNotice({ tone: 'error', text: asked.refused })
+        return
+      }
+      if (!asked.ok) return
     }
     setBusy(true)
     try {
@@ -680,7 +817,7 @@ function InvitePeople({
         <datalist id={listId}>
           {addable.map((m) => (
             <option key={m.user.id} value={m.user.handle ? `@${m.user.handle}` : m.user.name}>
-              {m.user.name}
+              {pickerOptionText(m)}
             </option>
           ))}
         </datalist>
@@ -712,6 +849,7 @@ function InvitePeople({
           {target.kind === 'email' ? 'Create invite link' : 'Invite'}
         </button>
       </form>
+      {box}
       <p className="dr-share__hint" data-testid="share-invite-hint">
         {target.kind === 'member' &&
           `${target.member.user.name} is in ${workspaceName}: they get access right away.`}
@@ -790,53 +928,60 @@ function AddMember({
   const [userId, setUserId] = useState('')
   // Never owner here (like Invite people): ownership is set on the person's row, which knows who may own.
   const [role, setRole] = useState<Exclude<BoardRole, 'owner'>>('editor')
+  const { confirm, box } = useOutsideAsk()
   return (
-    <form
-      className="dr-share__add"
-      onSubmit={(e) => {
-        e.preventDefault()
-        if (userId) onAdd(userId, role)
-        setUserId('')
-      }}
-    >
-      <label htmlFor={personId} className="dr-sr-only">
-        Person from the workspace
-      </label>
-      <select
-        id={personId}
-        className="dr-input dr-select"
-        data-testid="share-add-member"
-        value={userId}
-        onChange={(e) => setUserId(e.target.value)}
+    <>
+      <form
+        className="dr-share__add"
+        onSubmit={async (e) => {
+          e.preventDefault()
+          const picked = candidates.find((m) => m.user.id === userId)
+          if (!picked) return
+          // Wave J: someone outside Dark Burn / TPG is asked about first.
+          if (!(await confirmPerson(confirm, picked, 'Give access'))) return
+          onAdd(picked.user.id, role)
+          setUserId('')
+        }}
       >
-        <option value="">Or pick someone from the workspace…</option>
-        {candidates.map((m) => (
-          <option key={m.user.id} value={m.user.id}>
-            {m.user.name}
-            {m.user.handle ? ` (@${m.user.handle})` : ''}
-          </option>
-        ))}
-      </select>
-      <label htmlFor={roleId} className="dr-sr-only">
-        Their role on this board
-      </label>
-      <select
-        id={roleId}
-        className="dr-input dr-select dr-select--compact"
-        data-testid="share-add-role"
-        value={role}
-        onChange={(e) => setRole(e.target.value as Exclude<BoardRole, 'owner'>)}
-      >
-        {ADD_MEMBER_ROLES.map((r) => (
-          <option key={r} value={r}>
-            {ROLE_OPTION_LABEL[r]}
-          </option>
-        ))}
-      </select>
-      <button type="submit" className="dr-btn" data-testid="share-add-submit" disabled={!userId || pending}>
-        Add
-      </button>
-    </form>
+        <label htmlFor={personId} className="dr-sr-only">
+          Person from the workspace
+        </label>
+        <select
+          id={personId}
+          className="dr-input dr-select"
+          data-testid="share-add-member"
+          value={userId}
+          onChange={(e) => setUserId(e.target.value)}
+        >
+          <option value="">Or pick someone from the workspace…</option>
+          {candidates.map((m) => (
+            <option key={m.user.id} value={m.user.id} data-external={m.outside === true || undefined}>
+              {pickerOptionText(m)}
+            </option>
+          ))}
+        </select>
+        <label htmlFor={roleId} className="dr-sr-only">
+          Their role on this board
+        </label>
+        <select
+          id={roleId}
+          className="dr-input dr-select dr-select--compact"
+          data-testid="share-add-role"
+          value={role}
+          onChange={(e) => setRole(e.target.value as Exclude<BoardRole, 'owner'>)}
+        >
+          {ADD_MEMBER_ROLES.map((r) => (
+            <option key={r} value={r}>
+              {ROLE_OPTION_LABEL[r]}
+            </option>
+          ))}
+        </select>
+        <button type="submit" className="dr-btn" data-testid="share-add-submit" disabled={!userId || pending}>
+          Add
+        </button>
+      </form>
+      {box}
+    </>
   )
 }
 
@@ -872,6 +1017,7 @@ function EmailInvite({
   )
   // null: not tried yet; false: the browser refused (the person copies from the field).
   const [copied, setCopied] = useState<boolean | null>(null)
+  const { confirm, box } = useOutsideAsk()
 
   const submit = async () => {
     setFailure(null)
@@ -884,6 +1030,13 @@ function EmailInvite({
       return
     }
     setFieldError(null)
+    // Wave J: an address outside Dark Burn / TPG is asked about first (or refused while internal only).
+    const asked = await confirmAddress(boardId, checked.email, confirm)
+    if (asked.refused) {
+      setFailure(asked.refused)
+      return
+    }
+    if (!asked.ok) return
     setBusy(true)
     try {
       const result = await sharing.inviteByEmail(boardId, { email: checked.email, role })
@@ -968,6 +1121,7 @@ function EmailInvite({
           {busy ? 'Sending…' : 'Send invite'}
         </button>
       </form>
+      {box}
       {fieldError && (
         <p id={errorId} className="dr-field-error" role="alert" data-testid="share-email-error">
           {fieldError}
@@ -1066,7 +1220,10 @@ function AccessRequestRow({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { user } = request
+  const { confirm, box } = useOutsideAsk()
   const decide = async (approve: boolean) => {
+    // Wave J: approving someone outside Dark Burn / TPG is asked about first (denying never is).
+    if (approve && !(await confirmPerson(confirm, request, 'Approve'))) return
     setBusy(true)
     setError(null)
     try {
@@ -1088,7 +1245,10 @@ function AccessRequestRow({
     >
       <Avatar user={user} />
       <div className="dr-member__text">
-        <span className="dr-member__name">{user.name}</span>
+        <span className="dr-member__name">
+          {user.name}
+          <OutsideStatusTag outside={request.outside} domain={request.emailDomain} />
+        </span>
         <span className="dr-member__sub">
           Asks to{' '}
           {request.roleRequested === 'editor'
@@ -1100,6 +1260,7 @@ function AccessRequestRow({
           {request.currentRole ? ` · now ${ROLE_OPTION_LABEL[request.currentRole]}` : ''}
         </span>
         {request.message && <q className="dr-sharing__request-msg">{request.message}</q>}
+        {box}
         {error && (
           <span className="dr-share__error" role="alert">
             {error}
@@ -1272,6 +1433,7 @@ function WorkspaceMembersSection({
   const [pending, setPending] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [confirming, setConfirming] = useState<string | null>(null)
+  const { confirm, box } = useOutsideAsk()
   const self = members.find((m) => m.user.id === selfUserId)?.role
   if (self !== 'owner' && self !== 'admin') return null
   const owners = members.filter((m) => m.role === 'owner').length
@@ -1306,6 +1468,7 @@ function WorkspaceMembersSection({
           {error}
         </p>
       )}
+      {box}
       <ul className="dr-members" aria-labelledby={headingId} data-testid="workspace-member-list">
         {members.map((m) => {
           const isSelf = m.user.id === selfUserId
@@ -1326,6 +1489,7 @@ function WorkspaceMembersSection({
                 <span className="dr-member__name">
                   {m.user.name}
                   {isSelf && <span className="dr-member__you"> (you)</span>}
+                  <OutsideStatusTag outside={m.outside} domain={m.emailDomain} />
                 </span>
                 <span className="dr-member__sub">{m.user.handle ? `@${m.user.handle}` : ''}</span>
                 {confirming === m.user.id && (
@@ -1360,7 +1524,13 @@ function WorkspaceMembersSection({
                     aria-label={`Workspace role for ${m.user.name}`}
                     value={m.role}
                     disabled={busy}
-                    onChange={(e) => void run(m.user.id, 'PATCH', e.target.value as WorkspaceRole)}
+                    onChange={async (e) => {
+                      const next = e.target.value as WorkspaceRole
+                      // Wave J: raising someone outside Dark Burn / TPG is asked about first.
+                      if (wsRank(next) < wsRank(m.role) && !(await confirmPerson(confirm, m, 'Change role')))
+                        return
+                      void run(m.user.id, 'PATCH', next)
+                    }}
                   >
                     {workspaceRoleChoices({ current: m.role, self, creator, lastOwner }).map((c) => (
                       <option key={c.role} value={c.role} disabled={c.disabled} title={c.title}>
@@ -1451,6 +1621,14 @@ function MemberRow({
   const [confirming, setConfirming] = useState(false)
   const [confirmingRemove, setConfirmingRemove] = useState(false)
   const { user } = member
+  const { confirm, box } = useOutsideAsk()
+  /** Wave J: a new or higher grant for someone outside Dark Burn / TPG is asked about first. */
+  const changeRole = async (next: BoardRole) => {
+    const current = rowDetail(member)?.grant ?? (member.source === 'grant' ? member.role : null)
+    if (!guest && raisesAccess(current, next) && !(await confirmPerson(confirm, member, 'Give access')))
+      return
+    onRole(next)
+  }
   const [baseName, marker] = splitGuestMarker(user.name)
   const detail = rowDetail(member)
   const source = detail
@@ -1489,6 +1667,7 @@ function MemberRow({
           <span className="dr-member__name">
             {user.name}
             {isSelf && <span className="dr-member__you"> (you)</span>}
+            <OutsideStatusTag outside={member.outside} domain={member.emailDomain} guest={guest} />
           </span>
         )}
         <span className="dr-member__sub" data-testid="member-source">
@@ -1500,6 +1679,7 @@ function MemberRow({
             {fallback}
           </span>
         )}
+        {box}
         {confirming && (
           <fieldset className="dr-sharing__confirm">
             <legend className="dr-sr-only">Transfer ownership to {user.name}</legend>
@@ -1560,7 +1740,7 @@ function MemberRow({
             value={selectValue}
             disabled={pending}
             aria-describedby={ownerNoteId}
-            onChange={(e) => onRole(e.target.value as BoardRole)}
+            onChange={(e) => void changeRole(e.target.value as BoardRole)}
           >
             {roleChoices.map((c) => (
               <option key={c.role} value={c.role} disabled={c.disabled} title={c.title}>
@@ -1649,6 +1829,7 @@ function InviteLinkSection({
   const [copied, setCopied] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const { confirm, box } = useOutsideAsk()
 
   const url = created ? (created.url.startsWith('/') ? absoluteUrl(created.url) : created.url) : ''
 
@@ -1667,6 +1848,13 @@ function InviteLinkSection({
       return
     }
     setFieldError(null)
+    // Wave J: an address outside Dark Burn / TPG is asked about first (or refused while internal only).
+    const asked = await confirmAddress(boardId, checked.email, confirm)
+    if (asked.refused) {
+      setError(asked.refused)
+      return
+    }
+    if (!asked.ok) return
     setPending(true)
     try {
       const inv = await api.createBoardInvitation(boardId, { role, email: checked.email })
@@ -1761,6 +1949,7 @@ function InviteLinkSection({
               {created ? 'Create another link' : 'Create invite link'}
             </button>
           </form>
+          {box}
           {fieldError && (
             <p id={errorId} className="dr-field-error" role="alert" data-testid="one-person-link-error">
               {fieldError}
