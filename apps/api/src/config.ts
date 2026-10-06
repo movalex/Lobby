@@ -14,6 +14,8 @@ import { parseFeedbackAdmins } from './features/feedback/admins.ts'
 import { parseStorageConfig, type StorageConfig } from './files/storage-config.ts'
 
 export type AuthProviderId = 'dev' | 'clerk' | 'email'
+export type OpenSigninMethod = 'email' | 'google'
+const GOOGLE_CLIENT_ID_RE = /^[0-9]+-[a-z0-9]+.apps.googleusercontent.com$/
 
 /**
  * Fastify's `trustProxy` option, ready to pass through: `false` (default: the socket peer is the client),
@@ -64,7 +66,14 @@ export interface ApiConfig {
    * everyone joins (DRAFTROOM_SHARED_WORKSPACE_NAME) and the partner token (DRAFTROOM_PARTNER_TOKEN, null
    * when unset: no /api/partner routes).
    */
-  openSignin: { workspaceName: string; partnerToken: string | null } | null
+  openSignin: {
+    workspaceName: string
+    partnerToken: string | null
+    /** DRAFTROOM_OPEN_SIGNIN_METHODS: typed address and/or Google (default email). */
+    methods: OpenSigninMethod[]
+    /** DRAFTROOM_GOOGLE_CLIENT_ID: required exactly when methods include google. */
+    googleClientId: string | null
+  } | null
   /** Exact browser origin (scheme://host[:port]) for Origin checks, cookie `Secure` and invite links. */
   publicOrigin: string
   /**
@@ -383,14 +392,24 @@ export function parseEventsOrigin(env: Env, production: boolean): string | null 
 export function parseOpenSignin(
   env: Env,
   authProvider: AuthProviderId,
-): { workspaceName: string; partnerTokenRaw: string | undefined } | null {
+): {
+  workspaceName: string
+  partnerTokenRaw: string | undefined
+  methods: OpenSigninMethod[]
+  googleClientId: string | null
+} | null {
   const flag = read(env, 'DRAFTROOM_OPEN_SIGNIN')
   if (flag !== undefined && flag !== '1' && flag !== '0')
     throw new Error('DRAFTROOM_OPEN_SIGNIN must be 1 (anyone may sign in as any email address) or unset')
   const open = flag === '1'
   const nameRaw = read(env, 'DRAFTROOM_SHARED_WORKSPACE_NAME')
   const partnerTokenRaw = read(env, 'DRAFTROOM_PARTNER_TOKEN')
+  const methodsRaw = read(env, 'DRAFTROOM_OPEN_SIGNIN_METHODS')
+  const googleRaw = read(env, 'DRAFTROOM_GOOGLE_CLIENT_ID')
   if (authProvider !== 'email') {
+    if (methodsRaw !== undefined)
+      throw new Error('DRAFTROOM_OPEN_SIGNIN_METHODS requires AUTH_PROVIDER=email')
+    if (googleRaw !== undefined) throw new Error('DRAFTROOM_GOOGLE_CLIENT_ID requires AUTH_PROVIDER=email')
     if (open) throw new Error('DRAFTROOM_OPEN_SIGNIN=1 requires AUTH_PROVIDER=email')
     if (nameRaw !== undefined) throw new Error('DRAFTROOM_SHARED_WORKSPACE_NAME requires AUTH_PROVIDER=email')
     if (partnerTokenRaw !== undefined) throw new Error('DRAFTROOM_PARTNER_TOKEN requires AUTH_PROVIDER=email')
@@ -402,7 +421,29 @@ export function parseOpenSignin(
     )
   const workspaceName = nameRaw ?? 'Lobby'
   if (workspaceName.length > 120) throw new Error('DRAFTROOM_SHARED_WORKSPACE_NAME must be 1-120 characters')
-  return { workspaceName, partnerTokenRaw }
+  // email: any typed address (nothing verified); google: "Sign in with Google" (the address Google verified).
+  const methods: OpenSigninMethod[] = []
+  for (const m of (methodsRaw ?? 'email')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean)) {
+    if (m !== 'email' && m !== 'google')
+      throw new Error('DRAFTROOM_OPEN_SIGNIN_METHODS must list email and/or google (comma-separated)')
+    if (!methods.includes(m)) methods.push(m)
+  }
+  if (!methods.length) throw new Error('DRAFTROOM_OPEN_SIGNIN_METHODS lists no method')
+  let googleClientId: string | null = null
+  if (methods.includes('google')) {
+    if (googleRaw === undefined || !GOOGLE_CLIENT_ID_RE.test(googleRaw))
+      throw new Error(
+        'DRAFTROOM_OPEN_SIGNIN_METHODS=google needs DRAFTROOM_GOOGLE_CLIENT_ID (<number>-<id>.apps.googleusercontent.com)',
+      )
+    googleClientId = googleRaw
+  } else if (googleRaw !== undefined)
+    throw new Error(
+      'DRAFTROOM_GOOGLE_CLIENT_ID is set but DRAFTROOM_OPEN_SIGNIN_METHODS does not include google',
+    )
+  return { workspaceName, partnerTokenRaw, methods, googleClientId }
 }
 
 /** Parses and validates the API environment. Throws an operator-facing message on bad input. */
@@ -480,7 +521,7 @@ export function loadConfig(env: Env = process.env): ApiConfig {
 
   let openSignin: ApiConfig['openSignin'] = null
   if (openSigninRaw) {
-    const { workspaceName, partnerTokenRaw } = openSigninRaw
+    const { workspaceName, partnerTokenRaw, methods, googleClientId } = openSigninRaw
     let partnerToken: string | null = null
     if (partnerTokenRaw !== undefined) {
       partnerToken = checkSecret('DRAFTROOM_PARTNER_TOKEN', partnerTokenRaw, production)
@@ -491,7 +532,7 @@ export function loadConfig(env: Env = process.env): ApiConfig {
           'DRAFTROOM_PARTNER_TOKEN must differ from DRAFTROOM_TICKET_SECRET, DRAFTROOM_INTERNAL_SECRET and DRAFTROOM_WORKER_TOKEN',
         )
     }
-    openSignin = { workspaceName, partnerToken }
+    openSignin = { workspaceName, partnerToken, methods, googleClientId }
   }
 
   // The inbox readers are matched against verified addresses; open email sign-in verifies none (anyone

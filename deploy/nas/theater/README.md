@@ -27,9 +27,23 @@ The volumes are Docker's own storage on the NAS's disks (never a network share: 
 2. In the same tunnel, **Public Hostname → Add**: subdomain `lobby`, domain `banzerinihouse.org`, service type
    `HTTP`, URL `web:8080`.
 3. On the PC, create `deploy/nas/theater/.env.tunnel` (gitignored) with one line: `TUNNEL_TOKEN=<the token>`.
+   (Done 2026-10-06 through the Cloudflare API: tunnel `lobby-theater`, `c3b29063-7164-4561-a5a6-19c2020eda34`.)
 4. Deploy (below). The tunnel starts, and `https://lobby.banzerinihouse.org` serves the Lobby.
 
-A different address: set `LOBBY_ORIGIN=https://<host>` when running the script, and use that host in step 2.
+A different address: change `LOBBY_ORIGIN` in `settings.env`, and use that host in step 2.
+
+## Sign-in: Google
+
+`settings.env` (committed, not secret) holds the address, the workspace name and the sign-in methods. To make
+"Continue with Google" the only way in:
+
+1. Google Cloud Console → (the theater's project) → **APIs & Services → Credentials → Create credentials → OAuth
+   client ID** → Application type **Web application**, name `Lobby (theater)`, **Authorized JavaScript origins**:
+   `https://lobby.banzerinihouse.org`. No redirect URI. Create, and copy the **Client ID** (it is public; the client
+   secret is not used).
+2. **OAuth consent screen / Audience**: user type *External*, publishing status **In production**, so any Google
+   account can sign in (in *Testing* only listed test users can).
+3. In `settings.env`: `LOBBY_SIGNIN_METHODS=google` and `LOBBY_GOOGLE_CLIENT_ID=<the client id>`, then deploy.
 
 ## Deploy / update
 

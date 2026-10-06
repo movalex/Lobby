@@ -269,7 +269,11 @@ function defaultProvider(config: ApiConfig): AuthProvider {
   if (config.authProvider === 'dev') return createDevAuthProvider()
   if (config.authProvider === 'email') {
     if (!config.openSignin) throw new Error('AUTH_PROVIDER=email requires DRAFTROOM_OPEN_SIGNIN=1')
-    return createEmailAuthProvider({ workspaceName: config.openSignin.workspaceName })
+    return createEmailAuthProvider({
+      workspaceName: config.openSignin.workspaceName,
+      methods: config.openSignin.methods,
+      googleClientId: config.openSignin.googleClientId,
+    })
   }
   if (!config.clerk) throw new Error('AUTH_PROVIDER=clerk requires Clerk keys')
   return createClerkAuthProvider({ ...config.clerk, publicOrigin: config.publicOrigin })
