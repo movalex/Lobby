@@ -11,6 +11,7 @@ import { existsSync, statSync } from 'node:fs'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import type { WireElement } from '@draftroom/canvas-schema/elements'
 import {
+  ensureGuestTagsSchema,
   ensureLbSchema,
   ensureReceiptsSchema,
   type Gclock,
@@ -472,6 +473,30 @@ export class BoardStore {
     return { landed, from: m.clock === null ? 0 : m.clock + 1 }
   }
 
+  // ---- the guests' tag-list keys (TAGS-1; schema.ts lb_guest_tags) ----------------------------------
+
+  /** Whether lb_guest_tags exists (read each time: a rolled-back push may have taken its CREATE with it). */
+  private hasGuestTagsTable(): boolean {
+    return !!this.db
+      .prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'lb_guest_tags'")
+      .get()
+  }
+
+  /** The tag-list keys guest `uid` wrote that nobody wrote since (their row's clock is the key's clock). */
+  guestTagKeys(uid: string): Set<string> {
+    const out = new Set<string>()
+    if (!this.hasGuestTagsTable()) return out
+    for (const r of this.st.guestTagKeys.all(uid) as { key: string }[]) out.add(r.key)
+    return out
+  }
+
+  /** Records that guest `uid` wrote `keys` at `clock`, inside the push's transaction (it advances the clock). */
+  putGuestTags(uid: string, keys: readonly string[], clock: number): void {
+    if (!keys.length) return
+    ensureGuestTagsSchema(this.db)
+    for (const key of keys) this.st.guestTagPut.run(key, uid, clock)
+  }
+
   // ---- recently deleted ------------------------------------------------------------------------
 
   insertDeleted(w: DeletedRowWrite): void {
@@ -657,5 +682,9 @@ function prepareStatements(db: DatabaseSync) {
     receiptMark: `INSERT INTO lb_receipts (uid, rid, clock, at) VALUES (?, '', ?, ?)
        ON CONFLICT(uid, rid) DO UPDATE SET clock = max(clock, excluded.clock), at = excluded.at`,
     receiptFloor: "SELECT max(clock) AS clock FROM lb_receipts WHERE rid = '' AND uid IN (?, '')",
+    // the guests' tag-list keys (TAGS-1)
+    guestTagKeys: `SELECT g.key AS key FROM lb_guest_tags g JOIN lb_doc d ON d.key = g.key
+       WHERE g.uid = ? AND d.clock = g.clock`,
+    guestTagPut: 'INSERT OR REPLACE INTO lb_guest_tags (key, uid, clock) VALUES (?, ?, ?)',
   })
 }

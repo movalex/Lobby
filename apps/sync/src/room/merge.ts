@@ -122,6 +122,13 @@ const isLabel = (el: El | null | undefined): boolean => !!el && el.type === 'tex
 const isFreeText = (el: El | null | undefined): boolean => !!el && el.type === 'text' && !el.containerId
 /** The largest `version` a create may carry from a client. */
 const MAX_CLIENT_VERSION = 2 ** 31
+/**
+ * TAGS-1: the last places of the board's tag list (MAX_TAG_DEFS) kept for members: name-only guests, every uid
+ * together, add a new tag-list key only while the list has fewer than MAX_TAG_DEFS - this (180 of 200), so a
+ * workshop of guests (10 keys each, GUEST_TAG_DEF_CAP) cannot fill it for the board's own people. A guest's
+ * refused key answers GUEST_LIMIT, as its own cap does.
+ */
+export const MEMBER_TAG_DEF_RESERVE = 20
 const FIT_CONTAINERS = new Set(['rectangle', 'ellipse', 'diamond', 'stickynote'])
 /** The lease id that protects an element's `text`, `layout` and `life`: a label's container, else itself. */
 export const leaseIdOf = (el: El): string => (isLabel(el) ? (el.containerId as string) : el.id)
@@ -930,6 +937,13 @@ export class PushApplier {
           refuse(key, 'INVALID')
           continue
         }
+        // TAGS-1: the list's last MEMBER_TAG_DEF_RESERVE places are the members': guests (every uid together)
+        // add a new tag only below that, so guests can never fill the list for the board's own people
+        if (this.s.guest && n + 1 > MAX_TAG_DEFS - MEMBER_TAG_DEF_RESERVE) {
+          refuse(key, 'GUEST_LIMIT')
+          guestLimited = true
+          continue
+        }
       }
       if (this.s.guest && !this.guestMayWriteTagKey(key)) {
         refuse(key, 'GUEST_LIMIT')
@@ -947,10 +961,13 @@ export class PushApplier {
    * fewer than the cap's keys of the tag list. "Wrote" is read from the writer ledger (the uid of each push's
    * clock, this room open) against every `tagDef:*` row's clock, removed keys included, so a deletion or a
    * rename spends the budget as a creation does. A key someone else rewrote since is no longer the guest's.
+   * TAGS-1: the keys come from the board file too (lb_guest_tags, written with each of a guest's tag-list
+   * writes), so an eviction or a restart no longer resets the budget; the ledger still covers this room open's
+   * writes made before that table existed.
    */
   private guestMayWriteTagKey(key: string): boolean {
     if (!this.guestTagKeys) {
-      const mine = new Set<string>()
+      const mine = this.env.store.guestTagKeys(this.s.uid)
       for (const [k, clock] of Object.entries(this.env.store.docClocks()))
         if (k.startsWith(TAG_DEF_KEY_PREFIX) && this.env.ledger.get(clock) === this.s.uid) mine.add(k)
       this.guestTagKeys = mine
@@ -1150,6 +1167,13 @@ export class PushApplier {
         if (counted) this.env.guestCreated.set(counted, (this.env.guestCreated.get(counted) ?? 0) + 1)
       }
       for (const [key, value] of Object.entries(this.docWrites)) store.docSet(key, this.clock, value)
+      // TAGS-1: a guest's tag-list keys, in the board file (its budget survives an eviction and a restart)
+      if (this.s.guest)
+        store.putGuestTags(
+          this.s.uid,
+          Object.keys(this.docWrites).filter((k) => k.startsWith(TAG_DEF_KEY_PREFIX)),
+          this.clock,
+        )
       this.env.ledger.set(this.clock, this.s.uid)
     }
     return {

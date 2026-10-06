@@ -6,11 +6,23 @@
 // definition answers the definition’s code (GUEST_LIMIT), never the abuse-counting INVALID.
 // Raw frames against the REAL sync server process (DRAFTROOM_ENGINE=excalidraw), the protocol harness.
 
-import { GUEST_TAG_DEF_CAP } from '@draftroom/canvas-schema/limits'
-import { describe, expect, it } from 'vitest'
-import { type ElementStack, newBoardId, sharedElementStack } from '../harness/element-stack.ts'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { GUEST_TAG_DEF_CAP, MAX_TAG_DEFS } from '@draftroom/canvas-schema/limits'
+import { afterEach, describe, expect, it } from 'vitest'
+import { MEMBER_TAG_DEF_RESERVE } from '../../src/room/merge.ts'
+import {
+  createElementStack,
+  type ElementStack,
+  newBoardId,
+  sharedElementStack,
+} from '../harness/element-stack.ts'
 import { rect } from '../harness/elements.ts'
+import { callInternal } from '../harness/tickets.ts'
 import { storedLobby } from './support.ts'
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 const shared = sharedElementStack()
 
@@ -106,4 +118,119 @@ describe('CR-3D-5: an editor guest writes the tag list, nothing else of the boar
     expect(doc['tagDef:other-guest']).toBeDefined()
     expect(await storedLobby(st, b, 'r1')).toEqual({})
   })
+})
+
+// ---- TAGS-1 (wave J): the budget survives an eviction and a restart; members keep a reserve ------------------
+
+describe('TAGS-1: a guest’s tag-list budget is kept in the board file, and members keep the list’s last places', () => {
+  const dirs: string[] = []
+  const stacks: ElementStack[] = []
+  afterEach(async () => {
+    await Promise.all(stacks.splice(0).map((s) => s.dispose()))
+    for (const d of dirs.splice(0))
+      rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  })
+  const T = 120_000
+
+  it(
+    `a guest that wrote ${GUEST_TAG_DEF_CAP} keys is still at its cap after the room was evicted and after a restart; a key a member rewrote is free again`,
+    async () => {
+      const dataDir = mkdtempSync(join(tmpdir(), 'dr-j6-tags-'))
+      dirs.push(dataDir)
+      let st = await createElementStack({ dataDir, env: { IDLE_EVICT_MS: '200' } })
+      stacks.push(st)
+      const b = newBoardId()
+      const alice = await st.client({ boardId: b, user: 'alice' })
+      const g = await st.client({ boardId: b, user: 'guest-keep', guest: true })
+      for (let i = 0; i < GUEST_TAG_DEF_CAP; i++)
+        expect((await g.push([], { doc: { set: tagDef(`k${i}`) } })).docDenied, `k${i}`).toBeUndefined()
+      expect((await g.push([], { doc: { set: tagDef('over-1') } })).docDenied).toEqual({
+        keys: ['tagDef:over-1'],
+        code: 'GUEST_LIMIT',
+      })
+      // the room is evicted (nobody on the board), then opened again: before TAGS-1 the budget was fresh
+      g.close()
+      alice.close()
+      await g.untilClosed()
+      await alice.untilClosed()
+      await sleep(700)
+      const metrics = await (await callInternal(st.server.url, 'GET', '/internal/metrics')).text()
+      expect(metrics).toMatch(/^lobby_rooms_open 0$/m)
+      const g2 = await st.client({ boardId: b, user: 'guest-keep', guest: true })
+      expect((await g2.push([], { doc: { set: tagDef('over-2') } })).docDenied).toEqual({
+        keys: ['tagDef:over-2'],
+        code: 'GUEST_LIMIT',
+      })
+      // its own keys stay writable
+      expect(
+        (await g2.push([], { doc: { set: { 'tagDef:k0': { name: 'k0', color: 'blue' } } } })).docDenied,
+      ).toBeUndefined()
+      // a process restart: the same
+      await st.dispose()
+      stacks.length = 0
+      st = await createElementStack({ dataDir })
+      stacks.push(st)
+      const g3 = await st.client({ boardId: b, user: 'guest-keep', guest: true })
+      expect((await g3.push([], { doc: { set: tagDef('over-3') } })).docDenied).toEqual({
+        keys: ['tagDef:over-3'],
+        code: 'GUEST_LIMIT',
+      })
+      // a member rewrites one of the guest's keys: it is no longer the guest's, so one new key fits again
+      const a2 = await st.client({ boardId: b, user: 'alice' })
+      expect(
+        (await a2.push([], { doc: { set: { 'tagDef:k1': { name: 'k1', color: 'green' } } } })).docDenied,
+      ).toBeUndefined()
+      expect((await g3.push([], { doc: { set: tagDef('after-member') } })).docDenied).toBeUndefined()
+      expect((await g3.push([], { doc: { set: tagDef('over-4') } })).docDenied?.code).toBe('GUEST_LIMIT')
+      // another guest uid has its own budget
+      const other = await st.client({ boardId: b, user: 'guest-other', guest: true })
+      expect((await other.push([], { doc: { set: tagDef('other-1') } })).docDenied).toBeUndefined()
+    },
+    T,
+  )
+
+  it(
+    `guests together fill the tag list to ${MAX_TAG_DEFS - MEMBER_TAG_DEF_RESERVE} of ${MAX_TAG_DEFS} at most; members add the rest`,
+    async () => {
+      const dataDir = mkdtempSync(join(tmpdir(), 'dr-j6-reserve-'))
+      dirs.push(dataDir)
+      const st = await createElementStack({ dataDir })
+      stacks.push(st)
+      const b = newBoardId()
+      const alice = await st.client({ boardId: b, user: 'alice' })
+      const guestShare = MAX_TAG_DEFS - MEMBER_TAG_DEF_RESERVE
+      expect(guestShare % GUEST_TAG_DEF_CAP).toBe(0)
+      // fresh guest uids (one per incognito join), each spending its whole budget in one push
+      for (let u = 0; u < guestShare / GUEST_TAG_DEF_CAP; u++) {
+        const g = await st.client({ boardId: b, user: `guest-r${u}`, guest: true })
+        const set: Record<string, unknown> = {}
+        for (let i = 0; i < GUEST_TAG_DEF_CAP; i++) Object.assign(set, tagDef(`r${u}-${i}`))
+        expect((await g.push([], { doc: { set } })).docDenied, `guest ${u}`).toBeUndefined()
+        g.close()
+      }
+      // the next fresh guest is refused: the rest is the members'
+      const late = await st.client({ boardId: b, user: 'guest-late', guest: true })
+      expect((await late.push([], { doc: { set: tagDef('late') } })).docDenied).toEqual({
+        keys: ['tagDef:late'],
+        code: 'GUEST_LIMIT',
+      })
+      // a guest still renames or removes a key it wrote (no new place)
+      const g0 = await st.client({ boardId: b, user: 'guest-r0', guest: true })
+      expect((await g0.push([], { doc: { set: { 'tagDef:r0-0': null } } })).docDenied).toBeUndefined()
+      // a member adds up to the list's cap, then is refused as before (INVALID)
+      const set: Record<string, unknown> = {}
+      for (let i = 0; i < MEMBER_TAG_DEF_RESERVE + 1; i++) Object.assign(set, tagDef(`m${i}`))
+      expect((await alice.push([], { doc: { set } })).docDenied).toBeUndefined()
+      expect((await alice.push([], { doc: { set: tagDef('m-over') } })).docDenied).toEqual({
+        keys: ['tagDef:m-over'],
+        code: 'INVALID',
+      })
+      const fresh = await st.client({ boardId: b, user: 'fresh' })
+      const keys = Object.keys((fresh.welcome?.doc ?? {}) as Record<string, unknown>).filter((k) =>
+        k.startsWith('tagDef:'),
+      )
+      expect(keys).toHaveLength(MAX_TAG_DEFS)
+    },
+    T,
+  )
 })
