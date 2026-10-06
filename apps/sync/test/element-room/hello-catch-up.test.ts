@@ -11,6 +11,7 @@ import { ELEMENT_SCHEMA_VERSION, PROTO } from '@draftroom/canvas-schema/protocol
 import { afterEach, describe, expect, it } from 'vitest'
 import WebSocket, { type RawData, WebSocketServer } from 'ws'
 import { ProtocolClient } from '../harness/element-client.ts'
+import { boardSocketTarget } from '../harness/tickets.ts'
 import { RawClient, ticketFor } from './support/client.ts'
 import { rect } from './support/elements.ts'
 import { newBoardId, useElementHarness } from './support/stack.ts'
@@ -29,9 +30,11 @@ type Frame = { data: Buffer; binary: boolean; type: string }
 /** Everything the room sends `user` for one hello, up to and including its `contracts` frame. */
 async function recordHello(wsUrl: string, boardId: string, user: string): Promise<Frame[]> {
   const tab = `tab-${user}`
-  const ws = new WebSocket(
-    `${wsUrl}/connect/${boardId}?sessionId=${encodeURIComponent(tab)}&ticket=${encodeURIComponent(ticketFor(boardId, user))}`,
+  const target = boardSocketTarget(
+    `${wsUrl}/connect/${boardId}?sessionId=${encodeURIComponent(tab)}`,
+    ticketFor(boardId, user),
   )
+  const ws = new WebSocket(target.url, target.protocols)
   const frames: Frame[] = []
   try {
     await new Promise<void>((resolve, reject) => {

@@ -41,6 +41,36 @@ describe('presence', () => {
     )
   })
 
+  it('a joiner’s roster join reaches everyone before its first cursor, also when its join and the tick’s cursors go out in separate tasks (CAP-L1)', async () => {
+    const st = await h.stack()
+    const b = newBoardId()
+    const watcher = await st.client({ boardId: b, user: 'watcher' })
+    // joiners that move at once, in waves (their joins and first cursors land in the same ticks)
+    for (let wave = 0; wave < 4; wave++) {
+      const joiners = await Promise.all(
+        Array.from({ length: 12 }, (_, i) => st.client({ boardId: b, user: `w${wave}-${i}` })),
+      )
+      for (const j of joiners) j.presence({ pointer: { x: wave * 100, y: 5 } })
+      await sleep(250)
+    }
+    await sleep(300)
+    // in the watcher's own order of frames: no cursor of a session before that session's join
+    const joined = new Set<string>()
+    const early: string[] = []
+    let cursors = 0
+    for (const m of watcher.received) {
+      if (m.type === 'roster') for (const e of m.events) if (e.k === 'join') joined.add(e.p.sid)
+      if (m.type === 'presence')
+        for (const p of m.peers) {
+          cursors++
+          if (!joined.has(p.sid)) early.push(p.sid)
+        }
+    }
+    expect(joined.size).toBe(48)
+    expect(cursors).toBeGreaterThan(0)
+    expect(early).toEqual([])
+  })
+
   it('at most 40 cursors per recipient (45 peers moving)', async () => {
     const st = await h.stack()
     const b = newBoardId()

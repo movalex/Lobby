@@ -248,6 +248,42 @@ describe('the 40-cursor rank (D1): the same frames as CR-3C-1, ranking only when
   it('crowded views (everyone in view, cursors going away and coming back): the same frames', () => {
     for (const seed of [21, 22]) randomRun(seed, { ticks: 300, lo: 90, hi: 110, area: 400 })
   })
+
+  it('PRES-2: the random rooms share ranks (and still give the same frames)', () => {
+    const { hub } = randomRun(31, { ticks: 300, lo: 80, hi: 140, area: 3_000 })
+    expect(hub.rankShares).toBeGreaterThan(0)
+    expect(hub.rankShares).toBeLessThan(hub.rankCalls)
+  })
+
+  it('PRES-2: a join storm (a restart: welcomes back to back, then everyone moving) gives the same frames; the joiners share ranks', () => {
+    const r = pair()
+    const view = { x: 0, y: 0, w: 1_920, h: 1_080 }
+    const all: Sess[] = []
+    // 100 sessions on the board (each says where it is), then 100 more join back to back: their welcomes
+    // see the same 100 peers and hold nothing yet
+    for (let i = 0; i < 100; i++) {
+      const s = r.join(i, i % 2 === 0)
+      s.view = view
+      s.pointer = { x: (i * 37) % 1_900, y: (i * 53) % 1_000 }
+      r.input(s)
+      all.push(s)
+    }
+    r.tick()
+    const shares0 = (r.hubs[0] as PresenceHub).rankShares
+    for (let i = 100; i < 200; i++) all.push(r.join(i, i % 3 === 0))
+    // most of the 100 welcomes share the first one's rank: those the first one took cannot have it
+    expect((r.hubs[0] as PresenceHub).rankShares - shares0).toBeGreaterThan(50)
+    for (let t = 0; t < 60; t++) {
+      for (const s of all) {
+        s.view = view
+        s.pointer = (t + s.i) % 17 === 0 ? null : { x: (s.i * 37 + t * 7) % 1_900, y: (s.i * 53) % 1_000 }
+        r.input(s)
+      }
+      const [mine, ref] = r.tick()
+      for (const s of all) expect(mine.get(s.key) ?? [], `tick ${t} ${s.sid}`).toEqual(ref.get(s.key) ?? [])
+    }
+    expect((r.hubs[0] as PresenceHub).rankShares).toBeGreaterThan(shares0 + 50)
+  })
 })
 
 // ---- a 200-session board: L1's ---------------------------------------------------------------------------
@@ -358,8 +394,10 @@ describe('a 200-session board (L1): the same frames, and ranks bounded per tick 
     let worst = 0
     let builds = 0
     const ticks = 750
+    let shares = 0
     for (let i = 0; i < ticks; i++) {
       const before = h.rankCalls
+      const sharesBefore = h.rankShares
       const buildsBefore = h.bucketBuilds
       // what everyone holds as the tick starts (the frames of the ticks before it)
       const start = new Map([...held].map(([k, v]) => [k, new Set(v)]))
@@ -371,6 +409,7 @@ describe('a 200-session board (L1): the same frames, and ranks bounded per tick 
       const r = h.rankCalls - before
       expect(r, `tick ${i}`).toBeLessThanOrEqual(n + backstop)
       ranks += r
+      shares += h.rankShares - sharesBefore
       holders += n
       worst = Math.max(worst, r)
       builds += h.bucketBuilds - buildsBefore
@@ -379,8 +418,12 @@ describe('a 200-session board (L1): the same frames, and ranks bounded per tick 
     // a bucket per distinct view (two here) per tick at most, built only when someone with it is ranked
     expect(builds / measured).toBeLessThanOrEqual(2)
     for (const set of held.values()) expect(set.size).toBeLessThanOrEqual(CURSORS_PER_RECIPIENT)
+    // PRES-2: the holders of the cursor that went away mostly hold the same 40, so most of them get the
+    // first one's rank: the walks a tick are a few, not one per holder
+    const walks = ranks - shares
+    expect(walks / measured).toBeLessThan(ranks / measured / 4)
     console.info(
-      `[presence-rank] L1 200 sessions, watchers going away: ${(ranks / measured).toFixed(1)} ranks/tick (worst ${worst}; holders of a cursor gone away ${(holders / measured).toFixed(1)}/tick; backstop ${backstop}; CR-3C-1: 200), ${(builds / measured).toFixed(2)} buckets/tick`,
+      `[presence-rank] L1 200 sessions, watchers going away: ${(ranks / measured).toFixed(1)} ranks/tick, of them ${(walks / measured).toFixed(1)} walked and ${(shares / measured).toFixed(1)} shared (PRES-2) (worst ${worst}; holders of a cursor gone away ${(holders / measured).toFixed(1)}/tick; backstop ${backstop}; CR-3C-1: 200), ${(builds / measured).toFixed(2)} buckets/tick`,
     )
   })
 

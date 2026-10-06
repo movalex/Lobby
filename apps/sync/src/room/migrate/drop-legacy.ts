@@ -31,7 +31,13 @@
 import { existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { LB_PRAGMAS, LB_PREV_TABLE_PATTERN, LB_RECEIPTS_TABLE, LB_TABLES } from '../schema.ts'
+import {
+  LB_GUEST_TAGS_TABLE,
+  LB_PRAGMAS,
+  LB_PREV_TABLE_PATTERN,
+  LB_RECEIPTS_TABLE,
+  LB_TABLES,
+} from '../schema.ts'
 import { boardFileState } from './board-state.ts'
 import { fileBytes, writeReport } from './convert-board.ts'
 import { tableNames } from './digest.ts'
@@ -43,8 +49,12 @@ export const LEGACY_TLDRAW_TABLES = ['documents', 'metadata', 'objects', 'tombst
 /** R0's "Recently deleted" capture (deleted/store.ts); the new build has its own `lb_deleted`. */
 export const LEGACY_DELETED_TABLES = ['dr_deleted_records', 'dr_deleted_schemas'] as const
 
-/** The tables the room serves: never dropped (the push receipts too, CONTRACTS_REV 11). */
-const SERVING_TABLES = new Set<string>([...LB_TABLES.filter((t) => t !== 'lb_source'), LB_RECEIPTS_TABLE])
+/** The tables the room serves: never dropped (the push receipts too, CONTRACTS_REV 11; the guests' tag keys, TAGS-1). */
+const SERVING_TABLES = new Set<string>([
+  ...LB_TABLES.filter((t) => t !== 'lb_source'),
+  LB_RECEIPTS_TABLE,
+  LB_GUEST_TAGS_TABLE,
+])
 
 export interface DropLegacyJob {
   readonly kind: 'drop-legacy'

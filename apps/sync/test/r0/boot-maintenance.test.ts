@@ -10,14 +10,16 @@ import { loadConfig } from '../../src/config.ts'
 import { ticketFor } from '../element-room/support/client.ts'
 import { note } from '../element-room/support/elements.ts'
 import { newBoardId, useElementHarness } from '../element-room/support/stack.ts'
-import { callInternal } from '../harness/tickets.ts'
+import { boardSocketTarget, callInternal } from '../harness/tickets.ts'
 
 const T = 120_000
 
 /** Opens a socket and reports how it closed (or `open` when it is still open after 1.5 s). */
-const tryConnect = (wsUrl: string, url: string) =>
+/** Opens a board socket at `url` with `ticket` in the offered subprotocol (as browsers send it, L7). */
+const tryConnect = (wsUrl: string, url: string, ticket: string) =>
   new Promise<{ code: number; reason: string } | 'open'>((resolve, reject) => {
-    const ws = new WebSocket(`${wsUrl}${url}`)
+    const target = boardSocketTarget(`${wsUrl}${url}`, ticket)
+    const ws = new WebSocket(target.url, target.protocols)
     const timer = setTimeout(() => {
       ws.terminate()
       resolve('open')
@@ -56,8 +58,10 @@ describe('DRAFTROOM_BOOT_MAINTENANCE', () => {
         engine: 'excalidraw',
       })
       const b = newBoardId()
-      const url = `/connect/${b}?sessionId=t1&ticket=${encodeURIComponent(ticketFor(b, 'alice'))}`
-      expect(await tryConnect(st.server.wsUrl, url)).toEqual({ code: 4099, reason: 'MAINTENANCE' })
+      expect(await tryConnect(st.server.wsUrl, `/connect/${b}?sessionId=t1`, ticketFor(b, 'alice'))).toEqual({
+        code: 4099,
+        reason: 'MAINTENANCE',
+      })
       const off = await callInternal(st.server.url, 'POST', '/internal/maintenance', { body: { on: false } })
       expect(await json(off)).toEqual({ maintenance: false, closedSockets: 0 })
       const a = await st.client({ boardId: b, user: 'alice' })

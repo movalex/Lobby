@@ -15,7 +15,7 @@ import { checkInvariants } from '@draftroom/canvas-schema/invariants'
 import { ELEMENT_SCHEMA_VERSION, PROTO } from '@draftroom/canvas-schema/protocol'
 import { describe, expect, it } from 'vitest'
 import WebSocket from 'ws'
-import { callInternal } from '../harness/tickets.ts'
+import { boardSocketTarget, callInternal } from '../harness/tickets.ts'
 import { type RawClient, ticketFor } from './support/client.ts'
 import { type El, frame, label, note, rect, text, withLabel } from './support/elements.ts'
 import { type ElementStack, newBoardId, useElementHarness } from './support/stack.ts'
@@ -364,10 +364,11 @@ interface Flood {
   closed: { code: number; reason: string } | null
 }
 async function floodSocket(st: ElementStack, boardId: string, user: string, tab: string): Promise<Flood> {
-  const ticket = encodeURIComponent(ticketFor(boardId, user, 'viewer'))
-  const ws = new WebSocket(
-    `${st.server.wsUrl}/connect/${boardId}?sessionId=${encodeURIComponent(tab)}&ticket=${ticket}`,
+  const target = boardSocketTarget(
+    `${st.server.wsUrl}/connect/${boardId}?sessionId=${encodeURIComponent(tab)}`,
+    ticketFor(boardId, user, 'viewer'),
   )
+  const ws = new WebSocket(target.url, target.protocols)
   const f: Flood = { ws, tab, welcomes: 0, closed: null }
   ws.on('message', (data, binary) => {
     if (!binary && (data as Buffer).subarray(0, 18).toString() === '{"type":"welcome",') f.welcomes++

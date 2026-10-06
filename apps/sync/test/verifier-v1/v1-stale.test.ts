@@ -5,11 +5,12 @@ import { describe, expect, it } from 'vitest'
 import { LobbyEngineCore } from '../../../web/src/canvas/sync/core/engine.ts'
 import { createMemoryOfflineStore } from '../../../web/src/canvas/sync/core/offline-memory.ts'
 import { bump, createMapScene } from '../../../web/src/canvas/sync/headless/scene.ts'
-import { createSocketTransport, type WebSocketCtor } from '../../../web/src/canvas/sync/transport/socket.ts'
+import { createSocketTransport } from '../../../web/src/canvas/sync/transport/socket.ts'
 import type { SceneElement } from '../../../web/src/canvas/sync/types.ts'
 import { ticketFor } from '../element-room/support/client.ts'
 import { rect } from '../element-room/support/elements.ts'
 import { newBoardId, useElementHarness } from '../element-room/support/stack.ts'
+import { TicketWebSocket } from '../harness/tickets.ts'
 import { sleep, startProxy, until, vlog } from './support.ts'
 
 const h = useElementHarness()
@@ -30,7 +31,7 @@ describe('V1 STALE for old offline replays', () => {
       const transport = createSocketTransport({
         url: async () =>
           `${base}/connect/${b}?${new URLSearchParams({ sessionId: tab, ticket: ticketFor(b, 'alice') })}`,
-        WebSocketImpl: (globalThis as { WebSocket: unknown }).WebSocket as WebSocketCtor,
+        WebSocketImpl: TicketWebSocket,
         backoffMs: [50, 100, 200],
       })
       const core = new LobbyEngineCore({ transport, scene, tab, offline: createMemoryOfflineStore(), now })

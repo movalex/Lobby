@@ -3,6 +3,7 @@
 // element goes through the server's real accept path (schema, limits, invariants, file-refs, index
 // keys), so a seeded board is exactly what the room stores. Used by the load runs (`--seed push`, Node
 // sockets) and by the browser specs (through a forge socket in a page: e2e/spike-b/support/seed.ts).
+import { ticketProtocols } from '../../apps/web/src/board/ticket-protocol.ts'
 import type { WireElement } from '../../packages/canvas-schema/src/elements.ts'
 import {
   type Ack,
@@ -153,8 +154,11 @@ export async function openNodeSocket(
 ): Promise<
   SeedIo & { welcome: Welcome; snapshot(timeoutMs?: number): Promise<SnapshotFrame>; close(): void }
 > {
-  const url = `${syncHttpUrl.replace(/^http/, 'ws')}/connect/${encodeURIComponent(boardId)}?${new URLSearchParams({ sessionId: tab, ticket })}`
-  const ws = new WebSocket(url)
+  // the ticket in the offered subprotocol, as a browser sends it (L7-tail), not in the URL
+  const protocols = ticketProtocols(ticket)
+  const query: Record<string, string> = protocols ? { sessionId: tab } : { sessionId: tab, ticket }
+  const url = `${syncHttpUrl.replace(/^http/, 'ws')}/connect/${encodeURIComponent(boardId)}?${new URLSearchParams(query)}`
+  const ws = protocols ? new WebSocket(url, protocols) : new WebSocket(url)
   ws.binaryType = 'arraybuffer'
   const inbox: ServerMessage[] = []
   const frames: ArrayBuffer[] = []

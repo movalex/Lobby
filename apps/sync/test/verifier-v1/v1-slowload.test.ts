@@ -3,11 +3,12 @@
 import { describe, expect, it } from 'vitest'
 import { LobbyEngineCore } from '../../../web/src/canvas/sync/core/engine.ts'
 import { bump, createMapScene } from '../../../web/src/canvas/sync/headless/scene.ts'
-import { createSocketTransport, type WebSocketCtor } from '../../../web/src/canvas/sync/transport/socket.ts'
+import { createSocketTransport } from '../../../web/src/canvas/sync/transport/socket.ts'
 import type { OfflineEntry, OfflineQueueStore, SceneElement } from '../../../web/src/canvas/sync/types.ts'
 import { ticketFor } from '../element-room/support/client.ts'
 import { rect } from '../element-room/support/elements.ts'
 import { newBoardId, useElementHarness } from '../element-room/support/stack.ts'
+import { TicketWebSocket } from '../harness/tickets.ts'
 import { sleep, until, vlog } from './support.ts'
 
 const h = useElementHarness()
@@ -45,7 +46,7 @@ describe('V1 Saved while the old queue is not loaded yet', () => {
       const transport = createSocketTransport({
         url: async () =>
           `${st.server.wsUrl}/connect/${b}?${new URLSearchParams({ sessionId: tab, ticket: ticketFor(b, 'alice') })}`,
-        WebSocketImpl: (globalThis as { WebSocket: unknown }).WebSocket as WebSocketCtor,
+        WebSocketImpl: TicketWebSocket,
       })
       const core = new LobbyEngineCore({ transport, scene, tab, offline: store })
       const states: { s: string; loaded: boolean; t: number }[] = []

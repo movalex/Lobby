@@ -81,6 +81,18 @@ import { runServerWrite, type ServerWriteEntry } from './server-write.ts'
 import { BoardStore, LB_DELETED_LIMITS } from './store.ts'
 import type { PreOp, PreparedPush, PushOutcome, SessionIdentity } from './types.ts'
 
+/**
+ * What a batch wrote of its receipt gaps (RCPT-1, element-room.ts writeReceiptGaps), applied after its COMMIT:
+ * the batch's own gaps (`fresh`, null when it only wrote older ones), where they went, what lb_meta holds
+ * now and what is still only in memory.
+ */
+interface ReceiptGapWrite {
+  readonly fresh: Map<string, number> | null
+  readonly where: 'file' | 'meta' | 'memory'
+  readonly meta: Map<string, number>
+  readonly unwritten: Map<string, number> | null
+}
+
 /** The drain's limits (§2.4.3 stage 1); a busy room's hold is pacing.ts DRAIN_PACING. */
 export const DRAIN = { maxPushes: 64, maxWorkMs: 8, minCommitIntervalMs: 25 } as const
 /** A catch-up larger than this is a reset instead. */
@@ -409,6 +421,17 @@ export class ElementRoom {
    * could not.
    */
   private readonly receiptGaps = new Map<string, number>()
+  /**
+   * RCPT-1: the gaps that are only in memory (neither a marker row nor lb_meta could be written). Every later
+   * batch that advances the clock tries again, so a restart after it finds them in the file.
+   */
+  private readonly unwrittenGaps = new Map<string, number>()
+  /** RCPT-1: the gaps lb_meta holds (schema.ts LB_META_RECEIPT_GAPS), as of the last COMMIT */
+  private metaGaps = new Map<string, number>()
+  /** the error name of the last failed receipts write (logged with its gap; no content) */
+  private receiptsError = 'error'
+  /** how many receipts the last failed receipts write held (the metric counts receipts, as before) */
+  private lastUnrecordedRows = 0
   /** this room open's session id, named by its `lb_deleted` rows (the per-session retention, store.ts) */
   readonly deletedSession = randomUUID()
 
@@ -427,6 +450,7 @@ export class ElementRoom {
       deps.log('[room] compaction failed', this.boardId, (e as Error)?.name ?? 'error')
     }
     this.rebuildCaches()
+    this.loadReceiptGaps()
     this.timers.push(setInterval(() => this.presenceTick(), PRESENCE_TICK_MS))
     this.timers.push(setInterval(() => this.leaseTick(), LEASE_TICK_MS))
     for (const t of this.timers) t.unref?.()
@@ -456,6 +480,18 @@ export class ElementRoom {
     }
     // ... and so do its deleted ones (D5, V2's re-check: tombstones made or revived reset nothing)
     for (const r of dead) if (r.byGuest && !r.label) guestItem(r.byGuest)
+  }
+
+  /** RCPT-1: the receipt gaps lb_meta kept (a gap whose marker row could not be written) count from the open. */
+  private loadReceiptGaps(): void {
+    try {
+      this.metaGaps = this.store.receiptGapsMeta()
+    } catch (e) {
+      this.deps.log('[room] receipt gaps unreadable', this.boardId, (e as Error)?.name ?? 'error')
+      this.metaGaps = new Map()
+    }
+    for (const [uid, clock] of this.metaGaps)
+      this.receiptGaps.set(uid, Math.max(this.receiptGaps.get(uid) ?? 0, clock))
   }
 
   private pullWorkshop(): void {
@@ -783,7 +819,7 @@ export class ElementRoom {
       )
       s.welcomed = true
       this.deps.metrics.inc('lobby_joins_total')
-      // one `roster` frame per hello slice for everyone (the joiner's welcome names it already)
+      // one `roster` frame per 100 ms at most for everyone (roster-batch.ts; the joiner's welcome names it already)
       if (!already) this.rosterBatch.push({ k: 'join', p: rosterEntry(s.identity) })
     }
     const meta = this.store.meta
@@ -901,8 +937,23 @@ export class ElementRoom {
   // ---- presence and lease ticks -------------------------------------------------------------------
 
   private presenceTick(): void {
-    // a peer's join reaches everyone before its first cursor does
-    this.rosterBatch.flush()
+    // a peer's join reaches everyone before its first cursor does. CAP-L1: when there are roster events, their
+    // frames go out in this task and the cursors in the next one (both write to every session: in a reconnect
+    // storm, one task doing both was the longest of the tick's)
+    if (this.rosterBatch.queued) {
+      this.rosterBatch.flush()
+      setImmediate(() => {
+        if (!this.closed) this.presenceTickNow()
+      })
+      return
+    }
+    this.presenceTickNow()
+  }
+
+  /** The presence tick's frames (presence.ts tick), to every welcomed session. */
+  private presenceTickNow(): void {
+    // a join queued meanwhile still goes first (the order above holds in every case)
+    if (this.rosterBatch.queued) this.rosterBatch.flush()
     const recipients = [...this.sessions]
       .filter((s) => s.welcomed && !s.closed)
       .map((s) => ({
@@ -1152,7 +1203,10 @@ export class ElementRoom {
         receipts.push({ uid: e.session.identity.uid, rid: e.push.rid, clock: outcome.clock })
       deliveries.push(this.ackDelivery(e.session, e.push, outcome, ackClock))
     }
-    const receiptGap = receipts.length ? this.recordReceipts(receipts, now) : null
+    // receipts this batch could not record (null: recorded, or none), then the gaps the file must keep
+    const unrecorded = receipts.length ? this.recordReceipts(receipts, now) : null
+    const receiptGap =
+      clock !== startClock ? this.writeReceiptGaps(unrecorded, receipts.length > 0 && !unrecorded, now) : null
     if (clock !== startClock) store.setClock(clock)
     const tc = performance.now()
     try {
@@ -1213,15 +1267,14 @@ export class ElementRoom {
    * Left at that, the next query found such a push's receipt absent and, its base being past `from`, the
    * client took it for a push that never landed and sent it again over whatever was written after it (the
    * wave C review's receipt gap). So a failure returns the gap, per user the highest clock whose receipt is
-   * missing, and marks it in the file as the ring's trim does (a marker row, `rid` = ''; second savepoint),
-   * so every answer's `from` is past it, after a restart too; the room keeps it in memory as well
-   * (noteReceiptGap), for when the marker could not be written either. The client then decides those pushes
-   * by counting, as before rev 11. Logged and counted without content.
+   * missing, which writeReceiptGaps keeps in the file, so every answer's `from` is past it, after a restart
+   * too. The client then decides those pushes by counting, as before rev 11. Logged and counted without
+   * content (noteReceiptGap).
    */
   private recordReceipts(
     rows: { uid: string; rid: string; clock: number }[],
     now: number,
-  ): { gap: Map<string, number>; rows: number; marked: boolean } | null {
+  ): Map<string, number> | null {
     const store = this.store
     store.savepoint('receipts')
     try {
@@ -1238,33 +1291,83 @@ export class ElementRoom {
     } catch (err) {
       store.rollbackTo('receipts')
       store.forgetReceiptsTable()
+      this.receiptsError = (err as Error)?.name ?? 'error'
       const gap = new Map<string, number>()
       for (const r of rows) gap.set(r.uid, Math.max(gap.get(r.uid) ?? 0, r.clock))
-      let marked = false
-      store.savepoint('receipts_gap')
-      try {
-        store.markReceiptGap(gap, now)
-        store.release('receipts_gap')
-        marked = true
-      } catch {
-        store.rollbackTo('receipts_gap')
-        store.forgetReceiptsTable()
-      }
-      this.deps.log(
-        '[room] receipts not recorded',
-        this.boardId,
-        (err as Error)?.name ?? 'error',
-        marked ? 'gap marked' : 'gap kept in memory',
-      )
-      return { gap, rows: rows.length, marked }
+      this.lastUnrecordedRows = rows.length
+      return gap
     }
   }
 
-  /** After the COMMIT of a batch whose receipts were not recorded (recordReceipts): the gap is kept, counted. */
-  private noteReceiptGap(g: { gap: Map<string, number>; rows: number; marked: boolean }): void {
-    for (const [uid, clock] of g.gap)
+  /**
+   * The receipt gaps the file must keep, in a batch that advances the clock (the receipts table's rule:
+   * schema.ts lb_receipts): this batch's (`fresh`) and those still only in memory (RCPT-1). First as marker
+   * rows (lb_receipts, `rid` = '', as the ring's trim keeps what it dropped; what lb_meta held goes there
+   * too and lb_meta's key is removed), in a savepoint; if those cannot be written either, in lb_meta
+   * (`receipt_gaps`, another table: a broken lb_receipts does not stop it), in a second one; if that fails
+   * too, in memory only (the open room's answers still use it) and tried again by the next writing batch.
+   * lb_meta's gaps are moved into marker rows only after a batch whose receipts were recorded (`receiptsOk`:
+   * lb_receipts takes writes again). Null when there is nothing to write.
+   */
+  private writeReceiptGaps(
+    fresh: Map<string, number> | null,
+    receiptsOk: boolean,
+    now: number,
+  ): ReceiptGapWrite | null {
+    const pending = new Map(this.unwrittenGaps)
+    for (const [uid, clock] of fresh ?? []) pending.set(uid, Math.max(pending.get(uid) ?? 0, clock))
+    const fold = receiptsOk && this.metaGaps.size > 0
+    if (!pending.size && !fold) return null
+    const store = this.store
+    const marks = new Map(pending)
+    for (const [uid, clock] of this.metaGaps) marks.set(uid, Math.max(marks.get(uid) ?? 0, clock))
+    store.savepoint('receipts_gap')
+    try {
+      store.markReceiptGap(marks, now)
+      if (this.metaGaps.size) store.setReceiptGapsMeta(new Map())
+      store.release('receipts_gap')
+      return { fresh, where: 'file', meta: new Map(), unwritten: null }
+    } catch {
+      store.rollbackTo('receipts_gap')
+      store.forgetReceiptsTable()
+    }
+    // lb_meta still holds what it held
+    if (!pending.size) return null
+    const meta = new Map(this.metaGaps)
+    for (const [uid, clock] of pending) meta.set(uid, Math.max(meta.get(uid) ?? 0, clock))
+    store.savepoint('receipts_gap_meta')
+    try {
+      store.setReceiptGapsMeta(meta)
+      store.release('receipts_gap_meta')
+      return { fresh, where: 'meta', meta, unwritten: null }
+    } catch {
+      store.rollbackTo('receipts_gap_meta')
+      return { fresh, where: 'memory', meta: this.metaGaps, unwritten: pending }
+    }
+  }
+
+  /**
+   * After the COMMIT of a batch that wrote receipt gaps (writeReceiptGaps): its new gaps are kept for the
+   * answers, the file's state is taken as written, and a batch's unrecorded receipts are counted and logged
+   * by where their gap went (`file`: marker rows; `meta`: lb_meta; `memory`: neither could be written).
+   */
+  private noteReceiptGap(g: ReceiptGapWrite): void {
+    for (const [uid, clock] of g.fresh ?? [])
       this.receiptGaps.set(uid, Math.max(this.receiptGaps.get(uid) ?? 0, clock))
-    this.deps.metrics.inc('lobby_receipts_unrecorded_total', { gap: g.marked ? 'file' : 'memory' }, g.rows)
+    const wasUnwritten = this.unwrittenGaps.size > 0
+    this.unwrittenGaps.clear()
+    for (const [uid, clock] of g.unwritten ?? []) this.unwrittenGaps.set(uid, clock)
+    this.metaGaps = g.meta
+    if (g.fresh) {
+      this.deps.metrics.inc('lobby_receipts_unrecorded_total', { gap: g.where }, this.lastUnrecordedRows)
+      this.deps.log(
+        '[room] receipts not recorded',
+        this.boardId,
+        this.receiptsError,
+        g.where === 'file' ? 'gap marked' : g.where === 'meta' ? 'gap kept in lb_meta' : 'gap kept in memory',
+      )
+    } else if (wasUnwritten && g.where !== 'memory')
+      this.deps.log('[room] receipt gap written', this.boardId, g.where === 'file' ? 'marked' : 'in lb_meta')
   }
 
   /**

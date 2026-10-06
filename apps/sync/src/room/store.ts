@@ -11,9 +11,11 @@ import { existsSync, statSync } from 'node:fs'
 import { DatabaseSync, type StatementSync } from 'node:sqlite'
 import type { WireElement } from '@draftroom/canvas-schema/elements'
 import {
+  ensureGuestTagsSchema,
   ensureLbSchema,
   ensureReceiptsSchema,
   type Gclock,
+  LB_META_RECEIPT_GAPS,
   LB_PRAGMAS,
   LB_SCHEMA_VERSION,
   parseGclock,
@@ -320,6 +322,31 @@ export class BoardStore {
     this.st.setMeta.run('horizon', String(horizon))
   }
 
+  /**
+   * The receipt gaps lb_meta keeps (schema.ts LB_META_RECEIPT_GAPS, RCPT-1): per user, the highest clock whose
+   * receipt is missing. Empty when there are none; an unreadable value counts as none and is logged by the
+   * caller's count only (it holds no content).
+   */
+  receiptGapsMeta(): Map<string, number> {
+    const out = new Map<string, number>()
+    const row = this.st.getMeta.get(LB_META_RECEIPT_GAPS) as { value: string } | undefined
+    if (!row) return out
+    try {
+      const v = JSON.parse(row.value) as unknown
+      if (v && typeof v === 'object' && !Array.isArray(v))
+        for (const [uid, clock] of Object.entries(v as Record<string, unknown>))
+          if (typeof clock === 'number' && Number.isSafeInteger(clock) && clock >= 0) out.set(uid, clock)
+    } catch {
+      // not JSON: none
+    }
+    return out
+  }
+  /** Writes lb_meta's receipt gaps (`gaps` empty: removes the key). Inside a batch that advances the clock. */
+  setReceiptGapsMeta(gaps: ReadonlyMap<string, number>): void {
+    if (!gaps.size) this.st.delMeta.run(LB_META_RECEIPT_GAPS)
+    else this.st.setMeta.run(LB_META_RECEIPT_GAPS, JSON.stringify(Object.fromEntries(gaps)))
+  }
+
   // ---- doc -------------------------------------------------------------------------------------
 
   /** Every doc key with a value (null = removed keys are left out). */
@@ -444,6 +471,30 @@ export class BoardStore {
     }
     const m = this.st.receiptFloor.get(uid) as { clock: number | null }
     return { landed, from: m.clock === null ? 0 : m.clock + 1 }
+  }
+
+  // ---- the guests' tag-list keys (TAGS-1; schema.ts lb_guest_tags) ----------------------------------
+
+  /** Whether lb_guest_tags exists (read each time: a rolled-back push may have taken its CREATE with it). */
+  private hasGuestTagsTable(): boolean {
+    return !!this.db
+      .prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'lb_guest_tags'")
+      .get()
+  }
+
+  /** The tag-list keys guest `uid` wrote that nobody wrote since (their row's clock is the key's clock). */
+  guestTagKeys(uid: string): Set<string> {
+    const out = new Set<string>()
+    if (!this.hasGuestTagsTable()) return out
+    for (const r of this.st.guestTagKeys.all(uid) as { key: string }[]) out.add(r.key)
+    return out
+  }
+
+  /** Records that guest `uid` wrote `keys` at `clock`, inside the push's transaction (it advances the clock). */
+  putGuestTags(uid: string, keys: readonly string[], clock: number): void {
+    if (!keys.length) return
+    ensureGuestTagsSchema(this.db)
+    for (const key of keys) this.st.guestTagPut.run(key, uid, clock)
   }
 
   // ---- recently deleted ------------------------------------------------------------------------
@@ -597,6 +648,8 @@ function prepareStatements(db: DatabaseSync) {
       'SELECT sum(CASE WHEN deleted = 0 THEN 1 ELSE 0 END) AS live, sum(deleted) AS dead FROM lb_elements',
     childrenOfFrame: "SELECT id FROM lb_elements WHERE deleted = 0 AND json_extract(data, '$.frameId') = ?",
     setMeta: 'INSERT OR REPLACE INTO lb_meta (key, value) VALUES (?, ?)',
+    getMeta: 'SELECT value FROM lb_meta WHERE key = ?',
+    delMeta: 'DELETE FROM lb_meta WHERE key = ?',
     docAll: 'SELECT key, clock, value FROM lb_doc',
     docGet: 'SELECT key, clock, value FROM lb_doc WHERE key = ?',
     docSet: 'INSERT OR REPLACE INTO lb_doc (key, clock, value) VALUES (?, ?, ?)',
@@ -629,5 +682,9 @@ function prepareStatements(db: DatabaseSync) {
     receiptMark: `INSERT INTO lb_receipts (uid, rid, clock, at) VALUES (?, '', ?, ?)
        ON CONFLICT(uid, rid) DO UPDATE SET clock = max(clock, excluded.clock), at = excluded.at`,
     receiptFloor: "SELECT max(clock) AS clock FROM lb_receipts WHERE rid = '' AND uid IN (?, '')",
+    // the guests' tag-list keys (TAGS-1)
+    guestTagKeys: `SELECT g.key AS key FROM lb_guest_tags g JOIN lb_doc d ON d.key = g.key
+       WHERE g.uid = ? AND d.clock = g.clock`,
+    guestTagPut: 'INSERT OR REPLACE INTO lb_guest_tags (key, uid, clock) VALUES (?, ?, ?)',
   })
 }

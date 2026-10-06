@@ -94,9 +94,51 @@ export function ensureReceiptsSchema(db: DatabaseSync): void {
   for (const stmt of LB_RECEIPTS_DDL) db.exec(stmt)
 }
 
+// ---- lb_guest_tags: who of the name-only guests wrote each tag-list key (TAGS-1, wave J) ----------------
+
+/**
+ * The board tag list's keys (`tagDef:*`, lb_doc) a name-only guest wrote, one row per key: the guest's uid
+ * and the clock of its write. GUEST_TAG_DEF_CAP counts a guest's keys (merge.ts guestMayWriteTagKey); before,
+ * that count came from the writer ledger, which lives as long as the room is open, so an eviction or a
+ * restart gave every guest a fresh budget of 10. A row counts only while its clock is still the key's lb_doc
+ * clock: a key someone else wrote since is no longer the guest's (as the ledger rule said). Members' writes
+ * write no row.
+ *
+ * Made like lb_receipts (IF NOT EXISTS, in the first batch that writes a guest's tag-list key, inside that
+ * batch's transaction, so only together with the clock: the backups' digest, the restore drill's live check);
+ * a file without it counts nothing from it. An lb_* table: the backups, the digest and the restore drill
+ * cover it; the conversion and the roll-forward leave it alone; drop-legacy keeps it (a serving table).
+ */
+export const LB_GUEST_TAGS_TABLE = 'lb_guest_tags'
+export const LB_GUEST_TAGS_DDL: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS lb_guest_tags (key TEXT PRIMARY KEY, uid TEXT NOT NULL, clock INTEGER NOT NULL)
+  WITHOUT ROWID`,
+  'CREATE INDEX IF NOT EXISTS lb_guest_tags_uid ON lb_guest_tags(uid)',
+]
+
+/** Creates lb_guest_tags when it is missing (idempotent). Call inside a transaction that advances the clock. */
+export function ensureGuestTagsSchema(db: DatabaseSync): void {
+  for (const stmt of LB_GUEST_TAGS_DDL) db.exec(stmt)
+}
+
 // ---- lb_meta ---------------------------------------------------------------------------------------
 
-export const LB_META_KEYS = ['clock', 'horizon', 'epoch', 'schemaVersion', 'converted_from'] as const
+/**
+ * `receipt_gaps` (RCPT-1, wave J): JSON `{uid: clock}`, per user the highest clock of a committed push whose
+ * receipt this board could not record and whose marker row (lb_receipts, `rid` = '') could not be written
+ * either (element-room.ts recordReceipts). Written in a batch that advances the clock, like the markers; moved
+ * into marker rows, and removed, once lb_receipts takes writes again. A build that does not know the key
+ * ignores it (every key is read by name).
+ */
+export const LB_META_RECEIPT_GAPS = 'receipt_gaps'
+export const LB_META_KEYS = [
+  'clock',
+  'horizon',
+  'epoch',
+  'schemaVersion',
+  'converted_from',
+  LB_META_RECEIPT_GAPS,
+] as const
 export type LbMetaKey = (typeof LB_META_KEYS)[number]
 
 /**

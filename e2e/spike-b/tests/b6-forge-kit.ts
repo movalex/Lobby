@@ -158,12 +158,13 @@ export async function burstSocket(page: Page, boardId: string): Promise<BurstSoc
       })
       if (res.status !== 200) throw new Error(`ticket: ${res.status}`)
       const { ticket } = (await res.json()) as { ticket: string }
+      // the ticket in the offered subprotocol, as the board page sends it (L7), never in the URL
       const url = `${location.origin.replace(/^http/, 'ws')}/connect/${encodeURIComponent(boardId)}?${new URLSearchParams(
-        { sessionId: `forge-${key}`, ticket },
+        { sessionId: `forge-${key}` },
       )}`
       const w = window as unknown as { __o1Burst?: Record<string, { ws: WebSocket; acked: string[] }> }
       w.__o1Burst ??= {}
-      const ws = new WebSocket(url)
+      const ws = new WebSocket(url, ['lobby.board.v1', `lobby.ticket.${ticket}`])
       const st = { ws, acked: [] as string[] }
       w.__o1Burst[key] = st
       return await new Promise<number>((resolve, reject) => {
