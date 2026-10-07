@@ -7,7 +7,8 @@
 // becomes an outside account with that access at their next sign-in). Now there is one rule: only a confirmed
 // creator is inside. Before deciding, the api confirms such accounts with the provider (outside any
 // transaction, a bounded number): a colleague who still qualifies is confirmed and counts as inside; one who
-// no longer qualifies, or whom the provider cannot confirm right now, counts as outside (fails closed).
+// no longer qualifies counts as outside; one the provider cannot confirm right now changes nothing (fails closed;
+// since IO-11 the answer is the retryable 503).
 // IO-7: under open email sign-in (everyone who signs in is a creator) keep sharing left out a colleague who
 // had not opened Lobby for a day and called them "not confirmed as Dark Burn Creative or Trailer Park Group".
 // Nobody is left out there for being stale (only name-only guests, which are never copied).
@@ -120,14 +121,20 @@ describe('IO-6 under Clerk domain access: a stale colleague, confirmed before th
     expect((await again.req('GET', `/api/boards/${body.board.id}`)).statusCode).not.toBe(200)
   })
 
-  it('the provider cannot confirm her right now: she counts as not inside (fails closed), both ways alike', async () => {
+  // Refix round 3 (IO-11): a colleague the provider could not answer about is not "confirmed outside":
+  // nothing changes (fails closed) and the answer is the retryable 503, not the outside refusal or a copy
+  // made without her.
+  it('the provider cannot confirm her right now: a retryable 503 both ways, nothing changed', async () => {
     fakeClerk.failures.set('user_carol', () => clerkError(503, 'service_unavailable'))
-    refused(await visibility(bob, plain, 'workspace_view'), 'project')
-    const body = await duplicate()
-    // The copy agrees with what it says: she was left out, and its visibility does not reach her either.
-    expect(body.outsideLeftOut).toBe(1)
-    expect(body.board.visibility).toBe('private')
-    expect((await grantsOf(w.api, body.board.id))[carol.userId]).toBeUndefined()
+    const raised = await visibility(bob, plain, 'workspace_view')
+    expect(raised.statusCode, raised.body).toBe(503)
+    expect((raised.json() as { error: { code: string } }).error.code).toBe(COLLEAGUES_UNCONFIRMED_CODE)
+    expect(await visibilityOf(w.api, plain)).toBe('private')
+    const before = await w.api.db.one<{ n: string }>('SELECT count(*) AS n FROM boards')
+    const dup = await bob.req('POST', `/api/boards/${board}/duplicate`, { keepSharing: true })
+    expect(dup.statusCode, dup.body).toBe(503)
+    expect((dup.json() as { error: { code: string } }).error.code).toBe(COLLEAGUES_UNCONFIRMED_CODE)
+    expect((await w.api.db.one<{ n: string }>('SELECT count(*) AS n FROM boards')).n).toBe(before.n)
   })
 })
 
@@ -293,5 +300,35 @@ describe('IO-9 under Clerk domain access: more stale colleagues than one decisio
       const res = await visibility(bob, plain, 'workspace_view')
       expect(res.statusCode, res.body).toBe(200)
     })
+  })
+
+  // Refix round 3 (IO-11): the calls still running at the time limit then failed, so those colleagues were in
+  // the provider-failure backoff. The retry the 503 asked for got no provider call for them and counted them
+  // as asked: the raise got the outside 409, and a keep-sharing copy was made private without their grants.
+  it('a retry while the timed-out colleagues are in the failure backoff: the 503 again, never 409 or a reduced copy', async () => {
+    Object.assign(staleConfirmLimits, { max: 50, timeMs: 200 })
+    for (const c of colleagues.slice(0, 2)) await grant(w.api, shared, c.userId, 'editor', bob.userId)
+    let open = () => {}
+    fakeClerk.gate = new Promise<void>((resolve) => {
+      open = resolve
+    })
+    for (let i = 0; i < COLLEAGUES; i++)
+      fakeClerk.failures.set(`user_m${i}`, () => clerkError(503, 'service_unavailable'))
+    unconfirmed(await visibility(bob, plain, 'workspace_view'))
+    fakeClerk.gate = null
+    open()
+    // The failed calls finish (and set the backoff); then the provider is healthy again.
+    await w.api.identity.settled()
+    fakeClerk.failures.clear()
+    fakeClerk.calls = []
+    unconfirmed(await visibility(bob, plain, 'workspace_view'))
+    expect(await visibilityOf(w.api, plain)).toBe('private')
+    const before = await boardCount()
+    unconfirmed(await bob.req('POST', `/api/boards/${shared}/duplicate`, { keepSharing: true }))
+    expect(await boardCount()).toBe(before)
+    // After the backoff the provider is asked again, and the raise passes.
+    w.api.clock.advance(61_000)
+    const again = await visibility(bob, plain, 'workspace_view')
+    expect(again.statusCode, again.body).toBe(200)
   })
 })

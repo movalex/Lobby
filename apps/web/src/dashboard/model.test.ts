@@ -12,6 +12,7 @@ import {
   emptyState,
   filterBoards,
   filterByOwner,
+  importedToast,
   importTitle,
   landingWorkspace,
   noWorkspaceCopy,
@@ -207,6 +208,20 @@ describe('owner filter, stars and duplicate names', () => {
     const files = '1 referenced file(s) could not be carried over to the new board and show as missing.'
     expect(duplicatedToast({ board, warnings: [leftOut, files] })).toBe(
       `Duplicated as “Retro (copy)” (${leftOut} ${files})`,
+    )
+  })
+
+  it('the import toast says the notes the server sent, not "no access" for every left-out file (IO-11)', () => {
+    const board = { title: 'Plan' }
+    expect(importedToast({ board, warnings: [], droppedFiles: 0 })).toBe('Imported “Plan”.')
+    const fenced =
+      '2 file(s) in this archive are on boards of an internal-only project, so they were not carried over to a board outside it and show as missing.'
+    const text = importedToast({ board, warnings: [fenced], droppedFiles: 2 })
+    expect(text).toBe(`Imported “Plan”. ${fenced}`)
+    expect(text).not.toContain('no access')
+    // An older api with no note for them: the count, no reason guessed.
+    expect(importedToast({ board, warnings: [], droppedFiles: 1 })).toBe(
+      'Imported “Plan”. 1 file was left out and shows as missing.',
     )
   })
 

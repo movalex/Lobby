@@ -427,6 +427,25 @@ export function duplicatedToast(created: { board: { title: string }; warnings: r
   return `Duplicated as “${created.board.title}”${notes.length ? ` (${notes.join(' ')})` : ''}`
 }
 
+/**
+ * The dashboard's toast after an import: every note the server sent (IO-11, wave J refix round 3: a file left
+ * out for the internal-only fence, for downloads turned off or for no access each has its own reason, and
+ * the toast said "no access" for all of them). An older api with no note for them: just the count.
+ */
+export function importedToast(created: {
+  board: { title: string }
+  warnings: readonly string[]
+  droppedFiles?: number
+}): string {
+  const notes = created.warnings.filter((w) => w.trim().length > 0)
+  const n = created.droppedFiles ?? 0
+  if (!notes.length && n > 0)
+    notes.push(
+      n === 1 ? '1 file was left out and shows as missing.' : `${n} files were left out and show as missing.`,
+    )
+  return `Imported “${created.board.title}”.${notes.length ? ` ${notes.join(' ')}` : ''}`
+}
+
 // ---- thumbnails ----------------------------------------------------------------------------------
 
 /** Paper-and-ink pairs that sit well next to the navy/amber brand. */

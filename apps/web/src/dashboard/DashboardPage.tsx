@@ -28,6 +28,7 @@ import {
   emptyState,
   filterBoards,
   filterByOwner,
+  importedToast,
   importTitle,
   OUTSIDE_NOTICE,
   type OwnerFilter,
@@ -380,14 +381,11 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
         title,
         projectId: defaultProjectId ?? undefined,
       })
-      const dropped = created.droppedFiles
-        ? ` ${created.droppedFiles} ${created.droppedFiles === 1 ? 'file was' : 'files were'} left out (no access).`
-        : ''
       notify({
         key: 'import',
-        text: `Imported “${created.board.title}”.${dropped}`,
+        text: importedToast(created),
         testId: 'dashboard-toast',
-        timeoutMs: dropped ? 10_000 : 5000,
+        timeoutMs: created.warnings.length || created.droppedFiles ? 10_000 : 5000,
       })
       boards.reload()
     } catch (err) {

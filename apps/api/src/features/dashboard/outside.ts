@@ -461,7 +461,8 @@ export const colleaguesUnconfirmed = () =>
  * as not inside only because their addresses are not confirmed (never checked, or stale with stored
  * addresses that still qualify) are confirmed with the provider (refreshTarget). Known outside accounts and
  * name-only guests are left as they are (a check would not make them inside). Whoever the provider cannot
- * confirm counts as not inside (fails closed).
+ * confirm counts as not inside (fails closed); since IO-11 they are also in `skipped`, so the caller
+ * changes nothing and answers the retryable 503 rather than the outside refusal or a reduced copy.
  *
  * IO-9 (wave J refix round 2): only the accounts the decision counts. A raise to `raise`: workspace members
  * with role 'member' whose own grant on `boardId` is below the visibility's role (visibilityReachesOutside's
@@ -469,7 +470,8 @@ export const colleaguesUnconfirmed = () =>
  * visibility `copy`: the board's grant holders (whose grants it carries) and, unless it is private, the
  * members with role 'member' (whom the copy's visibility reaches). At most staleConfirmLimits.max accounts,
  * a few at a time, for at most staleConfirmLimits.timeMs, most recently confirmed first. Returns the ones it
- * did not get to (`skipped`: beyond the budget or the time): the caller answers 503 COLLEAGUES_UNCONFIRMED
+ * did not get to (`skipped`: beyond the budget or the time, and since IO-11 the ones the provider could not
+ * answer about, a provider error or its failure backoff included): the caller answers 503 COLLEAGUES_UNCONFIRMED
  * (retryable, a retry confirms the next ones) when they are what would decide it, never the outside refusal
  * for a colleague nobody asked the provider about. A call still running at the time limit goes on in the
  * background (refreshTarget never throws; its write is the usual stamp).
@@ -510,23 +512,27 @@ export async function confirmStaleReach(
   const { max, atOnce, timeMs } = staleConfirmLimits
   const deadline = performance.now() + timeMs
   let done = 0
+  const unanswered: string[] = [] // IO-11: the provider could not answer (unavailable, or in its backoff)
   while (done < Math.min(ids.length, max)) {
     const left = deadline - performance.now()
     if (left <= 0) break
     const batch = ids.slice(done, Math.min(done + atOnce, max))
     let timer: ReturnType<typeof setTimeout> | undefined
-    const finished = await Promise.race([
-      Promise.all(batch.map((id) => deps.identity.refreshTarget(id))).then(() => true),
-      new Promise<false>((resolve) => {
-        timer = setTimeout(() => resolve(false), left)
+    const answered = await Promise.race([
+      Promise.all(batch.map((id) => deps.identity.refreshTarget(id))),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), left)
         timer.unref?.()
       }),
     ])
     clearTimeout(timer)
-    if (!finished) break
+    if (!answered) break
+    batch.forEach((id, i) => {
+      if (!answered[i]) unanswered.push(id)
+    })
     done += batch.length
   }
-  return { skipped: ids.slice(done) }
+  return { skipped: [...unanswered, ...ids.slice(done)] }
 }
 
 /**

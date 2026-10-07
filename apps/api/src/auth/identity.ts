@@ -83,7 +83,13 @@ export interface IdentityService {
     user: SessionUser,
     answer: (user: SessionUser) => Promise<T>,
   ): Promise<T>
-  refreshTarget(userId: string): Promise<void>
+  /**
+   * Confirms the target with the provider when unknown or stale. Never throws. Resolves false only when the
+   * provider could not answer (unavailable, including the failure backoff): its stored status is then not
+   * one the provider confirmed (IO-11, confirmStaleReach). True otherwise (fresh already, no provider check
+   * configured, or the provider answered).
+   */
+  refreshTarget(userId: string): Promise<boolean>
   requireCreator(q: Queryable, userId: string, purpose: CreatorPurpose, log: RefusalLog): Promise<void>
   /** Stored status only; unconfirmed counts as not a creator. */
   isCreatorUser(q: Queryable, userId: string): Promise<boolean>
@@ -310,16 +316,18 @@ export function createIdentityService(deps: Deps): IdentityService {
     },
 
     async refreshTarget(userId) {
-      if (!provider.refreshIdentity) return
+      if (!provider.refreshIdentity) return true
       try {
         const row = await db.maybeOne<{ kind: string; identity_checked_at: Date | null }>(
           'SELECT kind, identity_checked_at FROM users WHERE id = $1',
           [userId],
         )
-        if (!row || row.kind === 'guest' || isConfirmed(row.identity_checked_at, now())) return
-        await refresh(userId) // the outcome is ignored: the route decides from stored data
+        if (!row || row.kind === 'guest' || isConfirmed(row.identity_checked_at, now())) return true
+        // The route decides from stored data; whether the provider answered is all that is returned.
+        return (await refresh(userId)) !== 'unavailable'
       } catch {
         // never throws: an unconfirmed target simply counts as not a creator
+        return false
       }
     },
 
