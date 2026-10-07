@@ -188,7 +188,10 @@ export async function createInvitation(
   if ((await storedEmails(tx, input.userId, ctx.identity.lookup.source)).includes(email))
     throw invitationToSelf()
   // Wave J: while the board's workspace or project (a workspace invitation: the workspace) is internal
-  // only, an address that is not a creator address is refused (409 INTERNAL_ONLY).
+  // only, an address that is not a creator address is refused (409 INTERNAL_ONLY). Decided under the
+  // workspace row lock the switch and a move take (access.ts step 0; every caller's reads before this are
+  // unlocked), so a switch-on cannot commit between this read and the insert (internal-only-locks.pg (l)).
+  await tx.query('SELECT id FROM workspaces WHERE id = $1 FOR NO KEY UPDATE', [input.workspaceId])
   await assertInviteAllowed(
     tx,
     ctx,

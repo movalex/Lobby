@@ -51,7 +51,7 @@ import { type PausingDb, pausingDb, waitedOrFinished } from '../../race-support.
 import { clerkUser, clerkWorld } from '../domain-access/clerk-fake.ts'
 import { freshIp, guestLink, joinRequest, tokenOf } from '../guests/support.ts'
 import { baseRecords, createFakeSync, type FakeSync, noteRec } from '../history/helpers.ts'
-import { addMember, move, newProject, setProject } from './internal-only-support.ts'
+import { addMember, move, newProject, refused, setProject } from './internal-only-support.ts'
 
 vi.mock('@clerk/backend', async () => (await import('../domain-access/clerk-fake.ts')).clerkBackendModule)
 
@@ -844,6 +844,550 @@ describe.skipIf(!PG)(
         expect(await breaks(w.api.db), `round ${i}`).toEqual([])
       }
       expect(failures).toEqual([])
+    })
+  },
+)
+
+// ---- the second real-Postgres run (b1f08c6f) -----------------------------------------------------
+//
+// What the races above leave out: the WORKSPACE switch (every one of them flips a project's), a visibility
+// raise against the switch, a visibility raise against a guest raised to member (IO-2b and IO-3 each read
+// the other's rows, both under the workspace row), a guest raised to member against the switch itself, a
+// single-use invitation created against the switch (outside.ts assertInviteAllowed: found here, below),
+// and every path at once against both switches (a deadlock between two paths, not only with the switch).
+//
+// Found here (b1f08c6f): creating a single-use invitation (POST …/invitations for a board or a workspace,
+// and the email route's link for an address with no account) decided the switch with no lock (its access
+// reads are unlocked), so a switch turned on between that read and the insert left a new invitation, and
+// the email route's message, for an outside address in an internal-only scope (accepting it is refused:
+// IO-4). createInvitation now takes the workspace row first, as a link's creation does (IO-5).
+
+const setWorkspace = (c: Client, on: boolean) =>
+  c.req('PUT', `/api/workspaces/${DEV_STUDIO}/internal-only`, { internalOnly: on })
+const workspaceOff: [string, unknown[]] = [
+  'UPDATE workspaces SET internal_only = false WHERE id = $1',
+  [DEV_STUDIO],
+]
+const asGuest = (userId: string): [string, unknown[]] => [
+  `INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES ($1, $2, 'guest', now())
+   ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = 'guest'`,
+  [DEV_STUDIO, userId],
+]
+const asMember = (userId: string): [string, unknown[]] => [
+  `INSERT INTO workspace_members (workspace_id, user_id, role, created_at) VALUES ($1, $2, 'member', now())
+   ON CONFLICT (workspace_id, user_id) DO UPDATE SET role = 'member'`,
+  [DEV_STUDIO, userId],
+]
+const noMembership = (userId: string): [string, unknown[]] => [
+  'DELETE FROM workspace_members WHERE workspace_id = $1 AND user_id = $2',
+  [DEV_STUDIO, userId],
+]
+const revokeLinks = (board: string): [string, unknown[]] => [
+  'UPDATE invitations SET revoked_at = now() WHERE board_id = $1 AND revoked_at IS NULL',
+  [board],
+]
+const raiseMember = (w: World, userId: string, role: 'guest' | 'member' = 'member') =>
+  w.alice.req('PATCH', `/api/workspaces/${DEV_STUDIO}/members/${userId}`, { role })
+
+/**
+ * One more commit-time check (with `watch`'s): a single-use invitation created for one of `emails` (the
+ * test's outside addresses) while its scope is internal only (a board's: its workspace or project; a
+ * workspace invitation's: the workspace).
+ */
+async function watchInvites(db: Db, emails: readonly string[]): Promise<void> {
+  await db.exec(`
+    CREATE TABLE io_outside_emails (email text PRIMARY KEY);
+    CREATE FUNCTION io_invite_check() RETURNS trigger LANGUAGE plpgsql AS $f$
+    DECLARE i record; scope_on boolean;
+    BEGIN
+      IF io_quiet() THEN RETURN NULL; END IF;
+      SELECT * INTO i FROM invitations WHERE id = NEW.id;
+      IF i.id IS NULL OR i.multi_use OR i.revoked_at IS NOT NULL
+         OR NOT EXISTS (SELECT 1 FROM io_outside_emails WHERE email = i.invited_email) THEN RETURN NULL; END IF;
+      scope_on := CASE WHEN i.board_id IS NOT NULL THEN io_board_on(i.board_id)
+                       ELSE (SELECT internal_only FROM workspaces WHERE id = i.workspace_id) END;
+      IF scope_on THEN
+        INSERT INTO io_breaks (what, detail)
+        VALUES ('invite', i.id || ' ' || coalesce(i.board_id, i.workspace_id) || ' ' || i.invited_email);
+      END IF;
+      RETURN NULL;
+    END $f$;
+    CREATE CONSTRAINT TRIGGER io_invite AFTER INSERT ON invitations
+      DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION io_invite_check();
+  `)
+  for (const e of emails) await db.query('INSERT INTO io_outside_emails (email) VALUES ($1)', [e])
+}
+
+/** sam: an outside account who is a workspace MEMBER (a workspace visibility reaches him). */
+async function withSam(w: World): Promise<Client> {
+  const sam = await w.api.login('sam', 'Sam Client', { email: 'sam@client.example.test' })
+  await reset(w.api.db, [
+    ['INSERT INTO io_outsiders (user_id) VALUES ($1)', [sam.userId]],
+    asMember(sam.userId),
+  ])
+  return sam
+}
+
+/** workspaceInternalOnly (outside.ts): the workspace switch read a member raise and an invitation decide on. */
+const WORKSPACE_SWITCH_READ = /^SELECT internal_only AS ws FROM workspaces WHERE id = \$1$/
+/** visibilityReachesOutside (outside.ts; PATCH /api/boards/:bid raising the visibility). */
+const VISIBILITY_REACH_READ = /WHERE wm\.workspace_id = \$2 AND wm\.role = 'member'/
+
+describe.skipIf(!PG)(
+  'Internal only, second run: the workspace switch, visibility and invitations (real Postgres)',
+  () => {
+    it('(g) raising a board’s visibility, against the switch turned on', async () => {
+      const w = await world()
+      await withSam(w)
+      const failures: string[] = []
+      for (let i = 0; i < ITER * 2; i++) {
+        const ws = i % 2 === 1
+        await reset(w.api.db, [
+          switchOff(w),
+          workspaceOff,
+          ["UPDATE boards SET visibility = 'private' WHERE id = $1", [w.board]],
+        ])
+        const to = Math.random() < 0.5 ? 'workspace_view' : 'workspace_edit'
+        const r = await race(i, failures, {
+          on: {
+            run: () => (ws ? setWorkspace(w.alice, true) : setProject(w.alice, w.project, true)),
+            ok: S.ok,
+          },
+          raise: {
+            run: () => w.bob.req('PATCH', `/api/boards/${w.board}`, { visibility: to }),
+            ok: S.okOr409,
+          },
+        })
+        expect(await breaks(w.api.db), `round ${i}`).toEqual([])
+        const now = (
+          await w.api.db.one<{ v: string }>('SELECT visibility AS v FROM boards WHERE id = $1', [w.board])
+        ).v
+        expect(now, `round ${i}`).toBe(r.raise?.statusCode === 200 ? to : 'private')
+      }
+      expect(failures).toEqual([])
+    })
+
+    it('(h) raising a workspace guest to member, against the project switch and the workspace switch turned on', async () => {
+      const w = await world()
+      const failures: string[] = []
+      for (let i = 0; i < ITER * 2; i++) {
+        const ws = i % 2 === 1
+        await reset(w.api.db, [
+          switchOff(w),
+          workspaceOff,
+          asGuest(w.pat.userId),
+          noGrantsFor(w.pat.userId),
+          // a board of the project that a member sees: the project switch makes the raise reach it
+          [
+            "UPDATE boards SET project_id = $2, visibility = 'workspace_edit' WHERE id = $1",
+            [w.board, w.project],
+          ],
+        ])
+        const r = await race(i, failures, {
+          on: {
+            run: () => (ws ? setWorkspace(w.alice, true) : setProject(w.alice, w.project, true)),
+            ok: S.ok,
+          },
+          raise: { run: () => raiseMember(w, w.pat.userId), ok: S.okOr409 },
+        })
+        expect(await breaks(w.api.db), `round ${i}`).toEqual([])
+        const role = (
+          await w.api.db.one<{ role: string }>(
+            'SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2',
+            [DEV_STUDIO, w.pat.userId],
+          )
+        ).role
+        expect(role, `round ${i}`).toBe(r.raise?.statusCode === 200 ? 'member' : 'guest')
+      }
+      expect(failures).toEqual([])
+    })
+
+    it('(j) a visibility raise against a guest raised to member, under the switch (each reads the other’s rows)', async () => {
+      const w = await world()
+      const failures: string[] = []
+      let both = 0
+      for (let i = 0; i < ITER * 2; i++) {
+        await reset(w.api.db, [
+          ['UPDATE projects SET internal_only = true WHERE id = $1', [w.project]],
+          workspaceOff,
+          asGuest(w.pat.userId),
+          noGrantsFor(w.pat.userId),
+          ["UPDATE boards SET project_id = $2, visibility = 'private' WHERE id = $1", [w.board, w.project]],
+        ])
+        // each alone is allowed: pat is a guest (no visibility reaches him), the board is private (being a
+        // member reaches nothing); together they would give an outside account the board
+        const r = await race(i, failures, {
+          raise: { run: () => raiseMember(w, w.pat.userId), ok: S.okOr409 },
+          visibility: {
+            run: () => w.bob.req('PATCH', `/api/boards/${w.board}`, { visibility: 'workspace_edit' }),
+            ok: S.okOr409,
+          },
+        })
+        expect(await breaks(w.api.db), `round ${i}`).toEqual([])
+        if (r.raise?.statusCode === 200 && r.visibility?.statusCode === 200) both++
+      }
+      expect(failures).toEqual([])
+      expect(both, 'never both').toBe(0)
+    })
+
+    it('(c, workspace switch) every board path and accepting a workspace invitation, against the workspace switch turned on', async () => {
+      const w = await world()
+      const sam = await withSam(w)
+      await reset(w.api.db, [
+        ['UPDATE boards SET project_id = NULL WHERE id = $1', [w.board]],
+        ['DELETE FROM workspace_members WHERE workspace_id = $1 AND user_id = $2', [DEV_STUDIO, sam.userId]],
+      ])
+      const kinds = [
+        'put',
+        'accept',
+        'workspaceAccept',
+        'join',
+        'approve',
+        'link',
+        'copy',
+        'visibility',
+      ] as const
+      const failures: string[] = []
+      for (let i = 0; i < ITER * kinds.length; i++) {
+        const kind = kinds[i % kinds.length] as (typeof kinds)[number]
+        // the copy route's own wall-clock limit (60 a minute, routes HEAVY): at most 40 copies
+        if (kind === 'copy' && i >= 40 * kinds.length) continue
+        await reset(w.api.db, [
+          switchOff(w),
+          workspaceOff,
+          noGrantsFor(w.pat.userId, w.quinn.userId),
+          noMembership(w.quinn.userId),
+          noMembership(sam.userId),
+          ['DELETE FROM access_requests WHERE user_id = $1', [w.quinn.userId]],
+          revokeLinks(w.board),
+          ["UPDATE boards SET visibility = 'private' WHERE id = $1", [w.board]],
+        ])
+        // the per-person accept and request limits stay out of the way
+        w.api.clock.advance(61_000)
+        let run: () => Promise<Res>
+        let ok: readonly number[] = S.okOr409
+        if (kind === 'put') {
+          run = () => w.alice.req('PUT', `/api/boards/${w.board}/members/${w.pat.userId}`, { role: 'editor' })
+        } else if (kind === 'accept' || kind === 'workspaceAccept') {
+          const made =
+            kind === 'accept'
+              ? await w.bob.req('POST', `/api/boards/${w.board}/invitations`, {
+                  role: 'commenter',
+                  email: 'quinn@client.example.test',
+                })
+              : await w.alice.req('POST', `/api/workspaces/${DEV_STUDIO}/invitations`, {
+                  role: 'member',
+                  email: 'quinn@client.example.test',
+                })
+          expect(made.statusCode, made.body).toBe(201)
+          const inv = InvitationCreated.parse(made.json())
+          run = () => w.quinn.req('POST', `/api/invitations/${tokenOf(inv.url)}/accept`)
+        } else if (kind === 'join') {
+          const link = await guestLink(w.bob, w.board, { role: 'viewer' })
+          run = () => joinRequest(w.api, tokenOf(link.url), { name: `Guest ${i}` }, { ip: freshIp() })
+          ok = [200, 201, 409]
+        } else if (kind === 'approve') {
+          const asked = await w.quinn.req('POST', `/api/boards/${w.board}/access-requests`, {
+            role: 'editor',
+          })
+          expect(asked.statusCode, asked.body).toBe(202)
+          const { id } = await w.api.db.one<{ id: string }>(
+            "SELECT id FROM access_requests WHERE user_id = $1 AND status = 'pending'",
+            [w.quinn.userId],
+          )
+          run = () => w.bob.req('POST', `/api/access-requests/${id}/approve`, {})
+        } else if (kind === 'link') {
+          run = () => w.bob.req('POST', `/api/boards/${w.board}/review-links`, { role: 'commenter' })
+          ok = [201, 409]
+        } else if (kind === 'copy') {
+          await reset(w.api.db, [
+            [
+              `INSERT INTO board_members (board_id, user_id, role, added_by, created_at) VALUES ($1, $2, 'commenter', $3, now())`,
+              [w.board, w.pat.userId, w.bob.userId],
+            ],
+          ])
+          run = () => w.bob.req('POST', `/api/boards/${w.board}/duplicate`, { keepSharing: true })
+          ok = [201]
+        } else {
+          await reset(w.api.db, [asMember(sam.userId)])
+          run = () => w.bob.req('PATCH', `/api/boards/${w.board}`, { visibility: 'workspace_edit' })
+        }
+        const r = await race(i, failures, {
+          on: { run: () => setWorkspace(w.alice, true), ok: S.ok },
+          [kind]: { run, ok },
+        })
+        expect(await breaks(w.api.db), `round ${i} ${kind}`).toEqual([])
+        if (kind === 'copy' && r.copy?.statusCode === 201) {
+          const copy = (r.copy.json() as { board: { id: string } }).board.id
+          // decided with the switch off: pat's grant was copied; with it on: left out
+          const pats = await grantOf(w.api, copy, w.pat.userId)
+          expect([null, 'commenter'], `round ${i}`).toContain(pats)
+        }
+      }
+      expect(failures).toEqual([])
+    })
+
+    it('(l) creating a single-use invitation for an outside address, against the switch turned on', async () => {
+      const w = await world()
+      await watchInvites(w.api.db, ['quinn@client.example.test', 'olga@client.example.test'])
+      const failures: string[] = []
+      for (let i = 0; i < ITER * 2; i++) {
+        const ws = i % 2 === 1
+        await reset(w.api.db, [
+          switchOff(w),
+          workspaceOff,
+          ['DELETE FROM invitations WHERE NOT multi_use', []],
+        ])
+        const r = await race(i, failures, {
+          on: {
+            run: () => (ws ? setWorkspace(w.alice, true) : setProject(w.alice, w.project, true)),
+            ok: S.ok,
+          },
+          invite: {
+            run: () =>
+              ws
+                ? w.alice.req('POST', `/api/workspaces/${DEV_STUDIO}/invitations`, {
+                    role: 'guest',
+                    email: 'olga@client.example.test',
+                  })
+                : w.bob.req('POST', `/api/boards/${w.board}/invitations`, {
+                    role: 'commenter',
+                    email: 'quinn@client.example.test',
+                  }),
+            ok: [201, 409],
+          },
+        })
+        expect(await breaks(w.api.db), `round ${i}`).toEqual([])
+        expect(r.invite?.statusCode).toBeDefined()
+      }
+      expect(failures).toEqual([])
+    })
+
+    it('(k) every path at once, against both switches (no deadlock between any two of them)', async () => {
+      const w = await world()
+      const other = await createBoard(w.bob, DEV_STUDIO, 'Team board')
+      w.sync.setBoard(other, [...baseRecords(), noteRec('n2', 'y')])
+      await watchInvites(w.api.db, ['quinn@client.example.test'])
+      // Anything but a 5xx (a deadlock is a 500): each path may be refused by the state the others left.
+      const any = [200, 201, 202, 204, 403, 404, 409, 410] as const
+      const failures: string[] = []
+      const pick = <T>(xs: readonly T[]) => xs[Math.floor(Math.random() * xs.length)] as T
+      const seen = new Map<string, number>()
+      for (let i = 0; i < ITER * 2; i++) {
+        await reset(w.api.db, [
+          switchOff(w),
+          workspaceOff,
+          ["UPDATE boards SET project_id = $2, visibility = 'private' WHERE id = $1", [w.board, w.project]],
+          ["UPDATE boards SET project_id = NULL, visibility = 'private' WHERE id = $1", [other]],
+          asGuest(w.pat.userId),
+          asGuest(w.quinn.userId),
+          noGrantsFor(w.pat.userId, w.quinn.userId),
+          ['DELETE FROM access_requests WHERE user_id = $1', [w.quinn.userId]],
+          revokeLinks(w.board),
+          revokeLinks(other),
+        ])
+        w.api.clock.advance(61_000)
+        // what the round redeems or approves, made while both switches are off
+        const made = await w.bob.req('POST', `/api/boards/${w.board}/invitations`, {
+          role: 'commenter',
+          email: 'quinn@client.example.test',
+        })
+        expect(made.statusCode, made.body).toBe(201)
+        const inv = InvitationCreated.parse(made.json())
+        const asked = await w.quinn.req('POST', `/api/boards/${other}/access-requests`, { role: 'editor' })
+        expect(asked.statusCode, asked.body).toBe(202)
+        const { id: request } = await w.api.db.one<{ id: string }>(
+          "SELECT id FROM access_requests WHERE user_id = $1 AND status = 'pending'",
+          [w.quinn.userId],
+        )
+        const link = await guestLink(w.bob, w.board, { role: 'viewer', allowGuests: false })
+        const guests = await guestLink(w.bob, other, { role: 'viewer' })
+        // and where the switches start
+        await reset(w.api.db, [
+          ['UPDATE projects SET internal_only = $2 WHERE id = $1', [w.project, Math.random() < 0.5]],
+          ['UPDATE workspaces SET internal_only = $2 WHERE id = $1', [DEV_STUDIO, Math.random() < 0.15]],
+        ])
+        const sides: Record<string, { run: () => Promise<Res>; ok: readonly number[] }> = {
+          project: { run: () => setProject(w.alice, w.project, Math.random() < 0.6), ok: any },
+          workspace: { run: () => setWorkspace(w.alice, Math.random() < 0.3), ok: any },
+          move: { run: () => move(w.bob, pick([w.board, other]), pick([w.project, w.open, null])), ok: any },
+          visibility: {
+            run: () =>
+              w.bob.req('PATCH', `/api/boards/${pick([w.board, other])}`, {
+                visibility: pick(['private', 'workspace_view', 'workspace_edit']),
+              }),
+            ok: any,
+          },
+          member: { run: () => raiseMember(w, w.pat.userId, pick(['guest', 'member'] as const)), ok: any },
+          put: {
+            run: () =>
+              w.alice.req('PUT', `/api/boards/${pick([w.board, other])}/members/${w.pat.userId}`, {
+                role: 'editor',
+              }),
+            ok: any,
+          },
+          invite: {
+            run: () =>
+              w.alice.req('POST', `/api/boards/${pick([w.board, other])}/invitations`, {
+                role: 'viewer',
+                email: 'quinn@client.example.test',
+              }),
+            ok: any,
+          },
+          accept: { run: () => w.quinn.req('POST', `/api/invitations/${tokenOf(inv.url)}/accept`), ok: any },
+          approve: { run: () => w.bob.req('POST', `/api/access-requests/${request}/approve`, {}), ok: any },
+          remove: {
+            run: () => w.alice.req('DELETE', `/api/workspaces/${DEV_STUDIO}/members/${w.quinn.userId}`),
+            ok: any,
+          },
+          link: {
+            run: () =>
+              pick([
+                () => w.bob.req('POST', `/api/boards/${w.board}/review-links`, { role: 'commenter' }),
+                () =>
+                  w.bob.req('POST', `/api/boards/${w.board}/review-links/${link.id}/extend`, { hours: 1 }),
+                () =>
+                  w.bob.req('PATCH', `/api/boards/${w.board}/review-links/${link.id}`, { allowGuests: true }),
+              ])(),
+            ok: any,
+          },
+          join: {
+            run: () => joinRequest(w.api, tokenOf(guests.url), { name: `Guest ${i}` }, { ip: freshIp() }),
+            ok: any,
+          },
+          // the copy route's own wall-clock limit (60 a minute, routes HEAVY): at most 40 copies
+          ...(i % 2 === 0 && i < 80
+            ? {
+                copy: {
+                  run: () => w.bob.req('POST', `/api/boards/${w.board}/duplicate`, { keepSharing: true }),
+                  ok: any,
+                },
+              }
+            : {}),
+        }
+        const r = await race(i, failures, sides)
+        for (const [n, res] of Object.entries(r))
+          seen.set(`${n} ${res.statusCode}`, (seen.get(`${n} ${res.statusCode}`) ?? 0) + 1)
+        expect(await breaks(w.api.db), `round ${i}`).toEqual([])
+      }
+      expect(failures).toEqual([])
+      // the race did race: most paths went through at least once (not refused every round)
+      const through = new Set([...seen.keys()].filter((k) => / 20[0-4]$/.test(k)).map((k) => k.split(' ')[0]))
+      expect(through.size, [...seen.entries()].join(', ')).toBeGreaterThanOrEqual(10)
+    })
+  },
+)
+
+describe.skipIf(!PG)(
+  'Internal only, second run: each path stopped at its decision, the other started against it (real Postgres)',
+  () => {
+    const pausedOf = (w: World) => w.paused as PausingDb
+
+    it('(g) a visibility raise, against the project switch turned on', async () => {
+      const w = await world({ paused: true })
+      await withSam(w)
+      await reset(w.api.db, [
+        switchOff(w),
+        ["UPDATE boards SET visibility = 'private' WHERE id = $1", [w.board]],
+      ])
+      const r = await forced(
+        pausedOf(w),
+        w.api.db,
+        COPY_SCOPE_READ, // scopeIn: the switch the raise decides on
+        () => w.bob.req('PATCH', `/api/boards/${w.board}`, { visibility: 'workspace_edit' }),
+        () => setProject(w.alice, w.project, true),
+      )
+      await expectSerialised(w, r)
+    })
+
+    it('(h) a guest raised to member, against the workspace switch turned on', async () => {
+      const w = await world({ paused: true })
+      await reset(w.api.db, [switchOff(w)])
+      const r = await forced(
+        pausedOf(w),
+        w.api.db,
+        WORKSPACE_SWITCH_READ,
+        () => raiseMember(w, w.pat.userId),
+        () => setWorkspace(w.alice, true),
+      )
+      await expectSerialised(w, r)
+    })
+
+    it('(j) a visibility raise stopped at its decision, a guest raised to member against it', async () => {
+      const w = await world({ paused: true })
+      await reset(w.api.db, [
+        ['UPDATE projects SET internal_only = true WHERE id = $1', [w.project]],
+        ["UPDATE boards SET visibility = 'private' WHERE id = $1", [w.board]],
+      ])
+      const r = await forced(
+        pausedOf(w),
+        w.api.db,
+        VISIBILITY_REACH_READ,
+        () => w.bob.req('PATCH', `/api/boards/${w.board}`, { visibility: 'workspace_edit' }),
+        () => raiseMember(w, w.pat.userId),
+      )
+      expect(r.order).toBe('waited')
+      expect(r.path.statusCode, r.path.body).toBe(200)
+      // the raise then sees the board reach him
+      refused(r.other, 'project')
+      expect(await breaks(w.api.db)).toEqual([])
+    })
+
+    it('(j) a guest raised to member stopped at its decision, a visibility raise against it', async () => {
+      const w = await world({ paused: true })
+      await reset(w.api.db, [
+        ['UPDATE projects SET internal_only = true WHERE id = $1', [w.project]],
+        ["UPDATE boards SET visibility = 'private' WHERE id = $1", [w.board]],
+      ])
+      const r = await forced(
+        pausedOf(w),
+        w.api.db,
+        MEMBER_REACH_READ,
+        () => raiseMember(w, w.pat.userId),
+        () => w.bob.req('PATCH', `/api/boards/${w.board}`, { visibility: 'workspace_edit' }),
+      )
+      expect(r.order).toBe('waited')
+      expect(r.path.statusCode, r.path.body).toBe(200)
+      refused(r.other, 'project')
+      expect(await breaks(w.api.db)).toEqual([])
+    })
+
+    it('(l) a board invitation for an outside address, against the project switch turned on', async () => {
+      const w = await world({ paused: true })
+      await watchInvites(w.api.db, ['quinn@client.example.test'])
+      await reset(w.api.db, [switchOff(w)])
+      const r = await forced(
+        pausedOf(w),
+        w.api.db,
+        BOARD_SCOPE_READ,
+        () =>
+          w.bob.req('POST', `/api/boards/${w.board}/invitations`, {
+            role: 'commenter',
+            email: 'quinn@client.example.test',
+          }),
+        () => setProject(w.alice, w.project, true),
+      )
+      // Before the fix the switch finished first, and the invitation then committed in a project that was
+      // internal only by then.
+      await expectSerialised(w, r, 201)
+    })
+
+    it('(l) a workspace invitation for an outside address, against the workspace switch turned on', async () => {
+      const w = await world({ paused: true })
+      await watchInvites(w.api.db, ['olga@client.example.test'])
+      await reset(w.api.db, [switchOff(w)])
+      const r = await forced(
+        pausedOf(w),
+        w.api.db,
+        WORKSPACE_SWITCH_READ,
+        () =>
+          w.alice.req('POST', `/api/workspaces/${DEV_STUDIO}/invitations`, {
+            role: 'guest',
+            email: 'olga@client.example.test',
+          }),
+        () => setWorkspace(w.alice, true),
+      )
+      await expectSerialised(w, r, 201)
     })
   },
 )

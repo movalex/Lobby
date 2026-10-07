@@ -95,8 +95,9 @@ function toAccess(row: AccessRow): BoardAccess {
 // lock the same rows in opposite orders deadlock: Postgres then fails one of them (a 500). So every
 // transaction that locks more than one of these takes them top-down, never bottom-up:
 //   0. the workspace row: FOR NO KEY UPDATE (assertBoardRoom, uploads, a member change or removal, the
-//      Internal only switch, every redemption: accepting an invitation, joining through a link, and a
-//      review, workshop or guest link created, extended or opened to guests). It is
+//      Internal only switch, every redemption: accepting an invitation, joining through a link, a
+//      single-use invitation created, and a review, workshop or guest link created, extended or opened
+//      to guests). It is
 //      taken first, before ANY read that decides whether the transaction may hand out a grant, the
 //      caller's own membership included: a board's creator gets an owner grant for themselves
 //      (routes/boards.ts, features/history/new-board.ts createBoardFrom), so both go through
