@@ -35,7 +35,7 @@ import {
 } from '../../sync-internal.ts'
 import type { FeatureContext } from '../context.ts'
 import { scopeIn, visibilityReachesOutside } from '../dashboard/outside.ts'
-import type { FileRef } from './files.ts'
+import { type FileRef, fenceInternalOnlyFiles } from './files.ts'
 
 /**
  * What the new board starts with (validated again by the sync server's seed): tldraw records with the
@@ -77,6 +77,8 @@ export interface KeptSharing {
 export interface NewBoard {
   row: BoardRow
   kept: KeptSharing | null
+  /** An import's files left out because they are held in an internal-only project (IO-10). */
+  fenced: number
 }
 
 /** The person-safe notes on a copy that left something out (HistoryBoardCreated.warnings). */
@@ -241,6 +243,18 @@ export async function createBoardFrom(
       )
       if (!row) throw new Error('board id already taken after seeding')
       let kept: KeptSharing | null = null
+      // IO-10 (wave J refix round 2): an import outside every internal-only scope never links the stored
+      // files of an internal-only project's boards (files.ts fenceInternalOnlyFiles), decided here under the
+      // workspace row lock (requireCreatingRoleLocked) that the switch and a move take, on the copy's project.
+      const fence =
+        plan.via === 'import'
+          ? await fenceInternalOnlyFiles(
+              tx,
+              ctx,
+              { workspaceId: plan.workspaceId, userId: plan.userId, projectId },
+              plan.files,
+            )
+          : { kept: plan.files, fenced: [] }
       await tx.query(
         "INSERT INTO board_members (board_id, user_id, role, added_by, created_at) VALUES ($1, $2, 'owner', $2, $3)",
         [newId, plan.userId, at],
@@ -329,7 +343,7 @@ export async function createBoardFrom(
           kept = { scope, outsideLeftOut: grants.rows.length - copied.length, madePrivate }
         }
       }
-      await insertLinks(tx, plan.workspaceId, newId, plan.files, at)
+      await insertLinks(tx, plan.workspaceId, newId, fence.kept, at)
       // AIPV-04: a copy of a board with AI off (an NDA client's board) keeps AI off; a copy never falls
       // back to the workspace default (usually on). Restore-as-new and duplicate only, from a board of
       // the same workspace; a board without its own choice gives a copy without one.
@@ -351,11 +365,12 @@ export async function createBoardFrom(
           ...(plan.from?.snapshotId ? { fromSnapshot: plan.from.snapshotId } : {}),
           keepSharing: !!plan.shareLike,
           ...(kept ? { outsideLeftOut: kept.outsideLeftOut, madePrivate: kept.madePrivate } : {}),
-          files: plan.files.length,
+          files: fence.kept.length,
+          ...(fence.fenced.length ? { filesFenced: fence.fenced.length } : {}),
         },
         at,
       })
-      return { row, kept }
+      return { row, kept, fenced: fence.fenced.length }
     })
   } catch (e) {
     log?.(`board ${newId} was seeded but its row was not created; its canvas file is unused`)

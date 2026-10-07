@@ -44,6 +44,8 @@ import {
   type AddressCheckResult,
   BOARD_OUTSIDE_PEOPLE_MAX,
   type BoardOutsidePeople,
+  COLLEAGUES_UNCONFIRMED_CODE,
+  COLLEAGUES_UNCONFIRMED_MESSAGE,
   cleanDisplayText,
   EmailInviteInput,
   ExtendReviewLinkInput,
@@ -405,7 +407,9 @@ const VISIBILITY_ROLE: Record<BoardVisibility, BoardRole | null> = {
  * 1: a stale account used to count as inside here, as OutsideInfo shows it, while keep sharing left it
  * out). Call confirmStaleReach first, outside the transaction, so a colleague who has not opened Lobby
  * for a day is confirmed rather than counted. Under open email sign-in only a name-only guest is outside.
- * A member whose own grant already reaches the new role is not raised. Stored data only.
+ * A member whose own grant already reaches the new role is not raised. `besides`: accounts left out of the
+ * count (IO-9: the ones confirmStaleReach did not get to, to tell a retryable answer from a refusal).
+ * Stored data only.
  */
 export async function visibilityReachesOutside(
   q: Queryable,
@@ -413,6 +417,7 @@ export async function visibilityReachesOutside(
   boardId: string,
   workspaceId: string,
   to: BoardVisibility,
+  besides: readonly string[] = [],
 ): Promise<boolean> {
   const role = VISIBILITY_ROLE[to]
   if (!role) return false
@@ -426,55 +431,102 @@ export async function visibilityReachesOutside(
          LEFT JOIN board_members bm ON bm.board_id = $1 AND bm.user_id = wm.user_id
         WHERE wm.workspace_id = $2 AND wm.role = 'member'
           AND (bm.role IS NULL OR array_position($3::text[], bm.role) < array_position($3::text[], $4::text))
+          AND NOT (wm.user_id = ANY($9::text[]))
      ) o
      WHERE ${outside}
      LIMIT 1`,
-    [boardId, workspaceId, [...BOARD_ROLES_UP], role, ...userParams(lookup, deps.now())],
+    [boardId, workspaceId, [...BOARD_ROLES_UP], role, ...userParams(lookup, deps.now()), [...besides]],
   )
   return hit !== null
 }
 
-/** How many accounts one decision confirms with the provider first (confirmStaleReach), a few at a time. */
-export const STALE_CONFIRM_MAX = 20
-const STALE_CONFIRM_AT_ONCE = 4
+/**
+ * How many accounts one decision confirms with the provider first (confirmStaleReach), how many at a time,
+ * and for how long at most (IO-9). Within a Clerk development instance's rate limit (100 requests per 10 s).
+ * Mutable for tests only.
+ */
+export const staleConfirmLimits = { max: 50, atOnce: 5, timeMs: 8_000 }
+
+/** What one decision counts (confirmStaleReach): a raise to this visibility, or a keep-sharing copy. */
+export type StaleReach = { raise: BoardVisibility } | { copy: BoardVisibility }
+
+/** 503 COLLEAGUES_UNCONFIRMED (IO-9): nothing changed, a retry confirms the next colleagues. */
+export const colleaguesUnconfirmed = () =>
+  new ApiError(503, COLLEAGUES_UNCONFIRMED_CODE, COLLEAGUES_UNCONFIRMED_MESSAGE)
 
 /**
  * IO-6 (wave J refix round 1): before deciding whether a workspace visibility in an internal-only scope
  * reaches someone who is not inside (a visibility raise: visibilityReachesOutside; "Duplicate, keep
  * sharing": the grants it copies and whether the copy is private), the accounts that decision would count
  * as not inside only because their addresses are not confirmed (never checked, or stale with stored
- * addresses that still qualify) are confirmed with the provider (refreshTarget): workspace members with
- * role 'member' (whom a visibility reaches) and anyone with a grant on `boardId` (whose grant a copy
- * carries). Known outside accounts and name-only guests are left as they are (a check would not make them
- * inside). At most STALE_CONFIRM_MAX accounts, most recently confirmed first; anyone left stale counts as
- * not inside (fails closed). Call only after the route's own checks, for a creator caller, and OUTSIDE any
- * transaction (no provider call while a lock is held). Never throws. Under open email sign-in, nothing:
- * only a name-only guest is outside there.
+ * addresses that still qualify) are confirmed with the provider (refreshTarget). Known outside accounts and
+ * name-only guests are left as they are (a check would not make them inside). Whoever the provider cannot
+ * confirm counts as not inside (fails closed).
+ *
+ * IO-9 (wave J refix round 2): only the accounts the decision counts. A raise to `raise`: workspace members
+ * with role 'member' whose own grant on `boardId` is below the visibility's role (visibilityReachesOutside's
+ * set; not a workspace guest with a grant, not a member already reached by their grant). A copy of a board at
+ * visibility `copy`: the board's grant holders (whose grants it carries) and, unless it is private, the
+ * members with role 'member' (whom the copy's visibility reaches). At most staleConfirmLimits.max accounts,
+ * a few at a time, for at most staleConfirmLimits.timeMs, most recently confirmed first. Returns the ones it
+ * did not get to (`skipped`: beyond the budget or the time): the caller answers 503 COLLEAGUES_UNCONFIRMED
+ * (retryable, a retry confirms the next ones) when they are what would decide it, never the outside refusal
+ * for a colleague nobody asked the provider about. A call still running at the time limit goes on in the
+ * background (refreshTarget never throws; its write is the usual stamp).
+ *
+ * Call only after the route's own checks, for a creator caller, and OUTSIDE any transaction (no provider
+ * call while a lock is held). Never throws. Under open email sign-in, nothing: only a name-only guest is
+ * outside there.
  */
 export async function confirmStaleReach(
   q: Queryable,
   deps: OutsideDeps,
   workspaceId: string,
   boardId: string,
-): Promise<void> {
+  reach: StaleReach,
+): Promise<{ skipped: string[] }> {
   const { lookup } = deps.identity
-  if (isOpenLookup(lookup)) return
+  if (isOpenLookup(lookup)) return { skipped: [] }
+  const counted =
+    'raise' in reach
+      ? `wm.role = 'member' AND (bm.role IS NULL OR
+           array_position($3::text[], bm.role) < array_position($3::text[], $4::text))`
+      : `$3::text[] IS NOT NULL AND (bm.role IS NOT NULL OR ($4::text IS NOT NULL AND wm.role = 'member'))`
+  const role = VISIBILITY_ROLE['raise' in reach ? reach.raise : reach.copy]
+  if ('raise' in reach && !role) return { skipped: [] }
   const rows = await q.query<{ o_id: string }>(
     `SELECT o.o_id FROM (
-       SELECT ${originColumns(3)}
+       SELECT ${originColumns(5)}
          FROM workspace_members wm
          JOIN users u ON u.id = wm.user_id
          LEFT JOIN board_members bm ON bm.board_id = $2 AND bm.user_id = wm.user_id
-        WHERE wm.workspace_id = $1 AND (wm.role = 'member' OR bm.role IS NOT NULL)
+        WHERE wm.workspace_id = $1 AND ${counted}
      ) o
      WHERE o.o_kind = 'account' AND NOT o.o_creator AND (o.o_checked_at IS NULL OR o.o_qualifies)
-     ORDER BY o.o_checked_at DESC NULLS LAST, o.o_id
-     LIMIT ${STALE_CONFIRM_MAX}`,
-    [workspaceId, boardId, ...userParams(lookup, deps.now())],
+     ORDER BY o.o_checked_at DESC NULLS LAST, o.o_id`,
+    [workspaceId, boardId, [...BOARD_ROLES_UP], role, ...userParams(lookup, deps.now())],
   )
   const ids = rows.rows.map((r) => r.o_id)
-  for (let i = 0; i < ids.length; i += STALE_CONFIRM_AT_ONCE)
-    await Promise.all(ids.slice(i, i + STALE_CONFIRM_AT_ONCE).map((id) => deps.identity.refreshTarget(id)))
+  const { max, atOnce, timeMs } = staleConfirmLimits
+  const deadline = performance.now() + timeMs
+  let done = 0
+  while (done < Math.min(ids.length, max)) {
+    const left = deadline - performance.now()
+    if (left <= 0) break
+    const batch = ids.slice(done, Math.min(done + atOnce, max))
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const finished = await Promise.race([
+      Promise.all(batch.map((id) => deps.identity.refreshTarget(id))).then(() => true),
+      new Promise<false>((resolve) => {
+        timer = setTimeout(() => resolve(false), left)
+        timer.unref?.()
+      }),
+    ])
+    clearTimeout(timer)
+    if (!finished) break
+    done += batch.length
+  }
+  return { skipped: ids.slice(done) }
 }
 
 /**

@@ -29,7 +29,7 @@ import { contentDisposition } from '../../files/disposition.ts'
 import { toBoardWithRole } from '../../serialize.ts'
 import type { BoardSnapshotJson, RoomSnapshotJson } from '../../sync-internal.ts'
 import type { FeatureContext } from '../context.ts'
-import { confirmStaleReach, scopeIn } from '../dashboard/outside.ts'
+import { colleaguesUnconfirmed, confirmStaleReach, scopeIn } from '../dashboard/outside.ts'
 import { keepDownloadableFiles } from '../export-control/import-files.ts'
 import { copyExportPolicy, requireExportAllowed } from '../export-control/policy.ts'
 import { DELETED_GUESTS, guestRefused } from '../guests/guard.ts'
@@ -291,8 +291,14 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     // grants and makes the copy private while its visibility reaches anyone else, so the people it would
     // count out only because their addresses are stale are confirmed with the provider first, outside the
     // copy's transaction (no provider call while a lock is held). createBoardFrom decides on what is stored.
-    if (input.keepSharing && (await scopeIn(db, workspaceId, access.board.project_id)))
-      await confirmStaleReach(db, ctx, workspaceId, bid)
+    // IO-9 (wave J refix round 2): only the accounts the copy counts (the grant holders, and the members its
+    // visibility reaches), within a budget; any it did not get to would be left out or make the copy private
+    // for not having been asked about, so the answer is a retryable 503 instead (nothing made yet).
+    if (input.keepSharing && (await scopeIn(db, workspaceId, access.board.project_id))) {
+      const reach = { copy: access.board.visibility }
+      if ((await confirmStaleReach(db, ctx, workspaceId, bid, reach)).skipped.length)
+        throw colleaguesUnconfirmed()
+    }
     const snap = await viaSync(() => ctx.sync.snapshot(bid))
     const lobby = lobbySnapshotOf(snap)
     const content = contentOf(snap)
@@ -426,7 +432,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
         warnings.push(
           `${limited.length} file(s) in this archive are on boards whose owner turned off downloads for viewers, so they were not carried over and show as missing.`,
         )
-      const { row: board } = await createBoardFrom(
+      const { row: board, fenced } = await createBoardFrom(
         ctx,
         {
           userId: user.id,
@@ -439,10 +445,18 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
         },
         warn,
       )
+      // IO-10: files held in an internal-only project stay there (createBoardFrom, under the switch's lock).
+      if (fenced)
+        warnings.push(
+          `${fenced} file(s) in this archive are on boards of an internal-only project, so they were not carried over to a board outside it and show as missing.`,
+        )
       // The board as imported, before anyone edits it (automatic; best effort).
       await checkpoints.captureQuietly(board.id, 'import')
       reply.code(201)
-      return { ...created(board, allowed.length, dropped.length, await onNewCanvas(ctx)), warnings }
+      return {
+        ...created(board, allowed.length - fenced, dropped.length + fenced, await onNewCanvas(ctx)),
+        warnings,
+      }
     },
   )
 

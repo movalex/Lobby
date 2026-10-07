@@ -118,6 +118,16 @@ export const INTERNAL_ONLY_MESSAGES: Readonly<Record<InternalOnlyScope, string>>
     'This project is internal only: only people at Dark Burn Creative or Trailer Park Group can be invited or given access to its boards, and review, workshop and guest links are off. A workspace owner or admin can turn this off.',
 }
 
+/**
+ * 503 COLLEAGUES_UNCONFIRMED (wave J refix round 2, IO-9): a visibility raise or a "Duplicate, keep sharing"
+ * in an internal-only scope would count colleagues whose addresses Lobby has not confirmed with the sign-in
+ * service for over a day, and it could not confirm all of them in one go. Nothing was changed; a retry
+ * confirms the next ones.
+ */
+export const COLLEAGUES_UNCONFIRMED_CODE = 'COLLEAGUES_UNCONFIRMED'
+export const COLLEAGUES_UNCONFIRMED_MESSAGE =
+  'Lobby is still confirming some colleagues’ email addresses with the sign-in service, so nothing was changed. Try again in a minute.'
+
 /** PUT /api/workspaces/:wid/internal-only and PUT /api/projects/:pid/internal-only. */
 export const SetInternalOnlyInput = z.strictObject({ internalOnly: z.boolean() })
 export type SetInternalOnlyInput = z.infer<typeof SetInternalOnlyInput>

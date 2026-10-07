@@ -12,8 +12,10 @@
 // had not opened Lobby for a day and called them "not confirmed as Dark Burn Creative or Trailer Park Group".
 // Nobody is left out there for being stale (only name-only guests, which are never copied).
 
+import { COLLEAGUES_UNCONFIRMED_CODE, COLLEAGUES_UNCONFIRMED_MESSAGE } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SHARED_WORKSPACE_ID } from '../../../src/auth/shared-workspace.ts'
+import { staleConfirmLimits } from '../../../src/features/dashboard/outside.ts'
 import { type Client, createBoard, createTestApi, type TestApi } from '../../helpers.ts'
 import { type ClerkWorld, clerkError, clerkUser, clerkWorld, fakeClerk } from '../domain-access/clerk-fake.ts'
 import { baseRecords, createFakeSync, type FakeSync, noteRec } from '../history/helpers.ts'
@@ -157,5 +159,139 @@ describe('IO-7 under open email sign-in: a colleague who has not opened Lobby fo
     expect(body.board.visibility).toBe('workspace_view')
     expect(body.outsideLeftOut ?? 0).toBe(0)
     expect(body.warnings).toEqual([])
+  })
+})
+
+// Wave J refix round 2.
+// IO-9: confirmStaleReach confirmed at most 20 accounts, and everyone it did not get to counted as outside
+// (IO-6's `NOT o_creator`). So with more than 20 colleagues idle for a day a raise in an internal-only scope
+// was refused with the outside message (and went through on a retry), and keep sharing left colleagues out or
+// made the copy private as "not confirmed". The budget was also spent on accounts the decision does not count
+// (a workspace guest with a grant, a member whose own grant already reaches the role). Now only the counted
+// accounts are confirmed, within a budget and a time limit, and when the ones it did not get to are all that
+// would decide it the answer is a retryable 503 COLLEAGUES_UNCONFIRMED with nothing changed.
+describe('IO-9 under Clerk domain access: more stale colleagues than one decision confirms', () => {
+  let w: ClerkWorld
+  let alice: Client // owner (darkburn.com)
+  let bob: Client // creator member, owns the boards
+  let wid: string
+  let project: string
+  let plain: string // in the project, private
+  let shared: string // in the project, workspace_view
+  let colleagues: Client[] // members with role 'member' (darkburn.com), stale
+  let sync: FakeSync
+  const saved = { ...staleConfirmLimits }
+  const COLLEAGUES = 5
+
+  beforeEach(async () => {
+    sync = createFakeSync()
+    w = await clerkWorld({ deps: { syncInternal: sync } })
+    clerkUser('user_alice', ['lobby-test-alice@darkburn.com'])
+    clerkUser('user_bob', ['lobby-test-bob@trailerparkgroup.com'])
+    alice = await w.signIn('user_alice')
+    bob = await w.signIn('user_bob')
+    wid = alice.personalWorkspaceId
+    await addMember(w.api, wid, bob.userId, 'member')
+    colleagues = []
+    for (let i = 0; i < COLLEAGUES; i++) {
+      clerkUser(`user_m${i}`, [`lobby-test-m${i}@darkburn.com`])
+      const c = await w.signIn(`user_m${i}`)
+      await addMember(w.api, wid, c.userId, 'member')
+      colleagues.push(c)
+    }
+    project = await newProject(alice, wid, 'Secret')
+    plain = await createBoard(bob, wid, 'Plain')
+    shared = await createBoard(bob, wid, 'Shared')
+    sync.setBoard(shared, [...baseRecords(), noteRec('n1', 'x')])
+    for (const b of [plain, shared]) expect((await move(bob, b, project)).statusCode).toBe(200)
+    expect((await visibility(bob, shared, 'workspace_view')).statusCode).toBe(200)
+    expect((await setProject(alice, project, true)).statusCode).toBe(200)
+    for (const c of colleagues) await staleFor(w.api, c.userId)
+    fakeClerk.calls = []
+    Object.assign(staleConfirmLimits, { max: 3 })
+  })
+  afterEach(() => {
+    Object.assign(staleConfirmLimits, saved)
+    fakeClerk.failures.clear()
+    fakeClerk.gate = null
+    return w.api.close()
+  })
+
+  const unconfirmed = (res: { statusCode: number; body: string; json: () => unknown }) => {
+    expect(res.statusCode, res.body).toBe(503)
+    expect(res.json()).toEqual({
+      error: expect.objectContaining({
+        code: COLLEAGUES_UNCONFIRMED_CODE,
+        message: COLLEAGUES_UNCONFIRMED_MESSAGE,
+      }),
+    })
+  }
+  const boardCount = async () =>
+    Number(
+      (await w.api.db.one<{ n: string }>('SELECT count(*) AS n FROM boards WHERE workspace_id = $1', [wid]))
+        .n,
+    )
+
+  it('a raise past the budget is a retryable 503 (nothing changed), and the retry passes', async () => {
+    unconfirmed(await visibility(bob, plain, 'workspace_view'))
+    expect(await visibilityOf(w.api, plain)).toBe('private')
+    expect(fakeClerk.calls).toHaveLength(3)
+    const again = await visibility(bob, plain, 'workspace_view')
+    expect(again.statusCode, again.body).toBe(200)
+    expect(await visibilityOf(w.api, plain)).toBe('workspace_view')
+  })
+
+  it('a keep-sharing copy past the budget is a retryable 503 (no board made), and the retry keeps everyone', async () => {
+    for (const c of colleagues.slice(0, 2)) await grant(w.api, shared, c.userId, 'editor', bob.userId)
+    const before = await boardCount()
+    unconfirmed(await bob.req('POST', `/api/boards/${shared}/duplicate`, { keepSharing: true }))
+    expect(await boardCount()).toBe(before)
+    const again = await bob.req('POST', `/api/boards/${shared}/duplicate`, { keepSharing: true })
+    expect(again.statusCode, again.body).toBe(201)
+    const body = again.json() as Created
+    expect(body.board.visibility).toBe('workspace_view')
+    expect(body.outsideLeftOut ?? 0).toBe(0)
+    expect(body.warnings).toEqual([])
+    const grants = await grantsOf(w.api, body.board.id)
+    for (const c of colleagues.slice(0, 2)) expect(grants[c.userId]).toBe('editor')
+  })
+
+  it('someone really outside: the outside refusal straight away, not the retryable answer', async () => {
+    clerkUser('user_out', ['out@client.example.test'])
+    const out = await w.signIn('user_out')
+    await addMember(w.api, wid, out.userId, 'member')
+    refused(await visibility(bob, plain, 'workspace_view'), 'project')
+  })
+
+  it('confirms only the accounts the raise counts (not a guest with a grant, not a member its grant reaches)', async () => {
+    Object.assign(staleConfirmLimits, { max: 50 })
+    clerkUser('user_g', ['lobby-test-g@darkburn.com'])
+    const g = await w.signIn('user_g')
+    await addMember(w.api, wid, g.userId, 'guest')
+    await grant(w.api, plain, g.userId, 'viewer', bob.userId)
+    const [first] = colleagues
+    if (!first) throw new Error('no colleagues')
+    await grant(w.api, plain, first.userId, 'editor', bob.userId)
+    await staleFor(w.api, g.userId)
+    fakeClerk.calls = []
+    const res = await visibility(bob, plain, 'workspace_view')
+    expect(res.statusCode, res.body).toBe(200)
+    expect([...fakeClerk.calls].sort()).toEqual(['user_m1', 'user_m2', 'user_m3', 'user_m4'])
+  })
+
+  it('a provider too slow for the time limit: a retryable 503, and the retry passes once it answers', async () => {
+    Object.assign(staleConfirmLimits, { max: 50, timeMs: 200 })
+    let open = () => {}
+    fakeClerk.gate = new Promise<void>((resolve) => {
+      open = resolve
+    })
+    unconfirmed(await visibility(bob, plain, 'workspace_view'))
+    expect(await visibilityOf(w.api, plain)).toBe('private')
+    fakeClerk.gate = null
+    open()
+    await vi.waitFor(async () => {
+      const res = await visibility(bob, plain, 'workspace_view')
+      expect(res.statusCode, res.body).toBe(200)
+    })
   })
 })

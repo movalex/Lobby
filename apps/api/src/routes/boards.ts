@@ -32,8 +32,10 @@ import { conflict, forbidden, notFound, parse } from '../errors.ts'
 import {
   assertProjectMoveAllowed,
   assertVisibilityRaiseAllowed,
+  colleaguesUnconfirmed,
   confirmStaleReach,
   scopeIn,
+  visibilityReachesOutside,
 } from '../features/dashboard/outside.ts'
 import { assertBoardRoom } from '../files/usage.ts'
 import { actorOf } from '../notifier.ts'
@@ -181,8 +183,17 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
         visibilityRank(input.visibility) > visibilityRank(visibility) &&
         (await ctx.identity.isCreatorUser(db, user.id)) &&
         (await scopeIn(db, workspace_id, input.projectId !== undefined ? input.projectId : project_id))
-      )
-        await confirmStaleReach(db, ctx, workspace_id, bid)
+      ) {
+        // IO-9 (wave J refix round 2): only the members the raise counts are confirmed, within a budget. When
+        // the ones it did not get to are all that would refuse it, the answer is a retryable 503 (nothing
+        // changed; a retry confirms the next ones), never the outside refusal for colleagues nobody checked.
+        const { skipped } = await confirmStaleReach(db, ctx, workspace_id, bid, { raise: input.visibility })
+        if (
+          skipped.length &&
+          !(await visibilityReachesOutside(db, ctx, bid, workspace_id, input.visibility, skipped))
+        )
+          throw colleaguesUnconfirmed()
+      }
     }
     const result = await db.transaction(async (tx) => {
       // "Internal only" (IO-1, IO-2b): a move or a visibility change is decided under the workspace row

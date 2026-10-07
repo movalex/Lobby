@@ -126,6 +126,77 @@ export async function filesViewableBy(
   return { allowed, dropped }
 }
 
+/**
+ * IO-10 (wave J refix round 2): an import's files that the importer can view only on boards of an
+ * internal-only project, when the new board lands outside every internal-only scope (no project, or a
+ * project that is not internal only). Carrying them would link the project's stored originals to a board
+ * outside the switch, where outside invitations and links work: the move out that IO-1 keeps for the people
+ * who may turn the switch off. So they are left out (`fenced`, shown as missing with a warning) unless the
+ * importer is a workspace owner or admin who is a creator. Into an internal-only project (between two of
+ * them, as a move) or while the workspace itself is internal only, nothing is fenced. A file the importer can
+ * also view on a board outside every internal-only project is already outside the switch, so it is kept.
+ * Call in createBoardFrom's transaction, under the workspace row lock the switch and a move take, after the
+ * caller's viewable check (filesViewableBy).
+ */
+export async function fenceInternalOnlyFiles(
+  q: Queryable,
+  deps: { identity: { isCreatorUser(q: Queryable, userId: string): Promise<boolean> } },
+  target: { workspaceId: string; userId: string; projectId: string | null },
+  files: readonly FileRef[],
+): Promise<{ kept: FileRef[]; fenced: FileRef[] }> {
+  const all = { kept: [...files], fenced: [] as FileRef[] }
+  if (!files.length) return all
+  const { workspaceId, userId, projectId } = target
+  const flags = await q.maybeOne<{ ws: boolean; target: boolean | null; any: boolean }>(
+    `SELECT w.internal_only AS ws,
+            (SELECT p.internal_only FROM projects p WHERE p.id = $2 AND p.workspace_id = w.id) AS target,
+            EXISTS (SELECT 1 FROM projects p WHERE p.workspace_id = w.id AND p.internal_only) AS any
+       FROM workspaces w WHERE w.id = $1`,
+    [workspaceId, projectId],
+  )
+  if (!flags || flags.ws || flags.target === true || !flags.any) return all
+  const member = await q.maybeOne<{ role: string }>(
+    'SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2',
+    [workspaceId, userId],
+  )
+  if (
+    (member?.role === 'owner' || member?.role === 'admin') &&
+    (await deps.identity.isCreatorUser(q, userId))
+  )
+    return all
+  const kept: FileRef[] = []
+  const fenced: FileRef[] = []
+  const outsideSwitch = new Map<string, boolean>()
+  const rows = await loadVersionRows(q, files)
+  for (const ref of files) {
+    const row = rows.get(refKey(ref))
+    let ok = false
+    if (row) {
+      for (const boardId of await boardsShowingAsset(q, workspaceId, {
+        ...ref,
+        ownerBoardId: row.board_id,
+      })) {
+        if (!outsideSwitch.has(boardId)) {
+          const access = await loadBoardAccess(q, boardId, userId)
+          const viewable = !!access && can(access.role, 'view', access.board.status)
+          const fencedBoard = await q.maybeOne(
+            `SELECT 1 AS hit FROM boards b JOIN projects p ON p.id = b.project_id AND p.workspace_id = b.workspace_id
+              WHERE b.id = $1 AND p.internal_only`,
+            [boardId],
+          )
+          outsideSwitch.set(boardId, viewable && fencedBoard === null)
+        }
+        if (outsideSwitch.get(boardId)) {
+          ok = true
+          break
+        }
+      }
+    }
+    ;(ok ? kept : fenced).push(ref)
+  }
+  return { kept, fenced }
+}
+
 /** The archive manifest entry of a version (values clamped to what the archive format accepts). */
 export function archiveRef(v: VersionRow): ArchiveAssetRef | null {
   const sizeBytes = Number(v.size_bytes)
