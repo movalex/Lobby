@@ -277,3 +277,25 @@ on the sync disk (§6).
     the code default (43b193a5), Clerk's sign-in-or-up flow (`<SignIn withSignUp>`) and the additive migration
     `0025_open_signin`.
   - The variable was then removed again, so unset means the default, the same three domains.
+- **2026-10-07 03:00Z, wave J deployed:** api, then sync, then web at `a3e3f4a` (main fast-forwarded to `wave-j/integration`).
+  - Before the deploy:
+    - The integrator's gate passed (PROGRESS.md, wave J).
+    - An independent pre-deploy review and three adversarial fix rounds closed IO-1 to IO-11, the Internal only bypasses and their follow-ups. Real PostgreSQL 18 races were added (`internal-only-locks.pg.test.ts`).
+    - The final complete gate at `a3e3f4a` passed:
+      - unit: 5,837 passed;
+      - real PG 18: all `*.pg.test.ts` and the whole api project, 1,654 passed;
+      - e2e: 594 passed and 0 failed, normally and again with `E2E_DIRECT_EVENTS=1`.
+    - Old open tabs (the eb96ba46 web) against the new patched sync showed no write loop in seven scenarios.
+  - `DRAFTROOM_FEEDBACK_ADMINS` was set on the api through the Render API, copied server-side from `DRAFTROOM_CREATOR_EMAILS` (1 address, never printed).
+  - Deploys: api `dep-db2raoh42hec73fki8u0` (migrations 0026 and 0027; the feedback inbox route answers), sync `dep-db2rbf2d0e5s73e5231g`, web `dep-db2rc2vlk1mc738fjp7g`.
+  - 0 `error`/`FATAL` lines afterwards. `render.yaml` drift is 0.
+  - Live smoke: 40 passed, 0 failed. The bundle now names `accounts.google.com` (the theater's Google button). The smoke check passes it only while `/api/auth/config` offers no Google sign-in, which is the case on staging. The headless sign-in page check saw no request to it.
+  - Live two-user check (the owner in Brave, a name-only guest in the built-in pane), on a test board in a test project:
+    - "Shared outside" on the top bar for both people.
+    - The guest tagged GUEST.
+    - Presence, remote selection and a note typed under a lease reached the guest live.
+    - Send feedback from the guest reached the owner's /feedback inbox; marking it done works through the api. A click in the hidden Brave tab did not land; the e2e `feedback.spec.ts` covers the button.
+    - Project Internal only: on, a new link was refused with 409 INTERNAL_ONLY and its words; off, links work again.
+    - Trashing the board ended the guest's access at once.
+    - Not checkable live without a second real account: the External tag, the owner's first-join bell item (both for outside ACCOUNTS) and a plain editor's refused move-out. The api and e2e suites cover them.
+  - Cleanup: both test links revoked, the board in Trash, the test project archived; the test feedback stays in the inbox as Done.

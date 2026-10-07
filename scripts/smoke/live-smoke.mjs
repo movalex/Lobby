@@ -96,6 +96,15 @@ const isNonRequestHost = (h) => h === 'www.w3.org' || h === 'json-schema.org' ||
 const DOC_LINK_HOSTS = new Set(['react.dev', 'github.com', 'rolldown.rs'])
 
 /**
+ * Google Identity Services, the open sign-in's "Continue with Google" (apps/web/src/auth/GoogleSignIn.tsx,
+ * docs/OPEN-SIGNIN.md). The script loads only where GET /api/auth/config offers Google, so it is the auth
+ * provider's host there and an unused name everywhere else. Section 5 checks which one this server is.
+ */
+const GOOGLE_SIGNIN_HOST = 'accounts.google.com'
+/** Set by the bundle scan (section 4): the bundle names GOOGLE_SIGNIN_HOST. */
+let bundleNamesGoogleSignIn = false
+
+/**
  * The hosts the bridge release R0's bundle names besides the above, measured on staging on 2026-10-01
  * (main 380aa92 / r0 38d3833 lineage): tldraw's embed allowlist and URL builders (@tldraw/tlschema and
  * tldraw), its asset CDN and docs, ProseMirror's docs, RFC 2606's example.com. None is requested by Lobby
@@ -486,6 +495,7 @@ function classify(host) {
   if (isClerkHost(host)) return 'clerk'
   if (isNonRequestHost(host)) return 'non-request'
   if (DOC_LINK_HOSTS.has(host)) return 'doc-link'
+  if (host === GOOGLE_SIGNIN_HOST) return 'google-signin'
   if (EXPECT === 'r0' && R0_BUNDLE_HOSTS.has(host)) return 'r0-known'
   return 'foreign'
 }
@@ -515,6 +525,7 @@ function classify(host) {
       `bundle host ${r.host}`,
       `${r.cls} [${r.kinds.join(',')}] in ${r.files.slice(0, 3).join(', ')}${r.files.length > 3 ? ` +${r.files.length - 3}` : ''}`,
     )
+  bundleNamesGoogleSignIn = rows.some((r) => r.cls === 'google-signin')
   const foreign = rows.filter((r) => r.cls === 'foreign')
   const clerk = rows.filter((r) => r.cls === 'clerk').map((r) => r.host)
   // @tldraw/tlschema's embed definitions name codepen.io, www.youtube.com and the like, and tlschema stays
@@ -590,6 +601,26 @@ try {
       'csp script-src names the Clerk frontend api',
       `${clerkFapi} (runbook P5: corrected from a real sign-in)`,
     )
+  }
+  if (bundleNamesGoogleSignIn) {
+    // The bundle's Google host is requested only when this server offers Google sign-in; then the page's
+    // CSP must allow it (the theater's nginx.conf does). Anywhere else it must stay an unused name.
+    const offersGoogle =
+      Boolean(cfg.googleClientId) && (cfg.openSigninMethods ?? ['email']).includes('google')
+    const cspAllows = (dir) =>
+      (parseCsp(cspHeader ?? '').get(dir) ?? []).some((s) => s.toLowerCase().includes(GOOGLE_SIGNIN_HOST))
+    if (offersGoogle)
+      check(
+        cspHeader !== null && cspAllows('script-src'),
+        'bundle Google sign-in host',
+        `${GOOGLE_SIGNIN_HOST}: this server offers Google sign-in; the CSP's script-src ${cspAllows('script-src') ? 'allows' : 'does NOT allow'} it`,
+      )
+    else
+      check(
+        true,
+        'bundle Google sign-in host',
+        `${GOOGLE_SIGNIN_HOST} is named by the open sign-in's Google button only; this server offers no Google sign-in (providers=${JSON.stringify(cfg.providers)}), so it is never requested`,
+      )
   }
 } catch (e) {
   fail('/api/auth/config', e.message)
