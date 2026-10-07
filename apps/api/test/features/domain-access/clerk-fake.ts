@@ -10,6 +10,7 @@
 import { ClerkAPIResponseError } from '@clerk/backend/errors'
 import type { Db } from '@draftroom/db'
 import type { LightMyRequestResponse } from 'fastify'
+import type { ApiDeps } from '../../../src/app.ts'
 import { createClerkAuthProvider } from '../../../src/auth/clerk.ts'
 import { type Client, createTestApi, ORIGIN, type TestApi } from '../../helpers.ts'
 
@@ -176,6 +177,8 @@ export async function clerkWorld(
     domainAccessGuard?: boolean
     /** Another api over this (migrated) database: a second process, e.g. a deploy overlap. */
     db?: Db
+    /** More api deps (a fake sync server, say); the logger and the Clerk provider stay this world's. */
+    deps?: Omit<Partial<ApiDeps>, 'logger' | 'authProvider'>
   } = {},
 ) {
   const logs: string[] = []
@@ -189,6 +192,7 @@ export async function clerkWorld(
     ...(opts.domainAccessGuard === false ? { domainAccessGuard: false } : {}),
     ...(opts.db ? { db: opts.db } : {}),
     deps: {
+      ...opts.deps,
       logger: { level: 'debug', stream: { write: (line: string) => void logs.push(line) } },
       authProvider: createClerkAuthProvider({
         ...CLERK_KEYS,

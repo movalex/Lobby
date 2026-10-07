@@ -57,6 +57,40 @@ export const grant = (api: TestApi, board: string, userId: string, role: string,
     [board, userId, role, by],
   )
 
+type Query = TestApi['db']['query']
+
+/**
+ * Runs `then` (with the unwrapped query) right after the first read on the pool (`api.db`: query, one
+ * or maybeOne) whose SQL matches: a change another connection commits between that read (a root hook's) and
+ * the route's transaction.
+ */
+export function commitAfter(api: TestApi, sql: RegExp, then: (q: Query) => Promise<unknown>): () => void {
+  const db = api.db
+  const saved = { query: db.query, one: db.one, maybeOne: db.maybeOne }
+  let armed = true
+  const after = async () => {
+    if (!armed) return
+    armed = false
+    await then(saved.query)
+  }
+  const wrap = <F extends (text: string, params?: readonly unknown[]) => Promise<unknown>>(f: F) =>
+    (async (text: string, params?: readonly unknown[]) => {
+      const result = await f(text, params)
+      if (armed && sql.test(text)) await after()
+      return result
+    }) as unknown as F
+  db.query = wrap(saved.query)
+  db.one = wrap(saved.one)
+  db.maybeOne = wrap(saved.maybeOne)
+  return () => {
+    Object.assign(db, saved)
+  }
+}
+
+/** The root hooks' reads (outside.ts boardInternalOnly, workspaceInternalOnly). */
+export const BOARD_SWITCH_READ = /SELECT w\.internal_only AS ws, p\.internal_only AS prj/
+export const WORKSPACE_SWITCH_READ = /SELECT internal_only AS ws FROM workspaces WHERE id = \$1/
+
 /** Open email sign-in (docs/OPEN-SIGNIN.md): everyone who signs in is a creator. */
 export const OPEN_ENV = { DRAFTROOM_DEV_AUTH: '0', AUTH_PROVIDER: 'email', DRAFTROOM_OPEN_SIGNIN: '1' }
 

@@ -29,6 +29,7 @@ import { contentDisposition } from '../../files/disposition.ts'
 import { toBoardWithRole } from '../../serialize.ts'
 import type { BoardSnapshotJson, RoomSnapshotJson } from '../../sync-internal.ts'
 import type { FeatureContext } from '../context.ts'
+import { confirmStaleReach, scopeIn } from '../dashboard/outside.ts'
 import { keepDownloadableFiles } from '../export-control/import-files.ts'
 import { copyExportPolicy, requireExportAllowed } from '../export-control/policy.ts'
 import { DELETED_GUESTS, guestRefused } from '../guests/guard.ts'
@@ -286,6 +287,12 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     if (access.board.new_canvas && !(await onNewCanvas(ctx))) throw newCanvasBoard()
     if (input.keepSharing && !can(access.role, 'manage_access', access.board.status))
       throw forbidden('Only the board owner can copy its sharing settings.')
+    // IO-6 (wave J refix round 1): into an internal-only scope, keep sharing copies only confirmed creators'
+    // grants and makes the copy private while its visibility reaches anyone else, so the people it would
+    // count out only because their addresses are stale are confirmed with the provider first, outside the
+    // copy's transaction (no provider call while a lock is held). createBoardFrom decides on what is stored.
+    if (input.keepSharing && (await scopeIn(db, workspaceId, access.board.project_id)))
+      await confirmStaleReach(db, ctx, workspaceId, bid)
     const snap = await viaSync(() => ctx.sync.snapshot(bid))
     const lobby = lobbySnapshotOf(snap)
     const content = contentOf(snap)

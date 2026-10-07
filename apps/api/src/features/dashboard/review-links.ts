@@ -38,7 +38,7 @@ import type { FeatureContext } from '../context.ts'
 import { publishExportPolicy } from '../export-control/index.ts'
 import { limitExportForClientLink } from '../export-control/policy.ts'
 import { extendGuestSessions } from '../guests/sessions.ts'
-import { assertLinksAllowed } from './outside.ts'
+import { assertLinksAllowed, lockBoardWorkspace } from './outside.ts'
 import { publishSharingChanged } from './shared.ts'
 
 /** Open review links per board (a runaway client cannot fill the table). */
@@ -289,6 +289,11 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
     const { bid = '' } = req.params as Params
     const input = parse(CreateReviewLinkInput, req.body ?? {})
     const created = await db.transaction(async (tx) => {
+      // Wave J refix round 1 (IO-5): the switch is decided below under the workspace row lock the switch and
+      // a move into a project take (access.ts step 0, before the board row), so neither can commit between
+      // that read and the new link. The unlocked check first, so only a manager of the board takes it.
+      await requireBoardAction(tx, bid, user.id, 'manage_access')
+      await lockBoardWorkspace(tx, bid)
       const access = await requireBoardAction(tx, bid, user.id, 'manage_access', { forUpdate: true })
       // Wave 3: a name-only guest never hands out links, whatever board role they were given.
       if ((await userKind(tx, user.id)) === 'guest')
@@ -423,13 +428,19 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
     const { bid = '', id = '' } = req.params as Params
     const { hours } = parse(ExtendReviewLinkInput, req.body ?? {})
     const result = await db.transaction(async (tx) => {
-      // The board row, then the link (the lock order in access.ts).
+      // The workspace row (IO-5, as creating a link), the board row, then the link (the lock order in
+      // access.ts). The unlocked check first, so only a manager of the board takes the workspace row.
+      await requireBoardAction(tx, bid, user.id, 'manage_access')
+      await lockBoardWorkspace(tx, bid)
       const access = await requireBoardAction(tx, bid, user.id, 'manage_access', { forUpdate: true })
       // Domain access (D4): extending a link hands out access for longer: creator-only.
       await ctx.identity.requireCreator(tx, user.id, 'share', {
         route: req.routeOptions.url ?? '',
         by: 'route',
       })
+      // Wave J (IO-5): no more time while the board's workspace or project is internal only. The root hook
+      // in outside.ts answers first; this decides, under the switch's lock.
+      await assertLinksAllowed(tx, bid)
       if (!InvitationId.safeParse(id).success) throw notFound()
       const link = await tx.maybeOne<LinkRow>(
         `SELECT ${LINK_COLUMNS} FROM invitations WHERE id = $1 AND board_id = $2 AND multi_use FOR UPDATE`,
@@ -484,15 +495,24 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
     const { bid = '', id = '' } = req.params as Params
     const { allowGuests } = parse(UpdateReviewLinkInput, req.body ?? {})
     const result = await db.transaction(async (tx) => {
-      // The board row, then the link (the lock order in access.ts; joining and accepting follow it).
+      // Opening it to guests: the workspace row first (IO-5, as creating a link), then the board row, then
+      // the link (the lock order in access.ts; joining and accepting follow it). The unlocked check first.
+      if (allowGuests) {
+        await requireBoardAction(tx, bid, user.id, 'manage_access')
+        await lockBoardWorkspace(tx, bid)
+      }
       const access = await requireBoardAction(tx, bid, user.id, 'manage_access', { forUpdate: true })
       if ((await userKind(tx, user.id)) === 'guest')
         throw guestAccountRequired('Sign in with an account to change links.')
-      if (allowGuests)
+      if (allowGuests) {
         await ctx.identity.requireCreator(tx, user.id, 'share', {
           route: req.routeOptions.url ?? '',
           by: 'route',
         })
+        // Wave J (IO-5): not while the board's workspace or project is internal only (the root hook answers
+        // first; this decides, under the switch's lock). Turning it off is never refused.
+        await assertLinksAllowed(tx, bid)
+      }
       if (!InvitationId.safeParse(id).success) throw notFound()
       const link = await tx.maybeOne<LinkRow>(
         `SELECT ${LINK_COLUMNS} FROM invitations WHERE id = $1 AND board_id = $2 AND multi_use FOR UPDATE`,

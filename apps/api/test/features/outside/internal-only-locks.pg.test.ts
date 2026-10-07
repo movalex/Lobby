@@ -26,7 +26,9 @@
 //   (c) PUT board members, the email invite (its "granted" path, under the Clerk fake) and accepting an
 //       invitation or joining through a guest link, against the switch;
 //   (d) an access-request approval against the switch;
-//   (e) "Duplicate, keep sharing" against the switch.
+//   (e) "Duplicate, keep sharing" against the switch;
+//   (f) a review, workshop or guest link created, extended ("+1 h") or opened to guests, against the switch
+//       (IO-5, wave J refix round 1: those decided under the board row alone, or only in the root hook).
 // Each path is raced at random (many rounds; DRAFTROOM_PG_STRESS_ITER, default 20) and once more stopped at
 // the statement it decides on, with the switch (or the move) started against it (the forced interleavings
 // below), which must wait for it.
@@ -153,6 +155,23 @@ async function watch(db: Db, outsiders: readonly string[]): Promise<void> {
     END $f$;
     CREATE CONSTRAINT TRIGGER io_board AFTER INSERT OR UPDATE ON boards
       DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION io_board_check();
+
+    -- A review, workshop or guest link created, given more time, or opened to name-only guests while its
+    -- board is internal only (IO-5). Revoking, a redemption's use count and turning guests off never count.
+    CREATE FUNCTION io_link_check() RETURNS trigger LANGUAGE plpgsql AS $f$
+    DECLARE i record;
+    BEGIN
+      IF io_quiet() THEN RETURN NULL; END IF;
+      SELECT * INTO i FROM invitations WHERE id = NEW.id;
+      IF i.id IS NULL OR NOT i.multi_use OR i.board_id IS NULL OR i.revoked_at IS NOT NULL THEN RETURN NULL; END IF;
+      IF (TG_OP = 'INSERT' OR i.expires_at > OLD.expires_at OR (i.allow_guests AND NOT OLD.allow_guests))
+         AND io_board_on(i.board_id) THEN
+        INSERT INTO io_breaks (what, detail) VALUES ('link', i.id || ' ' || lower(TG_OP));
+      END IF;
+      RETURN NULL;
+    END $f$;
+    CREATE CONSTRAINT TRIGGER io_link AFTER INSERT OR UPDATE ON invitations
+      DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION io_link_check();
   `)
   for (const id of outsiders) await db.query('INSERT INTO io_outsiders (user_id) VALUES ($1)', [id])
 }
@@ -481,6 +500,35 @@ describe.skipIf(!PG)('Internal only: the switch against the paths it guards (rea
     expect(failures).toEqual([])
     expect(await switchIsOn(w)).toBe(true)
   })
+
+  it('(f) creating, extending and opening a link to guests, against the switch turned on', async () => {
+    const w = await world()
+    const failures: string[] = []
+    for (let i = 0; i < ITER; i++) {
+      await reset(w.api.db, [
+        switchOff(w),
+        [
+          'UPDATE invitations SET revoked_at = now() WHERE board_id = $1 AND multi_use AND revoked_at IS NULL',
+          [w.board],
+        ],
+      ])
+      const link = await guestLink(w.bob, w.board, { role: 'viewer', allowGuests: false })
+      const kind = (['create', 'extend', 'guests'] as const)[i % 3] ?? 'create'
+      const path =
+        kind === 'create'
+          ? () => w.bob.req('POST', `/api/boards/${w.board}/review-links`, { role: 'commenter' })
+          : kind === 'extend'
+            ? () => w.bob.req('POST', `/api/boards/${w.board}/review-links/${link.id}/extend`, { hours: 1 })
+            : () =>
+                w.bob.req('PATCH', `/api/boards/${w.board}/review-links/${link.id}`, { allowGuests: true })
+      await race(i, failures, {
+        on: { run: () => setProject(w.alice, w.project, true), ok: S.ok },
+        [kind]: { run: path, ok: kind === 'create' ? [201, 409] : S.okOr409 },
+      })
+      expect(await breaks(w.api.db), `round ${i}`).toEqual([])
+    }
+    expect(failures).toEqual([])
+  })
 })
 
 // ---- forced interleavings -------------------------------------------------------------------------
@@ -678,6 +726,50 @@ describe.skipIf(!PG)(
       // decided before the switch: pat's grant was copied, and it committed before the switch did
       const copy = (r.path.json() as { board: { id: string } }).board.id
       expect(await grantOf(w.api, copy, w.pat.userId)).toBe('commenter')
+    })
+
+    it('(f) creating a link, against the switch turned on', async () => {
+      const w = await world({ paused: true })
+      await reset(w.api.db, [switchOff(w)])
+      const r = await forced(
+        pausedOf(w),
+        w.api.db,
+        BOARD_SCOPE_READ,
+        () => w.bob.req('POST', `/api/boards/${w.board}/review-links`, { role: 'commenter' }),
+        on(w),
+      )
+      // Before IO-5 the creation held the board row alone: the switch finished first, and the link then
+      // committed on a board that was internal only by then.
+      await expectSerialised(w, r, 201)
+    })
+
+    it('(f) "+1 h" on a link, against the switch turned on', async () => {
+      const w = await world({ paused: true })
+      await reset(w.api.db, [switchOff(w)])
+      const link = await guestLink(w.bob, w.board, { role: 'viewer' })
+      const r = await forced(
+        pausedOf(w),
+        w.api.db,
+        BOARD_SCOPE_READ,
+        () => w.bob.req('POST', `/api/boards/${w.board}/review-links/${link.id}/extend`, { hours: 1 }),
+        on(w),
+      )
+      // Before IO-5 the route never read the switch in its transaction (only the root hook did, before it).
+      await expectSerialised(w, r)
+    })
+
+    it('(f) opening a link to guests, against the switch turned on', async () => {
+      const w = await world({ paused: true })
+      await reset(w.api.db, [switchOff(w)])
+      const link = await guestLink(w.bob, w.board, { role: 'viewer', allowGuests: false })
+      const r = await forced(
+        pausedOf(w),
+        w.api.db,
+        BOARD_SCOPE_READ,
+        () => w.bob.req('PATCH', `/api/boards/${w.board}/review-links/${link.id}`, { allowGuests: true }),
+        on(w),
+      )
+      await expectSerialised(w, r)
     })
 
     it('(c) the email invite’s granted path (Clerk), against the switch turned on', async () => {

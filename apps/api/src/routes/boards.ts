@@ -29,7 +29,12 @@ import { audit } from '../audit.ts'
 import { onNewCanvas } from '../canvas-engine.ts'
 import type { AppContext, Params } from '../context.ts'
 import { conflict, forbidden, notFound, parse } from '../errors.ts'
-import { assertProjectMoveAllowed, assertVisibilityRaiseAllowed } from '../features/dashboard/outside.ts'
+import {
+  assertProjectMoveAllowed,
+  assertVisibilityRaiseAllowed,
+  confirmStaleReach,
+  scopeIn,
+} from '../features/dashboard/outside.ts'
 import { assertBoardRoom } from '../files/usage.ts'
 import { actorOf } from '../notifier.ts'
 import { type BoardMarks, toBoard, toBoardWithRole } from '../serialize.ts'
@@ -162,6 +167,22 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
       if ((input.title !== undefined || input.projectId !== undefined) && !can(access.role, 'rename', status))
         throw forbidden()
       if (input.visibility !== undefined && !can(access.role, 'change_visibility', status)) throw forbidden()
+    }
+    // IO-6 (wave J refix round 1): a raise in an internal-only scope counts everyone who is not a confirmed
+    // creator as outside, so the members it would reach whose addresses are stale are confirmed with the
+    // provider first, here, outside the transaction (no provider call while a lock is held). Only after the
+    // route's own checks and for a creator caller (anyone else is refused below), so nobody else makes the
+    // api call the provider. The transaction decides on what is stored then.
+    if (input.visibility !== undefined) {
+      const peek = await requireVisibleBoard(db, bid, user.id, 'view')
+      permitted(peek)
+      const { workspace_id, project_id, visibility } = peek.board
+      if (
+        visibilityRank(input.visibility) > visibilityRank(visibility) &&
+        (await ctx.identity.isCreatorUser(db, user.id)) &&
+        (await scopeIn(db, workspace_id, input.projectId !== undefined ? input.projectId : project_id))
+      )
+        await confirmStaleReach(db, ctx, workspace_id, bid)
     }
     const result = await db.transaction(async (tx) => {
       // "Internal only" (IO-1, IO-2b): a move or a visibility change is decided under the workspace row

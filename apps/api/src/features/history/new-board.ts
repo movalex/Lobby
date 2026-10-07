@@ -22,6 +22,7 @@ import { newBoardId, type Queryable } from '@draftroom/db'
 import type { BoardRole, BoardVisibility } from '@draftroom/permissions'
 import { BOARD_RETURNING, type BoardRow, requireCreatingRoleLocked } from '../../access.ts'
 import { audit } from '../../audit.ts'
+import { isOpenLookup } from '../../auth/creator-sql.ts'
 import { onNewCanvas } from '../../canvas-engine.ts'
 import { ApiError } from '../../errors.ts'
 import { assertBoardRoom } from '../../files/usage.ts'
@@ -297,8 +298,12 @@ export async function createBoardFrom(
         )
         // IO-2a (wave J pre-deploy review): while the copy's workspace or project is internal only, nobody
         // outside is given new access there, so only confirmed creators' grants are copied (an account
-        // whose addresses are unconfirmed is left out too, failing closed); the response says how many.
-        const copied = scope ? grants.rows.filter((g) => creators.has(g.user_id)) : grants.rows
+        // whose addresses are unconfirmed is left out too, failing closed; the route confirmed stale ones
+        // first, IO-6); the response says how many. Under open email sign-in every account is inside (the
+        // visibility rule's open branch; name-only guests are never copied, above), so nobody is left out
+        // there for not having opened Lobby for a day (IO-7, wave J refix round 1).
+        const filter = scope !== null && !isOpenLookup(ctx.identity.lookup)
+        const copied = filter ? grants.rows.filter((g) => creators.has(g.user_id)) : grants.rows
         const people = copied.map((g) => g.user_id)
         // D5: a copied owner grant of someone who is not a creator is at most editor.
         const roles = copied.map((g) => (g.role === 'owner' && !creators.has(g.user_id) ? 'editor' : g.role))

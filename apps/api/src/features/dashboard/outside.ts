@@ -25,7 +25,8 @@
 //   to start if one of their routes is missing: assertHookRoutes), after the route's own permission
 //   checks and only for a creator caller (a non-creator is refused by the route itself, so the hook
 //   reveals nothing new);
-//   createInvitation, review-link creation and access-request approval check in their transactions.
+//   createInvitation, review-link creation, a link's extend and PATCH, and access-request approval check
+//   in their transactions.
 //   Taking a board OUT of an internal-only project is for the people who may turn the switch off
 //   (assertProjectMoveAllowed, in PATCH /api/boards/:bid under the switch's workspace row lock; IO-1).
 //   Raising a board's visibility there is refused while it would raise a workspace member who is not
@@ -34,9 +35,9 @@
 //   account a workspace member (a guest raised, a workspace invitation created or accepted) is refused
 //   while that would reach a board of an internal-only project that is not private (IO-3,
 //   assertMemberRaiseAllowed, under the same lock). The hooks are early answers: PUT board members, the
-//   email invite's grant, PATCH workspace members and an access-request approval decide again in their
-//   transactions under the workspace row lock (lockBoardWorkspace), so a switch-on or a move cannot slip
-//   between the hook's read and the grant.
+//   email invite's grant, PATCH workspace members, an access-request approval, and a link's creation,
+//   extend and opening to guests (IO-5) decide again in their transactions under the workspace row lock
+//   (lockBoardWorkspace), so a switch-on or a move cannot slip between the hook's read and the grant.
 
 import {
   AddressCheckInput,
@@ -398,10 +399,13 @@ const VISIBILITY_ROLE: Record<BoardVisibility, BoardRole | null> = {
 /**
  * IO-2b (wave J pre-deploy review): whether board `boardId` at visibility `to` gives a HIGHER role to a
  * workspace member (role 'member': owners and admins see every board already, and a workspace guest gets
- * nothing from the visibility) who is not inside: a name-only guest, a known outside account, or an
- * account whose addresses were never confirmed (the OutsideInfo rule, toInfo: a stale account whose
- * stored addresses qualify is inside). Under open email sign-in only a name-only guest is outside. A
- * member whose own grant already reaches the new role is not raised. Stored data only.
+ * nothing from the visibility) who is not inside: anyone who is not a confirmed creator (a name-only
+ * guest, a known outside account, an account whose addresses were never confirmed or were confirmed more
+ * than IDENTITY_GRACE_MS ago; the rule creatorsAmong and every other refusal use; IO-6, wave J refix round
+ * 1: a stale account used to count as inside here, as OutsideInfo shows it, while keep sharing left it
+ * out). Call confirmStaleReach first, outside the transaction, so a colleague who has not opened Lobby
+ * for a day is confirmed rather than counted. Under open email sign-in only a name-only guest is outside.
+ * A member whose own grant already reaches the new role is not raised. Stored data only.
  */
 export async function visibilityReachesOutside(
   q: Queryable,
@@ -413,9 +417,7 @@ export async function visibilityReachesOutside(
   const role = VISIBILITY_ROLE[to]
   if (!role) return false
   const { lookup } = deps.identity
-  const outside = isOpenLookup(lookup)
-    ? `o.o_kind = 'guest'`
-    : `o.o_kind = 'guest' OR NOT (o.o_creator OR (o.o_checked_at IS NOT NULL AND o.o_qualifies))`
+  const outside = isOpenLookup(lookup) ? `o.o_kind = 'guest'` : `NOT o.o_creator`
   const hit = await q.maybeOne(
     `SELECT 1 AS hit FROM (
        SELECT ${originColumns(5)}
@@ -430,6 +432,49 @@ export async function visibilityReachesOutside(
     [boardId, workspaceId, [...BOARD_ROLES_UP], role, ...userParams(lookup, deps.now())],
   )
   return hit !== null
+}
+
+/** How many accounts one decision confirms with the provider first (confirmStaleReach), a few at a time. */
+export const STALE_CONFIRM_MAX = 20
+const STALE_CONFIRM_AT_ONCE = 4
+
+/**
+ * IO-6 (wave J refix round 1): before deciding whether a workspace visibility in an internal-only scope
+ * reaches someone who is not inside (a visibility raise: visibilityReachesOutside; "Duplicate, keep
+ * sharing": the grants it copies and whether the copy is private), the accounts that decision would count
+ * as not inside only because their addresses are not confirmed (never checked, or stale with stored
+ * addresses that still qualify) are confirmed with the provider (refreshTarget): workspace members with
+ * role 'member' (whom a visibility reaches) and anyone with a grant on `boardId` (whose grant a copy
+ * carries). Known outside accounts and name-only guests are left as they are (a check would not make them
+ * inside). At most STALE_CONFIRM_MAX accounts, most recently confirmed first; anyone left stale counts as
+ * not inside (fails closed). Call only after the route's own checks, for a creator caller, and OUTSIDE any
+ * transaction (no provider call while a lock is held). Never throws. Under open email sign-in, nothing:
+ * only a name-only guest is outside there.
+ */
+export async function confirmStaleReach(
+  q: Queryable,
+  deps: OutsideDeps,
+  workspaceId: string,
+  boardId: string,
+): Promise<void> {
+  const { lookup } = deps.identity
+  if (isOpenLookup(lookup)) return
+  const rows = await q.query<{ o_id: string }>(
+    `SELECT o.o_id FROM (
+       SELECT ${originColumns(3)}
+         FROM workspace_members wm
+         JOIN users u ON u.id = wm.user_id
+         LEFT JOIN board_members bm ON bm.board_id = $2 AND bm.user_id = wm.user_id
+        WHERE wm.workspace_id = $1 AND (wm.role = 'member' OR bm.role IS NOT NULL)
+     ) o
+     WHERE o.o_kind = 'account' AND NOT o.o_creator AND (o.o_checked_at IS NULL OR o.o_qualifies)
+     ORDER BY o.o_checked_at DESC NULLS LAST, o.o_id
+     LIMIT ${STALE_CONFIRM_MAX}`,
+    [workspaceId, boardId, ...userParams(lookup, deps.now())],
+  )
+  const ids = rows.rows.map((r) => r.o_id)
+  for (let i = 0; i < ids.length; i += STALE_CONFIRM_AT_ONCE)
+    await Promise.all(ids.slice(i, i + STALE_CONFIRM_AT_ONCE).map((id) => deps.identity.refreshTarget(id)))
 }
 
 /**
@@ -517,8 +562,8 @@ export async function anyInternalOnlyIn(q: Queryable, workspaceId: string): Prom
 
 /**
  * Minor (wave J second review): a direct grant (PUT board members, the email invite's "granted" path, an
- * access-request approval) decides the switch in its own transaction, under the workspace row lock the
- * switch and a move take, so a switch-on or a move into an internal-only project cannot slip between the
+ * access-request approval; and a link created, extended or opened to guests: IO-5) decides the switch in
+ * its own transaction, under the workspace row lock the switch and a move take, so a switch-on or a move into an internal-only project cannot slip between the
  * read and the grant. Lock order (access.ts): the workspace row (step 0) before the board row (step 1),
  * so call this before the transaction locks the board. Returns nothing; a board that does not exist locks
  * nothing (the route answers 404 itself).
@@ -937,7 +982,8 @@ export function registerOutsideRoutes(app: FastifyInstance, ctx: FeatureContext)
       const { policy, devDomain } = identity.lookup
       if (email !== null && !isCreatorEmail(email, policy, devDomain)) throw internalOnlyRefused(scope)
     },
-    // A link that exists: no more time, and no opening it to name-only guests, while internal only.
+    // A link that exists: no more time, and no opening it to name-only guests, while internal only (an
+    // early answer: review-links.ts decides again under the switch's lock, IO-5).
     'POST /api/boards/:bid/review-links/:id/extend': async (req, callerId) => {
       const { bid = '' } = req.params as Params
       if (!ExtendReviewLinkInput.safeParse(req.body ?? {}).success) return

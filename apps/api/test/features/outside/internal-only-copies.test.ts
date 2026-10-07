@@ -1,7 +1,7 @@
 // Wave J pre-deploy review, IO-2: two creator paths handed new access to outside accounts already in an
 // internal-only scope.
-// (a) "Duplicate, keep sharing" into an internal-only scope copies only confirmed creators' grants and
-//     says how many people it left out; the copy is private while its visibility would reach a
+// (a) "Duplicate, keep sharing" into an internal-only scope copies only confirmed creators' grants (stale
+//     ones are confirmed first: IO-6, internal-only-stale.test.ts) and says how many people it left out; the copy is private while its visibility would reach a
 //     workspace member who is outside or unconfirmed (and says so).
 // (b) Raising a board's visibility in an internal-only scope is refused with the scope's 409
 //     INTERNAL_ONLY while it would raise a workspace member who is outside or unconfirmed (owners and
@@ -38,8 +38,8 @@ interface Created {
   outsideLeftOut?: number
 }
 
-const LEFT_OUT_TWO =
-  'This project is internal only, so 2 people who are not confirmed as Dark Burn Creative or Trailer Park Group were not given access to the copy.'
+const LEFT_OUT_ONE =
+  'This project is internal only, so 1 person who is not confirmed as Dark Burn Creative or Trailer Park Group was not given access to the copy.'
 const MADE_PRIVATE =
   'This project is internal only and its workspace has members who are not confirmed as Dark Burn Creative or Trailer Park Group, so the copy is private.'
 
@@ -82,21 +82,24 @@ describe('IO-2 under the dev provider (outside accounts are not creators)', () =
       await grant(api, board, pat.userId, 'viewer', bob.userId)
       const dave = await api.login('dave')
       await grant(api, board, dave.userId, 'editor', bob.userId)
-      // dave is a creator whose addresses are not confirmed: left out too (fails closed).
+      // dave is a creator whose addresses are not confirmed: confirmed first (IO-6; the dev provider always
+      // confirms), so his grant is copied. One the provider cannot confirm is left out (fails closed:
+      // internal-only-stale.test.ts, under Clerk).
       await api.db.query('UPDATE users SET identity_checked_at = NULL WHERE id = $1', [dave.userId])
       const body = await duplicate(bob)
       expect(await grantsOf(api, body.board.id)).toEqual({
         [bob.userId]: 'owner',
         [carol.userId]: 'commenter',
+        [dave.userId]: 'editor',
       })
-      expect(body.outsideLeftOut).toBe(2)
-      expect(body.warnings).toEqual([LEFT_OUT_TWO])
+      expect(body.outsideLeftOut).toBe(1)
+      expect(body.warnings).toEqual([LEFT_OUT_ONE])
       // The audit row says so too (a count, no names).
       const audit = await api.db.one<{ detail: { outsideLeftOut?: number } }>(
         "SELECT detail FROM audit_events WHERE action = 'board.create' AND target = $1",
         [body.board.id],
       )
-      expect(audit.detail.outsideLeftOut).toBe(2)
+      expect(audit.detail.outsideLeftOut).toBe(1)
     })
 
     it('the workspace switch gives the workspace’s words; one person reads “1 person”', async () => {
@@ -173,12 +176,21 @@ describe('IO-2 under the dev provider (outside accounts are not creators)', () =
       refused(await visibility(bob, plain, 'workspace_edit'), 'workspace')
     })
 
-    it('an unconfirmed member counts; an outside guest or admin does not (visibility gives them nothing new)', async () => {
+    it('an unconfirmed member is confirmed first; an outside guest or admin does not count (visibility gives them nothing new)', async () => {
       await addMember(api, DEV_STUDIO, sam.userId, 'guest')
       const dave = await api.login('dave')
       await api.db.query('UPDATE users SET identity_checked_at = NULL WHERE id = $1', [dave.userId])
-      refused(await visibility(bob, board, 'workspace_view'), 'project')
-      await addMember(api, DEV_STUDIO, dave.userId, 'admin')
+      // IO-6: dave is confirmed before the decision (the dev provider always confirms); one the provider
+      // cannot confirm counts as outside (internal-only-stale.test.ts, under Clerk).
+      expect((await visibility(bob, board, 'workspace_view')).statusCode).toBe(200)
+      expect(
+        (
+          await api.db.one<{ at: Date | null }>('SELECT identity_checked_at AS at FROM users WHERE id = $1', [
+            dave.userId,
+          ])
+        ).at,
+      ).not.toBeNull()
+      await api.db.query("UPDATE boards SET visibility = 'private' WHERE id = $1", [board])
       await addMember(api, DEV_STUDIO, pat.userId, 'admin')
       const res = await visibility(bob, board, 'workspace_view')
       expect(res.statusCode, res.body).toBe(200)
