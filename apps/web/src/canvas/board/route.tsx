@@ -16,10 +16,11 @@
  * K1-1 (wave K): this module is part of the app's first bundle (App.tsx imports it), so a board goes
  * through ONE lazy step, the board page's chunk (lib/prefetch-board.ts `loadBoardCode`, which App.tsx
  * already started for a board address). Before, App lazily loaded this module and this module lazily
- * loaded the page, one after the other.
+ * loaded the page, one after the other. K1-2: the board and its first ticket are asked for here, as soon
+ * as the route renders with a session, while the code may still be on its way.
  */
-import { lazy, Suspense } from 'react'
-import { loadBoardCode } from '../../lib/prefetch-board.ts'
+import { lazy, Suspense, useRef } from 'react'
+import { loadBoardCode, preloadBoardOpen } from '../../lib/prefetch-board.ts'
 import { LoadingScreen } from '../../ui/screens.tsx'
 
 const LobbyBoardPage = lazy(loadBoardCode)
@@ -43,6 +44,12 @@ export function boardPageFor(
 
 export default function ExcalidrawBoardRoute({ boardId }: { boardId: string }) {
   const page = boardPageFor(location.search)
+  // K1-2: once per board this route shows (idempotent: React may render twice)
+  const preloaded = useRef<string | null>(null)
+  if (page === 'lobby' && preloaded.current !== boardId) {
+    preloaded.current = boardId
+    preloadBoardOpen(boardId)
+  }
   return (
     <Suspense fallback={<LoadingScreen label="Opening board…" testId="board-loading" />}>
       {page === 'spike' && SpikeBoardPage ? (

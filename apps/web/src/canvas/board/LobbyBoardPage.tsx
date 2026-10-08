@@ -10,6 +10,10 @@
  * `board-title`, `save-status`, `conn-status`, `presence-user`, `feature-dock`, `sync-loading`,
  * `sync-error`, `offline-banner`, `share-button`, `skip-to-canvas`), and `lobby-board` (data-phase,
  * data-engine="excalidraw"), `lease-notice`, `lease-status`, `typing-badge`, `cursor` for the canvas.
+ *
+ * Wave K (K1-2): the board and its first ticket are asked for together (lib/prefetch-board.ts
+ * `preloadBoardOpen`, started by ./route.tsx before this chunk arrives; taken here once each, and asked again
+ * on a retry).
  */
 import '../engine/engineGlobals.ts'
 import type { Board, BoardDetail, Me, TicketResponse } from '@draftroom/contracts'
@@ -35,6 +39,7 @@ import { CANVAS_FEATURES } from '../../features/canvas-registry.ts'
 import { type BoardEvents, createBoardEvents } from '../../features/events.ts'
 import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 import type { BoardRole } from '../../lib/permissions.ts'
+import { takeBoardDetail, takeBoardTicket } from '../../lib/prefetch-board.ts'
 import { boardPath, navigate, setLeaveGuard } from '../../lib/routing.ts'
 import { useResource } from '../../lib/useResource.ts'
 import { useEngineSaveStatus } from '../../sync-quality/useEngineSaveStatus.ts'
@@ -86,7 +91,11 @@ const LEAVE_WAIT_MS = 5_000
 
 /** /b/:bid — loads the board (and the caller's role) from the API, then opens the canvas. */
 export function LobbyBoardPage({ boardId }: { boardId: string }) {
-  const load = useCallback((signal: AbortSignal) => api.getBoard(boardId, signal), [boardId])
+  // K1-2: the answer route.tsx asked for together with the ticket, once; a retry asks again
+  const load = useCallback(
+    (signal: AbortSignal) => takeBoardDetail(boardId) ?? api.getBoard(boardId, signal),
+    [boardId],
+  )
   const detail = useResource(load)
   if (detail.status === 'loading') return <LoadingScreen label="Opening board…" testId="board-loading" />
   if (detail.status === 'error') {
@@ -184,10 +193,19 @@ function FirstTicket(props: SessionProps) {
   const onAccessLost = useRef(props.onAccessLost)
   onAccessLost.current = props.onAccessLost
   const boardId = props.board.id
+  const uid = props.me.user.id
   useEffect(() => {
     const ac = new AbortController()
-    api.boardTicket(boardId, ac.signal).then(
-      (t) => setFirst(t),
+    // K1-2: the ticket asked for together with the board (once: a retry, a new key, asks again), if it is
+    // this person's
+    const preloaded = takeBoardTicket(boardId)
+    const ticket = preloaded
+      ? preloaded.then((t) => (t.user.id === uid ? t : api.boardTicket(boardId, ac.signal)))
+      : api.boardTicket(boardId, ac.signal)
+    ticket.then(
+      (t) => {
+        if (!ac.signal.aborted) setFirst(t)
+      },
       (e: unknown) => {
         if (ac.signal.aborted) return
         const kind = (e as { kind?: string }).kind
@@ -197,7 +215,7 @@ function FirstTicket(props: SessionProps) {
       },
     )
     return () => ac.abort()
-  }, [boardId, refresh])
+  }, [boardId, uid, refresh])
   if (failed)
     return (
       <MessageScreen
