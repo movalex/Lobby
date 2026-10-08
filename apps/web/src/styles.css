@@ -2330,3 +2330,43 @@ html[data-dr-presenting] .dr-board__account {
 :root[data-theme="dark"] .dr-share__visicon[data-visibility^="workspace"] {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM3 20c0-3 2.7-5 6-5s6 2 6 5M16 11a3 3 0 1 0 0-6M18 15c2 .6 3 2.4 3 5' fill='none' stroke='%2374d39d' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E");
 }
+
+/* ---- K5-2 (wave K): the soft keyboard and the iOS input zoom ---------------------------------------- */
+
+/* Safari on iPhone zooms the whole page into a field whose text is under 16 px when it takes the focus,
+   and leaves it zoomed. On a touch screen every text field and select is 16 px (the engine's own text
+   editor keeps the size Excalidraw gives it for the zoom). */
+@media (pointer: coarse) {
+  :is(
+    input:not(
+      [type="checkbox"],
+      [type="radio"],
+      [type="range"],
+      [type="color"],
+      [type="file"],
+      [type="button"],
+      [type="submit"],
+      [type="reset"],
+      [type="image"],
+      [type="hidden"]
+    ),
+    textarea,
+    select
+  ):not(.excalidraw-wysiwyg) {
+    /* biome-ignore lint/complexity/noImportantStyles: an accessibility floor over every component's own field size (iOS input zoom) */
+    font-size: 16px !important;
+  }
+}
+
+/* --dr-kb-inset (main.tsx): how much of the bottom of the layout viewport the soft keyboard covers where it
+   only shrinks the visual viewport (Safari). 0 elsewhere, and where the browser resizes the content for
+   the keyboard (index.html: interactive-widget=resizes-content). The phone sheets end above it. */
+@media (max-width: 600px) {
+  .dr-board__body > .dr-dock .dr-dock__panel {
+    bottom: var(--dr-kb-inset, 0px);
+  }
+}
+.dr-a11y-sheet-root > .dr-a11y-sheet {
+  bottom: var(--dr-kb-inset, 0px);
+  max-height: calc(60vh - var(--dr-kb-inset, 0px));
+}
