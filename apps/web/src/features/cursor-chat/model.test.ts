@@ -20,6 +20,7 @@ import {
   messageOf,
   nextChangeAt,
   phaseOf,
+  placeBubble,
 } from './model.ts'
 
 const ME = 'usr_me000000000000000'
@@ -157,5 +158,37 @@ describe('sending', () => {
     expect(failureText({ status: 403 })).toMatch(/can’t chat/)
     expect(failureText({ status: 404 })).toMatch(/isn’t available/)
     expect(failureText(null)).toMatch(/not sent/)
+  })
+})
+
+// Wave K round 1 refix: a bubble not drawn at its sender's own live cursor is placed at a point the sender
+// chose (`at`), which may be someone else's cursor; it must name who sent it.
+describe('placeBubble: a bubble away from its sender’s cursor names the sender', () => {
+  const VICTIM = 'usr_victimAAAAAAAA'
+  const ATTACKER = 'usr_attackerBBBBBBB'
+  it('a message from someone with no cursor here, placed at a colleague’s cursor point, carries the sender’s name', () => {
+    const victimPoint = { x: 400, y: 300 }
+    const peers = [{ sid: 'victim-tab', uid: VICTIM, point: victimPoint, idle: true }]
+    const anchor = anchorFor(peers, ATTACKER, victimPoint, () => true)
+    expect(anchor).toEqual({ sid: null, at: victimPoint })
+    const placed = placeBubble({ sid: anchor?.sid ?? null, at: anchor?.at ?? null, mine: false }, null)
+    expect(placed).toEqual({ point: victimPoint, named: true })
+  })
+  it('at the sender’s own live cursor: unnamed (their cursor label says who); a cursor gone since: named', () => {
+    const cursor = { x: 10, y: 20 }
+    expect(placeBubble({ sid: 'tab', at: { x: 0, y: 0 }, mine: false }, cursor)).toEqual({
+      point: cursor,
+      named: false,
+    })
+    expect(placeBubble({ sid: 'tab', at: { x: 0, y: 0 }, mine: false }, null)).toEqual({
+      point: { x: 0, y: 0 },
+      named: true,
+    })
+    // this person's own bubble, where they typed it: no name
+    expect(placeBubble({ sid: null, at: { x: 1, y: 2 }, mine: true }, null)).toEqual({
+      point: { x: 1, y: 2 },
+      named: false,
+    })
+    expect(placeBubble({ sid: null, at: null, mine: false }, null)).toBeNull()
   })
 })

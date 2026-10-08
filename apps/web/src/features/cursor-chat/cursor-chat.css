@@ -21,6 +21,10 @@
   animation: dr-cchat-in 140ms ease-out;
   transition: opacity 600ms ease-in;
 }
+/* away from its sender's cursor a bubble names them (wave K round 1 refix) */
+.dr-cchat-bubble__name {
+  font-weight: 700;
+}
 .dr-cchat-bubble[data-phase="fading"],
 .dr-cchat-bubble[data-phase="gone"] {
   opacity: 0;

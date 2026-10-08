@@ -11,9 +11,11 @@
 // - The composer: a small field at the pointer (or the middle of the view when the pointer is elsewhere);
 //   Enter sends, Escape or leaving it closes; keys typed into it never reach the board.
 // - The bubbles: someone else's message floats at their live cursor (the tab nearest to where they sent it)
-//   when this page shows that cursor (not hidden by a facilitator, not presenting), else nowhere; this
-//   person's own floats where they sent it. One per person; CURSOR_CHAT_SHOW_MS, then a CURSOR_CHAT_FADE_MS
-//   fade. The board's own polite live region (the a11y announcer's, features/a11y) reads each message out:
+//   when this page shows that cursor (not hidden by a facilitator, not presenting); where they sent it from
+//   when this page has no cursor of theirs, and then it names them (`Name: text`, wave K round 1 refix: that
+//   point is the sender's to choose and may be a colleague's cursor); nowhere when their cursor is hidden
+//   here. This person's own floats where they sent it. One per person; CURSOR_CHAT_SHOW_MS, then a
+//   CURSOR_CHAT_FADE_MS fade. The board's own polite live region (the a11y announcer's, features/a11y) reads each message out:
 //   the board has one set of live regions (e2e a11y-audit rule 6), never one per feature.
 import '../cursor-chat.css'
 import { CURSOR_CHAT_EVENT, CURSOR_CHAT_MAX_CHARS, cursorChatPath } from '@draftroom/contracts'
@@ -42,6 +44,7 @@ import {
   nextChangeAt,
   type Point,
   phaseOf,
+  placeBubble,
 } from '../model.ts'
 
 type Ctx = CanvasFeatureContext
@@ -241,26 +244,27 @@ function BubblesLayer({ ctx }: { ctx: Ctx }) {
   const version = useRegistryVersion(ctx)
   const list = useValue('cursor-chat-list', () => c?.bubbles.get() ?? [], [c])
   const placed = useValue('cursor-chat-placed', () => {
-    const out: { b: Bubble; x: number; y: number }[] = []
+    const out: { b: Bubble; x: number; y: number; named: boolean }[] = []
     for (const b of list) {
-      let point: Point | null = null
+      let cursor: Point | null = null
       if (b.sid) {
         const peer = ctx.canvas.presence.peer(b.sid)
         // a cursor this page does not show (hidden by a facilitator, presenting) gives nothing away
         if (peer && !ctx.registries.cursorVisible.call(b.sid)) continue
-        point = peer?.point ?? null
+        cursor = peer?.point ?? null
       }
-      point ??= b.at
-      if (!point) continue
-      const o = ctx.canvas.sceneToOverlay(point)
-      out.push({ b, x: o.x + BUBBLE_OFFSET.x, y: o.y + BUBBLE_OFFSET.y })
+      // away from the sender's own cursor it names them (it may sit at someone else's)
+      const place = placeBubble(b, cursor)
+      if (!place) continue
+      const o = ctx.canvas.sceneToOverlay(place.point)
+      out.push({ b, x: o.x + BUBBLE_OFFSET.x, y: o.y + BUBBLE_OFFSET.y, named: place.named })
     }
     return out
   }, [ctx, list, version])
   const now = Date.now()
   return (
     <>
-      {placed.map(({ b, x, y }) => (
+      {placed.map(({ b, x, y, named }) => (
         <div
           key={`${b.userId}:${b.since}`}
           className="dr-cchat-bubble"
@@ -268,9 +272,15 @@ function BubblesLayer({ ctx }: { ctx: Ctx }) {
           data-user-id={b.userId}
           data-mine={b.mine ? 'true' : 'false'}
           data-phase={phaseOf(b, now)}
+          data-named={named ? 'true' : 'false'}
           aria-hidden="true"
           style={{ left: x, top: y, background: b.color }}
         >
+          {named && (
+            <span className="dr-cchat-bubble__name" data-testid="cursor-chat-bubble-name">
+              {b.name}:{' '}
+            </span>
+          )}
           {b.text}
         </div>
       ))}

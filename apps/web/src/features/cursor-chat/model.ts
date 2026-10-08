@@ -108,6 +108,22 @@ export interface Bubble {
   readonly color: string
 }
 
+/**
+ * Where a bubble is drawn (scene), and whether it names its sender (wave K round 1 refix). At the sender's own
+ * live cursor (`cursor`: that session's point on this page) the cursor's name label says who it is. Anywhere
+ * else it sits at the point the sender sent (`at`), which they choose and which may be a colleague's cursor:
+ * it names them, so it can never pass for someone else's message. This person's own bubble needs no name.
+ */
+export function placeBubble(
+  b: Pick<Bubble, 'sid' | 'at' | 'mine'>,
+  cursor: Point | null,
+): { point: Point; named: boolean } | null {
+  const attached = b.sid !== null && cursor !== null
+  const point = attached ? cursor : b.at
+  if (!point) return null
+  return { point, named: !b.mine && !attached }
+}
+
 export type BubblePhase = 'shown' | 'fading' | 'gone'
 
 /** A bubble shows for CURSOR_CHAT_SHOW_MS, then fades for CURSOR_CHAT_FADE_MS, then is gone. */
