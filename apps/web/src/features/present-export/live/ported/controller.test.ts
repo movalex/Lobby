@@ -94,7 +94,7 @@ interface Call {
   reject(e: unknown): void
 }
 
-function setup() {
+function setup(opts: { others?: string[] } = {}) {
   const calls: Call[] = []
   const notices: string[] = []
   const listeners: ((d: unknown) => void)[] = []
@@ -120,6 +120,8 @@ function setup() {
       },
     },
     notify: (n: { text: string }) => void notices.push(n.text),
+    // who is on the board (K3-5: a Present is offered to everyone only when someone else is here)
+    canvas: { collaborators: () => [ME, ...(opts.others ?? [])].map((uid) => ({ uid })) },
   } as unknown as CanvasFeatureContext
   const { presenter, log } = fakePresenter()
   const unmount = mountLive(ctx, presenter)
@@ -344,6 +346,63 @@ describe('present-live controller (Excalidraw page)', () => {
     await t.respond(get, null, 'e2')
     const resume = posts(t.calls, '')[0]
     expect(resume?.body).toMatchObject({ resumeId: ID, tab: t.tab })
+    t.unmount()
+  })
+})
+
+describe('K3-5: Present offers the presentation to everyone on the board', () => {
+  it('someone else is here: a Present is a presentation to everyone at once (their toast), without a word to the presenter', async () => {
+    const t = setup({ others: [ANN] })
+    await t.respond(undefined, null)
+    t.presenter.start({ role: 'presenter' })
+    const offered = t.live.offerToEveryone()
+    await t.settle()
+    const start = posts(t.calls, '')
+    expect(start).toHaveLength(1)
+    expect(start[0]?.body).toMatchObject({ slideId: 'shape:f0', index: 0, count: 3, tab: t.tab })
+    await t.respond(start[0], t.pres())
+    await offered
+    expect(t.live.presentingLive.get()).toBe(true)
+    expect(t.live.flash.get()).toBeNull() // no "Everyone can now join" message: it simply is
+    t.unmount()
+  })
+
+  it('alone on the board, someone else presenting, or a viewer: nothing is sent', async () => {
+    const alone = setup()
+    alone.presenter.start({ role: 'presenter' })
+    await alone.live.offerToEveryone()
+    expect(posts(alone.calls, '')).toEqual([])
+    alone.unmount()
+
+    const busy = setup({ others: [ANN] })
+    await busy.event(busy.annPres())
+    busy.presenter.start({ role: 'presenter' })
+    await busy.live.offerToEveryone()
+    expect(posts(busy.calls, '')).toEqual([])
+    busy.unmount()
+
+    const viewer = setup({ others: [ANN] })
+    viewer.live.role.set({ role: 'viewer', status: 'active' })
+    viewer.presenter.start({ role: 'presenter' })
+    await viewer.live.offerToEveryone()
+    expect(posts(viewer.calls, '')).toEqual([])
+    viewer.unmount()
+  })
+
+  it('a refusal says nothing (Invite everyone stays in the bar)', async () => {
+    const t = setup({ others: [ANN] })
+    t.presenter.start({ role: 'presenter' })
+    const offered = t.live.offerToEveryone()
+    await t.settle()
+    const start = posts(t.calls, '')[0]
+    start?.reject(
+      Object.assign(new Error('Someone else is presenting.'), { status: 409, code: 'PRESENTING' }),
+    )
+    await offered
+    await t.settle()
+    expect(t.live.presentingLive.get()).toBe(false)
+    expect(t.live.flash.get()).toBeNull()
+    expect(t.notices).toEqual([])
     t.unmount()
   })
 })

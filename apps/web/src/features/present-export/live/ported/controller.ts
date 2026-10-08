@@ -65,6 +65,12 @@ export interface LiveController {
   mayPresent(): boolean
   /** From a local presentation: make it a presentation to everyone. */
   inviteEveryone(opts?: { takeOver?: boolean }): Promise<void>
+  /**
+   * K3-5: a presentation just started here with Present: offered to everyone on the board at once (their
+   * toast: "Chase is presenting · Follow"), when this person may present to everyone, nobody does yet, and
+   * someone else is on the board. Nothing is said when it is refused: "Invite everyone" stays in the bar.
+   */
+  offerToEveryone(): Promise<void>
   /** Follow the live presentation (the invitation's Join, the chip's Rejoin). */
   join(): void
   notNow(): void
@@ -380,6 +386,12 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
         say(startRefusedText(r.code, r.message), r.code === 'PRESENTER_AWAY' ? 'take-over' : undefined)
       }),
     join,
+    offerToEveryone: async () => {
+      if (presenter.role() !== 'presenter' || presentingLive.get() || !mayPresent()) return
+      if (store.presentation.get()) return
+      if (!ctx.canvas.collaborators().some((c) => c.uid !== me.id)) return
+      await withBusy(() => store.start({ slide: slideOf(presenter) }))
+    },
     notNow() {
       const p = store.presentation.get()
       if (p) store.setIntent(p.id, 'declined')

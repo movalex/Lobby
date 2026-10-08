@@ -5,10 +5,11 @@
 // ../reactions.ts placeBurst) for everyone. Bursts only fade in and out for people who prefer reduced
 // motion (workshops.css). Nothing is stored.
 import { REACTION_EMOJIS, REACTION_LABELS, type ReactionEmoji } from '@draftroom/contracts'
-import { useEffect, useRef, useState } from 'react'
+import { type CSSProperties, useEffect, useRef, useState } from 'react'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
+import { useMediaQuery } from '../../../ui/useMedia.ts'
 import { HandIcon } from '../Hands.tsx'
-import { addBurst, BURST_MS, type Burst, placeBurst } from '../reactions.ts'
+import { addBurst, BURST_MS, type Burst, burstCopies, placeBurst } from '../reactions.ts'
 import type { WorkshopSnapshot, WorkshopStore } from '../store.ts'
 import { isPresentingHere, usePresentingHere } from './presenting.ts'
 import { workshopSettingsOf } from './session-settings.ts'
@@ -194,9 +195,53 @@ function viewSize(ctx: Ctx): { width: number; height: number } {
 
 let burstIds = 0
 
+export const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)'
+
+/**
+ * K3-5: a reaction's face: BURST_COPIES copies of the emoji springing from it, staggered (../reactions.ts
+ * burstCopies), or the one emoji, still, for people who prefer reduced motion.
+ */
+export function BurstFace({
+  emoji,
+  reduced,
+  spread = 0.5,
+}: {
+  emoji: string
+  reduced: boolean
+  spread?: number
+}) {
+  const copies = burstCopies(reduced, spread)
+  return (
+    <span className="dr-wk-burst__copies" data-copies={copies.length}>
+      {copies.map((c, i) => (
+        <span
+          // the copies of one burst never change: their index is their identity
+          key={i}
+          className="dr-wk-burst__emoji"
+          data-copy={i === 0 ? 'main' : 'spark'}
+          style={
+            i === 0
+              ? undefined
+              : ({
+                  '--dx': `${c.dx}px`,
+                  '--rise': `${c.rise}px`,
+                  '--delay': `${c.delayMs}ms`,
+                  '--scale': String(c.scale),
+                  '--turn': `${c.turn}deg`,
+                } as CSSProperties)
+          }
+        >
+          {emoji}
+        </span>
+      ))}
+    </span>
+  )
+}
+
 /** Every reaction on the board, as a short burst (above the presentation too). */
 export function ReactionBursts({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
   const [bursts, setBursts] = useState<Burst[]>([])
+  const reduced = useMediaQuery(REDUCED_MOTION_QUERY)
   const presenting = usePresentingHere(ctx.canvas)
   const live = useRef({ ctx, presenting })
   live.current = { ctx, presenting }
@@ -214,7 +259,7 @@ export function ReactionBursts({ ctx, store }: { ctx: Ctx; store: WorkshopStore 
           laneX: laneX(c),
           jitter: Math.random(),
         })
-        const burst: Burst = { ...r, id: ++burstIds, at: Date.now(), placement }
+        const burst: Burst = { ...r, id: ++burstIds, at: Date.now(), placement, spread: Math.random() }
         setBursts((list) => addBurst(list, burst, burst.at))
       }),
     [store],
@@ -245,7 +290,7 @@ export function ReactionBursts({ ctx, store }: { ctx: Ctx; store: WorkshopStore 
           data-placement={b.placement.kind}
           style={{ left: b.placement.x, top: b.placement.y }}
         >
-          <span className="dr-wk-burst__emoji">{b.emoji}</span>
+          <BurstFace emoji={b.emoji} reduced={reduced} spread={b.spread} />
           {b.placement.kind === 'top' && !b.mine && <span className="dr-wk-burst__name">{b.name}</span>}
         </div>
       ))}

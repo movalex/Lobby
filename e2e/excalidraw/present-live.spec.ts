@@ -100,15 +100,19 @@ async function withDeck(a: CanvasSession, others: CanvasSession[]): Promise<Deck
   return deck
 }
 
-/** The presenter starts presenting and invites everyone. */
+/**
+ * The presenter starts presenting, to everyone: K3-5, with others on the board a Present is offered to
+ * everyone at once (their toast: "Alice Park is presenting · Follow"), so there is no "Invite everyone" to press
+ * and no message about it.
+ */
 async function presentToEveryone(page: Page) {
   const ui = presentUi(page)
   await ui.button.click()
   await expect(ui.overlay).toBeVisible()
-  await wake(page)
-  await live(page).inviteEveryone.click()
   await expect(live(page).presenting).toBeVisible()
-  await expect(live(page).flash).toContainText('Everyone on the board can now join your presentation')
+  await wake(page)
+  await expect(live(page).inviteEveryone).toHaveCount(0)
+  await expect(live(page).flash).toHaveCount(0)
 }
 
 async function joinPresentation(page: Page, presenterName: string) {

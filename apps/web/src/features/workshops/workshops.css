@@ -415,14 +415,16 @@ fieldset.dr-wk-stepper {
   padding: 0;
   border: 2px solid #fff;
   border-radius: 50%;
-  background: var(--dr-navy);
-  color: #fff;
+  /* K3-5: in the voter's presence colour, with the ink that reads on it (voting.ts dotInk) */
+  background: var(--dot, var(--dr-navy));
+  color: var(--dot-ink, #fff);
   font: 700 12px / 1 var(--dr-font);
   box-shadow: 0 1px 4px rgb(0 0 0 / 30%);
   cursor: pointer;
 }
 .dr-wk-dot:hover:not(:disabled) {
   background: var(--dr-danger-fill);
+  color: var(--dr-on-danger);
 }
 .dr-wk-dot:disabled {
   cursor: default;
@@ -1170,12 +1172,44 @@ button.dr-wk-badge--group:focus-visible {
     opacity: 0;
   }
 }
+/* K3-5: the copies that spring from a reaction (features/workshops/reactions.ts burstCopies), staggered;
+   the first copy is the reaction itself and moves with the burst. */
+.dr-wk-burst__copies {
+  display: grid;
+  place-items: center;
+}
+.dr-wk-burst__copies > .dr-wk-burst__emoji {
+  grid-area: 1 / 1;
+}
+.dr-wk-burst__emoji[data-copy="spark"] {
+  font-size: 24px;
+  opacity: 0;
+  animation: dr-wk-burst-spark 1.4s ease-out var(--delay, 0ms) forwards;
+}
+@keyframes dr-wk-burst-spark {
+  0% {
+    opacity: 0;
+    transform: translate(0, 6px) scale(0.3) rotate(0deg);
+  }
+  25% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--dx, 0px), var(--rise, -32px)) scale(var(--scale, 0.8))
+      rotate(var(--turn, 0deg));
+  }
+}
 @media (prefers-reduced-motion: reduce) {
-  /* No movement or scaling: the reaction just appears and fades where it would have started. */
+  /* No movement or scaling: the reaction just appears and fades where it would have started (one copy). */
   .dr-wk-burst,
   .dr-wk-burst[data-placement="top"] {
     animation-name: dr-wk-burst-fade;
     animation-timing-function: linear;
+  }
+  .dr-wk-burst__emoji[data-copy="spark"] {
+    display: none;
+    animation: none;
   }
   .dr-wk-burst[data-placement="top"] {
     transform: translate(-50%, 0);
@@ -1305,5 +1339,46 @@ button.dr-wk-badge--group:focus-visible {
   }
   .dr-wk-pop {
     max-height: calc(100dvh - var(--dr-topbar-h) - 16px);
+  }
+}
+
+/* K3-5: the reveal's confetti (WorkshopOverlay.tsx RevealConfetti): an overlay only, no pointer, and none at
+   all for people who prefer reduced motion. */
+.dr-wk-confetti {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.dr-wk-confetti__piece {
+  position: absolute;
+  top: -14px;
+  width: 8px;
+  height: 13px;
+  border-radius: 2px;
+  opacity: 0;
+  animation: dr-wk-confetti-fall 1.8s cubic-bezier(0.25, 0.6, 0.5, 1) var(--delay, 0ms) forwards;
+}
+.dr-wk-confetti__piece:nth-child(3n) {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+@keyframes dr-wk-confetti-fall {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0) rotate(0deg);
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--drift, 0px), 72vh) rotate(var(--spin, 360deg));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dr-wk-confetti {
+    display: none;
   }
 }

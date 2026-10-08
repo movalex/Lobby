@@ -1,6 +1,7 @@
 // OWNER: 3c. Present to everyone (present-live) on the Excalidraw board page: what people see (the tldraw
 // page's ../LiveUi.tsx).
-// - On the board: an invitation when someone presents ("Chase is presenting · Join / Not now"), and a
+// - On the board: a toast when someone presents ("Chase is presenting · Follow / Not now"; K3-5: a Present
+//   started by someone who may present to everyone is offered to everyone at once), and a
 //   top-bar chip to rejoin after "Not now" or "Stop following" (or, for the presenter's other tabs,
 //   "Present here").
 // - In the presentation (present-export's chrome): a banner at the top for the presenter ("Presenting
@@ -116,7 +117,7 @@ function LiveInviteCard({ live }: { live: LiveController }) {
             <span className="dr-live-invite__title">
               <PersonName name={view.name} className="dr-live-invite__name" /> is presenting
             </span>
-            <span className="dr-live-invite__sub">Join to follow their slides as they present.</span>
+            <span className="dr-live-invite__sub">Follow their slides as they present.</span>
           </>
         ) : (
           <>
@@ -139,7 +140,7 @@ function LiveInviteCard({ live }: { live: LiveController }) {
             data-testid="live-join"
             onClick={() => live.join()}
           >
-            <PlayIcon /> Join
+            <PlayIcon /> Follow
           </button>
         ) : (
           may && (

@@ -21,14 +21,23 @@
 // accept goes to the engine as usual. The topmost object under the press decides (W5-03): a click on an
 // object the vote does not take casts nothing, even over one it takes, and says so.
 import { type VoteEligibilityRule, voteRuleOf } from '@draftroom/contracts'
-import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useId, useMemo, useRef, useState } from 'react'
+import {
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { type CanvasFeatureContext, geometry } from '../../../canvas/api/index.ts'
+import { safeColor } from '../../../lib/identity.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { PHONE_QUERY, useMediaQuery } from '../../../ui/useMedia.ts'
 import { formatClock, timerDisplayPhase, timerRemainingMs } from '../countdown.ts'
 import { HandToasts, PresentingHands } from '../Hands.tsx'
 import type { WorkshopStore } from '../store.ts'
-import { badgeScale, clusterBadges, describeVoted, topResults } from '../voting.ts'
+import { badgeScale, clusterBadges, describeVoted, dotInk, revealConfetti, topResults } from '../voting.ts'
 import { useIsFacilitator, useNow, useWorkshop } from '../workshop-context.ts'
 import { followingNow, stopFollowing, zoomToBounds } from './camera.ts'
 import { isEligibleElement, labelOfRef, refOf } from './elements.ts'
@@ -39,7 +48,7 @@ import {
   PrivateNotesReminder,
   PrivateNotesStartPrompt,
 } from './private-notes/PrivateNotesBar.tsx'
-import { ReactionBursts } from './Reactions.tsx'
+import { REDUCED_MOTION_QUERY, ReactionBursts } from './Reactions.tsx'
 import { useVoted } from './VotingPanel.tsx'
 import {
   cornersOf,
@@ -231,6 +240,7 @@ export function WorkshopTopLayer({ ctx }: { ctx: Ctx }) {
     <>
       <div className="dr-wk-top" data-testid="workshop-top">
         <TimerFlash seq={snap.alertSeq} />
+        <RevealConfetti seq={snap.resultsNews?.seq ?? null} />
         {(presenting || phone) && <PresentingTimer store={store} corner={presenting ? 'left' : 'right'} />}
         {presenting && <PresentingHands snap={snap} />}
         <ReactionBursts ctx={ctx} store={store} />
@@ -259,6 +269,9 @@ function MyDots({
   const cast = useCast(ctx, store)
   const open = store.getSnapshot().vote?.session.status === 'open'
   const get = (id: string) => ctx.canvas.get(id)
+  // K3-5: my dots in my presence colour (the colour others see my cursor in), with an ink that reads on it
+  const fill = safeColor(ctx.me.user.color, ctx.me.user.id)
+  const colours = { '--dot': fill, '--dot-ink': dotInk(fill) } as CSSProperties
   return (
     <>
       {placed.map((p) => {
@@ -271,7 +284,7 @@ function MyDots({
             data-testid="vote-dot"
             data-shape-id={p.shapeId}
             data-count={p.n}
-            style={{ transform: `translate(${p.x - 12}px, ${p.y - 12}px)` }}
+            style={{ ...colours, transform: `translate(${p.x - 12}px, ${p.y - 12}px)` }}
             aria-label={`Your votes on ${label}: ${p.n}.${open ? ' Remove one.' : ''}`}
             title={open ? 'Your votes (click to take one back)' : 'Your votes'}
             disabled={!open}
@@ -967,6 +980,52 @@ function ResultsCard({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
         See all results
       </button>
     </section>
+  )
+}
+
+// ---- the reveal ------------------------------------------------------------------------------------------------
+
+/** How long the reveal's confetti falls (its pieces start within half a second, each falls 1.8 s). */
+const CONFETTI_MS = 2_600
+
+/**
+ * K3-5: when this tab sees a vote's results come in (the "Results are in" news, ../store.ts resultsNews), a
+ * short confetti fall over the board: an overlay that takes no pointer, writes nothing, and is not drawn for
+ * people who prefer reduced motion.
+ */
+export function RevealConfetti({ seq, reduced: forced }: { seq: number | null; reduced?: boolean }) {
+  const prefers = useMediaQuery(REDUCED_MOTION_QUERY)
+  const reduced = forced ?? prefers
+  const [shown, setShown] = useState<number | null>(null)
+  useEffect(() => {
+    if (seq === null) return
+    setShown(seq)
+    const t = setTimeout(() => setShown(null), CONFETTI_MS)
+    return () => clearTimeout(t)
+  }, [seq])
+  const at = shown ?? (forced !== undefined ? seq : null)
+  if (at === null) return null
+  const pieces = revealConfetti(reduced, at)
+  if (pieces.length === 0) return null
+  return (
+    <div className="dr-wk-confetti" data-testid="vote-confetti" aria-hidden="true">
+      {pieces.map((p, i) => (
+        <span
+          // a fixed list for one reveal
+          key={i}
+          className="dr-wk-confetti__piece"
+          style={
+            {
+              left: `${p.x}%`,
+              background: p.color,
+              '--delay': `${p.delayMs}ms`,
+              '--drift': `${p.drift}px`,
+              '--spin': `${p.spin}deg`,
+            } as CSSProperties
+          }
+        />
+      ))}
+    </div>
   )
 }
 

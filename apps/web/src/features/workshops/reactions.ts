@@ -71,6 +71,45 @@ export function placeBurst(p: PlacementInput): BurstPlacement {
   return { kind: 'top', x, y: 18 }
 }
 
+/** K3-5: one copy of a reaction's emoji in its burst. */
+export interface BurstCopy {
+  /** sideways offset, px (the first copy, the reaction itself, is at 0) */
+  dx: number
+  /** how far it rises as it fades, px */
+  rise: number
+  /** when it starts, ms after the burst */
+  delayMs: number
+  scale: number
+  /** a slight tilt, degrees */
+  turn: number
+}
+
+/** K3-5: how many copies a burst has (the reaction and the ones that spring from it). */
+export const BURST_COPIES = 5
+
+/**
+ * K3-5: a reaction was one emoji; now it bursts: BURST_COPIES copies, staggered in time and spread sideways
+ * (`jitter`, 0..1, varies the spread), the first one the reaction itself. People who prefer reduced motion
+ * get one copy that does not move (it only fades, workshops.css).
+ */
+export function burstCopies(reduced: boolean, jitter = 0.5): BurstCopy[] {
+  if (reduced) return [{ dx: 0, rise: 0, delayMs: 0, scale: 1, turn: 0 }]
+  const lean = (jitter - 0.5) * 8
+  const out: BurstCopy[] = [{ dx: 0, rise: 0, delayMs: 0, scale: 1, turn: 0 }]
+  for (let i = 1; i < BURST_COPIES; i++) {
+    const side = i % 2 === 1 ? -1 : 1
+    const step = Math.ceil(i / 2)
+    out.push({
+      dx: Math.round(side * (14 + step * 12) + lean),
+      rise: -(28 + step * 14 + ((i * 7) % 9)),
+      delayMs: i * 110,
+      scale: Math.round((0.7 + ((i * 13) % 4) * 0.08) * 100) / 100,
+      turn: side * (8 + step * 6),
+    })
+  }
+  return out
+}
+
 export interface Burst {
   id: number
   userId: string
@@ -79,6 +118,8 @@ export interface Burst {
   mine: boolean
   at: number
   placement: BurstPlacement
+  /** K3-5: 0..1, how this burst's copies spread (burstCopies) */
+  spread?: number
 }
 
 /** Adds a burst, dropping expired ones and the oldest beyond MAX_BURSTS. */
