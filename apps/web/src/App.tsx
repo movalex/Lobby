@@ -10,16 +10,23 @@ import { GuestEndedScreen } from './invite/GuestEndedScreen.tsx'
 import { GuestKindProvider, wasGuestTab } from './invite/guest.tsx'
 import { InvitePage } from './invite/InvitePage.tsx'
 import { DEV_AUTH_ENABLED } from './lib/identity.ts'
-import { startBoardCodeFor } from './lib/prefetch-board.ts'
+import {
+  installBoardPrefetch,
+  prefetchBoardCodeWhenIdle,
+  returnsToBoard,
+  startBoardCodeFor,
+} from './lib/prefetch-board.ts'
 import { matchRoute, navigate, signInPath, useLocationKey, workspacePath } from './lib/routing.ts'
 import { readLastWorkspace } from './lib/storage.ts'
 import { LoadingScreen, MessageScreen, UnreachableScreen } from './ui/screens.tsx'
 
 // K1 (wave K), once per page, while this module is evaluated (before the session check answers):
 //  - K1-1: on a board's address, the board page's code starts downloading now, alongside GET /api/auth/me
-//    (it waited for that answer and then went through two lazy steps: about 1.1 s of serial download at 4G).
+//    (it waited for that answer and then went through two lazy steps: about 1.1 s of serial download at 4G);
+//  - K1-3: a pointer over, a focus on or a press of a link to a board downloads it ahead of the click.
 if (typeof window !== 'undefined') {
   startBoardCodeFor(location.pathname)
+  installBoardPrefetch()
 }
 
 // Spike A (docs/EXCALIDRAW-MIGRATION.md §8): dev-only /spike/:name engine pages, outside the session.
@@ -65,9 +72,21 @@ function Routes() {
   const route = matchRoute(location.pathname)
   switch (route.name) {
     case 'signin':
-      return <SignInPage />
+      return (
+        <>
+          {/* K1-3: signing in to open a board (a shared link): its code downloads meanwhile */}
+          {returnsToBoard(location.search) && <PrefetchBoardCodeWhenIdle />}
+          <SignInPage />
+        </>
+      )
     case 'invite':
-      return <InvitePage token={route.token} />
+      return (
+        <>
+          {/* K1-3: an invitation (a client's review link, most often) leads to a board */}
+          <PrefetchBoardCodeWhenIdle />
+          <InvitePage token={route.token} />
+        </>
+      )
     case 'root':
       return (
         <RequireSession>
@@ -77,6 +96,7 @@ function Routes() {
     case 'workspace':
       return (
         <RequireSession>
+          <PrefetchBoardCodeWhenIdle />
           <DashboardPage workspaceId={route.workspaceId} section={route.section} />
         </RequireSession>
       )
@@ -119,6 +139,16 @@ function PurgeOfflineOnSignOut() {
   const uid = state.status === 'signed-in' ? state.me.user.id : null
   const explicit = state.status === 'signed-out' && state.explicit === true
   useEffect(() => observe({ status: state.status, uid, explicit }), [observe, state.status, uid, explicit])
+  return null
+}
+
+/**
+ * K1-3: while a dashboard is shown (or the sign-in page on the way to a board, or an invitation), the board
+ * page's code downloads once the page is idle (skipped on Save-Data and on a 2G connection;
+ * lib/prefetch-board.ts), so the first board opened from it does not wait for the engine.
+ */
+function PrefetchBoardCodeWhenIdle() {
+  useEffect(() => prefetchBoardCodeWhenIdle(), [])
   return null
 }
 

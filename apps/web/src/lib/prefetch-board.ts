@@ -12,24 +12,45 @@
  *    download for the whole tab. `startBoardCodeFor(location.pathname)` runs when App.tsx is evaluated, so
  *    a board link opened cold downloads the code alongside the sign-in check. Not speculative: it is not
  *    skipped on Save-Data (the person is opening a board).
+ *  - K1-3 `prefetchBoardCode()`: the same download, speculative: skipped when the browser asks to save
+ *    data (`navigator.connection.saveData`), idempotent. `installBoardPrefetch()` (App.tsx, once) starts it
+ *    when the pointer or the keyboard reaches a link to a board (/b/<id>, document-level delegation, so no
+ *    dashboard component has to call it), and `prefetchBoardCodeWhenIdle()` (App.tsx, while a dashboard is
+ *    shown) when the page has nothing else to do.
  *  - K1-2 `preloadBoardOpen(boardId)` / `takeBoardDetail` / `takeBoardTicket`: GET /api/boards/:id and the
  *    first POST /api/boards/:id/ticket together, as soon as the board route renders with a session (before
  *    the board code has arrived). The board page takes each answer once; a retry asks again.
  */
 import type { BoardDetail, TicketResponse } from '@draftroom/contracts'
 import { api } from '../api/client.ts'
-import { matchRoute } from './routing.ts'
+import { matchRoute, safeReturnTo } from './routing.ts'
 
-// ---- the board code (K1-1) ------------------------------------------------------------------------------
+// ---- the board code (K1-1, K1-3) -----------------------------------------------------------------------
 
 export interface BoardCode<T> {
   /** Downloads (once) and resolves the module. A failed download may be tried again. */
   load(): Promise<T>
+  /** The same, unless the browser asks to save data. True when a download was started or is under way. */
+  prefetch(): boolean
   /** Whether a download was started (and has not failed). */
   readonly started: boolean
 }
 
-export function createBoardCode<T>(loader: () => Promise<T>): BoardCode<T> {
+interface BoardCodeEnv {
+  /** `navigator.connection.saveData` (Save-Data, Lite mode, data saver) */
+  saveData(): boolean
+}
+
+const saveData = () => {
+  try {
+    const c = (globalThis.navigator as { connection?: { saveData?: boolean } } | undefined)?.connection
+    return c?.saveData === true
+  } catch {
+    return false
+  }
+}
+
+export function createBoardCode<T>(loader: () => Promise<T>, env: BoardCodeEnv = { saveData }): BoardCode<T> {
   let pending: Promise<T> | null = null
   const load = () => {
     if (!pending) {
@@ -44,6 +65,12 @@ export function createBoardCode<T>(loader: () => Promise<T>): BoardCode<T> {
   }
   return {
     load,
+    prefetch() {
+      if (pending) return true
+      if (env.saveData()) return false
+      load().catch(() => {}) // a prefetch never reports: the real load does
+      return true
+    },
     get started() {
       return pending !== null
     },
@@ -59,6 +86,9 @@ const boardCode = createBoardCode(importBoardPage)
 /** K1-1: the board page's code, downloaded once per tab (not speculative). */
 export const loadBoardCode = (): Promise<BoardPageModule> => boardCode.load()
 
+/** K1-3: downloads the board page's code ahead of a click (idempotent; skipped on Save-Data). */
+export const prefetchBoardCode = (): boolean => boardCode.prefetch()
+
 /**
  * K1-1: called once while App.tsx is evaluated, with `location.pathname`: on a board's address the board
  * code starts downloading now, alongside the sign-in check. Any other address downloads nothing.
@@ -67,6 +97,102 @@ export function startBoardCodeFor(pathname: string, load: () => Promise<unknown>
   if (matchRoute(pathname).name !== 'board') return false
   load().catch(() => {}) // the board route's own load reports a failure
   return true
+}
+
+// ---- prefetch on intent and when idle (K1-3) ------------------------------------------------------------
+
+/** Whether the sign-in page (its `location.search`) will go on to a board once the person is signed in. */
+export function returnsToBoard(search: string): boolean {
+  const to = safeReturnTo(new URLSearchParams(search).get('returnTo'))
+  return to !== null && matchRoute(new URL(to, 'http://lobby.invalid').pathname).name === 'board'
+}
+
+/** The board a link (or something inside one) points to, or null. */
+export function boardOfLink(target: EventTarget | null, origin = globalThis.location?.origin): string | null {
+  const el = target as { closest?: (sel: string) => Element | null } | null
+  const a = el && typeof el.closest === 'function' ? el.closest('a[href]') : null
+  const href = a?.getAttribute('href')
+  if (!href || !origin) return null
+  let url: URL
+  try {
+    url = new URL(href, origin)
+  } catch {
+    return null
+  }
+  if (url.origin !== origin) return null
+  const route = matchRoute(url.pathname)
+  return route.name === 'board' ? route.boardId : null
+}
+
+/**
+ * K1-3: document-level delegation, installed once. A pointer over, a focus on or a press of a link to a
+ * board downloads the board code (`prefetchBoardCode`). Returns the uninstall.
+ */
+export function installBoardPrefetch(
+  doc: Pick<Document, 'addEventListener' | 'removeEventListener'> = document,
+  prefetch: () => boolean = prefetchBoardCode,
+): () => void {
+  const onIntent = (e: Event) => {
+    const boardId = boardOfLink(e.target)
+    if (!boardId) return
+    prefetch()
+  }
+  const opts = { capture: true, passive: true } as const
+  const types = ['pointerover', 'focusin', 'pointerdown', 'click'] as const
+  for (const t of types) doc.addEventListener(t, onIntent, opts)
+  return () => {
+    for (const t of types) doc.removeEventListener(t, onIntent, opts)
+  }
+}
+
+interface IdleWindow {
+  requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
+  cancelIdleCallback?: (id: number) => void
+  setTimeout: (cb: () => void, ms: number) => unknown
+  clearTimeout: (id: never) => void
+}
+
+/** How long after the dashboard shows an idle prefetch waits at most (a busy page still gets it). */
+export const IDLE_PREFETCH_TIMEOUT_MS = 4_000
+/** Where there is no requestIdleCallback (Safari): a plain delay. */
+export const IDLE_FALLBACK_MS = 1_500
+
+/** Before the idle prefetch asks for idle time: the dashboard's own first requests go first. */
+export const IDLE_DELAY_MS = 800
+
+/** A 2G connection (`navigator.connection.effectiveType`): no speculative engine download while idle. */
+const slowConnection = () => {
+  try {
+    const c = (globalThis.navigator as { connection?: { effectiveType?: string } } | undefined)?.connection
+    return c?.effectiveType === '2g' || c?.effectiveType === 'slow-2g'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * K1-3: the board code once the page is idle (the dashboard: after its first requests). Not on a 2G
+ * connection (a link the person reaches still prefetches), and never on Save-Data (`prefetchBoardCode`).
+ * Returns the cancel (the dashboard left before it ran).
+ */
+export function prefetchBoardCodeWhenIdle(
+  win: IdleWindow = globalThis as unknown as IdleWindow,
+  prefetch: () => boolean = prefetchBoardCode,
+  slow: () => boolean = slowConnection,
+): () => void {
+  if (slow()) return () => {}
+  let idle: number | null = null
+  let fallback: unknown = null
+  const delay = win.setTimeout(() => {
+    if (typeof win.requestIdleCallback === 'function')
+      idle = win.requestIdleCallback(() => prefetch(), { timeout: IDLE_PREFETCH_TIMEOUT_MS })
+    else fallback = win.setTimeout(() => prefetch(), IDLE_FALLBACK_MS)
+  }, IDLE_DELAY_MS)
+  return () => {
+    win.clearTimeout(delay as never)
+    if (idle !== null) win.cancelIdleCallback?.(idle)
+    if (fallback !== null) win.clearTimeout(fallback as never)
+  }
 }
 
 // ---- the board's first data (K1-2) ----------------------------------------------------------------------
