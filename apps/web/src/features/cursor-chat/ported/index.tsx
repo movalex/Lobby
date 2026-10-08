@@ -30,11 +30,11 @@ import { type Atom, atom, useValue } from '../../../lib/signals.ts'
 import { announcerFor } from '../../a11y/ported/announcer.ts'
 import {
   addBubble,
+  anchorFor,
   BUBBLE_OFFSET,
   type Bubble,
   ChatThrottle,
   clampText,
-  cursorFor,
   failureText,
   incoming,
   mayChat,
@@ -152,7 +152,10 @@ export class CursorChatController {
     if (!m) return
     const peers = ctx.canvas.presence.peers()
     const visible = (sid: string) => ctx.registries.cursorVisible.call(sid)
-    const sid = cursorFor(peers, m.userId, m.at, visible)
+    const anchor = anchorFor(peers, m.userId, m.at, visible)
+    // their cursor is hidden here (a facilitator hid the cursors, or presenting): no bubble, nothing read out
+    if (!anchor) return
+    const { sid } = anchor
     const peer = sid ? peers.find((p) => p.sid === sid) : undefined
     this.add({
       userId: m.userId,
@@ -160,7 +163,7 @@ export class CursorChatController {
       text: m.text,
       mine: false,
       sid,
-      at: m.at ?? null,
+      at: anchor.at,
       since: Date.now(),
       color: safeColor(peer?.color, m.userId),
     })

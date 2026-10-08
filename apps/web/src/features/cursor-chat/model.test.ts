@@ -8,6 +8,7 @@ import {
 import { describe, expect, it } from 'vitest'
 import {
   addBubble,
+  anchorFor,
   type Bubble,
   ChatThrottle,
   clampText,
@@ -81,6 +82,29 @@ describe('which cursor a message floats at', () => {
     // a facilitator hid everyone's cursors (or this page presents): the message gives no cursor away
     expect(cursorFor(peers, ALICE, { x: 0, y: 0 }, () => false)).toBeNull()
     expect(cursorFor(peers, ALICE, { x: 0, y: 0 }, (sid) => sid.endsWith('t2'))).toBe(`${ALICE}:t2`)
+  })
+})
+
+describe('where someone else’s message is placed (wave K integration, the K6 review)', () => {
+  const peers = [
+    { sid: `${ALICE}:t1`, uid: ALICE, point: { x: 0, y: 0 }, idle: false },
+    { sid: 'usr_bob00000000000000:t1', uid: 'usr_bob00000000000000', point: { x: 1, y: 1 }, idle: false },
+  ]
+  it('at their cursor when it is shown; where they sent it when this page has no cursor of theirs', () => {
+    expect(anchorFor(peers, ALICE, { x: 5, y: 5 }, () => true)).toEqual({
+      sid: `${ALICE}:t1`,
+      at: { x: 5, y: 5 },
+    })
+    expect(anchorFor(peers, 'usr_carol000000000000', { x: 5, y: 5 }, () => true)).toEqual({
+      sid: null,
+      at: { x: 5, y: 5 },
+    })
+  })
+  it('nowhere when this page hides their cursor (a facilitator hid cursors, or presenting): it gives nothing away', () => {
+    // before the fix the bubble was placed at the sent point (and read out) although the cursor was hidden
+    expect(anchorFor(peers, ALICE, { x: 5, y: 5 }, () => false)).toBeNull()
+    expect(anchorFor(peers, ALICE, undefined, () => false)).toBeNull()
+    expect(anchorFor(peers, ALICE, { x: 5, y: 5 }, (sid) => !sid.startsWith(ALICE))).toBeNull()
   })
 })
 

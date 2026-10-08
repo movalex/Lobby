@@ -72,6 +72,24 @@ export function cursorFor(
   return best?.sid ?? null
 }
 
+/**
+ * Where someone else's message is placed on this page (K6-4; wave K integration, the K6 review): at their cursor
+ * (`cursorFor`) when this page shows one; at the point they sent it from when this page has no cursor of theirs
+ * at all; null (not shown, not read out) when this page has their cursor but hides it (a facilitator hid the
+ * cursors, or this page presents): a message there must not give away where they are.
+ */
+export function anchorFor(
+  peers: readonly PeerLike[],
+  userId: string,
+  at: Point | undefined,
+  visible: (sid: string) => boolean,
+): { sid: string | null; at: Point | null } | null {
+  const sid = cursorFor(peers, userId, at, visible)
+  if (sid) return { sid, at: at ?? null }
+  if (peers.some((p) => p.uid === userId && !visible(p.sid))) return null
+  return { sid: null, at: at ?? null }
+}
+
 /** Where a bubble sits from the cursor's tip (overlay px): below the cursor's name label, to its right. */
 export const BUBBLE_OFFSET = { x: 10, y: 30 } as const
 
