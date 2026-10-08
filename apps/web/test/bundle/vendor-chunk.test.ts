@@ -116,9 +116,16 @@ test('the engine is a chunk of its own whose name survives a Lobby-only change; 
   assert.notEqual(entryB.fileName, entryA.fileName, 'the entry changed')
   assert.ok(pageA.imports.includes(engineA.fileName), 'the board page imports the engine chunk')
 
-  // the dashboard (the entry and what it loads statically) never downloads the engine
+  // the dashboard (the entry and what it loads statically) never downloads the engine; K1-1: the board route
+  // is in the entry, so the board page is the one lazy step
   assert.ok(!staticClosure(a, entryA).has(engineA.fileName), 'the entry does not load the engine')
   assert.ok(!staticClosure(a, entryA).has(pageA.fileName), 'the entry does not load the board page')
+  assert.ok(entryA.dynamicImports.includes(pageA.fileName), 'the entry imports the board page lazily')
+  assert.equal(
+    a.chunks.filter((c) => c.facadeModuleId && /\/src\/canvas\/board\/route\.tsx$/.test(norm(c.facadeModuleId))).length,
+    0,
+    'no separate route chunk',
+  )
 
   // the host rewrite ran on the engine's code in its new chunk (apps/web/build/excalidraw-host-rewrite.ts)
   assert.ok(!engineA.code.includes('esm.sh'), 'no esm.sh left in the engine chunk')

@@ -1,8 +1,8 @@
 /**
- * /b/:boardId on the Excalidraw engine (App.tsx loads this module for every board; since wave 4 part 2 it
- * is the only board page: docs/EXCALIDRAW-CUTOVER.md G2, G10). Opens Lobby's board page
- * (./LobbyBoardPage.tsx), or spike B's board page (canvas/spike/board/SpikeBoardPage.tsx) while spike B
- * still runs its acceptance specs against it:
+ * /b/:boardId on the Excalidraw engine (App.tsx renders this for every board; since wave 4 part 2 it is the
+ * only board page: docs/EXCALIDRAW-CUTOVER.md G2, G10). Opens Lobby's board page (./LobbyBoardPage.tsx),
+ * or spike B's board page (canvas/spike/board/SpikeBoardPage.tsx) while spike B still runs its acceptance
+ * specs against it:
  *
  *  - `VITE_LOBBY_BOARD_PAGE=spike` at build time: /b/:boardId is the spike page (the spike B suite's
  *    build: a change request asks spike B's e2e/spike-b/playwright.config.ts to set it);
@@ -12,11 +12,17 @@
  * VITE_DRAFTROOM_DEV_AUTH=1; src/lib/identity.ts): the production engine build carries only Lobby's page,
  * and `?page=spike` opens Lobby's page there. The test is inlined so the spike chunk folds out of that
  * build (an imported const does not fold).
+ *
+ * K1-1 (wave K): this module is part of the app's first bundle (App.tsx imports it), so a board goes
+ * through ONE lazy step, the board page's chunk (lib/prefetch-board.ts `loadBoardCode`, which App.tsx
+ * already started for a board address). Before, App lazily loaded this module and this module lazily
+ * loaded the page, one after the other.
  */
 import { lazy, Suspense } from 'react'
+import { loadBoardCode } from '../../lib/prefetch-board.ts'
 import { LoadingScreen } from '../../ui/screens.tsx'
 
-const LobbyBoardPage = lazy(() => import('./LobbyBoardPage.tsx'))
+const LobbyBoardPage = lazy(loadBoardCode)
 const SpikeBoardPage =
   import.meta.env.DEV || import.meta.env.VITE_DRAFTROOM_DEV_AUTH === '1'
     ? lazy(() => import('../spike/board/SpikeBoardPage.tsx'))
