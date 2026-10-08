@@ -25,6 +25,7 @@ import { api as apiClient } from '../../api/client.ts'
 import { createTicketUri, ticketInProtocol } from '../../board/ticket.ts'
 import { exportAllowedOnBoard } from '../../features/canvas-ux/ported/export-gate.ts'
 import { frameAt } from '../../features/canvas-ux/ported/notes.ts'
+import { toolAfterPlacement, toolLock } from '../../features/canvas-ux/ported/tool-lock.ts'
 import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 import { engineRejectNotice } from '../../sync-quality/copy.ts'
 import { type BoardConcern, type BoardEvent, createLobbyCanvas, type LobbyCanvasHandle } from '../api/impl.ts'
@@ -891,19 +892,35 @@ export class LobbyBoardSession {
         tx.create('note', { x: c.x - size / 2, y: c.y - size / 2, size }),
       )
       this.lease.markCreated(id)
-      setTool(this.api, 'select', {})
+      this.afterPlacement('note')
       this.input.editorLease?.requestEdit(id, { reason: 'new-note', caretEnd: true })
     } else if (c.tool === 'text') {
       const target = this.input.textTargetAt(c.x, c.y)
-      if (target) this.input.editorLease?.requestEdit(target.id, { reason: 'T-tool', caretEnd: true })
-      else this.createFreeText(c.x, c.y)
+      if (target) {
+        this.afterPlacement('text')
+        this.input.editorLease?.requestEdit(target.id, { reason: 'T-tool', caretEnd: true })
+      } else {
+        this.createFreeText(c.x, c.y, () => this.afterPlacement('text'))
+      }
     }
   }
 
-  private createFreeText(x: number, y: number): void {
+  /**
+   * K2-2 (UXD-06): one placement, then back to Select, for Text as for Note (the next click on the board no
+   * longer opens another text, so a stray key no longer leaves a one-letter text), unless the tool lock is on
+   * (Q; features/canvas-ux/ported/tool-lock.ts). The switch happens before the edit is asked for, so the
+   * editor still opens only through the lease (`requestEdit`), exactly as before.
+   */
+  private afterPlacement(tool: 'note' | 'text'): void {
+    if (this.api && toolAfterPlacement(tool, toolLock.get()) === 'select') setTool(this.api, 'select', {})
+  }
+
+  /** A new free text at (x, y) with its editor asked for; `placed` runs between the create and the ask. */
+  private createFreeText(x: number, y: number, placed?: () => void): void {
     if (this.snap.readonly || !this.port) return
     const id = this.createInFrame('text', { x, y }, (tx) => tx.create('text', { x, y, text: '' }))
     this.lease.markCreated(id)
+    placed?.()
     this.input.editorLease?.requestEdit(id, { reason: 'new-text', caretEnd: true })
   }
 

@@ -47,6 +47,8 @@ const BOARD_ROWS: readonly ShortcutRow[] = [
   { label: 'New note below (while editing a note)', keys: ['mod+enter'] },
   { label: 'New sticky note (double-click empty canvas)', keys: [{ text: 'Double-click' }] },
   { label: 'Place the picked note, shape or text in the middle of the view', keys: ['enter'] },
+  // K2-2: Note and Text go back to Select after one placement unless the lock is on
+  { label: 'Tool lock: keep the tool picked after placing (or double-click a tool)', keys: ['q'] },
   { label: 'Rename the selected frame', keys: ['enter'] },
   { label: 'Go to the selection toolbar (Esc returns)', keys: ['alt+f10'] },
   { label: 'Open the context menu for the selection', keys: ['shift+f10'] },

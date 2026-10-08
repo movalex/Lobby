@@ -41,6 +41,7 @@ import { ShortcutsDialog } from './ShortcutsDialog.tsx'
 import { StylePanel } from './StylePanel.tsx'
 import { anyMenuOpen, closeMenus, uxState } from './state.ts'
 import { Toolbar } from './Toolbar.tsx'
+import { toolLock } from './tool-lock.ts'
 
 const isModalOpen = (doc: Document) => doc.querySelector('dialog[open]') !== null
 
@@ -97,6 +98,8 @@ function mount(ctx: CanvasFeatureContext): () => void {
     for (const c of cleanups.reverse()) c()
     closeMenus(state)
     state.renamingFrame.set(null)
+    // K2-2: the tool lock is this board page's only
+    toolLock.set(false)
   }
 }
 

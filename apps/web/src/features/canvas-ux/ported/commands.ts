@@ -40,6 +40,7 @@ import { guardExport } from './export-gate.ts'
 import { pickFiles } from './insert-file.ts'
 import { readSessionSettings, writeSessionSettings } from './session-settings.ts'
 import { uxState } from './state.ts'
+import { toolLock, toolLockNotice } from './tool-lock.ts'
 
 /** Command ids (also the menus' and the selection bar's). */
 export const CMD = {
@@ -73,7 +74,20 @@ export const CMD = {
   toggleNoteAuthors: 'canvas-ux.toggle-note-authors',
   toggleSnap: 'canvas-ux.toggle-snap',
   toggleGrid: 'canvas-ux.toggle-grid',
+  toolLock: 'canvas-ux.tool-lock',
 } as const
+
+/**
+ * K2-2: turns the tool lock (./tool-lock.ts) on or off, says so, and picks the tool in use again so the
+ * engine's drawing tools take the new lock at once. `on` forces a state (the toolbar's double-click).
+ */
+export function setToolLock(ctx: CanvasFeatureContext, on: boolean = !toolLock.get()): void {
+  if (toolLock.get() === on) return
+  toolLock.set(on)
+  const tool = ctx.canvas.tool()
+  if (tool && tool !== 'select') ctx.canvas.setTool(tool)
+  ctx.notify({ key: 'tool-lock', text: toolLockNotice(on), testId: 'tool-lock-notice', timeoutMs: 4000 })
+}
 
 /** Copy for the board settings (honest about what they do and do not do; ../overrides.tsx). */
 export const BOARD_SETTING_COPY = {
@@ -535,6 +549,15 @@ export const COMMANDS: readonly CommandSpec[] = [
     label: 'Show grid',
     readOnlyAllowed: true,
     run: (ctx) => ctx.canvas.settings.set({ grid: !ctx.canvas.settings.get().grid }),
+  },
+  {
+    // K2-2: Note and Text go back to Select after one placement; the lock keeps every tool picked. Its key, Q
+    // (tldraw's and Excalidraw's for the same lock), is ./keys.ts `canvas-ux.tool-lock-key`: it steps aside
+    // for type-to-edit on a selected note
+    id: CMD.toolLock,
+    label: 'Tool lock (keep the tool after placing)',
+    enabled: editable,
+    run: (ctx) => setToolLock(ctx),
   },
 ]
 
