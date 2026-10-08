@@ -19,7 +19,7 @@ const STALE = new TypeError(
   'Failed to fetch dynamically imported module: https://lobby.example/assets/LobbyBoardPage-Ab12Cd.js',
 )
 
-function env(opts: { storage?: 'ok' | 'throws' | 'none'; now?: number } = {}) {
+function env(opts: { storage?: 'ok' | 'throws' | 'none'; now?: number; offline?: boolean } = {}) {
   const store = new Map<string, string>()
   const timers: { fn: () => void; at: number }[] = []
   const e = {
@@ -30,6 +30,7 @@ function env(opts: { storage?: 'ok' | 'throws' | 'none'; now?: number } = {}) {
       e.reloads++
     },
     now: () => e.t,
+    online: () => opts.offline !== true,
     storage: () => {
       if (opts.storage === 'none') return null
       if (opts.storage === 'throws')
@@ -117,6 +118,16 @@ describe('outside a board: one reload, guarded', () => {
     e.t += RELOAD_GUARD_MS
     expect(createStaleChunkHandler(e).report(STALE)).toBe('reload')
     expect(e.reloads).toBe(2)
+  })
+
+  it('offline: the notice (a reload would show the browser’s offline page); its Reload still works', () => {
+    const e = env({ offline: true })
+    const h = createStaleChunkHandler(e)
+    expect(h.report(STALE)).toBe('notice')
+    expect(e.reloads).toBe(0)
+    expect(e.store.has(RELOAD_KEY)).toBe(false)
+    h.notice()?.action?.onClick()
+    expect(e.reloads).toBe(1)
   })
 
   it('storage that throws, or none: the notice, never a reload it could not guard', () => {

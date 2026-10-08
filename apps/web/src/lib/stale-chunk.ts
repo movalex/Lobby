@@ -7,7 +7,8 @@
  *  - outside a board (the dashboard, sign-in, the feedback page, opening a board whose code is missing), the
  *    page reloads once, which loads the new build. A guard in sessionStorage (RELOAD_GUARD_MS) stops a
  *    reload loop: a second failure soon after a reload shows a notice with a Reload button instead. Storage
- *    that is blocked or throws counts as a guard that cannot be read: the notice, never a loop;
+ *    that is blocked or throws counts as a guard that cannot be read: the notice, never a loop; so does a
+ *    browser that is offline (the same error, from the network: a reload would show its offline page);
  *  - on a board, the page never reloads by itself (it would drop the open panel, the camera, a text being
  *    typed and, for a guest, changes not yet sent): the board shows a notice with a Reload button
  *    (`registerStaleChunkBoard`). While the sync adapter reports changes not yet acknowledged, the button
@@ -55,6 +56,8 @@ export interface StaleChunkBoard {
 interface Env {
   reload(): void
   now(): number
+  /** `navigator.onLine`: a chunk that failed while offline is the network's failure, not a deploy's */
+  online(): boolean
   /** sessionStorage, or null where it cannot be used */
   storage(): Pick<Storage, 'getItem' | 'setItem'> | null
   setTimeout(fn: () => void, ms: number): unknown
@@ -63,6 +66,7 @@ interface Env {
 const defaultEnv: Env = {
   reload: () => globalThis.location?.reload(),
   now: () => Date.now(),
+  online: () => (globalThis.navigator as { onLine?: boolean } | undefined)?.onLine !== false,
   storage: () => {
     try {
       return globalThis.sessionStorage ?? null
@@ -138,7 +142,8 @@ export function createStaleChunkHandler(env: Env = defaultEnv) {
         board.notify(staleNotice())
         return 'notice'
       }
-      const last = readGuard()
+      // offline, a reload would show the browser's offline page: the notice, to reload once it is back
+      const last = env.online() ? readGuard() : 'blocked'
       const recent = last === 'blocked' || (last !== null && env.now() - last < RELOAD_GUARD_MS)
       if (!recent && writeGuard()) {
         reloading = true
