@@ -37,6 +37,7 @@ import { AccessActorHint, blockedEditHint, isReadonlyRole, roleChangeNotice } fr
 import type { NoticeInput } from '../../board/board-context.ts'
 import { NoticeRegion, useNotices } from '../../board/Notices.tsx'
 import { SyncErrorScreen } from '../../board/SyncErrorScreen.tsx'
+import { firstTicketWhileStarting } from '../../board/ticket.ts'
 import { BoardAccount, type ConnState, TopBarFrame } from '../../board/TopBarFrame.tsx'
 import { CANVAS_FEATURES } from '../../features/canvas-registry.ts'
 import { type BoardEvents, createBoardEvents } from '../../features/events.ts'
@@ -211,11 +212,19 @@ function FirstTicket(props: SessionProps) {
   useEffect(() => {
     const ac = new AbortController()
     // K1-2: the ticket asked for together with the board (once: a retry, a new key, asks again), if it is
-    // this person's
-    const preloaded = takeBoardTicket(boardId)
-    const ticket = preloaded
-      ? preloaded.then((t) => (t.user.id === uid ? t : api.boardTicket(boardId, ac.signal)))
-      : api.boardTicket(boardId, ac.signal)
+    // this person's. K6-1: while the api is starting (503 CANVAS_STARTING) the first ticket is asked again
+    // soon, quietly (the skeleton stays), instead of the error screen; the preloaded answer is the first try.
+    let preloaded = takeBoardTicket(boardId)
+    const ticket = firstTicketWhileStarting(
+      (signal) => {
+        const p = preloaded
+        preloaded = null
+        return p
+          ? p.then((t) => (t.user.id === uid ? t : api.boardTicket(boardId, signal)))
+          : api.boardTicket(boardId, signal)
+      },
+      { signal: ac.signal },
+    )
     ticket.then(
       (t) => {
         if (!ac.signal.aborted) setFirst(t)
