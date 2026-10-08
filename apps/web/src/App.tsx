@@ -1,6 +1,7 @@
 import { lazy, type ReactNode, Suspense, useEffect, useState } from 'react'
 import { SignInPage } from './auth/SignInPage.tsx'
 import { SessionProvider, useSession } from './auth/session.tsx'
+import { BoardSkeleton } from './canvas/board/BoardSkeleton.tsx'
 import BoardRoute from './canvas/board/route.tsx'
 import { createSignOutPurge } from './canvas/sync/adapter/offline-idb.ts'
 import { DashboardPage } from './dashboard/DashboardPage.tsx'
@@ -102,7 +103,8 @@ function Routes() {
       )
     case 'board':
       return (
-        <RequireSession>
+        // K1-5: the board skeleton from the first frame, the session check included
+        <RequireSession loading={<BoardSkeleton boardId={route.boardId} />}>
           <BoardRoute boardId={route.boardId} />
         </RequireSession>
       )
@@ -153,7 +155,7 @@ function PrefetchBoardCodeWhenIdle() {
 }
 
 /** Renders children only with a session; otherwise sends the user to sign in and back here after. */
-function RequireSession({ children }: { children: ReactNode }) {
+function RequireSession({ children, loading }: { children: ReactNode; loading?: ReactNode }) {
   const { state, refresh } = useSession()
   const signedOut = state.status === 'signed-out'
   // A guest has no account to sign in with: when their session ends (the link was revoked or
@@ -168,7 +170,7 @@ function RequireSession({ children }: { children: ReactNode }) {
   if (state.status === 'signed-in') return <>{children}</>
   if (state.status === 'unreachable')
     return <UnreachableScreen message={state.message} onRetry={() => void refresh()} />
-  return <LoadingScreen testId="session-loading" />
+  return loading ?? <LoadingScreen testId="session-loading" />
 }
 
 function RootRedirect() {

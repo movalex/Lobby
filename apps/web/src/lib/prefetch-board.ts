@@ -20,6 +20,8 @@
  *  - K1-2 `preloadBoardOpen(boardId)` / `takeBoardDetail` / `takeBoardTicket`: GET /api/boards/:id and the
  *    first POST /api/boards/:id/ticket together, as soon as the board route renders with a session (before
  *    the board code has arrived). The board page takes each answer once; a retry asks again.
+ *  - K1-5 `boardTitleHint(boardId)`: the title (and workspace) of a board whose link was pointed at,
+ *    focused or clicked, for the board skeleton's top bar before the board answers. In memory only.
  */
 import type { BoardDetail, TicketResponse } from '@draftroom/contracts'
 import { api } from '../api/client.ts'
@@ -125,8 +127,27 @@ export function boardOfLink(target: EventTarget | null, origin = globalThis.loca
 }
 
 /**
- * K1-3: document-level delegation, installed once. A pointer over, a focus on or a press of a link to a
- * board downloads the board code (`prefetchBoardCode`). Returns the uninstall.
+ * The board's title next to its link, for the skeleton: the link's `data-board-title`, or the title of
+ * the board card around it (`[data-board-id]` with a `[data-board-title]` or `[data-testid=board-card-title]`
+ * element: its `title` attribute, else its text).
+ */
+function titleNear(target: EventTarget | null, boardId: string): string | null {
+  const el = target as { closest?: (sel: string) => Element | null } | null
+  if (!el || typeof el.closest !== 'function') return null
+  const a = el.closest('a[href]')
+  const own = a?.getAttribute('data-board-title')
+  if (own) return own
+  const esc = (globalThis as { CSS?: { escape?: (s: string) => string } }).CSS?.escape
+  const card = el.closest(`[data-board-id="${esc ? esc(boardId) : boardId}"]`)
+  const t = card?.querySelector('[data-board-title], [data-testid="board-card-title"]')
+  const title = t?.getAttribute('data-board-title') || t?.getAttribute('title') || t?.textContent
+  return title?.trim() ? title.trim() : null
+}
+
+/**
+ * K1-3 (and K1-5): document-level delegation, installed once. A pointer over, a focus on or a press of a
+ * link to a board downloads the board code (`prefetchBoardCode`) and remembers the board's title for its
+ * skeleton. Returns the uninstall.
  */
 export function installBoardPrefetch(
   doc: Pick<Document, 'addEventListener' | 'removeEventListener'> = document,
@@ -135,6 +156,8 @@ export function installBoardPrefetch(
   const onIntent = (e: Event) => {
     const boardId = boardOfLink(e.target)
     if (!boardId) return
+    const title = titleNear(e.target, boardId)
+    if (title) rememberBoardTitle(boardId, title, workspaceOfPage())
     prefetch()
   }
   const opts = { capture: true, passive: true } as const
@@ -251,3 +274,33 @@ export const takeBoardDetail = (boardId: string, now = Date.now()): Promise<Boar
 /** The preloaded first ticket for `boardId`, once (null: ask now). */
 export const takeBoardTicket = (boardId: string, now = Date.now()): Promise<TicketResponse> | null =>
   take('ticket', boardId, now)
+
+// ---- title hints for the skeleton (K1-5) ----------------------------------------------------------------
+
+export interface BoardTitleHint {
+  readonly title: string
+  /** the workspace whose page the link was on (its name comes from the session) */
+  readonly workspaceId: string | null
+}
+
+const hints = new Map<string, BoardTitleHint>()
+const MAX_HINTS = 200
+
+/** Remembers a board's title (a link the person reached, or the board itself once it answered). */
+export function rememberBoardTitle(boardId: string, title: string, workspaceId: string | null = null): void {
+  const t = title.trim()
+  if (!t) return
+  hints.delete(boardId)
+  hints.set(boardId, { title: t.slice(0, 200), workspaceId })
+  if (hints.size > MAX_HINTS) hints.delete(hints.keys().next().value as string)
+}
+
+/** What the skeleton may show for `boardId` before the board answers (null: a neutral placeholder). */
+export const boardTitleHint = (boardId: string): BoardTitleHint | null => hints.get(boardId) ?? null
+
+function workspaceOfPage(): string | null {
+  const path = globalThis.location?.pathname
+  if (!path) return null
+  const route = matchRoute(path)
+  return route.name === 'workspace' ? route.workspaceId : null
+}

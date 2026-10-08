@@ -17,11 +17,13 @@
  * through ONE lazy step, the board page's chunk (lib/prefetch-board.ts `loadBoardCode`, which App.tsx
  * already started for a board address). Before, App lazily loaded this module and this module lazily
  * loaded the page, one after the other. K1-2: the board and its first ticket are asked for here, as soon
- * as the route renders with a session, while the code may still be on its way.
+ * as the route renders with a session, while the code may still be on its way. K1-5: while the code
+ * downloads, the board skeleton (./BoardSkeleton.tsx).
  */
 import { lazy, Suspense, useRef } from 'react'
+import { useSession } from '../../auth/session.tsx'
 import { loadBoardCode, preloadBoardOpen } from '../../lib/prefetch-board.ts'
-import { LoadingScreen } from '../../ui/screens.tsx'
+import { BoardSkeleton } from './BoardSkeleton.tsx'
 
 const LobbyBoardPage = lazy(loadBoardCode)
 const SpikeBoardPage =
@@ -44,14 +46,16 @@ export function boardPageFor(
 
 export default function ExcalidrawBoardRoute({ boardId }: { boardId: string }) {
   const page = boardPageFor(location.search)
+  const { state } = useSession()
   // K1-2: once per board this route shows (idempotent: React may render twice)
   const preloaded = useRef<string | null>(null)
   if (page === 'lobby' && preloaded.current !== boardId) {
     preloaded.current = boardId
     preloadBoardOpen(boardId)
   }
+  const workspaces = state.status === 'signed-in' ? state.me.workspaces : undefined
   return (
-    <Suspense fallback={<LoadingScreen label="Opening board…" testId="board-loading" />}>
+    <Suspense fallback={<BoardSkeleton boardId={boardId} workspaces={workspaces} />}>
       {page === 'spike' && SpikeBoardPage ? (
         <SpikeBoardPage boardId={boardId} />
       ) : (
