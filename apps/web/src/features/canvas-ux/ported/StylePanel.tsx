@@ -28,6 +28,7 @@ import { NOTE_PALETTE, type NoteColorName } from '../palette.ts'
 import { selectedRoots } from './commands.ts'
 import { TOOL_ICONS } from './icons.tsx'
 import { isPolygonHolder, isPolygonLine, POLYGON_TOOLS } from './polygons.ts'
+import { uxState } from './state.ts'
 import {
   ALIGN_LABELS,
   ALIGNS,
@@ -257,6 +258,8 @@ function pickNoteColor(canvas: LobbyCanvas, t: Target, name: NoteColorName) {
 }
 
 function pickFill(canvas: LobbyCanvas, t: Target, fill: FillName) {
+  // K2-3: a fill picked here is the person's choice for the next shapes too (the light default steps aside)
+  uxState(canvas).fillChosen.set(true)
   const w: Writes = new Map()
   for (const el of t.els) {
     if (kindOf(el) !== 'shape') continue

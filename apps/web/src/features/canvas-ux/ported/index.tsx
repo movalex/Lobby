@@ -28,7 +28,7 @@ import { CONTEXT_MENU_ENTRIES, ContextMenu } from './ContextMenu.tsx'
 import { installCanvasEvents } from './canvas-events.ts'
 import { installChromeHistoryKeys } from './chrome-keys.ts'
 import { COMMANDS } from './commands.ts'
-import { applyFontDefault, applySnapDefault, startToolFor } from './defaults.ts'
+import { applyFontDefault, applySnapDefault, installShapeFillDefault, startToolFor } from './defaults.ts'
 import { exportGate, installCopyGuard, syncExportGate } from './export-gate.ts'
 import { FrameRename } from './FrameRename.tsx'
 import { KEYS } from './keys.ts'
@@ -92,6 +92,8 @@ function mount(ctx: CanvasFeatureContext): () => void {
   cleanups.push(syncExportGate(ctx))
   applySnapDefault(canvas, storage())
   if (!canvas.readOnly()) applyFontDefault(canvas)
+  // K2-3: shapes get a light fill by default, so they can be grabbed anywhere
+  cleanups.push(installShapeFillDefault(ctx))
   const start = startToolFor({ coarsePointer: isCoarsePrimaryPointer(), readonly: canvas.readOnly() })
   if (start && canvas.tool() === 'select') canvas.setTool(start)
   return () => {
