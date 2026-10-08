@@ -4,11 +4,12 @@
 // canvas, a small auto-hiding control bar (previous / counter / next / slide list / exit) and a
 // screen-reader announcement. present-live's controls come through ./live-slots.ts.
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
-import { fittedSlideRect, slideTitle } from '../slides.ts'
+import { fittedSlideRect, type Insets, slideTitle } from '../slides.ts'
 import { getController } from './controller.ts'
+import { presentInsets, presentTopChromeOf } from './insets.ts'
 import { presentLiveOf } from './live-slots.ts'
 import { canvasSize, PRESENT_ZOOM_RANGE, type Presenter } from './presenter.ts'
 
@@ -83,16 +84,27 @@ function PresentChrome({ ctx, presenter }: { ctx: CanvasFeatureContext; presente
   const live = useValue('lobby-present-live', () => presentLiveOf(canvas).get(), [canvas])
   const liveHere = useValue('lobby-present-live-here', () => live?.presentingLive() ?? false, [live])
   const view = useViewSize(canvas)
+  // K3-4: the band the timer, the hands, the live banner (top) and the control bar (bottom) float in is
+  // kept free, so they never cover the slide (./insets.ts).
+  const insetsKey = useValue('lobby-present-insets', () => {
+    const top = { ...presentTopChromeOf(canvas), banner: live?.banner?.() ?? false }
+    const i = presentInsets(view, top, count > 0)
+    return `${i.top}|${i.right}|${i.bottom}|${i.left}`
+  }, [canvas, live, view.w, view.h, count])
+  const insets = useMemo<Insets>(() => {
+    const [top = 0, right = 0, bottom = 0, left = 0] = insetsKey.split('|').map(Number)
+    return { top, right, bottom, left }
+  }, [insetsKey])
 
   // The window in the surround is where the slide sits once fitted: it stays put while the camera flies
   // between slides (content passes behind it, like a projector screen), so nothing flickers. The camera
   // is set from the same numbers.
-  const hole = slide ? fittedSlideRect(slide.bounds, view, PRESENT_ZOOM_RANGE) : null
+  const hole = slide ? fittedSlideRect(slide.bounds, view, PRESENT_ZOOM_RANGE, insets) : null
 
   // Fit the camera to the slide: animated when the slide changes (unless reduced motion), immediate when
-  // the view (entering fullscreen, window resize) or the frame itself changes.
+  // the view (entering fullscreen, window resize), the insets (a timer starts) or the frame itself changes.
   const fitKey = slide
-    ? `${slide.id}|${slide.bounds.x}|${slide.bounds.y}|${slide.bounds.w}|${slide.bounds.h}|${view.w}x${view.h}`
+    ? `${slide.id}|${slide.bounds.x}|${slide.bounds.y}|${slide.bounds.w}|${slide.bounds.h}|${view.w}x${view.h}|${insetsKey}`
     : ''
   const lastSlideId = useRef<string | null>(null)
   // Runs when fitKey changes (slide id, frame bounds or view size); `slide` is this render's value.
@@ -174,6 +186,7 @@ function PresentChrome({ ctx, presenter }: { ctx: CanvasFeatureContext; presente
       data-testid="present-overlay"
       data-mode={mode}
       data-idle={idle && !gridOpen && count > 0 ? 'true' : 'false'}
+      data-insets={insetsKey}
       aria-roledescription="presentation"
       aria-label="Presentation"
       tabIndex={-1}

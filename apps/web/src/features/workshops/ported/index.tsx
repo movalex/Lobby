@@ -22,10 +22,13 @@ import type {
   LobbyCanvas,
 } from '../../../canvas/api/index.ts'
 import { knownUserKind } from '../../../invite/guest.tsx'
-import { react } from '../../../lib/signals.ts'
+import { atom, react } from '../../../lib/signals.ts'
+import { providePresentChrome } from '../../present-export/ported/insets.ts'
 import { installAudioUnlock } from '../chime.ts'
+import { timerDisplayPhase, timerRemainingMs } from '../countdown.ts'
 import { followSidOf } from '../follow.ts'
 import { privateStoreFor } from '../private-notes/hooks.ts'
+import type { WorkshopSnapshot } from '../store.ts'
 import { provideVoteResultsForExport, shownResults } from '../vote-export.ts'
 import { storeFor } from '../workshop-context.ts'
 import {
@@ -99,6 +102,46 @@ function announcePanelChanges(ctx: Ctx): () => void {
   const offs = [storeFor(ctx).subscribe(check), privateStoreFor(ctx).subscribe(check)]
   return () => {
     for (const off of offs) off()
+  }
+}
+
+/**
+ * What workshops floats over a presentation (WorkshopTopLayer's PresentingTimer and PresentingHands: a
+ * running or paused timer, raised hands), told to present mode (K3-4) as it changes. The timer's phase
+ * moves with the clock, so the end of a running timer is checked when it is due.
+ */
+export function presentChromeNow(
+  snap: Pick<WorkshopSnapshot, 'timer' | 'hands'>,
+  nowMs: number,
+  offsetMs: number,
+): { timer: boolean; hands: boolean } {
+  const phase = timerDisplayPhase(snap.timer, nowMs, offsetMs)
+  return { timer: phase === 'running' || phase === 'paused', hands: snap.hands.length > 0 }
+}
+
+function mountPresentChrome(ctx: Ctx): () => void {
+  const store = storeFor(ctx)
+  const chrome = atom('dr-wk-present-chrome', { timer: false, hands: false })
+  let due: ReturnType<typeof setTimeout> | null = null
+  const update = () => {
+    const snap = store.getSnapshot()
+    const offset = store.serverOffsetMs()
+    const next = presentChromeNow(snap, Date.now(), offset)
+    const cur = chrome.get()
+    if (cur.timer !== next.timer || cur.hands !== next.hands) chrome.set(next)
+    if (due) clearTimeout(due)
+    due = null
+    const left =
+      next.timer && snap.timer?.status === 'running' ? timerRemainingMs(snap.timer, Date.now(), offset) : 0
+    if (left > 0) due = setTimeout(update, left + 50)
+  }
+  update()
+  const offStore = store.subscribe(update)
+  const offProvide = providePresentChrome(ctx.canvas, () => chrome.get())
+  return () => {
+    if (due) clearTimeout(due)
+    offStore()
+    offProvide()
   }
 }
 
@@ -343,6 +386,10 @@ function mountWorkshops(ctx: Ctx) {
   // Exports draw a revealed vote's result badges, as this person sees them (../vote-export.ts, R14):
   // present-export reads them with `voteResultsForExport(canvas)` on this page.
   offs.push(provideVoteResultsForExport(canvas, () => shownResults(store.getSnapshot())))
+
+  // K3-4: while presenting, the live timer and the raised hands float over the top of the slides
+  // (WorkshopTopLayer): present mode fits each slide below them (present-export/ported/insets.ts).
+  offs.push(mountPresentChrome(ctx))
 
   return () => {
     for (const t of timers) clearTimeout(t)

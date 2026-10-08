@@ -13,15 +13,15 @@ import {
   createNote,
   expect,
   expectSaved,
-  item,
   test,
   updateItem,
-  viewport,
   waitForCanvas,
   waitForItem,
 } from '../tests/support/canvas.ts'
 import { WEB_URL } from '../tests/support/ports.ts'
 import type { Users } from '../tests/support/users.ts'
+// K3-4: the slide is fitted in the room the presentation's insets leave (the kit reads them)
+import { expectSlideOnScreen } from './present-kit.ts'
 
 interface Deck {
   one: string
@@ -98,32 +98,6 @@ async function withDeck(a: CanvasSession, others: CanvasSession[]): Promise<Deck
   await expectSaved(a.page)
   for (const s of others) for (const id of Object.values(deck)) await waitForItem(s.page, id)
   return deck
-}
-
-/** The frame is the slide on screen: inside the viewport, centred and fitted (camera animation done). */
-async function expectSlideOnScreen(page: Page, frameId: string) {
-  await expect
-    .poll(
-      async () => {
-        const f = await item(page, frameId)
-        const vp = await viewport(page)
-        if (!f) return false
-        const eps = 1
-        const inside =
-          f.x >= vp.x - eps &&
-          f.y >= vp.y - eps &&
-          f.x + f.width <= vp.x + vp.width + eps &&
-          f.y + f.height <= vp.y + vp.height + eps
-        const centre = Math.hypot(
-          f.x + f.width / 2 - (vp.x + vp.width / 2),
-          f.y + f.height / 2 - (vp.y + vp.height / 2),
-        )
-        const fill = Math.max(f.width / vp.width, f.height / vp.height)
-        return inside && centre < 1 && fill > 0.98
-      },
-      { message: `${frameId} fitted on screen`, timeout: 10_000 },
-    )
-    .toBe(true)
 }
 
 /** The presenter starts presenting and invites everyone. */

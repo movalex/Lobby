@@ -238,19 +238,27 @@ type TopView =
   | { kind: 'presenting'; count: number; names: string[] }
   | { kind: 'following' | 'waiting' | 'reconnecting'; name: string }
 
+/** Reactive: what the banner at the top of the presentation says, or null when it is not drawn. */
+function topViewOf(live: LiveController): TopView | null {
+  const st = live.presenter.state.get()
+  if (!st) return null
+  const p = live.store.presentation.get()
+  if (st.role === 'follower') {
+    const name = st.leader?.name ?? p?.presenter.name ?? 'the presenter'
+    if (!p) return live.store.restartLost.get() ? { kind: 'reconnecting', name } : null
+    return { kind: p.presenterOnline ? 'following' : 'waiting', name }
+  }
+  if (!live.presentingLive.get() || !p) return null
+  return { kind: 'presenting', count: p.followerCount, names: p.followers.map((f) => f.name) }
+}
+
+/** Reactive: the banner at the top of the presentation is drawn (K3-4 fits the slide under it). */
+export function liveBannerShown(live: LiveController | null): boolean {
+  return !!live && topViewOf(live) !== null
+}
+
 function LiveTopBanner({ live }: { live: LiveController }) {
-  const view = useValue<TopView | null>('dr-live-top', () => {
-    const st = live.presenter.state.get()
-    if (!st) return null
-    const p = live.store.presentation.get()
-    if (st.role === 'follower') {
-      const name = st.leader?.name ?? p?.presenter.name ?? 'the presenter'
-      if (!p) return live.store.restartLost.get() ? { kind: 'reconnecting', name } : null
-      return { kind: p.presenterOnline ? 'following' : 'waiting', name }
-    }
-    if (!live.presentingLive.get() || !p) return null
-    return { kind: 'presenting', count: p.followerCount, names: p.followers.map((f) => f.name) }
-  }, [live])
+  const view = useValue<TopView | null>('dr-live-top', () => topViewOf(live), [live])
   const flash = useValue('dr-live-flash', () => live.flash.get(), [live])
   const may = useValue('dr-live-may', () => live.mayPresent(), [live])
   const busy = useValue('dr-live-busy', () => live.busy.get(), [live])

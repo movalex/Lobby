@@ -30,7 +30,15 @@ import type {
   StopInfo,
   StopOptions,
 } from '../present-types.ts'
-import { findStartIndex, reconcileIndex, type Slide, stepIndex } from '../slides.ts'
+import {
+  evenInsets,
+  findStartIndex,
+  fittedSlideRect,
+  type Insets,
+  reconcileIndex,
+  type Slide,
+  stepIndex,
+} from '../slides.ts'
 import { containersOf, type ElementFrameEntry, presentationOrder, slidesOf } from './frames.ts'
 
 export type { FullscreenMode, PresentLeader, PresentRole, StartResult, StopInfo, StopOptions }
@@ -157,22 +165,20 @@ function tryMember<T>(read: () => T, fallback: T): T {
   }
 }
 
-/** The camera that shows scene `bounds` fitted in the middle of a `w`×`h` view with `inset` px around. */
+/**
+ * The camera that shows scene `bounds` fitted in a `w`×`h` view: in the middle of it with `inset` px
+ * around (a number), or in the middle of what the separate top, right, bottom and left insets leave
+ * (K3-4: the presentation's timer at the top and its control bar at the bottom never cover the slide).
+ * The same numbers as slides.ts `fittedSlideRect`, which places the surround's window.
+ */
 export function viewportFor(
   bounds: { x: number; y: number; w: number; h: number },
   view: { w: number; h: number },
-  inset: number,
+  inset: number | Readonly<Insets>,
   zoomRange: { min: number; max: number },
 ): { x: number; y: number; zoom: number } {
-  const w = Math.max(bounds.w, 1e-6)
-  const h = Math.max(bounds.h, 1e-6)
-  const fit = Math.min((view.w - inset * 2) / w, (view.h - inset * 2) / h)
-  const zoom = Math.max(zoomRange.min, Math.min(zoomRange.max, fit))
-  return {
-    x: bounds.x + w / 2 - view.w / zoom / 2,
-    y: bounds.y + h / 2 - view.h / zoom / 2,
-    zoom,
-  }
+  const r = fittedSlideRect(bounds, view, zoomRange, typeof inset === 'number' ? evenInsets(inset) : inset)
+  return { x: bounds.x - r.x / r.zoom, y: bounds.y - r.y / r.zoom, zoom: r.zoom }
 }
 
 /**

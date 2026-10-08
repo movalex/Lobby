@@ -14,6 +14,8 @@ export interface PresentLiveChrome {
   readonly Bar?: ComponentType<{ readonly ctx: CanvasFeatureContext }>
   /** Reactive: this tab presents to everyone (Exit becomes "End", which ends it for everyone). */
   presentingLive(): boolean
+  /** Reactive: `Top` draws its banner now (K3-4: the slide is fitted under it, ./insets.ts). */
+  banner?(): boolean
 }
 
 const slots = new WeakMap<LobbyCanvas, Atom<PresentLiveChrome | null>>()
