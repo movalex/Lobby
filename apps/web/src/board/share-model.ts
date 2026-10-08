@@ -20,12 +20,12 @@ export const VISIBILITY_OPTIONS: readonly {
   {
     value: 'private',
     label: 'Private',
-    describe: () => 'Only the people listed below can open this board.',
+    describe: () => 'Only the people listed above can open this board.',
   },
   {
     value: 'workspace_view',
     label: 'Workspace can view',
-    describe: (ws) => `Everyone in ${ws} can open and view this board. People listed below keep their role.`,
+    describe: (ws) => `Everyone in ${ws} can open and view this board. People listed above keep their role.`,
   },
   {
     value: 'workspace_edit',
@@ -83,14 +83,77 @@ export type InviteTarget =
   | { kind: 'member'; member: WorkspaceMember }
   | { kind: 'already'; member: WorkspaceMember }
   | { kind: 'email'; email: string }
+  /**
+   * K5-5: the start of someone's @handle, name (or a word of it), or of an address whose name part starts
+   * their handle: the field lists them to pick (`matches`, the people still without a direct grant first).
+   */
+  | { kind: 'partial'; text: string; matches: WorkspaceMember[] }
   | { kind: 'unknown'; text: string }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
+/** The most people the invite field's suggestion list shows at once. */
+export const MAX_INVITE_SUGGESTIONS = 8
+
+/** Lower case without accents: "Zoë" matches "zoe". */
+const fold = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
+
+/**
+ * K5-5: whether `typed` starts this person's @handle, their name or one of its words (with or without an "@"
+ * in front: accounts that sign in with Clerk have no handle, and people still type "@chase" for a colleague),
+ * or, for an address being typed ("carol@da"), whether its name part starts their handle.
+ * The members list carries no addresses (only a masked one for people outside), so an address is matched
+ * through the handle.
+ */
+export function memberMatches(typed: string, m: Pick<WorkspaceMember, 'user'>): boolean {
+  const t = fold(typed.trim())
+  if (!t) return false
+  const handle = fold(m.user.handle ?? '')
+  const at = t.indexOf('@')
+  if (at > 0) return handle !== '' && handle.startsWith(t.slice(0, at))
+  const q = t.replace(/^@/, '')
+  if (!q) return false
+  if (handle.startsWith(q)) return true
+  const name = fold(m.user.name)
+  return name.startsWith(q) || name.split(/[\s.-]+/).some((w) => w.startsWith(q))
+}
+
+/**
+ * The people `text` may mean, for the suggestion list: those still without a direct grant on the board
+ * first, then those whose name (not only a word of it) starts with it, then by name; at most
+ * MAX_INVITE_SUGGESTIONS.
+ */
+export function inviteMatches(
+  text: string,
+  workspaceMembers: readonly WorkspaceMember[],
+  boardMembers: readonly Pick<BoardMember, 'user' | 'source'>[],
+): WorkspaceMember[] {
+  const granted = new Set(boardMembers.filter((b) => b.source === 'grant').map((b) => b.user.id))
+  const q = fold(text.trim().replace(/^@/, ''))
+  return workspaceMembers
+    .filter((m) => memberMatches(text, m))
+    .sort(
+      (a, b) =>
+        Number(granted.has(a.user.id)) - Number(granted.has(b.user.id)) ||
+        Number(!fold(a.user.name).startsWith(q)) - Number(!fold(b.user.name).startsWith(q)) ||
+        a.user.name.localeCompare(b.user.name),
+    )
+    .slice(0, MAX_INVITE_SUGGESTIONS)
+}
+
+/** How the hint and a suggestion name someone: "Carol Smith (@carol)". */
+export const inviteWho = (m: Pick<WorkspaceMember, 'user'>): string =>
+  `${m.user.name}${m.user.handle ? ` (@${m.user.handle})` : ''}`
+
+/** What picking someone puts in the field: their @handle, else their name. */
+export const pickedText = (m: Pick<WorkspaceMember, 'user'>): string =>
+  m.user.handle ? `@${m.user.handle}` : m.user.name
+
 /**
  * What the "Invite by @handle or email" field refers to. A handle (with or without @) or an exact
  * name of someone in the workspace is granted directly; an email address or anyone else gets an
- * invite link to send them (Lobby does not send email).
+ * invite link to send them (Lobby does not send email). K5-5: the start of someone's handle or name is
+ * 'partial' (the field lists them to pick); only text that starts no one's is 'unknown'.
  */
 export function parseInviteTarget(
   text: string,
@@ -104,7 +167,18 @@ export function parseInviteTarget(
   const byHandle = workspaceMembers.find((m) => m.user.handle?.toLowerCase() === handle)
   const byName = workspaceMembers.filter((m) => m.user.name.toLowerCase() === t.toLowerCase())
   const member = byHandle ?? (byName.length === 1 ? byName[0] : undefined)
-  if (!member) return { kind: 'unknown', text: t }
+  if (!member) {
+    const matches = inviteMatches(t, workspaceMembers, boardMembers)
+    return matches.length > 0 ? { kind: 'partial', text: t, matches } : { kind: 'unknown', text: t }
+  }
+  return targetFor(member, boardMembers)
+}
+
+/** Someone typed exactly or picked from the list: a direct grant, or already granted. */
+export function targetFor(
+  member: WorkspaceMember,
+  boardMembers: readonly Pick<BoardMember, 'user' | 'source'>[],
+): InviteTarget {
   const granted = boardMembers.some((b) => b.user.id === member.user.id && b.source === 'grant')
   return granted ? { kind: 'already', member } : { kind: 'member', member }
 }
@@ -122,6 +196,8 @@ export type InvitePlan =
   | { kind: 'invalid-email'; message: string }
   /** Neither an address nor someone in the workspace: ask for their address, make nothing. */
   | { kind: 'ask-email' }
+  /** K5-5: the start of someone's name or handle: pick them from the list (nothing is granted yet). */
+  | { kind: 'pick'; matches: WorkspaceMember[] }
   /** The inviter's own address (fixer round 3, §21): nothing is created (the api answers 409). */
   | { kind: 'own-address'; message: string }
 
@@ -153,6 +229,8 @@ export function invitePlan(target: InviteTarget, ownEmail: string | null = null)
       return { kind: 'grant', member: target.member }
     case 'unknown':
       return { kind: 'ask-email' }
+    case 'partial':
+      return { kind: 'pick', matches: target.matches }
     case 'email': {
       const checked = checkInviteEmail(target.email)
       if (!checked.ok) return { kind: 'invalid-email', message: checked.message }
@@ -432,18 +510,43 @@ export function guestsToggleSaying(allowGuests: boolean): string {
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
+/** K5-5: the collapsed section's title (client links, the workshop link, invite by email, one-time links). */
+export const GUESTS_SECTION_TITLE = 'Guests and clients'
+
 /**
- * The summary of the collapsed "More ways to share" (workshop link, invite by email, one-time invite
- * links): what is inside, plus what is open in there, so nothing running hides behind the fold.
+ * The summary of the collapsed "Guests and clients" (a client review link, a workshop link, invite by
+ * email, one-time invite links): what is inside, or what is open in there, so nothing running hides behind
+ * the fold.
  */
-export function moreWaysSummary(open: { workshopLinks: number; unusedInvites: number }): string {
+export function guestsSummary(open: {
+  reviewLinks: number
+  workshopLinks: number
+  unusedInvites: number
+}): string {
   const extras = [
+    open.reviewLinks > 0 ? `${count(open.reviewLinks, 'client link', 'client links')} open` : '',
     open.workshopLinks > 0 ? `${count(open.workshopLinks, 'workshop link', 'workshop links')} open` : '',
     open.unusedInvites > 0 ? count(open.unusedInvites, 'unused invite link', 'unused invite links') : '',
   ].filter(Boolean)
   return extras.length
     ? extras.join(' · ')
-    : 'Workshop link for a live session, invite by email, one-time invite links'
+    : 'Client review link, workshop link for a live session, invite by email, one-time invite links'
+}
+
+/** K5-5: the collapsed "Advanced" section (export and download) says the setting it holds. */
+export const ADVANCED_SECTION_TITLE = 'Advanced'
+
+export function advancedSummary(policy: 'editors' | 'everyone' | 'everyone-including-guests' | null): string {
+  switch (policy) {
+    case 'editors':
+      return 'Export and download: editors and owners only'
+    case 'everyone':
+      return 'Export and download: everyone with an account'
+    case 'everyone-including-guests':
+      return 'Export and download: everyone, guests too'
+    default:
+      return 'Export and download'
+  }
 }
 
 // ---- invite by email ------------------------------------------------------------------------------
@@ -463,6 +566,39 @@ export function linkForEmailHint(canEmail: boolean): string {
   return canEmail
     ? 'This makes a one-time link that only this address can use, for you to send. To have Lobby email the invitation, use “Invite by email” below.'
     : 'Lobby does not send email: you get a one-time invite link that only this address can use, to copy and send them yourself.'
+}
+
+/** The line under "Invite people" while nothing is typed. */
+export const INVITE_IDLE_HINT =
+  'People in the workspace get access right away. For anyone else, enter their email.'
+
+/**
+ * K5-5: the one line under the invite field, for what is typed. It is said once: a submit adds no second
+ * copy of it (for the inviter's own address the alert replaces it: `notice`). '' draws nothing.
+ */
+export function inviteHintText(
+  target: InviteTarget,
+  opts: { workspaceName: string; canEmail: boolean; ownAddress: boolean; notice: string | null },
+): string {
+  switch (target.kind) {
+    case 'empty':
+      return INVITE_IDLE_HINT
+    case 'member':
+      return `${target.member.user.name} is in ${opts.workspaceName}: they get access right away.`
+    case 'already':
+      return `${target.member.user.name} already has access. Change their role under People with access.`
+    case 'email':
+      if (!opts.ownAddress) return linkForEmailHint(opts.canEmail)
+      return opts.notice === OWN_ADDRESS_MESSAGE ? '' : OWN_ADDRESS_MESSAGE
+    case 'partial': {
+      const [only] = target.matches
+      return target.matches.length === 1 && only
+        ? `Pick ${inviteWho(only)} from the list.`
+        : `${target.matches.length} people in ${opts.workspaceName} match. Pick one from the list.`
+    }
+    case 'unknown':
+      return `No one in ${opts.workspaceName} matches. ${ASK_EMAIL_PROMPT}`
+  }
 }
 
 /** The address as the API will read it, or the reason it is not one (shown next to the field). */
@@ -508,7 +644,7 @@ export function emailInviteOutcome(
         ? {
             tone: 'info',
             text: `${result.user.name} already has access to this board (“${ROLE_OPTION_LABEL[result.role]}”).`,
-            detail: 'Nothing changed: an invite never lowers a role. Change it in the list below.',
+            detail: 'Nothing changed: an invite never lowers a role. Change it under People with access.',
             link: null,
           }
         : {

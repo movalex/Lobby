@@ -42,7 +42,7 @@ const TOGGLE_SELECTOR = '[data-testid="share-export-policy-toggle"]'
 /**
  * DANA2-01: the client card says whether the people its links let in may download files and export
  * (off on a board whose owner never chose: the first client link turns it off), with "Change" taking
- * the owner to the Export and download setting further down the dialog.
+ * the owner to the Export and download setting further down the dialog (K5-5: unfolding "Advanced").
  */
 export function ClientExportLine({ boardId }: { boardId: string }) {
   const state = exportStateOf(boardId)
@@ -74,6 +74,9 @@ export function ClientExportLine({ boardId }: { boardId: string }) {
             const root = e.currentTarget.closest('[role="dialog"]') ?? document
             const toggle = root.querySelector<HTMLInputElement>(TOGGLE_SELECTOR)
             if (!toggle) return
+            // K5-5: the setting sits in the folded "Advanced" section: unfold it first
+            const fold = toggle.closest('details')
+            if (fold && !fold.open) fold.open = true
             toggle.scrollIntoView({ block: 'center', behavior: 'smooth' })
             toggle.focus({ preventScroll: true })
           }}

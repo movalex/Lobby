@@ -231,6 +231,16 @@ html[data-dr-presenting] .dr-comments-layer {
   box-shadow:
     0 -2px 8px rgb(27 35 48 / 10%),
     0 -12px 32px rgb(27 35 48 / 18%);
+  /* K5-2: above a soft keyboard that only shrinks the visual viewport (Safari; main.tsx sets the inset,
+     0 everywhere else), so the composer and Post stay in sight while typing. */
+  transform: translateY(calc(-1 * var(--dr-kb-inset, 0px)));
+}
+/* While that keyboard is up, the sheet also keeps below the top of the canvas: layout.ts's own cap
+   (sheetHeight: 420 px, 55 % of the canvas), and what the keyboard leaves. The inline max-height is only
+   overridden while the keyboard is open. */
+html[data-dr-kb] .dr-cpopover--docked {
+  /* biome-ignore lint/complexity/noImportantStyles: overrides layout.ts's inline max-height while the keyboard is up */
+  max-height: max(120px, min(420px, 55%, calc(100% - var(--dr-kb-inset, 0px) - 24px))) !important;
 }
 .dr-cpopover:focus-visible {
   outline: 2px solid var(--dr-focus);

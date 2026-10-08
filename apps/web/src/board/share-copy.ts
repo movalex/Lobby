@@ -37,3 +37,19 @@ export function copyBounded(
       )
   })
 }
+
+// ---- K5-5: what the dialog says when the browser did not copy -------------------------------------------
+// The link is on screen either way. A browser usually refuses a copy that is not right after a press (the
+// link came back from the server a moment later, or the window lost the focus): a press of the Copy button
+// next to it then works, and selecting the link always does.
+
+/** After a copy that did not happen, next to a link with a copy button called `button` (none: no button). */
+export function copyFailedText(button: string | null): string {
+  return button
+    ? `Couldn’t copy automatically. Press ${button}, or select the link and copy it.`
+    : 'Couldn’t copy automatically. Select the link and copy it.'
+}
+
+/** "Copy board link" when the browser did not copy: the link itself, to select. */
+export const boardLinkCopyFailed = (url: string): string =>
+  `Couldn’t copy automatically. Select this link and copy it: ${url}`

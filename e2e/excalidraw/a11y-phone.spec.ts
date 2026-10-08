@@ -4,10 +4,34 @@
 // share); the phone sheet ("Board actions", the `phoneSheet` slot) offers the role's tools, Undo / Redo and
 // Zoom to fit with touch-size targets and gives the keyboard back; a name-only guest joins from a workshop
 // link on a phone and adds a note by tap.
+// K5-1 (wave K): double-tapping a note at a whole-board fit opens its editor at a readable size (the local
+// camera moves to 100 %, the note in the upper third, above where the keyboard opens), pushes nothing for the
+// move, and the camera goes back when the editor closes unless the person moved it meanwhile.
 import type { Page } from '@playwright/test'
-import { expect, items, test, tool } from '../tests/support/canvas.ts'
+import {
+  editingId,
+  expect,
+  expectSaved,
+  itemCenterOnScreen,
+  items,
+  pushedOps,
+  setViewport,
+  TEXT_EDITOR,
+  test,
+  tool,
+  viewport,
+  zoomToFit,
+} from '../tests/support/canvas.ts'
 import { WEB_URL } from '../tests/support/ports.ts'
-import { boardHasFocus, note, openPhoneSession, PHONE, scrollsSideways, waitForA11y } from './a11y-kit.ts'
+import {
+  boardHasFocus,
+  note,
+  openPhoneSession,
+  PHONE,
+  scrollsSideways,
+  waitForA11y,
+  withCanvas,
+} from './a11y-kit.ts'
 
 const box = async (page: Page, testId: string) => {
   const b = await page.getByTestId(testId).first().boundingBox()
@@ -62,7 +86,8 @@ test('at 390 px: no sideways scroll; the rail folds and a panel is a full-width 
     await test.step('Board actions: a 48 px button that opens a full-width sheet with the tools', async () => {
       const open = page.getByTestId('phone-sheet-open')
       await expect(open).toBeVisible()
-      await expect(open).toHaveAccessibleName('Board actions')
+      // K5-3: "All tools", with its own icon (the board menu at the top left is the ≡)
+      await expect(open).toHaveAccessibleName('All tools')
       const o = await box(page, 'phone-sheet-open')
       expect(o.width).toBeGreaterThanOrEqual(44)
       expect(o.height).toBeGreaterThanOrEqual(44)
@@ -71,7 +96,7 @@ test('at 390 px: no sideways scroll; the rail folds and a panel is a full-width 
       await expect(open).toHaveAttribute('aria-expanded', 'true')
       const sheet = page.getByTestId('phone-sheet')
       await expect(sheet).toBeVisible()
-      await expect(page.getByRole('dialog', { name: 'Board actions' })).toBeVisible()
+      await expect(page.getByRole('dialog', { name: 'All tools' })).toBeVisible()
       const s = await box(page, 'phone-sheet')
       expect(Math.round(s.x)).toBe(0)
       expect(Math.round(s.width)).toBe(PHONE.width)
@@ -155,6 +180,142 @@ test('at 390 px: no sideways scroll; the rail folds and a panel is a full-width 
       await expect(page.getByTestId('phone-sheet-open')).toHaveCount(0)
       await expect(page.getByTestId('dock-rail-toggle')).toBeHidden()
       await expect(page.getByTestId('dock-tab-contents')).toBeVisible()
+    })
+  } finally {
+    await a.context.close()
+  }
+})
+
+// ---- K5-1 (wave K): editing a note on a phone zooms the local camera to a readable size -------------------
+
+/** A one-finger double tap at a screen point through the browser's own touch input (CDP). */
+async function doubleTap(page: Page, at: { x: number; y: number }): Promise<void> {
+  const cdp = await page.context().newCDPSession(page)
+  try {
+    for (let i = 0; i < 2; i++) {
+      await cdp.send('Input.dispatchTouchEvent', {
+        type: 'touchStart',
+        touchPoints: [{ x: at.x, y: at.y, id: 1 }],
+      })
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+      await page.waitForTimeout(60)
+    }
+  } finally {
+    await cdp.detach()
+  }
+}
+
+/** The text editor's line of text on screen: its font size times the scale it is drawn at, and its box. */
+const editorFontBox = (page: Page) =>
+  page.locator(TEXT_EDITOR).evaluate((el) => {
+    const cs = getComputedStyle(el)
+    const m = cs.transform.match(/^matrix\(([^,]+),\s*([^,]+)/)
+    const scale = m ? Math.hypot(Number(m[1]), Number(m[2])) : 1
+    const r = el.getBoundingClientRect()
+    return {
+      font: Number.parseFloat(cs.fontSize) * scale,
+      line: Number.parseFloat(cs.lineHeight) * scale,
+      height: r.height,
+    }
+  })
+
+/**
+ * Opens `id`'s editor by a double tap, runs `check` while it is open, closes it with Escape (no typing) and
+ * waits for the camera to settle; returns what was pushed meanwhile.
+ */
+async function editWithoutTyping(page: Page, id: string, check?: () => Promise<void>) {
+  await expectSaved(page)
+  const before = (await pushedOps(page)).length
+  await doubleTap(page, await itemCenterOnScreen(page, id))
+  await expect.poll(() => editingId(page)).toBe(id)
+  await expect(page.locator(TEXT_EDITOR)).toBeVisible()
+  if (check) await check()
+  await page.waitForTimeout(500)
+  await page.keyboard.press('Escape')
+  await expect.poll(() => editingId(page)).toBeNull()
+  await page.waitForTimeout(500)
+  await expectSaved(page)
+  return (await pushedOps(page)).slice(before)
+}
+
+/** The camera is animating (LobbyCanvas.viewport.moving). */
+const cameraMoving = (page: Page) => withCanvas(page, (c) => c.viewport.moving(), null)
+
+/** The note high on a phone screen at 100 %: an edit there moves no camera. */
+const readableView = (n: { x: number; y: number }) => ({ x: n.x - 87, y: n.y - 40, zoom: 1 })
+
+test('K5-1: double-tapping a note at fit zoom on a phone zooms the camera so its words are at least 14 px; the zoom pushes nothing and goes back on close', async ({
+  browser,
+  board,
+  users,
+}, testInfo) => {
+  const a = await openPhoneSession(browser, board, users, 'alice', 'owner', { width: 375, height: 812 })
+  try {
+    const page = a.page
+    // a board wider and taller than the screen: its whole-board fit is well under 1
+    const at = { x: 300, y: 700 }
+    const middle = await note(page, at.x, at.y, 'Middle')
+    await note(page, -400, -300, 'Top left')
+    await note(page, 1100, 1700, 'Far')
+
+    await test.step('control: an edit at 100 % with the note high moves no camera', async () => {
+      // the first edit of a note may write its label's measured layout (the lease holder's fit): out of the
+      // way here, where nothing moves, so the counter below sees only what the zoom could add
+      await setViewport(page, readableView(at))
+      const still = await viewport(page)
+      await editWithoutTyping(page, middle, async () => {
+        const v = await viewport(page)
+        expect(v.zoom).toBe(1)
+        expect(Math.abs(v.x - still.x)).toBeLessThan(0.01)
+        expect(Math.abs(v.y - still.y)).toBeLessThan(0.01)
+      })
+      expect(await editWithoutTyping(page, middle)).toEqual([])
+    })
+
+    await zoomToFit(page)
+    await expect.poll(async () => (await viewport(page)).zoom).toBeLessThan(0.6)
+    const fit = await viewport(page)
+
+    await test.step('at fit zoom the editor opens at a readable size, the note centred in the upper third; nothing is pushed', async () => {
+      const pushed = await editWithoutTyping(page, middle, async () => {
+        // the move animates: wait for where it ends
+        await expect.poll(async () => (await viewport(page)).zoom).toBeGreaterThanOrEqual(1)
+        await expect.poll(() => cameraMoving(page)).toBe(false)
+        const box = await editorFontBox(page)
+        expect(box.font).toBeGreaterThanOrEqual(14)
+        expect(box.height).toBeGreaterThanOrEqual(14)
+        const c = await itemCenterOnScreen(page, middle)
+        const canvas = await page.locator('[data-lobby-board-canvas]').boundingBox()
+        if (!canvas) throw new Error('no canvas')
+        expect(Math.abs(c.x - (canvas.x + canvas.width / 2))).toBeLessThan(2)
+        expect(c.y - canvas.y).toBeLessThan(canvas.height / 3)
+        await page.screenshot({ path: testInfo.outputPath('k5-1-editing-readable.png') })
+      })
+      // the camera went to 100 % and back: a local move, no push
+      expect(pushed).toEqual([])
+    })
+
+    await test.step('closing it put the camera back where it was', async () => {
+      const v = await viewport(page)
+      expect(v.zoom).toBeCloseTo(fit.zoom, 4)
+      expect(Math.abs(v.x - fit.x) * v.zoom).toBeLessThan(2)
+      expect(Math.abs(v.y - fit.y) * v.zoom).toBeLessThan(2)
+    })
+
+    await test.step('a pan while editing: the camera stays where the person put it', async () => {
+      await expectSaved(page)
+      await doubleTap(page, await itemCenterOnScreen(page, middle))
+      await expect.poll(() => editingId(page)).toBe(middle)
+      await expect.poll(async () => (await viewport(page)).zoom).toBeGreaterThanOrEqual(1)
+      await expect.poll(() => cameraMoving(page)).toBe(false)
+      const zoomed = await viewport(page)
+      await setViewport(page, { x: zoomed.x + 60, y: zoomed.y, zoom: zoomed.zoom })
+      await page.keyboard.press('Escape')
+      await expect.poll(() => editingId(page)).toBeNull()
+      await page.waitForTimeout(500)
+      const v = await viewport(page)
+      expect(v.zoom).toBeCloseTo(zoomed.zoom, 4)
+      expect(Math.abs(v.x - (zoomed.x + 60))).toBeLessThan(0.5)
     })
   } finally {
     await a.context.close()

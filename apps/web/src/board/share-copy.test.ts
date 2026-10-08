@@ -2,7 +2,7 @@
 // never answers (an unfocused window, a permission prompt) must settle as "couldn't copy" within the
 // timeout, so the "Creating…" button and the new link do not depend on it.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { COPY_TIMEOUT_MS, copyBounded } from './share-copy.ts'
+import { boardLinkCopyFailed, COPY_TIMEOUT_MS, copyBounded, copyFailedText } from './share-copy.ts'
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -76,5 +76,27 @@ describe('copyBounded', () => {
     stubClipboard(async () => {})
     await copyBounded('x')
     expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('K5-5: what the dialog says when the browser did not copy', () => {
+  it('next to a link with a copy button: press it, or select the link (the old "use Copy" said neither why nor how)', () => {
+    expect(copyFailedText('Copy')).toBe(
+      'Couldn’t copy automatically. Press Copy, or select the link and copy it.',
+    )
+    expect(copyFailedText('“Copy link”')).toBe(
+      'Couldn’t copy automatically. Press “Copy link”, or select the link and copy it.',
+    )
+    expect(copyFailedText('Copy')).not.toContain('use Copy')
+  })
+
+  it('without a button: select the link', () => {
+    expect(copyFailedText(null)).toBe('Couldn’t copy automatically. Select the link and copy it.')
+  })
+
+  it('Copy board link: the link itself, to select', () => {
+    expect(boardLinkCopyFailed('https://lobby.example/b/b-abc')).toBe(
+      'Couldn’t copy automatically. Select this link and copy it: https://lobby.example/b/b-abc',
+    )
   })
 })

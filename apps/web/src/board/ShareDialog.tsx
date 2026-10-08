@@ -5,11 +5,15 @@
 // sees who has access and can ask for more. The API enforces every rule; this only offers what the
 // shared permission rules allow.
 //
-// Order for board owners (DANA-03 / F3, after F13): "Share with a client" first (one review link:
-// comment, 14 days, join with just a name, created and copied by one button), then "Invite people",
-// pending requests, "More ways to share" (collapsed: workshop link, invite by email, one-time invite
-// links), then the settings (workspace access, export) and who has access. Every guest option sits
-// above its Create button and applies to the link that button makes (once a link is open, the box says
+// Order (K5-5, wave K; it opened on the client-link policy text before): "Invite people" first (the field
+// lists the people whose @handle or name starts with what is typed: ../features/sharing/InviteField.tsx),
+// pending requests, "People with access" with the workspace access under it, "Copy board link", then the
+// collapsed "Guests and clients" (the client review link: comment, 14 days, join with just a name, created
+// and copied by one button; the workshop link; invite by email; one-time invite links; its summary names
+// what is open inside, and it opens by itself while a client or workshop link is open), then the collapsed "Advanced"
+// (export and download; its summary says the setting), then the workspace's members. Someone who may only
+// reduce access sees every open link and the export setting without unfolding anything. Every guest option
+// sits above its Create button and applies to the link that button makes (once a link is open, the box says
 // "for the next link"); a link that exists has its own box in its row (G2: PATCH review-links/:id).
 //
 // Wave J (outside markers): people outside Dark Burn / TPG carry an "External" tag with their verified
@@ -47,6 +51,14 @@ import { OutsideConfirm, OutsideStatusTag } from '../features/people/ExternalTag
 import { useBoardOutside } from '../features/people/outside.ts'
 import { announceShareChanged, SHARE_REMOTE_EVENT, sharingApi } from '../features/sharing/api.ts'
 import {
+  CLOSED,
+  InviteHint,
+  InviteInput,
+  SuggestionList,
+  type SuggestState,
+  suggestionKey,
+} from '../features/sharing/InviteField.tsx'
+import {
   canExtend,
   createdSaying,
   daysLabel,
@@ -59,7 +71,7 @@ import {
   WORKSHOP_LINK_HOUR_OPTIONS,
 } from '../features/sharing/model.ts'
 import { ClientExportLine, ExportPolicySection } from '../features/sharing/ported/ExportPolicySection.tsx'
-import { refreshExportPolicy } from '../features/sharing/ported/export-policy.ts'
+import { exportStateOf, refreshExportPolicy } from '../features/sharing/ported/export-policy.ts'
 import { RequestAccess } from '../features/sharing/RequestAccess.tsx'
 import '../features/sharing/sharing.css'
 import { fetchBoardGuests, useIsGuest } from '../invite/guest.tsx'
@@ -75,15 +87,17 @@ import {
   type WorkspaceRole,
 } from '../lib/permissions.ts'
 import { boardPath } from '../lib/routing.ts'
+import { useValue } from '../lib/signals.ts'
 import { useResource } from '../lib/useResource.ts'
 import { Dialog } from '../ui/Dialog.tsx'
-import { copyBounded } from './share-copy.ts'
+import { boardLinkCopyFailed, copyBounded, copyFailedText } from './share-copy.ts'
 import {
   type AccessDetail,
   ADD_MEMBER_ROLES,
   ADDRESS_CHECK_FAILED,
-  ASK_EMAIL_PROMPT,
+  ADVANCED_SECTION_TITLE,
   accessSource,
+  advancedSummary,
   asksBeforeGiving,
   CLIENT_LINK_DEFAULTS,
   checkInviteEmail,
@@ -91,20 +105,22 @@ import {
   type EmailInviteOutcome,
   emailInviteHint,
   emailInviteOutcome,
+  GUESTS_SECTION_TITLE,
   GUESTS_TOGGLE_LABEL,
   grantEditable,
   guestsOptionLabel,
+  guestsSummary,
   guestsToggleSaying,
+  type InviteTarget,
   internalOnlyNote,
+  inviteHintText,
   invitePlan,
   inviteRoleOptions,
   isOwnAddress,
   linkAccessLine,
-  linkForEmailHint,
   listShowsOwnerNote,
   lockedLinkNote,
   memberRoleChoices,
-  moreWaysSummary,
   OWN_ADDRESS_MESSAGE,
   OWNER_NEEDS_CREATOR,
   OWNER_NEEDS_CREATOR_NOTE,
@@ -113,6 +129,7 @@ import {
   outsideWho,
   parseInviteTarget,
   pendingInviteLabel,
+  pickedText,
   pickerOptionText,
   ROLE_OPTION_LABEL,
   raisesAccess,
@@ -122,6 +139,7 @@ import {
   shareableWorkspaceMembers,
   shareCreatorNote,
   sortMembers,
+  targetFor,
   VISIBILITY_OPTIONS,
   visibilityChoices,
   WORKSHOP_LINK_GUESTS_DEFAULT,
@@ -435,6 +453,26 @@ export function ShareDialog({
     return row
   })
   const ownerNote = listShowsOwnerNote(people, canShare)
+  // "Guests and clients": the workshop link section, first in it when a link was running as the dialog opened
+  // (decided once: moving it later would remount it and lose what its Create just said)
+  const [workshopFirst, setWorkshopFirst] = useState<boolean | null>(null)
+  useEffect(() => {
+    if (workshopFirst !== null || !invitations.data) return
+    setWorkshopFirst(workshopLinks.length > 0)
+  }, [workshopFirst, invitations.data, workshopLinks.length])
+  const workshopSection = (
+    <WorkshopLinksSection
+      boardId={board.id}
+      focusAsk={workshopAsk}
+      links={workshopLinks}
+      canCreate={!internalOnly}
+      onChange={() => {
+        invitations.reload()
+        members.reload()
+        changed()
+      }}
+    />
+  )
 
   return (
     <Dialog
@@ -467,26 +505,7 @@ export function ShareDialog({
           </p>
         )}
 
-        {/* DANA-03 / F3: the one obvious path for a client, first. A review link that lets people
-            comment for 14 days and join with just a name; one button creates and copies it. Someone
-            who may only reduce access sees the open links, to revoke them. */}
-        {canManage && (mayCreateLinks || reviewLinks.length > 0) && (
-          <ClientLinkSection
-            boardId={board.id}
-            links={reviewLinks}
-            canCreate={mayCreateLinks}
-            onChange={() => {
-              invitations.reload()
-              members.reload()
-              changed()
-            }}
-          />
-        )}
-
-        {mayCreateLinks && invitations.data && workshopLinks.length === 0 && (
-          <WorkshopShortcut onOpen={() => setWorkshopAsk((n) => n + 1)} />
-        )}
-
+        {/* K5-5: what most people open this dialog for comes first: inviting a colleague. */}
         {canShare && (
           <InvitePeople
             boardId={board.id}
@@ -514,95 +533,7 @@ export function ShareDialog({
           />
         )}
 
-        {/* DANA-03: the other mechanisms, one click away. An open workshop link opens this on the
-            first load (a facilitator's "+1 h" stays at hand); the summary names what is open inside. */}
-        {canShare && (
-          <MoreWaysToShare
-            workshopLinks={invitations.data ? workshopLinks.length : null}
-            unusedInvites={oneTimeInvites.length}
-            openAsk={workshopAsk}
-          >
-            <WorkshopLinksSection
-              boardId={board.id}
-              focusAsk={workshopAsk}
-              links={workshopLinks}
-              canCreate={!internalOnly}
-              onChange={() => {
-                invitations.reload()
-                members.reload()
-                changed()
-              }}
-            />
-            <EmailInvite
-              boardId={board.id}
-              canEmail={canEmail}
-              onResult={(result) => {
-                if (result.mode === 'granted') {
-                  if (result.alreadyHadAccess) return
-                  members.reload()
-                  changed()
-                } else invitations.reload()
-              }}
-            />
-            <InviteLinkSection
-              boardId={board.id}
-              invitations={oneTimeInvites}
-              canCreate
-              ownEmail={access?.email ?? null}
-              onChange={() => invitations.reload()}
-            />
-          </MoreWaysToShare>
-        )}
-
-        {/* Domain access: what is open, for someone who may only revoke it. */}
-        {reduceOnly && workshopLinks.length > 0 && (
-          <WorkshopLinksSection
-            boardId={board.id}
-            links={workshopLinks}
-            canCreate={false}
-            onChange={() => {
-              invitations.reload()
-              members.reload()
-              changed()
-            }}
-          />
-        )}
-        {reduceOnly && oneTimeInvites.length > 0 && (
-          <InviteLinkSection
-            boardId={board.id}
-            invitations={oneTimeInvites}
-            canCreate={false}
-            ownEmail={access?.email ?? null}
-            onChange={() => invitations.reload()}
-          />
-        )}
-
-        <VisibilitySection
-          board={board}
-          workspaceName={workspace.name}
-          canRaise={canShare}
-          editable={canChangeVisibility}
-          linkNote={canManage ? null : linkLine}
-          onChange={async (visibility) => {
-            setError(null)
-            try {
-              onBoardChange(await api.patchBoard(board.id, { visibility }))
-              members.reload()
-              changed()
-            } catch (e) {
-              setError(isApiError(e) ? e.message : 'Access was not changed. Try again.')
-            }
-          }}
-        />
-
-        <ExportPolicySection
-          boardId={board.id}
-          role={effectiveRole}
-          canManage={canManage}
-          canCreateLinks={canShare}
-        />
-
-        <section className="dr-share__section" aria-labelledby="dr-share-people">
+        <section className="dr-share__section" aria-labelledby="dr-share-people" data-testid="share-people">
           <h3 id="dr-share-people" className="dr-share__heading">
             People with access
           </h3>
@@ -653,21 +584,25 @@ export function ShareDialog({
           {!canManage && <p className="dr-share__note">Only board owners can change who has access.</p>}
         </section>
 
-        {/* authz-006: the workspace's owners and admins manage its members (roles, removal) from here */}
-        {canManage && wsMembers.data && (
-          <WorkspaceMembersSection
-            workspace={workspace}
-            members={wsMembers.data}
-            selfUserId={selfUserId}
-            creator={creator}
-            onChanged={(next) => {
-              wsMembers.update(() => next)
-              // a removal takes their grants on this board too; a role change can move their access here
+        {/* Who in the workspace can open it, right under who has access (PRI-07: and an open link, for
+            people who cannot manage access). */}
+        <VisibilitySection
+          board={board}
+          workspaceName={workspace.name}
+          canRaise={canShare}
+          editable={canChangeVisibility}
+          linkNote={canManage ? null : linkLine}
+          onChange={async (visibility) => {
+            setError(null)
+            try {
+              onBoardChange(await api.patchBoard(board.id, { visibility }))
               members.reload()
               changed()
-            }}
-          />
-        )}
+            } catch (e) {
+              setError(isApiError(e) ? e.message : 'Access was not changed. Try again.')
+            }
+          }}
+        />
 
         {!canManage && guest && (
           <p className="dr-share__note" data-testid="share-guest-note">
@@ -698,6 +633,118 @@ export function ShareDialog({
           )}
 
         <CopyBoardLink boardId={board.id} />
+
+        {/* DANA-03 / K5-5: client and workshop links, invite by email and one-time links, one click away.
+            The summary names what is open inside; an open link unfolds it on the first load (a
+            facilitator's "+1 h" stays at hand). */}
+        {canShare && (
+          <GuestsAndClients
+            reviewLinks={invitations.data ? reviewLinks.length : null}
+            workshopLinks={invitations.data ? workshopLinks.length : null}
+            unusedInvites={oneTimeInvites.length}
+            openAsk={workshopAsk}
+          >
+            {/* a running workshop link (a live session) first, nearest the top */}
+            {workshopFirst && workshopSection}
+            {/* DANA-03 / F3: the one obvious path for a client. A review link that lets people comment for
+                14 days and join with just a name; one button creates and copies it. */}
+            {(mayCreateLinks || reviewLinks.length > 0) && (
+              <ClientLinkSection
+                boardId={board.id}
+                links={reviewLinks}
+                canCreate={mayCreateLinks}
+                onChange={() => {
+                  invitations.reload()
+                  members.reload()
+                  changed()
+                }}
+              />
+            )}
+            {mayCreateLinks && invitations.data && workshopLinks.length === 0 && (
+              <WorkshopShortcut onOpen={() => setWorkshopAsk((n) => n + 1)} />
+            )}
+            {!workshopFirst && workshopSection}
+            <EmailInvite
+              boardId={board.id}
+              canEmail={canEmail}
+              onResult={(result) => {
+                if (result.mode === 'granted') {
+                  if (result.alreadyHadAccess) return
+                  members.reload()
+                  changed()
+                } else invitations.reload()
+              }}
+            />
+            <InviteLinkSection
+              boardId={board.id}
+              invitations={oneTimeInvites}
+              canCreate
+              ownEmail={access?.email ?? null}
+              onChange={() => invitations.reload()}
+            />
+          </GuestsAndClients>
+        )}
+
+        {/* Domain access: what is open, for someone who may only revoke it, in view (nothing to unfold). */}
+        {reduceOnly && reviewLinks.length > 0 && (
+          <ClientLinkSection
+            boardId={board.id}
+            links={reviewLinks}
+            canCreate={false}
+            onChange={() => {
+              invitations.reload()
+              members.reload()
+              changed()
+            }}
+          />
+        )}
+        {reduceOnly && workshopLinks.length > 0 && (
+          <WorkshopLinksSection
+            boardId={board.id}
+            links={workshopLinks}
+            canCreate={false}
+            onChange={() => {
+              invitations.reload()
+              members.reload()
+              changed()
+            }}
+          />
+        )}
+        {reduceOnly && oneTimeInvites.length > 0 && (
+          <InviteLinkSection
+            boardId={board.id}
+            invitations={oneTimeInvites}
+            canCreate={false}
+            ownEmail={access?.email ?? null}
+            onChange={() => invitations.reload()}
+          />
+        )}
+
+        {/* K5-5: the export setting, folded; open from the start for someone who may only reduce access. */}
+        <Advanced boardId={board.id} defaultOpen={reduceOnly}>
+          <ExportPolicySection
+            boardId={board.id}
+            role={effectiveRole}
+            canManage={canManage}
+            canCreateLinks={canShare}
+          />
+        </Advanced>
+
+        {/* authz-006: the workspace's owners and admins manage its members (roles, removal) from here */}
+        {canManage && wsMembers.data && (
+          <WorkspaceMembersSection
+            workspace={workspace}
+            members={wsMembers.data}
+            selfUserId={selfUserId}
+            creator={creator}
+            onChanged={(next) => {
+              wsMembers.update(() => next)
+              // a removal takes their grants on this board too; a role change can move their access here
+              members.reload()
+              changed()
+            }}
+          />
+        )}
       </div>
     </Dialog>
   )
@@ -705,7 +752,17 @@ export function ShareDialog({
 
 // ---- invite people -------------------------------------------------------------------------------
 
-function InvitePeople({
+/** K5-5: a touch screen: the dialog does not open on a text field (that would raise the soft keyboard). */
+function coarsePointer(): boolean {
+  try {
+    return typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
+  } catch {
+    return false
+  }
+}
+
+/** Exported for its markup test (features/sharing/invite-field.test.ts); the dialog is its one user. */
+export function InvitePeople({
   boardId,
   workspaceName,
   workspaceMembers,
@@ -716,6 +773,7 @@ function InvitePeople({
   ownEmail,
   onGrant,
   onLinkCreated,
+  initialText = '',
 }: {
   boardId: string
   workspaceName: string
@@ -730,11 +788,19 @@ function InvitePeople({
   /** Resolves false when the grant failed (the dialog shows the server's reason). */
   onGrant(userId: string, role: BoardRole): Promise<boolean>
   onLinkCreated(): void
+  /** What the field starts with (the markup test; the dialog starts empty). */
+  initialText?: string
 }) {
   const inputId = useId()
   const listId = useId()
+  const hintId = useId()
   const roleId = useId()
-  const [text, setText] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
+  const roleRef = useRef<HTMLSelectElement>(null)
+  const [text, setText] = useState(initialText)
+  // K5-5: someone picked from the list (by id: two people may share a name), while the field still says them
+  const [picked, setPicked] = useState<{ id: string; text: string } | null>(null)
+  const [list, setList] = useState<SuggestState>(initialText.trim() ? { open: true, active: 0 } : CLOSED)
   const [role, setRole] = useState<Exclude<BoardRole, 'owner'>>('editor')
   const [roleTouched, setRoleTouched] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -743,10 +809,16 @@ function InvitePeople({
     null,
   )
   const [copied, setCopied] = useState(false)
-  const target = parseInviteTarget(text, workspaceMembers, boardMembers)
+  const pickedMember =
+    picked && picked.text === text ? workspaceMembers.find((m) => m.user.id === picked.id) : null
+  const target: InviteTarget = pickedMember
+    ? targetFor(pickedMember, boardMembers)
+    : parseInviteTarget(text, workspaceMembers, boardMembers)
+  const suggestions = target.kind === 'partial' ? target.matches : []
   const { confirm, box } = useOutsideAsk()
   // Fixer round 3 (§21): said at once, while typing, and nothing is created for it.
   const ownAddress = target.kind === 'email' && isOwnAddress(target.email, ownEmail)
+  const hasAccess = (userId: string) => boardMembers.some((b) => b.user.id === userId)
 
   // Default role (checklist decision 2): edit for workspace members, comment for everyone else.
   useEffect(() => {
@@ -754,25 +826,49 @@ function InvitePeople({
     setRole(target.kind === 'email' || target.kind === 'unknown' ? 'commenter' : 'editor')
   }, [target.kind, roleTouched])
 
+  // K5-5: on a touch screen the dialog does not open on this field, which would raise the keyboard over it
+  // (ui/Dialog.tsx starts on the first field of its body, after this runs: the next frame moves it on).
+  useEffect(() => {
+    if (!coarsePointer()) return
+    const frame = requestAnimationFrame(() => {
+      if (document.activeElement === inputRef.current) roleRef.current?.focus({ preventScroll: true })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [])
+
+  const pick = (m: WorkspaceMember) => {
+    const next = pickedText(m)
+    setText(next)
+    setPicked({ id: m.user.id, text: next })
+    setList(CLOSED)
+    setNotice(null)
+    inputRef.current?.focus()
+  }
+
   const submit = async () => {
     setNotice(null)
     setLink(null)
     setCopied(false)
     // Domain access (D13): an address gets a single-use link that only that verified address can
-    // accept; a name that is neither an address nor someone in the workspace gets nothing.
+    // accept; a name that is neither an address nor someone in the workspace gets nothing. K5-5: what
+    // the hint already says is not said again (the hint is the one line about what is typed).
     const plan = invitePlan(target, ownEmail)
     switch (plan.kind) {
       case 'none':
-        return
       case 'already':
-        setNotice({
-          tone: 'info',
-          text: `${plan.member.user.name} already has access. Change their role below.`,
-        })
-        return
       case 'ask-email':
-        setNotice({ tone: 'info', text: ASK_EMAIL_PROMPT })
+        inputRef.current?.focus()
         return
+      case 'pick': {
+        // one person starts with that: Invite picks them (granting is the next press); several: the list
+        const [only] = plan.matches
+        if (plan.matches.length === 1 && only) pick(only)
+        else {
+          setList({ open: true, active: 0 })
+          inputRef.current?.focus()
+        }
+        return
+      }
       case 'invalid-email':
       case 'own-address':
         setNotice({ tone: 'error', text: plan.message })
@@ -802,6 +898,7 @@ function InvitePeople({
         onLinkCreated()
       }
       setText('')
+      setPicked(null)
       setRoleTouched(false)
     } catch (e) {
       setNotice({ tone: 'error', text: isApiError(e) ? e.message : 'That did not work. Try again.' })
@@ -810,8 +907,15 @@ function InvitePeople({
     }
   }
 
+  const hint = inviteHintText(target, {
+    workspaceName,
+    canEmail,
+    ownAddress,
+    notice: notice?.text ?? null,
+  })
+
   return (
-    <section className="dr-share__section" aria-labelledby={`${inputId}-h`}>
+    <section className="dr-share__section" aria-labelledby={`${inputId}-h`} data-testid="share-invite">
       <h3 id={`${inputId}-h`} className="dr-share__heading">
         Invite people
       </h3>
@@ -825,30 +929,40 @@ function InvitePeople({
         <label htmlFor={inputId} className="dr-sr-only">
           Invite by @handle, name or email
         </label>
-        <input
+        <InviteInput
           id={inputId}
-          className="dr-input dr-sharing__invite-input"
-          data-testid="share-invite-input"
-          list={listId}
-          placeholder="@handle, name or email"
-          autoComplete="off"
+          listId={listId}
+          hintId={hintId}
+          inputRef={inputRef}
           value={text}
-          onChange={(e) => {
-            setText(e.target.value)
+          state={list}
+          count={suggestions.length}
+          onChange={(next) => {
+            setText(next)
             setNotice(null)
+            // the list follows what is typed: open while it starts someone's name or handle
+            setList(next.trim() ? { open: true, active: 0 } : CLOSED)
           }}
+          onKey={(e) => {
+            // an input method composing (Enter confirms its text, not a pick)
+            if (e.nativeEvent.isComposing) return
+            const r = suggestionKey(list, e.key, suggestions.length)
+            if (r.handled) {
+              e.preventDefault()
+              // Escape closes the list, not the dialog
+              e.stopPropagation()
+            }
+            setList(r.state)
+            const m = r.pick === null ? null : suggestions[r.pick]
+            if (m) pick(m)
+          }}
+          onBlur={() => setList((l) => ({ ...l, open: false }))}
         />
-        <datalist id={listId}>
-          {addable.map((m) => (
-            <option key={m.user.id} value={m.user.handle ? `@${m.user.handle}` : m.user.name}>
-              {pickerOptionText(m)}
-            </option>
-          ))}
-        </datalist>
         <label htmlFor={roleId} className="dr-sr-only">
           Role for the person you invite
         </label>
         <select
+          ref={roleRef}
           id={roleId}
           className="dr-input dr-select dr-select--compact"
           data-testid="share-invite-role"
@@ -872,23 +986,19 @@ function InvitePeople({
         >
           {target.kind === 'email' ? 'Create invite link' : 'Invite'}
         </button>
+        <SuggestionList
+          id={listId}
+          members={suggestions}
+          state={list}
+          hasAccess={hasAccess}
+          onPick={pick}
+          onHover={(i) => setList({ open: true, active: i })}
+        />
       </form>
       {box}
-      <p className="dr-share__hint" data-testid="share-invite-hint">
-        {target.kind === 'member' &&
-          `${target.member.user.name} is in ${workspaceName}: they get access right away.`}
-        {/* Fixer round 4 (§22): the own-address sentence is said once: here while typing, then as the
-            alert below after a submit (never both). */}
-        {target.kind === 'email' &&
-          (ownAddress
-            ? notice?.text === OWN_ADDRESS_MESSAGE
-              ? null
-              : OWN_ADDRESS_MESSAGE
-            : linkForEmailHint(canEmail))}
-        {target.kind === 'unknown' && `No one in ${workspaceName} matches. ${ASK_EMAIL_PROMPT}`}
-        {(target.kind === 'empty' || target.kind === 'already') &&
-          'People in the workspace get access right away. For anyone else, enter their email.'}
-      </p>
+      {/* K5-5: one line about what is typed (fixer round 4, §22: the own-address sentence is the alert
+          below after a submit, never both). */}
+      <InviteHint id={hintId} text={hint} />
       {notice && (
         <p
           className={notice.tone === 'error' ? 'dr-share__error' : 'dr-share__hint'}
@@ -918,7 +1028,7 @@ function InvitePeople({
             </button>
           </div>
           <p className="dr-share__hint" role="status" data-testid="share-invite-lock-note">
-            {copied ? 'Copied. ' : ''}
+            {copied ? 'Copied. ' : `${copyFailedText('Copy')} `}
             {lockedLinkNote(link, formatDateTime)}
           </p>
         </div>
@@ -1172,8 +1282,8 @@ function EmailInvite({
           </p>
         )}
         {link && copied === false && (
-          <span className="dr-share__hint">
-            Your browser didn’t allow copying: select the link and copy it.
+          <span className="dr-share__hint" data-testid="share-email-copy-failed">
+            {copyFailedText('“Copy link”')}
           </span>
         )}
       </div>
@@ -1359,7 +1469,7 @@ function VisibilitySection({
   const [pending, setPending] = useState(false)
   const current = VISIBILITY_OPTIONS.find((o) => o.value === board.visibility)
   return (
-    <section className="dr-share__section">
+    <section className="dr-share__section" data-testid="share-visibility">
       <label htmlFor={id} className="dr-share__heading">
         Workspace access
       </label>
@@ -2010,8 +2120,8 @@ function InviteLinkSection({
             </button>
           </div>
           <p className="dr-share__hint" role="status">
-            {copied ? 'Copied to your clipboard. ' : ''}This link is shown only once.{' '}
-            {lockedLinkNote(created, formatDateTime)}{' '}
+            {copied ? 'Copied to your clipboard. ' : `${copyFailedText('Copy')} `}This link is shown only
+            once. {lockedLinkNote(created, formatDateTime)}{' '}
             <button
               type="button"
               className="dr-linkbtn"
@@ -2368,16 +2478,22 @@ function WorkshopShortcut({ onOpen }: { onOpen(): void }) {
 }
 
 /**
- * DANA-03: workshop link, invite by email and one-time invite links, behind one native disclosure
- * (keyboard and screen readers get its expanded state for free). It opens by itself once, on the
- * first load, when a workshop link is running; the person's own toggling wins after that.
+ * DANA-03 / K5-5: "Guests and clients": the client review link, the workshop link, invite by email and
+ * one-time invite links, behind one native disclosure (keyboard and screen readers get its expanded state
+ * for free). Its summary names what is open inside. It opens by itself once, on the first load, when a
+ * client or workshop link is open (a running link is never folded away; a running workshop link comes
+ * first and is scrolled into view); the person's own toggling wins after that. Test ids are the ones of "More ways
+ * to share" (share-more, share-more-toggle, share-more-summary), which it replaces.
  */
-function MoreWaysToShare({
+function GuestsAndClients({
+  reviewLinks,
   workshopLinks,
   unusedInvites,
   openAsk = 0,
   children,
 }: {
+  /** Open client (review) links; null until the invitations have loaded. */
+  reviewLinks: number | null
   /** Open workshop links; null until the invitations have loaded. */
   workshopLinks: number | null
   unusedInvites: number
@@ -2388,11 +2504,20 @@ function MoreWaysToShare({
   const [open, setOpen] = useState(false)
   // Whether the first load has decided the opening state (from then on, only the person toggles it).
   const [settled, setSettled] = useState(false)
+  const ref = useRef<HTMLDetailsElement>(null)
   useEffect(() => {
-    if (settled || workshopLinks === null) return
+    if (settled || workshopLinks === null || reviewLinks === null) return
     setSettled(true)
-    if (workshopLinks > 0) setOpen(true)
-  }, [settled, workshopLinks])
+    // a link that is open is never folded away as the dialog opens (to revoke it, extend it, copy it)
+    if (workshopLinks + reviewLinks === 0) return
+    setOpen(true)
+    if (workshopLinks === 0) return
+    // F13: a facilitator's running workshop link (and its "+1 h") is in view as the dialog opens
+    const frame = requestAnimationFrame(() =>
+      ref.current?.querySelector('[data-testid="workshop-link-row"]')?.scrollIntoView({ block: 'nearest' }),
+    )
+    return () => cancelAnimationFrame(frame)
+  }, [settled, workshopLinks, reviewLinks])
   useEffect(() => {
     if (openAsk <= 0) return
     setSettled(true)
@@ -2400,6 +2525,7 @@ function MoreWaysToShare({
   }, [openAsk])
   return (
     <details
+      ref={ref}
       className="dr-share__section dr-sharing__more"
       data-testid="share-more"
       data-loaded={settled}
@@ -2407,9 +2533,44 @@ function MoreWaysToShare({
       onToggle={(e) => setOpen(e.currentTarget.open)}
     >
       <summary className="dr-sharing__more-summary" data-testid="share-more-toggle">
-        <span className="dr-sharing__more-title">More ways to share</span>
+        <span className="dr-sharing__more-title">{GUESTS_SECTION_TITLE}</span>
         <span className="dr-sharing__more-sub" data-testid="share-more-summary">
-          {moreWaysSummary({ workshopLinks: workshopLinks ?? 0, unusedInvites })}
+          {guestsSummary({ reviewLinks: reviewLinks ?? 0, workshopLinks: workshopLinks ?? 0, unusedInvites })}
+        </span>
+      </summary>
+      {children}
+    </details>
+  )
+}
+
+/**
+ * K5-5: "Advanced": the export and download setting, folded (most visits to this dialog are about people);
+ * its summary says the setting. Open from the start for someone who may only reduce access (every lever
+ * they have in view). The client card's "Change" opens it (ExportPolicySection.tsx ClientExportLine).
+ */
+function Advanced({
+  boardId,
+  defaultOpen,
+  children,
+}: {
+  boardId: string
+  defaultOpen: boolean
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  const state = exportStateOf(boardId)
+  const policy = useValue('dr-share-advanced-policy', () => state.policy.get(), [state])
+  return (
+    <details
+      className="dr-share__section dr-sharing__more"
+      data-testid="share-advanced"
+      open={open}
+      onToggle={(e) => setOpen(e.currentTarget.open)}
+    >
+      <summary className="dr-sharing__more-summary" data-testid="share-advanced-toggle">
+        <span className="dr-sharing__more-title">{ADVANCED_SECTION_TITLE}</span>
+        <span className="dr-sharing__more-sub" data-testid="share-advanced-summary">
+          {advancedSummary(policy)}
         </span>
       </summary>
       {children}
@@ -2628,7 +2789,7 @@ function ReviewLinkRow({
         )}
         {canShare && link.url && copyFailed && (
           <span className="dr-share__hint" data-testid="review-link-copy-failed">
-            Couldn’t copy — use Copy.
+            {copyFailedText('Copy')}
           </span>
         )}
         {/* G2: this link's own guest box. Turning it on lets anyone with the link in with just a name, so
@@ -2698,7 +2859,7 @@ function CopyBoardLink({ boardId }: { boardId: string }) {
   const [copied, setCopied] = useState<boolean | null>(null)
   const url = absoluteUrl(boardPath(boardId))
   return (
-    <footer className="dr-sharing__footer">
+    <footer className="dr-sharing__footer" data-testid="share-copy-section">
       <button
         type="button"
         className="dr-btn"
@@ -2718,7 +2879,7 @@ function CopyBoardLink({ boardId }: { boardId: string }) {
       </button>
       <span className="dr-share__hint" role="status">
         {copied === false
-          ? `Copy this link: ${url}`
+          ? boardLinkCopyFailed(url)
           : 'Only people with access can open it. Anyone else who opens it can request access.'}
       </span>
     </footer>

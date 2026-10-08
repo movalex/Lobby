@@ -1,11 +1,12 @@
 // PORTED from e2e/tests/sharing-polish.spec.ts (the tldraw spec keeps running on the default build) to the
 // Excalidraw board page (owner 2C: the Share dialog opened from this page, the guest link it makes, and the
 // page's own sharing events). Wave 4 demo polish, sharing (DANA-03 / F3 / R15, F4, F9):
-// - "Share with a client" is the first thing in the Share dialog: comment, 14 days, "join with just a
-//   name" ticked ABOVE the one button that creates and copies the link, and the link it makes lets a
-//   client in with just a name. Workshop link, invite by email and one-time links sit under a collapsed
-//   "More ways to share" that opens by itself while a workshop link runs. The workshop hint says
-//   "after signing in" only while guests are not allowed.
+// - K5-5 (wave K): the dialog opens on "Invite people"; "Share with a client" sits in the collapsed
+//   "Guests and clients" (with the workshop link, invite by email and one-time links), which opens by itself
+//   while a client or workshop link is open (a running workshop link first): comment, 14 days, "join with just a name" ticked ABOVE the one button that
+//   creates and copies the link, and the link it makes lets a client in with just a name. The workshop
+//   hint says "after signing in" only while guests are not allowed. Export and download is in the collapsed
+//   "Advanced".
 // - @mentions: someone given access while the board is open can be mentioned without a reload (3c's
 //   comment composer on this page).
 // - The Export dialog's sentence says who may export under the board's current policy (3e's dialog).
@@ -26,7 +27,7 @@ import { emptyCanvasPoint, newCommentPopover, pressCommentTool } from './comment
 
 const top = async (l: Locator) => (await l.boundingBox())?.y ?? Number.NaN
 
-test('share with a client: first in the dialog, guests on above one Create-and-copy button, and the link lets a client in with just a name; everything else is under "More ways to share"', async ({
+test('share with a client: under "Guests and clients" (Invite people leads the dialog), guests on above one Create-and-copy button, and the link lets a client in with just a name', async ({
   board,
   canvasSession,
   browser,
@@ -40,8 +41,26 @@ test('share with a client: first in the dialog, guests on above one Create-and-c
   const dialog = shareDialog(page)
   const client = dialog.getByTestId('share-client')
 
-  await test.step('the client block leads the dialog, in view, with the client defaults', async () => {
-    await expect(dialog.locator('.dr-share > *').first()).toHaveAttribute('data-testid', 'share-client')
+  await test.step('K5-5: Invite people leads the dialog; the client link, the workshop link, invite by email and one-time links are collapsed under "Guests and clients"', async () => {
+    await expect(dialog.locator('.dr-share > *').first()).toHaveAttribute('data-testid', 'share-invite')
+    const more = dialog.getByTestId('share-more')
+    await expect(more).toHaveAttribute('data-loaded', 'true')
+    await expect(more).not.toHaveAttribute('open', /.*/)
+    await expect(dialog.getByTestId('share-more-toggle')).toContainText('Guests and clients')
+    await expect(dialog.getByTestId('share-more-summary')).toHaveText(
+      'Client review link, workshop link for a live session, invite by email, one-time invite links',
+    )
+    for (const id of ['review-link-create', 'workshop-link-create', 'share-email-input', 'invite-create'])
+      await expect(dialog.getByTestId(id)).toBeHidden()
+  })
+
+  await test.step('opened, the client block comes first in it, in view, with the client defaults', async () => {
+    await openMoreWaysToShare(page)
+    await expect(dialog.locator('[data-testid="share-more"] > .dr-share__section').first()).toHaveAttribute(
+      'data-testid',
+      'share-client',
+    )
+    await client.evaluate((el) => el.scrollIntoView({ block: 'center' }))
     await expect(client).toBeInViewport({ ratio: 1 })
     await expect(client.getByRole('heading', { name: 'Share with a client' })).toBeVisible()
     await expect(client.getByTestId('review-link-role')).toHaveValue('commenter')
@@ -57,15 +76,10 @@ test('share with a client: first in the dialog, guests on above one Create-and-c
     await guests.check()
   })
 
-  await test.step('workshop link, invite by email and one-time links are collapsed under "More ways to share"', async () => {
-    const more = dialog.getByTestId('share-more')
-    await expect(more).toHaveAttribute('data-loaded', 'true')
-    await expect(more).not.toHaveAttribute('open', /.*/)
-    await expect(dialog.getByTestId('share-more-summary')).toHaveText(
-      'Workshop link for a live session, invite by email, one-time invite links',
-    )
+  await test.step('the workshop link, invite by email and one-time links are in the same section', async () => {
     for (const id of ['workshop-link-create', 'share-email-input', 'invite-create'])
-      await expect(dialog.getByTestId(id)).toBeHidden()
+      await expect(dialog.getByTestId(id)).toBeAttached()
+    await expect(dialog.getByTestId('workshop-links')).toBeVisible()
   })
 
   let url = ''
@@ -116,13 +130,20 @@ test('share with a client: first in the dialog, guests on above one Create-and-c
     await closeShare(page)
   })
 
-  await test.step('while a workshop link runs, "More ways to share" opens by itself and says so', async () => {
+  await test.step('while links are open, "Guests and clients" opens by itself, says what is open, and shows the running workshop link first', async () => {
     await openShareFromButton(page)
     const more = dialog.getByTestId('share-more')
     await expect(more).toHaveAttribute('data-loaded', 'true')
     await expect(more).toHaveAttribute('open', '')
-    await expect(dialog.getByTestId('share-more-summary')).toHaveText('1 workshop link open')
+    await expect(dialog.getByTestId('share-more-summary')).toHaveText(
+      '1 client link open · 1 workshop link open',
+    )
     await expect(dialog.getByTestId('workshop-link-row')).toBeVisible()
+    await expect(dialog.getByTestId('workshop-link-row')).toBeInViewport()
+    await expect(dialog.locator('[data-testid="share-more"] > .dr-share__section').first()).toHaveAttribute(
+      'data-testid',
+      'workshop-links',
+    )
     // The person's own toggle wins after that.
     await dialog.getByTestId('share-more-toggle').click()
     await expect(more).not.toHaveAttribute('open', /.*/)
@@ -195,7 +216,17 @@ test('F9: the Export dialog says who may export under the current policy', async
   await expect(exportDialog).toHaveCount(0)
 
   await openShareFromButton(page)
+  // K5-5: under the collapsed "Advanced", whose summary says the setting
+  const advanced = shareDialog(page).getByTestId('share-advanced')
+  await expect(advanced).not.toHaveAttribute('open', /.*/)
+  await expect(shareDialog(page).getByTestId('share-advanced-summary')).toHaveText(
+    'Export and download: everyone with an account',
+  )
+  await shareDialog(page).getByTestId('share-advanced-toggle').click()
   await shareDialog(page).getByTestId('share-export-policy-toggle').uncheck()
+  await expect(shareDialog(page).getByTestId('share-advanced-summary')).toHaveText(
+    'Export and download: editors and owners only',
+  )
   await expect(shareDialog(page).getByTestId('share-export-policy')).toHaveAttribute('data-policy', 'editors')
   await closeShare(page)
 
@@ -252,11 +283,13 @@ test('R2-11, R2-08: the retro link path in Share opens the workshop link with gu
   await page.setViewportSize({ width: 1440, height: 900 })
   const startedAt = await page.evaluate(() => Date.now())
 
-  await test.step('R2-11: "Workshop link (guests can edit)" is in view under the client card and opens that link', async () => {
+  await test.step('R2-11: "Workshop link (guests can edit)" sits right under the client card in "Guests and clients" and gets that link ready', async () => {
     await page.getByTestId('share-button').click()
     const dialog = page.getByTestId('share-dialog')
     await expect(dialog).toBeVisible()
+    await openMoreWaysToShare(page)
     const shortcut = dialog.getByTestId('share-workshop-shortcut')
+    await shortcut.scrollIntoViewIfNeeded()
     await expect(shortcut).toBeInViewport()
     await expect(shortcut).toContainText('A client link only lets people comment')
     const [card, line] = await Promise.all([
@@ -264,7 +297,7 @@ test('R2-11, R2-08: the retro link path in Share opens the workshop link with gu
       shortcut.boundingBox(),
     ])
     expect((line?.y ?? 0) - ((card?.y ?? 0) + (card?.height ?? 0))).toBeLessThan(24) // right under it
-    await expect(dialog.getByTestId('workshop-links')).toBeHidden() // behind "More ways to share"
+    await expect(dialog.getByTestId('workshop-link-guests')).not.toBeChecked()
     await shortcut.getByTestId('share-workshop-open').click()
     await expect(dialog.getByTestId('share-more')).toHaveAttribute('open', '')
     await expect(dialog.getByTestId('workshop-link-guests')).toBeChecked()
@@ -296,7 +329,7 @@ test('R2-11, R2-08: the retro link path in Share opens the workshop link with gu
 // second "Create workshop link" stayed on "Creating…" for good although the api answered 201 in 12 ms. The
 // dialog awaited navigator.clipboard.writeText before it showed the new link, and that call can reject (no
 // permission, no focus) or never settle at all. The link and the button must not depend on it.
-test('G2: Create never waits on the clipboard: a write that never answers or is refused still lists the link, frees the button, and says "Couldn’t copy — use Copy"', async ({
+test('G2: Create never waits on the clipboard: a write that never answers or is refused still lists the link, frees the button, and says how to copy it (K5-5 words)', async ({
   board,
   canvasSession,
   users,
@@ -346,8 +379,12 @@ test('G2: Create never waits on the clipboard: a write that never answers or is 
     await expect(create).toHaveText('Create workshop link')
     await expect(create).not.toHaveAttribute('aria-busy', 'true')
     await expect(rows.first().getByTestId('review-link-url')).toHaveValue(/\/invite\/[A-Za-z0-9_-]{43}$/)
-    await expect(rows.first().getByTestId('review-link-copy-failed')).toHaveText('Couldn’t copy — use Copy.')
-    await expect(status).toHaveText('Workshop link created. Couldn’t copy it: use Copy in the list below.')
+    await expect(rows.first().getByTestId('review-link-copy-failed')).toHaveText(
+      'Couldn’t copy automatically. Press Copy, or select the link and copy it.',
+    )
+    await expect(status).toHaveText(
+      'Workshop link created. It couldn’t be copied automatically: press Copy in the list below.',
+    )
     await expect(rows.first().getByTestId('review-link-copy')).toHaveText('Copy')
     expect(await serverLinks()).toHaveLength(1)
   })
@@ -359,7 +396,7 @@ test('G2: Create never waits on the clipboard: a write that never answers or is 
     await expect(create).toHaveText('Create workshop link')
     await expect(create).not.toHaveAttribute('aria-busy', 'true')
     await expect(workshop.getByTestId('review-link-copy-failed')).toHaveCount(2)
-    await expect(status).toContainText('Couldn’t copy it')
+    await expect(status).toContainText('couldn’t be copied automatically')
     expect(await serverLinks()).toHaveLength(2)
   })
 
@@ -386,13 +423,14 @@ test('G2: Create never waits on the clipboard: a write that never answers or is 
   await test.step('the client link behaves the same (it shares the flow)', async () => {
     await closeShare(page)
     await openShareFromButton(page)
+    await openMoreWaysToShare(page)
     const client = dialog().getByTestId('share-client')
     await stubClipboard('never')
     await client.getByTestId('review-link-create').click()
     await expect(client.getByTestId('review-link-row')).toHaveCount(1)
     await expect(client.getByTestId('review-link-create')).toHaveText('Create and copy link')
     await expect(client.getByTestId('review-link-status')).toHaveText(
-      'Client link created. Couldn’t copy it: use Copy in the list below.',
+      'Client link created. It couldn’t be copied automatically: press Copy in the list below.',
     )
     await expect(client.getByTestId('review-link-copy-failed')).toBeVisible()
   })

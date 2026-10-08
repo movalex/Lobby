@@ -49,8 +49,8 @@ export async function createGuestLink(
   await waitForLobbyBoard(page)
   await openShareFromButton(page)
   const dialog = shareDialog(page)
-  // DANA-03: the workshop link sits under "More ways to share".
-  if (kind === 'workshop') await openMoreWaysToShare(page)
+  // K5-5: the client link and the workshop link sit under the collapsed "Guests and clients".
+  await openMoreWaysToShare(page)
   const guests = dialog.getByTestId(kind === 'review' ? 'review-link-guests' : 'workshop-link-guests')
   // On by default for a client (review) link, off for a workshop (edit) link; the label says what it
   // does, and it sits above the Create button it applies to.
