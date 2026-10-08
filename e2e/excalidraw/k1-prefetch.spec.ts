@@ -5,18 +5,22 @@
 import type { Page, Request } from '@playwright/test'
 import { signInContext } from '../tests/support/api.ts'
 import { expect, test } from '../tests/support/fixtures.ts'
-import { WEB_URL } from '../tests/support/ports.ts'
+import { API_URL, WEB_URL } from '../tests/support/ports.ts'
 
 const BOARD_CHUNK = /\/assets\/LobbyBoardPage-[\w-]+\.js$/
 
-/** Every request of the page that left Lobby's origin (none may: plan §2.12, the e2e network assertion). */
+/**
+ * Every request of the page that left Lobby's own origins (none may: plan §2.12, the e2e network assertion): the
+ * page's, and the api's, where the board event stream goes when the api serves it directly (Render's
+ * DRAFTROOM_EVENTS_ORIGIN; E2E_DIRECT_EVENTS=1 in the e2e, wave K integration).
+ */
 function foreignRequests(page: Page) {
-  const origin = new URL(WEB_URL).origin
+  const own = new Set([new URL(WEB_URL).origin, new URL(API_URL).origin])
   const foreign: string[] = []
   page.on('request', (r: Request) => {
     const url = new URL(r.url())
     if (url.protocol === 'data:' || url.protocol === 'blob:') return
-    if (url.origin !== origin) foreign.push(r.url())
+    if (!own.has(url.origin)) foreign.push(r.url())
   })
   return foreign
 }
