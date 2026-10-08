@@ -403,22 +403,17 @@ for (const size of [PHONE_375, { width: 360, height: 740 }, { width: 412, height
     const page = a.page
     try {
       await note(page, 0, 0, 'Targets')
-      // the people chip and the bell arrive a moment after the first paint; the quick actions with the toolbar
+      // the people chip arrives a moment after the first paint; the quick actions with the toolbar. Since K2-5
+      // the bell and the comment tool are in the "⋯" menu on a phone (wave K integration)
       await expect(page.getByTestId('topbar').locator('.dr-people')).toBeVisible()
-      await expect(page.getByTestId('notifications-bell')).toBeVisible()
+      await expect(page.getByTestId('topbar-overflow')).toBeVisible()
+      await expect(page.getByTestId('notifications-bell')).toBeHidden()
       await expect(page.getByTestId('quick-actions.undo')).toBeVisible()
       // the one-time hint goes with a tap on "Got it"
       await page.getByTestId('phone-hand-hint-ok').tap()
       const controls = await drawnSizes(page, TOPBAR_CONTROLS)
       expect(controls.map((c) => c.id)).toEqual(
-        expect.arrayContaining([
-          'board-title',
-          'people-open',
-          'comment-tool',
-          'notifications-bell',
-          'topbar-overflow',
-          'share-button',
-        ]),
+        expect.arrayContaining(['board-title', 'people-open', 'topbar-overflow', 'share-button']),
       )
 
       await test.step('40 x 40 px around each control hits that control (and only it)', async () => {
@@ -473,10 +468,11 @@ test('K5-4: a desktop (a fine pointer) keeps its spacing: no hit areas are added
   const page = a.page
   await page.setViewportSize({ width: 390, height: 844 })
   await expect(page.getByTestId('topbar')).toHaveAttribute('data-width', 'phone')
-  const after = await page
-    .getByTestId('comment-tool')
-    .evaluate((el) => getComputedStyle(el, '::after').content)
-  expect(pseudoText(after)).toBe('')
+  // a control still on the phone bar (since K2-5 the comment tool is in the "⋯" menu, where ::after is its name)
+  for (const id of ['topbar-overflow', 'people-open', 'share-button']) {
+    const after = await page.getByTestId(id).evaluate((el) => getComputedStyle(el, '::after').content)
+    expect(after, id).toBe('none')
+  }
 })
 
 test('K5-4: in the "⋯" menu every item shows its name in words: icon-only ones their accessible name', async ({
@@ -490,7 +486,7 @@ test('K5-4: in the "⋯" menu every item shows its name in words: icon-only ones
     await page.getByTestId('topbar-overflow').tap()
     const panel = page.getByTestId('topbar-overflow-panel')
     await expect(panel).toHaveAttribute('data-open', 'true')
-    await expect(panel.getByTestId('export-button')).toBeVisible()
+    await expect(panel.getByTestId('comment-tool')).toBeVisible()
     const rows = await panel.locator('button').evaluateAll((els) =>
       els
         .filter((el) => el.getBoundingClientRect().width > 0)
@@ -512,10 +508,11 @@ test('K5-4: in the "⋯" menu every item shows its name in words: icon-only ones
       // an item with its own words: they begin its accessible name (WCAG 2.5.3, label in name)
       else expect(r.label.startsWith(r.own), `${r.id}: "${r.own}" in "${r.label}"`).toBe(true)
     }
-    // the two that had none: Export's arrow and the reactions smiley
+    // the icon-only ones in it since K2-5 and K3-3 (wave K integration): the comment tool and the bell (Export
+    // left the bar for the Board menu, the reactions smiley went into Facilitate)
     const by = (id: string) => rows.find((r) => r.id === id)
-    expect(shown(by('export-button') as (typeof rows)[number])).toBe('Export')
-    expect(shown(by('reactions-button') as (typeof rows)[number])).toBe('Reactions and raise hand')
+    expect(shown(by('comment-tool') as (typeof rows)[number])).toBe('Comment tool')
+    expect(shown(by('notifications-bell') as (typeof rows)[number])).toBe('Notifications')
     await panel.screenshot({ path: testInfo.outputPath('k5-4-overflow-labels.png') })
   } finally {
     await a.context.close()
