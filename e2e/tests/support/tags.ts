@@ -164,7 +164,7 @@ export async function forgeTagWrites(page: Page, noteId: string) {
 export async function createGuestLink(page: Page, kind: 'review' | 'workshop'): Promise<string> {
   await openShareFromButton(page)
   const dialog = shareDialog(page)
-  if (kind === 'workshop') await openMoreWaysToShare(page) // DANA-03
+  await openMoreWaysToShare(page) // K5-5: both links are under "Guests and clients"
   await dialog.getByTestId(kind === 'review' ? 'review-link-guests' : 'workshop-link-guests').check()
   if (kind === 'review') await dialog.getByTestId('review-link-role').selectOption('commenter')
   await dialog.getByTestId(kind === 'review' ? 'review-link-create' : 'workshop-link-create').click()

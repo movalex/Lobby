@@ -12,6 +12,7 @@
 import type { Page } from '@playwright/test'
 import { type FakeOpenAi, startFakeOpenAi } from '../tests/support/ai.ts'
 import { test as base, expect, select, zoomToFit } from '../tests/support/canvas.ts'
+import { openMoreWaysToShare } from '../tests/support/dashboard-share.ts'
 import {
   A11Y_AI_ENV,
   A11Y_FAKE_OPENAI_PORT,
@@ -108,6 +109,8 @@ test('A11Y-01 + A11Y-08: Share "Create…" keeps the keyboard and says what it d
   await expect(dialog).toBeVisible()
 
   await test.step('client link: Enter on "Create and copy link"', async () => {
+    // K5-5: the client link is under the collapsed "Guests and clients"
+    await openMoreWaysToShare(a.page)
     const create = dialog.getByTestId('review-link-create')
     await create.focus()
     await a.page.keyboard.press('Enter')
