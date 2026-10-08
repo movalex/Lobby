@@ -86,7 +86,8 @@ test('at 390 px: no sideways scroll; the rail folds and a panel is a full-width 
     await test.step('Board actions: a 48 px button that opens a full-width sheet with the tools', async () => {
       const open = page.getByTestId('phone-sheet-open')
       await expect(open).toBeVisible()
-      await expect(open).toHaveAccessibleName('Board actions')
+      // K5-3: "All tools", with its own icon (the board menu at the top left is the ≡)
+      await expect(open).toHaveAccessibleName('All tools')
       const o = await box(page, 'phone-sheet-open')
       expect(o.width).toBeGreaterThanOrEqual(44)
       expect(o.height).toBeGreaterThanOrEqual(44)
@@ -95,7 +96,7 @@ test('at 390 px: no sideways scroll; the rail folds and a panel is a full-width 
       await expect(open).toHaveAttribute('aria-expanded', 'true')
       const sheet = page.getByTestId('phone-sheet')
       await expect(sheet).toBeVisible()
-      await expect(page.getByRole('dialog', { name: 'Board actions' })).toBeVisible()
+      await expect(page.getByRole('dialog', { name: 'All tools' })).toBeVisible()
       const s = await box(page, 'phone-sheet')
       expect(Math.round(s.x)).toBe(0)
       expect(Math.round(s.width)).toBe(PHONE.width)

@@ -2370,3 +2370,43 @@ html[data-dr-presenting] .dr-board__account {
   bottom: var(--dr-kb-inset, 0px);
   max-height: calc(60vh - var(--dr-kb-inset, 0px));
 }
+
+/* ---- K5-3 (wave K): the phone rests on Hand; the one-time hint (features/a11y/ported/PhoneSheet.tsx) ---- */
+
+/* Under the board's top-left corner (the panel button and the board menu end about 50 px into the canvas),
+   clear of the bottom chrome: the tools, the quick actions, "All tools", the workshop cards and the docked
+   comment sheet. A panel sheet (the dock, z-index 310) covers it. */
+.dr-phone-hint {
+  position: fixed;
+  top: calc(var(--dr-topbar-h) + 60px);
+  left: 12px;
+  right: 12px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 10px 10px 10px 14px;
+  border-radius: 12px;
+  background: var(--dr-inverse);
+  color: var(--dr-on-inverse);
+  box-shadow: var(--dr-shadow-pop);
+  font: 13.5px / 1.4 var(--dr-font);
+  /* a tap on its words reaches the board (and closes it); only "Got it" takes the pointer */
+  pointer-events: none;
+}
+.dr-phone-hint__text {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+.dr-phone-hint .dr-btn {
+  flex: none;
+  pointer-events: auto;
+  min-width: 44px;
+  min-height: 40px;
+}
+html[data-dr-presenting] .dr-phone-hint {
+  display: none;
+}
