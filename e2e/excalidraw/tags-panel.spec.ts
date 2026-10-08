@@ -17,6 +17,7 @@ import { downloadFrom, parseCsv } from '../tests/support/present-export.ts'
 import { capture } from '../tests/support/screenshots.ts'
 import { createGuestLink } from '../tests/support/tags.ts'
 import { settled } from './board-kit.ts'
+import { openBoardExport } from './present-kit.ts'
 import {
   boardList,
   cameraAt,
@@ -246,7 +247,8 @@ test('search by tag and the CSV tags column: the panel’s tag filter lists the 
     (await a.page.getByTestId('search-input').count()) > 0 &&
     (await a.page.getByTestId('search-tag-filter').count()) > 0
   if (search) await a.page.keyboard.press('Escape')
-  const exportDialog = (await a.page.getByTestId('export-button').count()) > 0
+  // K3-3: the export dialog opens from the board menu (Board menu > Export > Export...)
+  const exportDialog = (await a.page.getByTestId('main-menu.button').count()) > 0
   test.skip(
     !search && !exportDialog,
     "needs 3b's search panel with ./SearchTagFilter.tsx (a change request) and 3e's export dialog",
@@ -283,7 +285,7 @@ test('search by tag and the CSV tags column: the panel’s tag filter lists the 
       return
     }
     await canvasCall(a.page, 'select', [])
-    await a.page.getByTestId('export-button').click()
+    await openBoardExport(a.page)
     const dialog = a.page.getByTestId('export-dialog')
     await expect(dialog).toBeVisible()
     const file = await downloadFrom(a.page, () => dialog.getByTestId('export-csv').click())

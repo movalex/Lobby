@@ -15,7 +15,7 @@ import { WEB_URL } from '../tests/support/ports.ts'
 import { downloadFrom, readPng } from '../tests/support/present-export.ts'
 import { FIXTURES_DIR } from '../tests/support/stack.ts'
 import { fileCard, insertFiles } from './media-kit.ts'
-import { expectItems, placeUploadedImage, seedDeck } from './present-kit.ts'
+import { expectItems, openBoardExport, placeUploadedImage, seedDeck } from './present-kit.ts'
 
 const OFF_TEXT = 'The board owner turned off exporting for viewers.'
 const fixture = (name: string) => join(FIXTURES_DIR, name)
@@ -78,10 +78,21 @@ test('export control: the owner turns it off in Share and the viewer loses Expor
     imageId,
   )) as { assetId: string; versionId: string }
   const href = `/files/${file.assetId}/${file.versionId}/original?board=${board}`
-  const exportButton = b.page.getByTestId('export-button')
+  // K3-3: no Export icon in the top bar: Board menu > Export holds Export... while exporting is on, and the
+  // line saying why while it is off
+  const exportMenu = async (page: typeof b.page) => {
+    await page.getByTestId('main-menu.button').click()
+    await page.getByTestId('main-menu-sub.export-button').click()
+    const on = (await page.getByTestId('main-menu.export-dialog').count()) > 0
+    const off = (await page.getByTestId('main-menu.dr-export-off').count()) > 0
+    // the button closes the whole menu (Escape would close the submenu first)
+    await page.getByTestId('main-menu.button').click()
+    await expect(page.getByTestId('main-menu-root')).toHaveCount(0)
+    return on && !off ? 'on' : off && !on ? 'off' : 'unknown'
+  }
 
   await test.step('before: the viewer can export, open the PDF export and copy as PNG (the default)', async () => {
-    await expect(exportButton).not.toHaveAttribute('aria-disabled', 'true')
+    await expect.poll(() => exportMenu(b.page)).toBe('on')
     expect((await b.page.request.get(href)).status()).toBe(200)
     await clickItem(b.page, 'ec-note')
     await b.page.keyboard.press('Control+p')
@@ -98,8 +109,7 @@ test('export control: the owner turns it off in Share and the viewer loses Expor
   })
 
   await test.step('an open Export dialog closes the moment the owner turns exporting off', async () => {
-    await exportButton.click()
-    await expect(b.page.getByTestId('export-dialog')).toBeVisible()
+    await openBoardExport(b.page)
     const section = await openShare(a.page)
     const toggle = section.getByTestId('share-export-policy-toggle')
     await expect(toggle).toBeChecked()
@@ -112,14 +122,15 @@ test('export control: the owner turns it off in Share and the viewer loses Expor
     await closeShare(a.page)
     await expect(b.page.getByTestId('export-dialog')).toHaveCount(0)
     // The owner keeps every entry.
-    await expect(a.page.getByTestId('export-button')).not.toHaveAttribute('aria-disabled', 'true')
+    await expect.poll(() => exportMenu(a.page)).toBe('on')
   })
 
   await test.step('the viewer, without a reload: Export is off and says why; Ctrl+P and Ctrl+Shift+C only say so', async () => {
-    await expect(exportButton).toHaveAttribute('aria-disabled', 'true')
-    await expect(exportButton).toHaveAttribute('title', OFF_TEXT)
-    // aria-disabled (announced as unavailable) but still focusable and clickable, to say why.
-    await exportButton.click({ force: true })
+    await expect.poll(() => exportMenu(b.page)).toBe('off')
+    // the board menu's line says why when chosen
+    await b.page.getByTestId('main-menu.button').click()
+    await b.page.getByTestId('main-menu-sub.export-button').click()
+    await b.page.getByTestId('main-menu.dr-export-off').click()
     await expect(b.page.getByTestId('export-off-notice')).toHaveText(OFF_TEXT)
     await expect(b.page.getByTestId('export-dialog')).toHaveCount(0)
     await clickItem(b.page, 'ec-note')
@@ -155,7 +166,7 @@ test('export control: the owner turns it off in Share and the viewer loses Expor
     await expect(b.page.getByTestId('conn-status')).toHaveAttribute('data-state', 'online', {
       timeout: 30_000,
     })
-    await expect(b.page.getByTestId('export-button')).toHaveAttribute('aria-disabled', 'true')
+    await expect.poll(() => exportMenu(b.page)).toBe('off')
     const section = await openShare(b.page)
     await expect(section.getByTestId('share-export-policy-toggle')).toBeDisabled()
     await expect(section.getByTestId('share-export-policy-toggle')).not.toBeChecked()
@@ -169,10 +180,9 @@ test('export control: the owner turns it off in Share and the viewer loses Expor
     await section.getByTestId('share-export-policy-toggle').check()
     await expect(section).toHaveAttribute('data-policy', 'everyone')
     await closeShare(a.page)
-    await expect(b.page.getByTestId('export-button')).not.toHaveAttribute('aria-disabled', 'true')
+    await expect.poll(() => exportMenu(b.page)).toBe('on')
     expect((await b.page.request.get(href)).status()).toBe(200)
-    await b.page.getByTestId('export-button').click()
-    await expect(b.page.getByTestId('export-dialog')).toBeVisible()
+    await openBoardExport(b.page)
     await b.page.keyboard.press('Escape')
     await expect(b.page.getByTestId('export-dialog')).toHaveCount(0)
     // …and the context menu's Export as, which draws the image from its original (a 2× PNG of it).

@@ -12,6 +12,8 @@
 // (their `needs` marks came off as those ports landed; R2-04's with CR-3F-3 at wave 3b).
 import type { Page } from '@playwright/test'
 import { expect, itemBounds, select, setViewport, test, viewport } from '../tests/support/canvas.ts'
+import { openWorkshopPopover } from '../tests/support/workshops.ts'
+import { openReactionBar } from '../tests/support/workshops-2.ts'
 import { MISSING_FEATURE_MS, note, PHONE, waitForA11y } from './a11y-kit.ts'
 
 interface Box {
@@ -96,7 +98,7 @@ test('R2-04: "Gather everyone" shows a phone the leader view at a readable zoom'
   await a.page.setViewportSize({ width: 1440, height: 900 })
   await b.page.setViewportSize(PHONE)
   await setViewport(a.page, { x: 400, y: 200, zoom: 0.44 })
-  await a.page.getByTestId('timer-pill').click({ timeout: MISSING_FEATURE_MS })
+  await openWorkshopPopover(a.page)
   const pop = a.page.getByTestId('workshop-popover')
   await pop.getByTestId('summon-button').click()
   await expect(b.page.getByTestId('follow-toast')).toBeVisible()
@@ -188,13 +190,11 @@ test('R2-07: an open workshop popover stays above the notices and the canvas cur
   const b = await canvasSession('bob')
   await waitForA11y(a.page)
   await waitForA11y(b.page)
-  await a.page.getByTestId('timer-pill').click({ timeout: MISSING_FEATURE_MS })
-  const pop = a.page.getByTestId('workshop-popover')
-  await expect(pop).toBeVisible()
+  const pop = await openWorkshopPopover(a.page)
   const zIndex = () =>
     a.page.evaluate(() => Number(getComputedStyle(document.querySelector('.dr-topbar') as Element).zIndex))
   expect(await zIndex()).toBeGreaterThan(300)
-  await b.page.getByTestId('reactions-button').click()
+  await openReactionBar(b.page)
   await b.page.getByTestId('hand-toggle').click()
   await expect(pop.getByTestId('hands-queue')).toContainText(b.name)
   await a.page.waitForTimeout(500)
@@ -235,9 +235,7 @@ test('A11Y2-05: People, Reactions and Notifications close when the keyboard leav
   })
 
   await test.step('Reactions: Tab past the bar closes it', async () => {
-    await a.page.getByTestId('reactions-button').click()
-    const bar = a.page.getByTestId('reaction-bar')
-    await expect(bar).toBeVisible()
+    const bar = await openReactionBar(a.page)
     const stops = await bar.locator('button').count()
     for (let i = 0; i < stops + 1; i++) await a.page.keyboard.press('Tab')
     await expect(bar).toHaveCount(0)

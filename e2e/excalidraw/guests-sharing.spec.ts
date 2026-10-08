@@ -199,7 +199,18 @@ test('a workshop guest under "editors": limited like a viewer, no Recently delet
     const policy = await g.request.get(`/api/boards/${board}/export-policy`)
     expect(await policy.json()).toEqual({ exportPolicy: 'editors', canExport: false, policySet: true })
     expect((await g.request.get(`/api/boards/${board}/export`)).status()).toBe(403)
-    await expect(g.getByTestId('export-button')).toHaveAttribute('data-export-off', '')
+    // K3-3: the top bar has no Export icon now: the board menu offers no Export… (its Export ▸ says why
+    // once the board has content) and the PDF shortcut only says why
+    await g.getByTestId('main-menu.button').click()
+    await expect(g.getByTestId('main-menu-root')).toBeVisible()
+    const exportSub = g.getByTestId('main-menu-sub.export-button')
+    if ((await exportSub.count()) > 0) {
+      await exportSub.click()
+      await expect(g.getByTestId('main-menu.dr-export-off')).toBeVisible()
+    }
+    await expect(g.getByTestId('main-menu.export-dialog')).toHaveCount(0)
+    await g.getByTestId('main-menu.button').click()
+    await expect(g.getByTestId('main-menu-root')).toHaveCount(0)
 
     // SEAM-06: no "Recently deleted" in History, and the api refuses it.
     const deleted = await g.request.get(`/api/boards/${board}/deleted`)

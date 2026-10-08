@@ -35,6 +35,7 @@ import { WEB_URL } from '../tests/support/ports.ts'
 import { downloadFrom, readClipboard, readPng } from '../tests/support/present-export.ts'
 import { FIXTURES_DIR } from '../tests/support/stack.ts'
 import { createGuestLink } from '../tests/support/tags.ts'
+import { closeFacilitate, openFacilitate } from '../tests/support/workshops.ts'
 import { settled } from './board-kit.ts'
 import {
   expectLoadedImage,
@@ -47,7 +48,16 @@ import {
   settleCamera,
 } from './media-kit.ts'
 import { buildMap, editingText, focusCanvas, mapView, selectOnly, waitForTyping } from './mindmap-kit.ts'
-import { pngPixels } from './present-kit.ts'
+import { openBoardExport, pngPixels } from './present-kit.ts'
+
+/** K3-3: whether the Facilitate menu has a Timer entry (a guest sees it only while a session runs). */
+async function timerEntry(p: Page): Promise<number> {
+  await openFacilitate(p)
+  const n = await p.getByTestId('timer-pill').count()
+  await closeFacilitate(p)
+  return n
+}
+
 import {
   cameraAt,
   chips,
@@ -123,11 +133,11 @@ test('DANA-11: viewers and guests see a plain "People" button, owners and editor
     await test.step('a guest: "People", and no Timer button, Voting or Private notes tab while nothing runs', async () => {
       await expect(share(g)).toHaveAccessibleName('People')
       await expect(share(g)).not.toHaveClass(/dr-btn--primary/)
-      await expect(g.getByTestId('timer-pill')).toHaveCount(0)
+      expect(await timerEntry(g)).toBe(0)
       await expect(g.getByTestId('dock-tab-voting')).toHaveCount(0)
       await expect(g.getByTestId('dock-tab-private-notes')).toHaveCount(0)
       // the account holders' bar still has them
-      await expect(owner.page.getByTestId('timer-pill')).toBeVisible()
+      expect(await timerEntry(owner.page)).toBe(1)
       await expect(owner.page.getByTestId('dock-tab-voting')).toBeVisible()
     })
 
@@ -137,12 +147,17 @@ test('DANA-11: viewers and guests see a plain "People" button, owners and editor
         durationMs: 120_000,
       })
       expect(start.status(), await start.text()).toBeLessThan(300)
-      await expect(g.getByTestId('timer-pill')).toBeVisible({ timeout: 20_000 })
-      await expect(g.getByTestId('timer-pill')).toHaveAttribute('data-state', 'running')
+      await expect(g.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'running', {
+        timeout: 20_000,
+      })
+      expect(await timerEntry(g)).toBe(1)
       await expect(g.getByTestId('dock-tab-voting')).toHaveCount(0)
       const stop = await alice.fetch('POST', `/api/boards/${board}/timer`, { action: 'stop' })
       expect(stop.status(), await stop.text()).toBeLessThan(300)
-      await expect(g.getByTestId('timer-pill')).toHaveCount(0, { timeout: 20_000 })
+      await expect(g.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'stopped', {
+        timeout: 20_000,
+      })
+      await expect.poll(() => timerEntry(g)).toBe(0)
     })
 
     await test.step('a vote brings the Voting tab (and the Timer button that holds its entry)', async () => {
@@ -154,7 +169,7 @@ test('DANA-11: viewers and guests see a plain "People" button, owners and editor
       })
       expect(vote.status(), await vote.text()).toBe(201)
       await expect(g.getByTestId('dock-tab-voting')).toBeVisible({ timeout: 20_000 })
-      await expect(g.getByTestId('timer-pill')).toBeVisible()
+      await expect.poll(() => timerEntry(g)).toBe(1)
     })
   } finally {
     await guest.context.close()
@@ -380,7 +395,7 @@ test('F9: a GIF keeps its still on the board and plays in an overlay from a chip
 
   await test.step('an export does not include the player or any animation: the PNG is the still', async () => {
     await select(a.page, [gif.id])
-    await a.page.getByTestId('export-button').click()
+    await openBoardExport(a.page)
     const dialog = a.page.getByTestId('export-dialog')
     await expect(dialog).toBeVisible()
     const png = await downloadFrom(a.page, () => dialog.getByTestId('export-png').click())
@@ -542,7 +557,7 @@ test('W5-37: a note in a PNG export or a copy has a soft shadow (a fade, not a h
   if (!b) throw new Error('no bounds')
 
   await test.step('a selection PNG at 1x', async () => {
-    await a.page.getByTestId('export-button').click()
+    await openBoardExport(a.page)
     const dialog = a.page.getByTestId('export-dialog')
     await expect(dialog).toBeVisible()
     await expect(dialog.getByTestId('export-area-selection')).toBeChecked()
@@ -587,7 +602,7 @@ test('W5-37: frame names add no height to a PNG exported from focus mode; the bo
   await createItem(a.page, 'note', { id: 'fn-note', x: 80, y: 80, text: 'In the frame', frameId: 'fn-frame' })
   await settled(a.page, Promise.resolve())
   const exportBoard = async () => {
-    await a.page.getByTestId('export-button').click()
+    await openBoardExport(a.page)
     const dialog = a.page.getByTestId('export-dialog')
     await expect(dialog).toBeVisible()
     await dialog.getByTestId('export-area-board').check()

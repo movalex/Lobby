@@ -24,6 +24,7 @@ import {
 } from '../tests/support/dashboard-share.ts'
 import { WEB_URL } from '../tests/support/ports.ts'
 import { emptyCanvasPoint, newCommentPopover, pressCommentTool } from './comments-kit.ts'
+import { openBoardExport } from './present-kit.ts'
 
 const top = async (l: Locator) => (await l.boundingBox())?.y ?? Number.NaN
 
@@ -208,7 +209,7 @@ test('F9: the Export dialog says who may export under the current policy', async
   const page = a.page
   const exportDialog = page.getByTestId('export-dialog')
 
-  await page.getByTestId('export-button').click()
+  await openBoardExport(page)
   await expect(exportDialog).toContainText(
     'Everyone who can view the board with an account can export it; guests who joined with just a name can’t.',
   )
@@ -230,7 +231,7 @@ test('F9: the Export dialog says who may export under the current policy', async
   await expect(shareDialog(page).getByTestId('share-export-policy')).toHaveAttribute('data-policy', 'editors')
   await closeShare(page)
 
-  await page.getByTestId('export-button').click()
+  await openBoardExport(page)
   await expect(exportDialog).toContainText(
     'Only editors can export this board: viewers, commenters and guests can’t.',
   )

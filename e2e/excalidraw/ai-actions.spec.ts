@@ -56,6 +56,7 @@ import {
   selectIds,
   showFrame,
 } from './ai-kit.ts'
+import { openBoardExport } from './present-kit.ts'
 
 const test = base.extend<object, { openai: FakeOpenAi }>({
   openai: [
@@ -379,7 +380,7 @@ test('DEMO 1:00 → 1:20 → 2:45 → 3:30 (W5-04): a note added with N joins th
   })
 
   await test.step('3:30: PDF page 2 (Brainstorm) holds the theme labels and the ideas', async () => {
-    await a.page.getByTestId('export-button').click()
+    await openBoardExport(a.page)
     const dialog = a.page.getByTestId('export-dialog')
     const pdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
     const texts = await pdfPageTexts(pdf.bytes)

@@ -24,6 +24,7 @@ import {
   waitForA11y,
   withCanvas,
 } from './a11y-kit.ts'
+import { openBoardExport } from './present-kit.ts'
 
 const test = base.extend<object, { openai: FakeOpenAi }>({
   openai: [
@@ -146,7 +147,7 @@ test('A11Y-01: Export "Download PDF" by keyboard: the button has the keyboard ag
   const a = await canvasSession('alice')
   await waitForA11y(a.page)
   await note(a.page, 0, 0, TEXTS[0] as string)
-  await a.page.getByTestId('export-button').click({ timeout: MISSING_FEATURE_MS })
+  await openBoardExport(a.page)
   const exp = a.page.getByTestId('export-dialog')
   await expect(exp).toBeVisible()
   const pdf = exp.getByTestId('export-pdf')
