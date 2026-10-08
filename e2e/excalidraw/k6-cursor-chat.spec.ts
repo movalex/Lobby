@@ -91,7 +91,8 @@ test('cursor chat: A presses /, types and Enter; B sees the bubble at A’s curs
   expect(cursor, 'A’s cursor on B’s page').not.toBeNull()
   expect(Math.abs(place.x - ((cursor?.x ?? 0) + 10))).toBeLessThanOrEqual(1)
   expect(Math.abs(place.y - ((cursor?.y ?? 0) + 30))).toBeLessThanOrEqual(1)
-  await expect(b.page.getByTestId('cursor-chat-live')).toContainText(MESSAGE)
+  // said by the board's polite live region (the a11y announcer's)
+  await expect(b.page.getByTestId('canvas-announcer-tool')).toContainText(MESSAGE)
 
   // it follows A's cursor while it is up
   await a.page.mouse.move(400, 380, { steps: 5 })

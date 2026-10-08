@@ -13,7 +13,8 @@
 // - The bubbles: someone else's message floats at their live cursor (the tab nearest to where they sent it)
 //   when this page shows that cursor (not hidden by a facilitator, not presenting), else nowhere; this
 //   person's own floats where they sent it. One per person; CURSOR_CHAT_SHOW_MS, then a CURSOR_CHAT_FADE_MS
-//   fade. A polite live region reads each message out.
+//   fade. The board's own polite live region (the a11y announcer's, features/a11y) reads each message out:
+//   the board has one set of live regions (e2e a11y-audit rule 6), never one per feature.
 import '../cursor-chat.css'
 import { CURSOR_CHAT_EVENT, CURSOR_CHAT_MAX_CHARS, cursorChatPath } from '@draftroom/contracts'
 import {
@@ -26,6 +27,7 @@ import {
 import type { CanvasFeature, CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { safeColor } from '../../../lib/identity.ts'
 import { type Atom, atom, useValue } from '../../../lib/signals.ts'
+import { announcerFor } from '../../a11y/ported/announcer.ts'
 import {
   addBubble,
   BUBBLE_OFFSET,
@@ -54,8 +56,6 @@ interface Composer {
 export class CursorChatController {
   readonly bubbles: Atom<readonly Bubble[]> = atom('cursor-chat.bubbles', [] as readonly Bubble[])
   readonly composer: Atom<Composer | null> = atom('cursor-chat.composer', null as Composer | null)
-  /** What the live region last said ("Alice: over here"). */
-  readonly announced: Atom<string> = atom('cursor-chat.announced', '')
   private readonly throttle = new ChatThrottle()
   private timer: ReturnType<typeof setTimeout> | null = null
   private opened = 0
@@ -164,7 +164,8 @@ export class CursorChatController {
       since: Date.now(),
       color: safeColor(peer?.color, m.userId),
     })
-    this.announced.set(`${m.name}: ${m.text}`)
+    // said politely, so it never cuts off what the selection says
+    announcerFor(ctx.canvas).sayPolitely(`${m.name} says: ${m.text}`)
   }
 
   private add(b: Bubble): void {
@@ -236,7 +237,6 @@ function BubblesLayer({ ctx }: { ctx: Ctx }) {
   const c = cursorChatOf(ctx)
   const version = useRegistryVersion(ctx)
   const list = useValue('cursor-chat-list', () => c?.bubbles.get() ?? [], [c])
-  const announced = useValue('cursor-chat-announced', () => c?.announced.get() ?? '', [c])
   const placed = useValue('cursor-chat-placed', () => {
     const out: { b: Bubble; x: number; y: number }[] = []
     for (const b of list) {
@@ -271,9 +271,6 @@ function BubblesLayer({ ctx }: { ctx: Ctx }) {
           {b.text}
         </div>
       ))}
-      <div className="dr-sr-only" role="status" aria-live="polite" data-testid="cursor-chat-live">
-        {announced}
-      </div>
     </>
   )
 }
