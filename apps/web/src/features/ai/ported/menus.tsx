@@ -16,6 +16,7 @@
 import { memo, useRef, useSyncExternalStore } from 'react'
 import {
   type CanvasFeatureContext,
+  type CommandSpec,
   type LobbyCanvas,
   type MenuEntrySpec,
   type MenuTarget,
@@ -24,9 +25,18 @@ import {
 } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { SparkIcon, Spinner } from '../icons.tsx'
-import { openAiMenu, runAi, setBoardAi, setWorkspaceAiDefault } from './actions.ts'
+import {
+  anchorAtScene,
+  ensureAiStatus,
+  expandTopic,
+  openAiMenu,
+  runAi,
+  setBoardAi,
+  setWorkspaceAiDefault,
+} from './actions.ts'
+import { canBuildWithAi } from './gate.ts'
 import { type AiMenuState, aiJob, aiMenu, aiStatus, getAiCtx, setAiCtx } from './runtime.ts'
-import { type AiTarget, selectionTarget, targetAt } from './target.ts'
+import { type AiTarget, NONE, selectionTarget, targetAt, viewTarget } from './target.ts'
 
 /** A scene point as the popover's anchor (px from the canvas container's top-left). */
 function anchorAtPoint(canvas: LobbyCanvas, scene: { x: number; y: number }): AiMenuState['at'] {
@@ -41,6 +51,10 @@ function anchorAtElement(canvas: LobbyCanvas, el: HTMLElement): AiMenuState['at'
 }
 
 const enabledOn = (canvas: LobbyCanvas) => aiStatus(canvas).get()?.enabled === true
+/** Expand with AI and Mind map from a prompt: AI on, may add to the board, budget left (K7). */
+const buildOn = (canvas: LobbyCanvas) => canBuildWithAi(aiStatus(canvas).get(), canvas.readOnly())
+/** The one mind-map topic that is selected, if that is the selection. */
+const topicOf = (canvas: LobbyCanvas): string | null => selectionTarget(canvas)?.topicId ?? null
 
 /** The selection bar's "AI" button. */
 export const AiBarButton = memo(function AiBarButton() {
@@ -86,7 +100,14 @@ export const SELECTION_BAR: readonly SelectionBarItemSpec[] = [
   {
     id: 'ai',
     order: 80,
-    visible: (ctx) => enabledOn(ctx.canvas),
+    // The bar asks `visible` while it renders, not when the status arrives. The first status read waits for
+    // an idle moment after the board opens (K7-4), so a selection made before the answer must still get the
+    // button when it comes: until the status is known the item is in the bar (for people who can edit, whose
+    // bar has other buttons) and draws nothing; once it is known, only a yes keeps it.
+    visible: (ctx) => {
+      const status = aiStatus(ctx.canvas).get()
+      return status === null ? !ctx.canvas.readOnly() : status.enabled
+    },
     component: () => <AiBarButton />,
   },
 ]
@@ -111,6 +132,16 @@ const run = (ctx: CanvasFeatureContext, t: MenuTarget, action: 'summarize' | 'th
 }
 
 export const CONTEXT_MENU: readonly MenuEntrySpec[] = [
+  {
+    // K7-1: one click from a topic's context menu
+    id: 'ai.expand',
+    group: 'ai',
+    order: 5,
+    label: 'Expand with AI',
+    command: 'ai.expand',
+    visible: (ctx) => buildOn(ctx.canvas) && topicOf(ctx.canvas) !== null,
+    disabled: (ctx) => aiJob(ctx.canvas).get() !== null || (selectionTarget(ctx.canvas)?.texts ?? 0) === 0,
+  },
   {
     id: 'ai',
     group: 'ai',
@@ -167,7 +198,68 @@ export const CONTEXT_MENU: readonly MenuEntrySpec[] = [
           later(() => openAiMenu(ctx.canvas, where, target, 'ideas'))
         },
       },
+      {
+        id: 'ai.mindmap',
+        group: 'ai',
+        order: 5,
+        label: 'Mind map from a prompt…',
+        visible: (ctx) => buildOn(ctx.canvas),
+        run: (ctx, t) => {
+          setAiCtx(ctx)
+          const where = at(ctx, t)
+          later(() => openAiMenu(ctx.canvas, where, NONE, 'mindmap'))
+        },
+      },
     ],
+  },
+]
+
+// ---- the commands (K7) -------------------------------------------------------------------------------------
+//
+// By id, for other features' buttons (the empty board's "Ideas with AI") and the menus above. Each makes sure
+// the status is known first (its first read waits for an idle moment, K7-4), then does nothing unless AI is
+// on and may add to the board.
+
+/** The middle of the view, where a popover with no selection points. */
+const viewCentre = (ctx: CanvasFeatureContext): AiMenuState['at'] => {
+  const v = ctx.canvas.viewport.get()
+  return anchorAtScene(ctx.canvas, { x: v.x + v.width / 2, y: v.y + v.height / 2 })
+}
+
+export const COMMANDS: readonly CommandSpec[] = [
+  {
+    id: 'ai.expand',
+    label: 'Expand with AI',
+    enabled: (ctx) => buildOn(ctx.canvas) && topicOf(ctx.canvas) !== null && aiJob(ctx.canvas).get() === null,
+    run: async (ctx) => {
+      setAiCtx(ctx)
+      await ensureAiStatus(ctx.canvas)
+      const topic = topicOf(ctx.canvas)
+      if (topic) expandTopic(ctx.canvas, topic)
+    },
+  },
+  {
+    // "Ideas with AI": the prompt for sticky notes next to the selection, or in the middle of the view
+    id: 'ai.ideas',
+    label: 'Ideas with AI',
+    enabled: (ctx) => insertOn(ctx) && aiJob(ctx.canvas).get() === null,
+    run: async (ctx) => {
+      setAiCtx(ctx)
+      await ensureAiStatus(ctx.canvas)
+      if (!insertOn(ctx) || aiJob(ctx.canvas).get()) return
+      openAiMenu(ctx.canvas, viewCentre(ctx), viewTarget(ctx.canvas), 'ideas')
+    },
+  },
+  {
+    id: 'ai.mindmap',
+    label: 'Mind map from a prompt',
+    enabled: (ctx) => buildOn(ctx.canvas) && aiJob(ctx.canvas).get() === null,
+    run: async (ctx) => {
+      setAiCtx(ctx)
+      await ensureAiStatus(ctx.canvas)
+      if (!buildOn(ctx.canvas) || aiJob(ctx.canvas).get()) return
+      openAiMenu(ctx.canvas, viewCentre(ctx), NONE, 'mindmap')
+    },
   },
 ]
 

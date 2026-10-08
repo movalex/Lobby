@@ -6,6 +6,7 @@
 import type { AiAction, AiStatus } from '@draftroom/contracts'
 import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { type Atom, atom } from '../../../lib/signals.ts'
+import type { ShimmerPlan } from './shimmer.ts'
 import type { AiTarget } from './target.ts'
 
 /** The same labels as ../runtime.ts (a tldraw module until wave 4). */
@@ -23,6 +24,13 @@ export const BUSY_LABELS: Record<AiAction, string> = {
   ideas: 'Generating ideas…',
 }
 
+/** The busy pill's words: the action's, or what the ideas are for. */
+export function busyLabel(job: { action: AiAction; into?: AiInto }): string {
+  if (job.into?.kind === 'expand') return 'Expanding the topic…'
+  if (job.into?.kind === 'mindmap') return 'Drafting your mind map…'
+  return BUSY_LABELS[job.action]
+}
+
 function perCanvas<T>(make: (canvas: LobbyCanvas) => T) {
   const map = new WeakMap<LobbyCanvas, T>()
   return (canvas: LobbyCanvas): T => {
@@ -35,6 +43,13 @@ function perCanvas<T>(make: (canvas: LobbyCanvas) => T) {
   }
 }
 
+/**
+ * Where the answer of an 'ideas' request goes besides sticky notes (K7): new sub-topics under a mind-map
+ * topic ("Expand with AI"), or the first ring of a new mind map whose centre is the prompt ("Mind map from
+ * a prompt"). The api only ever sees the existing 'ideas' action; this is what the web does with the answer.
+ */
+export type AiInto = { kind: 'expand'; topicId: string } | { kind: 'mindmap' }
+
 /** A request the person asked for (it may still wait for the privacy notice). */
 export interface AiRequest {
   action: AiAction
@@ -42,13 +57,15 @@ export interface AiRequest {
   mode?: 'insert' | 'panel'
   prompt?: string
   count?: number
+  /** ideas only: build a mind map with the answer instead of sticky notes. */
+  into?: AiInto
 }
 
 export interface AiMenuState {
   /** Where the popover points, in px from the canvas container's top-left. */
   at: { x: number; top: number; bottom: number }
   /** 'regroup': asked before grouping notes that already sit in groups (DANA-10). */
-  view: 'menu' | 'ideas' | 'notice' | 'regroup'
+  view: 'menu' | 'ideas' | 'mindmap' | 'notice' | 'regroup'
   target: AiTarget
   /** The request waiting for the notice (view 'notice'). */
   pending: AiRequest | null
@@ -57,6 +74,10 @@ export interface AiMenuState {
 export interface AiJob {
   id: number
   action: AiAction
+  /** Where an 'ideas' answer goes when it is not sticky notes (K7). */
+  into?: AiInto
+  /** What the placeholder shows where the result will land (scene space, K7-4); empty: nowhere on the board. */
+  landing: ShimmerPlan | null
   label: string
   abort: AbortController
   /** What had the keyboard when the popover that asked for it opened (W5-47); null from a menu. */
@@ -73,6 +94,12 @@ export interface AiPanelState {
   opener: HTMLElement | null
 }
 
+/** What the result just wrote, for the brief highlight (overlay only, never stored): ids in scene space. */
+export interface AiFlashState {
+  n: number
+  ids: string[]
+}
+
 /** Null until the api answered (the feature stays hidden until then). */
 export const aiStatus = perCanvas<Atom<AiStatus | null>>(() => atom<AiStatus | null>('lobby-ai-status', null))
 export const aiMenu = perCanvas<Atom<AiMenuState | null>>(() =>
@@ -81,6 +108,9 @@ export const aiMenu = perCanvas<Atom<AiMenuState | null>>(() =>
 export const aiJob = perCanvas<Atom<AiJob | null>>(() => atom<AiJob | null>('lobby-ai-job', null))
 export const aiPanel = perCanvas<Atom<AiPanelState | null>>(() =>
   atom<AiPanelState | null>('lobby-ai-panel', null),
+)
+export const aiFlash = perCanvas<Atom<AiFlashState | null>>(() =>
+  atom<AiFlashState | null>('lobby-ai-flash', null),
 )
 
 /**

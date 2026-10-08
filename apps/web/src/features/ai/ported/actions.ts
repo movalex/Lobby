@@ -12,11 +12,28 @@
 import { AI_ERROR_CODES, AiResult, AiSettings, AiStatus } from '@draftroom/contracts'
 import { isApiError } from '../../../api/client.ts'
 import type { LobbyCanvas } from '../../../canvas/api/index.ts'
-import { actionItemText, ideasHeading, plural, themesDone } from '../copy.ts'
+import { mindmapOf } from '../../mindmap/ported/bridge.ts'
+import { addChildTopics, mindmapFromIdeas } from '../../mindmap/ported/commands.ts'
+import {
+  actionItemText,
+  EXPAND_EMPTY,
+  EXPAND_GONE,
+  expandDone,
+  ideasHeading,
+  MINDMAP_FAILED,
+  mindmapDone,
+  plural,
+  themesDone,
+} from '../copy.ts'
 import { applyNotes, applySummary, applyThemes } from './apply.ts'
+import { EXPAND_COUNT, expandPlan } from './expand.ts'
+import { canBuildWithAi } from './gate.ts'
+import { deferUntilIdle, type IdleEnv } from './idle.ts'
+import { landingFor } from './landing.ts'
 import {
   type AiMenuState,
   type AiRequest,
+  aiFlash,
   aiJob,
   aiMenu,
   aiOpener,
@@ -24,7 +41,7 @@ import {
   aiStatus,
   getAiCtx,
 } from './runtime.ts'
-import { type AiTarget, refOf } from './target.ts'
+import { type AiTarget, isLive, NONE, refOf } from './target.ts'
 
 const enc = encodeURIComponent
 const NOTICE_KEY = 'dr-ai'
@@ -32,6 +49,28 @@ let jobSeq = 0
 
 /** The latest status question per canvas: only its answer may set what the web shows. */
 const statusAsks = new WeakMap<LobbyCanvas, number>()
+
+/** Whether the status has been asked for on this canvas (the first read waits for an idle moment, K7-4). */
+export const hasAskedAiStatus = (canvas: LobbyCanvas): boolean => statusAsks.has(canvas)
+
+/**
+ * The overlay's read of the status (K7-4). The first one is not part of the burst of a board opening: it waits
+ * for an idle moment (the overlay only mounts once the board is live). Later ones (a change of role or board
+ * status) go at once, as does every opening of the AI menu (openAiMenu). Returns a cancel.
+ */
+export function askAiStatus(canvas: LobbyCanvas, signal?: AbortSignal, env?: IdleEnv): () => void {
+  const ask = () => void refreshAiStatus(canvas, signal)
+  if (hasAskedAiStatus(canvas)) {
+    ask()
+    return () => undefined
+  }
+  return deferUntilIdle(ask, env)
+}
+
+/** Makes sure the status is known (an AI command run before the first read asked for it). */
+export async function ensureAiStatus(canvas: LobbyCanvas): Promise<void> {
+  if (aiStatus(canvas).get() === null) await refreshAiStatus(canvas)
+}
 
 /**
  * Asks the api what this person may do with AI on this board (hidden until it answers yes). Answers
@@ -118,6 +157,8 @@ export async function runAi(
   const status = aiStatus(canvas).get()
   if (!ctx || !status?.enabled) return
   if (aiJob(canvas).get()) return
+  // what builds onto the board is offered only to people who may (AI on, can add, budget left)
+  if (req.into && !canBuildWithAi(status, canvas.readOnly())) return
   if (!status.noticeAccepted && !opts.acknowledged) {
     const at = opts.at ?? aiMenu(canvas).get()?.at
     if (at) aiMenu(canvas).set({ at, target, view: 'notice', pending: req })
@@ -135,7 +176,16 @@ export async function runAi(
   // W5-47: asked from the popover, the keyboard goes back to what opened it (taken before the popover
   // closes, which forgets it); asked from a menu, to the board.
   const opener = aiMenu(canvas).get() ? aiOpener.get(canvas) : null
-  const job = { id: ++jobSeq, action: req.action, label: target.label, abort: new AbortController(), opener }
+  const job = {
+    id: ++jobSeq,
+    action: req.action,
+    ...(req.into ? { into: req.into } : {}),
+    // K7-4: a placeholder where the result will land, for the wait (read-only, never written)
+    landing: landingFor(canvas, req, target),
+    label: target.label,
+    abort: new AbortController(),
+    opener,
+  }
   aiJob(canvas).set(job)
   aiMenu(canvas).set(null)
   // Back to the board, so Ctrl+Z, Delete and the arrows work on the result straight away.
@@ -181,6 +231,129 @@ export async function runAi(
   const now = aiStatus(canvas).get() ?? status
   aiStatus(canvas).set({ ...now, noticeAccepted: true, budget: result.budget ?? now.budget })
   applyResult(canvas, result, target, req, job.opener)
+}
+
+// ---- the brief highlight of a result (K7-4) ---------------------------------------------------------
+
+/** How long the new elements are highlighted. */
+export const FLASH_MS = 1600
+let flashSeq = 0
+
+/**
+ * Highlights what a result just wrote for a moment. Overlay only: the ids go to a signal the overlay draws
+ * boxes from, nothing is written to the board, and the overlay draws nothing under reduced motion.
+ */
+export function flash(canvas: LobbyCanvas, ids: readonly string[]) {
+  const mine = ++flashSeq
+  aiFlash(canvas).set(ids.length ? { n: mine, ids: [...ids] } : null)
+  if (!ids.length) return
+  setTimeout(() => {
+    if (aiFlash(canvas).get()?.n === mine) aiFlash(canvas).set(null)
+  }, FLASH_MS)
+}
+
+// ---- mind maps (K7) ----------------------------------------------------------------------------------
+
+/** A scene point as the popover's anchor (px from the canvas container's top-left). */
+export function anchorAtScene(canvas: LobbyCanvas, scene: { x: number; y: number }): AiMenuState['at'] {
+  const v = canvas.sceneToOverlay(scene)
+  return { x: v.x, top: v.y, bottom: v.y }
+}
+
+const noticeOf = (canvas: LobbyCanvas, text: string, tone?: 'error') =>
+  getAiCtx(canvas)?.notify({
+    key: NOTICE_KEY,
+    text,
+    ...(tone ? { tone } : {}),
+    testId: tone ? 'ai-error' : 'ai-done',
+    timeoutMs: 6000,
+  })
+
+/**
+ * "Expand with AI": asks the existing 'ideas' action for sub-topics of mind-map topic `topicId` (its words as
+ * the prompt, its path and children as the context) and adds them under it in one undo step. The notice
+ * comes first, once per workspace, as for every AI action.
+ */
+export function expandTopic(canvas: LobbyCanvas, topicId: string, at?: AiMenuState['at']): void {
+  const m = mindmapOf(canvas)
+  if (!getAiCtx(canvas) || !m) return
+  if (!canBuildWithAi(aiStatus(canvas).get(), canvas.readOnly())) return
+  const plan = expandPlan(m.rt, topicId)
+  if ('problem' in plan) {
+    noticeOf(canvas, plan.problem === 'empty' ? EXPAND_EMPTY : EXPAND_GONE, 'error')
+    return
+  }
+  const b = canvas.bounds(topicId)
+  const target: AiTarget = {
+    kind: 'selection',
+    ids: plan.context,
+    label: plan.label,
+    notes: 0,
+    prompts: 0,
+    groups: [],
+    texts: plan.context.length,
+    bounds: b,
+    topicId,
+  }
+  const where = at ?? (b ? anchorAtScene(canvas, { x: b.x + b.width / 2, y: b.y + b.height }) : undefined)
+  void runAi(
+    canvas,
+    { action: 'ideas', prompt: plan.prompt, count: EXPAND_COUNT, into: { kind: 'expand', topicId } },
+    target,
+    where ? { at: where } : {},
+  )
+}
+
+/**
+ * "Mind map from a prompt": the prompt is sent to the existing 'ideas' action (nothing else from the board)
+ * and comes back as a new mind map: the prompt as the central topic, the ideas as the first ring.
+ */
+export function mindmapFromPrompt(
+  canvas: LobbyCanvas,
+  prompt: string,
+  count: number,
+  at?: AiMenuState['at'],
+): Promise<void> {
+  const target: AiTarget = { ...NONE, kind: 'none', label: 'nothing selected', bounds: null }
+  return runAi(
+    canvas,
+    { action: 'ideas', prompt, count, into: { kind: 'mindmap' } },
+    target,
+    at ? { at } : {},
+  )
+}
+
+/** The answer of an 'ideas' request that goes into a mind map: one write, one undo step, or nothing at all. */
+function applyIdeasIntoMap(
+  canvas: LobbyCanvas,
+  ideas: readonly string[],
+  into: NonNullable<AiRequest['into']>,
+  prompt: string,
+  done: (text: string, ids: readonly string[], shown?: readonly string[]) => void,
+) {
+  const ctx = getAiCtx(canvas)
+  const m = mindmapOf(canvas)
+  if (!ctx || !m) return
+  const stamp = { by: ctx.me.user.id, kind: 'ai-topic' }
+  if (into.kind === 'expand') {
+    if (!isLive(canvas.get(into.topicId))) {
+      noticeOf(canvas, EXPAND_GONE, 'error')
+      return
+    }
+    const made = addChildTopics(m, into.topicId, ideas, { stamp })
+    if (!made) {
+      noticeOf(canvas, 'AI had nothing new to add under that topic.')
+      return
+    }
+    done(expandDone(made.children.length), made.touched, made.ids)
+    return
+  }
+  const made = mindmapFromIdeas(m, prompt, ideas, { stamp })
+  if (!made) {
+    noticeOf(canvas, MINDMAP_FAILED, 'error')
+    return
+  }
+  done(mindmapDone(made.children.length), made.touched, made.ids)
 }
 
 /** How long the "Undo" toast after an AI result stays up. */
@@ -340,8 +513,10 @@ function applyResult(
   if (!ctx) return
   const by = ctx.me.user.id
   const partly = result.truncated ? ' Only part of the selection fitted in one request.' : ''
-  const done = (text: string, ids: readonly string[]) =>
+  const done = (text: string, ids: readonly string[], shown: readonly string[] = ids) => {
     offerUndo(canvas, `${text}${partly}`, versionsOf(canvas, touched(canvas, ids)))
+    flash(canvas, shown)
+  }
   const canEdit = !canvas.readOnly() && (aiStatus(canvas).get()?.canInsert ?? false)
   switch (result.action) {
     case 'summarize': {
@@ -397,6 +572,10 @@ function applyResult(
     }
     case 'ideas': {
       if (!canEdit) return
+      if (req.into) {
+        applyIdeasIntoMap(canvas, result.ideas, req.into, req.prompt ?? '', done)
+        return
+      }
       const ids = applyNotes(
         canvas,
         target,

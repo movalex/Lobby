@@ -14,6 +14,10 @@ import { isReadonlyRole } from '../../../board/access.ts'
 import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { Dialog } from '../../../ui/Dialog.tsx'
+import { SparkIcon } from '../../ai/icons.tsx'
+import { expandTopic } from '../../ai/ported/actions.ts'
+import { canBuildWithAi } from '../../ai/ported/gate.ts'
+import { aiJob, aiStatus } from '../../ai/ported/runtime.ts'
 import {
   AddChildIcon,
   AddSiblingIcon,
@@ -108,15 +112,18 @@ function BarButton(props: {
   onClick(): void
   children: ReactNode
   pressed?: boolean
+  disabled?: boolean
+  className?: string
 }) {
   return (
     <button
       type="button"
-      className="dr-mm-bar__btn"
+      className={props.className ? `dr-mm-bar__btn ${props.className}` : 'dr-mm-bar__btn'}
       aria-label={props.label}
       title={props.label}
       data-testid={props.testId}
       aria-pressed={props.pressed}
+      disabled={props.disabled}
       onClick={props.onClick}
     >
       {props.children}
@@ -226,6 +233,10 @@ interface BarState {
   isRoot: boolean
   canPromote: boolean
   exportOk: boolean
+  /** "Expand with AI" is offered (AI on here, may add to the board, budget left). */
+  ai: boolean
+  aiBusy: boolean
+  hasText: boolean
 }
 
 function TopicBar({ ctx, m }: { ctx: CanvasFeatureContext; m: Mindmap }) {
@@ -264,8 +275,11 @@ function TopicBar({ ctx, m }: { ctx: CanvasFeatureContext; m: Mindmap }) {
       isRoot: depth === 0,
       canPromote: depth >= 2,
       exportOk: m.gate.allowed(),
+      ai: canBuildWithAi(aiStatus(canvas).get(), !canEdit),
+      aiBusy: aiJob(canvas).get() !== null,
+      hasText: rt.textOf(id).trim() !== '',
     }
-  }, [canvas, m])
+  }, [canvas, m, canEdit])
   const [halfWidth, setHalfWidth] = useState(120)
   useLayoutEffect(() => {
     const w = ref.current?.offsetWidth
@@ -343,6 +357,20 @@ function TopicBar({ ctx, m }: { ctx: CanvasFeatureContext; m: Mindmap }) {
           >
             <TidyIcon />
           </BarButton>
+          {state.ai && (
+            <BarButton
+              label={state.hasText ? 'Expand with AI' : 'Type some words first, then expand with AI'}
+              testId="mindmap-expand-ai"
+              className="dr-mm-bar__btn--ai"
+              disabled={state.aiBusy || !state.hasText}
+              onClick={() => {
+                expandTopic(canvas, state.id)
+                back()
+              }}
+            >
+              <SparkIcon size={18} />
+            </BarButton>
+          )}
         </>
       )}
       {state.exportOk && <OutlineMenu m={m} canvas={canvas} topicId={state.id} />}

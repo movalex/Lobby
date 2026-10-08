@@ -58,6 +58,7 @@ import {
   type ThemesLayoutInput,
   union,
 } from '../layout.ts'
+import { SHIMMER_MAX_TILES, type ShimmerPlan, type ShimmerTile } from './shimmer.ts'
 import {
   type AiTarget,
   type FrameIndex,
@@ -856,15 +857,16 @@ function noteSizeOf(canvas: LobbyCanvas, target: AiTarget): number {
   return NOTE_CELL
 }
 
-/** Action items / Generate ideas: a heading over a grid of new sticky notes, beside the target. */
-export function applyNotes(
-  canvas: LobbyCanvas,
-  target: AiTarget,
-  opts: { heading: string; texts: readonly string[]; color: LobbyColorName; kind: 'idea' | 'action-item' },
-  by: string,
-): string[] {
-  const label = opts.kind === 'idea' ? 'ai: generate ideas' : 'ai: action items'
-  return createBlock(canvas, target, label, by, (maxW) => {
+interface NotesOptions {
+  heading: string
+  texts: readonly string[]
+  color: LobbyColorName
+  kind: 'idea' | 'action-item'
+}
+
+/** The block of a heading over a grid of new sticky notes (what `applyNotes` writes), for `maxW` of room. */
+function notesBlock(canvas: LobbyCanvas, target: AiTarget, opts: NotesOptions) {
+  return (maxW: number | null) => {
     const cell = noteSizeOf(canvas, target)
     const wanted = opts.texts.length <= 4 ? opts.texts.length : opts.texts.length <= 9 ? 3 : 4
     // As many columns as the frame has room for.
@@ -889,5 +891,46 @@ export function applyNotes(
       })
     })
     return { pieces, size: { w: headW, h: top + g.h } }
-  })
+  }
+}
+
+/** Action items / Generate ideas: a heading over a grid of new sticky notes, beside the target. */
+export function applyNotes(canvas: LobbyCanvas, target: AiTarget, opts: NotesOptions, by: string): string[] {
+  const label = opts.kind === 'idea' ? 'ai: generate ideas' : 'ai: action items'
+  return createBlock(canvas, target, label, by, notesBlock(canvas, target, opts))
+}
+
+/**
+ * Where `applyNotes` would put `count` notes under `heading` right now, without writing anything: the
+ * placeholder shown while the request runs (K7-4), a block for the heading and one for each note, in scene
+ * space.
+ */
+export function previewNotes(
+  canvas: LobbyCanvas,
+  target: AiTarget,
+  opts: { heading: string; count: number; kind: NotesOptions['kind'] },
+): ShimmerPlan | null {
+  try {
+    const home = homeFrame(canvas, target)
+    const { pieces, size } = notesBlock(canvas, target, {
+      heading: opts.heading,
+      texts: Array.from({ length: Math.max(1, opts.count) }, () => '…'),
+      color: 'yellow',
+      kind: opts.kind,
+    })(roomIn(home))
+    const spot = spotFor(canvas, target, size, home)
+    const at = { x: spot.space.ox + spot.x, y: spot.space.oy + spot.y }
+    const tiles: ShimmerTile[] = []
+    for (const p of pieces) {
+      if (tiles.length >= SHIMMER_MAX_TILES) break
+      if (p.kind === 'note')
+        tiles.push({ x: at.x + p.dx, y: at.y + p.dy, w: p.size, h: p.size, shape: 'note' })
+      else if (p.kind === 'text')
+        tiles.push({ x: at.x + p.dx, y: at.y + p.dy, w: Math.min(p.width ?? 200, 240), h: 18, shape: 'pill' })
+    }
+    return { rect: { ...at, w: size.w, h: size.h }, tiles }
+  } catch {
+    // a placeholder is a nicety: never a reason for a request to fail
+    return null
+  }
 }

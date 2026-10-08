@@ -7,13 +7,19 @@
 //    summary panel (./Overlay.tsx, a screen layer);
 //  - results applied as ordinary canvas edits in one `transact` (./apply.ts, layout math in ../layout.ts),
 //    every element made carrying `customData.lobby.ai`.
+//  - mind maps (K7): "Expand with AI" on a selected topic (the topic bar of ../../mindmap, the context menu, the AI
+//    menu, command ai.expand) and "Mind map from a prompt" (the AI menu, the ideas prompt's "Show them as", commands
+//    ai.mindmap and ai.ideas): the existing 'ideas' action, its answer built as topics in one undo step
+//    (./expand.ts, ./actions.ts);
+//  - the wait (K7-4): a shimmer where the result will land and a brief highlight on it (./Placeholders.tsx, overlay
+//    only), and the status read that waits for an idle moment after the board is live (./idle.ts).
 // Hidden entirely unless the api reports AI on for this person on this board: not configured, switched
 // off, a name-only guest, or a viewer limited by the export policy all see nothing. The api enforces
 // every rule and every cost limit; the client only follows its answer.
 import type { CanvasFeature } from '../../../canvas/api/index.ts'
 import '../ai.css'
 import './ai-ported.css'
-import { AiEntryFallback, CONTEXT_MENU, MAIN_MENU, SELECTION_BAR } from './menus.tsx'
+import { AiEntryFallback, COMMANDS, CONTEXT_MENU, MAIN_MENU, SELECTION_BAR } from './menus.tsx'
 import { AiOverlay } from './Overlay.tsx'
 import { aiJob, aiMenu, aiPanel, setAiCtx } from './runtime.ts'
 
@@ -24,6 +30,7 @@ export const feature: CanvasFeature = {
     { id: 'ai', layer: 'screen', order: 60, pointer: 'none', component: AiOverlay },
     { id: 'ai-entry', layer: 'screen', order: 59, pointer: 'none', component: AiEntryFallback },
   ],
+  commands: COMMANDS,
   selectionBar: SELECTION_BAR,
   contextMenu: CONTEXT_MENU,
   mainMenu: MAIN_MENU,

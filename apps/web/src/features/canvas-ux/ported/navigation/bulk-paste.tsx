@@ -1,6 +1,8 @@
 // COL-05 bulk paste on the new canvas: a `text` content handler (paste and drop; docs/EXCALIDRAW-
 // CONTRACTS.md §3 `contentHandlers`). One cell (a word, a sentence) is left to the engine's own paste (a
-// text element); multi-line, TSV or CSV text opens "Paste as sticky notes or as text?" at the pointer.
+// text element); multi-line, TSV or CSV text opens "Paste as sticky notes or as text?" at the pointer. K7-2: when
+// the text is an outline (a heading over lines, or indentation: mindmap/outline-parse.ts), the prompt also
+// offers "Paste as mind map", one new map in one undo step (mindmap/ported/commands.ts pasteOutlineAsMindmap).
 //
 // RETRO-01: the paste point is the pointer over the canvas, else the view's centre. The grid goes to the
 // nearest empty spot there, into the frame under that point when it fits (bulk-paste.ts placeBulkGrid).
@@ -9,7 +11,7 @@
 // inserted as they are, with the pasted-note face).
 import { DEFAULT_MAX_NOTES, noteElementsFromText, parseBulkText } from '@draftroom/board-ops/elements'
 import { MAX_ITEMS } from '@draftroom/canvas-schema/limits'
-import { useEffect, useId, useRef } from 'react'
+import { useEffect, useId, useMemo } from 'react'
 import {
   type CanvasElement,
   type CanvasFeatureContext,
@@ -18,7 +20,16 @@ import {
   type ScenePoint,
 } from '../../../../canvas/api/index.ts'
 import { useValue } from '../../../../lib/signals.ts'
-import { placeBulkGrid, reflowLine, truncationMessage } from '../../bulk-paste.ts'
+import type { Outline } from '../../../mindmap/outline-parse.ts'
+import { mindmapOf } from '../../../mindmap/ported/bridge.ts'
+import { type Mindmap, pasteOutlineAsMindmap } from '../../../mindmap/ported/commands.ts'
+import {
+  mindmapNotice,
+  outlineOfPaste,
+  placeBulkGrid,
+  reflowLine,
+  truncationMessage,
+} from '../../bulk-paste.ts'
 import { containingFrame, type Rect, rectContains, unionRects } from '../../placement.ts'
 import { boxOf } from './camera.ts'
 import { frameAt } from './model.ts'
@@ -167,11 +178,104 @@ export function pasteAsText(ctx: CanvasFeatureContext, text: string, center: Sce
 }
 
 const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max)
+/** What the prompt shows and does (a plain component: the connected one below fills it in). */
+export interface BulkPasteViewProps {
+  /** Cells in the paste. */
+  cells: number
+  /** Topics a "Paste as mind map" would make, or null when the paste has no hierarchy (K7-2). */
+  topics: number | null
+  /** Where the prompt points (px from the canvas's top-left). */
+  at: { x: number; y: number }
+  titleId: string
+  /** Remounts the prompt for a new paste, so the first button takes the focus again. */
+  pasteId: number
+  onNotes(): void
+  onText(): void
+  onMindmap(): void
+  onCancel(): void
+}
+
+/**
+ * "Paste N items as sticky notes or as text?", with "Paste as mind map" first when the paste is an outline
+ * (a hierarchy of its own). The button the decision most likely is takes the focus.
+ */
+export function BulkPasteView(p: BulkPasteViewProps) {
+  const notes = Math.min(p.cells, DEFAULT_MAX_NOTES)
+  const outline = p.topics !== null
+  return (
+    <div
+      // a new paste replaces the prompt: remount so the first button takes focus again
+      key={p.pasteId}
+      className="dr-cux-paste"
+      role="dialog"
+      aria-labelledby={p.titleId}
+      data-testid="bulk-paste-prompt"
+      style={{ left: p.at.x, top: p.at.y, pointerEvents: 'auto' }}
+      onKeyDown={(e) => {
+        if (e.key !== 'Escape') return
+        e.preventDefault()
+        e.stopPropagation()
+        p.onCancel()
+      }}
+    >
+      <p id={p.titleId} className="dr-cux-paste__title">
+        {outline
+          ? `Paste ${p.cells} ${p.cells === 1 ? 'item' : 'items'} as a mind map, sticky notes or text?`
+          : `Paste ${p.cells} ${p.cells === 1 ? 'item' : 'items'} as sticky notes or as text?`}
+      </p>
+      {p.cells > DEFAULT_MAX_NOTES && (
+        <p className="dr-cux-muted">Only the first {DEFAULT_MAX_NOTES} become notes.</p>
+      )}
+      <div className="dr-cux-paste__actions">
+        {outline && (
+          <button
+            type="button"
+            className="dr-btn dr-btn--primary dr-btn--sm"
+            data-testid="bulk-paste-mindmap"
+            // biome-ignore lint/a11y/noAutofocus: the prompt exists to take this one decision
+            autoFocus
+            onClick={p.onMindmap}
+          >
+            Paste as mind map
+          </button>
+        )}
+        <button
+          type="button"
+          className={outline ? 'dr-btn dr-btn--sm' : 'dr-btn dr-btn--primary dr-btn--sm'}
+          data-testid="bulk-paste-notes"
+          // biome-ignore lint/a11y/noAutofocus: the prompt exists to take this one decision
+          autoFocus={!outline}
+          onClick={p.onNotes}
+        >
+          {notes} sticky {notes === 1 ? 'note' : 'notes'}
+        </button>
+        <button type="button" className="dr-btn dr-btn--sm" data-testid="bulk-paste-text" onClick={p.onText}>
+          Text
+        </button>
+        <button
+          type="button"
+          className="dr-iconbtn dr-iconbtn--sm"
+          data-testid="bulk-paste-cancel"
+          aria-label="Cancel paste"
+          onClick={p.onCancel}
+        >
+          ×
+        </button>
+      </div>
+    </div>
+  )
+}
 
 /** "Paste N items as sticky notes or as text?" at the paste point (a screen overlay layer). */
 export function BulkPastePrompt({ ctx }: { ctx: CanvasFeatureContext }) {
   const { canvas } = ctx
   const pending = useValue('nav-pending-paste', () => pendingPaste(canvas).get(), [canvas])
+  // K7-2: a nested outline can be pasted as a mind map, when the mind-map feature is on this page
+  const mindmap = useValue('nav-paste-mindmap', () => mindmapOf(canvas), [canvas])
+  const outline = useMemo(
+    () => (pending && mindmap && !canvas.readOnly() ? outlineOfPaste(pending.text) : null),
+    [pending, mindmap, canvas],
+  )
   const pos = useValue('nav-paste-pos', () => {
     const p = pendingPaste(canvas).get()
     if (!p) return null
@@ -182,7 +286,6 @@ export function BulkPastePrompt({ ctx }: { ctx: CanvasFeatureContext }) {
     return { x: clamp(at.x, 170, Math.max(170, w - 170)), y: clamp(at.y, 70, Math.max(70, h - 90)) }
   }, [canvas])
   const titleId = useId()
-  const ref = useRef<HTMLDivElement>(null)
   // working on the canvas instead of answering dismisses the prompt (nothing is pasted)
   useEffect(
     () =>
@@ -197,69 +300,48 @@ export function BulkPastePrompt({ ctx }: { ctx: CanvasFeatureContext }) {
     pendingPaste(canvas).set(null)
     canvas.focus({ preventScroll: true })
   }
-  const notes = Math.min(pending.cells, DEFAULT_MAX_NOTES)
   return (
-    <div
-      // a new paste replaces the prompt: remount so the Notes button takes focus again
-      key={pending.id}
-      ref={ref}
-      className="dr-cux-paste"
-      role="dialog"
-      aria-labelledby={titleId}
-      data-testid="bulk-paste-prompt"
-      style={{ left: pos.x, top: pos.y, pointerEvents: 'auto' }}
-      onKeyDown={(e) => {
-        if (e.key !== 'Escape') return
-        e.preventDefault()
-        e.stopPropagation()
-        finish()
+    <BulkPasteView
+      pasteId={pending.id}
+      cells={pending.cells}
+      topics={outline?.topics ?? null}
+      at={pos}
+      titleId={titleId}
+      onCancel={finish}
+      onNotes={() => {
+        const p = pendingPaste(canvas).get()
+        pendingPaste(canvas).set(null)
+        if (p) pasteAsNotes(ctx, p.text, p.center)
+        canvas.focus({ preventScroll: true })
       }}
-    >
-      <p id={titleId} className="dr-cux-paste__title">
-        Paste {pending.cells} {pending.cells === 1 ? 'item' : 'items'} as sticky notes or as text?
-      </p>
-      {pending.cells > DEFAULT_MAX_NOTES && (
-        <p className="dr-cux-muted">Only the first {DEFAULT_MAX_NOTES} become notes.</p>
-      )}
-      <div className="dr-cux-paste__actions">
-        <button
-          type="button"
-          className="dr-btn dr-btn--primary dr-btn--sm"
-          data-testid="bulk-paste-notes"
-          // biome-ignore lint/a11y/noAutofocus: the prompt exists to take this one decision
-          autoFocus
-          onClick={() => {
-            const p = pendingPaste(canvas).get()
-            pendingPaste(canvas).set(null)
-            if (p) pasteAsNotes(ctx, p.text, p.center)
-            canvas.focus({ preventScroll: true })
-          }}
-        >
-          {notes} sticky {notes === 1 ? 'note' : 'notes'}
-        </button>
-        <button
-          type="button"
-          className="dr-btn dr-btn--sm"
-          data-testid="bulk-paste-text"
-          onClick={() => {
-            const p = pendingPaste(canvas).get()
-            pendingPaste(canvas).set(null)
-            if (p) pasteAsText(ctx, p.text, p.center)
-            canvas.focus({ preventScroll: true })
-          }}
-        >
-          Text
-        </button>
-        <button
-          type="button"
-          className="dr-iconbtn dr-iconbtn--sm"
-          data-testid="bulk-paste-cancel"
-          aria-label="Cancel paste"
-          onClick={finish}
-        >
-          ×
-        </button>
-      </div>
-    </div>
+      onText={() => {
+        const p = pendingPaste(canvas).get()
+        pendingPaste(canvas).set(null)
+        if (p) pasteAsText(ctx, p.text, p.center)
+        canvas.focus({ preventScroll: true })
+      }}
+      onMindmap={() => {
+        const p = pendingPaste(canvas).get()
+        pendingPaste(canvas).set(null)
+        if (p && mindmap && outline) pasteAsMindmap(ctx, mindmap, outline, p.center)
+        canvas.focus({ preventScroll: true })
+      }}
+    />
   )
+}
+
+/**
+ * "Paste as mind map": the outline as one new map around the paste point, selected, one undo step. A paste
+ * the caps cut says what was left out. Returns the central topic.
+ */
+export function pasteAsMindmap(
+  ctx: CanvasFeatureContext,
+  m: Mindmap,
+  outline: Outline,
+  center: ScenePoint,
+): string | null {
+  const root = pasteOutlineAsMindmap(m, outline, center)
+  const msg = root ? mindmapNotice(outline) : null
+  if (msg) ctx.notify({ key: 'bulk-paste', text: msg, timeoutMs: 10_000, testId: 'bulk-paste-notice' })
+  return root
 }
