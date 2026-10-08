@@ -1,0 +1,55 @@
+/* Screens (wave K, K4-4): the "no workspace" screens say which address is signed in, in a callout, and work on a
+   phone: a screen taller than the window scrolls instead of cutting off its buttons, and the buttons stack at
+   full width. Tokens only, so both themes apply. */
+
+/* A card taller than the window: scroll, centre when it fits. (justify-content: center alone would cut the
+   top and the bottom off with no way to reach them.) */
+.dr-screen--scroll {
+  justify-content: flex-start;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.dr-screen--scroll > .dr-card {
+  margin-block: auto;
+}
+
+.dr-card__body .dr-nowork__account {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--dr-accent-line);
+  border-radius: 10px;
+  background: var(--dr-accent-tint);
+  color: var(--dr-ink);
+  font-size: 15px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.dr-nowork__email {
+  display: inline-block;
+  max-width: 100%;
+  font-size: 17px;
+  font-weight: 700;
+  /* one click or tap selects the whole address (Ctrl+C then copies it) */
+  user-select: all;
+  /* it moves to a line of its own when it does not fit beside the words, and breaks inside only when it is
+     longer than the line */
+  overflow-wrap: anywhere;
+}
+.dr-card__body .dr-nowork__hint {
+  color: var(--dr-ink);
+  font-weight: 600;
+}
+
+@media (max-width: 480px) {
+  .dr-screen--scroll .dr-card {
+    padding: 22px 18px;
+  }
+  .dr-screen--scroll .dr-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .dr-screen--scroll .dr-row .dr-btn {
+    width: 100%;
+    min-height: 44px;
+  }
+}

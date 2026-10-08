@@ -3,7 +3,7 @@ import { SignInPage } from './auth/SignInPage.tsx'
 import { SessionProvider, useSession } from './auth/session.tsx'
 import { createSignOutPurge } from './canvas/sync/adapter/offline-idb.ts'
 import { DashboardPage } from './dashboard/DashboardPage.tsx'
-import { landingWorkspace, noWorkspaceCopy } from './dashboard/model.ts'
+import { landingWorkspace } from './dashboard/model.ts'
 import { FeedbackHost } from './features/feedback/FeedbackHost.tsx'
 import { GuestEndedScreen } from './invite/GuestEndedScreen.tsx'
 import { GuestKindProvider, wasGuestTab } from './invite/guest.tsx'
@@ -11,7 +11,7 @@ import { InvitePage } from './invite/InvitePage.tsx'
 import { DEV_AUTH_ENABLED } from './lib/identity.ts'
 import { matchRoute, navigate, signInPath, useLocationKey, workspacePath } from './lib/routing.ts'
 import { readLastWorkspace } from './lib/storage.ts'
-import { LoadingScreen, MessageScreen, UnreachableScreen } from './ui/screens.tsx'
+import { LoadingScreen, MessageScreen, NoWorkspaceScreen, UnreachableScreen } from './ui/screens.tsx'
 
 // Spike A (docs/EXCALIDRAW-MIGRATION.md §8): dev-only /spike/:name engine pages, outside the session.
 // The dev-auth test is inlined (same as DEV_AUTH_ENABLED) so it folds at build time: the imported const
@@ -135,54 +135,16 @@ function RequireSession({ children }: { children: ReactNode }) {
 }
 
 function RootRedirect() {
-  const { state, signOut, signingOut } = useSession()
+  const { state } = useSession()
   const me = state.status === 'signed-in' ? state.me : null
   const target = me ? landingWorkspace(me.workspaces, readLastWorkspace()) : null
   const targetId = target?.id
   useEffect(() => {
     if (targetId) navigate(workspacePath(targetId), { replace: true })
   }, [targetId])
-  if (me && !target) {
-    // Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §9): an outside account gets only what it is
-    // invited to, so with nothing shared yet it lands here and is told why.
-    const copy = noWorkspaceCopy(me.access)
-    return (
-      <MessageScreen
-        testId="no-workspace"
-        reason={copy.reason}
-        title={copy.title}
-        body={copy.body.map((p, i) => (
-          <p key={p} data-testid={i === 0 && copy.reason === 'outside' ? 'no-workspace-account' : undefined}>
-            {p}
-          </p>
-        ))}
-        actions={
-          copy.action === 'switch-account' ? (
-            <button
-              type="button"
-              className="dr-btn dr-btn--primary"
-              data-testid="no-workspace-switch"
-              disabled={signingOut}
-              aria-busy={signingOut || undefined}
-              onClick={() => void signOut()}
-            >
-              {signingOut ? 'Signing out…' : 'Sign in with a different account'}
-            </button>
-          ) : copy.action === 'reload' ? (
-            <button
-              type="button"
-              className="dr-btn dr-btn--primary"
-              data-testid="no-workspace-reload"
-              onClick={() => location.reload()}
-            >
-              Reload
-            </button>
-          ) : (
-            <span />
-          )
-        }
-      />
-    )
-  }
+  // Domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §9): an outside account gets only what it is invited to,
+  // so with nothing shared yet it lands here and is told why (K4-4: ui/screens.tsx says which address is
+  // signed in, what to do and how to switch account, on a phone too).
+  if (me && !target) return <NoWorkspaceScreen />
   return <LoadingScreen />
 }
