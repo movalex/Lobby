@@ -19,12 +19,13 @@
  * loaded the page, one after the other. K1-2: the board and its first ticket are asked for here, as soon
  * as the route renders with a session, while the code may still be on its way. K1-5: while the code
  * downloads, the board skeleton (./BoardSkeleton.tsx). K1-7: a board chunk that no longer exists (a tab
- * from before a deploy) reloads the page once (lib/stale-chunk.ts) instead of breaking it.
+ * from before a deploy) reloads the page once (lib/stale-chunk.ts) instead of breaking it; one that failed
+ * while offline waits for the connection instead (round 2 refix).
  */
-import { lazy, Suspense, useRef } from 'react'
+import { lazy, Suspense, useEffect, useRef } from 'react'
 import { useSession } from '../../auth/session.tsx'
 import { type BoardPageModule, loadBoardCode, preloadBoardOpen } from '../../lib/prefetch-board.ts'
-import { recoverChunk, staleChunks } from '../../lib/stale-chunk.ts'
+import { recoverChunk, reloadWhenOnline, staleChunks } from '../../lib/stale-chunk.ts'
 import { MessageScreen } from '../../ui/screens.tsx'
 import { BoardSkeleton } from './BoardSkeleton.tsx'
 
@@ -44,8 +45,26 @@ function BoardCodeUpdated() {
   )
 }
 
+/**
+ * Round 2 refix: the board code failed while the browser is offline (the network's failure, not a deploy's):
+ * no "Lobby has been updated", and no Reload, which would land on the browser's offline page. No board has
+ * opened, so once the connection is back the page reloads once and opens it (React.lazy would keep this
+ * screen for every board opened in this tab).
+ */
+function BoardCodeOffline() {
+  useEffect(() => reloadWhenOnline(), [])
+  return (
+    <MessageScreen
+      testId="board-code-offline"
+      title="You are offline"
+      body="This board could not load while you are offline. It opens by itself once you are back online."
+    />
+  )
+}
+
 const UPDATED: BoardPageModule = { default: BoardCodeUpdated } as unknown as BoardPageModule
-const LobbyBoardPage = lazy(recoverChunk(loadBoardCode, UPDATED, staleChunks))
+const OFFLINE: BoardPageModule = { default: BoardCodeOffline } as unknown as BoardPageModule
+const LobbyBoardPage = lazy(recoverChunk(loadBoardCode, UPDATED, staleChunks, OFFLINE))
 const SpikeBoardPage =
   import.meta.env.DEV || import.meta.env.VITE_DRAFTROOM_DEV_AUTH === '1'
     ? lazy(() => import('../spike/board/SpikeBoardPage.tsx'))

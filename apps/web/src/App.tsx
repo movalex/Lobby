@@ -21,7 +21,7 @@ import {
   startBoardCodeFor,
 } from './lib/prefetch-board.ts'
 import { matchRoute, navigate, signInPath, useLocationKey, workspacePath } from './lib/routing.ts'
-import { installStaleChunkRecovery, recoverChunk, staleChunks } from './lib/stale-chunk.ts'
+import { installStaleChunkRecovery, recoverChunk, reloadWhenOnline, staleChunks } from './lib/stale-chunk.ts'
 import { readLastWorkspace } from './lib/storage.ts'
 import { LoadingScreen, MessageScreen, NoWorkspaceScreen, UnreachableScreen } from './ui/screens.tsx'
 
@@ -55,6 +55,18 @@ function FeedbackCodeUpdated() {
   return <LoadingScreen label="Lobby has been updated: reloading…" testId="feedback-code-updated" />
 }
 
+/** Round 2 refix: the feedback page's code failed while offline (not a deploy): it reloads once back online. */
+function FeedbackCodeOffline() {
+  useEffect(() => reloadWhenOnline(), [])
+  return (
+    <MessageScreen
+      testId="feedback-code-offline"
+      title="You are offline"
+      body="This page could not load while you are offline. It opens by itself once you are back online."
+    />
+  )
+}
+
 // Wave J5: the feedback inbox at /feedback (its readers only; the api answers 404 to everybody else, and the
 // page then shows the unknown-address screen). A small page, loaded when it is opened.
 const FeedbackRoute = lazy(
@@ -62,6 +74,7 @@ const FeedbackRoute = lazy(
     () => import('./features/feedback/FeedbackPage.tsx'),
     { default: FeedbackCodeUpdated } as unknown as typeof import('./features/feedback/FeedbackPage.tsx'),
     staleChunks,
+    { default: FeedbackCodeOffline } as unknown as typeof import('./features/feedback/FeedbackPage.tsx'),
   ),
 )
 

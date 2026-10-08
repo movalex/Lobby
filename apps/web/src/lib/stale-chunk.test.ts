@@ -7,9 +7,11 @@ import {
   createStaleChunkHandler,
   installStaleChunkRecovery,
   isStaleChunkError,
+  OFFLINE_CHUNK_TEXT,
   RELOAD_GUARD_MS,
   RELOAD_KEY,
   recoverChunk,
+  reloadWhenOnline,
   STALE_NOTICE_KEY,
   STALE_NOTICE_TEXT,
   type StaleNotice,
@@ -121,14 +123,40 @@ describe('outside a board: one reload, guarded', () => {
     expect(e.reloads).toBe(2)
   })
 
-  it('offline: the notice (a reload would show the browser’s offline page); its Reload still works', () => {
+  it('offline (wave K round 2 refix): the connection notice, not “Lobby has been updated”, no Reload to the offline page, no reload', () => {
     const e = env({ offline: true })
     const h = createStaleChunkHandler(e)
     expect(h.report(STALE)).toBe('notice')
     expect(e.reloads).toBe(0)
     expect(e.store.has(RELOAD_KEY)).toBe(false)
-    h.notice()?.action?.onClick()
-    expect(e.reloads).toBe(1)
+    const n = h.notice() as StaleNotice
+    expect(n).toMatchObject({
+      key: STALE_NOTICE_KEY,
+      text: OFFLINE_CHUNK_TEXT,
+      testId: 'stale-chunk-offline-notice',
+    })
+    expect(n.text).not.toBe(STALE_NOTICE_TEXT)
+    expect(n.action).toBeUndefined()
+    expect(h.online()).toBe(false)
+  })
+
+  it('offline (round 2): opening a board whose code fails (no board registered yet) resolves to the offline fallback, not “updated”', async () => {
+    const UPDATED = { default: 'updated' }
+    const OFFLINE = { default: 'offline' }
+    const off = env({ offline: true })
+    const h = createStaleChunkHandler(off)
+    expect(await recoverChunk(() => Promise.reject(STALE), UPDATED, h, OFFLINE)()).toBe(OFFLINE)
+    expect(off.reloads).toBe(0)
+    expect(h.notice()?.testId).toBe('stale-chunk-offline-notice')
+    expect(h.notice()?.action).toBeUndefined()
+    // online, the same failure is a deploy's: the updated fallback, and the page reloads once
+    const on = env()
+    const h2 = createStaleChunkHandler(on)
+    expect(await recoverChunk(() => Promise.reject(STALE), UPDATED, h2, OFFLINE)()).toBe(UPDATED)
+    expect(on.reloads).toBe(1)
+    // without an offline fallback (other lazy pages), the one fallback, as before
+    const h3 = createStaleChunkHandler(env({ offline: true }))
+    expect(await recoverChunk(() => Promise.reject(STALE), UPDATED, h3)()).toBe(UPDATED)
   })
 
   it('storage that throws, or none: the notice, never a reload it could not guard', () => {
@@ -291,6 +319,68 @@ describe('the sources', () => {
     const fine = recoverChunk(() => Promise.resolve({ default: 'page' }), fallback, handler)
     expect(await fine()).toEqual({ default: 'page' })
     expect(reports).toHaveLength(1)
+  })
+})
+
+describe('reloadWhenOnline (round 2: the board route’s offline fallback)', () => {
+  function onlineWindow() {
+    const listeners = new Map<string, (e: Event) => void>()
+    return {
+      listeners,
+      addEventListener: (t: string, fn: (e: Event) => void) => listeners.set(t, fn),
+      removeEventListener: (t: string, fn: (e: Event) => void) => {
+        if (listeners.get(t) === fn) listeners.delete(t)
+      },
+    }
+  }
+
+  it('offline: nothing until the browser is back online, then one reload', () => {
+    const win = onlineWindow()
+    let reloads = 0
+    reloadWhenOnline(
+      win,
+      () => false,
+      () => reloads++,
+    )
+    expect(reloads).toBe(0)
+    expect(win.listeners.has('online')).toBe(true)
+    win.listeners.get('online')?.(new Event('online'))
+    expect(reloads).toBe(1)
+    expect(win.listeners.has('online')).toBe(false)
+  })
+
+  it('already back online: reloads at once; the cancel (the fallback unmounted) stops a pending one', () => {
+    const win = onlineWindow()
+    let reloads = 0
+    reloadWhenOnline(
+      win,
+      () => true,
+      () => reloads++,
+    )
+    expect(reloads).toBe(1)
+    expect(win.listeners.size).toBe(0)
+    const cancel = reloadWhenOnline(
+      win,
+      () => false,
+      () => reloads++,
+    )
+    cancel()
+    expect(win.listeners.size).toBe(0)
+    expect(reloads).toBe(1)
+  })
+
+  it('the board route gives its board page an offline fallback that waits for the connection', async () => {
+    const { readFileSync } = await import('node:fs')
+    const route = readFileSync(new URL('../canvas/board/route.tsx', import.meta.url), 'utf8')
+    expect(route).toContain('recoverChunk(loadBoardCode, UPDATED, staleChunks, OFFLINE)')
+    expect(route).toContain('reloadWhenOnline()')
+  })
+
+  it('the feedback page (the other lazy page outside a board) has one too', async () => {
+    const { readFileSync } = await import('node:fs')
+    const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8')
+    expect(app).toMatch(/{ default: FeedbackCodeOffline }/)
+    expect(app).toContain('reloadWhenOnline()')
   })
 })
 

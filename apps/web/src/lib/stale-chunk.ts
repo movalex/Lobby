@@ -7,14 +7,17 @@
  *  - outside a board (the dashboard, sign-in, the feedback page, opening a board whose code is missing), the
  *    page reloads once, which loads the new build. A guard in sessionStorage (RELOAD_GUARD_MS) stops a
  *    reload loop: a second failure soon after a reload shows a notice with a Reload button instead. Storage
- *    that is blocked or throws counts as a guard that cannot be read: the notice, never a loop; so does a
- *    browser that is offline (the same error, from the network: a reload would show its offline page);
+ *    that is blocked or throws counts as a guard that cannot be read: the notice, never a loop;
  *  - on a board, the page never reloads by itself (it would drop the open panel, the camera, a text being
  *    typed and, for a guest, changes not yet sent): the board shows a notice with a Reload button
  *    (`registerStaleChunkBoard`). While the sync adapter reports changes not yet acknowledged, the button
  *    waits (at most UNSENT_WAIT_MS) for them before it reloads. A browser that is offline (wave K round 1
  *    refix) gets a connection notice instead, with no Reload: a reload then would land on the browser's
- *    offline page, with changes the sync server cannot acknowledge yet.
+ *    offline page, with changes the sync server cannot acknowledge yet;
+ *  - offline, on a board or not (round 2 refix: the board route itself is "not on a board" while its code
+ *    loads), the failure is the network's, not a deploy's: the connection notice, no Reload, no reload, and
+ *    never "Lobby has been updated". A lazy page that passes an offline fallback to `recoverChunk` draws it
+ *    (the board route's waits for the connection, then reloads once: `reloadWhenOnline`).
  *
  * Sources: Vite's `vite:preloadError` event (its preload helper dispatches it for a failed CSS preload and a
  * failed dynamic import), a stale chunk error that reaches `unhandledrejection`, and lazy components that
@@ -130,6 +133,13 @@ export function createStaleChunkHandler(env: Env = defaultEnv) {
     tryNow()
   }
 
+  const offlineNotice = (): StaleNotice => ({
+    key: STALE_NOTICE_KEY,
+    text: OFFLINE_CHUNK_TEXT,
+    testId: 'stale-chunk-offline-notice',
+    timeoutMs: null,
+  })
+
   const staleNotice = (): StaleNotice => ({
     key: STALE_NOTICE_KEY,
     text: STALE_NOTICE_TEXT,
@@ -142,21 +152,20 @@ export function createStaleChunkHandler(env: Env = defaultEnv) {
     /** A chunk could not be loaded (see the header for what happens). Returns what was done. */
     report(_error?: unknown): 'notice' | 'reload' | 'reloading' {
       if (reloading) return 'reloading'
-      if (board) {
-        board.notify(
-          env.online()
-            ? staleNotice()
-            : {
-                key: STALE_NOTICE_KEY,
-                text: OFFLINE_CHUNK_TEXT,
-                testId: 'stale-chunk-offline-notice',
-                timeoutMs: null,
-              },
-        )
+      // offline (on a board or not): the network's failure; a reload would show the browser's offline page
+      if (!env.online()) {
+        if (board) board.notify(offlineNotice())
+        else {
+          notice = offlineNotice()
+          emit()
+        }
         return 'notice'
       }
-      // offline, a reload would show the browser's offline page: the notice, to reload once it is back
-      const last = env.online() ? readGuard() : 'blocked'
+      if (board) {
+        board.notify(staleNotice())
+        return 'notice'
+      }
+      const last = readGuard()
       const recent = last === 'blocked' || (last !== null && env.now() - last < RELOAD_GUARD_MS)
       if (!recent && writeGuard()) {
         reloading = true
@@ -174,6 +183,8 @@ export function createStaleChunkHandler(env: Env = defaultEnv) {
         if (board === b) board = null
       }
     },
+    /** Whether the browser says it is online (`recoverChunk` picks its offline fallback by it). */
+    online: () => env.online(),
     /** The notice to draw outside a board (null: none). */
     notice: () => notice,
     dismiss() {
@@ -198,18 +209,44 @@ export const registerStaleChunkBoard = (b: StaleChunkBoard) => staleChunks.regis
 /**
  * Wraps a lazy component's import: a stale chunk is reported (above) and resolves to `fallback` (what to
  * draw meanwhile) instead of throwing into React, which would unmount the page. Other errors are thrown.
+ * With `offline` (round 2 refix), a failure while the browser is offline resolves to that instead: the
+ * network's failure, not a deploy's.
  */
 export function recoverChunk<T>(
   load: () => Promise<T>,
   fallback: T,
-  handler: Pick<StaleChunkHandler, 'report'> = staleChunks,
+  handler: Pick<StaleChunkHandler, 'report'> & Partial<Pick<StaleChunkHandler, 'online'>> = staleChunks,
+  offline?: T,
 ): () => Promise<T> {
   return () =>
     load().catch((e: unknown) => {
       if (!isStaleChunkError(e)) throw e
       handler.report(e)
-      return fallback
+      return offline !== undefined && handler.online?.() === false ? offline : fallback
     })
+}
+
+/**
+ * Round 2 refix: the board route's offline fallback (its code could not load while offline, so no board
+ * opened and a reload loses nothing). Once the browser is back online, the page reloads once, which opens
+ * the board (React.lazy would otherwise keep the fallback for the tab's lifetime). Already online: at once.
+ * Returns the cancel (the fallback unmounted).
+ */
+export function reloadWhenOnline(
+  win: ChunkWindow = globalThis as unknown as ChunkWindow,
+  online: () => boolean = defaultEnv.online,
+  reload: () => void = defaultEnv.reload,
+): () => void {
+  if (online()) {
+    reload()
+    return () => {}
+  }
+  const onOnline = () => {
+    win.removeEventListener('online', onOnline)
+    reload()
+  }
+  win.addEventListener('online', onOnline)
+  return () => win.removeEventListener('online', onOnline)
 }
 
 interface ChunkWindow {

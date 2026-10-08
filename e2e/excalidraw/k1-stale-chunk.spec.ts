@@ -6,7 +6,9 @@
 //  - opening a board from the dashboard when the board page's chunk is gone: the page reloads once (the new
 //    build), and the board opens;
 //  - the chunk still missing after that reload: no second reload (the loop guard), the page says Lobby was
-//    updated and offers a Reload.
+//    updated and offers a Reload;
+//  - (round 2 refix) offline, opening a board whose code cannot load: a connection screen and notice, no
+//    Reload, never "Lobby has been updated"; back online, the page reloads once and the board opens.
 import type { Page } from '@playwright/test'
 import { signInContext } from '../tests/support/api.ts'
 import { clickItem, createNote, expect, expectSaved, test } from '../tests/support/canvas.ts'
@@ -131,6 +133,47 @@ test('the chunk still missing after that reload: no second reload, a page that s
     await page.unroute(BOARD_CHUNK)
     await page.getByTestId('stale-chunk-reload').click()
     await expect(page.getByTestId('lobby-board')).toHaveAttribute('data-phase', 'ready', { timeout: 60_000 })
+  } finally {
+    await context.close()
+  }
+})
+
+test('offline (round 2 refix): opening a board whose code cannot load says so, offers no Reload, never says Lobby was updated, and opens the board once back online', async ({
+  browser,
+  board,
+  users,
+}) => {
+  const alice = await users.get('alice')
+  const context = await browser.newContext()
+  try {
+    const page = await context.newPage()
+    await signInContext(context, alice.handle, alice.name)
+    const errors = pageErrors(page)
+    const nav = reloads(page)
+    // the board code never arrives while this runs (the idle and hover prefetches fail too, quietly)
+    await page.route(BOARD_CHUNK, (route) => route.abort('internetdisconnected'))
+    await page.goto(`/w/${users.devStudioId}`)
+    const card = page.locator(`[data-testid="board-card"][data-board-id="${board}"]`)
+    await expect(card).toBeVisible({ timeout: 30_000 })
+    await context.setOffline(true)
+    await card.locator('a.dr-bcard__link').click()
+    await expect(page).toHaveURL(new RegExp(`/b/${board}$`))
+    await expect(page.getByTestId('board-code-offline')).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByTestId('stale-chunk-offline-notice')).toBeVisible()
+    await page.waitForTimeout(1_500)
+    await expect(page.getByTestId('board-code-updated')).toHaveCount(0)
+    await expect(page.getByTestId('stale-chunk-notice')).toHaveCount(0)
+    await expect(page.getByTestId('stale-chunk-reload')).toHaveCount(0)
+    await expect(page.getByText('Lobby has been updated')).toHaveCount(0)
+    expect(nav.count).toBe(0)
+    // back online: one reload, and the board opens
+    await page.unroute(BOARD_CHUNK)
+    await context.setOffline(false)
+    await expect.poll(() => nav.count, { timeout: 15_000 }).toBe(1)
+    await expect(page.getByTestId('lobby-board')).toHaveAttribute('data-phase', 'ready', { timeout: 60_000 })
+    await page.waitForTimeout(1_000)
+    expect(nav.count).toBe(1)
+    expect(errors).toEqual([])
   } finally {
     await context.close()
   }
