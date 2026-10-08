@@ -11,6 +11,7 @@ import {
   RELOAD_KEY,
   recoverChunk,
   STALE_NOTICE_KEY,
+  STALE_NOTICE_TEXT,
   type StaleNotice,
   UNSENT_WAIT_MS,
 } from './stale-chunk.ts'
@@ -187,6 +188,21 @@ describe('on a board: a notice, never a reload by itself', () => {
     expect(e.reloads).toBe(0)
     notices[0]?.action?.onClick()
     expect(e.reloads).toBe(1)
+  })
+
+  it('offline (wave K round 1 refix): a connection notice, not “Lobby has been updated”, and no Reload to the offline page', () => {
+    const e = env({ offline: true })
+    const h = createStaleChunkHandler(e)
+    const notices: StaleNotice[] = []
+    h.registerBoard({ unsent: () => true, notify: (n) => notices.push(n) })
+    expect(h.report(STALE)).toBe('notice')
+    expect(notices).toHaveLength(1)
+    expect(notices[0]?.text).not.toBe(STALE_NOTICE_TEXT)
+    expect(notices[0]?.text).toMatch(/offline/i)
+    expect(notices[0]).toMatchObject({ key: STALE_NOTICE_KEY, testId: 'stale-chunk-offline-notice' })
+    expect(notices[0]?.action).toBeUndefined()
+    e.advance(UNSENT_WAIT_MS * 2)
+    expect(e.reloads).toBe(0)
   })
 
   it('the board leaving: the next failure is outside a board again', () => {

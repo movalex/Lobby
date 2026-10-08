@@ -12,7 +12,9 @@
  *  - on a board, the page never reloads by itself (it would drop the open panel, the camera, a text being
  *    typed and, for a guest, changes not yet sent): the board shows a notice with a Reload button
  *    (`registerStaleChunkBoard`). While the sync adapter reports changes not yet acknowledged, the button
- *    waits (at most UNSENT_WAIT_MS) for them before it reloads.
+ *    waits (at most UNSENT_WAIT_MS) for them before it reloads. A browser that is offline (wave K round 1
+ *    refix) gets a connection notice instead, with no Reload: a reload then would land on the browser's
+ *    offline page, with changes the sync server cannot acknowledge yet.
  *
  * Sources: Vite's `vite:preloadError` event (its preload helper dispatches it for a failed CSS preload and a
  * failed dynamic import), a stale chunk error that reaches `unhandledrejection`, and lazy components that
@@ -36,6 +38,8 @@ export const UNSENT_WAIT_MS = 5_000
 export const RELOAD_KEY = 'lobby:stale-chunk-reload'
 export const STALE_NOTICE_KEY = 'stale-chunk'
 export const STALE_NOTICE_TEXT = 'Lobby has been updated. Reload to keep working with the new version.'
+export const OFFLINE_CHUNK_TEXT =
+  'This part of Lobby could not load while you are offline. Reload the page once you are back online to use it.'
 
 export interface StaleNotice {
   key: string
@@ -139,7 +143,16 @@ export function createStaleChunkHandler(env: Env = defaultEnv) {
     report(_error?: unknown): 'notice' | 'reload' | 'reloading' {
       if (reloading) return 'reloading'
       if (board) {
-        board.notify(staleNotice())
+        board.notify(
+          env.online()
+            ? staleNotice()
+            : {
+                key: STALE_NOTICE_KEY,
+                text: OFFLINE_CHUNK_TEXT,
+                testId: 'stale-chunk-offline-notice',
+                timeoutMs: null,
+              },
+        )
         return 'notice'
       }
       // offline, a reload would show the browser's offline page: the notice, to reload once it is back
