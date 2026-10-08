@@ -59,6 +59,17 @@ test('K2-5: one status dot says Saved and Live; no comment tool in the bar; the 
   await expect(a.page.getByTestId('save-status')).toHaveText('Saved')
   await expect(a.page.getByTestId('conn-status')).toHaveText('Live')
   await expect(status).toHaveAttribute('title', /^Saved: .*Connected: /)
+  // drawn in the live colour (green), not the busy grey
+  const colours = await status.evaluate((el) => {
+    const dot = el.querySelector('.dr-status__dot') as HTMLElement
+    const probe = document.createElement('span')
+    probe.style.color = 'var(--dr-live)'
+    el.appendChild(probe)
+    const live = getComputedStyle(probe).color
+    probe.remove()
+    return { dot: getComputedStyle(dot).backgroundColor, live }
+  })
+  expect(colours.dot).toBe(colours.live)
   // the dot alone: no "Saved" and "Live" pills any more
   await expect(a.page.locator('[data-testid="topbar"] .dr-status__label')).toHaveCount(0)
   await expect(a.page.locator('[data-testid="topbar"] .dr-pill--online')).toHaveCount(0)
