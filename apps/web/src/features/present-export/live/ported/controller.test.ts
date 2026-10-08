@@ -389,6 +389,29 @@ describe('K3-5: Present offers the presentation to everyone on the board', () =>
     viewer.unmount()
   })
 
+  for (const first of ['answer', 'event'] as const)
+    it(`the presenter leaves before the offer lands (the ${first} first): it is ended at once, never resumed here`, async () => {
+      const t = setup({ others: [ANN] })
+      await t.respond(undefined, null)
+      t.presenter.start({ role: 'presenter' })
+      const offered = t.live.offerToEveryone()
+      await t.settle()
+      const start = posts(t.calls, '')[0]
+      t.presenter.stop({ reason: 'local' }) // Esc before the POST answered (a slow network)
+      if (first === 'event') await t.event(t.pres(), 'started', ME)
+      await t.respond(start, t.pres())
+      await offered
+      await t.settle()
+      // before the fix: the late presentation put this tab back into present mode, live to everyone
+      expect(t.presenter.isPresenting()).toBe(false)
+      expect(t.log.filter((l) => l.startsWith('start'))).toHaveLength(1)
+      expect(t.live.presentingLive.get()).toBe(false)
+      const stops = posts(t.calls, '/stop')
+      expect(stops).toHaveLength(1)
+      expect(stops[0]?.body).toMatchObject({ id: ID })
+      t.unmount()
+    })
+
   it('a refusal says nothing (Invite everyone stays in the bar)', async () => {
     const t = setup({ others: [ANN] })
     t.presenter.start({ role: 'presenter' })

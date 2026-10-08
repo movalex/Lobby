@@ -149,6 +149,13 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
    */
   let ending: string | null = null
   let stopping = false
+  /**
+   * K3-5 (wave K integration, the K3 review): a Present's offer to everyone is on its way (`offering`), and
+   * this tab left present mode before it landed (`offerWithdrawn`: Esc right after Present on a slow
+   * network). The late presentation is then ended at once and never puts this tab back into present mode.
+   */
+  let offering = false
+  let offerWithdrawn = false
   const endIt = (id: string) => {
     ending = id
     if (stopping) return
@@ -225,6 +232,11 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
         if (ending === p.id) {
           // Ended here; the api has not said so yet (or the request was lost): ask again, never resume.
           if (!local) endIt(p.id)
+          return
+        }
+        if (!local && offering && offerWithdrawn) {
+          // K3-5: the offer landed after this tab left present mode: end it, do not resume it here.
+          endIt(p.id)
           return
         }
         if (!local) {
@@ -332,6 +344,7 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
 
   const offStop = presenter.onStop(({ role: was, reason }) => {
     const p = store.presentation.get()
+    if (was === 'presenter' && offering) offerWithdrawn = true
     if (was === 'presenter' && presentingLive.get()) {
       presentingLive.set(false)
       // Exit / Esc ends it for everyone. Leaving the board does not: the api ends it after its grace
@@ -390,7 +403,24 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
       if (presenter.role() !== 'presenter' || presentingLive.get() || !mayPresent()) return
       if (store.presentation.get()) return
       if (!ctx.canvas.collaborators().some((c) => c.uid !== me.id)) return
-      await withBusy(() => store.start({ slide: slideOf(presenter) }))
+      offering = true
+      offerWithdrawn = false
+      try {
+        const r = await withBusy(() => store.start({ slide: slideOf(presenter) }))
+        // K3-5: left present mode while the offer was on its way: the presentation it made ends now
+        const p = store.presentation.get()
+        if (
+          r.ok &&
+          offerWithdrawn &&
+          !presenter.isPresenting() &&
+          p?.presenter.userId === me.id &&
+          p.tab === tab
+        )
+          endIt(p.id)
+      } finally {
+        offering = false
+        offerWithdrawn = false
+      }
     },
     notNow() {
       const p = store.presentation.get()
