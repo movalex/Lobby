@@ -269,9 +269,26 @@
   height: 36px;
   border-radius: 8px;
 }
+/* the engine canvas's own background (canvas/engine/theme.ts CANVAS_LIGHT, CANVAS_DARK): no change of colour
+   when the canvas appears under the skeleton's place */
+.lobby-skeleton__canvas,
+.lobby-canvas-screen--skeleton {
+  --lobby-skeleton-canvas: #f9fafb;
+  background: var(--lobby-skeleton-canvas);
+}
 .lobby-skeleton__canvas {
   overflow: hidden;
-  background: var(--dr-paper, #f6f4ee);
+}
+/* the session-connecting cover: the skeleton's canvas (shimmer, greyed toolbar), its words small and low */
+.lobby-canvas-screen--skeleton {
+  justify-content: flex-start;
+  padding-top: 18vh;
+  overflow: hidden;
+  font-size: 13px;
+}
+:root[data-theme="dark"] .lobby-skeleton__canvas,
+:root[data-theme="dark"] .lobby-canvas-screen--skeleton {
+  --lobby-skeleton-canvas: #101011;
 }
 .lobby-skeleton__shimmer {
   position: absolute;
@@ -323,13 +340,36 @@
   align-items: center;
 }
 @media (max-width: 600px) {
+  /* the phone toolbar: 44 px tools, six of them before "More" */
   .lobby-skeleton__toolbar {
     height: 54px;
+    gap: 4px;
+    padding: 0 6px;
   }
-  /* on a phone the dock folds over the board: no column to keep */
-  .lobby-skeleton__dock {
+  .lobby-skeleton__bone--tool {
+    width: 40px;
+    height: 40px;
+  }
+  .lobby-skeleton__bone--tool:nth-child(n + 7) {
     display: none;
   }
+  /* on a phone the dock folds over the board (one button in the corner): no column, no bones */
+  .dr-board__body > .lobby-skeleton__dock {
+    display: none;
+  }
+}
+/* the top bar's own breakpoints (BoardSkeleton sets data-width as TopBarFrame does; styles.css hides the
+   crumb): the crumb's bone goes with it, the status pills shrink to dots, and Share is an icon on a phone */
+.lobby-skeleton__topbar[data-width="tablet"] .lobby-skeleton__bone--ws,
+.lobby-skeleton__topbar[data-width="phone"] .lobby-skeleton__bone--ws {
+  display: none;
+}
+.lobby-skeleton__topbar[data-width="tablet"] .lobby-skeleton__bone--pill,
+.lobby-skeleton__topbar[data-width="phone"] .lobby-skeleton__bone--pill {
+  width: 24px;
+}
+.lobby-skeleton__topbar[data-width="phone"] .lobby-skeleton__bone--button {
+  width: 32px;
 }
 /* the board page's dock column before its features are installed (LobbyBoardPage.tsx): the same width, so the
    canvas does not narrow under the person when the dock arrives */
@@ -337,15 +377,7 @@
   pointer-events: none;
 }
 @media (max-width: 600px) {
-  .lobby-dock-placeholder {
+  .dr-board__body > .lobby-dock-placeholder {
     display: none;
   }
-}
-/* the session-connecting cover: the skeleton's canvas (shimmer, greyed toolbar), its words small and low */
-.lobby-canvas-screen--skeleton {
-  justify-content: flex-start;
-  padding-top: 18vh;
-  overflow: hidden;
-  background: var(--dr-paper, #f6f4ee);
-  font-size: 13px;
 }

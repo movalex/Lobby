@@ -17,6 +17,7 @@
  */
 import { Mark } from '../../brand/Wordmark.tsx'
 import { boardTitleHint } from '../../lib/prefetch-board.ts'
+import { useTopBarWidth } from '../../ui/useMedia.ts'
 import './board.css'
 
 export interface BoardSkeletonProps {
@@ -69,6 +70,8 @@ export function SkeletonToolbar({ readonly = false }: { readonly?: boolean }) {
 
 export function BoardSkeleton(props: BoardSkeletonProps) {
   const v = boardSkeletonView(props)
+  // the board's own top bar breakpoints (styles.css): the workspace crumb goes at 768 px, and so on
+  const width = useTopBarWidth()
   return (
     <div
       className="dr-board lobby-skeleton"
@@ -76,7 +79,11 @@ export function BoardSkeleton(props: BoardSkeletonProps) {
       data-board-id={props.boardId}
       aria-busy="true"
     >
-      <header className="dr-topbar lobby-skeleton__topbar" data-testid="board-skeleton-topbar">
+      <header
+        className="dr-topbar lobby-skeleton__topbar"
+        data-width={width}
+        data-testid="board-skeleton-topbar"
+      >
         <span className="dr-topbar__home" aria-hidden="true">
           <Mark size={24} />
         </span>
