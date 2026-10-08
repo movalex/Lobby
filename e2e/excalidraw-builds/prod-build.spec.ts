@@ -52,6 +52,10 @@ const TLDRAW_MARKERS = [
  */
 const ALLOWED_HOSTS = new Set([
   'clerk.com',
+  // The open sign-in's "Continue with Google" (auth/GoogleSignIn.tsx, docs/OPEN-SIGNIN.md): the auth provider's
+  // host where GET /api/auth/config offers Google (the theater Lobby, whose CSP allows it), never requested
+  // anywhere else; scripts/smoke/live-smoke.mjs checks which a live server is (since 648bd891)
+  'accounts.google.com',
   'dashboard.clerk.com',
   'www.w3.org',
   'react.dev',
