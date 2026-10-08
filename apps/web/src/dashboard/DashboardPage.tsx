@@ -169,6 +169,8 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   const tryBusy = useRef(false)
   // K4-5: "Try it" on the template row asks for it to be shown and focused (see the effect below)
   const [startRowAsk, setStartRowAsk] = useState(0)
+  const canCreateNow = useRef(canCreate)
+  canCreateNow.current = canCreate
   const { mod: catalogMod } = useCatalog(catalogWanted)
   // K4-5: the What's new card is dismissed per person (their browser's storage, which may be missing)
   const [whatsNewGone, setWhatsNewGone] = useState(() => readWhatsNewDismissed(me.user.id, WHATS_NEW_VERSION))
@@ -198,8 +200,8 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
     if (tile) {
       tile.scrollIntoView({ block: 'center', behavior: 'smooth' })
       tile.focus({ preventScroll: true })
-    } else if (canCreate) setCreating(true)
-  }, [startRowAsk, canCreate])
+    } else if (canCreateNow.current) setCreating(true)
+  }, [startRowAsk])
 
   // Wave J / K4-1: the Internal only switches live in the sidebar's workspace menu. The dashboard owns the
   // state so the What's new card can tell whether that menu has a control for this person at all.
