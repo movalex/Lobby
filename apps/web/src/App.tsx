@@ -1,6 +1,7 @@
-import { lazy, type ReactNode, Suspense, useEffect, useState } from 'react'
+import { lazy, type ReactNode, Suspense, useEffect, useState, useSyncExternalStore } from 'react'
 import { SignInPage } from './auth/SignInPage.tsx'
 import { SessionProvider, useSession } from './auth/session.tsx'
+import { NoticeRegion } from './board/Notices.tsx'
 import { BoardSkeleton } from './canvas/board/BoardSkeleton.tsx'
 import BoardRoute from './canvas/board/route.tsx'
 import { createSignOutPurge } from './canvas/sync/adapter/offline-idb.ts'
@@ -13,21 +14,26 @@ import { InvitePage } from './invite/InvitePage.tsx'
 import { DEV_AUTH_ENABLED } from './lib/identity.ts'
 import {
   installBoardPrefetch,
+  isBoardCodePrefetch,
   prefetchBoardCodeWhenIdle,
   returnsToBoard,
   startBoardCodeFor,
 } from './lib/prefetch-board.ts'
 import { matchRoute, navigate, signInPath, useLocationKey, workspacePath } from './lib/routing.ts'
+import { installStaleChunkRecovery, recoverChunk, staleChunks } from './lib/stale-chunk.ts'
 import { readLastWorkspace } from './lib/storage.ts'
 import { LoadingScreen, MessageScreen, UnreachableScreen } from './ui/screens.tsx'
 
 // K1 (wave K), once per page, while this module is evaluated (before the session check answers):
 //  - K1-1: on a board's address, the board page's code starts downloading now, alongside GET /api/auth/me
 //    (it waited for that answer and then went through two lazy steps: about 1.1 s of serial download at 4G);
-//  - K1-3: a pointer over, a focus on or a press of a link to a board downloads it ahead of the click.
+//  - K1-3: a pointer over, a focus on or a press of a link to a board downloads it ahead of the click;
+//  - K1-7: a lazy chunk a deploy removed reloads the page once (or, on a board, offers a reload); a failed
+//    speculative prefetch is left to the real load, so a hover or an idle moment never reloads the page.
 if (typeof window !== 'undefined') {
   startBoardCodeFor(location.pathname)
   installBoardPrefetch()
+  installStaleChunkRecovery(window, staleChunks, isBoardCodePrefetch)
 }
 
 // Spike A (docs/EXCALIDRAW-MIGRATION.md §8): dev-only /spike/:name engine pages, outside the session.
@@ -43,9 +49,20 @@ const SpikeRoute =
 // route module itself is small and in this bundle, and it loads the board page's chunk (K1-1: one lazy step).
 // Spike B's board page behind ?page=spike stays under the dev-auth guard (route.tsx).
 
+/** A stale feedback-page chunk (K1-7): the page reloads; meanwhile, this. */
+function FeedbackCodeUpdated() {
+  return <LoadingScreen label="Lobby has been updated: reloading…" testId="feedback-code-updated" />
+}
+
 // Wave J5: the feedback inbox at /feedback (its readers only; the api answers 404 to everybody else, and the
 // page then shows the unknown-address screen). A small page, loaded when it is opened.
-const FeedbackRoute = lazy(() => import('./features/feedback/FeedbackPage.tsx'))
+const FeedbackRoute = lazy(
+  recoverChunk(
+    () => import('./features/feedback/FeedbackPage.tsx'),
+    { default: FeedbackCodeUpdated } as unknown as typeof import('./features/feedback/FeedbackPage.tsx'),
+    staleChunks,
+  ),
+)
 
 export function App() {
   if (SpikeRoute && location.pathname.startsWith('/spike/')) {
@@ -64,6 +81,8 @@ export function App() {
       <GuestKindProvider>
         <Routes />
       </GuestKindProvider>
+      {/* K1-7: outside a board, the notice of a stale chunk that could not reload the page by itself */}
+      <StaleChunkNotice />
     </SessionProvider>
   )
 }
@@ -152,6 +171,32 @@ function PurgeOfflineOnSignOut() {
 function PrefetchBoardCodeWhenIdle() {
   useEffect(() => prefetchBoardCodeWhenIdle(), [])
   return null
+}
+
+/** K1-7: the stale-chunk notice outside a board (on a board, the board's own notices show it). */
+function StaleChunkNotice() {
+  const notice = useSyncExternalStore(
+    (l) => staleChunks.subscribe(l),
+    () => staleChunks.notice(),
+    () => null,
+  )
+  if (!notice) return null
+  return (
+    <NoticeRegion
+      notices={[
+        {
+          key: notice.key,
+          text: notice.text,
+          tone: notice.tone ?? 'info',
+          testId: notice.testId ?? 'app-toast',
+          timeoutMs: null,
+          action: notice.action ?? null,
+          seq: 1,
+        },
+      ]}
+      onDismiss={() => staleChunks.dismiss()}
+    />
+  )
 }
 
 /** Renders children only with a session; otherwise sends the user to sign in and back here after. */

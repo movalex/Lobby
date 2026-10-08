@@ -18,14 +18,34 @@
  * already started for a board address). Before, App lazily loaded this module and this module lazily
  * loaded the page, one after the other. K1-2: the board and its first ticket are asked for here, as soon
  * as the route renders with a session, while the code may still be on its way. K1-5: while the code
- * downloads, the board skeleton (./BoardSkeleton.tsx).
+ * downloads, the board skeleton (./BoardSkeleton.tsx). K1-7: a board chunk that no longer exists (a tab
+ * from before a deploy) reloads the page once (lib/stale-chunk.ts) instead of breaking it.
  */
 import { lazy, Suspense, useRef } from 'react'
 import { useSession } from '../../auth/session.tsx'
-import { loadBoardCode, preloadBoardOpen } from '../../lib/prefetch-board.ts'
+import { type BoardPageModule, loadBoardCode, preloadBoardOpen } from '../../lib/prefetch-board.ts'
+import { recoverChunk, staleChunks } from '../../lib/stale-chunk.ts'
+import { MessageScreen } from '../../ui/screens.tsx'
 import { BoardSkeleton } from './BoardSkeleton.tsx'
 
-const LobbyBoardPage = lazy(loadBoardCode)
+/** What a board shows while a stale board chunk reloads the page (or, after a reload loop, asks to). */
+function BoardCodeUpdated() {
+  return (
+    <MessageScreen
+      testId="board-code-updated"
+      title="Lobby has been updated"
+      body="Reloading to open this board with the new version…"
+      actions={
+        <button type="button" className="dr-btn dr-btn--primary" onClick={() => location.reload()}>
+          Reload
+        </button>
+      }
+    />
+  )
+}
+
+const UPDATED: BoardPageModule = { default: BoardCodeUpdated } as unknown as BoardPageModule
+const LobbyBoardPage = lazy(recoverChunk(loadBoardCode, UPDATED, staleChunks))
 const SpikeBoardPage =
   import.meta.env.DEV || import.meta.env.VITE_DRAFTROOM_DEV_AUTH === '1'
     ? lazy(() => import('../spike/board/SpikeBoardPage.tsx'))

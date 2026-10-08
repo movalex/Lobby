@@ -36,6 +36,12 @@ export interface BoardCode<T> {
   prefetch(): boolean
   /** Whether a download was started (and has not failed). */
   readonly started: boolean
+  /**
+   * Whether the download under way was started by a prefetch and nothing has asked for the module yet: its
+   * failure is nobody's to report (lib/stale-chunk.ts ignores Vite's preloadError for it). A real load
+   * meanwhile makes it its own.
+   */
+  readonly speculative: boolean
 }
 
 interface BoardCodeEnv {
@@ -54,27 +60,41 @@ const saveData = () => {
 
 export function createBoardCode<T>(loader: () => Promise<T>, env: BoardCodeEnv = { saveData }): BoardCode<T> {
   let pending: Promise<T> | null = null
-  const load = () => {
+  let speculative = false
+  const start = () => {
     if (!pending) {
       const p = loader()
       pending = p
       // a download that failed (a deploy removed the file, the network) may be asked for again
-      p.catch(() => {
-        if (pending === p) pending = null
-      })
+      p.then(
+        () => {
+          speculative = false
+        },
+        () => {
+          speculative = false
+          if (pending === p) pending = null
+        },
+      )
     }
     return pending
   }
   return {
-    load,
+    load() {
+      speculative = false
+      return start()
+    },
     prefetch() {
       if (pending) return true
       if (env.saveData()) return false
-      load().catch(() => {}) // a prefetch never reports: the real load does
+      speculative = true
+      start().catch(() => {}) // a prefetch never reports: the real load does (lib/stale-chunk.ts)
       return true
     },
     get started() {
       return pending !== null
+    },
+    get speculative() {
+      return speculative
     },
   }
 }
@@ -90,6 +110,13 @@ export const loadBoardCode = (): Promise<BoardPageModule> => boardCode.load()
 
 /** K1-3: downloads the board page's code ahead of a click (idempotent; skipped on Save-Data). */
 export const prefetchBoardCode = (): boolean => boardCode.prefetch()
+
+/**
+ * K1-7: whether a failed chunk load is the board code's speculative prefetch (nobody asked for the module
+ * yet): App.tsx tells lib/stale-chunk.ts to ignore it, so a hover or an idle moment never reloads the page;
+ * the real load reports its own failure.
+ */
+export const isBoardCodePrefetch = (): boolean => boardCode.speculative
 
 /**
  * K1-1: called once while App.tsx is evaluated, with `location.pathname`: on a board's address the board

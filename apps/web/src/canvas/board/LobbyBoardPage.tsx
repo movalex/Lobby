@@ -15,7 +15,8 @@
  * `preloadBoardOpen`, started by ./route.tsx before this chunk arrives; taken here once each, and asked again
  * on a retry); every loading state is the board skeleton (K1-5: ./BoardSkeleton.tsx, `board-skeleton`), the
  * dock's column is kept before the features install, and the connecting cover is the skeleton's canvas, so
- * nothing moves when the board takes over.
+ * nothing moves when the board takes over; a chunk a deploy removed shows a notice with a Reload button
+ * while the board is open (K1-7: lib/stale-chunk.ts).
  */
 import '../engine/engineGlobals.ts'
 import type { Board, BoardDetail, Me, TicketResponse } from '@draftroom/contracts'
@@ -43,6 +44,7 @@ import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 import type { BoardRole } from '../../lib/permissions.ts'
 import { rememberBoardTitle, takeBoardDetail, takeBoardTicket } from '../../lib/prefetch-board.ts'
 import { boardPath, navigate, setLeaveGuard } from '../../lib/routing.ts'
+import { recoverChunk, registerStaleChunkBoard } from '../../lib/stale-chunk.ts'
 import { useResource } from '../../lib/useResource.ts'
 import { useEngineSaveStatus } from '../../sync-quality/useEngineSaveStatus.ts'
 import { useTheme } from '../../theme/useTheme.ts'
@@ -85,8 +87,11 @@ import { duplicateLobbyData } from './tx.ts'
 import { onUploads, uploadsInFlight } from './uploads.ts'
 import './board.css'
 
-const ShareDialog = lazy(() =>
-  import('../../board/ShareDialog.tsx').then((m) => ({ default: m.ShareDialog })),
+// K1-7: a stale chunk draws nothing here (the board's notice offers the reload) rather than unmounting the board
+const ShareDialog = lazy(
+  recoverChunk(() => import('../../board/ShareDialog.tsx').then((m) => ({ default: m.ShareDialog })), {
+    default: () => null,
+  } as unknown as { default: typeof import('../../board/ShareDialog.tsx').ShareDialog }),
 )
 
 /** Longest an in-app navigation waits for this board's last changes to be acknowledged. */
@@ -466,6 +471,17 @@ function LobbyBoardScreen({
     uploading,
     role,
   })
+
+  // K1-7: while this board is open, a chunk a deploy removed shows a notice with a Reload button (never a
+  // reload by itself), and the button waits for this tab's changes not yet acknowledged
+  useEffect(
+    () =>
+      registerStaleChunkBoard({
+        unsent: () => session.snapshot.save.pending > 0 || uploadsInFlight(session.registries) > 0,
+        notify,
+      }),
+    [session, notify],
+  )
 
   // In-app navigation away from the board holds until this tab's last changes are acknowledged (bounded).
   useEffect(() => {
