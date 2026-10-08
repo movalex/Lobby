@@ -224,6 +224,17 @@ export const NEW_CANVAS_ARCHIVE_MESSAGE =
 /** The error code of those refusals. */
 export const NEW_CANVAS_ERROR = 'NEW_CANVAS'
 
+/**
+ * K6-1 (wave K): 503 CANVAS_STARTING, with Retry-After. The api has not reached its board server since it
+ * started (a deploy), so it does not know yet which canvas runs: a ticket for a board made on the new
+ * canvas, a new board (its `new_canvas` mark) and the refusals that depend on it wait for that answer. Never
+ * a NEW_CANVAS refusal. The web retries it quickly while it says "Connecting".
+ */
+export const CANVAS_STARTING_ERROR = 'CANVAS_STARTING'
+export const CANVAS_STARTING_MESSAGE = 'Lobby is connecting to the board server. Try again in a moment.'
+/** The Retry-After of that answer, in seconds. */
+export const CANVAS_STARTING_RETRY_AFTER_S = 2
+
 /** GET /api/boards/:bid/snapshots (view) as the checkpoints UI reads it: every kind, newest first. */
 export const ListCheckpointsResponse = z.object({ snapshots: z.array(BoardCheckpoint) })
 export type ListCheckpointsResponse = z.infer<typeof ListCheckpointsResponse>

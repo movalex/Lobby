@@ -5,8 +5,11 @@
 // deleted. Anyone who can view the board can load it (GET); board lists carry `thumbnailVersion` so the
 // card's URL changes (and caches) per upload. Every decision goes through access.ts
 // (packages/permissions): 404 whenever the caller cannot see the board. Thumbnails are board content:
-// nothing here is ever published on the board event stream, and no route hands one to anyone who
-// cannot view the board. Uploads are refused before their body is read unless the caller may upload.
+// no image is ever published on the board event stream, and no route hands one to anyone who cannot view
+// the board. Uploads are refused before their body is read unless the caller may upload.
+// K6-3: an accepted upload or removal is announced on the board's stream as a content-free hint
+// (THUMBNAIL_UPDATED_EVENT: the new version, or null), after it commits, so the other editors' clients skip
+// theirs instead of meeting the per-board window (429). The window itself is unchanged.
 
 import { createHash } from 'node:crypto'
 import {
@@ -14,6 +17,8 @@ import {
   THUMBNAIL_MAX_DIMENSION,
   THUMBNAIL_MIME_TYPES,
   THUMBNAIL_MIN_INTERVAL_MS,
+  THUMBNAIL_UPDATED_EVENT,
+  type ThumbnailUpdatedEvent,
 } from '@draftroom/contracts'
 import type { Queryable } from '@draftroom/db'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
@@ -78,7 +83,12 @@ function versionParam(req: FastifyRequest): string | null {
 }
 
 export async function registerThumbnails(app: FastifyInstance, ctx: FeatureContext): Promise<void> {
-  const { db, blobs, now } = ctx
+  const { db, blobs, now, events } = ctx
+  /** K6-3: after the commit, everyone on the board hears that its thumbnail changed (no image, no person). */
+  const announce = (boardId: string, version: string | null) => {
+    const data: ThumbnailUpdatedEvent = { version }
+    events.publish(boardId, { type: THUMBNAIL_UPDATED_EVENT, data })
+  }
   const perBoard = keyedLimit(
     { max: 1, timeWindow: THUMBNAIL_MIN_INTERVAL_MS },
     now,
@@ -237,6 +247,7 @@ export async function registerThumbnails(app: FastifyInstance, ctx: FeatureConte
         await deleteQuietly(blobs, [key], warn('new thumbnail blob not cleaned up'))
         throw e
       }
+      announce(bid, swapped.row.version)
       if (swapped.previous && swapped.previous !== key)
         await deleteQuietly(blobs, [swapped.previous], warn('previous thumbnail blob not deleted'))
       return { thumbnail: toThumbnail(swapped.row) }
@@ -254,7 +265,10 @@ export async function registerThumbnails(app: FastifyInstance, ctx: FeatureConte
         await tx.query('DELETE FROM board_thumbnails WHERE board_id = $1', [bid])
         return row.blob_key
       })
-      if (removed) await deleteQuietly(blobs, [removed], warn('removed thumbnail blob not deleted'))
+      if (removed) {
+        announce(bid, null)
+        await deleteQuietly(blobs, [removed], warn('removed thumbnail blob not deleted'))
+      }
       return reply.code(204).send()
     })
 

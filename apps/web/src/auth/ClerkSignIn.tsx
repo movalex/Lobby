@@ -14,6 +14,7 @@ import { ClerkProvider, SignIn, useAuth, useUser } from '@clerk/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { useTheme } from '../theme/useTheme.ts'
+import { clerkProviderOptions } from './clerk-options.ts'
 import { type ClerkAppearance, clerkAppearance, readThemeTokens } from './clerkAppearance.ts'
 import { ExchangeStatus } from './ExchangeStatus.tsx'
 import { type ExchangeErrorView, exchangeErrorView } from './exchange-error.ts'
@@ -27,7 +28,7 @@ export default function ClerkSignIn({ publishableKey, onDone }: { publishableKey
   const { colorMode } = useTheme()
   const appearance = useMemo(() => clerkAppearance(readThemeTokens(), colorMode), [colorMode])
   return (
-    <ClerkProvider publishableKey={publishableKey}>
+    <ClerkProvider {...clerkProviderOptions(publishableKey)}>
       <ClerkExchange onDone={onDone} appearance={appearance} />
     </ClerkProvider>
   )

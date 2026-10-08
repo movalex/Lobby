@@ -1,0 +1,84 @@
+/* Cursor chat (K6-4): a message floats just under its sender's cursor label, in their colour, then fades. */
+
+.dr-cchat-bubble,
+.dr-cchat-composer {
+  position: absolute;
+  max-width: 260px;
+  border-radius: 4px 14px 14px 14px;
+  color: #fff;
+  font: 500 13px / 1.35 var(--dr-font, system-ui, sans-serif);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 18%),
+    0 4px 14px rgb(0 0 0 / 16%);
+  pointer-events: none;
+}
+
+.dr-cchat-bubble {
+  padding: 6px 11px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  transform-origin: top left;
+  animation: dr-cchat-in 140ms ease-out;
+  transition: opacity 600ms ease-in;
+}
+.dr-cchat-bubble[data-phase="fading"],
+.dr-cchat-bubble[data-phase="gone"] {
+  opacity: 0;
+}
+
+@keyframes dr-cchat-in {
+  from {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dr-cchat-bubble {
+    animation: none;
+  }
+}
+
+.dr-cchat-composer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 4px;
+  pointer-events: auto;
+}
+
+.dr-cchat-composer__input {
+  width: 220px;
+  min-width: 0;
+  border: 0;
+  border-radius: 10px;
+  padding: 4px 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  outline: none;
+}
+.dr-cchat-composer__input::placeholder {
+  color: rgb(255 255 255 / 78%);
+}
+.dr-cchat-composer:focus-within {
+  outline: 2px solid var(--dr-focus, #2563eb);
+  outline-offset: 2px;
+}
+
+.dr-cchat-composer__left {
+  font-size: 11px;
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+
+/* phones: the field must not zoom the page (iOS zooms inputs under 16 px) */
+@media (pointer: coarse) {
+  .dr-cchat-composer__input {
+    font-size: 16px;
+  }
+}

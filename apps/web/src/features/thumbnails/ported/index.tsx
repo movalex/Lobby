@@ -19,7 +19,7 @@ export function mayCapture(ctx: Pick<CanvasFeatureContext, 'role' | 'board' | 'm
 }
 
 function ThumbnailCapture({ ctx }: { ctx: CanvasFeatureContext }) {
-  const { canvas, registries } = ctx
+  const { canvas, registries, events } = ctx
   const boardId = ctx.board.id
   const enabled = mayCapture(ctx)
   const [status, setStatus] = useState<CaptureStatus>({ state: enabled ? 'idle' : 'off' })
@@ -33,8 +33,9 @@ function ThumbnailCapture({ ctx }: { ctx: CanvasFeatureContext }) {
     return startCapture(canvas, boardId, {
       menusOpen: () => registries.menusOpen.call(),
       onStatus: (s) => setStatus((prev) => ({ ...prev, ...s })),
+      events, // K6-3: someone else's accepted upload
     })
-  }, [canvas, registries, boardId, enabled])
+  }, [canvas, registries, boardId, enabled, events])
   return (
     <span
       hidden

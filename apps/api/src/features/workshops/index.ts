@@ -42,6 +42,7 @@ import { isBoardId, isUserId, requireBoardAction } from '../../access.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, badRequest, conflict, forbidden, notFound, parse } from '../../errors.ts'
 import type { FeatureContext } from '../context.ts'
+import { registerCursorChat } from './cursor-chat.ts'
 import { requireFacilitatorAccount, TIMER_NOT_YOURS } from './facilitators.ts'
 import { HandLimitError, HandRegistry } from './hands.ts'
 import { registerPresentation } from './presentation.ts'
@@ -132,6 +133,8 @@ export async function registerWorkshops(app: FastifyInstance, ctx: FeatureContex
   registerPrivateNotes(app, ctx)
   // Present to everyone (wave 4, present-live; presentation.ts): in memory, like raised hands.
   registerPresentation(app, ctx)
+  // Cursor chat (K6-4, cursor-chat.ts): relayed to the board's stream like reactions, never stored.
+  registerCursorChat(app, ctx)
 }
 
 export function registerWorkshopRoutes(

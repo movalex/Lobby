@@ -210,8 +210,13 @@ describe('invite by email with Clerk sign-in (UNVERIFIED against a live Clerk; f
     })
     // One lookup with the normalized address; no invitation email, no invitation row.
     expect(clerk.lookups).toEqual([{ emailAddress: ['bob@example.com'], limit: 10 }])
+    // K6-2: built with Clerk's SDK telemetry off (auth/clerk-options.ts)
     expect(clerk.clients).toEqual([
-      { secretKey: CLERK_KEYS.secretKey, publishableKey: CLERK_KEYS.publishableKey },
+      {
+        secretKey: CLERK_KEYS.secretKey,
+        publishableKey: CLERK_KEYS.publishableKey,
+        telemetry: { disabled: true },
+      },
     ])
     expect(clerk.invitations).toEqual([])
     expect(await countRows(w.api, 'invitations WHERE board_id = $1', [board])).toBe(0)

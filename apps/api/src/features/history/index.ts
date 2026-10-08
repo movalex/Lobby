@@ -22,7 +22,7 @@ import type { FastifyInstance } from 'fastify'
 import { requireBoardAction, requireProjectInWorkspace, requireWorkspaceRole } from '../../access.ts'
 import { userKind } from '../../auth/users.ts'
 import { liveElements, lobbySnapshotOf } from '../../canvas/lobby-elements.ts'
-import { onNewCanvas } from '../../canvas-engine.ts'
+import { onNewCanvas, showsR0Marks } from '../../canvas-engine.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, conflict, forbidden, gone, notFound, parse } from '../../errors.ts'
 import { contentDisposition } from '../../files/disposition.ts'
@@ -141,7 +141,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
         ORDER BY s.created_at DESC, s.id DESC LIMIT ${MAX_LISTED}`,
       [bid, access.board.workspace_id],
     )
-    const marks = { newCanvas: !(await onNewCanvas(ctx)) }
+    const marks = { newCanvas: await showsR0Marks(ctx) }
     return { snapshots: rows.rows.map((r) => toCheckpoint(r, marks)) }
   })
 
@@ -213,7 +213,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     }
     ctx.events.publish(bid, { type: HISTORY_EVENTS.snapshot, data: { snapshotId: id } })
     reply.code(201)
-    return toCheckpoint(row, { newCanvas: !(await onNewCanvas(ctx)) })
+    return toCheckpoint(row, { newCanvas: await showsR0Marks(ctx) })
   })
 
   app.post('/api/snapshots/:sid/restore-as-new', HEAVY, async (req, reply) => {
@@ -272,7 +272,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
       warn,
     )
     reply.code(201)
-    return created(board, shown.length, notShown, await onNewCanvas(ctx))
+    return created(board, shown.length, notShown, !(await showsR0Marks(ctx)))
   })
 
   app.post('/api/boards/:bid/duplicate', HEAVY, async (req, reply) => {
@@ -326,7 +326,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
     // export-control: the same people on the copy stay under the same export policy.
     if (input.keepSharing) await copyExportPolicy(db, bid, board, user.id, ctx.now())
     reply.code(201)
-    const made = created(board, shown.length, notShown, await onNewCanvas(ctx))
+    const made = created(board, shown.length, notShown, !(await showsR0Marks(ctx)))
     // IO-2a: what keep sharing left out of a copy in an internal-only scope, said plainly (first).
     return {
       ...made,
@@ -454,7 +454,7 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
       await checkpoints.captureQuietly(board.id, 'import')
       reply.code(201)
       return {
-        ...created(board, allowed.length - fenced, dropped.length + fenced, await onNewCanvas(ctx)),
+        ...created(board, allowed.length - fenced, dropped.length + fenced, !(await showsR0Marks(ctx))),
         warnings,
       }
     },

@@ -1,10 +1,14 @@
 // Wires the thumbnail scheduler to one Excalidraw board page (the port of ../capture.ts): local content
 // changes (this tab's edits and its undo, never a collaborator's: they capture their own), the start view
 // changing, the person's input (a render waits until they have paused), tab hidden / page unload, the
-// board closing, and a one-time check whether the board has a thumbnail at all.
+// board closing, and a one-time check whether the board has a thumbnail at all. K6-3: the board's event
+// stream says when someone's upload was accepted ('thumbnail.updated'), so one client uploads per board.
+import { THUMBNAIL_UPDATED_EVENT, ThumbnailUpdatedEvent } from '@draftroom/contracts'
 import type { LobbyCanvas } from '../../../canvas/api/index.ts'
+import { DEV_AUTH_ENABLED } from '../../../lib/identity.ts'
+import type { BoardEvents } from '../../events.ts'
 import { hasStandIn, markStandIn } from '../capture-state.ts'
-import { CaptureScheduler, type CaptureStatus, RENDER_QUIET_MS } from '../scheduler.ts'
+import { CaptureScheduler, type CaptureStatus, DEFAULT_TIMING, type SchedulerTiming } from '../scheduler.ts'
 import { hasStoredThumbnail, sendLeftover, sendThumbnail } from '../upload.ts'
 import {
   boardHasContent,
@@ -18,17 +22,37 @@ import {
 /** Pointer presses, keys and wheel turns anywhere on the page count as "the person is active". */
 const INPUT_EVENTS = ['pointerdown', 'keydown', 'wheel'] as const
 
+/** The scheduler's waits: a test build (the dev-auth guard) may shorten them, read once per board open. */
+export function thumbnailTiming(): Partial<SchedulerTiming> {
+  if (!DEV_AUTH_ENABLED) return {}
+  const raw = (globalThis as { __lobbyThumbnailTiming?: unknown }).__lobbyThumbnailTiming
+  if (!raw || typeof raw !== 'object') return {}
+  const out: Partial<SchedulerTiming> = {}
+  for (const key of Object.keys(DEFAULT_TIMING) as (keyof SchedulerTiming)[]) {
+    const v = (raw as Record<string, unknown>)[key]
+    if (typeof v === 'number' && Number.isFinite(v) && v >= 0) out[key] = v
+  }
+  return out
+}
+
 export function startCapture(
   canvas: LobbyCanvas,
   boardId: string,
-  opts: { menusOpen: () => boolean; onStatus?(s: CaptureStatus): void },
+  opts: {
+    menusOpen: () => boolean
+    onStatus?(s: CaptureStatus): void
+    /** The board's event stream (K6-3: someone else's accepted upload). */
+    events?: Pick<BoardEvents, 'on'>
+  },
 ): () => void {
+  const timing = thumbnailTiming()
+  const renderQuietMs = timing.renderQuietMs ?? DEFAULT_TIMING.renderQuietMs
   let lastInputAt = 0
   const onInput = () => {
     lastInputAt = Date.now()
   }
   for (const type of INPUT_EVENTS) document.addEventListener(type, onInput, { capture: true, passive: true })
-  const busy = () => Date.now() - lastInputAt < RENDER_QUIET_MS || isBusy(canvas, opts.menusOpen)
+  const busy = () => Date.now() - lastInputAt < renderQuietMs || isBusy(canvas, opts.menusOpen)
 
   const scheduler = new CaptureScheduler({
     now: () => Date.now(),
@@ -43,7 +67,14 @@ export function startCapture(
       return sent
     },
     onStatus: opts.onStatus,
+    timing,
   })
+  // K6-3: an upload accepted for this board (anyone's: this tab's own is recognised by its version)
+  const offUpdated =
+    opts.events?.on(THUMBNAIL_UPDATED_EVENT, (data) => {
+      const parsed = ThumbnailUpdatedEvent.safeParse(data)
+      if (parsed.success) scheduler.noteRemoteUpload(parsed.data.version)
+    }) ?? (() => {})
 
   // What the board looked like after its last change (./render.ts BoardView): the board page tears the
   // canvas down in the same commit that unmounts this capture, so the drawing made on the way out reads
@@ -105,6 +136,7 @@ export function startCapture(
       // never let a thumbnail break closing the board
     }
     closed = true
+    offUpdated()
     offChange()
     offDoc()
     for (const type of INPUT_EVENTS) document.removeEventListener(type, onInput, { capture: true })

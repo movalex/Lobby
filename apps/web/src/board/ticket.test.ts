@@ -6,8 +6,12 @@ import {
   BOARD_SOCKET_PROTOCOL,
   buildTimeSyncOrigin,
   createTicketUri,
+  firstTicketWhileStarting,
+  isCanvasStarting,
+  STARTING_BACKOFF_MS,
   syncSocketOrigin,
   TICKET_PROTOCOL_PREFIX,
+  type TicketRetry,
   type TicketUriOptions,
   ticketInProtocol,
   ticketProtocols,
@@ -158,6 +162,99 @@ describe('sync uri: a fresh ticket on every (re)connect', () => {
     expect(fetchTicket).toHaveBeenCalledTimes(7)
     expect(sleeps).toEqual([10, 20, 40, 40, 40, 40])
     expect(onAccessLost).not.toHaveBeenCalled()
+  })
+
+  it('K6-1: 503 CANVAS_STARTING (the api has not reached sync yet) is retried on the short backoff while "Connecting", and is never taken for NEW_CANVAS', async () => {
+    const starting = () =>
+      new ApiError(
+        'server',
+        503,
+        'CANVAS_STARTING',
+        'Lobby is connecting to the board server. Try again in a moment.',
+      )
+    const failures = [starting(), starting(), starting(), starting(), starting(), starting()]
+    const fetchTicket = vi.fn(async () => {
+      const f = failures.shift()
+      if (f) throw f
+      return ticket(3)
+    })
+    const onNewCanvas = vi.fn()
+    const states: boolean[] = []
+    const onConnecting = vi.fn((_info: TicketRetry) => void states.push(t.connecting()))
+    const { t, sleeps, onAccessLost, onSignedOut, onTicket } = setup(fetchTicket, {
+      onNewCanvas,
+      onConnecting,
+    })
+    expect(t.connecting()).toBe(false)
+    const url = await t.uri()
+    expect(new URL(url).searchParams.get('ticket')).toBe('v1.payload3.sig+/=3')
+    expect(fetchTicket).toHaveBeenCalledTimes(7)
+    // short and capped at 2 s (the api's Retry-After), never the 5 s of the general backoff
+    expect(sleeps).toEqual([...STARTING_BACKOFF_MS, 2_000])
+    expect(Math.max(...sleeps)).toBeLessThanOrEqual(2_000)
+    expect(onConnecting.mock.calls.map(([info]) => info)).toEqual(
+      sleeps.map((waitMs, i) => ({ attempt: i + 1, waitMs, starting: true })),
+    )
+    expect(states.every(Boolean)).toBe(true) // "Connecting" while it waits
+    expect(t.connecting()).toBe(false) // and not once the ticket came
+    expect(onTicket).toHaveBeenCalledTimes(1)
+    expect(onNewCanvas).not.toHaveBeenCalled()
+    expect(onAccessLost).not.toHaveBeenCalled()
+    expect(onSignedOut).not.toHaveBeenCalled()
+    expect(isCanvasStarting(starting())).toBe(true)
+    expect(isCanvasStarting(new ApiError('conflict', 409, 'NEW_CANVAS', 'x'))).toBe(false)
+    expect(isCanvasStarting(new ApiError('server', 503, 'HTTP_503', 'x'))).toBe(false)
+  })
+
+  it('K6-1: a starting api and other transient failures keep their own backoff counts', async () => {
+    const failures = [
+      new ApiError('network', 0, 'NETWORK', 'down'),
+      new ApiError('server', 503, 'CANVAS_STARTING', 'starting'),
+      new ApiError('network', 0, 'NETWORK', 'down'),
+      new ApiError('server', 503, 'CANVAS_STARTING', 'starting'),
+    ]
+    const fetchTicket = vi.fn(async () => {
+      const f = failures.shift()
+      if (f) throw f
+      return ticket(4)
+    })
+    const onConnecting = vi.fn((_info: TicketRetry) => {})
+    const { t, sleeps } = setup(fetchTicket, { backoffMs: [10, 20, 40], onConnecting })
+    await t.uri()
+    expect(sleeps).toEqual([10, STARTING_BACKOFF_MS[0], 20, STARTING_BACKOFF_MS[1]])
+    expect(onConnecting.mock.calls.map(([i]) => i.starting)).toEqual([false, true, false, true])
+  })
+
+  it('K6-1: the first ticket (before the session) waits out a starting api, and gives every other failure back at once', async () => {
+    const sleeps: number[] = []
+    const sleep = async (ms: number) => void sleeps.push(ms)
+    let n = 0
+    const ok = await firstTicketWhileStarting(
+      async () => {
+        if (n++ < 3) throw new ApiError('server', 503, 'CANVAS_STARTING', 'starting')
+        return ticket(5)
+      },
+      { sleep },
+    )
+    expect(ok.ticket).toBe('v1.payload5.sig+/=5')
+    expect(sleeps).toEqual(STARTING_BACKOFF_MS.slice(0, 3))
+    // NEW_CANVAS, no access and every other error: thrown as they are, no wait
+    for (const e of [
+      new ApiError('conflict', 409, 'NEW_CANVAS', 'made on the new canvas'),
+      new ApiError('not-found', 404, 'NOT_FOUND', 'no'),
+      new ApiError('server', 500, 'INTERNAL', 'boom'),
+    ]) {
+      sleeps.length = 0
+      await expect(firstTicketWhileStarting(async () => Promise.reject(e), { sleep })).rejects.toBe(e)
+      expect(sleeps).toEqual([])
+    }
+    // a start that lasts past maxWaitMs is reported (the page's error screen, with Try again)
+    sleeps.length = 0
+    const lasting = new ApiError('server', 503, 'CANVAS_STARTING', 'starting')
+    await expect(
+      firstTicketWhileStarting(async () => Promise.reject(lasting), { sleep, maxWaitMs: 5_000 }),
+    ).rejects.toBe(lasting)
+    expect(sleeps.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(5_000)
   })
 
   it('shares one attempt between overlapping uri() calls', async () => {

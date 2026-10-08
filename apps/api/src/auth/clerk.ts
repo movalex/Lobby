@@ -35,6 +35,7 @@ import type { Queryable } from '@draftroom/db'
 import { unauthenticated } from '../errors.ts'
 import { CLERK_TIMEOUT_MS, withTimeout } from '../features/dashboard/clerk-directory.ts'
 import { keyedLimit, type RouteRateLimit } from '../rate-limit.ts'
+import { clerkClientOptions } from './clerk-options.ts'
 import { accountDisabled } from './identity.ts'
 import type { AuthProvider, RefreshOutcome } from './provider.ts'
 import { SESSION_TTL_MS } from './session.ts'
@@ -127,7 +128,8 @@ export function verifiedProfileEmails(u: ClerkUserEmails): ProfileEmail[] {
   return out
 }
 
-function defaultDeps(opts: ClerkProviderOptions): ClerkDeps {
+/** The deps that call Clerk (exported for the telemetry test, K6-2: which options build the client). */
+export function defaultDeps(opts: ClerkProviderOptions): ClerkDeps {
   // Loaded lazily: dev-provider runs (and tests with fakes) never load the Clerk SDK.
   let sdk: Promise<typeof import('@clerk/backend')> | null = null
   const load = () => {
@@ -136,7 +138,8 @@ function defaultDeps(opts: ClerkProviderOptions): ClerkDeps {
   }
   const client = async () => {
     const { createClerkClient } = await load()
-    return createClerkClient({ secretKey: opts.secretKey, publishableKey: opts.publishableKey })
+    // K6-2: telemetry off (./clerk-options.ts)
+    return createClerkClient(clerkClientOptions(opts))
   }
   return {
     async verify(token) {

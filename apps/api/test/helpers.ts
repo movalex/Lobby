@@ -13,6 +13,7 @@ import type { FastifyInstance, LightMyRequestResponse } from 'fastify'
 import { type ApiDeps, createApiServer } from '../src/app.ts'
 import type { IdentityService } from '../src/auth/identity.ts'
 import { createRecordingSessionEndNotifier } from '../src/auth/session-sync.ts'
+import { TLDRAW_ONLY } from '../src/canvas-engine.ts'
 import { type ApiConfig, loadConfig } from '../src/config.ts'
 import { type AccessChange, createRecordingNotifier } from '../src/notifier.ts'
 
@@ -108,6 +109,10 @@ export async function createTestApi(
     sessionEnds,
     now,
     ...(opts.domainAccessGuard === false ? { domainAccessGuard: false } : {}),
+    // K6-1: without an injected sync client the api talks to config's sync URL, where nothing listens in
+    // a test: its engine would stay unknown (503 CANVAS_STARTING). Such tests ran on R0's tldraw answer
+    // before (the probe's old default), so they get exactly that. A test with a sync fake gets the probe.
+    ...(opts.deps?.syncInternal ? {} : { canvasEngine: TLDRAW_ONLY }),
     ...opts.deps,
   })
   await server.app.ready()
