@@ -63,6 +63,8 @@ export const CANVAS_ENGINE_WAIT_MS = 2_500
 export const CANVAS_ENGINE_START_BACKOFF_MS: readonly number[] = [250, 500, 1_000, 2_000, 5_000]
 /** Before the first answer, a request may start an ask of its own at most this often (sync down: no storm). */
 export const CANVAS_ENGINE_UNKNOWN_ASK_GAP_MS = 500
+/** After this many failed start-up asks the api says so in its log, once (an operator's clue). */
+export const CANVAS_ENGINE_SILENT_ASKS = 5
 
 export interface CanvasEngineProbeOptions {
   ttlMs?: number
@@ -133,6 +135,11 @@ export function createCanvasEngineProbe(
       if (stopped || known !== 'unknown' || timer !== null) return
       const ms = backoff[Math.min(attempts, backoff.length - 1)] ?? 5_000
       attempts++
+      // once: tickets of new-canvas boards and new boards wait for this (a wrong sync URL or secret, sync down)
+      if (attempts === CANVAS_ENGINE_SILENT_ASKS)
+        opts.log?.(
+          `sync has not said which canvas it runs (${attempts} asks since start-up); new-canvas boards' tickets and new boards answer 503 CANVAS_STARTING until it does`,
+        )
       timer = setTimer(loop, ms)
     })
   }

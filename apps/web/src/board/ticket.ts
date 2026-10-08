@@ -193,7 +193,10 @@ export function createTicketUri(opts: TicketUriOptions) {
         try {
           opts.onConnecting?.({ attempt: i + 1, waitMs, starting: isStarting })
         } catch (err) {
-          console.error('Lobby: a ticket retry listener failed', err)
+          // the error's class name only (a page's listener; never what it said)
+          console.error(
+            `Lobby: a ticket retry listener failed (${err instanceof Error ? err.name : 'Error'})`,
+          )
         }
         await sleep(waitMs)
       }

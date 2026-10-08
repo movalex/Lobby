@@ -9,6 +9,7 @@ import {
 } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
 import {
+  CANVAS_ENGINE_SILENT_ASKS,
   CANVAS_ENGINE_START_BACKOFF_MS,
   CANVAS_ENGINE_UNKNOWN_ASK_GAP_MS,
   type CanvasEngine,
@@ -178,7 +179,15 @@ describe('createCanvasEngineProbe', () => {
     up = true
     await timers.advance(5_000)
     expect(probe.known()).toBe('excalidraw')
-    expect(logs).toEqual(['sync runs the excalidraw canvas'])
+    // said once after CANVAS_ENGINE_SILENT_ASKS failed asks (an operator's clue: no secret, no URL), then the answer
+    expect(logs).toHaveLength(2)
+    expect(logs[0]).toMatch(
+      new RegExp(
+        `^sync has not said which canvas it runs \\(${CANVAS_ENGINE_SILENT_ASKS} asks since start-up\\)`,
+      ),
+    )
+    expect(logs[0]).toContain('503 CANVAS_STARTING')
+    expect(logs[1]).toBe('sync runs the excalidraw canvas')
     const after = asks
     await timers.advance(60_000)
     expect(asks).toBe(after) // no start-up asks once answered
