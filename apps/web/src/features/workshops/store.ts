@@ -118,6 +118,30 @@ export const REFRESH_RETRY_MIN_MS = 1_000
 export const REFRESH_RETRY_MAX_MS = 15_000
 
 /**
+ * K3-6: a board open fetched /workshop (and /private-brainstorm) twice: once when the store was made and
+ * once at the event stream's first resync, which comes at once or a moment later. The first load is now
+ * that resync's refetch alone; only a stream that has not connected after this long (slow or down) makes
+ * the store fetch on its own (and its later resync fetches again, as every reconnect does).
+ */
+export const FIRST_LOAD_FALLBACK_MS = 3_000
+
+/**
+ * The first load of a store fed by an event stream (K3-6): nothing when a refetch was already asked for
+ * (the stream was connected, so its resync ran as the store subscribed), else one fetch after `fallbackMs`
+ * unless the resync (or anything else) asked first. Returns the cancel.
+ */
+export function firstLoad(
+  store: { refreshAsked(): boolean; refresh(): Promise<void> },
+  fallbackMs = FIRST_LOAD_FALLBACK_MS,
+): () => void {
+  if (store.refreshAsked()) return () => {}
+  const t = setTimeout(() => {
+    if (!store.refreshAsked()) void store.refresh()
+  }, fallbackMs)
+  return () => clearTimeout(t)
+}
+
+/**
  * Whether a failed request may succeed if sent again: no answer at all, a server error, a rate limit or
  * an answer that was not the api's (a proxy's page). Not a 401/403/404 (signed out, access lost, gone)
  * or another refusal. Errors without a status (not the api client's) count as retryable.
@@ -202,6 +226,9 @@ export class WorkshopStore {
   /** The highest refetch seq that failed: an older answer does not make the store current again (as private-notes/store.ts). */
   private failedSeq = 0
   private disposed = false
+  /** Refetches asked for so far (K3-6: the first load waits for the stream's resync to ask). */
+  private refreshes = 0
+  private cancelFirstLoad: () => void = () => {}
 
   constructor(deps: {
     boardId: string
@@ -231,6 +258,7 @@ export class WorkshopStore {
   dispose() {
     this.disposed = true
     this.clearRetry()
+    this.cancelFirstLoad()
     for (const u of this.unsubscribers.splice(0)) u()
     this.listeners.clear()
     this.reactionListeners.clear()
@@ -331,12 +359,22 @@ export class WorkshopStore {
 
   // ---- loading and events --------------------------------------------------------------------------
 
+  /** Whether a refetch was asked for yet (K3-6 `firstLoad`). */
+  refreshAsked = () => this.refreshes > 0
+
+  /** The first load (K3-6): the stream's resync, or a fetch after `fallbackMs` without one. */
+  startFirstLoad(fallbackMs?: number) {
+    this.cancelFirstLoad()
+    this.cancelFirstLoad = firstLoad(this, fallbackMs)
+  }
+
   /**
    * Fetches the workshop state (the caller's own view of the vote). A failure keeps the state shown
    * (marked stale) and is tried again, sooner or later, until a refetch succeeds (G1): the event that
    * asked for it does not come twice.
    */
   async refresh(): Promise<void> {
+    this.refreshes++
     const seq = ++this.seq
     try {
       const sentAt = this.nowMs()
@@ -807,13 +845,17 @@ export class WorkshopStore {
 
 const stores = new WeakMap<object, WorkshopStore>()
 
-/** One store per board event stream (stable for the board session), created on first use. */
+/**
+ * One store per board event stream (stable for the board session), created on first use. It loads with
+ * the stream's first resync (K3-6: one /workshop request per board open), or on its own when the stream
+ * has not connected after FIRST_LOAD_FALLBACK_MS.
+ */
 export function workshopStoreFor(events: EventSource & object, make: () => WorkshopStore): WorkshopStore {
   let s = stores.get(events)
   if (!s) {
     s = make()
     stores.set(events, s)
-    void s.refresh()
+    s.startFirstLoad()
   }
   return s
 }

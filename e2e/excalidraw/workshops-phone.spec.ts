@@ -247,7 +247,9 @@ test('R2 R3 R4 R5 R6 W5-07: guests take part but never facilitate; a brainstorm 
       await expectOnScreenAboveToolbars(guest, joinCard)
       await expectNothingOver(joinCard)
       await expect(joinCard.getByTestId('vote-touch-hint')).toBeVisible()
-      await expect(joinCard.getByTestId('vote-keys-hint')).toBeHidden()
+      // K3-6: the keyboard help is the card's description for screen readers, never a line on screen
+      await expect(joinCard.getByTestId('vote-click-hint')).toBeHidden()
+      await expect(joinCard.getByTestId('vote-keys-hint')).toHaveClass(/dr-sr-only/)
       await shot(guest, 'lc-r6-guest-phone-vote-join.png', testInfo)
       await joinCard.getByTestId('vote-join').click()
       const bar = guest.getByTestId('vote-bar')

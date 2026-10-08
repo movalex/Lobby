@@ -21,7 +21,7 @@
 // accept goes to the engine as usual. The topmost object under the press decides (W5-03): a click on an
 // object the vote does not take casts nothing, even over one it takes, and says so.
 import { type VoteEligibilityRule, voteRuleOf } from '@draftroom/contracts'
-import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
+import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { type CanvasFeatureContext, geometry } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { PHONE_QUERY, useMediaQuery } from '../../../ui/useMedia.ts'
@@ -602,12 +602,26 @@ function zoomToRefs(ctx: Ctx, refs: readonly string[]) {
 
 // ---- the message stack -------------------------------------------------------------------------------------
 
+/**
+ * K3-6: how to vote with the keyboard, for the prompt's description (screen readers read it with the card
+ * and its Join button). On screen the prompt says one short line; the keys took two.
+ */
+export const VOTE_KEYS_HELP =
+  'Keyboard: Tab from the board goes to an object’s +, Enter or Space adds a vote, Tab moves to the next object and Esc returns to the board.'
+
 function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
+  const keysId = useId()
   const vote = store.getSnapshot().vote
   if (!vote) return null
   const s = vote.session
   return (
-    <div className="dr-wk-prompt" role="dialog" aria-label="Vote started" data-testid="vote-join-prompt">
+    <div
+      className="dr-wk-prompt"
+      role="dialog"
+      aria-label="Vote started"
+      aria-describedby={keysId}
+      data-testid="vote-join-prompt"
+    >
       <p>
         <strong>{s.title}</strong> — you have {vote.myRemaining} vote{vote.myRemaining === 1 ? '' : 's'} to
         place on
@@ -618,19 +632,24 @@ function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
             : ' objects on the board'}
         .
       </p>
-      <p className="dr-wk-hint dr-wk-hint--fine" data-testid="vote-keys-hint">
-        Click objects to vote. Keyboard: Tab from the board goes to an object’s +, Enter or Space adds a vote,
-        Tab moves to the next object and Esc returns to the board.
+      <p className="dr-wk-hint">
+        <span className="dr-wk-hint--fine" data-testid="vote-click-hint">
+          Click objects to vote; click your dot to take one back.
+        </span>
+        {/* Touch screens (final review R6): no keyboard to talk about. */}
+        <span className="dr-wk-hint--coarse" data-testid="vote-touch-hint">
+          Tap objects to vote; tap your dot to take one back.
+        </span>
       </p>
-      {/* Touch screens (final review R6): no keyboard to talk about. */}
-      <p className="dr-wk-hint dr-wk-hint--coarse" data-testid="vote-touch-hint">
-        Tap objects to vote. Tap your dot on an object to take a vote back.
-      </p>
+      <span id={keysId} className="dr-sr-only" data-testid="vote-keys-hint">
+        {VOTE_KEYS_HELP}
+      </span>
       <div className="dr-wk-row">
         <button
           type="button"
           className="dr-btn dr-btn--primary dr-btn--sm"
           data-testid="vote-join"
+          aria-describedby={keysId}
           onClick={() => void store.joinVote(s.id)}
         >
           Join vote

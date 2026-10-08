@@ -421,13 +421,14 @@ export const feature: CanvasFeature = {
   ],
   overlays: [
     // who last edited each note: part of the note's face, so under every other layer (tags' Show only
-    // veil and search's dimming included); shown while presenting, as tldraw's note face was
+    // veil and search's dimming included). K3-6: not on the slides while presenting (tldraw's note face
+    // kept it there; a deck is about the ideas, and exports never draw it either)
     {
       id: 'workshops-authors',
       layer: 'scene',
       order: 4,
       pointer: 'none',
-      focusMode: 'show',
+      focusMode: 'hide',
       component: NoteAuthorsLayer,
     },
     // the revealed counts sit under the top bar's popovers; the rest above the canvas's own chrome

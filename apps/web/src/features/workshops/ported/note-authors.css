@@ -1,7 +1,10 @@
 /* OWNER: 3f. The note-author label on the Excalidraw page (./NoteAuthors.tsx), a ported-only file (the
    normal build never loads it). Sizes are scene units: the layer's box is scaled by the zoom, as tldraw's
-   note face scaled `.tl-note__attribution` (11 px, 4 px from the bottom, 8 px from the right, 60 % wide,
-   at 0.6 of the label's ink). */
+   note face scaled `.tl-note__attribution` (11 px, 4 px from the bottom, 8 px from the right, 60 % wide).
+   K3-6: in the label's own ink, at full strength. tldraw drew it at 0.6 of the ink, which read 4.08:1 on a
+   light note and 2.93:1 through the dark theme's filter; the note's own text, in the same ink, meets 4.5:1
+   on every note colour in both themes (canvas/a11y palette-contrast.test.ts, a11y-contrast.spec W5-15), so
+   the label does too. Its size, weight and place keep it quieter than the note's words. */
 .dr-note-authors {
   position: absolute;
   left: 0;
@@ -25,8 +28,8 @@
   text-overflow: ellipsis;
   font-family: var(--dr-font);
   font-size: 11px;
+  font-weight: 500;
   line-height: 14px;
-  opacity: 0.6;
 }
 /* "Hide note authors" (workshops' session setting): the layer also stops drawing; this covers the frame
    in between */

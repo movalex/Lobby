@@ -16,7 +16,17 @@
 //    her attribution (the tldraw page stripped its drawn label from the SVG it rasterized; this page's
 //    PNG is not made from an SVG).
 import type { Locator, Page } from '@playwright/test'
-import { item, itemBounds, select, updateItem, viewport } from '../tests/support/canvas.ts'
+import {
+  expectSaved,
+  item,
+  itemBounds,
+  select,
+  startTextEditingWithKeyboard,
+  stopTextEditing,
+  typeText,
+  updateItem,
+  viewport,
+} from '../tests/support/canvas.ts'
 import { forgeSession, storedElement } from '../tests/support/excalidraw.ts'
 import { downloadFrom } from '../tests/support/present-export.ts'
 import { capture } from '../tests/support/screenshots.ts'
@@ -591,7 +601,13 @@ test('RETRO-03a: the note-author label on the board hides with "Hide note author
 }) => {
   const a = await join('alice')
   const b = await join('bob', 'editor')
-  await seed(a.page, { notes: [{ id: 'fr-authored', x: 0, y: 0, text: 'Anonymous idea' }] })
+  // K3-6: a note shows its author once someone typed its words (one made with them, as a template's or a
+  // paste's, shows nobody): alice makes it empty, as the note tool does, and types in it
+  await seed(a.page, { notes: [{ id: 'fr-authored', x: 0, y: 0 }] })
+  await startTextEditingWithKeyboard(a.page, 'fr-authored')
+  await typeText(a.page, 'Anonymous idea')
+  await stopTextEditing(a.page)
+  await expectSaved(a.page)
   await expectItemsEverywhere([b], ['fr-authored'])
   await showAll(b.page)
   const label = (page: Page) => page.locator('[data-testid="note-author"][data-note-id="fr-authored"]')

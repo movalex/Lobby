@@ -1,7 +1,13 @@
 import { WorkshopState, type WorkshopTimer, type WorkshopVoteState } from '@draftroom/contracts'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { z } from 'zod'
-import { type EventSource, type RequestFn, WorkshopStore } from './store.ts'
+import {
+  type EventSource,
+  FIRST_LOAD_FALLBACK_MS,
+  type RequestFn,
+  WorkshopStore,
+  workshopStoreFor,
+} from './store.ts'
 
 const ISO = (ms: number) => new Date(Date.parse('2026-09-26T10:00:00.000Z') + ms).toISOString()
 const SID = 'vot_0123456789abcdefghij'
@@ -407,5 +413,95 @@ describe('results news (RETRO-08)', () => {
     h.store.announce('Voted. 2 of 3 left')
     expect(h.store.getSnapshot().announcement?.text).toBe('Voted. 2 of 3 left')
     expect(h.store.getSnapshot().announcement?.seq).toBe((first?.seq ?? 0) + 1)
+  })
+})
+
+describe('one /workshop request per board open (K3-6)', () => {
+  /** A stream that is already connected: onResync runs the listener at once, as BoardEvents does. */
+  class ConnectedEvents extends FakeEvents {
+    override onResync(l: () => void) {
+      const off = super.onResync(l)
+      l()
+      return off
+    }
+  }
+  const counting = () => {
+    const calls: string[] = []
+    const request = (async (method: string, path: string) => {
+      calls.push(`${method} ${path}`)
+      return WorkshopState.parse({ timer: null, vote: null, serverNow: ISO(0) })
+    }) as unknown as RequestFn
+    return { calls, request }
+  }
+  const make = (events: EventSource, request: RequestFn) => () =>
+    new WorkshopStore({ boardId: 'b-abc1234567', userId: 'usr_me0000000001', request, events, storage: null })
+
+  it('the stream connects after the store is made: its first resync is the one load', async () => {
+    vi.useFakeTimers()
+    try {
+      const { calls, request } = counting()
+      const events = new FakeEvents()
+      const store = workshopStoreFor(events, make(events, request))
+      await vi.advanceTimersByTimeAsync(500)
+      expect(calls).toEqual([]) // nothing before the stream says hello
+      for (const r of events.resync) r()
+      await vi.advanceTimersByTimeAsync(FIRST_LOAD_FALLBACK_MS * 2)
+      expect(calls).toEqual(['GET /api/boards/b-abc1234567/workshop'])
+      expect(store.getSnapshot().loaded).toBe(true)
+      // the same stream gets the same store: no second load
+      expect(workshopStoreFor(events, make(events, request))).toBe(store)
+      expect(calls).toHaveLength(1)
+      // a reconnect refetches, as always
+      for (const r of events.resync) r()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('the stream is already connected: the resync as the store subscribes is the one load', async () => {
+    vi.useFakeTimers()
+    try {
+      const { calls, request } = counting()
+      const events = new ConnectedEvents()
+      workshopStoreFor(events, make(events, request))
+      await vi.advanceTimersByTimeAsync(FIRST_LOAD_FALLBACK_MS * 2)
+      expect(calls).toEqual(['GET /api/boards/b-abc1234567/workshop'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a stream that never connects: the store loads on its own after the fallback, once', async () => {
+    vi.useFakeTimers()
+    try {
+      const { calls, request } = counting()
+      const events = new FakeEvents()
+      const store = workshopStoreFor(events, make(events, request))
+      await vi.advanceTimersByTimeAsync(FIRST_LOAD_FALLBACK_MS - 1)
+      expect(calls).toEqual([])
+      await vi.advanceTimersByTimeAsync(2)
+      expect(calls).toHaveLength(1)
+      expect(store.getSnapshot().loaded).toBe(true)
+      await vi.advanceTimersByTimeAsync(FIRST_LOAD_FALLBACK_MS * 3)
+      expect(calls).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a store left before it loaded fetches nothing later', async () => {
+    vi.useFakeTimers()
+    try {
+      const { calls, request } = counting()
+      const events = new FakeEvents()
+      const store = workshopStoreFor(events, make(events, request))
+      store.dispose()
+      await vi.advanceTimersByTimeAsync(FIRST_LOAD_FALLBACK_MS * 2)
+      expect(calls).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
