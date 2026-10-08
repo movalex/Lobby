@@ -12,7 +12,9 @@
 //    the lease flow. Linear-editor toggles, entering a group, crop… are forwarded (open item 2).
 //  - touchstart: Lobby's tap-twice mirror (./doubleTap.ts) swallows the one touchstart Excalidraw would
 //    turn into a double-tap, calls preventDefault on it (Excalidraw's iOS preventDefault no longer runs)
-//    and runs the lease flow (P4).
+//    and runs the lease flow (P4). On a tool that is not the selection tool (Hand, where phones rest:
+//    K5-3) Excalidraw would do nothing; Lobby still swallows it (the mirror stays exact) but edits a note
+//    only once both touches ended as taps (touchmove / touchend), and never makes a new text there.
 //  - contextmenu: Lobby's menu, never Excalidraw's.
 //  - copy / cut: the export policy (a read-only role copies the selection's text where it allows: CR-3A-4;
 //    cut is the editors'). paste: read-only roles get nothing. dragover / drop: Lobby's upload
@@ -36,7 +38,7 @@ import type { LeaseClient } from '../lease/client.ts'
 import { type EditNotice, EditorLease, type EditState, type EditTrace } from '../lease/editorLease.ts'
 import { bufferedKeyOf } from '../lease/replay.ts'
 import { classifyDoubleClick, type DblClickElement } from './dblclick.ts'
-import { DoubleTapMirror } from './doubleTap.ts'
+import { DoubleTapMirror, TAP_MAX_MS, TAP_SLOP_PX } from './doubleTap.ts'
 import { classifyKey, type KeyContext, type KeyVerdict, keyLikeOf, type LobbyKeyAction } from './keymap.ts'
 import { installKeyupGate, keyIdOf, keyupVerdict, registerKeyupClient } from './keyupGate.ts'
 import { computeSelectAll } from './selectAll.ts'
@@ -162,12 +164,28 @@ function containsPoint(el: SceneEl, x: number, y: number): boolean {
   return lx >= minX && lx <= maxX && ly >= minY && ly <= maxY
 }
 
+/** Excalidraw's touch listener is on the interactive canvas only. */
+function isInteractiveCanvas(target: EventTarget | null): boolean {
+  return (
+    !!target &&
+    typeof HTMLCanvasElement !== 'undefined' &&
+    target instanceof HTMLCanvasElement &&
+    target.classList.contains('interactive')
+  )
+}
+
 export class CanvasInput {
   readonly synthetic = new WeakSet<Event>()
   private readonly blockedKeyups = new Set<string>()
   /** Keys whose keydown was delegated to Excalidraw's canvas handling: only their keyups reach it (K1). */
   private readonly delegatedKeys = new Set<string>()
   private readonly tapMirror = new DoubleTapMirror()
+  /** The one-finger touch on the interactive canvas now down (null: none, or several fingers). */
+  private touch: { start: number; x: number; y: number; moved: boolean } | null = null
+  /** The last touch on the interactive canvas ended as a tap. */
+  private lastTouchWasTap = false
+  /** A double-tap on a panning tool, waiting for its second touch to end as a tap. */
+  private pendingTap: { clientX: number; clientY: number } | null = null
   private editor: EditorLease | null = null
   private api: ExcalidrawImperativeAPI | null = null
   private wrapper: HTMLElement | null = null
@@ -204,10 +222,14 @@ export class CanvasInput {
     const stopWatching = editor.watch()
     const capture = { capture: true } as const
     const activeCapture = { capture: true, passive: false } as const
+    const passiveCapture = { capture: true, passive: true } as const
     wrapper.addEventListener('keydown', this.onKeyDown, capture)
     wrapper.addEventListener('keyup', this.onKeyUp, capture)
     wrapper.addEventListener('dblclick', this.onDblClick, capture)
     wrapper.addEventListener('touchstart', this.onTouchStart, activeCapture)
+    wrapper.addEventListener('touchmove', this.onTouchMove, passiveCapture)
+    wrapper.addEventListener('touchend', this.onTouchEnd, passiveCapture)
+    wrapper.addEventListener('touchcancel', this.onTouchCancel, passiveCapture)
     wrapper.addEventListener('contextmenu', this.onContextMenu, capture)
     wrapper.addEventListener('copy', this.onCopy, capture)
     wrapper.addEventListener('cut', this.onCut, capture)
@@ -239,6 +261,9 @@ export class CanvasInput {
       wrapper.removeEventListener('keyup', this.onKeyUp, capture)
       wrapper.removeEventListener('dblclick', this.onDblClick, capture)
       wrapper.removeEventListener('touchstart', this.onTouchStart, activeCapture)
+      wrapper.removeEventListener('touchmove', this.onTouchMove, passiveCapture)
+      wrapper.removeEventListener('touchend', this.onTouchEnd, passiveCapture)
+      wrapper.removeEventListener('touchcancel', this.onTouchCancel, passiveCapture)
       wrapper.removeEventListener('contextmenu', this.onContextMenu, capture)
       wrapper.removeEventListener('copy', this.onCopy, capture)
       wrapper.removeEventListener('cut', this.onCut, capture)
@@ -494,8 +519,15 @@ export class CanvasInput {
   private readonly onTouchStart = (e: TouchEvent): void => {
     if (this.opts.interceptDoubleClicks === false || this.opts.role() !== 'editor') return
     // Excalidraw's listener is on the interactive canvas only.
-    const target = e.target as Element | null
-    if (!target || !(target instanceof HTMLCanvasElement) || !target.classList.contains('interactive')) return
+    if (!isInteractiveCanvas(e.target)) return
+    const prevWasTap = this.lastTouchWasTap
+    const first = e.touches[0]
+    this.touch =
+      e.touches.length === 1 && first
+        ? { start: e.timeStamp, x: first.clientX, y: first.clientY, moved: false }
+        : null
+    this.lastTouchWasTap = false
+    this.pendingTap = null
     const verdict = this.tapMirror.onTouchStart({
       time: e.timeStamp,
       touches: Array.from(e.touches, (t) => ({ clientX: t.clientX, clientY: t.clientY })),
@@ -508,21 +540,64 @@ export class CanvasInput {
       clientY: verdict.clientY,
       prevented: e.defaultPrevented,
     })
-    const scene = this.toScene(verdict.clientX, verdict.clientY)
+    const s = this.api?.getAppState()
+    if (s && s.activeTool.type !== s.preferredSelectionTool.type && s.activeTool.type !== 'autoshape') {
+      // Excalidraw does nothing here (handleCanvasDoubleClick :44733). On Hand a one-finger drag pans: wait
+      // for this touch to end as a tap, after a first touch that did too, before anything opens
+      if (prevWasTap) this.pendingTap = { clientX: verdict.clientX, clientY: verdict.clientY }
+      this.trace('doubletap-deferred', { tool: s.activeTool.type, prevWasTap })
+      return
+    }
+    this.runDoubleTap(verdict.clientX, verdict.clientY, true)
+  }
+
+  /** A double-tap Lobby took: a blocked spot, a feature that takes it, else the lease flow. */
+  private runDoubleTap(clientX: number, clientY: number, makeText: boolean): void {
+    const scene = this.toScene(clientX, clientY)
     if (this.opts.isBlocked?.(scene)) {
       this.trace('doubletap-blocked', {})
       return
     }
     // CR-W5-3G-4: a feature that takes a double-click on this element takes the double-tap too
-    if (this.opts.onDoubleTap?.(scene, { x: verdict.clientX, y: verdict.clientY })) {
+    if (this.opts.onDoubleTap?.(scene, { x: clientX, y: clientY })) {
       this.trace('doubletap-handled', {})
       return
     }
-    this.editAt(scene.x, scene.y, 'P4-doubletap', false)
+    this.editAt(scene.x, scene.y, 'P4-doubletap', false, makeText)
+  }
+
+  private readonly onTouchMove = (e: TouchEvent): void => {
+    const t = this.touch
+    if (!t || t.moved) return
+    const p = e.touches[0]
+    if (e.touches.length !== 1 || !p || Math.hypot(p.clientX - t.x, p.clientY - t.y) > TAP_SLOP_PX) {
+      t.moved = true
+      this.pendingTap = null
+    }
+  }
+
+  private readonly onTouchEnd = (e: TouchEvent): void => {
+    if (!isInteractiveCanvas(e.target)) return
+    const t = this.touch
+    this.touch = null
+    const tap = !!t && !t.moved && e.timeStamp - t.start <= TAP_MAX_MS
+    this.lastTouchWasTap = tap
+    const pending = this.pendingTap
+    this.pendingTap = null
+    if (!pending || !tap) return
+    if (this.opts.interceptDoubleClicks === false || this.opts.role() !== 'editor') return
+    // a double-tap on a panning tool edits what is there, and never makes a new text
+    this.runDoubleTap(pending.clientX, pending.clientY, false)
+  }
+
+  private readonly onTouchCancel = (): void => {
+    this.touch = null
+    this.lastTouchWasTap = false
+    this.pendingTap = null
   }
 
   /** Lobby's handler for a text-editing double-click or double-tap at a scene point. */
-  editAt(x: number, y: number, reason: string, skipContainer: boolean): void {
+  editAt(x: number, y: number, reason: string, skipContainer: boolean, makeText = true): void {
     const editor = this.editor
     if (editor?.phase !== 'idle') return
     const target = skipContainer ? null : this.textTargetAt(x, y)
@@ -530,7 +605,7 @@ export class CanvasInput {
       editor.requestEdit(target.id, { reason, caretEnd: true })
       return
     }
-    this.opts.onEmptyDoubleClick?.({ x, y })
+    if (makeText) this.opts.onEmptyDoubleClick?.({ x, y })
   }
 
   // --- menus, clipboard, drop ------------------------------------------------------------------------

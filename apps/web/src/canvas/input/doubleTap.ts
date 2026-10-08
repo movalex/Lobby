@@ -62,3 +62,10 @@ export class DoubleTapMirror {
 }
 // Note: after a swallowed double, Excalidraw's didTapTwice stays true until its timer; a third quick tap
 // near the first one would pair again there, so the mirror keeps pairing too and Lobby swallows it again.
+
+// Wave K round 1 refix (K5-3): on a tool that pans (Hand, where phones rest), Excalidraw's double-tap does
+// nothing, and two quick pan swipes pair here too (the mirror counts touchstarts only). Lobby edits a note on
+// Hand only when both touches ENDED as taps: moved at most TAP_SLOP_PX from where they started and lasted at
+// most TAP_MAX_MS (CanvasInput.onTouchEnd).
+export const TAP_SLOP_PX = 10
+export const TAP_MAX_MS = 400

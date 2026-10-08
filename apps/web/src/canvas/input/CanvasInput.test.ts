@@ -145,6 +145,105 @@ describe('a double-tap a feature took (CR-W5-3G-4)', () => {
   })
 })
 
+// Wave K round 1 refix (K5-3): a phone editor rests on Hand, where a one-finger drag pans. Excalidraw's own
+// double-tap does nothing on Hand (handleCanvasDoubleClick returns for a tool that is not the selection
+// tool, dist/dev/index.js:44733). Lobby keeps "double-tap a note to edit it" there only when both touches
+// ended as taps (no move past TAP_SLOP_PX, no longer than TAP_MAX_MS), and never makes a new text on Hand.
+describe('a double-tap on the Hand tool (wave K round 1 refix)', () => {
+  class FakeCanvas {
+    classList = { contains: (c: string) => c === 'interactive' }
+  }
+  type Touch = { clientX: number; clientY: number }
+  const call = (t: ReturnType<typeof setup>, name: string, e: unknown) =>
+    (t.internals as unknown as Record<string, (e: unknown) => void>)[name]?.(e)
+  const ev = (time: number, touches: Touch[]) => ({
+    target: new FakeCanvas(),
+    timeStamp: time,
+    touches,
+    changedTouches: touches,
+    stopPropagation: vi.fn(),
+    preventDefault: vi.fn(),
+  })
+  const start = (t: ReturnType<typeof setup>, time: number, x: number, y: number) => {
+    const e = ev(time, [{ clientX: x, clientY: y }])
+    call(t, 'onTouchStart', e)
+    return e
+  }
+  const move = (t: ReturnType<typeof setup>, time: number, x: number, y: number) =>
+    call(t, 'onTouchMove', ev(time, [{ clientX: x, clientY: y }]))
+  const end = (t: ReturnType<typeof setup>, time: number) => call(t, 'onTouchEnd', ev(time, []))
+  const onHand = (onDoubleTap: (s: { x: number; y: number }) => boolean = () => false) => {
+    vi.stubGlobal('HTMLCanvasElement', FakeCanvas)
+    const t = setup({ app: { activeTool: { type: 'hand' } } })
+    ;(t.input.opts as { onDoubleTap?: unknown }).onDoubleTap = onDoubleTap
+    return t
+  }
+
+  it('two quick touchstarts (two pan swipes) make no new text on empty canvas and open no note', () => {
+    const empty = onHand()
+    start(empty, 0, 900, 900)
+    start(empty, 250, 910, 905)
+    expect(empty.onEmpty).not.toHaveBeenCalled()
+    expect(empty.requestEdit).not.toHaveBeenCalled()
+    const over = onHand()
+    start(over, 0, 50, 50)
+    start(over, 250, 60, 55)
+    expect(over.requestEdit).not.toHaveBeenCalled()
+    expect(over.onEmpty).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+
+  it('two quick swipes that end (each moved well past a tap) do nothing either', () => {
+    const t = onHand()
+    start(t, 0, 50, 50)
+    move(t, 60, 120, 50)
+    end(t, 120)
+    start(t, 250, 60, 55)
+    move(t, 300, 140, 55)
+    end(t, 370)
+    expect(t.requestEdit).not.toHaveBeenCalled()
+    expect(t.onEmpty).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+
+  it('two real taps on a note open it (after the second tap ends); on empty canvas they make no text', () => {
+    const t = onHand()
+    start(t, 0, 50, 50)
+    end(t, 40)
+    start(t, 100, 52, 51)
+    expect(t.requestEdit).not.toHaveBeenCalled() // not yet: the second touch may still become a pan
+    end(t, 140)
+    expect(t.requestEdit).toHaveBeenCalledWith('n1', expect.objectContaining({ reason: 'P4-doubletap' }))
+    const empty = onHand()
+    start(empty, 0, 900, 900)
+    end(empty, 40)
+    start(empty, 100, 900, 900)
+    end(empty, 140)
+    expect(empty.onEmpty).not.toHaveBeenCalled()
+    expect(empty.requestEdit).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+
+  it('a second touch that turns into a pan cancels the edit; a feature that takes a double-tap still gets real taps', () => {
+    const t = onHand()
+    start(t, 0, 50, 50)
+    end(t, 40)
+    start(t, 100, 50, 50)
+    move(t, 130, 90, 50)
+    end(t, 200)
+    expect(t.requestEdit).not.toHaveBeenCalled()
+    const took = vi.fn(() => true)
+    const f = onHand(took)
+    start(f, 0, 50, 50)
+    end(f, 40)
+    start(f, 100, 50, 50)
+    end(f, 140)
+    expect(took).toHaveBeenCalledWith({ x: 50, y: 50 }, { x: 50, y: 50 })
+    expect(f.requestEdit).not.toHaveBeenCalled()
+    vi.unstubAllGlobals()
+  })
+})
+
 describe('the key context', () => {
   it('says when a crop is open, and what a feature’s type-to-edit rule says about the one selected element', () => {
     const open = setup({ selected: ['i1'], app: { croppingElementId: 'i1' } }).internals.keyContext(null)

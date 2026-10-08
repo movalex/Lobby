@@ -9,21 +9,27 @@
 //  K5-3  A phone with a touch screen rests on the Hand tool: a one-finger drag pans (on a note too) and moves
 //        nothing; Select from "All tools" then selects and drags a note; Select picked stays; a one-time hint
 //        (once per viewer, storage in try/catch). A desktop, and a narrow desktop window, keep Select.
+//        Round 1 refix: on Hand two quick pan swipes (their touchstarts pair as a double tap) make no text and
+//        open no note; two real taps on a note still edit it, and on empty canvas make nothing.
 //
 //   E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/k5-phone.spec.ts --project=chromium --workers=1
 import type { Locator, Page } from '@playwright/test'
 import { signInContext } from '../tests/support/api.ts'
 import {
+  editingId,
   expect,
   expectSaved,
   item,
   itemCenterOnScreen,
   items,
+  pushedOps,
   selection,
   setTool,
+  TEXT_EDITOR,
   test,
   tool,
   viewport,
+  zoomToFit,
 } from '../tests/support/canvas.ts'
 import { openDashboard } from '../tests/support/dashboard-share.ts'
 import { coveredControls, note, openPhoneSession, waitForA11y } from './a11y-kit.ts'
@@ -306,6 +312,108 @@ test('K5-3: with storage that throws (blocked site data) the hint still shows on
     await expect(page.getByTestId('phone-hand-hint')).toHaveCount(0)
   } finally {
     await context.close()
+  }
+})
+
+/**
+ * Two quick one-finger pan swipes (wave K round 1 refix): each about 100 ms, the second touch starting about
+ * 250 ms after the first and within 35 px of it, as a thumb flicking around the board does. Excalidraw's
+ * tap-twice window (300 ms, 35 px) pairs their touchstarts.
+ */
+async function twoQuickSwipes(page: Page, from: Pt): Promise<void> {
+  const cdp = await page.context().newCDPSession(page)
+  try {
+    for (const start of [from, { x: from.x + 10, y: from.y + 5 }]) {
+      const t0 = Date.now()
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ ...start, id: 1 }] })
+      for (let i = 1; i <= 5; i++) {
+        const p = { x: start.x + i * 16, y: start.y + i * 12 }
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ ...p, id: 1 }] })
+        await page.waitForTimeout(16)
+      }
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+      if (start === from) await page.waitForTimeout(Math.max(0, 250 - (Date.now() - t0)))
+    }
+  } finally {
+    await cdp.detach()
+  }
+}
+
+/** A one-finger double tap (two quick taps on one spot) through the browser's own touch input (CDP). */
+async function doubleTap(page: Page, at: Pt): Promise<void> {
+  const cdp = await page.context().newCDPSession(page)
+  try {
+    for (let i = 0; i < 2; i++) {
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ ...at, id: 1 }] })
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+      await page.waitForTimeout(60)
+    }
+  } finally {
+    await cdp.detach()
+  }
+}
+
+test('K5-3 (round 1 refix): on Hand two quick pan swipes make no text and open no note; two real taps on a note still edit it', async ({
+  browser,
+  board,
+  users,
+}) => {
+  const a = await openPhoneSession(browser, board, users, 'alice', 'owner', PHONE_375)
+  const page = a.page
+  try {
+    const id = await note(page, 0, 0, 'Pan past me')
+    await expect.poll(() => tool(page)).toBe('hand')
+    const hint = page.getByTestId('phone-hand-hint-ok')
+    if (await hint.isVisible()) await hint.tap()
+    await expectSaved(page)
+    const c = await page.locator('[data-lobby-board-canvas]').boundingBox()
+    if (!c) throw new Error('no canvas')
+    const ids = async () => (await items(page)).map((e) => e.id).sort()
+    const before = await ids()
+    const pushes = (await pushedOps(page)).length
+
+    await test.step('two quick swipes from empty canvas: the board pans, no new text, no editor', async () => {
+      const v0 = await viewport(page)
+      await twoQuickSwipes(page, { x: c.x + c.width * 0.55, y: c.y + c.height * 0.7 })
+      await expect.poll(async () => (await viewport(page)).x).not.toBe(v0.x)
+      await page.waitForTimeout(600)
+      expect(await editingId(page)).toBeNull()
+      await expect(page.locator(TEXT_EDITOR)).toHaveCount(0)
+      expect(await ids()).toEqual(before)
+    })
+
+    await test.step('two quick swipes starting on a note: the note’s editor stays shut', async () => {
+      await page.waitForTimeout(400)
+      const at = await itemCenterOnScreen(page, id)
+      await twoQuickSwipes(page, at)
+      await page.waitForTimeout(600)
+      expect(await editingId(page)).toBeNull()
+      await expect(page.locator(TEXT_EDITOR)).toHaveCount(0)
+      expect(await ids()).toEqual(before)
+      // nothing the swipes did reached the sync server
+      expect((await pushedOps(page)).length).toBe(pushes)
+    })
+
+    await test.step('two real taps on empty canvas on Hand make no text', async () => {
+      await page.waitForTimeout(400)
+      await doubleTap(page, { x: c.x + c.width * 0.5, y: c.y + c.height * 0.85 })
+      await page.waitForTimeout(600)
+      expect(await editingId(page)).toBeNull()
+      expect(await ids()).toEqual(before)
+    })
+
+    await test.step('two real taps on the note on Hand open its editor (the hint’s “double-tap a note”)', async () => {
+      // the swipes moved the note off the screen: bring it back (a local camera move)
+      await zoomToFit(page)
+      await page.waitForTimeout(400)
+      await doubleTap(page, await itemCenterOnScreen(page, id))
+      await expect.poll(() => editingId(page)).toBe(id)
+      await page.keyboard.press('Escape')
+      await expect.poll(() => editingId(page)).toBeNull()
+      expect(await ids()).toEqual(before)
+    })
+  } finally {
+    await a.context.close()
   }
 })
 
