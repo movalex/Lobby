@@ -1,6 +1,5 @@
 // OWNER: 3c. The comments top-bar item on the Excalidraw board page (the tldraw page's ../CommentsTopBar.tsx):
-// the comment tool toggle (C) and the notifications bell with its unread count. Notifications are in-app
-// only; the inbox says so.
+// the comment tool toggle (C) and the notifications bell with its unread count. Notifications are in-app.
 
 import type {
   NotificationAccessGranted,
@@ -255,7 +254,6 @@ function NotificationsBell({ ctx }: { ctx: CanvasFeatureContext }) {
                 ))}
               </ul>
             )}
-            <p className="dr-cbell__note">In-app only: email notifications aren’t available yet.</p>
           </section>,
           document.body,
         )}
