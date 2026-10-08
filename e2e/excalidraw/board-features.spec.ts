@@ -117,9 +117,11 @@ test('the feature host renders the registries: dock, top bar, overlays, the tool
   ).toBe(false)
 
   // a feature's pointer tool: setTool takes its name, a click and a double-click reach it with the
-  // element under the pointer (never Excalidraw's editor), and leaving it runs its onExit
+  // element under the pointer (never Excalidraw's editor), and leaving it runs its onExit. The tool reads
+  // back once Excalidraw has rendered the switch (setActiveTool is a React state update; a read in the same
+  // task still says `select`, and so can the next read on a busy page, as in the wave K gate), so it is polled
   expect(await setTool(a.page, 'probe-tool')).toBe(true)
-  expect(await tool(a.page)).toBe('probe-tool')
+  await expect.poll(() => tool(a.page)).toBe('probe-tool')
   const note = (await items(a.page)).find((e) => e.type === 'stickynote' && e.id !== bobs)?.id as string
   await clickItem(a.page, note)
   await expect.poll(async () => (await probe(a.page))?.toolUps).toContain(note)
