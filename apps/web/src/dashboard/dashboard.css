@@ -1030,3 +1030,53 @@
   color: var(--dr-ink-2);
   font-size: 13px;
 }
+
+/* ---- K4-6: thumb-sized targets on touch -------------------------------------------------------------- */
+/* On a touchscreen the bell, a card's star and ⋯ menu and the template category chips were 28 to 34 px (the
+   bell is squeezed to 28 by the phone's top bar). Each one's hit area is at least 40 px square: a transparent
+   ::after centred on the control, as wide and tall as the control or 40 px, whichever is more. The control
+   itself, and what it looks like, keep their size (no background or border moves). A mouse or a trackpad does
+   not match (pointer: coarse) and is untouched. Neighbours leave room: the bell sits in a 12 px gap, and the
+   star and ⋯ share a 4 px one without overlapping (below). */
+@media (pointer: coarse) {
+  .dr-star,
+  .dr-dbell__button,
+  .dr-bcard__foot .dr-menu-wrap > .dr-iconbtn,
+  .dr-gallery__cats .dr-chip {
+    position: relative;
+  }
+  .dr-star::after,
+  .dr-dbell__button::after,
+  .dr-bcard__foot .dr-menu-wrap > .dr-iconbtn::after,
+  .dr-gallery__cats .dr-chip::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100%, 40px);
+    height: max(100%, 40px);
+    transform: translate(-50%, -50%);
+  }
+  /* The star and ⋯ are 4 px apart: each one grows away from the other (8 px on its outer side, 2 on the inner),
+     so the two 40 px areas do not eat into each other. */
+  .dr-star::after {
+    right: -2px;
+    left: auto;
+    transform: translateY(-50%);
+  }
+  .dr-bcard__foot .dr-menu-wrap > .dr-iconbtn::after {
+    left: -2px;
+    transform: translateY(-50%);
+  }
+  /* The category chips wrap into rows: 10 px between rows (6 before) keeps the rows' 40 px areas apart. */
+  .dr-gallery__cats {
+    row-gap: 10px;
+  }
+}
+
+/* The What's new card on a phone: titles and their "Try it", not every sentence (the boards stay in reach). */
+@media (max-width: 560px) {
+  .dr-whatsnew__text span {
+    display: none;
+  }
+}

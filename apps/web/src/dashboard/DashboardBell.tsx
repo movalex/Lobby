@@ -10,6 +10,8 @@ import { outsiderJoinedText } from '../features/people/outside.ts'
 import { formatRelativeTime } from '../lib/format.ts'
 import { navigate } from '../lib/routing.ts'
 import {
+  BELL_EMPTY,
+  BELL_NOTE,
   GRANTED_TEXT,
   KIND_TEXT,
   markLocallyRead,
@@ -177,9 +179,7 @@ export function DashboardBell({ inbox, refresh, markRead }: DashboardInbox) {
               </button>
             </header>
             {items.length === 0 ? (
-              <p className="dr-dbell__empty">
-                You’re all caught up. Mentions, replies and new comments on boards you own show up here.
-              </p>
+              <p className="dr-dbell__empty">{BELL_EMPTY}</p>
             ) : (
               <ul className="dr-dbell__list">
                 {items.map((n) => (
@@ -231,7 +231,7 @@ export function DashboardBell({ inbox, refresh, markRead }: DashboardInbox) {
                 ))}
               </ul>
             )}
-            <p className="dr-dbell__note">In-app only: email notifications aren’t available yet.</p>
+            <p className="dr-dbell__note">{BELL_NOTE}</p>
           </section>,
           document.body,
         )}

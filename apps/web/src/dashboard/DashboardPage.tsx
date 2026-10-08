@@ -1,10 +1,19 @@
 import type { Board, Project } from '@draftroom/contracts'
-import { type ChangeEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import {
+  type ChangeEvent,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { useMe } from '../auth/session.tsx'
 import { UserMenu } from '../auth/UserMenu.tsx'
 import { NoticeRegion, useNotices } from '../board/Notices.tsx'
-import { ShareDialog } from '../board/ShareDialog.tsx'
 import { FeedbackPill } from '../features/feedback/FeedbackPill.tsx'
 import { openFeedback } from '../features/feedback/state.ts'
 import { useIsGuest } from '../invite/guest.tsx'
@@ -69,6 +78,11 @@ import { requestWorkspaceMenu } from './workspace-menu-request.ts'
 import './dashboard.css'
 
 const dash = dashboardApi(api)
+
+// K4-6: the Share dialog (about 43 KB with its sharing code) is fetched when someone chooses Share on a card,
+// not with the dashboard: most visits never open it. dashboard-bundle.test.ts keeps it out of the page's
+// static imports.
+const ShareDialog = lazy(() => import('../board/ShareDialog.tsx').then((m) => ({ default: m.ShareDialog })))
 
 // A11Y-17: whether the person has clicked, tapped or pressed a key in this tab yet. After they have
 // (signing in, a link in the folded phone menu), a dashboard that leaves the focus nowhere moves it to
@@ -854,17 +868,19 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
         />
       )}
       {dialog?.kind === 'share' && (
-        <ShareDialog
-          board={dialog.board}
-          role={dialog.board.role}
-          workspace={{ id: workspace.id, name: workspace.name }}
-          selfUserId={me.user.id}
-          onClose={() => setDialog(null)}
-          onBoardChange={(b: Board) => {
-            updateBoard(b.id, (x) => ({ ...x, ...b }))
-            setDialog((d) => (d?.kind === 'share' ? { ...d, board: { ...d.board, ...b } } : d))
-          }}
-        />
+        <Suspense fallback={null}>
+          <ShareDialog
+            board={dialog.board}
+            role={dialog.board.role}
+            workspace={{ id: workspace.id, name: workspace.name }}
+            selfUserId={me.user.id}
+            onClose={() => setDialog(null)}
+            onBoardChange={(b: Board) => {
+              updateBoard(b.id, (x) => ({ ...x, ...b }))
+              setDialog((d) => (d?.kind === 'share' ? { ...d, board: { ...d.board, ...b } } : d))
+            }}
+          />
+        </Suspense>
       )}
       {dialog?.kind === 'move' && (
         <MoveBoardDialog

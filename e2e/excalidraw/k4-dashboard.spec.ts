@@ -1,14 +1,14 @@
-// Wave K (K4-1, K4-5, K4-6): the dashboard's first impression, in a real browser against the real api.
+// Wave K (K4-1, K4-6): the dashboard's first impression, in a real browser against the real api.
 //   - "Start something": creators get the template row above Recent boards, one click makes a board from a
 //     tile and lands on it; an outside account (never creates) and someone who hid the picker do not get it;
 //   - the Internal only control sits in the workspace menu (the workspace tile), with a shield on the tile
 //     while it is on, and the same behaviour as before;
-//   - K4-5: the Feedback pill sends one item to the api; the What's new card dismisses and stays dismissed;
+//   - (the Feedback pill and the What's new card are k4-feedback-card.spec.ts)
 //   - K4-6: Share from a card still opens (its code loads on demand); touch targets measure 40 px on a phone.
 //
 //   E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e excalidraw k4-dashboard
-import type { Page } from '@playwright/test'
-import { Api } from '../tests/support/api.ts'
+import type { Locator, Page } from '@playwright/test'
+import { Api, signInContext } from '../tests/support/api.ts'
 import { expect, test } from '../tests/support/canvas.ts'
 import {
   freshHandle,
@@ -185,16 +185,143 @@ test('Internal only sits in the workspace menu: one click opens it, the shield s
   }
 })
 
-test('a card’s Share opens the dialog (its code loads when it is asked for)', async ({ browser }) => {
+test('a card’s Share opens the dialog, and its code is fetched only when Share is chosen', async ({
+  browser,
+}) => {
   const p = await creator(browser, 'Sam Share')
   try {
     const board = await p.api.createBoard(p.wid, 'Share me')
+    const scripts: string[] = []
+    p.page.on('request', (r) => {
+      if (r.resourceType() === 'script') scripts.push(new URL(r.url()).pathname)
+    })
     await openDashboard(p.page, p.wid)
     const card = mainCard(p.page, board.id)
     await expect(card).toBeVisible()
+    // the dashboard is up and idle (the template catalog has arrived): no Share code has been asked for
+    await expect(p.page.getByTestId('start-row').locator('.dr-tthumb').first()).toBeVisible({
+      timeout: 15_000,
+    })
+    expect(scripts.filter((u) => /ShareDialog/i.test(u))).toEqual([])
+    expect(scripts.some((u) => /template-catalog/.test(u))).toBe(true)
+
     await card.getByTestId('board-card-menu').click()
     await card.locator('[role="menuitem"][data-action="share"]').click()
     await expect(shareDialog(p.page)).toBeVisible({ timeout: 15_000 })
+    expect(scripts.filter((u) => /ShareDialog/i.test(u))).toHaveLength(1)
+    // and it works: the dialog names the board
+    await expect(shareDialog(p.page)).toContainText('Share me')
+  } finally {
+    await p.context.close()
+  }
+})
+
+/**
+ * How far a button's hit area reaches around its centre, by asking the page which element sits under points
+ * on both axes (a transparent ::after counts, the button's own box is what it looks like).
+ */
+async function hitArea(locator: Locator) {
+  return locator.evaluate((el) => {
+    // in the middle of its scroller: at an edge, what lies beyond it (a header) would answer for it
+    el.scrollIntoView({ block: 'center', inline: 'center' })
+    const r = el.getBoundingClientRect()
+    const cx = r.left + r.width / 2
+    const cy = r.top + r.height / 2
+    const hit = (x: number, y: number) => {
+      const t = document.elementFromPoint(x, y)
+      return !!t && (t === el || el.contains(t))
+    }
+    const reach = (dx: number, dy: number) => {
+      let n = 0
+      while (n < 60 && hit(cx + dx * (n + 1), cy + dy * (n + 1))) n++
+      return n
+    }
+    return {
+      visualW: Math.round(r.width),
+      visualH: Math.round(r.height),
+      hitW: reach(-1, 0) + reach(1, 0) + 1,
+      hitH: reach(0, -1) + reach(0, 1) + 1,
+    }
+  })
+}
+
+test('on a phone with touch, the bell, a card’s ⋯ and star and the template categories have 40 px targets, and look the size they did', async ({
+  browser,
+}) => {
+  test.setTimeout(120_000)
+  const handle = freshHandle('k4p')
+  const context = await browser.newContext({
+    viewport: { width: 375, height: 812 },
+    hasTouch: true,
+    isMobile: true,
+  })
+  try {
+    const me = await signInContext(context, handle, 'Pia Phone', { email: CREATOR })
+    const wid = personalWorkspace(me)
+    const api = new Api(context.request)
+    const board = await api.createBoard(wid, 'Thumb me')
+    const page = await context.newPage()
+    await openDashboard(page, wid)
+    expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true)
+    const card = mainCard(page, board.id)
+    await expect(card).toBeVisible()
+
+    const bell = await hitArea(page.getByTestId('dashboard-bell'))
+    const menu = await hitArea(card.getByTestId('board-card-menu'))
+    const star = await hitArea(card.getByTestId('board-star'))
+    for (const [name, h] of Object.entries({ bell, menu, star })) {
+      expect(h.hitW, `${name} hit width`).toBeGreaterThanOrEqual(40)
+      expect(h.hitH, `${name} hit height`).toBeGreaterThanOrEqual(40)
+      // what it looks like is what it was: under 40 (the old sizes are 30 to 34)
+      expect(h.visualW, `${name} visual width`).toBeLessThan(40)
+      expect(h.visualH, `${name} visual height`).toBeLessThan(40)
+    }
+    // the sizes they have always had (28 to 34 px on a phone: the top bar squeezes the bell to 28, the footer
+    // the ⋯ to 28), never grown to make room for a finger
+    for (const [name, h] of Object.entries({ bell, menu, star })) {
+      expect(h.visualW, `${name} visual width`).toBeGreaterThanOrEqual(24)
+      expect(h.visualW, `${name} visual width`).toBeLessThanOrEqual(34)
+      expect(h.visualH, `${name} visual height`).toBeLessThanOrEqual(34)
+    }
+
+    await page.getByTestId('create-board').click()
+    await expect(page.getByTestId('create-board-dialog')).toBeVisible()
+    const chips = page.getByTestId('template-category')
+    await expect.poll(() => chips.count()).toBeGreaterThanOrEqual(5)
+    // the dialog opens with a short animation (it scales in): measure once it has settled
+    await page.evaluate(() =>
+      Promise.all(document.getAnimations().map((a) => a.finished.catch(() => undefined))),
+    )
+    for (let i = 0; i < (await chips.count()); i++) {
+      const h = await hitArea(chips.nth(i))
+      expect(h.hitH, `category ${i} hit height`).toBeGreaterThanOrEqual(40)
+      expect(h.hitW, `category ${i} hit width`).toBeGreaterThanOrEqual(40)
+      expect(h.visualH, `category ${i} visual height`).toBe(30)
+    }
+  } finally {
+    await context.close()
+  }
+})
+
+test('with a mouse the same controls keep their own size (the larger area is for touch only)', async ({
+  browser,
+}) => {
+  const p = await creator(browser, 'Max Mouse')
+  try {
+    const board = await p.api.createBoard(p.wid, 'Mouse me')
+    await openDashboard(p.page, p.wid)
+    const card = mainCard(p.page, board.id)
+    await expect(card).toBeVisible()
+    expect(await p.page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(false)
+    for (const [name, locator] of [
+      ['bell', p.page.getByTestId('dashboard-bell')],
+      ['menu', card.getByTestId('board-card-menu')],
+      ['star', card.getByTestId('board-star')],
+    ] as const) {
+      const h = await hitArea(locator)
+      expect(Math.abs(h.hitW - h.visualW), name).toBeLessThanOrEqual(1)
+      expect(Math.abs(h.hitH - h.visualH), name).toBeLessThanOrEqual(1)
+    }
   } finally {
     await p.context.close()
   }
