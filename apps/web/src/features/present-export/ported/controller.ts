@@ -6,7 +6,8 @@
 import type { NoticeInput } from '../../../board/board-context.ts'
 import type { LobbyCanvas } from '../../../canvas/api/index.ts'
 import { type Atom, atom } from '../../../lib/signals.ts'
-import { exportAllowedOn, notifyExportOff } from '../../sharing/ported/export-policy.ts'
+import { notifyExportPending } from '../../sharing/export-rules.ts'
+import { exportAllowedOn, exportPolicyOn, notifyExportOff } from '../../sharing/ported/export-policy.ts'
 import { downloadBlob } from '../download.ts'
 import { exportFilename } from '../filename.ts'
 import type { ExportFocus, ExportRequest } from '../present-types.ts'
@@ -69,10 +70,15 @@ export function getController(canvas: LobbyCanvas): Controller {
     const b = board.get()
     return b ? exportAllowedOn(b.id) : true
   }
-  /** False (and the reason as a notice) while the board owner turned exporting off for this person. */
+  /**
+   * False (and the reason as a notice) while the board owner turned exporting off for this person, or (wave K.1)
+   * while the board's policy has not arrived yet for someone a policy could limit.
+   */
   const mayExport = () => {
     if (allowed()) return true
-    notifyExportOff(notify)
+    const b = board.get()
+    if (b && exportPolicyOn(b.id) === null) notifyExportPending(notify)
+    else notifyExportOff(notify)
     return false
   }
 

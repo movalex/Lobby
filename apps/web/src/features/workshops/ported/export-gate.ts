@@ -7,19 +7,22 @@
 // GET /api/boards/:bid/export-policy per board session, every `export-control.policy` event and a refetch
 // after each event-stream reconnect, with this person's role and guest kind. Before, the panel asked the api
 // itself on every mount: one of the four or five export-policy calls a board open made.
-import { type ExportPolicy, exportAllowedFor } from '@draftroom/contracts'
+import type { ExportPolicy } from '@draftroom/contracts'
 import { useValue } from '../../../lib/signals.ts'
+import { boardExportAllowed } from '../../sharing/export-rules.ts'
 import { exportAllowedOn } from '../../sharing/ported/export-policy.ts'
 import type { WorkshopContext } from '../workshop-context.ts'
 
-/** Unknown role or policy = allowed; an unknown kind = not a name-only guest (the server decides anyway). */
+/**
+ * The board page's rule (`boardExportAllowed`, wave K.1): closed before the first answer but for the owner and
+ * editors with an account; then the policy decides (an unknown kind = not a name-only guest).
+ */
 export function exportAllowedWith(
   role: WorkshopContext['role'] | null,
   policy: ExportPolicy | null,
   guest: boolean | null,
 ): boolean {
-  if (role === null || policy === null) return true
-  return exportAllowedFor(role, policy, { nameOnlyGuest: guest === true })
+  return boardExportAllowed(role, policy, guest)
 }
 
 /** Reactive: may this person export on the board of `ctx`? (the shared store; no request of its own) */

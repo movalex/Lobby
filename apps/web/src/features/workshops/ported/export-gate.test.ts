@@ -6,9 +6,10 @@ import { exportStateOf } from '../../sharing/ported/export-policy.ts'
 import { exportAllowedWith, useExportAllowed } from './export-gate.ts'
 
 describe('the vote CSV export gate', () => {
-  it('allows while anything is unknown, and follows the policy by role and guest kind', () => {
+  it('closed for a viewer while the policy is unknown (wave K.1), and follows the policy by role and guest kind', () => {
     expect(exportAllowedWith(null, 'editors', true)).toBe(true)
-    expect(exportAllowedWith('viewer', null, null)).toBe(true)
+    expect(exportAllowedWith('viewer', null, null)).toBe(false)
+    expect(exportAllowedWith('editor', null, false)).toBe(true)
     expect(exportAllowedWith('viewer', 'everyone', null)).toBe(true)
     expect(exportAllowedWith('viewer', 'editors', null)).toBe(false)
     expect(exportAllowedWith('commenter', 'editors', false)).toBe(false)
@@ -27,8 +28,8 @@ describe('the gate reads the shared export-policy store (K3-6, K1-4)', () => {
 
   it('follows what the sharing feature stored for the board, and asks the api nothing itself', () => {
     const id = 'b-k3gate00001'
-    // nothing known yet: allowed (the server decides anyway)
-    expect(render(id)).toBe('true')
+    // nothing known yet: closed (wave K.1: before the first answer only the owner and editors)
+    expect(render(id)).toBe('false')
     const s = exportStateOf(id)
     s.role.set('viewer')
     s.guest.set(false)
@@ -38,7 +39,7 @@ describe('the gate reads the shared export-policy store (K3-6, K1-4)', () => {
     expect(render(id)).toBe('true')
     s.guest.set(true) // a name-only guest editor is limited under 'editors'
     expect(render(id)).toBe('false')
-    // another board has its own entry
-    expect(render('b-k3gate00002')).toBe('true')
+    // another board has its own entry (nothing known there: closed)
+    expect(render('b-k3gate00002')).toBe('false')
   })
 })

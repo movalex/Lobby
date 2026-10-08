@@ -54,9 +54,9 @@ function fakeApi() {
 const tick = () => new Promise((r) => setTimeout(r, 0))
 
 describe('the ported export policy store', () => {
-  it('unknown is allowed; editors-only limits viewers and name-only guests, never editors', () => {
+  it('unknown is closed (wave K.1); editors-only limits viewers and name-only guests, never editors', () => {
     const s = exportStateOf('b-rules')
-    expect(exportAllowedOn('b-rules')).toBe(true)
+    expect(exportAllowedOn('b-rules')).toBe(false)
     expect(exportCertainOn('b-rules')).toBe(false)
     s.policy.set('editors')
     s.role.set('viewer')

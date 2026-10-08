@@ -88,9 +88,10 @@ describe('defaults', () => {
 })
 
 describe('export gate', () => {
-  it('unknown role or policy allows; editors may; viewers may not under editors; a name-only guest never', () => {
+  it('an unknown role allows once the policy is known; editors may; viewers may not under editors; a name-only guest never', () => {
     expect(exportAllowedWith(null, 'editors', null)).toBe(true)
-    expect(exportAllowedWith('viewer', null, null)).toBe(true)
+    // wave K.1: an unknown policy is closed for a viewer (it allowed before)
+    expect(exportAllowedWith('viewer', null, null)).toBe(false)
     expect(exportAllowedWith('viewer', 'editors', false)).toBe(false)
     expect(exportAllowedWith('editor', 'editors', false)).toBe(true)
     expect(exportAllowedWith('editor', 'editors', true)).toBe(false)
@@ -99,14 +100,18 @@ describe('export gate', () => {
     expect(exportAllowedWith('editor', 'everyone', true)).toBe(false)
     expect(exportAllowedWith('editor', 'everyone-including-guests', true)).toBe(true)
   })
-  it('CR-3A-4: while the policy is still loading a known name-only guest fails closed; accounts and unknown kinds are allowed', () => {
+  it('CR-3A-4, wave K.1: while the policy is still loading only the owner and editors who are not name-only guests are let through', () => {
     expect(exportAllowedWith('editor', null, true)).toBe(false)
     expect(exportAllowedWith('commenter', null, true)).toBe(false)
     expect(exportAllowedWith(null, null, true)).toBe(false)
     expect(exportAllowedWith('editor', null, false)).toBe(true)
-    expect(exportAllowedWith('viewer', null, false)).toBe(true)
-    expect(exportAllowedWith('viewer', null, null)).toBe(true)
-    expect(exportAllowedWith(null, null, null)).toBe(true)
+    expect(exportAllowedWith('editor', null, null)).toBe(true)
+    expect(exportAllowedWith('owner', null, null)).toBe(true)
+    // K.1: viewers, commenters and an unknown role wait for the answer (they were let through before)
+    expect(exportAllowedWith('viewer', null, false)).toBe(false)
+    expect(exportAllowedWith('commenter', null, false)).toBe(false)
+    expect(exportAllowedWith('viewer', null, null)).toBe(false)
+    expect(exportAllowedWith(null, null, null)).toBe(false)
     // the first answer decides, for the guest too
     expect(exportAllowedWith('editor', 'everyone-including-guests', true)).toBe(true)
     expect(exportAllowedWith('editor', 'everyone', true)).toBe(false)

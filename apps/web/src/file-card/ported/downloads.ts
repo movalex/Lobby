@@ -6,10 +6,12 @@
 // K1-4 (wave K): the export policy is the board's one shared resource (features/sharing/ported/
 // export-policy.ts: read once per board session, every `export-control.policy` board event, a read after
 // each event-stream reconnect), which every gate on the board reads; the media feature used to make that
-// read itself. The same rule (`exportAllowedFor`), with 'everyone' until the first answer.
+// read itself. The same rule (`exportAllowedFor`); before the first answer, closed but for the owner and editors with
+// an account (wave K.1).
 import { EXPORT_DISABLED_MESSAGE, type ExportPolicy, exportAllowedFor } from '@draftroom/contracts'
 import { type AssetVersionMeta, derivativeUrl, metaUrl, originalUrl } from '../../assets/contract.ts'
 import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
+import { boardExportAllowed, notifyExportPending } from '../../features/sharing/export-rules.ts'
 import { attachExportPolicy, exportStateOf } from '../../features/sharing/ported/export-policy.ts'
 import type { Atom } from '../../lib/signals.ts'
 import { pageAssetName } from '../pdf-pages.ts'
@@ -24,15 +26,22 @@ export function syncExportPolicy(ctx: CanvasFeatureContext): () => void {
   return attachExportPolicy({ boardId: ctx.board.id, api: ctx.api, events: ctx.events })
 }
 
-/** Whether this person may download originals here (reactive; 'everyone' until the first answer). */
+/**
+ * Whether this person may download originals here (reactive). Before the first answer only the owner and an
+ * editor with an account, whom no policy limits (wave K.1, the board page's `boardExportAllowed`); `guest` null
+ * reads the board's shared kind then (unknown: closed), and counts as not a name-only guest after it.
+ */
 export function downloadsAllowed(ctx: CanvasFeatureContext, guest: boolean | null = null): boolean {
   const policy = policyOf(ctx.board.id).get()
-  if (policy === null) return true
+  if (policy === null)
+    return boardExportAllowed(ctx.role, null, guest ?? exportStateOf(ctx.board.id).guest.get())
   return exportAllowedFor(ctx.role, policy, { nameOnlyGuest: guest === true })
 }
 
 /** Tells the person downloads are off (the export policy's own words). */
 export function notifyDownloadsOff(ctx: CanvasFeatureContext): void {
+  // wave K.1: before the first policy answer nothing is known to be off yet
+  if (policyOf(ctx.board.id).get() === null) return notifyExportPending(ctx.notify)
   ctx.notify({ key: 'export-off', text: EXPORT_OFF_TEXT, testId: 'export-off-toast', timeoutMs: 5000 })
 }
 

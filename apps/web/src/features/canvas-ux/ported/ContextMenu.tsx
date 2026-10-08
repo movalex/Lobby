@@ -11,7 +11,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { CanvasFeatureContext, MenuEntrySpec, MenuTarget } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { CMD, canCopySelection, hasLocked, pasteFromMenu, selectedRoots } from './commands.ts'
-import { EXPORT_OFF_MENU_LABEL, exportAllowed, notifyExportOff } from './export-gate.ts'
+import { EXPORT_OFF_MENU_LABEL, exportAllowed, exportPending, notifyExportOff } from './export-gate.ts'
 import { EXPORTING_ENTRIES, groupRows, MenuList } from './Menu.tsx'
 import { uxState } from './state.ts'
 
@@ -19,13 +19,16 @@ const selected = (ctx: CanvasFeatureContext) => selectedRoots(ctx.canvas)
 const editable = (ctx: CanvasFeatureContext) => !ctx.canvas.readOnly()
 const atLeast = (n: number) => (ctx: CanvasFeatureContext) => selected(ctx).length >= n
 
-/** The one line where copying and exporting would be, while exporting is off for this person. */
+/**
+ * The one line where copying and exporting would be, while exporting is off for this person. Not while the
+ * policy is still unknown (wave K.1): the entries are hidden then, but nothing is known to be off.
+ */
 export const EXPORT_OFF_ENTRY: MenuEntrySpec = {
   id: 'dr-export-off',
   group: 'export',
   order: -1000,
   label: EXPORT_OFF_MENU_LABEL,
-  visible: (ctx) => !exportAllowed(ctx) && ctx.canvas.items().length > 0,
+  visible: (ctx) => !exportAllowed(ctx) && !exportPending(ctx) && ctx.canvas.items().length > 0,
   run: (ctx) => notifyExportOff(ctx),
 }
 
@@ -174,7 +177,10 @@ export function ContextMenu({ ctx }: { ctx: CanvasFeatureContext }) {
   // re-read the entries when the board or the policy changes while it is open
   useValue(
     'cux-context-deps',
-    () => (open ? [canvas.items().length, canvas.selection.join(), exportAllowed(ctx)].join('|') : ''),
+    () =>
+      open
+        ? [canvas.items().length, canvas.selection.join(), exportAllowed(ctx), exportPending(ctx)].join('|')
+        : '',
     [canvas, open, ctx],
   )
   const ref = useRef<HTMLDivElement>(null)

@@ -31,6 +31,25 @@ export function exportAllowedWith(
 }
 
 /**
+ * Wave K.1 (follow-up 4, K1-4): the Excalidraw board page's rule, for every gate there. Until the board's first
+ * export-policy answer it fails closed: only people no policy can limit see export and copy-out entries, the
+ * owner (never a name-only guest) and an editor who is not a known name-only guest (every policy lets an account
+ * editor export, so neither sees any change; a guest's kind is known from the join that signed them in, as
+ * CR-3A-4 relies on). Viewers, commenters, known name-only guests and anyone whose role is not known yet get
+ * nothing until the answer, so a viewer on an export-off board never sees those entries flash on open. Once the policy is known, `exportAllowedFor` decides (an unknown role still counts as allowed: the
+ * server decides). UI hints only, as everywhere: the api refuses the exports themselves.
+ */
+export function boardExportAllowed(
+  role: BoardRole | null,
+  policy: ExportPolicy | null,
+  guest: boolean | null,
+): boolean {
+  if (policy === null) return role === 'owner' || (role === 'editor' && guest !== true)
+  if (role === null) return true
+  return exportAllowedFor(role, policy, { nameOnlyGuest: guest === true })
+}
+
+/**
  * Whether this person CERTAINLY may export: the policy is known, and it includes guests, or the role and
  * the kind are known and allow it (under 'everyone', anyone with an account; under 'editors', an editor
  * or owner with an account). Unlike exportAllowedWith, anything unknown counts as no.
@@ -116,6 +135,18 @@ export function exportPolicySentence(policy: ExportPolicy | null): string {
 /** Says why an export, copy or download did nothing. */
 export function notifyExportOff(notify: (n: NoticeInput) => void) {
   notify({ key: 'export-off', text: EXPORT_OFF_TEXT, testId: 'export-off-notice', timeoutMs: 6000 })
+}
+
+/**
+ * Wave K.1: what an export or a copy says while the board's policy has not arrived yet (`boardExportAllowed` is
+ * closed then for anyone a policy could limit). It says nothing is turned off: nobody knows that yet.
+ */
+export const EXPORT_PENDING_TEXT =
+  'Checking whether you can export or copy on this board. Try again in a moment.'
+
+/** The pending notice (same key as the off notice: one replaces the other). */
+export function notifyExportPending(notify: (n: NoticeInput) => void) {
+  notify({ key: 'export-off', text: EXPORT_PENDING_TEXT, testId: 'export-pending-notice', timeoutMs: 4000 })
 }
 
 const enc = encodeURIComponent

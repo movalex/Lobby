@@ -275,3 +275,53 @@ test('export control on file cards: the viewer’s Download goes and comes back 
     expect((await b.page.request.get(href)).status()).toBe(200)
   })
 })
+
+test('K.1: before the board’s first export-policy answer a viewer gets no Export entries and no “turned off” line; they come with the answer', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await seedDeck(a.page, {
+    frames: [FRAME],
+    notes: [{ id: 'ec-note', frame: FRAME.id, x: 40, y: 40, text: 'Hi' }],
+  })
+  const b = await canvasSession('bob', { role: 'viewer' })
+  await expectItems(b.page, [FRAME.id, 'ec-note'])
+  // the next open's export-policy read is held until the test lets it go (a slow api in the open burst)
+  let release: () => void = () => {}
+  const held = new Promise<void>((r) => {
+    release = r
+  })
+  let reads = 0
+  await b.page.route('**/api/boards/*/export-policy', async (route) => {
+    reads++
+    await held
+    await route.continue()
+  })
+  await b.page.reload()
+  await waitForCanvas(b.page)
+  await expectItems(b.page, [FRAME.id, 'ec-note'])
+  await expect.poll(() => reads).toBeGreaterThan(0)
+  // the Board menu: no Export submenu at all (nothing to offer yet, and nothing is known to be off)
+  await b.page.getByTestId('main-menu.button').click()
+  await expect(b.page.getByTestId('main-menu-root')).toBeVisible()
+  await expect(b.page.getByTestId('main-menu-sub.export-button')).toHaveCount(0)
+  await b.page.getByTestId('main-menu.button').click()
+  await expect(b.page.getByTestId('main-menu-root')).toHaveCount(0)
+  // the context menu on the note: no Copy, no Export as, no "turned off" line
+  const menu = await contextMenuOn(b.page, 'ec-note')
+  await expect(menu.getByTestId('context-menu-sub.export-as-button')).toHaveCount(0)
+  await expect(menu.getByTestId('context-menu.copy')).toHaveCount(0)
+  await expect(menu.getByTestId('context-menu.dr-export-off')).toHaveCount(0)
+  await closeMenu(b.page)
+  // Copy as PNG says it is still being checked, not that it is off
+  await clickItem(b.page, 'ec-note')
+  await b.page.keyboard.press('Control+Shift+C')
+  await expect(b.page.getByTestId('export-pending-notice')).toBeVisible()
+  await expect(b.page.getByText(OFF_TEXT)).toHaveCount(0)
+  // the answer ('everyone', the default): the viewer's entries come
+  release()
+  await b.page.getByTestId('main-menu.button').click()
+  await b.page.getByTestId('main-menu-sub.export-button').click()
+  await expect(b.page.getByTestId('main-menu.export-dialog')).toBeVisible()
+  await expect(b.page.getByTestId('main-menu.dr-export-off')).toHaveCount(0)
+})

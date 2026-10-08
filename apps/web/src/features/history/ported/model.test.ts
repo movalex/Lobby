@@ -115,7 +115,10 @@ describe('history on elements', () => {
 
   it('export is allowed unless the known policy limits this role', () => {
     expect(exportAllowedHere(null, 'editors', false)).toBe(true)
-    expect(exportAllowedHere('viewer', null, false)).toBe(true)
+    // wave K.1: before the first answer only the owner and editors (whom no policy limits)
+    expect(exportAllowedHere('viewer', null, false)).toBe(false)
+    expect(exportAllowedHere('editor', null, false)).toBe(true)
+    expect(exportAllowedHere('owner', null, null)).toBe(true)
     expect(exportAllowedHere('viewer', 'editors', false)).toBe(false)
     expect(exportAllowedHere('editor', 'editors', false)).toBe(true)
     expect(exportAllowedHere('editor', 'editors', true)).toBe(false)

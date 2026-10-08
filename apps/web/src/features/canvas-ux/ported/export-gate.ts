@@ -8,15 +8,15 @@
 // K1-4 (wave K): the policy is the board's one shared export-policy resource
 // (features/sharing/ported/export-policy.ts: read once per board session, every `export-control.policy`
 // event, a read after each event-stream reconnect), which every gate on the board reads; this gate used to
-// read GET /api/boards/:bid/export-policy itself. Until the first answer it counts as 'everyone' for
-// accounts, so boards that never limit anyone do not flash disabled entries; a name-only guest the gate
-// KNOWS about fails closed instead (they are limited under 'everyone' too), so they cannot copy in the
-// moment before the policy has loaded (CR-3A-4).
-import { EXPORT_DISABLED_MESSAGE, type ExportPolicy, exportAllowedFor } from '@draftroom/contracts'
+// read GET /api/boards/:bid/export-policy itself. Until the first answer it fails closed (wave K.1): only the
+// owner and an editor with an account, whom no policy limits, copy and export then; a viewer, a commenter or
+// a name-only guest cannot copy in the moment before the policy has loaded (CR-3A-4 closed it for guests).
+import { EXPORT_DISABLED_MESSAGE, type ExportPolicy } from '@draftroom/contracts'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { knownUserKind } from '../../../invite/guest.tsx'
 import type { BoardRole } from '../../../lib/permissions.ts'
 import { type Atom, atom } from '../../../lib/signals.ts'
+import { boardExportAllowed, notifyExportPending } from '../../sharing/export-rules.ts'
 import { attachExportPolicy, exportStateOf } from '../../sharing/ported/export-policy.ts'
 
 /** What people see wherever copying or exporting is turned off. */
@@ -46,18 +46,17 @@ export function exportGate(boardId: string): ExportGate {
 }
 
 /**
- * The rule (pure): unknown role = allowed, unknown kind = not a name-only guest, and an unknown policy
- * (still loading) = allowed for an account but not for a KNOWN name-only guest (`guest === true`): the
- * policy may well limit them, and only 'everyone-including-guests' lets them through.
+ * The rule (pure): the board page's `boardExportAllowed` (../../sharing/export-rules.ts). An unknown policy
+ * (still loading) lets through only the owner and an editor known to have an account, whom no policy limits
+ * (wave K.1: before, it let every account through, so a viewer could copy on an export-off board in that
+ * moment); a known policy decides as before (unknown role = allowed, unknown kind = not a name-only guest).
  */
 export function exportAllowedWith(
   role: BoardRole | null,
   policy: ExportPolicy | null,
   guest: boolean | null,
 ) {
-  if (policy === null) return guest !== true
-  if (role === null) return true
-  return exportAllowedFor(role, policy, { nameOnlyGuest: guest === true })
+  return boardExportAllowed(role, policy, guest)
 }
 
 /**
@@ -73,7 +72,8 @@ export function exportAllowedOnBoard(
   nameOnlyGuest: boolean,
 ): boolean {
   const g = exportGate(boardId)
-  return exportAllowedWith(role, g.policy.get(), nameOnlyGuest ? true : g.guest.get())
+  // the session's welcome is authoritative about the kind (it asks after the welcome): false is an account
+  return exportAllowedWith(role, g.policy.get(), nameOnlyGuest || g.guest.get() === true)
 }
 
 /** Reactive (inside useValue / react): may this person copy and export here? */
@@ -82,8 +82,15 @@ export function exportAllowed(ctx: Pick<CanvasFeatureContext, 'board' | 'role'>)
   return exportAllowedWith(ctx.role, g.policy.get(), g.guest.get())
 }
 
-/** Says why a copy or an export did nothing. */
-export function notifyExportOff(ctx: Pick<CanvasFeatureContext, 'notify'>) {
+/** Whether the board's policy is still unknown (wave K.1: the gates are closed then, but nothing is "off"). */
+export const exportPending = (ctx: Pick<CanvasFeatureContext, 'board'>): boolean =>
+  exportGate(ctx.board.id).policy.get() === null
+
+/** Says why a copy or an export did nothing (before the first policy answer: that it is still being checked). */
+export function notifyExportOff(
+  ctx: Pick<CanvasFeatureContext, 'notify'> & Partial<Pick<CanvasFeatureContext, 'board'>>,
+) {
+  if (ctx.board && exportPending({ board: ctx.board })) return notifyExportPending(ctx.notify)
   ctx.notify({ key: 'export-off', text: EXPORT_OFF_TEXT, testId: 'export-off-notice', timeoutMs: 6000 })
 }
 

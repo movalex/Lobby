@@ -8,22 +8,25 @@
 // to read GET /api/boards/:bid/export-policy itself each time it opened; now it attaches to the resource
 // while it is open (the board session keeps it current already, so opening the panel reads nothing).
 
-import { type ExportPolicy, exportAllowedFor } from '@draftroom/contracts'
+import type { ExportPolicy } from '@draftroom/contracts'
 import { useEffect } from 'react'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { useUserKind } from '../../../invite/guest.tsx'
 import type { BoardRole } from '../../../lib/permissions.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { boardExportAllowed } from '../../sharing/export-rules.ts'
 import { attachExportPolicy, exportStateOf } from '../../sharing/ported/export-policy.ts'
 
-/** The same rule as sharing's `exportAllowedWith`: unknown role or policy = allowed (the server decides). */
+/**
+ * The board page's rule (`boardExportAllowed`, wave K.1): closed before the first answer but for the owner and
+ * editors with an account; then the policy decides (unknown role = allowed: the server decides).
+ */
 export function exportAllowedHere(
   role: BoardRole | null,
   policy: ExportPolicy | null,
-  guest: boolean,
+  guest: boolean | null,
 ): boolean {
-  if (role === null || policy === null) return true
-  return exportAllowedFor(role, policy, { nameOnlyGuest: guest })
+  return boardExportAllowed(role, policy, guest)
 }
 
 export function useExportAllowed(
@@ -34,5 +37,5 @@ export function useExportAllowed(
   const boardId = ctx.board.id
   useEffect(() => attachExportPolicy({ boardId, api, events }), [api, events, boardId])
   const policy = useValue('history-export-policy', () => exportStateOf(boardId).policy.get(), [boardId])
-  return exportAllowedHere(ctx.role, policy, kind === 'guest')
+  return exportAllowedHere(ctx.role, policy, kind === null ? null : kind === 'guest')
 }

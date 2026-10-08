@@ -30,8 +30,9 @@
 // (../../../file-card/ported/downloads.ts), the mind-map outline (../../mindmap/ported/export-gate.ts) and
 // the History panel (../../history/ported/export-allowed.ts) import from here.
 //
-// Until the first answer arrives the policy counts as 'everyone' (the default and by far the common
-// case), so boards that never limit anyone do not flash disabled entries on open. The Share dialog's
+// Until the first answer arrives the gates fail closed (wave K.1, ../export-rules.ts `boardExportAllowed`): only
+// the owner and editors with an account, whom no policy limits, get export and copy entries. Before, the
+// policy counted as 'everyone' then, and a viewer on an export-off board saw those entries for a moment. The Share dialog's
 // "Export and download" section (./ExportPolicySection.tsx; board/ShareDialog.tsx opens from the board
 // page and the dashboard) reads and writes this same store (`refreshExportPolicy`, `saveExportPolicy`).
 
@@ -47,8 +48,8 @@ import type { BoardRole } from '../../../lib/permissions.ts'
 import { type Atom, atom } from '../../../lib/signals.ts'
 import type { BoardEvents } from '../../events.ts'
 import {
+  boardExportAllowed,
   createPolicyOrder,
-  exportAllowedWith,
   exportCertainWith,
   exportPolicyApi,
   notifyExportOff,
@@ -189,10 +190,10 @@ export function invalidateExportPolicy(boardId: string): void {
   invalidate(entry(boardId))
 }
 
-/** Reactive: may this person export on `boardId`? */
+/** Reactive: may this person export on `boardId`? (closed before the first answer: `boardExportAllowed`) */
 export function exportAllowedOn(boardId: string): boolean {
   const s = exportStateOf(boardId)
-  return exportAllowedWith(s.role.get(), s.policy.get(), s.guest.get())
+  return boardExportAllowed(s.role.get(), s.policy.get(), s.guest.get())
 }
 
 /** Reactive: whether this person CERTAINLY may export (anything unknown counts as no). */

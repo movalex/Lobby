@@ -3,6 +3,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { exportStateOf } from '../../sharing/ported/export-policy.ts'
 import { workshopKit } from '../../workshops/ported/ctx-kit.ts'
 import { getController } from './controller.ts'
 import { feature } from './index.tsx'
@@ -29,6 +30,8 @@ describe('Export lives in the board menu, not the top bar (K3-3)', () => {
     expect(command).toMatchObject({ label: 'Export…', readOnlyAllowed: true })
     // the command asks the controller for the dialog: the request the top-bar item renders it from
     const kit = workshopKit()
+    // the board's export policy is known (wave K.1: before the first answer only the owner and editors export)
+    exportStateOf(kit.ctx.board.id).policy.set('everyone')
     expect(getController(kit.ctx.canvas).exportRequest.get()).toBeNull()
     command?.run(kit.ctx, 'menu' as never)
     expect(getController(kit.ctx.canvas).exportRequest.get()).toMatchObject({ focus: 'image' })

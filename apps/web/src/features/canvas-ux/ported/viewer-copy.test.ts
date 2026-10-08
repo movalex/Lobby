@@ -69,8 +69,11 @@ describe('exportAllowedOnBoard (what the input layer asks before it lets a copy 
   it('follows the policy for each role, and a name-only guest only under everyone-including-guests', () => {
     const board = 'viewer-copy-rule'
     const policy = exportGate(board).policy
-    // no answer yet: counts as 'everyone' (the menus do not flash disabled)
-    expect(exportAllowedOnBoard(board, 'viewer', false)).toBe(true)
+    // no answer yet (wave K.1): closed for a viewer, open for the owner and an editor, whom no policy limits
+    expect(exportAllowedOnBoard(board, 'viewer', false)).toBe(false)
+    expect(exportAllowedOnBoard(board, 'commenter', false)).toBe(false)
+    expect(exportAllowedOnBoard(board, 'editor', false)).toBe(true)
+    expect(exportAllowedOnBoard(board, 'owner', false)).toBe(true)
     policy.set('everyone')
     for (const role of ['viewer', 'commenter', 'editor', 'owner'] as const)
       expect(exportAllowedOnBoard(board, role, false), role).toBe(true)
@@ -116,7 +119,9 @@ describe('exportAllowedOnBoard (what the input layer asks before it lets a copy 
     expect(exportAllowedOnBoard(board, 'editor', true)).toBe(false)
   })
 
-  it('no role: allowed until known (the first answer decides)', () => {
+  it('no role: closed until the first answer (wave K.1), then allowed until known', () => {
+    expect(exportAllowedOnBoard('viewer-copy-no-role', null, false)).toBe(false)
+    exportGate('viewer-copy-no-role').policy.set('editors')
     expect(exportAllowedOnBoard('viewer-copy-no-role', null, false)).toBe(true)
   })
 })
