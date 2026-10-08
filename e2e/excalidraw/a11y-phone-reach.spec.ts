@@ -194,11 +194,13 @@ test('W5-07: Board actions is never on the docked comment sheet (new comment and
     const page = b.page
     await note(page, 0, 0, 'Comment on me')
     await expect(boardActions(page)).toBeVisible()
-    // the comment tool, then a tap on the board: the new-comment sheet docks at the bottom
+    // the comment tool (in the top bar's overflow menu on phones since K2-5), then a tap on the board below
+    // that open menu: the new-comment sheet docks at the bottom
+    await page.getByTestId('topbar-overflow').tap()
     await page.getByTestId('comment-tool').tap()
     const c = await page.locator('[data-lobby-board-canvas]').boundingBox()
     if (!c) throw new Error('no canvas')
-    await page.touchscreen.tap(c.x + c.width / 2, c.y + c.height * 0.35)
+    await page.touchscreen.tap(c.x + c.width / 2, c.y + c.height * 0.75)
     const popover = page.getByTestId('new-comment-popover')
     await expect(popover).toHaveAttribute('data-docked', 'true')
     await expect(boardActions(page)).toBeHidden()
