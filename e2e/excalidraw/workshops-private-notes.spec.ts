@@ -885,6 +885,9 @@ test('R1: 16 notes revealed into a retro column keep its width and never reach t
 }) => {
   const alice = await join('alice')
   const bob = await join('bob', 'editor')
+  // the start by a host of its own (wave K integration): with boards opening faster (K1) alice's starts in
+  // the tests before this one crossed the api's 10 a minute (private-notes.ts startsPerMinute) and got a 429
+  const host = await join('rita', 'editor')
   await seed(alice.page, {
     frames: ['2 · What went well', '3 · What to improve', '4 · Actions'].map((name, i) => ({
       id: `fp-col${i}`,
@@ -903,7 +906,7 @@ test('R1: 16 notes revealed into a retro column keep its width and never reach t
   })
   await expectItemsEverywhere([bob], ['fp-prompt2'])
   const target = { frameId: 'shape:fp-col1', pageId: 'page:page', x: 880, y: 0, w: 800, h: 960 }
-  const started = await post(alice, `/api/boards/${board}/private-brainstorm`, {
+  const started = await post(host, `/api/boards/${board}/private-brainstorm`, {
     prompt: 'What slowed us down this sprint?',
     anonymous: true,
     target,
@@ -943,7 +946,9 @@ test('I1: a brainstorm started while the participant’s refetch keeps failing s
   join,
 }) => {
   test.setTimeout(90_000)
-  const alice = await join('alice', 'owner')
+  // the start by a host of its own (wave K integration), as R1 and DANA2-02: alice's starts in the tests before
+  // this one can cross the api's 10 a minute now that boards open faster
+  const host = await join('ines', 'editor')
   const bob = await join('bob', 'editor')
   await expect(brainstormPill(bob.page)).toHaveCount(0)
   await bob.page.evaluate(() => {
@@ -961,7 +966,7 @@ test('I1: a brainstorm started while the participant’s refetch keeps failing s
     }
     return route.continue()
   })
-  await startBrainstorm(alice.page, { prompt: 'What should we change?', anonymous: false, target: 'new' })
+  await startBrainstorm(host.page, { prompt: 'What should we change?', anonymous: false, target: 'new' })
 
   // The event's refetch failed, and the store keeps trying (1 s, 2 s, ...): three refused reads, not one.
   await expect.poll(() => refused, { timeout: 15_000 }).toBeGreaterThanOrEqual(3)
