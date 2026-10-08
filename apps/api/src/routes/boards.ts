@@ -26,7 +26,7 @@ import {
   roleOf,
 } from '../access.ts'
 import { audit } from '../audit.ts'
-import { onNewCanvas } from '../canvas-engine.ts'
+import { onNewCanvas, showsR0Marks } from '../canvas-engine.ts'
 import type { AppContext, Params } from '../context.ts'
 import { conflict, forbidden, notFound, parse } from '../errors.ts'
 import {
@@ -55,8 +55,8 @@ const TRANSITIONS = { archive: 'archived', trash: 'trashed', restore: 'active' }
 >
 
 export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void {
-  /** R0's `newCanvas` marks: shown unless this api serves the new canvas (canvas-engine.ts). */
-  const boardMarks = async (): Promise<BoardMarks> => ({ newCanvas: !(await onNewCanvas(ctx)) })
+  /** R0's `newCanvas` marks: shown only while this api's sync is known to be a tldraw one (canvas-engine.ts). */
+  const boardMarks = async (): Promise<BoardMarks> => ({ newCanvas: await showsR0Marks(ctx) })
   const { db, notifier, now } = ctx
 
   app.get('/api/workspaces/:wid/boards', async (req) => {

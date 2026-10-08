@@ -25,7 +25,7 @@ import type { AuthProvider, RouteRateLimit, SignInContext } from './auth/provide
 import { createSessionStore } from './auth/session.ts'
 import { createHttpSessionEndNotifier, type SessionEndNotifier } from './auth/session-sync.ts'
 import { listUserWorkspaces } from './auth/users.ts'
-import { type CanvasEngine, createCanvasEngineProbe } from './canvas-engine.ts'
+import { type CanvasEngine, type CanvasEngineProbe, createCanvasEngineProbe } from './canvas-engine.ts'
 import type { ApiConfig } from './config.ts'
 import { type ApiLimits, type AppContext, DEFAULT_LIMITS, type InvitationRateLimits } from './context.ts'
 import { badRequest, toErrorResponse, unauthenticated } from './errors.ts'
@@ -114,6 +114,11 @@ export interface ApiDeps {
   events?: EventHub
   /** api -> sync snapshot/seed client (tests inject a fake). */
   syncInternal?: SyncInternalClient
+  /**
+   * TEST-ONLY seam: replaces the canvas engine probe built from `syncInternal.engine` (canvas-engine.ts).
+   * The test helper passes TLDRAW_ONLY when it injects no sync client, as no test reaches a real sync.
+   */
+  canvasEngine?: CanvasEngineProbe
   /** Replaces the blob store chosen by config (tests inject fakes or a temp directory). */
   blobs?: BlobStore
   /** Request arrival limits (defaults: DEFAULT_REQUEST_TIMEOUTS; tests lower them). */
@@ -392,12 +397,15 @@ async function buildServer(
       createHttpSyncInternalClient({ baseUrl: config.syncInternalUrl, secret: config.internalSecret }),
   )
   // R0's contracts (canvas-engine.ts): which canvas the sync runs decides what the api marks and refuses
-  const canvas = createCanvasEngineProbe(
-    sync.engine ? () => (sync.engine as () => Promise<CanvasEngine>)() : undefined,
-    {
+  // K6-1: asked at start-up, again and again until sync answers; unknown until then (no guess).
+  const canvas =
+    deps.canvasEngine ??
+    createCanvasEngineProbe(sync.engine ? () => (sync.engine as () => Promise<CanvasEngine>)() : undefined, {
       log: (m) => app.log.info(m),
-    },
-  )
+      now: () => now().getTime(),
+    })
+  canvas.start?.()
+  app.addHook('onClose', async () => canvas.stop?.())
   const ctx: AppContext = {
     config,
     db,

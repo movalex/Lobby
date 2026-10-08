@@ -106,9 +106,25 @@ describe('on the new canvas, the api marks what it makes and refuses none of it'
   })
 
   it('a converted board (made before, new_canvas false) keeps false', async () => {
-    sync.engine = undefined
-    const id = await createBoard(bob, DEV_STUDIO, 'Before the move')
-    expect((await row(id)).new_canvas).toBe(false)
+    // made by an api whose sync was a tldraw one (K6-1: the probe asks at start-up, so the sync's answer
+    // is the one the api started with, not a later change of the fake)
+    const before = createFakeSync()
+    const old = await createTestApi({ db: api.db, deps: { syncInternal: before } })
+    try {
+      const carol = await old.login('carol')
+      await old.db.query(
+        "INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'member') ON CONFLICT DO NOTHING",
+        [DEV_STUDIO, carol.userId],
+      )
+      const made = await carol.req('POST', `/api/workspaces/${DEV_STUDIO}/boards`, {
+        title: 'Before the move',
+      })
+      expect(made.statusCode, made.body).toBe(201)
+      const id = (made.json() as { id: string }).id
+      expect((await row(id)).new_canvas).toBe(false)
+    } finally {
+      await old.close()
+    }
   })
 })
 

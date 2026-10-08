@@ -1,4 +1,4 @@
-import type { TicketResponse } from '@draftroom/contracts'
+import { CANVAS_STARTING_ERROR, type TicketResponse } from '@draftroom/contracts'
 import { isApiError } from '../api/client.ts'
 
 export interface TicketUriOptions {
@@ -25,11 +25,38 @@ export interface TicketUriOptions {
    * the page origin). `null`: always the page origin.
    */
   syncOrigin?: string | null
+  /**
+   * K6-1: called before each wait of a retry (the page says "Connecting" meanwhile): `starting` when the api
+   * answered 503 CANVAS_STARTING (it has not reached the board server since it started), retried on the
+   * short STARTING_BACKOFF_MS; otherwise a transient failure on `backoffMs`.
+   */
+  onConnecting?(info: TicketRetry): void
   sleep?: (ms: number) => Promise<void>
   backoffMs?: readonly number[]
+  /** The waits between tries while the api is starting (default STARTING_BACKOFF_MS). */
+  startingBackoffMs?: readonly number[]
+}
+
+/** One retry of a ticket: which try failed, how long until the next, and whether the api is starting. */
+export interface TicketRetry {
+  readonly attempt: number
+  readonly waitMs: number
+  readonly starting: boolean
 }
 
 const DEFAULT_BACKOFF = [500, 1000, 2000, 4000, 5000] as const
+/**
+ * K6-1: the waits while the api answers 503 CANVAS_STARTING (Retry-After 2 s): short, because the api asks
+ * sync again and again until it answers, and the first ticket after that succeeds. Never past 2 s.
+ */
+export const STARTING_BACKOFF_MS: readonly number[] = [250, 500, 1_000, 1_000, 2_000]
+
+/**
+ * 503 CANVAS_STARTING (K6-1): the api does not know yet which canvas its sync runs. A retry, never the
+ * NEW_CANVAS refusal (409) it used to be mistaken for.
+ */
+export const isCanvasStarting = (e: unknown): boolean =>
+  isApiError(e) && e.status === 503 && e.code === CANVAS_STARTING_ERROR
 
 /**
  * The build-time sync origin, e.g. `https://draftroom-staging-sync.onrender.com` (Render static sites
@@ -113,6 +140,9 @@ const never = () => new Promise<string>(() => {})
 export function createTicketUri(opts: TicketUriOptions) {
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
   const backoff = opts.backoffMs ?? DEFAULT_BACKOFF
+  const startingBackoff = opts.startingBackoffMs ?? STARTING_BACKOFF_MS
+  /** A try failed and the next one is waited for (the page shows "Connecting"). */
+  let retrying = false
   // Bumped by cancel(): attempts from an earlier generation stop and never settle.
   let generation = 0
   let inflight: Promise<string> | null = null
@@ -128,11 +158,14 @@ export function createTicketUri(opts: TicketUriOptions) {
   async function attempt(): Promise<string> {
     const gen = generation
     const stale = () => gen !== generation
+    let transient = 0
+    let starting = 0
     for (let i = 0; ; i++) {
       if (stale()) return never()
       try {
         const t = await opts.fetchTicket(opts.boardId)
         if (stale()) return never()
+        retrying = false
         opts.onTicket(t)
         // The caller appends sessionId. The ticket is a secret: it only ever appears here, and the board
         // socket (ticketInProtocol) moves it into the handshake before the URL goes anywhere.
@@ -151,12 +184,25 @@ export function createTicketUri(opts: TicketUriOptions) {
           opts.onNewCanvas()
           return never()
         }
-        await sleep(backoff[Math.min(i, backoff.length - 1)] ?? 5000)
+        // K6-1: the api is starting (503 CANVAS_STARTING): again soon. Anything else transient: the backoff.
+        const isStarting = isCanvasStarting(e)
+        const waitMs = isStarting
+          ? (startingBackoff[Math.min(starting++, startingBackoff.length - 1)] ?? 2_000)
+          : (backoff[Math.min(transient++, backoff.length - 1)] ?? 5000)
+        retrying = true
+        try {
+          opts.onConnecting?.({ attempt: i + 1, waitMs, starting: isStarting })
+        } catch (err) {
+          console.error('Lobby: a ticket retry listener failed', err)
+        }
+        await sleep(waitMs)
       }
     }
   }
 
   return {
+    /** K6-1: a ticket try failed and the next one is being waited for (the page says "Connecting"). */
+    connecting: () => retrying,
     /** Stable for the lifetime of one board session; pass it to useSync as `uri`. */
     uri(): Promise<string> {
       // The reconnect manager can ask again while a slow attempt is still running (on 'online' /
@@ -175,6 +221,50 @@ export function createTicketUri(opts: TicketUriOptions) {
     cancel() {
       generation++
       inflight = null
+      retrying = false
     },
+  }
+}
+
+/**
+ * K6-1: the board page's FIRST ticket (who this is, before the board session exists), retried like the
+ * session's own while the api is starting (503 CANVAS_STARTING: STARTING_BACKOFF_MS, "Connecting") for at
+ * most `maxWaitMs`. Any other failure, or one that lasts, is thrown as it was (the page shows its error
+ * screen). Aborting `signal` stops the waits and throws its reason.
+ */
+export async function firstTicketWhileStarting(
+  fetchTicket: (signal?: AbortSignal) => Promise<TicketResponse>,
+  opts: {
+    signal?: AbortSignal
+    onConnecting?(info: TicketRetry): void
+    sleep?: (ms: number, signal?: AbortSignal) => Promise<void>
+    backoffMs?: readonly number[]
+    maxWaitMs?: number
+  } = {},
+): Promise<TicketResponse> {
+  const backoff = opts.backoffMs ?? STARTING_BACKOFF_MS
+  const maxWaitMs = opts.maxWaitMs ?? 30_000
+  const sleep =
+    opts.sleep ??
+    ((ms: number, signal?: AbortSignal) =>
+      new Promise<void>((resolve, reject) => {
+        const t = setTimeout(resolve, ms)
+        signal?.addEventListener('abort', () => {
+          clearTimeout(t)
+          reject(signal.reason)
+        })
+      }))
+  let waited = 0
+  for (let i = 0; ; i++) {
+    try {
+      return await fetchTicket(opts.signal)
+    } catch (e) {
+      if (!isCanvasStarting(e) || opts.signal?.aborted) throw e
+      const waitMs = backoff[Math.min(i, backoff.length - 1)] ?? 2_000
+      if (waited + waitMs > maxWaitMs) throw e
+      waited += waitMs
+      opts.onConnecting?.({ attempt: i + 1, waitMs, starting: true })
+      await sleep(waitMs, opts.signal)
+    }
   }
 }
