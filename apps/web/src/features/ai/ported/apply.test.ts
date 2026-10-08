@@ -594,3 +594,52 @@ describe('W5-04: the theme labels on one line', () => {
     for (const l of labels) expect(overlap(l, els.get('card') as El)).toBe(false)
   })
 })
+
+describe('a mind-map topic as the target (K7-1)', () => {
+  const topic = (id: string, text: string, lobby: Record<string, unknown>): El[] => [
+    {
+      id,
+      type: 'rectangle',
+      x: 0,
+      y: 0,
+      width: 200,
+      height: 80,
+      boundElements: [{ id: `${id}.t`, type: 'text' }],
+      customData: { lobby },
+    },
+    {
+      id: `${id}.t`,
+      type: 'text',
+      containerId: id,
+      originalText: text,
+      x: 10,
+      y: 20,
+      width: 180,
+      height: 40,
+    },
+  ]
+  const MAP = { mindmap: { rootId: 'r', parentId: null, side: 'right', collapsed: false } }
+
+  it('one selected topic names itself, so "Expand with AI" is offered', () => {
+    const { canvas } = fakeCanvas(topic('r', 'Launch', MAP))
+    canvas.select(['r'])
+    expect(selectionTarget(canvas)).toMatchObject({ topicId: 'r', texts: 1 })
+    // its label stands for it
+    canvas.select(['r.t'])
+    expect(selectionTarget(canvas)?.topicId).toBe('r')
+  })
+
+  it('a plain shape, two topics or an empty topic: no topic target (the empty one has no words to send)', () => {
+    const { canvas } = fakeCanvas([
+      ...topic('r', 'Launch', MAP),
+      ...topic('p', 'Plain', {}),
+      ...topic('e', '', MAP),
+    ])
+    canvas.select(['p'])
+    expect(selectionTarget(canvas)?.topicId).toBeUndefined()
+    canvas.select(['r', 'e'])
+    expect(selectionTarget(canvas)?.topicId).toBeUndefined()
+    canvas.select(['e'])
+    expect(selectionTarget(canvas)).toMatchObject({ topicId: 'e', texts: 0 })
+  })
+})

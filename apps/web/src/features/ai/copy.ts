@@ -4,7 +4,8 @@ import type { AiActionItem } from '@draftroom/contracts'
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`
 
-function cut(text: string, max: number): string {
+/** `text` cut to `max` characters (code points) with an ellipsis. */
+export function cut(text: string, max: number): string {
   const points = Array.from(text)
   return points.length > max
     ? `${points
@@ -59,3 +60,19 @@ export function themesDone(out: {
   ].filter(Boolean)
   return [`Grouped ${plural(out.moved, 'note')} into ${plural(out.themes, 'theme')}.`, ...extra].join(' ')
 }
+
+// ---- mind maps (K7) ------------------------------------------------------------------------------------
+
+/** "the topic “Channels”": what an Expand with AI request is about (the topic's words, cut at 30). */
+export const topicLabel = (text: string) => `the topic “${cut(text.replace(/\s+/g, ' ').trim(), 30)}”`
+
+export const EXPAND_EMPTY = 'Type some words into the topic first, then expand it.'
+export const EXPAND_GONE = 'That topic is gone, so there is nothing to expand.'
+export const MINDMAP_FAILED = 'Lobby couldn’t add the mind map to the board. Try again.'
+
+/** The toast after Expand with AI: "Added 5 sub-topics." */
+export const expandDone = (n: number) => `Added ${plural(n, 'sub-topic')}.`
+
+/** The toast after Mind map from a prompt: "Drafted a mind map with 6 branches." */
+export const mindmapDone = (branches: number) =>
+  `Drafted a mind map with ${plural(branches, 'branch', 'branches')}.`

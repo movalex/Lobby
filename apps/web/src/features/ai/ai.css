@@ -301,3 +301,131 @@
     top: 104px;
   }
 }
+
+/* ---- the wait made deliberate, and the result noticed (K7-4) ----------------------------------------
+   Pictures over the canvas, never part of the board: a shimmer where the result will land while the
+   request runs, a brief highlight on what it wrote. Reduced motion: the placeholder stands still, the
+   highlight is not drawn (the component renders nothing, and the rule below is the second line). */
+.dr-ai-shimmer,
+.dr-ai-flash {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.dr-ai-overlay > .dr-ai-shimmer,
+.dr-ai-overlay > .dr-ai-flash {
+  pointer-events: none;
+}
+.dr-ai-shimmer__tile {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.5px dashed var(--dr-accent-line);
+  border-radius: 10px;
+  background: linear-gradient(100deg, var(--dr-accent-bg) 25%, var(--dr-chip) 45%, var(--dr-accent-bg) 65%);
+  background-size: 240% 100%;
+  opacity: 0.85;
+  animation: dr-ai-shimmer 1.5s ease-in-out infinite;
+}
+.dr-ai-shimmer__tile--pill,
+.dr-ai-shimmer__tile--hub {
+  border-radius: 999px;
+}
+.dr-ai-shimmer__tile--region {
+  border-radius: 14px;
+  opacity: 0.55;
+}
+@keyframes dr-ai-shimmer {
+  from {
+    background-position: 130% 0;
+  }
+  to {
+    background-position: -130% 0;
+  }
+}
+.dr-ai-shimmer[data-motion="still"] .dr-ai-shimmer__tile {
+  animation: none;
+}
+
+.dr-ai-flash__box {
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: var(--dr-accent-bg);
+  box-shadow:
+    0 0 0 2px var(--dr-accent-line),
+    0 0 20px 4px var(--dr-accent-bg);
+  opacity: 0;
+  animation: dr-ai-flash 1.5s ease-out forwards;
+}
+@keyframes dr-ai-flash {
+  0% {
+    opacity: 0;
+    transform: scale(1.06);
+  }
+  18% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+
+/* the summary's placeholder panel */
+.dr-ai-panel--pending {
+  pointer-events: none;
+}
+.dr-ai-line {
+  display: block;
+  height: 12px;
+  margin: 10px 4px 0;
+  border-radius: 6px;
+  background: linear-gradient(100deg, var(--dr-chip) 25%, var(--dr-accent-bg) 45%, var(--dr-chip) 65%);
+  background-size: 240% 100%;
+  animation: dr-ai-shimmer 1.5s ease-in-out infinite;
+}
+.dr-ai-line--long {
+  width: calc(100% - 8px);
+}
+.dr-ai-line--short {
+  width: 55%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dr-ai-shimmer__tile,
+  .dr-ai-line {
+    animation: none;
+  }
+  .dr-ai-flash {
+    display: none;
+  }
+}
+
+/* K7-3: "Show them as" in the ideas prompt (sticky notes or a mind map) */
+.dr-ai-form__choice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.dr-ai-form__choice > legend {
+  float: left;
+  margin-right: 10px;
+  padding: 0;
+}
+.dr-ai-form__radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--dr-ink);
+  font-size: 13.5px;
+  cursor: pointer;
+}
+.dr-ai-form__radio input {
+  margin: 0;
+  accent-color: var(--dr-accent-ink);
+}

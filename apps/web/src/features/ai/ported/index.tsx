@@ -13,7 +13,7 @@
 import type { CanvasFeature } from '../../../canvas/api/index.ts'
 import '../ai.css'
 import './ai-ported.css'
-import { AiEntryFallback, CONTEXT_MENU, MAIN_MENU, SELECTION_BAR } from './menus.tsx'
+import { AiEntryFallback, COMMANDS, CONTEXT_MENU, MAIN_MENU, SELECTION_BAR } from './menus.tsx'
 import { AiOverlay } from './Overlay.tsx'
 import { aiJob, aiMenu, aiPanel, setAiCtx } from './runtime.ts'
 
@@ -24,6 +24,7 @@ export const feature: CanvasFeature = {
     { id: 'ai', layer: 'screen', order: 60, pointer: 'none', component: AiOverlay },
     { id: 'ai-entry', layer: 'screen', order: 59, pointer: 'none', component: AiEntryFallback },
   ],
+  commands: COMMANDS,
   selectionBar: SELECTION_BAR,
   contextMenu: CONTEXT_MENU,
   mainMenu: MAIN_MENU,

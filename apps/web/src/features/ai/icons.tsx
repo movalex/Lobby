@@ -65,6 +65,26 @@ const ICONS = {
       <path d="M12 3a6 6 0 0 0-3.6 10.8c.6.5 1 1.2 1 2V16h5.2v-.2c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z" />
     </g>
   ),
+  // K7: a topic with three new sub-topics, and a hub with a ring of branches
+  expand: (
+    <g fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="9.5" width="7" height="5" rx="1.5" />
+      <path d="M10 12h3.5M13.5 12V6.5H16M13.5 12V12H16M13.5 12v5.5H16" />
+      <rect x="16" y="4.5" width="5" height="4" rx="1.2" />
+      <rect x="16" y="10" width="5" height="4" rx="1.2" />
+      <rect x="16" y="15.5" width="5" height="4" rx="1.2" />
+    </g>
+  ),
+  mindmap: (
+    <g fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="8.5" y="9.5" width="7" height="5" rx="1.5" />
+      <path d="M8.5 12H6M15.5 12H18M12 9.5V7M12 14.5V17" />
+      <circle cx="4.5" cy="12" r="1.6" />
+      <circle cx="19.5" cy="12" r="1.6" />
+      <circle cx="12" cy="5.5" r="1.6" />
+      <circle cx="12" cy="18.5" r="1.6" />
+    </g>
+  ),
 } as const
 
 export function ActionIcon({ action }: { action: keyof typeof ICONS }) {

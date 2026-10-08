@@ -10,6 +10,7 @@ import { AI_IDEAS_DEFAULT, AI_IDEAS_MAX, AI_PROMPT_MAX_CHARS, AI_SETTINGS_EVENT 
 import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import {
   type CanvasFeatureContext,
+  items,
   type LobbyCanvas,
   useCanvasFeatureContext,
 } from '../../../canvas/api/index.ts'
@@ -17,7 +18,18 @@ import { useValue } from '../../../lib/signals.ts'
 import { isTextEntry, onFocusLeave, trapTab, tryFocus } from '../../../ui/focus.ts'
 import { budgetLine, groupNames, themesHint } from '../copy.ts'
 import { ActionIcon, SparkIcon, Spinner } from '../icons.tsx'
-import { addSummaryToBoard, cancelAiJob, closeAiMenu, refreshAiStatus, runAi } from './actions.ts'
+import {
+  addSummaryToBoard,
+  askAiStatus,
+  cancelAiJob,
+  closeAiMenu,
+  expandTopic,
+  mindmapFromPrompt,
+  refreshAiStatus,
+  runAi,
+} from './actions.ts'
+import { canBuildWithAi } from './gate.ts'
+import { AiFlash, AiShimmer } from './Placeholders.tsx'
 import {
   ACTION_LABELS,
   type AiMenuState,
@@ -28,7 +40,7 @@ import {
   aiOpener,
   aiPanel,
   aiStatus,
-  BUSY_LABELS,
+  busyLabel,
   setAiCtx,
 } from './runtime.ts'
 
@@ -190,6 +202,7 @@ function AiPopover({ menu }: { menu: AiMenuState }) {
     >
       {menu.view === 'menu' && <MenuView menu={menu} titleId={titleId} onClose={() => close(true)} />}
       {menu.view === 'ideas' && <IdeasView menu={menu} titleId={titleId} onClose={() => close(true)} />}
+      {menu.view === 'mindmap' && <MindmapView menu={menu} titleId={titleId} onClose={() => close(true)} />}
       {menu.view === 'notice' && <NoticeView menu={menu} titleId={titleId} onClose={() => close(true)} />}
       {menu.view === 'regroup' && <RegroupView menu={menu} titleId={titleId} onClose={() => close(true)} />}
     </div>
@@ -212,12 +225,16 @@ function Head({ titleId, children, onClose }: { titleId: string; children: React
   )
 }
 
-function Item(props: {
-  action: 'summarize' | 'themes' | 'actions' | 'ideas'
-  hint: string
-  disabled?: boolean
-  onClick(): void
-}) {
+/** The menu's rows: the four actions, and the two that build mind maps (K7). */
+type ItemAction = 'summarize' | 'themes' | 'actions' | 'ideas' | 'expand' | 'mindmap'
+
+const ITEM_LABELS: Record<ItemAction, string> = {
+  ...ACTION_LABELS,
+  expand: 'Expand with AI',
+  mindmap: 'Mind map from a prompt',
+}
+
+function Item(props: { action: ItemAction; hint: string; disabled?: boolean; onClick(): void }) {
   return (
     <button
       type="button"
@@ -232,8 +249,8 @@ function Item(props: {
       </span>
       <span className="dr-ai-item__text">
         <span className="dr-ai-item__label">
-          {ACTION_LABELS[props.action]}
-          {props.action === 'ideas' ? '…' : ''}
+          {ITEM_LABELS[props.action]}
+          {props.action === 'ideas' || props.action === 'mindmap' ? '…' : ''}
         </span>
         <span className="dr-ai-item__hint">{props.hint}</span>
       </span>
@@ -268,6 +285,8 @@ function MenuView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: stri
   const readOnly = useValue('lobby-ai-menu-readonly', () => canvas.readOnly(), [canvas])
   const { target } = menu
   const insert = !!status?.canInsert && !readOnly
+  // Expand and Mind map from a prompt write to the board: only while AI is on, may add and has budget left
+  const build = canBuildWithAi(status, readOnly)
   const run = (req: AiRequest) => void runAi(canvas, req, target, { at: menu.at })
   return (
     <>
@@ -275,6 +294,14 @@ function MenuView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: stri
         AI <span className="dr-ai-pop__about">· {target.label}</span>
       </Head>
       <div role="menu" aria-label="AI actions" className="dr-ai-pop__items">
+        {build && target.topicId && (
+          <Item
+            action="expand"
+            hint={target.texts === 0 ? 'Type some words into the topic first' : 'Adds sub-topics under it'}
+            disabled={target.texts === 0}
+            onClick={() => expandTopic(canvas, target.topicId as string, menu.at)}
+          />
+        )}
         <Item
           action="summarize"
           hint={
@@ -312,6 +339,13 @@ function MenuView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: stri
             />
           </>
         )}
+        {build && (
+          <Item
+            action="mindmap"
+            hint="A first ring of branches from a topic"
+            onClick={() => aiMenu(canvas).set({ ...menu, view: 'mindmap' })}
+          />
+        )}
       </div>
       <Budget />
       <p className="dr-ai-pop__foot">Uses OpenAI. Comments, private notes and files are never sent.</p>
@@ -323,12 +357,24 @@ function IdeasView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: str
   const { canvas } = useCanvasFeatureContext()
   const [prompt, setPrompt] = useState('')
   const [count, setCount] = useState(AI_IDEAS_DEFAULT)
+  // K7-3: the ideas can land as sticky notes or as the first ring of a new mind map; on an empty board with
+  // nothing selected (where the empty board's "Ideas with AI" opens this prompt) a map is the better start
+  const canMap = canBuildWithAi(
+    useValue('lobby-ai-ideas-status', () => aiStatus(canvas).get(), [canvas]),
+    canvas.readOnly(),
+  )
+  const [asMap, setAsMap] = useState(
+    () => menu.target.kind === 'none' && items.contentItems(canvas.items()).length === 0,
+  )
+  const map = canMap && asMap
   const inputId = useId()
   const countId = useId()
+  const resultId = useId()
   const trimmed = prompt.trim()
   const submit = () => {
     if (!trimmed) return
-    void runAi(canvas, { action: 'ideas', prompt: trimmed, count }, menu.target, { at: menu.at })
+    if (map) void mindmapFromPrompt(canvas, trimmed, count, menu.at)
+    else void runAi(canvas, { action: 'ideas', prompt: trimmed, count }, menu.target, { at: menu.at })
   }
   return (
     <>
@@ -356,9 +402,36 @@ function IdeasView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: str
           autoComplete="off"
           onChange={(e) => setPrompt(e.target.value)}
         />
+        {canMap && (
+          <fieldset className="dr-ai-form__choice" aria-labelledby={resultId}>
+            <legend id={resultId} className="dr-ai-form__label">
+              Show them as
+            </legend>
+            <label className="dr-ai-form__radio">
+              <input
+                type="radio"
+                name={resultId}
+                data-testid="ai-ideas-as-notes"
+                checked={!asMap}
+                onChange={() => setAsMap(false)}
+              />
+              Sticky notes
+            </label>
+            <label className="dr-ai-form__radio">
+              <input
+                type="radio"
+                name={resultId}
+                data-testid="ai-ideas-as-map"
+                checked={asMap}
+                onChange={() => setAsMap(true)}
+              />
+              Mind map
+            </label>
+          </fieldset>
+        )}
         <div className="dr-ai-form__row">
           <label htmlFor={countId} className="dr-ai-form__label">
-            How many
+            {map ? 'Branches' : 'How many'}
           </label>
           <select
             id={countId}
@@ -387,13 +460,100 @@ function IdeasView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: str
             data-testid="ai-ideas-go"
             disabled={!trimmed}
           >
-            Generate
+            {map ? 'Draft it' : 'Generate'}
           </button>
         </div>
       </form>
-      {menu.target.texts > 0 && (
-        <p className="dr-ai-pop__foot">The selected text is sent along as context.</p>
+      {map ? (
+        <p className="dr-ai-pop__foot">Only your prompt is sent. The map appears as one step you can undo.</p>
+      ) : (
+        menu.target.texts > 0 && (
+          <p className="dr-ai-pop__foot">The selected text is sent along as context.</p>
+        )
       )}
+    </>
+  )
+}
+
+/**
+ * "Mind map from a prompt" (K7-3): a topic, how many branches, and the existing 'ideas' action drafts the
+ * first ring (nothing from the board is sent: the prompt is the only text). The answer becomes a new mind
+ * map, in one step.
+ */
+function MindmapView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: string; onClose(): void }) {
+  const { canvas } = useCanvasFeatureContext()
+  const [prompt, setPrompt] = useState('')
+  const [count, setCount] = useState(AI_IDEAS_DEFAULT)
+  const inputId = useId()
+  const countId = useId()
+  const trimmed = prompt.trim()
+  const submit = () => {
+    if (!trimmed) return
+    void mindmapFromPrompt(canvas, trimmed, count, menu.at)
+  }
+  return (
+    <>
+      <Head titleId={titleId} onClose={onClose}>
+        Mind map from a prompt
+      </Head>
+      <form
+        className="dr-ai-form"
+        data-testid="ai-mindmap-form"
+        onSubmit={(e) => {
+          e.preventDefault()
+          submit()
+        }}
+      >
+        <label htmlFor={inputId} className="dr-ai-form__label">
+          What is the mind map about?
+        </label>
+        <input
+          id={inputId}
+          className="dr-ai-form__input"
+          data-testid="ai-mindmap-prompt"
+          data-autofocus
+          value={prompt}
+          maxLength={AI_PROMPT_MAX_CHARS}
+          placeholder="e.g. launch campaign for the new trailer"
+          autoComplete="off"
+          onChange={(e) => setPrompt(e.target.value)}
+        />
+        <div className="dr-ai-form__row">
+          <label htmlFor={countId} className="dr-ai-form__label">
+            Branches
+          </label>
+          <select
+            id={countId}
+            className="dr-ai-form__select"
+            data-testid="ai-mindmap-count"
+            value={count}
+            onChange={(e) => setCount(Number(e.target.value))}
+          >
+            {[3, 4, 5, 6, 8, 10, AI_IDEAS_MAX].map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+          <span className="dr-ai-form__spacer" />
+          <button
+            type="button"
+            className="dr-btn dr-btn--sm"
+            onClick={() => aiMenu(canvas).set({ ...menu, view: 'menu' })}
+          >
+            Back
+          </button>
+          <button
+            type="submit"
+            className="dr-btn dr-btn--primary dr-btn--sm"
+            data-testid="ai-mindmap-go"
+            disabled={!trimmed}
+          >
+            Draft it
+          </button>
+        </div>
+      </form>
+      <p className="dr-ai-pop__foot">Only your prompt is sent. The map appears as one step you can undo.</p>
     </>
   )
 }
@@ -433,10 +593,20 @@ function RegroupView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: s
 function NoticeView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: string; onClose(): void }) {
   const { canvas } = useCanvasFeatureContext()
   const pending = menu.pending
+  const into = pending?.into
   const what =
     menu.target.kind === 'none'
       ? 'your prompt'
-      : `the text of ${menu.target.label}${pending?.action === 'ideas' ? ' and your prompt' : ''}`
+      : into?.kind === 'expand'
+        ? `the words of ${menu.target.label}, the topics it sits under and the ones below it`
+        : `the text of ${menu.target.label}${pending?.action === 'ideas' ? ' and your prompt' : ''}`
+  const verb = into
+    ? into.kind === 'expand'
+      ? 'expand the topic'
+      : 'draft a mind map'
+    : pending
+      ? ACTION_LABELS[pending.action].toLowerCase()
+      : 'do this'
   return (
     <>
       <Head titleId={titleId} onClose={onClose}>
@@ -444,8 +614,7 @@ function NoticeView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: st
       </Head>
       <div className="dr-ai-notice" data-testid="ai-notice">
         <p>
-          To {pending ? ACTION_LABELS[pending.action].toLowerCase() : 'do this'}, Lobby sends {what} to
-          OpenAI, which writes the answer.
+          To {verb}, Lobby sends {what} to OpenAI, which writes the answer.
         </p>
         <p className="dr-ai-notice__muted">
           Comments, private brainstorm notes, files and who wrote what are never sent. You’ll see this once
@@ -485,9 +654,10 @@ function Busy() {
       aria-live="polite"
       data-testid="ai-busy"
       data-action={job.action}
+      data-into={job.into?.kind}
     >
       <Spinner size={16} />
-      <span className="dr-ai-busy__text">{BUSY_LABELS[job.action]}</span>
+      <span className="dr-ai-busy__text">{busyLabel(job)}</span>
       <button
         type="button"
         className="dr-btn dr-btn--sm"
@@ -497,6 +667,31 @@ function Busy() {
         Cancel
       </button>
     </div>
+  )
+}
+
+/**
+ * K7-4: while a summary is on its way, the panel it will open in is already there as a placeholder (lines
+ * that shimmer), so the wait has a place. Decoration only: the busy pill is what a screen reader hears.
+ */
+function SummaryPending() {
+  const { canvas } = useCanvasFeatureContext()
+  const summarizing = useValue('lobby-ai-summarizing', () => aiJob(canvas).get()?.action === 'summarize', [
+    canvas,
+  ])
+  if (!summarizing) return null
+  return (
+    <section className="dr-ai-panel dr-ai-panel--pending" data-testid="ai-summary-pending" aria-hidden="true">
+      <div className="dr-ai-pop__head">
+        <span className="dr-ai-pop__badge">
+          <SparkIcon size={14} />
+        </span>
+        <span className="dr-ai-pop__title">Summary</span>
+      </div>
+      <span className="dr-ai-line dr-ai-line--long" />
+      <span className="dr-ai-line" />
+      <span className="dr-ai-line dr-ai-line--short" />
+    </section>
   )
 }
 
@@ -681,8 +876,15 @@ export function AiOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
   useEffect(() => {
     setAiCtx(ctx)
     const abort = new AbortController()
-    void refreshAiStatus(canvas, abort.signal)
-    return () => abort.abort()
+    // K7-4: the first read is no part of the burst of a board opening. This overlay mounts once the board is
+    // live (after the first welcome); the read then waits for an idle moment, and the entry points (which
+    // need the answer) appear a moment later. A change of role or board status asks again at once, and so
+    // does every opening of the AI menu (./actions.ts openAiMenu).
+    const cancel = askAiStatus(canvas, abort.signal)
+    return () => {
+      cancel()
+      abort.abort()
+    }
   }, [canvas, boardId, role, status])
   // The owner turned AI on or off for this board (or its workspace default): ask again at once.
   const events = ctx.events
@@ -709,8 +911,11 @@ export function AiOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
   return (
     <div className="dr-ai-overlay" data-testid="ai-overlay">
       {menu && <AiPopover key={`${menu.view}`} menu={menu} />}
+      <AiShimmer canvas={canvas} />
       <Busy />
+      <SummaryPending />
       <SummaryPanel onAnnounce={setSaid} />
+      <AiFlash canvas={canvas} />
       <p className="dr-sr-only" role="status" data-testid="ai-summary-status">
         {said}
       </p>

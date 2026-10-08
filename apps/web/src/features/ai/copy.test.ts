@@ -3,11 +3,14 @@ import { describe, expect, it } from 'vitest'
 import {
   actionItemText,
   budgetLine,
+  expandDone,
   groupNames,
   ideasHeading,
+  mindmapDone,
   plural,
   themesDone,
   themesHint,
+  topicLabel,
 } from './copy.ts'
 
 describe('AI copy', () => {
@@ -92,5 +95,20 @@ describe('which notes "Group into themes" moves', () => {
     expect(ids(splitThemeNotes([seeded('a'), seeded('b'), typed('c')], facts).ideas)).toEqual(['a', 'b', 'c'])
     expect(ids(splitThemeNotes([typed('a'), typed('b')], facts).ideas)).toEqual(['a', 'b'])
     expect(isTeamNote({ meta: null, textLastEditedBy: '' })).toBe(false)
+  })
+})
+
+describe('the mind map words (K7)', () => {
+  it('names the topic an Expand with AI request is about, cut at 30', () => {
+    expect(topicLabel('Channels')).toBe('the topic “Channels”')
+    expect(topicLabel('  A  topic\nwith   space ')).toBe('the topic “A topic with space”')
+    expect(topicLabel('x'.repeat(40))).toBe(`the topic “${'x'.repeat(29)}…”`)
+  })
+
+  it('counts what was added', () => {
+    expect(expandDone(1)).toBe('Added 1 sub-topic.')
+    expect(expandDone(5)).toBe('Added 5 sub-topics.')
+    expect(mindmapDone(1)).toBe('Drafted a mind map with 1 branch.')
+    expect(mindmapDone(6)).toBe('Drafted a mind map with 6 branches.')
   })
 })

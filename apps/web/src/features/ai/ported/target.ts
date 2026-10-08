@@ -31,6 +31,8 @@ export interface AiTarget {
   texts: number
   /** Scene bounds of what the action is about (where results go), or null. */
   bounds: Bounds | null
+  /** The selection is exactly one mind-map topic (K7: "Expand with AI" is offered); its element id. */
+  topicId?: string
 }
 
 /** Objects looked at when counting (a huge frame stops counting here: the api has its own caps). */
@@ -238,12 +240,18 @@ export function existingGroups(canvas: LobbyCanvas, els: readonly CanvasElement[
   return names.length >= 2 ? names : []
 }
 
+/** The element is a mind-map topic (its value is validated by the mind map; here it only has to be there). */
+export const isTopicElement = (el: CanvasElement | undefined): boolean =>
+  !!el && el.type !== 'arrow' && el.type !== 'frame' && items.lobbyValue(el, 'mindmap') !== undefined
+
 /** The current selection as a target (null when nothing is selected). */
 export function selectionTarget(canvas: LobbyCanvas): AiTarget | null {
   const els = resolve(canvas, canvas.selection)
   if (!els.length) return null
   const { notes, prompts, texts } = count(canvas, els)
+  const only = els.length === 1 ? els[0] : undefined
   return {
+    ...(only && isTopicElement(only) ? { topicId: only.id } : {}),
     kind: 'selection',
     ids: els.slice(0, AI_MAX_REQUEST_SHAPES).map((e) => e.id),
     label: describe(els, notes),
