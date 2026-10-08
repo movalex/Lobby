@@ -46,6 +46,9 @@ export function createFsBlobStore(root: string): BlobStore {
         await mkdir(dir, { recursive: true })
       } catch (e) {
         if (errCode(e) === 'EEXIST' || errCode(e) === 'ENOTDIR') throw keyConflict()
+        // Windows: a recursive mkdir racing delete()'s prune of the same parents can fail with ENOENT itself
+        // (wave K.1, follow-up 13); it is the same race as the open's below, so it is retried the same way
+        if (errCode(e) === 'ENOENT' && attempt < 5) continue
         throw e
       }
       const tmp = join(dir, `~${basename(path)}.${randomUUID()}.tmp`)
