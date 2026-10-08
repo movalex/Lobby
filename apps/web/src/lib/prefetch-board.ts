@@ -322,6 +322,24 @@ export function rememberBoardTitle(boardId: string, title: string, workspaceId: 
   if (hints.size > MAX_HINTS) hints.delete(hints.keys().next().value as string)
 }
 
+/** The signed-in user the hints and the preloaded open belong to (null: nobody yet). */
+let hintsUser: string | null = null
+
+/**
+ * Wave K integration (the K1 review): the session's user, from App.tsx (`null` once signed out; `undefined` while
+ * the session is being checked, which changes nothing). When the user changes (Sign out on a shared computer,
+ * another account in the same tab, no reload) the board titles remembered for the skeleton and an untaken
+ * preloaded board answer are forgotten, so the next person never sees the previous one's board titles.
+ */
+export function noteSessionUser(uid: string | null | undefined): void {
+  if (uid === undefined) return
+  if (hintsUser !== null && uid !== hintsUser) {
+    hints.clear()
+    open = null
+  }
+  hintsUser = uid
+}
+
 /** What the skeleton may show for `boardId` before the board answers (null: a neutral placeholder). */
 export const boardTitleHint = (boardId: string): BoardTitleHint | null => hints.get(boardId) ?? null
 

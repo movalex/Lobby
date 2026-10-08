@@ -3,7 +3,14 @@
 // `data-board-title`, or the board card's title) and the workspace whose page it was on; the board page
 // itself remembers a board it opened. In memory only, the latest wins.
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { boardTitleHint, installBoardPrefetch, rememberBoardTitle } from './prefetch-board.ts'
+import {
+  boardTitleHint,
+  installBoardPrefetch,
+  noteSessionUser,
+  preloadBoardOpen,
+  rememberBoardTitle,
+  takeBoardDetail,
+} from './prefetch-board.ts'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -59,5 +66,32 @@ describe('title hints for the skeleton (K1-5)', () => {
     for (let i = 0; i < 250; i++) rememberBoardTitle(`b-many${String(i).padStart(6, '0')}`, `Board ${i}`)
     expect(boardTitleHint('b-many000000')).toBeNull()
     expect(boardTitleHint('b-many000249')?.title).toBe('Board 249')
+  })
+})
+
+describe('a new person in the same tab (wave K integration, the K1 review)', () => {
+  const deps = {
+    getBoard: (id: string) => Promise.resolve({ board: { id } } as never),
+    boardTicket: () => Promise.resolve({ ticket: 't', user: { id: 'usr_a' } } as never),
+    now: () => 1_000,
+  }
+  it('signing out forgets the board titles and the preloaded board; the check in between changes nothing', () => {
+    noteSessionUser('usr_alice0000000000')
+    rememberBoardTitle('b-private0001', 'Alice’s private plans')
+    preloadBoardOpen('b-private0001', deps)
+    noteSessionUser(undefined) // the session is being checked again
+    expect(boardTitleHint('b-private0001')?.title).toBe('Alice’s private plans')
+    noteSessionUser(null) // Sign out (no reload: an SPA state change)
+    // before the fix the next person in this tab saw this title in the board skeleton
+    expect(boardTitleHint('b-private0001')).toBeNull()
+    expect(takeBoardDetail('b-private0001', 1_000)).toBeNull()
+  })
+  it('another account in the same tab forgets them too; the same person keeps them', () => {
+    noteSessionUser('usr_alice0000000000')
+    rememberBoardTitle('b-private0002', 'Kept')
+    noteSessionUser('usr_alice0000000000')
+    expect(boardTitleHint('b-private0002')?.title).toBe('Kept')
+    noteSessionUser('usr_bob000000000000')
+    expect(boardTitleHint('b-private0002')).toBeNull()
   })
 })

@@ -15,6 +15,7 @@ import { DEV_AUTH_ENABLED } from './lib/identity.ts'
 import {
   installBoardPrefetch,
   isBoardCodePrefetch,
+  noteSessionUser,
   prefetchBoardCodeWhenIdle,
   returnsToBoard,
   startBoardCodeFor,
@@ -160,6 +161,9 @@ function PurgeOfflineOnSignOut() {
   const uid = state.status === 'signed-in' ? state.me.user.id : null
   const explicit = state.status === 'signed-out' && state.explicit === true
   useEffect(() => observe({ status: state.status, uid, explicit }), [observe, state.status, uid, explicit])
+  // K1-5 (the K1 review): another person in this tab never sees the previous one's board titles in the skeleton
+  const sessionUser = state.status === 'signed-in' ? uid : state.status === 'signed-out' ? null : undefined
+  useEffect(() => noteSessionUser(sessionUser), [sessionUser])
   return null
 }
 
