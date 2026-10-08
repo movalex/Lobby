@@ -34,6 +34,7 @@ import { type CanvasFeatureContext, geometry } from '../../../canvas/api/index.t
 import { safeColor } from '../../../lib/identity.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { PHONE_QUERY, useMediaQuery } from '../../../ui/useMedia.ts'
+import { announcerFor } from '../../a11y/ported/announcer.ts'
 import { formatClock, timerDisplayPhase, timerRemainingMs } from '../countdown.ts'
 import { HandToasts, PresentingHands } from '../Hands.tsx'
 import type { WorkshopStore } from '../store.ts'
@@ -656,6 +657,21 @@ export function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
     [ctx.canvas, banner?.createdBy],
   )
   const [busy, setBusy] = useState(false)
+  // K3-1 (wave K integration, the K3 review): the banner takes no focus, so a screen reader is told a vote
+  // began, in the board's polite live region (one set of live regions per board), once per banner shown
+  const bannerSeq = banner?.seq
+  useEffect(() => {
+    if (bannerSeq === undefined) return
+    const now = store.getSnapshot()
+    const b = now.voteBanner
+    if (!b || now.vote?.session.id !== b.sessionId) return
+    const name =
+      b.createdBy !== ctx.me.user.id
+        ? ctx.canvas.collaborators().find((c) => c.uid === b.createdBy)?.name
+        : null
+    const who = name ? `${firstWord(name)} started a vote` : 'Vote started'
+    announcerFor(ctx.canvas).sayPolitely(`${who}: ${now.vote.session.title}. Join and vote is on the board.`)
+  }, [bannerSeq, ctx, store])
   if (!banner || !vote || vote.session.id !== banner.sessionId) return null
   const s = vote.session
   const left = vote.myRemaining

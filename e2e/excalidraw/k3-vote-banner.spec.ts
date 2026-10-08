@@ -62,6 +62,10 @@ test('K3-1: a vote starts: the colleague gets the banner at once, joins with one
     await expect(banner(b.page)).toContainText('Pick our next experiment')
     await expect(banner(b.page)).toContainText('you have 3 votes')
     await expect(banner(b.page).getByTestId('vote-join')).toHaveText('Join and vote')
+    // wave K integration (the K3 review): the board's polite live region says it (the banner takes no focus)
+    await expect(b.page.getByTestId('canvas-announcer-tool')).toHaveText(
+      `${a.name.split(' ')[0]} started a vote: Pick our next experiment. Join and vote is on the board.`,
+    )
     await b.page.screenshot({ path: testInfo.outputPath('k3-vote-banner.png') })
   })
 
