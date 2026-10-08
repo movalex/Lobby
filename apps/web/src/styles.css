@@ -2410,3 +2410,92 @@ html[data-dr-presenting] .dr-board__account {
 html[data-dr-presenting] .dr-phone-hint {
   display: none;
 }
+
+/* ---- K5-4 (wave K): 40 px touch targets in the board chrome; words for icon-only overflow items ------- */
+
+/* On a touch screen every top-bar control of a phone or tablet bar, and every quick action on the toolbar,
+   takes a finger in a 40 x 40 px square (WCAG 2.5.5 asks 44; 40 is what fits a 360 px phone today). Nothing
+   is drawn bigger: each control keeps its own box, and a transparent ::after reaches out to 40 px around it.
+   The controls move apart (margins) so that no two of these squares overlap: a tap between two icons goes to
+   the nearer one. The board title is a button that cuts its words (overflow: hidden, where an ::after would
+   be clipped): it gets the height itself, transparent while nobody hovers it. Under 360 px there is no room
+   for the spacing, and the bar keeps its compact rules above (every control at least 24 px). The class
+   contract with board/TopBarFrame.tsx, the people and comments features (dr-iconbtn, dr-topbar__home,
+   dr-topbar__share, dr-pill--role) and canvas-ux's quick actions (cux-quick__btn): k5-phone.spec.ts K5-4. */
+@media (pointer: coarse) and (min-width: 360px) {
+  .dr-topbar:is([data-width="phone"], [data-width="tablet"]) {
+    gap: 2px;
+  }
+  .dr-topbar:is([data-width="phone"], [data-width="tablet"])
+    :is(.dr-topbar__home, .dr-iconbtn, .dr-topbar__share, .dr-pill--role) {
+    position: relative;
+  }
+  .dr-topbar:is([data-width="phone"], [data-width="tablet"])
+    :is(.dr-topbar__home, .dr-iconbtn, .dr-topbar__share, .dr-pill--role)::after {
+    content: "";
+    position: absolute;
+    top: min(0px, calc((100% - 40px) / 2));
+    bottom: min(0px, calc((100% - 40px) / 2));
+    left: min(0px, calc((100% - 40px) / 2));
+    right: min(0px, calc((100% - 40px) / 2));
+  }
+  /* the spacing: a 28 px icon, 5 px each side and the 2 px gap make 40 px from one centre to the next */
+  .dr-topbar:is([data-width="phone"], [data-width="tablet"])
+  :is(.dr-topbar__home, .dr-iconbtn, .dr-pill--role) {
+    margin-inline: 5px;
+  }
+  .dr-topbar:is([data-width="phone"], [data-width="tablet"]) .dr-iconbtn.dr-people-open {
+    margin-inline: 2px;
+  }
+  .dr-topbar:is([data-width="phone"], [data-width="tablet"]) .dr-topbar__share {
+    margin-inline: 3px;
+  }
+  .dr-topbar:is([data-width="phone"], [data-width="tablet"]) .dr-ctopbar {
+    gap: 2px;
+  }
+  .dr-topbar:is([data-width="phone"], [data-width="tablet"]) .dr-topbar__title {
+    min-height: 40px;
+    padding-block: 10px;
+  }
+  /* the spacing costs about 50 px on a phone: the title gives way first (still a 40 px target) */
+  .dr-topbar[data-width="phone"] > .dr-topbar__board {
+    min-width: 40px;
+  }
+
+  /* the quick actions above the phone toolbar: 36 px buttons, 2 px apart in their bar, become 40 px squares
+     side by side, the bar's own side padding in them (the bar is 8 px longer, as tall as before: at 360 px it
+     still ends clear of "All tools") */
+  .cux-quick--toolbar > .cux-quick__bar {
+    gap: 0;
+    padding-inline: 0;
+  }
+  .cux-quick--toolbar > .cux-quick__bar > .cux-quick__btn {
+    position: relative;
+    margin-inline: 2px;
+  }
+  .cux-quick--toolbar > .cux-quick__bar > .cux-quick__btn::after {
+    content: "";
+    position: absolute;
+    top: min(0px, calc((100% - 40px) / 2));
+    bottom: min(0px, calc((100% - 40px) / 2));
+    left: min(0px, calc((100% - 40px) / 2));
+    right: min(0px, calc((100% - 40px) / 2));
+  }
+}
+
+/* The "⋯" menu has room for words: an icon-only control there (Export's download arrow, the reactions
+   smiley; on a phone also what the bar moves in) shows its accessible name beside its icon. */
+.dr-overflow :is(.dr-iconbtn, .dr-wk-iconbtn)[aria-label] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  /* its own height (28 px, as its neighbours in the menu), wide enough for its words */
+  width: auto;
+  padding: 0 11px 0 8px;
+  font: 500 13.5px / 1 var(--dr-font);
+  white-space: nowrap;
+}
+.dr-overflow :is(.dr-iconbtn, .dr-wk-iconbtn)[aria-label]::after {
+  content: attr(aria-label);
+}
