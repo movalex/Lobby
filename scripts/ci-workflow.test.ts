@@ -144,7 +144,9 @@ describe('ci.yml', () => {
     )
     // every file the globs name exists (a renamed guard would leave the step running nothing)
     for (const dir of ['apps/web/build', 'apps/web/test/bundle'])
-      expect(readdirSync(join(ROOT, dir)).filter((f) => f.endsWith('.test.ts')).length, dir).toBeGreaterThan(0)
+      expect(readdirSync(join(ROOT, dir)).filter((f) => f.endsWith('.test.ts')).length, dir).toBeGreaterThan(
+        0,
+      )
     expect(read('scripts/smoke/render-yaml.test.mjs').length).toBeGreaterThan(0)
   })
 
