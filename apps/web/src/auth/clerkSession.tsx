@@ -19,6 +19,7 @@
 import { ClerkProvider, useAuth } from '@clerk/react'
 import { useEffect, useRef } from 'react'
 import { createRoot } from 'react-dom/client'
+import { clerkProviderOptions } from './clerk-options.ts'
 
 /** Clerk had this long to load and sign out; after it the sign-out is reported as not finished. */
 export const CLERK_SIGN_OUT_TIMEOUT_MS = 15_000
@@ -44,7 +45,7 @@ export function endClerkSession(
     }
     root.render(
       <ClerkProvider
-        publishableKey={publishableKey}
+        {...clerkProviderOptions(publishableKey)}
         afterSignOutUrl={here}
         routerPush={stayHere}
         routerReplace={stayHere}

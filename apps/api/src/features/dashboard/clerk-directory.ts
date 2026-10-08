@@ -7,6 +7,7 @@
 
 import type { ClerkClient } from '@clerk/backend'
 import type { EmailInviteFallbackReason } from '@draftroom/contracts'
+import { clerkClientOptions } from '../../auth/clerk-options.ts'
 import { normalizeEmail } from '../../auth/creators.ts'
 
 export interface ClerkDirectory {
@@ -35,8 +36,9 @@ export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 export function createClerkDirectory(keys: { secretKey: string; publishableKey: string }): ClerkDirectory {
   let client: Promise<ClerkClient> | null = null
   const load = () => {
+    // K6-2: telemetry off (auth/clerk-options.ts)
     client ??= import('@clerk/backend').then(({ createClerkClient }) =>
-      createClerkClient({ secretKey: keys.secretKey, publishableKey: keys.publishableKey }),
+      createClerkClient(clerkClientOptions(keys)),
     )
     return client
   }
