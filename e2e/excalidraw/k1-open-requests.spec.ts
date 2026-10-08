@@ -39,6 +39,16 @@ const OPEN_LIMITS: readonly {
   readonly beforeLive?: boolean
 }[] = [
   { test: /^GET \/api\/boards\/:id\/export-policy$/, max: 1, why: 'K1-4: one export-policy read per open' },
+  { test: /^GET \/api\/boards\/:id\/threads$/, max: 1, why: 'K2-6: the threads list once per open' },
+  { test: /^GET \/api\/boards\/:id\/workshop$/, max: 1, why: 'K3-6: the workshop state once per open' },
+  { test: /^GET \/api\/boards\/:id\/private-brainstorm$/, max: 1, why: 'K3-6: the private brainstorm once' },
+  {
+    test: /^GET \/api\/boards\/:id\/ai$/,
+    max: 0,
+    beforeLive: true,
+    why: 'K7-4: no AI status read before live',
+  },
+  { test: /^GET \/api\/boards\/:id\/ai$/, max: 1, why: 'K7-4: the AI status once per open' },
 ]
 
 /** Records every /api request of `page` with the page's own clock, and when the board went live. */
