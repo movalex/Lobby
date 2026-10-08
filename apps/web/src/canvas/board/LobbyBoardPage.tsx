@@ -6,10 +6,17 @@
  * the board session (./session.ts), the overlay root and host slots (./chrome.tsx), and CANVAS_FEATURES
  * installed on the feature-facing canvas after the first welcome.
  *
- * Test ids: the tldraw page's where the job is the same (`board-loading`, `board-load-error`, `topbar`,
+ * Test ids: the tldraw page's where the job is the same (`board-load-error`, `topbar`,
  * `board-title`, `save-status`, `conn-status`, `presence-user`, `feature-dock`, `sync-loading`,
  * `sync-error`, `offline-banner`, `share-button`, `skip-to-canvas`), and `lobby-board` (data-phase,
  * data-engine="excalidraw"), `lease-notice`, `lease-status`, `typing-badge`, `cursor` for the canvas.
+ *
+ * Wave K (K1): the board and its first ticket are asked for together (K1-2: lib/prefetch-board.ts
+ * `preloadBoardOpen`, started by ./route.tsx before this chunk arrives; taken here once each, and asked again
+ * on a retry); every loading state is the board skeleton (K1-5: ./BoardSkeleton.tsx, `board-skeleton`), the
+ * dock's column is kept before the features install, and the connecting cover is the skeleton's canvas, so
+ * nothing moves when the board takes over; a chunk a deploy removed shows a notice with a Reload button
+ * while the board is open (K1-7: lib/stale-chunk.ts).
  */
 import '../engine/engineGlobals.ts'
 import type { Board, BoardDetail, Me, TicketResponse } from '@draftroom/contracts'
@@ -35,7 +42,9 @@ import { CANVAS_FEATURES } from '../../features/canvas-registry.ts'
 import { type BoardEvents, createBoardEvents } from '../../features/events.ts'
 import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 import type { BoardRole } from '../../lib/permissions.ts'
+import { rememberBoardTitle, takeBoardDetail, takeBoardTicket } from '../../lib/prefetch-board.ts'
 import { boardPath, navigate, setLeaveGuard } from '../../lib/routing.ts'
+import { recoverChunk, registerStaleChunkBoard } from '../../lib/stale-chunk.ts'
 import { useResource } from '../../lib/useResource.ts'
 import { useEngineSaveStatus } from '../../sync-quality/useEngineSaveStatus.ts'
 import { useTheme } from '../../theme/useTheme.ts'
@@ -51,6 +60,7 @@ import type { LobbyCanvas } from '../api/lobby-canvas.ts'
 import { ExcalidrawHost, type ExcalidrawHostProps, type HostWiring } from '../engine/ExcalidrawHost.tsx'
 import { parseFileKey } from '../files/loader.ts'
 import { guestQueueLeaver } from '../sync/adapter/offline-guest.ts'
+import { BoardSkeleton, SkeletonToolbar } from './BoardSkeleton.tsx'
 import {
   BoardPeople,
   CanvasDock,
@@ -77,8 +87,11 @@ import { duplicateLobbyData } from './tx.ts'
 import { onUploads, uploadsInFlight } from './uploads.ts'
 import './board.css'
 
-const ShareDialog = lazy(() =>
-  import('../../board/ShareDialog.tsx').then((m) => ({ default: m.ShareDialog })),
+// K1-7: a stale chunk draws nothing here (the board's notice offers the reload) rather than unmounting the board
+const ShareDialog = lazy(
+  recoverChunk(() => import('../../board/ShareDialog.tsx').then((m) => ({ default: m.ShareDialog })), {
+    default: () => null,
+  } as unknown as { default: typeof import('../../board/ShareDialog.tsx').ShareDialog }),
 )
 
 /** Longest an in-app navigation waits for this board's last changes to be acknowledged. */
@@ -86,9 +99,13 @@ const LEAVE_WAIT_MS = 5_000
 
 /** /b/:bid — loads the board (and the caller's role) from the API, then opens the canvas. */
 export function LobbyBoardPage({ boardId }: { boardId: string }) {
-  const load = useCallback((signal: AbortSignal) => api.getBoard(boardId, signal), [boardId])
+  // K1-2: the answer route.tsx asked for together with the ticket, once; a retry asks again
+  const load = useCallback(
+    (signal: AbortSignal) => takeBoardDetail(boardId) ?? api.getBoard(boardId, signal),
+    [boardId],
+  )
   const detail = useResource(load)
-  if (detail.status === 'loading') return <LoadingScreen label="Opening board…" testId="board-loading" />
+  if (detail.status === 'loading') return <BoardSkeleton boardId={boardId} />
   if (detail.status === 'error') {
     if (isNoAccess(detail.error)) return <NoAccessScreen />
     // 401: the session guard is already switching to the sign-in page.
@@ -129,6 +146,12 @@ function LobbyBoardShell({ initial }: { initial: BoardDetail }) {
       document.title = 'Lobby'
     }
   }, [board.title])
+  // K1-5: the skeleton of a later open of this board in this tab names it at once
+  const workspaceId = initial.workspace.id
+  useEffect(
+    () => rememberBoardTitle(board.id, board.title, workspaceId),
+    [board.id, board.title, workspaceId],
+  )
 
   // I2 (wave I): the page left this board: a guest's page queue with nothing unsent goes with it
   // (canvas/sync/adapter/offline-guest.ts; one with an unsent edit stays for their return). Not on a Retry
@@ -184,10 +207,19 @@ function FirstTicket(props: SessionProps) {
   const onAccessLost = useRef(props.onAccessLost)
   onAccessLost.current = props.onAccessLost
   const boardId = props.board.id
+  const uid = props.me.user.id
   useEffect(() => {
     const ac = new AbortController()
-    api.boardTicket(boardId, ac.signal).then(
-      (t) => setFirst(t),
+    // K1-2: the ticket asked for together with the board (once: a retry, a new key, asks again), if it is
+    // this person's
+    const preloaded = takeBoardTicket(boardId)
+    const ticket = preloaded
+      ? preloaded.then((t) => (t.user.id === uid ? t : api.boardTicket(boardId, ac.signal)))
+      : api.boardTicket(boardId, ac.signal)
+    ticket.then(
+      (t) => {
+        if (!ac.signal.aborted) setFirst(t)
+      },
       (e: unknown) => {
         if (ac.signal.aborted) return
         const kind = (e as { kind?: string }).kind
@@ -197,7 +229,7 @@ function FirstTicket(props: SessionProps) {
       },
     )
     return () => ac.abort()
-  }, [boardId, refresh])
+  }, [boardId, uid, refresh])
   if (failed)
     return (
       <MessageScreen
@@ -211,8 +243,20 @@ function FirstTicket(props: SessionProps) {
         }
       />
     )
-  if (!first) return <LoadingScreen label="Opening board…" testId="board-loading" />
+  if (!first) return <OpeningSkeleton {...props} />
   return <LobbyBoardView {...props} first={first} />
+}
+
+/** K1-5: the skeleton once the board answered: its own title and workspace, the shape of its toolbar. */
+function OpeningSkeleton({ board, role, workspace }: Pick<SessionProps, 'board' | 'role' | 'workspace'>) {
+  return (
+    <BoardSkeleton
+      boardId={board.id}
+      title={board.title}
+      workspace={workspace}
+      readonly={isReadonlyRole(role, board.status)}
+    />
+  )
 }
 
 const connOf = (s: LobbyBoardSnapshot): ConnState =>
@@ -266,7 +310,7 @@ function LobbyBoardView({
     }
   }, [boardId, first, notify, dismiss])
 
-  if (!session) return <LoadingScreen label="Opening board…" testId="board-loading" />
+  if (!session) return <OpeningSkeleton board={board} role={rest.role} workspace={rest.workspace} />
   return (
     <LobbyBoardScreen
       {...rest}
@@ -427,6 +471,17 @@ function LobbyBoardScreen({
     uploading,
     role,
   })
+
+  // K1-7: while this board is open, a chunk a deploy removed shows a notice with a Reload button (never a
+  // reload by itself), and the button waits for this tab's changes not yet acknowledged
+  useEffect(
+    () =>
+      registerStaleChunkBoard({
+        unsent: () => session.snapshot.save.pending > 0 || uploadsInFlight(session.registries) > 0,
+        notify,
+      }),
+    [session, notify],
+  )
 
   // In-app navigation away from the board holds until this tab's last changes are acknowledged (bounded).
   useEffect(() => {
@@ -657,6 +712,12 @@ function LobbyBoardScreen({
       )}
       <div className="dr-board__body">
         {ctx && !focusMode ? <CanvasDock ctx={ctx} /> : null}
+        {/* K1-5: the dock's column until the features install, so the canvas keeps its width */}
+        {!ctx && !focusMode ? (
+          <div className="dr-dock lobby-dock-placeholder" data-open="false" aria-hidden="true">
+            <div className="dr-dock__rail" />
+          </div>
+        ) : null}
         <main className="dr-board__canvas" aria-label="Board canvas">
           <div className="dr-board__editor">
             <section ref={setRoot} className="lobby-board-canvas" data-lobby-board-canvas="">
@@ -676,9 +737,16 @@ function LobbyBoardScreen({
             </section>
           </div>
           {!snap.welcomed && !closed && (
-            <div className="dr-screen dr-screen--overlay lobby-canvas-screen" data-testid="sync-loading">
-              <span className="dr-spinner" aria-hidden="true" />
-              <p>{snap.phase === 'preparing' ? 'Preparing this board…' : 'Connecting to board…'}</p>
+            // K1-5: the skeleton's canvas (shimmer, greyed toolbar) until the first welcome
+            <div
+              className="dr-screen dr-screen--overlay lobby-canvas-screen lobby-canvas-screen--skeleton"
+              data-testid="sync-loading"
+            >
+              <div className="lobby-skeleton__shimmer" aria-hidden="true" />
+              <p role="status">
+                {snap.phase === 'preparing' ? 'Preparing this board…' : 'Connecting to board…'}
+              </p>
+              <SkeletonToolbar readonly={readonly} />
             </div>
           )}
           {terminalShown && closeReason !== 'NOT_AUTHENTICATED' && (

@@ -3,74 +3,25 @@
 // original in a new tab (F7a), and "Download original" for the selected images, pages and cards (F2-05:
 // several download one after another after a question; features/canvas-ux/download-originals.ts).
 //
-// The export policy reader is the media feature's own until 3e's sharing port provides one: the same
-// sources as features/sharing/export-policy.ts (GET /api/boards/:bid/export-policy, every
-// `export-control.policy` board event, a refetch after each event-stream reconnect), and the same rule
-// (`exportAllowedFor`), with 'everyone' until the first answer.
-import {
-  EXPORT_CONTROL_EVENTS,
-  EXPORT_DISABLED_MESSAGE,
-  type ExportPolicy,
-  ExportPolicyEvent,
-  ExportPolicyState,
-  exportAllowedFor,
-} from '@draftroom/contracts'
+// K1-4 (wave K): the export policy is the board's one shared resource (features/sharing/ported/
+// export-policy.ts: read once per board session, every `export-control.policy` board event, a read after
+// each event-stream reconnect), which every gate on the board reads; the media feature used to make that
+// read itself. The same rule (`exportAllowedFor`), with 'everyone' until the first answer.
+import { EXPORT_DISABLED_MESSAGE, type ExportPolicy, exportAllowedFor } from '@draftroom/contracts'
 import { type AssetVersionMeta, derivativeUrl, metaUrl, originalUrl } from '../../assets/contract.ts'
 import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
-import { type Atom, atom } from '../../lib/signals.ts'
+import { attachExportPolicy, exportStateOf } from '../../features/sharing/ported/export-policy.ts'
+import type { Atom } from '../../lib/signals.ts'
 import { pageAssetName } from '../pdf-pages.ts'
 import { factsOf, pageOfFileId } from './model.ts'
 
 export const EXPORT_OFF_TEXT = EXPORT_DISABLED_MESSAGE
 
-const policies = new Map<string, Atom<ExportPolicy | null>>()
+const policyOf = (boardId: string): Atom<ExportPolicy | null> => exportStateOf(boardId).policy
 
-function policyOf(boardId: string): Atom<ExportPolicy | null> {
-  let a = policies.get(boardId)
-  if (!a) {
-    a = atom<ExportPolicy | null>(`media-export-policy:${boardId}`, null)
-    policies.set(boardId, a)
-  }
-  return a
-}
-
-/** Keeps this board's export policy current (the feature's onMount); returns the stop. */
+/** Keeps this board's export policy current (the feature's onMount): attaches to the shared resource. */
 export function syncExportPolicy(ctx: CanvasFeatureContext): () => void {
-  const boardId = ctx.board.id
-  const controller = new AbortController()
-  let events = 0
-  const refetch = () => {
-    const seen = events
-    ctx.api
-      .request('GET', `/api/boards/${encodeURIComponent(boardId)}/export-policy`, {
-        schema: ExportPolicyState,
-        signal: controller.signal,
-      })
-      .then(
-        (s) => {
-          // an answer read before a policy event never overwrites that event
-          if (!controller.signal.aborted && seen === events) policyOf(boardId).set(s.exportPolicy)
-        },
-        () => {}, // keep what we had: the server enforces
-      )
-  }
-  const offEvent = ctx.events.on(EXPORT_CONTROL_EVENTS.policy, (data) => {
-    const parsed = ExportPolicyEvent.safeParse(data)
-    if (!parsed.success) return
-    events++
-    policyOf(boardId).set(parsed.data.exportPolicy)
-  })
-  let resynced = false
-  const offResync = ctx.events.onResync(() => {
-    resynced = true
-    refetch()
-  })
-  if (!resynced) refetch()
-  return () => {
-    controller.abort()
-    offEvent()
-    offResync()
-  }
+  return attachExportPolicy({ boardId: ctx.board.id, api: ctx.api, events: ctx.events })
 }
 
 /** Whether this person may download originals here (reactive; 'everyone' until the first answer). */

@@ -15,12 +15,7 @@
 import { type CSSProperties, type PointerEvent, useEffect, useRef, useState } from 'react'
 import { derivativeUrl, originalUrl } from '../../assets/contract.ts'
 import { useAssetMeta } from '../../assets/meta-store.ts'
-import {
-  type CanvasElement,
-  type CanvasFeatureContext,
-  geometry,
-  type LobbyCanvas,
-} from '../../canvas/api/index.ts'
+import type { CanvasFeatureContext, LobbyCanvas } from '../../canvas/api/index.ts'
 import { useUserKind } from '../../invite/guest.tsx'
 import { extensionLabel, formatBytes, formatDuration, pluralize } from '../../lib/format.ts'
 import { useValue } from '../../lib/signals.ts'
@@ -42,27 +37,10 @@ import {
   factsOf,
   fileItemKind,
 } from './model.ts'
+import { type Box, Occluders } from './occluders.ts'
 import { openPdfViewer } from './viewer-state.ts'
 
 const STRIP_MAX = 4
-/**
- * Whether an element painted above a card hides that part of it, so it cuts a hole in the card's face:
- * notes, images (and other cards) and shapes with a solid fill. Frames never do (their children are
- * drawn over them); strokes, texts and unfilled shapes over a card stay under its face.
- */
-function opaque(el: CanvasElement): boolean {
-  if (el.type === 'stickynote' || el.type === 'image') return true
-  if (el.type !== 'rectangle' && el.type !== 'ellipse' && el.type !== 'diamond') return false
-  const e = el as { backgroundColor?: string; fillStyle?: string; opacity?: number }
-  return e.backgroundColor !== 'transparent' && e.fillStyle === 'solid' && (e.opacity ?? 100) >= 100
-}
-
-interface Box {
-  readonly x: number
-  readonly y: number
-  readonly w: number
-  readonly h: number
-}
 
 interface Entry {
   readonly id: string
@@ -94,41 +72,17 @@ const NO_FACTS = {
   sizeBytes: 0,
 } as const satisfies FileFacts
 
-const overlap = (a: Box, b: Box) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
-
-/** An element's axis-aligned box from its own fields (rotation included; cheap: no engine call). */
-function aabbOf(el: CanvasElement): Box {
-  const r = { x: el.x, y: el.y, width: el.width, height: el.height }
-  if (!el.angle) return { x: r.x, y: r.y, w: r.width, h: r.height }
-  const pts = geometry.corners(r, el.angle)
-  const xs = pts.map((p) => p.x)
-  const ys = pts.map((p) => p.y)
-  const x = Math.min(...xs)
-  const y = Math.min(...ys)
-  return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y }
-}
-
-function holesAbove(canvas: LobbyCanvas, items: readonly CanvasElement[], index: number, box: Box): Box[] {
-  const out: Box[] = []
-  for (let i = index + 1; i < items.length; i++) {
-    const el = items[i] as CanvasElement
-    if (!opaque(el)) continue
-    const r = aabbOf(el)
-    if (!overlap(r, box) || canvas.isHidden(el.id)) continue
-    const x1 = Math.max(0, r.x - box.x)
-    const y1 = Math.max(0, r.y - box.y)
-    const x2 = Math.min(box.w, r.x + r.w - box.x)
-    const y2 = Math.min(box.h, r.y + r.h - box.y)
-    if (x2 > x1 && y2 > y1) out.push({ x: x1, y: y1, w: x2 - x1, h: y2 - y1 })
-  }
-  return out
-}
-
 /** The entries to draw, in paint order (reactive: items, loader states, hidden ids). */
 function entriesOf(canvas: LobbyCanvas): Entry[] {
   const items = canvas.items()
   const out: Entry[] = []
   const editing = canvas.editingId()
+  // K1-8: the opaque elements in a grid, built once per pass and only when a card needs its holes
+  let grid: Occluders | null = null
+  const holesAbove = (index: number, box: Box) => {
+    if (!grid) grid = new Occluders(items, (id) => canvas.isHidden(id))
+    return grid.holesAbove(index, box)
+  }
   items.forEach((el, index) => {
     const url = linkOf(el as never)
     // a link card whose words are being edited shows its plain canvas face (and the editor) meanwhile
@@ -147,7 +101,7 @@ function entriesOf(canvas: LobbyCanvas): Entry[] {
         link: { url, title: titleOf(canvas.text.of(el.id), url) },
         box,
         angle: el.angle ?? 0,
-        holes: el.angle ? [] : holesAbove(canvas, items, index, box),
+        holes: el.angle ? [] : holesAbove(index, box),
         state: null,
         // the rectangle under it is drawn with its own rounded corners
         radius: cornerRadiusOf(el as never),
@@ -160,14 +114,14 @@ function entriesOf(canvas: LobbyCanvas): Entry[] {
     const facts = factsOf(el) as FileFacts
     const box = { x: el.x, y: el.y, w: el.width, h: el.height }
     if (kind === 'card') {
-      const holes = el.angle ? [] : holesAbove(canvas, items, index, box)
+      const holes = el.angle ? [] : holesAbove(index, box)
       const radius = canvas.files.status(el.id) === 'loaded' ? cornerRadiusOf(el as never) : 0
       out.push({ id: el.id, kind: 'card', facts, box, angle: el.angle ?? 0, holes, state: null, radius })
       return
     }
     const st = canvas.files.status(el.id)
     if (st === 'loaded') return
-    const holes = el.angle ? [] : holesAbove(canvas, items, index, box)
+    const holes = el.angle ? [] : holesAbove(index, box)
     out.push({
       id: el.id,
       kind: 'pending',

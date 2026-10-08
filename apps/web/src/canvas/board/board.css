@@ -225,3 +225,159 @@
     font-size: 14px;
   }
 }
+
+/* K1-5 (wave K): the board skeleton (./BoardSkeleton.tsx), drawn at once while a board opens, and the canvas
+   cover while its session connects (LobbyBoardPage.tsx). Bones are the line colour, so both themes have them;
+   the toolbar sits where the board's own does (chrome.tsx's toolbar slot: centred, 12 px from the bottom, the
+   canvas-ux toolbar's 48 px, 54 px on a phone), and the dock column is the board's (`dr-dock`), so nothing
+   moves when the board takes over. */
+.lobby-skeleton__topbar {
+  /* the bar's controls are not there yet: nothing to squeeze */
+  overflow: hidden;
+}
+.lobby-skeleton__bone {
+  display: inline-block;
+  flex: none;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--dr-line, #dcd8cc) 75%, transparent);
+}
+.lobby-skeleton__bone--ws {
+  width: 72px;
+  height: 14px;
+}
+.lobby-skeleton__bone--title {
+  width: min(180px, 30vw);
+  height: 18px;
+}
+.lobby-skeleton__bone--pill {
+  width: 56px;
+  height: 24px;
+  border-radius: 999px;
+}
+.lobby-skeleton__bone--button {
+  width: 78px;
+  height: 30px;
+  border-radius: 8px;
+}
+.lobby-skeleton__bone--tab {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+}
+.lobby-skeleton__bone--tool {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+}
+/* the engine canvas's own background (canvas/engine/theme.ts CANVAS_LIGHT, CANVAS_DARK): no change of colour
+   when the canvas appears under the skeleton's place */
+.lobby-skeleton__canvas,
+.lobby-canvas-screen--skeleton {
+  --lobby-skeleton-canvas: #f9fafb;
+  background: var(--lobby-skeleton-canvas);
+}
+.lobby-skeleton__canvas {
+  overflow: hidden;
+}
+/* the session-connecting cover: the skeleton's canvas (shimmer, greyed toolbar), its words small and low */
+.lobby-canvas-screen--skeleton {
+  justify-content: flex-start;
+  padding-top: 18vh;
+  overflow: hidden;
+  font-size: 13px;
+}
+:root[data-theme="dark"] .lobby-skeleton__canvas,
+:root[data-theme="dark"] .lobby-canvas-screen--skeleton {
+  --lobby-skeleton-canvas: #101011;
+}
+.lobby-skeleton__shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    color-mix(in srgb, var(--dr-surface, #ffffff) 55%, transparent) 50%,
+    transparent 70%
+  );
+  background-size: 200% 100%;
+  animation: lobby-skeleton-shimmer 1.6s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes lobby-skeleton-shimmer {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -50% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lobby-skeleton__shimmer {
+    animation: none;
+  }
+}
+.lobby-skeleton__toolbar {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  z-index: 1;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 48px;
+  max-width: calc(100% - 24px);
+  padding: 0 10px;
+  overflow: hidden;
+  border: 1px solid var(--dr-line, #dcd8cc);
+  border-radius: 12px;
+  background: var(--dr-surface, #ffffff);
+  box-shadow: 0 1px 2px rgb(27 35 48 / 6%);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.lobby-skeleton__dock .dr-dock__rail {
+  align-items: center;
+}
+@media (max-width: 600px) {
+  /* the phone toolbar: 44 px tools, six of them before "More" */
+  .lobby-skeleton__toolbar {
+    height: 54px;
+    gap: 4px;
+    padding: 0 6px;
+  }
+  .lobby-skeleton__bone--tool {
+    width: 40px;
+    height: 40px;
+  }
+  .lobby-skeleton__bone--tool:nth-child(n + 7) {
+    display: none;
+  }
+  /* on a phone the dock folds over the board (one button in the corner): no column, no bones */
+  .dr-board__body > .lobby-skeleton__dock {
+    display: none;
+  }
+}
+/* the top bar's own breakpoints (BoardSkeleton sets data-width as TopBarFrame does; styles.css hides the
+   crumb): the crumb's bone goes with it, the status pills shrink to dots, and Share is an icon on a phone */
+.lobby-skeleton__topbar[data-width="tablet"] .lobby-skeleton__bone--ws,
+.lobby-skeleton__topbar[data-width="phone"] .lobby-skeleton__bone--ws {
+  display: none;
+}
+.lobby-skeleton__topbar[data-width="tablet"] .lobby-skeleton__bone--pill,
+.lobby-skeleton__topbar[data-width="phone"] .lobby-skeleton__bone--pill {
+  width: 24px;
+}
+.lobby-skeleton__topbar[data-width="phone"] .lobby-skeleton__bone--button {
+  width: 32px;
+}
+/* the board page's dock column before its features are installed (LobbyBoardPage.tsx): the same width, so the
+   canvas does not narrow under the person when the dock arrives */
+.lobby-dock-placeholder {
+  pointer-events: none;
+}
+@media (max-width: 600px) {
+  .dr-board__body > .lobby-dock-placeholder {
+    display: none;
+  }
+}
