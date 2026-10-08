@@ -45,10 +45,14 @@ import {
 import { newsByBoard } from './notifications.ts'
 import { readPickerHidden, readViewMode, type ViewMode, writeViewMode } from './prefs.ts'
 import { Sidebar } from './Sidebar.tsx'
+import { StartRow } from './StartRow.tsx'
 import { ContentSearch } from './search/ContentSearch.tsx'
 import { contentSearchApplies, SEARCH_MAX_QUERY_CHARS } from './search/content-search.ts'
+import { type StartChoice, showStartRow, startTiles, startTitle } from './start-row-model.ts'
 import { SampleBoardButton } from './TemplateGallery.tsx'
+import type { CatalogEntry } from './template-catalog.ts'
 import { newBoardPath } from './template-paths.ts'
+import { useCatalog, whenIdle } from './use-catalog.ts'
 import './dashboard.css'
 
 const dash = dashboardApi(api)
@@ -126,10 +130,18 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   const [dialog, setDialog] = useState<Dialog>(null)
   const [importing, setImporting] = useState(false)
   const [quickCreating, setQuickCreating] = useState(false)
+  // K4-1: the "Start something" row's tile whose board is being made
+  const [starting, setStarting] = useState<StartChoice | null>(null)
+  const [catalogWanted, setCatalogWanted] = useState(false)
+  const { mod: catalogMod } = useCatalog(catalogWanted)
   const [now, setNow] = useState(() => new Date())
   // PRI-05a: what is new, without opening each board (the board bell's inbox).
   const inbox = useDashboardInbox()
   const news = useMemo(() => newsByBoard(inbox.inbox?.notifications ?? []), [inbox.inbox])
+
+  // The row's thumbnails come with the template catalog, which is fetched once the page is idle, so the
+  // dashboard's first paint never waits for the template builders.
+  useEffect(() => whenIdle(() => setCatalogWanted(true)), [])
 
   // Relative times ("5 min ago") stay honest while the dashboard is left open.
   useEffect(() => {
@@ -220,6 +232,13 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   // New boards are active: offering "New board" while looking at Trash or Archived would be confusing.
   const showCreate = canCreate && section.kind !== 'archived' && section.kind !== 'trash'
   const totalCount = boards.data?.length ?? 0
+  const startRowShown = showStartRow({
+    canCreate: showCreate,
+    guest,
+    section,
+    searching: query.trim().length > 0,
+    pickerHidden: readPickerHidden(me.user.id),
+  })
   const menu = { canCreate, canMove: inWorkspace }
   const defaultProjectId = section.kind === 'project' ? section.projectId : null
 
@@ -352,6 +371,28 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
       navigate(boardPath(board.id))
     } catch (e) {
       setQuickCreating(false)
+      notify({
+        key: 'create',
+        text: isApiError(e) ? e.message : 'The board could not be created.',
+        tone: 'error',
+      })
+    }
+  }
+
+  // K4-1: a tile of the "Start something" row. The same thing as choosing a template in New board (a private
+  // board named for the template, opened at ?template=<id>); the api's creator rule answers 403 for anyone
+  // who may not, whatever the row shows.
+  const startFromRow = async (choice: StartChoice, entry: CatalogEntry | null) => {
+    if (!canCreate || starting) return
+    setStarting(choice)
+    try {
+      const board = await api.createBoard(workspace.id, {
+        title: startTitle(entry),
+        projectId: defaultProjectId,
+      })
+      navigate(newBoardPath(board.id, choice === 'blank' ? null : choice))
+    } catch (e) {
+      setStarting(null)
       notify({
         key: 'create',
         text: isApiError(e) ? e.message : 'The board could not be created.',
@@ -654,6 +695,14 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
           <p className="dr-dash__note" data-testid="trash-note">
             {TRASH_NOTE}
           </p>
+        )}
+
+        {startRowShown && (
+          <StartRow
+            tiles={startTiles(catalogMod ? catalogMod.templateCatalog() : null)}
+            pending={starting}
+            onChoose={(c, e) => void startFromRow(c, e)}
+          />
         )}
 
         {showStarred && starredVisible.length > 0 && (

@@ -38,6 +38,16 @@ import { WEB_URL } from '../tests/support/ports.ts'
 import { capture } from '../tests/support/screenshots.ts'
 import { createGuestLink, cursorOf, joinAsGuest, waitForLobbyBoard } from './guests-kit.ts'
 
+/**
+ * Wave K (K4-1): the Internal only control moved into the workspace menu (the workspace tile at the top of the
+ * sidebar), so reaching it takes one more click. Its test ids and its behaviour are unchanged.
+ */
+async function openWorkspaceMenu(page: Page) {
+  const tile = page.getByTestId('workspace-switcher')
+  if ((await tile.getAttribute('aria-expanded')) !== 'true') await tile.click()
+  await expect(page.getByTestId('workspace-menu')).toBeVisible()
+}
+
 /** The board's Shared outside flag as the server computes it (ShareState.sharedOutside). */
 const sharedOutside = async (api: Api, boardId: string) =>
   ((await (await api.fetch('GET', `/api/boards/${boardId}/sharing`)).json()) as { sharedOutside?: boolean })
@@ -379,6 +389,7 @@ test('Internal only on the workspace: outside invites, approvals and links refus
     const a = await canvasSession('alice')
     await test.step('alice turns Internal only on in the sidebar; quinn is listed, not removed', async () => {
       await openDashboard(a.page, ws)
+      await openWorkspaceMenu(a.page)
       const section = a.page.getByTestId('internal-only')
       await expect(section).toHaveAttribute('data-on', 'false')
       await section.getByTestId('internal-only-switch').check()
@@ -452,6 +463,7 @@ test('Internal only on the workspace: outside invites, approvals and links refus
 
     await test.step('alice turns it off again (a creator may)', async () => {
       await openDashboard(a.page, ws)
+      await openWorkspaceMenu(a.page)
       const section = a.page.getByTestId('internal-only')
       await section.getByTestId('internal-only-switch').uncheck()
       await expect(section).toHaveAttribute('data-on', 'false')

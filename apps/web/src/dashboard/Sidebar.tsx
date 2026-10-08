@@ -2,28 +2,17 @@ import { type Project, WorkspaceStorage, type WorkspaceSummary } from '@draftroo
 import { type FormEvent, type MouseEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { Wordmark } from '../brand/Wordmark.tsx'
-import { type DashboardSection, linkClick, navigate, workspacePath } from '../lib/routing.ts'
+import { type DashboardSection, linkClick, workspacePath } from '../lib/routing.ts'
 import { MenuButton } from '../ui/Menu.tsx'
 import { RenameInput } from '../ui/RenameInput.tsx'
-import {
-  InternalOnlySection,
-  type InternalOnlyState,
-  OutsideAccessDialog,
-  useInternalOnly,
-} from './InternalOnly.tsx'
+import { type InternalOnlyState, OutsideAccessDialog, useInternalOnly } from './InternalOnly.tsx'
 import {
   outsideAccessIn,
   type ProjectMenuAction,
   projectInternalOnly,
   projectMenuItems,
 } from './internal-only-model.ts'
-
-const WS_ROLE_LABEL: Record<WorkspaceSummary['role'], string> = {
-  owner: 'Owner',
-  admin: 'Admin',
-  member: 'Member',
-  guest: 'Guest',
-}
+import { WorkspaceMenu } from './WorkspaceMenu.tsx'
 
 const sameSection = (a: DashboardSection, b: DashboardSection) =>
   a.kind === b.kind && (a.kind !== 'project' || (b.kind === 'project' && a.projectId === b.projectId))
@@ -130,12 +119,11 @@ export function Sidebar({
         </button>
       </div>
       <div className="dr-side__body" id={bodyId}>
-        <WorkspaceSwitcher workspace={workspace} workspaces={workspaces} />
-        <InternalOnlySection
-          workspaceId={workspace.id}
-          workspaceName={workspace.name}
+        <WorkspaceMenu
+          workspace={workspace}
+          workspaces={workspaces}
           projects={projects}
-          state={internal}
+          internal={internal}
         />
         <nav aria-label="Boards">
           <ul className="dr-nav">
@@ -580,52 +568,6 @@ function NewProjectForm({ onCreate, onCancel }: { onCreate(name: string): Promis
         </p>
       )}
     </form>
-  )
-}
-
-function WorkspaceSwitcher({
-  workspace,
-  workspaces,
-}: {
-  workspace: WorkspaceSummary
-  workspaces: readonly WorkspaceSummary[]
-}) {
-  const others = workspaces.filter((w) => w.id !== workspace.id)
-  const current = (
-    <>
-      <span className="dr-ws__tile" aria-hidden="true">
-        {workspace.name.slice(0, 1).toUpperCase() || 'W'}
-      </span>
-      <span className="dr-ws__text">
-        <span className="dr-ws__name" title={workspace.name}>
-          {workspace.name}
-        </span>
-        {/* DANA-08: say what this box is (the workspace holds the project lobbies and their boards). */}
-        <span className="dr-ws__role">Workspace · {WS_ROLE_LABEL[workspace.role]}</span>
-      </span>
-    </>
-  )
-  if (!others.length) {
-    return (
-      <div className="dr-ws" data-testid="workspace-switcher">
-        {current}
-      </div>
-    )
-  }
-  return (
-    <div className="dr-ws-wrap">
-      <MenuButton
-        label={`Switch workspace (current: ${workspace.name})`}
-        items={others.map((w) => ({ action: w.id, label: `${w.name} · ${WS_ROLE_LABEL[w.role]}` }))}
-        onSelect={(id) => navigate(workspacePath(id))}
-        className="dr-ws dr-ws--button"
-        testId="workspace-switcher"
-        align="start"
-      >
-        {current}
-        <Icon d="M7 10l5 5 5-5" />
-      </MenuButton>
-    </div>
   )
 }
 

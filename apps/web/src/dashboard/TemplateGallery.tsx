@@ -3,33 +3,15 @@
 // and a section preview, search and categories. Selecting is a click (or Enter/Space); a double click
 // creates right away. Also the empty dashboard's "Start with the sample board" button.
 
-import { type ReactNode, useEffect, useId, useMemo, useState } from 'react'
+import { type ReactNode, useId, useMemo, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { navigate } from '../lib/routing.ts'
 import { createSampleBoard } from './sample-board.ts'
 import type { CatalogEntry, TemplateCategory, TemplateId, TemplatePreview } from './template-catalog.ts'
+import { useCatalog } from './use-catalog.ts'
 import './template-gallery.css'
 
 export type TemplateChoice = TemplateId | 'blank'
-
-type Catalog = typeof import('./template-catalog.ts')
-
-/** The catalog module pulls in the template builders; load it only when the picker opens. */
-function useCatalog(): { mod: Catalog | null; error: boolean } {
-  const [mod, setMod] = useState<Catalog | null>(null)
-  const [error, setError] = useState(false)
-  useEffect(() => {
-    let live = true
-    import('./template-catalog.ts').then(
-      (m) => live && setMod(m),
-      () => live && setError(true),
-    )
-    return () => {
-      live = false
-    }
-  }, [])
-  return { mod, error }
-}
 
 export function TemplateGallery({
   selected,

@@ -1,9 +1,11 @@
-// Wave J: the "Internal only" switches (a workspace, each project) in the dashboard sidebar. Owners and
-// admins turn one on; turning it off hands outside sharing back, so it also needs a creator (the server
-// decides: 403 otherwise, its message shown as is). While one is on, the server refuses outside
-// invitations, approvals, raises and links there (409 INTERNAL_ONLY); it removes nothing, so the outside
-// access that remains is listed here for the owners to remove (people from the workspace or a board,
-// links and pending outside invitations revoked), never removed by the switch itself. Default off.
+// Wave J: the "Internal only" switches (a workspace, each project). Since wave K the workspace's switch lives
+// in the sidebar's workspace menu (WorkspaceMenu.tsx; a shield badge on the workspace tile shows it is on), and
+// each project's in that project's menu. Owners and admins turn one on; turning it off hands outside sharing
+// back, so it also needs a creator (the server decides: 403 otherwise, its message shown as is). While one is
+// on, the server refuses outside invitations, approvals, raises and links there (409 INTERNAL_ONLY); it
+// removes nothing, so the outside access that remains is listed here for the owners to remove (people from
+// the workspace or a board, links and pending outside invitations revoked), never removed by the switch
+// itself. Default off.
 import {
   type InternalOnlySettings,
   type Project,
@@ -14,6 +16,7 @@ import { api, isApiError } from '../api/client.ts'
 import { ExternalTag } from '../features/people/ExternalTag.tsx'
 import { Dialog } from '../ui/Dialog.tsx'
 import {
+  internalOnlyShown,
   type OutsideAccess,
   type OutsideScope,
   outsideAccessIn,
@@ -86,7 +89,7 @@ export function useInternalOnly(workspaceId: string, enabled: boolean): Internal
   }
 }
 
-/** The sidebar's workspace switch, and what still reaches the workspace from outside while it is on. */
+/** The workspace menu's switch, and what still reaches the workspace from outside while it is on. */
 export function InternalOnlySection({
   workspaceId,
   workspaceName,
@@ -113,8 +116,8 @@ export function InternalOnlySection({
       : null
   const access = scope ? outsideAccessIn(settings, scope) : null
   const summary = access ? outsideAccessSummary(access) : null
-  // Members see the state; owners and admins change it.
-  if (!settings.canChange && !on && !internalProjects.length) return null
+  // Members see the state; owners and admins change it (the menu asks the same question: internalOnlyShown).
+  if (!internalOnlyShown(settings, projects)) return null
   return (
     <div className="dr-internal" data-testid="internal-only" data-on={on ? 'true' : 'false'}>
       {settings.canChange ? (
