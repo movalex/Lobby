@@ -6,7 +6,8 @@
 // - open event streams on its board (GUEST_LINK_STREAMS): past it, 503 TOO_MANY_SUBSCRIBERS (the
 //   stream route's own answer for a full board), so one link never holds more than its share of the
 //   board's slots (authz-003: the owner's stream must still open);
-// - reactions (GUEST_LINK_REACTIONS) and "Bring everyone to me" (GUEST_LINK_SUMMONS): past them,
+// - reactions (GUEST_LINK_REACTIONS), cursor chat (GUEST_LINK_CURSOR_CHATS, K6-4) and "Bring everyone to
+//   me" (GUEST_LINK_SUMMONS): past them,
 //   429 RATE_LIMITED with Retry-After. Only what the route accepted (202) counts: a request refused
 //   for another reason (the person's own limit, a bad body) gives its share back.
 // Simultaneous requests cannot all slip past a cap: the check reserves in the same tick in which it
@@ -27,7 +28,12 @@
 // app is ready. They run before the route: a request refused here never reaches it.
 
 import type { ServerResponse } from 'node:http'
-import { GUEST_LINK_REACTIONS, GUEST_LINK_STREAMS, GUEST_LINK_SUMMONS } from '@draftroom/contracts'
+import {
+  GUEST_LINK_CURSOR_CHATS,
+  GUEST_LINK_REACTIONS,
+  GUEST_LINK_STREAMS,
+  GUEST_LINK_SUMMONS,
+} from '@draftroom/contracts'
 import type { Queryable } from '@draftroom/db'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { isBoardId } from '../../access.ts'
@@ -42,15 +48,18 @@ export const guestLinkCapSettings: {
   streams: number
   reactions: { max: number; windowMs: number }
   summons: { max: number; windowMs: number }
+  cursorChats: { max: number; windowMs: number }
 } = {
   streams: GUEST_LINK_STREAMS,
   reactions: { ...GUEST_LINK_REACTIONS },
   summons: { ...GUEST_LINK_SUMMONS },
+  cursorChats: { ...GUEST_LINK_CURSOR_CHATS },
 }
 
 const EVENTS = 'GET /api/boards/:bid/events'
 const REACTIONS = 'POST /api/boards/:bid/reactions'
 const SUMMON = 'POST /api/boards/:bid/summon'
+const CURSOR_CHAT = 'POST /api/boards/:bid/cursor-chat'
 
 /** The stream route's refusal for a full board, with its Retry-After. */
 const STREAMS_FULL_RETRY_AFTER_S = 30
@@ -64,6 +73,7 @@ const linkStreamsFull = () =>
 
 const REACTIONS_MESSAGE = 'That is a lot of reactions from this link. Wait a moment.'
 const SUMMON_MESSAGE = 'Someone who joined with this link just asked everyone to follow. Wait a moment.'
+const CURSOR_CHAT_MESSAGE = 'That is a lot of messages from this link. Wait a moment.'
 
 /** The link (invitation id) through which `userId` first joined `boardId`, if any. */
 async function linkOf(q: Queryable, boardId: string, userId: string): Promise<string | null> {
@@ -172,6 +182,10 @@ export function registerGuestLinkCaps(app: FastifyInstance, ctx: FeatureContext)
       window: new LinkWindow(caps.summons.max, caps.summons.windowMs),
       message: SUMMON_MESSAGE,
     },
+    [CURSOR_CHAT]: {
+      window: new LinkWindow(caps.cursorChats.max, caps.cursorChats.windowMs),
+      message: CURSOR_CHAT_MESSAGE,
+    },
   } as const
   /** Takes of requests still in the route: given back unless it accepts them (202). */
   const taken = new WeakMap<FastifyRequest, { window: LinkWindow; link: string; at: number }>()
@@ -180,7 +194,7 @@ export function registerGuestLinkCaps(app: FastifyInstance, ctx: FeatureContext)
 
   app.addHook('preHandler', async (req, reply) => {
     const key = routeKey(req)
-    if (key !== EVENTS && key !== REACTIONS && key !== SUMMON) return
+    if (key !== EVENTS && key !== REACTIONS && key !== SUMMON && key !== CURSOR_CHAT) return
     const { bid } = req.params as Params
     if (!isBoardId(bid)) return // the route answers 404
     // Not signed in: the route answers 401 itself. (sessions.user is cached for the request.)

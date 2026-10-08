@@ -4,6 +4,8 @@
 // "Bring everyone to me" (summon) and reactions. People with an account are never counted, and a
 // request the route itself refuses never uses up the link's share.
 import {
+  CURSOR_CHAT_RATE,
+  GUEST_LINK_CURSOR_CHATS,
   GUEST_LINK_REACTIONS,
   GUEST_LINK_STREAMS,
   GUEST_LINK_SUMMONS,
@@ -32,10 +34,13 @@ describe('the caps', () => {
     expect(GUEST_LINK_STREAMS).toBe(2 * GUESTS_PER_LINK)
     expect(GUEST_LINK_REACTIONS).toEqual({ max: 50, windowMs: 1000 })
     expect(GUEST_LINK_SUMMONS).toEqual({ max: 1, windowMs: 3000 })
+    // K6-4: cursor chat's share, a third of the board's own (60 per 10 s)
+    expect(GUEST_LINK_CURSOR_CHATS).toEqual({ max: 20, windowMs: 10_000 })
     expect(guestLinkCapSettings).toEqual({
       streams: GUEST_LINK_STREAMS,
       reactions: GUEST_LINK_REACTIONS,
       summons: GUEST_LINK_SUMMONS,
+      cursorChats: GUEST_LINK_CURSOR_CHATS,
     })
   })
 })
@@ -102,6 +107,38 @@ describe('reactions per link', () => {
     expect((await react(other)).statusCode).toBe(202)
     w.api.clock.advance(1_100)
     expect((await react(c)).statusCode).toBe(202)
+  })
+})
+
+describe('cursor chat per link (K6-4)', () => {
+  it('commenting guests of one link share a message rate; a message the route refused (per person, a bad body) uses none of it; members are not counted', async () => {
+    guestLinkCapSettings.cursorChats = { max: 7, windowMs: 10_000 }
+    w = await setupWorld()
+    const url = (await guestLink(w.bob, w.board, { role: 'commenter' })).url
+    const a = await joinAsGuest(w.api, url, 'A')
+    const b = await joinAsGuest(w.api, url, 'B')
+    const c = await joinAsGuest(w.api, url, 'C')
+    const chat = (g: { req: GuestClient['req'] }, text = 'over here') =>
+      g.req('POST', `/api/boards/${w.board}/cursor-chat`, { text })
+    // A: the per-person limit refuses the 6th; that refusal is not the link's.
+    const byA = [] as number[]
+    for (let i = 0; i <= CURSOR_CHAT_RATE.max; i++) byA.push((await chat(a)).statusCode)
+    expect(byA).toEqual([...Array(CURSOR_CHAT_RATE.max).fill(202), 429])
+    // a body the route refuses (400) gives its share back
+    expect((await chat(b, '')).statusCode).toBe(400)
+    // B: 2 more fill the link's 7.
+    for (let i = 0; i < 2; i++) expect((await chat(b)).statusCode).toBe(202)
+    const refused = await chat(c)
+    expect(refused.statusCode).toBe(429)
+    expect(errorCode(refused)).toBe('RATE_LIMITED')
+    expect(refused.headers['retry-after']).toBeTruthy()
+    expect(refused.json().error.message).toContain('this link')
+    // The board's owner chats as usual; another link has its own share.
+    expect((await chat(w.bob)).statusCode).toBe(202)
+    const other = await joinAsGuest(w.api, (await guestLink(w.bob, w.board, { role: 'editor' })).url, 'D')
+    expect((await chat(other)).statusCode).toBe(202)
+    w.api.clock.advance(10_100)
+    expect((await chat(c)).statusCode).toBe(202)
   })
 })
 

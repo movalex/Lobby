@@ -305,6 +305,7 @@ export type ErrorBody = z.infer<typeof ErrorBody>
 // Feature schemas (docs/FEATURES-M2-CONTRACTS.md): one file per feature, owned by that feature.
 export * from './ai.ts'
 export * from './comments.ts'
+export * from './cursor-chat.ts'
 export * from './dashboard.ts'
 export * from './domain-access.ts'
 export * from './export-control.ts'
