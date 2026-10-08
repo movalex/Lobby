@@ -24,7 +24,8 @@
 #     probes      the browser half of the engine probe suite (docs/EXCALIDRAW-MIGRATION.md section 6.5): `pnpm probe:browser`, as probe:engine and probe:layout
 #     audit       `pnpm audit --prod` against the 5 advisories the owner has been told about (scripts/audit-check.mjs)
 #     xbrowser    the cross-browser smoke on WebKit and Firefox (e2e/excalidraw/xbrowser-smoke.spec.ts)
-#     build-gates the production-build gates: `excalidraw:prod`, `excalidraw:dev` (StrictMode) and `csp:cutover`
+#     build-gates the production-build gates: the node --test build guards, `excalidraw:prod`, `excalidraw:dev` (StrictMode)
+#                 and `csp:cutover`
 #   pull requests only
 #     e2e-smoke   a short browser subset (ten spec files, about 3 minutes on the development PC)
 #   pushes to main only (the stand-in for a nightly run: this file's triggers are the owner's decision)
@@ -300,6 +301,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ffmpeg
+      # node:test files that no vitest project runs (wave K.1, follow-up 14): the build's host rewrite and font
+      # assets, K1-6's vendor chunks (two in-memory production builds, about 10 s) and render.yaml's headers
+      - name: Build guards (node --test)
+        run: node --test apps/web/build/*.test.ts apps/web/test/bundle/*.test.ts scripts/smoke/render-yaml.test.mjs
       - name: Install Playwright chromium
         run: pnpm --filter @draftroom/e2e exec playwright install --with-deps --only-shell chromium
       # the production web build without the dev-auth guard (no facade, no debug handle, no tldraw, no foreign host)

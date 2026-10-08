@@ -136,6 +136,18 @@ describe('ci.yml', () => {
     expect(pg).toContain('fail-fast: false')
   })
 
+  it('runs the build guards that are plain node tests (K1-6: the vendor chunks, the host rewrite, render.yaml)', () => {
+    // wave K.1 (follow-up 14): these are node:test files, outside vitest, so no vitest shard runs them
+    const gates = jobCode('build-gates')
+    expect(gates).toContain(
+      'run: node --test apps/web/build/*.test.ts apps/web/test/bundle/*.test.ts scripts/smoke/render-yaml.test.mjs',
+    )
+    // every file the globs name exists (a renamed guard would leave the step running nothing)
+    for (const dir of ['apps/web/build', 'apps/web/test/bundle'])
+      expect(readdirSync(join(ROOT, dir)).filter((f) => f.endsWith('.test.ts')).length, dir).toBeGreaterThan(0)
+    expect(read('scripts/smoke/render-yaml.test.mjs').length).toBeGreaterThan(0)
+  })
+
   it('splits the unit tests into shards that cover every vitest project, off the quick static gate', () => {
     const unit = jobCode('unit')
     const shards = /shard: \[([\d, ]+)\]/
