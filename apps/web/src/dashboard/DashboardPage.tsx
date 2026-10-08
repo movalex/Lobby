@@ -29,6 +29,9 @@ import { BoardDetailsDialog, DuplicateBoardDialog, MoveBoardDialog } from './Boa
 import { CreateBoardDialog } from './CreateBoardDialog.tsx'
 import { DashboardBell, useDashboardInbox } from './DashboardBell.tsx'
 import { dashboardApi, IMPORT_BODY_LIMIT_BYTES } from './dashboard-api.ts'
+import { useInternalOnly } from './InternalOnly.tsx'
+import { internalOnlyShown } from './internal-only-model.ts'
+import { LazyDialogBoundary } from './LazyDialogBoundary.tsx'
 import {
   type BoardMenuAction,
   type BoardSort,
@@ -67,13 +70,13 @@ import { StartRow } from './StartRow.tsx'
 import { createSampleBoard } from './sample-board.ts'
 import { ContentSearch } from './search/ContentSearch.tsx'
 import { contentSearchApplies, SEARCH_MAX_QUERY_CHARS } from './search/content-search.ts'
-import { type StartChoice, showStartRow, startTiles, startTitle } from './start-row-model.ts'
+import { type StartChoice, showStartRow, startRowOffered, startTiles, startTitle } from './start-row-model.ts'
 import { SampleBoardButton } from './TemplateGallery.tsx'
 import type { CatalogEntry } from './template-catalog.ts'
 import { newBoardPath } from './template-paths.ts'
 import { useCatalog, whenIdle } from './use-catalog.ts'
 import { WhatsNewCard } from './WhatsNew.tsx'
-import { showWhatsNew, type TryAction, WHATS_NEW_VERSION, whatsNewFor } from './whats-new.ts'
+import { planBoardTry, showWhatsNew, type TryAction, WHATS_NEW_VERSION, whatsNewFor } from './whats-new.ts'
 import { requestWorkspaceMenu } from './workspace-menu-request.ts'
 import './dashboard.css'
 
@@ -160,6 +163,12 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   // K4-1: the "Start something" row's tile whose board is being made
   const [starting, setStarting] = useState<StartChoice | null>(null)
   const [catalogWanted, setCatalogWanted] = useState(false)
+  // K4-5: a What's new "Try it" whose work is under way (a board being opened or made). The ref is the guard
+  // (a second click in the same tick sees it); the state only draws the button.
+  const [tryPending, setTryPending] = useState<TryAction | null>(null)
+  const tryBusy = useRef(false)
+  // K4-5: "Try it" on the template row asks for it to be shown and focused (see the effect below)
+  const [startRowAsk, setStartRowAsk] = useState(0)
   const { mod: catalogMod } = useCatalog(catalogWanted)
   // K4-5: the What's new card is dismissed per person (their browser's storage, which may be missing)
   const [whatsNewGone, setWhatsNewGone] = useState(() => readWhatsNewDismissed(me.user.id, WHATS_NEW_VERSION))
@@ -168,9 +177,33 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   const inbox = useDashboardInbox()
   const news = useMemo(() => newsByBoard(inbox.inbox?.notifications ?? []), [inbox.inbox])
 
-  // The row's thumbnails come with the template catalog, which is fetched once the page is idle, so the
+  // Whether the row is on the page now: only creators on the landing view see it, so only they fetch the
+  // template catalog for its thumbnails (a guest, an outside account, the All / Archived / Trash / project
+  // views and a search in progress never pay for the chunk). It is fetched once the page is idle, so the
   // dashboard's first paint never waits for the template builders.
-  useEffect(() => whenIdle(() => setCatalogWanted(true)), [])
+  const startRowShown = showStartRow({
+    canCreate,
+    guest,
+    section,
+    searching: query.trim().length > 0,
+    pickerHidden: readPickerHidden(me.user.id),
+  })
+  useEffect(() => (startRowShown ? whenIdle(() => setCatalogWanted(true)) : undefined), [startRowShown])
+
+  // K4-5: "Try it" on the row's item: the row is shown (a search was cleared for it) and its first tile
+  // takes the focus; where the row is not there after all, the picker has the same templates.
+  useEffect(() => {
+    if (startRowAsk === 0) return
+    const tile = document.querySelector<HTMLElement>('[data-testid="start-tile"]')
+    if (tile) {
+      tile.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      tile.focus({ preventScroll: true })
+    } else if (canCreate) setCreating(true)
+  }, [startRowAsk, canCreate])
+
+  // Wave J / K4-1: the Internal only switches live in the sidebar's workspace menu. The dashboard owns the
+  // state so the What's new card can tell whether that menu has a control for this person at all.
+  const internal = useInternalOnly(workspace?.id ?? workspaceId, inWorkspace)
 
   // Relative times ("5 min ago") stay honest while the dashboard is left open.
   useEffect(() => {
@@ -261,19 +294,19 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   // New boards are active: offering "New board" while looking at Trash or Archived would be confusing.
   const showCreate = canCreate && section.kind !== 'archived' && section.kind !== 'trash'
   const totalCount = boards.data?.length ?? 0
-  const newItems = whatsNewFor({ canCreate, inWorkspace })
+  // The card says only what is true for this person: the row if they get it (not while a search or another
+  // view hides it for now: "Try it" brings it back), the workspace menu's Internal only control if they have
+  // one (owners and admins, and anyone while it is on; a plain member has none).
+  const newItems = whatsNewFor({
+    canCreate,
+    startRow: startRowOffered({ canCreate, guest, pickerHidden: readPickerHidden(me.user.id) }),
+    internalOnly: internalOnlyShown(internal.settings, projectList),
+  })
   const whatsNewShown = showWhatsNew({
     items: newItems,
     guest,
     dismissed: whatsNewGone,
     landing: section.kind === 'recent',
-  })
-  const startRowShown = showStartRow({
-    canCreate: showCreate,
-    guest,
-    section,
-    searching: query.trim().length > 0,
-    pickerHidden: readPickerHidden(me.user.id),
   })
   const menu = { canCreate, canMove: inWorkspace }
   const defaultProjectId = section.kind === 'project' ? section.projectId : null
@@ -437,25 +470,39 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
     }
   }
 
-  // K4-5: "Try it" on a What's new item takes the person to the thing
+  // K4-5: "Try it" on a What's new item takes the person to the thing, and does something they can see.
   const tryNew = (action: TryAction) => {
+    if (tryBusy.current) return
     if (action === 'workspace-menu') requestWorkspaceMenu()
     else if (action === 'templates') {
       if (canCreate) setCreating(true)
     } else if (action === 'start-row') {
-      const tile = document.querySelector<HTMLElement>('[data-testid="start-tile"]')
-      tile?.scrollIntoView({ block: 'center', behavior: 'smooth' })
-      tile?.focus({ preventScroll: true })
-    } else if (action === 'tour') {
-      if (!canCreate) return
+      // a search hides the row: clear it, then the effect above focuses the first tile
+      setQuery('')
+      setStartRowAsk((n) => n + 1)
+    } else if (action === 'board') {
+      // Show a board's top bar without leaving anything behind: the board they opened last, and only
+      // someone with no boards at all gets the Lobby tour made for them (once; the buttons wait).
+      const plan = planBoardTry({
+        listReady: boards.status === 'ready',
+        latestBoardId: (boards.data ? recentBoards(boards.data)[0]?.id : null) ?? null,
+        canCreate,
+      })
+      if (plan.kind === 'open') navigate(boardPath(plan.boardId))
+      if (plan.kind !== 'make-tour') return
+      tryBusy.current = true
+      setTryPending('board')
       createSampleBoard(api.createBoard, workspace.id, defaultProjectId).then(
         (path) => navigate(path),
-        (e) =>
+        (e) => {
+          tryBusy.current = false
+          setTryPending(null)
           notify({
             key: 'sample-board',
             text: isApiError(e) ? e.message : 'The sample board could not be created.',
             tone: 'error',
-          }),
+          })
+        },
       )
     }
   }
@@ -551,6 +598,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
         section={section}
         projects={projectList}
         projectsError={projects.status === 'error' ? projects.error.message : null}
+        internal={internal}
         canSeeProjects={inWorkspace}
         canCreateProjects={canCreate}
         canRenameProjects={canCreate}
@@ -774,6 +822,8 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
         {whatsNewShown && (
           <WhatsNewCard
             items={newItems}
+            pending={tryPending}
+            unavailable={boards.status === 'ready' ? [] : ['board']}
             onTry={tryNew}
             onTellUs={() => openFeedback(null)}
             onDismiss={() => {
@@ -875,19 +925,21 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
         />
       )}
       {dialog?.kind === 'share' && (
-        <Suspense fallback={null}>
-          <ShareDialog
-            board={dialog.board}
-            role={dialog.board.role}
-            workspace={{ id: workspace.id, name: workspace.name }}
-            selfUserId={me.user.id}
-            onClose={() => setDialog(null)}
-            onBoardChange={(b: Board) => {
-              updateBoard(b.id, (x) => ({ ...x, ...b }))
-              setDialog((d) => (d?.kind === 'share' ? { ...d, board: { ...d.board, ...b } } : d))
-            }}
-          />
-        </Suspense>
+        <LazyDialogBoundary what="Share" onClose={() => setDialog(null)}>
+          <Suspense fallback={null}>
+            <ShareDialog
+              board={dialog.board}
+              role={dialog.board.role}
+              workspace={{ id: workspace.id, name: workspace.name }}
+              selfUserId={me.user.id}
+              onClose={() => setDialog(null)}
+              onBoardChange={(b: Board) => {
+                updateBoard(b.id, (x) => ({ ...x, ...b }))
+                setDialog((d) => (d?.kind === 'share' ? { ...d, board: { ...d.board, ...b } } : d))
+              }}
+            />
+          </Suspense>
+        </LazyDialogBoundary>
       )}
       {dialog?.kind === 'move' && (
         <MoveBoardDialog

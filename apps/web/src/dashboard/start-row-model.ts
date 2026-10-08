@@ -44,10 +44,22 @@ export function startTiles(catalog: readonly CatalogEntry[] | null): StartTile[]
 }
 
 /**
- * Whether the dashboard shows the row: to creators who can make boards here (`canCreate`, the same flag as
- * New board), on the landing view, while nothing is searched, and not to a name-only guest. Someone who
- * ticked "Don't show templates on new boards" asked not to be shown templates, so they get the plain
- * "Templates" button instead.
+ * Whether this person gets the row at all (as against it being hidden for now, by a search or another view):
+ * creators who can make boards here and are not a name-only guest. Someone who ticked "Don't show templates
+ * on new boards" asked not to be shown templates, so they get the plain "Templates" button instead. The
+ * What's new card asks the same question before it talks about the row.
+ */
+export function startRowOffered(input: {
+  canCreate: boolean
+  guest: boolean
+  pickerHidden: boolean
+}): boolean {
+  return input.canCreate && !input.guest && !input.pickerHidden
+}
+
+/**
+ * Whether the dashboard shows the row right now: to those it is offered to (`startRowOffered`; `canCreate` is
+ * the same flag as New board), on the landing view, while nothing is searched.
  */
 export function showStartRow(input: {
   canCreate: boolean
@@ -56,13 +68,7 @@ export function showStartRow(input: {
   searching: boolean
   pickerHidden: boolean
 }): boolean {
-  return (
-    input.canCreate &&
-    !input.guest &&
-    input.section.kind === 'recent' &&
-    !input.searching &&
-    !input.pickerHidden
-  )
+  return startRowOffered(input) && input.section.kind === 'recent' && !input.searching
 }
 
 /** The title a board made from a tile starts with: the template's name, or "Untitled board". */

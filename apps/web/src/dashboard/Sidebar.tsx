@@ -6,7 +6,7 @@ import { type DashboardSection, linkClick, workspacePath } from '../lib/routing.
 import { useValue } from '../lib/signals.ts'
 import { MenuButton } from '../ui/Menu.tsx'
 import { RenameInput } from '../ui/RenameInput.tsx'
-import { type InternalOnlyState, OutsideAccessDialog, useInternalOnly } from './InternalOnly.tsx'
+import { type InternalOnlyState, OutsideAccessDialog } from './InternalOnly.tsx'
 import {
   outsideAccessIn,
   type ProjectMenuAction,
@@ -25,6 +25,7 @@ export function Sidebar({
   section,
   projects,
   projectsError,
+  internal,
   canSeeProjects,
   canCreateProjects,
   canRenameProjects,
@@ -36,6 +37,8 @@ export function Sidebar({
   section: DashboardSection
   projects: readonly Project[]
   projectsError: string | null
+  /** Wave J's Internal only switches (DashboardPage loads them: its What's new card asks whether the control is there). */
+  internal: InternalOnlyState
   /** The project list and the storage line (workspace members and above; guests get 403). */
   canSeeProjects: boolean
   /** "New project lobby" (domain access: creators who are members and above). */
@@ -54,9 +57,6 @@ export function Sidebar({
   const toggleRef = useRef<HTMLButtonElement>(null)
   // Guests reach only the boards shared with them: Archived and Trash hold nothing of theirs to act on.
   const guest = workspace.role === 'guest'
-  // Wave J: the "Internal only" switches (members and above read them; owners and admins change them).
-  const internal = useInternalOnly(workspace.id, canSeeProjects)
-
   // "Try it" on the What's new card asks for the workspace menu: on a phone the folded menu opens first
   const menuAsked = useValue(workspaceMenuRequests)
   const menuSeen = useRef(menuAsked)

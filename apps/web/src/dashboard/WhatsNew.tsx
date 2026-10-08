@@ -6,11 +6,17 @@ export const WHATS_NEW_HEADING_ID = 'dr-whatsnew-h'
 
 export function WhatsNewCard({
   items,
+  pending = null,
+  unavailable = [],
   onTry,
   onTellUs,
   onDismiss,
 }: {
   items: readonly WhatsNewItem[]
+  /** The "Try it" whose work is under way (a board is being opened or made): every "Try it" waits for it. */
+  pending?: TryAction | null
+  /** "Try it" actions that cannot be done yet (what they need has not loaded): those buttons are disabled. */
+  unavailable?: readonly TryAction[]
   onTry(action: TryAction): void
   /** Opens the feedback dialog. */
   onTellUs(): void
@@ -49,9 +55,11 @@ export function WhatsNewCard({
                 data-testid="whats-new-try"
                 data-action={item.tryIt}
                 aria-label={`Try it: ${item.title}`}
+                aria-busy={pending === item.tryIt || undefined}
+                disabled={pending !== null || unavailable.includes(item.tryIt)}
                 onClick={() => item.tryIt && onTry(item.tryIt)}
               >
-                Try it
+                {pending === item.tryIt ? 'Opening…' : 'Try it'}
               </button>
             )}
           </li>

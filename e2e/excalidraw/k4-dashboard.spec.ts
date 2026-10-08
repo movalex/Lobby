@@ -368,3 +368,110 @@ test('with a mouse the same controls keep their own size (the larger area is for
     await p.context.close()
   }
 })
+
+// ---- K4 review follow-ups --------------------------------------------------------------------------------
+
+test('the template catalog is fetched only where the row is shown: not on the All view, not for an account that cannot create', async ({
+  browser,
+}) => {
+  test.setTimeout(120_000)
+  const p = await creator(browser, 'Cat Alog')
+  const scriptsOf = (page: Page) => {
+    const seen: string[] = []
+    page.on('request', (r) => {
+      if (r.resourceType() === 'script') seen.push(new URL(r.url()).pathname)
+    })
+    return seen
+  }
+  const catalog = (urls: string[]) => urls.filter((u) => /template-catalog/.test(u))
+  try {
+    await test.step('the All boards view of a creator: idle for longer than the idle load waits, no catalog', async () => {
+      const seen = scriptsOf(p.page)
+      await openDashboard(p.page, p.wid, 'all')
+      await expect(p.page.getByTestId('start-row')).toHaveCount(0)
+      await p.page.waitForTimeout(3500)
+      expect(catalog(seen)).toEqual([])
+    })
+
+    await test.step('an account that cannot create, on the landing view: no row, no catalog', async () => {
+      const outsider = await p.context.newPage()
+      await pretendOutside(outsider)
+      const seen = scriptsOf(outsider)
+      await openDashboard(outsider, p.wid)
+      await expect(outsider.getByTestId('access-outside')).toBeVisible()
+      await outsider.waitForTimeout(3500)
+      expect(catalog(seen)).toEqual([])
+      await outsider.close()
+    })
+
+    await test.step('the control: the creator’s landing view does fetch it once idle', async () => {
+      const seen = scriptsOf(p.page)
+      await openDashboard(p.page, p.wid)
+      await expect(p.page.getByTestId('start-row')).toBeVisible()
+      await expect.poll(() => catalog(seen).length, { timeout: 15_000 }).toBeGreaterThan(0)
+    })
+  } finally {
+    await p.context.close()
+  }
+})
+
+test('a Share chunk that is gone (a tab left open across a deploy) shows a notice with Reload, and the dashboard stays', async ({
+  browser,
+}) => {
+  const p = await creator(browser, 'Stale Tab')
+  try {
+    const board = await p.api.createBoard(p.wid, 'Share me later')
+    await openDashboard(p.page, p.wid)
+    const card = mainCard(p.page, board.id)
+    await expect(card).toBeVisible()
+    // the new build no longer has the chunk this old page asks for
+    await p.page.route('**/*ShareDialog*', (route) => route.abort())
+    await card.getByTestId('board-card-menu').click()
+    await card.locator('[role="menuitem"][data-action="share"]').click()
+    const notice = p.page.getByTestId('lazy-dialog-failed')
+    await expect(notice).toBeVisible({ timeout: 15_000 })
+    await expect(notice).toContainText('Share could not open')
+    await expect(notice.getByTestId('lazy-dialog-reload')).toBeVisible()
+    await expect(shareDialog(p.page)).toHaveCount(0)
+    // the page is still there behind it (an uncaught error would have unmounted the app)
+    await p.page.keyboard.press('Escape')
+    await expect(notice).toHaveCount(0)
+    await expect(p.page.getByTestId('dashboard')).toBeVisible()
+    await expect(card).toBeVisible()
+  } finally {
+    await p.context.close()
+  }
+})
+
+test('Escape closes the workspace menu from inside it, and leaves a field elsewhere on the page alone', async ({
+  browser,
+}) => {
+  const p = await creator(browser, 'Esc Ape')
+  try {
+    await openDashboard(p.page, p.wid)
+    const tile = p.page.getByTestId('workspace-switcher')
+    const menu = p.page.getByTestId('workspace-menu')
+    const search = p.page.getByTestId('dashboard-search')
+
+    await openWorkspaceMenu(p.page)
+    // typing in the search box and pressing Escape there is the box’s business, not the menu’s
+    await search.focus()
+    await search.fill('xyz')
+    await p.page.keyboard.press('Escape')
+    await expect(menu).toBeVisible()
+    await expect(search).toBeFocused()
+
+    // from the tile or the switch inside the panel, Escape closes it and the tile gets the keyboard back
+    await tile.focus()
+    await p.page.keyboard.press('Escape')
+    await expect(menu).toHaveCount(0)
+    await expect(tile).toBeFocused()
+    await openWorkspaceMenu(p.page)
+    await p.page.getByTestId('internal-only-switch').focus()
+    await p.page.keyboard.press('Escape')
+    await expect(menu).toHaveCount(0)
+    await expect(tile).toBeFocused()
+  } finally {
+    await p.context.close()
+  }
+})

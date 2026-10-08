@@ -13,7 +13,14 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { InternalOnlyState } from './InternalOnly.tsx'
 import { StartRow } from './StartRow.tsx'
-import { START_TILES, type StartChoice, showStartRow, startTiles, startTitle } from './start-row-model.ts'
+import {
+  START_TILES,
+  type StartChoice,
+  showStartRow,
+  startRowOffered,
+  startTiles,
+  startTitle,
+} from './start-row-model.ts'
 import { templateCatalog } from './template-catalog.ts'
 import { TEMPLATE_IDS } from './template-paths.ts'
 import { byTestId, fire, textOf } from './test-tree.ts'
@@ -92,6 +99,30 @@ describe('who sees the row', () => {
       expect(showStartRow({ ...base, section }), section.kind).toBe(false)
     expect(showStartRow({ ...base, searching: true })).toBe(false)
     expect(showStartRow({ ...base, pickerHidden: true })).toBe(false)
+  })
+})
+
+describe('who is offered the row at all (the What’s new card asks before it talks about it)', () => {
+  const base = { canCreate: true, guest: false, pickerHidden: false }
+
+  it('is creators who can make boards here, not a name-only guest, not someone who hid templates', () => {
+    expect(startRowOffered(base)).toBe(true)
+    expect(startRowOffered({ ...base, canCreate: false })).toBe(false)
+    expect(startRowOffered({ ...base, guest: true })).toBe(false)
+    expect(startRowOffered({ ...base, pickerHidden: true })).toBe(false)
+  })
+
+  it('is exactly what showing the row on the landing view with no search needs, and no more', () => {
+    for (const canCreate of [true, false])
+      for (const guest of [true, false])
+        for (const pickerHidden of [true, false]) {
+          const who = { canCreate, guest, pickerHidden }
+          const landing = { ...who, section: { kind: 'recent' } as const, searching: false }
+          expect(showStartRow(landing), JSON.stringify(who)).toBe(startRowOffered(who))
+          // a search or another view hides it for now, for everybody
+          expect(showStartRow({ ...landing, searching: true })).toBe(false)
+          expect(showStartRow({ ...landing, section: { kind: 'trash' } })).toBe(false)
+        }
   })
 })
 
@@ -207,10 +238,8 @@ describe('the workspace menu: where the Internal only control went', () => {
   it('shows the shield on the tile while the workspace is internal only, and not otherwise', () => {
     const on = menu({ workspaces: one, internal: settings({ workspace: true }) })
     expect(on).toContain('data-testid="workspace-internal-badge"')
-    expect(on).toContain('aria-label="Workspace menu for Dev Studio, internal only"')
     const off = menu({ workspaces: one, internal: settings({ workspace: false }) })
     expect(off).not.toContain('workspace-internal-badge')
-    expect(off).toContain('aria-label="Workspace menu for Dev Studio"')
     // the badge is on the tile even while the menu is closed, and a project's switch does not raise it
     expect(
       menu({
@@ -218,6 +247,21 @@ describe('the workspace menu: where the Internal only control went', () => {
         internal: settings({ projects: [{ projectId: 'prj_a', internalOnly: true }] }),
       }),
     ).not.toContain('workspace-internal-badge')
+  })
+
+  it('names the tile button by the words it shows, the shield included (label in name)', () => {
+    const buttonOf = (html: string) => html.slice(html.indexOf('<button'), html.indexOf('</button>'))
+    const on = buttonOf(menu({ workspaces: one, internal: settings({ workspace: true }) }))
+    // no aria-label that replaces the visible words: the name is what is on the tile
+    expect(on).not.toMatch(/^<button[^>]*aria-label=/)
+    expect(on).toContain('Dev Studio')
+    expect(on).toContain('Workspace · Owner')
+    expect(on).toMatch(/role="img"[^>]*aria-label="Internal only"/)
+    const off = buttonOf(menu({ workspaces: one, internal: settings({ workspace: false }) }))
+    expect(off).not.toMatch(/^<button[^>]*aria-label=/)
+    expect(off).not.toContain('Internal only')
+    // what the button opens is still said, as its description
+    expect(off).toMatch(/^<button[^>]*title="Workspace menu"/)
   })
 
   it('lists the other workspaces beside the control, and keeps a lone workspace a plain tile', () => {

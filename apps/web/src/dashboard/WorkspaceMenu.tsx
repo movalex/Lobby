@@ -69,8 +69,10 @@ export function WorkspaceMenu({
   const showInternal = internalOnlyShown(internal.settings, projects)
   const internalOn = internal.settings?.workspace === true
   const [open, setOpen] = useState(defaultOpen)
+  const [shownAt, setShownAt] = useState(0) // requests honoured so far (see the focus effect below)
   const panelId = useId()
   const button = useRef<HTMLButtonElement>(null)
+  const wrap = useRef<HTMLDivElement>(null)
   // the What's new card's "Try it" asks for the panel (a request made before this mounted is not replayed)
   const asked = useValue(workspaceMenuRequests)
   const seen = useRef(asked)
@@ -78,17 +80,27 @@ export function WorkspaceMenu({
   useEffect(() => {
     if (asked === seen.current) return
     seen.current = asked
-    if (hasMenu) setOpen(true)
+    if (!hasMenu) return
+    setOpen(true)
+    setShownAt((n) => n + 1)
   }, [asked, hasMenu])
+  // The person asked to be shown it: the keyboard goes to the tile (which also scrolls it into view), so Escape
+  // closes the panel again. After the render that opened it: on a phone the folded sidebar (Sidebar.tsx) opens
+  // in the same batch, and a tile inside a folded menu cannot take the focus before that.
+  useEffect(() => {
+    if (shownAt > 0) button.current?.focus()
+  }, [shownAt])
 
   useEffect(() => {
     if (!open) return
-    // Escape closes the panel and gives the keyboard back to the tile. Capture: it runs before the folded
-    // sidebar's own Escape (Sidebar.tsx), which would close the whole menu. A dialog opened from the panel
-    // (the outside access review) keeps its own Escape.
+    // Escape closes the panel and gives the keyboard back to the tile, while the focus is in the menu (or
+    // nowhere: on the page itself). Capture: it runs before the folded sidebar's own Escape (Sidebar.tsx),
+    // which would close the whole menu. A dialog opened from the panel (the outside access review) keeps its
+    // own Escape, and so does a field or popup elsewhere on the page: Escape in the search box is not for us.
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return
       if (e.target instanceof Element && e.target.closest('dialog')) return
+      if (e.target instanceof Node && e.target !== document.body && !wrap.current?.contains(e.target)) return
       e.preventDefault()
       setOpen(false)
       button.current?.focus()
@@ -122,7 +134,7 @@ export function WorkspaceMenu({
   }
 
   return (
-    <div className="dr-wsmenu-wrap">
+    <div ref={wrap} className="dr-wsmenu-wrap">
       <button
         ref={button}
         type="button"
@@ -130,7 +142,6 @@ export function WorkspaceMenu({
         data-testid="workspace-switcher"
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}
-        aria-label={`Workspace menu for ${workspace.name}${internalOn ? ', internal only' : ''}`}
         title="Workspace menu"
         onClick={() => setOpen((o) => !o)}
       >

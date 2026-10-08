@@ -12,6 +12,7 @@ import { readWhatsNewDismissed, writeWhatsNewDismissed } from './prefs.ts'
 import { byTestId, fire, textOf } from './test-tree.ts'
 import { WhatsNewCard } from './WhatsNew.tsx'
 import {
+  planBoardTry,
   showWhatsNew,
   type TryAction,
   WHATS_NEW_ITEMS,
@@ -21,7 +22,10 @@ import {
   whatsNewFor,
 } from './whats-new.ts'
 
-const creator = whatsNewFor({ canCreate: true, inWorkspace: true })
+// the people the card is for, in the terms the dashboard computes them
+const ownerCreator = { canCreate: true, startRow: true, internalOnly: true }
+const creator = whatsNewFor(ownerCreator)
+const ids = (who: Parameters<typeof whatsNewFor>[0]) => whatsNewFor(who).map((i) => i.id)
 
 describe('the card’s items', () => {
   it('are three to five for a creator, each with a title, a sentence and a unique id', () => {
@@ -37,17 +41,47 @@ describe('the card’s items', () => {
   })
 
   it('go to something: each "Try it" is one of the dashboard’s four places', () => {
-    const places: readonly TryAction[] = ['start-row', 'templates', 'tour', 'workspace-menu']
+    const places: readonly TryAction[] = ['start-row', 'templates', 'board', 'workspace-menu']
     for (const i of WHATS_NEW_ITEMS) if (i.tryIt) expect(places, i.id).toContain(i.tryIt)
     expect(WHATS_NEW_ITEMS.filter((i) => i.tryIt).length).toBeGreaterThanOrEqual(3)
   })
 
   it('show a person only what is true for them', () => {
-    const member = whatsNewFor({ canCreate: false, inWorkspace: true }).map((i) => i.id)
-    expect(member).toEqual(['workspace-menu', 'phones'])
-    const outsider = whatsNewFor({ canCreate: false, inWorkspace: false }).map((i) => i.id)
-    expect(outsider).toEqual(['phones'])
+    // an owner or admin who can create has all of it
     expect(creator.map((i) => i.id)).toEqual(WHATS_NEW_ITEMS.map((i) => i.id))
+    // an outside account, or anyone who can neither create nor open the Internal only control: only the phones
+    expect(ids({ canCreate: false, startRow: false, internalOnly: false })).toEqual(['phones'])
+  })
+
+  it('does not send a plain member to an Internal only control that is not there (K4-5 review)', () => {
+    // a creator who is a plain member: the switch is off and they are not an owner or admin, so the
+    // workspace tile has no control to point at (a lone workspace is not even a menu)
+    const member = { canCreate: true, startRow: true, internalOnly: false }
+    expect(ids(member)).toEqual(['start-row', 'agency-templates', 'calmer-top-bar', 'phones'])
+    expect(ids(member)).not.toContain('workspace-menu')
+    // the same person once an owner turns it on: the menu shows them the state, so the item is true
+    expect(ids({ ...member, internalOnly: true })).toContain('workspace-menu')
+    // and a member who cannot create gets it too while it is on, never while it is off
+    expect(ids({ canCreate: false, startRow: false, internalOnly: true })).toEqual([
+      'workspace-menu',
+      'phones',
+    ])
+    expect(ids({ canCreate: false, startRow: false, internalOnly: false })).not.toContain('workspace-menu')
+  })
+
+  it('does not talk about the template row to someone who is not offered it (K4-5 review)', () => {
+    // a creator who ticked "Don't show templates on new boards": the picker items stay, the row item goes
+    const spared = { canCreate: true, startRow: false, internalOnly: true }
+    expect(ids(spared)).not.toContain('start-row')
+    expect(ids(spared)).toContain('agency-templates')
+    // and nobody sees a "Try it" whose place is missing for them
+    for (const who of [ownerCreator, spared, { canCreate: false, startRow: false, internalOnly: false }]) {
+      for (const i of whatsNewFor(who)) {
+        if (i.tryIt === 'start-row') expect(who.startRow, i.id).toBe(true)
+        if (i.tryIt === 'workspace-menu') expect(who.internalOnly, i.id).toBe(true)
+        if (i.tryIt === 'templates' || i.tryIt === 'board') expect(who.canCreate, i.id).toBe(true)
+      }
+    }
   })
 
   it('show on the landing view for people with something to read, never to a name-only guest or after dismissal', () => {
@@ -102,6 +136,68 @@ describe('the card', () => {
     expect(dismiss?.props['aria-label']).toBe('Dismiss what’s new')
     fire(dismiss as never)
     expect(calls.onDismiss).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('"Try it" on the board’s top bar leaves nothing behind (K4-5 review)', () => {
+  it('waits for the board list, then opens the board they opened last', () => {
+    expect(planBoardTry({ listReady: false, latestBoardId: null, canCreate: true })).toEqual({ kind: 'wait' })
+    expect(planBoardTry({ listReady: false, latestBoardId: 'b-1', canCreate: true })).toEqual({
+      kind: 'wait',
+    })
+    expect(planBoardTry({ listReady: true, latestBoardId: 'b-1', canCreate: true })).toEqual({
+      kind: 'open',
+      boardId: 'b-1',
+    })
+    // a viewer who cannot create still sees the board they have
+    expect(planBoardTry({ listReady: true, latestBoardId: 'b-1', canCreate: false })).toEqual({
+      kind: 'open',
+      boardId: 'b-1',
+    })
+  })
+
+  it('makes the Lobby tour only for someone with no board at all, and only if they may', () => {
+    expect(planBoardTry({ listReady: true, latestBoardId: null, canCreate: true })).toEqual({
+      kind: 'make-tour',
+    })
+    expect(planBoardTry({ listReady: true, latestBoardId: null, canCreate: false })).toEqual({ kind: 'none' })
+  })
+})
+
+describe('the card while a "Try it" is under way', () => {
+  const enabled = (node: ReturnType<typeof WhatsNewCard>) =>
+    byTestId(node, 'whats-new-try').map((t) => [t.props['data-action'], t.props.disabled === true] as const)
+
+  it('shows "Opening…" on the button in flight and disables every "Try it" until it is done', () => {
+    const busy = WhatsNewCard({ items: creator, pending: 'board', onTry() {}, onTellUs() {}, onDismiss() {} })
+    expect(enabled(busy).every(([, off]) => off)).toBe(true)
+    const buttons = byTestId(busy, 'whats-new-try')
+    const mine = buttons.find((b) => b.props['data-action'] === 'board')
+    expect(textOf(mine)).toBe('Opening…')
+    expect(mine?.props['aria-busy']).toBe(true)
+    // the others keep their words, and tell nobody they are busy
+    const other = buttons.find((b) => b.props['data-action'] === 'templates')
+    expect(textOf(other)).toBe('Try it')
+    expect(other?.props['aria-busy']).toBeUndefined()
+  })
+
+  it('disables only the "Try it" whose place is not ready yet', () => {
+    const waiting = WhatsNewCard({
+      items: creator,
+      unavailable: ['board'],
+      onTry() {},
+      onTellUs() {},
+      onDismiss() {},
+    })
+    expect(enabled(waiting)).toEqual([
+      ['start-row', false],
+      ['templates', false],
+      ['board', true],
+      ['workspace-menu', false],
+    ])
+    // nothing pending, nothing unavailable: all enabled
+    const idle = WhatsNewCard({ items: creator, onTry() {}, onTellUs() {}, onDismiss() {} })
+    expect(enabled(idle).every(([, off]) => !off)).toBe(true)
   })
 })
 
