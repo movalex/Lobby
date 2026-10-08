@@ -197,7 +197,13 @@ export interface DotView {
 }
 
 const DANGER: ReadonlySet<DisplayState> = new Set<DisplayState>(['rejected', 'error'])
-const WARN: ReadonlySet<DisplayState> = new Set<DisplayState>(['offline', 'offline-pending', 'retrying'])
+// K.1 (follow-up 6): 'unsupported' (a protocol this build cannot read: nothing is confirmed saved) warns, never green
+const WARN: ReadonlySet<DisplayState> = new Set<DisplayState>([
+  'offline',
+  'offline-pending',
+  'retrying',
+  'unsupported',
+])
 const BUSY: ReadonlySet<DisplayState> = new Set<DisplayState>(['connecting', 'saving'])
 
 const sentence = (s: string) => {

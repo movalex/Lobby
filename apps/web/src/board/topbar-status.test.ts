@@ -62,6 +62,15 @@ describe('the status dot (K2-5)', () => {
     expect(html).toMatch(/aria-live="polite"[^>]*data-testid="save-announcer"/)
   })
 
+  it('K.1 (follow-up 6): the unsupported save state is a warning, never green, and says its words', () => {
+    const html = dot(view('unsupported'), 'online')
+    expect(html).toContain('data-tone="warn"')
+    expect(html).not.toContain('data-tone="ok"')
+    expect(html).toMatch(/class="dr-status__label"[^>]*>Live</)
+    expect(titleOf(html)).toMatch(/cannot confirm that your changes are saved/)
+    expect(textOf(html, 'save-status')).not.toBe('Saved')
+  })
+
   it('a viewer with the role pill: save-status is hidden and the dot is the connection', () => {
     const html = dot(view('readonly', { readonly: true }), 'online', true)
     expect(html).toMatch(/data-testid="save-status"[^>]*hidden=""/)
