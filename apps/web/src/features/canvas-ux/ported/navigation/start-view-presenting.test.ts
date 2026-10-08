@@ -158,7 +158,9 @@ describe('the first view and a presentation that starts at once', () => {
     await vi.advanceTimersByTimeAsync(200)
     expect(await done).toBe('first-frame')
     const first = b.camera()
-    expect(first).toEqual({ x: -100, y: -75, zoom: 1 })
+    // K2-7: the first frame centred in the free canvas under its name (placement.ts startViewCamera: 32 px of
+    // room, the frame name's 26 px above it), at 100 %
+    expect(first).toEqual({ x: -100, y: -88, zoom: 1 })
     page.frame()
     // the dock rail appears and the canvas resizes: the first view is put back, once per resize
     const before = b.log.length

@@ -664,6 +664,13 @@ const nextArrowKind = (styles: { readonly arrowKind?: unknown }): ArrowKind | un
     ? styles.arrowKind
     : undefined
 
+/** K2-7: what an opacity-only selection is, in words ("Image", "3 images", "File", "2 files"). */
+export function summaryKind(els: readonly CanvasElement[]): string {
+  const images = els.every((e) => items.itemKindOf(e) === 'image')
+  const word = images ? 'image' : 'file'
+  return els.length === 1 ? `${word[0]?.toUpperCase()}${word.slice(1)}` : `${els.length} ${word}s`
+}
+
 export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
   const { canvas } = ctx
   const readOnly = useValue('cux-readonly', () => canvas.readOnly(), [canvas])
@@ -674,6 +681,20 @@ export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
     [canvas, t],
   )
   if (!t) return null
+  // K2-7 (UXD-09): images (and file cards) have opacity only: a single-row summary instead of a card around one
+  // slider
+  if (!t.next && t.els.length > 0 && t.els.every((e) => kindOf(e) === 'image'))
+    return (
+      <section
+        className="cux-style cux-style--summary"
+        aria-label="Styles"
+        data-testid="style.panel"
+        data-summary="image"
+      >
+        <span className="cux-style__summary-kind">{summaryKind(t.els)}</span>
+        <OpacityPicker canvas={canvas} t={t} value={styles.opacity as number | 'mixed' | undefined} />
+      </section>
+    )
   // the highlighter's next stroke: its colour only (tldraw's highlighter has colour and size; the size here
   // is the highlighter's one width)
   if (t.next && has(t, 'highlight'))

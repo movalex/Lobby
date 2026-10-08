@@ -10,7 +10,7 @@ import {
   items,
   type LobbyCanvas,
 } from '../../../../canvas/api/index.ts'
-import { frameCamera, type Insets } from '../../placement.ts'
+import { FRAME_HEADING, frameCamera, type Insets, startViewCamera } from '../../placement.ts'
 import {
   PHONE_CANVAS_MAX_W,
   PHONE_FRAME_INSET,
@@ -80,7 +80,8 @@ export function viewportHasContent(canvas: LobbyCanvas, view: Bounds = viewOf(ca
  */
 export function uiInsets(canvas: LobbyCanvas): Insets {
   const insets: Insets = { top: 0, right: 0, bottom: 0, left: 0 }
-  const root = canvas.container()
+  // a canvas without a page around it (a unit test's): no chrome to measure
+  const root = typeof canvas.container === 'function' ? canvas.container() : null
   if (!root) return insets
   const c = root.getBoundingClientRect()
   const rect = (el: Element | null) => {
@@ -165,7 +166,32 @@ export function showFrame(canvas: LobbyCanvas, id: string, animate: boolean): bo
       return true
     }
   }
+  // K2-7 (UXD-11): clear of the chrome (the board menu button, the toolbar, the zoom chip) plus 32 px, its name
+  // above it in view
+  if (fitClearOfChrome(canvas, { x: b.x, y: b.y, w: b.width, h: b.height }, FRAME_HEADING, move)) return true
   canvas.viewport.zoomTo(b, { maxZoom: 1, inset: (onPhone(canvas) ? PHONE_FRAME_INSET : 48) / 2, ...move })
+  return true
+}
+
+/**
+ * K2-7 (UXD-11): shows `rect` centred in the part of the canvas the chrome leaves free, START_VIEW_PAD clear of
+ * it (placement.ts `startViewCamera`), never above 100%. False when the free area is too small (a plain fit
+ * then).
+ */
+function fitClearOfChrome(
+  canvas: LobbyCanvas,
+  rect: { x: number; y: number; w: number; h: number },
+  heading: number,
+  move: CameraMove,
+): boolean {
+  const limits = canvas.viewport.limits()
+  const camera = startViewCamera(rect, screenSize(canvas), uiInsets(canvas), {
+    heading,
+    minZoom: limits.min,
+    maxZoom: Math.min(1, limits.max),
+  })
+  if (!camera) return false
+  canvas.viewport.set(fromTldrawCamera(camera), move)
   return true
 }
 
@@ -191,6 +217,10 @@ export function fitContent(canvas: LobbyCanvas, animate = false): 'fit' | 'first
     const frame = firstFrame(canvas)
     if (frame && showFrame(canvas, frame, animate)) return 'first-frame'
   }
+  // K2-7 (UXD-11): the content clear of the chrome plus 32 px (frame names above it in view), else a plain fit
+  const hasFrame = canvas.items().some((e) => e.type === 'frame' && !e.isDeleted && !canvas.isHidden(e.id))
+  const box = { x: bounds.x, y: bounds.y, w: bounds.width, h: bounds.height }
+  if (fitClearOfChrome(canvas, box, hasFrame ? FRAME_HEADING : 0, motion(animate))) return 'fit'
   canvas.viewport.zoomTo(bounds, { maxZoom: 1, ...(animate ? { animate: true } : {}) })
   return 'fit'
 }

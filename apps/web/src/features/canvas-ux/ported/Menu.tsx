@@ -260,6 +260,8 @@ function MenuItem({
             }
           }}
         >
+          {/* K2-7 (UXD-18): the same leading gutter as every other row, so all labels line up */}
+          <span className="cux-menu__check" aria-hidden="true" />
           <span className="cux-menu__label">{row.label}</span>
           <ChevronRightIcon />
         </button>

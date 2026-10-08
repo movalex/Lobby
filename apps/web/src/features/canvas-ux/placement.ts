@@ -196,3 +196,39 @@ export function frameCamera(
   const sy = insets.top + pad + heading + freeH / 2
   return { x: sx / z - (bounds.x + bounds.w / 2), y: sy / z - (bounds.y + bounds.h / 2), z }
 }
+
+/** K2-7 (UXD-11): room the first view keeps between the content and the chrome around it (screen px). */
+export const START_VIEW_PAD = 32
+/** K2-7: the room a frame's name takes above the frame on screen (the engine draws it 6 px above, ~18 px tall). */
+export const FRAME_HEADING = 26
+
+/**
+ * K2-7 (UXD-11): the first view of a board (and "Go to start view" without one): `bounds` (the content or its
+ * first frame) centred in the part of the canvas the chrome leaves free (`insets`: the board menu button at the
+ * top, the toolbar and the zoom chip at the bottom, a dock panel over the canvas), START_VIEW_PAD clear of it,
+ * with room for frame names above (`heading`), never zoomed in past `maxZoom`. A tldraw-style camera
+ * (`frameCamera`'s), or null when the free area is too small (the caller falls back to a plain fit).
+ */
+export function startViewCamera(
+  bounds: Rect,
+  viewport: { w: number; h: number },
+  insets: Insets,
+  opts: { heading?: number; minZoom?: number; maxZoom?: number } = {},
+): { x: number; y: number; z: number } | null {
+  return frameCamera(bounds, viewport, insets, {
+    heading: opts.heading ?? 0,
+    pad: START_VIEW_PAD,
+    ...(opts.minZoom !== undefined ? { minZoom: opts.minZoom } : {}),
+    maxZoom: opts.maxZoom ?? 1,
+  })
+}
+
+/** Where `bounds` lands on screen under a tldraw-style camera (screen = (scene + camera) * z). Pure. */
+export function onScreen(bounds: Rect, camera: { x: number; y: number; z: number }): Rect {
+  return {
+    x: (bounds.x + camera.x) * camera.z,
+    y: (bounds.y + camera.y) * camera.z,
+    w: bounds.w * camera.z,
+    h: bounds.h * camera.z,
+  }
+}

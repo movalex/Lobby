@@ -29,6 +29,47 @@ export function selectionBarLeft(cx: number, halfWidth: number, vw: number): num
   return Math.max(halfWidth, Math.min(vw - halfWidth, cx))
 }
 
+/** A box in the canvas's overlay coordinates (px from its top-left). */
+export interface OverlayRect {
+  readonly x: number
+  readonly y: number
+  readonly w: number
+  readonly h: number
+}
+
+const overlaps = (a: OverlayRect, b: OverlayRect) =>
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+
+/** Space kept between the selection bar and the style panel it steps aside for (px). */
+export const SELBAR_PANEL_GAP = 8
+
+/**
+ * K2-7 (UXD-09): where the selection's quick actions (this bar: link, lock, tags, AI…) go. Centred on the
+ * selection at `top` (under it, or above it near the bottom), inside the canvas; when that box would cover the
+ * style panel (`panel`, at the top right), the bar flips to the left of the panel, or, with no room there,
+ * below it. `half` includes the bar's edge margin. Returns the bar's centre x and top. Pure.
+ */
+export function placeSelectionBar(o: {
+  readonly cx: number
+  readonly top: number
+  readonly half: number
+  readonly h: number
+  readonly vw: number
+  readonly vh: number
+  readonly panel: OverlayRect | null
+}): { left: number; top: number; side: 'under' | 'left' | 'below' } {
+  const left = selectionBarLeft(o.cx, o.half, o.vw)
+  const box = (l: number, t: number): OverlayRect => ({ x: l - o.half, y: t, w: o.half * 2, h: o.h })
+  const p = o.panel
+  if (!p || p.w <= 0 || p.h <= 0 || !overlaps(box(left, o.top), p)) return { left, top: o.top, side: 'under' }
+  // to the left of the panel, at the same height, when the bar fits between the canvas edge and the panel
+  const leftOf = p.x - SELBAR_PANEL_GAP - o.half
+  if (leftOf - o.half >= 0) return { left: Math.min(left, leftOf), top: o.top, side: 'left' }
+  // else under the panel, inside the canvas
+  const below = Math.min(p.y + p.h + SELBAR_PANEL_GAP, Math.max(0, o.vh - o.h))
+  return { left, top: below, side: 'below' }
+}
+
 export function BarButton(props: {
   label: string
   testId?: string
@@ -178,12 +219,32 @@ export function SelectionBar({ ctx }: { ctx: CanvasFeatureContext }) {
     return { sel: ids.join(' '), ids, cx: bottom.x, vw: vp.width, vh: vp.height, y }
   }, [canvas])
   const [size, setSize] = useState({ half: 150, h: 38 })
+  // K2-7: the style panel's box (it opens for the same selection, at the top right), to step aside for it
+  const [panel, setPanel] = useState<OverlayRect | null>(null)
   useLayoutEffect(() => {
     const el = ref.current
     if (!el?.offsetWidth) return
     const half = Math.ceil(el.offsetWidth / 2) + SELBAR_EDGE
     const h = el.offsetHeight
     if (half !== size.half || h !== size.h) setSize({ half, h })
+    const origin = el.offsetParent?.getBoundingClientRect()
+    const styles = el.ownerDocument.querySelector(
+      '[data-lobby-slot="stylePanel"] [data-testid="style.panel"]',
+    )
+    const r = styles?.getBoundingClientRect()
+    const next =
+      origin && r && r.width > 0 && r.height > 0
+        ? { x: r.left - origin.left, y: r.top - origin.top, w: r.width, h: r.height }
+        : null
+    const same =
+      next === panel ||
+      (!!next &&
+        !!panel &&
+        next.x === panel.x &&
+        next.y === panel.y &&
+        next.w === panel.w &&
+        next.h === panel.h)
+    if (!same) setPanel(next)
   })
   const [moreOpen, setMoreOpen] = useState(false)
   const moreId = useId()
@@ -206,8 +267,16 @@ export function SelectionBar({ ctx }: { ctx: CanvasFeatureContext }) {
   if (!items.length) return null
   const main = items.filter((i) => i.order < ARRANGE_ROW_FROM)
   const arrange = items.filter((i) => i.order >= ARRANGE_ROW_FROM)
-  const left = selectionBarLeft(view.cx, size.half, view.vw)
-  const top = size.h > 44 ? Math.max(60, Math.min(view.y, view.vh - 100 - size.h)) : view.y
+  const under = size.h > 44 ? Math.max(60, Math.min(view.y, view.vh - 100 - size.h)) : view.y
+  const { left, top, side } = placeSelectionBar({
+    cx: view.cx,
+    top: under,
+    half: size.half,
+    h: size.h,
+    vw: view.vw,
+    vh: view.vh,
+    panel,
+  })
   const compact = view.vw < SELBAR_COMPACT_BELOW
   const render = (list: readonly SelectionBarItemSpec[]) =>
     list.map((i) => <i.component key={i.id} ctx={ctx} selection={view.ids} />)
@@ -219,6 +288,7 @@ export function SelectionBar({ ctx }: { ctx: CanvasFeatureContext }) {
       aria-label="Selection"
       data-testid="selection-bar"
       data-compact={compact ? 'true' : undefined}
+      data-side={side}
       style={{ left, top }}
       onKeyDown={(e) => {
         if (e.key === 'Escape') {
