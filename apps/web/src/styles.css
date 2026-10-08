@@ -2366,7 +2366,7 @@ html[data-dr-presenting] .dr-board__account {
     bottom: var(--dr-kb-inset, 0px);
   }
 }
-.dr-a11y-sheet-root > .dr-a11y-sheet {
+[data-lobby-slot="phoneSheet"] [data-testid="phone-sheet"] {
   bottom: var(--dr-kb-inset, 0px);
   max-height: calc(60vh - var(--dr-kb-inset, 0px));
 }
@@ -2421,7 +2421,9 @@ html[data-dr-presenting] .dr-phone-hint {
    be clipped): it gets the height itself, transparent while nobody hovers it. Under 360 px there is no room
    for the spacing, and the bar keeps its compact rules above (every control at least 24 px). The class
    contract with board/TopBarFrame.tsx, the people and comments features (dr-iconbtn, dr-topbar__home,
-   dr-topbar__share, dr-pill--role) and canvas-ux's quick actions (cux-quick__btn): k5-phone.spec.ts K5-4. */
+   dr-topbar__share, dr-pill--role) and canvas-ux's quick actions (the toolbar slot's "quick-actions" bar,
+   by attribute: this shared stylesheet does not name a ported stylesheet's classes, css-scope.test.ts):
+   k5-phone.spec.ts K5-4. */
 @media (pointer: coarse) and (min-width: 360px) {
   .dr-topbar:is([data-width="phone"], [data-width="tablet"]) {
     gap: 2px;
@@ -2465,15 +2467,15 @@ html[data-dr-presenting] .dr-phone-hint {
   /* the quick actions above the phone toolbar: 36 px buttons, 2 px apart in their bar, become 40 px squares
      side by side, the bar's own side padding in them (the bar is 8 px longer, as tall as before: at 360 px it
      still ends clear of "All tools") */
-  .cux-quick--toolbar > .cux-quick__bar {
+  [data-lobby-slot="toolbar"] [data-testid="quick-actions"] {
     gap: 0;
     padding-inline: 0;
   }
-  .cux-quick--toolbar > .cux-quick__bar > .cux-quick__btn {
+  [data-lobby-slot="toolbar"] [data-testid="quick-actions"] > button {
     position: relative;
     margin-inline: 2px;
   }
-  .cux-quick--toolbar > .cux-quick__bar > .cux-quick__btn::after {
+  [data-lobby-slot="toolbar"] [data-testid="quick-actions"] > button::after {
     content: "";
     position: absolute;
     top: min(0px, calc((100% - 40px) / 2));
