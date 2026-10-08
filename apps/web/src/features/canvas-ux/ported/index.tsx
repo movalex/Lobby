@@ -29,6 +29,7 @@ import { installCanvasEvents } from './canvas-events.ts'
 import { installChromeHistoryKeys } from './chrome-keys.ts'
 import { COMMANDS } from './commands.ts'
 import { applyFontDefault, applySnapDefault, installShapeFillDefault, startToolFor } from './defaults.ts'
+import { EmptyBoardGrid, EmptyBoardHint } from './EmptyBoardHint.tsx'
 import { exportGate, installCopyGuard, syncExportGate } from './export-gate.ts'
 import { FrameRename } from './FrameRename.tsx'
 import { KEYS } from './keys.ts'
@@ -115,6 +116,10 @@ export const feature: CanvasFeature = {
   mainMenu: MAIN_MENU_ENTRIES,
   selectionBar: SELECTION_BAR_ITEMS,
   overlays: [
+    // K2-4: the empty board's dot grid (under everything) and its "start here" card; neither takes a pointer
+    // event (the card's buttons do, through canvas-ux.css)
+    { id: 'canvas-ux.empty-grid', layer: 'scene', order: -100, pointer: 'none', component: EmptyBoardGrid },
+    { id: 'canvas-ux.empty-hint', layer: 'screen', order: 2, pointer: 'none', component: EmptyBoardHint },
     { id: 'canvas-ux.locked-frames', layer: 'scene', order: 5, component: LockedFrameBadges },
     { id: 'canvas-ux.frame-rename', layer: 'scene', order: 40, pointer: 'auto', component: FrameRename },
     {

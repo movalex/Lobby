@@ -518,3 +518,91 @@
     transform: none;
   }
 }
+
+/* ---- K2-4: the empty board (ported/EmptyBoardHint.tsx) ------------------------------------------------
+   A dot grid under every other layer and a "start here" card in the middle of the view, while the board has
+   nothing on it. Neither takes a pointer event: a double-click on the card's words still reaches the board;
+   only its buttons take clicks. The dots' step and offset follow the camera (inline background-size and
+   -position). */
+.cux-empty-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: radial-gradient(
+    circle,
+    var(--cux-grid-dot, rgb(27 35 48 / 22%)) 1.1px,
+    transparent 1.6px
+  );
+  opacity: 0.9;
+  animation: cux-empty-fade 240ms ease-out both;
+}
+:root[data-theme="dark"] .cux-empty-grid {
+  --cux-grid-dot: rgb(235 232 225 / 16%);
+}
+.cux-empty-hint {
+  position: absolute;
+  left: 50%;
+  /* above the middle of the view: a click or a double-click in the middle reaches the board, not a button */
+  top: 28%;
+  transform: translate(-50%, -50%);
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(440px, calc(100% - 32px));
+  padding: 18px 22px 16px;
+  border: 1px solid var(--dr-line);
+  border-radius: 14px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow-pop);
+  color: var(--dr-ink);
+  font-family: var(--dr-font);
+  text-align: center;
+  pointer-events: none;
+  animation: cux-empty-fade 240ms ease-out both;
+}
+.cux-empty-hint__title {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.cux-empty-hint__line {
+  margin: 0;
+  color: var(--dr-ink-2);
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+.cux-empty-hint[data-readonly="true"] {
+  padding: 12px 18px;
+}
+.cux-empty-hint__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+/* the card's only pointer-active parts */
+.cux-empty-hint__btn {
+  pointer-events: auto;
+}
+.cux-empty-hint__btn:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 2px;
+}
+@keyframes cux-empty-fade {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cux-empty-grid,
+  .cux-empty-hint {
+    animation: none;
+  }
+}
+@media (max-width: 600px) {
+  .cux-empty-hint {
+    top: 24%;
+    padding: 14px 16px 12px;
+  }
+}
