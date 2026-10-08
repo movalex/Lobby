@@ -4,7 +4,7 @@
 // callers share one read; a sharing change, a policy event and a stream resync each read again exactly once;
 // another board id is its own entry; a board nobody keeps current any more is read again by the next session.
 import type { ExportPolicyState } from '@draftroom/contracts'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { ApiClient } from '../../../api/client.ts'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { downloadsAllowed, syncExportPolicy as syncMediaPolicy } from '../../../file-card/ported/downloads.ts'
@@ -15,6 +15,7 @@ import { watchExportPolicy } from '../../mindmap/ported/export-gate.ts'
 import {
   exportStateOf,
   getExportPolicy,
+  HELLO_WAIT_MS,
   invalidateExportPolicy,
   refreshExportPolicy,
   syncExportPolicy,
@@ -155,6 +156,57 @@ describe('the shared export-policy resource', () => {
     await tick()
     expect(exportStateOf(boardId).policy.get()).toBe('editors')
     for (const stop of stops) stop()
+  })
+
+  it('the gates first, on a stream still connecting: no read until its hello, which is the one read', async () => {
+    const boardId = 'b-res-patient'
+    const { events, hello } = fakeEvents(false)
+    const { api, count, answer } = fakeApi()
+    const ctx = featureCtx(boardId, api, events)
+    // the board's features install first (their gates), then the sharing feature's overlay mounts
+    const stops = [
+      syncExportGate(ctx),
+      watchExportPolicy(ctx).dispose,
+      syncMediaPolicy(ctx),
+      syncExportPolicy({ boardId, api, events }),
+    ]
+    expect(count(boardId)).toBe(0)
+    hello()
+    expect(count(boardId)).toBe(1)
+    answer(0, { exportPolicy: 'editors', canExport: false })
+    await tick()
+    expect(exportStateOf(boardId).policy.get()).toBe('editors')
+    expect(exportAllowedOnBoard(boardId, 'viewer', false)).toBe(false)
+    for (const stop of stops) stop()
+  })
+
+  it('the gates first, and the hello is late: one read after HELLO_WAIT_MS, and the hello reads again', async () => {
+    vi.useFakeTimers()
+    try {
+      const boardId = 'b-res-late'
+      const { events, hello } = fakeEvents(false)
+      const { api, count, answer } = fakeApi()
+      const ctx = featureCtx(boardId, api, events)
+      const stop = syncExportGate(ctx)
+      vi.advanceTimersByTime(HELLO_WAIT_MS - 1)
+      expect(count(boardId)).toBe(0)
+      vi.advanceTimersByTime(1)
+      expect(count(boardId)).toBe(1)
+      answer(0, { exportPolicy: 'editors' })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(exportStateOf(boardId).policy.get()).toBe('editors')
+      hello()
+      expect(count(boardId)).toBe(2)
+      // detached before its timer: nothing is read
+      const other = fakeEvents(false)
+      const stopOther = syncExportGate(featureCtx('b-res-gone', api, other.events))
+      stopOther()
+      vi.advanceTimersByTime(HELLO_WAIT_MS * 2)
+      expect(count('b-res-gone')).toBe(0)
+      stop()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('invalidation reads again exactly once: a sharing change, a policy event, a stream resync', async () => {

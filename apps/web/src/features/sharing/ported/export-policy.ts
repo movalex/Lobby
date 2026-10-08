@@ -9,9 +9,13 @@
 // queued on a 0.1-CPU Postgres inside the open burst). Now every reader attaches to this resource
 // (`syncExportPolicy` / `attachExportPolicy`, reference-counted per event stream) and reads its atoms:
 //
-//   - the first answer: one read when the first reader attaches to a board's event stream (a stream that is
-//     already connected answers `onResync` at once, and that is the read; one still connecting gets its read
-//     at once and another after its first hello, as every reader did before);
+//   - the first answer: one read when the first reader attaches to a board's event stream. A stream that is
+//     already connected answers `onResync` at once, and that is the read. For one still connecting, the
+//     gates (`attachExportPolicy`: canvas-ux, the mind map, the file cards, the History panel; installed with
+//     the board's features, before the sharing feature's overlay mounts) wait up to HELLO_WAIT_MS for its
+//     hello, which is then the one read (a read before it would have to be repeated after it); the sharing
+//     feature's own sync (`syncExportPolicy`, when it is the first reader: the Share dialog's store on its
+//     own) reads at once and again after the hello, as before;
 //   - every `export-control.policy` event applies at once (the event wins over an answer to a request sent
 //     before it) and invalidates: one read after it, for the server's `canExport` and `policySet`;
 //   - every stream (re)connect invalidates (events are hints; a missed one is repaired by the resync);
@@ -52,6 +56,9 @@ import {
 } from '../export-rules.ts'
 
 export { EXPORT_OFF_TEXT, exportPolicySentence, notifyExportOff } from '../export-rules.ts'
+
+/** How long a gate that attaches to a stream still connecting waits for its hello before the first read. */
+export const HELLO_WAIT_MS = 1_500
 
 export interface ExportState {
   /** null until the first answer (treated like 'everyone') */
@@ -232,8 +239,11 @@ export async function saveExportPolicy(
   return saved
 }
 
-/** Installs the resource's listeners on one event stream (the first reader of that stream does). */
-function listen(e: Entry, events: BoardEvents): () => void {
+/**
+ * Installs the resource's listeners on one event stream (the first reader of that stream does). `patient`:
+ * a stream that is not connected yet is given HELLO_WAIT_MS to say hello before the first read.
+ */
+function listen(e: Entry, events: BoardEvents, patient: boolean): () => void {
   const offEvent = events.on(EXPORT_CONTROL_EVENTS.policy, (data) => {
     const parsed = ExportPolicyEvent.safeParse(data)
     if (!parsed.success) return
@@ -243,24 +253,34 @@ function listen(e: Entry, events: BoardEvents): () => void {
     invalidate(e) // `canExport` follows the policy: read it once
   })
   // onResync runs at once when the stream is already connected (that is the first read), and after every
-  // reconnect; a stream that is still connecting gets its first read now
+  // reconnect
   let resynced = false
+  let wait: ReturnType<typeof setTimeout> | null = null
   const offResync = events.onResync(() => {
     resynced = true
+    if (wait !== null) clearTimeout(wait)
+    wait = null
     invalidate(e)
   })
-  if (!resynced) invalidate(e)
+  if (!resynced) {
+    if (!patient) invalidate(e)
+    else
+      wait = setTimeout(() => {
+        wait = null
+        // the hello is late (or the stream is broken): read without it; the hello reads again when it comes
+        if (!resynced && !e.fresh) invalidate(e)
+      }, HELLO_WAIT_MS)
+  }
   return () => {
+    if (wait !== null) clearTimeout(wait)
     offEvent()
     offResync()
   }
 }
 
-/**
- * Keeps `boardId`'s policy current while the caller is mounted (see the header): attaches to the shared
- * resource for `events`, the first reader of a stream installing its listeners. Returns the detach.
- */
-export function syncExportPolicy(opts: { boardId: string; api: ApiClient; events: BoardEvents }): () => void {
+type AttachOptions = { boardId: string; api: ApiClient; events: BoardEvents }
+
+function attach(opts: AttachOptions, patient: boolean): () => void {
   const e = entry(opts.boardId)
   e.api = opts.api
   let a = e.live.get(opts.events)
@@ -270,7 +290,7 @@ export function syncExportPolicy(opts: { boardId: string; api: ApiClient; events
     const holder: { detach: () => void } = { detach: () => {} }
     a = { refs: 1, detach: () => holder.detach() }
     e.live.set(opts.events, a)
-    holder.detach = listen(e, opts.events)
+    holder.detach = listen(e, opts.events, patient)
   }
   const mine = a
   let done = false
@@ -286,5 +306,20 @@ export function syncExportPolicy(opts: { boardId: string; api: ApiClient; events
   }
 }
 
-/** The name the readers outside the sharing feature use for `syncExportPolicy`. */
-export const attachExportPolicy = syncExportPolicy
+/**
+ * The sharing feature's sync (its overlay, for the whole board session): keeps `boardId`'s policy current
+ * while mounted. As the first reader of a stream that is still connecting it reads at once (and again
+ * after the hello); after the gates (`attachExportPolicy`) it reads nothing more. Returns the detach.
+ */
+export function syncExportPolicy(opts: AttachOptions): () => void {
+  return attach(opts, false)
+}
+
+/**
+ * The gates' attach (canvas-ux, the mind map, the file cards, the History panel): the same shared resource;
+ * as the first reader of a stream that is still connecting, it waits up to HELLO_WAIT_MS for the hello, so
+ * a board open reads the policy once. Returns the detach.
+ */
+export function attachExportPolicy(opts: AttachOptions): () => void {
+  return attach(opts, true)
+}
