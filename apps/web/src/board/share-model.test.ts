@@ -1,21 +1,32 @@
-import { CLERK_TEST_ADDRESS_MESSAGE, DOMAIN_ACCESS_MESSAGES } from '@draftroom/contracts'
+import {
+  CLERK_TEST_ADDRESS_MESSAGE,
+  DOMAIN_ACCESS_MESSAGES,
+  type WorkspaceMember,
+} from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
 import { makeUser, member, wsMember } from '../api/test-fixtures.ts'
 import { REVIEW_LINK_DAY_OPTIONS, REVIEW_LINK_DEFAULT_DAY } from '../features/sharing/model.ts'
 import {
   type AccessDetail,
   ADD_MEMBER_ROLES,
+  ADVANCED_SECTION_TITLE,
   ASK_EMAIL_PROMPT,
   accessSource,
+  advancedSummary,
   CLIENT_LINK_DEFAULTS,
   checkInviteEmail,
   clientLinkHint,
   emailInviteHint,
   emailInviteOutcome,
+  GUESTS_SECTION_TITLE,
   GUESTS_TOGGLE_LABEL,
   grantEditable,
   guestsOptionLabel,
+  guestsSummary,
   guestsToggleSaying,
+  INVITE_IDLE_HINT,
+  inviteHintText,
+  inviteMatches,
   invitePlan,
   inviteRoleOptions,
   isOwnAddress,
@@ -23,15 +34,17 @@ import {
   linkForEmailHint,
   listShowsOwnerNote,
   lockedLinkNote,
+  MAX_INVITE_SUGGESTIONS,
+  memberMatches,
   memberRoleChoices,
   memberRoleEditable,
-  moreWaysSummary,
   OWN_ADDRESS_MESSAGE,
   OWNER_NEEDS_CREATOR,
   OWNER_NEEDS_CREATOR_NOTE,
   type OwnerNoteRow,
   parseInviteTarget,
   pendingInviteLabel,
+  pickedText,
   removalNote,
   removeConfirmText,
   rowNeedsOwnerNote,
@@ -39,6 +52,7 @@ import {
   shareCreatorNote,
   showOwnerNote,
   sortMembers,
+  targetFor,
   UNCONFIRMED_SHARE_NOTE,
   VISIBILITY_OPTIONS,
   visibilityChoices,
@@ -91,15 +105,26 @@ describe('share with a client, workshop link, more ways to share (DANA-03, F3, R
     expect(guestsToggleSaying(false)).toContain('keep their access until the link ends or is revoked')
   })
 
-  it('the collapsed summary names what is inside, or what is open in there', () => {
-    expect(moreWaysSummary({ workshopLinks: 0, unusedInvites: 0 })).toBe(
-      'Workshop link for a live session, invite by email, one-time invite links',
+  it('K5-5: "Guests and clients", collapsed, names what is inside, or what is open in there', () => {
+    expect(GUESTS_SECTION_TITLE).toBe('Guests and clients')
+    expect(guestsSummary({ reviewLinks: 0, workshopLinks: 0, unusedInvites: 0 })).toBe(
+      'Client review link, workshop link for a live session, invite by email, one-time invite links',
     )
-    expect(moreWaysSummary({ workshopLinks: 1, unusedInvites: 0 })).toBe('1 workshop link open')
-    expect(moreWaysSummary({ workshopLinks: 2, unusedInvites: 1 })).toBe(
-      '2 workshop links open · 1 unused invite link',
+    expect(guestsSummary({ reviewLinks: 0, workshopLinks: 1, unusedInvites: 0 })).toBe('1 workshop link open')
+    expect(guestsSummary({ reviewLinks: 1, workshopLinks: 2, unusedInvites: 1 })).toBe(
+      '1 client link open · 2 workshop links open · 1 unused invite link',
     )
-    expect(moreWaysSummary({ workshopLinks: 0, unusedInvites: 3 })).toBe('3 unused invite links')
+    expect(guestsSummary({ reviewLinks: 2, workshopLinks: 0, unusedInvites: 3 })).toBe(
+      '2 client links open · 3 unused invite links',
+    )
+  })
+
+  it('K5-5: "Advanced", collapsed, says the export setting it holds', () => {
+    expect(ADVANCED_SECTION_TITLE).toBe('Advanced')
+    expect(advancedSummary(null)).toBe('Export and download')
+    expect(advancedSummary('editors')).toBe('Export and download: editors and owners only')
+    expect(advancedSummary('everyone')).toBe('Export and download: everyone with an account')
+    expect(advancedSummary('everyone-including-guests')).toBe('Export and download: everyone, guests too')
   })
 })
 
@@ -168,6 +193,105 @@ describe('share dialog: invite by @handle, name or email (PRS-02)', () => {
     })
     expect(parseInviteTarget('@zed', ws, board)).toEqual({ kind: 'unknown', text: '@zed' })
     expect(parseInviteTarget('   ', ws, board)).toEqual({ kind: 'empty' })
+  })
+})
+
+describe('K5-5: the start of a handle, a name or an address is "partial": the hint names the person', () => {
+  const carolS = {
+    user: makeUser('carols', { name: 'Carol Smith', handle: null }),
+    role: 'member',
+  } as const satisfies WorkspaceMember
+  const zoe = {
+    user: makeUser('zoe', { name: 'Zoë Ng', handle: 'zng' }),
+    role: 'member',
+  } as const satisfies WorkspaceMember
+  const ws = [wsMember('bob', 'member'), wsMember('carol', 'member'), wsMember('dana', 'guest'), carolS, zoe]
+  const board = [member('carol', 'viewer', 'grant')]
+  const ids = (t: ReturnType<typeof parseInviteTarget>) =>
+    t.kind === 'partial' ? t.matches.map((m) => m.user.handle ?? m.user.name) : t.kind
+  const hint = (text: string) =>
+    inviteHintText(parseInviteTarget(text, ws, board), {
+      workspaceName: 'Dev Studio',
+      canEmail: false,
+      ownAddress: false,
+      notice: null,
+    })
+
+  it('a prefix of an @handle (with or without @) lists that person, and the hint names them', () => {
+    expect(ids(parseInviteTarget('@bo', ws, board))).toEqual(['bob'])
+    expect(ids(parseInviteTarget('bo', ws, board))).toEqual(['bob'])
+    expect(hint('@bo')).toBe('Pick Bob (@bob) from the list.')
+    // an "@" in front of a name too (Clerk accounts have no handle: people type "@carol" for Carol Smith)
+    expect(ids(parseInviteTarget('@smi', ws, board))).toEqual(['Carol Smith'])
+    expect(ids(parseInviteTarget('@zz', ws, board))).toBe('unknown')
+  })
+
+  it('a prefix of a name, or of any word of it, in any case and without accents', () => {
+    expect(ids(parseInviteTarget('Car', ws, board))).toEqual(['Carol Smith', 'carol'])
+    expect(ids(parseInviteTarget('smi', ws, board))).toEqual(['Carol Smith'])
+    expect(hint('smi')).toBe('Pick Carol Smith from the list.')
+    expect(ids(parseInviteTarget('zoe', ws, board))).toEqual(['zng'])
+    expect(hint('ZOË')).toBe('Pick Zoë Ng (@zng) from the list.')
+  })
+
+  it('several people: the ones still without a direct grant first; the hint says how many', () => {
+    // carol is on the board already (a viewer grant): after Carol Smith
+    expect(ids(parseInviteTarget('c', ws, board))).toEqual(['Carol Smith', 'carol'])
+    expect(hint('c')).toBe('2 people in Dev Studio match. Pick one from the list.')
+  })
+
+  it('an address being typed: its name part starting a handle lists that person; a whole address is an email', () => {
+    expect(ids(parseInviteTarget('bob@dev', ws, board))).toEqual(['bob'])
+    expect(ids(parseInviteTarget('bob@dev.example', ws, board))).toBe('email')
+    expect(ids(parseInviteTarget('pat@cli', ws, board))).toBe('unknown')
+  })
+
+  it('exact handles and names are unchanged: a direct grant, or "already" for someone granted', () => {
+    expect(parseInviteTarget('@bob', ws, board)).toMatchObject({
+      kind: 'member',
+      member: { user: { handle: 'bob' } },
+    })
+    expect(parseInviteTarget('BOB', ws, board)).toMatchObject({ kind: 'member' })
+    expect(parseInviteTarget('Carol Smith', ws, board)).toMatchObject({ kind: 'member' })
+    expect(parseInviteTarget('@carol', ws, board)).toMatchObject({ kind: 'already' })
+    expect(targetFor(carolS, board)).toMatchObject({ kind: 'member' })
+    expect(targetFor(ws[1] as WorkspaceMember, board)).toMatchObject({ kind: 'already' })
+  })
+
+  it('nothing that starts anyone: "unknown", one line asking for their address', () => {
+    expect(parseInviteTarget('Someone New', ws, board)).toEqual({ kind: 'unknown', text: 'Someone New' })
+    expect(hint('Someone New')).toBe(`No one in Dev Studio matches. ${ASK_EMAIL_PROMPT}`)
+  })
+
+  it('a partial target plans a pick, never a grant or a link', () => {
+    expect(invitePlan(parseInviteTarget('@bo', ws, board))).toMatchObject({
+      kind: 'pick',
+      matches: [{ user: { handle: 'bob' } }],
+    })
+  })
+
+  it('picking puts the @handle in the field, else the name', () => {
+    expect(pickedText(ws[0] as WorkspaceMember)).toBe('@bob')
+    expect(pickedText(carolS)).toBe('Carol Smith')
+  })
+
+  it('memberMatches and inviteMatches: empty text matches no one; the list is capped', () => {
+    expect(memberMatches('', ws[0] as WorkspaceMember)).toBe(false)
+    expect(memberMatches('@', ws[0] as WorkspaceMember)).toBe(false)
+    const many = Array.from({ length: 12 }, (_, i) => wsMember(`ann${i}`, 'member'))
+    expect(inviteMatches('ann', many, [])).toHaveLength(MAX_INVITE_SUGGESTIONS)
+  })
+
+  it('the one hint line for the other cases', () => {
+    const opts = { workspaceName: 'Dev Studio', canEmail: false, ownAddress: false, notice: null }
+    expect(inviteHintText({ kind: 'empty' }, opts)).toBe(INVITE_IDLE_HINT)
+    expect(hint('@bob')).toBe('Bob is in Dev Studio: they get access right away.')
+    expect(hint('@carol')).toBe('Carol already has access. Change their role under People with access.')
+    expect(hint('pat@client.example')).toContain('only this address can use')
+    // the inviter's own address: the hint, or nothing once the alert says it
+    const own = { kind: 'email', email: 'alice@dev.invalid' } as const
+    expect(inviteHintText(own, { ...opts, ownAddress: true })).toBe(OWN_ADDRESS_MESSAGE)
+    expect(inviteHintText(own, { ...opts, ownAddress: true, notice: OWN_ADDRESS_MESSAGE })).toBe('')
   })
 })
 

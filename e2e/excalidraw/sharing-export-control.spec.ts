@@ -27,6 +27,10 @@ const FRAME = { id: 'ec-frame', name: 'Moodboard', x: 0, y: 0, w: 800, h: 600 }
 async function openShare(page: Page): Promise<Locator> {
   await page.evaluate(() => window.dispatchEvent(new Event('draftroom:open-share')))
   await expect(page.getByTestId('share-dialog')).toBeVisible()
+  // K5-5: the setting is under the collapsed "Advanced"
+  const advanced = page.getByTestId('share-advanced')
+  if ((await advanced.getAttribute('open')) === null) await page.getByTestId('share-advanced-toggle').click()
+  await expect(advanced).toHaveAttribute('open', '')
   const section = page.getByTestId('share-export-policy')
   await expect(section).not.toHaveAttribute('data-policy', 'loading')
   return section

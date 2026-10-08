@@ -126,7 +126,7 @@ export function shareBadgeName(badge: ShareBadge): string {
 export function createdSaying(what: 'Client link' | 'Workshop link', copied: boolean): string {
   return copied
     ? `${what} created and copied to the clipboard.`
-    : `${what} created. Couldn’t copy it: use Copy in the list below.`
+    : `${what} created. It couldn’t be copied automatically: press Copy in the list below.`
 }
 
 // ---- "request sent" memory (per browser, per user + board) ----------------------------------------

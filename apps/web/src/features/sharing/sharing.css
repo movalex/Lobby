@@ -290,9 +290,13 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
-  margin-top: 20px;
+  margin-top: 18px;
   padding-top: 14px;
   border-top: 1px solid var(--dr-line);
+}
+/* K5-5: Copy board link sits after the people and the workspace access; the folded sections follow it. */
+.dr-sharing .dr-sharing__footer + .dr-share__section {
+  margin-top: 14px;
 }
 .dr-sharing__footer .dr-share__hint {
   margin: 0;
@@ -483,4 +487,74 @@
   color: var(--dr-accent-ink);
   font-size: 13px;
   line-height: 1.45;
+}
+
+/* ---- K5-5 (wave K): the invite field's suggestion list (InviteField.tsx) and phones ------------------- */
+
+.dr-sharing__suggestions {
+  flex: 1 1 100%;
+  display: grid;
+  gap: 1px;
+  max-height: 248px;
+  margin: 0;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 10px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow);
+  list-style: none;
+}
+.dr-sharing__suggestion {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 4px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.dr-sharing__suggestion[aria-selected="true"] {
+  background: var(--dr-accent-bg);
+  box-shadow: inset 0 0 0 1px var(--dr-accent-line);
+}
+.dr-sharing__suggestion-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.dr-sharing__suggestion-name {
+  overflow: hidden;
+  color: var(--dr-ink);
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-sharing__suggestion-sub {
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+}
+.dr-sharing__suggestion-sub:empty {
+  display: none;
+}
+
+/* Phones: the invite field takes the whole row (it was 82 px wide at 375 px), the role and Invite go under
+   it; the other one-line forms of the dialog wrap the same way. */
+@media (max-width: 600px) {
+  .dr-sharing__invite > .dr-sharing__invite-input {
+    flex: 1 1 100%;
+  }
+  .dr-sharing__invite > .dr-select {
+    flex: 1 1 auto;
+  }
+  .dr-sharing .dr-share__add {
+    flex-wrap: wrap;
+  }
+  .dr-sharing .dr-share__add .dr-select:first-of-type {
+    flex: 1 1 100%;
+  }
+  .dr-sharing .dr-share__add .dr-select--compact {
+    flex: 1 1 auto;
+  }
 }
