@@ -967,3 +967,66 @@
   color: var(--dr-ink-2);
   font-size: 12px;
 }
+
+/* ---- K4-5: the What's new card ---------------------------------------------------------------------- */
+.dr-whatsnew {
+  max-width: 820px;
+  margin: 0 0 24px;
+  padding: 14px 16px 12px;
+  border: 1px solid var(--dr-accent-line);
+  border-radius: 12px;
+  background: var(--dr-accent-tint);
+}
+.dr-whatsnew__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.dr-whatsnew__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+.dr-whatsnew__list {
+  display: grid;
+  gap: 2px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-whatsnew__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 7px 0;
+  border-top: 1px solid color-mix(in srgb, var(--dr-accent-line) 60%, transparent);
+}
+.dr-whatsnew__item:first-child {
+  border-top: 0;
+}
+.dr-whatsnew__text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+.dr-whatsnew__text span {
+  color: var(--dr-ink-2);
+}
+.dr-whatsnew__item .dr-btn {
+  flex: none;
+}
+.dr-whatsnew__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--dr-accent-line) 60%, transparent);
+  color: var(--dr-ink-2);
+  font-size: 13px;
+}

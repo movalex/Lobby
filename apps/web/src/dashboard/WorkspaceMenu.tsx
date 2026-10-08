@@ -7,8 +7,10 @@
 import type { Project, WorkspaceSummary } from '@draftroom/contracts'
 import { useEffect, useId, useRef, useState } from 'react'
 import { navigate, workspacePath } from '../lib/routing.ts'
+import { useValue } from '../lib/signals.ts'
 import { InternalOnlySection, type InternalOnlyState } from './InternalOnly.tsx'
 import { internalOnlyShown } from './internal-only-model.ts'
+import { workspaceMenuRequests } from './workspace-menu-request.ts'
 
 export const WS_ROLE_LABEL: Record<WorkspaceSummary['role'], string> = {
   owner: 'Owner',
@@ -69,6 +71,15 @@ export function WorkspaceMenu({
   const [open, setOpen] = useState(defaultOpen)
   const panelId = useId()
   const button = useRef<HTMLButtonElement>(null)
+  // the What's new card's "Try it" asks for the panel (a request made before this mounted is not replayed)
+  const asked = useValue(workspaceMenuRequests)
+  const seen = useRef(asked)
+  const hasMenu = others.length > 0 || showInternal
+  useEffect(() => {
+    if (asked === seen.current) return
+    seen.current = asked
+    if (hasMenu) setOpen(true)
+  }, [asked, hasMenu])
 
   const tile = (
     <>
@@ -86,7 +97,7 @@ export function WorkspaceMenu({
     </>
   )
 
-  if (!others.length && !showInternal) {
+  if (!hasMenu) {
     return (
       <div className="dr-ws" data-testid="workspace-switcher">
         {tile}

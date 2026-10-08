@@ -5,6 +5,8 @@ import { useMe } from '../auth/session.tsx'
 import { UserMenu } from '../auth/UserMenu.tsx'
 import { NoticeRegion, useNotices } from '../board/Notices.tsx'
 import { ShareDialog } from '../board/ShareDialog.tsx'
+import { FeedbackPill } from '../features/feedback/FeedbackPill.tsx'
+import { openFeedback } from '../features/feedback/state.ts'
 import { useIsGuest } from '../invite/guest.tsx'
 import { absoluteUrl, copyText } from '../lib/clipboard.ts'
 import { boardPath, type DashboardSection, navigate, workspacePath } from '../lib/routing.ts'
@@ -43,9 +45,17 @@ import {
   withStarredEntry,
 } from './model.ts'
 import { newsByBoard } from './notifications.ts'
-import { readPickerHidden, readViewMode, type ViewMode, writeViewMode } from './prefs.ts'
+import {
+  readPickerHidden,
+  readViewMode,
+  readWhatsNewDismissed,
+  type ViewMode,
+  writeViewMode,
+  writeWhatsNewDismissed,
+} from './prefs.ts'
 import { Sidebar } from './Sidebar.tsx'
 import { StartRow } from './StartRow.tsx'
+import { createSampleBoard } from './sample-board.ts'
 import { ContentSearch } from './search/ContentSearch.tsx'
 import { contentSearchApplies, SEARCH_MAX_QUERY_CHARS } from './search/content-search.ts'
 import { type StartChoice, showStartRow, startTiles, startTitle } from './start-row-model.ts'
@@ -53,6 +63,9 @@ import { SampleBoardButton } from './TemplateGallery.tsx'
 import type { CatalogEntry } from './template-catalog.ts'
 import { newBoardPath } from './template-paths.ts'
 import { useCatalog, whenIdle } from './use-catalog.ts'
+import { WhatsNewCard } from './WhatsNew.tsx'
+import { showWhatsNew, type TryAction, WHATS_NEW_VERSION, whatsNewFor } from './whats-new.ts'
+import { requestWorkspaceMenu } from './workspace-menu-request.ts'
 import './dashboard.css'
 
 const dash = dashboardApi(api)
@@ -134,6 +147,8 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   const [starting, setStarting] = useState<StartChoice | null>(null)
   const [catalogWanted, setCatalogWanted] = useState(false)
   const { mod: catalogMod } = useCatalog(catalogWanted)
+  // K4-5: the What's new card is dismissed per person (their browser's storage, which may be missing)
+  const [whatsNewGone, setWhatsNewGone] = useState(() => readWhatsNewDismissed(me.user.id, WHATS_NEW_VERSION))
   const [now, setNow] = useState(() => new Date())
   // PRI-05a: what is new, without opening each board (the board bell's inbox).
   const inbox = useDashboardInbox()
@@ -232,6 +247,13 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   // New boards are active: offering "New board" while looking at Trash or Archived would be confusing.
   const showCreate = canCreate && section.kind !== 'archived' && section.kind !== 'trash'
   const totalCount = boards.data?.length ?? 0
+  const newItems = whatsNewFor({ canCreate, inWorkspace })
+  const whatsNewShown = showWhatsNew({
+    items: newItems,
+    guest,
+    dismissed: whatsNewGone,
+    landing: section.kind === 'recent',
+  })
   const startRowShown = showStartRow({
     canCreate: showCreate,
     guest,
@@ -398,6 +420,29 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
         text: isApiError(e) ? e.message : 'The board could not be created.',
         tone: 'error',
       })
+    }
+  }
+
+  // K4-5: "Try it" on a What's new item takes the person to the thing
+  const tryNew = (action: TryAction) => {
+    if (action === 'workspace-menu') requestWorkspaceMenu()
+    else if (action === 'templates') {
+      if (canCreate) setCreating(true)
+    } else if (action === 'start-row') {
+      const tile = document.querySelector<HTMLElement>('[data-testid="start-tile"]')
+      tile?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      tile?.focus({ preventScroll: true })
+    } else if (action === 'tour') {
+      if (!canCreate) return
+      createSampleBoard(api.createBoard, workspace.id, defaultProjectId).then(
+        (path) => navigate(path),
+        (e) =>
+          notify({
+            key: 'sample-board',
+            text: isApiError(e) ? e.message : 'The sample board could not be created.',
+            tone: 'error',
+          }),
+      )
     }
   }
 
@@ -705,6 +750,18 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
           />
         )}
 
+        {whatsNewShown && (
+          <WhatsNewCard
+            items={newItems}
+            onTry={tryNew}
+            onTellUs={() => openFeedback(null)}
+            onDismiss={() => {
+              writeWhatsNewDismissed(me.user.id, WHATS_NEW_VERSION)
+              setWhatsNewGone(true)
+            }}
+          />
+        )}
+
         {showStarred && starredVisible.length > 0 && (
           <section className="dr-dash__group" aria-labelledby="dr-starred-h" data-testid="starred-section">
             <h2 id="dr-starred-h" className="dr-dash__group-title">
@@ -855,6 +912,8 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
         />
       )}
       <NoticeRegion notices={notices} onDismiss={dismiss} />
+      {/* K4-5: Feedback is one click away, on the dashboard as on a board */}
+      <FeedbackPill />
     </div>
   )
 }

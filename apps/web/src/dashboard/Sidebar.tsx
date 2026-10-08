@@ -3,6 +3,7 @@ import { type FormEvent, type MouseEvent, type ReactNode, useEffect, useId, useR
 import { api, isApiError } from '../api/client.ts'
 import { Wordmark } from '../brand/Wordmark.tsx'
 import { type DashboardSection, linkClick, workspacePath } from '../lib/routing.ts'
+import { useValue } from '../lib/signals.ts'
 import { MenuButton } from '../ui/Menu.tsx'
 import { RenameInput } from '../ui/RenameInput.tsx'
 import { type InternalOnlyState, OutsideAccessDialog, useInternalOnly } from './InternalOnly.tsx'
@@ -13,6 +14,7 @@ import {
   projectMenuItems,
 } from './internal-only-model.ts'
 import { WorkspaceMenu } from './WorkspaceMenu.tsx'
+import { workspaceMenuRequests } from './workspace-menu-request.ts'
 
 const sameSection = (a: DashboardSection, b: DashboardSection) =>
   a.kind === b.kind && (a.kind !== 'project' || (b.kind === 'project' && a.projectId === b.projectId))
@@ -54,6 +56,15 @@ export function Sidebar({
   const guest = workspace.role === 'guest'
   // Wave J: the "Internal only" switches (members and above read them; owners and admins change them).
   const internal = useInternalOnly(workspace.id, canSeeProjects)
+
+  // "Try it" on the What's new card asks for the workspace menu: on a phone the folded menu opens first
+  const menuAsked = useValue(workspaceMenuRequests)
+  const menuSeen = useRef(menuAsked)
+  useEffect(() => {
+    if (menuAsked === menuSeen.current) return
+    menuSeen.current = menuAsked
+    setOpen(true)
+  }, [menuAsked])
 
   useEffect(() => {
     if (!open) return

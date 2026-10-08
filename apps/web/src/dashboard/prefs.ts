@@ -8,6 +8,7 @@ type WriteStore = Pick<Storage, 'setItem' | 'removeItem'> | null
 
 const VIEW_KEY = 'draftroom:dashboard-view'
 const pickerKey = (userId: string) => `draftroom:template-picker-hidden:${userId}`
+const whatsNewKey = (userId: string) => `draftroom:whats-new-dismissed:${userId}`
 
 export function browserStorage(): Storage | null {
   try {
@@ -48,5 +49,34 @@ export function writePickerHidden(userId: string, hidden: boolean, store: WriteS
     else store?.removeItem(pickerKey(userId))
   } catch {
     // not remembered: the picker shows again next time
+  }
+}
+
+/**
+ * K4-5: whether this person dismissed this version of the What's new card (keyed by user id in this browser,
+ * like the picker choice). It stores the version, so a card with new words shows once more. Storage that is
+ * missing or throws reads as "not dismissed": the card shows again, the page still renders.
+ */
+export function readWhatsNewDismissed(
+  userId: string,
+  version: string,
+  store: ReadStore = browserStorage(),
+): boolean {
+  try {
+    return store?.getItem(whatsNewKey(userId)) === version
+  } catch {
+    return false
+  }
+}
+
+export function writeWhatsNewDismissed(
+  userId: string,
+  version: string,
+  store: WriteStore = browserStorage(),
+) {
+  try {
+    store?.setItem(whatsNewKey(userId), version)
+  } catch {
+    // not remembered: the card shows again next time
   }
 }
