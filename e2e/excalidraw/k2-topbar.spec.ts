@@ -192,7 +192,14 @@ test('K2-5: on a 375 px phone the bell, the comment tool, Feedback and the accou
   for (const id of ['notifications-bell', 'comment-tool', 'topbar-feedback'])
     await expect(panel.getByTestId(id), id).toBeVisible()
   await expect(panel).toContainText('Your account')
-  // the comment tool from the menu picks the tool
+  // the comment tool from the menu picks the tool; the next press on the board closes the menu and places the
+  // new comment there (the phone flow a11y-phone-reach.spec.ts W5-07 now takes: "⋯", then Comment tool)
   await panel.getByTestId('comment-tool').click()
   await expect(panel.getByTestId('comment-tool')).toHaveAttribute('aria-pressed', 'true')
+  const c = await a.page.locator('[data-lobby-board-canvas]').boundingBox()
+  if (!c) throw new Error('no canvas')
+  // below the empty board's start card (its buttons take clicks)
+  await a.page.mouse.click(c.x + c.width / 2, c.y + c.height * 0.62)
+  await expect(panel).toHaveAttribute('data-open', 'false')
+  await expect(a.page.getByTestId('new-comment-popover')).toBeVisible()
 })
