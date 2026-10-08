@@ -11,6 +11,7 @@
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
 import type { CanvasFeatureContext, FeatureToolSpec } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { installEditZoom } from './edit-zoom.ts'
 import { animateCamera } from './motion.ts'
 import { EDIT_TOOLS, READONLY_TOOLS, type ToolRow } from './tools.ts'
 
@@ -46,6 +47,9 @@ export function sheetTools(readOnly: boolean, featureTools: readonly FeatureTool
 export function PhoneSheet({ ctx }: { readonly ctx: CanvasFeatureContext }) {
   const phone = usePhone()
   const [open, setOpen] = useState(false)
+  // K5-1: editing a note on a phone brings it to a readable size above the keyboard (a local camera move,
+  // ./edit-zoom.ts). Mounted with the slot on every width: the rule itself checks the pointer and the canvas.
+  useEffect(() => installEditZoom(ctx.canvas), [ctx.canvas])
   useEffect(() => {
     if (!phone) setOpen(false)
   }, [phone])
