@@ -376,6 +376,15 @@ test('the template catalog is fetched only where the row is shown: not on the Al
 }) => {
   test.setTimeout(120_000)
   const p = await creator(browser, 'Cat Alog')
+  // Wave K integration: K1-3 downloads the board page's code on an idle dashboard, and that code holds the
+  // catalog (the board's templates panel), so this checks the dashboard's OWN idle load with K1's prefetch
+  // off: on Save-Data (K1 skips it there; the dashboard's gate does not depend on it)
+  await p.context.addInitScript(() => {
+    Object.defineProperty(Navigator.prototype, 'connection', {
+      configurable: true,
+      get: () => ({ saveData: true, effectiveType: '4g', addEventListener() {}, removeEventListener() {} }),
+    })
+  })
   const scriptsOf = (page: Page) => {
     const seen: string[] = []
     page.on('request', (r) => {
