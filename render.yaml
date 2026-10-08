@@ -131,9 +131,9 @@ services:
         name: Cache-Control
         value: public, max-age=31536000, immutable
       # K1-6 (wave K): Excalidraw's self-hosted fonts. Their names do not change with a build, so a week, not a
-      # year, and not immutable (an engine bump that changed a font file is picked up within a week, and a
-      # reload revalidates). Render applies headers to the site's own files only: the 404 a miss gets from the
-      # /excalidraw-assets/* rewrite above (the api's answer) is not cached by this.
+      # year, and not immutable (an engine bump that changed a font file under the same name reaches a browser
+      # within a week; a hard reload fetches it at once). Render applies headers to the site's own files only:
+      # the 404 a miss gets from the /excalidraw-assets/* rewrite above (the api's answer) is not cached by this.
       - path: /excalidraw-assets/*
         name: Cache-Control
         value: public, max-age=604800
