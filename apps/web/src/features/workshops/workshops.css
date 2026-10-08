@@ -649,6 +649,48 @@ button.dr-wk-badge--group:focus-visible {
   white-space: nowrap;
 }
 
+/* K3-2: the facilitator's line for a running vote or brainstorm: who has taken part, and a clear end. */
+.dr-wk-facilbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 6px 10px 6px 14px;
+  border: 1px solid var(--dr-navy);
+  border-radius: 12px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font-size: 13px;
+  box-shadow: 0 6px 24px rgb(27 35 48 / 16%);
+  pointer-events: auto;
+}
+.dr-wk-facilbar__what {
+  max-width: 22ch;
+  overflow: hidden;
+  color: var(--dr-ink-2);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-wk-facilbar__count {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.dr-wk-voted {
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.dr-wk-final {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--dr-paper);
+  font-weight: 600;
+}
+
 .dr-wk-flash {
   position: absolute;
   inset: 0;

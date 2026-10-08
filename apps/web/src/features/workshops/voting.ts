@@ -78,6 +78,26 @@ export function describeProgress(v: {
   return `${v.participantsDone} of ${v.participants} done · ${votes}`
 }
 
+/**
+ * K3-2: "x of y voted" for the facilitator, from the counts the api already sends (`participants`: people
+ * who cast a vote or said they are done; no ballot of anyone) and who is on the board now (the roster).
+ * `y` is the other people here, and this person once they voted themselves (whoever runs the vote need not
+ * vote); someone who voted and left still counts in `x`, so `y` is never below it.
+ */
+export function votedOf(input: { participants: number; othersHere: number; meIn: boolean }): {
+  voted: number
+  of: number
+} {
+  const voted = Math.max(0, input.participants)
+  return { voted, of: Math.max(voted, Math.max(0, input.othersHere) + (input.meIn ? 1 : 0)) }
+}
+
+/** "1 of 3 voted"; "Nobody else is here yet" while the facilitator is alone and has not voted. */
+export function describeVoted(v: { voted: number; of: number }): string {
+  if (v.of === 0) return 'Nobody else is here yet'
+  return `${v.voted} of ${v.of} voted`
+}
+
 // ---- result badges on the board (round-2 F3) ----------------------------------------------------------
 
 /** A result badge at a shape's top-right corner, in screen pixels. */

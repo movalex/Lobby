@@ -10,9 +10,10 @@ import {
 import { useCallback, useEffect, useId, useMemo, useState } from 'react'
 import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { formatDateTime } from '../../../lib/format.ts'
+import { useValue } from '../../../lib/signals.ts'
 import { describeClock, formatClock } from '../countdown.ts'
 import type { WorkshopStore } from '../store.ts'
-import { describeProgress, resultsCsv, topResults } from '../voting.ts'
+import { describeProgress, describeVoted, resultsCsv, topResults, votedOf } from '../voting.ts'
 import { useIsFacilitator, useNow, useWorkshop } from '../workshop-context.ts'
 import { zoomToBounds } from './camera.ts'
 import { elementIdOf, labelOfRef, typeNameOfRef } from './elements.ts'
@@ -201,6 +202,7 @@ function CurrentVote({
   const mine = Object.entries(ballot.myVotes)
   const joined = snap.participation === 'joined'
   const canvas = ctx.canvas
+  const voted = useVoted(ctx, vote, mine.length > 0)
 
   return (
     <section
@@ -279,6 +281,10 @@ function CurrentVote({
 
       {facilitator && s.status !== 'revealed' && (
         <div className="dr-wk-facil" data-testid="vote-facilitator">
+          {/* K3-2: how many of the people here have voted, then the clear end below */}
+          <p className="dr-wk-voted" data-testid="vote-voted" data-voted={voted.voted} data-of={voted.of}>
+            {describeVoted(voted)}
+          </p>
           <p data-testid="vote-progress">{describeProgress(vote)}</p>
           {timed && (
             <div className="dr-wk-row">
@@ -325,6 +331,13 @@ function CurrentVote({
       {s.status === 'closed' && !facilitator && (
         <p className="dr-muted">Voting has ended. The results stay hidden until a facilitator shows them.</p>
       )}
+      {/* K3-2: the end is plain to see: the vote is over, and how it went */}
+      {s.status === 'revealed' && (
+        <p className="dr-wk-final" role="status" data-testid="vote-final">
+          Voting is over: {vote.totalVotesCast} vote{vote.totalVotesCast === 1 ? '' : 's'} from{' '}
+          {vote.participants} {vote.participants === 1 ? 'person' : 'people'}. Everyone sees the results.
+        </p>
+      )}
       {s.status === 'revealed' && vote.results && (
         <>
           <label className="dr-wk-check">
@@ -359,6 +372,26 @@ function CurrentVote({
       )}
     </section>
   )
+}
+
+/**
+ * K3-2: "x of y voted" for this vote (../voting.ts votedOf): the api's count of people who voted, and who
+ * else is on the board now (the roster: each person once, however many tabs they have).
+ */
+export function useVoted(
+  ctx: Ctx,
+  vote: Pick<WorkshopVoteState, 'participants' | 'done'>,
+  castSome: boolean,
+): { voted: number; of: number } {
+  const me = ctx.me.user.id
+  const othersHere = useValue(
+    'dr-wk-others-here',
+    () =>
+      new Set(ctx.canvas.collaborators().map((c) => c.uid)).size -
+      (ctx.canvas.collaborators().some((c) => c.uid === me) ? 1 : 0),
+    [ctx.canvas, me],
+  )
+  return votedOf({ participants: vote.participants, othersHere, meIn: castSome || vote.done })
 }
 
 const MEDALS = ['1st', '2nd', '3rd']

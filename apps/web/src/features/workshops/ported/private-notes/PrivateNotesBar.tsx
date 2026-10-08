@@ -160,6 +160,52 @@ export function PrivateNotesReminder({ ctx }: { ctx: Ctx }) {
   )
 }
 
+/**
+ * K3-2: whoever may end the brainstorm (its starter, a board owner) sees it on the board while it runs: the
+ * notes submitted so far (counts only: nobody's text before the reveal), "Reveal" (the panel's reveal), and
+ * the panel (its Cancel asks first). Not while the Private notes panel, which says the same, is open.
+ */
+export function PrivateNotesFacilitatorBar({ ctx }: { ctx: Ctx }) {
+  const { store, snap } = usePrivateNotes(ctx)
+  const s = snap.session
+  if (s?.status !== 'open' || !snap.canReveal || ctx.activePanel === PRIVATE_PANEL_ID) return null
+  const n = snap.counts.notes
+  return (
+    <section
+      className="dr-wk-facilbar dr-pn-facilbar"
+      aria-label="Your private brainstorm"
+      data-testid="pn-facilitator-bar"
+    >
+      <LockIcon />
+      <span className="dr-wk-facilbar__what">Private brainstorm</span>
+      <span className="dr-wk-facilbar__count" data-testid="pn-bar-counts" data-notes={n} aria-live="polite">
+        {describeCounts(snap.counts)}
+      </span>
+      <button
+        type="button"
+        className="dr-btn dr-btn--primary dr-btn--sm"
+        data-testid="pn-bar-reveal"
+        disabled={snap.busy !== null}
+        onClick={async () => {
+          const r = await store.reveal()
+          if (!r.ok && r.error)
+            ctx.notify({ key: 'pn-reveal', text: r.error, tone: 'error', testId: 'pn-toast' })
+        }}
+      >
+        {snap.busy === 'reveal' ? 'Revealing…' : n === 0 ? 'Reveal' : `Reveal ${n} note${n === 1 ? '' : 's'}`}
+      </button>
+      <button
+        type="button"
+        className="dr-linkbtn"
+        data-testid="pn-bar-open"
+        onClick={() => ctx.openPanel(PRIVATE_PANEL_ID)}
+      >
+        More
+      </button>
+    </section>
+  )
+}
+
 export function PrivateNotesSection({ ctx, onClose }: { ctx: Ctx; onClose(): void }) {
   const { store, snap } = usePrivateNotes(ctx)
   const facilitator = useIsFacilitator(ctx)

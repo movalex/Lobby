@@ -28,14 +28,19 @@ import { PHONE_QUERY, useMediaQuery } from '../../../ui/useMedia.ts'
 import { formatClock, timerDisplayPhase, timerRemainingMs } from '../countdown.ts'
 import { HandToasts, PresentingHands } from '../Hands.tsx'
 import type { WorkshopStore } from '../store.ts'
-import { badgeScale, clusterBadges, topResults } from '../voting.ts'
-import { useNow, useWorkshop } from '../workshop-context.ts'
+import { badgeScale, clusterBadges, describeVoted, topResults } from '../voting.ts'
+import { useIsFacilitator, useNow, useWorkshop } from '../workshop-context.ts'
 import { followingNow, stopFollowing, zoomToBounds } from './camera.ts'
 import { isEligibleElement, labelOfRef, refOf } from './elements.ts'
 import { PlusOnes } from './PlusOnes.tsx'
 import { usePresentingHere } from './presenting.ts'
-import { PrivateNotesReminder, PrivateNotesStartPrompt } from './private-notes/PrivateNotesBar.tsx'
+import {
+  PrivateNotesFacilitatorBar,
+  PrivateNotesReminder,
+  PrivateNotesStartPrompt,
+} from './private-notes/PrivateNotesBar.tsx'
 import { ReactionBursts } from './Reactions.tsx'
+import { useVoted } from './VotingPanel.tsx'
 import {
   cornersOf,
   eligibleAt,
@@ -202,6 +207,8 @@ export function WorkshopLayer({ ctx }: { ctx: Ctx }) {
           {resultsCard && <ResultsCard ctx={ctx} store={store} />}
           {snap.voteBanner && <JoinPrompt key={snap.voteBanner.seq} ctx={ctx} store={store} />}
           {joined && <VotingBar ctx={ctx} store={store} />}
+          {open && <VoteFacilitatorBar ctx={ctx} store={store} />}
+          <PrivateNotesFacilitatorBar ctx={ctx} />
         </div>
       )}
       {joined && (
@@ -829,6 +836,53 @@ function VotingBar({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
       )}
       <button type="button" className="dr-linkbtn" onClick={() => ctx.openPanel('voting')}>
         Details
+      </button>
+    </section>
+  )
+}
+
+/**
+ * K3-2: the facilitator's own line for an open vote, on the board: how many of the people here voted, and a
+ * clear end ("Show results", the panel's "End and show results"). Not while the Voting panel, which says the
+ * same, is open.
+ */
+export function VoteFacilitatorBar({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
+  const snap = store.getSnapshot()
+  const vote = snap.vote
+  const facilitator = useIsFacilitator(ctx)
+  const castSome = Object.keys(snap.ballot?.myVotes ?? {}).length > 0
+  const voted = useVoted(ctx, vote ?? { participants: 0, done: false }, castSome)
+  const [busy, setBusy] = useState(false)
+  if (!facilitator || vote?.session.status !== 'open' || ctx.activePanel === 'voting') return null
+  return (
+    <section className="dr-wk-facilbar" aria-label="Your vote" data-testid="vote-facilitator-bar">
+      <span className="dr-wk-facilbar__what">{vote.session.title}</span>
+      <span
+        className="dr-wk-facilbar__count"
+        data-testid="vote-bar-voted"
+        data-voted={voted.voted}
+        data-of={voted.of}
+        aria-live="polite"
+      >
+        {describeVoted(voted)}
+      </span>
+      <button
+        type="button"
+        className="dr-btn dr-btn--primary dr-btn--sm"
+        data-testid="vote-bar-reveal"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true)
+          const r = await store.revealVote()
+          setBusy(false)
+          if (!r.ok && r.error)
+            ctx.notify({ key: 'vote-reveal', text: r.error, tone: 'error', testId: 'vote-toast' })
+        }}
+      >
+        Show results
+      </button>
+      <button type="button" className="dr-linkbtn" onClick={() => ctx.openPanel('voting')}>
+        More
       </button>
     </section>
   )
