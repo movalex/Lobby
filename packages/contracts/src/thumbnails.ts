@@ -35,6 +35,17 @@ export const THUMBNAIL_MIN_INTERVAL_MS = 30_000
 export const THUMBNAIL_VERSION_PATTERN = /^[0-9a-f]{24}$/
 export const ThumbnailVersion = z.string().regex(THUMBNAIL_VERSION_PATTERN)
 
+/**
+ * K6-3 (wave K): the board event stream's hint that the api accepted a thumbnail upload (`version`) or a
+ * removal (`version: null`). Content-free: no image and no person; everyone on the stream may view the board
+ * and load its thumbnail anyway. Editors' clients use it so that one of them uploads per board (the others
+ * drop their pending picture and wait); the uploader knows its own by the version. A web build that does not
+ * know the event ignores it (apps/web/src/features/events.ts).
+ */
+export const THUMBNAIL_UPDATED_EVENT = 'thumbnail.updated'
+export const ThumbnailUpdatedEvent = z.object({ version: ThumbnailVersion.nullable() })
+export type ThumbnailUpdatedEvent = z.infer<typeof ThumbnailUpdatedEvent>
+
 export const BoardThumbnail = z.object({
   version: ThumbnailVersion,
   mimeType: ThumbnailMimeType,

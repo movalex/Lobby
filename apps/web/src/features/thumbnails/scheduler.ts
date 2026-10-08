@@ -11,6 +11,15 @@
 //   changes have no picture yet (`needsRender`), the caller draws one synchronously and hands it over
 //   with `adopt` first (F11: leaving 1.5 s after an edit used to keep the placeholder).
 // - The api accepts one upload per board every THUMBNAIL_MIN_INTERVAL_MS; a 429 says when to retry.
+// - K6-3: one upload per board when several people are on it (6 of 51 PUTs got 429 with 2-3 people on one
+//   board). The api tells the board's event stream when a thumbnail was accepted ('thumbnail.updated',
+//   with its version). Another client's upload (another person's, or another tab's) counts as this
+//   client's: what it rendered and did not send yet is dropped (it is older than their picture, and would
+//   only be refused 429 or put an older picture over theirs), its next upload waits UPLOAD_MIN_GAP_MS after
+//   theirs plus a small random REMOTE_JITTER (so two clients that are due together do not collide), and
+//   never inside the api's window. Changes still unsent are drawn again before that upload. This client's
+//   own upload, coming back on the stream, is recognised by its version and changes nothing. A 429 is the
+//   same evidence when the stream is late: the picture is drawn again, and sent once after Retry-After.
 
 import { THUMBNAIL_MIN_INTERVAL_MS, type ThumbnailMimeType } from '@draftroom/contracts'
 
@@ -20,6 +29,26 @@ export const UPLOAD_MIN_GAP_MS = 120_000
 export const BUSY_RETRY_MS = 1_000
 /** After a failure that may pass (network, 5xx) without a Retry-After. */
 export const ERROR_BACKOFF_MS = 60_000
+/** K6-3: the random extra wait after someone else's upload, between these two (ms). */
+export const REMOTE_JITTER_MIN_MS = 2_000
+export const REMOTE_JITTER_MAX_MS = 10_000
+
+/** The scheduler's waits (a test build shortens them: ported/capture.ts thumbnailTiming). */
+export interface SchedulerTiming {
+  renderQuietMs: number
+  uploadQuietMs: number
+  uploadMinGapMs: number
+  remoteJitterMinMs: number
+  remoteJitterMaxMs: number
+}
+
+export const DEFAULT_TIMING: Readonly<SchedulerTiming> = {
+  renderQuietMs: RENDER_QUIET_MS,
+  uploadQuietMs: UPLOAD_QUIET_MS,
+  uploadMinGapMs: UPLOAD_MIN_GAP_MS,
+  remoteJitterMinMs: REMOTE_JITTER_MIN_MS,
+  remoteJitterMaxMs: REMOTE_JITTER_MAX_MS,
+}
 
 export type Rendered =
   | {
@@ -84,6 +113,10 @@ export interface SchedulerDeps {
   render(opts: { force: boolean }): Promise<RenderResult>
   send(r: Rendered, opts: { keepalive: boolean }): Promise<SendResult>
   onStatus?(s: CaptureStatus): void
+  /** The waits (default DEFAULT_TIMING); a missing field keeps its default. */
+  timing?: Partial<SchedulerTiming>
+  /** 0..1 (default Math.random): the jitter after someone else's upload. */
+  random?(): number
 }
 
 /** What is left to send when the board closes: sent later from outside the board (upload.ts). */
@@ -112,9 +145,20 @@ export class CaptureScheduler {
   private sending = false
   private stopped = false
   private timer: unknown = null
+  private readonly timing: SchedulerTiming
+  /** K6-3: when this client heard of the board's last upload by someone else, and the jitter it drew. */
+  private remoteAt = Number.NEGATIVE_INFINITY
+  private remoteJitter = 0
+  /** The version this client's last accepted upload got (its own upload coming back on the stream). */
+  private ownVersion: string | null = null
+  /** A removal this client made (its 'thumbnail.updated' carries no version), and when. */
+  private ownRemovalAt = Number.NEGATIVE_INFINITY
+  /** Versions heard while an upload of ours was in flight: decided once its answer says which is ours. */
+  private heardWhileSending: (string | null)[] = []
 
   constructor(deps: SchedulerDeps) {
     this.d = deps
+    this.timing = { ...DEFAULT_TIMING, ...deps.timing }
   }
 
   /** A local change to the board's content. */
@@ -122,7 +166,23 @@ export class CaptureScheduler {
     if (this.stopped) return
     this.changeSeq += 1
     this.lastChangeAt = this.d.now()
-    this.schedule(RENDER_QUIET_MS)
+    this.schedule(this.timing.renderQuietMs)
+  }
+
+  /**
+   * K6-3: the board's thumbnail was just updated ('thumbnail.updated' on the board's event stream), with the
+   * accepted version (null: a removal). Someone else's (another person's, another tab's): this client's
+   * pending picture is dropped and its next upload waits (see the header). Its own: nothing changes.
+   */
+  noteRemoteUpload(version: string | null): void {
+    if (this.stopped) return
+    if (this.sending) {
+      // perhaps the answer to the upload in flight, published before its response arrived
+      this.heardWhileSending.push(version)
+      return
+    }
+    if (this.isOwn(version)) return
+    this.remoteUpload()
   }
 
   /** The api has (or has no) thumbnail for this board. */
@@ -162,6 +222,39 @@ export class CaptureScheduler {
     void this.sendNow(true).then(() => this.tick())
   }
 
+  private isOwn(version: string | null): boolean {
+    if (version !== null) return version === this.ownVersion
+    return this.d.now() - this.ownRemovalAt < 10_000
+  }
+
+  /** Someone else's picture of the board is newer than anything this client has not sent. */
+  private remoteUpload(): void {
+    const t = this.d.now()
+    const { remoteJitterMinMs: lo, remoteJitterMaxMs: hi } = this.timing
+    const r = Math.min(1, Math.max(0, (this.d.random ?? Math.random)()))
+    this.remoteAt = t
+    this.remoteJitter = lo + r * Math.max(0, hi - lo)
+    this.dropPending()
+    this.status({ state: 'idle' })
+    this.tick()
+  }
+
+  /** What this client rendered and did not send is older than the board's thumbnail now: draw it again. */
+  private dropPending(): void {
+    if (!this.rendered || this.rendered.seq <= this.sentSeq) return
+    this.rendered = null
+    this.attemptedSeq = Math.min(this.attemptedSeq, this.sentSeq)
+  }
+
+  /** When the api accepts the next upload of this board, as far as this client knows. */
+  private windowOpensAt(): number {
+    return Math.max(
+      this.lastSentAt + THUMBNAIL_MIN_INTERVAL_MS,
+      this.retryAt,
+      this.remoteAt + THUMBNAIL_MIN_INTERVAL_MS + this.remoteJitter,
+    )
+  }
+
   /** The board closes. Returns what should still be sent (the caller outlives the board). */
   dispose(): Leftover | null {
     if (this.stopped) return null
@@ -176,13 +269,10 @@ export class CaptureScheduler {
       if (pending.seq <= this.sendingSeq) return null
       return {
         rendered: pending.result,
-        notBefore: Math.max(this.d.now() + THUMBNAIL_MIN_INTERVAL_MS, this.retryAt),
+        notBefore: Math.max(this.d.now() + THUMBNAIL_MIN_INTERVAL_MS, this.windowOpensAt()),
       }
     }
-    return {
-      rendered: pending.result,
-      notBefore: Math.max(this.lastSentAt + THUMBNAIL_MIN_INTERVAL_MS, this.retryAt),
-    }
+    return { rendered: pending.result, notBefore: this.windowOpensAt() }
   }
 
   // ---- internals ---------------------------------------------------------------------------------
@@ -219,7 +309,7 @@ export class CaptureScheduler {
     if (this.stopped || this.rendering || this.sending) return
     const t = this.d.now()
     if (this.attemptedSeq < this.changeSeq) {
-      const wait = this.lastChangeAt + RENDER_QUIET_MS - t
+      const wait = this.lastChangeAt + this.timing.renderQuietMs - t
       if (wait > 0) this.schedule(wait)
       else if (this.d.isBusy()) this.schedule(BUSY_RETRY_MS)
       // A render that found the person busy has already scheduled its retry.
@@ -232,9 +322,11 @@ export class CaptureScheduler {
       return
     }
     const due = Math.max(
-      this.lastChangeAt + UPLOAD_QUIET_MS,
-      this.lastSentAt + UPLOAD_MIN_GAP_MS,
-      this.retryAt,
+      this.lastChangeAt + this.timing.uploadQuietMs,
+      this.lastSentAt + this.timing.uploadMinGapMs,
+      // K6-3: someone else's upload counts as this client's, plus the jitter
+      this.remoteAt + this.timing.uploadMinGapMs + this.remoteJitter,
+      this.windowOpensAt(),
     )
     if (t < due) this.schedule(due - t)
     else void this.sendNow(false).then(() => this.tick())
@@ -277,9 +369,9 @@ export class CaptureScheduler {
   private async sendNow(keepalive: boolean): Promise<void> {
     if (this.sending || this.stopped || !this.hasPending()) return
     const t = this.d.now()
-    // Inside the api's window (our own last upload, or its Retry-After): it would only answer 429.
-    if (t < Math.max(this.lastSentAt + THUMBNAIL_MIN_INTERVAL_MS, this.retryAt)) {
-      if (!keepalive) this.schedule(Math.max(this.lastSentAt + THUMBNAIL_MIN_INTERVAL_MS, this.retryAt) - t)
+    // Inside the api's window (our own last upload, someone else's, or a Retry-After): it would only answer 429.
+    if (t < this.windowOpensAt()) {
+      if (!keepalive) this.schedule(this.windowOpensAt() - t)
       return
     }
     const pending = this.rendered
@@ -296,13 +388,20 @@ export class CaptureScheduler {
       this.sending = false
     }
     const now = this.d.now()
+    const heard = this.heardWhileSending
+    this.heardWhileSending = []
     if (res.ok) {
       this.sentSeq = Math.max(this.sentSeq, pending.seq)
       this.lastSentAt = now
       this.remote = pending.result.kind === 'image'
+      if (pending.result.kind === 'image') this.ownVersion = res.version
+      else this.ownRemovalAt = now
       this.status({ state: 'uploaded', version: res.version })
+      // K6-3: an upload heard meanwhile that is not this one was someone else's (theirs came first)
+      if (heard.some((v) => !this.isOwn(v))) this.remoteUpload()
       return
     }
+    if (heard.some((v) => !this.isOwn(v))) this.remoteUpload()
     if (res.stop) {
       this.stopped = true
       this.clear()
@@ -310,7 +409,10 @@ export class CaptureScheduler {
       return
     }
     if (res.drop) this.sentSeq = Math.max(this.sentSeq, pending.seq)
-    this.retryAt = now + (res.retryAfterMs ?? (res.drop ? 0 : ERROR_BACKOFF_MS))
+    this.retryAt = Math.max(this.retryAt, now + (res.retryAfterMs ?? (res.drop ? 0 : ERROR_BACKOFF_MS)))
+    // K6-3: a 429 means someone else's picture is newer than this one (the stream did not say so yet): draw
+    // it again for the one retry after Retry-After
+    if (res.retryAfterMs !== undefined) this.dropPending()
     this.status({ state: 'error' })
   }
 }
