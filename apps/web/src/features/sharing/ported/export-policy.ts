@@ -139,7 +139,9 @@ function read(e: Entry, api: ApiClient): Promise<ExportPolicyState> {
         e.state.canExport.set(s.canExport)
         e.last = s
       }
-      if (gen === e.gen) e.fresh = true
+      // current only while a board session keeps it so (its events and resyncs); without one, every
+      // caller that is not sharing this read asks again
+      if (gen === e.gen && e.live.size > 0) e.fresh = true
       return s
     })
     .finally(() => {

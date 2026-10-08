@@ -338,6 +338,19 @@ describe('the shared export-policy resource', () => {
     stop()
   })
 
+  it('without a board session an answer is never kept as current: the next getter asks again', async () => {
+    const boardId = 'b-res-nosession'
+    const { api, count, answer } = fakeApi()
+    const first = getExportPolicy(api, boardId)
+    answer(0, { exportPolicy: 'editors' })
+    expect((await first).exportPolicy).toBe('editors')
+    // an hour later on the dashboard: nothing kept it current (no events), so it is read again
+    const later = getExportPolicy(api, boardId)
+    expect(count(boardId)).toBe(2)
+    answer(1, { exportPolicy: 'everyone' })
+    expect((await later).exportPolicy).toBe('everyone')
+  })
+
   it('a caller’s abort stops its own wait only', async () => {
     const boardId = 'b-res-abort'
     const { api, count, answer } = fakeApi()
