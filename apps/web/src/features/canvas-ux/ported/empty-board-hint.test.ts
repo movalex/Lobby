@@ -67,6 +67,17 @@ describe('the empty board hint (K2-4)', () => {
     expect(renderToStaticMarkup(createElement(EmptyBoardGrid, { ctx }))).toBe('')
   })
 
+  it('a board opened with a template to insert (?template=) shows nothing while it is still empty', () => {
+    vi.stubGlobal('location', { search: '?template=retro' })
+    try {
+      const { ctx } = fakeCtx({ items: 0 })
+      expect(html(ctx)).toBe('')
+      expect(renderToStaticMarkup(createElement(EmptyBoardGrid, { ctx }))).toBe('')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('a viewer (or a commenter) gets one read-only line and no buttons', () => {
     const { ctx, registries } = fakeCtx({ readOnly: true })
     registries.panels.register(panel as never)

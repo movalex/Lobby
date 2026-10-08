@@ -13,6 +13,7 @@
 import { useEffect, useState } from 'react'
 import type { CanvasFeatureContext, MenuEntrySpec, MenuTarget } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { TEMPLATE_PARAM } from '../start-view.ts'
 import { runCommand } from './commands.ts'
 import { TEMPLATES_PANEL } from './Toolbar.tsx'
 
@@ -127,8 +128,20 @@ function useCoarsePointer(): boolean {
   return coarse
 }
 
+/**
+ * A board opened from the dashboard with a template (`?template=`) is empty only until the first view inserts it
+ * (navigation/start-view.ts): no card or grid flashes up meanwhile.
+ */
+function templatePending(): boolean {
+  try {
+    return new URLSearchParams(globalThis.location?.search ?? '').has(TEMPLATE_PARAM)
+  } catch {
+    return false
+  }
+}
+
 const useEmpty = (ctx: CanvasFeatureContext) =>
-  useValue('cux-empty-board', () => ctx.canvas.items().length === 0, [ctx.canvas])
+  useValue('cux-empty-board', () => ctx.canvas.items().length === 0 && !templatePending(), [ctx.canvas])
 
 /** The scene layer's dot grid, under every other layer, while the board is empty. */
 export function EmptyBoardGrid({ ctx }: { ctx: CanvasFeatureContext }) {
