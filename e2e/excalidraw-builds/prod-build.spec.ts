@@ -230,22 +230,26 @@ test('the static files: self-hosted fonts under /excalidraw-assets/ (200 woff2; 
   }
 
   // index.html: no inline script (the CSP has no hash); the theme boot is a same-origin classic script
-  // in <head>, before the app's module script
+  // in <head>, before the app's module script. K1-6 (wave K): both head scripts are emitted hashed under
+  // /assets/ (cached for a year); the plain root copies stay for a page cached before that.
   const html = await (await request.get('/')).text()
   expect(html.match(/<script(?![^>]*\bsrc=)[^>]*>/g)).toBeNull()
-  const boot = html.indexOf('<script src="/theme-boot.js">')
+  const bootSrc = /<script src="(\/assets\/theme-boot-[\w-]+\.js)"><\/script>/.exec(html)?.[1] ?? ''
+  const boot = bootSrc ? html.indexOf(`<script src="${bootSrc}">`) : -1
   expect(boot).toBeGreaterThan(-1)
   expect(boot).toBeLessThan(html.indexOf('</head>'))
   expect(boot).toBeLessThan(html.indexOf('type="module"'))
-  const script = await request.get('/theme-boot.js')
+  const script = await request.get(bootSrc)
   expect(script.status()).toBe(200)
   expect(script.headers()['content-type'] ?? '').toMatch(/javascript/)
   expect(await script.text()).toContain('draftroom:theme')
+  expect((await request.get('/theme-boot.js')).status()).toBe(200)
   // zod's jitless setting (no 'unsafe-eval'): a classic head script too, before every module script
-  const zod = html.indexOf('<script src="/zod-jitless.js">')
+  const zodSrc = /<script src="(\/assets\/zod-jitless-[\w-]+\.js)"><\/script>/.exec(html)?.[1] ?? ''
+  const zod = zodSrc ? html.indexOf(`<script src="${zodSrc}">`) : -1
   expect(zod).toBeGreaterThan(-1)
   expect(zod).toBeLessThan(html.indexOf('type="module"'))
-  const jitless = await request.get('/zod-jitless.js')
+  const jitless = await request.get(zodSrc)
   expect(jitless.status()).toBe(200)
   expect(await jitless.text()).toContain('jitless: true')
 })

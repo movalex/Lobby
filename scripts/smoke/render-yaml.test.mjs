@@ -22,6 +22,8 @@ test("render.yaml: the static site's headers, the enforced CSP on one line", () 
   assert.equal(headerFor(headers, '/*', 'X-Frame-Options'), 'DENY')
   assert.equal(headerFor(headers, '/*', 'Referrer-Policy'), 'strict-origin-when-cross-origin')
   assert.equal(headerFor(headers, '/assets/*', 'Cache-Control'), 'public, max-age=31536000, immutable')
+  // K1-6 (wave K): the self-hosted fonts, a week
+  assert.equal(headerFor(headers, '/excalidraw-assets/*', 'Cache-Control'), 'public, max-age=604800')
   const csp = expectedCsp(headers)
   assert.ok(csp, 'render.yaml sets a CSP for /*')
   assert.equal(csp.name, CSP, 'enforced, not report-only')
@@ -32,7 +34,7 @@ test("render.yaml: the static site's headers, the enforced CSP on one line", () 
   assert.deepEqual(cspDifferences(csp.value, csp.value), [])
   // Only the static site's own headers: nothing from another service.
   assert.ok(
-    headers.every((h) => h.path === '/*' || h.path === '/assets/*'),
+    headers.every((h) => h.path === '/*' || h.path === '/assets/*' || h.path === '/excalidraw-assets/*'),
     JSON.stringify(headers),
   )
 })
