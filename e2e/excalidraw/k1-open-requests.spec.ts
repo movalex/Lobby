@@ -27,11 +27,17 @@ const normalise = (pathname: string) =>
     .join('/')
 
 /**
- * Most calls of one kind a board open may make (whole open: navigation until quiet). K1-4: the export
- * policy once. Workstreams that bring a read down add theirs (K2-6 /threads, K3-6 /workshop and
- * /private-brainstorm, K7-4 no /ai before live).
+ * Most calls of one kind a board open may make: over the whole open (navigation until quiet), or only before
+ * the board is live (`beforeLive`). K1-4: the export policy once. Workstreams that bring a read down add
+ * theirs (K2-6 /threads, K3-6 /workshop and /private-brainstorm, K7-4 no /ai before live: `max: 0,
+ * beforeLive: true`).
  */
-const OPEN_LIMITS: readonly { readonly test: RegExp; readonly max: number; readonly why: string }[] = [
+const OPEN_LIMITS: readonly {
+  readonly test: RegExp
+  readonly max: number
+  readonly why: string
+  readonly beforeLive?: boolean
+}[] = [
   { test: /^GET \/api\/boards\/:id\/export-policy$/, max: 1, why: 'K1-4: one export-policy read per open' },
 ]
 
@@ -93,7 +99,10 @@ async function report(testInfo: TestInfo, label: string, calls: readonly ApiCall
     contentType: 'application/json',
   })
   console.log(`[k1 api calls] ${label}: ${body.beforeLive} before live, ${body.total} in all`)
-  for (const [k, n] of Object.entries(body.byPath)) console.log(`  ${n}  ${k}`)
+  for (const [k, n] of Object.entries(body.byPath)) {
+    const early = body.byPathBeforeLive[k] ?? 0
+    console.log(`  ${n}  ${k}${early ? ` (${early} before live)` : ''}`)
+  }
   return body
 }
 
@@ -125,8 +134,10 @@ for (const who of [
       await settle(page, calls)
       const body = await report(testInfo, who.label, calls, liveAt)
       for (const limit of OPEN_LIMITS) {
-        const n = calls.filter((c) => limit.test.test(`${c.method} ${c.path}`)).length
-        expect(n, `${limit.why}: ${JSON.stringify(body.byPath)}`).toBeLessThanOrEqual(limit.max)
+        const window = limit.beforeLive ? calls.filter((c) => c.at <= liveAt) : calls
+        const n = window.filter((c) => limit.test.test(`${c.method} ${c.path}`)).length
+        const seen = limit.beforeLive ? body.byPathBeforeLive : body.byPath
+        expect(n, `${limit.why}: ${JSON.stringify(seen)}`).toBeLessThanOrEqual(limit.max)
       }
       // positive control: the policy was read (the gates have an answer), and the board and ticket were asked
       expect(calls.filter((c) => c.path === '/api/boards/:id/export-policy').length).toBeGreaterThanOrEqual(1)
