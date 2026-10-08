@@ -99,15 +99,7 @@ describe('which engine each entry point loads', () => {
   })
 
   it('the template content (./templates/*.ts) imports only the neutral builder', () => {
-    for (const t of [
-      'brainstorm',
-      'lobby-tour',
-      'mood-board',
-      'pitch-outline',
-      'production-plan',
-      'retrospective',
-      'storyboard',
-    ])
-      expect(importGraph(`templates/${t}.ts`).bare).toEqual([])
+    // every template of the catalogue has its own file, named by its id
+    for (const t of TEMPLATE_INFOS) expect(importGraph(`templates/${t.id}.ts`).bare, t.id).toEqual([])
   })
 })

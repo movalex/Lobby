@@ -168,7 +168,8 @@ test('W5-05: moving each frame of every template takes its locked heading and in
 }) => {
   // W5-05: 2A's lock rule (apps/sync/src/room/merge.ts, wave 5) lets a locked heading move with its frame;
   // the mark came off at the wave-5 engine integration.
-  test.setTimeout(300_000)
+  // (wave K: 13 templates took 4.5 minutes, so the budget grows with the catalogue)
+  test.setTimeout(60_000 + TEMPLATE_INFOS.length * 40_000)
   const a = await canvasSession('alice')
   for (const t of TEMPLATE_INFOS) {
     await test.step(t.id, async () => {

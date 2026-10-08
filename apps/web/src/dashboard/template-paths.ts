@@ -10,6 +10,12 @@ export const TEMPLATE_IDS = [
   'pitch-outline',
   'retrospective',
   'production-plan',
+  'creative-brief',
+  'client-feedback',
+  'shot-list',
+  'launch-timeline',
+  'prioritisation-2x2',
+  'kanban',
 ] as const
 export type NewBoardTemplateId = (typeof TEMPLATE_IDS)[number]
 

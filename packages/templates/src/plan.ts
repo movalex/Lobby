@@ -37,7 +37,7 @@ export {
 } from './common.ts'
 export { getTemplateSource, isTemplateId, type TemplateInfo, type TemplateSource } from './source.ts'
 
-/** The seven templates' metadata, in catalogue order (the Lobby tour last, as in `TEMPLATES`). */
+/** The templates' metadata, in catalogue order (the Lobby tour last, as in `TEMPLATES`). */
 export const TEMPLATE_INFOS: readonly TemplateInfo[] = Object.freeze(
   TEMPLATE_SOURCES.map(({ id, name, description, category, sections }) =>
     Object.freeze({ id, name, description, category, sections }),

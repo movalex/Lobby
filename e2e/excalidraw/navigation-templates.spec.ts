@@ -5,6 +5,7 @@
 // only), so it keeps an expected-failure mark with that reason.
 //
 //   E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e excalidraw -- navigation-templates
+import { TEMPLATE_INFOS } from '../../packages/templates/src/plan.ts'
 import { createNote, expect, expectSaved, test } from '../tests/support/canvas.ts'
 import {
   boundsOf,
@@ -31,7 +32,7 @@ test('the template picker: every template with its preview, search and categorie
   const picker = a.page.getByTestId('template-picker')
   await expect(picker).toBeVisible()
   const options = picker.getByTestId('template-option')
-  await expect(options).toHaveCount(7)
+  await expect(options).toHaveCount(TEMPLATE_INFOS.length)
   await expect(picker.locator('[data-template-id="storyboard"] svg rect').first()).toBeAttached()
   // every word must match the name, the description or a section (the tour mentions every template)
   await picker.getByTestId('template-search').fill('mood')
@@ -40,7 +41,7 @@ test('the template picker: every template with its preview, search and categorie
     .toEqual(['mood-board', 'lobby-tour'])
   await picker.getByTestId('template-search').fill('')
   await picker.locator('[data-testid="template-category"][data-category="plan"]').click()
-  expect(await options.count()).toBeLessThan(7)
+  expect(await options.count()).toBeLessThan(TEMPLATE_INFOS.length)
   const v = await canvasSession('carol', { role: 'viewer' })
   await waitForNavigation(v.page)
   await expect(v.page.getByTestId('dock-tab-templates')).toHaveCount(0)

@@ -6,6 +6,7 @@
 //
 //   E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e excalidraw -- sync-room-frames
 import type { Page } from '@playwright/test'
+import { TEMPLATE_INFOS } from '../../packages/templates/src/plan.ts'
 import {
   type CanvasElement,
   expect,
@@ -22,15 +23,8 @@ import { openPath, waitForNavigation } from './navigation-kit.ts'
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
-const TEMPLATES = [
-  'retrospective',
-  'brainstorm',
-  'storyboard',
-  'mood-board',
-  'pitch-outline',
-  'production-plan',
-  'lobby-tour',
-] as const
+/** Every template of the catalogue (wave K added six), so a new one is covered the day it is added. */
+const TEMPLATES = TEMPLATE_INFOS.map((t) => t.id)
 
 /** An empty spot of frame `f` (no member covers it), in scene coordinates, or null. */
 function emptySpot(f: CanvasElement, members: CanvasElement[]): { x: number; y: number } | null {
