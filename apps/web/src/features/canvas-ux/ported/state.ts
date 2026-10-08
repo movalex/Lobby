@@ -45,6 +45,11 @@ export interface CanvasUxState {
   readonly leftEditing: Atom<string | null>
   /** bumped to move the keyboard to the selection bar (Alt+F10) */
   readonly selectionBarFocus: Atom<number>
+  /**
+   * K2-3: the person picked a fill in the style panel on this board page: the shape tools' light default
+   * (./defaults.ts `installShapeFillDefault`) never overrides that choice.
+   */
+  readonly fillChosen: Atom<boolean>
 }
 
 const states = new WeakMap<LobbyCanvas, CanvasUxState>()
@@ -64,6 +69,7 @@ export function uxState(canvas: LobbyCanvas): CanvasUxState {
       renamingFrame: atom<string | null>('cux-renaming-frame', null),
       leftEditing: atom<string | null>('cux-left-editing', null),
       selectionBarFocus: atom('cux-selbar-focus', 0),
+      fillChosen: atom('cux-fill-chosen', false),
     }
     states.set(canvas, s)
   }

@@ -9,6 +9,7 @@ import { type CanvasFeatureContext, SINGLE_PAGE_ID } from '../../../canvas/api/i
 import { formatRelativeTime } from '../../../lib/format.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { ExternalTag } from '../../people/ExternalTag.tsx'
+import { coarsePointer, emptyPanelText, NOTIFICATIONS_NOTE } from '../copy.ts'
 import {
   anchorLabel,
   isThreadFilter,
@@ -19,7 +20,7 @@ import {
   THREAD_FILTERS,
 } from '../model.ts'
 import { Avatar } from '../ThreadView.tsx'
-import { controllerFor, openThreadFromPanel } from './controller.ts'
+import { controllerFor, openThreadFromPanel, selectCommentTool } from './controller.ts'
 import { anchorContext, placeOnBoard } from './geometry.ts'
 
 export function CommentsPanel({ ctx }: { ctx: CanvasFeatureContext; close(): void }) {
@@ -122,11 +123,21 @@ export function CommentsPanel({ ctx }: { ctx: CanvasFeatureContext; close(): voi
       {status === 'ready' && list.length === 0 && (
         <p className="dr-cpanel__empty" data-testid="comments-empty">
           {Object.keys(threads).length === 0
-            ? canComment
-              ? 'No comments yet. Press C, then click an object or the board to add one.'
-              : 'No comments yet.'
+            ? emptyPanelText({ coarse: coarsePointer(), canComment })
             : 'No comments match this filter.'}
         </p>
+      )}
+      {status === 'ready' && canComment && Object.keys(threads).length === 0 && (
+        // K2-6 (F6): one click to the comment tool from the empty panel (the toolbar's Comment, C)
+        <button
+          type="button"
+          className="dr-btn dr-btn--sm dr-cpanel__add"
+          style={{ margin: '0 0 12px' }}
+          data-testid="comments-add"
+          onClick={() => selectCommentTool(ctx)}
+        >
+          Add a comment
+        </button>
       )}
 
       <ul className="dr-cpanel__list" aria-label="Comment threads">
@@ -145,9 +156,7 @@ export function CommentsPanel({ ctx }: { ctx: CanvasFeatureContext; close(): voi
           />
         ))}
       </ul>
-      <p className="dr-cpanel__note">
-        Notifications are in-app only (the bell in the top bar); email notifications aren’t available yet.
-      </p>
+      <p className="dr-cpanel__note">{NOTIFICATIONS_NOTE}</p>
     </div>
   )
 }

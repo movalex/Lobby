@@ -5,6 +5,7 @@
 import { type KeyboardEvent, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ExternalTag } from '../people/ExternalTag.tsx'
 import { useBoardOutside } from '../people/outside.ts'
+import { coarsePointer, composerHint } from './copy.ts'
 import {
   activeMentionQuery,
   applyMention,
@@ -232,7 +233,7 @@ export function Composer({
       </div>
       <div className="dr-ccomposer__bar">
         <span id={hintId} className="dr-ccomposer__hint">
-          Enter to post · Shift+Enter for a new line · @ to mention
+          {composerHint(coarsePointer())}
         </span>
         <button
           type="button"

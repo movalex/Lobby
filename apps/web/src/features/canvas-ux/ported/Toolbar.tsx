@@ -26,12 +26,14 @@ import type { CanvasFeatureContext, FeatureToolSpec } from '../../../canvas/api/
 import { currentPlatform, formatChord } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { TemplatesIcon } from '../icons.tsx'
+import { setToolLock } from './commands.ts'
 import { MediaIcon, MoreIcon, TOOL_ICONS } from './icons.tsx'
 import { pickFiles } from './insert-file.ts'
 import { POLYGON_TOOLS } from './polygons.ts'
 import { HistoryBar, QuickActions } from './QuickActions.tsx'
 import { hasStyleTarget, StylePanelBody, styleSwatchOf } from './StylePanel.tsx'
 import { uxState } from './state.ts'
+import { toolLock } from './tool-lock.ts'
 import { moveInToolbar } from './toolbar-keys.ts'
 import { planToolbar, STYLES_BUTTON_MAX, useCanvasRoom } from './toolbar-layout.ts'
 
@@ -100,6 +102,8 @@ interface Slot {
   readonly icon: ComponentType
   readonly active: boolean
   readonly expanded?: boolean
+  /** K2-2: the tool lock is on and this is the tool in use (it stays picked after each placement) */
+  readonly locked?: boolean
   /** the More button: the id of the popover it opens */
   readonly controls?: string
   onSelect(e?: { readonly detail: number }): void
@@ -137,8 +141,11 @@ function ToolButton({
     'data-tool': slot.id,
     'aria-label': slot.label,
     'aria-keyshortcuts': ariaKeys(slot.key),
-    title: title(slot.label, slot.key),
+    title: slot.locked
+      ? `${title(slot.label, slot.key)} (tool lock on: Q to turn it off)`
+      : title(slot.label, slot.key),
     'data-state': slot.active ? 'selected' : undefined,
+    'data-locked': slot.locked ? 'true' : undefined,
     tabIndex,
     // the board keeps the keyboard: a click on a tool is not a move of the focus
     onMouseDown: (e: { preventDefault(): void }) => e.preventDefault(),
@@ -204,6 +211,7 @@ export function Toolbar({ ctx }: { ctx: CanvasFeatureContext }) {
   const state = uxState(canvas)
   const tool = useValue('cux-tool', () => canvas.tool(), [canvas])
   const readOnly = useValue('cux-readonly', () => canvas.readOnly(), [canvas])
+  const locked = useValue(toolLock)
   const moreOpen = useValue(state.moreOpen)
   const stylesOpen = useValue(state.stylesOpen)
   const lastOverflow = useValue(state.lastOverflowTool)
@@ -241,7 +249,12 @@ export function Toolbar({ ctx }: { ctx: CanvasFeatureContext }) {
     key: t.key,
     icon: TOOL_ICONS[t.id] ?? MoreIcon,
     active: tool === t.id,
-    onSelect: () => pick(t.id),
+    locked: locked && tool === t.id,
+    onSelect: (e) => {
+      // K2-2: a double-click on a tool keeps it picked (the tool lock; Q does the same)
+      if ((e?.detail ?? 1) >= 2 && t.id !== 'select' && t.id !== 'hand' && !readOnly) setToolLock(ctx, true)
+      pick(t.id)
+    },
   })
   const featureSlot = (t: FeatureToolSpec): Slot => ({
     id: t.id,

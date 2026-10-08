@@ -19,15 +19,23 @@ import { CommentIcon } from '../icons.tsx'
 import { SHARING_CHANGED_EVENT } from '../store.ts'
 import { CommentsOverlay } from './CommentsOverlay.tsx'
 import { CommentsPanel } from './CommentsPanel.tsx'
-import { CommentsTopBar } from './CommentsTopBar.tsx'
+import { CommentsMenuItem, CommentsTopBar } from './CommentsTopBar.tsx'
 import { COMMENT_TOOL_ID, controllerFor, focusThread, selectCommentTool } from './controller.ts'
 import { anchorAt, anchorForKeyboard } from './geometry.ts'
 import { COMMENT_TOOL_KEYS, placeCommentFromKeyboard } from './keys.ts'
+import { startNotificationsPoll } from './poll.ts'
 import { mountCommentTool } from './tool.ts'
 
 const NOTIFICATIONS_POLL_MS = 60_000
-/** A resync right after a load (the stream's first hello) does not refetch again. */
+/** A resync right after a load does not refetch again. */
 const RESYNC_DEBOUNCE_MS = 1_500
+/**
+ * K2-6 (PERF-10): the board's threads are fetched ONCE per open. The first fetch waits for the event stream's
+ * first hello (its resync: nothing said before it can be missed after it), at most this long; before wave K
+ * the mount fetched, and the stream's first hello (fired at once when it was already up, or a moment later)
+ * fetched again.
+ */
+export const FIRST_LOAD_WAIT_MS = 2_500
 
 /** `/b/:bid?thread=thr_…` (links from notifications) opens that thread once the threads are loaded. */
 function takeDeepLinkedThread(): string | null {
@@ -91,6 +99,20 @@ function mount(ctx: CanvasFeatureContext): () => void {
     lastLoad = Date.now()
     return store.load()
   }
+  // K2-6: the first load, on the stream's first hello or after FIRST_LOAD_WAIT_MS, whichever comes first
+  let resolveFirst: () => void = () => {}
+  const firstLoaded = new Promise<void>((resolve) => {
+    resolveFirst = resolve
+  })
+  let firstTimer: ReturnType<typeof setTimeout> | null = null
+  const firstLoad = () => {
+    if (firstTimer === null) return false
+    clearTimeout(firstTimer)
+    firstTimer = null
+    void load().finally(resolveFirst)
+    return true
+  }
+  firstTimer = setTimeout(firstLoad, FIRST_LOAD_WAIT_MS)
   const offs = [
     events.on(COMMENTS_THREAD_EVENT, (data) => store.handleEvent(COMMENTS_THREAD_EVENT, data)),
     events.on(COMMENTS_DELETED_EVENT, (data) => store.handleEvent(COMMENTS_DELETED_EVENT, data)),
@@ -98,12 +120,12 @@ function mount(ctx: CanvasFeatureContext): () => void {
     // can be @mentioned follows any change of who has access (F4).
     events.on(SHARING_CHANGED_EVENT, (data) => store.handleEvent(SHARING_CHANGED_EVENT, data)),
     events.onResync(() => {
-      if (Date.now() - lastLoad > RESYNC_DEBOUNCE_MS) void load()
+      if (!firstLoad() && Date.now() - lastLoad > RESYNC_DEBOUNCE_MS) void load()
       store.scheduleNotificationsRefresh(0)
     }),
   ]
   const deepLink = takeDeepLinkedThread()
-  void load().then(() => {
+  void firstLoaded.then(() => {
     if (!deepLink) return
     if (!focusThread(controller.ctx, deepLink))
       controller.ctx.notify({
@@ -120,15 +142,23 @@ function mount(ctx: CanvasFeatureContext): () => void {
   }
   window.addEventListener(SHARE_CHANGED_EVENT, onShareChanged)
   store.scheduleNotificationsRefresh(0)
-  const poll = setInterval(() => void store.refreshNotifications(), NOTIFICATIONS_POLL_MS)
+  // K2-6 (F8): no poll while the tab is hidden; one refresh when it is shown again (folded with a focus)
+  const stopPoll = startNotificationsPoll({
+    poll: () => void store.refreshNotifications(),
+    wake: () => store.scheduleNotificationsRefresh(0),
+    doc: document,
+    intervalMs: NOTIFICATIONS_POLL_MS,
+  })
   const onFocus = () => store.scheduleNotificationsRefresh(0)
   window.addEventListener('focus', onFocus)
 
   return () => {
     for (const off of offs) off()
+    if (firstTimer !== null) clearTimeout(firstTimer)
+    firstTimer = null
     offTool()
     window.removeEventListener(SHARE_CHANGED_EVENT, onShareChanged)
-    clearInterval(poll)
+    stopPoll()
     window.removeEventListener('focus', onFocus)
     store.dispose()
   }
@@ -154,8 +184,12 @@ export const feature: CanvasFeature = {
       component: CommentsPanel,
     },
   ],
-  // the tool toggle and the bell stay in the bar on narrow screens (PRI-02)
-  topBar: [{ id: 'comments', order: 20, pinned: true, component: CommentsTopBar }],
+  // the bell stays in the bar on narrow screens (PRI-02); K2-5: on a phone it is in "⋯" with the comment tool
+  // (the second item, which draws nothing on wider screens; the comment tool left the bar there)
+  topBar: [
+    { id: 'comments', order: 20, pinned: true, component: CommentsTopBar },
+    { id: 'comments-menu', order: 21, overflowCaption: 'Comments', component: CommentsMenuItem },
+  ],
   tools: [
     {
       id: COMMENT_TOOL_ID,

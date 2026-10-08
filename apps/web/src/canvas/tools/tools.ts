@@ -11,6 +11,24 @@
 // :51295-51320) and `autoshape` from a double-click (:44733), all without the text lease (P6-P8 of
 // §2.9.2). `image` would open Excalidraw's file picker and base64 path (§2.10.1); `embeddable` and
 // `magicframe` are refused element types (§3.1); `bucketfill` is not a Lobby tool.
+//
+// K2-2 (wave K): the tool lock (features/canvas-ux/ported/tool-lock.ts). Excalidraw keeps `activeTool.locked`
+// from one tool to the next (updateActiveTool: `locked: data.locked ?? appState.activeTool.locked`,
+// @excalidraw/common dist/dev/index.js:2734-2750), and every Lobby custom tool is activated with
+// `locked: true`, so a rectangle picked after the note or comment tool used to stay armed after drawing. The
+// engine's drawing tools now say `locked` every time: Lobby's tool lock, off unless Q (or a double-click on a
+// tool) turned it on.
+import { toolLock } from '../../features/canvas-ux/ported/tool-lock.ts'
+
+/** The engine tools that go back to Select after one shape unless locked (the engine's padlock rule). */
+export const LOCKABLE_ENGINE_TOOLS: ReadonlySet<string> = new Set([
+  'rectangle',
+  'diamond',
+  'ellipse',
+  'arrow',
+  'line',
+  'frame',
+])
 
 export const REFUSED_ENGINE_TOOLS: ReadonlySet<string> = new Set([
   'text',
@@ -111,12 +129,19 @@ export function toolRequest(tool: string): ToolRequest {
 export interface ToolOptions {
   /** Commenters, viewers and limited guests (Excalidraw runs with the `interaction` config). */
   readOnly?: boolean
+  /** K2-2: whether a drawing tool stays picked after one shape (default: Lobby's tool lock). */
+  locked?: boolean
+}
+
+/** The request for an engine tool: a drawing tool says whether it stays picked (K2-2). */
+function engineRequest(type: EngineTool, opts: ToolOptions): ToolRequest {
+  return LOCKABLE_ENGINE_TOOLS.has(type) ? { type, locked: opts.locked ?? toolLock.get() } : { type }
 }
 
 export function setEngineTool(api: ToolApi, type: string, opts: ToolOptions = {}): boolean {
   if (REFUSED_ENGINE_TOOLS.has(type) || !isEngineTool(type)) return false
   if (!opts.readOnly) {
-    api.setActiveTool({ type })
+    api.setActiveTool(engineRequest(type, opts))
     return true
   }
   // Finding (spike A4): under the `interaction` config Excalidraw refuses EVERY engine tool, the

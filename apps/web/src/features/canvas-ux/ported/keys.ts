@@ -16,6 +16,8 @@
 //    locked element never goes; MAK-05 keeps it selected after locking).
 //  - export control: while exporting is off for this person, Ctrl/Cmd+C and +X on a selection say why (the
 //    allowlist keeps the key from read-only roles, so no copy event ever reaches ./export-gate.ts's guard).
+//  - K2-2 (wave K): Q turns the tool lock on and off (./tool-lock.ts), unless a printable key on the selection
+//    types into it (a selected note, a mind-map topic).
 //  - CR-3A-6 (wave 3b): Shift+D picks the highlighter (tldraw's key; a key on one selected note types into
 //    it instead), P while highlighting goes back to the pen, and H / V pick the read-only Hand and Select
 //    for people who cannot edit. These tools are the canvas API's (canvas/api/parts/tools.ts), which the
@@ -26,6 +28,7 @@
 // (./keyboard-map.test.ts) leaves them out of the conflict check for that reason.
 import type { CanvasFeatureContext, FeatureKeySpec, KeyEventLike } from '../../../canvas/api/index.ts'
 import { items } from '../../../canvas/api/index.ts'
+import { setToolLock } from './commands.ts'
 import { openContextMenuForSelection } from './context-menu-open.ts'
 import { exportAllowed, notifyExportOff } from './export-gate.ts'
 import { editAdjacentNote, type NoteDirection } from './notes.ts'
@@ -61,6 +64,7 @@ export const DEFERRING_KEYS: ReadonlySet<string> = new Set([
   'canvas-ux.tool-highlight',
   'canvas-ux.tool-pen-after-highlight',
   'canvas-ux.readonly-tools',
+  'canvas-ux.tool-lock-key',
 ])
 
 /** One selected sticky note: the allowlist's type-to-edit takes printable keys (canvas/input/keymap.ts). */
@@ -70,6 +74,21 @@ const typeToEditTarget = (ctx: CanvasFeatureContext) => {
 }
 
 const plain = (e: KeyEventLike) => !e.ctrlKey && !e.metaKey && !e.altKey
+
+/** A printable key on the selection types into it: one selected note, or a feature's type-to-edit rule. */
+const typesInto = (ctx: CanvasFeatureContext) => {
+  const sel = ctx.canvas.selection
+  if (sel.length !== 1) return false
+  if (typeToEditTarget(ctx)) return true
+  const id = sel[0] as string
+  return ctx.registries.typeToEdit.list().some((r) => {
+    try {
+      return r.applies(id)
+    } catch {
+      return false
+    }
+  })
+}
 
 /** Another feature's key (commands and keys alike) takes this event: a deferring key steps aside. */
 export function othersTake(e: KeyEventLike, ctx: CanvasFeatureContext, scope: 'canvas' | 'editor'): boolean {
@@ -106,6 +125,8 @@ export const KEYS: readonly FeatureKeySpec[] = [
       const letter = /^Key([A-Z])$/.exec(e.code)?.[1]?.toLowerCase()
       const tool = letter && !e.shiftKey ? TOOL_LETTERS[letter] : undefined
       if (tool) ctx.canvas.setTool(tool)
+      // K2-2: Q is the tool lock here too (the note just edited is not typed into)
+      else if (letter === 'q' && !e.shiftKey && !ctx.canvas.readOnly()) setToolLock(ctx)
       return true
     },
   },
@@ -223,6 +244,18 @@ export const KEYS: readonly FeatureKeySpec[] = [
     match: (e, ctx) =>
       plain(e) && !e.shiftKey && ctx.canvas.tool() === 'highlight' && !othersTake(e, ctx, 'canvas'),
     handle: (_e, ctx) => ctx.canvas.setTool('freedraw'),
+  },
+  {
+    // K2-2: the tool lock (./tool-lock.ts); a printable key on a selected note types into it instead
+    id: 'canvas-ux.tool-lock-key',
+    scope: 'canvas',
+    chords: ['q'],
+    match: (e, ctx) =>
+      plain(e) && !e.shiftKey && !ctx.canvas.readOnly() && !typesInto(ctx) && !othersTake(e, ctx, 'canvas'),
+    handle: (_e, ctx) => {
+      setToolLock(ctx)
+      return true
+    },
   },
   {
     // CR-3A-6: H and V for read-only roles pick the read-only Hand and Select (canvas/api/parts/tools.ts);

@@ -385,6 +385,9 @@ for (const colorScheme of ['light', 'dark'] as const) {
     const a = await canvasSession('alice')
     await a.page.emulateMedia({ colorScheme })
     await waitForA11y(a.page)
+    // K2-4: the empty board's start card and dot grid
+    await expect(a.page.getByTestId('empty-board-hint')).toBeVisible()
+    await expectAxeClean(a.page, `board empty, with the start card ${colorScheme}`)
     const retro = await frame(a.page, 0, 0, 800, 500, 'Retro')
     const inner = await note(a.page, 100, 100, 'Inside')
     await intoFrame(a.page, [inner], retro)

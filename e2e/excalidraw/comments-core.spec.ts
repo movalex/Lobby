@@ -82,7 +82,8 @@ test('commenter on a read-only canvas: C, click a note, Enter posts; the owner s
   let threadId = ''
   await test.step('carol presses C and comments on the note', async () => {
     await pressCommentTool(c.page)
-    await expect(c.page.getByTestId('comment-tool')).toHaveAttribute('aria-pressed', 'true')
+    // K2-5: the comment tool is the toolbar's (the top bar's copy is gone on a desktop)
+    await expect(c.page.getByTestId('tools.comment')).toHaveAttribute('aria-pressed', 'true')
     threadId = await commentOnElement(c.page, note, 'Can we warm up the grade here?', { u: 0.25, v: 0.75 })
     const list = threadPopover(c.page, threadId).getByTestId('comment-item')
     await expect(list).toHaveCount(1)
@@ -645,7 +646,9 @@ test('viewer: C shows the read-only notice and keeps the select tool; the viewer
   await d.page.keyboard.press('c')
   await expect(d.page.getByTestId('comments-readonly-notice')).toBeVisible()
   expect(await currentTool(d.page)).toBe('select')
-  await expect(d.page.getByTestId('comment-tool')).toHaveAttribute('aria-disabled', 'true')
+  // K2-5: no top-bar comment tool any more (it said aria-disabled for a viewer); the toolbar's stays unpressed
+  await expect(d.page.getByTestId('comment-tool')).toHaveCount(0)
+  await expect(d.page.getByTestId('tools.comment')).toHaveAttribute('aria-pressed', 'false')
 
   await pin(d.page, thread.id).click()
   const popover = threadPopover(d.page, thread.id)

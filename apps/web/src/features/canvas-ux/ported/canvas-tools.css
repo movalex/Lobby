@@ -147,6 +147,21 @@
   outline: 2px solid var(--dr-focus);
   outline-offset: 1px;
 }
+/* K2-2: the tool lock is on (Q, or a double-click on the tool): a small padlock dot on the tool in use */
+.cux-tool[data-locked="true"] {
+  position: relative;
+}
+.cux-tool[data-locked="true"]::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--dr-navy);
+  border-radius: 2px;
+  background: var(--dr-on-navy);
+}
 
 /* ---- style panel ---------------------------------------------------------------------------------- */
 .cux-style {
@@ -541,4 +556,33 @@
 .cux-style__opt--icon:focus-visible {
   outline: 2px solid var(--dr-focus);
   outline-offset: 1px;
+}
+
+/* K2-7 (UXD-09): an image selection's style panel is one row (its kind, then the opacity slider), not a card */
+.cux-style--summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: auto;
+  max-width: 300px;
+  padding: 6px 10px;
+}
+.cux-style__summary-kind {
+  flex: none;
+  color: var(--dr-ink-2);
+  font-weight: 600;
+}
+.cux-style--summary .cux-style__opacity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}
+.cux-style--summary .cux-style__opacity-label {
+  gap: 6px;
+  margin: 0;
+}
+.cux-style--summary .cux-style__opacity input {
+  width: 120px;
 }

@@ -219,7 +219,8 @@ test('A11Y-14: the save pill is not a live region; the announcer stays quiet whi
   const announcer = a.page.getByTestId('save-announcer')
   await expect(pill).not.toHaveAttribute('role', 'status')
   await expect(pill).not.toHaveAttribute('aria-live', /.+/)
-  await expect(announcer).toHaveAttribute('role', 'status')
+  // K2-5 (UXP-11): the announcer is a polite live region but no (empty) status node beside "Saved"
+  await expect(announcer).not.toHaveAttribute('role', /.+/)
   await expect(announcer).toHaveAttribute('aria-live', 'polite')
   for (let i = 0; i < 3; i++) {
     await note(a.page, 200 + i * 240, 200, `Edit ${i}`)

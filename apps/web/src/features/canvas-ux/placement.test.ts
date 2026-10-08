@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
   containingFrame,
+  FRAME_HEADING,
   findEmptySpot,
   findEmptySpotWithin,
   frameCamera,
   offsetToCenter,
+  onScreen,
   type Rect,
   rectsOverlap,
+  START_VIEW_PAD,
+  startViewCamera,
   unionRects,
 } from './placement.ts'
 
@@ -142,5 +146,55 @@ describe('frameCamera (PRI-10: frames panel "go to frame")', () => {
         { top: 50, right: 0, bottom: 50, left: 0 },
       ),
     ).toBeNull()
+  })
+})
+
+// K2-7 (wave K, UXD-11): the board's first view is framed clear of the chrome, plus 32 px
+describe('startViewCamera (K2-7)', () => {
+  // a 1440 x 900 window: the canvas is what the top bar (48 px) and the rail (48 px) leave, 1392 x 852; on it the
+  // board menu button (12 + 38 px) at the top and the toolbar and zoom chip (48 px, 12 px from the edge) at the
+  // bottom
+  const screen = { w: 1392, h: 852 }
+  const insets = { top: 50, right: 0, bottom: 60, left: 0 }
+  const free = {
+    left: insets.left + START_VIEW_PAD,
+    right: screen.w - insets.right - START_VIEW_PAD,
+    top: insets.top + START_VIEW_PAD,
+    bottom: screen.h - insets.bottom - START_VIEW_PAD,
+  }
+  const inside = (r: { x: number; y: number; w: number; h: number }, heading = 0) =>
+    r.x >= free.left - 0.5 &&
+    r.x + r.w <= free.right + 0.5 &&
+    r.y - heading >= free.top - 0.5 &&
+    r.y + r.h <= free.bottom + 0.5
+
+  it('a wide frame (the tour) lies inside the canvas minus the chrome plus 32 px, its name included', () => {
+    const frame = { x: -200, y: 40, w: 1920, h: 1080 }
+    const cam = startViewCamera(frame, screen, insets, { heading: FRAME_HEADING, minZoom: 0.1 })
+    expect(cam).not.toBeNull()
+    const r = onScreen(frame, cam as { x: number; y: number; z: number })
+    expect(inside(r, FRAME_HEADING)).toBe(true)
+    // and it is centred in that free area horizontally (it fills its width)
+    expect(r.x + r.w / 2).toBeCloseTo((free.left + free.right) / 2, 5)
+  })
+
+  it('tall content fits by height, inside the same area', () => {
+    const tall = { x: 0, y: 0, w: 600, h: 2400 }
+    const cam = startViewCamera(tall, screen, insets, { minZoom: 0.05 })
+    const r = onScreen(tall, cam as { x: number; y: number; z: number })
+    expect(inside(r)).toBe(true)
+    expect(r.y + r.h / 2).toBeCloseTo((free.top + free.bottom) / 2, 5)
+  })
+
+  it('small content is not zoomed in past 100 % and is centred in the free area', () => {
+    const small = { x: 100, y: 100, w: 200, h: 200 }
+    const cam = startViewCamera(small, screen, insets) as { x: number; y: number; z: number }
+    expect(cam.z).toBe(1)
+    const r = onScreen(small, cam)
+    expect(inside(r)).toBe(true)
+  })
+
+  it('a free area too small to show anything falls back (null) to a plain fit', () => {
+    expect(startViewCamera({ x: 0, y: 0, w: 100, h: 100 }, { w: 120, h: 120 }, insets)).toBeNull()
   })
 })
