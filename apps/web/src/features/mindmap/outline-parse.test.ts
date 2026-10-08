@@ -9,6 +9,7 @@ import {
   cutTopic,
   flattenOutline,
   OUTLINE_MAX_DEPTH,
+  OUTLINE_MAX_LINE_CHARS,
   OUTLINE_MAX_TOPIC_CHARS,
   OUTLINE_MAX_TOPICS,
   OUTLINE_UNTITLED,
@@ -162,6 +163,20 @@ describe('no title in the text', () => {
 })
 
 describe('caps', () => {
+  it('a hostile line is cleaned in bounded time (wave K integration, the K7 review)', () => {
+    // before the cap: about 1 s for '[' x 59,000 (the link and image patterns are quadratic on it)
+    for (const hostile of ['['.repeat(59_000), '!['.repeat(29_500), '[a]('.repeat(14_750)]) {
+      const t0 = performance.now()
+      offersMindmap(`${hostile}
+next
+  child`)
+      cleanTopicText(hostile)
+      expect(performance.now() - t0, hostile.slice(0, 4)).toBeLessThan(150)
+    }
+    expect(OUTLINE_MAX_LINE_CHARS).toBeGreaterThan(OUTLINE_MAX_TOPIC_CHARS)
+    // a long line still makes its topic from its start
+    expect(cleanTopicText(`**Plan** ${'x'.repeat(5_000)}`).startsWith('Plan x')).toBe(true)
+  })
   it('a depth cap of 4: deeper lines join the last level, and are counted', () => {
     const text = ['Root', '  L1', '    L2', '      L3', '        L4', '          L5', '            L6'].join(
       '\n',

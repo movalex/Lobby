@@ -29,6 +29,11 @@ export const OUTLINE_MAX_TOPIC_CHARS = 120
 /** Characters of a paste that are looked at, and lines. */
 export const OUTLINE_MAX_INPUT_CHARS = 60_000
 export const OUTLINE_MAX_LINES = 600
+/**
+ * Characters of one line that are cleaned (wave K integration, the K7 review): the link and image patterns are
+ * quadratic on a hostile line ('[' x 59,000 took about 1 s); a topic keeps OUTLINE_MAX_TOPIC_CHARS anyway.
+ */
+export const OUTLINE_MAX_LINE_CHARS = 2_000
 /** What a map without a title in its text is called. */
 export const OUTLINE_UNTITLED = 'Mind map'
 /** A paste offers "Paste as mind map" from this many topics. */
@@ -69,8 +74,9 @@ const PLACE = '\u0001'
 /** One topic's words from a line of Markdown: markup reduced, whitespace collapsed. */
 export function cleanTopicText(raw: string): string {
   const kept: string[] = []
+  const line = raw.length > OUTLINE_MAX_LINE_CHARS ? raw.slice(0, OUTLINE_MAX_LINE_CHARS) : raw
   // escapes first (they are what the outline export writes), restored last
-  let s = raw.replace(ESCAPABLE, (_, c: string) => `${PLACE}${kept.push(c) - 1}${PLACE}`)
+  let s = line.replace(ESCAPABLE, (_, c: string) => `${PLACE}${kept.push(c) - 1}${PLACE}`)
   s = s
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
