@@ -1,31 +1,49 @@
-// OWNER: 3f. The workshops feature's top-bar item on the Excalidraw page (the tldraw board's
-// WorkshopBar): the timer pill (countdown for everyone), a vote chip while a vote is open, the private
-// brainstorm chip, the raised-hands chip, the reactions control, and the facilitation popover (timer
-// controls, start a vote, raise-hand queue, private brainstorm, gather everyone, session settings).
-// Controls are hidden for people who cannot facilitate; the API refuses them anyway.
-import { useEffect, useId, useRef, useState } from 'react'
+// OWNER: 3f. The workshops feature's top-bar item on the Excalidraw page (the tldraw board's WorkshopBar).
+// K3-3 (wave K, UXD-01): ONE button, "Facilitate" ("Session" for people who cannot facilitate), instead of the
+// timer pill, the vote chip, the brainstorm chip, the raised-hands chip and the reactions button side by side.
+// Its pill shows only what is live ("4:58 · Vote"); its menu holds the same entries with the same test ids:
+// Timer (`timer-pill`: the workshop tools popover with the timer controls, the raise-hand queue, voting, the
+// private brainstorm, gather everyone and the session settings), Reactions and raise hand
+// (`reactions-button`: the reactions bar), Raised hands (`hands-chip`), Voting (`vote-chip`: the voting
+// panel, or a new vote's setup for a facilitator) and Private brainstorm (`pn-chip`). Who sees which entry is
+// ./guest-chrome.ts `facilitateEntries`: the rules each control had in the bar. Controls are hidden for
+// people who cannot facilitate; the API refuses them anyway.
+import { Fragment, type KeyboardEvent, useEffect, useId, useRef, useState } from 'react'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { useIsGuest } from '../../../invite/guest.tsx'
 import { useValue } from '../../../lib/signals.ts'
+import { onFocusLeave } from '../../../ui/focus.ts'
 import { installAudioUnlock, playChime, readMuted, writeMuted } from '../chime.ts'
 import {
   crossedZero,
   describeClock,
   formatClock,
   parseDurationInput,
+  type TimerDisplay,
   type TimerPhase,
   timerDisplayPhase,
   timerPhase,
   timerRemainingMs,
 } from '../countdown.ts'
-import { HandsChip, HandsSection } from '../Hands.tsx'
+import { HandIcon, HandsEntry, HandsSection, handsLabel } from '../Hands.tsx'
 import { usePrivateNotes } from '../private-notes/hooks.ts'
-import type { WorkshopStore } from '../store.ts'
+import type { WorkshopSnapshot, WorkshopStore } from '../store.ts'
 import { canEditBoard, useIsFacilitator, useNow, useWorkshop } from '../workshop-context.ts'
 import { summonScreen } from './camera.ts'
-import { showTimerButton, workshopActivity } from './guest-chrome.ts'
-import { PrivateNotesChip, PrivateNotesSection } from './private-notes/PrivateNotesBar.tsx'
-import { ReactionControl } from './Reactions.tsx'
+import {
+  type FacilitateEntry,
+  facilitateEntries,
+  facilitatePill,
+  type PillPart,
+  pillText,
+  workshopActivity,
+} from './guest-chrome.ts'
+import {
+  PrivateNotesEntry,
+  PrivateNotesSection,
+  PrivateNotesSetup,
+} from './private-notes/PrivateNotesBar.tsx'
+import { ReactionBar, SmileIcon } from './Reactions.tsx'
 import { workshopSettingsOf, writeWorkshopSettings } from './session-settings.ts'
 import { VoteSetupDialog } from './VoteSetupDialog.tsx'
 
@@ -48,21 +66,99 @@ export function StopwatchIcon({ size = 14 }: { size?: number }) {
   )
 }
 
+/** The Facilitate button's mark: a speech bubble with a spark (live tools for a session). */
+function FacilitateIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+      <path
+        d="M4 5.5h10.5a2 2 0 0 1 2 2V13a2 2 0 0 1-2 2H9l-4 3.5V15H4a2 2 0 0 1-2-2V7.5a2 2 0 0 1 2-2z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinejoin="round"
+      />
+      <path d="M19.5 2.5l.8 1.9 1.9.8-1.9.8-.8 1.9-.8-1.9-1.9-.8 1.9-.8z" fill="currentColor" />
+    </svg>
+  )
+}
+
+function VoteIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+      <circle cx="8" cy="9" r="3" fill="currentColor" />
+      <circle cx="16" cy="9" r="3" fill="currentColor" opacity="0.55" />
+      <circle cx="12" cy="16" r="3" fill="currentColor" opacity="0.8" />
+    </svg>
+  )
+}
+
+/** What is open under the Facilitate button: its menu, the workshop tools or the reactions bar. */
+type Open = 'menu' | 'tools' | 'reactions' | null
+
+/** The Timer entry's state on the right ("4:58 left", "Paused · 4:58", "Not set"). */
+export function timerMeta(display: TimerDisplay, remaining: number): string {
+  switch (display) {
+    case 'running':
+      return `${formatClock(remaining)} left`
+    case 'paused':
+      return `Paused · ${formatClock(remaining)}`
+    case 'finished':
+      return "Time's up"
+    case 'stopped':
+      return 'Stopped'
+    case 'ended':
+      return 'Finished'
+    default:
+      return 'Not set'
+  }
+}
+
+/** The Voting entry's state on the right ("3 left", "Join", "Results", "Start…"). */
+export function voteMeta(
+  snap: Pick<WorkshopSnapshot, 'vote' | 'participation' | 'ballot'>,
+  facilitator: boolean,
+) {
+  const vote = snap.vote
+  if (!vote) return facilitator ? 'Start…' : ''
+  if (vote.session.status === 'open') {
+    if (snap.participation !== 'joined') return 'Join'
+    return `${snap.ballot?.myRemaining ?? vote.myRemaining} left`
+  }
+  return vote.session.status === 'revealed' ? 'Results' : 'Ended'
+}
+
+/** The pill's words for screen readers ("timer 4 minutes 58 seconds left, a vote is open"). */
+function spokenPill(parts: readonly PillPart[], remaining: number, snap: WorkshopSnapshot): string {
+  return parts
+    .map((p) => {
+      if (p.kind === 'timer')
+        return p.state === 'finished'
+          ? "time's up"
+          : `timer ${describeClock(remaining)} left${p.state === 'paused' ? ', paused' : ''}`
+      if (p.kind === 'vote') return 'a vote is open'
+      if (p.kind === 'brainstorm') return 'a private brainstorm is open'
+      return handsLabel(snap)
+    })
+    .join(', ')
+}
+
 export function WorkshopBar({ ctx }: { ctx: Ctx }) {
   const { store, snap } = useWorkshop(ctx)
   const facilitator = useIsFacilitator(ctx)
   const guest = useIsGuest()
-  const brainstorming = usePrivateNotes(ctx).snap.session !== null
+  const brainstorm = usePrivateNotes(ctx).snap.session
   const sessionSettings = useValue('dr-wk-bar-settings', () => workshopSettingsOf(ctx.canvas), [ctx.canvas])
-  const [open, setOpen] = useState(false)
-  /** Which section the popover should bring into view and focus when it opens (null = the first). */
+  const [open, setOpen] = useState<Open>(null)
+  /** Which section the tools popover should bring into view and focus when it opens (null = the first). */
   const [focusSection, setFocusSection] = useState<'hands' | null>(null)
   const [muted, setMuted] = useState(readMuted)
   const wrap = useRef<HTMLDivElement>(null)
-  const pill = useRef<HTMLButtonElement>(null)
+  const button = useRef<HTMLButtonElement>(null)
+  const menuId = useId()
   const popId = useId()
+  const barId = useId()
 
-  // "Show queue" (a toast) and the hands chip open the popover at the raised-hands queue.
+  // "Show queue" (a toast) and the hands entry open the tools at the raised-hands queue.
   const requestSeq = snap.toolsRequest?.seq
   const requestSection = snap.toolsRequest?.section ?? null
   const handledRequest = useRef(requestSeq)
@@ -70,7 +166,7 @@ export function WorkshopBar({ ctx }: { ctx: Ctx }) {
     if (requestSeq === undefined || requestSeq === handledRequest.current) return
     handledRequest.current = requestSeq
     setFocusSection(requestSection)
-    setOpen(true)
+    setOpen('tools')
   }, [requestSeq, requestSection])
 
   const offset = store.serverOffsetMs()
@@ -98,108 +194,129 @@ export function WorkshopBar({ ctx }: { ctx: Ctx }) {
     prev.current = { phase, endsAt }
   }, [phase, snap.timer?.endsAt, store])
 
-  // Close on outside press / Escape. Escape is handled on the document because the focused control
-  // can disappear under the user (Resume turns into Pause), which drops focus to <body>.
+  // Close on an outside press and on Escape (on the document: the focused control can disappear under the
+  // user, Resume turning into Pause, which drops focus to <body>); the menu and the reactions bar also when
+  // the keyboard leaves them (A11Y2-05: Tab past the bar, or a dialog taking the keyboard).
   useEffect(() => {
     if (!open) return
     const onDown = (e: PointerEvent) => {
-      const t = e.target as Element | null
-      // The reactions control has its own bar: pressing it closes these tools.
-      if (!wrap.current?.contains(t) || t?.closest?.('.dr-wk-react')) setOpen(false)
+      if (!wrap.current?.contains(e.target as Node)) setOpen(null)
     }
-    const onKey = (e: KeyboardEvent) => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key !== 'Escape') return
       const inside = wrap.current?.contains(document.activeElement)
       if (!inside && document.activeElement !== document.body) return // someone else's Escape
       e.stopPropagation()
-      setOpen(false)
-      pill.current?.focus()
+      setOpen(null)
+      button.current?.focus()
     }
     document.addEventListener('pointerdown', onDown, true)
     document.addEventListener('keydown', onKey, true)
+    // The menu stays when the board page hands the canvas the keyboard (it does on its own after a load); a
+    // Tab out of it, or a press anywhere else, closes it.
+    const keep = open === 'menu' ? (el: Element) => !!el.closest('[data-lobby-board-canvas]') : undefined
+    const off =
+      open !== 'tools' && wrap.current ? onFocusLeave(wrap.current, () => setOpen(null), keep) : () => {}
     return () => {
       document.removeEventListener('pointerdown', onDown, true)
       document.removeEventListener('keydown', onKey, true)
+      off()
     }
   }, [open])
 
   const vote = snap.vote
-  const voteOpen = vote?.session.status === 'open'
-  const shown = display === 'running' || display === 'paused' || display === 'finished'
-  // DANA-11 / F14 / PRI-18: a guest sees the Timer button only while a session is running (./guest-chrome.ts);
-  // an open popover stays until it is closed.
-  const timerButton =
-    open ||
-    showTimerButton(
-      guest,
-      workshopActivity({
-        timer: snap.timer,
-        vote: snap.vote !== null,
-        brainstorm: brainstorming,
-        hands: snap.hands.length,
-        settings: sessionSettings,
-        now,
-        offsetMs: offset,
-      }),
-    )
-  const label = shown
-    ? `Timer: ${display === 'finished' ? "time's up" : `${describeClock(remaining)} left${display === 'paused' ? ', paused' : ''}`}. Workshop tools`
-    : display === 'ended'
-      ? 'Timer (finished). Workshop tools'
-      : 'Timer and workshop tools'
+  const activity = workshopActivity({
+    timer: snap.timer,
+    vote: vote !== null,
+    brainstorm: brainstorm !== null,
+    hands: snap.hands.length,
+    settings: sessionSettings,
+    now,
+    offsetMs: offset,
+  })
+  const entries = facilitateEntries({ guest, facilitator, activity, vote: vote !== null })
+  const parts = facilitatePill({
+    timer: display,
+    clock: formatClock(remaining),
+    voteOpen: vote?.session.status === 'open',
+    brainstormOpen: brainstorm?.status === 'open',
+    hands: snap.hands.length,
+  })
+  const title = facilitator ? 'Facilitate' : 'Session'
+  const spoken = spokenPill(parts, remaining, snap)
+  const label = spoken ? `${title}: ${spoken}` : title
+  const controls =
+    open === 'menu' ? menuId : open === 'tools' ? popId : open === 'reactions' ? barId : undefined
+
+  const show = (what: Open, section: 'hands' | null = null) => {
+    setFocusSection(section)
+    setOpen(what)
+  }
 
   return (
     <div className="dr-wk-bar" ref={wrap}>
-      {timerButton && (
-        <button
-          ref={pill}
-          type="button"
-          className="dr-wk-pill"
-          data-testid="timer-pill"
-          data-state={display}
-          aria-haspopup="dialog"
-          aria-expanded={open}
-          aria-controls={open ? popId : undefined}
-          aria-label={label}
-          title={label}
-          onClick={() => {
-            setFocusSection(null)
-            setOpen((o) => !o)
-          }}
-        >
-          <StopwatchIcon />
-          {shown ? (
-            <span className="dr-wk-pill__time" data-testid="timer-remaining">
-              {formatClock(remaining)}
-            </span>
-          ) : (
-            <span className="dr-wk-pill__label">Timer</span>
-          )}
-        </button>
-      )}
-      {voteOpen && snap.ballot && (
-        <button
-          type="button"
-          className="dr-wk-chip"
-          data-testid="vote-chip"
-          title="Open the voting panel"
-          onClick={() => ctx.openPanel('voting')}
-        >
-          <span className="dr-wk-chip__dot" aria-hidden="true" />
-          Voting · {snap.ballot.myRemaining} left
-        </button>
-      )}
-      <PrivateNotesChip ctx={ctx} />
-      <HandsChip
-        snap={snap}
-        onOpen={() => {
-          if (open && focusSection === 'hands') return setOpen(false)
-          setFocusSection('hands')
-          setOpen(true)
+      <button
+        ref={button}
+        type="button"
+        className="dr-wk-facilitate"
+        data-testid="facilitate-button"
+        data-timer-state={display}
+        data-live={parts.length > 0 ? 'true' : 'false'}
+        aria-haspopup="menu"
+        aria-expanded={open !== null}
+        aria-controls={controls}
+        aria-label={label}
+        title={parts.length ? `${title}: ${pillText(parts)}` : title}
+        onClick={() => setOpen((o) => (o === null ? 'menu' : null))}
+        onKeyDown={(e) => {
+          if (e.key === 'ArrowDown' && open !== 'menu') {
+            e.preventDefault()
+            setOpen('menu')
+          }
         }}
-      />
-      <ReactionControl ctx={ctx} store={store} snap={snap} />
-      {open && (
+      >
+        <FacilitateIcon />
+        <span className="dr-wk-facilitate__label">{title}</span>
+        {parts.length > 0 && (
+          <span className="dr-wk-facilitate__pill" data-testid="facilitate-pill">
+            {parts.map((p, i) => (
+              <Fragment key={p.kind}>
+                {i > 0 && (
+                  <span className="dr-wk-facilitate__sep" aria-hidden="true">
+                    ·
+                  </span>
+                )}
+                <span
+                  className={`dr-wk-facilitate__part dr-wk-facilitate__part--${p.kind}`}
+                  data-testid={p.kind === 'timer' ? 'timer-remaining' : `facilitate-pill-${p.kind}`}
+                  data-state={p.kind === 'timer' ? p.state : undefined}
+                  data-count={p.kind === 'hands' ? p.count : undefined}
+                  data-mine={p.kind === 'hands' ? (snap.myHand ? 'true' : 'false') : undefined}
+                >
+                  {p.text}
+                </span>
+              </Fragment>
+            ))}
+          </span>
+        )}
+      </button>
+      {open === 'menu' && (
+        <FacilitateMenu
+          id={menuId}
+          ctx={ctx}
+          store={store}
+          snap={snap}
+          entries={entries}
+          facilitator={facilitator}
+          timer={{ display, remaining }}
+          onShow={show}
+          onClose={(refocus) => {
+            setOpen(null)
+            if (refocus) button.current?.focus()
+          }}
+        />
+      )}
+      {open === 'tools' && (
         <WorkshopPopover
           id={popId}
           ctx={ctx}
@@ -214,14 +331,147 @@ export function WorkshopBar({ ctx }: { ctx: Ctx }) {
             writeMuted(m)
           }}
           onClose={(refocus) => {
-            setOpen(false)
-            if (refocus) pill.current?.focus()
+            setOpen(null)
+            if (refocus) button.current?.focus()
           }}
         />
       )}
+      {open === 'reactions' && <ReactionBar id={barId} ctx={ctx} store={store} snap={snap} />}
+      <PrivateNotesSetup ctx={ctx} />
       {snap.setupOpen && (
         <VoteSetupDialog ctx={ctx} store={store} onClose={() => store.setSetupOpen(false)} />
       )}
+    </div>
+  )
+}
+
+/**
+ * The Facilitate menu (role menu): ↑/↓ (and Home/End) move between the entries, Enter or a click opens one,
+ * Escape gives the keyboard back to the button. Each entry keeps the test id of the control it replaces.
+ */
+export function FacilitateMenu({
+  id,
+  ctx,
+  store,
+  snap,
+  entries,
+  facilitator,
+  timer,
+  onShow,
+  onClose,
+}: {
+  id: string
+  ctx: Ctx
+  store: WorkshopStore
+  snap: WorkshopSnapshot
+  entries: readonly FacilitateEntry[]
+  facilitator: boolean
+  timer: { display: TimerDisplay; remaining: number }
+  onShow(what: Open, section?: 'hands' | null): void
+  onClose(refocus: boolean): void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    ref.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
+  }, [])
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape' || e.key === 'Tab') return // the bar's document handlers
+    e.stopPropagation() // no board shortcuts from inside the menu
+    const items = [...(ref.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])]
+    const at = items.indexOf(document.activeElement as HTMLElement)
+    const go = (i: number) => {
+      e.preventDefault()
+      items[(i + items.length) % items.length]?.focus()
+    }
+    if (e.key === 'ArrowDown') go(at + 1)
+    else if (e.key === 'ArrowUp') go(at - 1)
+    else if (e.key === 'Home') go(0)
+    else if (e.key === 'End') go(items.length - 1)
+  }
+  const raised = !!snap.myHand
+  const vote = snap.vote
+  return (
+    <div
+      id={id}
+      ref={ref}
+      role="menu"
+      aria-label={facilitator ? 'Facilitate' : 'Session'}
+      className="dr-wk-menu"
+      data-testid="facilitate-menu"
+      onKeyDown={onKeyDown}
+    >
+      {entries.map((entry) => {
+        switch (entry) {
+          case 'timer':
+            return (
+              <button
+                key={entry}
+                type="button"
+                role="menuitem"
+                className="dr-wk-menu__item"
+                data-testid="timer-pill"
+                data-state={timer.display}
+                onClick={() => onShow('tools')}
+              >
+                <span className="dr-wk-menu__icon" aria-hidden="true">
+                  <StopwatchIcon size={16} />
+                </span>
+                <span className="dr-wk-menu__label">Timer</span>
+                <span className="dr-wk-menu__meta" data-state={timer.display}>
+                  {timerMeta(timer.display, timer.remaining)}
+                </span>
+              </button>
+            )
+          case 'reactions':
+            return (
+              <button
+                key={entry}
+                type="button"
+                role="menuitem"
+                className="dr-wk-menu__item"
+                data-testid="reactions-button"
+                data-hand={raised ? 'up' : 'down'}
+                aria-label={raised ? 'Reactions. Your hand is raised' : 'Reactions and raise hand'}
+                onClick={() => onShow('reactions')}
+              >
+                <span className="dr-wk-menu__icon" aria-hidden="true">
+                  {raised ? <HandIcon size={16} /> : <SmileIcon />}
+                </span>
+                <span className="dr-wk-menu__label">Reactions and raise hand</span>
+                {raised && <span className="dr-wk-menu__meta dr-wk-menu__meta--hands">Hand up</span>}
+              </button>
+            )
+          case 'hands':
+            return <HandsEntry key={entry} snap={snap} onOpen={() => onShow('tools', 'hands')} />
+          case 'voting':
+            return (
+              <button
+                key={entry}
+                type="button"
+                role="menuitem"
+                className="dr-wk-menu__item"
+                data-testid="vote-chip"
+                data-status={vote?.session.status ?? 'none'}
+                onClick={() => {
+                  onClose(false)
+                  // a facilitator with no vote yet goes straight to a new vote's setup
+                  if (!vote && facilitator) store.setSetupOpen(true)
+                  else ctx.openPanel('voting')
+                }}
+              >
+                <span className="dr-wk-menu__icon" aria-hidden="true">
+                  <VoteIcon />
+                </span>
+                <span className="dr-wk-menu__label">Voting</span>
+                <span className="dr-wk-menu__meta">{voteMeta(snap, facilitator)}</span>
+              </button>
+            )
+          case 'brainstorm':
+            return <PrivateNotesEntry key={entry} ctx={ctx} onDone={() => onClose(false)} />
+          default:
+            return null
+        }
+      })}
     </div>
   )
 }

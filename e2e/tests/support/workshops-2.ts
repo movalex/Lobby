@@ -5,7 +5,7 @@ import type { Locator, Page, TestInfo } from '@playwright/test'
 import type { Api } from './api.ts'
 import { edit, read } from './board.ts'
 import { richText } from './editor.ts'
-import { expect, reachableCenter, type WorkshopSession } from './workshops.ts'
+import { expect, facilitateEntry, reachableCenter, type WorkshopSession } from './workshops.ts'
 
 // ---- canvas -------------------------------------------------------------------------------------------
 
@@ -104,7 +104,7 @@ export async function clickPlusOne(page: Page, id: string) {
 
 export async function openReactionBar(page: Page): Promise<Locator> {
   const bar = page.getByTestId('reaction-bar')
-  if (!(await bar.isVisible())) await page.getByTestId('reactions-button').click()
+  if (!(await bar.isVisible())) await (await facilitateEntry(page, 'reactions-button')).click()
   await expect(bar).toBeVisible()
   return bar
 }
@@ -146,12 +146,13 @@ export async function setHand(page: Page, raised: boolean) {
   await closeReactionBar(page)
 }
 
-export const handsChip = (page: Page) => page.getByTestId('hands-chip')
+/** K3-3: how many hands are up, as the Facilitate button's pill shows it (`data-count`, `data-mine`). */
+export const handsChip = (page: Page) => page.getByTestId('facilitate-pill-hands')
 
 /** The queue rows' user ids, in order, from the popover (opened from the hands chip). */
 export async function openQueue(page: Page): Promise<Locator> {
   const queue = page.getByTestId('hands-queue')
-  if (!(await queue.isVisible())) await handsChip(page).click()
+  if (!(await queue.isVisible())) await (await facilitateEntry(page, 'hands-chip')).click()
   await expect(queue).toBeVisible()
   return queue
 }

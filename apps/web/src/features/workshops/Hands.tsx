@@ -1,5 +1,5 @@
-// Raise hand (FAC-08), UI: the top-bar chip that shows how many hands are up (everyone sees it), the
-// queue inside the workshop tools popover (facilitators lower hands there; everyone else sees who is
+// Raise hand (FAC-08), UI: the Facilitate menu's entry that shows how many hands are up (everyone sees it;
+// a top-bar chip until K3-3), the queue inside the workshop tools popover (facilitators lower hands there; everyone else sees who is
 // waiting and can lower their own), and the toasts that tell a facilitator a hand went up and tell
 // a person their hand was lowered. Raising is in the reaction bar (Reactions.tsx). The API keeps the
 // queue in memory and enforces who may lower whom.
@@ -26,17 +26,28 @@ export function HandIcon({ size = 15 }: { size?: number }) {
   )
 }
 
-/** Top-bar chip while any hand is up: "✋ 2". Opens the queue in the workshop tools. */
-export function HandsChip({ snap, onOpen }: { snap: WorkshopSnapshot; onOpen(): void }) {
+/** "2 raised hands, yours is number 1", for the hands entry and the Facilitate pill. */
+export function handsLabel(snap: Pick<WorkshopSnapshot, 'hands' | 'myHand'>): string {
+  const n = snap.hands.length
+  const mine = snap.myHand
+  const position = mine ? snap.hands.findIndex((h) => h.userId === mine.userId) + 1 : 0
+  return `${n} raised hand${n === 1 ? '' : 's'}${mine ? `, yours is number ${position}` : ''}`
+}
+
+/**
+ * The Facilitate menu's raised-hands entry while any hand is up ("Raised hands · 2"; K3-3: it was a top-bar
+ * chip, "✋ 2"). Opens the queue in the workshop tools.
+ */
+export function HandsEntry({ snap, onOpen }: { snap: WorkshopSnapshot; onOpen(): void }) {
   const n = snap.hands.length
   if (n === 0) return null
   const mine = snap.myHand
-  const position = mine ? snap.hands.findIndex((h) => h.userId === mine.userId) + 1 : 0
-  const label = `${n} raised hand${n === 1 ? '' : 's'}${mine ? `, yours is number ${position}` : ''}. Show the queue`
+  const label = `${handsLabel(snap)}. Show the queue`
   return (
     <button
       type="button"
-      className="dr-wk-hands-chip"
+      role="menuitem"
+      className="dr-wk-menu__item"
       data-testid="hands-chip"
       data-count={n}
       data-mine={mine ? 'true' : 'false'}
@@ -44,8 +55,13 @@ export function HandsChip({ snap, onOpen }: { snap: WorkshopSnapshot; onOpen(): 
       title={label}
       onClick={onOpen}
     >
-      <HandIcon size={14} />
-      <span>{n}</span>
+      <span className="dr-wk-menu__icon" aria-hidden="true">
+        <HandIcon size={16} />
+      </span>
+      <span className="dr-wk-menu__label">Raised hands</span>
+      <span className={`dr-wk-menu__meta dr-wk-menu__meta--hands${mine ? ' dr-wk-menu__meta--mine' : ''}`}>
+        {n}
+      </span>
     </button>
   )
 }
@@ -163,7 +179,7 @@ export function HandsSection({
         )}
       </div>
       {hands.length === 0 ? (
-        <p className="dr-wk-hint">No hands are up. People raise theirs from the reactions button.</p>
+        <p className="dr-wk-hint">No hands are up. People raise theirs in Reactions and raise hand.</p>
       ) : (
         <ol className="dr-wk-hands">
           {hands.map((h: RaisedHand, i) => {
@@ -228,8 +244,9 @@ export function HandToasts({ ctx, store }: { ctx: WorkshopContext; store: Worksh
           if (!n) continue
           // R2-07: with the queue already open, it shows the new hand; a toast would only cover it.
           if (n.openQueue && document.querySelector('[data-testid="hands-queue"]')) continue
-          // The queue lives in the top-bar popover; on narrow screens the bar is in the "⋯" menu.
-          const canOpen = n.openQueue && !!document.querySelector('[data-testid="timer-pill"]')
+          // The queue lives in the workshop tools, behind the top bar's Facilitate button (K3-3); on narrow
+          // screens the bar is in the "⋯" menu.
+          const canOpen = n.openQueue && !!document.querySelector('[data-testid="facilitate-button"]')
           c.notify({
             key: n.key,
             text: n.text,

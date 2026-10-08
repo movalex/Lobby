@@ -1,6 +1,9 @@
 import type { WorkshopTimer } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
 import {
+  facilitateEntries,
+  facilitatePill,
+  pillText,
   showPrivateNotesTab,
   showTimerButton,
   showVotingTab,
@@ -79,5 +82,87 @@ describe('what workshop chrome a guest sees (DANA-11 / F14 / PRI-18)', () => {
     expect(showTimerButton(true, activity({ settings: { hideNoteAuthors: false, hideCursors: true } }))).toBe(
       true,
     )
+  })
+})
+
+describe('K3-3: the Facilitate menu shows each person what the bar showed them before', () => {
+  const entries = (
+    guest: boolean,
+    facilitator: boolean,
+    over: Partial<Parameters<typeof workshopActivity>[0]> = {},
+  ) => facilitateEntries({ guest, facilitator, activity: activity(over), vote: !!over.vote })
+
+  it('a facilitator: Timer, Reactions and hands, and Voting (to start one), always', () => {
+    expect(entries(false, true)).toEqual(['timer', 'reactions', 'voting'])
+  })
+
+  it('a viewer or commenter with an account: the timer and the reactions; voting while a vote exists', () => {
+    expect(entries(false, false)).toEqual(['timer', 'reactions'])
+    expect(entries(false, false, { vote: true })).toEqual(['timer', 'reactions', 'voting'])
+  })
+
+  it('a name-only guest while nothing runs: only the reactions (the bar showed them the reactions button)', () => {
+    expect(entries(true, false)).toEqual(['reactions'])
+  })
+
+  it('a guest while a session runs: the timer, and what runs', () => {
+    expect(entries(true, false, { timer: timer({}) })).toEqual(['timer', 'reactions'])
+    expect(entries(true, false, { vote: true })).toEqual(['timer', 'reactions', 'voting'])
+    expect(entries(true, false, { brainstorm: true })).toEqual(['timer', 'reactions', 'brainstorm'])
+    expect(entries(true, false, { hands: 1 })).toEqual(['timer', 'reactions', 'hands'])
+  })
+
+  it('everyone sees the raised hands and the brainstorm while there is one, in this order', () => {
+    expect(entries(false, true, { hands: 2, vote: true, brainstorm: true })).toEqual([
+      'timer',
+      'reactions',
+      'hands',
+      'voting',
+      'brainstorm',
+    ])
+  })
+})
+
+describe('K3-3: the Facilitate pill shows only what is live', () => {
+  const pill = (over: Partial<Parameters<typeof facilitatePill>[0]> = {}) =>
+    pillText(
+      facilitatePill({
+        timer: 'idle',
+        clock: '0:00',
+        voteOpen: false,
+        brainstormOpen: false,
+        hands: 0,
+        ...over,
+      }),
+    )
+
+  it('nothing while idle (a stopped or long-finished timer is not live)', () => {
+    expect(pill()).toBe('')
+    expect(pill({ timer: 'stopped', clock: '5:00' })).toBe('')
+    expect(pill({ timer: 'ended' })).toBe('')
+  })
+
+  it('"4:58 · Vote" while a timer runs and a vote is open', () => {
+    expect(pill({ timer: 'running', clock: '4:58', voteOpen: true })).toBe('4:58 · Vote')
+  })
+
+  it('the timer alone, paused, or at zero (0:00 in red, the flash says "Time\'s up")', () => {
+    expect(pill({ timer: 'running', clock: '1:05' })).toBe('1:05')
+    expect(pill({ timer: 'paused', clock: '3:00' })).toBe('3:00')
+    const finished = facilitatePill({
+      timer: 'finished',
+      clock: '0:00',
+      voteOpen: false,
+      brainstormOpen: false,
+      hands: 0,
+    })
+    expect(finished).toEqual([{ kind: 'timer', text: '0:00', state: 'finished' }])
+  })
+
+  it('a brainstorm and raised hands too, in a fixed order', () => {
+    expect(pill({ timer: 'running', clock: '2:00', voteOpen: true, brainstormOpen: true, hands: 2 })).toBe(
+      '2:00 · Vote · Brainstorm · ✋ 2',
+    )
+    expect(pill({ hands: 1 })).toBe('✋ 1')
   })
 })

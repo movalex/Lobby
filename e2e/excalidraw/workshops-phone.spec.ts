@@ -8,7 +8,12 @@
 import type { Browser, BrowserContext, Locator, Page, TestInfo } from '@playwright/test'
 import { selection } from '../tests/support/canvas.ts'
 import { capture } from '../tests/support/screenshots.ts'
-import { openWorkshopPopover } from '../tests/support/workshops.ts'
+import {
+  closeFacilitate,
+  facilitateEntry,
+  openFacilitate,
+  openWorkshopPopover,
+} from '../tests/support/workshops.ts'
 import { openQueue, setHand } from '../tests/support/workshops-2.ts'
 import {
   expect,
@@ -148,7 +153,7 @@ test('R2 R3 R4 R5 R6 W5-07: guests take part but never facilitate; a brainstorm 
       await ok(post(alice, `/api/boards/${board}/timer`, { action: 'start', durationMs: 5 * 60_000 }))
       await expect(guest.getByTestId('timer-floating')).toBeVisible()
       await guest.getByTestId('topbar-overflow').click()
-      await guest.getByTestId('timer-pill').click()
+      await (await facilitateEntry(guest, 'timer-pill')).click()
       const pop = guest.getByTestId('workshop-popover')
       await expect(pop).toBeVisible()
       for (const id of ['timer-start', 'vote-start', 'pn-start', 'summon-button'])
@@ -190,9 +195,15 @@ test('R2 R3 R4 R5 R6 W5-07: guests take part but never facilitate; a brainstorm 
       const card = bob.page.getByTestId('pn-start-prompt')
       await expect(card).toBeVisible()
       await expect(card.getByTestId('pn-start-prompt-text')).toHaveText(PROMPT)
-      await expect(bob.page.getByTestId('pn-chip-counts')).toHaveText('Add your notes')
+      await expect((await openFacilitate(bob.page)).getByTestId('pn-chip-counts')).toHaveText(
+        'Add your notes',
+      )
       await shot(bob.page, 'lc-r4-bob-desktop-brainstorm-started.png', testInfo)
-      await expect(alice.page.getByTestId('pn-chip-counts')).toHaveText('Waiting for notes')
+      await closeFacilitate(bob.page)
+      await expect((await openFacilitate(alice.page)).getByTestId('pn-chip-counts')).toHaveText(
+        'Waiting for notes',
+      )
+      await closeFacilitate(alice.page)
       await expect(alice.page.getByTestId('pn-start-prompt')).toHaveCount(0)
       await card.getByTestId('pn-start-prompt-write').click()
       await expect(bob.page.getByTestId('pn-panel')).toHaveAttribute('data-state', 'open')
@@ -222,16 +233,20 @@ test('R2 R3 R4 R5 R6 W5-07: guests take part but never facilitate; a brainstorm 
       await guest.getByTestId('topbar-overflow').click()
       const panel = guest.getByTestId('topbar-overflow-panel')
       await expect(panel).toHaveAttribute('data-open', 'true')
-      await expect(panel.getByTestId('pn-chip')).toBeVisible()
       const b = (await panel.boundingBox()) as { x: number; width: number }
       expect(b.x).toBeGreaterThanOrEqual(0)
       expect(b.x + b.width).toBeLessThanOrEqual(390)
+      // K3-3: the panel holds the Facilitate button; its menu (the brainstorm entry too) spans the screen
+      await expect(panel.getByTestId('facilitate-pill-brainstorm')).toBeVisible()
+      const menu = await openFacilitate(guest)
+      await expect(menu.getByTestId('pn-chip')).toBeVisible()
       for (const id of ['timer-pill', 'pn-chip']) {
-        const c = (await panel.getByTestId(id).boundingBox()) as { x: number; width: number }
-        expect(c.x, id).toBeGreaterThanOrEqual(b.x)
-        expect(c.x + c.width, id).toBeLessThanOrEqual(b.x + b.width)
+        const c = (await menu.getByTestId(id).boundingBox()) as { x: number; width: number }
+        expect(c.x, id).toBeGreaterThanOrEqual(0)
+        expect(c.x + c.width, id).toBeLessThanOrEqual(390)
       }
       await shot(guest, 'lc-r5-guest-phone-overflow.png', testInfo)
+      await closeFacilitate(guest) // the first Escape closes the Facilitate menu, the next the panel
       await guest.keyboard.press('Escape')
       await expect(panel).toHaveAttribute('data-open', 'false')
     })
@@ -329,7 +344,7 @@ test('raised hands: a long guest name is cut, never its "(guest)" marker (queue,
     // A phone: the tools are in the "⋯" menu, the queue still shows the marker.
     await alice.page.setViewportSize({ width: 390, height: 844 })
     await alice.page.getByTestId('topbar-overflow').click()
-    await alice.page.getByTestId('timer-pill').click()
+    await (await facilitateEntry(alice.page, 'timer-pill')).click()
     const phoneRow = alice.page.locator(`[data-testid="hand-row"][data-user-id="${guest.id}"]`)
     await expect(phoneRow).toBeVisible()
     await capture('lc-hands-queue-long-guest-phone-dark.png', alice.page, testInfo)

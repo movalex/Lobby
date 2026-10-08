@@ -383,3 +383,14 @@ export async function pngRegionStats(
     { b64: png.toString('base64'), regions },
   )
 }
+
+/**
+ * K3-3: the Export dialog from the board menu (Board menu ▸ Export ▸ Export…). The top bar has no Export icon
+ * now (UXD-01); Ctrl/Cmd+P opens the dialog at PDF.
+ */
+export async function openBoardExport(page: Page): Promise<void> {
+  await page.getByTestId('main-menu.button').click()
+  await page.getByTestId('main-menu-sub.export-button').click()
+  await page.getByTestId('main-menu.export-dialog').click()
+  await expect(page.getByTestId('export-dialog')).toBeVisible()
+}

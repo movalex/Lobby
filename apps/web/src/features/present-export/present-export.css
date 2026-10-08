@@ -21,16 +21,6 @@
   }
 }
 
-/* export-control: the board owner turned exporting off for this person. The button stays (a click
-   says why), dimmed like a disabled control; its hover does not suggest an action. */
-.dr-pe-export-btn[aria-disabled="true"] {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-.dr-pe-export-btn[aria-disabled="true"]:hover {
-  background: transparent;
-}
-
 /* ---- export dialog ------------------------------------------------------------------------------ */
 
 .dr-pe-export {

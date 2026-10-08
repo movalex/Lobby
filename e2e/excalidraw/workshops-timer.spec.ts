@@ -37,7 +37,8 @@ test('timer sync: start, pause, +1 min, resume and stop look the same to everyon
   const pages = [a.page, b.page, c.page]
 
   await test.step('carol (viewer) has no timer, vote or gather controls, and the API refuses them', async () => {
-    for (const p of pages) await expect(p.getByTestId('timer-pill')).toHaveAttribute('data-state', 'idle')
+    for (const p of pages)
+      await expect(p.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'idle')
     const pop = await openWorkshopPopover(c.page)
     await expect(pop).toContainText('Only editors and owners can set the timer')
     for (const id of [
@@ -75,7 +76,8 @@ test('timer sync: start, pause, +1 min, resume and stop look the same to everyon
     await expect(pop.getByTestId('timer-duration')).toHaveValue('5:00')
     await pop.getByTestId('timer-start').click()
     await closeWorkshopPopover(a.page)
-    for (const p of pages) await expect(p.getByTestId('timer-pill')).toHaveAttribute('data-state', 'running')
+    for (const p of pages)
+      await expect(p.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'running')
     await expect.poll(() => pillSpread(pages), { message: 'pills agree within 1 s' }).toBeLessThanOrEqual(1)
     const first = await pillSeconds(a.page)
     expect(first).toBeGreaterThan(285)
@@ -88,17 +90,17 @@ test('timer sync: start, pause, +1 min, resume and stop look the same to everyon
 
   await test.step('a late joiner and a reload show the same time within 1 s', async () => {
     const d = await join('dave', 'viewer')
-    await expect(d.page.getByTestId('timer-pill')).toHaveAttribute('data-state', 'running')
+    await expect(d.page.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'running')
     await expectPillsAgree([a.page, d.page])
     await reloadBoard(c)
-    await expect(c.page.getByTestId('timer-pill')).toHaveAttribute('data-state', 'running')
+    await expect(c.page.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'running')
     await expectPillsAgree([a.page, c.page, d.page])
     await d.context.close()
   })
 
   await test.step('a late joiner on a slow device (busy when the server time arrives) agrees too', async () => {
     const e = await join('erin', 'viewer', { busyAfterEventStreamMs: 2_000 })
-    await expect(e.page.getByTestId('timer-pill')).toHaveAttribute('data-state', 'running')
+    await expect(e.page.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'running')
     await expectPillsAgree([a.page, e.page])
     await e.context.close()
   })
@@ -114,7 +116,8 @@ test('timer sync: start, pause, +1 min, resume and stop look the same to everyon
     await pop.getByTestId('timer-pause').click()
     await expect(pop.getByTestId('timer-resume')).toBeVisible()
     await closeWorkshopPopover(a.page)
-    for (const p of pages) await expect(p.getByTestId('timer-pill')).toHaveAttribute('data-state', 'paused')
+    for (const p of pages)
+      await expect(p.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'paused')
     paused = await pillSeconds(a.page)
     for (const p of pages)
       await expect(p.getByTestId('timer-remaining')).toHaveText(
@@ -133,7 +136,7 @@ test('timer sync: start, pause, +1 min, resume and stop look the same to everyon
     await closeWorkshopPopover(a.page)
     for (const p of pages) {
       await expect.poll(() => pillSeconds(p)).toBe(paused + 60)
-      await expect(p.getByTestId('timer-pill')).toHaveAttribute('data-state', 'paused')
+      await expect(p.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'paused')
     }
     expect(Math.ceil(((await workshopState(b.api, board)).timer?.remainingMs ?? 0) / 1000)).toBe(paused + 60)
   })
@@ -142,7 +145,8 @@ test('timer sync: start, pause, +1 min, resume and stop look the same to everyon
     const pop = await openWorkshopPopover(a.page)
     await pop.getByTestId('timer-resume').click()
     await closeWorkshopPopover(a.page)
-    for (const p of pages) await expect(p.getByTestId('timer-pill')).toHaveAttribute('data-state', 'running')
+    for (const p of pages)
+      await expect(p.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'running')
     await expectPillsAgree(pages)
     expect(await pillSeconds(b.page)).toBeLessThanOrEqual(paused + 60)
     await expect.poll(() => pillSeconds(b.page)).toBeLessThan(paused + 59)
@@ -153,7 +157,7 @@ test('timer sync: start, pause, +1 min, resume and stop look the same to everyon
     await pop.getByTestId('timer-stop').click()
     await closeWorkshopPopover(a.page)
     for (const p of pages) {
-      await expect(p.getByTestId('timer-pill')).toHaveAttribute('data-state', 'stopped')
+      await expect(p.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'stopped')
       await expect(p.getByTestId('timer-remaining')).toHaveCount(0)
     }
     expect((await workshopState(c.api, board)).timer?.status).toBe('stopped')
@@ -171,7 +175,7 @@ test('timer sync: while carol presents, the timer floats over the slides (3e pre
   expect(
     (await post(a, `/api/boards/${board}/timer`, { action: 'start', durationMs: 300_000 })).status(),
   ).toBe(200)
-  await expect(c.page.getByTestId('timer-pill')).toHaveAttribute('data-state', 'running')
+  await expect(c.page.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'running')
   await c.page.getByTestId('present-button').click({ timeout: 5_000 })
   await expect(c.page.getByTestId('present-overlay')).toBeVisible()
   const floating = c.page.getByTestId('timer-floating')
@@ -214,7 +218,7 @@ test("time's up: everyone gets the flash and one message at zero; the chime play
     await pop.getByTestId('timer-start').click()
     await closeWorkshopPopover(a.page)
     for (const s of everyone)
-      await expect(s.page.getByTestId('timer-pill')).toHaveAttribute('data-state', 'running')
+      await expect(s.page.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'running')
   })
 
   let zeroAt = 0
@@ -229,7 +233,7 @@ test("time's up: everyone gets the flash and one message at zero; the chime play
       // "Time's up" here, so only the canvas and the notices are counted).
       await expect(s.page.getByRole('main').getByText("Time's up", { exact: true })).toHaveCount(1)
       await expect(s.page.locator('.dr-notices')).not.toContainText("Time's up")
-      await expect(s.page.getByTestId('timer-pill')).toHaveAttribute('data-state', 'finished')
+      await expect(s.page.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'finished')
       await expect(s.page.getByTestId('timer-remaining')).toHaveText('0:00')
     }
     await expect.poll(() => oscillatorStarts(a.page), { message: 'alice heard the chime' }).toBe(6)
@@ -249,10 +253,10 @@ test("time's up: everyone gets the flash and one message at zero; the chime play
 
   await test.step('about 10 s after zero the pills go back to "Timer" (the server stays finished; Reset stays)', async () => {
     for (const s of everyone) {
-      await expect(s.page.getByTestId('timer-pill')).toHaveAttribute('data-state', 'ended', {
+      await expect(s.page.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'ended', {
         timeout: 15_000,
       })
-      await expect(s.page.getByTestId('timer-pill')).toHaveText('Timer')
+      await expect(s.page.getByTestId('facilitate-pill')).toHaveCount(0)
       await expect(s.page.getByTestId('timer-remaining')).toHaveCount(0)
     }
     expect(Date.now() - zeroAt).toBeGreaterThan(5_000)
@@ -264,7 +268,7 @@ test("time's up: everyone gets the flash and one message at zero; the chime play
 
   await test.step('a late joiner (more than 10 s after zero) sees no red 0:00', async () => {
     await reloadBoard(b)
-    await expect(b.page.getByTestId('timer-pill')).toHaveAttribute('data-state', 'ended')
+    await expect(b.page.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'ended')
     await expect(b.page.getByTestId('timer-remaining')).toHaveCount(0)
     await expect(b.page.getByTestId('timer-flash')).toHaveCount(0)
   })
@@ -279,7 +283,7 @@ test("time's up: presenting a board whose timer has finished shows no floating t
   expect((await post(a, `/api/boards/${board}/timer`, { action: 'start', durationMs: 2_000 })).status()).toBe(
     200,
   )
-  await expect(c.page.getByTestId('timer-pill')).toHaveAttribute('data-state', 'finished', {
+  await expect(c.page.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'finished', {
     timeout: 10_000,
   })
   await createItem(a.page, 'frame', { id: 'wk-tu-frame', x: 0, y: 0, width: 400, height: 300, name: 'Slide' })
@@ -302,7 +306,7 @@ test("the timer: a teammate can't pause the facilitator's running timer; the own
   const carol = await join('carol', 'editor')
   const timer = (s: WorkshopCanvasSession, body: unknown) => post(s, `/api/boards/${board}/timer`, body)
   expect((await timer(bob, { action: 'start', durationMs: 5 * 60_000 })).status()).toBe(200)
-  await expect(carol.page.getByTestId('timer-pill')).toHaveAttribute('data-state', 'running')
+  await expect(carol.page.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'running')
 
   const pop = await openWorkshopPopover(carol.page)
   await expect(pop.getByTestId('timer-held-hint')).toHaveText(
@@ -314,11 +318,11 @@ test("the timer: a teammate can't pause the facilitator's running timer; the own
   const refused = await timer(carol, { action: 'pause' })
   expect(refused.status()).toBe(403)
   expect(((await refused.json()) as { error: { code: string } }).error.code).toBe('TIMER_NOT_YOURS')
-  await expect(bob.page.getByTestId('timer-pill')).toHaveAttribute('data-state', 'running')
+  await expect(bob.page.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'running')
 
   const bobPop = await openWorkshopPopover(bob.page)
   await expect(bobPop.getByTestId('timer-pause')).toBeVisible()
   const alicePop = await openWorkshopPopover(alice.page)
   await alicePop.getByTestId('timer-pause').click()
-  await expect(carol.page.getByTestId('timer-pill')).toHaveAttribute('data-state', 'paused')
+  await expect(carol.page.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'paused')
 })

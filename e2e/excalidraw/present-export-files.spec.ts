@@ -57,6 +57,7 @@ import {
   type DeckSpec,
   expectItems,
   NOTE_FILL,
+  openBoardExport,
   placeUploadedImage,
   pngRegionStats,
   type Rgb,
@@ -116,7 +117,7 @@ test.describe('image exports', () => {
     const files = trackRequests(a.page, isFileRequest)
     const dialog = a.page.getByTestId('export-dialog')
 
-    await a.page.getByTestId('export-button').click()
+    await openBoardExport(a.page)
     await expect(dialog).toBeVisible()
     await dialog.getByTestId('export-frame').selectOption(F.intro)
     await expect(dialog.getByTestId('export-area-frame')).toBeChecked()
@@ -173,7 +174,7 @@ test.describe('image exports', () => {
       // Two notes on a diagonal: the selection's top-left corner is empty board.
       await select(a.page, [N.intro, N.plan])
       const sel = await unionBounds(a.page, [N.intro, N.plan])
-      await a.page.getByTestId('export-button').click()
+      await openBoardExport(a.page)
       await expect(dialog.getByTestId('export-area-selection')).toBeChecked()
       await expect(dialog.getByTestId('export-scale')).toHaveValue('2') // remembered
       await dialog.getByTestId('export-transparent').check()
@@ -310,7 +311,7 @@ test.describe('image exports', () => {
 
     // The dialog's button, with a frame chosen.
     await writeClipboardText(a.page, 'not an image yet')
-    await a.page.getByTestId('export-button').click()
+    await openBoardExport(a.page)
     const dialog = a.page.getByTestId('export-dialog')
     await dialog.getByTestId('export-frame').selectOption(F.intro)
     await dialog.getByTestId('export-copy-png').click()
@@ -341,7 +342,7 @@ test('D3: an SVG export embeds Lilita One for a heading in fontFamily 7', async 
     )
     .toBe(7)
   await zoomToFit(a.page)
-  await a.page.getByTestId('export-button').click()
+  await openBoardExport(a.page)
   const dialog = a.page.getByTestId('export-dialog')
   const svg = await downloadFrom(a.page, () => dialog.getByTestId('export-svg').click())
   expect(svg.bytes.toString('utf8')).toMatch(
@@ -376,7 +377,7 @@ test.describe('file cards in exports', () => {
     expect(cards.map((c) => c.facts.name).sort()).toEqual([...FILES].sort())
 
     const dialog = a.page.getByTestId('export-dialog')
-    await a.page.getByTestId('export-button').click()
+    await openBoardExport(a.page)
     await expect(dialog).toBeVisible()
     await dialog.getByTestId('export-area-board').check()
     await dialog.getByTestId('export-scale').selectOption('2')
@@ -469,7 +470,7 @@ test.describe('PDF export', () => {
     const dialog = a.page.getByTestId('export-dialog')
     const summary = dialog.getByTestId('export-pdf-summary')
 
-    await a.page.getByTestId('export-button').click()
+    await openBoardExport(a.page)
     await expect(summary).toHaveText('One page per frame, in presentation order (2 pages).')
 
     await test.step('cancel while a page is rendering: no file, "Export cancelled."', async () => {
@@ -564,7 +565,7 @@ test.describe('PDF export', () => {
       await a.page.keyboard.press('Escape')
       await expect(dialog).toHaveCount(0)
       await select(a.page, [F.backstage])
-      await a.page.getByTestId('export-button').click()
+      await openBoardExport(a.page)
       await expect(summary).toHaveText('The selected frames, one page each (1 page).')
       await expect(dialog.getByTestId('export-pdf-include-skipped')).toHaveCount(0)
       const pdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
@@ -591,7 +592,7 @@ test.describe('PDF export', () => {
     await expectSaved(a.page)
     await selectNone(a.page)
     const dialog = a.page.getByTestId('export-dialog')
-    await a.page.getByTestId('export-button').click()
+    await openBoardExport(a.page)
     await expect(dialog).toBeVisible()
     const pdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
     const words = new Set((await pdfPageTexts(pdf.bytes)).flatMap((t) => t.split(/\s+/)))
@@ -643,7 +644,7 @@ test.describe('PDF export', () => {
 
     // ...and can download the CSV and the PDF (presenting as a viewer: present-export-present.spec.ts).
     const vDialog = v.page.getByTestId('export-dialog')
-    await v.page.getByTestId('export-button').click()
+    await openBoardExport(v.page)
     await expect(vDialog).toBeVisible()
     const csv = await downloadFrom(v.page, () => vDialog.getByTestId('export-csv').click())
     expect(csv.name).toBe(`${title}.csv`)
@@ -683,7 +684,7 @@ test.describe('PDF export', () => {
     }
 
     await test.step('with no vote and no comments both are off, and the dialog says why', async () => {
-      await a.page.getByTestId('export-button').click()
+      await openBoardExport(a.page)
       await expect(withResults).toBeDisabled()
       await expect(withResults).not.toBeChecked()
       await expect(dialog.getByTestId('export-pdf-results-hint')).toContainText('reveal a vote')
@@ -708,7 +709,7 @@ test.describe('PDF export', () => {
       for (const id of [N.intro, N.intro, N.plan]) await cast(alice, id)
       for (const id of [N.intro, 'pe-note-story', 'pe-note-story']) await cast(bob, id)
       // not revealed: nothing is on offer yet
-      await a.page.getByTestId('export-button').click()
+      await openBoardExport(a.page)
       await expect(withResults).toBeDisabled()
       await a.page.keyboard.press('Escape')
       await call(alice, `/api/votes/${sid}/reveal`)
@@ -733,7 +734,7 @@ test.describe('PDF export', () => {
     })
 
     await test.step('the dialog offers both, with what each holds; team-only threads stay out until asked', async () => {
-      await a.page.getByTestId('export-button').click()
+      await openBoardExport(a.page)
       await expect(withResults).toBeEnabled()
       await expect(withResults).not.toBeChecked()
       await expect(withComments).toBeEnabled()
@@ -833,7 +834,7 @@ test.describe('PDF export', () => {
       const info = await readPdf(pdf.bytes)
       expect(info.outline.map((o) => o.title)).toEqual(['Plan', 'Intro', 'Vote results'])
       await a.page.keyboard.press('Escape')
-      await a.page.getByTestId('export-button').click()
+      await openBoardExport(a.page)
       await expect(withResults).not.toBeChecked()
       await expect(withComments).not.toBeChecked()
     })
@@ -912,7 +913,7 @@ test.describe('CSV export', () => {
     })
     const dialog = a.page.getByTestId('export-dialog')
     const exportCsv = async () => {
-      await a.page.getByTestId('export-button').click()
+      await openBoardExport(a.page)
       await expect(dialog).toBeVisible()
       const file = await downloadFrom(a.page, () => dialog.getByTestId('export-csv').click())
       const status = (await dialog.getByTestId('export-status').textContent()) ?? ''

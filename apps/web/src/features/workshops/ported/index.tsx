@@ -402,7 +402,8 @@ export const feature: CanvasFeature = {
   // tldraw's BOARD_FEATURES order (W5-50, ./chrome-order.test.ts): the workshop items before Present and
   // export (30) and Sharing (50); the Voting and Private notes panels after Comments and the navigation
   // panels, before History (70)
-  topBar: [{ id: 'workshops', order: 25, overflowCaption: 'Timer and voting', component: WorkshopBar }],
+  // K3-3: one Facilitate button (timer, reactions and hands, voting, the brainstorm)
+  topBar: [{ id: 'workshops', order: 25, overflowCaption: 'Facilitate', component: WorkshopBar }],
   // A guest sees the Voting and Private notes tabs only while a vote or a brainstorm exists (DANA-11 / F14 /
   // PRI-18; ./guest-chrome.ts); everyone with an account always does.
   panels: [

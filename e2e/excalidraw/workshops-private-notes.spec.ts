@@ -21,7 +21,13 @@ import {
   viewport,
 } from '../tests/support/canvas.ts'
 import { capture } from '../tests/support/screenshots.ts'
-import { closeWorkshopPopover, openWorkshopPopover } from '../tests/support/workshops.ts'
+import {
+  closeFacilitate,
+  closeWorkshopPopover,
+  facilitateEntry,
+  openFacilitate,
+  openWorkshopPopover,
+} from '../tests/support/workshops.ts'
 import {
   expect,
   expectItemsEverywhere,
@@ -69,13 +75,19 @@ async function startBrainstorm(
   await expect(page.getByTestId('pn-panel')).toHaveAttribute('data-state', 'open')
 }
 
-/** Opens the "Private notes" panel (the top-bar chip, or the dock on a phone). */
+/** The brainstorm as the Facilitate button's pill shows it (K3-3: it was a chip of its own in the bar). */
+const brainstormPill = (page: Page) => page.getByTestId('facilitate-pill-brainstorm')
+
+/** Opens the "Private notes" panel (Facilitate ▸ Private brainstorm, or the dock on a phone). */
 async function openPanel(page: Page) {
   const panel = page.getByTestId('pn-panel')
   if (!(await panel.isVisible())) {
-    const chip = page.getByTestId('pn-chip')
-    if (await chip.isVisible()) await chip.click()
+    const chip = (await page.getByTestId('facilitate-button').isVisible())
+      ? (await openFacilitate(page)).getByTestId('pn-chip')
+      : null
+    if (chip && (await chip.count()) > 0) await chip.click()
     else {
+      if (chip) await closeFacilitate(page)
       const toggle = page.getByTestId('dock-rail-toggle')
       if (await toggle.isVisible()) await toggle.click()
       await page.getByTestId('dock-tab-private-notes').click()
@@ -184,8 +196,8 @@ test('private notes: nobody sees another person’s drafts; the counts are live;
   const frameId = (started.session?.frameId ?? '').replace(/^shape:/, '')
   await expectItemsEverywhere([alice, bob], [frameId])
   expect(await itemText(bob.page, frameId)).toBe('Private ideas')
-  // Bob sees the session and its prompt through the chip, without reloading.
-  await expect(bob.page.getByTestId('pn-chip')).toBeVisible()
+  // Bob sees the session and its prompt through the Facilitate pill, without reloading.
+  await expect(brainstormPill(bob.page)).toBeVisible()
   const bobPanel = await openPanel(bob.page)
   await expect(bobPanel.getByTestId('pn-prompt')).toHaveText('What should we change?')
   await expect(bobPanel.getByTestId('pn-mode')).toHaveText('Names shown')
@@ -198,7 +210,10 @@ test('private notes: nobody sees another person’s drafts; the counts are live;
   await writeNote(bob.page, BOB_TEXTS[1] as string, 'green')
   for (const s of [alice, bob])
     await expect(s.page.getByTestId('pn-counts')).toHaveText('4 notes from 2 people')
-  await expect(bob.page.getByTestId('pn-chip-counts')).toHaveText('4 notes from 2 people')
+  await expect((await openFacilitate(bob.page)).getByTestId('pn-chip-counts')).toHaveText(
+    '4 notes from 2 people',
+  )
+  await closeFacilitate(bob.page)
   await capture('lc-private-notes-drafting.png', bob.page, testInfo)
 
   const bobSaw = await everythingSeen(bob)
@@ -252,7 +267,7 @@ test('private notes: the reveal puts every note in the frame for everyone, with 
     await expect(s.page.getByTestId('pn-toast')).toContainText(
       '4 notes from the private brainstorm are now on the board',
     )
-    await expect(s.page.getByTestId('pn-chip')).toHaveCount(0)
+    await expect(brainstormPill(s.page)).toHaveCount(0)
   }
   // Grouped by author: alice's two notes on one row, bob's after them.
   const byText = new Map((await placedNotes(alice.page, sid)).map((n) => [n.text, n.id]))
@@ -455,7 +470,7 @@ test('private notes: cancel discards drafts; a double Ctrl+Enter adds a note onc
   await alice.page.getByTestId('pn-cancel').click()
   await alice.page.getByTestId('pn-cancel-confirm').click()
   await expect(bob.page.getByTestId('pn-toast')).toContainText('cancelled')
-  await expect(bob.page.getByTestId('pn-chip')).toHaveCount(0)
+  await expect(brainstormPill(bob.page)).toHaveCount(0)
   expect(await placedNotes(bob.page, second)).toEqual([])
   const aliceSawSecond = await everythingSeen(alice)
   expect(aliceSawSecond).not.toContain('Never shown to anyone')
@@ -469,7 +484,7 @@ test('private notes: the panel and the dialog in dark mode at phone width', asyn
   await alice.page.setViewportSize({ width: 390, height: 844 })
   // On phones the workshop tools live in the "⋯" menu.
   await alice.page.getByTestId('topbar-overflow').click()
-  await alice.page.getByTestId('timer-pill').click()
+  await (await facilitateEntry(alice.page, 'timer-pill')).click()
   await alice.page.getByTestId('pn-start').click()
   const dialog = alice.page.getByTestId('pn-setup-dialog')
   await expect(dialog).toBeVisible()
@@ -487,13 +502,14 @@ test('private notes: the panel and the dialog in dark mode at phone width', asyn
   const overflow = await alice.page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)
   expect(overflow).toBeLessThanOrEqual(0)
 
-  // A small laptop in light mode: the chip fits in the top bar next to everything else.
+  // A small laptop in light mode: the Facilitate button, its pill and its menu fit next to everything else.
   await alice.page.emulateMedia({ colorScheme: 'light' })
   await alice.page.setViewportSize({ width: 1024, height: 768 })
-  await expect(alice.page.getByTestId('pn-chip')).toBeVisible()
-  await expect(alice.page.getByTestId('pn-chip')).toHaveAccessibleName(
-    /Private brainstorm: 1 note from 1 person/,
-  )
+  await expect(brainstormPill(alice.page)).toBeVisible()
+  const entry = await facilitateEntry(alice.page, 'pn-chip')
+  await expect(entry).toBeVisible()
+  await expect(entry).toHaveAccessibleName(/Private brainstorm: 1 note from 1 person/)
+  await closeFacilitate(alice.page)
   const bar = await alice.page.evaluate(() => {
     const el = document.querySelector('.dr-topbar')
     return el ? el.scrollWidth - el.clientWidth : -1
@@ -638,10 +654,10 @@ test('private notes: "Add your notes" puts the keyboard in the note box; Enter a
   await expect(panel.getByTestId('pn-note-text')).toHaveCount(2)
   expect(await tool(bob.page)).toBe('select')
 
-  // The top-bar chip does the same once the panel is closed.
+  // The Facilitate menu's entry does the same once the panel is closed.
   await bob.page.getByTestId('dock-panel-close').click()
   await expect(panel).toHaveCount(0)
-  await bob.page.getByTestId('pn-chip').click()
+  await (await facilitateEntry(bob.page, 'pn-chip')).click()
   await expect(bob.page.getByTestId('pn-compose-text')).toBeFocused()
   await bob.page.keyboard.type('Stream it')
   await expect(bob.page.getByTestId('pn-compose-text')).toHaveValue('Stream it')
@@ -929,7 +945,7 @@ test('I1: a brainstorm started while the participant’s refetch keeps failing s
   test.setTimeout(90_000)
   const alice = await join('alice', 'owner')
   const bob = await join('bob', 'editor')
-  await expect(bob.page.getByTestId('pn-chip')).toHaveCount(0)
+  await expect(brainstormPill(bob.page)).toHaveCount(0)
   await bob.page.evaluate(() => {
     ;(window as unknown as { __i1Mark: boolean }).__i1Mark = true
   })
@@ -949,11 +965,11 @@ test('I1: a brainstorm started while the participant’s refetch keeps failing s
 
   // The event's refetch failed, and the store keeps trying (1 s, 2 s, ...): three refused reads, not one.
   await expect.poll(() => refused, { timeout: 15_000 }).toBeGreaterThanOrEqual(3)
-  await expect(bob.page.getByTestId('pn-chip')).toHaveCount(0)
+  await expect(brainstormPill(bob.page)).toHaveCount(0)
 
   // The api answers again: the next retry (at most a few seconds on) brings the session, nobody reloads.
   failing = false
-  await expect(bob.page.getByTestId('pn-chip')).toBeVisible({ timeout: 20_000 })
+  await expect(brainstormPill(bob.page)).toBeVisible({ timeout: 20_000 })
   const panel = await openPanel(bob.page)
   await expect(panel.getByTestId('pn-prompt')).toHaveText('What should we change?')
   expect(await bob.page.evaluate(() => (window as unknown as { __i1Mark?: boolean }).__i1Mark)).toBe(true)

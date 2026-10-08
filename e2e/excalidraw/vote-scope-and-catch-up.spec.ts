@@ -501,13 +501,14 @@ for (const how of ['stream cut', 'offline'] as const) {
         // what the guest's page asked for meanwhile could not come in
         await g.waitForTimeout(1_500)
         await expect(joinPrompt(g)).toHaveCount(0)
-        await expect(g.getByTestId('vote-chip')).toHaveCount(0)
+        await expect(g.getByTestId('facilitate-pill-vote')).toHaveCount(0)
       })
 
       await test.step('restored: the open vote comes up on its own', async () => {
         await restore()
         await expect(joinPrompt(g)).toContainText(describes('board'), { timeout: CATCH_UP_MS })
-        await expect(g.getByTestId('vote-chip')).toContainText('Voting · 3 left')
+        // K3-3: the Facilitate pill says a vote is open (the bar's vote chip, before)
+        await expect(g.getByTestId('facilitate-pill-vote')).toHaveText('Vote')
         await joinVote(g, 'board')
         await showAll(g)
         await votesOn(g, ID.loose, 2)
@@ -520,7 +521,7 @@ for (const how of ['stream cut', 'offline'] as const) {
         await expect(panel.getByTestId('vote-current')).toHaveAttribute('data-status', 'revealed')
         await restore()
         await expect(g.getByTestId('vote-bar')).toHaveCount(0, { timeout: CATCH_UP_MS })
-        await expect(g.getByTestId('vote-chip')).toHaveCount(0)
+        await expect(g.getByTestId('facilitate-pill-vote')).toHaveCount(0)
         const gp = await openVotingPanel(g)
         await expect(gp.getByTestId('vote-current')).toHaveAttribute('data-status', 'revealed', {
           timeout: CATCH_UP_MS,

@@ -5,7 +5,7 @@
 // what. Pure rules (this file) so they are tested without a browser; ./index.tsx and ./WorkshopBar.tsx
 // apply them.
 import type { WorkshopTimer } from '@draftroom/contracts'
-import { timerDisplayPhase } from '../countdown.ts'
+import { type TimerDisplay, timerDisplayPhase } from '../countdown.ts'
 
 /** What is going on in the workshop right now, as far as this tab knows. */
 export interface WorkshopActivity {
@@ -42,9 +42,68 @@ export function workshopActivity(input: {
 
 const anything = (a: WorkshopActivity) => a.timer || a.vote || a.brainstorm || a.hands || a.settings
 
-/** The top bar's Timer and workshop tools button. */
+/** The top bar's Timer and workshop tools button (since K3-3, the Facilitate menu's Timer entry). */
 export const showTimerButton = (guest: boolean, a: WorkshopActivity) => !guest || anything(a)
 /** The Voting dock tab. */
 export const showVotingTab = (guest: boolean, a: WorkshopActivity) => !guest || a.vote
 /** The Private notes dock tab. */
 export const showPrivateNotesTab = (guest: boolean, a: WorkshopActivity) => !guest || a.brainstorm
+
+// ---- K3-3: one Facilitate button ---------------------------------------------------------------------
+//
+// The top bar showed the timer pill, the voting chip, the brainstorm chip, the raised-hands chip and the
+// reactions button side by side (UXD-01). They are one button now, whose menu holds the same entries with
+// the same test ids, and whose pill shows only what is live ("4:58 · Vote"). Each entry shows to the
+// people it showed to before, under the same rules: the timer by `showTimerButton`, the reactions to
+// everyone, the hands queue and the brainstorm while there is one, voting to facilitators (who start
+// votes) and to everyone else while a vote exists (open, or the last one with its results).
+
+/** The Facilitate menu's entries, in order. */
+export type FacilitateEntry = 'timer' | 'reactions' | 'hands' | 'voting' | 'brainstorm'
+
+export function facilitateEntries(input: {
+  guest: boolean
+  facilitator: boolean
+  activity: WorkshopActivity
+  /** a vote exists on the board (open, ended or revealed: the last one) */
+  vote: boolean
+}): FacilitateEntry[] {
+  const out: FacilitateEntry[] = []
+  if (showTimerButton(input.guest, input.activity)) out.push('timer')
+  out.push('reactions')
+  if (input.activity.hands) out.push('hands')
+  if (input.facilitator || input.vote) out.push('voting')
+  if (input.activity.brainstorm) out.push('brainstorm')
+  return out
+}
+
+/** One live part of the Facilitate pill. */
+export type PillPart =
+  | { kind: 'timer'; text: string; state: 'running' | 'paused' | 'finished' }
+  | { kind: 'vote'; text: 'Vote' }
+  | { kind: 'brainstorm'; text: 'Brainstorm' }
+  | { kind: 'hands'; text: string; count: number }
+
+/**
+ * What the Facilitate button's pill says: only what is live, in this order. Nothing when idle; "4:58 · Vote"
+ * while a timer runs and a vote is open. `clock` is the timer as the pill shows it ("4:58").
+ */
+export function facilitatePill(input: {
+  timer: TimerDisplay
+  clock: string
+  voteOpen: boolean
+  brainstormOpen: boolean
+  hands: number
+}): PillPart[] {
+  const out: PillPart[] = []
+  // a finished timer reads 0:00 in red for its alert (the canvas flash says "Time's up": RETRO-23a, one message)
+  if (input.timer === 'running' || input.timer === 'paused' || input.timer === 'finished')
+    out.push({ kind: 'timer', text: input.clock, state: input.timer })
+  if (input.voteOpen) out.push({ kind: 'vote', text: 'Vote' })
+  if (input.brainstormOpen) out.push({ kind: 'brainstorm', text: 'Brainstorm' })
+  if (input.hands > 0) out.push({ kind: 'hands', text: `✋ ${input.hands}`, count: input.hands })
+  return out
+}
+
+/** The pill as one line ("4:58 · Vote"), '' when idle. */
+export const pillText = (parts: readonly PillPart[]) => parts.map((p) => p.text).join(' · ')

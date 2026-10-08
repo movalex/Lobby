@@ -1,12 +1,12 @@
 // OWNER: 3f. Reactions and raise hand (FAC-08) on the Excalidraw page (the tldraw board's Reactions.tsx):
-// a reactions button in the top bar opens a small bar with the six reactions and the raise-hand toggle;
+// the Facilitate menu's "Reactions and raise hand" (K3-3) opens a small bar with the six reactions and the
+// raise-hand toggle;
 // every reaction on the board shows as a short burst near the sender's cursor (or below the top bar, see
 // ../reactions.ts placeBurst) for everyone. Bursts only fade in and out for people who prefer reduced
 // motion (workshops.css). Nothing is stored.
 import { REACTION_EMOJIS, REACTION_LABELS, type ReactionEmoji } from '@draftroom/contracts'
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
-import { onFocusLeave } from '../../../ui/focus.ts'
 import { HandIcon } from '../Hands.tsx'
 import { addBurst, BURST_MS, type Burst, placeBurst } from '../reactions.ts'
 import type { WorkshopSnapshot, WorkshopStore } from '../store.ts'
@@ -15,7 +15,7 @@ import { workshopSettingsOf } from './session-settings.ts'
 
 type Ctx = CanvasFeatureContext
 
-function SmileIcon() {
+export function SmileIcon() {
   return (
     <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
       <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.9" />
@@ -34,52 +34,31 @@ function SmileIcon() {
 
 const HINT_MS = 1_800
 
-/** The top-bar reactions button and its bar (six reactions + raise hand). */
-export function ReactionControl({
+/**
+ * The reactions bar (six reactions + raise hand), opened from the Facilitate menu's "Reactions and raise
+ * hand" entry (K3-3; it had its own top-bar button). The bar takes the keyboard when it opens; Escape, an
+ * outside press and Tab past it close it (./WorkshopBar.tsx, which owns what is open).
+ */
+export function ReactionBar({
   ctx,
   store,
   snap,
+  id,
 }: {
   ctx: Ctx
   store: WorkshopStore
   snap: WorkshopSnapshot
+  id: string
 }) {
-  const [open, setOpen] = useState(false)
   const [hint, setHint] = useState<string | null>(null)
   const busy = useRef(false)
-  const wrap = useRef<HTMLDivElement>(null)
-  const button = useRef<HTMLButtonElement>(null)
   const bar = useRef<HTMLDivElement>(null)
-  const barId = useId()
   const active = ctx.board.status === 'active'
   const raised = !!snap.myHand
 
-  // Close on an outside press, and on Escape wherever the focus is inside the bar or dropped to the
-  // page (a control can re-render under the keyboard); another dialog's Escape is left alone.
   useEffect(() => {
-    if (!open) return
     bar.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
-    const onDown = (e: PointerEvent) => {
-      if (!wrap.current?.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return
-      const inside = wrap.current?.contains(document.activeElement)
-      if (!inside && document.activeElement !== document.body) return
-      e.stopPropagation()
-      setOpen(false)
-      button.current?.focus()
-    }
-    document.addEventListener('pointerdown', onDown, true)
-    document.addEventListener('keydown', onKey, true)
-    // A11Y2-05: Tab past the bar (to Present) or a dialog taking the keyboard closes it.
-    const off = wrap.current ? onFocusLeave(wrap.current, () => setOpen(false)) : () => {}
-    return () => {
-      document.removeEventListener('pointerdown', onDown, true)
-      document.removeEventListener('keydown', onKey, true)
-      off()
-    }
-  }, [open])
+  }, [])
 
   useEffect(() => {
     if (!hint) return
@@ -114,82 +93,61 @@ export function ReactionControl({
       })
   }
 
-  const label = raised ? 'Reactions. Your hand is raised' : 'Reactions and raise hand'
   return (
-    <div className="dr-wk-react" ref={wrap}>
-      <button
-        ref={button}
-        type="button"
-        className="dr-wk-iconbtn"
-        data-testid="reactions-button"
-        data-hand={raised ? 'up' : 'down'}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-controls={open ? barId : undefined}
-        aria-label={label}
-        title={label}
-        onClick={() => setOpen((o) => !o)}
-      >
-        {raised ? <HandIcon /> : <SmileIcon />}
-      </button>
-      {open && (
-        <div
-          id={barId}
-          ref={bar}
-          role="dialog"
-          aria-label="Reactions"
-          className="dr-wk-reactbar"
-          data-testid="reaction-bar"
-          onKeyDown={(e) => {
-            e.stopPropagation() // no board shortcuts from inside the bar (Escape is handled above)
-            if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
-              const items = [
-                ...(bar.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? []),
-              ]
-              const at = items.indexOf(document.activeElement as HTMLButtonElement)
-              const next = items[(at + (e.key === 'ArrowRight' ? 1 : -1) + items.length) % items.length]
-              next?.focus()
-              e.preventDefault()
-            }
-          }}
+    <div
+      id={id}
+      ref={bar}
+      role="dialog"
+      aria-label="Reactions"
+      className="dr-wk-reactbar"
+      data-testid="reaction-bar"
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') return // ./WorkshopBar.tsx closes it and gives the keyboard back
+        e.stopPropagation() // no board shortcuts from inside the bar
+        if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+          const items = [...(bar.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])]
+          const at = items.indexOf(document.activeElement as HTMLButtonElement)
+          const next = items[(at + (e.key === 'ArrowRight' ? 1 : -1) + items.length) % items.length]
+          next?.focus()
+          e.preventDefault()
+        }
+      }}
+    >
+      <div className="dr-wk-reactbar__row">
+        {REACTION_EMOJIS.map((emoji) => (
+          <button
+            key={emoji}
+            type="button"
+            className="dr-wk-reactbar__emoji"
+            data-testid="reaction-option"
+            data-emoji={emoji}
+            aria-label={REACTION_LABELS[emoji]}
+            title={REACTION_LABELS[emoji]}
+            disabled={!active}
+            onClick={() => void react(emoji)}
+          >
+            <span aria-hidden="true">{emoji}</span>
+          </button>
+        ))}
+        <span className="dr-wk-reactbar__sep" aria-hidden="true" />
+        <button
+          type="button"
+          className="dr-wk-reactbar__hand"
+          data-testid="hand-toggle"
+          aria-pressed={raised}
+          disabled={!active && !raised}
+          onClick={() => void toggleHand()}
         >
-          <div className="dr-wk-reactbar__row">
-            {REACTION_EMOJIS.map((emoji) => (
-              <button
-                key={emoji}
-                type="button"
-                className="dr-wk-reactbar__emoji"
-                data-testid="reaction-option"
-                data-emoji={emoji}
-                aria-label={REACTION_LABELS[emoji]}
-                title={REACTION_LABELS[emoji]}
-                disabled={!active}
-                onClick={() => void react(emoji)}
-              >
-                <span aria-hidden="true">{emoji}</span>
-              </button>
-            ))}
-            <span className="dr-wk-reactbar__sep" aria-hidden="true" />
-            <button
-              type="button"
-              className="dr-wk-reactbar__hand"
-              data-testid="hand-toggle"
-              aria-pressed={raised}
-              disabled={!active && !raised}
-              onClick={() => void toggleHand()}
-            >
-              <HandIcon size={16} />
-              {raised ? 'Lower hand' : 'Raise hand'}
-            </button>
-          </div>
-          <p className="dr-wk-reactbar__hint" aria-live="polite" data-testid="reaction-hint">
-            {hint ??
-              (active
-                ? 'Everyone on the board sees reactions for a moment. Nothing is saved.'
-                : 'Reactions and raised hands are off while the board is archived.')}
-          </p>
-        </div>
-      )}
+          <HandIcon size={16} />
+          {raised ? 'Lower hand' : 'Raise hand'}
+        </button>
+      </div>
+      <p className="dr-wk-reactbar__hint" aria-live="polite" data-testid="reaction-hint">
+        {hint ??
+          (active
+            ? 'Everyone on the board sees reactions for a moment. Nothing is saved.'
+            : 'Reactions and raised hands are off while the board is archived.')}
+      </p>
     </div>
   )
 }
@@ -212,9 +170,9 @@ function cursorOf(ctx: Ctx, userId: string): { x: number; y: number } | null {
   return { x: at.x, y: at.y }
 }
 
-/** The reactions button's centre, relative to the canvas region (null when it is not on screen). */
+/** The Facilitate button's centre (the reactions live in its menu), relative to the canvas region (null when it is not on screen). */
 function laneX(ctx: Ctx): number | null {
-  const btn = document.querySelector<HTMLElement>('[data-testid="reactions-button"]')
+  const btn = document.querySelector<HTMLElement>('[data-testid="facilitate-button"]')
   const container = ctx.canvas.container()
   if (!btn || !container) return null
   const b = btn.getBoundingClientRect()
