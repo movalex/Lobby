@@ -151,7 +151,10 @@
   gap: 8px;
 }
 
-.lobby-canvas-screen {
+/* K1-5 (wave K integration, the K1 review): board.css now loads before styles.css (BoardSkeleton imports it from
+   the entry), so the cover's rules win over .dr-screen and .dr-screen--overlay by specificity, not by order */
+.lobby-canvas-screen,
+.dr-screen.lobby-canvas-screen {
   position: absolute;
   inset: 0;
   z-index: 50;
@@ -272,7 +275,8 @@
 /* the engine canvas's own background (canvas/engine/theme.ts CANVAS_LIGHT, CANVAS_DARK): no change of colour
    when the canvas appears under the skeleton's place */
 .lobby-skeleton__canvas,
-.lobby-canvas-screen--skeleton {
+.lobby-canvas-screen--skeleton,
+.dr-screen.lobby-canvas-screen--skeleton {
   --lobby-skeleton-canvas: #f9fafb;
   background: var(--lobby-skeleton-canvas);
 }
@@ -280,14 +284,16 @@
   overflow: hidden;
 }
 /* the session-connecting cover: the skeleton's canvas (shimmer, greyed toolbar), its words small and low */
-.lobby-canvas-screen--skeleton {
+.lobby-canvas-screen--skeleton,
+.dr-screen.lobby-canvas-screen--skeleton {
   justify-content: flex-start;
   padding-top: 18vh;
   overflow: hidden;
   font-size: 13px;
 }
 :root[data-theme="dark"] .lobby-skeleton__canvas,
-:root[data-theme="dark"] .lobby-canvas-screen--skeleton {
+:root[data-theme="dark"] .lobby-canvas-screen--skeleton,
+:root[data-theme="dark"] .dr-screen.lobby-canvas-screen--skeleton {
   --lobby-skeleton-canvas: #101011;
 }
 .lobby-skeleton__shimmer {

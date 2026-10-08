@@ -162,3 +162,32 @@ test('from the dashboard: the skeleton names the board from its card at once, be
     await context.close()
   }
 })
+
+// Wave K integration (the K1 review): the connecting cover (until the first welcome) is the skeleton's canvas, above
+// the board's layers. board.css loads before styles.css since K1-5 (BoardSkeleton imports it from the entry), so its
+// rules must win by specificity: before the fix the cover had .dr-screen--overlay's z-index 10 and paper colour,
+// its words centred.
+test('the connecting cover is the skeleton canvas above the board: z-index 50, the canvas colour, its words high', async ({
+  browser,
+  board,
+  users,
+}) => {
+  const alice = await users.get('alice')
+  const context = await browser.newContext({ colorScheme: 'light' })
+  try {
+    const page = await context.newPage()
+    await signInContext(context, alice.handle, alice.name)
+    // the board socket opens and never hears a welcome: the cover stays
+    await page.routeWebSocket(/\/connect\/[^/?#]+(?:[?#]|$)/, () => {})
+    await page.goto(`/b/${board}`)
+    const cover = page.getByTestId('sync-loading')
+    await expect(cover).toBeVisible({ timeout: 30_000 })
+    const style = await cover.evaluate((el) => {
+      const s = getComputedStyle(el)
+      return { z: s.zIndex, background: s.backgroundColor, justify: s.justifyContent }
+    })
+    expect(style).toEqual({ z: '50', background: 'rgb(249, 250, 251)', justify: 'flex-start' })
+  } finally {
+    await context.close()
+  }
+})
