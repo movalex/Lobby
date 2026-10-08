@@ -5,6 +5,7 @@
 // region says each step. Replaces the traversal half of tldraw's own keyboard navigation (Tab with a
 // selection), which the key allowlist gives back to the browser on the new canvas.
 import {
+  clickItem,
   expect,
   items,
   itemText,
@@ -329,6 +330,20 @@ test('W5-45: the board shows a focus ring when the keyboard arrives (Tab, F6, Es
     await a.page.keyboard.press('Escape')
     await expect.poll(() => boardHasFocus(a.page)).toBe(true)
     await expect(ring).toBeVisible()
+  })
+
+  await test.step('K2-1: a pointer move takes the ring away, and Escape out of a note the pointer opened shows none', async () => {
+    await a.page.mouse.move(300, 300)
+    await a.page.mouse.move(320, 310)
+    await expect(ring).toHaveCount(0)
+    await clickItem(a.page, id)
+    await a.page.keyboard.press('Enter')
+    await waitForTextEditor(a.page, id)
+    await a.page.keyboard.type('!')
+    await a.page.keyboard.press('Escape')
+    await expect.poll(() => boardHasFocus(a.page)).toBe(true)
+    await a.page.waitForTimeout(150)
+    await expect(ring).toHaveCount(0)
   })
 })
 

@@ -22,6 +22,14 @@ import { boardRegionName, SKIP_TO_CANVAS_EVENT } from '../../../ui/SkipLink.tsx'
 import { announcerFor, releaseAnnouncer } from './announcer.ts'
 import { ContentsPanel } from './ContentsPanel.tsx'
 import { FocusRing, keyboardFocus } from './FocusRing.tsx'
+import {
+  isRealMove,
+  nextRing,
+  type PointerAt,
+  RING_START,
+  type RingInput,
+  type RingState,
+} from './focus-ring.ts'
 import { CANVAS_HINT_ID, LiveRegion } from './LiveRegion.tsx'
 import { PhoneSheet } from './PhoneSheet.tsx'
 import { toolWords } from './tools.ts'
@@ -30,10 +38,39 @@ import './a11y.css'
 
 const hasItems = (ctx: CanvasFeatureContext) => selectionLevel(ctx.canvas).order.length > 0
 
+/** K2-1: each board's focus-ring state (./focus-ring.ts), fed by `nameTheCanvas` and `enter`. */
+const rings = new WeakMap<object, { state: RingState }>()
+
+function feedRing(canvas: object, input: RingInput): void {
+  let r = rings.get(canvas)
+  if (!r) {
+    r = { state: RING_START }
+    rings.set(canvas, r)
+  }
+  r.state = nextRing(r.state, input)
+  if (keyboardFocus.get() !== r.state.ring) keyboardFocus.set(r.state.ring)
+}
+
+/** The board's focusable canvas (the element holding the drawing surface, not its text editor) has the focus. */
+function boardFocused(root: HTMLElement | null): boolean {
+  const a = root?.ownerDocument.activeElement
+  return (
+    !!root &&
+    a instanceof HTMLElement &&
+    a !== root &&
+    root.contains(a) &&
+    !isTextEntry(a) &&
+    !!a.querySelector('canvas')
+  )
+}
+
 /** The keyboard enters the canvas (F6, "Skip to canvas"), then the live region says where it is. */
 function enter(ctx: CanvasFeatureContext): void {
   const announcer = announcerFor(ctx.canvas)
-  if (enterCanvas(ctx.canvas)) announcer.saySelection()
+  const entered = enterCanvas(ctx.canvas)
+  // K2-1: an entry on purpose shows the ring, also when the board already had the focus (no focusin then)
+  feedRing(ctx.canvas, { type: 'enter', onBoard: boardFocused(ctx.canvas.container()) })
+  if (entered) announcer.saySelection()
   else announcer.say(EMPTY_BOARD)
 }
 
@@ -142,9 +179,11 @@ export const feature: CanvasFeature = {
  * engine class is assumed.
  *
  * Two more things happen on that focus:
- *  - W5-45: the keyboard arriving there (Tab, F6, "Skip to canvas", Escape out of an editor) turns the
- *    board's focus ring on (./FocusRing.tsx); a press of the pointer, or the focus leaving the board, turns
- *    it off. A focus that follows a click or the page opening shows no ring, as `:focus-visible` would not.
+ *  - W5-45, K2-1: the keyboard arriving there (Tab, F6, "Skip to canvas", and Escape out of an editor the
+ *    keyboard got to) turns the board's focus ring on (./FocusRing.tsx); a press or a real move of the pointer,
+ *    or the focus leaving the board, turns it off. A focus that follows a click or the page opening shows no
+ *    ring, as `:focus-visible` would not, and neither does Escape out of a note a pointer opened: typing and
+ *    Escape are not keys that move the focus (./focus-ring.ts has the rule).
  *  - W5-59: the engine's text editor (a textarea inside the board) is NOT named here: canvas-ux names it
  *    as it opens (../../canvas-ux/ported/canvas-events.ts editorName), and two writers gave it two names in
  *    turn (the wave-5 integration).
@@ -162,15 +201,21 @@ function nameTheCanvas(ctx: CanvasFeatureContext): () => void {
       el.setAttribute('aria-describedby', CANVAS_HINT_ID)
     named.add(el)
   }
-  // the last kind of input: the ring shows only for a focus the keyboard brought
-  let viaKeyboard = false
+  // the last input that moved the focus (./focus-ring.ts): the ring shows only for a focus the keyboard brought
+  let last: PointerAt | null = null
   const onKeyDown = (e: KeyboardEvent) => {
     if (!e.isTrusted) return
-    viaKeyboard = true
+    feedRing(canvas, { type: 'key', key: e.key })
   }
-  const onPointerDown = () => {
-    viaKeyboard = false
-    keyboardFocus.set(false)
+  const onPointerDown = (e: PointerEvent) => {
+    last = { x: e.clientX, y: e.clientY }
+    feedRing(canvas, { type: 'pointerdown' })
+  }
+  const onPointerMove = (e: PointerEvent) => {
+    if (!e.isTrusted) return
+    const moved = isRealMove(last, e)
+    last = { x: e.clientX, y: e.clientY }
+    feedRing(canvas, { type: 'pointermove', moved })
   }
   const consider = (target: EventTarget | null) => {
     if (!(target instanceof HTMLElement) || target === root || !root.contains(target)) return false
@@ -180,14 +225,14 @@ function nameTheCanvas(ctx: CanvasFeatureContext): () => void {
     return true
   }
   const onFocusIn = (e: FocusEvent) => {
-    const onBoard = consider(e.target)
-    keyboardFocus.set(onBoard && viaKeyboard)
+    feedRing(canvas, { type: 'focus', onBoard: consider(e.target) })
   }
   const onFocusOut = (e: FocusEvent) => {
-    if (e.target instanceof HTMLElement && named.has(e.target)) keyboardFocus.set(false)
+    if (e.target instanceof HTMLElement && named.has(e.target)) feedRing(canvas, { type: 'leave' })
   }
   document.addEventListener('keydown', onKeyDown, true)
   document.addEventListener('pointerdown', onPointerDown, true)
+  document.addEventListener('pointermove', onPointerMove, { capture: true, passive: true })
   document.addEventListener('focusin', onFocusIn, true)
   document.addEventListener('focusout', onFocusOut, true)
   consider(document.activeElement)
@@ -199,9 +244,11 @@ function nameTheCanvas(ctx: CanvasFeatureContext): () => void {
   return () => {
     document.removeEventListener('keydown', onKeyDown, true)
     document.removeEventListener('pointerdown', onPointerDown, true)
+    document.removeEventListener('pointermove', onPointerMove, { capture: true })
     document.removeEventListener('focusin', onFocusIn, true)
     document.removeEventListener('focusout', onFocusOut, true)
     watch.disconnect()
+    rings.delete(canvas)
     keyboardFocus.set(false)
   }
 }
