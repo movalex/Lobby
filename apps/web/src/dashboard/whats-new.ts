@@ -76,7 +76,7 @@ export const WHATS_NEW_ITEMS: readonly WhatsNewItem[] = [
   {
     id: 'phones',
     title: 'Phones start with the Hand tool',
-    body: 'On a phone one finger moves around the board, so a swipe never moves a colleague’s note. Tap a note to select it.',
+    body: 'On a phone one finger moves around the board, so a swipe never moves a colleague’s note. To work with notes, tap Select (the arrow).',
     tryIt: null,
     for: 'everyone',
   },
