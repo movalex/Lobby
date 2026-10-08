@@ -40,6 +40,12 @@
 // that becomes visible replaces one that has been silent for the stale timeout (the timer was throttled).
 // Never a connection the server told to wait, as 'replaced' does: that would let a person's tabs push each
 // other out.
+//
+// Listeners (K6-5, EVT-3): an event listener, a resync listener or an access-lost listener that throws is
+// its feature's problem. The other listeners still run, the connection stays open, and the failure is
+// logged once per listener by its kind and the error's class name (never the event's data or the error's
+// message). An event type a page has no listener for (a newer api's, e.g. 'cursor.chat' for a tab opened
+// before the web deploy that added cursor chat) is simply not delivered to anyone.
 
 export interface BoardEventMessage {
   type: string
@@ -201,6 +207,10 @@ export interface BoardEventsOptions {
   maxDirectFailures?: number
 }
 
+/** An error's class name only (`TypeError`), for logs that must not carry what it says. */
+const errorName = (e: unknown): string =>
+  e instanceof Error && /^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(e.name) ? e.name : 'Error'
+
 const directSupported = () =>
   typeof fetch === 'function' && typeof ReadableStream !== 'undefined' && typeof TextDecoder !== 'undefined'
 
@@ -246,14 +256,24 @@ export function createBoardEvents(boardId: string, opts: BoardEventsOptions = {}
     staleTimer = null
   }
 
-  const emit = (msg: BoardEventMessage) => {
-    for (const l of listeners.get(msg.type) ?? []) {
-      try {
-        l(msg.data, msg)
-      } catch (e) {
-        console.error('board event listener failed', msg.type, e)
-      }
+  // K6-5 (EVT-3): every listener runs on its own. One that throws is that feature's problem: the others
+  // still run and the connection goes on (a throw inside the direct stream's read loop used to end it).
+  // Each failing listener is logged once, by the event's type and the error's name only: never the
+  // event's data or the error's message, which can carry what the board says.
+  const failedListeners = new WeakSet<object>()
+  const safely = (what: string, l: object, run: () => void) => {
+    try {
+      run()
+    } catch (e) {
+      if (failedListeners.has(l)) return
+      failedListeners.add(l)
+      console.error(`Lobby: a board ${what} listener failed (${errorName(e)})`)
     }
+  }
+
+  const emit = (msg: BoardEventMessage) => {
+    for (const l of [...(listeners.get(msg.type) ?? [])])
+      safely(`'${msg.type}' event`, l, () => l(msg.data, msg))
   }
 
   /** One message's data, from either transport. Returns its type ('' when it is not JSON). */
@@ -269,16 +289,11 @@ export function createBoardEvents(boardId: string, opts: BoardEventsOptions = {}
       if (!Number.isNaN(serverNow)) offset = serverNow - Date.now()
       connected = true
       retryMs = FIRST_RETRY_MS
-      for (const r of resync) {
-        // A feature's refetch that throws is that feature's problem, not a failed stream.
-        try {
-          r()
-        } catch (e) {
-          console.error('board resync listener failed', e)
-        }
-      }
+      // A feature's refetch that throws is that feature's problem, not a failed stream.
+      for (const r of [...resync]) safely('resync', r, r)
     } else if (msg.type === 'access-lost') {
-      for (const l of lost) l()
+      // The same for the page's access-lost handlers (K6-5): a throw here ended the direct connection.
+      for (const l of [...lost]) safely('access-lost', l, l)
     }
     emit(msg)
     return msg.type
@@ -620,7 +635,7 @@ export function createBoardEvents(boardId: string, opts: BoardEventsOptions = {}
     },
     onResync(listener) {
       resync.add(listener)
-      if (connected) listener()
+      if (connected) safely('resync', listener, listener)
       return () => void resync.delete(listener)
     },
     serverOffsetMs: () => offset,

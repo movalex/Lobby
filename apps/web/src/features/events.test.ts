@@ -724,6 +724,123 @@ describe('createBoardEvents: a mint that keeps failing (wave I1)', () => {
     expect(FakeEventSource.all).toHaveLength(0)
     d.events.close()
   })
+
+  it('K6-5 (EVT-3): a throwing resync or access-lost listener never ends the direct connection; each is logged once, with no content', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const d = direct()
+    const SECRET = 'the words on a private note'
+    d.events.onResync(() => {
+      throw new Error(SECRET)
+    })
+    d.events.onAccessLost(() => {
+      throw new TypeError(SECRET)
+    })
+    const lostToo = vi.fn()
+    d.events.onAccessLost(lostToo)
+    const got = vi.fn()
+    d.events.on('comments.thread', got)
+    await settle()
+    const stream = d.last()
+    d.last()?.push(frame('hello', hello))
+    await settle()
+    d.last()?.push(frame('access-lost', { reason: SECRET }))
+    await settle()
+    // the other access-lost listener still ran, and the stream goes on: later events arrive on it
+    expect(lostToo).toHaveBeenCalledTimes(1)
+    d.last()?.push(frame('comments.thread', { id: 'thr_after', text: SECRET }))
+    d.last()?.push(frame('access-lost', null))
+    await settle()
+    expect(got).toHaveBeenCalledTimes(1)
+    expect(got).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'thr_after' }),
+      expect.objectContaining({ type: 'comments.thread' }),
+    )
+    expect(lostToo).toHaveBeenCalledTimes(2)
+    // the same connection: no new mint, no new fetch, not aborted, still direct
+    expect(d.last()).toBe(stream)
+    expect(stream?.aborted).toBe(false)
+    expect(d.mint).toHaveBeenCalledTimes(1)
+    expect(d.calls).toHaveLength(1)
+    expect(d.events.transport()).toBe('direct')
+    expect(warn).not.toHaveBeenCalled()
+    // logged once per listener (the access-lost one threw twice), and never what the board says
+    expect(error).toHaveBeenCalledTimes(2)
+    const logged = JSON.stringify(error.mock.calls.map((args) => args.map((a) => String(a))))
+    expect(logged).not.toContain(SECRET)
+    expect(logged).not.toContain('thr_after')
+    d.events.close()
+  })
+
+  it('K6-5: a resync listener that throws when it is registered on a connected stream is logged, not thrown at the feature', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const d = direct()
+    await settle()
+    d.last()?.push(frame('hello', hello))
+    await settle()
+    expect(() =>
+      d.events.onResync(() => {
+        throw new Error('a feature broke')
+      }),
+    ).not.toThrow()
+    expect(error).toHaveBeenCalledTimes(1)
+    d.events.close()
+  })
+})
+
+describe('createBoardEvents: an event type this build does not know (K6-4: an older tab and cursor chat)', () => {
+  beforeEach(() => {
+    vi.useRealTimers()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+  })
+
+  it('is ignored by a page with no listener for it (the old parser behaviour): nothing logged, the stream goes on', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const d = direct()
+    const resync = vi.fn()
+    const reaction = vi.fn()
+    d.events.onResync(resync)
+    d.events.on('workshop.reaction', reaction)
+    await settle()
+    const stream = d.last()
+    d.last()?.push(
+      frame('hello', hello) +
+        frame('cursor.chat', { userId: 'usr_x', name: 'X', text: 'hi' }) +
+        frame('some.future.event', { anything: [1, 2, 3] }) +
+        frame('workshop.reaction', { userId: 'usr_x', name: 'X', emoji: '👍' }),
+    )
+    await settle()
+    expect(resync).toHaveBeenCalledTimes(1)
+    expect(reaction).toHaveBeenCalledTimes(1)
+    expect(d.last()).toBe(stream)
+    expect(d.calls).toHaveLength(1)
+    expect(error).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
+    d.events.close()
+  })
+
+  it('reaches a page that listens for it (the new build), on either transport', async () => {
+    const d = direct()
+    const chat = vi.fn()
+    d.events.on('cursor.chat', chat)
+    await settle()
+    d.last()?.push(frame('hello', hello) + frame('cursor.chat', { userId: 'usr_x', name: 'X', text: 'hi' }))
+    await settle()
+    expect(chat).toHaveBeenCalledWith(
+      { userId: 'usr_x', name: 'X', text: 'hi' },
+      expect.objectContaining({ type: 'cursor.chat' }),
+    )
+    d.events.close()
+    vi.useFakeTimers()
+    const cookie = createBoardEvents('b-1', COOKIE_ONLY)
+    const chat2 = vi.fn()
+    cookie.on('cursor.chat', chat2)
+    FakeEventSource.all[0]?.send('hello', hello)
+    FakeEventSource.all[0]?.send('cursor.chat', { userId: 'usr_y', name: 'Y', text: 'yo' })
+    expect(chat2).toHaveBeenCalledTimes(1)
+    cookie.close()
+  })
 })
 
 describe('createBoardEvents: the cookie fallback is temporary (wave I1)', () => {
