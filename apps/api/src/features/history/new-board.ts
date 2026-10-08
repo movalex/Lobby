@@ -185,6 +185,11 @@ export async function createBoardFrom(
         }
   // SEAM-11: before the seed, so a full workspace never leaves an orphan canvas behind (and again below).
   await assertBoardRoom(ctx.db, plan.workspaceId, ctx.config.storage.maxBoardsPerWorkspace)
+  // Bridge release R0's contract: every board this api makes on the new canvas (restore as new,
+  // duplicate, import) has `new_canvas = true`, so a rollback's R0 refuses it instead of opening it
+  // empty. Converted boards (made before the cut-over) keep false. K6-1: asked BEFORE the seed (the K6
+  // review), so a 503 CANVAS_STARTING while the engine is unknown leaves no orphan canvas file behind.
+  const newCanvas = await onNewCanvas(ctx)
   let boardId: string | null = null
   for (let attempt = 0; attempt < SEED_ATTEMPTS && !boardId; attempt++) {
     const id = newBoardId()
@@ -198,10 +203,6 @@ export async function createBoardFrom(
     }
   }
   if (!boardId) throw new ApiError(503, 'SYNC_CONFLICT', 'Could not create the board. Try again.')
-  // Bridge release R0's contract: every board this api makes on the new canvas (restore as new,
-  // duplicate, import) has `new_canvas = true`, so a rollback's R0 refuses it instead of opening it
-  // empty. Converted boards (made before the cut-over) keep false.
-  const newCanvas = await onNewCanvas(ctx)
 
   const newId = boardId
   try {
