@@ -2,15 +2,15 @@
 // Markdown or CSV), which follows the board's export policy like every other export (today's
 // ../commands.ts guardExport). UI hints only: the outline is built from what this person already sees.
 //
-// The tldraw page reads the sharing feature's policy store (features/sharing/export-policy.ts, tldraw
-// signals). Until the ported sharing feature (3e) offers the same to ported code, this reads the server's
-// own answer for the caller (`GET /api/boards/:bid/export-policy` `canExport`): on mount, after every
-// `export-control.policy` board event and after every event-stream reconnect. Unknown counts as allowed,
-// as today (the default and by far the common case).
+// K1-4 (wave K): the server's own answer for the caller (`GET /api/boards/:bid/export-policy` `canExport`),
+// read through the board's one shared export-policy resource (features/sharing/ported/export-policy.ts),
+// which every gate on the board reads: once per board session, again after every `export-control.policy`
+// board event and after every event-stream reconnect. This gate used to make that read itself. Unknown
+// counts as allowed, as before (the default and by far the common case).
 
-import { EXPORT_CONTROL_EVENTS, EXPORT_DISABLED_MESSAGE, ExportPolicyState } from '@draftroom/contracts'
+import { EXPORT_DISABLED_MESSAGE } from '@draftroom/contracts'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
-import { atom } from '../../../lib/signals.ts'
+import { attachExportPolicy, exportStateOf } from '../../sharing/ported/export-policy.ts'
 
 export interface ExportGate {
   /** Reactive: may this person export now? */
@@ -21,29 +21,12 @@ export interface ExportGate {
 }
 
 export function watchExportPolicy(ctx: CanvasFeatureContext): ExportGate {
-  const state = atom<boolean | null>('mindmap.export-allowed', null)
-  const controller = new AbortController()
-  let stopped = false
-  const path = `/api/boards/${encodeURIComponent(ctx.board.id)}/export-policy`
-  const refetch = () => {
-    ctx.api.request('GET', path, { schema: ExportPolicyState, signal: controller.signal }).then(
-      (s) => {
-        if (!stopped) state.set(s.canExport)
-      },
-      () => {}, // keep what we had: the server enforces, and the next resync asks again
-    )
-  }
-  const offEvent = ctx.events.on(EXPORT_CONTROL_EVENTS.policy, () => refetch())
-  let resynced = false
-  const offResync = ctx.events.onResync(() => {
-    resynced = true
-    refetch()
-  })
-  if (!resynced) refetch()
+  const canExport = exportStateOf(ctx.board.id).canExport
+  const detach = attachExportPolicy({ boardId: ctx.board.id, api: ctx.api, events: ctx.events })
   return {
-    allowed: () => state.get() !== false,
+    allowed: () => canExport.get() !== false,
     guard() {
-      if (state.get() !== false) return true
+      if (canExport.get() !== false) return true
       ctx.notify({
         key: 'export-off',
         text: EXPORT_DISABLED_MESSAGE,
@@ -52,11 +35,6 @@ export function watchExportPolicy(ctx: CanvasFeatureContext): ExportGate {
       })
       return false
     },
-    dispose() {
-      stopped = true
-      controller.abort()
-      offEvent()
-      offResync()
-    },
+    dispose: detach,
   }
 }

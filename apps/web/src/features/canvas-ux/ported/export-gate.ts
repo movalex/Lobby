@@ -5,25 +5,19 @@
 // `export` group and the clipboard's copy entries: ./Menu.tsx). UI only: the api refuses the downloads
 // themselves.
 //
-// The policy is read here, engine-neutral, the same way the sharing feature's store reads it on the tldraw
-// page (features/sharing/export-policy.ts: the first answer of GET /api/boards/:bid/export-policy, every
-// `export-control.policy` event, a refetch after each event-stream reconnect), into a signal. Until the
-// first answer it counts as 'everyone' for accounts, so boards that never limit anyone do not flash
-// disabled entries; a name-only guest the gate KNOWS about fails closed instead (they are limited under
-// 'everyone' too), so they cannot copy in the moment before the policy has loaded (CR-3A-4).
-// The ported sharing feature (3e) may later own one store for both; this one is canvas-ux's until then.
-import {
-  EXPORT_CONTROL_EVENTS,
-  EXPORT_DISABLED_MESSAGE,
-  type ExportPolicy,
-  ExportPolicyEvent,
-  ExportPolicyState,
-  exportAllowedFor,
-} from '@draftroom/contracts'
+// K1-4 (wave K): the policy is the board's one shared export-policy resource
+// (features/sharing/ported/export-policy.ts: read once per board session, every `export-control.policy`
+// event, a read after each event-stream reconnect), which every gate on the board reads; this gate used to
+// read GET /api/boards/:bid/export-policy itself. Until the first answer it counts as 'everyone' for
+// accounts, so boards that never limit anyone do not flash disabled entries; a name-only guest the gate
+// KNOWS about fails closed instead (they are limited under 'everyone' too), so they cannot copy in the
+// moment before the policy has loaded (CR-3A-4).
+import { EXPORT_DISABLED_MESSAGE, type ExportPolicy, exportAllowedFor } from '@draftroom/contracts'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { knownUserKind } from '../../../invite/guest.tsx'
 import type { BoardRole } from '../../../lib/permissions.ts'
 import { type Atom, atom } from '../../../lib/signals.ts'
+import { attachExportPolicy, exportStateOf } from '../../sharing/ported/export-policy.ts'
 
 /** What people see wherever copying or exporting is turned off. */
 export const EXPORT_OFF_TEXT = EXPORT_DISABLED_MESSAGE
@@ -31,7 +25,7 @@ export const EXPORT_OFF_TEXT = EXPORT_DISABLED_MESSAGE
 export const EXPORT_OFF_MENU_LABEL = EXPORT_OFF_TEXT.replace(/\.$/, '')
 
 export interface ExportGate {
-  /** null until the first answer (treated like 'everyone') */
+  /** the board's shared policy (null until the first answer, treated like 'everyone') */
   readonly policy: Atom<ExportPolicy | null>
   /** a name-only guest (null: not known yet) */
   readonly guest: Atom<boolean | null>
@@ -43,7 +37,7 @@ export function exportGate(boardId: string): ExportGate {
   let g = gates.get(boardId)
   if (!g) {
     g = {
-      policy: atom<ExportPolicy | null>(`cux-export-policy:${boardId}`, null),
+      policy: exportStateOf(boardId).policy,
       guest: atom<boolean | null>(`cux-export-guest:${boardId}`, null),
     }
     gates.set(boardId, g)
@@ -100,57 +94,16 @@ export function guardExport(ctx: Pick<CanvasFeatureContext, 'board' | 'role' | '
   return false
 }
 
-const enc = encodeURIComponent
-
 /**
- * Keeps this board's policy current: the answer now, every policy event, and a refetch after every
- * event-stream (re)connect. An answer to a request sent before a later event never overwrites it.
+ * Keeps this board's policy current while canvas-ux is installed: attaches to the board's shared resource
+ * (one read per board session for every gate; an answer to a request sent before a later event never
+ * overwrites that event) and records whether this person is a name-only guest.
  */
 export function syncExportGate(ctx: CanvasFeatureContext): () => void {
-  const boardId = ctx.board.id
-  const g = exportGate(boardId)
+  const g = exportGate(ctx.board.id)
   const kind = knownUserKind(ctx.me.user.id)
   if (kind !== null) g.guest.set(kind === 'guest')
-  let stopped = false
-  let events = 0
-  let sent = 0
-  let applied = 0
-  const controller = new AbortController()
-  const refetch = () => {
-    const mine = ++sent
-    const eventsThen = events
-    ctx.api
-      .request('GET', `/api/boards/${enc(boardId)}/export-policy`, {
-        schema: ExportPolicyState,
-        signal: controller.signal,
-      })
-      .then(
-        (s) => {
-          if (stopped || events !== eventsThen || applied > mine) return
-          applied = mine
-          g.policy.set(s.exportPolicy)
-        },
-        () => {}, // keep what we had: the server enforces, and the next resync asks again
-      )
-  }
-  const offEvent = ctx.events.on(EXPORT_CONTROL_EVENTS.policy, (data) => {
-    const parsed = ExportPolicyEvent.safeParse(data)
-    if (!parsed.success) return
-    events++
-    g.policy.set(parsed.data.exportPolicy)
-  })
-  let resynced = false
-  const offResync = ctx.events.onResync(() => {
-    resynced = true
-    refetch()
-  })
-  if (!resynced) refetch()
-  return () => {
-    stopped = true
-    controller.abort()
-    offEvent()
-    offResync()
-  }
+  return attachExportPolicy({ boardId: ctx.board.id, api: ctx.api, events: ctx.events })
 }
 
 const isEditable = (el: EventTarget | null) =>
