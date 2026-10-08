@@ -90,8 +90,10 @@ export const brainstorm: TemplateSource = {
       geo: 'ellipse',
       text: 'How might we…?\nWrite your question here',
       color: 'violet',
-      labelColor: 'white',
-      fill: 'fill',
+      // A pale tint with the dark ink reads in both themes (K4-3): a white label on the full violet came out
+      // as dark text on a bright fill in the dark theme.
+      labelColor: 'black',
+      fill: 'solid',
       size: 'l',
     })
 

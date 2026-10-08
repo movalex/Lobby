@@ -194,45 +194,40 @@ function wordsOfNode(n: PlanNode): string {
  * in the dark ink instead, and a swatch (a full-colour block) carries no words at all.
  */
 const SATURATED = Object.keys(LOBBY_PALETTE).filter((c) => c !== 'white')
-/** Templates whose labels K4-3 fixes (the rule below is not applied to them until then). */
-const UNTIL_K4_3: readonly string[] = ['brainstorm', 'mood-board']
 
-describe.each(TEMPLATE_INFOS.filter((t) => !UNTIL_K4_3.includes(t.id)).map((t) => [t.id] as const))(
-  '%s: dark-safe labels',
-  (id) => {
-    const { plan, elements, idOf } = alignedTemplate(id as TemplateId, ORIGIN)
+describe.each(TEMPLATE_INFOS.map((t) => [t.id] as const))('%s: dark-safe labels', (id) => {
+  const { plan, elements, idOf } = alignedTemplate(id as TemplateId, ORIGIN)
 
-    it('puts no white label on a saturated fill (plan)', () => {
-      for (const n of plan.nodes) {
-        if (n.kind !== 'geo' || n.fill !== 'fill' || n.meta.draftroomSwatch !== undefined) continue
-        expect(n.labelColor, `"${n.text}" on a full ${n.color} fill`).not.toBe('white')
-        // and no label at all on a full-colour fill: the tinted fills carry words in both themes
-        expect(n.text, `a full ${n.color} fill carries no words`).toBe('')
-      }
-      for (const n of plan.nodes) if (n.kind === 'text') expect(n.color, n.text).not.toBe('white')
-    })
+  it('puts no white label on a saturated fill (plan)', () => {
+    for (const n of plan.nodes) {
+      if (n.kind !== 'geo' || n.fill !== 'fill' || n.meta.draftroomSwatch !== undefined) continue
+      expect(n.labelColor, `"${n.text}" on a full ${n.color} fill`).not.toBe('white')
+      // and no label at all on a full-colour fill: the tinted fills carry words in both themes
+      expect(n.text, `a full ${n.color} fill carries no words`).toBe('')
+    }
+    for (const n of plan.nodes) if (n.kind === 'text') expect(n.color, n.text).not.toBe('white')
+  })
 
-    it('stores the same on the new canvas: no white stroke on a full-colour background', () => {
-      const white = lobbyColor('white').solid
-      const fills = new Set(SATURATED.map((c) => lobbyColor(c).fill))
-      for (const e of elements) {
-        if (e.type !== 'text' || !e.containerId) continue
-        const container = must(elements.find((c) => c.id === e.containerId))
-        const fullColour = fills.has(container.backgroundColor)
-        expect(
-          e.strokeColor.toLowerCase() === white && fullColour,
-          `"${e.originalText}" is white on ${container.backgroundColor}`,
-        ).toBe(false)
-      }
-      for (const n of plan.nodes) {
-        if (n.kind !== 'geo') continue
-        const el = must(elements.find((e) => e.id === idOf.get(n)))
-        // the plan's fill names map onto the stored backgrounds
-        if (n.fill === 'fill') expect(el.backgroundColor).toBe(lobbyColor(n.color).fill)
-      }
-    })
-  },
-)
+  it('stores the same on the new canvas: no white stroke on a full-colour background', () => {
+    const white = lobbyColor('white').solid
+    const fills = new Set(SATURATED.map((c) => lobbyColor(c).fill))
+    for (const e of elements) {
+      if (e.type !== 'text' || !e.containerId) continue
+      const container = must(elements.find((c) => c.id === e.containerId))
+      const fullColour = fills.has(container.backgroundColor)
+      expect(
+        e.strokeColor.toLowerCase() === white && fullColour,
+        `"${e.originalText}" is white on ${container.backgroundColor}`,
+      ).toBe(false)
+    }
+    for (const n of plan.nodes) {
+      if (n.kind !== 'geo') continue
+      const el = must(elements.find((e) => e.id === idOf.get(n)))
+      // the plan's fill names map onto the stored backgrounds
+      if (n.fill === 'fill') expect(el.backgroundColor).toBe(lobbyColor(n.color).fill)
+    }
+  })
+})
 
 describe('getTemplateSource', () => {
   it('knows the new ids and refuses lookalikes', () => {
