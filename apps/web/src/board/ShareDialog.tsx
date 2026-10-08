@@ -456,10 +456,10 @@ export function ShareDialog({
   // "Guests and clients": the workshop link section, first in it when a link was running as the dialog opened
   // (decided once: moving it later would remount it and lose what its Create just said)
   const [workshopFirst, setWorkshopFirst] = useState<boolean | null>(null)
-  useEffect(() => {
-    if (workshopFirst !== null || !invitations.data) return
-    setWorkshopFirst(workshopLinks.length > 0)
-  }, [workshopFirst, invitations.data, workshopLinks.length])
+  // Wave K integration: decided in the render the invitations first arrive in (React renders again before
+  // committing), not in an effect after it: the effect committed the section at the end for one frame and
+  // then moved it up, a remount that detached its row (guests-sharing at 390 px: "not attached to the DOM")
+  if (workshopFirst === null && invitations.data) setWorkshopFirst(workshopLinks.length > 0)
   const workshopSection = (
     <WorkshopLinksSection
       boardId={board.id}
