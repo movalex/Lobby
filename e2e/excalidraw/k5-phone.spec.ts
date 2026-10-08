@@ -309,6 +309,21 @@ test('K5-3: with storage that throws (blocked site data) the hint still shows on
   }
 })
 
+test('K5-3: a viewer on a phone rests on Hand too, and gets no hint about moving notes', async ({
+  browser,
+  board,
+  users,
+}) => {
+  const v = await openPhoneSession(browser, board, users, 'carol', 'viewer', PHONE_375)
+  try {
+    await expect.poll(() => tool(v.page)).toBe('hand')
+    await v.page.waitForTimeout(500)
+    await expect(v.page.getByTestId('phone-hand-hint')).toHaveCount(0)
+  } finally {
+    await v.context.close()
+  }
+})
+
 test('K5-3: a desktop keeps Select and shows no hint; a narrow desktop window too', async ({
   canvasSession,
 }) => {

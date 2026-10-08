@@ -166,8 +166,9 @@ export function PhoneSheet({ ctx }: { readonly ctx: CanvasFeatureContext }) {
   const resting = restsOnHand({ phone, coarse })
   useEffect(() => {
     if (!resting) return
-    if (rest.afterLoad() && takePhoneHint(pageStorage())) setHint(true)
-  }, [resting, rest])
+    // the hint is about selecting and moving notes: for people who may edit (a viewer only looks around)
+    if (rest.afterLoad() && !canvas.readOnly() && takePhoneHint(pageStorage())) setHint(true)
+  }, [resting, rest, canvas])
   // a tool the person picks on the toolbar counts as their pick too (Select from the toolbar stays)
   useEffect(() => {
     if (!resting) return
