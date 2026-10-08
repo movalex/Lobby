@@ -32,6 +32,7 @@
 // Copies (Ctrl+D, paste) keep their originals' values (the `customData` duplicate handlers in ./index.tsx)
 // and become maps of their own right after the copy, in the same undo step (`normalizeCopies`).
 
+import type { LobbyColorName } from '@draftroom/board-ops/elements'
 import { MINDMAP_MAX_DEPTH, type MindmapSide } from '@draftroom/contracts'
 import type { CanvasChange, CanvasElement, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { atom, react, untracked } from '../../../lib/signals.ts'
@@ -43,6 +44,7 @@ import {
   type Box,
   balancedSides,
   buildTree,
+  childrenOnSide,
   dropTarget,
   isVisible,
   type MindmapTree,
@@ -53,6 +55,7 @@ import {
   subtreeIds,
   type TopicInput,
 } from '../model.ts'
+import type { OutlineNode } from '../outline-parse.ts'
 import { Draft } from './draft.ts'
 import { boxOf, elbowLine, sameLine } from './geometry.ts'
 import {
@@ -91,6 +94,28 @@ export const RECENT_LOCAL_MS = 5000
 /** The owner name of this feature's hidden set (`LobbyCanvas.hide`). */
 export const HIDE_OWNER = 'mindmap'
 
+/**
+ * What a writer other than the keys stamps on every topic and line a bulk write makes (AI: "made by an AI
+ * run for `by`", `customData.lobby.ai` and, on topics, `kind`; both are create-only keys, so they are
+ * set in the write that makes the element and the server checks `by` is the writer).
+ */
+export interface Stamp {
+  by: string
+  /** A short lowercase word such as 'ai-topic' (canvas-schema `kind`); topics only. */
+  kind: string
+}
+
+/** The result of a bulk write: every topic made (the central one first for a new map) and the new branches. */
+export interface BuiltTopics {
+  rootId: string
+  /** Every topic made, in reading order. */
+  ids: string[]
+  /** The topics made directly under the parent (a new map: the first ring). */
+  children: string[]
+  /** Every element the write made or changed: topics, labels, lines, a parent opened (for undo offers). */
+  touched: string[]
+}
+
 export interface DeletePlan {
   /** Everything to delete: the selection, widened to whole branches and their lines. */
   ids: string[]
@@ -102,6 +127,25 @@ export interface DeletePlan {
   roots: string[]
   /** A central topic is among them (a whole map goes). */
   wholeMap: boolean
+}
+
+/** What a bulk write keeps while it makes topics (see makeTopics). */
+interface TopicBatch {
+  d: Draft
+  rootId: string
+  frameId: string | null
+  stamp: Stamp | undefined
+  /** First-level colours in use; new branches take the next free ones. */
+  used: string[]
+  /** Centre y of the next topic made. */
+  y: number
+  /** Every topic made, in reading order. */
+  ids: string[]
+}
+
+/** Topics at the end of the branches under `n` (a branch without children counts as one). */
+function leavesOf(n: OutlineNode): number {
+  return n.children.length ? n.children.reduce((sum, c) => sum + leavesOf(c), 0) : 1
 }
 
 interface Dirty {
@@ -541,6 +585,8 @@ export class MindmapRuntime {
       sides?: ReadonlyMap<string, MindmapSide>
       edges?: boolean
       extra?: readonly string[]
+      /** Written on the lines this layout makes (a bulk write by AI). */
+      stamp?: Stamp
     } = {},
   ) {
     const extra = [...(opts.extra ?? []), ...d.createdIds()]
@@ -587,7 +633,7 @@ export class MindmapRuntime {
     this.keepInFrame(d, rootId, extra)
     const after = this.readTree(rootId, d, extra)
     if (!after) return
-    if (opts.edges) this.ensureEdges(d, after)
+    if (opts.edges) this.ensureEdges(d, after, opts.stamp)
     else this.refreshLines(d, after)
   }
 
@@ -652,7 +698,7 @@ export class MindmapRuntime {
   }
 
   /** Every topic but the root has exactly one line from its parent, bound at the right sides. */
-  private ensureEdges(d: Draft, tree: MindmapTree) {
+  private ensureEdges(d: Draft, tree: MindmapTree, stamp?: Stamp) {
     const wanted = new Set<string>()
     for (const n of tree.nodes.values()) {
       if (n.parentId === null) continue
@@ -679,7 +725,7 @@ export class MindmapRuntime {
           strokeStyle: 'solid',
           frameId: child.frameId ?? null,
           fixedSegments: null,
-          customData: { lobby: { [MINDMAP_EDGE_KEY]: meta } },
+          customData: { lobby: { [MINDMAP_EDGE_KEY]: meta, ...(stamp ? { ai: { by: stamp.by } } : {}) } },
         })
         d.bind(id, 'start', parent.id)
         d.bind(id, 'end', n.id)
@@ -983,7 +1029,7 @@ export class MindmapRuntime {
     depth: number,
     color: Parameters<typeof topicColors>[0],
     meta: Omit<TopicMeta, 'rootId'> & { rootId: string | null },
-    opts: { frameId?: string | null; text?: string; id?: string } = {},
+    opts: { frameId?: string | null; text?: string; id?: string; stamp?: Stamp } = {},
   ): string {
     const st = levelStyle(depth)
     const text = opts.text ?? ''
@@ -1001,6 +1047,7 @@ export class MindmapRuntime {
       roughness: 0,
       roundness: null,
       frameId: opts.frameId ?? null,
+      ...(opts.stamp ? { customData: { lobby: { ai: { by: opts.stamp.by }, kind: opts.stamp.kind } } } : {}),
     })
     d.update(id, topicPatch({ ...meta, rootId: meta.rootId ?? id } as TopicMeta))
     this.addLabel(d, id, text, st.fontSize)
@@ -1035,7 +1082,11 @@ export class MindmapRuntime {
     return id ? (canvas.get(id) ?? null) : null
   }
 
-  private spotInFrame(frame: CanvasElement, center: Point): { center: Point; growToH: number | null } {
+  private spotInFrame(
+    frame: CanvasElement,
+    center: Point,
+    room = this.newMapRoom(),
+  ): { center: Point; growToH: number | null; room: { w: number; h: number } } {
     const children: Box[] = []
     for (const el of this.canvas.items()) {
       if (el.frameId !== frame.id || (el.type === 'text' && el.containerId)) continue
@@ -1043,7 +1094,7 @@ export class MindmapRuntime {
       if (b) children.push({ x: b.x, y: b.y, w: b.width, h: b.height })
     }
     const placed = placeInFrame(
-      this.newMapRoom(),
+      room,
       center,
       { x: frame.x, y: frame.y, w: frame.width, h: frame.height },
       children,
@@ -1051,20 +1102,26 @@ export class MindmapRuntime {
     return {
       center: { x: placed.at.x + placed.room.w / 2, y: placed.at.y + placed.room.h / 2 },
       growToH: placed.growToH,
+      room: placed.room,
     }
   }
 
   /** The free spot nearest `center` with room for a few branches around it (top-level content only). */
   private spotForNewMap(center: Point): Point {
     const room = this.newMapRoom()
+    const at = this.freeTopLeft(room, center)
+    return { x: at.x + room.w / 2, y: at.y + room.h / 2 }
+  }
+
+  /** The free top-left for a `room`-sized map nearest `center` (top-level content only). */
+  private freeTopLeft(room: { w: number; h: number }, center: Point): Point {
     const obstacles: Box[] = []
     for (const el of this.canvas.items()) {
       if (el.frameId || (el.type === 'text' && el.containerId)) continue
       const b = this.canvas.bounds(el.id)
       if (b) obstacles.push({ x: b.x, y: b.y, w: b.width, h: b.height })
     }
-    const at = findEmptySpot(room, center, obstacles, { gap: 40 })
-    return { x: at.x + room.w / 2, y: at.y + room.h / 2 }
+    return findEmptySpot(room, center, obstacles, { gap: 40 })
   }
 
   // ---- operations -------------------------------------------------------------------------------
@@ -1099,6 +1156,248 @@ export class MindmapRuntime {
     this.reveal(id)
     this.say('New mind map. Type the central topic, then press Tab to add a branch.')
     return id
+  }
+
+  // ---- bulk writes: a whole outline, or a batch of children, as one undo step ---------------------
+
+  /**
+   * Makes `nodes` (and what hangs under them) under `parentId` in the draft, depth first. Each new topic is
+   * placed by the centre of its box below everything made before it (`b.y` counts up), so the map's reading
+   * order (children sorted by where they are, model.ts) is the order of `nodes`; the layout that follows
+   * puts them where they belong. A new first-level branch takes the next palette colour not in use.
+   */
+  private makeTopics(
+    b: TopicBatch,
+    parentId: string,
+    parentDepth: number,
+    parentColor: LobbyColorName | null,
+    nodes: readonly OutlineNode[],
+    sideOf: (i: number) => MindmapSide,
+    kids?: string[],
+  ) {
+    nodes.forEach((node, i) => {
+      const depth = parentDepth + 1
+      const color = colorForNew(depth, parentColor, b.used)
+      if (depth === 1) b.used.push(color)
+      const side = sideOf(i)
+      const id = this.newTopic(
+        b.d,
+        { x: 0, y: 0 },
+        depth,
+        color,
+        { rootId: b.rootId, parentId, side, collapsed: false },
+        { frameId: b.frameId, text: node.text, ...(b.stamp ? { stamp: b.stamp } : {}) },
+      )
+      const el = b.d.get(id)
+      if (el) b.d.move(id, el.x, b.y++ - el.height / 2)
+      b.ids.push(id)
+      kids?.push(id)
+      this.makeTopics(b, id, depth, color, node.children, () => side)
+    })
+  }
+
+  /**
+   * The central topic and every topic under it, in `d`, at `rootAt` (the central topic's top-left): the
+   * first ring is balanced between the two sides keeping the reading order (the right side top to bottom,
+   * then the left bottom to top: the order the outline export writes), then the whole map is laid out and
+   * its lines made. Writes nothing to the canvas.
+   */
+  private constructMap(
+    d: Draft,
+    outline: OutlineNode,
+    rootAt: Point,
+    frameId: string | null,
+    stamp?: Stamp,
+  ): BuiltTopics {
+    const rootId = this.newTopic(
+      d,
+      rootAt,
+      0,
+      ROOT_COLOR,
+      { rootId: null, parentId: null, side: 'right', collapsed: false },
+      { frameId, text: outline.text, ...(stamp ? { stamp } : {}) },
+    )
+    const batch: TopicBatch = { d, rootId, frameId, stamp, used: [], y: 0, ids: [rootId] }
+    const children: string[] = []
+    this.makeTopics(batch, rootId, 0, ROOT_COLOR, outline.children, () => 'right', children)
+    let sides: Map<string, MindmapSide> | undefined
+    const tree = this.readTree(rootId, d, batch.ids)
+    if (tree) {
+      const heights = blockHeights(expanded(tree))
+      const balanced = balancedSides(tree, (id) => heights.get(id) ?? 0)
+      sides = balanced
+      // the left side reads bottom to top: the branch that comes first sits lowest
+      const left = children.filter((id) => balanced.get(id) === 'left')
+      const centres = left.map((id) => {
+        const el = d.get(id)
+        return el ? el.y + el.height / 2 : 0
+      })
+      left.forEach((id, j) => {
+        const el = d.get(id)
+        const to = centres[left.length - 1 - j]
+        if (el && to !== undefined) d.move(id, el.x, to - el.height / 2)
+      })
+    }
+    this.layoutNow(d, rootId, {
+      edges: true,
+      extra: batch.ids,
+      ...(sides ? { sides } : {}),
+      ...(stamp ? { stamp } : {}),
+    })
+    return { rootId, ids: batch.ids, children, touched: [] }
+  }
+
+  /** Pans and zooms out (never in) so that all of `ids` is on screen, when it is not. */
+  private revealAll(ids: readonly string[]) {
+    const { canvas } = this
+    const b = canvas.boundsOf(ids)
+    if (!b) return
+    const v = canvas.viewport.get()
+    const inside =
+      b.x >= v.x && b.y >= v.y && b.x + b.width <= v.x + v.width && b.y + b.height <= v.y + v.height
+    if (!inside) canvas.viewport.zoomTo(b, { inset: 64, maxZoom: 1, animate: { durationMs: 320 } })
+  }
+
+  /**
+   * Where a new map of `room` size goes: the frame that is selected or fills the view when the whole width
+   * fits there (it grows downward), else the free spot nearest `want`, clear of everything else.
+   */
+  private placeMap(
+    room: { w: number; h: number },
+    want: Point,
+  ): { topLeft: Point; frame: CanvasElement | null; growToH: number | null } {
+    const frame = this.frameForNewMap()
+    const inFrame = frame ? this.spotInFrame(frame, want, room) : null
+    // inside the frame only when the whole width fits there (else it goes on the page, beside the frames)
+    if (frame && inFrame && inFrame.room.w >= room.w - 0.5)
+      return {
+        topLeft: { x: inFrame.center.x - room.w / 2, y: inFrame.center.y - room.h / 2 },
+        frame,
+        growToH: inFrame.growToH,
+      }
+    return { topLeft: this.freeTopLeft(room, want), frame: null, growToH: null }
+  }
+
+  /** Where a new map of about `room` size would go now (the placeholder while AI drafts one, K7-4). */
+  previewMapRect(room: { w: number; h: number }, center?: Point): Box {
+    const v = this.canvas.viewport.get()
+    const place = this.placeMap(room, center ?? { x: v.x + v.width / 2, y: v.y + v.height / 2 })
+    return { x: place.topLeft.x, y: place.topLeft.y, w: room.w, h: room.h }
+  }
+
+  /**
+   * A new map from an outline (a paste, or AI's first ring), as ONE undo step: the central topic and every
+   * topic under it with their words, the lines, the layout. It goes where a new map goes (the free spot
+   * nearest `center`, or the view's centre; inside the frame that is selected or fills the view when the
+   * map fits its width, the frame growing downward), clear of everything else. The map is first built on
+   * a scratch draft at the origin to learn its size; nothing is written until the real one is placed.
+   * `stamp` marks the topics and lines (AI). Returns what was made, or null.
+   */
+  createMapFromOutline(
+    outline: OutlineNode,
+    opts: { center?: Point; stamp?: Stamp } = {},
+  ): BuiltTopics | null {
+    if (!this.canEdit()) return null
+    const { canvas } = this
+    const v = canvas.viewport.get()
+    const want = opts.center ?? { x: v.x + v.width / 2, y: v.y + v.height / 2 }
+    const probe = new Draft(canvas)
+    const sample = this.constructMap(probe, outline, { x: 0, y: 0 }, null, opts.stamp)
+    const sampled = this.readTree(sample.rootId, probe, sample.ids)
+    const rootBox = sampled?.nodes.get(sample.rootId)?.box
+    const bounds = unionRects([...(sampled?.nodes.values() ?? [])].map((n) => n.box))
+    if (!rootBox || !bounds) return null
+    const offset = { x: rootBox.x - bounds.x, y: rootBox.y - bounds.y }
+    const place = this.placeMap({ w: bounds.w, h: bounds.h }, want)
+    const d = new Draft(canvas)
+    if (place.frame && place.growToH) d.update(place.frame.id, { height: Math.ceil(place.growToH) })
+    const built = this.constructMap(
+      d,
+      outline,
+      { x: Math.round(place.topLeft.x + offset.x), y: Math.round(place.topLeft.y + offset.y) },
+      place.frame?.id ?? null,
+      opts.stamp,
+    )
+    const touched = d.touchedIds()
+    if (!this.commit(d, 'mindmap: new map from an outline', false)) return null
+    built.touched = touched
+    canvas.select([built.rootId])
+    this.revealAll(built.ids)
+    this.say(`New mind map with ${built.ids.length} topics.`)
+    return built
+  }
+
+  /**
+   * Several topics (and what hangs under them) under `parentId` at once, as ONE undo step: after the
+   * topic's existing children, the layout of the whole map and the new lines in the same write. Under the
+   * central topic a new branch goes to the lighter side (by the height it adds); deeper ones follow their
+   * parent. A collapsed parent opens. `stamp` marks what is made (AI). Returns what was made, or null.
+   */
+  addChildren(
+    parentId: string,
+    nodes: readonly OutlineNode[],
+    opts: { stamp?: Stamp } = {},
+  ): BuiltTopics | null {
+    if (!this.canEdit() || !nodes.length) return null
+    const tree = this.treeOfTopic(parentId)
+    const parent = tree?.nodes.get(parentId)
+    const parentEl = this.canvas.get(parentId)
+    if (!tree || !parent || !isLive(parentEl)) return null
+    const d = new Draft(this.canvas)
+    if (parent.collapsed) {
+      const m = this.index.topics.get(parentId)
+      if (m) d.update(parentId, topicPatch({ ...m, collapsed: false }))
+    }
+    const sides: MindmapSide[] = []
+    if (parent.parentId === null) {
+      const heights = blockHeights(expanded(tree))
+      const total = (side: MindmapSide) =>
+        childrenOnSide(tree, tree.rootId, side).reduce((sum, id) => sum + (heights.get(id) ?? 0), 0)
+      let left = total('left')
+      let right = total('right')
+      for (const n of nodes) {
+        const side: MindmapSide = left < right ? 'left' : 'right'
+        // the height a branch adds: a row for each of its leaves
+        const h = leavesOf(n) * (levelStyle(2).minH + DEFAULT_LAYOUT.vGap(2))
+        if (side === 'left') left += h
+        else right += h
+        sides.push(side)
+      }
+    }
+    const base = Math.max(...[...tree.nodes.values()].map((n) => n.box.y + n.box.h / 2)) + 1
+    const firstLevel = (tree.nodes.get(tree.rootId)?.children ?? [])
+      .map((c) => colorNameOf(this.canvas.get(c)))
+      .filter((c): c is NonNullable<typeof c> => !!c)
+    const batch: TopicBatch = {
+      d,
+      rootId: tree.rootId,
+      frameId: parentEl.frameId ?? null,
+      stamp: opts.stamp,
+      used: [...firstLevel],
+      y: base,
+      ids: [],
+    }
+    const children: string[] = []
+    this.makeTopics(
+      batch,
+      parentId,
+      parent.depth,
+      colorNameOf(parentEl),
+      nodes,
+      (i) => sides[i] ?? parent.side,
+      children,
+    )
+    this.layoutNow(d, tree.rootId, {
+      edges: true,
+      extra: batch.ids,
+      ...(opts.stamp ? { stamp: opts.stamp } : {}),
+    })
+    const touched = d.touchedIds()
+    if (!this.commit(d, 'mindmap: add topics', false)) return null
+    this.canvas.select(children)
+    this.revealAll(children)
+    this.say(batch.ids.length === 1 ? 'Added 1 topic.' : `Added ${batch.ids.length} topics.`)
+    return { rootId: tree.rootId, ids: batch.ids, children, touched }
   }
 
   /** Can `el` start a map? (A note, text or shape that is not a topic yet, unlocked, not in a group.) */

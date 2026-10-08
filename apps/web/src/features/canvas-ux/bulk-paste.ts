@@ -8,6 +8,12 @@
 // children), else on the page (clear of the page's shapes).
 
 import { DEFAULT_MAX_NOTES, DEFAULT_NOTE_GAP, NOTE_SIZE, parseBulkText } from '@draftroom/board-ops/elements'
+import {
+  OUTLINE_MAX_DEPTH,
+  OUTLINE_MAX_TOPICS,
+  type Outline,
+  offersMindmap,
+} from '../mindmap/outline-parse.ts'
 import { findEmptySpot, findEmptySpotWithin, type Point, type Rect } from './placement.ts'
 
 export interface PasteSourceLike {
@@ -115,4 +121,31 @@ export function truncationMessage(
   }
   if (textShortened) return 'Some very long cells were shortened to fit a note.'
   return null
+}
+
+// ---- "Paste as mind map" (K7-2) --------------------------------------------------------------------
+
+/**
+ * The outline in a paste when it is worth "Paste as mind map": text with a hierarchy of its own (a heading
+ * over lines, or indentation) and a few topics. A flat list, spreadsheet cells and prose offer notes or
+ * text only. Parsed by mindmap/outline-parse.ts (capped at 4 levels, 60 topics and 120 characters a topic).
+ */
+export function outlineOfPaste(text: string): Outline | null {
+  return typeof text === 'string' && text.trim() ? offersMindmap(text) : null
+}
+
+/** What a capped mind map paste left out, in words (null when it kept everything). */
+export function mindmapNotice(outline: Pick<Outline, 'clipped'>): string | null {
+  const { topics, depth, text } = outline.clipped
+  const parts: string[] = []
+  if (topics > 0)
+    parts.push(
+      `${topics} more ${topics === 1 ? 'line was' : 'lines were'} left out (limit: ${OUTLINE_MAX_TOPICS} topics per map).`,
+    )
+  if (depth > 0)
+    parts.push(
+      `${depth} ${depth === 1 ? 'line' : 'lines'} nested more than ${OUTLINE_MAX_DEPTH} levels deep moved up to level ${OUTLINE_MAX_DEPTH}.`,
+    )
+  if (text > 0) parts.push('Some very long lines were shortened.')
+  return parts.length ? parts.join(' ') : null
 }
