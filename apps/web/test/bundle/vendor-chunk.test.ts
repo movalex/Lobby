@@ -54,7 +54,8 @@ async function buildWeb(variant?: string): Promise<Built> {
   }
 }
 
-const isEngine = (id: string) => /\/node_modules\/@excalidraw\/excalidraw\/dist\/prod\/index\.js$/.test(norm(id))
+const isEngine = (id: string) =>
+  /\/node_modules\/@excalidraw\/excalidraw\/dist\/prod\/index\.js$/.test(norm(id))
 const engineChunk = (b: Built) => {
   const found = b.chunks.filter((c) => c.moduleIds.some(isEngine))
   assert.equal(found.length, 1, 'the engine entry is in exactly one chunk')
@@ -88,7 +89,9 @@ test('the engine is a chunk of its own whose name survives a Lobby-only change; 
   // the engine's chunk: node_modules only (and the mermaid stub the engine imports), no Lobby source
   const engineA = engineChunk(a)
   const engineB = engineChunk(b)
-  const lobbyModules = engineA.moduleIds.map(norm).filter((id) => !id.includes('/node_modules/') && !id.includes('\0'))
+  const lobbyModules = engineA.moduleIds
+    .map(norm)
+    .filter((id) => !id.includes('/node_modules/') && !id.includes('\0'))
   assert.deepEqual(
     lobbyModules.filter((id) => !id.endsWith('/apps/web/build/mermaid-to-excalidraw-stub.ts')),
     [],
@@ -97,13 +100,19 @@ test('the engine is a chunk of its own whose name survives a Lobby-only change; 
   assert.ok(!engineA.moduleIds.some((id) => norm(id).includes('/apps/web/src/')), 'no apps/web/src module')
   assert.match(engineA.fileName, /^assets\/excalidraw-[\w-]+\.js$/)
   // it imports only the vendor chunks (whose names are stable too)
-  for (const imp of engineA.imports) assert.match(imp, /^assets\/(react|preload-helper|rolldown-runtime)-/, imp)
+  for (const imp of engineA.imports)
+    assert.match(imp, /^assets\/(react|preload-helper|rolldown-runtime)-/, imp)
 
   // the same file name after a change to Lobby's code; so are the vendor chunks and the engine stylesheet
   assert.equal(engineB.fileName, engineA.fileName, 'the engine chunk keeps its hash')
   for (const prefix of ['react', 'preload-helper', 'rolldown-runtime'])
-    assert.deepEqual(named(b, prefix).map((c) => c.fileName), named(a, prefix).map((c) => c.fileName), prefix)
-  const engineCss = (x: Built) => x.assets.filter((s) => /^assets\/excalidraw-[\w-]+\.css$/.test(s.fileName)).map((s) => s.fileName)
+    assert.deepEqual(
+      named(b, prefix).map((c) => c.fileName),
+      named(a, prefix).map((c) => c.fileName),
+      prefix,
+    )
+  const engineCss = (x: Built) =>
+    x.assets.filter((s) => /^assets\/excalidraw-[\w-]+\.css$/.test(s.fileName)).map((s) => s.fileName)
   assert.equal(engineCss(a).length, 1, 'the engine stylesheet is a file of its own')
   assert.deepEqual(engineCss(b), engineCss(a), 'the engine stylesheet keeps its hash')
 
@@ -122,7 +131,9 @@ test('the engine is a chunk of its own whose name survives a Lobby-only change; 
   assert.ok(!staticClosure(a, entryA).has(pageA.fileName), 'the entry does not load the board page')
   assert.ok(entryA.dynamicImports.includes(pageA.fileName), 'the entry imports the board page lazily')
   assert.equal(
-    a.chunks.filter((c) => c.facadeModuleId && /\/src\/canvas\/board\/route\.tsx$/.test(norm(c.facadeModuleId))).length,
+    a.chunks.filter(
+      (c) => c.facadeModuleId && /\/src\/canvas\/board\/route\.tsx$/.test(norm(c.facadeModuleId)),
+    ).length,
     0,
     'no separate route chunk',
   )
@@ -136,7 +147,11 @@ test('the engine is a chunk of its own whose name survives a Lobby-only change; 
   for (const name of ['theme-boot', 'zod-jitless']) {
     const asset = a.assets.find((s) => new RegExp(`^assets/${name}-[\\w-]{8}\\.js$`).test(s.fileName))
     assert.ok(asset, `${name} is emitted under assets/`)
-    assert.equal(String(asset.source), readFileSync(`${WEB}public/${name}.js`, 'utf8'), `${name}: the public file, as it is`)
+    assert.equal(
+      String(asset.source),
+      readFileSync(`${WEB}public/${name}.js`, 'utf8'),
+      `${name}: the public file, as it is`,
+    )
     const tag = `<script src="/${asset.fileName}"></script>`
     const at = html.indexOf(tag)
     assert.ok(at > -1, `index.html loads ${tag}`)
@@ -144,7 +159,10 @@ test('the engine is a chunk of its own whose name survives a Lobby-only change; 
     assert.ok(at < html.indexOf('type="module"'), `${name} before the module script`)
     assert.ok(!html.includes(`<script src="/${name}.js">`), `${name}: the unhashed tag is gone`)
     // the same name when only Lobby's code changed (the scripts did not)
-    assert.ok(b.assets.some((s) => s.fileName === asset.fileName), `${name} keeps its hash`)
+    assert.ok(
+      b.assets.some((s) => s.fileName === asset.fileName),
+      `${name} keeps its hash`,
+    )
   }
   assert.equal(html.match(/<script(?![^>]*\bsrc=)[^>]*>/g), null, 'no inline script')
 })
