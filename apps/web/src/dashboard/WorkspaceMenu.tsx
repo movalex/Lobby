@@ -81,6 +81,22 @@ export function WorkspaceMenu({
     if (hasMenu) setOpen(true)
   }, [asked, hasMenu])
 
+  useEffect(() => {
+    if (!open) return
+    // Escape closes the panel and gives the keyboard back to the tile. Capture: it runs before the folded
+    // sidebar's own Escape (Sidebar.tsx), which would close the whole menu. A dialog opened from the panel
+    // (the outside access review) keeps its own Escape.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      if (e.target instanceof Element && e.target.closest('dialog')) return
+      e.preventDefault()
+      setOpen(false)
+      button.current?.focus()
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [open])
+
   const tile = (
     <>
       <span className="dr-ws__tile" aria-hidden="true">
@@ -104,22 +120,6 @@ export function WorkspaceMenu({
       </div>
     )
   }
-
-  useEffect(() => {
-    if (!open) return
-    // Escape closes the panel and gives the keyboard back to the tile. Capture: it runs before the folded
-    // sidebar's own Escape (Sidebar.tsx), which would close the whole menu. A dialog opened from the panel
-    // (the outside access review) keeps its own Escape.
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.defaultPrevented) return
-      if (e.target instanceof Element && e.target.closest('dialog')) return
-      e.preventDefault()
-      setOpen(false)
-      button.current?.focus()
-    }
-    document.addEventListener('keydown', onKey, true)
-    return () => document.removeEventListener('keydown', onKey, true)
-  }, [open])
 
   return (
     <div className="dr-wsmenu-wrap">
