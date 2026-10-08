@@ -10,6 +10,12 @@ export type TemplateId =
   | 'pitch-outline'
   | 'retrospective'
   | 'production-plan'
+  | 'creative-brief'
+  | 'client-feedback'
+  | 'shot-list'
+  | 'launch-timeline'
+  | 'prioritisation-2x2'
+  | 'kanban'
   | 'lobby-tour'
 
 /** 'sample': the Lobby tour demo board (shown first on the dashboard, under no category chip). */

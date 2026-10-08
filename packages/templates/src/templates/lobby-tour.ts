@@ -87,21 +87,49 @@ function card(
   return b.geo(frame, { ...spec, fill: 'solid', labelColor: 'black', size: 'm' })
 }
 
+/**
+ * The Welcome frame's cards share one style (K4-3): the three pillars are one orange title card (the display
+ * face, the dark ink, one size) with its sentence under it in one body size, and the three "try this" stickies
+ * are one yellow at one scale, each centred under its pillar. (They were three different fills at three
+ * different sizes, and a card in the neutral tone read as a different kind of card.) The plan test pins the
+ * shared style.
+ */
+export const WELCOME_TITLE_H = 72
+export const WELCOME_NOTE_SCALE = 1.2
+
 function welcome(b: BoardBuilder) {
   const f = tourFrame(
     b,
     0,
     'Welcome to Lobby',
-    "Dark Burn Creative's whiteboard. Every project gets a lobby: its boards, files and feedback in one " +
-      'place, live for the whole team.',
+    "Dark Burn Creative's whiteboard. Every project gets a lobby: boards, files and feedback in one place, " +
+      'live for the whole team.',
   )
-  const pillars: ReadonlyArray<[string, LobbyColor]> = [
-    ['Kick off\nBriefs, references and first ideas, all on one board.', 'orange'],
-    ['Make\nPlan the campaign, map the beats, pull the key art together.', 'black'],
-    ['Review\nComments, votes and sign-off, without the email chain.', 'orange'],
+  const pillars: ReadonlyArray<readonly [string, string]> = [
+    ['Kick off', 'Briefs, references and first ideas, all on one board.'],
+    ['Make', 'Plan the campaign, map the beats, pull the key art together.'],
+    ['Review', 'Comments, votes and sign-off, without the email chain.'],
   ]
-  pillars.forEach(([text, color], i) => {
-    card(b, f, { x: col3(i), y: TOP, w: COL3_W, h: 190, text, color, titled: true })
+  pillars.forEach(([title, sentence], i) => {
+    card(b, f, {
+      x: col3(i),
+      y: TOP,
+      w: COL3_W,
+      h: WELCOME_TITLE_H,
+      text: title,
+      color: 'orange',
+      heading: true,
+    })
+    // headings and instructions arrive locked (PRE-07)
+    b.text(f, {
+      x: col3(i),
+      y: TOP + WELCOME_TITLE_H + 20,
+      w: COL3_W,
+      text: sentence,
+      size: 'm',
+      color: 'black',
+      locked: true,
+    })
   })
   b.text(f, {
     x: M,
@@ -113,22 +141,27 @@ function welcome(b: BoardBuilder) {
     locked: true,
     heading: true,
   })
-  const tries: ReadonlyArray<[string, LobbyColor]> = [
+  const tries = [
     // DANA-11: a client who can only comment reads this board too, so no editor-only promises.
-    ["Can edit? Press N, click anywhere and type. That's a sticky note.", 'yellow'],
-    ['Press C, then click this note to leave a comment.', 'orange'],
-    ['Click Present at the top to walk these frames as slides.', 'light-blue'],
+    'Can edit? Press N and click to add a sticky. Type to fill it in.',
+    'Press C, then click this note to leave a comment.',
+    'Click Present at the top to walk these frames as slides.',
   ]
-  const scale = 1.2
-  const noteW = NOTE_SIZE * scale
-  tries.forEach(([text, color], i) => {
-    b.note(f, { x: col3(i) + (COL3_W - noteW) / 2, y: 590, text, color, scale })
+  const noteW = NOTE_SIZE * WELCOME_NOTE_SCALE
+  tries.forEach((text, i) => {
+    b.note(f, {
+      x: col3(i) + (COL3_W - noteW) / 2,
+      y: 590,
+      text,
+      color: 'yellow',
+      scale: WELCOME_NOTE_SCALE,
+    })
   })
   b.text(f, {
     x: M,
     y: 900,
     w: INNER_W,
-    text: 'Editors can move, change or delete anything here (Ctrl/Cmd + Z undoes it). Everyone can comment.',
+    text: 'Editors can move, change or delete anything here (Ctrl/Cmd + Z undoes it). Commenters can leave comments.',
     size: 's',
     color: 'grey',
     align: 'middle',
@@ -141,7 +174,7 @@ function brainstorm(b: BoardBuilder) {
     b,
     1,
     'Brainstorm',
-    'One question, ideas in clusters. The connectors are attached, so they follow when you move a theme.',
+    'One question, ideas in clusters. Move a theme and its connectors follow.',
     // Full width, like the heading: the free column below it starts right under the intro.
     INNER_W,
   )
@@ -224,12 +257,7 @@ function brainstorm(b: BoardBuilder) {
 }
 
 function processPlan(b: BoardBuilder) {
-  const f = tourFrame(
-    b,
-    2,
-    'Plan',
-    'A small process map. Every arrow is attached at both ends: drag a step and its arrows follow.',
-  )
+  const f = tourFrame(b, 2, 'Plan', 'A small process map. Drag a step and its arrows follow.')
   const boxW = 200
   const boxH = 120
   const diaW = 240
@@ -330,8 +358,7 @@ function moodBoard(b: BoardBuilder) {
     b,
     3,
     'Mood board',
-    'One direction for the launch trailer: references, palette and type. Drop an image onto a slot and ' +
-      'it fits the slot.',
+    'One direction for the launch trailer. Drop an image onto a slot and it fits the slot.',
   )
   // F10: a direction that reads as finished in Present (a palette, type samples) with two reference
   // slots that invite a drop, instead of six empty boxes. No images ship with the tour: the colours
@@ -441,12 +468,7 @@ function moodBoard(b: BoardBuilder) {
 }
 
 function retro(b: BoardBuilder) {
-  const f = tourFrame(
-    b,
-    4,
-    'Retro',
-    'Ten minutes a column. Then start a vote from Voting to pick what to talk about first.',
-  )
+  const f = tourFrame(b, 4, 'Retro', 'Ten minutes a column. Then run a vote to pick what to discuss first.')
   const columns: ReadonlyArray<{ title: string; color: LobbyColor; notes: string[] }> = [
     {
       title: 'Went well',

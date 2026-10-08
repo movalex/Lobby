@@ -1,6 +1,15 @@
+import { readFileSync } from 'node:fs'
 import type { NotificationItem } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
-import { KIND_TEXT, markLocallyRead, newsByBoard, newsLabel, notificationHref } from './notifications.ts'
+import {
+  BELL_EMPTY,
+  BELL_NOTE,
+  KIND_TEXT,
+  markLocallyRead,
+  newsByBoard,
+  newsLabel,
+  notificationHref,
+} from './notifications.ts'
 
 const n = (id: string, boardId: string, kind: NotificationItem['kind'], read = false): NotificationItem => ({
   id: `ntf_${id.padEnd(12, '0')}`,
@@ -61,5 +70,21 @@ describe('dashboard notifications (PRI-05a)', () => {
     expect(one.notifications[0]?.readAt).toBe('now')
     expect(one.notifications[1]?.readAt).toBeNull()
     expect(markLocallyRead(inbox, { all: true }, 'now').unreadCount).toBe(0)
+  })
+})
+
+describe('the bell’s words (K4-6)', () => {
+  it('say where alerts show up and that they are not emailed, without promising anything "yet"', () => {
+    expect(BELL_NOTE).toBe('Alerts appear here in Lobby. They are not sent by email.')
+    expect(BELL_NOTE).not.toMatch(/ yet|aren.t available|in-app only/i)
+    expect(BELL_EMPTY).toMatch(/all caught up/)
+    expect(BELL_EMPTY).toMatch(/Mentions, replies and new comments/)
+  })
+
+  it('are the ones the bell draws (no second, older copy in the component)', () => {
+    const bell = readFileSync(new URL('./DashboardBell.tsx', import.meta.url), 'utf8')
+    expect(bell).toContain('{BELL_NOTE}')
+    expect(bell).toContain('{BELL_EMPTY}')
+    expect(bell).not.toMatch(/email notifications|aren.t available yet/i)
   })
 })

@@ -493,6 +493,8 @@ describe('domain access: the dashboard for someone who is not a creator (docs/DO
       'When someone at Dark Burn Creative or Trailer Park Group invites this address, open the invite link they send you. Work there? Sign in with your work email.',
     )
     expect(withEmail.body.join(' ')).not.toMatch(/in their email/)
+    expect(withEmail.address).toBe('pat@client.example.test')
+    expect(noWorkspaceCopy(unconfirmed).address).toBeNull()
     const noEmail = noWorkspaceCopy({ ...outside, email: null })
     expect(noEmail.body[0]).toBe("You're signed in with an account that has no confirmed email address.")
     expect(noEmail.body.join(' ')).not.toMatch(/null|undefined/)
@@ -501,11 +503,20 @@ describe('domain access: the dashboard for someone who is not a creator (docs/DO
       title: "We couldn't confirm your account",
       action: 'reload',
     })
+    // K4-4: the "not in a workspace" screen says who is signed in, what to do and how to switch account
     expect(noWorkspaceCopy(dev)).toEqual({
       reason: 'none',
       title: "You're not in a workspace yet",
-      body: ['Open an invite link from a teammate to join their workspace or board.'],
-      action: null,
+      body: [
+        "You're signed in as alice@dev.invalid.",
+        'Open an invite link from a teammate to join their workspace or board. Signed in with the wrong address? Switch account.',
+        'Work addresses end in @darkburn.com, @trailerparkgroup.com or @trailerpark.com.',
+      ],
+      action: 'switch-account',
+      address: 'alice@dev.invalid',
     })
+    expect(noWorkspaceCopy({ ...dev, email: null }).body[0]).toBe(
+      "You're signed in with an account that has no confirmed email address.",
+    )
   })
 })

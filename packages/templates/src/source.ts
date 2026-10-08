@@ -6,11 +6,17 @@
 import { type BoardBuilder, type BoardPlan, createBoardBuilder } from './builder.ts'
 import type { TemplateCategory, TemplateId, TemplatePoint } from './common.ts'
 import { brainstorm } from './templates/brainstorm.ts'
+import { clientFeedback } from './templates/client-feedback.ts'
+import { creativeBrief } from './templates/creative-brief.ts'
+import { kanban } from './templates/kanban.ts'
+import { launchTimeline } from './templates/launch-timeline.ts'
 import { lobbyTour } from './templates/lobby-tour.ts'
 import { moodBoard } from './templates/mood-board.ts'
 import { pitchOutline } from './templates/pitch-outline.ts'
+import { prioritisation2x2 } from './templates/prioritisation-2x2.ts'
 import { productionPlan } from './templates/production-plan.ts'
 import { retrospective } from './templates/retrospective.ts'
+import { shotList } from './templates/shot-list.ts'
 import { storyboard } from './templates/storyboard.ts'
 
 /** What the template picker shows. */
@@ -37,9 +43,22 @@ export interface TemplateSource extends TemplateInfo {
 }
 
 export const TEMPLATE_SOURCES: readonly TemplateSource[] = Object.freeze(
-  [brainstorm, moodBoard, storyboard, pitchOutline, retrospective, productionPlan, lobbyTour].map((s) =>
-    Object.freeze({ ...s, sections: Object.freeze([...s.sections]) }),
-  ),
+  [
+    brainstorm,
+    moodBoard,
+    storyboard,
+    pitchOutline,
+    retrospective,
+    productionPlan,
+    // wave K (K4-2): the agency templates
+    creativeBrief,
+    clientFeedback,
+    shotList,
+    launchTimeline,
+    prioritisation2x2,
+    kanban,
+    lobbyTour,
+  ].map((s) => Object.freeze({ ...s, sections: Object.freeze([...s.sections]) })),
 )
 
 const BY_ID = new Map<string, TemplateSource>(TEMPLATE_SOURCES.map((t) => [t.id, t]))

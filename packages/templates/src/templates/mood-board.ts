@@ -7,17 +7,19 @@ const ROW2_Y = 760
 const TOP_H = 640
 const BOTTOM_H = 900
 
-const SWATCHES: ReadonlyArray<{
-  label: string
-  color: LobbyColor
-  labelColor: LobbyColor
-}> = [
-  { label: 'Primary', color: 'violet', labelColor: 'white' },
-  { label: 'Secondary', color: 'light-violet', labelColor: 'black' },
-  { label: 'Accent', color: 'light-red', labelColor: 'black' },
-  { label: 'Warm', color: 'orange', labelColor: 'black' },
-  { label: 'Highlight', color: 'yellow', labelColor: 'black' },
-  { label: 'Base', color: 'grey', labelColor: 'black' },
+/**
+ * The palette: a full-colour block with its name under it (K4-3). A label inside a full-colour block cannot
+ * be dark-safe: the dark theme inverts the label and the fill, so white-on-violet became dark-on-bright
+ * (the Brainstorm's centre question had the same fault). The block carries no words (a swatch), and the
+ * name is a text under it in the page ink, which reads on both themes.
+ */
+const SWATCHES: ReadonlyArray<{ label: string; color: LobbyColor }> = [
+  { label: 'Primary', color: 'violet' },
+  { label: 'Secondary', color: 'light-violet' },
+  { label: 'Accent', color: 'light-red' },
+  { label: 'Warm', color: 'orange' },
+  { label: 'Highlight', color: 'yellow' },
+  { label: 'Base', color: 'grey' },
 ]
 
 const IMAGE_SLOTS = [
@@ -65,20 +67,15 @@ export const moodBoard: TemplateSource = {
       h: TOP_H,
       name: SECTIONS[1],
       heading: 'Color palette',
-      intro: 'Recolor each swatch from the style panel, then write its name or hex code in the label.',
+      intro:
+        'Recolor each swatch from the style panel, then write its name or hex code in the caption under it.',
     })
     SWATCHES.forEach((s, i) => {
-      b.geo(palette, {
-        x: PAD + i * (swatchW + NOTE_GAP),
-        y: CONTENT_Y - 10,
-        w: swatchW,
-        h: 180,
-        text: s.label,
-        color: s.color,
-        labelColor: s.labelColor,
-        fill: 'fill',
-        size: 'm',
-      })
+      const x = PAD + i * (swatchW + NOTE_GAP)
+      const y = CONTENT_Y - 10
+      b.swatch(palette, { x, y, w: swatchW, h: 130, color: s.color })
+      // starter values people rewrite, so the captions stay unlocked
+      b.text(palette, { x, y: y + 130 + 12, w: swatchW, text: s.label, size: 'm', color: 'black' })
     })
     b.noteGrid(palette, { x: PAD, y: 400, cols: 3 }, [
       { text: 'Which color leads, and which is a rare accent?', color: 'light-blue' },

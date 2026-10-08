@@ -8,6 +8,7 @@ import {
   type WorkspaceRole,
 } from '../lib/permissions.ts'
 import type { DashboardSection } from '../lib/routing.ts'
+import { CREATOR_DOMAINS, creatorDomainsInWords } from './creator-config.ts'
 
 // ---- domain access (docs/DOMAIN-ACCESS-CONTRACTS.md §9) --------------------------------------------
 
@@ -80,27 +81,50 @@ export interface NoWorkspaceCopy {
   title: string
   /** Paragraphs, in order. */
   body: string[]
-  /** The one action: sign in with a different account, reload, or none (today's screen). */
+  /**
+   * The one action: switch account (sign out, to sign in with another address), reload, or none. Wave K
+   * (K4-4): the "not in a workspace" screen offers it too, so a phone visitor who signed in with the wrong
+   * address has a way out on the screen itself.
+   */
   action: 'switch-account' | 'reload' | null
+  /**
+   * The signed-in address, when there is one: the screen shows it prominently and offers "Copy my address"
+   * (to send to a colleague who invites it). null: nothing to copy.
+   */
+  address: string | null
 }
+
+/** "You're signed in as pat@client.example." or, with no confirmed address, what is true instead. */
+const signedInAs = (email: string | null) =>
+  email
+    ? `You're signed in as ${email}.`
+    : "You're signed in with an account that has no confirmed email address."
+
+/** Which addresses can create, from the build's configuration (creator-config.ts), never typed into copy. */
+const workAddresses = (domains: readonly string[]) =>
+  `Work addresses end in ${creatorDomainsInWords(domains)}.`
 
 /**
  * "/" for someone with no workspace (App.tsx RootRedirect, `no-workspace`). An outside account has
  * nothing until someone invites it; `none` (a creator without a workspace, which should not happen,
- * or an older api) keeps today's copy.
+ * or an older api) tells the same story with its own first line. Both say which address is signed in,
+ * what to do next, and which addresses are work addresses (`domains`: the configured creator domains).
  */
-export function noWorkspaceCopy(access: MeAccess): NoWorkspaceCopy {
+export function noWorkspaceCopy(
+  access: MeAccess,
+  domains: readonly string[] = CREATOR_DOMAINS,
+): NoWorkspaceCopy {
   if (!access.creator && access.reason === 'outside') {
     return {
       reason: 'outside',
       title: 'Nothing has been shared with you yet',
       body: [
-        access.email
-          ? `You're signed in as ${access.email}.`
-          : "You're signed in with an account that has no confirmed email address.",
+        signedInAs(access.email),
         'When someone at Dark Burn Creative or Trailer Park Group invites this address, open the invite link they send you. Work there? Sign in with your work email.',
+        workAddresses(domains),
       ],
       action: 'switch-account',
+      address: access.email,
     }
   }
   if (!access.creator && access.reason === 'unconfirmed') {
@@ -111,13 +135,19 @@ export function noWorkspaceCopy(access: MeAccess): NoWorkspaceCopy {
         'Lobby couldn’t confirm your email address with the sign-in service, so it can’t show your boards yet. Reload in a minute to try again.',
       ],
       action: 'reload',
+      address: null,
     }
   }
   return {
     reason: 'none',
     title: "You're not in a workspace yet",
-    body: ['Open an invite link from a teammate to join their workspace or board.'],
-    action: null,
+    body: [
+      signedInAs(access.email),
+      'Open an invite link from a teammate to join their workspace or board. Signed in with the wrong address? Switch account.',
+      workAddresses(domains),
+    ],
+    action: 'switch-account',
+    address: access.email,
   }
 }
 

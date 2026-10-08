@@ -7,7 +7,7 @@ import { newBoardPath, TEMPLATE_IDS } from './template-paths.ts'
 describe('template picker catalog (PRE-01)', () => {
   const catalog = templateCatalog()
 
-  it('lists the Lobby tour sample first, then the six @draftroom/templates, with names, one-sentence descriptions, categories and sections', () => {
+  it('lists the Lobby tour sample first, then the other @draftroom/templates, with names, one-sentence descriptions, categories and sections', () => {
     expect(catalog.map((e) => e.id)).toEqual([...TEMPLATE_IDS])
     expect(catalog.map((e) => e.category)[0]).toBe('sample')
     for (const e of catalog) {
@@ -106,10 +106,15 @@ describe('template picker catalog (PRE-01)', () => {
   })
 
   it('searches names, descriptions, categories and section names, within a category', () => {
-    expect(filterTemplates(catalog, '', 'all')).toHaveLength(7)
+    expect(filterTemplates(catalog, '', 'all')).toHaveLength(TEMPLATE_IDS.length)
     expect(filterTemplates(catalog, 'panel', 'all').map((e) => e.id)).toEqual(['storyboard'])
     expect(filterTemplates(catalog, 'RETRO', 'all').map((e) => e.id)).toContain('retrospective')
     expect(filterTemplates(catalog, '', 'visual').map((e) => e.id)).toEqual(['mood-board', 'storyboard'])
+    // wave K (K4-2): the agency templates are findable by what they are for
+    expect(filterTemplates(catalog, 'kanban', 'all').map((e) => e.id)).toContain('kanban')
+    expect(filterTemplates(catalog, 'shot', 'all').map((e) => e.id)).toContain('shot-list')
+    expect(filterTemplates(catalog, 'feedback client', 'all').map((e) => e.id)).toEqual(['client-feedback'])
+    expect(filterTemplates(catalog, 'impact effort', 'all').map((e) => e.id)).toEqual(['prioritisation-2x2'])
     expect(filterTemplates(catalog, 'panel', 'plan')).toEqual([])
     expect(filterTemplates(catalog, 'zzz-nothing', 'all')).toEqual([])
   })

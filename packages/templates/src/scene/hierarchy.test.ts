@@ -75,7 +75,8 @@ describe.each(TEMPLATE_INFOS.map((t) => [t.id] as const))('%s: hierarchy without
       expect(titles).toEqual(
         expect.arrayContaining(['Gameplay', 'Story', 'Community', 'Went well', 'N\nSticky note']),
       )
-      expect(titles).toHaveLength(3 + 3 + 16)
+      // themes, the Welcome frame's pillar titles (K4-3), the retro columns and the shortcut keys
+      expect(titles).toHaveLength(3 + 3 + 3 + 16)
     }
   })
 })

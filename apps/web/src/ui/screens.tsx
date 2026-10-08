@@ -1,12 +1,15 @@
-import { type ReactNode, useCallback } from 'react'
+import { type ReactNode, type RefObject, useCallback, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client.ts'
 import { useSession } from '../auth/session.tsx'
 import { Wordmark } from '../brand/Wordmark.tsx'
+import { type NoWorkspaceCopy, noWorkspaceCopy } from '../dashboard/model.ts'
 import { RequestAccess } from '../features/sharing/RequestAccess.tsx'
 import { GuestNoAccessScreen } from '../invite/GuestNoAccessScreen.tsx'
 import { useUserKind } from '../invite/guest.tsx'
 import type { BoardRole } from '../lib/permissions.ts'
 import { linkClick, matchRoute } from '../lib/routing.ts'
+import { ADDRESS_COPY_FALLBACK, copyAddress } from './copy-address.ts'
+import './screens.css'
 
 export function LoadingScreen({ label = 'Loading…', testId }: { label?: string; testId?: string }) {
   return (
@@ -23,6 +26,7 @@ export function MessageScreen({
   testId,
   reason,
   actions,
+  scroll = false,
 }: {
   title: string
   body: ReactNode
@@ -30,9 +34,18 @@ export function MessageScreen({
   /** `data-reason` on the screen: which variant of a screen this is (for tests and styles). */
   reason?: string
   actions?: ReactNode
+  /**
+   * A screen with more than a line or two (K4-4): it scrolls when the card is taller than the window (a phone,
+   * a landscape phone), instead of cutting off its top and its buttons.
+   */
+  scroll?: boolean
 }) {
   return (
-    <main className="dr-screen dr-screen--page" data-testid={testId} data-reason={reason}>
+    <main
+      className={`dr-screen dr-screen--page${scroll ? ' dr-screen--scroll' : ''}`}
+      data-testid={testId}
+      data-reason={reason}
+    >
       <div className="dr-card dr-card--narrow">
         <a href="/" onClick={linkClick('/')} className="dr-card__brand" aria-label="Lobby home">
           <Wordmark />
@@ -151,6 +164,160 @@ export function NoAccessScreen({
           </button>
         </>
       }
+    />
+  )
+}
+
+// ---- wave K (K4-4): "Nothing has been shared with you yet" and "You're not in a workspace yet" ------------
+
+/** What the copy button did: not yet, the address is on the clipboard, or the browser would not (do it by hand). */
+export type CopyState = 'idle' | 'copied' | 'manual'
+
+/** "You're signed in as <b>pat@client.example</b>." with the address set apart (the sentence reads the same). */
+function accountSentence(sentence: string, address: string | null, ref?: RefObject<HTMLElement | null>) {
+  const at = address ? sentence.indexOf(address) : -1
+  if (!address || at < 0) return sentence
+  return (
+    <>
+      {sentence.slice(0, at)}
+      <strong className="dr-nowork__email" data-testid="no-workspace-email" ref={ref}>
+        {address}
+      </strong>
+      {sentence.slice(at + address.length)}
+    </>
+  )
+}
+
+/**
+ * The screen for an account with no workspace, as a plain function of its props (no hooks: a component test
+ * reads it). It shows which address is signed in, what to do next, which addresses are work addresses (from the
+ * build's configuration, in the copy), "Switch account", and "Copy my address" (the clipboard only: nothing is
+ * sent to anyone). The "unconfirmed" variant keeps its Reload.
+ */
+export function NoWorkspaceView({
+  copy,
+  copyState = 'idle',
+  switching = false,
+  addressRef,
+  onSwitch,
+  onCopy,
+  onReload,
+}: {
+  copy: NoWorkspaceCopy
+  copyState?: CopyState
+  switching?: boolean
+  /** The address element, so the container can select it when the browser would not copy. */
+  addressRef?: RefObject<HTMLElement | null>
+  onSwitch(): void
+  onCopy(): void
+  onReload(): void
+}) {
+  const hasAccount = copy.address !== null
+  return (
+    <MessageScreen
+      testId="no-workspace"
+      reason={copy.reason}
+      title={copy.title}
+      scroll
+      body={
+        <>
+          {copy.body.map((p, i) => {
+            const account = i === 0 && hasAccount
+            return (
+              <p
+                key={p}
+                className={account ? 'dr-nowork__account' : undefined}
+                data-testid={i === 0 && copy.reason !== 'unconfirmed' ? 'no-workspace-account' : undefined}
+              >
+                {account ? accountSentence(p, copy.address, addressRef) : p}
+              </p>
+            )
+          })}
+          {copyState === 'copied' && (
+            <p className="dr-nowork__hint" role="status" data-testid="no-workspace-copied">
+              Copied. Send it to someone at Dark Burn Creative or Trailer Park Group, then open the invite
+              link they send you.
+            </p>
+          )}
+          {copyState === 'manual' && (
+            <p className="dr-nowork__hint" role="status" data-testid="no-workspace-copy-fallback">
+              {ADDRESS_COPY_FALLBACK}
+            </p>
+          )}
+        </>
+      }
+      actions={
+        <>
+          {copy.action === 'switch-account' && (
+            <button
+              type="button"
+              className="dr-btn dr-btn--primary"
+              data-testid="no-workspace-switch"
+              disabled={switching}
+              aria-busy={switching || undefined}
+              onClick={onSwitch}
+            >
+              {switching ? 'Signing out…' : 'Switch account'}
+            </button>
+          )}
+          {copy.action === 'reload' && (
+            <button
+              type="button"
+              className="dr-btn dr-btn--primary"
+              data-testid="no-workspace-reload"
+              onClick={onReload}
+            >
+              Reload
+            </button>
+          )}
+          {hasAccount && (
+            <button type="button" className="dr-btn" data-testid="no-workspace-copy" onClick={onCopy}>
+              Copy my address
+            </button>
+          )}
+        </>
+      }
+    />
+  )
+}
+
+/** Selects an element's text (what Ctrl+C then copies), for a browser that refused the copy button. */
+function selectContents(el: HTMLElement | null) {
+  try {
+    if (!el) return
+    const selection = window.getSelection()
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    selection?.removeAllRanges()
+    selection?.addRange(range)
+  } catch {
+    // the address stays shown, selectable by hand
+  }
+}
+
+/** "/" for a signed-in account that belongs to no workspace (App.tsx RootRedirect). */
+export function NoWorkspaceScreen() {
+  const { state, signOut, signingOut } = useSession()
+  const me = state.status === 'signed-in' ? state.me : null
+  const copy = useMemo(() => (me ? noWorkspaceCopy(me.access) : null), [me])
+  const [copyState, setCopyState] = useState<CopyState>('idle')
+  const addressRef = useRef<HTMLElement | null>(null)
+  if (!copy) return <LoadingScreen />
+  const onCopy = () => {
+    void copyAddress(copy.address).then((ok) => {
+      setCopyState(ok ? 'copied' : 'manual')
+      if (!ok) selectContents(addressRef.current)
+    })
+  }
+  return (
+    <NoWorkspaceView
+      copy={copy}
+      copyState={copyState}
+      switching={signingOut}
+      addressRef={addressRef}
+      onSwitch={() => void signOut()}
+      onCopy={onCopy}
+      onReload={() => location.reload()}
     />
   )
 }

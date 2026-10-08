@@ -1,10 +1,21 @@
 import type { Board, Project } from '@draftroom/contracts'
-import { type ChangeEvent, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import {
+  type ChangeEvent,
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { useMe } from '../auth/session.tsx'
 import { UserMenu } from '../auth/UserMenu.tsx'
 import { NoticeRegion, useNotices } from '../board/Notices.tsx'
-import { ShareDialog } from '../board/ShareDialog.tsx'
+import { FeedbackPill } from '../features/feedback/FeedbackPill.tsx'
+import { openFeedback } from '../features/feedback/state.ts'
 import { useIsGuest } from '../invite/guest.tsx'
 import { absoluteUrl, copyText } from '../lib/clipboard.ts'
 import { boardPath, type DashboardSection, navigate, workspacePath } from '../lib/routing.ts'
@@ -18,6 +29,9 @@ import { BoardDetailsDialog, DuplicateBoardDialog, MoveBoardDialog } from './Boa
 import { CreateBoardDialog } from './CreateBoardDialog.tsx'
 import { DashboardBell, useDashboardInbox } from './DashboardBell.tsx'
 import { dashboardApi, IMPORT_BODY_LIMIT_BYTES } from './dashboard-api.ts'
+import { useInternalOnly } from './InternalOnly.tsx'
+import { internalOnlyShown } from './internal-only-model.ts'
+import { LazyDialogBoundary } from './LazyDialogBoundary.tsx'
 import {
   type BoardMenuAction,
   type BoardSort,
@@ -43,15 +57,35 @@ import {
   withStarredEntry,
 } from './model.ts'
 import { newsByBoard } from './notifications.ts'
-import { readPickerHidden, readViewMode, type ViewMode, writeViewMode } from './prefs.ts'
+import {
+  readPickerHidden,
+  readViewMode,
+  readWhatsNewDismissed,
+  type ViewMode,
+  writeViewMode,
+  writeWhatsNewDismissed,
+} from './prefs.ts'
 import { Sidebar } from './Sidebar.tsx'
+import { StartRow } from './StartRow.tsx'
+import { createSampleBoard } from './sample-board.ts'
 import { ContentSearch } from './search/ContentSearch.tsx'
 import { contentSearchApplies, SEARCH_MAX_QUERY_CHARS } from './search/content-search.ts'
+import { type StartChoice, showStartRow, startRowOffered, startTiles, startTitle } from './start-row-model.ts'
 import { SampleBoardButton } from './TemplateGallery.tsx'
+import type { CatalogEntry } from './template-catalog.ts'
 import { newBoardPath } from './template-paths.ts'
+import { useCatalog, whenIdle } from './use-catalog.ts'
+import { WhatsNewCard } from './WhatsNew.tsx'
+import { planBoardTry, showWhatsNew, type TryAction, WHATS_NEW_VERSION, whatsNewFor } from './whats-new.ts'
+import { requestWorkspaceMenu } from './workspace-menu-request.ts'
 import './dashboard.css'
 
 const dash = dashboardApi(api)
+
+// K4-6: the Share dialog (about 43 KB with its sharing code) is fetched when someone chooses Share on a card,
+// not with the dashboard: most visits never open it. dashboard-bundle.test.ts keeps it out of the page's
+// static imports.
+const ShareDialog = lazy(() => import('../board/ShareDialog.tsx').then((m) => ({ default: m.ShareDialog })))
 
 // A11Y-17: whether the person has clicked, tapped or pressed a key in this tab yet. After they have
 // (signing in, a link in the folded phone menu), a dashboard that leaves the focus nowhere moves it to
@@ -126,10 +160,52 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   const [dialog, setDialog] = useState<Dialog>(null)
   const [importing, setImporting] = useState(false)
   const [quickCreating, setQuickCreating] = useState(false)
+  // K4-1: the "Start something" row's tile whose board is being made
+  const [starting, setStarting] = useState<StartChoice | null>(null)
+  const [catalogWanted, setCatalogWanted] = useState(false)
+  // K4-5: a What's new "Try it" whose work is under way (a board being opened or made). The ref is the guard
+  // (a second click in the same tick sees it); the state only draws the button.
+  const [tryPending, setTryPending] = useState<TryAction | null>(null)
+  const tryBusy = useRef(false)
+  // K4-5: "Try it" on the template row asks for it to be shown and focused (see the effect below)
+  const [startRowAsk, setStartRowAsk] = useState(0)
+  const canCreateNow = useRef(canCreate)
+  canCreateNow.current = canCreate
+  const { mod: catalogMod } = useCatalog(catalogWanted)
+  // K4-5: the What's new card is dismissed per person (their browser's storage, which may be missing)
+  const [whatsNewGone, setWhatsNewGone] = useState(() => readWhatsNewDismissed(me.user.id, WHATS_NEW_VERSION))
   const [now, setNow] = useState(() => new Date())
   // PRI-05a: what is new, without opening each board (the board bell's inbox).
   const inbox = useDashboardInbox()
   const news = useMemo(() => newsByBoard(inbox.inbox?.notifications ?? []), [inbox.inbox])
+
+  // Whether the row is on the page now: only creators on the landing view see it, so only they fetch the
+  // template catalog for its thumbnails (a guest, an outside account, the All / Archived / Trash / project
+  // views and a search in progress never pay for the chunk). It is fetched once the page is idle, so the
+  // dashboard's first paint never waits for the template builders.
+  const startRowShown = showStartRow({
+    canCreate,
+    guest,
+    section,
+    searching: query.trim().length > 0,
+    pickerHidden: readPickerHidden(me.user.id),
+  })
+  useEffect(() => (startRowShown ? whenIdle(() => setCatalogWanted(true)) : undefined), [startRowShown])
+
+  // K4-5: "Try it" on the row's item: the row is shown (a search was cleared for it) and its first tile
+  // takes the focus; where the row is not there after all, the picker has the same templates.
+  useEffect(() => {
+    if (startRowAsk === 0) return
+    const tile = document.querySelector<HTMLElement>('[data-testid="start-tile"]')
+    if (tile) {
+      tile.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      tile.focus({ preventScroll: true })
+    } else if (canCreateNow.current) setCreating(true)
+  }, [startRowAsk])
+
+  // Wave J / K4-1: the Internal only switches live in the sidebar's workspace menu. The dashboard owns the
+  // state so the What's new card can tell whether that menu has a control for this person at all.
+  const internal = useInternalOnly(workspace?.id ?? workspaceId, inWorkspace)
 
   // Relative times ("5 min ago") stay honest while the dashboard is left open.
   useEffect(() => {
@@ -220,6 +296,20 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   // New boards are active: offering "New board" while looking at Trash or Archived would be confusing.
   const showCreate = canCreate && section.kind !== 'archived' && section.kind !== 'trash'
   const totalCount = boards.data?.length ?? 0
+  // The card says only what is true for this person: the row if they get it (not while a search or another
+  // view hides it for now: "Try it" brings it back), the workspace menu's Internal only control if they have
+  // one (owners and admins, and anyone while it is on; a plain member has none).
+  const newItems = whatsNewFor({
+    canCreate,
+    startRow: startRowOffered({ canCreate, guest, pickerHidden: readPickerHidden(me.user.id) }),
+    internalOnly: internalOnlyShown(internal.settings, projectList),
+  })
+  const whatsNewShown = showWhatsNew({
+    items: newItems,
+    guest,
+    dismissed: whatsNewGone,
+    landing: section.kind === 'recent',
+  })
   const menu = { canCreate, canMove: inWorkspace }
   const defaultProjectId = section.kind === 'project' ? section.projectId : null
 
@@ -360,6 +450,65 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
     }
   }
 
+  // K4-1: a tile of the "Start something" row. The same thing as choosing a template in New board (a private
+  // board named for the template, opened at ?template=<id>); the api's creator rule answers 403 for anyone
+  // who may not, whatever the row shows.
+  const startFromRow = async (choice: StartChoice, entry: CatalogEntry | null) => {
+    if (!canCreate || starting) return
+    setStarting(choice)
+    try {
+      const board = await api.createBoard(workspace.id, {
+        title: startTitle(entry),
+        projectId: defaultProjectId,
+      })
+      navigate(newBoardPath(board.id, choice === 'blank' ? null : choice))
+    } catch (e) {
+      setStarting(null)
+      notify({
+        key: 'create',
+        text: isApiError(e) ? e.message : 'The board could not be created.',
+        tone: 'error',
+      })
+    }
+  }
+
+  // K4-5: "Try it" on a What's new item takes the person to the thing, and does something they can see.
+  const tryNew = (action: TryAction) => {
+    if (tryBusy.current) return
+    if (action === 'workspace-menu') requestWorkspaceMenu()
+    else if (action === 'templates') {
+      if (canCreate) setCreating(true)
+    } else if (action === 'start-row') {
+      // a search hides the row: clear it, then the effect above focuses the first tile
+      setQuery('')
+      setStartRowAsk((n) => n + 1)
+    } else if (action === 'board') {
+      // Show a board's top bar without leaving anything behind: the board they opened last, and only
+      // someone with no boards at all gets the Lobby tour made for them (once; the buttons wait).
+      const plan = planBoardTry({
+        listReady: boards.status === 'ready',
+        latestBoardId: (boards.data ? recentBoards(boards.data)[0]?.id : null) ?? null,
+        canCreate,
+      })
+      if (plan.kind === 'open') navigate(boardPath(plan.boardId))
+      if (plan.kind !== 'make-tour') return
+      tryBusy.current = true
+      setTryPending('board')
+      createSampleBoard(api.createBoard, workspace.id, defaultProjectId).then(
+        (path) => navigate(path),
+        (e) => {
+          tryBusy.current = false
+          setTryPending(null)
+          notify({
+            key: 'sample-board',
+            text: isApiError(e) ? e.message : 'The sample board could not be created.',
+            tone: 'error',
+          })
+        },
+      )
+    }
+  }
+
   const onImportFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     e.target.value = '' // the same file can be picked again after an error
@@ -432,11 +581,18 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
 
   return (
     <div className="dr-dash" data-testid="dashboard" data-workspace-id={workspace.id}>
-      {/* A11Y-09: the first Tab stop jumps past the sidebar and the search bar to the board list. */}
+      {/* A11Y-09: the first Tab stop jumps past the sidebar and the search bar to the board list. Wave K: past the
+          "Start something" row and the What's new card too, to the first board (the page heading when there is
+          none), so the twelve template tiles are not the price of getting to a board. */}
       <SkipLink
         label="Skip to boards"
         testId="skip-to-boards"
-        onSkip={() => titleRef.current?.focus({ preventScroll: false })}
+        onSkip={() => {
+          const first = document.querySelector<HTMLElement>(
+            '[data-testid="starred-grid"] a, [data-testid="board-grid"] a',
+          )
+          ;(first ?? titleRef.current)?.focus({ preventScroll: false })
+        }}
       />
       <Sidebar
         workspace={workspace}
@@ -444,6 +600,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
         section={section}
         projects={projectList}
         projectsError={projects.status === 'error' ? projects.error.message : null}
+        internal={internal}
         canSeeProjects={inWorkspace}
         canCreateProjects={canCreate}
         canRenameProjects={canCreate}
@@ -656,6 +813,28 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
           </p>
         )}
 
+        {startRowShown && (
+          <StartRow
+            tiles={startTiles(catalogMod ? catalogMod.templateCatalog() : null)}
+            pending={starting}
+            onChoose={(c, e) => void startFromRow(c, e)}
+          />
+        )}
+
+        {whatsNewShown && (
+          <WhatsNewCard
+            items={newItems}
+            pending={tryPending}
+            unavailable={boards.status === 'ready' ? [] : ['board']}
+            onTry={tryNew}
+            onTellUs={() => openFeedback(null)}
+            onDismiss={() => {
+              writeWhatsNewDismissed(me.user.id, WHATS_NEW_VERSION)
+              setWhatsNewGone(true)
+            }}
+          />
+        )}
+
         {showStarred && starredVisible.length > 0 && (
           <section className="dr-dash__group" aria-labelledby="dr-starred-h" data-testid="starred-section">
             <h2 id="dr-starred-h" className="dr-dash__group-title">
@@ -748,17 +927,21 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
         />
       )}
       {dialog?.kind === 'share' && (
-        <ShareDialog
-          board={dialog.board}
-          role={dialog.board.role}
-          workspace={{ id: workspace.id, name: workspace.name }}
-          selfUserId={me.user.id}
-          onClose={() => setDialog(null)}
-          onBoardChange={(b: Board) => {
-            updateBoard(b.id, (x) => ({ ...x, ...b }))
-            setDialog((d) => (d?.kind === 'share' ? { ...d, board: { ...d.board, ...b } } : d))
-          }}
-        />
+        <LazyDialogBoundary what="Share" onClose={() => setDialog(null)}>
+          <Suspense fallback={null}>
+            <ShareDialog
+              board={dialog.board}
+              role={dialog.board.role}
+              workspace={{ id: workspace.id, name: workspace.name }}
+              selfUserId={me.user.id}
+              onClose={() => setDialog(null)}
+              onBoardChange={(b: Board) => {
+                updateBoard(b.id, (x) => ({ ...x, ...b }))
+                setDialog((d) => (d?.kind === 'share' ? { ...d, board: { ...d.board, ...b } } : d))
+              }}
+            />
+          </Suspense>
+        </LazyDialogBoundary>
       )}
       {dialog?.kind === 'move' && (
         <MoveBoardDialog
@@ -806,6 +989,8 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
         />
       )}
       <NoticeRegion notices={notices} onDismiss={dismiss} />
+      {/* K4-5: Feedback is one click away, on the dashboard as on a board */}
+      <FeedbackPill />
     </div>
   )
 }

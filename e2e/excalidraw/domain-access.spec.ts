@@ -98,7 +98,7 @@ test('outside account with nothing shared: an honest landing, and every create r
       // D13: "Invite people" and "Link for one person" send no email, so nothing says to wait for one.
       await expect(screen).toContainText('open the invite link they send you')
       await expect(screen).not.toContainText('in their email')
-      await expect(screen.getByTestId('no-workspace-switch')).toHaveText('Sign in with a different account')
+      await expect(screen.getByTestId('no-workspace-switch')).toHaveText('Switch account')
       await capture('domain-access-outside-landing.png', client.page, testInfo)
       await client.page.setViewportSize({ width: 390, height: 844 })
       await expect(screen.getByTestId('no-workspace-switch')).toBeInViewport()

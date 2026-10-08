@@ -83,3 +83,17 @@ export function projectMenuItems(opts: {
   }
   return items
 }
+
+/**
+ * Whether the Internal only control has anything to show (wave K moved it into the workspace menu, so the
+ * menu needs to know before it renders): owners and admins always (the switch), members only while it is on
+ * for the workspace or for a project. A guest or an older api has no settings and sees nothing.
+ */
+export function internalOnlyShown(
+  settings: InternalOnlySettings | null,
+  projects: readonly { id: string }[],
+): boolean {
+  if (!settings) return false
+  if (settings.canChange || settings.workspace) return true
+  return projects.some((p) => projectInternalOnly(settings, p.id))
+}
