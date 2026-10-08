@@ -19,7 +19,7 @@ import {
   signedInContext,
 } from '../tests/support/dashboard-share.ts'
 import { capture } from '../tests/support/screenshots.ts'
-import { waitForLobbyBoard } from './guests-kit.ts'
+import { createGuestLink, guestOn, waitForLobbyBoard } from './guests-kit.ts'
 import { countOf, waitForNavigation } from './navigation-kit.ts'
 
 test.use({ viewport: { width: 1360, height: 860 } })
@@ -120,6 +120,25 @@ test('"Start something": creators get the row above Recent boards; one click mak
   }
 })
 
+test('"Skip to boards" goes past the template row and the What’s new card, to the first board', async ({
+  browser,
+}) => {
+  const p = await creator(browser, 'Kip Skip')
+  try {
+    const board = await p.api.createBoard(p.wid, 'Skip to me')
+    await openDashboard(p.page, p.wid)
+    await expect(p.page.getByTestId('start-row')).toBeVisible()
+    await expect(p.page.getByTestId('whats-new')).toBeVisible()
+    // the skip link is the first Tab stop; Enter on it
+    await p.page.keyboard.press('Tab')
+    await expect(p.page.getByTestId('skip-to-boards')).toBeFocused()
+    await p.page.keyboard.press('Enter')
+    await expect(mainCard(p.page, board.id).locator('a.dr-bcard__link')).toBeFocused()
+  } finally {
+    await p.context.close()
+  }
+})
+
 test('"Start something" is not for accounts that cannot create (the api still refuses them whatever the page shows)', async ({
   browser,
 }) => {
@@ -131,6 +150,29 @@ test('"Start something" is not for accounts that cannot create (the api still re
     await expect(p.page.getByTestId('start-row')).toHaveCount(0)
     await expect(p.page.getByTestId('create-board')).toHaveCount(0)
   } finally {
+    await p.context.close()
+  }
+})
+
+test('a name-only guest gets neither the template row nor the What’s new card, only the Feedback pill', async ({
+  browser,
+}) => {
+  test.setTimeout(120_000)
+  const p = await creator(browser, 'Gwen Host')
+  const guestContext = await browser.newContext({ viewport: { width: 1280, height: 820 } })
+  try {
+    const board = await p.api.createBoard(p.wid, 'For a guest')
+    const link = await createGuestLink(p.page, board.id, 'review')
+    const guest = await guestOn(guestContext, link.split('/').pop() ?? '', 'Gus')
+    await guest.page.goto('/')
+    await expect(guest.page.getByTestId('guest-banner')).toBeVisible()
+    await expect(guest.page.getByTestId('board-grid').locator('[data-testid="board-card"]')).toHaveCount(1)
+    await expect(guest.page.getByTestId('start-row')).toHaveCount(0)
+    await expect(guest.page.getByTestId('whats-new')).toHaveCount(0)
+    await expect(guest.page.getByTestId('create-board')).toHaveCount(0)
+    await expect(guest.page.getByTestId('feedback-pill')).toBeVisible()
+  } finally {
+    await guestContext.close()
     await p.context.close()
   }
 })

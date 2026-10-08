@@ -532,11 +532,18 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
 
   return (
     <div className="dr-dash" data-testid="dashboard" data-workspace-id={workspace.id}>
-      {/* A11Y-09: the first Tab stop jumps past the sidebar and the search bar to the board list. */}
+      {/* A11Y-09: the first Tab stop jumps past the sidebar and the search bar to the board list. Wave K: past the
+          "Start something" row and the What's new card too, to the first board (the page heading when there is
+          none), so the twelve template tiles are not the price of getting to a board. */}
       <SkipLink
         label="Skip to boards"
         testId="skip-to-boards"
-        onSkip={() => titleRef.current?.focus({ preventScroll: false })}
+        onSkip={() => {
+          const first = document.querySelector<HTMLElement>(
+            '[data-testid="starred-grid"] a, [data-testid="board-grid"] a',
+          )
+          ;(first ?? titleRef.current)?.focus({ preventScroll: false })
+        }}
       />
       <Sidebar
         workspace={workspace}
