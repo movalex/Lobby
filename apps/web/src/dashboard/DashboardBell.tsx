@@ -231,7 +231,9 @@ export function DashboardBell({ inbox, refresh, markRead }: DashboardInbox) {
                 ))}
               </ul>
             )}
-            <p className="dr-dbell__note">{BELL_NOTE}</p>
+            <p className="dr-dbell__note" data-testid="notifications-note">
+              {BELL_NOTE}
+            </p>
           </section>,
           document.body,
         )}

@@ -16,6 +16,7 @@ import { onFocusLeave } from '../../../ui/focus.ts'
 import { useTopBarWidth } from '../../../ui/useMedia.ts'
 import { ExternalTag } from '../../people/ExternalTag.tsx'
 import { OUTSIDER_JOINED_KIND_TEXT, outsiderJoinedText } from '../../people/outside.ts'
+import { BELL_EMPTY, BELL_NOTE } from '../copy.ts'
 import { BellIcon, CommentIcon } from '../icons.tsx'
 import { COMMENT_TOOL_ID, canCommentIn, controllerFor, focusThread, selectCommentTool } from './controller.ts'
 
@@ -247,9 +248,7 @@ function NotificationsBell({ ctx }: { ctx: CanvasFeatureContext }) {
               </button>
             </header>
             {inbox.notifications.length === 0 ? (
-              <p className="dr-cbell__empty">
-                You’re all caught up. Mentions, replies and new comments on boards you own show up here.
-              </p>
+              <p className="dr-cbell__empty">{BELL_EMPTY}</p>
             ) : (
               <ul className="dr-cbell__list">
                 {inbox.notifications.map((n) => (
@@ -302,6 +301,9 @@ function NotificationsBell({ ctx }: { ctx: CanvasFeatureContext }) {
                 ))}
               </ul>
             )}
+            <p className="dr-cbell__note" data-testid="notifications-note">
+              {BELL_NOTE}
+            </p>
           </section>,
           document.body,
         )}

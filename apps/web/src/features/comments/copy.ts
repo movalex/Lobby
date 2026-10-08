@@ -26,5 +26,21 @@ export function composerHint(coarse: boolean): string {
   return coarse ? '@ to mention' : 'Enter to post · Shift+Enter for a new line · @ to mention'
 }
 
-/** The panel's footnote: where notifications show (in-app; no promise about email). */
-export const NOTIFICATIONS_NOTE = 'Mentions and replies show in the bell in the top bar.'
+/**
+ * Wave K.1 (follow-up 12): what every notification surface says about email, which is what the api does
+ * (apps/api/src/features/comments/notifications.ts: in-app only, no email is sent). The dashboard's bell
+ * (dashboard/DashboardBell.tsx), the board's bell (./ported/CommentsTopBar.tsx) and the Comments panel's
+ * footnote all use these, so they cannot drift apart again (K4-6 said it on the dashboard, K2-6 had removed
+ * the board's lines).
+ */
+export const NOT_EMAILED = 'They are not sent by email.'
+
+/** The line under a bell's list (K4-6's words): where alerts show up, and that they are not emailed. */
+export const BELL_NOTE = `Alerts appear here in Lobby. ${NOT_EMAILED}`
+
+/** A bell's list when there is nothing in it. */
+export const BELL_EMPTY =
+  'You’re all caught up. Mentions, replies and new comments on boards you own show up here.'
+
+/** The panel's footnote: where notifications show, and (as the bells say) that they are not emailed. */
+export const NOTIFICATIONS_NOTE = `Mentions and replies show in the bell in the top bar. ${NOT_EMAILED}`

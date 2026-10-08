@@ -24,13 +24,9 @@ export function notificationsApi(api: ApiClient) {
 /**
  * The line under the bell's list (K4-6). It said "In-app only: email notifications aren't available yet", which
  * promised something and read like a limitation; it now says plainly where alerts show up and that they are
- * not emailed.
+ * not emailed. The words are shared with the board's bell and the Comments panel (wave K.1).
  */
-export const BELL_NOTE = 'Alerts appear here in Lobby. They are not sent by email.'
-
-/** The bell's list when there is nothing in it. */
-export const BELL_EMPTY =
-  'You’re all caught up. Mentions, replies and new comments on boards you own show up here.'
+export { BELL_EMPTY, BELL_NOTE } from '../features/comments/copy.ts'
 
 export const KIND_TEXT: Record<NotificationItem['kind'], string> = {
   mention: 'mentioned you',

@@ -85,6 +85,28 @@ test('K2-6: the empty Comments panel has "Add a comment" (one click to the tool)
   await expect(a.page.getByTestId('notifications-panel')).not.toContainText('available yet')
 })
 
+// K.1 (follow-up 12): the dashboard's bell, the board's bell and the Comments panel say the same thing about email
+// (what the api does: notifications are in-app only, no email is sent).
+test('K.1: the board bell, the Comments panel and the dashboard bell all say alerts are not sent by email', async ({
+  canvasSession,
+}) => {
+  const NOT_EMAILED = 'They are not sent by email.'
+  const a = await canvasSession('alice')
+  const panel = await openCommentsPanel(a.page)
+  await expect(panel.locator('.dr-cpanel__note')).toHaveText(
+    `Mentions and replies show in the bell in the top bar. ${NOT_EMAILED}`,
+  )
+  await a.page.getByTestId('notifications-bell').click()
+  const boardNote = a.page.getByTestId('notifications-panel').getByTestId('notifications-note')
+  await expect(boardNote).toHaveText(`Alerts appear here in Lobby. ${NOT_EMAILED}`)
+  const words = await boardNote.textContent()
+  await a.page.goto('/')
+  await a.page.getByTestId('dashboard-bell').click()
+  await expect(a.page.getByTestId('dashboard-notifications').getByTestId('notifications-note')).toHaveText(
+    words ?? '',
+  )
+})
+
 for (const slowStream of [false, true])
   test(`K2-6 (PERF-10): a board open fetches its threads once${slowStream ? ' (the event stream says hello 2 s late)' : ''}`, async ({
     canvasSession,
