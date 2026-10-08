@@ -205,7 +205,15 @@ export async function onNewCanvas(ctx: { canvas?: CanvasEngineProbe }): Promise<
  * Whether answers carry R0's `newCanvas` display marks (the dashboard's "New canvas" badge, a checkpoint's
  * "made on the new canvas"): only when sync is KNOWN to be a tldraw one. Unknown (sync not reached since
  * start-up) shows none: this build's boards are not "opening again later". Never decides a write or a refusal.
+ *
+ * Wave K.1 (follow-up 10): read with `known()`, so a dashboard list or a checkpoint answer never waits for sync
+ * (`current()` waited up to CANVAS_ENGINE_WAIT_MS while the engine was unknown: a deploy with a slow sync). A
+ * known answer past its ttl is asked again in the background (`current()`, not awaited), so a rollback's tldraw
+ * sync is still picked up; while unknown the start-up asks (`start`) are already running.
  */
 export async function showsR0Marks(ctx: { canvas?: CanvasEngineProbe }): Promise<boolean> {
-  return (await (ctx.canvas ?? TLDRAW_ONLY).current()) === 'tldraw'
+  const probe = ctx.canvas ?? TLDRAW_ONLY
+  const engine = probe.known()
+  if (engine !== 'unknown') void probe.current().catch(() => {})
+  return engine === 'tldraw'
 }

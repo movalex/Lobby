@@ -233,4 +233,32 @@ describe('createCanvasEngineProbe', () => {
     expect(await showsR0Marks({ canvas: probe })).toBe(true)
     expect(timers.pending()).toEqual([])
   })
+
+  it('K.1 (follow-up 10): display marks never wait for sync: while the engine is unknown they answer at once (none), and a known answer is read without asking', async () => {
+    const timers = manualTimers()
+    let asks = 0
+    // a sync that does not answer (a deploy with a slow sync): an ask stays out
+    const slow = createCanvasEngineProbe(() => {
+      asks++
+      return new Promise<CanvasEngine>(() => {})
+    }, timers)
+    let marks: boolean | null = null
+    void showsR0Marks({ canvas: slow }).then((m) => {
+      marks = m
+    })
+    await flush()
+    // before: it joined (or started) an ask and waited up to waitMs (2.5 s) for it
+    expect(marks).toBe(false)
+    expect(timers.pending()).toEqual([])
+    // known: the last answer, at once
+    const known = createCanvasEngineProbe(async () => {
+      asks++
+      return 'tldraw'
+    }, timers)
+    known.start?.()
+    await timers.advance(0)
+    const before = asks
+    expect(await showsR0Marks({ canvas: known })).toBe(true)
+    expect(asks).toBe(before)
+  })
 })
