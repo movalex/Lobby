@@ -275,7 +275,8 @@ test('PRI-14: keyboard-only commenting — C, Tab to the note, Enter, type, Ente
   const note = await noteAt(a.page, 100, 100, 'Keyboard target')
   await setViewport(a.page, { x: 0, y: 0, zoom: 1 })
   const api = commentsApi(await users.api('alice'))
-  await expect(a.page.getByTestId('comment-tool')).toHaveAttribute('title', /Enter/)
+  // K2-5: the comment tool is the toolbar's (the top bar's copy, whose tooltip named Enter, is gone on a desktop)
+  await expect(a.page.getByTestId('tools.comment')).toHaveAttribute('aria-label', 'Comment')
 
   await focusCanvas(a.page)
   await a.page.keyboard.press('c')

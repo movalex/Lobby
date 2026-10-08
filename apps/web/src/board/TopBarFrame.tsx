@@ -2,46 +2,52 @@
 // differs per engine comes in as render props: the people list, the live-presentation chip and the
 // feature controls (the tldraw page's BOARD_FEATURES items, ./TopBar.tsx; the Excalidraw page's top-bar
 // registry, canvas/board/**). Integration owner (2C).
+//
+// K2-5 (wave K, UXD-01, F3, UXP-11, UXP-5): a calmer bar (./topbar-fit.ts `topBarPlan`, `statusView`):
+//  - one status dot for Saved and Live (`BoardStatus`): words beside it only when something needs attention,
+//    both halves in its tooltip and for screen readers, never "Saved" before the board is live; the hidden
+//    live region that speaks problems and recoveries (A11Y-14) is no `status` node, so "Saved" is read once;
+//  - an always-visible Feedback pill (wave J5's dialog through features/feedback/state.ts `openFeedback`; in
+//    the "⋯" menu on a phone);
+//  - "Shared outside" is a badge on Share (same test id and tooltip), and the sharing link badge (the sharing
+//    feature's control) sits against Share (canvas-ux.css);
+//  - the H1 is named by the title alone; its button is "Rename board";
+//  - on a phone the bell and the comment tool are in "⋯" (the comments feature's items; the comment tool left
+//    the bar everywhere else: the toolbar's Comment and the rail's Comments stay).
+// Moved controls keep their test ids (save-status, conn-status, topbar-shared-outside, notifications-bell,
+// comment-tool). The new parts are styled in features/canvas-ux/canvas-ux.css (loaded with the board page).
+
 import type { Board } from '@draftroom/contracts'
-import { type ReactNode, type RefObject, useLayoutEffect, useRef, useState } from 'react'
+import { SHARED_OUTSIDE_LABEL, SHARED_OUTSIDE_TITLE } from '@draftroom/contracts'
+import { type ReactNode, type RefObject, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { UserMenu } from '../auth/UserMenu.tsx'
 import { Mark } from '../brand/Wordmark.tsx'
+import { openFeedback } from '../features/feedback/state.ts'
 import { useBoardOutside } from '../features/people/outside.ts'
-import { SharedOutsideMarker } from '../features/people/SharedOutside.tsx'
 import { useIsGuest } from '../invite/guest.tsx'
 import { type BoardRole, can } from '../lib/permissions.ts'
 import { linkClick, workspacePath } from '../lib/routing.ts'
-import { SaveStatus, type SaveStatusView } from '../sync-quality/SaveStatus.tsx'
+import { type SaveStatusView, saveAnnouncement } from '../sync-quality/SaveStatus.tsx'
+import type { DisplayState } from '../sync-quality/save-state.ts'
 import { OverflowMenu } from '../ui/OverflowMenu.tsx'
 import { RenameInput } from '../ui/RenameInput.tsx'
 import { useTopBarWidth } from '../ui/useMedia.ts'
 import { readonlyPill, shareButtonView } from './access.ts'
 import {
+  type ConnState,
   compactValue,
   firstFittingLevel,
   hasContent,
   mayLeaveMenu,
+  statusView,
   type TitleMeasure,
   titleFits,
   titleNeed,
+  topBarPlan,
 } from './topbar-fit.ts'
 
-export type ConnState = 'connecting' | 'online' | 'offline' | 'error'
-
-const CONN_LABEL: Record<ConnState, string> = {
-  connecting: 'Connecting…',
-  online: 'Live',
-  offline: 'Offline',
-  error: 'Disconnected',
-}
-const CONN_TITLE: Record<ConnState, string> = {
-  connecting: 'Connecting to the board server',
-  online: 'Connected: your changes are sent to everyone on this board as you make them',
-  offline:
-    'Offline: changes are kept in this tab only until the connection returns. Reloading now would lose them.',
-  error: 'The connection to this board ended',
-}
+export type { ConnState } from './topbar-fit.ts'
 
 /** Which feature controls the bar asks for: all of them, the pinned ones, or the rest as "⋯" menu rows. */
 export type TopBarItemsMode = 'all' | 'pinned' | 'overflow'
@@ -85,25 +91,28 @@ export function TopBarFrame({
   const share = shareButtonView(role, useIsGuest())
   const pillIcon = board.status !== 'archived' && can(role, 'comment', board.status) ? 'comment' : 'eye'
   // Wave J: "Shared outside" while someone outside Dark Burn / TPG, a guest or an open link can open the
-  // board (the server's flag on the board's outside list, refetched when sharing changes).
+  // board (the server's flag on the board's outside list, refetched when sharing changes). K2-5: a badge on Share.
   const { snap: outside } = useBoardOutside(board.id)
   // PRI-02: at 768 px and below the feature controls (present, export, timer, sharing badge) move
-  // into a "⋯" menu; at 480 px and below the people list and the account button do too. The title,
-  // the bell and Share always stay in the bar.
+  // into a "⋯" menu; at 480 px and below the people list, the account button, Feedback, the bell and the
+  // comment tool do too (K2-5). The title, the status dot and Share always stay in the bar.
   const width = useTopBarWidth()
   const narrow = width !== 'wide'
-  const phone = width === 'phone'
   // F4: a wide bar compacts its controls (then, if still too full, moves them into "⋯") before the
   // board title drops below about 24 characters.
   const bar = useRef<HTMLElement>(null)
   const crowded = useTopBarFit(bar, narrow)
   const menu = narrow || crowded
+  const plan = topBarPlan(width, crowded)
+  const inBar = new Set(plan.bar)
+  const inMenu = new Set(plan.menu)
   // The role pill already says what a viewer/commenter can do: a second "View only" is noise (RETRO-17).
   const saveHidden = !!pill && save.state === 'readonly'
   // W5-50: on a phone the people list sits in the "⋯" menu, unless the people feature draws its own chip
   // in the bar (`people()` is then nothing): a caption with nothing under it is not drawn.
-  const menuPeople = phone ? people(MAX_AVATARS) : null
-  // Tab order = DOM order (RETRO-22a): breadcrumb, title, role, people, status, feature controls,
+  const menuPeople = inMenu.has('people') ? people(MAX_AVATARS) : null
+  const feedbackBoard = { id: board.id, title: board.title }
+  // Tab order = DOM order (RETRO-22a): breadcrumb, title, role, Feedback, people, status, feature controls,
   // Share. The account (DEV identity) badge is drawn at the bar's right end and comes right after
   // Share (A11Y-09: BoardAccount below, rendered by BoardPage just after this bar); on phones it is in
   // the menu.
@@ -165,22 +174,12 @@ export function TopBarFrame({
           <span className="dr-pill__label">{pill.label}</span>
         </button>
       )}
-      {outside.sharedOutside && <SharedOutsideMarker testId="topbar-shared-outside" compact={phone} />}
       <div className="dr-topbar__spacer" />
+      {inBar.has('feedback') && <FeedbackPill board={feedbackBoard} />}
       {/* Wave 4 (present-live): rejoin a presentation to everyone; the people list (features/people). */}
       {liveChip}
-      {!phone && people(narrow ? 2 : MAX_AVATARS)}
-      <SaveStatus view={save} hidden={saveHidden} />
-      <span
-        className={`dr-pill dr-pill--${conn}`}
-        data-testid="conn-status"
-        data-state={conn}
-        role="status"
-        title={CONN_TITLE[conn]}
-      >
-        <span className="dr-pill__dot" aria-hidden="true" />
-        <span className="dr-pill__label">{CONN_LABEL[conn]}</span>
-      </span>
+      {inBar.has('people') && people(narrow ? 2 : MAX_AVATARS)}
+      <BoardStatus save={save} conn={conn} saveHidden={saveHidden} />
       {items(menu ? 'pinned' : 'all')}
       {menu && (
         <OverflowMenu label="More board controls" testId="topbar-overflow">
@@ -193,7 +192,12 @@ export function TopBarFrame({
               {menuPeople}
             </div>
           )}
-          {phone && (
+          {inMenu.has('feedback') && (
+            <div className="dr-overflow__item" data-feature="feedback">
+              <FeedbackPill board={feedbackBoard} wide />
+            </div>
+          )}
+          {inMenu.has('account') && (
             <div className="dr-overflow__item" data-feature="account">
               <span className="dr-overflow__caption" aria-hidden="true">
                 Your account
@@ -208,7 +212,8 @@ export function TopBarFrame({
         className={`dr-btn ${share.primary ? 'dr-btn--primary ' : ''}dr-btn--sm dr-topbar__share`}
         data-testid="share-button"
         data-variant={share.primary ? 'share' : 'people'}
-        aria-label={share.label}
+        data-outside={outside.sharedOutside || undefined}
+        aria-label={outside.sharedOutside ? `${share.label} (${SHARED_OUTSIDE_LABEL})` : share.label}
         title={share.primary ? undefined : share.title}
         onClick={onShare}
       >
@@ -222,8 +227,143 @@ export function TopBarFrame({
           />
         </svg>
         <span className="dr-topbar__share-label">{share.label}</span>
+        {outside.sharedOutside && <SharedOutsideBadge />}
       </button>
     </header>
+  )
+}
+
+/**
+ * K2-5: "Shared outside" as a badge on Share (wave J's marker: the same test id and tooltip; the words are in
+ * Share's accessible name, since a button's content is not read on its own).
+ */
+function SharedOutsideBadge() {
+  return (
+    <span
+      className="dr-topbar__share-badge"
+      data-testid="topbar-shared-outside"
+      title={SHARED_OUTSIDE_TITLE}
+      aria-hidden="true"
+    >
+      <svg viewBox="0 0 24 24" width="10" height="10" aria-hidden="true">
+        <path
+          d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3.5 12h17M12 3c2.5 2.6 3.7 5.6 3.7 9s-1.2 6.4-3.7 9c-2.5-2.6-3.7-5.6-3.7-9S9.5 5.6 12 3z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </span>
+  )
+}
+
+/**
+ * K2-5 (F3): the always-visible Feedback pill: wave J5's dialog (features/feedback/state.ts `openFeedback`,
+ * about this board); the keyboard comes back to the pill when the dialog closes. `wide`: the "⋯" menu's row.
+ */
+export function FeedbackPill({
+  board,
+  wide = false,
+}: {
+  board: { id: string; title: string }
+  wide?: boolean
+}) {
+  const ref = useRef<HTMLButtonElement>(null)
+  return (
+    <button
+      ref={ref}
+      type="button"
+      className={`dr-btn dr-btn--sm dr-topbar__feedback${wide ? ' dr-topbar__feedback--wide' : ''}`}
+      data-testid="topbar-feedback"
+      aria-label={wide ? undefined : 'Send feedback'}
+      title="Send feedback about Lobby"
+      onClick={() => openFeedback(board, () => ref.current?.focus())}
+    >
+      <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+        <path
+          d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-4.2 3.6c-.6.5-1.8.2-1.8-.8z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinejoin="round"
+        />
+      </svg>
+      <span className="dr-topbar__feedback-label">{wide ? 'Send feedback' : 'Feedback'}</span>
+    </button>
+  )
+}
+
+/**
+ * A11Y-14: the words for the hidden live region, set only when `saveAnnouncement` has something to say (a
+ * problem, or the recovery from one; never the "Saving…"/"Saved" of every edit).
+ */
+function useSaveAnnouncement(state: DisplayState, role?: string, label?: string): string {
+  const [text, setText] = useState('')
+  const prev = useRef<DisplayState | null>(null)
+  const trouble = useRef<DisplayState | null>(null)
+  useEffect(() => {
+    const a = saveAnnouncement(prev.current, state, trouble.current, role, label)
+    prev.current = state
+    trouble.current = a.trouble
+    const say = a.say
+    // The same words twice (offline again) must change the region's text to be spoken again.
+    if (say) setText((t) => (t === say ? `${say} ` : say))
+  }, [state, role, label])
+  return text
+}
+
+/**
+ * K2-5 (UXD-01, UXP-11): one status dot for Saved and Live (./topbar-fit.ts `statusView`). The dot alone while
+ * all is well (its tooltip says "Saved" and "Live"); its words beside it when something needs attention. For
+ * screen readers it reads "Saved" then "Live" once (the test ids `save-status` and `conn-status` stay on those
+ * words); the live region next to it speaks only problems and recoveries and is no `status` node.
+ */
+export function BoardStatus({
+  save,
+  conn,
+  saveHidden,
+}: {
+  save: SaveStatusView
+  conn: ConnState
+  saveHidden: boolean
+}) {
+  const v = statusView(save, conn, saveHidden)
+  const announcement = useSaveAnnouncement(save.state, save.role, save.label)
+  return (
+    <>
+      <span
+        className={`dr-status dr-status--${v.tone}`}
+        data-testid="board-status"
+        data-tone={v.tone}
+        title={v.title}
+      >
+        <span className="dr-status__dot" aria-hidden="true" />
+        {v.label && (
+          <span className="dr-status__label" aria-hidden="true">
+            {v.label}
+          </span>
+        )}
+        <span
+          className="dr-sr-only"
+          data-testid="save-status"
+          data-state={save.state}
+          data-role={save.role}
+          title={v.saveTitle ?? undefined}
+          // Hidden, not removed, when the role pill already says it: it comes back by itself if the
+          // session goes offline or errors.
+          hidden={saveHidden}
+        >
+          {v.saveText}
+        </span>
+        <span className="dr-sr-only" data-testid="conn-status" data-state={conn} title={v.connTitle}>
+          {v.connText}
+        </span>
+      </span>
+      <span className="dr-sr-only" aria-live="polite" aria-atomic="true" data-testid="save-announcer">
+        {announcement}
+      </span>
+    </>
   )
 }
 
@@ -258,7 +398,11 @@ export function BoardAccount() {
   )
 }
 
-function BoardTitle({
+/**
+ * UXP-11 (K2-5): the H1 is named by the board's title alone ("Launch plan", not "Launch plan, rename board");
+ * the button inside it is "Rename board", described by the title.
+ */
+export function BoardTitle({
   title,
   canRename,
   onRename,
@@ -268,6 +412,7 @@ function BoardTitle({
   onRename(title: string): void
 }) {
   const [editing, setEditing] = useState(false)
+  const titleId = useId()
   if (!canRename) {
     return (
       <h1 className="dr-topbar__title" data-testid="board-title" title={title}>
@@ -291,16 +436,17 @@ function BoardTitle({
     )
   }
   return (
-    <h1 className="dr-topbar__h1">
+    <h1 className="dr-topbar__h1" aria-labelledby={titleId}>
       <button
         type="button"
         className="dr-topbar__title dr-topbar__title--editable"
         data-testid="board-title"
         title="Rename board"
-        aria-label={`${title}, rename board`}
+        aria-label="Rename board"
+        aria-describedby={titleId}
         onClick={() => setEditing(true)}
       >
-        {title}
+        <span id={titleId}>{title}</span>
       </button>
     </h1>
   )

@@ -19,7 +19,7 @@ import { CommentIcon } from '../icons.tsx'
 import { SHARING_CHANGED_EVENT } from '../store.ts'
 import { CommentsOverlay } from './CommentsOverlay.tsx'
 import { CommentsPanel } from './CommentsPanel.tsx'
-import { CommentsTopBar } from './CommentsTopBar.tsx'
+import { CommentsMenuItem, CommentsTopBar } from './CommentsTopBar.tsx'
 import { COMMENT_TOOL_ID, controllerFor, focusThread, selectCommentTool } from './controller.ts'
 import { anchorAt, anchorForKeyboard } from './geometry.ts'
 import { COMMENT_TOOL_KEYS, placeCommentFromKeyboard } from './keys.ts'
@@ -184,8 +184,12 @@ export const feature: CanvasFeature = {
       component: CommentsPanel,
     },
   ],
-  // the tool toggle and the bell stay in the bar on narrow screens (PRI-02)
-  topBar: [{ id: 'comments', order: 20, pinned: true, component: CommentsTopBar }],
+  // the bell stays in the bar on narrow screens (PRI-02); K2-5: on a phone it is in "⋯" with the comment tool
+  // (the second item, which draws nothing on wider screens; the comment tool left the bar there)
+  topBar: [
+    { id: 'comments', order: 20, pinned: true, component: CommentsTopBar },
+    { id: 'comments-menu', order: 21, overflowCaption: 'Comments', component: CommentsMenuItem },
+  ],
   tools: [
     {
       id: COMMENT_TOOL_ID,

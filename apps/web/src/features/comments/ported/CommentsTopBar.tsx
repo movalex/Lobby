@@ -13,42 +13,90 @@ import { formatRelativeTime } from '../../../lib/format.ts'
 import { boardPath, navigate } from '../../../lib/routing.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { onFocusLeave } from '../../../ui/focus.ts'
+import { useTopBarWidth } from '../../../ui/useMedia.ts'
 import { ExternalTag } from '../../people/ExternalTag.tsx'
 import { OUTSIDER_JOINED_KIND_TEXT, outsiderJoinedText } from '../../people/outside.ts'
 import { BellIcon, CommentIcon } from '../icons.tsx'
 import { COMMENT_TOOL_ID, canCommentIn, controllerFor, focusThread, selectCommentTool } from './controller.ts'
 
+/**
+ * The comments' part of the bar: the notifications bell. K2-5 (UXD-01): the comment tool left the bar (the
+ * toolbar's Comment, C, the rail's Comments and the context menu's Comment stay), and on a phone the bell and
+ * the comment tool are in the "⋯" menu (`CommentsMenuItem`); the bar then keeps only an unread count.
+ */
 export function CommentsTopBar({ ctx }: { ctx: CanvasFeatureContext }) {
-  const { canvas } = ctx
   const { store } = controllerFor(ctx)
   const canComment = canCommentIn(ctx)
   useEffect(() => store.setCanComment(canComment), [store, canComment])
-  const active = useValue('dr-comments.tool-active', () => canvas.tool() === COMMENT_TOOL_ID, [canvas])
+  const phone = useTopBarWidth() === 'phone'
+  if (phone) return <UnreadCount ctx={ctx} />
   return (
     <div className="dr-ctopbar">
-      <button
-        type="button"
-        className="dr-iconbtn dr-ctopbar__tool"
-        data-testid="comment-tool"
-        aria-pressed={active}
-        aria-disabled={!canComment}
-        title={
-          canComment
-            ? active
-              ? 'Comment tool is on: click an object or the board, or press Enter to comment on the selected object (the middle of the view when nothing is selected). Esc to stop.'
-              : 'Comment (C): click an object or the board, or press Enter to comment on the selection'
-            : 'You can read comments here but not add them'
-        }
-        aria-label="Comment tool"
-        onClick={() => {
-          if (active) canvas.setTool('select')
-          else selectCommentTool(ctx)
-        }}
-      >
-        <CommentIcon />
-      </button>
       <NotificationsBell ctx={ctx} />
     </div>
+  )
+}
+
+/** K2-5: on a phone, the "⋯" menu's comments row: the comment tool and the bell (nothing on wider screens). */
+export function CommentsMenuItem({ ctx }: { ctx: CanvasFeatureContext }) {
+  const phone = useTopBarWidth() === 'phone'
+  if (!phone) return null
+  return (
+    <div className="dr-ctopbar">
+      <CommentToolButton ctx={ctx} />
+      <NotificationsBell ctx={ctx} />
+    </div>
+  )
+}
+
+/** K2-5: on a phone the bell is in "⋯": the bar keeps its unread count (not a control). */
+function UnreadCount({ ctx }: { ctx: CanvasFeatureContext }) {
+  const { store } = controllerFor(ctx)
+  const count = useValue('dr-comments.unread', () => store.notifications.get().unreadCount, [store])
+  if (!count) return null
+  return (
+    <span className="dr-cbell" data-testid="notifications-bar-count">
+      <span
+        className="dr-cbell__count"
+        style={{ position: 'static', display: 'inline-block' }}
+        aria-hidden="true"
+      >
+        {count > 99 ? '99+' : count}
+      </span>
+      <span className="dr-sr-only">
+        {count === 1 ? '1 unread notification' : `${count} unread notifications`} in More board controls
+      </span>
+    </span>
+  )
+}
+
+/** The comment tool's toggle (C), in the phone's "⋯" menu (K2-5). */
+function CommentToolButton({ ctx }: { ctx: CanvasFeatureContext }) {
+  const { canvas } = ctx
+  const canComment = canCommentIn(ctx)
+  const active = useValue('dr-comments.tool-active', () => canvas.tool() === COMMENT_TOOL_ID, [canvas])
+  return (
+    <button
+      type="button"
+      className="dr-iconbtn dr-ctopbar__tool"
+      data-testid="comment-tool"
+      aria-pressed={active}
+      aria-disabled={!canComment}
+      title={
+        canComment
+          ? active
+            ? 'Comment tool is on: click an object or the board, or press Enter to comment on the selected object (the middle of the view when nothing is selected). Esc to stop.'
+            : 'Comment (C): click an object or the board, or press Enter to comment on the selection'
+          : 'You can read comments here but not add them'
+      }
+      aria-label="Comment tool"
+      onClick={() => {
+        if (active) canvas.setTool('select')
+        else selectCommentTool(ctx)
+      }}
+    >
+      <CommentIcon />
+    </button>
   )
 }
 

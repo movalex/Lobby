@@ -606,3 +606,131 @@
     padding: 14px 16px 12px;
   }
 }
+
+/* ---- K2-5: the calmer top bar (board/TopBarFrame.tsx; tokens from styles.css) ----------------------------------
+   One status dot for Saved and Live (words beside it only when something needs attention), the Feedback pill,
+   "Shared outside" as a badge on Share and the sharing link badge against Share. The bar's own layout rules
+   stay in styles.css; these are the new parts and their compact steps (board/topbar-fit.ts). */
+.dr-topbar .dr-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 999px;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: default;
+}
+.dr-topbar .dr-status__dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--dr-live);
+  box-shadow: 0 0 0 3px var(--dr-live-bg);
+}
+.dr-topbar .dr-status--busy .dr-status__dot {
+  background: var(--dr-ink-2);
+  box-shadow: 0 0 0 3px var(--dr-chip);
+  animation: dr-pulse 1.2s ease-in-out infinite;
+}
+.dr-topbar .dr-status--warn {
+  padding: 0 10px;
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+}
+.dr-topbar .dr-status--danger {
+  padding: 0 10px;
+  background: var(--dr-danger-bg);
+  color: var(--dr-danger);
+}
+.dr-topbar .dr-status--warn .dr-status__dot,
+.dr-topbar .dr-status--danger .dr-status__dot {
+  width: 7px;
+  height: 7px;
+  background: currentColor;
+  box-shadow: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dr-topbar .dr-status--busy .dr-status__dot {
+    animation: none;
+  }
+}
+/* narrow bars and the compact step keep the dot (the words stay in the tooltip and for screen readers) */
+.dr-topbar[data-width="tablet"] .dr-status__label,
+.dr-topbar[data-width="phone"] .dr-status__label,
+.dr-topbar[data-compact~="status"] .dr-status__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.dr-topbar[data-width="tablet"] .dr-status,
+.dr-topbar[data-width="phone"] .dr-status,
+.dr-topbar[data-compact~="status"] .dr-status {
+  padding: 0 6px;
+}
+
+/* the Feedback pill: quiet, always there; its speech bubble alone on a narrow or crowded bar */
+.dr-topbar__feedback {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-style: dashed;
+}
+.dr-topbar[data-width="tablet"] .dr-topbar__feedback-label,
+.dr-topbar[data-compact~="feedback"] .dr-topbar__feedback-label {
+  display: none;
+}
+.dr-topbar[data-width="tablet"] .dr-topbar__feedback,
+.dr-topbar[data-compact~="feedback"] .dr-topbar__feedback {
+  width: 32px;
+  justify-content: center;
+  padding: 0;
+}
+.dr-overflow .dr-topbar__feedback--wide {
+  justify-content: flex-start;
+}
+
+/* "Shared outside": a small globe badge on Share's corner (its words are in Share's name and the tooltip) */
+.dr-topbar__share {
+  position: relative;
+}
+.dr-topbar__share-badge {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--dr-surface);
+  border-radius: 50%;
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+  box-sizing: border-box;
+}
+/* the sharing link badge (the sharing feature's control) sits against Share, its icon alone: one Share group */
+.dr-topbar > .dr-sharebadge {
+  margin-right: -8px;
+}
+.dr-topbar > .dr-sharebadge .dr-sharebadge__text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* a "⋯" menu row whose feature draws nothing at this width (the phone-only comments row on a tablet) */
+.dr-overflow__item:has(> .dr-overflow__controls:empty) {
+  display: none;
+}
