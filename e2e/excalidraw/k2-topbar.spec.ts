@@ -136,9 +136,10 @@ test('K2-5: with a client link and a vote running: Shared outside is a badge on 
   const outside = a.page.getByTestId('topbar-shared-outside')
   await expect(outside).toBeVisible()
   await expect(outside).toHaveAttribute('title', /outside Dark Burn/)
-  // the badge is on Share (inside it), and Share's name says it
+  // the badge is on Share (inside it); Share's name stays "Share", its description says it
   expect(await share.locator('[data-testid="topbar-shared-outside"]').count()).toBe(1)
-  await expect(share).toHaveAttribute('aria-label', /Shared outside/)
+  await expect(share).toHaveAccessibleName('Share')
+  await expect(share).toHaveAccessibleDescription(/^Shared outside: .*outside Dark Burn/)
   // the link badge: its icon alone, against Share (its words stay its name)
   const badge = a.page.getByTestId('share-badge')
   await expect(badge).toBeVisible()

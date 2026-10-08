@@ -93,6 +93,7 @@ export function TopBarFrame({
   // Wave J: "Shared outside" while someone outside Dark Burn / TPG, a guest or an open link can open the
   // board (the server's flag on the board's outside list, refetched when sharing changes). K2-5: a badge on Share.
   const { snap: outside } = useBoardOutside(board.id)
+  const outsideId = useId()
   // PRI-02: at 768 px and below the feature controls (present, export, timer, sharing badge) move
   // into a "⋯" menu; at 480 px and below the people list, the account button, Feedback, the bell and the
   // comment tool do too (K2-5). The title, the status dot and Share always stay in the bar.
@@ -213,7 +214,9 @@ export function TopBarFrame({
         data-testid="share-button"
         data-variant={share.primary ? 'share' : 'people'}
         data-outside={outside.sharedOutside || undefined}
-        aria-label={outside.sharedOutside ? `${share.label} (${SHARED_OUTSIDE_LABEL})` : share.label}
+        aria-label={share.label}
+        // the name stays what the button does; "Shared outside" is its description
+        aria-describedby={outside.sharedOutside ? outsideId : undefined}
         title={share.primary ? undefined : share.title}
         onClick={onShare}
       >
@@ -229,13 +232,18 @@ export function TopBarFrame({
         <span className="dr-topbar__share-label">{share.label}</span>
         {outside.sharedOutside && <SharedOutsideBadge />}
       </button>
+      {outside.sharedOutside && (
+        <span id={outsideId} className="dr-sr-only">
+          {SHARED_OUTSIDE_LABEL}: {SHARED_OUTSIDE_TITLE}
+        </span>
+      )}
     </header>
   )
 }
 
 /**
- * K2-5: "Shared outside" as a badge on Share (wave J's marker: the same test id and tooltip; the words are in
- * Share's accessible name, since a button's content is not read on its own).
+ * K2-5: "Shared outside" as a badge on Share (wave J's marker: the same test id and tooltip; for screen readers
+ * the words are Share's description, its name staying what it does).
  */
 function SharedOutsideBadge() {
   return (
