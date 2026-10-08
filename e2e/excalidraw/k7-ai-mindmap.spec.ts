@@ -431,6 +431,23 @@ test('Mind map from a prompt, from the commands (the empty board’s "Ideas with
   })
 })
 
+// Wave K integration (K2-4 with K7-3): the empty board's card dispatches the registered 'ai.ideas' command.
+test('The empty board’s card offers "Ideas with AI" once the AI status is known; it opens the ideas prompt set to a mind map', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await waitForCanvas(a.page)
+  await expect(a.page.getByTestId('empty-board-hint')).toBeVisible()
+  // the first status read waits for an idle moment after the board is live (K7-4), then the button appears
+  const ideas = a.page.getByTestId('empty-hint-ai')
+  await expect(ideas).toBeVisible({ timeout: 15_000 })
+  await expect(ideas).toHaveText(/Ideas with AI/)
+  await ideas.click()
+  await expect(a.page.getByTestId('ai-ideas-prompt')).toBeVisible()
+  await expect(a.page.getByTestId('ai-ideas-as-map')).toBeChecked()
+  await expect(a.page.getByTestId('ai-ideas-as-notes')).not.toBeChecked()
+})
+
 // ---- K7-4: the wait feels deliberate, and the status read leaves the open burst ----------------------------------
 
 const aiButton = (page: Page) => page.getByTestId('selection-ai')
