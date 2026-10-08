@@ -147,7 +147,8 @@ test('K2-5: with a client link and a vote running: Shared outside is a badge on 
   if (!b || !s) throw new Error('no badge or Share box')
   expect(Math.abs(s.x - (b.x + b.width))).toBeLessThanOrEqual(4)
   await expect(badge).toHaveAttribute('aria-label', /^Link: comment/)
-  await expect(a.page.getByTestId('vote-chip')).toBeVisible()
+  // the vote is running: K3-3 shows it in the Facilitate button's pill (the vote chip is in its menu)
+  await expect(a.page.getByTestId('facilitate-pill')).toContainText('Vote')
 
   const controls = await visibleControls(a.page)
   await testInfo.attach('k2-5-controls.json', {
@@ -167,10 +168,8 @@ test('K2-5: with a client link and a vote running: Shared outside is a badge on 
   const ungrouped = controls.filter((c) =>
     ['timer-pill', 'vote-chip', 'reactions-button', 'export-button'].includes(c),
   )
-  test.skip(
-    ungrouped.length > 0,
-    `K3's Facilitate grouping is not on this branch yet: ${controls.length} controls (${controls.join(', ')})`,
-  )
+  // wave K integration: K3 is merged, so this is a check, not a skip
+  expect(ungrouped, controls.join(', ')).toEqual([])
   expect(controls.length, controls.join(', ')).toBeLessThanOrEqual(8)
 })
 
