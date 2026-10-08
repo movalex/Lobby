@@ -334,3 +334,69 @@ describe('addChildren: Expand with AI adds N children under a topic in one undo 
     expect(problems(f)).toEqual([])
   })
 })
+
+describe('a map made inside a frame (R7): it belongs to the frame when the whole width fits', () => {
+  const frame = (w: number, h: number): El => ({
+    id: 'frame',
+    type: 'frame',
+    x: 0,
+    y: 0,
+    width: w,
+    height: h,
+    name: 'Slide',
+  })
+
+  it('a selected frame wide enough takes the whole map: every topic, label and line is in it, and it grows to hold it', () => {
+    const s = setup([frame(2200, 500)])
+    s.f.canvas.select(['frame'])
+    const built = s.rt.createMapFromOutline(OUTLINE)
+    expect(built?.ids).toHaveLength(11)
+    for (const el of s.f.els.values()) {
+      if (el.isDeleted || el.id === 'frame') continue
+      expect(el.frameId, `${el.type} ${el.id}`).toBe('frame')
+    }
+    const frameEl = s.f.els.get('frame') as El
+    const boxes = topics(s.f).map((t) => t.el)
+    for (const b of boxes) {
+      expect(b.x).toBeGreaterThanOrEqual(frameEl.x)
+      expect(b.x + b.width).toBeLessThanOrEqual(frameEl.x + frameEl.width)
+      expect(b.y + b.height).toBeLessThanOrEqual(frameEl.y + frameEl.height)
+    }
+    expect(problems(s.f)).toEqual([])
+    // one step, frame growth included
+    expect(s.f.steps()).toBe(1)
+    s.f.undo()
+    expect((s.f.els.get('frame') as El).height).toBe(500)
+  })
+
+  it('a frame too narrow for the map: the map goes on the page, beside the frame, not squeezed into it', () => {
+    const s = setup([frame(300, 300)])
+    s.f.canvas.select(['frame'])
+    s.rt.createMapFromOutline(OUTLINE)
+    for (const t of topics(s.f)) expect(t.el.frameId).toBeNull()
+    const frameEl = s.f.els.get('frame') as El
+    expect(frameEl.width).toBe(300)
+    for (const t of topics(s.f)) {
+      const clear =
+        t.el.x >= frameEl.x + frameEl.width ||
+        t.el.x + t.el.width <= frameEl.x ||
+        t.el.y >= frameEl.y + frameEl.height ||
+        t.el.y + t.el.height <= frameEl.y
+      expect(clear, t.text).toBe(true)
+    }
+  })
+
+  it('Expand under a topic in a frame keeps the new topics, labels and lines in it, and the frame holds them', () => {
+    const s = setup([frame(2200, 700)])
+    s.f.canvas.select(['frame'])
+    s.rt.createMapFromOutline(OUTLINE)
+    const hub = topics(s.f).find((t) => t.text === 'Channels') as Topic
+    const made = s.rt.addChildren(hub.id, [leaf('a'), leaf('b'), leaf('c'), leaf('d'), leaf('e')])
+    expect(made?.children).toHaveLength(5)
+    for (const id of made?.touched ?? []) {
+      const el = s.f.els.get(id) as El
+      if (!el.isDeleted) expect(el.frameId, `${el.type} ${id}`).toBe('frame')
+    }
+    expect(problems(s.f)).toEqual([])
+  })
+})

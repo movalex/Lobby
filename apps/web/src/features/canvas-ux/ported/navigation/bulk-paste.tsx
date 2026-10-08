@@ -1,6 +1,8 @@
 // COL-05 bulk paste on the new canvas: a `text` content handler (paste and drop; docs/EXCALIDRAW-
 // CONTRACTS.md §3 `contentHandlers`). One cell (a word, a sentence) is left to the engine's own paste (a
-// text element); multi-line, TSV or CSV text opens "Paste as sticky notes or as text?" at the pointer.
+// text element); multi-line, TSV or CSV text opens "Paste as sticky notes or as text?" at the pointer. K7-2: when
+// the text is an outline (a heading over lines, or indentation: mindmap/outline-parse.ts), the prompt also
+// offers "Paste as mind map", one new map in one undo step (mindmap/ported/commands.ts pasteOutlineAsMindmap).
 //
 // RETRO-01: the paste point is the pointer over the canvas, else the view's centre. The grid goes to the
 // nearest empty spot there, into the frame under that point when it fits (bulk-paste.ts placeBulkGrid).
