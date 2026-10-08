@@ -39,7 +39,14 @@ const { feature, cursorChatOf } = await import('./ported/index.tsx')
 
 type Handler = (e: unknown) => void
 
-function board(opts: { role?: CanvasFeatureContext['role']; readOnly?: boolean; selected?: string } = {}) {
+function board(
+  opts: {
+    role?: CanvasFeatureContext['role']
+    readOnly?: boolean
+    selected?: string
+    focusMode?: boolean
+  } = {},
+) {
   const handlers = new Map<string, Handler[]>()
   const inCanvas = new FakeHTMLElement()
   const registries = createFeatureRegistries()
@@ -56,6 +63,7 @@ function board(opts: { role?: CanvasFeatureContext['role']; readOnly?: boolean; 
     tool: () => 'select',
     presence: { peers: () => [], peer: () => null },
     sceneToOverlay: (p: { x: number; y: number }) => p,
+    settings: { get: () => ({ focusMode: opts.focusMode ?? false }) },
   }
   const ctx = {
     canvas,
@@ -190,6 +198,12 @@ describe('K6-4: the cursor-chat key', () => {
     const commenterOnNote = board({ role: 'commenter', readOnly: true, selected: 'note-1' })
     expect(commenterOnNote.press()).toEqual({ taken: true, opened: true })
     commenterOnNote.uninstall()
+  })
+
+  it('presenting (focus mode): / is not cursor chat (the layers and everyone’s cursors are hidden)', () => {
+    const b = board({ focusMode: true })
+    expect(b.press()).toEqual({ taken: false, opened: false })
+    b.uninstall()
   })
 
   it('a second / while the composer is open is not taken again', () => {

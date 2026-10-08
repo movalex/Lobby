@@ -1,13 +1,13 @@
 // OWNER: 3c (people and presence; added in wave K, K6-4). Cursor chat on the Excalidraw board page: press /
 // with the board in hand, type a short line, Enter, and it floats at your cursor for everyone on the board
-// for a few seconds, then fades. Never stored:
-// the api relays it on the board's event stream (@draftroom/contracts cursor-chat.ts); no sync push, no
-// board write, no presence field.
+// for a few seconds, then fades. Never stored: the api relays it on the board's event stream
+// (@draftroom/contracts cursor-chat.ts); no sync push, no board write, no presence field.
 //
 // - The key: a command with kbd '/' (it shows in the shortcuts dialog). The key registry runs it before
 //   the key allowlist, in the canvas scope only: never inside the text editor, an overlay's field or any
 //   other input (canvas/board/input.ts), and it is not delegated to Excalidraw. It steps aside when '/'
-//   would type into the one selected note (type-to-edit) and for people who may not comment.
+//   would type into the one selected note (type-to-edit), for people who may not comment, and while
+//   presenting (focus mode hides the layers and everyone's cursors).
 // - The composer: a small field at the pointer (or the middle of the view when the pointer is elsewhere);
 //   Enter sends, Escape or leaving it closes; keys typed into it never reach the board.
 // - The bubbles: someone else's message floats at their live cursor (the tab nearest to where they sent it)
@@ -82,6 +82,8 @@ export class CursorChatController {
     const { canvas, registries } = this.ctx
     if (!mayChat(this.ctx.role, this.ctx.board.status)) return false
     if (this.composer.get()) return false
+    // presenting (focus mode): the layers are hidden, and so are everyone's cursors
+    if (focusModeOf(canvas)) return false
     if (!canvas.readOnly()) {
       // '/' types into the one selected note (type-to-edit), or the element a feature's rule edits
       const sel = canvas.selection
@@ -116,6 +118,7 @@ export class CursorChatController {
       ctx.notify({ key: 'cursor-chat', text: failureText({ status: 429 }), testId: 'cursor-chat-toast' })
       return
     }
+    const since = Date.now()
     this.add({
       userId: ctx.me.user.id,
       name: ctx.me.user.name,
@@ -123,7 +126,7 @@ export class CursorChatController {
       mine: true,
       sid: null,
       at: composer.anchor,
-      since: Date.now(),
+      since,
       color: safeColor(ctx.me.user.color, ctx.me.user.id),
     })
     try {
@@ -132,6 +135,8 @@ export class CursorChatController {
         schema: null,
       })
     } catch (e) {
+      // nobody saw it: it does not float here either
+      this.bubbles.set(this.bubbles.get().filter((b) => !(b.mine && b.since === since)))
       ctx.notify({
         key: 'cursor-chat',
         text: failureText(e as { status?: number; code?: string }),
@@ -199,6 +204,14 @@ function anchorOf(canvas: LobbyCanvas): Point {
   if (p?.overCanvas) return { x: p.scene.x, y: p.scene.y }
   const v = canvas.viewport.get()
   return { x: v.x + v.width / 2, y: v.y + v.height / 2 }
+}
+
+function focusModeOf(canvas: LobbyCanvas): boolean {
+  try {
+    return canvas.settings.get().focusMode
+  } catch {
+    return false
+  }
 }
 
 const roundPoint = (p: Point): Point => ({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 })
