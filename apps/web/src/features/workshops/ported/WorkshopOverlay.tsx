@@ -176,6 +176,9 @@ export function WorkshopLayer({ ctx }: { ctx: Ctx }) {
   const joined = open && snap.participation === 'joined'
   // While presenting, the slides stay clean: no prompts or controls.
   const voting = joined && !vote?.done && !presenting
+  // K3-1: the banner is for people who may vote here now: an active board, not presenting
+  const eligible = ctx.board.status === 'active' && !presenting
+  useEffect(() => store.setVoteEligible(eligible), [store, eligible])
   const resultsCard =
     !!snap.resultsNews &&
     vote?.session.status === 'revealed' &&
@@ -189,6 +192,7 @@ export function WorkshopLayer({ ctx }: { ctx: Ctx }) {
       {joined && snap.ballot && <MyDots ctx={ctx} store={store} myVotes={snap.ballot.myVotes} />}
       {voting && <ClickToVote ctx={ctx} store={store} />}
       {voting && <SelectedStepper ctx={ctx} store={store} />}
+      {snap.voteBanner && !presenting && <ClickToOffer ctx={ctx} store={store} />}
       {/* One stack, top to bottom, so messages never cover each other (RETRO-11). */}
       {!presenting && (
         <div className="dr-wk-stack" data-testid="workshop-stack">
@@ -196,7 +200,7 @@ export function WorkshopLayer({ ctx }: { ctx: Ctx }) {
           <PrivateNotesStartPrompt ctx={ctx} />
           <PrivateNotesReminder ctx={ctx} />
           {resultsCard && <ResultsCard ctx={ctx} store={store} />}
-          {open && snap.participation === null && <JoinPrompt ctx={ctx} store={store} />}
+          {snap.voteBanner && <JoinPrompt key={snap.voteBanner.seq} ctx={ctx} store={store} />}
           {joined && <VotingBar ctx={ctx} store={store} />}
         </div>
       )}
@@ -609,22 +613,61 @@ function zoomToRefs(ctx: Ctx, refs: readonly string[]) {
 export const VOTE_KEYS_HELP =
   'Keyboard: Tab from the board goes to an object’s +, Enter or Space adds a vote, Tab moves to the next object and Esc returns to the board.'
 
-function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
+/** "Fay" from "Fay Facilitator (guest)": the first word, as the note-author label names people. */
+const firstWord = (name: string) => name.trim().split(/\s+/)[0] ?? name
+
+/**
+ * K3-1: the "Vote started" banner (the vote's join card, RETRO-11's stack): who started it, what the vote
+ * takes and how many dots this person has, one click to join and vote ("Join and vote"), or, after a click on
+ * an object before joining, one click to join and give that object its first dot. Up once per vote for each
+ * person who may vote here and has neither joined nor said "Not now" (../store.ts `voteBanner`); the
+ * keyboard help is its description (K3-6).
+ */
+export function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
   const keysId = useId()
-  const vote = store.getSnapshot().vote
-  if (!vote) return null
+  const snap = store.getSnapshot()
+  const banner = snap.voteBanner
+  const vote = snap.vote
+  const offer = snap.joinOffer
+  const by = useValue(
+    'dr-wk-banner-by',
+    () =>
+      banner ? (ctx.canvas.collaborators().find((c) => c.uid === banner.createdBy)?.name ?? null) : null,
+    [ctx.canvas, banner?.createdBy],
+  )
+  const [busy, setBusy] = useState(false)
+  if (!banner || !vote || vote.session.id !== banner.sessionId) return null
   const s = vote.session
+  const left = vote.myRemaining
+  const startedBy =
+    by && banner.createdBy !== ctx.me.user.id ? `${firstWord(by)} started a vote` : 'Vote started'
+  const target = offer ? labelOfRef(offer.shapeId, (id) => ctx.canvas.get(id)) : null
+  const joinAndCast = async () => {
+    setBusy(true)
+    const r = await store.joinAndCast()
+    setBusy(false)
+    if (r && !r.ok && r.error)
+      ctx.notify({ key: 'vote-cast', text: r.error, testId: 'vote-toast', timeoutMs: 3500 })
+    const after = store.getSnapshot()
+    if (r?.ok && after.ballot && after.vote)
+      store.announce(castAnnouncement(1, after.ballot.myRemaining, after.vote.session.votesPerPerson))
+  }
   return (
     <div
-      className="dr-wk-prompt"
+      className="dr-wk-prompt dr-wk-banner"
       role="dialog"
       aria-label="Vote started"
       aria-describedby={keysId}
       data-testid="vote-join-prompt"
+      data-banner-seq={banner.seq}
+      data-offer={offer?.shapeId}
     >
+      <p className="dr-wk-banner__eyebrow" data-testid="vote-banner-by">
+        <span className="dr-wk-chip__dot" aria-hidden="true" />
+        {startedBy}
+      </p>
       <p>
-        <strong>{s.title}</strong> — you have {vote.myRemaining} vote{vote.myRemaining === 1 ? '' : 's'} to
-        place on
+        <strong>{s.title}</strong> — you have {left} vote{left === 1 ? '' : 's'} to place on
         {s.scope === 'frame'
           ? ' objects in one frame'
           : s.scope === 'selection'
@@ -645,15 +688,39 @@ function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
         {VOTE_KEYS_HELP}
       </span>
       <div className="dr-wk-row">
-        <button
-          type="button"
-          className="dr-btn dr-btn--primary dr-btn--sm"
-          data-testid="vote-join"
-          aria-describedby={keysId}
-          onClick={() => void store.joinVote(s.id)}
-        >
-          Join vote
-        </button>
+        {offer && target !== null ? (
+          <>
+            <button
+              type="button"
+              className="dr-btn dr-btn--primary dr-btn--sm dr-wk-banner__cast"
+              data-testid="vote-join-cast"
+              aria-describedby={keysId}
+              disabled={busy}
+              onClick={() => void joinAndCast()}
+            >
+              Join and vote for “{target}”
+            </button>
+            <button
+              type="button"
+              className="dr-btn dr-btn--sm"
+              data-testid="vote-join"
+              disabled={busy}
+              onClick={() => void store.joinVote(s.id)}
+            >
+              Join
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            className="dr-btn dr-btn--primary dr-btn--sm"
+            data-testid="vote-join"
+            aria-describedby={keysId}
+            onClick={() => void store.joinVote(s.id)}
+          >
+            Join and vote
+          </button>
+        )}
         <button
           type="button"
           className="dr-btn dr-btn--sm dr-btn--ghost"
@@ -662,16 +729,50 @@ function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
             store.setParticipation(s.id, 'skipped')
             ctx.notify({
               key: 'vote-skip',
-              text: 'You can join later from the voting chip in the top bar.',
+              text: 'You can join later from Voting in the top bar’s Facilitate (or Session) menu.',
               testId: 'vote-toast',
             })
           }}
         >
-          Skip
+          Not now
         </button>
       </div>
     </div>
   )
+}
+
+/**
+ * K3-1: before joining, a plain click (no drag) on an object the open vote takes offers to join and give it
+ * a dot (the banner's "Join and vote for …"). The press is not claimed: the object is selected and moves as
+ * usual, and nothing is cast until the person joins.
+ */
+function ClickToOffer({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
+  const rule = useRule(store)
+  const sid = store.getSnapshot().voteBanner?.sessionId ?? null
+  useEffect(() => {
+    if (!rule || !sid) return
+    const canvas = ctx.canvas
+    let pressed: { x: number; y: number; id: string } | null = null
+    return canvas.on('input', (e) => {
+      if (e.type === 'pointer-down') {
+        pressed = null
+        if (e.button !== 0 || !plainPress(e) || canvas.editingId()) return
+        const tool = canvas.tool()
+        if (tool !== 'select' && tool !== 'hand') return
+        const click = voteClickAt(canvas, e.scene, rule)
+        if (click.kind === 'vote') pressed = { x: e.screen.x, y: e.screen.y, id: click.target.id }
+        return
+      }
+      if (e.type === 'pointer-up') {
+        const p = pressed
+        pressed = null
+        if (!p || Math.hypot(e.screen.x - p.x, e.screen.y - p.y) > CLICK_SLOP_PX) return
+        const ref = refOf(p.id)
+        if (ref) store.offerJoin(sid, ref)
+      }
+    })
+  }, [ctx, rule, sid, store])
+  return null
 }
 
 function VotingBar({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {

@@ -550,6 +550,47 @@ button.dr-wk-badge--group:focus-visible {
 .dr-wk-prompt p {
   margin: 0;
 }
+/* K3-1: the "Vote started" banner: an accent edge, who started it, and an entrance once per vote. */
+.dr-wk-banner {
+  gap: 6px;
+  width: min(460px, 100%);
+  border-color: var(--dr-navy);
+  box-shadow:
+    inset 4px 0 0 var(--dr-navy),
+    0 6px 24px rgb(27 35 48 / 16%);
+  animation: dr-wk-banner-in 260ms ease-out;
+}
+.dr-wk-banner__eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--dr-ink-2);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.dr-wk-banner__cast {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@keyframes dr-wk-banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dr-wk-banner {
+    animation: none;
+  }
+}
 .dr-wk-follow {
   border-color: var(--dr-navy);
 }

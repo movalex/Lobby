@@ -88,6 +88,24 @@ export interface WorkshopSnapshot {
   myHand: RaisedHand | null
   /** A request (from a toast or the hands chip) to open the workshop tools at a section. */
   toolsRequest: { seq: number; section: 'hands' | null } | null
+  /**
+   * K3-1: the "Vote started" banner: an open vote this person has neither joined nor skipped, while they may
+   * vote here (`setVoteEligible`). `seq` is the vote's: it comes up once per vote (the banner's entrance and
+   * its announcement), not again for every count update, refetch or a stretch of not being eligible.
+   */
+  voteBanner: VoteBanner | null
+  /** K3-1: an object this person clicked before joining: the banner offers to join and give it a dot. */
+  joinOffer: { sessionId: string; shapeId: string } | null
+}
+
+export interface VoteBanner {
+  sessionId: string
+  title: string
+  votesPerPerson: number
+  scope: WorkshopVoteState['session']['scope']
+  /** who started it (a user id; the UI names them from the people on the board) */
+  createdBy: string
+  seq: number
 }
 
 /** A reaction to show: from the event stream (someone else) or from this tab (`mine`). */
@@ -211,6 +229,12 @@ export class WorkshopStore {
   private hands: RaisedHand[] = []
   private handsVersion: HandsVersion | null = null
   private toolsRequest: WorkshopSnapshot['toolsRequest'] = null
+  /** K3-1: whether this person may vote here now (an active board, not presenting): the UI says. */
+  private voteEligible = true
+  /** K3-1: the banner's seq per vote, given the first time the vote's banner came up. */
+  private readonly bannerSeqs = new Map<string, number>()
+  private bannerSeq = 0
+  private joinOffer: WorkshopSnapshot['joinOffer'] = null
   private readonly throttle = new ReactionThrottle()
   private readonly reactionListeners = new Set<(r: ReactionShown) => void>()
   private readonly handListeners = new Set<(changes: HandChange[]) => void>()
@@ -300,7 +324,73 @@ export class WorkshopStore {
       hands: this.hands,
       myHand: this.hands.find((h) => h.userId === this.userId) ?? null,
       toolsRequest: this.toolsRequest,
+      ...this.bannerAndOffer(vote, sid ? this.readParticipation(sid, vote) : null),
     }
+  }
+
+  /** K3-1: the banner for `vote` (see WorkshopSnapshot.voteBanner), and the click offer that goes with it. */
+  private bannerAndOffer(
+    vote: WorkshopVoteState | null,
+    participation: Participation | null,
+  ): Pick<WorkshopSnapshot, 'voteBanner' | 'joinOffer'> {
+    if (vote?.session.status !== 'open' || participation !== null || !this.voteEligible)
+      return { voteBanner: null, joinOffer: null }
+    const s = vote.session
+    let seq = this.bannerSeqs.get(s.id)
+    if (seq === undefined) {
+      seq = ++this.bannerSeq
+      this.bannerSeqs.set(s.id, seq)
+    }
+    return {
+      voteBanner: {
+        sessionId: s.id,
+        title: s.title,
+        votesPerPerson: s.votesPerPerson,
+        scope: s.scope,
+        createdBy: s.createdBy,
+        seq,
+      },
+      joinOffer: this.joinOffer?.sessionId === s.id ? this.joinOffer : null,
+    }
+  }
+
+  /** K3-1: whether this person may vote here now (the board is active and they are not presenting). */
+  setVoteEligible(eligible: boolean) {
+    if (this.voteEligible === eligible) return
+    this.voteEligible = eligible
+    this.emit()
+  }
+
+  /**
+   * K3-1: a click on an object the open vote takes, before joining it: the banner offers to join and give it
+   * a dot. Nothing is sent (no cast before the join); only while the banner is up.
+   */
+  offerJoin(sessionId: string, shapeId: string) {
+    const banner = this.snap.voteBanner
+    if (banner?.sessionId !== sessionId) return
+    if (this.joinOffer?.sessionId === sessionId && this.joinOffer.shapeId === shapeId) return
+    this.joinOffer = { sessionId, shapeId }
+    this.emit()
+  }
+
+  clearJoinOffer() {
+    if (!this.joinOffer) return
+    this.joinOffer = null
+    this.emit()
+  }
+
+  /**
+   * K3-1: the banner's "Join and vote" with an object picked: joins (the vote confirmed with the server
+   * first, G1), then casts one dot on it if that vote is still the open one. The cast is sent after the join.
+   */
+  async joinAndCast(): Promise<ActionResult | null> {
+    const offer = this.joinOffer
+    if (!offer) return null
+    this.joinOffer = null
+    await this.joinVote(offer.sessionId)
+    const vote = this.state?.vote
+    if (vote?.session.id !== offer.sessionId || vote.session.status !== 'open') return null
+    return this.cast(offer.shapeId, 1)
   }
 
   /**
@@ -808,12 +898,15 @@ export class WorkshopStore {
     if (vote.done || Object.keys(vote.myVotes).length > 0) return 'joined'
     const known = this.memo.get(sid)
     if (known) return known
+    let stored: string | null = null
     try {
-      const v = this.storage?.getItem(this.participationKey(sid))
-      return v === 'joined' || v === 'skipped' ? v : null
+      stored = this.storage?.getItem(this.participationKey(sid)) ?? null
     } catch {
-      return null
+      // not readable: as if nothing was stored
     }
+    if (stored === 'joined' || stored === 'skipped') return stored
+    // K3-1: whoever started the vote is in it, on every tab of theirs and after a reload (no banner for them)
+    return vote.session.createdBy === this.userId ? 'joined' : null
   }
 
   /**
@@ -827,6 +920,7 @@ export class WorkshopStore {
   }
 
   setParticipation(sid: string, v: Participation) {
+    if (this.joinOffer?.sessionId === sid) this.joinOffer = null
     try {
       this.storage?.setItem(this.participationKey(sid), v)
     } catch {
