@@ -16,11 +16,26 @@
 //    her attribution (the tldraw page stripped its drawn label from the SVG it rasterized; this page's
 //    PNG is not made from an SVG).
 import type { Locator, Page } from '@playwright/test'
-import { item, itemBounds, select, updateItem, viewport } from '../tests/support/canvas.ts'
+import {
+  expectSaved,
+  item,
+  itemBounds,
+  select,
+  startTextEditingWithKeyboard,
+  stopTextEditing,
+  typeText,
+  updateItem,
+  viewport,
+} from '../tests/support/canvas.ts'
 import { forgeSession, storedElement } from '../tests/support/excalidraw.ts'
 import { downloadFrom } from '../tests/support/present-export.ts'
 import { capture } from '../tests/support/screenshots.ts'
-import { closeWorkshopPopover, openWorkshopPopover } from '../tests/support/workshops.ts'
+import {
+  closeFacilitate,
+  closeWorkshopPopover,
+  facilitateEntry,
+  openWorkshopPopover,
+} from '../tests/support/workshops.ts'
 import {
   burstAnimation,
   bursts,
@@ -34,6 +49,7 @@ import {
   react,
   setHand,
 } from '../tests/support/workshops-2.ts'
+import { openBoardExport } from './present-kit.ts'
 import {
   clickPlusOne,
   expect,
@@ -52,6 +68,19 @@ import {
 } from './workshops-kit.ts'
 
 const EMOJIS = ['👍', '❤️', '😂', '🎉', '🤔', '👏']
+
+/** K3-3: the reactions bar by keyboard: the Facilitate button, Enter, down to "Reactions and raise hand", Enter. */
+async function reactionsByKeyboard(page: Page) {
+  await page.getByTestId('facilitate-button').focus()
+  await page.keyboard.press('Enter')
+  const entry = page.getByTestId('reactions-button')
+  await expect(page.getByTestId('facilitate-menu')).toBeVisible()
+  for (let i = 0; i < 5 && !(await entry.evaluate((el) => el === document.activeElement)); i++)
+    await page.keyboard.press('ArrowDown')
+  await expect(entry).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('reaction-bar')).toBeVisible()
+}
 /** The sender's cursor as `s` draws it, in overlay pixels (the board page's cursor layer), or null. */
 const cursorOnScreen = (s: WorkshopCanvasSession, userId: string) =>
   s.page.evaluate((uid) => {
@@ -96,14 +125,13 @@ test('reactions: a viewer’s reaction bursts for everyone (near her cursor when
   await expect(bar.getByTestId('reaction-option').first()).toBeFocused()
   await expect(bar.getByTestId('hand-toggle')).toBeEnabled()
   await closeReactionBar(c.page)
-  await expect(c.page.getByTestId('reactions-button')).toBeFocused()
+  // K3-3: the reactions are in the Facilitate menu; Escape gives the keyboard back to its button
+  await expect(c.page.getByTestId('facilitate-button')).toBeFocused()
 
   // By keyboard, with her pointer resting on the canvas: the others see the burst at her cursor.
   await pointerOnCanvas(c, a)
   const before = await cursorOnScreen(a, c.id)
-  await c.page.getByTestId('reactions-button').focus()
-  await c.page.keyboard.press('Enter')
-  await expect(c.page.getByTestId('reaction-bar')).toBeVisible()
+  await reactionsByKeyboard(c.page)
   for (let i = 0; i < 3; i++) await c.page.keyboard.press('ArrowRight')
   await expect(c.page.locator('[data-testid="reaction-option"][data-emoji="🎉"]')).toBeFocused()
   await c.page.keyboard.press('Enter')
@@ -161,8 +189,7 @@ test('reactions: a viewer’s reaction bursts for everyone (near her cursor when
   await c.page.mouse.move(400, 400)
   await c.page.mouse.move(420, 420, { steps: 3 })
   for (const s of [a, b]) await expect(bursts(s.page, c.id, '👍')).toHaveCount(0, { timeout: 5_000 })
-  await c.page.getByTestId('reactions-button').focus()
-  await c.page.keyboard.press('Enter')
+  await reactionsByKeyboard(c.page)
   await c.page.keyboard.press('Enter') // the first reaction, 👍
   await expect(bursts(a.page, c.id, '👍')).toHaveAttribute('data-placement', 'top')
   await expect(bursts(b.page, c.id, '👍')).toHaveAttribute('data-placement', 'top')
@@ -334,7 +361,8 @@ test('raise hand: a viewer and an editor raise hands, facilitators are told and 
   const c = await join('carol', 'viewer')
 
   await setHand(c.page, true)
-  await expect(c.page.getByTestId('reactions-button')).toHaveAttribute('data-hand', 'up')
+  await expect(await facilitateEntry(c.page, 'reactions-button')).toHaveAttribute('data-hand', 'up')
+  await closeFacilitate(c.page)
   for (const s of [a, b, c]) await expect(handsChip(s.page)).toHaveAttribute('data-count', '1')
   await expect(handsChip(c.page)).toHaveAttribute('data-mine', 'true')
   for (const s of [a, b])
@@ -367,7 +395,8 @@ test('raise hand: a viewer and an editor raise hands, facilitators are told and 
   // Alice lowers carol's hand: carol is told, and everyone's queue is down to bob.
   await queue.locator(`[data-testid="hand-row"][data-user-id="${c.id}"]`).getByTestId('hand-lower').click()
   await expect(c.page.getByTestId('hand-lowered-toast')).toContainText('Alice Park lowered your hand.')
-  await expect(c.page.getByTestId('reactions-button')).toHaveAttribute('data-hand', 'down')
+  await expect(await facilitateEntry(c.page, 'reactions-button')).toHaveAttribute('data-hand', 'down')
+  await closeFacilitate(c.page)
   for (const s of [a, b, c, d]) await expect(handsChip(s.page)).toHaveAttribute('data-count', '1')
   expect(await queueIds(queue)).toEqual([b.id])
   expect(await queueIds(dq)).toEqual([b.id])
@@ -439,7 +468,8 @@ test('after an api restart: raised hands were in memory, so every page drops the
 
   await stack.api.restart() // SIGKILL, then a fresh process (the hand registry starts empty)
   for (const s of [a, c]) await expect(handsChip(s.page)).toHaveCount(0, { timeout: 45_000 })
-  await expect(c.page.getByTestId('reactions-button')).toHaveAttribute('data-hand', 'down')
+  await expect(await facilitateEntry(c.page, 'reactions-button')).toHaveAttribute('data-hand', 'down')
+  await closeFacilitate(c.page)
   expect(await handsOnServer(a.api, board)).toEqual([])
 
   await setHand(c.page, true)
@@ -547,7 +577,7 @@ test('RETRO-03a + RETRO-07a: a facilitator hides note authors and cursors for ev
     // …and no export carries it: the note-author label is an overlay, which exports never draw, and the
     // exports embed no scene data (the tldraw page stripped its drawn label from the SVG instead).
     const dialog = b.page.getByTestId('export-dialog')
-    await b.page.getByTestId('export-button').click()
+    await openBoardExport(b.page)
     await expect(dialog).toBeVisible()
     await dialog.getByTestId('export-area-board').check()
     const png = await downloadFrom(b.page, () => dialog.getByTestId('export-png').click())
@@ -591,7 +621,13 @@ test('RETRO-03a: the note-author label on the board hides with "Hide note author
 }) => {
   const a = await join('alice')
   const b = await join('bob', 'editor')
-  await seed(a.page, { notes: [{ id: 'fr-authored', x: 0, y: 0, text: 'Anonymous idea' }] })
+  // K3-6: a note shows its author once someone typed its words (one made with them, as a template's or a
+  // paste's, shows nobody): alice makes it empty, as the note tool does, and types in it
+  await seed(a.page, { notes: [{ id: 'fr-authored', x: 0, y: 0 }] })
+  await startTextEditingWithKeyboard(a.page, 'fr-authored')
+  await typeText(a.page, 'Anonymous idea')
+  await stopTextEditing(a.page)
+  await expectSaved(a.page)
   await expectItemsEverywhere([b], ['fr-authored'])
   await showAll(b.page)
   const label = (page: Page) => page.locator('[data-testid="note-author"][data-note-id="fr-authored"]')
@@ -650,7 +686,7 @@ test('R2-07: an open workshop popover stays above the notices and the canvas cur
   const zIndex = () =>
     a.page.evaluate(() => Number(getComputedStyle(document.querySelector('.dr-topbar') as Element).zIndex))
   expect(await zIndex()).toBeGreaterThan(300)
-  await b.page.getByTestId('reactions-button').click()
+  await openReactionBar(b.page)
   await b.page.getByTestId('hand-toggle').click()
   await expect(pop.getByTestId('hands-queue')).toContainText(b.name)
   await a.page.waitForTimeout(500)
@@ -676,8 +712,7 @@ test('R2-07: an open workshop popover stays above the notices and the canvas cur
 
 test('A11Y2-05: the reactions bar closes when the keyboard leaves it', async ({ join }) => {
   const a = await join('alice')
-  await a.page.getByTestId('reactions-button').click()
-  const bar: Locator = a.page.getByTestId('reaction-bar')
+  const bar: Locator = await openReactionBar(a.page)
   await expect(bar).toBeVisible()
   const stops = await bar.locator('button').count()
   for (let i = 0; i < stops + 1; i++) await a.page.keyboard.press('Tab')

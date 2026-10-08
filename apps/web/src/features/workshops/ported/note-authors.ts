@@ -8,7 +8,8 @@
 //   sync server stamps it from the ticket when a text element is created with text or its text changes,
 //   and place-notes stamps the draft's author (or null for an anonymous reveal). The client never writes it.
 // - As tldraw's: nothing on a note without text or without an author; the first word of the name, with the
-//   whole name kept for the label's title.
+//   whole name kept for the label's title. K3-6: nothing on a note that arrived with its words (a template's,
+//   the sample's, a paste) until someone edits them (`madeWithItsWords`): the template is nobody's idea.
 // - The label sits in the note's bottom right corner. It is left out where Excalidraw would not show that
 //   corner: under an opaque element painted above the note (another note, an image, a filled shape; the
 //   same rule as the file-card faces), outside the note's frame (frames clip their children), on a
@@ -55,6 +56,39 @@ export function lastEditorOf(label: CanvasElement | undefined): { name: string }
     ?.lobbyServer
   const by = server?.lastEditedBy as { name?: unknown } | null | undefined
   return by && typeof by.name === 'string' && by.name.trim() ? { name: by.name.trim() } : null
+}
+
+interface ServerStamp {
+  readonly createdAt?: unknown
+  readonly lastEditedAt?: unknown
+  readonly privateNote?: unknown
+}
+
+const stampOf = (el: CanvasElement | undefined): ServerStamp | null => {
+  const s = (el?.customData as { lobbyServer?: unknown } | null | undefined)?.lobbyServer
+  return s && typeof s === 'object' ? (s as ServerStamp) : null
+}
+
+/** A template's prompt note (`customData.lobby.prompt`, what the template emitter writes: CR-3H-2). */
+const promptNote = (note: CanvasElement) =>
+  (note.customData as { lobby?: { prompt?: unknown } } | null | undefined)?.lobby?.prompt === 'true'
+
+/**
+ * K3-6: a note that came onto the board with its words already in it and that nobody has typed in since:
+ * a template's or the sample board's note, and a pasted, duplicated or generated one. The sync server
+ * stamps both elements of such a note in the one write that created them (canvas-schema LobbyServer:
+ * `createdAt` is that write's time on the note and on its label, and the label's `lastEditedAt` too), while
+ * a note made with the note tool gets its label later, when someone types in it, and any later typing
+ * moves the label's `lastEditedAt` on. A template's prompt note is told by its marker as well. Its "last
+ * editor" is only whoever put it there, so it shows no author until someone edits its words. Revealed
+ * private notes (`privateNote` on the note: place-notes writes the drafts' authors) keep their author.
+ */
+export function madeWithItsWords(note: CanvasElement, label: CanvasElement): boolean {
+  const n = stampOf(note)
+  const l = stampOf(label)
+  if (!l || n?.privateNote) return false
+  if (typeof l.createdAt !== 'number' || l.lastEditedAt !== l.createdAt) return false
+  return promptNote(note) || (typeof n?.createdAt === 'number' && n.createdAt === l.createdAt)
 }
 
 /**
@@ -192,7 +226,7 @@ export function noteAuthorsOf(
     const text = String((label as { originalText?: unknown }).originalText ?? '')
     if (!text.trim()) continue
     const by = lastEditorOf(label)
-    if (!by) continue
+    if (!by || madeWithItsWords(el, label)) continue
     const band = labelBandOf(el)
     if (occluders.covers(band, index)) continue
     const frameId = (el as { frameId?: string | null }).frameId

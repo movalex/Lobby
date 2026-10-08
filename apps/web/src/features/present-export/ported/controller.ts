@@ -11,6 +11,7 @@ import { downloadBlob } from '../download.ts'
 import { exportFilename } from '../filename.ts'
 import type { ExportFocus, ExportRequest } from '../present-types.ts'
 import { copyPng, exportTarget, renderPng, renderSvg } from './exporter.ts'
+import { presentLiveOf } from './live-slots.ts'
 import { createPresenter, type Presenter } from './presenter.ts'
 
 export type { ExportFocus, ExportRequest }
@@ -88,6 +89,9 @@ export function getController(canvas: LobbyCanvas): Controller {
     },
     present() {
       const result = presenter.start()
+      // K3-5: present-live offers a presentation started here to everyone on the board (its toast: "Chase is
+      // presenting · Follow"), when this person may present to everyone and someone else is here
+      if (result.ok) presentLiveOf(canvas).get()?.onLocalStart?.()
       if (result.ok || result.reason === 'already') return
       notify({
         key: 'present-export',

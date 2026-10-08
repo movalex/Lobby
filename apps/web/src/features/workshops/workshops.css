@@ -58,6 +58,131 @@
   }
 }
 
+/* K3-3: the one Facilitate button ("Session" for participants) and its live pill ("4:58 · Vote"). */
+.dr-wk-facilitate {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 4px 0 10px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 999px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 600 12.5px / 1 var(--dr-font);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dr-wk-facilitate[data-live="false"] {
+  padding-right: 10px;
+}
+.dr-wk-facilitate:hover,
+.dr-wk-facilitate[aria-expanded="true"] {
+  background: var(--dr-hover);
+}
+.dr-wk-facilitate:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 2px;
+}
+.dr-wk-facilitate__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--dr-navy);
+  color: #fff;
+  font-weight: 650;
+}
+.dr-wk-facilitate[data-timer-state="paused"] .dr-wk-facilitate__pill {
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+  box-shadow: inset 0 0 0 1px var(--dr-amber);
+}
+.dr-wk-facilitate[data-timer-state="finished"] .dr-wk-facilitate__pill {
+  background: var(--dr-danger-fill);
+  color: var(--dr-on-danger);
+  animation: dr-wk-pulse 1s ease-in-out 4;
+}
+.dr-wk-facilitate__part--timer {
+  font-family: var(--dr-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+}
+.dr-wk-facilitate__sep {
+  opacity: 0.7;
+}
+
+/* K3-3: the Facilitate menu (role menu): one entry per tool, its live state on the right. */
+.dr-wk-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 260px;
+  padding: 6px;
+  color: var(--dr-ink);
+  background: var(--dr-surface);
+  border: 1px solid var(--dr-line);
+  border-radius: 12px;
+  box-shadow: 0 8px 28px rgb(27 35 48 / 18%);
+}
+.dr-wk-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: 600 13px / 1.2 var(--dr-font);
+  text-align: start;
+  cursor: pointer;
+}
+.dr-wk-menu__item:hover,
+.dr-wk-menu__item:focus-visible {
+  background: var(--dr-hover);
+}
+.dr-wk-menu__item:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: -2px;
+}
+.dr-wk-menu__icon {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  color: var(--dr-ink-2);
+}
+.dr-wk-menu__label {
+  flex: 1 1 auto;
+  white-space: nowrap;
+}
+.dr-wk-menu__meta {
+  flex: none;
+  color: var(--dr-ink-2);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.dr-wk-menu__meta[data-state="running"] {
+  color: var(--dr-ink);
+  font-weight: 650;
+}
+.dr-wk-menu__meta--hands {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+  font-weight: 650;
+}
+
 .dr-wk-chip {
   display: inline-flex;
   align-items: center;
@@ -290,14 +415,16 @@ fieldset.dr-wk-stepper {
   padding: 0;
   border: 2px solid #fff;
   border-radius: 50%;
-  background: var(--dr-navy);
-  color: #fff;
+  /* K3-5: in the voter's presence colour, with the ink that reads on it (voting.ts dotInk) */
+  background: var(--dot, var(--dr-navy));
+  color: var(--dot-ink, #fff);
   font: 700 12px / 1 var(--dr-font);
   box-shadow: 0 1px 4px rgb(0 0 0 / 30%);
   cursor: pointer;
 }
 .dr-wk-dot:hover:not(:disabled) {
   background: var(--dr-danger-fill);
+  color: var(--dr-on-danger);
 }
 .dr-wk-dot:disabled {
   cursor: default;
@@ -425,6 +552,47 @@ button.dr-wk-badge--group:focus-visible {
 .dr-wk-prompt p {
   margin: 0;
 }
+/* K3-1: the "Vote started" banner: an accent edge, who started it, and an entrance once per vote. */
+.dr-wk-banner {
+  gap: 6px;
+  width: min(460px, 100%);
+  border-color: var(--dr-navy);
+  box-shadow:
+    inset 4px 0 0 var(--dr-navy),
+    0 6px 24px rgb(27 35 48 / 16%);
+  animation: dr-wk-banner-in 260ms ease-out;
+}
+.dr-wk-banner__eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--dr-ink-2);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.dr-wk-banner__cast {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@keyframes dr-wk-banner-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dr-wk-banner {
+    animation: none;
+  }
+}
 .dr-wk-follow {
   border-color: var(--dr-navy);
 }
@@ -483,6 +651,48 @@ button.dr-wk-badge--group:focus-visible {
   white-space: nowrap;
 }
 
+/* K3-2: the facilitator's line for a running vote or brainstorm: who has taken part, and a clear end. */
+.dr-wk-facilbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 6px 10px 6px 14px;
+  border: 1px solid var(--dr-navy);
+  border-radius: 12px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font-size: 13px;
+  box-shadow: 0 6px 24px rgb(27 35 48 / 16%);
+  pointer-events: auto;
+}
+.dr-wk-facilbar__what {
+  max-width: 22ch;
+  overflow: hidden;
+  color: var(--dr-ink-2);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-wk-facilbar__count {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.dr-wk-voted {
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.dr-wk-final {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--dr-paper);
+  font-weight: 600;
+}
+
 .dr-wk-flash {
   position: absolute;
   inset: 0;
@@ -535,6 +745,7 @@ button.dr-wk-badge--group:focus-visible {
 
 @media (prefers-reduced-motion: reduce) {
   .dr-wk-pill[data-state="finished"],
+  .dr-wk-facilitate[data-timer-state="finished"] .dr-wk-facilitate__pill,
   .dr-wk-flash {
     animation: none;
   }
@@ -961,12 +1172,44 @@ button.dr-wk-badge--group:focus-visible {
     opacity: 0;
   }
 }
+/* K3-5: the copies that spring from a reaction (features/workshops/reactions.ts burstCopies), staggered;
+   the first copy is the reaction itself and moves with the burst. */
+.dr-wk-burst__copies {
+  display: grid;
+  place-items: center;
+}
+.dr-wk-burst__copies > .dr-wk-burst__emoji {
+  grid-area: 1 / 1;
+}
+.dr-wk-burst__emoji[data-copy="spark"] {
+  font-size: 24px;
+  opacity: 0;
+  animation: dr-wk-burst-spark 1.4s ease-out var(--delay, 0ms) forwards;
+}
+@keyframes dr-wk-burst-spark {
+  0% {
+    opacity: 0;
+    transform: translate(0, 6px) scale(0.3) rotate(0deg);
+  }
+  25% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--dx, 0px), var(--rise, -32px)) scale(var(--scale, 0.8))
+      rotate(var(--turn, 0deg));
+  }
+}
 @media (prefers-reduced-motion: reduce) {
-  /* No movement or scaling: the reaction just appears and fades where it would have started. */
+  /* No movement or scaling: the reaction just appears and fades where it would have started (one copy). */
   .dr-wk-burst,
   .dr-wk-burst[data-placement="top"] {
     animation-name: dr-wk-burst-fade;
     animation-timing-function: linear;
+  }
+  .dr-wk-burst__emoji[data-copy="spark"] {
+    display: none;
+    animation: none;
   }
   .dr-wk-burst[data-placement="top"] {
     transform: translate(-50%, 0);
@@ -1085,6 +1328,7 @@ button.dr-wk-badge--group:focus-visible {
    (Last in the file, so it wins over the rules above.) */
 @media (max-width: 600px) {
   .dr-wk-pop,
+  .dr-wk-menu,
   .dr-wk-reactbar {
     position: fixed;
     top: calc(var(--dr-topbar-h) + 8px);
@@ -1095,5 +1339,46 @@ button.dr-wk-badge--group:focus-visible {
   }
   .dr-wk-pop {
     max-height: calc(100dvh - var(--dr-topbar-h) - 16px);
+  }
+}
+
+/* K3-5: the reveal's confetti (WorkshopOverlay.tsx RevealConfetti): an overlay only, no pointer, and none at
+   all for people who prefer reduced motion. */
+.dr-wk-confetti {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.dr-wk-confetti__piece {
+  position: absolute;
+  top: -14px;
+  width: 8px;
+  height: 13px;
+  border-radius: 2px;
+  opacity: 0;
+  animation: dr-wk-confetti-fall 1.8s cubic-bezier(0.25, 0.6, 0.5, 1) var(--delay, 0ms) forwards;
+}
+.dr-wk-confetti__piece:nth-child(3n) {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+@keyframes dr-wk-confetti-fall {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0) rotate(0deg);
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--drift, 0px), 72vh) rotate(var(--spin, 360deg));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dr-wk-confetti {
+    display: none;
   }
 }

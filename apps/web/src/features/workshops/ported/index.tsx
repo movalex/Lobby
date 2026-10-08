@@ -22,10 +22,13 @@ import type {
   LobbyCanvas,
 } from '../../../canvas/api/index.ts'
 import { knownUserKind } from '../../../invite/guest.tsx'
-import { react } from '../../../lib/signals.ts'
+import { atom, react } from '../../../lib/signals.ts'
+import { providePresentChrome } from '../../present-export/ported/insets.ts'
 import { installAudioUnlock } from '../chime.ts'
+import { timerDisplayPhase, timerRemainingMs } from '../countdown.ts'
 import { followSidOf } from '../follow.ts'
 import { privateStoreFor } from '../private-notes/hooks.ts'
+import type { WorkshopSnapshot } from '../store.ts'
 import { provideVoteResultsForExport, shownResults } from '../vote-export.ts'
 import { storeFor } from '../workshop-context.ts'
 import {
@@ -99,6 +102,46 @@ function announcePanelChanges(ctx: Ctx): () => void {
   const offs = [storeFor(ctx).subscribe(check), privateStoreFor(ctx).subscribe(check)]
   return () => {
     for (const off of offs) off()
+  }
+}
+
+/**
+ * What workshops floats over a presentation (WorkshopTopLayer's PresentingTimer and PresentingHands: a
+ * running or paused timer, raised hands), told to present mode (K3-4) as it changes. The timer's phase
+ * moves with the clock, so the end of a running timer is checked when it is due.
+ */
+export function presentChromeNow(
+  snap: Pick<WorkshopSnapshot, 'timer' | 'hands'>,
+  nowMs: number,
+  offsetMs: number,
+): { timer: boolean; hands: boolean } {
+  const phase = timerDisplayPhase(snap.timer, nowMs, offsetMs)
+  return { timer: phase === 'running' || phase === 'paused', hands: snap.hands.length > 0 }
+}
+
+function mountPresentChrome(ctx: Ctx): () => void {
+  const store = storeFor(ctx)
+  const chrome = atom('dr-wk-present-chrome', { timer: false, hands: false })
+  let due: ReturnType<typeof setTimeout> | null = null
+  const update = () => {
+    const snap = store.getSnapshot()
+    const offset = store.serverOffsetMs()
+    const next = presentChromeNow(snap, Date.now(), offset)
+    const cur = chrome.get()
+    if (cur.timer !== next.timer || cur.hands !== next.hands) chrome.set(next)
+    if (due) clearTimeout(due)
+    due = null
+    const left =
+      next.timer && snap.timer?.status === 'running' ? timerRemainingMs(snap.timer, Date.now(), offset) : 0
+    if (left > 0) due = setTimeout(update, left + 50)
+  }
+  update()
+  const offStore = store.subscribe(update)
+  const offProvide = providePresentChrome(ctx.canvas, () => chrome.get())
+  return () => {
+    if (due) clearTimeout(due)
+    offStore()
+    offProvide()
   }
 }
 
@@ -344,6 +387,10 @@ function mountWorkshops(ctx: Ctx) {
   // present-export reads them with `voteResultsForExport(canvas)` on this page.
   offs.push(provideVoteResultsForExport(canvas, () => shownResults(store.getSnapshot())))
 
+  // K3-4: while presenting, the live timer and the raised hands float over the top of the slides
+  // (WorkshopTopLayer): present mode fits each slide below them (present-export/ported/insets.ts).
+  offs.push(mountPresentChrome(ctx))
+
   return () => {
     for (const t of timers) clearTimeout(t)
     for (const off of offs.reverse()) off()
@@ -355,7 +402,8 @@ export const feature: CanvasFeature = {
   // tldraw's BOARD_FEATURES order (W5-50, ./chrome-order.test.ts): the workshop items before Present and
   // export (30) and Sharing (50); the Voting and Private notes panels after Comments and the navigation
   // panels, before History (70)
-  topBar: [{ id: 'workshops', order: 25, overflowCaption: 'Timer and voting', component: WorkshopBar }],
+  // K3-3: one Facilitate button (timer, reactions and hands, voting, the brainstorm)
+  topBar: [{ id: 'workshops', order: 25, overflowCaption: 'Facilitate', component: WorkshopBar }],
   // A guest sees the Voting and Private notes tabs only while a vote or a brainstorm exists (DANA-11 / F14 /
   // PRI-18; ./guest-chrome.ts); everyone with an account always does.
   panels: [
@@ -374,13 +422,14 @@ export const feature: CanvasFeature = {
   ],
   overlays: [
     // who last edited each note: part of the note's face, so under every other layer (tags' Show only
-    // veil and search's dimming included); shown while presenting, as tldraw's note face was
+    // veil and search's dimming included). K3-6: not on the slides while presenting (tldraw's note face
+    // kept it there; a deck is about the ideas, and exports never draw it either)
     {
       id: 'workshops-authors',
       layer: 'scene',
       order: 4,
       pointer: 'none',
-      focusMode: 'show',
+      focusMode: 'hide',
       component: NoteAuthorsLayer,
     },
     // the revealed counts sit under the top bar's popovers; the rest above the canvas's own chrome

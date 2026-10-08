@@ -1,7 +1,13 @@
 import { WorkshopState, type WorkshopTimer, type WorkshopVoteState } from '@draftroom/contracts'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { z } from 'zod'
-import { type EventSource, type RequestFn, WorkshopStore } from './store.ts'
+import {
+  type EventSource,
+  FIRST_LOAD_FALLBACK_MS,
+  type RequestFn,
+  WorkshopStore,
+  workshopStoreFor,
+} from './store.ts'
 
 const ISO = (ms: number) => new Date(Date.parse('2026-09-26T10:00:00.000Z') + ms).toISOString()
 const SID = 'vot_0123456789abcdefghij'
@@ -407,5 +413,252 @@ describe('results news (RETRO-08)', () => {
     h.store.announce('Voted. 2 of 3 left')
     expect(h.store.getSnapshot().announcement?.text).toBe('Voted. 2 of 3 left')
     expect(h.store.getSnapshot().announcement?.seq).toBe((first?.seq ?? 0) + 1)
+  })
+})
+
+describe('one /workshop request per board open (K3-6)', () => {
+  /** A stream that is already connected: onResync runs the listener at once, as BoardEvents does. */
+  class ConnectedEvents extends FakeEvents {
+    override onResync(l: () => void) {
+      const off = super.onResync(l)
+      l()
+      return off
+    }
+  }
+  const counting = () => {
+    const calls: string[] = []
+    const request = (async (method: string, path: string) => {
+      calls.push(`${method} ${path}`)
+      return WorkshopState.parse({ timer: null, vote: null, serverNow: ISO(0) })
+    }) as unknown as RequestFn
+    return { calls, request }
+  }
+  const make = (events: EventSource, request: RequestFn) => () =>
+    new WorkshopStore({ boardId: 'b-abc1234567', userId: 'usr_me0000000001', request, events, storage: null })
+
+  it('the stream connects after the store is made: its first resync is the one load', async () => {
+    vi.useFakeTimers()
+    try {
+      const { calls, request } = counting()
+      const events = new FakeEvents()
+      const store = workshopStoreFor(events, make(events, request))
+      await vi.advanceTimersByTimeAsync(500)
+      expect(calls).toEqual([]) // nothing before the stream says hello
+      for (const r of events.resync) r()
+      await vi.advanceTimersByTimeAsync(FIRST_LOAD_FALLBACK_MS * 2)
+      expect(calls).toEqual(['GET /api/boards/b-abc1234567/workshop'])
+      expect(store.getSnapshot().loaded).toBe(true)
+      // the same stream gets the same store: no second load
+      expect(workshopStoreFor(events, make(events, request))).toBe(store)
+      expect(calls).toHaveLength(1)
+      // a reconnect refetches, as always
+      for (const r of events.resync) r()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('the stream is already connected: the resync as the store subscribes is the one load', async () => {
+    vi.useFakeTimers()
+    try {
+      const { calls, request } = counting()
+      const events = new ConnectedEvents()
+      workshopStoreFor(events, make(events, request))
+      await vi.advanceTimersByTimeAsync(FIRST_LOAD_FALLBACK_MS * 2)
+      expect(calls).toEqual(['GET /api/boards/b-abc1234567/workshop'])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a stream that never connects: the store loads on its own after the fallback, once', async () => {
+    vi.useFakeTimers()
+    try {
+      const { calls, request } = counting()
+      const events = new FakeEvents()
+      const store = workshopStoreFor(events, make(events, request))
+      await vi.advanceTimersByTimeAsync(FIRST_LOAD_FALLBACK_MS - 1)
+      expect(calls).toEqual([])
+      await vi.advanceTimersByTimeAsync(2)
+      expect(calls).toHaveLength(1)
+      expect(store.getSnapshot().loaded).toBe(true)
+      await vi.advanceTimersByTimeAsync(FIRST_LOAD_FALLBACK_MS * 3)
+      expect(calls).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a store left before it loaded fetches nothing later', async () => {
+    vi.useFakeTimers()
+    try {
+      const { calls, request } = counting()
+      const events = new FakeEvents()
+      const store = workshopStoreFor(events, make(events, request))
+      store.dispose()
+      await vi.advanceTimersByTimeAsync(FIRST_LOAD_FALLBACK_MS * 2)
+      expect(calls).toEqual([])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('the "Vote started" banner (K3-1)', () => {
+  const event = (over: Partial<{ sessionId: string; status: string; totalVotesCast: number }> = {}) => ({
+    sessionId: SID,
+    status: 'open',
+    totalVotesCast: 0,
+    participants: 0,
+    participantsDone: 0,
+    endsAt: null,
+    ...over,
+  })
+
+  it('a vote-start event shows it to a participant who has not joined, once', async () => {
+    const h = harness({ timer: null, vote: null, serverNow: ISO(0) })
+    await h.store.refresh()
+    expect(h.store.getSnapshot().voteBanner).toBeNull()
+    h.setServer({ timer: null, vote: voteState(), serverNow: ISO(1) })
+    h.events.emit('workshop.vote', event())
+    await flush()
+    const banner = h.store.getSnapshot().voteBanner
+    expect(banner).toMatchObject({ sessionId: SID, title: 'Vote', votesPerPerson: 3, scope: 'board' })
+    expect(banner?.createdBy).toBe('usr_facilitator0001')
+    // count updates, refetches: the same banner, not a new one
+    h.events.emit('workshop.vote', event({ totalVotesCast: 2 }))
+    await h.store.refresh()
+    expect(h.store.getSnapshot().voteBanner?.seq).toBe(banner?.seq)
+  })
+
+  it('hides on join, and the join is the vote confirmed with the server', async () => {
+    const h = harness({ timer: null, vote: voteState(), serverNow: ISO(0) })
+    await h.store.refresh()
+    expect(h.store.getSnapshot().voteBanner).not.toBeNull()
+    const gets = h.calls.length
+    await h.store.joinVote(SID)
+    expect(h.store.getSnapshot().voteBanner).toBeNull()
+    expect(h.store.getSnapshot().participation).toBe('joined')
+    expect(h.calls.length).toBe(gets + 1) // G1: the join refetches the vote
+  })
+
+  it('hides on skip ("Not now"), for good', async () => {
+    const h = harness({ timer: null, vote: voteState(), serverNow: ISO(0) })
+    await h.store.refresh()
+    h.store.setParticipation(SID, 'skipped')
+    expect(h.store.getSnapshot().voteBanner).toBeNull()
+    await h.store.refresh()
+    expect(h.store.getSnapshot().voteBanner).toBeNull()
+  })
+
+  it('hides when the vote closes, and the next vote has a banner of its own', async () => {
+    const h = harness({ timer: null, vote: voteState(), serverNow: ISO(0) })
+    await h.store.refresh()
+    const first = h.store.getSnapshot().voteBanner?.seq
+    h.setServer({
+      timer: null,
+      vote: voteState({ session: { ...voteState().session, status: 'closed' } }),
+      serverNow: ISO(1),
+    })
+    h.events.emit('workshop.vote', event({ status: 'closed' }))
+    expect(h.store.getSnapshot().voteBanner).toBeNull() // at once, from the event
+    await flush()
+    expect(h.store.getSnapshot().voteBanner).toBeNull()
+    const next = voteState({
+      session: { ...voteState().session, id: 'vot_nextvote0000000000', title: 'Round 2' },
+    })
+    h.setServer({ timer: null, vote: next, serverNow: ISO(2) })
+    h.events.emit('workshop.vote', event({ sessionId: 'vot_nextvote0000000000' }))
+    await flush()
+    const banner = h.store.getSnapshot().voteBanner
+    expect(banner).toMatchObject({ sessionId: 'vot_nextvote0000000000', title: 'Round 2' })
+    expect(banner?.seq).not.toBe(first)
+  })
+
+  it('not for a participant who is not eligible (an archived board, presenting); back, as the same banner', async () => {
+    const h = harness({ timer: null, vote: voteState(), serverNow: ISO(0) })
+    h.store.setVoteEligible(false)
+    await h.store.refresh()
+    expect(h.store.getSnapshot().voteBanner).toBeNull()
+    h.store.setVoteEligible(true)
+    const seq = h.store.getSnapshot().voteBanner?.seq
+    expect(seq).toBeGreaterThan(0)
+    h.store.setVoteEligible(false)
+    expect(h.store.getSnapshot().voteBanner).toBeNull()
+    h.store.setVoteEligible(true)
+    expect(h.store.getSnapshot().voteBanner?.seq).toBe(seq) // shown once: not a new entrance
+  })
+
+  it('not for whoever started the vote (they are in it), nor for someone who already voted', async () => {
+    const h = harness({ timer: null, vote: null, serverNow: ISO(0) })
+    await h.store.refresh()
+    h.next(() => voteState())
+    await h.store.startVote({ votesPerPerson: 3, onePerObject: false, scope: 'board' })
+    expect(h.store.getSnapshot().voteBanner).toBeNull()
+    const other = harness({
+      timer: null,
+      vote: voteState({ myVotes: { 'shape:a': 1 }, myRemaining: 2 }),
+      serverNow: ISO(0),
+    })
+    await other.store.refresh()
+    expect(other.store.getSnapshot().voteBanner).toBeNull()
+  })
+
+  it('a click on a note before joining offers join and cast; nothing is cast before the join', async () => {
+    const h = harness({ timer: null, vote: voteState(), serverNow: ISO(0) })
+    await h.store.refresh()
+    h.store.offerJoin(SID, 'shape:note1')
+    expect(h.store.getSnapshot().joinOffer).toEqual({ sessionId: SID, shapeId: 'shape:note1' })
+    expect(h.calls.filter((c) => c.path.endsWith('/cast'))).toEqual([])
+    const order: string[] = []
+    h.next((c) => {
+      order.push(`${c.method} ${c.path}`)
+      return WorkshopState.parse({ timer: null, vote: voteState(), serverNow: ISO(1) })
+    })
+    h.next((c) => {
+      order.push(`${c.method} ${c.path}`)
+      return voteState({ myVotes: { 'shape:note1': 1 }, myRemaining: 2 })
+    })
+    const r = await h.store.joinAndCast()
+    expect(r?.ok).toBe(true)
+    expect(order).toEqual([`GET /api/boards/b-abc1234567/workshop`, `POST /api/votes/${SID}/cast`])
+    expect(h.calls.at(-1)?.body).toEqual({ shapeId: 'shape:note1', delta: 1 })
+    const snap = h.store.getSnapshot()
+    expect(snap.participation).toBe('joined')
+    expect(snap.voteBanner).toBeNull()
+    expect(snap.joinOffer).toBeNull()
+    expect(snap.ballot?.myVotes).toEqual({ 'shape:note1': 1 })
+  })
+
+  it('no offer without a banner (joined, skipped, or another vote)', async () => {
+    const h = harness({ timer: null, vote: voteState(), serverNow: ISO(0) })
+    await h.store.refresh()
+    h.store.offerJoin('vot_another0000000000', 'shape:x')
+    expect(h.store.getSnapshot().joinOffer).toBeNull()
+    h.store.setParticipation(SID, 'skipped')
+    h.store.offerJoin(SID, 'shape:x')
+    expect(h.store.getSnapshot().joinOffer).toBeNull()
+  })
+})
+
+describe('the vote’s starter is in it (K3-1)', () => {
+  it('on another tab, or after a reload: no banner, joined', async () => {
+    const calls: string[] = []
+    const request = (async (method: string, path: string) => {
+      calls.push(`${method} ${path}`)
+      return WorkshopState.parse({ timer: null, vote: voteState(), serverNow: ISO(0) })
+    }) as unknown as RequestFn
+    const store = new WorkshopStore({
+      boardId: 'b-abc1234567',
+      userId: 'usr_facilitator0001', // voteState()'s createdBy
+      request,
+      events: new FakeEvents(),
+      storage: null,
+    })
+    await store.refresh()
+    expect(store.getSnapshot().participation).toBe('joined')
+    expect(store.getSnapshot().voteBanner).toBeNull()
   })
 })

@@ -13,15 +13,15 @@ import {
   createNote,
   expect,
   expectSaved,
-  item,
   test,
   updateItem,
-  viewport,
   waitForCanvas,
   waitForItem,
 } from '../tests/support/canvas.ts'
 import { WEB_URL } from '../tests/support/ports.ts'
 import type { Users } from '../tests/support/users.ts'
+// K3-4: the slide is fitted in the room the presentation's insets leave (the kit reads them)
+import { expectSlideOnScreen } from './present-kit.ts'
 
 interface Deck {
   one: string
@@ -100,41 +100,19 @@ async function withDeck(a: CanvasSession, others: CanvasSession[]): Promise<Deck
   return deck
 }
 
-/** The frame is the slide on screen: inside the viewport, centred and fitted (camera animation done). */
-async function expectSlideOnScreen(page: Page, frameId: string) {
-  await expect
-    .poll(
-      async () => {
-        const f = await item(page, frameId)
-        const vp = await viewport(page)
-        if (!f) return false
-        const eps = 1
-        const inside =
-          f.x >= vp.x - eps &&
-          f.y >= vp.y - eps &&
-          f.x + f.width <= vp.x + vp.width + eps &&
-          f.y + f.height <= vp.y + vp.height + eps
-        const centre = Math.hypot(
-          f.x + f.width / 2 - (vp.x + vp.width / 2),
-          f.y + f.height / 2 - (vp.y + vp.height / 2),
-        )
-        const fill = Math.max(f.width / vp.width, f.height / vp.height)
-        return inside && centre < 1 && fill > 0.98
-      },
-      { message: `${frameId} fitted on screen`, timeout: 10_000 },
-    )
-    .toBe(true)
-}
-
-/** The presenter starts presenting and invites everyone. */
+/**
+ * The presenter starts presenting, to everyone: K3-5, with others on the board a Present is offered to
+ * everyone at once (their toast: "Alice Park is presenting · Follow"), so there is no "Invite everyone" to press
+ * and no message about it.
+ */
 async function presentToEveryone(page: Page) {
   const ui = presentUi(page)
   await ui.button.click()
   await expect(ui.overlay).toBeVisible()
-  await wake(page)
-  await live(page).inviteEveryone.click()
   await expect(live(page).presenting).toBeVisible()
-  await expect(live(page).flash).toContainText('Everyone on the board can now join your presentation')
+  await wake(page)
+  await expect(live(page).inviteEveryone).toHaveCount(0)
+  await expect(live(page).flash).toHaveCount(0)
 }
 
 async function joinPresentation(page: Page, presenterName: string) {

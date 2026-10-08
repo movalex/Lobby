@@ -21,7 +21,7 @@ import {
   type UpdatePrivateNoteInput,
 } from '@draftroom/contracts'
 import type { z } from 'zod'
-import { REFRESH_RETRY_MAX_MS, REFRESH_RETRY_MIN_MS, retryableError } from '../store.ts'
+import { firstLoad, REFRESH_RETRY_MAX_MS, REFRESH_RETRY_MIN_MS, retryableError } from '../store.ts'
 
 type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE'
 /** The subset of ApiClient['request'] the store needs (tests pass a fake). */
@@ -123,6 +123,9 @@ export class PrivateNotesStore {
   private retryTimer: ReturnType<typeof setTimeout> | null = null
   private retryMs = REFRESH_RETRY_MIN_MS
   private disposed = false
+  /** Refetches asked for so far (K3-6: the first load waits for the stream's resync to ask). */
+  private refreshes = 0
+  private cancelFirstLoad: () => void = () => {}
   /** Sessions whose end was already announced (the event and a response can both report it). */
   private readonly announced = new Set<string>()
   private readonly revealedHere = new Set<string>()
@@ -155,6 +158,7 @@ export class PrivateNotesStore {
   dispose() {
     this.disposed = true
     this.clearRetry()
+    this.cancelFirstLoad()
     for (const u of this.unsubscribers.splice(0)) u()
     this.listeners.clear()
     this.endListeners.clear()
@@ -244,7 +248,17 @@ export class PrivateNotesStore {
 
   private path = (p: string) => `/api/boards/${encodeURIComponent(this.boardId)}${p}`
 
+  /** Whether a refetch was asked for yet (K3-6 `firstLoad`). */
+  refreshAsked = () => this.refreshes > 0
+
+  /** The first load (K3-6): the stream's resync, or a fetch after `fallbackMs` without one. */
+  startFirstLoad(fallbackMs?: number) {
+    this.cancelFirstLoad()
+    this.cancelFirstLoad = firstLoad(this, fallbackMs)
+  }
+
   async refresh(): Promise<void> {
+    this.refreshes++
     const seq = ++this.seq
     try {
       const s = await this.request('GET', this.path('/private-brainstorm'), {
@@ -428,7 +442,11 @@ export class PrivateNotesStore {
 
 const stores = new WeakMap<object, PrivateNotesStore>()
 
-/** One store per board event stream (stable for the board session), created on first use. */
+/**
+ * One store per board event stream (stable for the board session), created on first use. It loads with
+ * the stream's first resync (K3-6: one /private-brainstorm request per board open), or on its own when the
+ * stream has not connected after FIRST_LOAD_FALLBACK_MS (../store.ts).
+ */
 export function privateNotesStoreFor(
   events: EventSource & object,
   make: () => PrivateNotesStore,
@@ -437,7 +455,7 @@ export function privateNotesStoreFor(
   if (!s) {
     s = make()
     stores.set(events, s)
-    void s.refresh()
+    s.startFirstLoad()
   }
   return s
 }

@@ -12,7 +12,6 @@ import type {
   MenuEntrySpec,
 } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
-import { EXPORT_OFF_TEXT } from '../../sharing/ported/export-policy.ts'
 import { workshopSettingsOf } from '../../workshops/ported/session-settings.ts'
 import { getController } from './controller.ts'
 import { ExportDialog } from './ExportDialog.tsx'
@@ -22,6 +21,10 @@ import '../present-export.css'
 export { presenterOf } from './controller.ts'
 export { type PresentLiveChrome, providePresentLive } from './live-slots.ts'
 
+/**
+ * The top bar's Present button, and the Export dialog wherever it was asked for (K3-3: the bar's own Export
+ * icon is gone, UXD-01: Board menu ▸ Export ▸ Export…, Ctrl/Cmd+P and the menus' Export as open it).
+ */
 function PresentExportTopBarItem({ ctx }: { ctx: CanvasFeatureContext }) {
   const controller = getController(ctx.canvas)
   const { title, id } = ctx.board
@@ -50,28 +53,6 @@ function PresentExportTopBarItem({ ctx }: { ctx: CanvasFeatureContext }) {
           <path d="M7 4.5v15l12-7.5z" fill="currentColor" />
         </svg>
         <span className="dr-pe-present__label">Present</span>
-      </button>
-      <button
-        type="button"
-        className="dr-iconbtn dr-pe-export-btn"
-        data-testid="export-button"
-        aria-label="Export"
-        aria-haspopup={canExport ? 'dialog' : undefined}
-        aria-disabled={canExport ? undefined : true}
-        data-export-off={canExport ? undefined : ''}
-        title={canExport ? 'Export: PNG, SVG, PDF, CSV' : EXPORT_OFF_TEXT}
-        onClick={() => controller.openExport()}
-      >
-        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-          <path
-            d="M12 4v11m0 0l-4.5-4.5M12 15l4.5-4.5M5 19.5h14"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.9"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
       </button>
       {request && (
         <ExportDialog
@@ -182,6 +163,8 @@ const CONTEXT_MENU: readonly MenuEntrySpec[] = [
   },
 ]
 const MAIN_MENU: readonly MenuEntrySpec[] = [
+  // K3-3: the dialog itself (PNG, SVG, PDF, CSV), as the top bar's Export icon opened it
+  { id: 'export-dialog', group: 'export', order: 10, label: 'Export…', command: 'present-export.export' },
   {
     id: 'export-as',
     group: 'export',
@@ -213,7 +196,7 @@ export const feature: CanvasFeature = {
     {
       id: 'present-export',
       order: 30,
-      overflowCaption: 'Present and export',
+      overflowCaption: 'Present',
       component: PresentExportTopBarItem,
     },
   ],

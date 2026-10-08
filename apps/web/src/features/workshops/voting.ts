@@ -2,6 +2,7 @@
 // caller's own ballot while casts are in flight. No editor, no DOM: unit-tested in Node.
 
 import type { VoteResult, WorkshopVoteState } from '@draftroom/contracts'
+import { contrastRatio } from '../../theme/contrast.ts'
 
 const MAX_TEXT_NODES = 2_000
 /** Rich-text nodes that end a line. */
@@ -76,6 +77,80 @@ export function describeProgress(v: {
   if (v.participants === 0 && v.totalVotesCast === 0) return 'Waiting for votes'
   const votes = `${v.totalVotesCast} vote${v.totalVotesCast === 1 ? '' : 's'} cast`
   return `${v.participantsDone} of ${v.participants} done · ${votes}`
+}
+
+/**
+ * K3-2: "x of y voted" for the facilitator, from the counts the api already sends (`participants`: people
+ * who cast a vote or said they are done; no ballot of anyone) and who is on the board now (the roster).
+ * `y` is the other people here, and this person once they voted themselves (whoever runs the vote need not
+ * vote); someone who voted and left still counts in `x`, so `y` is never below it.
+ */
+export function votedOf(input: { participants: number; othersHere: number; meIn: boolean }): {
+  voted: number
+  of: number
+} {
+  const voted = Math.max(0, input.participants)
+  return { voted, of: Math.max(voted, Math.max(0, input.othersHere) + (input.meIn ? 1 : 0)) }
+}
+
+/** #rgb, #rrggbb or #rrggbbaa as #rrggbb (lower case), or null. */
+export function opaqueHex(color: string): string | null {
+  const c = color.trim().toLowerCase()
+  const short = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/.exec(c)
+  if (short) return `#${short[1]}${short[1]}${short[2]}${short[2]}${short[3]}${short[3]}`
+  const long = /^#([0-9a-f]{6})(?:[0-9a-f]{2})?$/.exec(c)
+  return long ? `#${long[1]}` : null
+}
+
+/**
+ * K3-5: the ink for a vote dot's figure on the voter's presence colour: white or black, whichever reads
+ * better (every colour has 4.5:1 or more with one of the two).
+ */
+export function dotInk(fill: string): '#ffffff' | '#000000' {
+  const hex = opaqueHex(fill)
+  if (!hex) return '#ffffff'
+  return contrastRatio('#ffffff', hex) >= contrastRatio('#000000', hex) ? '#ffffff' : '#000000'
+}
+
+/** K3-5: one piece of the reveal's confetti. */
+export interface ConfettiPiece {
+  /** where it starts across the view, % */
+  x: number
+  delayMs: number
+  /** how far it drifts sideways as it falls, px */
+  drift: number
+  spin: number
+  color: string
+}
+
+/** The note palette's brighter fills (board-ops elements palette.ts NOTE_FILL). */
+const CONFETTI_COLOURS = ['#f6c453', '#f4a874', '#ef8c82', '#c5a4ea', '#a7b7f6', '#93cfa6', '#a6d8f3']
+export const CONFETTI_PIECES = 28
+
+/**
+ * K3-5: a short confetti fall over the board when a vote's results come in (an overlay only: nothing is
+ * written anywhere). None for people who prefer reduced motion. Deterministic for a `seed`.
+ */
+export function revealConfetti(reduced: boolean, seed = 1): ConfettiPiece[] {
+  if (reduced) return []
+  let h = (seed * 2654435761) >>> 0
+  const next = () => {
+    h = (Math.imul(h ^ (h >>> 15), 2246822507) + 0x9e3779b9) >>> 0
+    return h / 4294967296
+  }
+  return Array.from({ length: CONFETTI_PIECES }, (_, i) => ({
+    x: Math.round(((i + next()) / CONFETTI_PIECES) * 1000) / 10,
+    delayMs: Math.round(next() * 450),
+    drift: Math.round((next() - 0.5) * 160),
+    spin: Math.round(180 + next() * 540),
+    color: CONFETTI_COLOURS[i % CONFETTI_COLOURS.length] as string,
+  }))
+}
+
+/** "1 of 3 voted"; "Nobody else is here yet" while the facilitator is alone and has not voted. */
+export function describeVoted(v: { voted: number; of: number }): string {
+  if (v.of === 0) return 'Nobody else is here yet'
+  return `${v.voted} of ${v.of} voted`
 }
 
 // ---- result badges on the board (round-2 F3) ----------------------------------------------------------

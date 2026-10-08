@@ -1,6 +1,13 @@
 import type { PrivateBrainstorm, PrivateBrainstormState } from '@draftroom/contracts'
-import { describe, expect, it } from 'vitest'
-import { type EventSource, PrivateNotesStore, type RequestFn, type SessionEnded } from './store.ts'
+import { describe, expect, it, vi } from 'vitest'
+import { FIRST_LOAD_FALLBACK_MS } from '../store.ts'
+import {
+  type EventSource,
+  PrivateNotesStore,
+  privateNotesStoreFor,
+  type RequestFn,
+  type SessionEnded,
+} from './store.ts'
 
 const SID = 'pbs_0123456789abcdefghij'
 const ISO = '2026-09-27T10:00:00.000Z'
@@ -268,5 +275,52 @@ describe('asking people to write when a brainstorm starts (final review R2/R4)',
     const { store } = withMe(() => state())
     await store.refresh()
     expect(store.getSnapshot().startNews).toEqual({ sessionId: SID })
+  })
+})
+
+describe('one /private-brainstorm request per board open (K3-6)', () => {
+  const counting = () => {
+    const calls: string[] = []
+    const request = (async (method: string, path: string, opts: { schema: unknown }) => {
+      calls.push(`${method} ${path}`)
+      return (opts.schema as { parse(v: unknown): unknown }).parse(state({ session: null }))
+    }) as RequestFn
+    return { calls, request }
+  }
+
+  it('waits for the stream: its first resync is the one load, a reconnect loads again', async () => {
+    vi.useFakeTimers()
+    try {
+      const { calls, request } = counting()
+      const events = new FakeEvents()
+      const make = () => new PrivateNotesStore({ boardId: 'b-abc1234567', request, events })
+      const store = privateNotesStoreFor(events, make)
+      await vi.advanceTimersByTimeAsync(500)
+      expect(calls).toEqual([])
+      for (const r of events.resync) r()
+      await vi.advanceTimersByTimeAsync(FIRST_LOAD_FALLBACK_MS * 2)
+      expect(calls).toEqual(['GET /api/boards/b-abc1234567/private-brainstorm'])
+      expect(privateNotesStoreFor(events, make)).toBe(store)
+      for (const r of events.resync) r()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(calls).toHaveLength(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('without a stream it loads once, after the fallback', async () => {
+    vi.useFakeTimers()
+    try {
+      const { calls, request } = counting()
+      const events = new FakeEvents()
+      privateNotesStoreFor(events, () => new PrivateNotesStore({ boardId: 'b-abc1234567', request, events }))
+      await vi.advanceTimersByTimeAsync(FIRST_LOAD_FALLBACK_MS + 10)
+      expect(calls).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(FIRST_LOAD_FALLBACK_MS * 3)
+      expect(calls).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

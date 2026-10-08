@@ -9,7 +9,7 @@ import type { CanvasFeatureContext } from '../../../../canvas/api/index.ts'
 import { presenterOf, providePresentLive } from '../../ported/index.tsx'
 import type { Presenter } from '../../ported/presenter.ts'
 import { getLive } from './controller.ts'
-import { LiveBarControls, LiveTop } from './LiveUi.tsx'
+import { LiveBarControls, LiveTop, liveBannerShown } from './LiveUi.tsx'
 import { type LivePresenter, provideLivePresenter } from './presenter.ts'
 
 /** Present mode's presenter as the live controller sees it (slide ids are element ids on both sides). */
@@ -37,6 +37,8 @@ export function joinPresentMode(ctx: CanvasFeatureContext): () => void {
     Top: LiveTop,
     Bar: LiveBarControls,
     presentingLive: () => getLive(ctx.registries)?.presentingLive.get() ?? false,
+    banner: () => liveBannerShown(getLive(ctx.registries)),
+    onLocalStart: () => void getLive(ctx.registries)?.offerToEveryone(),
   })
   return () => {
     offChrome()

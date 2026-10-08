@@ -144,22 +144,46 @@ export async function expectItems(page: Page, ids: string[], timeout = 15_000): 
   for (const id of ids) await waitForItem(page, id, () => true, timeout)
 }
 
-/** How `frameId` sits in the view: fully inside, how far its centre is from the view's, how much it fills. */
+/**
+ * The screen px the presentation keeps free at each edge (K3-4: the floating timer and hands at the top, the
+ * control bar at the bottom), from the overlay's `data-insets` ("top|right|bottom|left"); none when not
+ * presenting.
+ */
+export async function presentInsets(page: Page) {
+  const raw = await page
+    .getByTestId('present-overlay')
+    .getAttribute('data-insets', { timeout: 1_000 })
+    .catch(() => null)
+  const [top = 0, right = 0, bottom = 0, left = 0] = (raw ?? '').split('|').map((n) => Number(n) || 0)
+  return { top, right, bottom, left }
+}
+
+/**
+ * How `frameId` sits in the view: fully inside, how far its centre is from the middle of the room the
+ * presentation's insets leave (the whole view when there are none), how much of that room it fills.
+ */
 export async function slidePlacement(page: Page, frameId: string) {
-  const [v, f] = await Promise.all([viewport(page), itemBounds(page, frameId)])
+  const [v, f, i] = await Promise.all([viewport(page), itemBounds(page, frameId), presentInsets(page)])
   if (!f) return null
   const eps = 1
+  const z = v.zoom || 1
+  const room = {
+    x: v.x + i.left / z,
+    y: v.y + i.top / z,
+    w: v.width - (i.left + i.right) / z,
+    h: v.height - (i.top + i.bottom) / z,
+  }
   return {
     inside:
-      f.x >= v.x - eps &&
-      f.y >= v.y - eps &&
-      f.x + f.width <= v.x + v.width + eps &&
-      f.y + f.height <= v.y + v.height + eps,
+      f.x >= room.x - eps &&
+      f.y >= room.y - eps &&
+      f.x + f.width <= room.x + room.w + eps &&
+      f.y + f.height <= room.y + room.h + eps,
     centreOffset: Math.hypot(
-      f.x + f.width / 2 - (v.x + v.width / 2),
-      f.y + f.height / 2 - (v.y + v.height / 2),
+      f.x + f.width / 2 - (room.x + room.w / 2),
+      f.y + f.height / 2 - (room.y + room.h / 2),
     ),
-    fill: Math.max(f.width / v.width, f.height / v.height),
+    fill: Math.max(f.width / room.w, f.height / room.h),
   }
 }
 
@@ -358,4 +382,15 @@ export async function pngRegionStats(
     },
     { b64: png.toString('base64'), regions },
   )
+}
+
+/**
+ * K3-3: the Export dialog from the board menu (Board menu ▸ Export ▸ Export…). The top bar has no Export icon
+ * now (UXD-01); Ctrl/Cmd+P opens the dialog at PDF.
+ */
+export async function openBoardExport(page: Page): Promise<void> {
+  await page.getByTestId('main-menu.button').click()
+  await page.getByTestId('main-menu-sub.export-button').click()
+  await page.getByTestId('main-menu.export-dialog').click()
+  await expect(page.getByTestId('export-dialog')).toBeVisible()
 }

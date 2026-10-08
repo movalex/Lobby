@@ -103,22 +103,45 @@ export interface ScreenRect {
 }
 
 /**
- * Where a slide sits on screen once the camera has fitted it (tldraw `zoomToBounds` with inset 0: the
- * zoom that fits both sides, clamped to the camera's zoom range, centred). The presentation's surround
- * keeps this window fixed while the camera flies between slides.
+ * Screen px kept free at each edge of the view (K3-4): the presentation's own chrome sits there (the live
+ * timer and raised hands at the top, the control bar at the bottom), so a slide fitted inside them is
+ * never covered.
+ */
+export interface Insets {
+  top: number
+  right: number
+  bottom: number
+  left: number
+}
+
+export const NO_INSETS: Readonly<Insets> = { top: 0, right: 0, bottom: 0, left: 0 }
+
+/** The same inset on every side. */
+export const evenInsets = (px: number): Insets => ({ top: px, right: px, bottom: px, left: px })
+
+/**
+ * Where a slide sits on screen once the camera has fitted it: the zoom that fits both sides inside the
+ * view less `insets` (tldraw `zoomToBounds`; no insets is its inset 0), clamped to the camera's zoom
+ * range, centred in that safe area. The presentation's surround keeps this window fixed while the camera
+ * flies between slides.
  */
 export function fittedSlideRect(
   bounds: SlideBox,
   viewport: { w: number; h: number },
   zoomRange: { min: number; max: number },
+  insets: Readonly<Insets> = NO_INSETS,
 ): ScreenRect {
   const w = Math.max(bounds.w, 1e-6)
   const h = Math.max(bounds.h, 1e-6)
-  const fit = Math.min(viewport.w / w, viewport.h / h)
+  const room = {
+    w: Math.max(1, viewport.w - insets.left - insets.right),
+    h: Math.max(1, viewport.h - insets.top - insets.bottom),
+  }
+  const fit = Math.min(room.w / w, room.h / h)
   const zoom = Math.max(zoomRange.min, Math.min(zoomRange.max, fit))
   const sw = w * zoom
   const sh = h * zoom
-  return { x: (viewport.w - sw) / 2, y: (viewport.h - sh) / 2, w: sw, h: sh, zoom }
+  return { x: insets.left + (room.w - sw) / 2, y: insets.top + (room.h - sh) / 2, w: sw, h: sh, zoom }
 }
 
 /** Moves by `delta` without wrapping (presentations stop at the first and last slide). */

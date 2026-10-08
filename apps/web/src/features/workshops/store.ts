@@ -88,6 +88,24 @@ export interface WorkshopSnapshot {
   myHand: RaisedHand | null
   /** A request (from a toast or the hands chip) to open the workshop tools at a section. */
   toolsRequest: { seq: number; section: 'hands' | null } | null
+  /**
+   * K3-1: the "Vote started" banner: an open vote this person has neither joined nor skipped, while they may
+   * vote here (`setVoteEligible`). `seq` is the vote's: it comes up once per vote (the banner's entrance and
+   * its announcement), not again for every count update, refetch or a stretch of not being eligible.
+   */
+  voteBanner: VoteBanner | null
+  /** K3-1: an object this person clicked before joining: the banner offers to join and give it a dot. */
+  joinOffer: { sessionId: string; shapeId: string } | null
+}
+
+export interface VoteBanner {
+  sessionId: string
+  title: string
+  votesPerPerson: number
+  scope: WorkshopVoteState['session']['scope']
+  /** who started it (a user id; the UI names them from the people on the board) */
+  createdBy: string
+  seq: number
 }
 
 /** A reaction to show: from the event stream (someone else) or from this tab (`mine`). */
@@ -116,6 +134,30 @@ const CLOCK_SAMPLE_MAX_AGE_MS = 60_000
 /** A failed refetch is tried again after this long, then twice as long each time, up to the max (G1). */
 export const REFRESH_RETRY_MIN_MS = 1_000
 export const REFRESH_RETRY_MAX_MS = 15_000
+
+/**
+ * K3-6: a board open fetched /workshop (and /private-brainstorm) twice: once when the store was made and
+ * once at the event stream's first resync, which comes at once or a moment later. The first load is now
+ * that resync's refetch alone; only a stream that has not connected after this long (slow or down) makes
+ * the store fetch on its own (and its later resync fetches again, as every reconnect does).
+ */
+export const FIRST_LOAD_FALLBACK_MS = 3_000
+
+/**
+ * The first load of a store fed by an event stream (K3-6): nothing when a refetch was already asked for
+ * (the stream was connected, so its resync ran as the store subscribed), else one fetch after `fallbackMs`
+ * unless the resync (or anything else) asked first. Returns the cancel.
+ */
+export function firstLoad(
+  store: { refreshAsked(): boolean; refresh(): Promise<void> },
+  fallbackMs = FIRST_LOAD_FALLBACK_MS,
+): () => void {
+  if (store.refreshAsked()) return () => {}
+  const t = setTimeout(() => {
+    if (!store.refreshAsked()) void store.refresh()
+  }, fallbackMs)
+  return () => clearTimeout(t)
+}
 
 /**
  * Whether a failed request may succeed if sent again: no answer at all, a server error, a rate limit or
@@ -187,6 +229,12 @@ export class WorkshopStore {
   private hands: RaisedHand[] = []
   private handsVersion: HandsVersion | null = null
   private toolsRequest: WorkshopSnapshot['toolsRequest'] = null
+  /** K3-1: whether this person may vote here now (an active board, not presenting): the UI says. */
+  private voteEligible = true
+  /** K3-1: the banner's seq per vote, given the first time the vote's banner came up. */
+  private readonly bannerSeqs = new Map<string, number>()
+  private bannerSeq = 0
+  private joinOffer: WorkshopSnapshot['joinOffer'] = null
   private readonly throttle = new ReactionThrottle()
   private readonly reactionListeners = new Set<(r: ReactionShown) => void>()
   private readonly handListeners = new Set<(changes: HandChange[]) => void>()
@@ -202,6 +250,9 @@ export class WorkshopStore {
   /** The highest refetch seq that failed: an older answer does not make the store current again (as private-notes/store.ts). */
   private failedSeq = 0
   private disposed = false
+  /** Refetches asked for so far (K3-6: the first load waits for the stream's resync to ask). */
+  private refreshes = 0
+  private cancelFirstLoad: () => void = () => {}
 
   constructor(deps: {
     boardId: string
@@ -231,6 +282,7 @@ export class WorkshopStore {
   dispose() {
     this.disposed = true
     this.clearRetry()
+    this.cancelFirstLoad()
     for (const u of this.unsubscribers.splice(0)) u()
     this.listeners.clear()
     this.reactionListeners.clear()
@@ -272,7 +324,73 @@ export class WorkshopStore {
       hands: this.hands,
       myHand: this.hands.find((h) => h.userId === this.userId) ?? null,
       toolsRequest: this.toolsRequest,
+      ...this.bannerAndOffer(vote, sid ? this.readParticipation(sid, vote) : null),
     }
+  }
+
+  /** K3-1: the banner for `vote` (see WorkshopSnapshot.voteBanner), and the click offer that goes with it. */
+  private bannerAndOffer(
+    vote: WorkshopVoteState | null,
+    participation: Participation | null,
+  ): Pick<WorkshopSnapshot, 'voteBanner' | 'joinOffer'> {
+    if (vote?.session.status !== 'open' || participation !== null || !this.voteEligible)
+      return { voteBanner: null, joinOffer: null }
+    const s = vote.session
+    let seq = this.bannerSeqs.get(s.id)
+    if (seq === undefined) {
+      seq = ++this.bannerSeq
+      this.bannerSeqs.set(s.id, seq)
+    }
+    return {
+      voteBanner: {
+        sessionId: s.id,
+        title: s.title,
+        votesPerPerson: s.votesPerPerson,
+        scope: s.scope,
+        createdBy: s.createdBy,
+        seq,
+      },
+      joinOffer: this.joinOffer?.sessionId === s.id ? this.joinOffer : null,
+    }
+  }
+
+  /** K3-1: whether this person may vote here now (the board is active and they are not presenting). */
+  setVoteEligible(eligible: boolean) {
+    if (this.voteEligible === eligible) return
+    this.voteEligible = eligible
+    this.emit()
+  }
+
+  /**
+   * K3-1: a click on an object the open vote takes, before joining it: the banner offers to join and give it
+   * a dot. Nothing is sent (no cast before the join); only while the banner is up.
+   */
+  offerJoin(sessionId: string, shapeId: string) {
+    const banner = this.snap.voteBanner
+    if (banner?.sessionId !== sessionId) return
+    if (this.joinOffer?.sessionId === sessionId && this.joinOffer.shapeId === shapeId) return
+    this.joinOffer = { sessionId, shapeId }
+    this.emit()
+  }
+
+  clearJoinOffer() {
+    if (!this.joinOffer) return
+    this.joinOffer = null
+    this.emit()
+  }
+
+  /**
+   * K3-1: the banner's "Join and vote" with an object picked: joins (the vote confirmed with the server
+   * first, G1), then casts one dot on it if that vote is still the open one. The cast is sent after the join.
+   */
+  async joinAndCast(): Promise<ActionResult | null> {
+    const offer = this.joinOffer
+    if (!offer) return null
+    this.joinOffer = null
+    await this.joinVote(offer.sessionId)
+    const vote = this.state?.vote
+    if (vote?.session.id !== offer.sessionId || vote.session.status !== 'open') return null
+    return this.cast(offer.shapeId, 1)
   }
 
   /**
@@ -331,12 +449,22 @@ export class WorkshopStore {
 
   // ---- loading and events --------------------------------------------------------------------------
 
+  /** Whether a refetch was asked for yet (K3-6 `firstLoad`). */
+  refreshAsked = () => this.refreshes > 0
+
+  /** The first load (K3-6): the stream's resync, or a fetch after `fallbackMs` without one. */
+  startFirstLoad(fallbackMs?: number) {
+    this.cancelFirstLoad()
+    this.cancelFirstLoad = firstLoad(this, fallbackMs)
+  }
+
   /**
    * Fetches the workshop state (the caller's own view of the vote). A failure keeps the state shown
    * (marked stale) and is tried again, sooner or later, until a refetch succeeds (G1): the event that
    * asked for it does not come twice.
    */
   async refresh(): Promise<void> {
+    this.refreshes++
     const seq = ++this.seq
     try {
       const sentAt = this.nowMs()
@@ -770,12 +898,15 @@ export class WorkshopStore {
     if (vote.done || Object.keys(vote.myVotes).length > 0) return 'joined'
     const known = this.memo.get(sid)
     if (known) return known
+    let stored: string | null = null
     try {
-      const v = this.storage?.getItem(this.participationKey(sid))
-      return v === 'joined' || v === 'skipped' ? v : null
+      stored = this.storage?.getItem(this.participationKey(sid)) ?? null
     } catch {
-      return null
+      // not readable: as if nothing was stored
     }
+    if (stored === 'joined' || stored === 'skipped') return stored
+    // K3-1: whoever started the vote is in it, on every tab of theirs and after a reload (no banner for them)
+    return vote.session.createdBy === this.userId ? 'joined' : null
   }
 
   /**
@@ -789,6 +920,7 @@ export class WorkshopStore {
   }
 
   setParticipation(sid: string, v: Participation) {
+    if (this.joinOffer?.sessionId === sid) this.joinOffer = null
     try {
       this.storage?.setItem(this.participationKey(sid), v)
     } catch {
@@ -807,13 +939,17 @@ export class WorkshopStore {
 
 const stores = new WeakMap<object, WorkshopStore>()
 
-/** One store per board event stream (stable for the board session), created on first use. */
+/**
+ * One store per board event stream (stable for the board session), created on first use. It loads with
+ * the stream's first resync (K3-6: one /workshop request per board open), or on its own when the stream
+ * has not connected after FIRST_LOAD_FALLBACK_MS.
+ */
 export function workshopStoreFor(events: EventSource & object, make: () => WorkshopStore): WorkshopStore {
   let s = stores.get(events)
   if (!s) {
     s = make()
     stores.set(events, s)
-    void s.refresh()
+    s.startFirstLoad()
   }
   return s
 }

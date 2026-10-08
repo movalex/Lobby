@@ -37,17 +37,18 @@ export function NoteAuthorsLayer({ ctx }: { ctx: CanvasFeatureContext }) {
 }
 
 function NoteAuthors({ canvas }: { canvas: LobbyCanvas }) {
-  // what to draw follows the elements (and this tab's editor); where, the camera
-  const all = useValue(
-    'dr-wk-authors',
-    () =>
-      noteAuthorsOf(canvas.items(), {
-        get: (id) => canvas.get(id),
-        hidden: (id) => canvas.isHidden(id),
-        editing: canvas.editingId(),
-      }),
-    [canvas],
-  )
+  // what to draw follows the elements (and this tab's editor); where, the camera. K3-6: and this tab's save
+  // state: the server stamps a label's editor in its answer to the edit, which lands without a new element
+  // version (the board's change signal), so the label of the note just typed in showed only at the board's
+  // next change; the save settling is when that answer is in.
+  const all = useValue('dr-wk-authors', () => {
+    canvas.saveStatus()
+    return noteAuthorsOf(canvas.items(), {
+      get: (id) => canvas.get(id),
+      hidden: (id) => canvas.isHidden(id),
+      editing: canvas.editingId(),
+    })
+  }, [canvas])
   const shown = useValue('dr-wk-authors-shown', () => {
     const v = canvas.viewport.get()
     const m = VIEW_MARGIN_PX / v.zoom

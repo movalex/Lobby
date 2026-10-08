@@ -11,6 +11,7 @@ import { writeFileSync } from 'node:fs'
 import type { Page } from '@playwright/test'
 import { downloadFrom, parseCsv, readPng } from '../tests/support/present-export.ts'
 import { workshopState } from '../tests/support/workshops.ts'
+import { openBoardExport } from './present-kit.ts'
 import {
   expect,
   expectItemsEverywhere,
@@ -49,7 +50,7 @@ test('R14 on the new canvas: a revealed vote’s badges are in the SVG (and the 
 
   const dialog = a.page.getByTestId('export-dialog')
   const openExport = async (page: Page) => {
-    await page.getByTestId('export-button').click()
+    await openBoardExport(page) // K3-3: Board menu ▸ Export ▸ Export…
     await expect(dialog).toBeVisible()
     await dialog.getByTestId('export-area-board').check()
   }

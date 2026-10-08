@@ -431,8 +431,10 @@ test.describe('present mode', () => {
     expect(await facts(a.page)).toEqual(before)
     expect(await item(a.page, EXTRA)).not.toBeNull()
 
-    // Tab stays inside the presentation controls, in order, and wraps; Shift+Tab goes back. "Present to
-    // everyone" is present-live's (3c), in the chrome since the wave-3 integration, as on the tldraw page.
+    // Tab stays inside the presentation controls, in order, and wraps; Shift+Tab goes back. Present-live's
+    // (3c) controls are in the chrome since the wave-3 integration: with bob on the board the Present is
+    // offered to everyone at once (K3-5), so the bar holds "Hand over" instead of "Invite everyone".
+    await expect(a.page.getByTestId('live-presenting')).toBeVisible()
     const seen: (string | null)[] = []
     for (let i = 0; i < 6; i++) {
       await a.page.keyboard.press('Tab')
@@ -442,7 +444,7 @@ test.describe('present mode', () => {
       'present-prev',
       'present-next',
       'present-grid-toggle',
-      'present-invite', // present-live (3c): alice may present to everyone
+      'present-handoff', // present-live (3c): alice presents to everyone (K3-5)
       'present-exit',
       'present-prev',
     ])

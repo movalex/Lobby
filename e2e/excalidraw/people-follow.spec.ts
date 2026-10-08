@@ -80,12 +80,11 @@ test('W5-23 and W5-51: after Gather, the follower keeps one flat "Stop following
   expect(Math.abs(pill.width - btn.width)).toBeLessThanOrEqual(1)
   expect(Math.abs(pill.height - btn.height)).toBeLessThanOrEqual(1)
 
-  // alice presents to everyone: bob gets the invitation and is still following her
+  // alice presents (to everyone: K3-5 offers a Present to everyone on the board at once): bob gets the
+  // invitation and is still following her
   await a.page.getByTestId('present-button').click()
   await expect(a.page.getByTestId('present-overlay')).toBeVisible()
-  const vp = a.page.viewportSize() ?? { width: 1280, height: 720 }
-  await a.page.mouse.move(vp.width / 2, vp.height / 2, { steps: 2 })
-  await a.page.getByTestId('present-invite').click()
+  await expect(a.page.getByTestId('live-presenting')).toBeVisible()
   const invite = b.page.getByTestId('live-invite')
   await expect(invite).toContainText('Alice Park is presenting')
   expect(await followingSid(b.page)).toBe(aliceSid)

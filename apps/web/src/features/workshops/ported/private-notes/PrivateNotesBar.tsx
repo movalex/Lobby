@@ -1,8 +1,8 @@
 // OWNER: 3f. Top-bar and canvas pieces for private brainstorming on the Excalidraw page (the tldraw
-// board's private-notes/PrivateNotesBar.tsx), rendered by WorkshopBar and the workshops overlay: a chip
-// while a session is active ("Private brainstorm · 7 notes from 4 people", opens the panel), the setup
-// dialog, the start prompt and phone reminder on the canvas, and a section in the workshop tools popover
-// (start one, or open the panel).
+// board's private-notes/PrivateNotesBar.tsx), rendered by WorkshopBar and the workshops overlay: an entry of
+// the Facilitate menu while a session is active ("Private brainstorm · 7 notes from 4 people", opens the
+// panel; a top-bar chip until K3-3), the setup dialog, the start prompt and phone reminder on the canvas,
+// and a section in the workshop tools popover (start one, or open the panel).
 
 import { useEffect } from 'react'
 import type { CanvasFeatureContext } from '../../../../canvas/api/index.ts'
@@ -15,38 +15,50 @@ import '../../private-notes/private-notes.css'
 
 type Ctx = CanvasFeatureContext
 
-export function PrivateNotesChip({ ctx }: { ctx: Ctx }) {
+/**
+ * The Facilitate menu's "Private brainstorm" entry while a session is active (K3-3: it was a top-bar chip,
+ * "Private brainstorm · 7 notes from 4 people"): the same test ids and words, and it opens the panel.
+ */
+export function PrivateNotesEntry({ ctx, onDone }: { ctx: Ctx; onDone(): void }) {
   const { store, snap } = usePrivateNotes(ctx)
   const s = snap.session
+  if (!s) return null
   const counts = describeCounts(snap.counts)
   // Someone who can write and has not yet is asked to (R4); whoever can reveal keeps the counts.
   const invite = canEditBoard(ctx) && !snap.canReveal && snap.myNotes.length === 0
   return (
-    <>
-      {s && (
-        <button
-          type="button"
-          className="dr-wk-chip dr-pn-chip"
-          data-testid="pn-chip"
-          data-state={s.status}
-          aria-label={`Private brainstorm: ${counts}. Open private notes`}
-          title="Open private notes"
-          onClick={() => {
-            // Someone who can write goes straight to the note box (A11Y2-01).
-            if (s.status === 'open' && canEditBoard(ctx)) store.requestComposeFocus()
-            ctx.openPanel(PRIVATE_PANEL_ID)
-          }}
-        >
-          <LockIcon />
-          <span className="dr-pn-chip__label">Private brainstorm</span>
-          <span className="dr-pn-chip__counts" data-testid="pn-chip-counts">
-            {chipCounts(s.status, snap.counts, invite)}
-          </span>
-        </button>
-      )}
-      {snap.setupOpen && <SetupDialog ctx={ctx} store={store} onClose={() => store.setSetupOpen(false)} />}
-    </>
+    <button
+      type="button"
+      role="menuitem"
+      className="dr-wk-menu__item dr-pn-chip"
+      data-testid="pn-chip"
+      data-state={s.status}
+      aria-label={`Private brainstorm: ${counts}. Open private notes`}
+      title="Open private notes"
+      onClick={() => {
+        onDone()
+        // Someone who can write goes straight to the note box (A11Y2-01).
+        if (s.status === 'open' && canEditBoard(ctx)) store.requestComposeFocus()
+        ctx.openPanel(PRIVATE_PANEL_ID)
+      }}
+    >
+      <span className="dr-wk-menu__icon" aria-hidden="true">
+        <LockIcon />
+      </span>
+      <span className="dr-wk-menu__label dr-pn-chip__label">Private brainstorm</span>
+      <span className="dr-wk-menu__meta dr-pn-chip__counts" data-testid="pn-chip-counts">
+        {chipCounts(s.status, snap.counts, invite)}
+      </span>
+    </button>
   )
+}
+
+/** The private brainstorm's setup dialog, wherever it was asked for (the tools popover, the panel). */
+export function PrivateNotesSetup({ ctx }: { ctx: Ctx }) {
+  const { store, snap } = usePrivateNotes(ctx)
+  return snap.setupOpen ? (
+    <SetupDialog ctx={ctx} store={store} onClose={() => store.setSetupOpen(false)} />
+  ) : null
 }
 
 /**
@@ -145,6 +157,52 @@ export function PrivateNotesReminder({ ctx }: { ctx: Ctx }) {
       <LockIcon />
       <span>Private brainstorm · {n === 0 ? 'Add your notes' : `Your notes (${n})`}</span>
     </button>
+  )
+}
+
+/**
+ * K3-2: whoever may end the brainstorm (its starter, a board owner) sees it on the board while it runs: the
+ * notes submitted so far (counts only: nobody's text before the reveal), "Reveal" (the panel's reveal), and
+ * the panel (its Cancel asks first). Not while the Private notes panel, which says the same, is open.
+ */
+export function PrivateNotesFacilitatorBar({ ctx }: { ctx: Ctx }) {
+  const { store, snap } = usePrivateNotes(ctx)
+  const s = snap.session
+  if (s?.status !== 'open' || !snap.canReveal || ctx.activePanel === PRIVATE_PANEL_ID) return null
+  const n = snap.counts.notes
+  return (
+    <section
+      className="dr-wk-facilbar dr-pn-facilbar"
+      aria-label="Your private brainstorm"
+      data-testid="pn-facilitator-bar"
+    >
+      <LockIcon />
+      <span className="dr-wk-facilbar__what">Private brainstorm</span>
+      <span className="dr-wk-facilbar__count" data-testid="pn-bar-counts" data-notes={n} aria-live="polite">
+        {describeCounts(snap.counts)}
+      </span>
+      <button
+        type="button"
+        className="dr-btn dr-btn--primary dr-btn--sm"
+        data-testid="pn-bar-reveal"
+        disabled={snap.busy !== null}
+        onClick={async () => {
+          const r = await store.reveal()
+          if (!r.ok && r.error)
+            ctx.notify({ key: 'pn-reveal', text: r.error, tone: 'error', testId: 'pn-toast' })
+        }}
+      >
+        {snap.busy === 'reveal' ? 'Revealing…' : n === 0 ? 'Reveal' : `Reveal ${n} note${n === 1 ? '' : 's'}`}
+      </button>
+      <button
+        type="button"
+        className="dr-linkbtn"
+        data-testid="pn-bar-open"
+        onClick={() => ctx.openPanel(PRIVATE_PANEL_ID)}
+      >
+        More
+      </button>
+    </section>
   )
 }
 

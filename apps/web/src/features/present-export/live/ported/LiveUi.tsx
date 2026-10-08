@@ -1,6 +1,7 @@
 // OWNER: 3c. Present to everyone (present-live) on the Excalidraw board page: what people see (the tldraw
 // page's ../LiveUi.tsx).
-// - On the board: an invitation when someone presents ("Chase is presenting · Join / Not now"), and a
+// - On the board: a toast when someone presents ("Chase is presenting · Follow / Not now"; K3-5: a Present
+//   started by someone who may present to everyone is offered to everyone at once), and a
 //   top-bar chip to rejoin after "Not now" or "Stop following" (or, for the presenter's other tabs,
 //   "Present here").
 // - In the presentation (present-export's chrome): a banner at the top for the presenter ("Presenting
@@ -116,7 +117,7 @@ function LiveInviteCard({ live }: { live: LiveController }) {
             <span className="dr-live-invite__title">
               <PersonName name={view.name} className="dr-live-invite__name" /> is presenting
             </span>
-            <span className="dr-live-invite__sub">Join to follow their slides as they present.</span>
+            <span className="dr-live-invite__sub">Follow their slides as they present.</span>
           </>
         ) : (
           <>
@@ -139,7 +140,7 @@ function LiveInviteCard({ live }: { live: LiveController }) {
             data-testid="live-join"
             onClick={() => live.join()}
           >
-            <PlayIcon /> Join
+            <PlayIcon /> Follow
           </button>
         ) : (
           may && (
@@ -238,19 +239,27 @@ type TopView =
   | { kind: 'presenting'; count: number; names: string[] }
   | { kind: 'following' | 'waiting' | 'reconnecting'; name: string }
 
+/** Reactive: what the banner at the top of the presentation says, or null when it is not drawn. */
+function topViewOf(live: LiveController): TopView | null {
+  const st = live.presenter.state.get()
+  if (!st) return null
+  const p = live.store.presentation.get()
+  if (st.role === 'follower') {
+    const name = st.leader?.name ?? p?.presenter.name ?? 'the presenter'
+    if (!p) return live.store.restartLost.get() ? { kind: 'reconnecting', name } : null
+    return { kind: p.presenterOnline ? 'following' : 'waiting', name }
+  }
+  if (!live.presentingLive.get() || !p) return null
+  return { kind: 'presenting', count: p.followerCount, names: p.followers.map((f) => f.name) }
+}
+
+/** Reactive: the banner at the top of the presentation is drawn (K3-4 fits the slide under it). */
+export function liveBannerShown(live: LiveController | null): boolean {
+  return !!live && topViewOf(live) !== null
+}
+
 function LiveTopBanner({ live }: { live: LiveController }) {
-  const view = useValue<TopView | null>('dr-live-top', () => {
-    const st = live.presenter.state.get()
-    if (!st) return null
-    const p = live.store.presentation.get()
-    if (st.role === 'follower') {
-      const name = st.leader?.name ?? p?.presenter.name ?? 'the presenter'
-      if (!p) return live.store.restartLost.get() ? { kind: 'reconnecting', name } : null
-      return { kind: p.presenterOnline ? 'following' : 'waiting', name }
-    }
-    if (!live.presentingLive.get() || !p) return null
-    return { kind: 'presenting', count: p.followerCount, names: p.followers.map((f) => f.name) }
-  }, [live])
+  const view = useValue<TopView | null>('dr-live-top', () => topViewOf(live), [live])
   const flash = useValue('dr-live-flash', () => live.flash.get(), [live])
   const may = useValue('dr-live-may', () => live.mayPresent(), [live])
   const busy = useValue('dr-live-busy', () => live.busy.get(), [live])

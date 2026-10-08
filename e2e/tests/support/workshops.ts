@@ -296,7 +296,7 @@ async function openInstrumented(
   await waitForBoard(page)
   await expect(page.getByTestId('dev-identity-badge')).toHaveAttribute('data-user-id', user.id)
   // The workshop state has loaded once the pill shows a state.
-  await expect(page.getByTestId('timer-pill')).toHaveAttribute('data-state', /.+/)
+  await expect(page.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', /.+/)
   return { user: user.handle, name: user.name, id: user.id, context, page, net, api, role }
 }
 
@@ -344,7 +344,7 @@ export { expect }
 export async function reloadBoard(s: WorkshopSession) {
   await s.page.reload()
   await waitForBoard(s.page)
-  await expect(s.page.getByTestId('timer-pill')).toHaveAttribute('data-state', /.+/)
+  await expect(s.page.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', /.+/)
 }
 
 // ---- timer ---------------------------------------------------------------------------------------------
@@ -393,9 +393,39 @@ export async function expectPillsAgree(pages: Page[], samples = 6) {
   ).toBe(true)
 }
 
+/**
+ * K3-3: the top bar's one Facilitate button ("Session" for participants) holds the timer, the reactions and
+ * raise hand, the raised hands, voting and the private brainstorm. Opens its menu (if it is not open yet).
+ */
+export async function openFacilitate(page: Page) {
+  const menu = page.getByTestId('facilitate-menu')
+  if (!(await menu.isVisible())) {
+    // the tools or the reactions bar is open under the button: a click on it would close that instead
+    for (const id of ['workshop-popover', 'reaction-bar'])
+      if (await page.getByTestId(id).isVisible()) await page.keyboard.press('Escape')
+    await page.getByTestId('facilitate-button').click()
+  }
+  await expect(menu).toBeVisible()
+  return menu
+}
+
+export async function closeFacilitate(page: Page) {
+  const menu = page.getByTestId('facilitate-menu')
+  if (await menu.isVisible()) await page.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+}
+
+/** The Facilitate menu's entry with test id `testId` (timer-pill, reactions-button, hands-chip, vote-chip, pn-chip), menu opened. */
+export async function facilitateEntry(page: Page, testId: string) {
+  return (await openFacilitate(page)).getByTestId(testId)
+}
+
+/** The timer's display state as the Facilitate button carries it (idle, running, paused, finished, ended…). */
+export const timerState = (page: Page) => page.getByTestId('facilitate-button')
+
 export async function openWorkshopPopover(page: Page) {
   const pop = page.getByTestId('workshop-popover')
-  if (!(await pop.isVisible())) await page.getByTestId('timer-pill').click()
+  if (!(await pop.isVisible())) await (await facilitateEntry(page, 'timer-pill')).click()
   await expect(pop).toBeVisible()
   return pop
 }

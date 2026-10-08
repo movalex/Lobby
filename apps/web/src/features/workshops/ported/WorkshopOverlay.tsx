@@ -21,21 +21,35 @@
 // accept goes to the engine as usual. The topmost object under the press decides (W5-03): a click on an
 // object the vote does not take casts nothing, even over one it takes, and says so.
 import { type VoteEligibilityRule, voteRuleOf } from '@draftroom/contracts'
-import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { type CanvasFeatureContext, geometry } from '../../../canvas/api/index.ts'
+import { safeColor } from '../../../lib/identity.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { PHONE_QUERY, useMediaQuery } from '../../../ui/useMedia.ts'
 import { formatClock, timerDisplayPhase, timerRemainingMs } from '../countdown.ts'
 import { HandToasts, PresentingHands } from '../Hands.tsx'
 import type { WorkshopStore } from '../store.ts'
-import { badgeScale, clusterBadges, topResults } from '../voting.ts'
-import { useNow, useWorkshop } from '../workshop-context.ts'
+import { badgeScale, clusterBadges, describeVoted, dotInk, revealConfetti, topResults } from '../voting.ts'
+import { useIsFacilitator, useNow, useWorkshop } from '../workshop-context.ts'
 import { followingNow, stopFollowing, zoomToBounds } from './camera.ts'
 import { isEligibleElement, labelOfRef, refOf } from './elements.ts'
 import { PlusOnes } from './PlusOnes.tsx'
 import { usePresentingHere } from './presenting.ts'
-import { PrivateNotesReminder, PrivateNotesStartPrompt } from './private-notes/PrivateNotesBar.tsx'
-import { ReactionBursts } from './Reactions.tsx'
+import {
+  PrivateNotesFacilitatorBar,
+  PrivateNotesReminder,
+  PrivateNotesStartPrompt,
+} from './private-notes/PrivateNotesBar.tsx'
+import { REDUCED_MOTION_QUERY, ReactionBursts } from './Reactions.tsx'
+import { useVoted } from './VotingPanel.tsx'
 import {
   cornersOf,
   eligibleAt,
@@ -176,6 +190,9 @@ export function WorkshopLayer({ ctx }: { ctx: Ctx }) {
   const joined = open && snap.participation === 'joined'
   // While presenting, the slides stay clean: no prompts or controls.
   const voting = joined && !vote?.done && !presenting
+  // K3-1: the banner is for people who may vote here now: an active board, not presenting
+  const eligible = ctx.board.status === 'active' && !presenting
+  useEffect(() => store.setVoteEligible(eligible), [store, eligible])
   const resultsCard =
     !!snap.resultsNews &&
     vote?.session.status === 'revealed' &&
@@ -189,6 +206,7 @@ export function WorkshopLayer({ ctx }: { ctx: Ctx }) {
       {joined && snap.ballot && <MyDots ctx={ctx} store={store} myVotes={snap.ballot.myVotes} />}
       {voting && <ClickToVote ctx={ctx} store={store} />}
       {voting && <SelectedStepper ctx={ctx} store={store} />}
+      {snap.voteBanner && !presenting && <ClickToOffer ctx={ctx} store={store} />}
       {/* One stack, top to bottom, so messages never cover each other (RETRO-11). */}
       {!presenting && (
         <div className="dr-wk-stack" data-testid="workshop-stack">
@@ -196,8 +214,10 @@ export function WorkshopLayer({ ctx }: { ctx: Ctx }) {
           <PrivateNotesStartPrompt ctx={ctx} />
           <PrivateNotesReminder ctx={ctx} />
           {resultsCard && <ResultsCard ctx={ctx} store={store} />}
-          {open && snap.participation === null && <JoinPrompt ctx={ctx} store={store} />}
+          {snap.voteBanner && <JoinPrompt key={snap.voteBanner.seq} ctx={ctx} store={store} />}
           {joined && <VotingBar ctx={ctx} store={store} />}
+          {open && <VoteFacilitatorBar ctx={ctx} store={store} />}
+          <PrivateNotesFacilitatorBar ctx={ctx} />
         </div>
       )}
       {joined && (
@@ -220,6 +240,7 @@ export function WorkshopTopLayer({ ctx }: { ctx: Ctx }) {
     <>
       <div className="dr-wk-top" data-testid="workshop-top">
         <TimerFlash seq={snap.alertSeq} />
+        <RevealConfetti seq={snap.resultsNews?.seq ?? null} />
         {(presenting || phone) && <PresentingTimer store={store} corner={presenting ? 'left' : 'right'} />}
         {presenting && <PresentingHands snap={snap} />}
         <ReactionBursts ctx={ctx} store={store} />
@@ -248,6 +269,9 @@ function MyDots({
   const cast = useCast(ctx, store)
   const open = store.getSnapshot().vote?.session.status === 'open'
   const get = (id: string) => ctx.canvas.get(id)
+  // K3-5: my dots in my presence colour (the colour others see my cursor in), with an ink that reads on it
+  const fill = safeColor(ctx.me.user.color, ctx.me.user.id)
+  const colours = { '--dot': fill, '--dot-ink': dotInk(fill) } as CSSProperties
   return (
     <>
       {placed.map((p) => {
@@ -260,7 +284,7 @@ function MyDots({
             data-testid="vote-dot"
             data-shape-id={p.shapeId}
             data-count={p.n}
-            style={{ transform: `translate(${p.x - 12}px, ${p.y - 12}px)` }}
+            style={{ ...colours, transform: `translate(${p.x - 12}px, ${p.y - 12}px)` }}
             aria-label={`Your votes on ${label}: ${p.n}.${open ? ' Remove one.' : ''}`}
             title={open ? 'Your votes (click to take one back)' : 'Your votes'}
             disabled={!open}
@@ -602,15 +626,68 @@ function zoomToRefs(ctx: Ctx, refs: readonly string[]) {
 
 // ---- the message stack -------------------------------------------------------------------------------------
 
-function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
-  const vote = store.getSnapshot().vote
-  if (!vote) return null
+/**
+ * K3-6: how to vote with the keyboard, for the prompt's description (screen readers read it with the card
+ * and its Join button). On screen the prompt says one short line; the keys took two.
+ */
+export const VOTE_KEYS_HELP =
+  'Keyboard: Tab from the board goes to an object’s +, Enter or Space adds a vote, Tab moves to the next object and Esc returns to the board.'
+
+/** "Fay" from "Fay Facilitator (guest)": the first word, as the note-author label names people. */
+const firstWord = (name: string) => name.trim().split(/\s+/)[0] ?? name
+
+/**
+ * K3-1: the "Vote started" banner (the vote's join card, RETRO-11's stack): who started it, what the vote
+ * takes and how many dots this person has, one click to join and vote ("Join and vote"), or, after a click on
+ * an object before joining, one click to join and give that object its first dot. Up once per vote for each
+ * person who may vote here and has neither joined nor said "Not now" (../store.ts `voteBanner`); the
+ * keyboard help is its description (K3-6).
+ */
+export function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
+  const keysId = useId()
+  const snap = store.getSnapshot()
+  const banner = snap.voteBanner
+  const vote = snap.vote
+  const offer = snap.joinOffer
+  const by = useValue(
+    'dr-wk-banner-by',
+    () =>
+      banner ? (ctx.canvas.collaborators().find((c) => c.uid === banner.createdBy)?.name ?? null) : null,
+    [ctx.canvas, banner?.createdBy],
+  )
+  const [busy, setBusy] = useState(false)
+  if (!banner || !vote || vote.session.id !== banner.sessionId) return null
   const s = vote.session
+  const left = vote.myRemaining
+  const startedBy =
+    by && banner.createdBy !== ctx.me.user.id ? `${firstWord(by)} started a vote` : 'Vote started'
+  const target = offer ? labelOfRef(offer.shapeId, (id) => ctx.canvas.get(id)) : null
+  const joinAndCast = async () => {
+    setBusy(true)
+    const r = await store.joinAndCast()
+    setBusy(false)
+    if (r && !r.ok && r.error)
+      ctx.notify({ key: 'vote-cast', text: r.error, testId: 'vote-toast', timeoutMs: 3500 })
+    const after = store.getSnapshot()
+    if (r?.ok && after.ballot && after.vote)
+      store.announce(castAnnouncement(1, after.ballot.myRemaining, after.vote.session.votesPerPerson))
+  }
   return (
-    <div className="dr-wk-prompt" role="dialog" aria-label="Vote started" data-testid="vote-join-prompt">
+    <div
+      className="dr-wk-prompt dr-wk-banner"
+      role="dialog"
+      aria-label="Vote started"
+      aria-describedby={keysId}
+      data-testid="vote-join-prompt"
+      data-banner-seq={banner.seq}
+      data-offer={offer?.shapeId}
+    >
+      <p className="dr-wk-banner__eyebrow" data-testid="vote-banner-by">
+        <span className="dr-wk-chip__dot" aria-hidden="true" />
+        {startedBy}
+      </p>
       <p>
-        <strong>{s.title}</strong> — you have {vote.myRemaining} vote{vote.myRemaining === 1 ? '' : 's'} to
-        place on
+        <strong>{s.title}</strong> — you have {left} vote{left === 1 ? '' : 's'} to place on
         {s.scope === 'frame'
           ? ' objects in one frame'
           : s.scope === 'selection'
@@ -618,23 +695,52 @@ function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
             : ' objects on the board'}
         .
       </p>
-      <p className="dr-wk-hint dr-wk-hint--fine" data-testid="vote-keys-hint">
-        Click objects to vote. Keyboard: Tab from the board goes to an object’s +, Enter or Space adds a vote,
-        Tab moves to the next object and Esc returns to the board.
+      <p className="dr-wk-hint">
+        <span className="dr-wk-hint--fine" data-testid="vote-click-hint">
+          Click objects to vote; click your dot to take one back.
+        </span>
+        {/* Touch screens (final review R6): no keyboard to talk about. */}
+        <span className="dr-wk-hint--coarse" data-testid="vote-touch-hint">
+          Tap objects to vote; tap your dot to take one back.
+        </span>
       </p>
-      {/* Touch screens (final review R6): no keyboard to talk about. */}
-      <p className="dr-wk-hint dr-wk-hint--coarse" data-testid="vote-touch-hint">
-        Tap objects to vote. Tap your dot on an object to take a vote back.
-      </p>
+      <span id={keysId} className="dr-sr-only" data-testid="vote-keys-hint">
+        {VOTE_KEYS_HELP}
+      </span>
       <div className="dr-wk-row">
-        <button
-          type="button"
-          className="dr-btn dr-btn--primary dr-btn--sm"
-          data-testid="vote-join"
-          onClick={() => void store.joinVote(s.id)}
-        >
-          Join vote
-        </button>
+        {offer && target !== null ? (
+          <>
+            <button
+              type="button"
+              className="dr-btn dr-btn--primary dr-btn--sm dr-wk-banner__cast"
+              data-testid="vote-join-cast"
+              aria-describedby={keysId}
+              disabled={busy}
+              onClick={() => void joinAndCast()}
+            >
+              Join and vote for “{target}”
+            </button>
+            <button
+              type="button"
+              className="dr-btn dr-btn--sm"
+              data-testid="vote-join"
+              disabled={busy}
+              onClick={() => void store.joinVote(s.id)}
+            >
+              Join
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            className="dr-btn dr-btn--primary dr-btn--sm"
+            data-testid="vote-join"
+            aria-describedby={keysId}
+            onClick={() => void store.joinVote(s.id)}
+          >
+            Join and vote
+          </button>
+        )}
         <button
           type="button"
           className="dr-btn dr-btn--sm dr-btn--ghost"
@@ -643,16 +749,50 @@ function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
             store.setParticipation(s.id, 'skipped')
             ctx.notify({
               key: 'vote-skip',
-              text: 'You can join later from the voting chip in the top bar.',
+              text: 'You can join later from Voting in the top bar’s Facilitate (or Session) menu.',
               testId: 'vote-toast',
             })
           }}
         >
-          Skip
+          Not now
         </button>
       </div>
     </div>
   )
+}
+
+/**
+ * K3-1: before joining, a plain click (no drag) on an object the open vote takes offers to join and give it
+ * a dot (the banner's "Join and vote for …"). The press is not claimed: the object is selected and moves as
+ * usual, and nothing is cast until the person joins.
+ */
+function ClickToOffer({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
+  const rule = useRule(store)
+  const sid = store.getSnapshot().voteBanner?.sessionId ?? null
+  useEffect(() => {
+    if (!rule || !sid) return
+    const canvas = ctx.canvas
+    let pressed: { x: number; y: number; id: string } | null = null
+    return canvas.on('input', (e) => {
+      if (e.type === 'pointer-down') {
+        pressed = null
+        if (e.button !== 0 || !plainPress(e) || canvas.editingId()) return
+        const tool = canvas.tool()
+        if (tool !== 'select' && tool !== 'hand') return
+        const click = voteClickAt(canvas, e.scene, rule)
+        if (click.kind === 'vote') pressed = { x: e.screen.x, y: e.screen.y, id: click.target.id }
+        return
+      }
+      if (e.type === 'pointer-up') {
+        const p = pressed
+        pressed = null
+        if (!p || Math.hypot(e.screen.x - p.x, e.screen.y - p.y) > CLICK_SLOP_PX) return
+        const ref = refOf(p.id)
+        if (ref) store.offerJoin(sid, ref)
+      }
+    })
+  }, [ctx, rule, sid, store])
+  return null
 }
 
 function VotingBar({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
@@ -709,6 +849,53 @@ function VotingBar({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
       )}
       <button type="button" className="dr-linkbtn" onClick={() => ctx.openPanel('voting')}>
         Details
+      </button>
+    </section>
+  )
+}
+
+/**
+ * K3-2: the facilitator's own line for an open vote, on the board: how many of the people here voted, and a
+ * clear end ("Show results", the panel's "End and show results"). Not while the Voting panel, which says the
+ * same, is open.
+ */
+export function VoteFacilitatorBar({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
+  const snap = store.getSnapshot()
+  const vote = snap.vote
+  const facilitator = useIsFacilitator(ctx)
+  const castSome = Object.keys(snap.ballot?.myVotes ?? {}).length > 0
+  const voted = useVoted(ctx, vote ?? { participants: 0, done: false }, castSome)
+  const [busy, setBusy] = useState(false)
+  if (!facilitator || vote?.session.status !== 'open' || ctx.activePanel === 'voting') return null
+  return (
+    <section className="dr-wk-facilbar" aria-label="Your vote" data-testid="vote-facilitator-bar">
+      <span className="dr-wk-facilbar__what">{vote.session.title}</span>
+      <span
+        className="dr-wk-facilbar__count"
+        data-testid="vote-bar-voted"
+        data-voted={voted.voted}
+        data-of={voted.of}
+        aria-live="polite"
+      >
+        {describeVoted(voted)}
+      </span>
+      <button
+        type="button"
+        className="dr-btn dr-btn--primary dr-btn--sm"
+        data-testid="vote-bar-reveal"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true)
+          const r = await store.revealVote()
+          setBusy(false)
+          if (!r.ok && r.error)
+            ctx.notify({ key: 'vote-reveal', text: r.error, tone: 'error', testId: 'vote-toast' })
+        }}
+      >
+        Show results
+      </button>
+      <button type="button" className="dr-linkbtn" onClick={() => ctx.openPanel('voting')}>
+        More
       </button>
     </section>
   )
@@ -793,6 +980,52 @@ function ResultsCard({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
         See all results
       </button>
     </section>
+  )
+}
+
+// ---- the reveal ------------------------------------------------------------------------------------------------
+
+/** How long the reveal's confetti falls (its pieces start within half a second, each falls 1.8 s). */
+const CONFETTI_MS = 2_600
+
+/**
+ * K3-5: when this tab sees a vote's results come in (the "Results are in" news, ../store.ts resultsNews), a
+ * short confetti fall over the board: an overlay that takes no pointer, writes nothing, and is not drawn for
+ * people who prefer reduced motion.
+ */
+export function RevealConfetti({ seq, reduced: forced }: { seq: number | null; reduced?: boolean }) {
+  const prefers = useMediaQuery(REDUCED_MOTION_QUERY)
+  const reduced = forced ?? prefers
+  const [shown, setShown] = useState<number | null>(null)
+  useEffect(() => {
+    if (seq === null) return
+    setShown(seq)
+    const t = setTimeout(() => setShown(null), CONFETTI_MS)
+    return () => clearTimeout(t)
+  }, [seq])
+  const at = shown ?? (forced !== undefined ? seq : null)
+  if (at === null) return null
+  const pieces = revealConfetti(reduced, at)
+  if (pieces.length === 0) return null
+  return (
+    <div className="dr-wk-confetti" data-testid="vote-confetti" aria-hidden="true">
+      {pieces.map((p, i) => (
+        <span
+          // a fixed list for one reveal
+          key={i}
+          className="dr-wk-confetti__piece"
+          style={
+            {
+              left: `${p.x}%`,
+              background: p.color,
+              '--delay': `${p.delayMs}ms`,
+              '--drift': `${p.drift}px`,
+              '--spin': `${p.spin}deg`,
+            } as CSSProperties
+          }
+        />
+      ))}
+    </div>
   )
 }
 

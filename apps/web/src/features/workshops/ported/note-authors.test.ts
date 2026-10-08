@@ -157,6 +157,93 @@ describe('the note-author label (CR-3F-4)', () => {
     expect(authors([frame, ...note('n1', { x: 250, y: 250, frameId: 'f' }, 'Out', by('Alice'))])).toEqual([])
   })
 
+  describe('K3-6: a note that arrived with its words shows no author until someone edits them', () => {
+    const alice = by('Alice Anders')
+    const bo = by('Bo Brook')
+    /** `pair` with the server's stamps as the sync server writes them (canvas-schema LobbyServer). */
+    const stamped = (
+      pair: CanvasElement[],
+      s: {
+        note?: Record<string, unknown> | null
+        noteLobby?: Record<string, unknown>
+        label: Record<string, unknown>
+      },
+    ): CanvasElement[] => {
+      const [n, l] = pair as unknown as Record<string, unknown>[]
+      return [
+        {
+          ...n,
+          customData: {
+            ...(s.noteLobby ? { lobby: s.noteLobby } : {}),
+            ...(s.note ? { lobbyServer: s.note } : {}),
+          },
+        },
+        { ...l, customData: { lobbyServer: s.label } },
+      ] as unknown as CanvasElement[]
+    }
+    const write = (at: number, who = alice) => ({
+      createdBy: who,
+      createdAt: at,
+      lastEditedBy: null,
+      lastEditedAt: at,
+    })
+    const label = (created: number, edited: number, who = alice, creator = alice) => ({
+      createdBy: creator,
+      createdAt: created,
+      lastEditedBy: who,
+      lastEditedAt: edited,
+    })
+
+    it('a template-inserted note (its prompt marker, one write for note and label) shows no label', () => {
+      const els = stamped(note('t1', { x: 0, y: 0 }, 'What went well?', alice), {
+        noteLobby: { prompt: 'true' },
+        note: write(1_000),
+        label: label(1_000, 1_000),
+      })
+      expect(authors(els)).toEqual([])
+      // the prompt marker alone is enough (a converted board's template note keeps it)
+      const marked = stamped(note('t1', { x: 0, y: 0 }, 'What went well?', alice), {
+        noteLobby: { prompt: 'true' },
+        note: null,
+        label: label(1_000, 1_000),
+      })
+      expect(authors(marked)).toEqual([])
+    })
+
+    it('once edited, it shows its editor', () => {
+      const els = stamped(note('t1', { x: 0, y: 0 }, 'Shipping on time', bo), {
+        noteLobby: { prompt: 'true' },
+        note: write(1_000),
+        label: label(1_000, 61_000, bo),
+      })
+      expect(authors(els).map((a) => a.full)).toEqual(['Bo Brook'])
+    })
+
+    it("the sample's notes (no marker), a paste and a duplicate: the same one write, so no label either", () => {
+      const els = stamped(note('s1', { x: 0, y: 0 }, 'Try a podcast', alice), {
+        note: write(5_000),
+        label: label(5_000, 5_000),
+      })
+      expect(authors(els)).toEqual([])
+    })
+
+    it('a note made with the note tool and typed in shows its author (its label came later)', () => {
+      const els = stamped(note('n1', { x: 0, y: 0 }, 'My idea', alice), {
+        note: write(1_000),
+        label: label(1_400, 1_400),
+      })
+      expect(authors(els).map((a) => a.full)).toEqual(['Alice Anders'])
+    })
+
+    it('a revealed private note keeps its author (place-notes writes the draft author)', () => {
+      const els = stamped(note('p1', { x: 0, y: 0 }, 'Quiet idea', bo), {
+        note: { ...write(9_000, bo), privateNote: { session: 'pbs_0123456789', author: bo.uid } },
+        label: label(9_000, 9_000, bo, bo),
+      })
+      expect(authors(els).map((a) => a.full)).toEqual(['Bo Brook'])
+    })
+  })
+
   it('rotates with the note: the covered corner is the rotated one', () => {
     const half = Math.PI
     // upside down, the label's corner is at the top left of the box
