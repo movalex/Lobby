@@ -7,9 +7,15 @@ import { VOTE_SELECTION_MAX, VOTES_PER_PERSON_MAX } from '@draftroom/contracts'
 import { type FormEvent, useId, useMemo, useState } from 'react'
 import type { CanvasElement, CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { Dialog } from '../../../ui/Dialog.tsx'
-import type { WorkshopStore } from '../store.ts'
-import { elementLabel, frameOf, refOf } from './elements.ts'
-import { initialScope, SELECTION_SCOPE, selectionCounts, selectionScopeOf } from './voting-canvas.ts'
+import type { VoteSetupPrefill, WorkshopStore } from '../store.ts'
+import { elementIdOf, elementLabel, frameOf, refOf } from './elements.ts'
+import {
+  initialScope,
+  SELECTION_SCOPE,
+  type SelectionScope,
+  selectionCounts,
+  selectionScopeOf,
+} from './voting-canvas.ts'
 
 type Ctx = CanvasFeatureContext
 
@@ -34,13 +40,31 @@ function selectedFrameRef(ctx: Ctx, frames: readonly CanvasElement[]): string | 
   return null
 }
 
+/**
+ * L5-3: the objects a prefilled vote lists (a run-off's top N, the coach's pick): like a selection scope, but
+ * named by refs instead of read from the canvas selection. Refs whose element is gone are left out.
+ */
+export function prefilledSelection(ctx: Ctx, refs: readonly string[]): SelectionScope | null {
+  const live = refs.filter((ref) => {
+    const id = elementIdOf(ref)
+    const el = id ? ctx.canvas.get(id) : undefined
+    return !!el && !(el as { isDeleted?: boolean }).isDeleted
+  })
+  if (live.length === 0) return null
+  const frames = live.filter((ref) => ctx.canvas.get(elementIdOf(ref) ?? '')?.type === 'frame').length
+  return { refs: live, frames, objects: live.length - frames, tooMany: live.length > VOTE_SELECTION_MAX }
+}
+
 export function VoteSetupDialog({
   ctx,
   store,
+  prefill = null,
   onClose,
 }: {
   ctx: Ctx
   store: WorkshopStore
+  /** L5-3: what to start from (a run-off over the top N); null: the dialog's own defaults */
+  prefill?: VoteSetupPrefill | null
   onClose(): void
 }) {
   const { canvas } = ctx
@@ -52,12 +76,21 @@ export function VoteSetupDialog({
         .slice(0, 200),
     [canvas],
   )
-  const [title, setTitle] = useState('Dot vote')
-  const [votes, setVotes] = useState('3')
-  const [onePerObject, setOnePerObject] = useState(false)
-  // The selection when the dialog opened: the vote lists what was selected then.
-  const selection = useMemo(() => selectionScopeOf(canvas), [canvas])
-  const [scope, setScope] = useState<string>(() => initialScope(selection, selectedFrameRef(ctx, frames)))
+  const [title, setTitle] = useState(prefill?.title ?? 'Dot vote')
+  const [votes, setVotes] = useState(String(prefill?.votesPerPerson ?? 3))
+  const [onePerObject, setOnePerObject] = useState(prefill?.onePerObject ?? false)
+  // The selection when the dialog opened: the vote lists what was selected then (or what the prefill names).
+  const selection = useMemo(
+    () => (prefill?.refs?.length ? prefilledSelection(ctx, prefill.refs) : selectionScopeOf(canvas)),
+    [canvas, ctx, prefill],
+  )
+  const [scope, setScope] = useState<string>(() =>
+    prefill?.scope === 'selection' && selection
+      ? SELECTION_SCOPE
+      : prefill?.scope === 'board'
+        ? 'board'
+        : initialScope(selection, selectedFrameRef(ctx, frames)),
+  )
   const [types, setTypes] = useState<'all' | 'note'>('all')
   const [duration, setDuration] = useState<string>('none')
   const [busy, setBusy] = useState(false)

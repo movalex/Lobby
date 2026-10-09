@@ -18,9 +18,14 @@ import {
   HandsResponse,
   type HandsVersion,
   isNewerHands,
+  isNewerSpotlight,
   ListVoteSessionsResponse,
   type RaisedHand,
   type ReactionEmoji,
+  type Spotlight,
+  type SpotlightEndReason,
+  SpotlightState,
+  type SpotlightVersion,
   type SummonScreen,
   type TimerActionInput,
   TimerResponse,
@@ -29,6 +34,7 @@ import {
   WORKSHOP_EVENTS,
   WorkshopHandEvent,
   WorkshopReactionEvent,
+  WorkshopSpotlightEvent,
   WorkshopState,
   type WorkshopTimer,
   WorkshopTimerEvent,
@@ -37,6 +43,7 @@ import {
   WorkshopVoteState,
 } from '@draftroom/contracts'
 import type { z } from 'zod'
+import type { VoteSetupArgs } from './commands.ts'
 import { ReactionThrottle } from './reactions.ts'
 import { localCastCheck, optimisticBallot, type PendingCast } from './voting.ts'
 
@@ -73,6 +80,8 @@ export interface WorkshopSnapshot {
   summonedBy: { userId: string; name: string } | null
   /** The vote setup dialog is open (it can be opened from the top bar or the panel). */
   setupOpen: boolean
+  /** L5-3: what the open dialog starts from (a run-off's objects, the coach's scope), or null: its own defaults */
+  setupPrefill: VoteSetupPrefill | null
   /** Increments each time the timer reaches zero in this tab (drives the visual alert). */
   alertSeq: number
   /**
@@ -96,7 +105,35 @@ export interface WorkshopSnapshot {
   voteBanner: VoteBanner | null
   /** K3-1: an object this person clicked before joining: the banner offers to join and give it a dot. */
   joinOffer: { sessionId: string; shapeId: string } | null
+  /** L5-2: the board's spotlight (the objects a facilitator is talking about), or null */
+  spotlight: Spotlight | null
+  /** L5-2: this person pressed Esc (or Hide) for this spotlight: it is dimmed for them no more, for nobody else */
+  spotlightHidden: boolean
+  /** L5-2: the last spotlight that ended in front of this tab, and why (a notice; null before any) */
+  spotlightEnded: SpotlightEnded | null
 }
+
+/**
+ * L5-3: what the vote setup dialog opens with: the command's args (workshops.vote.setup, ./commands.ts), plus a
+ * title and a number of votes when the caller knows better than the dialog's defaults (a run-off).
+ */
+export interface VoteSetupPrefill extends VoteSetupArgs {
+  readonly title?: string
+  readonly votesPerPerson?: number
+}
+
+/** A spotlight that ended while this tab had the board open. */
+export interface SpotlightEnded {
+  seq: number
+  reason: SpotlightEndReason
+  /** whose it was */
+  starterName: string
+  /** who ended it (null: the api did) */
+  byName: string | null
+}
+
+/** One spotlight's identity: a new one has a new key (a person who hid the last one sees this one). */
+export const spotlightKey = (s: Spotlight) => `${s.version.epoch}:${s.version.n}`
 
 export interface VoteBanner {
   sessionId: string
@@ -222,6 +259,9 @@ export class WorkshopStore {
   private hiddenResults = new Set<string>()
   private readonly memo = new Map<string, Participation>()
   private setupOpen = false
+  private setupPrefill: VoteSetupPrefill | null = null
+  /** L5-3: the last vote this tab saw revealed, kept when a newer vote opens (lastRevealedResults) */
+  private lastRevealed: LastRevealedResults | null = null
   private alertSeq = 0
   private resultsNews: WorkshopSnapshot['resultsNews'] = null
   private newsSeq = 0
@@ -235,6 +275,12 @@ export class WorkshopStore {
   private readonly bannerSeqs = new Map<string, number>()
   private bannerSeq = 0
   private joinOffer: WorkshopSnapshot['joinOffer'] = null
+  /** L5-2: the spotlight, the version of that state and which spotlight this person hid (spotlightKey) */
+  private spotlight: Spotlight | null = null
+  private spotlightVersion: SpotlightVersion | null = null
+  private spotlightHiddenKey: string | null = null
+  private spotlightEnded: SpotlightEnded | null = null
+  private endedSeq = 0
   private readonly throttle = new ReactionThrottle()
   private readonly reactionListeners = new Set<(r: ReactionShown) => void>()
   private readonly handListeners = new Set<(changes: HandChange[]) => void>()
@@ -275,6 +321,7 @@ export class WorkshopStore {
       this.events.on(WORKSHOP_EVENTS.results, (d) => this.onResultsEvent(d)),
       this.events.on(WORKSHOP_EVENTS.reaction, (d) => this.onReactionEvent(d)),
       this.events.on(WORKSHOP_EVENTS.hand, (d) => this.onHandEvent(d)),
+      this.events.on(WORKSHOP_EVENTS.spotlight, (d) => this.onSpotlightEvent(d)),
       this.events.onResync(() => void this.refresh()),
     )
   }
@@ -306,6 +353,13 @@ export class WorkshopStore {
 
   private compute(): WorkshopSnapshot {
     const vote = this.state?.vote ?? null
+    // L5-3: a revealed vote is remembered, so a newer vote opening does not take its results away
+    if (vote?.session.status === 'revealed' && vote.results)
+      this.lastRevealed = {
+        sessionId: vote.session.id,
+        participants: vote.participants,
+        results: vote.results.map((r) => ({ ref: r.shapeId, count: r.count, rank: r.rank })),
+      }
     const sid = vote?.session.id
     return {
       loaded: this.loaded,
@@ -318,6 +372,7 @@ export class WorkshopStore {
       showResults: sid ? !this.hiddenResults.has(sid) : true,
       summonedBy: this.summoned,
       setupOpen: this.setupOpen,
+      setupPrefill: this.setupOpen ? this.setupPrefill : null,
       alertSeq: this.alertSeq,
       resultsNews: this.resultsNews && this.resultsNews.sessionId === sid ? this.resultsNews : null,
       announcement: this.announcement,
@@ -325,6 +380,9 @@ export class WorkshopStore {
       myHand: this.hands.find((h) => h.userId === this.userId) ?? null,
       toolsRequest: this.toolsRequest,
       ...this.bannerAndOffer(vote, sid ? this.readParticipation(sid, vote) : null),
+      spotlight: this.spotlight,
+      spotlightHidden: !!this.spotlight && this.spotlightHiddenKey === spotlightKey(this.spotlight),
+      spotlightEnded: this.spotlightEnded,
     }
   }
 
@@ -479,6 +537,8 @@ export class WorkshopStore {
       this.setVote(vote)
       this.state = { ...s, timer, vote }
       this.applyHands(s.hands, s.handsVersion)
+      // L5-2: an api from before wave L sends no spotlight (no version): none then
+      this.applySpotlight(s.spotlight ?? null, s.spotlightVersion ?? null)
       this.loaded = true
       this.refreshedSeq = seq
       this.confirmedAt = this.nowMs()
@@ -583,6 +643,80 @@ export class WorkshopStore {
         session: { ...vote.session, status: 'revealed' },
       },
     }
+    this.emit()
+  }
+
+  // ---- spotlight (L5-2) ---------------------------------------------------------------------------------
+
+  /**
+   * Takes a spotlight state from any path (event, response, refetch) unless it is older than the one held
+   * (same API process, lower version). `end`: why it ended, when an event says so. Returns whether it was taken.
+   */
+  private applySpotlight(
+    spotlight: Spotlight | null,
+    version: SpotlightVersion | null,
+    end?: { reason: SpotlightEndReason | null; endedBy: { name: string } | null },
+  ): boolean {
+    if (!version || !isNewerSpotlight(this.spotlightVersion, version)) return false
+    const prev = this.spotlight
+    this.spotlight = spotlight
+    this.spotlightVersion = version
+    if (!spotlight && prev && end?.reason)
+      this.spotlightEnded = {
+        seq: ++this.endedSeq,
+        reason: end.reason,
+        starterName: prev.by.name,
+        byName: end.endedBy?.name ?? null,
+      }
+    return true
+  }
+
+  private onSpotlightEvent(data: unknown) {
+    const p = WorkshopSpotlightEvent.safeParse(data)
+    if (!p.success) return
+    const { spotlight, version, reason, endedBy } = p.data
+    if (this.applySpotlight(spotlight, version, { reason, endedBy })) this.emit()
+  }
+
+  /** Starts a spotlight on these objects (api refs, `shape:<id>`) for everyone (a facilitator; the api checks). */
+  async startSpotlight(refs: readonly string[], bringEveryone = false): Promise<ActionResult> {
+    try {
+      const r = await this.request('POST', `/api/boards/${encodeURIComponent(this.boardId)}/spotlight`, {
+        body: { refs, bringEveryone },
+        schema: SpotlightState,
+      })
+      if (this.applySpotlight(r.spotlight, r.version)) this.emit()
+      return { ok: true }
+    } catch (e) {
+      return errorOf(e)
+    }
+  }
+
+  /** Ends the board's spotlight for everyone (its starter or a board owner; the api checks). */
+  async endSpotlight(): Promise<ActionResult> {
+    try {
+      const r = await this.request('POST', `/api/boards/${encodeURIComponent(this.boardId)}/spotlight/end`, {
+        body: {},
+        schema: SpotlightState,
+      })
+      if (this.applySpotlight(r.spotlight, r.version)) this.emit()
+      return { ok: true }
+    } catch (e) {
+      return errorOf(e)
+    }
+  }
+
+  /** This person's Esc: the spotlight is dimmed for them no more (for nobody else), until a new one starts. */
+  hideSpotlight() {
+    if (!this.spotlight) return
+    this.spotlightHiddenKey = spotlightKey(this.spotlight)
+    this.emit()
+  }
+
+  /** The chip that brings a hidden spotlight back for this person. */
+  showSpotlight() {
+    if (this.spotlightHiddenKey === null) return
+    this.spotlightHiddenKey = null
     this.emit()
   }
 
@@ -873,7 +1007,20 @@ export class WorkshopStore {
   setSetupOpen(open: boolean) {
     if (this.setupOpen === open) return
     this.setupOpen = open
+    if (!open) this.setupPrefill = null
     this.emit()
+  }
+
+  /** L5-3: opens the vote setup dialog started from `prefill` (null: its own defaults). */
+  openSetup(prefill: VoteSetupPrefill | null) {
+    this.setupPrefill = prefill
+    this.setupOpen = true
+    this.emit()
+  }
+
+  /** L5-3: the results of the last revealed vote this tab saw, or null (see lastRevealedResults). */
+  lastRevealedResults(): LastRevealedResults | null {
+    return this.lastRevealed
   }
 
   raiseTimerAlert() {
@@ -967,16 +1114,11 @@ export interface LastRevealedResults {
 /**
  * The results of the most recent revealed vote of the board whose event stream is `events` (the board's
  * `ctx.events`), as this tab's workshop store holds them, or null: no store yet (the workshops feature has not
- * loaded on this board), or the board's current vote is not revealed. It never fetches and never creates a
- * store. Foundation body: the store's current vote when it is revealed; W5 keeps the last revealed one even
- * after a newer vote opens.
+ * loaded on this board), or this tab has not seen a vote revealed. It never fetches and never creates a store.
+ * The last revealed vote stays after a newer vote opens (a coach's "vote-weighted action items" and a sort by
+ * votes are asked for right when the next vote may already be open); a board opened with a newer vote already
+ * open knows only what this tab saw.
  */
 export function lastRevealedResults(events: object): LastRevealedResults | null {
-  const vote = stores.get(events)?.getSnapshot().vote
-  if (vote?.session.status !== 'revealed' || !vote.results) return null
-  return {
-    sessionId: vote.session.id,
-    participants: vote.participants,
-    results: vote.results.map((r) => ({ ref: r.shapeId, count: r.count, rank: r.rank })),
-  }
+  return stores.get(events)?.lastRevealedResults() ?? null
 }

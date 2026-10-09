@@ -59,7 +59,7 @@ export const showPrivateNotesTab = (guest: boolean, a: WorkshopActivity) => !gue
 // votes) and to everyone else while a vote exists (open, or the last one with its results).
 
 /** The Facilitate menu's entries, in order. */
-export type FacilitateEntry = 'timer' | 'reactions' | 'hands' | 'voting' | 'brainstorm'
+export type FacilitateEntry = 'timer' | 'reactions' | 'hands' | 'voting' | 'brainstorm' | 'spotlight'
 
 export function facilitateEntries(input: {
   guest: boolean
@@ -67,6 +67,8 @@ export function facilitateEntries(input: {
   activity: WorkshopActivity
   /** a vote exists on the board (open, ended or revealed: the last one) */
   vote: boolean
+  /** L5-2: the entry for the spotlight (facilitators; nothing when left out, as before wave L) */
+  spotlight?: boolean
 }): FacilitateEntry[] {
   const out: FacilitateEntry[] = []
   if (showTimerButton(input.guest, input.activity)) out.push('timer')
@@ -74,6 +76,7 @@ export function facilitateEntries(input: {
   if (input.activity.hands) out.push('hands')
   if (input.facilitator || input.vote) out.push('voting')
   if (input.activity.brainstorm) out.push('brainstorm')
+  if (input.spotlight) out.push('spotlight')
   return out
 }
 

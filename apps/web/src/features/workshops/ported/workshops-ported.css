@@ -10,3 +10,125 @@
 [data-lobby-board-canvas]:has(.dr-a11y-sheet-root > .dr-a11y-sheet__toggle) .dr-wk-layer > .dr-wk-stack {
   bottom: 132px;
 }
+
+/* ---- Spotlight for everyone (wave L, L5-2) ---------------------------------------------------------------
+   The rest of the board dimmed around what a facilitator is talking about (./SpotlightLayer.tsx). Under the
+   revealed counts (15) and every other overlay, so cursors, pins and the stack stay bright and clickable;
+   the layer takes no pointer: only the bar's buttons do. */
+
+.dr-wk-spot {
+  position: absolute;
+  inset: 0;
+  z-index: 14;
+  overflow: hidden;
+  pointer-events: none;
+}
+.dr-wk-spot__dim {
+  position: absolute;
+  inset: 0;
+  animation: dr-wk-spot-in 160ms ease-out;
+}
+.dr-wk-spot__shade {
+  fill: var(--dr-wk-spot-shade, rgb(15 20 30 / 52%));
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .dr-wk-spot__shade {
+    fill: var(--dr-wk-spot-shade, rgb(0 0 0 / 58%));
+  }
+}
+:root[data-theme="dark"] .dr-wk-spot__shade {
+  fill: var(--dr-wk-spot-shade, rgb(0 0 0 / 58%));
+}
+.dr-wk-spot__ring {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2.5px solid var(--dr-accent-ink);
+  pointer-events: none;
+}
+/* The pulse: a second ring that grows and fades (transform and opacity only). Still under reduced motion. */
+.dr-wk-spot[data-motion="pulse"] .dr-wk-spot__ring::after {
+  position: absolute;
+  inset: -2.5px;
+  border: 2.5px solid var(--dr-accent-ink);
+  border-radius: inherit;
+  content: "";
+  animation: dr-wk-spot-pulse 1.8s ease-out infinite;
+}
+@keyframes dr-wk-spot-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes dr-wk-spot-pulse {
+  from {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.07);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dr-wk-spot__dim {
+    animation: none;
+  }
+  .dr-wk-spot[data-motion="pulse"] .dr-wk-spot__ring::after {
+    animation: none;
+    display: none;
+  }
+}
+.dr-wk-spot__bar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 10px;
+  box-sizing: border-box;
+  max-width: calc(100% - 24px);
+  padding: 6px 8px 6px 14px;
+  border: 1px solid var(--dr-accent-line);
+  border-radius: 12px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  box-shadow: var(--dr-shadow-pop);
+  font: 13.5px / 1.35 var(--dr-font);
+  transform: translateX(-50%);
+  pointer-events: auto;
+}
+.dr-wk-spot__text {
+  font-weight: 600;
+}
+.dr-wk-spot__looking {
+  color: var(--dr-ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.dr-wk-spot__chip {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  padding: 5px 12px;
+  border: 1px solid var(--dr-accent-line);
+  border-radius: 999px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  box-shadow: var(--dr-shadow-pop);
+  font: 600 12.5px var(--dr-font);
+  transform: translateX(-50%);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.dr-wk-spot__chip:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 2px;
+}
+/* Phones: under the page's own top controls. */
+@media (max-width: 560px) {
+  .dr-wk-spot__bar,
+  .dr-wk-spot__chip {
+    top: 60px;
+  }
+}

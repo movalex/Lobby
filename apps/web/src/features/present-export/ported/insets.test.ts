@@ -7,6 +7,7 @@ import {
   intersects,
   NO_TOP_CHROME,
   PRESENT_BAR_INSET,
+  PRESENT_TOP_AGENDA_INSET,
   PRESENT_TOP_INSET,
   PRESENT_TOP_STACKED_INSET,
   presentInsets,
@@ -123,5 +124,33 @@ describe('present mode keeps the chrome off the slide (K3-4)', () => {
     expect(r.h).toBeCloseTo(800 - 64, 6)
     expect(r.y).toBeCloseTo(32, 6)
     expect(r.x + r.w / 2).toBeCloseTo(500, 6)
+  })
+})
+
+describe('the run of show’s strip under the live banner (L5-1)', () => {
+  const view = { w: 1440, h: 900 }
+  it('takes one more row at the top, only under a banner; everything else is as it was', () => {
+    expect(presentInsets(view, { ...NO_TOP_CHROME, banner: true }, true).top).toBe(PRESENT_TOP_INSET)
+    expect(presentInsets(view, { ...NO_TOP_CHROME, banner: true, agenda: true }, true)).toEqual({
+      top: PRESENT_TOP_AGENDA_INSET,
+      right: 0,
+      bottom: PRESENT_BAR_INSET,
+      left: 0,
+    })
+    // no banner, no strip; and `agenda: false` is the same as leaving it out
+    expect(presentInsets(view, { ...NO_TOP_CHROME, agenda: true }, true).top).toBe(0)
+    expect(presentInsets(view, { ...NO_TOP_CHROME, banner: true, agenda: false }, true)).toEqual(
+      presentInsets(view, { ...NO_TOP_CHROME, banner: true }, true),
+    )
+    // the timer with the hands under it is the taller stack at the left: the larger of the two wins
+    expect(presentInsets(view, { timer: true, hands: true, banner: true, agenda: true }, true).top).toBe(
+      Math.max(PRESENT_TOP_STACKED_INSET, PRESENT_TOP_AGENDA_INSET),
+    )
+  })
+
+  it('keeps the slide a usable size on a short view (the shared limit still applies)', () => {
+    const phone = { w: 800, h: 360 }
+    const i = presentInsets(phone, { ...NO_TOP_CHROME, banner: true, agenda: true }, true)
+    expect(i.top + i.bottom).toBeLessThanOrEqual(Math.floor(phone.h * 0.4))
   })
 })

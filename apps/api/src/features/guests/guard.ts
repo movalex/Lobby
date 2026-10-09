@@ -47,6 +47,15 @@ export const DELETED_GUESTS =
 export const LINK_PREVIEW_GUESTS =
   'Link previews are for people with an account. Sign in with an account to add link cards.'
 
+/**
+ * POST /api/boards/:bid/spotlight and …/spotlight/end (wave L, L5-2, features/workshops/spotlight.ts, which
+ * refuses guests itself too): a spotlight dims the board for everyone, so only facilitators (editors with an
+ * account) start one, like the timer, votes and "Gather everyone" (workshops/facilitators.ts). Listed here so a
+ * guest is refused before any board check, whatever role they were given.
+ */
+export const SPOTLIGHT_GUESTS =
+  'Guests take part, but the spotlight is run by editors with an account. Sign in with an account to use it.'
+
 /** `METHOD route-pattern` → the message a signed-in guest gets (403 GUEST_ACCOUNT_REQUIRED). */
 export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {
   // workspaces, projects and boards
@@ -78,6 +87,9 @@ export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {
   'POST /api/boards/:bid/access-requests': REQUEST,
   // outbound fetches on the caller's behalf (audit L2)
   'POST /api/boards/:bid/link-preview': LINK_PREVIEW_GUESTS,
+  // facilitation (wave L, L5-2): the spotlight for everyone
+  'POST /api/boards/:bid/spotlight': SPOTLIGHT_GUESTS,
+  'POST /api/boards/:bid/spotlight/end': SPOTLIGHT_GUESTS,
 }
 
 export const guestRefused = (message: string) => new ApiError(403, 'GUEST_ACCOUNT_REQUIRED', message)

@@ -12,6 +12,7 @@ import {
 } from '@draftroom/board-ops/elements'
 import { FILE_CARD_TYPE } from '@draftroom/canvas-schema'
 import { type CanvasElement, items, type LobbyCanvas } from '../../../../canvas/api/index.ts'
+import { minsOf } from '../../../present-export/live/agenda.ts'
 import { matchesFilter, type SearchFilter } from '../../search-filter.ts'
 import type { ShapeLite } from '../../select-by-type.ts'
 
@@ -162,6 +163,8 @@ export interface FrameRow {
   readonly bounds: Box
   /** customData.lobby.present.index, or null (the order then follows the layout) */
   readonly presentIndex: number | null
+  /** customData.lobby.present.mins (wave L, L5-1 run of show), or null: no time planned */
+  readonly mins: number | null
 }
 
 /** The board's frames in presentation order (board-ops `presentationOrderOf`; frames never nest on the new canvas). */
@@ -176,6 +179,7 @@ export function frameRows(elements: readonly CanvasElement[]): FrameRow[] {
     locked: byId.get(e.id)?.locked === true,
     bounds: e.bounds,
     presentIndex: e.presentIndex,
+    mins: minsOf(items.lobbyValue(byId.get(e.id), 'present')),
   }))
 }
 

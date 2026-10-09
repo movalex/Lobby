@@ -8,6 +8,8 @@
 //   (final review R3, facilitators.ts).
 // - Casting, "I'm done", reacting and raising a hand: `view` on an ACTIVE board — viewers and
 //   commenters take part; the person is always the signed-in user. Lowering your own hand: `view`.
+// - Spotlight (wave L, L5-2, spotlight.ts): `edit` and an account to start, the starter or a board owner to end;
+//   in memory like hands, folded into GET state as `spotlight`.
 // Events are published only after the transaction commits, and carry aggregates only. Reactions and
 // hands are in-memory (hands.ts, reactions.ts): nothing about them is stored.
 // RT-03 (wave J3): an open vote's counts, in events and in answers, are those of the last finished
@@ -49,6 +51,7 @@ import { registerPresentation } from './presentation.ts'
 import { allowedNow, registerPrivateNotes } from './private-notes.ts'
 import { REACTIONS_PER_BOARD_MAX, SlidingWindowLimiter } from './reactions.ts'
 import { createShapeIndex, type ShapeIndex } from './shapes.ts'
+import { registerSpotlightRoutes, SpotlightRegistry } from './spotlight.ts'
 import { applyTimerAction, TimerRuleError, type TimerState, timerHolder, timerView } from './timer.ts'
 import { VoteTally } from './vote-tally.ts'
 import {
@@ -83,6 +86,13 @@ export interface WorkshopOptions {
   workshopState?: WorkshopStatePusher
   /** RT-03: the counting window of open votes (default VOTE_TALLY_WINDOW_MS, vote-tally.ts). */
   voteTallyWindowMs?: number
+  /** L5-2: minimum time between two spotlights by one person on one board (default SPOTLIGHT_COOLDOWN_MS). */
+  spotlightCooldownMs?: number
+  /** L5-2: how often spotlights are checked for expiry without a request (0 = never; default 1 s). */
+  spotlightSweepMs?: number
+  /** L5-2: how long a spotlight lasts (default SPOTLIGHT_MAX_MS) and how long its starter may be away. */
+  spotlightMaxMs?: number
+  spotlightGraceMs?: number
 }
 
 /** The board event stream route (apps/api/src/events/routes.ts): raised hands follow its lifetime. */
@@ -198,6 +208,25 @@ export function registerWorkshopRoutes(
     app.addHook('onClose', async () => stopSweeper())
   }
 
+  // L5-2: the spotlight is in memory like the hands; it ends with its starter's event streams (spotlight.ts).
+  const spotlights = new SpotlightRegistry({
+    now,
+    publish: (boardId, data) => events.publish(boardId, { type: WORKSHOP_EVENTS.spotlight, data }),
+    online: (boardId, userId) => events.userStreamCount(userId, boardId) > 0,
+    ...(opts.spotlightMaxMs !== undefined ? { maxMs: opts.spotlightMaxMs } : {}),
+    ...(opts.spotlightGraceMs !== undefined ? { graceMs: opts.spotlightGraceMs } : {}),
+  })
+  const spotlightSweepMs = opts.spotlightSweepMs ?? 1_000
+  if (spotlightSweepMs > 0) {
+    const stopSpotlights = spotlights.startSweeper(spotlightSweepMs)
+    app.addHook('onClose', async () => stopSpotlights())
+  }
+  registerSpotlightRoutes(app, ctx, {
+    registry: spotlights,
+    shapes,
+    ...(opts.spotlightCooldownMs !== undefined ? { cooldownMs: opts.spotlightCooldownMs } : {}),
+  })
+
   // The version is read right after the list (same tick), so it describes that list.
   const handsBody = (boardId: string, list = hands.list(boardId)): HandsResponse => ({
     hands: list,
@@ -230,6 +259,9 @@ export function registerWorkshopRoutes(
       vote: row ? await stateOf(row, user.id, at, revOf(req)) : null,
       hands: hands.list(access.board.id),
       handsVersion: hands.version(),
+      // L5-2: read right after the spotlight (same tick), so the version describes it; older webs strip both
+      spotlight: spotlights.get(access.board.id),
+      spotlightVersion: spotlights.version(),
       serverNow: at.toISOString(),
     }
     return body

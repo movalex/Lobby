@@ -182,6 +182,82 @@ export function isNewerHands(current: HandsVersion | null, next: HandsVersion | 
   return next.n >= current.n
 }
 
+// ---- spotlight (wave L, L5-2; in memory on the API like the raised hands, never stored) -----------------
+
+/** The most objects one spotlight names (the same cap as a selection vote). */
+export const SPOTLIGHT_MAX_REFS = 200
+/** A spotlight ends by itself after this long. */
+export const SPOTLIGHT_MAX_MS = 5 * 60 * 1000
+
+/**
+ * Orders spotlight states that arrive by different paths (a response, an event, a refetch): `n` grows with
+ * every change within one API process (`epoch`); another epoch means the api restarted (and lost its
+ * spotlights). As HandsVersion.
+ */
+export const SpotlightVersion = z.object({
+  epoch: z.string().min(1).max(40),
+  n: z.number().int().nonnegative(),
+})
+export type SpotlightVersion = z.infer<typeof SpotlightVersion>
+
+/** Whether `next` may replace `current` (never an older state of the same API process). */
+export function isNewerSpotlight(current: SpotlightVersion | null, next: SpotlightVersion | null): boolean {
+  if (!next) return false
+  if (!current || current.epoch !== next.epoch) return true
+  return next.n >= current.n
+}
+
+/**
+ * The one spotlight a board can have: the objects (api refs, `shape:<id>`) a facilitator is talking about.
+ * Everyone's board dims around them; nobody's camera is taken, unless `bringEveryone` asks each person's
+ * view to move to them once. `version` is the state it started as: a new spotlight has a new one (a person
+ * who pressed Esc for the last one sees this one), the same spotlight keeps it. Names are of people already
+ * on the board (the session's, never a request body's).
+ */
+export const Spotlight = z.object({
+  refs: z.array(VoteShapeId).min(1).max(SPOTLIGHT_MAX_REFS),
+  bringEveryone: z.boolean(),
+  by: z.object({ userId: WsUserId, name: z.string() }),
+  startedAt: IsoDate,
+  /** startedAt + SPOTLIGHT_MAX_MS: when the api ends it if nobody did */
+  endsAt: IsoDate,
+  version: SpotlightVersion,
+})
+export type Spotlight = z.infer<typeof Spotlight>
+
+/** POST /api/boards/:bid/spotlight (a facilitator: edit and an account). Repeats in `refs` are dropped. */
+export const SpotlightInput = z.object({
+  refs: z.array(VoteShapeId).min(1).max(SPOTLIGHT_MAX_REFS),
+  bringEveryone: z.boolean().default(false),
+})
+export type SpotlightInput = z.input<typeof SpotlightInput>
+
+/**
+ * Why a spotlight ended: its starter or a board owner ended it, it ran for SPOTLIGHT_MAX_MS, or its
+ * starter's last event stream closed (and did not come back).
+ */
+export const SpotlightEndReason = z.enum(['ended', 'ended-by-owner', 'expired', 'starter-left'])
+export type SpotlightEndReason = z.infer<typeof SpotlightEndReason>
+
+/** The answer of both spotlight routes: the board's spotlight after the change (null: none). */
+export const SpotlightState = z.object({
+  spotlight: Spotlight.nullable(),
+  version: SpotlightVersion,
+  serverNow: IsoDate,
+})
+export type SpotlightState = z.infer<typeof SpotlightState>
+
+/** `workshop.spotlight`: the whole state after a change (idempotent to apply), plus why it ended. */
+export const WorkshopSpotlightEvent = z.object({
+  spotlight: Spotlight.nullable(),
+  version: SpotlightVersion,
+  /** Set when `spotlight` is null because one ended; null for a start or a replacement. */
+  reason: SpotlightEndReason.nullable(),
+  /** Who ended it (null when the api did: a timeout, the starter leaving). */
+  endedBy: z.object({ userId: WsUserId, name: z.string() }).nullable(),
+})
+export type WorkshopSpotlightEvent = z.infer<typeof WorkshopSpotlightEvent>
+
 export const WorkshopState = z.object({
   timer: WorkshopTimer.nullable(),
   /** The open vote, else the most recent one (so everyone can still see its results). */
@@ -189,6 +265,12 @@ export const WorkshopState = z.object({
   /** Raised hands on this board, first raised first (so late joiners see the queue). */
   hands: z.array(RaisedHand).default([]),
   handsVersion: HandsVersion.nullable().default(null),
+  /**
+   * Wave L (L5-2): the board's spotlight, and the version of that state. Optional and additive: an older
+   * api sends neither, and a web build from before wave L strips both (this schema is not strict).
+   */
+  spotlight: Spotlight.nullable().optional(),
+  spotlightVersion: SpotlightVersion.nullable().optional(),
   serverNow: IsoDate,
 })
 export type WorkshopState = z.infer<typeof WorkshopState>
@@ -347,6 +429,8 @@ export const WORKSHOP_EVENTS = {
   summon: 'workshop.summon',
   reaction: 'workshop.reaction',
   hand: 'workshop.hand',
+  /** wave L (L5-2): the board's spotlight, whole (WorkshopSpotlightEvent) */
+  spotlight: 'workshop.spotlight',
 } as const
 
 /** Someone on the board reacted (a hint to animate; nothing is stored). */

@@ -17,20 +17,24 @@ import { voteRuleOf, WORKSHOP_EVENTS, WorkshopSummonEvent } from '@draftroom/con
 import type {
   CanvasFeature,
   CanvasFeatureContext,
+  CommandSpec,
   FeatureKeySpec,
   FeatureToolSpec,
   LobbyCanvas,
+  MenuEntrySpec,
+  SelectionBarItemSpec,
 } from '../../../canvas/api/index.ts'
 import { knownUserKind } from '../../../invite/guest.tsx'
 import { atom, react } from '../../../lib/signals.ts'
 import { providePresentChrome } from '../../present-export/ported/insets.ts'
 import { installAudioUnlock } from '../chime.ts'
+import { spotlightArgs, voteSetupArgs, WORKSHOP_COMMAND_IDS } from '../commands.ts'
 import { timerDisplayPhase, timerRemainingMs } from '../countdown.ts'
 import { followSidOf } from '../follow.ts'
 import { privateStoreFor } from '../private-notes/hooks.ts'
 import type { WorkshopSnapshot } from '../store.ts'
 import { provideVoteResultsForExport, shownResults } from '../vote-export.ts'
-import { storeFor } from '../workshop-context.ts'
+import { canEditBoard, storeFor } from '../workshop-context.ts'
 import {
   followingNow,
   onFollowChanged,
@@ -42,6 +46,13 @@ import { showPrivateNotesTab, showVotingTab, workshopActivity } from './guest-ch
 import { NoteAuthorsLayer } from './NoteAuthors.tsx'
 import { isPresentingHere } from './presenting.ts'
 import { mountPrivateNotes, privateNotesPanel } from './private-notes/index.tsx'
+import {
+  endSpotlight,
+  mayEndSpotlight,
+  SpotlightLayer,
+  SpotlightSelectionButton,
+  spotlightIds,
+} from './SpotlightLayer.tsx'
 import { HIDE_AUTHORS_ATTR, workshopSettingsOf } from './session-settings.ts'
 import { VotingPanel } from './VotingPanel.tsx'
 import { selectEligible, selectedEligible, voteClickAt } from './voting-canvas.ts'
@@ -144,6 +155,13 @@ function mountPresentChrome(ctx: Ctx): () => void {
     offProvide()
   }
 }
+
+/**
+ * Facilitator = an editor with an account (final review R3): runs the timer, votes, brainstorms, "Gather everyone"
+ * and the spotlight. A name-only guest takes part only. While the kind is still unknown an editor counts as one.
+ * UI hint only: the api enforces it.
+ */
+const facilitatorHere = (ctx: Ctx) => canEditBoard(ctx) && !guestHere(ctx)
 
 function BallotIcon() {
   return (
@@ -377,6 +395,38 @@ function mountWorkshops(ctx: Ctx) {
     offTab = null
   })
 
+  // Esc dims the spotlight only for this person (L5-2), while one shows. Registered only then, like the Tab key
+  // above: Esc is no feature's static shortcut. It goes on to the board's own Esc (a selection to clear, a tool to
+  // leave) when there is one; only an Esc that would do nothing else hides the spotlight.
+  let offEsc: (() => void) | null = null
+  const syncEsc = () => {
+    const snap = store.getSnapshot()
+    const on = !!snap.spotlight && !snap.spotlightHidden && !isPresentingHere(canvas)
+    if (on && !offEsc) {
+      offEsc = registries.keys.register({
+        id: 'key:workshops.spotlight-hide',
+        scope: 'canvas',
+        match: (e) => e.key === 'Escape' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey,
+        handle: () => {
+          const tool = canvas.tool()
+          if (canvas.selection.length > 0 || (tool !== null && tool !== 'select' && tool !== 'hand'))
+            return false
+          store.hideSpotlight()
+          return true
+        },
+      })
+    } else if (!on && offEsc) {
+      offEsc()
+      offEsc = null
+    }
+  }
+  offs.push(store.subscribe(syncEsc))
+  offs.push(react('dr-wk-spotlight-esc', syncEsc))
+  offs.push(() => {
+    offEsc?.()
+    offEsc = null
+  })
+
   // Private brainstorming: a notice when a session ends; the revealing tab shows the placed notes.
   offs.push(mountPrivateNotes(ctx))
 
@@ -396,6 +446,68 @@ function mountWorkshops(ctx: Ctx) {
     for (const off of offs.reverse()) off()
   }
 }
+
+// ---- commands and the ways into the spotlight (L5-2) -----------------------------------------------------------------
+
+/**
+ * 'workshops.spotlight' {ids} (the frozen command id, ../commands.ts): dims the board for everyone around these
+ * elements; no ids means the selection. 'workshops.spotlight-end' ends it (its starter, or an owner).
+ */
+const COMMANDS: readonly CommandSpec[] = [
+  {
+    // L5-3: opens the vote setup, prefilled (a run-off on the top N, the coach's pick); no args: its own defaults
+    id: WORKSHOP_COMMAND_IDS.voteSetup,
+    label: 'Start a vote…',
+    keywords: ['poll', 'dot vote', 'run-off', 'ballot'],
+    group: 'Facilitate',
+    enabled: facilitatorHere,
+    run: (ctx, _source, args) => {
+      storeFor(ctx).openSetup(voteSetupArgs(args))
+    },
+  },
+  {
+    id: WORKSHOP_COMMAND_IDS.spotlight,
+    label: 'Spotlight for everyone',
+    keywords: ['focus', 'attention', 'dim', 'highlight', 'point at'],
+    group: 'Facilitate',
+    enabled: facilitatorHere,
+    run: async (ctx, _source, args) => {
+      await spotlightIds(ctx, spotlightArgs(args)?.ids ?? ctx.canvas.selection)
+    },
+  },
+  {
+    id: 'workshops.spotlight-end',
+    label: 'End the spotlight',
+    keywords: ['spotlight', 'stop', 'undim'],
+    group: 'Facilitate',
+    enabled: (ctx) => mayEndSpotlight(ctx, storeFor(ctx).getSnapshot().spotlight),
+    run: async (ctx) => {
+      await endSpotlight(ctx)
+    },
+  },
+]
+
+const CONTEXT_MENU: readonly MenuEntrySpec[] = [
+  {
+    id: 'workshops-spotlight',
+    group: 'workshop',
+    order: 20,
+    label: 'Spotlight for everyone',
+    visible: (ctx, target) => facilitatorHere(ctx) && target.ids.length > 0,
+    run: async (ctx, target) => {
+      await spotlightIds(ctx, target.ids)
+    },
+  },
+]
+
+const SELECTION_BAR: readonly SelectionBarItemSpec[] = [
+  {
+    id: 'workshops-spotlight',
+    order: 70,
+    visible: (ctx, selection) => facilitatorHere(ctx) && selection.length > 0,
+    component: SpotlightSelectionButton,
+  },
+]
 
 export const feature: CanvasFeature = {
   id: 'workshops',
@@ -449,6 +561,15 @@ export const feature: CanvasFeature = {
       focusMode: 'show',
       component: WorkshopLayer,
     },
+    // L5-2: the rest of the board dimmed around what a facilitator is talking about (under the counts: 14)
+    {
+      id: 'workshops-spotlight',
+      layer: 'scene',
+      order: 14,
+      pointer: 'none',
+      focusMode: 'hide',
+      component: SpotlightLayer,
+    },
     // above everything, the presentation included (the tldraw board's z-index 10001)
     {
       id: 'workshops-top',
@@ -460,5 +581,8 @@ export const feature: CanvasFeature = {
     },
   ],
   tools: [VOTE_TOOL],
+  commands: COMMANDS,
+  contextMenu: CONTEXT_MENU,
+  selectionBar: SELECTION_BAR,
   onMount: mountWorkshops,
 }

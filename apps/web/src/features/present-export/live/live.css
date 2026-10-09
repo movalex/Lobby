@@ -397,3 +397,52 @@ html[data-dr-presenting] .dr-live-invite {
     display: none;
   }
 }
+
+/* ---- the run of show's strip (wave L, L5-1) ------------------------------------------------------------
+   Under the banner at the top of the presentation, for the presenter and the followers: "Section 1 of 2 ·
+   Ideas · 1:58 left · next: Vote", "+0:42 over", "<name> holds the timer". The presenter's also has the
+   drift ("planned 60 · projected 63"). Nothing moves or animates: the text changes. */
+
+.dr-live-agenda {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2px 12px;
+  max-width: 100%;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--dr-present-chrome);
+  color: var(--dr-present-ink);
+  box-shadow: 0 8px 30px rgb(0 0 0 / 35%);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: auto;
+}
+.dr-live-agenda__line {
+  font-weight: 600;
+}
+.dr-live-agenda__drift {
+  opacity: 0.8;
+  font-size: 12.5px;
+}
+.dr-live-agenda__drift[data-behind="true"] {
+  color: #f6c453;
+  opacity: 1;
+}
+.dr-live-agenda[data-state="low"] .dr-live-agenda__line {
+  color: #f6c453;
+}
+.dr-live-agenda[data-state="over"] .dr-live-agenda__line {
+  color: #ff8a80;
+}
+.dr-live-agenda[data-state="held"] .dr-live-agenda__line {
+  color: #a7b7f6;
+}
+@media (max-width: 560px) {
+  .dr-live-agenda {
+    border-radius: 14px;
+    padding: 6px 12px;
+    font-size: 12.5px;
+  }
+}

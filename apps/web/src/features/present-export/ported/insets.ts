@@ -19,6 +19,11 @@ export const PRESENT_BAR_INSET = 80
 export const PRESENT_TOP_INSET = 64
 /** The timer with the raised hands under it (the hands sit 68 px down: workshops.css). */
 export const PRESENT_TOP_STACKED_INSET = 116
+/**
+ * The banner with the run of show's strip under it (wave L, L5-1): the banner's row (14 px down, about 40 px
+ * tall), the gap, the strip's row (about 34 px) and a gap.
+ */
+export const PRESENT_TOP_AGENDA_INSET = 104
 /** At most this share of the view's height goes to insets (a phone held sideways keeps a usable slide). */
 export const PRESENT_INSET_MAX_SHARE = 0.4
 
@@ -30,6 +35,8 @@ export interface PresentTopChrome {
   readonly hands: boolean
   /** present-live's banner (presenting to everyone, following someone) */
   readonly banner: boolean
+  /** the run of show's strip under the banner (wave L, L5-1) */
+  readonly agenda?: boolean
 }
 
 export const NO_TOP_CHROME: PresentTopChrome = { timer: false, hands: false, banner: false }
@@ -48,6 +55,8 @@ export function presentInsets(view: { w: number; h: number }, top: PresentTopChr
         : 0
   let b = bar ? PRESENT_BAR_INSET : 0
   const max = Math.max(0, view.h) * PRESENT_INSET_MAX_SHARE
+  // L5-1: the strip under the banner (the banner is the strip's anchor: no banner, no strip)
+  if (top.banner && top.agenda) t = Math.max(t, PRESENT_TOP_AGENDA_INSET)
   if (t + b > max && t + b > 0) {
     const k = max / (t + b)
     t = Math.floor(t * k)
