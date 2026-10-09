@@ -6,7 +6,7 @@ import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
 import { handlersFor } from '../../canvas/board/content.ts'
 import { parseMermaidLite } from '../ai/diagram/mermaid-lite.ts'
 import { BULK_PASTE_HANDLER } from '../canvas-ux/ported/navigation/bulk-paste.tsx'
-import { MERMAID_PASTE_HANDLER, pasteAsDiagram, pendingMermaid } from './MermaidPaste.tsx'
+import { MERMAID_PASTE_HANDLER, mermaidPromptText, pasteAsDiagram, pendingMermaid } from './MermaidPaste.tsx'
 import { placeDiagram } from './place.ts'
 import { fakeFlowCanvas } from './test-canvas.ts'
 
@@ -35,6 +35,28 @@ describe('the Mermaid paste handler', () => {
     pendingMermaid(f.canvas).set(null)
     f.setReadOnly(true)
     expect(MERMAID_PASTE_HANDLER.handle({ kind: 'text', text: CHART }, ctx, null, 'paste')).toBe(false)
+  })
+
+  it('the prompt says what the paste makes and, before anything is written, what the caps shorten or leave out', () => {
+    const f = fakeFlowCanvas([])
+    const ctx = ctxOf(f)
+    MERMAID_PASTE_HANDLER.handle({ kind: 'text', text: CHART }, ctx, null, 'paste')
+    const plain = pendingMermaid(f.canvas).get()
+    if (!plain) throw new Error('no prompt')
+    expect(mermaidPromptText(plain)).toBe(
+      'Paste this Mermaid flowchart as a diagram? 3 shapes, 3 connectors.',
+    )
+    const long = `flowchart TD\nA[${'word '.repeat(40)}] --> B\nB --> C[${'more '.repeat(40)}]\nA --> B\nB --> B`
+    MERMAID_PASTE_HANDLER.handle({ kind: 'text', text: long }, ctx, null, 'paste')
+    const capped = pendingMermaid(f.canvas).get()
+    if (!capped) throw new Error('no prompt')
+    expect(capped).toMatchObject({ shortened: 2, dropped: 2 })
+    expect(mermaidPromptText(capped)).toBe(
+      'Paste this Mermaid flowchart as a diagram? 3 shapes, 2 connectors. 2 long labels are shortened. 2 links are left out (repeated, or from a shape to itself).',
+    )
+    expect(mermaidPromptText({ ...capped, shortened: 1, dropped: 1 })).toContain(
+      '1 long label is shortened. 1 link is left out',
+    )
   })
 })
 

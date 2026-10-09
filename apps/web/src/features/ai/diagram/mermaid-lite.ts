@@ -9,9 +9,17 @@
 //   links    `-->`, `-.->`, `==>`, `---` (no arrowhead), `-- text -->`, `-. text .->`, `== text ==>`, and a
 //            `|text|` label after any of them; chains (`A --> B --> C`) and `;` between statements
 //   ignored  `%%` comments and the styling statements `style`, `classDef`, `class`, `linkStyle`
-// Refused (null): `subgraph`, `click`, `direction`, `&` fan-outs, any other diagram type, fewer than two
-// nodes, more than DIAGRAM_MAX_NODES nodes or DIAGRAM_MAX_EDGES edges.
+// Refused (null): `subgraph`, `click`, `direction`, `&` fan-outs, the circle and cross ends (`--o`, `--x`,
+// `==o`, …) and the open dotted and thick links (`-.-`, `===`), also where a texted link's words would swallow
+// one (`A --o B --> C` is not a link "o B" from A to C), any other diagram type, fewer than two nodes, more than
+// DIAGRAM_MAX_NODES nodes or DIAGRAM_MAX_EDGES edges.
+//
+// The graph goes through the AI path's gate (./graph.ts normalizeGraph): a label longer than its cap is
+// shortened, and a repeated link or a link from a shape to itself is left out. `readMermaid` counts both, so the
+// paste prompt says so before anything is written ("Paste as text" keeps every word).
 import {
+  cleanLabel,
+  DIAGRAM_LABEL_MAX_CHARS,
   DIAGRAM_MAX_EDGES,
   DIAGRAM_MAX_NODES,
   type DiagramDirection,
@@ -51,6 +59,13 @@ const TEXT_LINKS: readonly { start: string; end: string; dashed: boolean }[] = [
   { start: '--', end: '-->', dashed: false },
   { start: '==', end: '==>', dashed: false },
 ]
+/**
+ * A texted link's words may not start with what makes Mermaid's link token longer (its circle and cross ends
+ * `o` and `x`, or more of the line: `---`, `-.-`, `===`, `-->`) nor hold another link: such a statement is
+ * a link this reader does not take, not words.
+ */
+const TEXT_LINK_BAD_START = /^[ox\-.=>]/
+const TEXT_LINK_INNER_LINK = /--|==|-\.|\.-/
 
 class Refused extends Error {}
 const refuse = (): never => {
@@ -143,7 +158,9 @@ function readLink(
     const from = i + texted.start.length
     const end = s.indexOf(texted.end, from)
     if (end < 0) refuse()
-    label = labelText(s.slice(from, end))
+    const raw = s.slice(from, end)
+    if (TEXT_LINK_BAD_START.test(raw) || TEXT_LINK_INNER_LINK.test(raw)) refuse()
+    label = labelText(raw)
     if (!label) refuse()
     dashed = texted.dashed
     at = end + texted.end.length
@@ -180,6 +197,26 @@ function readStatement(s: string, p: Parsed): void {
 
 /** A Mermaid flowchart (the subset above) as a graph, or null when the text is anything else. */
 export function parseMermaidLite(text: string): DiagramGraph | null {
+  return readMermaid(text)?.graph ?? null
+}
+
+/** What the paste turns a flowchart into, and what the graph's gate changed on the way (see the header). */
+export interface MermaidRead {
+  readonly graph: DiagramGraph
+  /** node and link labels shortened to their caps (lines or characters) */
+  readonly shortened: number
+  /** links left out: repeated (the same from and to), or from a shape to itself */
+  readonly dropped: number
+}
+
+/** Whether the gate kept a label as written (its words cleaned of spacing and control characters only). */
+const kept = (raw: string, gated: string, oneLine: boolean) => {
+  const full = cleanLabel(raw, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY)
+  return (oneLine ? full.replace(/\n/g, ' ') : full) === gated
+}
+
+/** A Mermaid flowchart as `parseMermaidLite` reads it, with what the gate shortened and left out; or null. */
+export function readMermaid(text: string): MermaidRead | null {
   if (typeof text !== 'string' || !text.trim() || text.length > MERMAID_MAX_CHARS) return null
   const lines = text.replace(/\r\n?/g, '\n').split('\n')
   let direction: DiagramDirection | null = null
@@ -217,5 +254,20 @@ export function parseMermaidLite(text: string): DiagramGraph | null {
       ...(e.open ? { open: true } : {}),
     })),
   })
-  return g
+  let shortened = 0
+  for (const n of g.nodes) {
+    const raw = p.nodes.get(n.id)?.label ?? n.id
+    if (!kept(cleanLabel(raw, DIAGRAM_LABEL_MAX_CHARS) ? raw : n.id, n.label, false)) shortened++
+  }
+  // the edges kept are the first of each from-to pair, in order
+  const firstOf = new Map<string, (typeof p.edges)[number]>()
+  for (const e of p.edges) {
+    const pair = `${e.from}\u0000${e.to}`
+    if (e.from !== e.to && !firstOf.has(pair)) firstOf.set(pair, e)
+  }
+  for (const e of g.edges) {
+    const raw = firstOf.get(`${e.from}\u0000${e.to}`)?.label ?? ''
+    if (!kept(raw, e.label, true)) shortened++
+  }
+  return { graph: g, shortened, dropped: p.edges.length - g.edges.length }
 }

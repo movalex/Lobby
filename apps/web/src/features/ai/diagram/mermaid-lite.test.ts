@@ -1,9 +1,15 @@
 // L4-3: the Mermaid flowchart subset Paste as diagram reads (./mermaid-lite.ts). 30 fixtures that parse,
-// garbage and every refused form that does not, the caps, and K7-2's outline text (which stays a mind map).
+// garbage and every refused form that does not, the caps (and what readMermaid tells the paste prompt they
+// changed), and K7-2's outline text (which stays a mind map).
 import { describe, expect, it } from 'vitest'
 import { outlineOfPaste } from '../../canvas-ux/bulk-paste.ts'
-import { DIAGRAM_MAX_EDGES, DIAGRAM_MAX_NODES } from './graph.ts'
-import { parseMermaidLite } from './mermaid-lite.ts'
+import {
+  DIAGRAM_EDGE_LABEL_MAX_CHARS,
+  DIAGRAM_LABEL_MAX_CHARS,
+  DIAGRAM_MAX_EDGES,
+  DIAGRAM_MAX_NODES,
+} from './graph.ts'
+import { parseMermaidLite, readMermaid } from './mermaid-lite.ts'
 
 /** A parse as plain lines: "direction", "id:kind:label" per node, "from>to[:label][ dashed][ open]" per edge. */
 function lines(text: string): string[] | null {
@@ -180,6 +186,16 @@ describe('mermaid-lite: everything else is not a diagram (null)', () => {
     ['a texted link without its end', 'flowchart TD\nA -- yes B'],
     ['JSON', '{"nodes": [1, 2]}'],
     ['an empty pipe label is fine but a stray pipe is not', 'flowchart TD\nA -->|oops B'],
+    // a link this reader does not take, before one it does: never read as the words of a texted link
+    ['a circle end before a link', 'flowchart TD\nA --o B --> C'],
+    ['a cross end before a link', 'flowchart TD\nA --x B --> C'],
+    ['a thick circle end before a thick link', 'flowchart TD\nA ==o B ==> C'],
+    ['a dotted circle end before a dotted link', 'flowchart TD\nA -.-o B -.-> C'],
+    ['an open dotted link before a dotted link', 'flowchart TD\nA -.- B -.-> C'],
+    ['an open thick link before a thick link', 'flowchart TD\nA === B ==> C'],
+    ['a texted open link before a link', 'flowchart TD\nA -- yes --- B --> C'],
+    ['a circle end alone', 'flowchart TD\nA --o B'],
+    ['a cross end with no spaces', 'flowchart TD\nA--xB-->C'],
   ]
   for (const [name, text] of NOT)
     it(name, () => {
@@ -230,10 +246,37 @@ describe('mermaid-lite: the caps', () => {
     expect(parseMermaidLite(['flowchart TD', ...pairs].join('\n'))).toBeNull()
   })
 
-  it('a long label is cut to the label cap', () => {
-    const g = parseMermaidLite(`flowchart TD\nA[${'word '.repeat(40)}] --> B`)
-    expect([...(g?.nodes[0]?.label ?? '')].length).toBeLessThanOrEqual(60)
+  it('a long label is cut to the label cap, and readMermaid counts it for the prompt', () => {
+    const text = `flowchart TD\nA[${'word '.repeat(40)}] --> B`
+    const g = parseMermaidLite(text)
+    expect([...(g?.nodes[0]?.label ?? '')].length).toBeLessThanOrEqual(DIAGRAM_LABEL_MAX_CHARS)
     expect(g?.nodes[0]?.label.endsWith('…')).toBe(true)
+    expect(readMermaid(text)).toMatchObject({ shortened: 1, dropped: 0 })
+  })
+
+  it('readMermaid: what the gate shortened (labels, link words, lines) and left out (repeats, self-links)', () => {
+    // nothing changed: spacing is not shortening
+    expect(readMermaid('flowchart TD\nA["  Brief   one "] -- yes --> B{OK?}\nB --> A')).toMatchObject({
+      shortened: 0,
+      dropped: 0,
+    })
+    const long = 'x'.repeat(DIAGRAM_EDGE_LABEL_MAX_CHARS + 1)
+    const r = readMermaid(
+      [
+        'flowchart LR',
+        `A[One] -->|${long}| B[Two]`,
+        'B[Two] --> C["1<br>2<br>3<br>4<br>5"]',
+        'A --> B',
+        'C --> C',
+        'C --> A',
+      ].join('\n'),
+    )
+    // the link words and the fifth line: 2 shortened; the repeated A to B and the C to C: 2 left out
+    expect(r).toMatchObject({ shortened: 2, dropped: 2 })
+    expect(r?.graph.edges.map((e) => `${e.from}>${e.to}`)).toEqual(['A>B', 'B>C', 'C>A'])
+    // an id that is longer than the label cap names its node, shortened
+    expect(readMermaid(`flowchart TD\n${'N'.repeat(DIAGRAM_LABEL_MAX_CHARS + 5)} --> B`)?.shortened).toBe(1)
+    expect(readMermaid('not a chart')).toBeNull()
   })
 
   it('a very long paste is not read at all', () => {

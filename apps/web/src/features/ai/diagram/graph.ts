@@ -49,8 +49,14 @@ export const DIAGRAM_MAX_EDGES = AI_DIAGRAM_MAX_EDGES
 export const DIAGRAM_LABEL_MAX_CHARS = AI_DIAGRAM_LABEL_MAX_CHARS
 export const DIAGRAM_EDGE_LABEL_MAX_CHARS = AI_DIAGRAM_EDGE_LABEL_MAX_CHARS
 
-/** Control characters other than a line break go; runs of spaces become one; at most `max` characters. */
-export function cleanLabel(raw: string, max: number): string {
+/** The most lines a label keeps. */
+export const DIAGRAM_LABEL_MAX_LINES = 4
+
+/**
+ * Control characters other than a line break go; runs of spaces become one; at most `maxLines` lines and `max`
+ * characters (an ellipsis ends a cut label).
+ */
+export function cleanLabel(raw: string, max: number, maxLines = DIAGRAM_LABEL_MAX_LINES): string {
   const lines = String(raw)
     .replace(/\r\n?/g, '\n')
     // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what this removes
@@ -58,7 +64,7 @@ export function cleanLabel(raw: string, max: number): string {
     .split('\n')
     .map((l) => l.replace(/\s+/g, ' ').trim())
     .filter(Boolean)
-    .slice(0, 4)
+    .slice(0, maxLines)
   const text = lines.join('\n')
   const chars = [...text]
   return chars.length <= max

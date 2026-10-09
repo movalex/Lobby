@@ -3,7 +3,9 @@
 // paste only when the text is a flowchart (../ai/diagram/mermaid-lite.ts; anything else goes on to the handlers
 // after it, exactly as before), and asks "Paste as diagram?" at the paste point. The diagram is the graph laid
 // out and written as L4-2's (../ai/diagram/apply.ts), without AI provenance; it works with AI off and for
-// guests who can edit. "Paste as text" keeps the words as one text element (bulk paste's).
+// guests who can edit. "Paste as text" keeps the words as one text element (bulk paste's). The diagram keeps the
+// AI path's caps (../ai/diagram/graph.ts normalizeGraph), so the prompt says, before anything is written, how many
+// long labels it shortens and how many links (repeated, or from a shape to itself) it leaves out.
 import { MAX_ITEMS } from '@draftroom/canvas-schema/limits'
 import { useEffect, useId } from 'react'
 import {
@@ -16,7 +18,7 @@ import { type Atom, atom, useValue } from '../../lib/signals.ts'
 import { bringIntoView } from '../a11y/ported/traversal.ts'
 import { applyDiagram, measureDiagram, planDiagram, planSize } from '../ai/diagram/apply.ts'
 import type { DiagramGraph } from '../ai/diagram/graph.ts'
-import { parseMermaidLite } from '../ai/diagram/mermaid-lite.ts'
+import { readMermaid } from '../ai/diagram/mermaid-lite.ts'
 import { pasteAsText } from '../canvas-ux/ported/navigation/bulk-paste.tsx'
 import { placeDiagram } from './place.ts'
 import { freshId } from './runtime.ts'
@@ -27,6 +29,25 @@ interface PendingMermaid {
   readonly text: string
   readonly graph: DiagramGraph
   readonly center: ScenePoint
+  /** labels the diagram's caps shorten, and links left out (../ai/diagram/mermaid-lite.ts readMermaid) */
+  readonly shortened: number
+  readonly dropped: number
+}
+
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
+
+/**
+ * What the prompt asks: the shapes and connectors the paste makes and, before anything is written, what the
+ * diagram's caps change ("Text" keeps every word as written).
+ */
+export function mermaidPromptText(p: Pick<PendingMermaid, 'graph' | 'shortened' | 'dropped'>): string {
+  const shapes = count(p.graph.nodes.length, 'shape', 'shapes')
+  const links = count(p.graph.edges.length, 'connector', 'connectors')
+  let text = `Paste this Mermaid flowchart as a diagram? ${shapes}, ${links}.`
+  if (p.shortened > 0) text += ` ${count(p.shortened, 'long label is', 'long labels are')} shortened.`
+  if (p.dropped > 0)
+    text += ` ${count(p.dropped, 'link is', 'links are')} left out (repeated, or from a shape to itself).`
+  return text
 }
 
 const pendings = new WeakMap<object, Atom<PendingMermaid | null>>()
@@ -49,11 +70,11 @@ export const MERMAID_PASTE_HANDLER: ContentHandlerSpec = {
   priority: 60,
   handle(content, ctx, at, source) {
     if (content.kind !== 'text' || source === 'insert' || ctx.canvas.readOnly()) return false
-    const graph = parseMermaidLite(content.text)
-    if (!graph) return false
+    const read = readMermaid(content.text)
+    if (!read) return false
     const v = ctx.canvas.viewport.get()
     const center = at ?? { x: v.x + v.width / 2, y: v.y + v.height / 2 }
-    pendingMermaid(ctx.canvas).set({ id: ++seq, text: content.text, graph, center })
+    pendingMermaid(ctx.canvas).set({ id: ++seq, text: content.text, center, ...read })
     return true
   },
 }
@@ -115,8 +136,6 @@ export function MermaidPastePrompt({ ctx }: { ctx: CanvasFeatureContext }) {
     pendingMermaid(canvas).set(null)
     canvas.focus({ preventScroll: true })
   }
-  const shapes = pending.graph.nodes.length
-  const links = pending.graph.edges.length
   return (
     <div
       key={pending.id}
@@ -133,7 +152,7 @@ export function MermaidPastePrompt({ ctx }: { ctx: CanvasFeatureContext }) {
       }}
     >
       <p id={titleId} className="dr-flow-paste__title">
-        {`Paste this Mermaid flowchart as a diagram? ${shapes} ${shapes === 1 ? 'shape' : 'shapes'}, ${links} ${links === 1 ? 'connector' : 'connectors'}.`}
+        {mermaidPromptText(pending)}
       </p>
       <div className="dr-flow-paste__actions">
         <button
