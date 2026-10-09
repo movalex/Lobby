@@ -93,6 +93,9 @@ function refusedCalls(board: string, other: string, userId: string): [string, Me
     ['POST /api/access-requests/:id/deny', 'POST', `/api/access-requests/${REQUEST}/deny`, {}],
     // Link previews (audit L2): the api fetches public pages for people with an account only.
     ['POST /api/boards/:bid/link-preview', 'POST', `${b}/link-preview`, { url: 'https://example.com/' }],
+    // The spotlight for everyone (wave L, L5-2): facilitators only, and a guest never is one.
+    ['POST /api/boards/:bid/spotlight', 'POST', `${b}/spotlight`, { refs: ['shape:abc'] }],
+    ['POST /api/boards/:bid/spotlight/end', 'POST', `${b}/spotlight/end`, {}],
     // Requesting access: to their own board and to any other.
     ['POST /api/boards/:bid/access-requests', 'POST', `${b}/access-requests`, { role: 'editor' }],
     [
