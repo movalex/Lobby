@@ -1,0 +1,234 @@
+/* sort feature styles (L8-1, L8-2). Only --dr-* tokens, so both themes work; the popover keeps 12 px from the
+   canvas' edges and scrolls inside itself when it is taller than the canvas. */
+
+.dr-sort-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 310;
+  overflow: hidden;
+  pointer-events: none;
+}
+.dr-sort-overlay > * {
+  pointer-events: auto;
+}
+
+/* ---- the popover ---------------------------------------------------------------------------------- */
+.dr-sort-pop {
+  position: absolute;
+  box-sizing: border-box;
+  max-width: calc(100% - 24px);
+  padding: 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--dr-line);
+  border-radius: 12px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow-pop);
+  color: var(--dr-ink);
+  font: 14px / 1.35 var(--dr-font);
+}
+.dr-sort-pop__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 2px 6px 4px;
+}
+.dr-sort-pop__badge {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+}
+.dr-sort-pop__title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+.dr-sort-pop__about {
+  color: var(--dr-ink-2);
+  font-weight: 500;
+}
+.dr-sort-pop__items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dr-sort-pop__sep {
+  height: 1px;
+  margin: 4px 6px;
+  border: 0;
+  background: var(--dr-line);
+}
+.dr-sort-item {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+  padding: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dr-ink);
+  text-align: left;
+  cursor: pointer;
+}
+.dr-sort-item:hover:not([aria-disabled="true"]),
+.dr-sort-item:focus-visible {
+  background: var(--dr-hover);
+}
+.dr-sort-item:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: -2px;
+}
+.dr-sort-item[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.6;
+}
+.dr-sort-item__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.dr-sort-item__label {
+  font-weight: 600;
+}
+.dr-sort-item__hint {
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+}
+
+/* ---- the lens and axes views ------------------------------------------------------------------------ */
+.dr-sort-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 4px 4px;
+}
+.dr-sort-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--dr-ink-2);
+  font-weight: 600;
+}
+.dr-sort-field .dr-input,
+.dr-sort-axis .dr-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+.dr-sort-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.dr-sort-chip {
+  padding: 3px 9px;
+  border: 1px solid var(--dr-line);
+  border-radius: 999px;
+  background: var(--dr-chip);
+  color: var(--dr-ink);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.dr-sort-chip:hover {
+  background: var(--dr-hover);
+}
+.dr-sort-chip:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+.dr-sort-axis {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.dr-sort-axis legend {
+  grid-column: 1 / -1;
+  padding: 0;
+  margin-bottom: 4px;
+  color: var(--dr-ink-2);
+  font-weight: 600;
+}
+.dr-sort-note {
+  margin: 0;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+}
+.dr-sort-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ---- the selection bar's button -------------------------------------------------------------------- */
+.dr-cux-selbar__btn.dr-sort-barbtn {
+  display: inline-flex;
+  gap: 4px;
+  width: auto;
+  padding: 0 8px 0 6px;
+  font: 600 12.5px / 1 var(--dr-font);
+}
+.dr-sort-barbtn[aria-expanded="true"] {
+  background: var(--dr-accent-bg);
+}
+
+/* ---- the scores chips (local, never stored) ---------------------------------------------------------- */
+.dr-sort-scores {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+.dr-sort-score {
+  position: absolute;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--dr-inverse);
+  color: var(--dr-on-inverse);
+  font: 600 13px / 1.3 var(--dr-font);
+  white-space: nowrap;
+  transform: translate(-100%, -50%);
+}
+.dr-sort-scores-legend {
+  position: absolute;
+  top: 56px;
+  left: 12px;
+  z-index: 311;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 10px;
+  border: 1px solid var(--dr-line);
+  border-radius: 999px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow);
+  color: var(--dr-ink);
+  font: 12.5px / 1.3 var(--dr-font);
+  pointer-events: auto;
+}
+
+@media (max-width: 600px) {
+  .dr-sort-axis {
+    grid-template-columns: 1fr 1fr;
+  }
+  .dr-sort-axis input:first-of-type {
+    grid-column: 1 / -1;
+  }
+}

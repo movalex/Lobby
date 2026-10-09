@@ -9,7 +9,9 @@
     "./scene": "./src/scene/index.ts",
     "./builder": "./src/builder.ts",
     "./common": "./src/common.ts",
-    "./source": "./src/source.ts"
+    "./source": "./src/source.ts",
+    "./pieces": "./src/pieces/index.ts",
+    "./pieces/catalog": "./src/pieces/catalog.ts"
   },
   "scripts": {
     "typecheck": "tsc -p ."
