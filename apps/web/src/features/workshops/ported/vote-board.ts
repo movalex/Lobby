@@ -203,13 +203,26 @@ export function resultsToBoard(
 /**
  * The results as candidates for gathering or a run-off (what each ref names now). `locked`: the element is locked,
  * and, when the originals are to be moved (`move`), also when it stands in a locked frame (the server refuses a
- * write to either; a copy of an element in a locked frame is a new element and is fine).
+ * write to either; a copy of an element in a locked frame is a new element and is fine). Round 1: with `move`, an
+ * element in use is left too and counted with them: one this tab or another session types in (its lease, or its
+ * label's: the server refuses the label's move, LEASED) or someone else drags (sort's skip rules, sort/model.ts).
  */
 export function candidatesOf(
-  canvas: Pick<LobbyCanvas, 'get' | 'isLocked'>,
+  canvas: Pick<LobbyCanvas, 'get' | 'isLocked'> &
+    Partial<Pick<LobbyCanvas, 'leaseHolder' | 'editingId' | 'presence'>>,
   results: readonly { shapeId: string; count: number; rank: number }[],
   move = false,
 ): WinnerCandidate[] {
+  const inUse = (el: CanvasElement): boolean => {
+    const label = items.labelOf(el, (x) => canvas.get(x))
+    return (
+      canvas.editingId?.() === el.id ||
+      (!!label && canvas.editingId?.() === label.id) ||
+      (canvas.leaseHolder?.(el.id) ?? null) !== null ||
+      (!!label && (canvas.leaseHolder?.(label.id) ?? null) !== null) ||
+      (canvas.presence?.draggerOf(el.id) ?? null) !== null
+    )
+  }
   return results.map((r) => {
     const id = elementIdOf(r.shapeId)
     const el = id ? canvas.get(id) : undefined
@@ -223,7 +236,9 @@ export function candidatesOf(
       locked:
         !!id &&
         isLive(el) &&
-        (canvas.isLocked(id) || (move && !!el.frameId && canvas.get(el.frameId)?.locked === true)),
+        (canvas.isLocked(id) ||
+          (move && !!el.frameId && canvas.get(el.frameId)?.locked === true) ||
+          (move && inUse(el))),
     }
   })
 }

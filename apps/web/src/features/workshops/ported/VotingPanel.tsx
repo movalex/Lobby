@@ -543,14 +543,17 @@ function ResultsActions({ ctx, store, vote }: { ctx: Ctx; store: WorkshopStore; 
   const gather = () => {
     const out = gatherWinners(ctx.canvas, vote, { n, move })
     if (!out?.frameId) {
-      notify('There is nothing to gather: the top ideas are gone, locked or frames.', 'vote-gather-toast')
+      notify(
+        'There is nothing to gather: the top ideas are gone, locked, in use or frames.',
+        'vote-gather-toast',
+      )
       return
     }
     const left = out.skipped.gone + out.skipped.frames + out.skipped.locked
     const verb = move ? 'moved' : 'gathered'
     notify(
       `${plural(out.gathered, 'idea')} ${verb} into “Top ideas”.${
-        left ? ` ${plural(left, 'result')} could not be ${verb} (locked, a frame or gone).` : ''
+        left ? ` ${plural(left, 'result')} could not be ${verb} (locked, in use, a frame or gone).` : ''
       } Ctrl+Z takes it back.`,
       'vote-gather-toast',
     )

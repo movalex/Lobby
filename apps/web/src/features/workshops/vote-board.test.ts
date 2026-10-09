@@ -63,9 +63,17 @@ function board(elements: CanvasElement[]) {
       height: text.split('\n').length * style.fontSize * 1.25,
     }),
   }
+  // who else is typing in or dragging an element (round 1: move mode leaves those)
+  const leases: Record<string, { sid: string; uid: string; name: string }> = {}
+  const draggers: Record<string, { sid: string; name: string }> = {}
+  Object.assign(f.canvas, {
+    leaseHolder: (id: string) => leases[id] ?? null,
+    editingId: () => null,
+    presence: { draggerOf: (id: string) => draggers[id] ?? null },
+  })
   const byId = (id: string) => f.elements.find((e) => e.id === id)
   const created = () => f.elements.filter((e) => e.id.startsWith('vr') || e.id.startsWith('gen'))
-  return { ...f, steps, byId, created }
+  return { ...f, steps, byId, created, leases, draggers }
 }
 
 const vote = (
@@ -326,6 +334,28 @@ describe('"Gather the winners"', () => {
     expect(copy).toMatchObject({ gathered: 2, skipped: { locked: 0 } })
     const move = gatherWinners(make().canvas, vote(RESULTS), { n: 2, move: true })
     expect(move).toEqual({ frameId: null, gathered: 0, skipped: { gone: 0, frames: 0, locked: 2 } })
+  })
+
+  it('move mode leaves a winner someone is typing in or dragging, and counts it; copying takes it (round 1)', () => {
+    const make = () => {
+      const b = board(placed({ n1: [100, 100], n2: [400, 100], n3: [700, 100] }))
+      b.leases['n1-label'] = { sid: 'sid-other', uid: 'usr_typist00001', name: 'Tia' }
+      b.draggers.n2 = { sid: 'sid-other', name: 'Dee' }
+      return b
+    }
+    const results = [
+      { shapeId: 'shape:n1', count: 3, rank: 1 },
+      { shapeId: 'shape:n2', count: 2, rank: 2 },
+      { shapeId: 'shape:n3', count: 1, rank: 3 },
+    ]
+    const moved = make()
+    const out = gatherWinners(moved.canvas, vote(results), { n: 3, move: true })
+    expect(out).toMatchObject({ gathered: 1, skipped: { locked: 2 } })
+    expect(moved.byId('n1')).toMatchObject({ x: 100, y: 100 })
+    expect(moved.byId('n1-label')?.frameId ?? null).not.toBe(out?.frameId)
+    expect(moved.byId('n2')).toMatchObject({ x: 400, y: 100 })
+    const copied = gatherWinners(make().canvas, vote(results), { n: 3, move: false })
+    expect(copied).toMatchObject({ gathered: 3, skipped: { locked: 0 } })
   })
 
   it('reads the candidates from the board as it is now', () => {
