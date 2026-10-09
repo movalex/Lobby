@@ -1,0 +1,130 @@
+/* OWNER: W4 (wave L). The + handles of flow-building (./Handles.tsx) and the Mermaid paste prompt (./MermaidPaste.tsx). */
+
+.dr-flow-handles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.dr-flow-handle {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  margin: -12px 0 0 -12px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1.5px solid var(--dr-accent-ink, #1f3a5f);
+  background: var(--dr-surface, #fff);
+  color: var(--dr-accent-ink, #1f3a5f);
+  box-shadow: 0 1px 4px rgb(0 0 0 / 0.18);
+  cursor: pointer;
+  pointer-events: auto;
+  touch-action: none;
+  opacity: 0.92;
+}
+
+.dr-flow-handle:hover {
+  opacity: 1;
+  background: var(--dr-accent-ink, #1f3a5f);
+  color: var(--dr-surface, #fff);
+}
+
+.dr-flow-ghost {
+  position: absolute;
+  border: 2px dashed var(--dr-accent-ink, #1f3a5f);
+  border-radius: 6px;
+  background: var(--dr-accent-bg, #e9eef6);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .dr-flow-handle {
+    transition:
+      background-color 120ms ease,
+      color 120ms ease,
+      opacity 120ms ease;
+  }
+}
+
+.dr-flow-paste {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  min-width: 300px;
+  max-width: 380px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--dr-surface, #fff);
+  color: var(--dr-ink, #1b2330);
+  box-shadow: var(--dr-shadow-pop, 0 4px 18px rgb(0 0 0 / 0.18));
+  pointer-events: auto;
+}
+
+.dr-flow-paste__title {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.dr-flow-paste__actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.dr-flow-ghost {
+  opacity: 0.7;
+}
+
+.dr-flow-diagram {
+  width: min(420px, calc(100% - 32px));
+  max-width: none;
+}
+
+.dr-flow-diagram__field {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.dr-flow-diagram__field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid var(--dr-line-strong, #8a96a8);
+  border-radius: 6px;
+  resize: vertical;
+  background: var(--dr-surface, #fff);
+  color: var(--dr-ink, #1b2330);
+}
+
+.dr-flow-diagram__check {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.dr-flow-diagram__dir {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 0 0 8px;
+  padding: 0;
+  border: 0;
+  font-size: 13px;
+}
+
+.dr-flow-diagram__dir legend {
+  float: left;
+  margin-right: 4px;
+  padding: 0;
+}
+
+.dr-flow-diagram__note {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
