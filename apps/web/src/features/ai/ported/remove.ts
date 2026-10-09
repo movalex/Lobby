@@ -1,6 +1,7 @@
 // OWNER: W2 (wave L, L2-1d). "Remove this AI result": one transact that deletes what one AI run made, except
-// what anyone changed since. A run's elements are those whose `customData.lobby.ai.run` is the run id. One is
-// removed only while
+// what anyone changed since. A run's elements are those whose `customData.lobby.ai.run` is the run id, and what a
+// frame of the run held as made in the same step without provenance of its own (the Recap frame's table and the
+// room's votes). One is removed only while
 //  - its server stamps still say nobody edited its words (`lobbyServer.lastEditedAt` equals `createdAt`, for
 //    the element and for its bound label), and
 //  - its version (and its label's) is the one this tab saw once the run had been saved: a move, a recolour or
@@ -38,25 +39,44 @@ const live = (el: CanvasElement | undefined): el is CanvasElement =>
 const labelIdOf = (canvas: Pick<LobbyCanvas, 'get'>, el: CanvasElement) =>
   items.labelOf(el, (id) => canvas.get(id))?.id ?? null
 
-/** Notes `ids` (just created by this tab) under their run, when they carry one of `me`'s runs. */
+const isLabel = (el: CanvasElement) =>
+  el.type === 'text' && !!(el as { containerId?: string | null }).containerId
+
+/**
+ * Notes `ids` (just created by this tab, in one step) under their run, when they carry one of `me`'s runs. What
+ * a run's frame made in the same step holds without AI provenance of its own (the Recap frame's planned-vs-actual
+ * table and the room's top-voted lines: the room's results, never stamped as AI) is part of that run too, so the
+ * frame can go with everything in it. Anything put into the frame later is not: the frame then stays.
+ */
 export function noteCreated(canvas: LobbyCanvas, ids: readonly string[], me: string): boolean {
   let any = false
+  const recordOf = (run: string): RunRecord => {
+    const rec = runRecords(canvas).get(run) ?? { versions: new Map(), kinds: new Set(), pending: new Set() }
+    runRecords(canvas).set(run, rec)
+    return rec
+  }
+  /** this step's frames of a run of `me`'s: frame id → run */
+  const frames = new Map<string, string>()
   for (const id of ids) {
     const el = canvas.get(id)
     const ai = aiOf(el)
-    if (!el || !ai?.run || ai.by !== me) continue
-    if (el.type === 'text' && (el as { containerId?: string | null }).containerId) continue
-    const rec = runRecords(canvas).get(ai.run) ?? {
-      versions: new Map(),
-      kinds: new Set(),
-      pending: new Set(),
-    }
-    runRecords(canvas).set(ai.run, rec)
+    if (!el || !ai?.run || ai.by !== me || isLabel(el)) continue
+    const rec = recordOf(ai.run)
     rec.pending.add(id)
     const kind = aiKindWord(el)
     if (kind) rec.kinds.add(kind)
+    if (el.type === 'frame') frames.set(id, ai.run)
     any = true
   }
+  if (frames.size)
+    for (const id of ids) {
+      const el = canvas.get(id)
+      if (!el || aiOf(el) || isLabel(el)) continue
+      const run = el.frameId ? frames.get(el.frameId) : undefined
+      if (!run) continue
+      recordOf(run).pending.add(id)
+      any = true
+    }
   return any
 }
 
@@ -117,17 +137,28 @@ export interface RemovalPlan {
   readonly remove: string[]
   /** the run's elements that stay: someone changed them (or this tab never saw them settle) */
   readonly kept: string[]
+  /** the run's frames that stay, unchanged, only because they hold something that is not removed */
+  readonly held: string[]
   /** a themes run: its notes are put back from History, not deleted */
   readonly themes: boolean
 }
 
-/** The run of an element (its own, or its container's for a label), if this tab recorded it. */
+/** Whether `rec` holds `id` (made by its run, or held in its frame as made in the same step). */
+const recorded = (rec: RunRecord, id: string) => rec.versions.has(id) || rec.pending.has(id)
+
+/**
+ * The run of an element (its own, or its container's for a label; for a piece of a run's frame with no AI
+ * provenance, the run it was recorded under), if this tab recorded it.
+ */
 export function recordedRunOf(canvas: LobbyCanvas, id: string): string | null {
   const el = canvas.get(id)
   if (!el) return null
   const root = items.containerOf(el, (x) => canvas.get(x))
   const run = aiOf(root)?.run ?? null
-  return run && runRecords(canvas).has(run) ? run : null
+  if (run) return runRecords(canvas).has(run) ? run : null
+  const rootId = root?.id ?? id
+  for (const [r, rec] of runRecords(canvas)) if (recorded(rec, rootId)) return r
+  return null
 }
 
 /** Unchanged since the run: the words never edited (server stamps) and the version this tab recorded. */
@@ -149,16 +180,13 @@ export function removalPlan(canvas: LobbyCanvas, runId: string): RemovalPlan | n
   const rec = runRecords(canvas).get(runId)
   if (!rec) return null
   if (rec.pending.size) settleRecords(canvas)
+  // the run's elements: stamped with it, or held in its frame as made in the same step (noteCreated)
   const mine = canvas
     .items()
-    .filter(
-      (e) =>
-        live(e) &&
-        !(e.type === 'text' && (e as { containerId?: string | null }).containerId) &&
-        aiOf(e)?.run === runId,
-    )
+    .filter((e) => live(e) && !isLabel(e) && (aiOf(e)?.run === runId || recorded(rec, e.id)))
   const remove = new Set<string>()
   const kept: string[] = []
+  const held: string[] = []
   for (const el of mine) {
     if (el.type === 'frame') continue
     if (untouched(canvas, rec, el)) remove.add(el.id)
@@ -169,12 +197,13 @@ export function removalPlan(canvas: LobbyCanvas, runId: string): RemovalPlan | n
     const inside = items.childrenOf(f.id, canvas.items()).filter((id) => live(canvas.get(id)))
     const roots = inside.filter((id) => {
       const c = canvas.get(id)
-      return !(c?.type === 'text' && (c as { containerId?: string | null }).containerId)
+      return !!c && !isLabel(c)
     })
-    if (untouched(canvas, rec, f) && roots.every((id) => remove.has(id))) remove.add(f.id)
-    else kept.push(f.id)
+    if (!untouched(canvas, rec, f)) kept.push(f.id)
+    else if (roots.every((id) => remove.has(id))) remove.add(f.id)
+    else held.push(f.id)
   }
-  return { runId, remove: [...remove], kept, themes: rec.kinds.has('theme-label') }
+  return { runId, remove: [...remove], kept, held, themes: rec.kinds.has('theme-label') }
 }
 
 /** Removes what `plan` names in one transact (one undo step). Returns how many went. */
@@ -188,10 +217,20 @@ export function applyRemoval(canvas: LobbyCanvas, plan: RemovalPlan): number {
   return ids.length
 }
 
-/** The toast after a removal: what went, and what stayed because someone changed it. */
-export function removedText(removed: number, kept: number): string {
-  if (!removed)
-    return kept ? `Nothing removed: ${plural(kept, 'part')} changed since.` : 'Nothing left to remove.'
+/**
+ * The toast after a removal: what went, what stayed because someone changed it, and a frame that stayed (unchanged)
+ * because it holds something else.
+ */
+export function removedText(removed: number, kept: number, held = 0): string {
+  const frames = held
+    ? held === 1
+      ? ' Kept the frame: it holds other content.'
+      : ` Kept ${held} frames: they hold other content.`
+    : ''
+  if (!removed) {
+    if (kept) return `Nothing removed: ${plural(kept, 'part')} changed since.${frames}`
+    return held ? `Nothing removed.${frames}` : 'Nothing left to remove.'
+  }
   const base = `Removed ${plural(removed, 'AI-made item')}.`
-  return kept ? `${base} Kept ${plural(kept, 'item')} someone changed.` : base
+  return `${base}${kept ? ` Kept ${plural(kept, 'item')} someone changed.` : ''}${frames}`
 }

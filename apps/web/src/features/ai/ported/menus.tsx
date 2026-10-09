@@ -174,7 +174,7 @@ export function removeResult(ctx: CanvasFeatureContext, runId: string): void {
   const removed = applyRemoval(canvas, plan)
   ctx.notify({
     key: 'dr-ai',
-    text: removedText(removed, plan.kept.length),
+    text: removedText(removed, plan.kept.length, plan.held.length),
     testId: 'ai-removed',
     timeoutMs: 7000,
   })

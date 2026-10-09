@@ -10,6 +10,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { exportGate } from '../../canvas-ux/ported/export-gate.ts'
 import { showSources } from '../ported/ask.ts'
 import { aiKindWord, aiOf } from '../ported/provenance.ts'
+import {
+  applyRemoval,
+  noteCreated,
+  recordedRunOf,
+  removalPlan,
+  removedText,
+  settleRecords,
+} from '../ported/remove.ts'
 import { AI_ON, aiKit, note, renderIn } from '../ported/test-kit.ts'
 import { applyRecap } from './apply.ts'
 import { RECAP_MARKDOWN_MAX_BYTES, recapMarkdown } from './markdown.ts'
@@ -232,6 +240,68 @@ describe('Wrap up', () => {
     for (const id of made.ids) expect(aiOf(k.els.get(id) as never), id).toBeNull()
     const frameData = k.els.get(made.frameId)?.customData as { lobby?: { kind?: string } } | undefined
     expect(frameData?.lobby?.kind).toBe('recap')
+  })
+})
+
+describe('Remove this AI result on a Recap frame', () => {
+  /** An AI Recap frame with the table and the room's votes (no AI provenance), recorded and settled. */
+  async function recapMade() {
+    const k = aiKit(board())
+    k.answer(recapAnswer)
+    const plan: RecapPlan = {
+      ...((await runRecap(k.ctx, 'session', NOW))?.plan as RecapPlan),
+      plannedVsActual: [{ name: 'Warm-up', plannedMin: 10, actualMin: 12 }],
+    }
+    const made = applyRecap(k.canvas, plan, 'usr_ana')
+    noteCreated(k.canvas, made.ids, 'usr_ana') // what watchAiRuns does with the step's created ids
+    k.stamp(2_000)
+    settleRecords(k.canvas)
+    k.pushes.length = 0
+    return { k, made }
+  }
+
+  it('removes the whole frame, the table and votes included, in one step; nothing is said to be changed', async () => {
+    const { k, made } = await recapMade()
+    // the table and the vote lines carry no AI provenance: they are part of the run as the frame's
+    const plain = made.ids.filter((id) => !aiOf(k.els.get(id) as never))
+    expect(plain.length).toBeGreaterThan(4)
+    expect(recordedRunOf(k.canvas, plain[0] as string)).toBe(RUN)
+    const plan = removalPlan(k.canvas, RUN)
+    expect(plan?.kept).toEqual([])
+    expect(plan?.held).toEqual([])
+    expect([...(plan?.remove ?? [])].sort()).toEqual([...made.ids].sort())
+    expect(applyRemoval(k.canvas, plan as NonNullable<typeof plan>)).toBe(made.ids.length)
+    expect(k.pushes).toHaveLength(1)
+    for (const id of made.ids) expect(k.els.get(id)?.isDeleted, id).toBe(true)
+    expect(removedText(made.ids.length, 0, 0)).toBe(`Removed ${made.ids.length} AI-made items.`)
+    k.undo()
+    for (const id of made.ids) expect(k.els.get(id)?.isDeleted, id).toBe(false)
+  })
+
+  it('a note added to the frame later keeps the frame (and says why); a changed cell is kept as changed', async () => {
+    const { k, made } = await recapMade()
+    k.canvas.transact('later', (tx) => {
+      ;(tx as { create(kind: string, p: Record<string, unknown>): string }).create('text', {
+        id: 'later',
+        x: 0,
+        y: 0,
+        text: 'Added after',
+        frameId: made.frameId,
+      })
+    })
+    // a step of its own: never part of the run
+    expect(noteCreated(k.canvas, ['later'], 'usr_ana')).toBe(false)
+    const cell = made.ids.find((id) => k.els.get(id)?.originalText === 'Warm-up') as string
+    k.editText(cell, 'Warm-up (long)', 9_000)
+    const plan = removalPlan(k.canvas, RUN)
+    expect(plan?.kept).toEqual([cell])
+    expect(plan?.held).toEqual([made.frameId])
+    expect(plan?.remove).not.toContain(made.frameId)
+    expect(plan?.remove).not.toContain('later')
+    expect(removedText(plan?.remove.length ?? 0, 1, 1)).toBe(
+      `Removed ${plan?.remove.length} AI-made items. Kept 1 item someone changed. Kept the frame: it holds other content.`,
+    )
+    expect(removedText(0, 0, 1)).toBe('Nothing removed. Kept the frame: it holds other content.')
   })
 })
 
