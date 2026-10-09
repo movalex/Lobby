@@ -35,9 +35,10 @@ import {
   setBoardAi,
   setWorkspaceAiDefault,
 } from './actions.ts'
+import { askBoard, WHOLE_BOARD } from './ask.ts'
 import { canBuildWithAi } from './gate.ts'
 import { aiLens } from './lens.tsx'
-import { AI_COMMAND_IDS, aiActionsArgs } from './public.ts'
+import { AI_COMMAND_IDS, aiActionsArgs, aiAskArgs } from './public.ts'
 import { applyRemoval, recordedRunOf, removalPlan, removedText } from './remove.ts'
 import { type AiMenuState, aiJob, aiMenu, aiStatus, getAiCtx, setAiCtx } from './runtime.ts'
 import { type AiTarget, NONE, selectionTarget, targetAt, viewTarget } from './target.ts'
@@ -61,6 +62,8 @@ function anchorAtElement(canvas: LobbyCanvas, el: HTMLElement): AiMenuState['at'
 }
 
 const enabledOn = (canvas: LobbyCanvas) => aiStatus(canvas).get()?.enabled === true
+/** Ask this board (L2-2): AI on here and offered to this person to read with (view; never a name-only guest). */
+const askOn = (ctx: CanvasFeatureContext) => aiStatus(ctx.canvas).get()?.canSummarize === true
 /** Expand with AI and Mind map from a prompt: AI on, may add to the board, budget left (K7). */
 const buildOn = (canvas: LobbyCanvas) => canBuildWithAi(aiStatus(canvas).get(), canvas.readOnly())
 /** The one mind-map topic that is selected, if that is the selection. */
@@ -220,6 +223,20 @@ export const CONTEXT_MENU: readonly MenuEntrySpec[] = [
         run: (ctx, t) => run(ctx, t, 'summarize'),
       },
       {
+        // L2-2: about the selection, the frame under the pointer, else the whole board (view is enough)
+        id: 'ai.ask',
+        group: 'ai',
+        order: 1.5,
+        label: 'Ask this board…',
+        visible: askOn,
+        run: (ctx, t) => {
+          setAiCtx(ctx)
+          const target = targetOf(ctx, t)
+          const where = at(ctx, t)
+          later(() => openAiMenu(ctx.canvas, where, target.kind === 'none' ? WHOLE_BOARD : target, 'ask'))
+        },
+      },
+      {
         id: 'ai.themes',
         group: 'ai',
         order: 2,
@@ -288,6 +305,25 @@ const viewCentre = (ctx: CanvasFeatureContext): AiMenuState['at'] => {
 }
 
 export const COMMANDS: readonly CommandSpec[] = [
+  {
+    // L2-2 Ask this board: args AiAskArgs (the palette's "Ask: <question>" asks at once); else the question box.
+    // About the selection when there is one, else the whole board. View is enough (a viewer may ask).
+    id: AI_COMMAND_IDS.ask,
+    label: 'Ask this board',
+    group: 'AI',
+    keywords: ['ai', 'question', 'answer', 'search', 'find'],
+    readOnlyAllowed: true,
+    enabled: (ctx) => askOn(ctx) && aiJob(ctx.canvas).get() === null,
+    run: async (ctx, _source, args) => {
+      setAiCtx(ctx)
+      await ensureAiStatus(ctx.canvas)
+      if (!askOn(ctx) || aiJob(ctx.canvas).get()) return
+      const target = selectionTarget(ctx.canvas) ?? WHOLE_BOARD
+      const { question } = aiAskArgs(args)
+      if (question) void askBoard(ctx, question, target)
+      else openAiMenu(ctx.canvas, viewCentre(ctx), target, 'ask')
+    },
+  },
   {
     // Group into themes on the selection, else the frame in the middle of the view (the coach, the palette)
     id: AI_COMMAND_IDS.themes,

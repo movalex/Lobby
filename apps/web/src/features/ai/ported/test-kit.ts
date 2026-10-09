@@ -10,8 +10,15 @@
 //  - the api is a queue of answers (`answer(...)`), each request recorded; the event stream can be fed (`emit`).
 
 import type { AiStatus } from '@draftroom/contracts'
+import { type ComponentType, createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { vi } from 'vitest'
-import type { CanvasElement, CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
+import {
+  type CanvasElement,
+  type CanvasFeatureContext,
+  CanvasFeatureContextProvider,
+  type LobbyCanvas,
+} from '../../../canvas/api/index.ts'
 import { aiStatus, setAiCtx } from './runtime.ts'
 
 export type El = Record<string, unknown> & {
@@ -394,4 +401,11 @@ export function note(id: string, x: number, y: number, text: string, extra: Part
       },
     },
   ]
+}
+
+/** A feature component rendered to markup inside the board page's feature context (as the board page does). */
+export function renderIn(k: Pick<Kit, 'ctx'>, C: ComponentType<{ ctx: CanvasFeatureContext }>): string {
+  return renderToStaticMarkup(
+    createElement(CanvasFeatureContextProvider, { value: k.ctx }, createElement(C, { ctx: k.ctx })),
+  )
 }

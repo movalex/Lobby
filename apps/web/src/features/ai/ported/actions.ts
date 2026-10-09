@@ -615,6 +615,15 @@ function touched(canvas: LobbyCanvas, ids: readonly string[]): string[] {
   return [...out]
 }
 
+/**
+ * Wave L: the "Undo" toast and the brief highlight for what an AI step of this feature just wrote (`ids`; their
+ * labels and frames count too): Ask's answer note, the recap frame.
+ */
+export function offerUndoFor(canvas: LobbyCanvas, text: string, ids: readonly string[]) {
+  offerUndo(canvas, text, versionsOf(canvas, touched(canvas, ids)))
+  flash(canvas, ids)
+}
+
 /** "Add to board" in the summary panel (editors): the summary as a card in the frame it is about. */
 export function addSummaryToBoard(canvas: LobbyCanvas) {
   const ctx = getAiCtx(canvas)

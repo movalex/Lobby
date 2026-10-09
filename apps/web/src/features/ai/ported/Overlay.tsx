@@ -6,7 +6,13 @@
 //  - the summary panel (everyone's summary opens here first; editors add it to the board from it).
 // Everything is driven by the signals in ./runtime.ts (useValue, narrow selectors); nothing runs per frame.
 
-import { AI_IDEAS_DEFAULT, AI_IDEAS_MAX, AI_PROMPT_MAX_CHARS, AI_SETTINGS_EVENT } from '@draftroom/contracts'
+import {
+  AI_ASK_QUESTION_MAX,
+  AI_IDEAS_DEFAULT,
+  AI_IDEAS_MAX,
+  AI_PROMPT_MAX_CHARS,
+  AI_SETTINGS_EVENT,
+} from '@draftroom/contracts'
 import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import {
   type CanvasFeatureContext,
@@ -28,6 +34,16 @@ import {
   refreshAiStatus,
   runAi,
 } from './actions.ts'
+import {
+  type AiAnswerState,
+  addAnswerAsNote,
+  aiAnswer,
+  answerParts,
+  answerText,
+  askBoard,
+  canAddAnswer,
+  showSources,
+} from './ask.ts'
 import { canBuildWithAi } from './gate.ts'
 import { AiFlash, AiShimmer } from './Placeholders.tsx'
 import { type PopPlacement, placeAiPopover } from './placement.ts'
@@ -211,6 +227,7 @@ function AiPopover({ menu }: { menu: AiMenuState }) {
       {menu.view === 'mindmap' && <MindmapView menu={menu} titleId={titleId} onClose={() => close(true)} />}
       {menu.view === 'notice' && <NoticeView menu={menu} titleId={titleId} onClose={() => close(true)} />}
       {menu.view === 'regroup' && <RegroupView menu={menu} titleId={titleId} onClose={() => close(true)} />}
+      {menu.view === 'ask' && <AskView menu={menu} titleId={titleId} onClose={() => close(true)} />}
     </div>
   )
 }
@@ -231,8 +248,8 @@ function Head({ titleId, children, onClose }: { titleId: string; children: React
   )
 }
 
-/** The menu's rows: the four actions, and the two that build mind maps (K7). */
-type ItemAction = 'summarize' | 'themes' | 'actions' | 'ideas' | 'expand' | 'mindmap'
+/** The menu's rows: the four actions, the two that build mind maps (K7), and Ask this board (wave L). */
+type ItemAction = 'summarize' | 'themes' | 'actions' | 'ideas' | 'expand' | 'mindmap' | 'ask'
 
 const ITEM_LABELS: Record<ItemAction, string> = {
   ...ACTION_LABELS,
@@ -256,7 +273,7 @@ function Item(props: { action: ItemAction; hint: string; disabled?: boolean; onC
       <span className="dr-ai-item__text">
         <span className="dr-ai-item__label">
           {ITEM_LABELS[props.action]}
-          {props.action === 'ideas' || props.action === 'mindmap' ? '…' : ''}
+          {props.action === 'ideas' || props.action === 'mindmap' || props.action === 'ask' ? '…' : ''}
         </span>
         <span className="dr-ai-item__hint">{props.hint}</span>
       </span>
@@ -320,6 +337,17 @@ function MenuView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: stri
           disabled={target.texts === 0}
           onClick={() => run({ action: 'summarize' })}
         />
+        {status?.canSummarize && (
+          <Item
+            action="ask"
+            hint={
+              target.kind === 'none'
+                ? 'A question about the whole board, with its sources'
+                : `A question about ${target.label}, with its sources`
+            }
+            onClick={() => aiMenu(canvas).set({ ...menu, view: 'ask' })}
+          />
+        )}
         {insert && (
           <>
             <Item
@@ -564,6 +592,68 @@ function MindmapView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: s
   )
 }
 
+/** Ask this board (L2-2): the question; the answer opens in the private answer panel. */
+function AskView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: string; onClose(): void }) {
+  const ctx = useCanvasFeatureContext()
+  const { canvas } = ctx
+  const [question, setQuestion] = useState(menu.question ?? '')
+  const inputId = useId()
+  const trimmed = question.trim()
+  const about = menu.target.kind === 'none' ? 'the whole board' : menu.target.label
+  return (
+    <>
+      <Head titleId={titleId} onClose={onClose}>
+        Ask this board <span className="dr-ai-pop__about">· {about}</span>
+      </Head>
+      <form
+        className="dr-ai-form"
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (!trimmed) return
+          closeAiMenu(canvas, false)
+          void askBoard(ctx, trimmed, menu.target)
+        }}
+      >
+        <label htmlFor={inputId} className="dr-ai-form__label">
+          What do you want to know?
+        </label>
+        <input
+          id={inputId}
+          className="dr-ai-form__input"
+          data-testid="ai-ask-input"
+          data-autofocus
+          value={question}
+          maxLength={AI_ASK_QUESTION_MAX}
+          placeholder="e.g. What did we decide about the hero image?"
+          autoComplete="off"
+          onChange={(e) => setQuestion(e.target.value)}
+        />
+        <div className="dr-ai-form__row">
+          <span className="dr-ai-form__spacer" />
+          <button
+            type="button"
+            className="dr-btn dr-btn--sm"
+            onClick={() => aiMenu(canvas).set({ ...menu, view: 'menu' })}
+          >
+            Back
+          </button>
+          <button
+            type="submit"
+            className="dr-btn dr-btn--primary dr-btn--sm"
+            data-testid="ai-ask-go"
+            disabled={!trimmed}
+          >
+            Ask
+          </button>
+        </div>
+      </form>
+      <p className="dr-ai-pop__foot">
+        The answer comes only from the board’s text, with its sources. Only you see it.
+      </p>
+    </>
+  )
+}
+
 /** Before regrouping notes that already sit in groups (DANA-10): say so, and let them keep the groups. */
 function RegroupView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: string; onClose(): void }) {
   const { canvas } = useCanvasFeatureContext()
@@ -757,6 +847,10 @@ function SummaryPanel({ onAnnounce }: { onAnnounce(text: string): void }) {
   useEffect(() => {
     if (!open) announce.current('')
   }, [open])
+  // One private panel at a time: a summary replaces an open answer.
+  useEffect(() => {
+    if (open) aiAnswer(canvas).set(null)
+  }, [open, canvas])
   // Mounted only while there is a summary, so its key isolation attaches to the panel.
   if (!panel) return null
   return <SummaryView panel={panel} onAnnounce={onAnnounce} />
@@ -880,6 +974,152 @@ function SummaryView({ panel, onAnnounce }: { panel: AiPanelState; onAnnounce(te
   )
 }
 
+/** The private answer of Ask this board (L2-2): the answer with numbered source chips; camera only. */
+function AnswerPanel() {
+  const { canvas } = useCanvasFeatureContext()
+  const state = useValue('lobby-ai-answer', () => aiAnswer(canvas).get(), [canvas])
+  if (!state) return null
+  return <AnswerView state={state} />
+}
+
+function AnswerView({ state }: { state: AiAnswerState }) {
+  const ctx = useCanvasFeatureContext()
+  const { canvas } = ctx
+  const ref = useIsolated<HTMLElement>()
+  const titleId = useId()
+  const [copied, setCopied] = useState(false)
+  const canAdd = useValue('lobby-ai-answer-can-add', () => canAddAnswer(canvas, aiAnswer(canvas).get()), [
+    canvas,
+  ])
+  const close = () => {
+    const hadFocus = !!ref.current?.contains(docOf(canvas).activeElement)
+    aiAnswer(canvas).set(null)
+    if (hadFocus) canvas.focus({ preventScroll: true })
+  }
+  const closeRef = useRef(close)
+  closeRef.current = close
+  const ctxRef = useRef(ctx)
+  ctxRef.current = ctx
+  useEffect(() => {
+    const doc = docOf(canvas)
+    const onKey = (e: KeyboardEvent) => {
+      if (!escapeIsOurs(ctxRef.current, e, ref.current)) return
+      e.preventDefault()
+      e.stopPropagation()
+      closeRef.current()
+    }
+    doc.addEventListener('keydown', onKey, true)
+    return () => doc.removeEventListener('keydown', onKey, true)
+  }, [canvas, ref])
+  const r = state.result
+  const citations = r?.citations ?? []
+  const none = r?.found === 'no' || (r !== null && !answerText(r.answer))
+  return (
+    <section
+      ref={ref}
+      className="dr-ai-panel dr-ai-answer"
+      role="dialog"
+      aria-labelledby={titleId}
+      aria-busy={state.status === 'asking'}
+      data-testid="ai-answer-panel"
+      data-found={r?.found ?? 'pending'}
+    >
+      <div className="dr-ai-pop__head">
+        <span className="dr-ai-pop__badge" aria-hidden="true">
+          <SparkIcon size={14} />
+        </span>
+        <h2 id={titleId} className="dr-ai-pop__title">
+          Answer <span className="dr-ai-pop__about">· {state.question}</span>
+        </h2>
+        <button type="button" className="dr-iconbtn dr-iconbtn--sm" aria-label="Close answer" onClick={close}>
+          ×
+        </button>
+      </div>
+      {state.status === 'asking' ? (
+        <div aria-hidden="true">
+          <span className="dr-ai-line dr-ai-line--long" />
+          <span className="dr-ai-line" />
+        </div>
+      ) : none ? (
+        <p className="dr-ai-panel__text" data-testid="ai-answer-none" role="status">
+          The board doesn’t say.
+        </p>
+      ) : (
+        <p className="dr-ai-panel__text" data-testid="ai-answer-text" role="status">
+          {answerParts(r?.answer ?? '', citations.length).map((part, i) =>
+            'cite' in part ? (
+              <button
+                key={i}
+                type="button"
+                className="dr-ai-cite"
+                data-testid="ai-answer-cite"
+                data-n={part.cite}
+                aria-label={`Source ${part.cite}: show it on the board`}
+                onClick={() => showSources(canvas, citations[part.cite - 1]?.ids ?? [])}
+              >
+                {part.cite}
+              </button>
+            ) : (
+              <span key={i}>{part.text}</span>
+            ),
+          )}
+        </p>
+      )}
+      {!none && citations.length > 0 && (
+        <ol className="dr-ai-sources" aria-label="Sources">
+          {citations.map((c, i) => (
+            <li key={i}>
+              <button
+                type="button"
+                className="dr-ai-sources__btn"
+                data-testid="ai-answer-source"
+                data-n={i + 1}
+                onClick={() => showSources(canvas, c.ids)}
+              >
+                <span className="dr-ai-cite" aria-hidden="true">
+                  {i + 1}
+                </span>
+                {c.ids.length === 1 ? 'Show it on the board' : `Show the ${c.ids.length} items on the board`}
+              </button>
+            </li>
+          ))}
+        </ol>
+      )}
+      {r?.truncated && <p className="dr-ai-pop__foot">Only part of the board fitted in one request.</p>}
+      <p className="dr-ai-pop__foot">
+        Only you can see this. Written by AI from the board’s text: check its sources.
+      </p>
+      {state.status === 'done' && !none && (
+        <div className="dr-ai-panel__actions">
+          <button
+            type="button"
+            className="dr-btn dr-btn--sm"
+            data-testid="ai-answer-copy"
+            onClick={() => {
+              void navigator.clipboard?.writeText(answerText(r?.answer ?? '')).then(
+                () => setCopied(true),
+                () => setCopied(false),
+              )
+            }}
+          >
+            {copied ? 'Copied' : 'Copy'}
+          </button>
+          {canAdd && (
+            <button
+              type="button"
+              className="dr-btn dr-btn--primary dr-btn--sm"
+              data-testid="ai-answer-add"
+              onClick={() => addAnswerAsNote(ctx)}
+            >
+              Add answer as a note
+            </button>
+          )}
+        </div>
+      )}
+    </section>
+  )
+}
+
 export function AiOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
   const { canvas } = ctx
   useLayoutEffect(() => {
@@ -931,6 +1171,7 @@ export function AiOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
       <Busy />
       <SummaryPending />
       <SummaryPanel onAnnounce={setSaid} />
+      <AnswerPanel />
       <AiFlash canvas={canvas} />
       <p className="dr-sr-only" role="status" data-testid="ai-summary-status">
         {said}

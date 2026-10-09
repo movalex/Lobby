@@ -85,6 +85,19 @@ const ICONS = {
       <circle cx="12" cy="18.5" r="1.6" />
     </g>
   ),
+  // wave L: a speech bubble with a question mark (Ask this board), a list closed by a check (Wrap up)
+  ask: (
+    <g fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 5.5h16v10H10l-4 3.5v-3.5H4z" />
+      <path d="M10.2 8.8a1.9 1.9 0 1 1 2.6 1.8c-.5.2-.8.6-.8 1.1v.3M12 13.8v.1" />
+    </g>
+  ),
+  recap: (
+    <g fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4" y="3.5" width="16" height="17" rx="2" />
+      <path d="M8 8h8M8 11.5h8M8 15l1.8 1.8L13.5 13" />
+    </g>
+  ),
 } as const
 
 export function ActionIcon({ action }: { action: keyof typeof ICONS }) {
