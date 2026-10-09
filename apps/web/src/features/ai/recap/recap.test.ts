@@ -151,7 +151,8 @@ describe('Wrap up', () => {
     }
     const made = applyRecap(k.canvas, plan, 'usr_ana')
     for (const id of made.ids) expect(aiOf(k.els.get(id) as never), id).toBeNull()
-    expect((k.els.get(made.frameId)?.customData as { lobby: { kind: string } }).lobby.kind).toBe('recap')
+    const frameData = k.els.get(made.frameId)?.customData as { lobby?: { kind?: string } } | undefined
+    expect(frameData?.lobby?.kind).toBe('recap')
   })
 })
 
