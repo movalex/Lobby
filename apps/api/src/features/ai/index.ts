@@ -93,6 +93,7 @@ import {
   type ShapeMap,
   type SourceItem,
   type Sources,
+  scopeOf,
   shapesOf,
   themeLabelOf,
 } from './sources.ts'
@@ -334,18 +335,30 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
     const wholeBoard = (ids: readonly string[]) => (ids.length ? ids : allShapeIds(shapes))
     switch (input.action) {
       case 'recap': {
-        const floor = now().getTime() - AI_RECAP_MAX_WINDOW_MS
-        const windowFrom = input.scope.kind === 'since' ? Math.max(input.scope.since, floor) : null
+        const nowMs = now().getTime()
+        const floor = nowMs - AI_RECAP_MAX_WINDOW_MS
+        // At most 14 days back, and never after now: a `since` in the future (up to the contract's
+        // unbounded int, past what a Date can hold) is a window from now, which finds nothing to send.
+        const windowFrom =
+          input.scope.kind === 'since' ? Math.min(Math.max(input.scope.since, floor), nowMs) : null
         const tallies = await revealedTallies(db, boardId, windowFrom ?? floor)
         const extraOf = (s: { id: string }): ItemExtra | undefined => {
           const votes = tallies.get(s.id)
           return votes ? { votes } : undefined
         }
-        const sources =
-          input.scope.kind === 'since'
-            ? collectRecapSources(shapes, { since: windowFrom ?? floor, tokenBudget, extraOf })
-            : collectSources(shapes, input.scope.shapeIds, { action: 'recap', tokenBudget, extraOf })
-        return { sources, windowFrom, topVoted: topVotedOf(tallies, (id) => shapes.has(id)) }
+        if (input.scope.kind === 'since')
+          return {
+            sources: collectRecapSources(shapes, { since: windowFrom ?? floor, tokenBudget, extraOf }),
+            windowFrom,
+            topVoted: topVotedOf(tallies, (id) => shapes.has(id)),
+          }
+        // A recap of named shapes: the votes revealed in the last 14 days, on what those shapes hold only.
+        const scope = scopeOf(shapes, input.scope.shapeIds)
+        return {
+          sources: collectSources(shapes, input.scope.shapeIds, { action: 'recap', tokenBudget, extraOf }),
+          windowFrom,
+          topVoted: topVotedOf(tallies, (id) => scope.has(id)),
+        }
       }
       case 'ask':
         return {

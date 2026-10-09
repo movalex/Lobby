@@ -150,6 +150,13 @@ describe('a big board and odd windows (review of wave L)', () => {
     expect(texts).toEqual(Array.from({ length: texts.length }, (_, i) => `Note ${6000 - texts.length + i}`))
     expect(sentItems()[0]?.id).toBe('n1')
   })
+
+  it('a `since` in the future, up to past what a Date can hold, is a window from now: 400, never a 500', async () => {
+    for (const s of [now + DAY, 8.64e15, 8.64e15 + 1, 9e15])
+      expectError(await run(w.dave, w.board, since(s)), 400, 'AI_NOTHING_TO_SEND')
+    expect(w.openai.requests).toHaveLength(0)
+    expect(await usageRows(w.api)).toHaveLength(0)
+  })
 })
 
 describe('votes', () => {
@@ -184,6 +191,25 @@ describe('votes', () => {
       'Sam will draft the brief': 2,
       'Is pricing still open?': 2,
     })
+  })
+
+  it("a 'shapes' recap lists the votes on what those shapes hold only; a 'since' recap the whole board's", async () => {
+    const vote = await startVote(w.alice, w.board)
+    await cast(w.bob, vote, ref('c'), 4) // outside frame F
+    await cast(w.bob, vote, ref('a'), 1) // inside it
+    await revealVote(w.alice, vote)
+    const framed = await run(w.dave, w.board, {
+      action: 'recap',
+      scope: { kind: 'shapes', shapeIds: [ref('F')] },
+      mode: 'panel',
+    })
+    expect(framed.statusCode, framed.body).toBe(200)
+    expect(recapOf(framed).topVoted).toEqual([{ id: ref('a'), votes: 1, rank: 1 }])
+    const whole = recapOf(await run(w.dave, w.board, since(now - 2 * HOUR)))
+    expect(whole.topVoted).toEqual([
+      { id: ref('c'), votes: 4, rank: 1 },
+      { id: ref('a'), votes: 1, rank: 2 },
+    ])
   })
 
   it('the top voted list comes from the tallies, whatever the model says about votes', async () => {

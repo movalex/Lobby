@@ -501,7 +501,7 @@ function readerOf(shapes: ShapeMap) {
   /**
    * The named shapes with frames and groups opened up (breadth first, each record at most once, at most
    * MAX_VISITED). `keepContainers`: frames and groups are items too (a command's index), not only what is
-   * inside them.
+   * inside them. `scope`: every id reached, containers included.
    */
   const expand = (requested: readonly string[], keepContainers = false) => {
     const picked: ShapeRec[] = []
@@ -537,7 +537,7 @@ function readerOf(shapes: ShapeMap) {
       }
       picked.push(s)
     }
-    return { picked, truncated }
+    return { picked, truncated, scope: seen as ReadonlySet<string> }
   }
   /** Reading order: rows about a note tall, left to right. */
   const readingOrder = (a: Eligible, b: Eligible) =>
@@ -617,6 +617,17 @@ export function collectSources(
   }
   const filled = fill(eligible, { cap, tokenBudget: opts.tokenBudget, extraOf: opts.extraOf })
   return { items: filled.items, frames: r.frameNames, truncated: truncated || filled.truncated }
+}
+
+/**
+ * Every id the named shapes stand for: themselves and, for frames and groups, what is inside them (the
+ * expansion collectSources reads). A 'shapes' recap's top voted list keeps to it.
+ */
+export function scopeOf(
+  snapshot: BoardSnapshotJson | ShapeMap,
+  requested: readonly string[],
+): ReadonlySet<string> {
+  return readerOf(shapeMapOf(snapshot)).expand(requested).scope
 }
 
 /** Whether every eligible item fits under the cap and the budget (aliases as `fill` would give them). */
