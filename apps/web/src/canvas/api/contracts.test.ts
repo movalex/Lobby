@@ -566,7 +566,7 @@ describe('feature registries and installation', () => {
     expect(ids.length).toBe(new Set(ids).size)
     const reg = readFileSync(join(SRC, 'features/canvas-registry.ts'), 'utf8')
     // wave L (W3, the registry's owner): a wave L feature folder exports `feature` from features/<id>/index.tsx
-    // and names its wave L workstream (W1..W8) as its owner
+    // and its first line names its wave L workstream (W1..W8): `// OWNER: W4 (wave L)...` or `// L8-1 ... (wave L, W8)`
     const waveL = /^\.\/[a-z-]+\/index\.tsx$/
     const files = [...reg.matchAll(/from '(\.[^']+\/ported\/[^']*index\.tsx|\.\/[a-z-]+\/index\.tsx)'/g)].map(
       (m) => m[1] as string,
@@ -575,7 +575,8 @@ describe('feature registries and installation', () => {
     for (const f of files) {
       const src = readFileSync(join(SRC, 'features', f), 'utf8')
       const owner = /^\/\/ OWNER: (\w+)/.exec(src)?.[1] ?? ''
-      const known = waveL.test(f) ? /^W[1-8]$/.test(owner) : isOwner(owner)
+      const firstLine = src.split('\n')[0] ?? ''
+      const known = waveL.test(f) ? /^\/\/ .*\bW[1-8]\b/.test(firstLine) : isOwner(owner)
       expect(known, `${f} names owner ${owner}`).toBe(true)
     }
   })
