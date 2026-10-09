@@ -291,24 +291,31 @@ export class MindmapKeyboard {
       const g = this.canvas.gesture()
       return g !== 'idle' && g !== 'tool' && g !== 'editing-text'
     }
-    // checked a few times over five seconds: the clean-up may land late, and more than once
-    const keep = async (topic: string, text: string) => {
+    // checked a few times over five seconds: the clean-up may land late, and more than once. The clean-up
+    // only ever puts the topic's old words back (`before`: what it held before the write). Any other words
+    // are an edit made since, this person's (F2, then "!") or someone else's, and they are kept: the guard
+    // ends there (wave L, L3-X: it used to put "Detail one" back over the "Detail one!" typed after F2 within
+    // those five seconds, e2e mindmap-keyboard.spec.ts:201).
+    const keep = async (topic: string, text: string, before: string) => {
       let at = 0
       for (const t of [60, 250, 600, 1200, 2000, 3500, 5000]) {
         await frame()
         await wait(t - at)
         at = t
         if (this.disposed || !this.rt.isTopic(topic)) return
-        if (this.rt.textOf(topic) === text) continue
+        const now = this.rt.textOf(topic)
+        if (now === text) continue
+        if (now !== before) return
         for (let j = 0; j < 600 && busy(); j++) await frame()
         this.rt.setTopicText(topic, text)
       }
     }
     const write = (topic: string, text: string) => {
+      const before = this.rt.textOf(topic)
       this.rt.setTopicText(topic, text)
       // it has words now (even while the write waits for its retry): an Esc does not take it back
       if (text.trim() && this.rt.fresh?.id === topic) this.rt.fresh = null
-      void keep(topic, text)
+      void keep(topic, text, before)
     }
     // the selection this replay leaves (a click or a drag since then is the person's, and wins)
     let sel = this.canvas.selection.join()

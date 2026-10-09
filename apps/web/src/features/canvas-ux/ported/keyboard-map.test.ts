@@ -10,6 +10,7 @@ import {
   type CanvasFeatureContext,
   collectKeyClaims,
   createFeatureRegistries,
+  installCanvasFeatures,
   type KeyEventLike,
   keyConflicts,
   parseChord,
@@ -201,6 +202,93 @@ describe('the wave L key claims (L3-1; canvas/input/keymap.ts WAVE_L_KEY_CLAIMS,
           order.indexOf(c.featureId),
         )
     }
+  })
+})
+
+describe('the wave L keyboard map (L3-1, regenerated with the palette; W3 owns the claims)', () => {
+  const claimOf = new Map(
+    WAVE_L_KEY_CLAIMS.flatMap((w) => w.chords.map((c) => [canonical(c), w.claim] as const)),
+  )
+  const line = (c: (typeof claims)[number]) =>
+    `${claimOf.get(canonical(c.chord))} ${c.scope} ${canonical(c.chord)} → ${c.by}${c.tool ? ` (tool ${c.tool})` : ''}${c.claim ? ` [claim ${c.claim}]` : ''}`
+
+  it('the wave L chords and who takes them (W4’s flow.* keys join this list when features/flow lands)', () => {
+    const taken = claims
+      .filter((c) => claimOf.has(canonical(c.chord)) && !c.by.startsWith('flow.'))
+      .map(line)
+      .sort()
+    expect(taken).toEqual(
+      [
+        // the palette: mod+k, read by the layout's character (claim), on the canvas scope only
+        'palette canvas mod+k → command-palette.open [claim palette]',
+        // shipped before wave L, unchanged: a11y's frame keys and the comment tool's level keys…
+        'flow-repeat canvas mod+shift+arrowdown → a11y.into-frame',
+        'flow-repeat canvas mod+shift+arrowdown → comments.tool-level (tool comment)',
+        'flow-repeat canvas mod+shift+arrowup → a11y.out-of-frame',
+        'flow-repeat canvas mod+shift+arrowup → comments.tool-level (tool comment)',
+        // …and a11y's reading-order walk on Alt+Arrow
+        'flow-walk canvas alt+arrowdown → a11y.next',
+        'flow-walk canvas alt+arrowleft → a11y.previous',
+        'flow-walk canvas alt+arrowright → a11y.next',
+        'flow-walk canvas alt+arrowup → a11y.previous',
+      ].sort(),
+    )
+  })
+
+  it('the palette: every role, the canvas scope only (inside a granted text editor mod+k is the allowlist’s: blocked)', () => {
+    const palette = CANVAS_FEATURES.flatMap((f) => f.commands ?? []).find(
+      (c) => c.id === 'command-palette.open',
+    )
+    expect(palette).toMatchObject({
+      kbd: ['mod+k'],
+      claim: 'palette',
+      scope: 'canvas',
+      readOnlyAllowed: true,
+    })
+    expect(claims.filter((c) => canonical(c.chord) === 'mod+k' && c.scope !== 'canvas')).toEqual([])
+    // and the shortcuts dialog lists it
+    const registries = createFeatureRegistries()
+    if (palette) registries.commands.register(palette)
+    const ctx = { registries } as unknown as CanvasFeatureContext
+    const rows = shortcutSections(ctx).flatMap((s) => s.rows)
+    expect(rows.find((r) => r.label === 'Command palette')?.keys).toEqual(['mod+k'])
+  })
+
+  it('installed, the palette opens on the K character of any layout, never with AltGr, Shift or Alt', () => {
+    const registries = createFeatureRegistries()
+    const palette = CANVAS_FEATURES.find((f) => f.id === 'command-palette')
+    expect(palette).toBeDefined()
+    let opened = 0
+    const ctx = {
+      registries,
+      canvas: { readOnly: () => true, container: () => null, tool: () => 'select' },
+    } as unknown as CanvasFeatureContext
+    // the command's own run opens the palette; count it instead
+    const spec = palette?.commands?.find((c) => c.id === 'command-palette.open')
+    const off = installCanvasFeatures(
+      [{ id: 'command-palette', commands: spec ? [{ ...spec, run: () => void opened++ }] : [] }],
+      ctx,
+    )
+    const key = registries.keys.list().find((k) => k.id === 'command:command-palette.open:canvas')
+    expect(registries.keys.list().some((k) => k.id === 'command:command-palette.open:editor')).toBe(false)
+    const ev = (
+      key: string,
+      code: string,
+      m: Partial<KeyEventLike> & { getModifierState?: (k: string) => boolean } = {},
+    ) => ({ key, code, ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, ...m }) as KeyEventLike
+    expect(key?.match(ev('k', 'KeyK'))).toBe(true)
+    expect(key?.match(ev('k', 'KeyV'))).toBe(true) // Dvorak's K character
+    expect(key?.match(ev('л', 'KeyK'))).toBe(true) // Russian
+    expect(key?.match(ev('t', 'KeyK'))).toBe(false) // Dvorak's physical K key
+    expect(key?.match(ev('K', 'KeyK', { shiftKey: true }))).toBe(false)
+    expect(key?.match(ev('k', 'KeyK', { altKey: true }))).toBe(false)
+    expect(key?.match(ev('k', 'KeyK', { altKey: true, getModifierState: (m) => m === 'AltGraph' }))).toBe(
+      false,
+    )
+    // a read-only role opens it too (it finds, selects and jumps)
+    expect(key?.handle(ev('k', 'KeyK'), {} as never)).toBe(true)
+    expect(opened).toBe(1)
+    off()
   })
 })
 

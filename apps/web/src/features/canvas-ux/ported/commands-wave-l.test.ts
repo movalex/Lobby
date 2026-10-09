@@ -9,7 +9,8 @@ import {
   commandRunnable,
   createFeatureRegistries,
 } from '../../../canvas/api/index.ts'
-import { runCommand } from './commands.ts'
+import { CMD, COMMANDS, runCommand } from './commands.ts'
+import { filterSections, type ShortcutSection } from './ShortcutsDialog.tsx'
 
 function ctxWith(readOnly = false) {
   const registries = createFeatureRegistries()
@@ -78,5 +79,102 @@ describe('CommandSpec wave L additions', () => {
       run: () => {},
     }
     expect(commandRunnable(unavailable, ctx)).toBe(false)
+  })
+})
+
+describe('canvas-ux’s palette words (L3-2): groups, keywords, and a reason only where enabled() says no', () => {
+  /** A canvas with `n` selected notes (the last `locked` of them locked), history `undo`/`redo`. */
+  function canvasWith(
+    n: number,
+    opts: { locked?: number; undo?: boolean; redo?: boolean; readOnly?: boolean } = {},
+  ) {
+    const els = Array.from({ length: n }, (_, i) => ({
+      id: `n${i}`,
+      type: 'stickynote',
+      x: i * 300,
+      y: 0,
+      width: 200,
+      height: 200,
+      angle: 0,
+      groupIds: i < 2 ? ['g1'] : [],
+      frameId: null,
+      locked: i >= n - (opts.locked ?? 0),
+      boundElements: null,
+    }))
+    const registries = createFeatureRegistries()
+    return {
+      registries,
+      canvas: {
+        readOnly: () => opts.readOnly === true,
+        selection: els.map((e) => e.id),
+        get: (id: string) => els.find((e) => e.id === id),
+        items: () => els,
+        history: { canUndo: () => opts.undo === true, canRedo: () => opts.redo === true },
+      },
+    } as unknown as CanvasFeatureContext
+  }
+
+  it('every canvas-ux command has a group; a disabled reason appears exactly when enabled() is false', () => {
+    const contexts = [
+      canvasWith(0),
+      canvasWith(1),
+      canvasWith(2),
+      canvasWith(3),
+      canvasWith(3, { locked: 3 }),
+      canvasWith(2, { undo: true, redo: true }),
+    ]
+    for (const cmd of COMMANDS) {
+      expect(cmd.group, cmd.id).toBeTruthy()
+      if (!cmd.disabledReason) continue
+      for (const ctx of contexts) {
+        let enabled: boolean
+        try {
+          enabled = cmd.enabled ? cmd.enabled(ctx) : true
+        } catch {
+          continue // a read this fake canvas does not offer (the clipboard's text)
+        }
+        const reason = cmd.disabledReason(ctx)
+        expect(reason === null, `${cmd.id}: enabled ${enabled}, reason ${reason}`).toBe(enabled)
+      }
+    }
+  })
+
+  it('the reasons say what to do', () => {
+    const reason = (id: string, ctx: CanvasFeatureContext) =>
+      COMMANDS.find((c) => c.id === id)?.disabledReason?.(ctx) ?? null
+    expect(reason(CMD.distributeH, canvasWith(2))).toBe('Select three or more objects to space them out')
+    expect(reason(CMD.alignLeft, canvasWith(1))).toBe('Select two or more objects to align them')
+    expect(reason(CMD.undo, canvasWith(0))).toBe('Nothing to undo')
+    expect(reason(CMD.delete, canvasWith(2, { locked: 2 }))).toBe('The selection is locked')
+    expect(reason(CMD.delete, canvasWith(0))).toBe('Select something first')
+    expect(reason(CMD.alignLeft, canvasWith(2))).toBeNull()
+    expect(COMMANDS.find((c) => c.id === CMD.toggleLock)?.keywords).toContain('lock')
+  })
+})
+
+describe('the shortcuts dialog’s search (L3-2: the palette’s scorer over the same rows)', () => {
+  const sections: ShortcutSection[] = [
+    {
+      id: 'edit',
+      title: 'Edit',
+      rows: [
+        { label: 'Toggle locked', keys: ['mod+shift+l'] },
+        { label: 'Undo', keys: ['mod+z'] },
+      ],
+    },
+    { id: 'features', title: 'View and features', rows: [{ label: 'Command palette', keys: ['mod+k'] }] },
+    { id: 'dr-board', title: 'Board', rows: [{ label: 'Pan (hold)', keys: [{ text: 'Space' }] }] },
+  ]
+  it('keeps the rows whose words or keys match, best first; an empty query keeps everything', () => {
+    expect(filterSections(sections, '', 'other')).toEqual(sections)
+    expect(filterSections(sections, 'lock', 'other').map((s) => s.rows.map((r) => r.label))).toEqual([
+      ['Toggle locked'],
+    ])
+    expect(filterSections(sections, 'ctrl+k', 'other').map((s) => s.rows.map((r) => r.label))).toEqual([
+      ['Command palette'],
+    ])
+    expect(filterSections(sections, 'cp', 'other')[0]?.rows[0]?.label).toBe('Command palette')
+    expect(filterSections(sections, 'space', 'other')[0]?.rows[0]?.label).toBe('Pan (hold)')
+    expect(filterSections(sections, 'xyzzy', 'other')).toEqual([])
   })
 })

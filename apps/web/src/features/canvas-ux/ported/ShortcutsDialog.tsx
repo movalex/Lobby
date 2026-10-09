@@ -3,10 +3,14 @@
 // or the board menu. It lists what the keys do on this canvas: the tools and edit keys the allowlist
 // routes itself (canvas/input/keymap.ts), every feature's command and tool with a key (the registries, so
 // a feature's key shows up without editing this file), and the "Board" keys canvas-ux documents.
-import { useEffect, useRef } from 'react'
-import type { CanvasFeatureContext, KeyChord } from '../../../canvas/api/index.ts'
+//
+// Wave L (W3, L3-2): a search field over the same rows, ranked as the command palette ranks (its scorer:
+// prefix, word starts, initials), matching a row's words or its keys as written on this platform.
+import { useEffect, useRef, useState } from 'react'
+import type { CanvasFeatureContext, KeyChord, Platform } from '../../../canvas/api/index.ts'
 import { currentPlatform, formatChord } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { scoreEntry } from '../../command-palette/scorer.ts'
 import { uxState } from './state.ts'
 import { MAIN_TOOLS, OVERFLOW_TOOLS } from './Toolbar.tsx'
 
@@ -89,11 +93,37 @@ export function shortcutSections(ctx: CanvasFeatureContext): ShortcutSection[] {
   return sections
 }
 
+/**
+ * The sections with only the rows that match `query` (their words, or their keys as this platform writes
+ * them), best first inside each section; empty sections left out. An empty query keeps everything.
+ */
+export function filterSections(
+  sections: readonly ShortcutSection[],
+  query: string,
+  platform: Platform = currentPlatform(),
+): ShortcutSection[] {
+  const q = query.trim()
+  if (!q) return [...sections]
+  const out: ShortcutSection[] = []
+  for (const s of sections) {
+    const scored = s.rows
+      .map((row) => {
+        const keys = row.keys.map((k) => (typeof k === 'string' ? formatChord(k, platform) : k.text))
+        return { row, score: scoreEntry(q, row.label, keys) }
+      })
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score)
+    if (scored.length) out.push({ ...s, rows: scored.map((x) => x.row) })
+  }
+  return out
+}
+
 export function ShortcutsDialog({ ctx }: { ctx: CanvasFeatureContext }) {
   const { canvas } = ctx
   const state = uxState(canvas)
   const open = useValue(state.shortcutsOpen)
   const ref = useRef<HTMLDialogElement>(null)
+  const [query, setQuery] = useState('')
   useEffect(() => {
     const d = ref.current
     if (!d) return
@@ -107,8 +137,10 @@ export function ShortcutsDialog({ ctx }: { ctx: CanvasFeatureContext }) {
     // be dropped and the keyboard end on <body> once React removes the dialog (3b's finding, a11y-3).
     if (ref.current?.open) ref.current.close()
     state.shortcutsOpen.set(false)
+    setQuery('')
     canvas.focus({ preventScroll: true })
   }
+  const sections = filterSections(shortcutSections(ctx), query, platform)
   return (
     <dialog
       ref={ref}
@@ -132,8 +164,32 @@ export function ShortcutsDialog({ ctx }: { ctx: CanvasFeatureContext }) {
           ×
         </button>
       </header>
+      <div className="cux-shortcuts__search" style={{ padding: '0 16px 8px' }}>
+        <input
+          type="search"
+          className="dr-input dr-input--block"
+          aria-label="Search shortcuts"
+          placeholder="Search shortcuts (“lock”, “zoom”, “Ctrl+K”)"
+          data-testid="shortcuts-search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            // the board never sees a key typed here; Escape still closes the dialog (its cancel)
+            if (e.key !== 'Escape') e.stopPropagation()
+          }}
+        />
+      </div>
       <div className="cux-shortcuts__body" data-testid="shortcuts-dialog-body">
-        {shortcutSections(ctx).map((s) => (
+        {sections.length === 0 && (
+          <p
+            className="cux-shortcuts__none"
+            data-testid="shortcuts-none"
+            style={{ margin: '8px 0', color: 'var(--dr-ink-2)' }}
+          >
+            No shortcut matches “{query.trim()}”.
+          </p>
+        )}
+        {sections.map((s) => (
           <section key={s.id} className="cux-shortcuts__section" data-section={s.id}>
             <h3>{s.title}</h3>
             <ul>
