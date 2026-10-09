@@ -27,7 +27,7 @@ which Lobby passes through but does not test itself.
 | **F** | Frame |
 | **C** | Comment |
 | **E** | Eraser |
-| **K** | Laser pointer |
+| **K** | Laser pointer (everyone on the board sees it; viewers can point too) *(wave L)* |
 | **Alt+Shift+M** | Start a mind map |
 
 Triangle, Diamond, Hexagon, Rhombus, Star, Cloud, Heart, the block arrows, Line and Lasso select have no
@@ -53,6 +53,7 @@ People who can only view or comment get **V**, **H**, **C**, the zoom keys and, 
 | **Enter** or **Esc** | With an image's crop open: finish the crop *(3 Oct)* |
 | Double-click empty canvas | New sticky note |
 | **Ctrl+V** with several lines of text | Lobby offers to paste them as sticky notes |
+| **Ctrl+V** with a Mermaid flowchart (`flowchart TD`, `graph LR`, …) | Lobby offers **Paste as diagram** (shapes and connectors) or **Text** *(wave L)* |
 
 ## Edit
 
@@ -177,6 +178,19 @@ While a vote is open and you have joined it, click a note to vote. **Tab** moves
 | **Shift+F10** or the menu key | Open the right-click menu for the selection |
 | **Alt+F10** | Move the keyboard to the selection toolbar (Esc returns) |
 | **?**, **Ctrl+/** or **Ctrl+Alt+/** | Open the Keyboard shortcuts dialog |
+
+## Command palette and flow building *(wave L)*
+
+| Key | What it does |
+|---|---|
+| **Ctrl+K** | Open the command palette: find and run any command, tool, panel, frame or template, search this board and the workspace, or type what to do ("make the red notes yellow", "line these up", "select the notes tagged Finance"). Every role. **Ctrl+K** or **Esc** closes it. With nothing typed, **Enter** runs nothing until an arrow key picks a line |
+| **Ctrl+K** on the dashboard | The dashboard's palette: boards, lists, a new board from a template, words inside boards |
+| **Ctrl+→ ↓ ← ↑** | Add a connected shape that way (the same kind and style as the selected one, its editor open to type) |
+| **Ctrl+Shift+→ ↓ ← ↑** | While building a flow (right after a step, for 15 s): one more of the last kind. Otherwise **Ctrl+Shift+↓ / ↑** go into and out of a frame, as below |
+| **Alt+→ ↓ ← ↑** | On a shape with connections: select the connected shape that way; otherwise the next or previous item |
+
+Inside a note's text editor **Ctrl+K** does nothing and **Ctrl+arrows** move the cursor by word. The engine's own
+flowchart and align keys never run. The Keyboard shortcuts dialog has a search field.
 
 ## Keys that do nothing on purpose
 
