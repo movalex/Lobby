@@ -1,0 +1,151 @@
+// L8-1 and L8-2: the one path every sort and every 2x2 placement takes from "a plan can be made" to "it is on
+// the board": build the plan from the board as it is now, show the preview when it moves more than a few notes,
+// then build it AGAIN from the board as it is at the moment of writing (someone may have started typing in a
+// note, locked it or dragged it while the preview was open or the AI answered) and write that, in one step.
+// Building twice from the same board gives the same plan, so a board nobody touched gets exactly what the
+// preview showed; a board somebody did touch gets a plan that leaves their note alone.
+import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
+import type { AiPreviewPlan } from '../ai/ported/public.ts'
+import { sortDeps } from './deps.ts'
+import { type Skipped, skippedText } from './model.ts'
+
+/** Moving more notes than this asks first (showAiPreview). */
+export const PREVIEW_MIN_MOVES = 10
+/** "Try again" in the preview, at most this many times in a row. */
+export const MAX_RETRIES = 3
+
+/** A plan that can be previewed and written. Built from the board as it is at the moment `build` runs. */
+export interface BuiltPlan {
+  /** notes left alone: locked, being typed in, being dragged by someone else (the notice names them) */
+  readonly skipped: readonly Skipped[]
+  /** the notes that change place, and where they go (scene top-left), for the preview */
+  readonly moves: readonly { readonly id: string; readonly x: number; readonly y: number }[]
+  /** what will be made, for the preview's outlines */
+  readonly creates: AiPreviewPlan['creates']
+  /** the count line of the preview ('Moves 12 notes into 3 columns') */
+  readonly summary: string
+  /** applying it would change nothing */
+  readonly noop: boolean
+  /** writes it (one transact) and says what it did, for the notice */
+  apply(): { readonly moved: number; readonly text: string; readonly ok: boolean }
+  /** extra words for the notice after the apply (unscored notes, notes that did not fit, …) */
+  readonly extra?: string
+  /** a button in the notice after the apply ("Show scores") */
+  readonly action?: { readonly label: string; readonly testId: string; onClick(): void }
+}
+
+export interface PlanProblem {
+  readonly problem: string
+}
+
+export interface PlanSpec {
+  /** the preview's heading and the undo step's name ('Sort by colour') */
+  readonly title: string
+  /** a stable id of the plan (an AI run's id, or one made for a deterministic sort) */
+  readonly runId: string
+  build(): BuiltPlan | PlanProblem
+  /**
+   * "Try again" in the preview: a new call, giving the next `build`, or null to stop (the call failed and the
+   * person has been told). A plan with no retry (a deterministic sort) just builds again from the board.
+   */
+  retry?(): Promise<(() => BuiltPlan | PlanProblem) | null>
+}
+
+export type Outcome =
+  | { readonly status: 'applied'; readonly moved: number; readonly skipped: number }
+  | { readonly status: 'discarded' }
+  | { readonly status: 'nothing'; readonly reason: string }
+  | { readonly status: 'refused'; readonly reason: string }
+
+const isProblem = (b: BuiltPlan | PlanProblem): b is PlanProblem => 'problem' in b
+
+const busy = new WeakSet<object>()
+
+/** Whether a sort or a placement of this canvas is waiting for the preview, or for the AI. */
+export const isBusy = (canvas: object) => busy.has(canvas)
+
+export function previewOf(spec: Pick<PlanSpec, 'title' | 'runId'>, built: BuiltPlan): AiPreviewPlan {
+  return {
+    runId: spec.runId,
+    title: spec.title,
+    summary: built.summary,
+    moves: built.moves,
+    recolors: [],
+    creates: built.creates,
+  }
+}
+
+function notice(ctx: CanvasFeatureContext, text: string, tone?: 'error', action?: BuiltPlan['action']) {
+  ctx.notify({
+    key: 'sort',
+    text,
+    testId: 'sort-notice',
+    timeoutMs: 8000,
+    ...(tone ? { tone } : {}),
+    ...(action ? { action } : {}),
+  })
+}
+
+/** Runs `spec` (see the header). Resolves what happened; tells the person in a notice. */
+export async function executePlan(ctx: CanvasFeatureContext, spec: PlanSpec): Promise<Outcome> {
+  const { canvas } = ctx
+  if (canvas.readOnly()) return { status: 'refused', reason: 'read-only' }
+  if (busy.has(canvas)) return { status: 'refused', reason: 'busy' }
+  busy.add(canvas)
+  try {
+    let build = spec.build
+    let built = build()
+    if (isProblem(built)) {
+      notice(ctx, built.problem)
+      return { status: 'nothing', reason: built.problem }
+    }
+    if (built.noop) {
+      const text = 'Nothing to change: these notes are already arranged that way.'
+      notice(ctx, `${text}${built.skipped.length ? ` ${skippedText(built.skipped)}` : ''}`)
+      return { status: 'nothing', reason: text }
+    }
+    // the preview, when it moves more than a few notes; "Try again" builds again (a new AI call when it has one)
+    let retries = 0
+    while (built.moves.length > PREVIEW_MIN_MOVES) {
+      const choice = await sortDeps().showAiPreview(ctx, previewOf(spec, built))
+      if (choice === 'apply') break
+      if (choice === 'discard' || retries >= MAX_RETRIES) return { status: 'discarded' }
+      retries++
+      if (spec.retry) {
+        const next = await spec.retry()
+        if (!next) return { status: 'discarded' }
+        build = next
+      }
+      const again = build()
+      if (isProblem(again)) {
+        notice(ctx, again.problem)
+        return { status: 'nothing', reason: again.problem }
+      }
+      built = again
+    }
+    if (canvas.readOnly()) return { status: 'refused', reason: 'read-only' }
+    // the board as it is now: a note that became busy while the preview was open stays where it is
+    const fresh = build()
+    if (isProblem(fresh)) {
+      notice(ctx, fresh.problem)
+      return { status: 'nothing', reason: fresh.problem }
+    }
+    if (fresh.noop) {
+      notice(ctx, 'Nothing to change: these notes are already arranged that way.')
+      return { status: 'nothing', reason: 'noop' }
+    }
+    let result: ReturnType<BuiltPlan['apply']>
+    try {
+      result = fresh.apply()
+    } catch (e) {
+      console.error('sort: could not write the plan', e)
+      notice(ctx, 'The notes could not be moved. Nothing was changed.', 'error')
+      return { status: 'refused', reason: 'write-failed' }
+    }
+    const skipped = skippedText(fresh.skipped)
+    notice(ctx, [result.text, fresh.extra ?? '', skipped].filter(Boolean).join(' '), undefined, fresh.action)
+    return { status: 'applied', moved: result.moved, skipped: fresh.skipped.length }
+  } finally {
+    busy.delete(canvas)
+  }
+}
