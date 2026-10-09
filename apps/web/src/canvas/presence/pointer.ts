@@ -10,6 +10,11 @@
 // pointerdown, pointerup, and pointerleave (-> pointer: null). They never call preventDefault or
 // stopPropagation, so Excalidraw's input is untouched. Moves are throttled to `hz` (default 20, leading
 // and trailing edge); button changes and leave are sent at once.
+//
+// While the button is down, the points of the moves between two samples (each move's coalesced points too)
+// are kept and handed over with the next sample as `trail` (oldest first, the sample's own point left out):
+// the shared laser (wave L, L6-1) draws the path between two 20 Hz messages from them. At most
+// MAX_BETWEEN_SAMPLES are kept (thinned evenly beyond that); nothing is kept while the button is up.
 
 export interface PresencePoint {
   x: number
@@ -19,6 +24,11 @@ export interface PresencePoint {
 export interface PresenceSample {
   /** Scene coordinates, or null when the pointer left the board. */
   pointer: PresencePoint | null
+  /**
+   * While the button is down: the scene points the pointer passed since the previous sample, oldest first,
+   * without `pointer` itself (the shared laser's trail). Absent or empty otherwise.
+   */
+  trail?: readonly PresencePoint[]
   button: 'down' | 'up'
   /** The DOM event that produced it, for tests: 'pointermove' | 'pointerdown' | 'pointerup' | 'pointerleave'. */
   source: string
@@ -33,6 +43,17 @@ export interface PresencePointerOptions {
   now?: () => number
 }
 
+/** The most in-between points one sample carries (more are thinned evenly, the first and last kept). */
+export const MAX_BETWEEN_SAMPLES = 32
+
+const thin = (points: PresencePoint[], n: number): PresencePoint[] => {
+  if (points.length <= n) return points
+  const out: PresencePoint[] = []
+  for (let i = 0; i < n; i++)
+    out.push(points[Math.round((i * (points.length - 1)) / (n - 1))] as PresencePoint)
+  return out
+}
+
 export function attachPresencePointer(wrapper: HTMLElement, opts: PresencePointerOptions): () => void {
   const interval = 1000 / (opts.hz ?? 20)
   const now = opts.now ?? (() => performance.now())
@@ -41,10 +62,35 @@ export function attachPresencePointer(wrapper: HTMLElement, opts: PresencePointe
   let trailing: ReturnType<typeof setTimeout> | null = null
   let latest: PointerEvent | null = null
   let left = false
+  /** the points passed since the last sample, while the button is down */
+  let between: PresencePoint[] = []
+
+  /** Keeps the points of a move (its coalesced ones, else its own) while the button is down. */
+  const keep = (e: PointerEvent) => {
+    if (button !== 'down') return
+    const list = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : []
+    for (const c of list.length ? list : [e]) between.push(opts.toScene(c.clientX, c.clientY))
+    if (between.length > MAX_BETWEEN_SAMPLES) between = thin(between, MAX_BETWEEN_SAMPLES / 2)
+  }
+  /** The kept points before `pointer` (the sample's own point, the last one kept, is left out). */
+  const takeBetween = (pointer: PresencePoint | null): PresencePoint[] => {
+    const out = between
+    between = []
+    const last = out[out.length - 1]
+    if (pointer && last && Math.abs(last.x - pointer.x) < 0.5 && Math.abs(last.y - pointer.y) < 0.5) out.pop()
+    return out
+  }
 
   const sample = (e: PointerEvent, source: string, pointer: PresencePoint | null) => {
     lastSent = now()
-    opts.onSample({ pointer, button, source, pointerType: e.pointerType })
+    const trail = takeBetween(pointer)
+    opts.onSample({
+      pointer,
+      button,
+      source,
+      pointerType: e.pointerType,
+      ...(trail.length ? { trail } : {}),
+    })
   }
   const flushTrailing = () => {
     trailing = null
@@ -60,6 +106,7 @@ export function attachPresencePointer(wrapper: HTMLElement, opts: PresencePointe
   const onMove = (e: PointerEvent) => {
     if (!e.isPrimary) return
     left = false
+    keep(e)
     const wait = lastSent + interval - now()
     if (wait <= 0) {
       cancelTrailing()
@@ -73,6 +120,7 @@ export function attachPresencePointer(wrapper: HTMLElement, opts: PresencePointe
     if (!e.isPrimary) return
     left = false
     cancelTrailing()
+    between = []
     button = 'down'
     sample(e, 'pointerdown', opts.toScene(e.clientX, e.clientY))
   }
@@ -89,6 +137,7 @@ export function attachPresencePointer(wrapper: HTMLElement, opts: PresencePointe
     if ((e.target !== wrapper && e.target !== wrapper.firstElementChild) || !e.isPrimary || left) return
     left = true
     cancelTrailing()
+    between = []
     sample(e, 'pointerleave', null)
   }
 

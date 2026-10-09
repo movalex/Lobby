@@ -7,6 +7,8 @@
 // Following is the canvas's (`canvas.follow`, canvas/api/parts/follow.ts): on the tldraw page tldraw drew
 // the coloured frame around a follower's canvas and its own "Stop following" button; here this overlay
 // draws both.
+//
+// Wave L (W6): the shared laser layer (./LaserLayer.tsx, L6-1).
 
 import { useLayoutEffect, useState, useSyncExternalStore } from 'react'
 import type { CanvasFeature, CanvasFeatureContext } from '../../../canvas/api/index.ts'
@@ -14,6 +16,7 @@ import { useValue } from '../../../lib/signals.ts'
 import { PersonName } from '../../workshops/Hands.tsx'
 import { usePresenting } from '../../workshops/presenting.ts'
 import { WorkshopStore, workshopStoreFor } from '../../workshops/store.ts'
+import { LaserLayer } from './LaserLayer.tsx'
 import { PeopleTopBar } from './PeopleBar.tsx'
 import '../people.css'
 import './people-ported.css'
@@ -154,5 +157,14 @@ export const feature: CanvasFeature = {
   topBar: [{ id: 'people', order: 10, pinned: true, component: PeopleItem }],
   overlays: [
     { id: 'people.following', layer: 'screen', order: 40, pointer: 'none', component: FollowingLabel },
+    // wave L (L6-1): the other sessions' lasers, also while presenting (focus mode)
+    {
+      id: 'people.laser',
+      layer: 'scene',
+      order: 45,
+      pointer: 'none',
+      focusMode: 'show',
+      component: LaserLayer,
+    },
   ],
 }

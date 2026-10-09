@@ -467,6 +467,34 @@ export interface LobbyPresence {
    * drag that ends with its committed positions may clear before the next presence frame.
    */
   draggerOf(id: string): { readonly sid: string; readonly name: string } | null
+  /**
+   * @owner 2C · wave L (W6, L6-1; CONTRACTS_REV 12): the other sessions' lasers, each with its samples of
+   * the last second (`RemoteLaser`), oldest first; empty in a room older than rev 12 (it relays none) and on
+   * a bare port. Every role's laser shows, read-only reviewers' included, and "hide cursors" does not hide
+   * it (pointing is deliberate). Tracks the `presence` concern (a presence frame brings new samples); a
+   * layer that draws the fade reads it again on its own animation frames. Nothing of it is stored.
+   */
+  lasers(): readonly RemoteLaser[]
+}
+
+/** One sample of another session's laser (L6-1): a scene point and when this tab got it (`performance.now()`). */
+export interface LaserSample {
+  readonly x: number
+  readonly y: number
+  readonly at: number
+}
+
+/** Another session's laser (L6-1, CONTRACTS_REV 12), with its identity from the roster. */
+export interface RemoteLaser {
+  readonly sid: string
+  readonly uid: string
+  readonly name: string
+  /** their presence colour (the roster's) */
+  readonly color: string
+  /** pressed now: their latest presence carries the laser */
+  readonly active: boolean
+  /** the samples of about the last second, oldest first (a pressed laser keeps at least its newest) */
+  readonly points: readonly LaserSample[]
 }
 
 /** A follower's camera: the scene point at the canvas's top left, and the zoom (what `viewport.set` takes). */

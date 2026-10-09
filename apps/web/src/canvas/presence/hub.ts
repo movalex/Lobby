@@ -13,6 +13,12 @@
  *    INVALID_MESSAGE). From that frame on, every message carries `f` (null included), which tells the
  *    room this socket reads the rev-10 fields; this tab sends one at once so the room knows without a
  *    pointer move. A new welcome (a reconnect, maybe to an older room) goes back to rev-9 messages;
+ *  - CONTRACTS_REV 12 (wave L, L6-1, the shared laser): `t` ('laser' while this tab's laser tool is pressed,
+ *    else null) in every message, and with the laser `trail`, the samples the pointer listener took since the
+ *    previous message (./laser.ts `laserTrailOut`: at most 6 integer points). ONLY on a socket whose room's
+ *    `contracts` frame named PRESENCE_LASER_REV or later: a rev-11 room refuses both (strict); this tab
+ *    sends one message at once when that frame comes, so the room knows it reads the laser fields. Whether
+ *    the laser is the active tool comes from the canvas API (./laser.ts `laserToolOn`, keyed by the core);
  *  - a drag preview: `{d, ids, dx, dy}` in the drag's FIRST message only (≤ 500 ids: the selection, its
  *    frames' children and its containers' labels), then `{d, dx, dy}` (scene units, rounded to 0.1), and
  *    `drag: null` at the end. Read-only sessions never send one (the server drops it anyway).
@@ -21,7 +27,8 @@
  * `drags` (ids once, then deltas) applied as render offsets through `RenderOverrides.setDrag` (the
  * container carries the offset; its label follows), cleared when the peer's drag ends, when the peer
  * leaves, and when the committed positions arrive (the core's `applied` event). `draggerOf(id)` tells
- * O5's hit guard who is moving an element ("Bob is moving this").
+ * O5's hit guard who is moving an element ("Bob is moving this"). The other sessions' lasers (`t`, `trail`,
+ * CONTRACTS_REV 12) go into ./laser.ts `LaserTrails`, which the canvas API reads (`presence.lasers()`).
  *
  * Browser (uses the overrides and the core's events), but no DOM of its own.
  */
@@ -32,13 +39,15 @@ import {
   MAX_PRESENCE_ZOOM,
   type PeerPresence,
   PRESENCE_FOLLOW_REV,
+  PRESENCE_LASER_REV,
   type RosterEntry,
 } from '@draftroom/canvas-schema/protocol'
 import type { LobbyEngineCore } from '../sync/core/engine.ts'
 import type { GestureState, SceneElement } from '../sync/types.ts'
 import { planDragArrows } from './drag-arrows.ts'
 import { onPresenceFollow, presenceFollowOf } from './follow-target.ts'
-import type { PresenceSample } from './pointer.ts'
+import { LaserTrails, laserToolOn, laserTrailOut, provideLasers, thinPoints } from './laser.ts'
+import type { PresencePoint, PresenceSample } from './pointer.ts'
 
 /** What O5's overrides.ts `RenderOverrides` offers for drag previews (its existing API). */
 export interface DragOverrides {
@@ -77,6 +86,8 @@ export interface PresenceHubOptions {
 }
 
 const RENEW_MS = 2_000
+/** The most laser samples held between two sends (a stalled send keeps the latest shape, thinned). */
+const MAX_PENDING_TRAIL = 64
 const round1 = (v: number) => Math.round(v * 10) / 10
 /** A zoom on the wire: 3 decimals (0.1 to 30 in Excalidraw). */
 const roundZoom = (z: number) => Math.round(z * 1000) / 1000
@@ -122,10 +133,20 @@ export class PresenceHub {
   private version = 0
   /** the contracts revision the current socket's room announced (0 until its `contracts` frame) */
   private roomRev = 0
+  /** this tab's laser is pressed (the laser tool, the button down; CONTRACTS_REV 12) */
+  private laserDown = false
+  /** laser samples since the last message (scene points, oldest first) */
+  private pendingTrail: PresencePoint[] = []
+  /** the other sessions' lasers (CONTRACTS_REV 12) */
+  private readonly lasers = new LaserTrails()
+  private readonly clock: () => number
 
   constructor(o: PresenceHubOptions) {
     this.o = o
+    this.clock = o.now ?? (() => performance.now())
     this.off.push(
+      // the canvas API reads the lasers this hub receives (./laser.ts, keyed by the core)
+      provideLasers(o.core, (now) => this.lasers.trails(now)),
       // 3c's follow part set whom this tab follows (./follow-target.ts): a rev-10 room hears it now
       onPresenceFollow(o.core, () => this.followChanged()),
       o.core.on((e) => {
@@ -136,17 +157,22 @@ export class PresenceHub {
             // a new socket: rev-9 messages until its room says otherwise
             this.roomRev = 0
             this.peersBySid.clear()
+            this.lasers.clear()
+            this.pendingTrail = []
             for (const sid of [...this.remoteDrags.keys()]) this.endRemoteDrag(sid)
             this.onPresence([], [], m.drags)
           } else if (m.type === 'contracts') {
             const before = this.rev10
+            const before12 = this.rev12
             this.roomRev = m.rev
-            // tell the room now that this socket reads the rev-10 fields (and whom it follows)
-            if (!before && this.rev10) this.send()
+            // tell the room now that this socket reads the rev-10 fields (and whom it follows), and since
+            // rev 12 the laser's (`t`)
+            if ((!before && this.rev10) || (!before12 && this.rev12)) this.send()
           } else if (m.type === 'roster') {
             for (const ev of m.events)
               if (ev.k === 'leave') {
                 this.peersBySid.delete(ev.sid)
+                this.lasers.remove(ev.sid)
                 this.endRemoteDrag(ev.sid)
               }
             this.changed()
@@ -226,6 +252,11 @@ export class PresenceHub {
     return this.roomRev >= PRESENCE_FOLLOW_REV
   }
 
+  /** Whether this socket's room reads presence `t` and `trail`, the laser (CONTRACTS_REV 12). */
+  get rev12(): boolean {
+    return this.roomRev >= PRESENCE_LASER_REV
+  }
+
   /**
    * The offset a remote drag shows `id` at right now (scene units), or null when nobody drags it: the
    * remote selection outlines (W5-28) follow the preview, as the elements do.
@@ -257,8 +288,15 @@ export class PresenceHub {
     off: readonly string[],
     drags: readonly DragOut[],
   ): void {
-    for (const p of peers) this.peersBySid.set(p.sid, p)
-    for (const sid of off) this.peersBySid.delete(sid)
+    const now = this.clock()
+    for (const p of peers) {
+      this.peersBySid.set(p.sid, p)
+      this.lasers.apply(p, now)
+    }
+    for (const sid of off) {
+      this.peersBySid.delete(sid)
+      this.lasers.remove(sid)
+    }
     for (const d of drags) {
       if ('end' in d) {
         this.endRemoteDrag(d.sid)
@@ -314,6 +352,16 @@ export class PresenceHub {
     this.pointer = s.pointer ? { x: Math.round(s.pointer.x), y: Math.round(s.pointer.y) } : null
     this.button = s.button
     this.idle = false
+    // CONTRACTS_REV 12: the laser is pressed while the laser tool is active and the button down on the board;
+    // the samples since the last message go with the next one (a selection-tool press never carries `t`)
+    const was = this.laserDown
+    this.laserDown = this.rev12 && s.button === 'down' && s.pointer !== null && laserToolOn(this.o.core)
+    if (!this.laserDown) this.pendingTrail = []
+    else if (was && s.trail?.length) {
+      for (const p of s.trail) this.pendingTrail.push(p)
+      if (this.pendingTrail.length > MAX_PENDING_TRAIL)
+        this.pendingTrail = [...thinPoints(this.pendingTrail, MAX_PENDING_TRAIL / 2)]
+    }
     this.send()
   }
 
@@ -397,6 +445,10 @@ export class PresenceHub {
     const z = rich && v?.z !== undefined && Number.isFinite(v.z) ? roundZoom(v.z) : 0
     const zoomOk = z > 0 && z <= MAX_PRESENCE_ZOOM
     const view = v ? { x: v.x, y: v.y, w: v.w, h: v.h, ...(zoomOk ? { z } : {}) } : null
+    // a rev-11 room refuses `t` and `trail` (strict): both only after this socket's rev-12 `contracts` frame
+    const laser = this.rev12
+    const trail = laser && this.laserDown ? laserTrailOut(this.pendingTrail, this.pointer) : []
+    this.pendingTrail = []
     this.o.core.sendPresence({
       pointer: this.pointer,
       button: this.button,
@@ -406,6 +458,8 @@ export class PresenceHub {
       editing: this.editing,
       ...(drag !== undefined ? { drag } : {}),
       ...(rich ? { f: this.followTarget() } : {}),
+      ...(laser ? { t: this.laserDown ? ('laser' as const) : null } : {}),
+      ...(trail.length ? { trail } : {}),
     })
   }
 

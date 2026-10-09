@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 import { CANVAS_FEATURES } from '../../features/canvas-registry.ts'
 import * as signals from '../../lib/signals.ts'
 import type { CanvasElement, CanvasPort } from '../port.ts'
+import { laserToolOn, provideLasers } from '../presence/laser.ts'
 import * as feature from './feature.ts'
 import { CANVAS_FEATURE_CONTEXT_KEYS, type CanvasFeatureContext, installCanvasFeatures } from './feature.ts'
 import * as geometry from './geometry.ts'
@@ -364,6 +365,59 @@ describe('the LobbyCanvas member table', () => {
     expect(canvas.presence.draggerOf('n2')).toBeNull()
     stop()
     dispose()
+  })
+
+  it('wave L (L6-1): presence.lasers is composed (empty on a bare port), the core hub’s lasers with roster identity, tracked on `presence`', () => {
+    expect(LOBBY_CANVAS_MEMBERS.find((m) => m.path === 'presence.lasers')).toEqual({
+      path: 'presence.lasers',
+      owner: '2C',
+      status: 'composed',
+    })
+    const bare = createLobbyCanvas({ port: fakePort(), registries: createFeatureRegistries() })
+    expect(bare.canvas.presence.lasers()).toEqual([])
+    bare.dispose()
+    // the board page: the presence hub of the port's engine core provides them (canvas/presence/laser.ts)
+    const core = { welcome: { sid: 'u_me:s1' }, onSaveStatus: () => () => {} }
+    const port = {
+      ...fakePort(),
+      engine: core,
+      tool: () => 'laser',
+      collaborators: () => [
+        { sid: 'u_bob:s1', uid: 'u_bob', name: 'Bob', color: '#228be6', role: 'viewer', guest: false },
+      ],
+    } as unknown as CanvasPort
+    let states: { sid: string; active: boolean; points: { x: number; y: number; at: number }[] }[] = []
+    const offLasers = provideLasers(core, () => states)
+    const listeners = new Set<() => void>()
+    const board = {
+      ...fakeBoard(),
+      subscribe: (c: string, l: () => void) => {
+        if (c === 'presence') listeners.add(l)
+        return () => listeners.delete(l)
+      },
+    } as unknown as BoardHandles
+    const { canvas, dispose } = createLobbyCanvas({ port, registries: createFeatureRegistries(), board })
+    // the canvas told the core's hub whether the laser is the tool in hand
+    expect(laserToolOn(core)).toBe(true)
+    const seen: string[] = []
+    const stop = signals.react('lasers', () => {
+      seen.push(
+        canvas.presence
+          .lasers()
+          .map((l) => `${l.name}:${l.color}:${l.points.length}`)
+          .join(','),
+      )
+    })
+    states = [
+      { sid: 'u_bob:s1', active: true, points: [{ x: 1, y: 2, at: 3 }] },
+      { sid: 'u_me:s1', active: true, points: [{ x: 1, y: 2, at: 3 }] }, // never this tab's own
+    ]
+    for (const l of listeners) l()
+    expect(seen).toEqual(['', 'Bob:#228be6:1'])
+    stop()
+    dispose()
+    expect(laserToolOn(core)).toBe(false)
+    offLasers()
   })
 
   it("2C's composed tx writes run on a bare port (group, reorder, frames)", () => {

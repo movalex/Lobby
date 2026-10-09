@@ -30,6 +30,7 @@ import {
   ungroup as ungroupTx,
 } from '../board/tx.ts'
 import type { CanvasElement, CanvasEventMap, CanvasPort, CanvasTx, ItemKind } from '../port.ts'
+import { lasersOf, setLaserToolSource } from '../presence/laser.ts'
 import { intersection, union } from './geometry.ts'
 import { contentItems, textOf } from './items.ts'
 import type {
@@ -48,6 +49,7 @@ import type {
   LobbyText,
   LobbyTx,
   PointerState,
+  RemoteLaser,
   ScenePoint,
   TransactOptions,
   Viewport,
@@ -124,8 +126,11 @@ export interface BoardHandles {
   }
   readonly text: Pick<LobbyText, 'edit' | 'stop' | 'editorElement' | 'measure' | 'replace'>
   readonly styles: Pick<LobbyStyles, 'next' | 'setNext'>
-  /** `draggerOf` is composed here, from the C0 registries' `dragger` (the board session provides it) */
-  readonly presence: Omit<LobbyPresence, 'draggerOf'>
+  /**
+   * `draggerOf` is composed here, from the C0 registries' `dragger` (the board session provides it); so is
+   * `lasers`, from the engine core's presence hub (canvas/presence/laser.ts, wave L L6-1)
+   */
+  readonly presence: Omit<LobbyPresence, 'draggerOf' | 'lasers'>
   readonly history: LobbyHistory & {
     /** runs `write` (a transact) and folds the step it records into this tab's previous one */
     joinPrevious<T>(write: () => T): T
@@ -196,6 +201,8 @@ const COMPOSED_BY_2C: ReadonlySet<string> = new Set([
   'room.contractsRev',
   // wave L: the C0 registries' `dragger` (null on a bare port: nobody provides it)
   'presence.draggerOf',
+  // wave L (L6-1): the engine core's presence hub (canvas/presence/laser.ts; empty on a bare port)
+  'presence.lasers',
   'text.of',
   'visibleBounds',
   'sceneToOverlay',
@@ -300,6 +307,8 @@ export const LOBBY_CANVAS_MEMBERS: readonly MemberInfo[] = [
       ['presence.peer', '2C'],
       // wave L (W6 for the wave): composed from the C0 registries' `dragger`
       ['presence.draggerOf', '2C'],
+      // wave L (W6, L6-1): composed from the core's presence hub (canvas/presence/laser.ts)
+      ['presence.lasers', '2C'],
       ['follow.current', '3c'],
       ['follow.start', '3c'],
       ['follow.stop', '3c'],
@@ -492,6 +501,8 @@ export function createLobbyCanvas(deps: LobbyCanvasDeps): LobbyCanvasHandle {
   ]
   const offSave = port.engine?.onSaveStatus(() => sources.save.bump())
   if (offSave) offs.push(offSave)
+  // wave L (L6-1): the presence hub of this engine core asks whether the laser is the tool in hand
+  if (port.engine) offs.push(setLaserToolSource(port.engine, () => port.tool() === 'laser'))
   if (board) {
     const concerns: [BoardConcern, ReturnType<typeof source>][] = [
       ['mode', sources.mode],
@@ -800,6 +811,31 @@ export function createLobbyCanvas(deps: LobbyCanvasDeps): LobbyCanvasHandle {
       draggerOf: (id: string) => {
         sources.presence.track()
         return registries.dragger.draggerOf(id)
+      },
+      // wave L (L6-1): the lasers the core's presence hub received, with the roster's names and colours
+      lasers: (): readonly RemoteLaser[] => {
+        sources.presence.track()
+        const engine = port.engine
+        if (!engine) return []
+        const now = typeof performance !== 'undefined' ? performance.now() : Date.now()
+        const states = lasersOf(engine, now)
+        if (!states.length) return []
+        const roster = new Map(port.collaborators().map((r) => [r.sid, r]))
+        const me = engine.welcome?.sid ?? null
+        const out: RemoteLaser[] = []
+        for (const t of states) {
+          if (t.sid === me) continue
+          const r = roster.get(t.sid)
+          out.push({
+            sid: t.sid,
+            uid: r?.uid ?? t.sid.split(':')[0] ?? t.sid,
+            name: r?.name ?? 'Someone',
+            color: r?.color ?? '#6b7280',
+            active: t.active,
+            points: t.points,
+          })
+        }
+        return out
       },
     },
     follow: followPart.follow,
