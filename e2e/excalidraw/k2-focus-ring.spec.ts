@@ -16,6 +16,7 @@ import {
   zoomToFit,
 } from '../tests/support/canvas.ts'
 import { boardHasFocus, frame, note, waitForA11y } from './a11y-kit.ts'
+import { startPresenting } from './present-kit.ts'
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
@@ -131,7 +132,7 @@ test('K2-1: present mode draws no focus ring on any slide (the present-slide bor
   for (let i = 0; i < 6 && !(await boardHasFocus(a.page)); i++) await a.page.keyboard.press('Tab')
   await expect(a.page.getByTestId('canvas-focus-ring')).toBeVisible()
 
-  await a.page.getByTestId('present-button').click()
+  await startPresenting(a.page.getByTestId('present-button'))
   await expect(a.page.getByTestId('present-overlay')).toBeVisible()
   await a.page.keyboard.press('ArrowRight')
   await expect(a.page.getByTestId('present-counter')).toContainText('2')

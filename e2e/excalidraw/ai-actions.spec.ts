@@ -56,7 +56,7 @@ import {
   selectIds,
   showFrame,
 } from './ai-kit.ts'
-import { openBoardExport } from './present-kit.ts'
+import { openBoardExport, startPresenting } from './present-kit.ts'
 
 const test = base.extend<object, { openai: FakeOpenAi }>({
   openai: [
@@ -361,7 +361,7 @@ test('DEMO 1:00 → 1:20 → 2:45 → 3:30 (W5-04): a note added with N joins th
 
   await test.step('2:45: the Brainstorm slide shows the ideas', async () => {
     await selectNone(a.page)
-    await a.page.getByTestId('present-button').click()
+    await startPresenting(a.page.getByTestId('present-button'))
     const counter = a.page.getByTestId('present-counter')
     await expect(counter).toHaveText(/^1 \//)
     await a.page.keyboard.press('ArrowRight')

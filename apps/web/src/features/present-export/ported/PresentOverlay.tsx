@@ -5,10 +5,12 @@
 // screen-reader announcement. present-live's controls come through ./live-slots.ts.
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { Dialog } from '../../../ui/Dialog.tsx'
 import { fittedSlideRect, type Insets, slideTitle } from '../slides.ts'
-import { getController } from './controller.ts'
+import { type Controller, getController } from './controller.ts'
 import { presentInsets, presentTopChromeOf } from './insets.ts'
 import { presentLiveOf } from './live-slots.ts'
 import { canvasSize, PRESENT_ZOOM_RANGE, type Presenter } from './presenter.ts'
@@ -51,14 +53,62 @@ function useViewSize(canvas: LobbyCanvas): { w: number; h: number } {
 }
 
 export function PresentOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
-  const presenter = getController(ctx.canvas).presenter
+  const controller = getController(ctx.canvas)
+  const presenter = controller.presenter
   const presenting = useValue('lobby-presenting', () => presenter.isPresenting(), [presenter])
+  const choice = useValue('lobby-present-choice', () => controller.presentChoice.get(), [controller])
   // Leaving the board (unmount, access lost, sync error) ends the presentation and restores everything.
   // A live presentation to everyone is not ended from here: the api ends it after its grace unless
   // this tab comes back (present-live).
   useEffect(() => () => presenter.stop({ reason: 'unmount' }), [presenter])
-  if (!presenting) return null
+  useEffect(() => () => controller.cancelPresent(), [controller])
+  if (!presenting)
+    return choice ? (
+      <PresentChoiceDialog key={choice.seq} count={choice.count} controller={controller} />
+    ) : null
   return <PresentChrome ctx={ctx} presenter={presenter} />
+}
+
+/**
+ * Wave K.1 (K3-5, follow-up 3): with other people on the board, Present asks before anything goes live to them.
+ * "Present to everyone (N here)" is the default button (it has the focus: Enter takes it); "Just me" presents
+ * in this tab only ("Invite everyone" stays in the bar). Escape, × or a click outside starts nothing. The
+ * dialog is closed (and the focus back on what opened it) before present mode starts, in the same gesture,
+ * so full screen is still allowed and the presentation gives the focus back to the Present button after.
+ */
+function PresentChoiceDialog({ count, controller }: { count: number; controller: Controller }) {
+  // the default: Enter presents to everyone, as Present did before it asked (focused after the dialog's own
+  // first focus: a parent's effect runs after its child's)
+  const everyoneRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => everyoneRef.current?.focus(), [])
+  const choose = (audience: 'everyone' | 'me') => {
+    flushSync(() => controller.cancelPresent())
+    controller.presentTo(audience)
+  }
+  const people = count === 1 ? '1 other person is' : `${count} other people are`
+  return (
+    <Dialog
+      title="Present to everyone?"
+      description={`${people} on this board. Presenting to everyone shows them your slides as you present (they can follow or not).`}
+      testId="present-choice"
+      onClose={() => controller.cancelPresent()}
+    >
+      <div className="dr-dialog__actions">
+        <button type="button" className="dr-btn" data-testid="present-choice-me" onClick={() => choose('me')}>
+          Just me
+        </button>
+        <button
+          type="button"
+          className="dr-btn dr-btn--primary"
+          data-testid="present-choice-everyone"
+          ref={everyoneRef}
+          onClick={() => choose('everyone')}
+        >
+          Present to everyone ({count} here)
+        </button>
+      </div>
+    </Dialog>
+  )
 }
 
 function PresentChrome({ ctx, presenter }: { ctx: CanvasFeatureContext; presenter: Presenter }) {

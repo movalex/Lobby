@@ -7,6 +7,7 @@
 import type { Page } from '@playwright/test'
 import { react } from '../tests/support/workshops-2.ts'
 import { pushCount } from './board-kit.ts'
+import { startPresenting } from './present-kit.ts'
 import {
   clickElement,
   dot,
@@ -36,7 +37,7 @@ test('K3-5: alice presents: bob and carol get "Alice is presenting · Follow" at
   const first = a.name.split(' ')[0] as string
 
   const startedAt = Date.now()
-  await a.page.getByTestId('present-button').click()
+  await startPresenting(a.page.getByTestId('present-button'))
   await expect(a.page.getByTestId('present-overlay')).toBeVisible()
 
   await test.step('the toast, for bob and carol, within the event stream’s latency; alice presents to everyone', async () => {
@@ -162,4 +163,79 @@ test('K3-5: my vote dots wear my presence colour, readable; a reveal drops confe
     await expect(confetti).toHaveCount(0, { timeout: 5_000 }) // it falls and is gone
     expect(await pushCount(b.page)).toBe(before)
   })
+})
+
+// Wave K.1 (K3-5, follow-up 3): with other people on the board, Present asks before anything goes live to them.
+test('K.1: with others here Present asks first: "Present to everyone (2 here)" is the default (Enter), "Just me" presents privately, Escape starts nothing', async ({
+  join,
+}) => {
+  const a = await join('alice')
+  const b = await join('bob', 'editor')
+  const c = await join('carol', 'viewer')
+  await seed(a.page, {
+    frames: [
+      { id: 'k3q-one', x: 0, y: 0, w: 800, h: 450, name: 'Welcome' },
+      { id: 'k3q-two', x: 1000, y: 0, w: 800, h: 450, name: 'Plan' },
+    ],
+  })
+  await expectItemsEverywhere([b, c], ['k3q-one', 'k3q-two'])
+  const ask = a.page.getByTestId('present-choice')
+  const overlay = a.page.getByTestId('present-overlay')
+
+  await test.step('the question: nothing has started, nothing reached bob or carol', async () => {
+    await a.page.getByTestId('present-button').click()
+    await expect(ask).toBeVisible()
+    await expect(ask.getByTestId('present-choice-everyone')).toHaveText('Present to everyone (2 here)')
+    await expect(ask.getByTestId('present-choice-everyone')).toBeFocused()
+    await expect(ask.getByTestId('present-choice-me')).toHaveText('Just me')
+    await expect(overlay).toHaveCount(0)
+    await b.page.waitForTimeout(800)
+    await expect(toast(b.page)).toHaveCount(0)
+  })
+
+  await test.step('Escape: no presentation, here or for anyone', async () => {
+    await a.page.keyboard.press('Escape')
+    await expect(ask).toHaveCount(0)
+    await expect(overlay).toHaveCount(0)
+    await expect(a.page.getByTestId('present-button')).toBeFocused()
+    await b.page.waitForTimeout(800)
+    await expect(toast(b.page)).toHaveCount(0)
+  })
+
+  await test.step('"Just me": present mode here only; "Invite everyone" stays in the bar; bob and carol get nothing', async () => {
+    await a.page.getByTestId('present-button').click()
+    await ask.getByTestId('present-choice-me').click()
+    await expect(ask).toHaveCount(0)
+    await expect(overlay).toBeVisible()
+    await a.page.mouse.move(500, 400)
+    await a.page.mouse.move(520, 410)
+    await expect(a.page.getByTestId('present-invite')).toBeVisible()
+    await expect(a.page.getByTestId('live-presenting')).toHaveCount(0)
+    for (const s of [b, c]) {
+      await s.page.waitForTimeout(800)
+      await expect(toast(s.page)).toHaveCount(0)
+    }
+    await a.page.keyboard.press('Escape')
+    await expect(overlay).toHaveCount(0)
+  })
+
+  await test.step('Enter takes the default: to everyone, and bob gets the toast', async () => {
+    await a.page.getByTestId('present-button').click()
+    await expect(ask.getByTestId('present-choice-everyone')).toBeFocused()
+    await a.page.keyboard.press('Enter')
+    await expect(overlay).toBeVisible()
+    await expect(toast(b.page)).toContainText(`${a.name} is presenting`, { timeout: 5_000 })
+    await expect(a.page.getByTestId('live-presenting')).toBeVisible()
+    await a.page.keyboard.press('Escape')
+    await expect(overlay).toHaveCount(0)
+  })
+})
+
+test('K.1: alone on the board Present asks nothing and presents at once', async ({ join }) => {
+  const a = await join('alice')
+  await seed(a.page, { frames: [{ id: 'k3a-one', x: 0, y: 0, w: 800, h: 450, name: 'Solo' }] })
+  await a.page.getByTestId('present-button').click()
+  await expect(a.page.getByTestId('present-overlay')).toBeVisible()
+  await expect(a.page.getByTestId('present-choice')).toHaveCount(0)
+  await a.page.keyboard.press('Escape')
 })

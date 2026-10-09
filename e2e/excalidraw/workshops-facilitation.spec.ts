@@ -49,7 +49,7 @@ import {
   react,
   setHand,
 } from '../tests/support/workshops-2.ts'
-import { openBoardExport } from './present-kit.ts'
+import { openBoardExport, startPresenting } from './present-kit.ts'
 import {
   clickPlusOne,
   expect,
@@ -341,7 +341,7 @@ test('+1 on notes: hidden while presenting, back after Esc (3e present mode)', a
   await showAll(a.page)
   await clickPlusOne(a.page, N2)
   await a.page.mouse.move(5, 300)
-  await a.page.getByTestId('present-button').click({ timeout: 5_000 })
+  await startPresenting(a.page.getByTestId('present-button'))
   await expect(a.page.getByTestId('present-overlay')).toBeVisible()
   await expect(a.page.getByTestId('plusone')).toHaveCount(0)
   await a.page.keyboard.press('Escape')
@@ -442,7 +442,7 @@ test('raise hand: presenting hides the top bar and the toasts, the presenter sti
   await seed(a.page, { frames: [{ id: 'wk2-slide', x: 0, y: 0, w: 400, h: 300, name: 'Slide' }] })
   await setHand(c.page, true)
   await expect(handsChip(a.page)).toHaveAttribute('data-count', '1')
-  await a.page.getByTestId('present-button').click({ timeout: 5_000 })
+  await startPresenting(a.page.getByTestId('present-button'))
   await expect(a.page.getByTestId('present-overlay')).toBeVisible()
   const floating = a.page.getByTestId('hands-floating')
   await expect(floating).toHaveAttribute('data-count', '1')
@@ -543,7 +543,7 @@ test('RETRO-03a + RETRO-07a: a facilitator hides note authors and cursors for ev
   })
 
   await test.step('bob presents: no author label and no cursor on the slide; after Esc the session still hides them', async () => {
-    await b.page.getByTestId('present-button').click()
+    await startPresenting(b.page.getByTestId('present-button'))
     await expect(b.page.getByTestId('present-overlay')).toBeVisible()
     await expect(b.page.getByTestId('present-counter')).toHaveText('1 / 1')
     await expect(b.page.getByTestId('note-author')).toHaveCount(0)

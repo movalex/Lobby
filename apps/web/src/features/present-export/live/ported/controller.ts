@@ -71,6 +71,12 @@ export interface LiveController {
    * someone else is on the board. Nothing is said when it is refused: "Invite everyone" stays in the bar.
    */
   offerToEveryone(): Promise<void>
+  /**
+   * Wave K.1 (K3-5, follow-up 3): the other people on the board a Present started here would go live to: 0 when
+   * nobody else is here, this person may not present to everyone, or a presentation to everyone is running.
+   * Present asks first when it is above 0 ("Present to everyone (N here)" or "Just me").
+   */
+  offerAudience(): number
   /** Follow the live presentation (the invitation's Join, the chip's Rejoin). */
   join(): void
   notNow(): void
@@ -399,6 +405,16 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
         say(startRefusedText(r.code, r.message), r.code === 'PRESENTER_AWAY' ? 'take-over' : undefined)
       }),
     join,
+    offerAudience: () => {
+      if (presenter.isPresenting() || presentingLive.get() || !mayPresent()) return 0
+      if (store.presentation.get()) return 0
+      return new Set(
+        ctx.canvas
+          .collaborators()
+          .map((c) => c.uid)
+          .filter((uid) => uid !== me.id),
+      ).size
+    },
     offerToEveryone: async () => {
       if (presenter.role() !== 'presenter' || presentingLive.get() || !mayPresent()) return
       if (store.presentation.get()) return

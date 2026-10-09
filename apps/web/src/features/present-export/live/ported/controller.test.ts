@@ -429,3 +429,30 @@ describe('K3-5: Present offers the presentation to everyone on the board', () =>
     t.unmount()
   })
 })
+
+describe('K.1 (K3-5): who a Present here would go live to, before it starts', () => {
+  it('nobody else here, or a viewer, or someone already presenting to everyone: 0 (no question)', async () => {
+    const alone = setup()
+    expect(alone.live.offerAudience()).toBe(0)
+    alone.unmount()
+
+    const viewer = setup({ others: [ANN] })
+    viewer.live.role.set({ role: 'viewer', status: 'active' })
+    expect(viewer.live.offerAudience()).toBe(0)
+    viewer.unmount()
+
+    const busy = setup({ others: [ANN] })
+    await busy.event(busy.annPres())
+    expect(busy.live.offerAudience()).toBe(0)
+    busy.unmount()
+  })
+
+  it('the other people on the board, each once (two tabs of one person are one), never this person', () => {
+    const t = setup({ others: [ANN, ANN, 'usr_bob000000000000000', ME] })
+    expect(t.live.offerAudience()).toBe(2)
+    // presenting already (in this tab): nothing to ask
+    t.presenter.start({ role: 'presenter' })
+    expect(t.live.offerAudience()).toBe(0)
+    t.unmount()
+  })
+})

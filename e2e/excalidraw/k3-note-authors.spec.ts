@@ -20,6 +20,7 @@ import {
   typeText,
 } from '../tests/support/canvas.ts'
 import { withCanvas } from './a11y-kit.ts'
+import { startPresenting } from './present-kit.ts'
 import { expect, expectItemsEverywhere, reloadBoard, test } from './workshops-kit.ts'
 
 const label = (page: Page, id: string) => page.locator(`[data-testid="note-author"][data-note-id="${id}"]`)
@@ -122,7 +123,7 @@ test('K3-6: template and sample notes are nobody’s until edited; a typed note 
 
   await test.step('while alice presents, her slides carry no author labels; they come back after', async () => {
     await expect(label(a.page, 'k3-typed')).toBeVisible()
-    await a.page.getByTestId('present-button').click()
+    await startPresenting(a.page.getByTestId('present-button'))
     await expect(a.page.getByTestId('present-overlay')).toBeVisible()
     await expect(a.page.getByTestId('note-author')).toHaveCount(0)
     await a.page.keyboard.press('Escape')

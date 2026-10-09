@@ -21,7 +21,7 @@ import {
 import { WEB_URL } from '../tests/support/ports.ts'
 import type { Users } from '../tests/support/users.ts'
 // K3-4: the slide is fitted in the room the presentation's insets leave (the kit reads them)
-import { expectSlideOnScreen } from './present-kit.ts'
+import { expectSlideOnScreen, startPresenting } from './present-kit.ts'
 
 interface Deck {
   one: string
@@ -107,7 +107,7 @@ async function withDeck(a: CanvasSession, others: CanvasSession[]): Promise<Deck
  */
 async function presentToEveryone(page: Page) {
   const ui = presentUi(page)
-  await ui.button.click()
+  await startPresenting(ui.button)
   await expect(ui.overlay).toBeVisible()
   await expect(live(page).presenting).toBeVisible()
   await wake(page)
@@ -373,7 +373,7 @@ test.describe('present to everyone', () => {
         [c.page, c.context],
         [g.page, g.context],
       ] as const) {
-        await presentUi(page).button.click()
+        await startPresenting(presentUi(page).button)
         await expect(presentUi(page).overlay).toBeVisible()
         await wake(page)
         await expect(live(page).inviteEveryone).toHaveCount(0)

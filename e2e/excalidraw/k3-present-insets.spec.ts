@@ -6,6 +6,7 @@
 // 1440 × 900 and 1280 × 760.
 import type { Locator, Page } from '@playwright/test'
 import { itemBounds, sceneToScreen } from '../tests/support/canvas.ts'
+import { startPresenting } from './present-kit.ts'
 import { expect, expectItemsEverywhere, post, seed, test } from './workshops-kit.ts'
 
 interface Rect {
@@ -66,7 +67,7 @@ for (const size of [
       (await post(a, `/api/boards/${board}/timer`, { action: 'start', durationMs: 300_000 })).status(),
     ).toBe(200)
 
-    await a.page.getByTestId('present-button').click()
+    await startPresenting(a.page.getByTestId('present-button'))
     const overlay = a.page.getByTestId('present-overlay')
     await expect(overlay).toBeVisible()
     const timer = a.page.getByTestId('timer-floating')

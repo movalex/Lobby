@@ -39,6 +39,7 @@ export function joinPresentMode(ctx: CanvasFeatureContext): () => void {
     presentingLive: () => getLive(ctx.registries)?.presentingLive.get() ?? false,
     banner: () => liveBannerShown(getLive(ctx.registries)),
     onLocalStart: () => void getLive(ctx.registries)?.offerToEveryone(),
+    audience: () => getLive(ctx.registries)?.offerAudience() ?? 0,
   })
   return () => {
     offChrome()

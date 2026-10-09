@@ -15,6 +15,7 @@ import {
   openWorkshopPopover,
 } from '../tests/support/workshops.ts'
 import { openQueue, setHand } from '../tests/support/workshops-2.ts'
+import { startPresenting } from './present-kit.ts'
 import {
   expect,
   post,
@@ -371,7 +372,7 @@ test('raised hands: presenting, the chip in the corner of the slides names who i
       viewport: { width: 1280, height: 820 },
     })
     await setHand(guest.page, true)
-    await alice.page.getByTestId('present-button').click({ timeout: 5_000 })
+    await startPresenting(alice.page.getByTestId('present-button'))
     const floating = alice.page.getByTestId('hands-floating')
     await expect(floating).toBeVisible()
     expect(await nameFit(floating)).toMatchObject({ marker: ' (guest)', visible: true })

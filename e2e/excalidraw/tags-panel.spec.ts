@@ -17,7 +17,7 @@ import { downloadFrom, parseCsv } from '../tests/support/present-export.ts'
 import { capture } from '../tests/support/screenshots.ts'
 import { createGuestLink } from '../tests/support/tags.ts'
 import { settled } from './board-kit.ts'
-import { openBoardExport } from './present-kit.ts'
+import { openBoardExport, startPresenting } from './present-kit.ts'
 import {
   boardList,
   cameraAt,
@@ -88,7 +88,7 @@ async function presenting(page: Page, on: boolean) {
       })
       await expectSaved(page)
     }
-    await page.getByTestId('present-button').click()
+    await startPresenting(page.getByTestId('present-button'))
     await expect(page.getByTestId('present-overlay')).toBeVisible()
     return
   }

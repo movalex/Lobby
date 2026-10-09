@@ -57,6 +57,7 @@ import {
   roundView,
   seedDeck,
   setPresent,
+  startPresenting,
 } from './present-kit.ts'
 
 const F = { intro: 'pe-intro', backstage: 'pe-backstage', plan: 'pe-plan' }
@@ -110,7 +111,7 @@ test.describe('present mode', () => {
     const before = await viewport(a.page)
     const ui = presentUi(a.page)
 
-    await ui.button.click()
+    await startPresenting(ui.button)
     await expect(ui.overlay).toBeVisible()
     await expect(ui.counter).toHaveText('1 / 2')
     await expect(ui.title).toHaveText('Intro')
@@ -183,7 +184,7 @@ test.describe('present mode', () => {
     const board = { enabled: true, clip: true, name: true, outline: true }
     expect(await frameRendering()).toEqual(board)
     const ui = presentUi(a.page)
-    await ui.button.click()
+    await startPresenting(ui.button)
     await expect(ui.counter).toHaveText('1 / 2')
     await expectSlideOnScreen(a.page, F.intro)
     await nextFrames(a.page)
@@ -277,7 +278,7 @@ test.describe('present mode', () => {
     await expect(ui.button).toBeFocused()
 
     // With the mouse: click Present, then Exit; the focus goes back to Present too.
-    await ui.button.click()
+    await startPresenting(ui.button)
     await expect(ui.overlay).toBeVisible()
     await ui.exit.click()
     await expect(ui.overlay).toHaveCount(0)
@@ -319,7 +320,7 @@ test.describe('present mode', () => {
     await moveB(400)
     await expect(cursors).toHaveCount(1)
 
-    await ui.button.click()
+    await startPresenting(ui.button)
     await expect(ui.counter).toHaveText('1 / 2')
     await expectSlideOnScreen(a.page, F.intro)
     await expect(cursors).toHaveCount(0)
@@ -350,7 +351,7 @@ test.describe('present mode', () => {
     await clickItem(a.page, N.plan)
     await expect.poll(selectionState).toEqual({ selected: [N.plan], editing: null })
 
-    await a.page.keyboard.press('Control+Alt+Enter')
+    await startPresenting(a.page, 'everyone', 'keys')
     await expect(ui.overlay).toBeVisible()
     await expect(ui.counter).toHaveText('2 / 2')
     await expect(ui.title).toHaveText('Plan')
@@ -381,12 +382,12 @@ test.describe('present mode', () => {
 
     // A selected frame starts there too; a selected SKIPPED frame starts at the next slide.
     await select(a.page, [F.plan])
-    await ui.button.click()
+    await startPresenting(ui.button)
     await expect(ui.counter).toHaveText('2 / 2')
     await a.page.keyboard.press('Escape')
     await expect(ui.overlay).toHaveCount(0)
     await select(a.page, [F.backstage])
-    await ui.button.click()
+    await startPresenting(ui.button)
     await expect(ui.counter).toHaveText('2 / 2')
     await expect(ui.title).toHaveText('Plan')
     await a.page.keyboard.press('Escape')
@@ -415,7 +416,7 @@ test.describe('present mode', () => {
     expect(await tool(a.page)).toBe('select')
     const ui = presentUi(a.page)
 
-    await ui.button.click()
+    await startPresenting(ui.button)
     await expect(ui.counter).toHaveText('1 / 2')
     // Give Delete and PageUp a target, as a selection left over on the board would.
     await select(a.page, [EXTRA])
@@ -476,7 +477,7 @@ test.describe('present mode', () => {
     await expectItems(b.page, [F.intro, F.plan])
     const ui = presentUi(a.page)
 
-    await ui.button.click()
+    await startPresenting(ui.button)
     await a.page.keyboard.press('ArrowRight')
     await expect(ui.counter).toHaveText('2 / 2')
     await expect(ui.title).toHaveText('Plan')
@@ -513,7 +514,7 @@ test.describe('present mode', () => {
     await expectItems(b.page, [F.intro, F.plan])
     const ui = presentUi(a.page)
 
-    await ui.button.click()
+    await startPresenting(ui.button)
     await expect(ui.counter).toHaveText('1 / 2')
     await expect(ui.title).toHaveText('Plan')
     await expectSlideOnScreen(a.page, F.plan)
@@ -539,7 +540,7 @@ test.describe('present mode', () => {
     const ui = presentUi(a.page)
     const toast = a.page.getByTestId('present-empty-toast')
 
-    await ui.button.click()
+    await startPresenting(ui.button)
     await expect(toast).toContainText('Nothing to present yet')
     await expect(ui.overlay).toHaveCount(0)
     await expect(html(a.page)).not.toHaveAttribute('data-dr-presenting')
@@ -547,7 +548,7 @@ test.describe('present mode', () => {
     await seedDeck(a.page, {
       frames: [{ id: F.intro, name: 'Intro', x: 0, y: 0, w: 800, h: 600, skip: true }],
     })
-    await ui.button.click()
+    await startPresenting(ui.button)
     await expect(toast).toContainText('Every frame is set to "skip in presentation"')
     await expect(ui.overlay).toHaveCount(0)
 
@@ -561,7 +562,7 @@ test.describe('present mode', () => {
     await expectItems(a.page, [F.intro])
     await setPresent(a.page, F.intro, null)
     await expectSaved(a.page)
-    await ui.button.click()
+    await startPresenting(ui.button)
     await expect(ui.overlay).toHaveAttribute('data-mode', 'window')
     await expect(ui.counter).toHaveText('1 / 1')
     // The board covers the whole window instead.
@@ -604,7 +605,7 @@ test.describe('integration', () => {
     await expect.poll(() => visibleCount(selbar)).toBeGreaterThan(0)
     const ui = presentUi(a.page)
 
-    await ui.button.click()
+    await startPresenting(ui.button)
     await expect(ui.counter).toHaveText('2 / 2')
     await expectSlideOnScreen(a.page, F.plan) // the pinned note is on this slide
     await expect.poll(() => visibleCount(a.page.locator('[data-testid="comment-pin"]'))).toBe(0)
@@ -623,13 +624,13 @@ test.describe('integration', () => {
     expect(await canvasCall(v.page, 'readOnly')).toBe(true)
     const vu = presentUi(v.page)
     await focusBoard(v.page)
-    await v.page.keyboard.press('Control+Alt+Enter')
+    await startPresenting(v.page, 'everyone', 'keys')
     await expect(vu.counter).toHaveText('1 / 2')
     await v.page.keyboard.press('ArrowRight')
     await expect(vu.counter).toHaveText('2 / 2')
     await v.page.keyboard.press('Escape')
     await expect(vu.overlay).toHaveCount(0)
-    await vu.button.click()
+    await startPresenting(vu.button)
     await expect(vu.counter).toHaveText('1 / 2')
     await vu.exit.click()
     await expect(vu.overlay).toHaveCount(0)

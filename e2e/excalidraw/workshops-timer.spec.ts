@@ -16,6 +16,7 @@ import {
   pillSpread,
   workshopState,
 } from '../tests/support/workshops.ts'
+import { startPresenting } from './present-kit.ts'
 import {
   expect,
   expectItemsEverywhere,
@@ -176,7 +177,7 @@ test('timer sync: while carol presents, the timer floats over the slides (3e pre
     (await post(a, `/api/boards/${board}/timer`, { action: 'start', durationMs: 300_000 })).status(),
   ).toBe(200)
   await expect(c.page.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'running')
-  await c.page.getByTestId('present-button').click({ timeout: 5_000 })
+  await startPresenting(c.page.getByTestId('present-button'))
   await expect(c.page.getByTestId('present-overlay')).toBeVisible()
   const floating = c.page.getByTestId('timer-floating')
   await expect(floating).toBeVisible()
@@ -288,7 +289,7 @@ test("time's up: presenting a board whose timer has finished shows no floating t
   })
   await createItem(a.page, 'frame', { id: 'wk-tu-frame', x: 0, y: 0, width: 400, height: 300, name: 'Slide' })
   await expectItemsEverywhere([c], ['wk-tu-frame'])
-  await c.page.getByTestId('present-button').click({ timeout: 5_000 })
+  await startPresenting(c.page.getByTestId('present-button'))
   await expect(c.page.getByTestId('present-overlay')).toBeVisible()
   await expect(c.page.getByTestId('timer-floating')).toHaveCount(0)
   await c.page.keyboard.press('Escape')

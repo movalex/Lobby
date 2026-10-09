@@ -23,6 +23,7 @@ import {
 } from '../tests/support/canvas.ts'
 import { openWorkshopPopover } from '../tests/support/workshops.ts'
 import { canvasRect, followingSid, openCommentsPanel, sessionId } from './comments-kit.ts'
+import { startPresenting } from './present-kit.ts'
 
 const stopButton = (page: Page) => page.getByTestId('following-stop')
 const followingLabel = (page: Page) => page.getByTestId('following-label')
@@ -82,7 +83,7 @@ test('W5-23 and W5-51: after Gather, the follower keeps one flat "Stop following
 
   // alice presents (to everyone: K3-5 offers a Present to everyone on the board at once): bob gets the
   // invitation and is still following her
-  await a.page.getByTestId('present-button').click()
+  await startPresenting(a.page.getByTestId('present-button'))
   await expect(a.page.getByTestId('present-overlay')).toBeVisible()
   await expect(a.page.getByTestId('live-presenting')).toBeVisible()
   const invite = b.page.getByTestId('live-invite')

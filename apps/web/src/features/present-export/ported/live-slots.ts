@@ -16,8 +16,13 @@ export interface PresentLiveChrome {
   presentingLive(): boolean
   /** Reactive: `Top` draws its banner now (K3-4: the slide is fitted under it, ./insets.ts). */
   banner?(): boolean
-  /** K3-5: a presentation was just started here with the Present button or its shortcut. */
+  /** K3-5: a presentation was just started here with the Present button or its shortcut, to everyone. */
   onLocalStart?(): void
+  /**
+   * Wave K.1 (K3-5, follow-up 3): how many other people a Present here would go live to (0: nobody, or this
+   * person may not present to everyone, or someone already presents). Above 0, Present asks first.
+   */
+  audience?(): number
 }
 
 const slots = new WeakMap<LobbyCanvas, Atom<PresentLiveChrome | null>>()

@@ -113,7 +113,9 @@ test('K.1: a board with notes never flashes the start card or the dot grid while
     await waitForCanvas(p)
     await expect.poll(async () => (await items(p)).filter((e) => e.type === 'stickynote').length).toBe(2)
     await p.waitForTimeout(500)
-    expect(await p.evaluate(() => (window as unknown as { __flashes: number }).__flashes), `open ${i}`).toBe(0)
+    expect(await p.evaluate(() => (window as unknown as { __flashes: number }).__flashes), `open ${i}`).toBe(
+      0,
+    )
     await p.close()
   }
   // and an empty board still shows them once it is all there

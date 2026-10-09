@@ -4,7 +4,7 @@
 // facade reports it, and the presentation's locators. The file readers (PNG, SVG, PDF, CSV, clipboard,
 // downloads, request logs) are the tldraw specs' own (../tests/support/present-export.ts): they read
 // files, not the canvas.
-import { expect, type Page } from '@playwright/test'
+import { expect, type Locator, type Page } from '@playwright/test'
 import { makePng } from '../spike-b/support/png.ts'
 import {
   createItem,
@@ -212,6 +212,29 @@ export async function centreOf(page: Page, id: string): Promise<{ x: number; y: 
   const b = await itemBounds(page, id)
   if (!b) throw new Error(`${id} has no bounds`)
   return sceneToScreen(page, { x: b.x + b.width / 2, y: b.y + b.height / 2 })
+}
+
+/**
+ * Wave K.1 (K3-5): starts present mode with the Present button (a Locator: that button; a Page: its Present
+ * button, or the Ctrl+Alt+Enter shortcut with `how: 'keys'`) and answers the question Present asks when other
+ * people are on the board: 'everyone' (the default button, what Present did at once before it asked), or 'me'.
+ * Alone on the board, as a viewer, or with nothing to present, no question comes and nothing is answered.
+ */
+export async function startPresenting(
+  target: Page | Locator,
+  choice: 'everyone' | 'me' = 'everyone',
+  how: 'click' | 'keys' = 'click',
+): Promise<void> {
+  const isPage = 'goto' in target
+  const page: Page = isPage ? (target as Page) : (target as Locator).page()
+  if (how === 'keys') await page.keyboard.press('Control+Alt+Enter')
+  else await (isPage ? page.getByTestId('present-button') : (target as Locator)).click()
+  const ask = page.getByTestId('present-choice')
+  await expect(
+    ask.or(page.getByTestId('present-overlay')).or(page.getByTestId('present-empty-toast')).first(),
+  ).toBeVisible()
+  if (await ask.isVisible())
+    await ask.getByTestId(choice === 'me' ? 'present-choice-me' : 'present-choice-everyone').click()
 }
 
 export const presentUi = (page: Page) => ({

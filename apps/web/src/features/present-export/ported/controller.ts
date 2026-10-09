@@ -29,8 +29,18 @@ export interface Controller {
   readonly exportRequest: Atom<ExportRequest | null>
   openExport(focus?: ExportFocus): void
   closeExport(): void
-  /** Start presenting (call from a user gesture); explains why when there is nothing to present. */
+  /**
+   * Start presenting (call from a user gesture); explains why when there is nothing to present. Wave K.1 (K3-5):
+   * with other people on the board (and this person may present to everyone) it asks first instead
+   * (`presentChoice`): nothing goes live to everyone without that choice.
+   */
   present(): void
+  /** Wave K.1: the question Present is asking (how many others are here), or null. */
+  readonly presentChoice: Atom<{ readonly count: number; readonly seq: number } | null>
+  /** Wave K.1: the answer (from the same gesture): to everyone on the board, or just this person. */
+  presentTo(audience: 'everyone' | 'me'): void
+  /** Wave K.1: the question was dismissed: nothing starts. */
+  cancelPresent(): void
   /** Menu "Export as PNG/SVG": the selection (or the board), originals for PNG, named after the board. */
   quickExport(format: 'png' | 'svg', scope: 'selection-or-board' | 'board'): Promise<void>
   /** Ctrl/Cmd+Shift+C: the selection (or the board) as a PNG on the clipboard. */
@@ -53,6 +63,8 @@ export function getController(canvas: LobbyCanvas): Controller {
 
   const presenter = createPresenter(canvas)
   const exportRequest = atom<ExportRequest | null>('lobby-export-request', null)
+  const presentChoice = atom<{ count: number; seq: number } | null>('lobby-present-choice', null)
+  let choiceSeq = 0
   const board = atom<{ id: string; title: string } | null>('lobby-export-board', null)
   let seq = 0
   let notifyFn: (n: NoticeInput) => void = () => {}
@@ -82,6 +94,19 @@ export function getController(canvas: LobbyCanvas): Controller {
     return false
   }
 
+  /** Starts present mode; `everyone`: and offers it to everyone on the board at once (K3-5's toast, Follow). */
+  const startPresenting = (everyone: boolean) => {
+    const result = presenter.start()
+    if (result.ok && everyone) presentLiveOf(canvas).get()?.onLocalStart?.()
+    if (result.ok || result.reason === 'already') return
+    notify({
+      key: 'present-export',
+      text: result.reason === 'all-skipped' ? ALL_FRAMES_SKIPPED : NOTHING_TO_PRESENT,
+      testId: 'present-empty-toast',
+      timeoutMs: 7000,
+    })
+  }
+
   const controller: Controller = {
     canvas,
     presenter,
@@ -93,18 +118,25 @@ export function getController(canvas: LobbyCanvas): Controller {
     closeExport() {
       exportRequest.set(null)
     },
+    presentChoice,
     present() {
-      const result = presenter.start()
-      // K3-5: present-live offers a presentation started here to everyone on the board (its toast: "Chase is
-      // presenting · Follow"), when this person may present to everyone and someone else is here
-      if (result.ok) presentLiveOf(canvas).get()?.onLocalStart?.()
-      if (result.ok || result.reason === 'already') return
-      notify({
-        key: 'present-export',
-        text: result.reason === 'all-skipped' ? ALL_FRAMES_SKIPPED : NOTHING_TO_PRESENT,
-        testId: 'present-empty-toast',
-        timeoutMs: 7000,
-      })
+      // K.1 (K3-5): others are here and this person may present to everyone: ask first (there is something to
+      // present: with nothing, the start below explains why, and there is no question)
+      if (!presenter.isPresenting() && presenter.slides().length > 0) {
+        const count = presentLiveOf(canvas).get()?.audience?.() ?? 0
+        if (count > 0) {
+          presentChoice.set({ count, seq: ++choiceSeq })
+          return
+        }
+      }
+      startPresenting(false)
+    },
+    presentTo(audience) {
+      presentChoice.set(null)
+      startPresenting(audience === 'everyone')
+    },
+    cancelPresent() {
+      presentChoice.set(null)
     },
     async quickExport(format, scope) {
       if (!mayExport()) return
