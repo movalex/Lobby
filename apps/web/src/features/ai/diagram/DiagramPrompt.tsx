@@ -5,7 +5,11 @@
 // joined by bound elbow connectors (./apply.ts), every element carrying its provenance (the person and the run).
 // A result of more than PREVIEW_ABOVE elements is shown first (showAiPreview); "Try again" asks again.
 //
-// Read-only roles get no entry; the api enforces who may use AI (runAi resolves null, having told the person why).
+// The entry and the command are offered only when the AI tools that build on the board are (the AI feature's own
+// rule, ../ported/gate.ts canBuildWithAi over its AiStatus, as the mind map's "Mind map from a prompt" reads it):
+// AI on for this person on this board, allowed to add to it, the day's budget not spent, and an editor. So
+// read-only roles, name-only guests and a board or workspace with AI off get no entry. The api still enforces
+// all of it (runAi resolves null, having told the person why).
 // Placement: findSpot (public.ts): inside the home frame of the selection, or beside it, or in the view.
 import { toShapeRef } from '@draftroom/canvas-schema/refs'
 import type { AiRunInput } from '@draftroom/contracts'
@@ -21,7 +25,9 @@ import {
 import { type Atom, atom, useValue } from '../../../lib/signals.ts'
 import { bringIntoView } from '../../a11y/ported/traversal.ts'
 import { freshId } from '../../flow/runtime.ts'
+import { canBuildWithAi } from '../ported/gate.ts'
 import { type AiPreviewPlan, findSpot, runAi, showAiPreview } from '../ported/public.ts'
+import { aiStatus } from '../ported/runtime.ts'
 import { applyDiagram, type DiagramPlan, measureDiagram, planDiagram, planSize } from './apply.ts'
 import { type DiagramDirection, graphFromAi } from './graph.ts'
 
@@ -148,7 +154,7 @@ export const DIAGRAM_COMMAND: CommandSpec = {
   label: 'Diagram from words…',
   keywords: ['flowchart', 'flow chart', 'process', 'diagram', 'ai'],
   group: 'AI',
-  enabled: (ctx) => !ctx.canvas.readOnly(),
+  enabled: (ctx) => diagramOffered(ctx.canvas),
   run: (ctx) => openDiagramPrompt(ctx.canvas),
 }
 
@@ -158,7 +164,12 @@ export const DIAGRAM_MENU: MenuEntrySpec = {
   order: 12,
   label: 'Diagram from words…',
   command: DIAGRAM_COMMAND_ID,
-  visible: (ctx) => !ctx.canvas.readOnly(),
+  visible: (ctx) => diagramOffered(ctx.canvas),
+}
+
+/** Whether Diagram from words is offered here (see the header): the AI tools that build on the board are. */
+export function diagramOffered(canvas: LobbyCanvas): boolean {
+  return canBuildWithAi(aiStatus(canvas).get(), canvas.readOnly())
 }
 
 /** The prompt (a screen-layer overlay; its own elements take clicks and keys). */

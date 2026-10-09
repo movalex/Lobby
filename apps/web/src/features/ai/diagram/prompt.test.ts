@@ -1,9 +1,11 @@
 // L4-2: Diagram from words (./DiagramPrompt.tsx runDiagram) with W2's public.ts mocked (runAi, showAiPreview,
 // findSpot are foundation stubs until W2 lands): the request it sends, the preview above 20 elements (apply, try
 // again, discard), the provenance on every element, the spot findSpot gives, and one undo for the whole diagram.
+import type { AiStatus } from '@draftroom/contracts'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { fakeFlowCanvas } from '../../flow/test-canvas.ts'
+import { aiStatus } from '../ported/runtime.ts'
 
 const runAi = vi.fn()
 const showAiPreview = vi.fn()
@@ -133,13 +135,43 @@ describe('runDiagram', () => {
 })
 
 describe('the entries', () => {
-  it('no Diagram from words for a read-only role', () => {
+  const ON: AiStatus = {
+    enabled: true,
+    reason: null,
+    canInsert: true,
+    canSummarize: true,
+    noticeAccepted: true,
+    budget: null,
+    settings: null,
+  }
+  const offered = (ctx: CanvasFeatureContext) => {
+    const menu = DIAGRAM_MENU.visible?.(ctx, { ids: [], point: null, hit: null })
+    const command = DIAGRAM_COMMAND.enabled?.(ctx)
+    expect(menu).toBe(command)
+    return menu
+  }
+
+  it('Diagram from words only where AI may build on the board: never for a read-only role', () => {
     const { f, ctx } = setup()
-    expect(DIAGRAM_MENU.visible?.(ctx, { ids: [], point: null, hit: null })).toBe(true)
-    expect(DIAGRAM_COMMAND.enabled?.(ctx)).toBe(true)
+    aiStatus(f.canvas).set(ON)
+    expect(offered(ctx)).toBe(true)
     f.setReadOnly(true)
-    expect(DIAGRAM_MENU.visible?.(ctx, { ids: [], point: null, hit: null })).toBe(false)
-    expect(DIAGRAM_COMMAND.enabled?.(ctx)).toBe(false)
+    expect(offered(ctx)).toBe(false)
+  })
+
+  it('no entry before the api said, with AI off (a guest, the board, the workspace), no inserting, or the budget spent', () => {
+    const { f, ctx } = setup()
+    expect(offered(ctx)).toBe(false)
+    aiStatus(f.canvas).set({ ...ON, enabled: false, reason: 'guest', canInsert: false, canSummarize: false })
+    expect(offered(ctx)).toBe(false)
+    aiStatus(f.canvas).set({ ...ON, enabled: false, reason: 'board-off' })
+    expect(offered(ctx)).toBe(false)
+    aiStatus(f.canvas).set({ ...ON, canInsert: false })
+    expect(offered(ctx)).toBe(false)
+    aiStatus(f.canvas).set({ ...ON, budget: { usedPercent: 100, resetsAt: '2026-10-10T00:00:00.000Z' } })
+    expect(offered(ctx)).toBe(false)
+    aiStatus(f.canvas).set(ON)
+    expect(offered(ctx)).toBe(true)
   })
 
   it('the selection gives its notes, texts and worded shapes (a label stands for its container)', () => {

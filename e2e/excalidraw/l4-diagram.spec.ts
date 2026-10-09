@@ -203,3 +203,27 @@ test('L4-3: text that is not a flowchart goes on to bulk paste as before (an out
   await a.page.getByTestId('mermaid-paste-text').click()
   await expect.poll(async () => (await items(a.page)).map((e) => e.type)).toEqual(['text'])
 })
+
+test('With AI off an editor has no "Diagram from words…" entry; a flowchart with a long label says it is shortened before anything is written', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await grantClipboard(a.context)
+  await focusBoard(a.page)
+  const box = await a.page.locator('[data-lobby-board-canvas]').boundingBox()
+  if (!box) throw new Error('no canvas')
+  await a.page.mouse.click(box.x + box.width * 0.6, box.y + box.height * 0.6, { button: 'right' })
+  await expect(a.page.getByTestId('context-menu-root')).toBeVisible()
+  await expect(a.page.getByRole('menuitem', { name: /Diagram from words/ })).toHaveCount(0)
+  await a.page.keyboard.press('Escape')
+  await expect(a.page.getByTestId('context-menu-root')).toHaveCount(0)
+
+  await pasteText(a.page, `flowchart LR\nA[${'word '.repeat(20)}] --> B[Ship]\nA --> B`)
+  await expect(prompt(a.page)).toContainText('2 shapes, 1 connector.')
+  await expect(prompt(a.page)).toContainText('1 long label is shortened.')
+  await expect(prompt(a.page)).toContainText('1 link is left out')
+  expect(await items(a.page)).toEqual([])
+  await a.page.getByTestId('mermaid-paste-cancel').click()
+  await expect(prompt(a.page)).toHaveCount(0)
+  expect(await items(a.page)).toEqual([])
+})
