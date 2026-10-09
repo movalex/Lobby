@@ -284,6 +284,77 @@ test('L8-1: the palette-style commands take the notes they are given, sort by a 
   ).toBe(0)
 })
 
+test('L8-1: with Hide note authors on, By author is unavailable in the popover, the context menu and the commands, and no author name reaches the board', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  const b = await canvasSession('bob')
+  for (const s of [a, b]) await waitForSort(s.page)
+  const { ids } = await retroBoard(a, b)
+  await fakeAi(a.page, { preview: 'apply' })
+  await setViewport(a.page, { x: -200, y: -250, zoom: 0.5 })
+  await select(a.page, ids)
+
+  await test.step('a facilitator hides the note authors: bob sees the setting', async () => {
+    await withCanvas(
+      a.page,
+      (c) => c.doc.set({ workshop: { hideNoteAuthors: true, hideCursors: false } }),
+      null,
+    )
+    await expect
+      .poll(() => withCanvas(b.page, (c) => c.doc.get('workshop') ?? null, null), { timeout: 5_000 })
+      .toMatchObject({ hideNoteAuthors: true })
+  })
+
+  const pushes = (await pushedOps(a.page)).length
+  await test.step('the popover shows By author disabled, with the reason, and the other ways stay open', async () => {
+    await a.page.getByTestId('selection-sort').click()
+    await expect(a.page.getByTestId('sort-menu')).toBeVisible()
+    const author = a.page.getByTestId('sort-by-author')
+    await expect(author).toHaveAttribute('aria-disabled', 'true')
+    await expect(author).toContainText('Note authors are hidden on this board')
+    await expect(a.page.getByTestId('sort-by-colour')).not.toHaveAttribute('aria-disabled', 'true')
+    // clicking it does nothing: no sort, nothing written
+    await author.click({ force: true })
+    await expect(a.page.getByTestId('sort-menu')).toBeVisible()
+    await a.page.keyboard.press('Escape')
+    await expect(a.page.getByTestId('sort-menu')).toHaveCount(0)
+  })
+
+  await test.step('the context menu entry is disabled and says why', async () => {
+    await select(a.page, ids)
+    const at = await itemCenterOnScreen(a.page, ids[0] as string)
+    await a.page.mouse.click(at.x, at.y, { button: 'right' })
+    await a.page.getByRole('menuitem', { name: 'Sort by' }).click()
+    await expect(a.page.getByRole('menuitem', { name: /Author/ })).toBeDisabled()
+    await expect(a.page.getByRole('menuitem', { name: /Author/ })).toContainText('hidden on this board')
+    await a.page.keyboard.press('Escape')
+  })
+
+  await test.step('the command refuses, and no heading or author name was written', async () => {
+    await select(a.page, ids)
+    expect(await sortRun(a.page, 'sort.author')).toBe(false)
+    expect(await headings(a.page)).toHaveLength(0)
+    expect((await opsSince(a.page, pushes)).length).toBe(0)
+    // colour still works while authors are hidden
+    expect(await sortRun(a.page, 'sort.colour')).toBe(true)
+    await expect
+      .poll(async () => (await headings(a.page)).map(wordsOf).sort())
+      .toEqual(['Butter', 'Coral', 'Sky'])
+  })
+
+  await test.step('with the setting off again By author works, with the author’s name', async () => {
+    await withCanvas(
+      a.page,
+      (c) => c.doc.set({ workshop: { hideNoteAuthors: false, hideCursors: false } }),
+      null,
+    )
+    await select(a.page, ids)
+    expect(await sortRun(a.page, 'sort.author')).toBe(true)
+    await expect.poll(async () => (await headings(a.page)).map(wordsOf)).toEqual([a.name])
+  })
+})
+
 test('L8-1: the context menu has Sort by with the ways to sort; Escape closes the popover and gives the keyboard back to the board', async ({
   canvasSession,
 }) => {

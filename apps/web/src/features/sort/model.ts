@@ -14,6 +14,7 @@ import {
   type LobbyCanvas,
 } from '../../canvas/api/index.ts'
 import { boardTagRows, boardTagsOf, displayTags } from '../tags/ported/model.ts'
+import { workshopSettingsOf } from '../workshops/ported/session-settings.ts'
 import { lastRevealedResults } from '../workshops/store.ts'
 import { isFrame, isLive, isNote } from './geom.ts'
 import type { SortContext, SortNote } from './keys.ts'
@@ -121,6 +122,9 @@ export function sortNoteOf(el: CanvasElement, board: ReturnType<typeof boardTags
   }
 }
 
+/** Whether the board hides note authors (the facilitation setting, read live every time). */
+export const authorsHidden = (canvas: LobbyCanvas): boolean => workshopSettingsOf(canvas).hideNoteAuthors
+
 /** The board's last revealed vote as note id → votes, or null when no vote has been revealed. */
 export function revealedVotes(ctx: Pick<CanvasFeatureContext, 'events'>): Map<string, number> | null {
   const revealed = lastRevealedResults(ctx.events)
@@ -144,6 +148,7 @@ export function readSortContext(ctx: CanvasFeatureContext): SortContext {
     names,
     tagOrder: boardTagRows(board, canvas.items()).map((r) => r.key),
     votes: revealedVotes(ctx),
+    authorsHidden: authorsHidden(canvas),
   }
 }
 

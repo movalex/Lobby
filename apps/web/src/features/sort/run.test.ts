@@ -3,11 +3,13 @@
 // stacked, the preview over 10 moves, and the board read again at the moment of writing.
 import type { WorkshopVoteState } from '@draftroom/contracts'
 import { afterEach, describe, expect, it } from 'vitest'
+import type { MenuTarget } from '../../canvas/api/index.ts'
 import type { AiPreviewPlan } from '../ai/ported/public.ts'
 import { type WorkshopStore, workshopStoreFor } from '../workshops/store.ts'
+import { COMMANDS, CONTEXT_MENU, SORT_COMMAND_IDS } from './commands.ts'
 import { setSortDeps } from './deps.ts'
 import { PREVIEW_MIN_MOVES } from './execute.ts'
-import { NO_VOTES } from './keys.ts'
+import { AUTHORS_HIDDEN, NO_VOTES } from './keys.ts'
 import { skippedText } from './model.ts'
 import { NEED_NOTES, sortBy, sortDisabledReason } from './run.ts'
 import { arrowEl, type El, fakeCanvas, fakeCtx, fillOf, frameEl, noteEls, textEl } from './test-kit.ts'
@@ -413,6 +415,67 @@ describe('headings that still label notes which stay are kept', () => {
     // n6 is locked, so it stays under Butter while n0, n3 and n9 are sorted away
     await sortBy(ctx, 'author', ['n0', 'n3', 'n6', 'n9'])
     expect(headings(f).map((e) => e.originalText)).toContain('Butter')
+  })
+})
+
+describe('sort by author on a board that hides note authors', () => {
+  const hidden = () => ({ workshop: { hideNoteAuthors: true, hideCursors: false } })
+
+  it('is unavailable: every entry says why, nothing is written, and no author name reaches the board', async () => {
+    applyPreview()
+    const f = fakeCanvas(board(6), { doc: hidden() })
+    const { ctx, notices } = fakeCtx(f.canvas)
+    expect(sortDisabledReason(ctx, 'author', noteIds(6))).toBe(AUTHORS_HIDDEN)
+    // the other ways to sort are not affected
+    expect(sortDisabledReason(ctx, 'colour', noteIds(6))).toBeNull()
+    expect(sortDisabledReason(ctx, 'tag', noteIds(6))).toBeNull()
+    // the palette command and the context menu entry
+    f.selected = noteIds(6)
+    expect(COMMANDS.find((c) => c.id === SORT_COMMAND_IDS.author)?.disabledReason?.(ctx)).toBe(AUTHORS_HIDDEN)
+    expect(COMMANDS.find((c) => c.id === SORT_COMMAND_IDS.colour)?.disabledReason?.(ctx)).toBeNull()
+    const target = { ids: noteIds(6), hit: null } as unknown as MenuTarget
+    const entry = CONTEXT_MENU[0]?.submenu?.find((e) => e.id === 'sort.menu.author')
+    expect(entry?.disabled?.(ctx, target)).toBe(true)
+    expect(typeof entry?.label === 'function' ? entry.label(ctx, target) : entry?.label).toBe(
+      'Author (note authors are hidden on this board)',
+    )
+    // running it anyway (a menu that was open when the setting changed, the dev hook) writes nothing, says why
+    const out = await sortBy(ctx, 'author', noteIds(6))
+    expect(out.status).toBe('nothing')
+    expect(f.steps).toEqual([])
+    expect(f.ops).toEqual([])
+    expect(headings(f)).toHaveLength(0)
+    expect(notices.at(-1)?.text).toBe(AUTHORS_HIDDEN)
+  })
+
+  it('sorts by author as before when the setting is off, missing or malformed', async () => {
+    for (const doc of [{ workshop: { hideNoteAuthors: false } }, {}, { workshop: 'yes' }]) {
+      applyPreview()
+      const f = fakeCanvas(board(6), { doc })
+      const { ctx } = fakeCtx(f.canvas)
+      expect(sortDisabledReason(ctx, 'author', noteIds(6))).toBeNull()
+      const out = await sortBy(ctx, 'author', noteIds(6))
+      expect(out.status).toBe('applied')
+      expect(headings(f).map((e) => e.originalText)).toEqual(['Alice', 'Bob', 'Anonymous'])
+    }
+  })
+
+  it('is checked again when it is applied: authors hidden while the preview is open stops the sort', async () => {
+    const doc: Record<string, unknown> = {}
+    const f = fakeCanvas(board(12), { doc })
+    const { ctx, notices } = fakeCtx(f.canvas)
+    expect(sortDisabledReason(ctx, 'author', noteIds(12))).toBeNull()
+    setSortDeps({
+      showAiPreview: async () => {
+        doc.workshop = { hideNoteAuthors: true, hideCursors: false }
+        return 'apply'
+      },
+    })
+    const out = await sortBy(ctx, 'author', noteIds(12))
+    expect(out.status).toBe('nothing')
+    expect(f.steps).toEqual([])
+    expect(headings(f)).toHaveLength(0)
+    expect(notices.at(-1)?.text).toBe(AUTHORS_HIDDEN)
   })
 })
 

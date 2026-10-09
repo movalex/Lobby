@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { NOTE_PALETTE } from '../canvas-ux/palette.ts'
 import {
   ANONYMOUS,
+  AUTHORS_HIDDEN,
   groupNotes,
   NO_VOTES,
   noteColourName,
@@ -29,6 +30,7 @@ const ctx = (over: Partial<SortContext> = {}): SortContext => ({
   names: new Map(),
   tagOrder: [],
   votes: null,
+  authorsHidden: false,
   ...over,
 })
 
@@ -116,6 +118,16 @@ describe('sort by author', () => {
     const g = groupNotes('author', [note('a'), note('b')], ctx())
     expect(summary(g)).toEqual([[ANONYMOUS, ['a', 'b']]])
   })
+
+  it('is unavailable while the board hides note authors: no groups, and it says why', () => {
+    const notes = [note('a', { author: ann }), note('b', { author: bo })]
+    expect(groupNotes('author', notes, ctx({ authorsHidden: true }))).toBeNull()
+    expect(sortKeyProblem('author', { votes: null, authorsHidden: true })).toBe(AUTHORS_HIDDEN)
+    // the other keys do not depend on it
+    expect(groupNotes('colour', notes, ctx({ authorsHidden: true }))).not.toBeNull()
+    expect(sortKeyProblem('colour', { votes: null, authorsHidden: true })).toBeNull()
+    expect(sortKeyProblem('author', { votes: null, authorsHidden: false })).toBeNull()
+  })
 })
 
 describe('sort by tag', () => {
@@ -182,9 +194,10 @@ describe('sort by votes', () => {
 
   it('is unavailable with no revealed vote, and says why', () => {
     expect(groupNotes('votes', [note('a')], ctx({ votes: null }))).toBeNull()
-    expect(sortKeyProblem('votes', { votes: null })).toBe('Reveal a vote first')
-    expect(sortKeyProblem('votes', { votes })).toBeNull()
-    expect(sortKeyProblem('colour', { votes: null })).toBeNull()
+    const open = { authorsHidden: false }
+    expect(sortKeyProblem('votes', { votes: null, ...open })).toBe('Reveal a vote first')
+    expect(sortKeyProblem('votes', { votes, ...open })).toBeNull()
+    expect(sortKeyProblem('colour', { votes: null, ...open })).toBeNull()
   })
 
   it('still makes a group for a vote nobody voted in (every note under "0 votes")', () => {

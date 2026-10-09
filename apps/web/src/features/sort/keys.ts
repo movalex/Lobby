@@ -5,7 +5,9 @@
 //  - colour: the note palette's order (canvas-ux/palette.ts), a column per colour in use, named by the palette
 //    (Butter, Marigold, …); a fill outside the palette is "Other colours", last;
 //  - author: whoever made the note (`lobbyServer.createdBy`); a column per person by name, a note nobody is
-//    credited with (an anonymous reveal, a template's) under "Anonymous", last;
+//    credited with (an anonymous reveal, a template's) under "Anonymous", last. Not available while the board
+//    hides note authors (a column heading is a name on the board, and the columns say who wrote what):
+//    `groupNotes` answers null;
 //  - tag: the note's first tag in the board's tag order, then "Untagged", last;
 //  - votes: the last revealed vote's counts, most votes first, ties sharing a column, then "0 votes". With no
 //    revealed vote there is nothing to sort by: `groupNotes` answers null and the option is disabled.
@@ -29,6 +31,8 @@ export const ANONYMOUS = 'Anonymous'
 export const UNTAGGED = 'Untagged'
 export const OTHER_COLOURS = 'Other colours'
 export const NO_VOTES = '0 votes'
+/** Why a sort by author is unavailable while the board's "Hide note authors" is on. */
+export const AUTHORS_HIDDEN = 'Note authors are hidden on this board'
 
 /** What a sort needs to know about one note. */
 export interface SortNote {
@@ -48,6 +52,8 @@ export interface SortContext {
   readonly tagOrder: readonly string[]
   /** note id → votes in the last revealed vote; null: no vote has been revealed */
   readonly votes: ReadonlyMap<string, number> | null
+  /** the board hides note authors (the facilitation setting): an author column would show them */
+  readonly authorsHidden: boolean
 }
 
 export interface SortGroup {
@@ -127,6 +133,7 @@ export function groupNotes(
       return b.list()
     }
     case 'author': {
+      if (context.authorsHidden) return null
       for (const n of notes) {
         if (!n.author) {
           b.add('author:none', ANONYMOUS, LAST, n.id)
@@ -172,7 +179,11 @@ export function groupNotes(
 }
 
 /** Why `key` cannot be used right now, in words for the person, or null when it can. */
-export function sortKeyProblem(key: SortKey, context: Pick<SortContext, 'votes'>): string | null {
+export function sortKeyProblem(
+  key: SortKey,
+  context: Pick<SortContext, 'votes' | 'authorsHidden'>,
+): string | null {
+  if (key === 'author' && context.authorsHidden) return AUTHORS_HIDDEN
   if (key === 'votes' && context.votes === null) return 'Reveal a vote first'
   return null
 }

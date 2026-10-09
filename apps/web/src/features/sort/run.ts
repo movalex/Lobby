@@ -8,6 +8,7 @@ import { plural } from './copy.ts'
 import { type BuiltPlan, executePlan, type Outcome, type PlanProblem, type PlanSpec } from './execute.ts'
 import { groupNotes, SORT_KEY_LABELS, type SortKey, sortKeyProblem } from './keys.ts'
 import {
+  authorsHidden,
   eligibility,
   MAX_SORT_NOTES,
   readSortContext,
@@ -105,6 +106,7 @@ export function sortDisabledReason(
   ids: readonly string[] = ctx.canvas.selection,
 ): string | null {
   if (targetNotes(ctx.canvas, ids).length < 2) return NEED_NOTES
-  // only the votes need the board's vote (a store lookup); the palette asks this of every command as it lists them
-  return key === 'votes' ? sortKeyProblem(key, { votes: revealedVotes(ctx) }) : null
+  // the palette asks this of every command as it lists them: only the keys with a condition look anything up
+  if (key === 'author') return sortKeyProblem(key, { votes: null, authorsHidden: authorsHidden(ctx.canvas) })
+  return key === 'votes' ? sortKeyProblem(key, { votes: revealedVotes(ctx), authorsHidden: false }) : null
 }

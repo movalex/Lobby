@@ -141,7 +141,7 @@ const keyEntry = (key: SortKey, order: number): MenuEntrySpec => ({
   order,
   label: (ctx, t) => {
     const why = sortDisabledReason(ctx, key, menuIds(ctx, t))
-    return why && key === 'votes' ? `${SORT_KEY_LABELS[key]} (${why.toLowerCase()})` : SORT_KEY_LABELS[key]
+    return why ? `${SORT_KEY_LABELS[key]} (${why.toLowerCase()})` : SORT_KEY_LABELS[key]
   },
   disabled: (ctx, t) => sortDisabledReason(ctx, key, menuIds(ctx, t)) !== null,
   run: (ctx, t) => {
