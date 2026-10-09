@@ -5,6 +5,13 @@
  * `./impl.ts` (2C), created by the board page. Frozen at wave 1.
  */
 
+// Wave L (W3, L3-1): the wave L key claims table (pure data; the allowlist itself stays canvas/input's)
+export {
+  WAVE_L_CONTEXTUAL_KEYS,
+  WAVE_L_KEY_CLAIMS,
+  type WaveLKeyClaim,
+  type WaveLKeyClaimSpec,
+} from '../input/keymap.ts'
 // CR-3H-1: the checkpoint preview's types (see loadCheckpointPreview at the end)
 export type { CheckpointPreviewHandle, CheckpointPreviewInput } from '../preview/index.ts'
 export type { KeyEventLike } from '../registries.ts'
@@ -51,6 +58,7 @@ export type {
   LobbyHistory,
   LobbyItemKind,
   LobbyPresence,
+  LobbyRoom,
   LobbySettings,
   LobbySettingsValues,
   LobbyStyles,
@@ -98,7 +106,7 @@ export type {
   TopBarItemSpec,
   TypeToEditSpec,
 } from './registries.ts'
-export { createFeatureRegistries, HOST_SLOTS, MENU_GROUPS } from './registries.ts'
+export { commandRunnable, createFeatureRegistries, HOST_SLOTS, MENU_GROUPS } from './registries.ts'
 // CR-3H-1 (3h, wave 3): the checkpoint preview (canvas/preview/**, 3h's; plan §4.6): a read-only bitmap of
 // a checkpoint's elements drawn with the engine's exporter and Lobby's own pan and zoom, never a second
 // editor. A checkpoint is not the live scene, so `LobbyCanvas.export.canvas` (live items) cannot draw it.

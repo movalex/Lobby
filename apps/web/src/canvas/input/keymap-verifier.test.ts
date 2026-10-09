@@ -8,6 +8,9 @@ import {
   type KeyContext,
   type KeyLike,
   textareaKeyAction,
+  WAVE_L_CONTEXTUAL_KEYS,
+  WAVE_L_KEY_CLAIMS,
+  waveLKeyClaimOf,
 } from './keymap.ts'
 
 // Spike B: the keys verifier's K2-K5 (docs/research/excalidraw/spike-b/OPEN-FROM-SPIKE-A.md), pinned.
@@ -281,5 +284,113 @@ describe('spike B R3: the clipboard chords go to the browser (plan §2.3.3 "Clip
     )
     for (const e of [raw('c', 'KeyC', { ctrlKey: true }), raw('v', 'KeyV', { ctrlKey: true })])
       expect(kind(e, READONLY)).toMatchObject({ kind: 'block', preventDefault: true })
+  })
+})
+
+describe('wave L key claims (L3-1): mod+k, mod+Arrow, mod+Shift+Arrow, Alt+Arrow never reach the engine', () => {
+  const ARROW_KEYS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'] as const
+  const PENDING: KeyContext = { ...EDITOR, editor: 'pending' }
+  const k = (m: Partial<KeyLike>) => raw('k', 'KeyK', m)
+  const arrow = (key: string, m: Partial<KeyLike>) => raw(key, key, m)
+  const contexts = [
+    ['editor', EDITOR],
+    ['read-only', READONLY],
+    ['editor on macOS', { ...EDITOR, mac: true }],
+    ['read-only on macOS', { ...READONLY, mac: true }],
+  ] as const
+
+  it('the table names each claim once, with its chords and who may take them', () => {
+    expect(WAVE_L_KEY_CLAIMS.map((c) => c.claim)).toEqual([
+      'palette',
+      'flow-next',
+      'flow-repeat',
+      'flow-walk',
+    ])
+    const chords = WAVE_L_KEY_CLAIMS.flatMap((c) => c.chords)
+    expect(new Set(chords).size).toBe(chords.length)
+    expect(chords).toHaveLength(13)
+    for (const c of WAVE_L_KEY_CLAIMS) expect(c.takenBy.length, c.claim).toBeGreaterThan(0)
+    expect([...WAVE_L_CONTEXTUAL_KEYS]).toEqual(['flow.repeat'])
+  })
+
+  it('reads each press as its claim (Ctrl or Cmd; never with AltGr or while composing; the letter by layout)', () => {
+    expect(waveLKeyClaimOf(k({ ctrlKey: true }))).toBe('palette')
+    expect(waveLKeyClaimOf(k({ metaKey: true }))).toBe('palette')
+    expect(waveLKeyClaimOf(raw('л', 'KeyK', { ctrlKey: true }))).toBe('palette') // Russian layout, K key
+    expect(waveLKeyClaimOf(raw('k', 'KeyV', { ctrlKey: true }))).toBe('palette') // Dvorak: the character decides
+    expect(waveLKeyClaimOf(raw('v', 'KeyK', { ctrlKey: true }))).toBeNull()
+    expect(waveLKeyClaimOf(k({ ctrlKey: true, shiftKey: true }))).toBeNull()
+    expect(waveLKeyClaimOf(k({ ctrlKey: true, altKey: true, altGraph: true }))).toBeNull()
+    expect(waveLKeyClaimOf(k({}))).toBeNull()
+    for (const a of ARROW_KEYS) {
+      expect(waveLKeyClaimOf(arrow(a, { ctrlKey: true })), a).toBe('flow-next')
+      expect(waveLKeyClaimOf(arrow(a, { metaKey: true, shiftKey: true })), a).toBe('flow-repeat')
+      expect(waveLKeyClaimOf(arrow(a, { altKey: true })), a).toBe('flow-walk')
+      expect(waveLKeyClaimOf(arrow(a, {})), a).toBeNull()
+      expect(waveLKeyClaimOf(arrow(a, { shiftKey: true })), a).toBeNull()
+      expect(waveLKeyClaimOf(arrow(a, { ctrlKey: true, altKey: true })), a).toBeNull()
+      expect(waveLKeyClaimOf(arrow(a, { ctrlKey: true, isComposing: true })), a).toBeNull()
+    }
+  })
+
+  it('Excalidraw would act on them (hyperlink, flowchart, align): the allowlist never delegates one, for any role', () => {
+    for (const mac of [false, true]) {
+      const mod = mac ? { metaKey: true } : { ctrlKey: true }
+      expect(engineKeyActions(k(mod), mac)).toContain('hyperlink')
+      for (const a of ARROW_KEYS) {
+        expect(engineKeyActions(arrow(a, mod), mac)).toContain('flowchart')
+        expect(engineKeyActions(arrow(a, { altKey: true }), mac)).toContain('flowchart')
+        expect(
+          engineKeyActions(arrow(a, { ...mod, shiftKey: true }), mac).some((x) => x.startsWith('align')),
+        ).toBe(true)
+      }
+    }
+    for (const [name, ctx] of contexts) {
+      const mod = ctx.mac ? { metaKey: true } : { ctrlKey: true }
+      const presses = [
+        k(mod),
+        ...ARROW_KEYS.flatMap((a) => [arrow(a, mod), arrow(a, { ...mod, shiftKey: true })]),
+      ]
+      for (const e of presses) {
+        const v = classifyKey(e, ctx)
+        expect(v, `${name}: ${chordOf(e)}`).toEqual({ kind: 'block', preventDefault: true })
+        expect(delegatedChord(e, ctx.mac === true), `${name}: ${chordOf(e)}`).toBeNull()
+      }
+      // Alt+Arrow stays Lobby's reading-order walk (a11y), never the engine's
+      for (const a of ARROW_KEYS)
+        expect(classifyKey(arrow(a, { altKey: true }), ctx), `${name}: alt+${a}`).toEqual({
+          kind: 'lobby',
+          action: 'a11yTraverse',
+        })
+    }
+  })
+
+  it('a pending editor neither buffers nor delegates them', () => {
+    expect(classifyKey(k({ ctrlKey: true }), PENDING)).toEqual({ kind: 'block', preventDefault: true })
+    for (const a of ARROW_KEYS) expect(classifyKey(arrow(a, { ctrlKey: true }), PENDING).kind).toBe('block')
+  })
+
+  it('inside the granted text editor: mod+k is blocked; the arrows stay the caret and selection moves; AltGr types', () => {
+    for (const mac of [false, true]) {
+      const ctx = { ...GRANTED, mac }
+      const mod = mac ? { metaKey: true } : { ctrlKey: true }
+      expect(classifyKey(k(mod), ctx)).toEqual({ kind: 'block', preventDefault: true })
+      for (const a of ARROW_KEYS) {
+        // a word / line move and its selection (the textarea's handler has no action for them)
+        expect(textareaKeyAction(arrow(a, mod), mac)).toBeNull()
+        expect(classifyKey(arrow(a, mod), ctx), `${mac} mod+${a}`).toEqual({ kind: 'delegate' })
+        expect(classifyKey(arrow(a, { ...mod, shiftKey: true }), ctx)).toEqual({ kind: 'delegate' })
+        // Alt+Arrow: the caret by word on macOS; elsewhere it would be the browser's Back/Forward
+        expect(classifyKey(arrow(a, { altKey: true }), ctx).kind).toBe(mac ? 'delegate' : 'block')
+      }
+    }
+    // AltGr (Windows: Ctrl+Alt) still types its character, here on the K key (Polish: none; a test layout: ĸ)
+    expect(classifyKey(raw('ĸ', 'KeyK', { ctrlKey: true, altKey: true, altGraph: true }), GRANTED)).toEqual({
+      kind: 'browser',
+    })
+    // macOS Option characters too
+    expect(classifyKey(raw('˚', 'KeyK', { altKey: true }), { ...GRANTED, mac: true })).toEqual({
+      kind: 'browser',
+    })
   })
 })

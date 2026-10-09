@@ -24,8 +24,20 @@ export type { KeyEventLike, Registry }
 
 // ---- commands (tldraw's `overrides.actions`) ----------------------------------------------------------------
 
-/** Where a command was started from (tldraw's TLUiEventSource). */
-export type CommandSource = 'kbd' | 'menu' | 'context-menu' | 'toolbar' | 'selection-bar' | 'dock' | 'api'
+/**
+ * Where a command was started from (tldraw's TLUiEventSource). 'palette' (wave L, W3): the Ctrl/Cmd+K command
+ * palette, which runs every command through canvas-ux's `runCommand` like a menu (the same enabled, read-only
+ * and export rules, the same undo steps).
+ */
+export type CommandSource =
+  | 'kbd'
+  | 'menu'
+  | 'context-menu'
+  | 'toolbar'
+  | 'selection-bar'
+  | 'dock'
+  | 'api'
+  | 'palette'
 
 export interface CommandSpec {
   /** unique across features, e.g. 'canvas-ux.select-all', 'comments.add' */
@@ -43,7 +55,32 @@ export interface CommandSpec {
    * keys do nothing): what it needs is missing (cursor chat on a touch screen with no cursor). Default: offered.
    */
   available?(ctx: CanvasFeatureContext): boolean
-  run(ctx: CanvasFeatureContext, source: CommandSource): void | Promise<void>
+  // ---- wave L (W3, L3-1/L3-2; additive: every field is optional, a command without them is unchanged) ----
+  /** More words the palette matches the command by ('dh' finds Distribute horizontally by its words already). */
+  readonly keywords?: readonly string[]
+  /** The palette's group heading for it ('Arrange', 'AI', 'Facilitate', 'Insert'); default: its feature's. */
+  readonly group?: string
+  /**
+   * Why it cannot run right now, in words the palette shows ('Select two or more objects'), or null when it
+   * can. A non-null reason means not enabled: `runCommand` and the command's keys refuse it as for `enabled`.
+   */
+  disabledReason?(ctx: CanvasFeatureContext): string | null
+  /**
+   * `args` (wave L): what the caller passes when it runs the command by id (`runCommand(ctx, id, source, args)`),
+   * e.g. `{ question }` for 'ai.ask'. Untyped on the registry: each command validates its own args and ignores
+   * what it does not know (a menu or a key passes none). The cross-workstream ids and their args are frozen in
+   * the owners' files (features/ai/ported/public.ts, features/workshops/commands.ts).
+   */
+  run(ctx: CanvasFeatureContext, source: CommandSource, args?: unknown): void | Promise<void>
+}
+
+/** Whether `cmd` may run now: available, allowed for a read-only role, enabled, and no disabled reason. */
+export function commandRunnable(cmd: CommandSpec, ctx: CanvasFeatureContext): boolean {
+  if (cmd.available && !cmd.available(ctx)) return false
+  if (ctx.canvas.readOnly() && !cmd.readOnlyAllowed) return false
+  if (cmd.enabled && !cmd.enabled(ctx)) return false
+  if (cmd.disabledReason && cmd.disabledReason(ctx) !== null) return false
+  return true
 }
 
 // ---- keys (Lobby-owned keys, §2.3.3) ----------------------------------------------------------------------

@@ -561,12 +561,23 @@ export const COMMANDS: readonly CommandSpec[] = [
   },
 ]
 
-/** Runs a command by id as a menu or a button would (its `enabled` and read-only rules applied). */
-export function runCommand(ctx: CanvasFeatureContext, id: string, source: CommandSource): boolean {
+/**
+ * Runs a command by id as a menu or a button would (its `enabled` and read-only rules applied, and since wave L
+ * its `disabledReason`). `args` (wave L): passed to the command's `run` as they are (the command checks them);
+ * the palette and the cross-workstream callers (the coach, Wrap up) use it. False when there is no such
+ * command or it may not run: an id another workstream has not registered yet is a no-op, never an error.
+ */
+export function runCommand(
+  ctx: CanvasFeatureContext,
+  id: string,
+  source: CommandSource,
+  args?: unknown,
+): boolean {
   const cmd = ctx.registries.commands.get(id) ?? COMMANDS.find((c) => c.id === id)
   if (!cmd) return false
   if (ctx.canvas.readOnly() && !cmd.readOnlyAllowed) return false
   if (cmd.enabled && !cmd.enabled(ctx)) return false
-  void cmd.run(ctx, source)
+  if (cmd.disabledReason && cmd.disabledReason(ctx) !== null) return false
+  void (args === undefined ? cmd.run(ctx, source) : cmd.run(ctx, source, args))
   return true
 }

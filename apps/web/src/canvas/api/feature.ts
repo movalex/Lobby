@@ -179,6 +179,8 @@ function commandKey(cmd: CommandSpec, ctx: CanvasFeatureContext, scope: 'canvas'
       if (cmd.available && !cmd.available(ctx)) return false
       if (ctx.canvas.readOnly() && !cmd.readOnlyAllowed) return false
       if (cmd.enabled && !cmd.enabled(ctx)) return false
+      // wave L: a disabled reason declines the key like `enabled` (the next claimant, then the allowlist, gets it)
+      if (cmd.disabledReason && cmd.disabledReason(ctx) !== null) return false
       void cmd.run(ctx, 'kbd')
       return true
     },

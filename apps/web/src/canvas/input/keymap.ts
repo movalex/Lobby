@@ -609,6 +609,91 @@ export function classifyTextEditorKey(e: KeyLike, ctx: Pick<KeyContext, 'inMindM
   return block(e)
 }
 
+// --- Wave L key claims (owner W3, the sole owner of key claims in wave L; L3-1) --------------------------
+//
+// Chords Lobby's wave L features own on the canvas. A feature takes one through the key registry, which the
+// board's input layer (canvas/board/input.ts) runs BEFORE this allowlist; whatever no feature takes reaches
+// classifyKey below, which never delegates any of them, whatever the role, so Excalidraw's own action for the
+// chord never runs: mod+k is its `hyperlink` keyTest (the link editor writes `link`, outside Lobby's lease
+// and URL rules), mod+Arrow its flowchart handler (App.onKeyDown 28674-28710: it creates elements and bound
+// arrows), mod+Shift+Arrow its align actions. Inside the granted text editor nothing changes: the feature keys
+// are canvas-scope only, mod+k stays blocked there (not a kept chord), Ctrl/Cmd+Arrow and Ctrl/Cmd+Shift+Arrow
+// stay the browser's caret and selection moves (kept chords; the textarea's handler has no action for them),
+// Alt+Arrow is the caret on macOS only, and AltGr / Option characters still type.
+//
+// Who takes each (the keyboard-map test, features/canvas-ux/ported/keyboard-map.test.ts, holds the claims of
+// CANVAS_FEATURES to this table):
+//   palette      mod+k             'command-palette.open' (W3, features/command-palette), every role
+//   flow-next    mod+Arrow         'flow.next' (W4, features/flow), editors: the next connected shape
+//   flow-repeat  mod+Shift+Arrow   'flow.repeat' (W4), editors: the next shape of the last created kind. It is
+//                                  contextual: it takes the key only in the state it acts in (a flow being built
+//                                  from the one selected shape) and declines otherwise, so the shipped claims of
+//                                  the same chords keep working: the comment tool's 'comments.tool-level' (only
+//                                  while that tool is on) and a11y's 'a11y.into-frame' (mod+Shift+Down) and
+//                                  'a11y.out-of-frame' (mod+Shift+Up). features/flow goes BEFORE a11y in
+//                                  CANVAS_FEATURES (W3 adds the line) so it is asked first.
+//   flow-walk    Alt+Arrow         already Lobby's: 'a11y.next' / 'a11y.previous' (and lobbyCommon's
+//                                  'a11yTraverse' below). W4 makes that walk follow bound connections in
+//                                  features/a11y/ported/traversal.ts; no new claim, no second key spec.
+
+export type WaveLKeyClaim = 'palette' | 'flow-next' | 'flow-repeat' | 'flow-walk'
+
+const ARROW_NAMES = ['arrowleft', 'arrowright', 'arrowup', 'arrowdown'] as const
+
+export interface WaveLKeyClaimSpec {
+  readonly claim: WaveLKeyClaim
+  /** the chords, in the key registry's spelling (canvas/api/keys.ts parseChord) */
+  readonly chords: readonly string[]
+  /** the claim ids (KeyClaim.by) that may take them; a wave L id is the owner's FeatureKeySpec or command id */
+  readonly takenBy: readonly string[]
+  readonly owner: 'W3' | 'W4'
+  /** who it acts for: every role, or editors only (read-only roles' presses stay blocked) */
+  readonly roles: 'all' | 'editors'
+}
+
+export const WAVE_L_KEY_CLAIMS: readonly WaveLKeyClaimSpec[] = [
+  { claim: 'palette', chords: ['mod+k'], takenBy: ['command-palette.open'], owner: 'W3', roles: 'all' },
+  {
+    claim: 'flow-next',
+    chords: ARROW_NAMES.map((a) => `mod+${a}`),
+    takenBy: ['flow.next'],
+    owner: 'W4',
+    roles: 'editors',
+  },
+  {
+    claim: 'flow-repeat',
+    chords: ARROW_NAMES.map((a) => `mod+shift+${a}`),
+    takenBy: ['flow.repeat', 'comments.tool-level', 'a11y.into-frame', 'a11y.out-of-frame'],
+    owner: 'W4',
+    roles: 'editors',
+  },
+  {
+    claim: 'flow-walk',
+    chords: ARROW_NAMES.map((a) => `alt+${a}`),
+    takenBy: ['a11y.next', 'a11y.previous'],
+    owner: 'W4',
+    roles: 'all',
+  },
+]
+
+/** Wave L claims that act only in a narrow state and decline otherwise (they share a chord on purpose). */
+export const WAVE_L_CONTEXTUAL_KEYS: ReadonlySet<string> = new Set(['flow.repeat'])
+
+/**
+ * Which wave L claim a key press is (outside any text field), or null. Ctrl or Cmd (one of them, as Lobby's
+ * `mod`), never with AltGr; the letter by the layout's character (chordLetter: Ctrl+К on a Russian layout's K
+ * key is Ctrl+K to the browser).
+ */
+export function waveLKeyClaimOf(e: KeyLike): WaveLKeyClaim | null {
+  if (e.isComposing || e.altGraph) return null
+  const mod = isMod(e)
+  if (mod && !e.altKey && !e.shiftKey && letterIs(e, 'k')) return 'palette'
+  if (!ARROWS.has(e.key)) return null
+  if (mod && !e.altKey) return e.shiftKey ? 'flow-repeat' : 'flow-next'
+  if (!mod && e.altKey && !e.shiftKey) return 'flow-walk'
+  return null
+}
+
 /** Lobby-owned keys that make sense for every role (navigation, search, menus). */
 function lobbyCommon(e: KeyLike): LobbyKeyAction | null {
   const mod = isMod(e)
@@ -655,6 +740,10 @@ export function classifyKey(e: KeyLike, ctx: KeyContext): KeyVerdict {
 
   const common = lobbyCommon(e)
   if (common) return { kind: 'lobby', action: common }
+
+  // Wave L (L3-1): a wave L chord no feature took (the key registry runs first) reaches nobody: never the
+  // engine's hyperlink, flowchart or align, for any role. Prevented like every blocked Ctrl/Cmd chord.
+  if (waveLKeyClaimOf(e)) return block(e)
 
   const mod = isMod(e)
 

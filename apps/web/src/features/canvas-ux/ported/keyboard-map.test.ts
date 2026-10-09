@@ -13,6 +13,8 @@ import {
   type KeyEventLike,
   keyConflicts,
   parseChord,
+  WAVE_L_CONTEXTUAL_KEYS,
+  WAVE_L_KEY_CLAIMS,
 } from '../../../canvas/api/index.ts'
 import { CANVAS_FEATURES } from '../../canvas-registry.ts'
 import { feature as canvasUx } from './index.tsx'
@@ -100,7 +102,8 @@ const TAKES_BROWSER_CHORD: Readonly<Record<string, string>> = {
  * its chord (so it wins while its tool is on). The comment tool's are the only ones today.
  */
 const toolScoped = claims.filter((c) => c.tool !== undefined)
-const contextual = (c: { by: string; tool?: string }) => DEFERRING_KEYS.has(c.by) || c.tool !== undefined
+const contextual = (c: { by: string; tool?: string }) =>
+  DEFERRING_KEYS.has(c.by) || c.tool !== undefined || WAVE_L_CONTEXTUAL_KEYS.has(c.by)
 
 describe('the keyboard map of CANVAS_FEATURES', () => {
   it('every claimed chord parses', () => {
@@ -144,6 +147,46 @@ describe('the keyboard map of CANVAS_FEATURES', () => {
           canonical(c.chord) === canonical(own.chord),
       )
       for (const c of same)
+        expect(order.indexOf(own.featureId), `${own.by} before ${c.by} (${own.chord})`).toBeLessThan(
+          order.indexOf(c.featureId),
+        )
+    }
+  })
+})
+
+describe('the wave L key claims (L3-1; canvas/input/keymap.ts WAVE_L_KEY_CLAIMS, owner W3)', () => {
+  const claimOf = new Map(WAVE_L_KEY_CLAIMS.flatMap((w) => w.chords.map((c) => [canonical(c), w] as const)))
+
+  it('only the ids the table names take a wave L chord', () => {
+    const taken = claims.filter((c) => claimOf.has(canonical(c.chord)))
+    const wrong = taken.filter((c) => !claimOf.get(canonical(c.chord))?.takenBy.includes(c.by))
+    expect(wrong.map((c) => `${c.by}: ${c.chord}`)).toEqual([])
+    // the claims that shipped before wave L keep their chords: a11y's walk and frame keys, the comment tool's
+    for (const id of [
+      'a11y.next',
+      'a11y.previous',
+      'a11y.into-frame',
+      'a11y.out-of-frame',
+      'comments.tool-level',
+    ])
+      expect(
+        taken.some((c) => c.by === id),
+        id,
+      ).toBe(true)
+    // mod+k and mod+Arrow are nobody's but the wave L features' (none is registered before W3 and W4 land)
+    for (const c of taken.filter((x) =>
+      ['palette', 'flow-next'].includes(claimOf.get(canonical(x.chord))?.claim ?? ''),
+    ))
+      expect(['command-palette.open', 'flow.next'], `${c.by}: ${c.chord}`).toContain(c.by)
+  })
+
+  it('a contextual wave L key is asked before the shipped claims of its chord (its feature comes first)', () => {
+    const order = CANVAS_FEATURES.map((f) => f.id)
+    for (const own of claims.filter((c) => WAVE_L_CONTEXTUAL_KEYS.has(c.by))) {
+      const others = claims.filter(
+        (c) => c.by !== own.by && c.tool === undefined && canonical(c.chord) === canonical(own.chord),
+      )
+      for (const c of others)
         expect(order.indexOf(own.featureId), `${own.by} before ${c.by} (${own.chord})`).toBeLessThan(
           order.indexOf(c.featureId),
         )
