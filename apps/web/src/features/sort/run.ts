@@ -11,6 +11,7 @@ import {
   eligibility,
   MAX_SORT_NOTES,
   readSortContext,
+  revealedVotes,
   type Skipped,
   skippedText,
   sortNotesOf,
@@ -104,5 +105,6 @@ export function sortDisabledReason(
   ids: readonly string[] = ctx.canvas.selection,
 ): string | null {
   if (targetNotes(ctx.canvas, ids).length < 2) return NEED_NOTES
-  return sortKeyProblem(key, { votes: readSortContext(ctx).votes })
+  // only the votes need the board's vote (a store lookup); the palette asks this of every command as it lists them
+  return key === 'votes' ? sortKeyProblem(key, { votes: revealedVotes(ctx) }) : null
 }

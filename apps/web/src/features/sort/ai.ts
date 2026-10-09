@@ -17,6 +17,7 @@ import { fromShapeRef, toShapeRef } from '@draftroom/canvas-schema/refs'
 import {
   AI_MAX_REQUEST_SHAPES,
   AI_SORT_LENS_MAX_CHARS,
+  AI_THEME_NAME_MAX_CHARS,
   type AiResult,
   type AiScoreAxis,
 } from '@draftroom/contracts'
@@ -129,7 +130,7 @@ export async function sortByLens(
     const groups: PlanGroup[] = res.themes
       .map((th, i) => ({
         key: `lens:${i}`,
-        label: th.name.trim() || `Group ${i + 1}`,
+        label: th.name.trim().slice(0, AI_THEME_NAME_MAX_CHARS) || `Group ${i + 1}`,
         ids: th.noteIds
           .map((r) => fromShapeRef(r))
           .filter((id): id is string => {

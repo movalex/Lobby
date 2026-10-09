@@ -148,6 +148,23 @@ describe('sort by a lens', () => {
     expect(f.els.get('n2')?.x).not.toBe(f.els.get('n0')?.x)
   })
 
+  it('clamps a long group name to what the contract allows, and names an unnamed group', async () => {
+    stubAi(() => ({
+      action: 'sort',
+      lens: 'x',
+      themes: [
+        { name: 'L'.repeat(90), noteIds: ['n0', 'n1'].map(ref) },
+        { name: '   ', noteIds: ['n2', 'n3'].map(ref) },
+      ],
+      ...common,
+    }))
+    const f = fakeCanvas(lensBoard(4))
+    await sortByLens(fakeCtx(f.canvas).ctx, 'x', nids(4))
+    const heads = [...f.els.values()].filter((e) => e.type === 'text' && !e.containerId && !e.isDeleted)
+    expect(heads.map((h) => String(h.originalText).length)).toEqual([40, 7])
+    expect(heads[1]?.originalText).toBe('Group 2')
+  })
+
   it('replaces the headings of an earlier run: sorting twice leaves one set', async () => {
     let call = 0
     stubAi(() => ({

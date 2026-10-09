@@ -150,8 +150,8 @@ export function PiecesPanel({ ctx, close }: { ctx: CanvasFeatureContext; close()
           className="dr-input"
           placeholder="Search pieces"
           role="combobox"
-          aria-expanded="true"
-          aria-controls={`${base}-list`}
+          aria-expanded={results.length > 0}
+          aria-controls={results.length > 0 ? `${base}-list` : undefined}
           aria-autocomplete="list"
           aria-activedescendant={active ? optionId(base, active.id) : undefined}
           value={state.query}
