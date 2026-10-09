@@ -140,6 +140,20 @@ export const aiFlash = perCanvas<Atom<AiFlashState | null>>(() =>
 )
 
 /**
+ * Wave L: the private panels (the summary, Ask's answer, the recap) are one at a time per canvas: opening one
+ * closes the others. Each module registers how its own panel closes (so this module imports none of them).
+ */
+export type AiPrivatePanel = 'summary' | 'answer' | 'recap'
+const panelClosers = new Map<AiPrivatePanel, (canvas: LobbyCanvas) => void>()
+export const registerPrivatePanel = (name: AiPrivatePanel, close: (canvas: LobbyCanvas) => void) =>
+  void panelClosers.set(name, close)
+/** `name` is opening on `canvas`: the other private panels close. */
+export function openingPrivatePanel(canvas: LobbyCanvas, name: AiPrivatePanel): void {
+  for (const [other, close] of panelClosers) if (other !== name) close(canvas)
+}
+registerPrivatePanel('summary', (canvas) => aiPanel(canvas).set(null))
+
+/**
  * A11Y-15, W5-47: what had the keyboard as the AI popover opened (the selection bar's AI button, or the
  * board), per canvas. The popover remounts for each of its views and closes as a request starts, so this
  * outlives any one of them; a request takes it along (AiJob.opener) to the summary panel it opens.

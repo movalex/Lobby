@@ -15,7 +15,7 @@ import { type Atom, atom } from '../../../lib/signals.ts'
 import { agendaActuals } from '../../present-export/live/agenda.ts'
 import { lastRevealedResults } from '../../workshops/store.ts'
 import { ensureAiStatus, runPublic } from '../ported/actions.ts'
-import { aiStatus, perCanvas } from '../ported/runtime.ts'
+import { aiStatus, openingPrivatePanel, perCanvas, registerPrivatePanel } from '../ported/runtime.ts'
 import { idOfRef, refOf } from '../ported/target.ts'
 import { type RecapPlan, type RecapResult, recapPlan } from './plan.ts'
 import { apiScope, catchUpWindow, type RecapScopeName, sessionSince } from './window.ts'
@@ -34,6 +34,8 @@ export interface RecapState {
 export const aiRecap = perCanvas<Atom<RecapState | null>>(() =>
   atom<RecapState | null>('lobby-ai-recap', null),
 )
+
+registerPrivatePanel('recap', (canvas) => aiRecap(canvas).set(null))
 
 /** Why the recap has no AI part (the panel and the Markdown say so). */
 export function aiOffNote(status: AiStatus | null, guest: boolean): string {
@@ -95,6 +97,8 @@ export async function runRecap(
   const mine: RecapState = { status: 'working', scope, plan: null, about, frameId: null }
   const slot = aiRecap(canvas)
   slot.set(mine)
+  // one private panel at a time: the summary or an answer closes
+  openingPrivatePanel(canvas, 'recap')
   const actuals = agendaActuals(boardId)
   const visit = scope === 'catch-up' ? catchUpWindow(boardId, now) : null
   const since = visit ? visit.since : scope === 'session' ? sessionSince(canvas.items(), now, actuals) : null

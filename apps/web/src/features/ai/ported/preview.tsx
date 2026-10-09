@@ -14,6 +14,7 @@ import { LOBBY_PALETTE } from '@draftroom/board-ops/elements'
 import { useEffect, useId, useRef } from 'react'
 import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { type Atom, atom, useValue } from '../../../lib/signals.ts'
+import { isTextEntry } from '../../../ui/focus.ts'
 import { SparkIcon } from '../icons.tsx'
 import { useReducedMotion } from './Placeholders.tsx'
 import { perCanvas, setAiCtx } from './runtime.ts'
@@ -149,6 +150,21 @@ export function AiPreviewOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
   return <PreviewView canvas={canvas} entry={entry} />
 }
 
+/**
+ * Whether an Escape keydown is the preview's (it discards): not one a menu or a dialog above already took, not
+ * mid-composition, and not one typed in a text field outside the preview (that field's Escape is its own).
+ */
+export function previewOwnsEscape(
+  e: Pick<KeyboardEvent, 'key' | 'defaultPrevented' | 'isComposing' | 'target'>,
+  doc: Pick<Document, 'querySelector'>,
+  panel: Pick<HTMLElement, 'contains'> | null,
+): boolean {
+  if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return false
+  if (doc.querySelector('dialog[open]')) return false
+  const at = e.target as Element | null
+  return !(isTextEntry(at) && !panel?.contains(at))
+}
+
 function PreviewView({ canvas, entry }: { canvas: LobbyCanvas; entry: PreviewEntry }) {
   const doc = canvas.container()?.ownerDocument ?? document
   const still = useReducedMotion(doc)
@@ -173,11 +189,11 @@ function PreviewView({ canvas, entry }: { canvas: LobbyCanvas; entry: PreviewEnt
   useEffect(() => {
     if (readOnly) entry.choose('discard')
   }, [readOnly, entry])
-  // Escape discards (unless a menu or a dialog above owns it); the panel keeps the canvas's keys off.
+  // Escape discards (unless a menu or a dialog above owns it, or someone is typing in a field elsewhere: that
+  // field's Escape is its own); the panel keeps the canvas's keys off.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return
-      if (doc.querySelector('dialog[open]')) return
+      if (!previewOwnsEscape(e, doc, panel.current)) return
       e.preventDefault()
       e.stopPropagation()
       entry.choose('discard')

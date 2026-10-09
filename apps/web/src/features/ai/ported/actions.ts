@@ -53,6 +53,7 @@ import {
   aiPanel,
   aiStatus,
   getAiCtx,
+  openingPrivatePanel,
   setAiCtx,
 } from './runtime.ts'
 import { regionTile } from './shimmer.ts'
@@ -243,8 +244,11 @@ async function sendRun(
   aiMenu(canvas).set(null)
   // Back to the board, so Ctrl+Z, Delete and the arrows work on the result straight away.
   canvas.focus({ preventScroll: true })
-  endUndoOffer(canvas)
-  ctx.dismiss(NOTICE_KEY)
+  // A run that only answers (Ask, a recap or summary panel) adds no step: the last result's one-click Undo stays.
+  if (writesBoard(body as unknown as AiRunInput) || !undoWatches.has(canvas)) {
+    endUndoOffer(canvas)
+    ctx.dismiss(NOTICE_KEY)
+  }
   let result: AiClientResult
   try {
     // The api reads the board as the server has it: let a change made a moment ago arrive first.
@@ -710,7 +714,8 @@ function applyResult(
   const canEdit = !canvas.readOnly() && (aiStatus(canvas).get()?.canInsert ?? false)
   switch (result.action) {
     case 'summarize': {
-      // Private first, for everyone: an editor puts it on the board with "Add to board".
+      // Private first, for everyone: an editor puts it on the board with "Add to board". One private panel at a time.
+      openingPrivatePanel(canvas, 'summary')
       aiPanel(canvas).set({
         summary: result.summary,
         about: target.label,

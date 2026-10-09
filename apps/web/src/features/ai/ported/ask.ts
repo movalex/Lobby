@@ -14,7 +14,7 @@ import { type Atom, atom } from '../../../lib/signals.ts'
 import { cut } from '../copy.ts'
 import { offerUndoFor, runPublic } from './actions.ts'
 import { applyNotes } from './apply.ts'
-import { aiJob, aiPanel, aiStatus, perCanvas } from './runtime.ts'
+import { aiJob, aiStatus, openingPrivatePanel, perCanvas, registerPrivatePanel } from './runtime.ts'
 import { type AiTarget, idOfRef, isLive, NONE, refOf } from './target.ts'
 
 export type AskResult = Extract<AiResult, { action: 'ask' }>
@@ -32,6 +32,8 @@ export interface AiAnswerState {
 export const aiAnswer = perCanvas<Atom<AiAnswerState | null>>(() =>
   atom<AiAnswerState | null>('lobby-ai-answer', null),
 )
+
+registerPrivatePanel('answer', (canvas) => aiAnswer(canvas).set(null))
 
 /** The whole board as what a question is about. */
 export const WHOLE_BOARD: AiTarget = { ...NONE, label: 'the whole board' }
@@ -63,7 +65,8 @@ export async function askBoard(ctx: CanvasFeatureContext, question: string, targ
   }
   const mine: AiAnswerState = { question: q, status: 'asking', result: null, target }
   aiAnswer(canvas).set(mine)
-  aiPanel(canvas).set(null)
+  // one private panel at a time: the summary or a recap closes
+  openingPrivatePanel(canvas, 'answer')
   const r = await runPublic(ctx, {
     action: 'ask',
     question: q,

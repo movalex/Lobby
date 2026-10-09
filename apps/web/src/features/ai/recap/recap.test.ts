@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs'
 import { AI_RECAP_MAX_WINDOW_MS } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { exportGate } from '../../canvas-ux/ported/export-gate.ts'
-import { showSources } from '../ported/ask.ts'
+import { aiAnswer, askBoard, showSources, WHOLE_BOARD } from '../ported/ask.ts'
 import { aiKindWord, aiOf } from '../ported/provenance.ts'
 import {
   applyRemoval,
@@ -19,6 +19,7 @@ import {
   removedText,
   settleRecords,
 } from '../ported/remove.ts'
+import { aiPanel } from '../ported/runtime.ts'
 import { AI_ON, aiKit, note, renderIn } from '../ported/test-kit.ts'
 import { applyRecap } from './apply.ts'
 import { RECAP_MARKDOWN_MAX_BYTES, recapMarkdown } from './markdown.ts'
@@ -507,5 +508,47 @@ describe('what a recap says it covers', () => {
     expect(plan.topVoted.map((v) => v.ref)).toEqual(['shape:in'])
     expect(plan.topVotedTitle).toBe('Top voted (last vote)')
     expect(recapMarkdown(plan)).toContain('## Top voted (last vote)')
+  })
+})
+
+describe('one private panel at a time', () => {
+  it('a recap closes an open answer and summary; a question closes the recap', async () => {
+    const k = aiKit(board())
+    k.answer({
+      action: 'ask',
+      answer: 'Summer [1].',
+      found: 'yes',
+      citations: [{ ids: ['shape:n1'] }],
+      truncated: false,
+      budget: null,
+      runId: RUN,
+    })
+    await askBoard(k.ctx, 'Summer?', WHOLE_BOARD)
+    expect(aiAnswer(k.canvas).get()?.status).toBe('done')
+    aiPanel(k.canvas).set({
+      summary: 'S',
+      about: 'x',
+      truncated: false,
+      runId: null,
+      target: WHOLE_BOARD,
+      opener: null,
+    })
+    k.answer(recapAnswer)
+    await runRecap(k.ctx, 'session', NOW)
+    expect(aiRecap(k.canvas).get()?.status).toBe('done')
+    expect(aiAnswer(k.canvas).get()).toBeNull()
+    expect(aiPanel(k.canvas).get()).toBeNull()
+    k.answer({
+      action: 'ask',
+      answer: 'Winter.',
+      found: 'yes',
+      citations: [],
+      truncated: false,
+      budget: null,
+      runId: RUN,
+    })
+    await askBoard(k.ctx, 'Winter?', WHOLE_BOARD)
+    expect(aiRecap(k.canvas).get()).toBeNull()
+    expect(aiAnswer(k.canvas).get()?.question).toBe('Winter?')
   })
 })

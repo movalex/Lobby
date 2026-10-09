@@ -113,6 +113,26 @@ describe('Ask this board', () => {
     )
   })
 
+  it('asking (a run that only answers) keeps the last AI result’s one-click Undo', async () => {
+    const k = aiKit(board())
+    k.answer(answer())
+    await askBoard(k.ctx, 'Summer?', WHOLE_BOARD)
+    const ids = addAnswerAsNote(k.ctx) ?? []
+    expect(ids.length).toBeGreaterThan(0)
+    const toast = k.notify.mock.calls.map((c) => c[0]).find((n) => n?.action?.testId === 'ai-undo')
+    expect(toast).toBeTruthy()
+    const dismiss = k.ctx.dismiss as unknown as ReturnType<typeof vi.fn>
+    dismiss.mockClear()
+    k.answer(answer())
+    await askBoard(k.ctx, 'And winter?', WHOLE_BOARD)
+    expect(aiAnswer(k.canvas).get()?.status).toBe('done')
+    expect(dismiss).not.toHaveBeenCalledWith('dr-ai')
+    // the answer note's Undo still takes it back
+    toast.action.onClick()
+    const live = new Set(k.live().map((e) => e.id))
+    for (const id of ids) expect(live.has(id), id).toBe(false)
+  })
+
   it('asks about the selection by its refs', async () => {
     const k = aiKit(board())
     k.canvas.select(['n1', 'n2'])

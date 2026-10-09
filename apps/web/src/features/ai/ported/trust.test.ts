@@ -15,7 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runAi } from './actions.ts'
 import { applyNotes } from './apply.ts'
 import { AiLensOverlay, aiLens, lensLine } from './lens.tsx'
-import { aiPreview } from './preview.tsx'
+import { aiPreview, previewOwnsEscape } from './preview.tsx'
 import { aiOf } from './provenance.ts'
 import { applyRemoval, noteCreated, removalPlan, removedText, settleRecords } from './remove.ts'
 import { aiJob } from './runtime.ts'
@@ -305,5 +305,25 @@ describe('the live shimmer of someone else’s run (L2-1e)', () => {
     expect(aiWorking(mine.canvas).get()).toEqual([])
     stopMine()
     expect(k.pushes).toEqual([])
+  })
+})
+
+describe('the preview’s Escape (L2-1b)', () => {
+  const doc = (dialog = false) => ({ querySelector: () => (dialog ? {} : null) }) as never
+  const key = (target: unknown, over: Record<string, unknown> = {}) =>
+    ({ key: 'Escape', defaultPrevented: false, isComposing: false, target, ...over }) as never
+  const field = { tagName: 'TEXTAREA', isContentEditable: false }
+  const inPanel = { tagName: 'INPUT', type: 'text', isContentEditable: false }
+  const panel = { contains: (el: unknown) => el === inPanel } as never
+
+  it('discards from the board, but leaves a field being typed in elsewhere, a dialog and a composition alone', () => {
+    expect(previewOwnsEscape(key({ tagName: 'DIV', isContentEditable: false }), doc(), panel)).toBe(true)
+    expect(previewOwnsEscape(key(null), doc(), panel)).toBe(true)
+    expect(previewOwnsEscape(key(field), doc(), panel)).toBe(false)
+    expect(previewOwnsEscape(key({ tagName: 'DIV', isContentEditable: true }), doc(), panel)).toBe(false)
+    expect(previewOwnsEscape(key(inPanel), doc(), panel)).toBe(true)
+    expect(previewOwnsEscape(key(null), doc(true), panel)).toBe(false)
+    expect(previewOwnsEscape(key(null, { isComposing: true }), doc(), panel)).toBe(false)
+    expect(previewOwnsEscape(key(null, { key: 'Enter' }), doc(), panel)).toBe(false)
   })
 })
