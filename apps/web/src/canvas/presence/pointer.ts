@@ -16,24 +16,9 @@
 // the shared laser (wave L, L6-1) draws the path between two 20 Hz messages from them. At most
 // MAX_BETWEEN_SAMPLES are kept (thinned evenly beyond that); nothing is kept while the button is up.
 
-export interface PresencePoint {
-  x: number
-  y: number
-}
+import type { PresencePoint, PresenceSample } from './sample.ts'
 
-export interface PresenceSample {
-  /** Scene coordinates, or null when the pointer left the board. */
-  pointer: PresencePoint | null
-  /**
-   * While the button is down: the scene points the pointer passed since the previous sample, oldest first,
-   * without `pointer` itself (the shared laser's trail). Absent or empty otherwise.
-   */
-  trail?: readonly PresencePoint[]
-  button: 'down' | 'up'
-  /** The DOM event that produced it, for tests: 'pointermove' | 'pointerdown' | 'pointerup' | 'pointerleave'. */
-  source: string
-  pointerType: string
-}
+export type { PresencePoint, PresenceSample } from './sample.ts'
 
 export interface PresencePointerOptions {
   /** Client (viewport) coordinates to scene coordinates, e.g. CanvasPort.screenToScene. */

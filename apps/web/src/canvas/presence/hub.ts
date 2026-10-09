@@ -47,7 +47,7 @@ import type { GestureState, SceneElement } from '../sync/types.ts'
 import { planDragArrows } from './drag-arrows.ts'
 import { onPresenceFollow, presenceFollowOf } from './follow-target.ts'
 import { LaserTrails, laserToolOn, laserTrailOut, provideLasers, thinPoints } from './laser.ts'
-import type { PresencePoint, PresenceSample } from './pointer.ts'
+import type { PresencePoint, PresenceSample } from './sample.ts'
 
 /** What O5's overrides.ts `RenderOverrides` offers for drag previews (its existing API). */
 export interface DragOverrides {
