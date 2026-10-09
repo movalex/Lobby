@@ -694,6 +694,27 @@ export function waveLKeyClaimOf(e: KeyLike): WaveLKeyClaim | null {
   return null
 }
 
+/**
+ * Wave L (foundation review): `e` as a wave L claim's key reads it, for the key registry (canvas/api
+ * feature.ts, a CommandSpec or FeatureKeySpec with `claim`): the registry's chords match letters by `code`
+ * (canvas/api/keys.ts), but a claim reads a letter by the layout's character (chordLetter), as this
+ * allowlist does. So the code is rewritten to the character's letter key: Dvorak's K character (code KeyV)
+ * is `mod+k`, and the physical K key there (the T character) is not. Every other field is `e`'s.
+ */
+export function claimKeyEvent(e: KeyLike): KeyLike & { code: string } {
+  const letter = chordLetter(e)
+  return {
+    key: e.key,
+    code: letter ? `Key${letter.toUpperCase()}` : (e.code ?? ''),
+    ctrlKey: e.ctrlKey,
+    metaKey: e.metaKey,
+    altKey: e.altKey,
+    shiftKey: e.shiftKey,
+    ...(e.isComposing !== undefined ? { isComposing: e.isComposing } : {}),
+    ...(e.altGraph !== undefined ? { altGraph: e.altGraph } : {}),
+  }
+}
+
 /** Lobby-owned keys that make sense for every role (navigation, search, menus). */
 function lobbyCommon(e: KeyLike): LobbyKeyAction | null {
   const mod = isMod(e)

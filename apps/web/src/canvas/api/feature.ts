@@ -15,8 +15,9 @@ import type { ApiClient } from '../../api/client.ts'
 import type { NoticeInput } from '../../board/board-context.ts'
 import type { BoardEvents } from '../../features/events.ts'
 import type { BoardRole } from '../../lib/permissions.ts'
+import { claimKeyEvent, keyLikeOf, type WaveLKeyClaim, waveLKeyClaimOf } from '../input/keymap.ts'
 import type { CustomDataHandlerSpec, KeyEventLike, KeyHandlerSpec, PointerToolSpec } from '../registries.ts'
-import { currentPlatform, matchChord, parseChord } from './keys.ts'
+import { currentPlatform, matchChord, type ParsedChord, type Platform, parseChord } from './keys.ts'
 import type { LobbyCanvas } from './lobby-canvas.ts'
 import type {
   CanvasPanelSpec,
@@ -124,6 +125,8 @@ export interface KeyClaim {
   readonly featureId: string
   /** CR-3A-9: the pointer tool the key acts under (`FeatureKeySpec.tool`); absent: under any tool */
   readonly tool?: string
+  /** wave L: the wave L key claim it declares (`CommandSpec.claim`, `FeatureKeySpec.claim`) */
+  readonly claim?: WaveLKeyClaim
 }
 
 /** Every chord the features claim (commands with `kbd`, keys, tools with `kbd`), in feature order. */
@@ -132,11 +135,24 @@ export function collectKeyClaims(features: readonly CanvasFeature[]): KeyClaim[]
   for (const f of features) {
     for (const c of f.commands ?? []) {
       for (const k of c.kbd ?? [])
-        out.push({ chord: k, scope: c.scope ?? 'canvas', by: c.id, featureId: f.id })
+        out.push({
+          chord: k,
+          scope: c.scope ?? 'canvas',
+          by: c.id,
+          featureId: f.id,
+          ...(c.claim ? { claim: c.claim } : {}),
+        })
     }
     for (const k of f.keys ?? []) {
       for (const chord of k.chords)
-        out.push({ chord, scope: k.scope, by: k.id, featureId: f.id, ...(k.tool ? { tool: k.tool } : {}) })
+        out.push({
+          chord,
+          scope: k.scope,
+          by: k.id,
+          featureId: f.id,
+          ...(k.tool ? { tool: k.tool } : {}),
+          ...(k.claim ? { claim: k.claim } : {}),
+        })
     }
     for (const t of f.tools ?? []) {
       for (const k of t.kbd ?? [])
@@ -167,6 +183,25 @@ export function keyConflicts(claims: readonly KeyClaim[]): { chord: string; scop
     .map(([k, v]) => ({ chord: v[0]?.chord ?? '', scope: k.split('|')[0] ?? '', by: v.map((c) => c.by) }))
 }
 
+/**
+ * Whether `e` is one of `chords`. With a wave L `claim` (CommandSpec.claim, FeatureKeySpec.claim): only a press
+ * the claim reads as its own (canvas/input/keymap.ts waveLKeyClaimOf: never with AltGr or while composing), a
+ * letter by the layout's character (claimKeyEvent), as the allowlist reads the claim.
+ */
+export function chordsMatch(
+  chords: readonly ParsedChord[],
+  e: KeyEventLike,
+  platform: Platform,
+  claim?: WaveLKeyClaim,
+): boolean {
+  if (!claim) return chords.some((c) => matchChord(c, e, platform))
+  // the board's input layer passes the DOM event (AltGr and composition read from it); a plain object works too
+  const k = keyLikeOf(e as unknown as KeyboardEvent)
+  if (waveLKeyClaimOf(k) !== claim) return false
+  const laid = claimKeyEvent(k)
+  return chords.some((c) => matchChord(c, laid, platform))
+}
+
 /** Adapts a command with `kbd` to the C0 key registry (the capture-phase allowlist reads `registries.keys`). */
 function commandKey(cmd: CommandSpec, ctx: CanvasFeatureContext, scope: 'canvas' | 'editor'): KeyHandlerSpec {
   const chords = (cmd.kbd ?? []).map(parseChord)
@@ -174,7 +209,7 @@ function commandKey(cmd: CommandSpec, ctx: CanvasFeatureContext, scope: 'canvas'
   return {
     id: `command:${cmd.id}:${scope}`,
     scope,
-    match: (e) => chords.some((c) => matchChord(c, e, platform)),
+    match: (e) => chordsMatch(chords, e, platform, cmd.claim),
     handle: () => {
       if (cmd.available && !cmd.available(ctx)) return false
       if (ctx.canvas.readOnly() && !cmd.readOnlyAllowed) return false
@@ -206,7 +241,7 @@ function featureKey(spec: FeatureKeySpec, ctx: CanvasFeatureContext): KeyHandler
     match: (e) =>
       // CR-3A-9: a tool's key acts only while its tool is on
       (spec.tool === undefined || ctx.canvas.tool() === spec.tool) &&
-      (chords.some((c) => matchChord(c, e, platform)) || matchChar(chars, e)) &&
+      (chordsMatch(chords, e, platform, spec.claim) || matchChar(chars, e)) &&
       (spec.match ? spec.match(e, ctx) : true),
     handle: (e) => spec.handle(e, ctx),
   }

@@ -180,6 +180,16 @@ describe('the wave L key claims (L3-1; canvas/input/keymap.ts WAVE_L_KEY_CLAIMS,
       expect(['command-palette.open', 'flow.next'], `${c.by}: ${c.chord}`).toContain(c.by)
   })
 
+  it('a taker of a letter claim (mod+k) declares it, so the registry reads the layout’s character as the allowlist does', () => {
+    // canvas/api feature.ts chordsMatch: without `claim`, letters match by code (Dvorak's K character, code
+    // KeyV, would miss the palette and the allowlist would block it)
+    const letters = WAVE_L_KEY_CLAIMS.filter((w) => w.chords.some((c) => /^[a-z]$/.test(parseChord(c).key)))
+    expect(letters.map((w) => w.claim)).toEqual(['palette'])
+    for (const w of letters)
+      for (const c of claims.filter((x) => w.chords.map(canonical).includes(canonical(x.chord))))
+        expect(c.claim, `${c.by}: ${c.chord}`).toBe(w.claim)
+  })
+
   it('a contextual wave L key is asked before the shipped claims of its chord (its feature comes first)', () => {
     const order = CANVAS_FEATURES.map((f) => f.id)
     for (const own of claims.filter((c) => WAVE_L_CONTEXTUAL_KEYS.has(c.by))) {

@@ -13,6 +13,7 @@
  * until the first unregisters.
  */
 import type { ComponentType } from 'react'
+import type { WaveLKeyClaim } from '../input/keymap.ts'
 import type { CanvasElement, ScenePoint } from '../port.ts'
 import { type CanvasRegistries, createRegistries, type KeyEventLike, type Registry } from '../registries.ts'
 // type-only: ./feature.ts imports this file at run time, not the other way round
@@ -72,6 +73,13 @@ export interface CommandSpec {
    * the owners' files (features/ai/ported/public.ts, features/workshops/commands.ts).
    */
   run(ctx: CanvasFeatureContext, source: CommandSource, args?: unknown): void | Promise<void>
+  /**
+   * Wave L: the wave L key claim its `kbd` takes (canvas/input/keymap.ts WAVE_L_KEY_CLAIMS). Its keys then
+   * match only that claim's press, letters by the layout's character as the allowlist reads them
+   * (`claimKeyEvent`): 'command-palette.open' with `kbd: ['mod+k']` and `claim: 'palette'` opens on Dvorak's
+   * Ctrl+K too. A taker of a letter claim ('palette') must set it (the keyboard-map test checks).
+   */
+  readonly claim?: WaveLKeyClaim
 }
 
 /** Whether `cmd` may run now: available, allowed for a read-only role, enabled, and no disabled reason. */
@@ -108,6 +116,11 @@ export interface FeatureKeySpec {
    * A character claim is not a chord claim: list the plain chord on a command (or in `chords`) for the dialog.
    */
   readonly chars?: readonly string[]
+  /**
+   * Wave L: the wave L key claim its chords take (canvas/input/keymap.ts WAVE_L_KEY_CLAIMS): as
+   * CommandSpec.claim, the chords then match only that claim's press, letters by the layout's character.
+   */
+  readonly claim?: WaveLKeyClaim
   /** a finer test than the chords (the chords must still list every key it can claim) */
   match?(e: KeyEventLike, ctx: CanvasFeatureContext): boolean
   /** true when it acted (the event is then stopped and prevented) */
