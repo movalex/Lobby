@@ -65,6 +65,9 @@ export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {
   'POST /api/workspaces/:wid/boards/import': CREATE,
   'POST /api/boards/:bid/duplicate': CREATE,
   'POST /api/snapshots/:sid/restore-as-new': CREATE,
+  // wave L (L7-2, W7): restoring chosen elements of a checkpoint into the board (history/restore-elements.ts)
+  'POST /api/boards/:bid/snapshots/:sid/restore-elements':
+    'Restoring from a checkpoint is for editors with an account. Sign in with an account to do that.',
   'GET /api/workspaces/:wid/members': PEOPLE,
   'GET /api/workspaces/:wid/projects': PEOPLE,
   // invitations and links

@@ -54,6 +54,12 @@ function refusedCalls(board: string, other: string, userId: string): [string, Me
     ['POST /api/workspaces/:wid/boards/import', 'POST', `${ws}/boards/import`, {}],
     ['POST /api/boards/:bid/duplicate', 'POST', `${b}/duplicate`, {}],
     ['POST /api/snapshots/:sid/restore-as-new', 'POST', `/api/snapshots/${SNAPSHOT}/restore-as-new`, {}],
+    [
+      'POST /api/boards/:bid/snapshots/:sid/restore-elements',
+      'POST',
+      `${b}/snapshots/${SNAPSHOT}/restore-elements`,
+      { ids: ['n1'] },
+    ],
     ['GET /api/workspaces/:wid/members', 'GET', `${ws}/members`, undefined],
     ['GET /api/workspaces/:wid/projects', 'GET', `${ws}/projects`, undefined],
     [
