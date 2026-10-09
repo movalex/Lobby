@@ -74,9 +74,12 @@ function setup(
   const kit = workshopKit({ elements })
   const presentingLive = atom('t-live', false)
   const cur = atom('t-cur', { index: 0, slideId: 'f1' as string | null, count: elements.length })
+  /** the live presentation's id as the api names it (a hand-off keeps it) */
+  const pid = { current: 'prs_one' as string | null }
   const agenda: AgendaLive = mountAgenda(kit.ctx, {
     presenter: { current: () => cur.get() },
     presentingLive,
+    presentationId: () => pid.current,
   })
   const go = async (slideId: string | null) => {
     cur.set({ index: ['f1', 'f2', 'f3'].indexOf(slideId ?? ''), slideId, count: elements.length })
@@ -86,7 +89,7 @@ function setup(
     presentingLive.set(on)
     await settle()
   }
-  return { kit, agenda, go, present, presentingLive, cur }
+  return { kit, agenda, go, present, presentingLive, cur, pid }
 }
 
 let storage: ReturnType<typeof memoryStorage>
@@ -221,7 +224,7 @@ describe('the record of the run', () => {
     vi.useFakeTimers()
     try {
       vi.setSystemTime(new Date('2026-10-09T10:00:00Z'))
-      const { kit, agenda, go, present } = setup()
+      const { kit, agenda, go, present, pid } = setup()
       answerTimers(kit, 4)
       await present()
       vi.advanceTimersByTime(130_000)
@@ -232,12 +235,45 @@ describe('the record of the run', () => {
         { frameId: 'f1', name: 'Warm-up', plannedMin: 2, actualMs: 130_000 },
         { frameId: 'f2', name: 'Ideas', plannedMin: 1, actualMs: 45_000 },
       ])
-      // the next run forgets this one
+      // the next run (a new presentation) forgets this one
+      pid.current = 'prs_two'
       await go('f1')
       await present()
       expect(agendaActuals(kit.ctx.board.id)).toEqual([
         { frameId: 'f1', name: 'Warm-up', plannedMin: 2, actualMs: 0 },
       ])
+      agenda.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('handing the presentation off and taking it back keeps the record and does not restart the section (round 1)', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-10-09T10:00:00Z'))
+      const { kit, agenda, go, present } = setup()
+      answerTimers(kit, 4)
+      await present()
+      vi.advanceTimersByTime(130_000)
+      await go('f2')
+      vi.advanceTimersByTime(40_000)
+      // handed to B (same presentation, this tab stops presenting), then back to this tab on the same slide
+      await present(false)
+      vi.advanceTimersByTime(10_000)
+      await present()
+      vi.advanceTimersByTime(5_000)
+      expect(timerCalls(kit)).toEqual([
+        { action: 'start', durationMs: 120_000 },
+        { action: 'start', durationMs: 60_000 },
+      ])
+      expect(agendaActuals(kit.ctx.board.id)).toEqual([
+        { frameId: 'f1', name: 'Warm-up', plannedMin: 2, actualMs: 130_000 },
+        { frameId: 'f2', name: 'Ideas', plannedMin: 1, actualMs: 45_000 },
+      ])
+      // a next section after taking it back is a new visit with its own timer
+      await go('f3')
+      expect(timerCalls(kit)).toHaveLength(2) // Break has no minutes
       agenda.dispose()
     } finally {
       vi.useRealTimers()

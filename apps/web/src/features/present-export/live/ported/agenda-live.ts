@@ -80,6 +80,8 @@ export interface AgendaLiveDeps {
   readonly presenter: Pick<LivePresenter, 'current'>
   /** Reactive: this tab presents to everyone. */
   readonly presentingLive: Signal<boolean>
+  /** The live presentation's id (a hand-off keeps it), or null; read when this tab starts presenting. */
+  readonly presentationId: () => string | null
 }
 
 /** Starts section timers one at a time, the latest wish winning, and never over someone else's timer. */
@@ -132,6 +134,13 @@ export function mountAgenda(ctx: CanvasFeatureContext, deps: AgendaLiveDeps): Ag
 
   let wasLive = false
   let lastSlide: string | null = null
+  /**
+   * Round 1: the presentation this tab last presented, and the section it was on when it stopped (handed off).
+   * Taking the same presentation back carries its record on (no new run), and the section it left is not a
+   * new one: its timer is not started over (the room's countdown kept running meanwhile).
+   */
+  let ranPid: string | null = null
+  let leftOn: string | null = null
 
   const onSlide = (live: boolean, slideId: string | null) => {
     // A failure here must never stop a presentation: the run of show is an extra on top of it.
@@ -145,6 +154,7 @@ export function mountAgenda(ctx: CanvasFeatureContext, deps: AgendaLiveDeps): Ag
   const step = (live: boolean, slideId: string | null) => {
     if (!live) {
       if (wasLive) {
+        leftOn = recorder.currentId()
         recorder.stop()
         recorded.update((n) => n + 1)
       }
@@ -160,16 +170,23 @@ export function mountAgenda(ctx: CanvasFeatureContext, deps: AgendaLiveDeps): Ag
       lastSlide = slideId
       return
     }
+    let resumedOn: string | null = null
     if (!wasLive) {
       wasLive = true
-      // a reload of the presenting tab finds its visit still on record and carries on; a new run starts afresh
-      if (recorder.currentId() === null) recorder.begin(sections)
+      const pid = deps.presentationId()
+      // a reload of the presenting tab finds its visit still on record and carries on; the same presentation
+      // taken back (a hand-off) carries its record on; a new run starts afresh
+      const same = pid !== null && pid === ranPid && recorder.active()
+      if (recorder.currentId() === null && !same) recorder.begin(sections)
+      if (same) resumedOn = leftOn
+      ranPid = pid
+      leftOn = null
     }
     if (slideId === lastSlide) return
     lastSlide = slideId
     const section = sections.find((s) => s.id === slideId)
     if (!section) return
-    const fresh = recorder.enter(slideId, sections)
+    const fresh = recorder.enter(slideId, sections) && slideId !== resumedOn
     recorded.update((n) => n + 1)
     if (fresh && autoTime.get() && section.mins !== null) timers.start(section.mins)
   }

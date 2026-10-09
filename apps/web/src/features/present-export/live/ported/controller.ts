@@ -143,7 +143,11 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
   const flash = atom<LiveFlash | null>('dr-live-flash', null)
   const busy = atom('dr-live-busy', false)
   // L5-1: records the sections of a run of show and starts their timers as the live slide moves
-  const agenda = mountAgenda(ctx, { presenter, presentingLive })
+  const agenda = mountAgenda(ctx, {
+    presenter,
+    presentingLive,
+    presentationId: () => store.presentation.get()?.id ?? null,
+  })
   let disposed = false
   let flashSeq = 0
   let flashTimer: ReturnType<typeof setTimeout> | undefined
