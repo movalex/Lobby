@@ -416,6 +416,32 @@ describe('restore-elements: a checkpoint’s elements back into the live board (
     ])
   })
 
+  it('a tab that was away catches the restore up on reconnect; every frame passes the strict wire schema (any reader rev)', async () => {
+    const st = await h.stack()
+    const b = newBoardId()
+    expect((await seed(st, b, sampleBoard())).status).toBe(201)
+    const ann = await st.client({ boardId: b, user: 'ann' })
+    const bob = await st.client({ boardId: b, user: 'bob' })
+    const cp = await copies(st, b)
+    const v = (id: string) => ann.confirmed.get(id)?.version ?? 1
+    await ann.push([del('R', v('R')), del('R.t', v('R.t'))])
+    await bob.until(() => bob.confirmed.get('R')?.isDeleted === true, 'bob saw the delete')
+    // bob drops off, the restore happens meanwhile, bob comes back with what it had
+    const since = bob.clock
+    const epoch = bob.epoch
+    const had = new Map(bob.confirmed)
+    bob.terminate()
+    const res = await restore(st, b, ['R'], closure(cp, ['R']))
+    const back = await st.client({ boardId: b, user: 'bob', since, epoch, confirmed: had })
+    await back.untilClock(res.clock)
+    expect(back.confirmed.get('R')?.isDeleted).toBe(false)
+    expect(back.confirmed.get('R.t')?.originalText).toBe('box')
+    expect(await back.hash()).toBe(await ann.hash())
+    // the restore's frames are ordinary `changes` frames: the frozen ServerMessage schema (what a rev-11 and a
+    // rev-12 tab parse alike: no field of the wire changed) accepted every one
+    for (const c of [ann, back]) expect(c.schemaErrors).toEqual([])
+  })
+
   it('two restores at once both land, one after the other in the room queue', async () => {
     const st = await h.stack()
     const b = newBoardId()
