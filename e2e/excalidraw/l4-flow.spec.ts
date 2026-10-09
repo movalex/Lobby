@@ -6,7 +6,7 @@
 // nothing; a + handle click works; the axe audit passes with the handles shown; the time to build a 10-step flow,
 // keyboard against pointer, is recorded; Ctrl+Shift+Arrow repeats the last kind only while the flow is being
 // built, and is a11y's (out of and into a frame) again once the selection moved; the + buttons keep clear of the
-// selected shape's rotation handle (a real-pointer rotation still works).
+// selected shape's rotation handle (a real-pointer rotation still works); a sticky note source makes a note.
 //
 //   E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/l4-flow --project=chromium --workers=1
 import AxeBuilder from '@axe-core/playwright'
@@ -17,6 +17,7 @@ import {
   type CanvasElement,
   clickItem,
   createItem,
+  createNote,
   editingId,
   expect,
   expectConverged,
@@ -443,4 +444,46 @@ test('The + handles keep clear of the selected shape’s rotation handle: the up
     .toBe('quarter')
   expect((await items(a.page)).map((e) => e.id)).toEqual([box])
   await expectSaved(a.page)
+})
+
+test('A sticky note grows the flow too: Ctrl+Down makes a note below with the words typed at once, its connector the room’s re-snap on both tabs; one undo takes it back', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  const b = await canvasSession('bob')
+  for (const p of [a.page, b.page]) await setViewport(p, { x: -100, y: -200, zoom: 1 })
+  const src = await settled(a.page, createNote(a.page, { x: 100, y: 100, text: 'Idea', color: '#ffd8a8' }))
+  await expectConverged(a.page, [b.page])
+  const bobPushes = (await pushedOps(b.page)).length
+  await select(a.page, [src])
+  await focusCanvas(a.page)
+  await a.page.keyboard.press('ControlOrMeta+ArrowDown')
+  await a.page.keyboard.type('Next')
+  const { shape, arrow } = await nextOf(a.page, src)
+  await waitForTextEditor(a.page, shape)
+  await a.page.keyboard.press('Escape')
+  await expect.poll(() => editingId(a.page)).toBeNull()
+  await expect.poll(() => itemText(a.page, shape)).toBe('Next')
+  const note = await item(a.page, shape)
+  const from = await item(a.page, src)
+  expect(note?.type).toBe('stickynote')
+  expect(note?.backgroundColor).toBe('#ffd8a8')
+  expect((note?.y ?? 0) > (from?.y ?? 0) + (from?.height ?? 0)).toBe(true)
+  await expectSaved(a.page)
+  expect((await saveState(a.page)).lastReject).toBeNull()
+  await expectConverged(a.page, [b.page])
+  await expect.poll(() => itemText(b.page, shape)).toBe('Next')
+  for (const p of [a.page, b.page])
+    expect(serverDerived((await item(p, arrow.id)) as Arrow, await items(p))).toBe(true)
+  await expectNoEndpointPush(a.page, arrow.id)
+  expect((await pushedOps(b.page)).length).toBe(bobPushes)
+
+  await focusCanvas(a.page)
+  await a.page.keyboard.press('ControlOrMeta+z') // the words
+  await a.page.keyboard.press('ControlOrMeta+z') // the note and its connector
+  await expect.poll(async () => (await connectorsFrom(a.page, src)).length).toBe(0)
+  await expect.poll(async () => (await item(a.page, shape))?.isDeleted ?? true).toBe(true)
+  await expectSaved(a.page)
+  expect((await saveState(a.page)).lastReject).toBeNull()
+  await expectConverged(a.page, [b.page])
 })
