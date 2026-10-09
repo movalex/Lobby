@@ -12,9 +12,9 @@
 //   E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/l2-wrapup.spec.ts --project=chromium --workers=1
 import type { Page } from '@playwright/test'
 import { type FakeOpenAi, startFakeOpenAi } from '../tests/support/ai.ts'
-import { expectSaved, items, saveState } from '../tests/support/canvas.ts'
+import { expectSaved, items, saveState, select, selection } from '../tests/support/canvas.ts'
 import { pressUndo, pushCount } from '../tests/support/excalidraw.ts'
-import { collectDownloads, downloadFrom } from '../tests/support/present-export.ts'
+import { collectDownloads, downloadFrom, readPdf } from '../tests/support/present-export.ts'
 import {
   AI_API_ENV_3H,
   aiRunRequests,
@@ -178,13 +178,22 @@ test('Wrap up after a revealed vote: the top voted list equals the tallies; the 
     expect(await pushCount(b.page)).toBe(bPushes)
   })
 
-  await test.step('Export recap as PDF: a download', async () => {
+  await test.step('Export recap as PDF: a download of the Recap frame (W5 present-export.export {frameIds})', async () => {
+    const recap = (await items(a.page)).find(
+      (e) => e.type === 'frame' && String(e.name).startsWith('Recap · '),
+    )
+    // Add selected the new frame: start from nothing selected, so only the command's frameIds can select it
+    await select(a.page, [])
+    await expect.poll(() => selection(a.page)).toEqual([])
     await panel.getByTestId('recap-pdf').click()
     const dialog = a.page.getByTestId('export-dialog')
     await expect(dialog).toBeVisible()
+    // the command selects the recap's frame, so the dialog's PDF pages are that frame
+    expect(await selection(a.page)).toEqual([recap?.id])
     const pdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
     expect(pdf.name).toMatch(/\.pdf$/)
     expect(pdf.bytes.subarray(0, 5).toString()).toBe('%PDF-')
+    expect((await readPdf(pdf.bytes)).pages).toHaveLength(1)
     await a.page.keyboard.press('Escape')
   })
 
