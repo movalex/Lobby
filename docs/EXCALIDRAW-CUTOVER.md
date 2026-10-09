@@ -684,8 +684,11 @@ canvas as an empty tldraw board and writes tldraw tables into it (DEPLOY.md "Rol
 > `render.yaml`; it comes off after D7. D30 is about 2026-10-31 (review the collector's reports first).
 
 - **D7. drop-legacy [OWNER]** (day 7 after C18, plan §5.9 step 5; G8 built, W4-SYNC). Only after the
-  window has closed and the owner says so. Maintenance on (C4's commands; the room's writes would wait
-  on `VACUUM` otherwise), then Sync Shell, a dry run first:
+  window has closed and the owner says so. **Done on staging 2026-10-09** (CUTOVER-LOG §7). Run it with
+  maintenance OFF: the sync refuses drop-legacy with 503 MAINTENANCE while maintenance is on (only
+  `convert-all` is exempt, apps/sync/src/http/router.ts). It runs live by design, one board at a time in
+  the migration worker, and a room's writes wait briefly on that board's `VACUUM`. So pick a quiet window,
+  and take a run-all backup first (maintenance on for the backup only, then off). Sync Shell, a dry run first:
 
   ```sh
   int POST /internal/migrate/drop-legacy '{"confirm":"drop-legacy","dryRun":true}'   # 202 {"started":true,...}
