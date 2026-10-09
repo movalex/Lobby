@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest'
 import { LOBBY_COLOR_NAMES } from '../../board-ops/src/elements/palette.ts'
 import {
   AI_ACTIONS,
+  AI_ANSWER_MAX_CHARS,
   AI_ASK_QUESTION_MAX,
   AI_COLOR_NAMES,
   AI_COMMAND_INSTRUCTION_MAX,
@@ -20,6 +21,7 @@ import {
   AI_SCORE_MAX,
   AI_SORT_LENS_MAX_CHARS,
   AiActionItem,
+  AiClientResult,
   AiCommandOp,
   AiDoneEvent,
   AiResult,
@@ -180,6 +182,25 @@ describe('AiResult: the wave L members', () => {
     expect(AiResult.safeParse(r).success).toBe(false)
     expect(AiResult.safeParse({ ...r, runId: RUN }).success).toBe(true)
     expect(AiResult.safeParse({ ...r, runId: 'air_short' }).success).toBe(false)
+  })
+
+  it('AiClientResult (what a web parses with) takes a wave K answer with no run id; a sent run id must be valid', () => {
+    const r = { action: 'ideas', ideas: ['x'], truncated: false, budget: null }
+    expect(AiClientResult.safeParse(r).success).toBe(true)
+    expect(AiClientResult.parse({ ...r, runId: RUN }).runId).toBe(RUN)
+    expect(AiClientResult.safeParse({ ...r, runId: 'air_short' }).success).toBe(false)
+    expect(AiClientResult.safeParse({ ...r, ideas: 'x' }).success).toBe(false)
+    // the members are AiResult's: every action, the same caps
+    expect(AiClientResult.options.map((o) => o.shape.action.value)).toEqual(
+      AiResult.options.map((o) => o.shape.action.value),
+    )
+    const longAsk = {
+      action: 'ask',
+      answer: 'a'.repeat(AI_ANSWER_MAX_CHARS + 1),
+      found: 'yes',
+      citations: [],
+    }
+    expect(AiClientResult.safeParse({ ...longAsk, truncated: false, budget: null }).success).toBe(false)
   })
 
   it('recap, ask, command, diagram, sort and score parse; over-cap lists are refused', () => {

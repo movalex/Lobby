@@ -37,12 +37,22 @@ function setup(status: AiStatus | null = ON) {
   setMindmap(f.canvas, m)
   const calls: Call[] = []
   const answers: (() => unknown)[] = []
-  const request = vi.fn(async (method: string, path: string, o: { body?: Record<string, unknown> }) => {
-    calls.push({ method, path, body: o.body ?? {} })
-    const next = answers.shift()
-    if (!next) throw new Error('no answer queued')
-    return next()
-  })
+  /** the schema each request asked the api client to parse its answer with (the client parses; this fake does too) */
+  const schemas: { parse(v: unknown): unknown }[] = []
+  const request = vi.fn(
+    async (
+      method: string,
+      path: string,
+      o: { body?: Record<string, unknown>; schema?: { parse(v: unknown): unknown } },
+    ) => {
+      calls.push({ method, path, body: o.body ?? {} })
+      if (o.schema) schemas.push(o.schema)
+      const next = answers.shift()
+      if (!next) throw new Error('no answer queued')
+      const raw = next()
+      return o.schema ? o.schema.parse(raw) : raw
+    },
+  )
   const ctx = {
     canvas: f.canvas,
     board: { id: 'bd_1', title: 'Board' },
@@ -82,7 +92,7 @@ function setup(status: AiStatus | null = ON) {
     [...f.els.values()].filter((e) => !e.isDeleted && e.type !== 'text' && topicMetaOf(e as never))
   f.transacts.length = 0
   const steps = f.steps()
-  return { f, rt, notify, calls, request, ideas, fail, idOf, topics, ctx, steps }
+  return { f, rt, notify, calls, request, ideas, fail, idOf, topics, ctx, steps, schemas, answers }
 }
 
 /** Resolves once the job ended (the answer applied or the error shown). */
@@ -159,6 +169,31 @@ describe('Expand with AI', () => {
     // the toast's Undo (or Ctrl+Z) takes all of them back
     done.action.onClick()
     expect(f.snapshot()).toBe(before)
+  })
+
+  it('parses the answer of a wave K api (no run id) and of a wave L one (foundation review: rollback-safe)', async () => {
+    const { f, ideas, idOf, topics, schemas, answers } = setup()
+    // a wave K api's answer: no runId (ideas() queues exactly that)
+    ideas(['One', 'Two'])
+    expandTopic(f.canvas, idOf('Channels'))
+    await settled(f.canvas)
+    expect(topics().filter((e) => topicMetaOf(e as never)?.parentId === idOf('Channels'))).toHaveLength(2)
+    // a wave L api's: with a run id, which must be a valid one
+    answers.push(() => ({
+      action: 'ideas',
+      ideas: ['Three'],
+      truncated: false,
+      budget: null,
+      runId: 'air_0123456789ABCDEFabcd',
+    }))
+    expandTopic(f.canvas, idOf('Audience'))
+    await settled(f.canvas)
+    expect(topics().some((e) => f.canvas.text.of(e.id) === 'Three')).toBe(true)
+    const schema = schemas[0]
+    expect(schema).toBeDefined()
+    expect(() =>
+      schema?.parse({ action: 'ideas', ideas: [], truncated: false, budget: null, runId: 'air_bad' }),
+    ).toThrow()
   })
 
   it('highlights what it wrote for a moment (overlay state only), then lets go', async () => {

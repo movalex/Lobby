@@ -9,7 +9,7 @@
 //   (DANA-09). Collaborators' edits never enter this tab's undo stack, so they leave it up.
 // - The board's AI switch and the workspace default (board menu: ./menus.tsx) go through the api.
 
-import { AI_ERROR_CODES, AiResult, AiSettings, AiStatus } from '@draftroom/contracts'
+import { AI_ERROR_CODES, AiClientResult, AiSettings, AiStatus } from '@draftroom/contracts'
 import { isApiError } from '../../../api/client.ts'
 import type { LobbyCanvas } from '../../../canvas/api/index.ts'
 import { mindmapOf } from '../../mindmap/ported/bridge.ts'
@@ -192,13 +192,14 @@ export async function runAi(
   canvas.focus({ preventScroll: true })
   endUndoOffer(canvas)
   ctx.dismiss(NOTICE_KEY)
-  let result: AiResult
+  let result: AiClientResult
   try {
     // The api reads the board as the server has it: let a change made a moment ago arrive first.
     await untilSaved(canvas, job.abort.signal)
     result = await ctx.api.request('POST', `/api/boards/${enc(ctx.board.id)}/ai/run`, {
       body,
-      schema: AiResult,
+      // runId optional: a wave K api (a rollback, or the web deployed first) sends none (foundation review)
+      schema: AiClientResult,
       signal: job.abort.signal,
     })
   } catch (e) {
@@ -504,7 +505,7 @@ export async function setWorkspaceAiDefault(canvas: LobbyCanvas, enabled: boolea
 
 function applyResult(
   canvas: LobbyCanvas,
-  result: AiResult,
+  result: AiClientResult,
   target: AiTarget,
   req: AiRequest,
   opener: HTMLElement | null,

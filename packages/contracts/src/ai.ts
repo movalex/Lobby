@@ -447,55 +447,74 @@ export const AiScore = z.object({
 })
 export type AiScore = z.infer<typeof AiScore>
 
-export const AiResult = z.discriminatedUnion('action', [
-  z.object({ action: z.literal('summarize'), summary: z.string(), sources: z.number().int(), ...Common }),
-  z.object({ action: z.literal('themes'), themes: z.array(AiTheme), ...Common }),
-  z.object({ action: z.literal('actions'), items: z.array(AiActionItem), ...Common }),
-  z.object({ action: z.literal('ideas'), ideas: z.array(z.string()), ...Common }),
-  // ---- wave L (W1) ----
-  z.object({
-    action: z.literal('recap'),
-    title: z.string().max(AI_RECAP_TITLE_MAX_CHARS),
-    summary: z.string().max(AI_RECAP_SUMMARY_MAX_CHARS),
-    decisions: z.array(AiRecapLine).max(AI_RECAP_DECISIONS_MAX),
-    actions: z.array(AiRecapAction).max(AI_RECAP_ACTIONS_MAX),
-    questions: z.array(AiRecapLine).max(AI_RECAP_QUESTIONS_MAX),
-    topVoted: z.array(AiTopVoted).max(AI_RECAP_TOP_VOTED_MAX),
-    /** The window's start as the api applied it (ms since the epoch), or null for a 'shapes' scope. */
-    windowFrom: z.number().int().nonnegative().nullable(),
-    ...Common,
-  }),
-  z.object({
-    action: z.literal('ask'),
-    answer: z.string().max(AI_ANSWER_MAX_CHARS),
-    /** 'no': the board does not say (the web shows "The board doesn't say"). */
-    found: z.enum(['yes', 'partial', 'no']),
-    citations: z.array(AiCitation).max(AI_CITATIONS_MAX),
-    ...Common,
-  }),
-  z.object({
-    action: z.literal('command'),
-    mode: z.enum(['find', 'do']),
-    ops: z.array(AiCommandOp).max(AI_COMMAND_MAX_OPS),
-    explain: z.string().max(AI_COMMAND_EXPLAIN_MAX_CHARS),
-    ...Common,
-  }),
-  z.object({
-    action: z.literal('diagram'),
-    direction: z.enum(['down', 'right']),
-    nodes: z.array(AiDiagramNode).max(AI_DIAGRAM_MAX_NODES),
-    edges: z.array(AiDiagramEdge).max(AI_DIAGRAM_MAX_EDGES),
-    ...Common,
-  }),
-  z.object({ action: z.literal('sort'), lens: z.string(), themes: z.array(AiTheme), ...Common }),
-  z.object({
-    action: z.literal('score'),
-    axes: z.tuple([AiScoreAxis, AiScoreAxis]),
-    scores: z.array(AiScore),
-    ...Common,
-  }),
-])
+/** The result members over the per-call fields `common` (AiResult: Common; AiClientResult: runId optional). */
+const aiResultMembers = <C extends z.ZodRawShape>(common: C) =>
+  [
+    z.object({ action: z.literal('summarize'), summary: z.string(), sources: z.number().int(), ...common }),
+    z.object({ action: z.literal('themes'), themes: z.array(AiTheme), ...common }),
+    z.object({ action: z.literal('actions'), items: z.array(AiActionItem), ...common }),
+    z.object({ action: z.literal('ideas'), ideas: z.array(z.string()), ...common }),
+    // ---- wave L (W1) ----
+    z.object({
+      action: z.literal('recap'),
+      title: z.string().max(AI_RECAP_TITLE_MAX_CHARS),
+      summary: z.string().max(AI_RECAP_SUMMARY_MAX_CHARS),
+      decisions: z.array(AiRecapLine).max(AI_RECAP_DECISIONS_MAX),
+      actions: z.array(AiRecapAction).max(AI_RECAP_ACTIONS_MAX),
+      questions: z.array(AiRecapLine).max(AI_RECAP_QUESTIONS_MAX),
+      topVoted: z.array(AiTopVoted).max(AI_RECAP_TOP_VOTED_MAX),
+      /** The window's start as the api applied it (ms since the epoch), or null for a 'shapes' scope. */
+      windowFrom: z.number().int().nonnegative().nullable(),
+      ...common,
+    }),
+    z.object({
+      action: z.literal('ask'),
+      answer: z.string().max(AI_ANSWER_MAX_CHARS),
+      /** 'no': the board does not say (the web shows "The board doesn't say"). */
+      found: z.enum(['yes', 'partial', 'no']),
+      citations: z.array(AiCitation).max(AI_CITATIONS_MAX),
+      ...common,
+    }),
+    z.object({
+      action: z.literal('command'),
+      mode: z.enum(['find', 'do']),
+      ops: z.array(AiCommandOp).max(AI_COMMAND_MAX_OPS),
+      explain: z.string().max(AI_COMMAND_EXPLAIN_MAX_CHARS),
+      ...common,
+    }),
+    z.object({
+      action: z.literal('diagram'),
+      direction: z.enum(['down', 'right']),
+      nodes: z.array(AiDiagramNode).max(AI_DIAGRAM_MAX_NODES),
+      edges: z.array(AiDiagramEdge).max(AI_DIAGRAM_MAX_EDGES),
+      ...common,
+    }),
+    z.object({ action: z.literal('sort'), lens: z.string(), themes: z.array(AiTheme), ...common }),
+    z.object({
+      action: z.literal('score'),
+      axes: z.tuple([AiScoreAxis, AiScoreAxis]),
+      scores: z.array(AiScore),
+      ...common,
+    }),
+  ] as const
+
+export const AiResult = z.discriminatedUnion('action', aiResultMembers(Common))
 export type AiResult = z.infer<typeof AiResult>
+
+/**
+ * What a web parses an /ai/run answer with (wave L foundation review): AiResult with `runId` optional, so a
+ * web on a wave K api still works (the api rolled back with DRAFTROOM_ALLOW_NEWER_SCHEMA while the web stays,
+ * or a deploy out of order): a wave K api sends no run id, and a strict parse would fail every AI call. Every
+ * other field is AiResult's, and a run id that is sent must still be a valid one. The api's own output stays
+ * AiResult (runId required; its tests pin it). A missing run id means "no provenance run": aiCustomData then
+ * writes `lobby.ai` without `run`, as before wave L. Only the four legacy actions can come back without one
+ * (a wave K api refuses the wave L actions with 400).
+ */
+export const AiClientResult = z.discriminatedUnion(
+  'action',
+  aiResultMembers({ ...Common, runId: AiRunId.optional() }),
+)
+export type AiClientResult = z.infer<typeof AiClientResult>
 
 // ---- live AI awareness (wave L, L1-1 / L2-1e): ephemeral board events, never stored ---------------------
 //
