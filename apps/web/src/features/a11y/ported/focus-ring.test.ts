@@ -1,16 +1,23 @@
 import { describe, expect, it } from 'vitest'
-import { isRealMove, movesFocus, nextRing, RING_START, type RingInput, type RingState } from './focus-ring.ts'
+import {
+  isRealMove,
+  keyboardIntent,
+  nextRing,
+  RING_START,
+  type RingInput,
+  type RingState,
+} from './focus-ring.ts'
 
 const run = (inputs: readonly RingInput[], from: RingState = RING_START): RingState =>
   inputs.reduce(nextRing, from)
 
-/** A note edit: the focus goes into the editor (not the board), keys are typed, Escape, the focus comes back. */
+/** A note edit: the focus goes into the editor (not the board), keys are typed there, Escape, the focus comes back. */
 const editAndEscape: readonly RingInput[] = [
   { type: 'focus', onBoard: false },
-  { type: 'key', key: 'H' },
-  { type: 'key', key: 'i' },
-  { type: 'key', key: 'Enter' },
-  { type: 'key', key: 'Escape' },
+  { type: 'key', key: 'H', inTextEntry: true },
+  { type: 'key', key: 'i', inTextEntry: true },
+  { type: 'key', key: 'Enter', inTextEntry: true },
+  { type: 'key', key: 'Escape', inTextEntry: true },
   { type: 'focus', onBoard: true },
 ]
 
@@ -21,11 +28,42 @@ describe('the board focus ring (K2-1, UXD-05)', () => {
     expect(s.modality).toBe('pointer')
   })
 
-  it('the page opening with the focus on the board shows no ring, nor does typing on it then', () => {
+  it('the page opening with the focus on the board shows no ring, nor does typing into a note opened by the pointer', () => {
     expect(run([{ type: 'focus', onBoard: true }]).ring).toBe(false)
-    expect(run([{ type: 'focus', onBoard: true }, { type: 'key', key: 'n' }, ...editAndEscape]).ring).toBe(
+    expect(run([{ type: 'focus', onBoard: true }, { type: 'pointerdown' }, ...editAndEscape]).ring).toBe(
       false,
     )
+  })
+
+  it('K.1 (WCAG 2.4.7): after a click, any key that acts on the board shows the ring at once (native :focus-visible)', () => {
+    const clicked = run([{ type: 'pointerdown' }, { type: 'focus', onBoard: true }])
+    expect(clicked.ring).toBe(false)
+    // a tool's letter, an arrow (a nudge), Delete, Enter (edit), Space: the keyboard acts on the board
+    for (const key of ['n', 'ArrowRight', 'Delete', 'Enter', ' ', 'PageDown'])
+      expect(nextRing(clicked, { type: 'key', key, onBoard: true }), key).toEqual({
+        modality: 'keyboard',
+        ring: true,
+      })
+    // pressed elsewhere (a panel button has the focus): the keyboard is the last input, no ring until the board has it
+    const elsewhere = nextRing(clicked, { type: 'key', key: 'ArrowDown', onBoard: false })
+    expect(elsewhere).toEqual({ modality: 'keyboard', ring: false })
+    expect(nextRing(elsewhere, { type: 'focus', onBoard: true }).ring).toBe(true)
+  })
+
+  it('K.1: Escape, a modifier alone and Ctrl/Meta/Alt chords are not keyboard intent (a pointer user keeps no ring)', () => {
+    const clicked = run([{ type: 'pointerdown' }, { type: 'focus', onBoard: true }])
+    for (const k of [
+      { key: 'Escape' },
+      { key: 'Shift' },
+      { key: 'Control' },
+      { key: 'AltGraph' },
+      { key: 'Meta' },
+      { key: 'z', ctrl: true },
+      { key: 'c', meta: true },
+      { key: 'Dead' },
+      { key: 'Process' },
+    ])
+      expect(nextRing(clicked, { type: 'key', ...k, onBoard: true }), JSON.stringify(k)).toBe(clicked)
   })
 
   it('Tab or Shift+Tab to the board shows it', () => {
@@ -82,10 +120,20 @@ describe('the board focus ring (K2-1, UXD-05)', () => {
     expect(nextRing(shown, { type: 'focus', onBoard: false }).ring).toBe(false)
   })
 
-  it('only the keys that move the focus count: Tab and F6, not typing, Escape or arrows', () => {
-    for (const k of ['Tab', 'F6']) expect(movesFocus(k)).toBe(true)
-    for (const k of ['Escape', 'Enter', 'a', 'ArrowRight', ' ', 'Shift', 'Delete'])
-      expect(movesFocus(k)).toBe(false)
+  it('K.1: keyboard intent is any key that moves the focus or acts; typing in a field counts only for Tab and F6', () => {
+    for (const key of ['Tab', 'F6', 'Enter', 'a', 'ArrowRight', ' ', 'Delete', 'Backspace', 'Home', 'F2'])
+      expect(keyboardIntent({ key }), key).toBe(true)
+    for (const key of ['Escape', 'Shift', 'Control', 'Alt', 'Meta', 'CapsLock', 'Dead', 'Unidentified', ''])
+      expect(keyboardIntent({ key }), key).toBe(false)
+    expect(keyboardIntent({ key: 'z', ctrl: true })).toBe(false)
+    expect(keyboardIntent({ key: 'Tab', alt: true })).toBe(false)
+    // Shift alone is not a chord: Shift+Tab moves the focus, a capital letter is a key
+    expect(keyboardIntent({ key: 'Tab' })).toBe(true)
+    // in a text field (the note editor, a search box) typing is not intent; Tab and F6 still leave it
+    for (const key of ['a', 'Enter', 'Backspace', 'ArrowLeft', ' '])
+      expect(keyboardIntent({ key, inTextEntry: true }), key).toBe(false)
+    expect(keyboardIntent({ key: 'Tab', inTextEntry: true })).toBe(true)
+    expect(keyboardIntent({ key: 'F6', inTextEntry: true })).toBe(true)
   })
 })
 

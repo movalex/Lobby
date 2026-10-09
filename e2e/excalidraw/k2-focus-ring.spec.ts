@@ -1,7 +1,9 @@
 // K2-1 (wave K, UXD-05): no blue ring around the whole canvas after Escape out of a note or a text when the
-// person was using a pointer. The rule is features/a11y/ported/focus-ring.ts: only Tab, F6 and an explicit
-// entry ("Skip to canvas", the F6 command) make the keyboard the last input; typing and Escape do not.
-// The keyboard paths keep the ring (a11y-traversal.spec.ts W5-45).
+// person was using a pointer. The rule is features/a11y/ported/focus-ring.ts: since wave K.1 native
+// `:focus-visible` semantics, any key that moves the focus or acts on the board makes the keyboard the last
+// input (WCAG 2.4.7: a keyboard user who clicked once and then works by keys gets the ring); Escape, a modifier
+// alone, Ctrl/Meta/Alt chords and typing into the note do not. The keyboard paths keep the ring
+// (a11y-traversal.spec.ts W5-45).
 import fs from 'node:fs'
 import type { Page } from '@playwright/test'
 import {
@@ -41,7 +43,7 @@ async function ringAndOutlines(page: Page) {
   })
 }
 
-test('K2-1: click a note, type, Escape: no ring element and no outline on the canvas wrapper', async ({
+test('K2-1: double-click a note, type, Escape: no ring element and no outline on the canvas wrapper', async ({
   canvasSession,
 }, testInfo) => {
   const a = await canvasSession('alice')
@@ -50,10 +52,11 @@ test('K2-1: click a note, type, Escape: no ring element and no outline on the ca
   await zoomToFit(a.page)
 
   await clickItem(a.page, id)
-  // typing on a selected note opens its editor through the lease (type-to-edit)
-  await a.page.keyboard.press('H')
+  // the pointer opens the editor (wave K.1: a key on the board, type-to-edit's first letter included, is the
+  // keyboard acting, and shows the ring as :focus-visible would)
+  await dblclickItem(a.page, id)
   await waitForTextEditor(a.page, id)
-  await typeText(a.page, 'ello there')
+  await typeText(a.page, 'Hello there')
   await a.page.keyboard.press('Escape')
   await expect.poll(() => boardHasFocus(a.page)).toBe(true)
   // give the ring a frame to appear if it were going to
@@ -70,14 +73,38 @@ test('K2-1: click a note, type, Escape: no ring element and no outline on the ca
   expect(seen.active?.outline).toBe('none')
   await a.page.screenshot({ path: testInfo.outputPath('k2-1-no-ring.png') })
 
-  await test.step('a double-click edit ends the same way', async () => {
+  await test.step('a second edit ends the same way, and Escape on the board alone brings no ring', async () => {
     await dblclickItem(a.page, id)
     await waitForTextEditor(a.page, id)
     await typeText(a.page, '!')
     await a.page.keyboard.press('Escape')
     await expect.poll(() => boardHasFocus(a.page)).toBe(true)
+    await a.page.keyboard.press('Escape')
+    await a.page.keyboard.press('Shift')
     await a.page.waitForTimeout(150)
     expect((await ringAndOutlines(a.page)).ring).toBe(0)
+  })
+
+  await test.step('K.1 (WCAG 2.4.7): after that click, a key that acts on the board shows the ring at once', async () => {
+    await clickItem(a.page, id)
+    await expect(a.page.getByTestId('canvas-focus-ring')).toHaveCount(0)
+    // an arrow nudges the selected note: the keyboard is working the board now
+    await a.page.keyboard.press('ArrowRight')
+    await expect(a.page.getByTestId('canvas-focus-ring')).toBeVisible()
+    await a.page.mouse.move(380, 380)
+    await a.page.mouse.move(400, 400)
+    await expect(a.page.getByTestId('canvas-focus-ring')).toHaveCount(0)
+    // a tool's letter does too
+    await clickItem(a.page, id)
+    await a.page.keyboard.press('Escape') // nothing selected; Escape alone: no ring
+    await a.page.waitForTimeout(150)
+    await expect(a.page.getByTestId('canvas-focus-ring')).toHaveCount(0)
+    await a.page.keyboard.press('r')
+    await expect(a.page.getByTestId('canvas-focus-ring')).toBeVisible()
+    await a.page.keyboard.press('v')
+    await a.page.mouse.move(420, 410)
+    await a.page.mouse.move(440, 420)
+    await expect(a.page.getByTestId('canvas-focus-ring')).toHaveCount(0)
   })
 
   await test.step('Tab from the dock still brings the ring; the next pointer move takes it away', async () => {

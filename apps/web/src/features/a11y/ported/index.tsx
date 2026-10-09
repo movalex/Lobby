@@ -179,11 +179,12 @@ export const feature: CanvasFeature = {
  * engine class is assumed.
  *
  * Two more things happen on that focus:
- *  - W5-45, K2-1: the keyboard arriving there (Tab, F6, "Skip to canvas", and Escape out of an editor the
- *    keyboard got to) turns the board's focus ring on (./FocusRing.tsx); a press or a real move of the pointer,
- *    or the focus leaving the board, turns it off. A focus that follows a click or the page opening shows no
- *    ring, as `:focus-visible` would not, and neither does Escape out of a note a pointer opened: typing and
- *    Escape are not keys that move the focus (./focus-ring.ts has the rule).
+ *  - W5-45, K2-1, K.1: the keyboard arriving there (Tab, F6, "Skip to canvas", Escape out of an editor the
+ *    keyboard got to) or acting on it (an arrow, Delete, Enter, a tool's letter: native `:focus-visible`
+ *    semantics) turns the board's focus ring on (./FocusRing.tsx); a press or a real move of the pointer, or the
+ *    focus leaving the board, turns it off. A focus that follows a click or the page opening shows no ring, as
+ *    `:focus-visible` would not, and neither does Escape out of a note a pointer opened: typing into the note
+ *    and Escape are not keyboard intent (./focus-ring.ts has the rule).
  *  - W5-59: the engine's text editor (a textarea inside the board) is NOT named here: canvas-ux names it
  *    as it opens (../../canvas-ux/ported/canvas-events.ts editorName), and two writers gave it two names in
  *    turn (the wave-5 integration).
@@ -201,11 +202,19 @@ function nameTheCanvas(ctx: CanvasFeatureContext): () => void {
       el.setAttribute('aria-describedby', CANVAS_HINT_ID)
     named.add(el)
   }
-  // the last input that moved the focus (./focus-ring.ts): the ring shows only for a focus the keyboard brought
+  // the last input that moved the focus or acted (./focus-ring.ts): the ring shows only for the keyboard
   let last: PointerAt | null = null
   const onKeyDown = (e: KeyboardEvent) => {
-    if (!e.isTrusted) return
-    feedRing(canvas, { type: 'key', key: e.key })
+    if (!e.isTrusted || e.isComposing) return
+    feedRing(canvas, {
+      type: 'key',
+      key: e.key,
+      ctrl: e.ctrlKey,
+      meta: e.metaKey,
+      alt: e.altKey,
+      inTextEntry: e.target instanceof Element && isTextEntry(e.target),
+      onBoard: boardFocused(root),
+    })
   }
   const onPointerDown = (e: PointerEvent) => {
     last = { x: e.clientX, y: e.clientY }
