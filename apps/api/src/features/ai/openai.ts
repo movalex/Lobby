@@ -49,6 +49,10 @@ export interface ChatRequest {
   user: string
   schemaName: string
   schema: Record<string, unknown>
+  /** This call's output cap (never above the configured one). */
+  maxOutputTokens?: number
+  /** This call's reasoning effort (sent only when the configuration sends one at all). */
+  reasoningEffort?: ReasoningEffort
 }
 
 export interface OpenAiClient {
@@ -154,12 +158,13 @@ export function createOpenAiClient(opts: OpenAiClientOptions): OpenAiClient {
           type: 'json_schema',
           json_schema: { name: req.schemaName, strict: true, schema: req.schema },
         },
-        max_completion_tokens: opts.maxOutputTokens,
+        max_completion_tokens: Math.min(opts.maxOutputTokens, req.maxOutputTokens ?? opts.maxOutputTokens),
         n: 1,
         // Nothing of a board is kept at OpenAI for distillation or evals.
         store: false,
       }
-      if (opts.reasoningEffort) body.reasoning_effort = opts.reasoningEffort
+      // DRAFTROOM_AI_REASONING_EFFORT=off (a model without the parameter) wins over a call's own effort.
+      if (opts.reasoningEffort) body.reasoning_effort = req.reasoningEffort ?? opts.reasoningEffort
       let res: Response
       try {
         res = await fetchImpl(url, {

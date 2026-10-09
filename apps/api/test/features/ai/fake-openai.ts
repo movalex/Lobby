@@ -105,7 +105,7 @@ export function defaultAnswer(req: SeenRequest): unknown {
 }
 
 /**
- * Wave L foundation (W1): the canned model answers for the six new actions, by response schema name, from
+ * Wave L (W1): the canned model answers for the six new actions and the vote-weighted actions, by response schema name, from
  * the items the api sent (so they name only aliases it was sent). These are the MODEL's JSON shapes, the
  * ones W1's prompt.ts schemas ask for and its plan.ts validates and maps back (alias ids, snake_case like
  * `note_ids`); the api's results (contracts AiResult) are what plan.ts makes of them. Undefined for any
@@ -117,6 +117,7 @@ export function defaultAnswer(req: SeenRequest): unknown {
  * - lobby_diagram {nodes[{id, label, kind}], edges[{from, to, label}]}         (the model's own node ids)
  * - lobby_sort    {themes[{name, note_ids}]}                                  (themes' shape, named by the lens)
  * - lobby_score   {scores[{id, x, y}]}                                        (integers from -5 to 5)
+ * - lobby_voted_actions {items[{task, owner, ids}]}                          (vote-weighted actions, L1-7)
  */
 export function waveLAnswer(schema: string | undefined, items: readonly FakeItem[]): unknown {
   const ids = items.map((i) => i.id)
@@ -162,6 +163,13 @@ export function waveLAnswer(schema: string | undefined, items: readonly FakeItem
         ],
       }
     }
+    case 'lobby_voted_actions':
+      // in the order sent (reading order): the api re-sorts them by the vote tallies
+      return {
+        items: items
+          .slice(0, 4)
+          .map((i) => ({ task: `Follow up on ${i.text.slice(0, 40)}`, owner: null, ids: [i.id] })),
+      }
     case 'lobby_score':
       return { scores: ids.map((id, k) => ({ id, x: (k % 11) - 5, y: 5 - (k % 11) })) }
     default:

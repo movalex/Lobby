@@ -5,8 +5,9 @@
 import { draftroomSchema } from '@draftroom/tldraw-import/schema'
 import type { LightMyRequestResponse } from 'fastify'
 import { expect } from 'vitest'
+import { EventHub } from '../../../src/events/hub.ts'
 import { aiSettings } from '../../../src/features/ai/index.ts'
-import type { RoomSnapshotJson, SyncInternalClient } from '../../../src/sync-internal.ts'
+import type { BoardSnapshotJson, SyncInternalClient } from '../../../src/sync-internal.ts'
 import { SyncUnavailable } from '../../../src/sync-internal.ts'
 import { type Client, createBoard, createTestApi, DEV_STUDIO, type TestApi } from '../../helpers.ts'
 import { type FakeOpenAi, startFakeOpenAi } from './fake-openai.ts'
@@ -16,6 +17,8 @@ export const SCHEMA = draftroomSchema.serialize()
 
 export interface AiSync extends SyncInternalClient {
   setBoard(boardId: string, shapes: readonly object[]): void
+  /** Wave L: the board as the Excalidraw engine's sync serves it (a lobby-elements snapshot of these). */
+  setElements(boardId: string, elements: readonly object[]): void
   unavailable: boolean
   snapshots: string[]
 }
@@ -26,7 +29,7 @@ const baseRecords = () => [
 ]
 
 export function aiSync(): AiSync {
-  const boards = new Map<string, RoomSnapshotJson>()
+  const boards = new Map<string, BoardSnapshotJson>()
   const s: AiSync = {
     unavailable: false,
     snapshots: [],
@@ -38,6 +41,15 @@ export function aiSync(): AiSync {
           state: state as unknown as Record<string, unknown>,
           lastChangedClock: 1,
         })),
+      })
+    },
+    setElements(boardId, elements) {
+      boards.set(boardId, {
+        format: 'lobby-elements',
+        schema: 1,
+        clock: 1,
+        elements: elements.map((e) => structuredClone(e) as Record<string, unknown>),
+        doc: {},
       })
     },
     async snapshot(boardId) {
@@ -73,6 +85,8 @@ export interface AiWorld {
   /** Not a member of Dev Studio. */
   erin: Client
   board: string
+  /** The api's board event hub (wave L: listen for ai.working / ai.done). */
+  events: EventHub
   close(): Promise<void>
 }
 
@@ -89,7 +103,8 @@ export async function aiWorld(
     ...(opts.key === null ? {} : { OPENAI_API_KEY: opts.key ?? TEST_KEY }),
     ...opts.env,
   }
-  const api = await createTestApi({ deps: { syncInternal: sync }, env })
+  const events = new EventHub()
+  const api = await createTestApi({ deps: { syncInternal: sync, events }, env })
   aiSettings.inFlight = saved
   const alice = await api.login('alice')
   const bob = await api.login('bob')
@@ -114,6 +129,7 @@ export async function aiWorld(
     dave,
     erin,
     board,
+    events,
     async close() {
       await api.close()
       await openai.close()

@@ -144,6 +144,13 @@ export function waveLAnswer(schema: string | undefined, items: readonly FakeItem
         ].filter((t) => t.note_ids.length),
       }
     }
+    case 'lobby_voted_actions':
+      // in the order sent (reading order): the api re-sorts them by the vote tallies
+      return {
+        items: items
+          .slice(0, 4)
+          .map((i) => ({ task: `Follow up on ${i.text.slice(0, 40)}`, owner: null, ids: [i.id] })),
+      }
     case 'lobby_score':
       return { scores: ids.map((id, k) => ({ id, x: k % 2 ? 3 : -3, y: k % 4 < 2 ? 3 : -3 })) }
     default:

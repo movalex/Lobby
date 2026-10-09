@@ -1,59 +1,72 @@
-// Wave L foundation (W1, L1-1): the contracts name six new actions, and this api refuses each of them with
-// the 400 BAD_REQUEST an unknown action got before (nothing read, reserved or sent) until W1 implements it.
-// Every result carries a fresh run id. W1 replaces the refusal cases action by action as it lands them.
+// Wave L (W1, L1-1): the contracts name six new actions and this api runs every one of them through the one
+// route (LIVE_AI_ACTIONS holds all ten). Every result carries a fresh run id. An old web build's body (the
+// four old actions, with or without the new optional fields) runs as before. The detailed behaviour of each
+// action is in its own file (recap, ask, command, diagram, sort-score, voted-actions); the live events in
+// live-events.test.ts.
 
-import { AI_RUN_ID_PATTERN, AiResult, AiRunInput } from '@draftroom/contracts'
+import { AI_ACTIONS, AI_RUN_ID_PATTERN, AiResult, AiRunInput } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { LIVE_AI_ACTIONS, newAiRunId } from '../../../src/features/ai/index.ts'
+import { note, ref } from './elements.ts'
 import { waveLAnswer } from './fake-openai.ts'
 import { brainstormShapes, FRAME, NOTES } from './fixtures.ts'
-import { type AiWorld, aiWorld, expectError, run, usageRows } from './support.ts'
+import { type AiWorld, aiWorld, run, usageRows } from './support.ts'
 
 const axis = { name: 'Impact', low: 'Low', high: 'High' }
-/** One valid body of each wave L action (each parses: the refusal is the api's, not the schema's). */
-const WAVE_L_BODIES: Record<string, Record<string, unknown>> = {
+/** One valid body of each wave L action. */
+export const WAVE_L_BODIES: Record<string, Record<string, unknown>> = {
   recap: { action: 'recap', scope: { kind: 'since', since: 0 }, mode: 'panel' },
   ask: { action: 'ask', question: 'What did we decide?', shapeIds: [] },
   command: { action: 'command', instruction: 'select the notes', mode: 'find', shapeIds: [] },
   diagram: { action: 'diagram', shapeIds: [], prompt: 'idea to launch', direction: 'down' },
-  sort: { action: 'sort', shapeIds: [FRAME], lens: 'urgency' },
-  score: { action: 'score', shapeIds: [FRAME], axes: [axis, axis] },
+  sort: { action: 'sort', shapeIds: [ref('a'), ref('b'), ref('c')], lens: 'urgency' },
+  score: { action: 'score', shapeIds: [ref('a'), ref('b'), ref('c')], axes: [axis, axis] },
 }
 
-describe('wave L actions before W1 implements them', () => {
+describe('wave L actions are live', () => {
   let w: AiWorld
   beforeEach(async () => {
     w = await aiWorld()
-    w.sync.setBoard(w.board, brainstormShapes())
   })
   afterEach(() => w.close())
 
-  it('each parses as a contract body, and the api answers 400 BAD_REQUEST: nothing read, reserved or sent', async () => {
+  it('LIVE_AI_ACTIONS is every contract action; each wave L body runs: 200, one ledger row under its own name', async () => {
+    expect([...LIVE_AI_ACTIONS].sort()).toEqual([...AI_ACTIONS].sort())
+    const now = w.api.clock.now().getTime()
+    w.sync.setElements(w.board, [
+      ...note('a', 'Ship the beta', { x: 0, createdAt: now }),
+      ...note('b', 'Write the docs', { x: 220, createdAt: now }),
+      ...note('c', 'Hire a designer', { x: 440, createdAt: now }),
+    ])
     for (const [action, body] of Object.entries(WAVE_L_BODIES)) {
       expect(AiRunInput.safeParse(body).success, action).toBe(true)
-      expect(LIVE_AI_ACTIONS.has(action), action).toBe(false)
-      expectError(await run(w.alice, w.board, body), 400, 'BAD_REQUEST')
+      const res = await run(w.alice, w.board, body)
+      expect(res.statusCode, `${action}: ${res.body}`).toBe(200)
+      const r = AiResult.parse(res.json())
+      expect(r.action).toBe(action)
+      expect(r.runId).toMatch(AI_RUN_ID_PATTERN)
     }
-    expect(w.openai.requests).toHaveLength(0)
-    expect(w.sync.snapshots).toEqual([])
-    expect(await usageRows(w.api)).toEqual([])
+    const rows = await usageRows(w.api)
+    expect(rows.map((r) => r.action)).toEqual(Object.keys(WAVE_L_BODIES))
+    expect(rows.every((r) => r.status === 'done')).toBe(true)
   })
 
-  it('an old action with the new optional fields (voteSessionId, at) runs as before', async () => {
+  it('an old action with the new optional `at` runs as before', async () => {
+    w.sync.setBoard(w.board, brainstormShapes())
     const res = await run(w.bob, w.board, {
       action: 'actions',
       shapeIds: [FRAME],
-      voteSessionId: 'vot_0123456789abcdefghij',
       at: { x: 0, y: 0, w: 100, h: 100 },
     })
     expect(res.statusCode, res.body).toBe(200)
     const r = AiResult.parse(res.json())
     expect(r.action).toBe('actions')
-    // the fake's items name no votes: nothing is weighted yet (W1, L1-7)
+    // no vote named: no counts (L1-7 only weighs by a named, revealed vote)
     if (r.action === 'actions') for (const i of r.items) expect(i.votes).toBeUndefined()
   })
 
   it('every result carries a fresh run id', async () => {
+    w.sync.setBoard(w.board, brainstormShapes())
     const seen = new Set<string>()
     for (let i = 0; i < 2; i++) {
       const res = await run(w.bob, w.board, { action: 'themes', shapeIds: NOTES })
@@ -83,7 +96,14 @@ describe("the fake OpenAI's canned wave L answers", () => {
   ]
   it('answer every new schema name, naming only the aliases sent', () => {
     const sent = new Set(items.map((i) => i.id))
-    for (const name of ['lobby_recap', 'lobby_answer', 'lobby_command', 'lobby_sort', 'lobby_score']) {
+    for (const name of [
+      'lobby_recap',
+      'lobby_answer',
+      'lobby_command',
+      'lobby_sort',
+      'lobby_score',
+      'lobby_voted_actions',
+    ]) {
       const json = JSON.stringify(waveLAnswer(name, items))
       for (const m of json.matchAll(/"(n\d+)"/g))
         expect(sent.has(m[1] as string), `${name}: ${m[1]}`).toBe(true)
