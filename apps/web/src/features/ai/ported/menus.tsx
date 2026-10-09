@@ -25,6 +25,7 @@ import {
 } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { SparkIcon, Spinner } from '../icons.tsx'
+import { runRecap } from '../recap/recap.ts'
 import {
   anchorAtScene,
   endUndoOffer,
@@ -38,7 +39,7 @@ import {
 import { askBoard, WHOLE_BOARD } from './ask.ts'
 import { canBuildWithAi } from './gate.ts'
 import { aiLens } from './lens.tsx'
-import { AI_COMMAND_IDS, aiActionsArgs, aiAskArgs } from './public.ts'
+import { AI_COMMAND_IDS, aiActionsArgs, aiAskArgs, aiRecapArgs } from './public.ts'
 import { applyRemoval, recordedRunOf, removalPlan, removedText } from './remove.ts'
 import { type AiMenuState, aiJob, aiMenu, aiStatus, getAiCtx, setAiCtx } from './runtime.ts'
 import { type AiTarget, NONE, selectionTarget, targetAt, viewTarget } from './target.ts'
@@ -223,6 +224,19 @@ export const CONTEXT_MENU: readonly MenuEntrySpec[] = [
         run: (ctx, t) => run(ctx, t, 'summarize'),
       },
       {
+        // L2-3: the session's recap (the selected frames' when frames are selected)
+        id: 'ai.recap',
+        group: 'ai',
+        order: 1.7,
+        label: 'Wrap up this session',
+        visible: askOn,
+        run: (ctx) => {
+          setAiCtx(ctx)
+          const frames = ctx.canvas.selection.some((id) => ctx.canvas.get(id)?.type === 'frame')
+          later(() => void runRecap(ctx, frames ? 'selection' : 'session'))
+        },
+      },
+      {
         // L2-2: about the selection, the frame under the pointer, else the whole board (view is enough)
         id: 'ai.ask',
         group: 'ai',
@@ -305,6 +319,19 @@ const viewCentre = (ctx: CanvasFeatureContext): AiMenuState['at'] => {
 }
 
 export const COMMANDS: readonly CommandSpec[] = [
+  {
+    // L2-3 Wrap up / Catch me up: args AiRecapArgs ('session' by default; 'selection'; 'catch-up'). Everyone who
+    // can see the board (the recap is private); the AI part only where AI is on for this person.
+    id: AI_COMMAND_IDS.recap,
+    label: 'Wrap up',
+    group: 'AI',
+    keywords: ['recap', 'summary', 'catch me up', 'minutes', 'decisions', 'actions'],
+    readOnlyAllowed: true,
+    run: (ctx, _source, args) => {
+      setAiCtx(ctx)
+      void runRecap(ctx, aiRecapArgs(args).scope ?? 'session')
+    },
+  },
   {
     // L2-2 Ask this board: args AiAskArgs (the palette's "Ask: <question>" asks at once); else the question box.
     // About the selection when there is one, else the whole board. View is enough (a viewer may ask).
@@ -428,6 +455,17 @@ const settingsOf = (ctx: CanvasFeatureContext) => aiStatus(ctx.canvas).get()?.se
 
 /** Shown even while AI is off here (the owner turns it back on from here); nothing for anyone else. */
 export const MAIN_MENU: readonly MenuEntrySpec[] = [
+  {
+    // L2-3: what changed since this device's last visit (everyone; AI's part only where AI is on)
+    id: 'ai.catch-up',
+    group: 'board',
+    order: 58,
+    label: 'Catch me up',
+    run: (ctx) => {
+      setAiCtx(ctx)
+      void runRecap(ctx, 'catch-up')
+    },
+  },
   {
     // L2-1c: everyone (what AI made is on the board for everyone); this tab only, never stored
     id: 'ai.lens',

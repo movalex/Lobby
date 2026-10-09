@@ -72,7 +72,7 @@ import {
 } from './target.ts'
 
 /** Lobby's sans (Nunito), the note font on the new canvas. */
-const FONT_FAMILY = 6
+export const FONT_FAMILY = 6
 /** tldraw's `m` text size (a theme label, a heading). */
 const LABEL_FONT_SIZE = 24
 /** tldraw's `s` size (the summary card's words). */
@@ -213,14 +213,19 @@ export function wrapLines(
   return out
 }
 
-interface TextBlock {
+export interface TextBlock {
   /** the words as the element stores them (wrapped) */
   text: string
   width: number
   height: number
 }
 
-function layoutText(canvas: LobbyCanvas, text: string, fontSize: number, maxWidth: number | null): TextBlock {
+export function layoutText(
+  canvas: LobbyCanvas,
+  text: string,
+  fontSize: number,
+  maxWidth: number | null,
+): TextBlock {
   const style = { fontFamily: FONT_FAMILY, fontSize }
   const lines = wrapLines((l) => canvas.text.measure(l, style).width, text, maxWidth)
   const wrapped = lines.join('\n')
@@ -229,7 +234,7 @@ function layoutText(canvas: LobbyCanvas, text: string, fontSize: number, maxWidt
 }
 
 /** Element ids AI creates (ELEMENT_ID_PATTERN); a note's label id is the note's with `.t`. */
-function newId(): string {
+export function newId(): string {
   const bytes = new Uint8Array(12)
   crypto.getRandomValues(bytes)
   return `ai${Array.from(bytes, (b) => (b % 36).toString(36)).join('')}`

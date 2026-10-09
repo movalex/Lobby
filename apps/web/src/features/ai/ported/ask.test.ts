@@ -128,19 +128,19 @@ describe('Ask this board', () => {
     expect(addAnswerAsNote(viewer.ctx)).toBeNull()
     expect(viewer.pushes).toEqual([])
 
-    const editor = aiKit(board())
-    editor.answer(answer())
-    await askBoard(editor.ctx, 'Summer?', WHOLE_BOARD)
-    html = renderIn(editor, AiOverlay)
+    const writer = aiKit(board())
+    writer.answer(answer())
+    await askBoard(writer.ctx, 'Summer?', WHOLE_BOARD)
+    html = renderIn(writer, AiOverlay)
     expect(html).toContain('data-testid="ai-answer-add"')
-    const ids = addAnswerAsNote(editor.ctx) ?? []
-    expect(editor.pushes.filter((p) => !p.joined)).toHaveLength(1)
-    const made = ids.map((id) => editor.els.get(id))
+    const ids = addAnswerAsNote(writer.ctx) ?? []
+    expect(writer.pushes.filter((p) => !p.joined)).toHaveLength(1)
+    const made = ids.map((id) => writer.els.get(id))
     expect(made.map((e) => aiKindWord(e as never)).sort()).toEqual(['answer', 'heading'])
     for (const e of made) expect(aiOf(e as never)).toEqual({ by: 'usr_ana', run: RUN })
-    expect(editor.canvas.text.of(ids.find((id) => editor.els.get(id)?.type === 'stickynote') ?? '')).toBe(
+    expect(writer.canvas.text.of(ids.find((id) => writer.els.get(id)?.type === 'stickynote') ?? '')).toBe(
       'Two concepts mention summer, and one is about the solstice.',
     )
-    expect(aiAnswer(editor.canvas).get()).toBeNull()
+    expect(aiAnswer(writer.canvas).get()).toBeNull()
   })
 })

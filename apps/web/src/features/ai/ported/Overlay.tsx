@@ -24,6 +24,7 @@ import { useValue } from '../../../lib/signals.ts'
 import { isTextEntry, onFocusLeave, trapTab, tryFocus } from '../../../ui/focus.ts'
 import { budgetLine, groupNames, themesHint } from '../copy.ts'
 import { ActionIcon, SparkIcon, Spinner } from '../icons.tsx'
+import { runRecap } from '../recap/recap.ts'
 import {
   addSummaryToBoard,
   askAiStatus,
@@ -58,6 +59,7 @@ import {
   aiPanel,
   aiStatus,
   busyLabel,
+  getAiCtx,
   setAiCtx,
 } from './runtime.ts'
 
@@ -249,7 +251,7 @@ function Head({ titleId, children, onClose }: { titleId: string; children: React
 }
 
 /** The menu's rows: the four actions, the two that build mind maps (K7), and Ask this board (wave L). */
-type ItemAction = 'summarize' | 'themes' | 'actions' | 'ideas' | 'expand' | 'mindmap' | 'ask'
+type ItemAction = 'summarize' | 'themes' | 'actions' | 'ideas' | 'expand' | 'mindmap' | 'ask' | 'recap'
 
 const ITEM_LABELS: Record<ItemAction, string> = {
   ...ACTION_LABELS,
@@ -346,6 +348,23 @@ function MenuView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: stri
                 : `A question about ${target.label}, with its sources`
             }
             onClick={() => aiMenu(canvas).set({ ...menu, view: 'ask' })}
+          />
+        )}
+        {status?.canSummarize && (
+          <Item
+            action="recap"
+            hint={
+              menu.target.kind === 'frame' || menu.target.ids.some((id) => canvas.get(id)?.type === 'frame')
+                ? 'Decisions, owners and the top votes of these frames'
+                : 'Decisions, owners and the top votes of this session'
+            }
+            onClick={() => {
+              const ctx = getAiCtx(canvas)
+              const frames = menu.target.ids.some((id) => canvas.get(id)?.type === 'frame')
+              closeAiMenu(canvas, false)
+              if (ctx)
+                void runRecap(ctx, frames && menu.target.kind === 'selection' ? 'selection' : 'session')
+            }}
           />
         )}
         {insert && (

@@ -190,7 +190,7 @@
 }
 button.dr-ai-cite:focus-visible,
 .dr-ai-sources__btn:focus-visible {
-  outline: 2px solid var(--dr-accent-line);
+  outline: 2px solid var(--dr-focus);
   outline-offset: 1px;
 }
 .dr-ai-sources {
@@ -214,4 +214,71 @@ button.dr-ai-cite:focus-visible,
 }
 .dr-ai-sources__btn:hover {
   background: var(--dr-chip);
+}
+
+/* ---- the recap (L2-3): Wrap up and Catch me up ------------------------------------------------------------ */
+.dr-ai-recap-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 311;
+  overflow: hidden;
+  pointer-events: none;
+}
+.dr-ai-recap-layer .dr-ai-panel.dr-ai-recap {
+  top: 58px;
+  left: 12px;
+  width: 420px;
+  max-height: calc(100% - 80px);
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+}
+.dr-ai-recap__body {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.dr-ai-recap__section {
+  margin: 4px 4px 10px;
+}
+.dr-ai-recap__section ul,
+.dr-ai-recap__section ol {
+  margin: 0;
+  padding-left: 20px;
+}
+.dr-ai-recap__section li {
+  margin: 2px 0;
+}
+.dr-ai-recap__h {
+  margin: 0 0 4px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--dr-ink);
+}
+.dr-ai-recap__owner {
+  color: var(--dr-ink);
+}
+.dr-ai-recap__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.dr-ai-recap__table th,
+.dr-ai-recap__table td {
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--dr-line);
+  text-align: left;
+}
+.dr-ai-recap__actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+@media (max-width: 480px) {
+  .dr-ai-recap-layer .dr-ai-panel.dr-ai-recap {
+    right: 12px;
+    left: 12px;
+    width: auto;
+  }
 }

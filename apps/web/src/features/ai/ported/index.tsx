@@ -16,7 +16,7 @@
 //  - wave L (W2): the trust layer (L2-1): the preview before a plan moves or recolours anything (./preview.tsx),
 //    provenance with the run id (./provenance.ts), the AI lens (./lens.tsx), "Remove this AI result"
 //    (./remove.ts) and the live "Dana is using AI here" shimmer (./working.tsx); the cross-workstream API in
-//    ./public.ts.
+//    ./public.ts; Ask this board (L2-2, ./ask.ts); Wrap up and Catch me up (L2-3, ../recap/).
 // Hidden entirely unless the api reports AI on for this person on this board: not configured, switched
 // off, a name-only guest, or a viewer limited by the export policy all see nothing. The api enforces
 // every rule and every cost limit; the client only follows its answer. The live shimmer and the lens are the
@@ -25,6 +25,10 @@ import type { CanvasFeature } from '../../../canvas/api/index.ts'
 import '../ai.css'
 import './ai-ported.css'
 import './wave-l.css'
+import { AiRecapOverlay } from '../recap/RecapPanel.tsx'
+import { aiRecap } from '../recap/recap.ts'
+import { noteVisit, writeLastVisit } from '../recap/window.ts'
+import { aiAnswer } from './ask.ts'
 import { AiLensOverlay } from './lens.tsx'
 import { AiEntryFallback, COMMANDS, CONTEXT_MENU, MAIN_MENU, SELECTION_BAR } from './menus.tsx'
 import { AiOverlay } from './Overlay.tsx'
@@ -42,6 +46,7 @@ export const feature: CanvasFeature = {
     { id: 'ai', layer: 'screen', order: 60, pointer: 'none', component: AiOverlay },
     { id: 'ai-entry', layer: 'screen', order: 59, pointer: 'none', component: AiEntryFallback },
     { id: 'ai-preview', layer: 'screen', order: 61, pointer: 'none', component: AiPreviewOverlay },
+    { id: 'ai-recap', layer: 'screen', order: 62, pointer: 'none', component: AiRecapOverlay },
   ],
   commands: COMMANDS,
   selectionBar: SELECTION_BAR,
@@ -50,9 +55,15 @@ export const feature: CanvasFeature = {
   onMount(ctx) {
     setAiCtx(ctx)
     const { canvas } = ctx
+    // L2-3 Catch me up: this visit is the next one's "since" (device-local; no request)
+    noteVisit(ctx.board.id, Date.now())
+    const left = () => writeLastVisit(ctx.board.id, Date.now())
+    globalThis.addEventListener?.('pagehide', left)
     const stopRuns = watchAiRuns(ctx)
     const stopWorking = listenAiWorking(ctx, (ev) => isOwnRun(canvas, ctx.me.user.name, ev))
     return () => {
+      left()
+      globalThis.removeEventListener?.('pagehide', left)
       stopRuns()
       stopWorking()
       discardPreview(canvas)
@@ -60,6 +71,8 @@ export const feature: CanvasFeature = {
       aiJob(canvas).set(null)
       aiMenu(canvas).set(null)
       aiPanel(canvas).set(null)
+      aiAnswer(canvas).set(null)
+      aiRecap(canvas).set(null)
     }
   },
 }
