@@ -18,6 +18,7 @@ import {
   TEXT_EDITOR,
   tool,
 } from '../tests/support/canvas.ts'
+import { openPhoneSession } from './a11y-kit.ts'
 import { emptyCanvasPoint, focusBoard } from './board-kit.ts'
 import { expect, test, type WorkshopCanvasSession } from './workshops-kit.ts'
 
@@ -169,4 +170,82 @@ test('cursor chat: a commenter chats, a viewer’s / does nothing, Escape closes
   await stopTextEditing(a.page)
   expect(await editingId(a.page)).toBeNull()
   await expect.poll(() => itemText(a.page, note)).toBe('a/b')
+})
+
+// Wave K.1 (follow-up 11): '/' is matched by the character it types, so a German layout's Shift+7 opens cursor
+// chat (a key event as that layout sends it: key '/', code Digit7, Shift); a phone with no cursor is not offered
+// cursor chat at all.
+test('K.1: a layout that needs Shift for / (German Shift+7) opens cursor chat, and the line reaches B', async ({
+  join,
+}) => {
+  const a = await join('alice')
+  const b = await join('bob', 'commenter')
+  await pointerOnCanvas(a, b)
+  const cdp = await a.page.context().newCDPSession(a.page)
+  const SHIFT = 8
+  await cdp.send('Input.dispatchKeyEvent', {
+    type: 'rawKeyDown',
+    key: 'Shift',
+    code: 'ShiftLeft',
+    modifiers: SHIFT,
+    windowsVirtualKeyCode: 16,
+  })
+  await cdp.send('Input.dispatchKeyEvent', {
+    type: 'keyDown',
+    key: '/',
+    code: 'Digit7',
+    text: '/',
+    unmodifiedText: '7',
+    modifiers: SHIFT,
+    windowsVirtualKeyCode: 55,
+  })
+  await cdp.send('Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    key: '/',
+    code: 'Digit7',
+    modifiers: SHIFT,
+    windowsVirtualKeyCode: 55,
+  })
+  await cdp.send('Input.dispatchKeyEvent', {
+    type: 'keyUp',
+    key: 'Shift',
+    code: 'ShiftLeft',
+    modifiers: 0,
+    windowsVirtualKeyCode: 16,
+  })
+  const input = a.page.getByTestId('cursor-chat-input')
+  await expect(input).toBeFocused()
+  // the '/' that opened it is not typed into it
+  await expect(input).toHaveValue('')
+  await a.page.keyboard.type('Hallo zusammen', { delay: 10 })
+  await a.page.keyboard.press('Enter')
+  await expect(bubbleOf(b.page, a.id)).toHaveText('Hallo zusammen', { timeout: 2_000 })
+})
+
+test('K.1: on a phone (touch, no cursor) cursor chat is not offered: / from an attached keyboard does nothing, and the command is not offered (no shortcuts-dialog row)', async ({
+  browser,
+  board,
+  users,
+}) => {
+  const a = await openPhoneSession(browser, board, users, 'alice')
+  try {
+    expect(await a.page.evaluate(() => matchMedia('(any-hover: hover)').matches)).toBe(false)
+    // the board has the keyboard (a keyboard attached to the phone): before K.1 '/' opened a composer there
+    await a.page.evaluate(() =>
+      (document.querySelector('[data-lobby-board-canvas] canvas') as HTMLElement | null)?.focus(),
+    )
+    await a.page.keyboard.press('/')
+    await a.page.waitForTimeout(300)
+    await expect(a.page.getByTestId('cursor-chat-input')).toHaveCount(0)
+    const rows = await a.page.evaluate(async () => {
+      const w = window as unknown as {
+        __lobbyBoard?: { registries: { commands: { list(): { id: string; available?: () => boolean }[] } } }
+      }
+      const cmd = w.__lobbyBoard?.registries.commands.list().find((c) => c.id === 'cursor-chat.open')
+      return { registered: !!cmd, offered: cmd?.available ? cmd.available() : true }
+    })
+    expect(rows).toEqual({ registered: true, offered: false })
+  } finally {
+    await a.context.close()
+  }
 })

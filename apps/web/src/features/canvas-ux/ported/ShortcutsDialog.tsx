@@ -74,6 +74,8 @@ export function shortcutSections(ctx: CanvasFeatureContext): ShortcutSection[] {
   const more: ShortcutRow[] = []
   for (const c of r.commands.list()) {
     if (!c.kbd?.length) continue
+    // wave K.1: a command this device does not offer has no row (cursor chat with no cursor)
+    if (c.available && !c.available(ctx)) continue
     const row = { label: c.label, keys: c.kbd }
     if (c.id.startsWith('canvas-ux.')) edit.push(row)
     else more.push(row)

@@ -38,6 +38,11 @@ export interface CommandSpec {
   /** read-only roles may run it (default false) */
   readonly readOnlyAllowed?: boolean
   enabled?(ctx: CanvasFeatureContext): boolean
+  /**
+   * Wave K.1: false when the command is not offered on this device at all (no row in the shortcuts dialog, its
+   * keys do nothing): what it needs is missing (cursor chat on a touch screen with no cursor). Default: offered.
+   */
+  available?(ctx: CanvasFeatureContext): boolean
   run(ctx: CanvasFeatureContext, source: CommandSource): void | Promise<void>
 }
 
@@ -59,6 +64,13 @@ export interface FeatureKeySpec {
    * claims under the same tool, not reported as a conflict with every other claim of its chord.
    */
   readonly tool?: string
+  /**
+   * Wave K.1: characters it claims by `KeyboardEvent.key`, whatever the key's code and Shift, with no Ctrl, Meta
+   * or Alt (AltGr, which Windows reports as Ctrl+Alt, types a character and counts): a key some layouts put on
+   * Shift (German Shift+7 types '/'), which a chord (matched on the code for digits and letters) cannot name.
+   * A character claim is not a chord claim: list the plain chord on a command (or in `chords`) for the dialog.
+   */
+  readonly chars?: readonly string[]
   /** a finer test than the chords (the chords must still list every key it can claim) */
   match?(e: KeyEventLike, ctx: CanvasFeatureContext): boolean
   /** true when it acted (the event is then stopped and prevented) */

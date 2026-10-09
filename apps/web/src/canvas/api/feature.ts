@@ -176,6 +176,7 @@ function commandKey(cmd: CommandSpec, ctx: CanvasFeatureContext, scope: 'canvas'
     scope,
     match: (e) => chords.some((c) => matchChord(c, e, platform)),
     handle: () => {
+      if (cmd.available && !cmd.available(ctx)) return false
       if (ctx.canvas.readOnly() && !cmd.readOnlyAllowed) return false
       if (cmd.enabled && !cmd.enabled(ctx)) return false
       void cmd.run(ctx, 'kbd')
@@ -184,8 +185,18 @@ function commandKey(cmd: CommandSpec, ctx: CanvasFeatureContext, scope: 'canvas'
   }
 }
 
+/**
+ * Wave K.1: `e` types one of `chars` (its `key`), Shift or not, with no Ctrl, Meta or Alt; AltGr (Ctrl+Alt on
+ * Windows) is typing and counts.
+ */
+export function matchChar(chars: readonly string[], e: KeyEventLike): boolean {
+  if (!chars.includes(e.key) || e.metaKey) return false
+  return e.ctrlKey === e.altKey
+}
+
 function featureKey(spec: FeatureKeySpec, ctx: CanvasFeatureContext): KeyHandlerSpec {
   const chords = spec.chords.map(parseChord)
+  const chars = spec.chars ?? []
   const platform = currentPlatform()
   return {
     id: `key:${spec.id}`,
@@ -193,7 +204,7 @@ function featureKey(spec: FeatureKeySpec, ctx: CanvasFeatureContext): KeyHandler
     match: (e) =>
       // CR-3A-9: a tool's key acts only while its tool is on
       (spec.tool === undefined || ctx.canvas.tool() === spec.tool) &&
-      chords.some((c) => matchChord(c, e, platform)) &&
+      (chords.some((c) => matchChord(c, e, platform)) || matchChar(chars, e)) &&
       (spec.match ? spec.match(e, ctx) : true),
     handle: (e) => spec.handle(e, ctx),
   }

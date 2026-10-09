@@ -19,6 +19,21 @@ export interface Point {
 }
 
 /** People who may comment on an active board may chat (the api decides; this hides the key). */
+/**
+ * Wave K.1 (follow-up 11): whether this device has a cursor to chat at: some pointer can hover (a mouse, a
+ * trackpad, a pen that hovers). A touch screen alone has no cursor, so cursor chat is not offered there at all
+ * (no row in the shortcuts dialog, '/' from a keyboard attached to it does nothing): a bubble at a cursor nobody
+ * sees would be a broken affordance. Without matchMedia (Node, an old browser): a cursor.
+ */
+export function hasCursor(): boolean {
+  try {
+    const mm = (globalThis as { matchMedia?: (q: string) => { matches: boolean } }).matchMedia
+    return typeof mm === 'function' ? mm.call(globalThis, '(any-hover: hover)').matches : true
+  } catch {
+    return true
+  }
+}
+
 export function mayChat(role: BoardRole, status: BoardStatus): boolean {
   return can(role, 'comment', status)
 }

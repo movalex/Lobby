@@ -3,7 +3,9 @@
 // for a few seconds, then fades. Never stored: the api relays it on the board's event stream
 // (@draftroom/contracts cursor-chat.ts); no sync push, no board write, no presence field.
 //
-// - The key: a command with kbd '/' (it shows in the shortcuts dialog). The key registry runs it before
+// - The key: a command with kbd '/' (it shows in the shortcuts dialog), and (wave K.1) a key matched on the
+//   character '/' whatever Shift does, for layouts that put '/' on Shift (German Shift+7). Not offered at all
+//   on a device without a cursor (a phone: `hasCursor`). The key registry runs them before
 //   the key allowlist, in the canvas scope only: never inside the text editor, an overlay's field or any
 //   other input (canvas/board/input.ts), and it is not delegated to Excalidraw. It steps aside when '/'
 //   would type into the one selected note (type-to-edit), for people who may not comment, and while
@@ -38,6 +40,7 @@ import {
   ChatThrottle,
   clampText,
   failureText,
+  hasCursor,
   incoming,
   mayChat,
   messageOf,
@@ -84,6 +87,8 @@ export class CursorChatController {
   canOpen(): boolean {
     const { canvas, registries } = this.ctx
     if (!mayChat(this.ctx.role, this.ctx.board.status)) return false
+    // a touch screen with no cursor (K.1): nothing to chat at
+    if (!hasCursor()) return false
     if (this.composer.get()) return false
     // presenting (focus mode): the layers are hidden, and so are everyone's cursors
     if (focusModeOf(canvas)) return false
@@ -379,8 +384,26 @@ export const feature: CanvasFeature = {
       scope: 'canvas',
       // commenters run the board read-only, and may chat
       readOnlyAllowed: true,
+      // K.1: not offered without a cursor (a phone): no row in the shortcuts dialog, and the key does nothing
+      available: () => hasCursor(),
       enabled: (ctx) => cursorChatOf(ctx)?.canOpen() ?? false,
       run: (ctx) => cursorChatOf(ctx)?.open(),
+    },
+  ],
+  keys: [
+    {
+      // K.1 (follow-up 11): '/' by the character it types, so layouts that need Shift for it (German Shift+7,
+      // French Shift+:) open the composer too; the command above keeps the plain '/' chord (and its dialog row)
+      id: 'cursor-chat.open-char',
+      scope: 'canvas',
+      chords: [],
+      chars: ['/'],
+      handle: (_e, ctx) => {
+        const c = cursorChatOf(ctx)
+        if (!c?.canOpen()) return false
+        c.open()
+        return true
+      },
     },
   ],
   overlays: [

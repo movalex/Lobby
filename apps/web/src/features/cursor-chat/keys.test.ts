@@ -214,4 +214,44 @@ describe('K6-4: the cursor-chat key', () => {
     expect(b.press()).toEqual({ taken: true, opened: true })
     b.uninstall()
   })
+
+  it('K.1: layouts that need Shift (or AltGr) for / open it: matched on the character, not the code', () => {
+    const b = board()
+    // German: Shift+7 types '/'
+    expect(b.press({ key: '/', code: 'Digit7', shiftKey: true })).toEqual({ taken: true, opened: true })
+    b.close()
+    // French (AZERTY): Shift+: types '/'
+    expect(b.press({ key: '/', code: 'Period', shiftKey: true })).toEqual({ taken: true, opened: true })
+    b.close()
+    // AltGr (Windows reports Ctrl+Alt) on a layout that puts '/' there
+    expect(b.press({ key: '/', code: 'KeyQ', ctrlKey: true, altKey: true })).toEqual({
+      taken: true,
+      opened: true,
+    })
+    b.close()
+    // still not a shortcut chord: Ctrl+/ , Alt+/ and Cmd+/ are not it
+    expect(b.press({ ctrlKey: true })).toEqual({ taken: false, opened: false })
+    expect(b.press({ altKey: true })).toEqual({ taken: false, opened: false })
+    expect(b.press({ metaKey: true })).toEqual({ taken: false, opened: false })
+    // and a '7' without Shift is a 7
+    expect(b.press({ key: '7', code: 'Digit7' })).toEqual({ taken: false, opened: false })
+    b.uninstall()
+  })
+
+  it('K.1: a touch screen with no cursor is not offered cursor chat: / does nothing and the shortcuts dialog has no row', async () => {
+    vi.stubGlobal('matchMedia', (q: string) => ({ matches: q !== '(any-hover: hover)' }))
+    const b = board()
+    expect(b.press()).toEqual({ taken: false, opened: false })
+    expect(b.press({ key: '/', code: 'Digit7', shiftKey: true })).toEqual({ taken: false, opened: false })
+    const { shortcutSections } = await import('../canvas-ux/ported/ShortcutsDialog.tsx')
+    const rows = shortcutSections(b.ctx).flatMap((s) => s.rows.map((r) => r.label))
+    expect(rows).not.toContain('Chat at your cursor')
+    b.uninstall()
+    // with a mouse (some pointer hovers) it is there
+    vi.stubGlobal('matchMedia', () => ({ matches: true }))
+    const m = board()
+    const withMouse = shortcutSections(m.ctx).flatMap((s) => s.rows.map((r) => r.label))
+    expect(withMouse).toContain('Chat at your cursor')
+    m.uninstall()
+  })
 })
