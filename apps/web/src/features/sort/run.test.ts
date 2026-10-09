@@ -417,6 +417,31 @@ describe('headings that still label notes which stay are kept', () => {
     await sortBy(ctx, 'author', ['n0', 'n3', 'n6', 'n9'])
     expect(headings(f).map((e) => e.originalText)).toContain('Butter')
   })
+
+  it('never deletes a heading that is locked, being typed in or dragged by someone else (round 1)', async () => {
+    applyPreview()
+    const f = fakeCanvas(board(12))
+    const { ctx } = fakeCtx(f.canvas)
+    await sortBy(ctx, 'colour', noteIds(12))
+    const [locked, leased, dragged] = headings(f).map((e) => e.id) as [string, string, string]
+    f.external((els) => {
+      const h = els.get(locked) as El
+      els.set(locked, { ...h, locked: true })
+    })
+    f.leases[leased] = { sid: 'sid-other', uid: 'usr_bob', name: 'Bob' }
+    f.draggers[dragged] = { sid: 'sid-other', name: 'Bob' }
+    const ops = f.ops.length
+    const out = await sortBy(ctx, 'author', noteIds(12))
+    expect(out.status).toBe('applied')
+    const deleted = f.ops
+      .slice(ops)
+      .filter((o) => o.op === 'delete')
+      .map((o) => o.id)
+    for (const id of [locked, leased, dragged]) {
+      expect(deleted).not.toContain(id)
+      expect(f.els.get(id)?.isDeleted).not.toBe(true)
+    }
+  })
 })
 
 describe('sort by author on a board that hides note authors', () => {

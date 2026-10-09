@@ -27,6 +27,7 @@ import {
   withNameBand,
 } from './geom.ts'
 import { type ColumnsGroup, layoutColumns, type Rect } from './layout.ts'
+import { skipOf } from './model.ts'
 
 /** The `customData.lobby.kind` of a heading a deterministic sort makes. */
 export const SORT_LABEL_KIND = 'sort-label'
@@ -146,7 +147,9 @@ function obstaclesIn(
 /**
  * Headings an earlier sort made for the notes about to move: a heading with a moving note just under it and no
  * staying note in its column (the staying notes below it that no other heading stands over). A heading that
- * still labels notes which stay is kept.
+ * still labels notes which stay is kept, and so is one in use (round 1: locked, being typed in, or dragged by
+ * someone else, the note skip rules of ./model.ts `skipOf`): the server would refuse its delete, so it stays
+ * where it is, an obstacle to the new columns.
  */
 function staleHeadings(
   canvas: LobbyCanvas,
@@ -161,6 +164,7 @@ function staleHeadings(
     const kind = items.lobbyValue(el, 'kind')
     if (typeof kind === 'string' && LABEL_KINDS.has(kind)) heads.push({ el, r: rectIn(el, space) })
   }
+  const free = (h: { el: CanvasElement }) => skipOf(canvas, h.el) === null
   const staying = canvas
     .items()
     .filter((e) => isLive(e) && isNote(e) && inSpace(canvas, e, space) && !moving.has(e.id))
@@ -176,6 +180,7 @@ function staleHeadings(
         !heads.some((o) => o.r !== r && sideways(n, o.r) && o.r.y > r.y && o.r.y <= n.y)
       return !staying.some(mine)
     })
+    .filter(free)
     .map((h) => h.el)
 }
 
