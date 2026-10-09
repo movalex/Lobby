@@ -146,10 +146,11 @@ function arrowsBetween(): El[] {
 }
 
 describe('the preview', () => {
-  it('writes nothing when the person discards it (the foundation’s own stub does)', async () => {
+  it('writes nothing when the person discards it', async () => {
+    // W2's real showAiPreview waits for the person: they press Discard
+    setSortDeps({ showAiPreview: async () => 'discard' })
     const f = fakeCanvas(board(12))
     const { ctx } = fakeCtx(f.canvas)
-    // the real showAiPreview is W2's; until then it resolves 'discard'
     const out = await sortBy(ctx, 'colour', noteIds(12))
     expect(out.status).toBe('discarded')
     expect(f.steps).toEqual([])
@@ -547,7 +548,17 @@ describe('sort by author, tag and votes', () => {
     } as unknown as WorkshopVoteState
     workshopStoreFor(
       events as never,
-      () => ({ getSnapshot: () => ({ vote }), startFirstLoad: () => {} }) as unknown as WorkshopStore,
+      () =>
+        ({
+          getSnapshot: () => ({ vote }),
+          startFirstLoad: () => {},
+          // W5's store keeps the last revealed vote itself (lastRevealedResults reads it from the store)
+          lastRevealedResults: () => ({
+            sessionId: vote.session.id,
+            participants: vote.participants,
+            results: (vote.results ?? []).map((r) => ({ ref: r.shapeId, count: r.count, rank: r.rank })),
+          }),
+        }) as unknown as WorkshopStore,
     )
     expect(sortDisabledReason(ctx, 'votes', noteIds(8))).toBeNull()
     await sortBy(ctx, 'votes', noteIds(8))
