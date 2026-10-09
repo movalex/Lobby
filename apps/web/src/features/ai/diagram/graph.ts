@@ -53,8 +53,8 @@ export const DIAGRAM_EDGE_LABEL_MAX_CHARS = AI_DIAGRAM_EDGE_LABEL_MAX_CHARS
 export const DIAGRAM_LABEL_MAX_LINES = 4
 
 /**
- * Control characters other than a line break go; runs of spaces become one; at most `maxLines` lines and `max`
- * characters (an ellipsis ends a cut label).
+ * Control characters other than a line break go; runs of spaces become one; at most `maxLines` lines (the rest
+ * go) and `max` characters (an ellipsis ends a label cut for its length).
  */
 export function cleanLabel(raw: string, max: number, maxLines = DIAGRAM_LABEL_MAX_LINES): string {
   const lines = String(raw)
