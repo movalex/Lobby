@@ -219,6 +219,25 @@ test('K.1: with others here Present asks first: "Present to everyone (2 here)" i
     await expect(overlay).toHaveCount(0)
   })
 
+  await test.step('K.1 refix: Enter held down on Present (its key repeat) does not take the default', async () => {
+    const present = a.page.getByTestId('present-button')
+    await a.page.waitForTimeout(300) // leaving present mode settles where the focus goes
+    await present.focus()
+    await expect(present).toBeFocused()
+    await a.page.keyboard.down('Enter') // the Present button clicks: the question opens, its default focused
+    await expect(ask.getByTestId('present-choice-everyone')).toBeFocused()
+    // the OS key repeat of the same held Enter lands on the default button (Playwright marks it repeat)
+    await a.page.keyboard.down('Enter')
+    await a.page.keyboard.down('Enter')
+    await a.page.keyboard.up('Enter')
+    await expect(ask).toBeVisible()
+    await expect(overlay).toHaveCount(0)
+    await b.page.waitForTimeout(800)
+    await expect(toast(b.page)).toHaveCount(0)
+    await a.page.keyboard.press('Escape')
+    await expect(ask).toHaveCount(0)
+  })
+
   await test.step('Enter takes the default: to everyone, and bob gets the toast', async () => {
     await a.page.getByTestId('present-button').click()
     await expect(ask.getByTestId('present-choice-everyone')).toBeFocused()

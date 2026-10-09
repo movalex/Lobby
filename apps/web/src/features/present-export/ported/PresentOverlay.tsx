@@ -81,6 +81,15 @@ function PresentChoiceDialog({ count, controller }: { count: number; controller:
   // first focus: a parent's effect runs after its child's)
   const everyoneRef = useRef<HTMLButtonElement>(null)
   useEffect(() => everyoneRef.current?.focus(), [])
+  // K.1 refix: the key repeat of an Enter (or Space) held down on Present, or on Ctrl/Cmd+Alt+Enter, would land
+  // on the focused default and go live to everyone without a choice: only a fresh key press chooses.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.repeat && (e.key === 'Enter' || e.key === ' ')) e.preventDefault()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
   const choose = (audience: 'everyone' | 'me') => {
     flushSync(() => controller.cancelPresent())
     controller.presentTo(audience)
