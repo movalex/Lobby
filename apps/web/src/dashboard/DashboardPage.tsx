@@ -14,6 +14,7 @@ import { api, isApiError } from '../api/client.ts'
 import { useMe } from '../auth/session.tsx'
 import { UserMenu } from '../auth/UserMenu.tsx'
 import { NoticeRegion, useNotices } from '../board/Notices.tsx'
+import { isPaletteKey, paletteKeyOf } from '../features/command-palette/keys.ts'
 import { FeedbackPill } from '../features/feedback/FeedbackPill.tsx'
 import { openFeedback } from '../features/feedback/state.ts'
 import { useIsGuest } from '../invite/guest.tsx'
@@ -86,6 +87,8 @@ const dash = dashboardApi(api)
 // not with the dashboard: most visits never open it. dashboard-bundle.test.ts keeps it out of the page's
 // static imports.
 const ShareDialog = lazy(() => import('../board/ShareDialog.tsx').then((m) => ({ default: m.ShareDialog })))
+// Wave L (W3, L3-2): the command palette, its own chunk, fetched the first time Ctrl/Cmd+K is pressed here
+const DashboardPalette = lazy(() => import('../features/command-palette/dashboard.tsx'))
 
 // A11Y-17: whether the person has clicked, tapped or pressed a key in this tab yet. After they have
 // (signing in, a link in the folded phone menu), a dashboard that leaves the focus nowhere moves it to
@@ -169,6 +172,8 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   const tryBusy = useRef(false)
   // K4-5: "Try it" on the template row asks for it to be shown and focused (see the effect below)
   const [startRowAsk, setStartRowAsk] = useState(0)
+  // wave L (L3-2): the command palette (Ctrl/Cmd+K)
+  const [paletteOpen, setPaletteOpen] = useState(false)
   const canCreateNow = useRef(canCreate)
   canCreateNow.current = canCreate
   const { mod: catalogMod } = useCatalog(catalogWanted)
@@ -221,6 +226,19 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
         searchRef.current?.focus()
         searchRef.current?.select()
       }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // Wave L (L3-2): Ctrl/Cmd+K opens the command palette (boards, lists, templates, words inside boards)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || !isPaletteKey(paletteKeyOf(e))) return
+      e.preventDefault()
+      setPaletteOpen(true)
+      // the creators' templates read better with the catalog's names (fetched once, as for the row)
+      if (canCreateNow.current) setCatalogWanted(true)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -912,6 +930,25 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
           </p>
         )}
       </main>
+      {paletteOpen && (
+        <LazyDialogBoundary what="The command palette" onClose={() => setPaletteOpen(false)}>
+          <Suspense fallback={null}>
+            <DashboardPalette
+              workspaceId={workspace.id}
+              workspaces={me.workspaces}
+              viewer={me.user.id}
+              canCreate={canCreate}
+              guest={guest}
+              tiles={startTiles(catalogMod ? catalogMod.templateCatalog() : null)}
+              onStart={(t) => void startFromRow(t.choice, t.entry)}
+              onBrowseTemplates={() => {
+                if (canCreate) setCreating(true)
+              }}
+              onClose={() => setPaletteOpen(false)}
+            />
+          </Suspense>
+        </LazyDialogBoundary>
+      )}
       {creating && canCreate && (
         <CreateBoardDialog
           workspaceId={workspace.id}

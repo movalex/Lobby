@@ -293,7 +293,7 @@ const editable = (ctx: CanvasFeatureContext) => !ctx.canvas.readOnly()
 export const canCopySelection = (ctx: CanvasFeatureContext): boolean =>
   selectionAtLeast(1)(ctx) && (editable(ctx) || selectionText(ctx.canvas) !== '')
 
-export const COMMANDS: readonly CommandSpec[] = [
+const BASE_COMMANDS: readonly CommandSpec[] = [
   {
     id: CMD.undo,
     label: 'Undo',
@@ -560,6 +560,120 @@ export const COMMANDS: readonly CommandSpec[] = [
     run: (ctx) => setToolLock(ctx),
   },
 ]
+
+// ---- the palette's words (wave L, W3, L3-2) -------------------------------------------------------------
+//
+// The command palette (features/command-palette) lists every command with its group, its keywords and, when
+// it cannot run, why. `disabledReason` here says why only where `enabled` already says no (it is derived from
+// it), so nothing runs or refuses differently: the menus, the keys and runCommand decide as before.
+
+type Why = (ctx: CanvasFeatureContext) => string
+const selectFirst: Why = () => 'Select something first'
+const selectAtLeast =
+  (n: number, doing: string): Why =>
+  () =>
+    `Select ${n === 2 ? 'two' : 'three'} or more objects to ${doing}`
+
+const PALETTE: Readonly<Record<string, { group: string; keywords?: readonly string[]; why?: Why }>> = {
+  [CMD.undo]: { group: 'Edit', keywords: ['back', 'revert'], why: () => 'Nothing to undo' },
+  [CMD.redo]: { group: 'Edit', keywords: ['again'], why: () => 'Nothing to redo' },
+  [CMD.cut]: { group: 'Edit', why: selectFirst },
+  [CMD.copy]: {
+    group: 'Edit',
+    keywords: ['clipboard'],
+    why: (ctx) =>
+      selectedRoots(ctx.canvas).length ? 'The selection has no words to copy' : selectFirst(ctx),
+  },
+  [CMD.paste]: { group: 'Edit', keywords: ['clipboard'] },
+  [CMD.duplicate]: { group: 'Edit', keywords: ['copy', 'clone'], why: selectFirst },
+  [CMD.delete]: {
+    group: 'Edit',
+    keywords: ['remove', 'erase'],
+    why: (ctx) => (selectedRoots(ctx.canvas).length ? 'The selection is locked' : selectFirst(ctx)),
+  },
+  [CMD.selectAll]: { group: 'Select', keywords: ['everything'] },
+  [CMD.selectNone]: {
+    group: 'Select',
+    keywords: ['deselect', 'clear selection'],
+    why: () => 'Nothing is selected',
+  },
+  [CMD.group]: { group: 'Arrange', why: selectAtLeast(2, 'group them') },
+  [CMD.ungroup]: { group: 'Arrange', why: () => 'Select a group first' },
+  [CMD.toggleLock]: {
+    group: 'Arrange',
+    keywords: ['lock', 'unlock', 'freeze', 'pin in place'],
+    why: () => 'Select something to lock or unlock',
+  },
+  [CMD.unlockAll]: { group: 'Arrange', keywords: ['unlock'], why: () => 'Nothing on this board is locked' },
+  [CMD.bringToFront]: { group: 'Arrange', keywords: ['z-order', 'raise', 'top'], why: selectFirst },
+  [CMD.sendToBack]: { group: 'Arrange', keywords: ['z-order', 'lower', 'bottom'], why: selectFirst },
+  [CMD.bringForward]: { group: 'Arrange', keywords: ['z-order', 'raise'], why: selectFirst },
+  [CMD.sendBackward]: { group: 'Arrange', keywords: ['z-order', 'lower'], why: selectFirst },
+  [CMD.alignLeft]: {
+    group: 'Arrange',
+    keywords: ['line up', 'left edges'],
+    why: selectAtLeast(2, 'align them'),
+  },
+  [CMD.alignCenterH]: {
+    group: 'Arrange',
+    keywords: ['line up', 'centre', 'center', 'column'],
+    why: selectAtLeast(2, 'align them'),
+  },
+  [CMD.alignRight]: {
+    group: 'Arrange',
+    keywords: ['line up', 'right edges'],
+    why: selectAtLeast(2, 'align them'),
+  },
+  [CMD.alignTop]: {
+    group: 'Arrange',
+    keywords: ['line up', 'top edges'],
+    why: selectAtLeast(2, 'align them'),
+  },
+  [CMD.alignCenterV]: {
+    group: 'Arrange',
+    keywords: ['line up', 'middle', 'row'],
+    why: selectAtLeast(2, 'align them'),
+  },
+  [CMD.alignBottom]: {
+    group: 'Arrange',
+    keywords: ['line up', 'bottom edges'],
+    why: selectAtLeast(2, 'align them'),
+  },
+  [CMD.distributeH]: {
+    group: 'Arrange',
+    keywords: ['space out', 'even gaps', 'spread'],
+    why: selectAtLeast(3, 'space them out'),
+  },
+  [CMD.distributeV]: {
+    group: 'Arrange',
+    keywords: ['space out', 'even gaps', 'spread'],
+    why: selectAtLeast(3, 'space them out'),
+  },
+  [CMD.shortcuts]: { group: 'Help', keywords: ['keys', 'hotkeys', 'help'] },
+  [CMD.insertFile]: { group: 'Insert', keywords: ['image', 'upload', 'file', 'video', 'pdf'] },
+  [CMD.toggleNoteAuthors]: { group: 'Board', keywords: ['anonymous', 'names'] },
+  [CMD.toggleSnap]: { group: 'View', keywords: ['guides', 'snapping'] },
+  [CMD.toggleGrid]: { group: 'View', keywords: ['dots', 'background'] },
+  [CMD.toolLock]: { group: 'Tools', keywords: ['keep tool', 'sticky tool'] },
+}
+
+/** A command with its palette words; its `disabledReason` only ever explains an `enabled` that says no. */
+function withPaletteWords(cmd: CommandSpec): CommandSpec {
+  const p = PALETTE[cmd.id]
+  if (!p) return cmd
+  const { enabled } = cmd
+  const why = p.why
+  return {
+    ...cmd,
+    group: p.group,
+    ...(p.keywords ? { keywords: p.keywords } : {}),
+    ...(enabled && why
+      ? { disabledReason: (ctx: CanvasFeatureContext) => (enabled(ctx) ? null : why(ctx)) }
+      : {}),
+  }
+}
+
+export const COMMANDS: readonly CommandSpec[] = BASE_COMMANDS.map(withPaletteWords)
 
 /**
  * Runs a command by id as a menu or a button would (its `enabled` and read-only rules applied, and since wave L
