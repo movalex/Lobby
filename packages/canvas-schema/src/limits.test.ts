@@ -309,6 +309,19 @@ describe('customData classes (§3.3)', () => {
     expect(lobbyValueProblem('present', { index: 2 })).toBeNull()
   })
 
+  it('present.mins (wave L, CONTRACTS_REV 12): whole minutes from 1 to 240, beside index and skip', () => {
+    expect(lobbyValueProblem('present', { index: 2, skip: false, mins: 5 })).toBeNull()
+    expect(lobbyValueProblem('present', { mins: 1 })).toBeNull()
+    expect(lobbyValueProblem('present', { mins: 240 })).toBeNull()
+    for (const mins of [0, 241, 1.5, -1, '5', null])
+      expect(lobbyValueProblem('present', { index: 0, mins }), String(mins)).not.toBeNull()
+    expect(lobbyValueProblem('present', { index: 0, minutes: 5 })).not.toBeNull() // still strict
+    // the same key: the lock exemption and the duplicate rule are present's
+    expect(lobbyKeySpec('present')).toMatchObject({ lockExempt: 'frame-account', duplicate: 'strip-index' })
+    // the largest value fits the key's byte budget
+    expect(checkLobbyData({ present: { index: 9_999_999, skip: false, mins: 240 } })).toEqual({ ok: true })
+  })
+
   it('budgets: 200 +1s of 60-character uids within 16 KiB; 8 KiB for the rest; 10 tags', () => {
     const plus: Record<string, unknown> = {}
     for (let i = 0; i < PLUS_ONES_MAX; i++) plus[`plusOne:${`u${i}`.padEnd(60, 'x')}`] = true

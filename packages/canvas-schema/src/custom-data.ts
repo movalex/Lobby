@@ -123,10 +123,20 @@ export const MindmapEdgeValue = z.strictObject({
 })
 /** `alt`: alternative text. */
 const AltValue = z.string().max(MAX_ALT_CHARS)
-/** `present`: a frame's place in the presentation. */
+/** The minutes a frame may plan for its section of the run of show (`present.mins`, wave L). */
+export const PRESENT_MINS_MIN = 1
+export const PRESENT_MINS_MAX = 240
+/**
+ * `present`: a frame's place in the presentation. `mins` (wave L, L6-4; CONTRACTS_REV 12, protocol.ts
+ * PRESENT_MINS_REV): the minutes W5's run of show plans for the frame's section, an integer from 1 to 240.
+ * Additive and optional, so ELEMENT_SCHEMA_VERSION is unchanged; it shares the key's lock exemption
+ * (`frame-account`) and its duplicate rule (`strip-index` keeps `mins` and `skip` on a copy). A sync older
+ * than rev 12 refuses it (strict), so a web writes it only in a rev-12 room.
+ */
 const PresentValue = z.strictObject({
   index: z.number().int().nonnegative().optional(),
   skip: z.boolean().optional(),
+  mins: z.number().int().min(PRESENT_MINS_MIN).max(PRESENT_MINS_MAX).optional(),
 })
 
 /** `prompt`, `slot`, `swatch`: a template's marker (a short word such as `image`, `color` or `true`). */

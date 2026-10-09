@@ -42,6 +42,7 @@ import type {
   LobbyFiles,
   LobbyHistory,
   LobbyPresence,
+  LobbyRoom,
   LobbySettings,
   LobbyStyles,
   LobbyText,
@@ -89,6 +90,8 @@ export type BoardConcern =
   | 'history'
   | 'files'
   | 'docKeys'
+  /** wave L: the room's contracts revision (`room.contractsRev`) changed */
+  | 'room'
 
 /** The board-page events of LobbyCanvasEventMap (C0's four come from the port, `followChanged` from 3c). */
 export type BoardEvent = 'change' | 'input' | 'toolChanged' | 'editingChanged' | 'resize' | 'docChanged'
@@ -128,6 +131,8 @@ export interface BoardHandles {
   }
   readonly files: Pick<LobbyFiles, 'status'>
   readonly settings: LobbySettings
+  /** wave L: what the board session knows of the room (its contracts frame) */
+  readonly room: LobbyRoom
   /** a local `doc.set` (the board page reports `docChanged` for it) */
   docWritten(keys: readonly string[]): void
   /** a fresh element or group id (the engine's) */
@@ -186,6 +191,8 @@ const LANDED_BOARD_PARTS: ReadonlySet<string> = new Set([
 /** 2C's members composed from port members alone (the rest of 2C's are the board page's). */
 const COMPOSED_BY_2C: ReadonlySet<string> = new Set([
   'transact.skipUndo',
+  // wave L: real everywhere (null on a bare port: no room is known; the board session's value on the page)
+  'room.contractsRev',
   'text.of',
   'visibleBounds',
   'sceneToOverlay',
@@ -306,6 +313,8 @@ export const LOBBY_CANVAS_MEMBERS: readonly MemberInfo[] = [
       ['files.track', '3g'],
       ['settings.get', '2C'],
       ['settings.set', '2C'],
+      // wave L (W6 for the wave, as the CanvasPort owner; the value is the board session's)
+      ['room.contractsRev', '2C'],
       ['tx.reorder', '2C'],
       ['tx.setFrame', '2C'],
       ['tx.group', '2C'],
@@ -380,6 +389,7 @@ export interface LobbyCanvasSources {
   readonly theme: ReturnType<typeof source>
   readonly history: ReturnType<typeof source>
   readonly files: ReturnType<typeof source>
+  readonly room: ReturnType<typeof source>
 }
 
 export interface LobbyCanvasHandle {
@@ -468,6 +478,7 @@ export function createLobbyCanvas(deps: LobbyCanvasDeps): LobbyCanvasHandle {
     theme: source('canvas.theme'),
     history: source('canvas.history'),
     files: source('canvas.files'),
+    room: source('canvas.room'),
   }
   const offs = [
     port.on('changed', () => sources.doc.bump()),
@@ -489,6 +500,7 @@ export function createLobbyCanvas(deps: LobbyCanvasDeps): LobbyCanvasHandle {
       ['history', sources.history],
       ['files', sources.files],
       ['docKeys', sources.docKeys],
+      ['room', sources.room],
     ]
     for (const [c, s] of concerns) offs.push(board.subscribe(c, () => s.bump()))
   }
@@ -807,6 +819,12 @@ export function createLobbyCanvas(deps: LobbyCanvasDeps): LobbyCanvasHandle {
         return b.settings.get()
       }),
       set: onBoard('settings.set', (b) => b.settings.set),
+    },
+    room: {
+      contractsRev: () => {
+        sources.room.track()
+        return board ? board.room.contractsRev() : null
+      },
     },
   }
   self = canvas

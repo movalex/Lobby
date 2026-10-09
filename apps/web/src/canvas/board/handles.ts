@@ -66,6 +66,8 @@ export interface HandleDeps {
   pushed(ids: readonly string[], timeoutMs: number): Promise<void>
   /** a concern changed that only the handles know of (the next-element styles) */
   changed(concern: BoardConcern): void
+  /** wave L: the contracts revision the room announced on the current socket, or null (the session's) */
+  contractsRev(): number | null
 }
 
 const excalidrawContainer = (root: HTMLElement) => root.querySelector<HTMLElement>('.excalidraw')
@@ -496,6 +498,7 @@ export function createBoardHandles(d: HandleDeps): BoardHandles & {
       get: () => d.settings.get(),
       set: (patch) => d.settings.set(patch),
     },
+    room: { contractsRev: () => d.contractsRev() },
     docWritten: d.docWritten,
     newId: () => randomId(),
     userMoved: () => {

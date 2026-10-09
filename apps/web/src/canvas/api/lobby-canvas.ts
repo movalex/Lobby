@@ -592,6 +592,20 @@ export interface LobbyFiles {
 export type WheelPreference = 'auto' | 'mouse' | 'trackpad'
 export const WHEEL_PREFERENCES: readonly WheelPreference[] = ['auto', 'mouse', 'trackpad']
 
+/**
+ * Wave L (W6, the CanvasPort owner of wave L): what this tab knows of the board's room (its sync server).
+ */
+export interface LobbyRoom {
+  /**
+   * @owner 2C · the contracts revision the room announced on this tab's current socket (its `contracts` frame:
+   * canvas-schema protocol.ts CONTRACTS_REV), or null until that frame came (a new socket, a room older than
+   * rev 10, a canvas with no board page). Reactive. Features gate on it what an older sync would refuse or
+   * not serve: `present.mins` (PRESENT_MINS_REV, W5) and "Restore these" (RESTORE_ELEMENTS_REV, W7). Null
+   * means "not known": offer nothing that needs a newer room.
+   */
+  contractsRev(): number | null
+}
+
 export interface LobbySettingsValues {
   readonly grid: boolean
   readonly snap: boolean
@@ -694,6 +708,8 @@ export interface LobbyCanvas extends CanvasPort {
   readonly export: LobbyExport
   readonly files: LobbyFiles
   readonly settings: LobbySettings
+  /** Wave L: the board's room (its contracts revision). */
+  readonly room: LobbyRoom
   /** @owner 2C · getColorMode, getCurrentTheme, user.getIsDarkMode (the palette's dark filter is applied by the engine) */
   theme(): 'light' | 'dark'
 }

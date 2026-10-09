@@ -63,6 +63,7 @@ import { attachCustomTools, type CustomToolClick } from '../tools/customTools.ts
 import { setTool } from '../tools/tools.ts'
 import { ChangeClassifier } from './changes.ts'
 import { contentOf } from './content.ts'
+import { ContractsRevTracker } from './contracts-rev.ts'
 import { selectionText } from './copy-text.ts'
 import { createBoardHandles } from './handles.ts'
 import { BoardInput } from './input.ts'
@@ -152,6 +153,8 @@ export class LobbyBoardSession {
   private handle: LobbyCanvasHandle | null = null
   /** K.1: marks the board ready if its room sends no `contracts` frame after the first welcome (./room-ready) */
   private roomReadyTimer: ReturnType<typeof setTimeout> | null = null
+  /** wave L: the room's contracts revision on the current socket (`canvas.room.contractsRev()`) */
+  private readonly contractsRev = new ContractsRevTracker(() => this.concern('room'))
   private handlesExtra: ReturnType<typeof createBoardHandles> | null = null
   port: LobbyCanvasPort | null = null
   private readonly listeners = new Set<() => void>()
@@ -437,6 +440,10 @@ export class LobbyBoardSession {
       // the core reports a message BEFORE it applies it (its roster, lease table and document are still
       // the old ones here): read them once it has
       const m = e.message
+      // wave L: the room's revision, per socket (a welcome is a new socket: unknown until its contracts frame;
+      // both read here, in the order the frames came, as the presence hub reads them)
+      if (m.type === 'welcome') this.contractsRev.welcome()
+      else if (m.type === 'contracts') this.contractsRev.contracts(m.rev)
       // K.1: the room's `contracts` frame comes after a welcome's snapshot and catch-up: the board is all here
       if (m.type === 'contracts' && this.snap.welcomed && this.handle) {
         if (this.roomReadyTimer !== null) clearTimeout(this.roomReadyTimer)
@@ -768,6 +775,7 @@ export class LobbyBoardSession {
       },
       pushed: (ids, ms) => this.pushed(ids, ms),
       changed: (c) => this.concern(c),
+      contractsRev: () => this.contractsRev.get(),
     })
     this.handlesExtra = handles
     offs.push(() => handles.dispose())

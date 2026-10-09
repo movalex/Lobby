@@ -59,8 +59,20 @@ export const PROTO = 1 as const
  * the query only on a socket whose room sent `contracts` with `rev >= RECEIPTS_REV` (a rev-10 room refuses
  * both: strict); a rev-10 client sends neither and is served as before; a rev-11 room's `contracts` frame
  * says 11, which a rev-10 client reads as "rev 10 or later".
+ * Revision 12 (wave L foundation; owner W6, the canvas-schema and presence owner of wave L): the shared
+ * laser. `PresenceIn.t` ('laser' while the laser tool is pressed, else null) and `trail` (the samples since
+ * the last send, at most MAX_LASER_TRAIL_POINTS integer scene points), relayed as `PeerPresence.t` and
+ * `trail`. Additive and gated per socket exactly like rev 10's `f`: a client sends `t` (null included) in
+ * every presence message, and `trail` with it, only on a socket whose room's `contracts` frame named
+ * PRESENCE_LASER_REV or later (a rev-11 room refuses both: strict), and that is how the room knows the
+ * socket reads them; every other socket gets the entries `presenceForReader` gives its revision (no `t`, no
+ * `trail`), which a rev-11 client's strict parse accepts. A rev-11 client never sends `t` and is served as
+ * before; a rev-12 room's `contracts` frame says 12, which it reads as "rev 10 (or 11) or later". Rev 12
+ * also marks the wave L sync build: `customData.lobby.present.mins` is accepted (PRESENT_MINS_REV) and the
+ * restore-elements internal route exists (RESTORE_ELEMENTS_REV); clients read the room's revision
+ * (CanvasPort `room.contractsRev()`) to offer either.
  */
-export const CONTRACTS_REV = 11
+export const CONTRACTS_REV = 12
 /**
  * The first contracts revision whose presence has `f`, `view.z` and `followers` (see `CONTRACTS_REV`).
  * A client sends them only to a room whose `contracts` frame names this revision or a later one.
@@ -71,6 +83,24 @@ export const PRESENCE_FOLLOW_REV = 10
  * `CONTRACTS_REV`). A client sends them only to a room whose `contracts` frame names this revision or a later one.
  */
 export const RECEIPTS_REV = 11
+/**
+ * The first contracts revision whose presence has the laser (`t`, `trail`; see `CONTRACTS_REV`). A client
+ * sends them only to a room whose `contracts` frame names this revision or a later one.
+ */
+export const PRESENCE_LASER_REV = 12
+/**
+ * The first contracts revision whose sync accepts `customData.lobby.present.mins` (custom-data.ts; W5's run
+ * of show). A web shows the minutes stepper only in a room whose `contracts` frame names this or later, so a
+ * web deployed before the sync never sends a value an older sync refuses.
+ */
+export const PRESENT_MINS_REV = 12
+/**
+ * The first contracts revision whose sync serves `POST /internal/boards/:bid/restore-elements` (W7's
+ * selective restore; @draftroom/contracts sync-internal.ts). Not a wire change: the web shows "Restore these"
+ * only in a room at this revision or later, and the api answers 503 RESTORE_UNAVAILABLE when the sync
+ * answers 404 (an older sync).
+ */
+export const RESTORE_ELEMENTS_REV = 12
 /** A push's receipt id (CONTRACTS_REV 11): made by the client, unique per page (`<page nonce>.<seq>`). */
 export const ReceiptId = z.string().regex(/^[A-Za-z0-9_.:-]{1,64}$/)
 /** The most receipt ids one `receipts` query names (a reconnect has at most a few pushes out). */
@@ -408,6 +438,25 @@ export const DragIn = z.strictObject({
   dx: Finite,
   dy: Finite,
 })
+/** The most laser samples one presence entry relays (CONTRACTS_REV 12): a longer `trail` in is dropped. */
+export const MAX_LASER_TRAIL_POINTS = 6
+/**
+ * The most laser samples a presence message may carry at all (CONTRACTS_REV 12): above it the message is
+ * INVALID; between MAX_LASER_TRAIL_POINTS and this the room drops the trail and keeps the rest (as a drag
+ * above MAX_DRAG_IDS is dropped and one above MAX_DRAG_IDS_WIRE is INVALID).
+ */
+export const MAX_LASER_TRAIL_POINTS_WIRE = 32
+/** A laser sample: an integer scene point inside the coordinate limit. */
+export const LaserPoint = z.strictObject({
+  x: z.number().int().gte(-COORD_LIMIT).lte(COORD_LIMIT),
+  y: z.number().int().gte(-COORD_LIMIT).lte(COORD_LIMIT),
+})
+export type LaserPoint = z.infer<typeof LaserPoint>
+/** What the pointer is doing beyond pointing (CONTRACTS_REV 12): only the laser today. */
+export const PRESENCE_TOOLS = ['laser'] as const
+export const PresenceTool = z.enum(PRESENCE_TOOLS)
+export type PresenceTool = z.infer<typeof PresenceTool>
+
 /**
  * `presence` (≤ 20 Hz, bypasses the FIFO): no identity fields; the server adds them from the ticket.
  *
@@ -415,6 +464,14 @@ export const DragIn = z.strictObject({
  * null. A client sends it, and `view.z`, only to a room that announced rev 10 (the `contracts` frame);
  * once it has, it sends `f` (null included) in every presence message, and that is how the room knows
  * this socket reads the rev-10 presence fields. A rev-9 room refuses both (strict: INVALID_MESSAGE).
+ *
+ * `t` and `trail` (CONTRACTS_REV 12, the shared laser): `t` is 'laser' while this tab's laser is pressed,
+ * else null; `trail` the samples taken since the previous send (integer scene points, oldest first), only
+ * with `t: 'laser'`. A client sends `t` (null included) in every presence message on a socket whose room
+ * announced PRESENCE_LASER_REV or later, and that is how the room knows this socket reads the rev-12
+ * presence fields; a rev-11 room refuses both (strict). The room drops a `trail` sent without `t: 'laser'`
+ * or with more than MAX_LASER_TRAIL_POINTS points and keeps the rest of the message; above
+ * MAX_LASER_TRAIL_POINTS_WIRE the message is INVALID. Nothing of it is ever stored.
  */
 export const PresenceIn = z.strictObject({
   type: z.literal('presence'),
@@ -427,6 +484,8 @@ export const PresenceIn = z.strictObject({
   editing: ElementId.nullable(),
   drag: DragIn.nullable().optional(),
   f: SessionId.nullable().optional(),
+  t: PresenceTool.nullable().optional(),
+  trail: z.array(LaserPoint).max(MAX_LASER_TRAIL_POINTS_WIRE).optional(),
 })
 export const Ping = z.strictObject({ type: z.literal('ping'), n: NonNegInt.optional() })
 /**
@@ -779,6 +838,9 @@ export const Roster = z.strictObject({ type: z.literal('roster'), events: z.arra
  * One peer in a presence frame (identity is in the roster, by `sid`). `sel` is null while a dot vote is
  * open. To a rev-10 recipient (one that sent `f`) only: `f`, the session this peer follows (left out when
  * it follows nobody), and `view.z`, its zoom; a rev-9 recipient gets neither (its parse is strict).
+ * To a rev-12 recipient (one that sent `t`) only: `t` while the peer's laser is pressed (left out
+ * otherwise) and `trail`, its latest samples (at most MAX_LASER_TRAIL_POINTS); a rev-11 recipient gets
+ * neither (its parse is strict). `presenceForReader` is the one rule for what each revision gets.
  */
 export const PeerPresence = z.strictObject({
   sid: SessionId,
@@ -789,8 +851,37 @@ export const PeerPresence = z.strictObject({
   idle: z.boolean(),
   editing: ElementId.nullable(),
   f: SessionId.nullable().optional(),
+  t: PresenceTool.optional(),
+  trail: z.array(LaserPoint).max(MAX_LASER_TRAIL_POINTS).optional(),
 })
 export type PeerPresence = z.infer<typeof PeerPresence>
+
+/**
+ * The presence revisions a recipient socket can read (CONTRACTS_REV 9 to 12 change presence at 10 and 12):
+ * 9 (it never sent `f`), 10 (it sent `f`: rev 10 and 11 clients) and 12 (it sent `t`).
+ */
+export type PresenceReaderRev = 9 | 10 | 12
+/** The presence revision of a client that announced contracts revision `rev` by what it sends. */
+export const presenceReaderRev = (rev: number): PresenceReaderRev =>
+  rev >= PRESENCE_LASER_REV ? 12 : rev >= PRESENCE_FOLLOW_REV ? 10 : 9
+
+/**
+ * What the room sends a recipient that reads presence revision `reader` of a peer's full entry (the one
+ * rule, CONTRACTS_REV 12): a rev-10 reader (rev 10 and 11 clients) gets no `t` and no `trail`, a rev-9 reader
+ * also no `f` and no `view.z`. Returns `peer` itself when nothing is to be left out (no copy per recipient).
+ * The result always parses with the reader's own strict schema (protocol.test.ts pins it).
+ */
+export function presenceForReader(peer: PeerPresence, reader: PresenceReaderRev): PeerPresence {
+  if (reader >= 12) return peer
+  const laser = peer.t !== undefined || peer.trail !== undefined
+  const follow = reader < 10 && (peer.f !== undefined || peer.view?.z !== undefined)
+  if (!laser && !follow) return peer
+  const { t: _t, trail: _trail, ...rest } = peer
+  if (!follow) return rest
+  const { f: _f, ...plain } = rest
+  const v = plain.view
+  return { ...plain, view: v ? { x: v.x, y: v.y, w: v.w, h: v.h } : null }
+}
 /** The most session ids one `followers` list carries (a room has fewer sessions than this in practice). */
 export const MAX_FOLLOWERS = 2_000
 /**

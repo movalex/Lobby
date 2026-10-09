@@ -42,13 +42,13 @@ const move = (c: RawClient, id: string, x: number) => ({
 
 describe('push receipts (CONTRACTS_REV 11, W5-ENG-2)', () => {
   it(
-    'the room says rev 11; a push with a receipt id that wrote is answered landed at its clock; others are not',
+    'the room says rev 11 or later; a push with a receipt id that wrote is answered landed at its clock; others are not',
     async () => {
       const st = await h.stack()
       const b = newBoardId()
       const a = await st.client({ boardId: b, user: 'alice' })
       expect(a.of('contracts').at(-1)).toEqual({ type: 'contracts', rev: CONTRACTS_REV })
-      expect(CONTRACTS_REV).toBe(11)
+      expect(CONTRACTS_REV).toBeGreaterThanOrEqual(11) // 12 since wave L (the laser): receipts are unchanged
       await a.create([rect('r1')])
       const landed = await pushRid(a, 'pg1.1', [move(a, 'r1', 40)])
       expect(landed.r[0]).toMatchObject({ ok: true })

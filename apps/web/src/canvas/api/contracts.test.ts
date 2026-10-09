@@ -96,6 +96,7 @@ function fakeBoard(): BoardHandles {
       get: () => ({ grid: false, snap: false, focusMode: false, wheel: 'auto' as const }),
       set: noop,
     },
+    room: { contractsRev: () => 12 },
     docWritten: noop,
     newId: () => 'fresh',
   }
@@ -301,6 +302,36 @@ describe('the LobbyCanvas member table', () => {
     dispose()
   })
 
+  it('wave L: room.contractsRev is null on a bare port, the board session’s value on the board page, reactive on `room`', () => {
+    const bare = createLobbyCanvas({ port: fakePort(), registries: createFeatureRegistries() })
+    expect(bare.canvas.room.contractsRev()).toBeNull()
+    bare.dispose()
+    let rev: number | null = null
+    const listeners = new Set<() => void>()
+    const board = {
+      ...fakeBoard(),
+      subscribe: (c: string, l: () => void) => {
+        if (c === 'room') listeners.add(l)
+        return () => listeners.delete(l)
+      },
+      room: { contractsRev: () => rev },
+    } as unknown as BoardHandles
+    const { canvas, dispose } = createLobbyCanvas({
+      port: fakePort(),
+      registries: createFeatureRegistries(),
+      board,
+    })
+    const seen: (number | null)[] = []
+    const stop = signals.react('room-rev', () => {
+      seen.push(canvas.room.contractsRev())
+    })
+    rev = 12
+    for (const l of listeners) l()
+    expect(seen).toEqual([null, 12])
+    stop()
+    dispose()
+  })
+
   it("2C's composed tx writes run on a bare port (group, reorder, frames)", () => {
     const writes: [string, Record<string, unknown>][] = []
     const els = new Map<string, CanvasElement>(
@@ -391,6 +422,7 @@ describe('the LobbyCanvas member table', () => {
       LobbyExport: 'export.',
       LobbyFiles: 'files.',
       LobbySettings: 'settings.',
+      LobbyRoom: 'room.',
       LobbyCanvas: '',
       TransactOptions: 'transact.',
     }

@@ -27,22 +27,30 @@ import {
   LeaseHookRequest,
   LeaseRelease,
   MAX_FOLLOWERS,
+  MAX_LASER_TRAIL_POINTS,
+  MAX_LASER_TRAIL_POINTS_WIRE,
   MAX_PRESENCE_ZOOM,
   MAX_RECEIPT_IDS,
   Notice,
   Op,
   PatchOp,
+  PeerPresence,
   Ping,
   Pong,
   PRESENCE_FOLLOW_REV,
+  PRESENCE_LASER_REV,
+  PRESENT_MINS_REV,
   PROTO,
   PresenceIn,
   PresenceOut,
   Push,
   PushEnvelope,
+  presenceForReader,
+  presenceReaderRev,
   RECEIPTS_REV,
   REJECT_CODE_INFO,
   REJECT_CODES,
+  RESTORE_ELEMENTS_REV,
   Receipts,
   ReceiptsQuery,
   Roster,
@@ -171,6 +179,35 @@ const CLIENT: Record<string, unknown[]> = {
       idle: false,
       editing: null,
       f: null,
+    },
+    // CONTRACTS_REV 12: the laser pressed, with the samples since the last send (sent only to a rev-12 room)
+    {
+      type: 'presence',
+      pointer: { x: 300, y: 120 },
+      button: 'down',
+      sel: [],
+      view: { x: 0, y: 0, w: 1280, h: 720, z: 1 },
+      idle: false,
+      editing: null,
+      f: null,
+      t: 'laser',
+      trail: [
+        { x: 280, y: 118 },
+        { x: 290, y: 119 },
+        { x: 300, y: 120 },
+      ],
+    },
+    // CONTRACTS_REV 12: the laser released (a rev-12 sender says t: null in every message)
+    {
+      type: 'presence',
+      pointer: { x: 300, y: 120 },
+      button: 'up',
+      sel: [],
+      view: null,
+      idle: false,
+      editing: null,
+      f: null,
+      t: null,
     },
   ],
   ping: [{ type: 'ping' }, { type: 'ping', n: 7 }],
@@ -369,6 +406,26 @@ const SERVER: Record<string, unknown[]> = {
       followers: ['usr_9876543210:tab-2', 'usr_x123456789:tab-3'],
     },
     { type: 'presence', peers: [], followers: [] },
+    // CONTRACTS_REV 12, to a rev-12 recipient: a peer's laser and its latest samples
+    {
+      type: 'presence',
+      peers: [
+        {
+          sid: holder.sid,
+          pointer: { x: 300, y: 120 },
+          button: 'down',
+          sel: [],
+          view: { x: 0, y: 0, w: 800, h: 600, z: 1 },
+          idle: false,
+          editing: null,
+          t: 'laser',
+          trail: [
+            { x: 280, y: 118 },
+            { x: 300, y: 120 },
+          ],
+        },
+      ],
+    },
   ],
   contracts: [
     { type: 'contracts', rev: 10 },
@@ -600,8 +657,8 @@ describe('CONTRACTS_REV 10: follow target, zoom, followers, the contracts frame'
   const ok = (s: ZodType, v: unknown) => expect(s.safeParse(v).success).toBe(true)
   const bad = (s: ZodType, v: unknown) => expect(s.safeParse(v).success).toBe(false)
 
-  it('presence follow starts at revision 10 (the room speaks rev 11 since wave C)', () => {
-    expect(CONTRACTS_REV).toBe(11)
+  it('presence follow starts at revision 10 (the room speaks rev 12 since wave L)', () => {
+    expect(CONTRACTS_REV).toBeGreaterThanOrEqual(PRESENCE_FOLLOW_REV)
     expect(PRESENCE_FOLLOW_REV).toBe(10)
   })
 
@@ -676,8 +733,8 @@ describe('CONTRACTS_REV 11: push receipts', () => {
   const ok = (s: ZodType, v: unknown) => expect(s.safeParse(v).success).toBe(true)
   const bad = (s: ZodType, v: unknown) => expect(s.safeParse(v).success).toBe(false)
 
-  it('is revision 11, receipts start at it', () => {
-    expect(CONTRACTS_REV).toBe(11)
+  it('receipts start at revision 11 (the room speaks rev 12 since wave L)', () => {
+    expect(CONTRACTS_REV).toBeGreaterThanOrEqual(RECEIPTS_REV)
     expect(RECEIPTS_REV).toBe(11)
     expect(MAX_RECEIPT_IDS).toBe(64)
   })
@@ -718,5 +775,117 @@ describe('CONTRACTS_REV 11: push receipts', () => {
     bad(Receipts, { type: 'receipts', req: 1, landed: { 'a.1': -1 }, from: 0 })
     bad(Receipts, { type: 'receipts', req: 1, landed: {}, from: 0, extra: true })
     bad(Receipts, { type: 'receipts', req: 1, landed: {} })
+  })
+})
+
+// ---- CONTRACTS_REV 12 (wave L: the shared laser) and the ends one revision older ------------------------------
+//
+// The stale-client pairs at the protocol layer (the plan's shared contract 4): (a) a rev-11 tab in a rev-12
+// room, (b) a rev-12 tab in a rev-11 room. Rev 11's presence is rev 10's (receipts changed no presence).
+
+/** Rev 11's presence schemas, as a rev-11 client or room parses them (strict: `f`, `view.z`, no `t`). */
+const Rect11 = z.strictObject({
+  x: z.number(),
+  y: z.number(),
+  w: z.number(),
+  h: z.number(),
+  z: z.number().positive().optional(),
+})
+const PresenceIn11 = z.strictObject({
+  type: z.literal('presence'),
+  pointer: z.strictObject({ x: z.number(), y: z.number() }).nullable(),
+  button: z.enum(['up', 'down']),
+  sel: z.union([z.array(z.string()), z.strictObject({ count: z.number() })]),
+  view: Rect11.nullable(),
+  idle: z.boolean(),
+  editing: z.string().nullable(),
+  drag: z.unknown().optional(),
+  f: z.string().nullable().optional(),
+})
+const PeerPresence11 = PresenceIn11.omit({ type: true, drag: true }).extend({
+  sid: z.string(),
+  sel: z.union([z.array(z.string()), z.strictObject({ count: z.number() })]).nullable(),
+})
+/** Rev 11's server message types (a rev-11 client drops a frame of another type). */
+const ServerTypes11 = [...ServerTypes10, 'receipts']
+
+describe('CONTRACTS_REV 12: the shared laser, present.mins and the restore marker', () => {
+  const ok = (s: ZodType, v: unknown) => expect(s.safeParse(v).success).toBe(true)
+  const bad = (s: ZodType, v: unknown) => expect(s.safeParse(v).success).toBe(false)
+  const laserIn = () => CLIENT.presence?.[5] as Record<string, unknown>
+  const laserPeer = () =>
+    PeerPresence.parse((SERVER.presence as { peers: unknown[] }[])[3]?.peers[0]) as ReturnType<
+      typeof PeerPresence.parse
+    >
+
+  it('is revision 12; the laser, present.mins and the restore route all start at it', () => {
+    expect(CONTRACTS_REV).toBe(12)
+    expect(PRESENCE_LASER_REV).toBe(12)
+    expect(PRESENT_MINS_REV).toBe(12)
+    expect(RESTORE_ELEMENTS_REV).toBe(12)
+    expect(MAX_LASER_TRAIL_POINTS).toBe(6)
+    expect(MAX_LASER_TRAIL_POINTS_WIRE).toBeGreaterThan(MAX_LASER_TRAIL_POINTS)
+    expect([9, 10, 11, 12, 13].map(presenceReaderRev)).toEqual([9, 10, 10, 12, 12])
+  })
+
+  it('(a) a rev-11 tab in a rev-12 room: everything it sends parses as before (the new fields are optional)', () => {
+    const rev11 = (CLIENT.presence ?? []).filter((m) => !('t' in (m as object)))
+    expect(rev11.length).toBeGreaterThanOrEqual(5)
+    for (const m of rev11) {
+      ok(PresenceIn11, m)
+      ok(PresenceIn, m)
+      ok(ClientMessage, m)
+    }
+    // it gets no new server message type: the rev-12 room's frames are all of rev-11 types
+    expect(discriminators(ServerMessage).filter((t) => !ServerTypes11.includes(t))).toEqual([])
+  })
+
+  it('(a) what the room sends a rev-11 (or older) tab: presenceForReader leaves out t and trail; the raw entry would be refused', () => {
+    const peer = laserPeer()
+    bad(PeerPresence11, peer) // why the room gates per socket: a rev-11 client's strict parse drops the frame
+    const for11 = presenceForReader(peer, 10)
+    ok(PeerPresence11, for11)
+    expect(for11).not.toHaveProperty('t')
+    expect(for11).not.toHaveProperty('trail')
+    expect(for11.view?.z).toBe(1) // a rev-10/11 reader keeps the zoom
+    const for9 = presenceForReader(peer, 9)
+    ok(PeerPresence9, for9)
+    expect(for9.view).toEqual({ x: 0, y: 0, w: 800, h: 600 })
+    ok(PresenceOut, { type: 'presence', peers: [for11] })
+    // a rev-12 reader gets the entry itself; an entry with nothing to leave out is never copied
+    expect(presenceForReader(peer, 12)).toBe(peer)
+    const plain = PeerPresence.parse((SERVER.presence as { peers: unknown[] }[])[0]?.peers[0])
+    expect(presenceForReader(plain, 9)).toBe(plain)
+    expect(presenceForReader(plain, 10)).toBe(plain)
+    const rich = PeerPresence.parse((SERVER.presence as { peers: unknown[] }[])[1]?.peers[0])
+    expect(presenceForReader(rich, 10)).toBe(rich)
+    ok(PeerPresence9, presenceForReader(rich, 9))
+  })
+
+  it('(b) a rev-12 tab in a rev-11 room: without its laser fields every message is one the rev-11 room accepts', () => {
+    const msg = laserIn()
+    ok(PresenceIn, msg)
+    bad(PresenceIn11, msg) // a rev-11 room: INVALID_MESSAGE, the socket closes (why the tab gates on rev 12)
+    bad(PresenceIn11, { ...msg, trail: undefined }) // `t` alone is refused too
+    const { t: _t, trail: _trail, ...asRev11 } = msg
+    ok(PresenceIn11, asRev11)
+    ok(PresenceIn, asRev11)
+  })
+
+  it('the laser fields: t is the laser or null; trail integer points, at most 32 in and 6 out', () => {
+    const msg = laserIn()
+    const pts = (n: number) => Array.from({ length: n }, (_, i) => ({ x: i, y: -i }))
+    ok(PresenceIn, { ...msg, trail: pts(MAX_LASER_TRAIL_POINTS_WIRE) })
+    bad(PresenceIn, { ...msg, trail: pts(MAX_LASER_TRAIL_POINTS_WIRE + 1) })
+    ok(PresenceIn, { ...msg, trail: [] })
+    bad(PresenceIn, { ...msg, trail: [{ x: 1.5, y: 0 }] })
+    bad(PresenceIn, { ...msg, trail: [{ x: 1e9, y: 0 }] })
+    bad(PresenceIn, { ...msg, trail: [{ x: 1, y: 2, z: 3 }] })
+    bad(PresenceIn, { ...msg, t: 'pen' })
+    ok(PresenceIn, { ...msg, t: null, trail: undefined })
+    const peer = laserPeer()
+    ok(PeerPresence, { ...peer, trail: pts(MAX_LASER_TRAIL_POINTS) })
+    bad(PeerPresence, { ...peer, trail: pts(MAX_LASER_TRAIL_POINTS + 1) }) // a 7-point trail out is refused
+    bad(PeerPresence, { ...peer, t: null }) // out, a released laser is left out, never null
   })
 })
