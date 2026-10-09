@@ -6,14 +6,16 @@
 //    walks the connections (a11y's walk, told the arrow by ./runtime.ts) and the live region names them.
 //  - L4-2 Diagram from words (../ai/diagram/DiagramPrompt.tsx): the AI group's "Diagram from words…" and the
 //    command 'flow.diagram'.
+//  - L4-3 Mermaid paste (./MermaidPaste.tsx): a pasted flowchart becomes the same native diagram, no AI.
 //
-// W3 registers it in features/canvas-registry.ts BEFORE a11y (its contextual Ctrl/Cmd+Shift+Arrow is asked first),
-// through ./ported/index.tsx. With it absent, the board is exactly as before: the wave L chords stay blocked by the
-// allowlist and Alt+Arrow walks the reading order.
+// W3 registers it in features/canvas-registry.ts BEFORE a11y (its contextual Ctrl/Cmd+Shift+Arrow is asked first).
+// With it absent, the board is exactly as before: the wave L chords stay blocked by the allowlist, Alt+Arrow walks
+// the reading order, a pasted flowchart is bulk paste's.
 import type { CanvasFeature } from '../../canvas/api/index.ts'
 import { DIAGRAM_COMMAND, DIAGRAM_MENU, DiagramPrompt } from '../ai/diagram/DiagramPrompt.tsx'
 import { FlowHandles } from './Handles.tsx'
 import { FLOW_KEYS } from './keys.ts'
+import { MERMAID_PASTE_HANDLER, MermaidPastePrompt } from './MermaidPaste.tsx'
 import { mountFlow } from './runtime.ts'
 
 export const feature: CanvasFeature = {
@@ -21,9 +23,11 @@ export const feature: CanvasFeature = {
   keys: FLOW_KEYS,
   commands: [DIAGRAM_COMMAND],
   contextMenu: [DIAGRAM_MENU],
+  contentHandlers: [MERMAID_PASTE_HANDLER],
   overlays: [
     // the layers take no clicks; their buttons and dialogs do (pointer-events on their own elements)
     { id: 'flow.handles', layer: 'screen', order: 40, pointer: 'none', component: FlowHandles },
+    { id: 'flow.mermaid-paste', layer: 'screen', order: 61, pointer: 'none', component: MermaidPastePrompt },
     { id: 'flow.diagram-prompt', layer: 'screen', order: 62, pointer: 'none', component: DiagramPrompt },
   ],
   onMount: (ctx) => mountFlow(ctx),
