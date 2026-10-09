@@ -89,6 +89,8 @@ export const OVERFLOW_TOOLS: readonly BuiltInToolInfo[] = [
 export const READONLY_TOOLS: readonly BuiltInToolInfo[] = [
   { id: 'select', label: 'Select', key: 'v' },
   { id: 'hand', label: 'Hand', key: 'h' },
+  // wave L (L6-1): the shared laser, so a viewer can point for everyone (K, keymap.ts's read-only branch)
+  { id: 'laser', label: 'Laser', key: 'k' },
 ]
 
 /** The toolbar's templates entry opens this dock panel (navigation's). */

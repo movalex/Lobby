@@ -781,6 +781,8 @@ export function classifyKey(e: KeyLike, ctx: KeyContext): KeyVerdict {
       if (letterIs(e, 'v')) return { kind: 'lobby', action: 'tool:select' }
       if (letterIs(e, 'h')) return { kind: 'lobby', action: 'tool:hand' }
       if (letterIs(e, 'c')) return { kind: 'lobby', action: 'tool:comment' }
+      // wave L (L6-1): read-only client reviewers point with the shared laser (the engine allows it, CR-3A-8)
+      if (letterIs(e, 'k')) return { kind: 'lobby', action: 'tool:laser' }
     }
     return block(e)
   }

@@ -4,7 +4,7 @@
 // page's debug handle.
 import type { Browser, BrowserContextOptions, Page } from '@playwright/test'
 import { signInContext } from '../tests/support/api.ts'
-import { type CanvasSession, expect, setDoc, setTool, waitForCanvas } from '../tests/support/canvas.ts'
+import { type CanvasSession, expect, setDoc, waitForCanvas } from '../tests/support/canvas.ts'
 import type { Users } from '../tests/support/users.ts'
 import { emptyCanvasPoint, focusBoard, pushCount } from './board-kit.ts'
 
@@ -73,13 +73,13 @@ export async function pickLaser(page: Page) {
 }
 
 /**
- * A read-only role picks the laser through the canvas API (`canvas.setTool('laser')`, what a toolbar button or
- * a key would do): today K and the read-only toolbar offer only Select and Hand to viewers (keymap.ts's
- * read-only branch and canvas-ux READONLY_TOOLS, W3's), while the engine lets them point (CR-3A-8).
+ * A read-only role picks the laser as a viewer does (wave L integration, L6-1): the read-only toolbar offers it
+ * (canvas-ux READONLY_TOOLS) and K picks it (keymap.ts's read-only branch); the engine lets them point (CR-3A-8).
  */
 export async function pickLaserReadOnly(page: Page) {
+  await expect(page.getByTestId('tools.laser')).toBeVisible()
   await focusBoard(page)
-  expect(await setTool(page, 'laser')).toBe(true)
+  await page.keyboard.press('k')
   await expect.poll(() => toolOf(page)).toBe('laser')
 }
 

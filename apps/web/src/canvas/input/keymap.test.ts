@@ -569,6 +569,13 @@ describe('classifyKey: read-only roles', () => {
     expect(kind(classifyKey(k('mod+f'), READONLY))).toBe('lobby:search')
     expect(kind(classifyKey(k('c'), READONLY))).toBe('lobby:tool:comment')
   })
+
+  it('K picks the laser (wave L, L6-1: viewers point for everyone); Shift+K, Ctrl/Cmd+K and Alt+K do not', () => {
+    expect(kind(classifyKey(k('k'), READONLY))).toBe('lobby:tool:laser')
+    expect(kind(classifyKey(k('shift+k'), READONLY))).not.toBe('lobby:tool:laser')
+    expect(kind(classifyKey(k('alt+k'), READONLY))).not.toBe('lobby:tool:laser')
+    expect(kind(classifyKey(k('mod+k'), READONLY))).not.toBe('lobby:tool:laser')
+  })
 })
 
 describe('classifyKey: read-only roles copy where the export policy lets them (CR-3A-4)', () => {
