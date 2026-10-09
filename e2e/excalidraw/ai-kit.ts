@@ -28,6 +28,8 @@ export const WAVE_L_SCHEMA_NAMES = {
   diagram: 'lobby_diagram',
   sort: 'lobby_sort',
   score: 'lobby_score',
+  // 'actions' with a voteSessionId (W1, L1-7): its own model schema
+  votedActions: 'lobby_voted_actions',
 } as const
 
 /**

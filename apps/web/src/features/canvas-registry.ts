@@ -12,12 +12,15 @@ import { feature as navigationFeature } from './canvas-ux/ported/navigation/inde
 import { feature as commandPaletteFeature } from './command-palette/index.tsx'
 import { feature as commentsFeature } from './comments/ported/index.tsx'
 import { feature as cursorChatFeature } from './cursor-chat/ported/index.tsx'
+import { feature as flowFeature } from './flow/ported/index.tsx'
 import { feature as historyFeature } from './history/ported/index.tsx'
 import { feature as mindmapFeature } from './mindmap/ported/index.tsx'
 import { feature as peopleFeature } from './people/ported/index.tsx'
+import { feature as piecesFeature } from './pieces/ported/index.tsx'
 import { feature as presentLiveFeature } from './present-export/live/ported/index.tsx'
 import { feature as presentExportFeature } from './present-export/ported/index.tsx'
 import { feature as sharingFeature } from './sharing/ported/index.tsx'
+import { feature as sortFeature } from './sort/ported/index.tsx'
 import { feature as tagsFeature } from './tags/ported/index.tsx'
 import { feature as thumbnailsFeature } from './thumbnails/ported/index.tsx'
 import { feature as workshopsFeature } from './workshops/ported/index.tsx'
@@ -37,11 +40,17 @@ export const CANVAS_FEATURES: readonly CanvasFeature[] = [
   tagsFeature,
   aiFeature,
   mediaFeature,
+  // wave L (W4, L4-1/L4-3): flow building and Mermaid paste, BEFORE a11y (its contextual 'flow.repeat' is asked first)
+  flowFeature,
   a11yFeature,
   // wave K (K6-4): cursor chat, a change request of its own (its '/' and its two overlays)
   cursorChatFeature,
   // wave L (W3, L3-2): the Ctrl/Cmd+K command palette (the wave L key claim 'palette'). W3 registers every
   // wave L feature folder here: features/flow (W4) goes BEFORE a11yFeature (its contextual 'flow.repeat' is
-  // asked first); features/sort and features/pieces (W8) after this line. Each exports `feature` from index.tsx.
+  // asked first); features/sort and features/pieces (W8) after this line. Each exports `feature` from index.tsx
+  // (registered here by its ported/index.tsx re-export, the path the contracts test reads).
   commandPaletteFeature,
+  // wave L (W8, L8-1/L8-2 and L8-3): sort and place, and the shape kits (Pieces), registered together
+  sortFeature,
+  piecesFeature,
 ]
