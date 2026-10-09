@@ -41,7 +41,10 @@ export function downloadsAllowed(ctx: CanvasFeatureContext, guest: boolean | nul
 /** Tells the person downloads are off (the export policy's own words). */
 export function notifyDownloadsOff(ctx: CanvasFeatureContext): void {
   // wave K.1: before the first policy answer nothing is known to be off yet
-  if (policyOf(ctx.board.id).get() === null) return notifyExportPending(ctx.notify)
+  if (policyOf(ctx.board.id).get() === null) {
+    notifyExportPending(ctx.notify)
+    return
+  }
   ctx.notify({ key: 'export-off', text: EXPORT_OFF_TEXT, testId: 'export-off-toast', timeoutMs: 5000 })
 }
 

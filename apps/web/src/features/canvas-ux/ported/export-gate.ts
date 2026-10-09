@@ -90,7 +90,10 @@ export const exportPending = (ctx: Pick<CanvasFeatureContext, 'board'>): boolean
 export function notifyExportOff(
   ctx: Pick<CanvasFeatureContext, 'notify'> & Partial<Pick<CanvasFeatureContext, 'board'>>,
 ) {
-  if (ctx.board && exportPending({ board: ctx.board })) return notifyExportPending(ctx.notify)
+  if (ctx.board && exportPending({ board: ctx.board })) {
+    notifyExportPending(ctx.notify)
+    return
+  }
   ctx.notify({ key: 'export-off', text: EXPORT_OFF_TEXT, testId: 'export-off-notice', timeoutMs: 6000 })
 }
 
