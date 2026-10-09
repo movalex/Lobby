@@ -139,6 +139,17 @@ export const aiFlash = perCanvas<Atom<AiFlashState | null>>(() =>
   atom<AiFlashState | null>('lobby-ai-flash', null),
 )
 
+/** How many of this tab's own run ids are remembered (./working.tsx: never a shimmer for one of them). */
+export const OWN_RUNS_KEPT = 50
+/** The run ids this tab's own AI requests were answered with, newest last (L2-1e; this page only). */
+export const aiOwnRuns = perCanvas<string[]>(() => [])
+export function noteOwnRun(canvas: LobbyCanvas, runId: string | null | undefined): void {
+  if (!runId) return
+  const list = aiOwnRuns(canvas)
+  if (!list.includes(runId)) list.push(runId)
+  if (list.length > OWN_RUNS_KEPT) list.splice(0, list.length - OWN_RUNS_KEPT)
+}
+
 /**
  * Wave L: the private panels (the summary, Ask's answer, the recap) are one at a time per canvas: opening one
  * closes the others. Each module registers how its own panel closes (so this module imports none of them).

@@ -12,7 +12,7 @@ import { AI_EVENTS, AI_WORKING_TTL_MS } from '@draftroom/contracts'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { runAi } from './actions.ts'
+import { runAi, runPublic } from './actions.ts'
 import { applyNotes } from './apply.ts'
 import { AiLensOverlay, aiLens, lensLine } from './lens.tsx'
 import { aiPreview, previewOwnsEscape } from './preview.tsx'
@@ -26,6 +26,7 @@ import {
   addWorking,
   aiWorking,
   endWorking,
+  isOwnRun,
   listenAiWorking,
   liveWorking,
 } from './working.tsx'
@@ -325,5 +326,25 @@ describe('the preview’s Escape (L2-1b)', () => {
     expect(previewOwnsEscape(key(null), doc(true), panel)).toBe(false)
     expect(previewOwnsEscape(key(null, { isComposing: true }), doc(), panel)).toBe(false)
     expect(previewOwnsEscape(key(null, { key: 'Enter' }), doc(), panel)).toBe(false)
+  })
+})
+
+describe('this tab’s own run (L2-1e)', () => {
+  const ev = (runId: string, name: string) => ({ runId, name, action: 'themes' as const, rect: null })
+
+  it('a late ai.working of a run this tab was answered with shows no shimmer; a colleague’s does', async () => {
+    const k = aiKit(four())
+    k.answer(themesAnswer(RUN_A))
+    k.canvas.select(['n1', 'n2', 'n3', 'n4'])
+    const done = runPublic(k.ctx, {
+      action: 'themes',
+      shapeIds: ['shape:n1', 'shape:n2', 'shape:n3', 'shape:n4'],
+    })
+    await done
+    // the job has ended: the name rule no longer applies, the run id does
+    expect(aiJob(k.canvas).get()).toBeNull()
+    expect(isOwnRun(k.canvas, 'Ana', ev(RUN_A, 'Ana'))).toBe(true)
+    expect(isOwnRun(k.canvas, 'Ana', ev(RUN_B, 'Bo'))).toBe(false)
+    expect(isOwnRun(k.canvas, 'Ana', ev(RUN_B, 'Ana'))).toBe(false)
   })
 })

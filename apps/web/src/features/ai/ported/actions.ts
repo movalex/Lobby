@@ -53,6 +53,7 @@ import {
   aiPanel,
   aiStatus,
   getAiCtx,
+  noteOwnRun,
   openingPrivatePanel,
   setAiCtx,
 } from './runtime.ts'
@@ -284,6 +285,8 @@ async function sendRun(
   }
   if (aiJob(canvas).get()?.id !== job.id) return null // cancelled while the answer was on its way
   aiJob(canvas).set(null)
+  // an `ai.working` of this run that arrives late shows no shimmer here (./working.tsx isOwnRun)
+  noteOwnRun(canvas, result.runId)
   const now = aiStatus(canvas).get() ?? status
   aiStatus(canvas).set({ ...now, noticeAccepted: true, budget: result.budget ?? now.budget })
   return result

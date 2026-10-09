@@ -11,7 +11,7 @@ import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/inde
 import { type Atom, atom, useValue } from '../../../lib/signals.ts'
 import { SparkIcon } from '../icons.tsx'
 import { useReducedMotion } from './Placeholders.tsx'
-import { aiJob, perCanvas } from './runtime.ts'
+import { aiJob, aiOwnRuns, perCanvas } from './runtime.ts'
 import { onScreen, toPixels } from './shimmer.ts'
 
 export interface WorkingEntry {
@@ -105,8 +105,14 @@ export function listenAiWorking(
   }
 }
 
-/** Whether `ev` is this tab's own run: a request of this tab is running, under this person's name. */
+/**
+ * Whether `ev` is this tab's own run: one this tab's requests were answered with (its `ai.working` came late), or,
+ * while a request of this tab is running (its run id is not known until the answer), one under this person's
+ * name. The event carries no account id, so a colleague with the same display name is not told apart in that
+ * moment (cosmetic: the shimmer is hidden for those seconds).
+ */
 export function isOwnRun(canvas: LobbyCanvas, myName: string, ev: AiWorkingEvent): boolean {
+  if (aiOwnRuns(canvas).includes(ev.runId)) return true
   return aiJob(canvas).get() !== null && ev.name.trim() === myName.trim()
 }
 
