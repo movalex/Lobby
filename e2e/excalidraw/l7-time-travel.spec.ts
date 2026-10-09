@@ -6,6 +6,8 @@
 //  - scrubbing 10 checkpoints stays under GET /api/snapshots/:sid/content's 60 a minute (a tick is asked for once
 //    the scrubber rests on it; a quick scrub asks for the last one only); the p95 tick-to-preview on a board of
 //    500 elements is recorded and under 400 ms; the keyboard moves the scrubber (Left/Right, Home/End);
+//  - a checkpoint saved while the scrubber rests (the list refreshed within SCRUB_DEBOUNCE_MS) does not drop the
+//    load of the tick it rests on; a tick refused as over the rate limit (429) says so and offers "Try again";
 //  - axe finds nothing on the open dialog;
 //  - a viewer scrubs and sees the changes but is offered no restore;
 //  - two browsers: A restores 3 notes (2 deleted since, 1 moved), B sees them within sync latency and pushes
@@ -240,6 +242,84 @@ test('scrubbing 10 checkpoints of a 500-element board: under the rate limit, key
   expect(statuses.length).toBeLessThan(60)
   expect(Date.now() - startedAt).toBeLessThan(120_000)
   expect(p95).toBeLessThan(400)
+})
+
+test('a checkpoint saved while the scrubber rests does not drop its load; a tick refused (429) offers Try again', async ({
+  canvasSession,
+  board,
+  users,
+}) => {
+  test.setTimeout(120_000)
+  const a = await canvasSession('alice')
+  const api = await users.api('alice')
+  await createItem(a.page, 'note', {
+    id: 'sc1',
+    x: 0,
+    y: 0,
+    text: 'Scrub',
+    backgroundColor: NOTE_FILL.yellow,
+  })
+  await expectSaved(a.page)
+  const one = await saveCheckpoint(api, board, 'One')
+  await moveBy(a.page, 'sc1', 0, 100)
+  await saveCheckpoint(api, board, 'Two')
+  await moveBy(a.page, 'sc1', 0, 100)
+  await saveCheckpoint(api, board, 'Three')
+  // the oldest one's content is refused as over the rate limit (the route's own 429 body) until the route goes
+  const refused = `**/api/snapshots/${one}/content`
+  await a.page.route(refused, (route) =>
+    route.fulfill({
+      status: 429,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        error: { code: 'RATE_LIMITED', message: 'Rate limit exceeded, retry in 1 minute' },
+      }),
+    }),
+  )
+  await openHistory(a.page)
+  const d = await openTimeTravel(a.page)
+  await expect(timeline(a.page)).toHaveAttribute('aria-valuemax', '3')
+
+  await test.step('a checkpoint saved by someone while the scrubber rests: the tick it rests on still opens', async () => {
+    await moveBy(a.page, 'sc1', 0, 100)
+    // the panel's list refresh (on the checkpoint event) is held until the scrubber has moved, then lands
+    // within the scrubber's rest (SCRUB_DEBOUNCE_MS)
+    const list = /\/api\/boards\/[^/]+\/snapshots$/
+    let release: () => void = () => {}
+    const released = new Promise<void>((r) => {
+      release = r
+    })
+    let held = false
+    await a.page.route(list, async (route) => {
+      if (route.request().method() !== 'GET') return route.fallback()
+      const response = await route.fetch()
+      held = true
+      await released
+      await route.fulfill({ response })
+    })
+    await saveCheckpoint(api, board, 'Four')
+    await expect.poll(() => held, { message: 'the panel refetched the list' }).toBe(true)
+    await timeline(a.page).focus()
+    await a.page.keyboard.press('ArrowLeft')
+    release()
+    await expect(timeline(a.page)).toHaveAttribute('aria-valuemax', '4')
+    await expect(timeline(a.page)).toHaveAttribute('aria-valuetext', /^Two, /)
+    await expectDrawn(a.page, 5_000)
+    await a.page.unroute(list)
+  })
+
+  await test.step('a tick refused as over the rate limit says to try again in a moment; Try again opens it', async () => {
+    await a.page.keyboard.press('Home')
+    await expect(timeline(a.page)).toHaveAttribute('aria-valuetext', /^One, /)
+    const error = d.getByTestId('checkpoint-preview-error')
+    await expect(error).toContainText('Try again in a moment.')
+    await a.page.unroute(refused)
+    await d.getByTestId('checkpoint-preview-retry').click()
+    await expectDrawn(a.page)
+    await expect(error).toHaveCount(0)
+    // the keyboard stays in the dialog, on the scrubber
+    await expect(timeline(a.page)).toBeFocused()
+  })
 })
 
 test('the time-travel dialog passes the accessibility audit (axe), changes listed', async ({

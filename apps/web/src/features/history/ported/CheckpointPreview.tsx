@@ -17,7 +17,9 @@
 // Wave L, time travel (L7-1, L7-2; owner W7):
 //  - a timeline of the board's checkpoints under the bitmap (./Timeline.tsx): the preview swaps per tick,
 //    keeping its camera. A tick's content is asked for once the scrubber rested on it (SCRUB_DEBOUNCE_MS) and
-//    kept in a small in-memory LRU (./content-cache.ts): GET /api/snapshots/:sid/content is 60 a minute;
+//    kept in a small in-memory LRU (./content-cache.ts): GET /api/snapshots/:sid/content is 60 a minute. The
+//    neighbour ahead is asked for after a longer rest (PREFETCH_IDLE_MS) and never after a 429; a tick refused
+//    as over the limit says to try again in a moment, with "Try again";
 //  - "Show changes": the checkpoint against the board now (./diff.ts), outlined over the bitmap and counted in
 //    words (a status line and a list), hidden mind-map branches left out (and not drawn);
 //  - for editors in a room at RESTORE_ELEMENTS_REV: pick objects (a click on the bitmap, Shift to add, the
@@ -25,7 +27,7 @@
 //    everyone (the History panel calls the api and offers "Undo restore").
 
 import type { BoardCheckpoint, CheckpointContent } from '@draftroom/contracts'
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { isApiError } from '../../../api/client.ts'
 import {
   type CheckpointPreviewHandle,
@@ -36,7 +38,7 @@ import { pluralize } from '../../../lib/format.ts'
 import { prefersFirstFrame } from '../../canvas-ux/start-view.ts'
 import type { HistoryApi } from '../api.ts'
 import { checkpointMeta, checkpointTitle } from '../checkpoints-model.ts'
-import { ContentCache, debounced } from './content-cache.ts'
+import { ContentCache, ScrubLoader } from './content-cache.ts'
 import { boundsOf, diffCheckpoint, diffSummary, hiddenBranchIds, isRestorable } from './diff.ts'
 import { checkpointPreviewSource, firstFrameBounds, previewElementCounts, previewTexts } from './model.ts'
 import { Timeline } from './Timeline.tsx'
@@ -49,8 +51,24 @@ const LIVE_DIFF_DELAY_MS = 300
 
 type Shown =
   | { status: 'loading'; id: string }
-  | { status: 'error'; id: string; message: string }
+  /** `retry`: worth asking again (over the rate limit, a server or network failure): "Try again" is offered */
+  | { status: 'error'; id: string; message: string; retry: boolean }
   | { status: 'ready'; id: string; content: CheckpointContent }
+
+/** GET /api/snapshots/:sid/content is 60 a minute (shared with the plain preview): a refused tick says so. */
+const RATE_LIMITED =
+  'Lobby opened a lot of checkpoints in the last minute, so this one has to wait. Try again in a moment.'
+
+function failure(id: string, e: unknown): Shown {
+  if (isApiError(e) && e.kind === 'rate-limited')
+    return { status: 'error', id, message: RATE_LIMITED, retry: true }
+  return {
+    status: 'error',
+    id,
+    message: isApiError(e) ? e.message : 'This checkpoint could not be opened.',
+    retry: isApiError(e) && (e.kind === 'server' || e.kind === 'network'),
+  }
+}
 
 /** What the History panel lets the dialog do on the live board (wave L, L7-2). */
 export interface RestoreElementsAction {
@@ -140,58 +158,45 @@ export function CheckpointPreview({
   }, [])
 
   // ---- contents: asked for once the scrubber rests, kept in a small LRU --------------------------------
+  // One loader per dialog: it reads the timeline through a ref, so a checkpoint saved or pruned meanwhile (the
+  // panel refetches the list on every checkpoint event) never drops the load waiting for the scrubber's rest.
+  const tickIds = useRef<readonly string[]>([])
+  tickIds.current = ticks.map((c) => c.id)
   const cache = useMemo(() => new ContentCache((id: string) => api.checkpointContent(id)), [api])
-  const prefetch = useCallback(
-    (from: number) => {
-      const step = direction.current >= 0 ? 1 : -1
-      const next = ticks[from + step]
-      if (next && !cache.has(next.id)) void cache.get(next.id).catch(() => undefined)
-    },
-    [cache, ticks],
-  )
-  const load = useMemo(
+  const loader = useMemo(
     () =>
-      debounced((id: string) => {
-        cache.get(id).then(
-          (content) => {
-            if (currentId.current !== id) return
-            setShown({ status: 'ready', id, content })
-            prefetch(ticks.findIndex((c) => c.id === id))
-          },
-          (e: unknown) => {
-            if (currentId.current !== id) return
-            setShown({
-              status: 'error',
-              id,
-              message: isApiError(e) ? e.message : 'This checkpoint could not be opened.',
-            })
-          },
-        )
+      new ScrubLoader<CheckpointContent>({
+        cache,
+        ticks: () => tickIds.current,
+        onReady: (id, content) => {
+          if (currentId.current === id) setShown({ status: 'ready', id, content })
+        },
+        onError: (id, e) => {
+          if (currentId.current === id) setShown(failure(id, e))
+        },
+        isRateLimited: (e) => isApiError(e) && e.kind === 'rate-limited',
       }),
-    [cache, prefetch, ticks],
+    [cache],
   )
   const first = useRef(true)
-  const lastTick = useRef<string | null>(null)
   useEffect(() => {
     const id = current.id
-    if (lastTick.current === id) return
-    lastTick.current = id
     setPicked(new Set())
     setRestoreNote(null)
-    const hit = cache.peek(id)
-    if (hit) {
-      load.cancel()
-      setShown({ status: 'ready', id, content: hit })
-      prefetch(ticks.findIndex((c) => c.id === id))
-      return
-    }
     setShown((s) => (s.status === 'ready' && s.id === id ? s : { status: 'loading', id }))
-    load.call(id)
-    // the dialog's first checkpoint is asked for at once
-    if (first.current) load.flush()
+    // the dialog's first checkpoint is asked for at once (from memory, `loader` answers at once)
+    loader.show(id, { now: first.current, direction: direction.current })
     first.current = false
-  }, [current.id, cache, load, prefetch])
-  useEffect(() => () => load.cancel(), [load])
+  }, [current.id, loader])
+  useEffect(() => () => loader.stop(), [loader])
+  const retry = () => {
+    // the button goes with the error: the keyboard stays in the dialog, on the scrubber (else Zoom to fit)
+    ref.current
+      ?.querySelector<HTMLElement>('[data-testid="history-timeline"], [data-testid="checkpoint-preview-fit"]')
+      ?.focus()
+    setShown({ status: 'loading', id: current.id })
+    loader.show(current.id, { now: true })
+  }
 
   const content = shown.status === 'ready' ? shown.content : null
   const elements = content?.elements ?? null
@@ -348,6 +353,7 @@ export function CheckpointPreview({
 
   const title = checkpointTitle(current)
   const error = shown.status === 'error' ? shown.message : drawError
+  const shownIsCurrent = shown.status === 'ready' && shown.id === current.id
   const now = new Date()
   const summary = diff ? diffSummary(diff) : null
   const changeCount = diff ? diff.entries.length : 0
@@ -413,6 +419,19 @@ export function CheckpointPreview({
               data-testid="checkpoint-preview-error"
             >
               {error}
+              {shown.status === 'error' && shown.retry && (
+                <>
+                  {' '}
+                  <button
+                    type="button"
+                    className="dr-btn dr-btn--ghost"
+                    data-testid="checkpoint-preview-retry"
+                    onClick={retry}
+                  >
+                    Try again
+                  </button>
+                </>
+              )}
             </p>
           )}
           {isV1 && (
@@ -564,9 +583,12 @@ export function CheckpointPreview({
                   type="button"
                   className="dr-btn dr-btn--primary"
                   data-testid="history-restore-elements"
-                  disabled={restoreElements.busy || toRestore.ids.length === 0 || shown.status !== 'ready'}
+                  disabled={restoreElements.busy || toRestore.ids.length === 0 || !shownIsCurrent}
                   aria-busy={restoreElements.busy}
                   onClick={() => {
+                    // the picks are of the tick drawn: never sent against another one (the render between a tick
+                    // change and the effect that clears them)
+                    if (!shownIsCurrent) return
                     if (toRestore.tooMany) {
                       setRestoreNote('Pick at most 200 objects to restore at once.')
                       return
