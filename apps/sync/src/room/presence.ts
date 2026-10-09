@@ -49,6 +49,18 @@
 //    reads them once it has sent `f` (a rev-10 client sends `f` in every message after the room's
 //    `contracts` frame); every other socket gets the rev-9 entries (no `f`, no `view.z`), which a
 //    rev-9 client's strict parse accepts. A socket's first `f` re-sends what it holds, now with them.
+//  - CONTRACTS_REV 12 (wave L, L6-1): the shared laser. A message with `t` ('laser' while the sender's laser
+//    is pressed, else null) makes its socket a rev-12 reader (a rev-12 client sends `t`, null included, in
+//    every message after the room's `contracts` frame), which also reads the rev-10 fields. `t: 'laser'` is
+//    relayed as `PeerPresence.t`, with `trail`: the samples since the peer's last relayed entry (the
+//    samples of every message of the tick, and the pointer of each but the last, thinned evenly to at most
+//    MAX_LASER_TRAIL_POINTS, oldest first), so a 10 Hz frame carries the 20 Hz input's path. A `trail`
+//    without `t: 'laser'` or with more than MAX_LASER_TRAIL_POINTS points is dropped and the rest of the
+//    message kept (above MAX_LASER_TRAIL_POINTS_WIRE the schema refuses the message). Every other socket gets
+//    what `presenceForReader` gives its revision: no `t`, no `trail` (a rev-11 client's strict parse). A
+//    trail goes out once: after the tick that carried it, the peer's entry keeps `t` and drops `trail`.
+//    Rates are unchanged (20 Hz in, 10 Hz out), the anonymous vote still relays `button` as 'up' (a laser
+//    press casts no dot), a read-only session's laser is relayed like its cursor, and nothing is stored.
 //  - The drag relay (open item 6): ids once per drag (the first frame after its start, and in `welcome`),
 //    then `{sid, d, dx, dy}`, then `{sid, d, end: true}`. Not subject to the cursor cap. Checks are shape
 //    and caps only: at most 500 ids, one active drag per session, and a read-only session's drag is
@@ -59,9 +71,14 @@ import { CURSORS_PER_RECIPIENT, MAX_DRAG_IDS, PRESENCE_IN_HZ } from '@draftroom/
 import {
   CONTRACTS_REV,
   type DragOut,
+  type LaserPoint,
   MAX_FOLLOWERS,
+  MAX_LASER_TRAIL_POINTS,
+  MAX_LASER_TRAIL_POINTS_WIRE,
   type PeerPresence,
   type PresenceIn,
+  type PresenceReaderRev,
+  presenceForReader,
   type RosterEntry,
 } from '@draftroom/canvas-schema/protocol'
 
@@ -96,10 +113,28 @@ export const DRAG_TTL_MS = 15_000
  */
 export const DRAG_MAX_MS = 60_000
 
+/**
+ * `points` thinned to at most `n`, evenly, keeping the first and the last (a laser trail's shape; its order).
+ * The same array when it has no more than `n`.
+ */
+export function thinTrail(points: readonly LaserPoint[], n: number): LaserPoint[] {
+  if (points.length <= n) return points as LaserPoint[]
+  if (n <= 1) return points.length ? [points[points.length - 1] as LaserPoint] : []
+  const out: LaserPoint[] = []
+  for (let i = 0; i < n; i++) out.push(points[Math.round((i * (points.length - 1)) / (n - 1))] as LaserPoint)
+  return out
+}
+
 interface Peer {
   readonly sid: string
-  /** the rev-10 entry (`f` when it follows someone, `view.z` when it sent one); `plainOf` is rev 9's */
+  /**
+   * the full entry, as a rev-12 reader gets it (`f` when it follows someone, `view.z` when it sent one, `t`
+   * while its laser is pressed, `trail` until the tick that sends it); `presenceForReader` gives each older
+   * reader's
+   */
   presence: PeerPresence
+  /** the laser samples since its last relayed entry (CONTRACTS_REV 12), oldest first */
+  trail: LaserPoint[]
   /** the session it follows (never itself), or null */
   f: string | null
   dirty: boolean
@@ -170,8 +205,10 @@ interface RecipientState {
    * sessions each with its place (IN, OUT, NONE; FOLLOWED for the peer it follows) as of its last tick
    */
   readonly held: Map<string, Slot>
-  /** it has sent `f`: it reads the rev-10 fields (`f`, `view.z`, `followers`) */
+  /** it has sent `f` (or `t`): it reads the rev-10 fields (`f`, `view.z`, `followers`) */
   rich: boolean
+  /** it has sent `t` (CONTRACTS_REV 12): it reads the laser fields (`t`, `trail`) too */
+  laser: boolean
   /** every peer it holds goes again on the next tick (it just became rich: it holds them without f, z) */
   resend: boolean
   /** the followers list it holds, joined ('' for none: it starts with none) */
@@ -247,6 +284,10 @@ export class PresenceHub {
   inCount = 0
   outCount = 0
   droppedDrags = 0
+  /** presence messages taken with the laser pressed (CONTRACTS_REV 12) */
+  laserIn = 0
+  /** laser trails dropped (no `t: 'laser'` with them, or more than MAX_LASER_TRAIL_POINTS points) */
+  droppedTrails = 0
   /** recipients ranked (CR-3C-1's rank, above 41 sessions; welcomes included) */
   rankCalls = 0
   /** a view's peers sorted by place for a tick (`Bucket`): at most once per distinct view per tick */
@@ -284,6 +325,7 @@ export class PresenceHub {
           idle: false,
           editing: null,
         },
+        trail: [],
         f: null,
         dirty: false,
         tokens: PRESENCE_IN_HZ,
@@ -309,6 +351,7 @@ export class PresenceHub {
       r = {
         held: new Map(),
         rich: false,
+        laser: false,
         resend: false,
         followers: '',
         ranked: false,
@@ -335,8 +378,9 @@ export class PresenceHub {
    * One presence message from a session. Returns false when it was dropped by the 20 Hz cap. `vote`: an
    * open vote drops `sel`; an open ANONYMOUS one also relays `button` as 'up' (RT-03). A boolean means an
    * open anonymous vote, or none (every open vote is anonymous today, workshop-state.ts). `key` is the
-   * sending socket's handle: a message with `f` (null included) makes that socket a rev-10 reader, also
-   * when the 20 Hz cap drops the rest of the message.
+   * sending socket's handle: a message with `f` (null included) makes that socket a rev-10 reader, one with
+   * `t` (null included) a rev-12 reader (rev 10's fields and the laser's), also when the 20 Hz cap drops the
+   * rest of the message.
    */
   input(
     sid: string,
@@ -348,12 +392,18 @@ export class PresenceHub {
     const voteOpen = typeof vote === 'boolean' ? vote : vote.voteOpen
     const secretBallot = typeof vote === 'boolean' ? vote : vote.voteOpen && vote.anonymous
     const p = this.peer(sid, readonly)
-    if (key !== undefined && msg.f !== undefined) {
+    if (key !== undefined && (msg.f !== undefined || msg.t !== undefined)) {
       const r = this.recipient(key)
       if (!r.rich) {
         r.rich = true
         r.resend = true
         r.followers = ''
+        this.wake = true
+      }
+      // CONTRACTS_REV 12: what it holds goes again, now with the laser fields of whoever has the laser down
+      if (msg.t !== undefined && !r.laser) {
+        r.laser = true
+        r.resend = true
         this.wake = true
       }
     }
@@ -366,6 +416,26 @@ export class PresenceHub {
     // a session never follows itself; a rev-9 sender (no `f`) follows nobody the room knows of
     const f = typeof msg.f === 'string' && msg.f !== sid ? msg.f : null
     p.f = f
+    // CONTRACTS_REV 12: the laser. A trail without the laser pressed, or longer than an entry carries, is
+    // dropped (the rest of the message is kept, as a drag over MAX_DRAG_IDS is)
+    const laser = msg.t === 'laser'
+    let trail: readonly LaserPoint[] | undefined = msg.trail
+    if (trail !== undefined && (!laser || trail.length > MAX_LASER_TRAIL_POINTS)) {
+      this.droppedTrails++
+      trail = undefined
+    }
+    if (laser) {
+      this.laserIn++
+      // a second message within this tick: its predecessor's pointer is one of the samples between the two
+      // entries the recipients get (they see only the last pointer)
+      const prev = p.presence
+      if (p.dirty && prev.t === 'laser' && prev.pointer) p.trail.push(prev.pointer)
+      if (trail) for (const pt of trail) p.trail.push({ x: pt.x, y: pt.y })
+      // bounded whatever the burst (the 20 Hz bucket lets a burst of 20 through at once)
+      if (p.trail.length > MAX_LASER_TRAIL_POINTS_WIRE)
+        p.trail = thinTrail(p.trail, 2 * MAX_LASER_TRAIL_POINTS)
+    } else p.trail = []
+    const out = laser && p.trail.length ? thinTrail(p.trail, MAX_LASER_TRAIL_POINTS) : null
     p.presence = {
       sid,
       pointer: msg.pointer ? { x: Math.round(msg.pointer.x), y: Math.round(msg.pointer.y) } : null,
@@ -376,6 +446,8 @@ export class PresenceHub {
       idle: msg.idle,
       editing: msg.editing,
       ...(f ? { f } : {}),
+      ...(laser ? { t: 'laser' as const } : {}),
+      ...(out ? { trail: out === p.trail ? [...out] : out } : {}),
     }
     p.dirty = true
     this.peerVersion++
@@ -445,7 +517,7 @@ export class PresenceHub {
     return out
   }
 
-  /** The last presence of every peer (rev-10 entries). */
+  /** The last presence of every peer (full entries: a rev-12 reader's). */
   current(): PeerPresence[] {
     return [...this.peers.values()].map((p) => p.presence)
   }
@@ -453,7 +525,7 @@ export class PresenceHub {
   /**
    * A late joiner's first frame (right after its welcome), or null when there is nobody to show: every
    * other peer, or above 41 sessions the 40 it starts with (`rank`), as rev-9 entries (the socket has
-   * not said it reads rev 10 yet). What it holds starts as exactly this.
+   * not said it reads rev 10 or 12 yet). What it holds starts as exactly this.
    */
   welcomeFrame(key: number, sid: string): string | null {
     this.recipients.delete(key)
@@ -469,7 +541,7 @@ export class PresenceHub {
         if (p.sid !== sid) this.hold(r, { peer: p, place: UNRANKED, stamp: 0, since: 0 })
     if (!r.held.size) return null
     const peers: PeerPresence[] = []
-    for (const slot of r.held.values()) peers.push(this.plainOf(slot.peer))
+    for (const slot of r.held.values()) peers.push(presenceForReader(slot.peer.presence, 9))
     return JSON.stringify({ type: 'presence', peers })
   }
 
@@ -585,22 +657,6 @@ export class PresenceHub {
 
   forgetRecipient(key: number): void {
     this.recipients.delete(key)
-  }
-
-  /** The rev-9 entry of a peer: no `f`, no `view.z` (the same object when it has neither). */
-  private plainOf(p: Peer): PeerPresence {
-    const pr = p.presence
-    if (pr.f === undefined && pr.view?.z === undefined) return pr
-    const v = pr.view
-    return {
-      sid: pr.sid,
-      pointer: pr.pointer,
-      button: pr.button,
-      sel: pr.sel,
-      view: v ? { x: v.x, y: v.y, w: v.w, h: v.h } : null,
-      idle: pr.idle,
-      editing: pr.editing,
-    }
   }
 
   /** Every peer by its place in `view`, in the room's order (a tick shares one per distinct view). */
@@ -776,35 +832,41 @@ export class PresenceHub {
     // a changed peer is one with `sentIn === epoch` (no set lookup per recipient and held peer)
     for (const p of changed) p.sentIn = epoch
     const capped = this.peers.size > CURSORS_PER_RECIPIENT + 1
-    const shared = new Map<string, string>()
+    const shared = new Map<PresenceReaderRev, string>()
     // above the cap: the peers with a pointer (what a recipient does not hold of them could take a slot);
     // each distinct view's bucket is built when a recipient with that view is ranked (`bucketFor`)
     let pointers = 0
     if (capped) for (const p of this.peers.values()) if (p.presence.pointer) pointers++
-    // each changed peer is serialized once per tick and form (rev 10, rev 9); a recipient's frame joins the
-    // entries it gets (the same JSON as stringifying the object: `{type, peers, off?, drags?, followers?}`
-    // in that key order). On a 200-session board the per-view frames (40 cursors each, 200 recipients,
-    // 10 Hz) were about a third of sync's CPU in B9's steady state, most of it this serialization
-    const richJson = new Map<string, string>()
-    const plainJson = new Map<string, string>()
-    const entry = (p: Peer, rich: boolean): string => {
-      const cache = rich ? richJson : plainJson
+    // each changed peer is serialized once per tick and form (rev 12, rev 10, rev 9: `presenceForReader`); a
+    // recipient's frame joins the entries it gets (the same JSON as stringifying the object: `{type, peers,
+    // off?, drags?, followers?}` in that key order). On a 200-session board the per-view frames (40 cursors
+    // each, 200 recipients, 10 Hz) were about a third of sync's CPU in B9's steady state, most of it this
+    // serialization. A peer without the laser fields has one entry for rev 10 and rev 12 readers
+    const json12 = new Map<string, string>()
+    const json10 = new Map<string, string>()
+    const json9 = new Map<string, string>()
+    const entry = (p: Peer, reader: PresenceReaderRev): string => {
+      const pr = p.presence
+      const form: PresenceReaderRev =
+        reader === 12 && pr.t === undefined && pr.trail === undefined ? 10 : reader
+      const cache = form === 12 ? json12 : form === 10 ? json10 : json9
       let j = cache.get(p.sid)
       if (j === undefined) {
-        j = JSON.stringify(rich ? p.presence : this.plainOf(p))
+        j = JSON.stringify(presenceForReader(pr, form))
         cache.set(p.sid, j)
       }
       return j
     }
+    const readerOf = (st: RecipientState): PresenceReaderRev => (st.laser ? 12 : st.rich ? 10 : 9)
     const frameFor = (
       peers: readonly Peer[],
-      rich: boolean,
+      reader: PresenceReaderRev,
       ds: DragOut[],
       off?: readonly string[],
       fl?: readonly string[],
     ) => {
       let s = '{"type":"presence","peers":['
-      for (let i = 0; i < peers.length; i++) s += (i ? ',' : '') + entry(peers[i] as Peer, rich)
+      for (let i = 0; i < peers.length; i++) s += (i ? ',' : '') + entry(peers[i] as Peer, reader)
       s += ']'
       if (off?.length) s += `,"off":${JSON.stringify(off)}`
       if (ds.length) s += `,"drags":${JSON.stringify(ds)}`
@@ -835,7 +897,7 @@ export class PresenceHub {
       if (r.congested) {
         // a congested socket gets the drags only; what it holds and its followers list wait
         if (ds.length) {
-          r.send(frameFor([], false, ds))
+          r.send(frameFor([], 9, ds))
           this.outCount++
         }
         continue
@@ -864,13 +926,14 @@ export class PresenceHub {
             if (p.sid !== r.sid && !st.held.has(p.sid))
               this.hold(st, { peer: p, place: UNRANKED, stamp: 0, since: 0 })
           if (changed.length - (own ? 1 : 0) === 0 && !ds.length) continue
-          const cacheKey = own || ds.length !== drags.length ? null : st.rich ? 'rich' : 'plain'
-          let frame = cacheKey ? shared.get(cacheKey) : undefined
+          const reader = readerOf(st)
+          const cacheKey = own || ds.length !== drags.length ? null : reader
+          let frame = cacheKey !== null ? shared.get(cacheKey) : undefined
           if (!frame) {
             const list: Peer[] = []
             for (const p of changed) if (p.sid !== r.sid) list.push(p)
-            frame = frameFor(list, st.rich, ds)
-            if (cacheKey) shared.set(cacheKey, frame)
+            frame = frameFor(list, reader, ds)
+            if (cacheKey !== null) shared.set(cacheKey, frame)
           }
           r.send(frame)
           this.outCount++
@@ -945,8 +1008,15 @@ export class PresenceHub {
       st.resend = false
       if (fl) st.followers = flKey
       if (!peers.length && !ds.length && !off?.length && !fl) continue
-      r.send(frameFor(peers, st.rich, ds, off, fl))
+      r.send(frameFor(peers, readerOf(st), ds, off, fl))
       this.outCount++
+    }
+    // CONTRACTS_REV 12: a trail goes out once (the samples since the entry before it); the entry keeps `t`
+    for (const p of changed) {
+      if (p.presence.trail === undefined) continue
+      const { trail: _sent, ...rest } = p.presence
+      p.presence = rest
+      p.trail = []
     }
   }
 }

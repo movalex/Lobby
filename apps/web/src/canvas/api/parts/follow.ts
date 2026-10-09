@@ -11,6 +11,14 @@
  *   (a click, a pan, a box selection). tldraw ended it on wheel, pinch and camera moves, and the workshops
  *   feature added a plain click (FAC-02); a press on an overlay (a comment pin, the people list) is not a
  *   canvas press.
+ * - Pause and resume (wave L, W6, L6-3; `followTransition` below is the whole machine): this person's own
+ *   camera move does not drop the follow, it PAUSES it. `followChanged(null)` goes out as before and
+ *   `current()` is null (the camera follows nobody, and the room hears `f: null`), but `state()` keeps the
+ *   target: `{sid, status: 'paused'}`. `resume()` follows the same session again, with the same options (a
+ *   Gather's camera rule). The followed session leaving, `stop()` and Esc end it, paused or not; `start` of
+ *   anyone replaces it. The workshops feature still stops a follow on a plain click (FAC-02: its listener
+ *   runs before this one), so the pause comes from a wheel or a pinch, and from a press only where that
+ *   feature is not mounted.
  * - The camera writes go through `viewport.set(…, {force: true})`: view state, never a document write.
  * - CONTRACTS_REV 10 (CR-3C-1): whom this tab follows travels in its presence (`f`, through
  *   canvas/presence/follow-target.ts on the canvas's engine core), so the room always delivers the
@@ -30,8 +38,10 @@ import { atom, react, untracked } from '../../../lib/signals.ts'
 import { setPresenceFollow } from '../../presence/follow-target.ts'
 import type {
   Bounds,
+  CanvasInputEvent,
   FollowCamera,
   FollowOptions,
+  FollowState,
   LobbyCanvasEventMap,
   LobbyFollow,
 } from '../lobby-canvas.ts'
@@ -91,13 +101,58 @@ export function followerCamera(
   }
 }
 
+/** The follow's state (L6-3): stopped, or following / paused with the session it is about. */
+export type FollowMachine =
+  | { readonly kind: 'stopped' }
+  | { readonly kind: 'following' | 'paused'; readonly sid: string }
+
+/** What moves the follow (L6-3). */
+export type FollowEvent =
+  /** `start(sid)`: anyone, from any state */
+  | { readonly type: 'start'; readonly sid: string }
+  /** this person moved the camera themselves (a wheel, a pinch, a press on the canvas) */
+  | { readonly type: 'nudge' }
+  /** `resume()` */
+  | { readonly type: 'resume' }
+  /** the followed session left the board */
+  | { readonly type: 'leader-left' }
+  /** `stop()`, Esc */
+  | { readonly type: 'stop' }
+
+export const FOLLOW_STOPPED: FollowMachine = Object.freeze({ kind: 'stopped' as const })
+
+/**
+ * The follow's machine (L6-3), pure: `start` follows (from any state); a nudge pauses a follow (and changes
+ * nothing otherwise); `resume` follows the paused session again (and changes nothing otherwise); the leader
+ * leaving and `stop` (Esc) end it, paused or not.
+ */
+export function followTransition(state: FollowMachine, event: FollowEvent): FollowMachine {
+  switch (event.type) {
+    case 'start':
+      return { kind: 'following', sid: event.sid }
+    case 'nudge':
+      return state.kind === 'following' ? { kind: 'paused', sid: state.sid } : state
+    case 'resume':
+      return state.kind === 'paused' ? { kind: 'following', sid: state.sid } : state
+    case 'leader-left':
+    case 'stop':
+      return FOLLOW_STOPPED
+  }
+}
+
+/** Esc pressed by the person (not the text lease's synthetic one) */
+const isEscape = (e: CanvasInputEvent) => e.type === 'key-down' && e.key === 'Escape' && !e.synthetic
+
 export function createFollowPart(deps: PartDeps): FollowPart {
-  const followed = atom<string | null>('canvas.follow', null)
+  const machine = atom<FollowMachine>('canvas.follow', FOLLOW_STOPPED)
   const listeners = new Set<LobbyCanvasEventMap['followChanged']>()
+  /** what a follow runs (the camera's reactions, its listeners); `pausedTeardown` what a pause watches */
   const teardown: (() => void)[] = []
-  // the options of the current follow and its camera write (set by `start`)
+  const pausedTeardown: (() => void)[] = []
+  // the options of the current follow and its camera write (set by `start`; a pause keeps them)
   let options: FollowOptions | undefined
   let reapply: (() => void) | null = null
+  const move = (event: FollowEvent) => machine.set(followTransition(machine.get(), event))
 
   const emit = (sid: string | null) => {
     for (const l of [...listeners]) {
@@ -109,32 +164,88 @@ export function createFollowPart(deps: PartDeps): FollowPart {
     }
   }
 
-  const clear = () => {
+  /** Ends what a follow runs (its options stay for a pause's `resume`). */
+  const clearFollowing = () => {
     for (const off of teardown.splice(0)) off()
-    options = undefined
     reapply = null
   }
+  const clearPaused = () => {
+    for (const off of pausedTeardown.splice(0)) off()
+  }
 
-  const stop = () => {
-    if (followed.get() === null) return
-    clear()
-    followed.set(null)
-    setPresenceFollow(deps.self().engine, null)
+  /** stop() and Esc ('stop'), the followed session leaving ('leader-left'): stopped, from either state. */
+  const end = (event: 'stop' | 'leader-left') => {
+    const was = machine.get()
+    if (was.kind === 'stopped') return
+    clearFollowing()
+    clearPaused()
+    options = undefined
+    move({ type: event })
+    // a paused follow told the room and the listeners already
+    if (was.kind === 'following') {
+      setPresenceFollow(deps.self().engine, null)
+      emit(null)
+    }
+  }
+  const stop = () => end('stop')
+
+  /** This person moved the camera: the follow pauses (the target and its options are kept). */
+  const pause = () => {
+    const was = machine.get()
+    if (was.kind !== 'following') return
+    const canvas = deps.self()
+    clearFollowing()
+    move({ type: 'nudge' })
+    setPresenceFollow(canvas.engine, null)
+    // while paused: the followed session leaving, and Esc, end it
+    pausedTeardown.push(
+      react('canvas.follow.paused', () => {
+        if (canvas.collaborators().some((r) => r.sid === was.sid)) return
+        queueMicrotask(() => {
+          const now = machine.get()
+          if (now.kind === 'paused' && now.sid === was.sid) end('leader-left')
+        })
+      }),
+    )
+    pausedTeardown.push(
+      canvas.on('input', (e) => {
+        if (isEscape(e)) stop()
+      }),
+    )
     emit(null)
+  }
+
+  const resume = () => {
+    const was = machine.get()
+    if (was.kind !== 'paused') return
+    clearPaused()
+    begin(was.sid, options)
   }
 
   const start = (sid: string, opts?: FollowOptions) => {
     const canvas = deps.self()
     if (!sid || sid === (canvas.engine?.welcome?.sid ?? null)) return
-    if (followed.get() === sid) {
+    const was = machine.get()
+    if (was.kind === 'following' && was.sid === sid) {
       // already following them: new options (a summon over a plain follow), the same follow
       options = opts
       reapply?.()
       return
     }
-    clear()
+    clearFollowing()
+    clearPaused()
+    begin(sid, opts)
+  }
+
+  /** Follows `sid` with `opts` (from stopped, paused, or another follow). */
+  const begin = (sid: string, opts?: FollowOptions) => {
+    const canvas = deps.self()
     options = opts
-    followed.set(sid)
+    move({ type: 'start', sid })
+    const following = () => {
+      const m = machine.get()
+      return m.kind === 'following' && m.sid === sid
+    }
     let last: Bounds | null = null
     let lastZoom: number | null = null
     const apply = () => {
@@ -151,7 +262,7 @@ export function createFollowPart(deps: PartDeps): FollowPart {
       for (const ms of SETTLE_MS) {
         const t = setTimeout(() => {
           settleTimers.delete(t)
-          if (followed.get() === sid) untracked(apply)
+          if (following()) untracked(apply)
         }, ms)
         settleTimers.add(t)
       }
@@ -166,7 +277,7 @@ export function createFollowPart(deps: PartDeps): FollowPart {
         const here = canvas.collaborators().some((r) => r.sid === sid)
         if (!here) {
           queueMicrotask(() => {
-            if (followed.get() === sid) stop()
+            if (following()) end('leader-left')
           })
           return
         }
@@ -199,10 +310,11 @@ export function createFollowPart(deps: PartDeps): FollowPart {
         settle()
       }),
     )
-    // this person moving the camera themselves ends it
+    // this person moving the camera themselves pauses it (L6-3); Esc ends it
     teardown.push(
       canvas.on('input', (e) => {
-        if (e.type === 'wheel' || e.type === 'pinch' || e.type === 'pointer-down') stop()
+        if (e.type === 'wheel' || e.type === 'pinch' || e.type === 'pointer-down') pause()
+        else if (isEscape(e)) stop()
       }),
     )
     // the room hears whom this tab follows (presence `f`): it then always delivers their view
@@ -212,9 +324,17 @@ export function createFollowPart(deps: PartDeps): FollowPart {
 
   return {
     follow: {
-      current: () => followed.get(),
+      current: () => {
+        const m = machine.get()
+        return m.kind === 'following' ? m.sid : null
+      },
+      state: (): FollowState | null => {
+        const m = machine.get()
+        return m.kind === 'stopped' ? null : { sid: m.sid, status: m.kind }
+      },
       start,
       stop,
+      resume,
     },
     onFollowChanged(listener) {
       listeners.add(listener)

@@ -219,6 +219,22 @@
   border-width: 6px 0 6px 9px;
   border-color: transparent transparent transparent var(--edge-color, #6b7280);
 }
+/* L6-2 (wave L): a chip that stands for more people than its own ("+N", ../presence/compass.ts) */
+.lobby-edge-marker__more {
+  position: absolute;
+  top: -7px;
+  right: -9px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border: 1px solid #fff;
+  border-radius: 8px;
+  background: var(--dr-ink, #1b2330);
+  color: #fff;
+  font: 700 9px / 14px var(--dr-font, system-ui, sans-serif);
+  text-align: center;
+  pointer-events: none;
+}
 /* a finger needs 44 px (the chip's reach on the edge is chrome.tsx chipRadius: 22 + the 9 px arrow) */
 @media (pointer: coarse) {
   .lobby-edge-marker {
