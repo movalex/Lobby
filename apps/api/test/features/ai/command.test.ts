@@ -96,6 +96,35 @@ describe('the index', () => {
     expect(commandOf(res).truncated).toBe(true)
     expect(itemsOf(x.openai.requests.at(-1) as never).length).toBeLessThanOrEqual(MAX_ITEMS)
   })
+
+  it('a board too big for the index: frames first, then the objects most relevant to the instruction', async () => {
+    const x = await world()
+    const many: Record<string, unknown>[] = [...frame('G', 'Week plan', { x: 0, y: 0, w: 400, h: 400 })]
+    for (let k = 0; k < 1200; k++)
+      many.push(
+        ...note(`m${k}`, `Filler ${k} about catering`, { x: (k % 30) * 220, y: Math.floor(k / 30) * 220 }),
+      )
+    // the last three objects of the board, far down: invisible to a reading-order cut at 400
+    for (const k of [1, 2, 3])
+      many.push(...note(`p${k}`, `Pricing note ${k}`, { x: k * 220, y: 100_000, backgroundColor: '#ef8c82' }))
+    x.sync.setElements(x.board, many)
+    const res = await run(x.dave, x.board, cmd('find the pricing notes', 'find'))
+    expect(res.statusCode, res.body).toBe(200)
+    expect(commandOf(res).truncated).toBe(true)
+    const lines = itemsOf(x.openai.requests.at(-1) as never) as unknown as IndexLine[]
+    expect(lines.length).toBeLessThanOrEqual(MAX_ITEMS)
+    expect(lines.slice(0, 4).map((l) => [l.id, l.type, l.text])).toEqual([
+      ['n1', 'frame', 'Week plan'],
+      ['n2', 'note', 'Pricing note 1'],
+      ['n3', 'note', 'Pricing note 2'],
+      ['n4', 'note', 'Pricing note 3'],
+    ])
+    // an instruction no object matches keeps the reading order
+    expect((await run(x.dave, x.board, cmd('select everything', 'find'))).statusCode).toBe(200)
+    const plain = itemsOf(x.openai.requests.at(-1) as never).map((l) => l.text)
+    expect(plain.slice(0, 2)).toEqual(['Week plan', 'Filler 0 about catering'])
+    expect(plain).not.toContain('Pricing note 1')
+  })
 })
 
 describe('the plan', () => {

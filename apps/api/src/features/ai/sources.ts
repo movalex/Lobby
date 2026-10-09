@@ -702,11 +702,16 @@ export function collectRecapSources(snapshot: BoardSnapshotJson | ShapeMap, opts
  * frames as items of their own, frames first, then reading order; per item its type, Lobby colour name, the
  * alias of its frame (when that frame is in the index), its tag names and its text cut to INDEX_TEXT_CHARS.
  * Objects without text count too (a command can recolour or select them); files never show their names.
+ *
+ * `query` (the instruction): when the index does not all fit (MAX_ITEMS or the token budget), the frames
+ * still go first and the other objects follow most relevant to it first (rankByQuery, ties in reading
+ * order), so "find the pricing notes" on a big board still sees the pricing notes; `truncated` reports
+ * the cut.
  */
 export function collectIndex(
   snapshot: BoardSnapshotJson | ShapeMap,
   requested: readonly string[],
-  opts: { tokenBudget: number },
+  opts: { tokenBudget: number; query?: string },
 ): Sources {
   const shapes = shapeMapOf(snapshot)
   const r = readerOf(shapes)
@@ -723,37 +728,51 @@ export function collectIndex(
   eligible.sort((a, b) => Number(b.s.type === 'frame') - Number(a.s.type === 'frame') || r.readingOrder(a, b))
   for (const e of eligible) if (e.s.type === 'frame') r.addFrameName(e.s)
 
-  const items: SourceItem[] = []
-  const frameAlias = new Map<string, string>()
-  let spent = 0
-  let truncated = cut
-  for (const e of eligible) {
-    if (items.length >= MAX_ITEMS) {
-      truncated = true
-      break
+  const fillIndex = (list: readonly Eligible[]) => {
+    const items: SourceItem[] = []
+    const frameAlias = new Map<string, string>()
+    let spent = 0
+    let truncated = false
+    for (const e of list) {
+      if (items.length >= MAX_ITEMS) {
+        truncated = true
+        break
+      }
+      const alias = `n${items.length + 1}`
+      const item: SourceItem = {
+        alias,
+        id: e.s.id,
+        kind: INDEX_KIND[e.s.type] as SourceKind,
+        text: e.text,
+        extra: {
+          color: e.s.color,
+          frame: frameAlias.get(e.s.parentId) ?? null,
+          tags: e.s.tags,
+        },
+      }
+      const cost = estimateTokens(itemJson(item)) + 1
+      if (spent + cost > opts.tokenBudget) {
+        truncated = true
+        break
+      }
+      spent += cost
+      items.push(item)
+      if (e.s.type === 'frame') frameAlias.set(e.s.id, alias)
     }
-    const alias = `n${items.length + 1}`
-    const item: SourceItem = {
-      alias,
-      id: e.s.id,
-      kind: INDEX_KIND[e.s.type] as SourceKind,
-      text: e.text,
-      extra: {
-        color: e.s.color,
-        frame: frameAlias.get(e.s.parentId) ?? null,
-        tags: e.s.tags,
-      },
-    }
-    const cost = estimateTokens(itemJson(item)) + 1
-    if (spent + cost > opts.tokenBudget) {
-      truncated = true
-      break
-    }
-    spent += cost
-    items.push(item)
-    if (e.s.type === 'frame') frameAlias.set(e.s.id, alias)
+    return { items, truncated }
   }
-  return { items, frames: r.frameNames, truncated }
+
+  let filled = fillIndex(eligible)
+  if (filled.truncated && opts.query !== undefined) {
+    const frames = eligible.filter((e) => e.s.type === 'frame')
+    const rest = eligible.filter((e) => e.s.type !== 'frame')
+    const order = rankByQuery(
+      opts.query,
+      rest.map((e) => e.text),
+    )
+    filled = fillIndex([...frames, ...order.map((i) => rest[i] as Eligible)])
+  }
+  return { items: filled.items, frames: r.frameNames, truncated: cut || filled.truncated }
 }
 
 // ---- theme labels (L1-7) -----------------------------------------------------------------------------------

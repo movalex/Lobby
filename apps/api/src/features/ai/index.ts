@@ -372,7 +372,10 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
         }
       case 'command':
         return {
-          sources: collectIndex(shapes, wholeBoard(input.shapeIds), { tokenBudget }),
+          sources: collectIndex(shapes, wholeBoard(input.shapeIds), {
+            tokenBudget,
+            query: input.instruction,
+          }),
           windowFrom: null,
           topVoted: [],
         }
