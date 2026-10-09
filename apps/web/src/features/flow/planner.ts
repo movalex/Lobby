@@ -12,6 +12,8 @@
 //    along the direction; never over another element of the same level (a connector or a line may be crossed).
 //  - It is placed in the source's frame when the source is in one: the frame grows to hold it, FRAME_PAD clear
 //    of its edges (never shrinks; a locked or rotated frame does not grow, and the shape then stays outside it).
+//    A + handle dropped outside the source's frame puts the shape (and its connector) on the open canvas, and the
+//    frame stays as it is.
 //  - The connector is a bound elbow arrow (./connector.ts): its whole path unit in its creation props, from the
 //    source's side facing the new shape to the new shape's facing side; ./build.ts binds both ends.
 //
@@ -255,10 +257,15 @@ export function planConnected(
     : freeSlot(src, size, dir, obstacles)
   let frameGrow: ConnectedPlan['frameGrow'] = null
   let inFrame = false
-  if (frame) {
+  // a + handle dropped outside the source's frame puts the shape on the open canvas: the frame (a slide, a
+  // section) never grows to reach a drop point beyond it
+  const fb = frame ? boxOfElement(frame) : null
+  const dropInside =
+    !opts.at ||
+    (!!fb && opts.at.x >= fb.x && opts.at.x <= fb.x + fb.w && opts.at.y >= fb.y && opts.at.y <= fb.y + fb.h)
+  if (frame && fb && dropInside) {
     // the frame grows to hold it, FRAME_PAD clear of its edges (never shrinks; a locked or rotated frame stays
     // as it is, and the shape then goes on the open canvas). Only the frame's own box changes: its children stay.
-    const fb = boxOfElement(frame)
     const x1 = Math.min(fb.x, box.x - FRAME_PAD)
     const y1 = Math.min(fb.y, box.y - FRAME_PAD)
     const x2 = Math.max(fb.x + fb.w, box.x + box.w + FRAME_PAD)

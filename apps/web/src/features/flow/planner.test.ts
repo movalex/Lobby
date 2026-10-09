@@ -229,6 +229,34 @@ describe('planConnected: the frame parent', () => {
     expect(plan?.box.x).toBe(-300)
     expect(plan?.frameGrow).toEqual({ id: 'fr', x: -320, y: -50, width: 1170, height: 600 })
   })
+
+  it('a + handle dropped outside the frame: the shape and its connector go on the open canvas, the frame stays', () => {
+    // the frame spans -50..350 x -50..250; the source is inside it
+    const f = fakeFlowCanvas([FRAME, { ...RECT, frameId: 'fr' }])
+    const plan = planConnected(f.canvas, 'src', 'right', { newId, at: { x: 1200, y: 400 } })
+    expect(plan?.box).toEqual({ x: 1100, y: 350, w: 200, h: 100 })
+    expect(plan?.frameId).toBeNull()
+    expect(plan?.frameGrow).toBeNull()
+    expect(plan?.shape.props.frameId).toBeNull()
+    expect(plan?.arrow.frameId).toBeNull()
+    // a note too (it joins no frame in the bind)
+    const n = fakeFlowCanvas([
+      FRAME,
+      { id: 'nt', type: 'stickynote', x: 0, y: 0, width: 200, height: 200, frameId: 'fr' },
+    ])
+    const notePlan = planConnected(n.canvas, 'nt', 'right', { newId, at: { x: 1200, y: 400 } })
+    expect(notePlan?.frameId).toBeNull()
+    expect(notePlan?.frameGrow).toBeNull()
+  })
+
+  it('a + handle dropped inside the frame: the shape is the frame’s, which grows only to hold it', () => {
+    const f = fakeFlowCanvas([FRAME, { ...RECT, frameId: 'fr' }])
+    // dropped at (300, 200), inside; the shape (200 x 100 centred there) reaches 400 x 250
+    const plan = planConnected(f.canvas, 'src', 'right', { newId, at: { x: 300, y: 200 } })
+    expect(plan?.frameId).toBe('fr')
+    expect(plan?.arrow.frameId).toBe('fr')
+    expect(plan?.frameGrow).toEqual({ id: 'fr', x: -50, y: -50, width: 470, height: 320 })
+  })
 })
 
 describe('the connector', () => {
