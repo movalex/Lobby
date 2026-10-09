@@ -214,6 +214,7 @@ function nameTheCanvas(ctx: CanvasFeatureContext): () => void {
       alt: e.altKey,
       inTextEntry: e.target instanceof Element && isTextEntry(e.target),
       onBoard: boardFocused(root),
+      repeat: e.repeat,
     })
   }
   const onPointerDown = (e: PointerEvent) => {
@@ -234,7 +235,11 @@ function nameTheCanvas(ctx: CanvasFeatureContext): () => void {
     return true
   }
   const onFocusIn = (e: FocusEvent) => {
-    feedRing(canvas, { type: 'focus', onBoard: consider(e.target) })
+    feedRing(canvas, {
+      type: 'focus',
+      onBoard: consider(e.target),
+      textEntry: e.target instanceof Element && isTextEntry(e.target),
+    })
   }
   const onFocusOut = (e: FocusEvent) => {
     if (e.target instanceof HTMLElement && named.has(e.target)) feedRing(canvas, { type: 'leave' })

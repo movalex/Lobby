@@ -16,6 +16,7 @@ import {
   zoomToFit,
 } from '../tests/support/canvas.ts'
 import { boardHasFocus, frame, note, waitForA11y } from './a11y-kit.ts'
+import { emptyCanvasPoint, focusBoard } from './board-kit.ts'
 import { startPresenting } from './present-kit.ts'
 
 test.use({ viewport: { width: 1440, height: 900 } })
@@ -53,8 +54,7 @@ test('K2-1: double-click a note, type, Escape: no ring element and no outline on
   await zoomToFit(a.page)
 
   await clickItem(a.page, id)
-  // the pointer opens the editor (wave K.1: a key on the board, type-to-edit's first letter included, is the
-  // keyboard acting, and shows the ring as :focus-visible would)
+  // the pointer opens the editor (type-to-edit's path is the K.1 refix step below)
   await dblclickItem(a.page, id)
   await waitForTextEditor(a.page, id)
   await typeText(a.page, 'Hello there')
@@ -82,6 +82,30 @@ test('K2-1: double-click a note, type, Escape: no ring element and no outline on
     await expect.poll(() => boardHasFocus(a.page)).toBe(true)
     await a.page.keyboard.press('Escape')
     await a.page.keyboard.press('Shift')
+    await a.page.waitForTimeout(150)
+    expect((await ringAndOutlines(a.page)).ring).toBe(0)
+  })
+
+  await test.step('K.1 refix: type-to-edit (the typed letters open the editor), then Escape: no ring either', async () => {
+    await clickItem(a.page, id)
+    await a.page.keyboard.type('Hey') // the first key asks for the lease, the rest wait for it
+    await waitForTextEditor(a.page, id)
+    await a.page.keyboard.press('Escape')
+    await expect.poll(() => boardHasFocus(a.page)).toBe(true)
+    await a.page.waitForTimeout(150)
+    expect((await ringAndOutlines(a.page)).ring).toBe(0)
+  })
+
+  await test.step('K.1 refix: cursor chat ("/", a message, Enter) by a pointer user brings no ring back', async () => {
+    await focusBoard(a.page) // a click on empty canvas: nothing selected, the pointer rests on the board
+    const p = await emptyCanvasPoint(a.page)
+    await a.page.mouse.move(p.x - 40, p.y - 30, { steps: 4 })
+    await a.page.keyboard.press('/')
+    await expect(a.page.getByTestId('cursor-chat-input')).toBeFocused()
+    await a.page.keyboard.type('hi all', { delay: 15 })
+    await a.page.keyboard.press('Enter')
+    await expect(a.page.getByTestId('cursor-chat-input')).toHaveCount(0)
+    await expect.poll(() => boardHasFocus(a.page)).toBe(true)
     await a.page.waitForTimeout(150)
     expect((await ringAndOutlines(a.page)).ring).toBe(0)
   })

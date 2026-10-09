@@ -40,7 +40,7 @@ describe('the board focus ring (K2-1, UXD-05)', () => {
     expect(clicked.ring).toBe(false)
     // a tool's letter, an arrow (a nudge), Delete, Enter (edit), Space: the keyboard acts on the board
     for (const key of ['n', 'ArrowRight', 'Delete', 'Enter', ' ', 'PageDown'])
-      expect(nextRing(clicked, { type: 'key', key, onBoard: true }), key).toEqual({
+      expect(nextRing(clicked, { type: 'key', key, onBoard: true }), key).toMatchObject({
         modality: 'keyboard',
         ring: true,
       })
@@ -134,6 +134,68 @@ describe('the board focus ring (K2-1, UXD-05)', () => {
       expect(keyboardIntent({ key, inTextEntry: true }), key).toBe(false)
     expect(keyboardIntent({ key: 'Tab', inTextEntry: true })).toBe(true)
     expect(keyboardIntent({ key: 'F6', inTextEntry: true })).toBe(true)
+  })
+})
+
+describe('K.1 refix: keys that open a text entry, and key repeats (pointer users keep no ring)', () => {
+  const clicked: readonly RingInput[] = [{ type: 'pointerdown' }, { type: 'focus', onBoard: true }]
+  /** the key opened a text entry (cursor chat's composer, a note's editor): typed into, then closed */
+  const intoEntryAndBack = (close: string): readonly RingInput[] => [
+    { type: 'leave' },
+    { type: 'focus', onBoard: false, textEntry: true },
+    { type: 'key', key: 'h', inTextEntry: true },
+    { type: 'key', key: 'i', inTextEntry: true },
+    { type: 'key', key: close, inTextEntry: true },
+    { type: 'focus', onBoard: true },
+  ]
+
+  it('cursor chat by a pointer user: "/", a message, Enter, the focus back on the board: no ring', () => {
+    const s = run([...clicked, { type: 'key', key: '/', onBoard: true }, ...intoEntryAndBack('Enter')])
+    expect(s).toMatchObject({ modality: 'pointer', ring: false })
+  })
+
+  it('type-to-edit by a pointer user: click a note, type (its first letters open the editor), Escape: no ring', () => {
+    const s = run([
+      ...clicked,
+      { type: 'key', key: 'H', onBoard: true },
+      { type: 'key', key: 'e', onBoard: true }, // typed before the editor (its lease) opened
+      ...intoEntryAndBack('Escape'),
+    ])
+    expect(s).toMatchObject({ modality: 'pointer', ring: false })
+  })
+
+  it('a keyboard user who types to edit gets the ring back; a letter that opens nothing still shows it', () => {
+    const tabbed: readonly RingInput[] = [
+      { type: 'key', key: 'Tab' },
+      { type: 'focus', onBoard: true },
+    ]
+    expect(
+      run([...tabbed, { type: 'key', key: 'H', onBoard: true }, ...intoEntryAndBack('Escape')]).ring,
+    ).toBe(true)
+    expect(run([...clicked, { type: 'key', key: 'r', onBoard: true }])).toMatchObject({
+      modality: 'keyboard',
+      ring: true,
+    })
+    // Enter (not typing) to edit is the keyboard acting: the ring after Escape, as before
+    expect(
+      run([...clicked, { type: 'key', key: 'Enter', onBoard: true }, ...intoEntryAndBack('Escape')]).ring,
+    ).toBe(true)
+  })
+
+  it('Space held while dragging to pan: its key repeats do not flicker the ring', () => {
+    let s = run(clicked)
+    s = nextRing(s, { type: 'key', key: ' ', onBoard: true })
+    const trace: boolean[] = []
+    s = nextRing(s, { type: 'pointerdown' })
+    trace.push(s.ring)
+    for (let i = 0; i < 4; i++) {
+      s = nextRing(s, { type: 'pointermove', moved: true })
+      trace.push(s.ring)
+      s = nextRing(s, { type: 'key', key: ' ', onBoard: true, repeat: true })
+      trace.push(s.ring)
+    }
+    expect(trace.every((r) => r === false)).toBe(true)
+    expect(s.modality).toBe('pointer')
   })
 })
 

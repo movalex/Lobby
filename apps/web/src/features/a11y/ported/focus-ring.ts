@@ -11,7 +11,11 @@
 //  - Escape (closing an editor or a menu is not a move: a pointer user's Escape out of a note keeps no ring);
 //  - a modifier on its own (Shift, Ctrl, Alt, Meta, AltGr, the locks), dead keys and IME composition keys;
 //  - a chord with Ctrl, Meta or Alt (the browser's and the board's shortcuts; native :focus-visible ignores them too);
-//  - keys typed into a text field or the note editor (typing, Enter and Backspace in the words).
+//  - keys typed into a text field or the note editor (typing, Enter and Backspace in the words);
+//  - (K.1 refix) characters typed on the board that open a text entry (cursor chat's "/", type-to-edit's first
+//    letters): when the focus lands in a text field right after them, they were typing, and the modality goes
+//    back to what it was before them;
+//  - (K.1 refix) a key's auto-repeat (Space held to pan while dragging would flicker the ring at every repeat).
 // So:
 //  - pointer, edit, type, Escape: no ring (the last input that moved anything was the pointer);
 //  - pointer, then an arrow, Delete, Enter or a tool's letter on the board: the ring (the keyboard acts);
@@ -25,6 +29,11 @@ export interface RingState {
   readonly modality: Modality
   /** The ring is drawn. */
   readonly ring: boolean
+  /**
+   * K.1 refix: the modality before a run of characters typed on the board, kept until the next input; the focus
+   * landing in a text entry then restores it (those characters opened it).
+   */
+  readonly typed?: Modality
 }
 
 export const RING_START: RingState = Object.freeze({ modality: 'none', ring: false })
@@ -46,9 +55,11 @@ export type RingInput =
       readonly alt?: boolean
       readonly inTextEntry?: boolean
       readonly onBoard?: boolean
+      /** KeyboardEvent.repeat: the key is held down */
+      readonly repeat?: boolean
     }
   /** The focus arrived on an element; `onBoard`: the board's focusable canvas (not its text editor). */
-  | { readonly type: 'focus'; readonly onBoard: boolean }
+  | { readonly type: 'focus'; readonly onBoard: boolean; readonly textEntry?: boolean }
   /** The focus left the board's canvas. */
   | { readonly type: 'leave' }
   /** The keyboard was brought to the board on purpose (F6, "Skip to canvas"); `onBoard`: it has the focus now. */
@@ -97,6 +108,20 @@ export function keyboardIntent(k: {
 }
 
 export function nextRing(s: RingState, input: RingInput): RingState {
+  const out = step(s, input)
+  // the characters' run ends with any other input (the focus leaving the board is still part of it)
+  if (out.typed === undefined || input.type === 'leave') return out
+  if (input.type === 'key' && (input.repeat || isCharacter(input) || !keyboardIntent(input))) return out
+  if (input.type === 'pointermove' && !input.moved) return out
+  const { typed: _, ...rest } = out
+  return rest
+}
+
+/** A character typed on the board (no Ctrl, Meta or Alt; Space pans and opens nothing). */
+const isCharacter = (k: { readonly key: string; readonly inTextEntry?: boolean }) =>
+  k.key.length === 1 && k.key !== ' ' && !k.inTextEntry
+
+function step(s: RingState, input: RingInput): RingState {
   switch (input.type) {
     case 'pointerdown':
       return s.modality === 'pointer' && !s.ring ? s : { modality: 'pointer', ring: false }
@@ -104,12 +129,16 @@ export function nextRing(s: RingState, input: RingInput): RingState {
       if (!input.moved) return s
       return s.modality === 'pointer' && !s.ring ? s : { modality: 'pointer', ring: false }
     case 'key': {
-      if (!keyboardIntent(input)) return s
+      if (input.repeat || !keyboardIntent(input)) return s
       // the board has the focus: the keyboard acting on it shows the ring now (as :focus-visible would)
       const ring = s.ring || input.onBoard === true
+      if (isCharacter(input) && input.onBoard)
+        return { modality: 'keyboard', ring, typed: s.typed ?? s.modality }
       return s.modality === 'keyboard' && ring === s.ring ? s : { modality: 'keyboard', ring }
     }
     case 'focus': {
+      // the characters typed on the board opened this text entry: they were typing, not the keyboard acting
+      if (input.textEntry && s.typed !== undefined) return { modality: s.typed, ring: false }
       const ring = input.onBoard && s.modality === 'keyboard'
       return ring === s.ring ? s : { ...s, ring }
     }
