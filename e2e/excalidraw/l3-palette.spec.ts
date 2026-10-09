@@ -282,3 +282,25 @@ test('the dashboard’s palette: Ctrl+K lists this workspace’s boards (fetched
   await expect(a.page).toHaveURL(new RegExp(`/b/${target}$`))
   await waitForCanvas(a.page)
 })
+
+// Wave L integration (the W3 review, minor): with nothing typed and no recents the first line was Undo, so a
+// reflex Ctrl/Cmd+K, Enter undid the last change. Now no line is active until an arrow key or the pointer picks one.
+test('Ctrl+K then Enter with nothing typed runs nothing (no recents): the last change stays; an arrow key picks the first line', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  const n1 = await createNote(a.page, { x: 0, y: 0, text: 'Keep me' })
+  await expectSaved(a.page)
+  const pushes = (await pushedOps(a.page)).length
+  await openPalette(a.page)
+  await expect(activeOption(a.page)).toHaveCount(0)
+  await a.page.keyboard.press('Enter')
+  await expect(palette(a.page)).toBeVisible()
+  expect(await item(a.page, n1)).not.toBeNull()
+  expect((await pushedOps(a.page)).length).toBe(pushes)
+  await a.page.keyboard.press('ArrowDown')
+  await expect(activeOption(a.page)).toHaveCount(1)
+  await a.page.keyboard.press('Escape')
+  await expect(palette(a.page)).toHaveCount(0)
+  expect(await item(a.page, n1)).not.toBeNull()
+})

@@ -79,6 +79,16 @@ export function paletteSections(
   return [{ id: 'matches', title: 'Best matches', entries: ranked }]
 }
 
+/**
+ * The line the palette starts on: the first of the ranked matches or of Recent, but none (-1) when nothing is
+ * typed and there are no recents, so a reflex Ctrl/Cmd+K, Enter runs nothing (it used to run the first registered
+ * command, Undo; wave L integration, the W3 review). An arrow key or the pointer then picks a line.
+ */
+export function firstActiveLine(sections: readonly Pick<Section, 'id'>[]): number {
+  const first = sections[0]
+  return first && !first.id.startsWith('group:') ? 0 : -1
+}
+
 export function Palette(props: PaletteProps) {
   const { entries, queryEntries, searches, recents, onChoose, onClose } = props
   const [query, setQuery] = useState(props.initialQuery ?? '')
@@ -157,11 +167,15 @@ export function Palette(props: PaletteProps) {
   const flat = useMemo(() => sections.flatMap((s) => s.entries), [sections])
 
   // a new query starts at the top; a search that arrives later keeps the line the person is on
+  const [moved, setMoved] = useState(false)
   useEffect(() => {
     setActive(0)
+    setMoved(false)
     setStatus('')
   }, [q])
-  const activeIndex = flat.length ? Math.min(active, flat.length - 1) : -1
+  // nothing typed and no recents: no line until an arrow key or the pointer picks one (firstActiveLine)
+  const resting = !moved && firstActiveLine(sections) < 0
+  const activeIndex = flat.length && !resting ? Math.min(active, flat.length - 1) : -1
   const activeEntry = activeIndex >= 0 ? flat[activeIndex] : undefined
   const optionId = (i: number) => `${base}-opt-${i}`
 
@@ -198,6 +212,11 @@ export function Palette(props: PaletteProps) {
     const step = (d: number) => {
       e.preventDefault()
       if (!flat.length) return
+      if (resting) {
+        setMoved(true)
+        setActive(0)
+        return
+      }
       setActive((i) => Math.max(0, Math.min(flat.length - 1, Math.min(i, flat.length - 1) + d)))
     }
     switch (e.key) {
@@ -309,7 +328,10 @@ export function Palette(props: PaletteProps) {
                   data-group={entry.group}
                   data-active={i === activeIndex ? 'true' : undefined}
                   onMouseMove={() => {
-                    if (i !== activeIndex) setActive(i)
+                    if (i !== activeIndex) {
+                      setMoved(true)
+                      setActive(i)
+                    }
                   }}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => choose(entry)}

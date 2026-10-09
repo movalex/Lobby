@@ -25,7 +25,7 @@ import {
 } from './board-index.ts'
 import { isPaletteKey, type PaletteKeyLike } from './keys.ts'
 import { chooseEntry, type PaletteEntry, pushRecent, RECENTS_MAX, readRecents } from './model.ts'
-import { paletteSections } from './Palette.tsx'
+import { firstActiveLine, paletteSections } from './Palette.tsx'
 import { fold, rank, scoreEntry } from './scorer.ts'
 import { workspaceEntries } from './workspace-search.ts'
 
@@ -131,6 +131,16 @@ describe('the scorer (fixed corpus)', () => {
     expect(paletteSections([a, b, c], 'gam', []).map((s) => s.entries.map((e) => e.label))).toEqual([
       ['Gamma'],
     ])
+  })
+
+  it('nothing typed and no recents: no line is active (a reflex Ctrl/Cmd+K, Enter runs nothing, not Undo)', () => {
+    const undo = entry('Undo', { group: 'Edit' })
+    const lock = entry('Lock', { group: 'Arrange' })
+    expect(firstActiveLine(paletteSections([undo, lock], '', []))).toBe(-1)
+    // Recent first, or something typed: the first line, as before
+    expect(firstActiveLine(paletteSections([undo, lock], '', ['cmd:Lock']))).toBe(0)
+    expect(firstActiveLine(paletteSections([undo, lock], 'und', []))).toBe(0)
+    expect(firstActiveLine([])).toBe(-1)
   })
 })
 
