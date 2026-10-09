@@ -280,6 +280,47 @@ describe('the record of the run', () => {
     }
   })
 
+  it('taking the presentation back after a reload of this tab keeps the record and does not restart the section (round 2)', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-10-09T10:00:00Z'))
+      const first = setup()
+      answerTimers(first.kit, 2)
+      await first.present()
+      vi.advanceTimersByTime(130_000)
+      await first.go('f2')
+      vi.advanceTimersByTime(40_000)
+      // handed to B (this tab stops presenting), then this tab reloads while B presents
+      await first.present(false)
+      expect(timerCalls(first.kit)).toHaveLength(2)
+      first.agenda.dispose()
+      const second = setup()
+      answerTimers(second.kit, 2)
+      second.cur.set({ index: 1, slideId: 'f2', count: 3 })
+      vi.advanceTimersByTime(10_000)
+      // B hands the same presentation back on f2: the room's f2 countdown is not started over
+      await second.present()
+      vi.advanceTimersByTime(5_000)
+      expect(timerCalls(second.kit)).toEqual([])
+      expect(agendaActuals(second.kit.ctx.board.id)).toEqual([
+        { frameId: 'f1', name: 'Warm-up', plannedMin: 2, actualMs: 130_000 },
+        { frameId: 'f2', name: 'Ideas', plannedMin: 1, actualMs: 45_000 },
+      ])
+      // a new presentation after the reload still starts afresh
+      await second.present(false)
+      second.pid.current = 'prs_two'
+      await second.go('f1')
+      await second.present()
+      expect(timerCalls(second.kit)).toEqual([{ action: 'start', durationMs: 120_000 }])
+      expect(agendaActuals(second.kit.ctx.board.id)).toEqual([
+        { frameId: 'f1', name: 'Warm-up', plannedMin: 2, actualMs: 0 },
+      ])
+      second.agenda.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('a reload of the presenting tab carries on in the same section without starting its timer again', async () => {
     const first = setup()
     answerTimers(first.kit, 2)

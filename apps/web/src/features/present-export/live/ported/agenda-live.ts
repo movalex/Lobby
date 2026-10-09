@@ -134,13 +134,6 @@ export function mountAgenda(ctx: CanvasFeatureContext, deps: AgendaLiveDeps): Ag
 
   let wasLive = false
   let lastSlide: string | null = null
-  /**
-   * Round 1: the presentation this tab last presented, and the section it was on when it stopped (handed off).
-   * Taking the same presentation back carries its record on (no new run), and the section it left is not a
-   * new one: its timer is not started over (the room's countdown kept running meanwhile).
-   */
-  let ranPid: string | null = null
-  let leftOn: string | null = null
 
   const onSlide = (live: boolean, slideId: string | null) => {
     // A failure here must never stop a presentation: the run of show is an extra on top of it.
@@ -154,8 +147,7 @@ export function mountAgenda(ctx: CanvasFeatureContext, deps: AgendaLiveDeps): Ag
   const step = (live: boolean, slideId: string | null) => {
     if (!live) {
       if (wasLive) {
-        leftOn = recorder.currentId()
-        recorder.stop()
+        recorder.stop() // keeps the section it left on record (a hand-off)
         recorded.update((n) => n + 1)
       }
       wasLive = false
@@ -175,12 +167,14 @@ export function mountAgenda(ctx: CanvasFeatureContext, deps: AgendaLiveDeps): Ag
       wasLive = true
       const pid = deps.presentationId()
       // a reload of the presenting tab finds its visit still on record and carries on; the same presentation
-      // taken back (a hand-off) carries its record on; a new run starts afresh
-      const same = pid !== null && pid === ranPid && recorder.active()
-      if (recorder.currentId() === null && !same) recorder.begin(sections)
-      if (same) resumedOn = leftOn
-      ranPid = pid
-      leftOn = null
+      // taken back (a hand-off) carries its record on, and the section it left is not a new one: its timer is not
+      // started over, the room's countdown kept running meanwhile (round 1). Round 2: the presentation and that
+      // section are kept in the record, not in memory, so a reload between the hand-off and the take-back keeps
+      // them. A new run starts afresh.
+      const same = pid !== null && pid === recorder.presentationId() && recorder.active()
+      if (recorder.currentId() === null && !same) recorder.begin(sections, pid)
+      if (same) resumedOn = recorder.leftOn()
+      recorder.resume(pid)
     }
     if (slideId === lastSlide) return
     lastSlide = slideId

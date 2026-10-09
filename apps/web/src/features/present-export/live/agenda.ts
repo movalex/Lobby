@@ -223,6 +223,13 @@ interface AgendaRecord {
   actual: Record<string, number>
   /** the visit in progress: the section and when it began (this browser's clock) */
   current: { id: string; since: number } | null
+  /**
+   * Round 2: the presentation this run belongs to (null: not known), and the section the tab was on when it last
+   * stopped presenting (handed off). Kept here, not in memory, so a reload between a hand-off and the take-back
+   * still carries the record on and does not start the section it left over.
+   */
+  pid: string | null
+  left: string | null
 }
 
 export interface AgendaStorage {
@@ -262,7 +269,9 @@ function parseRecord(raw: string | null): AgendaRecord | null {
       cur && typeof cur.id === 'string' && typeof cur.since === 'number' && Number.isFinite(cur.since)
         ? { id: cur.id, since: cur.since }
         : null
-    return { v: 1, sections, actual, current }
+    const pid = typeof v.pid === 'string' ? v.pid : null
+    const left = typeof v.left === 'string' ? v.left : null
+    return { v: 1, sections, actual, current, pid, left }
   } catch {
     return null
   }
@@ -303,9 +312,34 @@ export class AgendaRecorder {
     }
   }
 
-  /** Starts a fresh run of show over `sections` (the earlier record is dropped). */
-  begin(sections: readonly AgendaSection[]) {
-    this.record = { v: 1, sections: sections.map((s) => ({ ...s })), actual: {}, current: null }
+  /** Starts a fresh run of show over `sections` for presentation `pid` (the earlier record is dropped). */
+  begin(sections: readonly AgendaSection[], pid: string | null = null) {
+    this.record = {
+      v: 1,
+      sections: sections.map((s) => ({ ...s })),
+      actual: {},
+      current: null,
+      pid,
+      left: null,
+    }
+    this.save()
+  }
+
+  /** The presentation the run on record belongs to (round 2), or null. */
+  presentationId(): string | null {
+    return this.record?.pid ?? null
+  }
+
+  /** The section the tab was on when it last stopped presenting (round 2), or null. */
+  leftOn(): string | null {
+    return this.record?.left ?? null
+  }
+
+  /** This tab presents presentation `pid` (again): the run on record is its, and the hand-off is over. */
+  resume(pid: string | null) {
+    if (!this.record) return
+    this.record.pid = pid
+    this.record.left = null
     this.save()
   }
 
@@ -342,6 +376,7 @@ export class AgendaRecorder {
   /** The presentation ended: the visit in progress is closed. The record stays for the recap. */
   stop() {
     if (!this.record) return
+    this.record.left = this.record.current?.id ?? null
     this.close(this.record, this.now())
     this.save()
   }
