@@ -142,7 +142,8 @@ test('ten expert tasks, before (menus, dock, toolbar) and after (Ctrl/Cmd+K): ev
       },
       before: async (h) => {
         await h.click('dock-tab-frames')
-        await h.clickLocator(`[data-testid="frame-row"][data-frame-id="${retro}"]`)
+        // the row's name button (W5's run-of-show stepper now sits in the row, under it)
+        await h.clickLocator(`[data-testid="frame-row"][data-frame-id="${retro}"] .dr-cux-frame__name`)
       },
       after: (h) => h.palette('retro'),
       done: async () => {
