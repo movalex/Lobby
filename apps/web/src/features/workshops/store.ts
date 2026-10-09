@@ -18,9 +18,14 @@ import {
   HandsResponse,
   type HandsVersion,
   isNewerHands,
+  isNewerSpotlight,
   ListVoteSessionsResponse,
   type RaisedHand,
   type ReactionEmoji,
+  type Spotlight,
+  type SpotlightEndReason,
+  SpotlightState,
+  type SpotlightVersion,
   type SummonScreen,
   type TimerActionInput,
   TimerResponse,
@@ -29,6 +34,7 @@ import {
   WORKSHOP_EVENTS,
   WorkshopHandEvent,
   WorkshopReactionEvent,
+  WorkshopSpotlightEvent,
   WorkshopState,
   type WorkshopTimer,
   WorkshopTimerEvent,
@@ -96,7 +102,26 @@ export interface WorkshopSnapshot {
   voteBanner: VoteBanner | null
   /** K3-1: an object this person clicked before joining: the banner offers to join and give it a dot. */
   joinOffer: { sessionId: string; shapeId: string } | null
+  /** L5-2: the board's spotlight (the objects a facilitator is talking about), or null */
+  spotlight: Spotlight | null
+  /** L5-2: this person pressed Esc (or Hide) for this spotlight: it is dimmed for them no more, for nobody else */
+  spotlightHidden: boolean
+  /** L5-2: the last spotlight that ended in front of this tab, and why (a notice; null before any) */
+  spotlightEnded: SpotlightEnded | null
 }
+
+/** A spotlight that ended while this tab had the board open. */
+export interface SpotlightEnded {
+  seq: number
+  reason: SpotlightEndReason
+  /** whose it was */
+  starterName: string
+  /** who ended it (null: the api did) */
+  byName: string | null
+}
+
+/** One spotlight's identity: a new one has a new key (a person who hid the last one sees this one). */
+export const spotlightKey = (s: Spotlight) => `${s.version.epoch}:${s.version.n}`
 
 export interface VoteBanner {
   sessionId: string
@@ -235,6 +260,12 @@ export class WorkshopStore {
   private readonly bannerSeqs = new Map<string, number>()
   private bannerSeq = 0
   private joinOffer: WorkshopSnapshot['joinOffer'] = null
+  /** L5-2: the spotlight, the version of that state and which spotlight this person hid (spotlightKey) */
+  private spotlight: Spotlight | null = null
+  private spotlightVersion: SpotlightVersion | null = null
+  private spotlightHiddenKey: string | null = null
+  private spotlightEnded: SpotlightEnded | null = null
+  private endedSeq = 0
   private readonly throttle = new ReactionThrottle()
   private readonly reactionListeners = new Set<(r: ReactionShown) => void>()
   private readonly handListeners = new Set<(changes: HandChange[]) => void>()
@@ -275,6 +306,7 @@ export class WorkshopStore {
       this.events.on(WORKSHOP_EVENTS.results, (d) => this.onResultsEvent(d)),
       this.events.on(WORKSHOP_EVENTS.reaction, (d) => this.onReactionEvent(d)),
       this.events.on(WORKSHOP_EVENTS.hand, (d) => this.onHandEvent(d)),
+      this.events.on(WORKSHOP_EVENTS.spotlight, (d) => this.onSpotlightEvent(d)),
       this.events.onResync(() => void this.refresh()),
     )
   }
@@ -325,6 +357,9 @@ export class WorkshopStore {
       myHand: this.hands.find((h) => h.userId === this.userId) ?? null,
       toolsRequest: this.toolsRequest,
       ...this.bannerAndOffer(vote, sid ? this.readParticipation(sid, vote) : null),
+      spotlight: this.spotlight,
+      spotlightHidden: !!this.spotlight && this.spotlightHiddenKey === spotlightKey(this.spotlight),
+      spotlightEnded: this.spotlightEnded,
     }
   }
 
@@ -479,6 +514,8 @@ export class WorkshopStore {
       this.setVote(vote)
       this.state = { ...s, timer, vote }
       this.applyHands(s.hands, s.handsVersion)
+      // L5-2: an api from before wave L sends no spotlight (no version): none then
+      this.applySpotlight(s.spotlight ?? null, s.spotlightVersion ?? null)
       this.loaded = true
       this.refreshedSeq = seq
       this.confirmedAt = this.nowMs()
@@ -583,6 +620,80 @@ export class WorkshopStore {
         session: { ...vote.session, status: 'revealed' },
       },
     }
+    this.emit()
+  }
+
+  // ---- spotlight (L5-2) ---------------------------------------------------------------------------------
+
+  /**
+   * Takes a spotlight state from any path (event, response, refetch) unless it is older than the one held
+   * (same API process, lower version). `end`: why it ended, when an event says so. Returns whether it was taken.
+   */
+  private applySpotlight(
+    spotlight: Spotlight | null,
+    version: SpotlightVersion | null,
+    end?: { reason: SpotlightEndReason | null; endedBy: { name: string } | null },
+  ): boolean {
+    if (!version || !isNewerSpotlight(this.spotlightVersion, version)) return false
+    const prev = this.spotlight
+    this.spotlight = spotlight
+    this.spotlightVersion = version
+    if (!spotlight && prev && end?.reason)
+      this.spotlightEnded = {
+        seq: ++this.endedSeq,
+        reason: end.reason,
+        starterName: prev.by.name,
+        byName: end.endedBy?.name ?? null,
+      }
+    return true
+  }
+
+  private onSpotlightEvent(data: unknown) {
+    const p = WorkshopSpotlightEvent.safeParse(data)
+    if (!p.success) return
+    const { spotlight, version, reason, endedBy } = p.data
+    if (this.applySpotlight(spotlight, version, { reason, endedBy })) this.emit()
+  }
+
+  /** Starts a spotlight on these objects (api refs, `shape:<id>`) for everyone (a facilitator; the api checks). */
+  async startSpotlight(refs: readonly string[], bringEveryone = false): Promise<ActionResult> {
+    try {
+      const r = await this.request('POST', `/api/boards/${encodeURIComponent(this.boardId)}/spotlight`, {
+        body: { refs, bringEveryone },
+        schema: SpotlightState,
+      })
+      if (this.applySpotlight(r.spotlight, r.version)) this.emit()
+      return { ok: true }
+    } catch (e) {
+      return errorOf(e)
+    }
+  }
+
+  /** Ends the board's spotlight for everyone (its starter or a board owner; the api checks). */
+  async endSpotlight(): Promise<ActionResult> {
+    try {
+      const r = await this.request('POST', `/api/boards/${encodeURIComponent(this.boardId)}/spotlight/end`, {
+        body: {},
+        schema: SpotlightState,
+      })
+      if (this.applySpotlight(r.spotlight, r.version)) this.emit()
+      return { ok: true }
+    } catch (e) {
+      return errorOf(e)
+    }
+  }
+
+  /** This person's Esc: the spotlight is dimmed for them no more (for nobody else), until a new one starts. */
+  hideSpotlight() {
+    if (!this.spotlight) return
+    this.spotlightHiddenKey = spotlightKey(this.spotlight)
+    this.emit()
+  }
+
+  /** The chip that brings a hidden spotlight back for this person. */
+  showSpotlight() {
+    if (this.spotlightHiddenKey === null) return
+    this.spotlightHiddenKey = null
     this.emit()
   }
 

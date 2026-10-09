@@ -44,6 +44,7 @@ import {
   PrivateNotesSetup,
 } from './private-notes/PrivateNotesBar.tsx'
 import { ReactionBar, SmileIcon } from './Reactions.tsx'
+import { endSpotlight, mayEndSpotlight, SpotlightIcon, spotlightIds } from './SpotlightLayer.tsx'
 import { workshopSettingsOf, writeWorkshopSettings } from './session-settings.ts'
 import { VoteSetupDialog } from './VoteSetupDialog.tsx'
 
@@ -234,7 +235,13 @@ export function WorkshopBar({ ctx }: { ctx: Ctx }) {
     now,
     offsetMs: offset,
   })
-  const entries = facilitateEntries({ guest, facilitator, activity, vote: vote !== null })
+  const entries = facilitateEntries({
+    guest,
+    facilitator,
+    activity,
+    vote: vote !== null,
+    spotlight: facilitator,
+  })
   const parts = facilitatePill({
     timer: display,
     clock: formatClock(remaining),
@@ -468,11 +475,68 @@ export function FacilitateMenu({
             )
           case 'brainstorm':
             return <PrivateNotesEntry key={entry} ctx={ctx} onDone={() => onClose(false)} />
+          case 'spotlight':
+            return <SpotlightEntry key={entry} ctx={ctx} snap={snap} onDone={() => onClose(false)} />
           default:
             return null
         }
       })}
     </div>
+  )
+}
+
+/**
+ * L5-2: the Facilitate menu's Spotlight entries: "Spotlight for everyone" dims the board for everyone around what
+ * is selected (it replaces a spotlight that is on), and, while one is on that this person may end, "End the
+ * spotlight". The selection is read live (it is the board's, not the menu's).
+ */
+function SpotlightEntry({ ctx, snap, onDone }: { ctx: Ctx; snap: WorkshopSnapshot; onDone(): void }) {
+  const selected = useValue('dr-wk-spot-entry-sel', () => ctx.canvas.selection.length, [ctx.canvas])
+  const on = snap.spotlight
+  const ending = !!on && mayEndSpotlight(ctx, on)
+  const back = () => ctx.canvas.focus({ preventScroll: true })
+  return (
+    <>
+      <button
+        type="button"
+        role="menuitem"
+        className="dr-wk-menu__item"
+        data-testid="spotlight-menu"
+        aria-disabled={selected === 0 ? true : undefined}
+        onClick={() => {
+          onDone()
+          void spotlightIds(ctx, ctx.canvas.selection)
+          back()
+        }}
+      >
+        <span className="dr-wk-menu__icon" aria-hidden="true">
+          <SpotlightIcon size={16} />
+        </span>
+        <span className="dr-wk-menu__label">Spotlight for everyone</span>
+        <span className="dr-wk-menu__meta">
+          {selected > 0 ? `${selected} selected` : 'Select items first'}
+        </span>
+      </button>
+      {ending && (
+        <button
+          type="button"
+          role="menuitem"
+          className="dr-wk-menu__item"
+          data-testid="spotlight-menu-end"
+          onClick={() => {
+            onDone()
+            void endSpotlight(ctx)
+            back()
+          }}
+        >
+          <span className="dr-wk-menu__icon" aria-hidden="true">
+            <SpotlightIcon size={16} />
+          </span>
+          <span className="dr-wk-menu__label">End the spotlight</span>
+          <span className="dr-wk-menu__meta">On</span>
+        </button>
+      )}
+    </>
   )
 }
 

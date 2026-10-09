@@ -123,6 +123,29 @@ describe('K3-3: the Facilitate menu shows each person what the bar showed them b
   })
 })
 
+describe('L5-2: the Spotlight entry is a facilitator’s, last, and only when asked for', () => {
+  const withSpot = (facilitator: boolean, spotlight?: boolean) =>
+    facilitateEntries({ guest: false, facilitator, activity: activity({}), vote: false, spotlight })
+
+  it('is left out unless the caller asks for it (every menu is as it was before wave L)', () => {
+    expect(withSpot(true)).toEqual(['timer', 'reactions', 'voting'])
+    expect(withSpot(true, false)).toEqual(['timer', 'reactions', 'voting'])
+  })
+
+  it('comes after everything else, brainstorm included', () => {
+    expect(withSpot(true, true)).toEqual(['timer', 'reactions', 'voting', 'spotlight'])
+    expect(
+      facilitateEntries({
+        guest: false,
+        facilitator: true,
+        activity: activity({ brainstorm: true, hands: 1 }),
+        vote: true,
+        spotlight: true,
+      }),
+    ).toEqual(['timer', 'reactions', 'hands', 'voting', 'brainstorm', 'spotlight'])
+  })
+})
+
 describe('K3-3: the Facilitate pill shows only what is live', () => {
   const pill = (over: Partial<Parameters<typeof facilitatePill>[0]> = {}) =>
     pillText(
