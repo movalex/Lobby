@@ -61,6 +61,10 @@ export { EXPORT_OFF_TEXT, exportPolicySentence, notifyExportOff } from '../expor
 /** How long a gate that attaches to a stream still connecting waits for its hello before the first read. */
 export const HELLO_WAIT_MS = 1_500
 
+/** K.1 refix: while a live board session has no answer yet, a failed read is retried after these delays (the
+ * last one repeats until an answer lands or the session ends), so a viewer is not locked out until a reconnect. */
+export const EXPORT_POLICY_RETRY_MS: readonly number[] = [1_000, 3_000, 10_000]
+
 export interface ExportState {
   /** null until the first answer (treated like 'everyone') */
   readonly policy: Atom<ExportPolicy | null>
@@ -95,6 +99,9 @@ interface Entry {
   api: ApiClient | null
   /** live readers, per event stream */
   readonly live: Map<BoardEvents, Attachment>
+  /** K.1 refix: the retry due after a failed read while there is no answer yet, and how many ran */
+  retry: ReturnType<typeof setTimeout> | null
+  retries: number
 }
 
 const boards = new Map<string, Entry>()
@@ -118,6 +125,8 @@ function entry(boardId: string): Entry {
       last: null,
       api: null,
       live: new Map(),
+      retry: null,
+      retries: 0,
     }
     boards.set(boardId, e)
   }
@@ -140,6 +149,7 @@ function read(e: Entry, api: ApiClient): Promise<ExportPolicyState> {
         e.state.canExport.set(s.canExport)
         e.last = s
       }
+      e.retries = 0
       // current only while a board session keeps it so (its events and resyncs); without one, every
       // caller that is not sharing this read asks again
       if (gen === e.gen && e.live.size > 0) e.fresh = true
@@ -157,8 +167,33 @@ function read(e: Entry, api: ApiClient): Promise<ExportPolicyState> {
 function invalidate(e: Entry): void {
   e.gen++
   e.fresh = false
+  stopRetry(e)
   if (e.live.size === 0 || !e.api) return
-  read(e, e.api).catch(() => {}) // keep what we had: the server enforces, and the next resync asks again
+  const gen = e.gen
+  // keep what we had: the server enforces, and the next resync asks again
+  read(e, e.api).catch(() => {
+    if (gen === e.gen) retryLater(e)
+  })
+}
+
+/**
+ * K.1 refix: with no answer yet the gates stay closed for anyone a policy could limit (`boardExportAllowed`),
+ * and the pending notice tells them to try again, so a failed read is not left to the next reconnect: it is
+ * read again after EXPORT_POLICY_RETRY_MS (the last delay repeats) while a board session is live.
+ */
+function retryLater(e: Entry): void {
+  if (e.retry !== null || e.last !== null || e.live.size === 0) return
+  const ms = EXPORT_POLICY_RETRY_MS[Math.min(e.retries, EXPORT_POLICY_RETRY_MS.length - 1)] ?? 10_000
+  e.retries++
+  e.retry = setTimeout(() => {
+    e.retry = null
+    if (e.last === null && e.live.size > 0) invalidate(e)
+  }, ms)
+}
+
+function stopRetry(e: Entry): void {
+  if (e.retry !== null) clearTimeout(e.retry)
+  e.retry = null
 }
 
 export const exportStateOf = (boardId: string): ExportState => entry(boardId).state
@@ -305,7 +340,11 @@ function attach(opts: AttachOptions, patient: boolean): () => void {
     e.live.delete(opts.events)
     mine.detach()
     // nobody keeps it current any more: kept for display, read again by the next session
-    if (e.live.size === 0) e.fresh = false
+    if (e.live.size === 0) {
+      e.fresh = false
+      stopRetry(e)
+      e.retries = 0
+    }
   }
 }
 

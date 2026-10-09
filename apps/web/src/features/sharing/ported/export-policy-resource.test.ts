@@ -13,6 +13,7 @@ import type { BoardEvents } from '../../events.ts'
 import { useExportAllowed as _historyHook } from '../../history/ported/export-allowed.ts'
 import { watchExportPolicy } from '../../mindmap/ported/export-gate.ts'
 import {
+  EXPORT_POLICY_RETRY_MS,
   exportStateOf,
   getExportPolicy,
   HELLO_WAIT_MS,
@@ -336,6 +337,45 @@ describe('the shared export-policy resource', () => {
     answer(2, { exportPolicy: 'everyone' })
     expect((await p).exportPolicy).toBe('everyone')
     stop()
+  })
+
+  it('K.1 refix: a failed FIRST read is retried with backoff, so a viewer is not locked out until a reconnect', async () => {
+    vi.useFakeTimers()
+    try {
+      const boardId = 'b-res-first-fail'
+      const { events } = fakeEvents(true) // answers onResync once and never reconnects
+      const { api, reads, count, answer } = fakeApi()
+      const stop = syncExportGate(featureCtx(boardId, api, events))
+      expect(count(boardId)).toBe(1)
+      reads[0]?.reject(new Error('503'))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(exportAllowedOnBoard(boardId, 'viewer', false)).toBe(false) // still pending: closed
+      await vi.advanceTimersByTimeAsync(EXPORT_POLICY_RETRY_MS[0] ?? 0)
+      expect(count(boardId)).toBe(2)
+      reads[1]?.reject(new Error('timeout'))
+      await vi.advanceTimersByTimeAsync((EXPORT_POLICY_RETRY_MS[1] ?? 0) - 1)
+      expect(count(boardId)).toBe(2) // backs off
+      await vi.advanceTimersByTimeAsync(1)
+      expect(count(boardId)).toBe(3)
+      answer(2, { exportPolicy: 'everyone' })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(exportStateOf(boardId).policy.get()).toBe('everyone')
+      expect(exportAllowedOnBoard(boardId, 'viewer', false)).toBe(true)
+      // answered: no more retries
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(count(boardId)).toBe(3)
+      stop()
+      // a session that leaves while a retry is due reads nothing more
+      const other = fakeEvents(true)
+      const stopOther = syncExportGate(featureCtx('b-res-first-fail-gone', api, other.events))
+      reads[3]?.reject(new Error('503'))
+      await vi.advanceTimersByTimeAsync(0)
+      stopOther()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(count('b-res-first-fail-gone')).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('without a board session an answer is never kept as current: the next getter asks again', async () => {
