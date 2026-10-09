@@ -1,5 +1,7 @@
 // OWNER: W2 (wave L, L2-3). "Add as Recap frame" (editors): the recap as native, editable board content in ONE undo
-// step: a frame "Recap · 8 Oct" to the right of the board's content, its heading, the planned-vs-actual table
+// step: a frame "Recap · 8 Oct" where the person is looking (beside the frames it recaps, else around the middle of
+// the view, clear of what is there: ../ported/apply.ts pageSpotNear; then brought into this tab's view only), its
+// heading, the planned-vs-actual table
 // (text and rectangles), the top voted lines, the AI's headline, decisions and questions as text, and the action
 // items as sticky notes. One transact writes everything; the notes join the frame in a second write folded into
 // the same undo step (the note builder takes no frame, and the port drops a change to an element created in the
@@ -11,7 +13,7 @@
 import { LOBBY_INK, LOBBY_PALETTE } from '@draftroom/board-ops/elements'
 import { type CanvasElement, items, type LobbyCanvas } from '../../../canvas/api/index.ts'
 import { plural } from '../copy.ts'
-import { FONT_FAMILY, layoutText, newId } from '../ported/apply.ts'
+import { bringIntoView, FONT_FAMILY, layoutText, newId, pageSpotNear } from '../ported/apply.ts'
 import { aiCustomData } from '../ported/provenance.ts'
 import type { RecapPlan } from './plan.ts'
 
@@ -32,15 +34,6 @@ export interface RecapApplied {
 }
 
 type Props = Record<string, unknown>
-
-/** Where the recap frame goes: to the right of everything on the board, top-aligned with it; else the view. */
-export function recapSpot(canvas: LobbyCanvas, size: { w: number; h: number }): { x: number; y: number } {
-  const all = items.contentItems(canvas.items()).filter((e) => !canvas.isHidden(e.id))
-  const b = all.length ? canvas.boundsOf(all.map((e) => e.id)) : null
-  if (b) return { x: Math.round(b.x + b.width + 240), y: Math.round(b.y) }
-  const v = canvas.viewport.get()
-  return { x: Math.round(v.x + v.width / 2 - size.w / 2), y: Math.round(v.y + v.height / 2 - size.h / 2) }
-}
 
 /** The plan as pieces in the frame's space (pure but for text measurement), and the frame's height. */
 function layout(canvas: LobbyCanvas, plan: RecapPlan) {
@@ -148,12 +141,19 @@ function layout(canvas: LobbyCanvas, plan: RecapPlan) {
 }
 
 /**
- * Writes the recap frame (see the header) and selects it; returns its id and every element it made. `by`: this
- * person (the server checks `lobby.ai.by` is the writer).
+ * Writes the recap frame (see the header), selects it and brings it into this tab's view (the camera only, never
+ * a write); returns its id and every element it made. `by`: this person (the server checks `lobby.ai.by` is the
+ * writer). `near`: the frames a 'selection' recap is about (element ids: the frame goes beside them), else none
+ * (around the middle of the view).
  */
-export function applyRecap(canvas: LobbyCanvas, plan: RecapPlan, by: string): RecapApplied {
+export function applyRecap(
+  canvas: LobbyCanvas,
+  plan: RecapPlan,
+  by: string,
+  near: readonly string[] = [],
+): RecapApplied {
   const { pieces, height } = layout(canvas, plan)
-  const at = recapSpot(canvas, { w: RECAP_W, h: height })
+  const at = pageSpotNear(canvas, { w: RECAP_W, h: height }, near)
   const run = plan.runId
   const stamp = (ai: boolean, kind: string): Props =>
     ai
@@ -230,6 +230,7 @@ export function applyRecap(canvas: LobbyCanvas, plan: RecapPlan, by: string): Re
   if (notes.length)
     canvas.transact('ai: recap frame', (tx) => tx.setFrame(notes, frameId), { joinPrevious: true })
   canvas.select([frameId])
+  bringIntoView(canvas, [frameId], { inset: 64 })
   return { frameId, ids }
 }
 

@@ -203,6 +203,59 @@ test('Wrap up after a revealed vote: the top voted list equals the tallies; the 
   expect(foreign).toEqual([])
 })
 
+test('on a board wider than the view, the Recap frame lands where the person looks and is wholly in view after Add', async ({
+  join,
+}) => {
+  const a = await join('alice')
+  const foreign = foreignRequests(a.page)
+  // 12 notes to x ≈ 9900, the view at the board's left end (the review's probe)
+  await seed(a.page, {
+    notes: Array.from({ length: 12 }, (_, i) => ({
+      id: `l2w-wide-${i}`,
+      x: i * 900,
+      y: 300,
+      text: `Idea ${i}`,
+    })),
+  })
+  type Cam = {
+    viewport: { set(v: object): void; get(): { x: number; y: number; width: number; height: number } }
+  }
+  const view = () =>
+    a.page.evaluate(() => {
+      const c = (window as unknown as { __lobbyBoard: { canvas: Cam } }).__lobbyBoard.canvas
+      return c.viewport.get()
+    })
+  await a.page.evaluate(() =>
+    (window as unknown as { __lobbyBoard: { canvas: Cam } }).__lobbyBoard.canvas.viewport.set({
+      x: -100,
+      y: -100,
+      zoom: 1,
+    }),
+  )
+  const before = await view()
+  expect(before.x + before.width).toBeLessThan(9_000) // the board is wider than the view
+  await fakeAiRuns(a.page)
+  const panel = await wrapUp(a.page)
+  await panel.getByTestId('recap-add').click()
+  await expectSaved(a.page)
+  expect((await saveState(a.page)).lastReject).toBeNull()
+  const frame = (await items(a.page)).find((e) => e.type === 'frame' && String(e.name).startsWith('Recap · '))
+  if (!frame) throw new Error('no Recap frame')
+  const f = { x: Number(frame.x), y: Number(frame.y), w: Number(frame.width), h: Number(frame.height) }
+  // placed near where the person was looking, not 240 units past the board's right end
+  expect(f.x).toBeLessThan(before.x + before.width + 1_200)
+  // and, once this tab's camera has moved (if it had to), wholly in view
+  await expect
+    .poll(async () => {
+      const v = await view()
+      return (
+        f.x >= v.x - 1 && f.y >= v.y - 1 && f.x + f.w <= v.x + v.width + 1 && f.y + f.h <= v.y + v.height + 1
+      )
+    })
+    .toBe(true)
+  expect(foreign).toEqual([])
+})
+
 /** Board menu › Board › Catch me up; continues the notice when it shows; the finished panel. */
 async function catchMeUp(page: Page) {
   await page.getByTestId('main-menu.button').click()

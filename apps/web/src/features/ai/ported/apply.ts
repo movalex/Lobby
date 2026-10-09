@@ -635,8 +635,11 @@ function planThemes(
   return { space, notes: all, stale, labels, moves, grow, show }
 }
 
-/** Moves the camera to show `ids` when they are not wholly on screen (3b's camera members). */
-function bringIntoView(canvas: LobbyCanvas, ids: readonly string[], opts: { inset: number }) {
+/**
+ * Moves this tab's camera to show `ids` when they are not wholly on screen (3b's camera members; never above
+ * 100%). Local only: nothing is written or pushed.
+ */
+export function bringIntoView(canvas: LobbyCanvas, ids: readonly string[], opts: { inset: number }) {
   try {
     const b = canvas.boundsOf(ids)
     const v = canvas.viewport.get()
@@ -747,6 +750,35 @@ function spotFor(
   return { space: page, ...at }
 }
 
+/** The live elements of `near` as a target to place beside (none: the view). */
+function nearTarget(canvas: LobbyCanvas, near: readonly string[]): AiTarget {
+  const ids = near.filter((id) => isLive(canvas.get(id)))
+  return {
+    kind: ids.length ? 'selection' : 'none',
+    ids,
+    label: '',
+    notes: 0,
+    prompts: 0,
+    groups: [],
+    texts: 0,
+    bounds: ids.length ? canvas.boundsOf(ids) : null,
+  }
+}
+
+/**
+ * A spot on the page, never inside a frame, for a new frame of `size` (the Recap frame, L2-3): beside the frames
+ * around `near` (element ids), else around the middle of the view; clear of what is there. So it lands where the
+ * person is looking, not past the end of a board wider than the view.
+ */
+export function pageSpotNear(
+  canvas: LobbyCanvas,
+  size: Size,
+  near: readonly string[],
+): { x: number; y: number } {
+  const spot = spotFor(canvas, nearTarget(canvas, near), size, null)
+  return { x: spot.space.ox + spot.x, y: spot.space.oy + spot.y }
+}
+
 /**
  * A free spot for new content of `size` near the elements `near` (public.ts `findSpot`, for W4's diagrams and
  * W8's matrix): the same rules as a block of AI notes (`spotFor`): inside their home frame when it has room
@@ -759,17 +791,8 @@ export function spotNear(
   size: Size,
   near: readonly string[],
 ): { x: number; y: number; frameId: string | null } {
-  const ids = near.filter((id) => isLive(canvas.get(id)))
-  const target: AiTarget = {
-    kind: ids.length ? 'selection' : 'none',
-    ids,
-    label: '',
-    notes: 0,
-    prompts: 0,
-    groups: [],
-    texts: 0,
-    bounds: ids.length ? canvas.boundsOf(ids) : null,
-  }
+  const target = nearTarget(canvas, near)
+  const ids = target.ids
   const home = ids.length ? homeFrame(canvas, target) : null
   const spot = spotFor(canvas, target, size, home)
   if (spot.growTo !== undefined) {

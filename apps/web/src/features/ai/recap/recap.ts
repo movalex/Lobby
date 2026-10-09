@@ -24,6 +24,8 @@ export interface RecapState {
   readonly status: 'working' | 'done'
   readonly scope: RecapScopeName
   readonly plan: RecapPlan | null
+  /** what a 'selection' recap is about (element ids: the selected frames, else the selection); else none */
+  readonly about: readonly string[]
   /** the Recap frame this tab added from it, once added */
   readonly frameId: string | null
 }
@@ -75,7 +77,8 @@ export async function runRecap(
     })
     return null
   }
-  const mine: RecapState = { status: 'working', scope, plan: null, frameId: null }
+  const about = refs.map(idOfRef)
+  const mine: RecapState = { status: 'working', scope, plan: null, about, frameId: null }
   const slot = aiRecap(canvas)
   slot.set(mine)
   const actuals = agendaActuals(boardId)
@@ -107,7 +110,7 @@ export async function runRecap(
     revealed: lastRevealedResults(ctx.events),
     textOf: (ref) => canvas.text.of(idOfRef(ref)),
   })
-  const done: RecapState = { status: 'done', scope, plan, frameId: null }
+  const done: RecapState = { status: 'done', scope, plan, about, frameId: null }
   slot.set(done)
   return done
 }

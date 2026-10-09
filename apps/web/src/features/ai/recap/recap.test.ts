@@ -166,6 +166,58 @@ describe('Wrap up', () => {
     expect(JSON.stringify(k.live())).toBe(before)
   })
 
+  it('on a board wider than the view the Recap frame lands where the person looks, clear of the notes, and is shown', async () => {
+    // notes to x ≈ 9900; the view is the left end (x -1000..1000)
+    const wide = [
+      ...board(),
+      ...note('far1', 5_000, 0, 'Far idea'),
+      ...note('far2', 9_700, 300, 'Farther idea'),
+    ]
+    const k = aiKit(wide)
+    k.answer(recapAnswer)
+    const plan = (await runRecap(k.ctx, 'session', NOW))?.plan as RecapPlan
+    const v = { ...k.canvas.viewport.get() }
+    const made = applyRecap(k.canvas, plan, 'usr_ana')
+    const f = k.els.get(made.frameId) as { x: number; y: number; width: number; height: number }
+    const overlaps = (a: typeof f, b: typeof f) =>
+      a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+    // in the view the person was looking at, not 240 units past the board's right end
+    expect(overlaps(f, v)).toBe(true)
+    expect(f.x).toBeLessThan(5_000)
+    // clear of what was there
+    for (const e of wide.filter((x) => x.type === 'stickynote'))
+      expect(overlaps(f, e as typeof f), String(e.id)).toBe(false)
+    // and wholly shown: in the view already, or this tab's camera goes to it (never a write)
+    const inside =
+      f.x >= v.x && f.y >= v.y && f.x + f.width <= v.x + v.width && f.y + f.height <= v.y + v.height
+    if (!inside)
+      expect(k.canvas.viewport.zoomTo).toHaveBeenCalledWith(
+        expect.objectContaining({ x: f.x, y: f.y, width: f.width, height: f.height }),
+        expect.objectContaining({ maxZoom: 1 }),
+      )
+    expect(k.pushes.filter((p) => !p.joined)).toHaveLength(1)
+  })
+
+  it('the camera goes to a Recap frame that is not wholly in view; a selection recap goes beside its frames', async () => {
+    const frameEl = { id: 'fr', type: 'frame', x: 3_000, y: 2_000, width: 1_400, height: 900, name: 'Ideas' }
+    const k = aiKit([frameEl as never, ...note('in1', 3_100, 2_100, 'Inside idea', { frameId: 'fr' })])
+    k.canvas.select(['fr'])
+    k.answer({ ...recapAnswer, windowFrom: null, topVoted: [] })
+    const state = await runRecap(k.ctx, 'selection', NOW)
+    expect(state?.about).toEqual(['fr'])
+    const made = applyRecap(k.canvas, state?.plan as RecapPlan, 'usr_ana', state?.about)
+    const f = k.els.get(made.frameId) as { x: number; y: number; width: number; height: number }
+    // beside the frame it recaps (right of or below it), not inside it and not over it
+    expect(k.els.get(made.frameId)?.frameId ?? null).toBeNull()
+    expect(f.x >= 3_000 + 1_400 || f.y >= 2_000 + 900).toBe(true)
+    expect(Math.min(Math.abs(f.x - 4_400), Math.abs(f.y - 2_900))).toBeLessThan(400)
+    // out of the view (x -1000..1000): this tab's camera is moved to it
+    expect(k.canvas.viewport.zoomTo).toHaveBeenCalledWith(
+      expect.objectContaining({ x: f.x, y: f.y }),
+      expect.objectContaining({ maxZoom: 1 }),
+    )
+  })
+
   it('without AI the frame is the room’s results only, with no AI provenance at all', async () => {
     const k = aiKit(board(), {
       status: { ...AI_ON, enabled: false, reason: 'board-off', canSummarize: false },

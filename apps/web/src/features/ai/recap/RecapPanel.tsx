@@ -202,7 +202,7 @@ function RecapView({ state }: { state: RecapState }) {
   const plan = state.plan
   const addFrame = () => {
     if (!plan || canvas.readOnly()) return
-    const made = applyRecap(canvas, plan, ctx.me.user.id)
+    const made = applyRecap(canvas, plan, ctx.me.user.id, state.about)
     aiRecap(canvas).set({ ...state, frameId: made.frameId })
     offerUndoFor(canvas, 'Recap frame added to the board.', made.ids)
   }
