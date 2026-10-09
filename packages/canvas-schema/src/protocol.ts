@@ -71,6 +71,11 @@ export const PROTO = 1 as const
  * also marks the wave L sync build: `customData.lobby.present.mins` is accepted (PRESENT_MINS_REV) and the
  * restore-elements internal route exists (RESTORE_ELEMENTS_REV); clients read the room's revision
  * (CanvasPort `room.contractsRev()`) to offer either.
+ * DEPLOY (foundation review): because 12 also means "the whole wave L sync", a sync built from the wave L
+ * foundation alone must never be deployed. It says 12 but relays the laser to nobody and has no
+ * restore-elements route, so a wave L web would offer a laser nobody sees and a "Restore these" that gets 503,
+ * and the rev gate (the fallback "hold the sync, the web hides all three") would stop working. The sync ships
+ * once, carrying W6's relay and W7's route, after the O1/O2 sign-off for this bump is recorded in PROGRESS.
  */
 export const CONTRACTS_REV = 12
 /**
