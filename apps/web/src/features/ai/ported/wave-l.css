@@ -282,3 +282,43 @@ button.dr-ai-cite:focus-visible,
     width: auto;
   }
 }
+
+/* ---- the session coach (L2-4): one next-step chip under the Facilitate control ----------------------------- */
+.dr-ai-coach {
+  position: absolute;
+  top: 8px;
+  z-index: 306;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: calc(100% - 24px);
+  padding: 2px 2px 2px 4px;
+  border: 1px solid var(--dr-accent-line);
+  border-radius: 999px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow-pop);
+  pointer-events: auto;
+}
+.dr-ai-coach__run {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+  font: 600 12.5px / 1.2 var(--dr-font);
+  cursor: pointer;
+}
+.dr-ai-coach__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-ai-coach__run:focus-visible,
+.dr-ai-coach__x:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}

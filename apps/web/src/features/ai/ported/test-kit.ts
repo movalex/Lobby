@@ -122,6 +122,7 @@ export function aiKit(seed: El[] = [], opts: { status?: AiStatus | null; me?: st
     editingId: () => null,
     leaseHolder: () => null,
     hovered: () => hovered,
+    follow: { current: () => null, start: () => undefined, stop: () => undefined },
     get selection() {
       return selection
     },

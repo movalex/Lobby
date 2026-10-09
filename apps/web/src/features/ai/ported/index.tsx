@@ -16,7 +16,8 @@
 //  - wave L (W2): the trust layer (L2-1): the preview before a plan moves or recolours anything (./preview.tsx),
 //    provenance with the run id (./provenance.ts), the AI lens (./lens.tsx), "Remove this AI result"
 //    (./remove.ts) and the live "Dana is using AI here" shimmer (./working.tsx); the cross-workstream API in
-//    ./public.ts; Ask this board (L2-2, ./ask.ts); Wrap up and Catch me up (L2-3, ../recap/).
+//    ./public.ts; Ask this board (L2-2, ./ask.ts); Wrap up and Catch me up (L2-3, ../recap/); the session coach
+//    (L2-4, ../coach/).
 // Hidden entirely unless the api reports AI on for this person on this board: not configured, switched
 // off, a name-only guest, or a viewer limited by the export policy all see nothing. The api enforces
 // every rule and every cost limit; the client only follows its answer. The live shimmer and the lens are the
@@ -25,6 +26,8 @@ import type { CanvasFeature } from '../../../canvas/api/index.ts'
 import '../ai.css'
 import './ai-ported.css'
 import './wave-l.css'
+import { CoachOverlay } from '../coach/CoachChip.tsx'
+import { listenWorkshop } from '../coach/facts.ts'
 import { AiRecapOverlay } from '../recap/RecapPanel.tsx'
 import { aiRecap } from '../recap/recap.ts'
 import { noteVisit, writeLastVisit } from '../recap/window.ts'
@@ -47,6 +50,7 @@ export const feature: CanvasFeature = {
     { id: 'ai-entry', layer: 'screen', order: 59, pointer: 'none', component: AiEntryFallback },
     { id: 'ai-preview', layer: 'screen', order: 61, pointer: 'none', component: AiPreviewOverlay },
     { id: 'ai-recap', layer: 'screen', order: 62, pointer: 'none', component: AiRecapOverlay },
+    { id: 'ai-coach', layer: 'screen', order: 56, pointer: 'none', component: CoachOverlay },
   ],
   commands: COMMANDS,
   selectionBar: SELECTION_BAR,
@@ -60,11 +64,14 @@ export const feature: CanvasFeature = {
     const left = () => writeLastVisit(ctx.board.id, Date.now())
     globalThis.addEventListener?.('pagehide', left)
     const stopRuns = watchAiRuns(ctx)
+    // L2-4: the coach's view of the workshop, from the event stream only (no request)
+    const stopCoach = listenWorkshop(ctx)
     const stopWorking = listenAiWorking(ctx, (ev) => isOwnRun(canvas, ctx.me.user.name, ev))
     return () => {
       left()
       globalThis.removeEventListener?.('pagehide', left)
       stopRuns()
+      stopCoach()
       stopWorking()
       discardPreview(canvas)
       aiJob(canvas).get()?.abort.abort()
