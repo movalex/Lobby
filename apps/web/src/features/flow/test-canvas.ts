@@ -2,7 +2,8 @@
 // transaction applies creates, updates and deletes as the board page's does and runs the board page's own
 // structural writes (canvas/board/tx.ts `bind` and `setFrame`, the code LobbyTx.bind runs), and its undo stack is
 // snapshot-based and follows `joinPrevious`, so a test can say "one undo removes it all" and check the board is as
-// it was. It records every transact and every bind.
+// it was. It records every transact and every bind. It emits 'input' (key and pointer presses), 'selectionChanged'
+// (when the selected set changes, as the port does) and 'editingChanged' (its editor opening or closing).
 import type { CanvasElement, LobbyCanvas, LobbyTx } from '../../canvas/api/index.ts'
 import { bind as bindTx, setFrame as setFrameTx, type TxView } from '../../canvas/board/tx.ts'
 
@@ -39,6 +40,8 @@ export interface FakeFlowCanvas {
     key: string,
     mods?: { shift?: boolean; ctrl?: boolean; meta?: boolean; alt?: boolean; synthetic?: boolean },
   ): void
+  /** a press on the canvas, as the input stream reports it to observers */
+  pointerDown(at?: { x: number; y: number }): void
   /** settles the oldest text.edit request: granted (with an open editor) or not */
   grant(ok: boolean): void
   /** the open editor's textarea (a plain object with value and the calls the runtime makes), or null */
@@ -82,7 +85,16 @@ export function fakeFlowCanvas(seed: Partial<El>[] = []): FakeFlowCanvas {
   let tool = 'select'
   let gesture = 'idle'
   let editing: string | null = null
-  const inputListeners = new Set<(e: unknown) => void>()
+  const listeners = new Map<string, Set<(e: unknown) => void>>()
+  const emit = (event: string, e: unknown) => {
+    for (const l of [...(listeners.get(event) ?? [])]) l(e)
+  }
+  /** this tab's editor opened or closed (the board page's 'editingChanged') */
+  const setEditingId = (id: string | null) => {
+    if (editing === id) return
+    editing = id
+    emit('editingChanged', id)
+  }
   const editWaiters: ((ok: boolean) => void)[] = []
   const replaced: { id: string; text: string }[] = []
   let stops = 0
@@ -184,13 +196,20 @@ export function fakeFlowCanvas(seed: Partial<El>[] = []): FakeFlowCanvas {
     get selection() {
       return selection
     },
+    // the port's 'selectionChanged': only when the selected set changes
     select: (ids: readonly string[]) => {
+      const was = [...selection].sort().join(',')
       selection = [...ids]
+      if ([...ids].sort().join(',') !== was) emit('selectionChanged', [...ids].sort())
     },
     on: (event: string, fn: (e: unknown) => void) => {
-      if (event !== 'input') return () => undefined
-      inputListeners.add(fn)
-      return () => inputListeners.delete(fn)
+      let set = listeners.get(event)
+      if (!set) {
+        set = new Set()
+        listeners.set(event, set)
+      }
+      set.add(fn)
+      return () => set.delete(fn)
     },
     focus: () => undefined,
     viewport: {
@@ -211,7 +230,7 @@ export function fakeFlowCanvas(seed: Partial<El>[] = []): FakeFlowCanvas {
         edits.push({ id, via: o.via })
         return new Promise<boolean>((resolve) => {
           editWaiters.push((ok) => {
-            if (ok) editing = id
+            if (ok) setEditingId(id)
             resolve(ok)
           })
         })
@@ -219,7 +238,7 @@ export function fakeFlowCanvas(seed: Partial<El>[] = []): FakeFlowCanvas {
       editorElement: () => (editing ? api.textarea : null),
       stop: () => {
         stops++
-        editing = null
+        setEditingId(null)
       },
       replace: (id: string, text: string) => {
         replaced.push({ id, text })
@@ -310,7 +329,22 @@ export function fakeFlowCanvas(seed: Partial<El>[] = []): FakeFlowCanvas {
         alt: mods.alt === true,
         handled: () => undefined,
       }
-      for (const l of [...inputListeners]) l(e)
+      emit('input', e)
+    },
+    pointerDown(at = { x: 0, y: 0 }) {
+      emit('input', {
+        type: 'pointer-down',
+        scene: at,
+        screen: at,
+        hit: null,
+        button: 0,
+        pointerType: 'mouse',
+        shift: false,
+        ctrl: false,
+        meta: false,
+        alt: false,
+        handled: () => undefined,
+      })
     },
     grant(ok) {
       const w = editWaiters.shift()
@@ -338,7 +372,7 @@ export function fakeFlowCanvas(seed: Partial<El>[] = []): FakeFlowCanvas {
       gesture = g
     },
     setEditing(id) {
-      editing = id
+      setEditingId(id)
     },
   }
   return api

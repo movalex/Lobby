@@ -14,6 +14,18 @@
 //  - a denied or failed open does the same.
 // Keys are held for the editor at most HOLD_LIMIT_MS.
 //
+// The flow being built (what Ctrl/Cmd+Shift+Arrow repeats) is short-lived: it is the one shape the flow last made
+// or connected to (`cursor`) with the kind it last made (`lastKind`), and it ends, both cleared, as soon as
+//  - the selection becomes anything other than that shape (or its label): another shape, several, a frame, a
+//    connector. An empty selection does not end it (the engine deselects while the shape's editor opens, and an
+//    Escape may deselect); nothing is then selected for the key to act on anyway;
+//  - the canvas is pressed (a click elsewhere, a drag, a click that closes the editor; the + handles are DOM
+//    buttons and do not count);
+//  - FLOW_IDLE_MS pass with no flow step (the shape's editor opening or closing counts as one: typing its words
+//    is part of the flow).
+// So the chord is a11y's again (Ctrl/Cmd+Shift+Down / Up into and out of a frame) on every shape the moment the
+// person does anything but build the flow, including on the shape the flow made, selected again later.
+//
 // Alt+Arrow (the walk along the connections) is a11y's 'a11y.next' / 'a11y.previous', which traversal.ts now
 // answers by the pressed arrow: this installs the key-down observer that tells it which arrow it was.
 import { newElementId } from '@draftroom/board-ops/elements'
@@ -25,6 +37,8 @@ import { type FlowKind, flowSourceOf, planConnected, planConnector } from './pla
 
 /** How long keys typed for a new shape are kept before its editor opens. */
 export const HOLD_LIMIT_MS = 3000
+/** How long a flow stays open to Ctrl/Cmd+Shift+Arrow after its last step (see the header). */
+export const FLOW_IDLE_MS = 15_000
 
 interface Pending {
   readonly id: string
@@ -69,10 +83,12 @@ const LABEL_FONT_SIZE = 20
 
 export class FlowRuntime {
   readonly canvas: LobbyCanvas
-  /** the kind the last flow step made (Ctrl/Cmd+Shift+Arrow makes one more of it) */
+  /** the kind the flow being built last made (Ctrl/Cmd+Shift+Arrow makes one more of it), or null */
   lastKind: FlowKind | null = null
-  /** shapes this tab's flow built from or made: Ctrl/Cmd+Shift+Arrow acts only on them */
-  readonly inFlow = new Set<string>()
+  /** the shape the flow being built last made or connected to: Ctrl/Cmd+Shift+Arrow acts only on it, or null */
+  cursor: string | null = null
+  /** when the flow's last step was (Date.now) */
+  private stepAt = 0
   private pending: Pending | null = null
   private offs: (() => void)[] = []
   private disposed = false
@@ -84,11 +100,20 @@ export class FlowRuntime {
   install(): () => void {
     this.offs.push(
       this.canvas.on('input', (e) => {
+        // a press on the canvas ends the flow being built (see the header)
+        if (e.type === 'pointer-down') this.endFlow()
         if (e.type !== 'key-down') return
         this.onKey(e)
         // Alt+Arrow: traversal.ts follows the connections in the pressed arrow's direction
         if (!e.synthetic && !e.composing && e.alt && !e.ctrl && !e.meta && !e.shift && dirOfKey(e.key))
           noteWalkKey(this.canvas, e.key)
+      }),
+      this.canvas.on('selectionChanged', (ids) => {
+        if (this.cursor !== null && ids.length > 0 && !this.isCursor(ids)) this.endFlow()
+      }),
+      this.canvas.on('editingChanged', () => {
+        // typing the new shape's words is part of the flow: its editor opening or closing is a step
+        if (this.cursor !== null) this.stepAt = Date.now()
       }),
     )
     return () => {
@@ -111,11 +136,37 @@ export class FlowRuntime {
     return flowSourceOf(c, c.selection)
   }
 
-  /** The source Ctrl/Cmd+Shift+Arrow acts on: a shape of this tab's flow, with a kind made before. */
+  /**
+   * The source Ctrl/Cmd+Shift+Arrow acts on: the shape the flow being built last made or connected to, while it
+   * is the selection and the flow has not ended (see the header), or null (the chord is then a11y's).
+   */
   repeatSource(): string | null {
-    if (this.lastKind === null || this.canvas.tool() === 'comment') return null
+    if (this.lastKind === null || this.cursor === null || this.canvas.tool() === 'comment') return null
+    if (Date.now() - this.stepAt > FLOW_IDLE_MS) return null
     const id = this.source()
-    return id && this.inFlow.has(id) ? id : null
+    return id !== null && id === this.cursor ? id : null
+  }
+
+  /** Ends the flow being built: Ctrl/Cmd+Shift+Arrow declines until the next flow step. */
+  endFlow(): void {
+    this.cursor = null
+    this.lastKind = null
+  }
+
+  /** The flow being built goes on from `id` (made or connected to just now). */
+  private step(id: string, kind: FlowKind | null): void {
+    this.cursor = id
+    this.stepAt = Date.now()
+    if (kind) this.lastKind = kind
+  }
+
+  /** `ids` is the cursor alone, or its label (a selected label stands for its container). */
+  private isCursor(ids: readonly string[]): boolean {
+    if (ids.length !== 1) return false
+    const id = ids[0] as string
+    if (id === this.cursor) return true
+    const el = this.canvas.get(id) as { containerId?: string | null } | undefined
+    return !!el && el.containerId === this.cursor
   }
 
   /**
@@ -132,9 +183,8 @@ export class FlowRuntime {
     const plan = planConnected(c, sourceId, dir, { newId: freshId, ...opts })
     if (!plan) return null
     const { shapeId } = applyConnected(c, plan)
-    this.lastKind = plan.kind
-    this.inFlow.add(sourceId)
-    this.inFlow.add(shapeId)
+    // before the selection moves to it (its change would end a flow that still pointed at the source)
+    this.step(shapeId, plan.kind)
     c.select([shapeId])
     bringIntoView(c, [shapeId])
     this.expectEditor(shapeId)
@@ -148,8 +198,8 @@ export class FlowRuntime {
     const plan = planConnector(c, fromId, toId, { newId: freshId })
     if (!plan) return null
     const id = applyConnector(c, fromId, toId, plan)
-    this.inFlow.add(fromId)
-    this.inFlow.add(toId)
+    // the flow goes on from the shape connected to, with the kind it last made (none yet: the chord declines)
+    this.step(toId, null)
     c.select([toId])
     return id
   }

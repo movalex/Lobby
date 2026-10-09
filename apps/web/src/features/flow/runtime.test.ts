@@ -1,7 +1,9 @@
 // L4-1: the flow keys through the key registry (installCanvasFeatures, so the wave L claims are matched as the
-// board matches them), the contextual Ctrl/Cmd+Shift+Arrow, and the new shape's editor: words typed before the
-// lease grant end up in it, and an Escape before the grant still keeps them.
-import { describe, expect, it } from 'vitest'
+// board matches them, with a11y's frame keys registered after them as on the board), the contextual
+// Ctrl/Cmd+Shift+Arrow (only while the flow is being built: it ends on a selection change, a canvas press or
+// FLOW_IDLE_MS, and the chord is a11y's again), and the new shape's editor: words typed before the lease grant end
+// up in it, and an Escape before the grant still keeps them.
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   type CanvasFeature,
   type CanvasFeatureContext,
@@ -9,9 +11,10 @@ import {
   installCanvasFeatures,
   type KeyEventLike,
 } from '../../canvas/api/index.ts'
+import { feature as a11yFeature } from '../a11y/ported/index.tsx'
 import { takeWalkKey } from '../a11y/ported/traversal.ts'
 import { FLOW_KEYS } from './keys.ts'
-import { flowRuntimeOf, mountFlow, wordsAfter } from './runtime.ts'
+import { FLOW_IDLE_MS, flowRuntimeOf, mountFlow, wordsAfter } from './runtime.ts'
 import { type El, fakeFlowCanvas } from './test-canvas.ts'
 
 const RECT: Partial<El> = {
@@ -29,7 +32,9 @@ function setup(seed: Partial<El>[] = [RECT]) {
   const registries = createFeatureRegistries()
   const ctx = { canvas: f.canvas, registries } as unknown as CanvasFeatureContext
   const feature: CanvasFeature = { id: 'flow', keys: FLOW_KEYS, onMount: (c) => mountFlow(c) }
-  const off = installCanvasFeatures([feature], ctx)
+  // a11y's commands (its frame keys mod+Shift+Down / Up among them), after flow as in features/canvas-registry.ts
+  const a11y: CanvasFeature = { id: 'a11y', commands: a11yFeature.commands }
+  const off = installCanvasFeatures([feature, a11y], ctx)
   /** The board's key dispatch: the first registered key that matches and handles it. */
   const press = (key: string, mods: Partial<KeyEventLike> = {}) => {
     const e: KeyEventLike = {
@@ -93,7 +98,9 @@ describe('Ctrl/Cmd+Arrow: the next connected shape', () => {
     const { f, press } = setup()
     f.canvas.select(['src'])
     expect(press('ArrowRight', { ctrlKey: true, altKey: true })).toBeNull()
-    expect(press('ArrowRight', { altKey: true })).toBeNull()
+    // Alt+Arrow is a11y's walk (a selection change only)
+    expect(press('ArrowRight', { altKey: true })).toBe('command:a11y.next:canvas')
+    f.canvas.select(['src'])
     expect(press('ArrowRight')).toBeNull()
     expect(
       press('ArrowRight', {
@@ -106,34 +113,140 @@ describe('Ctrl/Cmd+Arrow: the next connected shape', () => {
 })
 
 describe('Ctrl/Cmd+Shift+Arrow: the last created kind, only while a flow is being built', () => {
-  it('declines before any flow step, then makes the kind the flow last made', async () => {
-    const { f, press } = setup([RECT, { id: 'dia', type: 'diamond', x: 0, y: 600, width: 160, height: 110 }])
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const DIA: Partial<El> = { id: 'dia', type: 'diamond', x: 0, y: 600, width: 160, height: 110 }
+  /** Ctrl+Right from the diamond (the flow's last kind is a diamond), no words typed; returns the made shape. */
+  async function stepFromDiamond(s: ReturnType<typeof setup>): Promise<string> {
+    s.f.canvas.select(['dia'])
+    expect(s.press('ArrowRight', { ctrlKey: true })).toBe('key:flow.next')
+    s.f.grant(false)
+    await tick()
+    return s.f.selected[0] as string
+  }
+
+  it('declines before any flow step, then makes the kind the flow last made, from the shape it made', async () => {
+    const s = setup([RECT, DIA])
+    const { f, press } = s
     f.canvas.select(['src'])
-    expect(press('ArrowDown', { ctrlKey: true, shiftKey: true })).toBeNull()
-    // a step from the diamond: the last created kind is a diamond
-    f.canvas.select(['dia'])
-    expect(press('ArrowRight', { ctrlKey: true })).toBe('key:flow.next')
+    // a11y's 'into the frame' (nothing to go into: the key is taken, nothing is made)
+    expect(press('ArrowDown', { ctrlKey: true, shiftKey: true })).toBe('command:a11y.into-frame:canvas')
+    const made = await stepFromDiamond(s)
+    expect(f.els.get(made)?.type).toBe('diamond')
+    // the new diamond is still the selection: a branch below it, a diamond again
+    expect(press('ArrowDown', { ctrlKey: true, shiftKey: true })).toBe('key:flow.repeat')
+    const branch = f.selected[0] as string
+    expect(branch).not.toBe(made)
+    expect(f.els.get(branch)?.type).toBe('diamond')
+    // and on from the branch
     f.grant(false)
     await tick()
-    // the rectangle is not in the flow yet: Ctrl+Shift+Arrow is a11y's (into a frame) there
+    expect(flowRuntimeOf(f.canvas)?.repeatSource()).toBe(branch)
+  })
+
+  it('the shape the flow built from is not the flow: the chord stays a11y’s there', async () => {
+    const s = setup([RECT, DIA])
+    await stepFromDiamond(s)
+    s.f.canvas.select(['dia'])
+    expect(s.press('ArrowDown', { ctrlKey: true, shiftKey: true })).toBe('command:a11y.into-frame:canvas')
+    expect(s.f.live().filter((e) => e.type === 'diamond')).toHaveLength(2)
+  })
+
+  it('selecting anything else ends the flow: back on the shape it made, the chord is a11y’s', async () => {
+    const s = setup([RECT, DIA])
+    const { f, press } = s
+    const made = await stepFromDiamond(s)
     f.canvas.select(['src'])
-    expect(press('ArrowDown', { ctrlKey: true, shiftKey: true })).toBeNull()
-    // the diamond is: a branch below it, a diamond again
+    f.canvas.select([made])
+    expect(flowRuntimeOf(f.canvas)?.repeatSource()).toBeNull()
+    expect(flowRuntimeOf(f.canvas)?.lastKind).toBeNull()
+    expect(press('ArrowDown', { ctrlKey: true, shiftKey: true })).toBe('command:a11y.into-frame:canvas')
+    expect(f.live().filter((e) => e.type === 'diamond')).toHaveLength(2)
+  })
+
+  it('so do several selected and a press on the canvas; an empty selection (the editor opening) does not', async () => {
+    const s = setup([RECT, DIA])
+    const { f } = s
+    const rt = () => flowRuntimeOf(f.canvas)
+    let made = await stepFromDiamond(s)
+    f.canvas.select([made, 'src'])
+    f.canvas.select([made])
+    expect(rt()?.repeatSource()).toBeNull()
+    made = await stepFromDiamond(s)
+    expect(rt()?.repeatSource()).toBe(made)
+    f.pointerDown()
+    expect(rt()?.repeatSource()).toBeNull()
+    // the engine deselects while the new shape's editor opens, and selects it again as the editor closes
     f.canvas.select(['dia'])
-    expect(press('ArrowDown', { ctrlKey: true, shiftKey: true })).toBe('key:flow.repeat')
-    expect(f.els.get(f.selected[0] as string)?.type).toBe('diamond')
+    expect(s.press('ArrowRight', { ctrlKey: true })).toBe('key:flow.next')
+    made = f.selected[0] as string
+    f.canvas.select([])
+    f.grant(true)
+    await tick()
+    f.canvas.text.stop()
+    f.canvas.select([made])
+    expect(rt()?.repeatSource()).toBe(made)
+    // a selected label stands for its shape
+    f.els.set('lbl', { id: 'lbl', type: 'text', x: 0, y: 0, width: 1, height: 1, containerId: made } as El)
+    f.canvas.select(['lbl'])
+    expect(rt()?.repeatSource()).toBe(made)
+  })
+
+  it(`ends FLOW_IDLE_MS (${FLOW_IDLE_MS} ms) after the last step; the editor opening or closing is a step`, async () => {
+    let now = 1_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    const s = setup([RECT, DIA])
+    const { f } = s
+    const made = await stepFromDiamond(s)
+    now += FLOW_IDLE_MS - 1
+    expect(flowRuntimeOf(f.canvas)?.repeatSource()).toBe(made)
+    // typing the words for a while: the editor closing is a step
+    f.setEditing(made)
+    now += FLOW_IDLE_MS - 1
+    f.setEditing(null)
+    now += FLOW_IDLE_MS - 1
+    expect(flowRuntimeOf(f.canvas)?.repeatSource()).toBe(made)
+    now += 2
+    expect(flowRuntimeOf(f.canvas)?.repeatSource()).toBeNull()
+    expect(s.press('ArrowDown', { ctrlKey: true, shiftKey: true })).toBe('command:a11y.into-frame:canvas')
+  })
+
+  it('a flow-made shape inside a frame, selected again later: Ctrl+Shift+Up is a11y’s, out to the frame', async () => {
+    const s = setup([
+      { id: 'fr', type: 'frame', x: -100, y: -100, width: 900, height: 500 },
+      { ...RECT, frameId: 'fr' },
+      { id: 'other', type: 'rectangle', x: 0, y: 250, width: 100, height: 60, frameId: 'fr' },
+    ])
+    const { f, press } = s
+    f.canvas.select(['src'])
+    expect(press('ArrowRight', { ctrlKey: true })).toBe('key:flow.next')
+    const made = f.selected[0] as string
+    expect(f.els.get(made)?.frameId).toBe('fr')
+    f.grant(false)
+    await tick()
+    const count = f.live().length
+    // something else, then back to the shape the flow made
+    f.canvas.select(['other'])
+    f.canvas.select([made])
+    expect(press('ArrowUp', { ctrlKey: true, shiftKey: true })).toBe('command:a11y.out-of-frame:canvas')
+    expect(f.selected).toEqual(['fr'])
+    expect(f.live()).toHaveLength(count)
+    expect(f.edits).toHaveLength(1)
   })
 
   it('never while the comment tool is on (its level keys)', async () => {
     const { f, press } = setup()
     f.canvas.select(['src'])
     press('ArrowRight', { ctrlKey: true })
+    const made = f.selected[0] as string
     f.grant(false)
     await tick()
-    f.canvas.select(['src'])
-    expect(flowRuntimeOf(f.canvas)?.repeatSource()).toBe('src')
+    expect(flowRuntimeOf(f.canvas)?.repeatSource()).toBe(made)
     f.setTool('comment')
-    expect(press('ArrowDown', { ctrlKey: true, shiftKey: true })).toBeNull()
+    expect(press('ArrowDown', { ctrlKey: true, shiftKey: true })).not.toBe('key:flow.repeat')
+    expect(f.live().filter((e) => e.type === 'rectangle')).toHaveLength(2)
   })
 })
 

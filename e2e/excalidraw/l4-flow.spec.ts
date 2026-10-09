@@ -4,7 +4,8 @@
 // no key lost, the other tab sees the same thing and pushes nothing; dragging the source re-snaps the connector
 // in both tabs; Alt+Arrow walks the connection and the live region names it; a locked shape and a viewer get
 // nothing; a + handle click works; the axe audit passes with the handles shown; the time to build a 10-step flow,
-// keyboard against pointer, is recorded.
+// keyboard against pointer, is recorded; Ctrl+Shift+Arrow repeats the last kind only while the flow is being
+// built, and is a11y's (out of and into a frame) again once the selection moved.
 //
 //   E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/l4-flow --project=chromium --workers=1
 import AxeBuilder from '@axe-core/playwright'
@@ -23,6 +24,7 @@ import {
   items,
   itemText,
   pushedOps,
+  saveState,
   select,
   setViewport,
   test,
@@ -338,4 +340,62 @@ test('Measured: building a 10-step flow, keyboard against pointer (+ handles)', 
     contentType: 'application/json',
   })
   console.log(`[l4-flow] 10-step flow: keyboard ${timings.keyboardMs} ms, pointer ${timings.pointerMs} ms`)
+})
+
+test('Ctrl+Shift+Arrow repeats the last kind only while the flow is being built; in a frame, back on a shape the flow made, Ctrl+Shift+Up goes out to the frame', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await waitForA11y(a.page)
+  await setViewport(a.page, { x: -100, y: -200, zoom: 1 })
+  const frame = await settled(a.page, createItem(a.page, 'frame', { x: 0, y: 0, width: 420, height: 260 }))
+  const src = await settled(
+    a.page,
+    createItem(a.page, 'diamond', { x: 40, y: 60, width: 160, height: 100, frameId: frame, ...FILLED }),
+  )
+  const other = await rect(a.page, 900, 600)
+  await waitForItem(a.page, src, (e) => e.frameId === frame)
+
+  let made = ''
+  await test.step('Ctrl+Right, the words, Escape: then Ctrl+Shift+Down makes one more diamond below it', async () => {
+    await select(a.page, [src])
+    await focusCanvas(a.page)
+    await a.page.keyboard.press('ControlOrMeta+ArrowRight')
+    made = (await nextOf(a.page, src)).shape
+    await waitForTextEditor(a.page, made)
+    await a.page.keyboard.type('Plan')
+    await a.page.keyboard.press('Escape')
+    await expect.poll(() => editingId(a.page)).toBeNull()
+    await expect.poll(() => selected(a.page)).toEqual([made])
+    expect((await item(a.page, made))?.frameId).toBe(frame)
+    await a.page.keyboard.press('ControlOrMeta+Shift+ArrowDown')
+    const branch = (await nextOf(a.page, made)).shape
+    await waitForTextEditor(a.page, branch)
+    await a.page.keyboard.press('Escape')
+    await expect.poll(() => editingId(a.page)).toBeNull()
+    const b = await item(a.page, branch)
+    const m = await item(a.page, made)
+    expect(b?.type).toBe('diamond')
+    expect((b?.y ?? 0) > (m?.y ?? 0) + (m?.height ?? 0)).toBe(true)
+    await expectSaved(a.page)
+    expect((await saveState(a.page)).lastReject).toBeNull()
+  })
+
+  await test.step('something else selected, then the shape the flow made again: Ctrl+Shift+Up is out to the frame, nothing made', async () => {
+    await select(a.page, [other])
+    await select(a.page, [made])
+    await focusCanvas(a.page)
+    const before = (await items(a.page)).length
+    await a.page.keyboard.press('ControlOrMeta+Shift+ArrowUp')
+    await expect.poll(() => selected(a.page)).toEqual([frame])
+    await a.page.waitForTimeout(400)
+    expect((await items(a.page)).length).toBe(before)
+    expect(await editingId(a.page)).toBeNull()
+    // and Ctrl+Shift+Down goes back in (a11y's), making nothing either
+    await a.page.keyboard.press('ControlOrMeta+Shift+ArrowDown')
+    await expect.poll(async () => (await selected(a.page)).length).toBe(1)
+    expect(await selected(a.page)).not.toEqual([frame])
+    await a.page.waitForTimeout(400)
+    expect((await items(a.page)).length).toBe(before)
+  })
 })

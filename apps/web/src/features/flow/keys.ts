@@ -4,9 +4,11 @@
 //   flow.next     Ctrl/Cmd+Arrow        claim 'flow-next': the next connected shape that way (editors)
 //   flow.repeat   Ctrl/Cmd+Shift+Arrow  claim 'flow-repeat': the same, of the last created kind (editors). It is
 //                                       contextual (WAVE_L_CONTEXTUAL_KEYS): it takes the key only while a flow is
-//                                       being built from the one selected shape (a shape this tab's flow made or
-//                                       built from), and declines otherwise, so a11y's Ctrl/Cmd+Shift+Down / Up
-//                                       (into and out of a frame) and the comment tool's level keys keep working.
+//                                       being built from the one selected shape (the shape the flow last made or
+//                                       connected to, until the selection moves, the canvas is pressed or the flow
+//                                       idles: ./runtime.ts), and declines otherwise, so a11y's Ctrl/Cmd+Shift+Down
+//                                       / Up (into and out of a frame) and the comment tool's level keys keep
+//                                       working.
 //
 // A key that declines (no source: nothing or several things selected, a frame, a locked shape, a mind-map topic,
 // a read-only role, an editor open) falls through to the allowlist, which blocks every wave L chord: the engine's
