@@ -201,7 +201,12 @@ test('L8-3: a Decision followed by Ctrl+Right makes a connected Process (W4’s 
       () => true,
       () => false,
     )
-  test.skip(!grew, 'W4’s flow building (Ctrl+Right) is not on this branch: nothing to follow the Decision')
+  // E2E_REQUIRE_FLOW=1 (set it once W4's flow building is on the branch, and in the integrator's run): a Decision
+  // that nothing follows is then a failure, not a skip, so a regression in the flow cannot pass as "not here yet"
+  if (process.env.E2E_REQUIRE_FLOW === '1')
+    expect(grew, 'Ctrl+Right after a Decision made no connected shape (W4’s flow building)').toBe(true)
+  else
+    test.skip(!grew, 'W4’s flow building (Ctrl+Right) is not on this branch: nothing to follow the Decision')
   const all = await items(a.page)
   const arrow = all.find((e) => e.type === 'arrow') as CanvasElement & {
     startBinding?: { elementId: string }
