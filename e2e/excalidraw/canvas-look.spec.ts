@@ -593,7 +593,9 @@ test('R13: on a phone, other people’s cursors show without their name tags; at
   await expect(cursor.locator('.lobby-cursor__name')).toHaveText(b.name)
 })
 
-test('PLAN-wave4 mermaid stub: a pasted chart definition stays plain text (no diagram is made)', async ({
+// Wave L (L4-3) replaced the wave 4 stub: a pasted flowchart now asks "Paste as diagram?" first (l4-diagram.spec.ts
+// covers the diagram); its "Text" choice keeps the words as the one plain text the stub made.
+test('PLAN-wave4 mermaid stub, since L4-3: a pasted chart definition offers a diagram, and Text keeps it plain text', async ({
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
@@ -606,6 +608,8 @@ test('PLAN-wave4 mermaid stub: a pasted chart definition stays plain text (no di
   const at = await canvasPoint(a.page, 0.4, 0.4)
   await a.page.mouse.move(at.x, at.y)
   await a.page.keyboard.press('ControlOrMeta+v')
+  await expect(a.page.getByTestId('mermaid-paste-prompt')).toBeVisible()
+  await a.page.getByTestId('mermaid-paste-text').click()
   await expect
     .poll(async () => ((await items(a.page)) as unknown as El[]).filter((e) => !before.has(e.id)).length)
     .toBeGreaterThan(0)
