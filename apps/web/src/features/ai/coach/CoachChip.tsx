@@ -10,7 +10,7 @@
 
 import { can } from '@draftroom/permissions'
 import { useEffect, useState } from 'react'
-import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
+import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { useUserKind } from '../../../invite/guest.tsx'
 import { subscribeValue } from '../../../lib/signals.ts'
 import { runCommand } from '../../canvas-ux/ported/commands.ts'
@@ -18,7 +18,7 @@ import { SparkIcon } from '../icons.tsx'
 import { AI_COMMAND_IDS } from '../ported/public.ts'
 import { setAiCtx } from '../ported/runtime.ts'
 import { idOfRef } from '../ported/target.ts'
-import { coachFacts, coachWorkshop, dismissedSteps, dismissStep } from './facts.ts'
+import { coachFacts, coachWorkshop, dismissedSteps, dismissStep, seedWorkshop } from './facts.ts'
 import { type CoachStep, nextStep, stepKey } from './next-step.ts'
 
 /** W5's vote setup (features/workshops/commands.ts WORKSHOP_COMMAND_IDS.voteSetup). */
@@ -84,14 +84,17 @@ export function CoachOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
 export const COACH_SETTLE_MS = 300
 
 /** The next step, read again once the board (or the workshop, or following) has been still for a moment. */
-function useCoachStep(canvas: LobbyCanvas): CoachStep | null {
-  const compute = () =>
-    JSON.stringify(
+function useCoachStep(ctx: CanvasFeatureContext): CoachStep | null {
+  const { canvas } = ctx
+  const compute = () => {
+    seedWorkshop(ctx)
+    return JSON.stringify(
       nextStep(coachWorkshop(canvas).get(), coachFacts(canvas), {
         facilitator: !canvas.readOnly(),
         following: canvas.follow.current() !== null,
       }),
     )
+  }
   const [json, setJson] = useState(compute)
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null
@@ -112,14 +115,13 @@ function useCoachStep(canvas: LobbyCanvas): CoachStep | null {
       for (const off of offs) off()
       if (timer) clearTimeout(timer)
     }
-  }, [canvas])
+  }, [ctx])
   return JSON.parse(json) as CoachStep | null
 }
 
 function CoachChip({ ctx }: { ctx: CanvasFeatureContext }) {
-  const { canvas } = ctx
   const [dismissed, setDismissed] = useState(() => dismissedSteps(ctx.board.id))
-  const step = useCoachStep(canvas)
+  const step = useCoachStep(ctx)
   const at = useAnchor(ctx)
   if (!step || dismissed.has(stepKey(step))) return null
   return (

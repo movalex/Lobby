@@ -68,17 +68,26 @@ export function applyWorkshopEvent(ws: CoachWorkshop, type: string, data: unknow
   return ws
 }
 
+/**
+ * Takes the last revealed vote from this tab's workshop store when the stream has said nothing about a vote yet
+ * (the board just opened, with a vote revealed before): the store loads after the coach starts, so this is also
+ * asked each time the coach looks again. Reads only; no request.
+ */
+export function seedWorkshop(ctx: Pick<CanvasFeatureContext, 'canvas' | 'events'>): void {
+  const slot = coachWorkshop(ctx.canvas)
+  if (slot.get().vote) return
+  const last = lastRevealedResults(ctx.events)
+  if (!last) return
+  slot.set({
+    ...slot.get(),
+    vote: { sessionId: last.sessionId, status: 'revealed', top: topOf(last.results) },
+  })
+}
+
 /** Keeps `coachWorkshop` from the board's event stream (see the header). Returns the stop. */
 export function listenWorkshop(ctx: Pick<CanvasFeatureContext, 'canvas' | 'events'>): () => void {
   const slot = coachWorkshop(ctx.canvas)
-  const seed = () => {
-    const last = lastRevealedResults(ctx.events)
-    if (!last || slot.get().vote) return
-    slot.set({
-      ...slot.get(),
-      vote: { sessionId: last.sessionId, status: 'revealed', top: topOf(last.results) },
-    })
-  }
+  const seed = () => seedWorkshop(ctx)
   seed()
   const offs = [WORKSHOP_EVENTS.vote, WORKSHOP_EVENTS.results, PRIVATE_NOTES_EVENTS.changed].map((type) =>
     ctx.events.on(type, (data) => slot.set(applyWorkshopEvent(slot.get(), type, data))),

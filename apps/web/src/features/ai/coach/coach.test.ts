@@ -8,6 +8,7 @@
 //  - the chip writes nothing and requests nothing until it is clicked.
 import { PRIVATE_NOTES_EVENTS, WORKSHOP_EVENTS } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { loadWorkshop, workshopKit } from '../../workshops/ported/ctx-kit.ts'
 import { aiKit, type El, note, renderIn } from '../ported/test-kit.ts'
 import { CoachOverlay } from './CoachChip.tsx'
 import {
@@ -19,6 +20,7 @@ import {
   dismissStep,
   listenWorkshop,
   resetDismissals,
+  seedWorkshop,
 } from './facts.ts'
 import {
   COACH_THEMES_MIN_NOTES,
@@ -226,6 +228,50 @@ describe('facts: the board and the workshop', () => {
     })
     expect(ws.brainstorm).toEqual({ status: 'revealed', frameId: 'f2' })
     expect(applyWorkshopEvent(ws, 'workshop.reaction', {})).toBe(ws)
+  })
+
+  it('a vote revealed before the board opened: the coach takes it from the workshop store (W5’s lastRevealedResults)', async () => {
+    const kit = workshopKit()
+    const iso = new Date().toISOString()
+    await loadWorkshop(kit, {
+      timer: null,
+      serverNow: iso,
+      vote: {
+        session: {
+          id: SID,
+          boardId: 'b-k3kit00001',
+          title: 'Dot vote',
+          votesPerPerson: 3,
+          onePerObject: false,
+          scope: 'board',
+          frameId: null,
+          shapeTypes: null,
+          status: 'revealed',
+          createdBy: 'usr_facilitator0001',
+          createdAt: iso,
+          endsAt: null,
+          closedAt: iso,
+          revealedAt: iso,
+        },
+        myVotes: {},
+        myRemaining: 0,
+        done: true,
+        participantsDone: 2,
+        participants: 2,
+        totalVotesCast: 4,
+        results: [
+          { shapeId: 'shape:b', count: 1, rank: 2 },
+          { shapeId: 'shape:a', count: 3, rank: 1 },
+        ],
+      },
+    })
+    const ctx = { canvas: kit.ctx.canvas, events: kit.ctx.events }
+    seedWorkshop(ctx)
+    expect(coachWorkshop(kit.ctx.canvas).get().vote).toEqual({
+      sessionId: SID,
+      status: 'revealed',
+      top: ['shape:a', 'shape:b'],
+    })
   })
 
   it('listenWorkshop keeps the coach’s state from the stream', () => {
