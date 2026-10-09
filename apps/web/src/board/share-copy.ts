@@ -53,3 +53,13 @@ export function copyFailedText(button: string | null): string {
 /** "Copy board link" when the browser did not copy: the link itself, to select. */
 export const boardLinkCopyFailed = (url: string): string =>
   `Couldn’t copy automatically. Select this link and copy it: ${url}`
+
+/**
+ * The words before a new link's note about its automatic copy: nothing while the copy has not settled
+ * (`null`: copyBounded may take up to COPY_TIMEOUT_MS, and a role=status note must not announce a failure
+ * first), `done` when it copied, the failure (naming `button`) when it did not.
+ */
+export function copyNote(copied: boolean | null, done: string, button: string): string {
+  if (copied === null) return ''
+  return copied ? done : `${copyFailedText(button)} `
+}

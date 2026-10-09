@@ -211,3 +211,45 @@ test('K5-5: at 375 px the invite field takes the whole row of the dialog, and th
     await p.context.close()
   }
 })
+
+// K5 review (minor): a link is drawn before its automatic copy has settled (copyBounded waits up to 1.5 s);
+// the role=status note said "Couldn't copy automatically" during that wait and then "Copied.", so a screen
+// reader could hear the failure first. It now says nothing about the copy until the copy has settled.
+test('K5-5 (review refix): while the automatic copy of a new email-locked link is pending the note says nothing about it; once it gives up it says so', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  const page = a.page
+  await page.setViewportSize({ width: 1280, height: 900 })
+  // a copy that never answers (the window lost the focus, a permission prompt is open)
+  await page.evaluate(() => {
+    Object.defineProperty(navigator.clipboard, 'writeText', {
+      configurable: true,
+      value: () => new Promise<void>(() => {}),
+    })
+  })
+  const FAILED = 'Couldn’t copy automatically'
+  await openShareFromButton(page)
+  const dialog = shareDialog(page)
+
+  await test.step('Invite people: the lock note while the copy is pending, then after it gave up', async () => {
+    await dialog.getByTestId('share-invite-input').fill(`k5copy-${Date.now()}@client.example.test`)
+    await dialog.getByTestId('share-invite-submit').click()
+    await dialog.getByTestId('outside-confirm-yes').click()
+    const note = dialog.getByTestId('share-invite-lock-note')
+    await expect(note).toContainText('can use this link, once, until')
+    expect(await note.textContent()).not.toContain(FAILED)
+    await expect(note).toContainText(FAILED, { timeout: 5000 })
+  })
+
+  await test.step('Guests and clients, a one-person link: the same', async () => {
+    await openMoreWaysToShare(page)
+    await dialog.getByTestId('one-person-link-email').fill(`k5copy2-${Date.now()}@client.example.test`)
+    await dialog.getByTestId('invite-create').click()
+    await dialog.getByTestId('outside-confirm-yes').click()
+    const note = dialog.getByTestId('invite-created-note')
+    await expect(note).toContainText('This link is shown only once')
+    expect(await note.textContent()).not.toContain(FAILED)
+    await expect(note).toContainText(FAILED, { timeout: 5000 })
+  })
+})

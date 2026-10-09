@@ -90,7 +90,7 @@ import { boardPath } from '../lib/routing.ts'
 import { useValue } from '../lib/signals.ts'
 import { useResource } from '../lib/useResource.ts'
 import { Dialog } from '../ui/Dialog.tsx'
-import { boardLinkCopyFailed, copyBounded, copyFailedText } from './share-copy.ts'
+import { boardLinkCopyFailed, copyBounded, copyFailedText, copyNote } from './share-copy.ts'
 import {
   type AccessDetail,
   ADD_MEMBER_ROLES,
@@ -808,7 +808,8 @@ export function InvitePeople({
   const [link, setLink] = useState<{ url: string; email: string; role: BoardRole; expiresAt: string } | null>(
     null,
   )
-  const [copied, setCopied] = useState(false)
+  // null: the automatic copy has not settled yet (nothing is said about it meanwhile); false: it did not copy
+  const [copied, setCopied] = useState<boolean | null>(null)
   const pickedMember =
     picked && picked.text === text ? workspaceMembers.find((m) => m.user.id === picked.id) : null
   const target: InviteTarget = pickedMember
@@ -848,7 +849,7 @@ export function InvitePeople({
   const submit = async () => {
     setNotice(null)
     setLink(null)
-    setCopied(false)
+    setCopied(null)
     // Domain access (D13): an address gets a single-use link that only that verified address can
     // accept; a name that is neither an address nor someone in the workspace gets nothing. K5-5: what
     // the hint already says is not said again (the hint is the one line about what is typed).
@@ -1028,7 +1029,7 @@ export function InvitePeople({
             </button>
           </div>
           <p className="dr-share__hint" role="status" data-testid="share-invite-lock-note">
-            {copied ? 'Copied. ' : `${copyFailedText('Copy')} `}
+            {copyNote(copied, 'Copied. ', 'Copy')}
             {lockedLinkNote(link, formatDateTime)}
           </p>
         </div>
@@ -1960,7 +1961,8 @@ function InviteLinkSection({
   const [created, setCreated] = useState<
     (InvitationCreated & { email: string; role: Exclude<BoardRole, 'owner'> }) | null
   >(null)
-  const [copied, setCopied] = useState(false)
+  // null: the automatic copy has not settled yet (nothing is said about it meanwhile); false: it did not copy
+  const [copied, setCopied] = useState<boolean | null>(null)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { confirm, box } = useOutsideAsk()
@@ -1969,7 +1971,7 @@ function InviteLinkSection({
 
   const create = async () => {
     setError(null)
-    setCopied(false)
+    setCopied(null)
     const checked = checkInviteEmail(email)
     if (!checked.ok) {
       setFieldError(checked.message)
@@ -2119,8 +2121,8 @@ function InviteLinkSection({
               {copied ? 'Copied' : 'Copy'}
             </button>
           </div>
-          <p className="dr-share__hint" role="status">
-            {copied ? 'Copied to your clipboard. ' : `${copyFailedText('Copy')} `}This link is shown only
+          <p className="dr-share__hint" role="status" data-testid="invite-created-note">
+            {copyNote(copied, 'Copied to your clipboard. ', 'Copy')}This link is shown only
             once. {lockedLinkNote(created, formatDateTime)}{' '}
             <button
               type="button"

@@ -2,7 +2,7 @@
 // never answers (an unfocused window, a permission prompt) must settle as "couldn't copy" within the
 // timeout, so the "Creating…" button and the new link do not depend on it.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { boardLinkCopyFailed, COPY_TIMEOUT_MS, copyBounded, copyFailedText } from './share-copy.ts'
+import { boardLinkCopyFailed, COPY_TIMEOUT_MS, copyBounded, copyFailedText, copyNote } from './share-copy.ts'
 
 beforeEach(() => {
   vi.useFakeTimers()
@@ -98,5 +98,13 @@ describe('K5-5: what the dialog says when the browser did not copy', () => {
     expect(boardLinkCopyFailed('https://lobby.example/b/b-abc')).toBe(
       'Couldn’t copy automatically. Select this link and copy it: https://lobby.example/b/b-abc',
     )
+  })
+})
+
+describe('K5 review: a new link’s note says nothing about the copy until it has settled', () => {
+  it('pending: nothing; copied: the done words; not copied: the failure naming the button', () => {
+    expect(copyNote(null, 'Copied. ', 'Copy')).toBe('')
+    expect(copyNote(true, 'Copied. ', 'Copy')).toBe('Copied. ')
+    expect(copyNote(false, 'Copied. ', 'Copy')).toBe(`${copyFailedText('Copy')} `)
   })
 })
