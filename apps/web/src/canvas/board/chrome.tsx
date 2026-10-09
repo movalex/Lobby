@@ -34,15 +34,10 @@ import { currentPlatform, formatChord } from '../api/keys.ts'
 import type { LobbyCanvas } from '../api/lobby-canvas.ts'
 import type { FeatureOverlaySpec, FeatureRegistries, HostSlotName } from '../api/registries.ts'
 import type { EditNotice, EditState } from '../lease/editorLease.ts'
+import { useLongPress } from '../overlay/long-press.ts'
+import { type CompassChip, compass } from '../presence/compass.ts'
 import { arrowPaths } from '../presence/drag-arrows.ts'
-import {
-  type AvoidRect,
-  type CoverNode,
-  EDGE_CHIP_RADIUS,
-  type EdgeMarker,
-  edgeMarkers,
-  floatingCovers,
-} from './edge-markers.ts'
+import { type AvoidRect, type CoverNode, EDGE_CHIP_RADIUS, floatingCovers } from './edge-markers.ts'
 import { editingOutline, hoverOutline, type OutlineBox } from './outlines.ts'
 import type { LobbyBoardSession } from './session.ts'
 
@@ -563,12 +558,14 @@ function Cursors({
   )
 }
 
-/** What a marker says about the person it points at. */
-interface EdgeMarkerView extends EdgeMarker {
+/** What a marker says about the person it points at (and, L6-2, how many more it stands for). */
+interface EdgeMarkerView extends CompassChip {
   readonly uid: string
   readonly name: string
   readonly color: string
   readonly idle: boolean
+  /** the other people merged into this chip ("+N") */
+  readonly more: number
 }
 
 /**
@@ -719,6 +716,9 @@ const SIDE_WORDS = { left: 'to the left', right: 'to the right', top: 'above', b
  * mode; a person the room does not stream to this tab has no place to point at. A chip never sits under the style
  * panel, the navigation panel, the floating selection bar or the phone sheet (its button and the open sheet), or
  * the other controls on the canvas's edge (`useCoveredRects`). Drawn only, never written.
+ * Wave L (W6, L6-2, the presence compass, ../presence/compass.ts): people whose chips would land on one another
+ * share one chip, the nearest person's with "+N", and at most six chips are drawn; a press held on a chip
+ * follows (a touch screen has no Shift-click).
  */
 function EdgeMarkers({
   canvas,
@@ -741,7 +741,7 @@ function EdgeMarkers({
       .peers()
       .filter((p) => p.streaming !== false && (p.point || p.view) && registries.cursorVisible.call(p.sid))
     if (!peers.length) return []
-    const found = edgeMarkers(
+    const found = compass(
       peers,
       v,
       // the canvas's size on screen, from the camera (which changes with the canvas's size)
@@ -752,9 +752,21 @@ function EdgeMarkers({
     const bySid = new Map(peers.map((p) => [p.sid, p]))
     return found.flatMap((m) => {
       const p = bySid.get(m.sid)
-      return p ? [{ ...m, uid: p.uid, name: p.name, color: safeColor(p.color, p.uid), idle: p.idle }] : []
+      return p
+        ? [
+            {
+              ...m,
+              uid: p.uid,
+              name: p.name,
+              color: safeColor(p.color, p.uid),
+              idle: p.idle,
+              more: m.sids.length - 1,
+            },
+          ]
+        : []
     })
   }, [canvas, registries, version, focusMode, covered])
+  const press = useLongPress((sid: string) => canvas.follow.start(sid))
   if (!markers.length) return null
   const go = (m: EdgeMarkerView, follow: boolean) => {
     if (follow) {
@@ -777,8 +789,13 @@ function EdgeMarkers({
           data-uid={m.uid}
           data-side={m.side}
           data-idle={m.idle || undefined}
-          aria-label={`Go to ${m.name}, off screen ${SIDE_WORDS[m.side]}`}
-          title={`${m.name} is off screen ${SIDE_WORDS[m.side]}. Click to go there, Shift-click to follow.`}
+          data-more={m.more || undefined}
+          aria-label={
+            m.more
+              ? `Go to ${m.name} and ${m.more} more near you, off screen ${SIDE_WORDS[m.side]}`
+              : `Go to ${m.name}, off screen ${SIDE_WORDS[m.side]}`
+          }
+          title={`${m.more ? `${m.name} and ${m.more} more near you are` : `${m.name} is`} off screen ${SIDE_WORDS[m.side]}. Click to go there, Shift-click or press and hold to follow.`}
           style={
             {
               left: Math.round(m.x),
@@ -787,12 +804,21 @@ function EdgeMarkers({
               '--edge-color': m.color,
             } as CSSProperties
           }
-          onClick={(e) => go(m, e.shiftKey)}
+          {...press.bind(m.sid)}
+          onClick={(e) => {
+            if (press.takeClick()) return
+            go(m, e.shiftKey)
+          }}
         >
           <span className="lobby-edge-marker__arrow" aria-hidden="true" />
           <span className="lobby-edge-marker__face" aria-hidden="true">
             {initialsFor(m.name)}
           </span>
+          {m.more > 0 ? (
+            <span className="lobby-edge-marker__more" data-testid="edge-marker-more" aria-hidden="true">
+              +{m.more}
+            </span>
+          ) : null}
         </button>
       ))}
     </div>
