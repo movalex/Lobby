@@ -525,7 +525,11 @@ export class ElementRoom {
       socket,
       this.deps.now(),
       () => this.metricsClose(CLOSE_RECONNECT, 'backpressure'),
-      (n) => this.deps.metrics.inc('lobby_outbound_bytes_total', {}, n),
+      (n) => {
+        this.deps.metrics.inc('lobby_outbound_bytes_total', {}, n)
+        // F10 (L6-5): an ack queued behind other frames is timed when its session's queue writes it
+        this.deps.metrics.ackFlushed(s.out, s.out.sentBytes, this.deps.now())
+      },
     )
     this.sessions.add(s)
     return s
@@ -580,6 +584,7 @@ export class ElementRoom {
       )
       if (ok) {
         this.deps.metrics.inc('lobby_presence_in_total')
+        if (msg.t === 'laser') this.deps.metrics.inc('lobby_presence_laser_in_total')
         if (msg.editing) this.leases.renew(msg.editing, s.identity.sid, this.deps.now())
       }
       return
@@ -819,6 +824,7 @@ export class ElementRoom {
       )
       s.welcomed = true
       this.deps.metrics.inc('lobby_joins_total')
+      if (epoch !== null) this.deps.metrics.reconnect(now)
       // one `roster` frame per 100 ms at most for everyone (roster-batch.ts; the joiner's welcome names it already)
       if (!already) this.rosterBatch.push({ k: 'join', p: rosterEntry(s.identity) })
     }
@@ -1227,6 +1233,11 @@ export class ElementRoom {
     this.deps.metrics.fsyncMs.observe(t1 - tc)
     this.deps.metrics.commitMs.observe(t1 - t0)
     if (pushes) this.deps.metrics.pushesPerCommit.observe(pushes)
+    if (pushEntries.length)
+      this.deps.metrics.committed(
+        pushEntries.map((e) => e.push.receivedAt),
+        this.deps.now(),
+      )
     this.lastCommitAt = this.deps.now()
     this.pacer.noteCommit(this.lastCommitAt)
     if (clock !== startClock) this.catchUps.clear()
@@ -1237,7 +1248,8 @@ export class ElementRoom {
     // the cached reset snapshot stays valid for its 5 s: a joiner gets it plus a catch-up since its clock
     // (§2.4.5), so a join storm on a busy board compresses one snapshot, not one per write
     // after COMMIT: the batch's changes (once, for everyone), then acks and lease events in order
-    if (after.size || Object.keys(doc).length) {
+    const fannedOut = after.size > 0 || Object.keys(doc).length > 0
+    if (fannedOut) {
       const ops: ServerOp[] = []
       for (const [id, el] of after) ops.push(serverOp(before.get(id) ?? null, el))
       const frame = JSON.stringify({
@@ -1251,6 +1263,10 @@ export class ElementRoom {
     }
     for (const d of deliveries) d()
     for (const w of serverWrites) (w.ok ? w.entry.resolve : w.entry.reject)(w.value)
+    // F10 (L6-5): aggregates only (metrics.ts)
+    if (fannedOut || deliveries.length) this.deps.metrics.fanout(performance.now() - t1)
+    if (fannedOut)
+      for (const s of this.sessions) if (s.welcomed && !s.closed) this.deps.metrics.queueDepth(s.out.pending)
     if (this.deletedSinceTrim >= LB_DELETED_LIMITS.trimEvery) {
       this.deletedSinceTrim = 0
       try {
@@ -1419,6 +1435,14 @@ export class ElementRoom {
           ...(outcome.derived.length ? { derived: outcome.derived } : {}),
           ...(outcome.docDenied ? { docDenied: outcome.docDenied } : {}),
         }),
+      )
+      // F10 (L6-5): written at once, or timed when the queue writes it (metrics.ts ackFlushed)
+      this.deps.metrics.ackQueued(
+        s.out,
+        s.out.pending - (s.socket.bufferedAmount ?? 0),
+        s.out.sentBytes,
+        push.receivedAt,
+        now,
       )
       const abuse = outcome.codes.filter((c) => c !== 'ok' && REJECT_CODE_INFO[c as RejectCode]?.abuse).length
       if (abuse && s.abused(abuse, now)) this.terminal(s, 'INVALID_MESSAGE')
