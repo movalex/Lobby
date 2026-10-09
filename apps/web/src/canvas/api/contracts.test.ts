@@ -332,6 +332,40 @@ describe('the LobbyCanvas member table', () => {
     dispose()
   })
 
+  it('wave L: presence.draggerOf is composed (null on a bare port), the session’s dragger on the board page, tracked on `presence`', () => {
+    expect(LOBBY_CANVAS_MEMBERS.find((m) => m.path === 'presence.draggerOf')).toEqual({
+      path: 'presence.draggerOf',
+      owner: '2C',
+      status: 'composed',
+    })
+    const bare = createLobbyCanvas({ port: fakePort(), registries: createFeatureRegistries() })
+    expect(bare.canvas.presence.draggerOf('n1')).toBeNull()
+    bare.dispose()
+    // the board session provides presence's lookup on the C0 registries (canvas/board/session.ts)
+    const registries = createFeatureRegistries()
+    let dragging: string[] = []
+    registries.dragger.provide((id) => (dragging.includes(id) ? { sid: 'u_bob:s1', name: 'Bob' } : null))
+    const listeners = new Set<() => void>()
+    const board = {
+      ...fakeBoard(),
+      subscribe: (c: string, l: () => void) => {
+        if (c === 'presence') listeners.add(l)
+        return () => listeners.delete(l)
+      },
+    } as unknown as BoardHandles
+    const { canvas, dispose } = createLobbyCanvas({ port: fakePort(), registries, board })
+    const seen: (string | null)[] = []
+    const stop = signals.react('dragger', () => {
+      seen.push(canvas.presence.draggerOf('n1')?.name ?? null)
+    })
+    dragging = ['n1']
+    for (const l of listeners) l()
+    expect(seen).toEqual([null, 'Bob'])
+    expect(canvas.presence.draggerOf('n2')).toBeNull()
+    stop()
+    dispose()
+  })
+
   it("2C's composed tx writes run on a bare port (group, reorder, frames)", () => {
     const writes: [string, Record<string, unknown>][] = []
     const els = new Map<string, CanvasElement>(

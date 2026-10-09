@@ -459,6 +459,14 @@ export interface LobbyPresence {
   peers(): readonly RemoteCursor[]
   /** @owner 2C · one peer by session id */
   peer(sid: string): RemoteCursor | null
+  /**
+   * @owner 2C · wave L (W6 for the wave, as the CanvasPort owner): the other session dragging `id` right now
+   * (the room's drag relay, O2's "Bob is moving this": the C0 registries' `dragger`), or null when nobody
+   * does. Null on a bare port (no presence). L8-1 and L8-2 skip a note another session drags. Tracks the
+   * `presence` concern (a presence frame carries the drags), but read it when you act, not from a cache: a
+   * drag that ends with its committed positions may clear before the next presence frame.
+   */
+  draggerOf(id: string): { readonly sid: string; readonly name: string } | null
 }
 
 /** A follower's camera: the scene point at the canvas's top left, and the zoom (what `viewport.set` takes). */

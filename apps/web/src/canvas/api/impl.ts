@@ -124,7 +124,8 @@ export interface BoardHandles {
   }
   readonly text: Pick<LobbyText, 'edit' | 'stop' | 'editorElement' | 'measure' | 'replace'>
   readonly styles: Pick<LobbyStyles, 'next' | 'setNext'>
-  readonly presence: LobbyPresence
+  /** `draggerOf` is composed here, from the C0 registries' `dragger` (the board session provides it) */
+  readonly presence: Omit<LobbyPresence, 'draggerOf'>
   readonly history: LobbyHistory & {
     /** runs `write` (a transact) and folds the step it records into this tab's previous one */
     joinPrevious<T>(write: () => T): T
@@ -193,6 +194,8 @@ const COMPOSED_BY_2C: ReadonlySet<string> = new Set([
   'transact.skipUndo',
   // wave L: real everywhere (null on a bare port: no room is known; the board session's value on the page)
   'room.contractsRev',
+  // wave L: the C0 registries' `dragger` (null on a bare port: nobody provides it)
+  'presence.draggerOf',
   'text.of',
   'visibleBounds',
   'sceneToOverlay',
@@ -295,6 +298,8 @@ export const LOBBY_CANVAS_MEMBERS: readonly MemberInfo[] = [
       ['styles.apply', '3a'],
       ['presence.peers', '2C'],
       ['presence.peer', '2C'],
+      // wave L (W6 for the wave): composed from the C0 registries' `dragger`
+      ['presence.draggerOf', '2C'],
       ['follow.current', '3c'],
       ['follow.start', '3c'],
       ['follow.stop', '3c'],
@@ -790,6 +795,12 @@ export function createLobbyCanvas(deps: LobbyCanvasDeps): LobbyCanvasHandle {
         sources.presence.track()
         return b.presence.peer(sid)
       }),
+      // wave L: composed from the C0 registries' `dragger` (the board session provides presence's; the
+      // fallback, a bare port's, is null)
+      draggerOf: (id: string) => {
+        sources.presence.track()
+        return registries.dragger.draggerOf(id)
+      },
     },
     follow: followPart.follow,
     history: {
