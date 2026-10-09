@@ -13,6 +13,7 @@ import { useEffect, useId, useMemo, useRef } from 'react'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { useMediaQuery } from '../../../ui/useMedia.ts'
+import { announcerFor } from '../../a11y/ported/announcer.ts'
 import { spotlightKey, type WorkshopStore } from '../store.ts'
 import { storeFor, useWorkshop } from '../workshop-context.ts'
 import { REDUCED_MOTION_QUERY } from './Reactions.tsx'
@@ -110,6 +111,13 @@ export function SpotlightLayer({ ctx }: { ctx: Ctx }) {
   const hidden = snap.spotlightHidden
   const starter = !!s && s.by.userId === me
 
+  // One polite announcement per spotlight, through the board's one announcer (the canvas has no live region of its
+  // own to add: a11y-audit), not per camera move; the person who started it knows.
+  useEffect(() => {
+    if (s && key && !starter) announcerFor(ctx.canvas).sayPolitely(`${spotlightText(s, me)}.`)
+    // said once per spotlight (a new one has a new key), not when its objects move
+  }, [key, starter])
+
   // bring everyone to it, once, but not the person who started it
   const scene = placed?.shape.scene ?? null
   useEffect(() => {
@@ -149,10 +157,6 @@ export function SpotlightLayer({ ctx }: { ctx: Ctx }) {
           Show the spotlight
         </button>
       )}
-      {/* one announcement per spotlight, not per camera move */}
-      <p className="dr-sr-only" role="status" aria-live="polite" data-testid="spotlight-announce">
-        {s ? spotlightText(s, me) : ''}
-      </p>
     </div>
   )
 }

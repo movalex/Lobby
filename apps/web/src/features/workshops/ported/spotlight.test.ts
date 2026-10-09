@@ -358,6 +358,17 @@ describe('what the layer draws', () => {
     expect(h).toContain('data-testid="spotlight-go"')
   })
 
+  it('adds no live region over the canvas (the one board announcer speaks; the a11y audit allows only known ones)', () => {
+    const kit = withNotes()
+    kit.events.emit('workshop.spotlight', event(spotlight(['shape:n1']), 1))
+    for (const h of [html(kit), html(withNotes())]) {
+      expect(h).not.toContain('aria-live')
+      expect(h).not.toMatch(/role="(status|alert)"/)
+    }
+    kit.store.hideSpotlight()
+    expect(html(kit)).not.toContain('aria-live')
+  })
+
   it('the stylesheet keeps the ring still and the dimming steady under reduced motion', () => {
     const css = readFileSync(new URL('./workshops-ported.css', import.meta.url), 'utf8')
     const block =
