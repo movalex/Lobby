@@ -32,7 +32,14 @@ import { aiCustomData } from '../ai/ported/public.ts'
 import { bringIntoView } from './apply.ts'
 import { plural } from './copy.ts'
 import { sortDeps } from './deps.ts'
-import { type BuiltPlan, executePlan, type Outcome, type PlanProblem, type PlanSpec } from './execute.ts'
+import {
+  type BuiltPlan,
+  executePlan,
+  type Outcome,
+  type PlanProblem,
+  type PlanSpec,
+  whileBusy,
+} from './execute.ts'
 import {
   boxOf,
   isBoundLabel,
@@ -95,12 +102,20 @@ function aiTargets(ctx: CanvasFeatureContext, ids: readonly string[]): Targets {
 
 // ---- sort by a lens ----------------------------------------------------------------------------------------------
 
-/** Sorts `ids` (default: the selection) into columns named by `lens`: "customer journey stage", "effort". */
-export async function sortByLens(
+/**
+ * Sorts `ids` (default: the selection) into columns named by `lens`: "customer journey stage", "effort". It holds
+ * the canvas's one sort slot from the start, across the wait for the AI: a second request made meanwhile is
+ * turned away with a notice and does not make a second call.
+ */
+export function sortByLens(
   ctx: CanvasFeatureContext,
   lens: string,
   ids: readonly string[] = ctx.canvas.selection,
 ): Promise<Outcome> {
+  return whileBusy(ctx, () => lensRun(ctx, lens, ids))
+}
+
+async function lensRun(ctx: CanvasFeatureContext, lens: string, ids: readonly string[]): Promise<Outcome> {
   const { canvas } = ctx
   if (canvas.readOnly()) return { status: 'refused', reason: 'read-only' }
   const words = lens.trim().replace(/\s+/g, ' ').slice(0, AI_SORT_LENS_MAX_CHARS)
@@ -164,7 +179,7 @@ export async function sortByLens(
       return isSort(again) ? makeBuild(again) : null
     },
   }
-  return executePlan(ctx, spec)
+  return executePlan(ctx, spec, true)
 }
 
 // ---- place on a 2x2 ----------------------------------------------------------------------------------------------
@@ -344,11 +359,19 @@ function matrixSpot(canvas: LobbyCanvas, notes: readonly CanvasElement[], size: 
 /**
  * Places `ids` (default: the selection) on a 2x2 by the scores the AI gives them on `axes` (the template's, or a
  * matrix this feature made, name their own; `axes` is what a new matrix is made from). Resolves 'needs-axes'
- * when the notes belong with no 2x2 and no axes were given.
+ * when the notes belong with no 2x2 and no axes were given. Like `sortByLens` it holds the canvas's one sort
+ * slot across the wait for the AI.
  */
-export async function placeOnMatrix(
+export function placeOnMatrix(
   ctx: CanvasFeatureContext,
   o: { ids?: readonly string[]; axes?: readonly [AiScoreAxis, AiScoreAxis] } = {},
+): Promise<PlaceOutcome> {
+  return whileBusy(ctx, () => placeRun(ctx, o))
+}
+
+async function placeRun(
+  ctx: CanvasFeatureContext,
+  o: { ids?: readonly string[]; axes?: readonly [AiScoreAxis, AiScoreAxis] },
 ): Promise<PlaceOutcome> {
   const { canvas } = ctx
   const ids = o.ids ?? canvas.selection
@@ -378,15 +401,19 @@ export async function placeOnMatrix(
   const title = `Place by ${axes[1].name.toLowerCase()} and ${axes[0].name.toLowerCase()}`
   const makeBuild = (res: Extract<AiResult, { action: 'score' }>) => (): BuiltPlan | PlanProblem =>
     buildPlacement(ctx, ids, o.axes, res, title)
-  return executePlan(ctx, {
-    title,
-    runId: first.runId,
-    build: makeBuild(first),
-    retry: async () => {
-      const again = await call()
-      return isScore(again) ? makeBuild(again) : null
+  return executePlan(
+    ctx,
+    {
+      title,
+      runId: first.runId,
+      build: makeBuild(first),
+      retry: async () => {
+        const again = await call()
+        return isScore(again) ? makeBuild(again) : null
+      },
     },
-  })
+    true,
+  )
 }
 
 /** The plan that puts the notes where `res` scores them, built from the board as it is now. */

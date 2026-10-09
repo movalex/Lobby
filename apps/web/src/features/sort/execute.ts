@@ -64,6 +64,37 @@ const busy = new WeakSet<object>()
 /** Whether a sort or a placement of this canvas is waiting for the preview, or for the AI. */
 export const isBusy = (canvas: object) => busy.has(canvas)
 
+/** What a request made while another one is running is told. */
+export const BUSY_TEXT = 'A sort is already running. Wait for it to finish, then try again.'
+
+/**
+ * Takes the canvas's one slot for a sort or a placement (null when it is taken). Whoever takes it gives it back:
+ * the AI paths take it before the call to the api, so a second request made while the first waits is turned away
+ * at once and not left to run a second call.
+ */
+export function takeBusy(canvas: object): (() => void) | null {
+  if (busy.has(canvas)) return null
+  busy.add(canvas)
+  return () => void busy.delete(canvas)
+}
+
+/** Runs `run` holding the canvas's slot; a request that finds it taken is refused with a notice. */
+export async function whileBusy<T extends { readonly status: string }>(
+  ctx: CanvasFeatureContext,
+  run: () => Promise<T>,
+): Promise<T | Outcome> {
+  const release = takeBusy(ctx.canvas)
+  if (!release) {
+    notice(ctx, BUSY_TEXT)
+    return { status: 'refused', reason: 'busy' }
+  }
+  try {
+    return await run()
+  } finally {
+    release()
+  }
+}
+
 export function previewOf(spec: Pick<PlanSpec, 'title' | 'runId'>, built: BuiltPlan): AiPreviewPlan {
   return {
     runId: spec.runId,
@@ -86,12 +117,18 @@ function notice(ctx: CanvasFeatureContext, text: string, tone?: 'error', action?
   })
 }
 
-/** Runs `spec` (see the header). Resolves what happened; tells the person in a notice. */
-export async function executePlan(ctx: CanvasFeatureContext, spec: PlanSpec): Promise<Outcome> {
+/**
+ * Runs `spec` (see the header). Resolves what happened; tells the person in a notice. `held`: the caller already
+ * holds the canvas's slot (`whileBusy`, around its AI call), so this neither takes nor gives it back.
+ */
+export async function executePlan(ctx: CanvasFeatureContext, spec: PlanSpec, held = false): Promise<Outcome> {
   const { canvas } = ctx
   if (canvas.readOnly()) return { status: 'refused', reason: 'read-only' }
-  if (busy.has(canvas)) return { status: 'refused', reason: 'busy' }
-  busy.add(canvas)
+  const release = held ? () => {} : takeBusy(canvas)
+  if (!release) {
+    notice(ctx, BUSY_TEXT)
+    return { status: 'refused', reason: 'busy' }
+  }
   try {
     let build = spec.build
     let built = build()
@@ -146,6 +183,6 @@ export async function executePlan(ctx: CanvasFeatureContext, spec: PlanSpec): Pr
     notice(ctx, [result.text, fresh.extra ?? '', skipped].filter(Boolean).join(' '), undefined, fresh.action)
     return { status: 'applied', moved: result.moved, skipped: fresh.skipped.length }
   } finally {
-    busy.delete(canvas)
+    release()
   }
 }

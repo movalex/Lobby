@@ -9,9 +9,11 @@ import { instantiateSceneTemplate } from '@draftroom/templates/scene'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { placeOnMatrix, sortByLens, validAxes } from './ai.ts'
 import { setSortDeps } from './deps.ts'
+import { isBusy } from './execute.ts'
 import { QUADRANT_KEYS, type QuadrantKey, quadrantOf } from './layout.ts'
 import { detectMatrix, MATRIX_FRAME_KIND, readTemplateMatrix } from './matrix.ts'
 import { targetNotes } from './model.ts'
+import { sortBy } from './run.ts'
 import { scoresOf } from './scores.ts'
 import { type El, fakeCanvas, fakeCtx, fillOf, frameEl, noteEls } from './test-kit.ts'
 
@@ -240,6 +242,98 @@ describe('sort by a lens', () => {
     const f = fakeCanvas(lensBoard(4), { readOnly: true })
     expect((await sortByLens(fakeCtx(f.canvas).ctx, 'x', nids(4))).status).toBe('refused')
     expect(seen).toHaveLength(0)
+  })
+})
+
+// ---- one sort at a time -------------------------------------------------------------------------------------------
+
+describe('one sort or placement at a time, from the moment it asks the AI', () => {
+  const lensAnswer = (): AiResult => ({
+    action: 'sort',
+    lens: 'x',
+    themes: [
+      { name: 'One', noteIds: ['n0', 'n1', 'n2', 'n3'].map(ref) },
+      { name: 'Two', noteIds: ['n4', 'n5', 'n6', 'n7'].map(ref) },
+    ],
+    ...common,
+  })
+
+  /** A runAi that waits for `release()`; `calls` counts what reached it. */
+  function gatedAi(answer: () => AiResult | null) {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const state = { calls: 0 }
+    setSortDeps({
+      runAi: async () => {
+        state.calls++
+        await gate
+        return answer()
+      },
+      showAiPreview: async () => 'apply',
+    })
+    return { state, release: () => release() }
+  }
+
+  it('turns a second lens sort away with a notice while the first waits for the AI: one call, one step', async () => {
+    const { state, release } = gatedAi(lensAnswer)
+    const f = fakeCanvas(lensBoard())
+    const { ctx, notices } = fakeCtx(f.canvas)
+    const first = sortByLens(ctx, 'journey', nids(8))
+    // the second request arrives while the first is waiting for the api
+    const second = await sortByLens(ctx, 'effort', nids(8))
+    expect(second).toEqual({ status: 'refused', reason: 'busy' })
+    expect(notices.at(-1)?.text).toMatch(/already running/)
+    expect(state.calls).toBe(1)
+    release()
+    expect((await first).status).toBe('applied')
+    expect(f.steps).toHaveLength(1)
+    // the slot is free again afterwards
+    expect(isBusy(f.canvas)).toBe(false)
+  })
+
+  it('also turns away a deterministic sort, a placement and another lens sort, and takes requests again after', async () => {
+    const { state, release } = gatedAi(lensAnswer)
+    const f = fakeCanvas(lensBoard())
+    const { ctx } = fakeCtx(f.canvas)
+    const first = sortByLens(ctx, 'journey', nids(8))
+    expect(await sortBy(ctx, 'colour', nids(8))).toEqual({ status: 'refused', reason: 'busy' })
+    expect(
+      await placeOnMatrix(ctx, {
+        ids: nids(8),
+        axes: [
+          { name: 'Effort', low: 'Low', high: 'High' },
+          { name: 'Impact', low: 'Low', high: 'High' },
+        ],
+      }),
+    ).toEqual({ status: 'refused', reason: 'busy' })
+    expect(state.calls).toBe(1)
+    release()
+    await first
+    // free again: a deterministic sort runs
+    expect((await sortBy(ctx, 'colour', nids(8))).status).not.toBe('refused')
+  })
+
+  it('gives the slot back when the AI fails or answers nothing, and when the request is refused', async () => {
+    stubAi(() => null)
+    const f = fakeCanvas(lensBoard())
+    const { ctx } = fakeCtx(f.canvas)
+    expect(await sortByLens(ctx, 'x', nids(8))).toEqual({ status: 'nothing', reason: 'ai' })
+    expect(isBusy(f.canvas)).toBe(false)
+    expect((await sortByLens(ctx, 'x', ['n0'])).status).toBe('nothing')
+    expect(isBusy(f.canvas)).toBe(false)
+    // a runAi that throws does not leave the canvas stuck
+    setSortDeps({
+      runAi: async () => {
+        throw new Error('network')
+      },
+    })
+    await expect(sortByLens(ctx, 'x', nids(8))).rejects.toThrow('network')
+    expect(isBusy(f.canvas)).toBe(false)
+    const ro = fakeCanvas(lensBoard(), { readOnly: true })
+    expect((await sortByLens(fakeCtx(ro.canvas).ctx, 'x', nids(8))).status).toBe('refused')
+    expect(isBusy(ro.canvas)).toBe(false)
   })
 })
 
