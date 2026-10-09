@@ -106,13 +106,13 @@ export function findSpot(ctx: CanvasFeatureContext, req: AiSpotRequest): AiSpot 
 // ---- command ids (CommandSpec ids W2 registers; canvas-ux runCommand(ctx, id, source, args)) -------------
 
 export const AI_COMMAND_IDS = {
-  /** Ask this board (L2-2); args AiAskArgs: the palette's "Ask: <query>" prefills the question */
+  /** Ask this board (L2-2); args AiAskArgs: with a question it asks at once (the palette), else the question box */
   ask: 'ai.ask',
   /** Wrap up / Catch me up (L2-3); args AiRecapArgs */
   recap: 'ai.recap',
-  /** Group into themes (registered since wave 3) */
+  /** Group into themes on the selection, else the frame in view (a command since wave L; the menus since wave 3) */
   themes: 'ai.themes',
-  /** Action items (registered since wave 3); args AiActionsArgs: vote-weighted with a revealed vote (L1-7) */
+  /** Action items (a command since wave L); args AiActionsArgs: vote-weighted with a revealed vote (L1-7) */
   actions: 'ai.actions',
 } as const
 

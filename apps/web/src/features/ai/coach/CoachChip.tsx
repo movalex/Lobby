@@ -10,9 +10,9 @@
 
 import { can } from '@draftroom/permissions'
 import { useEffect, useState } from 'react'
-import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
+import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { useUserKind } from '../../../invite/guest.tsx'
-import { useValue } from '../../../lib/signals.ts'
+import { subscribeValue } from '../../../lib/signals.ts'
 import { runCommand } from '../../canvas-ux/ported/commands.ts'
 import { SparkIcon } from '../icons.tsx'
 import { AI_COMMAND_IDS } from '../ported/public.ts'
@@ -80,17 +80,46 @@ export function CoachOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
   return <CoachChip ctx={ctx} />
 }
 
+/** How long the board must be still before the coach looks again (a drag or a paste is many changes). */
+export const COACH_SETTLE_MS = 300
+
+/** The next step, read again once the board (or the workshop, or following) has been still for a moment. */
+function useCoachStep(canvas: LobbyCanvas): CoachStep | null {
+  const compute = () =>
+    JSON.stringify(
+      nextStep(coachWorkshop(canvas).get(), coachFacts(canvas), {
+        facilitator: !canvas.readOnly(),
+        following: canvas.follow.current() !== null,
+      }),
+    )
+  const [json, setJson] = useState(compute)
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const later = () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        setJson(compute())
+      }, COACH_SETTLE_MS)
+    }
+    const offs = [
+      canvas.on('change', later),
+      canvas.on('followChanged', later),
+      subscribeValue(coachWorkshop(canvas), later),
+    ]
+    later()
+    return () => {
+      for (const off of offs) off()
+      if (timer) clearTimeout(timer)
+    }
+  }, [canvas])
+  return JSON.parse(json) as CoachStep | null
+}
+
 function CoachChip({ ctx }: { ctx: CanvasFeatureContext }) {
   const { canvas } = ctx
   const [dismissed, setDismissed] = useState(() => dismissedSteps(ctx.board.id))
-  const json = useValue('lobby-ai-coach-step', () => {
-    const step = nextStep(coachWorkshop(canvas).get(), coachFacts(canvas), {
-      facilitator: !canvas.readOnly(),
-      following: canvas.follow.current() !== null,
-    })
-    return JSON.stringify(step)
-  }, [canvas])
-  const step = JSON.parse(json) as CoachStep | null
+  const step = useCoachStep(canvas)
   const at = useAnchor(ctx)
   if (!step || dismissed.has(stepKey(step))) return null
   return (
