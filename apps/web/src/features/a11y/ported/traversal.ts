@@ -5,7 +5,14 @@
 //
 // Every move is a selection change only (no undo step, nothing pushed) followed by "bring it into view", as
 // tldraw's `_selectShapesAndZoom` did.
-import { type Bounds, type LobbyCanvas, NotImplementedError } from '../../../canvas/api/index.ts'
+import {
+  type Bounds,
+  type CanvasElement,
+  geometry,
+  items,
+  type LobbyCanvas,
+  NotImplementedError,
+} from '../../../canvas/api/index.ts'
 import { animateCamera } from './motion.ts'
 import {
   adjacentEntry,
@@ -83,8 +90,117 @@ function selectEntry(canvas: LobbyCanvas, entry: OrderEntry | null): boolean {
   return true
 }
 
-/** Alt+→ / Alt+↓ and Alt+← / Alt+↑: the next or previous element of the selection's level, wrapping. */
+// ---- wave L (W4, L4-1): the walk along the connections ------------------------------------------------------
+//
+// Alt+Arrow on one shape that has bound connectors selects the connected shape nearest the pressed arrow's
+// direction (a selection change only, as every move here), so a flow is walked the way it was built. With no
+// connected shape that way (none within WALK_MAX_ANGLE of it), or no connector, or several things selected, it
+// is the reading order as before. The commands 'a11y.next' / 'a11y.previous' do not carry their key, so the arrow
+// comes from the board's key-down stream: features/flow notes each Alt+Arrow (noteWalkKey) just before the key
+// registry runs the command, which reads it back here once (takeWalkKey).
+
+/** How far from the pressed direction a connected shape may lie and still be walked to, degrees. */
+export const WALK_MAX_ANGLE = 70
+/** A noted Alt+Arrow older than this (ms) is not the key the command is running for. */
+const WALK_KEY_TTL_MS = 250
+
+const walkKeys = new WeakMap<object, { key: string; at: number }>()
+const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now())
+
+/** The board saw Alt+`key` (an arrow key) go down: the walk that follows goes that way. */
+export function noteWalkKey(canvas: object, key: string): void {
+  walkKeys.set(canvas, { key, at: nowMs() })
+}
+
+/** The Alt+Arrow just noted for `canvas` (once), or null. */
+export function takeWalkKey(canvas: object): string | null {
+  const k = walkKeys.get(canvas)
+  walkKeys.delete(canvas)
+  return k && nowMs() - k.at <= WALK_KEY_TTL_MS ? k.key : null
+}
+
+const ARROW_VECTORS: Readonly<Record<string, readonly [number, number]>> = {
+  ArrowRight: [1, 0],
+  ArrowLeft: [-1, 0],
+  ArrowDown: [0, 1],
+  ArrowUp: [0, -1],
+}
+
+/** The live shapes bound to `id` through a connector at its other end, deduplicated, in connector order. */
+export function connectedShapes(id: string, get: (id: string) => CanvasElement | undefined): string[] {
+  const el = get(id)
+  if (!el || el.isDeleted) return []
+  const out: string[] = []
+  for (const arrowId of items.arrowsOf(el)) {
+    const a = get(arrowId)
+    if (!a || a.isDeleted || a.type !== 'arrow') continue
+    const { start, end } = items.arrowEnds(a)
+    const other = start === id ? end : end === id ? start : null
+    if (!other || other === id || out.includes(other)) continue
+    const o = get(other)
+    if (o && !o.isDeleted) out.push(other)
+  }
+  return out
+}
+
+/**
+ * The connected shape of the one selected element nearest the direction of `key` (an arrow key's name), or null:
+ * the smallest angle to that direction within WALK_MAX_ANGLE, then the nearest, then the id.
+ */
+export function connectedNeighbour(
+  canvas: Pick<LobbyCanvas, 'get' | 'selection' | 'isHidden'>,
+  key: string,
+): string | null {
+  const v = ARROW_VECTORS[key]
+  if (!v) return null
+  const get = (id: string) => canvas.get(id)
+  const ids = [
+    ...new Set(
+      canvas.selection.map((id) => {
+        const el = get(id)
+        return el ? items.containerOf(el, get).id : id
+      }),
+    ),
+  ]
+  if (ids.length !== 1) return null
+  const from = get(ids[0] as string)
+  if (!from || from.type === 'arrow' || from.type === 'line') return null
+  const c = geometry.center(elementBounds(from))
+  const minCos = Math.cos((WALK_MAX_ANGLE * Math.PI) / 180)
+  let best: { id: string; cos: number; d: number } | null = null
+  for (const id of connectedShapes(from.id, get)) {
+    if (canvas.isHidden(id)) continue
+    const el = get(id) as CanvasElement
+    const p = geometry.center(elementBounds(el))
+    const dx = p.x - c.x
+    const dy = p.y - c.y
+    const d = Math.hypot(dx, dy)
+    if (d < 1e-6) continue
+    const cos = (dx * v[0] + dy * v[1]) / d
+    if (cos < minCos) continue
+    if (
+      !best ||
+      cos > best.cos + 1e-6 ||
+      (Math.abs(cos - best.cos) <= 1e-6 &&
+        (d < best.d - 1e-6 || (Math.abs(d - best.d) <= 1e-6 && id < best.id)))
+    )
+      best = { id, cos, d }
+  }
+  return best?.id ?? null
+}
+
+/**
+ * Alt+→ / Alt+↓ and Alt+← / Alt+↑: the connected shape that way (see above), else the next or previous element of
+ * the selection's level, wrapping.
+ */
 export function selectAdjacent(canvas: LobbyCanvas, direction: 'next' | 'prev'): boolean {
+  const key = takeWalkKey(canvas)
+  const along = key ? connectedNeighbour(canvas, key) : null
+  if (along) {
+    canvas.select([along])
+    bringIntoView(canvas, [along])
+    return true
+  }
   const { order } = selectionLevel(canvas)
   return selectEntry(canvas, adjacentEntry(order, canvas.selection, direction))
 }

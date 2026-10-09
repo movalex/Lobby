@@ -86,7 +86,45 @@ export function describeSelection(selection: readonly string[], c: SelectionCont
   if (ids.length > 1) return `${ids.length} shapes selected`
   const el = c.get(ids[0] as string)
   if (!el) return ''
-  return `${describeElement(el, c.get)}${where}`
+  return `${describeElement(el, c.get)}${connections(el, c.get)}${where}`
+}
+
+// ---- wave L (W4, L4-1): what a shape is connected to ----------------------------------------------------------
+//
+//   one connected shape     "Rectangle: Process, connected to Review. 2 of 5"
+//   several                 "Rectangle: Process, connected to Decision and Review. 2 of 5"
+//   more than CONNECTIONS_SPOKEN   "…, connected to A, B, C, D, E and 3 more. 2 of 9"
+// A shape is named by its words, else its kind. Connectors and lines themselves say nothing more.
+
+/** How many connected shapes the region names before "and N more". */
+export const CONNECTIONS_SPOKEN = 5
+
+/** ", connected to A and B" for a shape with bound connectors, '' otherwise. */
+export function connections(el: CanvasElement, get: items.Lookup): string {
+  if (el.type === 'arrow' || el.type === 'line') return ''
+  const names: string[] = []
+  const seen = new Set<string>()
+  for (const arrowId of items.arrowsOf(el)) {
+    const a = get(arrowId)
+    if (!a || (a as { isDeleted?: boolean }).isDeleted || a.type !== 'arrow') continue
+    const { start, end } = items.arrowEnds(a)
+    const other = start === el.id ? end : end === el.id ? start : null
+    if (!other || other === el.id || seen.has(other)) continue
+    const o = get(other)
+    if (!o || (o as { isDeleted?: boolean }).isDeleted) continue
+    seen.add(other)
+    names.push(clip(wordsOf(o, get), 60) || kindLabel(o))
+  }
+  if (!names.length) return ''
+  const shown = names.slice(0, CONNECTIONS_SPOKEN)
+  const more = names.length - shown.length
+  const list =
+    more > 0
+      ? `${shown.join(', ')} and ${more} more`
+      : shown.length === 1
+        ? (shown[0] as string)
+        : `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}`
+  return `, connected to ${list}`
 }
 
 function position(index: number, total: number, frame: CanvasElement | null, get: items.Lookup): string {
