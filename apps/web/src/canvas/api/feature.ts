@@ -15,7 +15,7 @@ import type { ApiClient } from '../../api/client.ts'
 import type { NoticeInput } from '../../board/board-context.ts'
 import type { BoardEvents } from '../../features/events.ts'
 import type { BoardRole } from '../../lib/permissions.ts'
-import type { CustomDataHandlerSpec, KeyHandlerSpec, PointerToolSpec } from '../registries.ts'
+import type { CustomDataHandlerSpec, KeyEventLike, KeyHandlerSpec, PointerToolSpec } from '../registries.ts'
 import { currentPlatform, matchChord, parseChord } from './keys.ts'
 import type { LobbyCanvas } from './lobby-canvas.ts'
 import type {
