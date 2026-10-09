@@ -338,7 +338,8 @@ test('L8-2: sort by a lens names groups with the AI and lays them out as columns
     await a.page.getByTestId('sort-by-lens').click()
     await expect(a.page.getByTestId('sort-menu')).toHaveAttribute('data-view', 'lens')
     await expect(a.page.getByTestId('sort-lens-go')).toBeDisabled()
-    await a.page.getByTestId('sort-lens-input').fill('journey stage')
+    // typed for real: the board's key allowlist must leave a text field of the popover alone
+    await a.page.getByTestId('sort-lens-input').pressSequentially('journey stage', { delay: 10 })
     await a.page.getByTestId('sort-lens-go').click()
     await expect(a.page.getByTestId('sort-notice')).toContainText('6 notes in 2 columns')
     expect(await aiRequests(a.page)).toMatchObject([{ action: 'sort', lens: 'journey stage' }])

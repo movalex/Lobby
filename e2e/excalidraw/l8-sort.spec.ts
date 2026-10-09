@@ -14,6 +14,7 @@ import {
   expect,
   expectConverged,
   expectSaved,
+  itemCenterOnScreen,
   items,
   leaseHolder,
   pushedOps,
@@ -38,6 +39,7 @@ import {
   sortRun,
   twelve,
   waitForSort,
+  withCanvas,
   wordsOf,
 } from './l8-kit.ts'
 import { focusCanvas, undoKey } from './navigation-kit.ts'
@@ -280,4 +282,91 @@ test('L8-1: the palette-style commands take the notes they are given, sort by a 
       () => (window as never as { __lobbySort: { previews(): unknown[] } }).__lobbySort.previews().length,
     ),
   ).toBe(0)
+})
+
+test('L8-1: the context menu has Sort by with the ways to sort; Escape closes the popover and gives the keyboard back to the board', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await waitForSort(a.page)
+  const { ids } = await retroBoard(a)
+  await fakeAi(a.page, { preview: 'apply' })
+  await setViewport(a.page, { x: -200, y: -250, zoom: 0.5 })
+  await select(a.page, ids)
+
+  await test.step('right-click a selected note: Sort by > Colour', async () => {
+    const at = await itemCenterOnScreen(a.page, ids[0] as string)
+    await a.page.mouse.click(at.x, at.y, { button: 'right' })
+    await a.page.getByRole('menuitem', { name: 'Sort by' }).click()
+    // votes cannot be used until one is revealed: the entry says so
+    await expect(a.page.getByRole('menuitem', { name: /Votes/ })).toBeDisabled()
+    await a.page.getByRole('menuitem', { name: 'Colour' }).click()
+    await expect.poll(async () => (await headings(a.page)).length).toBe(3)
+    await expect(a.page.getByTestId('sort-notice')).toContainText('12 notes in 3 columns')
+  })
+
+  await test.step('the popover: arrow keys move along the ways to sort, Escape closes it and the board has the keyboard', async () => {
+    await select(a.page, ids)
+    await a.page.getByTestId('selection-sort').click()
+    await expect(a.page.getByTestId('sort-menu')).toBeVisible()
+    await expect(a.page.getByTestId('sort-by-colour')).toBeFocused()
+    await a.page.keyboard.press('ArrowDown')
+    await expect(a.page.getByTestId('sort-by-author')).toBeFocused()
+    await a.page.keyboard.press('End')
+    await expect(a.page.getByTestId('sort-place')).toBeFocused()
+    await a.page.keyboard.press('Home')
+    await expect(a.page.getByTestId('sort-by-colour')).toBeFocused()
+    await a.page.keyboard.press('Escape')
+    await expect(a.page.getByTestId('sort-menu')).toHaveCount(0)
+    await expect
+      .poll(() =>
+        a.page.evaluate(() => !!document.activeElement?.closest('.excalidraw, [data-testid="lobby-board"]')),
+      )
+      .toBe(true)
+    // nothing was written by looking
+    await expectSaved(a.page)
+  })
+})
+
+test('L8-1: a note another tab is dragging is not moved by a sort, and the notice counts it', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  const b = await canvasSession('bob')
+  for (const s of [a, b]) await waitForSort(s.page)
+  const { ids } = await retroBoard(a, b)
+  await fakeAi(a.page, { preview: 'apply' })
+  for (const s of [a, b]) await setViewport(s.page, { x: -100, y: -100, zoom: 0.7 })
+  const dragged = ids[7] as string
+  const bobPushes = (await pushedOps(b.page)).length
+
+  await test.step('bob takes a note and holds it: alice’s tab reads it as dragged by someone else', async () => {
+    const c = await itemCenterOnScreen(b.page, dragged)
+    await b.page.mouse.move(c.x, c.y)
+    await b.page.mouse.down()
+    await b.page.mouse.move(c.x + 30, c.y + 40, { steps: 6 })
+    await b.page.mouse.move(c.x + 60, c.y + 80, { steps: 6 })
+    await expect
+      .poll(() => withCanvas(a.page, (canvas, id) => canvas.presence.draggerOf(id)?.name ?? null, dragged), {
+        message: 'alice sees bob dragging the note',
+      })
+      .toBeTruthy()
+  })
+
+  await test.step('alice sorts: the other eleven move, the dragged one stays and is named in the notice', async () => {
+    const stays = (await positions(a.page, [dragged]))[dragged]
+    await select(a.page, ids)
+    expect(await sortRun(a.page, 'sort.colour')).toBe(true)
+    await expect.poll(async () => (await headings(a.page)).length).toBe(3)
+    await expect(a.page.getByTestId('sort-notice')).toContainText('1 note was skipped')
+    expect((await positions(a.page, [dragged]))[dragged]).toEqual(stays)
+  })
+
+  await test.step('bob lets go; nothing from this tab was pushed for the sort', async () => {
+    await b.page.mouse.up()
+    await expectSaved(b.page)
+    // bob pushed his own drop (a note's position), nothing else
+    const ops = await opsSince(b.page, bobPushes)
+    expect(ops.every((o) => o.k === 'p')).toBe(true)
+  })
 })

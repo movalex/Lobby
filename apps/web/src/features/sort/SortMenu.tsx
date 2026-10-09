@@ -22,6 +22,8 @@ const WIDTH = 304
 /** Kept clear of the canvas' edges, px. */
 const EDGE = 12
 const GAP = 8
+/** Kept clear along the bottom of the canvas: the board's tool bar sits there, px. */
+const BOTTOM_CLEAR = 96
 
 /** What each way to sort says under its name. */
 const HINTS: Record<SortKey, string> = {
@@ -73,18 +75,27 @@ function SortPopover({ ctx, state }: { ctx: CanvasFeatureContext; state: SortMen
     const pop = ref.current
     const box = canvas.container()?.getBoundingClientRect()
     if (!pop || !box) return
-    const h = pop.offsetHeight
+    // the content's own height (a max-height from an earlier view does not clip the measure)
+    const h = pop.scrollHeight + 2
     const left = Math.max(EDGE, Math.min(state.at.x - WIDTH / 2, box.width - WIDTH - EDGE))
+    // clear of the board's tool bar along the bottom
+    const limit = box.height - BOTTOM_CLEAR
     const under = state.at.bottom + GAP
-    const top = under + h <= box.height - EDGE ? under : Math.max(EDGE, state.at.top - GAP - h)
-    setPos({ left, top, max: box.height - 2 * EDGE })
+    const spaceBelow = limit - under
+    const spaceAbove = state.at.top - GAP - EDGE
+    const below = h <= spaceBelow || spaceBelow >= spaceAbove
+    const top = below ? under : Math.max(EDGE, state.at.top - GAP - Math.min(h, spaceAbove))
+    setPos({ left, top, max: Math.max(160, below ? spaceBelow : spaceAbove) })
   }, [canvas, state.at, state.view])
 
   // focus goes in when it opens (and when its view changes); a press outside closes it
+  // (a popover that is not placed yet is not shown, and a hidden element takes no focus)
+  const placed = pos !== null
   useEffect(() => {
+    if (!placed) return
     const first = ref.current?.querySelector<HTMLElement>('[data-autofocus], [role="menuitem"]')
     first?.focus({ preventScroll: true })
-  }, [state.view])
+  }, [state.view, placed])
   useEffect(() => {
     const onDown = (e: PointerEvent) => {
       const t = e.target as Node | null

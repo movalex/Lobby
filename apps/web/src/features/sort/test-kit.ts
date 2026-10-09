@@ -224,6 +224,7 @@ export function fakeCanvas(seed: El[], o: FakeCanvasOptions = {}): Fake {
       fake.selected = [...ids]
     },
     editingId: () => null,
+    focus: () => {},
     leaseHolder: (id: string) => fake.leases[id] ?? null,
     collaborators: () => o.roster ?? [],
     presence: { draggerOf: (id: string) => fake.draggers[id] ?? null, peers: () => [], peer: () => null },

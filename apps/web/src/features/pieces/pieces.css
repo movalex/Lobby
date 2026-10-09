@@ -1,0 +1,105 @@
+/* Pieces panel styles (L8-3). Only --dr-* tokens, so both themes work. The previews are drawn on a fixed light
+   paper (the pieces' own colours), so they read the same in both themes. */
+
+.dr-pieces {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  color: var(--dr-ink);
+  font: 14px / 1.35 var(--dr-font);
+}
+.dr-pieces__search .dr-input {
+  box-sizing: border-box;
+  width: 100%;
+}
+.dr-pieces__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.dr-pieces__chip {
+  padding: 3px 10px;
+  border: 1px solid var(--dr-line);
+  border-radius: 999px;
+  background: var(--dr-chip);
+  color: var(--dr-ink);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.dr-pieces__chip:hover {
+  background: var(--dr-hover);
+}
+.dr-pieces__chip[aria-pressed="true"] {
+  border-color: var(--dr-accent-line);
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+  font-weight: 600;
+}
+.dr-pieces__chip:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+.dr-pieces__note,
+.dr-pieces__hint,
+.dr-pieces__empty {
+  margin: 0;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+}
+.dr-pieces__list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.dr-pieces__option {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--dr-line);
+  border-radius: 10px;
+  background: var(--dr-surface);
+  cursor: grab;
+}
+.dr-pieces__option:hover {
+  background: var(--dr-hover);
+}
+.dr-pieces__option[data-active] {
+  border-color: var(--dr-focus);
+  outline: 2px solid var(--dr-focus);
+  outline-offset: -2px;
+}
+.dr-pieces__option[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.6;
+}
+.dr-pieces__preview {
+  display: block;
+  width: 100%;
+  height: 64px;
+  border-radius: 6px;
+  background: #f9fafb;
+}
+.dr-pieces__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.dr-pieces__name {
+  font-weight: 600;
+}
+.dr-pieces__desc {
+  color: var(--dr-ink-2);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
