@@ -12,12 +12,13 @@
 // A plan is built from notes that may be moved (./model.ts `eligibility`); the caller reads that again when it
 // applies the plan.
 import { type CanvasElement, items, type LobbyCanvas } from '../../canvas/api/index.ts'
-import { FRAME_MARGIN, frameRegion, LABEL_GAP, NOTE_GAP } from '../ai/layout.ts'
+import { FRAME_MARGIN, frameRegion, LABEL_GAP } from '../ai/layout.ts'
 import {
   boxOf,
   isBoundLabel,
   isFrame,
   isLive,
+  isNote,
   LABEL_PAD,
   layoutLabel,
   type Measure,
@@ -25,7 +26,7 @@ import {
   unionRects,
   withNameBand,
 } from './geom.ts'
-import { COLUMN_ROWS, type ColumnsGroup, layoutColumns, type Rect } from './layout.ts'
+import { type ColumnsGroup, layoutColumns, type Rect } from './layout.ts'
 
 /** The `customData.lobby.kind` of a heading a deterministic sort makes. */
 export const SORT_LABEL_KIND = 'sort-label'
@@ -142,19 +143,40 @@ function obstaclesIn(
   return out
 }
 
-/** Headings an earlier sort made that sit over the notes about to move (see the header). */
-function staleHeadings(canvas: LobbyCanvas, space: Space, noteRects: readonly Rect[]): CanvasElement[] {
-  const reach = COLUMN_ROWS * (200 + NOTE_GAP) + LABEL_GAP * 3 + 8
-  const out: CanvasElement[] = []
+/**
+ * Headings an earlier sort made for the notes about to move: a heading with a moving note just under it and no
+ * staying note in its column (the staying notes below it that no other heading stands over). A heading that
+ * still labels notes which stay is kept.
+ */
+function staleHeadings(
+  canvas: LobbyCanvas,
+  space: Space,
+  noteRects: readonly Rect[],
+  moving: ReadonlySet<string>,
+): CanvasElement[] {
+  const band = LABEL_GAP * 3 + 8
+  const heads: { el: CanvasElement; r: Rect }[] = []
   for (const el of canvas.items()) {
     if (!isLive(el) || el.type !== 'text' || el.containerId || !inSpace(canvas, el, space)) continue
     const kind = items.lobbyValue(el, 'kind')
-    if (typeof kind !== 'string' || !LABEL_KINDS.has(kind)) continue
-    const r = rectIn(el, space)
-    const over = (n: Rect) => n.x < r.x + r.w && r.x < n.x + n.w && n.y >= r.y && n.y <= r.y + r.h + reach
-    if (noteRects.some(over)) out.push(el)
+    if (typeof kind === 'string' && LABEL_KINDS.has(kind)) heads.push({ el, r: rectIn(el, space) })
   }
-  return out
+  const staying = canvas
+    .items()
+    .filter((e) => isLive(e) && isNote(e) && inSpace(canvas, e, space) && !moving.has(e.id))
+    .map((e) => rectIn(e, space))
+  const sideways = (a: Rect, b: Rect) => a.x < b.x + b.w && b.x < a.x + a.w
+  return heads
+    .filter(({ r }) => {
+      const under = (n: Rect) => sideways(n, r) && n.y >= r.y && n.y <= r.y + r.h + band
+      if (!noteRects.some(under)) return false
+      const mine = (n: Rect) =>
+        sideways(n, r) &&
+        n.y >= r.y &&
+        !heads.some((o) => o.r !== r && sideways(n, o.r) && o.r.y > r.y && o.r.y <= n.y)
+      return !staying.some(mine)
+    })
+    .map((h) => h.el)
 }
 
 /** Reading order inside a group: rows of 120, then left to right (where the notes were). */
@@ -171,7 +193,7 @@ function planSpace(
   const all = groups.flatMap((g) => g.notes)
   const moving = new Set(all.map((n) => n.id))
   const rects = new Map(all.map((n) => [n.id, rectIn(n, space)]))
-  const stale = staleHeadings(canvas, space, [...rects.values()])
+  const stale = staleHeadings(canvas, space, [...rects.values()], moving)
   // their place counts as the notes' own: sorting the same notes again gives the same result
   const staleRects = stale.map((s) => rectIn(s, space))
   const notesBounds = unionRects([...rects.values(), ...staleRects]) as Rect

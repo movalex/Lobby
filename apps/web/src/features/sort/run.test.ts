@@ -335,6 +335,87 @@ describe('headings are replaced, never stacked', () => {
   })
 })
 
+describe('headings that still label notes which stay are kept', () => {
+  const at = (f: ReturnType<typeof fakeCanvas>) =>
+    headings(f).map((e) => `${e.originalText}@${Math.round(e.x)},${Math.round(e.y)}`)
+
+  it('sorting group B on the open canvas keeps the headings of group A directly above it', async () => {
+    applyPreview()
+    const els: El[] = []
+    const colours = ['black', 'light-blue', 'red']
+    // group A: 6 notes in 2 rows; group B: 6 notes in 2 rows, 120 px below A
+    for (let i = 0; i < 6; i++)
+      els.push(
+        ...noteEls(`a${i}`, (i % 3) * 230, 100 + Math.floor(i / 3) * 230, {
+          fill: fillOf(colours[i % 3] as string),
+        }),
+        ...noteEls(`b${i}`, (i % 3) * 230, 800 + Math.floor(i / 3) * 230, {
+          fill: fillOf(colours[i % 3] as string),
+        }),
+      )
+    const f = fakeCanvas(els)
+    const { ctx } = fakeCtx(f.canvas)
+    const groupA = Array.from({ length: 6 }, (_, i) => `a${i}`)
+    const groupB = Array.from({ length: 6 }, (_, i) => `b${i}`)
+    await sortBy(ctx, 'colour', groupA)
+    const headsA = at(f)
+    const idsA = new Set(headings(f).map((e) => e.id))
+    const placedA = groupA.map((id) => `${f.els.get(id)?.x},${f.els.get(id)?.y}`)
+    expect(headsA).toHaveLength(3)
+    await sortBy(ctx, 'colour', groupB)
+    // A's three headings are exactly where they were, and B has its own three
+    expect(headings(f)).toHaveLength(6)
+    expect(at(f).filter((h) => headsA.includes(h))).toEqual(headsA)
+    // A's notes did not move, and B's columns did not jump up next to A's
+    expect(groupA.map((id) => `${f.els.get(id)?.x},${f.els.get(id)?.y}`)).toEqual(placedA)
+    const lowestA = Math.max(...groupA.map((id) => (f.els.get(id)?.y ?? 0) + 200))
+    const bHeads = headings(f).filter((e) => !idsA.has(e.id))
+    expect(bHeads).toHaveLength(3)
+    for (const h of bHeads) expect(h.y).toBeGreaterThan(lowestA)
+  })
+
+  it('re-sorting some of the notes of a sorted column keeps the heading of the notes that stay', async () => {
+    applyPreview()
+    const f = fakeCanvas(board(12))
+    const { ctx } = fakeCtx(f.canvas)
+    await sortBy(ctx, 'colour', noteIds(12))
+    expect(headings(f).map((e) => e.originalText)).toEqual(['Butter', 'Coral', 'Sky'])
+    // two of the four Butter notes (n0, n3) by author: n6 and n9 still stand under Butter
+    const out = await sortBy(ctx, 'author', ['n0', 'n3'])
+    expect(out.status).toBe('applied')
+    expect(headings(f).map((e) => e.originalText)).toContain('Butter')
+    // the other columns, whose notes did not move, are untouched
+    expect(headings(f).map((e) => e.originalText)).toEqual(expect.arrayContaining(['Coral', 'Sky']))
+  })
+
+  it('still removes the heading of a column whose notes all move', async () => {
+    applyPreview()
+    const f = fakeCanvas(board(12))
+    const { ctx } = fakeCtx(f.canvas)
+    await sortBy(ctx, 'colour', noteIds(12))
+    // every Butter note (n0, n3, n6, n9) by author: nothing is left under the Butter heading
+    const out = await sortBy(ctx, 'author', ['n0', 'n3', 'n6', 'n9'])
+    expect(out.status).toBe('applied')
+    const names = headings(f).map((e) => e.originalText)
+    expect(names).not.toContain('Butter')
+    expect(names).toEqual(expect.arrayContaining(['Coral', 'Sky']))
+  })
+
+  it('keeps the heading over a locked note that stays, though the other notes of its column move', async () => {
+    applyPreview()
+    const f = fakeCanvas(board(12))
+    const { ctx } = fakeCtx(f.canvas)
+    await sortBy(ctx, 'colour', noteIds(12))
+    f.external((els) => {
+      const n = els.get('n6') as El
+      els.set('n6', { ...n, locked: true })
+    })
+    // n6 is locked, so it stays under Butter while n0, n3 and n9 are sorted away
+    await sortBy(ctx, 'author', ['n0', 'n3', 'n6', 'n9'])
+    expect(headings(f).map((e) => e.originalText)).toContain('Butter')
+  })
+})
+
 describe('sort by author, tag and votes', () => {
   it('puts the notes nobody is credited with under Anonymous, last', async () => {
     applyPreview()
