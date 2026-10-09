@@ -16,6 +16,8 @@ export interface PresentLiveChrome {
   presentingLive(): boolean
   /** Reactive: `Top` draws its banner now (K3-4: the slide is fitted under it, ./insets.ts). */
   banner?(): boolean
+  /** Reactive (wave L, L5-1): the banner has the run of show's strip under it, one row taller (./insets.ts). */
+  agenda?(): boolean
   /** K3-5: a presentation was just started here with the Present button or its shortcut, to everyone. */
   onLocalStart?(): void
   /**

@@ -12,11 +12,19 @@
 // guest can neither lock nor unlock, and the room refuses its `present` on a locked frame (LOCKED), so for a
 // guest a locked frame keeps its place and skip mark: its row cannot be reordered or skipped, and a reorder of
 // the others leaves it out.
+//
+// Wave L (L5-1 run of show): each row also plans minutes for its section (`present.mins`, a stepper under the
+// name). `present` is a whole-value key, so EVERY write of it carries index, skip and mins together
+// (`presentWith`): reordering or skipping never drops the minutes. The stepper shows only in a room whose
+// `contracts` frame says PRESENT_MINS_REV (12) or more (`canvas.room.contractsRev()`): a web deployed before
+// the sync would otherwise send a field the older room refuses. One press is one canvas.transact (one undo step).
+import { PRESENT_MINS_REV } from '@draftroom/canvas-schema/protocol'
 import { type DragEvent, type KeyboardEvent, type MouseEvent, useMemo, useState } from 'react'
 import { isReadonlyRole } from '../../../../board/access.ts'
 import { type CanvasFeatureContext, geometry, type LobbyCanvas } from '../../../../canvas/api/index.ts'
 import { knownUserKind, useUserKind } from '../../../../invite/guest.tsx'
 import { useValue } from '../../../../lib/signals.ts'
+import { stepMins } from '../../../present-export/live/agenda.ts'
 import { moveItem, rowNumberLabel, toggleInSelection } from '../../frame-order.ts'
 import { ArrowDownIcon, ArrowUpIcon, DragHandleIcon, EyeOffIcon, LinkIcon } from '../../icons.tsx'
 import { goToFrameCamera } from './camera.ts'
@@ -24,16 +32,28 @@ import { copySelectionLink } from './copy-link.ts'
 import { type FrameRow, frameRows } from './model.ts'
 import { lastFrameJump } from './state.ts'
 
-/** A frame's `present` value after a patch (null removes the key: no index and not skipped). */
+/** A frame's `present` value: its place, whether it is skipped and the minutes planned for its section. */
+export interface PresentPatch {
+  index?: number
+  skip?: boolean
+  mins?: number
+}
+
+/**
+ * A frame's `present` value after a patch (null removes the key: no index, not skipped, no minutes). The key is
+ * written whole, so what the patch does not name is carried over from the row.
+ */
 function presentWith(
   row: FrameRow,
-  patch: { index?: number | null; skip?: boolean },
-): { index?: number; skip?: boolean } | null {
+  patch: { index?: number | null; skip?: boolean; mins?: number | null },
+): PresentPatch | null {
   const index = patch.index === undefined ? row.presentIndex : patch.index
   const skip = patch.skip === undefined ? row.skip : patch.skip
-  const out: { index?: number; skip?: boolean } = {}
+  const mins = patch.mins === undefined ? row.mins : patch.mins
+  const out: PresentPatch = {}
   if (typeof index === 'number') out.index = index
   if (skip) out.skip = true
+  if (typeof mins === 'number') out.mins = mins
   return Object.keys(out).length ? out : null
 }
 
@@ -53,9 +73,9 @@ export function presentOrderWrites(
   rows: readonly FrameRow[],
   orderedIds: readonly string[],
   opts: FrameWriteOptions = {},
-): { id: string; present: { index?: number; skip?: boolean } | null }[] {
+): { id: string; present: PresentPatch | null }[] {
   const byId = new Map(rows.map((r) => [r.id, r]))
-  const out: { id: string; present: { index?: number; skip?: boolean } | null }[] = []
+  const out: { id: string; present: PresentPatch | null }[] = []
   orderedIds.forEach((id, index) => {
     const row = byId.get(id)
     if (!row || (row.locked && !opts.includeLocked) || row.presentIndex === index) return
@@ -73,13 +93,76 @@ export function autoOrderWrites(rows: readonly FrameRow[], opts: FrameWriteOptio
 
 function applyWrites(
   canvas: LobbyCanvas,
-  writes: readonly { id: string; present: { index?: number; skip?: boolean } | null }[],
+  writes: readonly { id: string; present: PresentPatch | null }[],
   label: string,
 ) {
   if (!writes.length) return
   canvas.transact(label, (tx) => {
     for (const w of writes) tx.update(w.id, { customData: { lobby: { present: w.present } } })
   })
+}
+
+/**
+ * L5-1: plans `mins` minutes (null: none) for a frame's section, keeping its place and skip mark, as one undo
+ * step. Returns false (and writes nothing) when the row already has them.
+ */
+export function setMins(canvas: LobbyCanvas, row: FrameRow, mins: number | null): boolean {
+  if (mins === row.mins) return false
+  applyWrites(canvas, [{ id: row.id, present: presentWith(row, { mins }) }], 'set section minutes')
+  return true
+}
+
+/** "5 min" / "No time planned" */
+export const minsText = (mins: number | null) => (mins === null ? 'No time planned' : `${mins} min`)
+
+/**
+ * The minutes stepper under a frame's name: "+ time" until minutes are planned, then − 5 min +. Each press
+ * is one write (`setMins`).
+ */
+export function MinsStepper({ canvas, row }: { canvas: LobbyCanvas; row: FrameRow }) {
+  const label = row.name || 'frame'
+  return (
+    <div className="dr-ros-mins" data-testid="frame-mins-stepper" data-mins={row.mins ?? ''}>
+      {row.mins === null ? (
+        <button
+          type="button"
+          className="dr-ros-mins__add"
+          data-testid="frame-mins-add"
+          aria-label={`Plan time for ${label}`}
+          title="Plan minutes for this section of the run of show"
+          onClick={() => setMins(canvas, row, stepMins(row.mins, 1))}
+        >
+          + time
+        </button>
+      ) : (
+        <>
+          <button
+            type="button"
+            className="dr-iconbtn dr-iconbtn--sm"
+            data-testid="frame-mins-down"
+            aria-label={`Less time for ${label}`}
+            onClick={() => setMins(canvas, row, stepMins(row.mins, -1))}
+          >
+            −
+          </button>
+          <span className="dr-ros-mins__value" data-testid="frame-mins" role="status">
+            <span className="dr-sr-only">Planned time for {label}: </span>
+            {minsText(row.mins)}
+          </span>
+          <button
+            type="button"
+            className="dr-iconbtn dr-iconbtn--sm"
+            data-testid="frame-mins-up"
+            aria-label={`More time for ${label}`}
+            disabled={stepMins(row.mins, 1) === row.mins}
+            onClick={() => setMins(canvas, row, stepMins(row.mins, 1))}
+          >
+            +
+          </button>
+        </>
+      )}
+    </div>
+  )
 }
 
 /**
@@ -114,6 +197,9 @@ export function FramesPanel({ ctx }: { ctx: CanvasFeatureContext; close(): void 
   // CR-3b-4: an account orders and skips locked frames too; a name-only guest does not (the room refuses it)
   const guest = (useUserKind() ?? knownUserKind(ctx.me.user.id)) === 'guest'
   const writeOpts: FrameWriteOptions = { includeLocked: !guest }
+  // L5-1: the minutes stepper needs a room that accepts `present.mins` (null: not known, so offer nothing)
+  const room = useValue('nav-room-rev', () => canvas.room.contractsRev(), [canvas])
+  const minsOk = (room ?? 0) >= PRESENT_MINS_REV
   const key = useValue('nav-frame-outline', () => JSON.stringify(frameRows(canvas.items())), [canvas])
   const rows = useMemo(() => JSON.parse(key) as FrameRow[], [key])
   const selected = useValue('nav-selected-ids', () => canvas.selection.join(','), [canvas])
@@ -296,6 +382,16 @@ export function FramesPanel({ ctx }: { ctx: CanvasFeatureContext; close(): void 
                   </button>
                 </div>
               </div>
+              {/* L5-1: the section's planned time; plain text for people who cannot change it */}
+              {editable && minsOk ? (
+                <MinsStepper canvas={canvas} row={row} />
+              ) : (
+                row.mins !== null && (
+                  <p className="dr-ros-mins dr-ros-mins--read" data-testid="frame-mins-read">
+                    {minsText(row.mins)}
+                  </p>
+                )
+              )}
             </li>
           )
         })}

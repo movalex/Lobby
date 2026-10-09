@@ -121,7 +121,12 @@ function setup(opts: { others?: string[] } = {}) {
     },
     notify: (n: { text: string }) => void notices.push(n.text),
     // who is on the board (K3-5: a Present is offered to everyone only when someone else is here)
-    canvas: { collaborators: () => [ME, ...(opts.others ?? [])].map((uid) => ({ uid })) },
+    // (the frames: L5-1's run of show reads them when a presentation to everyone runs; there are none here)
+    canvas: {
+      collaborators: () => [ME, ...(opts.others ?? [])].map((uid) => ({ uid })),
+      items: () => [],
+      get: () => undefined,
+    },
   } as unknown as CanvasFeatureContext
   const { presenter, log } = fakePresenter()
   const unmount = mountLive(ctx, presenter)

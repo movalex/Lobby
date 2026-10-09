@@ -24,6 +24,7 @@ import { LOBBY_SIGNALS } from '../../../comments/cells.ts'
 import { type LiveResult, LiveStore } from '../store.ts'
 import { presenterTabId, sessionStore } from '../tab.ts'
 import { endedText, startRefusedText } from '../words.ts'
+import { type AgendaLive, mountAgenda } from './agenda-live.ts'
 import type { LivePresenter, PresentLeader } from './presenter.ts'
 
 /** A slide's element id as the api names it (`shape:<id>`), or null when it has no api form. */
@@ -61,6 +62,8 @@ export interface LiveController {
   readonly presentingLive: Atom<boolean>
   readonly flash: Atom<LiveFlash | null>
   readonly busy: Atom<boolean>
+  /** Wave L (L5-1): the run of show while this tab presents to everyone (agenda-live.ts). */
+  readonly agenda: AgendaLive
   /** May present to everyone (edit rights and an account): UI only. */
   mayPresent(): boolean
   /** From a local presentation: make it a presentation to everyone. */
@@ -139,6 +142,8 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
   const presentingLive = atom('dr-live-presenting', false)
   const flash = atom<LiveFlash | null>('dr-live-flash', null)
   const busy = atom('dr-live-busy', false)
+  // L5-1: records the sections of a run of show and starts their timers as the live slide moves
+  const agenda = mountAgenda(ctx, { presenter, presentingLive })
   let disposed = false
   let flashSeq = 0
   let flashTimer: ReturnType<typeof setTimeout> | undefined
@@ -393,6 +398,7 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
     presentingLive,
     flash,
     busy,
+    agenda,
     mayPresent,
     inviteEveryone: (opts = {}) =>
       withBusy(async () => {
@@ -500,6 +506,7 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
       disposed = true
       stopWatch()
       stopSlides()
+      agenda.dispose()
       offStop()
       document.removeEventListener('visibilitychange', onVisible)
       if (flashTimer) clearTimeout(flashTimer)

@@ -146,7 +146,11 @@ function PresentChrome({ ctx, presenter }: { ctx: CanvasFeatureContext; presente
   // K3-4: the band the timer, the hands, the live banner (top) and the control bar (bottom) float in is
   // kept free, so they never cover the slide (./insets.ts).
   const insetsKey = useValue('lobby-present-insets', () => {
-    const top = { ...presentTopChromeOf(canvas), banner: live?.banner?.() ?? false }
+    const top = {
+      ...presentTopChromeOf(canvas),
+      banner: live?.banner?.() ?? false,
+      agenda: live?.agenda?.() ?? false,
+    }
     const i = presentInsets(view, top, count > 0)
     return `${i.top}|${i.right}|${i.bottom}|${i.left}`
   }, [canvas, live, view.w, view.h, count])

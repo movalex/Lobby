@@ -16,6 +16,7 @@ import { useValue } from '../../../../lib/signals.ts'
 import { mayPresentAs, presenceUsers, type RosterRow, rosterMap } from '../../../people/ported/presence.ts'
 import { PersonName } from '../../../workshops/Hands.tsx'
 import { followingText, namesText } from '../words.ts'
+import { AgendaAutoToggle, AgendaStrip } from './AgendaStrip.tsx'
 import { getLive, type LiveController } from './controller.ts'
 import { PRESENT_POPUP_ATTR, PRESENT_POPUP_CLOSE } from './presenter.ts'
 import '../live.css'
@@ -321,6 +322,10 @@ function LiveTopBanner({ live }: { live: LiveController }) {
           </button>
         </div>
       )}
+      {/* L5-1: the run of show under the banner, for the presenter (with drift) and for followers */}
+      {(view?.kind === 'presenting' || view?.kind === 'following') && (
+        <AgendaStrip live={live} variant={view.kind === 'presenting' ? 'presenter' : 'follower'} />
+      )}
       {flash && (
         <div className="dr-live-flash" role="status" data-testid="live-flash" key={flash.seq}>
           {flash.text}
@@ -367,7 +372,12 @@ function LiveBarButtons({ live }: { live: LiveController }) {
       </button>
     )
   }
-  return <HandOffButton live={live} />
+  return (
+    <>
+      <AgendaAutoToggle live={live} />
+      <HandOffButton live={live} />
+    </>
+  )
 }
 
 function HandOffButton({ live }: { live: LiveController }) {
