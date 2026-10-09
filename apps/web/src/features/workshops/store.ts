@@ -953,3 +953,30 @@ export function workshopStoreFor(events: EventSource & object, make: () => Works
   }
   return s
 }
+
+// ---- wave L (owner W5; W2's Wrap up and W8's "Sort by votes" import it) -----------------------------------
+
+/** The last revealed vote this tab knows on a board: who took part and the ranked results (ties share a rank). */
+export interface LastRevealedResults {
+  readonly sessionId: string
+  readonly participants: number
+  /** `ref` is the voted object's shape ref (`shape:<element id>`, canvas-schema refs.ts) */
+  readonly results: readonly { readonly ref: string; readonly count: number; readonly rank: number }[]
+}
+
+/**
+ * The results of the most recent revealed vote of the board whose event stream is `events` (the board's
+ * `ctx.events`), as this tab's workshop store holds them, or null: no store yet (the workshops feature has not
+ * loaded on this board), or the board's current vote is not revealed. It never fetches and never creates a
+ * store. Foundation body: the store's current vote when it is revealed; W5 keeps the last revealed one even
+ * after a newer vote opens.
+ */
+export function lastRevealedResults(events: object): LastRevealedResults | null {
+  const vote = stores.get(events)?.getSnapshot().vote
+  if (vote?.session.status !== 'revealed' || !vote.results) return null
+  return {
+    sessionId: vote.session.id,
+    participants: vote.participants,
+    results: vote.results.map((r) => ({ ref: r.shapeId, count: r.count, rank: r.rank })),
+  }
+}

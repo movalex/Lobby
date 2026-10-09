@@ -90,6 +90,68 @@ export async function findSession(q: Queryable, sessionId: string): Promise<Sess
   return q.maybeOne<SessionRow>(`SELECT ${SESSION_COLUMNS} FROM vote_sessions WHERE id = $1`, [sessionId])
 }
 
+// ---- wave L cross-workstream reads (owner W5; W1's AI recap and vote-weighted actions import them) -----------
+//
+// Read-only, and they never widen what anyone sees: per-object totals leave only for a REVEALED vote (as
+// `revealedResults`), and the caller (W1's AI routes) has already checked board access. The plan named the
+// first one `findSession(db, boardId, sessionId)`; `findSession(q, sessionId)` above already exists, so the
+// board-scoped one is `findSessionForBoard`.
+
+/** The vote `sessionId` if it belongs to `boardId`, else null (another board's vote is as good as none: 404). */
+export async function findSessionForBoard(
+  q: Queryable,
+  boardId: string,
+  sessionId: string,
+): Promise<SessionRow | null> {
+  return q.maybeOne<SessionRow>(
+    `SELECT ${SESSION_COLUMNS} FROM vote_sessions WHERE id = $1 AND board_id = $2`,
+    [sessionId, boardId],
+  )
+}
+
+/** One revealed vote of a board and its results (ranked; ties share a rank; objects with no vote left out). */
+export interface RevealedBoardVote {
+  sessionId: string
+  title: string
+  revealedAt: Date
+  /** people who cast at least one vote or said they were done */
+  participants: number
+  results: VoteResult[]
+}
+
+/** The most revealed votes one call returns (newest first). */
+export const REVEALED_FOR_BOARD_MAX = 20
+
+/**
+ * The board's votes revealed at or after `sinceMs` (ms since the epoch), newest reveal first, at most
+ * REVEALED_FOR_BOARD_MAX, each with its results. Only status 'revealed' counts: an open or closed vote has no
+ * per-object totals anyone may see.
+ */
+export async function revealedResultsForBoard(
+  q: Queryable,
+  boardId: string,
+  sinceMs: number,
+): Promise<RevealedBoardVote[]> {
+  const rows = await q.query<{ id: string; title: string; revealed_at: Date }>(
+    `SELECT id, title, revealed_at FROM vote_sessions
+      WHERE board_id = $1 AND status = 'revealed' AND revealed_at IS NOT NULL AND revealed_at >= $2
+      ORDER BY revealed_at DESC, id DESC LIMIT $3`,
+    [boardId, new Date(Math.max(0, sinceMs)), REVEALED_FOR_BOARD_MAX],
+  )
+  const out: RevealedBoardVote[] = []
+  for (const r of rows.rows) {
+    const agg = await aggregates(q, r.id)
+    out.push({
+      sessionId: r.id,
+      title: r.title,
+      revealedAt: r.revealed_at,
+      participants: agg.participants,
+      results: await revealedResults(q, r.id),
+    })
+  }
+  return out
+}
+
 /** Row lock on the session: serializes every ballot change of that vote (budget checks stay exact). */
 export async function lockSession(tx: Queryable, sessionId: string): Promise<SessionRow> {
   return tx.one<SessionRow>(`SELECT ${SESSION_COLUMNS} FROM vote_sessions WHERE id = $1 FOR UPDATE`, [
