@@ -2501,3 +2501,13 @@ html[data-dr-presenting] .dr-phone-hint {
 .dr-overflow :is(.dr-iconbtn, .dr-wk-iconbtn)[aria-label]::after {
   content: attr(aria-label);
 }
+/* A control whose accessible name carries what it also draws (the bell: "Notifications, 1 unread" beside its
+   count badge) names its visible words in data-label, the start of that name, so the count shows once. */
+.dr-overflow :is(.dr-iconbtn, .dr-wk-iconbtn)[aria-label][data-label]::after {
+  content: attr(data-label);
+}
+/* there the bell's count sits after its words, not over their end */
+.dr-overflow .dr-cbell__count {
+  position: static;
+  order: 1;
+}

@@ -203,6 +203,8 @@ function NotificationsBell({ ctx }: { ctx: CanvasFeatureContext }) {
         className="dr-iconbtn dr-cbell__button"
         data-testid="notifications-bell"
         data-unread={count}
+        // the words the "⋯" menu shows beside its icon (styles.css): its count stays the badge, said once
+        data-label="Notifications"
         aria-label={count ? `Notifications, ${count} unread` : 'Notifications'}
         aria-expanded={open}
         aria-controls={open ? panelId : undefined}

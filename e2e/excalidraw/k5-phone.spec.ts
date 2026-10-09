@@ -31,6 +31,7 @@ import {
   viewport,
   zoomToFit,
 } from '../tests/support/canvas.ts'
+import { commentsApi, mentionToken } from '../tests/support/comments.ts'
 import { openDashboard } from '../tests/support/dashboard-share.ts'
 import { coveredControls, note, openPhoneSession, waitForA11y } from './a11y-kit.ts'
 
@@ -588,41 +589,84 @@ test('K5-4: in the "⋯" menu every item shows its name in words: icon-only ones
   board,
   users,
 }, testInfo) => {
+  // K5 review: earlier specs may have left alice an unread notification; start from a clean inbox, and
+  // check the menu again with one unread below
+  const alice = commentsApi(await users.api('alice'))
+  await alice.markAllNotificationsRead()
   const a = await openPhoneSession(browser, board, users, 'alice', 'owner', PHONE_375)
   const page = a.page
   try {
-    await page.getByTestId('topbar-overflow').tap()
     const panel = page.getByTestId('topbar-overflow-panel')
-    await expect(panel).toHaveAttribute('data-open', 'true')
-    await expect(panel.getByTestId('comment-tool')).toBeVisible()
-    const rows = await panel.locator('button').evaluateAll((els) =>
-      els
-        .filter((el) => el.getBoundingClientRect().width > 0)
-        .map((el) => ({
-          id: el.getAttribute('data-testid'),
-          label: el.getAttribute('aria-label'),
-          own: (el as HTMLElement).innerText.replace(/\s+/g, ' ').trim(),
-          before: getComputedStyle(el, '::before').content,
-          after: getComputedStyle(el, '::after').content,
-        })),
-    )
-    const shown = (r: (typeof rows)[number]) =>
-      [pseudoText(r.before), r.own, pseudoText(r.after)].filter(Boolean).join(' ').trim()
-    expect(rows.length).toBeGreaterThanOrEqual(4)
-    for (const r of rows) {
-      expect(shown(r), `${r.id} shows words`).not.toBe('')
-      if (!r.label) continue
-      if (r.own === '') expect(shown(r), `${r.id}: an icon-only item shows its accessible name`).toBe(r.label)
-      // an item with its own words: they begin its accessible name (WCAG 2.5.3, label in name)
-      else expect(r.label.startsWith(r.own), `${r.id}: "${r.own}" in "${r.label}"`).toBe(true)
+    const menuRows = async () => {
+      await page.getByTestId('topbar-overflow').tap()
+      await expect(panel).toHaveAttribute('data-open', 'true')
+      await expect(panel.getByTestId('comment-tool')).toBeVisible()
+      return panel.locator('button').evaluateAll((els) =>
+        els
+          .filter((el) => el.getBoundingClientRect().width > 0)
+          .map((el) => {
+            // the words it shows itself: an aria-hidden badge (the bell's count) is drawn as a badge, not words
+            const copy = el.cloneNode(true) as HTMLElement
+            for (const h of copy.querySelectorAll('[aria-hidden="true"]')) h.remove()
+            return {
+              id: el.getAttribute('data-testid'),
+              label: el.getAttribute('aria-label'),
+              own: (copy.textContent ?? '').replace(/\s+/g, ' ').trim(),
+              badge: el.querySelector('[aria-hidden="true"]:not(svg)')?.textContent?.trim() ?? '',
+              before: getComputedStyle(el, '::before').content,
+              after: getComputedStyle(el, '::after').content,
+            }
+          }),
+      )
+    }
+    type Row = Awaited<ReturnType<typeof menuRows>>[number]
+    const shown = (r: Row) => [pseudoText(r.before), r.own, pseudoText(r.after)].filter(Boolean).join(' ').trim()
+    const check = (rows: Row[]) => {
+      expect(rows.length).toBeGreaterThanOrEqual(4)
+      for (const r of rows) {
+        expect(shown(r), `${r.id} shows words`).not.toBe('')
+        if (!r.label) continue
+        // an icon-only item shows its accessible name, or the start of it (the bell: its count is the badge)
+        if (r.own === '')
+          expect(r.label.startsWith(shown(r)), `${r.id}: "${shown(r)}" begins "${r.label}"`).toBe(true)
+        // an item with its own words: they begin its accessible name (WCAG 2.5.3, label in name)
+        else expect(r.label.startsWith(r.own), `${r.id}: "${r.own}" in "${r.label}"`).toBe(true)
+        // nothing shows a number twice (a badge and the same count in words)
+        if (r.badge) expect(shown(r), `${r.id}: its count once`).not.toContain(r.badge)
+      }
     }
     // the icon-only ones in it since K2-5 and K3-3 (wave K integration): the comment tool and the bell (Export
     // left the bar for the Board menu, the reactions smiley went into Facilitate)
-    const by = (id: string) => rows.find((r) => r.id === id)
-    expect(shown(by('comment-tool') as (typeof rows)[number])).toBe('Comment tool')
-    expect(shown(by('notifications-bell') as (typeof rows)[number])).toBe('Notifications')
+    const by = (rows: Row[], id: string) => rows.find((r) => r.id === id) as Row
+
+    const rows = await menuRows()
+    check(rows)
+    expect(shown(by(rows, 'comment-tool'))).toBe('Comment tool')
+    expect(shown(by(rows, 'notifications-bell'))).toBe('Notifications')
     await panel.screenshot({ path: testInfo.outputPath('k5-4-overflow-labels.png') })
+    await page.keyboard.press('Escape')
+
+    await test.step('with an unread notification the bell says "Notifications" beside its badge, its count once', async () => {
+      const bob = await users.grant(board, 'bob', 'editor')
+      const aliceUser = await users.get('alice')
+      const bobApi = commentsApi(await users.api('bob'))
+      await bobApi.createThread(
+        board,
+        { kind: 'point', x: 40, y: 40 },
+        `For ${mentionToken(aliceUser.name, aliceUser.id)} (${bob.name})`,
+      )
+      await expect.poll(async () => (await alice.notifications()).unreadCount).toBeGreaterThan(0)
+      await expect(page.getByTestId('notifications-bell')).not.toHaveAttribute('data-unread', '0')
+      const unread = await menuRows()
+      check(unread)
+      const bell = by(unread, 'notifications-bell')
+      expect(bell.label).toMatch(/^Notifications, \d+ unread$/)
+      expect(bell.badge).toMatch(/^\d+$/)
+      expect(shown(bell)).toBe('Notifications')
+      await panel.screenshot({ path: testInfo.outputPath('k5-4-overflow-labels-unread.png') })
+    })
   } finally {
     await a.context.close()
+    await alice.markAllNotificationsRead()
   }
 })
