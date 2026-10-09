@@ -7,7 +7,8 @@
 //    connector, one undo step); dropped anywhere else, the connected shape is made there.
 // Off for read-only roles, frames, locked shapes and mind-map topics (./planner.ts flowKindOf), while a gesture
 // or an editor is in progress, and while a new shape's editor is on its way. The keyboard's way is Ctrl/Cmd+Arrow
-// (the buttons say so), so they are not tab stops.
+// (the buttons say so), so they are not tab stops. They never cover the engine's rotation handle of the selection
+// (a button that would moves out past it), so rotating a selected shape by its handle still works.
 import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
 import { type CanvasFeatureContext, currentPlatform, formatChord, items } from '../../canvas/api/index.ts'
 import { useValue } from '../../lib/signals.ts'
@@ -22,6 +23,59 @@ export const HANDLE_OFFSET = 22
 const DRAG_PX = 6
 /** How long the handles of a shape the pointer just left stay, so the pointer can reach them (ms). */
 const LINGER_MS = 700
+
+/**
+ * The engine draws the selection's rotation handle this many screen px beyond its top edge (rotated with it):
+ * Excalidraw's transformHandles.ts, a 16 px gap plus the handle's margins, at any zoom; the handle is 8 px across
+ * for a mouse and 28 px on a touch screen. A + button never covers it: one whose centre is closer than
+ * ROTATION_CLEARANCE moves out along its own direction until it is clear (the up button of a selected shape sits
+ * above the rotation handle).
+ */
+export const ROTATION_HANDLE_GAP = 20
+export const ROTATION_CLEARANCE = 30
+
+type Pt = { readonly x: number; readonly y: number }
+const OUTWARD: Readonly<Record<FlowDir, Pt>> = {
+  right: { x: 1, y: 0 },
+  left: { x: -1, y: 0 },
+  down: { x: 0, y: 1 },
+  up: { x: 0, y: -1 },
+}
+
+/** `p` (the centre of the + button going `dir`), moved out along `dir` until it is clear of `rotation`. */
+export function clearOfRotation(p: Pt, dir: FlowDir, rotation: Pt | null): Pt {
+  if (!rotation) return p
+  const u = OUTWARD[dir]
+  let q = p
+  for (let i = 0; i < 60 && Math.hypot(q.x - rotation.x, q.y - rotation.y) < ROTATION_CLEARANCE; i++)
+    q = { x: q.x + 2 * u.x, y: q.y + 2 * u.y }
+  return q
+}
+
+/** Where the engine draws the selection's rotation handle (overlay px), or null when it draws none. */
+export function rotationHandleAt(
+  canvas: Pick<
+    CanvasFeatureContext['canvas'],
+    'selection' | 'get' | 'isLocked' | 'editingId' | 'viewport' | 'boundsOf' | 'sceneToOverlay'
+  >,
+): Pt | null {
+  const sel = canvas.selection
+  if (!sel.length || canvas.editingId() !== null) return null
+  const gap = ROTATION_HANDLE_GAP / (canvas.viewport.get().zoom || 1)
+  if (sel.length === 1) {
+    const el = canvas.get(sel[0] as string)
+    if (!el || el.isDeleted || canvas.isLocked(el.id) || el.type === 'arrow' || el.type === 'line')
+      return null
+    // its own box turned about its centre: the handle is `gap` beyond its top edge, turned with it
+    const angle = (el as { angle?: number }).angle ?? 0
+    const d = el.height / 2 + gap
+    const cx = el.x + el.width / 2
+    const cy = el.y + el.height / 2
+    return canvas.sceneToOverlay({ x: cx + d * Math.sin(angle), y: cy - d * Math.cos(angle) })
+  }
+  const b = canvas.boundsOf(sel)
+  return b ? canvas.sceneToOverlay({ x: b.x + b.width / 2, y: b.y - gap }) : null
+}
 
 const WORDS: Readonly<Record<FlowDir, string>> = { right: 'right', left: 'left', down: 'below', up: 'above' }
 const KEY: Readonly<Record<FlowDir, string>> = {
@@ -93,11 +147,12 @@ export function FlowHandles({ ctx }: { ctx: CanvasFeatureContext }) {
     const br = at(b.x + b.w, b.y + b.h)
     const cx = (tl.x + br.x) / 2
     const cy = (tl.y + br.y) / 2
+    const rotation = rotationHandleAt(canvas)
     return {
-      right: { x: br.x + HANDLE_OFFSET, y: cy },
-      left: { x: tl.x - HANDLE_OFFSET, y: cy },
-      down: { x: cx, y: br.y + HANDLE_OFFSET },
-      up: { x: cx, y: tl.y - HANDLE_OFFSET },
+      right: clearOfRotation({ x: br.x + HANDLE_OFFSET, y: cy }, 'right', rotation),
+      left: clearOfRotation({ x: tl.x - HANDLE_OFFSET, y: cy }, 'left', rotation),
+      down: clearOfRotation({ x: cx, y: br.y + HANDLE_OFFSET }, 'down', rotation),
+      up: clearOfRotation({ x: cx, y: tl.y - HANDLE_OFFSET }, 'up', rotation),
       size: { w: br.x - tl.x, h: br.y - tl.y },
     }
   }, [canvas, target])

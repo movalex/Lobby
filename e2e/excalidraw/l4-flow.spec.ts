@@ -5,7 +5,8 @@
 // in both tabs; Alt+Arrow walks the connection and the live region names it; a locked shape and a viewer get
 // nothing; a + handle click works; the axe audit passes with the handles shown; the time to build a 10-step flow,
 // keyboard against pointer, is recorded; Ctrl+Shift+Arrow repeats the last kind only while the flow is being
-// built, and is a11y's (out of and into a frame) again once the selection moved.
+// built, and is a11y's (out of and into a frame) again once the selection moved; the + buttons keep clear of the
+// selected shape's rotation handle (a real-pointer rotation still works).
 //
 //   E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/l4-flow --project=chromium --workers=1
 import AxeBuilder from '@axe-core/playwright'
@@ -14,6 +15,7 @@ import { type ElementsById, resnapArrow } from '../../packages/canvas-schema/src
 import type { Op } from '../../packages/canvas-schema/src/protocol.ts'
 import {
   type CanvasElement,
+  clickItem,
   createItem,
   editingId,
   expect,
@@ -25,6 +27,7 @@ import {
   itemText,
   pushedOps,
   saveState,
+  sceneToScreen,
   select,
   setViewport,
   test,
@@ -398,4 +401,46 @@ test('Ctrl+Shift+Arrow repeats the last kind only while the flow is being built;
     await a.page.waitForTimeout(400)
     expect((await items(a.page)).length).toBe(before)
   })
+})
+
+test('The + handles keep clear of the selected shape’s rotation handle: the up button sits above it, and a real-pointer quarter turn still rotates the shape', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await setViewport(a.page, { x: 0, y: 0, zoom: 1 })
+  const box = await settled(
+    a.page,
+    createItem(a.page, 'rectangle', { x: 400, y: 260, width: 200, height: 120, ...FILLED }),
+  )
+  await clickItem(a.page, box)
+  await expect.poll(() => selected(a.page)).toEqual([box])
+  const top = await sceneToScreen(a.page, { x: 500, y: 260 })
+  const centre = await sceneToScreen(a.page, { x: 500, y: 320 })
+  // the pointer over the shape shows its + buttons; none is under the rotation handle (20 px above the top)
+  await a.page.mouse.move(centre.x, centre.y)
+  await expect(a.page.getByTestId('flow-handles')).toHaveAttribute('data-flow-source', box)
+  const up = await a.page.getByTestId('flow-handle-up').boundingBox()
+  if (!up) throw new Error('no up handle')
+  expect(up.y + up.height).toBeLessThan(top.y - 20 - 8)
+  const handle = { x: top.x, y: top.y - 22 }
+  expect(
+    await a.page.evaluate(
+      ({ x, y }) => !!document.elementFromPoint(x, y)?.closest('[data-testid^="flow-handle"]'),
+      handle,
+    ),
+  ).toBe(false)
+  // the gaps-input-select quarter turn, with the + buttons on the page
+  await a.page.mouse.move(handle.x, handle.y)
+  await a.page.mouse.down()
+  await a.page.mouse.move(centre.x + 110, centre.y - 110, { steps: 8 })
+  await a.page.mouse.move(centre.x + 160, centre.y, { steps: 8 })
+  await a.page.mouse.up()
+  await expect
+    .poll(async () => {
+      const ang = (await item(a.page, box))?.angle ?? null
+      return ang !== null && Math.abs(ang - Math.PI / 2) < 0.06 ? 'quarter' : String(ang)
+    })
+    .toBe('quarter')
+  expect((await items(a.page)).map((e) => e.id)).toEqual([box])
+  await expectSaved(a.page)
 })
