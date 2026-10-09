@@ -15,12 +15,13 @@ import { COMMENTS_DELETED_EVENT, COMMENTS_THREAD_EVENT, CommentThreadId } from '
 import type { CanvasFeature, CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { SHARE_CHANGED_EVENT } from '../../sharing/api.ts'
 import '../comments.css'
+import { commentToolHint } from '../copy.ts'
 import { CommentIcon } from '../icons.tsx'
 import { SHARING_CHANGED_EVENT } from '../store.ts'
 import { CommentsOverlay } from './CommentsOverlay.tsx'
 import { CommentsPanel } from './CommentsPanel.tsx'
 import { CommentsMenuItem, CommentsTopBar } from './CommentsTopBar.tsx'
-import { COMMENT_TOOL_ID, controllerFor, focusThread, selectCommentTool } from './controller.ts'
+import { COMMENT_TOOL_ID, canCommentIn, controllerFor, focusThread, selectCommentTool } from './controller.ts'
 import { anchorAt, anchorForKeyboard } from './geometry.ts'
 import { COMMENT_TOOL_KEYS, placeCommentFromKeyboard } from './keys.ts'
 import { startNotificationsPoll } from './poll.ts'
@@ -196,7 +197,19 @@ export const feature: CanvasFeature = {
       label: 'Comment',
       readOnlyAllowed: true,
       cursor: 'crosshair',
-      toolbar: { group: 'main', order: 900, icon: ToolIcon },
+      toolbar: {
+        group: 'main',
+        order: 900,
+        icon: ToolIcon,
+        // K.1: what the top bar's comment tool said before K2-5 moved it here (its keyboard hint, and why a
+        // viewer cannot), and a press goes through the feature's own entry (a viewer is told, not given the tool)
+        hint: (ctx, active) => commentToolHint(canCommentIn(ctx), active),
+        disabled: (ctx) => !canCommentIn(ctx),
+        select: (ctx) => {
+          if (ctx.canvas.tool() === COMMENT_TOOL_ID) ctx.canvas.setTool('select')
+          else selectCommentTool(ctx)
+        },
+      },
       // Esc or another tool: the new-comment composer closes (its text stays a draft)
       onExit: (ctx) => controllerFor(ctx).store.cancelNewThread(),
     },

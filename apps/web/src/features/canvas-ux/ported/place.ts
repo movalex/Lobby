@@ -6,7 +6,7 @@
 //
 // W5-20 (the wave-5 review): as after a click with a creation tool (tldraw's rule, and the board page's
 // N + click), the tool goes back to Select, so Esc then Enter edits the placed shape again instead of
-// placing a blank one. A sticky note whose editor closes with no words in it is taken off the board in the
+// placing a blank one; with the tool lock on (Q) the tool stays, as it does after a click (wave K.1). A sticky note whose editor closes with no words in it is taken off the board in the
 // same undo step (a keyboard user who changed their mind leaves nothing behind), and the live region says
 // so (the a11y feature's announcer).
 import type { CanvasFeatureContext, ItemKind, LobbyCanvas, StyleValues } from '../../../canvas/api/index.ts'
@@ -15,6 +15,7 @@ import { announcerFor } from '../../a11y/ported/announcer.ts'
 import { findEmptySpot, type Rect } from '../placement.ts'
 import { frameAt, NOTE_SIZE, putInFrame } from './notes.ts'
 import { createPolygon, editPolygonLabel, isPolygonTool, type PolygonKind } from './polygons.ts'
+import { toolLock } from './tool-lock.ts'
 
 /** What the live region says when an empty placed note is taken off the board (W5-20). */
 export const EMPTY_NOTE_REMOVED = 'Empty sticky note removed'
@@ -112,6 +113,15 @@ export function removeIfLeftEmpty(canvas: LobbyCanvas, id: string): void {
   })
 }
 
+/**
+ * W5-20: after a keyboard placement the tool goes back to Select, as after a click; with the tool lock on (K2-2's Q)
+ * it stays, as a click keeps it (wave K.1: Enter used to drop the lock's tool).
+ */
+function backToSelect(canvas: LobbyCanvas): void {
+  if (toolLock.get()) return
+  if (canvas.tool() !== 'select') canvas.setTool('select')
+}
+
 /** Places the tool's shape; returns its id, or null on a read-only board. */
 export function placeAtCenter(ctx: CanvasFeatureContext, tool: PlaceableTool): string | null {
   const { canvas } = ctx
@@ -129,7 +139,7 @@ export function placeAtCenter(ctx: CanvasFeatureContext, tool: PlaceableTool): s
       `place ${tool}`,
     )
     if (!made) return null
-    if (canvas.tool() !== 'select') canvas.setTool('select')
+    backToSelect(canvas)
     editPolygonLabel(canvas, made.holder, 'enter')
     return made.holder
   }
@@ -142,8 +152,9 @@ export function placeAtCenter(ctx: CanvasFeatureContext, tool: PlaceableTool): s
     return tx.create(kind, props)
   })
   putInFrame(canvas, id, frame?.id)
-  // W5-20: back to Select before the selection (switching tools keeps a selection only into Select)
-  if (canvas.tool() !== 'select') canvas.setTool('select')
+  // W5-20: back to Select before the selection (switching tools keeps a selection only into Select), unless
+  // the tool lock is on (K.1): then the tool stays, as after a click with it
+  backToSelect(canvas)
   canvas.select([id])
   if (tool === 'note') removeIfLeftEmpty(canvas, id)
   // a crowded view pushes it to the nearest free spot, which can be off screen: bring it into view

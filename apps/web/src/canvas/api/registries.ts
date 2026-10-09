@@ -109,7 +109,17 @@ export interface FeatureToolSpec {
   readonly readOnlyAllowed: boolean
   readonly cursor?: string
   /** a toolbar button (3a's toolbar reads it); omit for tools started only by other UI */
-  readonly toolbar?: { readonly group: 'main' | 'more'; readonly order: number; readonly icon: ComponentType }
+  readonly toolbar?: {
+    readonly group: 'main' | 'more'
+    readonly order: number
+    readonly icon: ComponentType
+    /** wave K.1: the button's tooltip (default: the label and its key), e.g. how to use it from the keyboard */
+    hint?(ctx: CanvasFeatureContext, active: boolean): string
+    /** wave K.1: the button is aria-disabled for this person (it stays focusable and says why when pressed) */
+    disabled?(ctx: CanvasFeatureContext): boolean
+    /** wave K.1: what pressing the button does instead of picking the tool (the feature's own entry, which explains) */
+    select?(ctx: CanvasFeatureContext): void
+  }
   onPointerDown?(e: ToolPointerEvent, ctx: CanvasFeatureContext): void
   onPointerUp?(e: ToolPointerEvent, ctx: CanvasFeatureContext): void
   onDoubleClick?(e: ToolPointerEvent, ctx: CanvasFeatureContext): void

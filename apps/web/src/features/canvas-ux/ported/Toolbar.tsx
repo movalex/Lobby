@@ -106,6 +106,10 @@ interface Slot {
   readonly locked?: boolean
   /** the More button: the id of the popover it opens */
   readonly controls?: string
+  /** K.1: a feature tool's own tooltip (instead of the label and its key) */
+  readonly hint?: string
+  /** K.1: aria-disabled for this person (a feature tool's `toolbar.disabled`) */
+  readonly disabled?: boolean
   onSelect(e?: { readonly detail: number }): void
 }
 
@@ -141,9 +145,12 @@ function ToolButton({
     'data-tool': slot.id,
     'aria-label': slot.label,
     'aria-keyshortcuts': ariaKeys(slot.key),
-    title: slot.locked
-      ? `${title(slot.label, slot.key)} (tool lock on: Q to turn it off)`
-      : title(slot.label, slot.key),
+    title: slot.hint
+      ? slot.hint
+      : slot.locked
+        ? `${title(slot.label, slot.key)} (tool lock on: Q to turn it off)`
+        : title(slot.label, slot.key),
+    'aria-disabled': slot.disabled ? true : undefined,
     'data-state': slot.active ? 'selected' : undefined,
     'data-locked': slot.locked ? 'true' : undefined,
     tabIndex,
@@ -232,14 +239,17 @@ export function Toolbar({ ctx }: { ctx: CanvasFeatureContext }) {
     state.stylesOpen.set(false)
   }, [sel, state])
 
-  const pick = (id: string, overflow = false) => {
-    if (overflow) state.lastOverflowTool.set(id)
-    state.moreOpen.set(false)
-    canvas.setTool(id)
+  const backToBoard = () => {
     const doc = barRef.current?.ownerDocument
     // a keyboard user who tabbed here goes back to the board after choosing
     if (!doc?.activeElement || wrapRef.current?.contains(doc.activeElement) || doc.activeElement === doc.body)
       canvas.focus({ preventScroll: true })
+  }
+  const pick = (id: string, overflow = false) => {
+    if (overflow) state.lastOverflowTool.set(id)
+    state.moreOpen.set(false)
+    canvas.setTool(id)
+    backToBoard()
   }
 
   const builtIn = (t: BuiltInToolInfo): Slot => ({
@@ -263,7 +273,15 @@ export function Toolbar({ ctx }: { ctx: CanvasFeatureContext }) {
     key: t.kbd?.[0],
     icon: t.toolbar?.icon ?? MoreIcon,
     active: tool === t.id,
-    onSelect: () => pick(t.id),
+    hint: t.toolbar?.hint?.(ctx, tool === t.id),
+    disabled: t.toolbar?.disabled?.(ctx) === true,
+    onSelect: () => {
+      const select = t.toolbar?.select
+      if (!select) return pick(t.id)
+      state.moreOpen.set(false)
+      select(ctx)
+      backToBoard()
+    },
   })
   const main: Slot[] = []
   if (readOnly) {

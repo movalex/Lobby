@@ -21,6 +21,17 @@ export function emptyPanelText(opts: { readonly coarse: boolean; readonly canCom
     : 'No comments yet. Press C, then click an object or the board to add one.'
 }
 
+/**
+ * The comment tool's tooltip (the toolbar's, wave K.1: the words the top bar's comment tool had before K2-5): its
+ * keys for people who may comment, or why a viewer cannot.
+ */
+export function commentToolHint(canComment: boolean, active: boolean): string {
+  if (!canComment) return 'You can read comments here but not add them'
+  return active
+    ? 'Comment tool is on: click an object or the board, or press Enter to comment on the selected object (the middle of the view when nothing is selected). Esc to stop.'
+    : 'Comment (C): click an object or the board, or press Enter to comment on the selection'
+}
+
 /** The composer's hint under its text box. */
 export function composerHint(coarse: boolean): string {
   return coarse ? '@ to mention' : 'Enter to post · Shift+Enter for a new line · @ to mention'

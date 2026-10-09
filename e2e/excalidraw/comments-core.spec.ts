@@ -646,9 +646,17 @@ test('viewer: C shows the read-only notice and keeps the select tool; the viewer
   await d.page.keyboard.press('c')
   await expect(d.page.getByTestId('comments-readonly-notice')).toBeVisible()
   expect(await currentTool(d.page)).toBe('select')
-  // K2-5: no top-bar comment tool any more (it said aria-disabled for a viewer); the toolbar's stays unpressed
+  // K2-5: no top-bar comment tool any more; the toolbar's says what the top bar's said (K.1): disabled for a
+  // viewer, with why in its tooltip, and unpressed; a click on it explains instead of picking it
   await expect(d.page.getByTestId('comment-tool')).toHaveCount(0)
-  await expect(d.page.getByTestId('tools.comment')).toHaveAttribute('aria-pressed', 'false')
+  const toolbarTool = d.page.getByTestId('tools.comment')
+  await expect(toolbarTool).toHaveAttribute('aria-pressed', 'false')
+  await expect(toolbarTool).toHaveAttribute('aria-disabled', 'true')
+  await expect(toolbarTool).toHaveAttribute('title', 'You can read comments here but not add them')
+  // an aria-disabled button still takes a click (Playwright waits for "enabled" unless forced)
+  await toolbarTool.click({ force: true })
+  await expect(d.page.getByTestId('comments-readonly-notice')).toBeVisible()
+  expect(await currentTool(d.page)).toBe('select')
 
   await pin(d.page, thread.id).click()
   const popover = threadPopover(d.page, thread.id)

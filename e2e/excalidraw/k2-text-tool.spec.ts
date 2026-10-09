@@ -154,3 +154,47 @@ test('K2-2: a double-click on the Note tool keeps it; Q on a selected note types
   await expect(a.page.getByTestId('tools.note')).not.toHaveAttribute('data-locked', 'true')
   expect(await tool(a.page)).toBe('select')
 })
+
+// Wave K.1 (a K2 reviewer's nit): with the tool lock on, the keyboard's Enter placement (A11Y-07: a shape in the
+// middle of the view) keeps the tool, as a click does; with it off Enter goes back to Select (W5-20).
+test('K.1: with the tool lock on (Q) Enter places a note and the Note tool stays; the next Enter places another', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await focusBoard(a.page)
+  await a.page.keyboard.press('q')
+  await expect(a.page.getByTestId('tool-lock-notice')).toBeVisible()
+  await a.page.keyboard.press('n')
+  await expect.poll(() => tool(a.page)).toBe('note')
+  await a.page.keyboard.press('Enter')
+  const first = await waitForTextEditor(a.page)
+  await expectLeasedEditor(a.page, first)
+  await typeText(a.page, 'One')
+  await a.page.keyboard.press('Escape')
+  await expect.poll(() => editingId(a.page)).toBeNull()
+  expect(await tool(a.page)).toBe('note')
+  await expect(a.page.getByTestId('tools.note')).toHaveAttribute('data-locked', 'true')
+  // the lock keeps placing: Enter again is a second note, not an edit of the first
+  await focusBoard(a.page)
+  await a.page.keyboard.press('Enter')
+  const second = await waitForTextEditor(a.page)
+  expect(second).not.toBe(first)
+  await typeText(a.page, 'Two')
+  await a.page.keyboard.press('Escape')
+  await expect.poll(() => editingId(a.page)).toBeNull()
+  expect(await tool(a.page)).toBe('note')
+  await expectSaved(a.page)
+  const notes = (await items(a.page)).filter((e) => e.type === 'stickynote')
+  expect(notes.map((n) => n.id).sort()).toEqual([first, second].sort())
+
+  await test.step('lock off: Enter places one note and goes back to Select (W5-20)', async () => {
+    await a.page.keyboard.press('q')
+    await a.page.keyboard.press('n')
+    await expect.poll(() => tool(a.page)).toBe('note')
+    await a.page.keyboard.press('Enter')
+    await waitForTextEditor(a.page)
+    await expect.poll(() => tool(a.page)).toBe('select')
+    await a.page.keyboard.press('Escape')
+    await expect.poll(() => editingId(a.page)).toBeNull()
+  })
+})
