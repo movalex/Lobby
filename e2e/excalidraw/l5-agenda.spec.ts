@@ -4,6 +4,7 @@
 //
 //   E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e excalidraw -- l5-agenda
 import type { Page } from '@playwright/test'
+import { CONNECT_URL } from '../spike-b/support/relay.ts'
 import { item } from '../tests/support/canvas.ts'
 import { focusBoard, pushCount } from './board-kit.ts'
 import { startPresenting } from './present-kit.ts'
@@ -11,6 +12,7 @@ import {
   expect,
   expectItemsEverywhere,
   post,
+  reloadBoard,
   seed,
   test,
   type WorkshopCanvasSession,
@@ -198,4 +200,38 @@ test('L5-1: with a second facilitator holding the timer, a slide change leaves t
   await a.page.waitForTimeout(500)
   expect(await timerOf(a, board)).toMatchObject({ status: 'running', durationMs: 600_000, startedBy: c.id })
   await a.page.keyboard.press('Escape')
+})
+
+test('L5-1: in a room that says revision 11 (a sync from before wave L) the minutes stepper is not offered, and the minutes already there are plain text', async ({
+  join,
+}) => {
+  const a = await join('alice')
+  const b = await join('bob', 'editor')
+  await twoSections(a, [b])
+  await a.page.getByTestId('dock-tab-frames').click()
+  await planMinutes(a.page, 'l5-one', 2)
+
+  // bob's tab is told by its room that the room is revision 11: the `contracts` frame is rewritten on the way
+  await b.page.routeWebSocket(CONNECT_URL, (ws) => {
+    const server = ws.connectToServer()
+    ws.onMessage((m) => server.send(m))
+    server.onMessage((m) =>
+      ws.send(
+        typeof m === 'string'
+          ? m.replace('{"type":"contracts","rev":12}', '{"type":"contracts","rev":11}')
+          : m,
+      ),
+    )
+    ws.onClose(() => server.close())
+    server.onClose(() => ws.close())
+  })
+  await reloadBoard(b)
+  await expectItemsEverywhere([b], ['l5-one', 'l5-two'])
+  await b.page.getByTestId('dock-tab-frames').click()
+  await expect(b.page.getByTestId('frame-outline')).toBeVisible()
+  await expect(row(b.page, 'l5-one').getByTestId('frame-mins-read')).toHaveText('2 min')
+  await expect(b.page.getByTestId('frame-mins-stepper')).toHaveCount(0)
+  await expect(b.page.getByTestId('frame-mins-add')).toHaveCount(0)
+  // and in a room that says 12, the same person gets it
+  await expect(a.page.getByTestId('frame-mins-stepper')).toHaveCount(2)
 })

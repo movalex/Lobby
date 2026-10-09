@@ -7,12 +7,12 @@ import type { WorkshopVoteState } from '@draftroom/contracts'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { CanvasElement, LobbyTx } from '../../../canvas/api/index.ts'
-// biome-ignore lint/style/noRestrictedImports: a test only: the real duplicate rules (canvas/board/tx.ts is pure), so what the registry strips is stripped here too
-import { duplicate, setFrame, type TxView } from '../../../canvas/board/tx.ts'
-import { loadWorkshop, workshopKit } from './ctx-kit.ts'
-import { el, fakeCanvas, note } from './test-kit.ts'
-import { VotingPanel } from './VotingPanel.tsx'
+import type { CanvasElement, LobbyTx } from '../../canvas/api/index.ts'
+// a test only: the real duplicate rules (canvas/board/tx.ts is pure), so what the registry strips is stripped here too
+import { duplicate, setFrame, type TxView } from '../../canvas/board/tx.ts'
+import { loadWorkshop, workshopKit } from './ported/ctx-kit.ts'
+import { el, fakeCanvas, note } from './ported/test-kit.ts'
+import { VotingPanel } from './ported/VotingPanel.tsx'
 import {
   candidatesOf,
   gatherWinners,
@@ -23,7 +23,7 @@ import {
   VOTE_CHART_KIND,
   VOTE_RANK_KIND,
   VOTE_WINNERS_KIND,
-} from './vote-board.ts'
+} from './ported/vote-board.ts'
 
 const SID = 'vot_0123456789abcdefghij'
 const PLUS = 'plusOne:usr_voter0000001'

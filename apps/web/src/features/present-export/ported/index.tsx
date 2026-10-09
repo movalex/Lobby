@@ -12,10 +12,10 @@ import type {
   MenuEntrySpec,
 } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
-import { presentExportArgs } from '../../workshops/commands.ts'
 import { workshopSettingsOf } from '../../workshops/ported/session-settings.ts'
 import { getController } from './controller.ts'
 import { ExportDialog } from './ExportDialog.tsx'
+import { exportFrameIds } from './export-frames.ts'
 import { PresentOverlay } from './PresentOverlay.tsx'
 import '../present-export.css'
 
@@ -95,9 +95,7 @@ const COMMANDS: readonly CommandSpec[] = [
     // wave L: frameIds (PresentExportArgs) are the frames of a recap ("Export recap as PDF"): selected, so the
     // dialog opens on them as its PDF pages; no args: the dialog as it was
     run: (ctx, _source, args) => {
-      const frames = (presentExportArgs(args).frameIds ?? []).filter(
-        (id) => ctx.canvas.get(id)?.type === 'frame',
-      )
+      const frames = exportFrameIds(ctx.canvas, args)
       if (frames.length === 0) return controllerOf(ctx).openExport()
       ctx.canvas.select(frames)
       controllerOf(ctx).openExport('pdf')
