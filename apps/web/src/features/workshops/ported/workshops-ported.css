@@ -42,14 +42,14 @@
 .dr-wk-spot__ring {
   position: absolute;
   box-sizing: border-box;
-  border: 2.5px solid var(--dr-accent);
+  border: 2.5px solid var(--dr-accent-ink);
   pointer-events: none;
 }
 /* The pulse: a second ring that grows and fades (transform and opacity only). Still under reduced motion. */
 .dr-wk-spot[data-motion="pulse"] .dr-wk-spot__ring::after {
   position: absolute;
   inset: -2.5px;
-  border: 2.5px solid var(--dr-accent);
+  border: 2.5px solid var(--dr-accent-ink);
   border-radius: inherit;
   content: "";
   animation: dr-wk-spot-pulse 1.8s ease-out infinite;

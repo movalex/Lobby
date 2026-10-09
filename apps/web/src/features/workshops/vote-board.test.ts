@@ -135,6 +135,15 @@ describe('"Results to board"', () => {
     const [h1 = 0, h2 = 0, h3 = 0] = rects.map((r) => r.height)
     expect(h1 / 4).toBeCloseTo(h2 / 2, 1)
     expect(h1 / 4).toBeCloseTo(h3 / 1, 1)
+    // the engine takes a centred text's `x` as its middle: each count is created over the middle of its bar
+    const counts = kids.filter(
+      (e) => e.type === 'text' && /^[0-9]+$/.test(String((e as { text?: string }).text)),
+    )
+    expect(counts).toHaveLength(3)
+    const barMiddles = rects.map((r) => r.x + r.width / 2).sort((x, y) => x - y)
+    const countXs = counts.map((c) => c.x).sort((x, y) => x - y)
+    for (const [i, x] of countXs.entries())
+      expect(Math.abs(x - (barMiddles[i] ?? Number.NaN))).toBeLessThan(1)
     // every element it made is tagged, and every text carries its words
     for (const e of b.created()) expect(e.customData?.lobby?.kind, e.type).toBe(VOTE_CHART_KIND)
     // a long label wraps over lines; its words are the same
@@ -303,6 +312,20 @@ describe('"Gather the winners"', () => {
       move: false,
     })
     expect(none).toEqual({ frameId: null, gathered: 0, skipped: { gone: 1, frames: 0, locked: 0 } })
+  })
+
+  it('a note in a locked frame is gathered as a copy but not moved (the server refuses a write to it)', () => {
+    const make = () =>
+      board([
+        el('lockedframe', 'frame', { x: 0, y: 0, width: 1200, height: 500, locked: true }),
+        ...placed({ n1: [100, 100], n2: [400, 100] }).map((e) =>
+          e.id.startsWith('n1') || e.id.startsWith('n2') ? { ...e, frameId: 'lockedframe' } : e,
+        ),
+      ])
+    const copy = gatherWinners(make().canvas, vote(RESULTS), { n: 2, move: false })
+    expect(copy).toMatchObject({ gathered: 2, skipped: { locked: 0 } })
+    const move = gatherWinners(make().canvas, vote(RESULTS), { n: 2, move: true })
+    expect(move).toEqual({ frameId: null, gathered: 0, skipped: { gone: 0, frames: 0, locked: 2 } })
   })
 
   it('reads the candidates from the board as it is now', () => {

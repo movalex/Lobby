@@ -2,7 +2,9 @@
 // dims the rest of the board around them, without taking anyone's camera (summon and present stay for a full
 // takeover). One spotlight per board, kept IN MEMORY like the raised hands and the live presentation: nothing is
 // stored, and a restart of this api process drops every spotlight (the facilitator starts it again; clients see
-// the new epoch). The api is the authority: it checks the objects against the board's shape index, decides who
+// the new epoch). Scope: one API process (docs/DEPLOY.md runs one instance). During a deploy two instances run for a
+// moment (the EVT-2 caveat of the other in-memory state): a spotlight started on one is not seen by streams on the
+// other, and a facilitator starts it again. The api is the authority: it checks the objects against the board's shape index, decides who
 // may start and end it, and publishes the whole state after every change (`workshop.spotlight`, versioned like
 // the hands queue so a late response never undoes a newer event). GET /workshop carries it for late joiners.
 //

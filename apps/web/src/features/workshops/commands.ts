@@ -1,7 +1,9 @@
 // OWNER: W5 (wave L, live meeting). The workshop and present-export command ids other workstreams run by id
-// (canvas-ux runCommand(ctx, id, source, args)), with their args. Frozen at the wave L foundation; W5 registers
-// the commands ('present-export.export' is registered since wave 3, without args; W5 adds `frameIds`).
-// Running an id that is not registered yet is a no-op (runCommand answers false), so a caller (W2's coach and
+// (canvas-ux runCommand(ctx, id, source, args)), with their args. Frozen at the wave L foundation. Registered by
+// W5: 'workshops.vote.setup' and 'workshops.spotlight' (workshops/ported/index.tsx COMMANDS; also
+// 'workshops.spotlight-end'), and 'present-export.export' (present-export/ported/index.tsx, registered since
+// wave 3 without args; it takes `frameIds` now).
+// Running an id that is not registered is a no-op (runCommand answers false), so a caller (W2's coach and
 // Wrap up) needs no feature check.
 
 export const WORKSHOP_COMMAND_IDS = {

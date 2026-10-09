@@ -148,6 +148,7 @@ export function WorkshopBar({ ctx }: { ctx: Ctx }) {
   const facilitator = useIsFacilitator(ctx)
   const guest = useIsGuest()
   const brainstorm = usePrivateNotes(ctx).snap.session
+  const selectedCount = useValue('dr-wk-bar-selected', () => ctx.canvas.selection.length, [ctx.canvas])
   const sessionSettings = useValue('dr-wk-bar-settings', () => workshopSettingsOf(ctx.canvas), [ctx.canvas])
   const [open, setOpen] = useState<Open>(null)
   /** Which section the tools popover should bring into view and focus when it opens (null = the first). */
@@ -240,7 +241,8 @@ export function WorkshopBar({ ctx }: { ctx: Ctx }) {
     facilitator,
     activity,
     vote: vote !== null,
-    spotlight: facilitator,
+    // L5-2: offered when there is something to spotlight (a selection) or to end; an idle menu is as it was
+    spotlight: facilitator && (selectedCount > 0 || !!snap.spotlight),
   })
   const parts = facilitatePill({
     timer: display,

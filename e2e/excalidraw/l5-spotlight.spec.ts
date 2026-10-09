@@ -136,6 +136,12 @@ test('L5-2: alice spotlights a note from its context menu: bob (panned away) get
     await clearAndFocus(b.page)
     await b.page.keyboard.press('Escape')
     await expect(mask(b.page)).toHaveCount(0)
+    // a viewer has the same Esc (it writes nothing), and alice still has hers
+    await clearAndFocus(c.page)
+    await c.page.keyboard.press('Escape')
+    await expect(bar(c.page)).toHaveCount(0)
+    await expect(c.page.getByTestId('spotlight-show')).toBeVisible()
+    await expect(mask(a.page)).toBeVisible()
   })
 
   await test.step('alice ends it for everyone: it is gone for bob (hidden or not) and carol, and bob is told', async () => {
@@ -143,6 +149,7 @@ test('L5-2: alice spotlights a note from its context menu: bob (panned away) get
     await expect(mask(a.page)).toHaveCount(0)
     await expect(mask(c.page)).toHaveCount(0)
     await expect(b.page.getByTestId('spotlight-show')).toHaveCount(0)
+    await expect(c.page.getByTestId('spotlight-show')).toHaveCount(0)
     await expect(b.page.getByTestId('spotlight-ended-toast')).toContainText(`${a.name} ended the spotlight`)
     expect((await spotlightState(a, board)).spotlight).toBeNull()
   })
@@ -175,6 +182,14 @@ test('L5-2: the selection bar and the Facilitate menu start it; a new spotlight 
     await select(c.page, ['l5s-one'])
     await expect(c.page.getByTestId('selection-spotlight')).toHaveCount(0)
     expect((await spotlightState(a, board)).spotlight).toBeNull()
+  })
+
+  await test.step('the Facilitate menu is as it was while nothing is selected and no spotlight runs', async () => {
+    await a.page.getByTestId('facilitate-button').click()
+    await expect(a.page.getByTestId('facilitate-menu')).toBeVisible()
+    await expect(a.page.getByTestId('spotlight-menu')).toHaveCount(0)
+    await a.page.keyboard.press('Escape')
+    await expect(a.page.getByTestId('facilitate-menu')).toHaveCount(0)
   })
 
   await test.step('the selection bar: select a note, press the button; bob sees it', async () => {

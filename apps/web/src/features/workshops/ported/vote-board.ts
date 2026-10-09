@@ -96,6 +96,11 @@ export function dateTextOf(iso: string | null, fallback: Date): string {
   return (Number.isFinite(d.getTime()) ? d : fallback).toLocaleDateString(undefined, { dateStyle: 'medium' })
 }
 
+/**
+ * The props a plan text is created with. The engine places a new text by its alignment: for 'center' the `x` it is
+ * given is the text's CENTRE (it subtracts half the width), for 'left' its left edge. The plans give the left
+ * edge, so a centred text is given the middle of its box.
+ */
 const textProps = (
   t: PlanText,
   id: string,
@@ -104,7 +109,7 @@ const textProps = (
   kind: string,
 ) => ({
   id,
-  x: Math.round((origin.x + t.x) * 100) / 100,
+  x: Math.round((origin.x + t.x + (t.align === 'center' ? t.width / 2 : 0)) * 100) / 100,
   y: Math.round((origin.y + t.y) * 100) / 100,
   text: t.text,
   originalText: t.text,
@@ -195,10 +200,15 @@ export function resultsToBoard(
 
 // ---- gather the winners ---------------------------------------------------------------------------------------------
 
-/** The results as candidates for gathering or a run-off (what each ref names now). */
+/**
+ * The results as candidates for gathering or a run-off (what each ref names now). `locked`: the element is locked,
+ * and, when the originals are to be moved (`move`), also when it stands in a locked frame (the server refuses a
+ * write to either; a copy of an element in a locked frame is a new element and is fine).
+ */
 export function candidatesOf(
   canvas: Pick<LobbyCanvas, 'get' | 'isLocked'>,
   results: readonly { shapeId: string; count: number; rank: number }[],
+  move = false,
 ): WinnerCandidate[] {
   return results.map((r) => {
     const id = elementIdOf(r.shapeId)
@@ -210,7 +220,10 @@ export function candidatesOf(
       id,
       live: isLive(el),
       frame: el?.type === 'frame',
-      locked: !!id && isLive(el) && canvas.isLocked(id),
+      locked:
+        !!id &&
+        isLive(el) &&
+        (canvas.isLocked(id) || (move && !!el.frameId && canvas.get(el.frameId)?.locked === true)),
     }
   })
 }
@@ -241,7 +254,7 @@ export function gatherWinners(
   opts: { n: number; move: boolean },
 ): GatherOutcome | null {
   if (vote.session.status !== 'revealed' || !vote.results?.length) return null
-  const { winners, skipped } = winnersOf(candidatesOf(canvas, vote.results), opts.n)
+  const { winners, skipped } = winnersOf(candidatesOf(canvas, vote.results, opts.move), opts.n)
   const plan = winnersPlan({
     winners,
     sizeOf: (id) => {
