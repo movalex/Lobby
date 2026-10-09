@@ -6,6 +6,7 @@
 //  - The Markdown matches the golden file (recap.golden.md) and is bounded at 20 KB.
 //  - Catch me up's window: the previous visit on this device, else 24 h, also when localStorage throws.
 import { readFileSync } from 'node:fs'
+import { AI_RECAP_MAX_WINDOW_MS } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { exportGate } from '../../canvas-ux/ported/export-gate.ts'
 import { showSources } from '../ported/ask.ts'
@@ -21,9 +22,9 @@ import {
 import { AI_ON, aiKit, note, renderIn } from '../ported/test-kit.ts'
 import { applyRecap } from './apply.ts'
 import { RECAP_MARKDOWN_MAX_BYTES, recapMarkdown } from './markdown.ts'
-import type { RecapPlan } from './plan.ts'
+import { type RecapPlan, recapPlan, recapWhen } from './plan.ts'
 import { AiRecapOverlay } from './RecapPanel.tsx'
-import { aiRecap, runRecap } from './recap.ts'
+import { aiRecap, inSelection, runRecap } from './recap.ts'
 import {
   catchUpSince,
   DAY_MS,
@@ -37,6 +38,8 @@ import {
 } from './window.ts'
 
 const RUN = 'air_0123456789ABCDEFabcd'
+/** the test kit's board id */
+const BOARD_ID = 'b-kit0000001'
 const NOW = Date.UTC(2026, 9, 8, 16, 0, 0)
 
 const recapAnswer = {
@@ -351,6 +354,7 @@ describe('Copy as Markdown', () => {
       { ref: 'shape:n1', label: 'Summer beach screenings', votes: 3, rank: 1 },
       { ref: 'shape:n2', label: 'Solstice trailer drop', votes: 1, rank: 2 },
     ],
+    topVotedTitle: 'Top voted',
     plannedVsActual: [
       { name: 'Warm-up | intro', plannedMin: 10, actualMin: 12 },
       { name: 'Brainstorm', plannedMin: null, actualMin: 25 },
@@ -427,5 +431,81 @@ describe('the recap window', () => {
     expect(sessionSince(els, NOW, null)).toBe(NOW - 7_200_000)
     expect(sessionSince(els, NOW, [{ actualMs: 600_000 }, { actualMs: 1_200_000 }])).toBe(NOW - 1_800_000)
     expect(sessionSince([], NOW, null)).toBe(today.getTime())
+  })
+})
+
+describe('what a recap says it covers', () => {
+  const OFF = { ...AI_ON, enabled: false, reason: 'board-off' as const, canSummarize: false }
+  /** this device's localStorage */
+  beforeEach(() => {
+    const m = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => m.get(key) ?? null,
+      setItem: (key: string, v: string) => void m.set(key, v),
+      removeItem: (key: string) => void m.delete(key),
+    })
+  })
+
+  it('Catch me up after a month away: the last 14 days, by date (AI off: clamped here; AI on: the api’s windowFrom)', async () => {
+    writeLastVisit(BOARD_ID, NOW - 30 * DAY_MS)
+    const off = aiKit(board(), { status: OFF })
+    const plan = (await runRecap(off.ctx, 'catch-up', NOW))?.plan
+    expect(plan?.windowFrom).toBe(NOW - AI_RECAP_MAX_WINDOW_MS)
+    expect(plan?.scopeLabel).toBe(`Since ${recapWhen(NOW - AI_RECAP_MAX_WINDOW_MS)} (the last 14 days)`)
+    expect(recapMarkdown(plan as RecapPlan)).toContain('(the last 14 days)')
+    resetVisits()
+    writeLastVisit(BOARD_ID, NOW - 30 * DAY_MS)
+    const on = aiKit(board())
+    on.answer({ ...recapAnswer, windowFrom: NOW - AI_RECAP_MAX_WINDOW_MS })
+    const ai = (await runRecap(on.ctx, 'catch-up', NOW))?.plan
+    // the api was asked for the whole absence and answered for the 14 days it allows
+    expect(on.requests[0]?.body).toMatchObject({ scope: { kind: 'since', since: NOW - 30 * DAY_MS } })
+    expect(ai?.scopeLabel).toBe(`Since ${recapWhen(NOW - AI_RECAP_MAX_WINDOW_MS)} (the last 14 days)`)
+  })
+
+  it('Catch me up names the last visit by date, else says it is the last 24 hours', async () => {
+    writeLastVisit(BOARD_ID, NOW - 5 * 3_600_000)
+    const k = aiKit(board(), { status: OFF })
+    expect((await runRecap(k.ctx, 'catch-up', NOW))?.plan?.scopeLabel).toBe(
+      `Since your last visit, ${recapWhen(NOW - 5 * 3_600_000)}`,
+    )
+    resetVisits()
+    const fresh = aiKit(board(), { status: OFF })
+    const ctx = fresh.ctx as unknown as { board: { id: string } }
+    ctx.board = { ...ctx.board, id: 'b-never-here' }
+    expect((await runRecap(fresh.ctx, 'catch-up', NOW))?.plan?.scopeLabel).toBe(
+      `Since ${recapWhen(NOW - DAY_MS)} (the last 24 hours)`,
+    )
+  })
+
+  it('a selection recap keeps only the votes on what is in the selected frames; this tab’s last vote is titled so', () => {
+    const k = aiKit([
+      { id: 'fa', type: 'frame', x: 0, y: 0, width: 1000, height: 600, name: 'A' } as never,
+      ...note('in', 40, 40, 'Inside A', { frameId: 'fa' }),
+      ...note('out', 2_000, 40, 'Outside'),
+    ])
+    const inScope = inSelection(k.canvas, ['fa'])
+    expect(inScope('shape:in')).toBe(true)
+    expect(inScope('shape:fa')).toBe(true)
+    expect(inScope('shape:out')).toBe(false)
+    const plan = recapPlan({
+      scope: 'selection',
+      now: NOW,
+      result: null,
+      aiNote: 'Without AI: AI is off on this board.',
+      since: null,
+      inScope,
+      actuals: null,
+      revealed: {
+        results: [
+          { ref: 'shape:out', count: 4, rank: 1 },
+          { ref: 'shape:in', count: 2, rank: 2 },
+        ],
+      },
+      textOf: (ref) => k.canvas.text.of(ref.replace(/^shape:/, '')),
+    })
+    expect(plan.topVoted.map((v) => v.ref)).toEqual(['shape:in'])
+    expect(plan.topVotedTitle).toBe('Top voted (last vote)')
+    expect(recapMarkdown(plan)).toContain('## Top voted (last vote)')
   })
 })

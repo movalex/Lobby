@@ -107,7 +107,7 @@ function layout(canvas: LobbyCanvas, plan: RecapPlan) {
     y += SECTION_GAP - 8
   }
   section(
-    'Top voted',
+    plan.topVotedTitle,
     plan.topVoted.map((v) => `${v.rank}. ${v.label} · ${plural(v.votes, 'vote')}`),
     false,
     'item',

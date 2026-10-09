@@ -33,7 +33,7 @@ export function recapMarkdown(p: RecapPlan): string {
     p.questions.map((q) => `- ${flat(q.text)}`),
   )
   list(
-    'Top voted',
+    p.topVotedTitle,
     p.topVoted.map((v) => `${v.rank}. ${flat(v.label)} (${v.votes} ${v.votes === 1 ? 'vote' : 'votes'})`),
   )
   if (p.plannedVsActual?.length)

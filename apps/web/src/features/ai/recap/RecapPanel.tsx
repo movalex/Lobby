@@ -109,7 +109,7 @@ function Body({ plan }: { plan: RecapPlan }) {
         </Section>
       )}
       {plan.topVoted.length > 0 && (
-        <Section title="Top voted" testId="recap-top-voted">
+        <Section title={plan.topVotedTitle} testId="recap-top-voted">
           <ol>
             {plan.topVoted.map((v) => (
               <li

@@ -18,7 +18,7 @@ import { ensureAiStatus, runPublic } from '../ported/actions.ts'
 import { aiStatus, perCanvas } from '../ported/runtime.ts'
 import { idOfRef, refOf } from '../ported/target.ts'
 import { type RecapPlan, type RecapResult, recapPlan } from './plan.ts'
-import { apiScope, catchUpSince, type RecapScopeName, sessionSince } from './window.ts'
+import { apiScope, catchUpWindow, type RecapScopeName, sessionSince } from './window.ts'
 
 export interface RecapState {
   readonly status: 'working' | 'done'
@@ -56,6 +56,20 @@ export function selectionRefs(canvas: Pick<LobbyCanvas, 'selection' | 'get'>): s
   return (frames.length ? frames : sel).map(refOf)
 }
 
+/** Whether a ref is in what a selection recap is about: one of `about`, or in one of those frames. */
+export function inSelection(
+  canvas: Pick<LobbyCanvas, 'get'>,
+  about: readonly string[],
+): (ref: string) => boolean {
+  const set = new Set(about)
+  return (ref) => {
+    const id = idOfRef(ref)
+    if (set.has(id)) return true
+    const frameId = (canvas.get(id) as { frameId?: string | null } | undefined)?.frameId
+    return !!frameId && set.has(frameId)
+  }
+}
+
 /**
  * Opens the recap of `scope` (see the header): asks AI when it may (one budgeted call, the privacy notice first
  * when needed), joins the room's results, and shows the panel. A newer recap replaces one still on its way.
@@ -82,12 +96,10 @@ export async function runRecap(
   const slot = aiRecap(canvas)
   slot.set(mine)
   const actuals = agendaActuals(boardId)
-  const since =
-    scope === 'catch-up'
-      ? catchUpSince(boardId, now)
-      : scope === 'session'
-        ? sessionSince(canvas.items(), now, actuals)
-        : null
+  const visit = scope === 'catch-up' ? catchUpWindow(boardId, now) : null
+  const since = visit ? visit.since : scope === 'session' ? sessionSince(canvas.items(), now, actuals) : null
+  // a selection recap: only the votes on what is in the selected frames, and only their sections of the run of show
+  const inScope = scope === 'selection' ? inSelection(canvas, about) : undefined
   await ensureAiStatus(canvas)
   const status = aiStatus(canvas).get()
   const guest = knownUserKind(ctx.me.user.id) === 'guest' || status?.reason === 'guest'
@@ -106,7 +118,9 @@ export async function runRecap(
     result,
     aiNote,
     since,
-    actuals,
+    ...(visit ? { visit: visit.visit } : {}),
+    ...(inScope ? { inScope } : {}),
+    actuals: inScope ? (actuals?.filter((a) => inScope(refOf(a.frameId))) ?? null) : actuals,
     revealed: lastRevealedResults(ctx.events),
     textOf: (ref) => canvas.text.of(idOfRef(ref)),
   })

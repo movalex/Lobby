@@ -69,14 +69,26 @@ export function noteVisit(
   writeLastVisit(boardId, now, storage)
 }
 
-/** Catch me up's `since`: the visit before this one on this device, else the last 24 hours. */
+/**
+ * Catch me up's window: since the visit before this one on this device (`visit` true), else the last 24 hours.
+ * The api clamps a window older than AI_RECAP_MAX_WINDOW_MS (the plan says so: ./plan.ts).
+ */
+export function catchUpWindow(
+  boardId: string,
+  now: number,
+  storage: VisitStorage | null = browserStorage(),
+): { since: number; visit: boolean } {
+  const before = visitBefore.has(boardId) ? visitBefore.get(boardId) : readLastVisit(boardId, storage)
+  return before && before < now ? { since: before, visit: true } : { since: now - DAY_MS, visit: false }
+}
+
+/** Catch me up's `since` (./catchUpWindow). */
 export function catchUpSince(
   boardId: string,
   now: number,
   storage: VisitStorage | null = browserStorage(),
 ): number {
-  const before = visitBefore.has(boardId) ? visitBefore.get(boardId) : readLastVisit(boardId, storage)
-  return before && before < now ? before : now - DAY_MS
+  return catchUpWindow(boardId, now, storage).since
 }
 
 /** Forgets what this page remembered (tests). */
