@@ -59,6 +59,19 @@ export interface ServerWriteEntry {
   readonly reject: (error: unknown) => void
 }
 
+/**
+ * W7 (wave L, L7-2): what a server write may read of the room's text leases, beside `ServerWriteTx`: the live
+ * holder of a lease id now (a label's lease is its container's id), or null. The selective restore
+ * (room-internal/restore-elements.ts) skips a text under a lease per id (LEASED) instead of having the whole write
+ * refused 409 `leased` by the check below. Read-only, and in the drain's order like every lease decision.
+ * Absent on a write that runs without a room (room-internal/board.ts with no `serverWrite`): no room, no leases.
+ */
+export interface ServerWriteLeaseView {
+  readonly leaseHolderOf: (
+    id: string,
+  ) => { readonly sid: string; readonly uid: string; readonly name: string } | null
+}
+
 /** A server write that broke the contract above (a bug in the route that made it): answered 500. */
 export class ServerWriteContractError extends Error {
   constructor(what: string) {
@@ -169,7 +182,16 @@ export function runServerWrite(
   const { store, clock, now } = ctx
   const priors = new Map<string, ElementRow | null>()
   const ownDeletedRows = new Set<string>()
-  const tx: ServerWriteTx = Object.freeze({ store: watchedStore(store, priors, ownDeletedRows), clock, now })
+  let leaseTable: MergeEnv['leases'] | null = null
+  const tx: ServerWriteTx & ServerWriteLeaseView = Object.freeze({
+    store: watchedStore(store, priors, ownDeletedRows),
+    clock,
+    now,
+    leaseHolderOf: (id: string) => {
+      leaseTable ??= ctx.env().leases
+      return leaseTable.holderOf(id, now)
+    },
+  })
   const out = apply(tx) as unknown
   if (!isObject(out) || !Array.isArray(out.changed) || !isObject(out.doc))
     throw new ServerWriteContractError(

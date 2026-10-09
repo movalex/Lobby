@@ -163,7 +163,9 @@ export type RestoreDeletedResponse = z.infer<typeof RestoreDeletedResponse>
 // restoreElementsInternalPath) to write them into the live board in one commit. A sync that does not serve the
 // route (older than canvas-schema RESTORE_ELEMENTS_REV) answers 404, and the api 503 RESTORE_UNAVAILABLE; the
 // web offers "Restore these" only in a room at that revision. Server write: not a Ctrl+Z step; "Undo restore"
-// restores the same ids from `checkpointId`.
+// restores the same ids from `checkpointId` with `removeAbsent` (W7): an id that checkpoint does not hold came
+// back with the restore, so it is removed again (with its label), instead of being skipped as MISSING.
+// Workspace guests are refused like the preview (the checkpoint may hold what was removed before they joined).
 
 /** Ids one restore may name (each brings back its bound text or container too). */
 export const RESTORE_ELEMENTS_MAX_IDS = 200
@@ -176,6 +178,11 @@ export const restoreElementsPath = (boardId: string, snapshotId: string) =>
 
 export const RestoreElementsInput = z.object({
   ids: z.array(RestoreElementId).min(1).max(RESTORE_ELEMENTS_MAX_IDS),
+  /**
+   * W7 ("Undo restore", additive): an id the checkpoint does not hold but the board does is removed (with its
+   * label), and listed in `restored` (it is back as the checkpoint had it: not there). Absent: skipped MISSING.
+   */
+  removeAbsent: z.literal(true).optional(),
 })
 export type RestoreElementsInput = z.infer<typeof RestoreElementsInput>
 
@@ -189,7 +196,10 @@ export type RestoreElementsSkipCode = z.infer<typeof RestoreElementsSkipCode>
 export const RestoreElementsSkip = z.object({ id: z.string(), code: RestoreElementsSkipCode })
 
 export const RestoreElementsResult = z.object({
-  /** element ids written (the requested ones and the bound texts or containers that came with them) */
+  /**
+   * element ids now as the checkpoint has them (the requested ones and the bound texts or containers that came
+   * with them; with `removeAbsent`, the ids removed too)
+   */
   restored: z.array(z.string()),
   skipped: z.array(RestoreElementsSkip),
   /** the board clock the write committed at (the web waits for it before it says "Restored") */
