@@ -38,6 +38,7 @@ import type {
   ScenePoint,
 } from '../api/lobby-canvas.ts'
 import { createFeatureRegistries, type ExternalContent, type FeatureRegistries } from '../api/registries.ts'
+import { markRoomReady, ROOM_READY_FALLBACK_MS, roomReadyOf } from '../api/room-ready.ts'
 import type { LobbyRole } from '../engine/interaction.ts'
 import { attachBoardFiles, installBoardFiles } from '../files/board.ts'
 import { UndoController } from '../history/controller.ts'
@@ -149,6 +150,8 @@ export class LobbyBoardSession {
   private presence: PresenceHub | null = null
   private boardInput: BoardInput | null = null
   private handle: LobbyCanvasHandle | null = null
+  /** K.1: marks the board ready if its room sends no `contracts` frame after the first welcome (./room-ready) */
+  private roomReadyTimer: ReturnType<typeof setTimeout> | null = null
   private handlesExtra: ReturnType<typeof createBoardHandles> | null = null
   port: LobbyCanvasPort | null = null
   private readonly listeners = new Set<() => void>()
@@ -398,6 +401,14 @@ export class LobbyBoardSession {
         }
       }
       const readonly = e.welcome.readonly || this.o.archived
+      // K.1 (follow-up 5): the catch-up behind this welcome is not applied yet; the room's `contracts` frame,
+      // which follows it, marks the board ready (or this timer, for a room that sends none)
+      const canvas = this.handle?.canvas
+      if (canvas && !roomReadyOf(canvas).get() && this.roomReadyTimer === null)
+        this.roomReadyTimer = setTimeout(() => {
+          this.roomReadyTimer = null
+          markRoomReady(canvas)
+        }, ROOM_READY_FALLBACK_MS)
       this.set({
         phase: 'ready',
         welcomed: true,
@@ -426,6 +437,12 @@ export class LobbyBoardSession {
       // the core reports a message BEFORE it applies it (its roster, lease table and document are still
       // the old ones here): read them once it has
       const m = e.message
+      // K.1: the room's `contracts` frame comes after a welcome's snapshot and catch-up: the board is all here
+      if (m.type === 'contracts' && this.snap.welcomed && this.handle) {
+        if (this.roomReadyTimer !== null) clearTimeout(this.roomReadyTimer)
+        this.roomReadyTimer = null
+        markRoomReady(this.handle.canvas)
+      }
       if (m.type === 'roster' || m.type === 'lease' || (m.type === 'changes' && m.doc))
         queueMicrotask(() => this.afterMessage(m))
       else if (m.type === 'notice' && m.code === 'PREPARING' && !this.snap.welcomed)
@@ -810,6 +827,8 @@ export class LobbyBoardSession {
     return () => {
       this.core.persistNow()
       for (const f of offs.reverse()) f()
+      if (this.roomReadyTimer !== null) clearTimeout(this.roomReadyTimer)
+      this.roomReadyTimer = null
       this.handle?.dispose()
       this.handle = null
       this.handlesExtra = null

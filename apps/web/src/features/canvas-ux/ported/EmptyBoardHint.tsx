@@ -11,10 +11,16 @@
 // canvas, so a grid under existing elements would need the engine's background changed (Board ▸ View ▸ Show
 // grid is the engine's own grid for that).
 import { useEffect, useState } from 'react'
-import type { CanvasFeatureContext, MenuEntrySpec, MenuTarget } from '../../../canvas/api/index.ts'
+import {
+  type CanvasFeatureContext,
+  type MenuEntrySpec,
+  type MenuTarget,
+  roomReadyOf,
+} from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { TEMPLATE_PARAM } from '../start-view.ts'
 import { runCommand } from './commands.ts'
+import { startParamsDropped } from './navigation/start-view.ts'
 import { TEMPLATES_PANEL } from './Toolbar.tsx'
 
 /** Scene px between two dots at 100 %. */
@@ -130,9 +136,11 @@ function useCoarsePointer(): boolean {
 
 /**
  * A board opened from the dashboard with a template (`?template=`) is empty only until the first view inserts it
- * (navigation/start-view.ts): no card or grid flashes up meanwhile.
+ * (navigation/start-view.ts): no card or grid flashes up meanwhile. Reactive: the first view drops the param once
+ * the insert is done, or failed (wave K.1: then the card shows, its "Browse templates" the way back).
  */
 function templatePending(): boolean {
+  startParamsDropped.get()
   try {
     return new URLSearchParams(globalThis.location?.search ?? '').has(TEMPLATE_PARAM)
   } catch {
@@ -140,8 +148,17 @@ function templatePending(): boolean {
   }
 }
 
+/**
+ * The board is empty: wave K.1 (follow-up 5) also waits for the room's first welcome AND its catch-up
+ * (`roomReadyOf`, canvas/api/room-ready.ts), so a populated board never flashes the card and the grid on open (a
+ * joiner's cached snapshot can be empty for a moment before the rows behind it land).
+ */
+export function boardLooksEmpty(ctx: Pick<CanvasFeatureContext, 'canvas'>): boolean {
+  return roomReadyOf(ctx.canvas).get() && ctx.canvas.items().length === 0 && !templatePending()
+}
+
 const useEmpty = (ctx: CanvasFeatureContext) =>
-  useValue('cux-empty-board', () => ctx.canvas.items().length === 0 && !templatePending(), [ctx.canvas])
+  useValue('cux-empty-board', () => boardLooksEmpty(ctx), [ctx.canvas])
 
 /** The scene layer's dot grid, under every other layer, while the board is empty. */
 export function EmptyBoardGrid({ ctx }: { ctx: CanvasFeatureContext }) {

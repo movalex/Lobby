@@ -15,7 +15,7 @@ import {
   resolveLegacyShapes,
   withoutParams,
 } from '../../../../lib/deep-link.ts'
-import { react } from '../../../../lib/signals.ts'
+import { atom, react } from '../../../../lib/signals.ts'
 import {
   cameraStorageKey,
   fitIfViewportEmpty,
@@ -268,8 +268,8 @@ export interface StartViewOptions {
   readonly userId: string
   readonly canEdit: boolean
   /**
-   * the dashboard's `?template=` could not be inserted: the param and the tab's marker are kept, so a
-   * reload inserts it again; `retry` inserts it again now (resolves with whether it went in)
+   * the dashboard's `?template=` could not be inserted: the param is dropped (wave K.1: the start card shows
+   * instead) and the tab is not marked; `retry` inserts it again now (resolves with whether it went in)
    */
   onTemplateFailed?(retry: () => Promise<boolean>): void
   /** receives the cleanup of anything the first view keeps running for a moment (holdThroughLayout) */
@@ -303,12 +303,16 @@ export function whenSettled(canvas: LobbyCanvas, quietMs = 150, maxMs = 2500): P
 }
 
 /** Removes `names` from the address bar (history.replaceState); a blocked history API is no error. */
+/** Bumped whenever the first view drops its params from the address (K.1: the start card re-reads `?template=`). */
+export const startParamsDropped = atom('cux-start-params-dropped', 0)
+
 function dropParams(names: readonly string[]): void {
   try {
     window.history.replaceState(window.history.state, '', withoutParams(window.location.href, names))
   } catch {
     // keep going; worst case the link replays on reload
   }
+  startParamsDropped.set(startParamsDropped.get() + 1)
 }
 
 /** How long after opening the first view is re-applied while the board's layout settles. */
@@ -428,8 +432,9 @@ export async function applyStartView(ctx: CanvasFeatureContext, opts: StartViewO
 
   // handled once: drop our params so a reload lands on the user's last camera instead. The deep-link params
   // go now; `?template=` goes now only when the plan is not to insert it (a viewer, a board with content,
-  // an unknown template, one this tab inserted already), else once its insert is confirmed (below): a first
-  // open whose insert failed used to consume it, which left the board empty with no way back (LEAD-2)
+  // an unknown template, one this tab inserted already), else once its insert is done (below): confirmed, or
+  // failed (wave K.1: the empty board then shows its start card, whose "Browse templates" is the way back;
+  // LEAD-2 kept the param, which left the board blank behind the hidden card)
   if (DEEP_LINK_PARAMS.some((p) => url.searchParams.has(p))) dropParams(DEEP_LINK_PARAMS)
   if (templateId && plan.kind !== 'template') dropParams([TEMPLATE_PARAM])
 
@@ -459,7 +464,10 @@ export async function applyStartView(ctx: CanvasFeatureContext, opts: StartViewO
         // board where nothing is selected
         const result = await insertTemplate(canvas, plan.templateId, { animate: false, select: false })
         if (!result.ok) {
-          // the param and the tab's marker are left alone: a retry, or the next open, inserts it (LEAD-2)
+          // K.1 (follow-up 5): the param goes, so the empty board shows its start card ("Browse templates" is
+          // one click away) instead of staying blank behind a template that did not come; the notice's Try
+          // again still inserts it. The tab's marker is left alone (a retry that lands sets it).
+          dropParams([TEMPLATE_PARAM])
           opts.onTemplateFailed?.(insert)
           return false
         }

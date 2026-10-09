@@ -9,9 +9,11 @@ import {
   type CommandSpec,
   createFeatureRegistries,
   type MenuEntrySpec,
+  markRoomReady,
 } from '../../../canvas/api/index.ts'
 import {
   AI_IDEAS_ID,
+  boardLooksEmpty,
   EmptyBoardGrid,
   EmptyBoardHint,
   GRID_MIN_SCREEN,
@@ -23,7 +25,7 @@ import {
 import { feature } from './index.tsx'
 import { TEMPLATES_PANEL } from './Toolbar.tsx'
 
-function fakeCtx(opts: { items?: number; readOnly?: boolean } = {}) {
+function fakeCtx(opts: { items?: number; readOnly?: boolean; ready?: boolean } = {}) {
   const registries = createFeatureRegistries()
   const opened: (string | null)[] = []
   const canvas = {
@@ -31,6 +33,8 @@ function fakeCtx(opts: { items?: number; readOnly?: boolean } = {}) {
     readOnly: () => opts.readOnly ?? false,
     viewport: { get: () => ({ x: -100, y: -50, width: 1000, height: 800, zoom: 1 }) },
   }
+  // the board session marks the first welcome and its catch-up (K.1); a fake board is all there unless told not
+  if (opts.ready !== false) markRoomReady(canvas)
   const ctx = {
     canvas,
     registries,
@@ -50,6 +54,14 @@ const command = (id: string, run = vi.fn(), enabled?: () => boolean): CommandSpe
 const html = (ctx: CanvasFeatureContext) => renderToStaticMarkup(createElement(EmptyBoardHint, { ctx }))
 
 describe('the empty board hint (K2-4)', () => {
+  it('K.1: nothing before the room’s first welcome and its catch-up, so a populated board never flashes it', () => {
+    const { ctx } = fakeCtx({ ready: false })
+    expect(html(ctx)).toBe('')
+    expect(renderToStaticMarkup(createElement(EmptyBoardGrid, { ctx }))).toBe('')
+    markRoomReady(ctx.canvas)
+    expect(html(ctx)).toContain('data-testid="empty-board-hint"')
+  })
+
   it('shows only while the board has no element, for people who can edit', () => {
     const { ctx, registries } = fakeCtx({ items: 0 })
     registries.panels.register(panel as never)
@@ -73,6 +85,28 @@ describe('the empty board hint (K2-4)', () => {
       const { ctx } = fakeCtx({ items: 0 })
       expect(html(ctx)).toBe('')
       expect(renderToStaticMarkup(createElement(EmptyBoardGrid, { ctx }))).toBe('')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('K.1: once the first view drops ?template= (its insert failed), the card shows without anything else changing', async () => {
+    const { computed, subscribeValue } = await import('../../../lib/signals.ts')
+    const { startParamsDropped } = await import('./navigation/start-view.ts')
+    const loc = { search: '?template=retro' }
+    vi.stubGlobal('location', loc)
+    try {
+      const { ctx } = fakeCtx({ items: 0 })
+      const empty = computed('test-empty', () => boardLooksEmpty(ctx))
+      let changes = 0
+      const off = subscribeValue(empty, () => changes++)
+      expect(empty.get()).toBe(false)
+      // the first view drops the param (history.replaceState) and says so
+      loc.search = ''
+      startParamsDropped.set(startParamsDropped.get() + 1)
+      expect(empty.get()).toBe(true)
+      expect(changes).toBeGreaterThan(0)
+      off()
     } finally {
       vi.unstubAllGlobals()
     }

@@ -78,7 +78,7 @@ describe('?template= on the new canvas', () => {
   beforeEach(() => insert.mockReset())
   afterEach(() => vi.unstubAllGlobals())
 
-  it('an insert that fails keeps the param and the marker, and the failure offers a retry that consumes them once it succeeds', async () => {
+  it('K.1: an insert that fails drops the param (the start card shows) but does not mark the tab, and the failure offers a retry that marks it once it succeeds', async () => {
     const page = fakePage(`http://lobby.test/b/${BOARD}?template=retrospective`)
     const canvas = fakeCanvas()
     insert.mockResolvedValueOnce(failed).mockResolvedValueOnce(ok)
@@ -93,8 +93,9 @@ describe('?template= on the new canvas', () => {
     })
     expect(did).toBe('template:retrospective')
     expect(insert).toHaveBeenCalledTimes(1)
-    // nothing consumed: the next open of this address inserts it, and the tab is not marked
-    expect(new URL(page.href).searchParams.get('template')).toBe('retrospective')
+    // wave K.1: the param goes (the empty board's start card shows, "Browse templates" one click away); the tab
+    // is not marked
+    expect(new URL(page.href).searchParams.has('template')).toBe(false)
     expect(page.session.get(templateInsertedKey(BOARD))).toBeUndefined()
     expect(retry).not.toBeNull()
     // the notice's retry: this time it goes in, and only then are the param and the marker consumed
