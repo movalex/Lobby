@@ -1,7 +1,8 @@
 // Identifier generators (docs/M1-CONTRACTS.md §2). Same algorithm and shape as
 // @draftroom/dev-assets newId(): `<prefix>_` + 20 base62 characters from crypto.getRandomValues.
 
-export const ID_PREFIXES = ['usr', 'wsp', 'prj', 'inv', 'thr', 'cmt', 'snp', 'wks', 'vot'] as const
+// 'air' (wave L, L1-1): an AI run id (contracts ai.ts AiRunId), minted per run and never stored.
+export const ID_PREFIXES = ['usr', 'wsp', 'prj', 'inv', 'thr', 'cmt', 'snp', 'wks', 'vot', 'air'] as const
 export type IdPrefix = (typeof ID_PREFIXES)[number]
 
 const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'

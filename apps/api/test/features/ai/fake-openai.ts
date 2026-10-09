@@ -97,8 +97,75 @@ export function defaultAnswer(req: SeenRequest): unknown {
       const n = Number(/Write exactly (\d+) new/.exec(user)?.[1] ?? 3)
       return { ideas: Array.from({ length: n }, (_, k) => `Fresh idea number ${k + 1}`) }
     }
+    default: {
+      const waveL = waveLAnswer(schema, items)
+      return waveL === undefined ? {} : waveL
+    }
+  }
+}
+
+/**
+ * Wave L foundation (W1): the canned model answers for the six new actions, by response schema name, from
+ * the items the api sent (so they name only aliases it was sent). These are the MODEL's JSON shapes, the
+ * ones W1's prompt.ts schemas ask for and its plan.ts validates and maps back (alias ids, snake_case like
+ * `note_ids`); the api's results (contracts AiResult) are what plan.ts makes of them. Undefined for any
+ * other schema name. W1 owns this file and adjusts a shape here together with its prompt schema.
+ *
+ * - lobby_recap   {title, summary, decisions[{text, ids}], actions[{task, owner, ids}], questions[{text, ids}]}
+ * - lobby_answer  {answer, found: 'yes' | 'partial' | 'no', citations[{ids}]}   ([n] in the answer = citations[n-1])
+ * - lobby_command {ops[AiCommandOp with alias ids], explain}
+ * - lobby_diagram {nodes[{id, label, kind}], edges[{from, to, label}]}         (the model's own node ids)
+ * - lobby_sort    {themes[{name, note_ids}]}                                  (themes' shape, named by the lens)
+ * - lobby_score   {scores[{id, x, y}]}                                        (integers from -5 to 5)
+ */
+export function waveLAnswer(schema: string | undefined, items: readonly FakeItem[]): unknown {
+  const ids = items.map((i) => i.id)
+  switch (schema) {
+    case 'lobby_recap':
+      return {
+        title: 'Session recap',
+        summary: `The session covered ${items.length} items.`,
+        decisions: ids.slice(0, 1).map((id) => ({ text: `Go with ${id}`, ids: [id] })),
+        actions: ids.slice(1, 3).map((id) => ({ task: `Follow up on ${id}`, owner: null, ids: [id] })),
+        questions: ids.slice(3, 4).map((id) => ({ text: `What about ${id}?`, ids: [id] })),
+      }
+    case 'lobby_answer':
+      return items.length
+        ? { answer: 'The board says so [1].', found: 'yes', citations: [{ ids: ids.slice(0, 2) }] }
+        : { answer: '', found: 'no', citations: [] }
+    case 'lobby_command':
+      return {
+        ops: ids.length ? [{ op: 'select', ids: ids.slice(0, 3) }] : [],
+        explain: `Selected ${Math.min(3, ids.length)} items`,
+      }
+    case 'lobby_diagram':
+      return {
+        nodes: [
+          { id: 'start', label: 'Start', kind: 'terminal' },
+          { id: 'work', label: items[0]?.text.slice(0, 40) || 'Do the work', kind: 'process' },
+          { id: 'ok', label: 'Done?', kind: 'decision' },
+          { id: 'end', label: 'End', kind: 'terminal' },
+        ],
+        edges: [
+          { from: 'start', to: 'work', label: '' },
+          { from: 'work', to: 'ok', label: '' },
+          { from: 'ok', to: 'end', label: 'yes' },
+          { from: 'ok', to: 'work', label: 'no' },
+        ],
+      }
+    case 'lobby_sort': {
+      const half = Math.ceil(ids.length / 2)
+      return {
+        themes: [
+          { name: 'Sooner', note_ids: ids.slice(0, half) },
+          { name: 'Later', note_ids: ids.slice(half) },
+        ],
+      }
+    }
+    case 'lobby_score':
+      return { scores: ids.map((id, k) => ({ id, x: (k % 11) - 5, y: 5 - (k % 11) })) }
     default:
-      return {}
+      return undefined
   }
 }
 

@@ -3,7 +3,9 @@
 // (lib/signals.ts), so the selection-bar button, the context menu and the overlay read them with narrow
 // useValue selectors; nothing here runs per frame.
 
-import type { AiAction, AiStatus } from '@draftroom/contracts'
+// Wave L foundation: the menus' requests stay the four actions this build runs (AiLegacyAction); W2 widens
+// them (and these labels) as it adds the wave L actions.
+import type { AiLegacyAction as AiAction, AiStatus } from '@draftroom/contracts'
 import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { type Atom, atom } from '../../../lib/signals.ts'
 import type { ShimmerPlan } from './shimmer.ts'

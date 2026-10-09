@@ -238,6 +238,7 @@ describe('shipped migrations', () => {
       '0025_open_signin',
       '0026_outside_markers',
       '0027_feedback',
+      '0028_ai_actions',
     ])
   })
 
@@ -271,6 +272,7 @@ describe('shipped migrations', () => {
       '0025_open_signin',
       '0026_outside_markers',
       '0027_feedback',
+      '0028_ai_actions',
     ])
     expect(await migrate(db)).toEqual({ applied: [], newer: [] })
     expect(await tableNames()).toEqual([
@@ -368,6 +370,7 @@ describe('shipped migrations', () => {
       '0025_open_signin',
       '0026_outside_markers',
       '0027_feedback',
+      '0028_ai_actions',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))
     const inv = await db.one<{ multi_use: boolean; use_count: number }>(

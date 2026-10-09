@@ -94,6 +94,63 @@ export function themesFor(items: readonly FakeItem[]) {
   return groups.filter((g) => g.note_ids.length)
 }
 
+/**
+ * Wave L foundation: the e2e fake's canned answers for the six new actions (the model's JSON shapes, the same
+ * as apps/api/test/features/ai/fake-openai.ts `waveLAnswer`, which documents them), from the items the api
+ * sent. W2 owns the e2e AI kit (../../excalidraw/ai-kit.ts) and tunes these for its specs; W1 keeps the shapes
+ * in step with its prompt schemas. Undefined for any other schema name.
+ */
+export function waveLAnswer(schema: string | undefined, items: readonly FakeItem[]): unknown {
+  const ids = items.map((i) => i.id)
+  switch (schema) {
+    case 'lobby_recap':
+      return {
+        title: 'Workshop recap',
+        summary: `The team worked through ${items.length} items and agreed the next steps.`,
+        decisions: ids.slice(0, 2).map((id, k) => ({ text: `Decision ${k + 1}`, ids: [id] })),
+        actions: ids.slice(2, 5).map((id, k) => ({ task: `Action ${k + 1}`, owner: null, ids: [id] })),
+        questions: ids.slice(5, 6).map((id) => ({ text: 'What is still open?', ids: [id] })),
+      }
+    case 'lobby_answer':
+      return items.length
+        ? { answer: 'The board answers this [1].', found: 'yes', citations: [{ ids: ids.slice(0, 3) }] }
+        : { answer: '', found: 'no', citations: [] }
+    case 'lobby_command':
+      return {
+        ops: ids.length ? [{ op: 'select', ids: ids.slice(0, 3) }] : [],
+        explain: `Selected ${Math.min(3, ids.length)} items`,
+      }
+    case 'lobby_diagram':
+      return {
+        nodes: [
+          { id: 'start', label: 'Start', kind: 'terminal' },
+          { id: 'brief', label: 'Write the brief', kind: 'process' },
+          { id: 'ok', label: 'Approved?', kind: 'decision' },
+          { id: 'ship', label: 'Ship', kind: 'terminal' },
+        ],
+        edges: [
+          { from: 'start', to: 'brief', label: '' },
+          { from: 'brief', to: 'ok', label: '' },
+          { from: 'ok', to: 'ship', label: 'yes' },
+          { from: 'ok', to: 'brief', label: 'no' },
+        ],
+      }
+    case 'lobby_sort': {
+      const half = Math.ceil(ids.length / 2)
+      return {
+        themes: [
+          { name: 'Sooner', note_ids: ids.slice(0, half) },
+          { name: 'Later', note_ids: ids.slice(half) },
+        ].filter((t) => t.note_ids.length),
+      }
+    }
+    case 'lobby_score':
+      return { scores: ids.map((id, k) => ({ id, x: k % 2 ? 3 : -3, y: k % 4 < 2 ? 3 : -3 })) }
+    default:
+      return undefined
+  }
+}
+
 export function defaultAnswer(req: SeenRequest): unknown {
   const items = itemsOf(req)
   const user = req.body.messages?.find((m) => m.role === 'user')?.content ?? ''
@@ -130,8 +187,10 @@ export function defaultAnswer(req: SeenRequest): unknown {
       ]
       return { ideas: Array.from({ length: n }, (_, i) => pool[i % pool.length]) }
     }
-    default:
-      return {}
+    default: {
+      const waveL = waveLAnswer(req.body.response_format?.json_schema?.name, items)
+      return waveL === undefined ? {} : waveL
+    }
   }
 }
 

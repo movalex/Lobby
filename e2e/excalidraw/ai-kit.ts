@@ -3,6 +3,10 @@
 // packages/templates, pushed over a raw socket with the page's ticket, as 2D's templates-scenes spec does:
 // the in-app template insert is 3b's and waits for CR-2D-2), a frame's contents with bounds, words and
 // AI kinds read in the page, and the AI UI.
+//
+// Wave L: W2 owns this kit. The fake's canned answers for the six new actions (recap, ask, command, diagram,
+// sort, score) are in ../tests/support/ai.ts `waveLAnswer` (the fake server's own file; re-exported here),
+// keyed by the response schema names below.
 import { expect, type Page } from '@playwright/test'
 import { installServerTextMetrics } from '../../packages/canvas-schema/src/engine/index.ts'
 import type { Ack, Welcome } from '../../packages/canvas-schema/src/protocol.ts'
@@ -13,6 +17,17 @@ import { forgeSession } from '../tests/support/excalidraw.ts'
 import { HOST, PORT_BASE } from '../tests/support/ports.ts'
 
 installServerTextMetrics()
+
+export { waveLAnswer } from '../tests/support/ai.ts'
+/** The response schema names of the wave L actions (W1's prompt.ts uses these; the fake answers them). */
+export const WAVE_L_SCHEMA_NAMES = {
+  recap: 'lobby_recap',
+  ask: 'lobby_answer',
+  command: 'lobby_command',
+  diagram: 'lobby_diagram',
+  sort: 'lobby_sort',
+  score: 'lobby_score',
+} as const
 
 /**
  * base + 10: inside this run's own extra range (the default suite's fake sits on base + 3, which a

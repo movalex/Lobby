@@ -29,19 +29,23 @@
 
 import {
   AI_ERROR_CODES,
+  AI_LEGACY_ACTIONS,
   type AiBudget,
+  type AiLegacyAction,
+  type AiLegacyRunInput,
   type AiOffReason,
   type AiResult,
   AiRunInput,
   type AiSettings,
   type AiStatus,
 } from '@draftroom/contracts'
+import { newId } from '@draftroom/db'
 import { can } from '@draftroom/permissions'
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { type BoardAccess, requireBoardAction } from '../../access.ts'
 import { userKind } from '../../auth/users.ts'
 import type { Params } from '../../context.ts'
-import { ApiError, conflict, forbidden, parse } from '../../errors.ts'
+import { ApiError, badRequest, conflict, forbidden, parse } from '../../errors.ts'
 import { keyedLimit } from '../../rate-limit.ts'
 import type { BoardSnapshotJson } from '../../sync-internal.ts'
 import type { FeatureContext } from '../context.ts'
@@ -80,8 +84,26 @@ const BOARD_OFF_MESSAGE = 'AI is turned off on this board. Its owner can turn it
 const EXPORT_MESSAGE =
   'The board owner turned off copying and exporting for you, so AI is off on this board too.'
 
-/** An answer before the per-call fields (truncated, budget) are added. */
-type AiPlan = AiResult extends infer R ? (R extends unknown ? Omit<R, 'truncated' | 'budget'> : never) : never
+/** An answer before the per-call fields (truncated, budget, runId) are added. */
+type AiPlan = AiResult extends infer R
+  ? R extends unknown
+    ? Omit<R, 'truncated' | 'budget' | 'runId'>
+    : never
+  : never
+
+/**
+ * The actions this api runs today. Wave L foundation: the contracts already name the six wave L actions
+ * (recap, ask, command, diagram, sort, score), and this api refuses them with the same 400 BAD_REQUEST an
+ * unknown action got before, until W1 implements each one (it widens this list action by action). No
+ * call is made, nothing is read and nothing is reserved for a refused action.
+ */
+export const LIVE_AI_ACTIONS: ReadonlySet<string> = new Set<AiLegacyAction>(AI_LEGACY_ACTIONS)
+/** A run input of an action this api runs (see LIVE_AI_ACTIONS). */
+export type LiveAiRunInput = AiLegacyRunInput
+const isLive = (input: AiRunInput): input is LiveAiRunInput => LIVE_AI_ACTIONS.has(input.action)
+
+/** A run id (contracts AiRunId: `air_` and 20 base62 characters), one per run, never stored. */
+export const newAiRunId = (): string => newId('air')
 
 interface Gate {
   reason: AiOffReason | null
@@ -184,7 +206,9 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
   app.post(AI_RUN_ROUTE, async (req, reply): Promise<AiResult> => {
     const user = await ctx.requireUser(req)
     runsPerUser.take(user.id)
-    const input = parse(AiRunInput, req.body)
+    const parsed = parse(AiRunInput, req.body)
+    if (!isLive(parsed)) throw badRequest('action: this AI action is not available on this server yet')
+    const input = parsed
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'view')
     const g = await gate(access, user.id)
@@ -229,7 +253,7 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
 
   async function run(
     client: OpenAiClient,
-    input: AiRunInput,
+    input: LiveAiRunInput,
     access: BoardAccess,
     userId: string,
     reply: FastifyReply,
@@ -338,11 +362,16 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
         notes: sources.items.filter((i) => i.kind === 'note').length,
         frame: sources.frames.length === 1 ? sources.frames[0] : undefined,
       })
-    return { ...plan, truncated: sources.truncated, budget: await budgetFor(access) } as AiResult
+    return {
+      ...plan,
+      truncated: sources.truncated,
+      budget: await budgetFor(access),
+      runId: newAiRunId(),
+    } as AiResult
   }
 }
 
-function toPlan(input: AiRunInput, json: unknown, sent: Parameters<typeof themesPlan>[1]): AiPlan {
+function toPlan(input: LiveAiRunInput, json: unknown, sent: Parameters<typeof themesPlan>[1]): AiPlan {
   switch (input.action) {
     case 'summarize':
       return { action: 'summarize', ...summaryPlan(json), sources: sent.length }

@@ -134,7 +134,9 @@ describe("wave J on staging's database (at 0025_open_signin)", () => {
     const d = await openPglite()
     db = d
     const all = loadMigrations()
-    expect(all.filter((m) => m.version >= 25).map((m) => m.name)).toEqual([
+    // wave J's build: the migrations up to 0027 (later ones, 0028_ai_actions on, are other builds')
+    const waveJ = all.filter((m) => m.version <= 27)
+    expect(waveJ.filter((m) => m.version >= 25).map((m) => m.name)).toEqual([
       '0025_open_signin',
       '0026_outside_markers',
       '0027_feedback',
@@ -155,8 +157,11 @@ describe("wave J on staging's database (at 0025_open_signin)", () => {
     await d.query("UPDATE boards SET external_ref = 'theaitre:production:42' WHERE id = $1", [b1])
     await insertNotification(d, 'access_granted')
 
-    expect((await migrate(d)).applied).toEqual(['0026_outside_markers', '0027_feedback'])
-    expect(await migrate(d)).toEqual({ applied: [], newer: [] })
+    expect((await migrate(d, { migrations: waveJ })).applied).toEqual([
+      '0026_outside_markers',
+      '0027_feedback',
+    ])
+    expect(await migrate(d, { migrations: waveJ })).toEqual({ applied: [], newer: [] })
     expect((await d.query('SELECT provider, subject FROM identities')).rows).toEqual([
       { provider: 'email', subject: 'ann@example.com' },
     ])

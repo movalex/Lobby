@@ -7,7 +7,12 @@
 // properties, nullable as a type union); limits the subset cannot express are stated in the
 // instructions and enforced by plan.ts.
 
-import { AI_ACTION_ITEMS_MAX, AI_THEMES_MAX, type AiAction, type AiRunInput } from '@draftroom/contracts'
+import {
+  AI_ACTION_ITEMS_MAX,
+  AI_THEMES_MAX,
+  type AiLegacyAction,
+  type AiLegacyRunInput,
+} from '@draftroom/contracts'
 import { estimateTokens, itemJson, type Sources } from './sources.ts'
 
 export interface Prompt {
@@ -33,7 +38,8 @@ const obj = (properties: Record<string, unknown>) => ({
   additionalProperties: false,
 })
 
-export const SCHEMAS: Record<AiAction, { name: string; schema: Record<string, unknown> }> = {
+// Wave L: the six new actions get their schemas here when W1 implements them (index.ts LIVE_AI_ACTIONS).
+export const SCHEMAS: Record<AiLegacyAction, { name: string; schema: Record<string, unknown> }> = {
   summarize: { name: 'lobby_summary', schema: obj({ summary: { type: 'string' } }) },
   themes: {
     name: 'lobby_themes',
@@ -68,7 +74,7 @@ export function themeRange(notes: number): { min: number; max: number } {
   return { min: 2, max }
 }
 
-function task(input: AiRunInput, sources: Sources): string {
+function task(input: AiLegacyRunInput, sources: Sources): string {
   switch (input.action) {
     case 'summarize':
       return [
@@ -101,7 +107,7 @@ function task(input: AiRunInput, sources: Sources): string {
   }
 }
 
-function userMessage(input: AiRunInput, sources: Sources): string {
+function userMessage(input: AiLegacyRunInput, sources: Sources): string {
   const lines = [`Task: ${task(input, sources)}`]
   if (sources.frames.length)
     lines.push(`The items are on the board in: ${sources.frames.map((f) => JSON.stringify(f)).join(', ')}.`)
@@ -115,7 +121,7 @@ function userMessage(input: AiRunInput, sources: Sources): string {
 }
 
 /** The instructions' own share of the input cap (everything but the items). */
-export function overheadTokens(input: AiRunInput): number {
+export function overheadTokens(input: AiLegacyRunInput): number {
   const empty: Sources = { items: [], frames: [], truncated: false }
   const { schema } = SCHEMAS[input.action]
   // Frame names are added later; 5 names of at most 120 characters.
@@ -128,7 +134,7 @@ export function overheadTokens(input: AiRunInput): number {
   )
 }
 
-export function buildPrompt(input: AiRunInput, sources: Sources): Prompt {
+export function buildPrompt(input: AiLegacyRunInput, sources: Sources): Prompt {
   const { name, schema } = SCHEMAS[input.action]
   return { system: SYSTEM, user: userMessage(input, sources), schemaName: name, schema }
 }
