@@ -6,6 +6,7 @@
 //  - nothing is written by either tab.
 import { expect, setViewport, test, viewport } from '../tests/support/canvas.ts'
 import { emptyCanvasPoint, focusBoard, follow, followState, sidOf, writes } from './l6-kit.ts'
+import { seedDeck, startPresenting } from './present-kit.ts'
 
 const centre = (v: { x: number; y: number; width: number; height: number }) => ({
   x: v.x + v.width / 2,
@@ -86,5 +87,33 @@ test('L6-3: Esc stops a follow; × on the paused chip stops it too', async ({ ca
   await expect(a.page.getByTestId('follow-paused')).toBeVisible()
   await a.page.getByTestId('follow-paused-stop').click()
   await expect(a.page.getByTestId('follow-paused')).toHaveCount(0)
+  expect(await followState(a.page)).toBeNull()
+})
+
+// Wave L integration (L6-3 with the presenter, W5's file): a paused follow has current() === null, so the
+// presenter's "stop following" used to leave it, and "Paused following …, Resume" came back after the
+// presentation ended (the W6 review's stale paused follow).
+test('L6-3: a paused follow ends when this tab starts presenting; it does not come back after', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  const b = await canvasSession('bob', { role: 'editor' })
+  await seedDeck(a.page, { frames: [{ id: 'l6p-f', x: 0, y: 0, w: 800, h: 500, name: 'Slide' }] })
+  const bsid = (await sidOf(b.page)) as string
+  await setViewport(b.page, { x: 2000, y: 1000, zoom: 1 })
+  await follow(a.page, bsid)
+  await expect(a.page.getByTestId('following-label')).toBeVisible()
+  const p = await emptyCanvasPoint(a.page)
+  await a.page.mouse.move(p.x, p.y)
+  await a.page.mouse.wheel(0, 240)
+  await expect(a.page.getByTestId('follow-paused')).toBeVisible()
+  await startPresenting(a.page, 'me')
+  await expect(a.page.getByTestId('present-overlay')).toBeVisible()
+  await expect.poll(() => followState(a.page)).toBeNull()
+  await a.page.keyboard.press('Escape')
+  await expect(a.page.getByTestId('present-overlay')).toHaveCount(0)
+  await a.page.waitForTimeout(300)
+  await expect(a.page.getByTestId('follow-paused')).toHaveCount(0)
+  await expect(a.page.getByTestId('following-label')).toHaveCount(0)
   expect(await followState(a.page)).toBeNull()
 })

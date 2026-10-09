@@ -400,8 +400,10 @@ export function createPresenter(canvas: LobbyCanvas): Presenter {
       stop({ reason: 'local', view: s.role === 'follower' ? 'here' : 'restore' })
   }
 
+  // a paused follow too (wave L, L6-3: its current() is null, its state() is not), or it comes back after
   const stopFollowing = () => {
-    if (tryMember(() => canvas.follow.current(), null)) tryMember(() => canvas.follow.stop(), undefined)
+    if (tryMember(() => canvas.follow.current(), null) || tryMember(() => canvas.follow.state(), null))
+      tryMember(() => canvas.follow.stop(), undefined)
   }
 
   const start = (opts: StartOptions = {}): StartResult => {

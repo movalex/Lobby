@@ -180,10 +180,10 @@ export function startFollowing(canvas: LobbyCanvas, sid: string, options?: Follo
   }
 }
 
-/** Stops following (no-op while following is not available). */
+/** Stops following, a paused follow too (wave L, L6-3: its current() is null); a no-op while following is not available. */
 export function stopFollowing(canvas: LobbyCanvas): void {
   try {
-    if (canvas.follow.current()) canvas.follow.stop()
+    if (canvas.follow.current() || canvas.follow.state()) canvas.follow.stop()
   } catch (e) {
     if (!isStub(e)) throw e
   }

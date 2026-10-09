@@ -1,10 +1,10 @@
 // OWNER: 3f. R2-04's readable follow on the Excalidraw page (./camera.ts readableFollowCamera): the camera
 // rule a gathered follower's `follow.start(sid, {camera})` gets (CR-3F-3), and the canvas size a summon
 // carries (summonScreen).
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Bounds, FollowCamera, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { READABLE_FOLLOW_ZOOM } from '../follow.ts'
-import { readableFollowCamera, summonScreen } from './camera.ts'
+import { readableFollowCamera, stopFollowing, summonScreen } from './camera.ts'
 
 type Screen = { width: number; height: number }
 
@@ -98,5 +98,31 @@ describe('summonScreen', () => {
         }),
       ),
     ).toBeUndefined()
+  })
+})
+
+// Wave L integration (L6-3): a paused follow has current() === null but a state(); it must not survive a
+// 'stop following' (a vote click, Gather), or 'Paused following X · Resume' comes back afterwards.
+describe('stopFollowing', () => {
+  const canvasWith = (
+    current: string | null,
+    state: { sid: string; status: 'following' | 'paused' } | null,
+  ) => {
+    const stop = vi.fn()
+    const canvas = { follow: { current: () => current, state: () => state, stop } } as unknown as LobbyCanvas
+    return { canvas, stop }
+  }
+  it('stops a follow that is paused, as well as one that is following', () => {
+    const paused = canvasWith(null, { sid: 's1', status: 'paused' })
+    stopFollowing(paused.canvas)
+    expect(paused.stop).toHaveBeenCalledTimes(1)
+    const following = canvasWith('s1', { sid: 's1', status: 'following' })
+    stopFollowing(following.canvas)
+    expect(following.stop).toHaveBeenCalledTimes(1)
+  })
+  it('does nothing when nobody is followed', () => {
+    const none = canvasWith(null, null)
+    stopFollowing(none.canvas)
+    expect(none.stop).not.toHaveBeenCalled()
   })
 })
