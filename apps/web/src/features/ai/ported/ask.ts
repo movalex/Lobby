@@ -14,7 +14,7 @@ import { type Atom, atom } from '../../../lib/signals.ts'
 import { cut } from '../copy.ts'
 import { offerUndoFor, runPublic } from './actions.ts'
 import { applyNotes } from './apply.ts'
-import { aiPanel, aiStatus, perCanvas } from './runtime.ts'
+import { aiJob, aiPanel, aiStatus, perCanvas } from './runtime.ts'
 import { type AiTarget, idOfRef, isLive, NONE, refOf } from './target.ts'
 
 export type AskResult = Extract<AiResult, { action: 'ask' }>
@@ -38,12 +38,29 @@ export const WHOLE_BOARD: AiTarget = { ...NONE, label: 'the whole board' }
 
 /**
  * Asks `question` about `target` (its ids; none: the whole board) and opens the answer. Nothing is written. A newer
- * question replaces an older one still on its way.
+ * question replaces an older one still on its way (that request is cancelled, as the busy pill's Cancel does).
+ * While another AI request of this tab is running (themes, a recap, …) it asks nothing and leaves the open answer
+ * alone: the person is told to wait.
  */
 export async function askBoard(ctx: CanvasFeatureContext, question: string, target: AiTarget): Promise<void> {
   const { canvas } = ctx
   const q = question.replace(/\s+/g, ' ').trim().slice(0, AI_ASK_QUESTION_MAX)
   if (!q) return
+  const running = aiJob(canvas).get()
+  if (running && running.action !== 'ask') {
+    ctx.notify({
+      key: 'dr-ai',
+      text: 'Lobby is still working on another AI request. Wait for it to finish.',
+      tone: 'error',
+      testId: 'ai-error',
+      timeoutMs: 6000,
+    })
+    return
+  }
+  if (running) {
+    running.abort.abort()
+    aiJob(canvas).set(null)
+  }
   const mine: AiAnswerState = { question: q, status: 'asking', result: null, target }
   aiAnswer(canvas).set(mine)
   aiPanel(canvas).set(null)

@@ -14,6 +14,7 @@ import {
 } from './ask.ts'
 import { AiOverlay } from './Overlay.tsx'
 import { aiKindWord, aiOf } from './provenance.ts'
+import { aiJob } from './runtime.ts'
 import { selectionTarget } from './target.ts'
 import { AI_ON, aiKit, note, renderIn } from './test-kit.ts'
 
@@ -66,6 +67,50 @@ describe('Ask this board', () => {
     expect(aiAnswer(k.canvas).get()?.status).toBe('done')
     expect(aiAnswer(k.canvas).get()?.result?.runId).toBe(RUN)
     expect(k.pushes).toEqual([])
+  })
+
+  it('a second question while the first is on its way: the first is cancelled and the second answer shows', async () => {
+    const k = aiKit(board())
+    const signals: AbortSignal[] = []
+    const api = k.ctx.api as unknown as { request: (...a: unknown[]) => Promise<unknown> }
+    api.request = (_m: unknown, _p: unknown, o: unknown) => {
+      const { body, schema, signal } = o as {
+        body: { question: string }
+        schema: { parse(v: unknown): unknown }
+        signal: AbortSignal
+      }
+      signals.push(signal)
+      if (body.question === 'First?')
+        return new Promise((_resolve, reject) =>
+          signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))),
+        )
+      return Promise.resolve(schema.parse(answer({ answer: 'The second answer [1].' })))
+    }
+    const first = askBoard(k.ctx, 'First?', WHOLE_BOARD)
+    await vi.waitFor(() => expect(signals).toHaveLength(1))
+    await askBoard(k.ctx, 'Second?', WHOLE_BOARD)
+    await first
+    expect(signals[0]?.aborted).toBe(true)
+    const state = aiAnswer(k.canvas).get()
+    expect(state?.question).toBe('Second?')
+    expect(state?.status).toBe('done')
+    expect(state?.result?.answer).toBe('The second answer [1].')
+  })
+
+  it('while another AI request runs (not a question), asking leaves the open answer alone and says to wait', async () => {
+    const k = aiKit(board())
+    k.answer(answer())
+    await askBoard(k.ctx, 'Summer?', WHOLE_BOARD)
+    const open = aiAnswer(k.canvas).get()
+    const abort = new AbortController()
+    aiJob(k.canvas).set({ id: 99, action: 'themes', landing: null, label: 'x', abort, opener: null })
+    await askBoard(k.ctx, 'Another?', WHOLE_BOARD)
+    expect(aiAnswer(k.canvas).get()).toBe(open)
+    expect(abort.signal.aborted).toBe(false)
+    expect(k.requests).toHaveLength(1)
+    expect(k.notify).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining('still working') }),
+    )
   })
 
   it('asks about the selection by its refs', async () => {
