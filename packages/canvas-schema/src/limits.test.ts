@@ -3,13 +3,14 @@
  * an invalid sample per element type, every limit of §3.5 with worst-case samples, the rounding rule,
  * links and `fileId`s, the customData classes' value schemas and budgets, doc keys and object refs.
  */
-import { GUESTS_PER_LINK } from '@draftroom/contracts'
+import { GUESTS_PER_LINK, RESTORE_ELEMENT_ID_PATTERN } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
 import { checkLobbyData, LOBBY_KEY_SPECS, lobbyKeySpec, lobbyValueProblem } from './custom-data.ts'
 import { canWriteDocKey, docValueProblem } from './doc.ts'
 import { checkElement, ELEMENT_TYPES, REFUSED_ELEMENT_TYPES } from './elements.ts'
 import {
   COORD_LIMIT,
+  ELEMENT_ID_PATTERN,
   FILE_ID_PATTERN,
   GEOMETRY_TOLERANCE_PX,
   GUEST_BOARD_ITEM_CAP,
@@ -389,5 +390,11 @@ describe('the board document (§3.4) and object refs (§3.6)', () => {
     expect(fromShapeRef('page:abc')).toBeNull()
     expect(fromShapeRef('shape:a,b')).toBeNull()
     expect(() => toShapeRef('a b')).toThrow()
+  })
+})
+
+describe('wave L: contracts copies of canvas-schema patterns', () => {
+  it('the selective restore takes element ids exactly as the canvas stores them (W7, history.ts)', () => {
+    expect(RESTORE_ELEMENT_ID_PATTERN.source).toBe(ELEMENT_ID_PATTERN.source)
   })
 })

@@ -154,6 +154,58 @@ export const RestoreDeletedResponse = z.object({
 })
 export type RestoreDeletedResponse = z.infer<typeof RestoreDeletedResponse>
 
+// ---- selective restore (wave L, L7-2; owner W7) ------------------------------------------------------------
+//
+// POST /api/boards/:bid/snapshots/:sid/restore-elements  RestoreElementsInput -> RestoreElementsResult
+// Edit on an active board, never a name-only guest (W5's refusals-matrix row; not a creator route). The api
+// makes a 'before_restore' checkpoint first, reads the checkpoint's elements (a v1 body through the converter),
+// closes the set over bound texts and containers, and asks the sync's internal route (sync-internal.ts
+// restoreElementsInternalPath) to write them into the live board in one commit. A sync that does not serve the
+// route (older than canvas-schema RESTORE_ELEMENTS_REV) answers 404, and the api 503 RESTORE_UNAVAILABLE; the
+// web offers "Restore these" only in a room at that revision. Server write: not a Ctrl+Z step; "Undo restore"
+// restores the same ids from `checkpointId`.
+
+/** Ids one restore may name (each brings back its bound text or container too). */
+export const RESTORE_ELEMENTS_MAX_IDS = 200
+/** An element id as the canvas stores it (canvas-schema limits.ts ELEMENT_ID_PATTERN; a test keeps them equal). */
+export const RESTORE_ELEMENT_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,120}$/
+export const RestoreElementId = z.string().regex(RESTORE_ELEMENT_ID_PATTERN)
+export const RESTORE_ELEMENTS_ROUTE = '/api/boards/:bid/snapshots/:sid/restore-elements'
+export const restoreElementsPath = (boardId: string, snapshotId: string) =>
+  `/api/boards/${encodeURIComponent(boardId)}/snapshots/${encodeURIComponent(snapshotId)}/restore-elements`
+
+export const RestoreElementsInput = z.object({
+  ids: z.array(RestoreElementId).min(1).max(RESTORE_ELEMENTS_MAX_IDS),
+})
+export type RestoreElementsInput = z.infer<typeof RestoreElementsInput>
+
+/**
+ * Why an id was not restored: LEASED (its text is under another session's lease), MISSING (not in the
+ * checkpoint), INVALID (the checkpoint's copy fails today's element check).
+ */
+export const RESTORE_ELEMENTS_SKIP_CODES = ['LEASED', 'MISSING', 'INVALID'] as const
+export const RestoreElementsSkipCode = z.enum(RESTORE_ELEMENTS_SKIP_CODES)
+export type RestoreElementsSkipCode = z.infer<typeof RestoreElementsSkipCode>
+export const RestoreElementsSkip = z.object({ id: z.string(), code: RestoreElementsSkipCode })
+
+export const RestoreElementsResult = z.object({
+  /** element ids written (the requested ones and the bound texts or containers that came with them) */
+  restored: z.array(z.string()),
+  skipped: z.array(RestoreElementsSkip),
+  /** the board clock the write committed at (the web waits for it before it says "Restored") */
+  clock: z.number().int().nonnegative(),
+  /** the 'before_restore' checkpoint made first ("Undo restore" restores the same ids from it) */
+  checkpointId: SnapshotId,
+})
+export type RestoreElementsResult = z.infer<typeof RestoreElementsResult>
+
+export const RESTORE_ELEMENTS_ERROR_CODES = {
+  /** 503: the sync does not serve the route (an older sync build) or is unreachable */
+  unavailable: 'RESTORE_UNAVAILABLE',
+  /** 409: the restore would take the board over its element cap */
+  elementLimit: 'ELEMENT_LIMIT',
+} as const
+
 // ---- events (GET /api/boards/:bid/events) ------------------------------------------------------------
 
 /** Hints only (payloads carry ids, never content): clients refetch the list they show. */

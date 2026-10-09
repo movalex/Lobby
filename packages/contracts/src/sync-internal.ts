@@ -126,3 +126,50 @@ export const LobbyElementsSnapshot = z.strictObject({
   doc: z.record(z.string(), z.unknown()),
 })
 export type LobbyElementsSnapshot = z.infer<typeof LobbyElementsSnapshot>
+
+// ---- selective restore (wave L, L7-2; owner W7) -------------------------------------------------------------
+//
+//   POST <sync>/internal/boards/:bid/restore-elements  RestoreElementsBody → 200 RestoreElementsAnswer
+//
+// api → sync only (behind the internal secret, like every internal route). The sync writes the checkpoint's
+// copies of `ids` into the live board through its server write, in the room's queue, in one SAVEPOINT, acked
+// after COMMIT: a live element gets the checkpoint's field groups, a deleted one comes back with its kept id
+// (`created: null`); a text under another session's lease is skipped (LEASED); arrow geometry is whole units;
+// bindings to targets that are neither live nor restored are dropped as a server fix; bound ends and labels are
+// re-snapped in the same commit. Only lb_* tables are written (never the tldraw tables nor dr_deleted_*). A
+// sync built before canvas-schema RESTORE_ELEMENTS_REV has no such route (404): the api answers 503
+// RESTORE_UNAVAILABLE (history.ts). Over the board's element cap: 409 ELEMENT_LIMIT, nothing written.
+
+/** At most this many elements per call (the ids closed over bound texts and containers, history.ts caps ids at 200). */
+export const RESTORE_ELEMENTS_MAX_ELEMENTS = 1_000
+/** The request body cap the sync applies to this route. */
+export const RESTORE_ELEMENTS_BODY_LIMIT_BYTES = 4 * 1024 * 1024
+
+export const restoreElementsInternalPath = (boardId: string) =>
+  `/internal/boards/${encodeURIComponent(boardId)}/restore-elements`
+
+export const RestoreElementsBody = z.strictObject({
+  /** who restores (the api's authenticated user): the write's author, as on any server write */
+  actor: z.strictObject({ uid: z.string().min(1).max(60), name: z.string().max(200) }),
+  /** the element ids asked for (what `restored` and `skipped` answer for, with what came with them) */
+  ids: z
+    .array(z.string().regex(/^[A-Za-z0-9_.:-]{1,120}$/))
+    .min(1)
+    .max(200),
+  /** the checkpoint's elements as stored (each one checked by the sync with canvas-schema's element check) */
+  elements: z
+    .array(z.looseObject({ id: z.string(), type: z.string() }))
+    .min(1)
+    .max(RESTORE_ELEMENTS_MAX_ELEMENTS),
+})
+export type RestoreElementsBody = z.infer<typeof RestoreElementsBody>
+
+export const RestoreElementsAnswer = z.strictObject({
+  restored: z.array(z.string()),
+  skipped: z.array(
+    z.strictObject({ id: z.string(), code: z.enum(['LEASED', 'MISSING', 'INVALID'] as const) }),
+  ),
+  /** the board clock the write committed at */
+  clock: z.number().int().nonnegative(),
+})
+export type RestoreElementsAnswer = z.infer<typeof RestoreElementsAnswer>
