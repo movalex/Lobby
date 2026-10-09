@@ -2,8 +2,12 @@
 // throttled, closed by default"): a 2D canvas with every content item's box and the view's rectangle.
 // Redrawn at most every 100 ms while the board or the camera changes, so a heavy board pays little while
 // panning; not mounted at all while closed (PERF-03). A press or a drag on it centres the view there.
+// Wave L (W6, L6-2): while this tab follows someone (or the follow is paused), their view's rectangle is drawn
+// too, in their presence colour (dashed while paused), and the map always takes it in; the canvas element
+// names it (data-followed-sid, data-followed-rect) for tests and assistive reading. Presence only, read-only.
 import { type PointerEvent, useEffect, useRef } from 'react'
 import { type Bounds, geometry, items, type LobbyCanvas } from '../../../../canvas/api/index.ts'
+import { safeColor } from '../../../../lib/identity.ts'
 import { react } from '../../../../lib/signals.ts'
 import { boxOf } from './camera.ts'
 
@@ -37,6 +41,17 @@ function css(name: string, fallback: string): string {
   return v || fallback
 }
 
+/** The view of the session this tab follows (or paused following), with its colour; null when none. */
+function followedView(
+  canvas: LobbyCanvas,
+): { sid: string; color: string; view: Bounds; paused: boolean } | null {
+  const st = canvas.follow.state()
+  if (!st) return null
+  const p = canvas.presence.peer(st.sid)
+  if (!p?.view) return null
+  return { sid: st.sid, color: safeColor(p.color, p.uid), view: p.view, paused: st.status === 'paused' }
+}
+
 function draw(canvasEl: HTMLCanvasElement, canvas: LobbyCanvas): Mapping {
   const dpr = window.devicePixelRatio || 1
   if (canvasEl.width !== MINIMAP_W * dpr) {
@@ -48,7 +63,20 @@ function draw(canvasEl: HTMLCanvasElement, canvas: LobbyCanvas): Mapping {
   const view = { x: v.x, y: v.y, width: v.width, height: v.height }
   const content = items.contentItems(canvas.items()).filter((e) => !canvas.isHidden(e.id))
   const boxes = content.map((e) => ({ e, b: boxOf(e) }))
-  const m = minimapMapping(geometry.union(boxes.map((x) => x.b)), view)
+  const leader = followedView(canvas)
+  const m = minimapMapping(geometry.union([...boxes.map((x) => x.b), leader?.view ?? null]), view)
+  if (leader) {
+    const p = toMini(m, leader.view.x, leader.view.y)
+    canvasEl.dataset.followedSid = leader.sid
+    canvasEl.dataset.followedColor = leader.color
+    canvasEl.dataset.followedRect = [p.x, p.y, leader.view.width * m.scale, leader.view.height * m.scale]
+      .map((v) => Math.round(v))
+      .join(',')
+  } else {
+    delete canvasEl.dataset.followedSid
+    delete canvasEl.dataset.followedColor
+    delete canvasEl.dataset.followedRect
+  }
   if (!g) return m
   g.setTransform(dpr, 0, 0, dpr, 0, 0)
   g.clearRect(0, 0, MINIMAP_W, MINIMAP_H)
@@ -78,6 +106,15 @@ function draw(canvasEl: HTMLCanvasElement, canvas: LobbyCanvas): Mapping {
   g.fillStyle = 'rgba(37, 99, 235, 0.08)'
   g.fillRect(vp.x, vp.y, view.width * m.scale, view.height * m.scale)
   g.strokeRect(vp.x, vp.y, view.width * m.scale, view.height * m.scale)
+  // L6-2: the followed person's view, in their colour
+  if (leader) {
+    const lp = toMini(m, leader.view.x, leader.view.y)
+    g.strokeStyle = leader.color
+    g.lineWidth = 2
+    g.setLineDash(leader.paused ? [4, 3] : [])
+    g.strokeRect(lp.x, lp.y, leader.view.width * m.scale, leader.view.height * m.scale)
+    g.setLineDash([])
+  }
   return m
 }
 
@@ -111,6 +148,9 @@ export function Minimap({ canvas }: { canvas: LobbyCanvas }) {
     const stop = react('nav-minimap', () => {
       canvas.items()
       canvas.viewport.get()
+      // L6-2: the followed person's view (their presence) and the follow itself
+      const st = canvas.follow.state()
+      if (st) canvas.presence.peer(st.sid)
       schedule()
     })
     const offResize = canvas.on('resize', schedule)

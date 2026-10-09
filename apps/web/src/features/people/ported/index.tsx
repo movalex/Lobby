@@ -8,7 +8,8 @@
 // the coloured frame around a follower's canvas and its own "Stop following" button; here this overlay
 // draws both.
 //
-// Wave L (W6): the shared laser layer (./LaserLayer.tsx, L6-1).
+// Wave L (W6): the shared laser layer (./LaserLayer.tsx, L6-1), face piles on frames (./FrameHeads.tsx, L6-2)
+// and the paused follow (L6-3).
 
 import { useLayoutEffect, useState, useSyncExternalStore } from 'react'
 import type { CanvasFeature, CanvasFeatureContext } from '../../../canvas/api/index.ts'
@@ -17,6 +18,7 @@ import { getLive } from '../../present-export/live/ported/controller.ts'
 import { PersonName } from '../../workshops/Hands.tsx'
 import { usePresenting } from '../../workshops/presenting.ts'
 import { WorkshopStore, workshopStoreFor } from '../../workshops/store.ts'
+import { FrameHeads } from './FrameHeads.tsx'
 import { LaserLayer } from './LaserLayer.tsx'
 import { PeopleTopBar } from './PeopleBar.tsx'
 import '../people.css'
@@ -207,6 +209,8 @@ export const feature: CanvasFeature = {
   topBar: [{ id: 'people', order: 10, pinned: true, component: PeopleItem }],
   overlays: [
     { id: 'people.following', layer: 'screen', order: 40, pointer: 'none', component: FollowingLabel },
+    // wave L (L6-2): face piles on frames (who is looking at which frame)
+    { id: 'people.frame-heads', layer: 'scene', order: 44, pointer: 'none', component: FrameHeads },
     // wave L (L6-1): the other sessions' lasers, also while presenting (focus mode)
     {
       id: 'people.laser',
