@@ -16,6 +16,10 @@
 //     view plus a margin in the local copy (a 4,000-unit frame would otherwise make the bitmap cover the
 //     whole frame), and an anchor again fixes the origin.
 // The checkpoint's elements are a local copy: nothing here touches the live board, its undo stack or sync.
+//
+// Wave L (L7-1, W7): outlines over the bitmaps (what changed since the checkpoint, what is picked for a
+// restore), drawn by Lobby in view space after the bitmaps on every paint, and a click (a press that does not
+// drag) reported to the caller, which picks the element under it.
 
 import { getCommonBounds, getElementBounds } from '@excalidraw/element'
 import type { ElementsMap, ExcalidrawElement, NonDeletedExcalidrawElement } from '@excalidraw/element/types'
@@ -58,6 +62,31 @@ interface Bitmap {
   /** Scene rect it is valid for (detail only). */
   rect?: { x: number; y: number; w: number; h: number }
 }
+
+/** What an outline says (its colour; `added` is dashed: it is not in the checkpoint, it is where it is now). */
+export type PreviewOutlineTone = 'removed' | 'added' | 'geometry' | 'text' | 'style'
+export interface PreviewOutline {
+  /** scene box */
+  readonly x: number
+  readonly y: number
+  readonly width: number
+  readonly height: number
+  /** what changed (absent: an unchanged element that is only picked) */
+  readonly tone?: PreviewOutlineTone
+  /** picked for a restore: a thicker line and a light fill */
+  readonly selected?: boolean
+}
+/** Colours readable on the light board and under the dark export filter's page alike. */
+const OUTLINE_COLOURS: Record<PreviewOutlineTone, string> = {
+  removed: '#e03131',
+  added: '#2f9e44',
+  geometry: '#e8590c',
+  text: '#1971c2',
+  style: '#9c36b5',
+}
+const SELECTED_COLOUR = '#5f3dc4'
+/** A press that moves less than this (CSS px) is a click, not a drag. */
+const CLICK_SLOP_PX = 4
 
 export interface PreviewStats {
   overviewMs: number
@@ -114,6 +143,7 @@ export class CheckpointPreview {
   private raf = 0
   private disposed = false
   private readonly listeners: (() => void)[] = []
+  private outlines: readonly PreviewOutline[] = []
   readonly stats: PreviewStats = {
     overviewMs: 0,
     overviewScale: 0,
@@ -232,22 +262,46 @@ export class CheckpointPreview {
     return { x: this.cam.x + x / this.cam.zoom, y: this.cam.y + y / this.cam.zoom }
   }
 
-  /** Drag to pan, wheel to zoom (Ctrl/Cmd+wheel or a pinch: zoom; plain wheel: pan), as on the board. */
-  attachInteraction(): void {
+  /** The outlines painted over the bitmaps from the next paint on (scene boxes). */
+  setOutlines(outlines: readonly PreviewOutline[]): void {
+    this.outlines = outlines
+    this.scheduleDraw()
+  }
+
+  /**
+   * Drag to pan, wheel to zoom (Ctrl/Cmd+wheel or a pinch: zoom; plain wheel: pan), as on the board. `onClick`:
+   * a press released without dragging, at its view point (CSS px from the view's top-left).
+   */
+  attachInteraction(onClick?: (x: number, y: number, additive: boolean) => void): void {
     const el = this.view
-    let drag: { id: number; x: number; y: number } | null = null
+    let drag: { id: number; x: number; y: number; startX: number; startY: number; moved: boolean } | null =
+      null
     const down = (e: PointerEvent) => {
       if (e.button !== 0) return
-      drag = { id: e.pointerId, x: e.clientX, y: e.clientY }
+      drag = {
+        id: e.pointerId,
+        x: e.clientX,
+        y: e.clientY,
+        startX: e.clientX,
+        startY: e.clientY,
+        moved: false,
+      }
       el.setPointerCapture(e.pointerId)
     }
     const move = (e: PointerEvent) => {
       if (!drag || e.pointerId !== drag.id) return
+      if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > CLICK_SLOP_PX) drag.moved = true
       this.panBy(e.clientX - drag.x, e.clientY - drag.y)
-      drag = { id: e.pointerId, x: e.clientX, y: e.clientY }
+      drag = { ...drag, x: e.clientX, y: e.clientY }
     }
     const up = (e: PointerEvent) => {
-      if (drag && e.pointerId === drag.id) drag = null
+      if (!drag || e.pointerId !== drag.id) return
+      const click = !drag.moved && e.type === 'pointerup'
+      drag = null
+      if (click && onClick) {
+        const r = el.getBoundingClientRect()
+        onClick(e.clientX - r.left, e.clientY - r.top, e.shiftKey || e.ctrlKey || e.metaKey)
+      }
     }
     const wheel = (e: WheelEvent) => {
       e.preventDefault()
@@ -310,6 +364,30 @@ export class CheckpointPreview {
     if (this.overview) paint(this.overview)
     const d = this.detail
     if (d?.forScale && Math.abs(d.forScale - k) / k < 0.01) paint(d)
+    if (this.outlines.length) this.paintOutlines(ctx, k, dpr)
+  }
+
+  private paintOutlines(ctx: CanvasRenderingContext2D, k: number, dpr: number) {
+    const pad = 4 * dpr
+    for (const o of this.outlines) {
+      const x = (o.x - this.cam.x) * k - pad
+      const y = (o.y - this.cam.y) * k - pad
+      const w = o.width * k + 2 * pad
+      const h = o.height * k + 2 * pad
+      ctx.setLineDash(o.tone === 'added' ? [6 * dpr, 4 * dpr] : [])
+      if (o.selected) {
+        ctx.fillStyle = 'rgba(95, 61, 196, 0.12)'
+        ctx.fillRect(x, y, w, h)
+        ctx.lineWidth = 3 * dpr
+        ctx.strokeStyle = SELECTED_COLOUR
+        ctx.strokeRect(x - dpr, y - dpr, w + 2 * dpr, h + 2 * dpr)
+      }
+      if (!o.tone) continue
+      ctx.lineWidth = 2 * dpr
+      ctx.strokeStyle = OUTLINE_COLOURS[o.tone]
+      ctx.strokeRect(x, y, w, h)
+    }
+    ctx.setLineDash([])
   }
 
   /** Whether the next paint uses a detail bitmap (the overview is too coarse for the zoom). */

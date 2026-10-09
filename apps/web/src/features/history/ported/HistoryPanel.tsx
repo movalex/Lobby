@@ -10,6 +10,12 @@
 // brings it into view through `canvas.viewport.zoomTo`; the preview is a bitmap (./CheckpointPreview.tsx).
 // A restore on an open board answers 503 until the room's server write lands (CR 2F-2): the panel shows
 // the api's message, as for any failed restore.
+//
+// Wave L, time travel (L7-1, L7-2; W7): "Time travel" opens the preview on the newest checkpoint with the
+// whole timeline (the preview swaps per tick and outlines what changed since); for editors with an account in
+// a room at RESTORE_ELEMENTS_REV, "Restore these" brings picked objects back into the live board for everyone
+// (a server write: not a Ctrl+Z step), and the notice offers "Undo restore", which restores the same ids from
+// the 'before_restore' checkpoint the api made first.
 
 import {
   type BoardCheckpoint,
@@ -24,6 +30,7 @@ import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { useUserKind } from '../../../invite/guest.tsx'
 import { formatRelativeTime, pluralize } from '../../../lib/format.ts'
 import { linkClick } from '../../../lib/routing.ts'
+import { useValue } from '../../../lib/signals.ts'
 import { fetchBoardArchive, historyApi, saveBlob } from '../api.ts'
 import { CheckpointList } from '../CheckpointList.tsx'
 import { checkpointPermissions, deletedCheckpointSummary } from '../checkpoints-model.ts'
@@ -42,6 +49,7 @@ import {
 import { CheckpointPreview } from './CheckpointPreview.tsx'
 import { useExportAllowed } from './export-allowed.ts'
 import { restoredElementIds, restoredSelection, touchesDeletedElements } from './model.ts'
+import { canRestoreElements, restoreElementsSummary, undoRestoreSummary } from './time-travel.ts'
 
 const DELETED_REFRESH_MS = 700
 const APPEAR_TIMEOUT_MS = 4_000
@@ -72,6 +80,14 @@ export function HistoryPanel({ ctx }: { ctx: CanvasFeatureContext; close(): void
   canExportRef.current = canExport
   const copy = copyActions(perms, canExport)
   const checkpointPerms = checkpointPermissions(role, board.status, workspaceRole)
+  // wave L (L7-2): "Restore these" only where the room serves it (an older sync would answer 503)
+  const contractsRev = useValue('history.contracts-rev', () => canvas.room.contractsRev(), [canvas])
+  const mayRestoreElements = canRestoreElements({
+    canEdit: perms.canEdit,
+    isAccount,
+    canPreview: checkpointPerms.canPreview,
+    contractsRev,
+  })
 
   const [snapshots, setSnapshots] = useState<BoardCheckpoint[] | null>(null)
   const [previewing, setPreviewing] = useState<BoardCheckpoint | null>(null)
@@ -255,6 +271,48 @@ export function HistoryPanel({ ctx }: { ctx: CanvasFeatureContext; close(): void
       }
     })
 
+  /** Wave L (L7-2): picked objects of a checkpoint back into the live board, for everyone; then "Undo restore". */
+  const restoreElements = (c: BoardCheckpoint, ids: string[]) =>
+    run(`elements:${c.id}`, async () => {
+      try {
+        const result = await api.restoreElements(board.id, c.id, { ids })
+        setPreviewing(null)
+        notify({
+          key: 'history:restore-elements',
+          text: restoreElementsSummary(ids, result),
+          testId: 'history-restored-notice',
+          timeoutMs: 30_000,
+          action: {
+            label: 'Undo restore',
+            testId: 'history-undo-restore',
+            onClick: () => void undoRestore(result.checkpointId, ids),
+          },
+        })
+        void showRestored(result.restored)
+      } catch (e) {
+        setStatus({ text: message(e, 'Those objects could not be restored.'), tone: 'error' })
+      }
+    })
+
+  /** "Undo restore": the same ids from the checkpoint made right before the restore (what came back goes again). */
+  const undoRestore = async (checkpointId: string, ids: string[]) => {
+    try {
+      const result = await api.restoreElements(board.id, checkpointId, { ids, removeAbsent: true })
+      notify({
+        key: 'history:restore-elements',
+        text: undoRestoreSummary(result),
+        testId: 'history-restored-notice',
+      })
+    } catch (e) {
+      notify({
+        key: 'history:restore-elements',
+        text: message(e, 'The restore could not be undone.'),
+        tone: 'error',
+        testId: 'history-restored-notice',
+      })
+    }
+  }
+
   /** Selects and shows what came back once sync has delivered it (it arrives like any remote edit). */
   const showRestored = async (refs: string[]) => {
     if (!refs.length) return
@@ -377,6 +435,23 @@ export function HistoryPanel({ ctx }: { ctx: CanvasFeatureContext; close(): void
             {EXPORT_OFF_TEXT}
           </p>
         )}
+        {checkpointPerms.canPreview && !!snapshots?.length && (
+          <div className="dr-history__actions">
+            <button
+              type="button"
+              className="dr-btn"
+              data-testid="history-time-travel"
+              disabled={busy !== null}
+              onClick={() => setPreviewing(snapshots[0] ?? null)}
+            >
+              Time travel
+            </button>
+            <span className="dr-history__hint">
+              Scrub through every checkpoint and see what changed since
+              {mayRestoreElements ? '; bring chosen objects back onto the board.' : '.'}
+            </span>
+          </div>
+        )}
         <CheckpointList
           checkpoints={snapshots}
           perms={checkpointPerms}
@@ -393,16 +468,21 @@ export function HistoryPanel({ ctx }: { ctx: CanvasFeatureContext; close(): void
         {previewing && (
           <CheckpointPreview
             checkpoint={previewing}
+            checkpoints={snapshots ?? []}
             api={api}
             canvas={canvas}
             boardId={board.id}
             canRestore={copy.restoreAsNew === 'on'}
-            restoring={busy === `restore:${previewing.id}`}
-            onRestore={() => {
-              const c = previewing
+            restoring={busy?.startsWith('restore:') ?? false}
+            onRestore={(c) => {
               setPreviewing(null)
               void restoreAsNew(c)
             }}
+            restoreElements={
+              mayRestoreElements
+                ? { run: restoreElements, busy: busy?.startsWith('elements:') ?? false }
+                : undefined
+            }
             onClose={() => setPreviewing(null)}
           />
         )}

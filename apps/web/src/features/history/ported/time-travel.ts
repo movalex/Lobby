@@ -1,0 +1,124 @@
+// The time-travel dialog's pure parts (wave L, L7-1 and L7-2; owner W7): the timeline's order and the words of
+// a tick, what "Restore these" sends for a selection made in the preview, and the lines after a restore and
+// its undo. Node-tested; the dialog is ./CheckpointPreview.tsx.
+
+import { RESTORE_ELEMENTS_REV } from '@draftroom/canvas-schema/protocol'
+import {
+  type BoardCheckpoint,
+  RESTORE_ELEMENTS_MAX_IDS,
+  type RestoreElementsResult,
+} from '@draftroom/contracts'
+import { formatRelativeTime, pluralize } from '../../../lib/format.ts'
+import { checkpointTitle } from '../checkpoints-model.ts'
+
+/** The timeline: oldest on the left, newest on the right (the list shows newest first). */
+export function timelineOrder(list: readonly BoardCheckpoint[]): BoardCheckpoint[] {
+  return [...list].sort((a, b) =>
+    a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
+  )
+}
+
+/** The slider's spoken value: "Hourly checkpoint, 2 hours ago (3 of 10)". */
+export function tickText(c: BoardCheckpoint, index: number, count: number, now: Date): string {
+  return `${checkpointTitle(c)}, ${formatRelativeTime(c.createdAt, now)} (${index + 1} of ${count})`
+}
+
+/** The tick a key moves to (Left/Down older, Right/Up newer, Home oldest, End newest, Page by 5); null: not a key of it. */
+export function tickForKey(key: string, index: number, count: number): number | null {
+  const last = Math.max(0, count - 1)
+  switch (key) {
+    case 'ArrowLeft':
+    case 'ArrowDown':
+      return Math.max(0, index - 1)
+    case 'ArrowRight':
+    case 'ArrowUp':
+      return Math.min(last, index + 1)
+    case 'Home':
+      return 0
+    case 'End':
+      return last
+    case 'PageDown':
+      return Math.max(0, index - 5)
+    case 'PageUp':
+      return Math.min(last, index + 5)
+    default:
+      return null
+  }
+}
+
+/**
+ * Whether this tab may offer "Restore these": an editor with an account who may open checkpoints, in a room
+ * at RESTORE_ELEMENTS_REV or later (null: not known yet, so not offered; an older sync has no route).
+ */
+export function canRestoreElements(o: {
+  readonly canEdit: boolean
+  readonly isAccount: boolean
+  readonly canPreview: boolean
+  readonly contractsRev: number | null
+}): boolean {
+  return o.canEdit && o.isAccount && o.canPreview && (o.contractsRev ?? 0) >= RESTORE_ELEMENTS_REV
+}
+
+interface ElementLike {
+  readonly id?: unknown
+  readonly type?: unknown
+  readonly isDeleted?: unknown
+  readonly frameId?: unknown
+  readonly containerId?: unknown
+}
+
+/**
+ * The ids "Restore these" sends for what is picked in the preview: the picked ones, and what a picked frame held
+ * in the checkpoint (its content comes back with it, as from "Recently deleted"); labels come with their
+ * containers on the server. `tooMany`: more than one restore may name.
+ */
+export function restoreIdsOf(
+  picked: Iterable<string>,
+  elements: readonly unknown[],
+): { ids: string[]; tooMany: boolean } {
+  const live = elements
+    .map((e) => (e ?? {}) as ElementLike)
+    .filter((e) => typeof e.id === 'string' && e.isDeleted !== true)
+  const byId = new Map(live.map((e) => [e.id as string, e]))
+  const out = new Set<string>()
+  for (const id of picked) {
+    const el = byId.get(id)
+    if (!el) continue
+    out.add(id)
+    if (el.type === 'frame')
+      for (const child of live)
+        if (child.frameId === id && !(child.type === 'text' && typeof child.containerId === 'string'))
+          out.add(child.id as string)
+  }
+  const ids = [...out]
+  return { ids: ids.slice(0, RESTORE_ELEMENTS_MAX_IDS), tooMany: ids.length > RESTORE_ELEMENTS_MAX_IDS }
+}
+
+/** The line after "Restore these": what came back, and why the rest did not. */
+export function restoreElementsSummary(
+  asked: readonly string[],
+  r: Pick<RestoreElementsResult, 'skipped'>,
+): string {
+  const skipped = new Set(r.skipped.map((s) => s.id))
+  const back = asked.filter((id) => !skipped.has(id)).length
+  const parts: string[] = []
+  parts.push(back ? `Restored ${pluralize(back, 'object')} for everyone` : 'Nothing was restored')
+  const leased = r.skipped.filter((s) => s.code === 'LEASED').length
+  const missing = r.skipped.filter((s) => s.code === 'MISSING').length
+  const invalid = r.skipped.filter((s) => s.code === 'INVALID').length
+  if (leased)
+    parts.push(
+      `${pluralize(leased, 'object')} left as ${leased === 1 ? 'it is' : 'they are'}: someone is typing in it`,
+    )
+  if (missing) parts.push(`${pluralize(missing, 'object')} not in that checkpoint`)
+  if (invalid) parts.push(`${pluralize(invalid, 'object')} could not be restored`)
+  return `${parts.join('; ')}.`
+}
+
+/** The line after "Undo restore". */
+export function undoRestoreSummary(r: Pick<RestoreElementsResult, 'skipped'>): string {
+  const leased = r.skipped.filter((s) => s.code === 'LEASED').length
+  return leased
+    ? `Restore undone, except ${pluralize(leased, 'object')} someone is typing in.`
+    : 'Restore undone: the board is as it was before.'
+}

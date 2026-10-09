@@ -9,13 +9,26 @@
 // into a preview-only files map: never `api.addFiles` on the live board, never stored or synced. Images
 // still loading after `filesTimeoutMs` are drawn as Excalidraw's placeholders. Nothing here writes an
 // element, the live board's undo stack or its sync.
-import type { ExcalidrawElement } from '@excalidraw/element/types'
+//
+// Wave L (L7-1, W7, the time-travel scrubber): a mount may start from a camera (the previous tick's, so the
+// view stays put while the checkpoints swap), leave out ids (hidden mind-map branches), share its images with
+// the other mounts of one scrubbing session (`session`: an opaque key; `releaseFiles` frees them), paint
+// outlines over the bitmap (`setOutlines`) and report clicks with the element under them (`onPick`).
+import { getElementBounds } from '@excalidraw/element'
+import type { ElementsMap, ExcalidrawElement } from '@excalidraw/element/types'
 import type { BinaryFiles } from '@excalidraw/excalidraw/types'
 import { AssetMetaStore } from '../../assets/meta-store.ts'
 import type { Bounds } from '../api/lobby-canvas.ts'
 import { ImageLoader } from '../files/loader.ts'
 import { FileUrlResolver } from '../files/resolve.ts'
-import { CheckpointPreview, type PreviewCamera, type PreviewStats } from './CheckpointPreview.ts'
+import {
+  CheckpointPreview,
+  type PreviewCamera,
+  type PreviewOutline,
+  type PreviewStats,
+} from './CheckpointPreview.ts'
+
+export type { PreviewCamera, PreviewOutline }
 
 export interface CheckpointPreviewInput {
   /** The checkpoint's elements (`CheckpointContent.elements` of a v2 body); deleted ones are skipped. */
@@ -26,6 +39,17 @@ export interface CheckpointPreviewInput {
   /** Longest wait for the checkpoint's images before the first paint (default 8 s). */
   readonly filesTimeoutMs?: number
   readonly signal?: AbortSignal
+  /** the camera to start from (default: fit everything) */
+  readonly camera?: PreviewCamera
+  /** ids to leave out of the drawing and the picking (a collapsed mind-map branch) */
+  readonly hidden?: ReadonlySet<string>
+  /**
+   * An opaque key shared by the mounts of one session (the scrubber): their images load once into one files
+   * map. The caller frees them with `releaseFiles` on any handle of the session when it is done.
+   */
+  readonly session?: object
+  /** A click on the view (not a drag): the element under it (a label's container), or null; `additive` with Shift/Ctrl/Cmd. */
+  readonly onPick?: (id: string | null, additive: boolean) => void
 }
 
 export interface CheckpointPreviewHandle {
@@ -42,7 +66,15 @@ export interface CheckpointPreviewHandle {
   /** The scene point under a view point (CSS px from the view's top-left). */
   viewToScene(x: number, y: number): { readonly x: number; readonly y: number }
   readonly stats: PreviewStats & { readonly images: number; readonly imagesLoaded: number }
+  /** Moves the camera (the next tick's preview starts where this one was). */
+  setCamera(camera: PreviewCamera): void
+  /** Outlines over the bitmap (scene boxes), from the next paint on. */
+  setOutlines(outlines: readonly PreviewOutline[]): void
+  /** The element under a view point (CSS px from the view's top-left), or null. */
+  pick(x: number, y: number): string | null
   dispose(): void
+  /** Frees the images of this handle's session (no-op without one). */
+  releaseFiles(): void
 }
 
 const DEFAULT_FILES_TIMEOUT_MS = 8_000
@@ -56,6 +88,37 @@ interface ImageLike {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+interface PreviewFiles {
+  readonly boardId: string
+  readonly files: BinaryFiles
+  readonly resolver: FileUrlResolver
+  readonly loader: ImageLoader
+}
+const sessions = new WeakMap<object, PreviewFiles>()
+function newFiles(boardId: string): PreviewFiles {
+  const files: BinaryFiles = {}
+  const resolver = new FileUrlResolver({ boardId, meta: new AssetMetaStore() })
+  const loader = new ImageLoader({
+    addFiles: (list) => {
+      for (const f of list) files[f.id] = f
+    },
+    resolveUrl: resolver.resolveUrl,
+  })
+  return { boardId, files, resolver, loader }
+}
+function filesFor(input: CheckpointPreviewInput): { shared: PreviewFiles; owned: boolean } {
+  if (!input.session) return { shared: newFiles(input.boardId), owned: true }
+  let shared = sessions.get(input.session)
+  if (!shared || shared.boardId !== input.boardId) {
+    shared?.loader.dispose()
+    shared = newFiles(input.boardId)
+    sessions.set(input.session, shared)
+  }
+  return { shared, owned: false }
+}
+const isLabel = (e: ExcalidrawElement) =>
+  e.type === 'text' && typeof (e as { containerId?: unknown }).containerId === 'string'
+
 /**
  * Draws `input.elements` into `view` (a <canvas> the caller sized with CSS) and wires drag-to-pan and
  * wheel/pinch zoom on it. Resolves once the overview is painted and fitted.
@@ -66,19 +129,23 @@ export async function mountCheckpointPreview(
 ): Promise<CheckpointPreviewHandle> {
   const elements = input.elements.filter(
     (e): e is ExcalidrawElement =>
-      typeof e === 'object' && e !== null && (e as { isDeleted?: unknown }).isDeleted !== true,
+      typeof e === 'object' &&
+      e !== null &&
+      (e as { isDeleted?: unknown }).isDeleted !== true &&
+      !input.hidden?.has((e as { id?: string }).id ?? ''),
   )
   const images = (elements as unknown as ImageLike[]).filter((e) => e.type === 'image' && !!e.fileId)
-  const files: BinaryFiles = {}
-  const resolver = new FileUrlResolver({ boardId: input.boardId, meta: new AssetMetaStore() })
+  const { shared, owned } = filesFor(input)
+  const { files, resolver, loader } = shared
   resolver.learn(images)
-  const loader = new ImageLoader({
-    addFiles: (list) => {
-      for (const f of list) files[f.id] = f
-    },
-    resolveUrl: resolver.resolveUrl,
-  })
-  const dispose = () => loader.dispose()
+  const dispose = () => {
+    if (owned) loader.dispose()
+  }
+  const releaseFiles = () => {
+    if (!input.session || sessions.get(input.session) !== shared) return
+    sessions.delete(input.session)
+    loader.dispose()
+  }
   try {
     if (images.length) {
       loader.syncScene(images)
@@ -106,7 +173,28 @@ export async function mountCheckpointPreview(
       preview.dispose()
       throw new DOMException('aborted', 'AbortError')
     }
-    preview.attachInteraction()
+    const map = new Map(elements.map((e) => [e.id, e])) as unknown as ElementsMap
+    const pick = (vx: number, vy: number): string | null => {
+      const at = preview.viewToScene(vx, vy)
+      const slack = 4 / Math.max(0.01, preview.camera.zoom)
+      let best: { id: string; area: number } | null = null
+      for (const e of elements) {
+        if (isLabel(e)) continue
+        let b: readonly [number, number, number, number]
+        try {
+          b = getElementBounds(e, map) as unknown as readonly [number, number, number, number]
+        } catch {
+          continue
+        }
+        const [x1, y1, x2, y2] = b
+        if (at.x < x1 - slack || at.x > x2 + slack || at.y < y1 - slack || at.y > y2 + slack) continue
+        const area = Math.max(1, (x2 - x1) * (y2 - y1))
+        if (!best || area < best.area) best = { id: e.id, area }
+      }
+      return best?.id ?? null
+    }
+    const onPick = input.onPick
+    preview.attachInteraction(onPick ? (x, y, additive) => onPick(pick(x, y), additive) : undefined)
     const [minX, minY, maxX, maxY] = preview.bounds
     const bounds: Bounds | null = elements.length
       ? { x: minX, y: minY, width: maxX - minX, height: maxY - minY }
@@ -142,12 +230,17 @@ export async function mountCheckpointPreview(
       get stats() {
         return { ...preview.stats, images: images.length, imagesLoaded: loaded }
       },
+      setCamera: (camera) => preview.setCamera(camera),
+      setOutlines: (outlines) => preview.setOutlines(outlines),
+      pick,
       dispose() {
         preview.dispose()
         dispose()
       },
+      releaseFiles,
     }
-    handle.fit()
+    if (input.camera) preview.setCamera(input.camera)
+    else handle.fit()
     preview.draw()
     return handle
   } catch (e) {

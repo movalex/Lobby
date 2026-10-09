@@ -1,6 +1,6 @@
-// OWNER: 3h. A read-only look at a checkpoint on the Excalidraw board page (plan §4.6; the tldraw
-// dialog is ../CheckpointPreview.tsx). The same modal <dialog>, copy and test ids, but the checkpoint is
-// drawn as a bitmap by the engine's exporter with Lobby's own pan and zoom (canvas/preview, through
+// OWNER: 3h (wave L time travel: W7). A read-only look at a checkpoint on the Excalidraw board page (plan §4.6;
+// the tldraw dialog is ../CheckpointPreview.tsx). The same modal <dialog>, copy and test ids, but the checkpoint
+// is drawn as a bitmap by the engine's exporter with Lobby's own pan and zoom (canvas/preview, through
 // `loadCheckpointPreview`: CR-3H-1), never a second editor: two Excalidraw instances share module-global
 // state (spike A11). Nothing here touches the live board, its undo stack or its sync. Keys pressed in
 // the dialog never reach the board (the modal makes the page inert, and the board's key listener sits on
@@ -13,57 +13,116 @@
 // it is shown converted. Records the api did not convert (an api on the tldraw sync, or a body the
 // converter cannot read) cannot be drawn here: the dialog says so, and "Restore as new board" still
 // works. There is one page: the tldraw preview's page picker is gone.
+//
+// Wave L, time travel (L7-1, L7-2; owner W7):
+//  - a timeline of the board's checkpoints under the bitmap (./Timeline.tsx): the preview swaps per tick,
+//    keeping its camera. A tick's content is asked for once the scrubber rested on it (SCRUB_DEBOUNCE_MS) and
+//    kept in a small in-memory LRU (./content-cache.ts): GET /api/snapshots/:sid/content is 60 a minute;
+//  - "Show changes": the checkpoint against the board now (./diff.ts), outlined over the bitmap and counted in
+//    words (a status line and a list), hidden mind-map branches left out (and not drawn);
+//  - for editors in a room at RESTORE_ELEMENTS_REV: pick objects (a click on the bitmap, Shift to add, the
+//    list's checkboxes, "Select changes") and "Restore these": they come back into the live board for
+//    everyone (the History panel calls the api and offers "Undo restore").
 
 import type { BoardCheckpoint, CheckpointContent } from '@draftroom/contracts'
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { isApiError } from '../../../api/client.ts'
 import {
   type CheckpointPreviewHandle,
   type LobbyCanvas,
   loadCheckpointPreview,
 } from '../../../canvas/api/index.ts'
+import { pluralize } from '../../../lib/format.ts'
 import { prefersFirstFrame } from '../../canvas-ux/start-view.ts'
 import type { HistoryApi } from '../api.ts'
 import { checkpointMeta, checkpointTitle } from '../checkpoints-model.ts'
+import { ContentCache, debounced } from './content-cache.ts'
+import { boundsOf, diffCheckpoint, diffSummary, hiddenBranchIds, isRestorable } from './diff.ts'
 import { checkpointPreviewSource, firstFrameBounds, previewElementCounts, previewTexts } from './model.ts'
+import { Timeline } from './Timeline.tsx'
+import { restoreIdsOf, timelineOrder } from './time-travel.ts'
 
 /** Excalidraw's smallest zoom: below it a whole-board fit is unreadable anyway. */
 const MIN_ZOOM = 0.1
+/** The board's changes are compared again this long after the last one (others keep editing meanwhile). */
+const LIVE_DIFF_DELAY_MS = 300
 
-type Loaded =
-  | { status: 'loading' }
-  | { status: 'error'; message: string }
-  | { status: 'ready'; content: CheckpointContent }
+type Shown =
+  | { status: 'loading'; id: string }
+  | { status: 'error'; id: string; message: string }
+  | { status: 'ready'; id: string; content: CheckpointContent }
+
+/** What the History panel lets the dialog do on the live board (wave L, L7-2). */
+export interface RestoreElementsAction {
+  /** brings `ids` of `checkpoint` back into the live board; resolves once the api answered */
+  run(checkpoint: BoardCheckpoint, ids: string[]): Promise<void>
+  readonly busy: boolean
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: checkpoint elements are JSON, read field by field
+type El = Record<string, any>
 
 export function CheckpointPreview({
   checkpoint,
+  checkpoints,
   api,
   canvas,
   boardId,
   canRestore,
   restoring,
   onRestore,
+  restoreElements,
   onClose,
 }: {
+  /** the checkpoint the dialog opens on */
   checkpoint: BoardCheckpoint
+  /** every checkpoint of the board (the timeline); default: only `checkpoint` */
+  checkpoints?: readonly BoardCheckpoint[]
   api: HistoryApi
-  /** The live board: only its theme is read. */
+  /** The live board: its theme, and its elements for "Show changes" (read only). */
   canvas: LobbyCanvas
   boardId: string
   canRestore: boolean
   restoring: boolean
-  onRestore(): void
+  /** "Restore as new board" of the checkpoint shown */
+  onRestore(checkpoint: BoardCheckpoint): void
+  /** "Restore these" (absent: not offered: a viewer, a guest, an older room) */
+  restoreElements?: RestoreElementsAction
   onClose(): void
 }) {
   const ref = useRef<HTMLDialogElement>(null)
   const view = useRef<HTMLCanvasElement>(null)
   const titleId = useId()
   const descId = useId()
-  const [loaded, setLoaded] = useState<Loaded>({ status: 'loading' })
+  // the timeline, kept by content (the panel's list is refetched on every checkpoint event; ticksKey stands for it)
+  const listed = checkpoints?.length ? checkpoints : [checkpoint]
+  const ticksKey = [checkpoint.id, ...listed.map((c) => `${c.id}@${c.createdAt}`)].join(',')
+  const ticks = useMemo(() => {
+    const all = timelineOrder(listed)
+    return all.some((c) => c.id === checkpoint.id) ? all : timelineOrder([...all, checkpoint])
+  }, [ticksKey])
+  // the tick shown, by id (a checkpoint saved or pruned meanwhile does not move it)
+  const [currentKey, setCurrentKey] = useState(checkpoint.id)
+  const found = ticks.findIndex((c) => c.id === currentKey)
+  const index = found >= 0 ? found : Math.max(0, ticks.length - 1)
+  const current = (ticks[index] ?? checkpoint) as BoardCheckpoint
+  const [shown, setShown] = useState<Shown>({ status: 'loading', id: current.id })
   const [preview, setPreview] = useState<CheckpointPreviewHandle | null>(null)
+  const [drawnId, setDrawnId] = useState<string | null>(null)
   const [drawError, setDrawError] = useState<string | null>(null)
+  const [showChanges, setShowChanges] = useState(true)
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set())
+  const [liveVersion, setLiveVersion] = useState(0)
+  const [tickMs, setTickMs] = useState<number | null>(null)
+  const [restoreNote, setRestoreNote] = useState<string | null>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
+  const handleRef = useRef<CheckpointPreviewHandle | null>(null)
+  const session = useRef({})
+  const tickStart = useRef(performance.now())
+  const currentId = useRef(current.id)
+  currentId.current = current.id
+  const direction = useRef(0)
 
   // Modal: focus trap, inert page, Escape (the shared Dialog pattern, ui/Dialog.tsx).
   useEffect(() => {
@@ -80,27 +139,73 @@ export function CheckpointPreview({
     }
   }, [])
 
+  // ---- contents: asked for once the scrubber rests, kept in a small LRU --------------------------------
+  const cache = useMemo(() => new ContentCache((id: string) => api.checkpointContent(id)), [api])
+  const prefetch = useCallback(
+    (from: number) => {
+      const step = direction.current >= 0 ? 1 : -1
+      const next = ticks[from + step]
+      if (next && !cache.has(next.id)) void cache.get(next.id).catch(() => undefined)
+    },
+    [cache, ticks],
+  )
+  const load = useMemo(
+    () =>
+      debounced((id: string) => {
+        cache.get(id).then(
+          (content) => {
+            if (currentId.current !== id) return
+            setShown({ status: 'ready', id, content })
+            prefetch(ticks.findIndex((c) => c.id === id))
+          },
+          (e: unknown) => {
+            if (currentId.current !== id) return
+            setShown({
+              status: 'error',
+              id,
+              message: isApiError(e) ? e.message : 'This checkpoint could not be opened.',
+            })
+          },
+        )
+      }),
+    [cache, prefetch, ticks],
+  )
+  const first = useRef(true)
+  const lastTick = useRef<string | null>(null)
   useEffect(() => {
-    const controller = new AbortController()
-    setLoaded({ status: 'loading' })
-    api
-      .checkpointContent(checkpoint.id, controller.signal)
-      .then((content) => setLoaded({ status: 'ready', content }))
-      .catch((e: unknown) => {
-        if (controller.signal.aborted) return
-        setLoaded({
-          status: 'error',
-          message: isApiError(e) ? e.message : 'This checkpoint could not be opened.',
-        })
-      })
-    return () => controller.abort()
-  }, [api, checkpoint.id])
+    const id = current.id
+    if (lastTick.current === id) return
+    lastTick.current = id
+    setPicked(new Set())
+    setRestoreNote(null)
+    const hit = cache.peek(id)
+    if (hit) {
+      load.cancel()
+      setShown({ status: 'ready', id, content: hit })
+      prefetch(ticks.findIndex((c) => c.id === id))
+      return
+    }
+    setShown((s) => (s.status === 'ready' && s.id === id ? s : { status: 'loading', id }))
+    load.call(id)
+    // the dialog's first checkpoint is asked for at once
+    if (first.current) load.flush()
+    first.current = false
+  }, [current.id, cache, load, prefetch])
+  useEffect(() => () => load.cancel(), [load])
 
-  const elements = loaded.status === 'ready' ? (loaded.content.elements ?? null) : null
-  const source = loaded.status === 'ready' ? checkpointPreviewSource(loaded.content) : null
+  const content = shown.status === 'ready' ? shown.content : null
+  const elements = content?.elements ?? null
+  const source = content ? checkpointPreviewSource(content) : null
   const isV1 = source === 'v1'
-  const counts = useMemo(() => (elements ? previewElementCounts(elements) : null), [elements])
-  const texts = useMemo(() => (elements ? previewTexts(elements) : []), [elements])
+  const hidden = useMemo(() => (elements ? hiddenBranchIds(elements) : new Set<string>()), [elements])
+  const counts = useMemo(
+    () => (elements ? previewElementCounts(elements.filter((e) => !hidden.has(e.id))) : null),
+    [elements, hidden],
+  )
+  const texts = useMemo(
+    () => (elements ? previewTexts(elements.filter((e) => !hidden.has(e.id))) : []),
+    [elements, hidden],
+  )
 
   /** DANA2-05: the whole checkpoint when it is readable that way, else its first frame (presentation order). */
   const open = (p: CheckpointPreviewHandle, els: readonly unknown[]) => {
@@ -122,24 +227,54 @@ export function CheckpointPreview({
     p.fit({ maxZoom: 1 })
   }
 
-  // Once the content is here and the canvas has its size: draw it, readably.
+  // picking (a click on the bitmap): the newest handler, read by the mounted preview
+  const pickRef = useRef<(id: string | null, additive: boolean) => void>(() => {})
+  pickRef.current = (id, additive) => {
+    if (!restoreElements) return
+    setPicked((cur) => {
+      if (!id) return additive ? cur : new Set()
+      const next = new Set(additive ? cur : [])
+      if (additive && cur.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  // Once the content is here and the canvas has its size: draw it, readably (a later tick keeps the camera).
   useEffect(() => {
-    if (!elements) return
+    if (!elements || shown.status !== 'ready') return
+    const id = shown.id
     const controller = new AbortController()
-    let handle: CheckpointPreviewHandle | null = null
     const frame = requestAnimationFrame(() => {
       const el = view.current
       if (!el) return
+      const camera = handleRef.current?.camera()
       void loadCheckpointPreview()
-        .then((mount) => mount(el, { elements, boardId, theme: canvas.theme(), signal: controller.signal }))
+        .then((mount) =>
+          mount(el, {
+            elements,
+            boardId,
+            theme: canvas.theme(),
+            signal: controller.signal,
+            session: session.current,
+            hidden,
+            ...(camera ? { camera } : {}),
+            onPick: (picked, additive) => pickRef.current(picked, additive),
+          }),
+        )
         .then((h) => {
           if (controller.signal.aborted) {
             h.dispose()
             return
           }
-          handle = h
-          open(h, elements)
+          const old = handleRef.current
+          handleRef.current = h
+          if (!camera) open(h, elements)
+          old?.dispose()
           setPreview(h)
+          setDrawnId(id)
+          setDrawError(null)
+          if (id === currentId.current) setTickMs(Math.round(performance.now() - tickStart.current))
         })
         .catch((e: unknown) => {
           if (controller.signal.aborted) return
@@ -150,20 +285,82 @@ export function CheckpointPreview({
     return () => {
       cancelAnimationFrame(frame)
       controller.abort()
-      handle?.dispose()
-      setPreview(null)
     }
-  }, [elements, boardId, canvas])
+  }, [elements, shown, boardId, canvas, hidden])
+  // the last preview goes with the dialog (and the images its ticks shared)
+  useEffect(
+    () => () => {
+      handleRef.current?.releaseFiles()
+      handleRef.current?.dispose()
+      handleRef.current = null
+    },
+    [],
+  )
 
-  const title = checkpointTitle(checkpoint)
-  const error = loaded.status === 'error' ? loaded.message : drawError
+  // ---- the changes since this checkpoint --------------------------------------------------------------------
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const off = canvas.on('change', () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => setLiveVersion((v) => v + 1), LIVE_DIFF_DELAY_MS)
+    })
+    return () => {
+      off()
+      if (timer) clearTimeout(timer)
+    }
+  }, [canvas])
+  const diff = useMemo(() => {
+    void liveVersion
+    if (!elements) return null
+    return diffCheckpoint(elements, canvas.items(), { liveHidden: (id) => canvas.isHidden(id) })
+  }, [elements, canvas, liveVersion])
+  const byId = useMemo(() => new Map((elements ?? []).map((e) => [e.id as string, e as El])), [elements])
+  useEffect(() => {
+    if (!preview || drawnId !== shown.id) return
+    const outlines = []
+    const entries = showChanges && diff ? diff.entries.filter((e) => e.kind !== 'derived') : []
+    const outlined = new Set<string>()
+    for (const e of entries) {
+      outlined.add(e.id)
+      outlines.push({
+        ...e.bounds,
+        tone: e.kind as Exclude<typeof e.kind, 'derived'>,
+        selected: picked.has(e.id),
+      })
+    }
+    for (const id of picked) {
+      const el = byId.get(id)
+      if (!el || outlined.has(id)) continue
+      outlines.push({ ...boundsOf(el as El & { id: string; type: string }), selected: true })
+    }
+    preview.setOutlines(outlines)
+  }, [preview, drawnId, shown.id, diff, showChanges, picked, byId])
+
+  const restorable = useMemo(() => (diff ? diff.entries.filter(isRestorable) : []), [diff])
+  const toRestore = useMemo(() => restoreIdsOf(picked, elements ?? []), [picked, elements])
+  const togglePick = (id: string) =>
+    setPicked((cur) => {
+      const next = new Set(cur)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+
+  const title = checkpointTitle(current)
+  const error = shown.status === 'error' ? shown.message : drawError
+  const now = new Date()
+  const summary = diff ? diffSummary(diff) : null
+  const changeCount = diff ? diff.entries.length : 0
   return (
     <dialog
       ref={ref}
       className="dr-dialog dr-cp-preview"
       data-testid="checkpoint-preview-dialog"
-      data-snapshot-id={checkpoint.id}
-      data-shape-count={counts?.objects ?? ''}
+      data-snapshot-id={current.id}
+      data-drawn-id={drawnId ?? ''}
+      data-shape-count={counts && shown.id === current.id ? counts.objects : ''}
+      data-tick-ms={tickMs ?? ''}
+      data-fetches={cache.fetches}
       aria-labelledby={titleId}
       aria-describedby={descId}
       onCancel={(e) => {
@@ -185,11 +382,7 @@ export function CheckpointPreview({
               <span className="dr-cp-preview__eyebrow">Preview</span> {title}
             </h2>
             <p id={descId} className="dr-dialog__desc">
-              {[
-                checkpoint.kind === 'manual' ? null : 'Automatic',
-                checkpointMeta(checkpoint, new Date()),
-                counts?.text,
-              ]
+              {[current.kind === 'manual' ? null : 'Automatic', checkpointMeta(current, now), counts?.text]
                 .filter(Boolean)
                 .join(' · ')}
             </p>
@@ -208,7 +401,7 @@ export function CheckpointPreview({
         </header>
 
         <div className="dr-cp-preview__canvas" data-testid="checkpoint-preview-canvas">
-          {loaded.status === 'loading' && (
+          {shown.status === 'loading' && !preview && (
             <div className="dr-cp-preview__note" role="status">
               <span className="dr-spinner" aria-hidden="true" /> Opening the checkpoint…
             </div>
@@ -236,13 +429,13 @@ export function CheckpointPreview({
               Saved before the canvas update: shown converted to the new canvas.
             </p>
           )}
-          {elements && (
+          {(elements || preview) && (
             <>
               <canvas
                 ref={view}
                 className="dr-cp-preview__bitmap"
                 data-testid="checkpoint-preview-bitmap"
-                data-ready={preview ? 'true' : 'false'}
+                data-ready={preview && drawnId === current.id ? 'true' : 'false'}
                 role="img"
                 aria-label={`Preview of “${title}”`}
                 style={{
@@ -251,7 +444,7 @@ export function CheckpointPreview({
                   width: '100%',
                   height: '100%',
                   touchAction: 'none',
-                  cursor: 'grab',
+                  cursor: restoreElements ? 'pointer' : 'grab',
                 }}
               />
               <ul
@@ -267,9 +460,84 @@ export function CheckpointPreview({
           )}
         </div>
 
+        {ticks.length > 1 && (
+          <Timeline
+            ticks={ticks}
+            index={index}
+            onChange={(i) => {
+              direction.current = i - index
+              // tick-to-preview is measured from the key or the pointer that moved the scrubber
+              tickStart.current = performance.now()
+              setCurrentKey((ticks[i] ?? current).id)
+            }}
+            now={now}
+          />
+        )}
+
+        {elements && diff && (
+          <section className="dr-tt-diff" aria-label="Changes since this checkpoint">
+            <label className="dr-tt-diff__toggle">
+              <input
+                type="checkbox"
+                data-testid="history-diff-toggle"
+                checked={showChanges}
+                onChange={(e) => setShowChanges(e.target.checked)}
+              />
+              Show changes
+            </label>
+            <p className="dr-tt-diff__summary" role="status" data-testid="history-diff-summary">
+              Compared with the board now: {summary}
+            </p>
+            {changeCount > 0 && (
+              <details className="dr-tt-diff__details" data-testid="history-diff-details">
+                <summary>List the changes ({changeCount})</summary>
+                <ul
+                  className="dr-tt-diff__list"
+                  data-testid="history-diff-list"
+                  aria-label="Changes since this checkpoint"
+                >
+                  {diff.entries.map((e) => (
+                    <li
+                      key={e.id}
+                      className={`dr-tt-diff__item dr-tt-diff__item--${e.kind}`}
+                      data-testid="history-diff-item"
+                      data-id={e.id}
+                      data-kind={e.kind}
+                    >
+                      {restoreElements && isRestorable(e) ? (
+                        <label>
+                          <input
+                            type="checkbox"
+                            data-testid="history-diff-select"
+                            checked={picked.has(e.id)}
+                            onChange={() => togglePick(e.id)}
+                          />
+                          {e.name} <span className="dr-tt-diff__kind">{KIND_WORDS[e.kind]}</span>
+                        </label>
+                      ) : (
+                        <>
+                          {e.name} <span className="dr-tt-diff__kind">{KIND_WORDS[e.kind]}</span>
+                        </>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </section>
+        )}
+
         <footer className="dr-cp-preview__foot">
-          <p className="dr-cp-preview__hint">
-            Read-only: nothing here changes this board. Drag to move around, scroll or pinch to zoom.
+          <p className="dr-cp-preview__hint" data-testid="checkpoint-preview-hint">
+            {restoreElements
+              ? 'Nothing here changes the board until you restore. Click objects to pick them (Shift adds), or drag to move around.'
+              : 'Read-only: nothing here changes this board. Drag to move around, scroll or pinch to zoom.'}
+            {restoreNote && (
+              <span className="dr-tt__note" role="alert" data-testid="history-restore-elements-note">
+                {' '}
+                {restoreNote}
+              </span>
+            )}
           </p>
           <div className="dr-cp-preview__actions">
             <button
@@ -281,14 +549,47 @@ export function CheckpointPreview({
             >
               Zoom to fit
             </button>
+            {restoreElements && (
+              <>
+                <button
+                  type="button"
+                  className="dr-btn"
+                  data-testid="history-select-changes"
+                  disabled={!restorable.length}
+                  onClick={() => setPicked(new Set(restorable.map((e) => e.id)))}
+                >
+                  Select changes
+                </button>
+                <button
+                  type="button"
+                  className="dr-btn dr-btn--primary"
+                  data-testid="history-restore-elements"
+                  disabled={restoreElements.busy || toRestore.ids.length === 0 || shown.status !== 'ready'}
+                  aria-busy={restoreElements.busy}
+                  onClick={() => {
+                    if (toRestore.tooMany) {
+                      setRestoreNote('Pick at most 200 objects to restore at once.')
+                      return
+                    }
+                    void restoreElements.run(current, toRestore.ids)
+                  }}
+                >
+                  {restoreElements.busy
+                    ? 'Restoring…'
+                    : toRestore.ids.length
+                      ? `Restore ${pluralize(toRestore.ids.length, 'object')}`
+                      : 'Restore these'}
+                </button>
+              </>
+            )}
             {canRestore && (
               <button
                 type="button"
-                className="dr-btn dr-btn--primary"
+                className={restoreElements ? 'dr-btn' : 'dr-btn dr-btn--primary'}
                 data-testid="checkpoint-preview-restore"
-                disabled={restoring || loaded.status !== 'ready'}
+                disabled={restoring || shown.status !== 'ready'}
                 aria-busy={restoring}
-                onClick={onRestore}
+                onClick={() => onRestore(current)}
               >
                 {restoring ? 'Restoring…' : 'Restore as new board'}
               </button>
@@ -299,3 +600,12 @@ export function CheckpointPreview({
     </dialog>
   )
 }
+
+const KIND_WORDS = {
+  removed: '(removed since)',
+  added: '(added since)',
+  geometry: '(moved or resized)',
+  text: '(other words now)',
+  style: '(restyled)',
+  derived: '(followed its shapes)',
+} as const
