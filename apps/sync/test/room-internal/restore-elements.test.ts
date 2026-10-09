@@ -4,6 +4,8 @@
 //
 //  - a live and a deleted element come back with their kept ids (created: null for the re-created one);
 //  - a text under a lease is skipped LEASED (a note's label: its container's lease), the rest is written;
+//  - a unit with an element locked now is skipped INVALID (a label follows its container's lock): never
+//    overwritten nor unlocked by the checkpoint's copy; "Undo restore" leaves a locked element too;
 //  - a restored target re-snaps the arrows bound to it in the same clock and frame;
 //  - a binding (or a frame) that names something neither on the board nor restored is dropped, and a live
 //    target lists a restored arrow again;
@@ -32,6 +34,7 @@ const KILL_DELAYS_MS = [0, 40, 90, 160, 400]
 const ACTOR = { uid: 'usr_restorer001', name: 'Rita' }
 const del = (id: string, v: number) => ({ k: 'p', id, pv: v, g: { life: { isDeleted: true } } })
 const move = (id: string, v: number, x: number, y: number) => ({ k: 'p', id, pv: v, g: { pos: { x, y } } })
+const lock = (id: string, v: number, locked = true) => ({ k: 'p', id, pv: v, g: { meta: { locked } } })
 
 function restoreCall(
   st: Stack,
@@ -149,6 +152,54 @@ describe('restore-elements: a checkpoint’s elements back into the live board (
     const later = await restore(st, b, ['N1', 'T'], closure(cp, ['N1', 'T']))
     expect(later.skipped).toEqual([])
     expect([...later.restored].sort()).toEqual(['N1', 'N1.t', 'T'])
+  })
+
+  it('a unit with an element locked now is skipped INVALID (never overwritten nor unlocked); Undo leaves a locked one', async () => {
+    const st = await h.stack()
+    const b = newBoardId()
+    expect((await seed(st, b, sampleBoard())).status).toBe(201)
+    const ann = await st.client({ boardId: b, user: 'ann' })
+    const cp = await copies(st, b)
+    const v = (id: string) => ann.confirmed.get(id)?.version ?? 1
+    // a facilitator moves the note and the rectangle, then locks them (the checkpoint's copies are unlocked)
+    await ann.push([
+      move('N1', v('N1'), 900, 900),
+      move('R', v('R'), 50, 900),
+      move('N2', v('N2'), 900, 1200),
+    ])
+    await ann.push([lock('N1', v('N1')), lock('R', v('R'))])
+    const before = await byIdOf(st, b)
+    expect(before.byId.get('N1')?.locked).toBe(true)
+    expect(before.byId.get('R')?.locked).toBe(true)
+
+    // the locked note, and the locked rectangle asked for by its label (a label follows its container's lock)
+    const res = await restore(st, b, ['N1', 'R.t', 'N2'], closure(cp, ['N1', 'R.t', 'N2']))
+    expect(res.skipped).toEqual([
+      { id: 'N1', code: 'INVALID' },
+      { id: 'R.t', code: 'INVALID' },
+    ])
+    expect([...res.restored].sort()).toEqual(['N2', 'N2.t'])
+    const { snap, byId } = await byIdOf(st, b)
+    expect(checkInvariants(snap.elements)).toEqual([])
+    for (const id of ['N1', 'N1.t', 'R', 'R.t']) expect(byId.get(id), id).toEqual(before.byId.get(id))
+    expect(byId.get('N2')).toMatchObject({ x: 300, y: 40 })
+
+    // once unlocked, it comes back as the checkpoint had it
+    await ann.push([lock('N1', v('N1'), false)])
+    const later = await restore(st, b, ['N1'], closure(cp, ['N1']))
+    expect(later.skipped).toEqual([])
+    expect((await byIdOf(st, b)).byId.get('N1')).toMatchObject({ x: 40, y: 40, locked: false })
+
+    // "Undo restore" of what came back: a text locked since then stays (as no push could delete it)
+    await ann.push([del('T', v('T'))])
+    const beforeRestore = await copies(st, b)
+    const back = await restore(st, b, ['T'], closure(cp, ['T']))
+    expect(back.restored).toEqual(['T'])
+    await ann.until(() => ann.confirmed.get('T')?.isDeleted === false, 'ann saw T come back')
+    await ann.push([lock('T', v('T'))])
+    const undo = await restore(st, b, ['T'], closure(beforeRestore, ['T']), { removeAbsent: true })
+    expect(undo.skipped).toEqual([{ id: 'T', code: 'INVALID' }])
+    expect((await byIdOf(st, b)).byId.get('T')).toMatchObject({ isDeleted: false, locked: true })
   })
 
   it('a restored target re-snaps the arrows bound to it in the same clock and changes frame', async () => {

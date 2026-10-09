@@ -72,6 +72,12 @@ describe('restore elements from a checkpoint into the live board', () => {
     expect(undo.statusCode, undo.body).toBe(200)
     expect(sync.calls[1]?.body).toMatchObject({ ids: ['n2'], elements: [], removeAbsent: true })
     expect(undo.json()).toMatchObject({ restored: ['n2', 'n2.t'], clock: 12 })
+    // its own checkpoint first, named for the undo (not "Before restoring “Before restoring …”")
+    expect((await beforeRestoreRows()).map((r) => r.name)).toEqual([
+      'Before restoring “After the workshop”',
+      'Before undoing a restore',
+    ])
+    expect(undo.json().checkpointId).toBe((await beforeRestoreRows())[1]?.id)
     // without it, ids the checkpoint lacks are refused before anything happens
     const none = await restore({ ids: ['n2'] }, checkpointId)
     expect(none.statusCode).toBe(400)

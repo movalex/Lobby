@@ -14,8 +14,8 @@
 // Wave L, time travel (L7-1, L7-2; W7): "Time travel" opens the preview on the newest checkpoint with the
 // whole timeline (the preview swaps per tick and outlines what changed since); for editors with an account in
 // a room at RESTORE_ELEMENTS_REV, "Restore these" brings picked objects back into the live board for everyone
-// (a server write: not a Ctrl+Z step), and the notice offers "Undo restore", which restores the same ids from
-// the 'before_restore' checkpoint the api made first.
+// (a server write: not a Ctrl+Z step), and the notice offers "Undo restore", which restores the ids it did not
+// skip from the 'before_restore' checkpoint the api made first (none: no "Undo restore").
 
 import {
   type BoardCheckpoint,
@@ -49,7 +49,12 @@ import {
 import { CheckpointPreview } from './CheckpointPreview.tsx'
 import { useExportAllowed } from './export-allowed.ts'
 import { restoredElementIds, restoredSelection, touchesDeletedElements } from './model.ts'
-import { canRestoreElements, restoreElementsSummary, undoRestoreSummary } from './time-travel.ts'
+import {
+  canRestoreElements,
+  restoreElementsSummary,
+  undoRestoreIds,
+  undoRestoreSummary,
+} from './time-travel.ts'
 
 const DELETED_REFRESH_MS = 700
 const APPEAR_TIMEOUT_MS = 4_000
@@ -277,16 +282,23 @@ export function HistoryPanel({ ctx }: { ctx: CanvasFeatureContext; close(): void
       try {
         const result = await api.restoreElements(board.id, c.id, { ids })
         setPreviewing(null)
+        // only what the restore did not skip: a skipped element (someone was typing in it) was never touched,
+        // and undoing must not take back what was done to it since
+        const undoIds = undoRestoreIds(ids, result)
         notify({
           key: 'history:restore-elements',
           text: restoreElementsSummary(ids, result),
           testId: 'history-restored-notice',
           timeoutMs: 30_000,
-          action: {
-            label: 'Undo restore',
-            testId: 'history-undo-restore',
-            onClick: () => void undoRestore(result.checkpointId, ids),
-          },
+          ...(undoIds.length
+            ? {
+                action: {
+                  label: 'Undo restore',
+                  testId: 'history-undo-restore',
+                  onClick: () => void undoRestore(result.checkpointId, undoIds),
+                },
+              }
+            : {}),
         })
         void showRestored(result.restored)
       } catch (e) {
@@ -294,7 +306,10 @@ export function HistoryPanel({ ctx }: { ctx: CanvasFeatureContext; close(): void
       }
     })
 
-  /** "Undo restore": the same ids from the checkpoint made right before the restore (what came back goes again). */
+  /**
+   * "Undo restore": the ids the restore wrote (undoRestoreIds: never the ones it skipped), from the checkpoint made
+   * right before it (what came back goes again).
+   */
   const undoRestore = async (checkpointId: string, ids: string[]) => {
     try {
       const result = await api.restoreElements(board.id, checkpointId, { ids, removeAbsent: true })

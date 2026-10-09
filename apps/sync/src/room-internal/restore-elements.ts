@@ -24,9 +24,11 @@
 //    held it (the "Recently deleted" precedent: its author and marks as they were).
 //  - `removeAbsent` ("Undo restore"): an asked id the checkpoint lacks but the board has is removed, its label
 //    with it (it came back with the restore being undone).
-//  - a unit whose text is under a lease (anyone's: the api is no session) is skipped, LEASED; one whose copy
-//    fails today's element check, or is inconsistent (a label without its container), is INVALID; an id the
-//    checkpoint lacks is MISSING.
+//  - a unit whose text is under a lease (anyone's: the api is no session) is skipped, LEASED; one with an
+//    element locked now (its head, its label, or a label's container) is INVALID: a restore never overrides a
+//    lock, as no push does (room/merge.ts step 5), and "Undo restore" neither; one whose copy fails today's
+//    element check, or is inconsistent (a label without its container), is INVALID; an id the checkpoint lacks
+//    is MISSING.
 // References are made to hold, as server fixes: a frame or a binding target that is neither on the board nor
 // restored is dropped (the element stays where it is, out of the frame; the arrow end is free); a container's
 // current label that is not the checkpoint's is removed with it; targets list the arrows bound to them; group
@@ -252,11 +254,20 @@ export function applyRestoreElements(tx: ServerWriteTx, body: RestoreElementsBod
     else u.asked.push(id)
   }
 
-  // 2. leases: a unit with a text under anyone's lease is skipped whole (a label's lease is its container's id)
+  // 2. leases: a unit with a text under anyone's lease is skipped whole (a label's lease is its container's id);
+  // locks: a unit with a live element that is locked now (a label follows its container's lock) is skipped
+  // whole, INVALID. A restore never overrides a lock, as no push does (room/merge.ts step 5: a locked element
+  // takes no change but its unlock): a facilitator's locked template notes or frame stay as they are, and the
+  // checkpoint's copy (maybe unlocked) does not unlock them. "Undo restore" alike: a locked element stays.
   const skipUnit = (u: Unit, code: SkipCode) => {
     for (const id of u.asked) skipped.set(id, code)
     u.asked.length = 0
     u.planned.clear()
+  }
+  const lockedNow = (id: string) => {
+    const r = row(id)
+    const el = r?.el as El | undefined
+    return !!r && !r.deleted && !!el && el.isDeleted !== true && el.locked === true
   }
   for (const u of units) {
     const ids = new Set<string>([u.headId])
@@ -266,6 +277,7 @@ export function applyRestoreElements(tx: ServerWriteTx, body: RestoreElementsBod
       if (stored?.type === 'text' && typeof stored.containerId === 'string') ids.add(stored.containerId)
     }
     if ([...ids].some(leased)) skipUnit(u, 'LEASED')
+    else if ([...ids].some(lockedNow)) skipUnit(u, 'INVALID')
   }
 
   // 3. each unit's elements as the checkpoint had them (references are resolved in step 4)

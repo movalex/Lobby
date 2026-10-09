@@ -41,7 +41,7 @@ import { SyncUnavailable } from '../../sync-internal.ts'
 import type { FeatureContext } from '../context.ts'
 import { guestRefused } from '../guests/guard.ts'
 import type { CheckpointReader } from './checkpoint-routes.ts'
-import type { CheckpointService } from './checkpoints.ts'
+import type { CheckpointAbout, CheckpointService } from './checkpoints.ts'
 import { syncUnavailable } from './new-board.ts'
 import { SNAPSHOT_COLUMNS, SNAPSHOT_FROM, type SnapshotRow } from './snapshot-rows.ts'
 import type { SnapshotBodies } from './snapshot-store.ts'
@@ -171,11 +171,15 @@ export function registerRestoreElements(
     return run
   }
 
-  /** The 'before_restore' checkpoint (or the newest one, when the board equals it): its id. */
-  async function checkpointFirst(boardId: string, restoredName: string): Promise<string> {
+  /**
+   * The 'before_restore' checkpoint (or the newest one, when the board equals it): its id. An "Undo restore" names
+   * its own 'Before undoing a restore' (it restores from a 'before_restore' checkpoint: "Before restoring" of
+   * that name would nest).
+   */
+  async function checkpointFirst(boardId: string, about: CheckpointAbout): Promise<string> {
     let outcome: Awaited<ReturnType<CheckpointService['capture']>>
     try {
-      outcome = await checkpoints.capture(boardId, 'before_restore', { restoredName })
+      outcome = await checkpoints.capture(boardId, 'before_restore', about)
     } catch (e) {
       if (e instanceof SyncUnavailable)
         throw new ApiError(503, RESTORE_ELEMENTS_ERROR_CODES.unavailable, NO_CHECKPOINT)
@@ -226,7 +230,10 @@ export function registerRestoreElements(
       throw new ApiError(400, 'TOO_MANY_ELEMENTS', 'Restore fewer objects at a time.')
 
     return oneAtATime(bid, async () => {
-      const checkpointId = await checkpointFirst(bid, row.name)
+      const checkpointId = await checkpointFirst(
+        bid,
+        input.removeAbsent ? { undoingRestore: true } : { restoredName: row.name },
+      )
       const body: RestoreElementsBody = {
         actor: { uid: user.id, name: user.name.slice(0, 200) },
         ids,

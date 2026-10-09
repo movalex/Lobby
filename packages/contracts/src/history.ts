@@ -163,8 +163,9 @@ export type RestoreDeletedResponse = z.infer<typeof RestoreDeletedResponse>
 // restoreElementsInternalPath) to write them into the live board in one commit. A sync that does not serve the
 // route (older than canvas-schema RESTORE_ELEMENTS_REV) answers 404, and the api 503 RESTORE_UNAVAILABLE; the
 // web offers "Restore these" only in a room at that revision. Server write: not a Ctrl+Z step; "Undo restore"
-// restores the same ids from `checkpointId` with `removeAbsent` (W7): an id that checkpoint does not hold came
-// back with the restore, so it is removed again (with its label), instead of being skipped as MISSING.
+// restores the asked ids the restore did not skip (never a skipped one: the restore left it, so its undo must too)
+// from `checkpointId` with `removeAbsent` (W7): an id that checkpoint does not hold came back with the restore,
+// so it is removed again (with its label), instead of being skipped as MISSING.
 // Workspace guests are refused like the preview (the checkpoint may hold what was removed before they joined).
 
 /** Ids one restore may name (each brings back its bound text or container too). */
@@ -188,7 +189,8 @@ export type RestoreElementsInput = z.infer<typeof RestoreElementsInput>
 
 /**
  * Why an id was not restored: LEASED (its text is under another session's lease), MISSING (not in the
- * checkpoint), INVALID (the checkpoint's copy fails today's element check).
+ * checkpoint), INVALID (an element of it is locked now, which a restore never overrides; or the checkpoint's copy
+ * fails today's element check, or is inconsistent).
  */
 export const RESTORE_ELEMENTS_SKIP_CODES = ['LEASED', 'MISSING', 'INVALID'] as const
 export const RestoreElementsSkipCode = z.enum(RESTORE_ELEMENTS_SKIP_CODES)
@@ -204,7 +206,7 @@ export const RestoreElementsResult = z.object({
   skipped: z.array(RestoreElementsSkip),
   /** the board clock the write committed at (the web waits for it before it says "Restored") */
   clock: z.number().int().nonnegative(),
-  /** the 'before_restore' checkpoint made first ("Undo restore" restores the same ids from it) */
+  /** the 'before_restore' checkpoint made first ("Undo restore" restores the ids not skipped from it) */
   checkpointId: SnapshotId,
 })
 export type RestoreElementsResult = z.infer<typeof RestoreElementsResult>

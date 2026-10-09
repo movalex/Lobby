@@ -134,7 +134,8 @@ export type LobbyElementsSnapshot = z.infer<typeof LobbyElementsSnapshot>
 // api → sync only (behind the internal secret, like every internal route). The sync writes the checkpoint's
 // copies of `ids` into the live board through its server write, in the room's queue, in one SAVEPOINT, acked
 // after COMMIT: a live element gets the checkpoint's field groups, a deleted one comes back with its kept id
-// (`created: null`); a text under another session's lease is skipped (LEASED); arrow geometry is whole units;
+// (`created: null`); a text under another session's lease is skipped (LEASED), and an element locked now is
+// skipped (INVALID: a restore never overrides a lock, as no push does); arrow geometry is whole units;
 // bindings to targets that are neither live nor restored are dropped as a server fix; bound ends and labels are
 // re-snapped in the same commit. Only lb_* tables are written (never the tldraw tables nor dr_deleted_*). A
 // sync built before canvas-schema RESTORE_ELEMENTS_REV has no such route (404): the api answers 503

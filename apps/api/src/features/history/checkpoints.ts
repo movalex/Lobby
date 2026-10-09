@@ -132,6 +132,11 @@ export type MigrationCaptureOutcome =
 export interface CheckpointAbout {
   /** before_restore: the name of the checkpoint that was restored. */
   restoredName?: string
+  /**
+   * before_restore of an "Undo restore" (W7, restore-elements.ts): its checkpoint is named for that, not after the
+   * checkpoint it restores from (a 'before_restore' one itself: the names would nest).
+   */
+  undoingRestore?: boolean
   /** before_reveal: the private brainstorm's prompt. */
   prompt?: string
   /** before_ai_themes: how many notes AI grouped, and the frame they are in when there is one. */
@@ -166,6 +171,7 @@ export function autoCheckpointName(reason: CheckpointReason, about: CheckpointAb
       return frame ? `Before AI grouped ${what} in ${frame}` : `Before AI grouped ${what} into themes`
     }
     case 'before_restore': {
+      if (about.undoingRestore) return 'Before undoing a restore'
       if (!about.restoredName) return 'Before a restore'
       const name = about.restoredName.length > 90 ? `${about.restoredName.slice(0, 89)}…` : about.restoredName
       return `Before restoring “${name}”`

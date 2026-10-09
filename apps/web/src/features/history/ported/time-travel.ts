@@ -94,6 +94,22 @@ export function restoreIdsOf(
   return { ids: ids.slice(0, RESTORE_ELEMENTS_MAX_IDS), tooMany: ids.length > RESTORE_ELEMENTS_MAX_IDS }
 }
 
+/**
+ * The ids "Undo restore" sends: the asked ids the restore did not skip. The restore never touched a skipped one
+ * (LEASED, MISSING, INVALID), so its undo must not either: restored from the 'before_restore' checkpoint, a
+ * skipped element would go back to how it was before the restore, taking back what was done to it since (a
+ * colleague's words once their lease ended, a note moved after the restore). Not the answer's `restored`: that
+ * lists bound labels too, and could name more than RESTORE_ELEMENTS_MAX_IDS. Empty: nothing to undo (the notice
+ * offers no "Undo restore").
+ */
+export function undoRestoreIds(
+  asked: readonly string[],
+  r: Pick<RestoreElementsResult, 'skipped'>,
+): string[] {
+  const skipped = new Set(r.skipped.map((s) => s.id))
+  return [...new Set(asked)].filter((id) => !skipped.has(id))
+}
+
 /** The line after "Restore these": what came back, and why the rest did not. */
 export function restoreElementsSummary(
   asked: readonly string[],
@@ -111,14 +127,24 @@ export function restoreElementsSummary(
       `${pluralize(leased, 'object')} left as ${leased === 1 ? 'it is' : 'they are'}: someone is typing in it`,
     )
   if (missing) parts.push(`${pluralize(missing, 'object')} not in that checkpoint`)
-  if (invalid) parts.push(`${pluralize(invalid, 'object')} could not be restored`)
+  // INVALID: locked now (a restore never overrides a lock), or the copy no longer fits today's checks
+  if (invalid)
+    parts.push(
+      `${pluralize(invalid, 'object')} could not be restored (locked, or no longer valid on this board)`,
+    )
   return `${parts.join('; ')}.`
 }
 
-/** The line after "Undo restore". */
+/** The line after "Undo restore" (it skips a text being typed in, and a locked element: INVALID). */
 export function undoRestoreSummary(r: Pick<RestoreElementsResult, 'skipped'>): string {
   const leased = r.skipped.filter((s) => s.code === 'LEASED').length
-  return leased
-    ? `Restore undone, except ${pluralize(leased, 'object')} someone is typing in.`
-    : 'Restore undone: the board is as it was before.'
+  const other = r.skipped.length - leased
+  if (!leased && !other) return 'Restore undone: the board is as it was before.'
+  const except: string[] = []
+  if (leased) except.push(`${pluralize(leased, 'object')} someone is typing in`)
+  if (other)
+    except.push(
+      `${pluralize(other, 'object')} that ${other === 1 ? 'is' : 'are'} locked or could not be changed back`,
+    )
+  return `Restore undone, except ${except.join(' and ')}.`
 }

@@ -10,10 +10,20 @@
 //  - a viewer scrubs and sees the changes but is offered no restore;
 //  - two browsers: A restores 3 notes (2 deleted since, 1 moved), B sees them within sync latency and pushes
 //    nothing in reaction; "Undo restore" brings back the board as it was before the restore, on the server too.
+//  - "Undo restore" sends only what the restore wrote: a note skipped because bob was typing in it, then moved by
+//    him, stays where he moved it.
 import AxeBuilder from '@axe-core/playwright'
 import type { Locator, Page } from '@playwright/test'
 import type { Api } from '../tests/support/api.ts'
-import { createItem, expect, expectSaved, pushedOps, test } from '../tests/support/canvas.ts'
+import {
+  createItem,
+  expect,
+  expectSaved,
+  pushedOps,
+  startTextEditingWithKeyboard,
+  stopTextEditing,
+  test,
+} from '../tests/support/canvas.ts'
 import { openHistory } from '../tests/support/history.ts'
 import { describeServerBoard, describeTab, NOTE_FILL, onBoard, placement } from './history-kit.ts'
 
@@ -386,4 +396,57 @@ test('two browsers: A restores 3 notes, B sees them within sync latency and push
     await b.page.waitForTimeout(1_500)
     expect((await pushedOps(b.page)).length).toBe(bobPushes)
   })
+})
+
+test('Undo restore leaves what the restore skipped: a note bob was typing in, then moved, stays where he moved it', async ({
+  canvasSession,
+  board,
+  stack,
+  users,
+}) => {
+  test.setTimeout(180_000)
+  const a = await canvasSession('alice')
+  const b = await canvasSession('bob')
+  const api = await users.api('alice')
+  for (const [i, id] of ['lk1', 'lk2'].entries())
+    await createItem(a.page, 'note', {
+      id,
+      x: i * 260,
+      y: 0,
+      text: `Plan ${i + 1}`,
+      backgroundColor: NOTE_FILL.blue,
+    })
+  await expectSaved(a.page)
+  await saveCheckpoint(api, board, 'The plan')
+  await moveBy(a.page, 'lk1', 0, 250)
+  await moveBy(a.page, 'lk2', 0, 250)
+  await expect.poll(async () => (await placement(b.page, 'lk2'))?.y).toBe(250)
+  // bob types in lk2: the lease is his while the restore runs
+  await startTextEditingWithKeyboard(b.page, 'lk2')
+
+  await openHistory(a.page)
+  const d = await openTimeTravel(a.page)
+  await expect(d.getByTestId('history-diff-summary')).toContainText('2 moved or resized')
+  await d.getByTestId('history-select-changes').click()
+  await expect(d.getByTestId('history-restore-elements')).toHaveText('Restore 2 objects')
+  await d.getByTestId('history-restore-elements').click()
+  const notice = a.page.getByTestId('history-restored-notice')
+  await expect(notice).toContainText(
+    'Restored 1 object for everyone; 1 object left as it is: someone is typing in it.',
+  )
+  await expect.poll(async () => (await placement(a.page, 'lk1'))?.y).toBe(0)
+  expect((await placement(a.page, 'lk2'))?.y).toBe(250)
+
+  // bob is done typing, then moves the note the restore left alone
+  await stopTextEditing(b.page)
+  await moveBy(b.page, 'lk2', 300, 200)
+  await expect.poll(async () => (await placement(a.page, 'lk2'))?.x).toBe(260 + 300)
+
+  await a.page.getByTestId('history-undo-restore').click()
+  await expect(notice).toContainText('Restore undone: the board is as it was before.')
+  // lk1 goes back to where it was before the restore; bob's move of lk2 is kept, on the server and in both tabs
+  const want = ['lk1|stickynote|0,250||Plan 1', 'lk2|stickynote|560,450||Plan 2']
+  await expect.poll(() => describeServerBoard(stack, board), { timeout: 10_000 }).toEqual(want)
+  await expect.poll(() => describeTab(a.page)).toEqual(want)
+  await expect.poll(() => describeTab(b.page)).toEqual(want)
 })
