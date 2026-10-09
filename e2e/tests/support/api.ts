@@ -140,7 +140,13 @@ export class Api {
   }
 
   private async call<T>(method: string, path: string, data?: unknown): Promise<T> {
-    const res = await this.fetch(method, path, data)
+    let res = await this.fetch(method, path, data)
+    // K6-1: a stack that just started may not know its sync's engine yet (503 CANVAS_STARTING, Retry-After):
+    // retried for up to 15 s as the web retries it, so the first board of a fresh stack does not fail the test
+    for (let i = 0; i < 30 && res.status() === 503 && (await res.text()).includes('CANVAS_STARTING'); i++) {
+      await new Promise((r) => setTimeout(r, 500))
+      res = await this.fetch(method, path, data)
+    }
     if (res.status() >= 300) throw new ApiError(method, path, res.status(), await res.text())
     return (res.status() === 204 ? undefined : await res.json()) as T
   }
