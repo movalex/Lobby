@@ -94,6 +94,16 @@ describe('restore elements from a checkpoint into the live board', () => {
     expect(sync.calls).toHaveLength(2)
   })
 
+  it('a restore that wrote nothing says so (round 2: the web offers no "Undo restore" for it)', async () => {
+    sync.answers.push({
+      status: 200,
+      body: { restored: ['n2', 'n2.t'], skipped: [], clock: 12, wrote: false },
+    })
+    const noop = await restore({ ids: ['n2'] })
+    expect(noop.statusCode, noop.body).toBe(200)
+    expect(RestoreElementsResult.parse(noop.json())).toMatchObject({ clock: 12, wrote: false })
+  })
+
   it('a board equal to its newest checkpoint keeps that one as the restore point', async () => {
     sync.setBoard(w.boardId, sync.boards.get(w.boardId)?.elements as El[], 9)
     const saved = await w.bob.req('POST', `/api/boards/${w.boardId}/snapshots`, { name: 'Now' })

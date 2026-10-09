@@ -94,6 +94,12 @@ describe('POST <sync>/internal/boards/:bid/restore-elements', () => {
   it('answers restored, skipped and the clock', () => {
     const a = { restored: ['a'], skipped: [{ id: 'b', code: 'INVALID' }], clock: 7 }
     expect(RestoreElementsAnswer.parse(a)).toEqual(a)
+    // round 2: whether it wrote anything (false: its clock is the board's as it was, nothing to undo)
+    expect(RestoreElementsAnswer.parse({ ...a, wrote: false })).toEqual({ ...a, wrote: false })
+    expect(RestoreElementsAnswer.safeParse({ ...a, wrote: 'no' }).success).toBe(false)
+    expect(RestoreElementsResult.parse({ ...a, wrote: false, checkpointId: 'snp_0123456789ab' }).wrote).toBe(
+      false,
+    )
     expect(RestoreElementsAnswer.safeParse({ ...a, checkpointId: 'snp_0123456789ab' }).success).toBe(false)
     expect(RestoreElementsAnswer.safeParse({ ...a, skipped: [{ id: 'b', code: 'CHANGED' }] }).success).toBe(
       true,

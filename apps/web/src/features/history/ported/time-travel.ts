@@ -113,12 +113,15 @@ export function undoRestoreIds(
 
 /**
  * What "Undo restore" sends (round 1): the ids of undoRestoreIds, and the restore's own clock, so the sync takes
- * back only what that restore wrote and nobody changed since (CHANGED). Null: nothing to undo (no "Undo restore").
+ * back only what that restore wrote and nobody changed since (CHANGED). Null: nothing to undo (no "Undo restore"),
+ * also when the restore wrote nothing (round 2: its clock is then the board's, maybe a colleague's commit, and an
+ * undo at it would take that commit back).
  */
 export function undoRestoreInput(
   asked: readonly string[],
-  r: Pick<RestoreElementsResult, 'skipped' | 'clock'>,
+  r: Pick<RestoreElementsResult, 'skipped' | 'clock' | 'wrote'>,
 ): RestoreElementsInput | null {
+  if (r.wrote === false) return null
   const ids = undoRestoreIds(asked, r)
   return ids.length ? { ids, removeAbsent: true, restoreClock: r.clock } : null
 }

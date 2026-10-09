@@ -639,6 +639,8 @@ export function applyRestoreElements(tx: ServerWriteTx, body: RestoreElementsBod
     skipped: [...skipped].map(([id, code]) => ({ id, code })),
     // nothing written: the board's clock before this write (the batch's clock does not move for it)
     clock: changed.length ? tx.clock : tx.clock - 1,
+    // round 2: that clock may be a colleague's commit, so a restore that wrote nothing says so (no "Undo restore")
+    wrote: changed.length > 0,
   }
   return { changed, doc: {}, result: answer }
 }

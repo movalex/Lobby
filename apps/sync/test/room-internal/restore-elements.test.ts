@@ -120,6 +120,9 @@ describe('restore-elements: a checkpoint’s elements back into the live board (
     const again = await restore(st, b, ['N1', 'R'], closure(cp, ['N1', 'R']))
     expect([...again.restored].sort()).toEqual(['N1', 'N1.t', 'R', 'R.t'])
     expect(again.clock).toBe(res.clock)
+    // round 2: and says it wrote nothing (that clock may be a colleague's commit: there is nothing to undo)
+    expect(res.wrote).toBe(true)
+    expect(again.wrote).toBe(false)
   })
 
   it('a text under a lease is skipped LEASED (a label: its container’s lease); the rest is written', async () => {

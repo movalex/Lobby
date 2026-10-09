@@ -220,6 +220,12 @@ export const RestoreElementsResult = z.object({
   skipped: z.array(RestoreElementsSkip),
   /** the board clock the write committed at (the web waits for it before it says "Restored") */
   clock: z.number().int().nonnegative(),
+  /**
+   * Wave L round 2 (the sync's answer, passed on): false when the restore wrote nothing (everything was already
+   * as the checkpoint has it, or skipped). `clock` is then the board's clock as it was, which may be a
+   * colleague's commit, so there is nothing to undo: the web offers no "Undo restore". Absent: it wrote.
+   */
+  wrote: z.boolean().optional(),
   /** the 'before_restore' checkpoint made first ("Undo restore" restores the ids not skipped from it) */
   checkpointId: SnapshotId,
 })

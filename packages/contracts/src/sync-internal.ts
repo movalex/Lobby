@@ -185,5 +185,7 @@ export const RestoreElementsAnswer = z.strictObject({
   ),
   /** the board clock the write committed at */
   clock: z.number().int().nonnegative(),
+  /** wave L round 2 (history.ts RestoreElementsResult): false when nothing was written (`clock` is the board's as it was) */
+  wrote: z.boolean().optional(),
 })
 export type RestoreElementsAnswer = z.infer<typeof RestoreElementsAnswer>

@@ -137,6 +137,13 @@ describe('Restore these', () => {
       restoreClock: 41,
     })
     expect(undoRestoreInput(['R'], { skipped: [{ id: 'R', code: 'LEASED' }], clock: 41 })).toBeNull()
+    // round 2: a restore that wrote nothing has nothing to undo (its clock is the board's, maybe a colleague's write)
+    expect(undoRestoreInput(['N1'], { skipped: [], clock: 41, wrote: false })).toBeNull()
+    expect(undoRestoreInput(['N1'], { skipped: [], clock: 41, wrote: true })).toEqual({
+      ids: ['N1'],
+      removeAbsent: true,
+      restoreClock: 41,
+    })
     expect(
       undoRestoreSummary({
         skipped: [
