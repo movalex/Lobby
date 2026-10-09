@@ -9,6 +9,7 @@ import { expect, test } from '../tests/support/canvas.ts'
 import {
   colorOf,
   laserStroke,
+  laserStrokeAtMouseRate,
   pickLaser,
   pickLaserReadOnly,
   setHideCursors,
@@ -26,7 +27,8 @@ test('L6-1: a laser sweep reaches the other tab as a path in the presenter’s c
   await pickLaser(a.page)
   const before = await writes([a.page, b.page])
   const watch = await watchLaser(b.page, a.id)
-  const stroke = await laserStroke(a.page)
+  // at a real mouse's rate (125 moves a second for 300 ms, 300 px)
+  const stroke = await laserStrokeAtMouseRate(a.page)
   await expect
     .poll(async () => (await watch.read()).at, { message: 'a path of 8 samples at bob' })
     .not.toBeNull()

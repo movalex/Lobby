@@ -102,6 +102,57 @@ export async function laserStroke(page: Page, opts: { dx?: number; steps?: numbe
   return { startedAt, endedAt: Date.now() }
 }
 
+/**
+ * The same stroke at a real mouse's rate: pointer events dispatched in the page on a fixed clock (`hz` moves a
+ * second for `ms`, 300 px), so the timing a person sees is measured, not how fast Playwright's mouse steps go
+ * on a busy machine (each awaited CDP move took 10 to 20 ms when other suites shared the PC). The events go to
+ * the element under the start point, as a real pointer's do (Lobby's capture listeners and the engine's).
+ * Returns when the press started and ended, on the page's clock (Date.now(), comparable across tabs).
+ */
+export async function laserStrokeAtMouseRate(
+  page: Page,
+  opts: { px?: number; ms?: number; hz?: number } = {},
+) {
+  const { px = 300, ms = 300, hz = 125 } = opts
+  const p = await emptyCanvasPoint(page)
+  await page.mouse.move(p.x - px, p.y)
+  return page.evaluate(
+    ({ x1, y, px, ms, hz }) =>
+      new Promise<{ startedAt: number; endedAt: number }>((resolve) => {
+        const x0 = x1 - px
+        const target = document.elementFromPoint(x0, y) ?? document.body
+        const fire = (type: string, x: number, buttons: number) =>
+          target.dispatchEvent(
+            new PointerEvent(type, {
+              bubbles: true,
+              cancelable: true,
+              composed: true,
+              pointerId: 1,
+              pointerType: 'mouse',
+              isPrimary: true,
+              button: type === 'pointermove' ? -1 : 0,
+              buttons,
+              clientX: x,
+              clientY: y,
+            }),
+          )
+        const startedAt = Date.now()
+        fire('pointerdown', x0, 1)
+        const n = Math.round((ms / 1000) * hz)
+        let i = 0
+        const timer = setInterval(() => {
+          i++
+          fire('pointermove', x0 + (px * i) / n, 1)
+          if (i < n) return
+          clearInterval(timer)
+          fire('pointerup', x0 + px, 0)
+          resolve({ startedAt, endedAt: Date.now() })
+        }, 1000 / hz)
+      }),
+    { x1: p.x, y: p.y, px, ms, hz },
+  )
+}
+
 export interface LaserSeen {
   /** first time the laser of `uid` had at least `minPoints` samples (Date.now()) */
   readonly at: number | null

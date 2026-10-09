@@ -54,8 +54,14 @@ test('L6-2: an off-screen colleague’s chip sits on the right edge; a click bri
   await expect(chip).toBeVisible()
   await expect(chip).toHaveAttribute('data-side', 'right')
   // the click: alice's camera goes to bob's pointer
-  const at = await peerPoint(a.page, b.id)
-  expect(at).not.toBeNull()
+  // the room has streamed his pointer, off to the right of her view
+  await expect
+    .poll(async () => {
+      const p = await peerPoint(a.page, b.id)
+      const av = await viewport(a.page)
+      return p !== null && p.x > av.x + av.width
+    })
+    .toBe(true)
   await chip.click()
   await expect
     .poll(async () => {
