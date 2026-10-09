@@ -346,7 +346,12 @@ export function WorkshopBar({ ctx }: { ctx: Ctx }) {
       {open === 'reactions' && <ReactionBar id={barId} ctx={ctx} store={store} snap={snap} />}
       <PrivateNotesSetup ctx={ctx} />
       {snap.setupOpen && (
-        <VoteSetupDialog ctx={ctx} store={store} onClose={() => store.setSetupOpen(false)} />
+        <VoteSetupDialog
+          ctx={ctx}
+          store={store}
+          prefill={snap.setupPrefill}
+          onClose={() => store.setSetupOpen(false)}
+        />
       )}
     </div>
   )

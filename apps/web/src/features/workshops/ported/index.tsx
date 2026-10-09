@@ -28,7 +28,7 @@ import { knownUserKind } from '../../../invite/guest.tsx'
 import { atom, react } from '../../../lib/signals.ts'
 import { providePresentChrome } from '../../present-export/ported/insets.ts'
 import { installAudioUnlock } from '../chime.ts'
-import { spotlightArgs, WORKSHOP_COMMAND_IDS } from '../commands.ts'
+import { spotlightArgs, voteSetupArgs, WORKSHOP_COMMAND_IDS } from '../commands.ts'
 import { timerDisplayPhase, timerRemainingMs } from '../countdown.ts'
 import { followSidOf } from '../follow.ts'
 import { privateStoreFor } from '../private-notes/hooks.ts'
@@ -454,6 +454,17 @@ function mountWorkshops(ctx: Ctx) {
  * elements; no ids means the selection. 'workshops.spotlight-end' ends it (its starter, or an owner).
  */
 const COMMANDS: readonly CommandSpec[] = [
+  {
+    // L5-3: opens the vote setup, prefilled (a run-off on the top N, the coach's pick); no args: its own defaults
+    id: WORKSHOP_COMMAND_IDS.voteSetup,
+    label: 'Start a vote…',
+    keywords: ['poll', 'dot vote', 'run-off', 'ballot'],
+    group: 'Facilitate',
+    enabled: facilitatorHere,
+    run: (ctx, _source, args) => {
+      storeFor(ctx).openSetup(voteSetupArgs(args))
+    },
+  },
   {
     id: WORKSHOP_COMMAND_IDS.spotlight,
     label: 'Spotlight for everyone',

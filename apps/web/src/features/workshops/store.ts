@@ -43,6 +43,7 @@ import {
   WorkshopVoteState,
 } from '@draftroom/contracts'
 import type { z } from 'zod'
+import type { VoteSetupArgs } from './commands.ts'
 import { ReactionThrottle } from './reactions.ts'
 import { localCastCheck, optimisticBallot, type PendingCast } from './voting.ts'
 
@@ -79,6 +80,8 @@ export interface WorkshopSnapshot {
   summonedBy: { userId: string; name: string } | null
   /** The vote setup dialog is open (it can be opened from the top bar or the panel). */
   setupOpen: boolean
+  /** L5-3: what the open dialog starts from (a run-off's objects, the coach's scope), or null: its own defaults */
+  setupPrefill: VoteSetupPrefill | null
   /** Increments each time the timer reaches zero in this tab (drives the visual alert). */
   alertSeq: number
   /**
@@ -108,6 +111,15 @@ export interface WorkshopSnapshot {
   spotlightHidden: boolean
   /** L5-2: the last spotlight that ended in front of this tab, and why (a notice; null before any) */
   spotlightEnded: SpotlightEnded | null
+}
+
+/**
+ * L5-3: what the vote setup dialog opens with: the command's args (workshops.vote.setup, ./commands.ts), plus a
+ * title and a number of votes when the caller knows better than the dialog's defaults (a run-off).
+ */
+export interface VoteSetupPrefill extends VoteSetupArgs {
+  readonly title?: string
+  readonly votesPerPerson?: number
 }
 
 /** A spotlight that ended while this tab had the board open. */
@@ -247,6 +259,9 @@ export class WorkshopStore {
   private hiddenResults = new Set<string>()
   private readonly memo = new Map<string, Participation>()
   private setupOpen = false
+  private setupPrefill: VoteSetupPrefill | null = null
+  /** L5-3: the last vote this tab saw revealed, kept when a newer vote opens (lastRevealedResults) */
+  private lastRevealed: LastRevealedResults | null = null
   private alertSeq = 0
   private resultsNews: WorkshopSnapshot['resultsNews'] = null
   private newsSeq = 0
@@ -338,6 +353,13 @@ export class WorkshopStore {
 
   private compute(): WorkshopSnapshot {
     const vote = this.state?.vote ?? null
+    // L5-3: a revealed vote is remembered, so a newer vote opening does not take its results away
+    if (vote?.session.status === 'revealed' && vote.results)
+      this.lastRevealed = {
+        sessionId: vote.session.id,
+        participants: vote.participants,
+        results: vote.results.map((r) => ({ ref: r.shapeId, count: r.count, rank: r.rank })),
+      }
     const sid = vote?.session.id
     return {
       loaded: this.loaded,
@@ -350,6 +372,7 @@ export class WorkshopStore {
       showResults: sid ? !this.hiddenResults.has(sid) : true,
       summonedBy: this.summoned,
       setupOpen: this.setupOpen,
+      setupPrefill: this.setupOpen ? this.setupPrefill : null,
       alertSeq: this.alertSeq,
       resultsNews: this.resultsNews && this.resultsNews.sessionId === sid ? this.resultsNews : null,
       announcement: this.announcement,
@@ -984,7 +1007,20 @@ export class WorkshopStore {
   setSetupOpen(open: boolean) {
     if (this.setupOpen === open) return
     this.setupOpen = open
+    if (!open) this.setupPrefill = null
     this.emit()
+  }
+
+  /** L5-3: opens the vote setup dialog started from `prefill` (null: its own defaults). */
+  openSetup(prefill: VoteSetupPrefill | null) {
+    this.setupPrefill = prefill
+    this.setupOpen = true
+    this.emit()
+  }
+
+  /** L5-3: the results of the last revealed vote this tab saw, or null (see lastRevealedResults). */
+  lastRevealedResults(): LastRevealedResults | null {
+    return this.lastRevealed
   }
 
   raiseTimerAlert() {
@@ -1078,16 +1114,11 @@ export interface LastRevealedResults {
 /**
  * The results of the most recent revealed vote of the board whose event stream is `events` (the board's
  * `ctx.events`), as this tab's workshop store holds them, or null: no store yet (the workshops feature has not
- * loaded on this board), or the board's current vote is not revealed. It never fetches and never creates a
- * store. Foundation body: the store's current vote when it is revealed; W5 keeps the last revealed one even
- * after a newer vote opens.
+ * loaded on this board), or this tab has not seen a vote revealed. It never fetches and never creates a store.
+ * The last revealed vote stays after a newer vote opens (a coach's "vote-weighted action items" and a sort by
+ * votes are asked for right when the next vote may already be open); a board opened with a newer vote already
+ * open knows only what this tab saw.
  */
 export function lastRevealedResults(events: object): LastRevealedResults | null {
-  const vote = stores.get(events)?.getSnapshot().vote
-  if (vote?.session.status !== 'revealed' || !vote.results) return null
-  return {
-    sessionId: vote.session.id,
-    participants: vote.participants,
-    results: vote.results.map((r) => ({ ref: r.shapeId, count: r.count, rank: r.rank })),
-  }
+  return stores.get(events)?.lastRevealedResults() ?? null
 }

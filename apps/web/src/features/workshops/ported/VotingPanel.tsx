@@ -7,7 +7,7 @@ import {
   type VoteSessionSummary,
   type WorkshopVoteState,
 } from '@draftroom/contracts'
-import { useCallback, useEffect, useId, useMemo, useState } from 'react'
+import { type CSSProperties, type ReactNode, useCallback, useEffect, useId, useMemo, useState } from 'react'
 import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { formatDateTime } from '../../../lib/format.ts'
 import { useValue } from '../../../lib/signals.ts'
@@ -18,6 +18,7 @@ import { useIsFacilitator, useNow, useWorkshop } from '../workshop-context.ts'
 import { zoomToBounds } from './camera.ts'
 import { elementIdOf, labelOfRef, typeNameOfRef } from './elements.ts'
 import { useExportAllowed } from './export-gate.ts'
+import { gatherWinners, resultsToBoard, runOffPrefill } from './vote-board.ts'
 import { selectionText } from './voting-canvas.ts'
 
 type Ctx = CanvasFeatureContext
@@ -356,6 +357,7 @@ function CurrentVote({
             totalVotes={vote.totalVotesCast}
             participants={vote.participants}
             testId="vote-results"
+            actions={facilitator ? <ResultsActions ctx={ctx} store={store} vote={vote} /> : null}
           />
         </>
       )}
@@ -403,6 +405,7 @@ function Results({
   totalVotes,
   participants,
   testId,
+  actions = null,
 }: {
   ctx: Ctx
   title: string
@@ -410,10 +413,14 @@ function Results({
   totalVotes: number
   participants: number
   testId: string
+  /** L5-3: what a facilitator can do with the results (the current vote only) */
+  actions?: ReactNode
 }) {
   const [all, setAll] = useState(false)
   const top = useMemo(() => topResults(results, 3), [results])
   const shown = all ? results : top
+  // L5-3: the ranking is a bar chart: each row's bar is as long as its count says over the top result's
+  const most = Math.max(1, ...results.map((r) => r.count))
   // export-control: a UI gate only (./export-gate.ts).
   const canExport = useExportAllowed(ctx)
   const csvOffId = useId()
@@ -430,11 +437,25 @@ function Results({
         {totalVotes} vote{totalVotes === 1 ? '' : 's'} from {participants}{' '}
         {participants === 1 ? 'person' : 'people'}
       </p>
-      <ol className="dr-wk-rank">
-        {shown.map((r) => {
+      <ol className="dr-wk-rank dr-wk-rank--chart" data-testid="vote-chart" data-bars={shown.length}>
+        {shown.map((r, i) => {
           const d = describeRef(canvas, r.shapeId)
           return (
-            <li key={r.shapeId} data-testid="vote-result-row" data-shape-id={r.shapeId} data-rank={r.rank}>
+            <li
+              key={r.shapeId}
+              data-testid="vote-result-row"
+              data-shape-id={r.shapeId}
+              data-rank={r.rank}
+              style={{ '--dr-wk-i': i } as CSSProperties}
+            >
+              <span
+                className="dr-wk-rank__bar"
+                data-testid="vote-result-bar"
+                data-count={r.count}
+                data-share={Math.round((r.count / most) * 1000) / 10}
+                style={{ width: `${(r.count / most) * 100}%` }}
+                aria-hidden="true"
+              />
               <span className={`dr-wk-rank__place${r.rank <= 3 ? ' dr-wk-rank__place--top' : ''}`}>
                 {MEDALS[r.rank - 1] ?? `${r.rank}th`}
               </span>
@@ -486,6 +507,107 @@ function Results({
           {EXPORT_DISABLED_MESSAGE}
         </p>
       )}
+      {actions}
+    </div>
+  )
+}
+
+// ---- what to do with the results (L5-3) ---------------------------------------------------------------------------
+
+const TOP_CHOICES = [1, 2, 3, 4, 5, 8, 10]
+
+/**
+ * After the reveal, while the room is still engaged: put the results on the board as a chart, gather the
+ * winners in a "Top ideas" frame (copies, or the originals moved), or start a run-off vote on them. Each is one
+ * undo step. Facilitators only (it writes to the board); the ballots behind the numbers were never anyone's to see.
+ */
+function ResultsActions({ ctx, store, vote }: { ctx: Ctx; store: WorkshopStore; vote: WorkshopVoteState }) {
+  const [n, setN] = useState(3)
+  const [move, setMove] = useState(false)
+  const results = vote.results ?? []
+  const options = TOP_CHOICES.filter((c) => c <= Math.max(3, results.length))
+  const notify = (text: string, testId: string) =>
+    ctx.notify({ key: 'vote-actions', text, testId, timeoutMs: 5000 })
+  if (results.length === 0 || ctx.canvas.readOnly()) return null
+  const plural = (c: number, one: string) => `${c} ${one}${c === 1 ? '' : 's'}`
+
+  const toBoard = () => {
+    const out = resultsToBoard(ctx.canvas, vote)
+    notify(
+      out
+        ? `The results are on the board: a chart of ${plural(out.bars, 'result')}. Ctrl+Z takes it back.`
+        : 'There is nothing to chart.',
+      'vote-chart-toast',
+    )
+  }
+  const gather = () => {
+    const out = gatherWinners(ctx.canvas, vote, { n, move })
+    if (!out?.frameId) {
+      notify('There is nothing to gather: the top ideas are gone, locked or frames.', 'vote-gather-toast')
+      return
+    }
+    const left = out.skipped.gone + out.skipped.frames + out.skipped.locked
+    const verb = move ? 'moved' : 'gathered'
+    notify(
+      `${plural(out.gathered, 'idea')} ${verb} into “Top ideas”.${
+        left ? ` ${plural(left, 'result')} could not be ${verb} (locked, a frame or gone).` : ''
+      } Ctrl+Z takes it back.`,
+      'vote-gather-toast',
+    )
+  }
+  const runOff = () => {
+    const prefill = runOffPrefill(ctx.canvas, vote, n)
+    if (!prefill) {
+      notify('A run-off needs at least two of the top ideas to still be on the board.', 'vote-runoff-toast')
+      return
+    }
+    store.openSetup(prefill)
+  }
+  return (
+    <div className="dr-wk-after" data-testid="vote-after">
+      <p className="dr-wk-after__title">Use the results</p>
+      <div className="dr-wk-row">
+        <button
+          type="button"
+          className="dr-btn dr-btn--sm dr-btn--primary"
+          data-testid="vote-results-to-board"
+          onClick={toBoard}
+        >
+          Results to board
+        </button>
+      </div>
+      <div className="dr-wk-row">
+        <label className="dr-wk-after__top">
+          Top{' '}
+          <select
+            className="dr-select"
+            data-testid="vote-top-n"
+            value={n}
+            onChange={(e) => setN(Number(e.target.value))}
+          >
+            {options.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button type="button" className="dr-btn dr-btn--sm" data-testid="vote-gather" onClick={gather}>
+          Gather the winners
+        </button>
+        <button type="button" className="dr-btn dr-btn--sm" data-testid="vote-runoff" onClick={runOff}>
+          Run-off vote
+        </button>
+      </div>
+      <label className="dr-wk-check">
+        <input
+          type="checkbox"
+          data-testid="vote-gather-move"
+          checked={move}
+          onChange={(e) => setMove(e.target.checked)}
+        />
+        Move the originals instead of copying them
+      </label>
     </div>
   )
 }
