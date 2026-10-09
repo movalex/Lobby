@@ -191,33 +191,58 @@ function MoreIcon() {
   )
 }
 
+/** What the bar draws now: the selection, where, and the items it holds (null: no bar). */
+export interface SelectionBarView {
+  readonly sel: string
+  readonly ids: readonly string[]
+  readonly cx: number
+  readonly vw: number
+  readonly vh: number
+  readonly y: number
+  readonly items: readonly SelectionBarItemSpec[]
+}
+
+/**
+ * The bar's view (reactive: read inside `useValue`). Wave K.1 (with K7, follow-up 9): each item's `visible` is
+ * evaluated here, inside the selector, so whatever it reads (K7's AI status arriving after an idle moment, a role
+ * change) re-renders the bar. It was evaluated only at render: a read-only person who selected before the AI
+ * status landed got no AI button until they selected again.
+ */
+export function selectionBarView(ctx: CanvasFeatureContext): SelectionBarView | null {
+  const { canvas } = ctx
+  const state = uxState(canvas)
+  const ids = canvas.selection
+  if (!ids.length || canvas.editingId() !== null) return null
+  // the style panel opened from the phone toolbar's Styles button covers the board's lower half
+  if (state.stylesOpen.get()) return null
+  const g = canvas.gesture()
+  if (g !== 'idle' && g !== 'pressing' && g !== 'tool') return null
+  const b = canvas.boundsOf(ids)
+  if (!b) return null
+  const vp = canvas.viewport.screenRect()
+  const bottom = canvas.sceneToOverlay({ x: b.x + b.width / 2, y: b.y + b.height })
+  const top = canvas.sceneToOverlay({ x: b.x + b.width / 2, y: b.y })
+  if (bottom.y < 0 || top.y > vp.height || bottom.x < -200 || bottom.x > vp.width + 200) return null
+  const items = ctx.registries
+    .sorted(ctx.registries.selectionBar)
+    .filter((i) => (i.visible ? i.visible(ctx, ids) : true))
+  if (!items.length) return null
+  // clear of the board menu and style panel at the top and the toolbar at the bottom
+  const safeTop = 60
+  const safeBottom = vp.height - 100
+  let y = bottom.y + 14
+  if (y + 40 > safeBottom) {
+    y = top.y - 54
+    if (y < safeTop) y = Math.max(safeTop, Math.min(safeBottom - 40, bottom.y - 54))
+  }
+  return { sel: ids.join(' '), ids, cx: bottom.x, vw: vp.width, vh: vp.height, y, items }
+}
+
 export function SelectionBar({ ctx }: { ctx: CanvasFeatureContext }) {
   const { canvas } = ctx
   const state = uxState(canvas)
   const ref = useRef<HTMLDivElement>(null)
-  const view = useValue('cux-selbar', () => {
-    const ids = canvas.selection
-    if (!ids.length || canvas.editingId() !== null) return null
-    // the style panel opened from the phone toolbar's Styles button covers the board's lower half
-    if (state.stylesOpen.get()) return null
-    const g = canvas.gesture()
-    if (g !== 'idle' && g !== 'pressing' && g !== 'tool') return null
-    const b = canvas.boundsOf(ids)
-    if (!b) return null
-    const vp = canvas.viewport.screenRect()
-    const bottom = canvas.sceneToOverlay({ x: b.x + b.width / 2, y: b.y + b.height })
-    const top = canvas.sceneToOverlay({ x: b.x + b.width / 2, y: b.y })
-    if (bottom.y < 0 || top.y > vp.height || bottom.x < -200 || bottom.x > vp.width + 200) return null
-    // clear of the board menu and style panel at the top and the toolbar at the bottom
-    const safeTop = 60
-    const safeBottom = vp.height - 100
-    let y = bottom.y + 14
-    if (y + 40 > safeBottom) {
-      y = top.y - 54
-      if (y < safeTop) y = Math.max(safeTop, Math.min(safeBottom - 40, bottom.y - 54))
-    }
-    return { sel: ids.join(' '), ids, cx: bottom.x, vw: vp.width, vh: vp.height, y }
-  }, [canvas])
+  const view = useValue('cux-selbar', () => selectionBarView(ctx), [ctx])
   const [size, setSize] = useState({ half: 150, h: 38 })
   // K2-7: the style panel's box (it opens for the same selection, at the top right), to step aside for it
   const [panel, setPanel] = useState<OverlayRect | null>(null)
@@ -261,10 +286,7 @@ export function SelectionBar({ ctx }: { ctx: CanvasFeatureContext }) {
       ?.focus({ focusVisible: true } as FocusOptions)
   }, [focusTick])
   if (!view) return null
-  const items = ctx.registries
-    .sorted(ctx.registries.selectionBar)
-    .filter((i) => (i.visible ? i.visible(ctx, view.ids) : true))
-  if (!items.length) return null
+  const { items } = view
   const main = items.filter((i) => i.order < ARRANGE_ROW_FROM)
   const arrange = items.filter((i) => i.order >= ARRANGE_ROW_FROM)
   const under = size.h > 44 ? Math.max(60, Math.min(view.y, view.vh - 100 - size.h)) : view.y

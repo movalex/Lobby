@@ -47,7 +47,13 @@ function anchorAtPoint(canvas: LobbyCanvas, scene: { x: number; y: number }): Ai
 function anchorAtElement(canvas: LobbyCanvas, el: HTMLElement): AiMenuState['at'] {
   const c = canvas.container()?.getBoundingClientRect() ?? { left: 0, top: 0 }
   const r = el.getBoundingClientRect()
-  return { x: r.left + r.width / 2 - c.left, top: r.top - c.top, bottom: r.bottom - c.top }
+  // wave K.1: the popover keeps clear of the whole selection bar the button is in (its More row included)
+  const bar = el.closest('[data-testid="selection-bar"]')?.getBoundingClientRect() ?? r
+  return {
+    x: r.left + r.width / 2 - c.left,
+    top: Math.min(r.top, bar.top) - c.top,
+    bottom: Math.max(r.bottom, bar.bottom) - c.top,
+  }
 }
 
 const enabledOn = (canvas: LobbyCanvas) => aiStatus(canvas).get()?.enabled === true

@@ -35,6 +35,13 @@
 }
 
 /* ---- popover ------------------------------------------------------------------------------------ */
+/* wave K.1: the popover's max-height is set where it is placed (./ported/placement.ts); taller content scrolls
+   inside it (the CSS cap is the fallback before the first placement) */
+.dr-ai-pop {
+  max-height: calc(100% - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .dr-ai-pop,
 .dr-ai-panel {
   position: absolute;

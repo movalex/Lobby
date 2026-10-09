@@ -30,6 +30,7 @@ import {
 } from './actions.ts'
 import { canBuildWithAi } from './gate.ts'
 import { AiFlash, AiShimmer } from './Placeholders.tsx'
+import { type PopPlacement, placeAiPopover } from './placement.ts'
 import {
   ACTION_LABELS,
   type AiMenuState,
@@ -75,25 +76,26 @@ function useIsolated<T extends HTMLElement>(onKey?: (e: KeyboardEvent) => void) 
   return ref
 }
 
-const EDGE = 12
-
-/** Below the anchor when it fits, else above; always inside the canvas. */
+/**
+ * Below the anchor when it fits, else above, else on the roomier side scrolling inside a max-height; always inside
+ * the canvas and never over its anchor while there is room (wave K.1, ./placement.ts).
+ */
 function usePlacement(canvas: LobbyCanvas, at: AiMenuState['at'], ref: React.RefObject<HTMLElement | null>) {
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
+  const [pos, setPos] = useState<PopPlacement | null>(null)
   useLayoutEffect(() => {
     const el = ref.current
     const box = canvas.container()?.getBoundingClientRect()
     if (!el || !box) return
-    const w = el.offsetWidth
-    const h = el.offsetHeight
-    const left = Math.max(EDGE, Math.min(box.width - w - EDGE, at.x - w / 2))
-    const below = at.bottom + 10
-    const above = at.top - 10 - h
-    const top =
-      below + h <= box.height - EDGE || above < 56
-        ? Math.max(56, Math.min(below, box.height - h - EDGE))
-        : above
-    if (!pos || Math.abs(pos.left - left) > 0.5 || Math.abs(pos.top - top) > 0.5) setPos({ left, top })
+    // the content's own height (scrollHeight is not capped by the max-height a previous pass set), with borders
+    const h = el.scrollHeight + (el.offsetHeight - el.clientHeight)
+    const next = placeAiPopover({ box, at, w: el.offsetWidth, h })
+    if (
+      !pos ||
+      Math.abs(pos.left - next.left) > 0.5 ||
+      Math.abs(pos.top - next.top) > 0.5 ||
+      Math.abs(pos.maxHeight - next.maxHeight) > 0.5
+    )
+      setPos(next)
   })
   return pos
 }
@@ -198,7 +200,11 @@ function AiPopover({ menu }: { menu: AiMenuState }) {
       aria-labelledby={titleId}
       data-testid="ai-menu"
       data-view={menu.view}
-      style={pos ? { left: pos.left, top: pos.top } : { visibility: 'hidden', left: 0, top: 0 }}
+      style={
+        pos
+          ? { left: pos.left, top: pos.top, maxHeight: pos.maxHeight }
+          : { visibility: 'hidden', left: 0, top: 0 }
+      }
     >
       {menu.view === 'menu' && <MenuView menu={menu} titleId={titleId} onClose={() => close(true)} />}
       {menu.view === 'ideas' && <IdeasView menu={menu} titleId={titleId} onClose={() => close(true)} />}

@@ -18,8 +18,10 @@ import {
   sceneToScreen,
   screenToScene,
   select,
+  selection,
   viewport,
   waitForCanvas,
+  waitForItem,
 } from '../tests/support/canvas.ts'
 import { pressRedo, pressUndo } from '../tests/support/excalidraw.ts'
 import {
@@ -689,3 +691,94 @@ test('With a normal browser the status is read once, soon after the board is liv
     await context.close()
   }
 })
+
+// Wave K.1 (K7 with K2, follow-up 9): the selection bar reads each item's `visible` inside its selector, so the AI
+// button comes when the status does. Before, a read-only person who selected before the status read (it waits for
+// an idle moment, K7-4) got a bar without it (for a viewer: no bar at all) until they selected again.
+test('K.1: a viewer who selects a note before the AI status is known gets the AI button when it arrives, without selecting again', async ({
+  browser,
+  board,
+  users,
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  const note = await noteInView(a.page, 'Summarise me')
+  await expectSaved(a.page)
+  const carol = await users.grant(board, 'carol', 'viewer')
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
+  await signInContext(context, carol.handle, carol.name)
+  // never idle until the test says so: the status read waits (K7-4)
+  await context.addInitScript(() => {
+    const held: ((d: unknown) => void)[] = []
+    const w = window as unknown as Record<string, unknown>
+    w.requestIdleCallback = (cb: (d: unknown) => void) => held.push(cb)
+    w.cancelIdleCallback = () => undefined
+    w.__releaseIdle = () => {
+      for (const cb of held.splice(0)) cb({ didTimeout: false, timeRemaining: () => 50 })
+    }
+  })
+  const page = await context.newPage()
+  try {
+    await page.goto(`/b/${board}`)
+    await waitForCanvas(page)
+    await waitForItem(page, note)
+    await select(page, [note])
+    await page.waitForTimeout(300)
+    await expect(aiButton(page)).toHaveCount(0)
+    // the status arrives (enabled for a viewer: summaries); the selection is unchanged
+    await page.evaluate(() => (window as never as { __releaseIdle(): void }).__releaseIdle())
+    await expect(aiButton(page)).toBeVisible()
+    expect(await selection(page)).toEqual([note])
+  } finally {
+    await context.close()
+  }
+})
+
+// Wave K.1 (follow-up 8): the AI popover has a max-height and scrolls inside it; it never sits under the selection
+// bar it opened from, nor runs off a short window.
+for (const size of [
+  { width: 1280, height: 520 },
+  { width: 900, height: 440 },
+])
+  test(`K.1: on a ${size.width}×${size.height} window the AI popover stays inside the canvas and off the selection bar, scrolling inside`, async ({
+    canvasSession,
+  }) => {
+    const a = await canvasSession('alice')
+    await a.page.setViewportSize(size)
+    const note = await noteInView(a.page, 'Launch trailer', { fx: 0.45, fy: 0.35 })
+    await expectSaved(a.page)
+    await select(a.page, [note])
+    await expect(aiButton(a.page)).toBeVisible({ timeout: 15_000 })
+    const menu = await openAiMenu(a.page)
+    await expect(menu).toHaveCSS('visibility', 'visible')
+    const boxes = await a.page.evaluate(() => {
+      const r = (sel: string) => {
+        const b = document.querySelector(sel)?.getBoundingClientRect()
+        return b ? { x: b.x, y: b.y, w: b.width, h: b.height } : null
+      }
+      const pop = document.querySelector<HTMLElement>('[data-testid="ai-menu"]')
+      return {
+        pop: r('[data-testid="ai-menu"]'),
+        bar: r('[data-testid="selection-bar"]'),
+        canvas: r('[data-lobby-board-canvas]'),
+        scrolls: pop ? pop.scrollHeight > pop.clientHeight + 1 : false,
+        overflowY: pop ? getComputedStyle(pop).overflowY : null,
+      }
+    })
+    const { pop, bar, canvas } = boxes
+    if (!pop || !bar || !canvas) throw new Error(`missing box: ${JSON.stringify(boxes)}`)
+    // inside the canvas, top and bottom
+    expect(pop.y).toBeGreaterThanOrEqual(canvas.y)
+    expect(pop.y + pop.h).toBeLessThanOrEqual(canvas.y + canvas.h + 0.5)
+    // never over the selection bar
+    const overlap =
+      pop.y < bar.y + bar.h && bar.y < pop.y + pop.h && pop.x < bar.x + bar.w && bar.x < pop.x + pop.w
+    expect(overlap, JSON.stringify(boxes)).toBe(false)
+    // what does not fit scrolls inside it
+    expect(boxes.overflowY).toBe('auto')
+    // every action can still be reached: the last one scrolls into view and is clickable
+    const items = menu.getByRole('menuitem')
+    const last = items.last()
+    await last.scrollIntoViewIfNeeded()
+    await expect(last).toBeInViewport()
+  })
