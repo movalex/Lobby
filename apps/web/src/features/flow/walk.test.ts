@@ -109,6 +109,13 @@ describe('Alt+Arrow along the connections', () => {
   it('selectAdjacent follows the noted arrow once; without one (or with no connection that way) it is the reading order', () => {
     const f = board()
     const canvas = f.canvas as LobbyCanvas
+    // the reading order's next after Process is not Decision (the connection below it)
+    const reading0 = selectionLevel(canvas).order.map((e) => e.ids[0])
+    expect(reading0[(reading0.indexOf('process') + 1) % reading0.length]).not.toBe('decision')
+    canvas.select(['process'])
+    noteWalkKey(canvas, 'ArrowDown')
+    expect(selectAdjacent(canvas, 'next')).toBe(true)
+    expect(f.selected).toEqual(['decision'])
     canvas.select(['process'])
     noteWalkKey(canvas, 'ArrowRight')
     expect(selectAdjacent(canvas, 'next')).toBe(true)
