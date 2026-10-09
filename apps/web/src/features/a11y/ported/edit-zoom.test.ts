@@ -29,6 +29,7 @@ function fakeCanvas(init: {
   let editing: string | null = null
   let moving = false
   const listeners = new Set<(id: string | null) => void>()
+  const resizeListeners = new Set<() => void>()
   const sets: { v: Partial<Camera>; animate: unknown }[] = []
   const writes: string[] = []
   const boundsOf = init.bounds ?? { n1: NOTE }
@@ -41,6 +42,11 @@ function fakeCanvas(init: {
   })
   const canvas: EditZoomCanvas & Record<string, unknown> = {
     on: ((event: string, fn: (id: string | null) => void) => {
+      if (event === 'resize') {
+        const r = () => fn(null)
+        resizeListeners.add(r)
+        return () => resizeListeners.delete(r)
+      }
       if (event !== 'editingChanged') throw new Error(`unexpected listener ${event}`)
       listeners.add(fn)
       return () => listeners.delete(fn)
@@ -79,8 +85,12 @@ function fakeCanvas(init: {
     setMoving(m: boolean) {
       moving = m
     },
+    /** The canvas changed size (the soft keyboard opened or closed): its `resize` event. */
+    resize() {
+      for (const fn of resizeListeners) fn()
+    },
     camera: () => ({ ...cam }),
-    listeners: () => listeners.size,
+    listeners: () => listeners.size + resizeListeners.size,
   }
 }
 
@@ -307,6 +317,120 @@ describe('installEditZoom', () => {
     installEditZoom(f.canvas, env())
     f.edit('gone')
     expect(f.sets).toEqual([])
+  })
+
+  // K5-1 review: Android Chrome (interactive-widget=resizes-content) shrinks the canvas when the keyboard
+  // opens, often while the 320 ms move is still running. The engine's camera tween keeps the centre fixed
+  // through a resize, so the move ends elsewhere than the target (about 150 screen px for a 300 px keyboard).
+  it('the keyboard resizes the canvas while the move is running: where the move ends counts as its own, and a close still goes back', () => {
+    const f = fakeCanvas({ camera: FIT })
+    installEditZoom(f.canvas, env({ animate: () => true }))
+    f.edit('n1')
+    const target = f.camera()
+    f.setMoving(true)
+    f.resize()
+    // the tween keeps the centre: it ends 150 screen px lower than the target, at the target's zoom
+    f.pan(0, 150 / target.zoom)
+    vi.advanceTimersByTime(100)
+    f.setMoving(false)
+    vi.advanceTimersByTime(200)
+    f.edit(null)
+    vi.advanceTimersByTime(RESTORE_DELAY_MS)
+    expect(f.camera()).toEqual(FIT)
+    expect(f.writes).toEqual([])
+  })
+
+  it('a close right after that resize (the move not settled yet) goes back too', () => {
+    const f = fakeCanvas({ camera: FIT })
+    installEditZoom(f.canvas, env({ animate: () => true }))
+    f.edit('n1')
+    const target = f.camera()
+    f.setMoving(true)
+    f.resize()
+    f.pan(0, 150 / target.zoom)
+    f.setMoving(false)
+    // the editor closes before any poll ran
+    f.edit(null)
+    vi.advanceTimersByTime(RESTORE_DELAY_MS)
+    expect(f.camera()).toEqual(FIT)
+  })
+
+  it('a pan after the resized move settled still counts as the person moving it', () => {
+    const f = fakeCanvas({ camera: FIT })
+    installEditZoom(f.canvas, env({ animate: () => true }))
+    f.edit('n1')
+    const target = f.camera()
+    f.setMoving(true)
+    f.resize()
+    f.pan(0, 150 / target.zoom)
+    f.setMoving(false)
+    vi.advanceTimersByTime(300)
+    f.pan(60, 0)
+    const panned = f.camera()
+    f.edit(null)
+    vi.advanceTimersByTime(RESTORE_DELAY_MS * 4)
+    expect(f.camera()).toEqual(panned)
+  })
+
+  it('a pinch that interrupted the resized move (another zoom) counts as the person moving it', () => {
+    const f = fakeCanvas({ camera: FIT })
+    installEditZoom(f.canvas, env({ animate: () => true }))
+    f.edit('n1')
+    f.setMoving(true)
+    f.resize()
+    f.canvas.viewport.set({ zoom: 0.7 }) // the person's pinch, mid-move
+    f.setMoving(false)
+    vi.advanceTimersByTime(300)
+    const pinched = f.camera()
+    f.edit(null)
+    vi.advanceTimersByTime(RESTORE_DELAY_MS * 4)
+    expect(f.camera()).toEqual(pinched)
+  })
+
+  it('a resize while nothing moves (the engine keeps the top-left) changes nothing: a pan before it still counts', () => {
+    const f = fakeCanvas({ camera: FIT })
+    installEditZoom(f.canvas, env())
+    f.edit('n1')
+    f.pan(40, 0)
+    const panned = f.camera()
+    f.resize()
+    vi.advanceTimersByTime(300)
+    f.edit(null)
+    vi.advanceTimersByTime(RESTORE_DELAY_MS * 4)
+    expect(f.camera()).toEqual(panned)
+  })
+
+  it('the keyboard closes while the move back is running: once it settles the camera is put exactly where it was', () => {
+    const f = fakeCanvas({ camera: FIT })
+    installEditZoom(f.canvas, env({ animate: () => true }))
+    f.edit('n1')
+    f.edit(null)
+    vi.advanceTimersByTime(RESTORE_DELAY_MS)
+    // the move back started (the fake jumps to its end); the canvas grows mid-move: it ends 150 px off
+    expect(f.camera()).toEqual(FIT)
+    f.setMoving(true)
+    f.resize()
+    f.pan(0, -150 / FIT.zoom)
+    f.setMoving(false)
+    vi.advanceTimersByTime(300)
+    expect(f.camera()).toEqual(FIT)
+    expect(f.sets.at(-1)?.animate).toBe(false)
+  })
+
+  it('a resize after the move back finished moves nothing more', () => {
+    const f = fakeCanvas({ camera: FIT })
+    installEditZoom(f.canvas, env({ animate: () => true }))
+    f.edit('n1')
+    f.edit(null)
+    vi.advanceTimersByTime(RESTORE_DELAY_MS)
+    vi.advanceTimersByTime(1000)
+    const n = f.sets.length
+    f.pan(30, 0) // the person pans afterwards
+    f.setMoving(true)
+    f.resize()
+    f.setMoving(false)
+    vi.advanceTimersByTime(1000)
+    expect(f.sets).toHaveLength(n)
   })
 
   it('the uninstaller stops listening and cancels a pending return', () => {

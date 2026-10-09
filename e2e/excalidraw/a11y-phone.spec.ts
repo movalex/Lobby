@@ -322,6 +322,82 @@ test('K5-1: double-tapping a note at fit zoom on a phone zooms the camera so its
   }
 })
 
+// K5 review: Android Chrome (interactive-widget=resizes-content) shrinks the canvas when the soft keyboard
+// opens, often while the 320 ms move is still running; the camera tween keeps the centre fixed through it,
+// so the move ends about 150 px from where it was aimed. The camera must still go back on close, and go back
+// exactly when the keyboard closes during the move back. A viewport resize stands in for the keyboard.
+test('K5-1 (review refix): the keyboard resizing the canvas during the zoom (or during the move back) still puts the camera back where it was', async ({
+  browser,
+  board,
+  users,
+}) => {
+  const a = await openPhoneSession(browser, board, users, 'alice', 'owner', { width: 375, height: 812 })
+  try {
+    const page = a.page
+    const at = { x: 300, y: 700 }
+    const middle = await note(page, at.x, at.y, 'Middle')
+    await note(page, -400, -300, 'Top left')
+    await note(page, 1100, 1700, 'Far')
+    // the first edit may write the label's measured layout (the lease holder's fit): out of the way first
+    await setViewport(page, readableView(at))
+    await editWithoutTyping(page, middle)
+
+    const backAtFit = async (fit: { x: number; y: number; zoom: number }) => {
+      await expect.poll(() => cameraMoving(page)).toBe(false)
+      const v = await viewport(page)
+      expect(v.zoom).toBeCloseTo(fit.zoom, 4)
+      expect(Math.abs(v.x - fit.x) * v.zoom).toBeLessThan(2)
+      expect(Math.abs(v.y - fit.y) * v.zoom).toBeLessThan(2)
+    }
+
+    await test.step('the keyboard opens while the zoom is still moving, then Escape: back at the fit', async () => {
+      await zoomToFit(page)
+      await expect.poll(() => cameraMoving(page)).toBe(false)
+      const fit = await viewport(page)
+      expect(fit.zoom).toBeLessThan(0.6)
+      await expectSaved(page)
+      const pushedBefore = (await pushedOps(page)).length
+      await doubleTap(page, await itemCenterOnScreen(page, middle))
+      await expect.poll(() => editingId(page)).toBe(middle)
+      // 80 ms into the 320 ms move
+      await page.waitForTimeout(80)
+      await page.setViewportSize({ width: 375, height: 512 })
+      await page.waitForTimeout(800)
+      expect((await viewport(page)).zoom).toBeGreaterThanOrEqual(1)
+      await page.keyboard.press('Escape')
+      await expect.poll(() => editingId(page)).toBeNull()
+      await page.waitForTimeout(600)
+      // the keyboard closes once the editor is gone (after the move back)
+      await page.setViewportSize({ width: 375, height: 812 })
+      await page.waitForTimeout(300)
+      await backAtFit(fit)
+      await expectSaved(page)
+      expect((await pushedOps(page)).slice(pushedBefore)).toEqual([])
+    })
+
+    await test.step('the keyboard closes while the move back is running: back exactly at the fit', async () => {
+      await zoomToFit(page)
+      await expect.poll(() => cameraMoving(page)).toBe(false)
+      const fit = await viewport(page)
+      await expectSaved(page)
+      await doubleTap(page, await itemCenterOnScreen(page, middle))
+      await expect.poll(() => editingId(page)).toBe(middle)
+      await expect.poll(() => cameraMoving(page)).toBe(false)
+      await page.setViewportSize({ width: 375, height: 512 })
+      await page.waitForTimeout(400)
+      await page.keyboard.press('Escape')
+      await expect.poll(() => editingId(page)).toBeNull()
+      // 150 ms delay, then a 320 ms move back: the keyboard closes 250 ms after Escape, mid-move
+      await page.waitForTimeout(250)
+      await page.setViewportSize({ width: 375, height: 812 })
+      await page.waitForTimeout(800)
+      await backAtFit(fit)
+    })
+  } finally {
+    await a.context.close()
+  }
+})
+
 test('a viewer on a phone gets Select, Hand, Laser and Comment in the sheet, and no Undo', async ({
   browser,
   board,

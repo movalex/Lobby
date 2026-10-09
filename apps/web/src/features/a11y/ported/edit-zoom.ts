@@ -11,10 +11,19 @@
 // closes the camera goes back to where it was, unless the person moved it meanwhile (a pan or a pinch: the
 // camera is no longer where this put it), and then it stays where they put it.
 //
+// The soft keyboard resizes the canvas (Android Chrome: interactive-widget=resizes-content), often while
+// the move is still running, and the camera tween keeps the CENTRE fixed through a resize, so the move then
+// ends elsewhere than where it was aimed (K5 review: about 150 screen px for a 300 px keyboard). So a resize
+// during this tab's own move re-takes "where this put it" from where that move settles (when it reached the
+// zoom it aimed for: a pinch that interrupted it still counts as the person's), and a resize during the
+// move back puts the camera exactly where it was once that move settles (without animation). A resize while
+// nothing moves keeps the top-left (the engine's own rule) and changes nothing here.
+//
 // This is a camera move and nothing else: `viewport.set` only (scroll and zoom are this tab's own state, never
 // synced), no element is written, so the sync engine pushes nothing for it (k5 spec: a push counter). A move
-// honours reduced motion (./motion.ts) and, like every camera move without `force`, gives way while the
-// person follows someone or presents.
+// honours reduced motion (./motion.ts). Nothing here checks following or presenting: the tap that opens an
+// editor ends a follow (a pointer-down does), and a presenter's own edit zooms the presenter's camera, so
+// the people who follow them see that zoom as they see any other move of the presenter's camera.
 import type { Bounds, LobbyCanvas, Viewport } from '../../../canvas/api/index.ts'
 
 /** A canvas narrower than this (px) counts as a phone, whatever the pointer. */
@@ -33,6 +42,10 @@ export const EDIT_TOP_PX = 56
 export const RESTORE_DELAY_MS = 150
 /** How far (screen px) the camera may be from where this put it and still count as not moved by the person. */
 export const MOVED_PX = 2
+/** After a resize during a camera move, how often (ms) to look whether the move has settled. */
+export const SETTLE_POLL_MS = 50
+/** And for how long at most (ms): a camera that never settles keeps the plain rule. */
+export const SETTLE_MAX_MS = 3000
 
 /** The canvas members edit-zoom uses (a fake one in edit-zoom.test.ts). */
 export interface EditZoomCanvas {
@@ -112,9 +125,14 @@ export function editCamera(input: {
   return { x: cx - W / 2 / zoom, y: cy - centreY / zoom, zoom }
 }
 
+/** The two zooms are the same (a move that reached the zoom it aimed for). */
+const sameZoom = (a: Camera, b: Camera): boolean => Math.abs(a.zoom - b.zoom) <= 1e-3 * Math.max(1, b.zoom)
+
+const cameraOf = (v: Camera): Camera => ({ x: v.x, y: v.y, zoom: v.zoom })
+
 /** The camera is (within MOVED_PX on screen) where `target` put it. */
 export function sameCamera(now: Camera, target: Camera): boolean {
-  if (Math.abs(now.zoom - target.zoom) > 1e-3 * Math.max(1, target.zoom)) return false
+  if (!sameZoom(now, target)) return false
   return (
     Math.abs(now.x - target.x) * now.zoom <= MOVED_PX && Math.abs(now.y - target.y) * now.zoom <= MOVED_PX
   )
@@ -128,6 +146,53 @@ export function installEditZoom(canvas: EditZoomCanvas, env: EditZoomEnv = brows
   /** Where the camera was before the first edit that moved it, and where this put it. */
   let held: { before: Camera; target: Camera } | null = null
   let restoreTimer: unknown = null
+  /** The canvas resized while this tab's own move towards `held.target` ran: re-take it once it settles. */
+  let heldResized = false
+  /** Where an animated move back is heading while it runs; `restoreResized`: the canvas resized meanwhile. */
+  let restoring: Camera | null = null
+  let restoreResized = false
+  let settleTimer: unknown = null
+
+  /** Re-takes `held.target` from where the camera settled after a resize, when the move reached its zoom. */
+  const rebase = () => {
+    if (!held || !heldResized || canvas.viewport.moving()) return
+    heldResized = false
+    const now = canvas.viewport.get()
+    if (sameZoom(now, held.target)) held = { ...held, target: cameraOf(now) }
+  }
+
+  /** The camera stopped moving: finish what a resize left open. */
+  const settled = () => {
+    rebase()
+    const r = restoring
+    if (!r) return
+    const resized = restoreResized
+    restoring = null
+    restoreResized = false
+    if (resized && sameZoom(canvas.viewport.get(), r)) canvas.viewport.set(r, { animate: false })
+  }
+
+  const cancelSettle = () => {
+    if (settleTimer === null) return
+    env.clearTimeout(settleTimer)
+    settleTimer = null
+  }
+
+  /** Waits (polling `moving()`) for the camera to settle, then runs `settled`. */
+  const watchSettle = () => {
+    if (settleTimer !== null) return
+    let waited = 0
+    const tick = () => {
+      settleTimer = null
+      waited += SETTLE_POLL_MS
+      if (canvas.viewport.moving() && waited < SETTLE_MAX_MS) {
+        settleTimer = env.setTimeout(tick, SETTLE_POLL_MS)
+        return
+      }
+      settled()
+    }
+    settleTimer = env.setTimeout(tick, SETTLE_POLL_MS)
+  }
 
   const cancelRestore = () => {
     if (restoreTimer === null) return
@@ -149,7 +214,11 @@ export function installEditZoom(canvas: EditZoomCanvas, env: EditZoomEnv = brows
     const target = editCamera({ view, screen: rect, bounds: b, coarse: env.coarse(), limits })
     if (!target) return
     // a second edit right after the first: the camera still goes back to where it was before the first
-    const before = held ? held.before : { x: view.x, y: view.y, zoom: view.zoom }
+    // (also while the move back to it is still running)
+    const before = held ? held.before : (restoring ?? cameraOf(view))
+    restoring = null
+    restoreResized = false
+    heldResized = false
     canvas.viewport.set(target, { animate: env.animate() })
     held = { before, target }
   }
@@ -158,18 +227,40 @@ export function installEditZoom(canvas: EditZoomCanvas, env: EditZoomEnv = brows
     const h = held
     held = null
     if (!h) return
+    // a resize during its own move that has settled since: where that move ended is where this put it
+    let target = h.target
+    if (heldResized && !canvas.viewport.moving()) {
+      const now = canvas.viewport.get()
+      if (sameZoom(now, target)) target = cameraOf(now)
+    }
+    heldResized = false
     // still animating towards where this put it: the person has not moved it
     const moving = canvas.viewport.moving()
-    if (!moving && !sameCamera(canvas.viewport.get(), h.target)) return
+    if (!moving && !sameCamera(canvas.viewport.get(), target)) return
     if (moving) canvas.viewport.stop()
-    canvas.viewport.set(h.before, { animate: env.animate() })
+    const animate = env.animate()
+    canvas.viewport.set(h.before, { animate })
+    if (!animate) return
+    // the keyboard may close during the move back: `settled` then puts it exactly where it was
+    restoring = h.before
+    restoreResized = false
+    watchSettle()
   }
+
+  const offResize = canvas.on('resize', () => {
+    // a resize while nothing moves keeps the top-left: `held.target` and the move back stay right
+    if (!canvas.viewport.moving()) return
+    if (held) heldResized = true
+    if (restoring) restoreResized = true
+    if (held || restoring) watchSettle()
+  })
 
   const off = canvas.on('editingChanged', (id) => {
     if (id !== null) {
       // another editor opens before the camera went back: keep where it was before the first one
       if (restoreTimer !== null) {
         cancelRestore()
+        rebase()
         if (held && !sameCamera(canvas.viewport.get(), held.target) && !canvas.viewport.moving()) held = null
       }
       open(id)
@@ -188,7 +279,10 @@ export function installEditZoom(canvas: EditZoomCanvas, env: EditZoomEnv = brows
 
   return () => {
     off()
+    offResize()
     cancelRestore()
+    cancelSettle()
     held = null
+    restoring = null
   }
 }
