@@ -2123,8 +2123,8 @@ function InviteLinkSection({
             </button>
           </div>
           <p className="dr-share__hint" role="status" data-testid="invite-created-note">
-            {copyNote(copied, 'Copied to your clipboard. ', 'Copy')}This link is shown only
-            once. {lockedLinkNote(created, formatDateTime)}{' '}
+            {copyNote(copied, 'Copied to your clipboard. ', 'Copy')}This link is shown only once.{' '}
+            {lockedLinkNote(created, formatDateTime)}{' '}
             <button
               type="button"
               className="dr-linkbtn"

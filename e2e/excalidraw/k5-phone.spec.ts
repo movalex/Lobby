@@ -620,7 +620,8 @@ test('K5-4: in the "⋯" menu every item shows its name in words: icon-only ones
       )
     }
     type Row = Awaited<ReturnType<typeof menuRows>>[number]
-    const shown = (r: Row) => [pseudoText(r.before), r.own, pseudoText(r.after)].filter(Boolean).join(' ').trim()
+    const shown = (r: Row) =>
+      [pseudoText(r.before), r.own, pseudoText(r.after)].filter(Boolean).join(' ').trim()
     const check = (rows: Row[]) => {
       expect(rows.length).toBeGreaterThanOrEqual(4)
       for (const r of rows) {
