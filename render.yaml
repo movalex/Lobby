@@ -138,12 +138,9 @@ services:
         name: Cache-Control
         value: public, max-age=604800
     envVars:
-      # Unused since the Excalidraw cut-over (2026-10-01): the current build ignores it. Its Dashboard value
-      # is kept only so that a rollback can still rebuild the bridge release R0 (tag lobby-r0). Remove this
-      # entry and the Dashboard value together at drop-legacy (docs/EXCALIDRAW-CUTOVER.md D7). Never add
-      # VITE_LOBBY_ENGINE back: the switch is gone from the web build.
-      - key: VITE_TLDRAW_LICENSE_KEY
-        sync: false
+      # VITE_TLDRAW_LICENSE_KEY was removed here and from the Dashboard at drop-legacy (2026-10-09,
+      # docs/EXCALIDRAW-CUTOVER.md D7): R0 can no longer be rebuilt or served. Never add VITE_LOBBY_ENGINE
+      # back: the switch is gone from the web build.
       # Static-site rewrites do not proxy WebSockets, so the board socket goes straight to the sync
       # service's public URL (apps/web/src/board/ticket.ts; the ticket authenticates, no cookie needed).
       # Inlined at build time: a hostname change needs a static-site REBUILD. Must match the sync

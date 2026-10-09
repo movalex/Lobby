@@ -299,3 +299,20 @@ on the sync disk (§6).
     - Trashing the board ended the guest's access at once.
     - Not checkable live without a second real account: the External tag, the owner's first-join bell item (both for outside ACCOUNTS) and a plain editor's refused move-out. The api and e2e suites cover them.
   - Cleanup: both test links revoked, the board in Trash, the test project archived; the test feedback stays in the inbox as Done.
+- **2026-10-09 08:43-08:50Z, D7 drop-legacy done** (owner's standing OK of 2026-10-01; full takeover 2026-10-08). The run was in the quiet window, after checking that no board had more than one idle client in the last 90 minutes.
+  - Checks before:
+    - 7 clean days: since the switch (2026-10-01 20:56Z), only the 8 deploys appear as events (no rollback, restart or OOM), and api and sync have 0 error/FATAL lines.
+    - Backups: `failuresTotal` 0, last pass 08:31Z.
+    - The C5 set is still in R2 (4 boards, 4 objects, held to 2026-12-30), listed with the sync's own R2 settings in memory.
+  - Maintenance on (`closedSockets` 1). A fresh run-all under maintenance: `run_94bd324df7f52cd1`, ok, `inMaintenance` true, 18 of 18 boards offsite in R2, held to 2027-01-07. Maintenance off.
+  - Runbook fix: the sync refuses drop-legacy while maintenance is on (503 MAINTENANCE; only `convert-all` is exempt, apps/sync/src/http/router.ts). It runs live by design, one board at a time in the migration worker.
+  - The dry run, then the real run: 4 boards dropped 7 tables each (the 4 converted at the switch), 14 had nothing to drop (born on the new canvas), 0 refused, 0 failed.
+    | Board | Before (bytes) | After (bytes) |
+    |---|---|---|
+    | b-0gazyr0d3e | 233,472 | 110,592 |
+    | b-7gw2v3e61a | 253,952 | 118,784 |
+    | b-e7mx42m5yt | 122,880 | 53,248 |
+    | b-esfzg8j7zo | 360,448 | 221,184 |
+  - Proof: a forced run-all after the drop (`run_9288733e98f7eba5`) left 14 boards' record digests identical. For the 4 converted boards, the backups from before and after were downloaded and compared table by table: `lb_meta`, `lb_elements`, `lb_doc`, `lb_deleted` and `lb_receipts` are identical, and the legacy tables went from 6 to 0. Their whole-file `recordsSha256` changed only because it also covers `lb_source`, which the drop removes by design (the room recreates it empty).
+  - `VITE_TLDRAW_LICENSE_KEY` was removed from the web service (Render API) and from `render.yaml`. A rollback to R0 is no longer possible.
+  - Not done: deleting `/var/data/cutover/` on the sync disk. It needs the sync Shell, and the reports in it are small.
