@@ -124,11 +124,14 @@ test('the facilitator follows the chips: themes, a vote, a reveal, action items 
       })
       expect(r.status(), await r.text()).toBe(201)
     }
-    const state = (await (await a.api.fetch('GET', `/api/boards/${board}/workshop`)).json()) as {
-      vote: { session: { id: string; status: string } }
-    }
-    sid = state.vote.session.id
-    expect(state.vote.session.status).toBe('open')
+    // W5's dialog starts the vote with its own request after the click: wait for the api to hold it
+    type Workshop = { vote: { session: { id: string; status: string } } | null }
+    const readVote = async () =>
+      ((await (await a.api.fetch('GET', `/api/boards/${board}/workshop`)).json()) as Workshop).vote
+    await expect.poll(async () => (await readVote())?.session.status ?? null).toBe('open')
+    const vote = await readVote()
+    sid = vote?.session.id ?? ''
+    expect(vote?.session.status).toBe('open')
     // people are voting: no chip
     await expect(chip(a.page)).toHaveCount(0)
     const cast = async (s: WorkshopCanvasSession, id: string) =>
