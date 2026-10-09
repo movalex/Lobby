@@ -316,3 +316,20 @@ on the sync disk (§6).
   - Proof: a forced run-all after the drop (`run_9288733e98f7eba5`) left 14 boards' record digests identical. For the 4 converted boards, the backups from before and after were downloaded and compared table by table: `lb_meta`, `lb_elements`, `lb_doc`, `lb_deleted` and `lb_receipts` are identical, and the legacy tables went from 6 to 0. Their whole-file `recordsSha256` changed only because it also covers `lb_source`, which the drop removes by design (the room recreates it empty).
   - `VITE_TLDRAW_LICENSE_KEY` was removed from the web service (Render API) and from `render.yaml`. A rollback to R0 is no longer possible.
   - Not done: deleting `/var/data/cutover/` on the sync disk. It needs the sync Shell, and the reports in it are small.
+- **2026-10-09 08:49-08:51Z, wave K deployed** (main `437b4e7`; quiet window): api `dep-db4al4dg1s2s738r08lg`, then web `dep-db4alk7lot8c738d5ebg`. Sync unchanged (`a3e3f4a`), so no board reconnected.
+  - Gate: K.1's complete gate at `da3fefec`.
+    - unit: 6,653 passed;
+    - real PG 18: 1,684 passed;
+    - whole e2e: 725/727 normally, and 724/727 with direct events, whose one failure is a pre-existing flake that also fails on main;
+    - stale-client pair A passed.
+  - The `/excalidraw-assets/*` `Cache-Control: public, max-age=604800` header (K1-6) was added through the Render API. render.yaml drift is 0.
+  - Live smoke: 40 passed, 0 failed. 0 error/FATAL lines afterwards.
+  - Live two-user check (the owner in Brave, a name-only guest in the built-in pane):
+    - The dashboard shows "Start something" with the 6 new templates, the What's new card and the Feedback pill.
+    - A Creative brief board was made from its tile; its top bar has 8 controls.
+    - Vote: the guest saw the "Chase started a vote" banner and joined with one click. The facilitator saw "1 of 1 voted · 1 vote cast", and the results showed with Export CSV.
+    - Present asked "Present to everyone? 1 other person is on this board" with "Just me" and "Present to everyone (1 here)". The guest got "Chase B is presenting · Follow".
+    - Cursor chat: the guest's "/" message showed as a bubble on the owner's page.
+    - The empty-board card shows on a blank board.
+    - Not live-tested: the AI actions. The board's AI privacy notice was not accepted on the owner's behalf; the K7 tests cover them with the fake OpenAI.
+  - Cleanup: the guest link revoked, both test boards in Trash.
