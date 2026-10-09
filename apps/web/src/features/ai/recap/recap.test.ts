@@ -109,7 +109,14 @@ describe('Wrap up', () => {
   it('“Add as Recap frame” is one transact, and one undo removes the frame and everything in it', async () => {
     const k = aiKit(board())
     k.answer(recapAnswer)
-    const plan = (await runRecap(k.ctx, 'session', NOW))?.plan as RecapPlan
+    const plan: RecapPlan = {
+      ...((await runRecap(k.ctx, 'session', NOW))?.plan as RecapPlan),
+      // the run of show (W5 agendaActuals) as the presenter's tab recorded it
+      plannedVsActual: [
+        { name: 'Warm-up', plannedMin: 10, actualMin: 12 },
+        { name: 'Brainstorm', plannedMin: 20, actualMin: 25 },
+      ],
+    }
     const before = JSON.stringify(k.live())
     const steps = k.steps()
     const made = applyRecap(k.canvas, plan, 'usr_ana')
@@ -125,6 +132,24 @@ describe('Wrap up', () => {
     const kinds = inside.map((e) => String((e?.customData as { lobby?: { kind?: string } })?.lobby?.kind))
     expect(kinds).toContain('ai-recap-heading')
     expect(kinds).toContain('ai-recap-item')
+    // planned vs actual: a header row and two rows, each a rectangle with three cells, none of them AI
+    expect(kinds.filter((x) => x === 'recap-table')).toHaveLength(1 + 3 * (1 + 3))
+    const cells = inside.filter(
+      (e) => String((e?.customData as { lobby?: { kind?: string } })?.lobby?.kind) === 'recap-table',
+    )
+    expect(cells.filter((e) => e?.type === 'rectangle')).toHaveLength(3)
+    expect(cells.map((e) => e?.originalText).filter(Boolean)).toEqual(
+      expect.arrayContaining([
+        'Planned vs actual',
+        'Warm-up',
+        '10 min',
+        '12 min',
+        'Brainstorm',
+        '20 min',
+        '25 min',
+      ]),
+    )
+    for (const e of cells) expect(aiOf(e as never)).toBeNull()
     // the room's own results carry no AI provenance
     const vote = inside.find((e) => String(e?.originalText ?? '').startsWith('1. Summer beach screenings'))
     expect(aiOf(vote as never)).toBeNull()
