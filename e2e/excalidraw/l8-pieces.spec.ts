@@ -180,7 +180,9 @@ test('L8-3: a Button dragged from the panel into a frame lands inside it in one 
   })
 })
 
-test('L8-3: a Decision followed by Ctrl+Right makes a connected Process (W4’s flow building, where it is on the page)', async ({
+// The plan's wording was 'a connected Process'; W4's flow rule (L4-1) is that the next shape takes the source's type and
+// style, so a Decision is followed by a connected Decision (Ctrl+Right), as for any other shape.
+test('L8-3: a Decision followed by Ctrl+Right makes the next connected shape, of the source’s type (W4’s flow building)', async ({
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
@@ -201,20 +203,18 @@ test('L8-3: a Decision followed by Ctrl+Right makes a connected Process (W4’s 
       () => true,
       () => false,
     )
-  // E2E_REQUIRE_FLOW=1 (set it once W4's flow building is on the branch, and in the integrator's run): a Decision
-  // that nothing follows is then a failure, not a skip, so a regression in the flow cannot pass as "not here yet"
-  if (process.env.E2E_REQUIRE_FLOW === '1')
-    expect(grew, 'Ctrl+Right after a Decision made no connected shape (W4’s flow building)').toBe(true)
-  else
-    test.skip(!grew, 'W4’s flow building (Ctrl+Right) is not on this branch: nothing to follow the Decision')
+  // W4's flow building is registered since the wave L integration: a Decision that nothing follows is a failure
+  expect(grew, 'Ctrl+Right after a Decision made no connected shape (W4’s flow building)').toBe(true)
   const all = await items(a.page)
   const arrow = all.find((e) => e.type === 'arrow') as CanvasElement & {
     startBinding?: { elementId: string }
     endBinding?: { elementId: string }
   }
-  const diamond = all.find((e) => e.type === 'diamond') as CanvasElement
+  const diamond = all.find((e) => e.type === 'diamond' && !e.isDeleted) as CanvasElement
   expect(arrow.startBinding?.elementId).toBe(diamond.id)
-  expect(all.find((e) => e.id === arrow.endBinding?.elementId)?.type).toBe('rectangle')
+  const next = all.find((e) => e.id === arrow.endBinding?.elementId)
+  expect(next?.id).not.toBe(diamond.id)
+  expect(next?.type).toBe('diamond')
 })
 
 test('L8-3: PNG and SVG exports include the pieces, and nothing leaves Lobby’s own origins', async ({
