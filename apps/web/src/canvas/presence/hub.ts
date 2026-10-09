@@ -137,6 +137,8 @@ export class PresenceHub {
   private laserDown = false
   /** laser samples since the last message (scene points, oldest first) */
   private pendingTrail: PresencePoint[] = []
+  /** the last sample's trail taken (a sample handed over again brings no new points) */
+  private lastTrail: readonly PresencePoint[] | null = null
   /** the other sessions' lasers (CONTRACTS_REV 12) */
   private readonly lasers = new LaserTrails()
   private readonly clock: () => number
@@ -357,7 +359,9 @@ export class PresenceHub {
     const was = this.laserDown
     this.laserDown = this.rev12 && s.button === 'down' && s.pointer !== null && laserToolOn(this.o.core)
     if (!this.laserDown) this.pendingTrail = []
-    else if (was && s.trail?.length) {
+    // the board session re-sends its last sample on a camera move (a fresh `view`): its trail went already
+    else if (was && s.trail?.length && s.trail !== this.lastTrail) {
+      this.lastTrail = s.trail
       for (const p of s.trail) this.pendingTrail.push(p)
       if (this.pendingTrail.length > MAX_PENDING_TRAIL)
         this.pendingTrail = [...thinPoints(this.pendingTrail, MAX_PENDING_TRAIL / 2)]

@@ -183,6 +183,25 @@ describe('a rev-12 tab in a rev-12 room (L6-1): the laser goes out, others’ la
     r.dispose()
   })
 
+  it('the same sample handed over again (the session re-sends it on a camera move) brings no trail twice', () => {
+    const r = rev12()
+    r.setTool('laser')
+    move(r.hub, 10, 'down')
+    const sample = {
+      pointer: { x: 40, y: 1 },
+      button: 'down' as const,
+      source: 'pointermove',
+      pointerType: 'mouse',
+      trail: [{ x: 25, y: 1 }],
+    }
+    r.hub.onPointer(sample)
+    expect(r.c.sent.at(-1)).toMatchObject({ t: 'laser', trail: [{ x: 25, y: 1 }] })
+    r.hub.onPointer(sample)
+    expect(r.c.sent.at(-1)).toMatchObject({ t: 'laser', pointer: { x: 40, y: 1 } })
+    expect(r.c.sent.at(-1)).not.toHaveProperty('trail')
+    r.dispose()
+  })
+
   it('a press with the selection tool never carries t: laser or a trail (what an anonymous vote relies on)', () => {
     const r = rev12()
     r.setTool('select')
