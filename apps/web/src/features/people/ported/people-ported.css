@@ -51,3 +51,31 @@
 .dr-people-following--ported[data-summoned="true"] .dr-people-following__stop:hover {
   background: rgb(255 255 255 / 18%);
 }
+/* L6-3 (wave L): a paused follow. The camera does not follow, so no frame and a light pill in the person's
+   colour (its border) with Resume and a stop. */
+.dr-people-following--paused {
+  border: 2px solid;
+  background: var(--dr-surface, #ffffff);
+  color: var(--dr-ink, #1b2330);
+}
+.dr-people-following--paused .dr-people-following__stop:focus-visible,
+.dr-people-following__dismiss:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+.dr-people-following__dismiss {
+  margin: 0 0 0 2px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.dr-people-following__dismiss:hover {
+  background: var(--dr-hover, rgb(0 0 0 / 8%));
+}

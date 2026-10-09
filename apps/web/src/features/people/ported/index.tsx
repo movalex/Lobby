@@ -13,6 +13,7 @@
 import { useLayoutEffect, useState, useSyncExternalStore } from 'react'
 import type { CanvasFeature, CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { getLive } from '../../present-export/live/ported/controller.ts'
 import { PersonName } from '../../workshops/Hands.tsx'
 import { usePresenting } from '../../workshops/presenting.ts'
 import { WorkshopStore, workshopStoreFor } from '../../workshops/store.ts'
@@ -100,22 +101,71 @@ function useBelowInvite(ctx: CanvasFeatureContext, active: boolean): number | nu
  * giving it the spot: a follower who stayed on after Gather is still following until they Join (present
  * mode then stops this follow), say Not now or stop. W5-51: "Stop following" is one flat button, never an
  * outlined button inside the coloured pill.
+ *
+ * Wave L (W6, L6-3): a follow this person paused by moving the camera (canvas.follow.state()) shows "Paused
+ * following Maya" with Resume and a way to stop, without the frame (the camera does not follow); when the
+ * person followed is presenting to everyone, "Paused · Back to presenter".
  */
 function FollowingLabel({ ctx }: { ctx: CanvasFeatureContext }) {
   const { canvas } = ctx
   const presenting = usePresenting()
   const summoned = useSummoned(ctx)
   const who = useValue('dr-people-following', () => {
-    const sid = canvas.follow.current()
-    if (!sid) return null
-    const r = canvas.collaborators().find((x) => x.sid === sid)
-    return r ? `${r.color}|${r.name}` : null
+    const st = canvas.follow.state()
+    if (!st) return null
+    const r = canvas.collaborators().find((x) => x.sid === st.sid)
+    return r ? JSON.stringify([st.status, r.uid, r.color, r.name]) : null
   }, [canvas])
+  const presenterUid = useValue(
+    'dr-people-live-presenter',
+    () => getLive(ctx.registries)?.store.presentation.get()?.presenter.userId ?? null,
+    [ctx.registries],
+  )
   const shown = !!who && !presenting
   const belowInvite = useBelowInvite(ctx, shown)
   if (!who || !shown) return null
-  const [color = '', ...rest] = who.split('|')
-  const name = rest.join('|')
+  const [status, uid, color = '', name = ''] = JSON.parse(who) as [string, string, string, string]
+  if (status === 'paused') {
+    const toPresenter = presenterUid !== null && presenterUid === uid
+    return (
+      <div
+        className="dr-people-following dr-people-following--ported dr-people-following--paused"
+        data-testid="follow-paused"
+        data-below-invite={belowInvite !== null ? 'true' : undefined}
+        style={{ borderColor: color, ...(belowInvite !== null ? { top: belowInvite } : {}) }}
+        role="status"
+      >
+        <span className="dr-people-following__text">
+          {toPresenter ? (
+            'Paused'
+          ) : (
+            <>
+              Paused following <PersonName name={name} className="dr-people-following__name" />
+            </>
+          )}
+        </span>
+        <span aria-hidden="true">·</span>
+        <button
+          type="button"
+          className="dr-people-following__stop"
+          data-testid="follow-resume"
+          onClick={() => canvas.follow.resume()}
+        >
+          {toPresenter ? 'Back to presenter' : 'Resume'}
+        </button>
+        <button
+          type="button"
+          className="dr-people-following__dismiss"
+          data-testid="follow-paused-stop"
+          aria-label="Stop following"
+          title="Stop following"
+          onClick={() => canvas.follow.stop()}
+        >
+          ×
+        </button>
+      </div>
+    )
+  }
   return (
     <>
       <div className="dr-people-following-frame" aria-hidden="true" style={{ borderColor: color }} />

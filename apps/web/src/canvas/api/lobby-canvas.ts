@@ -529,16 +529,34 @@ export interface FollowOptions {
   readonly camera?: (input: FollowCameraInput) => FollowCamera | null
 }
 
+/**
+ * Wave L (W6, L6-3): a follow that this person paused by moving the camera keeps its target. `following`: the
+ * camera follows `sid`; `paused`: it does not, and `resume()` follows `sid` again.
+ */
+export interface FollowState {
+  readonly sid: string
+  readonly status: 'following' | 'paused'
+}
+
 export interface LobbyFollow {
-  /** @owner 3c · getInstanceState().followingUserId: the session followed, or null */
+  /** @owner 3c · getInstanceState().followingUserId: the session followed, or null (also while paused) */
   current(): string | null
   /**
    * @owner 3c · startFollowingUser (the camera follows their `view`). Starting the session already followed
    * keeps following and replaces the options (a summon over a plain follow).
    */
   start(sid: string, options?: FollowOptions): void
-  /** @owner 3c · stopFollowingUser */
+  /** @owner 3c · stopFollowingUser (a paused follow too) */
   stop(): void
+  /**
+   * @owner 3c · wave L (W6, L6-3): the follow's state, or null when there is none. This person's own camera
+   * move (a wheel, a pinch, a press on the canvas) pauses a follow instead of ending it (`followChanged(null)`,
+   * `current()` null), and the target stays here; the followed session leaving, `stop()` and Esc end it.
+   * Reactive.
+   */
+  state(): FollowState | null
+  /** @owner 3c · wave L (W6, L6-3): a paused follow follows its session again (its options kept); else nothing */
+  resume(): void
 }
 
 export interface LobbyHistory {

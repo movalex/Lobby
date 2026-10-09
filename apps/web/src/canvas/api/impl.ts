@@ -167,6 +167,9 @@ const LANDED_PARTS: ReadonlySet<string> = new Set([
   'follow.current',
   'follow.start',
   'follow.stop',
+  // wave L (W6, L6-3): pause and resume, in 3c's part
+  'follow.state',
+  'follow.resume',
   'on:followChanged',
   // 3g: parts/files.ts
   'files.urlOf',
@@ -312,6 +315,8 @@ export const LOBBY_CANVAS_MEMBERS: readonly MemberInfo[] = [
       ['follow.current', '3c'],
       ['follow.start', '3c'],
       ['follow.stop', '3c'],
+      ['follow.state', '3c'],
+      ['follow.resume', '3c'],
       ['history.undo', '2C'],
       ['history.redo', '2C'],
       ['history.canUndo', '2C'],

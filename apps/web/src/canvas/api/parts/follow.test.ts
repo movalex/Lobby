@@ -3,8 +3,17 @@
 // (CR-3F-3) shapes where the camera goes.
 import { describe, expect, it, vi } from 'vitest'
 import { atom } from '../../../lib/signals.ts'
+import { presenceFollowOf } from '../../presence/follow-target.ts'
 import type { CanvasInputEvent, LobbyCanvas, RemoteCursor, RosterEntry } from '../lobby-canvas.ts'
-import { createFollowPart, followCamera, followerCamera } from './follow.ts'
+import {
+  createFollowPart,
+  FOLLOW_STOPPED,
+  type FollowEvent,
+  type FollowMachine,
+  followCamera,
+  followerCamera,
+  followTransition,
+} from './follow.ts'
 
 const peer = (sid: string, view: RemoteCursor['view']): RemoteCursor => ({
   sid,
@@ -141,7 +150,7 @@ describe('the follow part', () => {
     expect(changed).toHaveBeenLastCalledWith(null)
   })
 
-  it('ends when this person moves the camera: wheel, pinch or a press on the canvas', () => {
+  it('a camera move of this person ends the camera follow (L6-3: it pauses): wheel, pinch or a press on the canvas', () => {
     for (const type of ['wheel', 'pinch', 'pointer-down'] as const) {
       const f = fakeCanvas()
       const { follow } = part(f.canvas)
@@ -245,5 +254,158 @@ describe('a follow camera rule (CR-3F-3)', () => {
     follow.stop()
     follow.start('bob')
     expect(f.set).toHaveBeenLastCalledWith({ x: 100, y: -150, zoom: 0.5 }, { force: true })
+  })
+})
+
+// ---- L6-3 (wave L, W6): pause and resume ------------------------------------------------------------------
+
+describe('followTransition: every transition', () => {
+  const stopped = FOLLOW_STOPPED
+  const following = { kind: 'following', sid: 'bob' } as const
+  const paused = { kind: 'paused', sid: 'bob' } as const
+  const cases: [FollowMachine, FollowEvent, FollowMachine][] = [
+    // start: from anywhere, to following that session
+    [stopped, { type: 'start', sid: 'bob' }, following],
+    [following, { type: 'start', sid: 'ann' }, { kind: 'following', sid: 'ann' }],
+    [paused, { type: 'start', sid: 'ann' }, { kind: 'following', sid: 'ann' }],
+    [paused, { type: 'start', sid: 'bob' }, following],
+    // a nudge pauses a follow, and changes nothing else
+    [following, { type: 'nudge' }, paused],
+    [paused, { type: 'nudge' }, paused],
+    [stopped, { type: 'nudge' }, stopped],
+    // resume: paused back to following the same session, nothing else
+    [paused, { type: 'resume' }, following],
+    [following, { type: 'resume' }, following],
+    [stopped, { type: 'resume' }, stopped],
+    // the leader leaving and stop (Esc): stopped, from anywhere
+    [following, { type: 'leader-left' }, stopped],
+    [paused, { type: 'leader-left' }, stopped],
+    [stopped, { type: 'leader-left' }, stopped],
+    [following, { type: 'stop' }, stopped],
+    [paused, { type: 'stop' }, stopped],
+    [stopped, { type: 'stop' }, stopped],
+  ]
+  for (const [from, event, to] of cases)
+    it(`${from.kind} + ${event.type} -> ${to.kind}`, () => {
+      expect(followTransition(from, event)).toEqual(to)
+    })
+})
+
+describe('the follow part: pause and resume (L6-3)', () => {
+  const esc = (synthetic = false) =>
+    ({ type: 'key-down', key: 'Escape', code: 'Escape', synthetic }) as unknown as CanvasInputEvent
+
+  it('a wheel pauses: followChanged(null), current null, the target kept, the camera no longer follows', () => {
+    for (const type of ['wheel', 'pinch', 'pointer-down'] as const) {
+      const f = fakeCanvas()
+      const { follow, onFollowChanged } = part(f.canvas)
+      const changed = vi.fn()
+      onFollowChanged(changed)
+      follow.start('bob')
+      expect(follow.state()).toEqual({ sid: 'bob', status: 'following' })
+      f.fire('input', input(type))
+      expect(follow.current(), type).toBeNull()
+      expect(follow.state(), type).toEqual({ sid: 'bob', status: 'paused' })
+      expect(changed.mock.calls).toEqual([['bob'], [null]])
+      const moves = f.set.mock.calls.length
+      f.peers.set([peer('bob', { x: 3000, y: 0, width: 400, height: 400 })])
+      expect(f.set.mock.calls.length, type).toBe(moves)
+      // a second nudge while paused changes nothing
+      f.fire('input', input('wheel'))
+      expect(changed).toHaveBeenCalledTimes(2)
+    }
+  })
+
+  it('Resume follows the same session again, with the options it had (a Gather’s camera rule)', () => {
+    const f = fakeCanvas()
+    const { follow, onFollowChanged } = part(f.canvas)
+    const changed = vi.fn()
+    onFollowChanged(changed)
+    follow.start('bob', { camera: ({ fit }) => ({ ...fit, zoom: fit.zoom * 2 }) })
+    f.fire('input', input('wheel'))
+    f.peers.set([peer('bob', { x: 0, y: 0, width: 400, height: 400 })])
+    follow.resume()
+    expect(follow.current()).toBe('bob')
+    expect(follow.state()).toEqual({ sid: 'bob', status: 'following' })
+    expect(changed.mock.calls).toEqual([['bob'], [null], ['bob']])
+    // the camera is on their newest view, through the rule
+    expect(f.set).toHaveBeenLastCalledWith({ x: 0, y: 0, zoom: 2 }, { force: true })
+    // and follows again
+    f.peers.set([peer('bob', { x: 400, y: 0, width: 400, height: 400 })])
+    expect(f.set).toHaveBeenLastCalledWith({ x: 400, y: 0, zoom: 2 }, { force: true })
+    // resume while following changes nothing
+    follow.resume()
+    expect(changed).toHaveBeenCalledTimes(3)
+  })
+
+  it('the followed session leaving while paused stops it', async () => {
+    const f = fakeCanvas()
+    const { follow, onFollowChanged } = part(f.canvas)
+    const changed = vi.fn()
+    onFollowChanged(changed)
+    follow.start('bob')
+    f.fire('input', input('wheel'))
+    f.roster.set([entry('me')])
+    await tick()
+    expect(follow.state()).toBeNull()
+    // already told at the pause: no second null
+    expect(changed.mock.calls).toEqual([['bob'], [null]])
+    follow.resume()
+    expect(follow.current()).toBeNull()
+  })
+
+  it('Esc stops a follow and a paused follow; the text lease’s synthetic Escape does not', () => {
+    const f = fakeCanvas()
+    const { follow, onFollowChanged } = part(f.canvas)
+    const changed = vi.fn()
+    onFollowChanged(changed)
+    follow.start('bob')
+    f.fire('input', esc(true))
+    expect(follow.current()).toBe('bob')
+    f.fire('input', esc())
+    expect(follow.state()).toBeNull()
+    expect(changed).toHaveBeenLastCalledWith(null)
+    follow.start('bob')
+    f.fire('input', input('wheel'))
+    f.fire('input', esc())
+    expect(follow.state()).toBeNull()
+    follow.resume()
+    expect(follow.current()).toBeNull()
+  })
+
+  it('stop() ends a paused follow; start() of anyone replaces it', () => {
+    const f = fakeCanvas()
+    f.roster.set([entry('me'), entry('bob'), entry('ann')])
+    f.peers.set([
+      peer('bob', { x: 0, y: 0, width: 400, height: 400 }),
+      peer('ann', { x: 1000, y: 0, width: 400, height: 400 }),
+    ])
+    const { follow, onFollowChanged } = part(f.canvas)
+    const changed = vi.fn()
+    onFollowChanged(changed)
+    follow.start('bob')
+    f.fire('input', input('wheel'))
+    follow.stop()
+    expect(follow.state()).toBeNull()
+    expect(changed.mock.calls).toEqual([['bob'], [null]])
+    follow.start('bob')
+    f.fire('input', input('wheel'))
+    follow.start('ann')
+    expect(follow.state()).toEqual({ sid: 'ann', status: 'following' })
+    expect(f.set).toHaveBeenLastCalledWith({ x: 1000, y: 0, zoom: 1 }, { force: true })
+  })
+
+  it('the room hears f: null while paused and the sid again on Resume (presence follow-target)', () => {
+    const f = fakeCanvas()
+    const core = (f.canvas as unknown as { engine: object }).engine
+    const { follow } = part(f.canvas)
+    follow.start('bob')
+    expect(presenceFollowOf(core)).toBe('bob')
+    f.fire('input', input('wheel'))
+    expect(presenceFollowOf(core)).toBeNull()
+    follow.resume()
+    expect(presenceFollowOf(core)).toBe('bob')
+    follow.stop()
+    expect(presenceFollowOf(core)).toBeNull()
   })
 })
