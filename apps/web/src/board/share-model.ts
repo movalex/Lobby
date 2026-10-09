@@ -518,18 +518,23 @@ export const GUESTS_SECTION_TITLE = 'Guests and clients'
  * email, one-time invite links): what is inside, or what is open in there, so nothing running hides behind
  * the fold.
  */
-export function guestsSummary(open: {
-  reviewLinks: number
-  workshopLinks: number
-  unusedInvites: number
-}): string {
+export function guestsSummary(
+  open: {
+    reviewLinks: number
+    workshopLinks: number
+    unusedInvites: number
+  },
+  /** linksAllowed: false on an Internal-only board (no client or workshop link can be made there) */
+  opts: { readonly linksAllowed?: boolean } = {},
+): string {
   const extras = [
     open.reviewLinks > 0 ? `${count(open.reviewLinks, 'client link', 'client links')} open` : '',
     open.workshopLinks > 0 ? `${count(open.workshopLinks, 'workshop link', 'workshop links')} open` : '',
     open.unusedInvites > 0 ? count(open.unusedInvites, 'unused invite link', 'unused invite links') : '',
   ].filter(Boolean)
-  return extras.length
-    ? extras.join(' · ')
+  if (extras.length) return extras.join(' · ')
+  return opts.linksAllowed === false
+    ? 'Invite by email, one-time invite links'
     : 'Client review link, workshop link for a live session, invite by email, one-time invite links'
 }
 

@@ -438,6 +438,9 @@ test('Internal only on the workspace: outside invites, approvals and links refus
         'This workspace is internal only',
       )
       await expect(dialog.getByTestId('review-link-create')).toHaveCount(0)
+      // K5 review: the folded section's summary offers no link that cannot be made here
+      await expect(dialog.getByTestId('share-more-summary')).not.toContainText('Client review link')
+      await expect(dialog.getByTestId('share-more-summary')).not.toContainText('workshop link for a live session')
       await dialog.getByTestId('share-invite-input').fill('y@client.example.test')
       await dialog.getByTestId('share-invite-submit').click()
       await expect(dialog.getByTestId('share-invite-notice')).toContainText('This workspace is internal only')

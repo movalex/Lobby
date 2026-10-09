@@ -119,6 +119,19 @@ describe('share with a client, workshop link, more ways to share (DANA-03, F3, R
     )
   })
 
+  it('K5 review: on an Internal-only board (no client or workshop link can be made) the summary offers neither', () => {
+    expect(guestsSummary({ reviewLinks: 0, workshopLinks: 0, unusedInvites: 0 }, { linksAllowed: false })).toBe(
+      'Invite by email, one-time invite links',
+    )
+    // what is still open is said as before (it can be revoked in there)
+    expect(guestsSummary({ reviewLinks: 1, workshopLinks: 0, unusedInvites: 0 }, { linksAllowed: false })).toBe(
+      '1 client link open',
+    )
+    expect(guestsSummary({ reviewLinks: 0, workshopLinks: 0, unusedInvites: 0 }, { linksAllowed: true })).toBe(
+      'Client review link, workshop link for a live session, invite by email, one-time invite links',
+    )
+  })
+
   it('K5-5: "Advanced", collapsed, says the export setting it holds', () => {
     expect(ADVANCED_SECTION_TITLE).toBe('Advanced')
     expect(advancedSummary(null)).toBe('Export and download')

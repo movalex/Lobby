@@ -642,6 +642,7 @@ export function ShareDialog({
             reviewLinks={invitations.data ? reviewLinks.length : null}
             workshopLinks={invitations.data ? workshopLinks.length : null}
             unusedInvites={oneTimeInvites.length}
+            linksAllowed={mayCreateLinks}
             openAsk={workshopAsk}
           >
             {/* a running workshop link (a live session) first, nearest the top */}
@@ -2491,6 +2492,7 @@ function GuestsAndClients({
   reviewLinks,
   workshopLinks,
   unusedInvites,
+  linksAllowed,
   openAsk = 0,
   children,
 }: {
@@ -2499,6 +2501,8 @@ function GuestsAndClients({
   /** Open workshop links; null until the invitations have loaded. */
   workshopLinks: number | null
   unusedInvites: number
+  /** False on an Internal-only board: the summary offers no client or workshop link. */
+  linksAllowed: boolean
   /** R2-11: bumped by "Workshop link (guests can edit)": open. */
   openAsk?: number
   children: ReactNode
@@ -2537,7 +2541,10 @@ function GuestsAndClients({
       <summary className="dr-sharing__more-summary" data-testid="share-more-toggle">
         <span className="dr-sharing__more-title">{GUESTS_SECTION_TITLE}</span>
         <span className="dr-sharing__more-sub" data-testid="share-more-summary">
-          {guestsSummary({ reviewLinks: reviewLinks ?? 0, workshopLinks: workshopLinks ?? 0, unusedInvites })}
+          {guestsSummary(
+            { reviewLinks: reviewLinks ?? 0, workshopLinks: workshopLinks ?? 0, unusedInvites },
+            { linksAllowed },
+          )}
         </span>
       </summary>
       {children}
