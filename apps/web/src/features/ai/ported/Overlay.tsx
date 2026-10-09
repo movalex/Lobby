@@ -600,19 +600,24 @@ function NoticeView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: st
   const { canvas } = useCanvasFeatureContext()
   const pending = menu.pending
   const into = pending?.into
-  const what =
-    menu.target.kind === 'none'
+  // wave L: a notice public.ts runAi asked for says itself what it does and sends
+  const asked = menu.notice
+  const what = asked
+    ? asked.what
+    : menu.target.kind === 'none'
       ? 'your prompt'
       : into?.kind === 'expand'
         ? `the words of ${menu.target.label}, the topics it sits under and the ones below it`
         : `the text of ${menu.target.label}${pending?.action === 'ideas' ? ' and your prompt' : ''}`
-  const verb = into
-    ? into.kind === 'expand'
-      ? 'expand the topic'
-      : 'draft a mind map'
-    : pending
-      ? ACTION_LABELS[pending.action].toLowerCase()
-      : 'do this'
+  const verb = asked
+    ? asked.verb
+    : into
+      ? into.kind === 'expand'
+        ? 'expand the topic'
+        : 'draft a mind map'
+      : pending
+        ? ACTION_LABELS[pending.action].toLowerCase()
+        : 'do this'
   return (
     <>
       <Head titleId={titleId} onClose={onClose}>
@@ -636,6 +641,11 @@ function NoticeView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: st
             data-testid="ai-notice-continue"
             data-autofocus
             onClick={() => {
+              if (asked) {
+                asked.confirm(true)
+                closeAiMenu(canvas, false)
+                return
+              }
               if (pending) void runAi(canvas, pending, menu.target, { acknowledged: true, at: menu.at })
             }}
           >

@@ -116,6 +116,8 @@ describe('Expand with AI', () => {
     expandTopic(f.canvas, idOf('Audience'))
     await settled(f.canvas)
     expect(calls).toHaveLength(1)
+    const b = f.canvas.bounds(idOf('Audience'))
+    if (!b) throw new Error('no bounds')
     expect(calls[0]).toEqual({
       method: 'POST',
       path: '/api/boards/bd_1/ai/run',
@@ -125,6 +127,8 @@ describe('Expand with AI', () => {
         shapeIds: [refOf(idOf('Launch')), refOf(idOf('Audience')), refOf(idOf('Fans'))],
         prompt: 'Audience',
         count: EXPAND_COUNT,
+        // wave L (L2-1e): where it is, for the live "is using AI here" shimmer others see (the topic)
+        at: { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height) },
       },
     })
   })

@@ -58,6 +58,7 @@ import {
   type ThemesLayoutInput,
   union,
 } from '../layout.ts'
+import { AI_KIND_PREFIX, aiCustomData } from './provenance.ts'
 import { SHIMMER_MAX_TILES, type ShimmerPlan, type ShimmerTile } from './shimmer.ts'
 import {
   type AiTarget,
@@ -81,20 +82,30 @@ const NOTE_CELL = 200
 /** Excalidraw's padding between a container and its bound label (BOUND_TEXT_PADDING). */
 const BOUND_TEXT_PADDING = 5
 
-export type AiKind = 'theme-label' | 'summary' | 'heading' | 'idea' | 'action-item'
-const KIND_PREFIX = 'ai-'
+/** The kinds this module makes (wave L: an answer note, the recap's pieces; ../recap/apply.ts makes those). */
+export type AiKind =
+  | 'theme-label'
+  | 'summary'
+  | 'heading'
+  | 'idea'
+  | 'action-item'
+  | 'answer'
+  | 'recap-heading'
+  | 'recap-item'
+  | 'recap-table'
 
-/** The `customData.lobby` an AI-made element is created with. */
-export function aiCustomData(by: string, kind: AiKind) {
-  return { lobby: { ai: { by }, kind: `${KIND_PREFIX}${kind}` } }
-}
+/**
+ * The `customData.lobby` an AI-made element is created with (./provenance.ts, the one public.ts re-exports):
+ * `lobby.ai = { by, run }` (wave L: `run` is the result's run id; none from a wave K api) and the `ai-` kind.
+ */
+export { aiCustomData }
 
 /** What an AI-made element is (null for anything else). */
 export function aiKindOf(el: CanvasElement | undefined): AiKind | null {
   if (!el || items.lobbyValue(el, 'ai') === undefined) return null
   const kind = items.lobbyValue(el, 'kind')
-  return typeof kind === 'string' && kind.startsWith(KIND_PREFIX)
-    ? (kind.slice(KIND_PREFIX.length) as AiKind)
+  return typeof kind === 'string' && kind.startsWith(AI_KIND_PREFIX)
+    ? (kind.slice(AI_KIND_PREFIX.length) as AiKind)
     : null
 }
 
@@ -335,12 +346,11 @@ export interface ThemesOutcome {
   written: string[]
 }
 
-/** "Group into themes": see the header. Returns null when none of the notes can move any more. */
-export function applyThemes(
+/** What "Group into themes" would write for `themes` right now, per space (null: no note can move any more). */
+function themesPlans(
   canvas: LobbyCanvas,
   themes: readonly AiTheme[],
-  by: string,
-): ThemesOutcome | null {
+): { plans: ThemesPlan[]; wanted: number; all: CanvasElement[] } | null {
   const seen = new Set<string>()
   const groups = themes
     .map((t, theme) => ({
@@ -377,7 +387,52 @@ export function applyThemes(
       return mine.length ? planThemes(canvas, spaceOf(frame, index), mine) : null
     })
     .filter((p): p is ThemesPlan => p !== null)
+  return { plans, wanted, all }
+}
 
+/** The preview of a themes result (L2-1b): where each note goes and where each label lands; nothing written. */
+export interface ThemesPreview {
+  /** each moving note's new top-left (scene units) */
+  moves: { id: string; x: number; y: number }[]
+  /** the theme labels' boxes (scene units) */
+  labels: { x: number; y: number; w: number; h: number }[]
+  notes: number
+  themes: number
+  /** a frame grows to hold the clusters */
+  grows: boolean
+}
+
+/** "Group into themes" as it would land right now, for the preview (null: none of the notes can move). */
+export function previewThemes(canvas: LobbyCanvas, themes: readonly AiTheme[]): ThemesPreview | null {
+  const planned = themesPlans(canvas, themes)
+  if (!planned) return null
+  const moves: ThemesPreview['moves'] = []
+  const labels: ThemesPreview['labels'] = []
+  for (const plan of planned.plans) {
+    const { space } = plan
+    for (const m of plan.moves) moves.push({ id: m.el.id, x: m.el.x + m.dx, y: m.el.y + m.dy })
+    for (const l of plan.labels)
+      labels.push({ x: space.ox + l.x, y: space.oy + l.y, w: l.block.width, h: l.block.height })
+  }
+  return {
+    moves,
+    labels,
+    notes: planned.all.length,
+    themes: new Set(planned.plans.flatMap((p) => p.labels.map((l) => l.theme))).size,
+    grows: planned.plans.some((p) => p.grow !== null),
+  }
+}
+
+/** "Group into themes": see the header. Returns null when none of the notes can move any more. */
+export function applyThemes(
+  canvas: LobbyCanvas,
+  themes: readonly AiTheme[],
+  by: string,
+  run: string | null = null,
+): ThemesOutcome | null {
+  const planned = themesPlans(canvas, themes)
+  if (!planned) return null
+  const { plans, wanted, all } = planned
   let outcome: ThemesOutcome | null = null
   const written: string[] = []
   canvas.transact('ai: group into themes', (tx) => {
@@ -407,7 +462,7 @@ export function applyThemes(
           frameId,
           // wrapped at the cluster's width: it keeps its lines when someone edits it
           autoResize: l.block.text === l.name,
-          customData: aiCustomData(by, 'theme-label'),
+          customData: aiCustomData(by, 'theme-label', run),
         })
         written.push(id)
       }
@@ -687,6 +742,38 @@ function spotFor(
   return { space: page, ...at }
 }
 
+/**
+ * A free spot for new content of `size` near the elements `near` (public.ts `findSpot`, for W4's diagrams and
+ * W8's matrix): the same rules as a block of AI notes (`spotFor`): inside their home frame when it has room
+ * beside them or at its end, else beside the frames around them on the page; with nothing near, around the
+ * middle of the view, clear of what is there. Reads the board only: a frame that would have to grow to hold it
+ * is not grown, the spot goes beside it instead.
+ */
+export function spotNear(
+  canvas: LobbyCanvas,
+  size: Size,
+  near: readonly string[],
+): { x: number; y: number; frameId: string | null } {
+  const ids = near.filter((id) => isLive(canvas.get(id)))
+  const target: AiTarget = {
+    kind: ids.length ? 'selection' : 'none',
+    ids,
+    label: '',
+    notes: 0,
+    prompts: 0,
+    groups: [],
+    texts: 0,
+    bounds: ids.length ? canvas.boundsOf(ids) : null,
+  }
+  const home = ids.length ? homeFrame(canvas, target) : null
+  const spot = spotFor(canvas, target, size, home)
+  if (spot.growTo !== undefined) {
+    const page = spotFor(canvas, target, size, null)
+    return { x: page.space.ox + page.x, y: page.space.oy + page.y, frameId: null }
+  }
+  return { x: spot.space.ox + spot.x, y: spot.space.oy + spot.y, frameId: spot.space.frame?.id ?? null }
+}
+
 /** One element of a block, positioned relative to the block's top-left. */
 type Piece =
   | { kind: 'text'; dx: number; dy: number; block: TextBlock; original: string; width?: number; ai: AiKind }
@@ -710,6 +797,7 @@ function createBlock(
   target: AiTarget,
   label: string,
   by: string,
+  run: string | null,
   build: (maxW: number | null) => { pieces: Piece[]; size: Size },
 ): string[] {
   const home = homeFrame(canvas, target)
@@ -734,7 +822,7 @@ function createBlock(
           size: p.size,
           text: p.text,
           backgroundColor: p.fill,
-          customData: aiCustomData(by, p.ai),
+          customData: aiCustomData(by, p.ai, run),
         })
         notes.push(id)
         created.push(id)
@@ -752,7 +840,7 @@ function createBlock(
           strokeColor: LOBBY_INK,
           frameId,
           autoResize: p.block.text === p.original,
-          customData: aiCustomData(by, p.ai),
+          customData: aiCustomData(by, p.ai, run),
         })
         created.push(id)
       } else {
@@ -772,7 +860,7 @@ function createBlock(
           roundness: { type: 3 },
           frameId,
           boundElements: [{ id: textId, type: 'text' }],
-          customData: aiCustomData(by, p.ai),
+          customData: aiCustomData(by, p.ai, run),
         })
         tx.create('text', {
           id: textId,
@@ -787,7 +875,7 @@ function createBlock(
           strokeColor: LOBBY_INK,
           containerId: id,
           frameId,
-          customData: aiCustomData(by, p.ai),
+          customData: aiCustomData(by, p.ai, run),
         })
         created.push(id)
       }
@@ -813,8 +901,14 @@ const paragraphs = (body: string) =>
  * Summarize, added to the board from the summary panel: a card (a pale rounded box with a "Summary"
  * line over the text, left-aligned), so it reads as a deliberate result, not stray text.
  */
-export function applySummary(canvas: LobbyCanvas, target: AiTarget, summary: string, by: string): string[] {
-  return createBlock(canvas, target, 'ai: add summary', by, (maxW) => {
+export function applySummary(
+  canvas: LobbyCanvas,
+  target: AiTarget,
+  summary: string,
+  by: string,
+  run: string | null = null,
+): string[] {
+  return createBlock(canvas, target, 'ai: add summary', by, run, (maxW) => {
     const width = Math.min(SUMMARY_W, maxW ?? SUMMARY_W)
     const original = ['Summary', ...paragraphs(summary)].join('\n')
     const block = layoutText(canvas, original, SUMMARY_FONT_SIZE, width - 2 * BOUND_TEXT_PADDING)
@@ -861,7 +955,7 @@ interface NotesOptions {
   heading: string
   texts: readonly string[]
   color: LobbyColorName
-  kind: 'idea' | 'action-item'
+  kind: 'idea' | 'action-item' | 'answer' | 'recap-item'
 }
 
 /** The block of a heading over a grid of new sticky notes (what `applyNotes` writes), for `maxW` of room. */
@@ -895,9 +989,20 @@ function notesBlock(canvas: LobbyCanvas, target: AiTarget, opts: NotesOptions) {
 }
 
 /** Action items / Generate ideas: a heading over a grid of new sticky notes, beside the target. */
-export function applyNotes(canvas: LobbyCanvas, target: AiTarget, opts: NotesOptions, by: string): string[] {
-  const label = opts.kind === 'idea' ? 'ai: generate ideas' : 'ai: action items'
-  return createBlock(canvas, target, label, by, notesBlock(canvas, target, opts))
+export function applyNotes(
+  canvas: LobbyCanvas,
+  target: AiTarget,
+  opts: NotesOptions,
+  by: string,
+  run: string | null = null,
+): string[] {
+  const label =
+    opts.kind === 'idea'
+      ? 'ai: generate ideas'
+      : opts.kind === 'answer'
+        ? 'ai: add answer'
+        : 'ai: action items'
+  return createBlock(canvas, target, label, by, run, notesBlock(canvas, target, opts))
 }
 
 /**

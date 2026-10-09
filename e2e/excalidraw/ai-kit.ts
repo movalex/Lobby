@@ -264,6 +264,25 @@ export async function continueIfAsked(page: Page) {
   if (await cont.isVisible()) await cont.click()
 }
 
+/** Wave L (L2-1b): the AI preview of a plan (outlines over the board, the panel with Apply, Try again, Discard). */
+export const aiPreviewPanel = (page: Page) => page.getByTestId('ai-preview-panel')
+
+/**
+ * Waits for the AI preview (Group into themes and the other plans that move or recolour notes show one before
+ * anything is written), checks its count line when `summary` is given, and presses `choice` (Apply by default).
+ */
+export async function applyPreview(
+  page: Page,
+  opts: { summary?: string | RegExp; choice?: 'apply' | 'retry' | 'discard' } = {},
+) {
+  const panel = aiPreviewPanel(page)
+  await expect(panel).toBeVisible({ timeout: 20_000 })
+  if (opts.summary !== undefined)
+    await expect(panel.getByTestId('ai-preview-summary')).toContainText(opts.summary)
+  await panel.getByTestId(`ai-preview-${opts.choice ?? 'apply'}`).click()
+  await expect(panel).toHaveCount(0)
+}
+
 /**
  * Moves a note (and its label) by `dy` as its own undo step, as a person's drag would: one transact
  * through the page's canvas.

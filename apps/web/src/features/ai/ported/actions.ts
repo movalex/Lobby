@@ -9,9 +9,19 @@
 //   (DANA-09). Collaborators' edits never enter this tab's undo stack, so they leave it up.
 // - The board's AI switch and the workspace default (board menu: ./menus.tsx) go through the api.
 
-import { AI_ERROR_CODES, AiClientResult, AiSettings, AiStatus } from '@draftroom/contracts'
+import {
+  AI_ERROR_CODES,
+  type AiAction,
+  AiClientResult,
+  type AiRect,
+  type AiResult,
+  type AiRunInput,
+  AiSettings,
+  AiStatus,
+} from '@draftroom/contracts'
 import { isApiError } from '../../../api/client.ts'
-import type { LobbyCanvas } from '../../../canvas/api/index.ts'
+import type { Bounds, CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
+import { react } from '../../../lib/signals.ts'
 import { mindmapOf } from '../../mindmap/ported/bridge.ts'
 import { addChildTopics, mindmapFromIdeas } from '../../mindmap/ported/commands.ts'
 import {
@@ -24,13 +34,16 @@ import {
   mindmapDone,
   plural,
   themesDone,
+  themesPreviewLine,
 } from '../copy.ts'
-import { applyNotes, applySummary, applyThemes } from './apply.ts'
+import { applyNotes, applySummary, applyThemes, previewThemes } from './apply.ts'
 import { EXPAND_COUNT, expandPlan } from './expand.ts'
 import { canBuildWithAi } from './gate.ts'
 import { deferUntilIdle, type IdleEnv } from './idle.ts'
 import { landingFor } from './landing.ts'
+import { showPreview } from './preview.tsx'
 import {
+  type AiJob,
   type AiMenuState,
   type AiRequest,
   aiFlash,
@@ -40,7 +53,9 @@ import {
   aiPanel,
   aiStatus,
   getAiCtx,
+  setAiCtx,
 } from './runtime.ts'
+import { regionTile } from './shimmer.ts'
 import { type AiTarget, isLive, NONE, refOf } from './target.ts'
 
 const enc = encodeURIComponent
@@ -166,12 +181,16 @@ export async function runAi(
   }
   // A summary always opens in the private panel first (DANA-04).
   const mode = req.action === 'summarize' ? (req.mode ?? 'panel') : undefined
+  // wave L: where it is (the live shimmer others see, L2-1e), and the vote the action items follow (L2-4)
+  const at = atRect(target.bounds)
   const body = {
     action: req.action,
     shapeIds: target.ids.map(refOf),
     ...(mode ? { mode } : {}),
     ...(req.action === 'ideas' ? { prompt: req.prompt ?? '', count: req.count ?? 6 } : {}),
+    ...(req.action === 'actions' && req.voteSessionId ? { voteSessionId: req.voteSessionId } : {}),
     ...(opts.acknowledged ? { acknowledged: true } : {}),
+    ...(at ? { at } : {}),
   }
   // W5-47: asked from the popover, the keyboard goes back to what opened it (taken before the popover
   // closes, which forgets it); asked from a menu, to the board.
@@ -186,6 +205,40 @@ export async function runAi(
     abort: new AbortController(),
     opener,
   }
+  const out = await sendRun(canvas, body, job)
+  if (out === 'notice') {
+    const where = opts.at
+    if (where) aiMenu(canvas).set({ at: where, target, view: 'notice', pending: req })
+    return
+  }
+  if (out) applyResult(canvas, out, target, req, job.opener)
+}
+
+/** The rect a run is about, as the api takes it (`at`: the live shimmer's place), or null. */
+export function atRect(b: Bounds | null | undefined): AiRect | null {
+  if (!b || ![b.x, b.y, b.width, b.height].every(Number.isFinite)) return null
+  return {
+    x: Math.round(b.x),
+    y: Math.round(b.y),
+    w: Math.max(0, Math.round(b.width)),
+    h: Math.max(0, Math.round(b.height)),
+  }
+}
+
+/**
+ * Sends one run as `job` (the busy pill, its Cancel and the placeholder): this tab's last edits reach the
+ * server first, then POST /ai/run. Resolves the answer; 'notice' when the api wants the privacy notice first
+ * (the status says so now); null when it was cancelled or refused (the person was told why, in the AI
+ * feature's notice). Every caller (the menus, public.ts `runAi`) goes through here.
+ */
+async function sendRun(
+  canvas: LobbyCanvas,
+  body: Record<string, unknown>,
+  job: AiJob,
+): Promise<AiClientResult | 'notice' | null> {
+  const ctx = getAiCtx(canvas)
+  const status = aiStatus(canvas).get()
+  if (!ctx || !status) return null
   aiJob(canvas).set(job)
   aiMenu(canvas).set(null)
   // Back to the board, so Ctrl+Z, Delete and the arrows work on the result straight away.
@@ -203,13 +256,11 @@ export async function runAi(
       signal: job.abort.signal,
     })
   } catch (e) {
-    if (aiJob(canvas).get()?.id !== job.id) return // cancelled
+    if (aiJob(canvas).get()?.id !== job.id) return null // cancelled
     aiJob(canvas).set(null)
     if (isApiError(e) && e.code === AI_ERROR_CODES.noticeRequired) {
       aiStatus(canvas).set({ ...status, noticeAccepted: false })
-      const at = opts.at
-      if (at) aiMenu(canvas).set({ at, target, view: 'notice', pending: req })
-      return
+      return 'notice'
     }
     if (
       isApiError(e) &&
@@ -225,13 +276,139 @@ export async function runAi(
       testId: 'ai-error',
       timeoutMs: 9000,
     })
-    return
+    return null
   }
-  if (aiJob(canvas).get()?.id !== job.id) return // cancelled while the answer was on its way
+  if (aiJob(canvas).get()?.id !== job.id) return null // cancelled while the answer was on its way
   aiJob(canvas).set(null)
   const now = aiStatus(canvas).get() ?? status
   aiStatus(canvas).set({ ...now, noticeAccepted: true, budget: result.budget ?? now.budget })
-  applyResult(canvas, result, target, req, job.opener)
+  return result
+}
+
+// ---- runs for every workstream (public.ts `runAi`, wave L) ---------------------------------------------
+
+/** Whether a run adds to the board (edit on an active board); the rest only answer (view). */
+export function writesBoard(input: AiRunInput): boolean {
+  switch (input.action) {
+    case 'summarize':
+    case 'recap':
+      return input.mode === 'insert'
+    case 'command':
+      return input.mode === 'do'
+    case 'ask':
+      return false
+    default:
+      return true
+  }
+}
+
+/** The notice's words for a run of public.ts `runAi`: what it does and what it sends. */
+const NOTICE_WORDS: Record<AiAction, { verb: string; what: string }> = {
+  summarize: { verb: 'summarize it', what: 'the text you selected' },
+  themes: { verb: 'group the notes into themes', what: 'the text of the notes' },
+  actions: { verb: 'find action items', what: 'the text you selected' },
+  ideas: { verb: 'generate ideas', what: 'your prompt and the text you selected' },
+  recap: { verb: 'write the recap', what: 'the text of what changed on the board in that time' },
+  ask: { verb: 'answer your question', what: 'your question and the text on the board' },
+  command: { verb: 'work out the command', what: 'your words and the text on the board' },
+  diagram: { verb: 'draw the diagram', what: 'your description and the text you selected' },
+  sort: { verb: 'sort the notes', what: 'the text of the notes and your lens' },
+  score: { verb: 'place the notes on the 2x2', what: 'the text of the notes and the two axes' },
+}
+
+/**
+ * The privacy notice for a run of public.ts `runAi` (the AI popover's notice view, in the middle of the view):
+ * resolves true on Continue, false on Cancel, Escape or the popover closing any other way.
+ */
+export function askNotice(canvas: LobbyCanvas, action: AiAction, target: AiTarget = NONE): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    let done = false
+    let stop: (() => void) | null = null
+    const finish = (ok: boolean) => {
+      if (done) return
+      done = true
+      stop?.()
+      resolve(ok)
+    }
+    const v = canvas.viewport.get()
+    const state: AiMenuState = {
+      at: anchorAtScene(canvas, { x: v.x + v.width / 2, y: v.y + v.height / 3 }),
+      target,
+      view: 'notice',
+      pending: null,
+      notice: { ...NOTICE_WORDS[action], confirm: finish },
+    }
+    aiMenu(canvas).set(state)
+    stop = react('lobby-ai-notice-watch', () => {
+      if (aiMenu(canvas).get() !== state) finish(false)
+    })
+    if (done) stop()
+  })
+}
+
+/** What the busy pill says a run of public.ts `runAi` is about. */
+const ACTION_WORDS: Record<AiAction, string> = {
+  summarize: 'the selection',
+  themes: 'the notes',
+  actions: 'the selection',
+  ideas: 'your prompt',
+  recap: 'the session',
+  ask: 'the board',
+  command: 'the board',
+  diagram: 'the diagram',
+  sort: 'the notes',
+  score: 'the notes',
+}
+
+/**
+ * public.ts `runAi` (frozen there): one run of any action for any workstream, through the same gate, notice,
+ * busy pill, Cancel and error notices as the AI menus. Resolves the result, or null when there is nothing to
+ * apply (the person has been told why). It applies nothing. `at` (the live shimmer's place) is the caller's,
+ * else the selection's bounds. An answer without a run id cannot be a wave L api's (a wave K api refuses the
+ * wave L actions with 400): it counts as an answer that could not be used.
+ */
+export async function runPublic(ctx: CanvasFeatureContext, input: AiRunInput): Promise<AiResult | null> {
+  setAiCtx(ctx)
+  const { canvas } = ctx
+  await ensureAiStatus(canvas)
+  const status = aiStatus(canvas).get()
+  const refuse = (text: string) => {
+    noticeOf(canvas, text, 'error')
+    return null
+  }
+  if (!status?.enabled) return refuse('AI isn’t available on this board.')
+  if (writesBoard(input) && !canBuildWithAi(status, canvas.readOnly()))
+    return refuse('Only editors can add AI results to this board.')
+  if (aiJob(canvas).get())
+    return refuse('Lobby is still working on another AI request. Wait for it to finish.')
+  let acknowledged = input.acknowledged === true
+  if (!status.noticeAccepted && !acknowledged) {
+    if (!(await askNotice(canvas, input.action))) return null
+    acknowledged = true
+  }
+  const sel = canvas.selection
+  const at = input.at ?? atRect(sel.length ? canvas.boundsOf(sel) : null)
+  const job = (): AiJob => ({
+    id: ++jobSeq,
+    action: input.action,
+    landing: at && writesBoard(input) ? regionTile(at) : null,
+    label: ACTION_WORDS[input.action],
+    abort: new AbortController(),
+    opener: null,
+  })
+  const body = (ack: boolean): Record<string, unknown> => ({
+    ...input,
+    ...(at ? { at } : {}),
+    ...(ack ? { acknowledged: true } : {}),
+  })
+  let out = await sendRun(canvas, body(acknowledged), job())
+  if (out === 'notice') {
+    if (!(await askNotice(canvas, input.action))) return null
+    out = await sendRun(canvas, body(true), job())
+  }
+  if (!out || out === 'notice') return null
+  if (!out.runId) return refuse('The AI’s answer couldn’t be used. Try again.')
+  return out as AiResult
 }
 
 // ---- the brief highlight of a result (K7-4) ---------------------------------------------------------
@@ -362,7 +539,8 @@ export const UNDO_TOAST_MS = 7000
 /** Ends the watch behind the current "Undo" toast (null when there is none). */
 const undoWatches = new WeakMap<LobbyCanvas, () => void>()
 
-function endUndoOffer(canvas: LobbyCanvas) {
+/** Ends the watch behind the current "Undo" toast (another AI step is about to change the board). */
+export function endUndoOffer(canvas: LobbyCanvas) {
   undoWatches.get(canvas)?.()
 }
 
@@ -442,7 +620,7 @@ export function addSummaryToBoard(canvas: LobbyCanvas) {
   const ctx = getAiCtx(canvas)
   const panel = aiPanel(canvas).get()
   if (!ctx || !panel || canvas.readOnly() || !aiStatus(canvas).get()?.canInsert) return
-  const ids = applySummary(canvas, panel.target, panel.summary, ctx.me.user.id)
+  const ids = applySummary(canvas, panel.target, panel.summary, ctx.me.user.id, panel.runId)
   // It is on the board now (and the toast can take it back): the private copy goes.
   aiPanel(canvas).set(null)
   canvas.focus({ preventScroll: true })
@@ -513,6 +691,8 @@ function applyResult(
   const ctx = getAiCtx(canvas)
   if (!ctx) return
   const by = ctx.me.user.id
+  /** wave L provenance: the run id (none from a wave K api: `lobby.ai` without `run`, as before) */
+  const run = result.runId ?? null
   const partly = result.truncated ? ' Only part of the selection fitted in one request.' : ''
   const done = (text: string, ids: readonly string[], shown: readonly string[] = ids) => {
     offerUndo(canvas, `${text}${partly}`, versionsOf(canvas, touched(canvas, ids)))
@@ -526,6 +706,7 @@ function applyResult(
         summary: result.summary,
         about: target.label,
         truncated: result.truncated,
+        runId: run,
         target,
         opener,
       })
@@ -533,17 +714,40 @@ function applyResult(
     }
     case 'themes': {
       if (!canEdit) return
-      const out = applyThemes(canvas, result.themes, by)
-      if (!out) {
+      // L2-1b: the notes move only once the person has seen where (the preview) and chose Apply.
+      const gone = () =>
         ctx.notify({
           key: NOTICE_KEY,
           text: 'Those notes were moved away or locked meanwhile.',
           tone: 'error',
           timeoutMs: 6000,
         })
+      const pv = previewThemes(canvas, result.themes)
+      if (!pv) {
+        gone()
         return
       }
-      done(themesDone({ ...out, prompts: target.prompts }), out.written)
+      void showPreview(ctx, {
+        runId: run ?? `themes-${++jobSeq}`,
+        title: 'Group into themes',
+        summary: themesPreviewLine(pv),
+        moves: pv.moves,
+        recolors: [],
+        creates: pv.labels.map((l) => ({ ...l, kind: 'text' })),
+      }).then((choice) => {
+        if (choice === 'retry') {
+          // a new, budgeted call (a new run id)
+          void runAi(canvas, { action: 'themes' }, target)
+          return
+        }
+        if (choice !== 'apply') return
+        const out = applyThemes(canvas, result.themes, by, run)
+        if (!out) {
+          gone()
+          return
+        }
+        done(themesDone({ ...out, prompts: target.prompts }), out.written)
+      })
       return
     }
     case 'actions': {
@@ -567,6 +771,7 @@ function applyResult(
           kind: 'action-item',
         },
         by,
+        run,
       )
       done(`Added ${plural(result.items.length, 'action item')}.`, ids)
       return
@@ -582,6 +787,7 @@ function applyResult(
         target,
         { heading: ideasHeading(req.prompt), texts: result.ideas, color: 'yellow', kind: 'idea' },
         by,
+        run,
       )
       done(`Added ${plural(result.ideas.length, 'idea')}.`, ids)
       return

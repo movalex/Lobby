@@ -34,7 +34,7 @@ import {
   viewport,
   waitForCanvas,
 } from '../tests/support/canvas.ts'
-import { pressRedo, pressUndo } from '../tests/support/excalidraw.ts'
+import { pressRedo, pressUndo, pushCount } from '../tests/support/excalidraw.ts'
 import { WEB_URL } from '../tests/support/ports.ts'
 import { downloadFrom, pdfPageTexts } from '../tests/support/present-export.ts'
 import {
@@ -42,6 +42,7 @@ import {
   aiButton,
   aiMenu,
   aiObjects,
+  applyPreview,
   continueIfAsked,
   countOf,
   FAKE_OPENAI_PORT_3H,
@@ -159,6 +160,12 @@ test('Group into themes on the Lobby tour Brainstorm: notice once, busy state, t
     await aiMenu(a.page).getByTestId('ai-notice-continue').click()
     await expect(a.page.getByTestId('ai-busy')).toContainText('Grouping into themes')
     await expect(aiButton(a.page)).toHaveAttribute('aria-busy', 'true')
+    // wave L (L2-1b): the plan shows first, and nothing is written until Apply
+    await expect(a.page.getByTestId('ai-preview-panel')).toBeVisible({ timeout: 20_000 })
+    const pushed = await pushCount(a.page)
+    await expect(a.page.getByTestId('ai-preview-move')).not.toHaveCount(0)
+    expect(await pushCount(a.page)).toBe(pushed)
+    await applyPreview(a.page, { summary: 'Moves 8 notes into 3 themes' })
     await expect(a.page.getByTestId('ai-done')).toContainText('Grouped 8 notes into 3 themes.', {
       timeout: 20_000,
     })
@@ -255,6 +262,7 @@ test('Group into themes on the Lobby tour Brainstorm: notice once, busy state, t
     await aiMenu(a.page).getByTestId('ai-themes').click()
     await aiMenu(a.page).getByTestId('ai-regroup-go').click()
     await expect(aiMenu(a.page)).toHaveCount(0)
+    await applyPreview(a.page)
     await expect(a.page.getByTestId('ai-done')).toHaveText(/^Grouped 8 notes into 3 themes\.Undo/)
     const again = await frameContents(a.page, BRAINSTORM)
     expect(again?.kids.filter((k) => k.ai === 'theme-label')).toHaveLength(3)
@@ -325,6 +333,7 @@ test('DEMO 1:00 → 1:20 → 2:45 → 3:30 (W5-04): a note added with N joins th
     await expect(aiMenu(a.page)).toHaveAttribute('data-view', 'regroup')
     await expect(aiMenu(a.page)).toContainText('“Gameplay”, “Story” and “Community”')
     await continueIfAsked(a.page)
+    await applyPreview(a.page, { summary: 'Moves 9 notes into 3 themes' })
     await expect(a.page.getByTestId('ai-done')).toContainText('Grouped 9 notes into 3 themes.', {
       timeout: 20_000,
     })
@@ -808,6 +817,7 @@ test('Group into themes leaves a template’s prompt notes where they are (R9; C
   await expect(menu.getByTestId('ai-themes')).toContainText('Sorts 3 notes; 3 prompt notes stay put')
   await menu.getByTestId('ai-themes').click()
   await continueIfAsked(a.page)
+  await applyPreview(a.page, { summary: 'Moves 3 notes' })
   await expect(a.page.getByTestId('ai-done')).toContainText('The 3 prompt notes stayed where they were.')
   const sent = itemsOf(openai.requests.at(-1) as never).map((i) => i.text)
   expect(sent.sort()).toEqual(['CI queue was slow!', 'Late brief changes!', 'Slow approvals!'])
@@ -880,6 +890,7 @@ test('Hostile model output (a prompt injection on a note) cannot touch other obj
   await openAiMenu(a.page)
   await aiMenu(a.page).getByTestId('ai-themes').click()
   await continueIfAsked(a.page)
+  await applyPreview(a.page, { summary: 'Moves 8 notes' })
   await expect(a.page.getByTestId('ai-done')).toContainText('Grouped 8 notes')
   const after = await frameContents(a.page, BRAINSTORM)
   // Nothing but the selected notes moved: the frame's other objects and every note elsewhere stayed.

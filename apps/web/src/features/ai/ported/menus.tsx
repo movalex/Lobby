@@ -27,6 +27,7 @@ import { useValue } from '../../../lib/signals.ts'
 import { SparkIcon, Spinner } from '../icons.tsx'
 import {
   anchorAtScene,
+  endUndoOffer,
   ensureAiStatus,
   expandTopic,
   openAiMenu,
@@ -35,6 +36,9 @@ import {
   setWorkspaceAiDefault,
 } from './actions.ts'
 import { canBuildWithAi } from './gate.ts'
+import { aiLens } from './lens.tsx'
+import { AI_COMMAND_IDS, aiActionsArgs } from './public.ts'
+import { applyRemoval, recordedRunOf, removalPlan, removedText } from './remove.ts'
 import { type AiMenuState, aiJob, aiMenu, aiStatus, getAiCtx, setAiCtx } from './runtime.ts'
 import { type AiTarget, NONE, selectionTarget, targetAt, viewTarget } from './target.ts'
 
@@ -137,7 +141,58 @@ const run = (ctx: CanvasFeatureContext, t: MenuTarget, action: 'summarize' | 'th
   later(() => void runAi(ctx.canvas, { action }, target, { at: where }))
 }
 
+/** The recorded AI run the context menu is about: the element under the pointer, else the one selected. */
+function runAt(ctx: CanvasFeatureContext, t: MenuTarget): string | null {
+  const id = t.hit?.id ?? (t.ids.length === 1 ? t.ids[0] : undefined)
+  return id ? recordedRunOf(ctx.canvas, id) : null
+}
+
+/**
+ * "Remove this AI result" (L2-1d): one transact deleting what the run made that nobody changed since (./remove.ts).
+ * A themes run moved notes that were there before: History puts them back (its before_ai_themes checkpoint).
+ */
+export function removeResult(ctx: CanvasFeatureContext, runId: string): void {
+  const { canvas } = ctx
+  const plan = removalPlan(canvas, runId)
+  if (!plan || canvas.readOnly()) return
+  if (plan.themes) {
+    ctx.openPanel('history')
+    ctx.notify({
+      key: 'dr-ai',
+      text: 'To put the notes back, restore “Before AI grouped notes into themes” in History.',
+      testId: 'ai-done',
+      timeoutMs: 8000,
+    })
+    return
+  }
+  // the last result's Undo toast must not take this step for its own (and dismiss this toast)
+  endUndoOffer(canvas)
+  const removed = applyRemoval(canvas, plan)
+  ctx.notify({
+    key: 'dr-ai',
+    text: removedText(removed, plan.kept.length),
+    testId: 'ai-removed',
+    timeoutMs: 7000,
+  })
+}
+
 export const CONTEXT_MENU: readonly MenuEntrySpec[] = [
+  {
+    id: 'ai.remove',
+    group: 'ai',
+    order: 20,
+    label: (ctx, t) => {
+      const run = runAt(ctx, t)
+      return run && removalPlan(ctx.canvas, run)?.themes
+        ? 'Put the notes back (History)…'
+        : 'Remove this AI result'
+    },
+    visible: (ctx, t) => !ctx.canvas.readOnly() && runAt(ctx, t) !== null,
+    run: (ctx, t) => {
+      const run = runAt(ctx, t)
+      if (run) later(() => removeResult(ctx, run))
+    },
+  },
   {
     // K7-1: one click from a topic's context menu
     id: 'ai.expand',
@@ -234,6 +289,68 @@ const viewCentre = (ctx: CanvasFeatureContext): AiMenuState['at'] => {
 
 export const COMMANDS: readonly CommandSpec[] = [
   {
+    // Group into themes on the selection, else the frame in the middle of the view (the coach, the palette)
+    id: AI_COMMAND_IDS.themes,
+    label: 'Group into themes',
+    group: 'AI',
+    keywords: ['ai', 'cluster', 'affinity'],
+    enabled: (ctx) => insertOn(ctx) && aiJob(ctx.canvas).get() === null,
+    disabledReason: (ctx) =>
+      insertOn(ctx) && viewTarget(ctx.canvas).notes < 2 ? 'Select two or more sticky notes' : null,
+    run: async (ctx) => {
+      setAiCtx(ctx)
+      await ensureAiStatus(ctx.canvas)
+      if (!insertOn(ctx) || aiJob(ctx.canvas).get()) return
+      const target = viewTarget(ctx.canvas)
+      if (target.notes < 2) return
+      const where = viewCentre(ctx)
+      if (target.groups.length) openAiMenu(ctx.canvas, where, target, 'regroup')
+      else void runAi(ctx.canvas, { action: 'themes' }, target, { at: where })
+    },
+  },
+  {
+    // Action items on the selection (else the frame in view); args AiActionsArgs: ordered by a revealed vote
+    id: AI_COMMAND_IDS.actions,
+    label: 'Action items',
+    group: 'AI',
+    keywords: ['ai', 'next steps', 'todo', 'owners'],
+    enabled: (ctx) => insertOn(ctx) && aiJob(ctx.canvas).get() === null,
+    run: async (ctx, _source, args) => {
+      setAiCtx(ctx)
+      await ensureAiStatus(ctx.canvas)
+      if (!insertOn(ctx) || aiJob(ctx.canvas).get()) return
+      const target = viewTarget(ctx.canvas)
+      if (target.texts === 0) return
+      const { voteSessionId } = aiActionsArgs(args)
+      void runAi(ctx.canvas, { action: 'actions', ...(voteSessionId ? { voteSessionId } : {}) }, target, {
+        at: viewCentre(ctx),
+      })
+    },
+  },
+  {
+    // L2-1d: the selected AI-made element's run
+    id: 'ai.remove-result',
+    label: 'Remove this AI result',
+    group: 'AI',
+    enabled: (ctx) =>
+      !ctx.canvas.readOnly() &&
+      ctx.canvas.selection.length === 1 &&
+      recordedRunOf(ctx.canvas, ctx.canvas.selection[0] as string) !== null,
+    run: (ctx) => {
+      const id = ctx.canvas.selection[0]
+      const run = id ? recordedRunOf(ctx.canvas, id) : null
+      if (run) removeResult(ctx, run)
+    },
+  },
+  {
+    // L2-1c: the AI lens (this tab only)
+    id: 'ai.lens',
+    label: 'Show what AI made',
+    group: 'View',
+    readOnlyAllowed: true,
+    run: (ctx) => aiLens(ctx.canvas).set(!aiLens(ctx.canvas).get()),
+  },
+  {
     id: 'ai.expand',
     label: 'Expand with AI',
     enabled: (ctx) => buildOn(ctx.canvas) && topicOf(ctx.canvas) !== null && aiJob(ctx.canvas).get() === null,
@@ -275,6 +392,15 @@ const settingsOf = (ctx: CanvasFeatureContext) => aiStatus(ctx.canvas).get()?.se
 
 /** Shown even while AI is off here (the owner turns it back on from here); nothing for anyone else. */
 export const MAIN_MENU: readonly MenuEntrySpec[] = [
+  {
+    // L2-1c: everyone (what AI made is on the board for everyone); this tab only, never stored
+    id: 'ai.lens',
+    group: 'board',
+    order: 59,
+    label: 'Show what AI made',
+    checked: (ctx) => aiLens(ctx.canvas).get(),
+    run: (ctx) => aiLens(ctx.canvas).set(!aiLens(ctx.canvas).get()),
+  },
   {
     id: 'ai.board',
     group: 'board',

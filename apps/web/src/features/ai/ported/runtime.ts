@@ -3,20 +3,26 @@
 // (lib/signals.ts), so the selection-bar button, the context menu and the overlay read them with narrow
 // useValue selectors; nothing here runs per frame.
 
-// Wave L foundation: the menus' requests stay the four actions this build runs (AiLegacyAction); W2 widens
-// them (and these labels) as it adds the wave L actions.
-import type { AiLegacyAction as AiAction, AiStatus } from '@draftroom/contracts'
+// Wave L (W2): the menus' own requests (AiRequest) stay the four legacy actions; a job (the busy pill) can be
+// any action, since public.ts `runAi` runs the wave L ones for every workstream.
+import type { AiAction, AiLegacyAction, AiStatus } from '@draftroom/contracts'
 import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { type Atom, atom } from '../../../lib/signals.ts'
 import type { ShimmerPlan } from './shimmer.ts'
 import type { AiTarget } from './target.ts'
 
-/** The same labels as ../runtime.ts (a tldraw module until wave 4). */
+/** The same labels as ../runtime.ts (a tldraw module until wave 4), and the wave L actions'. */
 export const ACTION_LABELS: Record<AiAction, string> = {
   summarize: 'Summarize',
   themes: 'Group into themes',
   actions: 'Action items',
   ideas: 'Generate ideas',
+  recap: 'Wrap up',
+  ask: 'Ask this board',
+  command: 'Board command',
+  diagram: 'Diagram from words',
+  sort: 'Sort by a lens',
+  score: 'Place on a 2x2',
 }
 
 export const BUSY_LABELS: Record<AiAction, string> = {
@@ -24,6 +30,12 @@ export const BUSY_LABELS: Record<AiAction, string> = {
   themes: 'Grouping into themes…',
   actions: 'Finding action items…',
   ideas: 'Generating ideas…',
+  recap: 'Writing the recap…',
+  ask: 'Reading the board…',
+  command: 'Working it out…',
+  diagram: 'Drawing the diagram…',
+  sort: 'Sorting…',
+  score: 'Placing on the 2x2…',
 }
 
 /** The busy pill's words: the action's, or what the ideas are for. */
@@ -33,7 +45,8 @@ export function busyLabel(job: { action: AiAction; into?: AiInto }): string {
   return BUSY_LABELS[job.action]
 }
 
-function perCanvas<T>(make: (canvas: LobbyCanvas) => T) {
+/** One value per canvas (a WeakMap: a closed board leaves nothing behind). */
+export function perCanvas<T>(make: (canvas: LobbyCanvas) => T) {
   const map = new WeakMap<LobbyCanvas, T>()
   return (canvas: LobbyCanvas): T => {
     let v = map.get(canvas)
@@ -52,9 +65,11 @@ function perCanvas<T>(make: (canvas: LobbyCanvas) => T) {
  */
 export type AiInto = { kind: 'expand'; topicId: string } | { kind: 'mindmap' }
 
-/** A request the person asked for (it may still wait for the privacy notice). */
+/** A request the person asked for from the AI menus (it may still wait for the privacy notice). */
 export interface AiRequest {
-  action: AiAction
+  action: AiLegacyAction
+  /** actions (L2-4, vote-weighted): order the items by this revealed vote */
+  voteSessionId?: string
   /** summarize: the web always asks for 'panel' (editors add it to the board from the panel). */
   mode?: 'insert' | 'panel'
   prompt?: string
@@ -66,11 +81,18 @@ export interface AiRequest {
 export interface AiMenuState {
   /** Where the popover points, in px from the canvas container's top-left. */
   at: { x: number; top: number; bottom: number }
-  /** 'regroup': asked before grouping notes that already sit in groups (DANA-10). */
-  view: 'menu' | 'ideas' | 'mindmap' | 'notice' | 'regroup'
+  /** 'regroup': asked before grouping notes that already sit in groups (DANA-10); 'ask': Ask this board (L2-2). */
+  view: 'menu' | 'ideas' | 'mindmap' | 'notice' | 'regroup' | 'ask'
   target: AiTarget
   /** The request waiting for the notice (view 'notice'). */
   pending: AiRequest | null
+  /**
+   * Wave L: a notice asked by public.ts `runAi` (any action, any caller): what it will do and send, and the
+   * answer (Continue: true; Cancel, Escape or closing it any other way: false).
+   */
+  notice?: { verb: string; what: string; confirm(ok: boolean): void }
+  /** view 'ask': the question to start with (the palette's "Ask: …") */
+  question?: string
 }
 
 export interface AiJob {
@@ -90,6 +112,8 @@ export interface AiPanelState {
   summary: string
   about: string
   truncated: boolean
+  /** The summary's run id (provenance of the card "Add to board" makes); null from a wave K api. */
+  runId: string | null
   /** What was summarized: "Add to board" puts the card there (DANA-04: nothing lands unasked). */
   target: AiTarget
   /** Where the keyboard goes back to when the panel closes from it (W5-47): the AI button, else the board. */

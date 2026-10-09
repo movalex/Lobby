@@ -10,6 +10,7 @@ import {
   plural,
   themesDone,
   themesHint,
+  themesPreviewLine,
   topicLabel,
 } from './copy.ts'
 
@@ -32,6 +33,18 @@ describe('AI copy', () => {
   it('action items carry their owner on a second line', () => {
     expect(actionItemText({ text: 'Book the studio', owner: 'Sam' })).toBe('Book the studio\nOwner: Sam')
     expect(actionItemText({ text: 'Write the brief', owner: null })).toBe('Write the brief')
+    // wave L (L2-4): a vote-weighted item says how many votes it follows
+    expect(actionItemText({ text: 'Hire a composer', owner: 'Priya', votes: 5 })).toBe(
+      'Hire a composer\nOwner: Priya\n5 votes',
+    )
+    expect(actionItemText({ text: 'Cut the teaser', owner: null, votes: 1 })).toBe('Cut the teaser\n1 vote')
+  })
+
+  it('the themes preview counts what moves (L2-1b)', () => {
+    expect(themesPreviewLine({ notes: 23, themes: 5, grows: false })).toBe('Moves 23 notes into 5 themes')
+    expect(themesPreviewLine({ notes: 1, themes: 1, grows: true })).toBe(
+      'Moves 1 note into 1 theme; the frame grows to fit',
+    )
   })
 
   it('the owner’s budget line is the contract’s wording ("AI budget used today: N%")', () => {

@@ -1,18 +1,19 @@
 // OWNER: W2 (wave L, "AI on the board"). The web AI feature's cross-workstream API: W3 (the palette and
 // plain-language commands), W4 (Diagram from words), W5 (Facilitate > Wrap up) and W8 (sort by a lens, 2x2
 // placement) import ONLY this file from features/ai. Frozen at the wave L foundation: the names, signatures
-// and semantics below; W2 replaces the bodies.
-//
-// Foundation state (safe defaults, nothing changes for anyone today):
-// - runAi resolves null and sends nothing (callers treat null as "nothing to apply");
-// - showAiPreview resolves 'discard' and writes nothing (nothing is applied without the preview);
-// - findSpot returns the view's centre, with no frame (W2's body uses apply.ts's spot rules);
-// - aiCustomData is final (pure).
-// The command ids are registered by W2 ('ai.themes' and 'ai.actions' already are, in ./menus.tsx); running an
-// id nobody registered yet is a no-op (canvas-ux runCommand answers false).
+// and semantics below. W2's bodies (wave L):
+// - runAi: ./actions.ts `runPublic` (the menus' gate, notice, busy pill and error notices);
+// - showAiPreview: ./preview.tsx (the screen-layer preview with Apply, Try again and Discard);
+// - findSpot: ./apply.ts `spotNear` (the rules AI notes are placed by);
+// - aiCustomData: ./provenance.ts (pure).
+// The command ids are registered by W2 in ./menus.tsx; running an id nobody registered is a no-op (canvas-ux
+// runCommand answers false).
 
 import type { AiResult, AiRunInput } from '@draftroom/contracts'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
+import { runPublic } from './actions.ts'
+import { spotNear } from './apply.ts'
+import { showPreview } from './preview.tsx'
 
 // ---- running an AI action --------------------------------------------------------------------------------
 
@@ -25,13 +26,9 @@ import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
  * elements). W2's body sends `at` (the selection's bounds) for the live "is using AI here" shimmer when the
  * caller gave none, waits for this tab's pending pushes first (the api reads the server's copy), and makes a
  * new budgeted call each time (Try again is a new call with a new run id).
- *
- * Foundation stub: resolves null, sends nothing.
  */
-export async function runAi(ctx: CanvasFeatureContext, input: AiRunInput): Promise<AiResult | null> {
-  void ctx
-  void input
-  return null
+export function runAi(ctx: CanvasFeatureContext, input: AiRunInput): Promise<AiResult | null> {
+  return runPublic(ctx, input).catch(() => null)
 }
 
 // ---- the shared preview ----------------------------------------------------------------------------------
@@ -67,39 +64,19 @@ export type AiPreviewChoice = 'apply' | 'retry' | 'discard'
  * choice. Nothing is written before it resolves; the caller writes on 'apply' (one transact), calls again on
  * 'retry' and does nothing on 'discard'. One preview at a time per canvas: a second call while one is open
  * resolves the first with 'discard'. Escape, closing the board or losing edit rights is 'discard'.
- *
- * Foundation stub: resolves 'discard' (nothing is ever applied without the preview).
  */
-export async function showAiPreview(
-  ctx: CanvasFeatureContext,
-  plan: AiPreviewPlan,
-): Promise<AiPreviewChoice> {
-  void ctx
-  void plan
-  return 'discard'
+export function showAiPreview(ctx: CanvasFeatureContext, plan: AiPreviewPlan): Promise<AiPreviewChoice> {
+  return showPreview(ctx, plan)
 }
 
 // ---- provenance ------------------------------------------------------------------------------------------
 
-/** The `customData.lobby.kind` prefix of AI-made elements. */
-export const AI_KIND_PREFIX = 'ai-'
-/** A kind word after the prefix: what canvas-schema's `kind` value allows (32 characters with the prefix). */
-const KIND_WORD = /^[a-z][a-z0-9-]{0,28}$/
-
 /**
- * The `customData` an AI-made element is created with (L2-1a): `lobby.ai = { by, run }` (canvas-schema
- * AiValue: `run` is the AiResult's run id) and `lobby.kind = 'ai-' + kind` ('theme-label', 'recap-heading',
- * 'recap-item', 'answer', 'diagram-node', …). `run` null or absent leaves it out (an element made before wave
- * L, or by a path with no run). Throws for a kind word the schema would refuse (a programming error).
+ * `AI_KIND_PREFIX` ('ai-') and `aiCustomData(by, kind, run?)`: the `customData` an AI-made element is created
+ * with (L2-1a), `lobby.ai = { by, run }` and `lobby.kind = 'ai-' + kind`. Implemented in ./provenance.ts (the
+ * AI feature's own writers import it from there); the signatures are the frozen ones.
  */
-export function aiCustomData(
-  by: string,
-  kind: string,
-  run?: string | null,
-): { lobby: { ai: { by: string; run?: string }; kind: string } } {
-  if (!KIND_WORD.test(kind)) throw new Error(`aiCustomData: not a kind word: ${JSON.stringify(kind)}`)
-  return { lobby: { ai: run ? { by, run } : { by }, kind: `${AI_KIND_PREFIX}${kind}` } }
-}
+export { AI_KIND_PREFIX, aiCustomData } from './provenance.ts'
 
 // ---- placement -------------------------------------------------------------------------------------------
 
@@ -119,17 +96,11 @@ export interface AiSpot {
 /**
  * A spot for new content (W4's diagrams, W2's recap frame, W8's matrix frame): inside the home frame of `near`
  * when it has room there, else beside `near` (right of or below it, clear of what is around), else the view's
- * centre; never over existing content. Reads the canvas only.
- *
- * Foundation stub: the view's centre, on the open canvas (no frame, no obstacle check).
+ * centre; never over existing content. Reads the canvas only (a frame that would have to grow to hold it is
+ * not grown: the spot goes beside it).
  */
 export function findSpot(ctx: CanvasFeatureContext, req: AiSpotRequest): AiSpot {
-  const v = ctx.canvas.viewport.get()
-  return {
-    x: v.x + v.width / 2 - req.size.w / 2,
-    y: v.y + v.height / 2 - req.size.h / 2,
-    frameId: null,
-  }
+  return spotNear(ctx.canvas, req.size, req.near ?? [])
 }
 
 // ---- command ids (CommandSpec ids W2 registers; canvas-ux runCommand(ctx, id, source, args)) -------------
