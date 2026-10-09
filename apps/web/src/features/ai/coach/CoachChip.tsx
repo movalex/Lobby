@@ -7,6 +7,8 @@
 //   vote    → W5's 'workshops.vote.setup' {scope: 'selection', refs: the theme notes};
 //   actions → 'ai.actions' {voteSessionId} on the vote's top items (selected first);
 //   wrapup  → 'ai.recap' {scope: 'session'}.
+// The AI steps (themes, actions) are offered only while AI may add to this board for this person (./next-step.ts:
+// the AI status, read again when it changes); a click that still cannot run says why (never a silent click).
 
 import { can } from '@draftroom/permissions'
 import { useEffect, useState } from 'react'
@@ -15,8 +17,9 @@ import { useUserKind } from '../../../invite/guest.tsx'
 import { subscribeValue } from '../../../lib/signals.ts'
 import { runCommand } from '../../canvas-ux/ported/commands.ts'
 import { SparkIcon } from '../icons.tsx'
+import { canBuildWithAi } from '../ported/gate.ts'
 import { AI_COMMAND_IDS } from '../ported/public.ts'
-import { setAiCtx } from '../ported/runtime.ts'
+import { aiJob, aiStatus, setAiCtx } from '../ported/runtime.ts'
 import { idOfRef } from '../ported/target.ts'
 import { coachFacts, coachWorkshop, dismissedSteps, dismissStep, seedWorkshop } from './facts.ts'
 import { type CoachStep, nextStep, stepKey } from './next-step.ts'
@@ -45,6 +48,20 @@ export function runStep(ctx: CanvasFeatureContext, step: CoachStep): boolean {
     case 'wrapup':
       return runCommand(ctx, AI_COMMAND_IDS.recap, 'menu', { scope: 'session' })
   }
+}
+
+/** What the chip says when its step could not run (null: nothing to say; Wrap up always runs). */
+export function refusedHint(
+  ctx: CanvasFeatureContext,
+  step: CoachStep,
+): { text: string; testId: string; tone?: 'error' } | null {
+  if (step.id === 'vote')
+    return { text: 'Open Facilitate › Voting to start the vote on the themes.', testId: 'coach-vote-hint' }
+  if (step.id === 'wrapup') return null
+  const text = aiJob(ctx.canvas).get()
+    ? 'Lobby is still working on another AI request. Wait for it to finish.'
+    : 'AI isn’t available on this board right now.'
+  return { text, testId: 'ai-error', tone: 'error' }
 }
 
 /**
@@ -92,6 +109,7 @@ function useCoachStep(ctx: CanvasFeatureContext): CoachStep | null {
       nextStep(coachWorkshop(canvas).get(), coachFacts(canvas), {
         facilitator: !canvas.readOnly(),
         following: canvas.follow.current() !== null,
+        ai: canBuildWithAi(aiStatus(canvas).get(), canvas.readOnly()),
       }),
     )
   }
@@ -109,6 +127,8 @@ function useCoachStep(ctx: CanvasFeatureContext): CoachStep | null {
       canvas.on('change', later),
       canvas.on('followChanged', later),
       subscribeValue(coachWorkshop(canvas), later),
+      // AI switched on or off here, the budget spent, the first status read landing
+      subscribeValue(aiStatus(canvas), later),
     ]
     later()
     return () => {
@@ -131,13 +151,9 @@ function CoachChip({ ctx }: { ctx: CanvasFeatureContext }) {
         className="dr-ai-coach__run"
         data-testid="coach-run"
         onClick={() => {
-          if (!runStep(ctx, step) && step.id === 'vote')
-            ctx.notify({
-              key: 'dr-ai',
-              text: 'Open Facilitate › Voting to start the vote on the themes.',
-              testId: 'coach-vote-hint',
-              timeoutMs: 6000,
-            })
+          if (runStep(ctx, step)) return
+          const hint = refusedHint(ctx, step)
+          if (hint) ctx.notify({ key: 'dr-ai', timeoutMs: 6000, ...hint })
         }}
       >
         <SparkIcon size={13} />

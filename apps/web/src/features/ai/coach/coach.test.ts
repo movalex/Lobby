@@ -9,13 +9,15 @@
 import { PRIVATE_NOTES_EVENTS, WORKSHOP_EVENTS } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadWorkshop, workshopKit } from '../../workshops/ported/ctx-kit.ts'
-import { aiKit, type El, note, renderIn } from '../ported/test-kit.ts'
-import { CoachOverlay } from './CoachChip.tsx'
+import { aiJob } from '../ported/runtime.ts'
+import { AI_ON, aiKit, type El, note, renderIn } from '../ported/test-kit.ts'
+import { CoachOverlay, refusedHint } from './CoachChip.tsx'
 import {
   applyWorkshopEvent,
   coachFacts,
   coachKey,
   coachWorkshop,
+  dismissalDay,
   dismissedSteps,
   dismissStep,
   listenWorkshop,
@@ -32,7 +34,7 @@ import {
 } from './next-step.ts'
 
 const SID = 'vot_0123456789abcdefghij'
-const FACILITATOR: CoachRole = { facilitator: true, following: false }
+const FACILITATOR: CoachRole = { facilitator: true, following: false, ai: true }
 const NONE_WS: CoachWorkshop = { brainstorm: null, vote: null }
 const ids = (n: number, p = 'n') => Array.from({ length: n }, (_, i) => `${p}${i + 1}`)
 const facts = (over: Partial<CoachFacts> = {}): CoachFacts => ({
@@ -136,8 +138,31 @@ describe('next-step: the state table', () => {
 
   it('viewers, guests and followers in present mode get nothing', () => {
     const f = facts({ frames: [{ frameId: 'f1', ungrouped: ids(10) }] })
-    expect(nextStep(NONE_WS, f, { facilitator: false, following: false })).toBeNull()
-    expect(nextStep(NONE_WS, f, { facilitator: true, following: true })).toBeNull()
+    expect(nextStep(NONE_WS, f, { facilitator: false, following: false, ai: true })).toBeNull()
+    expect(nextStep(NONE_WS, f, { facilitator: true, following: true, ai: true })).toBeNull()
+  })
+
+  it('AI off (or not usable here): no themes or action items chip; the vote and Wrap up stay', () => {
+    const OFF: CoachRole = { ...FACILITATOR, ai: false }
+    const crowded = facts({ frames: [{ frameId: 'f1', ungrouped: ids(9) }] })
+    expect(nextStep(NONE_WS, crowded, OFF)).toBeNull()
+    expect(
+      nextStep(
+        { brainstorm: { status: 'revealed', frameId: 'f1' }, vote: null },
+        facts({ frames: [{ frameId: 'f1', ungrouped: ids(3) }] }),
+        OFF,
+      ),
+    ).toBeNull()
+    const revealed: CoachWorkshop = {
+      brainstorm: null,
+      vote: { sessionId: SID, status: 'revealed', top: ['shape:a'] },
+    }
+    expect(nextStep(revealed, facts({ themeLabels: 2, themeNotes: ['a', 'b'] }), OFF)).toBeNull()
+    // what needs no AI is still offered
+    expect(nextStep(NONE_WS, facts({ themeLabels: 2, themeNotes: ['a', 'b'] }), OFF)?.id).toBe('vote')
+    expect(nextStep(revealed, facts({ actionItems: 2 }), OFF)?.id).toBe('wrapup')
+    // the 8+ notes of a new round do not hide the vote behind an AI step that cannot run
+    expect(nextStep(NONE_WS, facts({ ...crowded, themeLabels: 1, themeNotes: ['a'] }), OFF)?.id).toBe('vote')
   })
 })
 
@@ -311,12 +336,26 @@ describe('dismissals and the chip', () => {
 
   it('a dismissed step stays dismissed for that board (stored), and only that step', () => {
     const s = memory()
-    dismissStep('b-1', 'themes', s)
+    const now = Date.UTC(2026, 9, 8, 12, 0, 0)
+    dismissStep('b-1', 'themes', s, now)
     resetDismissals() // a reload: only the storage is left
-    expect(dismissedSteps('b-1', s).has('themes')).toBe(true)
-    expect(dismissedSteps('b-1', s).has('vote')).toBe(false)
-    expect(dismissedSteps('b-2', s).has('themes')).toBe(false)
-    expect(JSON.parse(s.m.get(coachKey('b-1')) ?? '[]')).toEqual(['themes'])
+    expect(dismissedSteps('b-1', s, now + 3_600_000).has('themes')).toBe(true)
+    expect(dismissedSteps('b-1', s, now).has('vote')).toBe(false)
+    expect(dismissedSteps('b-2', s, now).has('themes')).toBe(false)
+    expect(JSON.parse(s.m.get(coachKey('b-1')) ?? '[]')).toEqual([`themes@${dismissalDay(now)}`])
+  })
+
+  it('a dismissal holds for the day: the board’s next workshop (another day) offers the step again', () => {
+    const s = memory()
+    const now = Date.UTC(2026, 9, 8, 12, 0, 0)
+    const nextWeek = now + 7 * 24 * 3_600_000
+    dismissStep('b-4', 'themes', s, now)
+    resetDismissals()
+    expect(dismissedSteps('b-4', s, now).has('themes')).toBe(true)
+    expect(dismissedSteps('b-4', s, nextWeek).has('themes')).toBe(false)
+    // a dismissal that day keeps only that day's
+    dismissStep('b-4', 'vote', s, nextWeek)
+    expect(JSON.parse(s.m.get(coachKey('b-4')) ?? '[]')).toEqual([`vote@${dismissalDay(nextWeek)}`])
   })
 
   it('with localStorage throwing it still works: the page keeps the dismissal', () => {
@@ -344,5 +383,46 @@ describe('dismissals and the chip', () => {
     expect(html).not.toContain('coach-chip')
     expect(k.pushes).toEqual([])
     expect(k.requests).toEqual([])
+  })
+
+  it('AI off on the board, not configured, the budget spent, no insert, or the status not read yet: no chip', () => {
+    vi.stubGlobal('document', { querySelector: () => null })
+    const board = [
+      { id: 'f1', type: 'frame', x: 0, y: 0, width: 2000, height: 1200, name: 'Ideas' } as El,
+      ...Array.from({ length: 9 }, (_, i) =>
+        note(`n${i}`, 40 + (i % 4) * 220, 100 + Math.floor(i / 4) * 220, `Idea ${i}`, { frameId: 'f1' }),
+      ).flat(),
+    ]
+    const spent = { usedPercent: 100, resetsAt: '2026-10-09T00:00:00.000Z' }
+    for (const [why, status] of [
+      ['board off', { ...AI_ON, enabled: false, reason: 'board-off' }],
+      ['not configured', { ...AI_ON, enabled: false, reason: 'not-configured' }],
+      ['budget spent', { ...AI_ON, budget: spent }],
+      ['may not insert', { ...AI_ON, canInsert: false }],
+      ['not read yet', null],
+    ] as const) {
+      const k = aiKit(board, { status: status as never })
+      expect(renderIn(k, CoachOverlay), why).not.toContain('coach-chip')
+      expect(k.requests, why).toEqual([])
+    }
+    // the same board with AI usable: the chip
+    expect(renderIn(aiKit(board), CoachOverlay)).toContain('Group these 9 notes into themes')
+  })
+
+  it('a click that cannot run says why (never silent); Wrap up needs no AI and has no hint', () => {
+    const k = aiKit([], { status: { ...AI_ON, enabled: false, reason: 'board-off' } })
+    const themes = { id: 'themes', label: 'Group these 9 notes into themes', notes: ['n1'] } as const
+    expect(refusedHint(k.ctx, themes)).toEqual({
+      text: 'AI isn’t available on this board right now.',
+      testId: 'ai-error',
+      tone: 'error',
+    })
+    aiJob(k.canvas).set({ id: 1 } as never)
+    expect(refusedHint(k.ctx, { id: 'actions', label: 'x', voteSessionId: SID, refs: [] })?.text).toContain(
+      'still working',
+    )
+    aiJob(k.canvas).set(null)
+    expect(refusedHint(k.ctx, { id: 'vote', label: 'x', refs: [] })?.testId).toBe('coach-vote-hint')
+    expect(refusedHint(k.ctx, { id: 'wrapup', label: 'Wrap up' })).toBeNull()
   })
 })

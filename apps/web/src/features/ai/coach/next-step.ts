@@ -8,6 +8,9 @@
 //   4. action items on the board: "Wrap up";
 //   and nothing once a recap is on the board, or while a vote is still open or closed but not revealed.
 // Facilitators only (editors with an account); never a viewer, a guest, or someone following in present mode.
+// Steps 1 and 3 run AI: they are offered only while AI may add to this board for this person (on here, allowed
+// to insert, budget left: ../ported/gate.ts canBuildWithAi; unknown until the status read lands). The vote and
+// Wrap up (which has a recap without AI) need no AI.
 
 /** Ungrouped team notes in one frame that make the coach offer themes. */
 export const COACH_THEMES_MIN_NOTES = 8
@@ -57,6 +60,8 @@ export interface CoachRole {
   readonly facilitator: boolean
   /** following someone (present mode's followers) */
   readonly following: boolean
+  /** AI may add to this board for this person now (canBuildWithAi; false while the status is unknown) */
+  readonly ai: boolean
 }
 
 export type CoachStep =
@@ -86,7 +91,7 @@ export function nextStep(ws: CoachWorkshop, facts: CoachFacts, role: CoachRole):
     .filter((f) => f.ungrouped.length >= COACH_THEMES_MIN_NOTES)
     .sort((a, b) => b.ungrouped.length - a.ungrouped.length)[0]
   const group = fromBrainstorm ?? crowded
-  if (group)
+  if (group && role.ai)
     return {
       id: 'themes',
       label: `Group these ${group.ungrouped.length} notes into themes`,
@@ -100,7 +105,7 @@ export function nextStep(ws: CoachWorkshop, facts: CoachFacts, role: CoachRole):
       refs: facts.themeNotes.slice(0, 200).map(ref),
     }
   // 3. the room chose: action items from the winners, ordered by votes
-  if (ws.vote?.status === 'revealed' && facts.actionItems === 0)
+  if (ws.vote?.status === 'revealed' && facts.actionItems === 0 && role.ai)
     return {
       id: 'actions',
       label: `Turn the top ${COACH_TOP_N} into action items`,

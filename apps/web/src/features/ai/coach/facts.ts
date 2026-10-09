@@ -4,7 +4,8 @@
 //    open with the last revealed vote this tab's workshop store holds (W5's lastRevealedResults);
 //  - the board's facts: the team's notes per frame that no AI theme groups yet (contracts splitThemeNotes, as
 //    Group into themes counts them), the AI theme labels and the notes they group, AI action items, a recap frame;
-//  - the dismissed steps of this board, kept in localStorage (try/catch: blocked storage keeps them for the page).
+//  - the dismissed steps of this board, kept in localStorage for the day (try/catch: blocked storage keeps them for
+//    the page).
 // Nothing here requests, writes or plays anything.
 
 import {
@@ -157,10 +158,17 @@ const browserStorage = (): CoachStorage | null => {
 /** Per page, for storage that refuses: the dismissals still hold until the page goes. */
 const inPage = new Map<string, Set<string>>()
 
-export function dismissedSteps(
-  boardId: string,
-  storage: CoachStorage | null = browserStorage(),
-): Set<string> {
+/**
+ * A dismissal holds for the day it was made (this browser's day): a board reused for next week's workshop offers
+ * the step again. Stored as `<step key>@<day>`.
+ */
+export const dismissalDay = (now: number): string => {
+  const d = new Date(now)
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`
+}
+
+/** The stored dismissals of `boardId` (`<key>@<day>`), as far as they can be read. */
+function storedDismissals(boardId: string, storage: CoachStorage | null): Set<string> {
   const out = new Set(inPage.get(boardId) ?? [])
   try {
     const raw = storage?.getItem(coachKey(boardId))
@@ -172,13 +180,29 @@ export function dismissedSteps(
   return out
 }
 
+/** The step keys dismissed on `boardId` today. */
+export function dismissedSteps(
+  boardId: string,
+  storage: CoachStorage | null = browserStorage(),
+  now: number = Date.now(),
+): Set<string> {
+  const day = `@${dismissalDay(now)}`
+  const out = new Set<string>()
+  for (const entry of storedDismissals(boardId, storage))
+    if (entry.endsWith(day)) out.add(entry.slice(0, -day.length))
+  return out
+}
+
 export function dismissStep(
   boardId: string,
   key: string,
   storage: CoachStorage | null = browserStorage(),
+  now: number = Date.now(),
 ): void {
-  const all = dismissedSteps(boardId, storage)
-  all.add(key)
+  const day = `@${dismissalDay(now)}`
+  // today's only: older days have expired
+  const all = new Set([...storedDismissals(boardId, storage)].filter((e) => e.endsWith(day)))
+  all.add(`${key}${day}`)
   inPage.set(boardId, all)
   try {
     storage?.setItem(coachKey(boardId), JSON.stringify([...all].slice(-50)))
