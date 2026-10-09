@@ -22,7 +22,7 @@ import {
 import { aiPanel } from '../ported/runtime.ts'
 import { AI_ON, aiKit, note, renderIn } from '../ported/test-kit.ts'
 import { applyRecap } from './apply.ts'
-import { RECAP_MARKDOWN_MAX_BYTES, recapMarkdown } from './markdown.ts'
+import { mdText, RECAP_MARKDOWN_MAX_BYTES, recapMarkdown } from './markdown.ts'
 import { type RecapPlan, recapPlan, recapWhen } from './plan.ts'
 import { AiRecapOverlay } from './RecapPanel.tsx'
 import { aiRecap, inSelection, runRecap } from './recap.ts'
@@ -367,6 +367,24 @@ describe('Copy as Markdown', () => {
   it('matches the golden file', () => {
     const golden = readFileSync(new URL('./recap.golden.md', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
     expect(recapMarkdown(plan)).toBe(golden)
+  })
+
+  it('the board’s words stay words: links, images, tags, code, emphasis and leading markers are escaped', () => {
+    const md = recapMarkdown({
+      ...plan,
+      headline: '# Not a heading',
+      decisions: [{ text: 'See [the deck](https://x.example) ![pic](https://x.example/p.png)', refs: [] }],
+      actions: [{ task: '<b>Bold</b> *now* `rm -rf` _under_', owner: '1. Sam', refs: [] }],
+      questions: [{ text: '- a question \\ with a backslash', refs: [] }],
+      topVoted: [{ ref: 'shape:n1', label: '[x](y)', votes: 2, rank: 1 }],
+    })
+    expect(md).toContain('\\# Not a heading')
+    expect(md).toContain('- See \\[the deck\\](https://x.example) !\\[pic\\](https://x.example/p.png)')
+    expect(md).toContain('- [ ] \\<b\\>Bold\\</b\\> \\*now\\* \\`rm -rf\\` \\_under\\_ (owner: 1\\. Sam)')
+    expect(md).toContain('- \\- a question \\\\ with a backslash')
+    expect(md).toContain('1. \\[x\\](y) (2 votes)')
+    expect(md).not.toMatch(/[^\\]\[the deck\]\(/)
+    expect(mdText('Plain words, kept as they are.')).toBe('Plain words, kept as they are.')
   })
 
   it('is bounded at 20 KB, cut at a whole line, and says so', () => {

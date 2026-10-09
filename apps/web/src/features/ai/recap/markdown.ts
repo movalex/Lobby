@@ -1,7 +1,9 @@
 // OWNER: W2 (wave L, L2-3). "Copy as Markdown": the recap as Markdown for the client email or Slack (pure; the
 // golden file recap.golden.md pins the format). Bounded at RECAP_MARKDOWN_MAX_BYTES: past it, whole lines are
-// left out and the last line says so. The board's words go in as plain text: line breaks become spaces and the
-// characters Markdown would read as structure in a table cell are escaped.
+// left out and the last line says so. The board's (and the AI's) words go in as plain text: line breaks become
+// spaces, and the characters Markdown or the HTML in it would read as a link, an image, code, emphasis or a tag (a
+// leading heading or list marker too, and a table cell's bar) are backslash-escaped, so a note's "[x](url)" or
+// "<b>" pasted into an email stays words.
 
 import type { RecapPlan } from './plan.ts'
 
@@ -10,31 +12,37 @@ export const RECAP_MARKDOWN_MAX_BYTES = 20_000
 const enc = new TextEncoder()
 const bytes = (s: string) => enc.encode(s).length
 const flat = (s: string) => s.replace(/\s+/g, ' ').trim()
-const cell = (s: string) => flat(s).replace(/\|/g, '\\|')
+/** Board or AI words as plain Markdown text (see the header). */
+export const mdText = (s: string) =>
+  flat(s)
+    .replace(/[\\`*_[\]<>]/g, (c) => `\\${c}`)
+    .replace(/^(\d+)([.)])/, '$1\\$2')
+    .replace(/^([#+=-])/, '\\$1')
+const cell = (s: string) => mdText(s).replace(/\|/g, '\\|')
 const minutes = (n: number | null) => (n === null ? '—' : `${n} min`)
 
 export function recapMarkdown(p: RecapPlan): string {
   const lines: string[] = [`# ${flat(p.title)}`, '', `_${p.scopeLabel}_`]
-  if (p.headline) lines.push('', flat(p.headline))
+  if (p.headline) lines.push('', mdText(p.headline))
   const list = (title: string, items: readonly string[]) => {
     if (!items.length) return
     lines.push('', `## ${title}`, ...items)
   }
   list(
     'Decisions',
-    p.decisions.map((d) => `- ${flat(d.text)}`),
+    p.decisions.map((d) => `- ${mdText(d.text)}`),
   )
   list(
     'Action items',
-    p.actions.map((a) => `- [ ] ${flat(a.task)}${a.owner ? ` (owner: ${flat(a.owner)})` : ''}`),
+    p.actions.map((a) => `- [ ] ${mdText(a.task)}${a.owner ? ` (owner: ${mdText(a.owner)})` : ''}`),
   )
   list(
     'Open questions',
-    p.questions.map((q) => `- ${flat(q.text)}`),
+    p.questions.map((q) => `- ${mdText(q.text)}`),
   )
   list(
     p.topVotedTitle,
-    p.topVoted.map((v) => `${v.rank}. ${flat(v.label)} (${v.votes} ${v.votes === 1 ? 'vote' : 'votes'})`),
+    p.topVoted.map((v) => `${v.rank}. ${mdText(v.label)} (${v.votes} ${v.votes === 1 ? 'vote' : 'votes'})`),
   )
   if (p.plannedVsActual?.length)
     lines.push(
