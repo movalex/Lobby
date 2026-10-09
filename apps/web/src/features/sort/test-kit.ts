@@ -186,6 +186,16 @@ export function fakeCanvas(seed: El[], o: FakeCanvasOptions = {}): Fake {
   const els = new Map<string, El>(
     seed.map((e) => [e.id, { frameId: null, groupIds: [], isDeleted: false, locked: false, angle: 0, ...e }]),
   )
+  // a connector is listed in the `boundElements` of the notes it is bound to, as the engine keeps it
+  for (const e of els.values()) {
+    if (e.type !== 'arrow') continue
+    for (const end of [e.startBinding, e.endBinding] as ({ elementId: string } | null | undefined)[]) {
+      const t = end ? els.get(end.elementId) : undefined
+      if (!t) continue
+      const list = (t.boundElements as { id: string; type: string }[] | null) ?? []
+      if (!list.some((b) => b.id === e.id)) t.boundElements = [...list, { id: e.id, type: 'arrow' }]
+    }
+  }
   const fake: Fake = {
     canvas: undefined as unknown as LobbyCanvas,
     els,
