@@ -106,6 +106,52 @@ describe('the window', () => {
   })
 })
 
+describe('a big board and odd windows (review of wave L)', () => {
+  const grid = (k: number) => ({ x: (k % 60) * 220, y: Math.floor(k / 60) * 220 })
+
+  it('6,000 old notes, then 3 made a minute ago: the 3 are the recap (no record is cut)', async () => {
+    const elements: Record<string, unknown>[] = []
+    for (let k = 0; k < 6000; k++)
+      elements.push(
+        ...note(`old${k}`, `Old note ${k} about the offsite`, { ...grid(k), createdAt: now - 3 * DAY }),
+      )
+    for (const k of [1, 2, 3])
+      elements.push(
+        ...note(`fresh${k}`, `Fresh decision ${k} on pricing`, {
+          x: k * 220,
+          y: 50_000,
+          createdAt: now - 60_000,
+        }),
+      )
+    w.sync.setElements(w.board, elements)
+    const res = await run(w.dave, w.board, since(now - HOUR))
+    expect(res.statusCode, res.body).toBe(200)
+    expect(recapOf(res).truncated).toBe(false)
+    expect(sentItems().map((i) => i.text)).toEqual([1, 2, 3].map((k) => `Fresh decision ${k} on pricing`))
+  })
+
+  it('more in the window than fits: the most recently edited go, in reading order, and `truncated` says so', async () => {
+    const elements: Record<string, unknown>[] = []
+    // all made 2 h ago; note k's words typed k seconds after that (the newest are last in the snapshot)
+    for (let k = 0; k < 6000; k++)
+      elements.push(
+        ...note(`m${k}`, `Note ${k}`, {
+          ...grid(k),
+          createdAt: now - 2 * HOUR,
+          editedAt: now - 2 * HOUR + k * 1000,
+        }),
+      )
+    w.sync.setElements(w.board, elements)
+    const res = await run(w.dave, w.board, since(now - 3 * HOUR))
+    expect(res.statusCode, res.body).toBe(200)
+    expect(recapOf(res).truncated).toBe(true)
+    const texts = sentItems().map((i) => i.text)
+    expect(texts.length).toBeGreaterThan(100)
+    expect(texts).toEqual(Array.from({ length: texts.length }, (_, i) => `Note ${6000 - texts.length + i}`))
+    expect(sentItems()[0]?.id).toBe('n1')
+  })
+})
+
 describe('votes', () => {
   it('an open or closed but unrevealed vote contributes nothing; once revealed, votes:n and the top voted list (ties share a rank)', async () => {
     const vote = await startVote(w.alice, w.board)

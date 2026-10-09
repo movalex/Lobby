@@ -24,11 +24,15 @@
 // An item's JSON line can carry extra facts (`votes`: a revealed vote's count, `theme`: the AI theme label
 // above it): aggregates only, never who voted or who wrote what.
 //
-// Bounded work on untrusted records: at most MAX_VISITED records are looked at, rich text goes through
-// board-ops plainTextOf (node, depth and length budgets), every item is cut at MAX_ITEM_CHARS, and the
-// items stop at the caller's token budget (`truncated` then says so).
+// Bounded work on untrusted records: a frame or group expansion looks at each record once and at most
+// MAX_VISITED of them (the largest board the sync accepts, so a whole-board read of a valid board is never
+// cut: review of wave L), rich text goes through board-ops plainTextOf (node, depth and length budgets),
+// every item is cut at MAX_ITEM_CHARS, and the items stop at MAX_ITEMS and the caller's token budget
+// (`truncated` then says so). When more is eligible than fits, what goes first is chosen for the action:
+// the most relevant to the question (ask) or the instruction (command), the most recently edited (recap).
 
 import { plainTextOf } from '@draftroom/board-ops'
+import { MAX_LIVE_ELEMENTS } from '@draftroom/canvas-schema/limits'
 import type { AiAction, AiNoteFacts } from '@draftroom/contracts'
 import {
   AI_COLOR_NAMES,
@@ -99,8 +103,12 @@ export interface Sources {
   truncated: boolean
 }
 
-/** Records looked at per request, expansion of frames and groups included. */
-export const MAX_VISITED = 5_000
+/**
+ * Records one expansion of frames and groups looks at (each at most once): the largest board the sync
+ * accepts (canvas-schema MAX_LIVE_ELEMENTS), so only a snapshot over the sync's own limit is ever cut.
+ * Wave L's first cut (5,000) silently dropped the newest objects of a big board from whole-board reads.
+ */
+export const MAX_VISITED = MAX_LIVE_ELEMENTS
 /** Items one call can carry (before the token budget). */
 export const MAX_ITEMS = 400
 /** Characters of one item (long text shapes are cut). */
@@ -286,19 +294,21 @@ const INVISIBLE: readonly (readonly [number, number])[] = [
   [0x2060, 0x206f],
   [0xfeff, 0xfeff],
 ]
-const isInvisible = (cp: number) => INVISIBLE.some(([a, b]) => cp >= a && cp <= b)
+const uEscape = (cp: number) => `\\u${cp.toString(16).padStart(4, '0')}`
+/** The INVISIBLE code points as one character class (all of them in the BMP). */
+const INVISIBLE_RE = new RegExp(
+  `[${INVISIBLE.map(([a, b]) => (a === b ? uEscape(a) : `${uEscape(a)}-${uEscape(b)}`)).join('')}]+`,
+  'gu',
+)
+const TAB_RE = /\t/g
 
 /**
  * Plain text for the model: control characters (bidi overrides and zero-width ones included) removed,
  * spaces collapsed within lines, at most two line breaks in a row, trimmed, cut at `max` code points.
  */
 export function cleanText(raw: string, max: number, multiline = true): string {
-  let s = ''
-  for (const ch of raw) {
-    const cp = ch.codePointAt(0) ?? 0
-    if (cp === 0x09) s += ' '
-    else if (!isInvisible(cp)) s += ch
-  }
+  // One pass of two regular expressions (a whole-board read cleans every text of a big board).
+  let s = raw.replace(TAB_RE, ' ').replace(INVISIBLE_RE, '')
   s = multiline
     ? s
         .split('\n')
@@ -307,6 +317,8 @@ export function cleanText(raw: string, max: number, multiline = true): string {
         .replace(/\n{3,}/g, '\n\n')
     : s.replace(/\s+/g, ' ')
   s = s.trim()
+  // UTF-16 length bounds the code points: only a string that may be over `max` is split into them.
+  if (s.length <= max) return s
   const points = Array.from(s)
   return points.length > max
     ? `${points
@@ -381,25 +393,39 @@ export function foldTerms(text: string): string[] {
  * that match nothing keep their order). Bounded: each text is folded once.
  */
 export function rankByQuery(query: string, texts: readonly string[]): number[] {
-  const q = [...new Set(foldTerms(query))]
+  const q = new Set(foldTerms(query))
   const order = texts.map((_, i) => i)
-  if (!q.length || !texts.length) return order
-  const docs = texts.map((t) => foldTerms(t))
-  const avg = docs.reduce((n, d) => n + d.length, 0) / docs.length || 1
+  if (!q.size || !texts.length) return order
+  // One fold per text: its length (in terms) and the counts of the query's terms in it.
+  const lengths: number[] = []
+  const counts: (Map<string, number> | null)[] = []
   const df = new Map<string, number>()
-  for (const d of docs) for (const t of new Set(d)) if (q.includes(t)) df.set(t, (df.get(t) ?? 0) + 1)
-  const N = docs.length
+  let total = 0
+  for (const text of texts) {
+    const d = foldTerms(text)
+    lengths.push(d.length)
+    total += d.length
+    let tf: Map<string, number> | null = null
+    for (const t of d)
+      if (q.has(t)) {
+        tf ??= new Map()
+        tf.set(t, (tf.get(t) ?? 0) + 1)
+      }
+    counts.push(tf)
+    if (tf) for (const t of tf.keys()) df.set(t, (df.get(t) ?? 0) + 1)
+  }
+  const avg = total / texts.length || 1
+  const N = texts.length
   const k1 = 1.2
   const b = 0.75
-  const scores = docs.map((d) => {
-    if (!d.length) return 0
-    const tf = new Map<string, number>()
-    for (const t of d) if (q.includes(t)) tf.set(t, (tf.get(t) ?? 0) + 1)
+  const scores = counts.map((tf, i) => {
+    if (!tf) return 0
+    const len = lengths[i] ?? 0
     let s = 0
     for (const [t, f] of tf) {
       const n = df.get(t) ?? 0
       const idf = Math.log(1 + (N - n + 0.5) / (n + 0.5))
-      s += (idf * (f * (k1 + 1))) / (f + k1 * (1 - b + (b * d.length) / avg))
+      s += (idf * (f * (k1 + 1))) / (f + k1 * (1 - b + (b * len) / avg))
     }
     return s
   })
@@ -473,8 +499,9 @@ function readerOf(shapes: ShapeMap) {
     if (name && !frameNames.includes(name)) frameNames.push(name)
   }
   /**
-   * The named shapes with frames and groups opened up (breadth first, bounded). `keepContainers`: frames
-   * and groups are items too (a command's index), not only what is inside them.
+   * The named shapes with frames and groups opened up (breadth first, each record at most once, at most
+   * MAX_VISITED). `keepContainers`: frames and groups are items too (a command's index), not only what is
+   * inside them.
    */
   const expand = (requested: readonly string[], keepContainers = false) => {
     const picked: ShapeRec[] = []
@@ -593,7 +620,11 @@ export function collectSources(
 }
 
 /** Whether every eligible item fits under the cap and the budget (aliases as `fill` would give them). */
-function fitsWhole(eligible: readonly Eligible[], cap: number, opts: CollectOptions): boolean {
+function fitsWhole(
+  eligible: readonly Eligible[],
+  cap: number,
+  opts: Pick<CollectOptions, 'tokenBudget' | 'extraOf'>,
+): boolean {
   if (eligible.length > cap) return false
   let spent = 0
   for (const [i, e] of eligible.entries()) {
@@ -620,29 +651,37 @@ export interface RecapOptions {
  * What a "since" recap reads: every object with text (notes, texts, shape and arrow labels) whose own or
  * whose label's server-stamped createdAt or lastEditedAt is at or after `since`, in reading order, with the
  * names of their frames and of frames made or renamed in the window. Never a client-set time.
+ *
+ * The whole board is filtered (a number compare per record: no record is skipped, however big the board),
+ * and only what is in the window has its text read. When more is in the window than fits (MAX_ITEMS or the
+ * token budget), the most recently edited go (what "Catch me up" is for), still sent in reading order, and
+ * `truncated` says so.
  */
 export function collectRecapSources(snapshot: BoardSnapshotJson | ShapeMap, opts: RecapOptions): Sources {
   const shapes = shapeMapOf(snapshot)
   const r = readerOf(shapes)
   const inWindow = (s: ShapeRec) => s.editedAt !== null && s.editedAt >= opts.since
-  const eligible: Eligible[] = []
-  let visited = 0
-  let truncated = false
+  let eligible: Eligible[] = []
   for (const s of shapes.values()) {
-    if (++visited > MAX_VISITED) {
-      truncated = true
-      break
-    }
     if (!KIND[s.type] || !inWindow(s)) continue
     const text = textOf(s)
     if (!text) continue
     eligible.push({ s, text, at: r.position(s) })
   }
   eligible.sort(r.readingOrder)
+  const fillOpts = { cap: MAX_ITEMS, tokenBudget: opts.tokenBudget, extraOf: opts.extraOf }
+  let cut = false
+  if (!fitsWhole(eligible, MAX_ITEMS, { tokenBudget: opts.tokenBudget, extraOf: opts.extraOf })) {
+    // Newest first picks what fits; the picked then go back to reading order (their aliases follow it).
+    const newest = [...eligible].sort((a, b) => (b.s.editedAt ?? 0) - (a.s.editedAt ?? 0))
+    const picked = new Set(fill(newest, fillOpts).items.map((i) => i.id))
+    eligible = eligible.filter((e) => picked.has(e.s.id))
+    cut = true
+  }
   for (const e of eligible) r.addFrameName(shapes.get(e.s.parentId))
   for (const s of shapes.values()) if (s.type === 'frame' && inWindow(s)) r.addFrameName(s)
-  const filled = fill(eligible, { cap: MAX_ITEMS, tokenBudget: opts.tokenBudget, extraOf: opts.extraOf })
-  return { items: filled.items, frames: r.frameNames, truncated: truncated || filled.truncated }
+  const filled = fill(eligible, fillOpts)
+  return { items: filled.items, frames: r.frameNames, truncated: cut || filled.truncated }
 }
 
 // ---- a command's index (L1-4) ------------------------------------------------------------------------------

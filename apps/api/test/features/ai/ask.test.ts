@@ -80,6 +80,32 @@ describe('ranking', () => {
     )
   })
 
+  it('on a 6,000-item board the relevant notes at the very end still rank first (no record is cut)', async () => {
+    const x = await aiWorld()
+    w = x
+    const elements: Record<string, unknown>[] = []
+    for (let k = 0; k < 6000; k++)
+      elements.push(
+        ...note(`m${k}`, `Filler note ${k} about logistics, catering and travel for the offsite`, {
+          x: (k % 60) * 220,
+          y: Math.floor(k / 60) * 220,
+        }),
+      )
+    // the newest three, last in the snapshot and at the bottom of the board
+    for (const v of [1, 2, 3])
+      elements.push(
+        ...note(`r${v}`, `Quarterly budget forecast, version ${v}: about 40k`, { x: v * 220, y: 30_000 }),
+      )
+    x.sync.setElements(x.board, elements)
+    const res = await run(x.dave, x.board, ask())
+    expect(res.statusCode, res.body).toBe(200)
+    expect(answerOf(res).truncated).toBe(true)
+    const sent = itemsOf(x.openai.requests.at(-1) as never)
+    expect(sent.slice(0, 3).map((i) => i.text)).toEqual(
+      [1, 2, 3].map((v) => `Quarterly budget forecast, version ${v}: about 40k`),
+    )
+  })
+
   it('a board that fits is sent whole, in reading order, not truncated', async () => {
     const x = await small()
     const res = await run(x.dave, x.board, ask())
