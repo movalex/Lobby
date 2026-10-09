@@ -1,0 +1,324 @@
+/* Wave L (W2): the AI trust layer, Ask this board, the recap and the session coach on the Excalidraw page. Only
+   --dr-* tokens, so both themes work; phone width (390 px): panels take the width minus 12 px gutters. Every
+   layer is a picture over the canvas (pointer-events none) except its own panels and chips. Reduced motion: each
+   layer's data-motion="still" stops its animation (and the media query below is the second line). */
+
+.dr-ai-preview,
+.dr-ai-lens,
+.dr-ai-working {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.dr-ai-lens,
+.dr-ai-working {
+  z-index: 305;
+}
+.dr-ai-preview {
+  z-index: 312;
+}
+
+/* ---- the preview (L2-1b) ------------------------------------------------------------------------------ */
+.dr-ai-preview__marks {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.dr-ai-preview__arrow {
+  stroke: var(--dr-accent-line);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+}
+.dr-ai-preview__head {
+  fill: var(--dr-accent-line);
+}
+.dr-ai-preview__dest,
+.dr-ai-preview__new {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px dashed var(--dr-accent-line);
+  border-radius: 10px;
+  background: var(--dr-accent-bg);
+  opacity: 0.75;
+  animation: dr-ai-preview-in 0.4s ease-out both;
+}
+.dr-ai-preview__new {
+  border-style: dotted;
+  opacity: 0.6;
+}
+.dr-ai-preview__swatch {
+  position: absolute;
+  box-sizing: border-box;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--dr-surface);
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px var(--dr-line);
+}
+.dr-ai-preview[data-motion="still"] .dr-ai-preview__dest,
+.dr-ai-preview[data-motion="still"] .dr-ai-preview__new {
+  animation: none;
+}
+@keyframes dr-ai-preview-in {
+  from {
+    opacity: 0;
+  }
+}
+.dr-ai-preview__panel {
+  position: absolute;
+  bottom: 72px;
+  left: 50%;
+  transform: translateX(-50%);
+  box-sizing: border-box;
+  width: 340px;
+  max-width: calc(100% - 24px);
+  padding: 8px;
+  border: 1px solid var(--dr-line);
+  border-radius: 12px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow-pop);
+  color: var(--dr-ink);
+  font: 14px / 1.35 var(--dr-font);
+  pointer-events: auto;
+}
+.dr-ai-preview__summary {
+  margin: 2px 4px 6px;
+  font-weight: 600;
+}
+
+/* ---- the lens (L2-1c) ---------------------------------------------------------------------------------- */
+.dr-ai-lens__box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--dr-accent-line);
+  border-radius: 10px;
+  animation: dr-ai-lens-pulse 2.4s ease-in-out infinite;
+}
+.dr-ai-lens[data-motion="still"] .dr-ai-lens__box {
+  animation: none;
+}
+@keyframes dr-ai-lens-pulse {
+  50% {
+    border-color: var(--dr-accent-bg);
+  }
+}
+.dr-ai-lens__card {
+  position: absolute;
+  max-width: 260px;
+  padding: 4px 8px;
+  border: 1px solid var(--dr-line);
+  border-radius: 8px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow-pop);
+  color: var(--dr-ink);
+  font: 12.5px / 1.3 var(--dr-font);
+  white-space: nowrap;
+}
+
+/* ---- the live shimmer of someone else's run (L2-1e) ------------------------------------------------------ */
+.dr-ai-working__area {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1.5px dashed var(--dr-accent-line);
+  border-radius: 14px;
+  background: linear-gradient(100deg, transparent 25%, var(--dr-accent-bg) 45%, transparent 65%);
+  background-size: 240% 100%;
+  animation: dr-ai-shimmer 1.8s ease-in-out infinite;
+}
+.dr-ai-working__label,
+.dr-ai-working__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+  font: 600 12px / 1.2 var(--dr-font);
+  white-space: nowrap;
+}
+.dr-ai-working__label {
+  position: absolute;
+  top: -12px;
+  left: 8px;
+}
+.dr-ai-working__pill {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+.dr-ai-working[data-motion="still"] .dr-ai-working__area {
+  animation: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dr-ai-preview__dest,
+  .dr-ai-preview__new,
+  .dr-ai-lens__box,
+  .dr-ai-working__area {
+    animation: none;
+  }
+}
+@media (max-width: 480px) {
+  .dr-ai-preview__panel {
+    bottom: 12px;
+  }
+}
+
+/* ---- Ask this board (L2-2): the private answer with numbered sources --------------------------------------- */
+.dr-ai-panel.dr-ai-answer {
+  pointer-events: auto;
+}
+.dr-ai-cite {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  margin: 0 2px;
+  padding: 0 4px;
+  border: 1px solid var(--dr-accent-line);
+  border-radius: 999px;
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+  font: 700 11px / 1 var(--dr-font);
+  vertical-align: 1px;
+  cursor: pointer;
+}
+button.dr-ai-cite:focus-visible,
+.dr-ai-sources__btn:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+.dr-ai-sources {
+  margin: 0 4px 8px;
+  padding: 0;
+  list-style: none;
+}
+.dr-ai-sources__btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--dr-ink);
+  font: 13px / 1.3 var(--dr-font);
+  text-align: left;
+  cursor: pointer;
+}
+.dr-ai-sources__btn:hover {
+  background: var(--dr-chip);
+}
+
+/* ---- the recap (L2-3): Wrap up and Catch me up ------------------------------------------------------------ */
+.dr-ai-recap-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 311;
+  overflow: hidden;
+  pointer-events: none;
+}
+.dr-ai-recap-layer .dr-ai-panel.dr-ai-recap {
+  top: 58px;
+  left: 12px;
+  width: 420px;
+  max-height: calc(100% - 80px);
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+}
+.dr-ai-recap__body {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.dr-ai-recap__section {
+  margin: 4px 4px 10px;
+}
+.dr-ai-recap__section ul,
+.dr-ai-recap__section ol {
+  margin: 0;
+  padding-left: 20px;
+}
+.dr-ai-recap__section li {
+  margin: 2px 0;
+}
+.dr-ai-recap__h {
+  margin: 0 0 4px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--dr-ink);
+}
+.dr-ai-recap__owner {
+  color: var(--dr-ink);
+}
+.dr-ai-recap__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.dr-ai-recap__table th,
+.dr-ai-recap__table td {
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--dr-line);
+  text-align: left;
+}
+.dr-ai-recap__actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+@media (max-width: 480px) {
+  .dr-ai-recap-layer .dr-ai-panel.dr-ai-recap {
+    right: 12px;
+    left: 12px;
+    width: auto;
+  }
+}
+
+/* ---- the session coach (L2-4): one next-step chip under the Facilitate control ----------------------------- */
+.dr-ai-coach {
+  position: absolute;
+  top: 8px;
+  z-index: 306;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: calc(100% - 24px);
+  padding: 2px 2px 2px 4px;
+  border: 1px solid var(--dr-accent-line);
+  border-radius: 999px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow-pop);
+  pointer-events: auto;
+}
+.dr-ai-coach__run {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+  font: 600 12.5px / 1.2 var(--dr-font);
+  cursor: pointer;
+}
+.dr-ai-coach__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-ai-coach__run:focus-visible,
+.dr-ai-coach__x:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}

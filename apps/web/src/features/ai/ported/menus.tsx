@@ -25,8 +25,10 @@ import {
 } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { SparkIcon, Spinner } from '../icons.tsx'
+import { runRecap } from '../recap/recap.ts'
 import {
   anchorAtScene,
+  endUndoOffer,
   ensureAiStatus,
   expandTopic,
   openAiMenu,
@@ -34,7 +36,11 @@ import {
   setBoardAi,
   setWorkspaceAiDefault,
 } from './actions.ts'
+import { askBoard, WHOLE_BOARD } from './ask.ts'
 import { canBuildWithAi } from './gate.ts'
+import { aiLens } from './lens.tsx'
+import { AI_COMMAND_IDS, aiActionsArgs, aiAskArgs, aiRecapArgs } from './public.ts'
+import { applyRemoval, recordedRunOf, removalPlan, removedText } from './remove.ts'
 import { type AiMenuState, aiJob, aiMenu, aiStatus, getAiCtx, setAiCtx } from './runtime.ts'
 import { type AiTarget, NONE, selectionTarget, targetAt, viewTarget } from './target.ts'
 
@@ -57,6 +63,8 @@ function anchorAtElement(canvas: LobbyCanvas, el: HTMLElement): AiMenuState['at'
 }
 
 const enabledOn = (canvas: LobbyCanvas) => aiStatus(canvas).get()?.enabled === true
+/** Ask this board (L2-2): AI on here and offered to this person to read with (view; never a name-only guest). */
+const askOn = (ctx: CanvasFeatureContext) => aiStatus(ctx.canvas).get()?.canSummarize === true
 /** Expand with AI and Mind map from a prompt: AI on, may add to the board, budget left (K7). */
 const buildOn = (canvas: LobbyCanvas) => canBuildWithAi(aiStatus(canvas).get(), canvas.readOnly())
 /** The one mind-map topic that is selected, if that is the selection. */
@@ -137,7 +145,58 @@ const run = (ctx: CanvasFeatureContext, t: MenuTarget, action: 'summarize' | 'th
   later(() => void runAi(ctx.canvas, { action }, target, { at: where }))
 }
 
+/** The recorded AI run the context menu is about: the element under the pointer, else the one selected. */
+function runAt(ctx: CanvasFeatureContext, t: MenuTarget): string | null {
+  const id = t.hit?.id ?? (t.ids.length === 1 ? t.ids[0] : undefined)
+  return id ? recordedRunOf(ctx.canvas, id) : null
+}
+
+/**
+ * "Remove this AI result" (L2-1d): one transact deleting what the run made that nobody changed since (./remove.ts).
+ * A themes run moved notes that were there before: History puts them back (its before_ai_themes checkpoint).
+ */
+export function removeResult(ctx: CanvasFeatureContext, runId: string): void {
+  const { canvas } = ctx
+  const plan = removalPlan(canvas, runId)
+  if (!plan || canvas.readOnly()) return
+  if (plan.themes) {
+    ctx.openPanel('history')
+    ctx.notify({
+      key: 'dr-ai',
+      text: 'To put the notes back, restore “Before AI grouped notes into themes” in History.',
+      testId: 'ai-done',
+      timeoutMs: 8000,
+    })
+    return
+  }
+  // the last result's Undo toast must not take this step for its own (and dismiss this toast)
+  endUndoOffer(canvas)
+  const removed = applyRemoval(canvas, plan)
+  ctx.notify({
+    key: 'dr-ai',
+    text: removedText(removed, plan.kept.length, plan.held.length),
+    testId: 'ai-removed',
+    timeoutMs: 7000,
+  })
+}
+
 export const CONTEXT_MENU: readonly MenuEntrySpec[] = [
+  {
+    id: 'ai.remove',
+    group: 'ai',
+    order: 20,
+    label: (ctx, t) => {
+      const run = runAt(ctx, t)
+      return run && removalPlan(ctx.canvas, run)?.themes
+        ? 'Put the notes back (History)…'
+        : 'Remove this AI result'
+    },
+    visible: (ctx, t) => !ctx.canvas.readOnly() && runAt(ctx, t) !== null,
+    run: (ctx, t) => {
+      const run = runAt(ctx, t)
+      if (run) later(() => removeResult(ctx, run))
+    },
+  },
   {
     // K7-1: one click from a topic's context menu
     id: 'ai.expand',
@@ -163,6 +222,33 @@ export const CONTEXT_MENU: readonly MenuEntrySpec[] = [
         label: 'Summarize',
         disabled: (ctx, t) => targetOf(ctx, t).texts === 0,
         run: (ctx, t) => run(ctx, t, 'summarize'),
+      },
+      {
+        // L2-3: the session's recap (the selected frames' when frames are selected)
+        id: 'ai.recap',
+        group: 'ai',
+        order: 1.7,
+        label: 'Wrap up this session',
+        visible: askOn,
+        run: (ctx) => {
+          setAiCtx(ctx)
+          const frames = ctx.canvas.selection.some((id) => ctx.canvas.get(id)?.type === 'frame')
+          later(() => void runRecap(ctx, frames ? 'selection' : 'session'))
+        },
+      },
+      {
+        // L2-2: about the selection, the frame under the pointer, else the whole board (view is enough)
+        id: 'ai.ask',
+        group: 'ai',
+        order: 1.5,
+        label: 'Ask this board…',
+        visible: askOn,
+        run: (ctx, t) => {
+          setAiCtx(ctx)
+          const target = targetOf(ctx, t)
+          const where = at(ctx, t)
+          later(() => openAiMenu(ctx.canvas, where, target.kind === 'none' ? WHOLE_BOARD : target, 'ask'))
+        },
       },
       {
         id: 'ai.themes',
@@ -234,6 +320,100 @@ const viewCentre = (ctx: CanvasFeatureContext): AiMenuState['at'] => {
 
 export const COMMANDS: readonly CommandSpec[] = [
   {
+    // L2-3 Wrap up / Catch me up: args AiRecapArgs ('session' by default; 'selection'; 'catch-up'). Everyone who
+    // can see the board (the recap is private); the AI part only where AI is on for this person.
+    id: AI_COMMAND_IDS.recap,
+    label: 'Wrap up',
+    group: 'AI',
+    keywords: ['recap', 'summary', 'catch me up', 'minutes', 'decisions', 'actions'],
+    readOnlyAllowed: true,
+    run: (ctx, _source, args) => {
+      setAiCtx(ctx)
+      void runRecap(ctx, aiRecapArgs(args).scope ?? 'session')
+    },
+  },
+  {
+    // L2-2 Ask this board: args AiAskArgs (the palette's "Ask: <question>" asks at once); else the question box.
+    // About the selection when there is one, else the whole board. View is enough (a viewer may ask).
+    id: AI_COMMAND_IDS.ask,
+    label: 'Ask this board',
+    group: 'AI',
+    keywords: ['ai', 'question', 'answer', 'search', 'find'],
+    readOnlyAllowed: true,
+    enabled: (ctx) => askOn(ctx) && aiJob(ctx.canvas).get() === null,
+    run: async (ctx, _source, args) => {
+      setAiCtx(ctx)
+      await ensureAiStatus(ctx.canvas)
+      if (!askOn(ctx) || aiJob(ctx.canvas).get()) return
+      const target = selectionTarget(ctx.canvas) ?? WHOLE_BOARD
+      const { question } = aiAskArgs(args)
+      if (question) void askBoard(ctx, question, target)
+      else openAiMenu(ctx.canvas, viewCentre(ctx), target, 'ask')
+    },
+  },
+  {
+    // Group into themes on the selection, else the frame in the middle of the view (the coach, the palette)
+    id: AI_COMMAND_IDS.themes,
+    label: 'Group into themes',
+    group: 'AI',
+    keywords: ['ai', 'cluster', 'affinity'],
+    enabled: (ctx) => insertOn(ctx) && aiJob(ctx.canvas).get() === null,
+    disabledReason: (ctx) =>
+      insertOn(ctx) && viewTarget(ctx.canvas).notes < 2 ? 'Select two or more sticky notes' : null,
+    run: async (ctx) => {
+      setAiCtx(ctx)
+      await ensureAiStatus(ctx.canvas)
+      if (!insertOn(ctx) || aiJob(ctx.canvas).get()) return
+      const target = viewTarget(ctx.canvas)
+      if (target.notes < 2) return
+      const where = viewCentre(ctx)
+      if (target.groups.length) openAiMenu(ctx.canvas, where, target, 'regroup')
+      else void runAi(ctx.canvas, { action: 'themes' }, target, { at: where })
+    },
+  },
+  {
+    // Action items on the selection (else the frame in view); args AiActionsArgs: ordered by a revealed vote
+    id: AI_COMMAND_IDS.actions,
+    label: 'Action items',
+    group: 'AI',
+    keywords: ['ai', 'next steps', 'todo', 'owners'],
+    enabled: (ctx) => insertOn(ctx) && aiJob(ctx.canvas).get() === null,
+    run: async (ctx, _source, args) => {
+      setAiCtx(ctx)
+      await ensureAiStatus(ctx.canvas)
+      if (!insertOn(ctx) || aiJob(ctx.canvas).get()) return
+      const target = viewTarget(ctx.canvas)
+      if (target.texts === 0) return
+      const { voteSessionId } = aiActionsArgs(args)
+      void runAi(ctx.canvas, { action: 'actions', ...(voteSessionId ? { voteSessionId } : {}) }, target, {
+        at: viewCentre(ctx),
+      })
+    },
+  },
+  {
+    // L2-1d: the selected AI-made element's run
+    id: 'ai.remove-result',
+    label: 'Remove this AI result',
+    group: 'AI',
+    enabled: (ctx) =>
+      !ctx.canvas.readOnly() &&
+      ctx.canvas.selection.length === 1 &&
+      recordedRunOf(ctx.canvas, ctx.canvas.selection[0] as string) !== null,
+    run: (ctx) => {
+      const id = ctx.canvas.selection[0]
+      const run = id ? recordedRunOf(ctx.canvas, id) : null
+      if (run) removeResult(ctx, run)
+    },
+  },
+  {
+    // L2-1c: the AI lens (this tab only)
+    id: 'ai.lens',
+    label: 'Show what AI made',
+    group: 'View',
+    readOnlyAllowed: true,
+    run: (ctx) => aiLens(ctx.canvas).set(!aiLens(ctx.canvas).get()),
+  },
+  {
     id: 'ai.expand',
     label: 'Expand with AI',
     enabled: (ctx) => buildOn(ctx.canvas) && topicOf(ctx.canvas) !== null && aiJob(ctx.canvas).get() === null,
@@ -275,6 +455,26 @@ const settingsOf = (ctx: CanvasFeatureContext) => aiStatus(ctx.canvas).get()?.se
 
 /** Shown even while AI is off here (the owner turns it back on from here); nothing for anyone else. */
 export const MAIN_MENU: readonly MenuEntrySpec[] = [
+  {
+    // L2-3: what changed since this device's last visit (everyone; AI's part only where AI is on)
+    id: 'ai.catch-up',
+    group: 'board',
+    order: 58,
+    label: 'Catch me up',
+    run: (ctx) => {
+      setAiCtx(ctx)
+      void runRecap(ctx, 'catch-up')
+    },
+  },
+  {
+    // L2-1c: everyone (what AI made is on the board for everyone); this tab only, never stored
+    id: 'ai.lens',
+    group: 'board',
+    order: 59,
+    label: 'Show what AI made',
+    checked: (ctx) => aiLens(ctx.canvas).get(),
+    run: (ctx) => aiLens(ctx.canvas).set(!aiLens(ctx.canvas).get()),
+  },
   {
     id: 'ai.board',
     group: 'board',

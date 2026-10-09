@@ -24,9 +24,21 @@ export function ideasHeading(prompt: string | undefined): string {
   return p ? `Ideas: ${cut(p, 60)}` : 'Ideas'
 }
 
-/** An action item as a sticky note: the task, then "Owner: Sam" when the board named someone. */
+/**
+ * An action item as a sticky note: the task, then "Owner: Sam" when the board named someone, and (wave L, L2-4:
+ * vote-weighted items) "3 votes" when the run followed a revealed vote.
+ */
 export function actionItemText(item: AiActionItem): string {
-  return item.owner ? `${item.text}\nOwner: ${item.owner}` : item.text
+  const lines = [item.text]
+  if (item.owner) lines.push(`Owner: ${item.owner}`)
+  if (item.votes !== undefined) lines.push(plural(item.votes, 'vote'))
+  return lines.join('\n')
+}
+
+/** The preview's count line for Group into themes (L2-1b): "Moves 23 notes into 5 themes". */
+export function themesPreviewLine(p: { notes: number; themes: number; grows: boolean }): string {
+  const line = `Moves ${plural(p.notes, 'note')} into ${plural(p.themes, 'theme')}`
+  return p.grows ? `${line}; the frame grows to fit` : line
 }
 
 /** The "Group into themes" line in the AI menu: how many notes move, and which stay (R9). */
