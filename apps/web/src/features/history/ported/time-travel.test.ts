@@ -9,6 +9,7 @@ import {
   tickText,
   timelineOrder,
   undoRestoreIds,
+  undoRestoreInput,
   undoRestoreSummary,
 } from './time-travel.ts'
 
@@ -127,5 +128,25 @@ describe('Restore these', () => {
     // within the asked ids, so within the 200 the api takes (the bound labels in `restored` are not sent)
     const asked = Array.from({ length: 200 }, (_, i) => `n${i}`)
     expect(undoRestoreIds(asked, { skipped: [] })).toEqual(asked)
+  })
+
+  it('"Undo restore" names the restore it undoes (round 1), and says what others changed since', () => {
+    expect(undoRestoreInput(['N1', 'R'], { skipped: [{ id: 'R', code: 'LEASED' }], clock: 41 })).toEqual({
+      ids: ['N1'],
+      removeAbsent: true,
+      restoreClock: 41,
+    })
+    expect(undoRestoreInput(['R'], { skipped: [{ id: 'R', code: 'LEASED' }], clock: 41 })).toBeNull()
+    expect(
+      undoRestoreSummary({
+        skipped: [
+          { id: 'a', code: 'CHANGED' },
+          { id: 'b', code: 'CHANGED' },
+          { id: 'c', code: 'INVALID' },
+        ],
+      }),
+    ).toBe(
+      'Restore undone, except 2 objects someone changed since and 1 object that is locked or could not be changed back.',
+    )
   })
 })

@@ -165,17 +165,23 @@ export const RestoreElementsBody = z
     elements: z.array(z.looseObject({ id: z.string(), type: z.string() })).max(RESTORE_ELEMENTS_MAX_ELEMENTS),
     /** W7 ("Undo restore", history.ts RestoreElementsInput): an asked id the checkpoint lacks is removed, not MISSING */
     removeAbsent: z.literal(true).optional(),
+    /** wave L round 1 (required with removeAbsent; history.ts RestoreElementsInput): the undone restore's clock */
+    restoreClock: z.number().int().nonnegative().optional(),
   })
   .refine((b) => b.elements.length > 0 || b.removeAbsent === true, {
     message: 'elements: at least one, unless removeAbsent',
     path: ['elements'],
+  })
+  .refine((b) => b.removeAbsent !== true || b.restoreClock !== undefined, {
+    message: 'restoreClock: required with removeAbsent',
+    path: ['restoreClock'],
   })
 export type RestoreElementsBody = z.infer<typeof RestoreElementsBody>
 
 export const RestoreElementsAnswer = z.strictObject({
   restored: z.array(z.string()),
   skipped: z.array(
-    z.strictObject({ id: z.string(), code: z.enum(['LEASED', 'MISSING', 'INVALID'] as const) }),
+    z.strictObject({ id: z.string(), code: z.enum(['LEASED', 'MISSING', 'INVALID', 'CHANGED'] as const) }),
   ),
   /** the board clock the write committed at */
   clock: z.number().int().nonnegative(),

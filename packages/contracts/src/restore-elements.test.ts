@@ -36,6 +36,23 @@ describe('POST /api/boards/:bid/snapshots/:sid/restore-elements', () => {
     expect(RestoreElementsInput.safeParse({ ids: ['has space'] }).success).toBe(false)
   })
 
+  it('"Undo restore" names the clock of the restore it undoes (round 1: an undo, not a wholesale restore)', () => {
+    expect(RestoreElementsInput.safeParse({ ids: ids(1), removeAbsent: true }).success).toBe(false)
+    expect(
+      RestoreElementsInput.safeParse({ ids: ids(1), removeAbsent: true, restoreClock: 12 }).success,
+    ).toBe(true)
+    expect(
+      RestoreElementsInput.safeParse({ ids: ids(1), removeAbsent: true, restoreClock: -1 }).success,
+    ).toBe(false)
+    const r = {
+      restored: [],
+      skipped: [{ id: 'b', code: 'CHANGED' }],
+      clock: 3,
+      checkpointId: 'snp_0123456789ab',
+    }
+    expect(RestoreElementsResult.parse(r)).toEqual(r)
+  })
+
   it('answers what was restored, what was skipped and why, the commit clock and the checkpoint made first', () => {
     const r = {
       restored: ['a', 'a-label'],
@@ -78,5 +95,14 @@ describe('POST <sync>/internal/boards/:bid/restore-elements', () => {
     const a = { restored: ['a'], skipped: [{ id: 'b', code: 'INVALID' }], clock: 7 }
     expect(RestoreElementsAnswer.parse(a)).toEqual(a)
     expect(RestoreElementsAnswer.safeParse({ ...a, checkpointId: 'snp_0123456789ab' }).success).toBe(false)
+    expect(RestoreElementsAnswer.safeParse({ ...a, skipped: [{ id: 'b', code: 'CHANGED' }] }).success).toBe(
+      true,
+    )
+  })
+
+  it('an undo (removeAbsent) carries the undone restore’s clock', () => {
+    const undo = { ...body, elements: [], removeAbsent: true }
+    expect(RestoreElementsBody.safeParse(undo).success).toBe(false)
+    expect(RestoreElementsBody.safeParse({ ...undo, restoreClock: 9 }).success).toBe(true)
   })
 })

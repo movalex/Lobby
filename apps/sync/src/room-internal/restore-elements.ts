@@ -23,7 +23,13 @@
 //  - a deleted (or compacted) element is re-created with its kept id and `created: null`, as the checkpoint
 //    held it (the "Recently deleted" precedent: its author and marks as they were).
 //  - `removeAbsent` ("Undo restore"): an asked id the checkpoint lacks but the board has is removed, its label
-//    with it (it came back with the restore being undone).
+//    with it (it came back with the restore being undone). Wave L round 1: it is an undo, not a wholesale
+//    restore. `restoreClock` is the clock the undone restore committed at (every server write has a clock of its
+//    own). A unit is taken back only when that restore wrote it (an element of it stored at that clock) and
+//    nobody wrote it since: an element stored above that clock (a colleague's edit, move or deletion), or one it
+//    would bring back that was deleted by anything but that restore, skips the unit CHANGED. A unit the restore
+//    did not write has nothing to undo: it is left as it is (listed in `restored` for a restore unit).
+//  - what this write removes is "Recently deleted" by the restorer (`actor`), not by Lobby.
 //  - a unit whose text is under a lease (anyone's: the api is no session) is skipped, LEASED; one with an
 //    element locked now (its head, its label, or a label's container) is INVALID: a restore never overrides a
 //    lock, as no push does (room/merge.ts step 5), and "Undo restore" neither; one whose copy fails today's
@@ -57,7 +63,7 @@ import type {
 import { readJson } from '../http/body.ts'
 import { HttpError, sendJson } from '../http/respond.ts'
 import type { Gclock } from '../room/schema.ts'
-import type { ServerWriteLeaseView } from '../room/server-write.ts'
+import type { ServerWriteDeletedView, ServerWriteLeaseView } from '../room/server-write.ts'
 import type { ElementRow } from '../room/store.ts'
 import { boardParam, writeBoard } from './board.ts'
 import { type El, isLabel, isObject, parseElement } from './elements.ts'
@@ -171,6 +177,7 @@ export function applyRestoreElements(tx: ServerWriteTx, body: RestoreElementsBod
   const { store } = tx
   const leaseHolderOf = (tx as Partial<ServerWriteLeaseView>).leaseHolderOf
   const leased = (id: unknown) => typeof id === 'string' && !!leaseHolderOf && leaseHolderOf(id) !== null
+  const deletedSession = (tx as Partial<ServerWriteDeletedView>).deletedSession
   const actor = { uid: body.actor.uid, name: body.actor.name, guest: false }
 
   // the checkpoint's copies (the first of an id), and the board now
@@ -343,6 +350,33 @@ export function applyRestoreElements(tx: ServerWriteTx, body: RestoreElementsBod
       u.planned.set(label.id, label)
     }
     for (const l of liveLabelsOf(u.headId)) if (l.id !== label?.id) u.planned.set(l.id, tombstone(l))
+  }
+  // 3b. "Undo restore" (round 1): only what the undone restore wrote, and only while nobody wrote it since
+  if (body.removeAbsent) {
+    const at = body.restoreClock ?? -1
+    for (const u of units) {
+      if (!u.asked.length) continue
+      const ids = new Set<string>([u.headId, ...u.planned.keys()])
+      for (const l of liveLabelsOf(u.headId)) ids.add(l.id)
+      let wrote = false
+      let since = false
+      for (const id of ids) {
+        const r = row(id)
+        if (r && r.clock === at) wrote = true
+        if (r && r.clock > at) since = true
+        // never bring back what anything but that restore deleted (or what is compacted away)
+        const p = u.planned.get(id)
+        if (p && !p.isDeleted && (!r || ((r.deleted || (r.el as El).isDeleted === true) && r.clock !== at)))
+          since = true
+      }
+      if (since) skipUnit(u, 'CHANGED')
+      else if (!wrote) {
+        if (u.kind === 'restore')
+          for (const [id, el] of u.planned) if (!el.isDeleted) restoredWithout.push(id)
+        u.asked.length = 0
+        u.planned.clear()
+      }
+    }
   }
   // an element is planned by one unit only (a later unit that names it again is inconsistent)
   const plannedBy = new Map<string, Unit>()
@@ -577,6 +611,17 @@ export function applyRestoreElements(tx: ServerWriteTx, body: RestoreElementsBod
         deletedClock: null,
         deletedAt: null,
       })
+      // round 1: what it removes is the restorer's deletion in "Recently deleted" (the room's own row would name
+      // Lobby); a write without a room keeps no such rows
+      if (el.isDeleted && !recreated && deletedSession !== undefined)
+        store.insertDeleted({
+          batch: tx.clock,
+          el: check.element,
+          deletedBy: actor.uid,
+          deletedByName: actor.name,
+          deletedAt: tx.now,
+          session: deletedSession,
+        })
       changed.push({ before: (prevEl as WireElement | null) ?? null, after: check.element })
     }
     for (const [id, el] of plan) write(id, el)

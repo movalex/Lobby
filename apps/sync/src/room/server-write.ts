@@ -72,6 +72,14 @@ export interface ServerWriteLeaseView {
   ) => { readonly sid: string; readonly uid: string; readonly name: string } | null
 }
 
+/**
+ * The room session `lb_deleted` rows name (wave L round 1), for a write that records a deletion as its
+ * requester's (store.insertDeleted; the room then adds no row of its own). Absent without a room.
+ */
+export interface ServerWriteDeletedView {
+  readonly deletedSession: string
+}
+
 /** A server write that broke the contract above (a bug in the route that made it): answered 500. */
 export class ServerWriteContractError extends Error {
   constructor(what: string) {
@@ -183,10 +191,11 @@ export function runServerWrite(
   const priors = new Map<string, ElementRow | null>()
   const ownDeletedRows = new Set<string>()
   let leaseTable: MergeEnv['leases'] | null = null
-  const tx: ServerWriteTx & ServerWriteLeaseView = Object.freeze({
+  const tx: ServerWriteTx & ServerWriteLeaseView & ServerWriteDeletedView = Object.freeze({
     store: watchedStore(store, priors, ownDeletedRows),
     clock,
     now,
+    deletedSession: ctx.deletedSession,
     leaseHolderOf: (id: string) => {
       leaseTable ??= ctx.env().leases
       return leaseTable.holderOf(id, now)

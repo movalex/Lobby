@@ -238,7 +238,8 @@ export function registerRestoreElements(
         actor: { uid: user.id, name: user.name.slice(0, 200) },
         ids,
         elements,
-        ...(input.removeAbsent ? { removeAbsent: true as const } : {}),
+        // round 1: an undo names the restore it undoes (the input requires restoreClock with removeAbsent)
+        ...(input.removeAbsent ? { removeAbsent: true as const, restoreClock: input.restoreClock } : {}),
       }
       let answer: RestoreSyncAnswer
       try {

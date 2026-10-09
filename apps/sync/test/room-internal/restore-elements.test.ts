@@ -197,7 +197,10 @@ describe('restore-elements: a checkpoint’s elements back into the live board (
     expect(back.restored).toEqual(['T'])
     await ann.until(() => ann.confirmed.get('T')?.isDeleted === false, 'ann saw T come back')
     await ann.push([lock('T', v('T'))])
-    const undo = await restore(st, b, ['T'], closure(beforeRestore, ['T']), { removeAbsent: true })
+    const undo = await restore(st, b, ['T'], closure(beforeRestore, ['T']), {
+      removeAbsent: true,
+      restoreClock: back.clock,
+    })
     expect(undo.skipped).toEqual([{ id: 'T', code: 'INVALID' }])
     expect((await byIdOf(st, b)).byId.get('T')).toMatchObject({ isDeleted: false, locked: true })
   })
@@ -448,7 +451,10 @@ describe('restore-elements: a checkpoint’s elements back into the live board (
     const asked = ['R', 'N1', 'N3']
     const res = await restore(st, b, asked, closure(old, asked))
     expect([...res.restored].sort()).toEqual(['N1', 'N1.t', 'N3', 'N3.t', 'R', 'R.t'])
-    const undo = await restore(st, b, asked, closure(now, asked), { removeAbsent: true })
+    const undo = await restore(st, b, asked, closure(now, asked), {
+      removeAbsent: true,
+      restoreClock: res.clock,
+    })
     expect(undo.skipped).toEqual([])
     expect([...undo.restored].sort()).toEqual(['N1', 'N1.t', 'N3', 'N3.t', 'R', 'R.t'])
     expect(await described()).toEqual(beforeRestore)
@@ -459,12 +465,73 @@ describe('restore-elements: a checkpoint’s elements back into the live board (
     await bob.untilClock(undo.clock)
     expect(bob.confirmed.get('R')?.isDeleted).toBe(true)
     expect(bob.confirmed.get('N1')?.x).toBe(900)
+    // round 1: what the undo removed is "Recently deleted" by the restorer, not by Lobby
+    const deleted = await call<{ entries: { shapeId: string; deletedBy: { id: string; name: string } }[] }>(
+      st,
+      'GET',
+      `/internal/boards/${b}/deleted`,
+    )
+    expect(deleted.body.entries.find((e) => e.shapeId === 'shape:R')?.deletedBy).toEqual({
+      id: ACTOR.uid,
+      name: ACTOR.name,
+    })
     // without removeAbsent, an id the checkpoint lacks is MISSING
     const missing = await restore(st, b, ['R', 'nope'], [text('unrelated', {})])
     expect(missing.skipped).toEqual([
       { id: 'R', code: 'MISSING' },
       { id: 'nope', code: 'MISSING' },
     ])
+  })
+
+  it('"Undo restore" is an undo: never revives a colleague’s later deletion nor takes back their later edits (round 1)', async () => {
+    const st = await h.stack()
+    const b = newBoardId()
+    expect(
+      (await seed(st, b, [...sampleBoard(), ...noteWithText('N3', 'third idea', { x: 0, y: 1200 })])).status,
+    ).toBe(201)
+    const ann = await st.client({ boardId: b, user: 'ann' })
+    const bob = await st.client({ boardId: b, user: 'bob' })
+    const old = await copies(st, b)
+    const va = (id: string) => ann.confirmed.get(id)?.version ?? 1
+    const vb = (id: string) => bob.confirmed.get(id)?.version ?? 1
+    await ann.push([move('N1', va('N1'), 900, 900), move('N2', va('N2'), 900, 1300)])
+    await ann.push([del('N3', va('N3')), del('N3.t', va('N3.t'))])
+    const before = await copies(st, b)
+    // between the 'before_restore' checkpoint and the restore's write, Ann moves the text (the restore leaves it)
+    await ann.push([move('T', va('T'), 5, 805)])
+    // N1 and N2 moved back, N3 re-created; R is as the checkpoint has it, so nothing of it is written
+    const asked = ['N1', 'N2', 'N3', 'R']
+    const res = await restore(st, b, asked, closure(old, asked))
+    expect(res.skipped).toEqual([])
+    await bob.untilClock(res.clock)
+    // within the notice's 30 s, Bob deletes N1 and R and moves N3
+    await bob.push([del('N1', vb('N1')), del('N1.t', vb('N1.t')), del('R', vb('R')), del('R.t', vb('R.t'))])
+    await bob.push([move('N3', vb('N3'), 500, 1500)])
+    const undo = await restore(st, b, asked, closure(before, asked), {
+      removeAbsent: true,
+      restoreClock: res.clock,
+    })
+    expect(undo.skipped).toEqual([
+      { id: 'N1', code: 'CHANGED' },
+      { id: 'N3', code: 'CHANGED' },
+      { id: 'R', code: 'CHANGED' },
+    ])
+    expect([...undo.restored].sort()).toEqual(['N2', 'N2.t'])
+    const { snap, byId } = await byIdOf(st, b)
+    expect(checkInvariants(snap.elements)).toEqual([])
+    // Bob's deletions stay, his move stays; only N2 (nobody touched it since) goes back
+    expect(byId.get('N1')?.isDeleted).toBe(true)
+    expect(byId.get('N1.t')?.isDeleted).toBe(true)
+    expect(byId.get('R')?.isDeleted).toBe(true)
+    expect(byId.get('N3')).toMatchObject({ isDeleted: false, x: 500, y: 1500 })
+    expect(byId.get('N2')).toMatchObject({ x: 900, y: 1300 })
+    // a unit the restore did not write has nothing to undo: it stays, even when the checkpoint differs
+    const again = await restore(st, b, ['T'], closure(before, ['T']), {
+      removeAbsent: true,
+      restoreClock: res.clock,
+    })
+    expect(again).toMatchObject({ restored: ['T'], skipped: [], clock: undo.clock })
+    expect((await byIdOf(st, b)).byId.get('T')).toMatchObject({ x: 5, y: 805 })
   })
 
   it('a tab that was away catches the restore up on reconnect; every frame passes the strict wire schema (any reader rev)', async () => {

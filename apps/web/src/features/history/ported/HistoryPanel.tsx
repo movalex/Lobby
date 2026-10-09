@@ -23,6 +23,7 @@ import {
   type DeletedShapeEntry,
   EXPORT_DISABLED_MESSAGE as EXPORT_OFF_TEXT,
   type ListDeletedResponse,
+  type RestoreElementsInput,
 } from '@draftroom/contracts'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { isApiError } from '../../../api/client.ts'
@@ -52,7 +53,7 @@ import { restoredElementIds, restoredSelection, touchesDeletedElements } from '.
 import {
   canRestoreElements,
   restoreElementsSummary,
-  undoRestoreIds,
+  undoRestoreInput,
   undoRestoreSummary,
 } from './time-travel.ts'
 
@@ -284,18 +285,18 @@ export function HistoryPanel({ ctx }: { ctx: CanvasFeatureContext; close(): void
         setPreviewing(null)
         // only what the restore did not skip: a skipped element (someone was typing in it) was never touched,
         // and undoing must not take back what was done to it since
-        const undoIds = undoRestoreIds(ids, result)
+        const undo = undoRestoreInput(ids, result)
         notify({
           key: 'history:restore-elements',
           text: restoreElementsSummary(ids, result),
           testId: 'history-restored-notice',
           timeoutMs: 30_000,
-          ...(undoIds.length
+          ...(undo
             ? {
                 action: {
                   label: 'Undo restore',
                   testId: 'history-undo-restore',
-                  onClick: () => void undoRestore(result.checkpointId, undoIds),
+                  onClick: () => void undoRestore(result.checkpointId, undo),
                 },
               }
             : {}),
@@ -307,12 +308,12 @@ export function HistoryPanel({ ctx }: { ctx: CanvasFeatureContext; close(): void
     })
 
   /**
-   * "Undo restore": the ids the restore wrote (undoRestoreIds: never the ones it skipped), from the checkpoint made
-   * right before it (what came back goes again).
+   * "Undo restore": the ids the restore did not skip (undoRestoreInput, with that restore's clock: the sync leaves
+   * what anyone changed since), from the checkpoint made right before it (what came back goes again).
    */
-  const undoRestore = async (checkpointId: string, ids: string[]) => {
+  const undoRestore = async (checkpointId: string, input: RestoreElementsInput) => {
     try {
-      const result = await api.restoreElements(board.id, checkpointId, { ids, removeAbsent: true })
+      const result = await api.restoreElements(board.id, checkpointId, input)
       notify({
         key: 'history:restore-elements',
         text: undoRestoreSummary(result),

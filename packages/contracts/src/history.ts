@@ -164,7 +164,8 @@ export type RestoreDeletedResponse = z.infer<typeof RestoreDeletedResponse>
 // route (older than canvas-schema RESTORE_ELEMENTS_REV) answers 404, and the api 503 RESTORE_UNAVAILABLE; the
 // web offers "Restore these" only in a room at that revision. Server write: not a Ctrl+Z step; "Undo restore"
 // restores the asked ids the restore did not skip (never a skipped one: the restore left it, so its undo must too)
-// from `checkpointId` with `removeAbsent` (W7): an id that checkpoint does not hold came back with the restore,
+// from `checkpointId` with `removeAbsent` and `restoreClock` (W7; round 1: only what that restore wrote and nobody
+// changed since, else CHANGED): an id that checkpoint does not hold came back with the restore,
 // so it is removed again (with its label), instead of being skipped as MISSING.
 // Workspace guests are refused like the preview (the checkpoint may hold what was removed before they joined).
 
@@ -177,22 +178,35 @@ export const RESTORE_ELEMENTS_ROUTE = '/api/boards/:bid/snapshots/:sid/restore-e
 export const restoreElementsPath = (boardId: string, snapshotId: string) =>
   `/api/boards/${encodeURIComponent(boardId)}/snapshots/${encodeURIComponent(snapshotId)}/restore-elements`
 
-export const RestoreElementsInput = z.object({
-  ids: z.array(RestoreElementId).min(1).max(RESTORE_ELEMENTS_MAX_IDS),
-  /**
-   * W7 ("Undo restore", additive): an id the checkpoint does not hold but the board does is removed (with its
-   * label), and listed in `restored` (it is back as the checkpoint had it: not there). Absent: skipped MISSING.
-   */
-  removeAbsent: z.literal(true).optional(),
-})
+export const RestoreElementsInput = z
+  .object({
+    ids: z.array(RestoreElementId).min(1).max(RESTORE_ELEMENTS_MAX_IDS),
+    /**
+     * W7 ("Undo restore", additive): an id the checkpoint does not hold but the board does is removed (with its
+     * label), and listed in `restored` (it is back as the checkpoint had it: not there). Absent: skipped MISSING.
+     */
+    removeAbsent: z.literal(true).optional(),
+    /**
+     * Wave L round 1 (required with `removeAbsent`): the `clock` the restore being undone answered. The undo is
+     * an undo: it takes back only units that restore wrote (an element of it stored at that clock) and nobody
+     * wrote since (none stored above it, and nothing it would bring back deleted by anyone but that restore):
+     * else CHANGED. A unit the restore did not write is left as it is.
+     */
+    restoreClock: z.number().int().nonnegative().optional(),
+  })
+  .refine((i) => i.removeAbsent !== true || i.restoreClock !== undefined, {
+    message: 'restoreClock: required with removeAbsent',
+    path: ['restoreClock'],
+  })
 export type RestoreElementsInput = z.infer<typeof RestoreElementsInput>
 
 /**
  * Why an id was not restored: LEASED (its text is under another session's lease), MISSING (not in the
  * checkpoint), INVALID (an element of it is locked now, which a restore never overrides; or the checkpoint's copy
- * fails today's element check, or is inconsistent).
+ * fails today's element check, or is inconsistent). CHANGED (wave L round 1, "Undo restore" only): someone wrote
+ * the element after the restore being undone (an edit, a move, a deletion), so its undo leaves it as it is.
  */
-export const RESTORE_ELEMENTS_SKIP_CODES = ['LEASED', 'MISSING', 'INVALID'] as const
+export const RESTORE_ELEMENTS_SKIP_CODES = ['LEASED', 'MISSING', 'INVALID', 'CHANGED'] as const
 export const RestoreElementsSkipCode = z.enum(RESTORE_ELEMENTS_SKIP_CODES)
 export type RestoreElementsSkipCode = z.infer<typeof RestoreElementsSkipCode>
 export const RestoreElementsSkip = z.object({ id: z.string(), code: RestoreElementsSkipCode })

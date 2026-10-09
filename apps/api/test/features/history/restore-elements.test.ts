@@ -68,9 +68,18 @@ describe('restore elements from a checkpoint into the live board', () => {
     const first = await restore({ ids: ['n2'] })
     const { checkpointId } = RestoreElementsResult.parse(first.json())
     sync.answers.push({ status: 200, body: { restored: ['n2', 'n2.t'], skipped: [], clock: 12 } })
-    const undo = await restore({ ids: ['n2'], removeAbsent: true }, checkpointId)
+    // round 1: an undo names the clock of the restore it undoes (the sync takes back only what that one wrote)
+    const unnamed = await restore({ ids: ['n2'], removeAbsent: true }, checkpointId)
+    expect(unnamed.statusCode).toBe(400)
+    expect(sync.calls).toHaveLength(1)
+    const undo = await restore({ ids: ['n2'], removeAbsent: true, restoreClock: 11 }, checkpointId)
     expect(undo.statusCode, undo.body).toBe(200)
-    expect(sync.calls[1]?.body).toMatchObject({ ids: ['n2'], elements: [], removeAbsent: true })
+    expect(sync.calls[1]?.body).toMatchObject({
+      ids: ['n2'],
+      elements: [],
+      removeAbsent: true,
+      restoreClock: 11,
+    })
     expect(undo.json()).toMatchObject({ restored: ['n2', 'n2.t'], clock: 12 })
     // its own checkpoint first, named for the undo (not "Before restoring “Before restoring …”")
     expect((await beforeRestoreRows()).map((r) => r.name)).toEqual([
