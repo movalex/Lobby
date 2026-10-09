@@ -22,6 +22,7 @@ import {
 } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { isTextEntry, onFocusLeave, trapTab, tryFocus } from '../../../ui/focus.ts'
+import { exportAllowed } from '../../canvas-ux/ported/export-gate.ts'
 import { budgetLine, groupNames, themesHint } from '../copy.ts'
 import { ActionIcon, SparkIcon, Spinner } from '../icons.tsx'
 import { runRecap } from '../recap/recap.ts'
@@ -1010,6 +1011,8 @@ function AnswerView({ state }: { state: AiAnswerState }) {
   const canAdd = useValue('lobby-ai-answer-can-add', () => canAddAnswer(canvas, aiAnswer(canvas).get()), [
     canvas,
   ])
+  // the export policy covers copying (canvas-ux export-gate.ts): no Copy for a person it limits
+  const canCopy = useValue('lobby-ai-answer-can-copy', () => exportAllowed(ctx), [ctx])
   const close = () => {
     const hadFocus = !!ref.current?.contains(docOf(canvas).activeElement)
     aiAnswer(canvas).set(null)
@@ -1108,21 +1111,23 @@ function AnswerView({ state }: { state: AiAnswerState }) {
       <p className="dr-ai-pop__foot">
         Only you can see this. Written by AI from the board’s text: check its sources.
       </p>
-      {state.status === 'done' && !none && (
+      {state.status === 'done' && !none && (canCopy || canAdd) && (
         <div className="dr-ai-panel__actions">
-          <button
-            type="button"
-            className="dr-btn dr-btn--sm"
-            data-testid="ai-answer-copy"
-            onClick={() => {
-              void navigator.clipboard?.writeText(answerText(r?.answer ?? '')).then(
-                () => setCopied(true),
-                () => setCopied(false),
-              )
-            }}
-          >
-            {copied ? 'Copied' : 'Copy'}
-          </button>
+          {canCopy && (
+            <button
+              type="button"
+              className="dr-btn dr-btn--sm"
+              data-testid="ai-answer-copy"
+              onClick={() => {
+                void navigator.clipboard?.writeText(answerText(r?.answer ?? '')).then(
+                  () => setCopied(true),
+                  () => setCopied(false),
+                )
+              }}
+            >
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          )}
           {canAdd && (
             <button
               type="button"

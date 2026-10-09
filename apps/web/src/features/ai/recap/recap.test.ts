@@ -7,12 +7,14 @@
 //  - Catch me up's window: the previous visit on this device, else 24 h, also when localStorage throws.
 import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { exportGate } from '../../canvas-ux/ported/export-gate.ts'
 import { showSources } from '../ported/ask.ts'
 import { aiKindWord, aiOf } from '../ported/provenance.ts'
-import { AI_ON, aiKit, note } from '../ported/test-kit.ts'
+import { AI_ON, aiKit, note, renderIn } from '../ported/test-kit.ts'
 import { applyRecap } from './apply.ts'
 import { RECAP_MARKDOWN_MAX_BYTES, recapMarkdown } from './markdown.ts'
 import type { RecapPlan } from './plan.ts'
+import { AiRecapOverlay } from './RecapPanel.tsx'
 import { aiRecap, runRecap } from './recap.ts'
 import {
   catchUpSince,
@@ -230,6 +232,34 @@ describe('Wrap up', () => {
     for (const id of made.ids) expect(aiOf(k.els.get(id) as never), id).toBeNull()
     const frameData = k.els.get(made.frameId)?.customData as { lobby?: { kind?: string } } | undefined
     expect(frameData?.lobby?.kind).toBe('recap')
+  })
+})
+
+describe('Copy as Markdown under the export policy', () => {
+  it('a person the policy limits gets no Copy (copying is exporting); an editor does', async () => {
+    for (const [role, policy, want] of [
+      ['viewer', 'editors', false],
+      ['commenter', 'editors', false],
+      ['viewer', 'everyone', true],
+      ['editor', 'editors', true],
+    ] as const) {
+      const k = aiKit(board(), {
+        status: { ...AI_ON, enabled: false, reason: 'board-off', canSummarize: false },
+      })
+      const ctx = k.ctx as unknown as {
+        role: string
+        board: { id: string }
+        registries: Record<string, unknown>
+      }
+      ctx.role = role
+      ctx.board = { ...ctx.board, id: `b-copy-${role}-${policy}` }
+      ctx.registries = { ...ctx.registries, commands: new Map() }
+      exportGate(ctx.board.id).policy.set(policy)
+      await runRecap(k.ctx, 'session', NOW)
+      const html = renderIn(k, AiRecapOverlay)
+      expect(html, `${role} under ${policy}`).toContain('data-testid="recap-panel"')
+      expect(html.includes('data-testid="recap-copy"'), `${role} under ${policy}`).toBe(want)
+    }
   })
 })
 

@@ -5,7 +5,8 @@
 //    "Planned vs actual" lists the run of show's sections (W5's agendaActuals; annotated where this build has no
 //    run of show yet); "Add as Recap frame" gets no server rejection, bob sees it, one Ctrl+Z removes all of it;
 //    Copy as Markdown copies the Markdown; "Export recap as PDF" is a download.
-//  - A viewer limited by the export policy gets the honest no-AI recap (no /ai/run at all) and no PDF export.
+//  - A viewer limited by the export policy gets the honest no-AI recap (no /ai/run at all), no Copy as Markdown and
+//    no PDF export (the policy covers copying too).
 //  - The e2e network assertion: nothing leaves Lobby's origins.
 //
 //   E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/l2-wrapup.spec.ts --project=chromium --workers=1
@@ -269,7 +270,7 @@ async function catchMeUp(page: Page) {
   return done
 }
 
-test('a viewer the export policy limits gets the recap without AI (no /ai/run) and no PDF export; the owner gets both', async ({
+test('a viewer the export policy limits gets the recap without AI (no /ai/run), no Copy and no PDF export; the owner gets all', async ({
   join,
   board,
 }) => {
@@ -302,14 +303,15 @@ test('a viewer the export policy limits gets the recap without AI (no /ai/run) a
   const runs = aiRunRequests(v.page)
   const downloads = collectDownloads(v.page)
   await expect.poll(async () => (await items(v.page)).filter((e) => e.type === 'stickynote').length).toBe(4)
-  await test.step('vera: Catch me up without AI, says why, and offers no PDF export', async () => {
+  await test.step('vera: Catch me up without AI, says why, and offers no Copy and no PDF export', async () => {
     const panel = await catchMeUp(v.page)
     await expect(panel).toHaveAttribute('data-ai', 'false')
     await expect(panel.getByTestId('recap-ai-note')).toHaveText(
       'Without AI: AI is off for you on this board.',
     )
     await expect(panel.getByTestId('recap-add')).toHaveCount(0)
-    await expect(panel.getByTestId('recap-copy')).toBeVisible()
+    // the export policy covers copying too: no Copy as Markdown
+    await expect(panel.getByTestId('recap-copy')).toHaveCount(0)
     await expect(panel.getByTestId('recap-pdf')).toHaveCount(0)
     expect(runs).toEqual([])
     expect(downloads).toEqual([])
@@ -320,6 +322,7 @@ test('a viewer the export policy limits gets the recap without AI (no /ai/run) a
     const panel = await catchMeUp(a.page)
     expect(fake.of('recap')[0]?.body).toMatchObject({ action: 'recap', scope: { kind: 'since' } })
     await expect(panel).toHaveAttribute('data-ai', 'true')
+    await expect(panel.getByTestId('recap-copy')).toBeVisible()
     await expect(panel.getByTestId('recap-pdf')).toBeVisible()
   })
 })

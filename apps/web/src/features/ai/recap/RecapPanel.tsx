@@ -1,7 +1,8 @@
 // OWNER: W2 (wave L, L2-3). The private recap panel (a screen layer of the AI feature, shown to everyone who opens
 // a recap, AI or not): the headline, decisions, actions with owners and open questions with their sources (a
 // chip only moves this tab's camera), the top voted items, planned vs actual, and the actions: "Add as Recap
-// frame" (editors, one undo step), "Copy as Markdown" (lib/clipboard.ts, bounded) and "Export recap as PDF" (the
+// frame" (editors, one undo step), "Copy as Markdown" (lib/clipboard.ts, bounded; only while this person may copy
+// here: the board's export policy covers copying, canvas-ux export-gate.ts) and "Export recap as PDF" (the
 // export dialog for the recap frame, W5's 'present-export.export'; only while this person may export).
 
 import { useEffect, useId, useRef, useState } from 'react'
@@ -13,6 +14,7 @@ import {
 import { copyText } from '../../../lib/clipboard.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { runCommand } from '../../canvas-ux/ported/commands.ts'
+import { exportAllowed } from '../../canvas-ux/ported/export-gate.ts'
 import { exportAllowedOn } from '../../sharing/ported/export-policy.ts'
 import { plural } from '../copy.ts'
 import { SparkIcon } from '../icons.tsx'
@@ -176,6 +178,8 @@ function RecapView({ state }: { state: RecapState }) {
     const cmd = ctx.registries.commands.get(EXPORT_COMMAND)
     return !!cmd && exportAllowedOn(ctx.board.id) && commandRunnable(cmd, ctx)
   }, [ctx])
+  // the export policy covers copying too (canvas-ux export-gate.ts): no Copy for a person it limits
+  const canCopy = useValue('lobby-ai-recap-copy', () => exportAllowed(ctx), [ctx])
   const close = () => aiRecap(canvas).set(null)
   const closeRef = useRef(close)
   closeRef.current = close
@@ -248,14 +252,16 @@ function RecapView({ state }: { state: RecapState }) {
               : 'Only you can see this. The room’s own results, no AI.'}
           </p>
           <div className="dr-ai-panel__actions dr-ai-recap__actions">
-            <button
-              type="button"
-              className="dr-btn dr-btn--sm"
-              data-testid="recap-copy"
-              onClick={() => void copyText(recapMarkdown(plan)).then((ok) => setCopied(ok ? 'yes' : 'no'))}
-            >
-              {copied === 'yes' ? 'Copied' : copied === 'no' ? 'Copy failed' : 'Copy as Markdown'}
-            </button>
+            {canCopy && (
+              <button
+                type="button"
+                className="dr-btn dr-btn--sm"
+                data-testid="recap-copy"
+                onClick={() => void copyText(recapMarkdown(plan)).then((ok) => setCopied(ok ? 'yes' : 'no'))}
+              >
+                {copied === 'yes' ? 'Copied' : copied === 'no' ? 'Copy failed' : 'Copy as Markdown'}
+              </button>
+            )}
             {frame && canExport && (
               <button
                 type="button"
