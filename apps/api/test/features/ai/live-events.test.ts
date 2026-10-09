@@ -154,6 +154,26 @@ describe('ai.working and ai.done', () => {
       AI_EVENTS.done,
     ])
   })
+
+  it('a failed display-name read publishes neither event (never a done without its working); the call still runs', async () => {
+    const x = await world()
+    const seen = listen(x)
+    const db = x.api.db as { maybeOne: (...a: unknown[]) => Promise<unknown> }
+    const original = db.maybeOne
+    db.maybeOne = function (this: unknown, ...a: unknown[]) {
+      if (typeof a[0] === 'string' && a[0].includes('guest_name FROM users'))
+        return Promise.reject(new Error('read failed: test'))
+      return original.apply(this, a)
+    }
+    try {
+      const res = await run(x.bob, x.board, panel)
+      expect(res.statusCode, res.body).toBe(200)
+    } finally {
+      db.maybeOne = original
+    }
+    expect(seen).toEqual([])
+    expect((await usageRows(x.api)).map((r) => r.status)).toEqual(['done'])
+  })
 })
 
 describe('a refused call publishes nothing', () => {

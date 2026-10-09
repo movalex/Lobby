@@ -459,10 +459,14 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
     })
     // Reserved: the call happens. Everyone on the board may now see that it is under way (live.ts).
     const runId = newAiRunId()
+    // ai.done goes out only after an ai.working was put on the hub (a failed name read publishes neither).
+    let announced = false
     try {
+      const name = await ticketName(db, user)
+      announced = true
       publishWorking(events, access.board.id, {
         runId,
-        name: await ticketName(db, user),
+        name,
         action: input.action,
         rect: clampRect(input.at),
       })
@@ -543,7 +547,7 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
       } as AiResult
     } finally {
       try {
-        publishDone(events, access.board.id, runId)
+        if (announced) publishDone(events, access.board.id, runId)
       } catch {
         // a hint only
       }
