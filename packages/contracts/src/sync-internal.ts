@@ -134,7 +134,8 @@ export type LobbyElementsSnapshot = z.infer<typeof LobbyElementsSnapshot>
 // api → sync only (behind the internal secret, like every internal route). The sync writes the checkpoint's
 // copies of `ids` into the live board through its server write, in the room's queue, in one SAVEPOINT, acked
 // after COMMIT: a live element gets the checkpoint's field groups, a deleted one comes back with its kept id
-// (`created: null`); a text under another session's lease is skipped (LEASED); arrow geometry is whole units;
+// (`created: null`); a text under another session's lease is skipped (LEASED), and an element locked now is
+// skipped (INVALID: a restore never overrides a lock, as no push does); arrow geometry is whole units;
 // bindings to targets that are neither live nor restored are dropped as a server fix; bound ends and labels are
 // re-snapped in the same commit. Only lb_* tables are written (never the tldraw tables nor dr_deleted_*). A
 // sync built before canvas-schema RESTORE_ELEMENTS_REV has no such route (404): the api answers 503
@@ -148,20 +149,27 @@ export const RESTORE_ELEMENTS_BODY_LIMIT_BYTES = 4 * 1024 * 1024
 export const restoreElementsInternalPath = (boardId: string) =>
   `/internal/boards/${encodeURIComponent(boardId)}/restore-elements`
 
-export const RestoreElementsBody = z.strictObject({
-  /** who restores (the api's authenticated user): the write's author, as on any server write */
-  actor: z.strictObject({ uid: z.string().min(1).max(60), name: z.string().max(200) }),
-  /** the element ids asked for (what `restored` and `skipped` answer for, with what came with them) */
-  ids: z
-    .array(z.string().regex(/^[A-Za-z0-9_.:-]{1,120}$/))
-    .min(1)
-    .max(200),
-  /** the checkpoint's elements as stored (each one checked by the sync with canvas-schema's element check) */
-  elements: z
-    .array(z.looseObject({ id: z.string(), type: z.string() }))
-    .min(1)
-    .max(RESTORE_ELEMENTS_MAX_ELEMENTS),
-})
+export const RestoreElementsBody = z
+  .strictObject({
+    /** who restores (the api's authenticated user): the write's author, as on any server write */
+    actor: z.strictObject({ uid: z.string().min(1).max(60), name: z.string().max(200) }),
+    /** the element ids asked for (what `restored` and `skipped` answer for, with what came with them) */
+    ids: z
+      .array(z.string().regex(/^[A-Za-z0-9_.:-]{1,120}$/))
+      .min(1)
+      .max(200),
+    /**
+     * the checkpoint's elements as stored (each one checked by the sync with canvas-schema's element check); empty
+     * only with `removeAbsent` (an "Undo restore" whose ids the checkpoint holds none of)
+     */
+    elements: z.array(z.looseObject({ id: z.string(), type: z.string() })).max(RESTORE_ELEMENTS_MAX_ELEMENTS),
+    /** W7 ("Undo restore", history.ts RestoreElementsInput): an asked id the checkpoint lacks is removed, not MISSING */
+    removeAbsent: z.literal(true).optional(),
+  })
+  .refine((b) => b.elements.length > 0 || b.removeAbsent === true, {
+    message: 'elements: at least one, unless removeAbsent',
+    path: ['elements'],
+  })
 export type RestoreElementsBody = z.infer<typeof RestoreElementsBody>
 
 export const RestoreElementsAnswer = z.strictObject({

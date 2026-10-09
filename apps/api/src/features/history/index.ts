@@ -58,6 +58,7 @@ import {
   newCanvasBoard,
   viaSync,
 } from './new-board.ts'
+import { registerRestoreElements } from './restore-elements.ts'
 import {
   checkpointBodyOf,
   isNewCanvasRow,
@@ -105,7 +106,9 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
   )
   checkpointServices.set(app, checkpoints)
   startCheckpointTimers(app, checkpoints, settings)
-  registerCheckpointRoutes(app, ctx, checkpoints, bodies)
+  const checkpointReader = registerCheckpointRoutes(app, ctx, checkpoints, bodies)
+  // Wave L (L7-2): chosen elements of a checkpoint back into the live board (restore-elements.ts).
+  registerRestoreElements(app, ctx, checkpoints, bodies, checkpointReader)
   // Bridge release R0: a manual checkpoint of every board, for the cut-over (checkpoint-all.ts).
   registerCheckpointAllRoutes(app, ctx, checkpoints)
 

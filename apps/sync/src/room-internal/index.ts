@@ -11,6 +11,8 @@
 //   GET  /internal/boards/:bid/asset-refs         asset-refs.ts
 //   GET  /internal/boards/:bid/deleted            deleted.ts
 //   POST /internal/boards/:bid/deleted/restore    deleted.ts
+//   POST /internal/boards/:bid/restore-elements   restore-elements.ts (wave L, L7-2: a checkpoint's elements
+//                                                 back into the live board; canvas-schema RESTORE_ELEMENTS_REV)
 //
 // Every one sits behind the router's internal-secret check, like every internal route.
 
@@ -18,6 +20,7 @@ import { type InternalRoute, type RoomExtensionContext, registerRoomExtension } 
 import { assetRefsRoutes } from './asset-refs.ts'
 import { deletedRoutes } from './deleted.ts'
 import { placeNotesRoutes } from './place-notes.ts'
+import { restoreElementsRoutes } from './restore-elements.ts'
 import { seedRoutes } from './seed.ts'
 import { textRoutes } from './text.ts'
 
@@ -28,6 +31,7 @@ export function roomInternalRoutes(ctx: RoomExtensionContext): InternalRoute[] {
     ...textRoutes(ctx),
     ...assetRefsRoutes(ctx),
     ...deletedRoutes(ctx),
+    ...restoreElementsRoutes(ctx),
   ]
 }
 

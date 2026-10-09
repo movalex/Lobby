@@ -291,12 +291,30 @@ const DELETE_LIMIT = { config: { rateLimit: { max: 120, timeWindow: 60_000 } } }
 const GUEST_PREVIEW = 'Guests can’t open earlier versions of a board. Ask the board’s owner for a copy.'
 const OWNERS_DELETE = 'Only the board’s owners can delete checkpoints.'
 
+/**
+ * A checkpoint's elements for a write that needs them (W7, L7-2: the selective restore): a v2 body's own, or a
+ * v1 body's converted the way its preview is (the same bounds, worker places and cache, so a restore right after
+ * a preview converts nothing again). Called after the caller's access checks, like the preview's conversion.
+ */
+export type CheckpointElements =
+  | { kind: 'elements'; elements: Record<string, unknown>[]; converted: boolean }
+  /** past a bound of the preview, or a limit of the worker */
+  | { kind: 'too-large' }
+  /** the converter cannot read the records, or the worker failed */
+  | { kind: 'unreadable' }
+  /** every worker place and the queue are taken */
+  | { kind: 'busy' }
+
+export interface CheckpointReader {
+  elementsOf(row: SnapshotRow, raw: string): Promise<CheckpointElements>
+}
+
 export function registerCheckpointRoutes(
   app: FastifyInstance,
   ctx: FeatureContext,
   checkpoints: CheckpointService,
   bodies: SnapshotBodies,
-): void {
+): CheckpointReader {
   const { db } = ctx
   const previews = new PreviewCache()
   // the conversion workers' places (previewSettings is read when the app is built, so tests can lower it)
@@ -537,4 +555,37 @@ export function registerCheckpointRoutes(
     if (!removed.length) throw notFound() // deleted meanwhile (another owner, or retention)
     return reply.code(204).send()
   })
+
+  return {
+    async elementsOf(row, raw) {
+      const body = readCheckpointBody(raw)
+      if (body.version === 2) return { kind: 'elements', elements: body.elements, converted: false }
+      const known = previews.get(row.id, row.storage_key)
+      if (known)
+        return known.kind === 'converted'
+          ? { kind: 'elements', elements: known.elements, converted: true }
+          : { kind: 'too-large' }
+      const bytes = Buffer.byteLength(raw, 'utf8')
+      if (
+        pastPreviewBounds(Math.max(body.records.length, Number(row.record_count) || 0), bytes) ||
+        labelTextTotal(body.records, previewSettings.maxTextChars) > previewSettings.maxTextChars
+      )
+        return { kind: 'too-large' }
+      let converted: V1Preview
+      try {
+        converted = await convertV1ForPreview(body, ctx.now().getTime(), convertGate)
+      } catch {
+        converted = { kind: 'unreadable', reason: 'failed' }
+      }
+      if (converted.kind === 'busy') return { kind: 'busy' }
+      if (converted.kind === 'unreadable') return { kind: 'unreadable' }
+      if (converted.kind === 'too-costly') {
+        if (converted.why !== 'time') previews.set(row.id, row.storage_key, 1, { kind: 'too-large' })
+        return { kind: 'too-large' }
+      }
+      const outcome: PreviewOutcome = { kind: 'converted', elements: converted.elements, doc: converted.doc }
+      previews.set(row.id, row.storage_key, 2 * (Number(row.size_bytes) || raw.length), outcome)
+      return { kind: 'elements', elements: converted.elements, converted: true }
+    },
+  }
 }

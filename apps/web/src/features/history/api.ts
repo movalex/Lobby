@@ -9,6 +9,9 @@ import {
   ListDeletedResponse,
   ListSnapshotsResponse,
   RestoreDeletedResponse,
+  type RestoreElementsInput,
+  RestoreElementsResult,
+  restoreElementsPath,
 } from '@draftroom/contracts'
 import { type ApiClient, ApiError, errorFromResponse } from '../../api/client.ts'
 
@@ -48,6 +51,12 @@ export function historyApi(client: ApiClient) {
       request('POST', `/api/boards/${enc(boardId)}/duplicate`, { body: opts, schema: HistoryBoardCreated }),
     listDeleted: (boardId: string, signal?: AbortSignal) =>
       request('GET', `/api/boards/${enc(boardId)}/deleted`, { schema: ListDeletedResponse, signal }),
+    /** Wave L (L7-2): chosen elements of a checkpoint back into the live board, for everyone. */
+    restoreElements: (boardId: string, snapshotId: string, input: RestoreElementsInput) =>
+      request('POST', restoreElementsPath(boardId, snapshotId), {
+        body: input,
+        schema: RestoreElementsResult,
+      }),
     restoreDeleted: (boardId: string, ids: string[]) =>
       request('POST', `/api/boards/${enc(boardId)}/deleted/restore`, {
         body: { ids },
