@@ -543,7 +543,18 @@ test('wave B follow-up 4: on a phone a chip keeps clear of the "Board actions" b
     const lookToward = async (to: { x: number; y: number }) => {
       const c = { x: box.width / 2, y: box.height / 2 }
       const p = { x: c.x + 3 * (to.x - c.x), y: c.y + 3 * (to.y - c.y) }
-      await setViewport(a.page, { x: at.x - p.x, y: at.y - p.y, zoom: 1 })
+      const want = { x: at.x - p.x, y: at.y - p.y, zoom: 1 }
+      await setViewport(a.page, want)
+      // wave K.1 (de-race): the engine applies a camera on its next render, and right after this page opened
+      // (the whole test runs within about a second of it) a read could still return the previous one; the note
+      // below is placed from the camera read back, so it landed off screen, with no bar to show (1 to 5 runs in
+      // 20 failed with 'selection-bar' not found). Wait until the camera is the one asked for.
+      await expect
+        .poll(async () => {
+          const v = await viewport(a.page)
+          return Math.abs(v.x - want.x) < 0.5 && Math.abs(v.y - want.y) < 0.5 && v.zoom === 1
+        })
+        .toBe(true)
     }
     const toggle = a.page.getByTestId('phone-sheet-open')
 
