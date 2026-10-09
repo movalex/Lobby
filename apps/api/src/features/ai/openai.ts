@@ -8,7 +8,7 @@
 // what it says). Nothing from the request or the answer is logged: the caller logs counts only.
 
 import { z } from 'zod'
-import type { ReasoningEffort } from './config.ts'
+import { REASONING_EFFORTS, type ReasoningEffort } from './config.ts'
 
 /** Token counts OpenAI reported for one call. */
 export interface AiUsage {
@@ -51,8 +51,17 @@ export interface ChatRequest {
   schema: Record<string, unknown>
   /** This call's output cap (never above the configured one). */
   maxOutputTokens?: number
-  /** This call's reasoning effort (sent only when the configuration sends one at all). */
+  /**
+   * This call's reasoning effort at most (sent only when the configuration sends one at all): the lower of
+   * it and the configured one goes, so a call can lower the effort but never raise it.
+   */
   reasoningEffort?: ReasoningEffort
+}
+
+/** The lower of two efforts (config.ts REASONING_EFFORTS runs from the least to the most). */
+export function lowerEffort(a: ReasoningEffort, b: ReasoningEffort | undefined): ReasoningEffort {
+  if (b === undefined) return a
+  return REASONING_EFFORTS.indexOf(b) < REASONING_EFFORTS.indexOf(a) ? b : a
 }
 
 export interface OpenAiClient {
@@ -163,8 +172,9 @@ export function createOpenAiClient(opts: OpenAiClientOptions): OpenAiClient {
         // Nothing of a board is kept at OpenAI for distillation or evals.
         store: false,
       }
-      // DRAFTROOM_AI_REASONING_EFFORT=off (a model without the parameter) wins over a call's own effort.
-      if (opts.reasoningEffort) body.reasoning_effort = req.reasoningEffort ?? opts.reasoningEffort
+      // DRAFTROOM_AI_REASONING_EFFORT=off (a model without the parameter) wins over a call's own effort,
+      // and a call's effort only ever lowers the configured one.
+      if (opts.reasoningEffort) body.reasoning_effort = lowerEffort(opts.reasoningEffort, req.reasoningEffort)
       let res: Response
       try {
         res = await fetchImpl(url, {

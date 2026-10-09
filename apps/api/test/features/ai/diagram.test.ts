@@ -137,6 +137,16 @@ describe('the request', () => {
     expect((await run(y.bob, y.board, diagram({ prompt: 'a flow' }))).statusCode).toBe(200)
     expect(y.openai.requests.at(-1)?.body.max_completion_tokens).toBe(1000)
     expect(y.openai.requests.at(-1)?.body).not.toHaveProperty('reasoning_effort')
+    await y.close()
+    w = undefined
+    // 'low' is a ceiling: a configured 'minimal' or 'none' is never raised for a diagram
+    for (const effort of ['minimal', 'none']) {
+      const z = await world({ DRAFTROOM_AI_REASONING_EFFORT: effort })
+      expect((await run(z.bob, z.board, diagram({ prompt: 'a flow' }))).statusCode).toBe(200)
+      expect(z.openai.requests.at(-1)?.body.reasoning_effort).toBe(effort)
+      await z.close()
+      w = undefined
+    }
   })
 
   it('neither a selection nor a description: 400; a selection with no text and no description: 400', async () => {

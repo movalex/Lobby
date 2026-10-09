@@ -39,7 +39,7 @@ export interface Prompt {
   schema: Record<string, unknown>
   /** This call's output cap when it is lower than the configured one (diagram: 1.5k). */
   maxOutputTokens?: number
-  /** This call's reasoning effort, when it differs from the configured one (only sent if one is configured). */
+  /** This call's reasoning effort at most: it can lower the configured one, never raise it (openai.ts). */
   reasoningEffort?: ReasoningEffort
 }
 
