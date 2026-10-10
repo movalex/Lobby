@@ -8,7 +8,8 @@
 //    quadrant on a grid. The 2x2 is the template's squares or a matrix this feature made (./matrix.ts), or,
 //    when there is neither, one made now from the axes the person named: a frame, a cross and six axis words,
 //    all new elements, in the same undo step as the moves.
-//  - both go through ./execute.ts: showAiPreview over 10 moves, and the board read again at the moment of
+//  - both go through ./execute.ts: showAiPreview first, whatever the size (wave M, M4-2: an AI answer never lands
+//    unseen), and the board read again at the moment of
 //    writing. They move only notes (with their bound labels), skip what is locked, under another tab's lease
 //    or being dragged, and write no arrow: the server re-snaps what is bound to a note that moved. A note
 //    the AI left out of a sort, or did not score, stays where it is and is counted.
@@ -179,7 +180,8 @@ async function lensRun(ctx: CanvasFeatureContext, lens: string, ids: readonly st
       return isSort(again) ? makeBuild(again) : null
     },
   }
-  return executePlan(ctx, spec, true)
+  // M4-2: an AI answer is always previewed before anything moves
+  return executePlan(ctx, spec, true, 'always')
 }
 
 // ---- place on a 2x2 ----------------------------------------------------------------------------------------------
@@ -413,6 +415,8 @@ async function placeRun(
       },
     },
     true,
+    // M4-2: an AI answer is always previewed before anything moves (the 2x2 too)
+    'always',
   )
 }
 

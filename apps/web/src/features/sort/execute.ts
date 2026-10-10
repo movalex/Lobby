@@ -120,11 +120,20 @@ function notice(ctx: CanvasFeatureContext, text: string, tone?: 'error', action?
   })
 }
 
+/** When the preview asks first: past PREVIEW_MIN_MOVES moves (a deterministic sort), or always (an AI answer, M4-2). */
+export type PreviewWhen = 'over-ten' | 'always'
+
 /**
  * Runs `spec` (see the header). Resolves what happened; tells the person in a notice. `held`: the caller already
- * holds the canvas's slot (`whileBusy`, around its AI call), so this neither takes nor gives it back.
+ * holds the canvas's slot (`whileBusy`, around its AI call), so this neither takes nor gives it back. `preview`:
+ * wave M (M4-2) shows every AI answer's plan first, whatever its size ('always'), so nothing an AI chose lands unseen.
  */
-export async function executePlan(ctx: CanvasFeatureContext, spec: PlanSpec, held = false): Promise<Outcome> {
+export async function executePlan(
+  ctx: CanvasFeatureContext,
+  spec: PlanSpec,
+  held = false,
+  preview: PreviewWhen = 'over-ten',
+): Promise<Outcome> {
   const { canvas } = ctx
   if (canvas.readOnly()) return { status: 'refused', reason: 'read-only' }
   const release = held ? () => {} : takeBusy(canvas)
@@ -144,9 +153,10 @@ export async function executePlan(ctx: CanvasFeatureContext, spec: PlanSpec, hel
       notice(ctx, `${text}${built.skipped.length ? ` ${skippedText(built.skipped)}` : ''}`)
       return { status: 'nothing', reason: text }
     }
-    // the preview, when it moves more than a few notes; "Try again" builds again (a new AI call when it has one)
+    // the preview, when it moves more than a few notes (an AI answer: always); "Try again" builds again (a new AI
+    // call when it has one)
     let retries = 0
-    while (built.moves.length > PREVIEW_MIN_MOVES) {
+    while (preview === 'always' || built.moves.length > PREVIEW_MIN_MOVES) {
       const choice = await sortDeps().showAiPreview(ctx, previewOf(spec, built))
       if (choice === 'apply') break
       if (choice === 'discard' || retries >= MAX_RETRIES) return { status: 'discarded' }

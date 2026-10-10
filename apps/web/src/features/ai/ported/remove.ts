@@ -7,7 +7,8 @@
 //  - its version (and its label's) is the one this tab saw once the run had been saved: a move, a recolour or
 //    any other edit by anyone (this tab included) changes it.
 // It never deletes anything else, never deletes a frame that keeps something, and never revives anything (it
-// only deletes live elements). This tab knows the versions only of runs it wrote itself (any writer: the AI
+// only deletes live elements). Wave M (M4-2): nor what is locked or under a text lease right now (the apply's skip
+// rules); those stay and are counted with what someone changed. This tab knows the versions only of runs it wrote itself (any writer: the AI
 // menus, public.ts callers): the record is in memory, gone with the page. A themes run moved notes that existed
 // before it: those are not deleted but put back from History (the before_ai_themes checkpoint), so its labels
 // link there instead.
@@ -18,7 +19,9 @@
 
 import type { CanvasElement, CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { items } from '../../../canvas/api/index.ts'
+import { countUsage } from '../../../lib/usage.ts'
 import { plural } from '../copy.ts'
+import { endUndoOffer } from './actions.ts'
 import { aiKindWord, aiOf, stampsOf } from './provenance.ts'
 import { perCanvas } from './runtime.ts'
 
@@ -80,18 +83,36 @@ export function noteCreated(canvas: LobbyCanvas, ids: readonly string[], me: str
   return any
 }
 
-/** Takes the versions of every pending element (and its label): the saves have settled. */
-export function settleRecords(canvas: LobbyCanvas): void {
+/** The server has stamped it (`lobbyServer.createdAt`): its version is the one the server keeps. */
+const stamped = (el: CanvasElement | undefined) => !!el && stampsOf(el).createdAt !== null
+
+/**
+ * Takes the versions of the pending elements (and their labels): the saves have settled. Wave M (M4-2): only of
+ * those the server has stamped, with their labels (a save that had not been sent yet left the record one version
+ * behind, so Remove kept everything as "changed since"); the others stay pending for the next settle. `force`
+ * takes them all (the wait is over, or Remove is asked now). Returns how many are still pending.
+ */
+export function settleRecords(canvas: LobbyCanvas, force = true): number {
+  let left = 0
   for (const rec of runRecords(canvas).values()) {
-    for (const id of rec.pending) {
+    for (const id of [...rec.pending]) {
       const el = canvas.get(id)
-      if (!live(el)) continue
-      rec.versions.set(id, versionOf(el))
+      if (!live(el)) {
+        rec.pending.delete(id)
+        continue
+      }
       const label = labelIdOf(canvas, el)
-      if (label) rec.versions.set(label, versionOf(canvas.get(label)))
+      const l = label ? canvas.get(label) : undefined
+      if (!force && (!stamped(el) || (label && !stamped(l)))) {
+        left++
+        continue
+      }
+      rec.versions.set(id, versionOf(el))
+      if (label) rec.versions.set(label, versionOf(l))
+      rec.pending.delete(id)
     }
-    rec.pending.clear()
   }
+  return left
 }
 
 /** How long the record waits for this tab's saves to settle after an AI write, at most. */
@@ -112,8 +133,10 @@ export function watchAiRuns(ctx: CanvasFeatureContext): () => void {
   }
   const poll = () => {
     timer = null
-    if (settled() || Date.now() - since > SETTLE_WAIT_MS) {
-      settleRecords(canvas)
+    const late = Date.now() - since > SETTLE_WAIT_MS
+    // the saves settled, and the server stamped what was made (else wait on, up to SETTLE_WAIT_MS)
+    if ((settled() && settleRecords(canvas, false) === 0) || late) {
+      if (late) settleRecords(canvas)
       return
     }
     timer = setTimeout(poll, SETTLE_POLL_MS)
@@ -161,13 +184,25 @@ export function recordedRunOf(canvas: LobbyCanvas, id: string): string | null {
   return null
 }
 
+/**
+ * Wave M (M4-2): someone holds it now: locked, or its words (or its label's) under a text lease, this tab's open
+ * editor included. Remove leaves it, as the apply's skip rules leave a note that is locked or being typed in.
+ */
+function heldNow(canvas: LobbyCanvas, id: string): boolean {
+  return canvas.isLocked(id) || canvas.editingId() === id || canvas.leaseHolder(id) !== null
+}
+
 /** Unchanged since the run: the words never edited (server stamps) and the version this tab recorded. */
 function untouched(canvas: LobbyCanvas, rec: RunRecord, el: CanvasElement): boolean {
   const parts = [el]
   const label = labelIdOf(canvas, el)
   const l = label ? canvas.get(label) : undefined
   if (l) parts.push(l)
+  // still this tab's own, not yet stamped by the server (its save is on its way): nobody else has had it
+  const own = rec.pending.has(el.id)
   for (const p of parts) {
+    if (heldNow(canvas, p.id)) return false
+    if (own) continue
     const s = stampsOf(p)
     if (s.createdAt !== null && s.lastEditedAt !== null && s.lastEditedAt !== s.createdAt) return false
     const seen = rec.versions.get(p.id)
@@ -176,10 +211,16 @@ function untouched(canvas: LobbyCanvas, rec: RunRecord, el: CanvasElement): bool
   return true
 }
 
+/** Wave M (M4-2): whether this tab's run `runId` grouped notes into themes (a read only: it settles nothing). */
+export const isThemesRun = (canvas: LobbyCanvas, runId: string): boolean =>
+  runRecords(canvas).get(runId)?.kinds.has('theme-label') ?? false
+
 export function removalPlan(canvas: LobbyCanvas, runId: string): RemovalPlan | null {
   const rec = runRecords(canvas).get(runId)
   if (!rec) return null
-  if (rec.pending.size) settleRecords(canvas)
+  // M4-2: what the server stamped meanwhile is taken now; what it has not stamped yet stays this tab's own (never
+  // forced: a version taken before the stamp would make Remove keep it as "changed since" afterwards)
+  if (rec.pending.size) settleRecords(canvas, false)
   // the run's elements: stamped with it, or held in its frame as made in the same step (noteCreated)
   const mine = canvas
     .items()
@@ -233,4 +274,34 @@ export function removedText(removed: number, kept: number, held = 0): string {
   }
   const base = `Removed ${plural(removed, 'AI-made item')}.`
   return `${base}${kept ? ` Kept ${plural(kept, 'item')} someone changed.` : ''}${frames}`
+}
+
+/**
+ * "Remove this AI result" (L2-1d): one transact deleting what the run made that nobody changed since (./remove.ts).
+ * A themes run moved notes that were there before: History puts them back (its before_ai_themes checkpoint).
+ */
+export function removeResult(ctx: CanvasFeatureContext, runId: string): void {
+  const { canvas } = ctx
+  const plan = removalPlan(canvas, runId)
+  if (!plan || canvas.readOnly()) return
+  countUsage('ai.open:remove-result')
+  if (plan.themes) {
+    ctx.openPanel('history')
+    ctx.notify({
+      key: 'dr-ai',
+      text: 'To put the notes back, restore “Before AI grouped notes into themes” in History.',
+      testId: 'ai-done',
+      timeoutMs: 8000,
+    })
+    return
+  }
+  // the last result's Undo toast must not take this step for its own (and dismiss this toast)
+  endUndoOffer(canvas)
+  const removed = applyRemoval(canvas, plan)
+  ctx.notify({
+    key: 'dr-ai',
+    text: removedText(removed, plan.kept.length, plan.held.length),
+    testId: 'ai-removed',
+    timeoutMs: 7000,
+  })
 }

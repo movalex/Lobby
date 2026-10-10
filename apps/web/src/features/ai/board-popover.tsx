@@ -44,11 +44,23 @@ export function usePopoverLayer(canvas: LobbyCanvas): HTMLElement | null {
   return host
 }
 
-/** `children` in the popover layer; in place when there is no board DOM (a server render, a unit test). */
+/**
+ * `node` in the layer `host` (from usePopoverLayer in the same component, so the component that places the popover
+ * renders again once the layer is there); in place when there is no board DOM (a server render, a unit test).
+ */
+export function inPopoverLayer(canvas: LobbyCanvas, host: HTMLElement | null, node: ReactNode): ReactNode {
+  if (!canvas.container()) return node
+  return host ? createPortal(node, host) : null
+}
+
+/**
+ * `children` in the popover layer (see inPopoverLayer). The component that places the popover must be inside
+ * `children` (its measure runs once it is in the layer); a component that places its own popover uses
+ * usePopoverLayer and inPopoverLayer itself.
+ */
 export function InPopoverLayer({ canvas, children }: { canvas: LobbyCanvas; children: ReactNode }) {
   const host = usePopoverLayer(canvas)
-  if (!canvas.container()) return <>{children}</>
-  return host ? createPortal(children, host) : null
+  return <>{inPopoverLayer(canvas, host, children)}</>
 }
 
 /** Popovers that fold the style panel away now (one count per canvas region). */

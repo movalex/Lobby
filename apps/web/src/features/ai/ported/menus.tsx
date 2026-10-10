@@ -28,7 +28,6 @@ import { SparkIcon, Spinner } from '../icons.tsx'
 import { runRecap } from '../recap/recap.ts'
 import {
   anchorAtScene,
-  endUndoOffer,
   ensureAiStatus,
   expandTopic,
   openAiMenu,
@@ -38,9 +37,10 @@ import {
 } from './actions.ts'
 import { askBoard, WHOLE_BOARD } from './ask.ts'
 import { canBuildWithAi } from './gate.ts'
-import { aiLens } from './lens.tsx'
+import { aiLens, toggleAiLens } from './lens.tsx'
+import { PROVENANCE_ITEM } from './provenance-chip.tsx'
 import { AI_COMMAND_IDS, aiActionsArgs, aiAskArgs, aiRecapArgs } from './public.ts'
-import { applyRemoval, recordedRunOf, removalPlan, removedText } from './remove.ts'
+import { isThemesRun, recordedRunOf, removeResult } from './remove.ts'
 import { type AiMenuState, aiJob, aiMenu, aiStatus, getAiCtx, setAiCtx } from './runtime.ts'
 import { type AiTarget, NONE, selectionTarget, targetAt, viewTarget } from './target.ts'
 
@@ -124,6 +124,8 @@ export const SELECTION_BAR: readonly SelectionBarItemSpec[] = [
     },
     component: () => <AiBarButton />,
   },
+  // wave M (M4-2): the "AI-made" chip of a selection that holds something AI made
+  PROVENANCE_ITEM,
 ]
 
 // ---- the context menu ----------------------------------------------------------------------------
@@ -151,35 +153,6 @@ function runAt(ctx: CanvasFeatureContext, t: MenuTarget): string | null {
   return id ? recordedRunOf(ctx.canvas, id) : null
 }
 
-/**
- * "Remove this AI result" (L2-1d): one transact deleting what the run made that nobody changed since (./remove.ts).
- * A themes run moved notes that were there before: History puts them back (its before_ai_themes checkpoint).
- */
-export function removeResult(ctx: CanvasFeatureContext, runId: string): void {
-  const { canvas } = ctx
-  const plan = removalPlan(canvas, runId)
-  if (!plan || canvas.readOnly()) return
-  if (plan.themes) {
-    ctx.openPanel('history')
-    ctx.notify({
-      key: 'dr-ai',
-      text: 'To put the notes back, restore “Before AI grouped notes into themes” in History.',
-      testId: 'ai-done',
-      timeoutMs: 8000,
-    })
-    return
-  }
-  // the last result's Undo toast must not take this step for its own (and dismiss this toast)
-  endUndoOffer(canvas)
-  const removed = applyRemoval(canvas, plan)
-  ctx.notify({
-    key: 'dr-ai',
-    text: removedText(removed, plan.kept.length, plan.held.length),
-    testId: 'ai-removed',
-    timeoutMs: 7000,
-  })
-}
-
 export const CONTEXT_MENU: readonly MenuEntrySpec[] = [
   {
     id: 'ai.remove',
@@ -187,9 +160,7 @@ export const CONTEXT_MENU: readonly MenuEntrySpec[] = [
     order: 20,
     label: (ctx, t) => {
       const run = runAt(ctx, t)
-      return run && removalPlan(ctx.canvas, run)?.themes
-        ? 'Put the notes back (History)…'
-        : 'Remove this AI result'
+      return run && isThemesRun(ctx.canvas, run) ? 'Put the notes back (History)…' : 'Remove this AI result'
     },
     visible: (ctx, t) => !ctx.canvas.readOnly() && runAt(ctx, t) !== null,
     run: (ctx, t) => {
@@ -411,7 +382,7 @@ export const COMMANDS: readonly CommandSpec[] = [
     label: 'Show what AI made',
     group: 'View',
     readOnlyAllowed: true,
-    run: (ctx) => aiLens(ctx.canvas).set(!aiLens(ctx.canvas).get()),
+    run: (ctx) => toggleAiLens(ctx.canvas),
   },
   {
     id: 'ai.expand',
@@ -473,7 +444,7 @@ export const MAIN_MENU: readonly MenuEntrySpec[] = [
     order: 59,
     label: 'Show what AI made',
     checked: (ctx) => aiLens(ctx.canvas).get(),
-    run: (ctx) => aiLens(ctx.canvas).set(!aiLens(ctx.canvas).get()),
+    run: (ctx) => toggleAiLens(ctx.canvas),
   },
   {
     id: 'ai.board',

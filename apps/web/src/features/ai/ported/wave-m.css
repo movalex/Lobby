@@ -1,0 +1,69 @@
+/* Wave M (W4): provenance you can see (M4-2): the selection bar's "AI-made" chip and its card, and the lens banner.
+   Only --dr-* tokens, so both themes work; the card and the banner open in the board popovers' layer
+   (../board-popover.tsx). */
+
+/* ---- the "AI-made" chip in the selection bar ------------------------------------------------------------- */
+.dr-cux-selbar__btn.dr-ai-provchip {
+  display: inline-flex;
+  gap: 4px;
+  width: auto;
+  margin: 0 2px;
+  padding: 0 8px 0 6px;
+  border: 1px solid var(--dr-accent-line);
+  border-radius: 999px;
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+  font: 600 12px / 1 var(--dr-font);
+  white-space: nowrap;
+}
+.dr-ai-provchip[aria-expanded="true"] {
+  border-color: var(--dr-accent-ink);
+}
+
+/* ---- its card ------------------------------------------------------------------------------------------- */
+.dr-ai-pop.dr-ai-provcard {
+  width: 300px;
+}
+.dr-ai-provcard .dr-ai-pop__title {
+  white-space: normal;
+}
+.dr-ai-provcard .dr-ai-panel__actions {
+  justify-content: flex-start;
+}
+
+/* ---- the lens banner ------------------------------------------------------------------------------------ */
+.dr-ai-lens-banner {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 24px);
+  padding: 4px 6px 4px 6px;
+  border: 1px solid var(--dr-accent-line);
+  border-radius: 999px;
+  background: var(--dr-surface);
+  box-shadow: var(--dr-shadow-pop);
+  color: var(--dr-ink);
+  font: 600 13px / 1.2 var(--dr-font);
+  white-space: nowrap;
+}
+.dr-ai-lens-banner .dr-ai-pop__badge {
+  width: 20px;
+  height: 20px;
+}
+.dr-ai-lens-banner__hide {
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--dr-chip);
+  color: var(--dr-accent-ink);
+  font: inherit;
+  cursor: pointer;
+}
+.dr-ai-lens-banner__hide:hover {
+  background: var(--dr-hover);
+}
+.dr-ai-lens-banner__hide:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
