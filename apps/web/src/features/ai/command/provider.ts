@@ -18,6 +18,14 @@ import { type BoardCommand, grammarRunId, runBoardCommand } from './run.ts'
 
 /** A query shorter than this offers no Do or Ask line. */
 export const DO_MIN_CHARS = 3
+/** The parsed Do line leads whatever is typed. */
+export const DO_PINNED = 2000
+/**
+ * A Do line that is only a guess (the words were taken as a frame's name: "show grid" with a frame "Grid ideas") ranks
+ * under a command whose name the words are or begin (the scorer gives an exact name 1000, a prefix 900 and below) and
+ * still over a loose match (M3-2, FTU-12: it used to beat the exact command, `Show grid`).
+ */
+export const DO_GUESS_PINNED = 640
 const READ_ONLY = 'You can find and select on this board, not change it'
 
 /** Whether AI is offered to this person here (W2's 'ai.ask' is registered and may run). */
@@ -75,7 +83,7 @@ export function commandEntries(ctx: CanvasFeatureContext, query: string): Palett
       label: r.title,
       group: 'Do',
       detail: r.find ? 'Selects and shows; changes nothing' : 'One undo step',
-      pinned: 2000,
+      pinned: r.ok && r.guess ? DO_GUESS_PINNED : DO_PINNED,
       disabledReason: !r.find && readOnly ? READ_ONLY : null,
       run: () => {
         void runBoardCommand(ctx, {

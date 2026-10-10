@@ -14,6 +14,7 @@ import {
 } from '../../canvas/api/index.ts'
 import { waveLKeyClaimOf } from '../../canvas/input/keymap.ts'
 import type { CanvasPort } from '../../canvas/port.ts'
+import { commandEntries } from '../ai/command/provider.ts'
 import { CANVAS_FEATURES } from '../canvas-registry.ts'
 import {
   boardEntries,
@@ -22,10 +23,11 @@ import {
   NOT_NOW,
   PALETTE_COMMAND_ID,
   READ_ONLY_REASON,
+  STARTERS,
 } from './board-index.ts'
 import { isPaletteKey, type PaletteKeyLike } from './keys.ts'
 import { chooseEntry, type PaletteEntry, pushRecent, RECENTS_MAX, readRecents } from './model.ts'
-import { firstActiveLine, paletteSections } from './Palette.tsx'
+import { firstActiveLine, paletteSections, TRY_SECTION, UNAVAILABLE_SECTION } from './Palette.tsx'
 import { fold, rank, scoreEntry } from './scorer.ts'
 import { workspaceEntries } from './workspace-search.ts'
 
@@ -146,12 +148,21 @@ describe('the scorer (fixed corpus)', () => {
 
 // ---- the board's index -------------------------------------------------------------------------------------
 
-function fakePort(): CanvasPort {
+interface FakeEl {
+  id: string
+  x: number
+  y: number
+  width: number
+  height: number
+  [key: string]: unknown
+}
+
+function fakePort(els: readonly FakeEl[] = []): CanvasPort {
   const noop = () => {}
   return {
-    items: () => [],
-    get: () => undefined,
-    bounds: () => null,
+    items: () => els as never,
+    get: (id: string) => els.find((e) => e.id === id) as never,
+    bounds: (id: string) => els.find((e) => e.id === id) ?? null,
     selection: [],
     select: noop,
     viewport: { get: () => ({ x: 0, y: 0, width: 100, height: 100, zoom: 1 }), set: noop, fit: noop },
@@ -170,14 +181,18 @@ function fakePort(): CanvasPort {
 }
 
 /** A feature context over a bare port, with every CANVAS_FEATURES command registered. */
-function boardCtx(readOnly: boolean, extra: readonly CommandSpec[] = []): CanvasFeatureContext {
+function boardCtx(
+  readOnly: boolean,
+  extra: readonly CommandSpec[] = [],
+  els: Parameters<typeof fakePort>[0] = [],
+): CanvasFeatureContext {
   const registries = createFeatureRegistries()
   for (const f of CANVAS_FEATURES) {
     for (const c of f.commands ?? []) registries.commands.register(c)
     for (const t of f.tools ?? []) registries.tools.register(t)
   }
   for (const c of extra) registries.commands.register(c)
-  const { canvas } = createLobbyCanvas({ port: fakePort(), registries })
+  const { canvas } = createLobbyCanvas({ port: fakePort(els), registries })
   return {
     canvas: { ...canvas, readOnly: () => readOnly } as LobbyCanvas,
     registries,
@@ -435,5 +450,189 @@ describe('Ctrl/Cmd+K off the board (the dashboard): the board claim’s reading,
     expect(isPaletteKey(k('k', 'KeyK', { ctrlKey: true }), true)).toBe(false)
     expect(isPaletteKey(k('k', 'KeyK', { metaKey: true }), false)).toBe(false)
     expect(isPaletteKey(k('k', 'KeyK'), false)).toBe(false)
+  })
+})
+
+// ---- M3-2: an empty palette starts with Try; the exact command beats a guessed frame name ---------------------------------
+
+/** A command that is on and runs, for the lines wave L's features register only when AI is on. */
+const on = (id: string, label: string, over: Partial<CommandSpec> = {}): CommandSpec => ({
+  id,
+  label,
+  enabled: () => true,
+  readOnlyAllowed: true,
+  run: () => {},
+  ...over,
+})
+
+describe('the empty palette (M3-2, FTU-4.3, FTU-12)', () => {
+  const askOn = [
+    on('ai.ask', 'Ask this board'),
+    on('flow.diagram', 'Diagram from words…', { readOnlyAllowed: false }),
+  ]
+
+  it('starts with Try: what wave L offers, in order, under the words that say what each does', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const list = boardEntries(boardCtx(false, askOn), 'other')
+    const sections = paletteSections(list, '', [])
+    expect(sections[0]?.id).toBe(TRY_SECTION)
+    expect(sections[0]?.title).toBe('Try')
+    const labels = sections[0]?.entries.map((e) => e.label) ?? []
+    // the ones that can run come first; the order is STARTERS'
+    expect(labels).toEqual(
+      expect.arrayContaining(['Wrap up this board', 'Ask this board', 'Diagram from words']),
+    )
+    // the ones that can run, in STARTERS order, then the ones with a reason (Sort needs notes selected)
+    const rankOf = (e: PaletteEntry) => STARTERS.findIndex((s) => s.id === e.id)
+    const lines = sections[0]?.entries ?? []
+    for (const part of [lines.filter((e) => !e.disabledReason), lines.filter((e) => !!e.disabledReason)]) {
+      const ranks = part.map(rankOf)
+      expect(ranks).toEqual([...ranks].sort((a, b) => a - b))
+    }
+    expect(lines.findIndex((e) => !!e.disabledReason)).toBeGreaterThan(
+      lines.findLastIndex((e) => !e.disabledReason) - 1,
+    )
+    expect(labels.indexOf('Wrap up this board')).toBeLessThan(labels.indexOf('Ask this board'))
+    expect(labels.indexOf('Ask this board')).toBeLessThan(labels.indexOf('Diagram from words'))
+    for (const e of sections[0]?.entries ?? []) expect(e.detail, e.id).toBeTruthy()
+    // the line keeps its own id (a pick is remembered under it, typing still finds it) and is not listed twice
+    const all = sections.flatMap((s) => s.entries.map((e) => e.id))
+    expect(all.filter((id) => id === 'cmd:ai.ask')).toHaveLength(1)
+    // Undo and Redo no longer open the list
+    expect(sections[0]?.entries.some((e) => e.id === 'cmd:canvas-ux.undo')).toBe(false)
+    errors.mockRestore()
+  })
+
+  it('does not preselect a line: a reflex Ctrl/Cmd+K, Enter still runs nothing', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const sections = paletteSections(boardEntries(boardCtx(false, askOn), 'other'), '', [])
+    expect(sections[0]?.id).toBe(TRY_SECTION)
+    expect(firstActiveLine(sections)).toBe(-1)
+    // with a recent pick that can run, the first line is that pick, as before
+    expect(
+      firstActiveLine(paletteSections(boardEntries(boardCtx(false, askOn), 'other'), '', ['cmd:ai.recap'])),
+    ).toBe(0)
+    errors.mockRestore()
+  })
+
+  it('a pick that is in Recent is not listed again in Try', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const list = boardEntries(boardCtx(false, askOn), 'other')
+    const sections = paletteSections(list, '', ['cmd:ai.recap'])
+    expect(sections.map((s) => s.id).slice(0, 2)).toEqual(['recent', TRY_SECTION])
+    expect(sections[1]?.entries.map((e) => e.id)).not.toContain('cmd:ai.recap')
+    expect(sections[0]?.entries.map((e) => e.id)).toEqual(['cmd:ai.recap'])
+    errors.mockRestore()
+  })
+
+  it('adds Ask all boards only when that command is registered and reports itself available', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const tryIds = (extra: CommandSpec[]) =>
+      paletteSections(boardEntries(boardCtx(false, [...askOn, ...extra]), 'other'), '', [])
+        .find((s) => s.id === TRY_SECTION)
+        ?.entries.map((e) => e.id)
+    expect(tryIds([])).not.toContain('cmd:ai.askWorkspace')
+    expect(tryIds([on('ai.askWorkspace', 'Ask all boards')])).toContain('cmd:ai.askWorkspace')
+    // registered but off (a 404 seen, or no AI for the workspace): left out, not shown greyed
+    expect(tryIds([on('ai.askWorkspace', 'Ask all boards', { enabled: () => false })])).not.toContain(
+      'cmd:ai.askWorkspace',
+    )
+    errors.mockRestore()
+  })
+
+  it('a viewer’s Try has only what a viewer can do', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const sections = paletteSections(boardEntries(boardCtx(true, askOn), 'other'), '', [])
+    const ids = sections.find((s) => s.id === TRY_SECTION)?.entries.map((e) => e.id) ?? []
+    expect(ids).toContain('cmd:ai.recap')
+    expect(ids).toContain('cmd:ai.ask')
+    // diagrams add to the board: not offered to a viewer
+    expect(ids).not.toContain('cmd:flow.diagram')
+    errors.mockRestore()
+  })
+
+  it('puts the lines that cannot run last, each with its reason, and the ones that can run before them', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const list = boardEntries(boardCtx(false, askOn), 'other')
+    const sections = paletteSections(list, '', [])
+    const last = sections[sections.length - 1]
+    expect(last?.id).toBe(UNAVAILABLE_SECTION)
+    expect(last?.title).toBe('Not available right now')
+    expect(last?.entries.length ?? 0).toBeGreaterThan(5)
+    for (const e of last?.entries ?? []) expect(e.disabledReason, e.id).toBeTruthy()
+    // outside Try, no line that cannot run comes before one that can
+    const rest = sections.filter((s) => s.id !== TRY_SECTION).flatMap((s) => s.entries)
+    const firstDisabled = rest.findIndex((e) => !!e.disabledReason)
+    expect(firstDisabled).toBeGreaterThan(0)
+    expect(rest.slice(firstDisabled).every((e) => !!e.disabledReason)).toBe(true)
+    expect(rest.slice(0, firstDisabled).every((e) => !e.disabledReason)).toBe(true)
+    // inside Try, the ones that can run are first
+    const tryLines = sections.find((s) => s.id === TRY_SECTION)?.entries ?? []
+    const firstOff = tryLines.findIndex((e) => !!e.disabledReason)
+    if (firstOff >= 0) expect(tryLines.slice(firstOff).every((e) => !!e.disabledReason)).toBe(true)
+    // every line of the index is in exactly one place
+    const placed = sections.flatMap((s) => s.entries.map((e) => e.id))
+    expect(new Set(placed).size).toBe(placed.length)
+    expect(new Set(placed)).toEqual(new Set(list.map((e) => e.id)))
+    errors.mockRestore()
+  })
+
+  it('a palette whose lines mark no starters has no Try (the dashboard’s), and typing is the ranked list as before', () => {
+    const a = entry('Alpha', { group: 'One' })
+    const b = entry('Beta', { group: 'Two', disabledReason: 'Not today' })
+    const sections = paletteSections([a, b], '', [])
+    expect(sections.map((s) => s.id)).toEqual(['group:One', UNAVAILABLE_SECTION])
+    expect(paletteSections([a, b], 'alp', []).map((s) => s.id)).toEqual(['matches'])
+  })
+
+  it('Undo and Redo show their keys, as Cut does (the engine takes the chords, so the registry has none)', () => {
+    const ctx = boardCtx(false)
+    const undo = commandEntry(ctx.registries.commands.get('canvas-ux.undo') as CommandSpec, ctx, 'other')
+    const redo = commandEntry(ctx.registries.commands.get('canvas-ux.redo') as CommandSpec, ctx, 'other')
+    expect(undo?.kbd).toBe('Ctrl+Z')
+    expect(redo?.kbd).toBe('Ctrl+Shift+Z or Ctrl+Y')
+    expect(commandEntry(ctx.registries.commands.get('canvas-ux.undo') as CommandSpec, ctx, 'mac')?.kbd).toBe(
+      '⌘Z',
+    )
+    // the key is only shown: the registry still has no chord for it (a second handler would fight the engine's)
+    expect(ctx.registries.commands.get('canvas-ux.undo')?.kbd).toBeUndefined()
+  })
+
+  it('"show grid" on a board with a “Grid ideas” frame ranks the Show grid command first, not the frame', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const frame = {
+      id: 'f1',
+      type: 'frame',
+      name: 'Grid ideas',
+      x: 0,
+      y: 0,
+      width: 800,
+      height: 600,
+      angle: 0,
+      groupIds: [],
+      frameId: null,
+      locked: false,
+      isDeleted: false,
+    }
+    const ctx = boardCtx(false, [], [frame])
+    const typed = commandEntries(ctx, 'show grid')
+    // the grammar does read “show grid” as “find the frame Grid ideas” (a guess), so a guessed line is there
+    const guess = typed.find((e) => e.id === 'do:grammar')
+    expect(guess?.label).toBe('Find frame “Grid ideas”')
+    const ranked = rank([...typed, ...boardEntries(ctx, 'other')], 'show grid', [])
+    expect(ranked[0]?.id).toBe('cmd:canvas-ux.toggle-grid')
+    expect(ranked[0]?.label).toBe('Show grid')
+    // the guess is still offered, right after the exact name
+    expect(ranked.findIndex((e) => e.id === 'do:grammar')).toBeGreaterThan(0)
+    expect(ranked.findIndex((e) => e.id === 'do:grammar')).toBeLessThan(5)
+    // a phrase that is only the frame (no command of that name) still leads with it
+    const retro = commandEntries(
+      boardCtx(false, [], [{ ...frame, id: 'f2', name: 'Retro' }]),
+      'zoom to retro',
+    )
+    expect(rank([...retro, ...boardEntries(boardCtx(false), 'other')], 'zoom to retro', [])[0]?.id).toBe(
+      'do:grammar',
+    )
+    errors.mockRestore()
   })
 })
