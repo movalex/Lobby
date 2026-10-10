@@ -29,7 +29,7 @@ import {
   waitForCanvas,
 } from '../tests/support/canvas.ts'
 import { expectServerConverged, noAccessScreen } from '../tests/support/excalidraw.ts'
-import { WEB_URL } from '../tests/support/ports.ts'
+import { API_URL, WEB_URL } from '../tests/support/ports.ts'
 import type { TestUser } from '../tests/support/users.ts'
 import { settled } from './board-kit.ts'
 import { createGuestLink, guestOn, tokenOf } from './guests-kit.ts'
@@ -249,14 +249,17 @@ async function routeBoardSockets(page: Page, o: { hold: boolean }): Promise<Boar
   }
 }
 
-/** Requests that leave Lobby's own origin (the e2e network assertion). */
+/**
+ * Requests that leave Lobby's own origins (the e2e network assertion): the web's, and the api's, which serves the board
+ * event stream itself under E2E_DIRECT_EVENTS=1 (as ai-kit.ts foreignRequests counts them).
+ */
 function foreignRequests(page: Page): string[] {
   const foreign: string[] = []
-  const own = new URL(WEB_URL).origin
+  const own = new Set([new URL(WEB_URL).origin, new URL(API_URL).origin])
   page.on('request', (r) => {
     const u = new URL(r.url())
     if (u.protocol === 'data:' || u.protocol === 'blob:') return
-    if (u.origin !== own) foreign.push(u.origin)
+    if (!own.has(u.origin)) foreign.push(u.origin)
   })
   return foreign
 }
