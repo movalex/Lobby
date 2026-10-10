@@ -201,6 +201,8 @@ export class LobbyBoardSession {
   // ---- M6 (wave M): the board cache (adapter/snapshot-cache.ts) --------------------------------------------
   /** the cached copy this session painted (until the first welcome replaces it) */
   private cacheShown: CachedBoard | null = null
+  /** the painted copy's point (epoch, clock, savedAt), kept past the welcome until the first check decides */
+  private cachePainted: Pick<CachedBoard, 'epoch' | 'clock' | 'savedAt'> | null = null
   /** never read or written again in this session: `?nocache`, a guest, an access loss, a Sign out (any tab) */
   private cacheOff: boolean
   /**
@@ -570,7 +572,10 @@ export class LobbyBoardSession {
     } else if (e.kind === 'confirmed') {
       // the first welcome after a cached paint that brought nothing new (same epoch and clock: the stored copy is
       // already this one): no write (the W6 review: each write is a whole-board clone, scan and hash)
-      if (this.cachedCopyCurrent()) {
+      const current = this.cachedCopyCurrent()
+      // (a reset snapshot older than the painted copy, the room's 5 s snapshot cache: its catch-up follows)
+      if (current === 'behind') return
+      if (current) {
         this.cacheWrittenAt = Date.now()
         return
       }
@@ -614,6 +619,7 @@ export class LobbyBoardSession {
     )
     if (!painted) return false
     this.cacheShown = rec
+    this.cachePainted = rec
     Object.assign(this.cacheInfo, {
       painted: true,
       paintedAt: typeof performance !== 'undefined' ? performance.now() : null,
@@ -630,13 +636,17 @@ export class LobbyBoardSession {
   /**
    * Once, at the first confirmed copy after a cached paint (the welcome's, emitted before the welcome event): whether
    * it is the painted copy's own point (same epoch and clock: the catch-up brought no row), saved recently enough
-   * (CACHE_UNCHANGED_REFRESH_MS) that its time stays honest for the offline copy.
+   * (CACHE_UNCHANGED_REFRESH_MS) that its time stays honest for the offline copy. 'behind': not decided yet, the
+   * confirmed copy is the same epoch's but older than the painted one (paint only, wave M round 1 refix: a reset
+   * welcome's snapshot can be the room's cached one, a few seconds old, with the rows since it right behind).
    */
-  private cachedCopyCurrent(): boolean {
-    const shown = this.cacheShown
+  private cachedCopyCurrent(): boolean | 'behind' {
+    const shown = this.cachePainted
     if (!shown || this.cacheFirstChecked) return false
-    this.cacheFirstChecked = true
     const c = this.core.cacheContent()
+    if (c && c.epoch === shown.epoch && c.clock < shown.clock) return 'behind'
+    this.cacheFirstChecked = true
+    this.cachePainted = null
     return (
       !!c &&
       c.epoch === shown.epoch &&
