@@ -17,6 +17,7 @@ import { ElementBackups } from './backup/element-backups.ts'
 import { createRunAll } from './backup/run-all.ts'
 import { type BackupService, createBackupService } from './backup/service.ts'
 import { isAllowedOrigin, type SyncConfig } from './config.ts'
+import { type DiskProbe, diskProbe } from './disk.ts'
 import {
   type ElementRoomDeps,
   type ElementRoomService,
@@ -147,8 +148,11 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
   // Maintenance mode (below, where the switch is built): declared here because the rooms read it too
   // (ElementRoomDeps.maintenance, OPEN16: the second check after a write's body is read)
   let maintenance = config.bootMaintenance === true
+  // M7-4: the disk's free share (statfs; the test hook's fixed answer), read by the rooms (DISK notice, the
+  // metrics), the backup pass and the deep health check
+  const disk: DiskProbe = diskProbe({ fixed: config.testDiskFree ?? null })
   // The ElementRoom (engine-switch.ts): sockets and the board routes go to it.
-  const elementRooms: ElementRoomService = createElementRooms(config, log, () => maintenance, {
+  const elementRooms: ElementRoomService = createElementRooms(config, log, () => maintenance, disk, {
     removed: (boardId, sessionId, meta) => {
       monitor?.removed(boardId, sessionId)
       sessionEnds.removed(boardId, meta)
@@ -167,6 +171,10 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
         roomsDir,
         backupsDir,
         ...(config.backupIntervalMs ? { intervalMs: config.backupIntervalMs } : {}),
+        // M7-4: DRAFTROOM_BACKUP_KEEP; held and low-disk prunes read what the offsite store holds
+        ...(config.backupKeep ? { keep: config.backupKeep } : {}),
+        offsite: backups,
+        disk,
         log,
       })
     : null
@@ -456,6 +464,7 @@ function createElementRooms(
   config: SyncConfig,
   log: (...a: unknown[]) => void,
   maintenance: () => boolean,
+  disk: DiskProbe,
   report: {
     removed: (
       boardId: string,
@@ -475,6 +484,7 @@ function createElementRooms(
     onSessionRemoved: (boardId, sessionId, meta) => report.removed(boardId, sessionId, meta),
     onDocumentChange: (boardId) => report.changed(boardId),
     maintenance,
+    disk,
   }
   // CR 2F-1: the registered room extensions' routes (apps/sync/src/room-internal/) join the room's own
   return extendElementRoom(factory(deps), deps)

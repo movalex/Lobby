@@ -40,6 +40,7 @@ import {
   NOTICE_CODES,
   TERMINAL_CLOSE_REASONS,
 } from '@draftroom/canvas-schema/protocol'
+import { STATFS_PROBE } from '../disk.ts'
 import {
   type ElementRoomDeps,
   type ElementRoomService,
@@ -234,6 +235,7 @@ export function createElementRoomServiceWith(
       onIdle,
       snapshotBudget,
       outboundBudget,
+      ...(deps.disk ? { disk: deps.disk } : {}),
     })
     const hooks = pendingHooks.get(boardId)
     if (hooks) {
@@ -598,6 +600,8 @@ export function createElementRoomServiceWith(
         sessionsByRole,
         boards,
         outbound: { queuedBytes: queued, budgetBytes: outboundBudget.bytes, over: outboundBudget.over },
+        // M7-4: the rooms' disk (on Render the backups share it)
+        diskFreeRatio: (deps.disk ?? STATFS_PROBE).freeRatio(deps.dataDir),
       })
     },
     async closeAll() {

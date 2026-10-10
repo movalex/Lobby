@@ -185,6 +185,8 @@ export class RoomMetrics {
     boards: BoardGauges[]
     /** M7-5: the process-wide outbound queue (every session's bytes waiting) and its budget */
     outbound?: { queuedBytes: number; budgetBytes: number; over: boolean }
+    /** M7-4: the free share of the data dir's disk (null: unreadable; the line is left out) */
+    diskFreeRatio?: number | null
   }): string {
     const out: string[] = []
     out.push('# TYPE lobby_rooms_open gauge', `lobby_rooms_open ${rooms.open}`)
@@ -197,6 +199,12 @@ export class RoomMetrics {
         `lobby_outbound_budget_bytes ${rooms.outbound.budgetBytes}`,
         '# TYPE lobby_outbound_over_budget gauge',
         `lobby_outbound_over_budget ${rooms.outbound.over ? 1 : 0}`,
+      )
+    if (typeof rooms.diskFreeRatio === 'number')
+      out.push(
+        '# HELP lobby_disk_free_ratio Free share of the data disk (rooms and backups).',
+        '# TYPE lobby_disk_free_ratio gauge',
+        `lobby_disk_free_ratio ${Number(rooms.diskFreeRatio.toFixed(4))}`,
       )
     out.push('# TYPE lobby_sessions gauge')
     for (const [role, n] of Object.entries(rooms.sessionsByRole))

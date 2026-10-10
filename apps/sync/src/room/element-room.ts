@@ -33,7 +33,6 @@
 // older revision cannot know of a value it writes is kept from the stored value (merge.ts, `lobbyWriteOf`).
 
 import { randomUUID } from 'node:crypto'
-import { statfsSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { gzip } from 'node:zlib'
 import { redactTombstone, type WireElement } from '@draftroom/canvas-schema/elements'
@@ -68,6 +67,7 @@ import {
   type Welcome,
 } from '@draftroom/canvas-schema/protocol'
 import { SYNC_INTERNAL_TIMEOUT_MS } from '@draftroom/contracts'
+import { DISK_NOTICE_RATIO, type DiskProbe, STATFS_PROBE } from '../disk.ts'
 import type {
   ElementSessionInfo,
   ElementSocket,
@@ -125,7 +125,6 @@ export const SNAPSHOT_REUSE = { maxAgeMs: 60_000, maxRowsBehind: 500 } as const
 export const SNAPSHOT_CACHE_MS = SNAPSHOT_REUSE.maxAgeMs
 const PRESENCE_TICK_MS = 100
 const LEASE_TICK_MS = 250
-const DISK_LOW_FRACTION = 0.05
 
 export interface RoomDeps {
   readonly boardId: string
@@ -148,6 +147,8 @@ export interface RoomDeps {
   readonly snapshotBudget: (room: ElementRoom, bytes: number) => void
   /** M7-5: the process-wide outbound budget every session's queue reads (index.ts); absent: never over */
   readonly outboundBudget?: OutboundBudget
+  /** M7-4: the disk's free share (disk.ts); absent: statfs */
+  readonly disk?: DiskProbe
 }
 
 type FifoItem =
@@ -1039,7 +1040,7 @@ export class ElementRoom {
   }
 
   private leaseTick(): void {
-    this.checkDisk() // at most once a minute: DISK when free space is below 5%
+    this.checkDisk() // at most once a minute: DISK when free space is below 10% (M7-4; it was 5%)
     const expired = this.leases.expire(this.deps.now())
     for (const l of expired) {
       this.broadcast(frameOf({ type: 'lease', id: l.id, holder: null }))
@@ -1548,14 +1549,9 @@ export class ElementRoom {
     const now = this.deps.now()
     if (!force && now - this.lastDiskCheck < 60_000) return
     this.lastDiskCheck = now
-    try {
-      const st = statfsSync(dirname(this.deps.path))
-      if (st.blocks > 0 && st.bavail / st.blocks < DISK_LOW_FRACTION) {
-        this.broadcast(frameOf({ type: 'notice', code: 'DISK' }))
-      }
-    } catch {
-      // statfs unavailable: no notice
-    }
+    // M7-4: below 10 % free (it was 5 %); statfs unavailable: no notice (disk.ts)
+    const free = (this.deps.disk ?? STATFS_PROBE).freeRatio(dirname(this.deps.path))
+    if (free !== null && free < DISK_NOTICE_RATIO) this.broadcast(frameOf({ type: 'notice', code: 'DISK' }))
   }
 
   // ---- lease messages (ordered with pushes) -------------------------------------------------------

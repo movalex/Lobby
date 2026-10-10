@@ -135,7 +135,9 @@ export function findRecentHeldSet(
   for (const boardId of boardIds) {
     let found = false
     try {
-      for (const e of readManifest(backupsDir, boardId)?.backups ?? []) {
+      const m = readManifest(backupsDir, boardId)
+      // M7-4: a held copy whose local file went once offsite held it is still part of the set (offsiteOnly)
+      for (const e of [...(m?.backups ?? []), ...(m?.offsiteOnly ?? [])]) {
         const made = Date.parse(e.createdAt)
         if (!isHeld(e, now.getTime()) || !Number.isFinite(made) || now.getTime() - made > windowMs) continue
         found = true

@@ -84,6 +84,12 @@ export interface SyncConfig {
    * Default 128.
    */
   outboundBudgetMb?: number
+  /**
+   * DRAFTROOM_TEST_DISK_FREE (M7-4/M7-6 tests): a fixed free share of the disk (0..1) instead of statfs, for the
+   * low-disk paths in a real server process. Read only with DRAFTROOM_TEST_HOOKS=1 (refused in production with
+   * it); null otherwise.
+   */
+  testDiskFree?: number | null
 }
 
 /**
@@ -468,7 +474,18 @@ export function loadConfig(env: Env = process.env): SyncConfig {
     wsDeflate: parseWsDeflate(env),
     backupKeep: int(env, 'DRAFTROOM_BACKUP_KEEP', BACKUP_DEFAULTS.keep, 1, 1_000),
     outboundBudgetMb: int(env, 'DRAFTROOM_OUTBOUND_BUDGET_MB', DEFAULT_OUTBOUND_BUDGET_MB, 8, 4_096),
+    testDiskFree: parseTestDiskFree(env),
   }
+}
+
+/** DRAFTROOM_TEST_DISK_FREE: a decimal in [0, 1], honoured only with the test hooks on; null otherwise. */
+export function parseTestDiskFree(env: Env): number | null {
+  const raw = read(env, 'DRAFTROOM_TEST_DISK_FREE')
+  if (raw === undefined || !parseTestHooks(env)) return null
+  const n = Number(raw)
+  if (!/^(0|1|0?\.\d+)$/.test(raw) || !(n >= 0 && n <= 1))
+    throw new Error('DRAFTROOM_TEST_DISK_FREE must be a decimal between 0 and 1')
+  return n
 }
 
 /**

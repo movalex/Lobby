@@ -7,6 +7,11 @@
 // Each new backup is announced to the listeners registered for its backups root (onBackupCreated):
 // the offsite copy (offsite.ts) subscribes there, so the room registry that drives local backups needs
 // no knowledge of object storage, and a listener can never fail or delay a local backup.
+//
+// Wave M (M7-4, CAP-DISK): local copies can also be removed on purpose (dropLocalBackups, under the same per-board
+// lock as a backup): a held copy once the offsite store holds it, and every copy but the newest offsite one when
+// the disk runs low (element-backups.ts decides). A held entry removed that way moves to the manifest's
+// `offsiteOnly` list until its hold ends, so run-all's recent-set check (run-all.ts) still sees the set.
 
 import { createHash, randomBytes } from 'node:crypto'
 import {
@@ -82,6 +87,12 @@ export interface BackupManifest {
   version: 1
   boardId: string
   backups: BackupEntry[]
+  /**
+   * M7-4: held entries whose local file was removed once the offsite store held it (dropLocalBackups): no local
+   * file, still held offsite. Kept until the hold ends, for run-all's recent-set check. Absent before wave M (an
+   * older build reads and writes the manifest whole, so it keeps the list as it is).
+   */
+  offsiteOnly?: BackupEntry[]
 }
 
 export function boardBackupDir(root: string, boardId: string): string {
@@ -99,6 +110,10 @@ export function readManifest(root: string, boardId: string): BackupManifest | nu
     throw new Error(`backup manifest for ${boardId} is not readable`)
   // Only file names this module writes: a manifest can never point outside its folder.
   parsed.backups = parsed.backups.filter((b) => typeof b.file === 'string' && BACKUP_FILE_RE.test(b.file))
+  if (parsed.offsiteOnly !== undefined)
+    parsed.offsiteOnly = Array.isArray(parsed.offsiteOnly)
+      ? parsed.offsiteOnly.filter((b) => typeof b?.file === 'string' && BACKUP_FILE_RE.test(b.file))
+      : []
   return parsed
 }
 
@@ -308,6 +323,12 @@ async function backupBoardNow(opts: BackupBoardOptions): Promise<BackupEntry> {
     const ordinary = manifest.backups.filter((b) => !isHeld(b, at.getTime()))
     const dropped = new Set(ordinary.length > keep ? ordinary.slice(0, ordinary.length - keep) : [])
     manifest.backups = manifest.backups.filter((b) => !dropped.has(b))
+    // M7-4: an offsite-only entry whose hold has ended is forgotten (its offsite copy follows offsite retention)
+    if (manifest.offsiteOnly) {
+      const stillHeld = manifest.offsiteOnly.filter((b) => isHeld(b, at.getTime()))
+      if (stillHeld.length) manifest.offsiteOnly = stillHeld
+      else delete manifest.offsiteOnly
+    }
     writeManifest(opts.root, manifest)
     // Best effort: the backup is complete and listed; a leftover old file is only wasted space.
     for (const old of dropped)
@@ -319,6 +340,48 @@ async function backupBoardNow(opts: BackupBoardOptions): Promise<BackupEntry> {
   } finally {
     for (const f of [tmp, `${tmp}-journal`, `${tmp}-wal`, `${tmp}-shm`]) rmSync(f, { force: true })
   }
+}
+
+/**
+ * M7-4: removes local copies of one board, files and manifest entries, under the board's backup lock (never in
+ * the middle of one of its backups). `drop(entry)` says which. A held entry removed this way is listed in
+ * `offsiteOnly` until its hold ends (the caller removes a held copy only once the offsite store holds it).
+ * Resolves with the files removed; nothing when the board has no manifest. A file that cannot be deleted is only
+ * wasted space: its entry is gone, as backupBoard's own retention does it.
+ */
+export function dropLocalBackups(
+  root: string,
+  boardId: string,
+  drop: (entry: BackupEntry) => boolean,
+  now: () => Date = () => new Date(),
+): Promise<string[]> {
+  return oneAtATime(
+    `${resolve(root)}
+${boardId}`,
+    async () => {
+      const manifest = readManifest(root, boardId)
+      if (!manifest) return []
+      const at = now().getTime()
+      const gone = manifest.backups.filter((b) => drop(b))
+      const expired = (manifest.offsiteOnly ?? []).filter((b) => !isHeld(b, at))
+      if (!gone.length && !expired.length) return []
+      const goneSet = new Set(gone)
+      manifest.backups = manifest.backups.filter((b) => !goneSet.has(b))
+      const offsiteOnly = [
+        ...(manifest.offsiteOnly ?? []).filter((b) => isHeld(b, at)),
+        ...gone.filter((b) => isHeld(b, at)),
+      ]
+      if (offsiteOnly.length) manifest.offsiteOnly = offsiteOnly
+      else delete manifest.offsiteOnly
+      writeManifest(root, manifest)
+      const dir = boardBackupDir(root, boardId)
+      for (const b of gone)
+        try {
+          rmSync(join(dir, b.file), { force: true, maxRetries: 3, retryDelay: 50 })
+        } catch {}
+      return gone.map((b) => b.file)
+    },
+  )
 }
 
 // ---- new-backup listeners ------------------------------------------------------------------------

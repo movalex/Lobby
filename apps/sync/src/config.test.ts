@@ -308,3 +308,15 @@ describe('wave M keys (render.yaml: DRAFTROOM_WS_DEFLATE=on, DRAFTROOM_BACKUP_KE
       )
   })
 })
+
+describe('DRAFTROOM_TEST_DISK_FREE (M7-4/M7-6 tests): a fixed free share, with the test hooks only', () => {
+  it('is null without DRAFTROOM_TEST_HOOKS=1, read with it, and refused when malformed', () => {
+    expect(loadConfig({ ...base, DRAFTROOM_TEST_DISK_FREE: '0.15' }).testDiskFree).toBeNull()
+    const hooks = { ...base, DRAFTROOM_TEST_HOOKS: '1' }
+    expect(loadConfig(hooks).testDiskFree).toBeNull()
+    expect(loadConfig({ ...hooks, DRAFTROOM_TEST_DISK_FREE: '0.15' }).testDiskFree).toBe(0.15)
+    expect(loadConfig({ ...hooks, DRAFTROOM_TEST_DISK_FREE: '1' }).testDiskFree).toBe(1)
+    for (const v of ['15%', '1.5', '-0.1', 'low'])
+      expect(() => loadConfig({ ...hooks, DRAFTROOM_TEST_DISK_FREE: v })).toThrow(/DRAFTROOM_TEST_DISK_FREE/)
+  })
+})

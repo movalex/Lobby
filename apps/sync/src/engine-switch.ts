@@ -15,6 +15,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WireElement } from '@draftroom/canvas-schema/elements'
 import type { FileRefsResponse, WorkshopStateBody } from '@draftroom/contracts'
 import type { SyncConfig } from './config.ts'
+import type { DiskProbe } from './disk.ts'
 import type { BoardRole } from './permissions.ts'
 import type { BoardStore } from './room/store.ts'
 
@@ -138,6 +139,8 @@ export interface ElementRoomDeps {
    * write, so a POST already in flight when maintenance went on cannot commit inside the window.
    */
   readonly maintenance?: () => boolean
+  /** M7-4: the disk's free share (disk.ts; app.ts passes statfs or the test hook's answer). Absent: statfs. */
+  readonly disk?: DiskProbe
 }
 
 /**

@@ -21,6 +21,11 @@ export interface BackupService {
    * are off, or when that copy did not make it (the failure is in status()).
    */
   copyOffsite(boardId: string, file: string): Promise<string | null>
+  /**
+   * M7-4: whether the offsite store holds backup `file` of `boardId`, as of the last manifest this server read or
+   * wrote for that board (false when offsite backups are off, or before the board's manifest was read).
+   */
+  stored(boardId: string, file: string): boolean
 }
 
 export function createBackupService(opts: {
@@ -71,6 +76,7 @@ export function createBackupService(opts: {
       await offsite.syncBoard(boardId)
       return offsite.storedKey(boardId, file)
     },
+    stored: (boardId, file) => (offsite ? offsite.storedKey(boardId, file) !== null : false),
   }
 }
 
