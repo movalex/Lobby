@@ -11,6 +11,9 @@
 //        <time>"; a guest gets the screen they got before; a copy older than 7 days is not shown.
 //  The W6 review: a Sign out in one tab stays a Sign out in the browser's other tabs (none of their writes puts the
 //        copy back); a warm open that brought nothing new writes no copy; a hidden tab writes at most once a minute.
+//  Round 2 refix: a member lowered to workspace guest while the tab stays open (a stale Me) gets no paint and no
+//        write, and the copy goes (the board answer's workspace role decides); a room whose clock went back within
+//        its epoch gets its copy written once the welcome's catch-up is in (the `contracts` frame).
 //
 // Every request stays on Lobby's own origin (the e2e network assertion). The cache record is read here only for
 // its metadata (clock, epoch, savedAt, hash, count): never its elements' content.
@@ -92,10 +95,15 @@ const cacheRecord = (page: Page, board: string, uid: string): Promise<CacheRecor
     { key: `${board}|${uid}` },
   )
 
-/** Moves this page's record of `board` back in time (the 7-day offline rule). */
-const ageCacheRecord = (page: Page, board: string, uid: string, savedAt: number): Promise<void> =>
+/** Changes fields of this page's record of `board` (its metadata: savedAt for the 7-day rule, the clock). */
+const patchCacheRecord = (
+  page: Page,
+  board: string,
+  uid: string,
+  patch: { readonly savedAt?: number; readonly clock?: number },
+): Promise<void> =>
   page.evaluate(
-    ({ key, savedAt }) =>
+    ({ key, patch }) =>
       new Promise<void>((resolve, reject) => {
         const req = indexedDB.open('lobby-board-cache', 1)
         req.onerror = () => reject(req.error)
@@ -105,7 +113,7 @@ const ageCacheRecord = (page: Page, board: string, uid: string, savedAt: number)
           const s = t.objectStore('boards')
           const get = s.get(key)
           get.onsuccess = () => {
-            if (get.result) s.put({ ...get.result, savedAt })
+            if (get.result) s.put({ ...get.result, ...patch })
           }
           t.oncomplete = () => {
             db.close()
@@ -114,8 +122,12 @@ const ageCacheRecord = (page: Page, board: string, uid: string, savedAt: number)
           t.onerror = () => reject(t.error)
         }
       }),
-    { key: `${board}|${uid}`, savedAt },
+    { key: `${board}|${uid}`, patch },
   )
+
+/** Moves this page's record of `board` back in time (the 7-day offline rule). */
+const ageCacheRecord = (page: Page, board: string, uid: string, savedAt: number): Promise<void> =>
+  patchCacheRecord(page, board, uid, { savedAt })
 
 /** Writes this board's cache now (the session's debug handle, dev-auth builds); whether it was kept. */
 const flushBoardCache = (page: Page): Promise<boolean> =>
@@ -704,4 +716,65 @@ test("M6-4: a name-only guest keeps no copy, and offline gets today's screen", a
     await gc.close()
     await ac.close()
   }
+})
+
+// ---- wave M round 2 refix ---------------------------------------------------------------------------------------------
+
+test('round 2: a member lowered to workspace guest while the tab is open gets no paint and no write, and the copy goes', async ({
+  board,
+  users,
+  canvasSession,
+}) => {
+  const alice = await users.api('alice')
+  // a person of this test only (lowering bob or carol would change the other tests' Dev Studio)
+  const pat = await users.get('m6pat')
+  const p = await canvasSession('m6pat')
+  await seedBoard(p.page)
+  expect(await flushBoardCache(p.page)).toBe(true)
+  expect(await cacheRecord(p.page, board, pat.id)).not.toBeNull()
+  // the tab stays open (no page load: its Me still says member); an admin lowers Pat to workspace guest, and
+  // Pat's board grant stays, so the board still answers
+  await goInApp(p.page, '/')
+  await expect(p.page.getByTestId('dashboard')).toBeVisible({ timeout: 30_000 })
+  const lowered = await alice.fetch('PATCH', `/api/workspaces/${users.devStudioId}/members/${pat.id}`, {
+    role: 'guest',
+  })
+  expect(lowered.status(), await lowered.text()).toBe(200)
+  await watchOpen(p.page)
+  await goInApp(p.page, `/b/${board}`)
+  await waitForCanvas(p.page)
+  expect(await cacheState(p.page)).toMatchObject({ painted: false, welcomed: true })
+  // no read: nothing painted; the copy goes; and the session writes none
+  await expect.poll(() => cacheRecord(p.page, board, pat.id)).toBeNull()
+  expect(await flushBoardCache(p.page)).toBe(false)
+  expect(await cacheWrites(p.page)).toBe(0)
+  expect(await cacheRecord(p.page, board, pat.id)).toBeNull()
+})
+
+test("round 2: a room whose clock went back (same epoch) gets its copy written at the welcome, not after it passes the device's", async ({
+  canvasSession,
+  board,
+}) => {
+  const a = await canvasSession('alice')
+  await seedBoard(a.page)
+  expect(await flushBoardCache(a.page)).toBe(true)
+  const record = await cacheRecord(a.page, board, a.id)
+  expect(record).not.toBeNull()
+  const roomClock = record?.clock as number
+  // the device's copy is ahead of the room within the same epoch (a disk-snapshot restore, lost WAL frames)
+  await patchCacheRecord(a.page, board, a.id, { clock: roomClock + 1000 })
+  await a.page.reload()
+  await waitForCanvas(a.page)
+  expect(await cacheState(a.page)).toMatchObject({ painted: true, welcomed: true })
+  // the room's copy replaces the stale one once the welcome's catch-up is in (the `contracts` frame)
+  await expect.poll(() => cacheWrites(a.page), { timeout: 15_000 }).toBeGreaterThanOrEqual(1)
+  await expect.poll(async () => (await cacheRecord(a.page, board, a.id))?.clock).toBe(roomClock)
+  // and the person's next edit is written too (the page going)
+  const before = await cacheWrites(a.page)
+  await settled(a.page, createItem(a.page, 'rectangle', { x: 100, y: 300, width: 120, height: 80 }))
+  await a.page.evaluate(() => dispatchEvent(new Event('pagehide')))
+  expect(await cacheWrites(a.page)).toBe(before + 1)
+  await expect
+    .poll(async () => (await cacheRecord(a.page, board, a.id))?.count)
+    .toBe((record?.count ?? 0) + 1)
 })

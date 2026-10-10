@@ -503,6 +503,7 @@ export class LobbyBoardSession {
         this.roomReadyTimer = setTimeout(() => {
           this.roomReadyTimer = null
           markRoomReady(canvas)
+          this.settleCacheBehind()
         }, ROOM_READY_FALLBACK_MS)
       this.set({
         phase: 'ready',
@@ -545,6 +546,8 @@ export class LobbyBoardSession {
         this.roomReadyTimer = null
         markRoomReady(this.handle.canvas)
       }
+      // the welcome's catch-up is all here: a copy still 'behind' the painted one is the room's real state
+      if (m.type === 'contracts' && this.snap.welcomed) this.settleCacheBehind()
       if (m.type === 'roster' || m.type === 'lease' || (m.type === 'changes' && m.doc))
         queueMicrotask(() => this.afterMessage(m))
       else if (m.type === 'notice' && m.code === 'PREPARING' && !this.snap.welcomed)
@@ -653,6 +656,20 @@ export class LobbyBoardSession {
       c.clock === shown.clock &&
       Date.now() - shown.savedAt < CACHE_UNCHANGED_REFRESH_MS
     )
+  }
+
+  /**
+   * Wave M round 2 refix: the 'behind' wait lasts only for the reset welcome's own catch-up. Once the room is ready
+   * (its `contracts` frame, or the fallback timer) a confirmed copy still older than the painted one is the room's
+   * real state (its clock went back within the epoch: a disk-snapshot restore, lost WAL frames), so the check is
+   * decided and the room's copy is written over the stale one.
+   */
+  private settleCacheBehind(): void {
+    if (!this.cachePainted || this.cacheFirstChecked) return
+    this.cacheFirstChecked = true
+    this.cachePainted = null
+    this.cacheDirty = true
+    this.scheduleCacheWrite()
   }
 
   /**
