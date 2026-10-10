@@ -29,11 +29,22 @@
 import {
   CLOSE_TERMINAL,
   type ClientMessage,
+  CONNECT_REV_PARAM,
+  CONTRACTS_REV,
   decodeSnapshotFrame,
   Pong,
   ServerMessage,
 } from '@draftroom/canvas-schema/protocol'
 import type { ServerInbound, Transport, TransportClose, TransportState } from '../types.ts'
+
+/**
+ * The connect URL's query beyond the ticket: the tab id (`sessionId`) and, since CONTRACTS_REV 12, the contracts
+ * revision this build reads (`rev`), so the room serves this socket every frame in its form and writes its pushes
+ * as its revision's from the first frame on (canvas-schema protocol.ts CONNECT_REV_PARAM). A rev-11 room ignores it.
+ */
+export function connectQuery(tab: string, extra: Readonly<Record<string, string>> = {}): URLSearchParams {
+  return new URLSearchParams({ ...extra, sessionId: tab, [CONNECT_REV_PARAM]: String(CONTRACTS_REV) })
+}
 
 /** The part of a WebSocket the transport uses (browser `WebSocket` and Node's global one both fit). */
 export interface WebSocketLike {

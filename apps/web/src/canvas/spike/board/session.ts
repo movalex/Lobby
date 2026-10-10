@@ -29,7 +29,7 @@ import { createIdbOfflineStore, type IdbOfflineStore, tabId } from '../../sync/a
 import { LobbyEngineCore } from '../../sync/core/engine.ts'
 import { createMemoryOfflineStore } from '../../sync/core/offline-memory.ts'
 import { bump } from '../../sync/headless/scene.ts'
-import { createSocketTransport, type SocketTransport } from '../../sync/transport/socket.ts'
+import { connectQuery, createSocketTransport, type SocketTransport } from '../../sync/transport/socket.ts'
 import type { OfflineQueueStore, SaveStatus, SceneAdapter, SceneElement } from '../../sync/types.ts'
 import { IDLE_GESTURE } from '../../sync/types.ts'
 import { attachCustomTools, type CustomToolClick } from '../../tools/customTools.ts'
@@ -113,7 +113,7 @@ export class BoardSession {
     })
     this.detach.push(() => tickets.cancel())
     this.transport = createSocketTransport({
-      url: async () => `${await tickets.uri()}&${new URLSearchParams({ sessionId: this.tab })}`,
+      url: async () => `${await tickets.uri()}&${connectQuery(this.tab)}`,
       WebSocketImpl: WebSocket as never,
       log: (event, detail) => this.log(event, detail),
     })

@@ -19,7 +19,12 @@
 import type { Welcome } from '@draftroom/canvas-schema/protocol'
 import { LobbyEngineCore } from '../core/engine.ts'
 import { createMemoryOfflineStore } from '../core/offline-memory.ts'
-import { createSocketTransport, type SocketTransport, type WebSocketCtor } from '../transport/socket.ts'
+import {
+  connectQuery,
+  createSocketTransport,
+  type SocketTransport,
+  type WebSocketCtor,
+} from '../transport/socket.ts'
 import type {
   CreateHeadlessClient,
   GestureState,
@@ -57,7 +62,7 @@ export interface LobbyHeadlessClient extends HeadlessClient {
 
 function connectUrl(syncUrl: string, boardId: string, tab: string, ticket: string): string {
   const base = syncUrl.replace(/^http(s?):/, 'ws$1:').replace(/\/+$/, '')
-  return `${base}/connect/${encodeURIComponent(boardId)}?${new URLSearchParams({ sessionId: tab, ticket })}`
+  return `${base}/connect/${encodeURIComponent(boardId)}?${connectQuery(tab, { ticket })}`
 }
 
 export const createHeadlessClient: CreateHeadlessClient = (options) =>

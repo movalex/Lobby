@@ -55,7 +55,7 @@ import { type GuestQueue, guestOfflineQueue } from '../sync/adapter/offline-gues
 import { createIdbOfflineStore, type IdbOfflineStore, tabId } from '../sync/adapter/offline-idb.ts'
 import { LobbyEngineCore } from '../sync/core/engine.ts'
 import { bump } from '../sync/headless/scene.ts'
-import { createSocketTransport, type SocketTransport } from '../sync/transport/socket.ts'
+import { connectQuery, createSocketTransport, type SocketTransport } from '../sync/transport/socket.ts'
 import type { OfflineQueueStore, SaveStatus, SceneAdapter, SceneElement } from '../sync/types.ts'
 import { IDLE_GESTURE } from '../sync/types.ts'
 import { install as installFacade } from '../test-facade.ts'
@@ -206,7 +206,8 @@ export class LobbyBoardSession {
     })
     this.detach.push(() => this.tickets.cancel())
     this.transport = createSocketTransport({
-      url: async () => `${await this.tickets.uri()}&${new URLSearchParams({ sessionId: this.tab })}`,
+      // the tab id and, since CONTRACTS_REV 12, this build's revision (socket.ts connectQuery)
+      url: async () => `${await this.tickets.uri()}&${connectQuery(this.tab)}`,
       // L7: the ticket goes in the handshake's Sec-WebSocket-Protocol, never in the socket URL
       WebSocketImpl: ticketInProtocol(WebSocket) as never,
     })
