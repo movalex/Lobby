@@ -172,7 +172,11 @@ export function mountAgenda(ctx: CanvasFeatureContext, deps: AgendaLiveDeps): Ag
       // section are kept in the record, not in memory, so a reload between the hand-off and the take-back keeps
       // them. A new run starts afresh.
       const same = pid !== null && pid === recorder.presentationId() && recorder.active()
-      if (recorder.currentId() === null && !same) recorder.begin(sections, pid)
+      // M2-3: a record of another presentation is dropped even if its visit was never closed (a reload of the tab
+      // in the middle of one, then a new presentation in the same tab): its times are not this run's, and its
+      // open visit would swallow the first section's timer. A presentation whose id is not known keeps the old rule.
+      const another = pid !== null && recorder.presentationId() !== pid
+      if ((recorder.currentId() === null && !same) || another) recorder.begin(sections, pid)
       if (same) resumedOn = recorder.leftOn()
       recorder.resume(pid)
     }

@@ -33,10 +33,14 @@ import {
 import { type CanvasFeatureContext, geometry } from '../../../canvas/api/index.ts'
 import { safeColor } from '../../../lib/identity.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { countUsage } from '../../../lib/usage.ts'
 import { PHONE_QUERY, useMediaQuery } from '../../../ui/useMedia.ts'
 import { announcerFor } from '../../a11y/ported/announcer.ts'
+import { agendaTimeShown } from '../../present-export/live/ported/AgendaStrip.tsx'
+import { getLive } from '../../present-export/live/ported/controller.ts'
 import { formatClock, timerDisplayPhase, timerRemainingMs } from '../countdown.ts'
 import { HandToasts, PresentingHands } from '../Hands.tsx'
+import { resultsCardShown } from '../results-card.ts'
 import type { WorkshopStore } from '../store.ts'
 import { badgeScale, clusterBadges, describeVoted, dotInk, revealConfetti, topResults } from '../voting.ts'
 import { useIsFacilitator, useNow, useWorkshop } from '../workshop-context.ts'
@@ -194,11 +198,19 @@ export function WorkshopLayer({ ctx }: { ctx: Ctx }) {
   // K3-1: the banner is for people who may vote here now: an active board, not presenting
   const eligible = ctx.board.status === 'active' && !presenting
   useEffect(() => store.setVoteEligible(eligible), [store, eligible])
-  const resultsCard =
-    !!snap.resultsNews &&
-    vote?.session.status === 'revealed' &&
-    !!vote.results &&
-    ctx.activePanel !== 'voting'
+  // M2-4: opening the Voting panel ends the card (also a reveal that comes while the panel is open)
+  const panel = ctx.activePanel ?? null
+  const newsSeq = snap.resultsNews?.seq
+  useEffect(() => {
+    void newsSeq
+    store.panelChanged(panel)
+  }, [store, panel, newsSeq])
+  const resultsCard = resultsCardShown({
+    news: snap.resultsNews,
+    revealedWithResults: vote?.session.status === 'revealed' && !!vote.results,
+    presenting,
+    panel,
+  })
 
   return (
     <div className="dr-wk-layer" data-testid="workshop-overlay">
@@ -242,7 +254,9 @@ export function WorkshopTopLayer({ ctx }: { ctx: Ctx }) {
       <div className="dr-wk-top" data-testid="workshop-top">
         <TimerFlash seq={snap.alertSeq} />
         <RevealConfetti seq={snap.resultsNews?.seq ?? null} />
-        {(presenting || phone) && <PresentingTimer store={store} corner={presenting ? 'left' : 'right'} />}
+        {(presenting || phone) && (
+          <PresentingTimer ctx={ctx} store={store} corner={presenting ? 'left' : 'right'} />
+        )}
         {presenting && <PresentingHands snap={snap} />}
         <ReactionBursts ctx={ctx} store={store} />
       </div>
@@ -678,7 +692,13 @@ export function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
   const startedBy =
     by && banner.createdBy !== ctx.me.user.id ? `${firstWord(by)} started a vote` : 'Vote started'
   const target = offer ? labelOfRef(offer.shapeId, (id) => ctx.canvas.get(id)) : null
+  // M2 usage: how often the banner is what brings someone into a vote (a count, nothing else)
+  const joinVote = () => {
+    countUsage('vote.join.banner')
+    return store.joinVote(s.id)
+  }
   const joinAndCast = async () => {
+    countUsage('vote.join.banner')
     setBusy(true)
     const r = await store.joinAndCast()
     setBusy(false)
@@ -741,7 +761,7 @@ export function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
               className="dr-btn dr-btn--sm"
               data-testid="vote-join"
               disabled={busy}
-              onClick={() => void store.joinVote(s.id)}
+              onClick={() => void joinVote()}
             >
               Join
             </button>
@@ -752,7 +772,7 @@ export function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
             className="dr-btn dr-btn--primary dr-btn--sm"
             data-testid="vote-join"
             aria-describedby={keysId}
-            onClick={() => void store.joinVote(s.id)}
+            onClick={() => void joinVote()}
           >
             Join and vote
           </button>
@@ -947,7 +967,7 @@ function ResultsCard({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
   const seq = snap.resultsNews?.seq
   useEffect(() => {
     if (seq === undefined) return
-    const t = setTimeout(() => store.dismissResultsNews(), RESULTS_CARD_MS)
+    const t = setTimeout(() => store.dismissResultsNews('timeout'), RESULTS_CARD_MS)
     return () => clearTimeout(t)
   }, [seq, store])
   if (!vote?.results) return null
@@ -962,7 +982,7 @@ function ResultsCard({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
           type="button"
           className="dr-iconbtn dr-wk-results-card__close"
           aria-label="Dismiss the results"
-          onClick={() => store.dismissResultsNews()}
+          onClick={() => store.dismissResultsNews('close')}
         >
           ×
         </button>
@@ -989,7 +1009,7 @@ function ResultsCard({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
         className="dr-btn dr-btn--sm dr-btn--primary"
         data-testid="vote-results-card-all"
         onClick={() => {
-          store.dismissResultsNews()
+          store.dismissResultsNews('see-all')
           ctx.openPanel('voting')
         }}
       >
@@ -1073,12 +1093,23 @@ function TimerFlash({ seq }: { seq: number }) {
  * Read-only timer on the canvas where the top bar's pill cannot be seen: while presenting (the top bar
  * is hidden then; top-left, like Miro), and on phones (the pill is in the "⋯" menu; top-right).
  */
-function PresentingTimer({ store, corner }: { store: WorkshopStore; corner: 'left' | 'right' }) {
+function PresentingTimer({
+  ctx,
+  store,
+  corner,
+}: {
+  ctx: Ctx
+  store: WorkshopStore
+  corner: 'left' | 'right'
+}) {
   const snap = store.getSnapshot()
   const running = snap.timer?.status === 'running'
   const now = useNow(running)
   if (!snap.timer) return null
   const offset = store.serverOffsetMs()
+  // M2-3: a run of show's line (under the presentation's banner) already counts this section down: one countdown
+  if (agendaTimeShown(getLive(ctx.registries), { timer: snap.timer, nowMs: now, offsetMs: offset }))
+    return null
   // Only a live countdown floats over the slides; a finished or stopped timer stays out of the way
   // (the flash still marks zero while presenting).
   const phase = timerDisplayPhase(snap.timer, now, offset)

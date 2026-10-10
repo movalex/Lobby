@@ -138,6 +138,13 @@ function timerOf(clock: AgendaClock, presenterId: string | null): AgendaTimer {
 export const overText = (overMs: number) => `+${formatClock(overMs)} over`
 
 /**
+ * Whether the strip's line shows a countdown (or how far past its end the section is): then the separate timer
+ * pill over the slides would show the same time twice (M2-3), and is left out. "<name> holds the timer" and "N min
+ * planned" show no time of the live section, so the pill stays for those.
+ */
+export const agendaShowsTime = (state: AgendaState | null): boolean => state?.timer.kind === 'section'
+
+/**
  * The strip's line: "Section 1 of 2 · Ideas · 1:58 left · next: Vote". `nameOf` names the timer's holder
  * (a user id; people on the board).
  */
@@ -207,9 +214,16 @@ export function driftOf(
 /** Minutes, rounded: 3780000 -> "63". */
 export const minutesText = (ms: number) => String(Math.round(ms / MIN_MS))
 
-/** "planned 60 · projected 63" */
+/**
+ * How the run of show is going, in words (wave M, M2-3; it read "planned 60 · projected 63", numbers with no unit
+ * or meaning): "Planned 60 min · on time", "Planned 60 min · 3 min over", "Planned 60 min · 4 min ahead". Within
+ * half a minute of the plan counts as on time.
+ */
 export function driftLine(d: Drift): string {
-  return `planned ${minutesText(d.plannedMs)} · projected ${minutesText(d.projectedMs)}`
+  const planned = `Planned ${minutesText(d.plannedMs)} min`
+  const off = Math.round(Math.abs(d.behindMs) / MIN_MS)
+  if (off === 0) return `${planned} · on time`
+  return `${planned} · ${off} min ${d.behindMs > 0 ? 'over' : 'ahead'}`
 }
 
 // ---- the presenter's record (sessionStorage) ----------------------------------------------------------------------------------

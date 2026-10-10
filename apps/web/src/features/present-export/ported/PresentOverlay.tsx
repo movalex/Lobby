@@ -8,6 +8,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { flushSync } from 'react-dom'
 import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { countUsage } from '../../../lib/usage.ts'
 import { Dialog } from '../../../ui/Dialog.tsx'
 import { fittedSlideRect, type Insets, slideTitle } from '../slides.ts'
 import { type Controller, getController } from './controller.ts'
@@ -91,6 +92,9 @@ function PresentChoiceDialog({ count, controller }: { count: number; controller:
     return () => window.removeEventListener('keydown', onKey, true)
   }, [])
   const choose = (audience: 'everyone' | 'me') => {
+    // M2 usage: which way the ask goes (a count, nothing else)
+    if (audience === 'me') countUsage('present.justme')
+    else countUsage('present.everyone')
     flushSync(() => controller.cancelPresent())
     controller.presentTo(audience)
   }

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { atom } from '../../../../lib/signals.ts'
 import { ME, workshopKit } from '../../../workshops/ported/ctx-kit.ts'
 import { el } from '../../../workshops/ported/test-kit.ts'
-import { agendaActuals } from '../agenda.ts'
+import { agendaActuals, driftOf, sectionsOf } from '../agenda.ts'
 import { type AgendaLive, agendaFramesOf, mountAgenda } from './agenda-live.ts'
 
 const OTHER = 'usr_someoneelse0002'
@@ -319,6 +319,67 @@ describe('the record of the run', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  // M2-3: a record outlived its presentation in the same tab (the tab reloaded, or the presentation ended elsewhere,
+  // with a visit still open), and the next presentation inherited its times and its open visit
+  it('a new presentation in the same tab starts afresh: no times of the last one (no "projected" number) and its first section’s timer is not skipped', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-10-10T10:00:00Z'))
+      const first = setup()
+      answerTimers(first.kit, 3)
+      await first.present()
+      vi.advanceTimersByTime(130_000)
+      await first.go('f2')
+      vi.advanceTimersByTime(40_000)
+      // the tab goes (a reload, a crash) in the middle of f2: nothing stops the recorder, the visit stays open
+      first.agenda.dispose()
+      expect(first.agenda.recorder.currentId()).toBe('f2')
+
+      // later, in the same tab (same sessionStorage), another presentation to everyone begins on f2
+      const second = setup()
+      second.pid.current = 'prs_two'
+      answerTimers(second.kit, 2)
+      second.cur.set({ index: 1, slideId: 'f2', count: 3 })
+      vi.advanceTimersByTime(60_000)
+      await second.present()
+      // its first section's timer starts (it was skipped: the open visit of the other presentation was "this" visit)
+      expect(timerCalls(second.kit)).toEqual([{ action: 'start', durationMs: 60_000 }])
+      // nothing of the last run: no f1 time, f2 counts from now
+      expect(agendaActuals(second.kit.ctx.board.id)).toEqual([
+        { frameId: 'f2', name: 'Ideas', plannedMin: 1, actualMs: 0 },
+      ])
+      expect(second.agenda.recorder.presentationId()).toBe('prs_two')
+      // the drift has nothing to project from the last run: on plan
+      const snap = second.agenda.recorder.snapshot()
+      expect(snap.actualMs).toEqual({ f2: 0 })
+      const d = driftOf(
+        sectionsOf(agendaFramesOf(second.kit.ctx.canvas)),
+        snap.actualMs,
+        snap.currentId,
+        snap.currentElapsedMs,
+      )
+      expect(d?.behindMs).toBe(0)
+      second.agenda.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('the same presentation after a reload keeps its record (only another presentation’s is dropped)', async () => {
+    const first = setup()
+    answerTimers(first.kit, 2)
+    await first.present()
+    await first.go('f2')
+    first.agenda.dispose()
+    const second = setup() // the same presentation id, prs_one
+    second.cur.set({ index: 1, slideId: 'f2', count: 3 })
+    await second.present()
+    expect(second.agenda.recorder.presentationId()).toBe('prs_one')
+    expect(second.agenda.recorder.currentId()).toBe('f2')
+    expect(timerCalls(second.kit)).toEqual([])
+    second.agenda.dispose()
   })
 
   it('a reload of the presenting tab carries on in the same section without starting its timer again', async () => {

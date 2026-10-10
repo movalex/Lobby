@@ -119,8 +119,8 @@ test('L5-1: minutes per frame, one undo step each; the follower sees the section
     expect(timer).toMatchObject({ status: 'running', durationMs: 120_000, startedBy: a.id })
   })
 
-  await test.step('drift is the presenter’s: "planned 3 · projected 3" for alice, nothing for bob', async () => {
-    await expect(a.page.getByTestId('agenda-drift')).toHaveText('planned 3 · projected 3')
+  await test.step('drift is the presenter’s: "Planned 3 min · on time" for alice, nothing for bob', async () => {
+    await expect(a.page.getByTestId('agenda-drift')).toHaveText('Planned 3 min · on time')
     await expect(b.page.getByTestId('agenda-drift')).toHaveCount(0)
     await expect(a.page.getByTestId('agenda-autotime')).toHaveAttribute('aria-pressed', 'true')
   })
@@ -147,8 +147,9 @@ test('L5-1: minutes per frame, one undo step each; the follower sees the section
     expect(await pushCount(b.page)).toBe(before)
   })
 
-  await test.step('Auto-time off: the next slide change starts no timer', async () => {
+  await test.step('"Times each section" off: the next slide change starts no timer', async () => {
     await wake(a.page)
+    await expect(a.page.getByTestId('agenda-autotime')).toHaveText('Times each section')
     await a.page.getByTestId('agenda-autotime').click()
     await expect(a.page.getByTestId('agenda-autotime')).toHaveAttribute('aria-pressed', 'false')
     const started = (await timerOf(a, board))?.durationMs

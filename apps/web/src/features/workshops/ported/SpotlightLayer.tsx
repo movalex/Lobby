@@ -12,6 +12,7 @@
 import { useEffect, useId, useMemo, useRef } from 'react'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { countUsage } from '../../../lib/usage.ts'
 import { useMediaQuery } from '../../../ui/useMedia.ts'
 import { announcerFor } from '../../a11y/ported/announcer.ts'
 import { spotlightKey, type WorkshopStore } from '../store.ts'
@@ -57,6 +58,7 @@ export async function spotlightIds(ctx: Ctx, ids: readonly string[]): Promise<bo
   }
   const r = await storeFor(ctx).startSpotlight(refs, true)
   if (!r.ok) note(startRefusedText(r.code, r.error))
+  else countUsage('spotlight.start')
   return r.ok
 }
 

@@ -448,14 +448,6 @@ function Results({
               data-rank={r.rank}
               style={{ '--dr-wk-i': i } as CSSProperties}
             >
-              <span
-                className="dr-wk-rank__bar"
-                data-testid="vote-result-bar"
-                data-count={r.count}
-                data-share={Math.round((r.count / most) * 1000) / 10}
-                style={{ width: `${(r.count / most) * 100}%` }}
-                aria-hidden="true"
-              />
               <span className={`dr-wk-rank__place${r.rank <= 3 ? ' dr-wk-rank__place--top' : ''}`}>
                 {MEDALS[r.rank - 1] ?? `${r.rank}th`}
               </span>
@@ -468,6 +460,16 @@ function Results({
               </button>
               <span className="dr-wk-rank__count">
                 {r.count} <span className="dr-sr-only">votes</span>
+              </span>
+              {/* M2-4/M2-3: the bar has its own line under the words (it ran behind them, and its edge crossed them) */}
+              <span className="dr-wk-rank__track" aria-hidden="true">
+                <span
+                  className="dr-wk-rank__bar"
+                  data-testid="vote-result-bar"
+                  data-count={r.count}
+                  data-share={Math.round((r.count / most) * 1000) / 10}
+                  style={{ width: `${(r.count / most) * 100}%` }}
+                />
               </span>
             </li>
           )
@@ -532,6 +534,8 @@ function ResultsActions({ ctx, store, vote }: { ctx: Ctx; store: WorkshopStore; 
   const plural = (c: number, one: string) => `${c} ${one}${c === 1 ? '' : 's'}`
 
   const toBoard = () => {
+    // M2-4: the results are on the board now; the "Results are in" card has nothing left to say
+    store.dismissResultsNews('to-board')
     const out = resultsToBoard(ctx.canvas, vote)
     notify(
       out
@@ -583,7 +587,7 @@ function ResultsActions({ ctx, store, vote }: { ctx: Ctx; store: WorkshopStore; 
         <label className="dr-wk-after__top">
           Top{' '}
           <select
-            className="dr-select"
+            className="dr-input dr-select dr-select--compact"
             data-testid="vote-top-n"
             value={n}
             onChange={(e) => setN(Number(e.target.value))}

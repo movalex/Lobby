@@ -45,6 +45,7 @@ import {
 import type { z } from 'zod'
 import type { VoteSetupArgs } from './commands.ts'
 import { ReactionThrottle } from './reactions.ts'
+import { nextResultsNews, type ResultsCardDismissal } from './results-card.ts'
 import { localCastCheck, optimisticBallot, type PendingCast } from './voting.ts'
 
 type Method = 'GET' | 'POST'
@@ -471,13 +472,33 @@ export class WorkshopStore {
       next.results &&
       next.session.status === 'revealed'
     )
-      this.resultsNews = { sessionId: next.session.id, seq: ++this.newsSeq }
-    if (next?.session.id !== this.resultsNews?.sessionId) this.resultsNews = null
+      this.resultsNews = nextResultsNews(this.resultsNews, {
+        kind: 'results',
+        sessionId: next.session.id,
+        seq: ++this.newsSeq,
+      })
+    this.resultsNews = nextResultsNews(this.resultsNews, {
+      kind: 'vote',
+      sessionId: next?.session.id ?? null,
+    })
   }
 
-  dismissResultsNews() {
-    if (!this.resultsNews) return
-    this.resultsNews = null
+  /**
+   * The "Results are in" card is done (./results-card.ts): closed, run out, "See all results", or "Results to
+   * board" (M2-4: the person has acted on the results, the card must not wait for them to come back).
+   */
+  dismissResultsNews(reason: ResultsCardDismissal = 'close') {
+    const next = nextResultsNews(this.resultsNews, { kind: reason })
+    if (next === this.resultsNews) return
+    this.resultsNews = next
+    this.emit()
+  }
+
+  /** M2-4: the dock's open panel (null: none). Opening the Voting panel ends the card (it shows the same ranking). */
+  panelChanged(panel: string | null) {
+    const next = nextResultsNews(this.resultsNews, { kind: 'panel', panel })
+    if (next === this.resultsNews) return
+    this.resultsNews = next
     this.emit()
   }
 

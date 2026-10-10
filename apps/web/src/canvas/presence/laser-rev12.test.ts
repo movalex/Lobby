@@ -157,6 +157,8 @@ describe('a rev-12 tab in a rev-12 room (L6-1): the laser goes out, others’ la
       c,
       hub,
       tick: clock.tick,
+      /** the hub's clock (its received lasers are stamped with it) */
+      now: clock.options.now,
       setTool: (t: string) => {
         tool = t
       },
@@ -265,23 +267,23 @@ describe('a rev-12 tab in a rev-12 room (L6-1): the laser goes out, others’ la
       ...(t ? { t, trail: [{ x: x - 5, y: 0 }] } : {}),
     })
     r.c.deliver({ type: 'presence', peers: [entry(10, 'laser')] })
-    const now = performance.now()
+    const now = r.now()
     expect(lasersOf(r.c.core, now).map((l) => [l.sid, l.active, l.points.map((p) => p.x)])).toEqual([
       [BOB, true, [5, 10]],
     ])
     r.c.deliver({ type: 'presence', peers: [], off: [BOB] })
-    expect(lasersOf(r.c.core, performance.now())).toEqual([])
+    expect(lasersOf(r.c.core, r.now())).toEqual([])
     r.c.deliver({ type: 'presence', peers: [entry(20, 'laser')] })
     r.c.deliver({ type: 'roster', events: [{ k: 'leave', sid: BOB }] })
-    expect(lasersOf(r.c.core, performance.now())).toEqual([])
+    expect(lasersOf(r.c.core, r.now())).toEqual([])
     r.c.deliver({ type: 'presence', peers: [entry(30, 'laser')] })
     r.c.welcome()
-    expect(lasersOf(r.c.core, performance.now())).toEqual([])
+    expect(lasersOf(r.c.core, r.now())).toEqual([])
     // a plain entry (no t) never makes a laser
     r.c.deliver({ type: 'presence', peers: [entry(40)] })
-    expect(lasersOf(r.c.core, performance.now())).toEqual([])
+    expect(lasersOf(r.c.core, r.now())).toEqual([])
     r.dispose()
-    expect(lasersOf(r.c.core, performance.now())).toEqual([])
+    expect(lasersOf(r.c.core, r.now())).toEqual([])
   })
 
   it('a laser tool press in an older room sends nothing new (the deploy order holds with the tool on)', () => {
