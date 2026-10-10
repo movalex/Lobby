@@ -23,7 +23,6 @@ const WAVE_M_ROUTES = [
   'POST /api/usage',
   'GET /internal/usage',
   'POST /internal/access-many',
-  'POST /api/workspaces/:wid/ai/ask',
   'GET /api/workspaces/:wid/templates',
   'POST /api/workspaces/:wid/templates',
   'DELETE /api/workspaces/:wid/templates/:bid',
@@ -45,12 +44,13 @@ describe('the pending list', () => {
     }
   })
 
-  it('every wave M guard row is a pending route (the rows are in place before the routes)', () => {
+  it('every wave M guard row is a pending route until its owner implements it (the rows are in place before the routes)', () => {
     const rows = [...Object.keys(CREATOR_ROUTES), ...Object.keys(GUEST_REFUSED_ROUTES)].filter(
       (k) => k.includes('/templates') || k.includes('/ai/ask'),
     )
     expect(rows.length).toBe(3 + 5)
-    for (const k of rows) expect(isPendingRoute(k), k).toBe(true)
+    // W8 implemented Ask across boards (M8-2): the matrices hold it to its guard row now
+    for (const k of rows) expect(isPendingRoute(k), k).toBe(!k.includes('/ai/ask'))
   })
 
   it('routeUnlessPending registers a route that is not pending, and nothing for one that is', async () => {

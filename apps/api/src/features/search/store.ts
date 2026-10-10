@@ -111,15 +111,22 @@ export async function rankedHits(
      * (read from comment_threads now, so a thread made team-only a moment ago is already excluded).
      */
     team: boolean
+    /**
+     * Wave M (M8-2, Ask across boards): only entries of this source. Ask reads canvas text only (no comment
+     * threads, whatever the asker may read of them). Absent: every source, as the search route has it.
+     */
+    source?: EntrySource
   },
 ): Promise<RankedRow[]> {
   if (!opts.boardIds.length || !opts.query.simple) return []
+  // Only an asked-for source adds a condition (and a parameter): the search route's statement is unchanged.
+  const only = opts.source === undefined ? '' : ' AND e.source = $8'
   const r = await q.query<RankedRow>(
     `WITH m AS (
        SELECT e.board_id, e.source, e.object_id, e.kind, e.page_id,
               ts_rank_cd(e.tsv, ${QUERY_SQL}, 32)::float8 AS rank
          FROM board_search_entries e
-        WHERE e.workspace_id = $3 AND e.board_id = ANY($4::text[]) AND e.tsv @@ ${QUERY_SQL}
+        WHERE e.workspace_id = $3 AND e.board_id = ANY($4::text[]) AND e.tsv @@ ${QUERY_SQL}${only}
           AND ($7::boolean OR e.source <> 'comment' OR EXISTS (
                 SELECT 1 FROM comment_threads t
                  WHERE t.id = e.object_id AND t.board_id = e.board_id AND t.visibility = 'everyone'))
@@ -150,9 +157,40 @@ export async function rankedHits(
       opts.boards,
       opts.perBoard,
       opts.team,
+      ...(opts.source === undefined ? [] : [opts.source]),
     ],
   )
   return r.rows
+}
+
+export interface EntryKey {
+  boardId: string
+  source: EntrySource
+  objectId: string
+}
+
+/**
+ * The indexed text of the chosen entries (wave M, M8-2), by index into `keys`. An entry re-indexed away
+ * between the ranking and this read is simply missing. `workspaceId` keeps the read inside the asker's
+ * workspace whatever the keys say.
+ */
+export async function entryBodies(
+  q: Queryable,
+  workspaceId: string,
+  keys: readonly EntryKey[],
+): Promise<Map<number, string>> {
+  const out = new Map<number, string>()
+  if (!keys.length) return out
+  const r = await q.query<{ i: number; body: string }>(
+    `SELECT k.i::int AS i, e.body
+       FROM unnest($2::text[], $3::text[], $4::text[]) WITH ORDINALITY AS k(board_id, source, object_id, i)
+       JOIN board_search_entries e
+         ON e.board_id = k.board_id AND e.source = k.source AND e.object_id = k.object_id
+      WHERE e.workspace_id = $1`,
+    [workspaceId, keys.map((k) => k.boardId), keys.map((k) => k.source), keys.map((k) => k.objectId)],
+  )
+  for (const row of r.rows) out.set(row.i - 1, row.body)
+  return out
 }
 
 export interface HeadlineRow {

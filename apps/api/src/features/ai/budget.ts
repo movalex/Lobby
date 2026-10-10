@@ -16,7 +16,12 @@
 // Fail-closed: if the ledger cannot be read or written, the call is refused (503 AI_UNAVAILABLE) and
 // the model is never called.
 
-import { AI_ERROR_CODES, type AiAction, type AiBudget } from '@draftroom/contracts'
+import {
+  AI_ERROR_CODES,
+  type AiAction,
+  type AiBudget,
+  type WORKSPACE_ASK_LEDGER_ACTION,
+} from '@draftroom/contracts'
 import type { Db, Queryable } from '@draftroom/db'
 import { ApiError } from '../../errors.ts'
 import type { AiConfig } from './config.ts'
@@ -90,7 +95,8 @@ export interface ReserveInput {
   workspaceId: string
   boardId: string
   userId: string
-  action: AiAction
+  /** A board action, or wave M's ask across boards (its board_id is then 'ws:<workspace id>'). */
+  action: AiAction | typeof WORKSPACE_ASK_LEDGER_ACTION
   /** The worst case: estimated input plus the output cap. */
   tokens: number
 }

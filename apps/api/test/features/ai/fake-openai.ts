@@ -36,6 +36,8 @@ export type FakeAnswer =
   | { kind: 'status'; status: number; body?: string }
   | { kind: 'raw'; body: string; status?: number }
   | { kind: 'stall'; ms: number }
+  /** Wave M (M8-2): `content` after `ms` (the model answers while something changes meanwhile). */
+  | { kind: 'delayed'; ms: number; content: unknown }
   /** Headers at once, then the body a byte every `everyMs` (a slow or stuck upstream mid-answer). */
   | { kind: 'trickle'; everyMs: number; bytes: number }
   | { kind: 'huge'; bytes: number }
@@ -266,6 +268,12 @@ export async function startFakeOpenAi(): Promise<FakeOpenAi> {
             () => send(200, JSON.stringify(envelope(seen, '{"summary":"late"}'))),
             answer.ms,
           )
+          res.on('close', () => clearTimeout(t))
+          return
+        }
+        case 'delayed': {
+          const content = JSON.stringify(answer.content)
+          const t = setTimeout(() => send(200, JSON.stringify(envelope(seen, content))), answer.ms)
           res.on('close', () => clearTimeout(t))
           return
         }
