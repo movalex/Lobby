@@ -23,7 +23,6 @@
 import { existsSync, statSync } from 'node:fs'
 import { extname, join, normalize, resolve, sep } from 'node:path'
 import { type Browser, type BrowserContext, expect, type Page, type WebSocketRoute } from '@playwright/test'
-import { hashElements } from '../../packages/canvas-schema/src/hash.ts'
 import * as Old from '../../packages/canvas-schema/test/fixtures/rev11-437b4e7/protocol.ts'
 import { CONNECT_URL } from '../spike-b/support/relay.ts'
 import { signInContext } from '../tests/support/api.ts'
@@ -262,6 +261,3 @@ export async function expectOldTabHolds(
   expect(old.socket.dropped, 'frames the previous build’s socket would drop').toEqual([])
   expect(old.pageErrors, 'page errors in the previous build').toEqual([])
 }
-
-/** The convergence hash of the server's live elements and tombstones (hash.ts), for messages. */
-export const hashOf = (els: readonly unknown[]) => hashElements(els as never)

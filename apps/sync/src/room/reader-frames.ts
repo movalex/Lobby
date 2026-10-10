@@ -3,8 +3,9 @@
 // A client's socket parses each server frame with its own build's strict `ServerMessage` and drops the whole frame
 // on one value or field its revision does not know. The web deployed before a bump stays open for days (wave L's
 // stale pair (c): the rev-11 web dropped every `changes` frame that carried a frame's `present.mins`, so it missed
-// the minutes and everything committed with them, and after a reconnect could miss its catch-up). So every frame a
-// session is sent leaves through `Session.send` (element-room.ts), the room's one send point, as one of:
+// the minutes and everything committed with them, until a reload once a later frame moved its clock past them).
+// So every frame a session is sent leaves through `Session.send` (element-room.ts), the room's one send point, as
+// one of:
 //  - a `MessageFrame`: a server message, given to each session in the form canvas-schema's `frameForReader` gives
 //    its revision (the one rule), serialized once per revision for every session it goes to: a broadcast to a room
 //    of rev-12 and rev-11 tabs is serialized twice at most, and once when nothing in it is newer than rev 11;
@@ -14,6 +15,10 @@
 //    form with `presenceForReader`, which is `frameForReader`'s presence rule);
 //  - the gzip snapshot (elements, as `c` ops: the same for every reader) and a session's reset welcome, built for
 //    that session's revision.
+// Two notices are written straight on a socket, outside any session's queue, and are the same for every reader
+// (`frameForReader` leaves every notice as it is): the CLOSING notice before a terminal close (closing.ts: it must
+// leave before the close frame) and PREPARING to a joiner held while its board is converted (index.ts, before
+// the room has a session for it).
 // A socket's revision is what its connect URL names (`rev`, CONNECT_REV_PARAM), else UNANNOUNCED_REV (11), raised
 // to PRESENCE_LASER_REV by its first presence message with `t` (Session.noteRev).
 

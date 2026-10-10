@@ -1011,10 +1011,10 @@ export { LEASE_TTL_MS }
  * A field that a revision after 11 added to a `customData.lobby` value (11: the oldest revision whose clients
  * are still open, the deployed web). A reader below `since` refuses a value that has it: its `LobbyPatch`
  * checks each value with its own strict schema, and its socket drops the whole frame that carries it (stale
- * pair (c), wave L: one `present.mins` in a `changes` frame lost every op of that frame, and a reconnect's
- * whole catch-up). A writer below `since` cannot know the field, so its writes of the key keep it
- * (`lobbyWriteOf`): every field of `present` is independent of the others (index, skip, mins), so an older
- * writer's whole-value write of it, or its removal of the key, never means "no minutes".
+ * pair (c), wave L: one `present.mins` in a `changes` frame lost every op of that frame, for good once a
+ * later frame moved the tab's clock past it). A writer below `since` cannot know the field, so its writes of
+ * the key keep it (`lobbyWriteOf`): every field of `present` is independent of the others (index, skip,
+ * mins), so an older writer's whole-value write of it, or its removal of the key, never means "no minutes".
  */
 export interface LobbyFieldAddition {
   readonly key: string
