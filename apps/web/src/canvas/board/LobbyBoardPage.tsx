@@ -133,7 +133,7 @@ export function LobbyBoardPage({ boardId }: { boardId: string }) {
   // this person's copy of it goes, and is never painted
   const noAccess = detail.status === 'error' && isNoAccess(detail.error)
   const trashed = detail.status === 'ready' && detail.data.board.status === 'trashed'
-  const outsider = detail.status === 'ready' && !boardCacheAllowed(me, detail.data.workspace)
+  const outsider = detail.status === 'ready' && !boardCacheAllowed(detail.data.workspace)
   useEffect(() => {
     if (noAccess || trashed || outsider) void purgeBoardCache(boardId, uid)
   }, [noAccess, trashed, outsider, boardId, uid])
@@ -359,7 +359,7 @@ function LobbyBoardView({
   // none for a trashed board, nor for anyone who is not a member of its workspace (no read: nothing painted, and
   // the session writes no copy without one)
   const [cache] = useState<CacheRead | null>(() =>
-    board.status === 'trashed' || !boardCacheAllowed(rest.me, rest.workspace)
+    board.status === 'trashed' || !boardCacheAllowed(rest.workspace)
       ? null
       : takeBoardCache(boardId, first.user.id),
   )

@@ -1,45 +1,32 @@
 // Wave M round 1 refix (M6-1 / M6-4): the board cache (the warm open's paint, its writes and the offline copy) is for
 // the members of the board's workspace (owner, admin, member). An outside account invited to one board (workspace
-// role 'guest') and a name-only guest never get one, whatever the board's export policy.
-import type { Me } from '@draftroom/contracts'
+// role 'guest') and a name-only guest never get one, whatever the board's export policy. The role is the board
+// answer's (round 2 refix), and an answer without it gets no copy (the wave M gate: it fails closed).
 import { describe, expect, it } from 'vitest'
 import { boardCacheAllowed } from './cache-access.ts'
-
-const me = (workspaces: Me['workspaces']): Me =>
-  ({ user: { id: 'usr_pat0000000000000000', name: 'Pat' }, workspaces }) as unknown as Me
-const WS = 'wsp_DevStudio00000000000'
 
 describe('boardCacheAllowed', () => {
   it('owners, admins and members of the board’s workspace', () => {
     for (const role of ['owner', 'admin', 'member'] as const)
-      expect(boardCacheAllowed(me([{ id: WS, name: 'Dev', role }]), { id: WS }), role).toBe(true)
+      expect(boardCacheAllowed({ role }), role).toBe(true)
   })
 
   it('a workspace guest (an outside account on one board) never, and nobody outside the workspace', () => {
-    expect(boardCacheAllowed(me([{ id: WS, name: 'Dev', role: 'guest' }]), { id: WS })).toBe(false)
-    // a member of another workspace only
-    expect(
-      boardCacheAllowed(me([{ id: 'wsp_Other000000000000000', name: 'O', role: 'owner' }]), { id: WS }),
-    ).toBe(false)
-    expect(boardCacheAllowed(me([]), { id: WS })).toBe(false)
+    expect(boardCacheAllowed({ role: 'guest' })).toBe(false)
+    // no workspace role at all (a board-only grant)
+    expect(boardCacheAllowed({ role: null })).toBe(false)
   })
 })
 
-describe('the board answer states the workspace role now (wave M round 2 refix)', () => {
-  // Pat was a member when the page loaded (Me), then an admin lowered Pat to workspace guest; Pat's board grant
-  // stays, so the board still answers, and its answer is what counts
-  const stale = me([{ id: WS, name: 'Dev', role: 'member' }])
-
-  it('a workspace guest by the board answer gets no copy, whatever the Me of the page load says', () => {
-    expect(boardCacheAllowed(stale, { id: WS, role: 'guest' })).toBe(false)
-    expect(boardCacheAllowed(stale, { id: WS, role: null })).toBe(false)
+describe('the board answer states the workspace role now (wave M round 2 refix, the gate fix)', () => {
+  it('a member lowered to workspace guest while the tab was open gets no copy: the answer decides', () => {
+    expect(boardCacheAllowed({ role: 'guest' })).toBe(false)
   })
 
-  it('a member by the board answer gets one; with no role in the answer (an older api), Me decides as before', () => {
-    expect(boardCacheAllowed(me([{ id: WS, name: 'Dev', role: 'guest' }]), { id: WS, role: 'member' })).toBe(
-      true,
-    )
-    expect(boardCacheAllowed(stale, { id: WS })).toBe(true)
-    expect(boardCacheAllowed(me([{ id: WS, name: 'Dev', role: 'guest' }]), { id: WS })).toBe(false)
+  it('an answer without the role (an api older than round 2: a rollback) gets no copy, not the Me of the page load', () => {
+    // the Me of the page load can say member long after an admin lowered the person (the gate's m6-warm-open
+    // round 2 failure against the 4e4a549 api)
+    expect(boardCacheAllowed({})).toBe(false)
+    expect(boardCacheAllowed({ role: undefined })).toBe(false)
   })
 })
