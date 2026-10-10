@@ -11,8 +11,8 @@ describe('the wave M features registered by the foundation', () => {
     const ids = CANVAS_FEATURES.map((f) => f.id)
     expect(ids.slice(-2)).toEqual(['ws-templates', 'ai-workspace-ask'])
     expect(Object.keys(feature)).toEqual(['id'])
-    // ai-workspace-ask's onMount only installs the dev-auth hook (and clears its context): no static declaration
-    expect(Object.keys(askFeature).sort()).toEqual(['id', 'onMount'])
+    // ai-workspace-ask (W8, M8-2): its palette command 'ai.askWorkspace' and its onMount (the context, the dev hook)
+    expect(Object.keys(askFeature).sort()).toEqual(['commands', 'id', 'onMount'])
   })
 
   it('their command ids are palette command ids', () => {

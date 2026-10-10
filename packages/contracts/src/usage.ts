@@ -20,8 +20,8 @@ import { z } from 'zod'
 
 /**
  * The commands `palette.run:<id>` may name: every static command of the board features
- * (apps/web/src/features/canvas-registry.ts, checked by apps/web/src/lib/usage.test.ts) plus the wave M
- * commands still to come ('ai.askWorkspace' and 'ws-templates.save', W8).
+ * (apps/web/src/features/canvas-registry.ts, checked by apps/web/src/lib/usage.test.ts), wave M's
+ * 'ai.askWorkspace' and 'ws-templates.save' (W8) included.
  */
 export const PALETTE_COMMAND_IDS = [
   // canvas-ux
@@ -163,17 +163,14 @@ export const PALETTE_COMMAND_IDS = [
   'pieces.insert.storyboard',
   'pieces.insert.persona',
   'pieces.insert.stage',
-  // wave M, W8 (registered when W8 implements them)
+  // wave M, W8 (features/ai/workspace-ask, features/ws-templates)
   'ai.askWorkspace',
   'ws-templates.save',
 ] as const
 export type PaletteCommandId = (typeof PALETTE_COMMAND_IDS)[number]
 
 /** The wave M commands no feature registers yet (their owner, W8, adds them): the web test allows them. */
-export const PENDING_PALETTE_COMMAND_IDS: readonly PaletteCommandId[] = [
-  'ai.askWorkspace',
-  'ws-templates.save',
-]
+export const PENDING_PALETTE_COMMAND_IDS: readonly PaletteCommandId[] = ['ws-templates.save']
 
 /**
  * The template picker's templates (`@draftroom/templates` TEMPLATE_INFOS ids, checked by
