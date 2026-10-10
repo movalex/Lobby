@@ -21,6 +21,7 @@ import {
 } from '@draftroom/contracts'
 import { isApiError } from '../../../api/client.ts'
 import type { Bounds, CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
+import { takeOpenState } from '../../../lib/open-state.ts'
 import { react } from '../../../lib/signals.ts'
 import { countUsage } from '../../../lib/usage.ts'
 import { mindmapOf } from '../../mindmap/ported/bridge.ts'
@@ -80,6 +81,15 @@ export function askAiStatus(canvas: LobbyCanvas, signal?: AbortSignal, env?: Idl
   const ask = () => void refreshAiStatus(canvas, signal)
   if (hasAskedAiStatus(canvas)) {
     ask()
+    return () => undefined
+  }
+  // wave M (M4, W5's board-open read): the board's first read may already hold the status (lib/open-state.ts): taken
+  // once, it is the answer GET /ai would give (null: this person gets no AI here), and nothing is asked
+  const ctx = getAiCtx(canvas)
+  const seeded = ctx ? takeOpenState(ctx.board.id, 'ai') : undefined
+  if (seeded !== undefined) {
+    statusAsks.set(canvas, (statusAsks.get(canvas) ?? 0) + 1)
+    aiStatus(canvas).set(seeded)
     return () => undefined
   }
   return deferUntilIdle(ask, env)
