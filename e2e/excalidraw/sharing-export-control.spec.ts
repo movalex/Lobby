@@ -292,6 +292,14 @@ test('K.1: before the board’s first export-policy answer a viewer gets no Expo
     release = r
   })
   let reads = 0
+  // wave M (M5-1): without the board-open read, so the policy comes from its own (held) read
+  await b.page.route('**/api/boards/*/open-state', (route) =>
+    route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Not found.' } }),
+    }),
+  )
   await b.page.route('**/api/boards/*/export-policy', async (route) => {
     reads++
     await held

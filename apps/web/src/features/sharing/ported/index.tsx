@@ -8,6 +8,7 @@ import type { ShareState } from '@draftroom/contracts'
 import { useEffect, useState } from 'react'
 import type { CanvasFeature, CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { useUserKind } from '../../../invite/guest.tsx'
+import { openStateOrRoute } from '../../../lib/open-state.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { announceRemoteShareChange, openShareDialog, SHARE_CHANGED_EVENT, sharingApi } from '../api.ts'
 import { shareBadge, shareBadgeName, showsShareBadge } from '../model.ts'
@@ -39,8 +40,13 @@ function ShareBadge({ ctx }: { ctx: CanvasFeatureContext }) {
     void tick
     void board.visibility
     const controller = new AbortController()
-    sharingApi(api)
-      .shareState(board.id, controller.signal)
+    // wave M (M5-1): the first fetch takes the board-open read's part, once (lib/open-state.ts); later ones read the route
+    openStateOrRoute(
+      board.id,
+      'sharing',
+      () => sharingApi(api).shareState(board.id, controller.signal),
+      controller.signal,
+    )
       .then(setState)
       .catch(() => {}) // keep the last known state; the Share button still works
     return () => controller.abort()

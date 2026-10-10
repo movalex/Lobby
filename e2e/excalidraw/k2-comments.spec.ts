@@ -115,9 +115,12 @@ for (const slowStream of [false, true])
     const a = await canvasSession('alice')
     const threadsPath = `/api/boards/${board}/threads`
     const seen: string[] = []
+    // wave M (M5-1): the first load may take its threads from the board-open read instead
+    const opened: string[] = []
     a.page.on('request', (r) => {
       const u = new URL(r.url())
       if (r.method() === 'GET' && u.pathname === threadsPath) seen.push(u.search)
+      if (r.method() === 'GET' && u.pathname === `/api/boards/${board}/open-state`) opened.push(u.search)
     })
     // a slow network or a busy api (the speed scout's 4G run saw two fetches): the board's event stream
     // (its ticket and the cookie stream alike) connects 2 s after the page asks for it
@@ -131,5 +134,7 @@ for (const slowStream of [false, true])
     await expect(a.page.getByTestId('conn-status')).toHaveAttribute('data-state', 'online')
     // past the first load's wait and the old resync window, with the event stream up
     await a.page.waitForTimeout(4_000)
-    expect(seen).toHaveLength(1)
+    // once: its own read, or none when the board-open read answered it
+    expect(seen.length).toBeLessThanOrEqual(1)
+    expect(seen.length + opened.length).toBeGreaterThanOrEqual(1)
   })

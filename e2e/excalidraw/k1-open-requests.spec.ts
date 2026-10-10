@@ -149,8 +149,10 @@ for (const who of [
         const seen = limit.beforeLive ? body.byPathBeforeLive : body.byPath
         expect(n, `${limit.why}: ${JSON.stringify(seen)}`).toBeLessThanOrEqual(limit.max)
       }
-      // positive control: the policy was read (the gates have an answer), and the board and ticket were asked
-      expect(calls.filter((c) => c.path === '/api/boards/:id/export-policy').length).toBeGreaterThanOrEqual(1)
+      // positive control: the policy was read (the gates have an answer: its own read, or wave M's board-open read,
+      // M5-1), and the board and ticket were asked
+      const policyReads = ['/api/boards/:id/export-policy', '/api/boards/:id/open-state']
+      expect(calls.filter((c) => policyReads.includes(c.path)).length).toBeGreaterThanOrEqual(1)
       expect(calls.some((c) => c.method === 'GET' && c.path === '/api/boards/:id')).toBe(true)
       expect(calls.some((c) => c.method === 'POST' && c.path === '/api/boards/:id/ticket')).toBe(true)
     } finally {
