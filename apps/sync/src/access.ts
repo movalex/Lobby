@@ -49,7 +49,7 @@ import { BOARD_ROLES, type BoardRole } from './permissions.ts'
 
 /** The periodic round's interval is jittered by this fraction either way (±20 %). */
 export const ACCESS_JITTER = 0.2
-/** After a 404 from the batch route (an older api), the per-pair route is used this long before trying again. */
+/** After the batch route was refused (404 or 403: an older api), the per-pair route is used this long, then tried again. */
 export const BATCH_REPROBE_MS = 60 * 60_000
 /** A batch may take a little longer than one pair (default timeout of the batch request). */
 export const BATCH_TIMEOUT_MS = 5_000
@@ -86,8 +86,9 @@ export interface AccessClient {
   getAccess?(boardId: string, userId: string): Promise<AccessAnswer>
   /**
    * M7-1: the answers for many pairs in one request (at most ACCESS_MANY_MAX_PAIRS), in the pairs' order, each
-   * as `getAccess` would answer it. Throws AccessBatchUnsupportedError when the api has no such route (a 404:
-   * an api from before wave M), AccessUnavailableError when it cannot answer. Optional: a client without it is
+   * as `getAccess` would answer it. Throws AccessBatchUnsupportedError when the api has no such route (404, or 403
+   * from its web-Origin check: an api from before wave M), AccessUnavailableError when it cannot answer. Optional: a
+   * client without it is
    * asked per pair, as before.
    */
   getAccessMany?(pairs: readonly AccessPair[]): Promise<AccessAnswer[]>
@@ -163,7 +164,8 @@ export function createApiAccessClient(opts: ApiAccessClientOptions): AccessClien
   }
   /**
    * M7-1: POST <api>/internal/access-many {pairs} -> AccessManyResponse. Only a 200 whose results name exactly
-   * the asked pairs, in order, counts; a 404 is an api that predates the route; anything else is "cannot tell".
+   * the asked pairs, in order, counts; a 404 or a 403 is an api that predates the route; anything else is "cannot
+   * tell".
    */
   async function getAccessMany(pairs: readonly AccessPair[]): Promise<AccessAnswer[]> {
     let res: Response
@@ -309,7 +311,7 @@ interface Admission {
 /** One chunk's outcome in a batched round (M7-1). */
 type ChunkAnswer =
   | { kind: 'ok'; answers: AccessAnswer[] }
-  /** a 404 (an older api), or the batch is off until its re-probe: these pairs are checked per pair */
+  /** the batch route was refused (an older api), or it is off until its re-probe: these pairs are checked per pair */
   | { kind: 'unsupported' }
   /** the api could not answer: fail open (every session of these pairs stays) */
   | { kind: 'failed' }
@@ -332,7 +334,7 @@ export function createAccessMonitor(opts: AccessMonitorOptions): AccessMonitor {
   const changes = new Map<string, number>()
   let timer: ReturnType<typeof setTimeout> | null = null
   let stopped = false
-  /** M7-1: the batch route is not used before this time (after a 404 from an older api) */
+  /** M7-1: the batch route is not used before this time (after an older api refused it) */
   let batchOffUntil = Number.NEGATIVE_INFINITY
   let last: AccessRound | null = null
 

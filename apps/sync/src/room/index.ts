@@ -464,14 +464,22 @@ export function createElementRoomServiceWith(
           },
         }
   }
-  let wasOver = false
+  // one line when the budget is crossed either way or sessions were closed, at most every 5 s (a sum at the
+  // threshold can flap tick to tick; the closes since the last line are counted into the next one)
+  let loggedOver = false
+  let closedSince = 0
+  let lastLogAt = Number.NEGATIVE_INFINITY
   const budgetTimer = setInterval(() => {
-    const closed = outboundBudget.check(budgetEntries())
-    if (outboundBudget.over !== wasOver || closed)
+    closedSince += outboundBudget.check(budgetEntries())
+    const at = now()
+    if ((outboundBudget.over !== loggedOver || closedSince > 0) && at - lastLogAt >= 5_000) {
       deps.log(
-        `[outbound] ${outboundBudget.over ? 'over' : 'under'} the process budget (${Math.round(outboundBudget.queued / 1048576)} of ${Math.round(outboundBudget.bytes / 1048576)} MiB queued)${closed ? `: ${closed} sessions sent to reconnect` : ''}`,
+        `[outbound] ${outboundBudget.over ? 'over' : 'under'} the process budget (${Math.round(outboundBudget.queued / 1048576)} of ${Math.round(outboundBudget.bytes / 1048576)} MiB queued)${closedSince ? `: ${closedSince} sessions sent to reconnect` : ''}`,
       )
-    wasOver = outboundBudget.over
+      loggedOver = outboundBudget.over
+      closedSince = 0
+      lastLogAt = at
+    }
   }, 250)
   budgetTimer.unref?.()
 
