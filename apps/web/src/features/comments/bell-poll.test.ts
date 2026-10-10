@@ -188,6 +188,40 @@ describe('CommentsStore: the bell (M5-3)', () => {
     expect(store.notifications.get().unreadCount).toBe(2)
   })
 
+  it('a poll’s 204 that lands before a whole refresh still on its way does not drop that whole answer', async () => {
+    let releaseWhole: (v: ListNotificationsResponse) => void = () => {}
+    const sent: (number | undefined)[] = []
+    const answers: Promise<ListNotificationsResponse | null>[] = [
+      Promise.resolve({ notifications: [item(1)], unreadCount: 1, seq: 5 }),
+      new Promise((r) => {
+        releaseWhole = r
+      }),
+      Promise.resolve(null),
+    ]
+    const api = {
+      notifications: vi.fn(async (_s?: AbortSignal, since?: number) => {
+        sent.push(since)
+        return answers.shift() as Promise<ListNotificationsResponse | null>
+      }),
+    } as unknown as CommentsApi
+    store = new CommentsStore({
+      signals: LOBBY_SIGNALS,
+      boardId: BOARD,
+      meId: ME,
+      canComment: true,
+      api,
+      storage: null,
+    })
+    await store.refreshNotifications()
+    const whole = store.refreshNotifications() // e.g. the bell opened: since 0
+    await store.refreshNotifications({ onlyIfNew: true }) // the minute poll: since 5, a 204 first
+    // read in another tab: the same seq, nothing unread
+    releaseWhole({ notifications: [item(1, '2026-10-10T11:00:00.000Z')], unreadCount: 0, seq: 5 })
+    await whole
+    expect(sent).toEqual([0, 0, 5])
+    expect(store.notifications.get().unreadCount).toBe(0)
+  })
+
   it('a scheduled poll folded with a whole refresh stays whole', async () => {
     vi.useFakeTimers()
     try {

@@ -572,6 +572,8 @@ export class CommentsStore {
     try {
       const res = await this.api.notifications(undefined, since)
       if (this.disposed || asked < this.notificationsApplied) return
+      // A poll's 204 applies nothing, so it never makes a whole answer still on its way "older" (round 1 refix).
+      if (res === null && since > 0) return
       this.notificationsApplied = asked
       if (res === null) {
         // nothing newer than `since`; and "since 0" answered so means there is nothing at all
