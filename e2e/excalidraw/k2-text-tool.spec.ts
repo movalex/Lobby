@@ -52,7 +52,8 @@ test('K2-2: T, click, type, Escape, then a click on empty canvas: back on Select
   await a.page.keyboard.press('t')
   await expect.poll(() => tool(a.page)).toBe('text')
 
-  const p1 = await canvasPoint(a.page, 0.55, 0.35)
+  // wave M: below the empty board's start card, which has two more buttons and is taller (a button takes the click)
+  const p1 = await canvasPoint(a.page, 0.55, 0.55)
   await a.page.mouse.click(p1.x, p1.y)
   const id = await waitForTextEditor(a.page)
   await expectLeasedEditor(a.page, id)
@@ -89,7 +90,8 @@ test('K2-2: with the tool lock on (Q) T stays armed: the next click opens a new 
   await expect.poll(() => tool(a.page)).toBe('text')
   await expect(a.page.getByTestId('tools.text')).toHaveAttribute('data-locked', 'true')
 
-  const p1 = await canvasPoint(a.page, 0.55, 0.35)
+  // wave M: below the empty board's start card, which has two more buttons and is taller (a button takes the click)
+  const p1 = await canvasPoint(a.page, 0.55, 0.55)
   await a.page.mouse.click(p1.x, p1.y)
   const first = await waitForTextEditor(a.page)
   await expectLeasedEditor(a.page, first)
