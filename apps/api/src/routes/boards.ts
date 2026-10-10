@@ -156,7 +156,7 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
     return {
       board: toBoard(row, await boardMarks()),
       role: roleOf(access),
-      workspace: { id: access.board.workspace_id, name: access.workspaceName },
+      workspace: { id: access.board.workspace_id, name: access.workspaceName, role: access.workspaceRole },
     }
   })
 

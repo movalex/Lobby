@@ -228,7 +228,13 @@ export const PatchBoardInput = z
 export const BoardDetail = z.object({
   board: Board,
   role: BoardRole,
-  workspace: z.object({ id: WorkspaceId, name: z.string() }),
+  workspace: z.object({
+    id: WorkspaceId,
+    name: z.string(),
+    // wave M round 2 refix: the caller's workspace role as it is now (null: none, a board-only grant), so the board
+    // page never decides on the Me of its page load (the board cache is for members only). Optional: an older api.
+    role: WorkspaceRole.nullable().optional(),
+  }),
 })
 export type BoardDetail = z.infer<typeof BoardDetail>
 

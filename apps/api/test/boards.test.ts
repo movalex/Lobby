@@ -84,9 +84,28 @@ describe('create + get', () => {
     expect(res.statusCode).toBe(200)
     const detail = BoardDetail.parse(res.json())
     expect(detail.role).toBe('owner')
-    expect(detail.workspace).toEqual({ id: DEV_STUDIO, name: 'Dev Studio' })
+    expect(detail.workspace).toEqual({ id: DEV_STUDIO, name: 'Dev Studio', role: 'member' })
     expect(detail.board.lastOpenedAt).not.toBeNull()
     expect(detail.board.updatedAt).toBe(before.updated_at.toISOString())
+  })
+
+  it("GET states the caller's workspace role as it is now (wave M round 2: the board cache is for members only)", async () => {
+    const id = await createBoard(alice, DEV_STUDIO, 'Grants')
+    expect(
+      (await alice.req('PUT', `/api/boards/${id}/members/${carol.userId}`, { role: 'editor' })).statusCode,
+    ).toBe(200)
+    const roleOf = async () =>
+      BoardDetail.parse((await carol.req('GET', `/api/boards/${id}`)).json()).workspace.role
+    expect(await roleOf()).toBe('member')
+    // lowered to workspace guest: the board grant stays, so the board still answers, with the new role
+    const patch = await alice.req('PATCH', `/api/workspaces/${DEV_STUDIO}/members/${carol.userId}`, {
+      role: 'guest',
+    })
+    expect(patch.statusCode, patch.body).toBe(200)
+    expect(await roleOf()).toBe('guest')
+    expect(BoardDetail.parse((await alice.req('GET', `/api/boards/${id}`)).json()).workspace.role).toBe(
+      'owner',
+    )
   })
 
   it('guests cannot create boards; non-members get 404 for the workspace', async () => {
