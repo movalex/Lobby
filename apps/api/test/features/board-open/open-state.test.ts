@@ -243,6 +243,12 @@ describe('GET /api/boards/:bid/open-state: each part is its own route’s body (
   })
 })
 
+/** The api's background sweepers (guests, review links: every 5 s on their own timers), not a request's statements. */
+const BACKGROUND_SWEEPS = [
+  /^SELECT id FROM invitations WHERE multi_use AND swept_at IS NULL /,
+  /^SELECT u.id FROM users u WHERE u.kind = 'guest' AND EXISTS /,
+]
+
 describe('GET /api/boards/:bid/open-state: what it costs the database', () => {
   it('one session lookup, one access check, one READ ONLY transaction, and no pooled query while it is open (each role)', async () => {
     // the review's nit: not only a viewer (the owner reads every part's manager view, a guest its link's caps)
@@ -268,9 +274,10 @@ describe('GET /api/boards/:bid/open-state: what it costs the database', () => {
       const inTx = all.filter((s) => s.inTransaction)
       expect(inTx[0]?.sql, who).toBe('SET TRANSACTION READ ONLY')
       expect(accessChecks[0]?.inTransaction, who).toBe(true)
-      // nothing on the pool while the transaction held its client (a capped pool must not wait on itself)
+      // nothing on the pool while the transaction held its client (a capped pool must not wait on itself); the app's
+      // own background sweepers run on their own timers, and on a real Postgres can land inside the window
       expect(
-        all.filter((s) => s.duringTransaction),
+        all.filter((s) => s.duringTransaction && !BACKGROUND_SWEEPS.some((r) => r.test(s.sql))),
         who,
       ).toEqual([])
     }
