@@ -116,8 +116,8 @@ export function setMins(canvas: LobbyCanvas, row: FrameRow, mins: number | null)
 export const minsText = (mins: number | null) => (mins === null ? 'No time planned' : `${mins} min`)
 
 /**
- * The minutes stepper under a frame's name: "+ time" until minutes are planned, then − 5 min +. Each press
- * is one write (`setMins`).
+ * The minutes stepper under a frame's name: "+ minutes" until minutes are planned, then − 5 min +. Each press
+ * is one write (`setMins`). Wave M (M1-6, FTU-10): it said "+ time", with no hint that it plans the presentation.
  */
 export function MinsStepper({ canvas, row }: { canvas: LobbyCanvas; row: FrameRow }) {
   const label = row.name || 'frame'
@@ -128,11 +128,11 @@ export function MinsStepper({ canvas, row }: { canvas: LobbyCanvas; row: FrameRo
           type="button"
           className="dr-ros-mins__add"
           data-testid="frame-mins-add"
-          aria-label={`Plan time for ${label}`}
-          title="Plan minutes for this section of the run of show"
+          aria-label={`Plan minutes for ${label}`}
+          title="Plan minutes for this section of the presentation"
           onClick={() => setMins(canvas, row, stepMins(row.mins, 1))}
         >
-          + time
+          + minutes
         </button>
       ) : (
         <>
@@ -269,6 +269,12 @@ export function FramesPanel({ ctx }: { ctx: CanvasFeatureContext; close(): void 
           </button>
         )}
       </div>
+      {/* wave M (M1-6, FTU-10): what "+ minutes" is for, once, where the stepper is offered */}
+      {canEdit && minsOk && (
+        <p className="dr-cux-muted dr-cux-hint" data-testid="frames-minutes-hint">
+          Each frame is a section of the presentation: + minutes plans its time in the run of show.
+        </p>
+      )}
       <ol
         className="dr-cux-frames__list"
         aria-label="Frames in presentation order"

@@ -458,6 +458,67 @@
   width: max-content;
   pointer-events: auto;
 }
+/* Wave M (M1-4): tier one. An open tray (a control's options) is the bar's last row: the bar wraps around it, and the
+   tray takes the bar's width without widening it (contain: inline-size gives it no width of its own), so its
+   options wrap inside; the bar stays as wide as its buttons (the H1 rule above). */
+.cux-selbar:has(> .cux-selstyle__tray) {
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.cux-selstyle__tray {
+  order: 1;
+  flex-basis: 100%;
+  contain: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 3px;
+  padding-top: 4px;
+  border-top: 1px solid var(--dr-line);
+}
+.cux-selstyle__row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.cux-selstyle__legend {
+  flex-basis: 100%;
+  color: var(--dr-ink-2);
+  font: 11px / 1.2 var(--dr-font);
+  text-align: center;
+}
+.cux-selstyle__dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 22%);
+}
+.cux-selstyle__dot[data-mixed] {
+  background: conic-gradient(#f6c453, #a7b7f6, #93cfa6, #ef8c82, #f6c453);
+}
+.cux-selstyle__note {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 18%);
+  font: 600 10px / 1 var(--dr-font);
+}
+.cux-selstyle__text {
+  font: 600 12px / 1 var(--dr-font);
+}
+/* "More styles" on a wide canvas points the style panel out */
+.cux-style[data-attention] {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 2px;
+}
 .cux-frame-lock {
   position: absolute;
   display: grid;

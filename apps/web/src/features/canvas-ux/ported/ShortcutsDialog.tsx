@@ -90,7 +90,32 @@ export function shortcutSections(ctx: CanvasFeatureContext): ShortcutSection[] {
   ]
   if (more.length) sections.push({ id: 'features', title: 'View and features', rows: more })
   sections.push({ id: 'dr-board', title: 'Board', rows: BOARD_ROWS })
-  return sections
+  return dedupeRows(sections)
+}
+
+/** A row's identity: its words and its keys, as written (chords compared case-blind, without spaces). */
+const rowId = (r: ShortcutRow) =>
+  `${r.label.trim().toLowerCase()}|${r.keys
+    .map((k) => (typeof k === 'string' ? k.toLowerCase().replace(/\s+/g, '') : `text:${k.text}`))
+    .join(' ')}`
+
+/**
+ * Wave M (M1-6, FTU-12): a row listed twice is listed once, where it first appears (Cut was in the built-in edit
+ * keys and again as canvas-ux's command; Zoom in and out as navigation's). Empty sections are left out. Pure.
+ */
+export function dedupeRows(sections: readonly ShortcutSection[]): ShortcutSection[] {
+  const seen = new Set<string>()
+  const out: ShortcutSection[] = []
+  for (const s of sections) {
+    const rows = s.rows.filter((r) => {
+      const id = rowId(r)
+      if (seen.has(id)) return false
+      seen.add(id)
+      return true
+    })
+    if (rows.length) out.push({ ...s, rows })
+  }
+  return out
 }
 
 /**

@@ -391,6 +391,29 @@ describe('the shortcuts dialog', () => {
     }
   })
 
+  it('wave M (M1-6, FTU-12): no row is listed twice (the same words and the same keys; Cut was)', () => {
+    const registries = createFeatureRegistries()
+    for (const f of CANVAS_FEATURES) {
+      for (const c of f.commands ?? []) registries.commands.register(c)
+      for (const t of f.tools ?? []) registries.tools.register(t)
+    }
+    const ctx = { registries } as unknown as CanvasFeatureContext
+    const seen = new Map<string, string>()
+    const twice: string[] = []
+    for (const s of shortcutSections(ctx))
+      for (const r of s.rows) {
+        const keys = r.keys.map((k) => (typeof k === 'string' ? canonical(k) : `text:${k.text}`)).join(' ')
+        const id = `${r.label.trim().toLowerCase()}|${keys}`
+        const at = seen.get(id)
+        if (at !== undefined) twice.push(`${r.label} (${keys}) in ${at} and ${s.id}`)
+        else seen.set(id, s.id)
+      }
+    expect(twice).toEqual([])
+    // the edit section still lists Cut once, with its key
+    const edit = shortcutSections(ctx).find((s) => s.id === 'edit')?.rows ?? []
+    expect(edit.filter((r) => r.label === 'Cut')).toEqual([{ label: 'Cut', keys: ['mod+x'] }])
+  })
+
   it('canvas-ux provides the chrome host slots it owns', () => {
     expect(Object.keys(canvasUx.slots ?? {}).sort()).toEqual(
       ['contextMenu', 'mainMenu', 'selectionBar', 'shortcutsDialog', 'stylePanel', 'toolbar'].sort(),

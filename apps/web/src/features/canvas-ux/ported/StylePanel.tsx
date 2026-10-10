@@ -156,7 +156,8 @@ export function showStylePanel(kinds: readonly StyleKind[], toolId: string | nul
   return toolId !== null && toolId in STYLED_TOOLS
 }
 
-interface Target {
+/** What a pick styles (wave M, M1-4: the selection bar's tier one picks through the same functions). */
+export interface Target {
   readonly els: readonly CanvasElement[]
   /** D4: selected polygons' see-through holders: only their labels take text styles (./polygons.ts) */
   readonly holders: readonly CanvasElement[]
@@ -165,7 +166,7 @@ interface Target {
   readonly next: boolean
 }
 
-function targetOf(canvas: LobbyCanvas): Target | null {
+export function targetOf(canvas: LobbyCanvas): Target | null {
   const roots = selectedRoots(canvas)
   const holders = roots.filter((e) => isPolygonHolder(e, canvas))
   const els = roots.filter((e) => kindOf(e) !== 'frame' && !holders.includes(e))
@@ -201,7 +202,7 @@ function labelOf(canvas: LobbyCanvas, el: CanvasElement) {
 }
 
 /** A colour pick: notes take the note fill, shapes a stroke with their fill in the same colour, the rest a stroke. */
-function pickColor(canvas: LobbyCanvas, t: Target, name: ColorName) {
+export function pickColor(canvas: LobbyCanvas, t: Target, name: ColorName) {
   const w: Writes = new Map()
   const c = SHADES[name]
   for (const el of t.els) {
@@ -246,7 +247,7 @@ function pickColor(canvas: LobbyCanvas, t: Target, name: ColorName) {
   }
 }
 
-function pickNoteColor(canvas: LobbyCanvas, t: Target, name: NoteColorName) {
+export function pickNoteColor(canvas: LobbyCanvas, t: Target, name: NoteColorName) {
   // the note tool's next note (CR-3A-7)
   if (t.next) {
     canvas.styles.setNext({ noteColor: noteFillOf(name) })
@@ -257,7 +258,7 @@ function pickNoteColor(canvas: LobbyCanvas, t: Target, name: NoteColorName) {
   write(canvas, 'note color', w)
 }
 
-function pickFill(canvas: LobbyCanvas, t: Target, fill: FillName) {
+export function pickFill(canvas: LobbyCanvas, t: Target, fill: FillName) {
   // K2-3: a fill picked here is the person's choice for the next shapes too (the light default steps aside)
   uxState(canvas).fillChosen.set(true)
   const w: Writes = new Map()
@@ -273,7 +274,7 @@ function pickFill(canvas: LobbyCanvas, t: Target, fill: FillName) {
   canvas.styles.setNext({ backgroundColor: f.backgroundColor, fillStyle: f.fillStyle })
 }
 
-function pickPlain(
+export function pickPlain(
   canvas: LobbyCanvas,
   t: Target,
   label: string,
@@ -299,7 +300,7 @@ function pickPlain(
  * picked, `setNext` writes the one the tool in hand makes (the port keeps the other: canvas/port-impl.ts), so a note's
  * L is never the next text's size.
  */
-function pickSize(canvas: LobbyCanvas, t: Target, size: SizeName) {
+export function pickSize(canvas: LobbyCanvas, t: Target, size: SizeName) {
   const texts = t.els.filter((e) => kindOf(e) === 'text').map((e) => e.id)
   const notes = t.els.filter((e) => kindOf(e) === 'note').map((e) => e.id)
   let stepped = false
@@ -333,7 +334,7 @@ function applyJoined(canvas: LobbyCanvas, patch: StyleValues, ids: readonly stri
   canvas.transact('style', () => canvas.styles.apply(patch, ids), { joinPrevious: true })
 }
 
-function textTargets(t: Target) {
+export function textTargets(t: Target) {
   return [
     ...t.els.filter((e) => ['text', 'note', 'shape', 'arrow'].includes(kindOf(e)) && !isPolygonLine(e)),
     ...t.holders,
@@ -628,7 +629,9 @@ function ArrowheadPicker({
  */
 export function StylePanel({ ctx }: { ctx: CanvasFeatureContext }) {
   const room = useCanvasRoom(ctx.canvas)
-  if (stylesFold(room)) return null
+  // wave M (M1-3): it steps aside while a popover of the selection bar fits nowhere clear of it
+  const yieldToBar = useValue(uxState(ctx.canvas).stylePanelYield)
+  if (stylesFold(room) || yieldToBar) return null
   return <StylePanelBody ctx={ctx} />
 }
 

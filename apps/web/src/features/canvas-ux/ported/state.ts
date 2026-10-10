@@ -50,6 +50,17 @@ export interface CanvasUxState {
    * (./defaults.ts `installShapeFillDefault`) never overrides that choice.
    */
   readonly fillChosen: Atom<boolean>
+  /**
+   * Wave M (M1-4): the selection bar's open style tray (a tier one control's options, or 'all' for the compact
+   * bar's one Style button), null when none is open; closed when the selection changes.
+   */
+  readonly selectionTray: Atom<string | null>
+  /**
+   * Wave M (M1-3): the style panel steps aside (renders nothing) while the selection bar has a popover open (its
+   * More row or a style tray) and nothing fits clear of the panel; back when the popover closes or the selection
+   * changes.
+   */
+  readonly stylePanelYield: Atom<boolean>
 }
 
 const states = new WeakMap<LobbyCanvas, CanvasUxState>()
@@ -70,6 +81,8 @@ export function uxState(canvas: LobbyCanvas): CanvasUxState {
       leftEditing: atom<string | null>('cux-left-editing', null),
       selectionBarFocus: atom('cux-selbar-focus', 0),
       fillChosen: atom('cux-fill-chosen', false),
+      selectionTray: atom<string | null>('cux-selection-tray', null),
+      stylePanelYield: atom('cux-style-panel-yield', false),
     }
     states.set(canvas, s)
   }
@@ -96,4 +109,6 @@ export function closeMenus(s: CanvasUxState): void {
   s.moreOpen.set(false)
   s.actionsMenuOpen.set(false)
   s.stylesOpen.set(false)
+  s.selectionTray.set(null)
+  s.stylePanelYield.set(false)
 }

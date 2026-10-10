@@ -57,6 +57,27 @@ describe('the minutes stepper is offered only where the room accepts minutes', (
     expect(h).toContain('data-testid="frame-mins-up"')
   })
 
+  it('wave M (M1-6, FTU-10): the add button says "+ minutes" and what they are for; the header has one hint line', () => {
+    const h = setup({ rev: 12 }).html()
+    const adds = [...h.matchAll(/<button[^>]*data-testid="frame-mins-add"[^>]*>([^<]*)<\/button>/g)]
+    expect(adds).toHaveLength(2)
+    for (const [tag, text] of adds) {
+      expect(text).toBe('+ minutes')
+      expect(tag).toContain('title="Plan minutes for this section of the presentation"')
+    }
+    expect(h).toContain('aria-label="Plan minutes for Ideas"')
+    expect(h).not.toContain('+ time')
+    // the header's hint: one line, before the list
+    const hint = h.match(/<p[^>]*data-testid="frames-minutes-hint"[^>]*>([^<]*)<\/p>/)
+    expect(hint?.[1]).toBe(
+      'Each frame is a section of the presentation: + minutes plans its time in the run of show.',
+    )
+    expect(h.indexOf('frames-minutes-hint')).toBeLessThan(h.indexOf('frame-row'))
+    // no hint where minutes are not offered (an older room, or people who cannot edit)
+    expect(setup({ rev: 11 }).html()).not.toContain('frames-minutes-hint')
+    expect(setup({ rev: 12, role: 'viewer' }).html()).not.toContain('frames-minutes-hint')
+  })
+
   it('a rev-11 room, or one whose revision is not known yet, shows no stepper (an older sync would refuse the field)', () => {
     for (const rev of [11, 10, null]) {
       const h = setup({ rev }).html()

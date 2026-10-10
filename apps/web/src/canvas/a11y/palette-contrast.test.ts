@@ -67,3 +67,46 @@ describe('the note palette on the new canvas (WCAG AA)', () => {
     expect(lost).toEqual([])
   })
 })
+
+// Wave M (M1-5, FTU-9; W1's): a note whose fill is not one of Lobby's swatches is drawn in dark mode with the fill as
+// it is (Lobby's theme draws an explicit colour unchanged), so its label takes whichever of Lobby's two inks reads
+// better on that fill (canvas/engine/theme.ts `noteInkFor`). Through Lobby's dark table, the path the board draws.
+describe('wave M (M1-5): off-palette notes read in dark mode; the 13 swatches are unchanged', async () => {
+  const theme = await import('../engine/theme.ts')
+  const { NOTE_PALETTE } = await import('../../features/canvas-ux/palette.ts')
+  /** The fill as Lobby's dark mode draws it (its table; an explicit colour as it is; greys through the filter). */
+  const drawn = (fill: string) => theme.lobbyDarkColor(fill) ?? dark(fill)
+
+  it('excalidraw.com pastels (#b2f2bb, #a5d8ff, #ffc9c9) get an ink of at least 4.5:1 on the fill as drawn', () => {
+    for (const fill of ['#b2f2bb', '#a5d8ff', '#ffc9c9']) {
+      const ink = theme.noteInkFor(fill, 'dark')
+      expect(ink, fill).toBe(theme.INK)
+      expect(contrastRatio(drawn(fill), ink), fill).toBeGreaterThanOrEqual(AA_TEXT)
+      // what it was: the one dark ink, near-white on pastel
+      expect(contrastRatio(drawn(fill), theme.CHALK), fill).toBeLessThan(AA_TEXT)
+    }
+  })
+
+  it('more pastels and darks from other tools: the ink is always the better of the two, and reads', () => {
+    for (const fill of ['#ffec99', '#d0bfff', '#e9ecef', '#99e9f2', '#1e3a5f', '#343a40', '#000000']) {
+      const ink = theme.noteInkFor(fill, 'dark')
+      const other = ink === theme.INK ? theme.CHALK : theme.INK
+      expect(contrastRatio(drawn(fill), ink), fill).toBeGreaterThanOrEqual(contrastRatio(drawn(fill), other))
+      expect(contrastRatio(drawn(fill), ink), fill).toBeGreaterThanOrEqual(AA_TEXT)
+    }
+  })
+
+  it('the 13 swatches keep their inks (CHALK on the designed dark fills, INK in light), each at 4.5:1 or more', () => {
+    expect(NOTE_PALETTE).toHaveLength(13)
+    for (const s of NOTE_PALETTE) {
+      expect(theme.noteInkFor(s.light.fill, 'light'), s.label).toBe(theme.INK)
+      expect(theme.noteInkFor(s.light.fill, 'dark'), s.label).toBe(theme.CHALK)
+      expect(contrastRatio(drawn(s.light.fill), theme.CHALK), s.label).toBeGreaterThanOrEqual(AA_TEXT)
+      // case and the #rgb form do not matter
+      expect(theme.noteInkFor(s.light.fill.toUpperCase(), 'dark'), s.label).toBe(theme.CHALK)
+    }
+    // what is no colour keeps the dark ink
+    expect(theme.noteInkFor('transparent', 'dark')).toBe(theme.CHALK)
+    expect(theme.noteInkFor('', 'dark')).toBe(theme.CHALK)
+  })
+})
