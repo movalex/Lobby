@@ -12,24 +12,37 @@
  *    `exact` (it paints, but never seeds a resume: its elements are not the server's copies any more);
  *  - `{epoch, clock, horizon}` of that copy, the ELEMENT_SCHEMA_VERSION and CONTRACTS_REV it was written under (a
  *    record under another revision is dropped, never translated: the lesson of the offline queue's q2: form), when
- *    it was saved, its size, and its convergence hash (canvas-schema hash.ts, the digest the room's test snapshot
- *    hashes to), checked when it is read: a record whose elements no longer hash to it is dropped.
- * Bounded: at most CACHE_MAX_BOARDS records and CACHE_MAX_BYTES in all (least recently saved go first); a board
- * larger than the whole budget is not kept.
+ *    it was saved, its size and element count, and the SHA-256 of its stored text, checked when it is read: a record
+ *    whose text no longer hashes to it is dropped.
+ * The elements are stored as one JSON text (the W6 review: a record of plain objects cost a whole-board deep copy,
+ * a scan, a canonical stringify and a structured clone per write, 0.7 s for 5,000 elements at CPU 4x): one
+ * stringify (a second, blanking, only when the text holds a URL), one hash, and a string IndexedDB stores as is.
+ * Bounded: at most CACHE_MAX_BOARDS records and CACHE_MAX_BYTES in all (least recently used go first: a record's
+ * last read for an open, or its save); a board larger than the whole budget is not kept.
  *
  * Never cached: name-only guests (the board session writes only after a welcome that says `guest: false`); a board
  * whose export policy is off for this person; a page opened with `?nocache=1`. Purged (`purge`): a FORBIDDEN or
  * NOT_FOUND close, the board GET answering 403/404, the event stream's access-lost, a trashed board, the export
  * policy turning off for this person; and every record of a user at their own Sign out (`purgeBoardCachesOf`, from
- * offline-idb.ts `createSignOutPurge`).
+ * offline-idb.ts `createSignOutPurge`). That Sign out holds in every tab of the browser (the W6 review): it leaves
+ * a mark (board-cache-db.ts `SignOutMarks`) that every session started before it obeys (`cacheWriteGate`: it
+ * writes nothing again), that the store's writes check (`write`'s `startedAt`), and under which a record saved
+ * before it is dropped, never shown (`verify`).
  *
  * Every IndexedDB call is guarded: no IndexedDB (a private window), a quota error or a broken record makes the
  * cache say "nothing here" and the board opens as before.
  *
- * The pure helpers (cacheElementsOf, cacheHash, sha256Hex, hasUrl) are node-safe; the store is browser-only.
+ * Known limits (the W6 review): a viewer's copy written while the export policy let them export stays on the device
+ * until a page of this browser learns the policy is off (an open of the board, or its event stream while open);
+ * the offline read (M6-4), which cannot ask, may show it for up to CACHE_OFFLINE_MAX_AGE_MS after the owner turned
+ * exporting off. A copy that had a URL blanked (a link, an address typed in a note) paints but never resumes, and the
+ * offline copy says its links are not kept. A warm open's socket names the cached clock in its hello like a
+ * reconnect, so the room's reconnect counters count it as one.
+ *
+ * The pure helpers (cacheJsonOf, cacheElementsOf, storedRecordOf, cacheRecordOf, sha256Hex, hasUrl) are node-safe;
+ * the store is browser-only.
  */
 import { redactTombstone } from '@draftroom/canvas-schema/elements'
-import { canonicalElementList, hashElements } from '@draftroom/canvas-schema/hash'
 import { CONTRACTS_REV, ELEMENT_SCHEMA_VERSION } from '@draftroom/canvas-schema/protocol'
 import { compareIndexThenId } from '../index-keys.ts'
 import type { SceneElement } from '../types.ts'
@@ -42,8 +55,11 @@ import {
   forgetPreloadedBoardCache,
   pageCacheConnection,
   pageSearch,
+  pageSignOutMarks,
   purgeBoardCachesOf,
   readRawRecord,
+  type SignOutMarks,
+  signedOutSince,
   takePreloadedBoardCache,
 } from './board-cache-db.ts'
 
@@ -54,6 +70,12 @@ export const CACHE_MAX_BOARDS = 20
 export const CACHE_MAX_BYTES = 50 * 1024 * 1024
 /** A session writes its board's record at most this often (and when the page is hidden or left). */
 export const CACHE_WRITE_MIN_MS = 60_000
+/**
+ * The first welcome after a cached paint that brought nothing new (the same epoch and clock) writes no record when
+ * the stored one is younger than this (the W6 review: a write is a whole-board clone, scan and hash); an older one
+ * is written again, so its time (the offline copy's "from <time>", the 7-day rule) stays near the truth.
+ */
+export const CACHE_UNCHANGED_REFRESH_MS = 24 * 60 * 60 * 1000
 /** M6-4: the oldest copy a member is shown offline. */
 export const CACHE_OFFLINE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 /**
@@ -81,13 +103,21 @@ export interface CachedBoard {
   readonly schema: number
   readonly rev: number
   readonly savedAt: number
+  /** the stored text's length */
   readonly bytes: number
-  /** hash.ts `hashElements(elements)`, as the room hashes its own copy */
+  readonly count: number
+  /** the SHA-256 (hex) of the stored text */
   readonly hash: string
   /** every element is the server's copy as it sent it (no URL blanked): only such a record resumes (M6-3) */
   readonly exact: boolean
   /** in (index, id) order, the order a scene is installed in */
   readonly elements: readonly SceneElement[]
+}
+
+/** The record as IndexedDB holds it: a CachedBoard whose elements are one JSON text. */
+export interface StoredBoard extends Omit<CachedBoard, 'elements'> {
+  /** the elements, in (index, id) order, as one JSON array */
+  readonly json: string
 }
 
 interface IndexEntry {
@@ -96,12 +126,22 @@ interface IndexEntry {
   boardId: string
   savedAt: number
   bytes: number
+  /** when the record was last read for an open (the LRU's "use"; absent: never since it was saved) */
+  usedAt?: number
 }
+
+/** The LRU's last use of a record: its last read for an open, or its save. */
+const lastUse = (e: IndexEntry): number => Math.max(e.savedAt, e.usedAt ?? Number.NEGATIVE_INFINITY)
 
 // ---- the stored form (pure) -----------------------------------------------------------------------------------
 
 /** A `data:`, `blob:` or `http(s)://` URL in a string. */
 const URL_PATTERN = /(?:\bdata:|\bblob:|https?:\/\/)/i
+/**
+ * The stored text's quick check: any such scheme anywhere, word boundary or not (a superset of URL_PATTERN's
+ * matches: in JSON text an escape such as `\n` puts a letter before `data:`, which URL_PATTERN's `\b` would miss).
+ */
+const URL_ANYWHERE = /data:|blob:|https?:\/\//i
 /** The same URLs as whole tokens (to the next white space), for blanking. */
 const URL_TOKENS = /(?:\bdata:|\bblob:|https?:\/\/)\S*/gi
 
@@ -114,60 +154,44 @@ export function hasUrl(value: unknown): boolean {
 }
 
 /**
- * `value` with every URL inside its strings blanked (a note's other words stay, a link field becomes ''), and
- * whether any was.
+ * The stored text of the core's confirmed copies: each tombstone in the server's redacted form (whatever content
+ * this tab kept under it), every live element as it is, no URL anywhere (a note's other words stay, a link field
+ * becomes ''), as one JSON array in (index, id) order. `exact`: nothing had to be blanked, so these are the server's
+ * copies exactly. One stringify; a second, blanking string by string, only when the text may hold a URL (only a
+ * string value can: no key or number has one).
  */
-function withoutUrls(value: unknown): { value: unknown; blanked: boolean } {
-  if (typeof value === 'string')
-    return URL_PATTERN.test(value)
-      ? { value: value.replace(URL_TOKENS, ''), blanked: true }
-      : { value, blanked: false }
-  if (Array.isArray(value)) {
-    let blanked = false
-    const out = value.map((v) => {
-      const r = withoutUrls(v)
-      blanked ||= r.blanked
-      return r.value
+export function cacheJsonOf(confirmed: Iterable<SceneElement>): {
+  json: string
+  exact: boolean
+  count: number
+} {
+  const bases: SceneElement[] = []
+  for (const el of confirmed)
+    bases.push(el.isDeleted === true ? (redactTombstone(el as never) as unknown as SceneElement) : el)
+  bases.sort(compareIndexThenId)
+  let json = JSON.stringify(bases)
+  let exact = true
+  if (URL_ANYWHERE.test(json))
+    json = JSON.stringify(bases, (_key, value: unknown) => {
+      if (typeof value !== 'string' || !URL_PATTERN.test(value)) return value
+      exact = false
+      return value.replace(URL_TOKENS, '')
     })
-    return { value: out, blanked }
-  }
-  if (value && typeof value === 'object') {
-    let blanked = false
-    const out: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(value)) {
-      const r = withoutUrls(v)
-      blanked ||= r.blanked
-      out[k] = r.value
-    }
-    return { value: out, blanked }
-  }
-  return { value, blanked: false }
+  return { json, exact, count: bases.length }
 }
 
-/**
- * The stored form of the core's confirmed copies: each tombstone in the server's redacted form (whatever content
- * this tab kept under it), every live element as a plain copy, no URL anywhere; in (index, id) order. `exact`:
- * nothing had to be blanked, so these are the server's copies exactly.
- */
+/** The stored form as elements (`cacheJsonOf`'s text, parsed). */
 export function cacheElementsOf(confirmed: Iterable<SceneElement>): {
   elements: SceneElement[]
   exact: boolean
 } {
-  let exact = true
-  const out: SceneElement[] = []
-  for (const el of confirmed) {
-    const base = el.isDeleted === true ? (redactTombstone(el as never) as unknown as SceneElement) : el
-    const r = withoutUrls(JSON.parse(JSON.stringify(base)))
-    if (r.blanked) exact = false
-    out.push(r.value as SceneElement)
-  }
-  out.sort(compareIndexThenId)
-  return { elements: out, exact }
+  const { json, exact } = cacheJsonOf(confirmed)
+  return { elements: JSON.parse(json) as SceneElement[], exact }
 }
 
 // SHA-256 (FIPS 180-4), synchronous: a record written in `pagehide` must start its IndexedDB write in that task,
-// so its hash cannot wait for WebCrypto. Its input is hash.ts's own (`canonicalElementList`), so the digest is
-// exactly `hashElements` (snapshot-cache.test.ts checks it), which the read verifies with.
+// so its hash cannot wait for WebCrypto; and the read checks with it too, so an http origin that is not localhost
+// (no crypto.subtle: the NAS rehearsal over the LAN) reads its records like any other.
 const K256 = new Uint32Array([
   0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98,
   0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
@@ -244,21 +268,16 @@ export function sha256Hex(text: string): string {
   return hex
 }
 
-/** hash.ts `hashElements(elements)`, computed synchronously. */
-export const cacheHash = (elements: Iterable<Readonly<Record<string, unknown>>>): string =>
-  sha256Hex(canonicalElementList(elements))
-
-/** The record a write stores (pure; null when the elements alone are over the whole budget). */
-export function cacheRecordOf(
+/** The record a write stores (pure; null when its text alone is over the whole budget). */
+export function storedRecordOf(
   boardId: string,
   uid: string,
   content: CacheContent,
   savedAt: number,
   maxBytes: number = CACHE_MAX_BYTES,
-): CachedBoard | null {
-  const { elements, exact } = cacheElementsOf(content.elements)
-  const bytes = JSON.stringify(elements).length
-  if (bytes > maxBytes) return null
+): StoredBoard | null {
+  const { json, exact, count } = cacheJsonOf(content.elements)
+  if (json.length > maxBytes) return null
   return {
     key: cacheKey(boardId, uid),
     boardId,
@@ -269,11 +288,37 @@ export function cacheRecordOf(
     schema: ELEMENT_SCHEMA_VERSION,
     rev: CONTRACTS_REV,
     savedAt,
-    bytes,
-    hash: cacheHash(elements),
+    bytes: json.length,
+    count,
+    hash: sha256Hex(json),
     exact,
-    elements,
+    json,
   }
+}
+
+/** A stored record as the board page uses it (its text parsed); null when the text is not its elements. */
+export function boardOfStored(r: StoredBoard): CachedBoard | null {
+  let elements: unknown
+  try {
+    elements = JSON.parse(r.json)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(elements) || elements.length !== r.count) return null
+  const { json: _json, ...meta } = r
+  return { ...meta, elements: elements as SceneElement[] }
+}
+
+/** The record a write would store, as the board page reads it back (pure; tests and the core's test helpers). */
+export function cacheRecordOf(
+  boardId: string,
+  uid: string,
+  content: CacheContent,
+  savedAt: number,
+  maxBytes: number = CACHE_MAX_BYTES,
+): CachedBoard | null {
+  const stored = storedRecordOf(boardId, uid, content, savedAt, maxBytes)
+  return stored ? boardOfStored(stored) : null
 }
 
 /**
@@ -291,9 +336,9 @@ export function cacheDroppedAtWelcome(
 }
 
 /** Whether a stored value is a record of this build's form for `boardId` and `uid` (anything else is dropped). */
-export function isCurrentRecord(r: unknown, boardId: string, uid: string): r is CachedBoard {
+export function isCurrentRecord(r: unknown, boardId: string, uid: string): r is StoredBoard {
   if (!r || typeof r !== 'object') return false
-  const x = r as Partial<CachedBoard>
+  const x = r as Partial<StoredBoard>
   return (
     x.key === cacheKey(boardId, uid) &&
     x.boardId === boardId &&
@@ -308,7 +353,8 @@ export function isCurrentRecord(r: unknown, boardId: string, uid: string): r is 
     typeof x.savedAt === 'number' &&
     typeof x.hash === 'string' &&
     typeof x.exact === 'boolean' &&
-    Array.isArray(x.elements)
+    typeof x.count === 'number' &&
+    typeof x.json === 'string'
   )
 }
 
@@ -319,8 +365,16 @@ export interface BoardCacheStore {
   read(boardId: string, uid: string): Promise<CachedBoard | null>
   /** checks a stored value read elsewhere (the route's early read): the record, or null (a bad one is dropped) */
   verify(raw: unknown, boardId: string, uid: string): Promise<CachedBoard | null>
-  /** stores the confirmed copy (its IndexedDB write starts in this call once the database is open); false: not kept */
-  write(boardId: string, uid: string, content: CacheContent): Promise<boolean>
+  /**
+   * stores the confirmed copy (its IndexedDB write starts in this call once the database is open); false: not kept.
+   * `startedAt`: when the writing session started; nothing is kept once `uid` signed out in this browser since.
+   */
+  write(
+    boardId: string,
+    uid: string,
+    content: CacheContent,
+    o?: { readonly startedAt?: number },
+  ): Promise<boolean>
   /** drops this user's record of the board */
   purge(boardId: string, uid: string): Promise<void>
   /** drops every record of this user; resolves with how many */
@@ -334,6 +388,8 @@ export interface BoardCacheOptions {
   /** the bounds (tests); default CACHE_MAX_BOARDS and CACHE_MAX_BYTES */
   readonly maxBoards?: number
   readonly maxBytes?: number
+  /** this browser's Sign out marks (default: the page's, board-cache-db.ts) */
+  readonly marks?: SignOutMarks
 }
 
 function request<T>(r: IDBRequest<T>): Promise<T> {
@@ -373,6 +429,7 @@ export function createBoardCacheStore(o: BoardCacheOptions = {}): BoardCacheStor
   const now = o.now ?? (() => Date.now())
   const maxBoards = o.maxBoards ?? CACHE_MAX_BOARDS
   const maxBytes = o.maxBytes ?? CACHE_MAX_BYTES
+  const marks = () => o.marks ?? pageSignOutMarks()
   const safely = async <T>(fallback: T, fn: (db: IDBDatabase) => Promise<T>): Promise<T> => {
     try {
       const db = await conn.get()
@@ -389,10 +446,13 @@ export function createBoardCacheStore(o: BoardCacheOptions = {}): BoardCacheStor
       }
     })
 
-  /** Keeps the newest records within CACHE_MAX_BOARDS and CACHE_MAX_BYTES (least recently saved go first). */
+  /**
+   * Keeps the most recently used records within CACHE_MAX_BOARDS and CACHE_MAX_BYTES (the least recently used go
+   * first: a record's last read for an open, or its save).
+   */
   const evict = async (db: IDBDatabase, keep: string) => {
     const all = await readIndex(db)
-    all.sort((a, b) => b.savedAt - a.savedAt || (a.key === keep ? -1 : b.key === keep ? 1 : 0))
+    all.sort((a, b) => lastUse(b) - lastUse(a) || (a.key === keep ? -1 : b.key === keep ? 1 : 0))
     let bytes = 0
     let kept = 0
     const drop: string[] = []
@@ -408,30 +468,73 @@ export function createBoardCacheStore(o: BoardCacheOptions = {}): BoardCacheStor
     if (drop.length) await remove(db, drop)
   }
 
+  /** A record read for an open counts as used (the LRU): its index entry says when, if the record is still there. */
+  const touch = (db: IDBDatabase, r: StoredBoard) =>
+    new Promise<void>((resolve, reject) => {
+      // (its own transaction, not writeTx: its second request is made from the first one's answer)
+      const t = db.transaction([CACHE_BOARDS, CACHE_INDEX], 'readwrite')
+      t.oncomplete = () => resolve()
+      t.onabort = () => reject(t.error ?? new Error('board cache touch aborted'))
+      t.onerror = () => reject(t.error ?? new Error('board cache touch failed'))
+      const g = t.objectStore(CACHE_BOARDS).get(r.key)
+      g.onsuccess = () => {
+        const cur = g.result as Partial<StoredBoard> | undefined
+        // (only the record this read checked: a purge or a newer write since keeps its own entry)
+        if (cur && cur.savedAt === r.savedAt)
+          t.objectStore(CACHE_INDEX).put({
+            key: r.key,
+            uid: r.uid,
+            boardId: r.boardId,
+            savedAt: r.savedAt,
+            bytes: r.bytes,
+            usedAt: now(),
+          } satisfies IndexEntry)
+      }
+    })
+
   const verify = async (raw: unknown, boardId: string, uid: string): Promise<CachedBoard | null> => {
     if (raw === undefined || raw === null) return null
     const key = cacheKey(boardId, uid)
     const drop = () => safely(undefined, (db) => remove(db, [key])).then(() => null)
     // another revision's form, or a broken record: dropped, never translated
     if (!isCurrentRecord(raw, boardId, uid)) return drop()
-    // the convergence hash (hash.ts) of what was stored: anything else is not the copy that was written
-    const digest = await hashElements(raw.elements).catch(() => null)
+    // saved before this person's latest Sign out in this browser (another tab wrote it back): never shown
+    const out = marks().at(uid)
+    if (out !== null && raw.savedAt <= out) return drop()
+    // the hash of what was stored: anything else is not the copy that was written. The synchronous digest (the
+    // write's own), which needs no WebCrypto: an http origin that is not localhost (the NAS rehearsal over the LAN)
+    // has no crypto.subtle, where hash.ts's WebCrypto digest threw and dropped every record (the W6 review)
+    let digest: string | null
+    try {
+      digest = sha256Hex(raw.json)
+    } catch {
+      digest = null
+    }
     if (digest !== raw.hash) return drop()
-    return raw
+    const board = boardOfStored(raw)
+    if (!board) return drop()
+    void safely(undefined, (db) => touch(db, raw)).catch(() => {})
+    return board
   }
 
   return {
     read: (boardId, uid) =>
       safely(null, async (db) => verify(await readRawRecord(db, cacheKey(boardId, uid)), boardId, uid)),
     verify: (raw, boardId, uid) => verify(raw, boardId, uid).catch(() => null),
-    write: (boardId, uid, content) => {
-      let record: CachedBoard | null
+    write: (boardId, uid, content, w) => {
+      const startedAt = w?.startedAt
+      /** the person signed out in this browser since the writing session started: nothing of theirs is kept */
+      const refused = () => startedAt !== undefined && signedOutSince(uid, startedAt, marks())
+      if (refused()) return Promise.resolve(false)
+      let record: StoredBoard | null
       try {
-        record = cacheRecordOf(boardId, uid, content, now(), maxBytes)
+        record = storedRecordOf(boardId, uid, content, now(), maxBytes)
       } catch {
         return Promise.resolve(false)
       }
       const put = async (db: IDBDatabase): Promise<boolean> => {
+        // (again once the database is open: a Sign out may have come in the meantime)
+        if (refused()) return false
         if (!record) {
           // over the whole budget: not kept (and an older copy of it is not left either)
           await remove(db, [cacheKey(boardId, uid)])
@@ -455,7 +558,49 @@ export function createBoardCacheStore(o: BoardCacheOptions = {}): BoardCacheStor
       safely(undefined, async (db) => {
         await remove(db, [cacheKey(boardId, uid)])
       }),
-    purgeUser: (uid) => purgeBoardCachesOf(uid, conn),
+    purgeUser: (uid) => purgeBoardCachesOf(uid, conn, marks(), now()),
+  }
+}
+
+/**
+ * The W6 review (M6-1): whether a board session may still write its person's copy. It starts with the session; once
+ * `uid` signs out in this browser (in this tab or any other, now or before `open()` is asked) it is shut for good,
+ * and `onSignedOut` is told once (when the Sign out is heard: the session stops its writes and drops its board's
+ * record, in case a write of its own got past the purge).
+ */
+export interface CacheWriteGate {
+  readonly startedAt: number
+  /** false once `uid` signed out in this browser since `startedAt` */
+  open(): boolean
+  /** stops listening */
+  close(): void
+}
+
+export function cacheWriteGate(
+  uid: string,
+  o: { readonly marks?: SignOutMarks; readonly now?: () => number; readonly onSignedOut?: () => void } = {},
+): CacheWriteGate {
+  const marks = o.marks ?? pageSignOutMarks()
+  const startedAt = (o.now ?? Date.now)()
+  let shut = false
+  const shutNow = () => {
+    if (shut) return
+    shut = true
+    try {
+      o.onSignedOut?.()
+    } catch {}
+  }
+  const off = marks.subscribe((who, at) => {
+    if (who === uid && at >= startedAt) shutNow()
+  })
+  return {
+    startedAt,
+    open() {
+      if (shut) return false
+      if (signedOutSince(uid, startedAt, marks)) shutNow()
+      return !shut
+    },
+    close: () => off(),
   }
 }
 
@@ -487,12 +632,31 @@ export interface CacheRead {
 
 const reads = new Map<string, CacheRead>()
 
+/** A read under way for `uid` shows nothing (an access loss, a Sign out). */
+function cancelRead(r: CacheRead): void {
+  r.cancelled = true
+  r.value = null
+  reads.delete(cacheKey(r.boardId, r.uid))
+}
+
+let readsWatched: SignOutMarks | null = null
+/** A Sign out heard from any tab cancels this page's reads of that person's copies. */
+function watchReads(): void {
+  const marks = pageSignOutMarks()
+  if (readsWatched === marks) return
+  readsWatched = marks
+  marks.subscribe((uid) => {
+    for (const r of [...reads.values()]) if (r.uid === uid) cancelRead(r)
+  })
+}
+
 /**
  * The board page takes this open's read once (the route's early read, board-cache-db.ts `preloadBoardCache`, or a
  * read started now), checked. Null with `?nocache=1`. A later open of the board reads again.
  */
 export function takeBoardCache(boardId: string, uid: string): CacheRead | null {
   if (cacheDisabledBy(pageSearch())) return null
+  watchReads()
   const key = cacheKey(boardId, uid)
   const early = takePreloadedBoardCache(boardId, uid)
   const store = boardCache()
@@ -519,10 +683,6 @@ export function purgeBoardCache(boardId: string, uid: string): Promise<void> {
   const key = cacheKey(boardId, uid)
   forgetPreloadedBoardCache(boardId, uid)
   const r = reads.get(key)
-  if (r) {
-    r.cancelled = true
-    r.value = null
-    reads.delete(key)
-  }
+  if (r) cancelRead(r)
   return boardCache().purge(boardId, uid)
 }

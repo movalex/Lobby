@@ -31,7 +31,7 @@ import { useSession } from '../../auth/session.tsx'
 import { type BoardPageModule, loadBoardCode, preloadBoardOpen } from '../../lib/prefetch-board.ts'
 import { recoverChunk, reloadWhenOnline, staleChunks } from '../../lib/stale-chunk.ts'
 import { MessageScreen } from '../../ui/screens.tsx'
-import { preloadBoardCache } from '../sync/adapter/board-cache-db.ts'
+import { forgetPreloadedBoardCache, preloadBoardCache } from '../sync/adapter/board-cache-db.ts'
 import { BoardSkeleton } from './BoardSkeleton.tsx'
 
 /** What a board shows while a stale board chunk reloads the page (or, after a reload loop, asks to). */
@@ -104,6 +104,14 @@ export default function ExcalidrawBoardRoute({ boardId }: { boardId: string }) {
     cacheRead.current = `${boardId}|${uid}`
     preloadBoardCache(boardId, uid)
   }
+  // the W6 review: an early read the board page never took (the route left before the board opened) is let go,
+  // not kept in memory with its whole record (a no-op once taken; the effect's own call restarts a read React
+  // StrictMode's extra cleanup let go of, and is a no-op otherwise)
+  useEffect(() => {
+    if (page !== 'lobby' || !uid) return
+    preloadBoardCache(boardId, uid)
+    return () => forgetPreloadedBoardCache(boardId, uid)
+  }, [page, boardId, uid])
   const workspaces = state.status === 'signed-in' ? state.me.workspaces : undefined
   return (
     <Suspense fallback={<BoardSkeleton boardId={boardId} workspaces={workspaces} />}>

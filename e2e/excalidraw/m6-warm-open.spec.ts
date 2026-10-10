@@ -8,6 +8,8 @@
 //        reset, and its map hashes equal to the stored board.
 //  M6-4: offline (context.setOffline), a member sees their copy read-only with "Offline · showing your copy from
 //        <time>"; a guest gets the screen they got before; a copy older than 7 days is not shown.
+//  The W6 review: a Sign out in one tab stays a Sign out in the browser's other tabs (none of their writes puts the
+//        copy back); a warm open that brought nothing new writes no copy; a hidden tab writes at most once a minute.
 //
 // Every request stays on Lobby's own origin (the e2e network assertion). The cache record is read here only for
 // its metadata (clock, epoch, savedAt, hash, count): never its elements' content.
@@ -66,7 +68,7 @@ const cacheRecord = (page: Page, board: string, uid: string): Promise<CacheRecor
                   savedAt: number
                   hash: string
                   exact: boolean
-                  elements: unknown[]
+                  count: number
                 }
               | undefined
             db.close()
@@ -78,7 +80,7 @@ const cacheRecord = (page: Page, board: string, uid: string): Promise<CacheRecor
                     savedAt: r.savedAt,
                     hash: r.hash,
                     exact: r.exact,
-                    count: r.elements.length,
+                    count: r.count,
                   }
                 : null,
             )
@@ -130,7 +132,7 @@ const cacheState = (page: Page) =>
       window as unknown as {
         __lobbyBoard?: {
           session: {
-            cacheInfo: { painted: boolean; resume: boolean; writes: number }
+            cacheInfo: { painted: boolean; resume: boolean; writes: number; lastWriteMs: number | null }
             snapshot: {
               readonly: boolean
               role: string
@@ -505,6 +507,96 @@ test("M6-1: the export policy turning off for a viewer, and a trashed board, pur
   expect(trash.status(), await trash.text()).toBe(200)
   await expect(noAccessScreen(b.page)).toBeVisible({ timeout: 15_000 })
   await expect.poll(() => cacheRecord(b.page, board, bob.id)).toBeNull()
+})
+
+// ---- the W6 review: Sign out across tabs, and the cost of writes ---------------------------------------------------
+
+/** The account menu's Sign out (on these stacks the development sign-in's badge), as sign-out-purge.spec.ts. */
+async function signOut(page: Page): Promise<void> {
+  await page.getByTestId('dev-identity-badge').click({ timeout: 15_000 })
+  await page.getByTestId('sign-out').click({ timeout: 15_000 })
+  await expect(page).toHaveURL(/\/signin/)
+}
+
+/** The page is hidden (a tab switch, a phone switching apps), as the browser reports it; `false` shows it again. */
+const setHidden = (page: Page, hidden: boolean) =>
+  page.evaluate((h) => {
+    if (h) Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+    else delete (document as unknown as { visibilityState?: string }).visibilityState
+    document.dispatchEvent(new Event('visibilitychange'))
+  }, hidden)
+
+const cacheWrites = async (page: Page): Promise<number> => (await cacheState(page))?.writes ?? -1
+
+test("the W6 review: a Sign out in one tab stays a Sign out in the browser's other tabs (no write puts the copy back)", async ({
+  canvasSession,
+  board,
+  users,
+}) => {
+  const alice = await users.get('alice')
+  const a = await canvasSession('alice')
+  const foreign = foreignRequests(a.page)
+  await seedBoard(a.page)
+  // tab B: the same person, the same browser, the same board, with an acknowledged edit not yet written to the cache
+  const b = await a.context.newPage()
+  const foreignB = foreignRequests(b)
+  await b.goto(`/b/${board}`)
+  await waitForCanvas(b)
+  expect(await flushBoardCache(b)).toBe(true)
+  await settled(b, createItem(b, 'rectangle', { x: 100, y: 300, width: 120, height: 80 }))
+  expect(await cacheRecord(b, board, alice.id)).not.toBeNull()
+
+  // tab A: her own Sign out deletes her copy
+  await signOut(a.page)
+  await expect.poll(() => cacheRecord(a.page, board, alice.id), { timeout: 10_000 }).toBeNull()
+  // tab B is hidden, then leaves (its hidden-page and pagehide writes): the copy stays gone
+  await setHidden(b, true)
+  await b.goto('/signin')
+  await new Promise((r) => setTimeout(r, 3_000))
+  expect(await cacheRecord(a.page, board, alice.id)).toBeNull()
+  expect(await cacheRecord(b, board, alice.id)).toBeNull()
+
+  // she signs in again: a session started after the Sign out keeps her copy as usual
+  await signInContext(a.context, alice.handle, alice.name)
+  await a.page.goto(`/b/${board}`)
+  await waitForCanvas(a.page)
+  expect(await flushBoardCache(a.page)).toBe(true)
+  expect(await cacheRecord(a.page, board, alice.id)).not.toBeNull()
+  expect(foreign).toEqual([])
+  expect(foreignB).toEqual([])
+})
+
+test('the W6 review: a warm open that brought nothing new writes no copy; a hidden tab writes at most once a minute, the page going at once', async ({
+  canvasSession,
+  board,
+}) => {
+  const a = await canvasSession('alice')
+  await seedBoard(a.page)
+  expect(await flushBoardCache(a.page)).toBe(true)
+  const record = await cacheRecord(a.page, board, a.id)
+  expect(record).not.toBeNull()
+
+  // nothing changed while the page was away: the warm open's welcome is the stored copy's point, so no write
+  await a.page.reload()
+  await waitForCanvas(a.page)
+  expect(await cacheState(a.page)).toMatchObject({ painted: true, resumeOutcome: 'catch-up', welcomed: true })
+  // (an idle write would have run by now: its idle callback's timeout is 5 s)
+  await new Promise((r) => setTimeout(r, 6_000))
+  expect(await cacheWrites(a.page)).toBe(0)
+  expect((await cacheRecord(a.page, board, a.id))?.savedAt).toBe(record?.savedAt)
+
+  // an edit, right after a write: hiding the tab writes nothing (the minute is not up), the page going writes it
+  expect(await flushBoardCache(a.page)).toBe(true)
+  const flushed = await cacheWrites(a.page)
+  await settled(a.page, createItem(a.page, 'rectangle', { x: 100, y: 300, width: 120, height: 80 }))
+  await setHidden(a.page, true)
+  expect(await cacheWrites(a.page)).toBe(flushed)
+  await setHidden(a.page, false)
+  await a.page.evaluate(() => dispatchEvent(new Event('pagehide')))
+  expect(await cacheWrites(a.page)).toBe(flushed + 1)
+  await expect
+    .poll(async () => (await cacheRecord(a.page, board, a.id))?.count)
+    .toBe((record?.count ?? 0) + 1)
 })
 
 // ---- M6-4 -----------------------------------------------------------------------------------------------------------

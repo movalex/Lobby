@@ -59,7 +59,7 @@ describe('the board cache against the real sync server', () => {
     const record = cacheRecordOf(b, 'alice', content, Date.now())
     if (!record) throw new Error('over budget')
     expect(record.exact).toBe(true)
-    expect(record.hash).toBe(await hashElements((await st.snapshot(b)).elements))
+    expect(await hashElements(record.elements)).toBe(await hashElements((await st.snapshot(b)).elements))
     await a.close()
 
     // bob changes the board while alice's page is closed: a move, a delete, a create

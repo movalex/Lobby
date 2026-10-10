@@ -59,10 +59,13 @@ import { type GuestQueue, guestOfflineQueue } from '../sync/adapter/offline-gues
 import { createIdbOfflineStore, type IdbOfflineStore, tabId } from '../sync/adapter/offline-idb.ts'
 import {
   boardCache,
+  CACHE_UNCHANGED_REFRESH_MS,
   CACHE_WRITE_MIN_MS,
   type CachedBoard,
   type CacheRead,
+  type CacheWriteGate,
   cacheDroppedAtWelcome,
+  cacheWriteGate,
   purgeBoardCache,
   RESUME_FROM_CACHE,
 } from '../sync/adapter/snapshot-cache.ts'
@@ -107,7 +110,7 @@ export interface LobbyBoardSnapshot {
    * M6-2 (wave M): the canvas shows this device's last copy of the board (read-only: `readonly` and the viewer's
    * interaction), until the first welcome replaces it; when that copy was saved. Null otherwise.
    */
-  readonly cached: { readonly savedAt: number } | null
+  readonly cached: { readonly savedAt: number; readonly exact: boolean } | null
 }
 
 export interface NoticeSink {
@@ -198,8 +201,15 @@ export class LobbyBoardSession {
   // ---- M6 (wave M): the board cache (adapter/snapshot-cache.ts) --------------------------------------------
   /** the cached copy this session painted (until the first welcome replaces it) */
   private cacheShown: CachedBoard | null = null
-  /** never read or written again in this session: `?nocache`, a guest, an access loss */
+  /** never read or written again in this session: `?nocache`, a guest, an access loss, a Sign out (any tab) */
   private cacheOff: boolean
+  /**
+   * the W6 review: shut for good once this person signs out in this browser, in this tab or any other (a Sign out
+   * elsewhere must not be undone by this session's next write); null with no cache
+   */
+  private readonly cacheGate: CacheWriteGate | null
+  /** the first confirmed copy after a cached paint was checked against it (written only when it moved on) */
+  private cacheFirstChecked = false
   /** the confirmed copy moved on since the last write */
   private cacheDirty = false
   private cacheWrittenAt = Number.NEGATIVE_INFINITY
@@ -215,13 +225,23 @@ export class LobbyBoardSession {
     savedAt: number | null
     resume: boolean
     writes: number
-  } = { painted: false, paintedAt: null, savedAt: null, resume: false, writes: 0 }
+    /** the last write's main-thread time (ms; the record is built in the write's call), for the perf spec */
+    lastWriteMs: number | null
+  } = { painted: false, paintedAt: null, savedAt: null, resume: false, writes: 0, lastWriteMs: null }
 
   constructor(o: LobbyBoardSessionOptions) {
     this.o = o
     this.tab = tabId()
     this.ticketRole = o.first.role
     this.cacheOff = !o.cache
+    this.cacheGate = o.cache
+      ? cacheWriteGate(o.first.user.id, { onSignedOut: () => this.cacheSignedOut() })
+      : null
+    if (this.cacheGate) {
+      const gate = this.cacheGate
+      this.detach.push(() => gate.close())
+      if (!gate.open()) this.cacheOff = true
+    }
     let storage: Storage | null = null
     try {
       storage = globalThis.localStorage ?? null
@@ -548,6 +568,12 @@ export class LobbyBoardSession {
     } else if (e.kind === 'refit') {
       this.refit(e.id, e.dx, e.dy)
     } else if (e.kind === 'confirmed') {
+      // the first welcome after a cached paint that brought nothing new (same epoch and clock: the stored copy is
+      // already this one): no write (the W6 review: each write is a whole-board clone, scan and hash)
+      if (this.cachedCopyCurrent()) {
+        this.cacheWrittenAt = Date.now()
+        return
+      }
       // M6-1: the confirmed copy moved on: written in idle time, at most once a minute (and when the page goes)
       this.cacheDirty = true
       this.scheduleCacheWrite()
@@ -571,7 +597,7 @@ export class LobbyBoardSession {
    * also seeds the resume (RESUME_FROM_CACHE).
    */
   private paintFromCache(undo: UndoController): boolean {
-    if (this.cacheOff) return false
+    if (this.cacheOff || !this.cacheGate?.open()) return false
     const rec = this.o.cache && !this.o.cache.cancelled ? this.o.cache.value : undefined
     if (!rec) return false
     // never for a name-only guest (none should exist: the session never writes one for them)
@@ -597,8 +623,38 @@ export class LobbyBoardSession {
     try {
       performance.mark('lobby.cachedPaint')
     } catch {}
-    this.set({ cached: { savedAt: rec.savedAt }, readonly: true, role: 'viewer' })
+    this.set({ cached: { savedAt: rec.savedAt, exact: rec.exact }, readonly: true, role: 'viewer' })
     return true
+  }
+
+  /**
+   * Once, at the first confirmed copy after a cached paint (the welcome's, emitted before the welcome event): whether
+   * it is the painted copy's own point (same epoch and clock: the catch-up brought no row), saved recently enough
+   * (CACHE_UNCHANGED_REFRESH_MS) that its time stays honest for the offline copy.
+   */
+  private cachedCopyCurrent(): boolean {
+    const shown = this.cacheShown
+    if (!shown || this.cacheFirstChecked) return false
+    this.cacheFirstChecked = true
+    const c = this.core.cacheContent()
+    return (
+      !!c &&
+      c.epoch === shown.epoch &&
+      c.clock === shown.clock &&
+      Date.now() - shown.savedAt < CACHE_UNCHANGED_REFRESH_MS
+    )
+  }
+
+  /**
+   * The W6 review (M6-1): this person signed out in this browser (here or in another tab), so nothing of theirs is
+   * written again by this session; and its board's record goes, in case a write of this session got past the
+   * Sign out's purge (the purge has already deleted the rest).
+   */
+  private cacheSignedOut(): void {
+    this.cacheOff = true
+    this.cacheDirty = false
+    this.cancelCacheWrite()
+    void purgeBoardCache(this.o.boardId, this.o.first.user.id)
   }
 
   /** This person's copy of the board goes, and nothing is read or written again in this session. */
@@ -616,6 +672,8 @@ export class LobbyBoardSession {
    */
   private cacheWritable(): boolean {
     if (this.cacheOff || this.guest || this.welcomedGuest !== false) return false
+    // a Sign out of this person in this browser since this session started (any tab, even one not heard of yet)
+    if (!this.cacheGate?.open()) return false
     const can = exportStateOf(this.o.boardId).canExport.get()
     if (can === false) return false
     if (can === null) return this.ticketRole === 'owner' || this.ticketRole === 'editor'
@@ -652,16 +710,26 @@ export class LobbyBoardSession {
     }, wait)
   }
 
-  /** Writes the confirmed copy now if it moved on and may be kept (the page's pagehide, a hidden page, dispose). */
-  private writeCacheNow(): boolean {
+  /**
+   * Writes the confirmed copy now if it moved on and may be kept: the page's pagehide and dispose (the page goes:
+   * now, whatever the minute) and an idle write; a hidden page (`throttled`: the W6 review) only when the last
+   * write is CACHE_WRITE_MIN_MS old, else the idle write already scheduled does it.
+   */
+  private writeCacheNow(o: { readonly throttled?: boolean } = {}): boolean {
     if (!this.cacheDirty || !this.cacheWritable()) return false
+    if (o.throttled && Date.now() - this.cacheWrittenAt < CACHE_WRITE_MIN_MS) return false
     const content = this.core.cacheContent()
     if (!content) return false
     this.cacheDirty = false
     this.cacheWrittenAt = Date.now()
     this.cancelCacheWrite()
     this.cacheInfo.writes++
-    void boardCache().write(this.o.boardId, this.o.first.user.id, content)
+    const t0 = typeof performance !== 'undefined' ? performance.now() : 0
+    void boardCache().write(this.o.boardId, this.o.first.user.id, content, {
+      startedAt: this.cacheGate?.startedAt,
+    })
+    // (the write's main-thread part: the record is built in the call)
+    if (t0) this.cacheInfo.lastWriteMs = performance.now() - t0
     return true
   }
 
@@ -674,7 +742,9 @@ export class LobbyBoardSession {
     this.cacheWrittenAt = Date.now()
     this.cancelCacheWrite()
     this.cacheInfo.writes++
-    return boardCache().write(this.o.boardId, this.o.first.user.id, content)
+    return boardCache().write(this.o.boardId, this.o.first.user.id, content, {
+      startedAt: this.cacheGate?.startedAt,
+    })
   }
 
   private afterMessage(m: ServerMessage): void {
@@ -1026,7 +1096,10 @@ export class LobbyBoardSession {
       this.writeCacheNow()
     }
     const onHidden = () => {
-      if (document.visibilityState === 'hidden') persist()
+      if (document.visibilityState !== 'hidden') return
+      this.core.persistNow()
+      // (a tab switch is not the page going: at most once a minute, as the idle writes; pagehide writes at once)
+      this.writeCacheNow({ throttled: true })
     }
     window.addEventListener('pagehide', persist)
     document.addEventListener('visibilitychange', onHidden)
