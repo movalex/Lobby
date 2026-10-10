@@ -1,7 +1,7 @@
 // Wave M (M7-1, CAP-SYNC-RECHECK), through the real server process: the periodic access round is ONE
 // POST /internal/access-many per round (no GET per pair), and it still closes a revoked person (4099 FORBIDDEN)
 // and an ended sign-in (4099 NOT_AUTHENTICATED) within a round, and nobody else. The stale pair: against an api
-// from before wave M (the 4e4a549 api has no such route: its 404), the round falls back to the per-pair route and
+// from before wave M (the 4e4a549 api has no such route: its web-Origin check answers the POST 403), the round falls back to the per-pair route and
 // still revokes, and the batch is not asked again within the hour. The unit tests are src/access-batch.test.ts.
 
 import { describe, expect, it } from 'vitest'
@@ -79,10 +79,10 @@ describe('M7-1: the batched access round in the real server', () => {
   })
 })
 
-describe('stale pair: this sync against an api from before wave M (404 on the batch route)', () => {
+describe('stale pair: this sync against an api from before wave M (403 on the batch route)', () => {
   it('falls back to the per-pair route for the round and still revokes; the batch is probed once, not every round', async () => {
     const st = await h.stack({ env: { ACCESS_RECHECK_MS: '200' } })
-    expect(st.api.accessMany).toBe(false) // the fake answers the batch route 404, as the 4e4a549 api does
+    expect(st.api.accessMany).toBe(false) // the fake answers the batch route 403, as the 4e4a549 api does
     const b = newBoardId()
     st.api.setRole(b, ALICE, 'editor')
     st.api.setRole(b, BOB, 'editor')

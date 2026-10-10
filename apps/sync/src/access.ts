@@ -31,7 +31,9 @@
 //  - fail open: a batch the api cannot answer (timeout, 5xx, a malformed answer) keeps every session of the round,
 //    and is logged once, without ids;
 //  - a pair whose ids the contract would refuse (not `usr_…` ids: tests, dev) goes per pair, as before.
-// Downgrade: an api without the route (before wave M) answers 404; that round's pairs are checked per pair, and
+// Downgrade: an api without the route (before wave M) does not answer it with 404 but with 403 FORBIDDEN "Cross-
+// origin request refused.": its web-Origin (CSRF) hook runs before its not-found answer, and this server-to-server
+// POST carries no Origin. Either status means "no batch route"; that round's pairs are checked per pair, and
 // later rounds use the per-pair route until BATCH_REPROBE_MS has passed (then the batch is tried again). The
 // interval is jittered by ±ACCESS_JITTER so the round never lands at the same instant as everything else.
 // The monitor reports whether its last round reached the api (`lastRound`, the deep health check's `api`).
@@ -98,7 +100,10 @@ export interface AccessPair {
 }
 
 export class AccessUnavailableError extends Error {}
-/** The api answered the batch route 404: it predates it (the per-pair route still works). */
+/**
+ * The api has no batch route: it answered 404, or the 403 its web-Origin check gives an Origin-less POST to a
+ * route it does not know (every api before wave M). The per-pair route still works.
+ */
 export class AccessBatchUnsupportedError extends Error {}
 
 export interface ApiAccessClientOptions {
@@ -178,9 +183,10 @@ export function createApiAccessClient(opts: ApiAccessClientOptions): AccessClien
       const name = (e as Error)?.name
       throw new AccessUnavailableError(name === 'TimeoutError' ? 'timed out' : 'unreachable')
     }
-    if (res.status === 404) {
+    // an api from before wave M: 404, or (the real one) 403 from its web-Origin check, which runs before its 404
+    if (res.status === 404 || res.status === 403) {
       await res.body?.cancel()
-      throw new AccessBatchUnsupportedError('HTTP 404')
+      throw new AccessBatchUnsupportedError(`HTTP ${res.status}`)
     }
     if (res.status !== 200) {
       await res.body?.cancel()

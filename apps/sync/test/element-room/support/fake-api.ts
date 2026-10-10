@@ -5,7 +5,8 @@
 //
 // Wave M (M7-1): POST /internal/access-many, the batched re-check, answers only with `accessMany` on (from the
 // same roles and sign-in times; a pair without a role makes the whole batch a 500, "cannot tell", as the
-// per-pair route's 404 does for it). Off (the default) it answers 404, as an api from before wave M does.
+// per-pair route's 404 does for it). Off (the default) it answers 403 "Cross-origin request refused.", exactly what
+// an api from before wave M answers the sync's Origin-less POST (its CSRF hook runs before its 404).
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -31,7 +32,7 @@ export interface ElementFakeApi {
    * null for none). Never set: the answer has no such field (an api from before J3).
    */
   setSignedInSince(userId: string, since: number | null): void
-  /** M7-1: answer POST /internal/access-many (default false: 404, an api from before wave M) */
+  /** M7-1: answer POST /internal/access-many (default false: 403, as an api from before wave M does) */
   accessMany: boolean
   /** every GET /internal/access, as `board/user` */
   readonly accessCalls: string[]
@@ -63,7 +64,10 @@ export async function startElementFakeApi(secret = TEST_INTERNAL_SECRET): Promis
       req.on('end', () => {
         const pairs = (JSON.parse(body) as { pairs?: { boardId: string; userId: string }[] }).pairs ?? []
         api.accessManyCalls.push(pairs.map((p) => `${p.boardId}/${p.userId}`))
-        if (!api.accessMany) return json(res, 404, { error: { code: 'NOT_FOUND', message: 'Not found.' } })
+        // as the real api from before wave M answers it: its web-Origin check refuses an Origin-less POST to a
+        // route it does not know before its 404 (apps/api/src/app.ts)
+        if (!api.accessMany)
+          return json(res, 403, { error: { code: 'FORBIDDEN', message: 'Cross-origin request refused.' } })
         if (pairs.some((p) => !roles.has(`${p.boardId}\n${p.userId}`)))
           return json(res, 500, { error: { code: 'INTERNAL' } })
         const users = [...new Set(pairs.map((p) => p.userId))]

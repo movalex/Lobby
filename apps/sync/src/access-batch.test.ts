@@ -143,11 +143,13 @@ describe('the batched access client (POST /internal/access-many)', () => {
     expect(seen).toEqual([{ method: 'POST', path: '/internal/access-many', secret: SECRET, body: { pairs } }])
   })
 
-  it('a 404 is an older api (AccessBatchUnsupportedError); anything else but a well-formed 200 is "cannot tell"', async () => {
+  it('a 404, or the 403 an older api’s web-Origin check gives, is "no batch route"; anything else but a well-formed 200 is "cannot tell"', async () => {
     const pairs = [{ boardId: board(1), userId: usr(1) }]
     const ok = { results: [{ ...pairs[0], role: 'viewer' }], signedInSince: {} }
     const answers: Array<[number, unknown]> = [
       [404, { error: { code: 'NOT_FOUND' } }],
+      // what an api from before wave M really answers this Origin-less POST (its CSRF hook runs before its 404)
+      [403, { error: { code: 'FORBIDDEN', message: 'Cross-origin request refused.' } }],
       [401, { error: { code: 'NOT_AUTHENTICATED' } }],
       [500, { error: { code: 'INTERNAL' } }],
       [204, null],
@@ -167,7 +169,8 @@ describe('the batched access client (POST /internal/access-many)', () => {
     const client = createApiAccessClient({ baseUrl: base, internalSecret: SECRET })
     const many = client.getAccessMany as NonNullable<AccessClient['getAccessMany']>
     await expect(many(pairs)).rejects.toThrow(AccessBatchUnsupportedError)
-    for (let k = 1; k < answers.length - 1; k++)
+    await expect(many(pairs)).rejects.toThrow(AccessBatchUnsupportedError)
+    for (let k = 2; k < answers.length - 1; k++)
       await expect(many(pairs), JSON.stringify(answers[k])).rejects.toThrow(AccessUnavailableError)
     expect(await many(pairs)).toEqual([{ role: 'viewer' }])
   })
@@ -363,12 +366,12 @@ describe('an older api (stale pair: this sync against the 4e4a549 api)', () => {
     expect(m.lastRound()).toMatchObject({ batched: true })
   })
 
-  it('through the real HTTP client: the api answers 404 on the batch route and 200 per pair', async () => {
+  it('through the real HTTP client: the api answers the batch route as the 4e4a549 api does (403 Cross-origin) and 200 per pair', async () => {
     const calls: string[] = []
     const base = await api((req, res) => {
       calls.push(`${req.method} ${new URL(req.url ?? '/', 'http://x').pathname}`)
       if (req.method === 'POST')
-        return json(res, 404, { error: { code: 'NOT_FOUND', message: 'Not found.' } })
+        return json(res, 403, { error: { code: 'FORBIDDEN', message: 'Cross-origin request refused.' } })
       const u = new URL(req.url ?? '/', 'http://x').searchParams.get('userId')
       json(res, 200, { role: u === usr(2) ? null : 'editor', signedInSince: 1 })
     })
