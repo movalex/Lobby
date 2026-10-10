@@ -241,6 +241,9 @@ function darkFillOf(fill: string): string | null {
   return normalizeHex(mapped)?.rgb ?? null
 }
 
+/** noteInkFor's dark answers so far, by stored fill (the answer is fixed: Lobby's table and the engine's filter). */
+const DARK_INK = new Map<string, string>()
+
 /**
  * The ink a note's label is drawn in on a note of `fill` (a stored, light colour), in `theme` (wave M, M1-5: W1's,
  * read by W2's dark time-travel preview). Frozen signature. Light: Lobby's INK (every note colour is light). Dark:
@@ -250,9 +253,15 @@ function darkFillOf(fill: string): string | null {
  */
 export function noteInkFor(fill: string, theme: 'light' | 'dark'): string {
   if (theme === 'light') return INK
-  const drawn = typeof fill === 'string' ? darkFillOf(fill) : null
-  if (!drawn) return CHALK
-  return contrastRatio(drawn, INK) > contrastRatio(drawn, CHALK) ? INK : CHALK
+  if (typeof fill !== 'string') return CHALK
+  const known = DARK_INK.get(fill)
+  if (known) return known
+  const drawn = darkFillOf(fill)
+  const ink = drawn && contrastRatio(drawn, INK) > contrastRatio(drawn, CHALK) ? INK : CHALK
+  // asked for every note on every frame the engine draws: remembered per fill (a board has few)
+  if (DARK_INK.size >= 512) DARK_INK.clear()
+  DARK_INK.set(fill, ink)
+  return ink
 }
 
 /** What the watch reads of an element the engine is about to draw. */
