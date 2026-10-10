@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   intersectionArea,
+  MIN_SHOWN_HEIGHT,
   OBSTACLE_IDS,
   obstacleRects,
   type PlacePopoverInput,
@@ -89,7 +90,7 @@ const covers = (p: { x: number; y: number }, size: { width: number; height: numb
 
 describe('placePopover', () => {
   it('free space: below, centred on the anchor, gap 8', () => {
-    expect(placePopover(base())).toEqual({ x: 550, y: 348, side: 'below', maxHeight: 900 - 8 - 348 })
+    expect(placePopover(base())).toEqual({ x: 550, y: 348, side: 'below', maxHeight: 900 - 8 - 348, fits: true })
   })
 
   it('takes the preferred side first, as a string or a list', () => {
@@ -103,6 +104,7 @@ describe('placePopover', () => {
     const anchor = { x: 680, y: 700, width: 80, height: 40 }
     const p = placePopover(base({ anchor, obstacles: [TOOLBAR] }))
     expect(p.side).toBe('above')
+    expect(p.fits).toBe(true)
     expect(covers(p, { width: 200, height: 160 }, TOOLBAR)).toBe(false)
   })
 
@@ -125,6 +127,8 @@ describe('placePopover', () => {
     expect(p.side).toBe('below')
     expect(p.y).toBe(608)
     expect(p.maxHeight).toBe(wide.y - 8 - 608)
+    // clipped, but clear of everything: not a fit (the caller knows the popover scrolls)
+    expect(p.fits).toBe(false)
     expect(covers(p, { width: 200, height: p.maxHeight }, wide)).toBe(false)
     // with a column free of the toolbar, it slides there and gets the room down to the viewport's margin
     const slid = placePopover(base({ anchor, size: tall, obstacles: [TOOLBAR, bar] }))
@@ -145,8 +149,42 @@ describe('placePopover', () => {
     for (let i = 0; i < 10; i++) expect(placePopover(input)).toEqual(p)
     // whatever the obstacles' order
     expect(placePopover({ ...input, obstacles: [...walls].reverse() })).toEqual(p)
-    expect(['above', 'below', 'left', 'right']).toContain(p.side)
-    expect(p.maxHeight).toBeGreaterThanOrEqual(0)
+    // nothing fits, and it says so; the answer is never a sliver: it keeps its natural height (120, the minimum)
+    // just below the anchor (the first side in the default order among the equally covered places)
+    expect(p).toEqual({ x: 95, y: 428, side: 'below', maxHeight: 120, fits: false })
+  })
+
+  it('nothing fits on a phone with the style panel open: a usable height over the least chrome, never a 4 px strip', () => {
+    // 390x844, the bottom toolbar at y 780, the style panel open on the left, a selection just above the toolbar
+    const toolbar = { x: 20, y: 780, width: 350, height: 56 }
+    const panel = { x: 0, y: 60, width: 240, height: 640 }
+    const input = base({
+      anchor: { x: 100, y: 700, width: 200, height: 60 },
+      viewport: PHONE,
+      size: { width: 280, height: 300 },
+      obstacles: [toolbar, panel],
+    })
+    const p = placePopover(input)
+    // below has 4 px before the toolbar (the foundation's first version answered below, maxHeight 4); above, at the
+    // least height, covers less (part of the panel's foot) than below at that height (the toolbar and the screen edge)
+    expect(p).toEqual({ x: 102, y: 572, side: 'above', maxHeight: MIN_SHOWN_HEIGHT, fits: false })
+    expect(placePopover({ ...input, obstacles: [panel, toolbar] })).toEqual(p)
+  })
+
+  it('a full-height place over a small obstacle beats a sliver; minHeight sets the least height', () => {
+    // as wide as the phone allows, so it cannot slide; the toolbar leaves 4 px below, a flow handle sits just above
+    const anchor = { x: 120, y: 600, width: 150, height: 40 }
+    const size = { width: 374, height: 100 }
+    const toolbar = { x: 0, y: 652, width: 390, height: 56 }
+    const handle = { x: 183, y: 560, width: 24, height: 24 }
+    const p = placePopover(base({ anchor, viewport: PHONE, size, obstacles: [toolbar, handle] }))
+    expect(p).toEqual({ x: 8, y: 492, side: 'above', maxHeight: 100, fits: false })
+    // it covers only the handle
+    expect(covers(p, size, handle)).toBe(true)
+    expect(covers(p, size, toolbar)).toBe(false)
+    // a caller that accepts a 4 px strip can ask for it (minHeight 0): below is then clear, clipped to 4
+    const strip = placePopover(base({ anchor, viewport: PHONE, size, obstacles: [toolbar, handle], minHeight: 0 }))
+    expect(strip).toEqual({ x: 8, y: 648, side: 'below', maxHeight: 0, fits: false })
   })
 
   it('stays inside the viewport (margin 8) on a phone', () => {

@@ -113,6 +113,13 @@ export const rectsIntersect = (a: Rect, b: Rect): boolean => intersectionArea(a,
 export type PopoverSide = 'above' | 'below' | 'left' | 'right'
 const DEFAULT_ORDER: readonly PopoverSide[] = ['below', 'above', 'right', 'left']
 
+/**
+ * The least height a placed popover is given (or its natural height, when that is less). A side with less room than
+ * this is not offered as a sliver: the popover keeps this height there and the part over an obstacle or off screen
+ * counts against that side, so a full-height place that covers a little of an obstacle beats a 4 px strip.
+ */
+export const MIN_SHOWN_HEIGHT = 120
+
 export interface PlacePopoverInput {
   /** What the popover belongs to (a button, a selection's box), viewport pixels. */
   anchor: Rect
@@ -128,6 +135,8 @@ export interface PlacePopoverInput {
   gap?: number
   /** Space kept inside the viewport's edges. Default 8. */
   margin?: number
+  /** The least height to give it (see MIN_SHOWN_HEIGHT, the default); capped at its natural height. */
+  minHeight?: number
 }
 
 export interface Placement {
@@ -136,9 +145,17 @@ export interface Placement {
   side: PopoverSide
   /**
    * The most height the popover has there before an obstacle or the viewport's edge (the bottom toolbar, for one
-   * below its anchor): give it as max-height and let it scroll. At least the natural height when it fits.
+   * below its anchor): give it as max-height and let it scroll. At least the natural height when it fits, and never
+   * less than min(natural height, minHeight), even when that covers an obstacle (then `fits` is false).
    */
   maxHeight: number
+  /**
+   * Whether the whole natural size fits there, inside the viewport (less the margin) and clear of every obstacle.
+   * False means nothing fit and this is the best there is: it is clipped (maxHeight < natural height), or it covers
+   * part of an obstacle or the screen's edge, or both. A caller may then choose another layout (a sheet, a smaller
+   * popover); W1's SelectionBar and W4's popovers check it rather than comparing heights themselves.
+   */
+  fits: boolean
 }
 
 interface Candidate {
@@ -148,7 +165,7 @@ interface Candidate {
   maxHeight: number
   /** area covering obstacles or outside the viewport */
   overlap: number
-  /** natural height that does not fit */
+  /** natural height it is not given (clipped off) */
   missing: number
   sideIndex: number
   /** distance from the centred position on the anchor */
@@ -169,8 +186,10 @@ const clamp = (v: number, lo: number, hi: number) => (hi < lo ? lo : Math.min(Ma
 /**
  * Where a popover goes: the first side (in `prefer` order, then below, above, right, left) where its whole natural
  * size fits inside the viewport clear of every obstacle, slid along that side if an obstacle is in the way (the
- * position closest to centred on the anchor wins). When no side fits, the best there is: the least area over
- * obstacles or off screen, then the most of its height, then the side order. Pure and deterministic.
+ * position closest to centred on the anchor wins); `fits` is then true. When no side fits (`fits` false), the best
+ * there is: each place gets the height it has room for, but at least min(natural height, minHeight), and the winner
+ * is the one with the least area over obstacles or off screen at that height, then the most of its natural height,
+ * then the side order. Pure and deterministic.
  */
 export function placePopover(input: PlacePopoverInput): Placement {
   const gap = input.gap ?? 8
@@ -178,6 +197,8 @@ export function placePopover(input: PlacePopoverInput): Placement {
   const { anchor } = input
   const w = Math.max(0, input.size.width)
   const h = Math.max(0, input.size.height)
+  /** The least height a place gives it (a sliver is never offered as clear). */
+  const minShown = Math.min(h, Math.max(0, input.minHeight ?? MIN_SHOWN_HEIGHT))
   const vp = {
     left: input.viewport.x + margin,
     top: input.viewport.y + margin,
@@ -227,13 +248,13 @@ export function placePopover(input: PlacePopoverInput): Placement {
       for (const x of xs()) {
         const edge = side === 'below' ? bottom(anchor) + gap : anchor.y - gap
         const room = side === 'below' ? freeBelow(x, edge) : freeAbove(x, edge)
-        const shown = Math.min(h, room)
+        const shown = Math.max(Math.min(h, room), minShown)
         const y = side === 'below' ? edge : edge - shown
         candidates.push({
           x,
           y,
           side,
-          maxHeight: room,
+          maxHeight: Math.max(room, shown),
           overlap: cost({ x, y, width: w, height: shown }),
           missing: h - shown,
           sideIndex,
@@ -244,12 +265,12 @@ export function placePopover(input: PlacePopoverInput): Placement {
       const x = side === 'right' ? right(anchor) + gap : anchor.x - gap - w
       for (const y0 of ys()) {
         const room = freeBelow(x, y0)
-        const shown = Math.min(h, room)
+        const shown = Math.max(Math.min(h, room), minShown)
         candidates.push({
           x,
           y: y0,
           side,
-          maxHeight: room,
+          maxHeight: Math.max(room, shown),
           overlap: cost({ x, y: y0, width: w, height: shown }),
           missing: h - shown,
           sideIndex,
@@ -275,5 +296,6 @@ export function placePopover(input: PlacePopoverInput): Placement {
     y: Math.round(best.y),
     side: best.side,
     maxHeight: Math.max(0, Math.floor(best.maxHeight)),
+    fits: best.overlap <= EPS && best.missing <= EPS,
   }
 }
