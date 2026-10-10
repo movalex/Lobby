@@ -8,7 +8,9 @@
 //  - stays in sync after an offline window (its socket cut and its reconnects held while the rev-12 tab writes,
 //    then its catch-up);
 //  - and keeps the rev-12 data when it edits those elements: its Frames panel's reorder, skip and auto-order keep
-//    the planned minutes, its moves and recolours keep the AI provenance (with the run id) and the kinds.
+//    the planned minutes, its moves and recolours keep the AI provenance (with the run id) and the kinds;
+//  - and what it queued offline keeps them too when this tree's web takes the queue over after the tab closes
+//    (L-compat 1b: that web sends it on a rev-12 socket, so its engine completes the old page's values first).
 // Before the per-reader rule its socket dropped every `changes` frame with a `present.mins` (and every op
 // committed with it) while showing Saved, and its reorder erased the minutes.
 //
@@ -23,6 +25,7 @@ import {
   createItem,
   createNote,
   expectSaved,
+  hash,
   item,
   itemCenterOnScreen,
   items,
@@ -30,6 +33,7 @@ import {
   select,
   setViewport,
   updateItem,
+  waitForCanvas,
 } from '../tests/support/canvas.ts'
 import { serverSnapshot, storedElement } from '../tests/support/excalidraw.ts'
 import { openHistory } from '../tests/support/history.ts'
@@ -287,6 +291,110 @@ test('L-compat 1 (W5 run of show): the minutes reach the 437b4e7 tab in every fr
     expect((await saveState(old.page)).lastReject).toBeNull()
     await expectOldTabHolds(stack, board, old, [a.page])
     expect(lobbyOf(await item(a.page, 'cx-f3')).present).toEqual({ index: 1, mins: 6 })
+  })
+})
+
+/** The `c:` groups of every offline queue entry this page's origin holds for `board` (IndexedDB lobby-offline). */
+async function queuedGroups(page: Page, board: string): Promise<Record<string, string[]>> {
+  return page.evaluate(
+    (board) =>
+      new Promise<Record<string, string[]>>((resolve, reject) => {
+        const req = indexedDB.open('lobby-offline', 1)
+        req.onerror = () => reject(req.error)
+        req.onsuccess = () => {
+          const all = req.result.transaction('queues', 'readonly').objectStore('queues').getAll()
+          all.onerror = () => reject(all.error)
+          all.onsuccess = () => {
+            const out: Record<string, string[]> = {}
+            type Rec = {
+              boardId: string
+              entries: { element: { id: string }; groups: string[]; rev?: number }[]
+            }
+            for (const r of all.result as Rec[])
+              if (r.boardId === board)
+                for (const e of r.entries) out[e.element.id] = [...e.groups, `rev:${e.rev ?? 'none'}`]
+            resolve(out)
+          }
+        }
+      }),
+    board,
+  )
+}
+
+test('L-compat 1b (the offline queue across the deploy): a reorder the 437b4e7 tab queued offline, taken over by this web, keeps the minutes', async ({
+  join,
+  browser,
+  board,
+  users,
+  stack,
+  oldTabs,
+}) => {
+  // Wave L compat refix, round 1: the room keeps the minutes for a rev-11 SOCKET's write, but a queue the 437b4e7
+  // page left in IndexedDB is taken over by this tree's web after a reload (or by its next tab of the board) and
+  // sent on a socket that names rev 12, which the room writes whole. Before the fix the reorder erased them.
+  test.setTimeout(180_000)
+  const p = await pair(join, browser, board, users, oldTabs)
+  const { a, old } = p
+  await seed(a.page, {
+    frames: [
+      { id: 'cq-f1', x: 0, y: 0, w: 800, h: 450, name: 'Warm-up' },
+      { id: 'cq-f2', x: 1000, y: 0, w: 800, h: 450, name: 'Ideas' },
+      { id: 'cq-f3', x: 2000, y: 0, w: 800, h: 450, name: 'Wrap' },
+    ],
+  })
+  await a.page.getByTestId('dock-tab-frames').click()
+  await expect(a.page.getByTestId('frame-outline')).toBeVisible()
+  for (const id of ['cq-f1', 'cq-f2', 'cq-f3']) await row(a.page, id).getByTestId('frame-mins-add').click()
+  await row(a.page, 'cq-f2').getByTestId('frame-mins-up').click()
+  await expect(row(a.page, 'cq-f2').getByTestId('frame-mins')).toContainText('6 min')
+  await a.page.getByRole('button', { name: 'Move Warm-up down' }).click()
+  await expectSaved(a.page)
+  await expectOldTabHolds(stack, board, old, [a.page])
+  const stored = async (id: string) => present((await storedElement(stack, board, id)) as CanvasElement)
+  expect(await stored('cq-f1')).toEqual({ index: 1, mins: 5 })
+  expect(await stored('cq-f3')).toEqual({ index: 2, mins: 5 })
+
+  await test.step('bob is offline and reorders in his Frames panel: the 437b4e7 page queues each moved frame’s present whole', async () => {
+    await old.page.getByTestId('dock-tab-frames').click()
+    await expect(row(old.page, 'cq-f3')).toBeVisible()
+    await old.cut()
+    await expect.poll(async () => (await saveState(old.page)).state, { timeout: 15_000 }).toBe('offline')
+    await old.page.getByRole('button', { name: 'Move Wrap up' }).click()
+    // its queue, as 437b4e7 writes it: the moved frames' `c:present`, and no writer revision
+    await expect
+      .poll(async () => (await queuedGroups(old.page, board))['cq-f3'] ?? [], { timeout: 10_000 })
+      .toEqual(['c:present', 'rev:none'])
+    expect((await queuedGroups(old.page, board))['cq-f1']).toEqual(['c:present', 'rev:none'])
+    expect(await stored('cq-f3')).toEqual({ index: 2, mins: 5 })
+  })
+
+  await test.step('bob closes it and opens the board again, now on this web: it takes the queue over and sends it on a rev-12 socket; the minutes stay', async () => {
+    await old.page.close()
+    // from here the context gets this tree's web (the preview server), on the same origin, IndexedDB and sign-in
+    await old.context.unrouteAll({ behavior: 'ignoreErrors' })
+    await old.restore()
+    const next = await old.context.newPage()
+    const urls: string[] = []
+    next.on('websocket', (ws) => urls.push(ws.url()))
+    await next.goto(`/b/${board}`)
+    await waitForCanvas(next)
+    expect(urls.length).toBeGreaterThan(0)
+    for (const u of urls) expect(new URL(u).searchParams.get('rev')).toBe('12')
+    await expect.poll(async () => (await stored('cq-f3'))?.index, { timeout: 20_000 }).toBe(1)
+    await expectSaved(next)
+    expect((await saveState(next)).lastReject).toBeNull()
+    expect(await stored('cq-f3')).toEqual({ index: 1, mins: 5 })
+    expect(await stored('cq-f1')).toEqual({ index: 2, mins: 5 })
+    expect(await stored('cq-f2')).toEqual({ index: 0, mins: 6 })
+    // every tab holds the server's board, and alice's panel still plans them
+    await expect
+      .poll(async () => {
+        const want = (await serverSnapshot(stack, board)).hash
+        return [await hash(next), await hash(a.page)].filter((h) => h !== want).length
+      })
+      .toBe(0)
+    await expect(row(a.page, 'cq-f3').getByTestId('frame-mins')).toContainText('5 min')
+    expect(await queuedGroups(next, board)).toEqual({})
   })
 })
 

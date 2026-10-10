@@ -62,10 +62,12 @@ import {
   type Changes,
   CLOSE_TERMINAL,
   type ClientMessage,
+  CONTRACTS_REV,
   ELEMENT_SCHEMA_VERSION,
   type LeaseClientMessage,
   type LeaseHolder,
   type LeaseServerMessage,
+  lobbyWriteOf,
   MAX_RECEIPT_IDS,
   type Op,
   PROTO,
@@ -78,6 +80,7 @@ import {
   type ServerMessage,
   type ServerOp,
   type SnapshotFrame,
+  UNANNOUNCED_REV,
   type Welcome,
 } from '@draftroom/canvas-schema/protocol'
 import { generateNKeysBetween } from '@excalidraw/fractional-indexing'
@@ -111,6 +114,7 @@ import {
   FIT_FIELDS,
   type GroupKey,
   keepLocalFileSuffix,
+  lobbyOf,
   opId,
   toWire,
   withoutArtifacts,
@@ -175,6 +179,11 @@ interface Sent {
    * new position, so its `fitDropped` asks for nothing more
    */
   fitSuperseded?: boolean
+  /**
+   * CONTRACTS_REV 12: an adopted lost record's writer revision when below this page's (LostPushRecord.rev;
+   * absent there: the rev-11 web's): `el`'s lobby values are completed from the server copy (withOlderLobby)
+   */
+  rev?: number
 }
 
 /** What an acked push left on the server for one element: its version, and the fields the server rewrote. */
@@ -507,6 +516,40 @@ export function decideLostElement(
   return { again, recreate: false, superseded }
 }
 
+/**
+ * CONTRACTS_REV 12 (wave L compat refix, the rev-11 hold): a queued copy built by a page of revision `rev`
+ * (absent: UNANNOUNCED_REV, every queue of the rev-11 web 437b4e7) with each `c:<key>` of `groups` given the
+ * fields that revision could not know from the server copy `conf` (canvas-schema `lobbyWriteOf`: a rev-11
+ * reorder `{index}` keeps the stored `mins`, a removal leaves `{mins}`). This page sends it on a socket of its
+ * own revision, which the room writes whole; before, an offline reorder or a lost push of a rev-11 page,
+ * adopted after a reload into this web, erased the frame's planned minutes for everyone. `el` itself when
+ * nothing is to change (this page's own queue, no server copy, or nothing stored to keep).
+ */
+function withOlderLobby(
+  el: SceneElement,
+  conf: SceneElement | undefined,
+  rev: number | undefined,
+  groups: Iterable<string>,
+): SceneElement {
+  const writer = rev ?? UNANNOUNCED_REV
+  if (writer >= CONTRACTS_REV || !conf) return el
+  const stored = lobbyOf(conf)
+  let lobby: Record<string, unknown> | null = null
+  for (const g of new Set(groups)) {
+    if (!g.startsWith('c:')) continue
+    const key = g.slice(2)
+    const written = lobbyOf(el)[key]
+    const kept = lobbyWriteOf(writer, key, written === undefined ? null : written, stored[key])
+    if (kept === written || (kept === null && written === undefined)) continue
+    lobby ??= { ...lobbyOf(el) }
+    if (kept === null || kept === undefined) delete lobby[key]
+    else lobby[key] = kept
+  }
+  if (!lobby) return el
+  const cd = { ...((el.customData as Record<string, unknown> | undefined) ?? {}), lobby }
+  return { ...el, customData: cd } as SceneElement
+}
+
 export class LobbyEngineCore implements EngineCore {
   // ---- options
   private readonly transport: Transport
@@ -645,6 +688,13 @@ export class LobbyEngineCore implements EngineCore {
    * after `CATCH_UP_WAIT_MS` when none comes.
    */
   private readonly awaitingCatchUp = new Set<string>()
+  /**
+   * CONTRACTS_REV 12 (wave L compat refix): adopted queue copies built by an older page (OfflineEntry.rev
+   * below this page's; absent: the rev-11 web's), with their writer revision and the groups they carry: each
+   * is completed from the server copy (withOlderLobby) the first time there is one (settleDirty), before
+   * anything of it is pushed. Behind a reset snapshot that lacks the element, that is at its catch-up.
+   */
+  private readonly olderCopies = new Map<string, { rev: number; groups: readonly string[] }>()
   private catchUpTimer: unknown = null
   /** the last welcome changed the epoch (a restore): nothing from before it waits for a catch-up */
   private epochReset = false
@@ -1915,6 +1965,7 @@ export class LobbyEngineCore implements EngineCore {
     // that had committed): decided BEFORE the rebuild, so those elements become the server copy exactly
     for (const [id, t] of [...this.tracked]) this.settleDirty(id, t)
     this.dropDeadCreates()
+    this.dropOlderUntracked()
     this.held.clear()
     this.heldBack.clear()
     // the whole scene is rebuilt from the new server state and the local changes
@@ -2012,7 +2063,13 @@ export class LobbyEngineCore implements EngineCore {
       // acked before the cut (effectivePv, effectiveRef)
       const parts: LostPart[] = list.map(({ p, s }) => {
         const landed = this.fateOf(p.rid)
-        return { p: { src: p.src, ...(landed !== undefined ? { landed } : {}) }, s: this.settledSent(id, s) }
+        const settled = this.settledSent(id, s)
+        // an older page's record: its values completed from the server copy, as its copy is (settleDirty)
+        const done =
+          settled.rev !== undefined
+            ? { ...settled, el: withOlderLobby(settled.el, conf, settled.rev, settled.groups) }
+            : settled
+        return { p: { src: p.src, ...(landed !== undefined ? { landed } : {}) }, s: done }
       })
       const { again, recreate, superseded } = decideLostElement(parts, conf, t?.dirty ?? new Set())
       if (superseded.length) {
@@ -2266,6 +2323,7 @@ export class LobbyEngineCore implements EngineCore {
       if (this.confirmedMap.has(id)) t.isNew = false
       this.settleDirty(id, t)
     }
+    this.dropOlderUntracked()
     this.applyScene(ids)
     this.scheduleFlush(true)
     this.schedulePersist()
@@ -2279,12 +2337,34 @@ export class LobbyEngineCore implements EngineCore {
    */
   private settleDirty(id: string, t: Tracked): void {
     if (t.isNew) return
-    const el = this.current.get(id)
+    let el = this.current.get(id)
     const conf = this.confirmedMap.get(id)
     if (!el || !conf) return
+    const older = this.olderCopies.get(id)
+    if (older) {
+      this.olderCopies.delete(id)
+      const done = withOlderLobby(el, conf, older.rev, older.groups)
+      if (done !== el) {
+        el = done
+        this.readScene(this.currentOrder.map((x) => (x.id === id ? done : x)))
+      }
+    }
     const diff = diffGroups(el, conf).groups
     for (const g of [...t.dirty]) if (g !== 'fit' && !diff.has(g)) t.dirty.delete(g)
     if (t.dirty.size === 0) this.tracked.delete(id)
+  }
+
+  /**
+   * Forgets the older copies (olderCopies) whose element is neither tracked nor in a push out or held: decided
+   * without anything to send (a lost push that landed, an element gone). Kept, a later change of this page's
+   * own to the element would be completed as if the older page had made it (a rev-12 removal of the minutes
+   * undone).
+   */
+  private dropOlderUntracked(): void {
+    if (!this.olderCopies.size) return
+    const flying = this.flying()
+    for (const id of [...this.olderCopies.keys()])
+      if (!this.tracked.has(id) && !flying.some((p) => p.sent.has(id))) this.olderCopies.delete(id)
   }
 
   private applyServerOp(op: ServerOp, affected: Set<string>): boolean {
@@ -2405,6 +2485,7 @@ export class LobbyEngineCore implements EngineCore {
       }
     }
     this.awaitingCatchUp.clear()
+    this.dropOlderUntracked()
     if (this.catchUpTimer !== null) {
       this.clearTimer(this.catchUpTimer)
       this.catchUpTimer = null
@@ -3272,6 +3353,7 @@ export class LobbyEngineCore implements EngineCore {
       }
       this.settleDirty(id, t)
     }
+    this.dropOlderUntracked()
     this.applyScene(ids)
     this.flushNow(false)
   }
@@ -3296,6 +3378,19 @@ export class LobbyEngineCore implements EngineCore {
     const id = e.element.id
     const isNew = e.groups.includes('create')
     const groups = new Set<GroupKey>(e.groups.filter((g) => g !== 'create') as GroupKey[])
+    // an older page's queue (no rev: the rev-11 web's): its lobby values get what that page could not know
+    // from the server copy before they go (settleDirty), or this page's push (a rev-12 socket, which the room
+    // writes whole) erased it (present.mins)
+    const conf = this.confirmedMap.get(id)
+    const olderRev = (rev: number | undefined) =>
+      (rev ?? UNANNOUNCED_REV) < CONTRACTS_REV ? (rev ?? UNANNOUNCED_REV) : null
+    const entryRev = olderRev(e.rev)
+    if (entryRev !== null)
+      this.olderCopies.set(id, {
+        rev: entryRev,
+        groups: [...e.groups, ...(e.lost ?? []).flatMap((r) => r.groups)],
+      })
+    else this.olderCopies.delete(id)
     if (groups.size || isNew || !e.lost?.length)
       this.tracked.set(id, { dirty: groups, isNew, since: e.queuedAt, replay: true, knownAt: e.base })
     // its pushes that were out when the page closed: one lost push per (socket, seq), in send order
@@ -3318,8 +3413,9 @@ export class LobbyEngineCore implements EngineCore {
       }
       p.sent.set(id, {
         groups: new Set(r.groups as GroupKey[]),
-        el: clone(r.el),
+        el: withOlderLobby(clone(r.el), conf, r.rev, r.groups),
         create: r.create,
+        ...(olderRev(r.rev) !== null ? { rev: olderRev(r.rev) as number } : {}),
         ...(r.ref ? { ref: clone(r.ref) } : {}),
         ...(r.pv !== undefined ? { pv: r.pv } : {}),
         ...(r.prior ? { prior: clone(r.prior) } : {}),
@@ -3381,6 +3477,7 @@ export class LobbyEngineCore implements EngineCore {
           ...(s.pv !== undefined ? { pv: s.pv } : {}),
           ...(s.prior ? { prior: withWireFile(s.prior) } : {}),
           ...(p.rid !== undefined ? { rid: p.rid } : {}),
+          rev: s.rev ?? CONTRACTS_REV,
         })
         a.since = Math.min(a.since, p.record.at)
       }
@@ -3394,6 +3491,8 @@ export class LobbyEngineCore implements EngineCore {
         base: this.clock,
         queuedAt: Number.isFinite(a.since) ? a.since : this.now(),
         ...(a.lost.length ? { lost: a.lost } : {}),
+        // an older page's copy not completed yet (no server copy so far) keeps that page's revision
+        rev: this.olderCopies.get(id)?.rev ?? CONTRACTS_REV,
       })
     }
     // loaded but not adopted yet (no welcome so far): kept in the store as they were

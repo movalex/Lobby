@@ -182,6 +182,13 @@ export interface OfflineEntry {
   readonly lost?: readonly LostPushRecord[]
   /** the `#doc` entry's board-document writes that were out without an ack, with what they replaced */
   readonly lostDoc?: readonly LostDocRecord[]
+  /**
+   * CONTRACTS_REV 12 (wave L compat refix): the contracts revision of the page that built `element`. Absent:
+   * an older page's (every queue of the rev-11 web, 437b4e7), whose `customData.lobby` values lack the fields
+   * its revision could not know; the page that adopts it adds them from the server copy (lobbyWriteOf) before
+   * sending, as the room does for an older socket's write.
+   */
+  readonly rev?: number
 }
 
 /** One lost push's part for one element, as the offline queue keeps it (OfflineEntry.lost). */
@@ -208,6 +215,8 @@ export interface LostPushRecord {
    * adopts the queue asks the room whether it landed. Absent in queues written before, or for a rev-10 room.
    */
   readonly rid?: string
+  /** CONTRACTS_REV 12: the revision of the page that built `el` (absent: an older page's; OfflineEntry.rev) */
+  readonly rev?: number
 }
 
 /** A lost board-document write: the keys it set and the server's values it replaced (null: none). */
