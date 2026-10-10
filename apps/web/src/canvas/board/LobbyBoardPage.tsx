@@ -803,7 +803,7 @@ function LobbyBoardScreen({
         >
           {showingCache && snap.cached
             ? // M6-4: the copy on screen is this device's, read-only until the connection returns
-              `${cachedOfflineLabel(snap.cached.savedAt)}. You can edit once you are back online.`
+              `${cachedOfflineLabel(snap.cached.savedAt)}${snap.cached.exact ? '' : ' (links and web addresses are not kept in it)'}. You can edit once you are back online.`
             : snap.guest
               ? "You're offline. Changes you make are kept in this tab only until the connection returns; reloading now would lose them."
               : "You're offline. Changes you make are kept on this device and sync when the connection returns."}
@@ -975,7 +975,9 @@ function OfflineCopyCanvas({ record, onRetry }: { record: CachedBoard; onRetry()
   return (
     <div className="dr-board" data-testid="offline-copy" data-board-id={record.boardId} data-phase="offline">
       <div className="dr-banner" data-testid="offline-copy-banner" role="status">
-        {label}. It may be out of date; you can edit once you are back online.{' '}
+        {label}. It may be out of date
+        {record.exact ? '' : ', and links and web addresses are not kept in it'}; you can edit once you are
+        back online.{' '}
         <button
           type="button"
           className="dr-btn dr-btn--ghost"
