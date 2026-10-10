@@ -26,9 +26,19 @@
 // map cannot give "Paper" (white) notes dark ink on a light fill in dark mode as tldraw did; Paper becomes
 // a dark paper with light ink instead (readable, >= 4.5:1, pinned by theme.test.ts).
 //
+// Wave M (M1-5, FTU-9): a note whose fill is not one of Lobby's swatches (a pastel pasted from excalidraw.com or
+// imported, #b2f2bb and the like) is drawn in dark mode with the fill as it is, so the one dark ink (CHALK) was
+// near-white on pastel. Such a note's label (and its date footer) is drawn in whichever of INK and CHALK has more
+// contrast with the fill as dark mode draws it (`noteInkFor`). The dark colour cache answers by colour only, so
+// the install also watches which element the engine is about to draw (its per-element canvas cache,
+// `elementWithCanvasCache`, is asked for every element right before it is drawn, a note just before its label):
+// while a note or its label is drawn, its default ink is answered with that choice, and a cached canvas drawn
+// with another ink is drawn again. Rendering only: stored colours never change, and a picked ink is left alone.
+//
 // Browser and Node (pure apart from the install).
 import { applyDarkModeFilter, FRAME_STYLE } from '@excalidraw/common'
-import { GREY_INK, NOTE_PALETTE } from '../../features/canvas-ux/palette.ts'
+import { elementWithCanvasCache } from '@excalidraw/element'
+import { contrastRatio, GREY_INK, NOTE_PALETTE } from '../../features/canvas-ux/palette.ts'
 
 /** The canvas (light): tldraw's light background. */
 export const CANVAS_LIGHT = '#f9fafb'
@@ -211,18 +221,123 @@ export function installLobbyEngineTheme(): boolean {
   const found = cache as Map<string, string> | null
   if (!found) return false
   const get = Map.prototype.get
-  found.get = (k: string) => (typeof k === 'string' ? lobbyDarkColor(k) : null) ?? get.call(found, k)
+  found.get = (k: string) =>
+    (typeof k === 'string' ? (noteInkAnswer(k) ?? lobbyDarkColor(k)) : null) ?? get.call(found, k)
+  installNoteInkWatch()
   installed = true
   return true
 }
 
+// ---- wave M (M1-5): readable notes in dark mode for off-palette fills --------------------------------------------
+
+/**
+ * The colour a stored (light) fill is drawn in, in dark mode: Lobby's table, else Excalidraw's own filter (greys),
+ * as `#rrggbb`; null for what is no hex colour (transparent, names).
+ */
+function darkFillOf(fill: string): string | null {
+  const hex = normalizeHex(fill)
+  if (!hex) return null
+  const mapped = lobbyDarkColor(hex.rgb) ?? applyDarkModeFilter(hex.rgb, true)
+  return normalizeHex(mapped)?.rgb ?? null
+}
+
 /**
  * The ink a note's label is drawn in on a note of `fill` (a stored, light colour), in `theme` (wave M, M1-5: W1's,
- * read by W2's dark time-travel preview). Frozen signature. The foundation's answer is today's rendering: one ink
- * for every note colour, Lobby's INK in light and CHALK in dark (what the dark table maps the stored label ink to).
- * W1 makes off-palette fills (pastels pasted from excalidraw.com) pick the higher-contrast of INK and CHALK.
+ * read by W2's dark time-travel preview). Frozen signature. Light: Lobby's INK (every note colour is light). Dark:
+ * whichever of INK and CHALK has the higher WCAG contrast with the fill as dark mode draws it, so Lobby's 13
+ * swatches (their designed dark fills) keep CHALK and a pastel drawn as it is (an excalidraw.com #b2f2bb) gets INK.
  * Rendering only: stored colours never change.
  */
-export function noteInkFor(_fill: string, theme: 'light' | 'dark'): string {
-  return theme === 'dark' ? CHALK : INK
+export function noteInkFor(fill: string, theme: 'light' | 'dark'): string {
+  if (theme === 'light') return INK
+  const drawn = typeof fill === 'string' ? darkFillOf(fill) : null
+  if (!drawn) return CHALK
+  return contrastRatio(drawn, INK) > contrastRatio(drawn, CHALK) ? INK : CHALK
+}
+
+/** What the watch reads of an element the engine is about to draw. */
+interface DrawnElement {
+  readonly id?: string
+  readonly type?: string
+  readonly containerId?: string | null
+  readonly strokeColor?: string
+  readonly backgroundColor?: string
+}
+
+/**
+ * The ink to draw a note or a note's label in when that is not the dark table's answer for its stored ink; null
+ * when the table's answer stands. `note` is the note the label belongs to (the engine draws a note right before
+ * its label). Only a default ink (one the table draws as CHALK: Lobby's INK, the engine's #1e1e1e, black) is
+ * answered differently; an ink someone picked is drawn as it is. Pure.
+ */
+export function noteInkOverride(el: DrawnElement, note: DrawnElement | null): string | null {
+  const fill =
+    el.type === 'stickynote'
+      ? el.backgroundColor
+      : el.type === 'text' && el.containerId && note?.type === 'stickynote' && note.id === el.containerId
+        ? note.backgroundColor
+        : undefined
+  if (typeof fill !== 'string' || typeof el.strokeColor !== 'string') return null
+  if (lobbyDarkColor(el.strokeColor) !== CHALK) return null
+  const ink = noteInkFor(fill, 'dark')
+  return ink === CHALK ? null : ink
+}
+
+/** While the engine draws a note or its label: the stored ink it will ask the dark cache for, and the answer. */
+let drawing: { readonly color: string; readonly ink: string } | null = null
+
+/** The dark cache's answer for `color` while a note or its label is drawn (see the header), else null. */
+function noteInkAnswer(color: string): string | null {
+  return drawing && color === drawing.color ? drawing.ink : null
+}
+
+let watching = false
+
+/**
+ * Watches the engine's per-element canvas cache (once): its `get` runs for every element right before the engine
+ * draws it (a note, then that note's label), and its `set` right after a fresh drawing. A note or label whose ink
+ * is answered differently is drawn with `drawing` set, and a cached drawing made with another ink is drawn again
+ * (a note recoloured from a swatch to a pastel changes no label, so the label's cached drawing would be kept).
+ * Elements of no note keep the engine's cache as it is.
+ */
+function installNoteInkWatch(): void {
+  if (watching) return
+  const cache = elementWithCanvasCache as unknown as WeakMap<object, object>
+  if (!cache || typeof cache.get !== 'function') return
+  const inkOf = new WeakMap<object, string | null>()
+  const get = WeakMap.prototype.get
+  const set = WeakMap.prototype.set
+  let lastNote: DrawnElement | null = null
+  /** the ink the drawing about to be made gets (recorded on its cache entry) */
+  let pending: string | null = null
+  const clear = () => {
+    drawing = null
+  }
+  cache.get = function (this: WeakMap<object, object>, key: object) {
+    drawing = null
+    pending = null
+    const cached = get.call(this, key) as object | undefined
+    const el = key as DrawnElement | null
+    if (!el || typeof el !== 'object') return cached
+    if (el.type === 'stickynote') lastNote = el
+    else if (!(el.type === 'text' && el.containerId)) return cached
+    const ink = noteInkOverride(el, lastNote)
+    // the engine may still draw it again (a zoom, the theme): the drawing it makes gets this ink too
+    pending = ink
+    if (ink !== null && typeof el.strokeColor === 'string') {
+      drawing = { color: el.strokeColor, ink }
+      // the engine draws synchronously after this call; nothing later may get this answer
+      queueMicrotask(clear)
+    }
+    // a drawing made with the ink it gets now (or before the watch, with the table's) is kept
+    if (cached !== undefined && (inkOf.has(cached) ? inkOf.get(cached) : null) === ink) return cached
+    return undefined
+  }
+  cache.set = function (this: WeakMap<object, object>, key: object, value: object) {
+    if (value && typeof value === 'object') inkOf.set(value, pending)
+    pending = null
+    drawing = null
+    return set.call(this, key, value) as WeakMap<object, object>
+  }
+  watching = true
 }
