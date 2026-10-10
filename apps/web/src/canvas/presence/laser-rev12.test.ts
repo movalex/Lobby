@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import type { LobbyEngineCore } from '../sync/core/engine.ts'
 import { setPresenceFollow } from './follow-target.ts'
-import { PresenceHub } from './hub.ts'
+import { PresenceHub, type PresenceHubOptions } from './hub.ts'
 import { lasersOf, setLaserToolSource } from './laser.ts'
 
 /** Rev 11's `presence` in, as a rev-11 room parses it (strict: `f` and `view.z`, no `t`, no `trail`). */
@@ -49,7 +49,7 @@ function fakeCore() {
       return () => listeners.delete(l)
     },
     roster: () => roster,
-    sendPresence: (p: Record<string, unknown>) => void sent.push({ type: 'presence', ...p }),
+    sendPresence: (p: Record<string, unknown>): void => void sent.push({ type: 'presence', ...p }),
   }
   const deliver = (message: unknown) => {
     for (const l of [...listeners]) l({ kind: 'message', message: message as ServerMessage })
@@ -57,14 +57,44 @@ function fakeCore() {
   return { core, sent, deliver, welcome: () => deliver({ type: 'welcome', drags: [] }) }
 }
 
-const hubOn = (core: ReturnType<typeof fakeCore>['core']) =>
+const hubOn = (core: ReturnType<typeof fakeCore>['core'], extra: Partial<PresenceHubOptions> = {}) =>
   new PresenceHub({
     core: core as unknown as LobbyEngineCore,
     overrides: null,
     elements: () => [],
     view: () => ({ x: 10, y: 20, w: 800, h: 600, z: 1.5 }),
     readOnly: () => false,
+    ...extra,
   })
+
+/** A virtual clock for a hub: while the laser is pressed it spaces its messages by 50 ms (M2-6), so a test moves time on. */
+function clockFor() {
+  let t = 1_000
+  const timers = new Map<number, { at: number; fn: () => void }>()
+  let next = 1
+  return {
+    options: {
+      now: () => t,
+      setTimer: (fn: () => void, ms: number) => {
+        const id = next++
+        timers.set(id, { at: t + ms, fn })
+        return id
+      },
+      clearTimer: (h: unknown) => void timers.delete(h as number),
+    } satisfies Partial<PresenceHubOptions>,
+    tick(ms: number) {
+      const end = t + ms
+      for (;;) {
+        const due = [...timers.entries()].filter(([, v]) => v.at <= end).sort((a, b) => a[1].at - b[1].at)[0]
+        if (!due) break
+        timers.delete(due[0])
+        t = Math.max(t, due[1].at)
+        due[1].fn()
+      }
+      t = end
+    },
+  }
+}
 
 const press = (hub: PresenceHub, x: number, button: 'up' | 'down') =>
   hub.onPointer({ pointer: { x, y: 1 }, button, source: 'pointermove', pointerType: 'mouse' })
@@ -118,12 +148,15 @@ describe('a rev-12 tab in a rev-12 room (L6-1): the laser goes out, others’ la
     const c = fakeCore()
     let tool = 'select'
     const offTool = setLaserToolSource(c.core, () => tool === 'laser')
-    const hub = hubOn(c.core)
+    const clock = clockFor()
+    const hub = hubOn(c.core, clock.options)
     c.welcome()
     c.deliver({ type: 'contracts', rev: PRESENCE_LASER_REV })
+    clock.tick(60) // the contracts frame's message was a handover: the first press waits for no slot
     return {
       c,
       hub,
+      tick: clock.tick,
       setTool: (t: string) => {
         tool = t
       },
@@ -157,6 +190,7 @@ describe('a rev-12 tab in a rev-12 room (L6-1): the laser goes out, others’ la
     move(r.hub, 10, 'down')
     expect(r.c.sent.at(-1)).toMatchObject({ t: 'laser', button: 'down', pointer: { x: 10, y: 1 } })
     expect(r.c.sent.at(-1)).not.toHaveProperty('trail')
+    r.tick(60) // M2-6: the hub spaces laser messages by the 20 Hz interval
     move(r.hub, 40, 'down', [
       { x: 20.4, y: 1 },
       { x: 30, y: 1.2 },
@@ -170,6 +204,7 @@ describe('a rev-12 tab in a rev-12 room (L6-1): the laser goes out, others’ la
       ],
     })
     // many samples: at most MAX_LASER_TRAIL_POINTS go
+    r.tick(60)
     move(
       r.hub,
       400,
@@ -177,6 +212,7 @@ describe('a rev-12 tab in a rev-12 room (L6-1): the laser goes out, others’ la
       Array.from({ length: 30 }, (_, i) => ({ x: 50 + i * 10, y: 1 })),
     )
     expect((r.c.sent.at(-1)?.trail as unknown[] | undefined)?.length).toBe(MAX_LASER_TRAIL_POINTS)
+    r.tick(60)
     move(r.hub, 401, 'up', [{ x: 400.6, y: 1 }])
     expect(r.c.sent.at(-1)).toMatchObject({ t: null, button: 'up' })
     expect(r.c.sent.at(-1)).not.toHaveProperty('trail')
@@ -194,8 +230,10 @@ describe('a rev-12 tab in a rev-12 room (L6-1): the laser goes out, others’ la
       pointerType: 'mouse',
       trail: [{ x: 25, y: 1 }],
     }
+    r.tick(60)
     r.hub.onPointer(sample)
     expect(r.c.sent.at(-1)).toMatchObject({ t: 'laser', trail: [{ x: 25, y: 1 }] })
+    r.tick(60)
     r.hub.onPointer(sample)
     expect(r.c.sent.at(-1)).toMatchObject({ t: 'laser', pointer: { x: 40, y: 1 } })
     expect(r.c.sent.at(-1)).not.toHaveProperty('trail')
@@ -262,5 +300,295 @@ describe('a rev-12 tab in a rev-12 room (L6-1): the laser goes out, others’ la
       hub.dispose()
       offTool()
     }
+  })
+})
+
+// ---- M2-6 (wave M, W2): a laser held still stays; a laser message is never coalesced away -------------------------
+
+/**
+ * A virtual clock with timers, and a core that does what the real one does with presence
+ * (canvas/sync/core/engine.ts sendPresence): a message that comes within one 20 Hz interval of the last flush
+ * is held, a newer one replaces it, and the timer flushes what is held. Everything flushed is delivered, as the
+ * room relays it, to a second hub (the peer's) whose core sees it as an entry of `ME`.
+ */
+function meeting() {
+  let t = 1_000
+  const timers = new Map<number, { at: number; fn: () => void }>()
+  let nextTimer = 1
+  const setTimer = (fn: () => void, ms: number) => {
+    const id = nextTimer++
+    timers.set(id, { at: t + ms, fn })
+    return id
+  }
+  const clearTimer = (h: unknown) => void timers.delete(h as number)
+  const advance = (ms: number) => {
+    const end = t + ms
+    for (;;) {
+      const due = [...timers.entries()].filter(([, v]) => v.at <= end).sort((a, b) => a[1].at - b[1].at)[0]
+      if (!due) break
+      timers.delete(due[0])
+      t = Math.max(t, due[1].at)
+      due[1].fn()
+    }
+    t = end
+  }
+
+  // the peer (Bob): receives
+  const bob = fakeCore()
+  const bobHub = new PresenceHub({
+    core: bob.core as unknown as LobbyEngineCore,
+    overrides: null,
+    elements: () => [],
+    view: () => null,
+    readOnly: () => false,
+    now: () => t,
+  })
+  bob.welcome()
+  bob.deliver({ type: 'contracts', rev: PRESENCE_LASER_REV })
+
+  // the sender (Alice = ME): her core coalesces like the real one, and relays to Bob
+  const alice = fakeCore()
+  const flushed: Record<string, unknown>[] = []
+  let pending: Record<string, unknown> | null = null
+  let last = Number.NEGATIVE_INFINITY
+  let coreTimer: number | null = null
+  const flush = () => {
+    const p = pending
+    pending = null
+    if (!p) return
+    last = t
+    flushed.push(p)
+    const { drag: _drag, type: _type, ...rest } = p
+    bob.deliver({ type: 'presence', peers: [{ sid: ME, ...rest }] })
+  }
+  alice.core.sendPresence = (p: Record<string, unknown>) => {
+    pending = { type: 'presence', ...p }
+    const wait = last + 1000 / 20 - t
+    if (wait <= 0) return flush()
+    if (coreTimer === null)
+      coreTimer = setTimer(() => {
+        coreTimer = null
+        flush()
+      }, wait)
+  }
+  let tool = 'laser'
+  const offTool = setLaserToolSource(alice.core, () => tool === 'laser')
+  const aliceHub = new PresenceHub({
+    core: alice.core as unknown as LobbyEngineCore,
+    overrides: null,
+    elements: () => [],
+    view: () => ({ x: 10, y: 20, w: 800, h: 600, z: 1.5 }),
+    readOnly: () => false,
+    now: () => t,
+    setTimer,
+    clearTimer,
+  })
+  alice.welcome()
+  alice.deliver({ type: 'contracts', rev: PRESENCE_LASER_REV })
+  const sample = (
+    x: number,
+    button: 'up' | 'down',
+    trail?: { x: number; y: number }[],
+  ): Parameters<PresenceHub['onPointer']>[0] => ({
+    pointer: { x, y: 1 },
+    button,
+    source: 'pointermove',
+    pointerType: 'mouse',
+    ...(trail ? { trail } : {}),
+  })
+  return {
+    alice,
+    aliceHub,
+    bob,
+    flushed,
+    advance,
+    now: () => t,
+    sample,
+    setTool: (v: string) => {
+      tool = v
+    },
+    /** Bob's view of Alice's laser now */
+    seen: () => lasersOf(bob.core, t).find((l) => l.sid === ME),
+    dispose: () => {
+      aliceHub.dispose()
+      bobHub.dispose()
+      offTool()
+    },
+  }
+}
+
+describe('M2-6: a laser held still stays visible to the others', () => {
+  it('pressed and not moved for 10 s: the peer still has the laser (it fails without the re-send: gone after 3 s)', () => {
+    const m = meeting()
+    m.aliceHub.onPointer(m.sample(100, 'down'))
+    m.advance(60)
+    m.aliceHub.onPointer(m.sample(120, 'down', [{ x: 110, y: 1 }]))
+    m.advance(200)
+    expect(m.seen()?.active).toBe(true)
+    // held still: no pointer event at all for 10 s
+    for (let s = 1; s <= 10; s++) {
+      m.advance(1_000)
+      expect(m.seen()?.active, `${s} s after the last move`).toBe(true)
+      // the dot is where she points
+      expect(m.seen()?.points.at(-1)).toMatchObject({ x: 120, y: 1 })
+    }
+    // released: the peer gets t: null and the laser fades on its own
+    m.aliceHub.onPointer(m.sample(120, 'up'))
+    m.advance(60)
+    expect(m.seen()?.active ?? false).toBe(false)
+    m.advance(1_500)
+    expect(m.seen()).toBeUndefined()
+    m.dispose()
+  })
+
+  it('the re-send is one message a second with the laser fields only: same point, t: laser, no trail', () => {
+    const m = meeting()
+    m.aliceHub.onPointer(m.sample(100, 'down'))
+    m.advance(60)
+    m.aliceHub.onPointer(m.sample(120, 'down', [{ x: 110, y: 1 }]))
+    m.advance(100)
+    const before = m.flushed.length
+    m.advance(5_000)
+    const resent = m.flushed.slice(before)
+    // 5 s of holding still: about a message a second (never faster than the 20 Hz cap, never silent for 2 s)
+    expect(resent.length).toBeGreaterThanOrEqual(4)
+    expect(resent.length).toBeLessThanOrEqual(6)
+    for (const p of resent) {
+      expect(p).toMatchObject({ t: 'laser', button: 'down', pointer: { x: 120, y: 1 } })
+      expect(p).not.toHaveProperty('trail')
+    }
+    m.dispose()
+  })
+
+  it('a moving laser sends no extra messages (the re-send waits for a second of stillness)', () => {
+    const m = meeting()
+    m.aliceHub.onPointer(m.sample(100, 'down'))
+    for (let i = 1; i <= 40; i++) {
+      m.advance(50)
+      m.aliceHub.onPointer(m.sample(100 + i * 5, 'down', [{ x: 100 + i * 5 - 2, y: 1 }]))
+    }
+    // 40 moves over 2 s, one message per move at the most
+    expect(m.flushed.length).toBeLessThanOrEqual(41)
+    m.dispose()
+  })
+
+  it('released or with the selection tool: no timer runs on (nothing is re-sent)', () => {
+    const m = meeting()
+    m.aliceHub.onPointer(m.sample(100, 'down'))
+    m.aliceHub.onPointer(m.sample(100, 'up'))
+    m.advance(100)
+    const n = m.flushed.length
+    m.advance(10_000)
+    expect(m.flushed.length).toBe(n)
+    m.setTool('select')
+    m.aliceHub.onPointer(m.sample(100, 'down'))
+    m.advance(100)
+    const k = m.flushed.length
+    m.advance(10_000)
+    expect(m.flushed.length).toBe(k)
+    m.dispose()
+  })
+
+  it('a rev-11 room receives nothing new: no re-send, no laser field, every message one it accepts', () => {
+    for (const rev of [10, 11]) {
+      const c = fakeCore()
+      const offTool = setLaserToolSource(c.core, () => true)
+      let t = 0
+      const timers: { at: number; fn: () => void }[] = []
+      const hub = new PresenceHub({
+        core: c.core as unknown as LobbyEngineCore,
+        overrides: null,
+        elements: () => [],
+        view: () => ({ x: 10, y: 20, w: 800, h: 600, z: 1.5 }),
+        readOnly: () => false,
+        now: () => t,
+        setTimer: (fn, ms) => timers.push({ at: t + ms, fn }),
+        clearTimer: () => {},
+      })
+      c.welcome()
+      c.deliver({ type: 'contracts', rev })
+      hub.onPointer({ pointer: { x: 1, y: 1 }, button: 'down', source: 'pointerdown', pointerType: 'mouse' })
+      const sent = c.sent.length
+      // ten seconds of holding still: any timer the hub set would fire here
+      t += 10_000
+      for (const x of timers) x.fn()
+      expect(c.sent.length).toBe(sent)
+      for (const m of c.sent) {
+        expect(PresenceIn11.safeParse(m).success, JSON.stringify(m)).toBe(true)
+        expect(m).not.toHaveProperty('t')
+        expect(m).not.toHaveProperty('trail')
+      }
+      hub.dispose()
+      offTool()
+    }
+  })
+
+  it('a new welcome (a reconnect) stops the re-send until the next press', () => {
+    const m = meeting()
+    m.aliceHub.onPointer(m.sample(100, 'down'))
+    m.advance(100)
+    m.alice.welcome()
+    const n = m.flushed.length
+    m.advance(10_000)
+    expect(m.flushed.length).toBe(n)
+    m.dispose()
+  })
+})
+
+describe('M2-6: a laser message is never coalesced away', () => {
+  it('a camera re-send of the same sample right after a sample with a trail does not lose that trail', () => {
+    const m = meeting()
+    m.aliceHub.onPointer(m.sample(100, 'down'))
+    m.advance(10)
+    const sample = m.sample(160, 'down', [
+      { x: 110, y: 1 },
+      { x: 130, y: 1 },
+      { x: 150, y: 1 },
+    ])
+    m.aliceHub.onPointer(sample)
+    m.advance(10)
+    // the board session re-sends its last sample on a camera move: no new trail, a fresh view
+    m.aliceHub.onPointer(sample)
+    m.advance(100)
+    const trails = m.flushed.flatMap((p) => (p.trail as { x: number }[] | undefined)?.map((q) => q.x) ?? [])
+    expect(trails).toEqual([100, 110, 130, 150])
+    // and the peer's laser has the whole path to the last point
+    expect(m.seen()?.points.map((p) => p.x)).toEqual([100, 110, 130, 150, 160])
+    m.dispose()
+  })
+
+  it('moves faster than 20 Hz go out at most every 50 ms, each batch with at most 6 points ending at the latest', () => {
+    const m = meeting()
+    m.aliceHub.onPointer(m.sample(0, 'down'))
+    // 125 moves a second for one second, each with two coalesced points
+    for (let i = 1; i <= 125; i++) {
+      m.advance(8)
+      m.aliceHub.onPointer(
+        m.sample(i * 4, 'down', [
+          { x: i * 4 - 3, y: 1 },
+          { x: i * 4 - 2, y: 1 },
+        ]),
+      )
+    }
+    m.advance(100)
+    expect(m.flushed.length).toBeLessThanOrEqual(22)
+    for (const p of m.flushed) expect((p.trail as unknown[] | undefined)?.length ?? 0).toBeLessThanOrEqual(6)
+    // the peer ends where she is
+    expect(m.seen()?.points.at(-1)).toMatchObject({ x: 500, y: 1 })
+    m.dispose()
+  })
+
+  it('the release goes at once and nothing of the laser follows it', () => {
+    const m = meeting()
+    m.aliceHub.onPointer(m.sample(0, 'down'))
+    m.advance(10)
+    m.aliceHub.onPointer(m.sample(20, 'down', [{ x: 10, y: 1 }]))
+    const waiting = m.flushed.length
+    m.aliceHub.onPointer(m.sample(30, 'up'))
+    m.advance(200)
+    const after = m.flushed.slice(waiting)
+    expect(after.at(-1)).toMatchObject({ t: null, button: 'up' })
+    expect(after.filter((p) => p.t === 'laser').length).toBeLessThanOrEqual(1)
+    m.dispose()
   })
 })

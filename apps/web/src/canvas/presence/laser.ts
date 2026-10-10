@@ -25,6 +25,12 @@ export const LASER_TRAIL_MS = 1_000
 export const LASER_MAX_SAMPLES = 120
 /** A pressed laser with no entry for this long counts as released (its sender stopped sending). */
 export const LASER_HOLD_MS = 3_000
+/**
+ * M2-6: a laser pressed and held still re-sends its last point this often, so a peer does not count it released
+ * (LASER_HOLD_MS): two sends may be lost before it would. It is one message a second, the same fields as any
+ * other laser message (no protocol change), and goes through the same 20 Hz gate (./hub.ts).
+ */
+export const LASER_RESEND_MS = 1_000
 /** The span one entry's samples are spread over when the previous entry is older (the room's 10 Hz tick). */
 const FRAME_SPAN_MS = 100
 
