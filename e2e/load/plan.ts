@@ -94,7 +94,8 @@ export function buildPlans(
             // time, and on a full core the send is coalesced on the core's timer, so a saturated worker's
             // event-loop stall ages the stamp before the frame leaves (NAS L2 r3: thin-measured presence
             // p50 161 ms against 55-81 in r1/r2 with the same server load); the thin client sends at once
-            ...(group.kind === 'watcher' &&
+            // M7-7: a laser group's `thin` sessions too (they send presence and receive, nothing more)
+            ...((group.kind === 'watcher' || group.kind === 'laser') &&
             (i >= group.count - (group.thin ?? 0) ||
               (i === 0 && group.measureVisibility && (group.thin ?? 0) > 0))
               ? { thin: true }
