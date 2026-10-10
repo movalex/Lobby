@@ -34,6 +34,8 @@ export function testConfig(dataDir: string, over: Partial<SyncConfig> = {}): Syn
     internalSecret: TEST_INTERNAL_SECRET,
     apiInternalUrl: UNREACHABLE_API,
     accessRecheckMs: 60_000, // tests that exercise the periodic round lower it
+    // M7-4/M7-6: a disk with room to spare whatever the test machine's (GET /healthz/deep reads it)
+    testDiskFree: 0.9,
     ...over,
   }
 }

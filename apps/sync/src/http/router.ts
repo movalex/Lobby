@@ -29,6 +29,11 @@ export interface RouterDeps extends InternalDeps {
   runAll?: Pick<RunAll, 'request' | 'get' | 'list'>
   /** The local backups root (null: local backups are off, so run-all answers 409 BACKUPS_OFF). Absent: off. */
   backupsDir?: () => string | null
+  /**
+   * M7-6: GET /healthz/deep's reasons (health.ts deepHealthReasons; empty = healthy). Public, codes only. Absent:
+   * the path is unknown (404).
+   */
+  deepHealth?: () => readonly string[]
 }
 
 export interface MaintenanceControl {
@@ -162,6 +167,14 @@ async function route(req: IncomingMessage, res: ServerResponse, url: URL, deps: 
   const p = url.pathname
   if (p === '/healthz') {
     res.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' }).end('ok')
+    return
+  }
+  // M7-6 (CAP-ALERTS): the deep check for an external monitor (health.ts). Render's health check stays /healthz.
+  if (p === '/healthz/deep' && deps.deepHealth) {
+    const reasons = deps.deepHealth()
+    res
+      .writeHead(reasons.length ? 503 : 200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' })
+      .end(reasons.length ? reasons.join(',') : 'ok')
     return
   }
   if (p === '/internal' || p.startsWith('/internal/')) {

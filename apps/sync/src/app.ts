@@ -25,6 +25,7 @@ import {
   type InternalRoute,
   registeredElementRoom,
 } from './engine-switch.ts'
+import { createLoopWatch, deepHealthReasons } from './health.ts'
 import { createRequestHandler, type MaintenanceControl } from './http/router.ts'
 import { JoinQueue } from './join-queue.ts'
 import { errorSummary } from './log-error.ts'
@@ -234,6 +235,8 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     backupsDir: () => backupsDir,
   })
 
+  // M7-6: the deep health check's event-loop windows (health.ts), and what it reads at each request
+  const loopWatch = createLoopWatch()
   const handle = createRequestHandler({
     internalSecret: config.internalSecret,
     monitor: access,
@@ -244,6 +247,14 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     maintenance: maintenanceControl,
     runAll,
     backupsDir: () => backupsDir,
+    deepHealth: () =>
+      deepHealthReasons({
+        diskFreeRatio: disk.freeRatio(roomsDir),
+        backups: backups.status(),
+        loopP99Ms: loopWatch.p99(),
+        accessRound: access.lastRound(),
+        now: Date.now(),
+      }),
   })
   const http = createServer((req, res) => {
     const p = handle(req, res)
@@ -424,6 +435,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     close() {
       closing ??= (async () => {
         access.stop()
+        loopWatch.stop()
         const stopped = http.listening
           ? new Promise<void>((resolve) => http.close(() => resolve()))
           : Promise.resolve()
