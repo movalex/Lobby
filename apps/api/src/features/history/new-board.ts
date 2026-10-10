@@ -1,4 +1,5 @@
-// Creating a board from existing content (restore-as-new, duplicate, import).
+// Creating a board from existing content (restore-as-new, duplicate, import, and since wave M a workspace
+// template: features/ws-templates).
 //
 // Always a NEW, PRIVATE board owned by the caller (PRF-08): no grants, no invitation/review links, no
 // workspace visibility are inherited, except the explicit "keep sharing settings" duplicate, which
@@ -57,8 +58,15 @@ export interface NewBoardPlan {
   files: readonly FileRef[]
   /** keepSharing duplicate only. */
   shareLike?: { boardId: string; visibility: BoardVisibility }
-  via: 'restore' | 'duplicate' | 'import'
+  /** 'template' (wave M, M8-3): a workspace template's board as the source (features/ws-templates). */
+  via: 'restore' | 'duplicate' | 'import' | 'template'
   from?: { boardId?: string; snapshotId?: string }
+  /**
+   * Wave M (M8-3): re-checks inside the transaction, right after the workspace row lock and the creator check
+   * and before anything is written (a workspace template still exists). A throw rolls everything back, so no
+   * board row is made; the seeded canvas is then unused, as after any failed insert (logged).
+   */
+  inTx?: (tx: Queryable) => Promise<void>
 }
 
 const SEED_ATTEMPTS = 4
@@ -216,6 +224,7 @@ export async function createBoardFrom(
         route: `createBoardFrom:${plan.via}`,
         by: 'route',
       })
+      if (plan.inTx) await plan.inTx(tx)
       await assertBoardRoom(tx, plan.workspaceId, ctx.config.storage.maxBoardsPerWorkspace)
       let projectId = plan.projectId
       if (projectId) {
@@ -346,9 +355,12 @@ export async function createBoardFrom(
       }
       await insertLinks(tx, plan.workspaceId, newId, fence.kept, at)
       // AIPV-04: a copy of a board with AI off (an NDA client's board) keeps AI off; a copy never falls
-      // back to the workspace default (usually on). Restore-as-new and duplicate only, from a board of
-      // the same workspace; a board without its own choice gives a copy without one.
-      if (plan.from?.boardId && (plan.via === 'restore' || plan.via === 'duplicate'))
+      // back to the workspace default (usually on). Restore-as-new, duplicate and (wave M) a workspace
+      // template, from a board of the same workspace; a board without its own choice gives a copy without one.
+      if (
+        plan.from?.boardId &&
+        (plan.via === 'restore' || plan.via === 'duplicate' || plan.via === 'template')
+      )
         await tx.query(
           `INSERT INTO board_ai_settings (board_id, workspace_id, enabled, updated_by, updated_at)
            SELECT $1, $2, s.enabled, $3, $4 FROM board_ai_settings s
