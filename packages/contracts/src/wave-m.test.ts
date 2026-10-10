@@ -5,6 +5,12 @@ import { BOARD_ROLES } from '@draftroom/permissions'
 import { describe, expect, it } from 'vitest'
 import {
   ACCESS_MANY_MAX_PAIRS,
+  FEEDBACK_PROMPT_GOOD_PREFIX,
+  FEEDBACK_PROMPT_MOMENTS,
+  FEEDBACK_TEXT_MAX,
+  FeedbackInput,
+  feedbackPromptGoodText,
+  feedbackPromptIssuePrefill,
   AccessManyRequest,
   AccessManyResponse,
   AddWorkspaceTemplateInput,
@@ -270,5 +276,25 @@ describe('the batched access recheck (M7-1)', () => {
         AccessManyResponse.shape.results.element.shape.role.safeParse(r).success,
         `${r} is a board role`,
       ).toBe(true)
+  })
+})
+
+describe('the end-of-moment feedback prompt (M2-5): text only, through POST /api/feedback as it is', () => {
+  it('Good and the issue prefill name the moment in the text; a kind or moment key would be dropped', () => {
+    expect(feedbackPromptGoodText('vote-reveal')).toBe('Good (after a vote reveal)')
+    expect(feedbackPromptIssuePrefill('run-of-show-end')).toBe('After the run of show: ')
+    for (const m of FEEDBACK_PROMPT_MOMENTS) {
+      const good = feedbackPromptGoodText(m)
+      expect(good.startsWith(FEEDBACK_PROMPT_GOOD_PREFIX)).toBe(true)
+      expect(good.length).toBeLessThanOrEqual(FEEDBACK_TEXT_MAX)
+      expect(feedbackPromptIssuePrefill(m).startsWith(FEEDBACK_PROMPT_GOOD_PREFIX)).toBe(false)
+    }
+    // why it is text: the input has no field for it, and the api's parse drops unknown keys without an error
+    const parsed = FeedbackInput.parse({
+      text: feedbackPromptGoodText('presentation-stop'),
+      kind: 'praise',
+      moment: 'x',
+    })
+    expect(parsed).toEqual({ text: 'Good (after a presentation)' })
   })
 })

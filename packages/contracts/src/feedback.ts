@@ -151,3 +151,45 @@ export const FEEDBACK_CODES = {
   /** 400: nothing to send after cleaning, or a field over its limit. */
   invalid: 'FEEDBACK_INVALID',
 } as const
+
+// ---- wave M (M2-5, W2; frozen by the wave M foundation): the end-of-moment prompt ----------------------------------
+//
+// "How did this go in Lobby? [Good] [Something got in the way]" after a facilitated moment. It uses POST
+// /api/feedback as it is: no route, contract field, column or migration (the wave M migrations end at 0030).
+// FeedbackKind already says who sent an item (account or guest), and FeedbackInput and its context drop unknown
+// keys, so a `kind: 'praise'` or a `moment` field would be lost without an error. The prompt therefore says both in
+// the text the person sends:
+//   - Good sends feedbackPromptGoodText(moment) as `text`, "Good (after a vote reveal)", with the usual context;
+//   - Something got in the way opens the FeedbackDialog with feedbackPromptIssuePrefill(moment) in "What happened?",
+//     "After a vote reveal: ", for the person to finish (they can edit or delete it).
+// The inbox tells a Good apart by its text (FEEDBACK_PROMPT_GOOD_PREFIX).
+
+/** The facilitated moments that end with the prompt. */
+export const FEEDBACK_PROMPT_MOMENTS = [
+  'presentation-stop',
+  'vote-reveal',
+  'results-to-board',
+  'run-of-show-end',
+] as const
+export type FeedbackPromptMoment = (typeof FEEDBACK_PROMPT_MOMENTS)[number]
+
+/** How each moment reads in the sent text. */
+export const FEEDBACK_PROMPT_MOMENT_LABELS: Readonly<Record<FeedbackPromptMoment, string>> = {
+  'presentation-stop': 'a presentation',
+  'vote-reveal': 'a vote reveal',
+  'results-to-board': 'vote results to the board',
+  'run-of-show-end': 'the run of show',
+}
+
+/** Every Good starts with this, so the inbox (and the lead's triage) can tell it from a report. */
+export const FEEDBACK_PROMPT_GOOD_PREFIX = 'Good (after '
+
+/** The whole `text` of a Good: "Good (after a vote reveal)". */
+export const feedbackPromptGoodText = (moment: FeedbackPromptMoment): string =>
+  `${FEEDBACK_PROMPT_GOOD_PREFIX}${FEEDBACK_PROMPT_MOMENT_LABELS[moment]})`
+
+/** What "Something got in the way" puts in "What happened?" first: "After a vote reveal: ". */
+export const feedbackPromptIssuePrefill = (moment: FeedbackPromptMoment): string => {
+  const label = FEEDBACK_PROMPT_MOMENT_LABELS[moment]
+  return `After ${label}: `
+}
