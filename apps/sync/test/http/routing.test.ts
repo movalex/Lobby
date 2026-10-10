@@ -58,6 +58,8 @@ describe('routing', () => {
       ['GET', '/dev-api/boards/board-a/assets/ast_0123456789/ver_0123456789'],
       ['GET', '/files/ast_0123456789/ver_0123456789/original?board=board-a'],
       ['GET', '/internal/nope'],
+      // wave M (the foundation): the sync's GET /healthz/deep is W7's (M7-6), pending until it lands: an unknown path
+      ['GET', '/healthz/deep'],
     ] as const) {
       const res = await req(t.port, { method, path, headers: secret, body: Buffer.alloc(0) })
       expect(res.status, `${method} ${path}`).toBe(404)
