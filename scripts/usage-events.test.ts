@@ -4,12 +4,15 @@
 //  - a string literal must be a USAGE_EVENTS member;
 //  - a template literal `name:${…}` must start with one of USAGE_PARAM_EVENTS' names and a colon (its value is typed
 //    by the parameter list), and one without `${` must be a member;
+//  - or a template naming a fixed family, `emptyhint.${action}`, `feedback.prompt.${step}`, `open.${how}`: the text
+//    before its one hole ends with a dot and starts a USAGE_FIXED_EVENTS member, and any text after the hole ends
+//    one of those (the typecheck holds the hole to that family's members);
 //  - any other argument (a typed variable) is left to the typecheck.
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { USAGE_EVENTS, USAGE_PARAM_EVENTS } from '../packages/contracts/src/usage.ts'
+import { USAGE_EVENTS, USAGE_FIXED_EVENTS, USAGE_PARAM_EVENTS } from '../packages/contracts/src/usage.ts'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const WEB = join(ROOT, 'apps/web/src')
@@ -35,6 +38,18 @@ export interface UsageCallProblem {
 const EVENTS: ReadonlySet<string> = new Set(USAGE_EVENTS)
 const PARAM_PREFIXES = Object.keys(USAGE_PARAM_EVENTS).map((n) => `${n}:`)
 
+/** Whether a template (its first hole at `hole`) names a fixed family of events (the header's third rule). */
+function fixedFamily(arg: string, hole: number): boolean {
+  const prefix = arg.slice(0, hole)
+  if (prefix.length < 2 || !prefix.endsWith('.')) return false
+  const close = arg.indexOf('}', hole)
+  if (close < 0 || arg.includes('${', close)) return false
+  const suffix = arg.slice(close + 1)
+  return USAGE_FIXED_EVENTS.some(
+    (e) => e.startsWith(prefix) && e.length > prefix.length + suffix.length && e.endsWith(suffix),
+  )
+}
+
 /** The countUsage calls of one file's text whose argument is not a known event. */
 export function usageCallProblems(
   text: string,
@@ -58,8 +73,12 @@ export function usageCallProblems(
       const hole = arg.indexOf('${')
       if (hole < 0) {
         if (!EVENTS.has(arg)) problems.push({ at, arg, why: 'not a USAGE_EVENTS member' })
-      } else if (!PARAM_PREFIXES.includes(arg.slice(0, hole)))
-        problems.push({ at, arg, why: 'not a template starting with a parameterised event and a colon' })
+      } else if (!PARAM_PREFIXES.includes(arg.slice(0, hole)) && !fixedFamily(arg, hole))
+        problems.push({
+          at,
+          arg,
+          why: 'not a template starting with a parameterised event and a colon, nor one naming a fixed family',
+        })
     }
   }
   return { calls, problems }
@@ -80,15 +99,29 @@ describe('countUsage call sites (apps/web/src)', () => {
         'countUsage(`board:%{boardId}`)',
         "countUsage( 'palette.run:nope' )",
         'countUsage(`palette.open`)',
+        // fixed families: the hole is typed from the family's members (USAGE_EMPTY_HINT_ACTIONS and the like)
+        'countUsage(`emptyhint.%{action}`)',
+        'countUsage(`feedback.prompt.%{step}`)',
+        'countUsage(`open.%{how}`)',
+        'countUsage(`stalechunk.%{what}`)',
+        // not a family: no fixed event starts with it, no dot before the hole, two holes, a suffix no member has
+        'countUsage(`palette.%{x}`)',
+        'countUsage(`emptyhint%{x}`)',
+        'countUsage(`emptyhint.%{a}.%{b}`)',
+        'countUsage(`emptyhint.%{a}x`)',
       ].join('\n'),
     )
     const { calls, problems } = usageCallProblems(sample, 'sample.ts')
-    expect(calls).toBe(9)
+    expect(calls).toBe(17)
     expect(problems.map((p) => p.arg)).toEqual([
       'coach.shwon',
       hole('board:%{boardId}'),
       'palette.run:nope',
       'palette.open',
+      hole('palette.%{x}'),
+      hole('emptyhint%{x}'),
+      hole('emptyhint.%{a}.%{b}'),
+      hole('emptyhint.%{a}x'),
     ])
     expect(problems[0]?.at).toBe('sample.ts:6')
   })

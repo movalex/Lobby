@@ -6,6 +6,7 @@ import {
   PENDING_PALETTE_COMMAND_IDS,
   USAGE_BATCH_MAX_KEYS,
   USAGE_COUNT_CAP,
+  USAGE_EMPTY_HINT_ACTIONS,
   USAGE_EVENTS,
   USAGE_TEMPLATE_IDS,
   UsageBatch,
@@ -19,6 +20,18 @@ import { countUsage, pendingUsage, resetUsageForTests, takeUsageBatch } from './
 afterEach(() => resetUsageForTests())
 
 describe('countUsage (the foundation stub: in memory, never sent)', () => {
+  it('a fixed family typed from its list type-checks as a template (scripts/usage-events.test.ts accepts it too)', () => {
+    for (const action of USAGE_EMPTY_HINT_ACTIONS) countUsage(`emptyhint.${action}`)
+    const step: 'shown' | 'good' | 'issue' = 'good'
+    countUsage(`feedback.prompt.${step}`)
+    const how = 'cold' as 'cached' | 'cold'
+    countUsage(`open.${how}`)
+    expect(Object.keys(pendingUsage()).sort()).toEqual(
+      [...USAGE_EMPTY_HINT_ACTIONS.map((a) => `emptyhint.${a}`), 'feedback.prompt.good', 'open.cold'].sort(),
+    )
+    for (const k of Object.keys(pendingUsage())) expect(USAGE_EVENTS as readonly string[]).toContain(k)
+  })
+
   it('counts per event, and a batch is a valid POST /api/usage body that starts the count again', () => {
     countUsage('coach.shown')
     countUsage('coach.shown')
