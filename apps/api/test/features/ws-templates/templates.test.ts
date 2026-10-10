@@ -17,6 +17,7 @@ import { type Client, createBoard, createTestApi, DEV_STUDIO, type TestApi } fro
 import { statementLog } from '../../statement-log.ts'
 import { guestLink, joinAsGuest } from '../guests/support.ts'
 import { baseRecords, createFakeSync, type FakeSync, noteRec } from '../history/helpers.ts'
+import { move, newProject, projectOf, refused, setProject } from '../outside/internal-only-support.ts'
 
 let api: TestApi
 let sync: FakeSync
@@ -26,7 +27,7 @@ let carol: Client
 let dave: Client
 let pat: Client
 let erin: Client
-/** carol's private board with a note, a viewer grant for dave, a review link, AI off, export limited. */
+/** carol's private board with a note, a viewer grant for dave, a review link, AI off, a stored export policy. */
 let source: string
 
 const ws = `/api/workspaces/${DEV_STUDIO}/templates`
@@ -147,6 +148,23 @@ describe('saving and removing (a creator who is a workspace owner or admin)', ()
     expect((await save(bob, 'b-limit-0000', 'Renamed')).statusCode).toBe(201)
   })
 
+  it('a board whose copying is limited to its editors (export policy) cannot be saved: 403, nothing stored', async () => {
+    expect(
+      (await carol.req('PUT', `/api/boards/${source}/export-policy`, { exportPolicy: 'editors' })).statusCode,
+    ).toBe(200)
+    for (const who of [bob, owner]) {
+      const res = await save(who, source)
+      expect(res.statusCode, res.body).toBe(403)
+      expect(res.json().error.message).toMatch(/limited to its editors/)
+    }
+    expect(await count('workspace_templates')).toBe(0)
+    expect(
+      (await carol.req('PUT', `/api/boards/${source}/export-policy`, { exportPolicy: 'everyone' }))
+        .statusCode,
+    ).toBe(200)
+    expect((await save(bob, source)).statusCode).toBe(201)
+  })
+
   it('DELETE answers 204, then 404; the board itself is untouched', async () => {
     expect((await save(bob, source)).statusCode).toBe(201)
     const del = await bob.req('DELETE', one(source))
@@ -188,7 +206,8 @@ describe('listing', () => {
 
 describe('using a template', () => {
   beforeEach(async () => {
-    // The source as it is in real life: shared, with a grant, a link, AI off and export limited.
+    // The source as it is in real life: shared, with a grant, a link, AI off and a stored export policy (the
+    // link stored 'editors', DANA2-01; its owner then let everyone copy, guests included).
     expect(
       (await carol.req('PATCH', `/api/boards/${source}`, { visibility: 'workspace_edit' })).statusCode,
     ).toBe(200)
@@ -202,7 +221,11 @@ describe('using a template', () => {
       200,
     )
     expect(
-      (await carol.req('PUT', `/api/boards/${source}/export-policy`, { exportPolicy: 'editors' })).statusCode,
+      (
+        await carol.req('PUT', `/api/boards/${source}/export-policy`, {
+          exportPolicy: 'everyone-including-guests',
+        })
+      ).statusCode,
     ).toBe(200)
     // the template is then made private again: the person who uses it has no access to the board at all
     expect((await carol.req('PATCH', `/api/boards/${source}`, { visibility: 'private' })).statusCode).toBe(
@@ -302,10 +325,79 @@ describe('using a template', () => {
     expect(sync.seeds).toHaveLength(1)
   })
 
+  it('copying limited to editors after the save is read at use: 403 EXPORT_DISABLED below editor, as duplicate', async () => {
+    expect(
+      (await carol.req('PUT', `/api/boards/${source}/export-policy`, { exportPolicy: 'editors' })).statusCode,
+    ).toBe(200)
+    const before = await count('boards')
+    // dave holds a viewer grant (his duplicate is refused too); a member with no grant at all is refused the same
+    expect((await dave.req('POST', `/api/boards/${source}/duplicate`, {})).json().error?.code).toBe(
+      'EXPORT_DISABLED',
+    )
+    const r1 = await dave.req('POST', use(source), {})
+    expect(r1.statusCode, r1.body).toBe(403)
+    expect(r1.json().error.code).toBe('EXPORT_DISABLED')
+    expect((await carol.req('DELETE', `/api/boards/${source}/members/${dave.userId}`)).statusCode).toBe(200)
+    expect((await dave.req('POST', use(source), {})).json().error.code).toBe('EXPORT_DISABLED')
+    expect(await count('boards')).toBe(before)
+    expect(sync.seeds).toEqual([])
+    // its owner, and a workspace owner or admin (owners of every board), still copy it
+    for (const who of [carol, bob]) expect((await who.req('POST', use(source), {})).statusCode).toBe(201)
+  })
+
   it('two uses at once make two boards', async () => {
     const [a, b] = await Promise.all([dave.req('POST', use(source), {}), carol.req('POST', use(source), {})])
     expect([a.statusCode, b.statusCode]).toEqual([201, 201])
     expect(a.json().board.id).not.toBe(b.json().board.id)
+  })
+})
+
+describe('a template in an internal-only project (IO-1: only owners and admins who are creators take content out)', () => {
+  let inside: string
+  let open: string
+  beforeEach(async () => {
+    inside = await newProject(owner, DEV_STUDIO, 'Client X')
+    open = await newProject(owner, DEV_STUDIO, 'Open')
+    expect((await move(carol, source, inside)).statusCode).toBe(200)
+    expect((await setProject(owner, inside, true)).statusCode).toBe(200)
+    expect((await save(bob, source)).statusCode, 'save').toBe(201)
+  })
+
+  it('a member: 409 INTERNAL_ONLY to no project or to a project that is not internal only; nothing is made', async () => {
+    // the same member may not move the board out either (IO-1)
+    refused(await move(carol, source, null), 'project')
+    const before = await count('boards')
+    refused(await carol.req('POST', use(source), {}), 'project')
+    refused(await carol.req('POST', use(source), { projectId: null }), 'project')
+    refused(await dave.req('POST', use(source), { projectId: open }), 'project')
+    expect(await count('boards')).toBe(before)
+    // into the project itself (where a duplicate lands): allowed
+    const ok = await dave.req('POST', use(source), { projectId: inside })
+    expect(ok.statusCode, ok.body).toBe(201)
+    expect(await projectOf(api, ok.json().board.id)).toBe(inside)
+  })
+
+  it('a workspace owner or admin who is a creator may take a copy out (as they may move the board)', async () => {
+    for (const who of [bob, owner]) {
+      const res = await who.req('POST', use(source), {})
+      expect(res.statusCode, res.body).toBe(201)
+      expect(await projectOf(api, res.json().board.id)).toBeNull()
+    }
+  })
+
+  it('the template board moved into the project after the first read: refused (its project is read under the lock)', async () => {
+    expect((await setProject(owner, inside, false)).statusCode).toBe(200)
+    expect((await move(carol, source, null)).statusCode).toBe(200)
+    const before = await count('boards')
+    const snapshot = sync.snapshot.bind(sync)
+    sync.snapshot = async (bid) => {
+      const snap = await snapshot(bid)
+      await api.db.query('UPDATE boards SET project_id = $1 WHERE id = $2', [inside, source])
+      await api.db.query('UPDATE projects SET internal_only = true WHERE id = $1', [inside])
+      return snap
+    }
+    refused(await carol.req('POST', use(source), {}), 'project')
+    expect(await count('boards')).toBe(before)
   })
 })
 

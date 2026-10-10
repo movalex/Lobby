@@ -24,6 +24,12 @@
 //   same row before it deletes, so a removal and a use run one after the other: removed first, the use answers 404
 //   and makes no board; used first, the copy is made and the removal waits. A member removal also holds the
 //   workspace row, so a use never leaves an owner grant for someone who is no member any more.
+// - A use is a full copy, so it follows the other copy paths (round 1 refix). IO-1: a copy of a template whose board
+//   is in an internal-only project goes outside every internal-only scope only for a workspace owner or admin who is
+//   a creator (assertProjectMoveAllowed, on the board's project read under the workspace row lock; 409
+//   INTERNAL_ONLY); anyone else may make it in that project. Export control: a board whose copying is limited to its
+//   editors (policy 'editors', DANA2-01's client-link default included) cannot be saved, and at use the policy is
+//   read again, so a later limit refuses whoever is below editor on the board (403 EXPORT_DISABLED, as duplicate).
 // - A trashed template board is gone for every route (its row stays until the board is deleted for good, 0030).
 // - Nothing here publishes board events or logs names.
 
@@ -53,7 +59,8 @@ import { onNewCanvas, showsR0Marks } from '../../canvas-engine.ts'
 import type { Params } from '../../context.ts'
 import { conflict, forbidden, notFound, parse } from '../../errors.ts'
 import type { FeatureContext } from '../context.ts'
-import { mayExport } from '../export-control/policy.ts'
+import { assertProjectMoveAllowed } from '../dashboard/outside.ts'
+import { exportDisabled, loadExportPolicy, mayExport } from '../export-control/policy.ts'
 import { filesShownOn, referencedElementFiles, referencedFiles } from '../history/files.ts'
 import { contentOf, created, recordsOf } from '../history/index.ts'
 import { createBoardFrom, newCanvasBoard, viaSync } from '../history/new-board.ts'
@@ -96,10 +103,10 @@ async function liveTemplate(
   workspaceId: string,
   boardId: string,
   lock = false,
-): Promise<(TemplateRow & Pick<BoardRow, 'new_canvas'>) | null> {
+): Promise<(TemplateRow & Pick<BoardRow, 'new_canvas' | 'project_id'>) | null> {
   if (!isBoardId(boardId)) return null
-  return q.maybeOne<TemplateRow & Pick<BoardRow, 'new_canvas'>>(
-    `${TEMPLATE_SELECT.replace('SELECT ', 'SELECT b.new_canvas, ')}
+  return q.maybeOne<TemplateRow & Pick<BoardRow, 'new_canvas' | 'project_id'>>(
+    `${TEMPLATE_SELECT.replace('SELECT ', 'SELECT b.new_canvas, b.project_id, ')}
      WHERE t.workspace_id = $1 AND t.board_id = $2 AND b.status <> 'trashed'${lock ? ' FOR SHARE OF t' : ''}`,
     [workspaceId, boardId],
   )
@@ -148,10 +155,11 @@ export async function registerWsTemplates(app: FastifyInstance, ctx: FeatureCont
       // A board of this workspace that is not in the trash (an owner or admin can open every one of them).
       const access = await loadBoardAccess(db, input.boardId, user.id)
       if (!access || access.board.workspace_id !== wid || access.board.status === 'trashed') throw notFound()
-      // Its content is offered to every member as a copy: whoever saves it must be allowed to copy out of it.
-      if (!(await mayExport(db, access, user.id)))
+      // Its content is offered to every member as a copy. An owner or admin may always copy (they own every board),
+      // so what decides is the board's own limit: copying limited to its editors keeps it from being a template.
+      if ((await loadExportPolicy(db, access.board.id)) === 'editors')
         throw forbidden(
-          'Copying from this board is turned off for you, so it cannot be a workspace template.',
+          'Copying from this board is limited to its editors, so it cannot be a workspace template. Let everyone copy it first.',
         )
       const row = await db.transaction(async (tx) => {
         await lockWorkspace(tx, wid)
@@ -225,6 +233,11 @@ export async function registerWsTemplates(app: FastifyInstance, ctx: FeatureCont
       if (!template) throw notFound()
       const projectId = input.projectId ?? null
       if (projectId) await requireProjectInWorkspace(db, projectId, wid)
+      // Export control, read now (a limit set after the save counts): below editor on the board, no copy.
+      if ((await loadExportPolicy(db, bid)) === 'editors') {
+        const access = await loadBoardAccess(db, bid, user.id)
+        if (!access || !(await mayExport(db, access, user.id))) throw exportDisabled()
+      }
       // bridge release R0: a board of the new canvas is copied only by an api whose sync runs it
       if (template.new_canvas && !(await onNewCanvas(ctx))) throw newCanvasBoard()
       const snap = await viaSync(() => ctx.sync.snapshot(bid))
@@ -248,7 +261,15 @@ export async function registerWsTemplates(app: FastifyInstance, ctx: FeatureCont
           from: { boardId: bid },
           // Under the workspace row lock: the template must still be one (a removal that went first wins).
           inTx: async (tx) => {
-            if (!(await liveTemplate(tx, wid, bid, true))) throw notFound()
+            const locked = await liveTemplate(tx, wid, bid, true)
+            if (!locked) throw notFound()
+            // IO-1: out of an internal-only project only for a workspace owner or admin who is a creator.
+            await assertProjectMoveAllowed(tx, ctx, {
+              workspaceId: wid,
+              userId: user.id,
+              from: locked.project_id,
+              to: projectId,
+            })
           },
         },
         warn,
