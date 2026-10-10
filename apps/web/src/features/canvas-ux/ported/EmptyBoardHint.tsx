@@ -10,14 +10,22 @@
 // so it pans and zooms with the board. It is drawn only on the empty board: the engine paints an opaque
 // canvas, so a grid under existing elements would need the engine's background changed (Board ▸ View ▸ Show
 // grid is the engine's own grid for that).
+//
+// Wave M (M3-3, FTU-4): two more ways to start, for what wave L brought: "Diagram from words" (when that command is
+// on for this person) and "Ctrl+K: search or do" (the command palette; on a touch screen just "Search or do…"). Each
+// click is counted `emptyhint.<action>` (the contract's USAGE_EMPTY_HINT_ACTIONS).
 import { useEffect, useState } from 'react'
 import {
   type CanvasFeatureContext,
+  currentPlatform,
+  formatChord,
   type MenuEntrySpec,
   type MenuTarget,
   roomReadyOf,
 } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { countUsage } from '../../../lib/usage.ts'
+import { PALETTE_COMMAND_ID } from '../../command-palette/ids.ts'
 import { TEMPLATE_PARAM } from '../start-view.ts'
 import { runCommand } from './commands.ts'
 import { startParamsDropped } from './navigation/start-view.ts'
@@ -46,10 +54,14 @@ export function gridLayout(v: { readonly x: number; readonly y: number; readonly
 export const AI_IDEAS_ID = 'ai.ideas'
 /** The mind-map feature's command that starts a map in the middle of the view. */
 export const MINDMAP_START_ID = 'mindmap.start'
+/** The flow feature's Diagram from words (W4, wave L). */
+export const DIAGRAM_ID = 'flow.diagram'
 
 export interface HintAction {
-  readonly id: 'templates' | 'mindmap' | 'ai'
+  readonly id: 'templates' | 'mindmap' | 'ai' | 'diagram' | 'palette'
   readonly label: string
+  /** the words on a touch screen, when they differ (no key to name) */
+  readonly touchLabel?: string
   readonly testId: string
   run(): void
 }
@@ -113,6 +125,22 @@ export function hintActions(ctx: CanvasFeatureContext): HintAction[] {
         run: () => entry.run?.(ctx, centreTarget(ctx)),
       })
   }
+  const diagram = r.commands.get(DIAGRAM_ID)
+  if (diagram && (!diagram.enabled || diagram.enabled(ctx)))
+    out.push({
+      id: 'diagram',
+      label: 'Diagram from words',
+      testId: 'empty-hint-diagram',
+      run: () => void runCommand(ctx, DIAGRAM_ID, 'menu'),
+    })
+  if (r.commands.get(PALETTE_COMMAND_ID))
+    out.push({
+      id: 'palette',
+      label: `${formatChord('mod+k', currentPlatform())}: search or do`,
+      touchLabel: 'Search or do…',
+      testId: 'empty-hint-palette',
+      run: () => void runCommand(ctx, PALETTE_COMMAND_ID, 'menu', { via: 'button' }),
+    })
   return out
 }
 
@@ -215,9 +243,12 @@ export function EmptyBoardHint({ ctx }: { ctx: CanvasFeatureContext }) {
               type="button"
               className="dr-btn dr-btn--sm cux-empty-hint__btn"
               data-testid={a.testId}
-              onClick={() => a.run()}
+              onClick={() => {
+                countUsage(`emptyhint.${a.id}`)
+                a.run()
+              }}
             >
-              {a.label}
+              {coarse && a.touchLabel ? a.touchLabel : a.label}
             </button>
           ))}
         </div>

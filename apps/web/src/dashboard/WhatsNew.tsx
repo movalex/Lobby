@@ -1,6 +1,6 @@
 // The "What's new" card (wave K, K4-5): see whats-new.ts. A plain function of its props (no hooks), so a
 // component test can read it and press its buttons; DashboardPage owns the state and what each "Try it" does.
-import type { TryAction, WhatsNewItem } from './whats-new.ts'
+import { type TryAction, type TryKey, tryKey, type WhatsNewItem } from './whats-new.ts'
 
 export const WHATS_NEW_HEADING_ID = 'dr-whatsnew-h'
 
@@ -14,9 +14,9 @@ export function WhatsNewCard({
 }: {
   items: readonly WhatsNewItem[]
   /** The "Try it" whose work is under way (a board is being opened or made): every "Try it" waits for it. */
-  pending?: TryAction | null
+  pending?: TryKey | null
   /** "Try it" actions that cannot be done yet (what they need has not loaded): those buttons are disabled. */
-  unavailable?: readonly TryAction[]
+  unavailable?: readonly TryKey[]
   onTry(action: TryAction): void
   /** Opens the feedback dialog. */
   onTellUs(): void
@@ -53,13 +53,13 @@ export function WhatsNewCard({
                 type="button"
                 className="dr-btn dr-btn--sm"
                 data-testid="whats-new-try"
-                data-action={item.tryIt}
+                data-action={tryKey(item.tryIt)}
                 aria-label={`Try it: ${item.title}`}
-                aria-busy={pending === item.tryIt || undefined}
-                disabled={pending !== null || unavailable.includes(item.tryIt)}
+                aria-busy={pending === tryKey(item.tryIt) || undefined}
+                disabled={pending !== null || unavailable.includes(tryKey(item.tryIt))}
                 onClick={() => item.tryIt && onTry(item.tryIt)}
               >
-                {pending === item.tryIt ? 'Opening…' : 'Try it'}
+                {pending === tryKey(item.tryIt) ? 'Opening…' : 'Try it'}
               </button>
             )}
           </li>

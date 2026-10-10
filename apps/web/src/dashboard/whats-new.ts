@@ -1,23 +1,37 @@
-// "What's new" (wave K, K4-5): a dismissible card on the dashboard that says what changed and where it went.
-// Wave K moves controls (Internal only now sits behind the workspace tile, the board's top bar is calmer, a
-// phone starts with the Hand tool), and pilot users had no way to learn that. Three to five items, each with a
-// "Try it" that goes to the thing; the card is remembered as dismissed per person (prefs.ts) until a new
-// version of it is published here. Pure data and rules; WhatsNew.tsx draws it.
+// "What's new" (wave K, K4-5; wave L's card, wave M, M3-3): a dismissible card on the dashboard that says what changed and
+// where it went. Wave K moved controls (Internal only now sits behind the workspace tile, the board's top bar is calmer, a
+// phone starts with the Hand tool); wave L brought the command palette, Ask this board, Diagram from words, Time travel
+// and the live meeting's run of show, spotlight and vote results, and the card still described wave K to the returning
+// colleague (FTU-4). Three to five items, each with a "Try it" that goes to the thing; the card is remembered as
+// dismissed per person (prefs.ts) until a new version of it is published here. Pure data and rules; WhatsNew.tsx draws it.
 //
-// The words describe what wave K ships. Items 3 and 5 are other workstreams' (the board's top bar: K2, phones:
-// K5); edit them here if what lands differs.
-//
-// Every item is shown only to people it is true for, and its "Try it" goes to something that is there: the row
-// only to those who get the row, the workspace menu only to those who have an Internal only control in it
-// (a plain member of a one-workspace account has no such menu). `whatsNewFor` takes those facts.
+// Every item is shown only to people it is true for, and its "Try it" goes to something that is there: wave L's items
+// land on a board they can edit with a `?try=<hint>` (features/command-palette/try-hints.ts: the board shows a coach mark
+// on the thing, once, and takes the parameter out of the address bar), or, for someone with no board to try it on, on the
+// Start row. The wave K items stay in this file's history; `WHATS_NEW_VERSION` resets everybody's "dismissed".
+
+import type { TryHint } from '../features/command-palette/try-hints.ts'
+import { type BoardRole, type BoardStatus, can } from '../lib/permissions.ts'
 
 /** Bump it when the card says something new: everybody sees it once more. */
-export const WHATS_NEW_VERSION = '2026-10-wave-k'
+export const WHATS_NEW_VERSION = '2026-10-wave-l'
 export const WHATS_NEW_MIN_ITEMS = 3
 export const WHATS_NEW_MAX_ITEMS = 5
 
+/** "Try it" on a wave L item: a board they can edit, with a coach mark on the thing (see the header). */
+export interface BoardHintTry {
+  readonly kind: 'board-hint'
+  readonly hint: TryHint
+}
+
 /** Where "Try it" goes. The dashboard decides how (it owns the dialogs and the routes). */
-export type TryAction = 'start-row' | 'templates' | 'board' | 'workspace-menu'
+export type TryAction = 'start-row' | 'templates' | 'board' | 'workspace-menu' | BoardHintTry
+
+/** A "Try it" as one string (the button's `data-action`, the card's `pending` and `unavailable`). */
+export type TryKey = string
+export const tryKey = (a: TryAction): TryKey => (typeof a === 'string' ? a : `board-hint:${a.hint}`)
+
+const hintTry = (hint: TryHint): BoardHintTry => ({ kind: 'board-hint', hint })
 
 /**
  * Who an item is true for: everybody; people who can make boards here; people who get the template row (a
@@ -46,39 +60,39 @@ export interface WhatsNewItem {
 
 export const WHATS_NEW_ITEMS: readonly WhatsNewItem[] = [
   {
-    id: 'start-row',
-    title: 'Start something in one click',
-    body: 'Pick a template from the new row above your boards and a board opens with it on.',
-    tryIt: 'start-row',
-    for: 'start-row',
-  },
-  {
-    id: 'agency-templates',
-    title: 'Six new templates for agency work',
-    body: 'Creative brief, client feedback round, shot list, launch timeline, 2x2 prioritisation and Kanban columns.',
-    tryIt: 'templates',
-    for: 'creators',
-  },
-  {
-    id: 'calmer-top-bar',
-    title: 'A calmer board top bar',
-    body: 'Saved and Live share one dot, and Feedback is one click away on every board.',
-    tryIt: 'board',
-    for: 'creators',
-  },
-  {
-    id: 'workspace-menu',
-    title: 'Internal only moved',
-    body: 'It is in the workspace menu now: click your workspace at the top left. A shield shows while it is on.',
-    tryIt: 'workspace-menu',
-    for: 'internal-only',
-  },
-  {
-    id: 'phones',
-    title: 'Phones start with the Hand tool',
-    body: 'On a phone one finger moves around the board, so a swipe never moves a colleague’s note. To work with notes, tap Select (the arrow).',
-    tryIt: null,
+    id: 'palette',
+    title: 'Ctrl+K: do it in words',
+    body: 'Search or do… in a board’s top bar (Ctrl+K) finds anything, and “make the yellow notes blue” just works.',
+    tryIt: hintTry('palette'),
     for: 'everyone',
+  },
+  {
+    id: 'ask',
+    title: 'Ask this board / Wrap up',
+    body: 'Ask a question and get an answer with sources, or Wrap up a session into decisions and actions.',
+    tryIt: hintTry('ask'),
+    for: 'everyone',
+  },
+  {
+    id: 'diagram',
+    title: 'Diagram from words and Mermaid paste',
+    body: 'Describe a process and get a flowchart, or paste a Mermaid diagram onto the board.',
+    tryIt: hintTry('diagram'),
+    for: 'creators',
+  },
+  {
+    id: 'time-travel',
+    title: 'Time travel: bring back just what you need',
+    body: 'Scrub an earlier version of a board in History and restore only the pieces you want.',
+    tryIt: hintTry('time-travel'),
+    for: 'everyone',
+  },
+  {
+    id: 'run-of-show',
+    title: 'Run of show, spotlight and vote results',
+    body: 'Plan minutes per frame, spotlight a note for everyone, and put ranked vote results on the board.',
+    tryIt: hintTry('run-of-show'),
+    for: 'creators',
   },
 ]
 
@@ -117,6 +131,40 @@ export function planBoardTry(input: {
   if (!input.listReady) return { kind: 'wait' }
   if (input.latestBoardId !== null) return { kind: 'open', boardId: input.latestBoardId }
   return input.canCreate ? { kind: 'make-tour' } : { kind: 'none' }
+}
+
+/** What "Try it" on a wave L item does (M3-3). */
+export type HintTry =
+  | { kind: 'wait' } // the board list has not arrived yet
+  | { kind: 'open'; boardId: string; hint: TryHint; to: string } // `to`: the board's address with the hint
+  | { kind: 'start-row' } // no board they can edit: the Start row (a board to try it on is one click there)
+  | { kind: 'none' }
+
+/**
+ * Where a wave L "Try it" goes: the board the person opened most recently that they can edit, with `?try=<hint>`
+ * (`boards`: their boards, the most recently opened first). With none, the dashboard's Start row when they get it. A
+ * person who can only view, comment or has no row opens their latest board of any kind (the palette, Ask and Time
+ * travel are theirs too; the board's coach says plainly when the thing is not there for them). Nothing is created.
+ */
+export function planHintTry(input: {
+  listReady: boolean
+  boards: readonly { readonly id: string; readonly role: BoardRole; readonly status: BoardStatus }[]
+  hint: TryHint
+  startRow: boolean
+  boardAddress: (boardId: string, hint: TryHint) => string
+}): HintTry {
+  if (!input.listReady) return { kind: 'wait' }
+  const open = (boardId: string): HintTry => ({
+    kind: 'open',
+    boardId,
+    hint: input.hint,
+    to: input.boardAddress(boardId, input.hint),
+  })
+  const editable = input.boards.find((b) => can(b.role, 'edit', b.status))
+  if (editable) return open(editable.id)
+  if (input.startRow) return { kind: 'start-row' }
+  const any = input.boards[0]
+  return any ? open(any.id) : { kind: 'none' }
 }
 
 /**

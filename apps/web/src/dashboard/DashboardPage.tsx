@@ -15,12 +15,14 @@ import { useMe } from '../auth/session.tsx'
 import { UserMenu } from '../auth/UserMenu.tsx'
 import { NoticeRegion, useNotices } from '../board/Notices.tsx'
 import { isPaletteKey, paletteKeyOf } from '../features/command-palette/keys.ts'
+import { boardTryPath } from '../features/command-palette/try-hints.ts'
 import { FeedbackPill } from '../features/feedback/FeedbackPill.tsx'
 import { openFeedback } from '../features/feedback/state.ts'
 import { useIsGuest } from '../invite/guest.tsx'
 import { absoluteUrl, copyText } from '../lib/clipboard.ts'
 import { boardPath, type DashboardSection, navigate, workspacePath } from '../lib/routing.ts'
 import { writeLastWorkspace } from '../lib/storage.ts'
+import { countUsage } from '../lib/usage.ts'
 import { useResource } from '../lib/useResource.ts'
 import { isFocusLost } from '../ui/focus.ts'
 import { SkipLink } from '../ui/SkipLink.tsx'
@@ -77,7 +79,16 @@ import type { CatalogEntry } from './template-catalog.ts'
 import { newBoardPath } from './template-paths.ts'
 import { useCatalog, whenIdle } from './use-catalog.ts'
 import { WhatsNewCard } from './WhatsNew.tsx'
-import { planBoardTry, showWhatsNew, type TryAction, WHATS_NEW_VERSION, whatsNewFor } from './whats-new.ts'
+import {
+  planBoardTry,
+  planHintTry,
+  showWhatsNew,
+  type TryAction,
+  type TryKey,
+  tryKey,
+  WHATS_NEW_VERSION,
+  whatsNewFor,
+} from './whats-new.ts'
 import { requestWorkspaceMenu } from './workspace-menu-request.ts'
 import './dashboard.css'
 
@@ -168,7 +179,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   const [catalogWanted, setCatalogWanted] = useState(false)
   // K4-5: a What's new "Try it" whose work is under way (a board being opened or made). The ref is the guard
   // (a second click in the same tick sees it); the state only draws the button.
-  const [tryPending, setTryPending] = useState<TryAction | null>(null)
+  const [tryPending, setTryPending] = useState<TryKey | null>(null)
   const tryBusy = useRef(false)
   // K4-5: "Try it" on the template row asks for it to be shown and focused (see the effect below)
   const [startRowAsk, setStartRowAsk] = useState(0)
@@ -237,6 +248,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
       if (e.defaultPrevented || !isPaletteKey(paletteKeyOf(e))) return
       e.preventDefault()
       setPaletteOpen(true)
+      countUsage('palette.open:key')
       // the creators' templates read better with the catalog's names (fetched once, as for the row)
       if (canCreateNow.current) setCatalogWanted(true)
     }
@@ -493,6 +505,24 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   // K4-5: "Try it" on a What's new item takes the person to the thing, and does something they can see.
   const tryNew = (action: TryAction) => {
     if (tryBusy.current) return
+    if (typeof action === 'object') {
+      // M3-3: a wave L item: the board they can edit that they opened last, with a coach mark on the thing; with none,
+      // the Start row (nothing is made). Counted by the item's id (`whatsnew.try:<id>`).
+      countUsage(`whatsnew.try:${action.hint}`)
+      const plan = planHintTry({
+        listReady: boards.status === 'ready',
+        boards: boards.data ? sortBoards(boards.data, 'opened') : [],
+        hint: action.hint,
+        startRow: startRowOffered({ canCreate, guest, pickerHidden: readPickerHidden(me.user.id) }),
+        boardAddress: boardTryPath,
+      })
+      if (plan.kind === 'open') navigate(plan.to)
+      else if (plan.kind === 'start-row') {
+        setQuery('')
+        setStartRowAsk((n) => n + 1)
+      }
+      return
+    }
     if (action === 'workspace-menu') requestWorkspaceMenu()
     else if (action === 'templates') {
       if (canCreate) setCreating(true)
@@ -843,7 +873,16 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
           <WhatsNewCard
             items={newItems}
             pending={tryPending}
-            unavailable={boards.status === 'ready' ? [] : ['board']}
+            unavailable={
+              boards.status === 'ready'
+                ? []
+                : [
+                    'board',
+                    ...newItems.flatMap((i) =>
+                      i.tryIt && typeof i.tryIt === 'object' ? [tryKey(i.tryIt)] : [],
+                    ),
+                  ]
+            }
             onTry={tryNew}
             onTellUs={() => openFeedback(null)}
             onDismiss={() => {
