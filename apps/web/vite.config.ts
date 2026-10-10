@@ -150,11 +150,43 @@ export function hashedHeadScripts(names: readonly string[] = HEAD_SCRIPTS): Plug
   }
 }
 
+// ---- wave M (S2, M3-5): /version.json, so an open tab can learn about a new build ---------------------------------
+//
+// The build emits dist/version.json `{"commit":"<the same commit as __LOBBY_COMMIT__>"}`. render.yaml serves it with
+// Cache-Control: no-store; W3's lib/version-check.ts fetches it (never while the tab is hidden) and compares it with
+// the commit the page was built from. Build only: the dev server has no such file (a fetch there gets index.html,
+// which is not JSON).
+
+export const VERSION_FILE = 'version.json'
+
+/** The body of /version.json for a build of `commit`. */
+export const versionJsonSource = (commit: string) => `${JSON.stringify({ commit })}\n`
+
+export function versionJson(commit: string): Plugin {
+  return {
+    name: 'lobby-version-json',
+    apply: 'build',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: VERSION_FILE, source: versionJsonSource(commit) })
+    },
+  }
+}
+
+/** The commit of this build: __LOBBY_COMMIT__ and /version.json say the same. */
+export const LOBBY_COMMIT = buildCommit()
+
 const engine = engineChunk()
 
 export default defineConfig({
-  plugins: [react(), excalidrawAssets(), excalidrawHostRewrite(), engine, hashedHeadScripts()],
-  define: { __LOBBY_COMMIT__: JSON.stringify(buildCommit()) },
+  plugins: [
+    react(),
+    excalidrawAssets(),
+    excalidrawHostRewrite(),
+    engine,
+    hashedHeadScripts(),
+    versionJson(LOBBY_COMMIT),
+  ],
+  define: { __LOBBY_COMMIT__: JSON.stringify(LOBBY_COMMIT) },
   resolve: {
     alias: [{ find: /^@excalidraw\/mermaid-to-excalidraw$/, replacement: MERMAID_STUB }],
   },
