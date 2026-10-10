@@ -28,7 +28,12 @@ export interface CommentsApi {
   remove(commentId: string): Promise<void>
   setStatus(threadId: string, action: 'resolve' | 'reopen'): Promise<CommentThread>
   markRead(threadId: string): Promise<{ threadId: string; readAt: string }>
-  notifications(signal?: AbortSignal): Promise<ListNotificationsResponse>
+  /**
+   * The bell. `since` (wave M, M5-3): the `seq` of the last answer this client applied (0 when none); the api then
+   * answers 204 when nothing was added or removed since, which resolves null (keep what you have). An api from
+   * before wave M ignores `since` and always answers the list (without `seq`).
+   */
+  notifications(signal?: AbortSignal, since?: number): Promise<ListNotificationsResponse | null>
   markNotificationsRead(sel: { ids: string[] } | { all: true }): Promise<void>
   mentionables(boardId: string): Promise<Mentionable[]>
 }
@@ -72,8 +77,15 @@ export function createCommentsApi(client: ApiClient): CommentsApi {
       (await request('POST', `/api/threads/${enc(threadId)}/${action}`, { schema: ThreadResponse })).thread,
     markRead: (threadId) =>
       request('POST', `/api/threads/${enc(threadId)}/read`, { schema: ThreadReadResponse }),
-    notifications: (signal) =>
-      request('GET', '/api/me/notifications', { schema: ListNotificationsResponse, signal }),
+    notifications: async (signal, since) => {
+      const path =
+        since === undefined
+          ? '/api/me/notifications'
+          : `/api/me/notifications?since=${Math.max(0, Math.floor(since))}`
+      // a 204 has no body: the optional schema reads it as undefined (nothing new)
+      const res = await request('GET', path, { schema: ListNotificationsResponse.optional(), signal })
+      return res ?? null
+    },
     markNotificationsRead: (sel) =>
       request('POST', '/api/me/notifications/read', { body: sel, schema: null }),
     mentionables: async (boardId) =>

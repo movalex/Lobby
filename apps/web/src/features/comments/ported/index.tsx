@@ -143,9 +143,10 @@ function mount(ctx: CanvasFeatureContext): () => void {
   }
   window.addEventListener(SHARE_CHANGED_EVENT, onShareChanged)
   store.scheduleNotificationsRefresh(0)
-  // K2-6 (F8): no poll while the tab is hidden; one refresh when it is shown again (folded with a focus)
+  // K2-6 (F8): no poll while the tab is hidden; one refresh when it is shown again (folded with a focus).
+  // Wave M (M5-3): the minute poll asks only whether anything is new (`since`: a 204 costs the api one query).
   const stopPoll = startNotificationsPoll({
-    poll: () => void store.refreshNotifications(),
+    poll: () => void store.refreshNotifications({ onlyIfNew: true }),
     wake: () => store.scheduleNotificationsRefresh(0),
     doc: document,
     intervalMs: NOTIFICATIONS_POLL_MS,

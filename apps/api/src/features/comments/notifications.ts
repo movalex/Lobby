@@ -36,6 +36,8 @@ import { idList, onTeam } from './store.ts'
 
 export const MAX_NOTIFICATIONS_LISTED = 100
 const MAX_UNREAD_COUNTED = 1_000
+/** The newest rows the list reads before it leaves out what the caller may not see. */
+const LISTED_SCAN = MAX_NOTIFICATIONS_LISTED * 3
 const SNIPPET_MAX = 140
 /**
  * DANA-02 flood cap: at most this many unread 'new_comment' notifications from one author on one board,
@@ -236,10 +238,14 @@ interface NotificationRow {
   actor_domain: string | null
 }
 
-/** The list query's SELECT; `source` is the parameter that holds the running provider (wave J). */
+/**
+ * The list query's SELECT; `source` is the parameter that holds the running provider (wave J). `picked` (wave M,
+ * M5-3): the rows come from a `picked` CTE (id, listed, counted) joined first, and its two flags are selected.
+ */
 const selectSql = (
   source: string,
-) => `SELECT n.id, n.kind, n.board_id, n.thread_id, n.comment_id, n.created_at, n.read_at,
+  picked = false,
+) => `SELECT n.id, n.kind, n.board_id, n.thread_id, n.comment_id, n.created_at, n.read_at,${picked ? ' p.listed, p.counted,' : ''}
        b.title AS board_title, b.visibility, b.status,
        wm.role AS workspace_role, bm.role AS board_grant,
        a.id AS actor_id, a.name AS actor_name, a.color AS actor_color,
@@ -250,7 +256,7 @@ const selectSql = (
        CASE WHEN n.kind = 'outsider_joined' THEN (
          SELECT e.domain FROM user_emails e WHERE e.user_id = n.actor_id AND e.source = ${source}::text
           ORDER BY e.is_primary DESC, e.seen_at, e.email LIMIT 1) END AS actor_domain
-  FROM notifications n
+  FROM notifications n${picked ? ' JOIN picked p ON p.id = n.id' : ''}
   JOIN boards b ON b.id = n.board_id AND b.workspace_id = n.workspace_id
   LEFT JOIN users ru ON ru.id = n.user_id
   LEFT JOIN comment_threads t ON t.id = n.thread_id AND t.board_id = n.board_id
@@ -354,24 +360,46 @@ export async function listNotifications(
   ])
   const creator = opts.creator === true
   const isVisible = (r: NotificationRow) => visible(r, creator)
-  const rows = await q.query<NotificationRow>(
-    `${selectSql('$4')}
-      WHERE n.user_id = $1 AND ($2::boolean = false OR n.read_at IS NULL)
-        AND n.kind NOT IN (SELECT jsonb_array_elements_text($3::jsonb))
-      ORDER BY n.seq DESC
-      LIMIT ${MAX_NOTIFICATIONS_LISTED * 3}`,
+  // Wave M (M5-3, CAP-BELL-POLL): ONE statement for the list and the unread count (they were two, each with the
+  // joins). `picked` takes the newest LISTED_SCAN rows of the list and the newest MAX_UNREAD_COUNTED unread ones,
+  // exactly the rows the two queries read, each once with both flags; the joins run once over them. Who may see a
+  // row is still decided here (visible), so the list and the count are what the two queries gave.
+  const rows = await q.query<NotificationRow & { listed: boolean; counted: boolean }>(
+    `WITH picked AS (
+       SELECT u.id, bool_or(u.listed) AS listed, bool_or(u.counted) AS counted FROM (
+         (SELECT n.id, true AS listed, false AS counted FROM notifications n
+           WHERE n.user_id = $1 AND ($2::boolean = false OR n.read_at IS NULL)
+             AND n.kind NOT IN (SELECT jsonb_array_elements_text($3::jsonb))
+           ORDER BY n.seq DESC LIMIT ${LISTED_SCAN})
+         UNION ALL
+         (SELECT n.id, false AS listed, true AS counted FROM notifications n
+           WHERE n.user_id = $1 AND n.read_at IS NULL
+             AND n.kind NOT IN (SELECT jsonb_array_elements_text($3::jsonb))
+           ORDER BY n.seq DESC LIMIT ${MAX_UNREAD_COUNTED})
+       ) u GROUP BY u.id
+     )
+     ${selectSql('$4', true)}
+      ORDER BY n.seq DESC`,
     [userId, opts.unreadOnly === true, hidden, opts.emailSource ?? 'dev'],
   )
-  const notifications = rows.rows.filter(isVisible).slice(0, MAX_NOTIFICATIONS_LISTED).map(toItem)
-  const unread = await q.query<NotificationRow>(
-    `${selectSql('$3')}
-      WHERE n.user_id = $1 AND n.read_at IS NULL
-        AND n.kind NOT IN (SELECT jsonb_array_elements_text($2::jsonb))
-      ORDER BY n.seq DESC
-      LIMIT ${MAX_UNREAD_COUNTED}`,
-    [userId, hidden, opts.emailSource ?? 'dev'],
+  const notifications = rows.rows
+    .filter((r) => r.listed && isVisible(r))
+    .slice(0, MAX_NOTIFICATIONS_LISTED)
+    .map(toItem)
+  return { notifications, unreadCount: rows.rows.filter((r) => r.counted && isVisible(r)).length }
+}
+
+/**
+ * Wave M (M5-3): the newest notification of the caller, of any kind and whoever may see it now (0 when none): one
+ * indexed read (notifications_user_idx, user_id + seq). The bell poll's `since` is compared with it: equal means
+ * nothing was added or removed since the client's last list (GET /api/me/notifications answers 204).
+ */
+export async function latestNotificationSeq(q: Queryable, userId: string): Promise<number> {
+  const row = await q.one<{ seq: string | null }>(
+    'SELECT max(seq)::text AS seq FROM notifications WHERE user_id = $1',
+    [userId],
   )
-  return { notifications, unreadCount: unread.rows.filter(isVisible).length }
+  return row.seq === null ? 0 : Number(row.seq)
 }
 
 /** Marks the caller's own notifications read; ids of other people's notifications are ignored. */

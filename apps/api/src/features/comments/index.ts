@@ -56,6 +56,7 @@ import type { FeatureContext } from '../context.ts'
 import {
   boardOwners,
   insertNotifications,
+  latestNotificationSeq,
   listNotifications,
   lockBoardNotifications,
   markNotificationsRead,
@@ -616,7 +617,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
 
   // ---- notifications -------------------------------------------------------------------------------
 
-  app.get('/api/me/notifications', async (req) => {
+  app.get('/api/me/notifications', async (req, reply) => {
     const user = await ctx.requireUser(req)
     const query = parse(ListNotificationsQuery, req.query)
     // What the caller's web build can parse (0024's access_granted only from LOBBY_CLIENT_REV 1).
@@ -624,14 +625,23 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
     // Wave J: the bell leaves team-only threads out for anyone not on the team (a confirmed creator),
     // decided after the caller's own addresses are confirmed like at /api/me (the list from one stored
     // state, then any due background refresh).
-    return ctx.identity.freshenThen(req, user, async (fresh) =>
-      listNotifications(db, fresh.id, {
+    return ctx.identity.freshenThen(req, user, async (fresh) => {
+      // Wave M (M5-3, CAP-BELL-POLL): the bell poll says what it holds. Nothing added or removed since (the
+      // caller's newest notification is still that one): 204 after this one indexed read, without the creator
+      // check or the list's joins. Only the caller's own rows are read: the session decides whose.
+      let seq: number | undefined
+      if (query.since !== undefined) {
+        seq = await latestNotificationSeq(db, fresh.id)
+        if (seq === Number(query.since)) return reply.code(204).send()
+      }
+      const list = await listNotifications(db, fresh.id, {
         unreadOnly: query.unread !== undefined,
         rev,
         creator: await ctx.identity.isCreatorUser(db, fresh.id),
         emailSource: lookup.source,
-      }),
-    )
+      })
+      return seq === undefined ? list : { ...list, seq }
+    })
   })
 
   app.post('/api/me/notifications/read', async (req, reply) => {

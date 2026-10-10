@@ -286,10 +286,25 @@ export const NotificationItem = z.object({
 })
 export type NotificationItem = z.infer<typeof NotificationItem>
 
-export const ListNotificationsQuery = z.object({ unread: z.enum(['1', 'true']).optional() })
+/**
+ * Wave M (M5-3, CAP-BELL-POLL): `since` is the `seq` of the client's last answer (0 when it has none). The api
+ * answers 204 (no body) when the caller's newest notification is still exactly that one (nothing added or removed),
+ * after one indexed read; otherwise the list as without it, plus `seq`. An api from before wave M ignores it (and
+ * sends no `seq`), so the client then gets the whole list every time, as before.
+ */
+export const NOTIFICATIONS_SINCE_PATTERN = /^\d{1,15}$/
+export const ListNotificationsQuery = z.object({
+  unread: z.enum(['1', 'true']).optional(),
+  since: z.string().regex(NOTIFICATIONS_SINCE_PATTERN).optional(),
+})
 export const ListNotificationsResponse = z.object({
   notifications: z.array(NotificationItem),
   unreadCount: z.number().int().min(0),
+  /**
+   * Wave M (M5-3): the caller's newest notification (any kind, 0 for none), to send back as `since`. Only in an
+   * answer to a request that sent `since`: the body of a request without it is exactly what it was.
+   */
+  seq: z.number().int().min(0).optional(),
 })
 export type ListNotificationsResponse = z.infer<typeof ListNotificationsResponse>
 
