@@ -24,7 +24,7 @@ export interface PendingRoute {
 
 /** `METHOD route-pattern` (the guard lists' key format) → who implements it. */
 export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
-  // W5
+  // W5: none left (open-state M5-1, usage M5-5 and /healthz/deep M5-6 are implemented)
   // W7
   'POST /internal/access-many': { owner: 'W7', item: 'M7-1' }, // routes/tickets.ts
   // W8
