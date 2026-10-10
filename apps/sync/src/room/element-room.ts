@@ -33,7 +33,6 @@
 // older revision cannot know of a value it writes is kept from the stored value (merge.ts, `lobbyWriteOf`).
 
 import { randomUUID } from 'node:crypto'
-import { statfsSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { gzip } from 'node:zlib'
 import { redactTombstone, type WireElement } from '@draftroom/canvas-schema/elements'
@@ -68,6 +67,7 @@ import {
   type Welcome,
 } from '@draftroom/canvas-schema/protocol'
 import { SYNC_INTERNAL_TIMEOUT_MS } from '@draftroom/contracts'
+import { DISK_NOTICE_RATIO, type DiskProbe, STATFS_PROBE } from '../disk.ts'
 import type {
   ElementSessionInfo,
   ElementSocket,
@@ -84,7 +84,7 @@ import { IndexCache } from './index-keys.ts'
 import { type LeaseHolderInfo, LeaseTable } from './lease.ts'
 import { type El, type MergeEnv, PushApplier } from './merge.ts'
 import type { RoomMetrics } from './metrics.ts'
-import { Outbound } from './outbound.ts'
+import { Outbound, type OutboundBudget } from './outbound.ts'
 import { CommitPacer } from './pacing.ts'
 import { PresenceHub, rosterEntry } from './presence.ts'
 import { type SessionBudgets, sessionBudgets } from './rates.ts'
@@ -125,7 +125,6 @@ export const SNAPSHOT_REUSE = { maxAgeMs: 60_000, maxRowsBehind: 500 } as const
 export const SNAPSHOT_CACHE_MS = SNAPSHOT_REUSE.maxAgeMs
 const PRESENCE_TICK_MS = 100
 const LEASE_TICK_MS = 250
-const DISK_LOW_FRACTION = 0.05
 
 export interface RoomDeps {
   readonly boardId: string
@@ -146,6 +145,10 @@ export interface RoomDeps {
   readonly onIdle: (room: ElementRoom) => void
   /** the global snapshot cache budget (index.ts): register an entry's size, evict others */
   readonly snapshotBudget: (room: ElementRoom, bytes: number) => void
+  /** M7-5: the process-wide outbound budget every session's queue reads (index.ts); absent: never over */
+  readonly outboundBudget?: OutboundBudget
+  /** M7-4: the disk's free share (disk.ts); absent: statfs */
+  readonly disk?: DiskProbe
 }
 
 type FifoItem =
@@ -319,6 +322,7 @@ export class Session {
     now: number,
     onOverflow: () => void,
     onSent: (n: number) => void,
+    budget?: OutboundBudget,
   ) {
     this.info = info
     this.socket = socket
@@ -333,7 +337,7 @@ export class Session {
     }
     this.reader = Math.min(info.contractsRev ?? UNANNOUNCED_REV, CONTRACTS_REV)
     this.budgets = sessionBudgets(info.guest, now)
-    this.out = new Outbound(socket, onOverflow, onSent)
+    this.out = new Outbound(socket, onOverflow, onSent, budget)
   }
 
   /**
@@ -571,6 +575,7 @@ export class ElementRoom {
         // F10 (L6-5): an ack queued behind other frames is timed when its session's queue writes it
         this.deps.metrics.ackFlushed(s.out, s.out.sentBytes, this.deps.now())
       },
+      this.deps.outboundBudget,
     )
     this.sessions.add(s)
     return s
@@ -628,7 +633,11 @@ export class ElementRoom {
       )
       if (ok) {
         this.deps.metrics.inc('lobby_presence_in_total')
-        if (msg.t === 'laser') this.deps.metrics.inc('lobby_presence_laser_in_total')
+        if (msg.t === 'laser') {
+          this.deps.metrics.inc('lobby_presence_laser_in_total')
+          // M7-3: the laser frames taken (the same count under its wave M name; metrics.ts)
+          this.deps.metrics.inc('lobby_laser_frames_in_total')
+        }
         if (msg.editing) this.leases.renew(msg.editing, s.identity.sid, this.deps.now())
       }
       return
@@ -1035,7 +1044,7 @@ export class ElementRoom {
   }
 
   private leaseTick(): void {
-    this.checkDisk() // at most once a minute: DISK when free space is below 5%
+    this.checkDisk() // at most once a minute: DISK when free space is below 10% (M7-4; it was 5%)
     const expired = this.leases.expire(this.deps.now())
     for (const l of expired) {
       this.broadcast(frameOf({ type: 'lease', id: l.id, holder: null }))
@@ -1544,14 +1553,9 @@ export class ElementRoom {
     const now = this.deps.now()
     if (!force && now - this.lastDiskCheck < 60_000) return
     this.lastDiskCheck = now
-    try {
-      const st = statfsSync(dirname(this.deps.path))
-      if (st.blocks > 0 && st.bavail / st.blocks < DISK_LOW_FRACTION) {
-        this.broadcast(frameOf({ type: 'notice', code: 'DISK' }))
-      }
-    } catch {
-      // statfs unavailable: no notice
-    }
+    // M7-4: below 10 % free (it was 5 %); statfs unavailable: no notice (disk.ts)
+    const free = (this.deps.disk ?? STATFS_PROBE).freeRatio(dirname(this.deps.path))
+    if (free !== null && free < DISK_NOTICE_RATIO) this.broadcast(frameOf({ type: 'notice', code: 'DISK' }))
   }
 
   // ---- lease messages (ordered with pushes) -------------------------------------------------------

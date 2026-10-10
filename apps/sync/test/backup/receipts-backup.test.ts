@@ -13,6 +13,7 @@ import { runRestoreDrill, storeBackupSource } from '../../src/backup/drill.ts'
 import { ElementBackups } from '../../src/backup/element-backups.ts'
 import { OffsiteBackups } from '../../src/backup/offsite.ts'
 import { backupSigningKey } from '../../src/backup/signing.ts'
+import { diskProbe } from '../../src/disk.ts'
 import { BoardStore } from '../../src/room/store.ts'
 import { boardDbPath } from '../../src/rooms.ts'
 import { TEST_INTERNAL_SECRET } from '../harness/tickets.ts'
@@ -69,7 +70,11 @@ describe('push receipts in the backups (W5-ENG-2)', () => {
   it('an open of a pre-rev-11 board file changes nothing: the drill still finds the live board identical', async () => {
     const path = boardDbPath(data.rooms, BOARD)
     makeBornAfterFile(path)
-    const eb = new ElementBackups({ roomsDir: data.rooms, backupsDir: data.backups })
+    const eb = new ElementBackups({
+      roomsDir: data.rooms,
+      backupsDir: data.backups,
+      disk: diskProbe({ fixed: 0.9 }), // M7-4: room to spare whatever the test machine's disk
+    })
     await eb.runPass()
     const before = inspectBoardDb(path)
     // the room opens the file (and a receipts query reads it): no table is made, nothing changes
@@ -88,7 +93,11 @@ describe('push receipts in the backups (W5-ENG-2)', () => {
     makeBornAfterFile(path)
     const clock = writeWithReceipt(path, 'pg1.1')
     expect(receiptRows(path)).toEqual([{ uid: 'alice', rid: 'pg1.1', clock }])
-    const eb = new ElementBackups({ roomsDir: data.rooms, backupsDir: data.backups })
+    const eb = new ElementBackups({
+      roomsDir: data.rooms,
+      backupsDir: data.backups,
+      disk: diskProbe({ fixed: 0.9 }), // M7-4: room to spare whatever the test machine's disk
+    })
     const entry = await eb.backupFresh(BOARD)
     expect(entry.documentClock).toBe(clock)
     const local = await runRestoreDrill({ dataDir: data.root, boardIds: [BOARD] })

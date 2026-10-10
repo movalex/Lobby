@@ -4,8 +4,13 @@
 //    prefix invariant (§2.4.3) holds by construction;
 //  - above 256 KiB of `bufferedAmount` a session gets no cursor (presence) frames;
 //  - above 8 MiB queued (socket buffer plus this queue) it is closed with 4000 RECONNECT and resyncs;
-//  - the service enforces a global budget of 64 MiB across sessions (index.ts), closing the largest
-//    buffer first.
+//  - the process-wide budget (wave M, M7-5, CAP-MEM; `OutboundBudget`, checked by the service every 250 ms,
+//    index.ts): the per-session queues are capped but their sum was not (a join storm on a big board after a
+//    deploy). Above the budget (DRAFTROOM_OUTBOUND_BUDGET_MB, 128 MiB) every session is `congested`: no cursor
+//    frames for anyone, as the 256 KiB per-session skip does for one. Above 1.25 times it, the largest queues are
+//    closed with 4000 RECONNECT, largest first, until the sum is back under 1.25 times the budget. Nothing else is
+//    ever skipped: a `changes` frame, an ack or a welcome is queued or its session is closed (it resyncs), never
+//    dropped. Before wave M the service closed the largest buffer above a fixed 64 MiB.
 //
 // Large frames are written in slices (B9's event-loop tail): a frame of DEFER_ABOVE_BYTES or more (a
 // welcome with a 200-entry roster or a catch-up, the gzip snapshot, the `changes` of a 100-note frame drag:
@@ -23,13 +28,67 @@ import type { ElementSocket } from '../engine-switch.ts'
 export const OUTBOUND = {
   skipPresenceAbove: 256 * 1024,
   closeAbove: 8 * 1024 * 1024,
-  globalBudget: 64 * 1024 * 1024,
+  /** the process-wide budget's default (config.ts DEFAULT_OUTBOUND_BUDGET_MB), bytes */
+  globalBudget: 128 * 1024 * 1024,
+  /** above this times the budget, the largest queues are closed */
+  closeFactor: 1.25,
 } as const
+
+/** One session as the budget sees it: its bytes waiting, and how to close it (4000 RECONNECT). */
+export interface BudgetEntry {
+  readonly pending: number
+  close(): void
+}
+
+/**
+ * The process-wide outbound budget (M7-5). `check` (the service's 250 ms timer) sums every session's bytes
+ * waiting, sets `over` (every Outbound reads it: congested, no presence) and closes the largest queues above
+ * `closeFactor` times the budget. `queued` is the last sum (lobby_outbound_bytes_queued).
+ */
+export class OutboundBudget {
+  /** the budget, bytes */
+  readonly bytes: number
+  /** the last check found the sum above the budget: presence is skipped for every session */
+  over = false
+  /** the sum of bytes waiting at the last check (after its closes) */
+  queued = 0
+  constructor(bytes: number = OUTBOUND.globalBudget) {
+    this.bytes = bytes
+  }
+
+  /** Sums `entries`, closes the largest above closeFactor times the budget; returns how many it closed. */
+  check(entries: Iterable<BudgetEntry>): number {
+    const list = [...entries]
+    let total = 0
+    for (const e of list) total += Math.max(0, e.pending)
+    let closed = 0
+    const closeAbove = this.bytes * OUTBOUND.closeFactor
+    if (total > closeAbove) {
+      list.sort((a, b) => b.pending - a.pending)
+      for (const e of list) {
+        if (total <= closeAbove) break
+        const n = Math.max(0, e.pending)
+        e.close()
+        total -= n
+        closed++
+      }
+    }
+    this.queued = total
+    this.over = total > this.bytes
+    return closed
+  }
+}
+
+/** The budget an Outbound reads when it is given none (tests; a room outside the service): never over. */
+const NO_BUDGET = new OutboundBudget(Number.POSITIVE_INFINITY)
 
 /** A frame of at least this size (or a frame whose size is not known yet: a promise) is written by the flusher. */
 export const DEFER_ABOVE_BYTES = 8 * 1024
 /** Socket writes per macrotask of the flusher, at most (plus the frame that crosses the line). */
 export const FLUSH_SLICE_MS = 5
+
+/** The send option of a frame that is compressed already (the gzip snapshot; app.ts WS_DEFLATE_OPTIONS). */
+export const NO_COMPRESS = Object.freeze({ compress: false })
 
 type Frame = string | Uint8Array
 type Entry = Frame | Promise<Frame | null>
@@ -79,10 +138,17 @@ export class Outbound {
   private readonly socket: ElementSocket
   private readonly onOverflow: () => void
   private readonly onSent: (bytes: number) => void
-  constructor(socket: ElementSocket, onOverflow: () => void, onSent: (bytes: number) => void = () => {}) {
+  private readonly budget: OutboundBudget
+  constructor(
+    socket: ElementSocket,
+    onOverflow: () => void,
+    onSent: (bytes: number) => void = () => {},
+    budget: OutboundBudget = NO_BUDGET,
+  ) {
     this.socket = socket
     this.onOverflow = onOverflow
     this.onSent = onSent
+    this.budget = budget
   }
 
   /** Bytes waiting: the socket's buffer plus this queue. */
@@ -90,9 +156,9 @@ export class Outbound {
     return (this.socket.bufferedAmount ?? 0) + this.queuedBytes
   }
 
-  /** Whether cursor frames should be skipped (backpressure). */
+  /** Whether cursor frames should be skipped (backpressure: this session's, or the process's budget, M7-5). */
   get congested(): boolean {
-    return this.pending > OUTBOUND.skipPresenceAbove
+    return this.budget.over || this.pending > OUTBOUND.skipPresenceAbove
   }
 
   send(entry: Entry): void {
@@ -142,7 +208,9 @@ export class Outbound {
       if (n === 0) continue
       if (this.socket.readyState !== 1) continue
       try {
-        this.socket.send(head)
+        // M7-2: the one binary frame is the gzip snapshot: deflating it again costs CPU and saves nothing
+        if (typeof head === 'string') this.socket.send(head)
+        else this.socket.send(head, NO_COMPRESS)
         this.sentBytes += n
         this.onSent(n)
       } catch {

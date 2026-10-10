@@ -52,7 +52,7 @@ import {
 import { registerInvitationRoutes } from './routes/invitations.ts'
 import { registerMemberRoutes } from './routes/members.ts'
 import { PARTNER_PREFIX, partnerPlugin } from './routes/partner.ts'
-import { registerTicketRoutes } from './routes/tickets.ts'
+import { INTERNAL_SYNC_POSTS, registerTicketRoutes } from './routes/tickets.ts'
 import { registerWorkspaceRoutes } from './routes/workspaces.ts'
 import { sessionUserToUser } from './serialize.ts'
 import { checkedSnapshots, createHttpSyncInternalClient, type SyncInternalClient } from './sync-internal.ts'
@@ -483,6 +483,8 @@ async function buildServer(
     // Partner boards (routes/partner.ts): Bearer token, cookies refused; registered only with open sign-in.
     if (req.routeOptions.url?.startsWith(PARTNER_PREFIX)) return
     if (req.method === 'POST' && INTERNAL_CHECKPOINT_POSTS.has(req.routeOptions.url ?? '')) return
+    // the sync's batched access re-check (M7-1, routes/tickets.ts): server to server, the internal secret first
+    if (req.method === 'POST' && INTERNAL_SYNC_POSTS.has(req.routeOptions.url ?? '')) return
     if (MUTATING.has(req.method) && req.headers.origin !== config.publicOrigin) {
       return reply.code(403).send({ error: { code: 'FORBIDDEN', message: 'Cross-origin request refused.' } })
     }

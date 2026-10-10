@@ -15,8 +15,27 @@
 //  - lobby_reconnects_per_minute: hellos that resume a board state (a reconnect, not a first open) in each
 //    minute of the process, one observation per minute (idle minutes count 0), with lobby_reconnects_total.
 // The room calls the hooks below; they cost a few array writes per push and per session written to.
+//
+// Wave M (M7-3, S5): the values outlive a restart. Once an hour (METRICS_SUMMARY_MS) the service logs ONE line,
+// `metrics.summary {json}`, so Render's log retention keeps what a deploy's restart erases from these in-memory
+// counters: the counters' increase over the hour (summed over their labels, under fixed short names), each F10
+// histogram's count with p50/p95 estimated from its buckets (the bucket's upper bound; null above the last one),
+// the event-loop delay over the hour, the outbound bytes written and queued, the disk's free share, the rooms
+// open, the sessions, and the element counts of the open rooms (max, p50, p95 only). No label, no board id, no
+// user id: nothing in the line names anyone or anything. A last line goes out when the service closes (a deploy),
+// with `final: true`, covering the part of the hour before it. Also new: lobby_laser_frames_in_total (presence
+// messages taken with the laser down; the older name lobby_presence_laser_in_total counts the same and stays for
+// wave L's scrape scripts). lobby_follow_pause_total is NOT added: a follow pause is client-local and no presence
+// field carries it (a CONTRACTS_REV change, out of wave M), so there is nothing for the server to count.
 
 import { monitorEventLoopDelay } from 'node:perf_hooks'
+
+/** A histogram's cumulative bucket counts, count and sum at one moment (the summary's window deltas). */
+interface HistogramSnapshot {
+  readonly counts: readonly number[]
+  readonly count: number
+  readonly sum: number
+}
 
 class Histogram {
   private readonly counts: number[]
@@ -32,6 +51,9 @@ class Histogram {
     this.count++
     for (let i = 0; i < this.buckets.length; i++)
       if (v <= (this.buckets[i] as number)) this.counts[i] = (this.counts[i] ?? 0) + 1
+  }
+  snapshot(): HistogramSnapshot {
+    return { counts: [...this.counts], count: this.count, sum: this.sum }
   }
   render(name: string, help: string): string {
     const lines = [`# HELP ${name} ${help}`, `# TYPE ${name} histogram`]
@@ -58,6 +80,66 @@ export const METRICS_MINUTE_MS = 60_000
 const MAX_MINUTES_PER_ROLL = 1_440
 /** The most acks one session may have waiting for their write (beyond it the oldest are dropped, unmeasured). */
 const MAX_ACK_WAITS = 256
+/** M7-3: how often the service logs its metrics.summary line (an hour). */
+export const METRICS_SUMMARY_MS = 60 * 60_000
+
+/**
+ * M7-3: the counters the summary carries, under short names that name nothing (no "board", no "user"); each is
+ * the counter's increase over the window, summed over its labels. A counter not listed here is not in the line.
+ */
+const SUMMARY_COUNTERS: Readonly<Record<string, string>> = {
+  lobby_joins_total: 'joins',
+  lobby_resets_total: 'resets',
+  lobby_reconnects_total: 'reconnects',
+  lobby_pushes_received_total: 'pushes',
+  lobby_ops_total: 'ops',
+  lobby_commit_failures_total: 'commitFailures',
+  lobby_closes_total: 'closes',
+  lobby_presence_in_total: 'presenceIn',
+  lobby_presence_out_total: 'presenceOut',
+  lobby_laser_frames_in_total: 'laserFramesIn',
+  lobby_lease_total: 'leases',
+  lobby_file_refs_total: 'fileRefs',
+  lobby_file_refs_failures_total: 'fileRefFailures',
+  lobby_board_prepare_total: 'prepares',
+  lobby_receipts_unrecorded_total: 'receiptsUnrecorded',
+}
+
+/** The gauges the service adds to a summary (index.ts). */
+export interface SummaryGauges {
+  readonly rooms: number
+  readonly sessions: number
+  /** every session's bytes waiting (lobby_outbound_bytes_queued) */
+  readonly outboundQueued: number
+  /** the data disk's free share (null: unreadable) */
+  readonly diskFree: number | null
+  /** the element count of each open room */
+  readonly elements: readonly number[]
+}
+
+/** The q-quantile (nearest rank) of sorted numbers; null for none. */
+const nearestRank = (sorted: readonly number[], q: number): number | null =>
+  sorted.length
+    ? (sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1))] as number)
+    : null
+
+/**
+ * The q-quantile of a window of a histogram, estimated from its cumulative buckets: the upper bound of the first
+ * bucket that holds the rank; null when the rank is above the last bucket.
+ */
+function bucketQuantile(
+  buckets: readonly number[],
+  counts: readonly number[],
+  n: number,
+  q: number,
+): number | null {
+  const rank = Math.max(1, Math.ceil(q * n))
+  for (let i = 0; i < buckets.length; i++) if ((counts[i] ?? 0) >= rank) return buckets[i] as number
+  return null
+}
+
+const round1 = (v: number) => Math.round(v * 10) / 10
+const counterName = (key: string) => key.replace(/\{.*$/, '')
 
 interface AckWait {
   /** the session's `sentBytes` once its ack has been written */
@@ -90,12 +172,126 @@ export class RoomMetrics {
   private minuteStart: number
   private minuteCount = 0
   private readonly loop = monitorEventLoopDelay({ resolution: 10 })
+  /** M7-3: the event-loop delay since the last summary (reset by each) */
+  private readonly loopWindow = monitorEventLoopDelay({ resolution: 10 })
   private readonly now: () => number
+  private readonly startedAt: number
+  /** M7-3: what the last summary saw (its window starts there) */
+  private lastSummary: {
+    at: number
+    counters: Map<string, number>
+    hists: Record<string, HistogramSnapshot>
+  }
 
   constructor(now: () => number = Date.now) {
     this.now = now
     this.minuteStart = now()
+    this.startedAt = now()
     this.loop.enable()
+    this.loopWindow.enable()
+    this.lastSummary = { at: this.startedAt, counters: new Map(), hists: {} }
+  }
+
+  /** The F10 histograms (and the group commit's) by their summary names. */
+  private summaryHistograms(): Record<string, Histogram> {
+    return {
+      pushToCommitMs: this.pushToCommitMs,
+      commitToFanoutMs: this.fanoutMs,
+      outboundQueueBytes: this.outboundQueueBytes,
+      ackSendMs: this.ackSendMs,
+      reconnectsPerMinute: this.reconnectsPerMinute,
+      commitMs: this.commitMs,
+    }
+  }
+
+  /**
+   * M7-3: the summary of the window since the last one (the first: since the process started), as one log line,
+   * `metrics.summary {json}`; the next window starts now. `final`: the service is closing (a deploy).
+   */
+  summaryLine(g: SummaryGauges, opts: { final?: boolean } = {}): string {
+    const at = this.now()
+    this.rollMinutes(at)
+    const totals = new Map<string, number>()
+    for (const [key, v] of this.counters) {
+      const name = counterName(key)
+      const short = name === 'lobby_outbound_bytes_total' ? 'outBytes' : SUMMARY_COUNTERS[name]
+      if (short) totals.set(short, (totals.get(short) ?? 0) + v)
+    }
+    const delta = (k: string) => (totals.get(k) ?? 0) - (this.lastSummary.counters.get(k) ?? 0)
+    const counts: Record<string, number> = {}
+    for (const short of Object.values(SUMMARY_COUNTERS)) counts[short] = delta(short)
+    const hist: Record<string, { n: number; p50?: number | null; p95?: number | null }> = {}
+    const snaps: Record<string, HistogramSnapshot> = {}
+    for (const [name, h] of Object.entries(this.summaryHistograms())) {
+      const snap = h.snapshot()
+      snaps[name] = snap
+      const before = this.lastSummary.hists[name]
+      const n = snap.count - (before?.count ?? 0)
+      if (n <= 0) {
+        hist[name] = { n: 0 }
+        continue
+      }
+      const window = snap.counts.map((c, i) => c - (before?.counts[i] ?? 0))
+      hist[name] = {
+        n,
+        p50: bucketQuantile(h.buckets, window, n, 0.5),
+        p95: bucketQuantile(h.buckets, window, n, 0.95),
+      }
+    }
+    const loop = this.loopWindow.count
+      ? {
+          p50: round1(this.loopWindow.percentile(50) / 1e6),
+          p99: round1(this.loopWindow.percentile(99) / 1e6),
+          max: round1(this.loopWindow.max / 1e6),
+        }
+      : { n: 0 }
+    const sizes = [...g.elements].sort((a, b) => a - b)
+    const line = {
+      ...(opts.final ? { final: true } : {}),
+      windowS: Math.round((at - this.lastSummary.at) / 1000),
+      uptimeS: Math.round((at - this.startedAt) / 1000),
+      rooms: g.rooms,
+      sessions: g.sessions,
+      counts,
+      outBytes: delta('outBytes'),
+      outQueued: g.outboundQueued,
+      diskFree: g.diskFree === null ? null : Number(g.diskFree.toFixed(4)),
+      hist,
+      loopMs: loop,
+      elements: sizes.length
+        ? { n: sizes.length, max: sizes.at(-1), p50: nearestRank(sizes, 0.5), p95: nearestRank(sizes, 0.95) }
+        : { n: 0 },
+    }
+    this.lastSummary = { at, counters: totals, hists: snaps }
+    this.loopWindow.reset()
+    return `metrics.summary ${JSON.stringify(line)}`
+  }
+
+  /**
+   * M7-3: logs a summary line every `everyMs` (an hour) with the gauges `gauges()` gives; returns the stop
+   * function, which logs one last line (`final`) when `flush` is set (the service closing: a deploy).
+   */
+  startSummary(
+    gauges: () => SummaryGauges,
+    log: (line: string) => void,
+    everyMs: number = METRICS_SUMMARY_MS,
+  ): (flush?: boolean) => void {
+    const emit = (final: boolean) => {
+      try {
+        log(this.summaryLine(gauges(), final ? { final } : {}))
+      } catch {
+        // a summary must never take the server down
+      }
+    }
+    const timer = setInterval(() => emit(false), everyMs)
+    timer.unref?.()
+    let stopped = false
+    return (flush = false) => {
+      if (stopped) return
+      stopped = true
+      clearInterval(timer)
+      if (flush) emit(true)
+    }
   }
 
   // ---- F10 hooks (L6-5) ------------------------------------------------------------------------------
@@ -177,11 +373,36 @@ export class RoomMetrics {
 
   stop(): void {
     this.loop.disable()
+    this.loopWindow.disable()
   }
 
-  render(rooms: { open: number; sessionsByRole: Record<string, number>; boards: BoardGauges[] }): string {
+  render(rooms: {
+    open: number
+    sessionsByRole: Record<string, number>
+    boards: BoardGauges[]
+    /** M7-5: the process-wide outbound queue (every session's bytes waiting) and its budget */
+    outbound?: { queuedBytes: number; budgetBytes: number; over: boolean }
+    /** M7-4: the free share of the data dir's disk (null: unreadable; the line is left out) */
+    diskFreeRatio?: number | null
+  }): string {
     const out: string[] = []
     out.push('# TYPE lobby_rooms_open gauge', `lobby_rooms_open ${rooms.open}`)
+    if (rooms.outbound)
+      out.push(
+        '# HELP lobby_outbound_bytes_queued Bytes waiting to be written, every session together (socket buffers and queues).',
+        '# TYPE lobby_outbound_bytes_queued gauge',
+        `lobby_outbound_bytes_queued ${rooms.outbound.queuedBytes}`,
+        '# TYPE lobby_outbound_budget_bytes gauge',
+        `lobby_outbound_budget_bytes ${rooms.outbound.budgetBytes}`,
+        '# TYPE lobby_outbound_over_budget gauge',
+        `lobby_outbound_over_budget ${rooms.outbound.over ? 1 : 0}`,
+      )
+    if (typeof rooms.diskFreeRatio === 'number')
+      out.push(
+        '# HELP lobby_disk_free_ratio Free share of the data disk (rooms and backups).',
+        '# TYPE lobby_disk_free_ratio gauge',
+        `lobby_disk_free_ratio ${Number(rooms.diskFreeRatio.toFixed(4))}`,
+      )
     out.push('# TYPE lobby_sessions gauge')
     for (const [role, n] of Object.entries(rooms.sessionsByRole))
       out.push(`lobby_sessions{role="${role}"} ${n}`)

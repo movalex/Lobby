@@ -58,8 +58,7 @@ describe('routing', () => {
       ['GET', '/dev-api/boards/board-a/assets/ast_0123456789/ver_0123456789'],
       ['GET', '/files/ast_0123456789/ver_0123456789/original?board=board-a'],
       ['GET', '/internal/nope'],
-      // wave M (the foundation): the sync's GET /healthz/deep is W7's (M7-6), pending until it lands: an unknown path
-      ['GET', '/healthz/deep'],
+      ['GET', '/healthz/deeper'],
     ] as const) {
       const res = await req(t.port, { method, path, headers: secret, body: Buffer.alloc(0) })
       expect(res.status, `${method} ${path}`).toBe(404)
@@ -69,6 +68,11 @@ describe('routing', () => {
     const health = await req(t.port, { path: '/healthz' })
     expect(health.status).toBe(200)
     expect(health.body.toString()).toBe('ok')
+    // wave M (M7-6): the deep check is public too, and healthy here (its reasons: test/http/deep-health.test.ts)
+    const deep = await req(t.port, { path: '/healthz/deep' })
+    expect(deep.status).toBe(200)
+    expect(deep.body.toString()).toBe('ok')
+    expect(deep.headers['cache-control']).toBe('no-store')
   })
 
   it('logs one line per request (method, path without the query string, status, duration) and never a ticket', async () => {

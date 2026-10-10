@@ -28,6 +28,7 @@ import { createRunAll } from '../../src/backup/run-all.ts'
 import { backupSigningKey, checkEntry } from '../../src/backup/signing.ts'
 import { applyStagedRestores, stageRestore } from '../../src/backup/staged-restore.ts'
 import { getJson } from '../../src/backup/store.ts'
+import { diskProbe } from '../../src/disk.ts'
 import { lbFileFacts } from '../../src/r0/lb-files.ts'
 import { convertBoardFile } from '../../src/room/migrate/convert-board.ts'
 import { boardFileState } from '../../src/room/migrate/service.ts'
@@ -52,6 +53,8 @@ const VER = 'ver_XBKXBKXBKXBKXBKXBKXB'
 const DAY = 86_400_000
 const t0 = Date.UTC(2026, 9, 10, 9, 0)
 const key = backupSigningKey(TEST_INTERNAL_SECRET)
+/** M7-4: a disk with room to spare, whatever the test machine's (the pass prunes and pauses below 20 % free) */
+const disk = diskProbe({ fixed: 0.9 })
 
 let data: TempData
 beforeEach(() => {
@@ -131,8 +134,14 @@ describe('the periodic pass of the Excalidraw build', () => {
       roomsDir: data.rooms,
       backupsDir: data.backups,
       now: () => new Date(now),
+      disk,
     })
-    expect(await eb.runPass()).toEqual({ backedUp: [CONVERTED, BORN].sort(), failed: [] })
+    expect(await eb.runPass()).toEqual({
+      backedUp: [CONVERTED, BORN].sort(),
+      failed: [],
+      pruned: [],
+      lowDisk: false,
+    })
     expect(readManifest(data.backups, CONVERTED)?.backups.map((b) => b.format)).toEqual([
       'lobby-elements-converted',
     ])
@@ -156,7 +165,7 @@ describe('retention keeps a held backup outside its count, locally and offsite',
     const { conv } = boards()
     let now = t0
     const clock = () => new Date(now)
-    const eb = new ElementBackups({ roomsDir: data.rooms, backupsDir: data.backups, now: clock })
+    const eb = new ElementBackups({ roomsDir: data.rooms, backupsDir: data.backups, now: clock, disk })
     const store = createFsBlobStore(data.blobs)
     const offsite = new OffsiteBackups({ store, localRoot: data.backups, signingKey: key, now: clock })
     const held = await eb.backupFresh(CONVERTED, { holdUntil: new Date(t0 + 90 * DAY) })
@@ -194,7 +203,7 @@ describe('retention keeps a held backup outside its count, locally and offsite',
 describe('the restore drill of the Excalidraw build', () => {
   it('opens lb backups through the element room’s store, from the local folder and from the offsite store', async () => {
     boards()
-    const eb = new ElementBackups({ roomsDir: data.rooms, backupsDir: data.backups })
+    const eb = new ElementBackups({ roomsDir: data.rooms, backupsDir: data.backups, disk })
     await eb.runPass()
     const local = await runRestoreDrill({ dataDir: data.root, boardIds: [CONVERTED, BORN] })
     expect(local.boards.map((b) => [b.boardId, b.ok, b.live, b.problems])).toEqual([
@@ -291,6 +300,7 @@ describe('run-all on the Excalidraw build', () => {
       backupsDir: data.backups,
       // a distinct stamp per backup, so concurrent copies never share a file name
       now: () => new Date(t0 + n++ * 1_000),
+      disk,
     })
     const runAll = createRunAll({
       registry: eb,

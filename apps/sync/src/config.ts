@@ -5,6 +5,9 @@ import { resolveDataDir } from '@draftroom/dev-assets'
 import { BACKUP_DEFAULTS } from './backup/backup.ts'
 import type { BackupSigningSecrets } from './backup/signing.ts'
 
+/** DRAFTROOM_OUTBOUND_BUDGET_MB's default (M7-5): 128 MiB of queued outbound bytes across every session. */
+export const DEFAULT_OUTBOUND_BUDGET_MB = 128
+
 export interface SyncConfig {
   /** NODE_ENV as checked by `parseNodeEnv` (M2): production, development or test, nothing else boots. */
   nodeEnv: NodeEnv
@@ -64,6 +67,29 @@ export interface SyncConfig {
    * with it off. Absent or 0 = off.
    */
   bootMaintenance?: boolean
+  /**
+   * DRAFTROOM_WS_DEFLATE (wave M, M7-2, CAP-BANDWIDTH): permessage-deflate on the board WebSocket, `on` unless
+   * the variable says `off` (the kill switch: a restart). Browsers negotiate it on their own; a client that does
+   * not offer it talks uncompressed. Absent here (a hand-made config): on.
+   */
+  wsDeflate?: boolean
+  /**
+   * DRAFTROOM_BACKUP_KEEP (wave M, M7-4, CAP-DISK): local backup copies kept per board (offsite keeps its own
+   * history). Default BACKUP_DEFAULTS.keep (12); render.yaml sets 4.
+   */
+  backupKeep?: number
+  /**
+   * DRAFTROOM_OUTBOUND_BUDGET_MB (wave M, M7-5, CAP-MEM): the process-wide budget of queued outbound bytes, MiB.
+   * Above it presence is skipped for every session; above 1.25 times it the largest queue is closed (RECONNECT).
+   * Default 128.
+   */
+  outboundBudgetMb?: number
+  /**
+   * DRAFTROOM_TEST_DISK_FREE (M7-4/M7-6 tests): a fixed free share of the disk (0..1) instead of statfs, for the
+   * low-disk paths in a real server process. Read only with DRAFTROOM_TEST_HOOKS=1 (refused in production with
+   * it); null otherwise.
+   */
+  testDiskFree?: number | null
 }
 
 /**
@@ -445,7 +471,21 @@ export function loadConfig(env: Env = process.env): SyncConfig {
     ),
     testHooks: parseTestHooks(env),
     bootMaintenance: parseBootMaintenance(env),
+    wsDeflate: parseWsDeflate(env),
+    backupKeep: int(env, 'DRAFTROOM_BACKUP_KEEP', BACKUP_DEFAULTS.keep, 1, 1_000),
+    outboundBudgetMb: int(env, 'DRAFTROOM_OUTBOUND_BUDGET_MB', DEFAULT_OUTBOUND_BUDGET_MB, 8, 4_096),
+    testDiskFree: parseTestDiskFree(env),
   }
+}
+
+/** DRAFTROOM_TEST_DISK_FREE: a decimal in [0, 1], honoured only with the test hooks on; null otherwise. */
+export function parseTestDiskFree(env: Env): number | null {
+  const raw = read(env, 'DRAFTROOM_TEST_DISK_FREE')
+  if (raw === undefined || !parseTestHooks(env)) return null
+  const n = Number(raw)
+  if (!/^(0|1|0?\.\d+)$/.test(raw) || !(n >= 0 && n <= 1))
+    throw new Error('DRAFTROOM_TEST_DISK_FREE must be a decimal between 0 and 1')
+  return n
 }
 
 /**
@@ -462,6 +502,14 @@ export function checkEngineFlag(raw: string | undefined): void {
       'DRAFTROOM_ENGINE=tldraw is not available: this build runs the Excalidraw engine only. To serve boards on tldraw again, deploy bridge release R0 (docs/EXCALIDRAW-CUTOVER.md, Rollback).',
     )
   throw new Error('DRAFTROOM_ENGINE must be excalidraw or unset')
+}
+
+/** DRAFTROOM_WS_DEFLATE: `on` (or unset) = permessage-deflate offered to clients; `off` = the kill switch. */
+export function parseWsDeflate(env: Env): boolean {
+  const raw = read(env, 'DRAFTROOM_WS_DEFLATE')?.toLowerCase()
+  if (raw === undefined || raw === 'on') return true
+  if (raw === 'off') return false
+  throw new Error('DRAFTROOM_WS_DEFLATE must be on or off')
 }
 
 /** DRAFTROOM_BOOT_MAINTENANCE: 1 = start in maintenance, 0 or absent = start serving. */

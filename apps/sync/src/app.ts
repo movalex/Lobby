@@ -17,6 +17,7 @@ import { ElementBackups } from './backup/element-backups.ts'
 import { createRunAll } from './backup/run-all.ts'
 import { type BackupService, createBackupService } from './backup/service.ts'
 import { isAllowedOrigin, type SyncConfig } from './config.ts'
+import { type DiskProbe, diskProbe } from './disk.ts'
 import {
   type ElementRoomDeps,
   type ElementRoomService,
@@ -24,6 +25,7 @@ import {
   type InternalRoute,
   registeredElementRoom,
 } from './engine-switch.ts'
+import { createLoopWatch, deepHealthReasons } from './health.ts'
 import { createRequestHandler, type MaintenanceControl } from './http/router.ts'
 import { JoinQueue } from './join-queue.ts'
 import { errorSummary } from './log-error.ts'
@@ -48,6 +50,26 @@ export const MAINTENANCE_REASON = 'MAINTENANCE'
 // ticket never comes back in a response header. The old transport, `?ticket=` in the URL, is still
 // accepted for at least one release (tabs opened before the deploy, cached bundles, the headless and load
 // clients). Either way the ticket is verified before the upgrade and never logged.
+
+// ---- permessage-deflate (wave M, M7-2, CAP-BANDWIDTH) ------------------------------------------------------
+//
+// Presence goes out as JSON at 10 Hz to everyone on a board (30 lasers: about 2.3 MB/s), and Render bills
+// WebSocket bytes past the included allowance. Browsers offer permessage-deflate on their own, so this needs no
+// protocol frame, CONTRACTS_REV or reader-frame change: a client that does not offer it (or an edge that strips
+// the header) talks uncompressed, exactly as before. Level 1 and memLevel 7 keep the CPU and the per-socket
+// memory small (the server keeps its context per socket for the ratio; the client is asked not to, which costs
+// nothing here: client frames are small). At most 4 zlib jobs run at once, process-wide. `threshold` (1 KiB) only
+// applies to a sender without context takeover (ws/lib/sender.js), so with the server's context kept every text
+// frame is deflated: a small cursor frame compresses well against the ones before it (the M7-7 NAS run measures
+// the CPU). The gzip snapshot is sent with `compress: false` (room/outbound.ts). DRAFTROOM_WS_DEFLATE=off is the
+// kill switch (config.ts; a restart).
+export const WS_DEFLATE_OPTIONS = Object.freeze({
+  zlibDeflateOptions: Object.freeze({ level: 1, memLevel: 7 }),
+  threshold: 1024,
+  concurrencyLimit: 4,
+  clientNoContextTakeover: true,
+  serverNoContextTakeover: false,
+})
 
 /** The subprotocol a board socket speaks: the one the server answers with. */
 export const BOARD_SOCKET_PROTOCOL = 'lobby.board.v1'
@@ -127,8 +149,11 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
   // Maintenance mode (below, where the switch is built): declared here because the rooms read it too
   // (ElementRoomDeps.maintenance, OPEN16: the second check after a write's body is read)
   let maintenance = config.bootMaintenance === true
+  // M7-4: the disk's free share (statfs; the test hook's fixed answer), read by the rooms (DISK notice, the
+  // metrics), the backup pass and the deep health check
+  const disk: DiskProbe = diskProbe({ fixed: config.testDiskFree ?? null })
   // The ElementRoom (engine-switch.ts): sockets and the board routes go to it.
-  const elementRooms: ElementRoomService = createElementRooms(config, log, () => maintenance, {
+  const elementRooms: ElementRoomService = createElementRooms(config, log, () => maintenance, disk, {
     removed: (boardId, sessionId, meta) => {
       monitor?.removed(boardId, sessionId)
       sessionEnds.removed(boardId, meta)
@@ -147,6 +172,10 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
         roomsDir,
         backupsDir,
         ...(config.backupIntervalMs ? { intervalMs: config.backupIntervalMs } : {}),
+        // M7-4: DRAFTROOM_BACKUP_KEEP; held and low-disk prunes read what the offsite store holds
+        ...(config.backupKeep ? { keep: config.backupKeep } : {}),
+        offsite: backups,
+        disk,
         log,
       })
     : null
@@ -206,6 +235,8 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     backupsDir: () => backupsDir,
   })
 
+  // M7-6: the deep health check's event-loop windows (health.ts), and what it reads at each request
+  const loopWatch = createLoopWatch()
   const handle = createRequestHandler({
     internalSecret: config.internalSecret,
     monitor: access,
@@ -216,6 +247,14 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     maintenance: maintenanceControl,
     runAll,
     backupsDir: () => backupsDir,
+    deepHealth: () =>
+      deepHealthReasons({
+        diskFreeRatio: disk.freeRatio(roomsDir),
+        backups: backups.status(),
+        loopP99Ms: loopWatch.p99(),
+        accessRound: access.lastRound(),
+        now: Date.now(),
+      }),
   })
   const http = createServer((req, res) => {
     const p = handle(req, res)
@@ -225,9 +264,15 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
 
   const wss = new WebSocketServer({
     noServer: true,
+    // also the most a compressed client frame may inflate to (ws checks the inflated size)
     maxPayload: 1024 * 1024,
     handleProtocols: selectProtocol,
+    perMessageDeflate:
+      config.wsDeflate === false
+        ? false
+        : { ...WS_DEFLATE_OPTIONS, zlibDeflateOptions: { ...WS_DEFLATE_OPTIONS.zlibDeflateOptions } },
   })
+  log(`[connect] permessage-deflate ${config.wsDeflate === false ? 'off (DRAFTROOM_WS_DEFLATE=off)' : 'on'}`)
   const liveSockets = new Map<string, WebSocket>() // `${boardId}/${sid}` -> current ws
   // One expensive connect per macrotask (PERF-05, join-queue.ts): a crowd joining at once no longer
   // blocks everyone else's edits. Keyed per socket, not per session id (a replaced socket).
@@ -309,7 +354,8 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
           contractsRev,
         },
         {
-          send: (d: string | Uint8Array) => ws.send(d),
+          send: (d: string | Uint8Array, o?: { readonly compress?: boolean }) =>
+            o ? ws.send(d, { compress: o.compress !== false }) : ws.send(d),
           close: (c: number, r: string) => ws.close(c, r),
           get readyState() {
             return ws.readyState
@@ -389,6 +435,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     close() {
       closing ??= (async () => {
         access.stop()
+        loopWatch.stop()
         const stopped = http.listening
           ? new Promise<void>((resolve) => http.close(() => resolve()))
           : Promise.resolve()
@@ -429,6 +476,7 @@ function createElementRooms(
   config: SyncConfig,
   log: (...a: unknown[]) => void,
   maintenance: () => boolean,
+  disk: DiskProbe,
   report: {
     removed: (
       boardId: string,
@@ -448,6 +496,7 @@ function createElementRooms(
     onSessionRemoved: (boardId, sessionId, meta) => report.removed(boardId, sessionId, meta),
     onDocumentChange: (boardId) => report.changed(boardId),
     maintenance,
+    disk,
   }
   // CR 2F-1: the registered room extensions' routes (apps/sync/src/room-internal/) join the room's own
   return extendElementRoom(factory(deps), deps)

@@ -376,6 +376,30 @@ export class LoadSession {
       case 'oneshot':
       case 'light':
         return this.oneShots()
+      case 'laser':
+        return this.laser()
+    }
+  }
+
+  /**
+   * M7-7: the laser held down for the whole run, swept at the presence rate, each message with a 1-2 point
+   * trail (the samples taken since the previous send: the midpoint, and half the time the previous pointer too).
+   */
+  private async laser(): Promise<void> {
+    const period = 1_000 / this.ctx.presenceHz
+    await sleep(Math.random() * period) // random phase
+    let a = Math.random() * Math.PI * 2
+    const cx = 400 + Math.random() * 1_200
+    const cy = 300 + Math.random() * 600
+    let prev: { x: number; y: number } | null = null
+    let n = 0
+    while (this.running()) {
+      a += 0.05
+      const p = { x: Math.round(cx + 200 * Math.cos(a)), y: Math.round(cy + 120 * Math.sin(a)) }
+      const mid = prev ? { x: Math.round((prev.x + p.x) / 2), y: Math.round((prev.y + p.y) / 2) } : p
+      this.presence({ pointer: p, laser: prev && n++ % 2 === 0 ? [prev, mid] : [mid] })
+      prev = p
+      await sleep(period)
     }
   }
 
@@ -390,18 +414,21 @@ export class LoadSession {
       editing?: string | null
       idle?: boolean
       sel?: unknown
+      /** M7-7: the laser held down, with these trail points (a rev-12 message: `f`, `t` and `trail`) */
+      laser?: readonly { x: number; y: number }[]
     } = {},
   ) {
     try {
       this.client?.core.sendPresence({
         pointer: extra.pointer ?? null,
-        button: 'up',
+        button: extra.laser ? 'down' : 'up',
         sel: (extra.sel as never) ?? [],
         // measuring sessions look at the probe's private region (meter.ts), everyone else at the board
         view: this.plan.group.measureVisibility ? { ...PROBE_VIEW } : { x: 0, y: 0, w: 1920, h: 1080 },
         idle: extra.idle ?? false,
         editing: extra.editing ?? null,
         ...(extra.drag !== undefined ? { drag: extra.drag as never } : {}),
+        ...(extra.laser ? ({ f: null, t: 'laser', trail: [...extra.laser] } as Record<string, unknown>) : {}),
       })
     } catch (e) {
       this.note(e)

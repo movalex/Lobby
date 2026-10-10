@@ -5,7 +5,8 @@
 //
 // The service: opens a board's room synchronously on the first socket (race-free, like
 // RoomRegistry.getOrCreate), evicts it after IDLE_EVICT_MS without sessions, serves the room's internal
-// routes and /internal/metrics, enforces the global outbound budget (64 MiB) and the snapshot cache
+// routes and /internal/metrics, enforces the global outbound budget (M7-5: DRAFTROOM_OUTBOUND_BUDGET_MB, 128 MiB;
+// outbound.ts OutboundBudget) and the snapshot cache
 // budget (64 MiB, one entry per board), and with DRAFTROOM_TEST_HOOKS=1 registers the test hooks
 // (snapshot with tombstones, lease-hook, fail-commit; test-hooks.ts).
 //
@@ -39,6 +40,7 @@ import {
   NOTICE_CODES,
   TERMINAL_CLOSE_REASONS,
 } from '@draftroom/canvas-schema/protocol'
+import { STATFS_PROBE } from '../disk.ts'
 import {
   type ElementRoomDeps,
   type ElementRoomService,
@@ -57,7 +59,7 @@ import { createWorkshopStateClient } from '../workshop-state.ts'
 import { closeTerminal } from './closing.ts'
 import { ElementRoom, type Session } from './element-room.ts'
 import { roomRoutes } from './http.ts'
-import { RoomMetrics } from './metrics.ts'
+import { RoomMetrics, type SummaryGauges } from './metrics.ts'
 import {
   type BoardFileState,
   boardFileState,
@@ -66,7 +68,7 @@ import {
   type PrepareResult,
 } from './migrate/index.ts'
 import { maintenanceState } from './migrate/maintenance.ts'
-import { OUTBOUND } from './outbound.ts'
+import { OUTBOUND, OutboundBudget } from './outbound.ts'
 import { testRoomRoutes } from './test-routes.ts'
 
 /** The global snapshot cache budget (§2.4.5): one entry per board, least recently built dropped first. */
@@ -152,6 +154,10 @@ export function createElementRoomServiceWith(
     deps.workshopState ??
     createWorkshopStateClient({ baseUrl: config.apiInternalUrl, internalSecret: config.internalSecret })
   const metrics = new RoomMetrics()
+  // M7-5: the process-wide outbound budget every session's queue reads (outbound.ts)
+  const outboundBudget = new OutboundBudget(
+    config.outboundBudgetMb ? config.outboundBudgetMb * 1024 * 1024 : OUTBOUND.globalBudget,
+  )
   const rooms = new Map<string, ElementRoom>()
   const evictTimers = new Map<string, ReturnType<typeof setTimeout>>()
   /** hooks set before a board's room opened */
@@ -228,6 +234,8 @@ export function createElementRoomServiceWith(
       onDocumentChange: deps.onDocumentChange,
       onIdle,
       snapshotBudget,
+      outboundBudget,
+      ...(deps.disk ? { disk: deps.disk } : {}),
     })
     const hooks = pendingHooks.get(boardId)
     if (hooks) {
@@ -443,22 +451,60 @@ export function createElementRoomServiceWith(
     return room
   }
 
-  // the global outbound budget (§2.4.5): above 64 MiB, the session with the largest buffer reconnects
-  const budgetTimer = setInterval(() => {
-    let total = 0
-    let largest: { room: ElementRoom; sid: string; pending: number } | null = null
+  // the global outbound budget (§2.4.5, M7-5): above it no session gets presence; above 1.25 times it the largest
+  // queues reconnect (4000), largest first (outbound.ts OutboundBudget)
+  const budgetEntries = function* () {
     for (const room of rooms.values())
-      for (const s of room.sessions) {
-        const p = s.out.pending
-        total += p
-        if (!largest || p > largest.pending) largest = { room, sid: s.identity.sid, pending: p }
-      }
-    if (total > OUTBOUND.globalBudget && largest) {
-      metrics.inc('lobby_closes_total', { code: String(CLOSE_RECONNECT), reason: 'global-budget' })
-      largest.room.closeSession(largest.sid)
+      for (const s of room.sessions)
+        yield {
+          pending: s.out.pending,
+          close: () => {
+            metrics.inc('lobby_closes_total', { code: String(CLOSE_RECONNECT), reason: 'global-budget' })
+            room.closeSession(s.identity.sid)
+          },
+        }
+  }
+  // one line when the budget is crossed either way or sessions were closed, at most every 5 s (a sum at the
+  // threshold can flap tick to tick; the closes since the last line are counted into the next one)
+  let loggedOver = false
+  let closedSince = 0
+  let lastLogAt = Number.NEGATIVE_INFINITY
+  const budgetTimer = setInterval(() => {
+    closedSince += outboundBudget.check(budgetEntries())
+    const at = now()
+    if ((outboundBudget.over !== loggedOver || closedSince > 0) && at - lastLogAt >= 5_000) {
+      deps.log(
+        `[outbound] ${outboundBudget.over ? 'over' : 'under'} the process budget (${Math.round(outboundBudget.queued / 1048576)} of ${Math.round(outboundBudget.bytes / 1048576)} MiB queued)${closedSince ? `: ${closedSince} sessions sent to reconnect` : ''}`,
+      )
+      loggedOver = outboundBudget.over
+      closedSince = 0
+      lastLogAt = at
     }
   }, 250)
   budgetTimer.unref?.()
+
+  // M7-3: once an hour, one `metrics.summary` line (metrics.ts), so the counters outlive a restart in the logs;
+  // the last one when the service closes (a deploy). Counts and shapes only: no board id, no user id.
+  const summaryGauges = (): SummaryGauges => {
+    let sessions = 0
+    let queued = 0
+    const elements: number[] = []
+    for (const room of rooms.values()) {
+      for (const s of room.sessions) {
+        sessions++
+        queued += s.out.pending
+      }
+      elements.push(room.gauges().elements)
+    }
+    return {
+      rooms: rooms.size,
+      sessions,
+      outboundQueued: queued,
+      diskFree: (deps.disk ?? STATFS_PROBE).freeRatio(deps.dataDir),
+      elements,
+    }
+  }
+  const stopSummary = metrics.startSummary(summaryGauges, (line) => deps.log(line))
 
   const offHooks = config.testHooks
     ? registerTestHooks({
@@ -578,11 +624,22 @@ export function createElementRoomServiceWith(
           sessionsByRole[s.identity.role] = (sessionsByRole[s.identity.role] ?? 0) + 1
         boards.push(room.gauges())
       }
-      return metrics.render({ open: rooms.size, sessionsByRole, boards })
+      let queued = 0
+      for (const room of rooms.values()) for (const s of room.sessions) queued += s.out.pending
+      return metrics.render({
+        open: rooms.size,
+        sessionsByRole,
+        boards,
+        outbound: { queuedBytes: queued, budgetBytes: outboundBudget.bytes, over: outboundBudget.over },
+        // M7-4: the rooms' disk (on Render the backups share it)
+        diskFreeRatio: (deps.disk ?? STATFS_PROBE).freeRatio(deps.dataDir),
+      })
     },
     async closeAll() {
       closed = true
       clearInterval(budgetTimer)
+      // M7-3: the part of the hour before the close (a deploy) is logged too, before the rooms go
+      stopSummary(true)
       for (const t of evictTimers.values()) clearTimeout(t)
       evictTimers.clear()
       for (const p of preparing.values())

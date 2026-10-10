@@ -76,6 +76,11 @@ export interface OffsiteBoardStatus {
   offsiteCount: number | null
   /** Local backups not in the store yet, as of the last attempt. */
   pending: number
+  /**
+   * M7-6: when the oldest local backup still waiting to go up was made (ISO), or null when none waits. The deep
+   * health check (health.ts) reports `backup` once that is over an hour ago.
+   */
+  pendingSince: string | null
   /** Failed attempts since the last one that went through. */
   failures: number
   /** Failed attempts since this server started. */
@@ -281,6 +286,7 @@ export class OffsiteBackups {
         lastSuccessClock: null,
         offsiteCount: null,
         pending: 0,
+        pendingSince: null,
         failures: 0,
         failuresTotal: 0,
         lastFailureAt: null,
@@ -313,6 +319,8 @@ export class OffsiteBackups {
         local.filter((e) => !inStore.has(e.file) && !this.badLocal.has(`${boardId}/${e.file}`)),
       )
       st.pending = missing.length
+      // M7-6: the oldest copy waiting (cleared below once nothing is left to upload)
+      st.pendingSince = missing[0]?.createdAt ?? null
       if (missing.length > 0 || known.pendingDeletes > 0 || this.unsignedInStore.has(boardId)) {
         manifest ??= await this.fetchManifest(boardId)
         for (const entry of missing) {
@@ -328,6 +336,7 @@ export class OffsiteBackups {
           await this.writeManifest(boardId, manifest)
         }
       }
+      if (st.pending <= 0) st.pendingSince = null
       what = 'index'
       await this.updateIndex(boardId)
       st.failures = 0

@@ -26,9 +26,15 @@
 // a thin measuring session loses nothing, and the presence probe sends at once instead of on a core's
 // timer): L1 keeps 50 full cores on its big board (40 editors, 10 editor-role watchers for B10's echo
 // check), L2 keeps 11 (10 editors, 1 measuring viewer for the echo check).
+// Wave M (M7-7, CAP-LASER-CPU): "laser30" and "laser60", one board with 30 or 60 rev-12 sessions that all hold
+// the shared laser down and move it at 20 Hz for the whole run, each message with `t: 'laser'` and a 1-2 point
+// `trail` (the samples since its previous send, as the web's laser sends them). Everyone receives everyone's
+// laser (30 or 60 peers, under the 41-session cap or above it): the socket-write cost of laser frames and,
+// run once with DRAFTROOM_WS_DEFLATE on and once off, the permessage-deflate CPU at Render's 0.5-CPU quota.
+// All thin (receive-and-presence only: no scene, no engine core).
 import { HEAVY_SPEC, L1_SPEC, SMALL_SPEC } from './boards.ts'
 
-export type SessionKind = 'gesture' | 'typist' | 'frame-dragger' | 'oneshot' | 'watcher' | 'light'
+export type SessionKind = 'gesture' | 'typist' | 'frame-dragger' | 'oneshot' | 'watcher' | 'light' | 'laser'
 
 export interface SessionGroup {
   readonly kind: SessionKind
@@ -168,7 +174,28 @@ export const DRY: Profile = {
   ],
 }
 
-export const PROFILES: Readonly<Record<string, Profile>> = { L1, L2, dry: DRY }
+/** M7-7: `count` rev-12 sessions on one board, every one sweeping the laser at 20 Hz (the header). */
+function laserProfile(count: number): Profile {
+  return {
+    name: `laser${count}`,
+    durationMs: 4 * 60_000,
+    joinRampMs: 20_000,
+    presenceHz: 20,
+    metricsEveryMs: 10_000,
+    killAtMs: null,
+    boards: [{ kind: 'small', boards: 1, groups: [{ kind: 'laser', count, role: 'editor', thin: count }] }],
+  }
+}
+export const LASER30 = laserProfile(30)
+export const LASER60 = laserProfile(60)
+
+export const PROFILES: Readonly<Record<string, Profile>> = {
+  L1,
+  L2,
+  dry: DRY,
+  laser30: LASER30,
+  laser60: LASER60,
+}
 
 export function sessionCount(p: Profile): number {
   return p.boards.reduce((n, b) => n + b.boards * b.groups.reduce((m, g) => m + g.count, 0), 0)

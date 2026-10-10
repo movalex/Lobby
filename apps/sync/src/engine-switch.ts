@@ -15,6 +15,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WireElement } from '@draftroom/canvas-schema/elements'
 import type { FileRefsResponse, WorkshopStateBody } from '@draftroom/contracts'
 import type { SyncConfig } from './config.ts'
+import type { DiskProbe } from './disk.ts'
 import type { BoardRole } from './permissions.ts'
 import type { BoardStore } from './room/store.ts'
 
@@ -69,8 +70,11 @@ export interface ElementSessionInfo {
 
 /** The socket as the room sees it: app.ts wraps the `ws` socket (never binds the room's listeners to it). */
 export interface ElementSocket {
-  /** a text frame (JSON) or the binary gzip snapshot frame (protocol.ts SnapshotFrame) */
-  send(data: string | Uint8Array): void
+  /**
+   * a text frame (JSON) or the binary gzip snapshot frame (protocol.ts SnapshotFrame). `compress: false` (M7-2):
+   * never deflate this frame on the wire, whatever the socket negotiated (the snapshot is gzip already)
+   */
+  send(data: string | Uint8Array, opts?: { readonly compress?: boolean }): void
   close(code: number, reason: string): void
   /** `ws` readyState: 1 = OPEN */
   readonly readyState: number
@@ -135,6 +139,8 @@ export interface ElementRoomDeps {
    * write, so a POST already in flight when maintenance went on cannot commit inside the window.
    */
   readonly maintenance?: () => boolean
+  /** M7-4: the disk's free share (disk.ts; app.ts passes statfs or the test hook's answer). Absent: statfs. */
+  readonly disk?: DiskProbe
 }
 
 /**
