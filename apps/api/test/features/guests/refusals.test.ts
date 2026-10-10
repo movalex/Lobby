@@ -3,6 +3,7 @@
 import { ListMembersResponse } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { GUEST_REFUSED_ROUTES } from '../../../src/features/guests/guard.ts'
+import { isPendingRoute } from '../../../src/features/pending-routes.ts'
 import { createBoard, DEV_STUDIO } from '../../helpers.ts'
 import {
   boardRole,
@@ -102,6 +103,12 @@ function refusedCalls(board: string, other: string, userId: string): [string, Me
     // The spotlight for everyone (wave L, L5-2): facilitators only, and a guest never is one.
     ['POST /api/boards/:bid/spotlight', 'POST', `${b}/spotlight`, { refs: ['shape:abc'] }],
     ['POST /api/boards/:bid/spotlight/end', 'POST', `${b}/spotlight/end`, {}],
+    // Wave M (landed by the foundation; pending routes answer as unknown ones until implemented, see below)
+    ['GET /api/workspaces/:wid/templates', 'GET', `${ws}/templates`, undefined],
+    ['POST /api/workspaces/:wid/templates', 'POST', `${ws}/templates`, { boardId: board, name: 'Mine' }],
+    ['DELETE /api/workspaces/:wid/templates/:bid', 'DELETE', `${ws}/templates/${board}`, undefined],
+    ['POST /api/workspaces/:wid/templates/:bid/use', 'POST', `${ws}/templates/${board}/use`, {}],
+    ['POST /api/workspaces/:wid/ai/ask', 'POST', `${ws}/ai/ask`, { question: 'What did we decide?' }],
     // Requesting access: to their own board and to any other.
     ['POST /api/boards/:bid/access-requests', 'POST', `${b}/access-requests`, { role: 'editor' }],
     [
@@ -118,8 +125,17 @@ describe('what a guest cannot do', () => {
     const calls = refusedCalls(w.board, others.priv, w.bob.userId)
     // The matrix covers the whole refusal list.
     expect(new Set(calls.map(([route]) => route))).toEqual(new Set(Object.keys(GUEST_REFUSED_ROUTES)))
-    for (const [, method, url, body] of calls) {
+    for (const [route, method, url, body] of calls) {
       const res = await sam.req(method, url, body)
+      // A wave M route still pending (src/features/pending-routes.ts) is not registered: the unknown route's 404.
+      // Once its owner implements it (and removes it from PENDING_ROUTES), it must refuse the guest here.
+      if (isPendingRoute(route)) {
+        expect(res.statusCode, `${method} ${url} (pending): ${res.body}`).toBe(404)
+        expect(res.json(), `${method} ${url} (pending)`).toEqual({
+          error: { code: 'NOT_FOUND', message: 'Not found.' },
+        })
+        continue
+      }
       expect(res.statusCode, `${method} ${url}: ${res.body}`).toBe(403)
       expect(errorCode(res), `${method} ${url}`).toBe('GUEST_ACCOUNT_REQUIRED')
     }
@@ -138,10 +154,10 @@ describe('what a guest cannot do', () => {
     ).toBe(0)
   })
 
-  it('every pattern on the refusal list is a registered route (a renamed route fails here)', () => {
+  it('every pattern on the refusal list is a registered route (a renamed route fails here), or a pending one that is not', () => {
     for (const key of Object.keys(GUEST_REFUSED_ROUTES)) {
       const [method = '', url = ''] = key.split(' ')
-      expect(w.api.app.hasRoute({ method: method as Method, url }), key).toBe(true)
+      expect(w.api.app.hasRoute({ method: method as Method, url }), key).toBe(!isPendingRoute(key))
     }
   })
 

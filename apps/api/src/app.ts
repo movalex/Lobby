@@ -28,13 +28,14 @@ import { listUserWorkspaces } from './auth/users.ts'
 import { type CanvasEngine, type CanvasEngineProbe, createCanvasEngineProbe } from './canvas-engine.ts'
 import type { ApiConfig } from './config.ts'
 import { type ApiLimits, type AppContext, DEFAULT_LIMITS, type InvitationRateLimits } from './context.ts'
-import { badRequest, toErrorResponse, unauthenticated } from './errors.ts'
+import { badRequest, notFound, toErrorResponse, unauthenticated } from './errors.ts'
 import { EventHub } from './events/hub.ts'
 import { registerEventRoutes } from './events/routes.ts'
 import type { FeatureContext } from './features/context.ts'
 import { registerFeedback } from './features/feedback/index.ts'
 import { INTERNAL_CHECKPOINT_POSTS } from './features/history/checkpoint-all.ts'
 import { registerFeatures } from './features/index.ts'
+import { routeUnlessPending } from './features/pending-routes.ts'
 import type { BlobStore } from './files/blobs.ts'
 import { filesPlugin } from './files/plugin.ts'
 import { registerStorage } from './files/storage-routes.ts'
@@ -613,6 +614,12 @@ async function buildServer(
 
   // Liveness only (no database, no auth): for Render health checks and local tooling.
   app.get('/healthz', async (_req, reply) => reply.type('text/plain').send('ok'))
+  // Wave M (M5-6, owner W5; a stub landed by the foundation): GET /healthz/deep, public and without data: 200 'ok',
+  // or 503 with comma-separated reason codes (db, 5xx, ai). Render's healthCheckPath stays /healthz. Pending
+  // (features/pending-routes.ts): not registered until W5 implements it, so it answers 404 like any unknown route.
+  routeUnlessPending(app, 'GET', '/healthz/deep', async () => {
+    throw notFound()
+  })
 
   // Stream diagnostic (no auth, no data): a 2 KB SSE comment, then three ticks one second apart, then
   // the end. It tells whether a proxy in front of the api (the static site's /api rewrite on Render)

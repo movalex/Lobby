@@ -56,6 +56,16 @@ export const LINK_PREVIEW_GUESTS =
 export const SPOTLIGHT_GUESTS =
   'Guests take part, but the spotlight is run by editors with an account. Sign in with an account to use it.'
 
+/**
+ * Wave M (M8-3, W8): workspace templates are the workspace's, and a guest never sees the workspace (like its
+ * projects and members). Listed here so a guest is refused before any workspace check.
+ */
+export const WS_TEMPLATES_GUESTS =
+  'Workspace templates are for people with an account. Sign in with an account to use them.'
+/** Wave M (M8-2, W8): Ask across boards reads every board the person can view and costs money, like AI on a board. */
+export const WORKSPACE_ASK_GUESTS =
+  'Asking across boards is for people with an account. Sign in with an account to use it.'
+
 /** `METHOD route-pattern` → the message a signed-in guest gets (403 GUEST_ACCOUNT_REQUIRED). */
 export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {
   // workspaces, projects and boards
@@ -93,6 +103,12 @@ export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {
   // facilitation (wave L, L5-2): the spotlight for everyone
   'POST /api/boards/:bid/spotlight': SPOTLIGHT_GUESTS,
   'POST /api/boards/:bid/spotlight/end': SPOTLIGHT_GUESTS,
+  // wave M (landed by the foundation, pending until implemented: ../pending-routes.ts)
+  'GET /api/workspaces/:wid/templates': WS_TEMPLATES_GUESTS,
+  'POST /api/workspaces/:wid/templates': WS_TEMPLATES_GUESTS,
+  'DELETE /api/workspaces/:wid/templates/:bid': WS_TEMPLATES_GUESTS,
+  'POST /api/workspaces/:wid/templates/:bid/use': WS_TEMPLATES_GUESTS,
+  'POST /api/workspaces/:wid/ai/ask': WORKSPACE_ASK_GUESTS,
 }
 
 export const guestRefused = (message: string) => new ApiError(403, 'GUEST_ACCOUNT_REQUIRED', message)

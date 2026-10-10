@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import type { LightMyRequestResponse } from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CREATOR_ROUTES } from '../../../src/features/domain-access/guard.ts'
+import { isPendingRoute } from '../../../src/features/pending-routes.ts'
 import { type Client, createBoard, createTestApi, DEV_STUDIO, devEmail, type TestApi } from '../../helpers.ts'
 import { baseRecords, createFakeSync, type FakeSync, noteRec } from '../history/helpers.ts'
 
@@ -17,6 +18,12 @@ type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 const ALWAYS = Object.entries(CREATOR_ROUTES)
   .filter(([, r]) => r.refuse === 'always')
   .map(([key]) => key)
+/**
+ * The 'always' routes that are registered. A wave M route still pending (src/features/pending-routes.ts) is not
+ * registered yet and answers as an unknown route (the last test below); once its owner implements it and removes it
+ * from PENDING_ROUTES, every check here covers it.
+ */
+const LIVE = ALWAYS.filter((key) => !isPendingRoute(key))
 
 interface World {
   api: TestApi
@@ -145,6 +152,22 @@ function probe(
       `/api/boards/${bid}/transfer-ownership`,
       { userId: w.bob.userId },
     ],
+    // wave M (M8-3, W8): workspace templates
+    'POST /api/workspaces/:wid/templates': [
+      'POST',
+      `/api/workspaces/${wid}/templates`,
+      { boardId: bid, name: 'Our retro', category: 'review' },
+    ],
+    'DELETE /api/workspaces/:wid/templates/:bid': [
+      'DELETE',
+      `/api/workspaces/${wid}/templates/${bid}`,
+      undefined,
+    ],
+    'POST /api/workspaces/:wid/templates/:bid/use': [
+      'POST',
+      `/api/workspaces/${wid}/templates/${bid}/use`,
+      {},
+    ],
   }
   const found = table[key]
   if (!found) throw new Error(`no probe for ${key}`)
@@ -188,21 +211,22 @@ let w: World
 afterEach(() => w?.api.close())
 
 describe('the creation matrix', () => {
-  it('every CREATOR_ROUTES key is a registered route (and the table has a probe for each "always" key)', async () => {
+  it('every CREATOR_ROUTES key is a registered route, or a pending one that is not (and the table has a probe for each "always" key)', async () => {
     w = await world()
     for (const key of Object.keys(CREATOR_ROUTES)) {
       const [method, url] = key.split(' ') as [Method, string]
-      expect(w.api.app.hasRoute({ method, url }), key).toBe(true)
+      expect(w.api.app.hasRoute({ method, url }), key).toBe(!isPendingRoute(key))
     }
     for (const key of ALWAYS) expect(() => probe(w, key)).not.toThrow()
-    expect(ALWAYS).toHaveLength(13)
+    // 13 until wave M, and the three workspace-template routes (M8-3)
+    expect(ALWAYS).toHaveLength(16)
   })
 
   it('the guard: an outsider (workspace admin, board owner) gets 403 CREATOR_REQUIRED everywhere, logged "by guard"; nothing is created', async () => {
     w = await world()
     const before = await counts(w.api)
     for (const who of [w.outsider, w.member]) {
-      for (const key of ALWAYS) {
+      for (const key of LIVE) {
         const [method, url, body] = probe(w, key)
         w.logs.length = 0
         expectCreatorRequired(await who.req(method, url, body), key)
@@ -224,7 +248,7 @@ describe('the creation matrix', () => {
 
   it('the same 403 for ids that do not exist (the answer depends only on the caller)', async () => {
     w = await world()
-    for (const key of ALWAYS) {
+    for (const key of LIVE) {
       const [method, url, body] = probe(w, key, NONEXISTENT)
       expectCreatorRequired(await w.outsider.req(method, url, body), `${key} (nonexistent)`)
     }
@@ -233,7 +257,7 @@ describe('the creation matrix', () => {
   it('without the guard, the in-route checks alone refuse every entry ("by route"); nothing is created', async () => {
     w = await world({ guard: false })
     const before = await counts(w.api)
-    for (const key of ALWAYS) {
+    for (const key of LIVE) {
       const [method, url, body] = probe(w, key)
       w.logs.length = 0
       expectCreatorRequired(await w.outsider.req(method, url, body), key)
@@ -248,16 +272,16 @@ describe('the creation matrix', () => {
 
   it('a creator gets 201/200 on the same calls', async () => {
     w = await world()
-    for (const key of ALWAYS) {
+    for (const key of LIVE) {
       const [method, url, body] = probe(w, key)
       const res = await w.alice.req(method, url, body)
-      expect([200, 201], `${key}: ${res.statusCode} ${res.body}`).toContain(res.statusCode)
+      expect([200, 201, 204], `${key}: ${res.statusCode} ${res.body}`).toContain(res.statusCode)
     }
   })
 
   it('tenancy is unchanged: a creator outside the workspace gets 404 on its ids', async () => {
     w = await world()
-    for (const key of ALWAYS) {
+    for (const key of LIVE) {
       const [method, url, body] = probe(w, key)
       const res = await w.erin.req(method, url, body)
       expect(res.statusCode, `${key}: ${res.body}`).toBe(404)
@@ -277,12 +301,29 @@ describe('the creation matrix', () => {
     })
     expect(joined.statusCode, joined.body).toBe(201)
     const cookie = `dr_session=${joined.cookies.find((c) => c.name === 'dr_session')?.value}`
-    for (const key of ALWAYS) {
+    for (const key of LIVE) {
       const [method, url, body] = probe(w, key)
       const res = await w.api.anon(method, url, body, { cookie })
       expect(res.statusCode, `${key}: ${res.body}`).toBe(403)
       expect(res.json().error.code, key).toBe('GUEST_ACCOUNT_REQUIRED')
     }
+  })
+
+  it('a pending wave M creator route is not registered yet: the unknown route answer for everyone, nothing created', async () => {
+    w = await world()
+    const pending = ALWAYS.filter((key) => isPendingRoute(key))
+    expect(pending.length + LIVE.length).toBe(ALWAYS.length)
+    const before = await counts(w.api)
+    for (const key of pending) {
+      const [method, url, body] = probe(w, key)
+      for (const who of [w.alice, w.outsider, w.erin]) {
+        const res = await who.req(method, url, body)
+        expect(res.statusCode, `${key}: ${res.body}`).toBe(404)
+        expect(res.json(), key).toEqual({ error: { code: 'NOT_FOUND', message: 'Not found.' } })
+      }
+    }
+    expect(await counts(w.api)).toEqual(before)
+    expect(w.sync.seeds).toEqual([])
   })
 })
 

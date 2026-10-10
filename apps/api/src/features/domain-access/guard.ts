@@ -46,6 +46,12 @@ export const CREATOR_ROUTES: Readonly<Record<string, CreatorRoute>> = {
   'PATCH /api/boards/:bid': { purpose: 'share', refuse: 'in-route' },
   // authz-006: raising a workspace member's role (lowering, and DELETE, stay open to every manager)
   'PATCH /api/workspaces/:wid/members/:uid': { purpose: 'share', refuse: 'in-route' },
+  // wave M (M8-3, W8; landed by the foundation, pending until implemented: ../pending-routes.ts): workspace
+  // templates. Saving and removing one is for a creator who is a workspace owner or admin (the admin part in the
+  // route); starting a board from one creates a board.
+  'POST /api/workspaces/:wid/templates': { purpose: 'create', refuse: 'always' },
+  'DELETE /api/workspaces/:wid/templates/:bid': { purpose: 'create', refuse: 'always' },
+  'POST /api/workspaces/:wid/templates/:bid/use': { purpose: 'create', refuse: 'always' },
 }
 
 const routeKey = (req: FastifyRequest) =>

@@ -3,6 +3,7 @@
 
 import { signTicket } from '@draftroom/auth-tickets'
 import {
+  ACCESS_MANY_PATH,
   BoardId,
   NEW_CANVAS_BOARD_MESSAGE,
   NEW_CANVAS_ERROR,
@@ -16,6 +17,7 @@ import { onNewCanvas } from '../canvas-engine.ts'
 import type { AppContext, Params } from '../context.ts'
 import { ApiError, notFound, parse } from '../errors.ts'
 import { ticketIdentity } from '../features/guests/label.ts'
+import { routeUnlessPending } from '../features/pending-routes.ts'
 
 const AccessQuery = z.object({ boardId: BoardId, userId: UserId })
 
@@ -62,5 +64,13 @@ export function registerTicketRoutes(app: FastifyInstance, ctx: AppContext): voi
       role: connectionRole(await loadBoardAccess(db, boardId, userId)),
       signedInSince: await ctx.sessions.signedInSince(userId),
     }
+  })
+
+  // Wave M (M7-1, owner W7; a stub landed by the foundation): POST /internal/access-many AccessManyRequest →
+  // AccessManyResponse (@draftroom/contracts sync-internal.ts), one call per recheck round: each pair answered as
+  // GET /internal/access answers it (loadBoardAccessMany), signedInSince once per person. Pending
+  // (features/pending-routes.ts): not registered until W7 implements it, so the sync's 404 fallback (per pair) runs.
+  routeUnlessPending(app, 'POST', ACCESS_MANY_PATH, async () => {
+    throw notFound()
   })
 }
