@@ -605,7 +605,7 @@ test('M6-4: offline, a member sees their copy read-only with the banner; a copy 
   browser,
   board,
   users,
-}) => {
+}, testInfo) => {
   const alice = await users.get('alice')
   const { context, page } = await onDashboard(browser, alice)
   try {
@@ -637,10 +637,36 @@ test('M6-4: offline, a member sees their copy read-only with the banner; a copy 
     await expect(page.getByTestId('board-load-error')).toBeVisible({ timeout: 30_000 })
     await expect(page.getByTestId('offline-copy')).toHaveCount(0)
 
-    // back online: the board opens as usual
+    // back online: the board opens as usual, by itself (the online event; a few more tries a moment after a failed
+    // one; the ticket that went out offline asked again), with no Try again (the W6 review: under load, a click
+    // racing that reload once left the page on the error screen)
     await context.setOffline(false)
-    await page.getByTestId('board-load-error').getByRole('button', { name: 'Try again' }).click()
+    const back = Date.now()
     await waitForCanvas(page)
+    testInfo.annotations.push({
+      type: 'back online',
+      description: `the board opened by itself after ${Date.now() - back} ms`,
+    })
+
+    // and with Try again clicked while that reload is under way (the review's flake under load: the board's answer
+    // is held 1 s here, so the click lands in the race; no cache: ?nocache=1 shows the error screen)
+    await goInApp(page, '/')
+    await expect(page.getByTestId('lobby-board')).toHaveCount(0)
+    await context.setOffline(true)
+    await goInApp(page, `/b/${board}?nocache=1`)
+    await expect(page.getByTestId('board-load-error')).toBeVisible({ timeout: 30_000 })
+    const boardGet = (url: URL) => url.pathname === `/api/boards/${board}`
+    await page.route(boardGet, async (route) => {
+      await new Promise((r) => setTimeout(r, 1_000))
+      await route.continue().catch(() => {})
+    })
+    await context.setOffline(false)
+    await page
+      .getByTestId('board-load-error')
+      .getByRole('button', { name: 'Try again' })
+      .click({ timeout: 5_000 })
+    await waitForCanvas(page)
+    await page.unroute(boardGet)
     expect(foreign).toEqual([])
   } finally {
     await context.close()

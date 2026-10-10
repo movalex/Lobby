@@ -139,7 +139,7 @@ export function LobbyBoardPage({ boardId }: { boardId: string }) {
     // M6-4: the request never got an answer (offline): a member's recent copy, read-only, else the screen below
     if (detail.error.kind === 'network')
       return (
-        <OfflineBoardCopy boardId={boardId} uid={uid} onRetry={detail.reload}>
+        <OfflineBoardCopy boardId={boardId} uid={uid} failure={detail.error} onRetry={detail.reload}>
           <MessageScreen
             testId="board-load-error"
             title="This board could not be opened"
@@ -269,8 +269,14 @@ function FirstTicket(props: SessionProps) {
       (signal) => {
         const p = preloaded
         preloaded = null
+        // (the W6 review: a preloaded ask that never got an answer, made while offline or as the network changed,
+        // is asked again now rather than shown as an error: the board itself has just answered)
         return p
-          ? p.then((t) => (t.user.id === uid ? t : api.boardTicket(boardId, signal)))
+          ? p.then(
+              (t) => (t.user.id === uid ? t : api.boardTicket(boardId, signal)),
+              (e: unknown) =>
+                isApiError(e) && e.kind === 'network' ? api.boardTicket(boardId, signal) : Promise.reject(e),
+            )
           : api.boardTicket(boardId, signal)
       },
       { signal: ac.signal },
@@ -880,15 +886,22 @@ function LobbyBoardScreen({
  * socket, nothing pushed, the offline queue untouched), with "Offline · showing your copy from <time>"; images
  * show their placeholder (no file is fetched). Back online (or Try again), the board opens as usual. Anyone else
  * (a guest, who never has a copy; an older copy; none) gets `children`: the screen this case showed before.
+ *
+ * Back online, the board is asked for again, and (the W6 review) up to ONLINE_RETRIES more times, a moment after
+ * each failed try: a request made right at the switch can fail (the network still changing), which left the person
+ * on this screen.
  */
 function OfflineBoardCopy({
   boardId,
   uid,
+  failure,
   onRetry,
   children,
 }: {
   boardId: string
   uid: string
+  /** the board request's failure (a new one per failed try) */
+  failure: unknown
   onRetry(): void
   children: ReactNode
 }) {
@@ -908,16 +921,32 @@ function OfflineBoardCopy({
   // back online: the board's own open
   const retry = useRef(onRetry)
   retry.current = onRetry
+  const retriesLeft = useRef(0)
   useEffect(() => {
-    const online = () => retry.current()
+    const online = () => {
+      retriesLeft.current = ONLINE_RETRIES
+      retry.current()
+    }
     window.addEventListener('online', online)
     return () => window.removeEventListener('online', online)
   }, [])
+  // each try that failed after the connection came back: another one, a moment later
+  useEffect(() => {
+    void failure
+    if (retriesLeft.current <= 0) return
+    retriesLeft.current--
+    const t = setTimeout(() => retry.current(), ONLINE_RETRY_MS)
+    return () => clearTimeout(t)
+  }, [failure])
   if (record === undefined) return <BoardSkeleton boardId={boardId} />
   const fresh = record && Date.now() - record.savedAt <= CACHE_OFFLINE_MAX_AGE_MS
   if (!record || !fresh) return <>{children}</>
   return <OfflineCopyCanvas record={record} onRetry={onRetry} />
 }
+
+/** Back online: how many more times the board is asked for after a failed try, and how long after it. */
+const ONLINE_RETRIES = 3
+const ONLINE_RETRY_MS = 1_500
 
 /** The offline copy's canvas role: read-only (pan, zoom, links). */
 const OFFLINE_COPY_ROLE: LobbyRole = 'viewer'
