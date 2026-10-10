@@ -2742,6 +2742,10 @@ export class LobbyEngineCore implements EngineCore {
       const sent = push.sent.get(id)
       if (r.ok) {
         const t = this.tracked.get(id)
+        // an older page's create (olderCopies) is written as it was, whole: nothing is left to complete, and
+        // kept, this page's own later change of it was completed as the old page's (a rev-12 removal of the
+        // minutes undone; wave L compat refix, round 2)
+        if (sent?.create) this.olderCopies.delete(id)
         if (t && sent?.create) {
           t.isNew = false
           // nothing else pending: the entry goes (it lingered with replay false, so a later offline

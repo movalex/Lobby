@@ -195,3 +195,63 @@ describe('an offline queue a rev-11 page left, taken over by this page after a r
     expect(lobbyOf(h.room.elements.get('f1')).present).toEqual({ index: 2 })
   })
 })
+
+// Wave L compat refix, round 2: an older page's queued CREATE (a frame it made offline and placed in the
+// presentation order). Its marker (olderCopies) was kept after this page's create of it was acked, so a later
+// rev-12 change of this page's own was completed as the old page's: the removal of the minutes undone, Saved.
+describe("an older page's offline create, taken over by this page: the create's ack ends the older copy", () => {
+  /** bob's 437b4e7 tab, offline, makes frame f2 at index 3; this page takes the queue over; bob plans 5 min. */
+  async function createdThenPlanned() {
+    const h = createHarness({ seed: [] })
+    const store = createMemoryOfflineStore()
+    const bob = h.client('bob', { offline: store })
+    h.settle()
+    h.room.cut(bob.transport)
+    h.settle()
+    bob.edit((m) => m.set('f2', frame('f2', 'a1', { customData: { lobby: { present: { index: 3 } } } })))
+    bob.core.persistNow()
+    await flushMicro()
+    const entries = as437b4e7(store.entries())
+    expect(entries.map((e) => e.groups.includes('create') && e.groups.includes('c:present'))).toEqual([true])
+    bob.core.stop()
+    const store2 = createMemoryOfflineStore(entries)
+    const bob2 = h.client('bob', { offline: store2, tab: 'tab1' })
+    for (let i = 0; i < 3; i++) {
+      await flushMicro()
+      h.settle()
+    }
+    expect(lobbyOf(h.room.elements.get('f2')).present).toEqual({ index: 3 })
+    bob2.edit((m) => m.set('f2', withPresent(m.get('f2') as SceneElement, { index: 3, mins: 5 })))
+    h.settle()
+    expect(lobbyOf(h.room.elements.get('f2')).present).toEqual({ index: 3, mins: 5 })
+    return { h, bob2, store2 }
+  }
+
+  it('a later rev-12 removal of the minutes, made offline on this page, is sent after the reconnect', async () => {
+    const { h, bob2 } = await createdThenPlanned()
+    h.room.cut(bob2.transport)
+    h.settle()
+    bob2.edit((m) => m.set('f2', withPresent(m.get('f2') as SceneElement, { index: 3 })))
+    ;(bob2.transport as unknown as { reopen(): void }).reopen()
+    h.settle()
+    expect(patchesOf(bob2, 'f2').map((p) => p.c?.present)).toEqual([{ index: 3, mins: 5 }, { index: 3 }])
+    expect(lobbyOf(h.room.elements.get('f2')).present).toEqual({ index: 3 })
+    expect(lobbyOf(bob2.get('f2')).present).toEqual({ index: 3 })
+    expect(bob2.core.saveStatus.state).toBe('saved')
+  })
+
+  it('or this page closes with the removal unsent: its queue entry is stamped with its own revision', async () => {
+    const { h, bob2, store2 } = await createdThenPlanned()
+    h.room.cut(bob2.transport)
+    h.settle()
+    bob2.edit((m) => m.set('f2', withPresent(m.get('f2') as SceneElement, { index: 3 })))
+    bob2.core.persistNow()
+    await flushMicro()
+    const again = structuredClone(store2.entries()) as OfflineEntry[]
+    expect(again.map((e) => [e.element.id, (e as { rev?: number }).rev])).toEqual([['f2', 12]])
+    bob2.core.stop()
+    const bob3 = await reload(h, again, 'tab1')
+    expect(patchesOf(bob3, 'f2').map((p) => p.c?.present)).toEqual([{ index: 3 }])
+    expect(lobbyOf(h.room.elements.get('f2')).present).toEqual({ index: 3 })
+  })
+})
