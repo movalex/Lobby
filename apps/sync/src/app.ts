@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { Duplex } from 'node:stream'
 import { type TicketClaims, verifyTicket } from '@draftroom/auth-tickets'
-import { CLOSE_TERMINAL } from '@draftroom/canvas-schema/protocol'
+import { CLOSE_TERMINAL, CONNECT_REV_PARAM, connectRevOf } from '@draftroom/canvas-schema/protocol'
 import { dataLayout } from '@draftroom/dev-assets'
 import { type WebSocket, WebSocketServer } from 'ws'
 import {
@@ -252,6 +252,8 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     const m = url && /^\/connect\/([^/]+)$/.exec(url.pathname)
     const boardId = m?.[1]
     const clientSessionId = url?.searchParams.get('sessionId') // appended by the client (TAB_ID)
+    // CONTRACTS_REV 12: the contracts revision the client reads, from its connect URL (none: an older client)
+    const contractsRev = connectRevOf(url?.searchParams.get(CONNECT_REV_PARAM))
     if (!url || !boardId || !BOARD_ID_RE.test(boardId) || !clientSessionId || clientSessionId.length > 128) {
       socket.write('HTTP/1.1 400 Bad Request\r\n\r\n')
       return void socket.destroy()
@@ -272,7 +274,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
       }
       // Maintenance (bridge release R0): refused before any room is touched; terminal on the client.
       if (maintenance) return closeTerminal(ws, MAINTENANCE_REASON)
-      connectElement(elementRooms, ws, boardId, clientSessionId, verdict.claims)
+      connectElement(elementRooms, ws, boardId, clientSessionId, verdict.claims, contractsRev)
     })
   }
   // A verified socket on the ElementRoom: the replaced-socket guard keyed by boardId/sid, the message
@@ -284,6 +286,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     boardId: string,
     clientSessionId: string,
     claims: TicketClaims,
+    contractsRev: number | null,
   ) => {
     const { uid, role, name, color, iat } = claims
     const sid = `${uid}:${clientSessionId}`
@@ -303,6 +306,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
           guest: claims.guest === true,
           readonly: !canEditCanvas(role),
           ticketIssuedAt: iat,
+          contractsRev,
         },
         {
           send: (d: string | Uint8Array) => ws.send(d),

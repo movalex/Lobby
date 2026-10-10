@@ -3,8 +3,13 @@
 // without its own join; the batch flushes on demand; a join spread over time (CAP-L1) still costs one frame per
 // recipient per 100 ms.
 
+import { CONTRACTS_REV } from '@draftroom/canvas-schema/protocol'
 import { describe, expect, it, vi } from 'vitest'
+import { MessageFrame, type RoomFrame } from './reader-frames.ts'
 import { ROSTER_FLUSH_MS, RosterBatch, type RosterRecipient } from './roster-batch.ts'
+
+/** A frame's JSON as a current reader gets it (Session.send). */
+const text = (f: RoomFrame): string => (f instanceof MessageFrame ? f.json(CONTRACTS_REV) : String(f))
 
 const entry = (sid: string) => ({
   sid,
@@ -25,7 +30,9 @@ function setup() {
   let scheduled: (() => void) | null = null
   const batch = new RosterBatch(
     () =>
-      [...recipients.values()].map((r): RosterRecipient => ({ sid: r.sid, send: (f) => r.frames.push(f) })),
+      [...recipients.values()].map(
+        (r): RosterRecipient => ({ sid: r.sid, send: (f) => r.frames.push(text(f)) }),
+      ),
     (fn) => {
       scheduled = fn
       return 0 as unknown as ReturnType<typeof setImmediate>
@@ -124,7 +131,9 @@ describe('roster batch timing (CAP-L1)', () => {
     vi.useFakeTimers()
     try {
       const old = { sid: 'old:1', frames: [] as string[] }
-      const batch = new RosterBatch(() => [{ sid: old.sid, send: (f: string) => old.frames.push(f) }])
+      const batch = new RosterBatch(() => [
+        { sid: old.sid, send: (f: RoomFrame) => old.frames.push(text(f)) },
+      ])
       // 40 joins, one every 5 ms (200 ms): before, each went out alone (40 frames to every recipient)
       for (let i = 0; i < 40; i++) {
         batch.push({ k: 'join', p: entry(`j${i}:1`) })

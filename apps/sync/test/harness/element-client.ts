@@ -48,6 +48,29 @@ export interface ProtocolClientOptions {
   readonly epoch?: string | null
   /** the elements this client already holds (a reconnect with `since`) */
   readonly confirmed?: ReadonlyMap<string, El>
+  /**
+   * More connect URL parameters, e.g. `{ rev: '12' }` (CONTRACTS_REV 12: the revision the client reads,
+   * canvas-schema CONNECT_REV_PARAM). Without `rev` the room reads this client as an older one (rev 11).
+   */
+  readonly query?: Readonly<Record<string, string>>
+  /**
+   * The schemas this client parses every server frame with, as its build would (default: this tree's). The
+   * stale-pair tests give it a previous build's, frozen (packages/canvas-schema/test/fixtures/): a frame that
+   * build's socket would drop lands in `schemaErrors` and is not applied, as that socket drops it.
+   */
+  readonly schemas?: FrameSchemas
+}
+
+/** How a client build parses server frames (its `ServerMessage`, and the gzip snapshot's decoder). */
+export interface FrameSchemas {
+  readonly ServerMessage: {
+    safeParse(
+      v: unknown,
+    ): { success: true; data: unknown } | { success: false; error: { issues: { message: string }[] } }
+  }
+  readonly decodeSnapshotFrame: (
+    bytes: Uint8Array,
+  ) => Promise<{ epoch: string; clock: number; elements: readonly unknown[] }>
 }
 
 /** A signed test ticket for `user` on `boardId` (the harness secret; `name` = `<user>-name`). */
@@ -103,8 +126,13 @@ export class ProtocolClient {
   private welcomeDone = false
   private inbound: Promise<void> = Promise.resolve()
   private readonly waiters: { test: () => boolean; resolve: () => void }[] = []
+  private readonly schemas: FrameSchemas
 
   constructor(opts: ProtocolClientOptions) {
+    this.schemas = opts.schemas ?? {
+      ServerMessage: ServerMessageSchema as FrameSchemas['ServerMessage'],
+      decodeSnapshotFrame,
+    }
     this.user = opts.user
     this.boardId = opts.boardId
     this.tab = opts.tab ?? `tab-${opts.user}`
@@ -112,7 +140,7 @@ export class ProtocolClient {
     if (opts.since) this.clock = opts.since
     const ticket = opts.ticket ?? elementTicket(opts.boardId, opts.user, opts.role, opts.guest)
     const target = boardSocketTarget(
-      `${opts.wsUrl}/connect/${encodeURIComponent(opts.boardId)}?${new URLSearchParams({ sessionId: this.tab })}`,
+      `${opts.wsUrl}/connect/${encodeURIComponent(opts.boardId)}?${new URLSearchParams({ ...opts.query, sessionId: this.tab })}`,
       ticket,
       opts.ticketIn,
     )
@@ -334,9 +362,11 @@ export class ProtocolClient {
 
   private async receive(data: Buffer, isBinary: boolean): Promise<void> {
     if (isBinary) {
-      const frame = await decodeSnapshotFrame(new Uint8Array(data.buffer, data.byteOffset, data.byteLength))
+      const frame = await this.schemas.decodeSnapshotFrame(
+        new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+      )
       this.confirmed.clear()
-      for (const el of frame.elements) this.confirmed.set(el.id, structuredClone(el) as El)
+      for (const el of frame.elements as El[]) this.confirmed.set(el.id, structuredClone(el) as El)
       this.epoch = frame.epoch
       this.clock = frame.clock
       this.welcomeDone = true
@@ -352,12 +382,12 @@ export class ProtocolClient {
       this.schemaErrors.push(`a text frame is not JSON (${text.length} chars)`)
       return this.notify()
     }
-    const parsed = ServerMessageSchema.safeParse(json)
+    const parsed = this.schemas.ServerMessage.safeParse(json)
     if (!parsed.success) {
       this.schemaErrors.push(`${(json as { type?: string }).type}: ${parsed.error.issues[0]?.message}`)
       return this.notify()
     }
-    const msg = parsed.data
+    const msg = parsed.data as ServerMessage
     this.received.push(msg)
     if (msg.type === 'welcome') {
       this.welcome = msg

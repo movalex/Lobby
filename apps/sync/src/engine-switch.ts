@@ -59,6 +59,12 @@ export interface ElementSessionInfo {
   readonly readonly: boolean
   /** the ticket's `iat` (the access monitor re-checks sessions admitted before an access change) */
   readonly ticketIssuedAt: number
+  /**
+   * The contracts revision the connect URL names (`rev`, canvas-schema protocol.ts CONNECT_REV_PARAM; CONTRACTS_REV
+   * 12 on), or null/absent for a client that names none (every web before rev 12): the room serves the socket
+   * every frame in that revision's form and writes its pushes as that revision's (room/reader-frames.ts).
+   */
+  readonly contractsRev?: number | null
 }
 
 /** The socket as the room sees it: app.ts wraps the `ws` socket (never binds the room's listeners to it). */

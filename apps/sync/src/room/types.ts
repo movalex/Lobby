@@ -34,6 +34,12 @@ export interface PreparedPush {
   readonly relayout?: string
   /** CONTRACTS_REV 11 (W5-ENG-2): the push's receipt id, recorded with its COMMIT (schema.ts lb_receipts) */
   readonly rid?: string
+  /**
+   * CONTRACTS_REV 12: the contracts revision of the socket that sent it (element-room.ts `Session.reader`), so
+   * what that revision cannot know of a value it writes is kept from the stored value (merge.ts, canvas-schema
+   * `lobbyWriteOf`). Absent (the server's own writes): this room's revision.
+   */
+  readonly writerRev?: number
 }
 
 /** What the drain produces for one push. */

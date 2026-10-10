@@ -16,13 +16,15 @@
 
 import type { RosterEvent as RosterEventSchema } from '@draftroom/canvas-schema/protocol'
 import type { z } from 'zod'
+import { frameOf, type RoomFrame } from './reader-frames.ts'
 
 /** A roster event as the protocol defines it (join, leave, update). */
 export type RosterEvent = z.infer<typeof RosterEventSchema>
 
 export interface RosterRecipient {
   readonly sid: string
-  send(frame: string): void
+  /** the session's send point (element-room.ts Session.send: in its revision's form) */
+  send(frame: RoomFrame): void
 }
 
 /** The longest a roster event waits for its frame (CAP-L1; the presence tick's period, 100 ms). */
@@ -67,7 +69,7 @@ export class RosterBatch {
     this.pending = []
     const joined = new Set<string>()
     for (const e of events) if (e.k === 'join') joined.add(e.p.sid)
-    const shared = JSON.stringify({ type: 'roster', events })
+    const shared = frameOf({ type: 'roster', events })
     for (const r of this.recipients()) {
       if (!joined.has(r.sid)) {
         r.send(shared)
@@ -76,7 +78,7 @@ export class RosterBatch {
       }
       const own = events.filter((e) => !(e.k === 'join' && e.p.sid === r.sid))
       if (!own.length) continue
-      r.send(JSON.stringify({ type: 'roster', events: own }))
+      r.send(frameOf({ type: 'roster', events: own }))
       this.frames++
     }
   }

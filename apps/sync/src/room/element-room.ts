@@ -24,6 +24,13 @@
 // commits with the push; a `receipts` query is a queue entry too (ordered after everything queued before
 // it, every socket's), answered after the batch's COMMIT from the file: which of the named receipts this
 // user's pushes left, and from which clock its receipts are complete.
+//
+// Readers (CONTRACTS_REV 12, reader-frames.ts; docs/EXCALIDRAW-CONTRACTS.md §0b): every frame a session gets
+// leaves through `Session.send`, in the form canvas-schema's `frameForReader` gives the socket's revision
+// (`Session.reader`: the connect URL's `rev`, else 11; a presence message with `t` makes it 12), so a tab of the
+// previous build parses every frame (a `p` op with a value it does not know reaches it as the `c` op of the
+// stored element). And a push carries its socket's revision (`PreparedPush.writerRev`): what a writer of an
+// older revision cannot know of a value it writes is kept from the stored value (merge.ts, `lobbyWriteOf`).
 
 import { randomUUID } from 'node:crypto'
 import { statfsSync } from 'node:fs'
@@ -45,14 +52,20 @@ import {
   CLOSE_RECONNECT,
   CLOSE_TERMINAL,
   ClientEnvelope,
+  CONTRACTS_REV,
   ELEMENT_SCHEMA_VERSION,
+  frameForReader,
   type LeaseHookRequest,
   Op,
+  PRESENCE_LASER_REV,
   PROTO,
   REJECT_CODE_INFO,
   type RejectCode,
+  type ServerMessage,
   type ServerOp,
   type TerminalCloseReason,
+  UNANNOUNCED_REV,
+  type Welcome,
 } from '@draftroom/canvas-schema/protocol'
 import { SYNC_INTERNAL_TIMEOUT_MS } from '@draftroom/contracts'
 import type {
@@ -73,8 +86,9 @@ import { type El, type MergeEnv, PushApplier } from './merge.ts'
 import type { RoomMetrics } from './metrics.ts'
 import { Outbound } from './outbound.ts'
 import { CommitPacer } from './pacing.ts'
-import { CONTRACTS_FRAME, PresenceHub, rosterEntry } from './presence.ts'
+import { PresenceHub, rosterEntry } from './presence.ts'
 import { type SessionBudgets, sessionBudgets } from './rates.ts'
+import { catchUpFrame, frameOf, MessageFrame, presenceFrame, type RoomFrame } from './reader-frames.ts'
 import { RosterBatch } from './roster-batch.ts'
 import { RECEIPTS } from './schema.ts'
 import { runServerWrite, type ServerWriteEntry } from './server-write.ts'
@@ -273,15 +287,25 @@ const SERVER_IDENTITY: SessionIdentity = {
   readonly: false,
 }
 
+/** The room's revision, to every session right after its welcome (CONTRACTS_REV 10; the same for every reader). */
+const CONTRACTS_MESSAGE = frameOf({ type: 'contracts', rev: CONTRACTS_REV })
+
 export class Session {
   readonly key = ++handleSeq
   readonly identity: SessionIdentity
+  /** the session's outbound queue: written only by `send` (the one send point; reader-frames.ts) */
   readonly out: Outbound
   readonly fifo: FifoItem[] = []
   readonly budgets: SessionBudgets
   welcomed = false
   closed = false
   pumpTimer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * The contracts revision this socket reads (CONTRACTS_REV 12, reader-frames.ts): what its connect URL named
+   * (`rev`, at most this room's), else UNANNOUNCED_REV (every web before rev 12), raised by `noteRev`. Every
+   * frame it is sent is in this revision's form (`frameForReader`); its pushes are written as this revision's.
+   */
+  reader: number
   private readonly abuse: number[] = []
   private readonly hellos: number[] = []
   private readonly receiptQueries: number[] = []
@@ -307,8 +331,25 @@ export class Session {
       guest: info.guest,
       readonly: info.readonly,
     }
+    this.reader = Math.min(info.contractsRev ?? UNANNOUNCED_REV, CONTRACTS_REV)
     this.budgets = sessionBudgets(info.guest, now)
     this.out = new Outbound(socket, onOverflow, onSent)
+  }
+
+  /**
+   * The room's one send point (reader-frames.ts): `frame` in the form this socket's revision reads. A message
+   * frame is serialized once per revision for every session it goes to; a formed frame is already in its
+   * reader's form (a catch-up's `c` ops, the presence hub's frames); the snapshot and a reset welcome as built.
+   */
+  send(frame: RoomFrame): void {
+    if (frame instanceof MessageFrame) this.out.send(frame.json(this.reader))
+    else if (frame instanceof Uint8Array || frame instanceof Promise) this.out.send(frame)
+    else this.out.send(frame.text)
+  }
+
+  /** The socket showed it reads revision `rev` (presence `t`: 12): its later frames and pushes are that revision's. */
+  noteRev(rev: number): void {
+    if (rev > this.reader) this.reader = Math.min(rev, CONTRACTS_REV)
   }
 
   /** Counts abuse rejects; true when more than 50 fell within the last minute. */
@@ -514,7 +555,7 @@ export class ElementRoom {
     const changed =
       !this.workshop || this.workshop.voteOpen !== s.voteOpen || this.workshop.anonymous !== s.anonymous
     this.workshop = { voteOpen: s.voteOpen, anonymous: s.anonymous }
-    if (changed) this.broadcast(JSON.stringify({ type: 'workshop', ...this.workshop }))
+    if (changed) this.broadcast(frameOf({ type: 'workshop', ...this.workshop }))
   }
 
   // ---- sessions -----------------------------------------------------------------------------------
@@ -566,7 +607,7 @@ export class ElementRoom {
       })
     }
     if (msg.type === 'ping')
-      return s.out.send(JSON.stringify({ type: 'pong', ...(msg.n !== undefined ? { n: msg.n } : {}) }))
+      return s.send(frameOf({ type: 'pong', ...(msg.n !== undefined ? { n: msg.n } : {}) }))
     if (!s.welcomed) {
       // presence before hello is dropped (a client may start its pointer stream early); a push or a lease
       // message before hello is malformed: the session has no clock yet
@@ -574,6 +615,9 @@ export class ElementRoom {
       return this.terminal(s, 'INVALID_MESSAGE')
     }
     if (msg.type === 'presence') {
+      // CONTRACTS_REV 12: only a client that read a rev-12 room's `contracts` frame sends `t` (null included),
+      // so this socket reads rev 12 from now on even if its connect URL named no revision
+      if (msg.t !== undefined) s.noteRev(PRESENCE_LASER_REV)
       const ok = this.presence.input(
         s.identity.sid,
         s.identity.readonly,
@@ -639,7 +683,7 @@ export class ElementRoom {
       (backlogBytes > s.budgets.bytes.burst && s.budgets.bytes.waitMs(backlogBytes, now) > 0)
     ) {
       item.rateRejected = true
-      s.out.send(JSON.stringify({ type: 'notice', code: 'SLOW_DOWN' }))
+      s.send(frameOf({ type: 'notice', code: 'SLOW_DOWN' }))
     } else if (!tooLarge) {
       // stage 0 step 2: the file ids the room has not seen, resolved with one call
       const needed = new Set<string>()
@@ -709,6 +753,7 @@ export class ElementRoom {
           files: item.files,
           receivedAt: item.receivedAt,
           ...(item.rid !== undefined ? { rid: item.rid } : {}),
+          writerRev: s.reader,
         }
         this.enqueue({
           kind: 'push',
@@ -799,7 +844,7 @@ export class ElementRoom {
   /** Who gets a batched `roster` frame: every welcomed session (roster-batch.ts). */
   private *rosterRecipients() {
     for (const s of this.sessions)
-      if (s.welcomed && !s.closed) yield { sid: s.identity.sid, send: (f: string) => s.out.send(f) }
+      if (s.welcomed && !s.closed) yield { sid: s.identity.sid, send: (f: RoomFrame) => s.send(f) }
   }
 
   private hello(s: Session, since: number, epoch: string | null): void {
@@ -855,40 +900,54 @@ export class ElementRoom {
     }
     const catchUp = catchUpRows !== null && catchUpRows <= CATCH_UP_MAX_ROWS
     // the rows since a clock as catch-up ops: the stored strings as they are, cached per `since` for this
-    // clock (catch-up.ts: a reconnect storm after a restart asks for the same rows hundreds of times)
+    // clock (catch-up.ts: a reconnect storm after a restart asks for the same rows hundreds of times). They are
+    // `c` ops, the same for every reader (reader-frames.ts `catchUpFrame`); the welcome's other fields are in
+    // this session's form (`frameForReader`), as every frame it gets
     const opsSince = (clock: number) => this.catchUps.get(clock, meta.clock, () => this.store.sinceRaw(clock))
+    const forReader = (w: Welcome) => frameForReader(s.reader, w as ServerMessage) as Welcome
     if (catchUp) {
-      s.out.send(
-        catchUpWelcomeJson({ ...base, clock: meta.clock, reset: false, snapshot: null }, opsSince(since)),
-      )
+      const { catchUp: _rows, ...head } = forReader({
+        ...base,
+        clock: meta.clock,
+        reset: false,
+        catchUp: [],
+        snapshot: null,
+      })
+      s.send(catchUpFrame(catchUpWelcomeJson(head, opsSince(since))))
     } else {
       this.deps.metrics.inc('lobby_resets_total')
       const snap = this.snapshotFor(now)
       const welcome = snap.bytes.then((b) =>
-        JSON.stringify({
-          ...base,
-          clock: snap.clock,
-          reset: true,
-          catchUp: null,
-          snapshot: { elements: snap.elements, bytes: b.byteLength },
-        }),
+        JSON.stringify(
+          forReader({
+            ...base,
+            clock: snap.clock,
+            reset: true,
+            catchUp: null,
+            snapshot: { elements: snap.elements, bytes: b.byteLength },
+          }),
+        ),
       )
-      s.out.send(welcome)
-      s.out.send(snap.bytes)
+      s.send(welcome)
+      s.send(snap.bytes)
       if (snap.clock < meta.clock) {
         // DEF-3F-1 (3b F2): the cached snapshot's document is as old as the snapshot, so the frame that brings
         // the rows since it also brings the doc keys written since it (null: removed); a joiner that took
         // the snapshot's document reaches the welcome's from the frames alone
         const doc = this.store.docSince(snap.clock)
-        s.out.send(catchUpChangesJson(meta.clock, opsSince(snap.clock), Object.keys(doc).length ? doc : null))
+        s.send(
+          catchUpFrame(
+            catchUpChangesJson(meta.clock, opsSince(snap.clock), Object.keys(doc).length ? doc : null),
+          ),
+        )
       }
     }
     // CONTRACTS_REV 10: the revision this room speaks, so a rev-10 client may send `f` and `view.z` on this
     // socket (a rev-9 client drops the frame as unknown); then everyone's current cursors (above 41
     // sessions the 40 this joiner starts with), so a late joiner does not wait for the next move
-    s.out.send(CONTRACTS_FRAME)
+    s.send(CONTRACTS_MESSAGE)
     const peers = this.presence.welcomeFrame(s.key, s.identity.sid)
-    if (peers) s.out.send(peers)
+    if (peers) s.send(presenceFrame(peers))
   }
 
   /**
@@ -935,9 +994,9 @@ export class ElementRoom {
     this.snapshotCache = null
   }
 
-  /** Sends `frame` to every welcomed session (except `except`). */
-  private broadcast(frame: string, except?: Session): void {
-    for (const s of this.sessions) if (s.welcomed && s !== except) s.out.send(frame)
+  /** Sends `frame` to every welcomed session (except `except`), each in its revision's form. */
+  private broadcast(frame: RoomFrame, except?: Session): void {
+    for (const s of this.sessions) if (s.welcomed && s !== except) s.send(frame)
   }
 
   // ---- presence and lease ticks -------------------------------------------------------------------
@@ -966,8 +1025,9 @@ export class ElementRoom {
         sid: s.identity.sid,
         key: s.key,
         congested: s.out.congested,
+        // the hub builds each frame in its recipient's presence form (presenceForReader)
         send: (f: string) => {
-          s.out.send(f)
+          s.send(presenceFrame(f))
           this.deps.metrics.inc('lobby_presence_out_total')
         },
       }))
@@ -978,7 +1038,7 @@ export class ElementRoom {
     this.checkDisk() // at most once a minute: DISK when free space is below 5%
     const expired = this.leases.expire(this.deps.now())
     for (const l of expired) {
-      this.broadcast(JSON.stringify({ type: 'lease', id: l.id, holder: null }))
+      this.broadcast(frameOf({ type: 'lease', id: l.id, holder: null }))
       // rule 6: the holder vanished; the server re-fits the container if its geometry changed since
       this.enqueue({ kind: 'relayout', id: l.id })
     }
@@ -1252,12 +1312,17 @@ export class ElementRoom {
     if (fannedOut) {
       const ops: ServerOp[] = []
       for (const [id, el] of after) ops.push(serverOp(before.get(id) ?? null, el))
-      const frame = JSON.stringify({
-        type: 'changes',
-        clock,
-        ops,
-        ...(Object.keys(doc).length ? { doc: { set: doc } } : {}),
-      })
+      // serialized once per reader revision: an older reader gets a patch with a value it does not know as the
+      // `c` op of the element as stored (the batch's `after`; canvas-schema opForReader)
+      const frame = frameOf(
+        {
+          type: 'changes',
+          clock,
+          ops,
+          ...(Object.keys(doc).length ? { doc: { set: doc } } : {}),
+        },
+        (id) => after.get(id),
+      )
       this.broadcast(frame)
       this.deps.onDocumentChange(this.boardId)
     }
@@ -1405,7 +1470,7 @@ export class ElementRoom {
       }
       const gap = this.receiptGaps.get(s.identity.uid)
       const from = gap === undefined ? answer.from : Math.max(answer.from, gap + 1)
-      s.out.send(JSON.stringify({ type: 'receipts', req, landed: answer.landed, from }))
+      s.send(frameOf({ type: 'receipts', req, landed: answer.landed, from }))
     }
   }
 
@@ -1426,8 +1491,8 @@ export class ElementRoom {
       for (const c of outcome.codes) this.deps.metrics.inc('lobby_ops_total', { result: c })
       this.deps.metrics.ackMs.observe(now - push.receivedAt)
       if (s.closed) return
-      s.out.send(
-        JSON.stringify({
+      s.send(
+        frameOf({
           type: 'ack',
           seq: push.seq,
           clock,
@@ -1482,7 +1547,7 @@ export class ElementRoom {
     try {
       const st = statfsSync(dirname(this.deps.path))
       if (st.blocks > 0 && st.bavail / st.blocks < DISK_LOW_FRACTION) {
-        this.broadcast(JSON.stringify({ type: 'notice', code: 'DISK' }))
+        this.broadcast(frameOf({ type: 'notice', code: 'DISK' }))
       }
     } catch {
       // statfs unavailable: no notice
@@ -1499,8 +1564,8 @@ export class ElementRoom {
     if (s.identity.readonly) {
       this.deps.metrics.inc('lobby_lease_total', { result: 'deny' })
       return () =>
-        s.out.send(
-          JSON.stringify({
+        s.send(
+          frameOf({
             type: 'lease.deny',
             req,
             id,
@@ -1518,8 +1583,8 @@ export class ElementRoom {
     if (stored && !stored.deleted && el?.type === 'text' && el.containerId) {
       this.deps.metrics.inc('lobby_lease_total', { result: 'deny' })
       return () =>
-        s.out.send(
-          JSON.stringify({
+        s.send(
+          frameOf({
             type: 'lease.deny',
             req,
             id,
@@ -1538,19 +1603,19 @@ export class ElementRoom {
     ) {
       this.deps.metrics.inc('lobby_lease_total', { result: 'deny' })
       const self = this.holderOf(s)
-      return () => s.out.send(JSON.stringify({ type: 'lease.deny', req, id, holder: self }))
+      return () => s.send(frameOf({ type: 'lease.deny', req, id, holder: self }))
     }
     const r = this.leases.acquire(id, this.holderOf(s), now)
     if (!r.granted) {
       this.deps.metrics.inc('lobby_lease_total', { result: 'deny' })
-      return () => s.out.send(JSON.stringify({ type: 'lease.deny', req, id, holder: r.holder }))
+      return () => s.send(frameOf({ type: 'lease.deny', req, id, holder: r.holder }))
     }
     this.deps.metrics.inc('lobby_lease_total', { result: 'grant' })
     const holder = this.holderOf(s)
     const grant = () => {
       if (s.closed || !this.leases.stillGranted(id, s.identity.sid, r.seq, this.deps.now())) return
-      s.out.send(JSON.stringify({ type: 'lease.grant', req, id, ttlMs: this.leases.ttlMs }))
-      if (r.fresh) this.broadcast(JSON.stringify({ type: 'lease', id, holder }))
+      s.send(frameOf({ type: 'lease.grant', req, id, ttlMs: this.leases.ttlMs }))
+      if (r.fresh) this.broadcast(frameOf({ type: 'lease', id, holder }))
     }
     const hook = this.leases.hook
     if (hook.mode === 'delay' && hook.ms > 0) return () => void setTimeout(grant, hook.ms).unref?.()
@@ -1561,7 +1626,7 @@ export class ElementRoom {
   private release(s: Session, id: string, now: number): () => void {
     const released = this.leases.release(id, s.identity.sid, now)
     return () => {
-      if (released) this.broadcast(JSON.stringify({ type: 'lease', id, holder: null }))
+      if (released) this.broadcast(frameOf({ type: 'lease', id, holder: null }))
     }
   }
 

@@ -69,7 +69,6 @@
 
 import { CURSORS_PER_RECIPIENT, MAX_DRAG_IDS, PRESENCE_IN_HZ } from '@draftroom/canvas-schema/limits'
 import {
-  CONTRACTS_REV,
   type DragOut,
   type LaserPoint,
   MAX_FOLLOWERS,
@@ -81,9 +80,6 @@ import {
   presenceForReader,
   type RosterEntry,
 } from '@draftroom/canvas-schema/protocol'
-
-/** The frame a room sends right after every welcome (CONTRACTS_REV 10): the revision it speaks. */
-export const CONTRACTS_FRAME = JSON.stringify({ type: 'contracts', rev: CONTRACTS_REV })
 
 interface DragState {
   d: number

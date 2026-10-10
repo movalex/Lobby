@@ -38,9 +38,11 @@ import {
 } from '@draftroom/canvas-schema/limits'
 import {
   type AckResult,
+  CONTRACTS_REV,
   type CreateOp,
   type DerivedRow,
   GROUP_NAMES,
+  lobbyWriteOf,
   type PatchOp,
   pathUnitProblem,
   type RejectCode,
@@ -219,12 +221,15 @@ export class PushApplier {
   private readonly push: PreparedPush
   /** this push's clock (used only if it writes anything) */
   readonly clock: number
+  /** the contracts revision of the push's socket (CONTRACTS_REV 12; this room's for the server's own writes) */
+  private readonly writerRev: number
 
   constructor(env: MergeEnv, s: SessionIdentity, push: PreparedPush, clock: number) {
     this.env = env
     this.s = s
     this.push = push
     this.clock = clock
+    this.writerRev = push.writerRev ?? CONTRACTS_REV
     this.writer = { uid: s.uid, name: s.name, guest: s.guest, role: s.role }
     this.ctx = {
       writer: this.writer,
@@ -359,6 +364,29 @@ export class PushApplier {
     w.opAfter = clone(next)
   }
 
+  /**
+   * CONTRACTS_REV 12 (the stale-client rule, canvas-schema protocol.ts `lobbyWriteOf`): the `customData.lobby`
+   * values this push writes, with the fields its writer's revision cannot know kept from the stored values. A
+   * rev-11 tab writes `present` whole as `{index, skip}` (or removes it) and has never heard of `mins`: its
+   * reorder or skip keeps the frame's planned minutes. `c` itself when nothing is kept (every writer of this
+   * revision). The caller keeps what was pushed for the ack, so its `fix` names the stored value (`c:<key>`),
+   * which the writer folds into its undo step like any server fix.
+   */
+  private keepUnknownFields(
+    c: Readonly<Record<string, unknown>>,
+    stored: Readonly<Record<string, unknown>>,
+  ): Record<string, unknown> {
+    if (this.writerRev >= CONTRACTS_REV) return c as Record<string, unknown>
+    let out: Record<string, unknown> | null = null
+    for (const [k, v] of Object.entries(c)) {
+      const kept = lobbyWriteOf(this.writerRev, k, v, stored[k])
+      if (kept === v) continue
+      out ??= { ...c }
+      out[k] = kept
+    }
+    return out ?? (c as Record<string, unknown>)
+  }
+
   private fileProblem(el: El): RejectCode | null {
     if (el.type !== 'image') return null
     const fileId = el.fileId as string
@@ -465,14 +493,18 @@ export class PushApplier {
       const cap = this.guestCapProblem(pushed)
       if (cap) return this.reject(i, cap)
     }
+    const prevLobby = (prev?.customData?.lobby as Record<string, unknown> | undefined) ?? null
     const lobby = checkCreateLobby(
       pushed.customData?.lobby as Record<string, unknown> | undefined,
       this.ctx,
-      (prev?.customData?.lobby as Record<string, unknown> | undefined) ?? null,
+      prevLobby,
     )
     if (!lobby.ok) return this.reject(i, lobby.code)
     const fileCode = this.fileProblem(pushed)
     if (fileCode) return this.reject(i, fileCode)
+    // a create over a tombstone from an older revision keeps what it cannot know of the keys it writes
+    // (CONTRACTS_REV 12, keepUnknownFields); the ack's fix names the stored value
+    const lobbyValue = prevLobby ? this.keepUnknownFields(lobby.value, prevLobby) : lobby.value
 
     let next = stripEngineArtifacts({ ...clone(pushed) }) as El
     // guests can neither lock nor unlock (§3.5), a create included: a guest's element (or its undelete of a
@@ -495,7 +527,7 @@ export class PushApplier {
         lastEditedBy: { uid: this.writer.uid, name: this.writer.name, guest: this.writer.guest },
         lastEditedAt: this.env.now,
       }
-    const canon = canonicalizeFile(next.type, next.fileId as string | undefined, lobby.value)
+    const canon = canonicalizeFile(next.type, next.fileId as string | undefined, lobbyValue)
     if (!canon.ok) return this.reject(i, canon.code)
     next.customData = {
       ...(Object.keys(canon.value).length ? { lobby: canon.value } : {}),
@@ -682,11 +714,14 @@ export class PushApplier {
       st.denied = denied
       return this.reject(i, denied.code)
     }
+    // what the writer's revision cannot know of a value it writes stays as stored (CONTRACTS_REV 12); `cApplied`
+    // stays what was pushed, so the ack's fix names the stored value
+    const cStored = this.keepUnknownFields(cApplied, storedLobby)
 
     // 9. merge: the groups (path whole), boundElements by id, customData.lobby per key
     let next = overlayPatch(cur, {
       g: groups,
-      ...(Object.keys(cApplied).length ? { c: cApplied } : {}),
+      ...(Object.keys(cStored).length ? { c: cStored } : {}),
       ...(op.b ? { b: op.b } : {}),
     }) as El
     if (groups.file?.fileId !== undefined) {

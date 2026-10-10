@@ -8,10 +8,12 @@
 //     rev-12 web in a rev-11 room sends nothing a rev-11 room refuses, also with the laser tool on; (a) a
 //     socket that never sent `t`, as a rev-11 web's, is never sent `t` or `trail` (every frame parses with
 //     rev 11's strict schemas) while another tab lasers. Cursors and follow keep working on every tab.
-//  2. present.mins (L6-4): a push that sets it commits; a receive-only web tab of the previous build (whose
-//     element path is this one: web clients do not validate incoming customData) keeps working and pushes
-//     nothing back; one that rewrites present.index writes the whole value it knows, so mins goes (pinned:
-//     W5's writes always send index, skip and mins together).
+//  2. present.mins (L6-4): a push that sets it commits; a receive-only tab keeps working and pushes nothing back;
+//     a rev-12 tab (the headless core names its revision in the connect URL) that rewrites `present` without
+//     `mins` clears them (W5's writes always send index, skip and mins together). The PREVIOUS build is not this
+//     core: it parses each frame with its own strict schemas (a `p` op's `c` included) and drops a whole frame
+//     it refuses, and its writes keep the minutes it cannot know; that pair, with its own frozen schemas, is
+//     ./stale-reader-rev11.test.ts (the integration's stale pair (c)).
 
 import { PRESENCE_LASER_REV } from '@draftroom/canvas-schema/protocol'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -295,11 +297,11 @@ describe('CONTRACTS_REV 12 stale-client pairs, with the web client code (presenc
 })
 
 describe('L6-4: present.mins through the web core', () => {
-  it('a push that sets mins commits; a receive-only tab keeps working and pushes nothing back; an index-only rewrite drops mins (pinned)', async () => {
+  it('a push that sets mins commits; a receive-only tab keeps working and pushes nothing back; a rev-12 index-only rewrite clears mins', async () => {
     const st = await h.stack()
     const b = newBoardId()
     const A = await tab(st.server.wsUrl, b, 'facilitator')
-    const B = await tab(st.server.wsUrl, b, 'previous-build')
+    const B = await tab(st.server.wsUrl, b, 'second-tab')
     A.c.edit((s) => {
       s.set(
         'f1',
@@ -327,7 +329,8 @@ describe('L6-4: present.mins through the web core', () => {
     B.c.core.flush()
     await B.c.saved(20_000)
     expect((await st.snapshot(b)).elements.find((e) => e.id === 'r1')?.x).toBe(2100)
-    // an older build that reorders frames writes the whole `present` it knows (index only): mins goes
+    // a rev-12 tab's whole `present` without mins (index only) is a clear: mins goes (an older build's keeps
+    // them: ./stale-reader-rev11.test.ts)
     B.c.change('f1', { customData: { lobby: { present: { index: 2 } } } })
     B.c.core.flush()
     await B.c.saved(20_000)
