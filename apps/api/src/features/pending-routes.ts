@@ -28,7 +28,6 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   'GET /api/boards/:bid/open-state': { owner: 'W5', item: 'M5-1' }, // features/board-open
   'POST /api/usage': { owner: 'W5', item: 'M5-5' }, // features/usage
   'GET /internal/usage': { owner: 'W5', item: 'M5-5' }, // features/usage
-  'GET /healthz/deep': { owner: 'W5', item: 'M5-6' }, // app.ts, next to /healthz
   // W7
   'POST /internal/access-many': { owner: 'W7', item: 'M7-1' }, // routes/tickets.ts
   // W8
