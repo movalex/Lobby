@@ -80,6 +80,11 @@ async function world(opts: { guard?: boolean } = {}): Promise<World> {
     .id as string
   const link = (await alice.req('POST', `/api/boards/${board}/review-links`, { role: 'viewer' })).json()
     .id as string
+  // the client link limited copying to editors (DANA2-01); its owner lets everyone copy again, so the board may be
+  // a workspace template (ws-templates refuses a board limited to its editors)
+  expect(
+    (await alice.req('PUT', `/api/boards/${board}/export-policy`, { exportPolicy: 'everyone' })).statusCode,
+  ).toBe(200)
   expect(
     (await carol.req('POST', `/api/boards/${board}/access-requests`, { role: 'viewer' })).statusCode,
   ).toBe(202)
