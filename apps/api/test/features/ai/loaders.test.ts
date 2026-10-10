@@ -3,6 +3,7 @@
 // POST …/ai/run had: per role and per policy (the board switch, the export policy, a guest, AI off for Lobby, no
 // key), and loadAiStatus equal to the status route's own body for the same caller (what W5's open-state reuses).
 
+import type { Queryable } from '@draftroom/db'
 import { afterEach, describe, expect, it } from 'vitest'
 import { loadBoardAccess } from '../../../src/access.ts'
 import { createAiLoaders } from '../../../src/features/ai/index.ts'
@@ -104,5 +105,40 @@ describe('loadAiStatus', () => {
     await world.alice.req('PUT', `/api/boards/${world.board}/ai/settings`, { enabled: false })
     const res = await world.bob.req('GET', statusUrl(world.board))
     expect((await gateOf(world, world.bob.userId)).status).toEqual(res.json())
+  })
+})
+
+describe('budgetFor on a transaction (open-state reads every part in one READ ONLY transaction)', () => {
+  /** `tx`, with the ledger's read turned into a statement Postgres refuses (division by zero) on the same connection. */
+  const failingLedger = (tx: Queryable): Queryable => {
+    const rw = (sql: string, params?: readonly unknown[]): [string, readonly unknown[] | undefined] =>
+      sql.includes('FROM ai_usage') ? ['SELECT 1 / 0 AS used', []] : [sql, params]
+    return {
+      query: (sql, params) => tx.query(...rw(sql, params)),
+      one: (sql, params) => tx.one(...rw(sql, params)),
+      maybeOne: (sql, params) => tx.maybeOne(...rw(sql, params)),
+      exec: (sql) => tx.exec(sql),
+    }
+  }
+
+  it('a failed ledger read gives null and leaves the transaction usable; a good one is the pool’s answer', async () => {
+    w = await aiWorld()
+    const world = w
+    const { loaders, access } = await gateOf(world, world.alice.userId)
+    expect(access.workspaceRole).toBe('owner')
+    const fromPool = await loaders.budgetFor(access)
+    expect(fromPool).not.toBeNull()
+    const out = await world.api.db.transaction(async (tx) => {
+      const failed = await loaders.budgetFor(access, failingLedger(tx))
+      // the transaction goes on: without the savepoint every later statement throws 25P02
+      const after = await tx.one<{ ok: number }>('SELECT 1 AS ok')
+      const status = await loaders.loadAiStatus(access, world.alice.userId, failingLedger(tx))
+      const good = await loaders.budgetFor(access, tx)
+      return { failed, after, status, good }
+    })
+    expect(out.failed).toBeNull()
+    expect(out.after).toEqual({ ok: 1 })
+    expect(out.status).toMatchObject({ enabled: true, budget: null })
+    expect(out.good).toEqual(fromPool)
   })
 })

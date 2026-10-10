@@ -189,9 +189,16 @@ export interface AiLoaders {
   loadAiStatus(access: BoardAccess, userId: string, q?: Queryable): Promise<AiStatus>
   /** Whether the person acknowledged the OpenAI notice in this workspace. */
   noticeAccepted(workspaceId: string, userId: string, q?: Queryable): Promise<boolean>
-  /** Workspace owners see the day's budget; everyone else gets null (and so does a ledger failure). */
+  /**
+   * Workspace owners see the day's budget; everyone else gets null, and so does a ledger failure. On a transaction's
+   * connection (any `q` other than the pool) the read runs in its own SAVEPOINT, so a failed read leaves the
+   * transaction usable (on Postgres a failed statement otherwise aborts it: 25P02 for every later read).
+   */
   budgetFor(access: BoardAccess, q?: Queryable): Promise<AiBudget | null>
 }
+
+/** budgetFor's savepoint on a caller's transaction (a fixed name: it is released before budgetFor returns). */
+const BUDGET_SAVEPOINT = 'dr_ai_budget'
 
 export function createAiLoaders(ctx: Pick<FeatureContext, 'db' | 'config' | 'now'>): AiLoaders {
   const { db, now } = ctx
@@ -229,9 +236,22 @@ export function createAiLoaders(ctx: Pick<FeatureContext, 'db' | 'config' | 'now
 
   async function budgetFor(access: BoardAccess, q: Queryable = db): Promise<AiBudget | null> {
     if (access.workspaceRole !== 'owner') return null
+    if (q === db) {
+      try {
+        return await ledger.view(access.board.workspace_id, q)
+      } catch {
+        return null
+      }
+    }
+    // A transaction's connection: undo only the failed read (the caller's other reads go on in the transaction).
+    await q.query(`SAVEPOINT ${BUDGET_SAVEPOINT}`)
     try {
-      return await ledger.view(access.board.workspace_id, q)
+      const budget = await ledger.view(access.board.workspace_id, q)
+      await q.query(`RELEASE SAVEPOINT ${BUDGET_SAVEPOINT}`)
+      return budget
     } catch {
+      await q.query(`ROLLBACK TO SAVEPOINT ${BUDGET_SAVEPOINT}`)
+      await q.query(`RELEASE SAVEPOINT ${BUDGET_SAVEPOINT}`)
       return null
     }
   }
