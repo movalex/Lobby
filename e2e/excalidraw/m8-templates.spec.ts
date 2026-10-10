@@ -95,6 +95,8 @@ test('a creator saves a board as a workspace template; another member starts a b
     await chip.click()
     const card = page.getByTestId('ws-template-card').filter({ hasText: `Team retro ${key}` })
     await expect(card).toBeVisible()
+    // only the workspace's templates are on the tab: the catalog (its Blank board card) is not shown under them
+    await expect(page.getByTestId('template-blank')).toBeHidden()
     await expect(card).toContainText('Review · saved by')
     await card.getByTestId('ws-template-use').click()
     await expect(page).toHaveURL(/\/b\/[a-z0-9_-]+$/, { timeout: 30_000 })

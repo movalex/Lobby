@@ -223,6 +223,10 @@
   padding: 0;
   list-style: none;
 }
+/* the catalog grid under the Workspace tab (wave M, M8-4): display: grid would otherwise override [hidden] */
+.dr-gallery__grid[hidden] {
+  display: none;
+}
 .dr-gallery__status {
   margin: 10px 0 0;
   font-size: 13.5px;
