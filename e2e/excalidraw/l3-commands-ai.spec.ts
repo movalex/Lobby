@@ -121,12 +121,17 @@ test('with the AI fake, "select the notes about budget" selects exactly those no
   await expect(option(a.page, 'do:grammar')).toHaveCount(0)
   const pushes = (await pushedOps(a.page)).length
   await line.click()
-  // W2's "Sends the selected text to OpenAI" notice, when this person has not agreed yet
+  // W2's "Sends the selected text to OpenAI" notice, when this person has not agreed yet. The palette runs the
+  // line on a later task (runChosen's setTimeout), so under load the notice opens after the click returns: wait
+  // for the notice or the result, never a one-off look (the gate's run 2 lost the run that way).
   const notice = a.page.getByTestId('ai-notice-continue')
-  if (await notice.isVisible().catch(() => false)) await notice.click()
+  const want = [...about].sort()
+  const selected = async () => JSON.stringify([...(await selection(a.page))].sort()) === JSON.stringify(want)
   await expect
-    .poll(async () => [...(await selection(a.page))].sort(), { timeout: 20_000 })
-    .toEqual([...about].sort())
+    .poll(async () => (await notice.isVisible()) || (await selected()), { timeout: 20_000 })
+    .toBe(true)
+  if (await notice.isVisible()) await notice.click()
+  await expect.poll(async () => [...(await selection(a.page))].sort(), { timeout: 20_000 }).toEqual(want)
   expect(await selection(a.page)).not.toContain(other)
   expect(seen.filter((r) => r.body.response_format?.json_schema?.name === 'lobby_command')).toHaveLength(1)
   // a find writes nothing
