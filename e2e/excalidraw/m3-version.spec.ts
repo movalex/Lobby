@@ -76,7 +76,17 @@ test('the dashboard asks only while shown (on showing, then every 15 minutes), r
     await test.step('shown: one ask, the same build, nothing happens; then one every 15 minutes while it stays shown', async () => {
       await setShown(p.page, state, true)
       await expect.poll(() => state.asks.length).toBe(1)
+      // the next ask is armed once the page has read the first answer, a quarter of an hour from then: when the page
+      // read it only after the jump, the timer is a quarter of an hour on from the jump, so jump once more
       await p.page.clock.fastForward('15:01')
+      const second = () => expect.poll(() => state.asks.length, { timeout: 3_000 }).toBe(2)
+      if (
+        !(await second().then(
+          () => true,
+          () => false,
+        ))
+      )
+        await p.page.clock.fastForward('15:01')
       await expect.poll(() => state.asks.length).toBe(2)
       expect(state.asks.every((a) => a.shown)).toBe(true)
       // only /version.json, uncached and without the session cookie
