@@ -27,13 +27,13 @@ import {
   createItem,
   createNote,
   expectSaved,
+  setViewport as facadeSetViewport,
   hash,
   item,
   itemCenterOnScreen,
   items,
   saveState,
   select,
-  setViewport,
   updateItem,
   waitForCanvas,
 } from '../tests/support/canvas.ts'
@@ -62,7 +62,7 @@ import {
   openOldTab,
 } from './l-compat-kit.ts'
 import { FILL, headings, makeFrame, makeNotes, sortRun, twelve, waitForSort } from './l8-kit.ts'
-import { focusCanvas, grantClipboard, writeClipboard } from './navigation-kit.ts'
+import { cameraIdle, focusCanvas, grantClipboard, writeClipboard } from './navigation-kit.ts'
 import { test as base, expect, post, reloadBoard, seed, type WorkshopCanvasSession } from './workshops-kit.ts'
 
 const test = base.extend<{ oldTabs: OldTab[] }, { openai: FakeOpenAi }>({
@@ -93,6 +93,18 @@ const lobbyOf = (el: CanvasElement | null | undefined): Lobby => (el?.customData
 const kindOf = (el: CanvasElement | null | undefined) => lobbyOf(el).kind as string | undefined
 const row = (page: Page, id: string) => page.locator(`[data-testid="frame-row"][data-frame-id="${id}"]`)
 const RUN_ID = /^air_[0-9A-Za-z]{20}$/
+
+/**
+ * Every camera move here, once the camera is still. The facade's set does not stop a camera animation that is still
+ * running (a paste's or an AI result's bring-into-view, 320 ms; ./ai-kit.ts showBounds), and the rounds of
+ * liveThenCaughtUp follow each other within that: its next frame took the camera back to what the last round made,
+ * and the click meant for empty canvas selected a shape of it (W4's second Mermaid paste then went nowhere: the
+ * shape's selection bar lay under the pointer, where Excalidraw takes no paste).
+ */
+async function setViewport(page: Page, v: { x: number; y: number; zoom: number }): Promise<void> {
+  await cameraIdle(page)
+  await facadeSetViewport(page, v)
+}
 
 /** One transaction (one push, one commit) that writes a frame's whole `present` and moves another element. */
 async function minutesAndMove(
