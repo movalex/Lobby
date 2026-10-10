@@ -1,0 +1,63 @@
+/* Wave M (W2, M2-1, FTU-6): the board's one top-centre stack (./top-centre.tsx, the model: ./top-centre.ts).
+   The invitation to a presentation, the spotlight bar, the "Following" pill, the coach's chip and the feedback
+   prompt are boxes of their own features, each of which was placed at `top: 12px; left: 50%` and sat on the others.
+   They are one column now, in that order, 8 px apart (TOP_CENTRE_GAP), and the toasts follow the column's bottom edge. */
+
+.lobby-top-centre {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  /* above the compass chips (board.css, 100) and the cursors, under the page's own panels and dialogs */
+  z-index: 150;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+/* Phones: under the page's own top controls (the bars it replaces were at 60 px there too). */
+@media (max-width: 560px) {
+  .lobby-top-centre {
+    top: 60px;
+  }
+}
+.lobby-top-centre__item {
+  display: flex;
+  justify-content: center;
+  box-sizing: border-box;
+  max-width: 100%;
+  pointer-events: none;
+}
+/* a box that renders nothing takes no place and no gap */
+.lobby-top-centre__item:empty {
+  display: none;
+}
+/* The boxes keep their own look; only where they stand changes: in the column, not at `top: 12px; left: 50%`. The
+   doubled class beats each box's own single-class rule (and its phone rule) whatever the order of the files. */
+.lobby-top-centre__item.lobby-top-centre__item > * {
+  position: static;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  margin: 0;
+  max-width: 100%;
+  transform: none;
+  pointer-events: auto;
+}
+
+/* The toasts (board/Notices.tsx, fixed in the page) follow the column: below its bottom edge and one gap, in line with
+   its centre, never above where they stand without it. The variables are set on the page's root while the column
+   has something in it (./top-centre.tsx) and removed when it has not. */
+html .dr-notices {
+  top: max(calc(var(--dr-topbar-h) + 56px), var(--lobby-top-centre-bottom, 0px));
+}
+@media (min-width: 601px) {
+  html .dr-notices {
+    left: var(--lobby-top-centre-x, 50%);
+  }
+}

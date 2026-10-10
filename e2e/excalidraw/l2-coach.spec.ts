@@ -1,7 +1,7 @@
 // Wave L (W2, L2-4): the session coach in three browsers, against the real api and sync server (OpenAI is the local
 // fake; the wave L 'recap' goes through the e2e AI fake of ai-kit). The facilitator (alice) follows the chips from
 // the colleagues' notes to themes, a vote (both colleagues cast), a reveal, vote-weighted action items and Wrap up;
-// the colleagues' tabs push nothing whenever a chip is shown, and the chip sits by the Facilitate control.
+// the colleagues' tabs push nothing whenever a chip is shown, and the chip sits in the board's top-centre stack (wave M; wave L put it by the Facilitate control).
 // Steps that ride on other workstreams say so in an annotation when this build lacks them: W5's
 // 'workshops.vote.setup' (else the vote starts through the api with the chip's theme notes), and W1's
 // vote-weighted 'actions' (else the items come back without `votes`).
@@ -77,15 +77,17 @@ test('the facilitator follows the chips: themes, a vote, a reveal, action items 
   await test.step('1: “Group these 8 notes into themes”, next to the Facilitate control; the preview, Apply', async () => {
     await expect(chip(a.page)).toHaveAttribute('data-step', 'themes', { timeout: 20_000 })
     await expect(chip(a.page)).toContainText('Group these 8 notes into themes')
-    const f = await a.page.getByTestId('facilitate-button').boundingBox()
+    // wave M (M2-1): the chip is in the board's top-centre stack, with the other bars (it was under the Facilitate
+    // control, where it met the style panel and the toasts): at the canvas's top centre, below the top bar
     const ch = await chip(a.page).boundingBox()
-    // under the Facilitate control, right edges together (clear of the style panel at the canvas's top right)
+    const canvas = await a.page.getByTestId('lobby-overlay').boundingBox()
+    await expect(a.page.locator('[data-testid="top-centre-stack"] [data-testid="coach-chip"]')).toBeVisible()
     expect(
-      f &&
-        ch &&
-        Math.abs(ch.x + ch.width - (f.x + f.width)) < 4 &&
-        ch.y > f.y &&
-        ch.y - (f.y + f.height) < 80,
+      ch &&
+        canvas &&
+        Math.abs(ch.x + ch.width / 2 - (canvas.x + canvas.width / 2)) < 4 &&
+        ch.y >= canvas.y &&
+        ch.y - canvas.y < 80,
     ).toBe(true)
     await colleaguesQuiet()
     await a.page.getByTestId('coach-run').click()

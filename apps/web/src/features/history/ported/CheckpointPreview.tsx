@@ -38,6 +38,7 @@ import { pluralize } from '../../../lib/format.ts'
 import { prefersFirstFrame } from '../../canvas-ux/start-view.ts'
 import type { HistoryApi } from '../api.ts'
 import { checkpointMeta, checkpointTitle } from '../checkpoints-model.ts'
+import { frameOfPreviewLabel, themedPreviewElements } from '../preview-theme.ts'
 import { ContentCache, ScrubLoader } from './content-cache.ts'
 import { boundsOf, diffCheckpoint, diffSummary, hiddenBranchIds, isRestorable } from './diff.ts'
 import { checkpointPreviewSource, firstFrameBounds, previewElementCounts, previewTexts } from './model.ts'
@@ -234,8 +235,10 @@ export function CheckpointPreview({
 
   // picking (a click on the bitmap): the newest handler, read by the mounted preview
   const pickRef = useRef<(id: string | null, additive: boolean) => void>(() => {})
-  pickRef.current = (id, additive) => {
+  pickRef.current = (picked, additive) => {
     if (!restoreElements) return
+    // a click on a frame's title (a text the preview adds, ./preview-theme.ts) is a click on its frame
+    const id = picked ? (frameOfPreviewLabel(picked) ?? picked) : null
     setPicked((cur) => {
       if (!id) return additive ? cur : new Set()
       const next = new Set(additive ? cur : [])
@@ -254,12 +257,15 @@ export function CheckpointPreview({
       const el = view.current
       if (!el) return
       const camera = handleRef.current?.camera()
+      const theme = canvas.theme()
       void loadCheckpointPreview()
         .then((mount) =>
           mount(el, {
-            elements,
+            // M2-4: the frames' names and the notes' labels in the board's inks (./preview-theme.ts); the
+            // checkpoint's own elements (the counts, the diff, the picks) are not changed
+            elements: themedPreviewElements(elements, theme),
             boardId,
-            theme: canvas.theme(),
+            theme,
             signal: controller.signal,
             session: session.current,
             hidden,

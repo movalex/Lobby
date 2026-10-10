@@ -167,6 +167,50 @@ describe('the words', () => {
     )
   })
 
+  // M2-1 (FTU-6): the presenter was told about her own spotlight in the third person ("Alice Park ended the spotlight.")
+  describe('endedText in the viewer’s voice (M2-1)', () => {
+    const base = { starterName: 'Maya', byName: 'Maya', starterUserId: MAYA, byUserId: MAYA }
+    it('the starter who ended it: "You ended the spotlight."; everyone else is told who did', () => {
+      expect(endedText({ ...base, reason: 'ended' }, MAYA)).toBe('You ended the spotlight.')
+      expect(endedText({ ...base, reason: 'ended' }, 'usr_someoneelse00001')).toBe(
+        'Maya ended the spotlight.',
+      )
+      // no viewer known: the third person for everyone, as before
+      expect(endedText({ ...base, reason: 'ended' })).toBe('Maya ended the spotlight.')
+      expect(endedText({ ...base, reason: 'ended' }, null)).toBe('Maya ended the spotlight.')
+    })
+    it("an owner who ended another person's is told You ended Maya’s spotlight; Maya is told Ada ended your spotlight", () => {
+      const owner = {
+        reason: 'ended-by-owner' as const,
+        starterName: 'Maya',
+        starterUserId: MAYA,
+        byName: 'Ada',
+        byUserId: 'usr_ada0000000001',
+      }
+      expect(endedText(owner, 'usr_ada0000000001')).toBe('You ended Maya’s spotlight.')
+      expect(endedText(owner, MAYA)).toBe('Ada ended your spotlight.')
+      expect(endedText(owner, 'usr_bystander000001')).toBe('Ada ended Maya’s spotlight.')
+      expect(endedText({ ...owner, byName: null, byUserId: null }, MAYA)).toBe(
+        'A board owner ended your spotlight.',
+      )
+    })
+    it('a spotlight that ran out or whose starter left reads the same for everyone', () => {
+      for (const me of [MAYA, 'usr_bystander000001'] as const) {
+        expect(endedText({ ...base, reason: 'expired', byName: null, byUserId: null }, me)).toMatch(
+          /five minutes/,
+        )
+        expect(endedText({ ...base, reason: 'starter-left', byName: null, byUserId: null }, me)).toMatch(
+          /Maya left/,
+        )
+      }
+    })
+    it('an event that names no ids (an older store) falls back to the third person', () => {
+      expect(endedText({ reason: 'ended', starterName: 'Maya', byName: 'Maya' }, MAYA)).toBe(
+        'Maya ended the spotlight.',
+      )
+    })
+  })
+
   it('says why it ended, and what a refusal means', () => {
     expect(endedText({ reason: 'ended', starterName: 'Maya', byName: 'Maya' })).toBe(
       'Maya ended the spotlight.',
@@ -267,6 +311,14 @@ describe('the store keeps the spotlight (versioned, per person, with a notice wh
     )
     expect(await kit.store.endSpotlight()).toEqual({ ok: true })
     expect(kit.store.getSnapshot().spotlight).toBeNull()
+    // M2-1: the one who ended it is told by this answer, before (or without) the event: their own, "You ended…"
+    const ended = kit.store.getSnapshot().spotlightEnded
+    expect(ended).toMatchObject({ reason: 'ended', starterUserId: ME, byUserId: ME })
+    expect(ended && endedText(ended, ME)).toBe('You ended the spotlight.')
+    // the event that follows (the same version) is not a second notice
+    const seq = ended?.seq
+    kit.events.emit('workshop.spotlight', event(null, 5, 'ended'))
+    expect(kit.store.getSnapshot().spotlightEnded?.seq).toBe(seq)
     // a refusal comes back as words, not a throw
     kit.next(
       (m, p) => m === 'POST' && p.endsWith('/spotlight'),

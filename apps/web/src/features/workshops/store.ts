@@ -43,8 +43,10 @@ import {
   WorkshopVoteState,
 } from '@draftroom/contracts'
 import type { z } from 'zod'
+import { takeOpenState } from '../../lib/open-state.ts'
 import type { VoteSetupArgs } from './commands.ts'
 import { ReactionThrottle } from './reactions.ts'
+import { nextResultsNews, type ResultsCardDismissal } from './results-card.ts'
 import { localCastCheck, optimisticBallot, type PendingCast } from './voting.ts'
 
 type Method = 'GET' | 'POST'
@@ -128,8 +130,12 @@ export interface SpotlightEnded {
   reason: SpotlightEndReason
   /** whose it was */
   starterName: string
+  /** M2-1: its starter's user id (the viewer who started it is told "You ended the spotlight.") */
+  starterUserId: string
   /** who ended it (null: the api did) */
   byName: string | null
+  /** M2-1: who ended it, by user id (null: the api did) */
+  byUserId: string | null
 }
 
 /** One spotlight's identity: a new one has a new key (a person who hid the last one sees this one). */
@@ -262,6 +268,8 @@ export class WorkshopStore {
   private setupPrefill: VoteSetupPrefill | null = null
   /** L5-3: the last vote this tab saw revealed, kept when a newer vote opens (lastRevealedResults) */
   private lastRevealed: LastRevealedResults | null = null
+  /** M2-2: who started the vote `lastRevealed` is of (a user id) */
+  private lastRevealedBy: { sessionId: string; startedBy: string } | null = null
   private alertSeq = 0
   private resultsNews: WorkshopSnapshot['resultsNews'] = null
   private newsSeq = 0
@@ -354,12 +362,14 @@ export class WorkshopStore {
   private compute(): WorkshopSnapshot {
     const vote = this.state?.vote ?? null
     // L5-3: a revealed vote is remembered, so a newer vote opening does not take its results away
-    if (vote?.session.status === 'revealed' && vote.results)
+    if (vote?.session.status === 'revealed' && vote.results) {
       this.lastRevealed = {
         sessionId: vote.session.id,
         participants: vote.participants,
         results: vote.results.map((r) => ({ ref: r.shapeId, count: r.count, rank: r.rank })),
       }
+      this.lastRevealedBy = { sessionId: vote.session.id, startedBy: vote.session.createdBy }
+    }
     const sid = vote?.session.id
     return {
       loaded: this.loaded,
@@ -467,13 +477,33 @@ export class WorkshopStore {
       next.results &&
       next.session.status === 'revealed'
     )
-      this.resultsNews = { sessionId: next.session.id, seq: ++this.newsSeq }
-    if (next?.session.id !== this.resultsNews?.sessionId) this.resultsNews = null
+      this.resultsNews = nextResultsNews(this.resultsNews, {
+        kind: 'results',
+        sessionId: next.session.id,
+        seq: ++this.newsSeq,
+      })
+    this.resultsNews = nextResultsNews(this.resultsNews, {
+      kind: 'vote',
+      sessionId: next?.session.id ?? null,
+    })
   }
 
-  dismissResultsNews() {
-    if (!this.resultsNews) return
-    this.resultsNews = null
+  /**
+   * The "Results are in" card is done (./results-card.ts): closed, run out, "See all results", or "Results to
+   * board" (M2-4: the person has acted on the results, the card must not wait for them to come back).
+   */
+  dismissResultsNews(reason: ResultsCardDismissal = 'close') {
+    const next = nextResultsNews(this.resultsNews, { kind: reason })
+    if (next === this.resultsNews) return
+    this.resultsNews = next
+    this.emit()
+  }
+
+  /** M2-4: the dock's open panel (null: none). Opening the Voting panel ends the card (it shows the same ranking). */
+  panelChanged(panel: string | null) {
+    const next = nextResultsNews(this.resultsNews, { kind: 'panel', panel })
+    if (next === this.resultsNews) return
+    this.resultsNews = next
     this.emit()
   }
 
@@ -526,10 +556,16 @@ export class WorkshopStore {
     const seq = ++this.seq
     try {
       const sentAt = this.nowMs()
-      const s = await this.request('GET', `/api/boards/${encodeURIComponent(this.boardId)}/workshop`, {
-        schema: WorkshopState,
-      })
-      this.noteServerTime(s.serverNow, sentAt, this.nowMs()) // a valid clock sample even if superseded
+      // M5-1/M2: the board-open read may already hold this answer (lib/open-state.ts hands it over once, for the
+      // first fetch; null or nothing: this route is asked, as it always was)
+      const seeded = takeOpenState(this.boardId, 'workshop') ?? null
+      const s =
+        seeded ??
+        (await this.request('GET', `/api/boards/${encodeURIComponent(this.boardId)}/workshop`, {
+          schema: WorkshopState,
+        }))
+      // a clock sample from a body that was read earlier would be wrong by its age: only an answer to this request counts
+      if (!seeded) this.noteServerTime(s.serverNow, sentAt, this.nowMs()) // a valid clock sample even if superseded
       if (seq < this.appliedSeq) return
       this.appliedSeq = seq
       const timer = this.newerTimer(s.timer) ? s.timer : (this.state?.timer ?? null)
@@ -655,7 +691,7 @@ export class WorkshopStore {
   private applySpotlight(
     spotlight: Spotlight | null,
     version: SpotlightVersion | null,
-    end?: { reason: SpotlightEndReason | null; endedBy: { name: string } | null },
+    end?: { reason: SpotlightEndReason | null; endedBy: { userId: string; name: string } | null },
   ): boolean {
     if (!version || !isNewerSpotlight(this.spotlightVersion, version)) return false
     const prev = this.spotlight
@@ -666,7 +702,9 @@ export class WorkshopStore {
         seq: ++this.endedSeq,
         reason: end.reason,
         starterName: prev.by.name,
+        starterUserId: prev.by.userId,
         byName: end.endedBy?.name ?? null,
+        byUserId: end.endedBy?.userId ?? null,
       }
     return true
   }
@@ -699,7 +737,17 @@ export class WorkshopStore {
         body: {},
         schema: SpotlightState,
       })
-      if (this.applySpotlight(r.spotlight, r.version)) this.emit()
+      // M2-1: the person who ended it is told so by this answer, if it comes before the event (the older of the
+      // two is not applied again): "You ended the spotlight." (./ported/spotlight.ts endedText)
+      const prev = this.spotlight
+      const end =
+        r.spotlight === null && prev
+          ? {
+              reason: (prev.by.userId === this.userId ? 'ended' : 'ended-by-owner') as SpotlightEndReason,
+              endedBy: { userId: this.userId, name: '' },
+            }
+          : undefined
+      if (this.applySpotlight(r.spotlight, r.version, end)) this.emit()
       return { ok: true }
     } catch (e) {
       return errorOf(e)
@@ -1023,6 +1071,13 @@ export class WorkshopStore {
     return this.lastRevealed
   }
 
+  /** M2-2: who started vote `sessionId` (a user id), if it is the vote this store holds or the last it saw revealed. */
+  voteStarter(sessionId: string): string | null {
+    const vote = this.state?.vote
+    if (vote?.session.id === sessionId) return vote.session.createdBy
+    return this.lastRevealedBy?.sessionId === sessionId ? this.lastRevealedBy.startedBy : null
+  }
+
   raiseTimerAlert() {
     this.alertSeq++
     this.emit()
@@ -1121,4 +1176,13 @@ export interface LastRevealedResults {
  */
 export function lastRevealedResults(events: object): LastRevealedResults | null {
   return stores.get(events)?.lastRevealedResults() ?? null
+}
+
+/**
+ * M2-2: who started the vote `sessionId` on the board whose event stream is `events` (a user id), as this tab's
+ * workshop store knows it, or null (no store yet, or that vote is neither the current one nor the last revealed).
+ * Reads only; the session coach shows its chip to the vote's starter.
+ */
+export function voteStarterOf(events: object, sessionId: string): string | null {
+  return stores.get(events)?.voteStarter(sessionId) ?? null
 }

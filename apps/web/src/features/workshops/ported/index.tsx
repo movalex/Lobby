@@ -26,6 +26,7 @@ import type {
 } from '../../../canvas/api/index.ts'
 import { knownUserKind } from '../../../invite/guest.tsx'
 import { atom, react } from '../../../lib/signals.ts'
+import { FeedbackPromptLayer } from '../../feedback/FeedbackPrompt.tsx'
 import { providePresentChrome } from '../../present-export/ported/insets.ts'
 import { installAudioUnlock } from '../chime.ts'
 import { spotlightArgs, voteSetupArgs, WORKSHOP_COMMAND_IDS } from '../commands.ts'
@@ -569,6 +570,14 @@ export const feature: CanvasFeature = {
       pointer: 'none',
       focusMode: 'hide',
       component: SpotlightLayer,
+    },
+    // wave M (M2-5): the end-of-moment feedback prompt, in the board's top-centre stack (features/feedback)
+    {
+      id: 'feedback-prompt',
+      layer: 'screen',
+      order: 63,
+      pointer: 'none',
+      component: FeedbackPromptLayer,
     },
     // above everything, the presentation included (the tldraw board's z-index 10001)
     {

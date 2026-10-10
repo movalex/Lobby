@@ -10,12 +10,14 @@ import {
   agendaActuals,
   agendaLine,
   agendaOf,
+  agendaShowsTime,
   driftLine,
   driftOf,
   hasAgenda,
   minsOf,
   minsToMs,
   overText,
+  runOfShowEnded,
   sectionsOf,
   stepMins,
   totalPlannedMs,
@@ -184,13 +186,66 @@ describe('the stepper’s steps', () => {
   })
 })
 
+describe('one countdown (M2-3)', () => {
+  it("the line shows the live section's time when the presenter's timer runs, pauses or has run over", () => {
+    const st = (timer: WorkshopTimer | null, at = T0) => agendaOf(frames(), 'f1', clock(timer, at), ME)
+    expect(agendaShowsTime(st(running()))).toBe(true)
+    expect(agendaShowsTime(st(running({ status: 'paused', endsAt: null })))).toBe(true)
+    expect(agendaShowsTime(st(running(), T0 + 150_000))).toBe(true) // over: "+0:30 over"
+  })
+
+  it('the line shows no time when nothing counts the section, someone else holds the timer, or there is no agenda', () => {
+    expect(agendaShowsTime(agendaOf(frames(), 'f1', clock(null), ME))).toBe(false)
+    expect(agendaShowsTime(agendaOf(frames(), 'f1', clock(running({ startedBy: OTHER })), ME))).toBe(false)
+    // a section with no minutes shows no timer at all
+    expect(agendaShowsTime(agendaOf(frames(), 'f3', clock(running()), ME))).toBe(false)
+    expect(agendaShowsTime(null)).toBe(false)
+  })
+})
+
+describe('the run of show is over (M2-5)', () => {
+  const last = (timer: WorkshopTimer | null, at = T0) => agendaOf(frames(), 'f4', clock(timer, at), ME)
+  it('the last section with its timer run out ends it; running, paused or none does not', () => {
+    const over = running({ durationMs: 300_000, endsAt: new Date(T0 + 300_000).toISOString() })
+    expect(runOfShowEnded(last(over, T0 + 301_000))).toBe(true)
+    expect(runOfShowEnded(last(over, T0 + 100_000))).toBe(false)
+    expect(runOfShowEnded(last({ ...over, status: 'paused', endsAt: null }, T0 + 400_000))).toBe(false)
+    expect(runOfShowEnded(last(null))).toBe(false)
+  })
+  it('a section before the last, someone else’s timer and no agenda never end it', () => {
+    const done = running({ endsAt: new Date(T0 + 1_000).toISOString() })
+    expect(runOfShowEnded(agendaOf(frames(), 'f1', clock(done, T0 + 5_000), ME))).toBe(false)
+    expect(runOfShowEnded(last({ ...done, startedBy: OTHER }, T0 + 5_000))).toBe(false)
+    expect(runOfShowEnded(null)).toBe(false)
+  })
+})
+
 describe('drift (presenter only)', () => {
   const sections = sectionsOf(frames()) // 2 + 10 + (none) + 5 = 17 min
   it('is planned against projected: finished sections count what they took, the rest their plan', () => {
     const d = driftOf(sections, { f1: minsToMs(3) }, 'f2', 0)
     // f1 took 3 (plan 2), f2 is live and has taken 0 so far (plan 10), f3 plans none, f4 plans 5
     expect(d).toEqual({ plannedMs: minsToMs(17), projectedMs: minsToMs(18), behindMs: minsToMs(1) })
-    expect(driftLine(d as NonNullable<typeof d>)).toBe('planned 17 · projected 18')
+    expect(driftLine(d as NonNullable<typeof d>)).toBe('Planned 17 min · 1 min over')
+  })
+
+  // M2-3: it read "planned 5 · projected 5" (numbers with no unit and no meaning)
+  it('says it in words: the plan in minutes, then on time, N min over, or N min ahead', () => {
+    const drift = (behindMs: number, plannedMin = 5) => ({
+      plannedMs: minsToMs(plannedMin),
+      projectedMs: minsToMs(plannedMin) + behindMs,
+      behindMs,
+    })
+    expect(driftLine(drift(0))).toBe('Planned 5 min · on time')
+    expect(driftLine(drift(minsToMs(2)))).toBe('Planned 5 min · 2 min over')
+    expect(driftLine(drift(minsToMs(1)))).toBe('Planned 5 min · 1 min over')
+    expect(driftLine(drift(-minsToMs(3), 60))).toBe('Planned 60 min · 3 min ahead')
+    // within half a minute of the plan is on time, either way
+    expect(driftLine(drift(29_000))).toBe('Planned 5 min · on time')
+    expect(driftLine(drift(-29_000))).toBe('Planned 5 min · on time')
+    expect(driftLine(drift(31_000))).toBe('Planned 5 min · 1 min over')
+    // no jargon
+    for (const b of [0, minsToMs(2), -minsToMs(2)]) expect(driftLine(drift(b))).not.toMatch(/projected/i)
   })
 
   it('the live section counts at least its plan, and what it has taken once that is more', () => {

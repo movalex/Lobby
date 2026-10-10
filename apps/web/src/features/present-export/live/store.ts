@@ -18,6 +18,7 @@ import {
   type PresentSlide,
 } from '@draftroom/contracts'
 import type { z } from 'zod'
+import { takeOpenState } from '../../../lib/open-state.ts'
 import type { Cell, SignalsKit } from '../../comments/cells.ts'
 
 type Method = 'GET' | 'POST'
@@ -175,7 +176,10 @@ export class LiveStore {
 
   async refresh(): Promise<void> {
     try {
-      const s = await this.deps.request('GET', this.base, { schema: PresentLiveState })
+      // M5-1/M2: the board-open read may already hold this answer (lib/open-state.ts hands it over once, for the first
+      // fetch; null or nothing: this route is asked, as it always was)
+      const seeded = takeOpenState(this.deps.boardId, 'presentation') ?? null
+      const s = seeded ?? (await this.deps.request('GET', this.base, { schema: PresentLiveState }))
       this.apply(s)
       this.ensureFollowing()
       // A slide that could not be sent while offline goes now.

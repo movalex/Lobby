@@ -81,6 +81,14 @@ export function canSend(text: string, expected: string): boolean {
   )
 }
 
+/**
+ * Wave M (M2-5): whether the message is only the sentence the dialog was opened with (the end-of-moment prompt's
+ * "After a vote reveal: "): nothing the person said, so nothing to send.
+ */
+export function sendsOnlyPrefill(text: string, prefill: string | null | undefined): boolean {
+  return !!prefill && text.trim() === prefill.trim()
+}
+
 /** The body of POST /api/feedback. */
 export function toInput(text: string, expected: string, context: FeedbackContext) {
   const e = expected.trim()

@@ -19,6 +19,11 @@
  *    `contracts` frame named PRESENCE_LASER_REV or later: a rev-11 room refuses both (strict); this tab
  *    sends one message at once when that frame comes, so the room knows it reads the laser fields. Whether
  *    the laser is the active tool comes from the canvas API (./laser.ts `laserToolOn`, keyed by the core);
+ *    M2-6 (wave M): while the laser is pressed, (1) the hub spaces its messages by the 20 Hz interval itself and
+ *    keeps the samples that arrive meanwhile for the next one, so the core never has to coalesce a laser message
+ *    (it replaces a pending message by the newest, and the trail of the replaced one was lost), and (2) a laser
+ *    held still re-sends its last point every LASER_RESEND_MS (the fields above only), so the others do not
+ *    count it released after LASER_HOLD_MS;
  *  - a drag preview: `{d, ids, dx, dy}` in the drag's FIRST message only (≤ 500 ids: the selection, its
  *    frames' children and its containers' labels), then `{d, dx, dy}` (scene units, rounded to 0.1), and
  *    `drag: null` at the end. Read-only sessions never send one (the server drops it anyway).
@@ -33,7 +38,7 @@
  * Browser (uses the overrides and the core's events), but no DOM of its own.
  */
 
-import { MAX_DRAG_IDS } from '@draftroom/canvas-schema/limits'
+import { MAX_DRAG_IDS, PRESENCE_IN_HZ } from '@draftroom/canvas-schema/limits'
 import {
   type DragOut,
   MAX_PRESENCE_ZOOM,
@@ -46,7 +51,14 @@ import type { LobbyEngineCore } from '../sync/core/engine.ts'
 import type { GestureState, SceneElement } from '../sync/types.ts'
 import { planDragArrows } from './drag-arrows.ts'
 import { onPresenceFollow, presenceFollowOf } from './follow-target.ts'
-import { LaserTrails, laserToolOn, laserTrailOut, provideLasers, thinPoints } from './laser.ts'
+import {
+  LASER_RESEND_MS,
+  LaserTrails,
+  laserToolOn,
+  laserTrailOut,
+  provideLasers,
+  thinPoints,
+} from './laser.ts'
 import type { PresencePoint, PresenceSample } from './sample.ts'
 
 /** What O5's overrides.ts `RenderOverrides` offers for drag previews (its existing API). */
@@ -88,6 +100,15 @@ export interface PresenceHubOptions {
 const RENEW_MS = 2_000
 /** The most laser samples held between two sends (a stalled send keeps the latest shape, thinned). */
 const MAX_PENDING_TRAIL = 64
+/** The least time between two presence messages the hub hands the core while the laser is pressed (20 Hz). */
+export const LASER_SEND_INTERVAL_MS = 1000 / PRESENCE_IN_HZ
+/**
+ * A message this close to its slot (ms) goes at once. The core counts in whole milliseconds (`Date.now()`), the hub in
+ * fractions (`performance.now()`), and a pointer sample that comes a hair before its 50 ms would otherwise wait for a timer
+ * (about 15 ms on Windows) to cover a gap the core does not see. The core's own cap still holds the message for what is
+ * left of it; the hub's next one is more than the core's window away, so the core never has two to choose between.
+ */
+export const LASER_GATE_SLACK_MS = 5
 const round1 = (v: number) => Math.round(v * 10) / 10
 /** A zoom on the wire: 3 decimals (0.1 to 30 in Excalidraw). */
 const roundZoom = (z: number) => Math.round(z * 1000) / 1000
@@ -137,6 +158,12 @@ export class PresenceHub {
   private laserDown = false
   /** laser samples since the last message (scene points, oldest first) */
   private pendingTrail: PresencePoint[] = []
+  /** M2-6: when the hub last handed the core a message (the hub's clock) */
+  private lastHandover = Number.NEGATIVE_INFINITY
+  /** M2-6: the timer of a laser message waiting for its 20 Hz slot */
+  private parkTimer: unknown = null
+  /** M2-6: the timer that re-sends a held laser */
+  private resendTimer: unknown = null
   /** the last sample's trail taken (a sample handed over again brings no new points) */
   private lastTrail: readonly PresencePoint[] | null = null
   /** the other sessions' lasers (CONTRACTS_REV 12) */
@@ -161,6 +188,8 @@ export class PresenceHub {
             this.peersBySid.clear()
             this.lasers.clear()
             this.pendingTrail = []
+            this.laserDown = false
+            this.stopLaserTimers()
             for (const sid of [...this.remoteDrags.keys()]) this.endRemoteDrag(sid)
             this.onPresence([], [], m.drags)
           } else if (m.type === 'contracts') {
@@ -205,6 +234,7 @@ export class PresenceHub {
   dispose(): void {
     for (const f of this.off.splice(0)) f()
     if (this.renewTimer !== null) (this.o.clearTimer ?? clearTimeout)(this.renewTimer as never)
+    this.stopLaserTimers()
     for (const sid of [...this.remoteDrags.keys()]) this.endRemoteDrag(sid)
   }
 
@@ -351,6 +381,9 @@ export class PresenceHub {
 
   /** Lobby's pointer listener (./pointer.ts). */
   onPointer(s: PresenceSample): void {
+    const before = this.pointer
+    // M2-6: the previous sample's own message is still waiting for its 20 Hz slot (it never went out)
+    const unsent = this.laserDown && this.parkTimer !== null
     this.pointer = s.pointer ? { x: Math.round(s.pointer.x), y: Math.round(s.pointer.y) } : null
     this.button = s.button
     this.idle = false
@@ -359,10 +392,14 @@ export class PresenceHub {
     const was = this.laserDown
     this.laserDown = this.rev12 && s.button === 'down' && s.pointer !== null && laserToolOn(this.o.core)
     if (!this.laserDown) this.pendingTrail = []
-    // the board session re-sends its last sample on a camera move (a fresh `view`): its trail went already
-    else if (was && s.trail?.length && s.trail !== this.lastTrail) {
-      this.lastTrail = s.trail
-      for (const p of s.trail) this.pendingTrail.push(p)
+    else if (was) {
+      // a point that was to go as a message's `pointer` and was replaced by a newer sample is a point of the path
+      if (unsent && before) this.pendingTrail.push(before)
+      // the board session re-sends its last sample on a camera move (a fresh `view`): its trail went already
+      if (s.trail?.length && s.trail !== this.lastTrail) {
+        this.lastTrail = s.trail
+        for (const p of s.trail) this.pendingTrail.push(p)
+      }
       if (this.pendingTrail.length > MAX_PENDING_TRAIL)
         this.pendingTrail = [...thinPoints(this.pendingTrail, MAX_PENDING_TRAIL / 2)]
     }
@@ -442,6 +479,58 @@ export class PresenceHub {
   }
 
   private send(drag?: { d: number; ids?: string[]; dx: number; dy: number } | null): void {
+    // M2-6: while the laser is pressed, a message that comes less than one 20 Hz interval after the last one waits
+    // for its slot (the samples it would have carried stay in `pendingTrail`, the pointer and the view are read
+    // when it goes), instead of being handed to a core that would hold it and let a newer message replace it.
+    if (drag === undefined && this.laserDown) {
+      const wait = this.lastHandover + LASER_SEND_INTERVAL_MS - this.clock()
+      if (wait > LASER_GATE_SLACK_MS) {
+        if (this.parkTimer === null) {
+          const setT = this.o.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms))
+          this.parkTimer = setT(() => {
+            this.parkTimer = null
+            this.send()
+          }, wait)
+        }
+        return
+      }
+    }
+    this.handOver(drag)
+  }
+
+  /** Cancels a parked laser message and the held laser's re-send. */
+  private stopLaserTimers(): void {
+    const clearT = this.o.clearTimer ?? ((h: unknown) => clearTimeout(h as never))
+    if (this.parkTimer !== null) clearT(this.parkTimer)
+    if (this.resendTimer !== null) clearT(this.resendTimer)
+    this.parkTimer = null
+    this.resendTimer = null
+  }
+
+  /**
+   * M2-6: a laser pressed and held still sends nothing by itself, and the others count it released after
+   * LASER_HOLD_MS. So every message that goes while it is pressed starts a timer; if it runs out (no pointer
+   * event, no other message in LASER_RESEND_MS), the last point goes again: the same fields as any laser
+   * message, no trail, through the same gate.
+   */
+  private armResend(): void {
+    const clearT = this.o.clearTimer ?? ((h: unknown) => clearTimeout(h as never))
+    if (this.resendTimer !== null) clearT(this.resendTimer)
+    this.resendTimer = null
+    if (!this.laserDown) return
+    const setT = this.o.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms))
+    this.resendTimer = setT(() => {
+      this.resendTimer = null
+      if (this.laserDown && this.rev12) this.send()
+    }, LASER_RESEND_MS)
+  }
+
+  private handOver(drag?: { d: number; ids?: string[]; dx: number; dy: number } | null): void {
+    if (this.parkTimer !== null) {
+      ;(this.o.clearTimer ?? ((h: unknown) => clearTimeout(h as never)))(this.parkTimer)
+      this.parkTimer = null
+    }
+    this.lastHandover = this.clock()
     const sel = this.sel.length > 200 ? { count: this.sel.length } : this.sel
     const v = this.o.view()
     const rich = this.rev10
@@ -465,6 +554,7 @@ export class PresenceHub {
       ...(laser ? { t: this.laserDown ? ('laser' as const) : null } : {}),
       ...(trail.length ? { trail } : {}),
     })
+    this.armResend()
   }
 
   /** Whom this tab follows (never itself), for `f`. */

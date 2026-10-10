@@ -431,7 +431,8 @@ export function HistoryPanel({ ctx }: { ctx: CanvasFeatureContext; close(): void
                 data-testid="checkpoint-name"
                 value={name}
                 maxLength={120}
-                placeholder={placeholder}
+                placeholder="Name (optional)"
+                aria-describedby="dr-history-name-default"
                 onChange={(e) => setName(e.target.value)}
               />
               <button
@@ -444,6 +445,15 @@ export function HistoryPanel({ ctx }: { ctx: CanvasFeatureContext; close(): void
                 {busy === 'save' ? 'Saving…' : 'Save checkpoint'}
               </button>
             </div>
+            {/* M2-4: the placeholder was the default name and was cut off mid-time ("Checkpoint Oct 10, 1:"); the
+                field says what it is, and the default sits where it fits */}
+            <p
+              className="dr-history__hint"
+              id="dr-history-name-default"
+              data-testid="checkpoint-name-default"
+            >
+              Left empty, it is saved as “{placeholder}”.
+            </p>
           </form>
         )}
         {copy.restoreAsNew === 'off' && !!snapshots?.length && (

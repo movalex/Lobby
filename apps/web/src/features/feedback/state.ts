@@ -15,6 +15,8 @@ export interface FeedbackRequest {
    * before the dialog opens, so the dialog has no opener of its own to return to).
    */
   readonly restoreFocus: (() => void) | null
+  /** Wave M (M2-5): what "What happened?" starts with (the end-of-moment prompt's "After a vote reveal: "), or null. */
+  readonly prefill: string | null
 }
 
 export const feedbackRequest = atom<FeedbackRequest | null>('lobby-feedback-request', null)
@@ -24,9 +26,10 @@ let seq = 0
 export function openFeedback(
   board: FeedbackBoard | null = null,
   restoreFocus: (() => void) | null = null,
+  prefill: string | null = null,
 ): void {
   seq += 1
-  feedbackRequest.set({ seq, board, restoreFocus })
+  feedbackRequest.set({ seq, board, restoreFocus, prefill })
 }
 
 export function closeFeedback(): void {

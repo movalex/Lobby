@@ -2,21 +2,25 @@
 //  - the strip, "Section 1 of 2 · Ideas · 1:58 left · next: Vote" (or "+0:42 over", or "<name> holds the timer"),
 //    under the banner at the top of the presentation for followers AND the presenter. It is computed from the
 //    frames, the live slide and the board's shared timer: nothing about it is stored or sent by a follower.
-//  - for the presenter only: "planned 60 · projected 63" (the drift, from this tab's own record) and the
-//    "Auto-time" switch in the control bar.
+//  - for the presenter only: "Planned 60 min · 3 min over" (the drift, from this tab's own record; M2-3 reworded it)
+//    and the "Times each section" switch in the control bar (Auto-time before M2-3).
 // The rules are ../agenda.ts's (pure, unit-tested).
 
-import { useMemo } from 'react'
+import type { WorkshopTimer } from '@draftroom/contracts'
+import { useEffect, useMemo } from 'react'
 import { useValue } from '../../../../lib/signals.ts'
+import { noteFeedbackMoment } from '../../../feedback/prompt-moments.ts'
 import { formatClock } from '../../../workshops/countdown.ts'
 import { useNow, useWorkshop } from '../../../workshops/workshop-context.ts'
 import {
   type AgendaFrame,
   agendaLine,
   agendaOf,
+  agendaShowsTime,
   driftLine,
   driftOf,
   hasAgenda,
+  runOfShowEnded,
   sectionsOf,
 } from '../agenda.ts'
 import { agendaFramesOf, liveSlideOf } from './agenda-live.ts'
@@ -38,6 +42,20 @@ export function agendaShown(live: LiveController | null): boolean {
   if (!p?.slideId) return false
   const sections = sectionsOf(agendaFramesOf(live.ctx.canvas))
   return hasAgenda(sections) && sections.some((s) => s.id === p.slideId)
+}
+
+/**
+ * M2-3: whether the strip's line is showing the live section's time now (a countdown, or how far over), so the timer
+ * pill over the slides stays out of its way. Reads the frames and the live slide like the strip does.
+ */
+export function agendaTimeShown(
+  live: LiveController | null,
+  clock: { timer: WorkshopTimer | null; nowMs: number; offsetMs: number },
+): boolean {
+  if (!live) return false
+  const p = presentationOf(live)
+  if (!p?.slideId) return false
+  return agendaShowsTime(agendaOf(agendaFramesOf(live.ctx.canvas), p.slideId, clock, p.presenterId))
 }
 
 /** The roster's name for a user id ("Someone" when they are not here). */
@@ -70,6 +88,11 @@ export function AgendaStrip({ live, variant }: { live: LiveController; variant: 
     { timer: snap.timer, nowMs: now, offsetMs: store.serverOffsetMs() },
     place?.presenterId ?? null,
   )
+  // M2-5: the last section ran out: a moment (the presenter's only: a follower records and is asked nothing)
+  const over = variant === 'presenter' && runOfShowEnded(state)
+  useEffect(() => {
+    if (over) noteFeedbackMoment(live.ctx.canvas, 'run-of-show-end')
+  }, [over, live])
   if (!state) return null
   const t = state.timer
   const mood =
@@ -114,7 +137,10 @@ export function AgendaStrip({ live, variant }: { live: LiveController; variant: 
   )
 }
 
-/** The presenter's "Auto-time" switch in the control bar: whether a section's timer starts as the slide moves. */
+/** What the switch says (M2-3; it read "Auto-time on" and "Auto-time off"). */
+export const AUTO_TIME_LABEL = { on: 'Times each section', off: 'Sections not timed' } as const
+
+/** The presenter's "Times each section" switch in the control bar: whether a section's timer starts as the slide moves. */
 export function AgendaAutoToggle({ live }: { live: LiveController }) {
   const shown = useValue('dr-agenda-shown', () => agendaShown(live), [live])
   const on = useValue('dr-agenda-auto-on', () => live.agenda.autoTime.get(), [live])
@@ -132,7 +158,7 @@ export function AgendaAutoToggle({ live }: { live: LiveController }) {
       }
       onClick={() => live.agenda.setAutoTime(!on)}
     >
-      Auto-time {on ? 'on' : 'off'}
+      {AUTO_TIME_LABEL[on ? 'on' : 'off']}
     </button>
   )
 }

@@ -57,6 +57,21 @@
   border: 2px solid;
   background: var(--dr-surface, #ffffff);
   color: var(--dr-ink, #1b2330);
+  /* M2-1: one line, always (it wrapped onto two cramped lines): the name gives way, with an ellipsis, not the words */
+  white-space: nowrap;
+}
+.dr-people-following--paused .dr-people-following__name {
+  min-width: 0;
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-people-following--paused .dr-people-following__text {
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+  white-space: nowrap;
 }
 .dr-people-following--paused .dr-people-following__stop:focus-visible,
 .dr-people-following__dismiss:focus-visible {

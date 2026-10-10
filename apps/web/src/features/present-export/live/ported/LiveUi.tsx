@@ -15,6 +15,7 @@ import { initialsFor, safeColor } from '../../../../lib/identity.ts'
 import { useValue } from '../../../../lib/signals.ts'
 import { mayPresentAs, presenceUsers, type RosterRow, rosterMap } from '../../../people/ported/presence.ts'
 import { PersonName } from '../../../workshops/Hands.tsx'
+import { TopCentreItem } from '../../../workshops/top-centre.ts'
 import { followingText, namesText } from '../words.ts'
 import { AgendaAutoToggle, AgendaStrip } from './AgendaStrip.tsx'
 import { getLive, type LiveController } from './controller.ts'
@@ -99,73 +100,75 @@ function LiveInviteCard({ live }: { live: LiveController }) {
     )
   }
   return (
-    <section
-      className="dr-live-invite"
-      aria-label="Presentation"
-      data-testid="live-invite"
-      data-online={view.online ? 'true' : 'false'}
-    >
-      <span
-        className="dr-live-invite__avatar"
-        style={{ background: safeColor(color, view.userId) }}
-        aria-hidden="true"
+    <TopCentreItem slot="invite">
+      <section
+        className="dr-live-invite"
+        aria-label="Presentation"
+        data-testid="live-invite"
+        data-online={view.online ? 'true' : 'false'}
       >
-        {initialsFor(view.name)}
-      </span>
-      <p className="dr-live-invite__text" aria-live="polite">
-        {view.online ? (
-          <>
-            <span className="dr-live-invite__title">
-              <PersonName name={view.name} className="dr-live-invite__name" /> is presenting
-            </span>
-            <span className="dr-live-invite__sub">Follow their slides as they present.</span>
-          </>
-        ) : (
-          <>
-            <span className="dr-live-invite__title">
-              <PersonName name={view.name} className="dr-live-invite__name" /> lost the connection
-            </span>
-            <span className="dr-live-invite__sub">
-              {may
-                ? 'Wait for them to come back, or take over the presentation.'
-                : 'Waiting for them to come back…'}
-            </span>
-          </>
-        )}
-      </p>
-      <div className="dr-live-invite__actions">
-        {view.online ? (
-          <button
-            type="button"
-            className="dr-btn dr-btn--primary dr-btn--sm"
-            data-testid="live-join"
-            onClick={() => live.join()}
-          >
-            <PlayIcon /> Follow
-          </button>
-        ) : (
-          may && (
+        <span
+          className="dr-live-invite__avatar"
+          style={{ background: safeColor(color, view.userId) }}
+          aria-hidden="true"
+        >
+          {initialsFor(view.name)}
+        </span>
+        <p className="dr-live-invite__text" aria-live="polite">
+          {view.online ? (
+            <>
+              <span className="dr-live-invite__title">
+                <PersonName name={view.name} className="dr-live-invite__name" /> is presenting
+              </span>
+              <span className="dr-live-invite__sub">Follow their slides as they present.</span>
+            </>
+          ) : (
+            <>
+              <span className="dr-live-invite__title">
+                <PersonName name={view.name} className="dr-live-invite__name" /> lost the connection
+              </span>
+              <span className="dr-live-invite__sub">
+                {may
+                  ? 'Wait for them to come back, or take over the presentation.'
+                  : 'Waiting for them to come back…'}
+              </span>
+            </>
+          )}
+        </p>
+        <div className="dr-live-invite__actions">
+          {view.online ? (
             <button
               type="button"
               className="dr-btn dr-btn--primary dr-btn--sm"
-              data-testid="live-take-over"
-              disabled={busy}
-              onClick={() => void live.takeOver()}
+              data-testid="live-join"
+              onClick={() => live.join()}
             >
-              Take over
+              <PlayIcon /> Follow
             </button>
-          )
-        )}
-        <button
-          type="button"
-          className="dr-btn dr-btn--sm"
-          data-testid="live-not-now"
-          onClick={() => live.notNow()}
-        >
-          Not now
-        </button>
-      </div>
-    </section>
+          ) : (
+            may && (
+              <button
+                type="button"
+                className="dr-btn dr-btn--primary dr-btn--sm"
+                data-testid="live-take-over"
+                disabled={busy}
+                onClick={() => void live.takeOver()}
+              >
+                Take over
+              </button>
+            )
+          )}
+          <button
+            type="button"
+            className="dr-btn dr-btn--sm"
+            data-testid="live-not-now"
+            onClick={() => live.notNow()}
+          >
+            Not now
+          </button>
+        </div>
+      </section>
+    </TopCentreItem>
   )
 }
 

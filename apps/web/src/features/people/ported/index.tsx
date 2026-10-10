@@ -18,6 +18,7 @@ import { getLive } from '../../present-export/live/ported/controller.ts'
 import { PersonName } from '../../workshops/Hands.tsx'
 import { usePresenting } from '../../workshops/presenting.ts'
 import { WorkshopStore, workshopStoreFor } from '../../workshops/store.ts'
+import { TopCentreItem } from '../../workshops/top-centre.ts'
 import { FrameHeads } from './FrameHeads.tsx'
 import { LaserLayer } from './LaserLayer.tsx'
 import { PeopleTopBar } from './PeopleBar.tsx'
@@ -130,71 +131,75 @@ function FollowingLabel({ ctx }: { ctx: CanvasFeatureContext }) {
   if (status === 'paused') {
     const toPresenter = presenterUid !== null && presenterUid === uid
     return (
-      <div
-        className="dr-people-following dr-people-following--ported dr-people-following--paused"
-        data-testid="follow-paused"
-        data-below-invite={belowInvite !== null ? 'true' : undefined}
-        style={{ borderColor: color, ...(belowInvite !== null ? { top: belowInvite } : {}) }}
-        role="status"
-      >
-        <span className="dr-people-following__text">
-          {toPresenter ? (
-            'Paused'
-          ) : (
-            <>
-              Paused following <PersonName name={name} className="dr-people-following__name" />
-            </>
-          )}
-        </span>
-        <span aria-hidden="true">·</span>
-        <button
-          type="button"
-          className="dr-people-following__stop"
-          data-testid="follow-resume"
-          onClick={() => canvas.follow.resume()}
+      <TopCentreItem slot="follow">
+        <div
+          className="dr-people-following dr-people-following--ported dr-people-following--paused"
+          data-testid="follow-paused"
+          data-below-invite={belowInvite !== null ? 'true' : undefined}
+          style={{ borderColor: color, ...(belowInvite !== null ? { top: belowInvite } : {}) }}
+          role="status"
         >
-          {toPresenter ? 'Back to presenter' : 'Resume'}
-        </button>
-        <button
-          type="button"
-          className="dr-people-following__dismiss"
-          data-testid="follow-paused-stop"
-          aria-label="Stop following"
-          title="Stop following"
-          onClick={() => canvas.follow.stop()}
-        >
-          ×
-        </button>
-      </div>
+          <span className="dr-people-following__text">
+            {toPresenter ? (
+              'Paused'
+            ) : (
+              <>
+                Paused following <PersonName name={name} className="dr-people-following__name" />
+              </>
+            )}
+          </span>
+          <span aria-hidden="true">·</span>
+          <button
+            type="button"
+            className="dr-people-following__stop"
+            data-testid="follow-resume"
+            onClick={() => canvas.follow.resume()}
+          >
+            {toPresenter ? 'Back to presenter' : 'Resume'}
+          </button>
+          <button
+            type="button"
+            className="dr-people-following__dismiss"
+            data-testid="follow-paused-stop"
+            aria-label="Stop following"
+            title="Stop following"
+            onClick={() => canvas.follow.stop()}
+          >
+            ×
+          </button>
+        </div>
+      </TopCentreItem>
     )
   }
   return (
     <>
       <div className="dr-people-following-frame" aria-hidden="true" style={{ borderColor: color }} />
-      <div
-        className="dr-people-following dr-people-following--ported"
-        data-testid="following-label"
-        data-summoned={summoned ? 'true' : 'false'}
-        data-below-invite={belowInvite !== null ? 'true' : undefined}
-        style={{ background: color, ...(belowInvite !== null ? { top: belowInvite } : {}) }}
-        role="status"
-      >
-        {summoned ? null : (
-          <span className="dr-people-following__text">
-            Following <PersonName name={name} className="dr-people-following__name" />
-          </span>
-        )}
-        <button
-          type="button"
-          className="dr-people-following__stop"
-          data-testid="following-stop"
-          // the name is its text, "Stop following", as tldraw's one button (RETRO-11); the label beside it
-          // names the person (the wave-3 integration)
-          onClick={() => canvas.follow.stop()}
+      <TopCentreItem slot="follow">
+        <div
+          className="dr-people-following dr-people-following--ported"
+          data-testid="following-label"
+          data-summoned={summoned ? 'true' : 'false'}
+          data-below-invite={belowInvite !== null ? 'true' : undefined}
+          style={{ background: color, ...(belowInvite !== null ? { top: belowInvite } : {}) }}
+          role="status"
         >
-          Stop following
-        </button>
-      </div>
+          {summoned ? null : (
+            <span className="dr-people-following__text">
+              Following <PersonName name={name} className="dr-people-following__name" />
+            </span>
+          )}
+          <button
+            type="button"
+            className="dr-people-following__stop"
+            data-testid="following-stop"
+            // the name is its text, "Stop following", as tldraw's one button (RETRO-11); the label beside it
+            // names the person (the wave-3 integration)
+            onClick={() => canvas.follow.stop()}
+          >
+            Stop following
+          </button>
+        </div>
+      </TopCentreItem>
     </>
   )
 }

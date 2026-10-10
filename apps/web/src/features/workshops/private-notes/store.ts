@@ -21,6 +21,7 @@ import {
   type UpdatePrivateNoteInput,
 } from '@draftroom/contracts'
 import type { z } from 'zod'
+import { takeOpenState } from '../../../lib/open-state.ts'
 import { firstLoad, REFRESH_RETRY_MAX_MS, REFRESH_RETRY_MIN_MS, retryableError } from '../store.ts'
 
 type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE'
@@ -261,9 +262,13 @@ export class PrivateNotesStore {
     this.refreshes++
     const seq = ++this.seq
     try {
-      const s = await this.request('GET', this.path('/private-brainstorm'), {
-        schema: PrivateBrainstormState,
-      })
+      // M5-1/M2: the board-open read may already hold this answer (lib/open-state.ts hands it over once, for the first
+      // fetch; null or nothing: this route is asked, as it always was)
+      const s =
+        takeOpenState(this.boardId, 'privateBrainstorm') ??
+        (await this.request('GET', this.path('/private-brainstorm'), {
+          schema: PrivateBrainstormState,
+        }))
       this.apply(s, seq)
       this.confirmed(seq)
     } catch (e) {

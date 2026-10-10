@@ -772,8 +772,9 @@ test('vote results: badges shrink (to a minimum size) and group when zoomed out,
   })
 
   await test.step('F3: under the workshop popover, the popover wins', async () => {
-    const card = a.getByTestId('vote-results-card')
-    await expect(card).toBeVisible()
+    // M2-4: alice had the Voting panel open when the results came in (and opened it again to read them), so the
+    // "Results are in" card has nothing to add and does not come back when she closes the panel (it used to)
+    await expect(a.getByTestId('vote-results-card')).toHaveCount(0)
     const pop = await openWorkshopPopover(a)
     const box = await pop.boundingBox()
     if (!box) throw new Error('no popover box')

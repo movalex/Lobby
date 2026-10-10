@@ -143,16 +143,30 @@ export function spotlightText(s: Pick<Spotlight, 'by' | 'refs'>, me: string): st
   return s.by.userId === me ? `You are spotlighting ${what}` : `${s.by.name} is spotlighting ${what}`
 }
 
-/** What shows when a spotlight ended in front of this tab ("Maya ended the spotlight"). */
-export function endedText(e: {
-  reason: 'ended' | 'ended-by-owner' | 'expired' | 'starter-left'
-  starterName: string
-  byName: string | null
-}): string {
+/**
+ * What shows when a spotlight ended in front of this tab, in the viewer's voice (`me`: this person's user id): the
+ * one who ended their own is told "You ended the spotlight." (not "Maya ended the spotlight." about herself), the
+ * starter whose spotlight an owner ended is told "<owner> ended your spotlight.", an owner who ended someone else's
+ * "You ended <name>'s spotlight.". Without `me` it is the third person for everyone (no viewer known).
+ */
+export function endedText(
+  e: {
+    reason: 'ended' | 'ended-by-owner' | 'expired' | 'starter-left'
+    starterName: string
+    byName: string | null
+    /** whose it was, and who ended it (user ids; absent from an event that does not name them) */
+    starterUserId?: string | null
+    byUserId?: string | null
+  },
+  me?: string | null,
+): string {
+  const mine = !!me && e.starterUserId === me
   switch (e.reason) {
     case 'ended':
-      return `${e.starterName} ended the spotlight.`
+      return mine ? 'You ended the spotlight.' : `${e.starterName} ended the spotlight.`
     case 'ended-by-owner':
+      if (me && e.byUserId === me) return `You ended ${e.starterName}’s spotlight.`
+      if (mine) return `${e.byName ?? 'A board owner'} ended your spotlight.`
       return `${e.byName ?? 'A board owner'} ended ${e.starterName}’s spotlight.`
     case 'expired':
       return 'The spotlight ended: it had been on for five minutes.'

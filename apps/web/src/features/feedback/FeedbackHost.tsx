@@ -13,6 +13,7 @@ export function FeedbackHost() {
     <FeedbackDialog
       key={request.seq}
       board={request.board}
+      prefill={request.prefill}
       onClose={() => {
         closeFeedback()
         // after the dialog has gone (its own cleanup puts the keyboard on the page, which is no place for it)

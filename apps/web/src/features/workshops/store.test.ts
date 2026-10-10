@@ -406,6 +406,53 @@ describe('results news (RETRO-08)', () => {
     expect(h.store.getSnapshot().resultsNews).toBeNull()
   })
 
+  // M2-4 (FTU-12): the facilitator kept the card after opening Voting and putting the results on the board
+  it('opening the Voting panel ends the card, and closing the panel does not bring it back', async () => {
+    const h = harness({ timer: null, vote: voteState(), serverNow: ISO(0) })
+    await h.store.refresh()
+    h.events.emit('workshop.vote.results', { sessionId: SID, results, totalVotesCast: 6, participants: 2 })
+    expect(h.store.getSnapshot().resultsNews).not.toBeNull()
+    h.store.panelChanged('tags') // another panel: the card stays
+    expect(h.store.getSnapshot().resultsNews).not.toBeNull()
+    h.store.panelChanged('voting')
+    expect(h.store.getSnapshot().resultsNews).toBeNull()
+    h.store.panelChanged(null)
+    expect(h.store.getSnapshot().resultsNews).toBeNull()
+  })
+
+  it('"Results to board" ends the card', async () => {
+    const h = harness({ timer: null, vote: voteState(), serverNow: ISO(0) })
+    await h.store.refresh()
+    h.events.emit('workshop.vote.results', { sessionId: SID, results, totalVotesCast: 6, participants: 2 })
+    h.store.dismissResultsNews('to-board')
+    expect(h.store.getSnapshot().resultsNews).toBeNull()
+    // and a dismissal with nothing to dismiss changes nothing (no extra render)
+    let renders = 0
+    h.store.subscribe(() => renders++)
+    h.store.dismissResultsNews('to-board')
+    h.store.panelChanged('voting')
+    expect(renders).toBe(0)
+  })
+
+  it('a newer reveal makes a new card even after the last was dismissed', async () => {
+    const h = harness({ timer: null, vote: voteState(), serverNow: ISO(0) })
+    await h.store.refresh()
+    h.events.emit('workshop.vote.results', { sessionId: SID, results, totalVotesCast: 6, participants: 2 })
+    const first = h.store.getSnapshot().resultsNews
+    h.store.dismissResultsNews('see-all')
+    const second = 'vot_zzzzzzzzzzzzzzzzzzzz'
+    h.setServer({
+      timer: null,
+      vote: voteState({ session: { ...voteState().session, id: second } }),
+      serverNow: ISO(9_000),
+    })
+    await h.store.refresh()
+    h.events.emit('workshop.vote.results', { sessionId: second, results, totalVotesCast: 6, participants: 2 })
+    const news = h.store.getSnapshot().resultsNews
+    expect(news).toMatchObject({ sessionId: second })
+    expect(news?.seq).toBeGreaterThan(first?.seq ?? 0)
+  })
+
   it('announcements repeat when the same text comes twice', () => {
     const h = harness({ timer: null, vote: null, serverNow: ISO(0) })
     h.store.announce('Voted. 2 of 3 left')

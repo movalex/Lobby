@@ -1,14 +1,27 @@
 // What present-live says, in one place (pure, unit-tested). "Lobby" is the product name in UI text.
 import type { PresentChange } from '@draftroom/contracts'
 
-/** The notice after a live presentation ended for someone who was following it. */
-export function endedText(change: PresentChange | null, presenterName: string | null): string {
+/**
+ * The notice after a live presentation ended for someone who was following it, in the viewer's voice (M2-1: the
+ * presenter was told about herself in the third person). `meId` is this viewer's user id and `presenterId` the
+ * presenter's: the person who ended it is told "You ended the presentation.", the presenter whose presentation an
+ * owner ended "<owner> ended your presentation.". Without them it is the third person for everyone.
+ */
+export function endedText(
+  change: PresentChange | null,
+  presenterName: string | null,
+  meId?: string | null,
+  presenterId?: string | null,
+): string {
   const who = presenterName ?? 'The presenter'
   if (change?.kind !== 'ended' || !change.reason) return 'The presentation has ended.'
+  if (meId && change.byUserId === meId && change.reason !== 'presenter-left')
+    return 'You ended the presentation.'
   switch (change.reason) {
     case 'stopped':
       return `${change.byName ?? who} ended the presentation.`
     case 'ended-by-owner':
+      if (meId && presenterId === meId) return `${change.byName ?? 'A board owner'} ended your presentation.`
       return `${change.byName ?? 'A board owner'} ended the presentation.`
     case 'presenter-left':
       return `${who} left the board, so the presentation ended.`

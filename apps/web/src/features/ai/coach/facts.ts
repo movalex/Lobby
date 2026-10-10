@@ -19,7 +19,7 @@ import {
 import type { CanvasElement, CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { items } from '../../../canvas/api/index.ts'
 import { type Atom, atom } from '../../../lib/signals.ts'
-import { lastRevealedResults } from '../../workshops/store.ts'
+import { lastRevealedResults, voteStarterOf } from '../../workshops/store.ts'
 import { aiKindWord } from '../ported/provenance.ts'
 import { perCanvas } from '../ported/runtime.ts'
 import { frameIndex, frameOfElement, idOfRef, isLive, isNote, noteFacts } from '../ported/target.ts'
@@ -50,13 +50,23 @@ export function applyWorkshopEvent(ws: CoachWorkshop, type: string, data: unknow
         sessionId: ev.data.sessionId,
         status: ev.data.status,
         top: same && ev.data.status === 'revealed' ? (ws.vote?.top ?? []) : [],
+        // the event does not say who started it; the same vote keeps what is known (seedWorkshop asks the store)
+        startedBy: same ? (ws.vote?.startedBy ?? null) : null,
       },
     }
   }
   if (type === WORKSHOP_EVENTS.results) {
     const ev = WorkshopVoteResultsEvent.safeParse(data)
     if (!ev.success) return ws
-    return { ...ws, vote: { sessionId: ev.data.sessionId, status: 'revealed', top: topOf(ev.data.results) } }
+    return {
+      ...ws,
+      vote: {
+        sessionId: ev.data.sessionId,
+        status: 'revealed',
+        top: topOf(ev.data.results),
+        startedBy: ws.vote?.sessionId === ev.data.sessionId ? (ws.vote.startedBy ?? null) : null,
+      },
+    }
   }
   if (type === PRIVATE_NOTES_EVENTS.changed) {
     const ev = PrivateBrainstormEvent.safeParse(data)
@@ -76,12 +86,25 @@ export function applyWorkshopEvent(ws: CoachWorkshop, type: string, data: unknow
  */
 export function seedWorkshop(ctx: Pick<CanvasFeatureContext, 'canvas' | 'events'>): void {
   const slot = coachWorkshop(ctx.canvas)
-  if (slot.get().vote) return
+  const now = slot.get()
+  if (now.vote) {
+    // M2-2: the stream never says who started a vote; the workshop store does, once it has loaded it
+    if (!now.vote.startedBy) {
+      const by = voteStarterOf(ctx.events, now.vote.sessionId)
+      if (by) slot.set({ ...now, vote: { ...now.vote, startedBy: by } })
+    }
+    return
+  }
   const last = lastRevealedResults(ctx.events)
   if (!last) return
   slot.set({
-    ...slot.get(),
-    vote: { sessionId: last.sessionId, status: 'revealed', top: topOf(last.results) },
+    ...now,
+    vote: {
+      sessionId: last.sessionId,
+      status: 'revealed',
+      top: topOf(last.results),
+      startedBy: voteStarterOf(ctx.events, last.sessionId),
+    },
   })
 }
 
