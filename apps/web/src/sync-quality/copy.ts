@@ -127,13 +127,20 @@ export function cachedCopyTime(savedAt: number, now: number = Date.now()): strin
 }
 
 /** M6-4: the offline line while this device's copy is shown: "Offline · showing your copy from 14:32". */
-export function cachedOfflineLabel(savedAt: number, now?: number): string {
-  return `Offline · showing your copy from ${cachedCopyTime(savedAt, now)}`
+export function cachedOfflineLabel(savedAt: number, now?: number, changes = 0): string {
+  // changes queued offline on this device are not drawn on the cached copy until the welcome adopts them
+  const queued =
+    changes > 0 ? ` · ${changes} change${changes === 1 ? '' : 's'} on this device, not shown yet` : ''
+  return `Offline · showing your copy from ${cachedCopyTime(savedAt, now)}${queued}`
 }
 
 /** M6-4: its tooltip (read-only, possibly out of date). */
-export function cachedOfflineTitle(savedAt: number, now?: number): string {
-  return `You're offline. This is the copy of the board this device kept (${cachedCopyTime(savedAt, now)}); it may be out of date. You can edit once you are back online.`
+export function cachedOfflineTitle(savedAt: number, now?: number, changes = 0): string {
+  const queued =
+    changes > 0
+      ? ` Your ${changes} change${changes === 1 ? '' : 's'} made offline ${changes === 1 ? 'is' : 'are'} kept on this device and will show and sync when the connection returns.`
+      : ''
+  return `You're offline. This is the copy of the board this device kept (${cachedCopyTime(savedAt, now)}); it may be out of date. You can edit once you are back online.${queued}`
 }
 
 /** "Offline — 3 changes on this device" (the engine's queue; none: plain "Offline"). */

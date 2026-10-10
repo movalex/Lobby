@@ -85,8 +85,8 @@ export function engineSaveView(
   if (state === 'offline' && !i.welcomed && i.cached)
     return {
       ...view,
-      label: cachedOfflineLabel(i.cached.savedAt),
-      title: cachedOfflineTitle(i.cached.savedAt),
+      label: cachedOfflineLabel(i.cached.savedAt, undefined, i.status.offlineChanges),
+      title: cachedOfflineTitle(i.cached.savedAt, undefined, i.status.offlineChanges),
     }
   if (state === 'offline-pending' || state === 'offline') {
     const n = i.status.offlineChanges

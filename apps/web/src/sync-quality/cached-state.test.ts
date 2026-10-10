@@ -50,6 +50,19 @@ describe("the 'cached' save state", () => {
     expect(cachedCopyText(savedAt, true)).toMatch(/^Offline · showing your copy from /)
   })
 
+  it('offline with changes queued on this device: the line says so (the cached copy does not draw them yet)', () => {
+    const i = input({ status: status({ offlineChanges: 3 }), cached: { savedAt, offline: true } })
+    expect(engineDisplayState(i)).toBe('offline')
+    const view = engineSaveView(i)
+    expect(view.label).toBe(
+      `Offline · showing your copy from ${cachedCopyTime(savedAt)} · 3 changes on this device, not shown yet`,
+    )
+    expect(view.title).toMatch(/Your 3 changes made offline are kept on this device/)
+    expect(cachedCopyText(savedAt, true, 1)).toMatch(/ · 1 change on this device, not shown yet$/)
+    // none queued: the line as before
+    expect(cachedOfflineLabel(savedAt, undefined, 0)).toBe(cachedOfflineLabel(savedAt))
+  })
+
   it('the welcome ends it (whatever the input still says), and a terminal close wins', () => {
     const cached = { savedAt, offline: false }
     expect(

@@ -803,7 +803,7 @@ function LobbyBoardScreen({
         >
           {showingCache && snap.cached
             ? // M6-4: the copy on screen is this device's, read-only until the connection returns
-              `${cachedOfflineLabel(snap.cached.savedAt)}${snap.cached.exact ? '' : ' (links and web addresses are not kept in it)'}. You can edit once you are back online.`
+              `${cachedOfflineLabel(snap.cached.savedAt, undefined, snap.save.offlineChanges)}${snap.cached.exact ? '' : ' (links and web addresses are not kept in it)'}. You can edit once you are back online.`
             : snap.guest
               ? "You're offline. Changes you make are kept in this tab only until the connection returns; reloading now would lose them."
               : "You're offline. Changes you make are kept on this device and sync when the connection returns."}
@@ -837,7 +837,11 @@ function LobbyBoardScreen({
           </div>
           {showingCache && snap.cached && !closed && (
             // M6-2: the cached copy is on the canvas (read-only); the skeleton's toolbar keeps its place
-            <CachedCopy savedAt={snap.cached.savedAt} offline={snap.phase === 'offline'}>
+            <CachedCopy
+              savedAt={snap.cached.savedAt}
+              offline={snap.phase === 'offline'}
+              changes={snap.save.offlineChanges}
+            >
               <SkeletonToolbar readonly={readonly} />
             </CachedCopy>
           )}
