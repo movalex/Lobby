@@ -633,7 +633,11 @@ export class ElementRoom {
       )
       if (ok) {
         this.deps.metrics.inc('lobby_presence_in_total')
-        if (msg.t === 'laser') this.deps.metrics.inc('lobby_presence_laser_in_total')
+        if (msg.t === 'laser') {
+          this.deps.metrics.inc('lobby_presence_laser_in_total')
+          // M7-3: the laser frames taken (the same count under its wave M name; metrics.ts)
+          this.deps.metrics.inc('lobby_laser_frames_in_total')
+        }
         if (msg.editing) this.leases.renew(msg.editing, s.identity.sid, this.deps.now())
       }
       return

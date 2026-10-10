@@ -59,7 +59,7 @@ import { createWorkshopStateClient } from '../workshop-state.ts'
 import { closeTerminal } from './closing.ts'
 import { ElementRoom, type Session } from './element-room.ts'
 import { roomRoutes } from './http.ts'
-import { RoomMetrics } from './metrics.ts'
+import { RoomMetrics, type SummaryGauges } from './metrics.ts'
 import {
   type BoardFileState,
   boardFileState,
@@ -475,6 +475,29 @@ export function createElementRoomServiceWith(
   }, 250)
   budgetTimer.unref?.()
 
+  // M7-3: once an hour, one `metrics.summary` line (metrics.ts), so the counters outlive a restart in the logs;
+  // the last one when the service closes (a deploy). Counts and shapes only: no board id, no user id.
+  const summaryGauges = (): SummaryGauges => {
+    let sessions = 0
+    let queued = 0
+    const elements: number[] = []
+    for (const room of rooms.values()) {
+      for (const s of room.sessions) {
+        sessions++
+        queued += s.out.pending
+      }
+      elements.push(room.gauges().elements)
+    }
+    return {
+      rooms: rooms.size,
+      sessions,
+      outboundQueued: queued,
+      diskFree: (deps.disk ?? STATFS_PROBE).freeRatio(deps.dataDir),
+      elements,
+    }
+  }
+  const stopSummary = metrics.startSummary(summaryGauges, (line) => deps.log(line))
+
   const offHooks = config.testHooks
     ? registerTestHooks({
         snapshot: async (boardId) => (await existing(boardId))?.testSnapshot() ?? null,
@@ -607,6 +630,8 @@ export function createElementRoomServiceWith(
     async closeAll() {
       closed = true
       clearInterval(budgetTimer)
+      // M7-3: the part of the hour before the close (a deploy) is logged too, before the rooms go
+      stopSummary(true)
       for (const t of evictTimers.values()) clearTimeout(t)
       evictTimers.clear()
       for (const p of preparing.values())
