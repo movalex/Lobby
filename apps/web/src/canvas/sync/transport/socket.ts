@@ -27,6 +27,7 @@
  * NODE-SAFE (CONTRACTS.md): no DOM types; the socket is a structural `WebSocketLike`.
  */
 import {
+  CLOSE_RECONNECT,
   CLOSE_TERMINAL,
   type ClientMessage,
   CONNECT_REV_PARAM,
@@ -68,6 +69,11 @@ export interface SocketTransportOptions {
   readonly backoffMs?: readonly number[]
   /** the source of the reconnect jitter (tests); default Math.random */
   readonly random?: () => number
+  /**
+   * M6-5: whether this tab has changes the room has not acknowledged (unsent, in flight or queued): after a
+   * restart close it then comes back within RESTART_SPREAD_UNSENT_MS instead of RESTART_SPREAD_MS
+   */
+  readonly hasUnsent?: () => boolean
   readonly setTimer?: (fn: () => void, ms: number) => unknown
   readonly clearTimer?: (h: unknown) => void
   /** every inbound frame, decoded (the headless client's `received()`), before validation drops anything */
@@ -102,6 +108,25 @@ export function jitteredDelay(delay: number, random: () => number = Math.random)
 }
 /** The close a dead (silent) socket is reported with. */
 export const HEARTBEAT_CLOSE = { code: 4000, reason: 'heartbeat' } as const
+/**
+ * M6-5 (wave M, CAP-RESTART): a sync restart or deploy closes every room's sockets at once with 4000 RECONNECT
+ * (element-room.ts close-all), and every tab used to come back within the first backoff step (250 ms ± 30 %): one
+ * burst of hellos and welcomes that kept the 0.5 CPU at 98-102 % (CAP-L1). After such a close the first reconnect
+ * waits a uniform random 0 to RESTART_SPREAD_MS instead, or 0 to RESTART_SPREAD_UNSENT_MS when this tab holds
+ * changes not yet acknowledged (they should land soon). Anything later is the backoff table as before. A close the
+ * room announced with a CLOSING notice is terminal (no reconnect at all), and the client's own heartbeat drop (4000
+ * `heartbeat`) is not the room's: both keep their behaviour.
+ */
+export const RESTART_SPREAD_MS = 3000
+export const RESTART_SPREAD_UNSENT_MS = 500
+/** Whether a close is the room's 4000 RECONNECT (a restart, a role change, a reopened room), not our heartbeat's. */
+export const isRestartClose = (close: TransportClose): boolean =>
+  close.code === CLOSE_RECONNECT && close.reason !== HEARTBEAT_CLOSE.reason
+/** The first reconnect's wait after a restart close (`random` in [0, 1)). */
+export function restartSpreadMs(unsent: boolean, random: () => number = Math.random): number {
+  const span = unsent ? RESTART_SPREAD_UNSENT_MS : RESTART_SPREAD_MS
+  return Math.min(span, Math.max(0, Math.round(random() * span)))
+}
 export const HEARTBEAT_MS = 15_000
 const OPEN = 1
 /** The longest text frame looked at for a pong at receipt (`{"type":"pong","n":…}` is far shorter). */
@@ -292,14 +317,24 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
         const close = closeOf(ev.code, ev.reason)
         setState('closed', close)
         if (close.code === CLOSE_TERMINAL || stopped || opts.reconnect === false) return
-        scheduleReconnect()
+        scheduleReconnect(isRestartClose(close))
       })
     }
   }
 
-  const scheduleReconnect = () => {
+  const scheduleReconnect = (restart = false) => {
     if (stopped || timer !== null) return
-    const ms = jitteredDelay(backoff[Math.min(failures, backoff.length - 1)] ?? 5000, opts.random)
+    let unsent = false
+    if (restart)
+      try {
+        unsent = opts.hasUnsent?.() === true
+      } catch {
+        unsent = false
+      }
+    const ms = restart
+      ? restartSpreadMs(unsent, opts.random)
+      : jitteredDelay(backoff[Math.min(failures, backoff.length - 1)] ?? 5000, opts.random)
+    if (restart) opts.log?.('socket_restart_spread', { ms, unsent })
     failures++
     timer = setTimer(() => {
       timer = null

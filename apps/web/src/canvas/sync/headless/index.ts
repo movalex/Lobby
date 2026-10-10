@@ -46,6 +46,8 @@ export interface HeadlessExtras {
   readonly reconnect?: boolean
   readonly setTimer?: (fn: () => void, ms: number) => unknown
   readonly clearTimer?: (h: unknown) => void
+  /** the reconnect jitter's source (tests, the load generator's seeds); default Math.random */
+  readonly random?: () => number
 }
 
 export interface LobbyHeadlessClient extends HeadlessClient {
@@ -87,6 +89,9 @@ export function createLobbyHeadlessClient(o: HeadlessClientOptions & HeadlessExt
     reconnect: o.reconnect,
     setTimer: o.setTimer,
     clearTimer: o.clearTimer,
+    random: o.random,
+    // M6-5: as the browser's, a client with changes not yet acknowledged comes back sooner after a restart close
+    hasUnsent: () => core.saveStatus.pending > 0,
     onRaw: (m) => received.push(m),
     log: o.log,
   })

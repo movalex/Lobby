@@ -55,3 +55,51 @@
 .dr-save[hidden] {
   display: none;
 }
+
+/* M6-2 (wave M): the layer over the canvas while this device's last copy is shown, until the first welcome. It
+   never takes a pointer (the canvas is read-only then, and still pans and zooms); its pill says what is shown. */
+.lobby-cached-copy {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+}
+.lobby-cached-copy__pill {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 32px);
+  box-sizing: border-box;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--dr-surface, #ffffff);
+  border: 1px solid var(--dr-line, #e5e7eb);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
+  color: var(--dr-ink-2, #374151);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lobby-cached-copy__pill .dr-save__dot {
+  flex: none;
+  animation: dr-save-pulse 1s ease-in-out infinite;
+}
+.lobby-cached-copy__pill[data-offline="true"] {
+  background: var(--dr-warn-bg, #fffbeb);
+  border-color: var(--dr-warn-line, #fcd34d);
+  color: var(--dr-warn, #92400e);
+}
+.lobby-cached-copy__pill[data-offline="true"] .dr-save__dot {
+  animation: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lobby-cached-copy__pill .dr-save__dot {
+    animation: none;
+  }
+}

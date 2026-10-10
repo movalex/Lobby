@@ -5,6 +5,7 @@ import type { DisplayState, Rejection } from './save-state.ts'
 
 export const SAVE_LABEL: Record<DisplayState, string> = {
   connecting: 'Connecting…',
+  cached: 'Showing your last copy · connecting',
   saved: 'Saved',
   saving: 'Saving…',
   offline: 'Offline',
@@ -19,6 +20,8 @@ export const SAVE_LABEL: Record<DisplayState, string> = {
 
 const SAVE_TITLE: Record<DisplayState, string> = {
   connecting: 'Connecting to the board server',
+  cached:
+    'This is the copy of the board this device kept from your last visit. Connecting to the board server for the latest version; you can edit once it is here.',
   saved: 'Every change you made is stored on the board server',
   saving: 'Sending your latest changes to the board server',
   offline:
@@ -111,6 +114,27 @@ export function rejectionNotice(rejection: Rejection, readonly: boolean): string
 // The engine keeps offline changes in this browser (IndexedDB, per tab, §2.5.6), so its offline line says
 // how many there are and that they are on this device; a guest's are in memory only. A change the server
 // refused carries its reject code, said in words here.
+
+/**
+ * M6-4: when a copy this device kept was saved, in words: the time today, else the day and the time (the
+ * browser's own locale and time zone).
+ */
+export function cachedCopyTime(savedAt: number, now: number = Date.now()): string {
+  const at = new Date(savedAt)
+  const time = at.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+  if (at.toDateString() === new Date(now).toDateString()) return time
+  return `${at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}, ${time}`
+}
+
+/** M6-4: the offline line while this device's copy is shown: "Offline · showing your copy from 14:32". */
+export function cachedOfflineLabel(savedAt: number, now?: number): string {
+  return `Offline · showing your copy from ${cachedCopyTime(savedAt, now)}`
+}
+
+/** M6-4: its tooltip (read-only, possibly out of date). */
+export function cachedOfflineTitle(savedAt: number, now?: number): string {
+  return `You're offline. This is the copy of the board this device kept (${cachedCopyTime(savedAt, now)}); it may be out of date. You can edit once you are back online.`
+}
 
 /** "Offline — 3 changes on this device" (the engine's queue; none: plain "Offline"). */
 export function engineOfflineLabel(changes: number): string {

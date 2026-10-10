@@ -16,6 +16,7 @@
 import { hashElements } from '@draftroom/canvas-schema/hash'
 import { describe, expect, it } from 'vitest'
 import { bump } from '../headless/scene.ts'
+import { openFromCache, recordOf } from '../testing/cached.ts'
 import { rect } from '../testing/elements.ts'
 import { stored } from '../testing/fakeRoom.ts'
 import { createHarness, type Harness, type TestClient } from '../testing/harness.ts'
@@ -185,5 +186,55 @@ describe('DEF-GAPS-1: a core started on another core’s scene never takes it fo
     expect(h.room.elements.get('n1')?.x, 'the queued move went out from the new core').toBe(55)
     expect(r.pushes()).toBe(1)
     expect(r.core.saveStatus.state).toBe('saved')
+  })
+})
+
+/**
+ * M6-2 (wave M, PWR-4): a new page paints this device's cached copy into its empty scene before its core starts
+ * (`startFromCache`): the same rule as another core's copies. Its first welcome rebuilds the scene from the server's
+ * state in one apply, so the cached paint then the welcome yields exactly the welcome's scene, whatever changed
+ * while the page was closed (moved, deleted, created, or gone from a restored board).
+ */
+describe("M6-2: the cached paint, then the welcome, is exactly the welcome's scene", () => {
+  for (const resume of [false, true])
+    it(`${resume ? 'with the resume (a catch-up welcome)' : 'paint only (a reset snapshot)'}`, async () => {
+      const { h, a } = board(0)
+      a.change('n2', { y: 2 })
+      h.settle()
+      const record = recordOf(a)
+      detach(a)
+      const b = h.client('bob', { tab: 'tab2' })
+      h.settle()
+      b.change('n1', { x: 999 })
+      b.change('n2', { isDeleted: true })
+      b.edit((m) => m.set('n3', rect('n3', 'a2', { x: 30 })))
+      h.settle()
+      const p = openFromCache(h, record, { resume, tab: 'tab3' })
+      // the paint: exactly the cached copies, before any frame
+      expect([...p.scene.map.keys()].sort()).toEqual(['n1', 'n2'])
+      expect(p.scene.map.get('n1')?.x).toBe(10)
+      expect(p.scene.map.get('n2')?.isDeleted).toBe(false)
+      h.settle()
+      // the welcome's scene: the server's copies, version and nonce included, and nothing else
+      expect([...p.scene.map.keys()].sort()).toEqual([...h.room.elements.keys()].sort())
+      for (const [id, el] of h.room.elements) expect(p.scene.map.get(id), id).toEqual(el)
+      expect(await hashElements(p.core.elements().values())).toBe(await h.roomHash())
+      expect(p.pushes()).toBe(0)
+      expect(p.core.showingCachedCopy).toBe(false)
+    })
+
+  it('an element the cached copy has and the server does not (a restored board) leaves the scene at the welcome', async () => {
+    const { h, a } = board(0)
+    const record = recordOf(a)
+    detach(a)
+    h.room.elements.delete('n2')
+    h.room.epoch = 'epoch2'
+    const p = openFromCache(h, record, { resume: true, tab: 'tab3' })
+    expect(p.scene.map.has('n2')).toBe(true)
+    expect(p.core.showingCachedCopy).toBe(true)
+    h.settle()
+    expect(p.scene.map.has('n2')).toBe(false)
+    expect(await hashElements(p.core.elements().values())).toBe(await h.roomHash())
+    expect(p.pushes()).toBe(0)
   })
 })

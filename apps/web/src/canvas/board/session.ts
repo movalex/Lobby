@@ -26,7 +26,11 @@ import { createTicketUri, ticketInProtocol } from '../../board/ticket.ts'
 import { exportAllowedOnBoard } from '../../features/canvas-ux/ported/export-gate.ts'
 import { frameAt } from '../../features/canvas-ux/ported/notes.ts'
 import { toolAfterPlacement, toolLock } from '../../features/canvas-ux/ported/tool-lock.ts'
+import { exportStateOf } from '../../features/sharing/ported/export-policy.ts'
+import { knownUserKind } from '../../invite/guest.tsx'
 import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
+import { subscribeValue } from '../../lib/signals.ts'
+import { countUsage } from '../../lib/usage.ts'
 import { engineRejectNotice } from '../../sync-quality/copy.ts'
 import { type BoardConcern, type BoardEvent, createLobbyCanvas, type LobbyCanvasHandle } from '../api/impl.ts'
 import type {
@@ -53,6 +57,18 @@ import { attachPresencePointer, type PresenceSample } from '../presence/pointer.
 import { attachEngine, createExcalidrawScene } from '../sync/adapter/excalidraw.ts'
 import { type GuestQueue, guestOfflineQueue } from '../sync/adapter/offline-guest.ts'
 import { createIdbOfflineStore, type IdbOfflineStore, tabId } from '../sync/adapter/offline-idb.ts'
+import {
+  boardCache,
+  CACHE_UNCHANGED_REFRESH_MS,
+  CACHE_WRITE_MIN_MS,
+  type CachedBoard,
+  type CacheRead,
+  type CacheWriteGate,
+  cacheDroppedAtWelcome,
+  cacheWriteGate,
+  purgeBoardCache,
+  RESUME_FROM_CACHE,
+} from '../sync/adapter/snapshot-cache.ts'
 import { LobbyEngineCore } from '../sync/core/engine.ts'
 import { bump } from '../sync/headless/scene.ts'
 import { connectQuery, createSocketTransport, type SocketTransport } from '../sync/transport/socket.ts'
@@ -90,6 +106,11 @@ export interface LobbyBoardSnapshot {
   readonly edit: EditState | null
   /** everyone in the room, this tab included */
   readonly roster: readonly RosterEntry[]
+  /**
+   * M6-2 (wave M): the canvas shows this device's last copy of the board (read-only: `readonly` and the viewer's
+   * interaction), until the first welcome replaces it; when that copy was saved. Null otherwise.
+   */
+  readonly cached: { readonly savedAt: number; readonly exact: boolean } | null
 }
 
 export interface NoticeSink {
@@ -116,6 +137,12 @@ export interface LobbyBoardSessionOptions {
   onAccessLost?(): void
   /** the session ended (401, NOT_AUTHENTICATED) */
   onSignedOut?(): void
+  /**
+   * M6 (wave M): this open's read of the board cache (adapter/snapshot-cache.ts; the page took it once). Its
+   * record, when it has answered by the time the canvas attaches, is painted read-only and (M6-3) resumed from;
+   * null or absent: none (a cold open, as before). The session writes the cache only when this is given.
+   */
+  readonly cache?: CacheRead | null
 }
 
 export const lobbyRoleOf = (r: TicketResponse['role'], readonly: boolean): LobbyRole =>
@@ -171,11 +198,50 @@ export class LobbyBoardSession {
   private lastEditing: string | null = null
   private rootEl: HTMLElement | null = null
   private contentSink: ContentSink | null = null
+  // ---- M6 (wave M): the board cache (adapter/snapshot-cache.ts) --------------------------------------------
+  /** the cached copy this session painted (until the first welcome replaces it) */
+  private cacheShown: CachedBoard | null = null
+  /** never read or written again in this session: `?nocache`, a guest, an access loss, a Sign out (any tab) */
+  private cacheOff: boolean
+  /**
+   * the W6 review: shut for good once this person signs out in this browser, in this tab or any other (a Sign out
+   * elsewhere must not be undone by this session's next write); null with no cache
+   */
+  private readonly cacheGate: CacheWriteGate | null
+  /** the first confirmed copy after a cached paint was checked against it (written only when it moved on) */
+  private cacheFirstChecked = false
+  /** the confirmed copy moved on since the last write */
+  private cacheDirty = false
+  private cacheWrittenAt = Number.NEGATIVE_INFINITY
+  private cacheTimer: ReturnType<typeof setTimeout> | null = null
+  private cacheIdle: (() => void) | null = null
+  /** what the last welcome said this person is (null: no welcome yet): only an account's copy is kept */
+  private welcomedGuest: boolean | null = null
+  private usageCounted = false
+  /** M6 (e2e, debug): what the open did with the cache */
+  readonly cacheInfo: {
+    painted: boolean
+    paintedAt: number | null
+    savedAt: number | null
+    resume: boolean
+    writes: number
+    /** the last write's main-thread time (ms; the record is built in the write's call), for the perf spec */
+    lastWriteMs: number | null
+  } = { painted: false, paintedAt: null, savedAt: null, resume: false, writes: 0, lastWriteMs: null }
 
   constructor(o: LobbyBoardSessionOptions) {
     this.o = o
     this.tab = tabId()
     this.ticketRole = o.first.role
+    this.cacheOff = !o.cache
+    this.cacheGate = o.cache
+      ? cacheWriteGate(o.first.user.id, { onSignedOut: () => this.cacheSignedOut() })
+      : null
+    if (this.cacheGate) {
+      const gate = this.cacheGate
+      this.detach.push(() => gate.close())
+      if (!gate.open()) this.cacheOff = true
+    }
     let storage: Storage | null = null
     try {
       storage = globalThis.localStorage ?? null
@@ -210,6 +276,8 @@ export class LobbyBoardSession {
       url: async () => `${await this.tickets.uri()}&${connectQuery(this.tab)}`,
       // L7: the ticket goes in the handshake's Sec-WebSocket-Protocol, never in the socket URL
       WebSocketImpl: ticketInProtocol(WebSocket) as never,
+      // M6-5: after a restart close, a tab with changes not yet acknowledged comes back sooner
+      hasUnsent: () => this.core.saveStatus.pending > 0,
     })
     this.store = createIdbOfflineStore({ boardId: o.boardId, uid: o.first.user.id, tab: this.tab })
     // guests keep no offline copy on the device (§2.5.6 privacy): memory only, once a welcome says so. The
@@ -249,6 +317,7 @@ export class LobbyBoardSession {
       notice: null,
       edit: null,
       roster: [],
+      cached: null,
     }
     this.input = new CanvasInput({
       role: () => (this.snap.readonly ? 'readonly' : 'editor'),
@@ -303,6 +372,18 @@ export class LobbyBoardSession {
       this.peers.subscribe(() => this.concern('presence')),
       this.core.on((e) => this.onCoreEvent(e)),
     )
+    // M6-1: the export policy turned off for this person: their copy goes (and none is written while it is off)
+    if (!this.cacheOff) {
+      const canExport = exportStateOf(o.boardId).canExport
+      // (already known off in this page: an earlier session of this board heard it)
+      if (canExport.get() === false) void purgeBoardCache(o.boardId, o.first.user.id)
+      this.detach.push(
+        subscribeValue(canExport, () => {
+          if (canExport.get() === false) void purgeBoardCache(o.boardId, o.first.user.id)
+          else this.scheduleCacheWrite()
+        }),
+      )
+    }
   }
 
   // ---- state for the page ------------------------------------------------------------------------------
@@ -396,6 +477,7 @@ export class LobbyBoardSession {
 
   private onCoreEvent(e: Parameters<Parameters<LobbyEngineCore['on']>[0]>[0]): void {
     if (e.kind === 'welcome') {
+      this.welcomedGuest = e.welcome.you.guest
       if (e.welcome.you.guest) {
         this.guest = true
         this.guestQueue.markGuest()
@@ -403,7 +485,14 @@ export class LobbyBoardSession {
           this.guestPurged = true
           void this.store?.purge()
         }
+        // M6-1: a name-only guest keeps no copy of the board on the device
+        this.dropCache()
       }
+      // M6-3: a cached copy of another epoch (the board was restored meanwhile) is dropped; the room's state is
+      // written in its place once the session has it
+      if (cacheDroppedAtWelcome(this.cacheShown, e.welcome, this.core.resumeOutcome))
+        void boardCache().purge(this.o.boardId, this.o.first.user.id)
+      this.cacheShown = null
       const readonly = e.welcome.readonly || this.o.archived
       // K.1 (follow-up 5): the catch-up behind this welcome is not applied yet; the room's `contracts` frame,
       // which follows it, marks the board ready (or this timer, for a room that sends none)
@@ -422,6 +511,7 @@ export class LobbyBoardSession {
         guest: this.guest,
         role: lobbyRoleOf(this.ticketRole, readonly),
         roster: [...this.core.roster().values()],
+        cached: null,
       })
       this.emit('docChanged', Object.keys(e.welcome.doc))
       this.concern('docKeys')
@@ -431,6 +521,8 @@ export class LobbyBoardSession {
         const reason = e.close.reason
         if (reason === 'FORBIDDEN' || reason === 'NOT_FOUND') {
           void this.store?.purge()
+          // M6-1: and this person's copy of the board
+          this.dropCache()
           // and a guest's page queue: it outlives this session now (E2), the device queues are purged here
           void this.guestQueue.clear()
           this.o.onAccessLost?.()
@@ -475,6 +567,16 @@ export class LobbyBoardSession {
       })
     } else if (e.kind === 'refit') {
       this.refit(e.id, e.dx, e.dy)
+    } else if (e.kind === 'confirmed') {
+      // the first welcome after a cached paint that brought nothing new (same epoch and clock: the stored copy is
+      // already this one): no write (the W6 review: each write is a whole-board clone, scan and hash)
+      if (this.cachedCopyCurrent()) {
+        this.cacheWrittenAt = Date.now()
+        return
+      }
+      // M6-1: the confirmed copy moved on: written in idle time, at most once a minute (and when the page goes)
+      this.cacheDirty = true
+      this.scheduleCacheWrite()
     } else if (e.kind === 'applied') {
       const api = this.api
       if (api) {
@@ -483,6 +585,166 @@ export class LobbyBoardSession {
       }
       this.boardInput?.invalidateHover()
     }
+  }
+
+  // ---- M6 (wave M): the board cache ------------------------------------------------------------------------
+
+  /**
+   * M6-2: before the core starts, this open's cached copy (when its read has answered) goes into the empty scene
+   * through the core (`startFromCache`: the adapter's apply, CaptureUpdateAction.NEVER), outside the undo
+   * history, and the canvas is read-only (the viewer's interaction) until the first welcome. The page asked for
+   * the board first: its GET /api/boards/:id answered 200 (this person's access is current). M6-3: an exact copy
+   * also seeds the resume (RESUME_FROM_CACHE).
+   */
+  private paintFromCache(undo: UndoController): boolean {
+    if (this.cacheOff || !this.cacheGate?.open()) return false
+    const rec = this.o.cache && !this.o.cache.cancelled ? this.o.cache.value : undefined
+    if (!rec) return false
+    // never for a name-only guest (none should exist: the session never writes one for them)
+    if (this.guest || knownUserKind(this.o.first.user.id) === 'guest') return false
+    // nor once this page knows the export policy is off for this person
+    if (exportStateOf(this.o.boardId).canExport.get() === false) return false
+    const resume = RESUME_FROM_CACHE && rec.exact
+    let painted = false
+    undo.outside(
+      () => {
+        painted = this.core.startFromCache(rec, { resume })
+      },
+      rec.elements.map((el) => [el.id, undefined] as const),
+    )
+    if (!painted) return false
+    this.cacheShown = rec
+    Object.assign(this.cacheInfo, {
+      painted: true,
+      paintedAt: typeof performance !== 'undefined' ? performance.now() : null,
+      savedAt: rec.savedAt,
+      resume,
+    })
+    try {
+      performance.mark('lobby.cachedPaint')
+    } catch {}
+    this.set({ cached: { savedAt: rec.savedAt, exact: rec.exact }, readonly: true, role: 'viewer' })
+    return true
+  }
+
+  /**
+   * Once, at the first confirmed copy after a cached paint (the welcome's, emitted before the welcome event): whether
+   * it is the painted copy's own point (same epoch and clock: the catch-up brought no row), saved recently enough
+   * (CACHE_UNCHANGED_REFRESH_MS) that its time stays honest for the offline copy.
+   */
+  private cachedCopyCurrent(): boolean {
+    const shown = this.cacheShown
+    if (!shown || this.cacheFirstChecked) return false
+    this.cacheFirstChecked = true
+    const c = this.core.cacheContent()
+    return (
+      !!c &&
+      c.epoch === shown.epoch &&
+      c.clock === shown.clock &&
+      Date.now() - shown.savedAt < CACHE_UNCHANGED_REFRESH_MS
+    )
+  }
+
+  /**
+   * The W6 review (M6-1): this person signed out in this browser (here or in another tab), so nothing of theirs is
+   * written again by this session; and its board's record goes, in case a write of this session got past the
+   * Sign out's purge (the purge has already deleted the rest).
+   */
+  private cacheSignedOut(): void {
+    this.cacheOff = true
+    this.cacheDirty = false
+    this.cancelCacheWrite()
+    void purgeBoardCache(this.o.boardId, this.o.first.user.id)
+  }
+
+  /** This person's copy of the board goes, and nothing is read or written again in this session. */
+  private dropCache(): void {
+    this.cacheOff = true
+    this.cacheDirty = false
+    this.cancelCacheWrite()
+    void purgeBoardCache(this.o.boardId, this.o.first.user.id)
+  }
+
+  /**
+   * Whether this person's copy may be kept now: an account (the last welcome said so), and the export policy
+   * allows them (the server's answer for them; until it is known, only an owner or an editor, whom no policy
+   * limits, as the export gates do).
+   */
+  private cacheWritable(): boolean {
+    if (this.cacheOff || this.guest || this.welcomedGuest !== false) return false
+    // a Sign out of this person in this browser since this session started (any tab, even one not heard of yet)
+    if (!this.cacheGate?.open()) return false
+    const can = exportStateOf(this.o.boardId).canExport.get()
+    if (can === false) return false
+    if (can === null) return this.ticketRole === 'owner' || this.ticketRole === 'editor'
+    return true
+  }
+
+  private cancelCacheWrite(): void {
+    if (this.cacheTimer !== null) clearTimeout(this.cacheTimer)
+    this.cacheTimer = null
+    this.cacheIdle?.()
+    this.cacheIdle = null
+  }
+
+  /** A write in idle time, at most once every CACHE_WRITE_MIN_MS. */
+  private scheduleCacheWrite(): void {
+    if (this.cacheOff || !this.cacheDirty || this.cacheTimer !== null || this.cacheIdle !== null) return
+    const wait = Math.max(0, this.cacheWrittenAt + CACHE_WRITE_MIN_MS - Date.now())
+    this.cacheTimer = setTimeout(() => {
+      this.cacheTimer = null
+      const w = globalThis as unknown as {
+        requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number
+        cancelIdleCallback?: (h: number) => void
+      }
+      if (typeof w.requestIdleCallback === 'function') {
+        const h = w.requestIdleCallback(
+          () => {
+            this.cacheIdle = null
+            this.writeCacheNow()
+          },
+          { timeout: 5_000 },
+        )
+        this.cacheIdle = () => w.cancelIdleCallback?.(h)
+      } else this.writeCacheNow()
+    }, wait)
+  }
+
+  /**
+   * Writes the confirmed copy now if it moved on and may be kept: the page's pagehide and dispose (the page goes:
+   * now, whatever the minute) and an idle write; a hidden page (`throttled`: the W6 review) only when the last
+   * write is CACHE_WRITE_MIN_MS old, else the idle write already scheduled does it.
+   */
+  private writeCacheNow(o: { readonly throttled?: boolean } = {}): boolean {
+    if (!this.cacheDirty || !this.cacheWritable()) return false
+    if (o.throttled && Date.now() - this.cacheWrittenAt < CACHE_WRITE_MIN_MS) return false
+    const content = this.core.cacheContent()
+    if (!content) return false
+    this.cacheDirty = false
+    this.cacheWrittenAt = Date.now()
+    this.cancelCacheWrite()
+    this.cacheInfo.writes++
+    const t0 = typeof performance !== 'undefined' ? performance.now() : 0
+    void boardCache().write(this.o.boardId, this.o.first.user.id, content, {
+      startedAt: this.cacheGate?.startedAt,
+    })
+    // (the write's main-thread part: the record is built in the call)
+    if (t0) this.cacheInfo.lastWriteMs = performance.now() - t0
+    return true
+  }
+
+  /** M6 (e2e, debug): writes this board's cache now, whatever the minute; resolves whether it was kept. */
+  async flushBoardCache(): Promise<boolean> {
+    if (!this.cacheWritable()) return false
+    const content = this.core.cacheContent()
+    if (!content) return false
+    this.cacheDirty = false
+    this.cacheWrittenAt = Date.now()
+    this.cancelCacheWrite()
+    this.cacheInfo.writes++
+    return boardCache().write(this.o.boardId, this.o.first.user.id, content, {
+      startedAt: this.cacheGate?.startedAt,
+    })
   }
 
   private afterMessage(m: ServerMessage): void {
@@ -569,6 +831,14 @@ export class LobbyBoardSession {
       },
     })
     this.undo = undo
+    // M6-2: this device's last copy, before anything reads the scene (the presence hub, the port, the files)
+    const painted = this.paintFromCache(undo)
+    // the copy is in the scene (or not wanted): the page's read lets go of it (a large board's second copy)
+    if (this.o.cache && this.o.cache.value !== undefined) this.o.cache.value = null
+    if (!this.usageCounted) {
+      this.usageCounted = true
+      countUsage(painted ? 'open.cached' : 'open.cold')
+    }
     const presence = new PresenceHub({
       core: this.core,
       overrides: board.overrides,
@@ -820,9 +1090,16 @@ export class LobbyBoardSession {
     // the offline queue is written when the page goes away or is hidden (a reload, a closed tab, a phone
     // switching apps), with any write Excalidraw has not reported yet (spike B part 3; WAVE-3 §6 asked the
     // board page for it): its pushes in flight then reach the next page as lost pushes, not as unsent edits
-    const persist = () => this.core.persistNow()
+    const persist = () => {
+      this.core.persistNow()
+      // M6-1: and the board cache, when it moved on since its last write
+      this.writeCacheNow()
+    }
     const onHidden = () => {
-      if (document.visibilityState === 'hidden') persist()
+      if (document.visibilityState !== 'hidden') return
+      this.core.persistNow()
+      // (a tab switch is not the page going: at most once a minute, as the idle writes; pagehide writes at once)
+      this.writeCacheNow({ throttled: true })
     }
     window.addEventListener('pagehide', persist)
     document.addEventListener('visibilitychange', onHidden)
@@ -1040,6 +1317,8 @@ export class LobbyBoardSession {
 
   dispose(): void {
     this.core.persistNow()
+    this.writeCacheNow()
+    this.cancelCacheWrite()
     for (const f of this.detach.splice(0)) f()
     this.peers.dispose()
     this.core.stop()
