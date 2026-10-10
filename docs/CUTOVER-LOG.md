@@ -333,3 +333,17 @@ on the sync disk (§6).
     - The empty-board card shows on a blank board.
     - Not live-tested: the AI actions. The board's AI privacy notice was not accepted on the owner's behalf; the K7 tests cover them with the fake OpenAI.
   - Cleanup: the guest link revoked, both test boards in Trash.
+- **2026-10-10 08:01-08:05Z, wave L deployed** (main `4e4a549`; 0 board connections in the 2 h before): api `dep-db4v182jnfac738l1rq0` (migration 0028_ai_actions), then sync `dep-db4v215ckfvc738c2rkg` (CONTRACTS_REV 12, the per-reader downgrade `frameForReader` and the writer-side keep), then web `dep-db4v35ad0e5s73djs8v0`.
+  - The O1/O2 sign-off is recorded in PROGRESS.md.
+  - After the deploy:
+    - 0 error/FATAL lines; maintenance off; backups `failuresTotal` 0 on 20 boards;
+    - render.yaml drift 0;
+    - live smoke 40 passed, 0 failed.
+  - Live check:
+    - A real 437b4e7 (rev-11) tab on the rev-12 sync stayed Saved and Live with no console errors, including while a rev-12 guest set a frame's minutes.
+    - The new web's minutes stepper persisted across reloads, and undo removed it as one step.
+    - Ctrl+K opens the command palette.
+    - Pieces lists the Flowchart, Wireframe, Org chart and Agency kits.
+    - Not live-tested: AI actions (the owner's AI notice was not accepted on his behalf); the laser between two signed-in tabs.
+  - Cleanup: the guest link revoked, the test board in Trash.
+  - Open follow-up: the Mermaid-paste prompt flake (`wave-l/mermaid-flake`).
