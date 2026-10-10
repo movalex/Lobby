@@ -78,8 +78,13 @@ describe('the board cache against the real sync server', () => {
     await a2.connect()
     await st.converged(b, [a2, bob])
     const frames = a2.received()
-    expect(frames.filter((f) => f.type === 'snapshot'), 'no snapshot frame').toHaveLength(0)
-    const welcome = frames.find((f) => f.type === 'welcome') as { reset: boolean; catchUp: unknown[] } | undefined
+    expect(
+      frames.filter((f) => f.type === 'snapshot'),
+      'no snapshot frame',
+    ).toHaveLength(0)
+    const welcome = frames.find((f) => f.type === 'welcome') as
+      | { reset: boolean; catchUp: unknown[] }
+      | undefined
     expect(welcome?.reset).toBe(false)
     expect(welcome?.catchUp.length).toBe(3)
     expect(a2.core.resumeOutcome).toBe('catch-up')
@@ -99,7 +104,9 @@ describe('the board cache against the real sync server', () => {
     const Timed = function (this: unknown, url: string) {
       opened.push({ at: performance.now(), tab: new URL(url).searchParams.get('sessionId') ?? '' })
       return new TicketWebSocket(url)
-    } as unknown as new (url: string) => WebSocketLike
+    } as unknown as new (
+      url: string,
+    ) => WebSocketLike
     const clients: LobbyHeadlessClient[] = []
     for (let i = 0; i < 20; i++) {
       const user = `u${i}`
@@ -146,7 +153,11 @@ describe('the board cache against the real sync server', () => {
     const firstBack = opened.slice(before).find((o) => o.tab === 't0')
     expect((firstBack?.at ?? Number.POSITIVE_INFINITY) - closedAt).toBeLessThanOrEqual(1000)
     await first.saved(20_000)
-    await st.converged(b, clients.map((c) => Object.assign(c, { hash: () => hashElements(c.core.elements().values()) })), 20_000)
+    await st.converged(
+      b,
+      clients.map((c) => Object.assign(c, { hash: () => hashElements(c.core.elements().values()) })),
+      20_000,
+    )
     expect((await st.stored(b, 'r2'))?.type).toBe('rectangle')
     await Promise.all(clients.map((c) => c.close().catch(() => {})))
   }, 120_000)
