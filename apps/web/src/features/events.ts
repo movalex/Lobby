@@ -48,13 +48,17 @@
 // so do the events that matter while nobody looks: 'access-lost' (the page leaves the board) and every event
 // ('access.changed' included) reach their listeners at once, whatever the visibility.
 //
+// The board-open read (wave M, M5-1; lib/open-state.ts): the stream reports every position it shows, each hello's
+// `eventsSeq` and each delivered event's `seq`, before any listener runs, so no feature's first fetch takes a part
+// older than what the page has heard of; and close() tells it the board page is gone.
+//
 // Listeners (K6-5, EVT-3): an event listener, a resync listener or an access-lost listener that throws is
 // its feature's problem. The other listeners still run, the connection stays open, and the failure is
 // logged once per listener by its kind and the error's class name (never the event's data or the error's
 // message). An event type a page has no listener for (a newer api's, e.g. 'cursor.chat' for a tab opened
 // before the web deploy that added cursor chat) is simply not delivered to anyone.
 
-import { noteBoardHello } from '../lib/open-state.ts'
+import { noteBoardEvent, noteBoardHello, noteBoardStreamClosed } from '../lib/open-state.ts'
 
 export interface BoardEventMessage {
   type: string
@@ -317,7 +321,8 @@ export function createBoardEvents(boardId: string, opts: BoardEventsOptions = {}
       const helloData = msg.data as { serverNow?: string; eventsSeq?: unknown } | null
       const serverNow = Date.parse(helloData?.serverNow ?? '')
       if (!Number.isNaN(serverNow)) offset = serverNow - Date.now()
-      // M5-1: where the board's events stand as this stream starts, before any feature takes its open-state part
+      // M5-1: where the board's events stand as this connection starts (every hello), before any feature takes its
+      // open-state part
       noteBoardHello(boardId, helloData?.eventsSeq)
       connected = true
       retryMs = FIRST_RETRY_MS
@@ -327,6 +332,10 @@ export function createBoardEvents(boardId: string, opts: BoardEventsOptions = {}
     } else if (msg.type === 'access-lost') {
       // The same for the page's access-lost handlers (K6-5): a throw here ended the direct connection.
       for (const l of [...lost]) safely('access-lost', l, l)
+    } else {
+      // M5-1: a delivered event's seq is the board's position after it (an open-state part older than it is not
+      // handed out); before its listeners run
+      noteBoardEvent(boardId, msg.seq)
     }
     emit(msg)
     return msg.type
@@ -706,6 +715,8 @@ export function createBoardEvents(boardId: string, opts: BoardEventsOptions = {}
       resync.clear()
       resyncDue.clear()
       lost.clear()
+      // M5-1: the board page is gone: what it left of the board-open read is not for the next one
+      noteBoardStreamClosed(boardId)
     },
   }
 }

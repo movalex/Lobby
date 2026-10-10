@@ -17,10 +17,11 @@
 // not (their 404s). A server error fails the whole answer (the web then makes the separate reads).
 //
 // Events (M5-1): the body also carries `eventsSeq`, where the board's events stood just before the parts were
-// read (apps/api/src/events/hub.ts boardPosition). The board's event stream says where they stand in its hello
-// (`data.eventsSeq`). Positions only move forward: when the answer's is the first hello's or later (same process),
-// no event was missed between the two and a part taken at that hello still holds; otherwise the feature reads its own
-// route (apps/web/src/lib/open-state.ts).
+// read (apps/api/src/events/hub.ts boardPosition). The board's event stream says where they stand in every hello
+// (`data.eventsSeq`), and each delivered event's `seq` is the board's position after it. Positions only move
+// forward: while the answer's is at or after every position the stream has shown (same process), it holds everything
+// the page has heard of, and a feature's first fetch may take its part; otherwise the feature reads its own route. A
+// part is for its feature's first fetch only (apps/web/src/lib/open-state.ts).
 //
 // Do not import values from ./index.ts here: index.ts re-exports this module.
 

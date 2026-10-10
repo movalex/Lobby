@@ -277,9 +277,10 @@ export class EventHub {
    * Wave M (M5-1): where the board's events stand now, as `<process>.<seq>`. It only moves forward: two equal
    * positions mean nothing was published to the board, and no access to it changed, between the two reads (an
    * audience-limited event moves it for everyone, which can only make a client refetch). GET
-   * /api/boards/:bid/open-state reads it before anything else, and the stream's hello carries it from the moment the
-   * stream is subscribed: when the open-state's position is the first hello's or later, the page missed no event in
-   * between (apps/web/src/lib/open-state.ts), so its answer still holds.
+   * /api/boards/:bid/open-state reads it before anything else, and every hello carries it from the moment its stream is
+   * subscribed (a delivered event's `seq` is the board's position after it): while the open-state's position is at or
+   * after every position the page's stream has shown, the page heard of no event the answer lacks
+   * (apps/web/src/lib/open-state.ts), so its answer still holds.
    */
   boardPosition(boardId: string): string {
     return `${this.epoch}.${this.positions.get(boardId) ?? 0}`
