@@ -64,6 +64,8 @@ interface Entry {
   readonly at: number
   readonly now: () => number
   answer: OpenStateBody | null
+  /** when the answer came (the deps' clock), null before */
+  receivedAt: number | null
   /** the request settled (answered or failed) */
   settled: boolean
   /** parts a feature has asked for, hit or miss: each is for its feature's first fetch only */
@@ -121,6 +123,7 @@ export function preloadOpenState(boardId: string, deps: OpenStateDeps = defaultD
     at: now,
     now: deps.now,
     answer: null,
+    receivedAt: null,
     settled: false,
     asked: new Set(),
     seen: null,
@@ -138,7 +141,10 @@ export function preloadOpenState(boardId: string, deps: OpenStateDeps = defaultD
   }
   p.then(
     (body) => {
-      if (entry === e) e.answer = body
+      if (entry === e) {
+        e.answer = body
+        e.receivedAt = deps.now()
+      }
       settle(e)
     },
     (err: unknown) => {
@@ -151,6 +157,18 @@ export function preloadOpenState(boardId: string, deps: OpenStateDeps = defaultD
       settle(e)
     },
   )
+}
+
+/**
+ * When the answer for `boardId` was asked for and when it came (the deps' clock: Date.now() in the app), or null
+ * without one. A part's `serverNow` was stamped in between, so a feature that keeps a server clock from its own
+ * requests (the workshop's countdowns) takes a sample from a part it was handed as from its own request (the wave M
+ * integration: a seeded workshop had none, and its timer fell back to the stream's one-way offset).
+ */
+export function openStateRoundTrip(boardId: string): { sentAt: number; receivedAt: number } | null {
+  const e = entry
+  if (!e || e.boardId !== boardId || !e.answer || e.receivedAt === null) return null
+  return { sentAt: e.at, receivedAt: e.receivedAt }
 }
 
 /** The part of `e`'s answer, if it still holds now (nothing about whether it was asked for). */

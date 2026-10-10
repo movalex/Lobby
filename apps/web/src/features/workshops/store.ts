@@ -43,7 +43,7 @@ import {
   WorkshopVoteState,
 } from '@draftroom/contracts'
 import type { z } from 'zod'
-import { takeOpenState } from '../../lib/open-state.ts'
+import { openStateRoundTrip, takeOpenState } from '../../lib/open-state.ts'
 import type { VoteSetupArgs } from './commands.ts'
 import { ReactionThrottle } from './reactions.ts'
 import { nextResultsNews, type ResultsCardDismissal } from './results-card.ts'
@@ -564,8 +564,14 @@ export class WorkshopStore {
         (await this.request('GET', `/api/boards/${encodeURIComponent(this.boardId)}/workshop`, {
           schema: WorkshopState,
         }))
-      // a clock sample from a body that was read earlier would be wrong by its age: only an answer to this request counts
-      if (!seeded) this.noteServerTime(s.serverNow, sentAt, this.nowMs()) // a valid clock sample even if superseded
+      // a clock sample from a body that was read earlier would be wrong by its age: only an answer to this request
+      // counts, or a seeded part with the board-open read's own round trip (its serverNow was stamped within it)
+      if (!seeded)
+        this.noteServerTime(s.serverNow, sentAt, this.nowMs()) // a valid clock sample even if superseded
+      else {
+        const trip = openStateRoundTrip(this.boardId)
+        if (trip) this.noteServerTime(s.serverNow, trip.sentAt, trip.receivedAt)
+      }
       if (seq < this.appliedSeq) return
       this.appliedSeq = seq
       const timer = this.newerTimer(s.timer) ? s.timer : (this.state?.timer ?? null)

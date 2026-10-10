@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const seeds = vi.hoisted(() => ({
   parts: {} as Record<string, unknown>,
   asked: [] as string[],
+  trip: null as { sentAt: number; receivedAt: number } | null,
 }))
 vi.mock('../../lib/open-state.ts', () => ({
   takeOpenState: (_board: string, part: string) => {
@@ -15,6 +16,7 @@ vi.mock('../../lib/open-state.ts', () => ({
     delete seeds.parts[part] // once, as the real one hands a part over
     return value
   },
+  openStateRoundTrip: () => seeds.trip,
 }))
 
 const { LOBBY_SIGNALS } = await import('../comments/cells.ts')
@@ -33,6 +35,7 @@ const events = {
 beforeEach(() => {
   seeds.parts = {}
   seeds.asked = []
+  seeds.trip = null
 })
 
 describe('the workshop store', () => {
@@ -93,6 +96,19 @@ describe('the workshop store', () => {
     await store.refresh()
     // an hour-old serverNow would put the clock an hour out; the stream's own offset (0) is what counts
     expect(store.serverOffsetMs()).toBe(0)
+  })
+
+  it('a seeded answer with the board-open read’s round trip is a clock sample, as an answer to its own request', async () => {
+    // the integration: without it a seeded workshop kept the stream's one-way offset, and pills disagreed by 2 s
+    const calls: string[] = []
+    const local = Date.parse(ISO)
+    seeds.parts.workshop = { ...workshop, serverNow: new Date(local + 2_000 + 150).toISOString() }
+    seeds.trip = { sentAt: local + 100, receivedAt: local + 200 }
+    const store = make(calls)
+    await store.refresh()
+    expect(calls).toEqual([])
+    // server time minus the round trip's midpoint (local + 150)
+    expect(store.serverOffsetMs()).toBe(2_000)
   })
 })
 
