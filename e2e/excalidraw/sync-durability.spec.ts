@@ -93,7 +93,10 @@ const offlineQueueIds = (page: Page, board: string): Promise<string[]> =>
           req.onsuccess = () => {
             const recs = req.result as { boardId: string; entries: { element: { id: string } }[] }[]
             resolve(
-              recs.filter((r) => r.boardId === boardId).flatMap((r) => r.entries.map((e) => e.element.id)),
+              recs
+                // this web's form (`q2:<board>`, offline-idb.ts queueBoard) or the rev-11 web's
+                .filter((r) => r.boardId === boardId || r.boardId === `q2:${boardId}`)
+                .flatMap((r) => r.entries.map((e) => e.element.id)),
             )
           }
         }

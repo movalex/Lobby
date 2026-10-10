@@ -19,9 +19,11 @@
 //
 // How to build that dist: ./l-compat-kit.ts. Without it every test here is skipped, saying so.
 import type { Page } from '@playwright/test'
+import { attachRelay, cut } from '../spike-b/support/relay.ts'
 import { type FakeOpenAi, startFakeOpenAi } from '../tests/support/ai.ts'
 import {
   type CanvasElement,
+  canvasCall,
   createItem,
   createNote,
   expectSaved,
@@ -37,6 +39,7 @@ import {
 } from '../tests/support/canvas.ts'
 import { serverSnapshot, storedElement } from '../tests/support/excalidraw.ts'
 import { openHistory } from '../tests/support/history.ts'
+import { WEB_URL } from '../tests/support/ports.ts'
 import {
   AI_API_ENV_3H,
   aiMenu,
@@ -310,9 +313,15 @@ async function queuedGroups(page: Page, board: string): Promise<Record<string, s
               boardId: string
               entries: { element: { id: string }; groups: string[]; rev?: number }[]
             }
+            // and the record's form: this web's (`q2:<board>`, offline-idb.ts queueBoard) or the rev-11 web's
             for (const r of all.result as Rec[])
-              if (r.boardId === board)
-                for (const e of r.entries) out[e.element.id] = [...e.groups, `rev:${e.rev ?? 'none'}`]
+              if (r.boardId === board || r.boardId === `q2:${board}`)
+                for (const e of r.entries)
+                  out[e.element.id] = [
+                    ...e.groups,
+                    `rev:${e.rev ?? 'none'}`,
+                    `form:${r.boardId === board ? 'rev11' : 'q2'}`,
+                  ]
             resolve(out)
           }
         }
@@ -363,8 +372,8 @@ test('L-compat 1b (the offline queue across the deploy): a reorder the 437b4e7 t
     // its queue, as 437b4e7 writes it: the moved frames' `c:present`, and no writer revision
     await expect
       .poll(async () => (await queuedGroups(old.page, board))['cq-f3'] ?? [], { timeout: 10_000 })
-      .toEqual(['c:present', 'rev:none'])
-    expect((await queuedGroups(old.page, board))['cq-f1']).toEqual(['c:present', 'rev:none'])
+      .toEqual(['c:present', 'rev:none', 'form:rev11'])
+    expect((await queuedGroups(old.page, board))['cq-f1']).toEqual(['c:present', 'rev:none', 'form:rev11'])
     expect(await stored('cq-f3')).toEqual({ index: 2, mins: 5 })
   })
 
@@ -395,6 +404,103 @@ test('L-compat 1b (the offline queue across the deploy): a reorder the 437b4e7 t
       .toBe(0)
     await expect(row(a.page, 'cq-f3').getByTestId('frame-mins')).toContainText('5 min')
     expect(await queuedGroups(next, board)).toEqual({})
+  })
+})
+
+/** A page of the previous build's context that gets this tree's web (the preview server), the context's routes passed by. */
+async function thisWebPage(context: OldTab['context']): Promise<Page> {
+  const page = await context.newPage()
+  const origin = new URL(WEB_URL).origin
+  // a page's route comes before the context's; `continue` sends the request to the network, not to that route
+  await page.route(
+    (url) => url.origin === origin && !/^\/(?:api|files|connect)(?:\/|$)/.test(url.pathname),
+    (r) => r.continue(),
+  )
+  return page
+}
+
+test('L-compat 1c (the offline queue across the deploy, the other way): a removal of the minutes this web queued offline is not taken over by a 437b4e7 page; this web sends it', async ({
+  join,
+  browser,
+  board,
+  users,
+  stack,
+  oldTabs,
+}) => {
+  // Wave L compat refix, round 2: bob has a 437b4e7 tab and a tab of this web. The 437b4e7 store adopted every
+  // free-lock queue of the board and user (whatever its revision) and sent it on a socket that names no revision,
+  // so the room kept the stored minutes: his removal of them, queued offline in this web, was undone. This web's
+  // queue records are now in a form that store never matches.
+  test.setTimeout(180_000)
+  const { a, old } = await pair(join, browser, board, users, oldTabs)
+  await seed(a.page, {
+    frames: [
+      { id: 'cr-f1', x: 0, y: 0, w: 800, h: 450, name: 'Warm-up' },
+      { id: 'cr-f2', x: 1000, y: 0, w: 800, h: 450, name: 'Ideas' },
+    ],
+  })
+  await a.page.getByTestId('dock-tab-frames').click()
+  await expect(a.page.getByTestId('frame-outline')).toBeVisible()
+  await row(a.page, 'cr-f1').getByTestId('frame-mins-add').click()
+  await a.page.getByRole('button', { name: 'Move Warm-up down' }).click()
+  await expectSaved(a.page)
+  await expectOldTabHolds(stack, board, old, [a.page])
+  const stored = async (id: string) => present((await storedElement(stack, board, id)) as CanvasElement)
+  expect(await stored('cr-f1')).toEqual({ index: 1, mins: 5 })
+
+  await test.step('bob, in a tab of this web, is offline and lowers Warm-up to No time planned; he closes the tab', async () => {
+    const t2 = await thisWebPage(old.context)
+    const urls: string[] = []
+    t2.on('websocket', (ws) => urls.push(ws.url()))
+    await attachRelay(t2)
+    await t2.goto(`/b/${board}`)
+    await waitForCanvas(t2)
+    await expectSaved(t2)
+    expect(urls.length).toBeGreaterThan(0)
+    for (const u of urls) expect(new URL(u).searchParams.get('rev')).toBe('12')
+    await t2.getByTestId('dock-tab-frames').click()
+    await expect(row(t2, 'cr-f1').getByTestId('frame-mins')).toContainText('5 min')
+    await cut(t2, { mode: 'hold' })
+    await expect.poll(async () => (await saveState(t2)).state, { timeout: 15_000 }).toBe('offline')
+    for (let i = 0; i < 10 && !(await row(t2, 'cr-f1').getByTestId('frame-mins-add').isVisible()); i++)
+      await row(t2, 'cr-f1').getByTestId('frame-mins-down').click()
+    await expect(row(t2, 'cr-f1').getByTestId('frame-mins-add')).toBeVisible()
+    // queued with this web's revision, in this web's form
+    await expect
+      .poll(async () => (await queuedGroups(t2, board))['cr-f1'] ?? [], { timeout: 10_000 })
+      .toEqual(['c:present', 'rev:12', 'form:q2'])
+    await t2.close()
+    expect(await stored('cr-f1')).toEqual({ index: 1, mins: 5 })
+  })
+
+  await test.step('he opens the board in a 437b4e7 tab: it takes nothing of that queue, which waits', async () => {
+    const t1 = await old.context.newPage()
+    const urls: string[] = []
+    t1.on('websocket', (ws) => urls.push(ws.url()))
+    await t1.goto(`/b/${board}`)
+    await waitForCanvas(t1)
+    await expect.poll(async () => (await canvasCall(t1, 'me'))?.uid).toBe(old.id)
+    await expectSaved(t1)
+    expect(urls.length).toBeGreaterThan(0)
+    for (const u of urls) expect(new URL(u).searchParams.has('rev')).toBe(false)
+    // before the fix it adopted the queue, sent {index: 1} on its rev-11 socket (the room kept the minutes) and
+    // cleared the record: the removal was gone for good, with Saved showing
+    await t1.waitForTimeout(1_000)
+    expect(await queuedGroups(t1, board)).toEqual({ 'cr-f1': ['c:present', 'rev:12', 'form:q2'] })
+    expect(await stored('cr-f1')).toEqual({ index: 1, mins: 5 })
+    await t1.close()
+  })
+
+  await test.step('he opens the board on this web again: it takes its queue over and the minutes are cleared', async () => {
+    const t3 = await thisWebPage(old.context)
+    await t3.goto(`/b/${board}`)
+    await waitForCanvas(t3)
+    await expect.poll(async () => await stored('cr-f1'), { timeout: 20_000 }).toEqual({ index: 1 })
+    await expectSaved(t3)
+    expect((await saveState(t3)).lastReject).toBeNull()
+    expect(await queuedGroups(t3, board)).toEqual({})
+    await expect(row(a.page, 'cr-f1').getByTestId('frame-mins-add')).toBeVisible()
+    await expectOldTabHolds(stack, board, old, [a.page, t3])
   })
 })
 

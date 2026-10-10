@@ -3,6 +3,7 @@
 // edits stayed readable in the browser (a shared machine). An expired or revoked session (a 401) keeps the
 // queue: unsent work, held per user for that user's next session (wave A follow-up before deploy).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import * as Old from '../testing/rev11-437b4e7/offline-idb.ts'
 import type { OfflineEntry } from '../types.ts'
 import { guestOfflineQueue } from './offline-guest.ts'
 import { createIdbOfflineStore, createSignOutPurge, purgeOfflineQueuesOf } from './offline-idb.ts'
@@ -341,5 +342,88 @@ describe('the offline queue across sessions (CRIT-18: an expiry keeps unsent edi
     expect(idb.records.size).toBe(2)
     // usr_a's next session on this browser gets both back
     expect((await queueOf('usr_a')).sort()).toEqual(['a-closed-tab', 'a-same-tab'])
+  })
+})
+
+// Wave L compat refix, round 2: a tab of the web deployed before wave L (437b4e7, CONTRACTS_REV 11; its store,
+// frozen in ../testing/rev11-437b4e7/offline-idb.ts) stays open across the deploy, possibly for days, on the same
+// IndexedDB as this web's tabs. Its `load` adopted every free-lock queue of the board and user and sent it on a
+// socket that names no revision, so a rev-12 page's queued removal of a frame's planned minutes was completed as
+// a rev-11 write and undone (or re-saved without its `rev` while it stayed offline). This web's records are in a
+// form that store never matches; this web still takes the older form over; both web's Sign out delete both.
+describe('the offline queue across the wave L deploy (a 437b4e7 tab beside this web, one IndexedDB)', () => {
+  let idb: ReturnType<typeof memoryIndexedDb>
+  beforeEach(() => {
+    idb = memoryIndexedDb()
+    vi.stubGlobal('indexedDB', idb.factory)
+    // Web Locks with every other tab's lock free (its tab is closed): an adopted queue's record is deleted
+    vi.stubGlobal('navigator', {
+      locks: { request: async (_n: string, _o: unknown, cb: (l: object) => unknown) => cb({}) },
+    })
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  const rev12 = (id: string): OfflineEntry => ({ ...entry(id), groups: ['c:present'], rev: 12 })
+  const ids = (entries: readonly OfflineEntry[]) => entries.map((e) => e.element.id).sort()
+
+  it("a queue this web left is never adopted by a 437b4e7 page; that page's own Sign out still deletes it", async () => {
+    const mine = createIdbOfflineStore({ boardId: 'b-1', uid: 'usr_a', tab: 't-new' })
+    await mine.load()
+    await mine.save([rev12('f1')])
+    mine.release()
+    // the 437b4e7 tab opens the board: it takes nothing of it (before, it adopted f1 and cleared the record)
+    const old = Old.createIdbOfflineStore({ boardId: 'b-1', uid: 'usr_a', tab: 't-old' })
+    expect(await old.load()).toEqual([])
+    old.release()
+    expect([...idb.records.keys()]).toEqual(['q2:b-1|usr_a|t-new'])
+    // this web's next page of the board takes it over, with its revision
+    const next = createIdbOfflineStore({ boardId: 'b-1', uid: 'usr_a', tab: 't-next' })
+    const taken = await next.load()
+    expect(taken.map((e) => [e.element.id, e.rev])).toEqual([['f1', 12]])
+    next.release()
+    // a Sign out in the 437b4e7 tab (CRIT-18: by user) deletes this web's form too
+    expect(await Old.purgeOfflineQueuesOf('usr_a', idb.factory as unknown as IDBFactory)).toBe(1)
+    expect(idb.records.size).toBe(0)
+  })
+
+  it("this web takes the 437b4e7 form over (a closed tab's, and this tab's own from before the reload)", async () => {
+    for (const [tab, id] of [
+      ['t0', 'closed-tab'],
+      ['t1', 'same-tab'],
+    ] as const) {
+      // saved by the 437b4e7 page of each tab (no load here: one would adopt the other's)
+      const old = Old.createIdbOfflineStore({ boardId: 'b-1', uid: 'usr_a', tab })
+      await old.save([entry(id)])
+      old.release()
+    }
+    const other = Old.createIdbOfflineStore({ boardId: 'b-2', uid: 'usr_a', tab: 't1' })
+    await other.save([entry('other-board')])
+    other.release()
+    const store = createIdbOfflineStore({ boardId: 'b-1', uid: 'usr_a', tab: 't1' })
+    expect(ids(await store.load())).toEqual(['closed-tab', 'same-tab'])
+    // kept in this web's form only (the older records gone), the other board's untouched
+    expect([...idb.records.keys()].sort()).toEqual(['b-2|usr_a|t1', 'q2:b-1|usr_a|t1'])
+    await store.clear()
+    store.release()
+    expect([...idb.records.keys()]).toEqual(['b-2|usr_a|t1'])
+  })
+
+  it("purge (a FORBIDDEN close) deletes this board's queues of the user in both forms, nothing else", async () => {
+    const old = Old.createIdbOfflineStore({ boardId: 'b-1', uid: 'usr_a', tab: 't0' })
+    await old.load()
+    await old.save([entry('r0')])
+    old.release()
+    const left = createIdbOfflineStore({ boardId: 'b-1', uid: 'usr_a', tab: 't9' })
+    await left.load()
+    await left.save([rev12('r9')])
+    left.release()
+    const elsewhere = createIdbOfflineStore({ boardId: 'b-2', uid: 'usr_a', tab: 't9' })
+    await elsewhere.load()
+    await elsewhere.save([rev12('r2')])
+    elsewhere.release()
+    const store = createIdbOfflineStore({ boardId: 'b-1', uid: 'usr_a', tab: 't1' })
+    await store.purge()
+    store.release()
+    expect([...idb.records.keys()]).toEqual(['q2:b-2|usr_a|t9'])
   })
 })

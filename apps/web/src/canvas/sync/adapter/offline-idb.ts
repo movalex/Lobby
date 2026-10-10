@@ -15,6 +15,15 @@
  *    sign-out in another tab) purges nothing: the queue is keyed by user, so only the same user's next
  *    session on this browser loads (and replays) it, never another account's (`load` and
  *    `adoptOthers` match `uid`);
+ *  - CONTRACTS_REV 12 (wave L compat refix, round 2): this web's records are in their own form (`queueBoard`:
+ *    `boardId` is `q2:<board>`, the key `q2:<board>|<uid>|<tab>`), which the rev-11 web (437b4e7, open in old
+ *    tabs across the deploy, possibly for days) never adopts: its `adoptOthers` matches `boardId` to the
+ *    board, adopts whatever it finds and sends it on a socket that names no revision, so a rev-12 value (a
+ *    removal of a frame's planned minutes) was completed as a rev-11 one and undone, with Saved showing. This
+ *    web still loads, adopts and clears the older form (its own tab's from before the reload too): those are
+ *    rev-11 queues, which the core completes (OfflineEntry.rev absent). Its Sign out (`purgeOfflineQueuesOf`,
+ *    by user) deletes both forms, and so does the rev-11 web's own; the rev-11 web's `purge` (a FORBIDDEN
+ *    close) does not reach this form (a revoked user's own unsent edits, which the room refuses when sent);
  *  - a `save` or `clear` starts its transaction in the call itself once the database is open (and asks
  *    it to commit at once), so a write the core starts right before a reload or in `pagehide` is not
  *    left waiting for a later task (spike B part 3: the offline window); it resolves once committed.
@@ -27,6 +36,9 @@ import { purgeGuestQueuesOf } from './offline-guest.ts'
 
 const DB = 'lobby-offline'
 const STORE = 'queues'
+
+/** This web's form of a record's `boardId` (see the header): never the board id the rev-11 web matches. */
+export const queueBoard = (boardId: string): string => `q2:${boardId}`
 
 interface QueueRecord {
   key: string
@@ -91,7 +103,11 @@ export interface IdbOfflineStore extends OfflineQueueStore {
 }
 
 export function createIdbOfflineStore(o: { boardId: string; uid: string; tab: string }): IdbOfflineStore {
-  const key = `${o.boardId}|${o.uid}|${o.tab}`
+  const board = queueBoard(o.boardId)
+  const key = `${board}|${o.uid}|${o.tab}`
+  // this tab's queue in the rev-11 web's form: written before the reload that brought this web
+  const olderKey = `${o.boardId}|${o.uid}|${o.tab}`
+  const ofBoard = (r: QueueRecord) => (r.boardId === board || r.boardId === o.boardId) && r.uid === o.uid
   let adopted = 0
   // `release()` may come before the lock is granted (React StrictMode disposes a page's first session in
   // the same task that made it; LEAD-1): the grant then gives the lock up at once, instead of a disposed
@@ -125,7 +141,7 @@ export function createIdbOfflineStore(o: { boardId: string; uid: string; tab: st
 
   const adoptOthers = async (db: IDBDatabase): Promise<OfflineEntry[]> => {
     const all = (await tx(db, 'readonly', (s) => s.getAll())) as QueueRecord[]
-    const mine = all.filter((r) => r.boardId === o.boardId && r.uid === o.uid && r.tab !== o.tab)
+    const mine = all.filter((r) => ofBoard(r) && r.tab !== o.tab)
     const out: OfflineEntry[] = []
     for (const rec of mine) {
       const free =
@@ -151,20 +167,22 @@ export function createIdbOfflineStore(o: { boardId: string; uid: string; tab: st
       await held
       const db = await dbp
       const own = ((await tx(db, 'readonly', (s) => s.get(key))) as QueueRecord | undefined)?.entries ?? []
+      const older = (await tx(db, 'readonly', (s) => s.get(olderKey))) as QueueRecord | undefined
       const others = await adoptOthers(db)
       // one entry per element (and one `#doc` entry with every tab's keys): core/offline-merge.ts
-      const entries = mergeOfflineQueues([others, own])
-      if (others.length)
-        await tx(db, 'readwrite', (s) =>
-          s.put({ key, boardId: o.boardId, uid: o.uid, tab: o.tab, entries, savedAt: Date.now() }),
-        )
+      const entries = mergeOfflineQueues([others, older?.entries ?? [], own])
+      if (others.length || older)
+        await tx(db, 'readwrite', (s) => {
+          if (older) s.delete(olderKey)
+          return s.put({ key, boardId: board, uid: o.uid, tab: o.tab, entries, savedAt: Date.now() })
+        })
       return entries
     },
     async save(entries) {
       await write((s) =>
         s.put({
           key,
-          boardId: o.boardId,
+          boardId: board,
           uid: o.uid,
           tab: o.tab,
           entries: [...entries],
@@ -178,8 +196,7 @@ export function createIdbOfflineStore(o: { boardId: string; uid: string; tab: st
     async purge() {
       const db = await dbp
       const all = (await tx(db, 'readonly', (s) => s.getAll())) as QueueRecord[]
-      for (const r of all)
-        if (r.boardId === o.boardId && r.uid === o.uid) await tx(db, 'readwrite', (s) => s.delete(r.key))
+      for (const r of all) if (ofBoard(r)) await tx(db, 'readwrite', (s) => s.delete(r.key))
     },
     release() {
       released = true
