@@ -19,6 +19,7 @@ import type { ElementsMap, ExcalidrawElement } from '@excalidraw/element/types'
 import type { BinaryFiles } from '@excalidraw/excalidraw/types'
 import { AssetMetaStore } from '../../assets/meta-store.ts'
 import type { Bounds } from '../api/lobby-canvas.ts'
+import { CANVAS_DARK, CANVAS_LIGHT } from '../engine/theme.ts'
 import { ImageLoader } from '../files/loader.ts'
 import { FileUrlResolver } from '../files/resolve.ts'
 import {
@@ -163,10 +164,10 @@ export async function mountCheckpointPreview(
       elements,
       files,
       dark,
-      // the board's own background; the dark theme is the engine's export filter over it, so only the
-      // view's fill around the bitmaps changes
-      background: '#ffffff',
-      fill: dark ? '#121212' : '#ffffff',
+      // one background for the whole view (wave M, M2-4): the dark bitmap's page is the live canvas's own dark
+      // (Lobby's dark table draws CANVAS_LIGHT as CANVAS_DARK), and the view's fill around it is the same colour
+      background: dark ? CANVAS_LIGHT : '#ffffff',
+      fill: dark ? CANVAS_DARK : '#ffffff',
     })
     await preview.init()
     if (input.signal?.aborted) {
