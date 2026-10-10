@@ -242,6 +242,25 @@ describe('a rev-12 tab in a rev-12 room (L6-1): the laser goes out, others’ la
     r.dispose()
   })
 
+  // M2-6: the hub spaces laser messages by 50 ms; one a few ms short of its slot goes at once (the core counts whole
+  // milliseconds, the hub fractions: a pointer sample a hair early must not wait for a ~15 ms timer)
+  it('a laser message less than 5 ms short of its slot goes at once; one 10 ms short waits for the slot', () => {
+    const r = rev12()
+    r.setTool('laser')
+    move(r.hub, 10, 'down')
+    const n = r.c.sent.length
+    r.tick(46) // 4 ms short of the slot
+    move(r.hub, 20, 'down')
+    expect(r.c.sent.length).toBe(n + 1)
+    r.tick(40) // 10 ms short of the next slot (the last one went at +46: its slot is +96)
+    move(r.hub, 30, 'down')
+    expect(r.c.sent.length).toBe(n + 1)
+    r.tick(10)
+    expect(r.c.sent.length).toBe(n + 2)
+    expect(r.c.sent.at(-1)).toMatchObject({ t: 'laser', pointer: { x: 30, y: 1 } })
+    r.dispose()
+  })
+
   it('a press with the selection tool never carries t: laser or a trail (what an anonymous vote relies on)', () => {
     const r = rev12()
     r.setTool('select')

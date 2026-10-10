@@ -102,6 +102,13 @@ const RENEW_MS = 2_000
 const MAX_PENDING_TRAIL = 64
 /** The least time between two presence messages the hub hands the core while the laser is pressed (20 Hz). */
 export const LASER_SEND_INTERVAL_MS = 1000 / PRESENCE_IN_HZ
+/**
+ * A message this close to its slot (ms) goes at once. The core counts in whole milliseconds (`Date.now()`), the hub in
+ * fractions (`performance.now()`), and a pointer sample that comes a hair before its 50 ms would otherwise wait for a timer
+ * (about 15 ms on Windows) to cover a gap the core does not see. The core's own cap still holds the message for what is
+ * left of it; the hub's next one is more than the core's window away, so the core never has two to choose between.
+ */
+export const LASER_GATE_SLACK_MS = 5
 const round1 = (v: number) => Math.round(v * 10) / 10
 /** A zoom on the wire: 3 decimals (0.1 to 30 in Excalidraw). */
 const roundZoom = (z: number) => Math.round(z * 1000) / 1000
@@ -477,7 +484,7 @@ export class PresenceHub {
     // when it goes), instead of being handed to a core that would hold it and let a newer message replace it.
     if (drag === undefined && this.laserDown) {
       const wait = this.lastHandover + LASER_SEND_INTERVAL_MS - this.clock()
-      if (wait > 0) {
+      if (wait > LASER_GATE_SLACK_MS) {
         if (this.parkTimer === null) {
           const setT = this.o.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms))
           this.parkTimer = setT(() => {
