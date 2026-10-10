@@ -355,6 +355,8 @@ export class LobbyBoardSession {
     // M6-1: the export policy turned off for this person: their copy goes (and none is written while it is off)
     if (!this.cacheOff) {
       const canExport = exportStateOf(o.boardId).canExport
+      // (already known off in this page: an earlier session of this board heard it)
+      if (canExport.get() === false) void purgeBoardCache(o.boardId, o.first.user.id)
       this.detach.push(
         subscribeValue(canExport, () => {
           if (canExport.get() === false) void purgeBoardCache(o.boardId, o.first.user.id)
@@ -574,6 +576,8 @@ export class LobbyBoardSession {
     if (!rec) return false
     // never for a name-only guest (none should exist: the session never writes one for them)
     if (this.guest || knownUserKind(this.o.first.user.id) === 'guest') return false
+    // nor once this page knows the export policy is off for this person
+    if (exportStateOf(this.o.boardId).canExport.get() === false) return false
     const resume = RESUME_FROM_CACHE && rec.exact
     let painted = false
     undo.outside(
