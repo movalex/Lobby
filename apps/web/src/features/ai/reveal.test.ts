@@ -32,9 +32,11 @@ describe('safeViewRect (M4-4)', () => {
     expect(safe).toEqual({ x: 44, y: 48, width: 1212 - 44, height: 840 - 48 })
   })
 
-  it('leaves the selection bar out (it moves with the selection), and what lies outside the view', () => {
+  it('leaves out the selection bar and the flow handles (they move with the selection), what lies in the middle of the view and what lies outside it', () => {
     const safe = safeViewRect(VIEW, [
-      { id: OBSTACLE_IDS.selectionBar, kind: 'bar', rect: { x: 400, y: 400, width: 500, height: 36 } },
+      { id: OBSTACLE_IDS.selectionBar, kind: 'bar', rect: { x: 400, y: 840, width: 500, height: 36 } },
+      { id: OBSTACLE_IDS.flowHandles, kind: 'handles', rect: { x: 600, y: 300, width: 300, height: 240 } },
+      { x: 600, y: 300, width: 300, height: 240 },
       { x: 2000, y: 0, width: 100, height: 100 },
     ])
     expect(safe).toEqual(VIEW)

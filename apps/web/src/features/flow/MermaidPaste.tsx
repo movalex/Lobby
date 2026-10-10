@@ -146,7 +146,7 @@ export function MermaidPastePrompt({ ctx }: { ctx: CanvasFeatureContext }) {
       style={
         pos
           ? { left: pos.left, top: pos.top, transform: 'none', maxHeight: pos.maxHeight, overflowY: 'auto' }
-          : { left: 0, top: 0, transform: 'none', visibility: 'hidden' }
+          : { left: 0, top: 0, transform: 'none', opacity: 0, pointerEvents: 'none' }
       }
       onKeyDown={(e) => {
         if (e.key !== 'Escape') return

@@ -371,11 +371,18 @@ function PreviewPanel({
     if (!el) return
     const stop = (e: Event) => e.stopPropagation()
     for (const t of ['pointerdown', 'mousedown', 'keyup', 'wheel'] as const) el.addEventListener(t, stop)
-    el.querySelector<HTMLElement>('[data-testid="ai-preview-apply"]')?.focus({ preventScroll: true })
     return () => {
       for (const t of ['pointerdown', 'mousedown', 'keyup', 'wheel'] as const) el.removeEventListener(t, stop)
     }
   }, [panel])
+  // Apply has the keyboard once the panel is placed (a hidden element takes no focus)
+  const placed = pos !== null
+  useEffect(() => {
+    if (placed)
+      panel.current
+        ?.querySelector<HTMLElement>('[data-testid="ai-preview-apply"]')
+        ?.focus({ preventScroll: true })
+  }, [panel, placed])
   return (
     <section
       ref={panel}

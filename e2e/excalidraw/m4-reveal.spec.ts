@@ -5,8 +5,8 @@
 //    The camera move writes nothing: alice pushes only the diagram, and bob, who watches, pushes nothing and keeps
 //    his own view.
 //  - A Piece inserted with Enter while a 2x2 frame fills the middle of the view lands outside it (frameId null).
-//  - After "Add as Recap frame" the recap panel folds to its header, "Add again" is no longer the primary button, and
-//    the frame is unobstructed: a press at its middle lands on the canvas.
+//  - After "Add as Recap frame" the recap panel folds to its header and its follow-ups (Copy, PDF, Add again), "Add
+//    again" is no longer the primary button, and the frame is unobstructed: a press at its middle lands on the canvas.
 //
 //   E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/m4-reveal.spec.ts --project=chromium --workers=1
 import type { Page } from '@playwright/test'
@@ -219,10 +219,13 @@ test('M4-4: after Add as Recap frame the panel folds, Add again is secondary, an
   await panel.getByTestId('recap-add').click()
   await expectSaved(a.page)
 
-  await test.step('the panel folds to its header; opened again, Add again is the lesser button', async () => {
+  await test.step('the panel folds to its header and its follow-ups; Add again is the lesser button', async () => {
     await expect(panel).toHaveAttribute('data-collapsed', '')
-    await expect(panel.getByTestId('recap-add')).toHaveCount(0)
     await expect(panel.getByTestId('recap-added')).toBeVisible()
+    await expect(panel.locator('.dr-ai-recap__body')).toHaveCount(0)
+    const again = panel.getByTestId('recap-add')
+    await expect(again).toHaveText('Add again')
+    await expect(again).not.toHaveClass(/dr-btn--primary/)
   })
 
   await test.step('the frame is unobstructed: a press at its middle lands on the canvas', async () => {
@@ -236,11 +239,10 @@ test('M4-4: after Add as Recap frame the panel folds, Add again is secondary, an
     expect(hit, `a press at the frame's middle lands on ${hit}`).toMatch(/^canvas/)
   })
 
-  await test.step('Show opens it again with Add again as a secondary button', async () => {
+  await test.step('Show opens the whole recap again, Add again still the lesser button', async () => {
     await panel.getByTestId('recap-expand').click()
     await expect(panel).not.toHaveAttribute('data-collapsed', '')
-    const again = panel.getByTestId('recap-add')
-    await expect(again).toHaveText('Add again')
-    await expect(again).not.toHaveClass(/dr-btn--primary/)
+    await expect(panel.locator('.dr-ai-recap__body')).toBeVisible()
+    await expect(panel.getByTestId('recap-add')).not.toHaveClass(/dr-btn--primary/)
   })
 })

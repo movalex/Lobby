@@ -155,11 +155,18 @@ export function topCentreAnchor(canvas: { container(): HTMLElement | null }): Re
 /** Kept between a revealed result and the safe view's edges (client px). */
 export const SAFE_INSET = 24
 
+/** How near a view edge a piece of chrome must sit to count as along it (client px). */
+export const EDGE_REACH = 64
+
+/** Chrome that follows the selection (it moves with the camera): never a reason to move the camera. */
+const FOLLOWS_SELECTION: ReadonlySet<string> = new Set([OBSTACLE_IDS.selectionBar, OBSTACLE_IDS.flowHandles])
+
 /**
  * The part of the view (`view`, client px) a new result can be seen in: the view less the chrome along its edges.
- * Each obstacle that touches the view takes the edge strip it covers least of (the style panel at the top right takes
- * its width off the right, the bottom toolbar its height off the bottom), so what is left is one rectangle. The
- * selection bar is left out: it follows the selection, and moves with the camera. Pure.
+ * Each obstacle along an edge (within EDGE_REACH of it) takes the edge strip it covers least of (the style panel at
+ * the top right takes its width off the right, the bottom toolbar its height off the bottom), so what is left is one
+ * rectangle. The selection bar and the flow + handles are left out: they follow the selection, and move with the
+ * camera; so is anything out in the middle of the view. Pure.
  */
 export function safeViewRect(view: Rect, obstacles: readonly (Rect | ObstacleRect)[]): Rect {
   let left = view.x
@@ -167,8 +174,14 @@ export function safeViewRect(view: Rect, obstacles: readonly (Rect | ObstacleRec
   let right = view.x + view.width
   let bottom = view.y + view.height
   for (const o of obstacles) {
-    if ('id' in o && o.id === OBSTACLE_IDS.selectionBar) continue
+    if ('id' in o && FOLLOWS_SELECTION.has(o.id)) continue
     const r = 'rect' in o ? o.rect : o
+    const alongAnEdge =
+      r.x <= view.x + EDGE_REACH ||
+      r.y <= view.y + EDGE_REACH ||
+      r.x + r.width >= view.x + view.width - EDGE_REACH ||
+      r.y + r.height >= view.y + view.height - EDGE_REACH
+    if (!alongAnEdge) continue
     const x0 = Math.max(r.x, view.x)
     const y0 = Math.max(r.y, view.y)
     const x1 = Math.min(r.x + r.width, view.x + view.width)

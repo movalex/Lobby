@@ -265,62 +265,61 @@ function RecapView({ state }: { state: RecapState }) {
           Added to the board as a frame.
         </p>
       ) : (
+        <div className="dr-ai-recap__body">
+          {plan ? (
+            <Body plan={plan} />
+          ) : (
+            <div aria-hidden="true">
+              <span className="dr-ai-line dr-ai-line--long" />
+              <span className="dr-ai-line" />
+              <span className="dr-ai-line dr-ai-line--short" />
+            </div>
+          )}
+        </div>
+      )}
+      {plan && (
         <>
-          <div className="dr-ai-recap__body">
-            {plan ? (
-              <Body plan={plan} />
-            ) : (
-              <div aria-hidden="true">
-                <span className="dr-ai-line dr-ai-line--long" />
-                <span className="dr-ai-line" />
-                <span className="dr-ai-line dr-ai-line--short" />
-              </div>
+          {!collapsed && (
+            <p className="dr-ai-pop__foot">
+              {plan.ai
+                ? 'Only you can see this. Written by AI from the board, with the room’s own results.'
+                : 'Only you can see this. The room’s own results, no AI.'}
+            </p>
+          )}
+          {/* folded, the follow-ups stay: the PDF of the frame, the Markdown, adding it again (now the lesser choice) */}
+          <div className="dr-ai-panel__actions dr-ai-recap__actions">
+            {canCopy && (
+              <button
+                type="button"
+                className="dr-btn dr-btn--sm"
+                data-testid="recap-copy"
+                onClick={() => void copyText(recapMarkdown(plan)).then((ok) => setCopied(ok ? 'yes' : 'no'))}
+              >
+                {copied === 'yes' ? 'Copied' : copied === 'no' ? 'Copy failed' : 'Copy as Markdown'}
+              </button>
+            )}
+            {frame && canExport && (
+              <button
+                type="button"
+                className="dr-btn dr-btn--sm"
+                data-testid="recap-pdf"
+                onClick={() => runCommand(ctx, EXPORT_COMMAND, 'menu', { frameIds: [frame] })}
+              >
+                Export recap as PDF
+              </button>
+            )}
+            {!readOnly && !recapIsEmpty(plan) && (
+              <button
+                type="button"
+                // once added, adding again is the lesser choice (M4-4)
+                className={state.frameId ? 'dr-btn dr-btn--sm' : 'dr-btn dr-btn--primary dr-btn--sm'}
+                data-testid="recap-add"
+                onClick={addFrame}
+              >
+                {state.frameId ? 'Add again' : 'Add as Recap frame'}
+              </button>
             )}
           </div>
-          {plan && (
-            <>
-              <p className="dr-ai-pop__foot">
-                {plan.ai
-                  ? 'Only you can see this. Written by AI from the board, with the room’s own results.'
-                  : 'Only you can see this. The room’s own results, no AI.'}
-              </p>
-              <div className="dr-ai-panel__actions dr-ai-recap__actions">
-                {canCopy && (
-                  <button
-                    type="button"
-                    className="dr-btn dr-btn--sm"
-                    data-testid="recap-copy"
-                    onClick={() =>
-                      void copyText(recapMarkdown(plan)).then((ok) => setCopied(ok ? 'yes' : 'no'))
-                    }
-                  >
-                    {copied === 'yes' ? 'Copied' : copied === 'no' ? 'Copy failed' : 'Copy as Markdown'}
-                  </button>
-                )}
-                {frame && canExport && (
-                  <button
-                    type="button"
-                    className="dr-btn dr-btn--sm"
-                    data-testid="recap-pdf"
-                    onClick={() => runCommand(ctx, EXPORT_COMMAND, 'menu', { frameIds: [frame] })}
-                  >
-                    Export recap as PDF
-                  </button>
-                )}
-                {!readOnly && !recapIsEmpty(plan) && (
-                  <button
-                    type="button"
-                    // once added, adding again is the lesser choice (M4-4)
-                    className={state.frameId ? 'dr-btn dr-btn--sm' : 'dr-btn dr-btn--primary dr-btn--sm'}
-                    data-testid="recap-add"
-                    onClick={addFrame}
-                  >
-                    {state.frameId ? 'Add again' : 'Add as Recap frame'}
-                  </button>
-                )}
-              </div>
-            </>
-          )}
         </>
       )}
     </section>
