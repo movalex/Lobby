@@ -16,6 +16,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { EventHub } from '../../../src/events/hub.ts'
 import { type Client, createBoard, createTestApi, DEV_STUDIO, type TestApi } from '../../helpers.ts'
 import { countQueries, isSessionLookup, type QueryCounter } from '../../query-count.ts'
+import { type AiWorld, aiWorld } from '../ai/support.ts'
 import { type GuestClient, guestLink, joinAsGuest, tokenOf } from '../guests/support.ts'
 import { FakeSync } from '../workshops/support.ts'
 
@@ -137,15 +138,28 @@ async function openState(c: Caller, bid = board) {
   return { res, body: res.statusCode === 200 ? OpenStateBody.parse(res.json()) : null }
 }
 
+/** A part without its `serverNow` (the time of the answer: equal only on a fixed clock). */
+const withoutServerNow = (v: unknown) => {
+  if (!v || typeof v !== 'object') return v
+  const { serverNow: _, ...rest } = v as Record<string, unknown>
+  return rest
+}
+
 /** Every part against its own route, for this caller: equal bodies, or null where the route refuses. */
-async function expectParity(who: string, c: Caller, bid = board) {
+async function expectParity(
+  who: string,
+  c: Caller,
+  bid = board,
+  normalise: (part: unknown) => unknown = (v) => v,
+) {
   const { res, body } = await openState(c, bid)
   expect(res.statusCode, `${who}: ${res.body}`).toBe(200)
   expect(res.headers['cache-control'], who).toBe('no-store')
   const refused: OpenStatePart[] = []
   for (const part of OPEN_STATE_PARTS) {
     const own = await c.req('GET', ROUTES[part](bid), undefined, REV as never)
-    if (own.statusCode === 200) expect(body?.[part], `${who}: ${part}`).toEqual(own.json())
+    if (own.statusCode === 200)
+      expect(normalise(body?.[part]), `${who}: ${part}`).toEqual(normalise(own.json()))
     else {
       expect([403, 404], `${who}: ${part} answered ${own.statusCode}`).toContain(own.statusCode)
       expect(body?.[part], `${who}: ${part} (refused)`).toBeNull()
@@ -230,24 +244,36 @@ describe('GET /api/boards/:bid/open-state: each part is its own route’s body (
 })
 
 describe('GET /api/boards/:bid/open-state: what it costs the database', () => {
-  it('one session lookup, one access check, one READ ONLY transaction, and no pooled query while it is open', async () => {
-    counter.reset()
-    const { res } = await openState(viewer)
-    expect(res.statusCode).toBe(200)
-    const all = counter.statements
-    expect(all.filter(isSessionLookup)).toHaveLength(1)
-    const accessChecks = all.filter((s) =>
-      /FROM boards b JOIN workspaces w ON w\.id = b\.workspace_id LEFT JOIN workspace_members wm ON wm\.workspace_id = b\.workspace_id AND wm\.user_id = \$2/.test(
-        s.sql,
-      ),
-    )
-    expect(accessChecks).toHaveLength(1)
-    expect(counter.transactions).toBe(1)
-    const inTx = all.filter((s) => s.inTransaction)
-    expect(inTx[0]?.sql).toBe('SET TRANSACTION READ ONLY')
-    expect(accessChecks[0]?.inTransaction).toBe(true)
-    // nothing on the pool while the transaction held its client (a capped pool must not wait on itself)
-    expect(all.filter((s) => s.duringTransaction)).toEqual([])
+  it('one session lookup, one access check, one READ ONLY transaction, and no pooled query while it is open (each role)', async () => {
+    // the review's nit: not only a viewer (the owner reads every part's manager view, a guest its link's caps)
+    for (const [who, c] of [
+      ['viewer', viewer],
+      ['owner', owner],
+      ['editor', editor],
+      ['guest', guest],
+      ['reviewer', reviewer],
+    ] as const) {
+      counter.reset()
+      const { res } = await openState(c)
+      expect(res.statusCode, who).toBe(200)
+      const all = counter.statements
+      expect(all.filter(isSessionLookup), who).toHaveLength(1)
+      const accessChecks = all.filter((s) =>
+        /FROM boards b JOIN workspaces w ON w\.id = b\.workspace_id LEFT JOIN workspace_members wm ON wm\.workspace_id = b\.workspace_id AND wm\.user_id = \$2/.test(
+          s.sql,
+        ),
+      )
+      expect(accessChecks, who).toHaveLength(1)
+      expect(counter.transactions, who).toBe(1)
+      const inTx = all.filter((s) => s.inTransaction)
+      expect(inTx[0]?.sql, who).toBe('SET TRANSACTION READ ONLY')
+      expect(accessChecks[0]?.inTransaction, who).toBe(true)
+      // nothing on the pool while the transaction held its client (a capped pool must not wait on itself)
+      expect(
+        all.filter((s) => s.duringTransaction),
+        who,
+      ).toEqual([])
+    }
   })
 
   it('the separate reads it replaces cost a session lookup and an access check each', async () => {
@@ -272,5 +298,36 @@ describe('GET /api/boards/:bid/open-state: the event position', () => {
     hub.accessChanged({ boardId: board })
     expect((await openState(viewer)).body?.eventsSeq).not.toBe(b)
     expect(hub.boardPosition(board)).toBe((await openState(viewer)).body?.eventsSeq)
+  })
+})
+
+describe('GET /api/boards/:bid/open-state with AI on (the ai part’s reads inside the READ ONLY transaction)', () => {
+  // the review's nit: the suite above runs with AI off, so the ai part's own path (the person's kind, the switches,
+  // may-export, the notice and the owner's budget, which takes its own SAVEPOINT) is exercised here
+  let w: AiWorld
+  beforeAll(async () => {
+    w = await aiWorld()
+  })
+  afterAll(async () => {
+    await w.close()
+  })
+
+  it('the workspace owner (a budget), an editor, a commenter, a viewer and a non-member: every part, as its route', async () => {
+    for (const [who, c] of [
+      ['owner', w.alice],
+      ['editor', w.bob],
+      ['commenter', w.carol],
+      ['viewer', w.dave],
+    ] as const) {
+      // the AI world runs on the real clock: the answers' own time is all that may differ
+      const { body, refused } = await expectParity(`ai on: ${who}`, c, w.board, withoutServerNow)
+      expect(refused, who).toEqual([])
+      expect(body?.ai?.enabled, who).toBe(true)
+    }
+    const owner = (await openState(w.alice, w.board)).body
+    expect(owner?.ai?.budget).not.toBeNull()
+    expect((await openState(w.bob, w.board)).body?.ai?.budget).toBeNull()
+    const erin = await expectParity('ai on: non-member', w.erin, w.board, withoutServerNow)
+    expect(erin.refused).toEqual([...OPEN_STATE_PARTS])
   })
 })
