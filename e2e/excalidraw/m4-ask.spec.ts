@@ -131,8 +131,10 @@ test('M4-6: no “This board / All boards” switch while asking all boards is n
   await waitForSort(a.page)
   const fake = await fakeWorkspaceAsk(a.page, { unavailable: true })
 
-  await test.step('not offered (no context set, or W8’s stub saying unavailable): no switch', async () => {
-    await forceWorkspaceAsk(a.page, null)
+  // since the wave M integration W8 sets the board's context, so with AI on for alice asking all boards is offered;
+  // 'not offered' is forced off here (as W8's rule says for a guest, a viewer without AI or AI off)
+  await test.step('not offered (forced off; W8’s stub saying unavailable): no switch', async () => {
+    await forceWorkspaceAsk(a.page, false)
     expect(await workspaceAskAvailable(a.page)).toBe(false)
     await openAsk(a.page)
     await expect(aiMenu(a.page).getByTestId('ai-ask-input')).toBeVisible()
