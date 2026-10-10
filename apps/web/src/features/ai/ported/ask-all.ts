@@ -46,7 +46,7 @@ registerPrivatePanel('answer', (canvas) => {
 export const ALL_BOARDS_NOTICE = {
   verb: 'answer your question',
   what: 'your question and the text of the boards you can open',
-  title: NOTICE_TITLES.board,
+  title: NOTICE_TITLES.boards,
 } as const
 
 /** The words after the asking falls back to this board (the api has no ask across boards here). */

@@ -19,6 +19,7 @@ const { AI_COMMAND_IDS, aiAskArgs } = await import('./public.ts')
 const { aiAnswer } = await import('./ask.ts')
 const { aiWorkspaceAnswer } = await import('./ask-all.ts')
 const { aiMenu } = await import('./runtime.ts')
+const { askAllBoards } = await import('./ask-all.ts')
 const { AI_ON, aiKit, note } = await import('./test-kit.ts')
 
 const answer: WorkspaceAskResponse = {
@@ -90,6 +91,19 @@ describe("'ai.ask' with scope 'all' (W8's Ask all boards)", () => {
     k.answer({ action: 'ask', answer: 'Budget [1].', found: 'yes', citations: [{ ids: ['shape:n9'] }] })
     await askCommand().run(k.ctx, 'palette', { scope: 'all', question: 'what is the budget' })
     await vi.waitFor(() => expect(k.requests.some((r) => r.path.endsWith('/ai/run'))).toBe(true))
+    expect(askWorkspace).not.toHaveBeenCalled()
+  })
+})
+
+describe('the first question of all boards (M4-6)', () => {
+  it('the notice says text from the boards goes, not this board alone', async () => {
+    const k = aiKit(note('n9', 0, 0, 'Budget'), { status: { ...AI_ON, noticeAccepted: false } })
+    const asked = askAllBoards(k.ctx, 'what is the budget')
+    const notice = aiMenu(k.canvas).get()?.notice
+    expect(notice?.title).toBe('Sends text from your boards to OpenAI')
+    expect(notice?.what).toBe('your question and the text of the boards you can open')
+    notice?.confirm(false)
+    await asked
     expect(askWorkspace).not.toHaveBeenCalled()
   })
 })

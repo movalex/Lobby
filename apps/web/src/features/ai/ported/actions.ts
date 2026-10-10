@@ -335,6 +335,8 @@ export interface NoticeWords {
 export const NOTICE_TITLES = {
   selected: 'Sends the selected text to OpenAI',
   board: 'Sends the board’s text to OpenAI',
+  /** Ask all boards (M4-6): text from every board the person can open, not this board alone */
+  boards: 'Sends text from your boards to OpenAI',
   words: 'Sends your words to OpenAI',
 } as const
 
