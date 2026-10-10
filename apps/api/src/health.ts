@@ -4,20 +4,29 @@
 //   200 'ok'                         nothing is wrong
 //   503 '<code>[,<code>...]'         what is wrong, as fixed reason codes:
 //     db    SELECT 1 did not answer within DB_PROBE_TIMEOUT_MS (or failed)
-//     5xx   more than SERVER_ERRORS_MAX 5xx answers within SERVER_ERRORS_WINDOW_MS
+//     5xx   more than SERVER_ERRORS_MAX server errors within SERVER_ERRORS_WINDOW_MS (see countsAsServerError)
 //     ai    more than half of the AI provider calls within AI_WINDOW_MS failed (at least AI_MIN_CALLS calls)
 //
 // Public and without data: the body is the codes only (no counts, no messages, no ids), so it tells a stranger
 // nothing a status page would not. The database probe is single-flight and its answer is kept for
-// DB_PROBE_CACHE_MS, so hammering the route costs at most one query per window and never piles up queries on a
-// database that hangs. The counters live in memory (this process, since it started); nothing is stored or logged.
+// DB_PROBE_CACHE_MS, so hammering the route costs at most one query per window. The counters live in memory (this
+// process, since it started); nothing is stored or logged.
+//
+// The M5-6 review:
+// - The probe runs on the database's own probe connection when it has one (`Db.ping`, Postgres: outside the capped
+//   pool, every bound the client's own), so a board-open burst queueing on the pool is not 'db', and a probe that hung
+//   ends at its timeout: the next one asks again, so 'db' clears as soon as the database answers. Without one (PGlite)
+//   it is a pooled SELECT 1, single-flight until that query settles (never a pile of hung queries on the pool).
+// - '5xx' counts the api's own failures only: 503 is always a deliberate answer here (a switch or a cap, AI turned off
+//   or not configured, TOO_MANY_SUBSCRIBERS, IDENTITY_UNAVAILABLE, CANVAS_STARTING, PREVIEW_BUSY), and the AI provider's
+//   502/504 are the 'ai' reason's. A monitor should still alert on two failed checks in a row, not one.
 //
 // What counts as an AI provider call is read from the AI routes' answers (app.ts's onResponse), without touching
 // the AI feature: a 2xx of a provider-calling route is a call that worked, a 502 or 504 one that failed (the AI
 // feature answers 502 AI_UPSTREAM / AI_BAD_OUTPUT and 504 for the provider's failures and nothing else); a refusal
 // before the provider is asked (403, 429, a 503 budget or switch) is no call at all.
 
-import type { Queryable } from '@draftroom/db'
+import type { Db, Queryable } from '@draftroom/db'
 
 export const HEALTH_DEEP_ROUTE = '/healthz/deep'
 
@@ -53,6 +62,18 @@ export const DEFAULT_HEALTH: HealthOptions = {
   aiMinCalls: AI_MIN_CALLS,
 }
 
+/** Whether an answer counts toward '5xx': a server error of the api's own (not a 503, not an AI provider's failure). */
+export function countsAsServerError(method: string, route: string | undefined, status: number): boolean {
+  if (status < 500 || status > 599 || status === 503) return false
+  if (
+    (status === 502 || status === 504) &&
+    route !== undefined &&
+    AI_PROVIDER_ROUTES.has(`${method} ${route}`)
+  )
+    return false
+  return true
+}
+
 export interface Health {
   /** One answer of the api (its matched route pattern, or undefined for no route). */
   record(method: string, route: string | undefined, status: number): void
@@ -86,7 +107,7 @@ class Window {
 }
 
 export function createHealth(deps: {
-  db: Pick<Queryable, 'query'>
+  db: Pick<Queryable, 'query'> & Pick<Db, 'ping'>
   now?: () => number
   options?: Partial<HealthOptions>
 }): Health {
@@ -106,7 +127,9 @@ export function createHealth(deps: {
       timer = setTimeout(() => resolve(false), o.dbTimeoutMs)
       timer.unref?.()
     })
-    const query = deps.db.query('SELECT 1 AS ok').then(
+    const db = deps.db
+    const own = typeof db.ping === 'function'
+    const query = (db.ping ? db.ping(o.dbTimeoutMs) : db.query('SELECT 1 AS ok')).then(
       () => true,
       () => false,
     )
@@ -116,8 +139,9 @@ export function createHealth(deps: {
       return ok
     })
     probe = p
-    // a hung query stays the one in flight until it settles (single flight), however often the route is asked
-    void query.finally(() => {
+    // single flight: on its own connection until this probe has its answer (a hung ping ends at its timeout, the
+    // next probe asks again); on the pool until the query settles, however often the route is asked
+    void (own ? p : query).finally(() => {
       if (probe === p) probe = null
     })
     return p
@@ -127,7 +151,7 @@ export function createHealth(deps: {
     record(method, route, status) {
       if (route === HEALTH_DEEP_ROUTE) return // the monitor's own 503s say nothing new
       const t = now()
-      if (status >= 500) serverErrors.add(t)
+      if (countsAsServerError(method, route, status)) serverErrors.add(t)
       if (route !== undefined && AI_PROVIDER_ROUTES.has(`${method} ${route}`)) {
         if (status >= 200 && status < 300) aiOk.add(t)
         else if (status === 502 || status === 504) aiFailed.add(t)

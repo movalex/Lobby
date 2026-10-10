@@ -30,6 +30,7 @@ function queryable(runner: Runner): Queryable {
 //   `.transaction(` body for those calls).
 // - The board event streams (SSE) and the event hub hold no client: a stream's re-check is one pooled query per
 //   round (events/routes.ts loadBoardAccessMany), and publishing touches no database.
+// - The api's /healthz/deep probe (`ping`) uses a one-connection pool of its own, never this one (the M5-6 review).
 
 /** The pool size without DRAFTROOM_DB_POOL_MAX (today's). */
 export const DB_POOL_MAX_DEFAULT = 10
@@ -64,6 +65,28 @@ export async function openPgPool(opts: { connectionString: string; maxConnection
   const pool = new pg.Pool({ connectionString: opts.connectionString, max })
   // An idle client losing its connection emits 'error' on the pool; unhandled it would crash the process.
   pool.on('error', (err) => console.error(`db: idle connection error: ${err.message}`))
+  // M5-6 review: the health probe's own connection (one, opened on the first ping, closed after a minute idle), so
+  // a board-open burst queueing on the capped pool never reads as 'db', and a hung probe never holds a pool client.
+  // Every bound is the client's own: connecting, the server's statement_timeout and the client's query_timeout;
+  // a failed or timed-out query drops its connection (pg-pool's release(err)), so the next ping starts afresh.
+  let probe: { pool: InstanceType<typeof pg.Pool>; timeoutMs: number } | null = null
+  const probePool = (timeoutMs: number) => {
+    if (probe && probe.timeoutMs === timeoutMs) return probe.pool
+    void probe?.pool.end().catch(() => {})
+    const p = new pg.Pool({
+      connectionString: opts.connectionString,
+      max: 1,
+      connectionTimeoutMillis: timeoutMs,
+      idleTimeoutMillis: 60_000,
+      statement_timeout: timeoutMs,
+      query_timeout: timeoutMs,
+      allowExitOnIdle: true,
+      application_name: 'lobby-health-probe',
+    })
+    p.on('error', () => {}) // an idle probe connection that drops: the next ping reports it
+    probe = { pool: p, timeoutMs }
+    return p
+  }
   return {
     kind: 'pg',
     ...queryable(pool),
@@ -86,6 +109,13 @@ export async function openPgPool(opts: { connectionString: string; maxConnection
         client.release(broken)
       }
     },
-    close: () => pool.end(),
+    async ping(timeoutMs) {
+      await probePool(timeoutMs).query('SELECT 1 AS ok')
+    },
+    async close() {
+      const p = probe?.pool
+      probe = null
+      await Promise.all([pool.end(), p?.end().catch(() => {})])
+    },
   }
 }

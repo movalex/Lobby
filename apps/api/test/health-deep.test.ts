@@ -172,6 +172,68 @@ describe('createHealth (the counters)', () => {
     expect(await h.reasons()).toEqual([])
   })
 
+  it('5xx counts the api’s own failures only: never a 503 (a deliberate answer), nor an AI provider’s 502/504', async () => {
+    const c = clock()
+    const h = createHealth({ db: okDb, now: c.now, options: { dbCacheMs: 0 } })
+    // six clicks on a turned-off AI, a full board, identity unavailable: 503s
+    for (let i = 0; i < 6; i++) h.record('POST', '/api/boards/:bid/ai/run', 503)
+    for (let i = 0; i < 6; i++) h.record('GET', '/api/boards/:bid/events', 503)
+    // the AI provider failing: the 'ai' reason's, not '5xx'
+    for (let i = 0; i < 6; i++) h.record('POST', '/api/boards/:bid/ai/run', 502)
+    for (let i = 0; i < 6; i++) h.record('POST', '/api/workspaces/:wid/ai/ask', 504)
+    expect(await h.reasons()).toEqual(['ai'])
+    // the api's own: 500, and a 502/504 anywhere else
+    for (const [route, status] of [
+      ['/api/me', 500],
+      ['/api/me', 500],
+      [undefined, 502],
+      ['/api/boards/:bid', 504],
+      ['/api/me', 500],
+      ['/api/me', 501],
+    ] as const)
+      h.record('GET', route, status)
+    expect(await h.reasons()).toEqual(['5xx', 'ai'])
+  })
+
+  it('a probe on the database’s own connection (Db.ping) never uses the pool', async () => {
+    let queries = 0
+    let pings = 0
+    const db = {
+      query: async () => {
+        queries++
+        return { rows: [], rowCount: 0 }
+      },
+      ping: async (timeoutMs: number) => {
+        pings++
+        expect(timeoutMs).toBe(2_000)
+      },
+    }
+    const h = createHealth({ db, options: { dbCacheMs: 0 } })
+    expect(await h.reasons()).toEqual([])
+    expect([pings, queries]).toEqual([1, 0])
+  })
+
+  it('a ping that hung ends at the timeout: the next probe asks again, so "db" clears once the database answers', async () => {
+    let pings = 0
+    let hang = true
+    const db = {
+      query: async () => ({ rows: [], rowCount: 0 }),
+      ping: () => {
+        pings++
+        return hang ? new Promise<void>(() => {}) : Promise.resolve()
+      },
+    }
+    const h = createHealth({ db, options: { dbCacheMs: 0, dbTimeoutMs: 30 } })
+    expect(await h.reasons()).toEqual(['db'])
+    expect(await h.reasons()).toEqual(['db'])
+    expect(pings).toBe(2)
+    hang = false // the database is back; the hung pings never settle
+    expect(await h.reasons()).toEqual([])
+    // concurrent probes share one ping
+    await Promise.all([h.reasons(), h.reasons(), h.reasons()])
+    expect(pings).toBe(4)
+  })
+
   it('the database probe is kept for its cache window (one query per window)', async () => {
     const c = clock()
     let n = 0
