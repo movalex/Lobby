@@ -1010,18 +1010,21 @@ test('Name-only guests never see or trigger AI; nor does anyone when the api say
   }
 
   // The api reports AI not configured (no key on this deployment): nothing AI shows for anyone.
-  await a.page.route('**/api/boards/*/ai', (route) =>
-    route.fulfill({
-      json: {
-        enabled: false,
-        reason: 'not-configured',
-        canInsert: false,
-        canSummarize: false,
-        noticeAccepted: false,
-        budget: null,
-      },
-    }),
-  )
+  const notSetUp = {
+    enabled: false,
+    reason: 'not-configured',
+    canInsert: false,
+    canSummarize: false,
+    noticeAccepted: false,
+    budget: null,
+    settings: null,
+  }
+  await a.page.route('**/api/boards/*/ai', (route) => route.fulfill({ json: notSetUp }))
+  // wave M (M5-1 with W4's seeding): the board-open read answers the same status, as its 'ai' part
+  await a.page.route('**/api/boards/*/open-state', async (route) => {
+    const response = await route.fetch()
+    await route.fulfill({ response, json: { ...(await response.json()), ai: notSetUp } })
+  })
   await a.page.reload()
   await waitForCanvas(a.page)
   await showFrame(a.page, BRAINSTORM)
