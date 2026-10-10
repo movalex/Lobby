@@ -76,6 +76,12 @@ export const PROTO = 1 as const
  * restore-elements route, so a wave L web would offer a laser nobody sees and a "Restore these" that gets 503,
  * and the rev gate (the fallback "hold the sync, the web hides all three") would stop working. The sync ships
  * once, carrying W6's relay and W7's route, after the O1/O2 sign-off for this bump is recorded in PROGRESS.
+ * Readers (the integration's stale pair (c)): the deployed rev-11 web parses each frame with its strict
+ * `ServerMessage` and drops the whole frame on one unknown field or value (`present.mins` in a `p` op's `c`),
+ * and it stays open for days after a deploy. So from rev 12 every frame the room sends goes through
+ * `frameForReader` for its socket's revision (the connect URL's `rev`, CONNECT_REV_PARAM; none: UNANNOUNCED_REV
+ * 11), and a write from an older socket keeps the fields it cannot know (`lobbyWriteOf`,
+ * LOBBY_FIELD_ADDITIONS). A rev-12 client names its revision in the connect URL to every room.
  */
 export const CONTRACTS_REV = 12
 /**
@@ -106,6 +112,26 @@ export const PRESENT_MINS_REV = 12
  * answers 404 (an older sync).
  */
 export const RESTORE_ELEMENTS_REV = 12
+/**
+ * The connect URL's parameter that names the contracts revision a client reads (CONTRACTS_REV 12 on):
+ * `/connect/:boardId?sessionId=…&rev=<CONTRACTS_REV>`. It tells the room before its first frame (the welcome)
+ * and before the client's first push, which a revision learned from presence (`f`, `t`) cannot: the room then
+ * serves that socket every frame in its revision's form (`frameForReader`) and keeps the fields a writer of an
+ * older revision cannot know (`lobbyWriteOf`). A rev-11 room ignores the parameter (it reads only `sessionId`
+ * and the ticket), so a client sends it to every room.
+ */
+export const CONNECT_REV_PARAM = 'rev'
+/**
+ * The revision the room reads a socket at when its connect URL names none: every web built before
+ * CONTRACTS_REV 12 (the web deployed with wave K, 437b4e7, is rev 11). A socket that sends `t` in presence is
+ * a rev-12 reader from then on (it could only have learned `t` from a rev-12 room's `contracts` frame).
+ */
+export const UNANNOUNCED_REV = 11
+/** The connect URL's `rev` as the room takes it: a whole number of at least 1, else null (an older client). */
+export function connectRevOf(param: string | null | undefined): number | null {
+  if (typeof param !== 'string' || !/^[1-9][0-9]{0,5}$/.test(param)) return null
+  return Number(param)
+}
 /** A push's receipt id (CONTRACTS_REV 11): made by the client, unique per page (`<page nonce>.<seq>`). */
 export const ReceiptId = z.string().regex(/^[A-Za-z0-9_.:-]{1,64}$/)
 /** The most receipt ids one `receipts` query names (a reconnect has at most a few pushes out). */
@@ -978,6 +1004,151 @@ export type ServerMessage = z.infer<typeof ServerMessage>
 /** The lease messages a client receives, as spike A's `LeaseServerMessage`. */
 export type LeaseServerMessage = LeaseGrant | LeaseDeny | LeaseBroadcast
 export { LEASE_TTL_MS }
+
+// ---- the per-reader rule (CONTRACTS_REV 12, docs/EXCALIDRAW-CONTRACTS.md §0b) -------------------------------
+
+/**
+ * A field that a revision after 11 added to a `customData.lobby` value (11: the oldest revision whose clients
+ * are still open, the deployed web). A reader below `since` refuses a value that has it: its `LobbyPatch`
+ * checks each value with its own strict schema, and its socket drops the whole frame that carries it (stale
+ * pair (c), wave L: one `present.mins` in a `changes` frame lost every op of that frame, and a reconnect's
+ * whole catch-up). A writer below `since` cannot know the field, so its writes of the key keep it
+ * (`lobbyWriteOf`): every field of `present` is independent of the others (index, skip, mins), so an older
+ * writer's whole-value write of it, or its removal of the key, never means "no minutes".
+ */
+export interface LobbyFieldAddition {
+  readonly key: string
+  readonly field: string
+  readonly since: number
+}
+/** Every field added to a `customData.lobby` value after revision 11 (custom-data.ts), with its revision. */
+export const LOBBY_FIELD_ADDITIONS: readonly LobbyFieldAddition[] = [
+  { key: 'present', field: 'mins', since: PRESENT_MINS_REV },
+]
+
+const additionsOf = (rev: number, key: string): LobbyFieldAddition[] =>
+  rev >= CONTRACTS_REV ? [] : LOBBY_FIELD_ADDITIONS.filter((a) => a.key === key && a.since > rev)
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v)
+
+/** Whether `value` (of `customData.lobby[key]`) has a field that a reader of revision `reader` does not know. */
+export function lobbyValueNewerThan(reader: number, key: string, value: unknown): boolean {
+  if (!isRecord(value)) return false
+  return additionsOf(reader, key).some((a) => a.field in value)
+}
+
+/** `value` without the fields a reader of revision `reader` does not know; `value` itself when it has none. */
+export function lobbyValueForReader(reader: number, key: string, value: unknown): unknown {
+  if (!lobbyValueNewerThan(reader, key, value)) return value
+  const out = { ...(value as Record<string, unknown>) }
+  for (const a of additionsOf(reader, key)) delete out[a.field]
+  return out
+}
+
+/**
+ * What the room stores when a writer of revision `writer` writes `written` (null: a removal) to
+ * `customData.lobby[key]`, whose stored value is `stored`: the fields that writer cannot know
+ * (LOBBY_FIELD_ADDITIONS above its revision) are kept from `stored` when `written` lacks them, and a removal
+ * leaves them alone (`present: null` from a rev-11 tab cleared index and skip, never the minutes). `written`
+ * itself when nothing is kept: a writer of this revision, or nothing stored to keep.
+ */
+export function lobbyWriteOf(writer: number, key: string, written: unknown, stored: unknown): unknown {
+  if (!isRecord(stored)) return written
+  const keep = additionsOf(writer, key).filter((a) => a.field in stored)
+  if (!keep.length) return written
+  if (written !== null && !isRecord(written)) return written
+  const out: Record<string, unknown> = written === null ? {} : { ...written }
+  let kept = false
+  for (const a of keep)
+    if (!(a.field in out)) {
+      out[a.field] = stored[a.field]
+      kept = true
+    }
+  return kept ? out : written
+}
+
+/** The stored element of a `p` op's id, for a translation into a `c` op (the room: the batch's elements). */
+export type StoredElementOf = (id: string) => WireElement | undefined
+
+/**
+ * One server op as a reader of revision `reader` must get it; the op itself when nothing is to change.
+ *  - A `c` op is never changed: every revision of the same ELEMENT_SCHEMA_VERSION takes a WireElement's
+ *    `customData.lobby` values as they are (`CustomData.lobby` is a record of unknown values; only
+ *    `LobbyPatch` checks them), and a new element field is an ELEMENT_SCHEMA_VERSION bump, which the hello
+ *    handles. So a catch-up, a snapshot and every create reach every reader whole.
+ *  - A `p` op whose `c` has a value with a field the reader does not know becomes the `c` op of the element as
+ *    stored (`stored`): the reader parses it and loses nothing, so its copy stays the server's exactly (the
+ *    client diffs its own pushes and decides lost ones against that copy). A deleted element is never sent in
+ *    full (W5-02: a tombstone travels redacted), so its patch keeps its form with those fields left out, which
+ *    changes nothing a reader compares (a tombstone is compared by hash.ts TOMBSTONE_KEYS only); and so does a
+ *    patch whose stored element the caller does not have.
+ */
+export function opForReader(reader: number, op: ServerOp, stored?: StoredElementOf): ServerOp {
+  if (reader >= CONTRACTS_REV || op.k === 'c' || !op.c) return op
+  const c = op.c as Record<string, unknown>
+  const newer = Object.keys(c).filter((k) => lobbyValueNewerThan(reader, k, c[k]))
+  if (!newer.length) return op
+  const el = stored?.(op.id)
+  if (el && !el.isDeleted && el.id === op.id && el.version === op.v) return { k: 'c', el }
+  const patch: Record<string, unknown> = { ...c }
+  for (const k of newer) patch[k] = lobbyValueForReader(reader, k, c[k])
+  return { ...op, c: patch }
+}
+
+/**
+ * THE per-reader rule (CONTRACTS_REV 12): `frame` as a reader of contracts revision `reader` must get it, so
+ * that its strict `ServerMessage` parses it. A client's socket drops a whole frame its schema refuses (the web's
+ * transport since C0), so a frame with one field its revision does not know loses everything in it, silently.
+ * Returns `frame` itself when nothing is to change (every frame to a reader of this revision). The room sends
+ * every frame through it, at one place (apps/sync/src/room/reader-frames.ts, element-room.ts `Session.send`),
+ * by the socket's revision (its connect URL's `rev`, CONNECT_REV_PARAM). By type:
+ *  - `changes`, and the catch-up of a `welcome`: each op by `opForReader`;
+ *  - `presence`: each peer by `presenceForReader` for the reader's presence revision (no `t`, no `trail` below 12);
+ *  - `ack`: unchanged (no revision checks a `fix` value or a refusal's element per key; a `fix` of a
+ *    `customData.lobby` key carries the stored value, the one its `changes` op gave the reader);
+ *  - every other type (`welcome`'s other fields, `lease.*`, `roster`, `workshop`, `notice`, `pong`, `contracts`,
+ *    `receipts`): unchanged, none of them changed after revision 11.
+ * A later revision that adds a field or a value to any server message adds its rule here (and its field to
+ * LOBBY_FIELD_ADDITIONS when it is one of a `customData.lobby` value), with a test that parses the downgraded
+ * frames with the previous build's own frozen schemas (packages/canvas-schema/test/fixtures/).
+ */
+export function frameForReader(
+  reader: number,
+  frame: ServerMessage,
+  stored?: StoredElementOf,
+): ServerMessage {
+  if (reader >= CONTRACTS_REV) return frame
+  switch (frame.type) {
+    case 'changes': {
+      const ops = mapSame(frame.ops, (op) => opForReader(reader, op, stored))
+      return ops === frame.ops ? frame : { ...frame, ops }
+    }
+    case 'welcome': {
+      if (!frame.catchUp) return frame
+      const catchUp = mapSame(frame.catchUp, (op) => opForReader(reader, op, stored))
+      return catchUp === frame.catchUp ? frame : { ...frame, catchUp }
+    }
+    case 'presence': {
+      const form = presenceReaderRev(reader)
+      const peers = mapSame(frame.peers, (p) => presenceForReader(p, form))
+      return peers === frame.peers ? frame : { ...frame, peers }
+    }
+    default:
+      return frame
+  }
+}
+
+/** `xs.map(f)`, or `xs` itself when `f` returned every item unchanged (no copy per reader). */
+function mapSame<T>(xs: readonly T[], f: (x: T) => T): T[] {
+  let out: T[] | null = null
+  for (let i = 0; i < xs.length; i++) {
+    const x = xs[i] as T
+    const y = f(x)
+    if (y !== x && !out) out = xs.slice(0, i)
+    if (out) out.push(y)
+  }
+  return out ?? (xs as T[])
+}
 
 // ---- the binary snapshot frame ------------------------------------------------------------------------------
 
