@@ -52,7 +52,17 @@ export interface AiPreviewPlan {
     readonly w: number
     readonly h: number
     readonly kind: string
+    /**
+     * Wave M (W4, M4-1; optional, additive): the words the new element will say (a theme's or a column's name, a
+     * diagram node's label), drawn in its outline so the person can judge them before Apply.
+     */
+    readonly label?: string
   }[]
+  /**
+   * Wave M (W4, M4-1; optional, additive): the groups the plan makes and how many notes each holds, in order, listed
+   * in the panel as "Sooner (2) · Later (2)". A plan that names no groups shows only its count line.
+   */
+  readonly groups?: readonly { readonly name: string; readonly count: number }[]
 }
 
 /** The person's choice: apply the plan, ask again (a new budgeted call), or drop it. */

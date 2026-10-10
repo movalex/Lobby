@@ -521,12 +521,33 @@ function buildPlacement(
   const moves = noteMoves
     .filter((m) => m.x !== m.el.x || m.y !== m.el.y)
     .map((m) => ({ id: m.el.id, x: m.x, y: m.y }))
+  // M4-1: the new 2x2's axis words in their outlines, and the squares with how many notes go in each
   const creates: BuiltPlan['creates'] = made
     ? [
         { x: made.frame.x, y: made.frame.y, w: made.frame.width, h: made.frame.height, kind: 'frame' },
-        ...made.texts.map((t) => ({ x: t.box.x, y: t.box.y, w: t.box.w, h: t.box.h, kind: 'text' })),
+        ...made.texts.map((t) => ({
+          x: t.box.x,
+          y: t.box.y,
+          w: t.box.w,
+          h: t.box.h,
+          kind: 'text',
+          label: t.originalText,
+        })),
       ]
     : []
+  const inSquare = new Map<QuadrantKey, number>()
+  for (const p of layout.placed) inSquare.set(p.quadrant, (inSquare.get(p.quadrant) ?? 0) + 1)
+  /** "High impact", from an axis's end word ("High") and its name ("Impact"), unless the word says it already */
+  const end = (a: AiScoreAxis, side: 'low' | 'high') =>
+    a[side].toLowerCase().includes(a.name.toLowerCase()) ? a[side] : `${a[side]} ${a.name.toLowerCase()}`
+  const squareName = (k: QuadrantKey) => {
+    const [x, y] = k.split('-') as ['low' | 'high', 'low' | 'high']
+    return `${end(axes[1], y)} · ${end(axes[0], x)}`
+  }
+  const groups = QUADRANT_KEYS.filter((k) => inSquare.has(k)).map((k) => ({
+    name: squareName(k),
+    count: inSquare.get(k) ?? 0,
+  }))
   const left = unscored.length
   const stuck = layout.unplaced.length
   const extra = [
@@ -545,6 +566,7 @@ function buildPlacement(
     skipped,
     moves,
     creates,
+    groups,
     summary: `Moves ${plural(moves.length, 'note')} onto a 2x2${built ? ' (a new frame)' : ''}`,
     noop: moves.length === 0 && !made && grow.size === 0,
     ...(extra ? { extra } : {}),

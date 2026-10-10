@@ -38,14 +38,17 @@ export function columnsBuilt(
   const moves = plan.spaces.flatMap((s) =>
     s.moves.filter((m) => m.x !== m.fromX || m.y !== m.fromY).map((m) => ({ id: m.id, x: m.x, y: m.y })),
   )
+  // M4-1: each heading's outline says its column's name, and the preview lists the columns with their notes
   const creates = plan.spaces.flatMap((s) =>
-    s.labels.map((l) => ({ x: l.x, y: l.y, w: l.width, h: l.block.height, kind: 'text' })),
+    s.labels.map((l) => ({ x: l.x, y: l.y, w: l.width, h: l.block.height, kind: 'text', label: l.name })),
   )
+  const groups = plan.spaces.flatMap((s) => s.labels.map((l) => ({ name: l.name, count: l.count })))
   const noun = (n: number) => plural(n, 'note')
   return {
     skipped,
     moves,
     creates,
+    groups,
     summary: `Moves ${noun(plan.moved)} into ${plural(plan.columns, 'column')}`,
     noop: isNoop(plan),
     ...(opts.extra ? { extra: opts.extra } : {}),

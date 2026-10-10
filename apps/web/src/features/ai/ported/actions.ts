@@ -750,7 +750,9 @@ function applyResult(
         summary: themesPreviewLine(pv),
         moves: pv.moves,
         recolors: [],
-        creates: pv.labels.map((l) => ({ ...l, kind: 'text' })),
+        // M4-1: each label's outline says the theme's name, and the panel lists the themes with their notes
+        creates: pv.labels.map((l) => ({ x: l.x, y: l.y, w: l.w, h: l.h, kind: 'text', label: l.name })),
+        groups: pv.groups,
       }).then((choice) => {
         if (choice === 'retry') {
           // a new, budgeted call (a new run id)

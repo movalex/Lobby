@@ -66,7 +66,13 @@ export function wordyIds(canvas: Pick<LobbyCanvas, 'get' | 'selection'>): string
 
 /** What the preview draws: each node's box and each connector's bounds. */
 export function previewOf(plan: DiagramPlan, runId: string): AiPreviewPlan {
-  const creates: { x: number; y: number; w: number; h: number; kind: string }[] = []
+  const creates: { x: number; y: number; w: number; h: number; kind: string; label?: string }[] = []
+  // M4-1: each node's outline says its label (the words the person judges)
+  const words = new Map<string, string>()
+  for (const c of plan.creates) {
+    const p = c.props as { containerId?: string | null; originalText?: string }
+    if (c.kind === 'text' && p.containerId && p.originalText) words.set(p.containerId, p.originalText)
+  }
   for (const c of plan.creates) {
     const p = c.props as { x: number; y: number; width: number; height: number; points?: [number, number][] }
     if (c.kind === 'text') continue
@@ -76,7 +82,17 @@ export function previewOf(plan: DiagramPlan, runId: string): AiPreviewPlan {
       const x = Math.min(...xs)
       const y = Math.min(...ys)
       creates.push({ x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y, kind: 'arrow' })
-    } else creates.push({ x: p.x, y: p.y, w: p.width, h: p.height, kind: 'diagram-node' })
+    } else {
+      const label = words.get(String((c.props as { id?: unknown }).id ?? ''))
+      creates.push({
+        x: p.x,
+        y: p.y,
+        w: p.width,
+        h: p.height,
+        kind: 'diagram-node',
+        ...(label ? { label } : {}),
+      })
+    }
   }
   const shapes = plan.shapeIds.length
   const links = plan.arrowIds.length

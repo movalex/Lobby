@@ -54,6 +54,8 @@ export interface PlannedLabel {
   readonly block: TextBlock
   /** the words as typed (the heading's `originalText`) */
   readonly name: string
+  /** M4-1: how many notes its column holds (the preview names "Sooner (2)") */
+  readonly count: number
 }
 
 export interface PlannedMove {
@@ -248,6 +250,7 @@ function planSpace(
       width: c.label.w,
       block: layoutLabel(measure, name, Math.max(40, c.label.w - 4)),
       name,
+      count: c.notes.length,
     }
   })
   const moves: PlannedMove[] = []

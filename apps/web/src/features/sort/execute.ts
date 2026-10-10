@@ -22,6 +22,8 @@ export interface BuiltPlan {
   readonly moves: readonly { readonly id: string; readonly x: number; readonly y: number }[]
   /** what will be made, for the preview's outlines */
   readonly creates: AiPreviewPlan['creates']
+  /** M4-1: the columns (or squares) it makes, with their notes, for the preview's list */
+  readonly groups?: AiPreviewPlan['groups']
   /** the count line of the preview ('Moves 12 notes into 3 columns') */
   readonly summary: string
   /** applying it would change nothing */
@@ -103,6 +105,7 @@ export function previewOf(spec: Pick<PlanSpec, 'title' | 'runId'>, built: BuiltP
     moves: built.moves,
     recolors: [],
     creates: built.creates,
+    ...(built.groups?.length ? { groups: built.groups } : {}),
   }
 }
 

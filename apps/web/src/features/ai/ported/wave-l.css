@@ -49,6 +49,39 @@
   border-style: dotted;
   opacity: 0.6;
 }
+/* Wave M (M4-1): a new element with words (a theme's name, a heading, a node's label) shows them, on an opaque
+   surface in the theme's accent ink (4.5:1 or more in both themes), never through the outlines' tint. */
+.dr-ai-preview__new[data-label] {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0 6px;
+  overflow: hidden;
+  border-style: dashed;
+  border-color: var(--dr-accent-line);
+  background: var(--dr-surface);
+  color: var(--dr-accent-ink);
+  opacity: 1;
+}
+.dr-ai-preview__name {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--dr-font);
+  font-weight: 650;
+  line-height: 1.15;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.dr-ai-preview__groups {
+  margin: 0 4px 6px;
+  color: var(--dr-ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.dr-ai-preview__group {
+  font-weight: 600;
+}
 .dr-ai-preview__swatch {
   position: absolute;
   box-sizing: border-box;
