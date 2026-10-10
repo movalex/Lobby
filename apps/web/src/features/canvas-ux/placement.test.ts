@@ -17,11 +17,15 @@ import {
   foldSelectionBarMeasure,
   type OverlayRect,
   placeSelectionBar,
-  roundPanelRect,
+  roundOutRect,
+  SELBAR_GAP,
   SELBAR_HYSTERESIS,
   SELBAR_INITIAL_LAYOUT,
+  SELBAR_MARGIN,
   SELBAR_MAX_PASSES,
   SELBAR_PASS_WINDOW_MS,
+  SELBAR_SAFE_TOP,
+  type SelectionBarMeasure,
   type SelectionBarPlacement,
 } from './ported/SelectionBar.tsx'
 
@@ -212,40 +216,65 @@ describe('startViewCamera (K2-7)', () => {
 
 // ---- H1 (wave M, M1-1; FTU-1): the selection bar's placement settles ------------------------------------------
 
-describe('placeSelectionBar is pure and idempotent (H1)', () => {
+describe('placeSelectionBar is pure and idempotent (H1; on placePopover since M1-3)', () => {
   const vw = 1392
   const vh = 852
   const panel: OverlayRect = { x: vw - 12 - 216, y: 12, w: 216, h: 450 }
+  const toolbar: OverlayRect = { x: 420, y: vh - 60, w: 552, h: 48 }
+  const sel = (x: number, y: number, w = 160, h = 100): OverlayRect => ({ x, y, w, h })
+  const bar = { w: 180, h: 38 }
   const fixtures: { name: string; o: Parameters<typeof placeSelectionBar>[0]; side: string }[] = [
-    { name: 'clear of the panel', o: { cx: 500, top: 300, half: 90, h: 38, vw, vh, panel }, side: 'under' },
     {
-      name: 'over the panel: left of it',
-      o: { cx: vw - 120, top: 200, half: 90, h: 38, vw, vh, panel },
-      side: 'left',
-    },
-    {
-      name: 'no room on the left: below it',
-      o: { cx: 150, top: 100, half: 120, h: 38, vw: 300, vh, panel: { x: 40, y: 12, w: 216, h: 300 } },
+      name: 'clear of the chrome: below, centred',
+      o: { anchor: sel(400, 200), ...bar, vw, vh, obstacles: [panel, toolbar] },
       side: 'below',
     },
-    // the hysteresis bands: 4 px over the panel's edge (under stays under), 4 px clear of it
     {
-      name: '4 px over the panel',
-      o: { cx: panel.x - 90 + 4, top: 100, half: 90, h: 38, vw, vh, panel },
-      side: 'left',
+      name: 'under the style panel: slid left of it, still below',
+      o: { anchor: sel(vw - 200, 100), ...bar, vw, vh, obstacles: [panel, toolbar] },
+      side: 'below',
     },
-    { name: 'no panel', o: { cx: vw - 120, top: 200, half: 90, h: 38, vw, vh, panel: null }, side: 'under' },
-    // FTU-1's phone: 390 x 796, the selection against the left edge
+    {
+      name: 'just above the bottom toolbar: above',
+      o: { anchor: sel(620, vh - 150), ...bar, vw, vh, obstacles: [panel, toolbar] },
+      side: 'above',
+    },
+    {
+      name: 'a selection taller than the canvas: inside it, near the bottom',
+      o: { anchor: sel(300, -300, 600, 1600), ...bar, vw, vh, obstacles: [panel, toolbar] },
+      side: 'below',
+    },
+    {
+      name: 'with the flow handles: below them',
+      o: {
+        anchor: sel(400, 200),
+        ...bar,
+        vw,
+        vh,
+        obstacles: [panel, toolbar],
+        reach: { left: 34, top: 34, right: 34, bottom: 34 },
+      },
+      side: 'below',
+    },
+    // FTU-1's phone: 390 x 796, the selection against the left edge, the folded style panel's corner
     {
       name: 'FTU-1 at 390 px',
-      o: { cx: 15, top: 262, half: 136, h: 82, vw: 390, vh: 796, panel: { x: 228, y: 8, w: 156, h: 120 } },
-      side: 'under',
+      o: {
+        anchor: sel(-40, 200, 110, 50),
+        w: 272,
+        h: 82,
+        vw: 390,
+        vh: 796,
+        obstacles: [{ x: 228, y: 8, w: 156, h: 120 }],
+      },
+      side: 'below',
     },
   ]
   for (const f of fixtures) {
     it(`${f.name}: its own result fed back 10 times gives the same side and position`, () => {
       const first = placeSelectionBar(f.o)
       expect(first.side).toBe(f.side)
+      expect(first.fits).toBe(true)
       let p = first
       for (let i = 0; i < 10; i++) {
         p = placeSelectionBar({ ...f.o, prev: p })
@@ -253,54 +282,113 @@ describe('placeSelectionBar is pure and idempotent (H1)', () => {
       }
       // pure: the same input twice, the same answer
       expect(placeSelectionBar(f.o)).toEqual(first)
+      // whatever the obstacles' order
+      expect(placeSelectionBar({ ...f.o, obstacles: [...f.o.obstacles].reverse() })).toEqual(first)
     })
   }
 
-  it('hysteresis: under stays under until it covers the panel by more than 8 px; aside stays aside until clear by more', () => {
-    const at = (cx: number, prev: SelectionBarPlacement | null) =>
-      placeSelectionBar({ cx, top: 100, half: 90, h: 38, vw, vh, panel, prev }).side
-    // the under box's right edge is cx + 90; the panel starts at panel.x
-    const edge = panel.x - 90
-    expect(at(edge + 4, null)).toBe('left') // no history: any overlap steps aside (K2-7)
-    expect(at(edge + 4, { left: 0, top: 0, side: 'under' })).toBe('under')
-    expect(at(edge + SELBAR_HYSTERESIS, { left: 0, top: 0, side: 'under' })).toBe('under')
-    expect(at(edge + SELBAR_HYSTERESIS + 1, { left: 0, top: 0, side: 'under' })).toBe('left')
-    expect(at(edge - 4, { left: 0, top: 0, side: 'left' })).toBe('left')
-    expect(at(edge - SELBAR_HYSTERESIS - 1, { left: 0, top: 0, side: 'left' })).toBe('under')
+  const box = (p: SelectionBarPlacement, w = bar.w, h = bar.h): OverlayRect => ({
+    x: p.left - w / 2,
+    y: p.top,
+    w,
+    h,
+  })
+  const hit = (a: OverlayRect, b: OverlayRect) =>
+    a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+
+  it('the places: below by the gap, slid clear of the panel, above the toolbar, past the handles', () => {
+    const [clear, slid, above, tall, handles] = fixtures.map((f) => placeSelectionBar(f.o))
+    expect(clear).toEqual({ left: 480, top: 200 + 100 + SELBAR_GAP, side: 'below', fits: true })
+    expect(hit(box(slid as SelectionBarPlacement), panel)).toBe(false)
+    expect((slid as SelectionBarPlacement).top).toBe(100 + 100 + SELBAR_GAP)
+    expect(hit(box(above as SelectionBarPlacement), toolbar)).toBe(false)
+    expect((above as SelectionBarPlacement).top + bar.h).toBe(vh - 150 - SELBAR_GAP)
+    // inside the tall selection, clear of the toolbar, inside the canvas
+    const t = box(tall as SelectionBarPlacement)
+    expect(hit(t, toolbar)).toBe(false)
+    expect(t.y + t.h).toBeLessThanOrEqual(vh - SELBAR_MARGIN)
+    expect(t.y).toBeGreaterThanOrEqual(SELBAR_SAFE_TOP)
+    // the bottom '+' handle (34 px out) is between the selection and the bar
+    expect((handles as SelectionBarPlacement).top).toBe(200 + 100 + 34 + SELBAR_GAP)
+  })
+
+  it('hysteresis: the side it is on stays while it fits with the chrome 8 px smaller; back once the other fits with it 8 px bigger', () => {
+    // a toolbar as wide as the canvas, so the bar cannot slide past it; below fits while the selection's bottom is at
+    // most 800 - 8 (the bar keeps SELBAR_MARGIN off the chrome) - 38 - 14 (the gap to the selection) = 740
+    const wide: OverlayRect = { x: 0, y: 800, w: 1000, h: 48 }
+    const at = (bottom: number, prev: SelectionBarPlacement | null) =>
+      placeSelectionBar({
+        anchor: sel(400, bottom - 100),
+        ...bar,
+        vw: 1000,
+        vh: 900,
+        obstacles: [wide],
+        prev,
+      }).side
+    const was = (side: 'below' | 'above'): SelectionBarPlacement => ({ left: 0, top: 0, side, fits: true })
+    expect(at(740, null)).toBe('below')
+    expect(at(741, null)).toBe('above')
+    // below stays below up to 8 px past the edge, then goes above
+    expect(at(741, was('below'))).toBe('below')
+    expect(at(740 + SELBAR_HYSTERESIS, was('below'))).toBe('below')
+    expect(at(740 + SELBAR_HYSTERESIS + 1, was('below'))).toBe('above')
+    // above stays above until below fits with 8 px to spare
+    expect(at(738, was('above'))).toBe('above')
+    expect(at(740 - SELBAR_HYSTERESIS + 1, was('above'))).toBe('above')
+    expect(at(740 - SELBAR_HYSTERESIS, was('above'))).toBe('below')
+  })
+
+  it('nothing fits (every place covers chrome): it says so, and the answer is still stable', () => {
+    // a phone with chrome all round the selection
+    const walls: OverlayRect[] = [
+      { x: 0, y: 60, w: 390, h: 300 },
+      { x: 0, y: 470, w: 390, h: 374 },
+      { x: 0, y: 360, w: 120, h: 110 },
+      { x: 270, y: 360, w: 120, h: 110 },
+    ]
+    const o = { anchor: sel(140, 380, 110, 70), w: 300, h: 44, vw: 390, vh: 844, obstacles: walls }
+    const p = placeSelectionBar(o)
+    expect(p.fits).toBe(false)
+    expect(placeSelectionBar({ ...o, prev: p })).toEqual(p)
+    expect(placeSelectionBar({ ...o, obstacles: [...walls].reverse() })).toEqual(p)
   })
 })
 
 describe('the selection bar layout effect settles in 2 passes or fewer (H1, FTU-1)', () => {
   // FTU-1, as measured at 390 x 844 (touch): the bar holds six 36 px buttons and is 256 px wide in one row. It was
-  // as wide as the room right of its left edge, so with the selection against the canvas's left edge (its centre
-  // clamped to `half`) every measure moved it, and a 1 px ceil flipped it between 135 and 136 for ever.
+  // as wide as the room right of its `left` (its centre: it is drawn translateX(-50%)), so with the selection against
+  // the canvas's left edge every measure moved it, and the move changed the measure for ever.
   const vw = 390
   const vh = 796
   const ROW = 256
-  const shrinkToFit = (left: number) => {
+  const shrinkToFit = (left: number): SelectionBarMeasure => {
     const room = vw - left
-    const w = room >= ROW ? ROW : room
-    return { half: Math.ceil(w / 2) + 8, h: room >= ROW ? 44 : 82, panel: null }
+    return {
+      w: room >= ROW ? ROW : Math.floor(room),
+      h: room >= ROW ? 44 : 82,
+      obstacles: [],
+      panel: null,
+      reach: null,
+    }
   }
 
   /** Renders the bar until its layout state stops changing: what React does with the layout effect. */
-  function run(fold: typeof foldSelectionBarMeasure, cx: number, renders = 60) {
+  function run(fold: typeof foldSelectionBarMeasure, x: number, renders = 60) {
     let layout = SELBAR_INITIAL_LAYOUT
     let prev: SelectionBarPlacement | null = null
     let changes = 0
     for (let i = 0; i < renders; i++) {
       const p = placeSelectionBar({
-        cx,
-        top: 300,
-        half: layout.m.half,
+        anchor: { x, y: 250, w: 60, h: 40 },
+        w: layout.m.w,
         h: layout.m.h,
         vw,
         vh,
-        panel: null,
+        obstacles: [],
         prev,
       })
       prev = p
-      const next = fold(layout, 'n1 n2|390x796|0|lock,tags', shrinkToFit(p.left), i)
+      const next = fold(layout, 'n1 n2|390x796|0||lock,tags', shrinkToFit(p.left), i)
       if (next === layout) return { settled: true, changes, placement: p }
       layout = next
       changes++
@@ -310,39 +398,36 @@ describe('the selection bar layout effect settles in 2 passes or fewer (H1, FTU-
 
   it('the fixture does oscillate without the cap (the old effect: set whenever the measure differs)', () => {
     const uncapped: typeof foldSelectionBarMeasure = (prev, key, m) =>
-      prev.m.half === m.half && prev.m.h === m.h ? prev : { key, passes: 0, at: 0, m }
-    expect(run(uncapped, 15).settled).toBe(false)
+      prev.m.w === m.w && prev.m.h === m.h ? prev : { key, passes: 0, at: 0, m }
+    expect(run(uncapped, -15).settled).toBe(false)
   })
 
   it('with the cap it settles within 2 passes, and the result is stable when fed back', () => {
-    const r = run(foldSelectionBarMeasure, 15)
+    const r = run(foldSelectionBarMeasure, -15)
     expect(r.settled).toBe(true)
     expect(r.changes).toBeLessThanOrEqual(SELBAR_MAX_PASSES)
     const p = r.placement as SelectionBarPlacement
     expect(p.left).toBeGreaterThan(0)
-    expect(placeSelectionBar({ cx: 15, top: 300, half: 136, h: 82, vw, vh, panel: null, prev: p }).side).toBe(
-      p.side,
-    )
   })
 
   it('a bar that does not move with its measure settles in one pass (the CSS fix: max-content)', () => {
     const r = run(
-      (prev, key, m, now) => foldSelectionBarMeasure(prev, key, { ...m, half: ROW / 2 + 8, h: 44 }, now),
-      15,
+      (prev, key, m, now) => foldSelectionBarMeasure(prev, key, { ...m, w: ROW, h: 44 }, now),
+      -15,
     )
     expect(r).toMatchObject({ settled: true, changes: 1 })
   })
 
   it('the pass count starts again for a new selection, after the burst window, and never for the same measure', () => {
-    const m1 = { half: 100, h: 38, panel: null }
-    const m2 = { half: 110, h: 38, panel: null }
+    const m1: SelectionBarMeasure = { w: 200, h: 38, obstacles: [], panel: null, reach: null }
+    const m2: SelectionBarMeasure = { ...m1, w: 220 }
     let s = foldSelectionBarMeasure(SELBAR_INITIAL_LAYOUT, 'a', m1, 0)
     s = foldSelectionBarMeasure(s, 'a', m2, 1)
     expect(s.passes).toBe(2)
     // capped: a third change for the same key in the same burst keeps what is drawn
     expect(foldSelectionBarMeasure(s, 'a', m1, 2)).toBe(s)
-    // the same measure is no change at all
-    expect(foldSelectionBarMeasure(s, 'b', m2, 3)).toBe(s)
+    // the same measure is no change at all (equal boxes, equal reach, even as new objects)
+    expect(foldSelectionBarMeasure(s, 'b', { ...m2, obstacles: [], reach: null }, 3)).toBe(s)
     // a new selection key: counted from 1 again
     expect(foldSelectionBarMeasure(s, 'b', m1, 3)).toMatchObject({ key: 'b', passes: 1, m: m1 })
     // the same key, later (a tag added a second later): a new burst
@@ -350,16 +435,22 @@ describe('the selection bar layout effect settles in 2 passes or fewer (H1, FTU-
       passes: 1,
       m: m1,
     })
+    // an obstacle, the panel or the handles' reach changing is a change
+    const withPanel = { ...m1, panel: { x: 1, y: 2, w: 3, h: 4 } }
+    expect(foldSelectionBarMeasure(SELBAR_INITIAL_LAYOUT, 'c', withPanel, 0).m).toBe(withPanel)
+    const t = foldSelectionBarMeasure(SELBAR_INITIAL_LAYOUT, 'c', m1, 0)
+    const reach = { ...m1, reach: { left: 1, top: 1, right: 1, bottom: 1 } }
+    expect(foldSelectionBarMeasure(t, 'c', reach, 1).m).toBe(reach)
   })
 
-  it('the style panel box is rounded out to 4 px (it still holds the real box)', () => {
-    expect(roundPanelRect({ x: 225.3, y: 11.6, w: 216.2, h: 450.4 })).toEqual({
+  it('a box is rounded out to 4 px (it still holds the real box)', () => {
+    expect(roundOutRect({ x: 225.3, y: 11.6, w: 216.2, h: 450.4 })).toEqual({
       x: 224,
       y: 8,
       w: 220,
       h: 456,
     })
-    expect(roundPanelRect({ x: 0, y: 0, w: 0, h: 10 })).toBeNull()
-    expect(roundPanelRect(null)).toBeNull()
+    expect(roundOutRect({ x: 0, y: 0, w: 0, h: 10 })).toBeNull()
+    expect(roundOutRect(null)).toBeNull()
   })
 })

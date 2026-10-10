@@ -35,6 +35,7 @@ import { FrameRename } from './FrameRename.tsx'
 import { KEYS } from './keys.ts'
 import { installLockedHint, LockedFrameBadges, LockedHintBar } from './LockedHint.tsx'
 import { MAIN_MENU_ENTRIES, MainMenu } from './MainMenu.tsx'
+import { installChromeObstacles } from './obstacles.ts'
 import { PolygonPreview } from './PolygonPreview.tsx'
 import { polygonTools } from './polygons.ts'
 import { SELECTION_BAR_ITEMS, SelectionBar } from './SelectionBar.tsx'
@@ -86,6 +87,8 @@ function mount(ctx: CanvasFeatureContext): () => void {
       },
     }),
   )
+  // wave M (M1-3): the style panel and the bottom toolbar are chrome other popovers keep clear of
+  cleanups.push(installChromeObstacles(doc))
   cleanups.push(installCanvasEvents(ctx))
   cleanups.push(installChromeHistoryKeys(ctx))
   cleanups.push(installLockedHint(ctx))

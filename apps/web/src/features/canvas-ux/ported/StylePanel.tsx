@@ -628,7 +628,9 @@ function ArrowheadPicker({
  */
 export function StylePanel({ ctx }: { ctx: CanvasFeatureContext }) {
   const room = useCanvasRoom(ctx.canvas)
-  if (stylesFold(room)) return null
+  // wave M (M1-3): it steps aside while a popover of the selection bar fits nowhere clear of it
+  const yieldToBar = useValue(uxState(ctx.canvas).stylePanelYield)
+  if (stylesFold(room) || yieldToBar) return null
   return <StylePanelBody ctx={ctx} />
 }
 
