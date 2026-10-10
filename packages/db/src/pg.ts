@@ -14,10 +14,54 @@ function queryable(runner: Runner): Queryable {
   })
 }
 
-/** node-postgres pool for deployments (DATABASE_URL). Loaded lazily so PGlite-only runs never load pg. */
+// ---- the pool's size (wave M, M5-2) ----------------------------------------------------------------------
+//
+// Staging's database has 0.1 CPU: past a few connections, more parallel queries only queue there (the board-open
+// burst measured p95 0.4-1.1 s against about 5 ms for the same read alone), and the pool sat at its maximum of 10
+// during bursts. DRAFTROOM_DB_POOL_MAX caps it (render.yaml sets 5 on the api); without it the pool keeps today's
+// 10, so a deploy without the variable behaves as before, and the value rolls back without a code change.
+//
+// Audit (wave M, M5-2): a capped pool starves requests if a client is held while waiting on something else.
+// - Only `transaction()` below takes a client (`pool.connect()`), and it releases it in `finally`
+//   (packages/db/test/pool-max.test.ts holds every pool `.connect()` in the source trees to that).
+// - No transaction body in apps/api/src awaits network I/O: no sync-internal call, blob-store call, fetch or
+//   identity-provider call runs inside one (the code's own rule: auth/identity.ts "no provider call inside a
+//   database transaction", worker/jobs.ts "no I/O inside a transaction"; checked by scanning every
+//   `.transaction(` body for those calls).
+// - The board event streams (SSE) and the event hub hold no client: a stream's re-check is one pooled query per
+//   round (events/routes.ts loadBoardAccessMany), and publishing touches no database.
+
+/** The pool size without DRAFTROOM_DB_POOL_MAX (today's). */
+export const DB_POOL_MAX_DEFAULT = 10
+/** The bounds DRAFTROOM_DB_POOL_MAX must be within. */
+export const DB_POOL_MAX_MIN = 2
+export const DB_POOL_MAX_MAX = 20
+export const DB_POOL_MAX_ENV = 'DRAFTROOM_DB_POOL_MAX'
+
+/**
+ * The pool size from the environment: DRAFTROOM_DB_POOL_MAX, an integer from DB_POOL_MAX_MIN to DB_POOL_MAX_MAX;
+ * unset or empty is DB_POOL_MAX_DEFAULT. Anything else throws (the process refuses to start, like a bad setting in
+ * apps/api config.ts), never a silent guess.
+ */
+export function dbPoolMaxFromEnv(env: Readonly<Record<string, string | undefined>> = process.env): number {
+  const raw = env[DB_POOL_MAX_ENV]?.trim()
+  if (raw === undefined || raw === '') return DB_POOL_MAX_DEFAULT
+  const n = /^\d+$/.test(raw) ? Number(raw) : Number.NaN
+  if (!Number.isSafeInteger(n) || n < DB_POOL_MAX_MIN || n > DB_POOL_MAX_MAX)
+    throw new Error(
+      `${DB_POOL_MAX_ENV} must be a whole number from ${DB_POOL_MAX_MIN} to ${DB_POOL_MAX_MAX} (got "${raw.slice(0, 20)}")`,
+    )
+  return n
+}
+
+/**
+ * node-postgres pool for deployments (DATABASE_URL). Loaded lazily so PGlite-only runs never load pg.
+ * `maxConnections` wins; without it the size comes from DRAFTROOM_DB_POOL_MAX (dbPoolMaxFromEnv).
+ */
 export async function openPgPool(opts: { connectionString: string; maxConnections?: number }): Promise<Db> {
+  const max = opts.maxConnections ?? dbPoolMaxFromEnv()
   const { default: pg } = await import('pg')
-  const pool = new pg.Pool({ connectionString: opts.connectionString, max: opts.maxConnections ?? 10 })
+  const pool = new pg.Pool({ connectionString: opts.connectionString, max })
   // An idle client losing its connection emits 'error' on the pool; unhandled it would crash the process.
   pool.on('error', (err) => console.error(`db: idle connection error: ${err.message}`))
   return {
