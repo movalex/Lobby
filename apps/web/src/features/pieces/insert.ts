@@ -13,6 +13,7 @@
 import { MAX_ITEMS } from '@draftroom/canvas-schema/limits'
 import type { PieceId } from '@draftroom/templates/pieces/catalog'
 import { type Bounds, type CanvasElement, geometry, items, type LobbyCanvas } from '../../canvas/api/index.ts'
+import { countUsage } from '../../lib/usage.ts'
 import { spotNear } from '../ai/ported/apply.ts'
 import { revealResult } from '../ai/reveal.ts'
 
@@ -103,6 +104,7 @@ export async function insertPiece(
     canvas.transact(`insert ${info.name.toLowerCase()}`, (tx) => tx.insert(elements))
     const present = piece.topLevelIds.filter((x) => live(canvas.get(x)))
     if (present.length !== piece.topLevelIds.length) return { ok: false, reason: 'failed' }
+    countUsage('pieces.insert')
     if (opts.select !== false) canvas.select(piece.topLevelIds)
     const bounds = { x: piece.bounds.x, y: piece.bounds.y, width: piece.bounds.w, height: piece.bounds.h }
     // shown whole, clear of the board's chrome (this tab's camera only)

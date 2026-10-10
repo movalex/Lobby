@@ -15,6 +15,7 @@ import {
   type ScenePoint,
 } from '../../canvas/api/index.ts'
 import { type Atom, atom, useValue } from '../../lib/signals.ts'
+import { countUsage } from '../../lib/usage.ts'
 import { topCentreAnchor } from '../ai/board-chrome.ts'
 import { inPopoverLayer, useBoardPlacement, usePopoverLayer } from '../ai/board-popover.tsx'
 import { applyDiagram, measureDiagram, planDiagram, planSize } from '../ai/diagram/apply.ts'
@@ -103,6 +104,7 @@ export function pasteAsDiagram(ctx: CanvasFeatureContext, graph: DiagramGraph, c
     return []
   }
   const ids = applyDiagram(canvas, plan, 'paste as diagram')
+  countUsage('mermaid.paste')
   // M4-4 (FTU-8): shown whole, clear of the board's chrome (this tab's camera only)
   void revealResult(canvas, ids)
   return ids

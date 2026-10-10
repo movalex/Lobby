@@ -22,6 +22,7 @@ import {
 import { isApiError } from '../../../api/client.ts'
 import type { Bounds, CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { react } from '../../../lib/signals.ts'
+import { countUsage } from '../../../lib/usage.ts'
 import { mindmapOf } from '../../mindmap/ported/bridge.ts'
 import { addChildTopics, mindmapFromIdeas } from '../../mindmap/ported/commands.ts'
 import {
@@ -183,6 +184,8 @@ export async function runAi(
     if (at) aiMenu(canvas).set({ at, target, view: 'notice', pending: req })
     return
   }
+  // M4-6: what people use (the event name only: no text, no ids)
+  countUsage(`ai.open:${req.into ? req.into.kind : req.action}`)
   // A summary always opens in the private panel first (DANA-04).
   const mode = req.action === 'summarize' ? (req.mode ?? 'panel') : undefined
   // wave L: where it is (the live shimmer others see, L2-1e), and the vote the action items follow (L2-4)
@@ -439,6 +442,7 @@ export async function runPublic(ctx: CanvasFeatureContext, input: AiRunInput): P
     return refuse('Only editors can add AI results to this board.')
   if (aiJob(canvas).get())
     return refuse('Lobby is still working on another AI request. Wait for it to finish.')
+  countUsage(`ai.open:${input.action}`)
   let acknowledged = input.acknowledged === true
   const words = noticeWords(input as Pick<AiRunInput, 'action'> & { shapeIds?: readonly string[] })
   if (!status.noticeAccepted && !acknowledged) {

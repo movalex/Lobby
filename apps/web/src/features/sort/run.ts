@@ -3,6 +3,7 @@
 // the moment of writing, one undo step). The AI sort by a lens (./ai.ts) goes the same way with the groups the
 // api names.
 import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
+import { countUsage } from '../../lib/usage.ts'
 import { applyColumns, bringIntoView, planBounds } from './apply.ts'
 import { plural } from './copy.ts'
 import { type BuiltPlan, executePlan, type Outcome, type PlanProblem, type PlanSpec } from './execute.ts'
@@ -99,6 +100,7 @@ export function sortBy(
   key: SortKey,
   ids: readonly string[] = ctx.canvas.selection,
 ): Promise<Outcome> {
+  countUsage(`sort.run:${key}`)
   return executePlan(ctx, sortSpec(ctx, key, ids))
 }
 

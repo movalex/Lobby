@@ -28,6 +28,7 @@ import {
   items,
   type LobbyCanvas,
 } from '../../canvas/api/index.ts'
+import { countUsage } from '../../lib/usage.ts'
 import { BESIDE_GAP, placeBeside } from '../ai/layout.ts'
 import { aiCustomData } from '../ai/ported/public.ts'
 import { bringIntoView } from './apply.ts'
@@ -113,6 +114,7 @@ export function sortByLens(
   lens: string,
   ids: readonly string[] = ctx.canvas.selection,
 ): Promise<Outcome> {
+  countUsage('sort.run:lens')
   return whileBusy(ctx, () => lensRun(ctx, lens, ids))
 }
 
@@ -368,6 +370,7 @@ export function placeOnMatrix(
   ctx: CanvasFeatureContext,
   o: { ids?: readonly string[]; axes?: readonly [AiScoreAxis, AiScoreAxis] } = {},
 ): Promise<PlaceOutcome> {
+  countUsage('sort.run:place')
   return whileBusy(ctx, () => placeRun(ctx, o))
 }
 

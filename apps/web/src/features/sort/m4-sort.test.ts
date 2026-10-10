@@ -28,7 +28,7 @@ function board(n: number): El[] {
     els.push(
       ...noteEls(`n${i}`, 60 + (i % 3) * 230, 120 + Math.floor(i / 3) * 230, {
         frameId: 'f1',
-        ...(i % 2 ? { backgroundColor: '#a6d8f3' } : {}),
+        ...(i % 2 ? { fill: '#a6d8f3' } : {}),
       }),
     )
   return els
