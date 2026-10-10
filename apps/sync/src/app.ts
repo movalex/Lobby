@@ -49,6 +49,26 @@ export const MAINTENANCE_REASON = 'MAINTENANCE'
 // accepted for at least one release (tabs opened before the deploy, cached bundles, the headless and load
 // clients). Either way the ticket is verified before the upgrade and never logged.
 
+// ---- permessage-deflate (wave M, M7-2, CAP-BANDWIDTH) ------------------------------------------------------
+//
+// Presence goes out as JSON at 10 Hz to everyone on a board (30 lasers: about 2.3 MB/s), and Render bills
+// WebSocket bytes past the included allowance. Browsers offer permessage-deflate on their own, so this needs no
+// protocol frame, CONTRACTS_REV or reader-frame change: a client that does not offer it (or an edge that strips
+// the header) talks uncompressed, exactly as before. Level 1 and memLevel 7 keep the CPU and the per-socket
+// memory small (the server keeps its context per socket for the ratio; the client is asked not to, which costs
+// nothing here: client frames are small). At most 4 zlib jobs run at once, process-wide. `threshold` (1 KiB) only
+// applies to a sender without context takeover (ws/lib/sender.js), so with the server's context kept every text
+// frame is deflated: a small cursor frame compresses well against the ones before it (the M7-7 NAS run measures
+// the CPU). The gzip snapshot is sent with `compress: false` (room/outbound.ts). DRAFTROOM_WS_DEFLATE=off is the
+// kill switch (config.ts; a restart).
+export const WS_DEFLATE_OPTIONS = Object.freeze({
+  zlibDeflateOptions: Object.freeze({ level: 1, memLevel: 7 }),
+  threshold: 1024,
+  concurrencyLimit: 4,
+  clientNoContextTakeover: true,
+  serverNoContextTakeover: false,
+})
+
 /** The subprotocol a board socket speaks: the one the server answers with. */
 export const BOARD_SOCKET_PROTOCOL = 'lobby.board.v1'
 /** The offered subprotocol that carries the ticket: this prefix, then the ticket. */
@@ -225,9 +245,15 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
 
   const wss = new WebSocketServer({
     noServer: true,
+    // also the most a compressed client frame may inflate to (ws checks the inflated size)
     maxPayload: 1024 * 1024,
     handleProtocols: selectProtocol,
+    perMessageDeflate:
+      config.wsDeflate === false
+        ? false
+        : { ...WS_DEFLATE_OPTIONS, zlibDeflateOptions: { ...WS_DEFLATE_OPTIONS.zlibDeflateOptions } },
   })
+  log(`[connect] permessage-deflate ${config.wsDeflate === false ? 'off (DRAFTROOM_WS_DEFLATE=off)' : 'on'}`)
   const liveSockets = new Map<string, WebSocket>() // `${boardId}/${sid}` -> current ws
   // One expensive connect per macrotask (PERF-05, join-queue.ts): a crowd joining at once no longer
   // blocks everyone else's edits. Keyed per socket, not per session id (a replaced socket).
@@ -309,7 +335,8 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
           contractsRev,
         },
         {
-          send: (d: string | Uint8Array) => ws.send(d),
+          send: (d: string | Uint8Array, o?: { readonly compress?: boolean }) =>
+            o ? ws.send(d, { compress: o.compress !== false }) : ws.send(d),
           close: (c: number, r: string) => ws.close(c, r),
           get readyState() {
             return ws.readyState

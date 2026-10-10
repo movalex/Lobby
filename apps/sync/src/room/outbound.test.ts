@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest'
 import type { ElementSocket } from '../engine-switch.ts'
-import { DEFER_ABOVE_BYTES, flusher, Outbound } from './outbound.ts'
+import { DEFER_ABOVE_BYTES, flusher, NO_COMPRESS, Outbound } from './outbound.ts'
 
 function socket() {
   const sent: (string | Uint8Array)[] = []
@@ -88,5 +88,29 @@ describe('outbound deferral', () => {
     o2.send('x')
     expect(s2.sent).toEqual([])
     expect(o2.pending).toBe(0)
+  })
+})
+
+describe('M7-2: the gzip snapshot is never deflated again', () => {
+  it('a binary frame (the snapshot) is sent with compress: false; a text frame with the socket’s default', async () => {
+    const calls: { data: string | Uint8Array; opts: unknown }[] = []
+    const s: ElementSocket = {
+      readyState: 1,
+      bufferedAmount: 0,
+      send: (data, opts) => void calls.push({ data, opts }),
+      close: () => {},
+    }
+    const o = new Outbound(s, () => {})
+    const snapshot = new Uint8Array([0x1f, 0x8b, 8, 0])
+    o.send('{"type":"welcome"}')
+    o.send(Promise.resolve(snapshot)) // as the room queues it: compressed off the event loop
+    o.send(big)
+    for (let i = 0; i < 5 && calls.length < 3; i++) await tick()
+    expect(calls.map((c) => [typeof c.data === 'string' ? 'text' : 'binary', c.opts])).toEqual([
+      ['text', undefined],
+      ['binary', { compress: false }],
+      ['text', undefined],
+    ])
+    expect(NO_COMPRESS).toEqual({ compress: false })
   })
 })

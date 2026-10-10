@@ -31,6 +31,9 @@ export const DEFER_ABOVE_BYTES = 8 * 1024
 /** Socket writes per macrotask of the flusher, at most (plus the frame that crosses the line). */
 export const FLUSH_SLICE_MS = 5
 
+/** The send option of a frame that is compressed already (the gzip snapshot; app.ts WS_DEFLATE_OPTIONS). */
+export const NO_COMPRESS = Object.freeze({ compress: false })
+
 type Frame = string | Uint8Array
 type Entry = Frame | Promise<Frame | null>
 
@@ -142,7 +145,9 @@ export class Outbound {
       if (n === 0) continue
       if (this.socket.readyState !== 1) continue
       try {
-        this.socket.send(head)
+        // M7-2: the one binary frame is the gzip snapshot: deflating it again costs CPU and saves nothing
+        if (typeof head === 'string') this.socket.send(head)
+        else this.socket.send(head, NO_COMPRESS)
         this.sentBytes += n
         this.onSent(n)
       } catch {

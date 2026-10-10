@@ -69,8 +69,11 @@ export interface ElementSessionInfo {
 
 /** The socket as the room sees it: app.ts wraps the `ws` socket (never binds the room's listeners to it). */
 export interface ElementSocket {
-  /** a text frame (JSON) or the binary gzip snapshot frame (protocol.ts SnapshotFrame) */
-  send(data: string | Uint8Array): void
+  /**
+   * a text frame (JSON) or the binary gzip snapshot frame (protocol.ts SnapshotFrame). `compress: false` (M7-2):
+   * never deflate this frame on the wire, whatever the socket negotiated (the snapshot is gzip already)
+   */
+  send(data: string | Uint8Array, opts?: { readonly compress?: boolean }): void
   close(code: number, reason: string): void
   /** `ws` readyState: 1 = OPEN */
   readonly readyState: number

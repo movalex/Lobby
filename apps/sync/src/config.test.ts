@@ -278,3 +278,33 @@ describe('ALLOWED_ORIGINS (board WebSocket Origin allowlist)', () => {
     }
   })
 })
+
+describe('wave M keys (render.yaml: DRAFTROOM_WS_DEFLATE=on, DRAFTROOM_BACKUP_KEEP=4, DRAFTROOM_OUTBOUND_BUDGET_MB=128)', () => {
+  it('DRAFTROOM_WS_DEFLATE (M7-2): on unless off (the kill switch); anything else is refused', () => {
+    expect(loadConfig(base).wsDeflate).toBe(true)
+    expect(loadConfig({ ...base, DRAFTROOM_WS_DEFLATE: '' }).wsDeflate).toBe(true)
+    expect(loadConfig({ ...base, DRAFTROOM_WS_DEFLATE: 'on' }).wsDeflate).toBe(true)
+    expect(loadConfig({ ...base, DRAFTROOM_WS_DEFLATE: 'off' }).wsDeflate).toBe(false)
+    expect(loadConfig({ ...base, DRAFTROOM_WS_DEFLATE: 'OFF' }).wsDeflate).toBe(false)
+    for (const v of ['0', 'false', 'of', 'yes'])
+      expect(() => loadConfig({ ...base, DRAFTROOM_WS_DEFLATE: v })).toThrow(
+        /DRAFTROOM_WS_DEFLATE must be on or off/,
+      )
+  })
+
+  it('DRAFTROOM_BACKUP_KEEP (M7-4): 12 by default (today), 1 to 1000', () => {
+    expect(loadConfig(base).backupKeep).toBe(12)
+    expect(loadConfig({ ...base, DRAFTROOM_BACKUP_KEEP: '4' }).backupKeep).toBe(4)
+    for (const v of ['0', '1001', '-1', 'four'])
+      expect(() => loadConfig({ ...base, DRAFTROOM_BACKUP_KEEP: v })).toThrow(/DRAFTROOM_BACKUP_KEEP/)
+  })
+
+  it('DRAFTROOM_OUTBOUND_BUDGET_MB (M7-5): 128 MiB by default, 8 to 4096', () => {
+    expect(loadConfig(base).outboundBudgetMb).toBe(128)
+    expect(loadConfig({ ...base, DRAFTROOM_OUTBOUND_BUDGET_MB: '64' }).outboundBudgetMb).toBe(64)
+    for (const v of ['7', '4097', '1.5'])
+      expect(() => loadConfig({ ...base, DRAFTROOM_OUTBOUND_BUDGET_MB: v })).toThrow(
+        /DRAFTROOM_OUTBOUND_BUDGET_MB/,
+      )
+  })
+})
