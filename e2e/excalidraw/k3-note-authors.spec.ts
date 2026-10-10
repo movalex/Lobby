@@ -252,18 +252,27 @@ test.describe('K3-6: the note-author label reads at 4.5:1', () => {
   })
 })
 
-test('K3-6: a board open asks /workshop and /private-brainstorm once each', async ({ join, board }) => {
+test('K3-6: a board open asks /workshop and /private-brainstorm once each (or takes them from the board-open read)', async ({
+  join,
+  board,
+}) => {
   const a = await join('alice')
   const count = (path: string) => a.net.responses.filter((r) => r.path === path).length
   const workshop = `/api/boards/${board}/workshop`
   const brainstorm = `/api/boards/${board}/private-brainstorm`
+  // wave M (M5-1): the board-open read answers both stores' first loads (W2's takers), else each asks its route
+  const opened = () => count(`/api/boards/${board}/open-state`)
   // past the stores' fallback (3 s): a second request would have been sent by now
   await a.page.waitForTimeout(4_000)
-  expect(count(workshop)).toBe(1)
-  expect(count(brainstorm)).toBe(1)
-  // a reload is a new open: one more each
+  for (const path of [workshop, brainstorm]) {
+    expect(count(path), path).toBeLessThanOrEqual(1)
+    expect(count(path) + opened(), path).toBeGreaterThanOrEqual(1)
+  }
+  // a reload is a new open: at most one more each
   await reloadBoard(a)
   await a.page.waitForTimeout(4_000)
-  expect(count(workshop)).toBe(2)
-  expect(count(brainstorm)).toBe(2)
+  for (const path of [workshop, brainstorm]) {
+    expect(count(path), path).toBeLessThanOrEqual(2)
+    expect(count(path) + opened(), path).toBeGreaterThanOrEqual(2)
+  }
 })
