@@ -4,7 +4,7 @@
 // status read leaving the board-open burst (K7-4). The outline paste is k7-outline-paste.spec.ts.
 //
 //   E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/k7-ai-mindmap --project=chromium --workers=1
-import type { Browser, Page } from '@playwright/test'
+import type { Browser, BrowserContext, Page } from '@playwright/test'
 import { type FakeOpenAi, itemsOf, startFakeOpenAi } from '../tests/support/ai.ts'
 import { signInContext } from '../tests/support/api.ts'
 import {
@@ -617,12 +617,28 @@ test('Expand with AI shows pills where the sub-topics will go; a summary shows i
   })
 })
 
+/**
+ * Wave M (M5-1 with W4's seeding): the board-open read carries the AI status, so a board opened with it asks for no
+ * separate status at all (m5-open-state.spec.ts holds that). The K7-4 tests below are about the separate read, which
+ * is what an api without the board-open read (it answers 404) still gets: they run that way.
+ */
+async function withoutOpenState(context: BrowserContext): Promise<void> {
+  await context.route('**/api/boards/*/open-state', (route) =>
+    route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { code: 'NOT_FOUND', message: 'Not found.' } }),
+    }),
+  )
+}
+
 test('The AI status is not read while the board opens: it waits for an idle moment after the board is live', async ({
   browser,
   board,
 }) => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
   await signInContext(context, 'alice')
+  await withoutOpenState(context)
   // a browser that is never idle until the test says so (requestIdleCallback holds its callbacks)
   await context.addInitScript(() => {
     const held: ((d: unknown) => void)[] = []
@@ -667,6 +683,7 @@ test('With a normal browser the status is read once, soon after the board is liv
 }) => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
   await signInContext(context, 'alice')
+  await withoutOpenState(context)
   const page = await context.newPage()
   const events: string[] = []
   page.on('websocket', (ws) =>
@@ -707,6 +724,7 @@ test('K.1: a viewer who selects a note before the AI status is known gets the AI
   const carol = await users.grant(board, 'carol', 'viewer')
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
   await signInContext(context, carol.handle, carol.name)
+  await withoutOpenState(context)
   // never idle until the test says so: the status read waits (K7-4)
   await context.addInitScript(() => {
     const held: ((d: unknown) => void)[] = []
