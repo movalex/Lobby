@@ -41,6 +41,13 @@
 // Never a connection the server told to wait, as 'replaced' does: that would let a person's tabs push each
 // other out.
 //
+// A hidden tab (wave M, M5-4; S7): a hello that arrives while the tab is hidden does not make every feature
+// refetch at once. The resync listeners registered then are marked due and each runs once when the tab is shown
+// again (an idle tab left open made a burst of 9 panel reads at every reconnect: with 200 tabs open, idle load
+// would match the board-open load). Two hidden hellos still mean one refetch. A visible hello stays immediate, and
+// so do the events that matter while nobody looks: 'access-lost' (the page leaves the board) and every event
+// ('access.changed' included) reach their listeners at once, whatever the visibility.
+//
 // Listeners (K6-5, EVT-3): an event listener, a resync listener or an access-lost listener that throws is
 // its feature's problem. The other listeners still run, the connection stays open, and the failure is
 // logged once per listener by its kind and the error's class name (never the event's data or the error's
@@ -207,6 +214,15 @@ export interface BoardEventsOptions {
   maxDirectFailures?: number
 }
 
+/** Whether the page is hidden now (a page without a document, a worker or a test, never is). */
+const pageHidden = (): boolean => {
+  try {
+    return typeof document !== 'undefined' && document.visibilityState === 'hidden'
+  } catch {
+    return false
+  }
+}
+
 /** An error's class name only (`TypeError`), for logs that must not carry what it says. */
 const errorName = (e: unknown): string =>
   e instanceof Error && /^[A-Za-z][A-Za-z0-9_]{0,40}$/.test(e.name) ? e.name : 'Error'
@@ -223,6 +239,8 @@ export function createBoardEvents(boardId: string, opts: BoardEventsOptions = {}
   const canDirect = Boolean(mint) && directSupported()
   const listeners = new Map<string, Set<Listener>>()
   const resync = new Set<() => void>()
+  /** M5-4: resync listeners a hello reached while the tab was hidden: each runs once when it is shown again. */
+  const resyncDue = new Set<() => void>()
   const lost = new Set<() => void>()
   let offset = 0
   let connected = false
@@ -271,6 +289,15 @@ export function createBoardEvents(boardId: string, opts: BoardEventsOptions = {}
     }
   }
 
+  /** Runs these resync listeners (each one's throw is its own), and none of them is due any more. */
+  const runResync = (list: readonly (() => void)[]) => {
+    for (const r of list) {
+      resyncDue.delete(r)
+      // A feature's refetch that throws is that feature's problem, not a failed stream.
+      if (resync.has(r)) safely('resync', r, r)
+    }
+  }
+
   const emit = (msg: BoardEventMessage) => {
     for (const l of [...(listeners.get(msg.type) ?? [])])
       safely(`'${msg.type}' event`, l, () => l(msg.data, msg))
@@ -289,8 +316,9 @@ export function createBoardEvents(boardId: string, opts: BoardEventsOptions = {}
       if (!Number.isNaN(serverNow)) offset = serverNow - Date.now()
       connected = true
       retryMs = FIRST_RETRY_MS
-      // A feature's refetch that throws is that feature's problem, not a failed stream.
-      for (const r of [...resync]) safely('resync', r, r)
+      // M5-4: a hidden tab refetches when it is looked at, once, not at every reconnect.
+      if (pageHidden()) for (const r of resync) resyncDue.add(r)
+      else runResync([...resync])
     } else if (msg.type === 'access-lost') {
       // The same for the page's access-lost handlers (K6-5): a throw here ended the direct connection.
       for (const l of [...lost]) safely('access-lost', l, l)
@@ -413,27 +441,39 @@ export function createBoardEvents(boardId: string, opts: BoardEventsOptions = {}
    *   refetch cost little); when the tab becomes visible only one that has been silent for the stale
    *   timeout is (the timer was throttled or the page slept), never a stream that is delivering pings.
    * - A direct retry that is due (or any, after 'online': the network changed) runs now.
+   * Returns whether it opened a new connection now (its hello will resync).
    */
-  const wake = (reason: 'online' | 'visible') => {
-    if (closed) return
+  const wake = (reason: 'online' | 'visible'): boolean => {
+    if (closed) return false
     const now = Date.now()
     const retrying =
       mode === 'cookie' && directRetryTimer !== null && (reason === 'online' || now >= directRetryAt)
     let replace = false
+    let reopened = false
     if (now - lastOpenAt >= WAKE_MIN_GAP_MS) {
       if (retryTimer) {
-        if (!serverHold) reconnectNow()
+        if (!serverHold) {
+          reconnectNow()
+          reopened = true
+        }
       } else {
         replace = Boolean(source || controller) && (reason === 'online' || now - lastActivityAt >= staleMs)
       }
     }
     // A direct retry that swaps the stream makes replacing it first pointless: replace only if it does not.
     if (retrying) void retryDirect(replace)
-    else if (replace) reconnectNow()
+    else if (replace) {
+      reconnectNow()
+      reopened = true
+    }
+    return reopened
   }
-  const onOnline = () => wake('online')
+  const onOnline = () => void wake('online')
   const onVisibility = () => {
-    if (document.visibilityState === 'visible') wake('visible')
+    if (document.visibilityState !== 'visible') return
+    // M5-4: the refetches a hidden hello left due run now, once; unless the stream is being reopened right now,
+    // whose hello (visible) refetches everything anyway.
+    if (!wake('visible') && resyncDue.size) runResync([...resyncDue])
   }
   if (typeof window !== 'undefined' && typeof window.addEventListener === 'function')
     window.addEventListener('online', onOnline)
@@ -659,6 +699,7 @@ export function createBoardEvents(boardId: string, opts: BoardEventsOptions = {}
       drop()
       listeners.clear()
       resync.clear()
+      resyncDue.clear()
       lost.clear()
     },
   }

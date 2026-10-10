@@ -1288,6 +1288,148 @@ describe('createBoardEvents: a page that wakes up does not sit out the backoff (
   })
 })
 
+// ---- wave M, M5-4 (S7): a hidden tab's reconnect does not refetch every panel until it is looked at ---------------
+
+describe('createBoardEvents: a hello while the tab is hidden (wave M, M5-4)', () => {
+  beforeEach(() => {
+    vi.useRealTimers()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+  })
+
+  it('a hidden hello calls no resync listener; becoming visible calls each one exactly once', () => {
+    const page = stubPage()
+    page.visibility('hidden')
+    const events = createBoardEvents('b-1', COOKIE_ONLY)
+    const a = vi.fn()
+    const b = vi.fn()
+    events.onResync(a)
+    events.onResync(b)
+    const es = FakeEventSource.all[0] as FakeEventSource
+    es.send('hello', hello)
+    expect(a).not.toHaveBeenCalled()
+    expect(b).not.toHaveBeenCalled()
+    // the stream is connected all the same: a clock offset, events delivered
+    const thread = vi.fn()
+    events.on('comments.thread', thread)
+    es.send('comments.thread', { id: 'thr_1' })
+    expect(thread).toHaveBeenCalledTimes(1)
+    page.visibility('visible')
+    expect(a).toHaveBeenCalledTimes(1)
+    expect(b).toHaveBeenCalledTimes(1)
+    // hidden and shown again with no hello in between: nothing more
+    page.visibility('hidden')
+    page.visibility('visible')
+    expect(a).toHaveBeenCalledTimes(1)
+    expect(b).toHaveBeenCalledTimes(1)
+    events.close()
+  })
+
+  it('a visible hello is immediate, as before', () => {
+    stubPage()
+    const events = createBoardEvents('b-1', COOKIE_ONLY)
+    const r = vi.fn()
+    events.onResync(r)
+    FakeEventSource.all[0]?.send('hello', hello)
+    expect(r).toHaveBeenCalledTimes(1)
+    events.close()
+  })
+
+  it('access-lost and access.changed reach their listeners at once while the tab is hidden', () => {
+    const page = stubPage()
+    page.visibility('hidden')
+    const events = createBoardEvents('b-1', COOKIE_ONLY)
+    const lost = vi.fn()
+    const changed = vi.fn()
+    const r = vi.fn()
+    events.onAccessLost(lost)
+    events.on('access.changed', changed)
+    events.onResync(r)
+    const es = FakeEventSource.all[0] as FakeEventSource
+    es.send('hello', hello)
+    es.send('access.changed', { reason: 'grant' })
+    expect(changed).toHaveBeenCalledTimes(1)
+    es.send('access-lost', null)
+    expect(lost).toHaveBeenCalledTimes(1)
+    expect(r).not.toHaveBeenCalled()
+    events.close()
+  })
+
+  it('two hidden hellos (a reconnect while hidden) give one refetch when the tab is shown', () => {
+    const page = stubPage()
+    page.visibility('hidden')
+    const events = createBoardEvents('b-1', { ...COOKIE_ONLY, staleMs: 3_600_000 })
+    const r = vi.fn()
+    events.onResync(r)
+    const first = FakeEventSource.all[0] as FakeEventSource
+    first.send('hello', hello)
+    // the stream drops and the page reconnects on its own while hidden
+    first.fail(FakeEventSource.CLOSED)
+    vi.advanceTimersByTime(1_000)
+    const second = FakeEventSource.all[1] as FakeEventSource
+    expect(second).toBeDefined()
+    second.send('hello', hello)
+    expect(r).not.toHaveBeenCalled()
+    page.visibility('visible')
+    expect(r).toHaveBeenCalledTimes(1)
+    events.close()
+  })
+
+  it('a listener registered on a connected stream while hidden runs at once (its first fetch) and is not due again', () => {
+    const page = stubPage()
+    page.visibility('hidden')
+    const events = createBoardEvents('b-1', COOKIE_ONLY)
+    const early = vi.fn()
+    events.onResync(early)
+    FakeEventSource.all[0]?.send('hello', hello)
+    const late = vi.fn()
+    events.onResync(late)
+    expect(late).toHaveBeenCalledTimes(1)
+    page.visibility('visible')
+    expect(early).toHaveBeenCalledTimes(1)
+    expect(late).toHaveBeenCalledTimes(1)
+    events.close()
+  })
+
+  it('a listener removed while it was due is not called; close() forgets what was due', () => {
+    const page = stubPage()
+    page.visibility('hidden')
+    const events = createBoardEvents('b-1', COOKIE_ONLY)
+    const gone = vi.fn()
+    const off = events.onResync(gone)
+    FakeEventSource.all[0]?.send('hello', hello)
+    off()
+    page.visibility('visible')
+    expect(gone).not.toHaveBeenCalled()
+    const other = createBoardEvents('b-2', COOKIE_ONLY)
+    const r = vi.fn()
+    page.visibility('hidden')
+    other.onResync(r)
+    FakeEventSource.all.at(-1)?.send('hello', hello)
+    other.close()
+    page.visibility('visible')
+    expect(r).not.toHaveBeenCalled()
+    events.close()
+  })
+
+  it('shown again with a stream that went silent while hidden: it is reopened, and its hello refetches once', () => {
+    const page = stubPage()
+    page.visibility('hidden')
+    const events = createBoardEvents('b-1', COOKIE_ONLY)
+    const r = vi.fn()
+    events.onResync(r)
+    const first = FakeEventSource.all[0] as FakeEventSource
+    first.send('hello', hello)
+    // the laptop slept: the clock moved on, no timer fired and nothing arrived
+    vi.setSystemTime(Date.now() + STALE_STREAM_MS)
+    page.visibility('visible')
+    expect(first.readyState).toBe(FakeEventSource.CLOSED)
+    expect(r).not.toHaveBeenCalled() // the new stream's hello will do it
+    FakeEventSource.all.at(-1)?.send('hello', hello)
+    expect(r).toHaveBeenCalledTimes(1)
+    events.close()
+  })
+})
+
 describe('createSseParser', () => {
   const parse = (chunks: string[]) => {
     const messages: string[] = []
