@@ -27,6 +27,9 @@ function switchableDb(base: Db) {
     maybeOne: (sql, params) => gate(sql, () => base.maybeOne(sql, params)),
     transaction: (fn) => gate('BEGIN', () => base.transaction(fn)),
   }
+  // the pool path (SELECT 1 on the pool): a real Postgres's own probe connection (Db.ping) would bypass the switch,
+  // and has tests of its own below (the fakes with ping)
+  delete db.ping
   return { db, state }
 }
 
