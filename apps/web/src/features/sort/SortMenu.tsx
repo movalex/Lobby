@@ -3,9 +3,11 @@
 // It opens from the selection bar's "Sort" button, the context menu's "Sort by" and the palette's commands, and
 // points at the selection. Escape closes it and gives the keyboard back to what had it; arrows move along the
 // ways to sort; it never takes a click meant for the board (a press outside closes it).
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
 import { useValue } from '../../lib/signals.ts'
+import { anchorRect } from '../ai/board-chrome.ts'
+import { InPopoverLayer, useBoardPlacement } from '../ai/board-popover.tsx'
 import { placeOnMatrix, sortByLens, validAxes } from './ai.ts'
 import { plural } from './copy.ts'
 import { MatrixIcon, SortIcon } from './icons.tsx'
@@ -19,11 +21,6 @@ import './sort.css'
 
 /** The popover's width, px. */
 const WIDTH = 304
-/** Kept clear of the canvas' edges, px. */
-const EDGE = 12
-const GAP = 8
-/** Kept clear along the bottom of the canvas: the board's tool bar sits there, px. */
-const BOTTOM_CLEAR = 96
 
 /** What each way to sort says under its name. */
 const HINTS: Record<SortKey, string> = {
@@ -58,7 +55,11 @@ export function SortOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
   return (
     <div className="dr-sort-overlay">
       <ScoresLegend ctx={ctx} />
-      {state && <SortPopover ctx={ctx} state={state} />}
+      {state && (
+        <InPopoverLayer canvas={canvas}>
+          <SortPopover ctx={ctx} state={state} />
+        </InPopoverLayer>
+      )}
     </div>
   )
 }
@@ -67,35 +68,24 @@ function SortPopover({ ctx, state }: { ctx: CanvasFeatureContext; state: SortMen
   const { canvas } = ctx
   const ref = useRef<HTMLDivElement>(null)
   const titleId = useId()
-  const [pos, setPos] = useState<{ left: number; top: number; max: number } | null>(null)
   const count = targetNotes(canvas, state.ids).length
 
-  // placed under the anchor when it fits, else over it, inside the canvas
-  useLayoutEffect(() => {
-    const pop = ref.current
+  // M4-3 (FTU-2): under the anchor when it fits, else over it or beside it, clear of the style panel, the bottom
+  // toolbar, the top-centre stack and the selection bar; in the popover layer above them (../ai/board-popover.tsx)
+  const placed = useBoardPlacement(canvas, ref, () => {
     const box = canvas.container()?.getBoundingClientRect()
-    if (!pop || !box) return
-    // the content's own height (a max-height from an earlier view does not clip the measure)
-    const h = pop.scrollHeight + 2
-    const left = Math.max(EDGE, Math.min(state.at.x - WIDTH / 2, box.width - WIDTH - EDGE))
-    // clear of the board's tool bar along the bottom
-    const limit = box.height - BOTTOM_CLEAR
-    const under = state.at.bottom + GAP
-    const spaceBelow = limit - under
-    const spaceAbove = state.at.top - GAP - EDGE
-    const below = h <= spaceBelow || spaceBelow >= spaceAbove
-    const top = below ? under : Math.max(EDGE, state.at.top - GAP - Math.min(h, spaceAbove))
-    setPos({ left, top, max: Math.max(160, below ? spaceBelow : spaceAbove) })
-  }, [canvas, state.at, state.view])
+    return box ? anchorRect(box, state.at) : null
+  })
+  const pos = placed ? { left: placed.left, top: placed.top, max: placed.maxHeight } : null
 
   // focus goes in when it opens (and when its view changes); a press outside closes it
   // (a popover that is not placed yet is not shown, and a hidden element takes no focus)
-  const placed = pos !== null
+  const shown = pos !== null
   useEffect(() => {
-    if (!placed) return
+    if (!shown) return
     const first = ref.current?.querySelector<HTMLElement>('[data-autofocus], [role="menuitem"]')
     first?.focus({ preventScroll: true })
-  }, [state.view, placed])
+  }, [state.view, shown])
   useEffect(() => {
     const onDown = (e: PointerEvent) => {
       const t = e.target as Node | null

@@ -11,6 +11,7 @@
 // (a button that would moves out past it), so rotating a selected shape by its handle still works.
 import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
 import { type CanvasFeatureContext, currentPlatform, formatChord, items } from '../../canvas/api/index.ts'
+import { OBSTACLE_IDS, type Rect, registerObstacle } from '../../lib/overlay-obstacles.ts'
 import { useValue } from '../../lib/signals.ts'
 import { FLOW_DIRS, type FlowDir } from './connector.ts'
 import { boxOfElement, flowKindOf, flowSourceOf } from './planner.ts'
@@ -93,6 +94,25 @@ interface Drag {
   pointerId: number
 }
 
+/** The box of the shown + buttons (client px), or null while none is shown (the 'flow-handles' obstacle). */
+export function handlesBox(root: Pick<HTMLElement, 'querySelectorAll'> | null): Rect | null {
+  if (!root) return null
+  let box: { l: number; t: number; r: number; b: number } | null = null
+  for (const el of root.querySelectorAll('.dr-flow-handle')) {
+    const r = el.getBoundingClientRect()
+    if (!(r.width > 0 && r.height > 0)) continue
+    box = box
+      ? {
+          l: Math.min(box.l, r.left),
+          t: Math.min(box.t, r.top),
+          r: Math.max(box.r, r.right),
+          b: Math.max(box.b, r.bottom),
+        }
+      : { l: r.left, t: r.top, r: r.right, b: r.bottom }
+  }
+  return box ? { x: box.l, y: box.t, width: box.r - box.l, height: box.b - box.t } : null
+}
+
 export function FlowHandles({ ctx }: { ctx: CanvasFeatureContext }) {
   const { canvas } = ctx
   // the shape the pointer is over (a label stands for its container) and the one selected source, when they may
@@ -117,6 +137,9 @@ export function FlowHandles({ ctx }: { ctx: CanvasFeatureContext }) {
   const [ghost, setGhost] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
   const drag = useRef<Drag | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const root = useRef<HTMLDivElement>(null)
+  // wave M (M4-3, FTU-11): the shown + buttons are board chrome the selection bar and the popovers keep clear of
+  useEffect(() => registerObstacle(OBSTACLE_IDS.flowHandles, 'handles', () => handlesBox(root.current)), [])
 
   // the shape the pointer left keeps its handles a moment (and while the pointer is on one of them)
   const hover = now?.hover ?? null
@@ -205,7 +228,7 @@ export function FlowHandles({ ctx }: { ctx: CanvasFeatureContext }) {
   }
 
   return (
-    <div className="dr-flow-handles" data-testid="flow-handles" data-flow-source={target}>
+    <div ref={root} className="dr-flow-handles" data-testid="flow-handles" data-flow-source={target}>
       {FLOW_DIRS.map((dir) => {
         const p = place[dir]
         return (

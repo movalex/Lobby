@@ -23,6 +23,8 @@ import {
 import { useValue } from '../../../lib/signals.ts'
 import { isTextEntry, onFocusLeave, trapTab, tryFocus } from '../../../ui/focus.ts'
 import { exportAllowed } from '../../canvas-ux/ported/export-gate.ts'
+import { anchorRect } from '../board-chrome.ts'
+import { InPopoverLayer, useBoardPlacement } from '../board-popover.tsx'
 import { budgetLine, groupNames, themesHint } from '../copy.ts'
 import { ActionIcon, SparkIcon, Spinner } from '../icons.tsx'
 import { runRecap } from '../recap/recap.ts'
@@ -48,7 +50,6 @@ import {
 } from './ask.ts'
 import { canBuildWithAi } from './gate.ts'
 import { AiFlash, AiShimmer } from './Placeholders.tsx'
-import { type PopPlacement, placeAiPopover } from './placement.ts'
 import {
   ACTION_LABELS,
   type AiMenuState,
@@ -96,27 +97,15 @@ function useIsolated<T extends HTMLElement>(onKey?: (e: KeyboardEvent) => void) 
 }
 
 /**
- * Below the anchor when it fits, else above, else on the roomier side scrolling inside a max-height; always inside
- * the canvas and never over its anchor while there is room (wave K.1, ./placement.ts).
+ * Wave M (M4-3, FTU-2): below the anchor when it fits, else above, else beside it, clear of the style panel, the
+ * bottom toolbar, the top-centre stack and the selection bar (../board-chrome.ts), scrolling inside a max-height that
+ * stops at the first of them; it opens in the popover layer above the host slots (../board-popover.tsx).
  */
 function usePlacement(canvas: LobbyCanvas, at: AiMenuState['at'], ref: React.RefObject<HTMLElement | null>) {
-  const [pos, setPos] = useState<PopPlacement | null>(null)
-  useLayoutEffect(() => {
-    const el = ref.current
+  return useBoardPlacement(canvas, ref, () => {
     const box = canvas.container()?.getBoundingClientRect()
-    if (!el || !box) return
-    // the content's own height (scrollHeight is not capped by the max-height a previous pass set), with borders
-    const h = el.scrollHeight + (el.offsetHeight - el.clientHeight)
-    const next = placeAiPopover({ box, at, w: el.offsetWidth, h })
-    if (
-      !pos ||
-      Math.abs(pos.left - next.left) > 0.5 ||
-      Math.abs(pos.top - next.top) > 0.5 ||
-      Math.abs(pos.maxHeight - next.maxHeight) > 0.5
-    )
-      setPos(next)
+    return box ? anchorRect(box, at) : null
   })
-  return pos
 }
 
 /** The popover closed from the keyboard (Escape, ×, Cancel): the focus goes back where it came from. */
@@ -1190,7 +1179,11 @@ export function AiOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
   if (!enabled) return null
   return (
     <div className="dr-ai-overlay" data-testid="ai-overlay">
-      {menu && <AiPopover key={`${menu.view}`} menu={menu} />}
+      {menu && (
+        <InPopoverLayer canvas={canvas}>
+          <AiPopover key={`${menu.view}`} menu={menu} />
+        </InPopoverLayer>
+      )}
       <AiShimmer canvas={canvas} />
       <Busy />
       <SummaryPending />

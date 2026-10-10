@@ -115,6 +115,8 @@
   box-shadow: var(--dr-shadow-pop);
   color: var(--dr-ink);
   font: 14px / 1.35 var(--dr-font);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   pointer-events: auto;
 }
 .dr-ai-preview__summary {

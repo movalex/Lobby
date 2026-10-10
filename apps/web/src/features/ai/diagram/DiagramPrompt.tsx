@@ -25,6 +25,8 @@ import {
 import { type Atom, atom, useValue } from '../../../lib/signals.ts'
 import { bringIntoView } from '../../a11y/ported/traversal.ts'
 import { freshId } from '../../flow/runtime.ts'
+import { topCentreAnchor } from '../board-chrome.ts'
+import { InPopoverLayer, useBoardPlacement } from '../board-popover.tsx'
 import { canBuildWithAi } from '../ported/gate.ts'
 import { type AiPreviewPlan, findSpot, runAi, showAiPreview } from '../ported/public.ts'
 import { aiStatus } from '../ported/runtime.ts'
@@ -233,6 +235,8 @@ function DiagramDialog({ ctx }: { ctx: CanvasFeatureContext }) {
       el.removeEventListener('wheel', stop)
     }
   })
+  // M4-3: at the top of the view, clear of the board's chrome, in the popover layer above it
+  const pos = useBoardPlacement(canvas, ref, () => topCentreAnchor(canvas), { prefer: 'below' })
   const ids = useSelection ? fromSelection.current : []
   const canSend = text.trim().length > 0 || ids.length > 0
   // the prompt closes as the request goes (runAi shows the wait and tells the person when it cannot run)
@@ -242,94 +246,100 @@ function DiagramDialog({ ctx }: { ctx: CanvasFeatureContext }) {
     void runDiagram(ctx, { prompt: text, shapeIds: ids, direction })
   }
   return (
-    <div
-      ref={ref}
-      className="dr-flow-paste dr-flow-diagram"
-      role="dialog"
-      aria-modal="false"
-      aria-labelledby={titleId}
-      data-testid="diagram-prompt"
-      style={{ left: '50%', top: 96, transform: 'translateX(-50%)' }}
-    >
-      <form
-        onSubmit={(e) => {
-          e.preventDefault()
-          submit()
-        }}
+    <InPopoverLayer canvas={canvas}>
+      <div
+        ref={ref}
+        className="dr-flow-paste dr-flow-diagram"
+        role="dialog"
+        aria-modal="false"
+        aria-labelledby={titleId}
+        data-testid="diagram-prompt"
+        style={
+          pos
+            ? { left: pos.left, top: pos.top, transform: 'none', maxHeight: pos.maxHeight, overflowY: 'auto' }
+            : { left: 0, top: 0, transform: 'none', visibility: 'hidden' }
+        }
       >
-        <p id={titleId} className="dr-flow-paste__title">
-          <strong>Diagram from words</strong>
-        </p>
-        <label className="dr-flow-diagram__field">
-          <span>Describe the process</span>
-          <textarea
-            data-testid="diagram-prompt-text"
-            // biome-ignore lint/a11y/noAutofocus: the prompt opens to be typed in
-            autoFocus
-            rows={4}
-            maxLength={AI_DIAGRAM_PROMPT_MAX_CHARS}
-            value={text}
-            placeholder="Brief, concept, internal review, client review; if rejected back to concept, else production"
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault()
-                submit()
-              }
-            }}
-          />
-        </label>
-        {fromSelection.current.length > 0 && (
-          <label className="dr-flow-diagram__check">
-            <input
-              type="checkbox"
-              data-testid="diagram-prompt-selection"
-              checked={useSelection}
-              onChange={(e) => setUseSelection(e.target.checked)}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            submit()
+          }}
+        >
+          <p id={titleId} className="dr-flow-paste__title">
+            <strong>Diagram from words</strong>
+          </p>
+          <label className="dr-flow-diagram__field">
+            <span>Describe the process</span>
+            <textarea
+              data-testid="diagram-prompt-text"
+              // biome-ignore lint/a11y/noAutofocus: the prompt opens to be typed in
+              autoFocus
+              rows={4}
+              maxLength={AI_DIAGRAM_PROMPT_MAX_CHARS}
+              value={text}
+              placeholder="Brief, concept, internal review, client review; if rejected back to concept, else production"
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                  e.preventDefault()
+                  submit()
+                }
+              }}
             />
-            <span>
-              {`Use the ${fromSelection.current.length} selected ${fromSelection.current.length === 1 ? 'item' : 'items'}`}
-            </span>
           </label>
-        )}
-        <fieldset className="dr-flow-diagram__dir">
-          <legend>Reads</legend>
-          {(['down', 'right'] as const).map((d) => (
-            <label key={d}>
+          {fromSelection.current.length > 0 && (
+            <label className="dr-flow-diagram__check">
               <input
-                type="radio"
-                name={`${titleId}-dir`}
-                value={d}
-                data-testid={`diagram-prompt-${d}`}
-                checked={direction === d}
-                onChange={() => setDirection(d)}
+                type="checkbox"
+                data-testid="diagram-prompt-selection"
+                checked={useSelection}
+                onChange={(e) => setUseSelection(e.target.checked)}
               />
-              <span>{d === 'down' ? 'Top to bottom' : 'Left to right'}</span>
+              <span>
+                {`Use the ${fromSelection.current.length} selected ${fromSelection.current.length === 1 ? 'item' : 'items'}`}
+              </span>
             </label>
-          ))}
-        </fieldset>
-        <p className="dr-cux-muted dr-flow-diagram__note">
-          Sends the description and the selected text to OpenAI.
-        </p>
-        <div className="dr-flow-paste__actions">
-          <button
-            type="submit"
-            className="dr-btn dr-btn--primary dr-btn--sm"
-            data-testid="diagram-prompt-create"
-            disabled={!canSend}
-          >
-            Create diagram
-          </button>
-          <button
-            type="button"
-            className="dr-btn dr-btn--sm"
-            data-testid="diagram-prompt-cancel"
-            onClick={close}
-          >
-            Cancel
-          </button>
-        </div>
-      </form>
-    </div>
+          )}
+          <fieldset className="dr-flow-diagram__dir">
+            <legend>Reads</legend>
+            {(['down', 'right'] as const).map((d) => (
+              <label key={d}>
+                <input
+                  type="radio"
+                  name={`${titleId}-dir`}
+                  value={d}
+                  data-testid={`diagram-prompt-${d}`}
+                  checked={direction === d}
+                  onChange={() => setDirection(d)}
+                />
+                <span>{d === 'down' ? 'Top to bottom' : 'Left to right'}</span>
+              </label>
+            ))}
+          </fieldset>
+          <p className="dr-cux-muted dr-flow-diagram__note">
+            Sends the description and the selected text to OpenAI.
+          </p>
+          <div className="dr-flow-paste__actions">
+            <button
+              type="submit"
+              className="dr-btn dr-btn--primary dr-btn--sm"
+              data-testid="diagram-prompt-create"
+              disabled={!canSend}
+            >
+              Create diagram
+            </button>
+            <button
+              type="button"
+              className="dr-btn dr-btn--sm"
+              data-testid="diagram-prompt-cancel"
+              onClick={close}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      </div>
+    </InPopoverLayer>
   )
 }

@@ -16,10 +16,13 @@
 
 import type { LobbyColorName } from '@draftroom/board-ops/elements'
 import { LOBBY_PALETTE } from '@draftroom/board-ops/elements'
-import { useEffect, useId, useRef } from 'react'
+import { type RefObject, useEffect, useId, useRef } from 'react'
 import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
+import { OBSTACLE_IDS } from '../../../lib/overlay-obstacles.ts'
 import { type Atom, atom, useValue } from '../../../lib/signals.ts'
 import { isTextEntry } from '../../../ui/focus.ts'
+import { boardObstacles } from '../board-chrome.ts'
+import { InPopoverLayer, useBoardPlacement } from '../board-popover.tsx'
 import { SparkIcon } from '../icons.tsx'
 import { useReducedMotion } from './Placeholders.tsx'
 import { perCanvas, setAiCtx } from './runtime.ts'
@@ -233,7 +236,6 @@ function PreviewView({ canvas, entry }: { canvas: LobbyCanvas; entry: PreviewEnt
     )
   }, [canvas, entry])
   const marks = JSON.parse(json) as ReturnType<typeof previewMarks>
-  const titleId = useId()
   const panel = useRef<HTMLElement>(null)
   // Losing edit rights while it is open: nothing can be applied.
   useEffect(() => {
@@ -252,16 +254,6 @@ function PreviewView({ canvas, entry }: { canvas: LobbyCanvas; entry: PreviewEnt
     doc.addEventListener('keydown', onKey, true)
     return () => doc.removeEventListener('keydown', onKey, true)
   }, [doc, entry, canvas])
-  useEffect(() => {
-    const el = panel.current
-    if (!el) return
-    const stop = (e: Event) => e.stopPropagation()
-    for (const t of ['pointerdown', 'mousedown', 'keyup', 'wheel'] as const) el.addEventListener(t, stop)
-    el.querySelector<HTMLElement>('[data-testid="ai-preview-apply"]')?.focus({ preventScroll: true })
-    return () => {
-      for (const t of ['pointerdown', 'mousedown', 'keyup', 'wheel'] as const) el.removeEventListener(t, stop)
-    }
-  }, [])
   const choose = (c: PreviewChoice) => {
     entry.choose(c)
     canvas.focus({ preventScroll: true })
@@ -334,68 +326,124 @@ function PreviewView({ canvas, entry }: { canvas: LobbyCanvas; entry: PreviewEnt
           style={{ left: s.x - 10, top: s.y - 10, background: s.color }}
         />
       ))}
-      <section
-        ref={panel}
-        className="dr-ai-preview__panel"
-        role="dialog"
-        aria-labelledby={titleId}
-        data-testid="ai-preview-panel"
-        data-run={plan.runId}
-      >
-        <div className="dr-ai-pop__head">
-          <span className="dr-ai-pop__badge" aria-hidden="true">
-            <SparkIcon size={14} />
-          </span>
-          <h2 id={titleId} className="dr-ai-pop__title">
-            {plan.title}
-          </h2>
-        </div>
-        <p className="dr-ai-preview__summary" data-testid="ai-preview-summary">
-          {plan.summary}
-        </p>
-        {groups.length > 0 && (
-          <p className="dr-ai-preview__groups" data-testid="ai-preview-groups">
-            {groups.slice(0, PREVIEW_MAX_GROUPS).map((g, i) => (
-              <span key={g.name}>
-                {i > 0 ? ' · ' : ''}
-                <span className="dr-ai-preview__group" data-testid="ai-preview-group">
-                  {groupText(g)}
-                </span>
-              </span>
-            ))}
-            {groups.length > PREVIEW_MAX_GROUPS ? ` and ${groups.length - PREVIEW_MAX_GROUPS} more` : ''}
-          </p>
-        )}
-        <p className="dr-ai-pop__foot">Nothing has changed yet. Apply makes it one step you can undo.</p>
-        <div className="dr-ai-panel__actions">
-          <button
-            type="button"
-            className="dr-btn dr-btn--sm"
-            data-testid="ai-preview-discard"
-            onClick={() => choose('discard')}
-          >
-            Discard
-          </button>
-          <span className="dr-ai-form__spacer" />
-          <button
-            type="button"
-            className="dr-btn dr-btn--sm"
-            data-testid="ai-preview-retry"
-            title="Asks AI again (uses another request)"
-            onClick={() => choose('retry')}
-          >
-            Try again
-          </button>
-          <button
-            type="button"
-            className="dr-btn dr-btn--primary dr-btn--sm"
-            data-testid="ai-preview-apply"
-            onClick={() => choose('apply')}
-          >
-            Apply
-          </button>
-        </div>
-      </section>
+      <InPopoverLayer canvas={canvas}>
+        <PreviewPanel canvas={canvas} plan={plan} groups={groups} panel={panel} choose={choose} />
+      </InPopoverLayer>
     </div>
+  )
+}
+
+/**
+ * The preview's panel (wave M, M4-3): in the popover layer above the board's chrome, placed above the bottom toolbar
+ * and clear of the selection bar and the style panel (it used to sit under the selection bar, which covered its
+ * title and its count line). Its presses and keys stay off the canvas; Apply has the keyboard when it opens.
+ */
+function PreviewPanel({
+  canvas,
+  plan,
+  groups,
+  panel,
+  choose,
+}: {
+  canvas: LobbyCanvas
+  plan: PreviewPlan
+  groups: readonly PreviewGroup[]
+  panel: RefObject<HTMLElement | null>
+  choose(c: PreviewChoice): void
+}) {
+  const titleId = useId()
+  const pos = useBoardPlacement(
+    canvas,
+    panel,
+    () => {
+      const root = canvas.container()
+      if (!root) return null
+      const box = root.getBoundingClientRect()
+      // just above the bottom toolbar (or the region's foot), in the middle
+      const bar = boardObstacles(root.ownerDocument).find((o) => o.id === OBSTACLE_IDS.bottomToolbar)
+      const y = bar ? Math.min(bar.rect.y, box.bottom) : box.bottom - 12
+      return { x: box.left + box.width / 2 - 1, y, width: 2, height: 0 }
+    },
+    { prefer: ['above', 'left', 'right', 'below'] },
+  )
+  useEffect(() => {
+    const el = panel.current
+    if (!el) return
+    const stop = (e: Event) => e.stopPropagation()
+    for (const t of ['pointerdown', 'mousedown', 'keyup', 'wheel'] as const) el.addEventListener(t, stop)
+    el.querySelector<HTMLElement>('[data-testid="ai-preview-apply"]')?.focus({ preventScroll: true })
+    return () => {
+      for (const t of ['pointerdown', 'mousedown', 'keyup', 'wheel'] as const) el.removeEventListener(t, stop)
+    }
+  }, [panel])
+  return (
+    <section
+      ref={panel}
+      className="dr-ai-preview__panel"
+      role="dialog"
+      aria-labelledby={titleId}
+      data-testid="ai-preview-panel"
+      data-run={plan.runId}
+      data-placed={pos ? '' : undefined}
+      style={
+        pos
+          ? { left: pos.left, top: pos.top, bottom: 'auto', transform: 'none', maxHeight: pos.maxHeight }
+          : { visibility: 'hidden' }
+      }
+    >
+      <div className="dr-ai-pop__head">
+        <span className="dr-ai-pop__badge" aria-hidden="true">
+          <SparkIcon size={14} />
+        </span>
+        <h2 id={titleId} className="dr-ai-pop__title">
+          {plan.title}
+        </h2>
+      </div>
+      <p className="dr-ai-preview__summary" data-testid="ai-preview-summary">
+        {plan.summary}
+      </p>
+      {groups.length > 0 && (
+        <p className="dr-ai-preview__groups" data-testid="ai-preview-groups">
+          {groups.slice(0, PREVIEW_MAX_GROUPS).map((g, i) => (
+            <span key={g.name}>
+              {i > 0 ? ' · ' : ''}
+              <span className="dr-ai-preview__group" data-testid="ai-preview-group">
+                {groupText(g)}
+              </span>
+            </span>
+          ))}
+          {groups.length > PREVIEW_MAX_GROUPS ? ` and ${groups.length - PREVIEW_MAX_GROUPS} more` : ''}
+        </p>
+      )}
+      <p className="dr-ai-pop__foot">Nothing has changed yet. Apply makes it one step you can undo.</p>
+      <div className="dr-ai-panel__actions">
+        <button
+          type="button"
+          className="dr-btn dr-btn--sm"
+          data-testid="ai-preview-discard"
+          onClick={() => choose('discard')}
+        >
+          Discard
+        </button>
+        <span className="dr-ai-form__spacer" />
+        <button
+          type="button"
+          className="dr-btn dr-btn--sm"
+          data-testid="ai-preview-retry"
+          title="Asks AI again (uses another request)"
+          onClick={() => choose('retry')}
+        >
+          Try again
+        </button>
+        <button
+          type="button"
+          className="dr-btn dr-btn--primary dr-btn--sm"
+          data-testid="ai-preview-apply"
+          onClick={() => choose('apply')}
+        >
+          Apply
+        </button>
+      </div>
+    </section>
   )
 }
