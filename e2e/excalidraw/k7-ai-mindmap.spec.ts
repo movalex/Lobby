@@ -745,6 +745,8 @@ for (const size of [
   }) => {
     const a = await canvasSession('alice')
     await a.page.setViewportSize(size)
+    // the canvas has the new size before the note is placed in it (else it lands low, from the old size)
+    await expect.poll(async () => (await viewport(a.page)).height).toBeLessThan(size.height - 40)
     const note = await noteInView(a.page, 'Launch trailer', { fx: 0.45, fy: 0.35 })
     await expectSaved(a.page)
     await select(a.page, [note])
