@@ -82,6 +82,7 @@ import {
   takeBoardCache,
 } from '../sync/adapter/snapshot-cache.ts'
 import { BoardSkeleton, SkeletonToolbar } from './BoardSkeleton.tsx'
+import { boardCacheAllowed } from './cache-access.ts'
 import {
   BoardPeople,
   CanvasDock,
@@ -120,19 +121,22 @@ const LEAVE_WAIT_MS = 5_000
 
 /** /b/:bid — loads the board (and the caller's role) from the API, then opens the canvas. */
 export function LobbyBoardPage({ boardId }: { boardId: string }) {
-  const uid = useMe().user.id
+  const me = useMe()
+  const uid = me.user.id
   // K1-2: the answer route.tsx asked for together with the ticket, once; a retry asks again
   const load = useCallback(
     (signal: AbortSignal) => takeBoardDetail(boardId) ?? api.getBoard(boardId, signal),
     [boardId],
   )
   const detail = useResource(load)
-  // M6-1: no access (403/404) or a trashed board: this person's copy of it goes, and is never painted
+  // M6-1: no access (403/404), a trashed board, or no member of its workspace (a workspace guest: round 1 refix):
+  // this person's copy of it goes, and is never painted
   const noAccess = detail.status === 'error' && isNoAccess(detail.error)
   const trashed = detail.status === 'ready' && detail.data.board.status === 'trashed'
+  const outsider = detail.status === 'ready' && !boardCacheAllowed(me, detail.data.workspace.id)
   useEffect(() => {
-    if (noAccess || trashed) void purgeBoardCache(boardId, uid)
-  }, [noAccess, trashed, boardId, uid])
+    if (noAccess || trashed || outsider) void purgeBoardCache(boardId, uid)
+  }, [noAccess, trashed, outsider, boardId, uid])
   if (detail.status === 'loading') return <BoardSkeleton boardId={boardId} />
   if (detail.status === 'error') {
     if (isNoAccess(detail.error)) return <NoAccessScreen />
@@ -351,9 +355,12 @@ function LobbyBoardView({
   const archived = useRef(board.status === 'archived')
   archived.current = board.status === 'archived'
   // M6: this open's read of the board cache, taken once (React StrictMode's second session gets the same one);
-  // none for a trashed board
+  // none for a trashed board, nor for anyone who is not a member of its workspace (no read: nothing painted, and
+  // the session writes no copy without one)
   const [cache] = useState<CacheRead | null>(() =>
-    board.status === 'trashed' ? null : takeBoardCache(boardId, first.user.id),
+    board.status === 'trashed' || !boardCacheAllowed(rest.me, rest.workspace.id)
+      ? null
+      : takeBoardCache(boardId, first.user.id),
   )
 
   // The session (its socket, engine core, lease, offline queue) is made by the effect that disposes it, not
