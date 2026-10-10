@@ -620,6 +620,8 @@ async function diagramFromWords(page: Page, openai: FakeOpenAi, y: number, n: nu
   await select(page, [note])
   const at = await itemCenterOnScreen(page, note)
   await page.mouse.click(at.x, at.y, { button: 'right' })
+  // wave M (M4-5): Diagram from words sits in the context menu's AI submenu
+  await page.getByRole('menuitem', { name: 'AI', exact: true }).click()
   await page.getByRole('menuitem', { name: /Diagram from words/ }).click()
   await page.getByTestId('diagram-prompt-text').fill('Brief, concept, review, ship')
   await page.getByTestId('diagram-prompt-create').click()
