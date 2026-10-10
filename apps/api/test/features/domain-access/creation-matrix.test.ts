@@ -270,12 +270,15 @@ describe('the creation matrix', () => {
     expect(w.sync.snapshots).toEqual([])
   })
 
-  it('a creator gets 201/200 on the same calls', async () => {
+  it('a creator gets 201/200 on the same calls (204 only for a DELETE)', async () => {
     w = await world()
     for (const key of LIVE) {
       const [method, url, body] = probe(w, key)
       const res = await w.alice.req(method, url, body)
-      expect([200, 201, 204], `${key}: ${res.statusCode} ${res.body}`).toContain(res.statusCode)
+      // A create or share call that answers 204 created nothing, so only a DELETE row (wave M's template removal,
+      // M8-3) may answer 204, and it must.
+      const ok = key.startsWith('DELETE ') ? [204] : [200, 201]
+      expect(ok, `${key}: ${res.statusCode} ${res.body}`).toContain(res.statusCode)
     }
   })
 
