@@ -343,3 +343,37 @@ describe('lock order (the statements of each transaction, on PGlite)', () => {
     await api.db.close()
   })
 })
+
+describe('shipping hidden (the gate rule: a route listed in PENDING_ROUTES again is not registered)', () => {
+  it('Ask across boards and the four template routes answer the unknown route’s 404; the rest of the api is unchanged', async () => {
+    const { PENDING_ROUTES } = await import('../../../src/features/pending-routes.ts')
+    const pending = PENDING_ROUTES as Record<string, { owner: 'W8'; item: string }>
+    const keys = [
+      'POST /api/workspaces/:wid/ai/ask',
+      'GET /api/workspaces/:wid/templates',
+      'POST /api/workspaces/:wid/templates',
+      'DELETE /api/workspaces/:wid/templates/:bid',
+      'POST /api/workspaces/:wid/templates/:bid/use',
+    ]
+    await api.close()
+    for (const k of keys) pending[k] = { owner: 'W8', item: 'hidden' }
+    try {
+      sync = createFakeSync()
+      api = await createTestApi({ deps: { syncInternal: sync } })
+      const alice = await api.login('alice')
+      for (const k of keys) {
+        const [method = '', url = ''] = k.split(' ')
+        expect(api.app.hasRoute({ method: method as 'GET', url }), k).toBe(false)
+      }
+      const res = await alice.req('GET', ws)
+      expect(res.statusCode).toBe(404)
+      expect(res.json()).toEqual({ error: { code: 'NOT_FOUND', message: 'Not found.' } })
+      expect(
+        (await alice.req('POST', `/api/workspaces/${DEV_STUDIO}/ai/ask`, { question: 'x' })).statusCode,
+      ).toBe(404)
+      expect((await alice.req('GET', `/api/workspaces/${DEV_STUDIO}/search?q=x`)).statusCode).toBe(200)
+    } finally {
+      for (const k of keys) delete pending[k]
+    }
+  })
+})

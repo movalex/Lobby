@@ -54,6 +54,7 @@ import type { KeyedLimit } from '../../rate-limit.ts'
 import type { FeatureContext } from '../context.ts'
 import { boardInternalOnly } from '../dashboard/outside.ts'
 import { mayExport } from '../export-control/policy.ts'
+import { isPendingRoute } from '../pending-routes.ts'
 import { searchIndexerOf } from '../search/index.ts'
 import { parseQuestion } from '../search/query.ts'
 import { type ScopedBoard, searchScope } from '../search/scope.ts'
@@ -133,45 +134,48 @@ export function registerWorkspaceAsk(
   const { db, now } = ctx
   const cfg = ctx.config.ai
 
-  app.post(WORKSPACE_ASK_ROUTE, async (req, reply): Promise<WorkspaceAskResponse> => {
-    const user = await ctx.requireUser(req)
-    deps.runsPerUser.take(user.id)
-    const input = parse(WorkspaceAskRequest, req.body)
-    const { wid = '' } = req.params as Params
-    if (!cfg.enabled)
-      throw new ApiError(503, AI_ERROR_CODES.turnedOff, 'AI is turned off for Lobby right now.')
-    const client = deps.client
-    if (!aiConfigured(cfg) || !client) throw notFound()
-    const workspaceRole = await requireWorkspaceRole(db, wid, user.id)
-    if (!ASKING_ROLES.has(workspaceRole)) throw forbidden(WORKSPACE_GUEST_MESSAGE)
+  // Registered unless listed in ../pending-routes.ts again: that would ship it hidden (the root 404, after which the
+  // web hides All boards for the tab) without a change here.
+  if (!isPendingRoute(`POST ${WORKSPACE_ASK_ROUTE}`))
+    app.post(WORKSPACE_ASK_ROUTE, async (req, reply): Promise<WorkspaceAskResponse> => {
+      const user = await ctx.requireUser(req)
+      deps.runsPerUser.take(user.id)
+      const input = parse(WorkspaceAskRequest, req.body)
+      const { wid = '' } = req.params as Params
+      if (!cfg.enabled)
+        throw new ApiError(503, AI_ERROR_CODES.turnedOff, 'AI is turned off for Lobby right now.')
+      const client = deps.client
+      if (!aiConfigured(cfg) || !client) throw notFound()
+      const workspaceRole = await requireWorkspaceRole(db, wid, user.id)
+      if (!ASKING_ROLES.has(workspaceRole)) throw forbidden(WORKSPACE_GUEST_MESSAGE)
 
-    if (input.acknowledged === true) {
-      await db.query(
-        `INSERT INTO ai_notice_acceptances (workspace_id, user_id, accepted_at) VALUES ($1, $2, $3)
+      if (input.acknowledged === true) {
+        await db.query(
+          `INSERT INTO ai_notice_acceptances (workspace_id, user_id, accepted_at) VALUES ($1, $2, $3)
          ON CONFLICT (workspace_id, user_id) DO NOTHING`,
-        [wid, user.id, now()],
-      )
-    } else if (!(await deps.loaders.noticeAccepted(wid, user.id))) {
-      throw conflict(
-        AI_ERROR_CODES.noticeRequired,
-        'Asking across boards sends the text of your boards to OpenAI. Confirm that before the first use.',
-      )
-    }
+          [wid, user.id, now()],
+        )
+      } else if (!(await deps.loaders.noticeAccepted(wid, user.id))) {
+        throw conflict(
+          AI_ERROR_CODES.noticeRequired,
+          'Asking across boards sends the text of your boards to OpenAI. Confirm that before the first use.',
+        )
+      }
 
-    const release = deps.inFlight.acquire(user.id, wid)
-    if (!release)
-      throw new ApiError(
-        429,
-        AI_ERROR_CODES.busy,
-        'Lobby is still working on another AI request. Wait for it to finish.',
-        { 'retry-after': '5' },
-      )
-    try {
-      return await ask(client, { workspaceId: wid, userId: user.id, workspaceRole }, input.question, reply)
-    } finally {
-      release()
-    }
-  })
+      const release = deps.inFlight.acquire(user.id, wid)
+      if (!release)
+        throw new ApiError(
+          429,
+          AI_ERROR_CODES.busy,
+          'Lobby is still working on another AI request. Wait for it to finish.',
+          { 'retry-after': '5' },
+        )
+      try {
+        return await ask(client, { workspaceId: wid, userId: user.id, workspaceRole }, input.question, reply)
+      } finally {
+        release()
+      }
+    })
 
   interface Asker {
     workspaceId: string

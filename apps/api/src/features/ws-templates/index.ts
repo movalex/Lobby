@@ -57,6 +57,7 @@ import { mayExport } from '../export-control/policy.ts'
 import { filesShownOn, referencedElementFiles, referencedFiles } from '../history/files.ts'
 import { contentOf, created, recordsOf } from '../history/index.ts'
 import { createBoardFrom, newCanvasBoard, viaSync } from '../history/new-board.ts'
+import { isPendingRoute } from '../pending-routes.ts'
 
 /** A full board copy each (as duplicate): per client, per minute. */
 const HEAVY = { config: { rateLimit: { max: 60, timeWindow: 60_000 } } }
@@ -118,131 +119,141 @@ export async function registerWsTemplates(app: FastifyInstance, ctx: FeatureCont
     await ctx.identity.requireCreator(db, userId, 'create', { route, by: 'route' })
   }
 
-  app.get(WS_TEMPLATES_ROUTE, async (req): Promise<ListWorkspaceTemplatesResponse> => {
-    const user = await ctx.requireUser(req)
-    const { wid = '' } = req.params as Params
-    const role = await requireWorkspaceRole(db, wid, user.id)
-    if (!LISTING_ROLES.has(role)) throw forbidden(MEMBERS_ONLY)
-    const rows = await db.query<TemplateRow>(
-      `${TEMPLATE_SELECT}
+  // Each route is registered unless it is listed in ../pending-routes.ts again: that would ship it hidden (the root
+  // 404, which the web reads as 'no templates here') without a change in this file.
+  const live = (key: string) => !isPendingRoute(key)
+
+  if (live(`GET ${WS_TEMPLATES_ROUTE}`))
+    app.get(WS_TEMPLATES_ROUTE, async (req): Promise<ListWorkspaceTemplatesResponse> => {
+      const user = await ctx.requireUser(req)
+      const { wid = '' } = req.params as Params
+      const role = await requireWorkspaceRole(db, wid, user.id)
+      if (!LISTING_ROLES.has(role)) throw forbidden(MEMBERS_ONLY)
+      const rows = await db.query<TemplateRow>(
+        `${TEMPLATE_SELECT}
        WHERE t.workspace_id = $1 AND b.status <> 'trashed'
        ORDER BY t.added_at DESC, t.board_id
        LIMIT ${WS_TEMPLATES_MAX}`,
-      [wid],
-    )
-    return { templates: rows.rows.map(toTemplate) }
-  })
-
-  app.post(WS_TEMPLATES_ROUTE, async (req, reply): Promise<WorkspaceTemplate> => {
-    const user = await ctx.requireUser(req)
-    const { wid = '' } = req.params as Params
-    const input = parse(AddWorkspaceTemplateInput, req.body)
-    await requireTemplateAdmin(wid, user.id, req.routeOptions.url ?? '')
-    // A board of this workspace that is not in the trash (an owner or admin can open every one of them).
-    const access = await loadBoardAccess(db, input.boardId, user.id)
-    if (!access || access.board.workspace_id !== wid || access.board.status === 'trashed') throw notFound()
-    // Its content is offered to every member as a copy: whoever saves it must be allowed to copy out of it.
-    if (!(await mayExport(db, access, user.id)))
-      throw forbidden('Copying from this board is turned off for you, so it cannot be a workspace template.')
-    const row = await db.transaction(async (tx) => {
-      await lockWorkspace(tx, wid)
-      const exists = await tx.maybeOne(
-        'SELECT 1 AS ok FROM workspace_templates WHERE workspace_id = $1 AND board_id = $2',
-        [wid, input.boardId],
+        [wid],
       )
-      if (!exists) {
-        const { n } = await tx.one<{ n: number }>(
-          'SELECT count(*)::int AS n FROM workspace_templates WHERE workspace_id = $1',
-          [wid],
+      return { templates: rows.rows.map(toTemplate) }
+    })
+
+  if (live(`POST ${WS_TEMPLATES_ROUTE}`))
+    app.post(WS_TEMPLATES_ROUTE, async (req, reply): Promise<WorkspaceTemplate> => {
+      const user = await ctx.requireUser(req)
+      const { wid = '' } = req.params as Params
+      const input = parse(AddWorkspaceTemplateInput, req.body)
+      await requireTemplateAdmin(wid, user.id, req.routeOptions.url ?? '')
+      // A board of this workspace that is not in the trash (an owner or admin can open every one of them).
+      const access = await loadBoardAccess(db, input.boardId, user.id)
+      if (!access || access.board.workspace_id !== wid || access.board.status === 'trashed') throw notFound()
+      // Its content is offered to every member as a copy: whoever saves it must be allowed to copy out of it.
+      if (!(await mayExport(db, access, user.id)))
+        throw forbidden(
+          'Copying from this board is turned off for you, so it cannot be a workspace template.',
         )
-        if (n >= WS_TEMPLATES_MAX)
-          throw conflict(
-            'WS_TEMPLATES_LIMIT',
-            `A workspace keeps at most ${WS_TEMPLATES_MAX} templates. Remove one first.`,
+      const row = await db.transaction(async (tx) => {
+        await lockWorkspace(tx, wid)
+        const exists = await tx.maybeOne(
+          'SELECT 1 AS ok FROM workspace_templates WHERE workspace_id = $1 AND board_id = $2',
+          [wid, input.boardId],
+        )
+        if (!exists) {
+          const { n } = await tx.one<{ n: number }>(
+            'SELECT count(*)::int AS n FROM workspace_templates WHERE workspace_id = $1',
+            [wid],
           )
-      }
-      // The board may have been deleted for good since it was read: the composite foreign key refuses the row.
-      const saved = await tx.maybeOne<{ board_id: string }>(
-        `INSERT INTO workspace_templates (workspace_id, board_id, name, category, added_by, added_at)
+          if (n >= WS_TEMPLATES_MAX)
+            throw conflict(
+              'WS_TEMPLATES_LIMIT',
+              `A workspace keeps at most ${WS_TEMPLATES_MAX} templates. Remove one first.`,
+            )
+        }
+        // The board may have been deleted for good since it was read: the composite foreign key refuses the row.
+        const saved = await tx.maybeOne<{ board_id: string }>(
+          `INSERT INTO workspace_templates (workspace_id, board_id, name, category, added_by, added_at)
          SELECT $1, b.id, $3, $4, $5, $6 FROM boards b
           WHERE b.id = $2 AND b.workspace_id = $1 AND b.status <> 'trashed'
          ON CONFLICT (workspace_id, board_id) DO UPDATE SET name = EXCLUDED.name, category = EXCLUDED.category
          RETURNING board_id`,
-        [wid, input.boardId, input.name, input.category, user.id, ctx.now()],
-      )
-      if (!saved) throw notFound()
-      return tx.one<TemplateRow>(`${TEMPLATE_SELECT} WHERE t.workspace_id = $1 AND t.board_id = $2`, [
-        wid,
-        input.boardId,
-      ])
+          [wid, input.boardId, input.name, input.category, user.id, ctx.now()],
+        )
+        if (!saved) throw notFound()
+        return tx.one<TemplateRow>(`${TEMPLATE_SELECT} WHERE t.workspace_id = $1 AND t.board_id = $2`, [
+          wid,
+          input.boardId,
+        ])
+      })
+      reply.code(201)
+      return toTemplate(row)
     })
-    reply.code(201)
-    return toTemplate(row)
-  })
 
-  app.delete(WS_TEMPLATE_ROUTE, async (req, reply) => {
-    const user = await ctx.requireUser(req)
-    const { wid = '', bid = '' } = req.params as Params
-    await requireTemplateAdmin(wid, user.id, req.routeOptions.url ?? '')
-    if (!isBoardId(bid)) throw notFound()
-    const removed = await db.transaction(async (tx) => {
-      // The workspace row first (the lock order): a use under way finishes before this removal, or sees it.
-      await lockWorkspace(tx, wid)
-      const r = await tx.query('DELETE FROM workspace_templates WHERE workspace_id = $1 AND board_id = $2', [
+  if (live(`DELETE ${WS_TEMPLATE_ROUTE}`))
+    app.delete(WS_TEMPLATE_ROUTE, async (req, reply) => {
+      const user = await ctx.requireUser(req)
+      const { wid = '', bid = '' } = req.params as Params
+      await requireTemplateAdmin(wid, user.id, req.routeOptions.url ?? '')
+      if (!isBoardId(bid)) throw notFound()
+      const removed = await db.transaction(async (tx) => {
+        // The workspace row first (the lock order): a use under way finishes before this removal, or sees it.
+        await lockWorkspace(tx, wid)
+        const r = await tx.query(
+          'DELETE FROM workspace_templates WHERE workspace_id = $1 AND board_id = $2',
+          [wid, bid],
+        )
+        return r.rowCount
+      })
+      if (!removed) throw notFound()
+      reply.code(204)
+      return null
+    })
+
+  if (live(`POST ${WS_TEMPLATE_USE_ROUTE}`))
+    app.post(WS_TEMPLATE_USE_ROUTE, HEAVY, async (req, reply) => {
+      const user = await ctx.requireUser(req)
+      const { wid = '', bid = '' } = req.params as Params
+      const input = parse(UseWorkspaceTemplateInput, req.body ?? {})
+      // A member who may create boards, and a creator: before anything is read of the template.
+      const role = await requireWorkspaceRole(db, wid, user.id)
+      if (!canCreateInWorkspace(role)) throw forbidden(CREATE_MEMBERS)
+      await ctx.identity.requireCreator(db, user.id, 'create', {
+        route: req.routeOptions.url ?? '',
+        by: 'route',
+      })
+      const template = await liveTemplate(db, wid, bid)
+      if (!template) throw notFound()
+      const projectId = input.projectId ?? null
+      if (projectId) await requireProjectInWorkspace(db, projectId, wid)
+      // bridge release R0: a board of the new canvas is copied only by an api whose sync runs it
+      if (template.new_canvas && !(await onNewCanvas(ctx))) throw newCanvasBoard()
+      const snap = await viaSync(() => ctx.sync.snapshot(bid))
+      const lobby = lobbySnapshotOf(snap)
+      const { shown, notShown } = await filesShownOn(
+        db,
         wid,
         bid,
-      ])
-      return r.rowCount
-    })
-    if (!removed) throw notFound()
-    reply.code(204)
-    return null
-  })
-
-  app.post(WS_TEMPLATE_USE_ROUTE, HEAVY, async (req, reply) => {
-    const user = await ctx.requireUser(req)
-    const { wid = '', bid = '' } = req.params as Params
-    const input = parse(UseWorkspaceTemplateInput, req.body ?? {})
-    // A member who may create boards, and a creator: before anything is read of the template.
-    const role = await requireWorkspaceRole(db, wid, user.id)
-    if (!canCreateInWorkspace(role)) throw forbidden(CREATE_MEMBERS)
-    await ctx.identity.requireCreator(db, user.id, 'create', {
-      route: req.routeOptions.url ?? '',
-      by: 'route',
-    })
-    const template = await liveTemplate(db, wid, bid)
-    if (!template) throw notFound()
-    const projectId = input.projectId ?? null
-    if (projectId) await requireProjectInWorkspace(db, projectId, wid)
-    // bridge release R0: a board of the new canvas is copied only by an api whose sync runs it
-    if (template.new_canvas && !(await onNewCanvas(ctx))) throw newCanvasBoard()
-    const snap = await viaSync(() => ctx.sync.snapshot(bid))
-    const lobby = lobbySnapshotOf(snap)
-    const { shown, notShown } = await filesShownOn(
-      db,
-      wid,
-      bid,
-      lobby ? await referencedElementFiles(db, lobby.elements) : referencedFiles(recordsOf(snap)),
-    )
-    const { row: board } = await createBoardFrom(
-      ctx,
-      {
-        userId: user.id,
-        workspaceId: wid,
-        projectId,
-        title: input.title ?? template.name,
-        content: contentOf(snap),
-        files: shown,
-        via: 'template',
-        from: { boardId: bid },
-        // Under the workspace row lock: the template must still be one (a removal that went first wins).
-        inTx: async (tx) => {
-          if (!(await liveTemplate(tx, wid, bid, true))) throw notFound()
+        lobby ? await referencedElementFiles(db, lobby.elements) : referencedFiles(recordsOf(snap)),
+      )
+      const { row: board } = await createBoardFrom(
+        ctx,
+        {
+          userId: user.id,
+          workspaceId: wid,
+          projectId,
+          title: input.title ?? template.name,
+          content: contentOf(snap),
+          files: shown,
+          via: 'template',
+          from: { boardId: bid },
+          // Under the workspace row lock: the template must still be one (a removal that went first wins).
+          inTx: async (tx) => {
+            if (!(await liveTemplate(tx, wid, bid, true))) throw notFound()
+          },
         },
-      },
-      warn,
-    )
-    reply.code(201)
-    return created(board, shown.length, notShown, !(await showsR0Marks(ctx)))
-  })
+        warn,
+      )
+      reply.code(201)
+      return created(board, shown.length, notShown, !(await showsR0Marks(ctx)))
+    })
 }
