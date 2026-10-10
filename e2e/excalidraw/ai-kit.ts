@@ -7,6 +7,9 @@
 // Wave L: W2 owns this kit. The fake's canned answers for the six new actions (recap, ask, command, diagram,
 // sort, score) are in ../tests/support/ai.ts `waveLAnswer` (the fake server's own file; re-exported here),
 // keyed by the response schema names below.
+//
+// Wave M: W4 owns this kit. Its m4 specs' page measures (contrastOf, hitTestable, elementAt) and the foundation's
+// Ask-across-boards fakes (fakeWorkspaceAsk, cannedWorkspaceAsk, forceWorkspaceAsk) are at the end.
 import { expect, type Locator, type Page, type Route } from '@playwright/test'
 import type { WorkspaceAskHookOutcome } from '../../apps/web/src/features/ai/workspace-ask/dev-hook-types.ts'
 import { installServerTextMetrics } from '../../packages/canvas-schema/src/engine/index.ts'
