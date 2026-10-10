@@ -11,6 +11,11 @@
 // "Shared outside" pill is a badge on Share and the sharing link pill sits against it, and a Feedback pill is
 // always there (in the "⋯" menu on a phone, with the bell and the comment tool). `topBarPlan` is the list of
 // what goes where per width; `statusView` is the dot.
+//
+// Wave M (M3-1): the command palette's "Search or do… Ctrl+K" is a feature item of the top bar (the topBar registry,
+// features/command-palette), not pinned: it is part of `features` below, so a tablet, a phone and a crowded bar fold it
+// into "⋯" with the other feature controls, and a bar that is only a little crowded keeps its magnifier (the `palette`
+// compact step).
 import { saveLabel, saveTitle } from '../sync-quality/copy.ts'
 import type { DisplayState, Rejection } from '../sync-quality/save-state.ts'
 
@@ -22,6 +27,8 @@ export const COMPACT_STEPS = [
   'status',
   /** "Private brainstorm" keeps its lock and counts; an idle timer keeps its stopwatch. */
   'chips',
+  /** M3-1: "Search or do… Ctrl+K" keeps its magnifier ("Search or do…" stays its name and tooltip; the key still works). */
+  'palette',
   /** K2-5: the Feedback pill keeps its speech bubble ("Send feedback" stays its name and tooltip). */
   'feedback',
   /** The workspace name before the title (the logo still goes back to the workspace). */

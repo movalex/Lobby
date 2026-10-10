@@ -10,6 +10,10 @@
 //
 // The searches (the board's own search, the workspace's) go out only for two or more characters, after a
 // 150 ms pause in typing; a newer query aborts the older one. The static lines are ranked at once.
+//
+// Wave M (M3-2, M3-3): an empty field starts with Recent, then Try (the lines the index marks as starters: what wave L
+// offers), then the groups, and last "Not available right now" (every line that cannot run, each saying why); no line is
+// chosen until an arrow key or the pointer picks one. A "Try it" from the What's new card opens it with one line coached.
 import { type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { isPaletteKey, paletteKeyOf } from './keys.ts'
 import {

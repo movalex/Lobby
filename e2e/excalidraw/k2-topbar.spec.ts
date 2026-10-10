@@ -170,7 +170,10 @@ test('K2-5: with a client link and a vote running: Shared outside is a badge on 
   )
   // wave K integration: K3 is merged, so this is a check, not a skip
   expect(ungrouped, controls.join(', ')).toEqual([])
-  expect(controls.length, controls.join(', ')).toBeLessThanOrEqual(8)
+  // wave M (M3-1): the command palette's "Search or do… Ctrl+K" is one more control in the bar; the count above it is K2's
+  const counted = controls.filter((c) => c !== 'topbar-palette')
+  expect(controls).toContain('topbar-palette')
+  expect(counted.length, controls.join(', ')).toBeLessThanOrEqual(8)
 })
 
 test('K2-5: on a 375 px phone the bell, the comment tool, Feedback and the account are in "⋯"; the dot and Share stay', async ({
