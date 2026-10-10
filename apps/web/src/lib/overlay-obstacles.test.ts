@@ -90,7 +90,13 @@ const covers = (p: { x: number; y: number }, size: { width: number; height: numb
 
 describe('placePopover', () => {
   it('free space: below, centred on the anchor, gap 8', () => {
-    expect(placePopover(base())).toEqual({ x: 550, y: 348, side: 'below', maxHeight: 900 - 8 - 348, fits: true })
+    expect(placePopover(base())).toEqual({
+      x: 550,
+      y: 348,
+      side: 'below',
+      maxHeight: 900 - 8 - 348,
+      fits: true,
+    })
   })
 
   it('takes the preferred side first, as a string or a list', () => {
@@ -183,7 +189,9 @@ describe('placePopover', () => {
     expect(covers(p, size, handle)).toBe(true)
     expect(covers(p, size, toolbar)).toBe(false)
     // a caller that accepts a 4 px strip can ask for it (minHeight 0): below is then clear, clipped to 4
-    const strip = placePopover(base({ anchor, viewport: PHONE, size, obstacles: [toolbar, handle], minHeight: 0 }))
+    const strip = placePopover(
+      base({ anchor, viewport: PHONE, size, obstacles: [toolbar, handle], minHeight: 0 }),
+    )
     expect(strip).toEqual({ x: 8, y: 648, side: 'below', maxHeight: 0, fits: false })
   })
 
