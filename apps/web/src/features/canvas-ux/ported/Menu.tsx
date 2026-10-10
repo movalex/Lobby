@@ -25,6 +25,7 @@ import type {
   MenuTarget,
 } from '../../../canvas/api/index.ts'
 import { currentPlatform, formatChord, MENU_GROUPS } from '../../../canvas/api/index.ts'
+import { FeatureBoundary } from '../../FeatureHostCore.tsx'
 import { CheckIcon, ChevronRightIcon } from './icons.tsx'
 
 export interface MenuRow {
@@ -63,7 +64,13 @@ export function resolveEntry(
   }
   if (e.component) {
     const C = e.component
-    return { id: e.id, label, disabled, custom: <C ctx={ctx} target={target} /> }
+    // H1 (M1-2): a custom row that throws drops out of the menu (it is mounted afresh when the menu opens again)
+    const custom = (
+      <FeatureBoundary featureId={`menu:${e.id}`}>
+        <C ctx={ctx} target={target} />
+      </FeatureBoundary>
+    )
+    return { id: e.id, label, disabled, custom }
   }
   const run = e.run ? () => e.run?.(ctx, target) : cmd ? () => cmd.run(ctx, source) : undefined
   return { id: e.id, label, ...(kbd ? { kbd } : {}), disabled, checked: e.checked?.(ctx, target), run }

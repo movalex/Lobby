@@ -13,6 +13,17 @@ import {
   startViewCamera,
   unionRects,
 } from './placement.ts'
+import {
+  foldSelectionBarMeasure,
+  type OverlayRect,
+  placeSelectionBar,
+  roundPanelRect,
+  SELBAR_HYSTERESIS,
+  SELBAR_INITIAL_LAYOUT,
+  SELBAR_MAX_PASSES,
+  SELBAR_PASS_WINDOW_MS,
+  type SelectionBarPlacement,
+} from './ported/SelectionBar.tsx'
 
 const size = { w: 1000, h: 600 }
 const center = { x: 0, y: 0 }
@@ -196,5 +207,159 @@ describe('startViewCamera (K2-7)', () => {
 
   it('a free area too small to show anything falls back (null) to a plain fit', () => {
     expect(startViewCamera({ x: 0, y: 0, w: 100, h: 100 }, { w: 120, h: 120 }, insets)).toBeNull()
+  })
+})
+
+// ---- H1 (wave M, M1-1; FTU-1): the selection bar's placement settles ------------------------------------------
+
+describe('placeSelectionBar is pure and idempotent (H1)', () => {
+  const vw = 1392
+  const vh = 852
+  const panel: OverlayRect = { x: vw - 12 - 216, y: 12, w: 216, h: 450 }
+  const fixtures: { name: string; o: Parameters<typeof placeSelectionBar>[0]; side: string }[] = [
+    { name: 'clear of the panel', o: { cx: 500, top: 300, half: 90, h: 38, vw, vh, panel }, side: 'under' },
+    {
+      name: 'over the panel: left of it',
+      o: { cx: vw - 120, top: 200, half: 90, h: 38, vw, vh, panel },
+      side: 'left',
+    },
+    {
+      name: 'no room on the left: below it',
+      o: { cx: 150, top: 100, half: 120, h: 38, vw: 300, vh, panel: { x: 40, y: 12, w: 216, h: 300 } },
+      side: 'below',
+    },
+    // the hysteresis bands: 4 px over the panel's edge (under stays under), 4 px clear of it
+    {
+      name: '4 px over the panel',
+      o: { cx: panel.x - 90 + 4, top: 100, half: 90, h: 38, vw, vh, panel },
+      side: 'left',
+    },
+    { name: 'no panel', o: { cx: vw - 120, top: 200, half: 90, h: 38, vw, vh, panel: null }, side: 'under' },
+    // FTU-1's phone: 390 x 796, the selection against the left edge
+    {
+      name: 'FTU-1 at 390 px',
+      o: { cx: 15, top: 262, half: 136, h: 82, vw: 390, vh: 796, panel: { x: 228, y: 8, w: 156, h: 120 } },
+      side: 'under',
+    },
+  ]
+  for (const f of fixtures) {
+    it(`${f.name}: its own result fed back 10 times gives the same side and position`, () => {
+      const first = placeSelectionBar(f.o)
+      expect(first.side).toBe(f.side)
+      let p = first
+      for (let i = 0; i < 10; i++) {
+        p = placeSelectionBar({ ...f.o, prev: p })
+        expect(p).toEqual(first)
+      }
+      // pure: the same input twice, the same answer
+      expect(placeSelectionBar(f.o)).toEqual(first)
+    })
+  }
+
+  it('hysteresis: under stays under until it covers the panel by more than 8 px; aside stays aside until clear by more', () => {
+    const at = (cx: number, prev: SelectionBarPlacement | null) =>
+      placeSelectionBar({ cx, top: 100, half: 90, h: 38, vw, vh, panel, prev }).side
+    // the under box's right edge is cx + 90; the panel starts at panel.x
+    const edge = panel.x - 90
+    expect(at(edge + 4, null)).toBe('left') // no history: any overlap steps aside (K2-7)
+    expect(at(edge + 4, { left: 0, top: 0, side: 'under' })).toBe('under')
+    expect(at(edge + SELBAR_HYSTERESIS, { left: 0, top: 0, side: 'under' })).toBe('under')
+    expect(at(edge + SELBAR_HYSTERESIS + 1, { left: 0, top: 0, side: 'under' })).toBe('left')
+    expect(at(edge - 4, { left: 0, top: 0, side: 'left' })).toBe('left')
+    expect(at(edge - SELBAR_HYSTERESIS - 1, { left: 0, top: 0, side: 'left' })).toBe('under')
+  })
+})
+
+describe('the selection bar layout effect settles in 2 passes or fewer (H1, FTU-1)', () => {
+  // FTU-1, as measured at 390 x 844 (touch): the bar holds six 36 px buttons and is 256 px wide in one row. It was
+  // as wide as the room right of its left edge, so with the selection against the canvas's left edge (its centre
+  // clamped to `half`) every measure moved it, and a 1 px ceil flipped it between 135 and 136 for ever.
+  const vw = 390
+  const vh = 796
+  const ROW = 256
+  const shrinkToFit = (left: number) => {
+    const room = vw - left
+    const w = room >= ROW ? ROW : room
+    return { half: Math.ceil(w / 2) + 8, h: room >= ROW ? 44 : 82, panel: null }
+  }
+
+  /** Renders the bar until its layout state stops changing: what React does with the layout effect. */
+  function run(fold: typeof foldSelectionBarMeasure, cx: number, renders = 60) {
+    let layout = SELBAR_INITIAL_LAYOUT
+    let prev: SelectionBarPlacement | null = null
+    let changes = 0
+    for (let i = 0; i < renders; i++) {
+      const p = placeSelectionBar({
+        cx,
+        top: 300,
+        half: layout.m.half,
+        h: layout.m.h,
+        vw,
+        vh,
+        panel: null,
+        prev,
+      })
+      prev = p
+      const next = fold(layout, 'n1 n2|390x796|0|lock,tags', shrinkToFit(p.left), i)
+      if (next === layout) return { settled: true, changes, placement: p }
+      layout = next
+      changes++
+    }
+    return { settled: false, changes, placement: prev }
+  }
+
+  it('the fixture does oscillate without the cap (the old effect: set whenever the measure differs)', () => {
+    const uncapped: typeof foldSelectionBarMeasure = (prev, key, m) =>
+      prev.m.half === m.half && prev.m.h === m.h ? prev : { key, passes: 0, at: 0, m }
+    expect(run(uncapped, 15).settled).toBe(false)
+  })
+
+  it('with the cap it settles within 2 passes, and the result is stable when fed back', () => {
+    const r = run(foldSelectionBarMeasure, 15)
+    expect(r.settled).toBe(true)
+    expect(r.changes).toBeLessThanOrEqual(SELBAR_MAX_PASSES)
+    const p = r.placement as SelectionBarPlacement
+    expect(p.left).toBeGreaterThan(0)
+    expect(placeSelectionBar({ cx: 15, top: 300, half: 136, h: 82, vw, vh, panel: null, prev: p }).side).toBe(
+      p.side,
+    )
+  })
+
+  it('a bar that does not move with its measure settles in one pass (the CSS fix: max-content)', () => {
+    const r = run(
+      (prev, key, m, now) => foldSelectionBarMeasure(prev, key, { ...m, half: ROW / 2 + 8, h: 44 }, now),
+      15,
+    )
+    expect(r).toMatchObject({ settled: true, changes: 1 })
+  })
+
+  it('the pass count starts again for a new selection, after the burst window, and never for the same measure', () => {
+    const m1 = { half: 100, h: 38, panel: null }
+    const m2 = { half: 110, h: 38, panel: null }
+    let s = foldSelectionBarMeasure(SELBAR_INITIAL_LAYOUT, 'a', m1, 0)
+    s = foldSelectionBarMeasure(s, 'a', m2, 1)
+    expect(s.passes).toBe(2)
+    // capped: a third change for the same key in the same burst keeps what is drawn
+    expect(foldSelectionBarMeasure(s, 'a', m1, 2)).toBe(s)
+    // the same measure is no change at all
+    expect(foldSelectionBarMeasure(s, 'b', m2, 3)).toBe(s)
+    // a new selection key: counted from 1 again
+    expect(foldSelectionBarMeasure(s, 'b', m1, 3)).toMatchObject({ key: 'b', passes: 1, m: m1 })
+    // the same key, later (a tag added a second later): a new burst
+    expect(foldSelectionBarMeasure(s, 'a', m1, 1 + SELBAR_PASS_WINDOW_MS + 1)).toMatchObject({
+      passes: 1,
+      m: m1,
+    })
+  })
+
+  it('the style panel box is rounded out to 4 px (it still holds the real box)', () => {
+    expect(roundPanelRect({ x: 225.3, y: 11.6, w: 216.2, h: 450.4 })).toEqual({
+      x: 224,
+      y: 8,
+      w: 220,
+      h: 456,
+    })
+    expect(roundPanelRect({ x: 0, y: 0, w: 0, h: 10 })).toBeNull()
+    expect(roundPanelRect(null)).toBeNull()
   })
 })

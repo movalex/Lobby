@@ -451,7 +451,11 @@
 }
 
 /* ---- selection bar, locked frames, frame names ------------------------------------------------------ */
+/* H1 (FTU-1): the selection bar is as wide as its buttons (up to the compact max-width in canvas-ux.css), never
+   as wide as the room right of its left edge: an absolutely placed box shrinks to that room, so near an edge the
+   bar folded into a column, and moving it changed its size (the measure loop that blanked the board on a phone). */
 .cux-selbar {
+  width: max-content;
   pointer-events: auto;
 }
 .cux-frame-lock {
