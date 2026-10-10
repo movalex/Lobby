@@ -36,10 +36,12 @@ const DEFLATE_TAIL = Buffer.from([0x00, 0x00, 0xff, 0xff])
 class RawFrames {
   readonly frames: Frame[] = []
   private buf = Buffer.alloc(0)
-  private constructor(
-    readonly socket: Socket,
-    readonly extensions: string | undefined,
-  ) {
+  readonly socket: Socket
+  /** the server's Sec-WebSocket-Extensions answer (undefined: nothing negotiated) */
+  readonly extensions: string | undefined
+  private constructor(socket: Socket, extensions: string | undefined) {
+    this.socket = socket
+    this.extensions = extensions
     socket.on('error', () => {}) // a reset when the test or the server ends it
     socket.on('data', (d: Buffer) => {
       this.buf = Buffer.concat([this.buf, d])
