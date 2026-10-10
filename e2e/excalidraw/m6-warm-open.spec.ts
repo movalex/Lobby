@@ -4,8 +4,9 @@
 //        "Showing your last copy · connecting"; the welcome replaces it; a peer's edit made while the page was
 //        closed is there after the welcome; a revoked user's copy is never painted (the board answers 403) and is
 //        purged, and so is the copy of someone removed while the board is open (a FORBIDDEN close).
-//  M6-3: the warm open resumes as a catch-up: its socket gets no snapshot frame (binary), its welcome is not a
-//        reset, and its map hashes equal to the stored board.
+//  M6-3: OFF since the wave M round 1 refix (RESUME_FROM_CACHE false: a disk-snapshot restore keeps the epoch, so a
+//        resume could not prove its lineage). The warm open paints only: its hello says since 0, it gets the
+//        snapshot frame and a reset welcome, and its map hashes equal to the stored board.
 //  M6-4: offline (context.setOffline), a member sees their copy read-only with "Offline · showing your copy from
 //        <time>"; a guest gets the screen they got before; a copy older than 7 days is not shown.
 //  The W6 review: a Sign out in one tab stays a Sign out in the browser's other tabs (none of their writes puts the
@@ -374,7 +375,7 @@ test('M6-2: the second open paints the cached copy before the board socket opens
   expect(foreign).toEqual([])
 })
 
-test('M6-2/M6-3: read-only until the welcome; a peer edit made while closed appears after it; no snapshot frame; the hash is the stored board', async ({
+test('M6-2: read-only until the welcome; a peer edit made while closed appears after it; paint only (the snapshot, no resume); the hash is the stored board', async ({
   canvasSession,
   stack,
   board,
@@ -421,17 +422,17 @@ test('M6-2/M6-3: read-only until the welcome; a peer edit made while closed appe
   await a.page.keyboard.press('Delete')
   expect(await scenePositions(a.page, '__lobbyBoard')).toEqual(positions)
 
-  // the room answers: a catch-up (no snapshot frame), bob's edit, the stored board's hash
+  // the room answers: its snapshot (paint only: M6-3 is off), bob's edit, the stored board's hash
   sockets.release()
   await waitForCanvas(a.page)
   await expect(a.page.getByTestId('cached-copy')).toHaveCount(0)
   await expect.poll(async () => (await item(a.page, r1))?.x).toBe(777)
   await expectServerConverged(stack, board, [a.page, b.page])
   const resumed = sockets.sockets[0]
-  expect(resumed?.welcome).toMatchObject({ reset: false })
-  expect(resumed?.binary, 'no snapshot frame on a warm open').toBe(0)
+  expect(resumed?.welcome).toMatchObject({ reset: true })
+  expect(resumed?.binary, 'the snapshot frame (no resume from the cache)').toBeGreaterThanOrEqual(1)
   const after = await cacheState(a.page)
-  expect(after).toMatchObject({ resume: true, resumeOutcome: 'catch-up', readonly: false })
+  expect(after).toMatchObject({ resume: false, resumeOutcome: null, readonly: false })
   expect(await pushedOps(a.page), 'nothing pushed by the warm open').toEqual([])
   expect(await a.page.getByTestId('save-status').getAttribute('data-state')).not.toBe('cached')
   expect(foreign).toEqual([])
@@ -582,7 +583,7 @@ test('the W6 review: a warm open that brought nothing new writes no copy; a hidd
   // nothing changed while the page was away: the warm open's welcome is the stored copy's point, so no write
   await a.page.reload()
   await waitForCanvas(a.page)
-  expect(await cacheState(a.page)).toMatchObject({ painted: true, resumeOutcome: 'catch-up', welcomed: true })
+  expect(await cacheState(a.page)).toMatchObject({ painted: true, resumeOutcome: null, welcomed: true })
   // (an idle write would have run by now: its idle callback's timeout is 5 s)
   await new Promise((r) => setTimeout(r, 6_000))
   expect(await cacheWrites(a.page)).toBe(0)

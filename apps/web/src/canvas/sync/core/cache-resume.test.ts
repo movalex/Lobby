@@ -8,7 +8,7 @@
 import { hashElements } from '@draftroom/canvas-schema/hash'
 import { CONTRACTS_REV, type Welcome } from '@draftroom/canvas-schema/protocol'
 import { describe, expect, it } from 'vitest'
-import { cacheDroppedAtWelcome } from '../adapter/snapshot-cache.ts'
+import { cacheDroppedAtWelcome, RESUME_FROM_CACHE } from '../adapter/snapshot-cache.ts'
 import { createMapScene } from '../headless/scene.ts'
 import { closePage, openFromCache, recordOf } from '../testing/cached.ts'
 import { rect } from '../testing/elements.ts'
@@ -216,5 +216,71 @@ describe('M6-3: resuming from the cache', () => {
     expect(empty.map.size).toBe(0)
     core.stop()
     core2.stop()
+  })
+})
+
+describe('a disk-snapshot restore keeps the epoch (wave M round 1 refix)', () => {
+  /** The room's stored rows as a restore puts them back (the board file of an older disk snapshot: same epoch). */
+  const diskOf = (room: Harness['room']) => ({
+    elements: new Map(room.elements),
+    rowClock: new Map(room.rowClock),
+    gclock: new Map(room.gclock),
+    docClocks: new Map(room.docClocks),
+    receipts: new Map(room.receipts),
+    clock: room.clock,
+  })
+  const restore = (room: Harness['room'], disk: ReturnType<typeof diskOf>) => {
+    for (const k of ['elements', 'rowClock', 'gclock', 'docClocks', 'receipts'] as const) {
+      const live = room[k] as Map<string, unknown>
+      live.clear()
+      for (const [id, v] of disk[k] as Map<string, unknown>) live.set(id, v)
+    }
+    room.clock = disk.clock
+  }
+
+  /** alice caches r1..r3 at clock 1; the disk goes back to r1 (clock 0); bob adds r4..r6 (clock 3). */
+  function restoredPastTheCopy() {
+    const h = createHarness({ seed: [stored(rect('r1', 'a0'))] })
+    h.room.contractsRev = CONTRACTS_REV
+    const disk = diskOf(h.room)
+    const a = h.client('alice')
+    h.settle()
+    a.edit((m) => {
+      m.set('r2', rect('r2', 'a1'))
+      m.set('r3', rect('r3', 'a2'))
+    })
+    h.settle()
+    const record = recordOf(a)
+    closePage(a)
+    restore(h.room, disk)
+    const b = h.client('bob', { tab: 'tb' })
+    h.settle()
+    for (const [id, at] of [
+      ['r4', 'a3'],
+      ['r5', 'a4'],
+      ['r6', 'a5'],
+    ] as const) {
+      b.edit((m) => m.set(id, rect(id, at)))
+      h.settle()
+    }
+    expect(h.room.epoch).toBe(record.epoch)
+    expect(h.room.clock).toBeGreaterThanOrEqual(record.clock)
+    return { h, record }
+  }
+
+  it('a resume cannot tell (it is answered as a catch-up and diverges for good), so the page never resumes from its cache', async () => {
+    const resumed = restoredPastTheCopy()
+    const p = openFromCache(resumed.h, resumed.record, { resume: true })
+    resumed.h.settle()
+    expect(p.core.resumeOutcome).toBe('catch-up')
+    expect(await hashElements(p.core.elements().values())).not.toBe(await resumed.h.roomHash())
+    // the kill switch is off until a resume proves its lineage: the page paints only, and that open converges
+    expect(RESUME_FROM_CACHE).toBe(false)
+    const painted = restoredPastTheCopy()
+    const q = openFromCache(painted.h, painted.record, { resume: RESUME_FROM_CACHE })
+    painted.h.settle()
+    expect(q.sent().find((m) => m.type === 'hello')).toMatchObject({ since: 0 })
+    await expectServerCopy(painted.h, q)
+    expect(q.pushes()).toBe(0)
   })
 })

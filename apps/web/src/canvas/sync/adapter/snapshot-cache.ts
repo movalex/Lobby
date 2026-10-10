@@ -81,8 +81,13 @@ export const CACHE_OFFLINE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 /**
  * M6-3's kill switch: false = paint only (phase 1). The hello then says `since: 0` as before and the room
  * answers with its full snapshot; the cached paint is replaced at that welcome.
+ *
+ * OFF (wave M round 1 refix): a resume cannot prove its lineage. A disk-snapshot restore of the sync (DEPLOY.md)
+ * keeps each board's epoch and rolls its clock back; once new writes take the clock past a cached copy's, that
+ * copy's hello is answered as a catch-up and the page keeps rows the room does not have, for good
+ * (cache-resume.test.ts). Turn it on only with a lineage check in the hello, or a restore step that rotates epochs.
  */
-export const RESUME_FROM_CACHE = true
+export const RESUME_FROM_CACHE = false
 
 /** What a board session hands the store: the core's confirmed copy at one consistent point. */
 export interface CacheContent {
