@@ -39,6 +39,7 @@ import { installChromeObstacles } from './obstacles.ts'
 import { PolygonPreview } from './PolygonPreview.tsx'
 import { polygonTools } from './polygons.ts'
 import { SELECTION_BAR_ITEMS, SelectionBar } from './SelectionBar.tsx'
+import { TIER1_ITEMS } from './SelectionStyleItems.tsx'
 import { ShortcutsDialog } from './ShortcutsDialog.tsx'
 import { StylePanel } from './StylePanel.tsx'
 import { anyMenuOpen, closeMenus, uxState } from './state.ts'
@@ -117,7 +118,8 @@ export const feature: CanvasFeature = {
   tools: polygonTools(),
   contextMenu: CONTEXT_MENU_ENTRIES,
   mainMenu: MAIN_MENU_ENTRIES,
-  selectionBar: SELECTION_BAR_ITEMS,
+  // wave M (M1-4): tier one (the quick styles) ends the main row, after lock (its order, 90)
+  selectionBar: [...TIER1_ITEMS, ...SELECTION_BAR_ITEMS],
   overlays: [
     // K2-4: the empty board's dot grid (under everything) and its "start here" card; neither takes a pointer
     // event (the card's buttons do, through canvas-ux.css)

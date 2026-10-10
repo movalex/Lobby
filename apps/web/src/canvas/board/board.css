@@ -403,3 +403,12 @@
     display: none;
   }
 }
+
+/* Wave M (M1-4): Excalidraw's own properties panel (its selected-shape actions, the App menu's left column) never
+   shows on the board page. The page mounts the engine with ui={false}, so it is not drawn today; should a bump ever
+   draw it, it stays hidden: Lobby's selection bar (tier one) and style panel are the style UI, and every
+   canvasActions flag stays off. */
+.lobby-board-canvas .excalidraw .selected-shape-actions,
+.lobby-board-canvas .excalidraw .App-menu__left {
+  display: none;
+}

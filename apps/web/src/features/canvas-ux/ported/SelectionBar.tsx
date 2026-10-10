@@ -3,7 +3,8 @@
 // own: Lock / Unlock (Ctrl+Shift+L), and align / distribute (MAK-03) for two or three movable units.
 //
 // Order bands (other features choose their `order` by them): below 100 the main row (copy link 10, lock 20,
-// tags 30, AI 40), from 100 the arrange row (align and distribute 100, arrange as grid 200). A11Y2-06: on a
+// tags 50, AI 80, wave M's tier one quick styles 90), from 100 the arrange row (align and distribute 100, arrange
+// as grid 200). A11Y2-06: on a
 // canvas narrower than 600 px the arrange row folds into "More" (a second row when open). A11Y-04: Alt+F10
 // on the board lands on the first button; arrows, Home and End move along the bar (ARIA toolbar), Tab
 // leaves it, Escape gives the keyboard back to the board. A mouse click never takes the keyboard from the
@@ -13,7 +14,7 @@
 // panel, the bottom toolbar, W2's top-centre stack and the navigation panel, and past the selection's flow '+'
 // handles; it registers itself as the 'selection-bar' obstacle. When the full bar fits nowhere it folds to compact,
 // and while one of its popovers (More, a style tray) still covers the style panel, the panel steps aside.
-import { createContext, type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { CanvasFeatureContext, SelectionBarItemSpec } from '../../../canvas/api/index.ts'
 import {
   OBSTACLE_IDS,
@@ -29,6 +30,7 @@ import { AlignIcons, LockIcon } from '../icons.tsx'
 import { unitsOf } from './align.ts'
 import { CMD, runCommand, selectedRoots } from './commands.ts'
 import { barObstacles, clientRectOf, STYLE_PANEL_SELECTOR, selectionHandlesRect } from './obstacles.ts'
+import { SelectionBarCompact } from './selection-bar-context.ts'
 import { uxState } from './state.ts'
 import { moveInToolbar, rove } from './toolbar-keys.ts'
 
@@ -36,9 +38,6 @@ import { moveInToolbar, rove } from './toolbar-keys.ts'
 export const SELBAR_COMPACT_BELOW = 600
 /** Items from this order on form the arrange row. */
 export const ARRANGE_ROW_FROM = 100
-
-/** Whether the bar is drawn compact (a narrow canvas, or folded because the full bar fits nowhere): items read it. */
-export const SelectionBarCompact = createContext(false)
 
 /** A box in the canvas's overlay coordinates (px from its top-left). */
 export interface OverlayRect {
@@ -59,6 +58,12 @@ export const SELBAR_GAP = 14
 export const SELBAR_MARGIN = 8
 /** The canvas's top band the bar never enters: the board menu and the top bar's chips (px). */
 export const SELBAR_SAFE_TOP = 60
+/**
+ * The canvas's bottom band the bar never enters (px, today's): the bottom toolbar's row and the popovers that sit
+ * just above it (AI's preview at 72 px, the workshop stacks), which are no registered obstacles. A taller toolbar (a
+ * phone's two rows) is the 'bottom-toolbar' obstacle.
+ */
+export const SELBAR_SAFE_BOTTOM = 100
 
 export type SelectionBarSide = PopoverSide
 
@@ -115,13 +120,19 @@ export function placeSelectionBar(o: {
   readonly prev?: SelectionBarPlacement | null
 }): SelectionBarPlacement {
   let a = o.reach ? grow(o.anchor, o.reach) : o.anchor
-  // inside the canvas sideways; when neither above nor below has room (a selection taller than the canvas), the
-  // part of it on screen, kept a bar's height from the band's edges
+  // inside the canvas sideways, between the top and bottom bands (a canvas too low for both keeps the top one); when
+  // neither above nor below has room (a selection taller than the canvas), the part of it on screen, kept a bar's
+  // height from the band's edges
   const top = SELBAR_SAFE_TOP
-  const bottom = o.vh - SELBAR_MARGIN
+  const bottom = Math.max(o.vh - SELBAR_SAFE_BOTTOM, top + o.h + SELBAR_MARGIN * 2)
   const x0 = Math.min(Math.max(a.x, 0), o.vw)
   const x1 = Math.max(x0, Math.min(a.x + a.w, o.vw))
   a = { ...a, x: x0, w: x1 - x0 }
+  // a selection inside the top band has the bar just under the band (as under the selection), one inside the bottom
+  // band just over it
+  if (a.y + a.h < top - SELBAR_GAP) a = { ...a, h: top - SELBAR_GAP - a.y }
+  if (a.y > bottom + SELBAR_GAP)
+    a = { ...a, y: bottom + SELBAR_GAP, h: Math.max(0, a.y + a.h - bottom - SELBAR_GAP) }
   const lo = top + o.h + SELBAR_GAP
   const hi = bottom - o.h - SELBAR_GAP
   if (a.y < lo && a.y + a.h > hi) {
@@ -138,7 +149,7 @@ export function placeSelectionBar(o: {
     return placePopover({
       anchor: toRect(a),
       size: { width: o.w, height: o.h },
-      viewport: { x: 0, y: top - SELBAR_MARGIN, width: o.vw, height: o.vh - top + SELBAR_MARGIN },
+      viewport: { x: 0, y: top - SELBAR_MARGIN, width: o.vw, height: bottom - top + SELBAR_MARGIN * 2 },
       obstacles: o.obstacles
         .map((r) => (by >= 0 ? grow(r, { left: by, top: by, right: by, bottom: by }) : shrink(r, -by)))
         .filter((r): r is OverlayRect => r !== null)
@@ -261,6 +272,8 @@ export function BarButton(props: {
   pressed?: boolean
   expanded?: boolean
   controls?: string
+  /** it opens a row inside the bar (More), not a popover placed from it */
+  inflow?: boolean
 }) {
   return (
     <button
@@ -272,6 +285,7 @@ export function BarButton(props: {
       aria-pressed={props.pressed}
       aria-expanded={props.expanded}
       aria-controls={props.controls}
+      data-inflow={props.inflow ? '' : undefined}
       onMouseDown={(e) => e.preventDefault()}
       onClick={props.onClick}
     >
@@ -399,7 +413,10 @@ export function selectionBarView(ctx: CanvasFeatureContext): SelectionBarView | 
   // the style panel opened from the phone toolbar's Styles button covers the board's lower half
   if (state.stylesOpen.get()) return null
   const g = canvas.gesture()
-  if (g !== 'idle' && g !== 'pressing' && g !== 'tool') return null
+  // wave M (M1-4): with the Hand tool (a phone's first tool, K5-3) a press anywhere reads as a pan, a press on the
+  // bar's own buttons too: the bar went away under the finger and the tap was lost. A pan starts on the canvas.
+  const pressOnChrome = g === 'panning' && canvas.pointer()?.overCanvas === false
+  if (g !== 'idle' && g !== 'pressing' && g !== 'tool' && !pressOnChrome) return null
   const b = canvas.boundsOf(ids)
   if (!b) return null
   const vp = canvas.viewport.screenRect()
@@ -418,6 +435,20 @@ export function selectionBarView(ctx: CanvasFeatureContext): SelectionBarView | 
     h: Math.abs(br.y - tl.y),
   }
   return { sel: ids.join(' '), ids, anchor, vw: vp.width, vh: vp.height, items }
+}
+
+/**
+ * M1-4: closes the bar's open style tray (if any) and gives the keyboard to the button that opened it (the compact
+ * bar's Style button for its one tray). Returns whether a tray was open.
+ */
+function closeStyleTray(bar: HTMLElement | null, state: ReturnType<typeof uxState>): boolean {
+  const open = state.selectionTray.get()
+  if (!open) return false
+  state.selectionTray.set(null)
+  const button = (id: string) => bar?.querySelector<HTMLButtonElement>(`[data-testid="${CSS.escape(id)}"]`)
+  // the control's own button, else (a compact bar) its one Style button
+  ;(button(`selection-style-${open}`) ?? button('selection-style'))?.focus()
+  return true
 }
 
 const intersects = (a: OverlayRect, b: OverlayRect) =>
@@ -483,14 +514,36 @@ export function SelectionBar({ ctx }: { ctx: CanvasFeatureContext }) {
       clearTimeout(later)
     }
   }, [sel])
+  // An item that changes the bar's size by itself (the AI button once AI's status arrives): measured on the next
+  // frame (never inside the observer's own callback), within the same key's pass cap
+  const [resized, setResized] = useState(0)
+  const shown = view !== null
+  useEffect(() => {
+    const el = ref.current
+    if (!sel || !el || typeof ResizeObserver === 'undefined') return
+    let frame = 0
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => setResized((n) => n + 1))
+    })
+    ro.observe(el)
+    return () => {
+      ro.disconnect()
+      cancelAnimationFrame(frame)
+    }
+  }, [sel, shown])
   useLayoutEffect(() => {
+    void resized
     const el = ref.current
     if (!view || !el?.offsetWidth) return
+    // a popover one of its items opened (AI, Sort, Tags: their button is expanded) is placed from the bar: the bar
+    // keeps the measure it had, so it never moves under the popover (it still follows the selection)
+    if (el.querySelector('button[aria-expanded="true"]:not([data-inflow])')) return
     const m = measureBar(el, view)
     const key = `${view.sel}|${view.vw}x${view.vh}|${moreOpen ? 1 : 0}|${tray ?? ''}|${itemsKey}|${settle}`
     const next = foldSelectionBarMeasure(layout, key, m, performance.now())
     if (next !== layout) setLayout(next)
-  }, [view, moreOpen, tray, itemsKey, layout, settle])
+  }, [view, moreOpen, tray, itemsKey, layout, settle, resized])
   // the placement drawn last for this selection (placeSelectionBar's hysteresis keeps its side); recorded after
   // the commit, a ref only (no state)
   const placed = useRef<{ sel: string; at: SelectionBarPlacement } | null>(null)
@@ -515,12 +568,13 @@ export function SelectionBar({ ctx }: { ctx: CanvasFeatureContext }) {
   const [foldedFor, setFoldedFor] = useState<string | null>(null)
   const compact = !!view && (view.vw < SELBAR_COMPACT_BELOW || foldedFor === fitKey)
   const fits = placement?.fits ?? true
+  // (judged on the bar alone: a popover of its own opening never folds it)
+  const popoverOpen = moreOpen || tray !== null
   useLayoutEffect(() => {
-    if (view && !fits && !compact) setFoldedFor(fitKey)
-  }, [view, fits, compact, fitKey])
+    if (view && !fits && !compact && !popoverOpen) setFoldedFor(fitKey)
+  }, [view, fits, compact, fitKey, popoverOpen])
   // M1-3: a popover of the bar (More, a style tray) that still covers the style panel: the panel steps aside
   // until the popover closes or the selection changes (sticky for the same reason)
-  const popoverOpen = moreOpen || tray !== null
   const panel = layout.m.panel
   const coversPanel =
     !!placement &&
@@ -573,6 +627,8 @@ export function SelectionBar({ ctx }: { ctx: CanvasFeatureContext }) {
         if (e.key === 'Escape') {
           e.preventDefault()
           e.stopPropagation()
+          // M1-4: an open style tray closes first, and its button gets the keyboard back
+          if (closeStyleTray(ref.current, state)) return
           canvas.focus({ preventScroll: true })
           return
         }
@@ -594,6 +650,7 @@ export function SelectionBar({ ctx }: { ctx: CanvasFeatureContext }) {
             <BarButton
               label="More: align, distribute and arrange"
               testId="selection-more"
+              inflow
               expanded={moreOpen}
               controls={moreOpen ? moreId : undefined}
               onClick={() => setMoreOpen((o) => !o)}

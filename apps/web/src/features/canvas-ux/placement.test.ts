@@ -24,6 +24,7 @@ import {
   SELBAR_MARGIN,
   SELBAR_MAX_PASSES,
   SELBAR_PASS_WINDOW_MS,
+  SELBAR_SAFE_BOTTOM,
   SELBAR_SAFE_TOP,
   type SelectionBarMeasure,
   type SelectionBarPlacement,
@@ -336,6 +337,15 @@ describe('placeSelectionBar is pure and idempotent (H1; on placePopover since M1
     expect(at(738, was('above'))).toBe('above')
     expect(at(740 - SELBAR_HYSTERESIS + 1, was('above'))).toBe('above')
     expect(at(740 - SELBAR_HYSTERESIS, was('above'))).toBe('below')
+  })
+
+  it('the bands: never in the top 60 px nor the bottom 100 px, chrome or not (the popovers above the toolbar)', () => {
+    const low = placeSelectionBar({ anchor: sel(600, vh - 220), ...bar, vw, vh, obstacles: [] })
+    expect(low.side).toBe('above')
+    expect(low.top + bar.h).toBeLessThanOrEqual(vh - SELBAR_SAFE_BOTTOM)
+    const high = placeSelectionBar({ anchor: sel(600, 0, 160, 40), ...bar, vw, vh, obstacles: [] })
+    expect(high.side).toBe('below')
+    expect(high.top).toBeGreaterThanOrEqual(SELBAR_SAFE_TOP)
   })
 
   it('nothing fits (every place covers chrome): it says so, and the answer is still stable', () => {
