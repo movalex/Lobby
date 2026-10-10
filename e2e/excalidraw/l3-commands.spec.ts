@@ -26,7 +26,8 @@ import { focusCanvas, inView } from './navigation-kit.ts'
 test.use({ viewport: { width: 1440, height: 900 } })
 
 /** Lobby's note fills (board-ops palette.ts NOTE_FILL, light): what a palette name stores on a note. */
-const FILL = { red: '#ef8c82', yellow: '#f6c453', blue: '#a7b7f6' } as const
+// M3-4: "yellow" as a destination is the family's first swatch on a note, Butter (stored as `black`)
+const FILL = { red: '#ef8c82', yellow: '#f6c453', butter: '#f8e48f', blue: '#a7b7f6' } as const
 
 const palette = (page: Page) => page.getByTestId('command-palette')
 const option = (page: Page, id: string) =>
@@ -81,19 +82,19 @@ test('"make all red notes yellow": the grammar’s Do line, the preview, Apply; 
   await openPalette(a.page)
   await a.page.keyboard.type('make all red notes yellow')
   await expect(activeOption(a.page)).toHaveAttribute('data-entry-id', 'do:grammar')
-  await expect(activeOption(a.page)).toContainText('Make 3 red notes yellow')
+  await expect(activeOption(a.page)).toContainText('Make 3 Coral notes Butter')
   await a.page.keyboard.press('Enter')
   await expect(palette(a.page)).toHaveCount(0)
   // three notes change: the shared preview first, nothing written before Apply
   await expect(a.page.getByTestId('ai-preview-apply')).toBeVisible({ timeout: 10_000 })
   expect(await fills(a.page, reds)).toEqual([FILL.red, FILL.red, FILL.red])
   await applyPreview(a.page)
-  await expect.poll(() => fills(a.page, reds)).toEqual([FILL.yellow, FILL.yellow, FILL.yellow])
+  await expect.poll(() => fills(a.page, reds)).toEqual([FILL.butter, FILL.butter, FILL.butter])
   expect(await fills(a.page, [blue])).toEqual([FILL.blue])
   await expectSaved(a.page)
 
   // the other browser sees every colour, and pushes nothing while it watches
-  await expect.poll(() => fills(b.page, reds)).toEqual([FILL.yellow, FILL.yellow, FILL.yellow])
+  await expect.poll(() => fills(b.page, reds)).toEqual([FILL.butter, FILL.butter, FILL.butter])
   expect((await pushedOps(b.page)).length).toBe(bobPushes)
 
   // one undo step: one Ctrl+Z puts every colour back
@@ -124,7 +125,7 @@ test('a viewer’s palette refuses a change and says why; "find the red notes" s
   await expect(v.page.getByTestId('command-palette-status')).toContainText('not change it')
   await expect(palette(v.page)).toBeVisible()
   await v.page.getByTestId('command-palette-input').fill('find the red notes')
-  await expect(activeOption(v.page)).toContainText('Find 1 red note')
+  await expect(activeOption(v.page)).toContainText('Find 1 Coral note')
   await v.page.keyboard.press('Enter')
   await expect(palette(v.page)).toHaveCount(0)
   await expect.poll(() => selection(v.page)).toEqual([red])
