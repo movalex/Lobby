@@ -24,6 +24,8 @@ test("render.yaml: the static site's headers, the enforced CSP on one line", () 
   assert.equal(headerFor(headers, '/assets/*', 'Cache-Control'), 'public, max-age=31536000, immutable')
   // K1-6 (wave K): the self-hosted fonts, a week
   assert.equal(headerFor(headers, '/excalidraw-assets/*', 'Cache-Control'), 'public, max-age=604800')
+  // wave M (S2, M3-5): the build's version file is never cached (open tabs compare it with their own commit)
+  assert.equal(headerFor(headers, '/version.json', 'Cache-Control'), 'no-store')
   const csp = expectedCsp(headers)
   assert.ok(csp, 'render.yaml sets a CSP for /*')
   assert.equal(csp.name, CSP, 'enforced, not report-only')
@@ -34,7 +36,7 @@ test("render.yaml: the static site's headers, the enforced CSP on one line", () 
   assert.deepEqual(cspDifferences(csp.value, csp.value), [])
   // Only the static site's own headers: nothing from another service.
   assert.ok(
-    headers.every((h) => h.path === '/*' || h.path === '/assets/*' || h.path === '/excalidraw-assets/*'),
+    headers.every((h) => ['/*', '/assets/*', '/excalidraw-assets/*', '/version.json'].includes(h.path)),
     JSON.stringify(headers),
   )
 })
@@ -104,4 +106,36 @@ test('other shapes: quoted and literal values, report-only, list items at the ke
   })
   assert.deepEqual(cspDifferences("object-src 'none'; default-src 'self'", expectedCsp(headers).value), [])
   assert.deepEqual(staticSiteHeaders('services:\n  - type: web\n    runtime: static\n    name: web\n'), [])
+})
+
+/** The plain `value:` of env key `key` in the service named `service` (a text read, like the reader above). */
+function envValue(yaml, service, key) {
+  const lines = yaml.replace(/\r\n?/g, '\n').split('\n')
+  // the service itself (indent 4), not a fromService reference to it inside another service
+  const start = lines.findIndex((l) => l.trimEnd() === `    name: ${service}`)
+  if (start < 0) return null
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^ {2}- type:/.test(lines[i])) return null // the next service
+    if (lines[i].trim() !== `- key: ${key}`) continue
+    const v = /^\s*value:\s*(.*?)\s*(#.*)?$/.exec(lines[i + 1] ?? '')
+    return v ? v[1].replace(/^"(.*)"$/, '$1') : null
+  }
+  return null
+}
+
+test('render.yaml: the wave M keys (the lead applies them through the Render API before each deploy)', () => {
+  const api = (k) => envValue(RENDER_YAML, 'draftroom-staging-api', k)
+  const sync = (k) => envValue(RENDER_YAML, 'draftroom-staging-sync', k)
+  const web = (k) => envValue(RENDER_YAML, 'draftroom-staging-web', k)
+  assert.equal(api('DRAFTROOM_DB_POOL_MAX'), '5')
+  assert.equal(api('DRAFTROOM_WORKSPACE_QUOTA_MB'), '5120')
+  assert.equal(sync('DRAFTROOM_WS_DEFLATE'), 'on')
+  assert.equal(sync('DRAFTROOM_BACKUP_KEEP'), '4')
+  assert.equal(sync('DRAFTROOM_OUTBOUND_BUDGET_MB'), '128')
+  assert.equal(web('VITE_PUBLIC_ORIGIN'), 'https://draftroom-staging-web.onrender.com')
+  // unchanged by wave M
+  assert.equal(sync('ACCESS_RECHECK_MS'), '10000')
+  // each in its own service only
+  assert.equal(sync('DRAFTROOM_DB_POOL_MAX'), null)
+  assert.equal(api('DRAFTROOM_WS_DEFLATE'), null)
 })

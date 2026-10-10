@@ -137,6 +137,11 @@ services:
       - path: /excalidraw-assets/*
         name: Cache-Control
         value: public, max-age=604800
+      # Wave M (S2, M3-5): the build's /version.json ({"commit": …}, apps/web/vite.config.ts versionJson) is how an
+      # open tab learns about a new build (W3's lib/version-check.ts), so it is never cached anywhere.
+      - path: /version.json
+        name: Cache-Control
+        value: no-store
     envVars:
       # VITE_TLDRAW_LICENSE_KEY was removed here and from the Dashboard at drop-legacy (2026-10-09,
       # docs/EXCALIDRAW-CUTOVER.md D7): R0 can no longer be rebuilt or served. Never add VITE_LOBBY_ENGINE
@@ -147,6 +152,11 @@ services:
       # service's onrender.com URL; the sync service's ALLOWED_ORIGINS must list this site's origin.
       - key: VITE_DRAFTROOM_SYNC_ORIGIN
         value: https://draftroom-staging-sync.onrender.com
+      # Wave M (S1.2, M3-6): this site's own origin, inlined at build time for index.html's absolute og:image URL (a
+      # link pasted into a chat tool unfurls as a generic "Lobby board": the tags are static, never a board's title).
+      # Unused by builds before W3's change. Must match the static site's URL, like PUBLIC_ORIGIN on the api.
+      - key: VITE_PUBLIC_ORIGIN
+        value: https://draftroom-staging-web.onrender.com
       # Never set VITE_DRAFTROOM_DEV_AUTH here: it enables development identities in the bundle.
 
   # ---------------------------------------------------------------------------------------------
@@ -180,10 +190,15 @@ services:
           property: connectionString # internal (private network) URL
       - key: DRAFTROOM_BLOB_STORE
         value: r2
-      # Per-workspace file storage (sum of stored originals; docs/SECURITY-REVIEW-2026-09-27.md FC-1).
-      # 100 GB in R2 is about $1.50/month when full (the code default is 2 GB).
+      # Per-workspace file storage (sum of stored originals; docs/SECURITY-REVIEW-2026-09-27.md FC-1). The code
+      # default is 2 GB. Wave M (CAP-R2-COST): 5 GB per workspace, down from 100 GB (about $1.50/month each when
+      # full), so a few workspaces stay within R2's free storage; the pilot used 0.19 MB when it was lowered.
       - key: DRAFTROOM_WORKSPACE_QUOTA_MB
-        value: "102400"
+        value: "5120"
+      # Wave M (M5-2): the api's Postgres pool, at most this many connections (the code default stays 10, today's).
+      # The database has 0.1 CPU: more parallel connections only queue. Rolls back by value, without code.
+      - key: DRAFTROOM_DB_POOL_MAX
+        value: "5"
       # Cloudflare R2 (docs/DEPLOY.md "Cloudflare R2"). Prompted once, at Blueprint creation; later
       # Blueprint syncs ignore sync:false values (change them in the Dashboard). Only the api holds
       # these: workers get short-lived presigned URLs, the browser never talks to R2.
@@ -284,6 +299,19 @@ services:
         value: https://draftroom-staging-web.onrender.com
       - key: ACCESS_RECHECK_MS
         value: "10000"
+      # Wave M (W7: M7-2, M7-4, M7-5). A build that does not read these keys yet runs unchanged; each rolls back by
+      # value (a restart), without code.
+      # permessage-deflate on the board WebSocket (CAP-BANDWIDTH): "off" is the kill switch (browsers then talk
+      # uncompressed, as before). Set "off" here and on the service if the M7-7 NAS run fails its gate.
+      - key: DRAFTROOM_WS_DEFLATE
+        value: "on"
+      # Local backup copies kept per board (CAP-DISK; the code default is 12). Offsite copies are kept as before.
+      - key: DRAFTROOM_BACKUP_KEEP
+        value: "4"
+      # The process-wide budget for queued outbound bytes (CAP-MEM): above it presence is skipped for everyone,
+      # above 1.25x the largest queue is closed with RECONNECT. The 0.5c-512mb instance has 512 MB in all.
+      - key: DRAFTROOM_OUTBOUND_BUDGET_MB
+        value: "128"
       # The canvas engine: Lobby's element sync (apps/sync/src/engine-switch.ts). Never roll back by
       # changing this value: a rollback deploys the bridge release R0, which ignores it
       # (docs/EXCALIDRAW-CUTOVER.md "Rollback to R0").
