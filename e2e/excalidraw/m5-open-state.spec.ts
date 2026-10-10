@@ -2,9 +2,9 @@
 // instead of firing their eight reads together, and the features take their parts from it. Counted per path from the
 // navigation until the board is live, its stream has said hello and the page is quiet (the k1-open-requests count).
 //
-// The parts' takers in this branch: export policy, the outside people and the threads (W5). The other five (the share
-// badge's sharing state, W2's workshop, presentation and private brainstorm, W4's AI status) take theirs in their
-// own files; once they land, their reads move from TAKEN_ELSEWHERE to TAKEN_HERE and the spec holds them too.
+// The parts' takers: export policy, the outside people and the threads (W5), W2's workshop, presentation and private
+// brainstorm, W4's AI status (since the wave M integration), all held to no separate read. The share badge takes its
+// part too, but refetches at the stream's first hello (its onResync bump): at most one GET /sharing, reported.
 import type { Page } from '@playwright/test'
 import { signInContext } from '../tests/support/api.ts'
 import { expect, test } from '../tests/support/fixtures.ts'
@@ -25,14 +25,16 @@ const TAKEN_HERE: Record<string, string> = {
   exportPolicy: 'GET /api/boards/:id/export-policy',
   outside: 'GET /api/boards/:id/sharing/outside',
   threads: 'GET /api/boards/:id/threads',
-}
-/** Taken by other workstreams' features (move each line up when its taker lands). */
-const TAKEN_ELSEWHERE: Record<string, string> = {
-  sharing: 'GET /api/boards/:id/sharing',
   workshop: 'GET /api/boards/:id/workshop',
   presentation: 'GET /api/boards/:id/presentation',
   privateBrainstorm: 'GET /api/boards/:id/private-brainstorm',
   ai: 'GET /api/boards/:id/ai',
+}
+/** The reads the 404 fallback must make again before the page is quiet (the AI status waits for an idle moment). */
+const FALLBACK_READS = ['exportPolicy', 'outside', 'threads'] as const
+/** Taken, but read again at the stream's first hello (the share badge's resync): at most once. */
+const TAKEN_ELSEWHERE: Record<string, string> = {
+  sharing: 'GET /api/boards/:id/sharing',
 }
 const OPEN_STATE = 'GET /api/boards/:id/open-state'
 
@@ -95,12 +97,13 @@ for (const who of [
       expect(count(calls, OPEN_STATE), JSON.stringify(byPath)).toBe(1)
       for (const [part, key] of Object.entries(TAKEN_HERE))
         expect(count(calls, key), `${part}: ${JSON.stringify(byPath)}`).toBe(0)
-      // not asserted in this branch (their takers are other workstreams'), only reported
-      for (const [part, key] of Object.entries(TAKEN_ELSEWHERE))
+      for (const [part, key] of Object.entries(TAKEN_ELSEWHERE)) {
+        expect(count(calls, key), `${part}: ${JSON.stringify(byPath)}`).toBeLessThanOrEqual(1)
         testInfo.annotations.push({
           type: 'taken elsewhere',
           description: `${part}: ${count(calls, key)} × ${key}`,
         })
+      }
       // the parts were used: the export gates have an answer (a viewer's Export entries follow the policy) and the
       // comments panel loaded (its status is ready, not loading)
       await expect(page.getByTestId('lobby-board')).toHaveAttribute('data-phase', 'ready')
@@ -135,8 +138,11 @@ test('M5-1: an api without the route (404) falls back to the separate reads, and
     await settle(page, calls)
     const byPath = JSON.stringify(calls.map((c) => `${c.method} ${c.path}`))
     expect(count(calls, OPEN_STATE), byPath).toBe(1)
-    for (const [part, key] of Object.entries(TAKEN_HERE))
-      expect(count(calls, key), `${part} (the fallback read): ${byPath}`).toBeGreaterThanOrEqual(1)
+    for (const part of FALLBACK_READS)
+      expect(
+        count(calls, TAKEN_HERE[part] as string),
+        `${part} (the fallback read): ${byPath}`,
+      ).toBeGreaterThanOrEqual(1)
   } finally {
     await context.close()
   }
