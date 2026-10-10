@@ -8,6 +8,8 @@ export interface CountedStatement {
   sql: string
   /** run inside db.transaction (else on the pool) */
   inTransaction: boolean
+  /** a pool statement sent while a transaction of this Db was open (it may wait for another pooled client) */
+  duringTransaction: boolean
 }
 
 export interface QueryCounter {
@@ -22,6 +24,7 @@ export interface QueryCounter {
 const squash = (sql: string) => sql.replace(/\s+/g, ' ').trim()
 
 export function countQueries(base: Db): QueryCounter {
+  let open = 0
   const counter: QueryCounter = {
     db: base,
     statements: [],
@@ -33,7 +36,11 @@ export function countQueries(base: Db): QueryCounter {
   }
   const wrap = (q: Queryable, inTransaction: boolean): Queryable => {
     const query = <T>(sql: string, params?: readonly unknown[]): Promise<QueryResult<T>> => {
-      counter.statements.push({ sql: squash(sql), inTransaction })
+      counter.statements.push({
+        sql: squash(sql),
+        inTransaction,
+        duringTransaction: !inTransaction && open > 0,
+      })
       return q.query<T>(sql, params)
     }
     return {
@@ -55,9 +62,14 @@ export function countQueries(base: Db): QueryCounter {
     ...base,
     ...wrap(base, false),
     transaction: (fn) =>
-      base.transaction((tx) => {
+      base.transaction(async (tx) => {
         counter.transactions++
-        return fn(wrap(tx, true))
+        open++
+        try {
+          return await fn(wrap(tx, true))
+        } finally {
+          open--
+        }
       }),
   }
   return counter

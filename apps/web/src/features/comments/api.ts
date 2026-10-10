@@ -11,6 +11,7 @@ import {
   ThreadResponse,
 } from '@draftroom/contracts'
 import type { ApiClient } from '../../api/client.ts'
+import { takeOpenState } from '../../lib/open-state.ts'
 import type { Mentionable } from './mentions.ts'
 
 export interface CommentsApi {
@@ -43,11 +44,15 @@ const enc = encodeURIComponent
 export function createCommentsApi(client: ApiClient): CommentsApi {
   const { request } = client
   return {
-    listThreads: (boardId, signal) =>
-      request('GET', `/api/boards/${enc(boardId)}/threads?status=all`, {
+    listThreads: (boardId, signal) => {
+      // M5-1: the board-open read's part, once (the first load, at the stream's first hello); then the route
+      const opened = takeOpenState(boardId, 'threads')
+      if (opened) return Promise.resolve(opened)
+      return request('GET', `/api/boards/${enc(boardId)}/threads?status=all`, {
         schema: ListThreadsResponse,
         signal,
-      }),
+      })
+    },
     createThread: async (boardId, anchor, body, visibility) =>
       (
         await request('POST', `/api/boards/${enc(boardId)}/threads`, {

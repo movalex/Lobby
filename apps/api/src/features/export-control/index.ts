@@ -13,29 +13,44 @@ import {
   type ExportPolicyState,
   PutExportPolicyInput,
 } from '@draftroom/contracts'
+import type { Queryable } from '@draftroom/db'
 import type { FastifyInstance } from 'fastify'
-import { requireBoardAction } from '../../access.ts'
+import { type BoardAccess, requireBoardAction } from '../../access.ts'
 import type { Params } from '../../context.ts'
 import { parse } from '../../errors.ts'
+import { provideOpenStatePart } from '../board-open/parts.ts'
 import type { FeatureContext } from '../context.ts'
 import { exportAllowedForCaller, loadExportPolicy, loadExportPolicyRow } from './policy.ts'
 
 /** Owners flipping the checkbox back and forth: generous, but not a firehose of board events. */
 const PUT_RATE = { config: { rateLimit: { max: 60, timeWindow: 60_000 } } }
 
+/**
+ * GET /api/boards/:bid/export-policy's body for a caller whose access passed 'view' (also the board-open read's
+ * `exportPolicy` part, wave M M5-1).
+ */
+export async function loadExportPolicyState(
+  q: Queryable,
+  access: BoardAccess,
+  userId: string,
+): Promise<ExportPolicyState> {
+  const { policy: exportPolicy, set } = await loadExportPolicyRow(q, access.board.id)
+  return {
+    exportPolicy,
+    canExport: await exportAllowedForCaller(q, access, userId, exportPolicy),
+    policySet: set,
+  }
+}
+
 export async function registerExportControl(app: FastifyInstance, ctx: FeatureContext): Promise<void> {
   const { db } = ctx
+  provideOpenStatePart(ctx, 'exportPolicy', { load: (q, c) => loadExportPolicyState(q, c.access, c.user.id) })
 
   app.get('/api/boards/:bid/export-policy', async (req): Promise<ExportPolicyState> => {
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'view')
-    const { policy: exportPolicy, set } = await loadExportPolicyRow(db, access.board.id)
-    return {
-      exportPolicy,
-      canExport: await exportAllowedForCaller(db, access, user.id, exportPolicy),
-      policySet: set,
-    }
+    return loadExportPolicyState(db, access, user.id)
   })
 
   app.put('/api/boards/:bid/export-policy', PUT_RATE, async (req): Promise<ExportPolicyState> => {

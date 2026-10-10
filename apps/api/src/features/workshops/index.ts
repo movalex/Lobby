@@ -43,6 +43,7 @@ import type { FastifyInstance } from 'fastify'
 import { isBoardId, isUserId, requireBoardAction } from '../../access.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, badRequest, conflict, forbidden, notFound, parse } from '../../errors.ts'
+import { type PartCaller, provideOpenStatePart } from '../board-open/parts.ts'
 import type { FeatureContext } from '../context.ts'
 import { registerCursorChat } from './cursor-chat.ts'
 import { requireFacilitatorAccount, TIMER_NOT_YOURS } from './facilitators.ts'
@@ -180,10 +181,11 @@ export function registerWorkshopRoutes(
     await Promise.all([workshopState.drain(), tally.drain()])
   })
   /** The counts the caller may see of `row` (an open vote: the last finished window's). */
-  const shownOf = (row: SessionRow, at: Date) => tally.view(row, at, () => aggregates(db, row.id))
+  const shownOf = (row: SessionRow, at: Date, q: Queryable = db) =>
+    tally.view(row, at, () => aggregates(q, row.id))
   /** The caller's view of a vote, with the counts they may see. */
-  const stateOf = async (row: SessionRow, userId: string, at: Date, rev: number) =>
-    voteState(db, row, userId, at, rev, await shownOf(row, at))
+  const stateOf = async (row: SessionRow, userId: string, at: Date, rev: number, q: Queryable = db) =>
+    voteState(q, row, userId, at, rev, await shownOf(row, at, q))
   const hands = new HandRegistry({
     now,
     publish: (boardId, data) => events.publish(boardId, { type: WORKSHOP_EVENTS.hand, data }),
@@ -247,16 +249,18 @@ export function registerWorkshopRoutes(
 
   // ---- state -----------------------------------------------------------------------------------
 
-  app.get('/api/boards/:bid/workshop', async (req) => {
-    const user = await ctx.requireUser(req)
-    const { bid = '' } = req.params as Params
-    const access = await requireBoardAction(db, bid, user.id, 'view')
+  /**
+   * GET /api/boards/:bid/workshop's body for a caller whose access passed 'view' (also the board-open read's
+   * `workshop` part, wave M M5-1). Not inside a transaction: an open vote's counts (vote-tally.ts) may read the
+   * vote again on the pool when a counting window ends.
+   */
+  const loadWorkshop = async (q: Queryable, { access, user, rev }: PartCaller): Promise<WorkshopState> => {
     const at = now()
-    const timer = await loadTimer(db, access.board.id)
-    const row = await currentSession(db, access.board.id)
-    const body: WorkshopState = {
+    const timer = await loadTimer(q, access.board.id)
+    const row = await currentSession(q, access.board.id)
+    return {
       timer: timer ? timerView(timer, at) : null,
-      vote: row ? await stateOf(row, user.id, at, revOf(req)) : null,
+      vote: row ? await stateOf(row, user.id, at, rev, q) : null,
       hands: hands.list(access.board.id),
       handsVersion: hands.version(),
       // L5-2: read right after the spotlight (same tick), so the version describes it; older webs strip both
@@ -264,7 +268,14 @@ export function registerWorkshopRoutes(
       spotlightVersion: spotlights.version(),
       serverNow: at.toISOString(),
     }
-    return body
+  }
+  provideOpenStatePart(ctx, 'workshop', { load: loadWorkshop, inTransaction: false })
+
+  app.get('/api/boards/:bid/workshop', async (req) => {
+    const user = await ctx.requireUser(req)
+    const { bid = '' } = req.params as Params
+    const access = await requireBoardAction(db, bid, user.id, 'view')
+    return loadWorkshop(db, { access, user, rev: revOf(req) })
   })
 
   // ---- timer -----------------------------------------------------------------------------------

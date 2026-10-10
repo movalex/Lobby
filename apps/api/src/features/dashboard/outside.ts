@@ -72,7 +72,14 @@ import {
   type WorkspaceRole,
 } from '@draftroom/permissions'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
-import { isBoardId, isUserId, isWorkspaceId, loadBoardAccess, requireBoardAction } from '../../access.ts'
+import {
+  type BoardAccess,
+  isBoardId,
+  isUserId,
+  isWorkspaceId,
+  loadBoardAccess,
+  requireBoardAction,
+} from '../../access.ts'
 import {
   type CreatorLookup,
   isOpenLookup,
@@ -87,6 +94,7 @@ import type { AppContext, Params } from '../../context.ts'
 import { ApiError, parse } from '../../errors.ts'
 import { keyedLimit, type RouteRateLimit } from '../../rate-limit.ts'
 import { toUser, type UserRow } from '../../serialize.ts'
+import { provideOpenStatePart } from '../board-open/parts.ts'
 import type { FeatureContext } from '../context.ts'
 import { trySavepoint } from './shared.ts'
 
@@ -861,8 +869,32 @@ export const ADDRESS_CHECKS_PER_USER: RouteRateLimit = { max: 30, timeWindow: 10
 
 const routeKey = (req: FastifyRequest) => `${req.method} ${req.routeOptions.url ?? ''}`
 
+/**
+ * GET /api/boards/:bid/sharing/outside's body for a caller whose access passed 'view' (also the board-open read's
+ * `outside` part, wave M M5-1): who on the board is an outside account, whether it is shared outside and internal
+ * only; the email domain only for people who manage access.
+ */
+export async function loadBoardOutside(
+  q: Queryable,
+  lookup: CreatorLookup,
+  at: Date,
+  access: BoardAccess,
+): Promise<BoardOutsidePeople> {
+  const manager = can(access.role, 'manage_access', access.board.status)
+  const people = await outsidePeopleOn(q, lookup, access.board)
+  const shared = await sharedOutsideAmong(q, lookup, at, [access.board.id])
+  return {
+    sharedOutside: shared.has(access.board.id),
+    internalOnly: await boardInternalOnly(q, access.board.id),
+    people: people.map((p) => ({ userId: p.userId, emailDomain: manager ? p.emailDomain : null })),
+  }
+}
+
 export function registerOutsideRoutes(app: FastifyInstance, ctx: FeatureContext): void {
   const { db, now, identity, sessions } = ctx
+  provideOpenStatePart(ctx, 'outside', {
+    load: (q, c) => loadBoardOutside(q, identity.lookup, now(), c.access),
+  })
   const addressChecks = keyedLimit(
     ADDRESS_CHECKS_PER_USER,
     now,
@@ -875,14 +907,7 @@ export function registerOutsideRoutes(app: FastifyInstance, ctx: FeatureContext)
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'view')
-    const manager = can(access.role, 'manage_access', access.board.status)
-    const people = await outsidePeopleOn(db, identity.lookup, access.board)
-    const shared = await sharedOutsideAmong(db, identity.lookup, now(), [access.board.id])
-    return {
-      sharedOutside: shared.has(access.board.id),
-      internalOnly: await boardInternalOnly(db, access.board.id),
-      people: people.map((p) => ({ userId: p.userId, emailDomain: manager ? p.emailDomain : null })),
-    }
+    return loadBoardOutside(db, identity.lookup, now(), access)
   })
 
   // The Share dialog asks before it invites an outside address: the server's policy decides (the

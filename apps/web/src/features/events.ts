@@ -54,6 +54,8 @@
 // message). An event type a page has no listener for (a newer api's, e.g. 'cursor.chat' for a tab opened
 // before the web deploy that added cursor chat) is simply not delivered to anyone.
 
+import { noteBoardHello } from '../lib/open-state.ts'
+
 export interface BoardEventMessage {
   type: string
   data: unknown
@@ -312,8 +314,11 @@ export function createBoardEvents(boardId: string, opts: BoardEventsOptions = {}
       return ''
     }
     if (msg.type === 'hello') {
-      const serverNow = Date.parse((msg.data as { serverNow?: string } | null)?.serverNow ?? '')
+      const helloData = msg.data as { serverNow?: string; eventsSeq?: unknown } | null
+      const serverNow = Date.parse(helloData?.serverNow ?? '')
       if (!Number.isNaN(serverNow)) offset = serverNow - Date.now()
+      // M5-1: where the board's events stand as this stream starts, before any feature takes its open-state part
+      noteBoardHello(boardId, helloData?.eventsSeq)
       connected = true
       retryMs = FIRST_RETRY_MS
       // M5-4: a hidden tab refetches when it is looked at, once, not at every reconnect.

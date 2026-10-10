@@ -19,10 +19,9 @@ import {
 
 /**
  * What the plan's foundation section names that is still pending. A route leaves the list when its owner implements it
- * (W5: GET /healthz/deep with M5-6, POST /api/usage and GET /internal/usage with M5-5); the sync's /healthz/deep is W7's.
+ * (W5: GET /healthz/deep with M5-6, POST /api/usage and GET /internal/usage with M5-5, the open-state with M5-1); the sync's /healthz/deep is W7's.
  */
 const WAVE_M_ROUTES = [
-  'GET /api/boards/:bid/open-state',
   'POST /internal/access-many',
   'POST /api/workspaces/:wid/ai/ask',
   'GET /api/workspaces/:wid/templates',

@@ -25,7 +25,6 @@ export interface PendingRoute {
 /** `METHOD route-pattern` (the guard lists' key format) → who implements it. */
 export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   // W5
-  'GET /api/boards/:bid/open-state': { owner: 'W5', item: 'M5-1' }, // features/board-open
   // W7
   'POST /internal/access-many': { owner: 'W7', item: 'M7-1' }, // routes/tickets.ts
   // W8

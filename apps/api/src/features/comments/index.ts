@@ -39,6 +39,7 @@ import {
   EditCommentInput,
   ListNotificationsQuery,
   ListThreadsQuery,
+  type ListThreadsResponse,
   LOBBY_CLIENT_HEADER,
   MarkNotificationsReadInput,
   mentionedUserIds,
@@ -52,6 +53,7 @@ import type { CreatorLookup } from '../../auth/creator-sql.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, badRequest, conflict, forbidden, notFound, parse } from '../../errors.ts'
 import type { BoardEvent } from '../../events/hub.ts'
+import { provideOpenStatePart } from '../board-open/parts.ts'
 import type { FeatureContext } from '../context.ts'
 import {
   boardOwners,
@@ -273,6 +275,29 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
 
   // ---- threads -----------------------------------------------------------------------------------
 
+  /**
+   * GET /api/boards/:bid/threads's body for a caller whose access passed 'view', after the caller's 'me' freshen
+   * (`userId`: the freshened user). Without `status` (or 'all'): every thread the caller may see, which is also the
+   * board-open read's `threads` part (wave M, M5-1: the web asks for ?status=all).
+   */
+  const loadThreadList = async (
+    q: Queryable,
+    access: BoardAccess,
+    userId: string,
+    status?: CommentThread['status'],
+  ): Promise<ListThreadsResponse> => {
+    const team = await isTeamMember(q, access.board.workspace_id, userId, rule())
+    const threads = await loadThreads(q, access.board, { status, team, lookup })
+    const reads = await loadReads(
+      q,
+      userId,
+      threads.map((t) => t.id),
+    )
+    const teamOnlyDefault = team && (await hasOutsideAccess(q, access.board, now(), lookup))
+    return { threads, reads, privacy: { teamOnly: team, teamOnlyDefault } }
+  }
+  provideOpenStatePart(ctx, 'threads', { load: (q, c) => loadThreadList(q, c.access, c.user.id) })
+
   app.get('/api/boards/:bid/threads', async (req) => {
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
@@ -282,17 +307,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
     // Wave J: the caller's own addresses are confirmed like at /api/me (awaited when unknown or older
     // than a day, else in the background after an hour, after the answer), so the team rule decides
     // on fresh data for people who keep a board open; after the permission check above.
-    return ctx.identity.freshenThen(req, user, async (fresh) => {
-      const team = await isTeamMember(db, access.board.workspace_id, fresh.id, rule())
-      const threads = await loadThreads(db, access.board, { status, team, lookup })
-      const reads = await loadReads(
-        db,
-        fresh.id,
-        threads.map((t) => t.id),
-      )
-      const teamOnlyDefault = team && (await hasOutsideAccess(db, access.board, now(), lookup))
-      return { threads, reads, privacy: { teamOnly: team, teamOnlyDefault } }
-    })
+    return ctx.identity.freshenThen(req, user, async (fresh) => loadThreadList(db, access, fresh.id, status))
   })
 
   app.post('/api/boards/:bid/threads', async (req, reply) => {

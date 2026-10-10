@@ -50,6 +50,7 @@ import { userKind } from '../../auth/users.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, conflict, parse } from '../../errors.ts'
 import { rateLimited, SlidingWindowLimiter } from '../../rate-limit.ts'
+import { provideOpenStatePart } from '../board-open/parts.ts'
 import type { FeatureContext } from '../context.ts'
 
 const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
@@ -505,6 +506,8 @@ export function registerPresentation(app: FastifyInstance, ctx: FeatureContext):
   }
 
   const boardOf = (req: { params: unknown }) => (req.params as Params).bid ?? ''
+  // the board-open read's `presentation` part (wave M, M5-1): the same body, in memory (no query)
+  provideOpenStatePart(ctx, 'presentation', { load: async (_q, c) => body(c.access.board.id) })
 
   app.get('/api/boards/:bid/presentation', async (req) => {
     const user = await ctx.requireUser(req)

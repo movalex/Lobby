@@ -295,7 +295,16 @@ export function registerEventRoutes(
     // Send the status line and headers now instead of with the first write, then the padding, then hello.
     res.flushHeaders()
     write(STREAM_PADDING)
-    send({ type: 'hello', data: { serverNow: ctx.now().toISOString(), role: connectionRole(access) } })
+    // Wave M (M5-1): `eventsSeq`, the board's event position (hub.boardPosition) now that the stream is subscribed (in
+    // the same tick as openStream): the web compares it with its open-state answer's (lib/open-state.ts).
+    send({
+      type: 'hello',
+      data: {
+        serverNow: ctx.now().toISOString(),
+        role: connectionRole(access),
+        eventsSeq: hub.boardPosition(boardId),
+      },
+    })
 
     const heartbeat = setInterval(() => send({ type: 'ping', data: null }), HEARTBEAT_MS)
     cleanup = () => {
