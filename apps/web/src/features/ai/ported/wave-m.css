@@ -67,3 +67,66 @@
   outline: 2px solid var(--dr-focus);
   outline-offset: 1px;
 }
+
+/* ---- Diagram from words on the AI popover's shell (M4-5) -------------------------------------------------- */
+.dr-ai-pop.dr-ai-diagram {
+  width: 380px;
+}
+.dr-ai-diagram__text {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 84px;
+  resize: vertical;
+  font: inherit;
+}
+/* a segmented control: native radios, drawn as two joined buttons */
+.dr-ai-seg {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.dr-ai-seg legend {
+  float: left;
+  margin-right: 8px;
+  padding: 0;
+}
+.dr-ai-seg__opt {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border: 1px solid var(--dr-line-strong);
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font-size: 13px;
+  cursor: pointer;
+}
+.dr-ai-seg__opt:first-of-type {
+  border-radius: 8px 0 0 8px;
+}
+.dr-ai-seg__opt:last-of-type {
+  margin-left: -1px;
+  border-radius: 0 8px 8px 0;
+}
+.dr-ai-seg__opt[data-checked] {
+  z-index: 1;
+  border-color: var(--dr-accent-line);
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+  font-weight: 600;
+}
+.dr-ai-seg__opt input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.dr-ai-seg__opt:has(input:focus-visible) {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}

@@ -317,6 +317,28 @@ export const NONE: AiTarget = {
   bounds: null,
 }
 
+/**
+ * Wave M (M4-5): the whole board as what Summarize reads when nothing is selected (as Ask does): its frames (they stand
+ * for their contents) and what lies outside them, at most AI_MAX_REQUEST_SHAPES (the api reads what fits one request
+ * and says when it cut). `kind` stays 'none': a summary of it is placed in the view, not beside the whole board.
+ */
+export function boardTarget(canvas: LobbyCanvas): AiTarget {
+  const roots = canvas
+    .items()
+    .filter((e) => isLive(e) && !e.frameId && !(e.type === 'text' && e.containerId) && !canvas.isHidden(e.id))
+  const { notes, prompts, texts } = count(canvas, roots)
+  return {
+    kind: 'none',
+    ids: roots.slice(0, AI_MAX_REQUEST_SHAPES).map((e) => e.id),
+    label: 'the whole board',
+    notes,
+    prompts,
+    groups: [],
+    texts,
+    bounds: null,
+  }
+}
+
 /** The selection, else the frame at `point`, else nothing. */
 export function targetAt(canvas: LobbyCanvas, point: { x: number; y: number } | null): AiTarget {
   const sel = selectionTarget(canvas)

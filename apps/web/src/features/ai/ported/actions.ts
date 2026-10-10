@@ -58,7 +58,7 @@ import {
   setAiCtx,
 } from './runtime.ts'
 import { regionTile } from './shimmer.ts'
-import { type AiTarget, isLive, NONE, refOf } from './target.ts'
+import { type AiTarget, boardTarget, isLive, NONE, refOf } from './target.ts'
 
 const enc = encodeURIComponent
 const NOTICE_KEY = 'dr-ai'
@@ -167,9 +167,11 @@ async function untilSaved(canvas: LobbyCanvas, signal: AbortSignal): Promise<voi
 export async function runAi(
   canvas: LobbyCanvas,
   req: AiRequest,
-  target: AiTarget,
+  asked: AiTarget,
   opts: { acknowledged?: boolean; at?: AiMenuState['at'] } = {},
 ): Promise<void> {
+  // M4-5: Summarize with nothing selected reads the whole board, as Ask does
+  const target = req.action === 'summarize' && asked.kind === 'none' ? boardTarget(canvas) : asked
   const ctx = getAiCtx(canvas)
   const status = aiStatus(canvas).get()
   if (!ctx || !status?.enabled) return
@@ -309,8 +311,20 @@ export function writesBoard(input: AiRunInput): boolean {
   }
 }
 
-/** The notice's words for a run of public.ts `runAi`: what it does and what it sends. */
-const NOTICE_WORDS: Record<AiAction, { verb: string; what: string }> = {
+/** The notice's words: what it does, what it sends, and its title (what kind of text leaves the board). */
+export interface NoticeWords {
+  readonly verb: string
+  readonly what: string
+  readonly title: string
+}
+
+export const NOTICE_TITLES = {
+  selected: 'Sends the selected text to OpenAI',
+  board: 'Sends the board’s text to OpenAI',
+  words: 'Sends your words to OpenAI',
+} as const
+
+const NOTICE_WORDS: Record<AiAction, Omit<NoticeWords, 'title'>> = {
   summarize: { verb: 'summarize it', what: 'the text you selected' },
   themes: { verb: 'group the notes into themes', what: 'the text of the notes' },
   actions: { verb: 'find action items', what: 'the text you selected' },
@@ -324,10 +338,47 @@ const NOTICE_WORDS: Record<AiAction, { verb: string; what: string }> = {
 }
 
 /**
- * The privacy notice for a run of public.ts `runAi` (the AI popover's notice view, in the middle of the view):
- * resolves true on Continue, false on Cancel, Escape or the popover closing any other way.
+ * Wave M (M4-5, FTU-11): the notice's words for a run of public.ts `runAi`, as the run is: "the selected text" only when
+ * something selected is sent (a diagram or ideas from words alone send only them; Summarize with nothing selected
+ * sends the board's text).
  */
-export function askNotice(canvas: LobbyCanvas, action: AiAction, target: AiTarget = NONE): Promise<boolean> {
+export function noticeWords(
+  input: Pick<AiRunInput, 'action'> & { shapeIds?: readonly string[] },
+): NoticeWords {
+  const base = NOTICE_WORDS[input.action]
+  const sent = (input.shapeIds?.length ?? 0) > 0
+  switch (input.action) {
+    case 'diagram':
+      return sent
+        ? { ...base, title: NOTICE_TITLES.selected }
+        : { ...base, what: 'your description', title: NOTICE_TITLES.words }
+    case 'ideas':
+      return sent
+        ? { ...base, title: NOTICE_TITLES.selected }
+        : { ...base, what: 'your prompt', title: NOTICE_TITLES.words }
+    case 'recap':
+    case 'command':
+      return { ...base, title: NOTICE_TITLES.board }
+    case 'ask':
+      return sent
+        ? { ...base, what: 'your question and the text you selected', title: NOTICE_TITLES.selected }
+        : { ...base, title: NOTICE_TITLES.board }
+    default:
+      return { ...base, title: NOTICE_TITLES.selected }
+  }
+}
+
+/**
+ * The privacy notice for a run of public.ts `runAi` (the AI popover's notice view, in the middle of the view):
+ * resolves true on Continue, false on Cancel, Escape or the popover closing any other way. `words`: what it says
+ * (default: the action's, as if the selection were sent).
+ */
+export function askNotice(
+  canvas: LobbyCanvas,
+  action: AiAction,
+  target: AiTarget = NONE,
+  words: NoticeWords = noticeWords({ action, shapeIds: ['x'] }),
+): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     let done = false
     let stop: (() => void) | null = null
@@ -343,7 +394,7 @@ export function askNotice(canvas: LobbyCanvas, action: AiAction, target: AiTarge
       target,
       view: 'notice',
       pending: null,
-      notice: { ...NOTICE_WORDS[action], confirm: finish },
+      notice: { ...words, confirm: finish },
     }
     aiMenu(canvas).set(state)
     stop = react('lobby-ai-notice-watch', () => {
@@ -389,8 +440,9 @@ export async function runPublic(ctx: CanvasFeatureContext, input: AiRunInput): P
   if (aiJob(canvas).get())
     return refuse('Lobby is still working on another AI request. Wait for it to finish.')
   let acknowledged = input.acknowledged === true
+  const words = noticeWords(input as Pick<AiRunInput, 'action'> & { shapeIds?: readonly string[] })
   if (!status.noticeAccepted && !acknowledged) {
-    if (!(await askNotice(canvas, input.action))) return null
+    if (!(await askNotice(canvas, input.action, NONE, words))) return null
     acknowledged = true
   }
   const sel = canvas.selection
@@ -410,7 +462,7 @@ export async function runPublic(ctx: CanvasFeatureContext, input: AiRunInput): P
   })
   let out = await sendRun(canvas, body(acknowledged), job())
   if (out === 'notice') {
-    if (!(await askNotice(canvas, input.action))) return null
+    if (!(await askNotice(canvas, input.action, NONE, words))) return null
     out = await sendRun(canvas, body(true), job())
   }
   if (!out || out === 'notice') return null
@@ -724,7 +776,8 @@ function applyResult(
         about: target.label,
         truncated: result.truncated,
         runId: run,
-        target,
+        // a summary of the whole board is added in the view, not beside everything on it (M4-5)
+        target: target.kind === 'none' ? { ...target, ids: [] } : target,
         opener,
       })
       return

@@ -27,6 +27,9 @@ import { type Atom, atom, useValue } from '../../../lib/signals.ts'
 import { freshId } from '../../flow/runtime.ts'
 import { topCentreAnchor } from '../board-chrome.ts'
 import { inPopoverLayer, useBoardPlacement, usePopoverLayer } from '../board-popover.tsx'
+import '../ai.css'
+import '../ported/wave-m.css'
+import { SparkIcon } from '../icons.tsx'
 import { canBuildWithAi } from '../ported/gate.ts'
 import { type AiPreviewPlan, aiResultToast, findSpot, runAi, showAiPreview } from '../ported/public.ts'
 import { aiStatus } from '../ported/runtime.ts'
@@ -214,6 +217,7 @@ function DiagramDialog({ ctx }: { ctx: CanvasFeatureContext }) {
   const [useSelection, setUseSelection] = useState(fromSelection.current.length > 0)
   const ref = useRef<HTMLDivElement>(null)
   const titleId = useId()
+  const textId = useId()
   const close = () => {
     diagramPrompt(canvas).set(null)
     canvas.focus({ preventScroll: true })
@@ -254,67 +258,84 @@ function DiagramDialog({ ctx }: { ctx: CanvasFeatureContext }) {
     close()
     void runDiagram(ctx, { prompt: text, shapeIds: ids, direction })
   }
+  const sendsSelection = ids.length > 0
   return inPopoverLayer(
     canvas,
     host,
+    // M4-5 (FTU-11): the AI popover's own shell: the sparkle header with its ×, a segmented control for the direction
     <div
       ref={ref}
-      className="dr-flow-paste dr-flow-diagram"
+      className="dr-ai-pop dr-ai-diagram"
       role="dialog"
       aria-modal="false"
       aria-labelledby={titleId}
       data-testid="diagram-prompt"
       style={
         pos
-          ? { left: pos.left, top: pos.top, transform: 'none', maxHeight: pos.maxHeight, overflowY: 'auto' }
-          : { left: 0, top: 0, transform: 'none', visibility: 'hidden' }
+          ? { left: pos.left, top: pos.top, maxHeight: pos.maxHeight }
+          : { left: 0, top: 0, opacity: 0, pointerEvents: 'none' }
       }
     >
+      <div className="dr-ai-pop__head">
+        <span className="dr-ai-pop__badge" aria-hidden="true">
+          <SparkIcon size={14} />
+        </span>
+        <h2 id={titleId} className="dr-ai-pop__title">
+          Diagram from words
+        </h2>
+        <button
+          type="button"
+          className="dr-iconbtn dr-iconbtn--sm"
+          aria-label="Close"
+          data-testid="diagram-prompt-close"
+          onClick={close}
+        >
+          ×
+        </button>
+      </div>
       <form
+        className="dr-ai-form"
         onSubmit={(e) => {
           e.preventDefault()
           submit()
         }}
       >
-        <p id={titleId} className="dr-flow-paste__title">
-          <strong>Diagram from words</strong>
-        </p>
-        <label className="dr-flow-diagram__field">
-          <span>Describe the process</span>
-          <textarea
-            data-testid="diagram-prompt-text"
-            // biome-ignore lint/a11y/noAutofocus: the prompt opens to be typed in
-            autoFocus
-            rows={4}
-            maxLength={AI_DIAGRAM_PROMPT_MAX_CHARS}
-            value={text}
-            placeholder="Brief, concept, internal review, client review; if rejected back to concept, else production"
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault()
-                submit()
-              }
-            }}
-          />
+        <label htmlFor={textId} className="dr-ai-form__label">
+          Describe the process
         </label>
+        <textarea
+          id={textId}
+          className="dr-ai-form__input dr-ai-diagram__text"
+          data-testid="diagram-prompt-text"
+          // biome-ignore lint/a11y/noAutofocus: the prompt opens to be typed in
+          autoFocus
+          rows={4}
+          maxLength={AI_DIAGRAM_PROMPT_MAX_CHARS}
+          value={text}
+          placeholder="Brief, concept, internal review, client review; if rejected back to concept, else production"
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+              e.preventDefault()
+              submit()
+            }
+          }}
+        />
         {fromSelection.current.length > 0 && (
-          <label className="dr-flow-diagram__check">
+          <label className="dr-ai-form__radio">
             <input
               type="checkbox"
               data-testid="diagram-prompt-selection"
               checked={useSelection}
               onChange={(e) => setUseSelection(e.target.checked)}
             />
-            <span>
-              {`Use the ${fromSelection.current.length} selected ${fromSelection.current.length === 1 ? 'item' : 'items'}`}
-            </span>
+            {`Use the ${fromSelection.current.length} selected ${fromSelection.current.length === 1 ? 'item' : 'items'}`}
           </label>
         )}
-        <fieldset className="dr-flow-diagram__dir">
-          <legend>Reads</legend>
+        <fieldset className="dr-ai-seg" data-testid="diagram-prompt-direction">
+          <legend className="dr-ai-form__label">Reads</legend>
           {(['down', 'right'] as const).map((d) => (
-            <label key={d}>
+            <label key={d} className="dr-ai-seg__opt" data-checked={direction === d ? '' : undefined}>
               <input
                 type="radio"
                 name={`${titleId}-dir`}
@@ -327,18 +348,8 @@ function DiagramDialog({ ctx }: { ctx: CanvasFeatureContext }) {
             </label>
           ))}
         </fieldset>
-        <p className="dr-cux-muted dr-flow-diagram__note">
-          Sends the description and the selected text to OpenAI.
-        </p>
-        <div className="dr-flow-paste__actions">
-          <button
-            type="submit"
-            className="dr-btn dr-btn--primary dr-btn--sm"
-            data-testid="diagram-prompt-create"
-            disabled={!canSend}
-          >
-            Create diagram
-          </button>
+        <div className="dr-ai-form__row">
+          <span className="dr-ai-form__spacer" />
           <button
             type="button"
             className="dr-btn dr-btn--sm"
@@ -347,8 +358,22 @@ function DiagramDialog({ ctx }: { ctx: CanvasFeatureContext }) {
           >
             Cancel
           </button>
+          <button
+            type="submit"
+            className="dr-btn dr-btn--primary dr-btn--sm"
+            data-testid="diagram-prompt-create"
+            disabled={!canSend}
+          >
+            Create diagram
+          </button>
         </div>
       </form>
+      <p className="dr-ai-pop__foot" data-testid="diagram-prompt-note">
+        {/* the selected text is named only when it is what goes along (M4-5) */}
+        {sendsSelection
+          ? 'Sends the description and the selected text to OpenAI.'
+          : 'Sends the description to OpenAI.'}
+      </p>
     </div>,
   )
 }

@@ -25,7 +25,7 @@ import { isTextEntry, onFocusLeave, trapTab, tryFocus } from '../../../ui/focus.
 import { exportAllowed } from '../../canvas-ux/ported/export-gate.ts'
 import { anchorRect } from '../board-chrome.ts'
 import { InPopoverLayer, useBoardPlacement } from '../board-popover.tsx'
-import { budgetLine, groupNames, themesHint } from '../copy.ts'
+import { budgetLine, groupNames } from '../copy.ts'
 import { ActionIcon, SparkIcon, Spinner } from '../icons.tsx'
 import { runRecap } from '../recap/recap.ts'
 import {
@@ -35,6 +35,7 @@ import {
   closeAiMenu,
   expandTopic,
   mindmapFromPrompt,
+  NOTICE_TITLES,
   refreshAiStatus,
   runAi,
 } from './actions.ts'
@@ -49,6 +50,7 @@ import {
   showSources,
 } from './ask.ts'
 import { canBuildWithAi } from './gate.ts'
+import { aiItemStates } from './menu-model.ts'
 import { AiFlash, AiShimmer } from './Placeholders.tsx'
 import {
   ACTION_LABELS,
@@ -64,6 +66,7 @@ import {
   getAiCtx,
   setAiCtx,
 } from './runtime.ts'
+import { boardTarget } from './target.ts'
 
 const docOf = (canvas: LobbyCanvas) => canvas.container()?.ownerDocument ?? document
 
@@ -303,6 +306,13 @@ function MenuView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: stri
   // Expand and Mind map from a prompt write to the board: only while AI is on, may add and has budget left
   const build = canBuildWithAi(status, readOnly)
   const run = (req: AiRequest) => void runAi(canvas, req, target, { at: menu.at })
+  // M4-5: one model for both menus; a greyed-out item says what it needs; Summarize reads the whole board when
+  // nothing is selected
+  const states = aiItemStates(
+    target,
+    { texts: target.kind === 'none' ? boardTarget(canvas).texts : 0 },
+    { insert },
+  )
   return (
     <>
       <Head titleId={titleId} onClose={onClose}>
@@ -319,14 +329,8 @@ function MenuView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: stri
         )}
         <Item
           action="summarize"
-          hint={
-            target.texts === 0
-              ? 'Nothing with text selected'
-              : insert
-                ? 'Read it first, then add it to the board'
-                : 'A short summary, just for you'
-          }
-          disabled={target.texts === 0}
+          hint={states.summarize.hint}
+          disabled={states.summarize.disabled}
           onClick={() => run({ action: 'summarize' })}
         />
         {status?.canSummarize && (
@@ -361,8 +365,8 @@ function MenuView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: stri
           <>
             <Item
               action="themes"
-              hint={themesHint(target.notes, target.prompts)}
-              disabled={target.notes < 2}
+              hint={states.themes.hint}
+              disabled={states.themes.disabled}
               onClick={() =>
                 target.groups.length
                   ? aiMenu(canvas).set({ ...menu, view: 'regroup' })
@@ -371,8 +375,8 @@ function MenuView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: stri
             />
             <Item
               action="actions"
-              hint={target.texts === 0 ? 'Nothing with text selected' : 'Next steps and owners as new notes'}
-              disabled={target.texts === 0}
+              hint={states.actions.hint}
+              disabled={states.actions.disabled}
               onClick={() => run({ action: 'actions' })}
             />
             <Item
@@ -704,10 +708,20 @@ function NoticeView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: st
   const what = asked
     ? asked.what
     : menu.target.kind === 'none'
-      ? 'your prompt'
+      ? pending?.action === 'summarize'
+        ? 'the text on the board'
+        : 'your prompt'
       : into?.kind === 'expand'
         ? `the words of ${menu.target.label}, the topics it sits under and the ones below it`
         : `the text of ${menu.target.label}${pending?.action === 'ideas' ? ' and your prompt' : ''}`
+  // M4-5: "the selected text" only when the selection is what is sent
+  const title =
+    asked?.title ??
+    (menu.target.kind !== 'none'
+      ? NOTICE_TITLES.selected
+      : pending?.action === 'summarize'
+        ? NOTICE_TITLES.board
+        : NOTICE_TITLES.words)
   const verb = asked
     ? asked.verb
     : into
@@ -720,7 +734,7 @@ function NoticeView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: st
   return (
     <>
       <Head titleId={titleId} onClose={onClose}>
-        Sends the selected text to OpenAI
+        {title}
       </Head>
       <div className="dr-ai-notice" data-testid="ai-notice">
         <p>

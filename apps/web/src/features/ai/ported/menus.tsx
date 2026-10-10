@@ -24,6 +24,7 @@ import {
   useCanvasFeatureContext,
 } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { DIAGRAM_MENU } from '../diagram/DiagramPrompt.tsx'
 import { SparkIcon, Spinner } from '../icons.tsx'
 import { runRecap } from '../recap/recap.ts'
 import {
@@ -38,11 +39,12 @@ import {
 import { askBoard, WHOLE_BOARD } from './ask.ts'
 import { canBuildWithAi } from './gate.ts'
 import { aiLens, toggleAiLens } from './lens.tsx'
+import { aiItemStates, labelWithReason } from './menu-model.ts'
 import { PROVENANCE_ITEM } from './provenance-chip.tsx'
 import { AI_COMMAND_IDS, aiActionsArgs, aiAskArgs, aiRecapArgs } from './public.ts'
 import { isThemesRun, recordedRunOf, removeResult } from './remove.ts'
 import { type AiMenuState, aiJob, aiMenu, aiStatus, getAiCtx, setAiCtx } from './runtime.ts'
-import { type AiTarget, NONE, selectionTarget, targetAt, viewTarget } from './target.ts'
+import { type AiTarget, boardTarget, NONE, selectionTarget, targetAt, viewTarget } from './target.ts'
 
 /** A scene point as the popover's anchor (px from the canvas container's top-left). */
 function anchorAtPoint(canvas: LobbyCanvas, scene: { x: number; y: number }): AiMenuState['at'] {
@@ -138,6 +140,16 @@ const at = (ctx: CanvasFeatureContext, t: MenuTarget): AiMenuState['at'] => {
   const v = ctx.canvas.viewport.get()
   return anchorAtPoint(ctx.canvas, t.point ?? { x: v.x + v.width / 2, y: v.y + v.height / 2 })
 }
+/** M4-5: what the three reading actions can do for the menu's target, and why not (./menu-model.ts). */
+const statesOf = (ctx: CanvasFeatureContext, t: MenuTarget) => {
+  const target = targetOf(ctx, t)
+  return aiItemStates(
+    target,
+    { texts: target.kind === 'none' ? boardTarget(ctx.canvas).texts : 0 },
+    { insert: insertOn(ctx) },
+  )
+}
+
 /** After the menu has closed (its focus handling first). */
 const later = (fn: () => void) => void setTimeout(fn, 0)
 const run = (ctx: CanvasFeatureContext, t: MenuTarget, action: 'summarize' | 'themes' | 'actions') => {
@@ -187,11 +199,12 @@ export const CONTEXT_MENU: readonly MenuEntrySpec[] = [
     disabled: (ctx) => aiJob(ctx.canvas).get() !== null,
     submenu: [
       {
+        // M4-5: with nothing selected, the whole board (as Ask)
         id: 'ai.summarize',
         group: 'ai',
         order: 1,
-        label: 'Summarize',
-        disabled: (ctx, t) => targetOf(ctx, t).texts === 0,
+        label: (ctx, t) => labelWithReason('Summarize', statesOf(ctx, t).summarize),
+        disabled: (ctx, t) => statesOf(ctx, t).summarize.disabled,
         run: (ctx, t) => run(ctx, t, 'summarize'),
       },
       {
@@ -225,9 +238,9 @@ export const CONTEXT_MENU: readonly MenuEntrySpec[] = [
         id: 'ai.themes',
         group: 'ai',
         order: 2,
-        label: 'Group into themes',
+        label: (ctx, t) => labelWithReason('Group into themes', statesOf(ctx, t).themes),
         visible: insertOn,
-        disabled: (ctx, t) => targetOf(ctx, t).notes < 2,
+        disabled: (ctx, t) => statesOf(ctx, t).themes.disabled,
         run: (ctx, t) => {
           const target = targetOf(ctx, t)
           if (!target.groups.length) {
@@ -243,9 +256,9 @@ export const CONTEXT_MENU: readonly MenuEntrySpec[] = [
         id: 'ai.actions',
         group: 'ai',
         order: 3,
-        label: 'Action items',
+        label: (ctx, t) => labelWithReason('Action items', statesOf(ctx, t).actions),
         visible: insertOn,
-        disabled: (ctx, t) => targetOf(ctx, t).texts === 0,
+        disabled: (ctx, t) => statesOf(ctx, t).actions.disabled,
         run: (ctx, t) => run(ctx, t, 'actions'),
       },
       {
@@ -261,6 +274,8 @@ export const CONTEXT_MENU: readonly MenuEntrySpec[] = [
           later(() => openAiMenu(ctx.canvas, where, target, 'ideas'))
         },
       },
+      // M4-5 (FTU-11): Diagram from words sits with the other AI entries (its command stays in the palette)
+      { ...DIAGRAM_MENU, order: 4.5 },
       {
         id: 'ai.mindmap',
         group: 'ai',
