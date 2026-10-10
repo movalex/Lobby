@@ -1,11 +1,12 @@
 // Wave M, M5-3 (CAP-BELL-POLL): the board's bell poll asks only whether anything is new. The minute poll sends the
-// `seq` of the last answer as `since`; a 204 keeps what the bell shows. Every other refresh asks for the whole list.
+// `seq` of the last answer as `since`; a 204 keeps what the bell shows. Every other refresh asks for the whole list,
+// and so does a poll NOTIFICATIONS_WHOLE_REFRESH_MS after the last whole answer (the M5-3 review: what the seq misses).
 import type { ListNotificationsResponse, NotificationItem } from '@draftroom/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createApiClient } from '../../api/client.ts'
 import { type CommentsApi, createCommentsApi } from './api.ts'
 import { LOBBY_SIGNALS } from './cells.ts'
-import { CommentsStore } from './store.ts'
+import { CommentsStore, NOTIFICATIONS_WHOLE_REFRESH_MS } from './store.ts'
 
 const BOARD = 'b-0123456789'
 const ME = 'usr_me0000000000000000'
@@ -108,6 +109,36 @@ describe('CommentsStore: the bell (M5-3)', () => {
     await s.refreshNotifications()
     expect(sent).toEqual([0, 0])
     expect(s.notifications.get().unreadCount).toBe(0)
+  })
+
+  it('a quiet tab: a poll 5 minutes after the last whole answer asks for the whole list (a read mark made elsewhere shows)', async () => {
+    const now = vi.spyOn(Date, 'now')
+    try {
+      let t = 1_000_000
+      now.mockImplementation(() => t)
+      const { store: s, sent } = make([
+        { notifications: [item(1)], unreadCount: 1, seq: 5 },
+        null,
+        null,
+        // read in another tab: the same seq, a new unread count
+        { notifications: [item(1, '2026-10-10T11:00:00.000Z')], unreadCount: 0, seq: 5 },
+        null,
+      ])
+      await s.refreshNotifications() // the board opened: whole
+      t += 60_000
+      await s.refreshNotifications({ onlyIfNew: true })
+      t += NOTIFICATIONS_WHOLE_REFRESH_MS - 60_001
+      await s.refreshNotifications({ onlyIfNew: true }) // still within the window: cheap
+      expect(s.notifications.get().unreadCount).toBe(1)
+      t += 1
+      await s.refreshNotifications({ onlyIfNew: true }) // the window ended: whole
+      expect(s.notifications.get().unreadCount).toBe(0)
+      t += 60_000
+      await s.refreshNotifications({ onlyIfNew: true }) // cheap again, counted from that whole answer
+      expect(sent).toEqual([0, 5, 5, 0, 5])
+    } finally {
+      now.mockRestore()
+    }
   })
 
   it('a 204 to "since 0" means the bell is empty', async () => {
