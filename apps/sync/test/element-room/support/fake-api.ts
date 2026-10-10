@@ -2,6 +2,10 @@
 // A1 file-refs, A2 workshop-state (the pull), and today's /internal/access (the access monitor), plus a
 // 204 for every POST report (touched, session-ended). Driven from the test: files per version id, a
 // foreign set, the vote state, delays and failures.
+//
+// Wave M (M7-1): POST /internal/access-many, the batched re-check, answers only with `accessMany` on (from the
+// same roles and sign-in times; a pair without a role makes the whole batch a 500, "cannot tell", as the
+// per-pair route's 404 does for it). Off (the default) it answers 404, as an api from before wave M does.
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -27,6 +31,12 @@ export interface ElementFakeApi {
    * null for none). Never set: the answer has no such field (an api from before J3).
    */
   setSignedInSince(userId: string, since: number | null): void
+  /** M7-1: answer POST /internal/access-many (default false: 404, an api from before wave M) */
+  accessMany: boolean
+  /** every GET /internal/access, as `board/user` */
+  readonly accessCalls: string[]
+  /** every POST /internal/access-many, its pairs as `board/user` (404s included) */
+  readonly accessManyCalls: string[][]
   close(): Promise<void>
 }
 
@@ -44,12 +54,35 @@ export async function startElementFakeApi(secret = TEST_INTERNAL_SECRET): Promis
     const url = new URL(req.url ?? '/', 'http://localhost')
     if (req.headers[INTERNAL_SECRET_HEADER] !== secret)
       return json(res, 401, { error: { code: 'bad-secret', message: 'no' } })
+    if (req.method === 'POST' && url.pathname === '/internal/access-many') {
+      let body = ''
+      req.setEncoding('utf8')
+      req.on('data', (d) => {
+        body += d
+      })
+      req.on('end', () => {
+        const pairs = (JSON.parse(body) as { pairs?: { boardId: string; userId: string }[] }).pairs ?? []
+        api.accessManyCalls.push(pairs.map((p) => `${p.boardId}/${p.userId}`))
+        if (!api.accessMany) return json(res, 404, { error: { code: 'NOT_FOUND', message: 'Not found.' } })
+        if (pairs.some((p) => !roles.has(`${p.boardId}\n${p.userId}`)))
+          return json(res, 500, { error: { code: 'INTERNAL' } })
+        const users = [...new Set(pairs.map((p) => p.userId))]
+        json(res, 200, {
+          results: pairs.map((p) => ({ ...p, role: roles.get(`${p.boardId}\n${p.userId}`) ?? null })),
+          signedInSince: Object.fromEntries(
+            users.filter((u) => signedInSince.has(u)).map((u) => [u, signedInSince.get(u) ?? null]),
+          ),
+        })
+      })
+      return
+    }
     if (req.method === 'POST') {
       req.resume()
       return res.writeHead(204).end()
     }
     if (url.pathname === '/internal/access') {
       const userId = url.searchParams.get('userId') ?? ''
+      api.accessCalls.push(`${url.searchParams.get('boardId')}/${userId}`)
       const k = `${url.searchParams.get('boardId')}\n${userId}`
       if (!roles.has(k)) return json(res, 404, { error: { code: 'NOT_FOUND' } })
       return json(res, 200, {
@@ -96,6 +129,9 @@ export async function startElementFakeApi(secret = TEST_INTERNAL_SECRET): Promis
     setWorkshop: (b, s) => void workshops.set(b, s),
     setRole: (b, u, r) => void roles.set(`${b}\n${u}`, r),
     setSignedInSince: (u, since) => void signedInSince.set(u, since),
+    accessMany: false,
+    accessCalls: [],
+    accessManyCalls: [],
     async close() {
       for (const r of hanging) r.destroy()
       server.closeAllConnections()

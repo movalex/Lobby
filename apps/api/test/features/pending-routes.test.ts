@@ -22,7 +22,6 @@ const WAVE_M_ROUTES = [
   'GET /api/boards/:bid/open-state',
   'POST /api/usage',
   'GET /internal/usage',
-  'POST /internal/access-many',
   'POST /api/workspaces/:wid/ai/ask',
   'GET /api/workspaces/:wid/templates',
   'POST /api/workspaces/:wid/templates',
