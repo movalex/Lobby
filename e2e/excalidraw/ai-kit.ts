@@ -10,7 +10,13 @@
 import { expect, type Page, type Route } from '@playwright/test'
 import { installServerTextMetrics } from '../../packages/canvas-schema/src/engine/index.ts'
 import type { Ack, Welcome } from '../../packages/canvas-schema/src/protocol.ts'
-import { AI_RUN_ID_PATTERN, AiResult, AiRunInput } from '../../packages/contracts/src/ai.ts'
+import {
+  AI_RUN_ID_PATTERN,
+  AiResult,
+  AiRunInput,
+  WorkspaceAskRequest,
+  WorkspaceAskResponse,
+} from '../../packages/contracts/src/ai.ts'
 import { instantiateSceneTemplate } from '../../packages/templates/src/scene/index.ts'
 import { FAKE_KEY } from '../tests/support/ai.ts'
 import { items, select, setViewport, viewport } from '../tests/support/canvas.ts'
@@ -756,4 +762,108 @@ export function aiRunRequests(page: Page): string[] {
     if (r.method() === 'POST' && RUN_ROUTE.test(new URL(r.url()).pathname)) seen.push(r.url())
   })
   return seen
+}
+
+// ---- wave M (the foundation; this kit is W4's): canned answers for Ask across boards (M8-2, M4-6) ------------------
+//
+// POST /api/workspaces/:wid/ai/ask is pending on the foundation's api (404 NOT_FOUND, as any unknown route) until W8
+// implements it. These let W4's Ask panel specs run either way: `fakeWorkspaceAsk(page)` answers every ask with a
+// canned WorkspaceAskResponse (or `unavailable: true`: the 404 an api without the route gives), and records the
+// requests. The answers are checked against the contract, so a canned answer can never be one the api could not send.
+
+export const WORKSPACE_ASK_GLOB = '**/api/workspaces/*/ai/ask'
+const WORKSPACE_ASK_ROUTE = /\/api\/workspaces\/([^/]+)\/ai\/ask$/
+
+/** One cited board of a canned answer. */
+export interface CannedCitation {
+  boardId: string
+  boardTitle: string
+  elementIds: string[]
+}
+
+/** A canned answer citing `citations` (found 'yes' with any, 'no' with none); `exportAllowed` defaults to true. */
+export function cannedWorkspaceAsk(
+  citations: readonly CannedCitation[],
+  opts: { answer?: string; found?: 'yes' | 'partial' | 'no'; exportAllowed?: boolean } = {},
+): WorkspaceAskResponse {
+  const found = opts.found ?? (citations.length ? 'yes' : 'no')
+  const answer =
+    opts.answer ??
+    (citations.length
+      ? `${citations.map((c, i) => `${c.boardTitle} [${i + 1}]`).join(' and ')} say so.`
+      : 'Your boards don’t say.')
+  return WorkspaceAskResponse.parse({
+    answer,
+    found,
+    citations: citations.map((c) => ({ ...c, elementIds: [...c.elementIds] })),
+    exportAllowed: opts.exportAllowed ?? true,
+  })
+}
+
+/** The "boards don't say" answer. */
+export const CANNED_WORKSPACE_ASK_NOTHING: WorkspaceAskResponse = cannedWorkspaceAsk([])
+
+export interface WorkspaceAskCall {
+  workspaceId: string
+  body: unknown
+  status: number
+}
+
+export interface WorkspaceAskFake {
+  readonly calls: WorkspaceAskCall[]
+  /** Answers the next ask with this (or a function of the request) instead of the default. */
+  next(answer: WorkspaceAskResponse | ((input: WorkspaceAskRequest) => WorkspaceAskResponse)): void
+  dispose(): Promise<void>
+}
+
+/**
+ * Installs the fake on `page`: every POST /api/workspaces/:wid/ai/ask gets `answer` (default: the nothing answer), a
+ * queued `next` one first, a 400 for a body the contract refuses, or with `unavailable` the unknown route's 404.
+ */
+export async function fakeWorkspaceAsk(
+  page: Page,
+  opts: { answer?: WorkspaceAskResponse; unavailable?: boolean } = {},
+): Promise<WorkspaceAskFake> {
+  const calls: WorkspaceAskCall[] = []
+  const queued: (WorkspaceAskResponse | ((input: WorkspaceAskRequest) => WorkspaceAskResponse))[] = []
+  const handler = async (route: Route) => {
+    const req = route.request()
+    const m = WORKSPACE_ASK_ROUTE.exec(new URL(req.url()).pathname)
+    if (req.method() !== 'POST' || !m) return route.fallback()
+    const workspaceId = decodeURIComponent(m[1] ?? '')
+    let body: unknown = null
+    try {
+      body = JSON.parse(req.postData() ?? 'null')
+    } catch {
+      // refused below
+    }
+    if (opts.unavailable) {
+      calls.push({ workspaceId, body, status: 404 })
+      return route.fulfill({ status: 404, json: { error: { code: 'NOT_FOUND', message: 'Not found.' } } })
+    }
+    const input = WorkspaceAskRequest.safeParse(body)
+    if (!input.success) {
+      calls.push({ workspaceId, body, status: 400 })
+      return route.fulfill({
+        status: 400,
+        json: { error: { code: 'BAD_REQUEST', message: 'Not a valid question.' } },
+      })
+    }
+    const own = queued.shift()
+    const answer = own
+      ? typeof own === 'function'
+        ? own(input.data)
+        : own
+      : (opts.answer ?? CANNED_WORKSPACE_ASK_NOTHING)
+    calls.push({ workspaceId, body, status: 200 })
+    return route.fulfill({ status: 200, json: WorkspaceAskResponse.parse(answer) })
+  }
+  await page.route(WORKSPACE_ASK_GLOB, handler)
+  return {
+    calls,
+    next(answer) {
+      queued.push(answer)
+    },
+    dispose: () => page.unroute(WORKSPACE_ASK_GLOB, handler),
+  }
 }
