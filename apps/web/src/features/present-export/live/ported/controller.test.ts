@@ -3,7 +3,11 @@
 // this person's choice. A fake presenter stands in for 3e's (./presenter.ts `LivePresenter`, element ids).
 import type { LivePresentation, PresentLiveState } from '@draftroom/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import type { CanvasFeatureContext, FeatureRegistries } from '../../../../canvas/api/index.ts'
+import {
+  type CanvasFeatureContext,
+  type FeatureRegistries,
+  markRoomReady,
+} from '../../../../canvas/api/index.ts'
 import { atom } from '../../../../lib/signals.ts'
 import { presenterTabId } from '../tab.ts'
 import { apiSlideId, elementSlideId, getLive, mountLive } from './controller.ts'
@@ -173,6 +177,7 @@ function setup(opts: { others?: string[] } = {}) {
   const annPres = (over: Partial<LivePresentation> = {}) =>
     pres({ presenter: { userId: ANN, name: 'Ann' }, tab: 'tab_annannannannannann', ...over })
   return {
+    canvas: ctx.canvas,
     live,
     presenter,
     log,
@@ -298,6 +303,40 @@ describe('present-live controller (Excalidraw page)', () => {
     await t.event(t.pres({ slideId: 'shape:f2', index: 2 }), 'slide', ME)
     expect(t.log).toContain('start presenter f2 fullscreen=false')
     expect(t.live.presentingLive.get()).toBe(true)
+    t.unmount()
+  })
+
+  it('a reload whose board is not in yet: no frames is decided after the first sync, not before (wave M gate)', async () => {
+    // a warm open's paint, then the room's older cached snapshot without the frames, then its catch-up
+    const t = setup()
+    const start = t.presenter.start.bind(t.presenter)
+    let frames = false
+    t.presenter.start = (o) => (frames ? start(o) : { ok: false, reason: 'no-frames' })
+    await t.event(t.pres({ slideId: 'shape:f1', index: 1 }), 'slide', ME)
+    expect(posts(t.calls, '/stop')).toEqual([])
+    expect(t.notices).toEqual([])
+    expect(t.live.presentingLive.get()).toBe(false)
+    frames = true
+    markRoomReady(t.canvas)
+    await t.settle()
+    expect(t.log).toContain('start presenter f1 fullscreen=false')
+    expect(t.live.presentingLive.get()).toBe(true)
+    expect(posts(t.calls, '/stop')).toEqual([])
+    t.unmount()
+  })
+
+  it('a follower whose board is not in yet waits too; once it is, a board with no frames still says so', async () => {
+    const t = setup()
+    t.presenter.start = () => ({ ok: false, reason: 'no-frames' })
+    await t.event(t.annPres(), 'started', ANN)
+    t.live.join()
+    await t.settle()
+    expect(t.notices).toEqual([])
+    expect(posts(t.calls, '/follow').map((c) => c.body?.following)).toEqual([true])
+    markRoomReady(t.canvas)
+    await t.settle()
+    expect(t.notices.at(-1)).toContain('this page has no frames')
+    expect(posts(t.calls, '/follow').map((c) => c.body?.following)).toEqual([true, false])
     t.unmount()
   })
 

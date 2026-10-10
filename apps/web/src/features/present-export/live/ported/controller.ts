@@ -17,7 +17,11 @@
 
 import { fromShapeRef } from '@draftroom/canvas-schema/refs'
 import { type LivePresentation, type PresentSlide, PresentSlideId } from '@draftroom/contracts'
-import type { CanvasFeatureContext, FeatureRegistries } from '../../../../canvas/api/index.ts'
+import {
+  type CanvasFeatureContext,
+  type FeatureRegistries,
+  roomReadyOf,
+} from '../../../../canvas/api/index.ts'
 import { type BoardRole, can } from '../../../../lib/permissions.ts'
 import { type Atom, atom, react } from '../../../../lib/signals.ts'
 import { LOBBY_SIGNALS } from '../../../comments/cells.ts'
@@ -149,6 +153,12 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
     presentingLive,
     presentationId: () => store.presentation.get()?.id ?? null,
   })
+  // the board's first sync (welcome, snapshot and catch-up) is applied: before it the scene can be empty (a cold
+  // open, or the room's older cached snapshot behind a warm open's paint), so 'no frames' is not known yet
+  const roomReady = roomReadyOf(ctx.canvas)
+  /** A start refused for no frames before the board's first sync: decided again once it is in (wave M gate). */
+  const notYet = (r: { ok: boolean; reason?: string }) =>
+    !r.ok && r.reason === 'no-frames' && !roomReady.get()
   let disposed = false
   let flashSeq = 0
   let flashTimer: ReturnType<typeof setTimeout> | undefined
@@ -268,6 +278,7 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
             index: p.index,
             fullscreen: false,
           })
+          if (notYet(r)) return
           if (!r.ok && r.reason !== 'already') {
             void store.stop()
             notify('Your presentation to everyone ended: this board has no frames to present.')
@@ -322,6 +333,7 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
           index: p.index,
           leader,
         })
+        if (notYet(r)) return
         if (!r.ok && r.reason !== 'already') {
           store.setIntent(p.id, 'declined')
           void store.follow(false)
@@ -352,6 +364,7 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
     store.restartLost.get()
     store.intent.get()
     presenter.state.get()
+    roomReady.get()
     schedule()
   })
 
