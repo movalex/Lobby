@@ -43,6 +43,7 @@ import {
   WorkshopVoteState,
 } from '@draftroom/contracts'
 import type { z } from 'zod'
+import { takeOpenState } from '../../lib/open-state.ts'
 import type { VoteSetupArgs } from './commands.ts'
 import { ReactionThrottle } from './reactions.ts'
 import { nextResultsNews, type ResultsCardDismissal } from './results-card.ts'
@@ -129,8 +130,12 @@ export interface SpotlightEnded {
   reason: SpotlightEndReason
   /** whose it was */
   starterName: string
+  /** M2-1: its starter's user id (the viewer who started it is told "You ended the spotlight.") */
+  starterUserId: string
   /** who ended it (null: the api did) */
   byName: string | null
+  /** M2-1: who ended it, by user id (null: the api did) */
+  byUserId: string | null
 }
 
 /** One spotlight's identity: a new one has a new key (a person who hid the last one sees this one). */
@@ -551,10 +556,16 @@ export class WorkshopStore {
     const seq = ++this.seq
     try {
       const sentAt = this.nowMs()
-      const s = await this.request('GET', `/api/boards/${encodeURIComponent(this.boardId)}/workshop`, {
-        schema: WorkshopState,
-      })
-      this.noteServerTime(s.serverNow, sentAt, this.nowMs()) // a valid clock sample even if superseded
+      // M5-1/M2: the board-open read may already hold this answer (lib/open-state.ts hands it over once, for the
+      // first fetch; null or nothing: this route is asked, as it always was)
+      const seeded = takeOpenState(this.boardId, 'workshop') ?? null
+      const s =
+        seeded ??
+        (await this.request('GET', `/api/boards/${encodeURIComponent(this.boardId)}/workshop`, {
+          schema: WorkshopState,
+        }))
+      // a clock sample from a body that was read earlier would be wrong by its age: only an answer to this request counts
+      if (!seeded) this.noteServerTime(s.serverNow, sentAt, this.nowMs()) // a valid clock sample even if superseded
       if (seq < this.appliedSeq) return
       this.appliedSeq = seq
       const timer = this.newerTimer(s.timer) ? s.timer : (this.state?.timer ?? null)
@@ -680,7 +691,7 @@ export class WorkshopStore {
   private applySpotlight(
     spotlight: Spotlight | null,
     version: SpotlightVersion | null,
-    end?: { reason: SpotlightEndReason | null; endedBy: { name: string } | null },
+    end?: { reason: SpotlightEndReason | null; endedBy: { userId: string; name: string } | null },
   ): boolean {
     if (!version || !isNewerSpotlight(this.spotlightVersion, version)) return false
     const prev = this.spotlight
@@ -691,7 +702,9 @@ export class WorkshopStore {
         seq: ++this.endedSeq,
         reason: end.reason,
         starterName: prev.by.name,
+        starterUserId: prev.by.userId,
         byName: end.endedBy?.name ?? null,
+        byUserId: end.endedBy?.userId ?? null,
       }
     return true
   }
@@ -724,7 +737,17 @@ export class WorkshopStore {
         body: {},
         schema: SpotlightState,
       })
-      if (this.applySpotlight(r.spotlight, r.version)) this.emit()
+      // M2-1: the person who ended it is told so by this answer, if it comes before the event (the older of the
+      // two is not applied again): "You ended the spotlight." (./ported/spotlight.ts endedText)
+      const prev = this.spotlight
+      const end =
+        r.spotlight === null && prev
+          ? {
+              reason: (prev.by.userId === this.userId ? 'ended' : 'ended-by-owner') as SpotlightEndReason,
+              endedBy: { userId: this.userId, name: '' },
+            }
+          : undefined
+      if (this.applySpotlight(r.spotlight, r.version, end)) this.emit()
       return { ok: true }
     } catch (e) {
       return errorOf(e)

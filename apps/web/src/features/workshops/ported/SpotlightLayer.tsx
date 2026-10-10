@@ -16,6 +16,7 @@ import { countUsage } from '../../../lib/usage.ts'
 import { useMediaQuery } from '../../../ui/useMedia.ts'
 import { announcerFor } from '../../a11y/ported/announcer.ts'
 import { spotlightKey, type WorkshopStore } from '../store.ts'
+import { TopCentreItem } from '../top-centre.ts'
 import { storeFor, useWorkshop } from '../workshop-context.ts'
 import { REDUCED_MOTION_QUERY } from './Reactions.tsx'
 import {
@@ -132,7 +133,7 @@ export function SpotlightLayer({ ctx }: { ctx: Ctx }) {
     const e = snap.spotlightEnded
     if (!e || e.seq === seen.current) return
     seen.current = e.seq
-    ctx.notify({ key: 'spotlight', text: endedText(e), testId: 'spotlight-ended-toast', timeoutMs: 5000 })
+    ctx.notify({ key: 'spotlight', text: endedText(e, me), testId: 'spotlight-ended-toast', timeoutMs: 5000 })
   }, [snap.spotlightEnded, ctx])
 
   const rect = placed?.shape.rect ?? null
@@ -145,20 +146,23 @@ export function SpotlightLayer({ ctx }: { ctx: Ctx }) {
       data-motion={reduced ? 'still' : 'pulse'}
     >
       {dim && rect && <Dim rect={rect} />}
-      {s && !hidden && placed && <SpotlightBar ctx={ctx} store={store} placed={placed} />}
-      {s && hidden && (
-        <button
-          type="button"
-          className="dr-wk-spot__chip"
-          data-testid="spotlight-show"
-          onClick={() => {
-            store.showSpotlight()
-            ctx.canvas.focus({ preventScroll: true })
-          }}
-        >
-          Show the spotlight
-        </button>
-      )}
+      {/* M2-1: the bar (or the chip that brings it back) is in the board's top-centre stack, with the other bars */}
+      <TopCentreItem slot="spotlight">
+        {s && !hidden && placed && <SpotlightBar ctx={ctx} store={store} placed={placed} />}
+        {s && hidden && (
+          <button
+            type="button"
+            className="dr-wk-spot__chip"
+            data-testid="spotlight-show"
+            onClick={() => {
+              store.showSpotlight()
+              ctx.canvas.focus({ preventScroll: true })
+            }}
+          >
+            Show the spotlight
+          </button>
+        )}
+      </TopCentreItem>
     </div>
   )
 }

@@ -15,6 +15,7 @@ import {
   FEEDBACK_TEXT_MAX,
   type FeedbackBoard,
   sendErrorMessage,
+  sendsOnlyPrefill,
   toInput,
 } from './model.ts'
 import './feedback.css'
@@ -23,10 +24,13 @@ type Phase = 'editing' | 'sending' | 'sent'
 
 export function FeedbackDialog({
   board,
+  prefill = null,
   onClose,
   send = (input) => feedbackApi().send(input),
 }: {
   board: FeedbackBoard | null
+  /** Wave M (M2-5): "What happened?" starts with this (the end-of-moment prompt's "After a vote reveal: "). */
+  prefill?: string | null
   onClose(): void
   /** Replaced by tests. */
   send?: (input: ReturnType<typeof toInput>) => Promise<unknown>
@@ -35,7 +39,7 @@ export function FeedbackDialog({
   const expectedId = useId()
   const countId = useId()
   const contextId = useId()
-  const [text, setText] = useState('')
+  const [text, setText] = useState(prefill ?? '')
   const [expected, setExpected] = useState('')
   const [phase, setPhase] = useState<Phase>('editing')
   const [error, setError] = useState<string | null>(null)
@@ -55,6 +59,15 @@ export function FeedbackDialog({
   )
   const sending = phase === 'sending'
   const closeButton = useRef<HTMLButtonElement>(null)
+  const whatRef = useRef<HTMLTextAreaElement>(null)
+  // M2-5: a prefilled sentence is finished by the person: the caret is at its end, and the textarea has the keyboard
+  useEffect(() => {
+    if (!prefill) return
+    const el = whatRef.current
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+  }, [prefill])
   // The form is gone once it is sent: the keyboard goes to Close, not to a page body with nothing on it.
   useEffect(() => {
     if (phase === 'sent') closeButton.current?.focus()
@@ -62,7 +75,7 @@ export function FeedbackDialog({
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
-    if (sending || !canSend(text, expected)) return
+    if (sending || !canSend(text, expected) || sendsOnlyPrefill(text, prefill)) return
     setPhase('sending')
     setError(null)
     try {
@@ -105,6 +118,7 @@ export function FeedbackDialog({
         <label htmlFor={whatId}>What happened?</label>
         <textarea
           id={whatId}
+          ref={whatRef}
           className="dr-input dr-input--block dr-fb__area"
           data-testid="feedback-text"
           rows={5}
@@ -164,7 +178,7 @@ export function FeedbackDialog({
             type="submit"
             className="dr-btn dr-btn--primary"
             data-testid="feedback-submit"
-            disabled={sending || !canSend(text, expected)}
+            disabled={sending || !canSend(text, expected) || sendsOnlyPrefill(text, prefill)}
             aria-busy={sending || undefined}
           >
             {sending ? 'Sending…' : 'Send feedback'}

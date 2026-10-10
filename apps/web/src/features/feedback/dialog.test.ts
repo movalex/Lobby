@@ -69,6 +69,36 @@ describe('the dialog', () => {
   })
 })
 
+describe('opened by the end-of-moment prompt (M2-5)', () => {
+  const withPrefill = (prefill: string | null) =>
+    renderToStaticMarkup(
+      createElement(FeedbackDialog, { board: null, prefill, onClose: () => {}, send: async () => {} }),
+    )
+
+  it('"What happened?" starts with the sentence, and sending only that is not possible', () => {
+    const html = withPrefill('After a vote reveal: ')
+    expect(html).toMatch(/<textarea[^>]*data-testid="feedback-text"[^>]*>After a vote reveal: <\/textarea>/)
+    expect(html).toContain('21 / 4,000')
+    expect(html).toMatch(/<button[^>]*data-testid="feedback-submit"[^>]*disabled/)
+  })
+
+  it('without a prefill the form is empty, as it always was', () => {
+    for (const none of [null, '']) {
+      const html = withPrefill(none)
+      expect(html).toMatch(/<textarea[^>]*data-testid="feedback-text"[^>]*><\/textarea>/)
+      expect(html).toContain('0 / 4,000')
+    }
+  })
+
+  it('openFeedback carries the prefill (and a plain open carries none)', () => {
+    openFeedback({ id: 'b-abc1234567', title: 'Q4 plan' }, null, 'After a presentation: ')
+    expect(feedbackRequest.get()).toMatchObject({ prefill: 'After a presentation: ' })
+    openFeedback({ id: 'b-abc1234567', title: 'Q4 plan' })
+    expect(feedbackRequest.get()?.prefill).toBeNull()
+    closeFeedback()
+  })
+})
+
 describe('opening it', () => {
   it('openFeedback asks for the dialog, with the board when there is one; every open is a fresh form', () => {
     expect(feedbackRequest.get()).toBeNull()

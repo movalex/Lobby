@@ -17,6 +17,7 @@ import {
   minsOf,
   minsToMs,
   overText,
+  runOfShowEnded,
   sectionsOf,
   stepMins,
   totalPlannedMs,
@@ -199,6 +200,23 @@ describe('one countdown (M2-3)', () => {
     // a section with no minutes shows no timer at all
     expect(agendaShowsTime(agendaOf(frames(), 'f3', clock(running()), ME))).toBe(false)
     expect(agendaShowsTime(null)).toBe(false)
+  })
+})
+
+describe('the run of show is over (M2-5)', () => {
+  const last = (timer: WorkshopTimer | null, at = T0) => agendaOf(frames(), 'f4', clock(timer, at), ME)
+  it('the last section with its timer run out ends it; running, paused or none does not', () => {
+    const over = running({ durationMs: 300_000, endsAt: new Date(T0 + 300_000).toISOString() })
+    expect(runOfShowEnded(last(over, T0 + 301_000))).toBe(true)
+    expect(runOfShowEnded(last(over, T0 + 100_000))).toBe(false)
+    expect(runOfShowEnded(last({ ...over, status: 'paused', endsAt: null }, T0 + 400_000))).toBe(false)
+    expect(runOfShowEnded(last(null))).toBe(false)
+  })
+  it('a section before the last, someone else’s timer and no agenda never end it', () => {
+    const done = running({ endsAt: new Date(T0 + 1_000).toISOString() })
+    expect(runOfShowEnded(agendaOf(frames(), 'f1', clock(done, T0 + 5_000), ME))).toBe(false)
+    expect(runOfShowEnded(last({ ...done, startedBy: OTHER }, T0 + 5_000))).toBe(false)
+    expect(runOfShowEnded(null)).toBe(false)
   })
 })
 

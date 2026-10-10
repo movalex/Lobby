@@ -17,6 +17,24 @@ describe('present-live words', () => {
     expect(endedText(null, null)).toBe('The presentation has ended.')
   })
 
+  // M2-1 (FTU-6): the same, in the viewer's voice: nobody is told about themselves in the third person
+  it('tells the person who ended it "You ended the presentation.", and the presenter whose it was who an owner was', () => {
+    const ann = 'usr_annnnnnnnnnnn'
+    const ben = 'usr_bennnnnnnnnnn'
+    const stopped = { kind: 'ended', reason: 'stopped', byUserId: ann, byName: 'Ann' } as const
+    expect(endedText(stopped, 'Ann', ann, ann)).toBe('You ended the presentation.')
+    expect(endedText(stopped, 'Ann', ben, ann)).toBe('Ann ended the presentation.')
+    expect(endedText(stopped, 'Ann')).toBe('Ann ended the presentation.')
+    const owner = { kind: 'ended', reason: 'ended-by-owner', byUserId: ben, byName: 'Ben' } as const
+    expect(endedText(owner, 'Ann', ben, ann)).toBe('You ended the presentation.')
+    expect(endedText(owner, 'Ann', ann, ann)).toBe('Ben ended your presentation.')
+    expect(endedText(owner, 'Ann', 'usr_cyyyyyyyyyyyy', ann)).toBe('Ben ended the presentation.')
+    // leaving the board is nobody's "You ended"
+    const left = { kind: 'ended', reason: 'presenter-left', byUserId: ann, byName: 'Ann' } as const
+    expect(endedText(left, 'Ann', ann, ann)).toBe('Ann left the board, so the presentation ended.')
+    expect(endedText(null, 'Ann', ann, ann)).toBe('The presentation has ended.')
+  })
+
   it('counts and lists followers', () => {
     expect(followingText(0)).toBe('No one following yet')
     expect(followingText(1)).toBe('1 following')

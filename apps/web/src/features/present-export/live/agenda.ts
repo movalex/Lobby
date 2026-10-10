@@ -138,6 +138,17 @@ function timerOf(clock: AgendaClock, presenterId: string | null): AgendaTimer {
 export const overText = (overMs: number) => `+${formatClock(overMs)} over`
 
 /**
+ * M2-5: the run of show is over: the live section is the last and its timer has run out (the strip says "+0:42 over").
+ * The presenter is asked how it went (./feedback/prompt.ts); a last section with no minutes never ends this way, and the
+ * presentation's own stop is a moment of its own.
+ */
+export const runOfShowEnded = (state: AgendaState | null): boolean =>
+  !!state &&
+  state.index === state.total - 1 &&
+  state.timer.kind === 'section' &&
+  state.timer.status === 'finished'
+
+/**
  * Whether the strip's line shows a countdown (or how far past its end the section is): then the separate timer
  * pill over the slides would show the same time twice (M2-3), and is left out. "<name> holds the timer" and "N min
  * planned" show no time of the live section, so the pill stays for those.

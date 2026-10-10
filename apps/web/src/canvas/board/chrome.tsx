@@ -18,6 +18,7 @@ import {
   type RefObject,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -27,6 +28,7 @@ import { frameAt } from '../../features/canvas-ux/ported/notes.ts'
 import { FeatureBoundary, FeatureDockView, TopBarOverflowRow } from '../../features/FeatureHostCore.tsx'
 import { cursorExternalSuffix, useBoardOutside } from '../../features/people/outside.ts'
 import { initialsFor, safeColor } from '../../lib/identity.ts'
+import { obstacleRects, rectsIntersect } from '../../lib/overlay-obstacles.ts'
 import { can } from '../../lib/permissions.ts'
 import { useValue } from '../../lib/signals.ts'
 import type { CanvasFeatureContext } from '../api/feature.ts'
@@ -36,6 +38,12 @@ import type { LobbyCanvas } from '../api/lobby-canvas.ts'
 import type { FeatureOverlaySpec, FeatureRegistries, HostSlotName } from '../api/registries.ts'
 import type { EditNotice, EditState } from '../lease/editorLease.ts'
 import { useLongPress } from '../overlay/long-press.ts'
+import {
+  TopCentreContext,
+  TopCentreStack,
+  useTopCentre,
+  useTopCentreRevision,
+} from '../overlay/top-centre.tsx'
 import { type CompassChip, compass } from '../presence/compass.ts'
 import { arrowPaths } from '../presence/drag-arrows.ts'
 import { type AvoidRect, type CoverNode, EDGE_CHIP_RADIUS, floatingCovers } from './edge-markers.ts'
@@ -260,44 +268,50 @@ export function OverlayRoot({
   const shown = r.sorted(r.featureOverlays).filter((o) => !focusMode || o.focusMode === 'show')
   const port = session.port
   const rootRef = useRef<HTMLDivElement>(null)
+  // M2-1: the one top-centre stack (../overlay/top-centre.tsx): its node goes to the layers that put boxes in it
+  const [stack, setStack] = useState<HTMLElement | null>(null)
+  useTopCentre(stack, r)
   const c0 = port ? [...r.overlays.list()].sort((a, b) => a.order - b.order) : []
   return (
-    <div
-      ref={rootRef}
-      data-testid="lobby-overlay"
-      data-focus-mode={focusMode || undefined}
-      // clip, not hidden: a hidden box can still be scrolled, and focusing or clicking something past its edge
-      // (a phone's toolbar, a panel) scrolled every layer sideways (found at the wave-3 integration)
-      style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'clip', zIndex: 5 }}
-    >
-      <div data-lobby-layer="scene" style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-        <CanvasOutlines canvas={ctx.canvas} focusMode={focusMode} />
-        <TypingBadges canvas={ctx.canvas} />
-        {shown
-          .filter((o) => o.layer === 'scene')
-          .map((o) => (
-            <FeatureLayer key={o.id} spec={o} ctx={ctx} />
-          ))}
-        {port && !focusMode
-          ? c0.map((l) => (
-              <FeatureGuard key={l.id} ctx={ctx} id={`c0overlay:${l.id}`}>
-                <l.component port={port} />
-              </FeatureGuard>
-            ))
-          : null}
-        <DragArrows canvas={ctx.canvas} session={session} />
-        <RemoteSelections canvas={ctx.canvas} registries={r} session={session} focusMode={focusMode} />
-        <Cursors canvas={ctx.canvas} registries={r} boardId={ctx.board.id} />
+    <TopCentreContext.Provider value={stack}>
+      <div
+        ref={rootRef}
+        data-testid="lobby-overlay"
+        data-focus-mode={focusMode || undefined}
+        // clip, not hidden: a hidden box can still be scrolled, and focusing or clicking something past its edge
+        // (a phone's toolbar, a panel) scrolled every layer sideways (found at the wave-3 integration)
+        style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'clip', zIndex: 5 }}
+      >
+        <div data-lobby-layer="scene" style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+          <CanvasOutlines canvas={ctx.canvas} focusMode={focusMode} />
+          <TypingBadges canvas={ctx.canvas} />
+          {shown
+            .filter((o) => o.layer === 'scene')
+            .map((o) => (
+              <FeatureLayer key={o.id} spec={o} ctx={ctx} />
+            ))}
+          {port && !focusMode
+            ? c0.map((l) => (
+                <FeatureGuard key={l.id} ctx={ctx} id={`c0overlay:${l.id}`}>
+                  <l.component port={port} />
+                </FeatureGuard>
+              ))
+            : null}
+          <DragArrows canvas={ctx.canvas} session={session} />
+          <RemoteSelections canvas={ctx.canvas} registries={r} session={session} focusMode={focusMode} />
+          <Cursors canvas={ctx.canvas} registries={r} boardId={ctx.board.id} />
+        </div>
+        <div data-lobby-layer="screen" style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+          {shown
+            .filter((o) => o.layer === 'screen')
+            .map((o) => (
+              <FeatureLayer key={o.id} spec={o} ctx={ctx} />
+            ))}
+          <TopCentreStack attach={setStack} />
+          <EdgeMarkers canvas={ctx.canvas} registries={r} focusMode={focusMode} overlay={rootRef} />
+        </div>
       </div>
-      <div data-lobby-layer="screen" style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-        {shown
-          .filter((o) => o.layer === 'screen')
-          .map((o) => (
-            <FeatureLayer key={o.id} spec={o} ctx={ctx} />
-          ))}
-        <EdgeMarkers canvas={ctx.canvas} registries={r} focusMode={focusMode} overlay={rootRef} />
-      </div>
-    </div>
+    </TopCentreContext.Provider>
   )
 }
 
@@ -543,6 +557,10 @@ function TypingBadges({ canvas }: { canvas: LobbyCanvas }) {
  * Remote cursors with name tags (§2.7), filtered by `cursorVisible` (present mode, "hide cursors"). Wave J:
  * an account outside Dark Burn / TPG gets " · External" after its name (the board's outside list,
  * features/people/outside.ts); name-only guests keep their " (guest)".
+ * Wave M (M2-1): the cursors are under the board's chrome (they have no z-index of their own: the top-centre stack,
+ * the feature layers and the compass chips are above them), and a cursor whose name tag meets a registered bar or
+ * stack (lib/overlay-obstacles.ts: the top-centre stack, the selection bar) is hidden while it is there, so it never
+ * sits on a button of the bar (it covered the spotlight bar's Hide).
  */
 function Cursors({
   canvas,
@@ -570,35 +588,107 @@ function Cursors({
   return (
     <>
       {cursors.map((p) => (
-        <div
+        <CursorChip
           key={p.sid}
-          className="lobby-cursor"
-          data-testid="cursor"
-          data-sid={p.sid}
-          data-uid={p.uid}
-          data-name={p.name}
-          data-external={outsideSnap.people.has(p.uid) || undefined}
-          style={{ position: 'absolute', left: p.at.x, top: p.at.y, transform: 'translate(-2px, -2px)' }}
-        >
-          <svg width="14" height="18" viewBox="0 0 14 18" aria-hidden="true">
-            <path
-              d="M1 1 L1 15 L5 11 L8 17 L10 16 L7 10 L13 10 Z"
-              fill={safeColor(p.color, p.uid)}
-              stroke="#fff"
-              strokeWidth="1"
-            />
-          </svg>
-          <span className="lobby-cursor__name" style={{ background: safeColor(p.color, p.uid) }}>
-            {p.name}
-            {cursorExternalSuffix(outsideSnap, p.uid, p.guest) && (
-              <span className="lobby-cursor__ext" data-testid="cursor-external">
-                {cursorExternalSuffix(outsideSnap, p.uid, p.guest)}
-              </span>
-            )}
-          </span>
-        </div>
+          sid={p.sid}
+          uid={p.uid}
+          name={p.name}
+          color={safeColor(p.color, p.uid)}
+          x={p.at.x}
+          y={p.at.y}
+          external={outsideSnap.people.has(p.uid) || undefined}
+          suffix={cursorExternalSuffix(outsideSnap, p.uid, p.guest)}
+        />
       ))}
     </>
+  )
+}
+
+/** The kinds of registered chrome a cursor's name tag must not sit on (the panels and toolbars are above the overlay already). */
+const CURSOR_AVOIDS = new Set(['bar', 'stack'])
+
+/** The client box of a cursor: its arrow and its name tag together. */
+function cursorBox(el: HTMLElement): { x: number; y: number; width: number; height: number } {
+  const parts = [el, el.querySelector('.lobby-cursor__name')].filter((n): n is Element => !!n)
+  let x1 = Number.POSITIVE_INFINITY
+  let y1 = Number.POSITIVE_INFINITY
+  let x2 = Number.NEGATIVE_INFINITY
+  let y2 = Number.NEGATIVE_INFINITY
+  for (const n of parts) {
+    const b = n.getBoundingClientRect()
+    if (b.width <= 0 && b.height <= 0) continue
+    x1 = Math.min(x1, b.left)
+    y1 = Math.min(y1, b.top)
+    x2 = Math.max(x2, b.right)
+    y2 = Math.max(y2, b.bottom)
+  }
+  return Number.isFinite(x1)
+    ? { x: x1, y: y1, width: x2 - x1, height: y2 - y1 }
+    : { x: 0, y: 0, width: 0, height: 0 }
+}
+
+function CursorChip({
+  sid,
+  uid,
+  name,
+  color,
+  x,
+  y,
+  external,
+  suffix,
+}: {
+  sid: string
+  uid: string
+  name: string
+  color: string
+  x: number
+  y: number
+  external: true | undefined
+  suffix: string | null
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [obscured, setObscured] = useState(false)
+  // the stack and the bars come and go and move: look again when they do (and after every render of this cursor)
+  const stackRevision = useTopCentreRevision()
+  useLayoutEffect(() => {
+    void stackRevision
+    const el = ref.current
+    if (!el) return
+    const box = cursorBox(el)
+    const hit =
+      box.width > 0 && obstacleRects().some((o) => CURSOR_AVOIDS.has(o.kind) && rectsIntersect(box, o.rect))
+    setObscured((was) => (was === hit ? was : hit))
+  })
+  return (
+    <div
+      ref={ref}
+      className="lobby-cursor"
+      data-testid="cursor"
+      data-sid={sid}
+      data-uid={uid}
+      data-name={name}
+      data-external={external}
+      data-obscured={obscured || undefined}
+      style={{
+        position: 'absolute',
+        left: x,
+        top: y,
+        transform: 'translate(-2px, -2px)',
+        ...(obscured ? { visibility: 'hidden' as const } : {}),
+      }}
+    >
+      <svg width="14" height="18" viewBox="0 0 14 18" aria-hidden="true">
+        <path d="M1 1 L1 15 L5 11 L8 17 L10 16 L7 10 L13 10 Z" fill={color} stroke="#fff" strokeWidth="1" />
+      </svg>
+      <span className="lobby-cursor__name" style={{ background: color }}>
+        {name}
+        {suffix && (
+          <span className="lobby-cursor__ext" data-testid="cursor-external">
+            {suffix}
+          </span>
+        )}
+      </span>
+    </div>
   )
 }
 
@@ -698,6 +788,13 @@ function useCoveredRects(overlay: RefObject<HTMLElement | null>, version: number
         if (b.width > 0 && b.height > 0)
           next.push({ x: b.left - base.left, y: b.top - base.top, w: b.width, h: b.height })
       }
+      // M2-1: the top-centre stack (a chip never sits under the spotlight bar or the coach's chip)
+      const stack = el.querySelector('[data-lobby-top-centre]')
+      if (stack) {
+        const b = stack.getBoundingClientRect()
+        if (b.width > 0 && b.height > 0)
+          next.push({ x: b.left - base.left, y: b.top - base.top, w: b.width, h: b.height })
+      }
       // the floating selection bar and the phone sheet: what is inside the slot, not the slot's own box
       for (const name of EDGE_LAYERS) {
         const slot = host.querySelector(`:scope > [data-lobby-slot="${name}"]`)
@@ -777,7 +874,8 @@ function EdgeMarkers({
   overlay: RefObject<HTMLElement | null>
 }) {
   const version = useRegistries(registries)
-  const covered = useCoveredRects(overlay, version)
+  const stackRevision = useTopCentreRevision()
+  const covered = useCoveredRects(overlay, version + stackRevision)
   const markers = useValue('lobby-edge-markers', (): EdgeMarkerView[] => {
     if (focusMode) return []
     const v = canvas.viewport.get()

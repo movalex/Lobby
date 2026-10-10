@@ -7,8 +7,9 @@
 // The rules are ../agenda.ts's (pure, unit-tested).
 
 import type { WorkshopTimer } from '@draftroom/contracts'
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useValue } from '../../../../lib/signals.ts'
+import { noteFeedbackMoment } from '../../../feedback/prompt-moments.ts'
 import { formatClock } from '../../../workshops/countdown.ts'
 import { useNow, useWorkshop } from '../../../workshops/workshop-context.ts'
 import {
@@ -19,6 +20,7 @@ import {
   driftLine,
   driftOf,
   hasAgenda,
+  runOfShowEnded,
   sectionsOf,
 } from '../agenda.ts'
 import { agendaFramesOf, liveSlideOf } from './agenda-live.ts'
@@ -86,6 +88,11 @@ export function AgendaStrip({ live, variant }: { live: LiveController; variant: 
     { timer: snap.timer, nowMs: now, offsetMs: store.serverOffsetMs() },
     place?.presenterId ?? null,
   )
+  // M2-5: the last section ran out: a moment (the presenter's only: a follower records and is asked nothing)
+  const over = variant === 'presenter' && runOfShowEnded(state)
+  useEffect(() => {
+    if (over) noteFeedbackMoment(live.ctx.canvas, 'run-of-show-end')
+  }, [over, live])
   if (!state) return null
   const t = state.timer
   const mood =

@@ -21,6 +21,7 @@ import type { CanvasFeatureContext, FeatureRegistries } from '../../../../canvas
 import { type BoardRole, can } from '../../../../lib/permissions.ts'
 import { type Atom, atom, react } from '../../../../lib/signals.ts'
 import { LOBBY_SIGNALS } from '../../../comments/cells.ts'
+import { noteFeedbackMoment } from '../../../feedback/prompt-moments.ts'
 import { type LiveResult, LiveStore } from '../store.ts'
 import { presenterTabId, sessionStore } from '../tab.ts'
 import { endedText, startRefusedText } from '../words.ts'
@@ -153,6 +154,8 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
   let flashTimer: ReturnType<typeof setTimeout> | undefined
   /** The presenter's name of the presentation last seen (for "Chase ended the presentation"). */
   let lastPresenter: string | null = null
+  /** and the user id of that presenter (M2-1: "You ended the presentation.") */
+  let lastPresenterId: string | null = null
   /** Claims already asked for (one per presentation id and tab). */
   let claiming: string | null = null
   /** Who handed this person the presentation (said once the tab has taken it). */
@@ -209,7 +212,10 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
     if (disposed) return
     const p = store.presentation.get()
     const local = presenter.state.get()
-    if (p) lastPresenter = p.presenter.name
+    if (p) {
+      lastPresenter = p.presenter.name
+      lastPresenterId = p.presenter.userId
+    }
 
     if (!p) {
       ending = null
@@ -229,7 +235,7 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
       }
       if (local?.role === 'follower') {
         presenter.stop({ reason: 'remote', view: 'here' })
-        notify(endedText(store.lastChange.get(), lastPresenter), 'live-ended-toast')
+        notify(endedText(store.lastChange.get(), lastPresenter, me.id, lastPresenterId), 'live-ended-toast')
       }
       if (presentingLive.get()) {
         presentingLive.set(false)
@@ -364,7 +370,11 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
       presentingLive.set(false)
       // Exit / Esc ends it for everyone. Leaving the board does not: the api ends it after its grace
       // unless this tab comes back (a reload resumes it).
-      if (reason === 'local' && p && p.presenter.userId === me.id && p.tab === tab) endIt(p.id)
+      if (reason === 'local' && p && p.presenter.userId === me.id && p.tab === tab) {
+        endIt(p.id)
+        // M2-5: the person whose presentation it was is asked how it went (a moment of theirs: ./feedback/prompt.ts)
+        noteFeedbackMoment(ctx.canvas, 'presentation-stop')
+      }
     }
     // Stepping out while the api restarts ("Reconnecting…") counts too: the presentation it puts back
     // has the same id, and must not pull this person back in.

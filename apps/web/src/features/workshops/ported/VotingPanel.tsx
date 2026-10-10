@@ -11,6 +11,8 @@ import { type CSSProperties, type ReactNode, useCallback, useEffect, useId, useM
 import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { formatDateTime } from '../../../lib/format.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { ownsMoment } from '../../feedback/prompt.ts'
+import { noteFeedbackMoment } from '../../feedback/prompt-moments.ts'
 import { describeClock, formatClock } from '../countdown.ts'
 import type { WorkshopStore } from '../store.ts'
 import { describeProgress, describeVoted, resultsCsv, topResults, votedOf } from '../voting.ts'
@@ -537,6 +539,16 @@ function ResultsActions({ ctx, store, vote }: { ctx: Ctx; store: WorkshopStore; 
     // M2-4: the results are on the board now; the "Results are in" card has nothing left to say
     store.dismissResultsNews('to-board')
     const out = resultsToBoard(ctx.canvas, vote)
+    // M2-5: the vote's starter, with the results on the board, is asked how it went (./feedback/prompt.ts)
+    if (
+      out &&
+      ownsMoment('results-to-board', {
+        me: ctx.me.user.id,
+        voteStarter: vote.session.createdBy,
+        presenter: null,
+      })
+    )
+      noteFeedbackMoment(ctx.canvas, 'results-to-board')
     notify(
       out
         ? `The results are on the board: a chart of ${plural(out.bars, 'result')}. Ctrl+Z takes it back.`

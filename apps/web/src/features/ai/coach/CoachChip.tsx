@@ -15,6 +15,7 @@
 import { can } from '@draftroom/permissions'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
+import { TopCentreItem } from '../../../canvas/overlay/top-centre.tsx'
 import { useUserKind } from '../../../invite/guest.tsx'
 import { computed, subscribeValue } from '../../../lib/signals.ts'
 import { countUsage } from '../../../lib/usage.ts'
@@ -179,34 +180,36 @@ function CoachChip({ ctx }: { ctx: CanvasFeatureContext }) {
   }, [shown])
   if (!step || shown === null) return null
   return (
-    <div className="dr-ai-coach" style={at} data-testid="coach-chip" data-step={step.id} role="status">
-      <button
-        type="button"
-        className="dr-ai-coach__run"
-        data-testid="coach-run"
-        onClick={() => {
-          countUsage('coach.run')
-          if (runStep(ctx, step)) return
-          const hint = refusedHint(ctx, step)
-          if (hint) ctx.notify({ key: 'dr-ai', timeoutMs: 6000, ...hint })
-        }}
-      >
-        <SparkIcon size={13} />
-        <span className="dr-ai-coach__label">{step.label}</span>
-      </button>
-      <button
-        type="button"
-        className="dr-iconbtn dr-iconbtn--sm dr-ai-coach__x"
-        aria-label="Not now"
-        title="Not now"
-        data-testid="coach-dismiss"
-        onClick={() => {
-          dismissStep(ctx.board.id, stepKey(step))
-          setDismissed(dismissedSteps(ctx.board.id))
-        }}
-      >
-        ×
-      </button>
-    </div>
+    <TopCentreItem slot="coach">
+      <div className="dr-ai-coach" style={at} data-testid="coach-chip" data-step={step.id} role="status">
+        <button
+          type="button"
+          className="dr-ai-coach__run"
+          data-testid="coach-run"
+          onClick={() => {
+            countUsage('coach.run')
+            if (runStep(ctx, step)) return
+            const hint = refusedHint(ctx, step)
+            if (hint) ctx.notify({ key: 'dr-ai', timeoutMs: 6000, ...hint })
+          }}
+        >
+          <SparkIcon size={13} />
+          <span className="dr-ai-coach__label">{step.label}</span>
+        </button>
+        <button
+          type="button"
+          className="dr-iconbtn dr-iconbtn--sm dr-ai-coach__x"
+          aria-label="Not now"
+          title="Not now"
+          data-testid="coach-dismiss"
+          onClick={() => {
+            dismissStep(ctx.board.id, stepKey(step))
+            setDismissed(dismissedSteps(ctx.board.id))
+          }}
+        >
+          ×
+        </button>
+      </div>
+    </TopCentreItem>
   )
 }

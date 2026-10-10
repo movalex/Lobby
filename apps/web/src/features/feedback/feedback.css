@@ -228,3 +228,26 @@
     bottom: 12px;
   }
 }
+
+/* ---- the end-of-moment prompt (FeedbackPrompt.tsx, wave M M2-5): one line in the board's top-centre stack --------- */
+.dr-fb-prompt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px 8px;
+  box-sizing: border-box;
+  padding: 6px 6px 6px 14px;
+  border: 1px solid var(--dr-line);
+  border-radius: 12px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  box-shadow: var(--dr-shadow-pop);
+  font: 13.5px / 1.35 var(--dr-font);
+}
+.dr-fb-prompt__q {
+  font-weight: 600;
+}
+.dr-fb-prompt__x {
+  flex: none;
+}
