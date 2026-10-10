@@ -23,6 +23,12 @@ export const STYLE_PANEL_SELECTOR = '[data-lobby-slot="stylePanel"] [data-testid
 export const BOTTOM_TOOLBAR_SELECTOR = '[data-lobby-slot="toolbar"] .cux-toolbar-wrap'
 /** The navigation panel (zoom, minimap) at the bottom left: a plain obstacle of the bar's own (no registry id). */
 export const NAVIGATION_SELECTOR = '[data-lobby-slot="navigation"] > *'
+/**
+ * The workshop's bottom-centre stack (the vote banner, the vote bar and the rows above the toolbar): each shown item a
+ * plain obstacle of the bar's own, as the navigation panel. Since the bar goes past the selection's '+' handles (M1-3)
+ * it otherwise landed on the vote banner's "Join and vote" (the wave M integration, K3-1).
+ */
+export const WORKSHOP_STACK_SELECTOR = '[data-testid="workshop-stack"] > *'
 
 /** Registers canvas-ux's chrome (the style panel, the bottom toolbar); returns the unregister. */
 export function installChromeObstacles(doc: Document): () => void {
@@ -95,12 +101,16 @@ export function selectionHandlesRect(
   return box && handlesOf(selectionBox, box) ? box : null
 }
 
-/** The other chrome the bar keeps clear of, in client pixels: every registered obstacle but the bar and the handles. */
+/**
+ * The other chrome the bar keeps clear of, in client pixels: every registered obstacle but the bar and the handles,
+ * the navigation panel and the workshop's bottom-centre stack.
+ */
 export function barObstacles(doc: Document): Rect[] {
   const out = obstacleRects([OBSTACLE_IDS.selectionBar, OBSTACLE_IDS.flowHandles]).map((o) => o.rect)
-  for (const el of doc.querySelectorAll(NAVIGATION_SELECTOR)) {
-    const r = clientRectOf(el)
-    if (r) out.push(r)
-  }
+  for (const selector of [NAVIGATION_SELECTOR, WORKSHOP_STACK_SELECTOR])
+    for (const el of doc.querySelectorAll(selector)) {
+      const r = clientRectOf(el)
+      if (r) out.push(r)
+    }
   return out
 }

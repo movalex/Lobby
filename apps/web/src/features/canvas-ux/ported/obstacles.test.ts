@@ -17,6 +17,7 @@ import {
   NAVIGATION_SELECTOR,
   STYLE_PANEL_SELECTOR,
   selectionHandlesRect,
+  WORKSHOP_STACK_SELECTOR,
 } from './obstacles.ts'
 
 afterEach(() => resetObstaclesForTests())
@@ -131,5 +132,13 @@ describe('what the bar keeps clear of', () => {
       { x: 600, y: 12, width: 240, height: 44 },
       nav,
     ])
+  })
+
+  it('the workshop’s bottom-centre stack: each shown item (the vote banner, the vote bar), not the gap between them', () => {
+    const banner = { x: 434, y: 457, width: 460, height: 134 }
+    const voteBar = { x: 459, y: 600, width: 408, height: 44 }
+    expect(barObstacles(fakeDoc({ [WORKSHOP_STACK_SELECTOR]: [el(banner), el(null), el(voteBar)] }))).toEqual(
+      [banner, voteBar],
+    )
   })
 })
