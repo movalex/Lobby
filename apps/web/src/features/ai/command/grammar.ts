@@ -20,6 +20,11 @@
 // `#tag`, `containing <words>`. "about …" is a matter of meaning, not of words: it goes to AI.
 // There is no verb for delete, remove, unlock, ungroup, rename, move or any text edit, and none is ever
 // guessed: such a phrase is not understood.
+//
+// Colours (wave M, M3-4; ./colours.ts): the words are the pickers' ("butter", "blush", "sky"…), the hue families
+// ("yellow" is Butter and Marigold, "pink" is Blush and Coral) and the older names ("light red"); a family on the
+// target side matches all its swatches, on the destination side it means its first. Every reply names colours by
+// the picker's label (Butter, Coral, Light red on a shape), never by the stored name ("light red" for a pink note).
 import {
   AI_COMMAND_FRAME_NAME_MAX_CHARS,
   AI_COMMAND_INSTRUCTION_MAX,
@@ -28,6 +33,19 @@ import {
   type AiColorName,
   type AiCommandOp,
 } from '@draftroom/contracts'
+import {
+  COLOUR_WORDS,
+  type ColourSpace,
+  type ColourWord,
+  capitalised,
+  colourLabel,
+  colourWord,
+  covers,
+  destinationIn,
+  labelsOf,
+  listWords,
+  namesIn,
+} from './colours.ts'
 
 // ---- the board, as the grammar sees it ---------------------------------------------------------------------
 
@@ -76,7 +94,8 @@ export interface TargetSpec {
   readonly selection: boolean
   /** null: any kind */
   readonly kind: KindName | null
-  readonly color: AiColorName | null
+  /** the colour word as typed: what it covers on a note and on everything else (./colours.ts) */
+  readonly colour: ColourWord | null
   /** a frame's name as typed: what is inside it */
   readonly frame: string | null
   readonly tag: string | null
@@ -86,50 +105,23 @@ export interface TargetSpec {
    * were nothing else; a board with no frame of that name then leaves the phrase to AI.
    */
   readonly frameItself?: { readonly name: string; readonly guess: boolean }
+  /**
+   * M3-4: the words were also a bare colour ("zoom to sky"): a frame of that name is found first (the frame is what a
+   * word that is a frame's name most likely means), and a board without one takes the colour's items.
+   */
+  readonly orColour?: TargetSpec
 }
 
 export interface ParsedCommand {
   readonly verb: CommandVerb
   readonly target: TargetSpec
-  readonly color?: AiColorName
+  /** the colour the items become */
+  readonly colour?: ColourWord
   readonly edge?: AlignEdge | 'auto'
   readonly axis?: 'horizontal' | 'vertical' | 'auto'
   /** the new frame's name, or the tag */
   readonly name?: string
 }
-
-/** Lobby's colours by the words people use for them, longest first. */
-const COLOR_WORDS: readonly (readonly [string, AiColorName])[] = (
-  [
-    ['light red', 'light-red'],
-    ['light-red', 'light-red'],
-    ['pink', 'light-red'],
-    ['light violet', 'light-violet'],
-    ['light-violet', 'light-violet'],
-    ['light purple', 'light-violet'],
-    ['lilac', 'light-violet'],
-    ['lavender', 'light-violet'],
-    ['light blue', 'light-blue'],
-    ['light-blue', 'light-blue'],
-    ['sky blue', 'light-blue'],
-    ['light green', 'light-green'],
-    ['light-green', 'light-green'],
-    ['lime', 'light-green'],
-    ['red', 'red'],
-    ['violet', 'violet'],
-    ['purple', 'violet'],
-    ['blue', 'blue'],
-    ['green', 'green'],
-    ['orange', 'orange'],
-    ['yellow', 'yellow'],
-    ['grey', 'grey'],
-    ['gray', 'grey'],
-    ['black', 'black'],
-    ['white', 'white'],
-  ] as const
-)
-  .slice()
-  .sort((a, b) => b[0].length - a[0].length)
 
 /** What people call each kind, longest first; '*' is anything. */
 const KIND_WORDS: readonly (readonly [string, KindName | '*'])[] = (
@@ -190,9 +182,7 @@ const KIND_WORDS: readonly (readonly [string, KindName | '*'])[] = (
   .sort((a, b) => b[0].length - a[0].length)
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-const COLOR_RE = COLOR_WORDS.map(([w]) => escapeRe(w)).join('|')
-const colorOf = (word: string): AiColorName | null =>
-  COLOR_WORDS.find(([w]) => w === word.trim())?.[1] ?? null
+const COLOR_RE = COLOUR_WORDS.map((w) => escapeRe(w.word)).join('|')
 
 /** Words the grammar never acts on (nothing destructive and no text edit is ever guessed). */
 const REFUSED =
@@ -234,26 +224,26 @@ export function parseTarget(phrase: string): TargetSpec | null {
   let s = phrase.trim()
   let selection = false
   let kind: KindName | '*' | null = null
-  let color: AiColorName | null = null
+  let colour: ColourWord | null = null
   let frame: string | null = null
   let tag: string | null = null
   let text: string | null = null
   // "on the board" / "in this board" add nothing: the whole board is where a target looks anyway
   s = s.replace(/\s*\b(?:on|in|across|from)\s+(?:the|this)\s+(?:whole\s+)?(?:board|canvas)$/, '').trim()
   if (!s && phrase.trim()) s = 'everything'
-  if (!s) return { selection: true, kind: null, color: null, frame: null, tag: null, text: null }
+  if (!s) return { selection: true, kind: null, colour: null, frame: null, tag: null, text: null }
   if (
     /^(?:them|it|the selection|selection|my selection|the selected ones|selected ones|what i selected|what is selected|what's selected|everything selected|all selected|the selected|selected)$/.test(
       s,
     )
   )
-    return { selection: true, kind: null, color: null, frame: null, tag: null, text: null }
+    return { selection: true, kind: null, colour: null, frame: null, tag: null, text: null }
   const deictic = /^(?:these|those|this|that|the selected|selected|my selected|the chosen)\s+(.+)$/.exec(s)
   if (deictic) {
     selection = true
     s = deictic[1] as string
   } else if (/^(?:these|those|this|that)$/.test(s)) {
-    return { selection: true, kind: null, color: null, frame: null, tag: null, text: null }
+    return { selection: true, kind: null, colour: null, frame: null, tag: null, text: null }
   }
   // quantifiers
   for (;;) {
@@ -262,11 +252,11 @@ export function parseTarget(phrase: string): TargetSpec | null {
     s = next
   }
   if (/^(?:all|everything|every thing|all items|the lot)$/.test(s))
-    return { selection, kind: null, color, frame, tag, text }
+    return { selection, kind: null, colour, frame, tag, text }
   // a colour, then a kind
   const c = new RegExp(`^(${COLOR_RE})(?:\\s+(?:coloured|colored))?(?=\\s|$)`).exec(s)
   if (c) {
-    color = colorOf(c[1] as string)
+    colour = colourWord(c[1] as string)
     s = s.slice((c[0] as string).length).trim()
   }
   for (const [w, k] of KIND_WORDS) {
@@ -295,8 +285,8 @@ export function parseTarget(phrase: string): TargetSpec | null {
     let m = /^(?:that are|which are|that is|which is)\s+(.+)$/.exec(s)
     if (m) {
       const cc = new RegExp(`^(${COLOR_RE})(?=\\s|$)`).exec(m[1] as string)
-      if (!cc || color) return null
-      color = colorOf(cc[1] as string)
+      if (!cc || colour) return null
+      colour = colourWord(cc[1] as string)
       s = (m[1] as string).slice((cc[1] as string).length).trim()
       continue
     }
@@ -339,26 +329,29 @@ export function parseTarget(phrase: string): TargetSpec | null {
     }
     return null
   }
-  if (!selection && kind === null && color === null && frame === null && tag === null && text === null)
+  if (!selection && kind === null && colour === null && frame === null && tag === null && text === null)
     return null
-  return { selection, kind: kind === '*' ? null : kind, color, frame, tag, text }
+  return { selection, kind: kind === '*' ? null : kind, colour, frame, tag, text }
 }
 
 /** A target, else the words as a frame's own name (for zoom, select and find). */
 function targetOrFrame(phrase: string): TargetSpec | null {
   const t = parseTarget(phrase)
-  if (t) return t
+  // a bare colour word ("sky", "stone") may be a frame's name as well (M3-4: the pickers' names are colour words now)
+  const bareColour = !!t && t.colour !== null && !t.selection && !t.kind && !t.frame && !t.tag && !t.text
+  if (t && !bareColour) return t
   const explicit = /^(?:the\s+)?(?:frame\s+(?:called\s+|named\s+)?(.+)|(.+?)\s+frame)$/.exec(phrase)
   const name = unquote(explicit ? ((explicit[1] ?? explicit[2]) as string) : phrase.replace(/^the\s+/, ''))
-  if (!name || name.length > AI_COMMAND_FRAME_NAME_MAX_CHARS) return null
+  if (!name || name.length > AI_COMMAND_FRAME_NAME_MAX_CHARS) return t
   return {
     selection: false,
     kind: null,
-    color: null,
+    colour: null,
     frame: null,
     tag: null,
     text: null,
     frameItself: { name, guess: !explicit },
+    ...(t ? { orColour: t } : {}),
   }
 }
 
@@ -419,13 +412,13 @@ export function parseCommand(input: string): ParsedCommand | null {
     ).exec(s)
   if (m) {
     const target = parseTarget(m[1] as string)
-    const color = colorOf(m[2] as string)
-    return target && color ? { verb: 'recolor', target, color } : null
+    const colour = colourWord(m[2] as string)
+    return target && colour ? { verb: 'recolor', target, colour } : null
   }
   m = new RegExp(`^(?:make|turn|paint|colou?r|recolou?r)\\s+(?:it\\s+|them\\s+)?(${COLOR_RE})$`).exec(s)
   if (m) {
-    const color = colorOf(m[1] as string)
-    return color ? { verb: 'recolor', target: parseTarget('') as TargetSpec, color } : null
+    const colour = colourWord(m[1] as string)
+    return colour ? { verb: 'recolor', target: parseTarget('') as TargetSpec, colour } : null
   }
 
   // tag
@@ -538,10 +531,15 @@ export type Resolved =
       readonly ops: readonly AiCommandOp[]
       /** the element ids it acts on */
       readonly ids: readonly string[]
-      /** what it will do, in words ('Make 3 red notes in “Ideas” yellow') */
+      /** what it will do, in words ('Make 3 Coral notes in “Ideas” Butter') */
       readonly title: string
       /** only selects or moves the camera (a viewer may run it) */
       readonly find: boolean
+      /**
+       * Only a guess: the words were nothing else, and a frame of that name happens to be on the board ("show grid" with a
+       * frame "Grid ideas"). The palette ranks such a line under a command whose name the words are (M3-2, FTU-12).
+       */
+      readonly guess?: true
     }
   | {
       readonly ok: false
@@ -563,7 +561,13 @@ const KIND_NOUN: Readonly<Record<KindName, readonly [string, string]>> = {
   image: ['image', 'images'],
   file: ['file', 'files'],
 }
-const COLOUR_LABEL = (c: AiColorName) => c.replace('-', ' ')
+/** The picker's label for a colour name on an item of this kind (a note's Butter, a shape's Black…). */
+export const COLOUR_LABEL = (c: AiColorName, kind: KindName = 'note'): string => colourLabel(c, spaceOf(kind))
+/** Notes are named by the sticky-note picker; everything else the grammar colours by the style panel's. */
+const spaceOf = (kind: KindName): ColourSpace => (kind === 'note' ? 'note' : 'stroke')
+/** Whether an item has the colour a target names. */
+const hasColour = (i: FactItem, w: ColourWord | null): boolean =>
+  w === null || covers(w, i.color, spaceOf(i.kind))
 const EDGE_LABEL: Readonly<Record<AlignEdge, string>> = {
   left: 'on their left edges',
   right: 'on their right edges',
@@ -596,11 +600,33 @@ export function frameNamed(
   return holds.length === 1 ? (holds[0] ?? null) : null
 }
 
-/** The phrase that names what a target picked: 'selected red notes in “Ideas”'. */
-function describe(t: TargetSpec, n: number, frameName: string | null): string {
+/**
+ * The colour part of a phrase. With the items that matched: the labels they carry, once each ("Butter and Marigold").
+ * Without any (nothing matched): the labels the word covers ("Blush or Coral"), as the pickers name them.
+ */
+function colourPhrase(t: TargetSpec, picked: readonly FactItem[] | null): string | null {
+  const w = t.colour
+  if (!w) return null
+  if (picked?.length) {
+    const labels = labelsOf(picked.flatMap((i) => (i.color ? [[i.color, spaceOf(i.kind)] as const] : [])))
+    return labels.length ? listWords(labels, 'and') : capitalised(w.word)
+  }
+  const spaces: ColourSpace[] = t.kind === null ? ['note', 'stroke'] : [spaceOf(t.kind)]
+  const labels = labelsOf(spaces.flatMap((sp) => namesIn(w, sp).map((n) => [n, sp] as const)))
+  return labels.length ? listWords(labels, 'or') : capitalised(w.word)
+}
+
+/** The phrase that names what a target picked: 'selected Coral notes in “Ideas”'. */
+function describe(
+  t: TargetSpec,
+  n: number,
+  frameName: string | null,
+  picked: readonly FactItem[] | null,
+): string {
   const parts: string[] = []
   if (t.selection) parts.push('selected')
-  if (t.color) parts.push(COLOUR_LABEL(t.color))
+  const colour = colourPhrase(t, picked)
+  if (colour) parts.push(colour)
   const noun = t.kind ? KIND_NOUN[t.kind] : (['item', 'items'] as const)
   parts.push(n === 1 ? noun[0] : noun[1])
   if (frameName !== null) parts.push(`in “${frameName}”`)
@@ -633,6 +659,8 @@ export function resolveCommand(cmd: ParsedCommand, facts: BoardFacts): Resolved 
   // a frame named by itself ("zoom to Retro")
   if (t.frameItself) {
     const f = frameNamed(facts.frames, t.frameItself.name)
+    // M3-4: no frame of that name, and the words are also a bare colour ("zoom to sky"): that colour's items
+    if (!f && t.orColour) return resolveCommand({ ...cmd, target: t.orColour }, facts)
     if (!f)
       return t.frameItself.guess
         ? {
@@ -651,7 +679,15 @@ export function resolveCommand(cmd: ParsedCommand, facts: BoardFacts): Resolved 
             ]
           : [{ op: 'select', ids: [shapeRef(f.id)] }]
     const verbWord = cmd.verb === 'zoomTo' ? 'Zoom to' : cmd.verb === 'find' ? 'Find' : 'Select'
-    return { ok: true, verb: cmd.verb, ops, ids: [f.id], title: `${verbWord} frame “${f.name}”`, find: true }
+    return {
+      ok: true,
+      verb: cmd.verb,
+      ops,
+      ids: [f.id],
+      title: `${verbWord} frame “${f.name}”`,
+      find: true,
+      ...(t.frameItself.guess ? { guess: true as const } : {}),
+    }
   }
 
   let frame: { id: string; name: string } | null = null
@@ -668,28 +704,39 @@ export function resolveCommand(cmd: ParsedCommand, facts: BoardFacts): Resolved 
   const matched = pool.filter(
     (i) =>
       (t.kind === null || i.kind === t.kind) &&
-      (t.color === null || i.color === t.color) &&
+      hasColour(i, t.colour) &&
       (frame === null || i.frameId === frame.id) &&
       (tagWanted === null || i.tags.some((g) => fold(g) === tagWanted)) &&
       (textWanted === null || fold(i.text).includes(textWanted)),
   )
-  const picked =
+  let picked =
     cmd.verb === 'recolor'
       ? matched.filter((i) => COLOURABLE.has(i.kind))
       : cmd.verb === 'wrapInFrame'
         ? matched.filter((i) => i.kind !== 'frame')
         : matched
+  // M3-4: a word that is no colour of a kind (black on a note: a note's own `black` is Butter) leaves that kind as it is
+  const recolour = cmd.verb === 'recolor' && cmd.colour ? cmd.colour : null
+  const takesIt = recolour ? picked.filter((i) => destinationIn(recolour, spaceOf(i.kind)) !== null) : picked
+  if (recolour && picked.length && !takesIt.length) {
+    const nouns = [...new Set(picked.map((i) => KIND_NOUN[i.kind][1]))]
+    return {
+      ok: false,
+      reason: `${capitalised(listWords(nouns, 'and'))} do not come in ${capitalised(recolour.word)}.`,
+    }
+  }
+  picked = takesIt
   const n = picked.length
-  const what = describe(t, n, frame?.name ?? null)
+  const what = describe(t, n, frame?.name ?? null, picked)
   if (!n)
     return {
       ok: false,
       reason:
         matched.length && cmd.verb === 'recolor'
-          ? `Nothing here takes a colour: no ${describe(t, 2, frame?.name ?? null)}.`
+          ? `Nothing here takes a colour: no ${describe(t, 2, frame?.name ?? null, null)}.`
           : matched.length
             ? 'A frame cannot go inside another frame.'
-            : `No ${describe(t, 2, frame?.name ?? null)} on this board.`,
+            : `No ${describe(t, 2, frame?.name ?? null, null)} on this board.`,
     }
   const ids = picked.map((i) => i.id)
   const find = FIND_VERBS.has(cmd.verb)
@@ -703,11 +750,20 @@ export function resolveCommand(cmd: ParsedCommand, facts: BoardFacts): Resolved 
   })
   switch (cmd.verb) {
     case 'recolor': {
-      const color = cmd.color as AiColorName
-      return done(
-        chunked(ids, (x) => ({ op: 'recolor', ids: x, color })),
-        `Make ${n} ${what} ${COLOUR_LABEL(color)}`,
+      const word = cmd.colour as ColourWord
+      // one op per destination (a note takes the word's note name, everything else its stroke name)
+      const byColour = new Map<AiColorName, string[]>()
+      const to: (readonly [AiColorName, ColourSpace])[] = []
+      for (const i of picked) {
+        const space = spaceOf(i.kind)
+        const color = destinationIn(word, space) as AiColorName
+        byColour.set(color, [...(byColour.get(color) ?? []), i.id])
+        to.push([color, space])
+      }
+      const ops = [...byColour].flatMap(([color, group]) =>
+        chunked(group, (x) => ({ op: 'recolor', ids: x, color })),
       )
+      return done(ops, `Make ${n} ${what} ${labelsOf(to).join(' / ')}`)
     }
     case 'select':
       return done(

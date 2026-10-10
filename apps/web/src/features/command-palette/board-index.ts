@@ -25,10 +25,10 @@ import { frameRows } from '../canvas-ux/ported/navigation/model.ts'
 import { lastFrameJump } from '../canvas-ux/ported/navigation/state.ts'
 import { insertTemplate } from '../canvas-ux/ported/navigation/template-insert.ts'
 import { MAIN_TOOLS, OVERFLOW_TOOLS, READONLY_TOOLS } from '../canvas-ux/ported/Toolbar.tsx'
+import { PALETTE_COMMAND_ID } from './ids.ts'
 import type { PaletteEntry } from './model.ts'
 
-/** The palette's own command (it is not listed in itself). */
-export const PALETTE_COMMAND_ID = 'command-palette.open'
+export { PALETTE_COMMAND_ID }
 
 /** A command's group when it names none: by its feature (the id's first part). */
 const FEATURE_GROUPS: Readonly<Record<string, string>> = {
@@ -77,6 +77,16 @@ const KEYWORDS: Readonly<Record<string, readonly string[]>> = {
   'mindmap.start': ['mind map', 'mindmap', 'brainstorm'],
 }
 
+/**
+ * Keys the engine or the key allowlist takes itself, so the commands carry none in the registry (a registered chord
+ * would be a second handler). The palette still shows them, as the shortcuts dialog does (ShortcutsDialog BUILT_IN_EDIT);
+ * M3-2 (FTU-12): Undo and Redo showed none while Cut did.
+ */
+const BUILT_IN_KBD: Readonly<Record<string, readonly string[]>> = {
+  'canvas-ux.undo': ['mod+z'],
+  'canvas-ux.redo': ['mod+shift+z', 'mod+y'],
+}
+
 /** A generic reason for a command whose `enabled` says no and that names no `disabledReason`. */
 export const NOT_NOW = 'Not available right now'
 export const READ_ONLY_REASON = 'You can view this board, not change it'
@@ -123,11 +133,12 @@ export function commandEntry(
   // a read-only role sees only what it may run
   if (ctx.canvas.readOnly() && !cmd.readOnlyAllowed) return null
   const keywords = cmd.keywords ?? KEYWORDS[cmd.id]
+  const keys = cmd.kbd?.length ? cmd.kbd : BUILT_IN_KBD[cmd.id]
   return {
     id: `cmd:${cmd.id}`,
     label: LABELS[cmd.id] ?? cmd.label,
     group: groupOf(cmd),
-    ...(cmd.kbd?.length ? { kbd: kbdOf(cmd.kbd, platform) } : {}),
+    ...(keys?.length ? { kbd: kbdOf(keys, platform) } : {}),
     ...(keywords ? { keywords } : {}),
     recentKey: `cmd:${cmd.id}`,
     disabledReason: reasonOf(cmd, ctx),
@@ -269,6 +280,59 @@ function templateEntries(ctx: CanvasFeatureContext): PaletteEntry[] {
   }))
 }
 
+// ---- M3-2: what an empty palette starts with ------------------------------------------------------------------------
+
+/**
+ * "Try", in the order an empty palette tells it: what wave L offers, which an empty field used to hide behind Undo and
+ * Redo and a screenful of greyed lines (FTU-4). Each is a line of the index (by its id) that gets a place in the section
+ * and, where the command's own name is short, words that say what it does. A line the index does not have (the AI is off
+ * for this person, a viewer, a guest, a command a later wave registers) is simply not in the section, and so is one that
+ * cannot run for no reason worth telling (the generic "not available right now").
+ */
+export const STARTERS: readonly { readonly id: string; readonly label: string; readonly detail: string }[] = [
+  {
+    id: 'cmd:ai.recap',
+    label: 'Wrap up this board',
+    detail: 'A private recap of what was decided, and the actions',
+  },
+  {
+    id: 'cmd:ai.ask',
+    label: 'Ask this board',
+    detail: 'A question in your own words, answered with sources',
+  },
+  { id: 'cmd:flow.diagram', label: 'Diagram from words', detail: 'Describe a process and get a flowchart' },
+  { id: 'cmd:sort.colour', label: 'Sort notes', detail: 'Group notes by colour, author, tag or votes' },
+  { id: 'cmd:navigation.open-templates', label: 'Templates', detail: 'Start from a ready-made layout' },
+  {
+    id: 'panel:history',
+    label: 'Time travel',
+    detail: 'Bring back just what you need from an earlier version',
+  },
+  // W8's command, once it is registered and reports itself available (it is then enabled; a disabled one is left out)
+  {
+    id: 'cmd:ai.askWorkspace',
+    label: 'Ask all boards',
+    detail: 'One question across every board you can open',
+  },
+]
+
+const ALWAYS_RUNNABLE_STARTERS: ReadonlySet<string> = new Set(['cmd:ai.askWorkspace'])
+
+/** `list` with the starters marked (see STARTERS); the lines themselves are the index's. */
+export function withStarters(list: readonly PaletteEntry[]): PaletteEntry[] {
+  const marks = new Map<string, NonNullable<PaletteEntry['starter']>>()
+  STARTERS.forEach((s, rank) => {
+    const e = list.find((x) => x.id === s.id)
+    if (!e || e.disabledReason === NOT_NOW) return
+    if (ALWAYS_RUNNABLE_STARTERS.has(s.id) && e.disabledReason) return
+    marks.set(s.id, { rank, label: s.label, detail: s.detail })
+  })
+  return list.map((e) => {
+    const starter = marks.get(e.id)
+    return starter ? { ...e, starter } : e
+  })
+}
+
 /** Every line of the board's palette for this person, now. */
 export function boardEntries(
   ctx: CanvasFeatureContext,
@@ -284,11 +348,11 @@ export function boardEntries(
     taken.add(e.label.toLowerCase())
     taken.add(cmd.label.toLowerCase())
   }
-  return [
+  return withStarters([
     ...commands,
     ...toolEntries(ctx, platform),
     ...panelEntries(ctx, platform, taken),
     ...frameEntries(ctx),
     ...templateEntries(ctx),
-  ]
+  ])
 }

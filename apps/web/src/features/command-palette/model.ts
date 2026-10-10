@@ -17,6 +17,13 @@ export interface PaletteEntry extends Rankable {
   readonly disabledReason?: string | null
   /** runs it (the palette has closed by then) */
   run(): void
+  /**
+   * M3-2: the line is one of the "Try" section an empty palette starts with (what wave L offers, which an empty
+   * field used to hide behind Undo and Redo): its place in the section, and the words it has there when they are
+   * not its own ("Wrap up this board", with a sentence on what it does). The line keeps its id, so a pick is
+   * remembered under its own key and typing finds it as before.
+   */
+  readonly starter?: { readonly rank: number; readonly label?: string; readonly detail?: string }
 }
 
 /** A group the palette fills after a pause in typing (the board's own search, the workspace's). */

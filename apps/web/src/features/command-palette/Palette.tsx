@@ -10,6 +10,10 @@
 //
 // The searches (the board's own search, the workspace's) go out only for two or more characters, after a
 // 150 ms pause in typing; a newer query aborts the older one. The static lines are ranked at once.
+//
+// Wave M (M3-2, M3-3): an empty field starts with Recent, then Try (the lines the index marks as starters: what wave L
+// offers), then the groups, and last "Not available right now" (every line that cannot run, each saying why); no line is
+// chosen until an arrow key or the pointer picks one. A "Try it" from the What's new card opens it with one line coached.
 import { type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { isPaletteKey, paletteKeyOf } from './keys.ts'
 import {
@@ -36,6 +40,11 @@ export interface PaletteProps {
   /** recent picks (PaletteEntry.recentKey), most recent first */
   readonly recents: readonly string[]
   readonly initialQuery?: string
+  /**
+   * M3-3: a "Try it" from the What's new card opened the palette on this line (its id) with a sentence on what it is:
+   * the line is marked "Try this" and scrolled into view. Nothing is chosen for the person.
+   */
+  readonly coach?: { readonly entryId: string; readonly text: string }
   /** a runnable line was chosen: close the palette, then run it */
   readonly onChoose: (entry: PaletteEntry) => void
   readonly onClose: () => void
@@ -53,7 +62,18 @@ type SearchState = { readonly query: string; readonly state: 'loading' | 'error'
   readonly entries: readonly PaletteEntry[]
 }
 
-/** The sections for `query`: the ranked index (or, with nothing typed, Recent and every group), then the searches. */
+/** The empty palette's sections (M3-2). */
+export const TRY_SECTION = 'try'
+export const UNAVAILABLE_SECTION = 'unavailable'
+
+/**
+ * The sections for `query`: the ranked index (or, with nothing typed, Recent, Try and every group), then the searches.
+ *
+ * With nothing typed (M3-2, FTU-4): Recent (this person's own picks that can run), then Try (the lines the index marks
+ * as starters: what wave L offers, in its order, the ones that can run first, the rest with their reasons), then the
+ * groups with the lines that can run, and last "Not available right now" with every other line that cannot run (it used
+ * to open on Undo, Redo and a screenful of "Select something first"). A palette whose lines mark no starters has no Try.
+ */
 export function paletteSections(
   entries: readonly PaletteEntry[],
   query: string,
@@ -63,16 +83,35 @@ export function paletteSections(
   const q = query.trim()
   if (!q) {
     const byKey = new Map(entries.filter((e) => e.recentKey).map((e) => [e.recentKey as string, e]))
-    const recent = recents.map((k) => byKey.get(k)).filter((e): e is PaletteEntry => !!e)
-    const shown = new Set(recent.map((e) => e.id))
+    const picks = recents.map((k) => byKey.get(k)).filter((e): e is PaletteEntry => !!e)
+    const recent = picks.filter(runnable)
+    const recentIds = new Set(recent.map((e) => e.id))
+    const starters = entries
+      .filter((e): e is PaletteEntry & { starter: NonNullable<PaletteEntry['starter']> } => !!e.starter)
+      .filter((e) => !recentIds.has(e.id))
+      .sort((a, b) => a.starter.rank - b.starter.rank)
+    const starting = [...starters.filter(runnable), ...starters.filter((e) => !runnable(e))].map((e) => ({
+      ...e,
+      label: e.starter.label ?? e.label,
+      ...(e.starter.detail ? { detail: e.starter.detail } : {}),
+    }))
+    const shown = new Set([...recentIds, ...starters.map((e) => e.id)])
     const groups = new Map<string, PaletteEntry[]>()
+    const unavailable: PaletteEntry[] = picks.filter((e) => !runnable(e))
     for (const e of entries) {
       if (shown.has(e.id)) continue
+      if (!runnable(e)) {
+        if (!unavailable.some((u) => u.id === e.id)) unavailable.push(e)
+        continue
+      }
       groups.set(e.group, [...(groups.get(e.group) ?? []), e])
     }
     const out: Section[] = []
     if (recent.length) out.push({ id: 'recent', title: 'Recent', entries: recent })
+    if (starting.length) out.push({ id: TRY_SECTION, title: 'Try', entries: starting })
     for (const [title, list] of groups) out.push({ id: `group:${title}`, title, entries: list })
+    if (unavailable.length)
+      out.push({ id: UNAVAILABLE_SECTION, title: 'Not available right now', entries: unavailable })
     return out
   }
   const ranked = rank([...extra, ...entries], q, recents).slice(0, PALETTE_MAX_RESULTS)
@@ -82,11 +121,12 @@ export function paletteSections(
 /**
  * The line the palette starts on: the first of the ranked matches or of Recent, but none (-1) when nothing is
  * typed and there are no recents, so a reflex Ctrl/Cmd+K, Enter runs nothing (it used to run the first registered
- * command, Undo; wave L integration, the W3 review). An arrow key or the pointer then picks a line.
+ * command, Undo; wave L integration, the W3 review). The Try section does not start on a line either (M3-2): it
+ * shows what could be done, it is not what the person last did. An arrow key or the pointer then picks a line.
  */
 export function firstActiveLine(sections: readonly Pick<Section, 'id'>[]): number {
   const first = sections[0]
-  return first && !first.id.startsWith('group:') ? 0 : -1
+  return first && (first.id === 'recent' || first.id === 'matches') ? 0 : -1
 }
 
 export function Palette(props: PaletteProps) {
@@ -178,6 +218,12 @@ export function Palette(props: PaletteProps) {
   const activeIndex = flat.length && !resting ? Math.min(active, flat.length - 1) : -1
   const activeEntry = activeIndex >= 0 ? flat[activeIndex] : undefined
   const optionId = (i: number) => `${base}-opt-${i}`
+
+  // a coached line is brought into view (the list may start with Recent, ahead of Try)
+  useEffect(() => {
+    if (!props.coach) return
+    listRef.current?.querySelector('[data-coach="true"]')?.scrollIntoView({ block: 'nearest' })
+  }, [props.coach])
 
   useEffect(() => {
     if (activeIndex < 0) return
@@ -284,6 +330,11 @@ export function Palette(props: PaletteProps) {
           onKeyDown={onKeyDown}
         />
       </div>
+      {props.coach && (
+        <p className="dr-palette__coach" role="note" data-testid="command-palette-coach">
+          {props.coach.text}
+        </p>
+      )}
       <div
         ref={listRef}
         id={listId}
@@ -327,6 +378,7 @@ export function Palette(props: PaletteProps) {
                   data-entry-id={entry.id}
                   data-group={entry.group}
                   data-active={i === activeIndex ? 'true' : undefined}
+                  data-coach={props.coach?.entryId === entry.id ? 'true' : undefined}
                   onMouseMove={() => {
                     if (i !== activeIndex) {
                       setMoved(true)
@@ -337,7 +389,12 @@ export function Palette(props: PaletteProps) {
                   onClick={() => choose(entry)}
                 >
                   <span className="dr-palette__main">
-                    <span className="dr-palette__label">{entry.label}</span>
+                    <span className="dr-palette__label">
+                      {entry.label}
+                      {props.coach?.entryId === entry.id && (
+                        <span className="dr-palette__coachtag">Try this</span>
+                      )}
+                    </span>
                     {entry.detail && <span className="dr-palette__detail">{entry.detail}</span>}
                     {disabled && (
                       <span className="dr-palette__reason" data-testid="command-palette-reason">
@@ -345,7 +402,9 @@ export function Palette(props: PaletteProps) {
                       </span>
                     )}
                   </span>
-                  {s.id === 'matches' && <span className="dr-palette__tag">{entry.group}</span>}
+                  {(s.id === 'matches' || s.id === UNAVAILABLE_SECTION) && (
+                    <span className="dr-palette__tag">{entry.group}</span>
+                  )}
                   {entry.kbd && <kbd className="dr-palette__kbd">{entry.kbd}</kbd>}
                 </div>
               )

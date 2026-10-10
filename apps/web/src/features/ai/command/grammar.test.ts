@@ -79,9 +79,10 @@ const ALL_ITEMS = ['f-ideas', 'f-retro', 'f-plan', ...ALL_NOTES, 's1', 't1', 'c1
 
 const TABLE: readonly (readonly [string, Expect])[] = [
   // ---- recolour ----
-  ['make all red notes yellow', { ops: [op('recolor', ['n1', 'n2', 'n4'], { color: 'yellow' })] }],
-  ['Make all the red notes yellow.', { ops: [op('recolor', ['n1', 'n2', 'n4'], { color: 'yellow' })] }],
-  ['make the red notes in Ideas yellow', { ops: [op('recolor', ['n1', 'n2'], { color: 'yellow' })] }],
+  // M3-4: "yellow" as a destination is the family's first swatch on a note, Butter (stored as `black`)
+  ['make all red notes yellow', { ops: [op('recolor', ['n1', 'n2', 'n4'], { color: 'black' })] }],
+  ['Make all the red notes yellow.', { ops: [op('recolor', ['n1', 'n2', 'n4'], { color: 'black' })] }],
+  ['make the red notes in Ideas yellow', { ops: [op('recolor', ['n1', 'n2'], { color: 'black' })] }],
   ['make the red notes in the Ideas frame green', { ops: [op('recolor', ['n1', 'n2'], { color: 'green' })] }],
   ['turn the notes in retro blue', { ops: [op('recolor', ['n4', 'n5'], { color: 'blue' })] }],
   ['colour every note grey', { ops: [op('recolor', ALL_NOTES, { color: 'grey' })] }],
@@ -94,7 +95,12 @@ const TABLE: readonly (readonly [string, Expect])[] = [
     'change the colour of the yellow notes to blue',
     { ops: [op('recolor', ['n3', 'n7'], { color: 'blue' })] },
   ],
-  ['change the pink notes to light blue', { ops: [op('recolor', ['n6'], { color: 'light-blue' })] }],
+  // "pink" is the family: Blush (n6) and Coral (n1, n2, n4)
+  [
+    'change the pink notes to light blue',
+    { ops: [op('recolor', ['n1', 'n2', 'n4', 'n6'], { color: 'light-blue' })] },
+  ],
+  ['change the blush notes to sky', { ops: [op('recolor', ['n6'], { color: 'light-blue' })] }],
   ['please make the notes tagged Finance red', { ops: [op('recolor', ['n5', 'n7'], { color: 'red' })] }],
   ['make #finance notes white', { ops: [op('recolor', ['n5', 'n7'], { color: 'white' })] }],
   ['make the red connectors black', { ops: [op('recolor', ['c2'], { color: 'black' })] }],
@@ -102,14 +108,14 @@ const TABLE: readonly (readonly [string, Expect])[] = [
     'make everything violet',
     { ops: [op('recolor', [...ALL_NOTES, 's1', 't1', 'c1', 'c2'], { color: 'violet' })] },
   ],
-  ['make the selected notes yellow', { ops: [op('recolor', ['n1', 'n2', 'n3'], { color: 'yellow' })] }],
+  ['make the selected notes yellow', { ops: [op('recolor', ['n1', 'n2', 'n3'], { color: 'black' })] }],
   ['make the notes containing "budget" green', { ops: [op('recolor', ['n1', 'n7'], { color: 'green' })] }],
   [
     'make all red notes on the board yellow',
-    { ops: [op('recolor', ['n1', 'n2', 'n4'], { color: 'yellow' })] },
+    { ops: [op('recolor', ['n1', 'n2', 'n4'], { color: 'black' })] },
   ],
   ['make the images red', { error: /Nothing here takes a colour/ }],
-  ['make the green notes red', { error: /No green notes on this board/ }],
+  ['make the green notes red', { error: /^No Fern or Pistachio notes on this board.$/ }],
   ['make the notes in Backlog yellow', { error: /No frame on this board is called “backlog”/ }],
   // ---- select, find, zoom ----
   ['select all red notes', { ops: [op('select', ['n1', 'n2', 'n4'])], find: true }],
@@ -246,7 +252,7 @@ describe('the local grammar (a table of phrases on a fixed board)', () => {
 
   it('says what it will do, in words', () => {
     const r = grammar('make the red notes in Ideas yellow', FACTS)
-    expect(r?.ok && r.title).toBe('Make 2 red notes in “Ideas” yellow')
+    expect(r?.ok && r.title).toBe('Make 2 Coral notes in “Ideas” Butter')
     const z = grammar('zoom to retro', FACTS)
     expect(z?.ok && z.title).toBe('Zoom to frame “Retro”')
     const l = grammar('lock these', FACTS)
@@ -281,12 +287,12 @@ describe('the local grammar (a table of phrases on a fixed board)', () => {
     expect(parseTarget('these')).toMatchObject({ selection: true })
     expect(parseTarget('the selected red notes')).toMatchObject({
       selection: true,
-      color: 'red',
+      colour: { word: 'red' },
       kind: 'note',
     })
     expect(parseTarget('all light blue stickies in "launch plan"')).toMatchObject({
       selection: false,
-      color: 'light-blue',
+      colour: { word: 'light blue', note: ['light-blue'] },
       kind: 'note',
       frame: 'launch plan',
     })

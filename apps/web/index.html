@@ -7,6 +7,22 @@
     <meta name="apple-mobile-web-app-title" content="Lobby" />
     <meta name="description" content="Lobby: Dark Burn Creative's collaborative whiteboard. Every DBC project gets its own lobby of boards." />
     <meta name="theme-color" content="#213150" />
+    <!-- Wave M (M3-6, S1.2): a board link pasted into a chat tool or a meeting invite unfurls as a generic "Lobby board".
+         Every /b/<id> serves this one page, so these tags are static: no board title, thumbnail or word of a board is ever
+         in them, and nothing here is read from a board. og:image is an absolute URL built at build time from
+         VITE_PUBLIC_ORIGIN (render.yaml: Vite replaces the percent-delimited name when the build has it set, which Render's does)
+         to a brand PNG of this site. The app is for signed-in colleagues, not for search engines: noindex. apps/web/src/lib/link-preview.test.ts
+         asserts all of it against the built page. -->
+    <meta name="robots" content="noindex, nofollow" />
+    <meta property="og:site_name" content="Lobby" />
+    <meta property="og:title" content="Lobby board" />
+    <meta property="og:description" content="Open to view in Lobby" />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="%VITE_PUBLIC_ORIGIN%/icon-512.png" />
+    <meta property="og:image:width" content="512" />
+    <meta property="og:image:height" content="512" />
+    <meta property="og:image:alt" content="Lobby" />
+    <meta name="twitter:card" content="summary" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />

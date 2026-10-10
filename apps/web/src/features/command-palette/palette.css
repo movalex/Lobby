@@ -135,3 +135,95 @@
     max-height: calc(100vh - 32px);
   }
 }
+
+/* ---- M3-2 / M3-3: the Try section, a coached line ------------------------------------------------------------ */
+.dr-palette__coach {
+  margin: 0;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--dr-line);
+  background: var(--dr-accent-bg);
+  color: var(--dr-ink);
+  font-size: 13px;
+}
+.dr-palette__option[data-coach="true"] {
+  background: var(--dr-accent-bg);
+  box-shadow: inset 3px 0 0 var(--dr-focus);
+}
+.dr-palette__coachtag {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border: 1px solid var(--dr-focus);
+  border-radius: 999px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+/* ---- M3-1: "Search or do… Ctrl+K" in the board's top bar ----------------------------------------------------- */
+.dr-topbar__palette {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.dr-topbar__palette-kbd {
+  padding: 0 5px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 5px;
+  background: var(--dr-inset);
+  color: var(--dr-ink-2);
+  font-family: var(--dr-font);
+  font-size: 11px;
+  line-height: 18px;
+}
+/* a bar that is a little crowded keeps the magnifier alone (board/topbar-fit.ts COMPACT_STEPS 'palette') */
+.dr-topbar[data-compact~="palette"] .dr-topbar__palette-label,
+.dr-topbar[data-compact~="palette"] .dr-topbar__palette-kbd {
+  display: none;
+}
+.dr-topbar[data-compact~="palette"] .dr-topbar__palette {
+  width: 32px;
+  justify-content: center;
+  padding: 0;
+}
+/* in the "⋯" menu there is room for the words */
+.dr-topbar .dr-overflow .dr-topbar__palette {
+  width: auto;
+  padding: 0 11px;
+  justify-content: flex-start;
+}
+.dr-topbar .dr-overflow .dr-topbar__palette-label,
+.dr-topbar .dr-overflow .dr-topbar__palette-kbd {
+  display: inline;
+}
+/* a touch screen has no key to name */
+@media (pointer: coarse) {
+  .dr-topbar .dr-overflow .dr-topbar__palette-kbd {
+    display: none;
+  }
+}
+
+/* ---- M3-3: the coach mark under the thing a "Try it" is about ------------------------------------------------- */
+.dr-try-coach {
+  position: fixed;
+  z-index: 330;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--dr-inverse);
+  color: var(--dr-on-inverse);
+  box-shadow: var(--dr-shadow-pop);
+  font: 13.5px / 1.4 var(--dr-font);
+  pointer-events: auto;
+}
+.dr-try-coach__text {
+  margin: 0;
+}
+html[data-dr-presenting] .dr-try-coach {
+  display: none;
+}

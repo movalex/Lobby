@@ -9,6 +9,10 @@
 // keyboard to the board. Nothing renders on wider screens. While a workshop card or a docked comment sheet
 // is up the button steps aside (a11y.css, W5-07); Zoom to fit honours reduced motion (W5-21).
 //
+// Wave M (M3-1, FTU-4.2): the Board section also has "Search or do…", which opens the command palette (the command
+// 'command-palette.open' with args {via: 'phone'}, counted `palette.open:phone`): on a phone there is no Ctrl+K, and the
+// top bar's button is in its "⋯" menu. The row is there only when the palette's feature is.
+//
 // Wave K:
 //  - K5-1: the slot also installs ./edit-zoom.ts (a note being edited on a phone comes to a readable size).
 //  - K5-3: on a phone with a touch screen (this breakpoint and (pointer: coarse)) the board rests on the Hand
@@ -21,6 +25,7 @@
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { CanvasFeatureContext, FeatureToolSpec, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { PALETTE_COMMAND_ID } from '../../command-palette/ids.ts'
 import { installEditZoom } from './edit-zoom.ts'
 import { animateCamera } from './motion.ts'
 import { EDIT_TOOLS, READONLY_TOOLS, type ToolRow } from './tools.ts'
@@ -32,6 +37,8 @@ export const COARSE_QUERY = '(pointer: coarse)'
 
 /** The floating button's name (and the sheet's): every tool at once. */
 export const ALL_TOOLS_LABEL = 'All tools'
+/** The sheet's row that opens the command palette (M3-1). */
+export const SEARCH_OR_DO_LABEL = 'Search or do…'
 
 function useMedia(query: string): boolean {
   return useSyncExternalStore(
@@ -400,6 +407,27 @@ function Sheet({
                     Redo
                   </button>
                 </>
+              )}
+              {ctx.registries.commands.get(PALETTE_COMMAND_ID) && (
+                <button
+                  type="button"
+                  className="dr-a11y-sheet__row"
+                  data-sheet-row=""
+                  data-testid="phone-sheet-palette"
+                  onClick={() => {
+                    // the sheet shuts first, so the palette (a modal dialog) opens over the board, not over the sheet
+                    shut('board')
+                    setTimeout(
+                      () =>
+                        void ctx.registries.commands
+                          .get(PALETTE_COMMAND_ID)
+                          ?.run(ctx, 'dock', { via: 'phone' }),
+                      0,
+                    )
+                  }}
+                >
+                  {SEARCH_OR_DO_LABEL}
+                </button>
               )}
               <button
                 type="button"
