@@ -210,6 +210,8 @@ export class LobbyBoardSession {
       url: async () => `${await this.tickets.uri()}&${connectQuery(this.tab)}`,
       // L7: the ticket goes in the handshake's Sec-WebSocket-Protocol, never in the socket URL
       WebSocketImpl: ticketInProtocol(WebSocket) as never,
+      // M6-5: after a restart close, a tab with changes not yet acknowledged comes back sooner
+      hasUnsent: () => this.core.saveStatus.pending > 0,
     })
     this.store = createIdbOfflineStore({ boardId: o.boardId, uid: o.first.user.id, tab: this.tab })
     // guests keep no offline copy on the device (§2.5.6 privacy): memory only, once a welcome says so. The
