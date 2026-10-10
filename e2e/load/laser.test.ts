@@ -130,7 +130,7 @@ describe('M7-2: the load generator’s thin clients against the real sync, defla
       )
       await Promise.all(clients.map((c) => c.connect()))
       for (let k = 0; k < 20; k++) {
-        clients.forEach((c, i) =>
+        for (const [i, c] of clients.entries())
           c.core.sendPresence({
             pointer: { x: 100 + k * 3 + i, y: 200 },
             button: 'down',
@@ -141,8 +141,7 @@ describe('M7-2: the load generator’s thin clients against the real sync, defla
             f: null,
             t: 'laser',
             trail: [{ x: 99 + k * 3 + i, y: 200 }],
-          } as never),
-        )
+          } as never)
         await sleep(60)
       }
       await sleep(400)
