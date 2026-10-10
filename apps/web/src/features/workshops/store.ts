@@ -262,6 +262,8 @@ export class WorkshopStore {
   private setupPrefill: VoteSetupPrefill | null = null
   /** L5-3: the last vote this tab saw revealed, kept when a newer vote opens (lastRevealedResults) */
   private lastRevealed: LastRevealedResults | null = null
+  /** M2-2: who started the vote `lastRevealed` is of (a user id) */
+  private lastRevealedBy: { sessionId: string; startedBy: string } | null = null
   private alertSeq = 0
   private resultsNews: WorkshopSnapshot['resultsNews'] = null
   private newsSeq = 0
@@ -354,12 +356,14 @@ export class WorkshopStore {
   private compute(): WorkshopSnapshot {
     const vote = this.state?.vote ?? null
     // L5-3: a revealed vote is remembered, so a newer vote opening does not take its results away
-    if (vote?.session.status === 'revealed' && vote.results)
+    if (vote?.session.status === 'revealed' && vote.results) {
       this.lastRevealed = {
         sessionId: vote.session.id,
         participants: vote.participants,
         results: vote.results.map((r) => ({ ref: r.shapeId, count: r.count, rank: r.rank })),
       }
+      this.lastRevealedBy = { sessionId: vote.session.id, startedBy: vote.session.createdBy }
+    }
     const sid = vote?.session.id
     return {
       loaded: this.loaded,
@@ -1023,6 +1027,13 @@ export class WorkshopStore {
     return this.lastRevealed
   }
 
+  /** M2-2: who started vote `sessionId` (a user id), if it is the vote this store holds or the last it saw revealed. */
+  voteStarter(sessionId: string): string | null {
+    const vote = this.state?.vote
+    if (vote?.session.id === sessionId) return vote.session.createdBy
+    return this.lastRevealedBy?.sessionId === sessionId ? this.lastRevealedBy.startedBy : null
+  }
+
   raiseTimerAlert() {
     this.alertSeq++
     this.emit()
@@ -1121,4 +1132,13 @@ export interface LastRevealedResults {
  */
 export function lastRevealedResults(events: object): LastRevealedResults | null {
   return stores.get(events)?.lastRevealedResults() ?? null
+}
+
+/**
+ * M2-2: who started the vote `sessionId` on the board whose event stream is `events` (a user id), as this tab's
+ * workshop store knows it, or null (no store yet, or that vote is neither the current one nor the last revealed).
+ * Reads only; the session coach shows its chip to the vote's starter.
+ */
+export function voteStarterOf(events: object, sessionId: string): string | null {
+  return stores.get(events)?.voteStarter(sessionId) ?? null
 }

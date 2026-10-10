@@ -4,10 +4,13 @@
 // a brainstorm got no notes; the coach chains the tools that already exist, one chip at a time:
 //   1. a revealed brainstorm, or 8 or more ungrouped team notes in one frame: "Group these N notes into themes";
 //   2. theme labels and no vote yet: "Start a 3-dot vote on the themes";
-//   3. a revealed vote (and no action items yet): "Turn the top 5 into action items";
+//   3. a revealed vote (and no action items yet): "Turn the top 5 into action items" ("the top 3" when the vote
+//      has only 3 results, "Turn the winner into an action item" when it has one: wave M, M2-2);
 //   4. action items on the board: "Wrap up";
 //   and nothing once a recap is on the board, or while a vote is still open or closed but not revealed.
-// Facilitators only (editors with an account); never a viewer, a guest, or someone following in present mode.
+// Facilitators only: an editor with an account who runs the session (wave M, M2-2: the vote's starter, else the live
+// presenter, else the board's owner while nobody presents: `runsSession`); never a viewer, a guest, a plain editor in
+// a meeting someone else runs, or someone following in present mode.
 // Steps 1 and 3 run AI: they are offered only while AI may add to this board for this person (on here, allowed
 // to insert, budget left: ../ported/gate.ts canBuildWithAi; unknown until the status read lands). The vote and
 // Wrap up (which has a recap without AI) need no AI.
@@ -33,6 +36,11 @@ export interface CoachWorkshop {
     readonly status: 'open' | 'closed' | 'revealed'
     /** a revealed vote's results, in rank order (refs `shape:<id>`) */
     readonly top: readonly string[]
+    /**
+     * Who started it (a user id), or null while unknown: the event stream does not say, the workshop store does
+     * (./facts.ts seedWorkshop fills it in).
+     */
+    readonly startedBy?: string | null
   } | null
 }
 
@@ -56,7 +64,7 @@ export interface CoachFacts {
 }
 
 export interface CoachRole {
-  /** an editor with an account (not a viewer, commenter or name-only guest) */
+  /** an editor with an account (not a viewer, commenter or name-only guest) who runs this session (`runsSession`) */
   readonly facilitator: boolean
   /** following someone (present mode's followers) */
   readonly following: boolean
@@ -76,6 +84,32 @@ export type CoachStep =
   | { readonly id: 'wrapup'; readonly label: string }
 
 const ref = (id: string) => `shape:${id}`
+
+/** The chip for `n` winning results: "Turn the winner into an action item", "Turn the top 3 into action items". */
+export const actionsLabel = (n: number): string =>
+  n === 1 ? 'Turn the winner into an action item' : `Turn the top ${n} into action items`
+
+/** What decides who runs the session (see `runsSession`). */
+export interface SessionFacts {
+  /** this person's user id */
+  readonly me: string
+  readonly role: 'owner' | 'editor' | 'commenter' | 'viewer'
+  /** who started the board's latest vote (a user id), or null: no vote, or not known */
+  readonly voteStarter: string | null
+  /** who presents to everyone now (a user id), or null: nobody does */
+  readonly presenter: string | null
+}
+
+/**
+ * Whether this person runs the session, so the coach's chip is theirs (wave M, M2-2; in a ten-person meeting
+ * every editor used to get the facilitator's prompts): the starter of the vote, else the live presenter, else
+ * the board's owner while nobody presents.
+ */
+export function runsSession(f: SessionFacts): boolean {
+  if (f.voteStarter !== null) return f.voteStarter === f.me
+  if (f.presenter !== null) return f.presenter === f.me
+  return f.role === 'owner'
+}
 
 /** The next step (see the header), or null. */
 export function nextStep(ws: CoachWorkshop, facts: CoachFacts, role: CoachRole): CoachStep | null {
@@ -104,13 +138,14 @@ export function nextStep(ws: CoachWorkshop, facts: CoachFacts, role: CoachRole):
       label: `Start a ${COACH_VOTE_DOTS}-dot vote on the themes`,
       refs: facts.themeNotes.slice(0, 200).map(ref),
     }
-  // 3. the room chose: action items from the winners, ordered by votes
-  if (ws.vote?.status === 'revealed' && facts.actionItems === 0 && role.ai)
+  // 3. the room chose: action items from the winners, ordered by votes (as many as there are, to the most)
+  const winners = ws.vote ? Math.min(COACH_TOP_N, ws.vote.top.length) : 0
+  if (ws.vote?.status === 'revealed' && winners > 0 && facts.actionItems === 0 && role.ai)
     return {
       id: 'actions',
-      label: `Turn the top ${COACH_TOP_N} into action items`,
+      label: actionsLabel(winners),
       voteSessionId: ws.vote.sessionId,
-      refs: ws.vote.top.slice(0, COACH_TOP_N),
+      refs: ws.vote.top.slice(0, winners),
     }
   // 4. wrap up
   if (facts.actionItems > 0) return { id: 'wrapup', label: 'Wrap up' }

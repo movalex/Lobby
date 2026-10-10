@@ -1,6 +1,8 @@
 // OWNER: W2 (wave L, L2-4). The session coach's chip: one "next step" for the facilitator, next to the Facilitate
-// control (K3-3) in a screen layer of the AI feature. Facilitators only (editors with an account), hidden while
-// following someone in present mode, and per board dismissible ("Not now", kept in localStorage). It makes no
+// control (K3-3) in a screen layer of the AI feature. Facilitators only: editors with an account who run the session
+// (wave M, M2-2, ./next-step.ts `runsSession`: the vote's starter, else the live presenter, else the board's owner
+// while nobody presents), hidden while following someone in present mode, and per board dismissible ("Not now",
+// kept in localStorage). It counts its showing and its use (coach.shown, coach.run: no id, no text). It makes no
 // request, no sound, and writes nothing until it is clicked; a click runs an existing command by id (canvas-ux
 // runCommand), with that command's own gate, notice and server checks:
 //   themes  → 'ai.themes' on the notes it names (they are selected first);
@@ -11,18 +13,21 @@
 // the AI status, read again when it changes); a click that still cannot run says why (never a silent click).
 
 import { can } from '@draftroom/permissions'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { useUserKind } from '../../../invite/guest.tsx'
-import { subscribeValue } from '../../../lib/signals.ts'
+import { computed, subscribeValue } from '../../../lib/signals.ts'
+import { countUsage } from '../../../lib/usage.ts'
 import { runCommand } from '../../canvas-ux/ported/commands.ts'
+import { getLive } from '../../present-export/live/ported/controller.ts'
+import { voteStarterOf } from '../../workshops/store.ts'
 import { SparkIcon } from '../icons.tsx'
 import { canBuildWithAi } from '../ported/gate.ts'
 import { AI_COMMAND_IDS } from '../ported/public.ts'
 import { aiJob, aiStatus, setAiCtx } from '../ported/runtime.ts'
 import { idOfRef } from '../ported/target.ts'
 import { coachFacts, coachWorkshop, dismissedSteps, dismissStep, seedWorkshop } from './facts.ts'
-import { type CoachStep, nextStep, stepKey } from './next-step.ts'
+import { type CoachStep, nextStep, runsSession, type SessionFacts, stepKey } from './next-step.ts'
 
 /** W5's vote setup (features/workshops/commands.ts WORKSHOP_COMMAND_IDS.voteSetup). */
 const VOTE_SETUP = 'workshops.vote.setup'
@@ -100,14 +105,33 @@ export function CoachOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
 /** How long the board must be still before the coach looks again (a drag or a paste is many changes). */
 export const COACH_SETTLE_MS = 300
 
+/** Who presents to everyone now (a user id), or null. Reactive: the live controller may mount after the coach. */
+const livePresenter = (ctx: CanvasFeatureContext) =>
+  computed(
+    'lobby-ai-coach-presenter',
+    () => getLive(ctx.registries)?.store.presentation.get()?.presenter.userId ?? null,
+  )
+
+/** What decides whether this person runs the session (./next-step.ts `runsSession`), as of now. */
+export function sessionFactsOf(ctx: CanvasFeatureContext, presenter: string | null): SessionFacts {
+  const vote = coachWorkshop(ctx.canvas).get().vote
+  return {
+    me: ctx.me.user.id,
+    role: ctx.role,
+    voteStarter: vote ? (vote.startedBy ?? voteStarterOf(ctx.events, vote.sessionId)) : null,
+    presenter,
+  }
+}
+
 /** The next step, read again once the board (or the workshop, or following) has been still for a moment. */
 function useCoachStep(ctx: CanvasFeatureContext): CoachStep | null {
   const { canvas } = ctx
+  const presenter = useMemo(() => livePresenter(ctx), [ctx])
   const compute = () => {
     seedWorkshop(ctx)
     return JSON.stringify(
       nextStep(coachWorkshop(canvas).get(), coachFacts(canvas), {
-        facilitator: !canvas.readOnly(),
+        facilitator: !canvas.readOnly() && runsSession(sessionFactsOf(ctx, presenter.get())),
         following: canvas.follow.current() !== null,
         ai: canBuildWithAi(aiStatus(canvas).get(), canvas.readOnly()),
       }),
@@ -127,6 +151,8 @@ function useCoachStep(ctx: CanvasFeatureContext): CoachStep | null {
       canvas.on('change', later),
       canvas.on('followChanged', later),
       subscribeValue(coachWorkshop(canvas), later),
+      // a presentation to everyone starting or ending changes who runs the session
+      subscribeValue(presenter, later),
       // AI switched on or off here, the budget spent, the first status read landing
       subscribeValue(aiStatus(canvas), later),
     ]
@@ -143,7 +169,15 @@ function CoachChip({ ctx }: { ctx: CanvasFeatureContext }) {
   const [dismissed, setDismissed] = useState(() => dismissedSteps(ctx.board.id))
   const step = useCoachStep(ctx)
   const at = useAnchor(ctx)
-  if (!step || dismissed.has(stepKey(step))) return null
+  const shown = step && !dismissed.has(stepKey(step)) ? stepKey(step) : null
+  // one count per step shown (coach.shown: how often the chip is in front of someone, not how long)
+  const counted = useRef<string | null>(null)
+  useEffect(() => {
+    if (shown === null || counted.current === shown) return
+    counted.current = shown
+    countUsage('coach.shown')
+  }, [shown])
+  if (!step || shown === null) return null
   return (
     <div className="dr-ai-coach" style={at} data-testid="coach-chip" data-step={step.id} role="status">
       <button
@@ -151,6 +185,7 @@ function CoachChip({ ctx }: { ctx: CanvasFeatureContext }) {
         className="dr-ai-coach__run"
         data-testid="coach-run"
         onClick={() => {
+          countUsage('coach.run')
           if (runStep(ctx, step)) return
           const hint = refusedHint(ctx, step)
           if (hint) ctx.notify({ key: 'dr-ai', timeoutMs: 6000, ...hint })
