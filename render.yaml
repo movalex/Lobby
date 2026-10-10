@@ -302,9 +302,10 @@ services:
       # Wave M (W7: M7-2, M7-4, M7-5). A build that does not read these keys yet runs unchanged; each rolls back by
       # value (a restart), without code.
       # permessage-deflate on the board WebSocket (CAP-BANDWIDTH): "off" is the kill switch (browsers then talk
-      # uncompressed, as before). Set "off" here and on the service if the M7-7 NAS run fails its gate.
+      # uncompressed, as before). HOLD: "off" until the lost-words race (docs/PROGRESS.md, wave M follow-up 0) is
+      # fixed and deflate's ack time is measured on staging; turning it on is a reviewed one-line change.
       - key: DRAFTROOM_WS_DEFLATE
-        value: "on"
+        value: "off"
       # Local backup copies kept per board (CAP-DISK; the code default is 12). Offsite copies are kept as before.
       - key: DRAFTROOM_BACKUP_KEEP
         value: "4"

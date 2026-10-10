@@ -129,7 +129,7 @@ test('render.yaml: the wave M keys (the lead applies them through the Render API
   const web = (k) => envValue(RENDER_YAML, 'draftroom-staging-web', k)
   assert.equal(api('DRAFTROOM_DB_POOL_MAX'), '5')
   assert.equal(api('DRAFTROOM_WORKSPACE_QUOTA_MB'), '5120')
-  assert.equal(sync('DRAFTROOM_WS_DEFLATE'), 'on')
+  assert.equal(sync('DRAFTROOM_WS_DEFLATE'), 'off')
   assert.equal(sync('DRAFTROOM_BACKUP_KEEP'), '4')
   assert.equal(sync('DRAFTROOM_OUTBOUND_BUDGET_MB'), '128')
   assert.equal(web('VITE_PUBLIC_ORIGIN'), 'https://draftroom-staging-web.onrender.com')

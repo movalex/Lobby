@@ -279,7 +279,7 @@ describe('ALLOWED_ORIGINS (board WebSocket Origin allowlist)', () => {
   })
 })
 
-describe('wave M keys (render.yaml: DRAFTROOM_WS_DEFLATE=on, DRAFTROOM_BACKUP_KEEP=4, DRAFTROOM_OUTBOUND_BUDGET_MB=128)', () => {
+describe('wave M keys (render.yaml: DRAFTROOM_WS_DEFLATE=off (the hold), DRAFTROOM_BACKUP_KEEP=4, DRAFTROOM_OUTBOUND_BUDGET_MB=128)', () => {
   it('DRAFTROOM_WS_DEFLATE (M7-2): on unless off (the kill switch); anything else is refused', () => {
     expect(loadConfig(base).wsDeflate).toBe(true)
     expect(loadConfig({ ...base, DRAFTROOM_WS_DEFLATE: '' }).wsDeflate).toBe(true)
