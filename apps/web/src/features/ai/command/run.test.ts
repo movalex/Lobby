@@ -177,7 +177,7 @@ describe('the palette’s Do lines', () => {
   it('a phrase the grammar knows is the top line, runnable for an editor, refused for a viewer', () => {
     const editor = ctxOn(THREE).ctx
     const [line] = commandEntries(editor, 'make all red notes yellow')
-    expect(line).toMatchObject({ id: 'do:grammar', label: 'Make 3 red notes yellow', pinned: 2000 })
+    expect(line).toMatchObject({ id: 'do:grammar', label: 'Make 3 Coral notes Butter', pinned: 2000 })
     expect(line?.disabledReason).toBeNull()
     const viewer = ctxOn(THREE, { readOnly: true }).ctx
     expect(commandEntries(viewer, 'make all red notes yellow')[0]?.disabledReason).toMatch(/not change it/)
