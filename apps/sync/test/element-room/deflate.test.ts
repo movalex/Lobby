@@ -2,7 +2,7 @@
 //  - A client that offers the extension gets it (the `ws` client, as browsers do), with the server's options;
 //  - a client that does not offer it works uncompressed (every frame's RSV1 bit clear);
 //  - the gzip snapshot frame is never deflated again (its RSV1 bit clear) while a text frame is;
-//  - DRAFTROOM_WS_DEFLATE=off: nothing is negotiated, nothing is compressed;
+//  - DRAFTROOM_WS_DEFLATE=off, or the key unset (the hold fails closed): nothing is negotiated, nothing is compressed;
 //  - a compressed client frame that inflates past maxPayload (1 MiB) is refused (1009), as an uncompressed one is.
 // The frames are read off a raw TCP socket here, so the RSV1 bit (a compressed message) is visible.
 
@@ -19,6 +19,8 @@ import { rect } from './support/elements.ts'
 import { type ElementStack, newBoardId, useElementHarness } from './support/stack.ts'
 
 const h = useElementHarness()
+/** Deflate is off unless the key says on (the hold; round-2 refix): the negotiation cases ask for it. */
+const DEFLATE_ON = { DRAFTROOM_WS_DEFLATE: 'on' }
 
 interface Frame {
   fin: boolean
@@ -210,7 +212,7 @@ async function boardWithContent(st: ElementStack): Promise<string> {
 
 describe('M7-2: permessage-deflate on the board socket', () => {
   it('negotiated with a client that offers it (the ws client, as browsers do), with the server’s options', async () => {
-    const st = await h.stack()
+    const st = await h.stack({ env: DEFLATE_ON })
     const b = newBoardId()
     const c = await st.client({ boardId: b, user: 'alice' })
     expect(c.ws.extensions).toBe('permessage-deflate') // the ws client lists the names it negotiated
@@ -226,7 +228,7 @@ describe('M7-2: permessage-deflate on the board socket', () => {
   })
 
   it('the gzip snapshot frame goes uncompressed (RSV1 clear) while a large text frame is deflated', async () => {
-    const st = await h.stack()
+    const st = await h.stack({ env: DEFLATE_ON })
     const b = await boardWithContent(st)
     const raw = await RawFrames.open(st, b, 'raw', true)
     expect(raw.extensions).toMatch(/^permessage-deflate/)
@@ -258,7 +260,7 @@ describe('M7-2: permessage-deflate on the board socket', () => {
   })
 
   it('a client that does not offer it works uncompressed: no extension, no RSV1 bit, edits reach it', async () => {
-    const st = await h.stack()
+    const st = await h.stack({ env: DEFLATE_ON })
     const b = await boardWithContent(st)
     const raw = await RawFrames.open(st, b, 'plain', false)
     expect(raw.extensions).toBeUndefined()
@@ -288,8 +290,11 @@ describe('M7-2: permessage-deflate on the board socket', () => {
     raw.close()
   })
 
-  it('DRAFTROOM_WS_DEFLATE=off: nothing is negotiated, nothing is compressed', async () => {
-    const st = await h.stack({ env: { DRAFTROOM_WS_DEFLATE: 'off' } })
+  it.each([
+    ['DRAFTROOM_WS_DEFLATE=off', { DRAFTROOM_WS_DEFLATE: 'off' }],
+    ['DRAFTROOM_WS_DEFLATE unset (the default is off)', {}],
+  ])('%s: nothing is negotiated, nothing is compressed', async (_name, env: Record<string, string>) => {
+    const st = await h.stack({ env })
     const b = await boardWithContent(st)
     const c = await st.client({ boardId: b, user: 'alice' })
     expect(c.ws.extensions).toBe('')
@@ -303,12 +308,12 @@ describe('M7-2: permessage-deflate on the board socket', () => {
       'the changes frame',
     )
     expect(raw.frames.every((f) => !f.rsv1)).toBe(true)
-    expect(st.server.logs()).toContain('[connect] permessage-deflate off (DRAFTROOM_WS_DEFLATE=off)')
+    expect(st.server.logs()).toContain('[connect] permessage-deflate off (DRAFTROOM_WS_DEFLATE is not on)')
     raw.close()
   })
 
   it('a compressed client frame that inflates past 1 MiB is refused (1009), the server stays up', async () => {
-    const st = await h.stack()
+    const st = await h.stack({ env: DEFLATE_ON })
     const b = newBoardId()
     const c = await st.client({ boardId: b, user: 'bomber' })
     // 2 MiB of one byte compresses to a few KiB on the wire

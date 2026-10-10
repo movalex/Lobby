@@ -28,7 +28,12 @@ import {
 } from '../tests/support/canvas.ts'
 import { serverSnapshot } from '../tests/support/excalidraw.ts'
 
-test.use({ viewport: { width: 1440, height: 900 }, launchOptions: OLD_WEB_LAUNCH })
+// deflate is off unless the key says on (the hold): this pair is the deflate check, so it asks for it
+test.use({
+  viewport: { width: 1440, height: 900 },
+  launchOptions: OLD_WEB_LAUNCH,
+  syncEnv: { DRAFTROOM_WS_DEFLATE: 'on' },
+})
 
 interface SocketWatch {
   /** Sec-WebSocket-Extensions of every board socket handshake the page made */

@@ -68,9 +68,9 @@ export interface SyncConfig {
    */
   bootMaintenance?: boolean
   /**
-   * DRAFTROOM_WS_DEFLATE (wave M, M7-2, CAP-BANDWIDTH): permessage-deflate on the board WebSocket, `on` unless
-   * the variable says `off` (the kill switch: a restart). Browsers negotiate it on their own; a client that does
-   * not offer it talks uncompressed. Absent here (a hand-made config): on.
+   * DRAFTROOM_WS_DEFLATE (wave M, M7-2, CAP-BANDWIDTH): permessage-deflate on the board WebSocket, only when the
+   * variable says `on` (`off` or unset: off, the deflate hold; a restart switches it). Browsers negotiate it on
+   * their own; a client that does not offer it talks uncompressed. Absent here (a hand-made config): off.
    */
   wsDeflate?: boolean
   /**
@@ -504,11 +504,15 @@ export function checkEngineFlag(raw: string | undefined): void {
   throw new Error('DRAFTROOM_ENGINE must be excalidraw or unset')
 }
 
-/** DRAFTROOM_WS_DEFLATE: `on` (or unset) = permessage-deflate offered to clients; `off` = the kill switch. */
+/**
+ * DRAFTROOM_WS_DEFLATE: `on` = permessage-deflate offered to clients; `off` or unset = not offered. Off by default
+ * while the release is on the deflate hold (docs/PROGRESS.md, wave M follow-up 0), so a service that lacks the key
+ * fails closed (round-2 refix); turning deflate on stays the reviewed render.yaml change.
+ */
 export function parseWsDeflate(env: Env): boolean {
   const raw = read(env, 'DRAFTROOM_WS_DEFLATE')?.toLowerCase()
-  if (raw === undefined || raw === 'on') return true
-  if (raw === 'off') return false
+  if (raw === 'on') return true
+  if (raw === undefined || raw === 'off') return false
   throw new Error('DRAFTROOM_WS_DEFLATE must be on or off')
 }
 

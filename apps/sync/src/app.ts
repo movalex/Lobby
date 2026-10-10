@@ -61,8 +61,8 @@ export const MAINTENANCE_REASON = 'MAINTENANCE'
 // nothing here: client frames are small). At most 4 zlib jobs run at once, process-wide. `threshold` (1 KiB) only
 // applies to a sender without context takeover (ws/lib/sender.js), so with the server's context kept every text
 // frame is deflated: a small cursor frame compresses well against the ones before it (the M7-7 NAS run measures
-// the CPU). The gzip snapshot is sent with `compress: false` (room/outbound.ts). DRAFTROOM_WS_DEFLATE=off is the
-// kill switch (config.ts; a restart).
+// the CPU). The gzip snapshot is sent with `compress: false` (room/outbound.ts). Deflate runs only with
+// DRAFTROOM_WS_DEFLATE=on; off or unset is the kill switch (config.ts; a restart), so the deflate hold fails closed.
 export const WS_DEFLATE_OPTIONS = Object.freeze({
   zlibDeflateOptions: Object.freeze({ level: 1, memLevel: 7 }),
   threshold: 1024,
@@ -268,11 +268,13 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
     maxPayload: 1024 * 1024,
     handleProtocols: selectProtocol,
     perMessageDeflate:
-      config.wsDeflate === false
+      config.wsDeflate !== true
         ? false
         : { ...WS_DEFLATE_OPTIONS, zlibDeflateOptions: { ...WS_DEFLATE_OPTIONS.zlibDeflateOptions } },
   })
-  log(`[connect] permessage-deflate ${config.wsDeflate === false ? 'off (DRAFTROOM_WS_DEFLATE=off)' : 'on'}`)
+  log(
+    `[connect] permessage-deflate ${config.wsDeflate !== true ? 'off (DRAFTROOM_WS_DEFLATE is not on)' : 'on'}`,
+  )
   const liveSockets = new Map<string, WebSocket>() // `${boardId}/${sid}` -> current ws
   // One expensive connect per macrotask (PERF-05, join-queue.ts): a crowd joining at once no longer
   // blocks everyone else's edits. Keyed per socket, not per session id (a replaced socket).
