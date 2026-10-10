@@ -8,6 +8,7 @@
 // sort, score) are in ../tests/support/ai.ts `waveLAnswer` (the fake server's own file; re-exported here),
 // keyed by the response schema names below.
 import { expect, type Page, type Route } from '@playwright/test'
+import type { WorkspaceAskHookOutcome } from '../../apps/web/src/features/ai/workspace-ask/dev-hook-types.ts'
 import { installServerTextMetrics } from '../../packages/canvas-schema/src/engine/index.ts'
 import type { Ack, Welcome } from '../../packages/canvas-schema/src/protocol.ts'
 import {
@@ -867,3 +868,33 @@ export async function fakeWorkspaceAsk(
     dispose: () => page.unroute(WORKSPACE_ASK_GLOB, handler),
   }
 }
+
+/**
+ * Forces Ask across boards on (or off; null puts the rule back) for the open board's workspace, through the dev-auth
+ * hook `window.__lobbyWorkspaceAsk` (apps/web/src/features/ai/workspace-ask/dev-hook.ts). The client then posts each
+ * ask, which fakeWorkspaceAsk answers, and a 404 (`unavailable: true`) still turns it off, as on an api without the
+ * route. Waits for the hook (the ai-workspace-ask feature is mounted once the board is).
+ */
+export async function forceWorkspaceAsk(page: Page, on: boolean | null): Promise<void> {
+  await page.waitForFunction(() => !!window.__lobbyWorkspaceAsk, undefined, { timeout: 30_000 })
+  await page.evaluate((v) => window.__lobbyWorkspaceAsk?.force(v), on)
+}
+
+/** askWorkspaceAvailable() in the page. */
+export const workspaceAskAvailable = (page: Page): Promise<boolean> =>
+  page.evaluate(() => window.__lobbyWorkspaceAsk?.available() ?? false)
+
+/** One ask through the page's real client, settled: the parsed answer, or the rejection's code and message. */
+export const askWorkspaceInPage = (
+  page: Page,
+  question: string,
+  acknowledged?: boolean,
+): Promise<WorkspaceAskHookOutcome> =>
+  page.evaluate(
+    ({ q, ack }) => {
+      const hook = window.__lobbyWorkspaceAsk
+      if (!hook) throw new Error('no window.__lobbyWorkspaceAsk')
+      return hook.ask(q, ack)
+    },
+    { q: question, ack: acknowledged },
+  )
