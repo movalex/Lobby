@@ -139,6 +139,8 @@ export const AI_COMMAND_IDS = {
 
 export interface AiAskArgs {
   readonly question?: string
+  /** 'all': across the workspace's boards (W8's 'ai.askWorkspace', 'Ask all boards') while that is offered here; else this board */
+  readonly scope?: 'all'
 }
 /** 'session': since the presenter's agenda started (else the first edit today); 'selection': the selected frames; 'catch-up': since this device's last visit. */
 export interface AiRecapArgs {
@@ -153,7 +155,8 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 /** The args of 'ai.ask' as a caller passed them (anything else is ignored). */
 export function aiAskArgs(args: unknown): AiAskArgs {
   const q = isObj(args) && typeof args.question === 'string' ? args.question.trim() : ''
-  return q ? { question: q } : {}
+  const all = isObj(args) && args.scope === 'all'
+  return { ...(q ? { question: q } : {}), ...(all ? { scope: 'all' as const } : {}) }
 }
 
 export function aiRecapArgs(args: unknown): AiRecapArgs {

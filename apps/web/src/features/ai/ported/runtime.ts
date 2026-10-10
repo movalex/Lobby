@@ -93,6 +93,8 @@ export interface AiMenuState {
   notice?: { verb: string; what: string; title?: string; confirm(ok: boolean): void }
   /** view 'ask': the question to start with (the palette's "Ask: …") */
   question?: string
+  /** view 'ask': start on All boards ('ai.ask' with scope 'all', W8's "Ask all boards") */
+  scope?: 'all'
 }
 
 export interface AiJob {

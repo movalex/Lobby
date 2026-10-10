@@ -128,8 +128,9 @@ export function openAiMenu(
   at: AiMenuState['at'],
   target: AiTarget,
   view: AiMenuState['view'] = 'menu',
+  scope?: AiMenuState['scope'],
 ) {
-  aiMenu(canvas).set({ at, target, view, pending: null })
+  aiMenu(canvas).set({ at, target, view, pending: null, ...(scope ? { scope } : {}) })
   // The budget line and the notice state stay current without polling: re-read on every open.
   void refreshAiStatus(canvas)
 }

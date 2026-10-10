@@ -631,7 +631,7 @@ function AskView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: strin
   const [question, setQuestion] = useState(menu.question ?? '')
   // M4-6: "This board / All boards", only while asking all boards is offered here (W8's client: it goes after a 404)
   const offered = useSyncExternalStore(subscribeWorkspaceAsk, askWorkspaceAvailable, () => false)
-  const [scope, setScope] = useState<'board' | 'all'>('board')
+  const [scope, setScope] = useState<'board' | 'all'>(menu.scope === 'all' ? 'all' : 'board')
   const all = offered && scope === 'all'
   const inputId = useId()
   const scopeName = useId()

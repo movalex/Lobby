@@ -27,6 +27,7 @@ import { useValue } from '../../../lib/signals.ts'
 import { DIAGRAM_MENU } from '../diagram/DiagramPrompt.tsx'
 import { SparkIcon, Spinner } from '../icons.tsx'
 import { runRecap } from '../recap/recap.ts'
+import { askWorkspaceAvailable } from '../workspace-ask/client.ts'
 import {
   anchorAtScene,
   ensureAiStatus,
@@ -37,6 +38,7 @@ import {
   setWorkspaceAiDefault,
 } from './actions.ts'
 import { askBoard, WHOLE_BOARD } from './ask.ts'
+import { askAllBoards } from './ask-all.ts'
 import { canBuildWithAi } from './gate.ts'
 import { aiLens, toggleAiLens } from './lens.tsx'
 import { aiItemStates, labelWithReason } from './menu-model.ts'
@@ -332,9 +334,11 @@ export const COMMANDS: readonly CommandSpec[] = [
       await ensureAiStatus(ctx.canvas)
       if (!askOn(ctx) || aiJob(ctx.canvas).get()) return
       const target = selectionTarget(ctx.canvas) ?? WHOLE_BOARD
-      const { question } = aiAskArgs(args)
-      if (question) void askBoard(ctx, question, target)
-      else openAiMenu(ctx.canvas, viewCentre(ctx), target, 'ask')
+      // scope 'all' (W8's "Ask all boards"): across the workspace's boards while that is offered, else this board
+      const { question, scope } = aiAskArgs(args)
+      const all = scope === 'all' && askWorkspaceAvailable()
+      if (question) void (all ? askAllBoards(ctx, question) : askBoard(ctx, question, target))
+      else openAiMenu(ctx.canvas, viewCentre(ctx), target, 'ask', all ? 'all' : undefined)
     },
   },
   {
