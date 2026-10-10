@@ -1,0 +1,17 @@
+/* Wave M (W4, M4-3): the board popovers' layer (./board-popover.tsx), over the canvas region and above its host
+   slots; it takes no clicks, its popovers do. */
+.dr-board-pops {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.dr-board-pops > * {
+  pointer-events: auto;
+}
+
+/* Nothing fitted beside the style panel: it folds away while the popover that covers its place is open (the canvas
+   region carries the attribute only for that long). It is hidden, not closed: its state and the selection stay. */
+[data-dr-covers-style-panel] > [data-lobby-slot="stylePanel"] {
+  visibility: hidden;
+}

@@ -4,15 +4,15 @@
 //    one selected shape, Ctrl/Cmd+Shift+Arrow one of the last created kind; its editor opens through the text lease
 //    with no key lost; the + handles (./Handles.tsx) do the same with the pointer, and drag to connect. Alt+Arrow
 //    walks the connections (a11y's walk, told the arrow by ./runtime.ts) and the live region names them.
-//  - L4-2 Diagram from words (../ai/diagram/DiagramPrompt.tsx): the AI group's "Diagram from words…" and the
-//    command 'flow.diagram'.
+//  - L4-2 Diagram from words (../ai/diagram/DiagramPrompt.tsx): the command 'flow.diagram' (the palette), and, since
+//    wave M (M4-5), "Diagram from words…" inside the context menu's AI submenu (../ai/ported/menus.tsx).
 //  - L4-3 Mermaid paste (./MermaidPaste.tsx): a pasted flowchart becomes the same native diagram, no AI.
 //
 // W3 registers it in features/canvas-registry.ts BEFORE a11y (its contextual Ctrl/Cmd+Shift+Arrow is asked first).
 // With it absent, the board is exactly as before: the wave L chords stay blocked by the allowlist, Alt+Arrow walks
 // the reading order, a pasted flowchart is bulk paste's.
 import type { CanvasFeature } from '../../canvas/api/index.ts'
-import { DIAGRAM_COMMAND, DIAGRAM_MENU, DiagramPrompt } from '../ai/diagram/DiagramPrompt.tsx'
+import { DIAGRAM_COMMAND, DiagramPrompt } from '../ai/diagram/DiagramPrompt.tsx'
 import { FlowHandles } from './Handles.tsx'
 import { FLOW_KEYS } from './keys.ts'
 import { MERMAID_PASTE_HANDLER, MermaidPastePrompt } from './MermaidPaste.tsx'
@@ -22,7 +22,6 @@ export const feature: CanvasFeature = {
   id: 'flow',
   keys: FLOW_KEYS,
   commands: [DIAGRAM_COMMAND],
-  contextMenu: [DIAGRAM_MENU],
   contentHandlers: [MERMAID_PASTE_HANDLER],
   overlays: [
     // the layers take no clicks; their buttons and dialogs do (pointer-events on their own elements)

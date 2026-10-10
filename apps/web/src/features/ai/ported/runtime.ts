@@ -90,7 +90,7 @@ export interface AiMenuState {
    * Wave L: a notice asked by public.ts `runAi` (any action, any caller): what it will do and send, and the
    * answer (Continue: true; Cancel, Escape or closing it any other way: false).
    */
-  notice?: { verb: string; what: string; confirm(ok: boolean): void }
+  notice?: { verb: string; what: string; title?: string; confirm(ok: boolean): void }
   /** view 'ask': the question to start with (the palette's "Ask: …") */
   question?: string
 }

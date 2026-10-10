@@ -3,6 +3,7 @@
 // the moment of writing, one undo step). The AI sort by a lens (./ai.ts) goes the same way with the groups the
 // api names.
 import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
+import { countUsage } from '../../lib/usage.ts'
 import { applyColumns, bringIntoView, planBounds } from './apply.ts'
 import { plural } from './copy.ts'
 import { type BuiltPlan, executePlan, type Outcome, type PlanProblem, type PlanSpec } from './execute.ts'
@@ -38,14 +39,17 @@ export function columnsBuilt(
   const moves = plan.spaces.flatMap((s) =>
     s.moves.filter((m) => m.x !== m.fromX || m.y !== m.fromY).map((m) => ({ id: m.id, x: m.x, y: m.y })),
   )
+  // M4-1: each heading's outline says its column's name, and the preview lists the columns with their notes
   const creates = plan.spaces.flatMap((s) =>
-    s.labels.map((l) => ({ x: l.x, y: l.y, w: l.width, h: l.block.height, kind: 'text' })),
+    s.labels.map((l) => ({ x: l.x, y: l.y, w: l.width, h: l.block.height, kind: 'text', label: l.name })),
   )
+  const groups = plan.spaces.flatMap((s) => s.labels.map((l) => ({ name: l.name, count: l.count })))
   const noun = (n: number) => plural(n, 'note')
   return {
     skipped,
     moves,
     creates,
+    groups,
     summary: `Moves ${noun(plan.moved)} into ${plural(plan.columns, 'column')}`,
     noop: isNoop(plan),
     ...(opts.extra ? { extra: opts.extra } : {}),
@@ -96,6 +100,7 @@ export function sortBy(
   key: SortKey,
   ids: readonly string[] = ctx.canvas.selection,
 ): Promise<Outcome> {
+  countUsage(`sort.run:${key}`)
   return executePlan(ctx, sortSpec(ctx, key, ids))
 }
 

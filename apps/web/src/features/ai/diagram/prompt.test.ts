@@ -10,14 +10,16 @@ import { aiStatus } from '../ported/runtime.ts'
 const runAi = vi.fn()
 const showAiPreview = vi.fn()
 const findSpot = vi.fn()
+const aiResultToast = vi.fn()
 vi.mock('../ported/public.ts', async (importActual) => ({
   ...(await importActual<typeof import('../ported/public.ts')>()),
   runAi: (...a: unknown[]) => runAi(...a),
   showAiPreview: (...a: unknown[]) => showAiPreview(...a),
   findSpot: (...a: unknown[]) => findSpot(...a),
+  aiResultToast: (...a: unknown[]) => aiResultToast(...a),
 }))
 
-const { DIAGRAM_COMMAND, DIAGRAM_MENU, PREVIEW_ABOVE, runDiagram, wordyIds } = await import(
+const { DIAGRAM_COMMAND, DIAGRAM_MENU, madeByAiText, runDiagram, wordyIds } = await import(
   './DiagramPrompt.tsx'
 )
 
@@ -54,6 +56,7 @@ beforeEach(() => {
   showAiPreview.mockReset()
   findSpot.mockReset()
   findSpot.mockReturnValue({ x: 1000, y: 500, frameId: null })
+  aiResultToast.mockReset()
 })
 
 describe('runDiagram', () => {
@@ -78,11 +81,25 @@ describe('runDiagram', () => {
     expect(f.live()).toHaveLength(0)
   })
 
-  it('a small diagram is built at once, at the spot findSpot gives, every element stamped with the run', async () => {
+  it('M4-2: a small diagram is shown first too (nothing written until Apply), then built at the spot findSpot gives, every element stamped with the run, and a toast says AI made it', async () => {
     const { f, ctx } = setup()
     runAi.mockResolvedValue(result(3))
+    let written = -1
+    showAiPreview.mockImplementation(async () => {
+      written = f.live().length
+      return 'apply'
+    })
     const ids = await runDiagram(ctx, { prompt: 'a b c', shapeIds: ['n'], direction: 'down' })
-    expect(showAiPreview).not.toHaveBeenCalled()
+    expect(showAiPreview).toHaveBeenCalledTimes(1)
+    expect(written).toBe(0)
+    expect(showAiPreview.mock.calls[0]?.[1].creates.map((c: { label?: string }) => c.label ?? null)).toEqual([
+      'Step 1',
+      'Step 2',
+      'Step 3',
+      null,
+      null,
+    ])
+    expect(aiResultToast).toHaveBeenCalledWith(ctx, 'Made by AI: 3 shapes and 2 connectors.', ids)
     expect(findSpot).toHaveBeenCalledWith(ctx, expect.objectContaining({ near: ['n'] }))
     expect(ids).toHaveLength(3 * 2 + 2)
     const shapes = f.live().filter((e) => e.type !== 'text' && e.type !== 'arrow')
@@ -94,7 +111,7 @@ describe('runDiagram', () => {
     expect(f.live()).toHaveLength(0)
   })
 
-  it(`over ${PREVIEW_ABOVE} elements: the preview first; apply builds it`, async () => {
+  it('a large diagram: the preview first; apply builds it', async () => {
     const { f, ctx } = setup()
     runAi.mockResolvedValue(result(40, 39))
     showAiPreview.mockResolvedValue('apply')
@@ -114,6 +131,8 @@ describe('runDiagram', () => {
     showAiPreview.mockResolvedValue('discard')
     expect(await runDiagram(ctx, { prompt: 'x', shapeIds: [], direction: 'down' })).toBeNull()
     expect(f.live()).toHaveLength(0)
+    expect(aiResultToast).not.toHaveBeenCalled()
+    expect(madeByAiText({ shapeIds: ['a'], arrowIds: [] })).toBe('Made by AI: 1 shape and 0 connectors.')
     runAi.mockReset()
     runAi.mockResolvedValueOnce(result(30, 29)).mockResolvedValueOnce(result(25, 24))
     showAiPreview.mockReset()
@@ -129,6 +148,7 @@ describe('runDiagram', () => {
     expect(await runDiagram(ctx, { prompt: 'x', shapeIds: [], direction: 'down' })).toBeNull()
     expect(notices).toHaveLength(1)
     runAi.mockResolvedValue(result(3))
+    showAiPreview.mockResolvedValue('apply')
     f.setReadOnly(true)
     expect(await runDiagram(ctx, { prompt: 'x', shapeIds: [], direction: 'down' })).toBeNull()
   })

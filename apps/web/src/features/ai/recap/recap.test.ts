@@ -21,6 +21,7 @@ import {
 } from '../ported/remove.ts'
 import { aiPanel } from '../ported/runtime.ts'
 import { AI_ON, aiKit, note, renderIn } from '../ported/test-kit.ts'
+import { revealResult } from '../reveal.ts'
 import { applyRecap } from './apply.ts'
 import { mdText, RECAP_MARKDOWN_MAX_BYTES, recapMarkdown } from './markdown.ts'
 import { type RecapPlan, recapPlan, recapWhen } from './plan.ts'
@@ -201,14 +202,14 @@ describe('Wrap up', () => {
     // clear of what was there
     for (const e of wide.filter((x) => x.type === 'stickynote'))
       expect(overlaps(f, e as typeof f), String(e.id)).toBe(false)
-    // and wholly shown: in the view already, or this tab's camera goes to it (never a write)
+    // and wholly shown (M4-4: the panel reveals it once it has folded): in the view already, or this tab's camera
+    // goes to it (never a write)
+    const pushes = k.pushes.length
+    const moved = await revealResult(k.canvas, [made.frameId], { now: true })
     const inside =
       f.x >= v.x && f.y >= v.y && f.x + f.width <= v.x + v.width && f.y + f.height <= v.y + v.height
-    if (!inside)
-      expect(k.canvas.viewport.zoomTo).toHaveBeenCalledWith(
-        expect.objectContaining({ x: f.x, y: f.y, width: f.width, height: f.height }),
-        expect.objectContaining({ maxZoom: 1 }),
-      )
+    expect(moved).toBe(!inside)
+    expect(k.pushes).toHaveLength(pushes)
     expect(k.pushes.filter((p) => !p.joined)).toHaveLength(1)
   })
 
@@ -225,11 +226,19 @@ describe('Wrap up', () => {
     expect(k.els.get(made.frameId)?.frameId ?? null).toBeNull()
     expect(f.x >= 3_000 + 1_400 || f.y >= 2_000 + 900).toBe(true)
     expect(Math.min(Math.abs(f.x - 4_400), Math.abs(f.y - 2_900))).toBeLessThan(400)
-    // out of the view (x -1000..1000): this tab's camera is moved to it
-    expect(k.canvas.viewport.zoomTo).toHaveBeenCalledWith(
-      expect.objectContaining({ x: f.x, y: f.y }),
-      expect.objectContaining({ maxZoom: 1 }),
-    )
+    // applying moves no camera (M4-4: the panel reveals it); out of the view (x -1000..1000), the reveal moves this
+    // tab's camera to it, centred, never above 100%
+    expect(k.canvas.viewport.zoomTo).not.toHaveBeenCalled()
+    expect(await revealResult(k.canvas, [made.frameId], { now: true })).toBe(true)
+    const to = (
+      k.canvas.viewport.set as unknown as { mock: { calls: [{ x: number; y: number; zoom: number }][] } }
+    ).mock.calls[0]?.[0]
+    expect(to?.zoom).toBeLessThanOrEqual(1)
+    const view = k.canvas.viewport.screenRect()
+    const cx = (to?.x ?? 0) + view.width / 2 / (to?.zoom ?? 1)
+    const cy = (to?.y ?? 0) + view.height / 2 / (to?.zoom ?? 1)
+    expect(Math.abs(cx - (f.x + f.width / 2))).toBeLessThan(view.width / 4 / (to?.zoom ?? 1))
+    expect(Math.abs(cy - (f.y + f.height / 2))).toBeLessThan(view.height / 4 / (to?.zoom ?? 1))
   })
 
   it('without AI the frame is the room’s results only, with no AI provenance at all', async () => {

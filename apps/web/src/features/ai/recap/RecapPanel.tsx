@@ -20,6 +20,7 @@ import { plural } from '../copy.ts'
 import { SparkIcon } from '../icons.tsx'
 import { offerUndoFor } from '../ported/actions.ts'
 import { showSources } from '../ported/ask.ts'
+import { revealResult } from '../reveal.ts'
 import { applyRecap, latestRecapFrame } from './apply.ts'
 import { recapMarkdown } from './markdown.ts'
 import { type RecapPlan, recapIsEmpty } from './plan.ts'
@@ -204,11 +205,25 @@ function RecapView({ state }: { state: RecapState }) {
     }
   }, [canvas])
   const plan = state.plan
+  // M4-4 (FTU-8): once the frame is on the board the panel folds to its header, so it does not cover the frame
+  const [collapsed, setCollapsed] = useState(false)
+  // a new recap opens unfolded
+  useEffect(() => {
+    if (plan) setCollapsed(false)
+  }, [plan])
   const addFrame = () => {
     if (!plan || canvas.readOnly()) return
     const made = applyRecap(canvas, plan, ctx.me.user.id, state.about)
     aiRecap(canvas).set({ ...state, frameId: made.frameId })
+    setCollapsed(true)
     offerUndoFor(canvas, 'Recap frame added to the board.', made.ids)
+    // shown whole, clear of the board's chrome and of the folded panel (this tab's camera only)
+    void revealResult(canvas, [made.frameId], {
+      avoid: () => {
+        const r = ref.current?.getBoundingClientRect()
+        return r && r.width > 0 ? [{ x: r.left, y: r.top, width: r.width, height: r.height }] : []
+      },
+    })
   }
   return (
     <section
@@ -219,6 +234,7 @@ function RecapView({ state }: { state: RecapState }) {
       aria-busy={state.status === 'working'}
       data-testid="recap-panel"
       data-status={state.status}
+      data-collapsed={collapsed ? '' : undefined}
       data-ai={plan ? String(plan.ai) : undefined}
     >
       <div className="dr-ai-pop__head">
@@ -229,28 +245,48 @@ function RecapView({ state }: { state: RecapState }) {
           {plan?.title ?? 'Recap'}{' '}
           <span className="dr-ai-pop__about">· {plan?.scopeLabel ?? 'working…'}</span>
         </h2>
+        {collapsed && (
+          <button
+            type="button"
+            className="dr-btn dr-btn--sm"
+            data-testid="recap-expand"
+            aria-expanded={false}
+            onClick={() => setCollapsed(false)}
+          >
+            Show
+          </button>
+        )}
         <button type="button" className="dr-iconbtn dr-iconbtn--sm" aria-label="Close recap" onClick={close}>
           ×
         </button>
       </div>
-      <div className="dr-ai-recap__body">
-        {plan ? (
-          <Body plan={plan} />
-        ) : (
-          <div aria-hidden="true">
-            <span className="dr-ai-line dr-ai-line--long" />
-            <span className="dr-ai-line" />
-            <span className="dr-ai-line dr-ai-line--short" />
-          </div>
-        )}
-      </div>
+      {collapsed ? (
+        <p className="dr-ai-pop__foot" data-testid="recap-added" role="status">
+          Added to the board as a frame.
+        </p>
+      ) : (
+        <div className="dr-ai-recap__body">
+          {plan ? (
+            <Body plan={plan} />
+          ) : (
+            <div aria-hidden="true">
+              <span className="dr-ai-line dr-ai-line--long" />
+              <span className="dr-ai-line" />
+              <span className="dr-ai-line dr-ai-line--short" />
+            </div>
+          )}
+        </div>
+      )}
       {plan && (
         <>
-          <p className="dr-ai-pop__foot">
-            {plan.ai
-              ? 'Only you can see this. Written by AI from the board, with the room’s own results.'
-              : 'Only you can see this. The room’s own results, no AI.'}
-          </p>
+          {!collapsed && (
+            <p className="dr-ai-pop__foot">
+              {plan.ai
+                ? 'Only you can see this. Written by AI from the board, with the room’s own results.'
+                : 'Only you can see this. The room’s own results, no AI.'}
+            </p>
+          )}
+          {/* folded, the follow-ups stay: the PDF of the frame, the Markdown, adding it again (now the lesser choice) */}
           <div className="dr-ai-panel__actions dr-ai-recap__actions">
             {canCopy && (
               <button
@@ -275,7 +311,8 @@ function RecapView({ state }: { state: RecapState }) {
             {!readOnly && !recapIsEmpty(plan) && (
               <button
                 type="button"
-                className="dr-btn dr-btn--primary dr-btn--sm"
+                // once added, adding again is the lesser choice (M4-4)
+                className={state.frameId ? 'dr-btn dr-btn--sm' : 'dr-btn dr-btn--primary dr-btn--sm'}
                 data-testid="recap-add"
                 onClick={addFrame}
               >

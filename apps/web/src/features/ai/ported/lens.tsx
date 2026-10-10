@@ -3,10 +3,18 @@
 // An overlay only (a screen layer): it reads the board and writes nothing; the toggle is this tab's own, never
 // stored or sent. "Hide note authors" (the board's session setting) leaves the name out. Under reduced motion the
 // outline stands still.
+//
+// Wave M (W4, M4-2): while it is on, a banner says how much AI made ("Showing 3 things AI made · Hide") and turns
+// it off; turning it on is counted (usage `ai.open:lens`, the event name only).
 
+import { useRef } from 'react'
 import type { CanvasElement, CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { items } from '../../../canvas/api/index.ts'
 import { type Atom, atom, useValue } from '../../../lib/signals.ts'
+import { countUsage } from '../../../lib/usage.ts'
+import { topCentreAnchor } from '../board-chrome.ts'
+import { inPopoverLayer, useBoardPlacement, usePopoverLayer } from '../board-popover.tsx'
+import { SparkIcon } from '../icons.tsx'
 import { useReducedMotion } from './Placeholders.tsx'
 import { aiOf, stampsOf } from './provenance.ts'
 import { perCanvas } from './runtime.ts'
@@ -64,12 +72,83 @@ export function aiMadeIds(canvas: Pick<LobbyCanvas, 'items' | 'isHidden'>): stri
   return out
 }
 
+/** How many things on the board AI made (labels are their containers'; the lens draws at most LENS_MAX_BOXES). */
+export function aiMadeCount(canvas: Pick<LobbyCanvas, 'items' | 'isHidden'>): number {
+  let n = 0
+  for (const el of canvas.items()) {
+    if (el.type === 'text' && (el as { containerId?: string | null }).containerId) continue
+    if (!canvas.isHidden(el.id) && aiOf(el)) n++
+  }
+  return n
+}
+
+/** The lens banner's words (wave M, M4-2): "Showing 3 things AI made", "Showing 1 thing AI made", none. */
+export function lensBannerText(n: number): string {
+  if (n <= 0) return 'Nothing on this board was made with AI'
+  return `Showing ${n} ${n === 1 ? 'thing' : 'things'} AI made`
+}
+
+/** Turns the lens on or off in this tab (counted when it turns on: usage `ai.open:lens`, the event name only). */
+export function toggleAiLens(canvas: LobbyCanvas, on: boolean = !aiLens(canvas).get()): void {
+  if (on && !aiLens(canvas).get()) countUsage('ai.open:lens')
+  aiLens(canvas).set(on)
+}
+
 /** The lens layer (a screen overlay of the AI feature). Nothing while the lens is off. */
 export function AiLensOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
   const { canvas } = ctx
   const on = useValue('lobby-ai-lens-on', () => aiLens(canvas).get(), [canvas])
   if (!on) return null
-  return <LensView canvas={canvas} />
+  return (
+    <>
+      <LensView canvas={canvas} />
+      <LensBanner canvas={canvas} />
+    </>
+  )
+}
+
+/**
+ * Wave M (M4-2): while the lens is on, a banner says how much AI made and turns it off: "Showing 3 things AI made ·
+ * Hide". In the popover layer at the top of the view, clear of the board's chrome; a status a screen reader hears.
+ */
+function LensBanner({ canvas }: { canvas: LobbyCanvas }) {
+  const n = useValue('lobby-ai-lens-count', () => aiMadeCount(canvas), [canvas])
+  const ref = useRef<HTMLDivElement>(null)
+  const host = usePopoverLayer(canvas)
+  const pos = useBoardPlacement(canvas, ref, () => topCentreAnchor(canvas), {
+    prefer: 'below',
+    coverStylePanel: false,
+  })
+  return inPopoverLayer(
+    canvas,
+    host,
+    <div
+      ref={ref}
+      className="dr-ai-lens-banner"
+      data-testid="ai-lens-banner"
+      data-count={n}
+      style={pos ? { left: pos.left, top: pos.top } : { left: 0, top: 0, visibility: 'hidden' }}
+    >
+      <span className="dr-ai-pop__badge" aria-hidden="true">
+        <SparkIcon size={13} />
+      </span>
+      <span role="status" data-testid="ai-lens-banner-text">
+        {lensBannerText(n)}
+      </span>
+      <span aria-hidden="true">·</span>
+      <button
+        type="button"
+        className="dr-ai-lens-banner__hide"
+        data-testid="ai-lens-hide"
+        onClick={() => {
+          toggleAiLens(canvas, false)
+          canvas.focus({ preventScroll: true })
+        }}
+      >
+        Hide
+      </button>
+    </div>,
+  )
 }
 
 function LensView({ canvas }: { canvas: LobbyCanvas }) {

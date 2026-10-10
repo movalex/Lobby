@@ -103,3 +103,23 @@
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+
+/* ---- the dark theme (wave M, M4-6, FTU-9): no white card in a dark panel ---------------------------------------- */
+:root[data-theme="dark"] .dr-pieces__preview {
+  background: var(--dr-surface-2, var(--dr-inset));
+  box-shadow: inset 0 0 0 1px var(--dr-line);
+}
+/* a shape keeps a hint of its colour, mixed into the surface; its line takes the ink */
+:root[data-theme="dark"] .dr-pieces__preview .dr-pp-shape {
+  fill: color-mix(in srgb, var(--pf) 34%, var(--dr-surface-2, var(--dr-inset)));
+  stroke: var(--dr-ink-2);
+}
+:root[data-theme="dark"] .dr-pieces__preview .dr-pp-line {
+  stroke: var(--dr-ink-2);
+}
+:root[data-theme="dark"] .dr-pieces__preview .dr-pp-frame {
+  stroke: var(--dr-ink-2);
+}
+:root[data-theme="dark"] .dr-pieces__preview .dr-pp-text {
+  fill: var(--dr-ink-2);
+}

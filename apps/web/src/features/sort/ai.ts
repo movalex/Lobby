@@ -8,7 +8,8 @@
 //    quadrant on a grid. The 2x2 is the template's squares or a matrix this feature made (./matrix.ts), or,
 //    when there is neither, one made now from the axes the person named: a frame, a cross and six axis words,
 //    all new elements, in the same undo step as the moves.
-//  - both go through ./execute.ts: showAiPreview over 10 moves, and the board read again at the moment of
+//  - both go through ./execute.ts: showAiPreview first, whatever the size (wave M, M4-2: an AI answer never lands
+//    unseen), and the board read again at the moment of
 //    writing. They move only notes (with their bound labels), skip what is locked, under another tab's lease
 //    or being dragged, and write no arrow: the server re-snaps what is bound to a note that moved. A note
 //    the AI left out of a sort, or did not score, stays where it is and is counted.
@@ -27,6 +28,7 @@ import {
   items,
   type LobbyCanvas,
 } from '../../canvas/api/index.ts'
+import { countUsage } from '../../lib/usage.ts'
 import { BESIDE_GAP, placeBeside } from '../ai/layout.ts'
 import { aiCustomData } from '../ai/ported/public.ts'
 import { bringIntoView } from './apply.ts'
@@ -112,6 +114,7 @@ export function sortByLens(
   lens: string,
   ids: readonly string[] = ctx.canvas.selection,
 ): Promise<Outcome> {
+  countUsage('sort.run:lens')
   return whileBusy(ctx, () => lensRun(ctx, lens, ids))
 }
 
@@ -179,7 +182,8 @@ async function lensRun(ctx: CanvasFeatureContext, lens: string, ids: readonly st
       return isSort(again) ? makeBuild(again) : null
     },
   }
-  return executePlan(ctx, spec, true)
+  // M4-2: an AI answer is always previewed before anything moves
+  return executePlan(ctx, spec, true, 'always')
 }
 
 // ---- place on a 2x2 ----------------------------------------------------------------------------------------------
@@ -366,6 +370,7 @@ export function placeOnMatrix(
   ctx: CanvasFeatureContext,
   o: { ids?: readonly string[]; axes?: readonly [AiScoreAxis, AiScoreAxis] } = {},
 ): Promise<PlaceOutcome> {
+  countUsage('sort.run:place')
   return whileBusy(ctx, () => placeRun(ctx, o))
 }
 
@@ -413,6 +418,8 @@ async function placeRun(
       },
     },
     true,
+    // M4-2: an AI answer is always previewed before anything moves (the 2x2 too)
+    'always',
   )
 }
 
@@ -521,12 +528,33 @@ function buildPlacement(
   const moves = noteMoves
     .filter((m) => m.x !== m.el.x || m.y !== m.el.y)
     .map((m) => ({ id: m.el.id, x: m.x, y: m.y }))
+  // M4-1: the new 2x2's axis words in their outlines, and the squares with how many notes go in each
   const creates: BuiltPlan['creates'] = made
     ? [
         { x: made.frame.x, y: made.frame.y, w: made.frame.width, h: made.frame.height, kind: 'frame' },
-        ...made.texts.map((t) => ({ x: t.box.x, y: t.box.y, w: t.box.w, h: t.box.h, kind: 'text' })),
+        ...made.texts.map((t) => ({
+          x: t.box.x,
+          y: t.box.y,
+          w: t.box.w,
+          h: t.box.h,
+          kind: 'text',
+          label: t.originalText,
+        })),
       ]
     : []
+  const inSquare = new Map<QuadrantKey, number>()
+  for (const p of layout.placed) inSquare.set(p.quadrant, (inSquare.get(p.quadrant) ?? 0) + 1)
+  /** "High impact", from an axis's end word ("High") and its name ("Impact"), unless the word says it already */
+  const end = (a: AiScoreAxis, side: 'low' | 'high') =>
+    a[side].toLowerCase().includes(a.name.toLowerCase()) ? a[side] : `${a[side]} ${a.name.toLowerCase()}`
+  const squareName = (k: QuadrantKey) => {
+    const [x, y] = k.split('-') as ['low' | 'high', 'low' | 'high']
+    return `${end(axes[1], y)} · ${end(axes[0], x)}`
+  }
+  const groups = QUADRANT_KEYS.filter((k) => inSquare.has(k)).map((k) => ({
+    name: squareName(k),
+    count: inSquare.get(k) ?? 0,
+  }))
   const left = unscored.length
   const stuck = layout.unplaced.length
   const extra = [
@@ -545,6 +573,7 @@ function buildPlacement(
     skipped,
     moves,
     creates,
+    groups,
     summary: `Moves ${plural(moves.length, 'note')} onto a 2x2${built ? ' (a new frame)' : ''}`,
     noop: moves.length === 0 && !made && grow.size === 0,
     ...(extra ? { extra } : {}),

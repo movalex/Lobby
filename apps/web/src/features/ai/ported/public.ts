@@ -11,9 +11,10 @@
 
 import type { AiResult, AiRunInput } from '@draftroom/contracts'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
-import { runPublic } from './actions.ts'
+import { offerUndoFor, runPublic } from './actions.ts'
 import { spotNear } from './apply.ts'
 import { showPreview } from './preview.tsx'
+import { setAiCtx } from './runtime.ts'
 
 // ---- running an AI action --------------------------------------------------------------------------------
 
@@ -52,7 +53,17 @@ export interface AiPreviewPlan {
     readonly w: number
     readonly h: number
     readonly kind: string
+    /**
+     * Wave M (W4, M4-1; optional, additive): the words the new element will say (a theme's or a column's name, a
+     * diagram node's label), drawn in its outline so the person can judge them before Apply.
+     */
+    readonly label?: string
   }[]
+  /**
+   * Wave M (W4, M4-1; optional, additive): the groups the plan makes and how many notes each holds, in order, listed
+   * in the panel as "Sooner (2) · Later (2)". A plan that names no groups shows only its count line.
+   */
+  readonly groups?: readonly { readonly name: string; readonly count: number }[]
 }
 
 /** The person's choice: apply the plan, ask again (a new budgeted call), or drop it. */
@@ -67,6 +78,16 @@ export type AiPreviewChoice = 'apply' | 'retry' | 'discard'
  */
 export function showAiPreview(ctx: CanvasFeatureContext, plan: AiPreviewPlan): Promise<AiPreviewChoice> {
   return showPreview(ctx, plan)
+}
+
+/**
+ * Wave M (W4, M4-2; additive): the toast after an AI result was written outside the AI menus (a diagram), "Made by AI:
+ * …" with an Undo that takes back exactly that step (the menus' own rule: it goes as soon as anything else changes the
+ * board from this tab), and the result's brief highlight. `ids`: what the step made.
+ */
+export function aiResultToast(ctx: CanvasFeatureContext, text: string, ids: readonly string[]): void {
+  setAiCtx(ctx)
+  offerUndoFor(ctx.canvas, text, ids)
 }
 
 // ---- provenance ------------------------------------------------------------------------------------------

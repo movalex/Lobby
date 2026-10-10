@@ -8,13 +8,21 @@
 //
 // One preview at a time per canvas: a second one resolves the first with 'discard'. Escape, closing the board,
 // and losing edit rights (a role change, an archived board) are 'discard' too.
+//
+// Wave M (W4, M4-1): the preview shows what there is to judge. A new element's outline carries its words (a theme's
+// name, a column's heading, a diagram node's label) and the panel names the groups with their notes ("First
+// Thoughts (2) · Next Steps (2)"). The words sit on an opaque surface in theme tokens (accent ink on the surface:
+// 4.5:1 or more in both themes), never under the outlines' see-through tint.
 
 import type { LobbyColorName } from '@draftroom/board-ops/elements'
 import { LOBBY_PALETTE } from '@draftroom/board-ops/elements'
-import { useEffect, useId, useRef } from 'react'
+import { type RefObject, useEffect, useId, useRef } from 'react'
 import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
+import { OBSTACLE_IDS } from '../../../lib/overlay-obstacles.ts'
 import { type Atom, atom, useValue } from '../../../lib/signals.ts'
 import { isTextEntry } from '../../../ui/focus.ts'
+import { boardObstacles } from '../board-chrome.ts'
+import { InPopoverLayer, useBoardPlacement } from '../board-popover.tsx'
 import { SparkIcon } from '../icons.tsx'
 import { useReducedMotion } from './Placeholders.tsx'
 import { perCanvas, setAiCtx } from './runtime.ts'
@@ -33,10 +41,51 @@ export interface PreviewPlan {
     readonly w: number
     readonly h: number
     readonly kind: string
+    /** wave M (M4-1): the words the new element will say, drawn in its outline */
+    readonly label?: string
   }[]
+  /** wave M (M4-1): the groups the plan makes, with how many notes each holds */
+  readonly groups?: readonly { readonly name: string; readonly count: number }[]
 }
 
 export type PreviewChoice = 'apply' | 'retry' | 'discard'
+
+/** One group of a plan as the panel lists it: its name and how many notes go there (null: not said). */
+export interface PreviewGroup {
+  readonly name: string
+  readonly count: number | null
+}
+
+/** Most groups the panel names (the rest are counted: "and 3 more"). */
+export const PREVIEW_MAX_GROUPS = 12
+
+/**
+ * What the panel names (wave M, M4-1; pure): the plan's groups in order, one entry per name (a theme split over
+ * two frames is one theme, its counts added), else the names its new elements carry (no count). Blank names go.
+ */
+export function previewGroups(plan: Pick<PreviewPlan, 'groups' | 'creates'>): PreviewGroup[] {
+  const out = new Map<string, { name: string; count: number | null }>()
+  const add = (raw: string, count: number | null) => {
+    const name = raw.replace(/\s+/g, ' ').trim()
+    if (!name) return
+    const seen = out.get(name)
+    if (!seen) out.set(name, { name, count })
+    else if (count !== null) seen.count = (seen.count ?? 0) + count
+  }
+  if (plan.groups?.length) for (const g of plan.groups) add(g.name, Math.max(0, Math.round(g.count)))
+  else for (const c of plan.creates) if (c.label) add(c.label, null)
+  return [...out.values()]
+}
+
+/** A group as the panel says it: "Sooner (2)", or just "Sooner". */
+export const groupText = (g: PreviewGroup): string => (g.count === null ? g.name : `${g.name} (${g.count})`)
+
+/** The panel's line of groups: "Sooner (2) · Later (2)", "… and 3 more" past PREVIEW_MAX_GROUPS. Empty: none. */
+export function groupsLine(groups: readonly PreviewGroup[]): string {
+  const shown = groups.slice(0, PREVIEW_MAX_GROUPS).map(groupText).join(' · ')
+  const more = groups.length - PREVIEW_MAX_GROUPS
+  return more > 0 ? `${shown} and ${more} more` : shown
+}
 
 interface PreviewEntry {
   readonly plan: PreviewPlan
@@ -90,6 +139,9 @@ export function swatchColor(to: string): string {
   return named?.noteFill ?? named?.solid ?? to
 }
 
+/** A ghost's words fill most of its height (a heading's box at the board's zoom), from 11 px up to 22 px. */
+export const ghostFontSize = (h: number): number => Math.round(Math.max(11, Math.min(22, h * 0.62)))
+
 /** The marks of a plan in overlay pixels (pure: unit-tested), capped at PREVIEW_MAX_MARKS in all. */
 export function previewMarks(
   plan: PreviewPlan,
@@ -100,12 +152,12 @@ export function previewMarks(
   outlines: (Rect & { id: string })[]
   arrows: { x1: number; y1: number; x2: number; y2: number }[]
   swatches: { x: number; y: number; color: string }[]
-  creates: (Rect & { kind: string })[]
+  creates: (Rect & { kind: string; label?: string })[]
 } {
   const outlines: (Rect & { id: string })[] = []
   const arrows: { x1: number; y1: number; x2: number; y2: number }[] = []
   const swatches: { x: number; y: number; color: string }[] = []
-  const creates: (Rect & { kind: string })[] = []
+  const creates: (Rect & { kind: string; label?: string })[] = []
   let left = PREVIEW_MAX_MARKS
   for (const m of plan.moves) {
     if (left <= 0) break
@@ -136,7 +188,8 @@ export function previewMarks(
     if (left <= 0) break
     const px = toPixels({ x: c.x, y: c.y, w: c.w, h: c.h }, toOverlay)
     if (!onScreen(px, screen.width, screen.height)) continue
-    creates.push({ ...px, kind: c.kind })
+    const label = c.label?.replace(/\s+/g, ' ').trim()
+    creates.push({ ...px, kind: c.kind, ...(label ? { label } : {}) })
     left--
   }
   return { outlines, arrows, swatches, creates }
@@ -183,7 +236,6 @@ function PreviewView({ canvas, entry }: { canvas: LobbyCanvas; entry: PreviewEnt
     )
   }, [canvas, entry])
   const marks = JSON.parse(json) as ReturnType<typeof previewMarks>
-  const titleId = useId()
   const panel = useRef<HTMLElement>(null)
   // Losing edit rights while it is open: nothing can be applied.
   useEffect(() => {
@@ -202,21 +254,12 @@ function PreviewView({ canvas, entry }: { canvas: LobbyCanvas; entry: PreviewEnt
     doc.addEventListener('keydown', onKey, true)
     return () => doc.removeEventListener('keydown', onKey, true)
   }, [doc, entry, canvas])
-  useEffect(() => {
-    const el = panel.current
-    if (!el) return
-    const stop = (e: Event) => e.stopPropagation()
-    for (const t of ['pointerdown', 'mousedown', 'keyup', 'wheel'] as const) el.addEventListener(t, stop)
-    el.querySelector<HTMLElement>('[data-testid="ai-preview-apply"]')?.focus({ preventScroll: true })
-    return () => {
-      for (const t of ['pointerdown', 'mousedown', 'keyup', 'wheel'] as const) el.removeEventListener(t, stop)
-    }
-  }, [])
   const choose = (c: PreviewChoice) => {
     entry.choose(c)
     canvas.focus({ preventScroll: true })
   }
   const { plan } = entry
+  const groups = previewGroups(plan)
   return (
     <div className="dr-ai-preview" data-testid="ai-preview" data-motion={still ? 'still' : 'move'}>
       <svg className="dr-ai-preview__marks" aria-hidden="true">
@@ -259,8 +302,21 @@ function PreviewView({ canvas, entry }: { canvas: LobbyCanvas; entry: PreviewEnt
           className="dr-ai-preview__new"
           data-testid="ai-preview-create"
           data-kind={c.kind}
-          style={{ left: c.x, top: c.y, width: c.w, height: c.h }}
-        />
+          data-label={c.label ? '' : undefined}
+          style={{
+            left: c.x,
+            top: c.y,
+            width: c.w,
+            height: c.h,
+            ...(c.label ? { fontSize: ghostFontSize(c.h) } : {}),
+          }}
+        >
+          {c.label ? (
+            <span className="dr-ai-preview__name" data-testid="ai-preview-name">
+              {c.label}
+            </span>
+          ) : null}
+        </span>
       ))}
       {marks.swatches.map((s, i) => (
         <span
@@ -270,55 +326,131 @@ function PreviewView({ canvas, entry }: { canvas: LobbyCanvas; entry: PreviewEnt
           style={{ left: s.x - 10, top: s.y - 10, background: s.color }}
         />
       ))}
-      <section
-        ref={panel}
-        className="dr-ai-preview__panel"
-        role="dialog"
-        aria-labelledby={titleId}
-        data-testid="ai-preview-panel"
-        data-run={plan.runId}
-      >
-        <div className="dr-ai-pop__head">
-          <span className="dr-ai-pop__badge" aria-hidden="true">
-            <SparkIcon size={14} />
-          </span>
-          <h2 id={titleId} className="dr-ai-pop__title">
-            {plan.title}
-          </h2>
-        </div>
-        <p className="dr-ai-preview__summary" data-testid="ai-preview-summary">
-          {plan.summary}
-        </p>
-        <p className="dr-ai-pop__foot">Nothing has changed yet. Apply makes it one step you can undo.</p>
-        <div className="dr-ai-panel__actions">
-          <button
-            type="button"
-            className="dr-btn dr-btn--sm"
-            data-testid="ai-preview-discard"
-            onClick={() => choose('discard')}
-          >
-            Discard
-          </button>
-          <span className="dr-ai-form__spacer" />
-          <button
-            type="button"
-            className="dr-btn dr-btn--sm"
-            data-testid="ai-preview-retry"
-            title="Asks AI again (uses another request)"
-            onClick={() => choose('retry')}
-          >
-            Try again
-          </button>
-          <button
-            type="button"
-            className="dr-btn dr-btn--primary dr-btn--sm"
-            data-testid="ai-preview-apply"
-            onClick={() => choose('apply')}
-          >
-            Apply
-          </button>
-        </div>
-      </section>
+      <InPopoverLayer canvas={canvas}>
+        <PreviewPanel canvas={canvas} plan={plan} groups={groups} panel={panel} choose={choose} />
+      </InPopoverLayer>
     </div>
+  )
+}
+
+/**
+ * The preview's panel (wave M, M4-3): in the popover layer above the board's chrome, placed above the bottom toolbar
+ * and clear of the selection bar and the style panel (it used to sit under the selection bar, which covered its
+ * title and its count line). Its presses and keys stay off the canvas; Apply has the keyboard when it opens.
+ */
+function PreviewPanel({
+  canvas,
+  plan,
+  groups,
+  panel,
+  choose,
+}: {
+  canvas: LobbyCanvas
+  plan: PreviewPlan
+  groups: readonly PreviewGroup[]
+  panel: RefObject<HTMLElement | null>
+  choose(c: PreviewChoice): void
+}) {
+  const titleId = useId()
+  const pos = useBoardPlacement(
+    canvas,
+    panel,
+    () => {
+      const root = canvas.container()
+      if (!root) return null
+      const box = root.getBoundingClientRect()
+      // just above the bottom toolbar (or the region's foot), in the middle
+      const bar = boardObstacles(root.ownerDocument).find((o) => o.id === OBSTACLE_IDS.bottomToolbar)
+      const y = bar ? Math.min(bar.rect.y, box.bottom) : box.bottom - 12
+      return { x: box.left + box.width / 2 - 1, y, width: 2, height: 0 }
+    },
+    { prefer: ['above', 'left', 'right', 'below'] },
+  )
+  useEffect(() => {
+    const el = panel.current
+    if (!el) return
+    const stop = (e: Event) => e.stopPropagation()
+    for (const t of ['pointerdown', 'mousedown', 'keyup', 'wheel'] as const) el.addEventListener(t, stop)
+    return () => {
+      for (const t of ['pointerdown', 'mousedown', 'keyup', 'wheel'] as const) el.removeEventListener(t, stop)
+    }
+  }, [panel])
+  // Apply has the keyboard once the panel is placed (a hidden element takes no focus)
+  const placed = pos !== null
+  useEffect(() => {
+    if (placed)
+      panel.current
+        ?.querySelector<HTMLElement>('[data-testid="ai-preview-apply"]')
+        ?.focus({ preventScroll: true })
+  }, [panel, placed])
+  return (
+    <section
+      ref={panel}
+      className="dr-ai-preview__panel"
+      role="dialog"
+      aria-labelledby={titleId}
+      data-testid="ai-preview-panel"
+      data-run={plan.runId}
+      data-placed={pos ? '' : undefined}
+      style={
+        pos
+          ? { left: pos.left, top: pos.top, bottom: 'auto', transform: 'none', maxHeight: pos.maxHeight }
+          : { visibility: 'hidden' }
+      }
+    >
+      <div className="dr-ai-pop__head">
+        <span className="dr-ai-pop__badge" aria-hidden="true">
+          <SparkIcon size={14} />
+        </span>
+        <h2 id={titleId} className="dr-ai-pop__title">
+          {plan.title}
+        </h2>
+      </div>
+      <p className="dr-ai-preview__summary" data-testid="ai-preview-summary">
+        {plan.summary}
+      </p>
+      {groups.length > 0 && (
+        <p className="dr-ai-preview__groups" data-testid="ai-preview-groups">
+          {groups.slice(0, PREVIEW_MAX_GROUPS).map((g, i) => (
+            <span key={g.name}>
+              {i > 0 ? ' · ' : ''}
+              <span className="dr-ai-preview__group" data-testid="ai-preview-group">
+                {groupText(g)}
+              </span>
+            </span>
+          ))}
+          {groups.length > PREVIEW_MAX_GROUPS ? ` and ${groups.length - PREVIEW_MAX_GROUPS} more` : ''}
+        </p>
+      )}
+      <p className="dr-ai-pop__foot">Nothing has changed yet. Apply makes it one step you can undo.</p>
+      <div className="dr-ai-panel__actions">
+        <button
+          type="button"
+          className="dr-btn dr-btn--sm"
+          data-testid="ai-preview-discard"
+          onClick={() => choose('discard')}
+        >
+          Discard
+        </button>
+        <span className="dr-ai-form__spacer" />
+        <button
+          type="button"
+          className="dr-btn dr-btn--sm"
+          data-testid="ai-preview-retry"
+          title="Asks AI again (uses another request)"
+          onClick={() => choose('retry')}
+        >
+          Try again
+        </button>
+        <button
+          type="button"
+          className="dr-btn dr-btn--primary dr-btn--sm"
+          data-testid="ai-preview-apply"
+          onClick={() => choose('apply')}
+        >
+          Apply
+        </button>
+      </div>
+    </section>
   )
 }

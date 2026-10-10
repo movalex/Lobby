@@ -13,19 +13,31 @@ import {
   AI_PROMPT_MAX_CHARS,
   AI_SETTINGS_EVENT,
 } from '@draftroom/contracts'
-import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import {
+  type ReactNode,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
 import {
   type CanvasFeatureContext,
   items,
   type LobbyCanvas,
   useCanvasFeatureContext,
 } from '../../../canvas/api/index.ts'
+import { linkClick } from '../../../lib/routing.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { isTextEntry, onFocusLeave, trapTab, tryFocus } from '../../../ui/focus.ts'
 import { exportAllowed } from '../../canvas-ux/ported/export-gate.ts'
-import { budgetLine, groupNames, themesHint } from '../copy.ts'
+import { anchorRect } from '../board-chrome.ts'
+import { InPopoverLayer, useBoardPlacement } from '../board-popover.tsx'
+import { budgetLine, groupNames } from '../copy.ts'
 import { ActionIcon, SparkIcon, Spinner } from '../icons.tsx'
 import { runRecap } from '../recap/recap.ts'
+import { askWorkspaceAvailable, subscribeWorkspaceAsk } from '../workspace-ask/client.ts'
 import {
   addSummaryToBoard,
   askAiStatus,
@@ -33,6 +45,7 @@ import {
   closeAiMenu,
   expandTopic,
   mindmapFromPrompt,
+  NOTICE_TITLES,
   refreshAiStatus,
   runAi,
 } from './actions.ts'
@@ -46,9 +59,18 @@ import {
   canAddAnswer,
   showSources,
 } from './ask.ts'
+import {
+  addAnswerReason,
+  addWorkspaceAnswer,
+  aiWorkspaceAnswer,
+  askAllBoards,
+  canAddWorkspaceAnswer,
+  citationHref,
+  type WorkspaceAnswerState,
+} from './ask-all.ts'
 import { canBuildWithAi } from './gate.ts'
+import { aiItemStates } from './menu-model.ts'
 import { AiFlash, AiShimmer } from './Placeholders.tsx'
-import { type PopPlacement, placeAiPopover } from './placement.ts'
 import {
   ACTION_LABELS,
   type AiMenuState,
@@ -63,6 +85,7 @@ import {
   getAiCtx,
   setAiCtx,
 } from './runtime.ts'
+import { boardTarget } from './target.ts'
 
 const docOf = (canvas: LobbyCanvas) => canvas.container()?.ownerDocument ?? document
 
@@ -96,27 +119,15 @@ function useIsolated<T extends HTMLElement>(onKey?: (e: KeyboardEvent) => void) 
 }
 
 /**
- * Below the anchor when it fits, else above, else on the roomier side scrolling inside a max-height; always inside
- * the canvas and never over its anchor while there is room (wave K.1, ./placement.ts).
+ * Wave M (M4-3, FTU-2): below the anchor when it fits, else above, else beside it, clear of the style panel, the
+ * bottom toolbar, the top-centre stack and the selection bar (../board-chrome.ts), scrolling inside a max-height that
+ * stops at the first of them; it opens in the popover layer above the host slots (../board-popover.tsx).
  */
 function usePlacement(canvas: LobbyCanvas, at: AiMenuState['at'], ref: React.RefObject<HTMLElement | null>) {
-  const [pos, setPos] = useState<PopPlacement | null>(null)
-  useLayoutEffect(() => {
-    const el = ref.current
+  return useBoardPlacement(canvas, ref, () => {
     const box = canvas.container()?.getBoundingClientRect()
-    if (!el || !box) return
-    // the content's own height (scrollHeight is not capped by the max-height a previous pass set), with borders
-    const h = el.scrollHeight + (el.offsetHeight - el.clientHeight)
-    const next = placeAiPopover({ box, at, w: el.offsetWidth, h })
-    if (
-      !pos ||
-      Math.abs(pos.left - next.left) > 0.5 ||
-      Math.abs(pos.top - next.top) > 0.5 ||
-      Math.abs(pos.maxHeight - next.maxHeight) > 0.5
-    )
-      setPos(next)
+    return box ? anchorRect(box, at) : null
   })
-  return pos
 }
 
 /** The popover closed from the keyboard (Escape, ×, Cancel): the focus goes back where it came from. */
@@ -314,6 +325,13 @@ function MenuView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: stri
   // Expand and Mind map from a prompt write to the board: only while AI is on, may add and has budget left
   const build = canBuildWithAi(status, readOnly)
   const run = (req: AiRequest) => void runAi(canvas, req, target, { at: menu.at })
+  // M4-5: one model for both menus; a greyed-out item says what it needs; Summarize reads the whole board when
+  // nothing is selected
+  const states = aiItemStates(
+    target,
+    { texts: target.kind === 'none' ? boardTarget(canvas).texts : 0 },
+    { insert },
+  )
   return (
     <>
       <Head titleId={titleId} onClose={onClose}>
@@ -330,14 +348,8 @@ function MenuView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: stri
         )}
         <Item
           action="summarize"
-          hint={
-            target.texts === 0
-              ? 'Nothing with text selected'
-              : insert
-                ? 'Read it first, then add it to the board'
-                : 'A short summary, just for you'
-          }
-          disabled={target.texts === 0}
+          hint={states.summarize.hint}
+          disabled={states.summarize.disabled}
           onClick={() => run({ action: 'summarize' })}
         />
         {status?.canSummarize && (
@@ -372,8 +384,8 @@ function MenuView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: stri
           <>
             <Item
               action="themes"
-              hint={themesHint(target.notes, target.prompts)}
-              disabled={target.notes < 2}
+              hint={states.themes.hint}
+              disabled={states.themes.disabled}
               onClick={() =>
                 target.groups.length
                   ? aiMenu(canvas).set({ ...menu, view: 'regroup' })
@@ -382,8 +394,8 @@ function MenuView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: stri
             />
             <Item
               action="actions"
-              hint={target.texts === 0 ? 'Nothing with text selected' : 'Next steps and owners as new notes'}
-              disabled={target.texts === 0}
+              hint={states.actions.hint}
+              disabled={states.actions.disabled}
               onClick={() => run({ action: 'actions' })}
             />
             <Item
@@ -617,13 +629,24 @@ function AskView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: strin
   const ctx = useCanvasFeatureContext()
   const { canvas } = ctx
   const [question, setQuestion] = useState(menu.question ?? '')
+  // M4-6: "This board / All boards", only while asking all boards is offered here (W8's client: it goes after a 404)
+  const offered = useSyncExternalStore(subscribeWorkspaceAsk, askWorkspaceAvailable, () => false)
+  const [scope, setScope] = useState<'board' | 'all'>('board')
+  const all = offered && scope === 'all'
   const inputId = useId()
+  const scopeName = useId()
   const trimmed = question.trim()
   const about = menu.target.kind === 'none' ? 'the whole board' : menu.target.label
   return (
     <>
       <Head titleId={titleId} onClose={onClose}>
-        Ask this board <span className="dr-ai-pop__about">· {about}</span>
+        {all ? (
+          'Ask all boards'
+        ) : (
+          <>
+            Ask this board <span className="dr-ai-pop__about">· {about}</span>
+          </>
+        )}
       </Head>
       <form
         className="dr-ai-form"
@@ -631,9 +654,28 @@ function AskView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: strin
           e.preventDefault()
           if (!trimmed) return
           closeAiMenu(canvas, false)
-          void askBoard(ctx, trimmed, menu.target)
+          if (all) void askAllBoards(ctx, trimmed)
+          else void askBoard(ctx, trimmed, menu.target)
         }}
       >
+        {offered && (
+          <fieldset className="dr-ai-seg dr-ai-ask__scope" data-testid="ai-ask-scope">
+            <legend className="dr-sr-only">Ask</legend>
+            {(['board', 'all'] as const).map((s) => (
+              <label key={s} className="dr-ai-seg__opt" data-checked={scope === s ? '' : undefined}>
+                <input
+                  type="radio"
+                  name={scopeName}
+                  value={s}
+                  data-testid={`ai-ask-scope-${s}`}
+                  checked={scope === s}
+                  onChange={() => setScope(s)}
+                />
+                <span>{s === 'board' ? 'This board' : 'All boards'}</span>
+              </label>
+            ))}
+          </fieldset>
+        )}
         <label htmlFor={inputId} className="dr-ai-form__label">
           What do you want to know?
         </label>
@@ -668,7 +710,9 @@ function AskView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: strin
         </div>
       </form>
       <p className="dr-ai-pop__foot">
-        The answer comes only from the board’s text, with its sources. Only you see it.
+        {all
+          ? 'The answer comes from the boards you can open, with links to its sources. Only you see it.'
+          : 'The answer comes only from the board’s text, with its sources. Only you see it.'}
       </p>
     </>
   )
@@ -715,10 +759,20 @@ function NoticeView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: st
   const what = asked
     ? asked.what
     : menu.target.kind === 'none'
-      ? 'your prompt'
+      ? pending?.action === 'summarize'
+        ? 'the text on the board'
+        : 'your prompt'
       : into?.kind === 'expand'
         ? `the words of ${menu.target.label}, the topics it sits under and the ones below it`
         : `the text of ${menu.target.label}${pending?.action === 'ideas' ? ' and your prompt' : ''}`
+  // M4-5: "the selected text" only when the selection is what is sent
+  const title =
+    asked?.title ??
+    (menu.target.kind !== 'none'
+      ? NOTICE_TITLES.selected
+      : pending?.action === 'summarize'
+        ? NOTICE_TITLES.board
+        : NOTICE_TITLES.words)
   const verb = asked
     ? asked.verb
     : into
@@ -731,7 +785,7 @@ function NoticeView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: st
   return (
     <>
       <Head titleId={titleId} onClose={onClose}>
-        Sends the selected text to OpenAI
+        {title}
       </Head>
       <div className="dr-ai-notice" data-testid="ai-notice">
         <p>
@@ -1144,6 +1198,194 @@ function AnswerView({ state }: { state: AiAnswerState }) {
   )
 }
 
+/**
+ * Wave M (M4-6): the private answer across boards. Its numbered chips name the cited boards and open each at its cited
+ * elements (`?el=`; this board's own citation shows them here, the camera only); "Add answer to board" only when every
+ * cited board allows copying out of it (the answer says so), else it says why.
+ */
+function WorkspaceAnswerPanel() {
+  const { canvas } = useCanvasFeatureContext()
+  const state = useValue('lobby-ai-workspace-answer', () => aiWorkspaceAnswer(canvas).get(), [canvas])
+  // one private panel at a time: this board's answer replaces the one across boards
+  const boardAnswer = useValue('lobby-ai-answer-open', () => aiAnswer(canvas).get() !== null, [canvas])
+  useEffect(() => {
+    if (boardAnswer) aiWorkspaceAnswer(canvas).set(null)
+  }, [boardAnswer, canvas])
+  if (!state) return null
+  return <WorkspaceAnswerView state={state} />
+}
+
+function WorkspaceAnswerView({ state }: { state: WorkspaceAnswerState }) {
+  const ctx = useCanvasFeatureContext()
+  const { canvas } = ctx
+  const ref = useIsolated<HTMLElement>()
+  const titleId = useId()
+  const [copied, setCopied] = useState(false)
+  const canAdd = useValue(
+    'lobby-ai-workspace-answer-add',
+    () => canAddWorkspaceAnswer(canvas, aiWorkspaceAnswer(canvas).get()),
+    [canvas],
+  )
+  const editor = useValue(
+    'lobby-ai-workspace-answer-editor',
+    () => !canvas.readOnly() && aiStatus(canvas).get()?.canInsert === true,
+    [canvas],
+  )
+  const canCopyHere = useValue('lobby-ai-workspace-answer-copy', () => exportAllowed(ctx), [ctx])
+  const close = () => {
+    const hadFocus = !!ref.current?.contains(docOf(canvas).activeElement)
+    aiWorkspaceAnswer(canvas).set(null)
+    if (hadFocus) canvas.focus({ preventScroll: true })
+  }
+  const closeRef = useRef(close)
+  closeRef.current = close
+  const ctxRef = useRef(ctx)
+  ctxRef.current = ctx
+  useEffect(() => {
+    const doc = docOf(canvas)
+    const onKey = (e: KeyboardEvent) => {
+      if (!escapeIsOurs(ctxRef.current, e, ref.current)) return
+      e.preventDefault()
+      e.stopPropagation()
+      closeRef.current()
+    }
+    doc.addEventListener('keydown', onKey, true)
+    return () => doc.removeEventListener('keydown', onKey, true)
+  }, [canvas, ref])
+  const r = state.result
+  const citations = r?.citations ?? []
+  const none = r?.found === 'no' || (r !== null && !answerText(r.answer))
+  const reason = addAnswerReason(state)
+  /** A citation chip: this board's shows its elements here; another board's opens it at them. */
+  const cite = (n: number, children: ReactNode, className: string, testId: string) => {
+    const c = citations[n - 1]
+    if (!c) return null
+    const href = citationHref(c)
+    const here = c.boardId === ctx.board.id
+    return (
+      <a
+        href={href}
+        className={className}
+        data-testid={testId}
+        data-n={n}
+        data-board={c.boardId}
+        aria-label={here ? `Source ${n}: show it on this board` : `Source ${n}: open ${c.boardTitle}`}
+        onClick={(e) => {
+          if (here) {
+            e.preventDefault()
+            showSources(canvas, c.elementIds)
+            return
+          }
+          linkClick(href)(e)
+        }}
+      >
+        {children}
+      </a>
+    )
+  }
+  return (
+    <section
+      ref={ref}
+      className="dr-ai-panel dr-ai-answer"
+      role="dialog"
+      aria-labelledby={titleId}
+      aria-busy={state.status === 'asking'}
+      data-testid="ai-workspace-answer-panel"
+      data-found={r?.found ?? 'pending'}
+    >
+      <div className="dr-ai-pop__head">
+        <span className="dr-ai-pop__badge" aria-hidden="true">
+          <SparkIcon size={14} />
+        </span>
+        <h2 id={titleId} className="dr-ai-pop__title">
+          All boards <span className="dr-ai-pop__about">· {state.question}</span>
+        </h2>
+        <button type="button" className="dr-iconbtn dr-iconbtn--sm" aria-label="Close answer" onClick={close}>
+          ×
+        </button>
+      </div>
+      {state.status === 'asking' ? (
+        <div aria-hidden="true">
+          <span className="dr-ai-line dr-ai-line--long" />
+          <span className="dr-ai-line" />
+        </div>
+      ) : none ? (
+        <p className="dr-ai-panel__text" data-testid="ai-workspace-answer-none" role="status">
+          Your boards don’t say.
+        </p>
+      ) : (
+        <p className="dr-ai-panel__text" data-testid="ai-workspace-answer-text" role="status">
+          {answerParts(r?.answer ?? '', citations.length).map((part, i) =>
+            'cite' in part ? (
+              <span key={i}>{cite(part.cite, part.cite, 'dr-ai-cite', 'ai-workspace-cite')}</span>
+            ) : (
+              <span key={i}>{part.text}</span>
+            ),
+          )}
+        </p>
+      )}
+      {!none && citations.length > 0 && (
+        <ol className="dr-ai-sources" aria-label="Sources">
+          {citations.map((c, i) => (
+            <li key={`${c.boardId}-${i}`}>
+              {cite(
+                i + 1,
+                <>
+                  <span className="dr-ai-cite" aria-hidden="true">
+                    {i + 1}
+                  </span>
+                  {c.boardId === ctx.board.id ? `This board · ${c.boardTitle}` : c.boardTitle}
+                </>,
+                'dr-ai-sources__btn',
+                'ai-workspace-source',
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
+      <p className="dr-ai-pop__foot">
+        Only you can see this. Written by AI from the boards you can open: check its sources.
+      </p>
+      {state.status === 'done' && !none && (
+        <div className="dr-ai-panel__actions">
+          {r?.exportAllowed && canCopyHere && (
+            <button
+              type="button"
+              className="dr-btn dr-btn--sm"
+              data-testid="ai-workspace-answer-copy"
+              onClick={() => {
+                void navigator.clipboard?.writeText(answerText(r?.answer ?? '')).then(
+                  () => setCopied(true),
+                  () => setCopied(false),
+                )
+              }}
+            >
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          )}
+          {editor && (
+            <button
+              type="button"
+              className="dr-btn dr-btn--primary dr-btn--sm"
+              data-testid="ai-workspace-answer-add"
+              disabled={!canAdd}
+              title={reason ?? undefined}
+              onClick={() => addWorkspaceAnswer(ctx)}
+            >
+              Add answer to board
+            </button>
+          )}
+        </div>
+      )}
+      {editor && reason && (
+        <p className="dr-ai-pop__foot" data-testid="ai-workspace-answer-reason">
+          {reason}
+        </p>
+      )}
+    </section>
+  )
+}
+
 export function AiOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
   const { canvas } = ctx
   useLayoutEffect(() => {
@@ -1190,12 +1432,17 @@ export function AiOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
   if (!enabled) return null
   return (
     <div className="dr-ai-overlay" data-testid="ai-overlay">
-      {menu && <AiPopover key={`${menu.view}`} menu={menu} />}
+      {menu && (
+        <InPopoverLayer canvas={canvas}>
+          <AiPopover key={`${menu.view}`} menu={menu} />
+        </InPopoverLayer>
+      )}
       <AiShimmer canvas={canvas} />
       <Busy />
       <SummaryPending />
       <SummaryPanel onAnnounce={setSaid} />
       <AnswerPanel />
+      <WorkspaceAnswerPanel />
       <AiFlash canvas={canvas} />
       <p className="dr-sr-only" role="status" data-testid="ai-summary-status">
         {said}

@@ -11,6 +11,7 @@
 import { AI_ASK_QUESTION_MAX, AI_MAX_REQUEST_SHAPES, type AiResult } from '@draftroom/contracts'
 import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { type Atom, atom } from '../../../lib/signals.ts'
+import { countUsage } from '../../../lib/usage.ts'
 import { cut } from '../copy.ts'
 import { offerUndoFor, runPublic } from './actions.ts'
 import { applyNotes } from './apply.ts'
@@ -63,6 +64,7 @@ export async function askBoard(ctx: CanvasFeatureContext, question: string, targ
     running.abort.abort()
     aiJob(canvas).set(null)
   }
+  countUsage('ai.ask.scope:board')
   const mine: AiAnswerState = { question: q, status: 'asking', result: null, target }
   aiAnswer(canvas).set(mine)
   // one private panel at a time: the summary or a recap closes

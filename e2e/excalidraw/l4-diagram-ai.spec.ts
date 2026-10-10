@@ -1,5 +1,5 @@
 // L4-2 (wave L, W4): Diagram from words on the Excalidraw board page, the api running with the AI fake
-// (support/ai.ts). A viewer has no "Diagram from words…" entry (an editor has). With the fake, a 40-node answer
+// (support/ai.ts). A viewer has no "Diagram from words…" entry (an editor has, under AI › since wave M). With the fake, a 40-node answer
 // becomes 40 native shapes with bound elbow connectors, after W2's shared preview (over 20 elements), every element
 // stamped with its provenance, all accepted by the server (no rejection), every connector the room's re-snap.
 //
@@ -56,7 +56,12 @@ test('L4-2: a viewer has no "Diagram from words…" entry; an editor has', async
     await s.page.mouse.click(box.x + box.width * 0.6, box.y + box.height * 0.6, { button: 'right' })
     await expect(s.page.getByTestId('context-menu-root')).toBeVisible()
   }
+  // wave M (M4-5): the entry sits inside AI ›
+  await expect(a.page.getByRole('menuitem', { name: /Diagram from words/ })).toHaveCount(0)
+  await a.page.getByRole('menuitem', { name: 'AI', exact: true }).click()
   await expect(a.page.getByRole('menuitem', { name: /Diagram from words/ })).toBeVisible()
+  const viewerAi = v.page.getByRole('menuitem', { name: 'AI', exact: true })
+  if (await viewerAi.count()) await viewerAi.click()
   await expect(v.page.getByRole('menuitem', { name: /Diagram from words/ })).toHaveCount(0)
 })
 
@@ -83,6 +88,7 @@ test('L4-2: a 40-node AI diagram is accepted by the server with 0 rejections, wi
   await canvasCall(a.page, 'select', [note])
   const at = await itemCenterOnScreen(a.page, note)
   await a.page.mouse.click(at.x, at.y, { button: 'right' })
+  await a.page.getByRole('menuitem', { name: 'AI', exact: true }).click()
   await a.page.getByRole('menuitem', { name: /Diagram from words/ }).click()
   await a.page.getByTestId('diagram-prompt-text').fill('Brief, concept, review, ship')
   await a.page.getByTestId('diagram-prompt-create').click()

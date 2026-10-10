@@ -7,7 +7,10 @@
 // Wave L: W2 owns this kit. The fake's canned answers for the six new actions (recap, ask, command, diagram,
 // sort, score) are in ../tests/support/ai.ts `waveLAnswer` (the fake server's own file; re-exported here),
 // keyed by the response schema names below.
-import { expect, type Page, type Route } from '@playwright/test'
+//
+// Wave M: W4 owns this kit. Its m4 specs' page measures (contrastOf, hitTestable, elementAt) and the foundation's
+// Ask-across-boards fakes (fakeWorkspaceAsk, cannedWorkspaceAsk, forceWorkspaceAsk) are at the end.
+import { expect, type Locator, type Page, type Route } from '@playwright/test'
 import type { WorkspaceAskHookOutcome } from '../../apps/web/src/features/ai/workspace-ask/dev-hook-types.ts'
 import { installServerTextMetrics } from '../../packages/canvas-schema/src/engine/index.ts'
 import type { Ack, Welcome } from '../../packages/canvas-schema/src/protocol.ts'
@@ -879,6 +882,67 @@ export async function forceWorkspaceAsk(page: Page, on: boolean | null): Promise
   await page.waitForFunction(() => !!window.__lobbyWorkspaceAsk, undefined, { timeout: 30_000 })
   await page.evaluate((v) => window.__lobbyWorkspaceAsk?.force(v), on)
 }
+
+// ---- wave M (W4): what the m4 specs measure on the page -------------------------------------------------------
+
+/**
+ * The WCAG contrast ratio of `locator`'s text against what is painted behind it: its own background, else the
+ * first ancestor's that is opaque (a see-through colour is laid over the ones under it). Computed styles only.
+ */
+export const contrastOf = (locator: Locator): Promise<number> =>
+  locator.evaluate((el) => {
+    const parse = (s: string): [number, number, number, number] | null => {
+      const m = /rgba?\(([^)]+)\)/.exec(s)
+      if (!m) return null
+      const p = (m[1] ?? '')
+        .split(/[\s,/]+/)
+        .filter(Boolean)
+        .map(Number)
+      return [p[0] ?? 0, p[1] ?? 0, p[2] ?? 0, p[3] ?? 1]
+    }
+    const over = (top: number[], under: number[]) =>
+      [0, 1, 2].map((i) => (top[i] ?? 0) * (top[3] ?? 1) + (under[i] ?? 0) * (1 - (top[3] ?? 1)))
+    // the backgrounds from the element up to the first opaque one, then laid over each other
+    const layers: number[][] = []
+    for (let n: Element | null = el; n; n = n.parentElement) {
+      const bg = parse(getComputedStyle(n).backgroundColor)
+      if (bg && bg[3] > 0) layers.push(bg)
+      if (bg && bg[3] >= 1) break
+    }
+    let back = [255, 255, 255]
+    for (const l of layers.reverse()) back = over(l, back)
+    const cs = getComputedStyle(el)
+    const fg = parse(cs.color) ?? [0, 0, 0, 1]
+    const ink = over(fg, back)
+    const lin = (v: number) => {
+      const s = v / 255
+      return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+    }
+    const lum = (c: number[]) => 0.2126 * lin(c[0] ?? 0) + 0.7152 * lin(c[1] ?? 0) + 0.0722 * lin(c[2] ?? 0)
+    // an element drawn see-through (opacity) shows the canvas through it: the ratio is that of what is painted
+    let alpha = 1
+    for (let n: Element | null = el; n; n = n.parentElement) alpha *= Number(getComputedStyle(n).opacity || 1)
+    const a = lum(over([...ink, alpha], back))
+    const b = lum(back)
+    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
+  })
+
+/** Whether a press at the middle of `locator` lands on it (document.elementFromPoint is it or inside it). */
+export const hitTestable = (locator: Locator): Promise<boolean> =>
+  locator.evaluate((el) => {
+    const r = el.getBoundingClientRect()
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+    return !!hit && (hit === el || el.contains(hit))
+  })
+
+/** The element a press at client point `p` lands on, as `tag#testid.class` (for a failure's message). */
+export const elementAt = (page: Page, p: { x: number; y: number }): Promise<string> =>
+  page.evaluate(({ x, y }) => {
+    const hit = document.elementFromPoint(x, y)
+    if (!hit) return 'nothing'
+    const id = hit.getAttribute('data-testid')
+    return `${hit.tagName.toLowerCase()}${id ? `#${id}` : ''}${hit.classList.length ? `.${[...hit.classList].join('.')}` : ''}`
+  }, p)
 
 /** askWorkspaceAvailable() in the page. */
 export const workspaceAskAvailable = (page: Page): Promise<boolean> =>

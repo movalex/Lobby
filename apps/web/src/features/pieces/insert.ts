@@ -2,14 +2,20 @@
 // the piece's elements are built with fresh ids (`@draftroom/templates/pieces`, loaded the first time), placed,
 // and written in ONE `transact` through `tx.insert`, so one Ctrl+Z takes the whole piece away and the room
 // validates every element as it would any other. Where it goes:
-//  - a click, Enter or a command: centred on the middle of the view; inserting the same piece again nudges it
-//    down and to the right, so a row of buttons is not one button on top of another;
-//  - a drop: centred on the pointer.
-// Either way it joins the unlocked frame under that point (every element of it gets the frame's id), unless it
-// is a frame itself (a swimlane: frames do not nest) or the frame is locked (a locked frame takes nothing new).
+//  - a click, Enter or a command (wave M, M4-4, FTU-8): the free spot nearest the middle of the view, clear of
+//    frames and of what is on the board (the AI's own spot finder, ../ai/ported/apply.ts spotNear), on the open
+//    canvas: it never joins a frame it was not dropped in (a Decision used to land inside a 2x2, on its axes);
+//    inserting the same piece again finds the next free spot;
+//  - a drop: centred on the pointer, and it joins the unlocked frame under the pointer (every element of it gets
+//    the frame's id), unless it is a frame itself (a swimlane: frames do not nest) or the frame is locked (a locked
+//    frame takes nothing new).
+// Then this tab's camera shows it whole, clear of the board's chrome (../ai/reveal.ts; the camera only).
 import { MAX_ITEMS } from '@draftroom/canvas-schema/limits'
 import type { PieceId } from '@draftroom/templates/pieces/catalog'
 import { type Bounds, type CanvasElement, geometry, items, type LobbyCanvas } from '../../canvas/api/index.ts'
+import { countUsage } from '../../lib/usage.ts'
+import { spotNear } from '../ai/ported/apply.ts'
+import { revealResult } from '../ai/reveal.ts'
 
 export type InsertPieceResult =
   | { ok: true; ids: string[]; bounds: Bounds; frameId: string | null }
@@ -59,21 +65,6 @@ function topIndex(canvas: LobbyCanvas): string | null {
   return top
 }
 
-const NUDGE = 24
-
-/** Down and right from `topLeft` until no earlier copy of this piece sits there. */
-function clearOfCopies(canvas: LobbyCanvas, kind: string, topLeft: { x: number; y: number }) {
-  const copies = canvas.items().filter((e) => items.lobbyValue(e, 'kind') === kind)
-  const at = { ...topLeft }
-  for (let i = 0; i < 20; i++) {
-    const taken = copies.some((e) => Math.abs(e.x - at.x) < 2 && Math.abs(e.y - at.y) < 2)
-    if (!taken) break
-    at.x += NUDGE
-    at.y += NUDGE
-  }
-  return at
-}
-
 export interface InsertPieceOptions {
   /** the pointer (a drop): the piece is centred on it. Default: the middle of the view. */
   readonly at?: { x: number; y: number } | null
@@ -94,18 +85,17 @@ export async function insertPiece(
     const info = mod.pieceInfo(id)
     if (!info) return { ok: false, reason: 'unknown' }
     if (canvas.readOnly()) return { ok: false, reason: 'readonly' }
-    const v = canvas.viewport.get()
-    const centre = opts.at ?? { x: v.x + v.width / 2, y: v.y + v.height / 2 }
     // measure at the origin (the size the layout really gives), then build at the place
     const probe = mod.instantiatePiece(id, { origin: { x: 0, y: 0 } })
-    let topLeft = {
-      x: Math.round(centre.x - probe.bounds.w / 2 - probe.bounds.x),
-      y: Math.round(centre.y - probe.bounds.h / 2 - probe.bounds.y),
-    }
-    if (!opts.at) topLeft = clearOfCopies(canvas, mod.pieceKind(id), topLeft)
+    const drop = opts.at ?? null
+    // a drop: centred on the pointer; else the free spot nearest the middle of the view, on the open canvas
+    const at = drop
+      ? { x: drop.x - probe.bounds.w / 2, y: drop.y - probe.bounds.h / 2 }
+      : spotNear(canvas, { w: probe.bounds.w, h: probe.bounds.h }, [])
+    const topLeft = { x: Math.round(at.x - probe.bounds.x), y: Math.round(at.y - probe.bounds.y) }
     const piece = mod.instantiatePiece(id, { origin: topLeft, indexAbove: topIndex(canvas) })
-    // the unlocked frame under the point takes it (not a frame of its own: frames do not nest)
-    const frame = piece.frame ? null : frameAtPoint(canvas, centre)
+    // only a drop joins the unlocked frame under the pointer (not a frame of its own: frames do not nest)
+    const frame = piece.frame || !drop ? null : frameAtPoint(canvas, drop)
     const frameId = frame && !canvas.isLocked(frame.id) ? frame.id : null
     const elements = frameId ? piece.elements.map((e) => ({ ...e, frameId })) : piece.elements
     const outer = elements.filter((e) => !(e.type === 'text' && e.containerId))
@@ -114,13 +104,11 @@ export async function insertPiece(
     canvas.transact(`insert ${info.name.toLowerCase()}`, (tx) => tx.insert(elements))
     const present = piece.topLevelIds.filter((x) => live(canvas.get(x)))
     if (present.length !== piece.topLevelIds.length) return { ok: false, reason: 'failed' }
+    countUsage('pieces.insert')
     if (opts.select !== false) canvas.select(piece.topLevelIds)
     const bounds = { x: piece.bounds.x, y: piece.bounds.y, width: piece.bounds.w, height: piece.bounds.h }
-    try {
-      canvas.viewport.ensureVisible(bounds, { animate: true })
-    } catch {
-      // the camera is not the board
-    }
+    // shown whole, clear of the board's chrome (this tab's camera only)
+    void revealResult(canvas, piece.topLevelIds)
     return { ok: true, ids: piece.topLevelIds, bounds, frameId }
   } catch (e) {
     console.error('piece insert failed', e)

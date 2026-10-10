@@ -1,8 +1,12 @@
 // L8-3: a small drawing of a piece for the panel's list: its real elements (the same ones that would be
-// inserted) drawn as plain shapes on a fixed light paper, so it reads the same in both themes. Words are shown
-// as short bars, not text: at this size they are only a texture. Built once per piece, after the builders load.
+// inserted) drawn as plain shapes. Words are shown as short bars, not text: at this size they are only a texture.
+// Built once per piece, after the builders load.
+//
+// Wave M (M4-6, FTU-9): in the light theme it is drawn in the piece's own colours on a light paper; in the dark theme
+// (./pieces.css) the paper is the panel's own recessed surface, the lines and bars take the theme's ink tokens, and
+// each fill is its own colour mixed into that surface (from `--pf`), so no card is a white block in a dark panel.
 import type { PieceInfo } from '@draftroom/templates/pieces/catalog'
-import { memo, type ReactNode } from 'react'
+import { type CSSProperties, memo, type ReactNode } from 'react'
 
 /** The parts of an element the drawing reads. */
 export interface PreviewEl {
@@ -24,10 +28,14 @@ export interface PreviewEl {
 
 const none = (c: string) => (c === 'transparent' ? 'none' : c)
 
+/** A fill the dark theme can mix into its surface (`--pf`, ./pieces.css), as an inline custom property. */
+const fillVar = (fill: string) => (fill === 'none' ? undefined : ({ '--pf': fill } as CSSProperties))
+
 /** One element as SVG, in the piece's own units (null for a bound label: its container shows it). */
 export function drawn(el: PreviewEl, key: number): ReactNode {
   const stroke = none(el.strokeColor)
   const fill = none(el.backgroundColor)
+  const look = { className: fill === 'none' ? 'dr-pp-line' : 'dr-pp-shape', style: fillVar(fill) }
   const dash = el.strokeStyle === 'dashed' ? '6 5' : undefined
   switch (el.type) {
     case 'rectangle':
@@ -44,6 +52,7 @@ export function drawn(el: PreviewEl, key: number): ReactNode {
           stroke={el.type === 'frame' ? '#7d8799' : stroke}
           strokeWidth={2}
           strokeDasharray={el.type === 'frame' ? '8 6' : dash}
+          {...(el.type === 'frame' ? { className: 'dr-pp-frame' } : look)}
         />
       )
     case 'ellipse':
@@ -57,6 +66,7 @@ export function drawn(el: PreviewEl, key: number): ReactNode {
           fill={fill}
           stroke={stroke}
           strokeWidth={2}
+          {...look}
         />
       )
     case 'diamond': {
@@ -68,13 +78,22 @@ export function drawn(el: PreviewEl, key: number): ReactNode {
           fill={fill}
           stroke={stroke}
           strokeWidth={2}
+          {...look}
         />
       )
     }
     case 'line': {
       const pts = (el.points ?? []).map(([px, py]) => `${el.x + px},${el.y + py}`).join(' ')
       return (
-        <polyline key={key} points={pts} fill={fill} stroke={stroke} strokeWidth={2} strokeLinejoin="round" />
+        <polyline
+          key={key}
+          points={pts}
+          fill={fill}
+          stroke={stroke}
+          strokeWidth={2}
+          strokeLinejoin="round"
+          {...look}
+        />
       )
     }
     case 'text': {
@@ -94,6 +113,7 @@ export function drawn(el: PreviewEl, key: number): ReactNode {
           rx={h / 2}
           fill={stroke === 'none' ? '#5f6b7a' : stroke}
           opacity={0.55}
+          className="dr-pp-text"
         />
       ))
     }

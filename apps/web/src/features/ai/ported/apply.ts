@@ -355,7 +355,13 @@ export interface ThemesOutcome {
 function themesPlans(
   canvas: LobbyCanvas,
   themes: readonly AiTheme[],
-): { plans: ThemesPlan[]; wanted: number; all: CanvasElement[] } | null {
+): {
+  plans: ThemesPlan[]
+  wanted: number
+  all: CanvasElement[]
+  /** each theme that keeps a note, in the plan's order, with how many of its notes are grouped (M4-1) */
+  groups: { name: string; count: number }[]
+} | null {
   const seen = new Set<string>()
   const groups = themes
     .map((t, theme) => ({
@@ -392,19 +398,21 @@ function themesPlans(
       return mine.length ? planThemes(canvas, spaceOf(frame, index), mine) : null
     })
     .filter((p): p is ThemesPlan => p !== null)
-  return { plans, wanted, all }
+  return { plans, wanted, all, groups: groups.map((g) => ({ name: g.name, count: g.notes.length })) }
 }
 
 /** The preview of a themes result (L2-1b): where each note goes and where each label lands; nothing written. */
 export interface ThemesPreview {
   /** each moving note's new top-left (scene units) */
   moves: { id: string; x: number; y: number }[]
-  /** the theme labels' boxes (scene units) */
-  labels: { x: number; y: number; w: number; h: number }[]
+  /** the theme labels' boxes (scene units) and their words (M4-1: the preview draws them) */
+  labels: { x: number; y: number; w: number; h: number; name: string }[]
   notes: number
   themes: number
   /** a frame grows to hold the clusters */
   grows: boolean
+  /** M4-1: the themes in order, with how many notes each groups ("First Thoughts (2) · Next Steps (2)") */
+  groups: { name: string; count: number }[]
 }
 
 /** "Group into themes" as it would land right now, for the preview (null: none of the notes can move). */
@@ -417,7 +425,13 @@ export function previewThemes(canvas: LobbyCanvas, themes: readonly AiTheme[]): 
     const { space } = plan
     for (const m of plan.moves) moves.push({ id: m.el.id, x: m.el.x + m.dx, y: m.el.y + m.dy })
     for (const l of plan.labels)
-      labels.push({ x: space.ox + l.x, y: space.oy + l.y, w: l.block.width, h: l.block.height })
+      labels.push({
+        x: space.ox + l.x,
+        y: space.oy + l.y,
+        w: l.block.width,
+        h: l.block.height,
+        name: l.name,
+      })
   }
   return {
     moves,
@@ -425,6 +439,7 @@ export function previewThemes(canvas: LobbyCanvas, themes: readonly AiTheme[]): 
     notes: planned.all.length,
     themes: new Set(planned.plans.flatMap((p) => p.labels.map((l) => l.theme))).size,
     grows: planned.plans.some((p) => p.grow !== null),
+    groups: planned.groups,
   }
 }
 
