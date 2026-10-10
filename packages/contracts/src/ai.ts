@@ -612,3 +612,57 @@ export function splitThemeNotes<T>(
     return { ideas: team, prompts: [...marked, ...rest.filter((n) => !isTeamNote(facts(n)))] }
   return { ideas: rest, prompts: marked }
 }
+
+// ---- Ask across boards (wave M, L-AI-8 / M8-2; routes W8, frozen by the wave M foundation) ----------------
+//
+//   POST /api/workspaces/:wid/ai/ask  WorkspaceAskRequest → 200 WorkspaceAskResponse
+//
+// A workspace member who is not a name-only guest (guests: 403 GUEST_ACCOUNT_REQUIRED before any read) asks one
+// question of the boards they can view right now (search's scope: viewable, not trashed), canvas text only.
+// Boards where AI is off for them (aiGateFor: the board switch, mayExport) are left out without a word. The same
+// per-minute and per-hour limits, notice and ledger as /ai/run (ledger action 'workspace-ask', board 'ws:<wid>').
+// Citations name only boards and elements that were sent; titles are read at answer time under the same scope.
+// Until W8 implements it the route is not registered (404 NOT_FOUND), and the web's askWorkspaceAvailable()
+// answers false (apps/web/src/features/ai/workspace-ask/client.ts).
+
+export const WORKSPACE_ASK_ROUTE = '/api/workspaces/:wid/ai/ask'
+export const workspaceAskPath = (workspaceId: string) =>
+  `/api/workspaces/${encodeURIComponent(workspaceId)}/ai/ask`
+/** The ledger's action name for an ask across boards (AI_LEDGER_ACTION_PATTERN). */
+export const WORKSPACE_ASK_LEDGER_ACTION = 'workspace-ask'
+/** Boards read per question, and search entries per board. */
+export const WORKSPACE_ASK_MAX_BOARDS = 8
+export const WORKSPACE_ASK_MAX_ENTRIES_PER_BOARD = 30
+/** The prompt's board text, at most (characters). */
+export const WORKSPACE_ASK_INPUT_CAP_CHARS = 12_000
+/** Cited boards per answer, and element ids per cited board. */
+export const WORKSPACE_ASK_MAX_CITATIONS = AI_CITATIONS_MAX
+export const WORKSPACE_ASK_MAX_IDS_PER_CITATION = 20
+/** An element id as the board's deep link reads it (canvas-schema limits.ts ELEMENT_ID_PATTERN; checked by a test). */
+export const WORKSPACE_ASK_ELEMENT_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,120}$/
+
+export const WorkspaceAskRequest = z.strictObject({
+  question: z.string().trim().min(1).max(AI_ASK_QUESTION_MAX),
+  /** "Sends the text of your boards to OpenAI" confirmed (the first ask per person per workspace needs it). */
+  acknowledged: z.boolean().optional(),
+})
+export type WorkspaceAskRequest = z.infer<typeof WorkspaceAskRequest>
+
+export const WorkspaceAskCitation = z.object({
+  boardId: z.string().regex(/^[a-z0-9][a-z0-9_-]{2,63}$/),
+  boardTitle: z.string(),
+  elementIds: z
+    .array(z.string().regex(WORKSPACE_ASK_ELEMENT_ID_PATTERN))
+    .max(WORKSPACE_ASK_MAX_IDS_PER_CITATION),
+})
+export type WorkspaceAskCitation = z.infer<typeof WorkspaceAskCitation>
+
+export const WorkspaceAskResponse = z.object({
+  answer: z.string().max(AI_ANSWER_MAX_CHARS),
+  /** 'no': the boards do not say. */
+  found: z.enum(['yes', 'partial', 'no']),
+  citations: z.array(WorkspaceAskCitation).max(WORKSPACE_ASK_MAX_CITATIONS),
+  /** Every cited board allows this person to copy out of it (mayExport and the internal-only fence): "Add answer to board". */
+  exportAllowed: z.boolean(),
+})
+export type WorkspaceAskResponse = z.infer<typeof WorkspaceAskResponse>

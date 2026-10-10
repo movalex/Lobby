@@ -304,6 +304,8 @@ export type ErrorBody = z.infer<typeof ErrorBody>
 
 // Feature schemas (docs/FEATURES-M2-CONTRACTS.md): one file per feature, owned by that feature.
 export * from './ai.ts'
+// wave M foundation (W5 owns these after it): the board-open read, usage counters, workspace templates
+export * from './board-open.ts'
 export * from './comments.ts'
 export * from './cursor-chat.ts'
 export * from './dashboard.ts'
@@ -321,4 +323,6 @@ export * from './storage.ts'
 export * from './sync-internal.ts'
 export * from './tags.ts'
 export * from './thumbnails.ts'
+export * from './usage.ts'
 export * from './workshops.ts'
+export * from './ws-templates.ts'

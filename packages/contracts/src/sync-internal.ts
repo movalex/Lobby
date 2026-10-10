@@ -20,6 +20,7 @@
 //   A2  POST <sync>/internal/boards/:bid/workshop-state  WorkshopStateBody → 204                  (api pushes on change)
 //       GET  <sync>/internal/boards/:bid/snapshot                     → 200 LobbyElementsSnapshot (excalidraw engine)
 
+import { BOARD_ROLES } from '@draftroom/permissions'
 import { z } from 'zod'
 
 /** The header the internal secret travels in (the same value as @draftroom/auth-tickets INTERNAL_SECRET_HEADER). */
@@ -189,3 +190,46 @@ export const RestoreElementsAnswer = z.strictObject({
   wrote: z.boolean().optional(),
 })
 export type RestoreElementsAnswer = z.infer<typeof RestoreElementsAnswer>
+
+// ---- the batched access recheck (wave M, CAP-SYNC-RECHECK, M7-1; owner W7, frozen by the wave M foundation) --
+//
+//   POST <api>/internal/access-many  AccessManyRequest → 200 AccessManyResponse
+//
+// sync → api only (behind the internal secret, like every internal route). One call per recheck round (chunks of
+// ACCESS_MANY_MAX_PAIRS) instead of one GET /internal/access per board-user pair. Each pair's `role` is exactly
+// what GET /internal/access answers for it (connectionRole of loadBoardAccess); `signedInSince` is answered once
+// per person (RT-01, as GET /internal/access's field). Unknown boards and people answer role null.
+// Downgrade: an api without the route answers 404; the sync then makes the per-pair calls for that round and
+// probes again later. Until W7 implements it the route is not registered (404 NOT_FOUND).
+
+export const ACCESS_MANY_PATH = '/internal/access-many'
+/** Pairs per call (the sync chunks a bigger round). */
+export const ACCESS_MANY_MAX_PAIRS = 500
+
+const AccessManyBoardId = z.string().regex(/^[a-z0-9][a-z0-9_-]{2,63}$/)
+const AccessManyUserId = z.string().regex(/^usr_[0-9A-Za-z]{10,40}$/)
+const AccessManyRole = z.enum(BOARD_ROLES)
+
+export const AccessManyPair = z.strictObject({ boardId: AccessManyBoardId, userId: AccessManyUserId })
+export type AccessManyPair = z.infer<typeof AccessManyPair>
+
+export const AccessManyRequest = z.strictObject({
+  pairs: z.array(AccessManyPair).min(1).max(ACCESS_MANY_MAX_PAIRS),
+})
+export type AccessManyRequest = z.infer<typeof AccessManyRequest>
+
+export const AccessManyResult = z.strictObject({
+  boardId: AccessManyBoardId,
+  userId: AccessManyUserId,
+  /** The person's role on the board now, or null for no access (unknown, trashed, revoked). */
+  role: AccessManyRole.nullable(),
+})
+export type AccessManyResult = z.infer<typeof AccessManyResult>
+
+export const AccessManyResponse = z.strictObject({
+  /** One entry per asked pair, in the request's order (a repeated pair is answered each time). */
+  results: z.array(AccessManyResult).max(ACCESS_MANY_MAX_PAIRS),
+  /** userId → when the person's oldest live session started (epoch ms), or null when they have none. */
+  signedInSince: z.record(AccessManyUserId, z.number().int().nonnegative().nullable()),
+})
+export type AccessManyResponse = z.infer<typeof AccessManyResponse>
