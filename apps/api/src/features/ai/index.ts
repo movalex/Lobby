@@ -50,7 +50,7 @@ import {
   type AiStatus,
   type AiTopVoted,
 } from '@draftroom/contracts'
-import { newId } from '@draftroom/db'
+import { newId, type Queryable } from '@draftroom/db'
 import { can } from '@draftroom/permissions'
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { type BoardAccess, requireBoardAction } from '../../access.ts'
@@ -98,6 +98,7 @@ import {
   themeLabelOf,
 } from './sources.ts'
 import { revealedTallies, topVotedOf, votedSessionTallies } from './tallies.ts'
+import { registerWorkspaceAsk } from './workspace-ask.ts'
 
 export const AI_STATUS_ROUTE = '/api/boards/:bid/ai'
 export const AI_RUN_ROUTE = '/api/boards/:bid/ai/run'
@@ -163,12 +164,102 @@ export function aiRunNeedsEdit(input: AiRunInput): boolean {
 /** Actions that move notes: a before_ai_themes checkpoint is saved before their plan returns. */
 const MOVES_NOTES: ReadonlySet<AiAction> = new Set<AiAction>(['themes', 'sort', 'score'])
 
-interface Gate {
+/**
+ * What this person may do with AI on one board (wave M, M8-1: exported, the same rules for every reader).
+ * `allowed`: AI is on for them here at all (`reason` null): configured and on for Lobby, not a name-only guest,
+ * the board's AI switch (else the workspace default) on, and mayExport for this person.
+ */
+export interface AiGate {
+  allowed: boolean
   reason: AiOffReason | null
   canInsert: boolean
   canSummarize: boolean
   /** Null when AI is not configured or off for all of Lobby, and for name-only guests. */
   settings: AiSettings | null
+}
+
+/**
+ * The per-board AI gate and the AI status as loaders (wave M, M8-1; owner W8): GET /api/boards/:bid/ai answers
+ * loadAiStatus, POST …/ai/run checks aiGateFor, W5's open-state builds its `ai` part with loadAiStatus and W8's
+ * Ask across boards drops every board aiGateFor refuses. `access` must already have passed 'view'. `q`: the queries'
+ * connection (a transaction's, for open-state's one READ ONLY transaction); default the api's pool.
+ */
+export interface AiLoaders {
+  aiGateFor(access: BoardAccess, userId: string, q?: Queryable): Promise<AiGate>
+  loadAiStatus(access: BoardAccess, userId: string, q?: Queryable): Promise<AiStatus>
+  /** Whether the person acknowledged the OpenAI notice in this workspace. */
+  noticeAccepted(workspaceId: string, userId: string, q?: Queryable): Promise<boolean>
+  /** Workspace owners see the day's budget; everyone else gets null (and so does a ledger failure). */
+  budgetFor(access: BoardAccess, q?: Queryable): Promise<AiBudget | null>
+}
+
+export function createAiLoaders(ctx: Pick<FeatureContext, 'db' | 'config' | 'now'>): AiLoaders {
+  const { db, now } = ctx
+  const cfg = ctx.config.ai
+  const ledger = new AiLedger(db, cfg, now)
+
+  async function aiGateFor(access: BoardAccess, userId: string, q: Queryable = db): Promise<AiGate> {
+    let reason: AiOffReason | null = null
+    let settings: AiSettings | null = null
+    if (!cfg.enabled) reason = 'turned-off'
+    else if (!aiConfigured(cfg)) reason = 'not-configured'
+    else if ((await userKind(q, userId)) === 'guest') reason = 'guest'
+    else {
+      const switches = await loadAiSwitches(q, access.board)
+      settings = settingsFor(access, switches)
+      if (!aiOn(switches)) reason = 'board-off'
+      else if (!(await mayExport(q, access, userId))) reason = 'export-policy'
+    }
+    return {
+      allowed: reason === null,
+      reason,
+      settings,
+      canSummarize: reason === null,
+      canInsert: reason === null && can(access.role, 'edit', access.board.status),
+    }
+  }
+
+  async function noticeAccepted(workspaceId: string, userId: string, q: Queryable = db): Promise<boolean> {
+    const row = await q.maybeOne(
+      'SELECT 1 AS ok FROM ai_notice_acceptances WHERE workspace_id = $1 AND user_id = $2',
+      [workspaceId, userId],
+    )
+    return row !== null
+  }
+
+  async function budgetFor(access: BoardAccess, q: Queryable = db): Promise<AiBudget | null> {
+    if (access.workspaceRole !== 'owner') return null
+    try {
+      return await ledger.view(access.board.workspace_id, q)
+    } catch {
+      return null
+    }
+  }
+
+  async function loadAiStatus(access: BoardAccess, userId: string, q: Queryable = db): Promise<AiStatus> {
+    const g = await aiGateFor(access, userId, q)
+    if (g.reason !== null)
+      return {
+        enabled: false,
+        reason: g.reason,
+        canInsert: false,
+        canSummarize: false,
+        noticeAccepted: false,
+        budget: null,
+        settings: g.settings,
+      }
+    return {
+      enabled: true,
+      reason: null,
+      canInsert: g.canInsert,
+      canSummarize: g.canSummarize,
+      noticeAccepted: await noticeAccepted(access.board.workspace_id, userId, q),
+      budget: await budgetFor(access, q),
+      settings: g.settings,
+    }
+  }
+
+  return { aiGateFor, loadAiStatus, noticeAccepted, budgetFor }
 }
 
 /** What the plan of a run is made from besides the answer: what was sent, and what the server knows. */
@@ -193,6 +284,8 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
   )
   const statusPerUser = keyedLimit(AI_STATUS_PER_MINUTE, now)
   registerAiSettings(app, ctx)
+  // wave M (M8-2): Ask across boards, pending until W8 implements it (./workspace-ask.ts)
+  registerWorkspaceAsk(app, ctx)
   const client: OpenAiClient | null = cfg.apiKey
     ? createOpenAiClient({
         apiKey: cfg.apiKey,
@@ -205,70 +298,15 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
       })
     : null
 
-  /** What this person may do with AI on this board (`access` already passed `view`). */
-  async function gate(access: BoardAccess, userId: string): Promise<Gate> {
-    let reason: AiOffReason | null = null
-    let settings: AiSettings | null = null
-    if (!cfg.enabled) reason = 'turned-off'
-    else if (!aiConfigured(cfg)) reason = 'not-configured'
-    else if ((await userKind(db, userId)) === 'guest') reason = 'guest'
-    else {
-      const switches = await loadAiSwitches(db, access.board)
-      settings = settingsFor(access, switches)
-      if (!aiOn(switches)) reason = 'board-off'
-      else if (!(await mayExport(db, access, userId))) reason = 'export-policy'
-    }
-    return {
-      reason,
-      settings,
-      canSummarize: reason === null,
-      canInsert: reason === null && can(access.role, 'edit', access.board.status),
-    }
-  }
-
-  async function noticeAccepted(workspaceId: string, userId: string): Promise<boolean> {
-    const row = await db.maybeOne(
-      'SELECT 1 AS ok FROM ai_notice_acceptances WHERE workspace_id = $1 AND user_id = $2',
-      [workspaceId, userId],
-    )
-    return row !== null
-  }
-
-  /** Workspace owners see the day's budget; everyone else gets null (and so does a ledger failure). */
-  async function budgetFor(access: BoardAccess): Promise<AiBudget | null> {
-    if (access.workspaceRole !== 'owner') return null
-    try {
-      return await ledger.view(access.board.workspace_id)
-    } catch {
-      return null
-    }
-  }
+  // M8-1: the gate and the status are the shared loaders (createAiLoaders above), unchanged in behaviour
+  const { aiGateFor: gate, loadAiStatus, noticeAccepted, budgetFor } = createAiLoaders(ctx)
 
   app.get(AI_STATUS_ROUTE, async (req): Promise<AiStatus> => {
     const user = await ctx.requireUser(req)
     statusPerUser.take(user.id)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'view')
-    const g = await gate(access, user.id)
-    if (g.reason !== null)
-      return {
-        enabled: false,
-        reason: g.reason,
-        canInsert: false,
-        canSummarize: false,
-        noticeAccepted: false,
-        budget: null,
-        settings: g.settings,
-      }
-    return {
-      enabled: true,
-      reason: null,
-      canInsert: g.canInsert,
-      canSummarize: g.canSummarize,
-      noticeAccepted: await noticeAccepted(access.board.workspace_id, user.id),
-      budget: await budgetFor(access),
-      settings: g.settings,
-    }
+    return loadAiStatus(access, user.id)
   })
 
   app.post(AI_RUN_ROUTE, async (req, reply): Promise<AiResult> => {

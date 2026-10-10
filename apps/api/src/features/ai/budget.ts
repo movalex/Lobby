@@ -17,7 +17,7 @@
 // the model is never called.
 
 import { AI_ERROR_CODES, type AiAction, type AiBudget } from '@draftroom/contracts'
-import type { Db } from '@draftroom/db'
+import type { Db, Queryable } from '@draftroom/db'
 import { ApiError } from '../../errors.ts'
 import type { AiConfig } from './config.ts'
 
@@ -195,10 +195,13 @@ export class AiLedger {
     )
   }
 
-  /** The workspace's budget today, as workspace owners see it. */
-  async view(workspaceId: string): Promise<AiBudget> {
+  /**
+   * The workspace's budget today, as workspace owners see it. `q` (wave M): the connection to read on, e.g.
+   * open-state's transaction; default the pool.
+   */
+  async view(workspaceId: string, q: Queryable = this.db): Promise<AiBudget> {
     const now = this.now()
-    const row = await this.db.one<{ used: number }>(
+    const row = await q.one<{ used: number }>(
       `SELECT coalesce(sum(charged_tokens), 0)::float8 AS used
          FROM ai_usage WHERE day = $1::date AND workspace_id = $2`,
       [utcDay(now), workspaceId],
