@@ -47,7 +47,8 @@ export const WorkspaceTemplate = z.object({
   boardId: BoardIdLike,
   name: z.string(),
   category: WsTemplateCategory,
-  addedBy: z.object({ id: UserIdLike, name: z.string() }),
+  /** Who saved it; null once that account is gone (0030: added_by ON DELETE SET NULL keeps the template). */
+  addedBy: z.object({ id: UserIdLike, name: z.string() }).nullable(),
   addedAt: z.string(),
 })
 export type WorkspaceTemplate = z.infer<typeof WorkspaceTemplate>

@@ -197,6 +197,16 @@ describe('workspace templates (M8-3)', () => {
         addedAt: '2026-10-10T00:00:00.000Z',
       }).category,
     ).toBe('review')
+    // a template whose author's account is gone (0030's added_by ON DELETE SET NULL) is still a template
+    const orphan = {
+      boardId: 'b-retro01',
+      name: 'Our retro',
+      category: 'review',
+      addedBy: null,
+      addedAt: '2026-10-10T00:00:00.000Z',
+    }
+    expect(WorkspaceTemplate.parse(orphan).addedBy).toBeNull()
+    expect(WorkspaceTemplate.safeParse({ ...orphan, addedBy: undefined }).success).toBe(false)
     expect(wsTemplateUsePath('wsp_0123456789', 'b-retro01')).toBe(
       '/api/workspaces/wsp_0123456789/templates/b-retro01/use',
     )

@@ -10,8 +10,12 @@
 --   of its own workspace, and its row goes when the board is deleted for good (trash keeps the board, so the
 --   route treats a trashed template as gone). The workspace's own delete cascades too.
 -- - name and category: what the picker's Workspace tab shows (contracts ws-templates.ts WS_TEMPLATE_CATEGORIES).
--- - added_by / added_at: who saved it and when; a deleted account leaves the template (added_by NULL).
--- Additive: no existing table changes, and the previous build never touches this one.
+-- - added_by / added_at: who saved it and when; a deleted account leaves the template (added_by NULL, which the
+--   contract's WorkspaceTemplate.addedBy answers as null).
+-- Additive: no existing table changes, and the previous build never reads or writes this one, so rolling the
+-- api back needs no down migration, only DRAFTROOM_ALLOW_NEWER_SCHEMA=1 and a "Deploy a specific commit" (not
+-- Render's Rollback; docs/DEPLOY.md "Rolling the api back past a migration"): a build without 0030 refuses to start
+-- on a database that recorded it.
 
 CREATE TABLE workspace_templates (
   workspace_id text NOT NULL REFERENCES workspaces (id) ON DELETE CASCADE,

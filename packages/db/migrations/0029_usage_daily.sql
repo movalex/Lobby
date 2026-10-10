@@ -9,7 +9,10 @@
 -- - event: a usage event name, the contract's USAGE_EVENT_PATTERN (the api validates against the list itself).
 -- - role_class: creator (a creator account), member (any other account), guest (a name-only guest).
 -- - count: the day's sum, never negative.
--- Additive: no existing table changes, and the previous build never touches this one.
+-- Additive: no existing table changes, and the previous build never reads or writes this one, so rolling the
+-- api back needs no down migration, only DRAFTROOM_ALLOW_NEWER_SCHEMA=1 and a "Deploy a specific commit" (not
+-- Render's Rollback; docs/DEPLOY.md "Rolling the api back past a migration"): a build without 0029 refuses to start
+-- on a database that recorded it.
 
 CREATE TABLE usage_daily (
   day date NOT NULL,
