@@ -215,3 +215,14 @@ export function installLobbyEngineTheme(): boolean {
   installed = true
   return true
 }
+
+/**
+ * The ink a note's label is drawn in on a note of `fill` (a stored, light colour), in `theme` (wave M, M1-5: W1's,
+ * read by W2's dark time-travel preview). Frozen signature. The foundation's answer is today's rendering: one ink
+ * for every note colour, Lobby's INK in light and CHALK in dark (what the dark table maps the stored label ink to).
+ * W1 makes off-palette fills (pastels pasted from excalidraw.com) pick the higher-contrast of INK and CHALK.
+ * Rendering only: stored colours never change.
+ */
+export function noteInkFor(_fill: string, theme: 'light' | 'dark'): string {
+  return theme === 'dark' ? CHALK : INK
+}

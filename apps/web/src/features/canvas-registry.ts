@@ -2,11 +2,12 @@
 // §7.2), in dock and registration order. Frozen at wave 1: each entry is its owner's file, created empty,
 // so no wave-3 owner edits this list. A new feature is a change request. The tldraw page keeps
 // features/registry.ts (BOARD_FEATURES) until wave 4. Wave L: W3 is this list's sole owner (it adds the wave L
-// feature folders).
+// feature folders). Wave M: lead-only; the foundation registers 'ws-templates' and 'ai-workspace-ask' (W8's).
 import type { CanvasFeature } from '../canvas/api/index.ts'
 import { feature as mediaFeature } from '../file-card/ported/index.tsx'
 import { feature as a11yFeature } from './a11y/ported/index.tsx'
 import { feature as aiFeature } from './ai/ported/index.tsx'
+import { feature as aiWorkspaceAskFeature } from './ai/workspace-ask/ported/index.tsx'
 import { feature as canvasUxFeature } from './canvas-ux/ported/index.tsx'
 import { feature as navigationFeature } from './canvas-ux/ported/navigation/index.tsx'
 import { feature as commandPaletteFeature } from './command-palette/index.tsx'
@@ -24,6 +25,7 @@ import { feature as sortFeature } from './sort/ported/index.tsx'
 import { feature as tagsFeature } from './tags/ported/index.tsx'
 import { feature as thumbnailsFeature } from './thumbnails/ported/index.tsx'
 import { feature as workshopsFeature } from './workshops/ported/index.tsx'
+import { feature as wsTemplatesFeature } from './ws-templates/index.tsx'
 
 export const CANVAS_FEATURES: readonly CanvasFeature[] = [
   canvasUxFeature,
@@ -53,4 +55,7 @@ export const CANVAS_FEATURES: readonly CanvasFeature[] = [
   // wave L (W8, L8-1/L8-2 and L8-3): sort and place, and the shape kits (Pieces), registered together
   sortFeature,
   piecesFeature,
+  // wave M (registered empty by the foundation; W8 fills them): workspace templates and Ask across boards
+  wsTemplatesFeature,
+  aiWorkspaceAskFeature,
 ]

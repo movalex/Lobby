@@ -69,3 +69,13 @@ describe('W5-15: dark mode keeps Lobby’s colours', () => {
     expect(common.applyDarkModeFilter('#f1ac4b', false)).toBe('#f1ac4b')
   })
 })
+
+describe('wave M (the foundation): noteInkFor, the frozen signature W2 reads', () => {
+  it('answers today’s ink for every note colour: INK in light, CHALK in dark (what the label ink renders as)', () => {
+    for (const s of NOTE_PALETTE) {
+      expect(theme.noteInkFor(s.light.fill, 'light'), s.label).toBe(theme.INK)
+      expect(theme.noteInkFor(s.light.fill, 'dark'), s.label).toBe(theme.CHALK)
+      expect(theme.noteInkFor(s.light.fill, 'dark')).toBe(dark(theme.INK))
+    }
+  })
+})
