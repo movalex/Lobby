@@ -573,10 +573,22 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
       syncNextSizes()
       if (elementsChanged) {
         const changed: string[] = []
-        for (const e of all()) {
+        const els = all()
+        for (const e of els) {
           if (versions.get(e.id) === e.version) continue
           versions.set(e.id, e.version)
           changed.push(e.id)
+        }
+        // an element that left the scene is a change too, and forgotten: when it comes back at the same
+        // version it is one again (a warm open's paint, then the room's older reset snapshot without it, then
+        // its catch-up at the painted version: readers of `changed` kept the empty scene, wave M gate)
+        if (versions.size > els.length) {
+          const here = new Set(els.map((e) => e.id))
+          for (const id of [...versions.keys()])
+            if (!here.has(id)) {
+              versions.delete(id)
+              changed.push(id)
+            }
         }
         if (changed.length) emit('changed', changed)
       }

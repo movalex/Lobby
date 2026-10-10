@@ -356,6 +356,25 @@ describe('the gesture-element hook (CR-3A-9)', () => {
   })
 })
 
+describe("the port's changed event", () => {
+  it('names an element that left the scene, and again when it comes back at the same version (wave M gate)', () => {
+    // a warm open: the painted copy, the room's older reset snapshot without it, its catch-up at the same version
+    const a = rect('a', 'a0')
+    const { api, port } = portOn([a])
+    const heard: string[][] = []
+    port.on('changed', (ids) => heard.push([...ids]))
+    port.afterSceneChange()
+    api.updateScene({ elements: [] })
+    port.afterSceneChange()
+    api.updateScene({ elements: [a] })
+    port.afterSceneChange()
+    expect(heard).toEqual([['a'], ['a'], ['a']])
+    // nothing changed: nothing heard
+    port.afterSceneChange()
+    expect(heard).toHaveLength(3)
+  })
+})
+
 describe('CanvasPort reads (CR 3b-7)', () => {
   it('get and bounds read the engine map, not a scan of the scene', () => {
     const { api, port } = portOn([rect('a', 'a0', { x: 10, y: 20, width: 30, height: 40 })])
