@@ -169,8 +169,8 @@ export const PALETTE_COMMAND_IDS = [
 ] as const
 export type PaletteCommandId = (typeof PALETTE_COMMAND_IDS)[number]
 
-/** The wave M commands no feature registers yet (their owner, W8, adds them): the web test allows them. */
-export const PENDING_PALETTE_COMMAND_IDS: readonly PaletteCommandId[] = ['ws-templates.save']
+/** The wave M commands no feature registers yet: none since W8 registered 'ai.askWorkspace' and 'ws-templates.save'. */
+export const PENDING_PALETTE_COMMAND_IDS: readonly PaletteCommandId[] = []
 
 /**
  * The template picker's templates (`@draftroom/templates` TEMPLATE_INFOS ids, checked by
