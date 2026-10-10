@@ -83,6 +83,10 @@ describe('F10: realtime-quality histograms in /internal/metrics', () => {
     expect(metricValue(text, 'lobby_ack_send_ms_count')).toBeGreaterThanOrEqual(31)
     expect(metricValue(text, 'lobby_reconnects_total')).toBeGreaterThanOrEqual(1)
     expect(metricValue(text, 'lobby_presence_laser_in_total')).toBeGreaterThanOrEqual(1)
+    // wave M (M7-5): the process-wide outbound queue and its budget (DRAFTROOM_OUTBOUND_BUDGET_MB, 128 MiB)
+    expect(metricValue(text, 'lobby_outbound_bytes_queued')).toBeGreaterThanOrEqual(0)
+    expect(metricValue(text, 'lobby_outbound_budget_bytes')).toBe(128 * 1024 * 1024)
+    expect(metricValue(text, 'lobby_outbound_over_budget')).toBe(0)
     // for the record: a group commit's mean (BEGIN to COMMIT, which the hooks are not inside) and the new means
     const mean = (n: string) => metricValue(text, `${n}_sum`) / metricValue(text, `${n}_count`)
     console.log(

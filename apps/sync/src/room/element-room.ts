@@ -84,7 +84,7 @@ import { IndexCache } from './index-keys.ts'
 import { type LeaseHolderInfo, LeaseTable } from './lease.ts'
 import { type El, type MergeEnv, PushApplier } from './merge.ts'
 import type { RoomMetrics } from './metrics.ts'
-import { Outbound } from './outbound.ts'
+import { Outbound, type OutboundBudget } from './outbound.ts'
 import { CommitPacer } from './pacing.ts'
 import { PresenceHub, rosterEntry } from './presence.ts'
 import { type SessionBudgets, sessionBudgets } from './rates.ts'
@@ -146,6 +146,8 @@ export interface RoomDeps {
   readonly onIdle: (room: ElementRoom) => void
   /** the global snapshot cache budget (index.ts): register an entry's size, evict others */
   readonly snapshotBudget: (room: ElementRoom, bytes: number) => void
+  /** M7-5: the process-wide outbound budget every session's queue reads (index.ts); absent: never over */
+  readonly outboundBudget?: OutboundBudget
 }
 
 type FifoItem =
@@ -319,6 +321,7 @@ export class Session {
     now: number,
     onOverflow: () => void,
     onSent: (n: number) => void,
+    budget?: OutboundBudget,
   ) {
     this.info = info
     this.socket = socket
@@ -333,7 +336,7 @@ export class Session {
     }
     this.reader = Math.min(info.contractsRev ?? UNANNOUNCED_REV, CONTRACTS_REV)
     this.budgets = sessionBudgets(info.guest, now)
-    this.out = new Outbound(socket, onOverflow, onSent)
+    this.out = new Outbound(socket, onOverflow, onSent, budget)
   }
 
   /**
@@ -571,6 +574,7 @@ export class ElementRoom {
         // F10 (L6-5): an ack queued behind other frames is timed when its session's queue writes it
         this.deps.metrics.ackFlushed(s.out, s.out.sentBytes, this.deps.now())
       },
+      this.deps.outboundBudget,
     )
     this.sessions.add(s)
     return s

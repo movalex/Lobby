@@ -179,9 +179,25 @@ export class RoomMetrics {
     this.loop.disable()
   }
 
-  render(rooms: { open: number; sessionsByRole: Record<string, number>; boards: BoardGauges[] }): string {
+  render(rooms: {
+    open: number
+    sessionsByRole: Record<string, number>
+    boards: BoardGauges[]
+    /** M7-5: the process-wide outbound queue (every session's bytes waiting) and its budget */
+    outbound?: { queuedBytes: number; budgetBytes: number; over: boolean }
+  }): string {
     const out: string[] = []
     out.push('# TYPE lobby_rooms_open gauge', `lobby_rooms_open ${rooms.open}`)
+    if (rooms.outbound)
+      out.push(
+        '# HELP lobby_outbound_bytes_queued Bytes waiting to be written, every session together (socket buffers and queues).',
+        '# TYPE lobby_outbound_bytes_queued gauge',
+        `lobby_outbound_bytes_queued ${rooms.outbound.queuedBytes}`,
+        '# TYPE lobby_outbound_budget_bytes gauge',
+        `lobby_outbound_budget_bytes ${rooms.outbound.budgetBytes}`,
+        '# TYPE lobby_outbound_over_budget gauge',
+        `lobby_outbound_over_budget ${rooms.outbound.over ? 1 : 0}`,
+      )
     out.push('# TYPE lobby_sessions gauge')
     for (const [role, n] of Object.entries(rooms.sessionsByRole))
       out.push(`lobby_sessions{role="${role}"} ${n}`)
