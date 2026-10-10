@@ -17,11 +17,12 @@ import {
   type World,
 } from './guests/support.ts'
 
-/** What the plan's foundation section names that is still pending (the api's GET /healthz/deep landed with M5-6; the sync's is W7's). */
+/**
+ * What the plan's foundation section names that is still pending. A route leaves the list when its owner implements it
+ * (W5: GET /healthz/deep with M5-6, POST /api/usage and GET /internal/usage with M5-5); the sync's /healthz/deep is W7's.
+ */
 const WAVE_M_ROUTES = [
   'GET /api/boards/:bid/open-state',
-  'POST /api/usage',
-  'GET /internal/usage',
   'POST /internal/access-many',
   'POST /api/workspaces/:wid/ai/ask',
   'GET /api/workspaces/:wid/templates',
