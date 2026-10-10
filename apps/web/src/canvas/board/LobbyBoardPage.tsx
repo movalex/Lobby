@@ -82,7 +82,7 @@ import {
   readOnlyDropNotice,
   withoutElements,
 } from './content.ts'
-import { PROBE_FEATURE } from './probe.tsx'
+import { CRASH_PROBE_FEATURE, PROBE_FEATURE } from './probe.tsx'
 import { LobbyBoardSession, type LobbyBoardSnapshot } from './session.ts'
 import { duplicateLobbyData } from './tx.ts'
 import { onUploads, uploadsInFlight } from './uploads.ts'
@@ -452,6 +452,7 @@ function LobbyBoardScreen({
     const handle = (window as unknown as { __lobbyBoard?: Record<string, unknown> }).__lobbyBoard
     if (!handle) return
     let uninstall: (() => void) | null = null
+    let uninstallCrash: (() => void) | null = null
     handle.installProbe = () => {
       uninstall ??= installCanvasFeatures([PROBE_FEATURE], ctx)
     }
@@ -459,10 +460,16 @@ function LobbyBoardScreen({
       uninstall?.()
       uninstall = null
     }
+    // H1 (M1-2): a feature that throws, for m1-boundary.spec.ts
+    handle.installCrashProbe = () => {
+      uninstallCrash ??= installCanvasFeatures([CRASH_PROBE_FEATURE], ctx)
+    }
     return () => {
       uninstall?.()
+      uninstallCrash?.()
       delete handle.installProbe
       delete handle.uninstallProbe
+      delete handle.installCrashProbe
     }
   }, [ctx, welcomed])
 

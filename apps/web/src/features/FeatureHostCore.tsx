@@ -5,7 +5,7 @@
 // per engine (which panels, what a panel renders, whether a text editor is open, the add-note action)
 // comes in as props. Integration owner (2C).
 
-import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { Component, type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { isFocusLost, isTextEntry, tryFocus } from '../ui/focus.ts'
 
 /** One dock panel as the rail shows it (from a BoardFeature panel or a CanvasPanelSpec). */
@@ -239,4 +239,76 @@ export function TopBarOverflowRow({
       <div className="dr-overflow__controls">{children}</div>
     </div>
   )
+}
+
+// ---- one feature's error never blanks the board (H1, wave M M1-2; FTU-1) ------------------------------------
+
+/** A contribution that crashes this many times within FEATURE_CRASH_WINDOW_MS stays off until the page reloads. */
+export const FEATURE_CRASH_LIMIT = 3
+export const FEATURE_CRASH_WINDOW_MS = 60_000
+
+/** Crash times per contribution id, and the ids that are off until a reload (this page load only). */
+const crashTimes = new Map<string, number[]>()
+const offUntilReload = new Set<string>()
+
+/** Records one crash of `id` at `now` (ms); true when that turned it off until the page reloads. */
+export function recordFeatureCrash(id: string, now: number): boolean {
+  const recent = (crashTimes.get(id) ?? []).filter((t) => now - t < FEATURE_CRASH_WINDOW_MS)
+  recent.push(now)
+  crashTimes.set(id, recent)
+  if (recent.length >= FEATURE_CRASH_LIMIT) offUntilReload.add(id)
+  return offUntilReload.has(id)
+}
+
+/** Whether `id` crashed FEATURE_CRASH_LIMIT times within a minute (it stays off until a reload). */
+export const featureOff = (id: string): boolean => offUntilReload.has(id)
+
+/** Tests only: forgets every crash. */
+export function resetFeatureCrashes(): void {
+  crashTimes.clear()
+  offUntilReload.clear()
+}
+
+interface FeatureBoundaryProps {
+  /** the contribution's id, kind first ("overlay:ai-menu", "selectionBar:tags.pick"): what the log line names */
+  readonly featureId: string
+  /** a change (the board, the selection) gives a crashed contribution another try */
+  readonly resetKey?: string | undefined
+  readonly children?: ReactNode
+}
+
+interface FeatureBoundaryState {
+  readonly failed: boolean
+  readonly key: string | undefined
+}
+
+/**
+ * Wraps every component a feature renders on the board page (dock panels, overlays, host slots, top-bar items,
+ * selection-bar items, menu rows). When one throws, only it renders nothing: the canvas and every other feature
+ * keep running. It logs one line (`feature_crash <featureId>`, no props, no content), tries again when `resetKey`
+ * changes, and after FEATURE_CRASH_LIMIT crashes within a minute stays off until the page reloads.
+ */
+export class FeatureBoundary extends Component<FeatureBoundaryProps, FeatureBoundaryState> {
+  override state: FeatureBoundaryState = { failed: false, key: this.props.resetKey }
+
+  static getDerivedStateFromError(): Partial<FeatureBoundaryState> {
+    return { failed: true }
+  }
+
+  static getDerivedStateFromProps(
+    props: FeatureBoundaryProps,
+    state: FeatureBoundaryState,
+  ): FeatureBoundaryState | null {
+    return props.resetKey === state.key ? null : { failed: false, key: props.resetKey }
+  }
+
+  override componentDidCatch(): void {
+    recordFeatureCrash(this.props.featureId, Date.now())
+    console.warn(`feature_crash ${this.props.featureId}`)
+  }
+
+  override render(): ReactNode {
+    if (this.state.failed || featureOff(this.props.featureId)) return null
+    return this.props.children ?? null
+  }
 }

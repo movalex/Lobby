@@ -8,7 +8,8 @@
  * Focus mode (`settings.focusMode`, present mode) hides the dock, the top bar, the host slots, the
  * remote selections, the edge markers and every overlay layer that does not say `show`.
  *
- * Every feature component is rendered inside `CanvasFeatureContextProvider` and gets the context.
+ * Every feature component is rendered inside `CanvasFeatureContextProvider` and gets the context, and inside a
+ * FeatureGuard (H1, M1-2): a feature that throws renders nothing and never blanks the board.
  */
 import type { RosterEntry } from '@draftroom/canvas-schema/protocol'
 import {
@@ -23,7 +24,7 @@ import {
   useSyncExternalStore,
 } from 'react'
 import { frameAt } from '../../features/canvas-ux/ported/notes.ts'
-import { FeatureDockView, TopBarOverflowRow } from '../../features/FeatureHostCore.tsx'
+import { FeatureBoundary, FeatureDockView, TopBarOverflowRow } from '../../features/FeatureHostCore.tsx'
 import { cursorExternalSuffix, useBoardOutside } from '../../features/people/outside.ts'
 import { initialsFor, safeColor } from '../../lib/identity.ts'
 import { can } from '../../lib/permissions.ts'
@@ -41,6 +42,32 @@ import { type AvoidRect, type CoverNode, EDGE_CHIP_RADIUS, floatingCovers } from
 import { editingOutline, hoverOutline, type OutlineBox } from './outlines.ts'
 import type { LobbyBoardSession } from './session.ts'
 
+// ---- the feature guard (H1, wave M M1-2) ----------------------------------------------------------------------
+
+/**
+ * A FeatureBoundary (../../features/FeatureHostCore.tsx) that gives a crashed contribution another try when the
+ * board or the selection changes. Only the guard re-renders on a selection change (its children are the same
+ * element), so what it wraps renders exactly as often as before.
+ */
+export function FeatureGuard({
+  ctx,
+  id,
+  children,
+}: {
+  ctx: CanvasFeatureContext
+  id: string
+  children: ReactNode
+}) {
+  const key = useValue('lobby-feature-guard', () => `${ctx.board.id}|${ctx.canvas.selection.join(' ')}`, [
+    ctx,
+  ])
+  return (
+    <FeatureBoundary featureId={id} resetKey={key}>
+      {children}
+    </FeatureBoundary>
+  )
+}
+
 // ---- the dock ---------------------------------------------------------------------------------------------
 
 export function CanvasDock({ ctx }: { ctx: CanvasFeatureContext }) {
@@ -53,7 +80,11 @@ export function CanvasDock({ ctx }: { ctx: CanvasFeatureContext }) {
       label: p.label,
       icon: <p.icon />,
       ...(p.shortcutHint ? { shortcutHint: formatChord(p.shortcutHint, currentPlatform()) } : {}),
-      render: (close: () => void) => <p.component ctx={ctx} close={close} />,
+      render: (close: () => void) => (
+        <FeatureGuard ctx={ctx} id={`panel:${p.id}`}>
+          <p.component ctx={ctx} close={close} />
+        </FeatureGuard>
+      ),
     }))
   return (
     <FeatureDockView
@@ -124,13 +155,18 @@ export function topBarItems(
   if (!ctx) return null
   const r = ctx.registries
   const items = r.sorted(r.topBar)
-  if (mode === 'all') return items.map((i) => <i.component key={i.id} ctx={ctx} />)
-  if (mode === 'pinned') return items.filter((i) => i.pinned).map((i) => <i.component key={i.id} ctx={ctx} />)
+  const guarded = (i: (typeof items)[number]) => (
+    <FeatureGuard key={i.id} ctx={ctx} id={`topBar:${i.id}`}>
+      <i.component ctx={ctx} />
+    </FeatureGuard>
+  )
+  if (mode === 'all') return items.map(guarded)
+  if (mode === 'pinned') return items.filter((i) => i.pinned).map(guarded)
   return items
     .filter((i) => !i.pinned)
     .map((i) => (
       <TopBarOverflowRow key={i.id} featureId={i.id} caption={i.overflowCaption}>
-        <i.component ctx={ctx} />
+        {guarded(i)}
       </TopBarOverflowRow>
     ))
 }
@@ -204,7 +240,9 @@ function FeatureLayer({ spec, ctx }: { spec: FeatureOverlaySpec; ctx: CanvasFeat
       className="lobby-overlay-layer"
       style={layerStyle(spec)}
     >
-      <spec.component ctx={ctx} />
+      <FeatureGuard ctx={ctx} id={`overlay:${spec.id}`}>
+        <spec.component ctx={ctx} />
+      </FeatureGuard>
     </div>
   )
 }
@@ -240,7 +278,13 @@ export function OverlayRoot({
           .map((o) => (
             <FeatureLayer key={o.id} spec={o} ctx={ctx} />
           ))}
-        {port && !focusMode ? c0.map((l) => <l.component key={l.id} port={port} />) : null}
+        {port && !focusMode
+          ? c0.map((l) => (
+              <FeatureGuard key={l.id} ctx={ctx} id={`c0overlay:${l.id}`}>
+                <l.component port={port} />
+              </FeatureGuard>
+            ))
+          : null}
         <DragArrows canvas={ctx.canvas} session={session} />
         <RemoteSelections canvas={ctx.canvas} registries={r} session={session} focusMode={focusMode} />
         <Cursors canvas={ctx.canvas} registries={r} boardId={ctx.board.id} />
@@ -874,7 +918,9 @@ export function HostSlots({ ctx, focusMode }: { ctx: CanvasFeatureContext; focus
             data-feature={entry.featureId}
             style={SLOT_STYLE[name]}
           >
-            <entry.component ctx={ctx} />
+            <FeatureGuard ctx={ctx} id={`slot:${name}:${entry.featureId}`}>
+              <entry.component ctx={ctx} />
+            </FeatureGuard>
           </div>
         )
       })}

@@ -11,6 +11,7 @@
 import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { CanvasFeatureContext, SelectionBarItemSpec } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { FeatureBoundary } from '../../FeatureHostCore.tsx'
 import { AlignIcons, LockIcon } from '../icons.tsx'
 import { unitsOf } from './align.ts'
 import { CMD, runCommand, selectedRoots } from './commands.ts'
@@ -406,7 +407,12 @@ export function SelectionBar({ ctx }: { ctx: CanvasFeatureContext }) {
   const { left, top, side } = placement
   const compact = view.vw < SELBAR_COMPACT_BELOW
   const render = (list: readonly SelectionBarItemSpec[]) =>
-    list.map((i) => <i.component key={i.id} ctx={ctx} selection={view.ids} />)
+    list.map((i) => (
+      // H1 (M1-2): an item that throws drops out of the bar; the bar and the other items stay
+      <FeatureBoundary key={i.id} featureId={`selectionBar:${i.id}`} resetKey={`${ctx.board.id}|${view.sel}`}>
+        <i.component ctx={ctx} selection={view.ids} />
+      </FeatureBoundary>
+    ))
   return (
     <div
       ref={ref}

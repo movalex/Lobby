@@ -171,3 +171,62 @@ export const PROBE_FEATURE: CanvasFeature = {
     }
   },
 }
+
+// ---- H1 (wave M, M1-2): a feature that throws ---------------------------------------------------------------
+
+/** What the crash probe saw (window.__lobbyCrashProbe): its overlay's renders with and without a selection. */
+export interface CrashProbeRecord {
+  okRenders: number
+  throws: number
+}
+
+declare global {
+  interface Window {
+    __lobbyCrashProbe?: CrashProbeRecord
+  }
+}
+
+/** Throws while anything is selected; with nothing selected, a marker (`crash-probe-ok`). */
+function CrashProbeOverlay() {
+  const { canvas } = useCanvasFeatureContext()
+  const selected = useValue('crash-probe-sel', () => canvas.selection.length, [canvas])
+  const rec = window.__lobbyCrashProbe
+  if (selected > 0) {
+    if (rec) rec.throws++
+    throw new Error('crash probe: an overlay that throws on a selection')
+  }
+  if (rec) rec.okRenders++
+  return (
+    <div
+      data-testid="crash-probe-ok"
+      style={{ position: 'absolute', left: 4, bottom: 4, width: 6, height: 6 }}
+    />
+  )
+}
+
+/**
+ * A test-only feature whose screen overlay throws on a selection and whose selection-bar item always throws (the
+ * board page's own e2e checks install it through `window.__lobbyBoard.installCrashProbe()`, dev-auth builds only):
+ * FeatureBoundary must drop just them, the board, the selection bar and the other overlays staying alive.
+ */
+export const CRASH_PROBE_FEATURE: CanvasFeature = {
+  id: 'crash-probe',
+  overlays: [
+    { id: 'crash-probe', layer: 'screen', order: 61, focusMode: 'show', component: CrashProbeOverlay },
+  ],
+  selectionBar: [
+    {
+      id: 'crash-probe.item',
+      order: 90,
+      component: () => {
+        throw new Error('crash probe: a selection-bar item that throws')
+      },
+    },
+  ],
+  onMount() {
+    window.__lobbyCrashProbe = { okRenders: 0, throws: 0 }
+    return () => {
+      delete window.__lobbyCrashProbe
+    }
+  },
+}
