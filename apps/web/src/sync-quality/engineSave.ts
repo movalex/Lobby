@@ -4,6 +4,8 @@
 //
 //   engine state   page state                 indicator
 //   (no welcome)   connecting                 Connecting…
+//   (no welcome)   the cached copy shown      Showing your last copy · connecting (M6-2, state 'cached')
+//   (no welcome)   cached copy, offline       Offline · showing your copy from 14:32 (M6-4, state 'offline')
 //   saved          ready                      Saved (View only for read-only roles; Saving… while an
 //                                             upload of this tab is still on its way)
 //   saving         ready                      Saving…
@@ -15,7 +17,13 @@
 // Pure: no DOM, no engine, no tldraw (Node-tested).
 
 import type { SaveStatus as EngineSaveStatus } from '../canvas/sync/types.ts'
-import { engineOfflineLabel, engineOfflineTitle, engineRejectTitle } from './copy.ts'
+import {
+  cachedOfflineLabel,
+  cachedOfflineTitle,
+  engineOfflineLabel,
+  engineOfflineTitle,
+  engineRejectTitle,
+} from './copy.ts'
 import type { SaveStatusView } from './SaveStatus.tsx'
 import type { DisplayState } from './save-state.ts'
 
@@ -33,11 +41,18 @@ export interface EngineSaveInput {
   readonly uploading: number
   /** the board role (a commenter's read-only line says her comments are saved) */
   readonly role?: string
+  /**
+   * M6-2 / M6-4: the board shows this device's cached copy (until the first welcome): when it was saved, and whether
+   * the page is offline (a socket closed before any welcome)
+   */
+  readonly cached?: { readonly savedAt: number; readonly offline: boolean } | null
 }
 
 /** The indicator's state for the engine's status. */
 export function engineDisplayState(i: EngineSaveInput): DisplayState {
   if (i.terminal) return 'error'
+  // M6-2: the cached copy, read-only, never "Saved"; offline it is the offline line with the copy's time (M6-4)
+  if (!i.welcomed && i.cached) return i.cached.offline ? 'offline' : 'cached'
   const s = i.status
   if (!i.welcomed && s.state === 'offline') return s.offlineChanges > 0 ? 'offline-pending' : 'connecting'
   switch (s.state) {
@@ -67,6 +82,12 @@ export function engineSaveView(
     uploading: i.uploading,
     ...(i.role !== undefined ? { role: i.role } : {}),
   }
+  if (state === 'offline' && !i.welcomed && i.cached)
+    return {
+      ...view,
+      label: cachedOfflineLabel(i.cached.savedAt),
+      title: cachedOfflineTitle(i.cached.savedAt),
+    }
   if (state === 'offline-pending' || state === 'offline') {
     const n = i.status.offlineChanges
     return { ...view, label: engineOfflineLabel(n), title: engineOfflineTitle(n, i.guest) }

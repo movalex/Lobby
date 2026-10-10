@@ -250,6 +250,26 @@ export type CoreEvent =
   | { kind: 'transport'; state: TransportState; close?: TransportClose }
   | { kind: 'welcome'; welcome: Welcome }
   | { kind: 'echo_suspect'; ids: readonly string[] }
+  /**
+   * M6-1 (wave M): the confirmed copy moved on (a welcome with its snapshot or catch-up, a `changes` batch):
+   * what the board cache stores (`cacheContent()`) is newer. Nothing else listens to it.
+   */
+  | { kind: 'confirmed' }
+
+/**
+ * M6-2/M6-3 (wave M, PWR-4): the copy of the server's state a board cache kept (adapter/snapshot-cache.ts),
+ * which a core may start from (`startFromCache`).
+ */
+export interface CachedStart {
+  readonly epoch: string
+  readonly clock: number
+  readonly horizon: number
+  /** the server's copies (live and redacted tombstones), in (index, id) order */
+  readonly elements: readonly SceneElement[]
+}
+
+/** How the first welcome answered a core that resumed from a cached copy (M6-3). */
+export type ResumeOutcome = 'catch-up' | 'reset' | 'epoch'
 
 const now0 = () => Date.now()
 
@@ -749,6 +769,15 @@ export class LobbyEngineCore implements EngineCore {
    * `adoptStartScene`), until the first welcome rebuilds them from the server's. Null: none, or welcomed.
    */
   private preScene: Set<string> | null = null
+  /**
+   * M6-3: the cached copy's point this core resumes from (`startFromCache` with resume): until the first welcome
+   * the hello names it (`since`, `epoch`) exactly as a reconnect names its own, and the room answers with the rows
+   * since it (a catch-up) or, past its horizon or in another epoch, with its reset snapshot. Null: none.
+   */
+  private resumeFrom: { readonly clock: number; readonly epoch: string } | null = null
+  private resumeAnswer: ResumeOutcome | null = null
+  /** M6-2: the scene this core started on is a cached copy it painted (not another core's) */
+  private paintedFromCache = false
 
   // ---- lease
   private leaseListener: ((m: LeaseServerMessage) => void) | null = null
@@ -830,6 +859,66 @@ export class LobbyEngineCore implements EngineCore {
     this.log('start_scene', { elements: pre.length })
   }
 
+  /**
+   * M6-2 / M6-3 (wave M, PWR-4): starts this core on the board cache's copy of the server's state, BEFORE
+   * `start()`, on an empty scene (anything else: false, nothing done; the page then opens as before).
+   *
+   *  - Phase 1, always: the copies are installed in the scene through the scene adapter (the Excalidraw adapter's
+   *    `apply`: CaptureUpdateAction.NEVER) and taken as another core's copies are (`adoptStartScene`, DEF-GAPS-1):
+   *    seen, never classified, never pushed until the first welcome, which rebuilds the whole scene from the
+   *    server's state in one apply (what the room does not have leaves the scene). So a receive-only tab that
+   *    opened from the cache pushes nothing, whatever the scene does with the copies before then (a re-measure,
+   *    an image status).
+   *  - Phase 2, with `resume`: the copies are also the confirmed map, and until the first welcome the hello names
+   *    their `clock` and `epoch` as `since` and `epoch`, as a reconnect names its own. The room answers with the
+   *    rows changed since (a catch-up welcome, the path every reconnect already takes), or with its reset snapshot
+   *    when the clock is behind its horizon or the epoch is not its (a restore): the existing reset path, which
+   *    replaces the confirmed map. Everything else of the first welcome is a cold open's (`this.epoch` and
+   *    `this.clock` stay unset until it, so its lost-push and offline-queue decisions are a fresh page's).
+   */
+  startFromCache(cache: CachedStart, o: { resume: boolean }): boolean {
+    if (this.started || this.stopped || this.welcomes > 0) return false
+    if (this.scene.read().elements.length > 0) return false
+    if (!cache.elements.length) return false
+    this.scene.apply(cache.elements.map((el) => clone(el)))
+    if (o.resume) {
+      this.confirmedMap.clear()
+      for (const el of cache.elements) this.confirmedMap.set(el.id, clone(el))
+      this.horizon = cache.horizon
+      this.resumeFrom = { clock: cache.clock, epoch: cache.epoch }
+    }
+    this.paintedFromCache = true
+    // taken as seen at once (not only at `start()`): a scene change reported before it is nobody's write either
+    this.adoptStartScene()
+    this.log('cache_start', { elements: cache.elements.length, resume: o.resume, since: cache.clock })
+    return true
+  }
+
+  /** M6-3: how the first welcome answered a resume from the cache (null: no resume, or no welcome yet). */
+  get resumeOutcome(): ResumeOutcome | null {
+    return this.resumeAnswer
+  }
+
+  /** M6-2: the scene shows the board cache's copy, and no welcome has replaced it yet. */
+  get showingCachedCopy(): boolean {
+    return this.paintedFromCache && this.welcomes === 0
+  }
+
+  /**
+   * M6-1: the confirmed copy at one consistent point, for the board cache: every server copy this core holds and
+   * the clock it is at (never a local, pending or held value: those live in the scene and the tracked state).
+   * Null before the first welcome, while a reset waits for its snapshot, and during a resync.
+   */
+  cacheContent(): { epoch: string; clock: number; horizon: number; elements: Iterable<SceneElement> } | null {
+    if (this.welcomes === 0 || this.awaitingSnapshot || this.resyncing || this.epoch === null) return null
+    return {
+      epoch: this.epoch,
+      clock: this.clock,
+      horizon: this.horizon,
+      elements: this.confirmedMap.values(),
+    }
+  }
+
   stop(): void {
     this.stopped = true
     for (const u of this.unsubscribe.splice(0)) u()
@@ -887,12 +976,14 @@ export class LobbyEngineCore implements EngineCore {
   }
 
   private sendHello(): void {
+    // M6-3: a core that resumes from the cache names the cached copy's point until its first welcome
+    const resume = this.epoch === null ? this.resumeFrom : null
     this.transport.send({
       type: 'hello',
       proto: PROTO,
       schema: ELEMENT_SCHEMA_VERSION,
-      since: this.epoch ? this.clock : 0,
-      epoch: this.epoch,
+      since: this.epoch ? this.clock : (resume?.clock ?? 0),
+      epoch: this.epoch ?? resume?.epoch ?? null,
       tab: this.tab,
     })
   }
@@ -1827,6 +1918,14 @@ export class LobbyEngineCore implements EngineCore {
   }
 
   private onWelcome(w: Welcome): void {
+    // M6-3: the answer to a resume from the cache: a catch-up, or the reset path (behind the horizon; another
+    // epoch). The board session drops a cached copy of another epoch
+    if (this.resumeFrom) {
+      const r = this.resumeFrom
+      this.resumeFrom = null
+      this.resumeAnswer = !w.reset ? 'catch-up' : w.epoch !== r.epoch ? 'epoch' : 'reset'
+      this.log('cache_resume', { outcome: this.resumeAnswer, since: r.clock, clock: w.clock })
+    }
     const epochChanged = this.epoch !== null && this.epoch !== w.epoch
     this.epochReset = epochChanged
     this.welcome = w
@@ -1983,6 +2082,7 @@ export class LobbyEngineCore implements EngineCore {
     else this.sendAfterWelcome()
     this.retryDelay = 0
     this.updateSaved()
+    this.emit({ kind: 'confirmed' })
   }
 
   /** A welcome's tail: everything pushable, the lease messages queued behind it, then the stale releases. */
@@ -2447,6 +2547,7 @@ export class LobbyEngineCore implements EngineCore {
     // an edit that could not go out before this frame (a change waiting for its element) goes now
     if (this.hasPushable()) this.scheduleFlush(false)
     this.updateSaved()
+    this.emit({ kind: 'confirmed' })
   }
 
   /** Starts (or stops) the fallback that drops changes still waiting for a catch-up (awaitingCatchUp). */

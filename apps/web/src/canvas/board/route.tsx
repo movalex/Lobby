@@ -21,12 +21,17 @@
  * downloads, the board skeleton (./BoardSkeleton.tsx). K1-7: a board chunk that no longer exists (a tab
  * from before a deploy) reloads the page once (lib/stale-chunk.ts) instead of breaking it; one that failed
  * while offline waits for the connection instead (round 2 refix).
+ *
+ * M6 (wave M, PWR-4): with the board and its ticket, this user's copy of the board in this browser is read
+ * (canvas/sync/adapter/board-cache-db.ts `preloadBoardCache`; the light half of the cache, no canvas-schema), so
+ * the board page can paint it the moment its canvas exists.
  */
 import { lazy, Suspense, useEffect, useRef } from 'react'
 import { useSession } from '../../auth/session.tsx'
 import { type BoardPageModule, loadBoardCode, preloadBoardOpen } from '../../lib/prefetch-board.ts'
 import { recoverChunk, reloadWhenOnline, staleChunks } from '../../lib/stale-chunk.ts'
 import { MessageScreen } from '../../ui/screens.tsx'
+import { preloadBoardCache } from '../sync/adapter/board-cache-db.ts'
 import { BoardSkeleton } from './BoardSkeleton.tsx'
 
 /** What a board shows while a stale board chunk reloads the page (or, after a reload loop, asks to). */
@@ -86,11 +91,18 @@ export function boardPageFor(
 export default function ExcalidrawBoardRoute({ boardId }: { boardId: string }) {
   const page = boardPageFor(location.search)
   const { state } = useSession()
+  const uid = state.status === 'signed-in' ? state.me.user.id : null
   // K1-2: once per board this route shows (idempotent: React may render twice)
   const preloaded = useRef<string | null>(null)
   if (page === 'lobby' && preloaded.current !== boardId) {
     preloaded.current = boardId
     preloadBoardOpen(boardId)
+  }
+  // M6: and this user's cached copy, once per board and user (a guest has none: nothing is ever written for one)
+  const cacheRead = useRef<string | null>(null)
+  if (page === 'lobby' && uid && cacheRead.current !== `${boardId}|${uid}`) {
+    cacheRead.current = `${boardId}|${uid}`
+    preloadBoardCache(boardId, uid)
   }
   const workspaces = state.status === 'signed-in' ? state.me.workspaces : undefined
   return (

@@ -4,6 +4,9 @@
 
 export type SaveState =
   | 'connecting' // first connect not finished
+  // M6-2 (wave M): this device's last copy of the board is shown, read-only, until the first welcome replaces it
+  // (never "Saved": nothing of this tab is confirmed then)
+  | 'cached'
   | 'saved' // everything acknowledged + verified
   | 'saving' // local changes unsent, in flight, or being verified
   | 'offline' // disconnected, nothing unsaved

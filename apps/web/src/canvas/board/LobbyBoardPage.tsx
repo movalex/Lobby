@@ -17,6 +17,11 @@
  * dock's column is kept before the features install, and the connecting cover is the skeleton's canvas, so
  * nothing moves when the board takes over; a chunk a deploy removed shows a notice with a Reload button
  * while the board is open (K1-7: lib/stale-chunk.ts).
+ *
+ * Wave M (W6, PWR-4): this device's last copy of the board (canvas/sync/adapter/snapshot-cache.ts) is painted
+ * read-only the moment the canvas exists, once the board answered 200, with "Showing your last copy ·
+ * connecting" (`cached-copy`) until the first welcome replaces it (M6-2); the board's answer 403/404, the event
+ * stream's access-lost and a trashed board drop that copy.
  */
 import '../engine/engineGlobals.ts'
 import type { Board, BoardDetail, Me, TicketResponse } from '@draftroom/contracts'
@@ -47,6 +52,8 @@ import { rememberBoardTitle, takeBoardDetail, takeBoardTicket } from '../../lib/
 import { boardPath, navigate, setLeaveGuard } from '../../lib/routing.ts'
 import { recoverChunk, registerStaleChunkBoard } from '../../lib/stale-chunk.ts'
 import { useResource } from '../../lib/useResource.ts'
+import { CachedCopy } from '../../sync-quality/CachedCopy.tsx'
+import { cachedOfflineLabel } from '../../sync-quality/copy.ts'
 import { useEngineSaveStatus } from '../../sync-quality/useEngineSaveStatus.ts'
 import { useTheme } from '../../theme/useTheme.ts'
 import { isFocusLost, isTextEntry } from '../../ui/focus.ts'
@@ -61,6 +68,7 @@ import type { LobbyCanvas } from '../api/lobby-canvas.ts'
 import { ExcalidrawHost, type ExcalidrawHostProps, type HostWiring } from '../engine/ExcalidrawHost.tsx'
 import { parseFileKey } from '../files/loader.ts'
 import { guestQueueLeaver } from '../sync/adapter/offline-guest.ts'
+import { type CacheRead, purgeBoardCache, takeBoardCache } from '../sync/adapter/snapshot-cache.ts'
 import { BoardSkeleton, SkeletonToolbar } from './BoardSkeleton.tsx'
 import {
   BoardPeople,
@@ -100,12 +108,19 @@ const LEAVE_WAIT_MS = 5_000
 
 /** /b/:bid — loads the board (and the caller's role) from the API, then opens the canvas. */
 export function LobbyBoardPage({ boardId }: { boardId: string }) {
+  const uid = useMe().user.id
   // K1-2: the answer route.tsx asked for together with the ticket, once; a retry asks again
   const load = useCallback(
     (signal: AbortSignal) => takeBoardDetail(boardId) ?? api.getBoard(boardId, signal),
     [boardId],
   )
   const detail = useResource(load)
+  // M6-1: no access (403/404) or a trashed board: this person's copy of it goes, and is never painted
+  const noAccess = detail.status === 'error' && isNoAccess(detail.error)
+  const trashed = detail.status === 'ready' && detail.data.board.status === 'trashed'
+  useEffect(() => {
+    if (noAccess || trashed) void purgeBoardCache(boardId, uid)
+  }, [noAccess, trashed, boardId, uid])
   if (detail.status === 'loading') return <BoardSkeleton boardId={boardId} />
   if (detail.status === 'error') {
     if (isNoAccess(detail.error)) return <NoAccessScreen />
@@ -139,7 +154,14 @@ function LobbyBoardShell({ initial }: { initial: BoardDetail }) {
   // E2 (the D2 review): stable, as FirstTicket's ticket effect once depended on it. An inline arrow was a new
   // function on every render of this shell (a rename, a role change), so each one fetched a new ticket and
   // started a new board session and socket on the same canvas.
-  const onLost = useCallback(() => setAccessLost(true), [])
+  // M6-1: every access loss (a refused ticket, a FORBIDDEN close, the event stream's access-lost) drops this
+  // person's copy of the board
+  const lostBoard = initial.board.id
+  const lostUid = me.user.id
+  const onLost = useCallback(() => {
+    setAccessLost(true)
+    void purgeBoardCache(lostBoard, lostUid)
+  }, [lostBoard, lostUid])
 
   useEffect(() => {
     document.title = `${board.title} · Lobby`
@@ -294,6 +316,11 @@ function LobbyBoardView({
   handlers.current = { onRole, onAccessLost, refresh }
   const archived = useRef(board.status === 'archived')
   archived.current = board.status === 'archived'
+  // M6: this open's read of the board cache, taken once (React StrictMode's second session gets the same one);
+  // none for a trashed board
+  const [cache] = useState<CacheRead | null>(() =>
+    board.status === 'trashed' ? null : takeBoardCache(boardId, first.user.id),
+  )
 
   // The session (its socket, engine core, lease, offline queue) is made by the effect that disposes it, not
   // in render. React StrictMode (`vite dev`) runs every effect's cleanup once right after mount and then the
@@ -311,13 +338,14 @@ function LobbyBoardView({
       onTicket: (t) => handlers.current.onRole(t.role),
       onAccessLost: () => handlers.current.onAccessLost(),
       onSignedOut: () => void handlers.current.refresh(),
+      cache,
     })
     setSession(s)
     return () => {
       s.dispose()
       setSession((current) => (current === s ? null : current))
     }
-  }, [boardId, first, notify, dismiss])
+  }, [boardId, first, notify, dismiss, cache])
 
   if (!session) return <OpeningSkeleton board={board} role={rest.role} workspace={rest.workspace} />
   return (
@@ -399,6 +427,8 @@ function LobbyBoardScreen({
   }, [boardId])
 
   const readonly = isReadonlyRole(role, board.status) || snap.readonly
+  // M6-2: this device's copy is shown (read-only) until the first welcome
+  const showingCache = !!snap.cached && !snap.welcomed
   const canvas = snap.attached ? session.canvas : null
 
   // The feature context: stable per canvas and event stream; what changes (the board, the role, the open
@@ -486,6 +516,10 @@ function LobbyBoardScreen({
     guest: snap.guest,
     uploading,
     role,
+    cached:
+      showingCache && snap.cached
+        ? { savedAt: snap.cached.savedAt, offline: snap.phase === 'offline' }
+        : null,
   })
 
   // K1-7: while this board is open, a chunk a deploy removed shows a notice with a Reload button (never a
@@ -533,8 +567,9 @@ function LobbyBoardScreen({
   // CRIT-38: the input layer takes a drop on the canvas from someone who cannot add to the board (a viewer,
   // a commenter, an archived board) and did nothing with it, silently: say why. Capture phase on the
   // region, so it runs before the input layer's own listener inside it; a field (a comment) keeps its drop.
-  const dropBlocked = useRef({ readonly, archived: board.status === 'archived' })
-  dropBlocked.current = { readonly, archived: board.status === 'archived' }
+  // (not while the cached copy is shown: the role's own answer comes with the welcome)
+  const dropBlocked = useRef({ readonly: readonly && !showingCache, archived: board.status === 'archived' })
+  dropBlocked.current = { readonly: readonly && !showingCache, archived: board.status === 'archived' }
   useEffect(() => {
     const root = rootRef.current
     if (!root) return
@@ -610,8 +645,14 @@ function LobbyBoardScreen({
 
   // PRI-08: on a read-only board, the first edit someone tries (dragging, double-clicking or deleting)
   // explains why nothing happened, once, with a way to ask for more.
-  useBlockedEditHint(canvas, readonly && board.status === 'active', boardId, me.user.id, role, notify, () =>
-    setSharing('request'),
+  useBlockedEditHint(
+    canvas,
+    readonly && !showingCache && board.status === 'active',
+    boardId,
+    me.user.id,
+    role,
+    notify,
+    () => setSharing('request'),
   )
 
   const rename = useCallback(
@@ -720,10 +761,18 @@ function LobbyBoardScreen({
       )}
       {!focusMode && <BoardAccount />}
       {conn === 'offline' && (
-        <div className="dr-banner" data-testid="offline-banner" role="status">
-          {snap.guest
-            ? "You're offline. Changes you make are kept in this tab only until the connection returns; reloading now would lose them."
-            : "You're offline. Changes you make are kept on this device and sync when the connection returns."}
+        <div
+          className="dr-banner"
+          data-testid="offline-banner"
+          role="status"
+          data-cached={showingCache || undefined}
+        >
+          {showingCache && snap.cached
+            ? // M6-4: the copy on screen is this device's, read-only until the connection returns
+              `${cachedOfflineLabel(snap.cached.savedAt)}. You can edit once you are back online.`
+            : snap.guest
+              ? "You're offline. Changes you make are kept in this tab only until the connection returns; reloading now would lose them."
+              : "You're offline. Changes you make are kept on this device and sync when the connection returns."}
         </div>
       )}
       <div className="dr-board__body">
@@ -752,7 +801,13 @@ function LobbyBoardScreen({
               <PendingAffordance edit={snap.edit} />
             </section>
           </div>
-          {!snap.welcomed && !closed && (
+          {showingCache && snap.cached && !closed && (
+            // M6-2: the cached copy is on the canvas (read-only); the skeleton's toolbar keeps its place
+            <CachedCopy savedAt={snap.cached.savedAt} offline={snap.phase === 'offline'}>
+              <SkeletonToolbar readonly={readonly} />
+            </CachedCopy>
+          )}
+          {!snap.welcomed && !showingCache && !closed && (
             // K1-5: the skeleton's canvas (shimmer, greyed toolbar) until the first welcome
             <div
               className="dr-screen dr-screen--overlay lobby-canvas-screen lobby-canvas-screen--skeleton"

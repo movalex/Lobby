@@ -21,6 +21,7 @@ export interface SaveStatusView {
 
 const TONE: Record<DisplayState, 'quiet' | 'busy' | 'warn' | 'danger'> = {
   connecting: 'busy',
+  cached: 'busy',
   saved: 'quiet',
   saving: 'busy',
   offline: 'warn',
@@ -89,7 +90,7 @@ export function saveAnnouncement(
     return { say: prev === next ? null : (label ?? saveLabel(next, role)), trouble: next }
   if (!trouble) return { say: null, trouble: null }
   // Still on the way back: say it when it is all stored (or, read-only, simply connected again).
-  if (next === 'saving' || next === 'connecting') return { say: null, trouble }
+  if (next === 'saving' || next === 'connecting' || next === 'cached') return { say: null, trouble }
   const wasOffline = trouble !== 'rejected'
   if (next === 'saved')
     return { say: wasOffline ? 'Back online. All changes saved.' : 'Saved.', trouble: null }

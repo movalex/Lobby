@@ -14,7 +14,7 @@
  *    left readable on a shared machine. An expired or revoked session (a 401, NOT_AUTHENTICATED, a
  *    sign-out in another tab) purges nothing: the queue is keyed by user, so only the same user's next
  *    session on this browser loads (and replays) it, never another account's (`load` and
- *    `adoptOthers` match `uid`);
+ *    `adoptOthers` match `uid`); the same Sign out deletes the user's board copies (./snapshot-cache.ts, M6-1);
  *  - CONTRACTS_REV 12 (wave L compat refix, round 2): this web's records are in their own form (`queueBoard`:
  *    `boardId` is `q2:<board>`, the key `q2:<board>|<uid>|<tab>`), which the rev-11 web (437b4e7, open in old
  *    tabs across the deploy, possibly for days) never adopts: its `adoptOthers` matches `boardId` to the
@@ -32,6 +32,7 @@
  */
 import { mergeOfflineQueues } from '../core/offline-merge.ts'
 import type { OfflineEntry, OfflineQueueStore } from '../types.ts'
+import { purgeBoardCachesOf } from './board-cache-db.ts'
 import { purgeGuestQueuesOf } from './offline-guest.ts'
 
 const DB = 'lobby-offline'
@@ -267,6 +268,8 @@ export function createSignOutPurge(
   purge: (uid: string) => Promise<unknown> = (uid) => {
     // and the queues a guest has in this page's memory (./offline-guest.ts), which outlive a board session
     purgeGuestQueuesOf(uid)
+    // M6-1 (wave M): and every board copy this user's sessions kept (./snapshot-cache.ts; never rejects)
+    void purgeBoardCachesOf(uid)
     return purgeOfflineQueuesOf(uid)
   },
 ): (seen: SessionSeen) => void {
