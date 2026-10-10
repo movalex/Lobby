@@ -347,3 +347,7 @@ on the sync disk (§6).
     - Not live-tested: AI actions (the owner's AI notice was not accepted on his behalf); the laser between two signed-in tabs.
   - Cleanup: the guest link revoked, the test board in Trash.
   - Open follow-up: the Mermaid-paste prompt flake (`wave-l/mermaid-flake`).
+- **2026-10-10 10:17Z, hotfix H1 deployed** (web only, `f380e83`, `dep-db510uajnfac738rtgc0`; 0 board connections in the 2 h before). It fixes the phone board-blanking loop in SelectionBar and adds per-feature error boundaries.
+  - Drift 0. Live smoke 40 passed, 0 failed.
+  - Live check: a 375x812 name-only guest on a Retrospective board with 14 framed notes ran the palette command "Select 14 notes", the exact path that crashed before (React #185). The board stayed alive: no page errors, the canvas rendering, Saved.
+  - Cleanup: the link revoked, the board in Trash.
