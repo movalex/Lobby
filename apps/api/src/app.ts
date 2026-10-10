@@ -28,19 +28,19 @@ import { listUserWorkspaces } from './auth/users.ts'
 import { type CanvasEngine, type CanvasEngineProbe, createCanvasEngineProbe } from './canvas-engine.ts'
 import type { ApiConfig } from './config.ts'
 import { type ApiLimits, type AppContext, DEFAULT_LIMITS, type InvitationRateLimits } from './context.ts'
-import { badRequest, notFound, toErrorResponse, unauthenticated } from './errors.ts'
+import { badRequest, toErrorResponse, unauthenticated } from './errors.ts'
 import { EventHub } from './events/hub.ts'
 import { registerEventRoutes } from './events/routes.ts'
 import type { FeatureContext } from './features/context.ts'
 import { registerFeedback } from './features/feedback/index.ts'
 import { INTERNAL_CHECKPOINT_POSTS } from './features/history/checkpoint-all.ts'
 import { registerFeatures } from './features/index.ts'
-import { routeUnlessPending } from './features/pending-routes.ts'
 import type { BlobStore } from './files/blobs.ts'
 import { filesPlugin } from './files/plugin.ts'
 import { registerStorage } from './files/storage-routes.ts'
 import { openBlobStore } from './files/store.ts'
 import { boardsShowingAsset, createFileAuthorizer } from './files-auth.ts'
+import { createHealth, HEALTH_DEEP_ROUTE, type HealthOptions } from './health.ts'
 import { createHttpSyncNotifier, fanOutAccessChanges, type SyncNotifier } from './notifier.ts'
 import { registerAuthRoutes } from './routes/auth.ts'
 import { registerBoardRoutes } from './routes/boards.ts'
@@ -131,6 +131,8 @@ export interface ApiDeps {
    * root guard out, to prove the in-route creator checks hold on their own. Never set outside tests.
    */
   domainAccessGuard?: boolean
+  /** GET /healthz/deep's thresholds and timeouts (health.ts DEFAULT_HEALTH; tests lower them). */
+  health?: Partial<HealthOptions>
 }
 
 export interface ApiServer {
@@ -490,8 +492,11 @@ async function buildServer(
     if (!reply.hasHeader('x-content-type-options')) reply.header('x-content-type-options', 'nosniff')
     return payload
   })
+  // M5-6: what /healthz/deep counts (5xx answers, the AI provider's failures), in memory only.
+  const health = createHealth({ db, now: () => now().getTime(), options: deps.health })
   app.addHook('onResponse', async (req, reply) => {
     const route = req.routeOptions.url
+    health.record(req.method, route, reply.statusCode)
     // An idle worker polls /claim every few seconds forever (204 = nothing to do): debug, not info, so
     // `pnpm dev` and production logs are not a wall of empty polls. Claims that hand out a job stay info.
     const idlePoll = route === `${WORKER_PREFIX}claim` && reply.statusCode === 204
@@ -614,12 +619,17 @@ async function buildServer(
 
   // Liveness only (no database, no auth): for Render health checks and local tooling.
   app.get('/healthz', async (_req, reply) => reply.type('text/plain').send('ok'))
-  // Wave M (M5-6, owner W5; a stub landed by the foundation): GET /healthz/deep, public and without data: 200 'ok',
-  // or 503 with comma-separated reason codes (db, 5xx, ai). Render's healthCheckPath stays /healthz. Pending
-  // (features/pending-routes.ts): not registered until W5 implements it, so it answers 404 like any unknown route.
-  routeUnlessPending(app, 'GET', '/healthz/deep', async () => {
-    throw notFound()
+  // Wave M (M5-6): for an outside monitor, public and without data: 200 'ok', or 503 with comma-separated reason
+  // codes (db, 5xx, ai; health.ts). Render's healthCheckPath stays /healthz, so a deep failure never restarts the api.
+  app.get(HEALTH_DEEP_ROUTE, async (_req, reply) => {
+    const reasons = await health.reasons()
+    return reply
+      .code(reasons.length ? 503 : 200)
+      .type('text/plain')
+      .send(reasons.length ? reasons.join(',') : 'ok')
   })
+  // S8: Render's deploy probe asks for GET / once per deploy; 204 instead of a 404 logged at warning level.
+  app.get('/', async (_req, reply) => reply.code(204).send())
 
   // Stream diagnostic (no auth, no data): a 2 KB SSE comment, then three ticks one second apart, then
   // the end. It tells whether a proxy in front of the api (the static site's /api rewrite on Render)

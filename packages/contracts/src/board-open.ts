@@ -10,7 +10,18 @@
 // a refused part is never an error, and never a hint of why.
 //
 // Downgrade: an api without the route answers 404 (the web then makes the separate reads, as today); a web
-// without it never calls it. Until W5 implements it the route is not registered (404 NOT_FOUND).
+// without it never calls it.
+//
+// Every part is decided on its own: a caller who may not view the board (or a malformed or unknown board id) gets
+// 200 with every part null, the same answer whatever the id, so the route reveals nothing its parts' routes would
+// not (their 404s). A server error fails the whole answer (the web then makes the separate reads).
+//
+// Events (M5-1): the body also carries `eventsSeq`, where the board's events stood just before the parts were
+// read (apps/api/src/events/hub.ts boardPosition). The board's event stream says where they stand in every hello
+// (`data.eventsSeq`), and each delivered event's `seq` is the board's position after it. Positions only move
+// forward: while the answer's is at or after every position the stream has shown (same process), it holds everything
+// the page has heard of, and a feature's first fetch may take its part; otherwise the feature reads its own route. A
+// part is for its feature's first fetch only (apps/web/src/lib/open-state.ts).
 //
 // Do not import values from ./index.ts here: index.ts re-exports this module.
 
@@ -71,6 +82,16 @@ export const OpenState = z.object({
 export type OpenState = z.infer<typeof OpenState>
 
 export type OpenStatePart = keyof OpenState
+/** `<process>.<seq>`: OpenStateBody.eventsSeq and the board stream hello's `data.eventsSeq`. */
+export const OPEN_STATE_EVENTS_SEQ_PATTERN = /^[0-9a-f]{8}\.\d{1,15}$/
+/**
+ * The route's 200 body: the parts (OpenState) and `eventsSeq`. Lazy: OpenState's fields are getters (see above), so
+ * it is built at the first parse, when every module exists.
+ */
+export const OpenStateBody = z.lazy(() =>
+  OpenState.extend({ eventsSeq: z.string().regex(OPEN_STATE_EVENTS_SEQ_PATTERN).optional() }),
+)
+export type OpenStateBody = OpenState & { eventsSeq?: string }
 export const OPEN_STATE_PARTS = [
   'exportPolicy',
   'outside',

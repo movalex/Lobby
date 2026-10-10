@@ -53,6 +53,12 @@ export function mayChangeWhoHasAccess(data: unknown): boolean {
 export const MENTIONABLES_REFRESH_DELAY_MS = 300
 /** An @query that matches nobody asks the server again at most this often. */
 export const MENTIONABLES_MISS_REFETCH_MS = 5_000
+/**
+ * M5-3 review: the bell's cheap poll ("anything newer than this seq?") cannot see a read mark made in another tab or
+ * device, or a notification removed that was not the newest (its comment deleted, access revoked): one poll this long
+ * after the last whole answer asks for the whole list instead, so a quiet tab's bell is never more than this stale.
+ */
+export const NOTIFICATIONS_WHOLE_REFRESH_MS = 5 * 60_000
 
 export interface CommentsStoreOptions {
   boardId: string
@@ -116,6 +122,15 @@ export class CommentsStore {
   private readonly deletedComments = new Set<string>()
   private loadSeq = 0
   private notificationsTimer: ReturnType<typeof setTimeout> | null = null
+  /** M5-3: whether the scheduled refresh must be a whole one (any caller that asked for one wins). */
+  private notificationsTimerWhole = false
+  /** M5-3: the `seq` of the last bell answer applied (null: none yet, or an api that sends none). */
+  private notificationsSeq: number | null = null
+  /** M5-3: bell requests sent, and the newest one applied (an older answer never overwrites a newer one). */
+  private notificationsAsked = 0
+  private notificationsApplied = 0
+  /** M5-3 review: when the last whole bell answer was applied (a 200, or a 204 to "since 0"); -Infinity: none yet. */
+  private notificationsWholeAt = Number.NEGATIVE_INFINITY
   private mentionablesLoading: Promise<void> | null = null
   private mentionablesSeq = 0
   private mentionablesAskedAt = 0
@@ -539,21 +554,52 @@ export class CommentsStore {
     this.mentionablesLoading = this.fetchMentionables()
   }
 
-  async refreshNotifications(): Promise<void> {
+  /**
+   * Reads the bell. Wave M (M5-3, CAP-BELL-POLL): `onlyIfNew` (the minute poll) sends the `seq` of the last answer,
+   * and a 204 (nothing added or removed since) keeps the list as it is, after one cheap query on the api. Every
+   * other refresh (opening the bell, a board event, a reconnect, the tab shown or focused, after marking read)
+   * asks for the whole list: read marks made elsewhere do not change the seq. Both send `since`, so the answer
+   * carries the seq to send next; a whole refresh sends 0, which only an empty bell answers with a 204. A poll
+   * NOTIFICATIONS_WHOLE_REFRESH_MS or more after the last whole answer is a whole one (what the seq cannot see).
+   */
+  async refreshNotifications(opts: { onlyIfNew?: boolean } = {}): Promise<void> {
+    const cheap =
+      opts.onlyIfNew &&
+      this.notificationsSeq !== null &&
+      Date.now() - this.notificationsWholeAt < NOTIFICATIONS_WHOLE_REFRESH_MS
+    const since = cheap && this.notificationsSeq !== null ? this.notificationsSeq : 0
+    const asked = ++this.notificationsAsked
     try {
-      const res = await this.api.notifications()
-      if (!this.disposed) this.notifications.set(res)
+      const res = await this.api.notifications(undefined, since)
+      if (this.disposed || asked < this.notificationsApplied) return
+      this.notificationsApplied = asked
+      if (res === null) {
+        // nothing newer than `since`; and "since 0" answered so means there is nothing at all
+        if (since === 0) {
+          this.notificationsSeq = 0
+          this.notificationsWholeAt = Date.now()
+          this.notifications.set({ notifications: [], unreadCount: 0 })
+        }
+        return
+      }
+      const { seq, ...list } = res
+      this.notificationsSeq = seq ?? null
+      this.notificationsWholeAt = Date.now()
+      this.notifications.set(list)
     } catch {
       // keep the previous list; the next refresh tries again
     }
   }
 
-  scheduleNotificationsRefresh(delayMs = 400) {
+  scheduleNotificationsRefresh(delayMs = 400, opts: { onlyIfNew?: boolean } = {}) {
     if (this.disposed) return
+    // folded with a pending refresh: a whole one wins over a poll's
+    const whole = !opts.onlyIfNew || (this.notificationsTimer !== null && this.notificationsTimerWhole)
     if (this.notificationsTimer) clearTimeout(this.notificationsTimer)
+    this.notificationsTimerWhole = whole
     this.notificationsTimer = setTimeout(() => {
       this.notificationsTimer = null
-      void this.refreshNotifications()
+      void this.refreshNotifications({ onlyIfNew: !whole })
     }, delayMs)
   }
 

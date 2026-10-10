@@ -35,6 +35,13 @@ export interface Db extends Queryable {
    */
   transaction<T>(fn: (tx: Queryable) => Promise<T>): Promise<T>
   close(): Promise<void>
+  /**
+   * Wave M (M5-6 review): a liveness check for the api's /healthz/deep on a connection of its own, outside the pool
+   * (a busy pool is not a database that is down, and a hung probe never holds one of its few connections). Resolves
+   * once SELECT 1 answered within `timeoutMs`; rejects otherwise, by then at the latest (its connection is dropped).
+   * Postgres only: PGlite has one in-process connection and no network to hang on.
+   */
+  ping?(timeoutMs: number): Promise<void>
 }
 
 export type DbConfig =

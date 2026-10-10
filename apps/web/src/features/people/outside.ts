@@ -12,6 +12,7 @@
 import { BoardOutsidePeople, EXTERNAL_TAG, type OutsideStatus } from '@draftroom/contracts'
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { api } from '../../api/client.ts'
+import { openStateOrRoute } from '../../lib/open-state.ts'
 import { SHARE_CHANGED_EVENT, SHARE_REMOTE_EVENT } from '../sharing/api.ts'
 
 export interface OutsideSnapshot {
@@ -31,11 +32,19 @@ const POLL_MS = 60_000
 
 type Fetcher = (boardId: string, signal: AbortSignal) => Promise<BoardOutsidePeople>
 
+// M5-1: the store's first fetch takes the board-open read's part, waiting for it while it is on its way; every later
+// one asks the route
 const defaultFetcher: Fetcher = (boardId, signal) =>
-  api.request('GET', `/api/boards/${encodeURIComponent(boardId)}/sharing/outside`, {
-    schema: BoardOutsidePeople,
+  openStateOrRoute(
+    boardId,
+    'outside',
+    () =>
+      api.request('GET', `/api/boards/${encodeURIComponent(boardId)}/sharing/outside`, {
+        schema: BoardOutsidePeople,
+        signal,
+      }),
     signal,
-  })
+  )
 
 export class OutsideStore {
   readonly boardId: string

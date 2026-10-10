@@ -34,6 +34,9 @@ export const ACCESS_CHANGED_EVENT = 'access.changed'
 /** Longest actor name put on the wire (display names are free text). */
 const ACTOR_NAME_MAX = 80
 
+/** Boards whose last event position is remembered (least recently changed forgotten first; see boardPosition). */
+const BOARD_POSITIONS_MAX = 50_000
+
 export interface BoardEvent {
   /** Namespaced type, e.g. 'comments.thread', 'workshop.timer'. */
   type: string
@@ -133,6 +136,12 @@ export class EventHub {
   private readonly byUser = new Map<string, Set<Entry>>()
   private total = 0
   private seq = 0
+  /** Wave M (M5-1): per board, the seq of the last event published to it or access change on it. */
+  private readonly positions = new Map<string, number>()
+  /** A new hub (a new process) starts new positions: one from before a restart never equals one after it. */
+  private readonly epoch = Math.floor(Math.random() * 0xffffffff)
+    .toString(16)
+    .padStart(8, '0')
   private generation = 0
   private revalidator: StreamRevalidator | null = null
 
@@ -212,6 +221,7 @@ export class EventHub {
    */
   publish(boardId: string, event: BoardEvent, opts: { to?: (userId: string) => boolean } = {}): void {
     const delivered: DeliveredEvent = { ...event, seq: ++this.seq, boardId, at: new Date().toISOString() }
+    this.moved(boardId, delivered.seq)
     for (const listener of [...(this.listeners.get(boardId) ?? [])]) {
       try {
         listener(delivered)
@@ -236,6 +246,7 @@ export class EventHub {
    */
   accessChanged(change: { boardId: string; userId?: string; actor?: { id: string; name: string } }): void {
     this.generation++
+    this.moved(change.boardId, ++this.seq)
     const affected = [...(this.byBoard.get(change.boardId) ?? [])].filter(
       (e) => change.userId === undefined || e.userId === change.userId,
     )
@@ -260,6 +271,29 @@ export class EventHub {
       { type: ACCESS_CHANGED_EVENT, data: { actor: { name } } },
       { to: (userId) => (change.userId === undefined ? userId !== actor.id : userId === change.userId) },
     )
+  }
+
+  /**
+   * Wave M (M5-1): where the board's events stand now, as `<process>.<seq>`. It only moves forward: two equal
+   * positions mean nothing was published to the board, and no access to it changed, between the two reads (an
+   * audience-limited event moves it for everyone, which can only make a client refetch). GET
+   * /api/boards/:bid/open-state reads it before anything else, and every hello carries it from the moment its stream is
+   * subscribed (a delivered event's `seq` is the board's position after it): while the open-state's position is at or
+   * after every position the page's stream has shown, the page heard of no event the answer lacks
+   * (apps/web/src/lib/open-state.ts), so its answer still holds.
+   */
+  boardPosition(boardId: string): string {
+    return `${this.epoch}.${this.positions.get(boardId) ?? 0}`
+  }
+
+  private moved(boardId: string, seq: number): void {
+    this.positions.delete(boardId)
+    this.positions.set(boardId, seq)
+    if (this.positions.size > BOARD_POSITIONS_MAX) {
+      const oldest = this.positions.keys().next().value
+      // a forgotten board reads as 0 again: a position taken before can only differ from it (a refetch)
+      if (oldest !== undefined) this.positions.delete(oldest)
+    }
   }
 
   /**

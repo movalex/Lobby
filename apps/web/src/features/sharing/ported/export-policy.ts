@@ -44,6 +44,7 @@ import {
 } from '@draftroom/contracts'
 import type { ApiClient } from '../../../api/client.ts'
 import type { NoticeInput } from '../../../board/board-context.ts'
+import { openStateOrRoute } from '../../../lib/open-state.ts'
 import type { BoardRole } from '../../../lib/permissions.ts'
 import { type Atom, atom } from '../../../lib/signals.ts'
 import type { BoardEvents } from '../../events.ts'
@@ -139,8 +140,9 @@ function read(e: Entry, api: ApiClient): Promise<ExportPolicyState> {
   if (e.inflight && e.inflight.gen === e.gen) return e.inflight.promise
   const gen = e.gen
   const may = e.order.begin()
-  const promise = exportPolicyApi(api)
-    .get(e.boardId)
+  // M5-1: the resource's first read takes the board-open read's part, waiting for it while it is on its way
+  // (lib/open-state.ts decides whether it still holds); every later read (a policy event, a resync) asks the route
+  const promise = openStateOrRoute(e.boardId, 'exportPolicy', () => exportPolicyApi(api).get(e.boardId))
     .then((s) => {
       // an answer to a request sent before a later policy event (or overtaken by a later answer) is dropped
       if (may()) {

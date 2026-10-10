@@ -25,6 +25,7 @@
  */
 import type { BoardDetail, TicketResponse } from '@draftroom/contracts'
 import { api } from '../api/client.ts'
+import { forgetOpenState, preloadOpenState } from './open-state.ts'
 import { matchRoute, safeReturnTo } from './routing.ts'
 
 // ---- the board code (K1-1, K1-3) -----------------------------------------------------------------------
@@ -262,11 +263,14 @@ interface OpenDeps {
   getBoard(boardId: string): Promise<BoardDetail>
   boardTicket(boardId: string): Promise<TicketResponse>
   now(): number
+  /** M5-1: the board-open read (lib/open-state.ts), with the other two; absent in deps that leave it out. */
+  openState?(boardId: string): void
 }
 const defaultDeps: OpenDeps = {
   getBoard: (boardId) => api.getBoard(boardId),
   boardTicket: (boardId) => api.boardTicket(boardId),
   now: () => Date.now(),
+  openState: (boardId) => preloadOpenState(boardId),
 }
 
 /**
@@ -281,6 +285,8 @@ export function preloadBoardOpen(boardId: string, deps: OpenDeps = defaultDeps):
     return
   const detail = deps.getBoard(boardId)
   const ticket = deps.boardTicket(boardId)
+  // M5-1: the panels' reads in one request, alongside (the board's features take their parts: lib/open-state.ts)
+  deps.openState?.(boardId)
   // nobody may take them (the person left, a 403 made the ticket moot): never an unhandled rejection
   detail.catch(() => {})
   ticket.catch(() => {})
@@ -336,6 +342,7 @@ export function noteSessionUser(uid: string | null | undefined): void {
   if (hintsUser !== null && uid !== hintsUser) {
     hints.clear()
     open = null
+    forgetOpenState()
   }
   hintsUser = uid
 }

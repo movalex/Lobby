@@ -130,13 +130,24 @@ describe('0027_feedback', () => {
 
   it('has the indexes the inbox pages by', async () => {
     db = await openTestDb()
-    const idx = await db.query<{ indexname: string }>(
-      "SELECT indexname FROM pg_indexes WHERE tablename = 'feedback' ORDER BY 1",
+    // Wave M (M5-6): another schema's feedback table (a test running in parallel on the same real Postgres, each
+    // in its own schema: src/testing.ts) is not this one. Without the schema filter its indexes were counted too.
+    const sibling = `dr_sibling_${Math.random().toString(36).slice(2, 10)}`
+    await db.exec(
+      `CREATE SCHEMA ${sibling}; CREATE TABLE ${sibling}.feedback (id text PRIMARY KEY);
+       CREATE INDEX feedback_created_idx ON ${sibling}.feedback (id)`,
     )
-    expect(idx.rows.map((r) => r.indexname)).toEqual([
-      'feedback_created_idx',
-      'feedback_pkey',
-      'feedback_status_created_idx',
-    ])
+    try {
+      const idx = await db.query<{ indexname: string }>(
+        "SELECT indexname FROM pg_indexes WHERE tablename = 'feedback' AND schemaname = current_schema() ORDER BY 1",
+      )
+      expect(idx.rows.map((r) => r.indexname)).toEqual([
+        'feedback_created_idx',
+        'feedback_pkey',
+        'feedback_status_created_idx',
+      ])
+    } finally {
+      await db.exec(`DROP SCHEMA ${sibling} CASCADE`)
+    }
   })
 })

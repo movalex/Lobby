@@ -39,6 +39,7 @@ import {
   EditCommentInput,
   ListNotificationsQuery,
   ListThreadsQuery,
+  type ListThreadsResponse,
   LOBBY_CLIENT_HEADER,
   MarkNotificationsReadInput,
   mentionedUserIds,
@@ -52,10 +53,12 @@ import type { CreatorLookup } from '../../auth/creator-sql.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, badRequest, conflict, forbidden, notFound, parse } from '../../errors.ts'
 import type { BoardEvent } from '../../events/hub.ts'
+import { provideOpenStatePart } from '../board-open/parts.ts'
 import type { FeatureContext } from '../context.ts'
 import {
   boardOwners,
   insertNotifications,
+  latestNotificationSeq,
   listNotifications,
   lockBoardNotifications,
   markNotificationsRead,
@@ -272,6 +275,29 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
 
   // ---- threads -----------------------------------------------------------------------------------
 
+  /**
+   * GET /api/boards/:bid/threads's body for a caller whose access passed 'view', after the caller's 'me' freshen
+   * (`userId`: the freshened user). Without `status` (or 'all'): every thread the caller may see, which is also the
+   * board-open read's `threads` part (wave M, M5-1: the web asks for ?status=all).
+   */
+  const loadThreadList = async (
+    q: Queryable,
+    access: BoardAccess,
+    userId: string,
+    status?: CommentThread['status'],
+  ): Promise<ListThreadsResponse> => {
+    const team = await isTeamMember(q, access.board.workspace_id, userId, rule())
+    const threads = await loadThreads(q, access.board, { status, team, lookup })
+    const reads = await loadReads(
+      q,
+      userId,
+      threads.map((t) => t.id),
+    )
+    const teamOnlyDefault = team && (await hasOutsideAccess(q, access.board, now(), lookup))
+    return { threads, reads, privacy: { teamOnly: team, teamOnlyDefault } }
+  }
+  provideOpenStatePart(ctx, 'threads', { load: (q, c) => loadThreadList(q, c.access, c.user.id) })
+
   app.get('/api/boards/:bid/threads', async (req) => {
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
@@ -281,17 +307,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
     // Wave J: the caller's own addresses are confirmed like at /api/me (awaited when unknown or older
     // than a day, else in the background after an hour, after the answer), so the team rule decides
     // on fresh data for people who keep a board open; after the permission check above.
-    return ctx.identity.freshenThen(req, user, async (fresh) => {
-      const team = await isTeamMember(db, access.board.workspace_id, fresh.id, rule())
-      const threads = await loadThreads(db, access.board, { status, team, lookup })
-      const reads = await loadReads(
-        db,
-        fresh.id,
-        threads.map((t) => t.id),
-      )
-      const teamOnlyDefault = team && (await hasOutsideAccess(db, access.board, now(), lookup))
-      return { threads, reads, privacy: { teamOnly: team, teamOnlyDefault } }
-    })
+    return ctx.identity.freshenThen(req, user, async (fresh) => loadThreadList(db, access, fresh.id, status))
   })
 
   app.post('/api/boards/:bid/threads', async (req, reply) => {
@@ -616,7 +632,7 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
 
   // ---- notifications -------------------------------------------------------------------------------
 
-  app.get('/api/me/notifications', async (req) => {
+  app.get('/api/me/notifications', async (req, reply) => {
     const user = await ctx.requireUser(req)
     const query = parse(ListNotificationsQuery, req.query)
     // What the caller's web build can parse (0024's access_granted only from LOBBY_CLIENT_REV 1).
@@ -624,14 +640,23 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
     // Wave J: the bell leaves team-only threads out for anyone not on the team (a confirmed creator),
     // decided after the caller's own addresses are confirmed like at /api/me (the list from one stored
     // state, then any due background refresh).
-    return ctx.identity.freshenThen(req, user, async (fresh) =>
-      listNotifications(db, fresh.id, {
+    return ctx.identity.freshenThen(req, user, async (fresh) => {
+      // Wave M (M5-3, CAP-BELL-POLL): the bell poll says what it holds. Nothing added or removed since (the
+      // caller's newest notification is still that one): 204 after this one indexed read, without the creator
+      // check or the list's joins. Only the caller's own rows are read: the session decides whose.
+      let seq: number | undefined
+      if (query.since !== undefined) {
+        seq = await latestNotificationSeq(db, fresh.id)
+        if (seq === Number(query.since)) return reply.code(204).send()
+      }
+      const list = await listNotifications(db, fresh.id, {
         unreadOnly: query.unread !== undefined,
         rev,
         creator: await ctx.identity.isCreatorUser(db, fresh.id),
         emailSource: lookup.source,
-      }),
-    )
+      })
+      return seq === undefined ? list : { ...list, seq }
+    })
   })
 
   app.post('/api/me/notifications/read', async (req, reply) => {

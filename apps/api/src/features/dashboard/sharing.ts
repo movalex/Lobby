@@ -4,7 +4,8 @@
 // manager-only list) says who is outside, with their email domain; the outside routes and hooks are
 // registered from here.
 
-import { type ShareMember, TransferOwnershipInput } from '@draftroom/contracts'
+import { type ShareMember, type ShareState, TransferOwnershipInput } from '@draftroom/contracts'
+import type { Queryable } from '@draftroom/db'
 import {
   BOARD_ROLES,
   type BoardRole,
@@ -13,14 +14,16 @@ import {
   type WorkspaceRole,
 } from '@draftroom/permissions'
 import type { FastifyInstance } from 'fastify'
-import { isUserId, requireBoardAction } from '../../access.ts'
+import { type BoardAccess, isUserId, requireBoardAction } from '../../access.ts'
 import { audit } from '../../audit.ts'
+import type { CreatorLookup } from '../../auth/creator-sql.ts'
 import { roleRequiresCreator } from '../../auth/identity.ts'
 import type { Params } from '../../context.ts'
 import { badRequest, notFound, parse } from '../../errors.ts'
 import { actorOf } from '../../notifier.ts'
 import { listBoardMembers, loadTarget } from '../../routes/members.ts'
 import { toUser, type UserRow } from '../../serialize.ts'
+import { provideOpenStatePart } from '../board-open/parts.ts'
 import type { FeatureContext } from '../context.ts'
 import {
   cleanName,
@@ -43,9 +46,53 @@ const M1_SHARING_ROUTES: Record<string, (method: string, body: unknown) => boole
   '/api/boards/:bid/members/:uid': (method) => method === 'PUT' || method === 'DELETE',
 }
 
+/**
+ * GET /api/boards/:bid/sharing's body (the header badge) for a caller whose access passed 'view' (also the
+ * board-open read's `sharing` part, wave M M5-1). Pending requests are counted for managers only.
+ */
+export async function loadShareState(
+  q: Queryable,
+  lookup: CreatorLookup,
+  at: Date,
+  access: BoardAccess,
+): Promise<ShareState> {
+  const { board } = access
+  const links = await q.query<{ role: 'viewer' | 'commenter'; expires_at: Date }>(
+    `SELECT role, expires_at FROM invitations
+      WHERE board_id = $1 AND multi_use AND revoked_at IS NULL AND expires_at > $2
+      ORDER BY expires_at, id LIMIT 20`,
+    [board.id, at],
+  )
+  const direct = await q.one<{ n: number }>(
+    `SELECT count(*)::int AS n FROM board_members bm
+       JOIN workspace_members wm ON wm.workspace_id = $2 AND wm.user_id = bm.user_id
+      WHERE bm.board_id = $1`,
+    [board.id, board.workspace_id],
+  )
+  let pendingRequests: number | null = null
+  if (can(access.role, 'manage_access', board.status)) {
+    const row = await q.one<{ n: number }>(
+      "SELECT count(*)::int AS n FROM access_requests WHERE board_id = $1 AND status = 'pending'",
+      [board.id],
+    )
+    pendingRequests = row.n
+  }
+  const shared = await sharedOutsideAmong(q, lookup, at, [board.id])
+  return {
+    visibility: board.visibility,
+    links: links.rows.map((l) => ({ role: l.role, expiresAt: l.expires_at.toISOString() })),
+    directCount: direct.n,
+    pendingRequests,
+    sharedOutside: shared.has(board.id),
+  }
+}
+
 export function registerSharingRoutes(app: FastifyInstance, ctx: FeatureContext): void {
   const { db, now, notifier } = ctx
   registerOutsideRoutes(app, ctx)
+  provideOpenStatePart(ctx, 'sharing', {
+    load: (q, c) => loadShareState(q, ctx.identity.lookup, now(), c.access),
+  })
 
   // M1's visibility and member routes publish nothing, so everyone else's header badge would wait
   // for its slow refresh. A root hook (bound to every route at ready time, like the starred flag in
@@ -63,35 +110,7 @@ export function registerSharingRoutes(app: FastifyInstance, ctx: FeatureContext)
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(db, bid, user.id, 'view')
-    const { board } = access
-    const links = await db.query<{ role: 'viewer' | 'commenter'; expires_at: Date }>(
-      `SELECT role, expires_at FROM invitations
-        WHERE board_id = $1 AND multi_use AND revoked_at IS NULL AND expires_at > $2
-        ORDER BY expires_at, id LIMIT 20`,
-      [board.id, now()],
-    )
-    const direct = await db.one<{ n: number }>(
-      `SELECT count(*)::int AS n FROM board_members bm
-         JOIN workspace_members wm ON wm.workspace_id = $2 AND wm.user_id = bm.user_id
-        WHERE bm.board_id = $1`,
-      [board.id, board.workspace_id],
-    )
-    let pendingRequests: number | null = null
-    if (can(access.role, 'manage_access', board.status)) {
-      const row = await db.one<{ n: number }>(
-        "SELECT count(*)::int AS n FROM access_requests WHERE board_id = $1 AND status = 'pending'",
-        [board.id],
-      )
-      pendingRequests = row.n
-    }
-    const shared = await sharedOutsideAmong(db, ctx.identity.lookup, now(), [board.id])
-    return {
-      visibility: board.visibility,
-      links: links.rows.map((l) => ({ role: l.role, expiresAt: l.expires_at.toISOString() })),
-      directCount: direct.n,
-      pendingRequests,
-      sharedOutside: shared.has(board.id),
-    }
+    return loadShareState(db, ctx.identity.lookup, now(), access)
   })
 
   app.get('/api/boards/:bid/sharing/members', async (req) => {

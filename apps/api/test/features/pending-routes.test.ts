@@ -17,18 +17,17 @@ import {
   type World,
 } from './guests/support.ts'
 
-/** What the plan's foundation section names (GET /healthz/deep for the api; the sync's is W7's, in apps/sync). */
+/**
+ * What the plan's foundation section names that is still pending. A route leaves the list when its owner implements it
+ * (W5: GET /healthz/deep with M5-6, POST /api/usage and GET /internal/usage with M5-5, the open-state with M5-1); the sync's /healthz/deep is W7's.
+ */
 const WAVE_M_ROUTES = [
-  'GET /api/boards/:bid/open-state',
-  'POST /api/usage',
-  'GET /internal/usage',
   'POST /internal/access-many',
   'POST /api/workspaces/:wid/ai/ask',
   'GET /api/workspaces/:wid/templates',
   'POST /api/workspaces/:wid/templates',
   'DELETE /api/workspaces/:wid/templates/:bid',
   'POST /api/workspaces/:wid/templates/:bid/use',
-  'GET /healthz/deep',
 ]
 
 const UNKNOWN = { error: { code: 'NOT_FOUND', message: 'Not found.' } }

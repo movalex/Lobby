@@ -49,6 +49,7 @@ import { userKind } from '../../auth/users.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, conflict, forbidden, notFound, parse } from '../../errors.ts'
 import { SlidingWindowLimiter } from '../../rate-limit.ts'
+import { provideOpenStatePart } from '../board-open/parts.ts'
 import type { FeatureContext } from '../context.ts'
 import { checkpointBeforeChange } from '../history/before-change.ts'
 import { requireFacilitatorAccount } from './facilitators.ts'
@@ -336,8 +337,16 @@ export function registerPrivateNotes(
   }
 
   /** The caller's view of the board's active session (or none). */
-  async function stateFor(access: BoardAccess, userId: string): Promise<PrivateBrainstormState> {
-    const row = await activeSession(db, access.board.id)
+  /**
+   * GET /api/boards/:bid/private-brainstorm's body for a caller whose access passed 'view' (also the board-open
+   * read's `privateBrainstorm` part, wave M M5-1, on its transaction: `q`).
+   */
+  async function stateFor(
+    access: BoardAccess,
+    userId: string,
+    q: Queryable = db,
+  ): Promise<PrivateBrainstormState> {
+    const row = await activeSession(q, access.board.id)
     if (!row)
       return {
         session: null,
@@ -349,13 +358,14 @@ export function registerPrivateNotes(
       }
     return {
       session: toSession(row),
-      counts: await countsOf(db, row.id),
+      counts: await countsOf(q, row.id),
       // Your own drafts, whatever your role now (you wrote them while you could edit).
-      myNotes: await myNotes(db, row.id, userId),
-      ...(await revealRight(db, access, row, userId, now())),
+      myNotes: await myNotes(q, row.id, userId),
+      ...(await revealRight(q, access, row, userId, now())),
       placed: null,
     }
   }
+  provideOpenStatePart(ctx, 'privateBrainstorm', { load: (q, c) => stateFor(c.access, c.user.id, q) })
 
   /** A session the caller can see (404 otherwise), with their access for `action` on its board. */
   async function sessionFor(req: { params: unknown }, userId: string, action: 'view' | 'edit') {
