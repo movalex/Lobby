@@ -19,10 +19,22 @@
  *    never "Lobby has been updated". A lazy page that passes an offline fallback to `recoverChunk` draws it
  *    (the board route's waits for the connection, then reloads once: `reloadWhenOnline`).
  *
+ * Wave M (M3-5, S2): a tab also learns about a new build without failing to load a chunk first (lib/version-check.ts
+ * asks /version.json while the tab is visible). `newVersion` is its entry: on a board the same notice (the Reload button
+ * waits for unsent changes as above); outside a board a silent reload while the tab is hidden, under the same guard
+ * as a stale chunk's and one more that stops a reload for a build the page already reloaded for (a cache that keeps
+ * serving the old page would otherwise reload it every minute); when a guard says no, the notice with its button. A
+ * board opened after the new version was seen shows the notice when it registers. Counted (lib/usage.ts, the
+ * contract's fixed events): `stalechunk.notice` (a chunk failed), `version.notice` (a newer build was seen), and
+ * `stalechunk.reload` for every reload this handler makes or the Reload button makes, whatever the cause.
+ *
  * Sources: Vite's `vite:preloadError` event (its preload helper dispatches it for a failed CSS preload and a
  * failed dynamic import), a stale chunk error that reaches `unhandledrejection`, and lazy components that
  * wrap their import in `recoverChunk` (React would otherwise unmount the page on the failed import).
  */
+
+import type { UsageEvent } from '@draftroom/contracts'
+import { countUsage } from './usage.ts'
 
 /** A failed dynamic import or chunk preload, as Chrome, Firefox, Safari and Vite word it. */
 export function isStaleChunkError(e: unknown): boolean {
@@ -39,6 +51,9 @@ export const RELOAD_GUARD_MS = 60_000
 /** Longest the board's Reload button waits for changes not yet acknowledged. */
 export const UNSENT_WAIT_MS = 5_000
 export const RELOAD_KEY = 'lobby:stale-chunk-reload'
+/** M3-5: the build a version-driven reload was made for, and when (sessionStorage): the same build is not reloaded for twice in a row. */
+export const VERSION_RELOAD_KEY = 'lobby:version-reload'
+export const VERSION_RELOAD_GUARD_MS = 30 * 60_000
 export const STALE_NOTICE_KEY = 'stale-chunk'
 export const STALE_NOTICE_TEXT = 'Lobby has been updated. Reload to keep working with the new version.'
 export const OFFLINE_CHUNK_TEXT =
@@ -61,6 +76,8 @@ export interface StaleChunkBoard {
 }
 
 interface Env {
+  /** counts a usage event (lib/usage.ts by default) */
+  count?(event: UsageEvent): void
   reload(): void
   now(): number
   /** `navigator.onLine`: a chunk that failed while offline is the network's failure, not a deploy's */
@@ -92,6 +109,10 @@ export function createStaleChunkHandler(env: Env = defaultEnv) {
   /** a notice outside a board (App.tsx draws it), or null */
   let notice: StaleNotice | null = null
   let reloading = false
+  /** M3-5: a newer build was seen (lib/version-check.ts); a board opened later shows the notice at once */
+  let versionStale = false
+  let versionNoticed = false
+  const count = (event: UsageEvent) => (env.count ?? countUsage)(event)
   const listeners = new Set<Listener>()
   const emit = () => {
     for (const l of listeners) l()
@@ -128,9 +149,37 @@ export function createStaleChunkHandler(env: Env = defaultEnv) {
         env.setTimeout(tryNow, 100)
         return
       }
+      count('stalechunk.reload')
       env.reload()
     }
     tryNow()
+  }
+
+  /** The version the page last reloaded for, with when: `served@time` (null: none, or storage cannot be read). */
+  const readVersionReload = (): { served: string; at: number } | null => {
+    try {
+      const raw = env.storage()?.getItem(VERSION_RELOAD_KEY)
+      const m = raw ? /^([0-9a-f]{7,40})@(\d+)$/i.exec(raw) : null
+      return m ? { served: m[1] as string, at: Number(m[2]) } : null
+    } catch {
+      return null
+    }
+  }
+  const writeVersionReload = (served: string): boolean => {
+    try {
+      const s = env.storage()
+      if (!s) return false
+      s.setItem(VERSION_RELOAD_KEY, `${served}@${env.now()}`)
+      return true
+    } catch {
+      return false
+    }
+  }
+  /** The version notice is counted once per page, however often the check sees the same newer build. */
+  const countVersionNotice = () => {
+    if (versionNoticed) return
+    versionNoticed = true
+    count('version.notice')
   }
 
   const offlineNotice = (): StaleNotice => ({
@@ -162,6 +211,7 @@ export function createStaleChunkHandler(env: Env = defaultEnv) {
         return 'notice'
       }
       if (board) {
+        count('stalechunk.notice')
         board.notify(staleNotice())
         return 'notice'
       }
@@ -169,9 +219,43 @@ export function createStaleChunkHandler(env: Env = defaultEnv) {
       const recent = last === 'blocked' || (last !== null && env.now() - last < RELOAD_GUARD_MS)
       if (!recent && writeGuard()) {
         reloading = true
+        count('stalechunk.reload')
         env.reload()
         return 'reload'
       }
+      count('stalechunk.notice')
+      notice = staleNotice()
+      emit()
+      return 'notice'
+    },
+    /**
+     * M3-5: a newer build than this page's is live (`served`: its commit, from /version.json). On a board: the notice
+     * (nothing reloads by itself). Outside one: 'wait' while the tab is visible (a reload would drop what the person is
+     * doing), and once it is hidden a reload nobody sees, unless a guard says no (a reload within RELOAD_GUARD_MS, or one
+     * already made for this build within VERSION_RELOAD_GUARD_MS, or storage that cannot be read): then the notice, with
+     * its button, for when they come back. Safe to call again for the same build.
+     */
+    newVersion(hidden: boolean, served: string): 'notice' | 'reload' | 'reloading' | 'wait' {
+      if (reloading) return 'reloading'
+      versionStale = true
+      if (board) {
+        countVersionNotice()
+        board.notify(staleNotice())
+        return 'notice'
+      }
+      if (!hidden) return 'wait'
+      const last = readGuard()
+      const recent = last === 'blocked' || (last !== null && env.now() - last < RELOAD_GUARD_MS)
+      const again = readVersionReload()
+      const reloadedFor =
+        again !== null && again.served === served && env.now() - again.at < VERSION_RELOAD_GUARD_MS
+      if (!recent && !reloadedFor && writeGuard() && writeVersionReload(served)) {
+        reloading = true
+        count('stalechunk.reload')
+        env.reload()
+        return 'reload'
+      }
+      countVersionNotice()
       notice = staleNotice()
       emit()
       return 'notice'
@@ -179,6 +263,13 @@ export function createStaleChunkHandler(env: Env = defaultEnv) {
     /** A board is open (its notices, its unsent changes); returns the unregister. */
     registerBoard(b: StaleChunkBoard): () => void {
       board = b
+      // a newer build was seen before this board opened: say so once its page can draw the notice
+      if (versionStale)
+        env.setTimeout(() => {
+          if (board !== b) return
+          countVersionNotice()
+          b.notify(staleNotice())
+        }, 0)
       return () => {
         if (board === b) board = null
       }

@@ -23,6 +23,7 @@ import {
 import { matchRoute, navigate, signInPath, useLocationKey, workspacePath } from './lib/routing.ts'
 import { installStaleChunkRecovery, recoverChunk, reloadWhenOnline, staleChunks } from './lib/stale-chunk.ts'
 import { readLastWorkspace } from './lib/storage.ts'
+import { installVersionCheck } from './lib/version-check.ts'
 import { LoadingScreen, MessageScreen, NoWorkspaceScreen, UnreachableScreen } from './ui/screens.tsx'
 
 // K1 (wave K), once per page, while this module is evaluated (before the session check answers):
@@ -30,11 +31,14 @@ import { LoadingScreen, MessageScreen, NoWorkspaceScreen, UnreachableScreen } fr
 //    (it waited for that answer and then went through two lazy steps: about 1.1 s of serial download at 4G);
 //  - K1-3: a pointer over, a focus on or a press of a link to a board downloads it ahead of the click;
 //  - K1-7: a lazy chunk a deploy removed reloads the page once (or, on a board, offers a reload); a failed
-//    speculative prefetch is left to the real load, so a hover or an idle moment never reloads the page.
+//    speculative prefetch is left to the real load, so a hover or an idle moment never reloads the page;
+//  - M3-5 (wave M): a tab learns about a new build without a chunk failing first (lib/version-check.ts: /version.json
+//    while the tab is visible; a notice on a board, a silent reload outside one while the tab is hidden).
 if (typeof window !== 'undefined') {
   startBoardCodeFor(location.pathname)
   installBoardPrefetch()
   installStaleChunkRecovery(window, staleChunks, isBoardCodePrefetch)
+  installVersionCheck()
 }
 
 // Spike A (docs/EXCALIDRAW-MIGRATION.md §8): dev-only /spike/:name engine pages, outside the session.
