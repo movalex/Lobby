@@ -498,20 +498,20 @@ export async function registerHistory(app: FastifyInstance, ctx: FeatureContext)
 }
 
 /** A tldraw snapshot's records (none for the Excalidraw engine's envelope). */
-function recordsOf(snap: BoardSnapshotJson): Record<string, unknown>[] {
+export function recordsOf(snap: BoardSnapshotJson): Record<string, unknown>[] {
   if (lobbySnapshotOf(snap)) return []
   const docs = (snap as RoomSnapshotJson).documents
   return (Array.isArray(docs) ? docs : []).map((d) => d.state)
 }
 
-/** A live board as the content of a new one, in its engine's format. */
-function contentOf(snap: BoardSnapshotJson): BoardContent {
+/** A live board as the content of a new one, in its engine's format (also wave M's workspace templates). */
+export function contentOf(snap: BoardSnapshotJson): BoardContent {
   const lobby = lobbySnapshotOf(snap)
   if (lobby) return { format: 'lobby-elements', elements: liveElements(lobby.elements), doc: lobby.doc }
   return { format: 'tldraw', records: recordsOf(snap), schema: (snap as RoomSnapshotJson).schema }
 }
 
-function created(
+export function created(
   board: Parameters<typeof toBoardWithRole>[0],
   linked: number,
   dropped: number,

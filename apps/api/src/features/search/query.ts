@@ -73,6 +73,61 @@ export function parseQuery(q: string): ParsedQuery {
   return { terms: folded, simple: prefixQuery(folded), english: prefixQuery(original) }
 }
 
+// ---- a question, not a search (wave M, M8-2: Ask across boards) -----------------------------------------
+//
+// A search box gets a few words that must ALL match. A question ("What did we decide about the launch
+// pricing?") is a sentence: requiring every word would find nothing. So a question is read as ANY of its
+// meaningful words (OR), each a prefix as in a search, with the common words of a question left out (they
+// would match nearly every note through the `simple` reading, which keeps stop words). ts_rank_cd then ranks
+// the entries that hold more of the words, closer together, first. The same word rule as parseQuery, so no
+// input reaches the tsquery parser's syntax either.
+
+/** The most words of one question that are looked for. */
+export const QUESTION_MAX_TERMS = 12
+
+/** Words that carry no topic in a question (folded forms), on top of English's own stop words. */
+const QUESTION_STOP = new Set(
+  (
+    'a about above after again all also am an and any are as at be been before being both but by can could ' +
+    'did do does doing done during each either else ever for from had has have having he her here hers him ' +
+    'his how i if in into is it its just let me more most my no nor not now of off on once only or other ' +
+    'our ours out over own same she should so some such than that the their theirs them then there these ' +
+    'they this those through to too under until up us very was we were what when where which while who ' +
+    'whom why will with would yet you your yours ' +
+    // question words people type at a board
+    'across board boards anything everything something tell know think say said says please give show ' +
+    'find list get got anyone someone everyone thing things way ways kind'
+  ).split(' '),
+)
+
+/**
+ * A question as a search for any of its words: `'w1':* | 'w2':*` over the folded words that are not
+ * QUESTION_STOP (at most QUESTION_MAX_TERMS, in order, without repeats), and the same over the lowercased
+ * originals for the english reading. Empty strings when no word is left (nothing is searched then).
+ */
+export function parseQuestion(q: string): ParsedQuery {
+  const terms: string[] = []
+  const originals: string[] = []
+  const seen = new Set<string>()
+  for (const m of q.matchAll(WORD_RE)) {
+    const original = m[0].toLowerCase()
+    const folded = foldText(m[0])
+    // A word folding into several (Straße → strasse) is still one word; the fold keeps letters and digits.
+    if (!/^[\p{L}\p{N}]+$/u.test(folded) || !/^[\p{L}\p{N}]+$/u.test(original)) continue
+    if ([...folded].length < SEARCH_MIN_TERM_CHARS || QUESTION_STOP.has(folded)) continue
+    const cut = (w: string) =>
+      w.length > MAX_TERM_CHARS ? w.slice(0, MAX_TERM_CHARS).replace(/[\uD800-\uDBFF]$/, '') : w
+    const t = cut(folded)
+    if (seen.has(t)) continue
+    seen.add(t)
+    terms.push(t)
+    originals.push(cut(original))
+    if (terms.length >= QUESTION_MAX_TERMS) break
+  }
+  const any = (ws: readonly string[]) => ws.map((w) => `'${w}':*`).join(' | ')
+  return { terms, simple: any(terms), english: any(originals) }
+}
+
 /** ts_headline markers: control characters, which indexed text never contains (see cleanIndexText). */
 export const HIGHLIGHT_START = '\u0002'
 export const HIGHLIGHT_STOP = '\u0003'

@@ -24,14 +24,8 @@ export interface PendingRoute {
 
 /** `METHOD route-pattern` (the guard lists' key format) → who implements it. */
 export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
-  // W5: none left (open-state M5-1, usage M5-5 and /healthz/deep M5-6 are implemented)
-  // W7: none left (POST /internal/access-many M7-1 is implemented, routes/tickets.ts)
-  // W8
-  'POST /api/workspaces/:wid/ai/ask': { owner: 'W8', item: 'M8-2' }, // features/ai/workspace-ask.ts
-  'GET /api/workspaces/:wid/templates': { owner: 'W8', item: 'M8-3' }, // features/ws-templates
-  'POST /api/workspaces/:wid/templates': { owner: 'W8', item: 'M8-3' },
-  'DELETE /api/workspaces/:wid/templates/:bid': { owner: 'W8', item: 'M8-3' },
-  'POST /api/workspaces/:wid/templates/:bid/use': { owner: 'W8', item: 'M8-3' },
+  // none left: W5 (open-state M5-1, usage M5-5, /healthz/deep M5-6), W7 (POST /internal/access-many M7-1) and W8
+  // (Ask across boards M8-2, the workspace templates M8-3) are implemented. To ship a W8 route hidden, add its key back.
 }
 
 export const isPendingRoute = (

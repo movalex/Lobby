@@ -2,10 +2,19 @@
 // frames as a strip), then a prominent Blank board and the six Lobby templates with names, descriptions
 // and a section preview, search and categories. Selecting is a click (or Enter/Space); a double click
 // creates right away. Also the empty dashboard's "Start with the sample board" button.
+//
+// Wave M (M8-4, W8): a "Workspace" tab with the workspace's own templates (GET /api/workspaces/:wid/templates,
+// features/ws-templates/client.ts). "Use template" makes a private copy (POST …/templates/:bid/use) in the
+// dashboard's current project and opens it. The tab shows only once the list answered: never for an api without
+// templates (its 404 hides the tab for the tab's life), nor for anyone the api refuses.
 
-import { type ReactNode, useId, useMemo, useState } from 'react'
+import type { WorkspaceTemplate } from '@draftroom/contracts'
+import { type ReactNode, useEffect, useId, useMemo, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
-import { navigate } from '../lib/routing.ts'
+import { listWsTemplates, startFromWsTemplate } from '../features/ws-templates/client.ts'
+import { filterWsTemplates, templateMeta } from '../features/ws-templates/model.ts'
+import { boardPath, matchRoute, navigate } from '../lib/routing.ts'
+import { countUsage } from '../lib/usage.ts'
 import { createSampleBoard } from './sample-board.ts'
 import type { CatalogEntry, TemplateCategory, TemplateId, TemplatePreview } from './template-catalog.ts'
 import { useCatalog } from './use-catalog.ts'
@@ -13,24 +22,67 @@ import './template-gallery.css'
 
 export type TemplateChoice = TemplateId | 'blank'
 
+/** Where a workspace template's copy goes: the dashboard's workspace and, in a project's section, that project. */
+export interface GalleryWorkspace {
+  id: string
+  projectId: string | null
+}
+
+/** The dashboard route's workspace and project (the picker opens on /w/<id>…); null elsewhere. */
+export function galleryWorkspaceOf(pathname: string): GalleryWorkspace | null {
+  const r = matchRoute(pathname)
+  if (r.name !== 'workspace') return null
+  return { id: r.workspaceId, projectId: r.section.kind === 'project' ? r.section.projectId : null }
+}
+
+type WsList = { kind: 'loading' | 'hidden' } | { kind: 'ready'; templates: WorkspaceTemplate[] }
+
+/** The workspace's templates for the Workspace tab: hidden on any refusal or failure (an old api's 404 above all). */
+function useWorkspaceTemplates(workspaceId: string | null): WsList {
+  const [list, setList] = useState<WsList>({ kind: workspaceId ? 'loading' : 'hidden' })
+  useEffect(() => {
+    if (!workspaceId) return setList({ kind: 'hidden' })
+    const abort = new AbortController()
+    setList({ kind: 'loading' })
+    listWsTemplates(workspaceId, { signal: abort.signal }).then(
+      (templates) => setList({ kind: 'ready', templates }),
+      () => {
+        if (!abort.signal.aborted) setList({ kind: 'hidden' })
+      },
+    )
+    return () => abort.abort()
+  }, [workspaceId])
+  return list
+}
+
 export function TemplateGallery({
   selected,
   onSelect,
   onChoose,
+  workspace,
 }: {
   selected: TemplateChoice
   onSelect(choice: TemplateChoice, entry: CatalogEntry | null): void
   /** Double click / Enter on an already selected card: create now. */
   onChoose(choice: TemplateChoice, entry: CatalogEntry | null): void
+  /** Where a workspace template's copy goes; default: the dashboard route's workspace and project. */
+  workspace?: GalleryWorkspace
 }) {
   const { mod, error } = useCatalog()
   const searchId = useId()
   const [query, setQuery] = useState('')
-  const [category, setCategory] = useState<TemplateCategory | 'all'>('all')
+  const [category, setCategory] = useState<TemplateCategory | 'all' | 'workspace'>('all')
+  const target = useMemo(
+    () => workspace ?? (typeof location === 'undefined' ? null : galleryWorkspaceOf(location.pathname)),
+    [workspace],
+  )
+  const wsList = useWorkspaceTemplates(target?.id ?? null)
+  const showWorkspace = category === 'workspace' && wsList.kind === 'ready'
+  const catalogCategory = category === 'workspace' ? 'all' : category
   const entries = useMemo(() => (mod ? mod.templateCatalog() : []), [mod])
   const visible = useMemo(
-    () => (mod ? mod.filterTemplates(entries, query, category) : []),
-    [mod, entries, query, category],
+    () => (mod && !showWorkspace ? mod.filterTemplates(entries, query, catalogCategory) : []),
+    [mod, entries, query, catalogCategory, showWorkspace],
   )
   const labels = mod?.CATEGORY_LABEL
   // The sample board has no category chip: it shows under "All" when the search matches it.
@@ -90,8 +142,23 @@ export function TemplateGallery({
               {c === 'all' ? 'All' : (labels?.[c] ?? c)}
             </button>
           ))}
+          {wsList.kind === 'ready' && (
+            <button
+              type="button"
+              className="dr-chip"
+              data-testid="template-category"
+              data-category="workspace"
+              aria-pressed={category === 'workspace'}
+              onClick={() => setCategory('workspace')}
+            >
+              Workspace
+            </button>
+          )}
         </fieldset>
       </div>
+      {showWorkspace && wsList.kind === 'ready' && target && (
+        <WorkspaceTemplates templates={wsList.templates} query={query} target={target} />
+      )}
       {sample && (
         <ul className="dr-gallery__sample" aria-label="Sample board">
           {card(
@@ -114,7 +181,7 @@ export function TemplateGallery({
           )}
         </ul>
       )}
-      <ul className="dr-gallery__grid" aria-label="Templates">
+      <ul className="dr-gallery__grid" aria-label="Templates" hidden={showWorkspace}>
         {card(
           'blank',
           null,
@@ -147,13 +214,13 @@ export function TemplateGallery({
           ),
         )}
       </ul>
-      {!mod && !error && <p className="dr-muted dr-gallery__status">Loading templates…</p>}
-      {error && (
+      {!mod && !error && !showWorkspace && <p className="dr-muted dr-gallery__status">Loading templates…</p>}
+      {error && !showWorkspace && (
         <p className="dr-field-error dr-gallery__status" role="alert">
           Templates could not be loaded. You can still start with a blank board.
         </p>
       )}
-      {mod && visible.length === 0 && (
+      {mod && !showWorkspace && visible.length === 0 && (
         <p className="dr-muted dr-gallery__status" data-testid="template-empty">
           No templates match. Try another word or category, or start with a blank board.
         </p>
@@ -189,6 +256,101 @@ function CreateHere({
     >
       {entry && choice !== 'blank' ? `Create from ${entry.name}` : 'Create board'}
     </button>
+  )
+}
+
+/**
+ * The Workspace tab (M8-4): the workspace's own templates, newest first, filtered by the search. "Use template" makes
+ * a private copy for the person (none of the template's sharing comes with it) and opens it.
+ */
+function WorkspaceTemplates({
+  templates,
+  query,
+  target,
+}: {
+  templates: readonly WorkspaceTemplate[]
+  query: string
+  target: GalleryWorkspace
+}) {
+  const [pending, setPending] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const shown = useMemo(() => filterWsTemplates(templates, query), [templates, query])
+  const start = async (t: WorkspaceTemplate) => {
+    setPending(t.boardId)
+    setError(null)
+    try {
+      const made = await startFromWsTemplate(target.id, t.boardId, { projectId: target.projectId })
+      countUsage('template.pick:workspace')
+      navigate(boardPath(made.board.id))
+    } catch (e) {
+      setPending(null)
+      setError(
+        isApiError(e) && e.status === 404
+          ? 'That template is no longer available. Pick another one.'
+          : isApiError(e)
+            ? e.message
+            : 'The board could not be created from that template.',
+      )
+    }
+  }
+  return (
+    <>
+      <ul className="dr-gallery__grid" aria-label="Workspace templates" data-testid="ws-template-list">
+        {shown.map((t) => (
+          <li key={t.boardId}>
+            <div
+              className="dr-tcard"
+              style={{ cursor: 'default' }}
+              data-testid="ws-template-card"
+              data-board-id={t.boardId}
+            >
+              <span className="dr-tcard__thumb dr-tcard__thumb--blank" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true">
+                  <rect
+                    x="4"
+                    y="5"
+                    width="16"
+                    height="14"
+                    rx="2"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    fill="none"
+                  />
+                  <path d="M4 9h16M9 9v10" stroke="currentColor" strokeWidth="1.8" />
+                </svg>
+              </span>
+              <span className="dr-tcard__name">{t.name}</span>
+              <span className="dr-tcard__desc">
+                A team template: your copy is private until you share it.
+              </span>
+              <span className="dr-tcard__meta">{templateMeta(t)}</span>
+              <button
+                type="button"
+                className="dr-btn dr-btn--primary dr-btn--sm"
+                data-testid="ws-template-use"
+                disabled={pending !== null}
+                aria-busy={pending === t.boardId || undefined}
+                onClick={() => void start(t)}
+              >
+                {pending === t.boardId ? 'Creating…' : 'Use template'}
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
+      {error && (
+        <p className="dr-field-error dr-gallery__status" role="alert" data-testid="ws-template-use-error">
+          {error}
+        </p>
+      )}
+      {shown.length === 0 && (
+        <p className="dr-muted dr-gallery__status" data-testid="ws-template-empty">
+          {templates.length
+            ? 'No workspace templates match. Try another word.'
+            : 'No workspace templates yet. Workspace owners and admins can save a board as one from its Board menu.'}
+        </p>
+      )}
+    </>
   )
 }
 

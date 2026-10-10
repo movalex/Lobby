@@ -19,15 +19,9 @@ import {
 
 /**
  * What the plan's foundation section names that is still pending. A route leaves the list when its owner implements it
- * (W5: GET /healthz/deep with M5-6, POST /api/usage and GET /internal/usage with M5-5, the open-state with M5-1; W7: POST /internal/access-many with M7-1); the sync's /healthz/deep is W7's.
+ * (W5: GET /healthz/deep with M5-6, POST /api/usage and GET /internal/usage with M5-5, the open-state with M5-1; W7: POST /internal/access-many with M7-1; W8: the ask and the four template routes); the sync's /healthz/deep is W7's.
  */
-const WAVE_M_ROUTES = [
-  'POST /api/workspaces/:wid/ai/ask',
-  'GET /api/workspaces/:wid/templates',
-  'POST /api/workspaces/:wid/templates',
-  'DELETE /api/workspaces/:wid/templates/:bid',
-  'POST /api/workspaces/:wid/templates/:bid/use',
-]
+const WAVE_M_ROUTES: string[] = []
 
 const UNKNOWN = { error: { code: 'NOT_FOUND', message: 'Not found.' } }
 
@@ -43,12 +37,14 @@ describe('the pending list', () => {
     }
   })
 
-  it('every wave M guard row is a pending route (the rows are in place before the routes)', () => {
+  it('every wave M guard row is a pending route until its owner implements it (the rows are in place before the routes)', () => {
     const rows = [...Object.keys(CREATOR_ROUTES), ...Object.keys(GUEST_REFUSED_ROUTES)].filter(
       (k) => k.includes('/templates') || k.includes('/ai/ask'),
     )
     expect(rows.length).toBe(3 + 5)
-    for (const k of rows) expect(isPendingRoute(k), k).toBe(true)
+    // W8 implemented Ask across boards (M8-2) and the workspace templates (M8-3): the refusal and creation matrices
+    // hold every one of them to its guard rows now
+    for (const k of rows) expect(isPendingRoute(k), k).toBe(false)
   })
 
   it('routeUnlessPending registers a route that is not pending, and nothing for one that is', async () => {

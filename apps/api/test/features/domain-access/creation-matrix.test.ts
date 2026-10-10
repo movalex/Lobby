@@ -272,7 +272,11 @@ describe('the creation matrix', () => {
 
   it('a creator gets 201/200 on the same calls (204 only for a DELETE)', async () => {
     w = await world()
-    for (const key of LIVE) {
+    // The DELETE rows last: wave M's template removal (M8-3) removes what the use row before it starts from.
+    const deletesLast = [...LIVE].sort(
+      (a, b) => Number(a.startsWith('DELETE ')) - Number(b.startsWith('DELETE ')),
+    )
+    for (const key of deletesLast) {
       const [method, url, body] = probe(w, key)
       const res = await w.alice.req(method, url, body)
       // A create or share call that answers 204 created nothing, so only a DELETE row (wave M's template removal,

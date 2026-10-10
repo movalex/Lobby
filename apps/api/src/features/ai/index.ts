@@ -304,8 +304,6 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
   )
   const statusPerUser = keyedLimit(AI_STATUS_PER_MINUTE, now)
   registerAiSettings(app, ctx)
-  // wave M (M8-2): Ask across boards, pending until W8 implements it (./workspace-ask.ts)
-  registerWorkspaceAsk(app, ctx)
   const client: OpenAiClient | null = cfg.apiKey
     ? createOpenAiClient({
         apiKey: cfg.apiKey,
@@ -319,7 +317,11 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
     : null
 
   // M8-1: the gate and the status are the shared loaders (createAiLoaders above), unchanged in behaviour
-  const { aiGateFor: gate, loadAiStatus, noticeAccepted, budgetFor } = createAiLoaders(ctx)
+  const loaders = createAiLoaders(ctx)
+  const { aiGateFor: gate, loadAiStatus, noticeAccepted, budgetFor } = loaders
+  // wave M (M8-2): Ask across boards (./workspace-ask.ts), under the same per-minute and in-flight limits, ledger,
+  // model client and per-board gate as the board's AI
+  registerWorkspaceAsk(app, ctx, { runsPerUser, inFlight, ledger, client, loaders })
 
   app.get(AI_STATUS_ROUTE, async (req): Promise<AiStatus> => {
     const user = await ctx.requireUser(req)
