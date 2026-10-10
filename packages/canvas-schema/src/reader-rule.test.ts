@@ -327,6 +327,71 @@ describe('each wave L data shape in every server frame, as the deployed web pars
     expect(oldWeb({ type: 'contracts', rev: 12 })).toBe('ACCEPT')
   })
 
+  it('every other message type the room sends, as it builds them, every code and reason included: ACCEPTED', () => {
+    const holder = { sid: 'usr_b:tab', uid: 'usr_b', name: 'Bob' }
+    const entry = {
+      sid: 'usr_b:tab',
+      uid: 'usr_b',
+      name: 'Bob',
+      color: '#1971c2',
+      role: 'editor',
+      guest: false,
+    }
+    const frames: unknown[] = [
+      // a reset welcome (the binary snapshot follows), and one with the board document and its clocks
+      {
+        ...welcome([]),
+        reset: true,
+        catchUp: null,
+        snapshot: { elements: 3, bytes: 900 },
+        doc: { 'tagDef:urgent': { name: 'urgent', color: 'red' } },
+        docClocks: { 'tagDef:urgent': 4 },
+        leases: [{ id: 'note-1', holder }],
+        roster: [entry],
+        drags: [{ sid: 'usr_b:tab', d: 1, ids: ['note-1'], dx: 2, dy: 3 }],
+      },
+      { type: 'lease.grant', req: 1, id: 'note-1', ttlMs: 10_000 },
+      { type: 'lease.deny', req: 2, id: 'note-1', holder },
+      { type: 'lease', id: 'note-1', holder: null },
+      {
+        type: 'roster',
+        events: [
+          { k: 'join', p: entry },
+          { k: 'leave', sid: 'usr_c:tab' },
+        ],
+      },
+      { type: 'workshop', voteOpen: true, anonymous: true },
+      { type: 'pong', n: 3 },
+      { type: 'receipts', req: 1, landed: { 'p1.1': 5 }, from: 2 },
+      {
+        type: 'ack',
+        seq: 2,
+        clock: 5,
+        r: [{ id: 'note-1', ok: true, v: 3, fitDropped: true, denied: { groups: ['text'], code: 'LEASED' } }],
+        docDenied: { keys: ['startView'], code: 'READ_ONLY' },
+      },
+      {
+        type: 'presence',
+        peers: [],
+        off: ['usr_c:tab'],
+        drags: [{ sid: 'usr_b:tab', d: 1, end: true }],
+        followers: ['usr_c:tab'],
+      },
+      { type: 'changes', clock: 6, ops: [], doc: { set: { startView: null } } },
+    ]
+    for (const code of NOTICE_CODES) frames.push({ type: 'notice', code })
+    for (const reason of TERMINAL_CLOSE_REASONS)
+      frames.push({ type: 'notice', code: 'CLOSING', detail: reason })
+    for (const code of REJECT_CODES)
+      frames.push({ type: 'ack', seq: 1, clock: 1, r: [{ id: 'x', ok: false, code, el: null }] })
+    for (const f of frames) {
+      expect(newWeb(f), JSON.stringify(f).slice(0, 80)).toBe('ACCEPT')
+      expect(oldWeb(f), JSON.stringify(f).slice(0, 80)).toBe('ACCEPT')
+      // and the rule leaves every one of them as it is, for every older reader
+      expect(frameForReader(11, f as ServerMessage)).toBe(f)
+    }
+  })
+
   it('every other wave L shape (AI provenance, recap, diagram, flow, sort, 2x2, pieces, vote results, tags): ACCEPTED in every frame', async () => {
     for (const [what, el] of Object.entries(WAVE_L_ELEMENTS)) {
       if (what === 'frame minutes') continue

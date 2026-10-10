@@ -290,6 +290,26 @@ test('L-compat 1 (W5 run of show): the minutes reach the 437b4e7 tab in every fr
   })
 })
 
+/**
+ * Runs `write` twice: with bob online (its frames reach him live), then with his board socket cut and its
+ * reconnects held (they reach him in his catch-up once he is back). After each, bob holds the server's board and
+ * his socket dropped no frame.
+ */
+async function liveThenCaughtUp(
+  p: Pair,
+  stack: Parameters<typeof serverSnapshot>[0],
+  board: string,
+  write: (round: 0 | 1) => Promise<void>,
+): Promise<void> {
+  await write(0)
+  await expectOldTabHolds(stack, board, p.old, [p.a.page])
+  await p.old.cut()
+  await expect.poll(async () => (await saveState(p.old.page)).state, { timeout: 15_000 }).toBe('offline')
+  await write(1)
+  await p.old.restore()
+  await expectOldTabHolds(stack, board, p.old, [p.a.page], 30_000)
+}
+
 // ---- 2. AI on the board (W2, W1; W4's diagram, W8's sort by a lens and 2x2) ------------------------------------
 
 /** W2's privacy notice, when this person has not agreed yet, then W2's preview: Apply. */
@@ -301,12 +321,36 @@ async function continueThenApply(page: Page) {
   await applyPreview(page)
 }
 
-/** Right-click on empty canvas → AI › Wrap up this session, then Add as Recap frame. */
-async function recapFrame(page: Page): Promise<CanvasElement> {
+/** AI › Action items on new notes with these words at y: the AI-made notes and heading, with the run id. */
+async function actionItems(page: Page, words: readonly string[], y: number) {
+  const ids: string[] = []
+  for (const [i, text] of words.entries()) {
+    ids.push(await createNote(page, { x: i * 260, y, text }))
+    await expectSaved(page)
+  }
+  const before = new Set((await aiObjects(page)).map((o) => o.id))
+  await showBounds(page, { x: -40, y: y - 40, w: 260 * words.length + 100, h: 300 })
+  await select(page, ids)
+  await openAiMenu(page)
+  await aiMenu(page).getByTestId('ai-actions').click()
+  await continueIfAsked(page)
+  await expect(page.getByTestId('ai-done')).toContainText('action items', { timeout: 20_000 })
+  await expectSaved(page)
+  expect((await saveState(page)).lastReject).toBeNull()
+  const made = (await aiObjects(page)).filter((o) => !before.has(o.id))
+  expect(made.filter((o) => o.kind === 'action-item').length).toBeGreaterThan(0)
+  for (const o of made) expect((lobbyOf(await item(page, o.id)).ai as { run?: string }).run).toMatch(RUN_ID)
+}
+
+/** Right-click on empty canvas at `at` → AI › Wrap up this session, then Add as Recap frame. */
+async function recapFrame(page: Page, at: { x: number; y: number }): Promise<void> {
   expect(await hasShell(page, 'contextMenu')).toBe(true)
+  const before = (await items(page)).filter(
+    (e) => e.type === 'frame' && String(e.name).startsWith('Recap · '),
+  )
   // nothing selected, and an empty part of the board in view: the canvas's own context menu
   await select(page, [])
-  await setViewport(page, { x: 30_000, y: 30_000, zoom: 1 })
+  await setViewport(page, { ...at, zoom: 1 })
   const box = await page.locator('[data-lobby-board-canvas]').boundingBox()
   if (!box) throw new Error('no canvas')
   await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5, { button: 'right' })
@@ -320,19 +364,19 @@ async function recapFrame(page: Page): Promise<CanvasElement> {
   await done.getByTestId('recap-add').click()
   await expectSaved(page)
   expect((await saveState(page)).lastReject).toBeNull()
-  let frame: CanvasElement | undefined
   await expect
-    .poll(async () => {
-      frame = (await items(page)).find((e) => e.type === 'frame' && String(e.name).startsWith('Recap · '))
-      return !!frame
-    })
-    .toBe(true)
+    .poll(
+      async () =>
+        (await items(page)).filter((e) => e.type === 'frame' && String(e.name).startsWith('Recap · ')).length,
+    )
+    .toBe(before.length + 1)
   await page.getByTestId('recap-panel').getByRole('button', { name: 'Close recap' }).click()
-  return frame as CanvasElement
 }
 
-/** Diagram from words, from a note's context menu, with the fake's `nodes` and `edges`. */
-async function diagramFromWords(page: Page, openai: FakeOpenAi, note: string, n: number) {
+/** Diagram from words from a new note at (0, y), with the fake's `n` nodes and their edges (over 20: a preview). */
+async function diagramFromWords(page: Page, openai: FakeOpenAi, y: number, n: number) {
+  const note = await createNote(page, { x: 0, y, text: 'Brief, concept, review, ship' })
+  await expectSaved(page)
   const nodes = Array.from({ length: n }, (_, i) => ({
     id: `s${i + 1}`,
     label: `Step ${i + 1}`,
@@ -344,10 +388,8 @@ async function diagramFromWords(page: Page, openai: FakeOpenAi, note: string, n:
     label: i % 3 ? '' : 'next',
   }))
   openai.next({ kind: 'content', content: { nodes, edges } })
-  // the note in view (the step before may have looked elsewhere)
-  const el = await item(page, note)
-  if (!el) throw new Error(`no ${note}`)
-  await setViewport(page, { x: el.x - 300, y: el.y - 200, zoom: 1 })
+  const before = (await items(page)).filter((e) => kindOf(e) === 'ai-diagram-node').length
+  await setViewport(page, { x: -300, y: y - 200, zoom: 1 })
   await focusBoard(page)
   await select(page, [note])
   const at = await itemCenterOnScreen(page, note)
@@ -358,21 +400,52 @@ async function diagramFromWords(page: Page, openai: FakeOpenAi, note: string, n:
   await continueIfAsked(page)
   // over 20 elements W2's shared preview comes first
   const apply = page.getByTestId('ai-preview-apply')
-  const shapes = async () => (await items(page)).filter((e) => kindOf(e) === 'ai-diagram-node').length
   await expect
     .poll(
       async () => {
         if (await apply.isVisible().catch(() => false)) await apply.click().catch(() => {})
-        return shapes()
+        return (await items(page)).filter((e) => kindOf(e) === 'ai-diagram-node').length
       },
       { timeout: 30_000 },
     )
-    .toBe(n)
+    .toBe(before + n)
   await expectSaved(page)
   expect((await saveState(page)).lastReject).toBeNull()
 }
 
-test('L-compat 2 (AI on the board): AI notes with run ids, the Recap frame, a diagram from words, sort by a lens and Place with AI reach the 437b4e7 tab; its edits keep the provenance', async ({
+/** Twelve notes in a frame at (x, 0), sorted by a lens (two headings with the run id), then placed on a new 2x2. */
+async function lensAndPlace(page: Page, x: number) {
+  await setViewport(page, { x: x - 100, y: -100, zoom: 0.5 })
+  const frame = await makeFrame(page, x, 0, 2400, 1100, `Journey ${x}`)
+  const ids = await makeNotes(page, twelve(x + 60, 120), frame)
+  const heads = (await headings(page)).length
+  await select(page, ids)
+  const sorted = sortRun(page, 'sort.lens', { lens: 'journey stage' })
+  await continueThenApply(page)
+  expect(await sorted).toBe(true)
+  await expect.poll(async () => (await headings(page)).length).toBe(heads + 2)
+  for (const h of await headings(page)) expect((lobbyOf(h).ai as { run?: string }).run).toMatch(RUN_ID)
+  await expectSaved(page)
+  const matrices = (await items(page)).filter((e) => e.type === 'frame' && kindOf(e) === 'sort-matrix').length
+  await select(page, ids)
+  const placed = sortRun(page, 'sort.place', {
+    axes: [
+      { name: 'Effort', low: 'Low effort', high: 'High effort' },
+      { name: 'Impact', low: 'Low impact', high: 'High impact' },
+    ],
+  })
+  await continueThenApply(page)
+  expect(await placed).toBe(true)
+  await expect
+    .poll(
+      async () => (await items(page)).filter((e) => e.type === 'frame' && kindOf(e) === 'sort-matrix').length,
+    )
+    .toBe(matrices + 1)
+  await expectSaved(page)
+  expect((await saveState(page)).lastReject).toBeNull()
+}
+
+test('L-compat 2 (AI on the board): AI notes with run ids, the Recap frame, a diagram from words, sort by a lens and Place with AI reach the 437b4e7 tab, live and in its catch-up; its edits keep the provenance', async ({
   join,
   browser,
   board,
@@ -381,116 +454,66 @@ test('L-compat 2 (AI on the board): AI notes with run ids, the Recap frame, a di
   openai,
   oldTabs,
 }) => {
-  test.setTimeout(300_000)
+  test.setTimeout(360_000)
   const p = await pair(join, browser, board, users, oldTabs)
   const { a, old } = p
   await waitForSort(a.page)
 
-  await test.step('W2: AI › Action items on three notes: the AI-made notes (and their heading) carry the run id; bob holds them', async () => {
-    const ids: string[] = []
-    for (const [i, text] of ['Book the venue', 'Draft the brief', 'Call the studio'].entries()) {
-      ids.push(await createNote(a.page, { x: i * 260, y: 0, text }))
-      await expectSaved(a.page)
-    }
-    await showBounds(a.page, { x: -40, y: -40, w: 860, h: 300 })
-    await select(a.page, ids)
-    await openAiMenu(a.page)
-    await aiMenu(a.page).getByTestId('ai-actions').click()
-    await continueIfAsked(a.page)
-    await expect(a.page.getByTestId('ai-done')).toContainText('Added 3 action items.', { timeout: 20_000 })
-    await expectSaved(a.page)
-    const made = await aiObjects(a.page)
-    expect(made.filter((o) => o.kind === 'action-item')).toHaveLength(3)
-    for (const o of made)
-      expect((lobbyOf(await item(a.page, o.id)).ai as { run?: string }).run).toMatch(RUN_ID)
-    await expectOldTabHolds(stack, board, old, [a.page])
-    expect((await aiObjects(old.page)).map((o) => o.id).sort()).toEqual(made.map((o) => o.id).sort())
+  await test.step('W2: AI › Action items (AI-made notes and a heading with the run id)', async () => {
+    await liveThenCaughtUp(p, stack, board, (r) =>
+      actionItems(
+        a.page,
+        r ? ['Pick the date', 'Order the props'] : ['Book the venue', 'Draft the brief', 'Call the studio'],
+        r * 600,
+      ),
+    )
+    expect((await aiObjects(old.page)).map((o) => o.id).sort()).toEqual(
+      (await aiObjects(a.page)).map((o) => o.id).sort(),
+    )
   })
 
-  await test.step('W2: Wrap up, Add as Recap frame: bob holds the frame and its parts', async () => {
-    const frame = await recapFrame(a.page)
-    await expectOldTabHolds(stack, board, old, [a.page])
-    expect(await item(old.page, frame.id)).toBeTruthy()
+  await test.step('W2: Wrap up, Add as Recap frame (the AI’s parts with provenance, the room’s table)', async () => {
+    await liveThenCaughtUp(p, stack, board, (r) => recapFrame(a.page, { x: 30_000 + r * 5_000, y: 30_000 }))
   })
 
-  await test.step('W4 with W1: Diagram from words (24 nodes, past the preview): bob holds every node and connector', async () => {
-    const note = await createNote(a.page, { x: 0, y: 2600, text: 'Brief, concept, review, ship' })
-    await expectSaved(a.page)
-    await diagramFromWords(a.page, openai, note, 24)
-    await expectOldTabHolds(stack, board, old, [a.page])
+  await test.step('W4 with W1: Diagram from words (24 nodes past the preview, then 12)', async () => {
+    await liveThenCaughtUp(p, stack, board, (r) =>
+      diagramFromWords(a.page, openai, 2_600 + r * 3_000, r ? 12 : 24),
+    )
   })
 
-  await test.step('W8 with W1: sort by a lens (headings with the run id) and Place with AI on a new 2x2: bob holds both', async () => {
-    await setViewport(a.page, { x: 5900, y: -100, zoom: 0.5 })
-    const frame = await makeFrame(a.page, 6000, 0, 2400, 1100, 'Journey')
-    const ids = await makeNotes(a.page, twelve(6060, 120), frame)
-    await select(a.page, ids)
-    const sorted = sortRun(a.page, 'sort.lens', { lens: 'journey stage' })
-    await continueThenApply(a.page)
-    expect(await sorted).toBe(true)
-    await expect.poll(async () => (await headings(a.page)).length).toBe(2)
-    for (const h of await headings(a.page)) expect((lobbyOf(h).ai as { run?: string }).run).toMatch(RUN_ID)
-    await expectSaved(a.page)
-    await expectOldTabHolds(stack, board, old, [a.page])
-    await select(a.page, ids)
-    const placed = sortRun(a.page, 'sort.place', {
-      axes: [
-        { name: 'Effort', low: 'Low effort', high: 'High effort' },
-        { name: 'Impact', low: 'Low impact', high: 'High impact' },
-      ],
-    })
-    await continueThenApply(a.page)
-    expect(await placed).toBe(true)
-    await expect.poll(async () => (await items(a.page)).some((e) => kindOf(e) === 'sort-matrix')).toBe(true)
-    await expectSaved(a.page)
-    expect((await saveState(a.page)).lastReject).toBeNull()
-    await expectOldTabHolds(stack, board, old, [a.page])
+  await test.step('W8 with W1: sort by a lens (headings with the run id) and Place with AI on a new 2x2', async () => {
+    await liveThenCaughtUp(p, stack, board, (r) => lensAndPlace(a.page, 6_000 + r * 4_000))
   })
 
-  await test.step('bob moves and recolours what AI made: every element keeps its provenance, run id and kind', async () => {
+  await test.step('bob moves, recolours and renames what AI made: every element keeps its provenance, run id and kind', async () => {
     const all = await items(old.page)
-    const pick = (kind: string) => {
-      const el = all.find((e) => kindOf(e) === kind && !(e.type === 'text' && e.containerId))
+    const pick = (kind: string, pred: (e: CanvasElement) => boolean = () => true) => {
+      const el = all.find((e) => kindOf(e) === kind && !(e.type === 'text' && e.containerId) && pred(e))
       if (!el) throw new Error(`no ${kind} on bob's board`)
       return el
     }
     const note = pick('ai-action-item')
     const node = pick('ai-diagram-node')
     const heading = pick('ai-sort-label')
-    const matrix = pick('sort-matrix')
+    const matrix = pick('sort-matrix', (e) => e.type === 'frame')
+    const recap = all.find((e) => e.type === 'frame' && String(e.name).startsWith('Recap · '))
+    if (!recap) throw new Error('no Recap frame on bob’s board')
     await oldTabEdits(p, stack, board, [
       { id: note.id, patch: { x: note.x + 40, y: note.y + 30 } },
       { id: node.id, patch: { backgroundColor: '#ffc9c9' } },
       { id: heading.id, patch: { x: heading.x + 25 } },
       { id: matrix.id, patch: { name: 'Effort and impact' } },
+      { id: recap.id, patch: { name: 'Recap (checked)' } },
     ])
     for (const id of [note.id, node.id, heading.id])
       expect((lobbyOf(await storedElement(stack, board, id)).ai as { run?: string }).run).toMatch(RUN_ID)
-  })
-
-  await test.step('bob is offline while alice runs AI again (action items); back online he holds the new run', async () => {
-    await old.cut()
-    await expect.poll(async () => (await saveState(old.page)).state, { timeout: 15_000 }).toBe('offline')
-    const ids: string[] = []
-    for (const [i, text] of ['Pick the date', 'Order the props'].entries()) {
-      ids.push(await createNote(a.page, { x: i * 260, y: 4400, text }))
-      await expectSaved(a.page)
-    }
-    await showBounds(a.page, { x: -40, y: 4360, w: 600, h: 300 })
-    await select(a.page, ids)
-    await openAiMenu(a.page)
-    await aiMenu(a.page).getByTestId('ai-actions').click()
-    await continueIfAsked(a.page)
-    await expect(a.page.getByTestId('ai-done')).toContainText('action items', { timeout: 20_000 })
-    await expectSaved(a.page)
-    await old.restore()
-    await expectOldTabHolds(stack, board, old, [a.page], 30_000)
   })
 })
 
 // ---- 3. builders without AI (W4's Mermaid paste and next shape, W8's sort headings and pieces) -------------------
 
-/** A small Mermaid flowchart: 8 nodes of mixed kinds, labelled and plain links. */
+/** A small Mermaid flowchart: 8 nodes of mixed kinds, 8 links (three of them labelled). */
 const CHART = [
   'flowchart TD',
   '  A[Brief] --> B{Approved?}',
@@ -500,10 +523,19 @@ const CHART = [
   '  C --> E[Edit]',
   '  E --> F[Grade]',
   '  F --> G[Mix]',
-  '  G --> H[Deliver]',
+  '  G -->|final| H[Deliver]',
 ].join('\n')
+const CHART_LINKS = 8
 
-test('L-compat 3 (no AI): a pasted Mermaid chart, the flow’s next shape, sort headings and pieces reach the 437b4e7 tab; its edits keep their kinds', async ({
+const arrowsFrom = async (page: Page, from: string) =>
+  (await items(page)).filter(
+    (e) =>
+      e.type === 'arrow' && (e as { startBinding?: { elementId?: string } }).startBinding?.elementId === from,
+  )
+const pieceCount = async (page: Page) =>
+  (await items(page)).filter((e) => (kindOf(e) ?? '').startsWith('piece-')).length
+
+test('L-compat 3 (no AI): a pasted Mermaid chart, the flow’s next shape, sort headings and pieces reach the 437b4e7 tab, live and in its catch-up; its edits keep their kinds', async ({
   join,
   browser,
   board,
@@ -511,116 +543,111 @@ test('L-compat 3 (no AI): a pasted Mermaid chart, the flow’s next shape, sort 
   stack,
   oldTabs,
 }) => {
-  test.setTimeout(240_000)
+  test.setTimeout(300_000)
   const p = await pair(join, browser, board, users, oldTabs)
   const { a, old } = p
   await grantClipboard(a.context)
   await waitForSort(a.page)
 
-  await test.step('W4: Mermaid paste as a diagram: bob holds every shape, connector and label', async () => {
-    await setViewport(a.page, { x: -200, y: -200, zoom: 0.6 })
-    await writeClipboard(a.page, { 'text/plain': CHART })
-    await focusBoard(a.page)
-    await a.page.keyboard.press('ControlOrMeta+v')
-    await expect(a.page.getByTestId('mermaid-paste-prompt')).toBeVisible()
-    await a.page.getByTestId('mermaid-paste-diagram').click()
-    await expect.poll(async () => (await items(a.page)).filter((e) => e.type === 'arrow').length).toBe(8)
-    await expectSaved(a.page)
-    expect((await saveState(a.page)).lastReject).toBeNull()
-    await expectOldTabHolds(stack, board, old, [a.page])
+  await test.step('W4: Mermaid paste as a diagram (shapes, elbow connectors, link labels; no AI)', async () => {
+    await liveThenCaughtUp(p, stack, board, async (r) => {
+      await setViewport(a.page, { x: -200 + r * 6_000, y: -200, zoom: 0.6 })
+      const arrows = (await items(a.page)).filter((e) => e.type === 'arrow').length
+      await writeClipboard(a.page, { 'text/plain': CHART })
+      await focusBoard(a.page)
+      await a.page.keyboard.press('ControlOrMeta+v')
+      await expect(a.page.getByTestId('mermaid-paste-prompt')).toBeVisible()
+      await a.page.getByTestId('mermaid-paste-diagram').click()
+      await expect
+        .poll(async () => (await items(a.page)).filter((e) => e.type === 'arrow').length)
+        .toBe(arrows + CHART_LINKS)
+      await expectSaved(a.page)
+      expect((await saveState(a.page)).lastReject).toBeNull()
+    })
   })
 
-  await test.step('W4: Ctrl+Right makes the next connected shape (the connector the room’s): bob holds both', async () => {
-    const src = await createItem(a.page, 'rectangle', { x: 0, y: 3000, width: 160, height: 80 })
-    await expectSaved(a.page)
-    await setViewport(a.page, { x: -100, y: 2800, zoom: 1 })
-    await select(a.page, [src])
-    await focusCanvas(a.page)
-    await a.page.keyboard.press('ControlOrMeta+ArrowRight')
-    await expect
-      .poll(async () =>
-        (await items(a.page)).some(
-          (e) =>
-            e.type === 'arrow' &&
-            (e as { startBinding?: { elementId?: string } }).startBinding?.elementId === src,
-        ),
+  await test.step('W4: Ctrl+Right makes the next connected shape (the connector’s ends the room’s)', async () => {
+    await liveThenCaughtUp(p, stack, board, async (r) => {
+      const y = 3_000 + r * 400
+      const src = await createItem(a.page, 'rectangle', { x: 0, y, width: 160, height: 80 })
+      await expectSaved(a.page)
+      await setViewport(a.page, { x: -100, y: y - 200, zoom: 1 })
+      await select(a.page, [src])
+      await focusCanvas(a.page)
+      await a.page.keyboard.press('ControlOrMeta+ArrowRight')
+      await expect.poll(async () => (await arrowsFrom(a.page, src)).length).toBe(1)
+      await a.page.keyboard.press('Escape')
+      await expectSaved(a.page)
+      expect((await saveState(a.page)).lastReject).toBeNull()
+    })
+  })
+
+  await test.step('W8: sort by colour into labelled columns (headings, moves)', async () => {
+    await liveThenCaughtUp(p, stack, board, async (r) => {
+      const y = 5_000 + r * 1_200
+      const frame = await makeFrame(a.page, 0, y, 2_000, 900, `Colours ${r}`)
+      const ids = await makeNotes(
+        a.page,
+        [
+          { x: 60, y: y + 120, text: 'one', fill: FILL.sky },
+          { x: 300, y: y + 120, text: 'two', fill: FILL.butter },
+          { x: 540, y: y + 120, text: 'three', fill: FILL.sky },
+        ],
+        frame,
       )
-      .toBe(true)
-    await a.page.keyboard.press('Escape')
-    await expectSaved(a.page)
-    await expectOldTabHolds(stack, board, old, [a.page])
+      const heads = (await headings(a.page)).length
+      await select(a.page, ids)
+      expect(await sortRun(a.page, 'sort.colour')).toBe(true)
+      await expect.poll(async () => (await headings(a.page)).length).toBe(heads + 2)
+      await expectSaved(a.page)
+      expect((await saveState(a.page)).lastReject).toBeNull()
+    })
   })
 
-  await test.step('W8: sort by colour into labelled columns: bob holds the headings and the moves', async () => {
-    const frame = await makeFrame(a.page, 0, 5000, 2000, 900, 'Colours')
-    const ids = await makeNotes(
-      a.page,
-      [
-        { x: 60, y: 5120, text: 'one', fill: FILL.sky },
-        { x: 300, y: 5120, text: 'two', fill: FILL.butter },
-        { x: 540, y: 5120, text: 'three', fill: FILL.sky },
-      ],
-      frame,
-    )
-    await select(a.page, ids)
-    expect(await sortRun(a.page, 'sort.colour')).toBe(true)
-    await expect.poll(async () => (await headings(a.page)).length).toBe(2)
-    await expectSaved(a.page)
-    expect((await saveState(a.page)).lastReject).toBeNull()
-    await expectOldTabHolds(stack, board, old, [a.page])
-  })
-
-  await test.step('W8: pieces from the Pieces panel (Decision, a button, a persona): bob holds every element', async () => {
-    await setViewport(a.page, { x: 3000, y: 5000, zoom: 1 })
+  await test.step('W8: pieces from the Pieces panel (Decision, a button, a persona; then a stage and a shot)', async () => {
     await a.page.getByTestId('dock-tab-pieces').click()
     await expect(a.page.getByTestId('pieces-panel')).toBeVisible()
-    for (const word of ['dec', 'button', 'persona']) {
-      const count = (await items(a.page)).filter((e) => (kindOf(e) ?? '').startsWith('piece-')).length
-      await a.page.getByTestId('piece-search').fill(word)
-      await a.page.getByTestId('piece-search').press('Enter')
-      await expect
-        .poll(async () => (await items(a.page)).filter((e) => (kindOf(e) ?? '').startsWith('piece-')).length)
-        .toBeGreaterThan(count)
-      await expectSaved(a.page)
-    }
-    expect((await saveState(a.page)).lastReject).toBeNull()
-    await expectOldTabHolds(stack, board, old, [a.page])
+    await liveThenCaughtUp(p, stack, board, async (r) => {
+      await setViewport(a.page, { x: 3_000 + r * 3_000, y: 5_000, zoom: 1 })
+      for (const word of r ? ['stage', 'shot'] : ['dec', 'button', 'persona']) {
+        const count = await pieceCount(a.page)
+        await a.page.getByTestId('piece-search').fill(word)
+        await a.page.getByTestId('piece-search').press('Enter')
+        await expect.poll(() => pieceCount(a.page)).toBeGreaterThan(count)
+        await expectSaved(a.page)
+      }
+      expect((await saveState(a.page)).lastReject).toBeNull()
+    })
   })
 
-  await test.step('bob moves a piece, a sort heading and a flow shape: every kind stays, the connectors are re-snapped by the room', async () => {
+  await test.step('bob moves a piece, a sort heading, a pasted shape and a flow shape: every kind stays, the connectors are the room’s', async () => {
     const all = await items(old.page)
-    const piece =
-      all.find(
-        (e) =>
-          (kindOf(e) ?? '').startsWith('piece-') &&
-          !(e.type === 'text' && e.containerId) &&
-          !e.groupIds?.length,
-      ) ?? all.find((e) => (kindOf(e) ?? '').startsWith('piece-') && e.type !== 'text')
+    const piece = all.find((e) => (kindOf(e) ?? '').startsWith('piece-') && e.type !== 'text')
     const heading = all.find((e) => kindOf(e) === 'sort-label')
-    const shape = all.find((e) => e.type === 'diamond' && !kindOf(e))
-    if (!piece || !heading || !shape) throw new Error('bob is missing what he edits')
+    const pasted = all.find((e) => e.type === 'diamond' && !kindOf(e))
+    const flow = all.find(
+      (e) =>
+        e.type === 'rectangle' &&
+        !kindOf(e) &&
+        all.some(
+          (x) =>
+            (x as { endBinding?: { elementId?: string } }).endBinding?.elementId === e.id &&
+            x.type === 'arrow',
+        ),
+    )
+    if (!piece || !heading || !pasted || !flow) throw new Error('bob is missing what he edits')
     await oldTabEdits(p, stack, board, [
       { id: piece.id, patch: { backgroundColor: '#d0bfff' } },
       { id: heading.id, patch: { x: heading.x + 30 } },
-      { id: shape.id, patch: { x: shape.x + 60, y: shape.y + 20 } },
+      { id: pasted.id, patch: { x: pasted.x + 60, y: pasted.y + 20 } },
+      { id: flow.id, patch: { x: flow.x + 40 } },
     ])
-  })
-
-  await test.step('bob is offline while alice adds a piece and the next shape; back online he holds them', async () => {
-    await old.cut()
-    await expect.poll(async () => (await saveState(old.page)).state, { timeout: 15_000 }).toBe('offline')
-    await a.page.getByTestId('piece-search').fill('stage')
-    await a.page.getByTestId('piece-search').press('Enter')
-    await expect.poll(async () => (await items(a.page)).some((e) => kindOf(e) === 'piece-stage')).toBe(true)
-    await expectSaved(a.page)
-    await old.restore()
-    await expectOldTabHolds(stack, board, old, [a.page], 30_000)
   })
 })
 
 // ---- 4. W7's restore and W5's vote results to the board ------------------------------------------------------------
 
-test('L-compat 4 (restore, vote results): a restore of frames with minutes and the vote’s chart and winners reach the 437b4e7 tab; its edits keep them', async ({
+test('L-compat 4 (restore, vote results): a restore of a frame with minutes and the vote’s chart and winners reach the 437b4e7 tab, live and in its catch-up; its edits keep them', async ({
   join,
   browser,
   board,
@@ -628,7 +655,7 @@ test('L-compat 4 (restore, vote results): a restore of frames with minutes and t
   stack,
   oldTabs,
 }) => {
-  test.setTimeout(240_000)
+  test.setTimeout(300_000)
   const p = await pair(join, browser, board, users, oldTabs)
   const { a, old } = p
   const api = await users.api('alice')
@@ -643,37 +670,43 @@ test('L-compat 4 (restore, vote results): a restore of frames with minutes and t
   await minutesAndMove(a.page, 'rx-f1', { index: 0, mins: 15 }, 'rx-n3', { x: 600, y: 140 })
   await expectOldTabHolds(stack, board, old, [a.page])
 
-  await test.step('W7: a checkpoint, the board changed (minutes, a note deleted and one moved), Restore these: bob holds the restored board', async () => {
-    const res = await api.fetch('POST', `/api/boards/${board}/snapshots`, { name: 'Before the changes' })
-    expect(res.status(), await res.text()).toBe(201)
-    await minutesAndMove(a.page, 'rx-f1', { index: 0, mins: 40 }, 'rx-n2', { x: 900, y: 900 })
-    await a.page.evaluate(() => {
-      type Tx = { delete(id: string): void }
-      const b = (
-        window as unknown as { __lobbyBoard: { canvas: { transact(l: string, fn: (tx: Tx) => void): void } } }
-      ).__lobbyBoard
-      b.canvas.transact('e2e: delete', (tx) => tx.delete('rx-n1'))
+  await test.step('W7: a checkpoint, the board changed (the minutes, a note deleted, one moved), Restore these', async () => {
+    await liveThenCaughtUp(p, stack, board, async (r) => {
+      const res = await api.fetch('POST', `/api/boards/${board}/snapshots`, {
+        name: `Before the changes ${r}`,
+      })
+      expect(res.status(), await res.text()).toBe(201)
+      await minutesAndMove(a.page, 'rx-f1', { index: 0, mins: 40 + r }, 'rx-n2', { x: 900, y: 900 })
+      await a.page.evaluate(() => {
+        type Tx = { delete(id: string): void }
+        const b = (
+          window as unknown as {
+            __lobbyBoard: { canvas: { transact(l: string, fn: (tx: Tx) => void): void } }
+          }
+        ).__lobbyBoard
+        b.canvas.transact('e2e: delete', (tx) => tx.delete('rx-n1'))
+      })
+      await expectSaved(a.page)
+      await openHistory(a.page)
+      await a.page.getByTestId('history-time-travel').click()
+      const d = a.page.getByTestId('checkpoint-preview-dialog')
+      await expect(d).toBeVisible()
+      await expect(d).toContainText(`Before the changes ${r}`)
+      await d.getByTestId('history-select-changes').click()
+      await d.getByTestId('history-restore-elements').click()
+      await expect(a.page.getByTestId('history-restored-notice')).toContainText('for everyone')
+      await expect(d).toHaveCount(0)
+      await expect
+        .poll(async () => present((await storedElement(stack, board, 'rx-f1')) as CanvasElement)?.mins)
+        .toBe(15)
+      await expectSaved(a.page)
     })
-    await expectSaved(a.page)
-    await expectOldTabHolds(stack, board, old, [a.page])
-    await openHistory(a.page)
-    await a.page.getByTestId('history-time-travel').click()
-    const d = a.page.getByTestId('checkpoint-preview-dialog')
-    await expect(d).toBeVisible()
-    await expect(d).toContainText('Before the changes')
-    await d.getByTestId('history-select-changes').click()
-    await d.getByTestId('history-restore-elements').click()
-    await expect(a.page.getByTestId('history-restored-notice')).toContainText('for everyone')
-    await expect
-      .poll(async () => present((await storedElement(stack, board, 'rx-f1')) as CanvasElement)?.mins)
-      .toBe(15)
-    await expectOldTabHolds(stack, board, old, [a.page])
     expect(present(await item(old.page, 'rx-f1'))?.mins).toBe(15)
     expect(await item(old.page, 'rx-n1')).toBeTruthy()
     expect((await item(old.page, 'rx-n2'))?.x).toBe(320)
   })
 
-  await test.step('W5: a vote cast by both and revealed, Results to board and Gather the winners: bob holds the chart and the winners', async () => {
+  await test.step('W5: a vote cast by both and revealed, then Results to board and Gather the winners', async () => {
     const r = await post(a, `/api/boards/${board}/votes`, {
       title: 'Pick one',
       votesPerPerson: 3,
@@ -697,25 +730,44 @@ test('L-compat 4 (restore, vote results): a restore of frames with minutes and t
     await expect(a.page.getByTestId('vote-reveal')).toBeVisible()
     await a.page.getByTestId('vote-reveal').click()
     await expect(a.page.getByTestId('vote-chart')).toBeVisible({ timeout: 8_000 })
-    await a.page.getByTestId('vote-results-to-board').click()
-    await expect
-      .poll(async () => (await items(a.page)).filter((e) => kindOf(e) === 'vote-chart').length, {
-        timeout: 8_000,
-      })
-      .toBeGreaterThan(3)
-    await expectSaved(a.page)
-    await a.page.getByTestId('vote-gather').click()
-    await expect.poll(async () => (await items(a.page)).some((e) => kindOf(e) === 'vote-winners')).toBe(true)
-    await expectSaved(a.page)
-    expect((await saveState(a.page)).lastReject).toBeNull()
-    await expectOldTabHolds(stack, board, old, [a.page])
+    await liveThenCaughtUp(p, stack, board, async () => {
+      const charts = (await items(a.page)).filter(
+        (e) => e.type === 'frame' && kindOf(e) === 'vote-chart',
+      ).length
+      const winners = (await items(a.page)).filter(
+        (e) => e.type === 'frame' && kindOf(e) === 'vote-winners',
+      ).length
+      await a.page.getByTestId('vote-results-to-board').click()
+      await expect
+        .poll(
+          async () =>
+            (await items(a.page)).filter((e) => e.type === 'frame' && kindOf(e) === 'vote-chart').length,
+          {
+            timeout: 8_000,
+          },
+        )
+        .toBe(charts + 1)
+      await expectSaved(a.page)
+      await a.page.getByTestId('vote-gather').click()
+      await expect
+        .poll(
+          async () =>
+            (await items(a.page)).filter((e) => e.type === 'frame' && kindOf(e) === 'vote-winners').length,
+        )
+        .toBe(winners + 1)
+      await expectSaved(a.page)
+      expect((await saveState(a.page)).lastReject).toBeNull()
+    })
   })
 
-  await test.step('bob moves the chart frame and renames the restored frame: kinds and minutes stay', async () => {
-    const chart = (await items(old.page)).find((e) => e.type === 'frame' && kindOf(e) === 'vote-chart')
-    if (!chart) throw new Error('no chart frame at bob')
+  await test.step('bob moves the chart, renames the winners and the restored frame: kinds and minutes stay', async () => {
+    const all = await items(old.page)
+    const chart = all.find((e) => e.type === 'frame' && kindOf(e) === 'vote-chart')
+    const winners = all.find((e) => e.type === 'frame' && kindOf(e) === 'vote-winners')
+    if (!chart || !winners) throw new Error('no chart or winners frame at bob')
     await oldTabEdits(p, stack, board, [
       { id: chart.id, patch: { x: chart.x + 50 } },
+      { id: winners.id, patch: { name: 'Top ideas (agreed)' } },
       { id: 'rx-f1', patch: { name: 'Kick-off (done)' } },
     ])
     expect(present((await storedElement(stack, board, 'rx-f1')) as CanvasElement)?.mins).toBe(15)
