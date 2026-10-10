@@ -21,12 +21,15 @@
  * Wave M (W6, PWR-4): this device's last copy of the board (canvas/sync/adapter/snapshot-cache.ts) is painted
  * read-only the moment the canvas exists, once the board answered 200, with "Showing your last copy ·
  * connecting" (`cached-copy`) until the first welcome replaces it (M6-2); the board's answer 403/404, the event
- * stream's access-lost and a trashed board drop that copy.
+ * stream's access-lost and a trashed board drop that copy. Offline (the board's request never got an answer), a
+ * member's copy of at most 7 days opens read-only with "Offline · showing your copy from <time>"
+ * (`offline-copy`, M6-4); anyone else gets the screen they got before.
  */
 import '../engine/engineGlobals.ts'
 import type { Board, BoardDetail, Me, TicketResponse } from '@draftroom/contracts'
 import {
   lazy,
+  type ReactNode,
   Suspense,
   useCallback,
   useEffect,
@@ -46,6 +49,7 @@ import { BoardAccount, type ConnState, TopBarFrame } from '../../board/TopBarFra
 import { firstTicketWhileStarting } from '../../board/ticket.ts'
 import { CANVAS_FEATURES } from '../../features/canvas-registry.ts'
 import { type BoardEvents, createBoardEvents } from '../../features/events.ts'
+import { knownUserKind } from '../../invite/guest.tsx'
 import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 import type { BoardRole } from '../../lib/permissions.ts'
 import { rememberBoardTitle, takeBoardDetail, takeBoardTicket } from '../../lib/prefetch-board.ts'
@@ -66,9 +70,17 @@ import {
 } from '../api/feature.ts'
 import type { LobbyCanvas } from '../api/lobby-canvas.ts'
 import { ExcalidrawHost, type ExcalidrawHostProps, type HostWiring } from '../engine/ExcalidrawHost.tsx'
+import type { LobbyRole } from '../engine/interaction.ts'
 import { parseFileKey } from '../files/loader.ts'
+import { createExcalidrawScene } from '../sync/adapter/excalidraw.ts'
 import { guestQueueLeaver } from '../sync/adapter/offline-guest.ts'
-import { type CacheRead, purgeBoardCache, takeBoardCache } from '../sync/adapter/snapshot-cache.ts'
+import {
+  CACHE_OFFLINE_MAX_AGE_MS,
+  type CachedBoard,
+  type CacheRead,
+  purgeBoardCache,
+  takeBoardCache,
+} from '../sync/adapter/snapshot-cache.ts'
 import { BoardSkeleton, SkeletonToolbar } from './BoardSkeleton.tsx'
 import {
   BoardPeople,
@@ -124,6 +136,22 @@ export function LobbyBoardPage({ boardId }: { boardId: string }) {
   if (detail.status === 'loading') return <BoardSkeleton boardId={boardId} />
   if (detail.status === 'error') {
     if (isNoAccess(detail.error)) return <NoAccessScreen />
+    // M6-4: the request never got an answer (offline): a member's recent copy, read-only, else the screen below
+    if (detail.error.kind === 'network')
+      return (
+        <OfflineBoardCopy boardId={boardId} uid={uid} onRetry={detail.reload}>
+          <MessageScreen
+            testId="board-load-error"
+            title="This board could not be opened"
+            body={detail.error.message}
+            actions={
+              <button type="button" className="dr-btn dr-btn--primary" onClick={detail.reload}>
+                Try again
+              </button>
+            }
+          />
+        </OfflineBoardCopy>
+      )
     // 401: the session guard is already switching to the sign-in page.
     if (detail.error.kind === 'unauthorized') return <LoadingScreen testId="board-loading" />
     return (
@@ -844,6 +872,102 @@ function LobbyBoardScreen({
   )
   // always the same tree (a provider that appears later would remount the canvas)
   return <CanvasFeatureContextProvider value={ctx}>{board_}</CanvasFeatureContextProvider>
+}
+
+/**
+ * M6-4 (wave M): the board's request never got an answer (the network is down). A member whose device kept a copy
+ * of this board at most CACHE_OFFLINE_MAX_AGE_MS (7 days) ago sees it, read-only (the viewer's interaction, no
+ * socket, nothing pushed, the offline queue untouched), with "Offline · showing your copy from <time>"; images
+ * show their placeholder (no file is fetched). Back online (or Try again), the board opens as usual. Anyone else
+ * (a guest, who never has a copy; an older copy; none) gets `children`: the screen this case showed before.
+ */
+function OfflineBoardCopy({
+  boardId,
+  uid,
+  onRetry,
+  children,
+}: {
+  boardId: string
+  uid: string
+  onRetry(): void
+  children: ReactNode
+}) {
+  const [read] = useState(() => (knownUserKind(uid) === 'guest' ? null : takeBoardCache(boardId, uid)))
+  const [record, setRecord] = useState<CachedBoard | null | undefined>(() => (read ? read.value : null))
+  useEffect(() => {
+    if (!read) return
+    let live = true
+    // (also when the read answered between the render and this effect)
+    void read.done.then((r) => {
+      if (live) setRecord(r)
+    })
+    return () => {
+      live = false
+    }
+  }, [read])
+  // back online: the board's own open
+  const retry = useRef(onRetry)
+  retry.current = onRetry
+  useEffect(() => {
+    const online = () => retry.current()
+    window.addEventListener('online', online)
+    return () => window.removeEventListener('online', online)
+  }, [])
+  if (record === undefined) return <BoardSkeleton boardId={boardId} />
+  const fresh = record && Date.now() - record.savedAt <= CACHE_OFFLINE_MAX_AGE_MS
+  if (!record || !fresh) return <>{children}</>
+  return <OfflineCopyCanvas record={record} onRetry={onRetry} />
+}
+
+/** The offline copy's canvas role: read-only (pan, zoom, links). */
+const OFFLINE_COPY_ROLE: LobbyRole = 'viewer'
+
+function OfflineCopyCanvas({ record, onRetry }: { record: CachedBoard; onRetry(): void }) {
+  const { colorMode } = useTheme()
+  // through the sync adapter's apply (CaptureUpdateAction.NEVER), once; nothing listens to changes, nothing pushes
+  const wiring = useMemo<readonly HostWiring[]>(
+    () => [
+      (_wrapper, api) => {
+        createExcalidrawScene(api).apply(record.elements.map((el) => structuredClone(el)))
+        if (DEV_AUTH_ENABLED)
+          (window as unknown as { __lobbyOfflineCopy?: unknown }).__lobbyOfflineCopy = {
+            api,
+            savedAt: record.savedAt,
+          }
+        return () => {
+          if (DEV_AUTH_ENABLED)
+            delete (window as unknown as { __lobbyOfflineCopy?: unknown }).__lobbyOfflineCopy
+        }
+      },
+    ],
+    [record],
+  )
+  const label = cachedOfflineLabel(record.savedAt)
+  return (
+    <div className="dr-board" data-testid="offline-copy" data-board-id={record.boardId} data-phase="offline">
+      <div className="dr-banner" data-testid="offline-copy-banner" role="status">
+        {label}. It may be out of date; you can edit once you are back online.{' '}
+        <button
+          type="button"
+          className="dr-btn dr-btn--ghost"
+          onClick={onRetry}
+          data-testid="offline-copy-retry"
+        >
+          Try again
+        </button>
+      </div>
+      <div className="dr-board__body">
+        <main className="dr-board__canvas" aria-label="Board canvas (offline copy)">
+          <div className="dr-board__editor">
+            <section className="lobby-board-canvas" data-lobby-board-canvas="">
+              <ExcalidrawHost role={OFFLINE_COPY_ROLE} theme={colorMode} wiring={wiring} />
+              <CachedCopy savedAt={record.savedAt} offline />
+            </section>
+          </div>
+        </main>
+      </div>
+    </div>
+  )
 }
 
 type PasteData = Parameters<NonNullable<ExcalidrawHostProps['onPaste']>>[0]

@@ -6,11 +6,14 @@
 //        purged, and so is the copy of someone removed while the board is open (a FORBIDDEN close).
 //  M6-3: the warm open resumes as a catch-up: its socket gets no snapshot frame (binary), its welcome is not a
 //        reset, and its map hashes equal to the stored board.
+//  M6-4: offline (context.setOffline), a member sees their copy read-only with "Offline · showing your copy from
+//        <time>"; a guest gets the screen they got before; a copy older than 7 days is not shown.
 //
 // Every request stays on Lobby's own origin (the e2e network assertion). The cache record is read here only for
 // its metadata (clock, epoch, savedAt, hash, count): never its elements' content.
-import type { Page, WebSocketRoute } from '@playwright/test'
+import type { Browser, BrowserContext, Page, WebSocketRoute } from '@playwright/test'
 import { CONNECT_URL } from '../spike-b/support/relay.ts'
+import { signInContext } from '../tests/support/api.ts'
 import {
   canvasCall,
   createItem,
@@ -25,7 +28,9 @@ import {
 } from '../tests/support/canvas.ts'
 import { expectServerConverged, noAccessScreen } from '../tests/support/excalidraw.ts'
 import { WEB_URL } from '../tests/support/ports.ts'
+import type { TestUser } from '../tests/support/users.ts'
 import { settled } from './board-kit.ts'
+import { createGuestLink, guestOn, tokenOf } from './guests-kit.ts'
 
 // ---- helpers ------------------------------------------------------------------------------------------------------
 
@@ -82,6 +87,31 @@ const cacheRecord = (page: Page, board: string, uid: string): Promise<CacheRecor
         }
       }),
     { key: `${board}|${uid}` },
+  )
+
+/** Moves this page's record of `board` back in time (the 7-day offline rule). */
+const ageCacheRecord = (page: Page, board: string, uid: string, savedAt: number): Promise<void> =>
+  page.evaluate(
+    ({ key, savedAt }) =>
+      new Promise<void>((resolve, reject) => {
+        const req = indexedDB.open('lobby-board-cache', 1)
+        req.onerror = () => reject(req.error)
+        req.onsuccess = () => {
+          const db = req.result
+          const t = db.transaction('boards', 'readwrite')
+          const s = t.objectStore('boards')
+          const get = s.get(key)
+          get.onsuccess = () => {
+            if (get.result) s.put({ ...get.result, savedAt })
+          }
+          t.oncomplete = () => {
+            db.close()
+            resolve()
+          }
+          t.onerror = () => reject(t.error)
+        }
+      }),
+    { key: `${board}|${uid}`, savedAt },
   )
 
 /** Writes this board's cache now (the session's debug handle, dev-auth builds); whether it was kept. */
@@ -229,6 +259,14 @@ function foreignRequests(page: Page): string[] {
   return foreign
 }
 
+/** In-app navigation (the router's own, no page load), as a link click does. */
+async function goInApp(page: Page, path: string): Promise<void> {
+  await page.evaluate((to) => {
+    history.pushState(null, '', to)
+    dispatchEvent(new PopStateEvent('popstate'))
+  }, path)
+}
+
 /** The live scene's ids, positions and versions (for "nothing moved"), through a page handle. */
 const scenePositions = (page: Page, handle: '__lobbyBoard' | '__lobbyOfflineCopy') =>
   page.evaluate((h) => {
@@ -254,6 +292,19 @@ async function dragAcrossCanvas(page: Page): Promise<void> {
   await page.mouse.down()
   await page.mouse.move(box.x + 260, box.y + 240, { steps: 6 })
   await page.mouse.up()
+}
+
+/** A signed-in context whose page is on the dashboard: boards are then opened in-app (no page load). */
+async function onDashboard(
+  browser: Browser,
+  user: TestUser,
+): Promise<{ context: BrowserContext; page: Page }> {
+  const context = await browser.newContext()
+  await signInContext(context, user.handle, user.name)
+  const page = await context.newPage()
+  await page.goto('/')
+  await expect(page.getByTestId('dashboard')).toBeVisible({ timeout: 30_000 })
+  return { context, page }
 }
 
 /** A small board: three rectangles near the scene origin, every write acknowledged. */
@@ -454,4 +505,81 @@ test("M6-1: the export policy turning off for a viewer, and a trashed board, pur
   expect(trash.status(), await trash.text()).toBe(200)
   await expect(noAccessScreen(b.page)).toBeVisible({ timeout: 15_000 })
   await expect.poll(() => cacheRecord(b.page, board, bob.id)).toBeNull()
+})
+
+// ---- M6-4 -----------------------------------------------------------------------------------------------------------
+
+test('M6-4: offline, a member sees their copy read-only with the banner; a copy older than 7 days is not shown', async ({
+  browser,
+  board,
+  users,
+}) => {
+  const alice = await users.get('alice')
+  const { context, page } = await onDashboard(browser, alice)
+  try {
+    const foreign = foreignRequests(page)
+    await goInApp(page, `/b/${board}`)
+    await waitForCanvas(page)
+    const ids = await seedBoard(page)
+    expect(await flushBoardCache(page)).toBe(true)
+    await goInApp(page, '/')
+    await expect(page.getByTestId('lobby-board')).toHaveCount(0)
+
+    await context.setOffline(true)
+    await goInApp(page, `/b/${board}`)
+    await expect(page.getByTestId('offline-copy')).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByTestId('offline-copy-banner')).toContainText('Offline · showing your copy from')
+    await expect(page.getByTestId('cached-copy-label')).toContainText('Offline · showing your copy from')
+    await expect.poll(async () => (await scenePositions(page, '__lobbyOfflineCopy'))?.length).toBe(ids.length)
+    // read-only: a drag and Delete change nothing
+    const positions = await scenePositions(page, '__lobbyOfflineCopy')
+    await dragAcrossCanvas(page)
+    await page.keyboard.press('Delete')
+    expect(await scenePositions(page, '__lobbyOfflineCopy')).toEqual(positions)
+    await expect(page.getByTestId('lobby-board')).toHaveCount(0)
+
+    // a copy older than 7 days is not shown: the screen this case showed before
+    await goInApp(page, '/')
+    await ageCacheRecord(page, board, alice.id, Date.now() - 8 * 24 * 60 * 60 * 1000)
+    await goInApp(page, `/b/${board}`)
+    await expect(page.getByTestId('board-load-error')).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByTestId('offline-copy')).toHaveCount(0)
+
+    // back online: the board opens as usual
+    await context.setOffline(false)
+    await page.getByTestId('board-load-error').getByRole('button', { name: 'Try again' }).click()
+    await waitForCanvas(page)
+    expect(foreign).toEqual([])
+  } finally {
+    await context.close()
+  }
+})
+
+test("M6-4: a name-only guest keeps no copy, and offline gets today's screen", async ({
+  browser,
+  board,
+  users,
+}) => {
+  const alice = await users.get('alice')
+  const ac = await browser.newContext()
+  const gc = await browser.newContext()
+  try {
+    await signInContext(ac, alice.handle, alice.name)
+    const alicePage = await ac.newPage()
+    const link = await createGuestLink(alicePage, board, 'review')
+    const guest = await guestOn(gc, tokenOf(link), 'Gina')
+    // a guest's session writes nothing (the welcome says guest)
+    expect(await flushBoardCache(guest.page)).toBe(false)
+    expect(await cacheRecord(guest.page, board, guest.id)).toBeNull()
+    await goInApp(guest.page, '/')
+    await expect(guest.page.getByTestId('lobby-board')).toHaveCount(0)
+    await gc.setOffline(true)
+    await goInApp(guest.page, `/b/${board}`)
+    await expect(guest.page.getByTestId('board-load-error')).toBeVisible({ timeout: 30_000 })
+    await expect(guest.page.getByTestId('offline-copy')).toHaveCount(0)
+    expect(await cacheRecord(guest.page, board, guest.id)).toBeNull()
+  } finally {
+    await gc.close()
+    await ac.close()
+  }
 })
