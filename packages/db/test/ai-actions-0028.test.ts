@@ -68,7 +68,10 @@ describe('0028_ai_actions', () => {
     const before = { columns: await columns(), constraints: await constraints(), def: await checkDef(d) }
     expect(before.def).toContain('summarize')
 
-    expect((await migrate(d)).applied).toEqual(['0028_ai_actions'])
+    // up to 0028 only: the later migrations (0029, 0030) add tables of their own
+    expect((await migrate(d, { migrations: all.filter((m) => m.version <= 28) })).applied).toEqual([
+      '0028_ai_actions',
+    ])
     expect(await columns()).toEqual(before.columns)
     expect(await constraints()).toEqual(before.constraints)
     expect(await checkDef(d)).not.toEqual(before.def)

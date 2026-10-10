@@ -656,6 +656,11 @@ describe.skipIf(!PG_URL)('every migration after 0008 on a real Postgres holding 
     const afterCounts = await counts(s.db, s.schema)
     for (const [t, n] of Object.entries(beforeCounts))
       if (t !== 'schema_migrations') expect(afterCounts[t], t).toBe(n)
+    // Wave M (the foundation): 0029_usage_daily and 0030_workspace_templates are new tables only (no existing
+    // object changed, checked above), empty after the upgrade.
+    expect(upgrade.slice(-2)).toEqual(['0029_usage_daily', '0030_workspace_templates'])
+    expect(afterCounts.usage_daily).toBe(0)
+    expect(afterCounts.workspace_templates).toBe(0)
   })
 
   it('the checksum guard accepts re-runs (also from a CRLF checkout) and refuses an edited file', async () => {

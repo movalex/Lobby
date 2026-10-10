@@ -239,6 +239,8 @@ describe('shipped migrations', () => {
       '0026_outside_markers',
       '0027_feedback',
       '0028_ai_actions',
+      '0029_usage_daily',
+      '0030_workspace_templates',
     ])
   })
 
@@ -273,6 +275,8 @@ describe('shipped migrations', () => {
       '0026_outside_markers',
       '0027_feedback',
       '0028_ai_actions',
+      '0029_usage_daily',
+      '0030_workspace_templates',
     ])
     expect(await migrate(db)).toEqual({ applied: [], newer: [] })
     expect(await tableNames()).toEqual([
@@ -314,6 +318,7 @@ describe('shipped migrations', () => {
       'projects',
       'schema_migrations',
       'sessions',
+      'usage_daily',
       'user_emails',
       'users',
       'vote_done',
@@ -322,6 +327,7 @@ describe('shipped migrations', () => {
       'workshop_timers',
       'workspace_ai_settings',
       'workspace_members',
+      'workspace_templates',
       'workspaces',
     ])
   })
@@ -371,6 +377,8 @@ describe('shipped migrations', () => {
       '0026_outside_markers',
       '0027_feedback',
       '0028_ai_actions',
+      '0029_usage_daily',
+      '0030_workspace_templates',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))
     const inv = await db.one<{ multi_use: boolean; use_count: number }>(
