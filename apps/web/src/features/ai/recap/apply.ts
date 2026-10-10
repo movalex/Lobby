@@ -13,7 +13,7 @@
 import { LOBBY_INK, LOBBY_PALETTE } from '@draftroom/board-ops/elements'
 import { type CanvasElement, items, type LobbyCanvas } from '../../../canvas/api/index.ts'
 import { plural } from '../copy.ts'
-import { bringIntoView, FONT_FAMILY, layoutText, newId, pageSpotNear } from '../ported/apply.ts'
+import { FONT_FAMILY, layoutText, newId, pageSpotNear } from '../ported/apply.ts'
 import { aiCustomData } from '../ported/provenance.ts'
 import type { RecapPlan } from './plan.ts'
 
@@ -141,8 +141,8 @@ function layout(canvas: LobbyCanvas, plan: RecapPlan) {
 }
 
 /**
- * Writes the recap frame (see the header), selects it and brings it into this tab's view (the camera only, never
- * a write); returns its id and every element it made. `by`: this person (the server checks `lobby.ai.by` is the
+ * Writes the recap frame (see the header) and selects it (the panel then brings it into this tab's view: the camera
+ * only, never a write); returns its id and every element it made. `by`: this person (the server checks `lobby.ai.by` is the
  * writer). `near`: the frames a 'selection' recap is about (element ids: the frame goes beside them), else none
  * (around the middle of the view).
  */
@@ -230,7 +230,7 @@ export function applyRecap(
   if (notes.length)
     canvas.transact('ai: recap frame', (tx) => tx.setFrame(notes, frameId), { joinPrevious: true })
   canvas.select([frameId])
-  bringIntoView(canvas, [frameId], { inset: 64 })
+  // wave M (M4-4): the panel that asked for it reveals it, clear of the board's chrome and of itself (RecapPanel.tsx)
   return { frameId, ids }
 }
 

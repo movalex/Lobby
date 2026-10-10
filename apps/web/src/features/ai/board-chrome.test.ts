@@ -108,7 +108,22 @@ describe('placeInBoard (M4-3)', () => {
 
   it('the top-centre anchor sits under the region’s top band, in its middle', () => {
     const canvas = { container: () => el({ left: 44, top: 48, width: 1396, height: 852 }) as HTMLElement }
-    expect(topCentreAnchor(canvas)).toEqual({ x: 44 + 698 - 1, y: 48 + BOARD_TOP_BAND, width: 2, height: 0 })
+    expect(topCentreAnchor(canvas)).toEqual({
+      x: 44 + 698 - 1,
+      y: 48 + BOARD_TOP_BAND + 2,
+      width: 2,
+      height: 0,
+    })
+    // a popover below it is centred under it, at the top of the room (not pushed beside it)
+    const p = placeInBoard({
+      container: { left: 44, top: 48, width: 1396, height: 852 },
+      anchor: topCentreAnchor(canvas) as NonNullable<ReturnType<typeof topCentreAnchor>>,
+      size: { width: 380, height: 100 },
+      obstacles: [],
+      prefer: 'below',
+    })
+    expect(p).toMatchObject({ side: 'below', fits: true, top: BOARD_TOP_BAND + 12 })
+    expect(p.left + 190).toBeCloseTo(698, 0)
     expect(topCentreAnchor({ container: () => null })).toBeNull()
   })
 })

@@ -1,6 +1,7 @@
-// OWNER: W4 (wave M, M4-3). Where the board's own chrome is, for the popovers of the AI, sort, diagram and paste
-// features: the obstacles a popover keeps clear of (lib/overlay-obstacles.ts, W1's registry, frozen by the wave M
-// foundation) and one pure placement in the canvas region's pixels.
+// OWNER: W4 (wave M, M4-3 and M4-4). Where the board's own chrome is, for the popovers and the camera of the AI, sort,
+// diagram, paste and Pieces features: the obstacles a popover keeps clear of (lib/overlay-obstacles.ts, W1's
+// registry, frozen by the wave M foundation), one pure placement in the canvas region's pixels, and the part of the
+// view a new result is safe to land in (the view less the chrome along its edges, ./reveal.ts).
 //
 // Until W1 registers the style panel, the bottom toolbar and the selection bar (and on a page where it does not),
 // their boxes are measured from the page by the same selectors canvas-ux's own SelectionBar reads; a registered id
@@ -134,8 +135,75 @@ export function anchorRect(
   }
 }
 
-/** The middle of the canvas region's top, under its top band: where a prompt about the whole view opens. */
+/**
+ * The middle of the canvas region's top, under its top band: where a prompt about the whole view opens. A popover
+ * below it starts exactly at the top of the room placeInBoard gives (the band, then the margin).
+ */
 export function topCentreAnchor(canvas: { container(): HTMLElement | null }): Rect | null {
   const box = canvas.container()?.getBoundingClientRect()
-  return box ? { x: box.left + box.width / 2 - 1, y: box.top + BOARD_TOP_BAND, width: 2, height: 0 } : null
+  if (!box) return null
+  return {
+    x: box.left + box.width / 2 - 1,
+    y: box.top + BOARD_TOP_BAND + BOARD_POP_MARGIN - BOARD_POP_GAP,
+    width: 2,
+    height: 0,
+  }
+}
+
+// ---- the safe part of the view (M4-4) -------------------------------------------------------------------------
+
+/** Kept between a revealed result and the safe view's edges (client px). */
+export const SAFE_INSET = 24
+
+/**
+ * The part of the view (`view`, client px) a new result can be seen in: the view less the chrome along its edges.
+ * Each obstacle that touches the view takes the edge strip it covers least of (the style panel at the top right takes
+ * its width off the right, the bottom toolbar its height off the bottom), so what is left is one rectangle. The
+ * selection bar is left out: it follows the selection, and moves with the camera. Pure.
+ */
+export function safeViewRect(view: Rect, obstacles: readonly (Rect | ObstacleRect)[]): Rect {
+  let left = view.x
+  let top = view.y
+  let right = view.x + view.width
+  let bottom = view.y + view.height
+  for (const o of obstacles) {
+    if ('id' in o && o.id === OBSTACLE_IDS.selectionBar) continue
+    const r = 'rect' in o ? o.rect : o
+    const x0 = Math.max(r.x, view.x)
+    const y0 = Math.max(r.y, view.y)
+    const x1 = Math.min(r.x + r.width, view.x + view.width)
+    const y1 = Math.min(r.y + r.height, view.y + view.height)
+    if (x1 <= x0 || y1 <= y0) continue
+    // what each edge strip would lose to take this obstacle out
+    const cuts = [
+      { edge: 'top', loss: (y1 - view.y) * view.width },
+      { edge: 'bottom', loss: (view.y + view.height - y0) * view.width },
+      { edge: 'left', loss: (x1 - view.x) * view.height },
+      { edge: 'right', loss: (view.x + view.width - x0) * view.height },
+    ].sort((a, b) => a.loss - b.loss)
+    switch (cuts[0]?.edge) {
+      case 'top':
+        top = Math.max(top, y1)
+        break
+      case 'bottom':
+        bottom = Math.min(bottom, y0)
+        break
+      case 'left':
+        left = Math.max(left, x1)
+        break
+      default:
+        right = Math.min(right, x0)
+    }
+  }
+  // never less than a third of the view each way (a phone's chrome must not leave nothing)
+  const minW = view.width / 3
+  const minH = view.height / 3
+  const keep = (lo: number, hi: number, min: number, from: number, size: number): [number, number] => {
+    if (hi - lo >= min) return [lo, hi]
+    const start = Math.max(from, Math.min((lo + hi) / 2 - min / 2, from + size - min))
+    return [start, start + min]
+  }
+  ;[left, right] = keep(left, right, minW, view.x, view.width)
+  ;[top, bottom] = keep(top, bottom, minH, view.y, view.height)
+  return { x: left, y: top, width: right - left, height: bottom - top }
 }

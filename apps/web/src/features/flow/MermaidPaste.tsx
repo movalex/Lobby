@@ -1,13 +1,13 @@
 // OWNER: W4 (wave L, L4-3). Paste Mermaid flowchart text as a native diagram, with no AI: a `text` content
 // handler asked before bulk paste (priority 60 over its 50, so before K7-2's outline paste too) that takes the
 // paste only when the text is a flowchart (../ai/diagram/mermaid-lite.ts; anything else goes on to the handlers
-// after it, exactly as before), and asks "Paste as diagram?" at the paste point. The diagram is the graph laid
+// after it, exactly as before), and asks "Paste as diagram?" (wave M: at the top of the view). The diagram is the graph laid
 // out and written as L4-2's (../ai/diagram/apply.ts), without AI provenance; it works with AI off and for
 // guests who can edit. "Paste as text" keeps the words as one text element (bulk paste's). The diagram keeps the
 // AI path's caps (../ai/diagram/graph.ts normalizeGraph), so the prompt says, before anything is written, how many
 // long labels it shortens and how many links (repeated, or from a shape to itself) it leaves out.
 import { MAX_ITEMS } from '@draftroom/canvas-schema/limits'
-import { useEffect, useId } from 'react'
+import { useEffect, useId, useRef } from 'react'
 import {
   type CanvasFeatureContext,
   type ContentHandlerSpec,
@@ -15,10 +15,12 @@ import {
   type ScenePoint,
 } from '../../canvas/api/index.ts'
 import { type Atom, atom, useValue } from '../../lib/signals.ts'
-import { bringIntoView } from '../a11y/ported/traversal.ts'
+import { topCentreAnchor } from '../ai/board-chrome.ts'
+import { inPopoverLayer, useBoardPlacement, usePopoverLayer } from '../ai/board-popover.tsx'
 import { applyDiagram, measureDiagram, planDiagram, planSize } from '../ai/diagram/apply.ts'
 import type { DiagramGraph } from '../ai/diagram/graph.ts'
 import { readMermaid } from '../ai/diagram/mermaid-lite.ts'
+import { revealResult } from '../ai/reveal.ts'
 import { pasteAsText } from '../canvas-ux/ported/navigation/bulk-paste.tsx'
 import { placeDiagram } from './place.ts'
 import { freshId } from './runtime.ts'
@@ -101,26 +103,21 @@ export function pasteAsDiagram(ctx: CanvasFeatureContext, graph: DiagramGraph, c
     return []
   }
   const ids = applyDiagram(canvas, plan, 'paste as diagram')
-  bringIntoView(canvas, plan.shapeIds)
+  // M4-4 (FTU-8): shown whole, clear of the board's chrome (this tab's camera only)
+  void revealResult(canvas, ids)
   return ids
 }
 
-/** The prompt at the paste point (a screen-layer overlay). */
+/**
+ * The prompt (a screen-layer overlay). Wave M (M4-4, FTU-8): at the top of the view, where the person looks, clear of
+ * the board's chrome (it opened at the paste point, often the bottom right corner), in the popover layer above it.
+ */
 export function MermaidPastePrompt({ ctx }: { ctx: CanvasFeatureContext }) {
   const { canvas } = ctx
   const pending = useValue('flow-mermaid-pending', () => pendingMermaid(canvas).get(), [canvas])
-  const pos = useValue('flow-mermaid-pos', () => {
-    const p = pendingMermaid(canvas).get()
-    if (!p) return null
-    const at = canvas.sceneToOverlay(p.center)
-    const v = canvas.viewport.get()
-    const w = v.width * v.zoom
-    const h = v.height * v.zoom
-    return {
-      x: Math.min(Math.max(at.x, 200), Math.max(200, w - 200)),
-      y: Math.min(Math.max(at.y, 140), Math.max(140, h - 40)),
-    }
-  }, [canvas])
+  const ref = useRef<HTMLDivElement>(null)
+  const host = usePopoverLayer(canvas)
+  const pos = useBoardPlacement(canvas, ref, () => topCentreAnchor(canvas), { prefer: 'below' })
   const titleId = useId()
   // working on the canvas instead of answering dismisses it (nothing is pasted)
   useEffect(
@@ -131,19 +128,26 @@ export function MermaidPastePrompt({ ctx }: { ctx: CanvasFeatureContext }) {
     [canvas],
   )
   useEffect(() => () => pendingMermaid(canvas).set(null), [canvas])
-  if (!pending || !pos) return null
+  if (!pending) return null
   const finish = () => {
     pendingMermaid(canvas).set(null)
     canvas.focus({ preventScroll: true })
   }
-  return (
+  return inPopoverLayer(
+    canvas,
+    host,
     <div
       key={pending.id}
+      ref={ref}
       className="dr-flow-paste"
       role="dialog"
       aria-labelledby={titleId}
       data-testid="mermaid-paste-prompt"
-      style={{ left: pos.x, top: pos.y }}
+      style={
+        pos
+          ? { left: pos.left, top: pos.top, transform: 'none', maxHeight: pos.maxHeight, overflowY: 'auto' }
+          : { left: 0, top: 0, transform: 'none', visibility: 'hidden' }
+      }
       onKeyDown={(e) => {
         if (e.key !== 'Escape') return
         e.preventDefault()
@@ -193,6 +197,6 @@ export function MermaidPastePrompt({ ctx }: { ctx: CanvasFeatureContext }) {
           ×
         </button>
       </div>
-    </div>
+    </div>,
   )
 }

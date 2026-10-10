@@ -137,13 +137,16 @@ export function aiKit(seed: El[] = [], opts: { status?: AiStatus | null; me?: st
     focus: () => undefined,
     saveStatus: () => ({ state: 'saved', pending: 0, offlineChanges: 0, lastReject: null }),
     sceneToOverlay: (p: { x: number; y: number }) => ({ x: p.x - viewport.x, y: p.y - viewport.y }),
+    // the canvas sits at the client's top-left: client px are overlay px (zoom 1)
+    sceneToScreen: (p: { x: number; y: number }) => ({ x: p.x - viewport.x, y: p.y - viewport.y }),
     container: () => null,
     doc: { get: (k: string) => doc.get(k), entries: () => new Map(), set: () => undefined },
     history: { undo: () => api.undo(), redo: () => undefined, canUndo: () => undoStack.length > 0 },
     viewport: {
       get: () => viewport,
-      set: () => undefined,
+      set: vi.fn(),
       zoomTo: vi.fn(),
+      limits: () => ({ min: 0.1, max: 4, steps: [], fit: 1 }),
       fit: () => undefined,
       moving: () => false,
       screenRect: () => ({ x: 0, y: 0, width: viewport.width, height: viewport.height }),

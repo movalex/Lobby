@@ -24,13 +24,13 @@ import {
   type MenuEntrySpec,
 } from '../../../canvas/api/index.ts'
 import { type Atom, atom, useValue } from '../../../lib/signals.ts'
-import { bringIntoView } from '../../a11y/ported/traversal.ts'
 import { freshId } from '../../flow/runtime.ts'
 import { topCentreAnchor } from '../board-chrome.ts'
 import { inPopoverLayer, useBoardPlacement, usePopoverLayer } from '../board-popover.tsx'
 import { canBuildWithAi } from '../ported/gate.ts'
 import { type AiPreviewPlan, aiResultToast, findSpot, runAi, showAiPreview } from '../ported/public.ts'
 import { aiStatus } from '../ported/runtime.ts'
+import { revealResult } from '../reveal.ts'
 import { applyDiagram, type DiagramPlan, measureDiagram, planDiagram } from './apply.ts'
 import { type DiagramDirection, graphFromAi } from './graph.ts'
 
@@ -166,7 +166,8 @@ export async function runDiagram(
     if (choice === 'retry') continue
     if (choice !== 'apply' || canvas.readOnly()) return null
     const ids = applyDiagram(canvas, plan, 'ai: diagram')
-    bringIntoView(canvas, plan.shapeIds)
+    // M4-4 (FTU-8): shown whole, clear of the board's chrome (this tab's camera only)
+    void revealResult(canvas, ids)
     // and once it is there, it says who made it, with the one-step Undo
     aiResultToast(ctx, madeByAiText(plan), ids)
     return ids

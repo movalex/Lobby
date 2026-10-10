@@ -218,6 +218,21 @@ export function fakeCanvas(seed: El[], o: FakeCanvasOptions = {}): Fake {
       const e = els.get(id)
       return e ? { x: e.x, y: e.y, width: e.width, height: e.height } : null
     },
+    boundsOf: (ids: readonly string[]) => {
+      const bs = ids.map((id) => els.get(id)).filter((e): e is El => !!e && !e.isDeleted)
+      if (!bs.length) return null
+      const x = Math.min(...bs.map((e) => e.x))
+      const y = Math.min(...bs.map((e) => e.y))
+      return {
+        x,
+        y,
+        width: Math.max(...bs.map((e) => e.x + e.width)) - x,
+        height: Math.max(...bs.map((e) => e.y + e.height)) - y,
+      }
+    },
+    // the view (-500, -500) at zoom 1, the canvas at the client's top-left (M4-4's reveal reads these)
+    sceneToScreen: (p: { x: number; y: number }) => ({ x: p.x + 500, y: p.y + 500 }),
+    container: () => null,
     isLocked: (id: string) => {
       const e = els.get(id)
       if (!e) return false
@@ -250,6 +265,8 @@ export function fakeCanvas(seed: El[], o: FakeCanvasOptions = {}): Fake {
       ensureVisible: (b: unknown) => {
         fake.shown.push(b)
       },
+      screenRect: () => ({ x: 0, y: 0, width: 4000, height: 3000 }),
+      set: () => {},
     },
     text: {
       of: (id: string) => {
