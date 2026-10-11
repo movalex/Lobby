@@ -310,6 +310,8 @@ export type ErrorBody = z.infer<typeof ErrorBody>
 
 // Feature schemas (docs/FEATURES-M2-CONTRACTS.md): one file per feature, owned by that feature.
 export * from './ai.ts'
+// wave N foundation (WS7 routes): board cards and backlinks
+export * from './board-links.ts'
 // wave M foundation (W5 owns these after it): the board-open read, usage counters, workspace templates
 export * from './board-open.ts'
 export * from './comments.ts'
@@ -330,5 +332,7 @@ export * from './sync-internal.ts'
 export * from './tags.ts'
 export * from './thumbnails.ts'
 export * from './usage.ts'
+// wave N foundation (WS4): private visit markers (since your last visit)
+export * from './visits.ts'
 export * from './workshops.ts'
 export * from './ws-templates.ts'

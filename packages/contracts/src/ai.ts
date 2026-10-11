@@ -666,3 +666,182 @@ export const WorkspaceAskResponse = z.object({
   exportAllowed: z.boolean(),
 })
 export type WorkspaceAskResponse = z.infer<typeof WorkspaceAskResponse>
+
+// ---- Capture the room (wave N; OWNER: WS5, frozen by the wave N foundation) ------------------------------------------
+//
+//   POST /api/boards/:bid/ai/capture/photo?mode=notes|diagram|auto   raw image body → 200 CaptureResponse
+//   POST /api/boards/:bid/ai/capture/board-image                     CaptureBoardImageRequest → 200 CaptureResponse
+//   POST /api/boards/:bid/ai/capture/transcript                      CaptureTranscriptRequest → 200 CaptureResponse
+//
+// Each needs view access plus aiGateFor (board AI on, workspace AI on, an edit role) and refuses name-only guests
+// (403 GUEST_ACCOUNT_REQUIRED before any read). The photo routes also need DRAFTROOM_AI_VISION=on (unset, empty or
+// off: they answer 404, the transcript route still works). A photo is image/jpeg, png or webp, at most
+// CAPTURE_PHOTO_MAX_BYTES (413) and CAPTURE_PHOTO_MAX_SIDE px a side (413), checked by its magic bytes (415); it goes
+// to the model in the request body only and is never stored, logged or cached. A board image is read by the server
+// from the board's own stored display copy (the element must be an image on this board: else 404). Per-day caps per
+// person (DRAFTROOM_AI_VISION_USER_DAILY, DRAFTROOM_AI_TRANSCRIPT_USER_DAILY) and in all
+// (DRAFTROOM_AI_VISION_GLOBAL_DAILY) count the ai_usage ledger's CAPTURE_LEDGER_ACTIONS rows (429 past them), and
+// every call counts against the token budgets too. Output is validated and sanitised to plain text; an action's owner
+// is a name as written, never linked to a user. Until WS5 implements them the three routes are pending (404
+// NOT_FOUND, like any unknown route), and the web's captureAvailable() answers false.
+
+export const CAPTURE_PHOTO_ROUTE = '/api/boards/:bid/ai/capture/photo'
+export const CAPTURE_BOARD_IMAGE_ROUTE = '/api/boards/:bid/ai/capture/board-image'
+export const CAPTURE_TRANSCRIPT_ROUTE = '/api/boards/:bid/ai/capture/transcript'
+
+/** The ledger's action names (AI_LEDGER_ACTION_PATTERN; ai_usage.action of 0028 accepts them: no migration). */
+export const CAPTURE_LEDGER_ACTIONS = { photo: 'capture-photo', transcript: 'capture-transcript' } as const
+
+export const CAPTURE_MODES = ['notes', 'diagram', 'auto'] as const
+export const CaptureMode = z.enum(CAPTURE_MODES)
+export type CaptureMode = z.infer<typeof CaptureMode>
+export const capturePhotoPath = (boardId: string, mode: CaptureMode) =>
+  `/api/boards/${encodeURIComponent(boardId)}/ai/capture/photo?mode=${mode}`
+export const captureBoardImagePath = (boardId: string) =>
+  `/api/boards/${encodeURIComponent(boardId)}/ai/capture/board-image`
+export const captureTranscriptPath = (boardId: string) =>
+  `/api/boards/${encodeURIComponent(boardId)}/ai/capture/transcript`
+
+export const CAPTURE_PHOTO_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const
+/** The photo body limit (this route's scope only; the JSON limit stays 256 KiB). */
+export const CAPTURE_PHOTO_MAX_BYTES = 4 * 1024 * 1024
+/** The longest side a photo may have (px). */
+export const CAPTURE_PHOTO_MAX_SIDE = 4096
+/** The web downsizes a photo to this longest side, as a JPEG of this quality (which also drops EXIF and GPS). */
+export const CAPTURE_CLIENT_MAX_SIDE = 2048
+export const CAPTURE_CLIENT_JPEG_QUALITY = 0.85
+/** DRAFTROOM_AI_TRANSCRIPT_MAX_CHARS when unset. */
+export const CAPTURE_TRANSCRIPT_MAX_CHARS = 60_000
+export const CAPTURE_TITLE_MAX_CHARS = 80
+/** The per-day caps when their keys are unset (render.yaml sets the same values). */
+export const CAPTURE_DEFAULT_CAPS = {
+  visionUserDaily: 10,
+  visionGlobalDaily: 150,
+  transcriptUserDaily: 10,
+} as const
+/** DRAFTROOM_AI_VISION_TIMEOUT_MS when unset. */
+export const CAPTURE_VISION_TIMEOUT_MS_DEFAULT = 60_000
+/** The most model calls one transcript makes (at most 4 map calls, and one reduce). */
+export const CAPTURE_TRANSCRIPT_MAX_CALLS = 5
+
+export const CAPTURE_NOTES_MAX = 120
+export const CAPTURE_NOTE_MAX_CHARS = 300
+export const CAPTURE_GROUPS_MAX = 12
+export const CAPTURE_THEMES_MAX = 8
+export const CAPTURE_THEME_NOTES_MAX = 12
+export const CAPTURE_DECISIONS_MAX = 12
+export const CAPTURE_ACTIONS_MAX = 20
+
+/** `?mode=` of the photo route. */
+export const CapturePhotoQuery = z.strictObject({ mode: CaptureMode.default('auto') })
+export type CapturePhotoQuery = z.infer<typeof CapturePhotoQuery>
+/** An image already on this board, read by the server from its stored display copy. */
+export const CaptureBoardImageRequest = z.strictObject({
+  elementId: z.string().regex(WORKSPACE_ASK_ELEMENT_ID_PATTERN),
+  mode: CaptureMode.default('auto'),
+})
+export type CaptureBoardImageRequest = z.infer<typeof CaptureBoardImageRequest>
+/** A meeting transcript, already stripped of cue numbers and timestamps by the web (speaker names kept). */
+export const CaptureTranscriptRequest = z.strictObject({
+  text: z.string().trim().min(1).max(CAPTURE_TRANSCRIPT_MAX_CHARS),
+  title: z.string().trim().max(CAPTURE_TITLE_MAX_CHARS).optional(),
+})
+export type CaptureTranscriptRequest = z.infer<typeof CaptureTranscriptRequest>
+
+/** A box in the photo, normalised to 0..1 of its width and height. */
+export const CaptureBox = z.strictObject({
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+  w: z.number().min(0).max(1),
+  h: z.number().min(0).max(1),
+})
+export type CaptureBox = z.infer<typeof CaptureBox>
+export const CaptureNote = z.strictObject({
+  text: z.string().max(CAPTURE_NOTE_MAX_CHARS),
+  color: AiColorName,
+  box: CaptureBox,
+})
+export type CaptureNote = z.infer<typeof CaptureNote>
+/** A group of notes the photo shows together (indexes into `notes`); it may become a frame. */
+export const CaptureGroup = z.strictObject({
+  name: z.string().max(AI_THEME_NAME_MAX_CHARS),
+  notes: z.array(z.number().int().nonnegative()).max(CAPTURE_NOTES_MAX),
+})
+export type CaptureGroup = z.infer<typeof CaptureGroup>
+export const CAPTURE_NODE_SHAPES = ['rect', 'ellipse', 'diamond'] as const
+export const CaptureNodeShape = z.enum(CAPTURE_NODE_SHAPES)
+export type CaptureNodeShape = z.infer<typeof CaptureNodeShape>
+const CaptureNodeId = z.string().regex(/^n[1-9][0-9]{0,2}$/)
+/** A diagram node: `id` is the api's own (n1 to n40), never the model's; `box` when the photo placed it. */
+export const CaptureNode = z.strictObject({
+  id: CaptureNodeId,
+  label: z.string().max(AI_DIAGRAM_LABEL_MAX_CHARS),
+  shape: CaptureNodeShape,
+  box: CaptureBox.optional(),
+})
+export type CaptureNode = z.infer<typeof CaptureNode>
+/** A connector: the web makes it through flow/connector.ts, so the server derives its bound ends. */
+export const CaptureEdge = z.strictObject({
+  from: CaptureNodeId,
+  to: CaptureNodeId,
+  label: z.string().max(AI_DIAGRAM_EDGE_LABEL_MAX_CHARS).optional(),
+  kind: z.enum(['arrow', 'line']),
+})
+export type CaptureEdge = z.infer<typeof CaptureEdge>
+export const CaptureTheme = z.strictObject({
+  name: z.string().max(AI_THEME_NAME_MAX_CHARS),
+  notes: z.array(z.string().max(CAPTURE_NOTE_MAX_CHARS)).max(CAPTURE_THEME_NOTES_MAX),
+})
+export type CaptureTheme = z.infer<typeof CaptureTheme>
+export const CaptureActionItem = z.strictObject({
+  text: z.string().max(AI_ITEM_MAX_CHARS),
+  /** a name as the transcript writes it (plain text; never linked to a user) */
+  owner: z.string().max(AI_OWNER_MAX_CHARS).optional(),
+})
+export type CaptureActionItem = z.infer<typeof CaptureActionItem>
+
+/** What a capture found: notes in their layout, a native diagram, or a meeting's themes, decisions and actions. */
+export const CaptureResult = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('notes'),
+    notes: z.array(CaptureNote).max(CAPTURE_NOTES_MAX),
+    groups: z.array(CaptureGroup).max(CAPTURE_GROUPS_MAX),
+  }),
+  z.strictObject({
+    kind: z.literal('diagram'),
+    nodes: z.array(CaptureNode).max(AI_DIAGRAM_MAX_NODES),
+    edges: z.array(CaptureEdge).max(AI_DIAGRAM_MAX_EDGES),
+  }),
+  z.strictObject({
+    kind: z.literal('transcript'),
+    themes: z.array(CaptureTheme).max(CAPTURE_THEMES_MAX),
+    decisions: z.array(z.string().max(AI_ITEM_MAX_CHARS)).max(CAPTURE_DECISIONS_MAX),
+    actions: z.array(CaptureActionItem).max(CAPTURE_ACTIONS_MAX),
+  }),
+])
+export type CaptureResult = z.infer<typeof CaptureResult>
+
+/** How many captures this person has left today (null: no cap applies or it is unknown). */
+export const CaptureQuota = z.strictObject({
+  photosLeftToday: z.number().int().nonnegative().nullable(),
+  transcriptsLeftToday: z.number().int().nonnegative().nullable(),
+})
+export type CaptureQuota = z.infer<typeof CaptureQuota>
+
+/** Every capture route's answer: the result, its run id (the `ai` provenance key of what is applied), the quota. */
+export const CaptureResponse = z.strictObject({
+  runId: AiRunId,
+  result: CaptureResult,
+  quota: CaptureQuota,
+})
+export type CaptureResponse = z.infer<typeof CaptureResponse>
+
+/** The capture routes' own refusal codes (the AI_ERROR_CODES apply too). */
+export const CAPTURE_ERROR_CODES = {
+  /** 429: the person's or the global per-day capture cap is reached. */
+  dailyCap: 'AI_CAPTURE_DAILY_CAP',
+  /** 415: not a JPEG, PNG or WebP by its bytes. */
+  badImage: 'AI_CAPTURE_BAD_IMAGE',
+  /** 413: over CAPTURE_PHOTO_MAX_BYTES or CAPTURE_PHOTO_MAX_SIDE. */
+  imageTooLarge: 'AI_CAPTURE_IMAGE_TOO_LARGE',
+} as const

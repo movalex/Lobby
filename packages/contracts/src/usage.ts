@@ -15,6 +15,7 @@
 // route), and the web's countUsage only counts in memory. A web on an older api drops its batch on the 404.
 
 import { z } from 'zod'
+import { REACTION_CODES } from './workshops.ts'
 
 // ---- the parameter lists -------------------------------------------------------------------------------
 
@@ -166,11 +167,25 @@ export const PALETTE_COMMAND_IDS = [
   // wave M, W8 (features/ai/workspace-ask, features/ws-templates)
   'ai.askWorkspace',
   'ws-templates.save',
+  // wave N (frozen by the wave N foundation, pending until their owners register them): reactions (WS3), board
+  // links (WS7), Capture the room (WS5)
+  'reactions.react',
+  'board-links.insert',
+  'board-links.backlinks',
+  'ai.capture',
 ] as const
 export type PaletteCommandId = (typeof PALETTE_COMMAND_IDS)[number]
 
-/** The wave M commands no feature registers yet: none since W8 registered 'ai.askWorkspace' and 'ws-templates.save'. */
-export const PENDING_PALETTE_COMMAND_IDS: readonly PaletteCommandId[] = []
+/**
+ * The commands no feature registers yet (the wave N foundation's ids; each owner removes its id here when it
+ * registers the command, apps/web/src/lib/usage.test.ts checks the two lists).
+ */
+export const PENDING_PALETTE_COMMAND_IDS: readonly PaletteCommandId[] = [
+  'reactions.react',
+  'board-links.insert',
+  'board-links.backlinks',
+  'ai.capture',
+]
 
 /**
  * The template picker's templates (`@draftroom/templates` TEMPLATE_INFOS ids, checked by
@@ -238,6 +253,11 @@ export const USAGE_SELECTION_STYLE_KINDS = [
   'more-styles',
 ] as const
 
+/** `open.decode:<where>`: where a board's snapshot was decoded (WS1, N1-1: a module Worker, or the main thread). */
+export const USAGE_OPEN_DECODE_KINDS = ['worker', 'main'] as const
+/** `open.apply:<how>`: how a reset snapshot was applied (WS1: a diff against the painted copy, in chunks, whole). */
+export const USAGE_OPEN_APPLY_KINDS = ['diff', 'chunked', 'full'] as const
+
 // ---- the events -----------------------------------------------------------------------------------------
 
 /** Events without a parameter. */
@@ -269,6 +289,21 @@ export const USAGE_FIXED_EVENTS = [
   'version.notice',
   'compass.click',
   'follow.pause',
+  // wave N (frozen by the wave N foundation): reactions (WS3), since your last visit (WS4), Capture the room (WS5),
+  // vector PDF (WS6), board links (WS7)
+  'reactions.clear',
+  'visits.chip.shown',
+  'visits.tour',
+  'visits.markseen',
+  'ai.capture.photo',
+  'ai.capture.boardimage',
+  'ai.capture.transcript',
+  'ai.capture.apply',
+  'export.pdf.vector',
+  'export.pdf.raster',
+  'boardlinks.insert',
+  'boardlinks.open',
+  'boardlinks.backlinks',
 ] as const
 
 /** Events with a parameter (`<name>:<value>`), each value from its fixed list. */
@@ -281,6 +316,10 @@ export const USAGE_PARAM_EVENTS = {
   'ai.ask.scope': ['board', 'all'],
   'whatsnew.try': USAGE_WHATS_NEW_IDS,
   'selectionbar.style': USAGE_SELECTION_STYLE_KINDS,
+  // wave N: how a big board's snapshot was decoded and applied (WS1), and which reaction was added (WS3)
+  'open.decode': USAGE_OPEN_DECODE_KINDS,
+  'open.apply': USAGE_OPEN_APPLY_KINDS,
+  'reactions.add': REACTION_CODES,
 } as const satisfies Record<string, readonly string[]>
 
 type ParamEvents = typeof USAGE_PARAM_EVENTS

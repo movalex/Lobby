@@ -233,3 +233,58 @@ export const AccessManyResponse = z.strictObject({
   signedInSince: z.record(AccessManyUserId, z.number().int().nonnegative().nullable()),
 })
 export type AccessManyResponse = z.infer<typeof AccessManyResponse>
+
+// ---- wave N: strip-keys maintenance (OWNER: WS2; landed by the wave N foundation) -----------------------------------
+//
+//   POST <sync>/internal/maintenance/strip-keys  StripKeysRequest → 200 StripKeysAnswer
+//
+// Internal secret only (the existing internal router). The rollback step for reactions (plan N2-5): the sync opens
+// each board room in turn and removes every `customData.lobby` key with `prefix` through its server write, in a
+// normal commit (broadcast, so every open tab converges), and logs counts only. A board with no such key is not
+// rewritten; a second run is a no-op. Only the sync process writes the board files. Until WS2 implements it the route
+// does not exist (404), like any unknown internal path.
+
+export const STRIP_KEYS_ROUTE = '/internal/maintenance/strip-keys'
+/** The key prefixes the route may strip: the wave N key classes (canvas-schema protocol.ts LOBBY_KEY_ADDITIONS). */
+export const STRIP_KEYS_PREFIXES = ['react:'] as const
+export const StripKeysRequest = z.strictObject({ prefix: z.enum(STRIP_KEYS_PREFIXES) })
+export type StripKeysRequest = z.infer<typeof StripKeysRequest>
+const Count = z.number().int().nonnegative()
+export const StripKeysAnswer = z.strictObject({
+  /** board files looked at, and those rewritten (they held at least one such key) */
+  boards: Count,
+  rewritten: Count,
+  /** elements changed, and keys removed */
+  elements: Count,
+  keys: Count,
+  /** boards that could not be opened or committed (named in the log by id only) */
+  failed: Count,
+})
+export type StripKeysAnswer = z.infer<typeof StripKeysAnswer>
+
+// ---- wave N: links in the read-only text route (OWNER: WS7; landed by the wave N foundation) -------------------------
+//
+//   GET <sync>/internal/boards/:bid/text?links=1[&since=…][&maxBytes=…]
+//
+// With BOARD_TEXT_LINKS_PARAM = 1 the text answer (apps/sync/src/http/board-text.ts; unchanged answers stay
+// `{unchanged: true}`) adds `links`: every live element whose `link` is a Lobby-relative board path
+// (board-links.ts BOARD_LINK_PATH_PATTERN), at most BOARD_TEXT_LINKS_MAX per board, inside the same bounded
+// extraction. Without the parameter the answer is byte-identical to the wave M one, and an older sync ignores the
+// parameter (the api then keeps its indexed rows). The route stays read-only: the sync is still the only board writer.
+
+export const BOARD_TEXT_LINKS_PARAM = 'links'
+export const BOARD_TEXT_LINKS_MAX = 200
+export const BoardTextLink = z.strictObject({
+  /** the linking element */
+  el: z.string().regex(/^[A-Za-z0-9_.:-]{1,120}$/),
+  /** the target board */
+  to: z.string().regex(/^[a-z0-9][a-z0-9_-]{2,63}$/),
+  /** the target element (`?el=`), when the link names one */
+  toEl: z
+    .string()
+    .regex(/^[A-Za-z0-9_.:-]{1,120}$/)
+    .optional(),
+})
+export type BoardTextLink = z.infer<typeof BoardTextLink>
+export const BoardTextLinks = z.array(BoardTextLink).max(BOARD_TEXT_LINKS_MAX)
+export type BoardTextLinks = z.infer<typeof BoardTextLinks>
