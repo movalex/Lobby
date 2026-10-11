@@ -1960,8 +1960,14 @@ export class LobbyEngineCore implements EngineCore {
         this.leaseHeld.delete(id)
         // (H2) a release held back for it whose lease the room let go meanwhile (its TTL ran out while the
         // socket was down, or a sync restart): not lost to anyone, it is an offline release, so its words
-        // go up behind this welcome as they would after Escape offline. Lost only to another session
-        if (this.releaseAfterPush.delete(id) && !this.holders.has(id)) continue
+        // go up behind this welcome as they would after Escape offline. Lost only to another session. An
+        // acquire of it queued while offline (the note opened again) ended that wait (sendLease), but it is
+        // the same case: the lease client never asks again for a lease it still holds, so a lease this core
+        // holds with an acquire of it queued is one whose release was held back
+        const heldBack =
+          this.releaseAfterPush.delete(id) ||
+          this.queuedLease.some((m) => m.type === 'lease.acquire' && m.id === id)
+        if (heldBack && !this.holders.has(id)) continue
         lost.add(id)
       }
     const dropped = new Set<string>()
@@ -2117,8 +2123,23 @@ export class LobbyEngineCore implements EngineCore {
     // behind the contracts wait just went)
     const sid = this.welcome?.sid
     for (const [id, h] of this.holders)
-      if (sid && h.sid === sid && !this.leaseHeld.has(id) && !this.leasePending.has(id) && !released.has(id))
+      if (
+        sid &&
+        h.sid === sid &&
+        !this.leaseHeld.has(id) &&
+        !this.leasePending.has(id) &&
+        !released.has(id)
+      ) {
+        if (this.leasedUnsent(id)) {
+          // H2: the flush above could not carry its words (a label's create lost with the socket, or a lost
+          // push still waiting for its decision): held back behind them, as sendLease does, the lease ours
+          this.leaseHeld.add(id)
+          this.releaseAfterPush.add(id)
+          this.log('release_after_push', { id })
+          continue
+        }
         this.transport.send({ type: 'lease.release', id })
+      }
   }
 
   /**
@@ -3318,18 +3339,22 @@ export class LobbyEngineCore implements EngineCore {
   /**
    * H2: lease `id` has a change of this tab that no push carries yet: a text's words, layout or life (its
    * `text`, `layout`, `life` groups) or a free text's own fit, the fit of its container, or the create of
-   * its label. They are the holder's, so the release waits for them (sendLease, releaseReady).
+   * its label. They are the holder's, so the release waits for them (sendLease, releaseReady). A lost push
+   * (`lostHeld`: lost with the old socket, or an adopted queue's) carries nothing until it is decided.
    */
   private leasedUnsent(id: string): boolean {
-    for (const [eid, t] of this.tracked) {
+    const ofLease = (eid: string, groups: Iterable<GroupKey>, create: boolean): boolean => {
       const el = this.current.get(eid)
-      if (!el) continue
-      if (isText(el)) {
-        if (leaseIdOf(el) !== id) continue
-        if ([...t.dirty].some((g) => LEASED_GROUPS.has(g) || g === 'fit')) return true
-        if (t.isNew && !this.confirmedMap.has(eid) && !this.inflightHas(eid)) return true
-      } else if (eid === id && t.dirty.has('fit')) return true
+      if (!el) return false
+      if (!isText(el)) return eid === id && [...groups].includes('fit')
+      return leaseIdOf(el) === id && (create || [...groups].some((g) => LEASED_GROUPS.has(g) || g === 'fit'))
     }
+    for (const [eid, t] of this.tracked) {
+      const create = t.isNew && !this.confirmedMap.has(eid) && !this.inflight.some((p) => p.sent.has(eid))
+      if (ofLease(eid, t.dirty, create)) return true
+    }
+    for (const p of this.lostHeld)
+      for (const [eid, x] of p.sent) if (ofLease(eid, x.groups, x.create)) return true
     return false
   }
 
