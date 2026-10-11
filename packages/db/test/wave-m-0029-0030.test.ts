@@ -46,7 +46,11 @@ describe('wave M migrations', () => {
     const all = loadMigrations()
     expect(all.find((m) => m.version === 29)?.name).toBe('0029_usage_daily')
     expect(all.find((m) => m.version === 30)?.name).toBe('0030_workspace_templates')
-    expect(all.at(-1)?.version).toBe(30)
+    // wave N's 0031 and 0032 follow (wave-n-0031-0032.test.ts)
+    expect(all.filter((m) => m.version > 30).map((m) => m.name)).toEqual([
+      '0031_board_visits',
+      '0032_board_links',
+    ])
     expect(all.map((m) => m.version)).toEqual(all.map((_, i) => i + 1))
   })
 
@@ -56,7 +60,10 @@ describe('wave M migrations', () => {
     const all = loadMigrations()
     await migrate(d, { migrations: all.filter((m) => m.version <= 28) })
     const before = { columns: await columnsOf(d), constraints: await constraintsOf(d) }
-    expect((await migrate(d)).applied).toEqual(['0029_usage_daily', '0030_workspace_templates'])
+    expect((await migrate(d, { migrations: all.filter((m) => m.version <= 30) })).applied).toEqual([
+      '0029_usage_daily',
+      '0030_workspace_templates',
+    ])
     const after = { columns: await columnsOf(d), constraints: await constraintsOf(d) }
     const isNew = (k: string) => k.startsWith('usage_daily.') || k.startsWith('workspace_templates.')
     expect(after.columns.filter((k) => !isNew(k))).toEqual(before.columns)
