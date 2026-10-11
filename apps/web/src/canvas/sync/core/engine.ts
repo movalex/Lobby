@@ -2113,15 +2113,31 @@ export class LobbyEngineCore implements EngineCore {
     // lease messages asked for while disconnected go out now, behind any push
     this.flushNow(true)
     const released = new Set<string>([...heldBack].filter((id) => !this.releaseAfterPush.has(id)))
+    const sid = this.welcome?.sid
     for (const m of this.queuedLease.splice(0)) {
-      this.transport.send(m)
       if (m.type === 'lease.release') released.add(m.id)
+      if (
+        m.type === 'lease.release' &&
+        sid &&
+        this.holders.get(m.id)?.sid === sid &&
+        this.leasedUnsent(m.id)
+      ) {
+        // H2 (round 2): a release made in the contracts wait (Escape before this socket's contracts frame)
+        // whose words the flush above could not carry (its label's create lost with the old socket, waiting
+        // for the receipts answer): held back behind them, as sendLease does, the lease ours again
+        this.leaseHeld.add(m.id)
+        this.releaseAfterPush.add(m.id)
+        this.log('release_after_push', { id: m.id })
+        continue
+      }
+      // asked for again behind it: that held-back release is not sent (as in sendLease)
+      if (m.type === 'lease.acquire') this.releaseAfterPush.delete(m.id)
+      this.transport.send(m)
     }
     // a lease the server still names this tab for, though this tab released it (offline, or in a batch
     // whose COMMIT failed, V1 N7) or never asked for it (a reload): released now, behind the pushes above,
     // so the editor's final text lands before anyone else can take the lease (once: a release queued
-    // behind the contracts wait just went)
-    const sid = this.welcome?.sid
+    // behind the contracts wait just went, or is held back above)
     for (const [id, h] of this.holders)
       if (
         sid &&
@@ -3022,6 +3038,9 @@ export class LobbyEngineCore implements EngineCore {
       )
         continue
       if (id === ctx.container && [...t.dirty].every((g) => g === 'fit')) continue
+      // H2 (round 2): the words a held-back release waits for, not pushable yet: no flush can carry them,
+      // and the frame that makes them pushable flushes them at once (flushForReleases)
+      if (this.heldWords(id, t)) continue
       return false
     }
     return true
@@ -3343,19 +3362,37 @@ export class LobbyEngineCore implements EngineCore {
    * (`lostHeld`: lost with the old socket, or an adopted queue's) carries nothing until it is decided.
    */
   private leasedUnsent(id: string): boolean {
-    const ofLease = (eid: string, groups: Iterable<GroupKey>, create: boolean): boolean => {
-      const el = this.current.get(eid)
-      if (!el) return false
-      if (!isText(el)) return eid === id && [...groups].includes('fit')
-      return leaseIdOf(el) === id && (create || [...groups].some((g) => LEASED_GROUPS.has(g) || g === 'fit'))
-    }
     for (const [eid, t] of this.tracked) {
       const create = t.isNew && !this.confirmedMap.has(eid) && !this.inflight.some((p) => p.sent.has(eid))
-      if (ofLease(eid, t.dirty, create)) return true
+      if (this.ofLease(id, eid, t.dirty, create)) return true
     }
     for (const p of this.lostHeld)
-      for (const [eid, x] of p.sent) if (ofLease(eid, x.groups, x.create)) return true
+      for (const [eid, x] of p.sent) if (this.ofLease(id, eid, x.groups, x.create)) return true
     return false
+  }
+
+  /** H2 (round 2): a change of lease `id` that a flush would push now (flushForReleases). */
+  private leasedPushable(id: string): boolean {
+    for (const eid of this.tracked.keys()) {
+      const p = this.pushableGroups(eid)
+      if (p && this.ofLease(id, eid, p.groups, p.create)) return true
+    }
+    return false
+  }
+
+  /** H2 (round 2): element `eid`'s change is a held-back release's words that no flush can carry yet. */
+  private heldWords(eid: string, t: Tracked): boolean {
+    if (!this.releaseAfterPush.size || this.pushableGroups(eid)) return false
+    const create = t.isNew && !this.confirmedMap.has(eid)
+    return [...this.releaseAfterPush].some((id) => this.ofLease(id, eid, t.dirty, create))
+  }
+
+  /** H2: element `eid`'s change (`groups`, or its create) is one of lease `id`'s (leasedUnsent). */
+  private ofLease(id: string, eid: string, groups: Iterable<GroupKey>, create: boolean): boolean {
+    const el = this.current.get(eid)
+    if (!el) return false
+    if (!isText(el)) return eid === id && [...groups].includes('fit')
+    return leaseIdOf(el) === id && (create || [...groups].some((g) => LEASED_GROUPS.has(g) || g === 'fit'))
   }
 
   /**
@@ -3383,7 +3420,13 @@ export class LobbyEngineCore implements EngineCore {
    * pushable (the room confirmed their label's create): they go now, and the release right behind them.
    */
   private flushForReleases(): void {
-    if (this.releaseAfterPush.size && this.leaseOnline()) this.flushNow(true)
+    if (!this.releaseAfterPush.size || !this.leaseOnline()) return
+    // only a frame that made those words pushable forces a flush (round 2: every echo and ack did, so
+    // typing elsewhere skipped its coalescing and the in-flight cap while a release was held), and never
+    // ahead of a retry's backoff; else a release with nothing left to wait for goes as it is
+    if (this.retryTimer === null && [...this.releaseAfterPush].some((id) => this.leasedPushable(id)))
+      this.flushNow(true)
+    else this.releaseReady()
   }
 
   private sendLeaseNow(message: LeaseClientMessage, online: boolean): void {

@@ -1,8 +1,9 @@
+import { MAX_IN_FLIGHT_PUSHES } from '@draftroom/canvas-schema/limits'
 import type { ClientMessage, PatchOp } from '@draftroom/canvas-schema/protocol'
 import { describe, expect, it } from 'vitest'
 import { LeaseClient } from '../../lease/client.ts'
 import { bump } from '../headless/scene.ts'
-import { note, text } from '../testing/elements.ts'
+import { note, rect, text } from '../testing/elements.ts'
 import { stored } from '../testing/fakeRoom.ts'
 import { createHarness, type TestClient } from '../testing/harness.ts'
 
@@ -625,5 +626,164 @@ describe('H2: the welcome’s stale release waits behind its lease’s words', (
     expect(a2.core.saveStatus.state).toBe('saved')
     expect(await a2.hash()).toBe(await h.roomHash())
     expect(await b.hash()).toBe(await h.roomHash())
+  })
+})
+
+describe('H2 round 2: a release queued behind a reconnect’s contracts wait, and the held release’s flushes', () => {
+  /** A's label create lost with a cut socket; back within the TTL, Escape before the contracts frame. */
+  function escapeInContractsWait() {
+    const h = createHarness({ seed: [stored(note(NOTE, 'a0'))] })
+    h.room.contractsRev = 12 // the room says its revision: a reconnect's tail waits for that frame
+    const a = h.client('alice', { latencyMs: 300 })
+    const b = h.client('bob')
+    recordSends(a)
+    h.settle()
+    const lease = a.core.leaseConnect(() => {})
+    const aHolder = { sid: a.core.sid as string, uid: 'alice', name: 'alice' }
+    lease.send({ type: 'lease.acquire', req: 1, id: NOTE })
+    h.settle()
+    openLabel(a)
+    h.clock.advance(60) // the label's create is up
+    typeWords(a)
+    h.clock.advance(200) // committed; its ack on its way
+    ;(a.transport as unknown as { drop(): void }).drop()
+    ;(a.transport as unknown as { close(code: number, reason: string): void }).close(1006, 'cut')
+    h.room.leases.set(NOTE, aHolder) // the room still names A (its TTL)
+    h.clock.advance(100)
+    // the contracts frame comes a beat after the welcome (a heavy welcome applied first): held here
+    const session = (a.transport as unknown as { session: { deliver: ((m: unknown) => void) | null } })
+      .session
+    const deliver = session.deliver as (m: unknown) => void
+    let contracts: unknown = null
+    session.deliver = (m: unknown) => {
+      if ((m as { type: string }).type === 'contracts' && contracts === null) contracts = m
+      else deliver(m)
+    }
+    ;(a.transport as unknown as { reopen(): void }).reopen()
+    h.clock.advance(300) // the welcome is in, its contracts frame not yet
+    expect(contracts).not.toBeNull()
+    a.gesture() // Escape in that window
+    lease.send({ type: 'lease.release', id: NOTE })
+    return { h, a, b, lease, deliver: () => deliver(contracts) }
+  }
+
+  it('Escape in the contracts wait after a reconnect, the label’s create lost with the socket, within the TTL: the words land before bob can take the lease', async () => {
+    const { h, a, b, deliver } = escapeInContractsWait()
+    deliver()
+    const events: string[] = []
+    let seen = 0
+    const bl = b.core.leaseConnect(() => {})
+    let asked = false
+    for (let t = 0; t < 6000; t += 2) {
+      h.clock.advance(2)
+      const s = sent(a)
+      for (; seen < s.length; seen++) events.push(`a> ${s[seen]}`)
+      if (!asked && !h.room.leases.has(NOTE)) {
+        events.push('room freed; bob asks')
+        bl.send({ type: 'lease.acquire', req: 1, id: NOTE })
+        asked = true
+      }
+    }
+    h.settle()
+    const words = events.findIndex(
+      (e) =>
+        e.startsWith(`a> c ${LABEL} ${JSON.stringify(WORDS)}`) ||
+        (e.startsWith(`a> p ${LABEL} `) && e.includes('text')),
+    )
+    expect(words).toBeGreaterThan(-1)
+    expect(events.lastIndexOf(`a> lease.release ${NOTE}`)).toBeGreaterThan(words)
+    expect(h.room.elements.get(LABEL)?.originalText).toBe(WORDS)
+    expect(b.get(LABEL)?.originalText).toBe(WORDS)
+    expect(h.room.leases.get(NOTE)?.sid).toBe(b.core.sid)
+    expect(a.core.leaseState().held).toEqual([])
+    expect(a.core.saveStatus.state).toBe('saved')
+    expect(await a.hash()).toBe(await h.roomHash())
+    expect(await b.hash()).toBe(await h.roomHash())
+  })
+
+  it('the same, the note opened again before the contracts frame: the queued release is not sent, the lease stays A’s, the words land', async () => {
+    const { h, a, lease, deliver } = escapeInContractsWait()
+    lease.send({ type: 'lease.acquire', req: 2, id: NOTE }) // the editor opens again, still in the wait
+    deliver()
+    h.settle()
+    expect(sent(a).filter((s) => s === `lease.release ${NOTE}`)).toEqual([])
+    expect(h.room.leases.get(NOTE)?.sid).toBe(a.core.sid)
+    expect(a.core.leaseState().held).toEqual([NOTE])
+    expect(h.room.elements.get(LABEL)?.originalText).toBe(WORDS)
+    expect(await a.hash()).toBe(await h.roomHash())
+  })
+
+  /**
+   * A types in another text she holds (t2) while bob moves a rect every 20 ms. Returns how many of A's
+   * pushes carried t2 in those 400 ms and the most pushes A had in flight at once.
+   */
+  function typingWhileBobEdits(held: boolean): { t2Pushes: number; maxInflight: number; bobRectByA: number } {
+    const T2 = 't2'
+    const R = 'r1'
+    const h = createHarness({
+      seed: [
+        stored(note(NOTE, 'a0')),
+        stored(text(T2, 'a2', { text: 'x', originalText: 'x' })),
+        stored(rect(R, 'a3')),
+      ],
+    })
+    const a = h.client('alice', { latencyMs: 300 })
+    const b = h.client('bob')
+    const out: ClientMessage[] = []
+    const t = a.transport as unknown as { send(m: ClientMessage): void }
+    const send = t.send.bind(t)
+    t.send = (m) => {
+      out.push(JSON.parse(JSON.stringify(m)) as ClientMessage)
+      send(m)
+    }
+    const bOut: ClientMessage[] = []
+    const tb = b.transport as unknown as { send(m: ClientMessage): void }
+    const sendB = tb.send.bind(tb)
+    tb.send = (m) => {
+      bOut.push(m)
+      sendB(m)
+    }
+    h.settle()
+    const lease = a.core.leaseConnect(() => {})
+    lease.send({ type: 'lease.acquire', req: 1, id: NOTE })
+    lease.send({ type: 'lease.acquire', req: 2, id: T2 })
+    openLabel(a)
+    h.clock.advance(380) // both granted, the label's create up
+    typeWords(a)
+    a.gesture()
+    if (!held) h.settle()
+    lease.send({ type: 'lease.release', id: NOTE })
+    if (held) expect(a.core.leaseState().held).toContain(NOTE)
+    const ids = (m: ClientMessage) =>
+      m.type === 'push' ? m.ops.map((op) => (op.k === 'c' ? (op.el as { id: string }).id : op.id)) : []
+    const start = out.length
+    let maxInflight = 0
+    const inflight = () => (a.core as unknown as { inflight: unknown[] }).inflight.length
+    for (let i = 0; i < 20; i++) {
+      const w = `x${'y'.repeat(i + 1)}`
+      a.change(T2, { originalText: w, text: w, width: 20 + i }, { editingTextElementId: T2 })
+      b.change(R, { x: 100 + i })
+      h.clock.advance(20)
+      maxInflight = Math.max(maxInflight, inflight())
+    }
+    // t2 pushed on its own (a push that also carries the held words is the one flush they need)
+    const t2Pushes = out.slice(start).filter((m) => ids(m).includes(T2) && !ids(m).includes(LABEL)).length
+    a.gesture()
+    h.settle()
+    expect(h.room.elements.get(LABEL)?.originalText).toBe(WORDS)
+    // a receiving client pushes nothing of the change it receives
+    const bobRectByA = out.filter((m) => ids(m).includes(R)).length
+    expect(bOut.filter((m) => m.type === 'push').every((m) => ids(m).every((id) => id === R))).toBe(true)
+    return { t2Pushes, maxInflight, bobRectByA }
+  }
+
+  it('a held-back release does not turn every frame from the room into a forced flush: typing elsewhere keeps its coalescing and the in-flight cap', () => {
+    const base = typingWhileBobEdits(false)
+    const held = typingWhileBobEdits(true)
+    // before: every echo of bob's rect and every ack forced a flush (6 pushes of t2, 5 in flight)
+    expect(held.t2Pushes).toBeLessThanOrEqual(base.t2Pushes)
+    expect(held.maxInflight).toBeLessThanOrEqual(MAX_IN_FLIGHT_PUSHES)
+    expect(held.bobRectByA).toBe(0)
+    expect(base.bobRectByA).toBe(0)
   })
 })
