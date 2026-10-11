@@ -455,7 +455,9 @@ export function ExportDialog({
         pdfPick.source === 'selection' ? 'selected frames' : undefined,
       )
       downloadBlob(blob, name)
-      countUsage(pagesKind === 'vector' ? 'export.pdf.vector' : 'export.pdf.raster')
+      // literal events (scripts/usage-events.test.ts reads them)
+      if (pagesKind === 'vector') countUsage('export.pdf.vector')
+      else countUsage('export.pdf.raster')
       const fallback = imagePagesSentence(result.imagePages.map((p) => p.page))
       const size = pdfSizeNote(blob.size)
       if (fallback || size) setPdfNotes({ imagePages: fallback, size })
