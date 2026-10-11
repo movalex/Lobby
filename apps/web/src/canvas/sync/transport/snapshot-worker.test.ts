@@ -15,6 +15,7 @@ import {
   createSnapshotDecoder,
   type DecodeSide,
   SnapshotDecodeLost,
+  WORKER_MIN_BYTES,
   type WorkerLike,
 } from './snapshot-decoder.ts'
 import { DECODE_SLICE, type DecodeRequest, type DecodeResponse } from './snapshot-protocol.ts'
@@ -103,6 +104,7 @@ describe('N1-1: the snapshot decoder', () => {
     const sides: DecodeSide[] = []
     let w: FakeWorker | null = null
     const d = createSnapshotDecoder({
+      minBytes: 0,
       worker: true,
       createWorker: () => {
         w = new FakeWorker()
@@ -124,9 +126,35 @@ describe('N1-1: the snapshot decoder', () => {
     expect(fw.terminated).toBe(true)
   })
 
+  it('a frame under WORKER_MIN_BYTES decodes on the main thread (a small board opens as before)', async () => {
+    let posted = 0
+    const sides: DecodeSide[] = []
+    const d = createSnapshotDecoder({
+      worker: true,
+      createWorker: () => {
+        const w = new FakeWorker()
+        const post = w.postMessage.bind(w)
+        w.postMessage = (m, t) => {
+          posted++
+          post(m, t)
+        }
+        return w
+      },
+      onDecoded: (s) => sides.push(s),
+    })
+    d.warm()
+    const small = frameOf(3)
+    const bytes = await encodeSnapshotFrame(small)
+    expect(bytes.byteLength).toBeLessThan(WORKER_MIN_BYTES)
+    expect(await d.decode(bytes)).toEqual(small)
+    expect(sides).toEqual(['main'])
+    expect(posted).toBe(0)
+    d.dispose()
+  })
+
   it('the worker is created lazily: at the first frame or a reset welcome (warm), once', async () => {
     FakeWorker.made = 0
-    const d = createSnapshotDecoder({ worker: true, createWorker: () => new FakeWorker() })
+    const d = createSnapshotDecoder({ minBytes: 0, worker: true, createWorker: () => new FakeWorker() })
     expect(FakeWorker.made).toBe(0)
     d.warm()
     d.warm()
@@ -141,6 +169,7 @@ describe('N1-1: the snapshot decoder', () => {
     const sides: DecodeSide[] = []
     const logs: string[] = []
     const d = createSnapshotDecoder({
+      minBytes: 0,
       worker: true,
       createWorker: () => {
         throw new Error('Workers are not allowed here')
@@ -176,6 +205,7 @@ describe('N1-1: the snapshot decoder', () => {
     const sides: DecodeSide[] = []
     let w: FakeWorker | null = null
     const d = createSnapshotDecoder({
+      minBytes: 0,
       worker: true,
       createWorker: () => {
         w = new FakeWorker({ ready: false })
@@ -194,6 +224,7 @@ describe('N1-1: the snapshot decoder', () => {
     expect(sides).toEqual(['main'])
     // a silent one: after the start timeout
     const d2 = createSnapshotDecoder({
+      minBytes: 0,
       worker: true,
       createWorker: () => new FakeWorker({ ready: false }),
       setTimer: clock.setTimer,
@@ -209,6 +240,7 @@ describe('N1-1: the snapshot decoder', () => {
   it('a worker that dies with a frame in it: that frame is lost (SnapshotDecodeLost), later ones decode on the main thread', async () => {
     let w: FakeWorker | null = null
     const d = createSnapshotDecoder({
+      minBytes: 0,
       worker: true,
       createWorker: () => {
         w = new FakeWorker()
@@ -226,7 +258,7 @@ describe('N1-1: the snapshot decoder', () => {
   })
 
   it('a frame the worker refuses rejects with the main thread’s own error text (a corrupt gzip, a schema refusal)', async () => {
-    const d = createSnapshotDecoder({ worker: true, createWorker: () => new FakeWorker() })
+    const d = createSnapshotDecoder({ minBytes: 0, worker: true, createWorker: () => new FakeWorker() })
     const main = createSnapshotDecoder({ worker: false })
     const corrupt = new Uint8Array([31, 139, 8, 0, 1, 2, 3, 4, 5, 6, 7])
     const bad = await encodeSnapshotFrame({ ...frameOf(1), clock: -5 } as SnapshotFrame)
@@ -322,7 +354,7 @@ async function socketWith(decoder: ReturnType<typeof createSnapshotDecoder> | un
 
 describe('N1-1: the socket decodes through the worker in arrival order', () => {
   it('frames after a snapshot are delivered after it, in order (a worker decode is slow: they wait)', async () => {
-    const d = createSnapshotDecoder({ worker: true, createWorker: () => new FakeWorker() })
+    const d = createSnapshotDecoder({ minBytes: 0, worker: true, createWorker: () => new FakeWorker() })
     const { t, s, got } = await socketWith(d)
     s.onmessage?.({ data: JSON.stringify(welcome) })
     const bytes = await encodeSnapshotFrame(frameOf(DECODE_SLICE + 3))
@@ -341,7 +373,7 @@ describe('N1-1: the socket decodes through the worker in arrival order', () => {
     const runs: { got: string[]; logs: unknown[]; closes: unknown[] }[] = []
     for (const decoder of [
       undefined,
-      createSnapshotDecoder({ worker: true, createWorker: () => new FakeWorker() }),
+      createSnapshotDecoder({ minBytes: 0, worker: true, createWorker: () => new FakeWorker() }),
     ]) {
       const { t, s, got, logs, closes } = await socketWith(decoder)
       s.onmessage?.({ data: JSON.stringify(welcome) })
@@ -365,6 +397,7 @@ describe('N1-1: the socket decodes through the worker in arrival order', () => {
   it('a worker that dies with the frame: the socket is dropped and reconnects (the next welcome resends it)', async () => {
     let w: FakeWorker | null = null
     const d = createSnapshotDecoder({
+      minBytes: 0,
       worker: true,
       createWorker: () => {
         w = new FakeWorker()

@@ -4,8 +4,9 @@
  * where the work runs changes:
  *
  *  - a module Worker (./snapshot.worker.ts), created lazily (at the first reset welcome, `warm()`, or the first
- *    binary frame) and terminated with the session (`dispose`): gunzip, JSON.parse and the whole zod parse leave
- *    the main thread; the decoded elements come back in slices (each a short structured clone);
+ *    large binary frame) and terminated with the session (`dispose`): gunzip, JSON.parse and the whole zod parse
+ *    leave the main thread; the decoded elements come back in slices (each a short structured clone). A frame under
+ *    WORKER_MIN_BYTES decodes on the main thread all the same (cheaper than the worker's round trip);
  *  - the main thread, the very same `decodeSnapshotFrame`, when the Worker constructor throws (no Worker, a policy),
  *    when the worker fails to start (its `error` before its `ready`), or with WORKER_DECODE off.
  *
@@ -55,6 +56,13 @@ class WorkerRefusal extends Error {
   }
 }
 
+/**
+ * Frames smaller than this (gzip bytes) decode on the main thread, worker or not: a small board's decode takes a few
+ * ms there, less than the round trip to a worker (about 500 elements: ~16 KiB of gzip, measured on the 10k fixture's
+ * first elements), so small boards open exactly as before.
+ */
+export const WORKER_MIN_BYTES = 16 * 1024
+
 /** How long a worker may take to say `ready` before frames decode on the main thread. */
 export const WORKER_START_TIMEOUT_MS = 10_000
 
@@ -69,6 +77,8 @@ export interface SnapshotDecoderOptions {
   readonly clearTimer?: (h: unknown) => void
   /** the main-thread decode (default canvas-schema's `decodeSnapshotFrame`) */
   readonly decodeMain?: (bytes: Uint8Array) => Promise<SnapshotFrame>
+  /** frames below this many bytes decode on the main thread (default WORKER_MIN_BYTES) */
+  readonly minBytes?: number
 }
 
 const moduleWorker = (): WorkerLike =>
@@ -179,6 +189,7 @@ export function createSnapshotDecoder(o: SnapshotDecoderOptions): SnapshotDecode
       if (o.worker) void start()
     },
     async decode(bytes) {
+      if (bytes.byteLength < (o.minBytes ?? WORKER_MIN_BYTES)) return viaMain(bytes)
       if (disposed || state === 'broken' || !(await start()) || !worker) return viaMain(bytes)
       const id = nextId++
       // the frame's own buffer, transferred (no copy); a view into a larger buffer is sliced out first

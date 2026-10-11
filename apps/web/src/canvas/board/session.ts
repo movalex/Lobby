@@ -242,6 +242,11 @@ export class LobbyBoardSession {
   private usageCounted = false
   /** wave N: `open.apply:<how>` counted for this session's first welcome */
   private applyCounted = false
+  /** N1-1 (e2e, debug): where this session's snapshot frames decode now (null: the worker is starting) */
+  get decodeSide(): 'worker' | 'main' | null {
+    return this.decoder.side
+  }
+
   /** M6 (e2e, debug): what the open did with the cache */
   readonly cacheInfo: {
     painted: boolean

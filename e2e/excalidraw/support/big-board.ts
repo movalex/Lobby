@@ -115,3 +115,130 @@ export function bigBoard(boardId: string, opts: { fileFacts?: readonly ImageFile
 /** hash.ts's hash of a big board's generated elements (BIG_BOARD_HASH for BIG_BOARD_ID). */
 export const bigBoardHash = (board: Pick<BigBoard, 'elements'>): Promise<string> =>
   hashElements(board.elements)
+
+// ---- seeding on a real stack (the N1 specs) ------------------------------------------------------------------
+
+/** The part of a Playwright page the seed uses (the page of a signed-in editor, on the board). */
+interface SeedPage {
+  evaluate<R, A>(fn: (arg: A) => R | Promise<R>, arg: A): Promise<R>
+}
+
+/**
+ * Uploads `count` small JPEGs from `page` (as a drop does: POST /api/boards/:bid/assets) and waits for their previews,
+ * so the big board's images pass the room's file-refs check. Small on purpose (320 x 240): the N1 specs measure the
+ * board's elements, not image decoding.
+ */
+export async function uploadBigBoardImages(
+  page: SeedPage,
+  boardId: string,
+  count: number,
+): Promise<ImageFileFacts[]> {
+  return page.evaluate(
+    async ({ boardId, count }) => {
+      const out: {
+        assetId: string
+        versionId: string
+        kind: 'image'
+        name: string
+        mimeType: string
+        sizeBytes: number
+      }[] = []
+      let next = 0
+      const one = async (i: number) => {
+        const canvas = new OffscreenCanvas(320, 240)
+        const ctx = canvas.getContext('2d')
+        if (!ctx) throw new Error('no 2d context')
+        ctx.fillStyle = `hsl(${(i * 47) % 360} 55% 50%)`
+        ctx.fillRect(0, 0, 320, 240)
+        ctx.fillStyle = '#fff'
+        ctx.font = 'bold 40px sans-serif'
+        ctx.fillText(`img ${i + 1}`, 20, 140)
+        const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.8 })
+        const name = `big-${String(i + 1).padStart(3, '0')}.jpg`
+        let res: Response
+        for (let attempt = 1; ; attempt++) {
+          res = await fetch(`/api/boards/${encodeURIComponent(boardId)}/assets`, {
+            method: 'POST',
+            body: blob,
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'image/jpeg', 'X-File-Name': encodeURIComponent(name) },
+          })
+          if (![429, 502, 503].includes(res.status) || attempt >= 20) break
+          const wait = Number(res.headers.get('retry-after') ?? '5')
+          await new Promise((r) => setTimeout(r, Math.min(65, Math.max(1, wait)) * 1000))
+        }
+        if (!res.ok) throw new Error(`upload ${name}: ${res.status}`)
+        const meta = (await res.json()) as { assetId: string; versionId: string }
+        out[i] = {
+          assetId: meta.assetId,
+          versionId: meta.versionId,
+          kind: 'image',
+          name,
+          mimeType: 'image/jpeg',
+          sizeBytes: blob.size,
+        }
+      }
+      await Promise.all(
+        Array.from({ length: 4 }, async () => {
+          while (next < count) await one(next++)
+        }),
+      )
+      const pending = new Set(out.map((_, i) => i))
+      const deadline = performance.now() + 300_000
+      while (pending.size) {
+        for (const i of [...pending]) {
+          const u = out[i]
+          if (!u) continue
+          const r = await fetch(
+            `/api/boards/${encodeURIComponent(boardId)}/assets/${u.assetId}/${u.versionId}`,
+            {
+              credentials: 'same-origin',
+            },
+          )
+          const meta = (await r.json()) as { status?: string }
+          if (meta.status === 'ready') pending.delete(i)
+          else if (meta.status === 'failed') throw new Error(`preview failed for ${u.name}`)
+        }
+        if (performance.now() > deadline) throw new Error(`${pending.size} previews not ready in 5 min`)
+        if (pending.size) await new Promise((r) => setTimeout(r, 500))
+      }
+      return out
+    },
+    { boardId, count },
+  )
+}
+
+export interface SeededBigBoard {
+  readonly board: BigBoard
+  readonly elements: number
+  readonly ms: { images: number; elements: number }
+}
+
+/**
+ * Fills `boardId` (open in `page` on Lobby's board page, signed in as an editor) with the 10k big board through the
+ * real protocol: the images uploaded (`uploadBigBoardImages`), then every element pushed as creates on a raw socket
+ * with the page's own ticket (e2e/load/seed.ts: at most 500 ops a push, each acked), so the room stores what a user's
+ * pushes would. Throws when the room refused any create.
+ */
+export async function seedBigBoard(page: SeedPage, boardId: string): Promise<SeededBigBoard> {
+  const [{ seedElements }, { forgeSession }] = await Promise.all([
+    import('../../load/seed.ts'),
+    import('../../tests/support/excalidraw.ts'),
+  ])
+  const t0 = Date.now()
+  const fileFacts = await uploadBigBoardImages(page, boardId, BIG_BOARD_SPEC.images)
+  const t1 = Date.now()
+  const board = bigBoard(boardId, { fileFacts })
+  const { socket, welcome } = await forgeSession(page as never, boardId)
+  let pushed: Awaited<ReturnType<typeof seedElements>>
+  try {
+    pushed = await seedElements(socket, board.elements, welcome.clock)
+  } finally {
+    await socket.close()
+  }
+  if (pushed.ok !== pushed.ops)
+    throw new Error(
+      `seeding ${boardId}: ${pushed.ops - pushed.ok} of ${pushed.ops} creates refused ${JSON.stringify(pushed.rejected)} (${pushed.rejectedIds.join(', ')})`,
+    )
+  return { board, elements: board.elements.length, ms: { images: t1 - t0, elements: Date.now() - t1 } }
+}

@@ -151,6 +151,19 @@ function isPong(data: string): boolean {
   }
 }
 
+/**
+ * A user-timing mark, in a page only (headless clients of a load run, hundreds per process, never accumulate them, as
+ * engine.ts `measure` does not); never throws.
+ */
+function mark(name: string): void {
+  if (typeof (globalThis as { document?: unknown }).document === 'undefined') return
+  try {
+    globalThis.performance?.mark?.(name)
+  } catch {
+    // no user timing: no mark
+  }
+}
+
 async function bytesOf(data: unknown): Promise<Uint8Array | null> {
   if (data instanceof ArrayBuffer) return new Uint8Array(data)
   if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
@@ -230,7 +243,10 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
       const bytes = await bytesOf(data)
       if (!bytes) return
       try {
+        // wave N (the N1 specs): the decode's window on the page's timeline
+        mark('lobby.snapshot.received')
         const frame = await (opts.decoder ? opts.decoder.decode(bytes) : decodeSnapshotFrame(bytes))
+        mark('lobby.snapshot.decoded')
         if (gen !== generation) return
         opts.onRaw?.(frame)
         deliver(frame)
