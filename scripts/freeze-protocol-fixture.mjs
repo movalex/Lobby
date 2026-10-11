@@ -1,7 +1,7 @@
 // Freezes the wire schemas a deployed web build parses server frames with, as a test fixture (the per-reader
 // downgrade rule, docs/EXCALIDRAW-CONTRACTS.md §0b): canvas-schema's protocol.ts and every module it imports
-// (custom-data, doc, elements, hash, limits) and the two @draftroom/contracts modules those import (tags,
-// mindmap), each exactly as `git show <commit>:<path>` gives it, with a header naming the commit and the blob, and
+// (custom-data, doc, elements, hash, limits; from wave N also reactions) and the @draftroom/contracts modules those
+// import (tags, mindmap; from wave N also workshops), each exactly as `git show <commit>:<path>` gives it, with a header naming the commit and the blob, and
 // the `@draftroom/contracts` import pointed at the frozen copies beside it. The stale-pair tests parse the room's
 // frames with them (packages/canvas-schema/src/reader-rule.test.ts, apps/sync/test/element-room/
 // stale-reader-rev11.test.ts, e2e/excalidraw/l-compat-kit.ts).
@@ -34,6 +34,14 @@ const FILES = [
   ['limits.ts', 'packages/canvas-schema/src/limits.ts'],
   ['contracts-tags.ts', 'packages/contracts/src/tags.ts'],
   ['contracts-mindmap.ts', 'packages/contracts/src/mindmap.ts'],
+  // wave N (CONTRACTS_REV 13 on): custom-data.ts imports ./reactions.ts, which reads REACTION_CODES from the
+  // contracts' workshops.ts. Optional: a commit before wave N has neither file (the rev-12 and rev-11 freezes).
+  ['reactions.ts', 'packages/canvas-schema/src/reactions.ts', { optional: true }],
+  [
+    'contracts-workshops.ts',
+    'packages/contracts/src/workshops.ts',
+    { optional: true, onlyWith: 'packages/canvas-schema/src/reactions.ts' },
+  ],
 ]
 /** What each frozen file imports from @draftroom/contracts, and the frozen copies that hold it. */
 const CONTRACTS_IMPORTS = {
@@ -43,6 +51,16 @@ const CONTRACTS_IMPORTS = {
     note: [
       'these header lines, and its `@draftroom/contracts` import, which reads the frozen copies',
       'beside it (contracts-mindmap.ts, contracts-tags.ts).',
+    ],
+  },
+  'reactions.ts': {
+    from: "import { REACTION_CODES, type ReactionCode } from '@draftroom/contracts'\n",
+    to: "import { REACTION_CODES, type ReactionCode } from './contracts-workshops.ts'\n",
+    // no zod import in this file: the frozen copy's import stays where the original was
+    inPlace: true,
+    note: [
+      'these header lines, and its `@draftroom/contracts` import, which reads the frozen copy',
+      'beside it (contracts-workshops.ts).',
     ],
   },
   'doc.ts': {
@@ -56,8 +74,19 @@ const CONTRACTS_IMPORTS = {
 }
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
 
+/** Whether `path` exists at `commit` (an optional file may not). */
+const exists = (path) => {
+  try {
+    execFileSync('git', ['cat-file', '-e', `${commit}:${path}`], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
 mkdirSync(out, { recursive: true })
-for (const [name, src] of FILES) {
+for (const [name, src, opts] of FILES) {
+  if (opts?.optional && !exists(opts.onlyWith ?? src)) continue
   const blob = git('rev-parse', `${commit}:${src}`).trim().slice(0, 12)
   let body = git('show', `${commit}:${src}`)
   let note = ['these header lines only.']
@@ -65,10 +94,13 @@ for (const [name, src] of FILES) {
   if (swap) {
     if (!body.includes(swap.from))
       throw new Error(`${src} at ${commit}: its @draftroom/contracts import changed`)
-    // the frozen copies sort after zod (biome's import order): the import goes right after zod's
-    body = body
-      .replace(swap.from, '')
-      .replace("import { z } from 'zod'\n", `import { z } from 'zod'\n${swap.to}`)
+    // the frozen copies sort after zod (biome's import order): the import goes right after zod's (in place in a
+    // file without zod)
+    body = swap.inPlace
+      ? body.replace(swap.from, swap.to)
+      : body
+          .replace(swap.from, '')
+          .replace("import { z } from 'zod'\n", `import { z } from 'zod'\n${swap.to}`)
     note = swap.note
   }
   const header = [
