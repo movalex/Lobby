@@ -2,14 +2,19 @@
 // renders, busy frames and what may be culled. Node only.
 import { describe, expect, it } from 'vitest'
 import {
+  LOD_LARGE_LIVE,
+  LOD_LARGE_VISIBLE,
   LOD_MAX_SIDE,
   LOD_QUIET_MS,
   LOD_ZOOM,
+  LOD_ZOOM_LARGE,
   type LodBitmap,
   type LodElement,
   LodModel,
   lodActiveAt,
+  lodBucketOf,
   lodScale,
+  lodThreshold,
 } from './model.ts'
 
 type El = LodElement & { boundElements?: { id: string; type: string }[] }
@@ -241,5 +246,67 @@ describe('the bitmaps the model lets go of', () => {
     expect(dropped).toEqual(['a', 'b'])
     m.reset([])
     expect(dropped).toEqual(['a', 'b', 'a2'])
+  })
+})
+
+// N1-5 (wave N, PERF-5): the pass scales with the board's size.
+describe('N1-5: the size-aware thresholds and zoom buckets', () => {
+  it('turns on below 0.2 up to 1,500 live elements, below 0.35 above that or with more than 3,000 in view', () => {
+    expect(LOD_ZOOM_LARGE).toBe(0.35)
+    expect(LOD_LARGE_LIVE).toBe(1_500)
+    expect(LOD_LARGE_VISIBLE).toBe(3_000)
+    expect(lodThreshold(1_500, 0, true)).toBe(0.2)
+    expect(lodThreshold(1_501, 0, true)).toBe(0.35)
+    expect(lodThreshold(100, 3_001, true)).toBe(0.35)
+    expect(lodThreshold(100, 3_000, true)).toBe(0.2)
+    expect(lodActiveAt(0.25, 1_500, 0, true)).toBe(false)
+    expect(lodActiveAt(0.25, 10_000, 0, true)).toBe(true)
+    expect(lodActiveAt(0.3499, 10_000, 0, true)).toBe(true)
+    expect(lodActiveAt(0.35, 10_000, 0, true)).toBe(false)
+    expect(lodActiveAt(0.1, 10, 0, true)).toBe(true)
+    // without SIZE_AWARE_LOD: 0.2 whatever the board (the pass before wave N)
+    expect(lodThreshold(10_000, 10_000, false)).toBe(0.2)
+    expect(lodActiveAt(0.25, 10_000, 10_000)).toBe(false)
+  })
+
+  it('two buckets (0.2 and 0.35): a bucket’s bitmaps are drawn at its zoom times the device pixel ratio', () => {
+    expect(lodBucketOf(0.05, true)).toBe(0.2)
+    expect(lodBucketOf(0.1999, true)).toBe(0.2)
+    expect(lodBucketOf(0.2, true)).toBe(0.35)
+    expect(lodBucketOf(0.34, true)).toBe(0.35)
+    expect(lodBucketOf(0.3, false)).toBe(0.2)
+    const r = { x: 0, y: 0, width: 3000, height: 2000 }
+    expect(lodScale(r, 1, 0.35)).toBeCloseTo(0.35)
+    expect(lodScale(r, 1.25, 0.35)).toBeCloseTo(0.4375)
+    expect(lodScale(r, 1.25, 0.2)).toBeCloseTo(0.25)
+  })
+
+  it('a frame keeps a bitmap per bucket: zooming back reuses it; a change lets every bucket’s go', () => {
+    const dropped: string[] = []
+    const s = scene([frame('F1'), note('N1', 'F1'), labelOf('N1-l', 'N1')])
+    const m = new LodModel<string>({ sizeAware: true, onDrop: (b) => dropped.push(b.image) })
+    m.reset(s.all())
+    const draw = (image: string) => {
+      const job = m.start('F1')
+      if (job) m.finish('F1', job.version, { image, rect: job.rect, scale: job.bucket }, 1)
+      return job
+    }
+    expect(draw('at-0.2')?.bucket).toBe(0.2)
+    expect([...m.culled()]).toEqual(['N1'])
+    m.setBucket(0.35)
+    // not drawn at this bucket yet: live, due
+    expect(m.culled().size).toBe(0)
+    expect(m.due(0)).toEqual(['F1'])
+    expect(draw('at-0.35')?.bucket).toBe(0.35)
+    expect(m.drawable().map((d) => d.bitmap.image)).toEqual(['at-0.35'])
+    m.setBucket(0.2)
+    // back: the 0.2 bitmap is still there, nothing to render
+    expect(m.drawable().map((d) => d.bitmap.image)).toEqual(['at-0.2'])
+    expect(m.due(0)).toEqual([])
+    expect(m.stats()).toMatchObject({ bitmaps: 2, bucket: 0.2 })
+    s.set({ ...note('N1', 'F1'), x: 99 })
+    m.changed(['N1'], s.get, 10)
+    expect(dropped.sort()).toEqual(['at-0.2', 'at-0.35'])
+    expect(m.stats()).toMatchObject({ bitmaps: 0, bytes: 0 })
   })
 })

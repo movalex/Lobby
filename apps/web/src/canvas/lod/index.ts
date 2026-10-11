@@ -26,9 +26,19 @@ import type { BinaryFiles, ExcalidrawImperativeAPI } from '@excalidraw/excalidra
 import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 import type { CanvasChange, LobbyCanvas } from '../api/lobby-canvas.ts'
 import { noteSceneWalk } from '../api/parts/scene-index.ts'
+import { SIZE_AWARE_LOD } from '../sync/flags.ts'
 import type { LodTarget } from './cull.ts'
 import { installFrameNameGuard } from './frame-names.ts'
-import { type LodBitmap, type LodElement, LodModel, type LodRect, lodActiveAt, lodScale } from './model.ts'
+import {
+  type LodBitmap,
+  type LodElement,
+  LodModel,
+  type LodRect,
+  lodActiveAt,
+  lodBucketOf,
+  lodScale,
+  lodThreshold,
+} from './model.ts'
 
 export { createLodTarget, type LodTarget } from './cull.ts'
 export { LOD_ZOOM } from './model.ts'
@@ -45,6 +55,8 @@ export interface LodOptions {
   readonly root: HTMLElement
   /** default true */
   readonly enabled?: boolean
+  /** N1-5: the size-aware pass (zoom buckets, the memory cap, loose-element tiles); default SIZE_AWARE_LOD */
+  readonly sizeAware?: boolean
 }
 
 export interface LodState {
@@ -52,6 +64,15 @@ export interface LodState {
   readonly active: boolean
   readonly zoom: number
   readonly frames: number
+  /** N1-5: the loose-element tiles */
+  readonly tiles: number
+  /** N1-5: the zoom bucket the bitmaps are drawn for, and the zoom below which the pass is on now */
+  readonly bucket: number
+  readonly threshold: number
+  readonly bitmaps: number
+  readonly bytes: number
+  readonly evicted: number
+  readonly live: number
   readonly ready: number
   readonly stale: number
   readonly rendering: number
@@ -236,7 +257,9 @@ export function installLod(o: LodOptions): LodHandle {
     layer.forget(b.image)
     closeImage(b.image)
   }
-  const model = new LodModel<Image>({ onDrop: release })
+  const sizeAware = o.sizeAware ?? SIZE_AWARE_LOD
+  const model = new LodModel<Image>({ onDrop: release, sizeAware })
+  let threshold = 0
   let enabled = o.enabled ?? true
   let active = false
   let disposed = false
@@ -286,7 +309,7 @@ export function installLod(o: LodOptions): LodHandle {
         return
       }
       if (!layer.mount(o.root)) return
-      const settled = layer.paint(model.drawable(), viewNow(), win.devicePixelRatio || 1)
+      const settled = layer.paint(model.drawable(now()), viewNow(), win.devicePixelRatio || 1)
       // a new scale: paint once more when it has held, which asks for the copies at that scale
       if (!settled && settleTimer === null)
         settleTimer = setTimeout(() => {
@@ -328,7 +351,7 @@ export function installLod(o: LodOptions): LodHandle {
     let bitmap: Bitmap | null = null
     const t0 = now()
     try {
-      bitmap = await renderFrame(next, job.rect)
+      bitmap = await renderRegion(next, job)
     } catch (e) {
       stats.failures++
       console.warn('lod: a frame could not be rendered', next, e)
@@ -338,19 +361,28 @@ export function installLod(o: LodOptions): LodHandle {
     stats.renders++
     stats.renderMs += now() - t0
     if (disposed) return
-    if (model.finish(next, job.version, bitmap)) apply()
+    if (model.finish(next, job.version, bitmap, now())) apply()
     else if (bitmap) release(bitmap)
     // yield to input between renders
     scheduleWork(16)
   }
 
-  const renderFrame = async (frameId: string, rect: LodRect): Promise<Bitmap | null> => {
+  /**
+   * One region's bitmap at its job's bucket: a frame's own export (its members clipped to it), or (N1-5) a tile's
+   * loose elements clipped to the tile's rectangle.
+   */
+  const renderRegion = async (
+    id: string,
+    job: { rect: LodRect; bucket: number; kind: 'frame' | 'tile'; members: readonly string[] },
+  ): Promise<Bitmap | null> => {
     const { exportSceneCanvas } = await import('../export/scene.ts')
-    const scale = lodScale(rect, win.devicePixelRatio || 1)
+    const rect = job.rect
+    const scale = lodScale(rect, win.devicePixelRatio || 1, job.bucket)
+    if (job.kind === 'tile' && !job.members.length) return null
     const out = await exportSceneCanvas(
       { api, boardId: null, resolver: null, isHidden: o.isHidden },
       {
-        frameId,
+        ...(job.kind === 'frame' ? { frameId: id } : { ids: job.members, bounds: rect }),
         scale,
         maxSide: 4096,
         background: false,
@@ -377,7 +409,22 @@ export function installLod(o: LodOptions): LodHandle {
 
   const updateActive = () => {
     const was = active
-    active = enabled && !disposed && lodActiveAt(api.getAppState().zoom.value)
+    const s = api.getAppState()
+    const zoom = s.zoom.value
+    // N1-5: the board's size and what is in view decide the zoom it turns on below; the bucket follows the zoom
+    const z = zoom || 1
+    const view = { x: -s.scrollX, y: -s.scrollY, width: s.width / z, height: s.height / z }
+    const live = model.liveCount()
+    const visible = sizeAware ? model.visibleCount(view) : 0
+    active = enabled && !disposed && lodActiveAt(zoom, live, visible, sizeAware)
+    threshold = lodThreshold(live, visible, sizeAware)
+    const bucketWas = model.bucket
+    model.setBucket(lodBucketOf(zoom, sizeAware))
+    if (active && was && model.bucket !== bucketWas) {
+      apply()
+      scheduleWork()
+      return
+    }
     if (active !== was) {
       if (active) reconcile()
       apply()
@@ -456,6 +503,7 @@ export function installLod(o: LodOptions): LodHandle {
         active,
         zoom: api.getAppState().zoom.value,
         ...s,
+        threshold,
         drawn: layer.drawn,
         renders: stats.renders,
         renderMs: Math.round(stats.renderMs),
