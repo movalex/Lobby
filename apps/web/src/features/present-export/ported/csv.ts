@@ -5,6 +5,11 @@
 // a selection. A sticky note's colour is the name the note palette shows ("Marigold" for the stored
 // 'yellow'; canvas-ux/palette.ts), never the stored value.
 //
+// Wave N (N3-4): once any exported note carries emoji reactions, a trailing `reactions` column after `votes` holds
+// each note's counts, "👍 3; ❤️ 1" (REACTION_CODES order), read from the stored `react:` keys. Counts only: no uid and
+// no name leaves the board (who reacted stays on the board). A board with no reactions exports exactly the columns it
+// always did.
+//
 // The ported rows are built here from board-ops' element helpers rather than by re-parsing
 // `elementsToCsv`'s text, so the extra columns and the colour names need no CSV parser.
 import {
@@ -21,7 +26,8 @@ import {
   lookupOf,
   readingOrder,
 } from '@draftroom/board-ops/elements'
-import type { VoteResult } from '@draftroom/contracts'
+import { reactionsOf } from '@draftroom/canvas-schema/reactions'
+import { REACTION_CODE_EMOJI, type VoteResult } from '@draftroom/contracts'
 import { NOTE_PALETTE } from '../../canvas-ux/palette.ts'
 import { votesByShape } from '../../workshops/vote-export.ts'
 import { resultElementId } from './badges.ts'
@@ -31,6 +37,9 @@ import { resultElementId } from './badges.ts'
 export const TAGS_CSV_COLUMN = 'tags'
 export const TAGS_CSV_SEPARATOR = '; '
 export const VOTES_CSV_COLUMN = 'votes'
+export const REACTIONS_CSV_COLUMN = 'reactions'
+/** Between the emoji of one cell: "👍 3; ❤️ 1" (the tags cell's separator). */
+export const REACTIONS_CSV_SEPARATOR = '; '
 export const CSV_MIME = 'text/csv;charset=utf-8'
 /** Excel only reads a UTF-8 CSV as UTF-8 (accents, emoji, CJK) when it starts with a byte-order mark. */
 export const UTF8_BOM = '﻿'
@@ -72,6 +81,18 @@ function tagsCell(el: BoardElement, defs: ReadonlyMap<string, { name: string }>)
 }
 
 /**
+ * The `reactions` cell of a note, "👍 3; ❤️ 1": each emoji somebody used with how many used it, in the reaction
+ * row's order, from the stored `react:<code>:<uid>` keys (a key that is not a well formed reaction counts for
+ * nothing). Empty for a note with none and for anything that is not a sticky note. Counts only, never a uid or a name.
+ */
+export function reactionsCell(el: BoardElement): string {
+  if (el.type !== 'stickynote') return ''
+  const lobby = (el.customData as { lobby?: Record<string, unknown> } | undefined)?.lobby
+  const parts = reactionsOf(lobby).map((r) => `${REACTION_CODE_EMOJI[r.code]} ${r.uids.length}`)
+  return parts.length ? csvTextCell(parts.join(REACTIONS_CSV_SEPARATOR)) : ''
+}
+
+/**
  * CSV of the board, or of `onlyIds` (a selection with what it contains) when given: the rows of the
  * whole board (reading order, frame names from the whole board) filtered to those elements. Records are
  * CRLF-separated and the text ends with CRLF.
@@ -96,10 +117,18 @@ export function boardCsv(
     if (!isLive(el) || isLabel(el) || SKIPPED.has(el.type)) continue
     rows.push({ id: el.id, bounds: elementBounds(el), el })
   }
-  const header = [...CSV_HEADER, TAGS_CSV_COLUMN, ...(votes ? [VOTES_CSV_COLUMN] : [])].join(',')
+  const shown = readingOrder(rows).filter(({ el }) => !onlyIds || onlyIds.has(el.id))
+  // wave N: the column is there once an exported note has a reaction; a board without any exports what it always did
+  const reactions = shown.map(({ el }) => reactionsCell(el))
+  const withReactions = reactions.some((c) => c !== '')
+  const header = [
+    ...CSV_HEADER,
+    TAGS_CSV_COLUMN,
+    ...(votes ? [VOTES_CSV_COLUMN] : []),
+    ...(withReactions ? [REACTIONS_CSV_COLUMN] : []),
+  ].join(',')
   const lines = [header]
-  for (const { el } of readingOrder(rows)) {
-    if (onlyIds && !onlyIds.has(el.id)) continue
+  shown.forEach(({ el }, i) => {
     const frame = el.frameId ? get(el.frameId) : undefined
     const color =
       el.type === 'stickynote' ? (NOTE_COLOR_LABELS.get(colorCellOf(el)) ?? colorCellOf(el)) : colorCellOf(el)
@@ -114,8 +143,9 @@ export function boardCsv(
         numberCell(typeof el.y === 'number' && Number.isFinite(el.y) ? el.y : 0),
         tagsCell(el, defs),
         ...(votes ? [votes(el.id)] : []),
+        ...(withReactions ? [reactions[i] ?? ''] : []),
       ].join(','),
     )
-  }
+  })
   return `${lines.join('\r\n')}\r\n`
 }
