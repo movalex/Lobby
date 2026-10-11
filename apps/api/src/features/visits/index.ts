@@ -1,24 +1,104 @@
-// OWNER: WS4 (wave N, since your last visit; a stub landed by the wave N foundation). Private visit markers
-// (@draftroom/contracts visits.ts; migration 0031_board_visits):
+// OWNER: WS4 (wave N, N4-1, "Since your last visit"). Private visit markers (@draftroom/contracts visits.ts; migration
+// 0031_board_visits):
 //
-//   POST /api/boards/:bid/visit       → 200 VisitAnswer   (view access; the session's own row only; no guests)
-//   POST /api/boards/:bid/visit/seen  → 204               (sendBeacon on pagehide and "Mark all seen")
+//   POST /api/boards/:bid/visit       (no body) → 200 VisitAnswer {previousSeenAt|null, seenAt}   view access
+//   POST /api/boards/:bid/visit/seen  (no body) → 204        sendBeacon on pagehide and "Mark all seen"; view access
 //
-// Nobody else ever sees who visited when: no route reads another person's row, and no log, export or usage counter
-// carries a visit time. The guest rows are in place (guests/guard.ts GUEST_REFUSED_ROUTES). Pending
-// (../pending-routes.ts): neither is registered until WS4 implements them, so they answer 404 NOT_FOUND like any
-// unknown route, and the web's fetchVisit() answers null (the chip stays hidden).
+// The owner's condition for storing a visit time: nobody else ever sees who visited when, and there are no read
+// receipts. So, by construction (./store.ts, held by test/features/visits/privacy.test.ts):
+//  - a route reads and writes only the SESSION's own row, keyed by (board, the session's user id); no route lists,
+//    counts, exports or logs visit times; the request log carries the route pattern, status and duration only; the
+//    archive export, /internal/usage and the admin views know nothing of this table;
+//  - a name-only guest is refused (403 GUEST_ACCOUNT_REQUIRED, before any query; the guest guard refuses it first, this
+//    handler again) and keeps the device-local "Catch me up" window;
+//  - someone who cannot view the board gets the 404 every board route gives;
+//  - at most one write per VISIT_WRITE_MIN_INTERVAL_MS per (person, board) (./gate.ts): a faster visit answers 200 with
+//    what the earlier one answered (or the stored time), a faster "seen" answers 204, and neither writes;
+//  - rows past DRAFTROOM_VISITS_RETENTION_DAYS are deleted (./sweep.ts); the board's and the account's deletion cascade.
+//
+// Pending (../pending-routes.ts): putting 'POST /api/boards/:bid/visit' and '…/visit/seen' back in PENDING_ROUTES hides
+// both (the unknown route's 404), and the web's fetchVisit() then answers null: the chip stays hidden.
 
-import { VISIT_ROUTE, VISIT_SEEN_ROUTE } from '@draftroom/contracts'
+import {
+  VISIT_ROUTE,
+  VISIT_SEEN_ROUTE,
+  VISIT_WRITE_MIN_INTERVAL_MS,
+  type VisitAnswer,
+} from '@draftroom/contracts'
+import { pgErrorCode } from '@draftroom/db'
 import type { FastifyInstance } from 'fastify'
+import { requireBoardAction } from '../../access.ts'
+import type { Params } from '../../context.ts'
 import { notFound } from '../../errors.ts'
 import type { FeatureContext } from '../context.ts'
+import { guestRefused, VISITS_GUESTS } from '../guests/guard.ts'
 import { routeUnlessPending } from '../pending-routes.ts'
+import { VisitWriteGate } from './gate.ts'
+import { markSeen, recordVisit, storedVisit } from './store.ts'
+import { startVisitsSweeper } from './sweep.ts'
 
-export async function registerVisits(app: FastifyInstance, _ctx: FeatureContext): Promise<void> {
-  const stub = async () => {
-    throw notFound()
-  }
-  routeUnlessPending(app, 'POST', VISIT_ROUTE, stub)
-  routeUnlessPending(app, 'POST', VISIT_SEEN_ROUTE, stub)
+/** A foreign-key violation: the board (or the account) was deleted between the access check and the write. */
+const vanished = (e: unknown) => pgErrorCode(e) === '23503'
+
+export async function registerVisits(app: FastifyInstance, ctx: FeatureContext): Promise<void> {
+  const { db, now } = ctx
+  const gate = new VisitWriteGate(VISIT_WRITE_MIN_INTERVAL_MS)
+
+  routeUnlessPending(app, 'POST', VISIT_ROUTE, async (req, reply): Promise<VisitAnswer> => {
+    const user = await ctx.requireUser(req)
+    // before any board or visit query: a guest keeps the device-local window
+    if (user.kind === 'guest') throw guestRefused(VISITS_GUESTS)
+    const { bid = '' } = req.params as Params
+    const access = await requireBoardAction(db, bid, user.id, 'view')
+    const boardId = access.board.id
+    const key = VisitWriteGate.key(user.id, boardId)
+    const at = now()
+    reply.header('cache-control', 'no-store')
+
+    const recent = gate.recent(key, at.getTime())
+    if (recent) {
+      // inside the interval: nothing is written; the earlier visit's answer, else the stored time
+      if (recent.answer) {
+        try {
+          return await recent.answer
+        } catch {
+          // that write failed: this call may try for itself below
+        }
+      }
+      const stored = await storedVisit(db, boardId, user.id)
+      if (stored !== null) return { previousSeenAt: stored, seenAt: stored }
+    }
+
+    const write = recordVisit(db, boardId, user.id, at)
+    const entry = gate.note(key, at.getTime(), write)
+    try {
+      return await write
+    } catch (e) {
+      gate.forget(key, entry)
+      if (vanished(e)) throw notFound()
+      throw e
+    }
+  })
+
+  routeUnlessPending(app, 'POST', VISIT_SEEN_ROUTE, async (req, reply) => {
+    const user = await ctx.requireUser(req)
+    if (user.kind === 'guest') throw guestRefused(VISITS_GUESTS)
+    const { bid = '' } = req.params as Params
+    const access = await requireBoardAction(db, bid, user.id, 'view')
+    const boardId = access.board.id
+    const key = VisitWriteGate.key(user.id, boardId)
+    const at = now()
+    if (gate.recent(key, at.getTime())) return reply.code(204).send()
+    const entry = gate.note(key, at.getTime(), null)
+    try {
+      await markSeen(db, boardId, user.id, at)
+    } catch (e) {
+      gate.forget(key, entry)
+      if (vanished(e)) throw notFound()
+      throw e
+    }
+    return reply.code(204).send()
+  })
+
+  startVisitsSweeper(app, ctx)
 }
