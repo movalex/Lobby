@@ -418,9 +418,16 @@ test('a tab that only receives pushes nothing: an idle editor sees a reaction co
   for (const s of [a, b]) await showAll(s.page)
   await expectSaved(b.page)
   const pushed = b.net.sentPushes().length
+  await b.page.waitForTimeout(2_000) // what arrives with the board is not a reaction (no burst)
 
   await reactWithMouse(a.page, N1, 'up')
   await expect(reactionChip(b.page, N1, 'up')).toHaveAttribute('data-count', '1')
+  // the reaction bursts once on the tab that only watches (five copies; the reduced-motion test below has one)
+  await expect(b.page.getByTestId('note-reaction-burst')).toBeVisible()
+  await expect(b.page.locator('[data-testid="note-reaction-burst"] [data-copies]')).toHaveAttribute(
+    'data-copies',
+    '5',
+  )
   await reactionChip(a.page, N1, 'up').click()
   await expect(reactionRow(b.page, N1)).toHaveCount(0)
   await reactWithMouse(a.page, N2, 'heart')
@@ -555,4 +562,18 @@ test('the picker follows the pointer on hover, stays once clicked, and closes on
   await a.page.mouse.click(2, 300)
   await expect(reactionPicker(a.page)).toHaveCount(0)
   expect(await reactionsIn(a.page, N1)).toEqual({ up: [b.id] })
+})
+
+test('people who prefer reduced motion get one still copy of the burst, not five', async ({ join }) => {
+  const a = await join('alice')
+  const b = await join('bob', 'editor')
+  await b.page.emulateMedia({ reducedMotion: 'reduce' })
+  await twoNotes(a.page)
+  await expectItemsEverywhere([b], [N1])
+  for (const s of [a, b]) await showAll(s.page)
+  await b.page.waitForTimeout(2_000) // what arrives with the board is not a reaction
+  await reactWithMouse(a.page, N1, 'party')
+  const burst = b.page.locator('[data-testid="note-reaction-burst"] [data-copies]')
+  await expect(burst).toHaveAttribute('data-copies', '1')
+  await expect(b.page.locator('[data-testid="note-reaction-burst"] [data-copy="spark"]')).toHaveCount(0)
 })
