@@ -30,6 +30,7 @@ import { checkElement, type WireElement } from '@draftroom/canvas-schema/element
 import { compareByIndex, indexKeysBetween, isValidIndexKey } from '@draftroom/canvas-schema/engine'
 import { checkInvariants } from '@draftroom/canvas-schema/invariants'
 import { MAX_ITEMS, MAX_LIVE_ELEMENTS, MAX_TAG_DEFS } from '@draftroom/canvas-schema/limits'
+import { isReactionKey } from '@draftroom/canvas-schema/reactions'
 import type { InternalRoute, RoomExtensionContext, ServerWriteChange } from '../engine-switch.ts'
 import { readJson } from '../http/body.ts'
 import { HttpError, sendJson } from '../http/respond.ts'
@@ -94,6 +95,29 @@ function paintOrder(elements: readonly El[]): El[] {
   return out
 }
 
+/**
+ * The element without its reaction keys (`customData.lobby` `react:*`, wave N). Until the sync takes
+ * reactions (WS2, N2-4: the identity rules, the CONTRACTS_REV 13 bump) a board stores none, and seeded content
+ * (an import, a duplicate, a restore, a template) is the one path that skips merge's identity checks, so
+ * reaction keys never enter a board from it: they would be planted under other people's uids, and a rolled-back
+ * sync refuses every edit of an element that carries one. An emptied `lobby` (and then `customData`) is left out.
+ * WS2 (N2-4) decides whether content from this deployment (a duplicate, a restore) may keep them once the room
+ * checks their identity; an archive import never keeps them (apps/api archive-v2.ts importCustomData).
+ */
+function withoutReactionKeys(el: El): El {
+  const custom = el.customData
+  if (!isObject(custom) || !isObject(custom.lobby)) return el
+  const keys = Object.keys(custom.lobby)
+  if (!keys.some(isReactionKey)) return el
+  const lobby = Object.fromEntries(Object.entries(custom.lobby).filter(([k]) => !isReactionKey(k)))
+  const { lobby: _old, ...rest } = custom
+  const next: Record<string, unknown> = Object.keys(lobby).length ? { ...rest, lobby } : rest
+  const copy = { ...el }
+  if (Object.keys(next).length) copy.customData = next
+  else delete copy.customData
+  return copy
+}
+
 /** Validates content for a new board; throws 400 with codes and ids only (never board text). */
 export function prepareSeedContent(raw: SeedContent): SeedContent {
   const seen = new Set<string>()
@@ -101,7 +125,7 @@ export function prepareSeedContent(raw: SeedContent): SeedContent {
   for (const candidate of raw.elements) {
     if (!isObject(candidate)) throw invalid('Every element must be an object.')
     if (candidate.isDeleted === true) continue
-    const el = { ...(candidate as El) }
+    const el = withoutReactionKeys({ ...(candidate as El) })
     if (el.type === 'image') el.status = 'saved'
     if (typeof el.id !== 'string' || seen.has(el.id)) throw invalid('Element ids must be unique strings.')
     seen.add(el.id)

@@ -122,6 +122,7 @@ function lobbyBoard(fileId: string): El[] {
       customData: {
         lobby: {
           'plusOne:usr_voter': true,
+          'react:heart:usr_reactor': true,
           mindmap: { rootId: 'N', parentId: null, side: 'right', collapsed: false },
         },
         lobbyServer: { ...server('usr_ann'), privateNote: { session: 'pbs_s', author: 'usr_ann' } },
@@ -240,7 +241,7 @@ describe('duplicate, export and import on the Excalidraw engine', () => {
     expect(lobbySeed().doc).toMatchObject({ startView: { frameId: 'F' } })
   })
 
-  it('exports the v2 archive without who wrote or voted what', async () => {
+  it('exports the v2 archive without who wrote, voted or reacted what', async () => {
     const res = await bob.req('GET', `/api/boards/${boardId}/export`)
     expect(res.statusCode).toBe(200)
     const archive = res.json()
@@ -251,9 +252,11 @@ describe('duplicate, export and import on the Excalidraw engine', () => {
     expect(archive.doc).not.toHaveProperty('import')
     const note = archive.elements.find((e: El) => e.id === 'N')
     expect(note.customData.lobby).not.toHaveProperty('plusOne:usr_voter')
+    expect(note.customData.lobby).not.toHaveProperty('react:heart:usr_reactor')
     expect(note.customData.lobbyServer.privateNote).toEqual({ session: 'pbs_s' })
     expect(note.customData.lobbyServer.lastEditedBy).toBeNull()
     expect(JSON.stringify(archive)).not.toContain('usr_voter')
+    expect(JSON.stringify(archive)).not.toContain('usr_reactor')
   })
 
   it('imports a v2 archive with fresh ids, links remapped, and nothing identity-bearing taken on trust', async () => {
@@ -262,6 +265,11 @@ describe('duplicate, export and import on the Excalidraw engine', () => {
     const N = archive.elements.find((e: El) => e.id === 'N')
     N.customData.lobby.ai = { by: 'usr_someone' }
     N.customData.lobbyServer.createdBy = { uid: 'usr_ceo', name: 'CEO', guest: false }
+    // ...and wave N reactions under other people's uids, on a note and on a frame (not a note)
+    N.customData.lobby['react:up:usr_someoneelse'] = true
+    N.customData.lobby['plusOne:usr_planted'] = true
+    const F = archive.elements.find((e: El) => e.id === 'F')
+    F.customData = { lobby: { 'react:party:usr_someoneelse': true } }
     const res = await bob.req('POST', `/api/workspaces/${DEV_STUDIO}/boards/import?title=Copy`, archive)
     expect(res.statusCode).toBe(201)
     const seed = lobbySeed()
@@ -286,10 +294,26 @@ describe('duplicate, export and import on the Excalidraw engine', () => {
     const custom = n.customData as { lobby: Record<string, unknown>; lobbyServer?: unknown }
     expect(custom.lobbyServer).toBeUndefined()
     expect(custom.lobby).not.toHaveProperty('ai')
+    expect(
+      Object.keys(custom.lobby).filter((k) => k.startsWith('react:') || k.startsWith('plusOne:')),
+    ).toEqual([])
+    expect(f.customData).toBeUndefined()
+    expect(JSON.stringify(seed.elements)).not.toContain('react:')
+    expect(JSON.stringify(seed.elements)).not.toContain('usr_someoneelse')
     expect(custom.lobby.mindmap).toMatchObject({ rootId: n.id, parentId: null })
     expect(seed.doc).toMatchObject({ startView: { frameId: f.id } })
     expect(res.json().warnings.join(' ')).toMatch(/not in this archive/)
     expect(res.json()).toMatchObject({ linkedFiles: 1, droppedFiles: 0 })
+  })
+
+  it('imports a v2 archive whose reaction keys are malformed, without them (the prefix decides the class)', async () => {
+    const archive = (await bob.req('GET', `/api/boards/${boardId}/export`)).json()
+    const N = archive.elements.find((e: El) => e.id === 'N')
+    N.customData.lobby['react:nope:usr_someoneelse'] = true
+    N.customData.lobby['react:up:'] = 'yes'
+    const res = await bob.req('POST', `/api/workspaces/${DEV_STUDIO}/boards/import?title=Copy`, archive)
+    expect(res.statusCode).toBe(201)
+    expect(JSON.stringify(lobbySeed().elements)).not.toContain('react:')
   })
 
   it('refuses a v2 archive it cannot take', async () => {

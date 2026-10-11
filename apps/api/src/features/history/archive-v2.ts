@@ -4,20 +4,21 @@
 //   { format: 'lobby-board', version: 2, engine: 'excalidraw', engineVersion, schema, exportedAt,
 //     elements, doc, assets: ArchiveAssetRef[] }
 //
-// Export strips who wrote what (`lobbyServer.privateNote.author`, `plusOne:*`, `lastEditedBy`) and leaves
+// Export strips who wrote what (`lobbyServer.privateNote.author`, `plusOne:*`, `react:*`, `lastEditedBy`) and leaves
 // out the server-only `import` doc key. Import (v1 archives stay board-ops' `importBoardArchive`, converted
 // by the sync seed) takes nothing on trust:
 //  - every element gets a fresh id; `containerId`, `boundElements`, arrow bindings, `frameId`, `groupIds`
 //    (fresh group ids) and the ids inside `mindmap` / `mindmapEdge` follow, and what points outside the
 //    archive is cut (a binding to nothing unbinds, a label whose container is gone becomes a free text);
 //  - server-owned and identity-stamped customData never comes from a file: `lobbyServer` goes (the seed
-//    stores none), and so do `plusOne:*`, `ai` and `privateFrame`;
+//    stores none), and so do `plusOne:*`, the wave N reactions `react:*`, `ai` and `privateFrame`;
 //  - elements are checked with the server's own element check (canvas-schema elements.ts) and the archive
 //    caps; the sync seed checks everything again with the invariants and assigns fresh indices.
 
 import { randomBytes } from 'node:crypto'
 import { checkElement } from '@draftroom/canvas-schema/elements'
 import { ARCHIVE_MAX_ELEMENTS } from '@draftroom/canvas-schema/limits'
+import { identityUidOf, isReactionKey } from '@draftroom/canvas-schema/reactions'
 import {
   type Element,
   exportableElements,
@@ -221,6 +222,13 @@ export function importLobbyArchive(body: unknown): ImportedLobbyBoard {
   return { elements: out, doc, assets, warnings }
 }
 
+/**
+ * Whether a `customData.lobby` key belongs to one person (`plusOne:<uid>`, wave N `react:<code>:<uid>`), malformed
+ * forms of either class included: such keys mean nothing across deployments, and a file never plants them.
+ */
+const identityBound = (key: string): boolean =>
+  key.startsWith('plusOne:') || isReactionKey(key) || identityUidOf(key) !== null
+
 /** customData of an imported element: no server-owned or identity-stamped keys, refs remapped. */
 function importCustomData(
   el: Element,
@@ -230,7 +238,7 @@ function importCustomData(
   if (!lobby) return undefined
   const next: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(lobby)) {
-    if (key.startsWith('plusOne:') || IDENTITY_KEYS.has(key)) continue
+    if (identityBound(key) || IDENTITY_KEYS.has(key)) continue
     if (key === 'mindmap' || key === 'mindmapEdge') {
       if (!isObject(value)) continue
       const refs = key === 'mindmap' ? ['rootId', 'parentId'] : ['rootId', 'parentId', 'childId']

@@ -93,6 +93,29 @@ describe('seed (Excalidraw engine)', () => {
     expect(snap.elements[0]?.customData).toEqual(kept.customData)
   })
 
+  it('wave N foundation: stores no reaction key from seeded content (not on a note, not under anyone)', async () => {
+    const st = await h.stack()
+    const b = newBoardId()
+    const tag = { 'tag:urgent': { name: 'Urgent', color: 'red' } }
+    const mixed = note('M', {
+      customData: { lobby: { ...tag, 'react:up:usr_someoneelse': true, 'react:heart:usr_other': true } },
+    })
+    const only = note('O', { customData: { lobby: { 'react:clap:usr_someoneelse': true } } })
+    const onRect = rect('R', { customData: { lobby: { 'react:party:usr_x': true } } })
+    const res = await seed(st, b, [mixed, only, onRect])
+    expect(res.status).toBe(201)
+    const snap = await st.snapshot(b)
+    const byId = new Map(snap.elements.map((e) => [e.id, e]))
+    expect(byId.get('M')?.customData).toEqual({ lobby: tag })
+    for (const id of ['O', 'R']) expect(byId.get(id)?.customData).toBeUndefined()
+    expect(JSON.stringify(snap.elements)).not.toContain('react:')
+    // a malformed key of the class is a reaction key too (the prefix decides the class): dropped, not refused
+    const b2 = newBoardId()
+    const odd = note('Q', { customData: { lobby: { 'react:nope:usr_x': true, 'react:up:': 'yes' } } })
+    expect((await seed(st, b2, [odd])).status).toBe(201)
+    expect((await st.snapshot(b2)).elements[0]?.customData).toBeUndefined()
+  })
+
   it('converts tldraw records (a v1 checkpoint, a v1 archive) with the board converter', async () => {
     const st = await h.stack()
     const b = newBoardId()

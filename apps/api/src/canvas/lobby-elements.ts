@@ -10,6 +10,7 @@
 // Api object refs stay `shape:<elementId>` (canvas-schema refs.ts), so comment anchors, AI ids and vote
 // targets keep working; object types are the api's vocabulary (the tldraw shape types its readers use).
 
+import { isReactionKey } from '@draftroom/canvas-schema/reactions'
 import { LobbyElementsSnapshot } from '@draftroom/contracts'
 
 // biome-ignore lint/suspicious/noExplicitAny: elements are JSON, read field by field
@@ -170,7 +171,8 @@ export function filesOfElements(
 
 /**
  * A copy of the elements for a portable archive (v2): without `lobbyServer.privateNote.author`, the
- * `plusOne:*` votes and `lastEditedBy` (as today's export strips authors). Tombstones are dropped.
+ * `plusOne:*` votes, the `react:*` reactions (wave N) and `lastEditedBy` (as today's export strips authors).
+ * Tombstones are dropped.
  */
 export function exportableElements(elements: readonly unknown[]): Element[] {
   return liveElements(elements).map((el) => {
@@ -179,7 +181,7 @@ export function exportableElements(elements: readonly unknown[]): Element[] {
     if (custom) {
       if (isObject(custom.lobby))
         custom.lobby = Object.fromEntries(
-          Object.entries(custom.lobby).filter(([k]) => !k.startsWith('plusOne:')),
+          Object.entries(custom.lobby).filter(([k]) => !k.startsWith('plusOne:') && !isReactionKey(k)),
         )
       if (isObject(custom.lobbyServer)) {
         const s = { ...custom.lobbyServer }
