@@ -64,8 +64,9 @@ describe.skipIf(!fontkit)('vector pages with Lobby’s fonts (needs @pdf-lib/fon
       expect(descriptor.get(PDFName.of('FontFile2')), 'a TrueType font program').toBeDefined()
       expect(obj.get(PDFName.of('ToUnicode')), 'a ToUnicode map (searchable)').toBeDefined()
       // a subset: the program holds the few glyphs drawn (a whole Nunito or Xiaolai file is tens of KB)
-      const program = doc.context.lookup(descriptor.get(PDFName.of('FontFile2')), PDFRawStream)
-      expect(program.contents.length).toBeLessThan(20_000)
+      const program = doc.context.lookup(descriptor.get(PDFName.of('FontFile2')))
+      expect(program).toBeInstanceOf(PDFRawStream)
+      expect((program as PDFRawStream).contents.length).toBeLessThan(20_000)
       embedded.push(String(obj.get(PDFName.of('BaseFont'))))
     }
     // Nunito for the Latin line, and at least one Xiaolai file for the CJK one
