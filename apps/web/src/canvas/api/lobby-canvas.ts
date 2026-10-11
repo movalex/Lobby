@@ -602,6 +602,13 @@ export interface ExportOptions {
    * placed PDF pages draw their face's preview.
    */
   readonly files?: 'original' | 'display' | 'canvas'
+  /**
+   * Wave N (WS6, the vector PDF): how `svg` carries the text's fonts. `embedded` (the default, today's): the
+   * covering woff2 faces as `@font-face` data: URLs (fonts.ts), a self-contained SVG. `names`: no `@font-face`
+   * at all, the text naming its families only, for a consumer that embeds the fonts itself (the PDF worker's
+   * subset fonts). Ignored by `png`, `canvas` and `copy`.
+   */
+  readonly fonts?: 'embedded' | 'names'
 }
 
 export interface LobbyExport {
@@ -658,6 +665,28 @@ export interface LobbyRoom {
    * means "not known": offer nothing that needs a newer room.
    */
   contractsRev(): number | null
+}
+
+/**
+ * Wave N (WS1, N1-6; frozen by the wave N foundation): find what a feature draws without walking the whole scene
+ * on every change (a 10k-element board at 60 fps). Every read is of LIVE elements (deleted ones excluded), in
+ * paint order, and reactive on the scene (like `items()`). The foundation's implementation is a full walk per
+ * read (parts/scene-index.ts); WS1's keeps an incremental index whose answers equal it.
+ */
+export interface SceneIndex {
+  /** @owner 2C · the live sticky notes */
+  notes(): readonly CanvasElement[]
+  /** @owner 2C · the live elements with a `customData.lobby` key that starts with `prefix` (`react:`, `plusOne:`) */
+  withLobbyKeyPrefix(prefix: string): readonly CanvasElement[]
+  /** @owner 2C · the live elements whose `frameId` is `frameId` */
+  byFrame(frameId: string): readonly CanvasElement[]
+  /** @owner 2C · the live elements whose `customData.lobby.kind` is `kind` (`board-card`, `link-card`) */
+  byKind(kind: string): readonly CanvasElement[]
+  /**
+   * @owner 2C · called after the scene applied a batch, with the ids that changed (created, updated or deleted;
+   * local or remote), once the index answers for it. Returns the unsubscribe.
+   */
+  onChanged(listener: (ids: readonly string[]) => void): () => void
 }
 
 export interface LobbySettingsValues {
@@ -764,6 +793,8 @@ export interface LobbyCanvas extends CanvasPort {
   readonly settings: LobbySettings
   /** Wave L: the board's room (its contracts revision). */
   readonly room: LobbyRoom
+  /** Wave N: the scene index (live notes, lobby key prefixes, frames, kinds), for overlays on big boards. */
+  readonly index: SceneIndex
   /** @owner 2C · getColorMode, getCurrentTheme, user.getIsDarkMode (the palette's dark filter is applied by the engine) */
   theme(): 'light' | 'dark'
 }

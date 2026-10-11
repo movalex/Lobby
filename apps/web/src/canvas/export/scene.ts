@@ -375,7 +375,11 @@ export async function exportSceneSvg(ctx: SceneExportContext, opts: SceneExportO
     exportingFrame: p.exportingFrame as never,
     skipInliningFonts: true,
   })
-  const { rules, urls } = await fontFaceRules(p.elements, ctx.fetchImpl ? { fetchImpl: ctx.fetchImpl } : {})
+  // wave N (WS6): `fonts: 'names'` leaves the faces to the consumer (the PDF worker embeds subset fonts itself)
+  const { rules, urls } =
+    opts.fonts === 'names'
+      ? { rules: [] as string[], urls: [] as string[] }
+      : await fontFaceRules(p.elements, ctx.fetchImpl ? { fetchImpl: ctx.fetchImpl } : {})
   let style = svg.querySelector('style.style-fonts')
   if (!style) {
     style = svg.ownerDocument.createElementNS('http://www.w3.org/2000/svg', 'style')

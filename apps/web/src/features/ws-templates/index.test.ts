@@ -33,9 +33,11 @@ function ctxFor(
 }
 
 describe('the board feature', () => {
-  it('is registered (with ai-workspace-ask after it, last); both commands are static palette commands', () => {
+  it('is registered (with ai-workspace-ask right after it); both commands are static palette commands', () => {
     const ids = CANVAS_FEATURES.map((f) => f.id)
-    expect(ids.slice(-2)).toEqual(['ws-templates', 'ai-workspace-ask'])
+    // wave N's features follow them (features/wave-n-stubs.test.ts)
+    const at = ids.indexOf('ws-templates')
+    expect(ids.slice(at, at + 2)).toEqual(['ws-templates', 'ai-workspace-ask'])
     expect(feature.commands?.map((c) => c.id)).toEqual([WS_TEMPLATES_SAVE_COMMAND_ID])
     expect(askFeature.commands?.map((c) => c.id)).toEqual(['ai.askWorkspace'])
     for (const id of [WS_TEMPLATES_SAVE_COMMAND_ID, 'ai.askWorkspace'])

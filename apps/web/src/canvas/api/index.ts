@@ -70,6 +70,7 @@ export type {
   RemoteCursor,
   ReorderTo,
   RosterEntry,
+  SceneIndex,
   ScenePoint,
   ScreenPoint,
   StyleValues,

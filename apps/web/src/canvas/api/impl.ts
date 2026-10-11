@@ -59,6 +59,7 @@ import { createExportPart } from './parts/export.ts'
 import { createFilesPart } from './parts/files.ts'
 import { createFollowPart } from './parts/follow.ts'
 import { createNavigationPart } from './parts/navigation.ts'
+import { createSceneIndexPart } from './parts/scene-index.ts'
 import { createStylesPart } from './parts/styles.ts'
 import { createToolsPart } from './parts/tools.ts'
 import type { PartDeps } from './parts/types.ts'
@@ -206,6 +207,12 @@ const COMPOSED_BY_2C: ReadonlySet<string> = new Set([
   'presence.draggerOf',
   // wave L (L6-1): the engine core's presence hub (canvas/presence/laser.ts; empty on a bare port)
   'presence.lasers',
+  // wave N (WS1, N1-6): the scene index (parts/scene-index.ts; composed from the canvas's own items())
+  'index.notes',
+  'index.withLobbyKeyPrefix',
+  'index.byFrame',
+  'index.byKind',
+  'index.onChanged',
   'text.of',
   'visibleBounds',
   'sceneToOverlay',
@@ -334,6 +341,12 @@ export const LOBBY_CANVAS_MEMBERS: readonly MemberInfo[] = [
       ['settings.set', '2C'],
       // wave L (W6 for the wave, as the CanvasPort owner; the value is the board session's)
       ['room.contractsRev', '2C'],
+      // wave N (WS1, N1-6; frozen by the foundation): the scene index
+      ['index.notes', '2C'],
+      ['index.withLobbyKeyPrefix', '2C'],
+      ['index.byFrame', '2C'],
+      ['index.byKind', '2C'],
+      ['index.onChanged', '2C'],
       ['tx.reorder', '2C'],
       ['tx.setFrame', '2C'],
       ['tx.group', '2C'],
@@ -548,6 +561,8 @@ export function createLobbyCanvas(deps: LobbyCanvasDeps): LobbyCanvasHandle {
   const filesPart = createFilesPart(partDeps)
   // CR-3A-6 (3a): the highlighter and a read-only Hand around the port's setTool / tool (parts/tools.ts)
   const toolsPart = createToolsPart(partDeps)
+  // wave N (WS1, N1-6): the scene index (parts/scene-index.ts)
+  const indexPart = createSceneIndexPart(partDeps)
 
   const newId = () => board?.newId() ?? fallbackId()
   const lobbyTx = (tx: CanvasTx): LobbyTx => {
@@ -878,6 +893,7 @@ export function createLobbyCanvas(deps: LobbyCanvasDeps): LobbyCanvasHandle {
         return board ? board.room.contractsRev() : null
       },
     },
+    index: indexPart,
   }
   self = canvas
   return {

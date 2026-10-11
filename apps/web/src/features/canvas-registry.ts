@@ -3,11 +3,14 @@
 // so no wave-3 owner edits this list. A new feature is a change request. The tldraw page keeps
 // features/registry.ts (BOARD_FEATURES) until wave 4. Wave L: W3 is this list's sole owner (it adds the wave L
 // feature folders). Wave M: lead-only; the foundation registers 'ws-templates' and 'ai-workspace-ask' (W8's).
+// Wave N: lead-only; the foundation registers 'visits' (WS4's) and 'board-links' (WS7's), empty. Reactions are inside
+// workshops (WS3, workshops/ported/note-reactions.ts) and Capture the room inside ai (WS5): no feature of their own.
 import type { CanvasFeature } from '../canvas/api/index.ts'
 import { feature as mediaFeature } from '../file-card/ported/index.tsx'
 import { feature as a11yFeature } from './a11y/ported/index.tsx'
 import { feature as aiFeature } from './ai/ported/index.tsx'
 import { feature as aiWorkspaceAskFeature } from './ai/workspace-ask/ported/index.tsx'
+import { feature as boardLinksFeature } from './board-links/index.tsx'
 import { feature as canvasUxFeature } from './canvas-ux/ported/index.tsx'
 import { feature as navigationFeature } from './canvas-ux/ported/navigation/index.tsx'
 import { feature as commandPaletteFeature } from './command-palette/index.tsx'
@@ -24,6 +27,7 @@ import { feature as sharingFeature } from './sharing/ported/index.tsx'
 import { feature as sortFeature } from './sort/ported/index.tsx'
 import { feature as tagsFeature } from './tags/ported/index.tsx'
 import { feature as thumbnailsFeature } from './thumbnails/ported/index.tsx'
+import { feature as visitsFeature } from './visits/index.tsx'
 import { feature as workshopsFeature } from './workshops/ported/index.tsx'
 import { feature as wsTemplatesFeature } from './ws-templates/index.tsx'
 
@@ -58,4 +62,7 @@ export const CANVAS_FEATURES: readonly CanvasFeature[] = [
   // wave M (registered empty by the foundation; W8 fills them): workspace templates and Ask across boards
   wsTemplatesFeature,
   aiWorkspaceAskFeature,
+  // wave N (registered empty by the foundation; WS4 and WS7 fill them): since your last visit, links between boards
+  visitsFeature,
+  boardLinksFeature,
 ]

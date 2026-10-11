@@ -511,6 +511,7 @@ describe('the LobbyCanvas member table', () => {
       LobbyFiles: 'files.',
       LobbySettings: 'settings.',
       LobbyRoom: 'room.',
+      SceneIndex: 'index.',
       LobbyCanvas: '',
       TransactOptions: 'transact.',
     }
@@ -630,7 +631,8 @@ describe('feature registries and installation', () => {
       const src = readFileSync(join(SRC, 'features', f), 'utf8')
       const owner = /^\/\/ OWNER: (\w+)/.exec(src)?.[1] ?? ''
       const firstLine = src.split('\n')[0] ?? ''
-      const known = waveL.test(f) ? /^\/\/ .*\bW[1-8]\b/.test(firstLine) : isOwner(owner)
+      // wave N's feature folders (the foundation) name a wave N workstream (WS1..WS7): `// OWNER: WS4 (wave N, ...)`
+      const known = waveL.test(f) ? /^\/\/ .*\b(W[1-8]|WS[1-7])\b/.test(firstLine) : isOwner(owner)
       expect(known, `${f} names owner ${owner}`).toBe(true)
     }
   })
