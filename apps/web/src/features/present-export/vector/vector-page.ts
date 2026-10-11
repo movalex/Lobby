@@ -4,7 +4,9 @@
 //    real, selectable and searchable in every script Lobby's fonts cover; characters no Lobby font has (emoji) are
 //    drawn as small pictures at their place;
 //  - images: taken out of the SVG and drawn natively (embedJpg / embedPng; other formats transcoded) at their
-//    transform, under their crop and rounded-corner clips, so photos keep their pixels and text stays vector;
+//    transform, under their crop mask and their symbol's viewport, so photos keep their pixels and text stays vector
+//    (Excalidraw writes an image's rounded-corner clip-path in the SVG namespace, which browsers ignore: so does
+//    this);
 //  - shapes: drawSvg, element by element in paint order, each with its resolved transform and style; dashed strokes
 //    natively (drawSvg drops dashes); clip paths and masks (frame clips, an arrow label's hole) as PDF clips;
 //  - Lobby's soft note shadow (an SVG filter) as a light offset copy of the note.
@@ -42,7 +44,6 @@ import {
   type ClipRef,
   hrefOf,
   IDENTITY,
-  type Leaf,
   type Matrix,
   multiply,
   num,
@@ -646,13 +647,6 @@ function shapePath(el: XElement): string {
 // A clip path is built in PAGE coordinates (each point mapped here): a PDF path object may not contain `cm`, so the
 // transform is applied to the points, which is exact for lines and Bézier curves under an affine map.
 
-function invert(m: Matrix): Matrix | null {
-  const [a, b, c, d, e, f] = m
-  const det = a * d - b * c
-  if (!Number.isFinite(det) || Math.abs(det) < 1e-12) return null
-  return [d / det, -b / det, -c / det, a / det, (c * f - d * e) / det, (b * e - a * f) / det]
-}
-
 /** Absolute or relative M/L/H/V/C/Q/Z path data → PDF path operators, every point mapped by `m`. */
 function pathOps(d: string, m: Matrix): PDFOperator[] | null {
   const tokens = d.match(/[A-Za-z]|[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?/g) ?? []
@@ -896,7 +890,3 @@ export function drawVectorFrame(
     i = j
   }
 }
-
-/** Every <text>'s characters (for the tests' expectations). */
-export const _internals = { invert, pathOps, shapePath, dashes, colour }
-export type { Leaf }
