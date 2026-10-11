@@ -24,6 +24,7 @@
 // selects the visible element under it), the hover cursor (`default` over blocked elements) and touch
 // (taps, double-taps and long-presses), and adds the board page seam at the end of this file:
 // `installBoardOverrides` provides `isBlocked` and `isHidden` through `registries.ts`.
+
 import {
   DEFAULT_COLLISION_THRESHOLD,
   sceneCoordsToViewportCoords,
@@ -49,6 +50,7 @@ import type {
 } from '@excalidraw/excalidraw/types'
 import { pointFrom } from '@excalidraw/math'
 import type { GlobalPoint } from '@excalidraw/math/types'
+import { noteSceneWalk } from './api/parts/scene-index.ts'
 import type { LodTarget } from './lod/cull.ts'
 import type { ScenePoint } from './port.ts'
 import type { CanvasRegistries, HitBlock } from './registries.ts'
@@ -364,6 +366,7 @@ export class RenderOverrides {
     this.dirtyExpansion = false
     const all: string[] = []
     for (const ids of this.hiddenBySource.values()) all.push(...ids)
+    if (all.length) noteSceneWalk('overrides.hidden')
     this.hiddenExpanded = all.length ? expandHidden(all, this.opts.elements()) : new Set()
   }
 }
@@ -541,6 +544,7 @@ export class HitGuardCore {
   }
 
   blockedAtScene(x: number, y: number): BlockedHit | null {
+    noteSceneWalk('overrides.hit')
     const appState = this.api.getAppState()
     const el = elementAtScenePoint(this.api.getSceneElements() as ExcalidrawElement[], appState, x, y)
     if (!el) return null
@@ -555,6 +559,7 @@ export class HitGuardCore {
 
   /** §2.7 dead zone: the visible element at the point, skipping hidden and moving ones, or null. */
   visibleAtScene(x: number, y: number): ExcalidrawElement | null {
+    noteSceneWalk('overrides.hit')
     const appState = this.api.getAppState()
     return elementAtScenePoint(
       this.api.getSceneElements() as ExcalidrawElement[],

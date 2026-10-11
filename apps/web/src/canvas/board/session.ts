@@ -41,6 +41,13 @@ import type {
   LobbyTx,
   ScenePoint,
 } from '../api/lobby-canvas.ts'
+import {
+  itemsCallerOf,
+  noteSceneWalk,
+  resetSceneWalks,
+  sceneWalks,
+  sceneWalksCounted,
+} from '../api/parts/scene-index.ts'
 import { createFeatureRegistries, type ExternalContent, type FeatureRegistries } from '../api/registries.ts'
 import { markRoomReady, ROOM_READY_FALLBACK_MS, roomReadyOf } from '../api/room-ready.ts'
 import type { LobbyRole } from '../engine/interaction.ts'
@@ -936,6 +943,10 @@ export class LobbyBoardSession {
         }
       },
       readOnly: () => this.snap.readonly,
+      // N1-6: a drag's frame children from the scene index (no walk of the scene at a drag's start)
+      frameChildren: (frameId) =>
+        (this.handle?.canvas.index.byFrame(frameId) as unknown as readonly SceneElement[] | undefined) ??
+        null,
     })
     this.presence = presence
     this.registries.dragger.provide((id) => presence.draggerOf(id))
@@ -951,6 +962,15 @@ export class LobbyBoardSession {
       },
     })
     this.port = port
+    // N1-6 (dev and dev-auth builds): every `canvas.items()` read is a walk of the whole scene by its caller, counted
+    // per site (`window.__lobbyWalks`; e2e/excalidraw/n1-drag-10k.spec.ts counts them per pointer move)
+    if (sceneWalksCounted()) {
+      const items = port.items.bind(port)
+      ;(port as { items: typeof port.items }).items = () => {
+        noteSceneWalk(itemsCallerOf(new Error().stack))
+        return items()
+      }
+    }
     // the image loader (one per page; 3g's file cards and exports find it through the registries)
     const files = installBoardFiles({
       api,
@@ -1151,6 +1171,10 @@ export class LobbyBoardSession {
     const uninstallFacade = installFacade(facadePort, this.registries)
     if (uninstallFacade) offs.push(uninstallFacade)
     if (DEV_AUTH_ENABLED) {
+      ;(window as unknown as { __lobbyWalks?: unknown }).__lobbyWalks = {
+        counts: () => sceneWalks(),
+        reset: () => resetSceneWalks(),
+      }
       ;(window as unknown as { __lobbyBoard?: unknown }).__lobbyBoard = {
         session: this,
         core: this.core,

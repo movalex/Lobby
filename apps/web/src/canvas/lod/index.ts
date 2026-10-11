@@ -25,6 +25,7 @@
 import type { BinaryFiles, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 import type { CanvasChange, LobbyCanvas } from '../api/lobby-canvas.ts'
+import { noteSceneWalk } from '../api/parts/scene-index.ts'
 import type { LodTarget } from './cull.ts'
 import { installFrameNameGuard } from './frame-names.ts'
 import { type LodBitmap, type LodElement, LodModel, type LodRect, lodActiveAt, lodScale } from './model.ts'
@@ -249,6 +250,7 @@ export function installLod(o: LodOptions): LodHandle {
 
   const elements = () =>
     api.getSceneElementsMapIncludingDeleted() as unknown as ReadonlyMap<string, LodElement>
+  noteSceneWalk('lod.reset')
   model.reset(elements().values())
 
   const viewNow = () => {
@@ -368,6 +370,7 @@ export function installLod(o: LodOptions): LodHandle {
   /** The model's frames match the scene's (a snapshot installed without a change batch): else rebuilt. */
   const reconcile = () => {
     let frames = 0
+    noteSceneWalk('lod.reconcile')
     for (const e of elements().values()) if (e.type === 'frame' && !e.isDeleted) frames++
     if (frames !== model.stats().frames) model.reset(elements().values())
   }
@@ -422,6 +425,7 @@ export function installLod(o: LodOptions): LodHandle {
         if (added.length) {
           const fresh = new Set(added)
           const ids: string[] = []
+          noteSceneWalk('lod.files')
           for (const e of elements().values()) {
             const fileId = (e as { fileId?: string | null }).fileId
             if (e.type === 'image' && fileId && fresh.has(fileId)) ids.push(e.id)
