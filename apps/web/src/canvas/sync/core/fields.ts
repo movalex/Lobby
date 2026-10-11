@@ -53,6 +53,112 @@ export const deepEqual = (a: unknown, b: unknown): boolean => {
 
 export const clone = <T>(v: T): T => (v === undefined ? v : structuredClone(v))
 
+// ---- N1-2 (wave N, PERF-3b): element copies that are never shared ---------------------------------------------
+
+type Json = unknown
+
+/** A deep copy of plain JSON data (arrays and plain objects; anything else through structuredClone). */
+function jsonCopy(v: Json): Json {
+  if (v === null || typeof v !== 'object') return v
+  if (Array.isArray(v)) {
+    const out = new Array(v.length)
+    for (let i = 0; i < v.length; i++) out[i] = jsonCopy(v[i])
+    return out
+  }
+  const proto = Object.getPrototypeOf(v)
+  if (proto !== Object.prototype && proto !== null) return structuredClone(v)
+  const out: Record<string, unknown> = {}
+  for (const k in v as Record<string, unknown>) out[k] = jsonCopy((v as Record<string, unknown>)[k])
+  return out
+}
+
+/** `[x, y]` pairs (points, fixed points, an image's scale). */
+const pairs = (v: readonly (readonly number[])[]): number[][] => {
+  const out = new Array(v.length)
+  for (let i = 0; i < v.length; i++) {
+    const p = v[i] as readonly number[]
+    out[i] = Array.isArray(p) ? p.slice() : jsonCopy(p)
+  }
+  return out
+}
+
+/** `customData`: a new object, a new `lobby`, and a copy of each object-valued lobby value. */
+function copyCustomData(cd: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...cd }
+  const lobby = cd.lobby
+  if (lobby && typeof lobby === 'object' && !Array.isArray(lobby)) {
+    const l: Record<string, unknown> = {}
+    for (const k in lobby as Record<string, unknown>) {
+      const v = (lobby as Record<string, unknown>)[k]
+      l[k] = v !== null && typeof v === 'object' ? structuredClone(v) : v
+    }
+    out.lobby = l
+  } else if (lobby !== undefined) out.lobby = jsonCopy(lobby)
+  for (const k in out) if (k !== 'lobby') out[k] = jsonCopy(out[k])
+  return out
+}
+
+/**
+ * A copy of `el` that shares no object with it (N1-2), typed by the wire shape (canvas-schema elements.ts): a
+ * top-level spread, new `points`, `pressures`, `groupIds`, `boundElements` and `fixedSegments` arrays, a new
+ * `customData` and `customData.lobby` (structuredClone only for object-valued lobby values), new binding,
+ * roundness, crop and scale values, and a plain deep copy of any other object-valued field. It equals
+ * `structuredClone(el)` for every element of the schema (fields.test.ts) at a fraction of its cost: the hot
+ * paths (the cache paint, `rebuild`, the confirmed copies a scene lacks) copy every element of a board.
+ *
+ * Why a copy at all: Excalidraw mutates scene elements in place (`mutateElement`, `bumpVersion`), so a confirmed
+ * copy handed to the scene would change behind the core's back (hashes, lost-push decisions, undo). The scene
+ * always gets its own copy; the confirmed map keeps the decoded row (dev builds deep-freeze it).
+ */
+export function copyElement<T extends Readonly<Record<string, unknown>>>(el: T): T {
+  const out: Record<string, unknown> = { ...el }
+  for (const k in out) {
+    const v = out[k]
+    if (v === null || typeof v !== 'object') continue
+    switch (k) {
+      case 'points':
+        out[k] = Array.isArray(v) ? pairs(v as number[][]) : jsonCopy(v)
+        break
+      case 'pressures':
+      case 'groupIds':
+      case 'scale':
+        out[k] = Array.isArray(v) ? (v as unknown[]).slice() : jsonCopy(v)
+        break
+      case 'boundElements':
+        out[k] = Array.isArray(v)
+          ? (v as Record<string, unknown>[]).map((b) =>
+              b && typeof b === 'object' && !Array.isArray(b) ? { ...b } : jsonCopy(b),
+            )
+          : jsonCopy(v)
+        break
+      case 'fixedSegments':
+        out[k] = Array.isArray(v)
+          ? (v as Record<string, unknown>[]).map((s) =>
+              s && typeof s === 'object' && Array.isArray(s.start) && Array.isArray(s.end)
+                ? { ...s, start: (s.start as number[]).slice(), end: (s.end as number[]).slice() }
+                : jsonCopy(s),
+            )
+          : jsonCopy(v)
+        break
+      case 'customData':
+        out[k] = Array.isArray(v) ? jsonCopy(v) : copyCustomData(v as Record<string, unknown>)
+        break
+      default:
+        out[k] = jsonCopy(v)
+    }
+  }
+  return out as T
+}
+
+/** Deep-freezes plain data (the dev check on confirmed copies, N1-2). Returns `v`. */
+export function deepFreeze<T>(v: T): T {
+  if (v === null || typeof v !== 'object' || Object.isFrozen(v)) return v
+  Object.freeze(v)
+  if (Array.isArray(v)) for (const x of v) deepFreeze(x)
+  else for (const k in v as Record<string, unknown>) deepFreeze((v as Record<string, unknown>)[k])
+  return v
+}
+
 /** `customData.lobby` of an element (never null). */
 export const lobbyOf = (el: Rec | undefined): Record<string, unknown> =>
   ((el?.customData as { lobby?: Record<string, unknown> } | undefined)?.lobby ?? {}) as Record<
@@ -191,7 +297,7 @@ export function boundPatch(
  */
 export function copyGroups(dst: SceneElement, src: SceneElement, groups: Iterable<GroupKey>): SceneElement {
   // a deep copy: the result goes into the scene, and Excalidraw mutates scene elements in place
-  const out: Record<string, unknown> = structuredClone(dst) as Record<string, unknown>
+  const out: Record<string, unknown> = copyElement(dst) as Record<string, unknown>
   const kind = kindOrNull(src) ?? kindOrNull(dst)
   let lobby: Record<string, unknown> | null = null
   for (const g of groups) {
@@ -201,7 +307,7 @@ export function copyGroups(dst: SceneElement, src: SceneElement, groups: Iterabl
     }
     if (g.startsWith('c:')) {
       const key = g.slice(2)
-      lobby ??= { ...lobbyOf(dst) }
+      lobby ??= { ...lobbyOf(out) }
       const v = lobbyOf(src)[key]
       if (v === undefined) delete lobby[key]
       else lobby[key] = clone(v)
@@ -222,7 +328,7 @@ export function copyGroups(dst: SceneElement, src: SceneElement, groups: Iterabl
     }
   }
   if (lobby) {
-    const cd = { ...((dst.customData as Record<string, unknown> | undefined) ?? {}) }
+    const cd = { ...((out.customData as Record<string, unknown> | undefined) ?? {}) }
     if (Object.keys(lobby).length) cd.lobby = lobby
     else delete cd.lobby
     if (Object.keys(cd).length) out.customData = cd

@@ -70,6 +70,7 @@ import {
   RESUME_FROM_CACHE,
 } from '../sync/adapter/snapshot-cache.ts'
 import { LobbyEngineCore } from '../sync/core/engine.ts'
+import { setDevChecks } from '../sync/flags.ts'
 import { bump } from '../sync/headless/scene.ts'
 import { connectQuery, createSocketTransport, type SocketTransport } from '../sync/transport/socket.ts'
 import type { OfflineQueueStore, SaveStatus, SceneAdapter, SceneElement } from '../sync/types.ts'
@@ -86,6 +87,9 @@ import { BoardInput } from './input.ts'
 import { PeerStore } from './peers.ts'
 import { groupsWithoutHiddenMembers } from './select-groups.ts'
 import { SettingsStore } from './settings.ts'
+
+// N1-2 (wave N): the core deep-freezes its confirmed copies in the Vite dev server (and vitest), never in a build
+setDevChecks(import.meta.env.DEV)
 
 export type BoardPhase = 'connecting' | 'preparing' | 'ready' | 'offline' | 'closed'
 

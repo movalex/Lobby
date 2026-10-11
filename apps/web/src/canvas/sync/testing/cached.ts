@@ -12,6 +12,7 @@ import { type CoreEvent, LobbyEngineCore } from '../core/engine.ts'
 import { createMapScene, type MapScene } from '../headless/scene.ts'
 import type { OfflineQueueStore, ServerInbound } from '../types.ts'
 import type { Harness, TestClient } from './harness.ts'
+import { checkSharingOnApply } from './sharing.ts'
 
 /** The record `c`'s session would write now (throws when the core has nothing to write). */
 export function recordOf(
@@ -63,7 +64,9 @@ export function openFromCache(
 ): CachedPage {
   const uid = o.uid ?? 'alice'
   const tab = o.tab ?? 'tab2'
-  const scene = createMapScene()
+  // N1-2: every apply of the core is followed by the no-sharing assertion (./sharing.ts)
+  let coreRef: LobbyEngineCore | null = null
+  const scene = checkSharingOnApply(createMapScene(), () => coreRef)
   const transport = h.room.connect({ uid, tab, readonly: o.readonly })
   const events: CoreEvent[] = []
   const logs: CachedPage['logs'] = []
@@ -77,6 +80,7 @@ export function openFromCache(
     clearTimer: h.clock.clearTimer,
     log: (event, detail) => logs.push({ event, detail }),
   })
+  coreRef = core
   core.on((e) => events.push(e))
   const started = record ? core.startFromCache(record, { resume: o.resume ?? true }) : false
   o.beforeStart?.({ scene, core })

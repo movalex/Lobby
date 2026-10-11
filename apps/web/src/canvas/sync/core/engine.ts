@@ -84,6 +84,7 @@ import {
   type Welcome,
 } from '@draftroom/canvas-schema/protocol'
 import { generateNKeysBetween } from '@excalidraw/fractional-indexing'
+import { devChecks } from '../flags.ts'
 import { compareIndexThenId, indexPrePass, isValidKey } from '../index-keys.ts'
 import type {
   EngineCore,
@@ -108,8 +109,10 @@ import { IDLE_GESTURE } from '../types.ts'
 import {
   buildPatch,
   clone,
+  copyElement,
   copyGroups,
   deepEqual,
+  deepFreeze,
   diffGroups,
   FIT_FIELDS,
   type GroupKey,
@@ -431,7 +434,7 @@ export interface LostPart {
 export function keepTombstoneContent(had: SceneElement | undefined, next: SceneElement): SceneElement {
   if (!had || next.isDeleted !== true || had.type !== next.type) return next
   if (!isRedactedTombstone(next as never)) return next
-  const out: Record<string, unknown> = clone(had) as Record<string, unknown>
+  const out: Record<string, unknown> = copyElement(had) as Record<string, unknown>
   for (const k of TOMBSTONE_KEYS) out[k] = (next as Record<string, unknown>)[k]
   return out as SceneElement
 }
@@ -580,6 +583,8 @@ export class LobbyEngineCore implements EngineCore {
   private readonly setTimer: (fn: () => void, ms: number) => unknown
   private readonly clearTimer: (h: unknown) => void
   private readonly logFn: EngineCoreOptions['log']
+  /** N1-2: dev and test builds deep-freeze every confirmed copy (sync/flags.ts devChecks) */
+  private readonly freezeConfirmed = devChecks()
 
   // ---- server state
   welcome: Welcome | null = null
@@ -891,10 +896,10 @@ export class LobbyEngineCore implements EngineCore {
     if (this.started || this.stopped || this.welcomes > 0) return false
     if (this.scene.read().elements.length > 0) return false
     if (!cache.elements.length) return false
-    this.scene.apply(cache.elements.map((el) => clone(el)))
+    this.scene.apply(cache.elements.map((el) => copyElement(el)))
     if (o.resume) {
       this.confirmedMap.clear()
-      for (const el of cache.elements) this.confirmedMap.set(el.id, clone(el))
+      for (const el of cache.elements) this.confirm(el.id, copyElement(el))
       this.horizon = cache.horizon
       this.resumeFrom = { clock: cache.clock, epoch: cache.epoch }
     }
@@ -1022,6 +1027,16 @@ export class LobbyEngineCore implements EngineCore {
 
   confirmed(id: string): SceneElement | undefined {
     return this.confirmedMap.get(id)
+  }
+
+  /**
+   * N1-2 (wave N): the one writer of the confirmed map. A row decoded from a snapshot or a `c` op goes in as it is
+   * (nothing else holds it; the scene always gets its own `copyElement`); in dev and test builds it is deep-frozen,
+   * so an in-place write to a confirmed copy (Excalidraw's `mutateElement` on an element that was handed to the
+   * scene uncopied) throws where it happens.
+   */
+  private confirm(id: string, el: SceneElement): void {
+    this.confirmedMap.set(id, this.freezeConfirmed ? deepFreeze(el) : el)
   }
 
   /** Every server copy (the snapshot and catch-up, then `changes`). */
@@ -1676,7 +1691,7 @@ export class LobbyEngineCore implements EngineCore {
   private rebuild(id: string): SceneElement | undefined {
     const conf = this.confirmedMap.get(id)
     const local = this.current.get(id)
-    if (!local) return conf ? clone(conf) : undefined
+    if (!local) return conf ? copyElement(conf) : undefined
     const t = this.tracked.get(id)
     if (!conf) return t?.isNew || this.inflightHas(id) || this.awaitingCatchUp.has(id) ? local : undefined
     const groups = new Set<GroupKey>([...(t?.dirty ?? []), ...this.inflightGroups(id)])
@@ -1694,7 +1709,7 @@ export class LobbyEngineCore implements EngineCore {
     // the local derivative suffix (`ver_X@display`) is not a change, and not the server's either: it
     // stays while the wire file is the same (E9, CR-W5-3G-3: before, every rebuild put the scene back on
     // the 512 px thumb and the derivative swap never stuck)
-    if (groups.size === 0) return keepLocalFileSuffix(clone(conf), local)
+    if (groups.size === 0) return keepLocalFileSuffix(copyElement(conf), local)
     const out = keepLocalFileSuffix(copyGroups(conf, local, groups), local) as Record<string, unknown>
     out.version = Math.max(local.version, conf.version)
     out.versionNonce = local.versionNonce
@@ -1755,7 +1770,7 @@ export class LobbyEngineCore implements EngineCore {
       if (seen.has(id) || this.vanish.has(id)) continue
       before.set(id, undefined)
       touched.push(id)
-      put(id, clone(el))
+      put(id, copyElement(el))
     }
     this.vanish.clear()
     if (touched.length === 0) return
@@ -2002,7 +2017,7 @@ export class LobbyEngineCore implements EngineCore {
     const had = new Map(this.confirmedMap)
     this.confirmedMap.clear()
     for (const el of frame.elements)
-      this.confirmedMap.set(el.id, keepTombstoneContent(had.get(el.id), el as unknown as SceneElement))
+      this.confirm(el.id, keepTombstoneContent(had.get(el.id), el as unknown as SceneElement))
     this.holdRecord(mark)
     const before = this.clock
     this.clock = frame.clock
@@ -2523,7 +2538,7 @@ export class LobbyEngineCore implements EngineCore {
 
   private applyServerOp(op: ServerOp, affected: Set<string>): boolean {
     if (op.k === 'c') {
-      this.confirmedMap.set(
+      this.confirm(
         op.el.id,
         keepTombstoneContent(this.confirmedMap.get(op.el.id), op.el as unknown as SceneElement),
       )
@@ -2535,7 +2550,7 @@ export class LobbyEngineCore implements EngineCore {
       this.log('resync_pv', { id: op.id, have: cur?.version ?? null, pv: op.pv })
       return false
     }
-    this.confirmedMap.set(op.id, overlayPatchOp(cur, op))
+    this.confirm(op.id, overlayPatchOp(cur, op))
     affected.add(op.id)
     return true
   }
@@ -2954,7 +2969,7 @@ export class LobbyEngineCore implements EngineCore {
         // a create of an id the server has, live: this client's own create landed before (element ids are
         // random), its ack lost with a socket, or a queued offline entry replayed after a reload (B4 D1).
         // Not a refusal: the server's copy is the element, and whatever is still dirty goes out as patches
-        this.confirmedMap.set(id, keepTombstoneContent(this.confirmedMap.get(id), stored))
+        this.confirm(id, keepTombstoneContent(this.confirmedMap.get(id), stored))
         const t = this.tracked.get(id)
         if (t) {
           t.isNew = false
@@ -2969,7 +2984,7 @@ export class LobbyEngineCore implements EngineCore {
       const held = mark?.has(id) ? this.heldRemote.get(id) : undefined
       if (held && sent) for (const g of sent.groups) held.groups.add(g)
       if (stored) {
-        this.confirmedMap.set(id, keepTombstoneContent(this.confirmedMap.get(id), stored))
+        this.confirm(id, keepTombstoneContent(this.confirmedMap.get(id), stored))
         // a refused create goes back to the server's copy: it is no create of ours any more (it stayed
         // "new" and Saved never came)
         if (sent?.create) this.tracked.delete(id)
