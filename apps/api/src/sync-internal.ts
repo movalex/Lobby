@@ -60,9 +60,10 @@ export interface SyncInternalClient {
   /**
    * Search (GET /internal/boards/:bid/text): the board's searchable text, or `{ unchanged: true }`
    * when its document clock is still `since`. Optional like placeNotes; the answer is unchecked JSON
-   * (features/search validates it).
+   * (features/search validates it). `links` (wave N, N7-3): ask for the board links too (`?links=1`; an older
+   * sync ignores it and answers without them).
    */
-  boardText?(boardId: string, opts?: { since?: number; maxBytes?: number }): Promise<unknown>
+  boardText?(boardId: string, opts?: { since?: number; maxBytes?: number; links?: boolean }): Promise<unknown>
   /**
    * Excalidraw engine, A2 (docs/EXCALIDRAW-MIGRATION.md §1, §2.4.6; @draftroom/contracts
    * sync-internal.ts): tells sync whether a dot vote is open (POST /internal/boards/:bid/workshop-state,
@@ -199,6 +200,7 @@ export function createHttpSyncInternalClient(opts: {
       const params = new URLSearchParams()
       if (opts.since !== undefined) params.set('since', String(opts.since))
       if (opts.maxBytes !== undefined) params.set('maxBytes', String(opts.maxBytes))
+      if (opts.links) params.set('links', '1')
       const qs = params.size ? `?${params}` : ''
       const res = await call(`/internal/boards/${encodeURIComponent(boardId)}/text${qs}`)
       if (!res.ok) throw await failure(res, 'board text')

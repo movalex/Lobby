@@ -19,9 +19,25 @@ export interface FakeEntry {
   pageId?: string
 }
 
+export interface FakeLink {
+  el: string
+  to: string
+  toEl?: string
+}
+
 export interface FakeSync extends SyncInternalClient {
   /** Replaces a board's canvas text (and moves its document clock). */
   setText(boardId: string, entries: FakeEntry[]): void
+  /**
+   * Wave N (N7-4): replaces a board's board links (and moves its document clock). They are answered only when
+   * asked for (`links`) and `linksSupported` is on: off, the fake is a sync older than wave N, which ignores
+   * the parameter.
+   */
+  setLinks(boardId: string, links: FakeLink[]): void
+  /** Wave N: whether this fake answers `links` when asked (a wave N sync); off by default (an older sync). */
+  linksSupported: boolean
+  /** Every boardText call with its options (wave N: whether it asked for links). */
+  asked: { boardId: string; since: number | undefined; links: boolean }[]
   /** Every boardText call: [boardId, since]. */
   calls: [string, number | undefined][]
   /** When set, boardText rejects (the sync server is unreachable). */
@@ -31,14 +47,19 @@ export interface FakeSync extends SyncInternalClient {
 }
 
 export function fakeSync(): FakeSync {
-  const boards = new Map<string, { clock: number; entries: FakeEntry[] }>()
+  const boards = new Map<string, { clock: number; entries: FakeEntry[]; links: FakeLink[] }>()
   let clock = 0
   const f: FakeSync = {
     calls: [],
+    asked: [],
+    linksSupported: false,
     failing: false,
     gate: null,
     setText(boardId, entries) {
-      boards.set(boardId, { clock: ++clock, entries })
+      boards.set(boardId, { clock: ++clock, entries, links: boards.get(boardId)?.links ?? [] })
+    },
+    setLinks(boardId, links) {
+      boards.set(boardId, { clock: ++clock, entries: boards.get(boardId)?.entries ?? [], links })
     },
     async snapshot() {
       return { documents: [] }
@@ -48,9 +69,10 @@ export function fakeSync(): FakeSync {
     },
     async boardText(boardId, opts = {}) {
       f.calls.push([boardId, opts.since])
+      f.asked.push({ boardId, since: opts.since, links: opts.links === true })
       if (f.gate) await f.gate
       if (f.failing) throw new Error('sync unreachable: TimeoutError')
-      const b = boards.get(boardId) ?? { clock: 0, entries: [] }
+      const b = boards.get(boardId) ?? { clock: 0, entries: [], links: [] }
       if (opts.since !== undefined && opts.since === b.clock)
         return { boardId, clock: b.clock, unchanged: true }
       const entries = b.entries.map((e) => ({
@@ -66,6 +88,7 @@ export function fakeSync(): FakeSync {
         truncated: false,
         bytes: entries.reduce((n, e) => n + Buffer.byteLength(e.text), 0),
         entries,
+        ...(opts.links && f.linksSupported ? { links: b.links } : {}),
       }
     },
   }

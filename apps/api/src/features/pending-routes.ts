@@ -27,14 +27,14 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   // wave M: none left: W5 (open-state M5-1, usage M5-5, /healthz/deep M5-6), W7 (POST /internal/access-many M7-1)
   // and W8 (Ask across boards M8-2, the workspace templates M8-3) are implemented. To ship a route hidden, add its
   // key back.
-  // wave N (landed by the wave N foundation; each owner deletes its keys when it implements the route)
+  // wave N (landed by the wave N foundation; each owner deletes its keys when it implements the route). WS7's
+  // backlinks (N7-4) is implemented.
   'POST /api/boards/:bid/visit': { owner: 'WS4', item: 'N4-1' },
   'POST /api/boards/:bid/visit/seen': { owner: 'WS4', item: 'N4-1' },
   'POST /api/boards/:bid/ai/capture/photo': { owner: 'WS5', item: 'N5-1' },
   'POST /api/boards/:bid/ai/capture/board-image': { owner: 'WS5', item: 'N5-1' },
   'POST /api/boards/:bid/ai/capture/transcript': { owner: 'WS5', item: 'N5-1' },
   'GET /api/boards/:bid/board-cards': { owner: 'WS7', item: 'N7-2' },
-  'GET /api/boards/:bid/backlinks': { owner: 'WS7', item: 'N7-4' },
 }
 
 export const isPendingRoute = (
