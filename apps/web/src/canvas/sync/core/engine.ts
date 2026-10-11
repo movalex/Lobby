@@ -626,6 +626,8 @@ export class LobbyEngineCore implements EngineCore {
   private readonly chunks: ChunkScheduler | null
   /** N1-3: the apply running now keeps scene elements their confirmed row equals (rebuild reads it) */
   private applyDiff = false
+  /** Wave N (usage `open.apply:<how>`): how the last reset welcome's snapshot was installed */
+  private lastResetApply: 'diff' | 'chunked' | 'full' | null = null
   /** N1-3: the epoch of the cached copy this core painted, until its first welcome (a diff needs the same) */
   private paintedEpoch: string | null = null
   /**
@@ -980,6 +982,11 @@ export class LobbyEngineCore implements EngineCore {
     this.adoptStartScene()
     this.log('cache_start', { elements: cache.elements.length, resume: o.resume, since: cache.clock })
     return true
+  }
+
+  /** Wave N: how the last reset welcome's snapshot went into the scene (N1-3 diff, N1-4 chunks, whole); null: none yet. */
+  get resetApply(): 'diff' | 'chunked' | 'full' | null {
+    return this.lastResetApply
   }
 
   /** M6-3: how the first welcome answered a resume from the cache (null: no resume, or no welcome yet). */
@@ -2042,6 +2049,7 @@ export class LobbyEngineCore implements EngineCore {
       handle: null,
       later: new Set(),
     }
+    this.lastResetApply = 'chunked'
     this.log('chunked_apply', { elements: next.length, chunks: plan.length })
     this.emit({ kind: 'applying', on: true, applied: 0, total: next.length })
     this.applyChunk()
@@ -2407,6 +2415,7 @@ export class LobbyEngineCore implements EngineCore {
     for (const id of this.current.keys())
       if (!this.confirmedMap.has(id) && !this.tracked.has(id) && !this.inflightHas(id)) this.vanish.add(id)
     const tail = () => this.welcomeTail(o.then)
+    if (reset !== null || this.epochReset) this.lastResetApply = diff ? 'diff' : 'full'
     // N1-4: chunked, the tail (the pushes, Saved, the welcome event) waits for the last chunk
     if (this.applyScene(all, { diff, chunked: o.chunk ? tail : undefined })) return
     tail()

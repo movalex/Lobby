@@ -54,6 +54,7 @@ import { installBoardOverrides, overridesLodTarget } from '../overrides.ts'
 import { createCanvasPort, type LobbyCanvasPort } from '../port-impl.ts'
 import { PresenceHub } from '../presence/hub.ts'
 import { attachPresencePointer, type PresenceSample } from '../presence/pointer.ts'
+import { animationFrames, idsInView } from '../sync/adapter/chunk-frames.ts'
 import { attachEngine, createExcalidrawScene } from '../sync/adapter/excalidraw.ts'
 import { type GuestQueue, guestOfflineQueue } from '../sync/adapter/offline-guest.ts'
 import { createIdbOfflineStore, type IdbOfflineStore, tabId } from '../sync/adapter/offline-idb.ts'
@@ -70,7 +71,7 @@ import {
   RESUME_FROM_CACHE,
 } from '../sync/adapter/snapshot-cache.ts'
 import { LobbyEngineCore } from '../sync/core/engine.ts'
-import { setDevChecks } from '../sync/flags.ts'
+import { CHUNKED_APPLY, DIFF_APPLY, setDevChecks } from '../sync/flags.ts'
 import { bump } from '../sync/headless/scene.ts'
 import { connectQuery, createSocketTransport, type SocketTransport } from '../sync/transport/socket.ts'
 import type { OfflineQueueStore, SaveStatus, SceneAdapter, SceneElement } from '../sync/types.ts'
@@ -115,6 +116,11 @@ export interface LobbyBoardSnapshot {
    * interaction), until the first welcome replaces it; when that copy was saved. Null otherwise.
    */
   readonly cached: { readonly savedAt: number; readonly exact: boolean } | null
+  /**
+   * N1-4 (wave N): a cold open's large snapshot is being installed in chunks: the canvas shows them (no skeleton),
+   * read-only, and the save state still says connecting, until the last chunk and the welcome
+   */
+  readonly applying: boolean
 }
 
 export interface NoticeSink {
@@ -224,6 +230,8 @@ export class LobbyBoardSession {
   /** what the last welcome said this person is (null: no welcome yet): only an account's copy is kept */
   private welcomedGuest: boolean | null = null
   private usageCounted = false
+  /** wave N: `open.apply:<how>` counted for this session's first welcome */
+  private applyCounted = false
   /** M6 (e2e, debug): what the open did with the cache */
   readonly cacheInfo: {
     painted: boolean
@@ -305,6 +313,11 @@ export class LobbyBoardSession {
       scene: this.sceneAdapter(),
       tab: this.tab,
       offline,
+      // wave N (WS1): a warm open's reset welcome as a diff (N1-3), a cold open's large one in chunks (N1-4)
+      snapshotApply: {
+        diff: DIFF_APPLY,
+        chunks: CHUNKED_APPLY ? animationFrames((els) => this.idsInInitialView(els)) : null,
+      },
     })
     const me = { sid: `${o.first.user.id}:${this.tab}`, uid: o.first.user.id, name: o.first.user.name }
     this.lease = new LeaseClient(this.core.leaseConnect, me)
@@ -324,6 +337,7 @@ export class LobbyBoardSession {
       edit: null,
       roster: [],
       cached: null,
+      applying: false,
     }
     this.input = new CanvasInput({
       role: () => (this.snap.readonly ? 'readonly' : 'editor'),
@@ -482,7 +496,20 @@ export class LobbyBoardSession {
   // ---- the engine core's events --------------------------------------------------------------------------
 
   private onCoreEvent(e: Parameters<Parameters<LobbyEngineCore['on']>[0]>[0]): void {
+    if (e.kind === 'applying') {
+      // N1-4: the chunks show at once (no skeleton), read-only, until the last one; the welcome that follows sets the
+      // role (a socket that went first leaves it read-only until the next welcome)
+      if (e.on) this.set({ applying: true, readonly: true, role: 'viewer' })
+      else this.set({ applying: false })
+      return
+    }
     if (e.kind === 'welcome') {
+      // wave N: how this open's snapshot went into the scene (once per session)
+      const how = this.core.resetApply
+      if (!this.applyCounted && how) {
+        this.applyCounted = true
+        countUsage(`open.apply:${how}`)
+      }
       this.welcomedGuest = e.welcome.you.guest
       if (e.welcome.you.guest) {
         this.guest = true
@@ -802,6 +829,15 @@ export class LobbyBoardSession {
       this.emit('editingChanged', editing)
     }
     this.concern('editing')
+  }
+
+  /** N1-4: the elements a chunked install shows first: those in the canvas's current view (none before attach). */
+  private idsInInitialView(elements: readonly SceneElement[]): ReadonlySet<string> {
+    const api = this.api
+    if (!api) return new Set()
+    const s = api.getAppState()
+    const z = s.zoom.value || 1
+    return idsInView(elements, { x: -s.scrollX, y: -s.scrollY, width: s.width / z, height: s.height / z })
   }
 
   // ---- the scene the core reads and applies (the api arrives after the engine initialises) ----------

@@ -853,7 +853,8 @@ function LobbyBoardScreen({
               <SkeletonToolbar readonly={readonly} />
             </CachedCopy>
           )}
-          {!snap.welcomed && !showingCache && !closed && (
+          {/* N1-4 (wave N): a chunked cold open shows its chunks as they come, read-only (no skeleton) */}
+          {!snap.welcomed && !snap.applying && !showingCache && !closed && (
             // K1-5: the skeleton's canvas (shimmer, greyed toolbar) until the first welcome
             <div
               className="dr-screen dr-screen--overlay lobby-canvas-screen lobby-canvas-screen--skeleton"
