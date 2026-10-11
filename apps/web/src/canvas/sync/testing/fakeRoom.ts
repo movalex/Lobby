@@ -22,6 +22,7 @@ import {
   ClientMessage as ClientMessageSchema,
   type DerivedRow,
   type LeaseHolder,
+  lobbyKeyNewerThan,
   Op as OpSchema,
   PushEnvelope,
   type RejectCode,
@@ -118,6 +119,12 @@ export class FakeRoom {
    * catch-up) with this revision, as the room does; null (the default): a room before rev 10, no frame.
    */
   contractsRev: number | null = null
+  /**
+   * Wave N (N1-7): refuse, INVALID and whole, any write that leaves an element with a `customData.lobby` key whose
+   * class `contractsRev` does not know (LOBBY_KEY_ADDITIONS), as a room below that revision does (the 104c6e0 sync's
+   * checkElement on every written element, merge.ts:771): a rev-12 room after a rollback, met by a rev-13 page.
+   */
+  refuseUnknownKeys = false
   /**
    * Push receipts (CONTRACTS_REV 11, W5-ENG-2; the room's lb_receipts): `<uid> <rid>` → the clock the push
    * committed at, for each push with a receipt id that wrote and had no op refused for a retryable reason
@@ -475,6 +482,10 @@ export class FakeRoom {
           updated: this.c.now(),
         }
         delete next.status
+        if (this.unknownKeyIn(next)) {
+          reject(el.id, 'INVALID', stored ?? null)
+          continue
+        }
         this.elements.set(el.id, next)
         this.rowClock.set(el.id, clock)
         this.gclock.set(el.id, { all: clock })
@@ -538,6 +549,10 @@ export class FakeRoom {
         continue
       }
       const merged = overlayPatch(stored, { g, c: op.c, b: op.b }) as El
+      if (this.unknownKeyIn(merged)) {
+        reject(op.id, 'INVALID', stored)
+        continue
+      }
       const next: El = {
         ...merged,
         version: stored.version + 1,
@@ -646,6 +661,14 @@ export class FakeRoom {
       })
       rows.push({ id, v: next.version, fix })
     }
+  }
+
+  /** N1-7: `el` has a lobby key this room's revision does not know (only with `refuseUnknownKeys`). */
+  private unknownKeyIn(el: El): boolean {
+    const rev = this.contractsRev
+    if (!this.refuseUnknownKeys || rev === null) return false
+    const lobby = (el.customData as { lobby?: Record<string, unknown> } | undefined)?.lobby ?? {}
+    return Object.keys(lobby).some((k) => lobbyKeyNewerThan(rev, k))
   }
 
   private leasedByOther(s: Session, id: string): boolean {

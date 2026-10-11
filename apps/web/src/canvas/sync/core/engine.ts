@@ -67,6 +67,8 @@ import {
   type LeaseClientMessage,
   type LeaseHolder,
   type LeaseServerMessage,
+  LOBBY_KEY_ADDITIONS,
+  lobbyKeyNewerThan,
   lobbyWriteOf,
   MAX_RECEIPT_IDS,
   type Op,
@@ -573,6 +575,28 @@ function withOlderLobby(
   return { ...el, customData: cd } as SceneElement
 }
 
+/** N1-7 (wave N): the `customData.lobby` keys of `el` whose class a room of revision `rev` does not know. */
+function newerKeysOf(el: SceneElement, rev: number): string[] {
+  const out: string[] = []
+  for (const k of Object.keys(lobbyOf(el))) if (lobbyKeyNewerThan(rev, k)) out.push(k)
+  return out
+}
+
+/** N1-7: the keys of `el` of any added class (LOBBY_KEY_ADDITIONS): what waits while the room's revision is unknown. */
+function addedKeysOf(el: SceneElement): string[] {
+  return Object.keys(lobbyOf(el)).filter((k) => LOBBY_KEY_ADDITIONS.some((a) => k.startsWith(a.prefix)))
+}
+
+/**
+ * N1-7: whether the key `key` stays out of a push to a room of revision `rev`: of a class that room does not know,
+ * or (`rev` null: its `contracts` frame has not come yet) of any added class, which waits for that frame.
+ */
+function keyHeldAt(rev: number | null, key: string): boolean {
+  return rev === null
+    ? LOBBY_KEY_ADDITIONS.some((a) => key.startsWith(a.prefix))
+    : lobbyKeyNewerThan(rev, key)
+}
+
 export class LobbyEngineCore implements EngineCore {
   // ---- options
   private readonly transport: Transport
@@ -748,6 +772,12 @@ export class LobbyEngineCore implements EngineCore {
   } | null = null
   /** CONTRACTS_REV 11: the revision this socket's room announced (its `contracts` frame); null until then */
   private roomRev: number | null = null
+  /**
+   * N1-7 (wave N): the revision taken for this socket's room when its `contracts` frame did not come within
+   * CONTRACTS_WAIT_MS of its welcome (a room before rev 10 sends none): the key classes it knows (keyRev)
+   */
+  private assumedRoomRev: number | null = null
+  private keyRevTimer: unknown = null
   /**
    * Wave D2: the revision the last socket's room announced (null: none so far, or the last room sent no
    * contracts frame), kept across sockets: a reconnect whose room is expected to send one waits for it
@@ -946,10 +976,11 @@ export class LobbyEngineCore implements EngineCore {
       this.catchUpTimer,
       this.lostTimer,
       this.contractsWait,
+      this.keyRevTimer,
     ])
       if (t !== null) this.clearTimer(t)
     this.flushTimer = this.retryTimer = this.presenceTimer = this.persistTimer = this.catchUpTimer = null
-    this.lostTimer = this.contractsWait = null
+    this.lostTimer = this.contractsWait = this.keyRevTimer = null
   }
 
   private onTransportState(state: TransportState, close?: TransportClose): void {
@@ -962,6 +993,10 @@ export class LobbyEngineCore implements EngineCore {
       this.connected = false
       this.welcome = null
       this.awaitingSnapshot = false
+      if (this.keyRevTimer !== null) {
+        this.clearTimer(this.keyRevTimer)
+        this.keyRevTimer = null
+      }
       if (close && close.code === CLOSE_TERMINAL) this.terminal = close
       // lost pushes held for a receipts answer wait for the next welcome, which asks again (not decided by
       // counting while no answer can come)
@@ -1351,6 +1386,8 @@ export class LobbyEngineCore implements EngineCore {
       for (const el of local) if (this.confirmedMap.has(el.id)) reset.add(el.id)
     } else {
       this.classify(local, reset)
+      // N1-7: a key this socket's room cannot take goes back to the server's value at once
+      this.stripNewerKeys(reset)
     }
     for (const el of changed) {
       this.known.set(el.id, { v: el.version, vn: el.versionNonce })
@@ -1693,7 +1730,10 @@ export class LobbyEngineCore implements EngineCore {
     const local = this.current.get(id)
     if (!local) return conf ? copyElement(conf) : undefined
     const t = this.tracked.get(id)
-    if (!conf) return t?.isNew || this.inflightHas(id) || this.awaitingCatchUp.has(id) ? local : undefined
+    if (!conf)
+      return t?.isNew || this.inflightHas(id) || this.awaitingCatchUp.has(id)
+        ? this.withoutNewerKeys(local)
+        : undefined
     const groups = new Set<GroupKey>([...(t?.dirty ?? []), ...this.inflightGroups(id)])
     // the open editor: only the edited label's text and layout are held back (§2.5.4), while this tab
     // holds or asks for its lease; a deny or a lost lease puts the server's back
@@ -1958,6 +1998,7 @@ export class LobbyEngineCore implements EngineCore {
     this.welcomes++
     // a new socket (or a resync): what its room speaks comes with its `contracts` frame, after this one
     this.roomRev = null
+    this.armKeyRev()
     this.epoch = w.epoch
     this.horizon = w.horizon
     this.serverDoc = { ...w.doc }
@@ -2426,10 +2467,93 @@ export class LobbyEngineCore implements EngineCore {
     this.log('receipts_asked', { req, ids: ids.length })
   }
 
+  /**
+   * N1-7 (wave N): the revision this socket's room takes `customData.lobby` keys at: its `contracts` frame's, the one
+   * assumed when that frame did not come (armKeyRev), or null (not known yet: keys of an added class wait).
+   */
+  private keyRev(): number | null {
+    return this.roomRev ?? this.assumedRoomRev
+  }
+
+  /** N1-7: at a welcome, the wait for its room's `contracts` frame; a room that sends none counts as UNANNOUNCED_REV. */
+  private armKeyRev(): void {
+    this.assumedRoomRev = null
+    if (this.keyRevTimer !== null) this.clearTimer(this.keyRevTimer)
+    this.keyRevTimer = this.setTimer(() => {
+      this.keyRevTimer = null
+      if (this.stopped || this.roomRev !== null || !this.connected || !this.welcome) return
+      this.assumedRoomRev = UNANNOUNCED_REV
+      this.log('key_rev_assumed', { rev: UNANNOUNCED_REV })
+      this.keyRevKnown()
+    }, CONTRACTS_WAIT_MS)
+  }
+
+  /**
+   * N1-7: this socket's room's revision is known now: every key of a class it does not know goes back to the
+   * server's value (stripNewerKeys), and the keys it knows that waited for it go out.
+   */
+  private keyRevKnown(): void {
+    if (this.roomRev !== null && this.keyRevTimer !== null) {
+      this.clearTimer(this.keyRevTimer)
+      this.keyRevTimer = null
+    }
+    if (this.stopped || !this.welcome || this.awaitingSnapshot || this.resyncing) return
+    this.syncLive()
+    const reset = new Set<string>()
+    this.stripNewerKeys(reset)
+    if (reset.size) this.applyScene(reset)
+    if (this.contractsWait === null && this.hasPushable()) this.scheduleFlush(true)
+    this.schedulePersist()
+    this.updateSaved()
+  }
+
+  /**
+   * N1-7 (wave N, a rollback below the reactions' revision): before every push, a `customData.lobby` key whose class
+   * this socket's room does not know (`lobbyKeyNewerThan(rev, key)`: a reaction queued in a rev-13 page, replayed
+   * to a rev-12 room) leaves the changes to send, and the element goes back to the server's value for it (into
+   * `reset`, rebuilt by the caller's apply). The old room refused the whole op INVALID, the edits sharing it
+   * included. A create keeps its other fields: the key leaves the scene copy and the op (withoutNewerKeys). Nothing
+   * to do while the revision is unknown (those keys wait: pushableGroups) or knows every class.
+   */
+  private stripNewerKeys(reset: Set<string>): void {
+    const rev = this.keyRev()
+    if (rev === null || !LOBBY_KEY_ADDITIONS.some((a) => a.since > rev)) return
+    for (const [id, t] of [...this.tracked]) {
+      let hit = false
+      for (const g of [...t.dirty])
+        if (g.startsWith('c:') && lobbyKeyNewerThan(rev, g.slice(2))) {
+          t.dirty.delete(g)
+          hit = true
+        }
+      const el = this.current.get(id)
+      const create = t.isNew && !this.confirmedMap.has(id)
+      if (!hit && !(create && el && newerKeysOf(el, rev).length)) continue
+      if (t.dirty.size === 0 && !t.isNew) this.tracked.delete(id)
+      reset.add(id)
+      this.log('lobby_key_stripped', { id, rev })
+    }
+  }
+
+  /** N1-7: `el` without the lobby keys this socket's room cannot take (`el` itself when it has none). */
+  private withoutNewerKeys(el: SceneElement): SceneElement {
+    const rev = this.keyRev()
+    if (rev === null) return el
+    const keys = newerKeysOf(el, rev)
+    if (!keys.length) return el
+    const out = copyElement(el) as Record<string, unknown>
+    const cd = out.customData as Record<string, unknown>
+    const lobby = cd.lobby as Record<string, unknown>
+    for (const k of keys) delete lobby[k]
+    if (!Object.keys(lobby).length) delete cd.lobby
+    if (!Object.keys(cd).length) delete out.customData
+    return out as SceneElement
+  }
+
   /** The room's revision (its `contracts` frame, after every welcome): a rev-11 room is asked for receipts. */
   private onContracts(rev: number): void {
     this.roomRev = rev
     this.lastRoomRev = rev
+    this.keyRevKnown()
     const g = this.lostGate
     if (g?.receipts === 'contracts') {
       if (rev >= RECEIPTS_REV) {
@@ -3094,6 +3218,11 @@ export class LobbyEngineCore implements EngineCore {
     if (create && this.inflight.some((p) => p.sent.get(id)?.create)) return null // the create is out: wait
     if (create && el.isDeleted) return null // created and deleted before it was pushed: nothing to say
     const groups = new Set(t.dirty)
+    // N1-7: a customData.lobby key of a class newer than this socket's room is never pushed; before the room's
+    // `contracts` frame says its revision such a key (and a create carrying one) waits
+    const rev = this.keyRev()
+    for (const g of [...groups]) if (g.startsWith('c:') && keyHeldAt(rev, g.slice(2))) groups.delete(g)
+    if (create && rev === null && addedKeysOf(el).length) return null
     // text and layout (and a label's create) wait for this tab's lease (§2.9.2 New element, guard step 3)
     if (isText(el)) {
       const standing = this.leaseStanding(leaseIdOf(el))
@@ -3148,6 +3277,10 @@ export class LobbyEngineCore implements EngineCore {
       this.flushDue = Number.POSITIVE_INFINITY
     }
     this.dropDeadCreates()
+    // N1-7: keys this socket's room cannot take leave every push (a replay, an adopted queue, a lost push's again)
+    const stripped = new Set<string>()
+    this.stripNewerKeys(stripped)
+    if (stripped.size) this.applyScene(stripped)
     // (contractsWait: the welcome's tail sends it all once this socket's contracts frame came, wave D2)
     if (
       !this.connected ||
@@ -3223,7 +3356,7 @@ export class LobbyEngineCore implements EngineCore {
         const t = this.tracked.get(id) as Tracked
         const off = t.replay ? this.now() - t.since : undefined
         let op: Op | null
-        if (p.create) op = { k: 'c', el: toWire(el) as never }
+        if (p.create) op = { k: 'c', el: toWire(this.withoutNewerKeys(el)) as never }
         else {
           const ref = this.base(id) as SceneElement
           const conf = this.confirmedMap.get(id) as SceneElement
@@ -3243,9 +3376,11 @@ export class LobbyEngineCore implements EngineCore {
         ops.push(op)
         bytes += size
         sent.set(id, {
-          groups: p.create ? new Set(diffGroups(el, undefined).groups) : new Set(p.groups),
+          groups: p.create
+            ? new Set(diffGroups(this.withoutNewerKeys(el), undefined).groups)
+            : new Set(p.groups),
           // the push's copy as the lost-push records and the offline queue keep it (no local file suffix)
-          el: withWireFile(el),
+          el: withWireFile(p.create ? this.withoutNewerKeys(el) : el),
           create: p.create,
           ...(p.create
             ? { prior: this.confirmedMap.has(id) ? clone(this.confirmedMap.get(id)) : undefined }
