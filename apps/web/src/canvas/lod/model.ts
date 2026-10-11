@@ -323,9 +323,16 @@ export class LodModel<B = unknown> {
         this.dropRegion(id)
       } else rest.push(id)
     }
-    if (this.sizeAware && moved.length)
+    if (this.sizeAware && moved.length) {
+      // (a set of the ids already in `rest`: a frame dragged with thousands of changed children over a large board
+      // is one lookup per loose element, not a scan of `rest` each)
+      const inRest = new Set(rest)
       for (const [id, box] of [...this.looseBox])
-        if (moved.some((r) => meets(r, box)) && !rest.includes(id)) rest.push(id)
+        if (!inRest.has(id) && moved.some((r) => meets(r, box))) {
+          inRest.add(id)
+          rest.push(id)
+        }
+    }
     for (const id of rest) {
       const live = liveOf(id)
       const before = this.memberOf.get(id)

@@ -81,6 +81,7 @@ import {
   purgeBoardCache,
   takeBoardCache,
 } from '../sync/adapter/snapshot-cache.ts'
+import { timelineMark } from '../sync/timeline.ts'
 import { BoardSkeleton, SkeletonToolbar } from './BoardSkeleton.tsx'
 import { boardCacheAllowed } from './cache-access.ts'
 import {
@@ -327,15 +328,6 @@ function OpeningSkeleton({ board, role, workspace }: Pick<SessionProps, 'board' 
       readonly={isReadonlyRole(role, board.status)}
     />
   )
-}
-
-/** A user-timing mark (the N1 specs read the board page's timeline); never throws. */
-function timelineMark(name: string): void {
-  try {
-    performance.mark(name)
-  } catch {
-    // no user timing
-  }
 }
 
 const connOf = (s: LobbyBoardSnapshot): ConnState =>
