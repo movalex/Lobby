@@ -3,15 +3,24 @@ import { describe, expect, it } from 'vitest'
 import {
   actionItemText,
   budgetLine,
+  CAPTURE_PHOTO_NOTICE,
+  CAPTURE_TRANSCRIPT_NOTICE,
+  captureActionText,
+  captureMeetingLine,
+  captureNotesLine,
   expandDone,
   groupNames,
   ideasHeading,
+  lengthMeter,
   mindmapDone,
+  photosLeftLine,
   plural,
   themesDone,
   themesHint,
   themesPreviewLine,
   topicLabel,
+  transcriptsLeftLine,
+  truncationNotice,
 } from './copy.ts'
 
 describe('AI copy', () => {
@@ -123,5 +132,38 @@ describe('the mind map words (K7)', () => {
     expect(expandDone(5)).toBe('Added 5 sub-topics.')
     expect(mindmapDone(1)).toBe('Drafted a mind map with 1 branch.')
     expect(mindmapDone(6)).toBe('Drafted a mind map with 6 branches.')
+  })
+})
+
+// Wave N (WS5, N5-5): the owner's words for Capture the room, exactly.
+describe('Capture the room words', () => {
+  it('the notices say that photos and transcripts go to OpenAI, and what Lobby keeps', () => {
+    expect(CAPTURE_PHOTO_NOTICE).toBe(
+      'Sends this photo to OpenAI to read the notes or diagram. Lobby doesn’t keep the photo unless you add it to the board.',
+    )
+    expect(CAPTURE_TRANSCRIPT_NOTICE).toBe(
+      'Sends this transcript’s text to OpenAI. Lobby doesn’t keep the transcript; only the notes you apply are saved.',
+    )
+  })
+
+  it('the per-day count, the length meter and the truncation notice', () => {
+    expect(photosLeftLine(7)).toBe('7 photo captures left today')
+    expect(photosLeftLine(1)).toBe('1 photo capture left today')
+    expect(transcriptsLeftLine(0)).toBe('0 transcript captures left today')
+    expect(lengthMeter(12_345, 60_000)).toBe('12,345 / 60,000 characters')
+    expect(truncationNotice(60_000)).toBe('Only the first 60,000 characters will be used.')
+  })
+
+  it('the preview lines and an action’s note', () => {
+    expect(captureNotesLine({ notes: 6, groups: 2, frames: 2 })).toBe(
+      'Adds 6 notes in 2 groups; each group is a frame',
+    )
+    expect(captureNotesLine({ notes: 1, groups: 0, frames: 0 })).toBe('Adds 1 note')
+    expect(captureNotesLine({ notes: 6, groups: 3, frames: 1 })).toBe('Adds 6 notes in 3 groups; 1 frame')
+    expect(captureMeetingLine({ themes: 3, notes: 5, decisions: 2, actions: 3 })).toBe(
+      'Adds 3 themes (5 notes), 2 decisions and 3 actions',
+    )
+    expect(captureActionText({ text: 'Book the studio', owner: 'Ana' })).toBe('Ana: Book the studio')
+    expect(captureActionText({ text: 'Share the list' })).toBe('Share the list')
   })
 })
