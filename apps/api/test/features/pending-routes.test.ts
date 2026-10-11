@@ -25,7 +25,7 @@ const WAVE_M_ROUTES: string[] = []
 /**
  * Wave N (the foundation, OWNER: WS4 after it): the routes wave N adds, pending until their owners implement them
  * (WS4: the visit routes, N4-1; WS5: the three capture routes, N5-1). Each owner deletes its keys here and in
- * PENDING_ROUTES in the same change: WS7 implemented backlinks (N7-4).
+ * PENDING_ROUTES in the same change: WS7 implemented board-cards (N7-2) and backlinks (N7-4).
  */
 const WAVE_N_ROUTES: string[] = [
   'POST /api/boards/:bid/visit',
@@ -33,7 +33,6 @@ const WAVE_N_ROUTES: string[] = [
   'POST /api/boards/:bid/ai/capture/photo',
   'POST /api/boards/:bid/ai/capture/board-image',
   'POST /api/boards/:bid/ai/capture/transcript',
-  'GET /api/boards/:bid/board-cards',
 ]
 const PENDING_NOW = [...WAVE_M_ROUTES, ...WAVE_N_ROUTES]
 

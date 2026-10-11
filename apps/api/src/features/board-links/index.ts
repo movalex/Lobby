@@ -30,35 +30,37 @@ import {
   BOARD_CARD_TARGET_PATTERN,
   BOARD_CARDS_ROUTE,
   type BoardCardFace,
+  type BoardCardsAnswer,
+  BoardCardsQuery,
 } from '@draftroom/contracts'
 import { can, resolveBoardRole } from '@draftroom/permissions'
 import type { FastifyInstance } from 'fastify'
-import { requireBoardAction } from '../../access.ts'
+import { type BoardAccess, loadBoardAccessMany, pairKey, requireBoardAction } from '../../access.ts'
 import { userKind } from '../../auth/users.ts'
 import type { Params } from '../../context.ts'
-import { notFound } from '../../errors.ts'
+import { parse } from '../../errors.ts'
 import { keyedLimit } from '../../rate-limit.ts'
 import type { FeatureContext } from '../context.ts'
 import { BACKLINKS_GUESTS, guestRefused } from '../guests/guard.ts'
 import { routeUnlessPending } from '../pending-routes.ts'
-import { backlinkCandidates } from './store.ts'
+import { backlinkCandidates, frameNames } from './store.ts'
 
 /** Per signed-in user, per minute (a board page asks once per open, ≤ 50 cards a call, plus a few refreshes). */
 export const BOARD_LINKS_LIMITS = { cardsPerUserPerMinute: 120, backlinksPerUserPerMinute: 60 }
 
 /** The one face every target the caller cannot have (missing, forbidden, trashed, or asked by a guest). */
-const _UNAVAILABLE: BoardCardFace = { state: 'unavailable' }
+const UNAVAILABLE: BoardCardFace = { state: 'unavailable' }
 /** The contract's longest title and frame name on a face. */
 const FACE_TEXT_MAX = 200
 
-const _target = (raw: string) => {
+const target = (raw: string) => {
   const m = BOARD_CARD_TARGET_PATTERN.exec(raw)
   return { raw, boardId: m?.[1] ?? '', elementId: m?.[2] ?? null }
 }
 
 export async function registerBoardLinks(app: FastifyInstance, ctx: FeatureContext): Promise<void> {
   const { db } = ctx
-  const _cardsLimit = keyedLimit(
+  const cardsLimit = keyedLimit(
     { max: BOARD_LINKS_LIMITS.cardsPerUserPerMinute, timeWindow: 60_000 },
     ctx.now,
     'Too many board cards at once. Wait a moment and try again.',
@@ -69,9 +71,47 @@ export async function registerBoardLinks(app: FastifyInstance, ctx: FeatureConte
     'Too many requests at once. Wait a moment and try again.',
   )
 
-  // N7-2 lands next: board-cards is still the foundation stub
-  routeUnlessPending(app, 'GET', BOARD_CARDS_ROUTE, async () => {
-    throw notFound()
+  routeUnlessPending(app, 'GET', BOARD_CARDS_ROUTE, async (req): Promise<BoardCardsAnswer> => {
+    const user = await ctx.requireUser(req)
+    cardsLimit.take(user.id)
+    const { bid = '' } = req.params as Params
+    const { ids } = parse(BoardCardsQuery, req.query)
+    await requireBoardAction(db, bid, user.id, 'view')
+    const targets = ids.map(target)
+    const cards: Record<string, BoardCardFace> = {}
+    for (const t of targets) cards[t.raw] = UNAVAILABLE
+    // a name-only guest sees nothing beyond the boards of their links: not even whether a target exists
+    if ((await userKind(db, user.id)) === 'guest') return { cards }
+    // 1. access, decided for this caller now, before anything else is read about any target
+    const boards = [...new Set(targets.map((t) => t.boardId))]
+    const access = await loadBoardAccessMany(
+      db,
+      boards.map((boardId) => ({ boardId, userId: user.id })),
+    )
+    const viewable = new Map<string, BoardAccess>()
+    for (const boardId of boards) {
+      const a = access.get(pairKey({ boardId, userId: user.id })) ?? null
+      if (a && can(a.role, 'view', a.board.status)) viewable.set(boardId, a)
+    }
+    // 2. frame names, only on the boards that passed
+    const names = await frameNames(
+      db,
+      targets.flatMap((t) =>
+        t.elementId && viewable.has(t.boardId) ? [{ boardId: t.boardId, elementId: t.elementId }] : [],
+      ),
+    )
+    for (const t of targets) {
+      const a = viewable.get(t.boardId)
+      if (!a) continue
+      const frame = t.elementId ? names.get(`${t.boardId}\u0000${t.elementId}`) : undefined
+      cards[t.raw] = {
+        state: 'ok',
+        title: a.board.title.slice(0, FACE_TEXT_MAX),
+        frameName: frame ? frame.slice(0, FACE_TEXT_MAX) : null,
+        thumbnailPath: `/api/boards/${t.boardId}/thumbnail`,
+      }
+    }
+    return { cards }
   })
 
   routeUnlessPending(app, 'GET', BACKLINKS_ROUTE, async (req): Promise<BacklinksAnswer> => {
