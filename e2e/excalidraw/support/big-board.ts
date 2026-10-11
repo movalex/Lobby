@@ -257,6 +257,10 @@ export interface OpenWatch {
   readonly marks: Record<string, number>
   /** the scene's element count at the end */
   readonly elements: number
+  /** N1-4: frames in which the board was installing a snapshot in chunks (snapshot.applying) */
+  readonly applyingFrames: number
+  /** N1-4: frames in which it was installing chunks while the canvas was writable (must be 0) */
+  readonly writableWhileApplying: number
 }
 
 /** Before every page load of `context`: a long-task observer and a per-frame watch of the open (read `readOpen`). */
@@ -270,15 +274,29 @@ export async function watchOpen(context: InitScriptContext): Promise<void> {
         longTasks: { start: number; duration: number }[]
         firstElements: number | null
         editable: number | null
+        applyingFrames: number
+        writableWhileApplying: number
       }
       __lobbyBoard?: {
         api?: { getSceneElements(): readonly unknown[] }
         session: {
-          snapshot: { welcomed: boolean; readonly: boolean; phase: string; save: { state: string } }
+          snapshot: {
+            welcomed: boolean
+            readonly: boolean
+            phase: string
+            save: { state: string }
+            applying?: boolean
+          }
         }
       }
     }
-    w.__n1 = { longTasks: [], firstElements: null, editable: null }
+    w.__n1 = {
+      longTasks: [],
+      firstElements: null,
+      editable: null,
+      applyingFrames: 0,
+      writableWhileApplying: 0,
+    }
     try {
       new PerformanceObserver((list) => {
         for (const e of list.getEntries()) w.__n1.longTasks.push({ start: e.startTime, duration: e.duration })
@@ -292,6 +310,10 @@ export async function watchOpen(context: InitScriptContext): Promise<void> {
         if (w.__n1.firstElements === null && (b.api?.getSceneElements().length ?? 0) > 0)
           w.__n1.firstElements = performance.now()
         const s = b.session.snapshot
+        if (s.applying) {
+          w.__n1.applyingFrames++
+          if (!s.readonly) w.__n1.writableWhileApplying++
+        }
         if (
           w.__n1.editable === null &&
           s.welcomed &&
@@ -318,6 +340,8 @@ export const readOpen = (page: EvalPage): Promise<OpenWatch> =>
         longTasks: { start: number; duration: number }[]
         firstElements: number | null
         editable: number | null
+        applyingFrames: number
+        writableWhileApplying: number
       }
       __lobbyBoard?: { api?: { getSceneElements(): readonly unknown[] } }
     }
@@ -330,6 +354,8 @@ export const readOpen = (page: EvalPage): Promise<OpenWatch> =>
       editable: w.__n1?.editable ?? null,
       marks,
       elements: w.__lobbyBoard?.api?.getSceneElements().length ?? 0,
+      applyingFrames: w.__n1?.applyingFrames ?? 0,
+      writableWhileApplying: w.__n1?.writableWhileApplying ?? 0,
     }
   })
 

@@ -20,6 +20,13 @@
 import { DEV_AUTH_ENABLED } from '../../../lib/identity.ts'
 import { source } from '../../../lib/signals.ts'
 import type { CanvasElement } from '../../port.ts'
+import {
+  noteSceneWalk,
+  resetSceneWalks,
+  sceneWalks,
+  sceneWalksCounted,
+  setSceneWalkCounting,
+} from '../../sync/walks.ts'
 import type { SceneIndex } from '../lobby-canvas.ts'
 import type { PartDeps } from './types.ts'
 
@@ -52,28 +59,19 @@ export function sceneIndexOf(items: () => readonly CanvasElement[]): Omit<SceneI
 
 // ---- the dev-only full-walk counter --------------------------------------------------------------------------
 
-const walkCounting: boolean = (() => {
-  try {
-    return DEV_AUTH_ENABLED || !!import.meta.env?.DEV
-  } catch {
-    return false
-  }
-})()
-const walks = new Map<string, number>()
+// (the counter itself is canvas/sync/walks.ts, dependency-free: the presence hub and the LOD pass import it; it counts
+// in dev and dev-auth builds, which this module, loaded with every board page, turns on here)
+setSceneWalkCounting(
+  (() => {
+    try {
+      return DEV_AUTH_ENABLED || !!import.meta.env?.DEV
+    } catch {
+      return false
+    }
+  })(),
+)
 
-/** Counts one walk of the whole scene at `site` (dev and dev-auth builds; a no-op otherwise). */
-export function noteSceneWalk(site: string): void {
-  if (walkCounting) walks.set(site, (walks.get(site) ?? 0) + 1)
-}
-
-/** The walks counted so far, by site (empty in a production build). */
-export function sceneWalks(): Record<string, number> {
-  return Object.fromEntries(walks)
-}
-
-export function resetSceneWalks(): void {
-  walks.clear()
-}
+export { noteSceneWalk, resetSceneWalks, sceneWalks, sceneWalksCounted }
 
 /** The files a `canvas.items()` read passes through on its way to the port (never its caller). */
 const ITEMS_PLUMBING = /\/src\/canvas\/(api\/impl|board\/session|port-impl)\.ts/
@@ -91,9 +89,6 @@ export function itemsCallerOf(stack: string | undefined): string {
   }
   return 'items'
 }
-
-/** Whether walks are counted in this build. */
-export const sceneWalksCounted = (): boolean => walkCounting
 
 // ---- the incremental index -------------------------------------------------------------------------------------
 

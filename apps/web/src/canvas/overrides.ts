@@ -50,10 +50,10 @@ import type {
 } from '@excalidraw/excalidraw/types'
 import { pointFrom } from '@excalidraw/math'
 import type { GlobalPoint } from '@excalidraw/math/types'
-import { noteSceneWalk } from './api/parts/scene-index.ts'
 import type { LodTarget } from './lod/cull.ts'
 import type { ScenePoint } from './port.ts'
 import type { CanvasRegistries, HitBlock } from './registries.ts'
+import { noteSceneWalk } from './sync/walks.ts'
 
 export interface Offset {
   readonly x: number

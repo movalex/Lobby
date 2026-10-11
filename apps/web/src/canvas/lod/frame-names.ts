@@ -24,7 +24,7 @@
  * a scene change) and writes the stylesheet. Browser only for the install.
  */
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
-import { noteSceneWalk } from '../api/parts/scene-index.ts'
+import { noteSceneWalk } from '../sync/walks.ts'
 
 export interface NameBox {
   readonly x: number

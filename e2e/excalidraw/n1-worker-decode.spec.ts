@@ -50,8 +50,19 @@ test('N1-1: the 10k board decodes in the worker: no main-thread long task over 2
       longestInDecodeMs: Math.round(longest),
       longestOverallMs: Math.round(Math.max(0, ...o.longTasks.map((t) => t.duration))),
       elements: o.elements,
+      applyingFrames: o.applyingFrames,
+      writableWhileApplying: o.writableWhileApplying,
     })
     expect(side, 'decoded in the worker').toBe('worker')
+    // N1-4: the cold open of 10k elements was installed in chunks, the canvas read-only meanwhile
+    const how = await a.page.evaluate(
+      () =>
+        (window as unknown as { __lobbyBoard?: { core: { resetApply: string | null } } }).__lobbyBoard?.core
+          .resetApply ?? null,
+    )
+    expect(how, 'the snapshot went in in chunks').toBe('chunked')
+    expect(o.applyingFrames, 'frames that showed the chunks').toBeGreaterThan(0)
+    expect(o.writableWhileApplying, 'frames writable while the chunks went in').toBe(0)
     expect(longest, 'no main-thread long task over 200 ms in the decode').toBeLessThanOrEqual(200)
   }
   const evidence = { board: { elements: seeded.elements, seedMs: seeded.ms }, runs }

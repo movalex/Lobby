@@ -47,9 +47,9 @@ import {
   PRESENCE_LASER_REV,
   type RosterEntry,
 } from '@draftroom/canvas-schema/protocol'
-import { noteSceneWalk } from '../api/parts/scene-index.ts'
 import type { LobbyEngineCore } from '../sync/core/engine.ts'
 import type { GestureState, SceneElement } from '../sync/types.ts'
+import { noteSceneWalk } from '../sync/walks.ts'
 import { planDragArrows } from './drag-arrows.ts'
 import { onPresenceFollow, presenceFollowOf } from './follow-target.ts'
 import {

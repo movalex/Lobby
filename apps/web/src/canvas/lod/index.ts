@@ -25,8 +25,8 @@
 import type { BinaryFiles, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 import type { CanvasChange, LobbyCanvas } from '../api/lobby-canvas.ts'
-import { noteSceneWalk } from '../api/parts/scene-index.ts'
 import { SIZE_AWARE_LOD } from '../sync/flags.ts'
+import { noteSceneWalk } from '../sync/walks.ts'
 import type { LodTarget } from './cull.ts'
 import { installFrameNameGuard } from './frame-names.ts'
 import {
