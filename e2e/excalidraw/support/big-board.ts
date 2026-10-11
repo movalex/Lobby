@@ -11,6 +11,7 @@
 // BIG_BOARD_HASH is the hash.ts hash of the GENERATED elements of BIG_BOARD_ID with placeholder images (a change to
 // the generator or to this file changes it, and ./big-board.test.ts says so); the room stamps its own `updated`,
 // `lobbyServer` and index keys on a seed, so a seeded board's hash is read from the room, never compared with this.
+import type { BrowserContext } from '@playwright/test'
 import type { WireElement } from '../../../packages/canvas-schema/src/elements.ts'
 import { checkElement } from '../../../packages/canvas-schema/src/elements.ts'
 import { indexKeysBetween } from '../../../packages/canvas-schema/src/engine/index.ts'
@@ -362,4 +363,35 @@ export const readOpen = (page: EvalPage): Promise<OpenWatch> =>
 export const median = (xs: readonly number[]): number => {
   const s = [...xs].filter((x) => Number.isFinite(x)).sort((a, b) => a - b)
   return s.length ? (s[Math.floor((s.length - 1) / 2)] as number) : Number.NaN
+}
+
+// ---- the speed parts a spec turns on (apps/web/src/canvas/sync/flags.ts) ------------------------------------------
+
+/** The speed parts by name (sync/flags.ts SPEED_FLAGS); a part that ships off is on for the specs that gate it. */
+export type SpeedFlags = Partial<
+  Record<'WORKER_DECODE' | 'DIFF_APPLY' | 'CHUNKED_APPLY' | 'SIZE_AWARE_LOD', boolean>
+>
+
+/** sync/flags.ts SPEED_FLAGS_KEY: the localStorage key a dev-auth page reads its overrides from. */
+export const SPEED_FLAGS_KEY = 'lobby.speedFlags'
+
+/**
+ * Before every page load of `context` from now on (the board session reads them when it starts; dev-auth builds only,
+ * so the e2e build): these speed parts on or off. The open in the fixture has already happened; the spec's own
+ * navigation after this call is the one that takes them.
+ */
+export async function speedFlags(
+  context: Pick<BrowserContext, 'addInitScript'>,
+  flags: SpeedFlags,
+): Promise<void> {
+  await context.addInitScript(
+    ({ key, value }) => {
+      try {
+        localStorage.setItem(key, value)
+      } catch {
+        // no storage: the page runs the shipped values
+      }
+    },
+    { key: SPEED_FLAGS_KEY, value: JSON.stringify(flags) },
+  )
 }

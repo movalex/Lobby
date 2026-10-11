@@ -8,6 +8,7 @@
  */
 import { CONTRACTS_REV } from '@draftroom/canvas-schema/protocol'
 import { describe, expect, it } from 'vitest'
+import { DIFF_APPLY } from '../flags.ts'
 import { bump } from '../headless/scene.ts'
 import { closePage, openFromCache, recordOf } from '../testing/cached.ts'
 import { arrow, note, rect, text } from '../testing/elements.ts'
@@ -112,7 +113,8 @@ describe('M6-2: a receive-only client that opened from the cache pushes nothing'
 // snapshot row equals by (id, version, versionNonce, isDeleted) stays the scene's object (Excalidraw's shape cache
 // stays warm; the confirmed map takes the decoded row, a separate object: the harness asserts no sharing after every
 // apply), an unequal or new row gets a copy, and what the snapshot lacks leaves the scene. The hello still says
-// since 0 (RESUME_FROM_CACHE stays off), and the convergence hash is checked as before.
+// since 0 (RESUME_FROM_CACHE stays off), and the convergence hash is checked as before. DIFF_APPLY ships off until its
+// speed gate passes (sync/flags.ts): these cases turn it on, and the kill-switch cases check the path as shipped.
 describe('N1-3: the reset welcome over a painted copy is a diff', () => {
   /** alice's cached copy, her page closed; `meanwhile` runs (bob's edits) before the new page opens from it. */
   async function warmOpen(
@@ -132,7 +134,7 @@ describe('N1-3: the reset welcome over a painted copy is a diff', () => {
     h.settle()
     meanwhile(h, b)
     h.settle()
-    const p = openFromCache(h, record, { resume: false, ...(o.diff === false ? { diff: false } : {}) })
+    const p = openFromCache(h, record, { resume: false, diff: o.diff ?? true })
     expect(p.started).toBe(true)
     const painted = new Map(p.scene.map)
     const appliesAtPaint = p.scene.applies
@@ -160,6 +162,7 @@ describe('N1-3: the reset welcome over a painted copy is a diff', () => {
   })
 
   it('without DIFF_APPLY (the kill switch) every painted element is replaced, as before wave N', async () => {
+    expect(DIFF_APPLY, 'shipped off until its gate passes (the WS1 review)').toBe(false)
     const r = await warmOpen(() => {}, { diff: false })
     expect(r.replaced).toEqual(['ar', 'n1', 'r1', 'r2', 't1'])
     expect(r.p.ops()).toBe(0)
@@ -214,7 +217,7 @@ describe('N1-3: the reset welcome over a painted copy is a diff', () => {
   it('a reconnect’s reset over the copy the scene holds: unchanged elements stay the scene’s objects', async () => {
     const h = createHarness({ seed: seed() })
     h.room.contractsRev = CONTRACTS_REV
-    const a = h.client('alice')
+    const a = h.client('alice', { diff: true })
     const b = h.client('bob', { tab: 'tb' })
     h.settle()
     h.room.cut(a.transport)

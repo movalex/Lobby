@@ -62,6 +62,8 @@ export interface LodOptions {
 
 export interface LodState {
   readonly enabled: boolean
+  /** N1-5: the size-aware pass is on (SIZE_AWARE_LOD, or the page's override, or setSizeAware) */
+  readonly sizeAware: boolean
   readonly active: boolean
   readonly zoom: number
   readonly frames: number
@@ -520,6 +522,7 @@ export function installLod(o: LodOptions): LodHandle {
       const s = model.stats()
       return {
         enabled,
+        sizeAware,
         active,
         zoom: api.getAppState().zoom.value,
         ...s,

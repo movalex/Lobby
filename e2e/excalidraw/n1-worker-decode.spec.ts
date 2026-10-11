@@ -3,10 +3,12 @@
 // in the decode: between the binary frame's arrival (`lobby.snapshot.received`) and its decoded frame reaching the
 // core (`lobby.snapshot.decoded`), only the slices' short structured clones run on the page. The board is the 10k
 // fixture (e2e/excalidraw/support/big-board.ts), seeded through the real protocol; the open is a cold one
-// (`?nocache=1`: the snapshot is the room's). The numbers are attached (n1-worker-decode.json).
+// (`?nocache=1`: the snapshot is the room's). The numbers are attached (n1-worker-decode.json). CHUNKED_APPLY ships off
+// (apps/web/src/canvas/sync/flags.ts: its speed gate is not met yet); this spec turns it on for its page (a dev-auth
+// override, ./support/big-board.ts `speedFlags`) to check the chunked install's read-only frames as well.
 import { writeFileSync } from 'node:fs'
 import { expect, test, waitForCanvas } from '../tests/support/canvas.ts'
-import { BIG_BOARD_ELEMENTS, readOpen, seedBigBoard, watchOpen } from './support/big-board.ts'
+import { BIG_BOARD_ELEMENTS, readOpen, seedBigBoard, speedFlags, watchOpen } from './support/big-board.ts'
 
 test('N1-1: the 10k board decodes in the worker: no main-thread long task over 200 ms during the decode', async ({
   canvasSession,
@@ -18,6 +20,7 @@ test('N1-1: the 10k board decodes in the worker: no main-thread long task over 2
   expect(seeded.elements).toBe(BIG_BOARD_ELEMENTS)
 
   await watchOpen(a.context)
+  await speedFlags(a.context, { CHUNKED_APPLY: true })
   const runs: Record<string, unknown>[] = []
   for (let i = 0; i < 2; i++) {
     await a.page.goto(`/b/${board}?nocache=1`)

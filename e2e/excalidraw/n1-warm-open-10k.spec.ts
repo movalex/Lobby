@@ -7,13 +7,21 @@
 //  - editable (welcomed, not read-only, ready, Saved): at or under 3.5 s;
 //  - no main-thread long task over 250 ms after the paint (until editable).
 // Medians are asserted; a measurement (N1_PERF=1 runs it), not a laptop number. Attached as n1-warm-open-10k.json.
-// N1_PERF_NET=loopback leaves the network alone.
+// N1_PERF_NET=loopback leaves the network alone. DIFF_APPLY ships off until this gate passes
+// (apps/web/src/canvas/sync/flags.ts); the spec turns it on for its page (./support/big-board.ts `speedFlags`).
 //
 //   N1_PERF=1 E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/n1-warm-open-10k.spec.ts --project=chromium --workers=1
 import { writeFileSync } from 'node:fs'
 import type { Page } from '@playwright/test'
 import { expect, test, waitForCanvas } from '../tests/support/canvas.ts'
-import { BIG_BOARD_ELEMENTS, median, readOpen, seedBigBoard, watchOpen } from './support/big-board.ts'
+import {
+  BIG_BOARD_ELEMENTS,
+  median,
+  readOpen,
+  seedBigBoard,
+  speedFlags,
+  watchOpen,
+} from './support/big-board.ts'
 
 test.skip(process.env.N1_PERF !== '1', 'a measurement: N1_PERF=1 runs it')
 
@@ -34,6 +42,7 @@ test('N1-3: a warm open of the 10k board at CPU 4x and Fast 4G: painted by 1.5 s
   const seeded = await seedBigBoard(a.page, board)
   expect(seeded.elements).toBe(BIG_BOARD_ELEMENTS)
   await watchOpen(a.context)
+  await speedFlags(a.context, { DIFF_APPLY: true })
   const cdp = await a.context.newCDPSession(a.page)
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 })
   const net = process.env.N1_PERF_NET ?? 'fast4g'

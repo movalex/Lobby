@@ -7,13 +7,21 @@
 //  - the longest main-thread task from the snapshot's arrival to the board being editable (Saved).
 // Targets (medians): first content at or under 1.2 s after the snapshot reaches the core, the longest task at or
 // under 200 ms. A measurement (N1_PERF=1 runs it), not a laptop number (PERF-laptop stays an owner device check); the
-// numbers are attached as n1-cold-open-10k.json. N1_PERF_NET=fast4g adds Chrome's Fast 4G network.
+// numbers are attached as n1-cold-open-10k.json. N1_PERF_NET=fast4g adds Chrome's Fast 4G network. CHUNKED_APPLY ships
+// off until this gate passes (apps/web/src/canvas/sync/flags.ts); the spec turns it on for its page (`speedFlags`).
 //
 //   N1_PERF=1 E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/n1-cold-open-10k.spec.ts --project=chromium --workers=1
 import { writeFileSync } from 'node:fs'
 import { logProfile, startProfile, stopProfile, summarizeProfile } from '../perf/fps.ts'
 import { expect, test, waitForCanvas } from '../tests/support/canvas.ts'
-import { BIG_BOARD_ELEMENTS, median, readOpen, seedBigBoard, watchOpen } from './support/big-board.ts'
+import {
+  BIG_BOARD_ELEMENTS,
+  median,
+  readOpen,
+  seedBigBoard,
+  speedFlags,
+  watchOpen,
+} from './support/big-board.ts'
 
 test.skip(process.env.N1_PERF !== '1', 'a measurement: N1_PERF=1 runs it')
 
@@ -26,6 +34,7 @@ test('N1-4: a cold open of the 10k board at CPU 4x: first content soon after the
   const seeded = await seedBigBoard(a.page, board)
   expect(seeded.elements).toBe(BIG_BOARD_ELEMENTS)
   await watchOpen(a.context)
+  await speedFlags(a.context, { CHUNKED_APPLY: true })
   const cdp = await a.context.newCDPSession(a.page)
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 })
   if (process.env.N1_PERF_NET === 'fast4g') {

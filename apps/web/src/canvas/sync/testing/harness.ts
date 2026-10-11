@@ -35,7 +35,14 @@ export interface Harness {
   readonly room: FakeRoom
   client(
     name: string,
-    o?: { readonly?: boolean; latencyMs?: number; offline?: OfflineQueueStore; tab?: string },
+    o?: {
+      readonly?: boolean
+      latencyMs?: number
+      offline?: OfflineQueueStore
+      tab?: string
+      /** N1-3: the reset welcome's diff apply (default: sync/flags.ts DIFF_APPLY, which ships off) */
+      diff?: boolean
+    },
   ): TestClient
   /** runs every queued frame and timer */
   settle(): void
@@ -69,6 +76,7 @@ export function createHarness(o: { seed?: readonly Record<string, unknown>[] } =
         setTimer: clock.setTimer,
         clearTimer: clock.clearTimer,
         log: (event, detail) => logs.push({ event, detail }),
+        ...(co.diff !== undefined ? { snapshotApply: { diff: co.diff } } : {}),
       })
       coreRef = core
       core.start()

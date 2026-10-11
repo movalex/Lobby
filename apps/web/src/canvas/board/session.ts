@@ -79,8 +79,9 @@ import {
   RESUME_FROM_CACHE,
 } from '../sync/adapter/snapshot-cache.ts'
 import { LobbyEngineCore } from '../sync/core/engine.ts'
-import { CHUNKED_APPLY, DIFF_APPLY, setDevChecks, WORKER_DECODE } from '../sync/flags.ts'
+import { SPEED_FLAGS_KEY, setDevChecks, setSpeedFlagOverrides, speedFlag } from '../sync/flags.ts'
 import { bump } from '../sync/headless/scene.ts'
+import { timelineMark } from '../sync/timeline.ts'
 import { createSnapshotDecoder, type SnapshotDecoder } from '../sync/transport/snapshot-decoder.ts'
 import { connectQuery, createSocketTransport, type SocketTransport } from '../sync/transport/socket.ts'
 import type {
@@ -269,6 +270,8 @@ export class LobbyBoardSession {
 
   constructor(o: LobbyBoardSessionOptions) {
     this.o = o
+    // wave N (WS1): a dev-auth page (the e2e build, local dev; never a production bundle) may switch a speed part
+    if (DEV_AUTH_ENABLED) readSpeedFlagOverrides()
     this.tab = tabId()
     this.ticketRole = o.first.role
     this.cacheOff = !o.cache
@@ -311,7 +314,7 @@ export class LobbyBoardSession {
     this.detach.push(() => this.tickets.cancel())
     // N1-1: the snapshot decode off the main thread (WORKER_DECODE), its worker ended with this session
     this.decoder = createSnapshotDecoder({
-      worker: WORKER_DECODE,
+      worker: speedFlag('WORKER_DECODE'),
       onDecoded: (side) => countUsage(`open.decode:${side}`),
     })
     const decoder = this.decoder
@@ -347,8 +350,8 @@ export class LobbyBoardSession {
       offline,
       // wave N (WS1): a warm open's reset welcome as a diff (N1-3), a cold open's large one in chunks (N1-4)
       snapshotApply: {
-        diff: DIFF_APPLY,
-        chunks: CHUNKED_APPLY ? animationFrames((els) => this.idsInInitialView(els)) : null,
+        diff: speedFlag('DIFF_APPLY'),
+        chunks: speedFlag('CHUNKED_APPLY') ? animationFrames((els) => this.idsInInitialView(els)) : null,
       },
     })
     const me = { sid: `${o.first.user.id}:${this.tab}`, uid: o.first.user.id, name: o.first.user.name }
@@ -1222,6 +1225,7 @@ export class LobbyBoardSession {
       canvas: this.handle.canvas,
       isHidden: (id) => this.registries.hidden.isHidden(id),
       root,
+      sizeAware: speedFlag('SIZE_AWARE_LOD'),
     })
     offs.push(() => lod.dispose())
     // the test facade and the debug handle (dev-auth builds only: the facade checks the guard itself)
@@ -1496,11 +1500,12 @@ export class LobbyBoardSession {
 // biome-ignore lint/suspicious/noExplicitAny: Excalidraw's element helpers, typed loosely on purpose
 const ElementLib = ExcalidrawElementNs as any
 
-/** A user-timing mark (the N1 specs read the board page's timeline); never throws. */
-function timelineMark(name: string): void {
+/** Wave N (WS1): this dev-auth page's speed-part overrides (sync/flags.ts SPEED_FLAGS_KEY); none when unreadable. */
+function readSpeedFlagOverrides(): void {
   try {
-    performance.mark(name)
+    const raw = globalThis.localStorage?.getItem(SPEED_FLAGS_KEY)
+    setSpeedFlagOverrides(raw ? JSON.parse(raw) : {})
   } catch {
-    // no user timing
+    setSpeedFlagOverrides({})
   }
 }

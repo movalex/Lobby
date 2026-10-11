@@ -6,8 +6,10 @@
 // arrows, 50 images, 730 loose shapes; LOBBY_FPS_BOARD=heavy: the perf seed's heavy board, e2e/perf/seed.ts HEAVY), the
 // views default to fit, 0.25 and 0.5, and each view is measured at CPU 1x and 4x (LOBBY_FPS_CPU=1,4; 4x is the laptop
 // stand-in, the real laptop number stays an owner device check: PERF-laptop). With N1_PERF=1 the N1-5 targets are
-// asserted on the page as shipped (the default mode): a median of at least 55 fps at each view at 1x, and at least 30 at
-// 4x.
+// asserted on the size-aware pass (the `size-on` mode, and `default` when the page ships with it): a median of at least
+// 55 fps at each view at 1x, and at least 30 at 4x. SIZE_AWARE_LOD ships off until that gate passes
+// (apps/web/src/canvas/sync/flags.ts), so with N1_PERF=1 the modes default to `default,size-on`: the page as shipped
+// (the pass before wave N) and the size-aware pass, in the same page and machine state.
 //
 // Same method as spike A14 and spike B's perf-fps (e2e/spike/fixtures/perf-kit.ts `measureView`): the
 // headless shell with GPU flags, 1536×864 at DPR 1.25, the pointer at rest over the canvas, nothing
@@ -19,9 +21,11 @@
 // images in it are loaded (the loader's state), and the run fails if any image fails to load.
 //
 // Each view is measured once per MODE, in the same page and the same machine state:
-//   default   the page as it is
+//   default   the page as it is (the pass as shipped: SIZE_AWARE_LOD)
 //   lod-off   the level-of-detail pass switched off (window.__lobbyLod, dev-auth builds only)
 //   lod-on    the level-of-detail pass switched on (its default)
+//   size-on   N1-5's size-aware pass (zoom buckets, the memory cap, loose-element tiles)
+//   size-off  the pass as before wave N (one bucket, frames only, below zoom 0.2)
 // LOBBY_FPS_MODES=a,b picks the modes (default: default, or lod-off,lod-on when the pass is on the page);
 // LOBBY_FPS_PROFILE=1 adds one V8 CPU-profiled pan per view and mode (the top functions are logged; the
 // raw .cpuprofile goes to the test's output folder).
@@ -137,14 +141,22 @@ async function enterMode(page: Page, mode: string): Promise<boolean> {
       probed.__lodProbe = false
     }
     // N1-5: the pass as before wave N (one bucket, no tiles, below 0.2 only), for the comparison
-    const sized = (w as unknown as { __lobbyLod?: { setSizeAware?(on: boolean): void } }).__lobbyLod
+    const sized = (
+      w as unknown as {
+        __lobbyLod?: { setSizeAware?(on: boolean): void; state(): { sizeAware?: boolean } }
+      }
+    ).__lobbyLod
+    // the page's own setting, read once (the other modes go back to it)
+    const shipped = w as unknown as { __lodShippedSizeAware?: boolean }
+    if (shipped.__lodShippedSizeAware === undefined)
+      shipped.__lodShippedSizeAware = sized?.state().sizeAware ?? false
     if (mode === 'size-off' || mode === 'size-on') {
       if (!sized?.setSizeAware) return false
       lod?.setEnabled(true)
       sized.setSizeAware(mode === 'size-on')
       return true
     }
-    sized?.setSizeAware?.(true)
+    sized?.setSizeAware?.(shipped.__lodShippedSizeAware)
     if (mode === 'default') return true
     if (mode === 'lod-off' || mode === 'lod-on') {
       if (!lod) return false
@@ -236,7 +248,12 @@ test('big board: pan fps at Lobby’s fit, 0.25 and 0.5, per mode and CPU rate (
 
     const hasLod = await page.evaluate(() => !!(window as unknown as { __lobbyLod?: unknown }).__lobbyLod)
     const modes = (
-      process.env.LOBBY_FPS_MODES ?? (hasLod && BOARD === 'heavy' ? 'lod-off,lod-on' : 'default')
+      process.env.LOBBY_FPS_MODES ??
+      (hasLod && BOARD === 'heavy'
+        ? 'lod-off,lod-on'
+        : process.env.N1_PERF === '1'
+          ? 'default,size-on'
+          : 'default')
     )
       .split(',')
       .map((m) => m.trim())
@@ -315,11 +332,18 @@ test('big board: pan fps at Lobby’s fit, 0.25 and 0.5, per mode and CPU rate (
     writeFileSync(testInfo.outputPath('lod-fps.json'), JSON.stringify(result, null, 2))
     testInfo.annotations.push({ type: 'lod-fps', description: JSON.stringify(result) })
     expect(rows.length).toBeGreaterThan(0)
-    // N1-5's targets on the page as shipped (N1_PERF=1)
+    // N1-5's targets on the size-aware pass (N1_PERF=1): the size-on rows, and the page's own when it ships with it
     if (process.env.N1_PERF === '1')
       for (const row of rows) {
-        const r = row as { cpu: number; mode: string; view: string; medianFps: number }
+        const r = row as {
+          cpu: number
+          mode: string
+          view: string
+          medianFps: number
+          lod: { sizeAware?: boolean } | null
+        }
         if (r.mode !== 'default' && r.mode !== 'lod-on' && r.mode !== 'size-on') continue
+        if (!r.lod?.sizeAware) continue
         const target = TARGET_FPS[r.cpu]
         if (target !== undefined)
           expect(r.medianFps, `${r.view} at CPU ${r.cpu}x (${r.mode})`).toBeGreaterThanOrEqual(target)
