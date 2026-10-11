@@ -167,7 +167,36 @@ function collapse(spans: Span[]): Span[] {
   return out
 }
 
-const isSpace = (ch: string) => /\s/.test(ch)
+const isSpace = (ch: string) => /^\s$/.test(ch)
+
+type SegmenterCtor = new (
+  locale?: string,
+  o?: { granularity: 'grapheme' },
+) => { segment(s: string): Iterable<{ segment: string }> }
+const Segmenter = (globalThis as { Intl?: { Segmenter?: SegmenterCtor } }).Intl?.Segmenter
+
+/** The text's grapheme clusters (a letter with its marks, a whole emoji sequence); code points without Intl.Segmenter. */
+export function clusters(text: string): string[] {
+  if (!Segmenter) return [...text]
+  return [...new Segmenter(undefined, { granularity: 'grapheme' }).segment(text)].map((s) => s.segment)
+}
+
+/** A cluster drawn as an emoji: a ZWJ sequence, a skin tone, a keycap, emoji presentation (U+FE0F), a tag sequence. */
+export function isEmojiSequence(cluster: string): boolean {
+  if ([...cluster].length < 2) return false
+  for (const ch of cluster) {
+    const cp = ch.codePointAt(0) ?? 0
+    if (
+      cp === 0x200d ||
+      cp === 0xfe0f ||
+      cp === 0x20e3 ||
+      (cp >= 0x1f3fb && cp <= 0x1f3ff) ||
+      (cp >= 0xe0020 && cp <= 0xe007f)
+    )
+      return true
+  }
+  return false
+}
 
 /**
  * Lays out one <text> (a line): its spans split into runs by the face that draws each character, positioned with
@@ -201,7 +230,7 @@ export function layoutText(
       if (cur?.text) dx = 0
       cur = null
     }
-    for (const ch of span.text.replace(/[\n\r\t]/g, ' ')) {
+    for (const ch of clusters(span.text.replace(/[\n\r\t]/g, ' '))) {
       const cp = ch.codePointAt(0) ?? 0
       if (isSpace(ch)) {
         const c = cur as { draw: Draw | null; text: string } | null
@@ -214,7 +243,8 @@ export function layoutText(
         }
         continue
       }
-      const d = faces.draw(cp, families)
+      // an emoji sequence (ZWJ, a skin tone, a keycap, emoji presentation) is one picture, never split by face
+      const d: Draw = isEmojiSequence(ch) ? { kind: 'glyph' } : faces.draw(cp, families)
       const c = cur as { draw: Draw | null; text: string } | null
       if (c?.draw && sameDraw(c.draw, d)) c.text += ch
       else {

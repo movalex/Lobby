@@ -118,6 +118,19 @@ describe('layoutText', () => {
       { text: '3', font: 'standard', x: 23.5, y: 13.6 },
     ])
   })
+  it('an emoji sequence (skin tone, ZWJ family, keycap) is one picture, even where a face covers U+200D', () => {
+    const wide = { ...LATIN, unicodeRange: 'U+20-7e, U+2000-206F' } // Nunito-like: General Punctuation, ZWJ in it
+    const runs = layout(
+      '<text x="0" y="0" font-family="Excalifont, Segoe UI Emoji" font-size="20" style="white-space: pre;">ok 👍🏽 👨‍👩‍👧 1️⃣</text>',
+      [wide],
+    )
+    expect(runs.map((r) => [r.text, r.font])).toEqual([
+      ['ok ', 'Excalifont'],
+      ['👍🏽', 'glyph'],
+      ['👨‍👩‍👧', 'glyph'],
+      ['1️⃣', 'glyph'],
+    ])
+  })
   it('without white-space: pre, spaces collapse as SVG does', () => {
     expect(layout('<text x="0" y="0" font-family="Excalifont" font-size="20">  a   b  </text>')).toEqual([
       { text: 'a b', font: 'Excalifont', x: 0, y: 0 },
