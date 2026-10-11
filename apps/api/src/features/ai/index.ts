@@ -64,11 +64,13 @@ import { mayExport } from '../export-control/policy.ts'
 import { guestRefused } from '../guests/guard.ts'
 import { ticketName } from '../guests/label.ts'
 import { checkpointBeforeChange } from '../history/before-change.ts'
+import { PENDING_ROUTES, type PendingRoute } from '../pending-routes.ts'
 import { AiLedger, InFlight, type InFlightLimits } from './budget.ts'
 import { registerCapture } from './capture.ts'
 import { aiConfigured } from './config.ts'
 import { clampRect, publishDone, publishWorking } from './live.ts'
 import { type ChatOutcome, createOpenAiClient, type OpenAiClient } from './openai.ts'
+import { badOutput, upstreamError } from './outcome.ts'
 import {
   actionsPlan,
   askPlan,
@@ -105,11 +107,21 @@ export const AI_STATUS_ROUTE = '/api/boards/:bid/ai'
 export const AI_RUN_ROUTE = '/api/boards/:bid/ai/run'
 
 /** Process-level knobs tests may lower before building an app (like search's searchSettings). */
-export const aiSettings: { inFlight: InFlightLimits; fetchImpl: typeof fetch | undefined } = {
+export const aiSettings: {
+  inFlight: InFlightLimits
+  fetchImpl: typeof fetch | undefined
+  /**
+   * Wave N (WS5): the pending-route list Capture the room's routes are registered against (default the api's own,
+   * ../pending-routes.ts PENDING_ROUTES). Only the capture tests pass another (none pending), so they can run
+   * while the routes are still held pending there.
+   */
+  capturePending: Readonly<Record<string, PendingRoute>>
+} = {
   // Each call holds a whole board snapshot in memory while it runs: a few at a time keeps a 512 MB api
   // safe on the biggest boards, and an internal tool never needs more.
   inFlight: { user: 2, workspace: 3, total: 4 },
   fetchImpl: undefined,
+  capturePending: PENDING_ROUTES,
 }
 
 /**
@@ -323,8 +335,29 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
   // wave M (M8-2): Ask across boards (./workspace-ask.ts), under the same per-minute and in-flight limits, ledger,
   // model client and per-board gate as the board's AI
   registerWorkspaceAsk(app, ctx, { runsPerUser, inFlight, ledger, client, loaders })
-  // wave N (WS5): Capture the room (./capture.ts; pending stubs until implemented)
-  registerCapture(app, ctx)
+  // wave N (WS5): Capture the room (./capture.ts), under the same per-minute and in-flight limits, ledger and gate.
+  // Photos go through a client of their own: DRAFTROOM_AI_VISION_MODEL (else OPENAI_MODEL) and the vision timeout.
+  const visionClient: OpenAiClient | null =
+    cfg.apiKey && cfg.capture.vision
+      ? createOpenAiClient({
+          apiKey: cfg.apiKey,
+          baseUrl: cfg.baseUrl,
+          model: cfg.capture.visionModel ?? cfg.model,
+          timeoutMs: cfg.capture.visionTimeoutMs,
+          maxOutputTokens: cfg.maxOutputTokens,
+          reasoningEffort: cfg.reasoningEffort,
+          fetchImpl: aiSettings.fetchImpl,
+        })
+      : null
+  await registerCapture(app, ctx, {
+    runsPerUser,
+    inFlight,
+    ledger,
+    client,
+    visionClient,
+    loaders,
+    pending: aiSettings.capturePending,
+  })
 
   app.get(AI_STATUS_ROUTE, async (req): Promise<AiStatus> => {
     const user = await ctx.requireUser(req)
@@ -674,31 +707,5 @@ function toPlan(input: LiveAiRunInput, json: unknown, c: PlanContext): AiPlan {
       return { action: 'sort', lens: input.lens, ...sortPlan(json, c.sent) }
     case 'score':
       return { action: 'score', axes: input.axes, ...scorePlan(json, c.sent) }
-  }
-}
-
-const badOutput = () =>
-  new ApiError(502, AI_ERROR_CODES.badOutput, 'The AI’s answer couldn’t be used. Try again.')
-
-function upstreamError(outcome: Extract<ChatOutcome, { ok: false }>): ApiError {
-  switch (outcome.kind) {
-    case 'timeout':
-      return new ApiError(504, AI_ERROR_CODES.upstream, 'OpenAI took too long to answer. Try again.')
-    case 'network':
-      return new ApiError(502, AI_ERROR_CODES.upstream, 'Lobby couldn’t reach OpenAI. Try again in a moment.')
-    case 'http':
-      if (outcome.status === 429)
-        return new ApiError(502, AI_ERROR_CODES.upstream, 'OpenAI is busy right now. Try again in a minute.')
-      if (outcome.status === 401 || outcome.status === 403)
-        return new ApiError(
-          502,
-          AI_ERROR_CODES.upstream,
-          'OpenAI refused Lobby’s key. Ask whoever runs Lobby to check the AI settings.',
-        )
-      return new ApiError(502, AI_ERROR_CODES.upstream, 'OpenAI couldn’t answer just now. Try again.')
-    case 'refused':
-      return new ApiError(422, AI_ERROR_CODES.refused, 'The AI declined to answer this one.')
-    default:
-      return new ApiError(502, AI_ERROR_CODES.badOutput, 'The AI’s answer couldn’t be used. Try again.')
   }
 }

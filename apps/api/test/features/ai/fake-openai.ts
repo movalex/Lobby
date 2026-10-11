@@ -58,9 +58,43 @@ export interface FakeOpenAi {
   close(): Promise<void>
 }
 
+/**
+ * A message's text (wave N, WS5: a capture photo's user message is an array of a text part and an image part; typed
+ * as a string for the older tests, which never see one).
+ */
+export function textOf(content: unknown): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  const text = (p: unknown) =>
+    p && typeof p === 'object' && (p as { type?: unknown }).type === 'text'
+      ? String((p as { text?: unknown }).text ?? '')
+      : ''
+  return content.map(text).join('\n')
+}
+
+/** The image parts of a request's user message (wave N, WS5): what was sent, as the request carried it. */
+export function imagePartsOf(req: SeenRequest): { url: string; detail: string | null }[] {
+  const out: { url: string; detail: string | null }[] = []
+  for (const m of req.body.messages ?? []) {
+    const content = m.content as unknown
+    if (!Array.isArray(content)) continue
+    for (const p of content as { type?: unknown; image_url?: { url?: unknown; detail?: unknown } }[])
+      if (p?.type === 'image_url')
+        out.push({
+          url: String(p.image_url?.url ?? ''),
+          detail: typeof p.image_url?.detail === 'string' ? p.image_url.detail : null,
+        })
+  }
+  return out
+}
+
+/** The user message's text. */
+export const userTextOf = (req: SeenRequest): string =>
+  textOf(req.body.messages?.find((m) => m.role === 'user')?.content)
+
 /** The items the api put between the prompt's <<<ITEMS / ITEMS>>> lines. */
 export function itemsOf(req: SeenRequest): FakeItem[] {
-  const user = req.body.messages?.find((m) => m.role === 'user')?.content ?? ''
+  const user = userTextOf(req)
   const start = user.indexOf('<<<ITEMS\n')
   const end = user.lastIndexOf('\nITEMS>>>')
   if (start < 0 || end < 0) return []
@@ -75,7 +109,7 @@ export function itemsOf(req: SeenRequest): FakeItem[] {
 export function defaultAnswer(req: SeenRequest): unknown {
   const items = itemsOf(req)
   const schema = req.body.response_format?.json_schema?.name
-  const user = req.body.messages?.find((m) => m.role === 'user')?.content ?? ''
+  const user = userTextOf(req)
   switch (schema) {
     case 'lobby_summary':
       return { summary: `The board holds ${items.length} items. ${items[0]?.text ?? ''}`.trim() }
@@ -101,7 +135,9 @@ export function defaultAnswer(req: SeenRequest): unknown {
     }
     default: {
       const waveL = waveLAnswer(schema, items)
-      return waveL === undefined ? {} : waveL
+      if (waveL !== undefined) return waveL
+      const capture = captureAnswer(schema, req)
+      return capture === undefined ? {} : capture
     }
   }
 }
@@ -179,8 +215,76 @@ export function waveLAnswer(schema: string | undefined, items: readonly FakeItem
   }
 }
 
+/**
+ * Wave N (WS5, Capture the room): the canned model answers for the capture schemas (capture-prompt.ts), the MODEL's
+ * shapes (its own node ids, indexes into its notes), which capture-plan.ts validates and maps:
+ * - lobby_capture_notes / _auto  three notes in two columns, two groups (auto: kind 'notes')
+ * - lobby_capture_diagram        three nodes (its own ids) and two edges, one labelled
+ * - lobby_capture_meeting        a theme per part from the transcript's first lines, a decision and an action
+ * - lobby_capture_themes         every note sent in one theme
+ */
+export function captureAnswer(schema: string | undefined, req: SeenRequest): unknown {
+  const notes = [
+    { text: 'Keep the demo', color: 'yellow', box: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 } },
+    { text: 'Shorter stand-ups', color: 'light-red', box: { x: 0.1, y: 0.4, w: 0.2, h: 0.2 } },
+    { text: 'Slow builds', color: 'orange', box: { x: 0.6, y: 0.1, w: 0.2, h: 0.2 } },
+  ]
+  const groups = [
+    { name: 'Keep', notes: [0, 1] },
+    { name: 'Change', notes: [2] },
+  ]
+  const nodes = [
+    { id: 'start', label: 'Brief', shape: 'ellipse', box: { x: 0.05, y: 0.4, w: 0.15, h: 0.1 } },
+    { id: 'work', label: 'Sketch', shape: 'rect', box: { x: 0.4, y: 0.4, w: 0.15, h: 0.1 } },
+    { id: 'ok', label: 'Happy?', shape: 'diamond', box: null },
+  ]
+  const edges = [
+    { from: 'start', to: 'work', label: '', kind: 'arrow' },
+    { from: 'work', to: 'ok', label: 'review', kind: 'line' },
+  ]
+  const user = userTextOf(req)
+  switch (schema) {
+    case 'lobby_capture_notes':
+      return { notes, groups }
+    case 'lobby_capture_diagram':
+      return { nodes, edges }
+    case 'lobby_capture_auto':
+      return { kind: 'notes', notes, groups, nodes: [], edges: [] }
+    case 'lobby_capture_meeting': {
+      const start = user.indexOf('<<<TRANSCRIPT\n')
+      const end = user.lastIndexOf('\nTRANSCRIPT>>>')
+      const lines =
+        start < 0 || end < 0
+          ? []
+          : user
+              .slice(start + '<<<TRANSCRIPT\n'.length, end)
+              .split('\n')
+              .map((l) => l.trim())
+              .filter(Boolean)
+      const part = Number(/part (\d+) of/.exec(user)?.[1] ?? 1)
+      return {
+        themes: [{ name: `Theme ${part}`, notes: lines.slice(0, 2).map((l) => l.slice(0, 120)) }],
+        decisions: [`Decision ${part}`],
+        actions: [{ text: `Action ${part}`, owner: null }],
+      }
+    }
+    case 'lobby_capture_themes': {
+      const ids = [...user.matchAll(/"id":"(t\d+)"/g)].map((m) => m[1])
+      return { themes: [{ name: 'Whole meeting', note_ids: ids }] }
+    }
+    default:
+      return undefined
+  }
+}
+
+/** An image's prompt tokens as the fake bills them (a high-detail 2048 px image on a patch-based model, roughly). */
+export const FAKE_IMAGE_TOKENS = 2_500
+const DATA_URL_RE = /data:image\/[a-z]+;base64,[A-Za-z0-9+/=]+/g
+
 const usageFor = (req: SeenRequest, content: string) => {
-  const prompt = Math.ceil(req.raw.length / 4)
+  // an image is billed as FAKE_IMAGE_TOKENS, never by its base64 length
+  const images = req.raw.match(DATA_URL_RE)?.length ?? 0
+  const prompt = Math.ceil(req.raw.replace(DATA_URL_RE, '').length / 4) + images * FAKE_IMAGE_TOKENS
   const completion = Math.ceil(content.length / 4)
   return { prompt_tokens: prompt, completion_tokens: completion, total_tokens: prompt + completion }
 }
@@ -240,7 +344,7 @@ export async function startFakeOpenAi(): Promise<FakeOpenAi> {
           const content = JSON.stringify(answer.content)
           const messages = seen.body.messages ?? []
           const prompt =
-            messages.reduce((n, m) => n + Buffer.byteLength(m.content, 'utf8') + 3, 0) +
+            messages.reduce((n, m) => n + Buffer.byteLength(textOf(m.content), 'utf8') + 3, 0) +
             Buffer.byteLength(JSON.stringify(seen.body.response_format?.json_schema?.schema ?? {}), 'utf8') +
             3
           const completion = Math.ceil(content.length / 4)
