@@ -39,7 +39,8 @@ vi.mock('../reveal.ts', () => ({ revealResult: (...a: unknown[]) => revealResult
 const countUsage = vi.fn()
 vi.mock('../../../lib/usage.ts', () => ({ countUsage: (e: string) => countUsage(e) }))
 
-const { captureDialog, captureJob, openCaptureDialog, runCapture, VISION_OFF_MESSAGE } = await import('./run.ts')
+const { cancelCapture, captureDialog, captureJob, openCaptureDialog, runCapture, VISION_OFF_MESSAGE } =
+  await import('./run.ts')
 const { CaptureUnavailableError } = await import('./client.ts')
 
 const RUN = 'air_0123456789ABCDEFGHIJ'
@@ -62,7 +63,11 @@ const MEETING = answer({
   decisions: ['One location'],
   actions: [{ text: 'Book the studio', owner: 'Ana' }],
 })
-const PHOTO = { blob: new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], { type: 'image/jpeg' }), width: 2048, height: 1536 }
+const PHOTO = {
+  blob: new Blob([new Uint8Array([0xff, 0xd8, 0xff, 0xd9])], { type: 'image/jpeg' }),
+  width: 2048,
+  height: 1536,
+}
 
 function setup() {
   const f = fakeFlowCanvas()
@@ -117,7 +122,11 @@ describe('a photo', () => {
     expect(ids).toHaveLength(2)
     const notes = f.live().filter((e) => e.type === 'stickynote')
     expect(notes).toHaveLength(2)
-    for (const n of notes) expect((n.customData as { lobby: { ai: unknown } }).lobby.ai).toEqual({ by: 'usr_alice000001', run: RUN })
+    for (const n of notes)
+      expect((n.customData as { lobby: { ai: unknown } }).lobby.ai).toEqual({
+        by: 'usr_alice000001',
+        run: RUN,
+      })
     expect(f.steps()).toBe(1)
     expect(pageSpotNear).toHaveBeenCalledWith(f.canvas, expect.anything(), [])
     expect(revealResult).toHaveBeenCalledWith(f.canvas, ids)
@@ -153,7 +162,12 @@ describe('a photo', () => {
     const { f, ctx } = setup()
     openCaptureDialog(ctx)
     capturePhoto.mockRejectedValueOnce(
-      new ApiError('rate-limited', 429, 'AI_CAPTURE_DAILY_CAP', 'You’ve used your 10 photo captures for today.'),
+      new ApiError(
+        'rate-limited',
+        429,
+        'AI_CAPTURE_DAILY_CAP',
+        'You’ve used your 10 photo captures for today.',
+      ),
     )
     expect(await runCapture(ctx, photoSrc())).toBeNull()
     expect(captureJob(f.canvas).get()).toMatchObject({
@@ -166,6 +180,29 @@ describe('a photo', () => {
     expect(captureDialog(f.canvas).get()).not.toBeNull()
     expect(f.live()).toEqual([])
     expect(showAiPreview).not.toHaveBeenCalled()
+  })
+
+  it('shows its stage while it runs, and Cancel stops it: the request is aborted, nothing is written', async () => {
+    const { f, ctx } = setup()
+    openCaptureDialog(ctx)
+    let signal: AbortSignal | undefined
+    capturePhoto.mockImplementation(
+      (_b: string, _j: Blob, _m: string, o: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          signal = o.signal
+          o.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+        }),
+    )
+    const run = runCapture(ctx, photoSrc())
+    await vi.waitFor(() => expect(captureJob(f.canvas).get()?.stage).toBe('reading'))
+    cancelCapture(f.canvas)
+    expect(await run).toBeNull()
+    expect(signal?.aborted).toBe(true)
+    expect(captureJob(f.canvas).get()).toBeNull()
+    // the dialog stays open for another try; nothing was previewed or written
+    expect(captureDialog(f.canvas).get()).not.toBeNull()
+    expect(showAiPreview).not.toHaveBeenCalled()
+    expect(f.live()).toEqual([])
   })
 
   it('no notes found: told so, nothing previewed or written', async () => {
