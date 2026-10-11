@@ -166,6 +166,8 @@ export interface LodStats {
   readonly bytes: number
   readonly evicted: number
   readonly live: number
+  /** N1-5: regions in view (setView) not drawn at the current bucket yet (stale or rendering) */
+  readonly pendingInView: number
 }
 
 interface Drawn<B> {
@@ -204,6 +206,8 @@ export class LodModel<B = unknown> {
   private readonly labels = new Set<string>()
   private culledCache: Set<string> | null = null
   private bucketNow: number = LOD_ZOOM
+  /** N1-5: the scene rectangle in view (setView; null: unknown, every region counts as in view) */
+  private view: LodRect | null = null
   /** N1-5: the tiles are drawn (a large board, see setTilesActive); kept in the bookkeeping either way */
   private tilesOn = true
   private bytes = 0
@@ -233,6 +237,14 @@ export class LodModel<B = unknown> {
    * N1-5: whether the loose-element tiles are drawn and culled (index.ts: on a large board, the size-aware regime);
    * off, a loose element is the engine's as before wave N, and the tiles are only kept up to date.
    */
+  /**
+   * N1-5: the scene rectangle in view. Under the memory cap the regions in view come first: a region out of view is
+   * rendered only while the bitmaps hold under 3/4 of the cap, and a bitmap of a region in view is never evicted.
+   */
+  setView(view: LodRect | null): void {
+    this.view = view
+  }
+
   setTilesActive(on: boolean): void {
     if (on === this.tilesOn) return
     this.tilesOn = on
@@ -369,8 +381,11 @@ export class LodModel<B = unknown> {
   /** Stale regions (at the current bucket) quiet for `LOD_QUIET_MS` at `now`, `first` ones (in view) first. */
   due(now: number, first?: (rect: LodRect) => boolean): string[] {
     const out: string[] = []
+    const headroom = this.bytes < this.memoryCap * 0.75
     for (const [id, r] of this.regions) {
       if (!this.on(r) || this.state(r) !== 'stale' || now - r.changedAt < LOD_QUIET_MS) continue
+      // out of view, only with room to spare: it would evict what is in view, then be evicted, in a loop
+      if (!headroom && !this.inView(r)) continue
       out.push(id)
     }
     if (!first) return out
@@ -497,12 +512,14 @@ export class LodModel<B = unknown> {
     let frames = 0
     let tiles = 0
     let bitmaps = 0
+    let pendingInView = 0
     for (const r of this.regions.values()) {
       if (r.kind === 'frame') frames++
       else tiles++
       bitmaps += [...r.drawn.values()].filter((d) => d.bitmap).length
       if (!this.on(r)) continue
       const s = this.state(r)
+      if (s !== 'ready' && this.inView(r)) pendingInView++
       if (s === 'ready') ready++
       else if (s === 'stale') stale++
       else rendering++
@@ -520,10 +537,16 @@ export class LodModel<B = unknown> {
       bytes: this.bytes,
       evicted: this.evictions,
       live: this.liveIds.size,
+      pendingInView,
     }
   }
 
   // ---- internals ----
+
+  /** Whether a region meets the view (every region, when the view is unknown). */
+  private inView(r: Region<B>): boolean {
+    return !this.view || meets(r.rect, this.view)
+  }
 
   /** A region the pass works on now (a tile only while tiles are active). */
   private on(r: Region<B>): boolean {
@@ -678,8 +701,11 @@ export class LodModel<B = unknown> {
   private enforceCap(now: number): void {
     if (this.bytes <= this.memoryCap) return
     const all: { r: Region<B>; bucket: number; d: Drawn<B>; id: string }[] = []
+    // never one of the last paint, nor one of the current bucket in view (it is drawn, or about to be)
     for (const [id, r] of this.regions)
-      for (const [bucket, d] of r.drawn) if (d.bitmap && d.usedAt < now) all.push({ r, bucket, d, id })
+      for (const [bucket, d] of r.drawn)
+        if (d.bitmap && d.usedAt < now && !(bucket === this.bucketNow && this.inView(r)))
+          all.push({ r, bucket, d, id })
     all.sort((a, b) => {
       const ao = a.bucket === this.bucketNow ? 1 : 0
       const bo = b.bucket === this.bucketNow ? 1 : 0

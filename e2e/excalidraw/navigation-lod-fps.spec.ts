@@ -136,6 +136,15 @@ async function enterMode(page: Page, mode: string): Promise<boolean> {
       w.__lobbyBoard.api.setElementRenderOverrides(null)
       probed.__lodProbe = false
     }
+    // N1-5: the pass as before wave N (one bucket, no tiles, below 0.2 only), for the comparison
+    const sized = (w as unknown as { __lobbyLod?: { setSizeAware?(on: boolean): void } }).__lobbyLod
+    if (mode === 'size-off' || mode === 'size-on') {
+      if (!sized?.setSizeAware) return false
+      lod?.setEnabled(true)
+      sized.setSizeAware(mode === 'size-on')
+      return true
+    }
+    sized?.setSizeAware?.(true)
     if (mode === 'default') return true
     if (mode === 'lod-off' || mode === 'lod-on') {
       if (!lod) return false
@@ -249,12 +258,14 @@ test('big board: pan fps at Lobby’s fit, 0.25 and 0.5, per mode and CPU rate (
           const inView = await imagesInView(page)
           const shown = await waitImagesLoaded(page, 60_000, inView)
           // the pass renders its bitmaps once it is on: measure the steady state (the time it took is logged)
-          if (mode === 'lod-on' || mode === 'default') {
+          if (mode === 'lod-on' || mode === 'default' || mode === 'size-on' || mode === 'size-off') {
             const t = Date.now()
             await page.waitForFunction(
               () => {
-                type S = { active: boolean; stale: number; rendering: number }
+                type S = { active: boolean; stale: number; rendering: number; pendingInView?: number }
                 const s = (window as unknown as { __lobbyLod?: { state(): S } }).__lobbyLod?.state()
+                // N1-5: under the memory cap the regions out of view may stay stale: the view's are what is drawn
+                if (s && s.pendingInView !== undefined) return !s.active || s.pendingInView === 0
                 return !s?.active || (s.stale === 0 && s.rendering === 0)
               },
               undefined,
@@ -308,7 +319,7 @@ test('big board: pan fps at Lobby’s fit, 0.25 and 0.5, per mode and CPU rate (
     if (process.env.N1_PERF === '1')
       for (const row of rows) {
         const r = row as { cpu: number; mode: string; view: string; medianFps: number }
-        if (r.mode !== 'default' && r.mode !== 'lod-on') continue
+        if (r.mode !== 'default' && r.mode !== 'lod-on' && r.mode !== 'size-on') continue
         const target = TARGET_FPS[r.cpu]
         if (target !== undefined)
           expect(r.medianFps, `${r.view} at CPU ${r.cpu}x (${r.mode})`).toBeGreaterThanOrEqual(target)

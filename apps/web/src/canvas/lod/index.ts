@@ -74,6 +74,7 @@ export interface LodState {
   readonly bytes: number
   readonly evicted: number
   readonly live: number
+  readonly pendingInView: number
   readonly ready: number
   readonly stale: number
   readonly rendering: number
@@ -91,6 +92,8 @@ export interface LodState {
 
 export interface LodHandle {
   setEnabled(on: boolean): void
+  /** N1-5 (the fps spec's comparison): the size-aware pass on or off (SIZE_AWARE_LOD), the model rebuilt */
+  setSizeAware(on: boolean): void
   state(): LodState
   dispose(): void
 }
@@ -258,8 +261,8 @@ export function installLod(o: LodOptions): LodHandle {
     layer.forget(b.image)
     closeImage(b.image)
   }
-  const sizeAware = o.sizeAware ?? SIZE_AWARE_LOD
-  const model = new LodModel<Image>({ onDrop: release, sizeAware })
+  let sizeAware = o.sizeAware ?? SIZE_AWARE_LOD
+  let model = new LodModel<Image>({ onDrop: release, sizeAware })
   let threshold = 0
   let enabled = o.enabled ?? true
   let active = false
@@ -417,6 +420,7 @@ export function installLod(o: LodOptions): LodHandle {
     const view = { x: -s.scrollX, y: -s.scrollY, width: s.width / z, height: s.height / z }
     const live = model.liveCount()
     const visible = sizeAware ? model.visibleCount(view) : 0
+    model.setView(view)
     active = enabled && !disposed && lodActiveAt(zoom, live, visible, sizeAware)
     threshold = lodThreshold(live, visible, sizeAware)
     // N1-5: the loose-element tiles on a large board only (a small one keeps the pass as it was)
@@ -501,6 +505,16 @@ export function installLod(o: LodOptions): LodHandle {
       enabled = on
       updateActive()
       if (!on) layer.clear()
+    },
+    setSizeAware(on) {
+      if (on === sizeAware) return
+      sizeAware = on
+      model.reset([])
+      model = new LodModel<Image>({ onDrop: release, sizeAware })
+      noteSceneWalk('lod.reset')
+      model.reset(elements().values())
+      active = false
+      updateActive()
     },
     state() {
       const s = model.stats()

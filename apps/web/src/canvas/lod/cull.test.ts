@@ -246,11 +246,46 @@ describe('N1-5: tiles, staleness and the memory cap', () => {
         .map((d) => d.bitmap.image)
         .sort(),
     ).toEqual(['b@0.2', 'c@0.2'])
-    // a (evicted) is stale at 0.2 again: due, and its new bitmap evicts the least recently drawn (b, drawn at 11 like
-    // c: the older of the two in the eviction order)
+    // only tile (0,0) in view now: a (evicted) is stale at 0.2 again and due (in view), and its new bitmap evicts one
+    // of the bitmaps out of view (b and c, both drawn at 11), never one in view
+    m.setView({ x: 0, y: 0, width: 100, height: 100 })
+    expect(m.stats().pendingInView).toBe(1)
     expect(m.due(20)).toEqual([tileId(0, 0)])
     draw(tileId(0, 0), 20, 'a2@0.2')
     expect(dropped).toHaveLength(3)
     expect(m.stats().bytes).toBeLessThanOrEqual(80_000)
+    expect(m.drawable(21).map((d) => d.bitmap.image)).toContain('a2@0.2')
+    expect(m.stats().pendingInView).toBe(0)
+    // with no room to spare, a stale region out of view is not rendered (it would evict, then be evicted, in a loop)
+    expect(m.due(30)).toEqual([])
+  })
+
+  it('a bitmap in view is never evicted, even past the cap; out of view ones go first', () => {
+    const dropped: string[] = []
+    const s = scene([rect('a', 10, 10), rect('b', LOD_TILE + 10, 10), rect('c', 2 * LOD_TILE + 10, 10)])
+    const m = new LodModel<string>({
+      sizeAware: true,
+      memoryCap: 40_000,
+      onDrop: (b) => dropped.push(b.image),
+    })
+    m.reset(s.all())
+    // tiles (0,0) and (1,0) in view
+    m.setView({ x: 0, y: 0, width: LOD_TILE + 100, height: 100 })
+    const draw = (id: string, at: number, image: string) => {
+      const job = m.start(id)
+      if (job)
+        m.finish(id, job.version, { image, rect: { ...job.rect, width: 100, height: 100 }, scale: 1 }, at)
+    }
+    // headroom first: c (out of view) is rendered while there is room
+    expect(m.due(0).slice(0, 2).sort()).toEqual([tileId(0, 0), tileId(1, 0)].sort())
+    draw(tileId(2, 0), 1, 'c')
+    draw(tileId(0, 0), 2, 'a')
+    // over the cap: c (out of view) goes, a (in view) stays
+    expect(dropped).toEqual(['c'])
+    draw(tileId(1, 0), 3, 'b')
+    // both in view: past the cap, nothing in view is evicted
+    expect(dropped).toEqual(['c'])
+    expect(m.stats().bytes).toBe(80_000)
+    expect(m.stats().pendingInView).toBe(0)
   })
 })
