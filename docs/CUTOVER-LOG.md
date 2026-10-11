@@ -351,3 +351,21 @@ on the sync disk (§6).
   - Drift 0. Live smoke 40 passed, 0 failed.
   - Live check: a 375x812 name-only guest on a Retrospective board with 14 framed notes ran the palette command "Select 14 notes", the exact path that crashed before (React #185). The board stayed alive: no page errors, the canvas rendering, Saved.
   - Cleanup: the link revoked, the board in Trash.
+- **2026-10-11 00:16-00:20Z, wave M deployed** (main `104c6e0`; 0 board connections in the 3 h before):
+  - api `dep-db5dagflot8c73eibpqg` (migrations 0029_usage_daily and 0030_workspace_templates);
+  - sync `dep-db5db2d9fdbs73cff5n0`;
+  - web `dep-db5dbqvlot8c73eifnt0`.
+  - Applied first through the Render API:
+    - api: `DRAFTROOM_DB_POOL_MAX=5` and `DRAFTROOM_WORKSPACE_QUOTA_MB=5120`;
+    - sync: `DRAFTROOM_BACKUP_KEEP=4`, `DRAFTROOM_OUTBOUND_BUDGET_MB=128` and `DRAFTROOM_WS_DEFLATE=off` (HOLD until the lost-words race is fixed; the sync logs "permessage-deflate off");
+    - web: `VITE_PUBLIC_ORIGIN`, plus the `/version.json` `Cache-Control: no-store` header.
+  - After the deploy:
+    - api `/healthz` and `/healthz/deep` 200; sync `/healthz/deep` ok; maintenance off;
+    - 0 error/FATAL lines; render.yaml drift 0;
+    - live smoke 40 passed, 0 failed;
+    - `/version.json` answers `{"commit":"104c6e011bfe"}` with no-store.
+  - Gate at `104c6e01`:
+    - units 8,578 passed; real PG 1,907 passed (with 4 workers);
+    - whole e2e 903/903 normally and 903/903 with direct events;
+    - stale pairs: (a) 131/131 with deflate on and off, (b) 164/164, (c) by design, (d) passed; l-compat-rev11 6/6.
+  - Open: hotfix H2, the lost-words race (`hotfix/h2-lost-words`).
