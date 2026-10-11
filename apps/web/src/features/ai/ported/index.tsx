@@ -18,6 +18,8 @@
 //    (./remove.ts) and the live "Dana is using AI here" shimmer (./working.tsx); the cross-workstream API in
 //    ./public.ts; Ask this board (L2-2, ./ask.ts); Wrap up and Catch me up (L2-3, ../recap/); the session coach
 //    (L2-4, ../coach/).
+//  - wave N (WS5): Capture the room (../capture/): a photo or a meeting transcript becomes notes, a native diagram or
+//    a meeting frame, previewed first; its dialog is the 'ai-capture' overlay.
 // Hidden entirely unless the api reports AI on for this person on this board: not configured, switched
 // off, a name-only guest, or a viewer limited by the export policy all see nothing. The api enforces
 // every rule and every cost limit; the client only follows its answer. The live shimmer and the lens are the
@@ -27,6 +29,9 @@ import '../ai.css'
 import './ai-ported.css'
 import './wave-l.css'
 import './wave-m.css'
+import { CaptureDialogOverlay } from '../capture/CaptureDialog.tsx'
+import { releaseCaptureCanvas, setCaptureCanvas } from '../capture/client.ts'
+import { captureJob, closeCaptureDialog } from '../capture/run.ts'
 import { CoachOverlay } from '../coach/CoachChip.tsx'
 import { listenWorkshop } from '../coach/facts.ts'
 import { AiRecapOverlay } from '../recap/RecapPanel.tsx'
@@ -52,6 +57,8 @@ export const feature: CanvasFeature = {
     { id: 'ai-preview', layer: 'screen', order: 61, pointer: 'none', component: AiPreviewOverlay },
     { id: 'ai-recap', layer: 'screen', order: 62, pointer: 'none', component: AiRecapOverlay },
     { id: 'ai-coach', layer: 'screen', order: 56, pointer: 'none', component: CoachOverlay },
+    // wave N (WS5): Capture the room's dialog (../capture/CaptureDialog.tsx)
+    { id: 'ai-capture', layer: 'screen', order: 63, pointer: 'none', component: CaptureDialogOverlay },
   ],
   commands: COMMANDS,
   selectionBar: SELECTION_BAR,
@@ -60,6 +67,8 @@ export const feature: CanvasFeature = {
   onMount(ctx) {
     setAiCtx(ctx)
     const { canvas } = ctx
+    // wave N (WS5): the board Capture the room works on (../capture/client.ts)
+    setCaptureCanvas(canvas)
     // L2-3 Catch me up: this visit is the next one's "since" (device-local; no request)
     noteVisit(ctx.board.id, Date.now())
     const left = () => writeLastVisit(ctx.board.id, Date.now())
@@ -75,6 +84,10 @@ export const feature: CanvasFeature = {
       stopCoach()
       stopWorking()
       discardPreview(canvas)
+      captureJob(canvas).get()?.abort.abort()
+      captureJob(canvas).set(null)
+      closeCaptureDialog(canvas)
+      releaseCaptureCanvas(canvas)
       aiJob(canvas).get()?.abort.abort()
       aiJob(canvas).set(null)
       aiMenu(canvas).set(null)

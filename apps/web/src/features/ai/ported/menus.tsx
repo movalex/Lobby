@@ -24,6 +24,7 @@ import {
   useCanvasFeatureContext,
 } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { CAPTURE_COMMANDS, CAPTURE_MENU } from '../capture/entries.ts'
 import { DIAGRAM_MENU } from '../diagram/DiagramPrompt.tsx'
 import { SparkIcon, Spinner } from '../icons.tsx'
 import { runRecap } from '../recap/recap.ts'
@@ -278,6 +279,8 @@ export const CONTEXT_MENU: readonly MenuEntrySpec[] = [
       },
       // M4-5 (FTU-11): Diagram from words sits with the other AI entries (its command stays in the palette)
       { ...DIAGRAM_MENU, order: 4.5 },
+      // wave N (WS5, N5-2): Capture the room, and on an image Turn photo into notes / a diagram
+      ...CAPTURE_MENU,
       {
         id: 'ai.mindmap',
         group: 'ai',
@@ -437,6 +440,8 @@ export const COMMANDS: readonly CommandSpec[] = [
       openAiMenu(ctx.canvas, viewCentre(ctx), NONE, 'mindmap')
     },
   },
+  // wave N (WS5, N5-2): 'ai.capture', held while the contracts list it as pending (../capture/entries.ts)
+  ...CAPTURE_COMMANDS,
 ]
 
 // ---- the board menu --------------------------------------------------------------------------------

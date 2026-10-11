@@ -1,0 +1,107 @@
+/* OWNER: WS5 (wave N). Capture the room's dialog on the AI popover's shell (theme tokens only: both themes). Under
+   ported/: the board page's stylesheets (canvas-ux css-scope.test.ts); every rule names a .dr-ai-capture class. */
+.dr-ai-pop.dr-ai-capture {
+  width: 400px;
+}
+.dr-ai-capture__tabs {
+  display: flex;
+  gap: 4px;
+  margin: 4px 0 8px;
+  border-bottom: 1px solid var(--dr-line);
+}
+.dr-ai-capture__tab {
+  padding: 6px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--dr-ink-soft, var(--dr-ink));
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.dr-ai-capture__tab[aria-selected="true"] {
+  border-bottom-color: var(--dr-accent-line);
+  color: var(--dr-accent-ink);
+  font-weight: 600;
+}
+.dr-ai-capture__tab:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+.dr-ai-capture__picks {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.dr-ai-capture__pick {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+.dr-ai-capture__pick:has(input:focus-visible) {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+/* the file input covers its button (clicks and keys reach it), drawn invisible */
+.dr-ai-capture__file {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.dr-ai-capture__modes {
+  margin: 4px 0 8px;
+}
+.dr-ai-capture__modes .dr-ai-seg__opt + .dr-ai-seg__opt {
+  margin-left: -1px;
+}
+.dr-ai-capture__modes .dr-ai-seg__opt:not(:first-of-type):not(:last-of-type) {
+  border-radius: 0;
+}
+.dr-ai-capture__text {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 110px;
+  resize: vertical;
+  font: inherit;
+}
+.dr-ai-capture__meter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+}
+.dr-ai-capture__meter {
+  color: var(--dr-ink-soft, var(--dr-ink));
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.dr-ai-capture__meter[data-over] {
+  color: var(--dr-danger, var(--dr-ink));
+  font-weight: 600;
+}
+.dr-ai-capture__hint,
+.dr-ai-capture__lead {
+  margin: 4px 0 8px;
+  font-size: 13px;
+}
+.dr-ai-capture__error {
+  margin: 8px 0 0;
+  color: var(--dr-danger, var(--dr-ink));
+  font-size: 13px;
+}
+.dr-ai-capture__busy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+.dr-ai-capture__notice-text {
+  margin: 4px 0 10px;
+}
+.dr-ai-capture__quota {
+  white-space: nowrap;
+  font-weight: 600;
+}
