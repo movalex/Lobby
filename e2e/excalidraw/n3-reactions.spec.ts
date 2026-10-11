@@ -523,3 +523,34 @@ test('a name-only guest who can edit reacts like anyone (a key of their own uid)
     await context.close()
   }
 })
+
+test('the picker follows the pointer on hover, stays once clicked, and closes on an outside press', async ({
+  join,
+}) => {
+  const a = await join('alice')
+  const b = await join('bob', 'editor')
+  await twoNotes(a.page)
+  await expectItemsEverywhere([b], [N1])
+  for (const s of [a, b]) await showAll(s.page)
+  await reactWithMouse(b.page, N1, 'up')
+  await expect(reactionChip(a.page, N1, 'up')).toBeVisible()
+
+  // hover: the picker opens on its own (and goes when the pointer leaves)
+  await reactionChip(a.page, N1, 'up').hover()
+  await expect(reactionPicker(a.page)).toHaveAttribute('data-via', 'hover')
+  await a.page.mouse.move(2, 300)
+  await expect(reactionPicker(a.page)).toHaveCount(0)
+
+  // a click on the add button while the hover one is open keeps it (one picker replaced by another)
+  await reactionChip(a.page, N1, 'up').hover()
+  await expect(reactionPicker(a.page)).toHaveAttribute('data-via', 'hover')
+  await reactionRow(a.page, N1).getByTestId('note-reaction-add').click()
+  await expect(reactionPicker(a.page)).toHaveAttribute('data-via', 'click')
+  await a.page.mouse.move(2, 300)
+  await a.page.waitForTimeout(600)
+  await expect(reactionPicker(a.page)).toBeVisible()
+  // an outside press closes it (and takes nothing from the board)
+  await a.page.mouse.click(2, 300)
+  await expect(reactionPicker(a.page)).toHaveCount(0)
+  expect(await reactionsIn(a.page, N1)).toEqual({ up: [b.id] })
+})

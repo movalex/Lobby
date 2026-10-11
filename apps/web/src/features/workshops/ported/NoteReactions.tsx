@@ -372,19 +372,20 @@ function Layer({ ctx }: { ctx: Ctx }) {
   const hoverStay = useCallback(() => clearIntent(), [])
 
   // the picker goes when the thing it was for is gone: the camera moved, the notes left, reacting is off
-  const pickerShownAt = useRef<string>('')
+  const pickerShownAt = useRef<{ seq: number; view: string } | null>(null)
   const view = useValue('dr-wk-react-view', () => {
     const v = canvas.viewport.get()
     return `${Math.round(v.x)},${Math.round(v.y)},${v.zoom.toFixed(3)}`
   }, [canvas])
   useEffect(() => {
     if (!picker) {
-      pickerShownAt.current = ''
+      pickerShownAt.current = null
       return
     }
-    const sig = `${picker.seq}|${view}`
-    if (pickerShownAt.current === '') pickerShownAt.current = sig
-    else if (pickerShownAt.current !== sig) closePicker()
+    // a picker that replaces another (hover, then a click) starts from the camera as it is now
+    const at = pickerShownAt.current
+    if (!at || at.seq !== picker.seq) pickerShownAt.current = { seq: picker.seq, view }
+    else if (at.view !== view) closePicker()
   }, [picker, view, closePicker])
   const alive = useValue(
     'dr-wk-nr-picker-alive',
@@ -626,6 +627,9 @@ const ReactionRow = memo(function ReactionRow(p: RowProps) {
           aria-expanded={p.pickerOpen}
           onClick={() => addRef.current && p.onClickOpen(row.id, addRef.current)}
           onFocus={(e) => {
+            // the keyboard arriving here opens the picker; the picker handing the keyboard back (a pick, Escape) does not
+            if (e.relatedTarget instanceof Element && e.relatedTarget.closest('[data-reaction-surface]'))
+              return
             if (e.currentTarget.matches(':focus-visible') && addRef.current)
               p.onFocusOpen(row.id, addRef.current)
           }}
