@@ -165,6 +165,21 @@ describe('N1-1: the snapshot decoder', () => {
     d.dispose()
   })
 
+  it('a reset welcome whose size hint is under WORKER_MIN_BYTES starts no worker (a small board never loads it)', async () => {
+    FakeWorker.made = 0
+    const d = createSnapshotDecoder({ worker: true, createWorker: () => new FakeWorker() })
+    d.warm(WORKER_MIN_BYTES - 1)
+    d.warm(0)
+    expect(FakeWorker.made, 'no worker for a small frame').toBe(0)
+    // its frame decodes on the main thread, still no worker
+    await d.decode(await encodeSnapshotFrame(frameOf(3)))
+    expect(FakeWorker.made).toBe(0)
+    // a large board's welcome starts it while the frame downloads
+    d.warm(WORKER_MIN_BYTES)
+    expect(FakeWorker.made).toBe(1)
+    d.dispose()
+  })
+
   it('the Worker constructor throws: the same function decodes on the main thread', async () => {
     const sides: DecodeSide[] = []
     const logs: string[] = []
@@ -364,6 +379,26 @@ describe('N1-1: the socket decodes through the worker in arrival order', () => {
     await flush(40)
     expect(got.map((m) => m.type)).toEqual(['welcome', 'snapshot', 'contracts', 'changes'])
     expect((got[1] as SnapshotFrame).elements).toHaveLength(DECODE_SLICE + 3)
+    t.close()
+    d.dispose()
+  })
+
+  it('a reset welcome starts the worker only when its size hint says the frame decodes there', async () => {
+    FakeWorker.made = 0
+    const d = createSnapshotDecoder({ worker: true, createWorker: () => new FakeWorker() })
+    const { t, s } = await socketWith(d)
+    // a small board: its welcome names a frame under WORKER_MIN_BYTES (decoded on the main thread)
+    s.onmessage?.({
+      data: JSON.stringify({ ...welcome, snapshot: { elements: 40, bytes: WORKER_MIN_BYTES - 1 } }),
+    })
+    await flush(4)
+    expect(FakeWorker.made, 'no worker for a small board').toBe(0)
+    // a large board's welcome: the worker starts while its frame downloads
+    s.onmessage?.({
+      data: JSON.stringify({ ...welcome, snapshot: { elements: 10_000, bytes: 400_000 } }),
+    })
+    await flush(4)
+    expect(FakeWorker.made).toBe(1)
     t.close()
     d.dispose()
   })

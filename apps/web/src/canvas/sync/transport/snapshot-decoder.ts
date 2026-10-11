@@ -3,8 +3,9 @@
  * (./socket.ts) awaits `decode(bytes)` for each binary frame, so arrival order is kept exactly as before; only
  * where the work runs changes:
  *
- *  - a module Worker (./snapshot.worker.ts), created lazily (at the first reset welcome, `warm()`, or the first
- *    large binary frame) and terminated with the session (`dispose`): gunzip, JSON.parse and the whole zod parse
+ *  - a module Worker (./snapshot.worker.ts), created lazily (at a reset welcome whose size hint is at least
+ *    WORKER_MIN_BYTES, `warm(bytes)`, or the first binary frame that large; a small board's open never starts one)
+ *    and terminated with the session (`dispose`): gunzip, JSON.parse and the whole zod parse
  *    leave the main thread; the decoded elements come back in slices (each a short structured clone). A frame under
  *    WORKER_MIN_BYTES decodes on the main thread all the same (cheaper than the worker's round trip);
  *  - the main thread, the very same `decodeSnapshotFrame`, when the Worker constructor throws (no Worker, a policy),
@@ -185,7 +186,9 @@ export function createSnapshotDecoder(o: SnapshotDecoderOptions): SnapshotDecode
     get side() {
       return state === 'broken' ? 'main' : state === 'ready' ? 'worker' : null
     },
-    warm() {
+    warm(bytes) {
+      // a frame under the worker's floor decodes on the main thread: no worker for it (nor its script fetch)
+      if (bytes !== undefined && bytes < (o.minBytes ?? WORKER_MIN_BYTES)) return
       if (o.worker) void start()
     },
     async decode(bytes) {

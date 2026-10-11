@@ -36,6 +36,7 @@ import {
   Pong,
   ServerMessage,
 } from '@draftroom/canvas-schema/protocol'
+import { timelineMark as mark } from '../timeline.ts'
 import type { ServerInbound, Transport, TransportClose, TransportState } from '../types.ts'
 import { type SnapshotDecode, SnapshotDecodeLost } from './snapshot-protocol.ts'
 
@@ -85,7 +86,8 @@ export interface SocketTransportOptions {
   readonly log?: (event: string, detail: Readonly<Record<string, unknown>>) => void
   /**
    * N1-1 (wave N): where the binary snapshot frame is decoded (./snapshot-decoder.ts: a module Worker, or the main
-   * thread); absent: `decodeSnapshotFrame` here, as before. Its `warm()` runs at a reset welcome (the frame follows).
+   * thread); absent: `decodeSnapshotFrame` here, as before. Its `warm(bytes)` runs at a reset welcome with the
+   * welcome's size hint (`snapshot.bytes`, the frame's gzip length: the frame follows).
    */
   readonly decoder?: SnapshotDecode
 }
@@ -148,19 +150,6 @@ function isPong(data: string): boolean {
     return Pong.safeParse(JSON.parse(data)).success
   } catch {
     return false
-  }
-}
-
-/**
- * A user-timing mark, in a page only (headless clients of a load run, hundreds per process, never accumulate them, as
- * engine.ts `measure` does not); never throws.
- */
-function mark(name: string): void {
-  if (typeof (globalThis as { document?: unknown }).document === 'undefined') return
-  try {
-    globalThis.performance?.mark?.(name)
-  } catch {
-    // no user timing: no mark
   }
 }
 
@@ -234,8 +223,10 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
         // the close that follows is terminal with this reason, whatever its frame says (SMK-2)
         if (r.data.type === 'notice' && r.data.code === 'CLOSING' && gen === generation)
           announced = r.data.detail || 'UNKNOWN_ERROR'
-        // N1-1: a reset welcome's snapshot frame follows: the decoder's worker starts while it downloads
-        if (r.data.type === 'welcome' && r.data.reset) opts.decoder?.warm()
+        // N1-1: a reset welcome's snapshot frame follows: the decoder's worker starts while it downloads, when the
+        // welcome's size hint says it is large enough to decode there (a small board's never starts one)
+        if (r.data.type === 'welcome' && r.data.reset && r.data.snapshot)
+          opts.decoder?.warm(r.data.snapshot.bytes)
         opts.onRaw?.(r.data)
         deliver(r.data)
         return

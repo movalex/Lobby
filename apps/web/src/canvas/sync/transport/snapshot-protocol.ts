@@ -38,6 +38,10 @@ export class SnapshotDecodeLost extends Error {
 /** What the socket needs of a snapshot decoder (./snapshot-decoder.ts). */
 export interface SnapshotDecode {
   decode(bytes: Uint8Array): Promise<SnapshotFrame>
-  /** starts the decoder's worker now (a reset welcome came: its binary frame follows) */
-  warm(): void
+  /**
+   * A reset welcome came (its binary frame follows): starts the decoder's worker now when the frame will decode
+   * there, judged by `bytes` (the welcome's `snapshot.bytes`, the frame's gzip length). A frame too small for the
+   * worker starts nothing (a small board's open never loads the worker's script). No argument: start it.
+   */
+  warm(bytes?: number): void
 }
