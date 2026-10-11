@@ -369,3 +369,9 @@ on the sync disk (§6).
     - whole e2e 903/903 normally and 903/903 with direct events;
     - stale pairs: (a) 131/131 with deflate on and off, (b) 164/164, (c) by design, (d) passed; l-compat-rev11 6/6.
   - Open: hotfix H2, the lost-words race (`hotfix/h2-lost-words`).
+- **2026-10-11 05:59Z, hotfix H2 deployed** (web only, `3c83611`, `dep-db5ib1id0e5s73fium5g`; 0 board connections in the 3 h before). It fixes the lost-words race: words typed into a just-made note were dropped when Escape came before the label create's ack, while the page showed Saved.
+  - Gate at `5a607c62`: units 8,604 passed; whole e2e 922/922; `board-lost-words` 90/90 (and 180/180 earlier); ai-actions DEMO with deflate on 30/30; l-compat-rev11 6/6.
+  - Drift 0. Live smoke 40 passed, 0 failed. `/version.json` reports `3c83611e688e`, so open tabs are offered the update.
+  - Live check, a name-only guest: N, click, wait for the editor, type, then Escape at once and reload. The words were kept ("Second note words").
+  - Cleanup: the link revoked, the board in Trash.
+  - `DRAFTROOM_WS_DEFLATE` stays off for now: turn it on only after measuring its ack time on staging.
