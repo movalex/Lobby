@@ -24,10 +24,14 @@ import {
   MAX_FREEDRAW_POINTS,
   MAX_ITEMS,
   MAX_LINEAR_POINTS,
+  MAX_LOBBY_CUSTOM_DATA_BYTES,
   MAX_ORIGINAL_TEXT_CHARS,
   MAX_TAG_DEFS,
+  PLUS_ONES_BUDGET_BYTES,
   PLUS_ONES_MAX,
   pdfPageOf,
+  REACTIONS_BUDGET_BYTES,
+  REACTIONS_MAX,
   roundGeometry,
   stripLocalFileSuffix,
   versionIdOf,
@@ -345,6 +349,20 @@ describe('customData classes (§3.3)', () => {
     expect(code({ ...E.rectangle, customData: { lobby: { 'plusOne:usr_1': 'x' } } })).toBe('INVALID')
     // the worst case of §3.5: 200 +1s of 60-character uids on one note
     expect(code({ ...E.stickynote, customData: { lobby: plus } })).toBe('ok')
+  })
+
+  it('REACTIONS (wave N): 120 react:<code>:<uid> keys within their own 6 KiB, beside the +1s and the rest', () => {
+    expect(REACTIONS_MAX).toBe(120)
+    expect(REACTIONS_BUDGET_BYTES).toBe(6 * 1024)
+    // the whole lobby of the worst note still fits the 32 KiB default element limit
+    expect(PLUS_ONES_BUDGET_BYTES + REACTIONS_BUDGET_BYTES + MAX_LOBBY_CUSTOM_DATA_BYTES).toBeLessThan(
+      MAX_ELEMENT_BYTES.default,
+    )
+    const react: Record<string, unknown> = {}
+    for (let i = 0; i < REACTIONS_MAX; i++) react[`react:up:u${i}`] = true
+    expect(checkLobbyData(react)).toEqual({ ok: true })
+    expect(checkLobbyData({ ...react, 'react:up:u999': true })).toMatchObject({ ok: false, code: 'INVALID' })
+    expect(code({ ...E.stickynote, customData: { lobby: react } })).toBe('ok')
   })
 })
 
