@@ -15,9 +15,23 @@
 // after its conversion could answer "unchanged" for a tldraw-era clock and keep its old index (§5.8: the
 // index is rebuilt when a board comes back on the new canvas). Every later write raises it, a roll-forward
 // raises both parts, so it never goes back.
+//
+// `?links=1` (wave N, WS7 N7-3; contracts sync-internal.ts BOARD_TEXT_LINKS_PARAM): a changed answer also lists
+// the board links (`links`, last): every live element whose `link` is exactly a Lobby-relative board path
+// (contracts board-links.ts BOARD_LINK_PATH_PATTERN: `/b/<id>` with an optional `?el=<id>`), a board card or any
+// other element, in id order, at most BOARD_TEXT_LINKS_MAX. Read in the same read-only pass as the text: a cheap
+// substring test in SQLite picks the candidate rows (`"link":"/b/`, the server's own JSON), each is parsed and
+// checked here, and a malformed row is skipped. Tombstones never count. Without the parameter nothing about the
+// answer changes (not a byte), and an "unchanged" answer never carries links (they cannot have changed either).
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { DatabaseSync } from 'node:sqlite'
+import {
+  BOARD_TEXT_LINKS_MAX,
+  BOARD_TEXT_LINKS_PARAM,
+  type BoardTextLink,
+  parseBoardLinkPath,
+} from '@draftroom/contracts'
 import type { InternalRoute, RoomExtensionContext } from '../engine-switch.ts'
 import {
   BOARD_TEXT_DEFAULT_BYTES,
@@ -87,6 +101,49 @@ export function extractElementText(
   return { entries, truncated, bytes }
 }
 
+/** An element id as the links answer names it (contracts BoardTextLink `el`). */
+const LINK_ELEMENT_ID_RE = /^[A-Za-z0-9_.:-]{1,120}$/
+
+/**
+ * The board links of live elements (N7-3): `{el, to, toEl?}` for each element whose `link` is exactly a
+ * Lobby-relative board path, in the order given (the route passes id order), at most `max`. Pure and tolerant:
+ * anything that is not such an element is skipped.
+ */
+export function extractElementLinks(
+  elements: Iterable<{ readonly id?: unknown; readonly link?: unknown; readonly isDeleted?: unknown }>,
+  max = BOARD_TEXT_LINKS_MAX,
+): BoardTextLink[] {
+  const out: BoardTextLink[] = []
+  if (max <= 0) return out
+  for (const el of elements) {
+    if (el.isDeleted === true || typeof el.id !== 'string' || !LINK_ELEMENT_ID_RE.test(el.id)) continue
+    const target = parseBoardLinkPath(el.link)
+    if (!target) continue
+    out.push(
+      target.elementId
+        ? { el: el.id, to: target.boardId, toEl: target.elementId }
+        : { el: el.id, to: target.boardId },
+    )
+    if (out.length >= max) break
+  }
+  return out
+}
+
+/** The board links of a board file's live elements (inside the caller's read transaction). */
+function boardLinks(db: DatabaseSync): BoardTextLink[] {
+  // the server writes element JSON with JSON.stringify: a board link always reads `"link":"/b/` in it
+  const rows = db
+    .prepare(`SELECT data FROM lb_elements WHERE deleted = 0 AND instr(data, '"link":"/b/') > 0 ORDER BY id`)
+    .iterate() as Iterable<{ data: string }>
+  function* parsed() {
+    for (const r of rows) {
+      const el = parseElement(r.data)
+      if (el) yield el
+    }
+  }
+  return extractElementLinks(parsed())
+}
+
 const badRequest = (message: string) => new HttpError(400, 'bad-request', message)
 
 function intParam(raw: string | null, what: string, min: number, max: number): number | null {
@@ -100,7 +157,7 @@ function intParam(raw: string | null, what: string, min: number, max: number): n
 export async function boardTextAnswer(
   ctx: RoomExtensionContext,
   boardId: string,
-  opts: { since?: number | null; maxBytes?: number } = {},
+  opts: { since?: number | null; maxBytes?: number; links?: boolean } = {},
 ): Promise<BoardTextAnswer> {
   const since = opts.since ?? null
   const board = await readableBoard(ctx, boardId)
@@ -108,7 +165,15 @@ export async function boardTextAnswer(
   if (board.state === 'missing')
     return since === 0
       ? { boardId, clock: 0, unchanged: true }
-      : { boardId, clock: 0, unchanged: false, entries: [], truncated: false, bytes: 0 }
+      : {
+          boardId,
+          clock: 0,
+          unchanged: false,
+          entries: [],
+          truncated: false,
+          bytes: 0,
+          ...(opts.links ? { links: [] } : {}),
+        }
   return readBoardFile(board.path, (db) => {
     const clock = textClock(db)
     if (since !== null && since === clock) return { boardId, clock, unchanged: true as const }
@@ -122,8 +187,23 @@ export async function boardTextAnswer(
       const el = parseElement(r.data)
       if (el) elements.push(el)
     }
-    return { boardId, clock, unchanged: false as const, ...extractElementText(elements, opts) }
+    const text = extractElementText(elements, opts)
+    // `links` goes last, and only when asked: without it the answer is the wave M one, byte for byte
+    return {
+      boardId,
+      clock,
+      unchanged: false as const,
+      ...text,
+      ...(opts.links ? { links: boardLinks(db) } : {}),
+    }
   })
+}
+
+/** `?links=`: absent (no links) or `1`; anything else is refused like a malformed `since`. */
+function linksParam(raw: string | null): boolean {
+  if (raw === null) return false
+  if (raw !== '1') throw badRequest(`${BOARD_TEXT_LINKS_PARAM} must be 1.`)
+  return true
 }
 
 export function textRoutes(ctx: RoomExtensionContext): InternalRoute[] {
@@ -136,7 +216,16 @@ export function textRoutes(ctx: RoomExtensionContext): InternalRoute[] {
         const params = new URL(req.url ?? '/', 'http://localhost').searchParams
         const since = intParam(params.get('since'), 'since', 0, Number.MAX_SAFE_INTEGER)
         const maxBytes = intParam(params.get('maxBytes'), 'maxBytes', 1, BOARD_TEXT_MAX_BYTES)
-        sendJson(res, 200, await boardTextAnswer(ctx, boardId, { since, maxBytes: maxBytes ?? undefined }))
+        const links = linksParam(params.get(BOARD_TEXT_LINKS_PARAM))
+        sendJson(
+          res,
+          200,
+          await boardTextAnswer(ctx, boardId, {
+            since,
+            maxBytes: maxBytes ?? undefined,
+            ...(links ? { links } : {}),
+          }),
+        )
       },
     },
   ]
