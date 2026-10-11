@@ -336,3 +336,111 @@ describe('H2: through the lease client (the browser’s own path: LeaseClient ov
     expect(await a.hash()).toBe(await h.roomHash())
   })
 })
+
+// H2 review (major x2): a release held back behind its words keeps the lease in `leaseHeld`. If the socket
+// then dies and the room lets the lease go before the tab is back (its TTL past the last renewal, or a sync
+// restart with an empty lease table), the welcome names nobody for it. That is not a lease lost to someone
+// else: it is the offline release main already handles, so the words go up as a free write (as with Escape
+// while offline). The words go back only when another session holds the lease now.
+describe('H2: the room let the lease go while the socket was down and a release was held back', () => {
+  const cut = (a: TestClient) => {
+    ;(a.transport as unknown as { drop(): void }).drop()
+    // the FakeRoom drops the session and with it the session's leases (as the real room does on expiry)
+    ;(a.transport as unknown as { close(code: number, reason: string): void }).close(1006, 'cut')
+  }
+  const reopen = (a: TestClient) => (a.transport as unknown as { reopen(): void }).reopen()
+
+  it('a label made after the grant, Escape before the echo, the socket gone past the TTL: the words land', async () => {
+    const { h, a, b, lease } = setup()
+    lease.send({ type: 'lease.acquire', req: 1, id: NOTE })
+    h.settle() // granted
+    openLabel(a)
+    h.clock.advance(60) // the label's create is up
+    typeWords(a)
+    h.clock.advance(10)
+    a.gesture()
+    lease.send({ type: 'lease.release', id: NOTE }) // held back behind the words
+    h.clock.advance(200) // the create committed; its echo and ack are on their way
+    cut(a)
+    expect(h.room.leases.has(NOTE)).toBe(false)
+    h.clock.advance(100)
+    reopen(a)
+    h.settle()
+    expect(h.room.elements.get(LABEL)?.originalText).toBe(WORDS)
+    expect(a.get(LABEL)?.originalText).toBe(WORDS)
+    expect(b.get(LABEL)?.originalText).toBe(WORDS)
+    expect(h.room.leases.has(NOTE)).toBe(false)
+    expect(a.core.leaseState().held).toEqual([])
+    expect(sent(a).filter((s) => s === `lease.release ${NOTE}`)).toEqual([])
+    expect(a.core.saveStatus.state).toBe('saved')
+    expect(await a.hash()).toBe(await h.roomHash())
+    expect(await b.hash()).toBe(await h.roomHash())
+  })
+
+  it('the New element order (label made while the acquire is pending), the same cut: the words land', async () => {
+    const { h, a, b, lease } = setup()
+    lease.send({ type: 'lease.acquire', req: 1, id: NOTE })
+    openLabel(a)
+    h.clock.advance(380) // granted; the label's create is up
+    typeWords(a)
+    a.gesture()
+    lease.send({ type: 'lease.release', id: NOTE })
+    h.clock.advance(200)
+    cut(a)
+    h.clock.advance(100)
+    reopen(a)
+    h.settle()
+    expect(h.room.elements.get(LABEL)?.originalText).toBe(WORDS)
+    expect(b.get(LABEL)?.originalText).toBe(WORDS)
+    expect(a.core.saveStatus.state).toBe('saved')
+    expect(await a.hash()).toBe(await h.roomHash())
+  })
+
+  it('the socket cut before the label’s create reached the room, back past the TTL: the label and its words land', async () => {
+    const { h, a, b, lease } = setup()
+    lease.send({ type: 'lease.acquire', req: 1, id: NOTE })
+    h.settle()
+    openLabel(a)
+    h.clock.advance(60)
+    typeWords(a)
+    a.gesture()
+    lease.send({ type: 'lease.release', id: NOTE })
+    h.clock.advance(20) // the create still on its way up: lost with the socket
+    cut(a)
+    h.clock.advance(300) // (the frames on their way die with the socket)
+    reopen(a)
+    h.settle()
+    expect(h.room.elements.get(LABEL)?.originalText).toBe(WORDS)
+    expect(b.get(LABEL)?.originalText).toBe(WORDS)
+    expect(a.core.saveStatus.state).toBe('saved')
+    expect(await a.hash()).toBe(await h.roomHash())
+  })
+
+  it('bob took the lease while alice was away: her words go back (not bob’s to lose), and everyone agrees', async () => {
+    const { h, a, b, lease } = setup()
+    lease.send({ type: 'lease.acquire', req: 1, id: NOTE })
+    h.settle()
+    openLabel(a)
+    h.clock.advance(60)
+    typeWords(a)
+    h.clock.advance(10)
+    a.gesture()
+    lease.send({ type: 'lease.release', id: NOTE })
+    h.clock.advance(200) // the create (empty) committed
+    cut(a)
+    b.core.leaseConnect(() => {}).send({ type: 'lease.acquire', req: 1, id: NOTE })
+    h.settle()
+    expect(h.room.leases.get(NOTE)?.sid).toBe(b.core.sid)
+    reopen(a)
+    h.settle()
+    expect(h.room.elements.get(LABEL)?.originalText).toBe('')
+    expect(a.get(LABEL)?.originalText).toBe('')
+    expect(sent(a).some((s) => s.startsWith(`p ${LABEL} `) && s.includes('text'))).toBe(false)
+    expect(h.room.leases.get(NOTE)?.sid).toBe(b.core.sid)
+    expect(a.core.leaseState().held).toEqual([])
+    expect(sent(a)).not.toContain(`lease.release ${NOTE}`)
+    expect(a.core.saveStatus.state).toBe('saved')
+    expect(await a.hash()).toBe(await h.roomHash())
+    expect(await b.hash()).toBe(await h.roomHash())
+  })
+})

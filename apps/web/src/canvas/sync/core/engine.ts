@@ -1958,8 +1958,10 @@ export class LobbyEngineCore implements EngineCore {
     for (const id of [...this.leaseHeld])
       if (this.holders.get(id)?.sid !== w.sid) {
         this.leaseHeld.delete(id)
-        // (H2) a release held back for it: nothing to give back any more
-        this.releaseAfterPush.delete(id)
+        // (H2) a release held back for it whose lease the room let go meanwhile (its TTL ran out while the
+        // socket was down, or a sync restart): not lost to anyone, it is an offline release, so its words
+        // go up behind this welcome as they would after Escape offline. Lost only to another session
+        if (this.releaseAfterPush.delete(id) && !this.holders.has(id)) continue
         lost.add(id)
       }
     const dropped = new Set<string>()

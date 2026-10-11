@@ -34,8 +34,8 @@ const orderOf = (up: readonly string[]) => ({
   release: up.findIndex((f) => f.includes('"type":"lease.release"')),
 })
 
-async function board() {
-  const st = await h.stack()
+async function board(env?: Record<string, string>) {
+  const st = await h.stack(env ? { env } : {})
   const b = newBoardId()
   const px = await startProxy(st.server.wsUrl)
   px.recordUp = true
@@ -142,6 +142,82 @@ describe('H2: words typed into a just-made label, the editor left before the roo
       // and once they are written, the lease is free for bob
       await until(() => !lease.holderOf('N'), 'the room broadcast alice’s release')
       expect((await bob.acquire('N')).granted).toBe(true)
+      await A.close()
+      await B.close()
+      await px.close()
+    },
+    T,
+  )
+})
+
+// H2 review (major x2): the release held back behind the words keeps the lease in the core's `leaseHeld`. The
+// socket then goes silent right after Escape and comes back only after the room's lease TTL (TEXT_LEASE_MS,
+// shortened here): the welcome names nobody for the note. That is an offline release, not a lease lost to
+// someone else, so the words go up as a free write (as on main, and as with Escape while offline). Only a
+// lease another session holds now sends them back.
+describe('H2: the socket goes silent right after Escape and comes back after the lease TTL (real room)', () => {
+  const textOf = (c: { scene: Map<string, unknown> }) =>
+    (c.scene.get('N.t') as { originalText?: string } | undefined)?.originalText ?? null
+
+  it(
+    'a label made after the grant: the words land after the reconnect',
+    async () => {
+      const { st, b, px, A, B, leaseOf } = await board({ TEXT_LEASE_MS: '1500' })
+      const lease = leaseOf(A)
+      expect((await lease.acquire('N')).granted).toBe(true)
+      px.holdDownFrom = isTextCreate
+      openLabel(A)
+      A.core.flush()
+      await until(() => px.holding, 'the label’s create went up')
+      A.change('N.t', { originalText: WORDS, text: WORDS, width: 180 }, editing)
+      A.gesture()
+      lease.release('N')
+      // nothing from the room reaches alice past the lease TTL, then the socket is cut
+      await sleep(3500)
+      px.cutAll()
+      px.releaseDown() // the held frames die with the old socket; the next socket is not held
+      await sleep(500)
+      await A.saved(20_000)
+      await sleep(300)
+      expect(await storedText(st, b)).toBe(WORDS)
+      expect(textOf(A)).toBe(WORDS)
+      await until(() => textOf(B) === WORDS, 'bob has the words')
+      await A.close()
+      await B.close()
+      await px.close()
+    },
+    T,
+  )
+
+  it(
+    'bob took the lease while alice was away: her words go back, everyone sees the label as stored',
+    async () => {
+      const { st, b, px, A, B, leaseOf } = await board({ TEXT_LEASE_MS: '1500' })
+      const lease = leaseOf(A)
+      expect((await lease.acquire('N')).granted).toBe(true)
+      px.holdDownFrom = isTextCreate
+      openLabel(A)
+      A.core.flush()
+      await until(() => px.holding, 'the label’s create went up')
+      // the up direction dies with Escape: neither the words nor the release can reach the room
+      A.change('N.t', { originalText: WORDS, text: WORDS, width: 180 }, editing)
+      await sleep(200)
+      px.dropUp = true
+      A.gesture()
+      lease.release('N')
+      await sleep(3500) // alice's lease expired
+      const bob = leaseOf(B)
+      expect((await bob.acquire('N')).granted).toBe(true)
+      px.cutAll()
+      px.dropUp = false
+      px.releaseDown()
+      await sleep(500)
+      await A.saved(20_000)
+      await sleep(300)
+      expect(await storedText(st, b)).toBe('')
+      expect(textOf(A)).toBe('')
+      expect(textOf(B)).toBe('')
+      expect(bob.holderOf('N')?.uid).toBe('bob')
       await A.close()
       await B.close()
       await px.close()
