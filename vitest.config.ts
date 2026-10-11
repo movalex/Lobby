@@ -89,7 +89,12 @@ export default defineConfig({
         test: {
           name: 'e2e-load',
           environment: 'node',
-          include: ['e2e/load/**/*.test.ts', 'e2e/tests/support/**/*.test.ts'],
+          include: [
+            'e2e/load/**/*.test.ts',
+            'e2e/tests/support/**/*.test.ts',
+            // wave N (the foundation): the 10k big board fixture's own test
+            'e2e/excalidraw/support/**/*.test.ts',
+          ],
         },
       },
       // wave C4: the repo's own CI scripts (scripts/audit-check.mjs, the dependency audit and its allowlist)

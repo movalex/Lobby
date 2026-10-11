@@ -10,6 +10,9 @@
 //
 // Wave M: W4 owns this kit. Its m4 specs' page measures (contrastOf, hitTestable, elementAt) and the foundation's
 // Ask-across-boards fakes (fakeWorkspaceAsk, cannedWorkspaceAsk, forceWorkspaceAsk) are at the end.
+//
+// Wave N: WS5 owns this kit. The foundation's Capture the room canned outputs and route fake (CANNED_CAPTURE,
+// fakeCapture) are at the very end.
 import { expect, type Locator, type Page, type Route } from '@playwright/test'
 import type { WorkspaceAskHookOutcome } from '../../apps/web/src/features/ai/workspace-ask/dev-hook-types.ts'
 import { installServerTextMetrics } from '../../packages/canvas-schema/src/engine/index.ts'
@@ -18,6 +21,10 @@ import {
   AI_RUN_ID_PATTERN,
   AiResult,
   AiRunInput,
+  CAPTURE_PHOTO_MAX_BYTES,
+  CaptureResponse,
+  type CaptureResult,
+  CaptureTranscriptRequest,
   WorkspaceAskRequest,
   WorkspaceAskResponse,
 } from '../../packages/contracts/src/ai.ts'
@@ -962,3 +969,177 @@ export const askWorkspaceInPage = (
     },
     { q: question, ack: acknowledged },
   )
+
+// ---- wave N (the foundation; this kit is WS5's): canned outputs for Capture the room ------------------------------
+//
+// POST /api/boards/:bid/ai/capture/{photo,board-image,transcript} are pending on the foundation's api (404 NOT_FOUND,
+// as any unknown route) until WS5 implements them. These let WS5's n5 specs run either way: `fakeCapture(page)`
+// answers each capture with its canned CaptureResponse (or `unavailable: true`: the 404 an api without the routes
+// gives; or `vision: false`: the photo routes' 404 while transcripts work), and records the requests (never their
+// bytes or text: only the size and the content type, as the api may log). Every canned answer is parsed with the
+// contract, so a canned answer can never be one the api could not send.
+
+const CAPTURE_RUN = 'air_CaptureFoundation000'
+const box = (x: number, y: number, w = 0.14, h = 0.14) => ({ x, y, w, h })
+
+/** The three canned results: notes from a photo of a wall, a 5-node diagram, and a meeting's themes. */
+export const CANNED_CAPTURE: {
+  readonly notes: CaptureResult
+  readonly diagram: CaptureResult
+  readonly transcript: CaptureResult
+} = {
+  // a sticky wall in two columns: six notes, two groups
+  notes: {
+    kind: 'notes',
+    notes: [
+      { text: 'Shorter stand-ups', color: 'yellow', box: box(0.06, 0.08) },
+      { text: 'Demo every Friday', color: 'yellow', box: box(0.06, 0.28) },
+      { text: 'Pair on reviews', color: 'light-green', box: box(0.06, 0.48) },
+      { text: 'Too many meetings', color: 'light-red', box: box(0.55, 0.08) },
+      { text: 'Unclear priorities', color: 'light-red', box: box(0.55, 0.28) },
+      { text: 'Slow builds', color: 'orange', box: box(0.55, 0.48) },
+    ],
+    groups: [
+      { name: 'Keep', notes: [0, 1, 2] },
+      { name: 'Change', notes: [3, 4, 5] },
+    ],
+  },
+  // a whiteboard flow: start, two steps, a decision, an end; one labelled branch and one plain line
+  diagram: {
+    kind: 'diagram',
+    nodes: [
+      { id: 'n1', label: 'Brief in', shape: 'ellipse', box: box(0.05, 0.4, 0.14, 0.12) },
+      { id: 'n2', label: 'Sketch ideas', shape: 'rect', box: box(0.25, 0.4, 0.14, 0.12) },
+      { id: 'n3', label: 'Client happy?', shape: 'diamond', box: box(0.45, 0.38, 0.16, 0.16) },
+      { id: 'n4', label: 'Final art', shape: 'rect', box: box(0.68, 0.4, 0.14, 0.12) },
+      { id: 'n5', label: 'Ship', shape: 'ellipse' },
+    ],
+    edges: [
+      { from: 'n1', to: 'n2', kind: 'arrow' },
+      { from: 'n2', to: 'n3', kind: 'arrow' },
+      { from: 'n3', to: 'n4', kind: 'arrow', label: 'yes' },
+      { from: 'n3', to: 'n2', kind: 'arrow', label: 'no' },
+      { from: 'n4', to: 'n5', kind: 'line' },
+    ],
+  },
+  // a meeting: 3 themes, 2 decisions, 3 actions (one without an owner)
+  transcript: {
+    kind: 'transcript',
+    themes: [
+      { name: 'Schedule', notes: ['Shoot moves to the 14th', 'Edit needs two more days'] },
+      { name: 'Budget', notes: ['Travel is over by 10%', 'Drop the second location'] },
+      { name: 'Team', notes: ['Sam joins as editor'] },
+    ],
+    decisions: ['We shoot on the 14th', 'One location only'],
+    actions: [
+      { text: 'Book the studio for the 14th', owner: 'Ana' },
+      { text: 'Send the revised budget', owner: 'Bo' },
+      { text: 'Share the shot list' },
+    ],
+  },
+}
+
+/** A whole canned answer (the quota: `photosLeftToday` / `transcriptsLeftToday`, default 7 and 9). */
+export function cannedCaptureResponse(
+  result: CaptureResult,
+  quota: { photosLeftToday?: number | null; transcriptsLeftToday?: number | null } = {},
+): CaptureResponse {
+  return CaptureResponse.parse({
+    runId: CAPTURE_RUN,
+    result,
+    quota: {
+      photosLeftToday: quota.photosLeftToday ?? 7,
+      transcriptsLeftToday: quota.transcriptsLeftToday ?? 9,
+    },
+  })
+}
+
+export const CAPTURE_GLOB = '**/api/boards/*/ai/capture/*'
+const CAPTURE_ROUTE = /\/api\/boards\/([^/]+)\/ai\/capture\/(photo|board-image|transcript)$/
+
+export interface CaptureCall {
+  boardId: string
+  kind: 'photo' | 'board-image' | 'transcript'
+  /** the photo's `mode` query, or the board-image body's mode */
+  mode: string | null
+  contentType: string | null
+  bytes: number
+  status: number
+}
+
+export interface CaptureFake {
+  readonly calls: CaptureCall[]
+  /** Answers the next capture with this instead of the default for its kind. */
+  next(answer: CaptureResponse): void
+  dispose(): Promise<void>
+}
+
+const NOT_FOUND = { error: { code: 'NOT_FOUND', message: 'Not found.' } }
+
+/**
+ * Installs the fake on `page`: a photo or board image answers CANNED_CAPTURE.notes (mode notes or auto) or .diagram
+ * (mode diagram), a transcript answers .transcript; a queued `next` answer first. A photo over the contract's size, or
+ * a transcript the contract refuses, gets the api's 413 or 400. `unavailable`: every capture is the unknown route's
+ * 404; `vision: false`: only the photo routes are.
+ */
+export async function fakeCapture(
+  page: Page,
+  opts: { unavailable?: boolean; vision?: boolean } = {},
+): Promise<CaptureFake> {
+  const calls: CaptureCall[] = []
+  const queued: CaptureResponse[] = []
+  const handler = async (route: Route) => {
+    const req = route.request()
+    const url = new URL(req.url())
+    const m = CAPTURE_ROUTE.exec(url.pathname)
+    if (req.method() !== 'POST' || !m) return route.fallback()
+    const kind = m[2] as CaptureCall['kind']
+    const body = req.postDataBuffer()
+    let mode = url.searchParams.get('mode')
+    let json: unknown = null
+    if (kind !== 'photo') {
+      try {
+        json = JSON.parse(body?.toString('utf8') ?? 'null')
+      } catch {
+        // refused below
+      }
+      if (kind === 'board-image') mode = String((json as { mode?: unknown } | null)?.mode ?? 'auto')
+    }
+    const call: CaptureCall = {
+      boardId: decodeURIComponent(m[1] ?? ''),
+      kind,
+      mode,
+      contentType: req.headers()['content-type'] ?? null,
+      bytes: body?.length ?? 0,
+      status: 200,
+    }
+    calls.push(call)
+    const fulfil = (status: number, payload: unknown) => {
+      call.status = status
+      return route.fulfill({ status, json: payload })
+    }
+    if (opts.unavailable || (opts.vision === false && kind !== 'transcript')) return fulfil(404, NOT_FOUND)
+    if (kind === 'photo' && call.bytes > CAPTURE_PHOTO_MAX_BYTES)
+      return fulfil(413, {
+        error: { code: 'AI_CAPTURE_IMAGE_TOO_LARGE', message: 'This photo is too large.' },
+      })
+    if (kind === 'transcript' && !CaptureTranscriptRequest.safeParse(json).success)
+      return fulfil(400, { error: { code: 'BAD_REQUEST', message: 'Not a valid transcript.' } })
+    const own = queued.shift()
+    const result =
+      kind === 'transcript'
+        ? CANNED_CAPTURE.transcript
+        : mode === 'diagram'
+          ? CANNED_CAPTURE.diagram
+          : CANNED_CAPTURE.notes
+    return fulfil(200, CaptureResponse.parse(own ?? cannedCaptureResponse(result)))
+  }
+  await page.route(CAPTURE_GLOB, handler)
+  return {
+    calls,
+    next(answer) {
+      queued.push(CaptureResponse.parse(answer))
+    },
+    dispose: () => page.unroute(CAPTURE_GLOB, handler),
+  }
+}
