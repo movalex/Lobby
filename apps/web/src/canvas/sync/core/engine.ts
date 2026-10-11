@@ -86,9 +86,10 @@ import {
   type Welcome,
 } from '@draftroom/canvas-schema/protocol'
 import { generateNKeysBetween } from '@excalidraw/fractional-indexing'
-import { devChecks } from '../flags.ts'
+import { DIFF_APPLY, devChecks } from '../flags.ts'
 import { compareIndexThenId, indexPrePass, isValidKey } from '../index-keys.ts'
 import type {
+  ChunkScheduler,
   EngineCore,
   EngineCoreOptions,
   GestureState,
@@ -260,6 +261,12 @@ export type CoreEvent =
    * what the board cache stores (`cacheContent()`) is newer. Nothing else listens to it.
    */
   | { kind: 'confirmed' }
+  /**
+   * N1-4 (wave N): a cold open's large snapshot is being installed in chunks, one per frame (`on`), or the last one
+   * is in (`on` false: the welcome follows at once; or the socket went first, `aborted`). Meanwhile the canvas is
+   * read-only and the save state is still connecting: the board page shows the chunks, nothing can be edited
+   */
+  | { kind: 'applying'; on: boolean; applied: number; total: number; aborted?: boolean }
 
 /**
  * M6-2/M6-3 (wave M, PWR-4): the copy of the server's state a board cache kept (adapter/snapshot-cache.ts),
@@ -441,6 +448,10 @@ export function keepTombstoneContent(had: SceneElement | undefined, next: SceneE
   return out as SceneElement
 }
 
+/** N1-3: a scene element and a server row are the same row (the version and nonce the server gave it, its life). */
+const sameRow = (a: SceneElement, b: SceneElement): boolean =>
+  a.version === b.version && a.versionNonce === b.versionNonce && a.isDeleted === b.isDeleted
+
 const sameGroup = (a: SceneElement, b: SceneElement, g: GroupKey): boolean =>
   g === 'fit' ? FIT_FIELDS.every((f) => deepEqual(a[f], b[f])) : !diffGroups(a, b).groups.has(g)
 
@@ -609,6 +620,34 @@ export class LobbyEngineCore implements EngineCore {
   private readonly logFn: EngineCoreOptions['log']
   /** N1-2: dev and test builds deep-freeze every confirmed copy (sync/flags.ts devChecks) */
   private readonly freezeConfirmed = devChecks()
+  /** N1-3: a reset welcome over a scene that shows a copy keeps the elements its rows equal (DIFF_APPLY) */
+  private readonly diffApply: boolean
+  /** N1-4: the frames a cold open's large snapshot is installed on (null: one apply) */
+  private readonly chunks: ChunkScheduler | null
+  /** N1-3: the apply running now keeps scene elements their confirmed row equals (rebuild reads it) */
+  private applyDiff = false
+  /** N1-3: the epoch of the cached copy this core painted, until its first welcome (a diff needs the same) */
+  private paintedEpoch: string | null = null
+  /**
+   * N1-4: the chunked install in progress (null: none). The core's view (`current`, `known`, `last`) is the whole
+   * array already; the scene gets it chunk by chunk. Meanwhile scene changes are not scanned, nothing is pushed,
+   * every server frame waits in `inbox` (in arrival order) and every other apply waits in `later`.
+   */
+  private chunk: {
+    readonly next: SceneElement[]
+    readonly plan: string[][]
+    readonly touched: ReadonlySet<string>
+    readonly before: ReadonlyMap<string, SceneElement | undefined>
+    readonly done: () => void
+    readonly prior: { readonly epoch: string | null; readonly clock: number }
+    readonly placed: Set<string>
+    i: number
+    handle: unknown
+    readonly later: Set<string>
+  } | null = null
+  private readonly inbox: ServerInbound[] = []
+  /** N1-4: this tab's epoch and clock before the last welcome (a chunked install cut short goes back to them) */
+  private priorPoint: { readonly epoch: string | null; readonly clock: number } = { epoch: null, clock: 0 }
 
   // ---- server state
   welcome: Welcome | null = null
@@ -858,6 +897,8 @@ export class LobbyEngineCore implements EngineCore {
     this.setTimer = opts.setTimer ?? ((fn, ms) => setTimeout(fn, ms))
     this.clearTimer = opts.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>))
     this.logFn = opts.log
+    this.diffApply = opts.snapshotApply?.diff ?? DIFF_APPLY
+    this.chunks = opts.snapshotApply?.chunks ?? null
   }
 
   // =====================================================================================================
@@ -934,6 +975,7 @@ export class LobbyEngineCore implements EngineCore {
       this.resumeFrom = { clock: cache.clock, epoch: cache.epoch }
     }
     this.paintedFromCache = true
+    this.paintedEpoch = cache.epoch
     // taken as seen at once (not only at `start()`): a scene change reported before it is nobody's write either
     this.adoptStartScene()
     this.log('cache_start', { elements: cache.elements.length, resume: o.resume, since: cache.clock })
@@ -956,7 +998,8 @@ export class LobbyEngineCore implements EngineCore {
    * Null before the first welcome, while a reset waits for its snapshot, and during a resync.
    */
   cacheContent(): { epoch: string; clock: number; horizon: number; elements: Iterable<SceneElement> } | null {
-    if (this.welcomes === 0 || this.awaitingSnapshot || this.resyncing || this.epoch === null) return null
+    if (this.welcomes === 0 || this.awaitingSnapshot || this.resyncing || this.epoch === null || this.chunk)
+      return null
     return {
       epoch: this.epoch,
       clock: this.clock,
@@ -967,6 +1010,10 @@ export class LobbyEngineCore implements EngineCore {
 
   stop(): void {
     this.stopped = true
+    const handle = this.chunk?.handle
+    if (handle !== null && handle !== undefined) this.chunks?.cancel(handle)
+    this.chunk = null
+    this.inbox.length = 0
     for (const u of this.unsubscribe.splice(0)) u()
     for (const t of [
       this.flushTimer,
@@ -990,6 +1037,7 @@ export class LobbyEngineCore implements EngineCore {
       this.terminal = null
       this.sendHello()
     } else if (state === 'closed') {
+      this.abortChunks()
       this.connected = false
       this.welcome = null
       this.awaitingSnapshot = false
@@ -1089,7 +1137,7 @@ export class LobbyEngineCore implements EngineCore {
    * pending (the scan that follows counts it properly). Listeners get the change at that scan.
    */
   get saveStatus(): SaveStatus {
-    if (this.scanning || this.stopped) return this.lastSave
+    if (this.scanning || this.stopped || this.chunk) return this.lastSave
     if (!this.unseen(this.scene.read().elements)) return this.lastSave
     const pending = this.lastSave.pending + 1
     const online = this.lastSave.state !== 'offline'
@@ -1293,7 +1341,8 @@ export class LobbyEngineCore implements EngineCore {
   // =====================================================================================================
 
   onSceneChange(snapshot: SceneSnapshot): void {
-    if (this.stopped) return
+    // N1-4: the applying guard: the scene is the core's chunks until the last one (read-only meanwhile)
+    if (this.stopped || this.chunk) return
     const t0 = nowMs()
     try {
       this.scan(snapshot)
@@ -1314,7 +1363,7 @@ export class LobbyEngineCore implements EngineCore {
 
   /** Scans the live scene when it differs from what the core last saw (never inside a scan). */
   private syncLive(): boolean {
-    if (this.scanning || this.stopped) return false
+    if (this.scanning || this.stopped || this.chunk) return false
     const snapshot = this.scene.read()
     if (!this.unseen(snapshot.elements)) return false
     const t0 = nowMs()
@@ -1749,7 +1798,12 @@ export class LobbyEngineCore implements EngineCore {
     // the local derivative suffix (`ver_X@display`) is not a change, and not the server's either: it
     // stays while the wire file is the same (E9, CR-W5-3G-3: before, every rebuild put the scene back on
     // the 512 px thumb and the derivative swap never stuck)
-    if (groups.size === 0) return keepLocalFileSuffix(copyElement(conf), local)
+    if (groups.size === 0) {
+      // N1-3: a reset welcome over a copy the scene shows: an element its row equals stays the scene's object (the
+      // engine's shape cache stays warm); the confirmed map keeps the decoded row, a separate object
+      if (this.applyDiff && sameRow(local, conf)) return local
+      return keepLocalFileSuffix(copyElement(conf), local)
+    }
     const out = keepLocalFileSuffix(copyGroups(conf, local, groups), local) as Record<string, unknown>
     out.version = Math.max(local.version, conf.version)
     out.versionNonce = local.versionNonce
@@ -1762,7 +1816,24 @@ export class LobbyEngineCore implements EngineCore {
    * element missing from the scene), after the index pre-pass (E2, E3). Elements an active gesture holds
    * keep their local copy until it ends.
    */
-  private applyScene(ids: ReadonlySet<string>): void {
+  private applyScene(
+    ids: ReadonlySet<string>,
+    o: { readonly diff?: boolean; readonly chunked?: () => void } = {},
+  ): boolean {
+    // N1-4: while a snapshot is installed in chunks, any other apply waits for the last chunk
+    if (this.chunk) {
+      for (const id of ids) this.chunk.later.add(id)
+      return false
+    }
+    this.applyDiff = !!o.diff
+    try {
+      return this.applySceneNow(ids, o.chunked)
+    } finally {
+      this.applyDiff = false
+    }
+  }
+
+  private applySceneNow(ids: ReadonlySet<string>, chunked: (() => void) | undefined): boolean {
     const hold = gestureActive(this.gesture) ? this.gestureIds() : new Set<string>()
     const out: SceneElement[] = []
     const seen = new Set<string>()
@@ -1813,7 +1884,7 @@ export class LobbyEngineCore implements EngineCore {
       put(id, copyElement(el))
     }
     this.vanish.clear()
-    if (touched.length === 0) return
+    if (touched.length === 0) return false
     // this client's to re-key: its own element the server has not acknowledged, and (SYNC-4) a confirmed
     // element whose scene key is this tab's write the server has not confirmed (a create whose `changes`
     // came before its ack, a reorder in flight or unsent). Counted as confirmed, such a key could tie with
@@ -1873,10 +1944,17 @@ export class LobbyEngineCore implements EngineCore {
         this.last.delete(id)
       }
     this.readScene(next)
+    if (chunked && this.startChunks(next, touched, before, chunked)) return true
     const t1 = nowMs()
     this.scene.apply(next)
     measure('lobby.updateScene', t1)
-    // the global guard (§2.5.5): what the scene holds now for a clean confirmed element is the server's copy
+    this.echoGuard()
+    this.emit({ kind: 'applied', ids: touched, before })
+    return false
+  }
+
+  /** The global guard (§2.5.5): what the scene holds now for a clean confirmed element is the server's copy. */
+  private echoGuard(): void {
     const after = this.scene.read().elements
     const suspects: string[] = []
     for (const el of after) {
@@ -1888,7 +1966,155 @@ export class LobbyEngineCore implements EngineCore {
       this.log('echo_suspect', { ids: suspects.slice(0, 20) })
       this.emit({ kind: 'echo_suspect', ids: suspects })
     }
-    this.emit({ kind: 'applied', ids: touched, before })
+  }
+
+  // =====================================================================================================
+  // N1-4 (wave N, PERF-3c): a cold open's large snapshot, in chunks
+  // =====================================================================================================
+
+  /**
+   * The chunks of `next` (the whole scene, in index order): the first holds every frame and the elements in the
+   * initial view (at most `size` of them), so something shows at once; then about `size` each, in index order, a
+   * container and its labels always together. Null when the scene is not large enough to be chunked.
+   */
+  private chunkPlan(next: readonly SceneElement[]): string[][] | null {
+    const s = this.chunks
+    if (!s || next.length <= s.threshold) return null
+    const size = Math.max(1, s.size)
+    const ids = new Set(next.map((el) => el.id))
+    const labelsOf = new Map<string, string[]>()
+    for (const el of next) {
+      const c = isText(el) ? containerOf(el) : null
+      if (c && ids.has(c)) labelsOf.set(c, [...(labelsOf.get(c) ?? []), el.id])
+    }
+    const view = s.first?.(next) ?? new Set<string>()
+    const placed = new Set<string>()
+    const plan: string[][] = []
+    let cur: string[] = []
+    const take = (id: string) => {
+      if (placed.has(id)) return
+      placed.add(id)
+      cur.push(id)
+      for (const l of labelsOf.get(id) ?? []) take(l)
+    }
+    // a label goes with its container
+    const takeEl = (el: SceneElement) => {
+      const c = isText(el) ? containerOf(el) : null
+      take(c && ids.has(c) ? c : el.id)
+      take(el.id)
+    }
+    for (const el of next) if (el.type === 'frame') take(el.id)
+    const frames = cur.length
+    for (const el of next) if (view.has(el.id) && cur.length - frames < size) takeEl(el)
+    plan.push(cur)
+    cur = []
+    const rest = [...next.filter((el) => view.has(el.id)), ...next.filter((el) => !view.has(el.id))]
+    for (const el of rest) {
+      if (placed.has(el.id)) continue
+      if (cur.length >= size) {
+        plan.push(cur)
+        cur = []
+      }
+      takeEl(el)
+    }
+    if (cur.length) plan.push(cur)
+    return plan.length > 1 ? plan : null
+  }
+
+  /** Starts the chunked install of `next` (false: one apply instead). `done` runs after the last chunk. */
+  private startChunks(
+    next: SceneElement[],
+    touched: readonly string[],
+    before: ReadonlyMap<string, SceneElement | undefined>,
+    done: () => void,
+  ): boolean {
+    const plan = this.chunkPlan(next)
+    if (!plan) return false
+    this.chunk = {
+      next,
+      plan,
+      touched: new Set(touched),
+      before,
+      done,
+      prior: this.priorPoint,
+      placed: new Set(),
+      i: 0,
+      handle: null,
+      later: new Set(),
+    }
+    this.log('chunked_apply', { elements: next.length, chunks: plan.length })
+    this.emit({ kind: 'applying', on: true, applied: 0, total: next.length })
+    this.applyChunk()
+    return true
+  }
+
+  /**
+   * One chunk: the scene gets every element of the chunks so far, in index order (CaptureUpdateAction.NEVER, the
+   * adapter's apply), and the history absorbs them (`applied`); the next one at the next frame. After the last: the
+   * echo guard, the welcome's tail, the applies that waited, then the frames that arrived meanwhile, in order.
+   */
+  private applyChunk(): void {
+    const c = this.chunk
+    if (!c || this.stopped) return
+    c.handle = null
+    const ids = c.plan[c.i] ?? []
+    for (const id of ids) c.placed.add(id)
+    c.i++
+    const last = c.i >= c.plan.length
+    const arr = last ? c.next : c.next.filter((el) => c.placed.has(el.id))
+    const t1 = nowMs()
+    this.scene.apply(arr)
+    measure('lobby.updateScene', t1)
+    const applied = ids.filter((id) => c.touched.has(id))
+    if (applied.length) this.emit({ kind: 'applied', ids: applied, before: c.before })
+    if (!last) {
+      this.emit({ kind: 'applying', on: true, applied: c.placed.size, total: c.next.length })
+      c.handle = (this.chunks as ChunkScheduler).frame(() => this.applyChunk())
+      return
+    }
+    this.chunk = null
+    this.echoGuard()
+    this.log('chunked_apply_done', { elements: c.next.length, chunks: c.plan.length })
+    this.emit({ kind: 'applying', on: false, applied: c.next.length, total: c.next.length })
+    c.done()
+    if (c.later.size) this.applyScene(c.later)
+    if (this.pendingAdopt?.length && this.connected && this.welcome && !this.awaitingSnapshot) {
+      const entries = this.pendingAdopt
+      this.pendingAdopt = null
+      this.adoptNow(entries)
+    }
+    this.drainInbox()
+  }
+
+  /** The frames that waited behind a chunked install, in arrival order (a new chunked install queues the rest). */
+  private drainInbox(): void {
+    while (this.inbox.length && !this.chunk && !this.stopped)
+      this.receive(this.inbox.shift() as ServerInbound)
+  }
+
+  /**
+   * The socket went while a snapshot was being installed in chunks: no partial baseline stays. The scene keeps the
+   * chunks it got (the core's view goes back to them), the frames that waited are dropped, and this tab's epoch and
+   * clock go back to what its hello said, so the next welcome is a reset again (a cold open's: since 0).
+   */
+  private abortChunks(): void {
+    const c = this.chunk
+    if (!c) return
+    this.chunk = null
+    if (c.handle !== null) this.chunks?.cancel(c.handle)
+    this.inbox.length = 0
+    const shown = c.next.filter((el) => c.placed.has(el.id))
+    this.readScene(shown)
+    this.known.clear()
+    this.last.clear()
+    for (const el of shown) {
+      this.known.set(el.id, { v: el.version, vn: el.versionNonce })
+      this.last.set(el.id, el)
+    }
+    this.epoch = c.prior.epoch
+    this.clock = c.prior.clock
+    this.log('chunked_apply_aborted', { applied: c.placed.size, total: c.next.length })
+    this.emit({ kind: 'applying', on: false, applied: c.placed.size, total: c.next.length, aborted: true })
   }
 
   // =====================================================================================================
@@ -1897,6 +2123,11 @@ export class LobbyEngineCore implements EngineCore {
 
   private receive(m: ServerInbound): void {
     if (this.stopped) return
+    // N1-4: a frame that arrives while a snapshot is installed in chunks lands after the last chunk, in order
+    if (this.chunk) {
+      this.inbox.push(m)
+      return
+    }
     // a message that rebuilds or re-classifies the scene first takes in any write Excalidraw holds and has
     // not reported yet (see the header): otherwise the apply below drops it
     if (
@@ -1994,6 +2225,8 @@ export class LobbyEngineCore implements EngineCore {
     }
     const epochChanged = this.epoch !== null && this.epoch !== w.epoch
     this.epochReset = epochChanged
+    // N1-4: what the hello said, so a chunked install the socket cuts short asks for everything again
+    this.priorPoint = { epoch: this.epoch, clock: this.clock }
     this.welcome = w
     this.welcomes++
     // a new socket (or a resync): what its room speaks comes with its `contracts` frame, after this one
@@ -2072,8 +2305,21 @@ export class LobbyEngineCore implements EngineCore {
     this.serverDoc = { ...(this.welcome?.doc ?? frame.doc) }
     if (!this.serverDocClock) this.serverDocClock = docClockOf(frame)
     this.resetAt = this.epochReset ? null : this.now()
-    this.afterWelcome(this.epochReset ? null : { snapshotClock: frame.clock, before })
-    if (this.welcome) this.emit({ kind: 'welcome', welcome: this.welcome })
+    // N1-4: a cold open (nothing in the scene, nothing of this tab's) of a large board is installed in chunks
+    const chunk =
+      !!this.chunks &&
+      frame.elements.length > this.chunks.threshold &&
+      this.current.size === 0 &&
+      this.tracked.size === 0 &&
+      !this.pendingAdopt?.length &&
+      this.flying().length === 0 &&
+      this.adoptedLost.size === 0
+    this.afterWelcome(this.epochReset ? null : { snapshotClock: frame.clock, before }, {
+      chunk,
+      then: () => {
+        if (this.welcome) this.emit({ kind: 'welcome', welcome: this.welcome })
+      },
+    })
   }
 
   /**
@@ -2081,8 +2327,19 @@ export class LobbyEngineCore implements EngineCore {
    * `reset`: the reset snapshot's clock and this tab's clock before it (null: a catch-up welcome, or an
    * epoch change), for changes to elements the snapshot lacks (see awaitingCatchUp).
    */
-  private afterWelcome(reset: { snapshotClock: number; before: number } | null): void {
+  private afterWelcome(
+    reset: { snapshotClock: number; before: number } | null,
+    o: { readonly chunk?: boolean; readonly then?: () => void } = {},
+  ): void {
     this.resyncing = false
+    // N1-3: a reset snapshot (same epoch) over a scene that shows a copy already: the warm open's painted cache (of
+    // the room's epoch), or the copy a reconnect's reset finds. Its rows are compared with the scene's elements
+    const diff =
+      this.diffApply &&
+      reset !== null &&
+      this.current.size > 0 &&
+      (this.paintedEpoch === null || this.paintedEpoch === this.epoch)
+    this.paintedEpoch = null
     // the scene this core started on (DEF-GAPS-1) is rebuilt below from the server's copies like the rest:
     // from here on every element is judged against them
     this.preScene = null
@@ -2149,7 +2406,14 @@ export class LobbyEngineCore implements EngineCore {
     // (an element only a held lost push carries, e.g. an adopted queue's create, waits for its decision)
     for (const id of this.current.keys())
       if (!this.confirmedMap.has(id) && !this.tracked.has(id) && !this.inflightHas(id)) this.vanish.add(id)
-    this.applyScene(all)
+    const tail = () => this.welcomeTail(o.then)
+    // N1-4: chunked, the tail (the pushes, Saved, the welcome event) waits for the last chunk
+    if (this.applyScene(all, { diff, chunked: o.chunk ? tail : undefined })) return
+    tail()
+  }
+
+  /** The rest of a welcome once its scene is installed (after the last chunk of a chunked install). */
+  private welcomeTail(then?: () => void): void {
     // CONTRACTS_REV 11 (wave D2): on a reconnect whose room is expected to say its revision, what goes out
     // now waits for that `contracts` frame (right behind this welcome and its snapshot and catch-up), so its
     // pushes carry receipt ids. Before, a reconnect's replays went out with none, and when that socket dropped
@@ -2160,6 +2424,7 @@ export class LobbyEngineCore implements EngineCore {
     this.retryDelay = 0
     this.updateSaved()
     this.emit({ kind: 'confirmed' })
+    then?.()
   }
 
   /** A welcome's tail: everything pushable, the lease messages queued behind it, then the stale releases. */
@@ -2497,7 +2762,7 @@ export class LobbyEngineCore implements EngineCore {
       this.clearTimer(this.keyRevTimer)
       this.keyRevTimer = null
     }
-    if (this.stopped || !this.welcome || this.awaitingSnapshot || this.resyncing) return
+    if (this.stopped || !this.welcome || this.awaitingSnapshot || this.resyncing || this.chunk) return
     this.syncLive()
     const reset = new Set<string>()
     this.stripNewerKeys(reset)
@@ -3287,7 +3552,8 @@ export class LobbyEngineCore implements EngineCore {
       !this.welcome ||
       this.awaitingSnapshot ||
       this.resyncing ||
-      this.contractsWait !== null
+      this.contractsWait !== null ||
+      this.chunk
     ) {
       this.schedulePersist()
       this.updateSaved()
@@ -3482,7 +3748,9 @@ export class LobbyEngineCore implements EngineCore {
 
   /** Lease messages go out now: a socket with its welcome (and its snapshot), no welcome tail waiting. */
   private leaseOnline(): boolean {
-    return this.connected && !!this.welcome && !this.awaitingSnapshot && this.contractsWait === null
+    return (
+      this.connected && !!this.welcome && !this.awaitingSnapshot && this.contractsWait === null && !this.chunk
+    )
   }
 
   private sendLease(message: LeaseClientMessage): void {
@@ -3728,7 +3996,8 @@ export class LobbyEngineCore implements EngineCore {
       const entries = await this.store.load()
       if (this.stopped || !entries.length) return
       this.log('offline_adopted', { entries: entries.length })
-      if (this.connected && this.welcome && !this.awaitingSnapshot && !this.resyncing) this.adoptNow(entries)
+      if (this.connected && this.welcome && !this.awaitingSnapshot && !this.resyncing && !this.chunk)
+        this.adoptNow(entries)
       else {
         // no server state yet: adopted at the next welcome (afterWelcome), counted meanwhile
         this.pendingAdopt = [...(this.pendingAdopt ?? []), ...entries]
@@ -4052,7 +4321,7 @@ export class LobbyEngineCore implements EngineCore {
     const unknown = this.store && !this.offlineLoaded ? 1 : 0
     dirty += this.pendingAdopt?.length ?? 0
     const inputs: SaveInputs = {
-      connected: this.connected && !!this.welcome && !this.awaitingSnapshot,
+      connected: this.connected && !!this.welcome && !this.awaitingSnapshot && !this.chunk,
       dirty,
       // an adopted queue's lost push carries no ops, only its elements (OfflineEntry.lost)
       inflightOps: this.flying().reduce((n, p) => n + (p.ops.length || p.sent.size), 0),

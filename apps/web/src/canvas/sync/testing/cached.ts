@@ -10,7 +10,7 @@ import type { ClientMessage } from '@draftroom/canvas-schema/protocol'
 import { type CachedBoard, cacheRecordOf } from '../adapter/snapshot-cache.ts'
 import { type CoreEvent, LobbyEngineCore } from '../core/engine.ts'
 import { createMapScene, type MapScene } from '../headless/scene.ts'
-import type { OfflineQueueStore, ServerInbound } from '../types.ts'
+import type { ChunkScheduler, OfflineQueueStore, ServerInbound } from '../types.ts'
 import type { Harness, TestClient } from './harness.ts'
 import { checkSharingOnApply } from './sharing.ts'
 
@@ -59,6 +59,10 @@ export function openFromCache(
     resume?: boolean
     readonly?: boolean
     offline?: OfflineQueueStore
+    /** N1-3: the reset welcome's diff apply (default: sync/flags.ts DIFF_APPLY) */
+    diff?: boolean
+    /** N1-4: the chunked install's frames (default: none, one apply) */
+    chunks?: ChunkScheduler
     beforeStart?: (p: { scene: MapScene; core: LobbyEngineCore }) => void
   } = {},
 ): CachedPage {
@@ -79,6 +83,14 @@ export function openFromCache(
     setTimer: h.clock.setTimer,
     clearTimer: h.clock.clearTimer,
     log: (event, detail) => logs.push({ event, detail }),
+    ...(o.diff !== undefined || o.chunks
+      ? {
+          snapshotApply: {
+            ...(o.diff !== undefined ? { diff: o.diff } : {}),
+            ...(o.chunks ? { chunks: o.chunks } : {}),
+          },
+        }
+      : {}),
   })
   coreRef = core
   core.on((e) => events.push(e))

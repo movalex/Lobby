@@ -107,3 +107,139 @@ describe('M6-2: a receive-only client that opened from the cache pushes nothing'
     expect(p.scene.map.get('r2')).toEqual(h.room.elements.get('r2'))
   })
 })
+
+// N1-3 (wave N): a warm open's reset welcome is applied as a diff against the painted copy. Every scene element its
+// snapshot row equals by (id, version, versionNonce, isDeleted) stays the scene's object (Excalidraw's shape cache
+// stays warm; the confirmed map takes the decoded row, a separate object: the harness asserts no sharing after every
+// apply), an unequal or new row gets a copy, and what the snapshot lacks leaves the scene. The hello still says
+// since 0 (RESUME_FROM_CACHE stays off), and the convergence hash is checked as before.
+describe('N1-3: the reset welcome over a painted copy is a diff', () => {
+  /** alice's cached copy, her page closed; `meanwhile` runs (bob's edits) before the new page opens from it. */
+  async function warmOpen(
+    meanwhile: (
+      h: ReturnType<typeof createHarness>,
+      b: ReturnType<ReturnType<typeof createHarness>['client']>,
+    ) => void,
+    o: { diff?: boolean } = {},
+  ) {
+    const h = createHarness({ seed: seed() })
+    h.room.contractsRev = CONTRACTS_REV
+    const a = h.client('alice')
+    h.settle()
+    const record = recordOf(a)
+    closePage(a)
+    const b = h.client('bob', { tab: 'tb' })
+    h.settle()
+    meanwhile(h, b)
+    h.settle()
+    const p = openFromCache(h, record, { resume: false, ...(o.diff === false ? { diff: false } : {}) })
+    expect(p.started).toBe(true)
+    const painted = new Map(p.scene.map)
+    const appliesAtPaint = p.scene.applies
+    h.settle()
+    expect(p.core.welcome?.reset).toBe(true)
+    const replaced = [...painted.keys()].filter((id) => p.scene.map.get(id) !== painted.get(id)).sort()
+    const { hashElements } = await import('@draftroom/canvas-schema/hash')
+    return {
+      h,
+      p,
+      replaced,
+      applies: p.scene.applies - appliesAtPaint,
+      hashEqual: (await hashElements(p.core.elements().values())) === (await h.roomHash()),
+    }
+  }
+
+  it('a painted copy equal to the snapshot: 0 scene objects replaced, 0 pushes, hash equal', async () => {
+    const r = await warmOpen(() => {})
+    expect(r.replaced).toEqual([])
+    expect(r.applies, 'nothing to install').toBe(0)
+    expect(r.p.ops()).toBe(0)
+    expect(r.hashEqual).toBe(true)
+    expect(r.p.core.saveStatus).toMatchObject({ state: 'saved', pending: 0 })
+    expect(r.p.events.filter((e) => e.kind === 'echo_suspect')).toEqual([])
+  })
+
+  it('without DIFF_APPLY (the kill switch) every painted element is replaced, as before wave N', async () => {
+    const r = await warmOpen(() => {}, { diff: false })
+    expect(r.replaced).toEqual(['ar', 'n1', 'r1', 'r2', 't1'])
+    expect(r.p.ops()).toBe(0)
+    expect(r.hashEqual).toBe(true)
+  })
+
+  it('3 changed rows: exactly those 3 are replaced, one apply', async () => {
+    const r = await warmOpen((_h, b) => {
+      b.change('r1', { x: 77 })
+      b.change('n1', { backgroundColor: '#ffc9c9' })
+      b.change('ar', { strokeWidth: 4 })
+    })
+    expect(r.replaced).toEqual(['ar', 'n1', 'r1'])
+    expect(r.applies).toBe(1)
+    expect(r.p.scene.map.get('r1')?.x).toBe(77)
+    expect(r.p.ops()).toBe(0)
+    expect(r.hashEqual).toBe(true)
+  })
+
+  it('a row gone from the snapshot leaves the scene (a purged tombstone)', async () => {
+    const r = await warmOpen((h) => {
+      h.room.elements.delete('r2')
+      h.room.rowClock.delete('r2')
+    })
+    expect(r.p.scene.map.has('r2')).toBe(false)
+    expect(r.replaced).toEqual(['r2'])
+    expect(r.p.ops()).toBe(0)
+    expect(r.hashEqual).toBe(true)
+  })
+
+  it('a tombstone in the snapshot replaces a live painted row', async () => {
+    const r = await warmOpen((_h, b) => b.change('r1', { isDeleted: true }))
+    expect(r.replaced).toEqual(['r1'])
+    expect(r.p.scene.map.get('r1')?.isDeleted).toBe(true)
+    expect(r.p.ops()).toBe(0)
+    expect(r.hashEqual).toBe(true)
+  })
+
+  it('a receive-only client pushes nothing: through the diff welcome and 50 remote changes after it', async () => {
+    const r = await warmOpen((_h, b) => b.change('n1', { width: 230 }))
+    expect(r.replaced).toEqual(['n1'])
+    const b = r.h.client('bob', { tab: 'tb2' })
+    r.h.settle()
+    expect(fiftyRemoteChanges(b, () => r.h.settle())).toBe(50)
+    r.h.settle()
+    expect(r.p.ops()).toBe(0)
+    expect(r.p.events.filter((e) => e.kind === 'echo_suspect')).toEqual([])
+    const { hashElements } = await import('@draftroom/canvas-schema/hash')
+    expect(await hashElements(r.p.core.elements().values())).toBe(await r.h.roomHash())
+  })
+
+  it('a reconnect’s reset over the copy the scene holds: unchanged elements stay the scene’s objects', async () => {
+    const h = createHarness({ seed: seed() })
+    h.room.contractsRev = CONTRACTS_REV
+    const a = h.client('alice')
+    const b = h.client('bob', { tab: 'tb' })
+    h.settle()
+    h.room.cut(a.transport)
+    h.settle()
+    b.change('r1', { x: 55 })
+    h.settle()
+    // past the room's horizon: the reconnect is answered with a reset snapshot
+    h.room.horizon = h.room.clock + 1
+    const held = new Map(a.scene.map)
+    ;(a.transport as unknown as { reopen(): void }).reopen()
+    h.settle()
+    expect(a.core.welcome?.reset).toBe(true)
+    const replaced = [...held.keys()].filter((id) => a.scene.map.get(id) !== held.get(id))
+    expect(replaced).toEqual(['r1'])
+    expect(a.scene.map.get('r1')?.x).toBe(55)
+    expect(a.core.pushLog()).toHaveLength(0)
+    expect(await a.hash()).toBe(await h.roomHash())
+  })
+
+  it('a cached copy of another epoch (a restore since): every element is replaced', async () => {
+    const r = await warmOpen((h) => {
+      h.room.epoch = 'epoch2'
+    })
+    expect(r.replaced).toEqual(['ar', 'n1', 'r1', 'r2', 't1'])
+    expect(r.p.ops()).toBe(0)
+    expect(r.hashEqual).toBe(true)
+  })
+})
