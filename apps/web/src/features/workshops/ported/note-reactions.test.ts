@@ -41,8 +41,10 @@ import {
   reactionsOffered,
   reactionsOn,
   reactionsRoom,
+  reactionsUi,
   reactionTargets,
   SOMEONE,
+  setReactionsUiForTests,
   toggleReaction,
   toggleReactions,
   UNAVAILABLE_TWICE,
@@ -172,12 +174,14 @@ const canvasAt = (rev: number | null, readOnly = false) => ({
 
 const markup = (k: Kit) => renderToStaticMarkup(createElement(NoteReactionsLayer, { ctx: k.ctx }))
 const count = (html: string, needle: string) => html.split(needle).length - 1
+/** How many reaction rows the markup draws. */
+const rowsOf = (html: string) => count(html, 'data-testid="note-reactions"')
 
 beforeEach(() => {
   // the picker state is per canvas (a WeakMap), the usage counts are the module's
 })
 afterEach(() => {
-  // nothing global to restore
+  setReactionsUiForTests(true)
 })
 
 describe('reactions are offered only where the room takes them', () => {
@@ -705,11 +709,11 @@ describe('the layer, rendered (N3-1)', () => {
   it('a hidden note (a collapsed branch), a deleted note and a note too small on screen show nothing', () => {
     const k = kit(board())
     ;(k.f.canvas as { isHidden: (id: string) => boolean }).isHidden = (id) => id === 'loved'
-    expect(markup(k)).toBe('')
+    expect(rowsOf(markup(k))).toBe(0)
     const gone = kit([...reacted('loved', keys(['up', BOB]), { isDeleted: true })])
-    expect(markup(gone)).toBe('')
+    expect(rowsOf(markup(gone))).toBe(0)
     const small = kit(board(), { zoom: 0.2 }) // a 200 px note is 40 px on screen
-    expect(markup(small)).toBe('')
+    expect(rowsOf(markup(small))).toBe(0)
   })
 
   it('reads the notes through canvas.index and never walks the scene', () => {
@@ -720,16 +724,33 @@ describe('the layer, rendered (N3-1)', () => {
     expect(k.walks.items).toBe(0)
   })
 
-  it('the hold hides everything, stored reactions included', () => {
-    // the hold is a constant: the layer is the same component with it on; this pins the constant’s value and the gate
-    expect(REACTIONS_UI).toBe(true)
-    expect(reactionsOn(kit([]).f.canvas, false)).toBe(false)
+  it('the hold (REACTIONS_UI=false in a web-only redeploy) hides everything, stored reactions included', () => {
+    const k = kit(board(), { role: 'owner' })
+    k.f.selection = ['loved']
+    expect(markup(k)).toContain('data-testid="note-reactions"')
+    setReactionsUiForTests(false)
+    try {
+      expect(reactionsUi()).toBe(false)
+      expect(rowsOf(markup(k))).toBe(0)
+      expect(reactionsOn(k.f.canvas)).toBe(false)
+      const item = (feature.selectionBar ?? []).find((i) => i.id === REACTIONS_SELECTION_ITEM_ID)
+      expect(item?.visible?.(k.ctx, ['loved'])).toBe(false)
+      const cmd = (feature.commands ?? []).find((c) => c.id === REACTIONS_COMMAND_ID)
+      expect(cmd?.available?.(k.ctx)).toBe(false)
+      expect(cmd?.enabled?.(k.ctx)).toBe(false)
+      const target = { ids: ['loved'], point: null, hit: null }
+      for (const m of feature.contextMenu ?? [])
+        if (m.id.startsWith('reactions-')) expect(m.visible?.(k.ctx, target), m.id).toBe(false)
+    } finally {
+      setReactionsUiForTests(true)
+    }
+    expect(markup(k)).toContain('data-testid="note-reactions"')
   })
 
   it('a note being typed in has no row (its label’s edit is open)', () => {
     const k = kit(board())
     ;(k.f.canvas as { editingId: () => string | null }).editingId = () => 'loved-label'
-    expect(markup(k)).toBe('')
+    expect(rowsOf(markup(k))).toBe(0)
   })
 })
 

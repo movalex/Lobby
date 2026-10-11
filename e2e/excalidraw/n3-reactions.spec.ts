@@ -15,7 +15,7 @@
 //  - a phone: a tap on the add button opens the picker as a sheet and a tap reacts.
 import AxeBuilder from '@axe-core/playwright'
 import type { Page } from '@playwright/test'
-import { expectSaved, item, itemCenterOnScreen, select, updateItem } from '../tests/support/canvas.ts'
+import { expectSaved, item, itemCenterOnScreen, items, select, updateItem } from '../tests/support/canvas.ts'
 import { forgeSession, storedElement } from '../tests/support/excalidraw.ts'
 import {
   expect,
@@ -23,6 +23,7 @@ import {
   focusCanvas,
   hoverNote,
   pickerOption,
+  post,
   reactionChip,
   reactionPicker,
   reactionRow,
@@ -33,6 +34,7 @@ import {
   showAll,
   test,
   type WorkshopCanvasSession,
+  waitForWorkshopBoard,
 } from './workshops-kit.ts'
 
 test.use({ syncEnv: { DRAFTROOM_REACTIONS: 'on' } })
@@ -400,4 +402,124 @@ test('a phone: a tap on the add button opens the picker as a sheet, a tap on an 
   await expect(sheet).toBeVisible()
   await p.page.getByTestId('reaction-picker-close').tap()
   await expect(sheet).toHaveCount(0)
+})
+
+test('a tab that only receives pushes nothing: an idle editor sees a reaction come, go and be cleared (CDP socket frames)', async ({
+  join,
+  stack,
+  board,
+}) => {
+  const a = await join('alice')
+  const b = await join('bob', 'editor')
+  await twoNotes(a.page)
+  await expectItemsEverywhere([b], [N1, N2])
+  for (const s of [a, b]) await showAll(s.page)
+  await expectSaved(b.page)
+  const pushed = b.net.sentPushes().length
+
+  await reactWithMouse(a.page, N1, 'up')
+  await expect(reactionChip(b.page, N1, 'up')).toHaveAttribute('data-count', '1')
+  await reactionChip(a.page, N1, 'up').click()
+  await expect(reactionRow(b.page, N1)).toHaveCount(0)
+  await reactWithMouse(a.page, N2, 'heart')
+  await expect(reactionChip(b.page, N2, 'heart')).toHaveAttribute('data-count', '1')
+  await select(a.page, [N2])
+  const at = await itemCenterOnScreen(a.page, N2)
+  await a.page.mouse.click(at.x, at.y, { button: 'right' })
+  await a.page.getByTestId('context-menu.reactions-clear').click()
+  await expect(reactionChip(b.page, N2, 'heart')).toHaveCount(0)
+  await expect.poll(async () => stored(stack, board, N2)).toEqual({})
+
+  // bob’s tab received all of it, drew it (bursts included) and wrote nothing back
+  await expectSaved(b.page)
+  expect(b.net.sentPushes().length).toBe(pushed)
+})
+
+test('a copy of a reacted note takes no reactions (the key spec strips them); the original keeps them', async ({
+  join,
+  stack,
+  board,
+}) => {
+  const a = await join('alice')
+  const b = await join('bob', 'editor')
+  await twoNotes(a.page)
+  await expectItemsEverywhere([b], [N1])
+  for (const s of [a, b]) await showAll(s.page)
+  await reactWithMouse(b.page, N1, 'up')
+  await reactWithMouse(a.page, N1, 'heart')
+  await expect.poll(async () => stored(stack, board, N1)).toEqual({ up: [b.id], heart: [a.id] })
+
+  const known = (await items(a.page)).map((e) => e.id)
+  await select(a.page, [N1])
+  await focusCanvas(a.page)
+  await a.page.keyboard.press('ControlOrMeta+d')
+  await expect
+    .poll(
+      async () =>
+        (await items(a.page)).filter((e) => e.type === 'stickynote' && !known.includes(e.id)).length,
+    )
+    .toBe(1)
+  const copy = (await items(a.page)).find((e) => e.type === 'stickynote' && !known.includes(e.id))
+    ?.id as string
+  // it is on the server and on bob’s tab (a copy that kept someone else’s key would have been refused), without them
+  await expect.poll(async () => (await storedElement(stack, board, copy))?.type).toBe('stickynote')
+  await expect.poll(async () => !!(await item(b.page, copy))).toBe(true)
+  expect(await stored(stack, board, copy)).toEqual({})
+  expect(await reactionsIn(a.page, copy)).toEqual({})
+  expect(await reactionsIn(b.page, copy)).toEqual({})
+  // the original keeps them
+  expect(await stored(stack, board, N1)).toEqual({ up: [b.id], heart: [a.id] })
+})
+
+test('two people react to the same note at the same moment: both land, on every tab and on the server', async ({
+  join,
+  stack,
+  board,
+}) => {
+  const a = await join('alice')
+  const b = await join('bob', 'editor')
+  await twoNotes(a.page)
+  await expectItemsEverywhere([b], [N1])
+  for (const s of [a, b]) await showAll(s.page)
+  await Promise.all([reactWithMouse(a.page, N1, 'up'), reactWithMouse(b.page, N1, 'up')])
+  for (const s of [a, b]) await expect(reactionChip(s.page, N1, 'up')).toHaveAttribute('data-count', '2')
+  await expect.poll(async () => stored(stack, board, N1)).toEqual({ up: [a.id, b.id].sort() })
+  // and both take theirs back at the same moment
+  await Promise.all([reactionChip(a.page, N1, 'up').click(), reactionChip(b.page, N1, 'up').click()])
+  for (const s of [a, b]) await expect(reactionRow(s.page, N1).getByTestId('note-reaction')).toHaveCount(0)
+  await expect.poll(async () => stored(stack, board, N1)).toEqual({})
+})
+
+test('a name-only guest who can edit reacts like anyone (a key of their own uid), and is named in the list', async ({
+  join,
+  browser,
+  stack,
+  board,
+}) => {
+  const a = await join('alice')
+  await twoNotes(a.page)
+  await showAll(a.page)
+  const r = await post(a, `/api/boards/${board}/review-links`, { role: 'editor', allowGuests: true })
+  expect(r.status(), await r.text()).toBe(201)
+  const { url } = (await r.json()) as { url: string }
+  const context = await browser.newContext()
+  try {
+    const page = await context.newPage()
+    await page.goto(url)
+    await page.getByTestId('invite-guest-name').fill('Gina Guest')
+    await page.getByTestId('invite-guest-join').click()
+    await expect(page).toHaveURL(/\/b\/[a-z0-9-]+$/, { timeout: 30_000 })
+    await waitForWorkshopBoard(page)
+    const guestId = (await page.getByTestId('user-menu').getAttribute('data-user-id')) ?? ''
+    expect(guestId).not.toBe('')
+    await expectItemsEverywhere([{ page, user: 'gina' }], [N1])
+    await showAll(page)
+    await reactWithMouse(page, N1, 'clap')
+    await expect(reactionChip(a.page, N1, 'clap')).toHaveAttribute('data-count', '1')
+    await expect.poll(async () => stored(stack, board, N1)).toEqual({ clap: [guestId] })
+    await reactionChip(a.page, N1, 'clap').hover()
+    await expect(a.page.getByTestId('note-reaction-names')).toContainText('Gina Guest')
+  } finally {
+    await context.close()
+  }
 })

@@ -42,6 +42,14 @@ export const REACTIONS_COMMAND_ID = 'reactions.react'
  */
 export const REACTIONS_UI = true
 
+let ui: boolean = REACTIONS_UI
+/** Whether the feature is on (the hold). Read at call time, so a test can turn it off and on again. */
+export const reactionsUi = (): boolean => ui
+/** Tests only: the hold, as a web-only redeploy with REACTIONS_UI=false would set it. */
+export function setReactionsUiForTests(on: boolean): void {
+  ui = on
+}
+
 /** Whether this room takes reactions (its contracts revision is REACTIONS_REV or later). Null rev: not known, no. */
 export function reactionsRoom(rev: number | null): boolean {
   return rev !== null && rev >= REACTIONS_REV
@@ -57,8 +65,8 @@ export function reactionsOffered(canvas: Pick<LobbyCanvas, 'room' | 'readOnly'>)
 }
 
 /** Whether the feature is on at all (the hold) and this tab may react. */
-export const reactionsOn = (canvas: Pick<LobbyCanvas, 'room' | 'readOnly'>, ui: boolean = REACTIONS_UI) =>
-  ui && reactionsOffered(canvas)
+export const reactionsOn = (canvas: Pick<LobbyCanvas, 'room' | 'readOnly'>, hold: boolean = reactionsUi()) =>
+  hold && reactionsOffered(canvas)
 
 // ---- reading a note's reactions ----------------------------------------------------------------------------------
 

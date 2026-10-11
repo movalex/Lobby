@@ -64,7 +64,6 @@ import {
   REACTIONS_COMMAND_ID,
   REACTIONS_NOT_YET_TEXT,
   REACTIONS_SELECTION_ITEM_ID,
-  REACTIONS_UI,
   react,
   reactionArgs,
   reactionChipsOf,
@@ -73,6 +72,7 @@ import {
   reactionsOffered,
   reactionsOn,
   reactionsRoom,
+  reactionsUi,
   reactionTargets,
   reactorNamesHidden,
   whoReacted,
@@ -193,7 +193,7 @@ function anchorAtNote(canvas: LobbyCanvas, id: string): PickerAnchor | null {
 
 /** `workshops-reactions` (scene): the rows, the picker and a live region. */
 export function NoteReactionsLayer({ ctx }: { ctx: Ctx }) {
-  if (!REACTIONS_UI) return null
+  if (!reactionsUi()) return null
   return <Layer ctx={ctx} />
 }
 
@@ -425,7 +425,7 @@ function Layer({ ctx }: { ctx: Ctx }) {
     return () => doc.removeEventListener('pointerdown', onDown, true)
   }, [picker, canvas, closePicker])
 
-  if (rows.length === 0 && !picker && !said) return null
+  // (the live region is there from the start: one added together with its words is not announced)
   return (
     <div className="dr-wk-nr-layer" data-testid="note-reactions-layer">
       {rows.map((r) => (
@@ -905,7 +905,7 @@ export const REACTIONS_COMMAND: CommandSpec = {
   label: 'React to a note…',
   keywords: ['emoji', 'reaction', 'like', 'thumbs up', 'heart', 'celebrate', 'applause', 'laugh'],
   group: 'Facilitate',
-  available: () => REACTIONS_UI,
+  available: () => reactionsUi(),
   enabled: (ctx) => reactionsOn(ctx.canvas) && notesOf(ctx, ctx.canvas.selection).length > 0,
   disabledReason: reactionsDisabledReason,
   run: (ctx, _source, args) => {
@@ -943,7 +943,7 @@ export const CONTEXT_MENU: readonly MenuEntrySpec[] = [
     order: 19,
     label: 'Clear reactions',
     visible: (ctx, target) =>
-      REACTIONS_UI &&
+      reactionsUi() &&
       canClearReactions(ctx) &&
       notesOf(ctx, target.ids).some((id) => reactionKeysOf(ctx.canvas.get(id)).length > 0),
     run: (ctx, target) => {
