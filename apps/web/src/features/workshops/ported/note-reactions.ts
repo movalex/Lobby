@@ -17,9 +17,17 @@
 //  - A refusal is told once: the engine settles a non-retryable one itself (the server's copy comes back); the
 //    kill switch answers UNAVAILABLE, which the engine retries for ever, so a second UNAVAILABLE for the same
 //    write is read as "switched off right now": the key goes back to the server's value and the person is told.
+//    That watch lives half a minute; a room that says it takes none (its `contracts` frame below REACTIONS_REV)
+//    gets every unconfirmed reaction put back whenever it says so, whatever the watch (`mountReactionGuard`: a tab
+//    offline longer, a reload with the write in its offline queue).
 import { REACTIONS_MAX } from '@draftroom/canvas-schema/limits'
 import { type Ack, REACTIONS_REV } from '@draftroom/canvas-schema/protocol'
-import { REACTION_KEY_PREFIX, reactionKey, reactionsOf } from '@draftroom/canvas-schema/reactions'
+import {
+  parseReactionKey,
+  REACTION_KEY_PREFIX,
+  reactionKey,
+  reactionsOf,
+} from '@draftroom/canvas-schema/reactions'
 import {
   REACTION_CODE_EMOJI,
   REACTION_CODE_LABELS,
@@ -27,7 +35,7 @@ import {
   type ReactionCode,
 } from '@draftroom/contracts'
 import type { CanvasElement, CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
-import { type Atom, atom } from '../../../lib/signals.ts'
+import { type Atom, atom, react as effect } from '../../../lib/signals.ts'
 import { countUsage } from '../../../lib/usage.ts'
 import { workshopSettingsOf } from './session-settings.ts'
 
@@ -333,16 +341,18 @@ export interface AckSource {
 
 /** The same write refused UNAVAILABLE this many times in a row reads as the kill switch (a commit failure is rarely repeated). */
 export const UNAVAILABLE_TWICE = 2
-/** A watch ends after this long (the engine's own "can't save" notice covers a longer outage). */
+/** A watch ends after this long (the guard, below, covers a write the room answers later). */
 export const WATCH_MS = 30_000
 
 interface OpLike {
   readonly k?: string
   readonly id?: string
   readonly c?: Readonly<Record<string, unknown>>
+  readonly el?: {
+    readonly id?: string
+    readonly customData?: { readonly lobby?: Readonly<Record<string, unknown>> }
+  }
 }
-
-const watches = new WeakMap<object, Map<string, () => void>>()
 
 /** The record of push `seq`, newest first (the log is every push of the session, and the one answered is recent). */
 function pushOf(engine: AckSource, seq: number) {
@@ -352,23 +362,66 @@ function pushOf(engine: AckSource, seq: number) {
   return undefined
 }
 
+/** The note a push op is about when it carries a `react:*` key (a patch's `c`, or a create's whole element). */
+function reactionOpId(op: OpLike): string | null {
+  const id = op.k === 'c' ? op.el?.id : op.id
+  if (!id) return null
+  const given = op.k === 'c' ? op.el?.customData?.lobby : op.c
+  return given && Object.keys(given).some((k) => k.startsWith(REACTION_KEY_PREFIX)) ? id : null
+}
+
+/** One skipUndo `transact` that writes each note's patch (the only write a revert makes); false when it did not go. */
+function writePatches(
+  canvas: LobbyCanvas,
+  patches: readonly (readonly [id: string, patch: LobbyPatch])[],
+): boolean {
+  if (patches.length === 0) return false
+  try {
+    canvas.transact(
+      'reaction',
+      (tx) => {
+        for (const [id, patch] of patches) tx.update(id, { customData: { lobby: patch } })
+      },
+      { skipUndo: true },
+    )
+    return true
+  } catch {
+    return false // read-only meanwhile: nothing to put back
+  }
+}
+
+interface Watched {
+  readonly keys: readonly string[]
+  unavailable: number
+}
+interface Watch {
+  /** a later write of this note took over: it is no longer this watch's */
+  drop(id: string): void
+}
+
+const watches = new WeakMap<object, Map<string, Watch>>()
+
 /**
- * Watches the push that carries a reaction write of `keys` on note `id` until the room answers it. The ack of an
- * accepted write ends the watch. A TOO_LARGE refusal tells the person the note is full (the engine puts the server's
- * copy back by itself). UNAVAILABLE is retryable, so the engine retries for ever under the kill switch: at the second
- * one the keys go back to the server's values (`confirmed`, one `transact` with `skipUndo`, the only write this makes)
- * and the person is told reactions are switched off. Every other refusal is the board's own "Change not saved" notice.
- * Returns the stop. A later watch of the same note replaces the earlier one.
+ * Watches the push that carries a reaction write (`writes`: each note with the keys written on it) until the room
+ * answers it, with ONE ack listener however many notes it covers. The ack of an accepted write ends that note's
+ * watch. A TOO_LARGE refusal tells the person the note is full (the engine puts the server's copy back by itself).
+ * UNAVAILABLE is retryable, so the engine retries for ever under the kill switch: at the second one the keys go back
+ * to the server's values (`confirmed`, one `transact` with `skipUndo` for all the notes, the only write this makes)
+ * and the person is told reactions are switched off. Every other refusal is the board's own "Change not saved"
+ * notice. The watch lasts WATCH_MS; a write the room answers later (a tab that was offline, a reload) is the guard's
+ * (`mountReactionGuard`). Returns the stop. A later watch of the same note takes it over.
  */
-export function watchReactionWrite(
+export function watchReactionWrites(
   canvas: LobbyCanvas,
   notify: CanvasFeatureContext['notify'],
-  id: string,
-  keys: readonly string[],
+  writes: Iterable<readonly [id: string, keys: readonly string[]]>,
   opts: { setTimer?: typeof setTimeout; clearTimer?: typeof clearTimeout } = {},
 ): () => void {
   const engine = canvas.engine as AckSource | null
-  if (!engine || keys.length === 0) return () => {}
+  if (!engine) return () => {}
+  const live = new Map<string, Watched>()
+  for (const [id, keys] of writes) if (keys.length > 0) live.set(id, { keys, unavailable: 0 })
+  if (live.size === 0) return () => {}
   const set = opts.setTimer ?? setTimeout
   const clear = opts.clearTimer ?? clearTimeout
   let perCanvas = watches.get(canvas)
@@ -376,8 +429,7 @@ export function watchReactionWrite(
     perCanvas = new Map()
     watches.set(canvas, perCanvas)
   }
-  perCanvas.get(id)?.()
-  let unavailable = 0
+  const owners = perCanvas
   let done = false
   let off: () => void = () => {}
   let timer: ReturnType<typeof setTimeout> | null = null
@@ -386,46 +438,70 @@ export function watchReactionWrite(
     done = true
     off()
     if (timer !== null) clear(timer)
-    if (perCanvas.get(id) === stop) perCanvas.delete(id)
+    for (const id of live.keys()) if (owners.get(id) === self) owners.delete(id)
+    live.clear()
   }
-  const revert = () => {
-    if (!canvas.get(id)) return
-    const stored = engine.confirmed?.(id)?.customData?.lobby
-    const patch = Object.fromEntries(keys.map((k) => [k, stored?.[k] === true ? true : null]))
-    try {
-      canvas.transact('reaction', (tx) => tx.update(id, { customData: { lobby: patch } }), { skipUndo: true })
-    } catch {
-      // read-only meanwhile: nothing to put back
-    }
+  const self: Watch = {
+    drop(id) {
+      live.delete(id)
+      if (live.size === 0) stop()
+    },
+  }
+  for (const id of [...live.keys()]) {
+    owners.get(id)?.drop(id)
+    owners.set(id, self)
   }
   off = engine.onAck((ack) => {
     if (done) return
     const push = pushOf(engine, ack.seq)
-    const at = push
-      ? (push.ops as readonly OpLike[]).findIndex(
-          (op) => op.k === 'p' && op.id === id && !!op.c && keys.some((k) => k in (op.c as object)),
-        )
-      : -1
-    const r = at >= 0 ? ack.r[at] : undefined
-    if (!r) return
-    const code = r.ok ? (r.denied?.code ?? null) : r.code
-    if (code === null) return stop() // accepted
-    if (code === 'UNAVAILABLE') {
-      unavailable++
-      if (unavailable < UNAVAILABLE_TWICE) return
-      revert()
+    if (!push) return
+    const back: [string, LobbyPatch][] = []
+    let full = false
+    const seen = new Set<string>()
+    ;(push.ops as readonly OpLike[]).forEach((op, n) => {
+      if (op.k !== 'p' || !op.id || !op.c) return
+      const w = live.get(op.id)
+      if (!w || seen.has(op.id)) return
+      const c = op.c
+      if (!w.keys.some((k) => k in c)) return
+      seen.add(op.id)
+      const r = ack.r[n]
+      if (!r) return
+      const code = r.ok ? (r.denied?.code ?? null) : r.code
+      if (code === null) {
+        live.delete(op.id) // accepted
+        return
+      }
+      if (code === 'RATE') return // retried by the engine
+      if (code === 'UNAVAILABLE') {
+        w.unavailable++
+        if (w.unavailable < UNAVAILABLE_TWICE) return
+        if (canvas.get(op.id)) {
+          const stored = engine.confirmed?.(op.id)?.customData?.lobby
+          back.push([op.id, Object.fromEntries(w.keys.map((k) => [k, stored?.[k] === true ? true : null]))])
+        }
+      } else if (code === 'TOO_LARGE') full = true
+      live.delete(op.id)
+    })
+    if (back.length > 0) {
+      writePatches(canvas, back)
       notify({ key: 'reaction', text: REACTIONS_OFF_TEXT, tone: 'error', testId: 'reaction-toast' })
-    } else if (code === 'TOO_LARGE') {
-      notify({ key: 'reaction', text: REACTIONS_FULL_TEXT, tone: 'error', testId: 'reaction-toast' })
-    } else if (code === 'RATE') {
-      return // retried by the engine
     }
-    stop()
+    if (full) notify({ key: 'reaction', text: REACTIONS_FULL_TEXT, tone: 'error', testId: 'reaction-toast' })
+    if (live.size === 0) stop()
   })
   timer = set(stop, WATCH_MS)
-  perCanvas.set(id, stop)
   return stop
 }
+
+/** One note's write watched (see `watchReactionWrites`). */
+export const watchReactionWrite = (
+  canvas: LobbyCanvas,
+  notify: CanvasFeatureContext['notify'],
+  id: string,
+  keys: readonly string[],
+  opts: { setTimer?: typeof setTimeout; clearTimer?: typeof clearTimeout } = {},
+): (() => void) => watchReactionWrites(canvas, notify, [[id, keys]], opts)
 
 /**
  * Reacts (or takes the reaction back) on `ids` and keeps watch for the room's answer: the one call every way in
@@ -445,7 +521,11 @@ export function react(
   }
   if (r.changed) {
     const key = reactionKey(code, ctx.me.user.id)
-    for (const id of reactionTargets(canvas, ids)) watchReactionWrite(canvas, ctx.notify, id, [key])
+    watchReactionWrites(
+      canvas,
+      ctx.notify,
+      reactionTargets(canvas, ids).map((id) => [id, [key]] as const),
+    )
   }
   return r
 }
@@ -463,8 +543,104 @@ export function clear(
     ctx.notify({ key: 'reaction', text: r.message ?? 'That did not work.', testId: 'reaction-toast' })
     return r
   }
-  if (r.changed) for (const [id, keys] of before) watchReactionWrite(canvas, ctx.notify, id, keys)
+  if (r.changed) watchReactionWrites(canvas, ctx.notify, before)
   return r
+}
+
+// ---- a room that takes no reactions (the guard) --------------------------------------------------------------------
+
+/** The room announced a revision below REACTIONS_REV: it takes no reaction key at all (null: not known yet, no). */
+export const reactionsClosed = (rev: number | null): boolean => rev !== null && rev < REACTIONS_REV
+
+/**
+ * The patch that puts a note's `react:*` keys back to the room's copy: a key held here and not there goes (null), a
+ * key there and not held here comes back (true). Null when they agree. Without a copy (`hasCopy` false: a note made
+ * here, not saved yet) only `me`'s own keys go, since what else the room holds is not known.
+ */
+export function reactionRevertPatch(
+  local: Readonly<Record<string, unknown>> | undefined,
+  stored: Readonly<Record<string, unknown>> | undefined,
+  hasCopy: boolean,
+  me: string,
+): LobbyPatch | null {
+  const patch: LobbyPatch = {}
+  for (const [k, v] of Object.entries(local ?? {})) {
+    if (!k.startsWith(REACTION_KEY_PREFIX) || v !== true || stored?.[k] === true) continue
+    if (hasCopy || parseReactionKey(k)?.uid === me) patch[k] = null
+  }
+  if (hasCopy)
+    for (const [k, v] of Object.entries(stored ?? {}))
+      if (k.startsWith(REACTION_KEY_PREFIX) && v === true && local?.[k] !== true) patch[k] = true
+  return Object.keys(patch).length > 0 ? patch : null
+}
+
+/**
+ * Puts every `react:*` key of the notes among `ids` that the room has not confirmed back to the room's copy
+ * (`engine.confirmed`), in ONE `transact` with `skipUndo`. Returns how many notes changed. The room's copy is the
+ * reference, so a removal not yet acknowledged (your own, or an owner's clear) comes back too.
+ */
+export function revertUnconfirmedReactions(canvas: LobbyCanvas, ids: Iterable<string>, me: string): number {
+  const engine = canvas.engine as AckSource | null
+  if (!engine?.confirmed || canvas.readOnly()) return 0
+  const patches: [string, LobbyPatch][] = []
+  for (const id of new Set(ids)) {
+    const el = canvas.get(id)
+    if (!isReactionTarget(el)) continue
+    const copy = engine.confirmed(id)
+    const patch = reactionRevertPatch(el.customData?.lobby, copy?.customData?.lobby, !!copy, me)
+    if (patch) patches.push([id, patch])
+  }
+  return writePatches(canvas, patches) ? patches.length : 0
+}
+
+/**
+ * The guard behind "reactions are switched off": a reaction this tab holds that the room has not confirmed goes back
+ * to the room's copy as soon as the room says it takes none, however the write got there. The kill switch
+ * (DRAFTROOM_REACTIONS=off) answers a reaction write UNAVAILABLE, which the engine retries for ever. The watch
+ * (`watchReactionWrites`) covers the half minute after the person reacted; this covers all the rest: a tab that was
+ * offline longer and reconnects to a room restarted with the switch off, a page reloaded with the write in its
+ * offline queue, a write that reached the room any other way. Two triggers, neither a walk of the scene per change:
+ * the room's `contracts` frame naming a revision below REACTIONS_REV (one look at the notes that hold a reaction
+ * key), and a refusal of a push that carried a reaction key while the room says so (that note only). It writes
+ * nothing when the tab and the room agree, and nothing in a room that takes reactions (a refusal there is the
+ * watch's). The person is told once per revert. It runs whatever the hold (REACTIONS_UI) says.
+ */
+export function mountReactionGuard(ctx: Pick<CanvasFeatureContext, 'canvas' | 'me' | 'notify'>): () => void {
+  const { canvas } = ctx
+  const engine = canvas.engine as AckSource | null
+  if (!engine) return () => {}
+  const me = ctx.me.user.id
+  let disposed = false
+  const closed = () => reactionsClosed(canvas.room.contractsRev())
+  const putBack = (ids: Iterable<string>) => {
+    if (disposed || !closed()) return
+    if (revertUnconfirmedReactions(canvas, ids, me) > 0)
+      ctx.notify({ key: 'reaction', text: REACTIONS_OFF_TEXT, tone: 'error', testId: 'reaction-toast' })
+  }
+  // the room's frame; the notes are looked at after the message is handled, not inside it
+  const offRoom = effect('dr-wk-react-guard', () => {
+    if (!closed()) return
+    queueMicrotask(() => putBack(canvas.index.withLobbyKeyPrefix(REACTION_KEY_PREFIX).map((e) => e.id)))
+  })
+  // an answer that is not an acceptance, to a push that carried a reaction key
+  const offAck = engine.onAck((ack) => {
+    if (disposed || !closed()) return
+    const push = pushOf(engine, ack.seq)
+    if (!push) return
+    const ids: string[] = []
+    ;(push.ops as readonly OpLike[]).forEach((op, n) => {
+      const r = ack.r[n]
+      if (!r || (r.ok && !r.denied)) return
+      const id = reactionOpId(op)
+      if (id) ids.push(id)
+    })
+    if (ids.length > 0) putBack(ids)
+  })
+  return () => {
+    disposed = true
+    offRoom()
+    offAck()
+  }
 }
 
 // ---- the picker (state shared by the ways in) --------------------------------------------------------------------

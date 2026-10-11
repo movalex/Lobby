@@ -53,6 +53,7 @@ import {
   CONTEXT_MENU as REACTIONS_CONTEXT_MENU,
   SELECTION_BAR_ITEM as REACTIONS_SELECTION_BAR_ITEM,
 } from './NoteReactions.tsx'
+import { mountReactionGuard } from './note-reactions.ts'
 import { isPresentingHere } from './presenting.ts'
 import { mountPrivateNotes, privateNotesPanel } from './private-notes/index.tsx'
 import {
@@ -449,6 +450,10 @@ function mountWorkshops(ctx: Ctx) {
   // K3-4: while presenting, the live timer and the raised hands float over the top of the slides
   // (WorkshopTopLayer): present mode fits each slide below them (present-export/ported/insets.ts).
   offs.push(mountPresentChrome(ctx))
+
+  // wave N (N3-2): a reaction the room has not confirmed goes back when the room says it takes none (the kill
+  // switch): a tab offline longer than the watch, a reload with the write in its offline queue (./note-reactions.ts)
+  offs.push(mountReactionGuard(ctx))
 
   return () => {
     for (const t of timers) clearTimeout(t)

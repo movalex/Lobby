@@ -15,6 +15,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { CanvasElement, CanvasFeatureContext } from '../../../canvas/api/index.ts'
+import { atom } from '../../../lib/signals.ts'
 import { pendingUsage } from '../../../lib/usage.ts'
 import { feature } from './index.tsx'
 import { NoteReactionsLayer, ReactionPicker } from './NoteReactions.tsx'
@@ -23,6 +24,7 @@ import {
   clear,
   clearReactions,
   closeReactionPicker,
+  mountReactionGuard,
   nameResolver,
   openReactionPicker,
   pickerOf,
@@ -38,20 +40,24 @@ import {
   reactionCountOf,
   reactionLabel,
   reactionPatch,
+  reactionRevertPatch,
+  reactionsClosed,
   reactionsOffered,
   reactionsOn,
   reactionsRoom,
   reactionsUi,
   reactionTargets,
+  revertUnconfirmedReactions,
   SOMEONE,
   setReactionsUiForTests,
   toggleReaction,
   toggleReactions,
   UNAVAILABLE_TWICE,
   watchReactionWrite,
+  watchReactionWrites,
   whoReacted,
 } from './note-reactions.ts'
-import { type FakeCanvas, fakeCanvas, note } from './test-kit.ts'
+import { el, type FakeCanvas, fakeCanvas, note } from './test-kit.ts'
 
 const ME = 'usr_me0000000001'
 const BOB = 'usr_bob000000001'
@@ -566,6 +572,299 @@ describe('a refusal is told once and the key returns to the server’s value (N3
     ;(k.f.canvas as { engine: unknown }).engine = k.engine
     watchReactionWrite(k.f.canvas, k.ctx.notify, 'n', [])
     expect(k.engine.listeners.size).toBe(0)
+  })
+})
+
+describe('one watch per write, however many notes it covers (N3-2)', () => {
+  const ops = (...entries: [id: string, c: Record<string, unknown>][]) =>
+    entries.map(([id, c]) => ({ k: 'p', id, pv: 1, c }))
+  const unavailable = (id: string) => ({ id, ok: false, code: 'UNAVAILABLE', el: null })
+
+  it('a reaction on many notes registers ONE ack listener; its answers are read once per ack', () => {
+    const k = kit([...reacted('a', undefined), ...reacted('b', undefined), ...reacted('c', undefined)])
+    const key = reactionKey('up', ME)
+    expect(react(k.ctx, ['a', 'b', 'c'], 'up')).toMatchObject({ ok: true, changed: 3 })
+    expect(k.engine.listeners.size).toBe(1)
+    k.engine.log.push({
+      seq: 7,
+      ops: ops(['a', { [key]: true }], ['b', { [key]: true }], ['c', { [key]: true }]),
+    })
+    // a is accepted, c is told the note is full, b is retried once (nothing yet)
+    k.engine.ack(7, [
+      { id: 'a', ok: true, v: 2 },
+      unavailable('b'),
+      { id: 'c', ok: false, code: 'TOO_LARGE', el: null },
+    ])
+    expect(k.notices.map((n) => n.text)).toEqual([REACTIONS_FULL_TEXT])
+    expect(k.engine.listeners.size).toBe(1) // b is still being watched
+    k.engine.log.push({ seq: 8, ops: ops(['b', { [key]: true }]) })
+    k.engine.ack(8, [unavailable('b')])
+    expect(k.notices.map((n) => n.text)).toEqual([REACTIONS_FULL_TEXT, REACTIONS_OFF_TEXT])
+    expect(k.f.canvas.get('b')?.customData?.lobby?.[key]).toBeUndefined()
+    expect(k.f.canvas.get('a')?.customData?.lobby?.[key]).toBe(true)
+    expect(k.engine.listeners.size).toBe(0)
+  })
+
+  it('the second UNAVAILABLE of several notes puts every key back in ONE skipUndo transact, with one toast', () => {
+    const ids = ['a', 'b', 'c', 'd']
+    const k = kit(ids.flatMap((id) => reacted(id, undefined)))
+    const key = reactionKey('up', ME)
+    react(k.ctx, ids, 'up')
+    expect(k.f.options).toEqual([{ skipUndo: true }])
+    const push = (seq: number) =>
+      k.engine.log.push({
+        seq,
+        ops: ops(...ids.map((id) => [id, { [key]: true }] as [string, Record<string, unknown>])),
+      })
+    for (const seq of [7, 8]) {
+      push(seq)
+      k.engine.ack(seq, ids.map(unavailable))
+    }
+    for (const id of ids) expect(k.f.canvas.get(id)?.customData?.lobby?.[key]).toBeUndefined()
+    expect(k.f.steps).toEqual(['reaction', 'reaction']) // the write, and one revert for all four
+    expect(k.f.options).toEqual([{ skipUndo: true }, { skipUndo: true }])
+    expect(k.notices.map((n) => n.text)).toEqual([REACTIONS_OFF_TEXT])
+    expect(k.engine.listeners.size).toBe(0)
+  })
+
+  it('a later write of one note takes that note over; the other notes of the earlier watch stay watched', () => {
+    const k = kit([...reacted('a', undefined), ...reacted('b', undefined)])
+    const up = reactionKey('up', ME)
+    const heart = reactionKey('heart', ME)
+    watchReactionWrites(k.f.canvas, k.ctx.notify, [
+      ['a', [up]],
+      ['b', [up]],
+    ])
+    expect(k.engine.listeners.size).toBe(1)
+    watchReactionWrites(k.f.canvas, k.ctx.notify, [['a', [heart]]])
+    expect(k.engine.listeners.size).toBe(2) // the first still watches b
+    // the first watch no longer reads a: an answer to a's `up` write is not its business
+    k.engine.log.push({ seq: 5, ops: ops(['a', { [up]: true }], ['b', { [up]: true }]) })
+    k.engine.ack(5, [
+      { id: 'a', ok: true, v: 2 },
+      { id: 'b', ok: true, v: 2 },
+    ])
+    expect(k.engine.listeners.size).toBe(1) // the first ended (b answered); the second still waits for a's heart
+  })
+})
+
+describe('a room that takes no reactions: what the room has not confirmed goes back (N3-2, the guard)', () => {
+  const key = reactionKey('up', ME)
+  const settle = () => new Promise<void>((r) => setTimeout(r, 0))
+
+  /** A kit whose room revision is an atom, as the board session's is (reactive). */
+  function guarded(elements: CanvasElement[], rev: number | null) {
+    const k = kit(elements, { rev })
+    const room = atom<number | null>('test-room-rev', rev)
+    Object.assign(k.f.canvas, { room: { contractsRev: () => room.get() } })
+    return { k, room }
+  }
+  const mount = (k: Kit) => mountReactionGuard({ canvas: k.f.canvas, me: k.ctx.me, notify: k.ctx.notify })
+  const lobbyOf = (k: Kit, id: string) => k.f.canvas.get(id)?.customData?.lobby
+
+  describe('the pure parts', () => {
+    it('reactionsClosed: only a revision the room announced and that is below 13', () => {
+      expect([null, 10, 12, 13, 14].map(reactionsClosed)).toEqual([false, true, true, false, false])
+    })
+
+    it('the patch: a key the room lacks goes, a key the room has comes back, agreement is no patch', () => {
+      const stored = { [reactionKey('heart', BOB)]: true, other: 1 }
+      expect(reactionRevertPatch({ [key]: true, ...stored }, stored, true, ME)).toEqual({ [key]: null })
+      expect(reactionRevertPatch({ other: 1 }, stored, true, ME)).toEqual({
+        [reactionKey('heart', BOB)]: true,
+      })
+      expect(reactionRevertPatch(stored, stored, true, ME)).toBeNull()
+      expect(reactionRevertPatch(undefined, undefined, true, ME)).toBeNull()
+      // a value that is not `true` is no reaction either way
+      expect(reactionRevertPatch({ [key]: 'yes' }, {}, true, ME)).toBeNull()
+    })
+
+    it('a note the room has no copy of: only my own keys go (what else the room holds is not known)', () => {
+      const local = { [key]: true, [reactionKey('heart', BOB)]: true, [reactionKey('heart', ME)]: true }
+      expect(reactionRevertPatch(local, undefined, false, ME)).toEqual({
+        [key]: null,
+        [reactionKey('heart', ME)]: null,
+      })
+    })
+  })
+
+  describe('revertUnconfirmedReactions', () => {
+    it('puts a key the room lacks back, and an unacknowledged removal back, in ONE skipUndo transact', () => {
+      const k = kit([
+        ...reacted('add', keys(['up', ME])), // mine, not stored
+        ...reacted('rm', undefined), // my removal, not acknowledged: the room still has it
+        ...reacted('same', keys(['heart', BOB])),
+      ])
+      k.engine.stored.set('add', { customData: { lobby: {} } })
+      k.engine.stored.set('rm', { customData: { lobby: { [key]: true } } })
+      k.engine.stored.set('same', { customData: { lobby: keys(['heart', BOB]) } })
+      expect(revertUnconfirmedReactions(k.f.canvas, ['add', 'rm', 'same'], ME)).toBe(2)
+      expect(lobbyOf(k, 'add')?.[key]).toBeUndefined()
+      expect(lobbyOf(k, 'rm')?.[key]).toBe(true)
+      expect(lobbyOf(k, 'same')).toEqual(keys(['heart', BOB]))
+      expect(k.f.steps).toEqual(['reaction'])
+      expect(k.f.options).toEqual([{ skipUndo: true }])
+    })
+
+    it('writes nothing when the tab and the room agree, on a read-only canvas, with no engine, or for a non-note', () => {
+      const k = kit([
+        ...reacted('n', keys(['up', ME])),
+        el('shape', 'rectangle', { customData: { lobby: keys(['up', ME]) } }),
+      ])
+      k.engine.stored.set('n', { customData: { lobby: keys(['up', ME]) } })
+      expect(revertUnconfirmedReactions(k.f.canvas, ['n', 'shape', 'gone'], ME)).toBe(0)
+      expect(k.f.steps).toEqual([])
+      k.engine.stored.set('n', { customData: { lobby: {} } })
+      expect(revertUnconfirmedReactions(k.f.canvas, ['shape'], ME)).toBe(0) // a rectangle is not a target
+      k.f.readOnly = true
+      expect(revertUnconfirmedReactions(k.f.canvas, ['n'], ME)).toBe(0)
+      k.f.readOnly = false
+      ;(k.f.canvas as { engine: unknown }).engine = null
+      expect(revertUnconfirmedReactions(k.f.canvas, ['n'], ME)).toBe(0)
+      expect(k.f.steps).toEqual([])
+    })
+  })
+
+  describe('the guard', () => {
+    it('a room that says 12 when the page mounts: the unconfirmed key goes back and the person is told, with no watch', async () => {
+      const { k } = guarded([...reacted('n', keys(['up', ME]))], 12)
+      k.engine.stored.set('n', { customData: { lobby: {} } })
+      const stop = mount(k)
+      expect(k.engine.listeners.size).toBe(1) // the guard's own, no watch
+      await settle()
+      expect(lobbyOf(k, 'n')?.[key]).toBeUndefined()
+      expect(k.notices.map((n) => [n.key, n.text, n.testId])).toEqual([
+        ['reaction', REACTIONS_OFF_TEXT, 'reaction-toast'],
+      ])
+      expect(k.f.options).toEqual([{ skipUndo: true }])
+      stop()
+    })
+
+    it('a room that takes reactions (13 or later), or has not said (null): nothing is touched', async () => {
+      for (const rev of [13, 14, null]) {
+        const { k } = guarded([...reacted('n', keys(['up', ME]))], rev)
+        k.engine.stored.set('n', { customData: { lobby: {} } })
+        const stop = mount(k)
+        await settle()
+        expect(lobbyOf(k, 'n')?.[key], String(rev)).toBe(true)
+        expect(k.f.steps, String(rev)).toEqual([])
+        stop()
+      }
+    })
+
+    it('the revision comes later: a reload with the write in the offline queue (null, then 12) is put back at the frame', async () => {
+      const { k, room } = guarded([...reacted('n', keys(['up', ME]))], null)
+      k.engine.stored.set('n', { customData: { lobby: {} } })
+      const stop = mount(k)
+      await settle()
+      expect(lobbyOf(k, 'n')?.[key]).toBe(true) // the room has not said yet
+      room.set(12) // its contracts frame
+      await settle()
+      expect(lobbyOf(k, 'n')?.[key]).toBeUndefined()
+      expect(k.notices.map((n) => n.text)).toEqual([REACTIONS_OFF_TEXT])
+      stop()
+    })
+
+    it('a tab offline longer than the watch: a rev-13 tab reconnects to a room restarted with the switch off (13, null, 12)', async () => {
+      const { k, room } = guarded([...reacted('n', undefined)], 13)
+      const stop = mount(k)
+      // the person reacts while offline; the watch's half minute runs out
+      react(k.ctx, ['n'], 'up')
+      expect(lobbyOf(k, 'n')?.[key]).toBe(true)
+      k.engine.stored.set('n', { customData: { lobby: {} } })
+      room.set(null) // the new socket's welcome
+      await settle()
+      expect(lobbyOf(k, 'n')?.[key]).toBe(true)
+      room.set(12) // the room's frame: the switch is off
+      await settle()
+      expect(lobbyOf(k, 'n')?.[key]).toBeUndefined()
+      expect(k.notices.map((n) => n.text)).toEqual([REACTIONS_OFF_TEXT])
+      stop()
+    })
+
+    it('an answer to a push that carried the key puts it back: a write at 12, an unacknowledged removal the frame cannot see', async () => {
+      const { k } = guarded([...reacted('add', undefined), ...reacted('rm', undefined)], 12)
+      k.engine.stored.set('add', { customData: { lobby: {} } })
+      k.engine.stored.set('rm', { customData: { lobby: { [key]: true } } }) // the room still holds mine; my removal is pending
+      const stop = mount(k)
+      await settle()
+      expect(k.f.steps).toEqual([]) // no local key to find: the frame's look sees nothing
+      // a write through the port that nothing watches, and the room's refusal
+      k.f.canvas.transact(
+        'e2e: react',
+        (tx) => tx.update('add', { customData: { lobby: { [key]: true } } }),
+        {
+          skipUndo: true,
+        },
+      )
+      k.engine.log.push({
+        seq: 3,
+        ops: [
+          { k: 'p', id: 'add', pv: 1, c: { [key]: true } },
+          { k: 'p', id: 'rm', pv: 1, c: { [key]: null } },
+        ],
+      })
+      k.engine.ack(3, [
+        { id: 'add', ok: false, code: 'UNAVAILABLE', el: null },
+        { id: 'rm', ok: false, code: 'UNAVAILABLE', el: null },
+      ])
+      expect(lobbyOf(k, 'add')?.[key]).toBeUndefined()
+      expect(lobbyOf(k, 'rm')?.[key]).toBe(true)
+      expect(k.notices.map((n) => n.text)).toEqual([REACTIONS_OFF_TEXT])
+      stop()
+    })
+
+    it('an accepted push, or one without a reaction key, is left alone', async () => {
+      const { k } = guarded([...reacted('n', keys(['up', ME]))], 12)
+      k.engine.stored.set('n', { customData: { lobby: keys(['up', ME]) } })
+      const stop = mount(k)
+      await settle()
+      k.engine.log.push({ seq: 4, ops: [{ k: 'p', id: 'n', pv: 1, c: { [key]: true } }] })
+      k.engine.ack(4, [{ id: 'n', ok: true, v: 2 }])
+      k.engine.log.push({ seq: 5, ops: [{ k: 'p', id: 'n', pv: 2, c: { 'tag:x': 1 } }] })
+      k.engine.ack(5, [{ id: 'n', ok: false, code: 'UNAVAILABLE', el: null }])
+      expect(k.f.steps).toEqual([])
+      expect(k.notices).toEqual([])
+      stop()
+    })
+
+    it('a refusal in a room that takes reactions is the watch’s, not the guard’s', async () => {
+      const { k } = guarded([...reacted('n', keys(['up', ME]))], 13)
+      k.engine.stored.set('n', { customData: { lobby: {} } })
+      const stop = mount(k)
+      await settle()
+      k.engine.log.push({ seq: 4, ops: [{ k: 'p', id: 'n', pv: 1, c: { [key]: true } }] })
+      k.engine.ack(4, [{ id: 'n', ok: false, code: 'UNAVAILABLE', el: null }])
+      expect(lobbyOf(k, 'n')?.[key]).toBe(true)
+      expect(k.f.steps).toEqual([])
+      stop()
+    })
+
+    it('a note made here and not saved yet: its create is refused, and my reaction on it goes (the others’ stay)', async () => {
+      const { k } = guarded([...reacted('n', { ...keys(['up', ME]), ...keys(['heart', BOB]) })], 12)
+      const stop = mount(k) // the room has no copy of n
+      k.engine.log.push({
+        seq: 6,
+        ops: [{ k: 'c', el: { id: 'n', customData: { lobby: keys(['up', ME]) } } }],
+      })
+      k.engine.ack(6, [{ id: 'n', ok: false, code: 'UNAVAILABLE', el: null }])
+      expect(lobbyOf(k, 'n')).toEqual(keys(['heart', BOB]))
+      stop()
+    })
+
+    it('the stop ends both triggers; a page without sync mounts nothing', async () => {
+      const { k, room } = guarded([...reacted('n', keys(['up', ME]))], 13)
+      k.engine.stored.set('n', { customData: { lobby: {} } })
+      const stop = mount(k)
+      expect(k.engine.listeners.size).toBe(1)
+      stop()
+      expect(k.engine.listeners.size).toBe(0)
+      room.set(12)
+      await settle()
+      expect(lobbyOf(k, 'n')?.[key]).toBe(true)
+      ;(k.f.canvas as { engine: unknown }).engine = null
+      expect(mount(k)).toBeTypeOf('function')
+    })
   })
 })
 
