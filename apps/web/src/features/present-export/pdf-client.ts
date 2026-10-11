@@ -1,10 +1,8 @@
 // A PdfBuilder that runs pdf-lib in a module worker (pdf.worker.ts), so decoding and compressing large
 // page images never blocks the board. Falls back to the main thread when workers are unavailable
 // (no Worker global, blocked by policy, or the worker fails to load).
-import { createPdfBuilder, type PdfBuilder, type PdfPageInput, type PdfVectorPageInput } from './pdf-build.ts'
+import type { PdfBuilder, PdfPageInput, PdfVectorPageInput } from './pdf-build.ts'
 import type { PdfWorkerRequest, PdfWorkerResponse } from './pdf-protocol.ts'
-import { loadFontkit } from './vector/fontkit.ts'
-import { browserVectorDeps } from './vector/worker-deps.ts'
 
 export interface DisposablePdfBuilder extends PdfBuilder {
   /** Stops the worker (cancel); a no-op after finish(). */
@@ -16,7 +14,13 @@ type WithoutId<T> = T extends unknown ? Omit<T, 'id'> : never
 
 const START_TIMEOUT_MS = 10_000
 
+/** Without a worker: the PDF library loads on this thread then, and only then (N6-1: never with the board). */
 async function mainThreadBuilder(title: string): Promise<DisposablePdfBuilder> {
+  const [{ createPdfBuilder }, { loadFontkit }, { browserVectorDeps }] = await Promise.all([
+    import('./pdf-build.ts'),
+    import('./vector/fontkit.ts'),
+    import('./vector/worker-deps.ts'),
+  ])
   const fontkit = await loadFontkit().catch(() => null)
   const b = await createPdfBuilder({ title, vector: { fontkit, deps: browserVectorDeps() } })
   return {

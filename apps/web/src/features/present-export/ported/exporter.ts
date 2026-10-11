@@ -496,7 +496,7 @@ export async function renderPdf(
   const imagePages: { page: number; reason: string }[] = []
   const [{ createPdfBuilderOffThread }, { bookmarkTitle, isWinAnsi }] = await Promise.all([
     import('../pdf-client.ts'),
-    import('../pdf-build.ts'),
+    import('../pdf-text.ts'),
   ])
   const builder = await createPdfBuilderOffThread({ title: opts.title })
   try {
