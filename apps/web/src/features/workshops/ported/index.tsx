@@ -5,6 +5,8 @@
 //  - anonymous dot voting (setup dialog, click-to-vote on the canvas, the stepper and Tab for the
 //    keyboard, "I'm done", ranked results, the results card, CSV) and the `vote` pointer tool;
 //  - +1 on notes, reactions and raise hand;
+//  - (wave N) emoji reactions on notes: a row under each note, the picker, the selection bar's React button, the
+//    context menu's React… and Clear reactions (an owner), the palette command reactions.react (./NoteReactions.tsx);
 //  - private brainstorming (drafts, the "Private ideas" frame, reveal through the api's place-notes);
 //  - "Gather everyone": others follow the facilitator's view (3c's follow) until they move;
 //  - the session settings "Hide note authors" and "Hide everyone's cursors" (lb_doc `workshop`), and the
@@ -45,6 +47,12 @@ import {
 } from './camera.ts'
 import { showPrivateNotesTab, showVotingTab, workshopActivity } from './guest-chrome.ts'
 import { NoteAuthorsLayer } from './NoteAuthors.tsx'
+import {
+  NoteReactionsLayer,
+  REACTIONS_COMMAND,
+  CONTEXT_MENU as REACTIONS_CONTEXT_MENU,
+  SELECTION_BAR_ITEM as REACTIONS_SELECTION_BAR_ITEM,
+} from './NoteReactions.tsx'
 import { isPresentingHere } from './presenting.ts'
 import { mountPrivateNotes, privateNotesPanel } from './private-notes/index.tsx'
 import {
@@ -486,6 +494,8 @@ const COMMANDS: readonly CommandSpec[] = [
       await endSpotlight(ctx)
     },
   },
+  // wave N (N3-2): react to the selected notes (opens the picker; with {code} reacts at once)
+  REACTIONS_COMMAND,
 ]
 
 const CONTEXT_MENU: readonly MenuEntrySpec[] = [
@@ -499,6 +509,7 @@ const CONTEXT_MENU: readonly MenuEntrySpec[] = [
       await spotlightIds(ctx, target.ids)
     },
   },
+  ...REACTIONS_CONTEXT_MENU,
 ]
 
 const SELECTION_BAR: readonly SelectionBarItemSpec[] = [
@@ -508,6 +519,7 @@ const SELECTION_BAR: readonly SelectionBarItemSpec[] = [
     visible: (ctx, selection) => facilitatorHere(ctx) && selection.length > 0,
     component: SpotlightSelectionButton,
   },
+  REACTIONS_SELECTION_BAR_ITEM,
 ]
 
 export const feature: CanvasFeature = {
@@ -544,6 +556,15 @@ export const feature: CanvasFeature = {
       pointer: 'none',
       focusMode: 'hide',
       component: NoteAuthorsLayer,
+    },
+    // wave N (N3-1): the reaction row under each note with reactions, and the picker; under the vote markers
+    // and the +1s (249), hidden while presenting
+    {
+      id: 'workshops-reactions',
+      layer: 'scene',
+      order: 247,
+      pointer: 'none',
+      component: NoteReactionsLayer,
     },
     // the revealed counts sit under the top bar's popovers; the rest above the canvas's own chrome
     {

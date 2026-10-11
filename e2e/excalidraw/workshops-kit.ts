@@ -90,6 +90,37 @@ function busyAfterEventStreamOpens(busyMs: number) {
 
 /** The network log, plus what the Excalidraw canvas socket says about other people's selections. */
 export class CanvasNetworkLog extends NetworkLog {
+  /** Every frame this page SENT on any socket (Playwright's framesent, the CDP's Network.webSocketFrameSent). */
+  readonly sentFrames: string[] = []
+
+  override async attach(context: BrowserContext, page: Page) {
+    page.on('websocket', (ws) => {
+      ws.on('framesent', (f) => {
+        this.sentFrames.push(typeof f.payload === 'string' ? f.payload : f.payload.toString('utf8'))
+      })
+    })
+    await super.attach(context, page)
+  }
+
+  /** The `push` frames this page sent (a push is how a tab writes the board), parsed. */
+  sentPushes(): { seq: number; ops: { k: string; id?: string; c?: Record<string, unknown> }[] }[] {
+    const out: { seq: number; ops: { k: string; id?: string; c?: Record<string, unknown> }[] }[] = []
+    for (const f of this.sentFrames) {
+      if (!f.includes('"push"')) continue
+      try {
+        const m = JSON.parse(f) as {
+          type?: string
+          seq?: number
+          ops?: { k: string; id?: string; c?: Record<string, unknown> }[]
+        }
+        if (m.type === 'push') out.push({ seq: m.seq ?? 0, ops: m.ops ?? [] })
+      } catch {
+        // not JSON
+      }
+    }
+    return out
+  }
+
   /**
    * Every element id that appeared in a peer's `sel` in any `presence` frame received (other people's
    * selections: canvas-schema protocol.ts PresenceOut), as `shape:` refs, sorted.
@@ -395,6 +426,49 @@ export async function clickPlusOne(page: Page, id: string) {
   const control = plusOne(page, id)
   await expect(control).toHaveAttribute('data-active', 'true')
   await control.click()
+}
+
+// ---- emoji reactions on notes (wave N, WS3) -------------------------------------------------------------------
+
+/** The reaction row under a note. */
+export const reactionRow = (page: Page, id: string) =>
+  page.locator(`[data-testid="note-reactions"][data-note-id="${id}"]`)
+
+/** One emoji of a note's row (`code`: up, heart, laugh, party, think, clap). */
+export const reactionChip = (page: Page, id: string, code: string) =>
+  reactionRow(page, id).locator(`[data-testid="note-reaction"][data-code="${code}"]`)
+
+/** The picker (one at a time) and one emoji of it. */
+export const reactionPicker = (page: Page) => page.getByTestId('reaction-picker')
+export const pickerOption = (page: Page, code: string) =>
+  page.locator(`[data-testid="note-reaction-option"][data-code="${code}"]`)
+
+/** The reactions a stored or local element carries: code → uids (sorted). */
+export function reactionsOfElement(el: CanvasElement | null): Record<string, string[]> {
+  const out: Record<string, string[]> = {}
+  for (const [k, v] of Object.entries(el?.customData?.lobby ?? {})) {
+    const m = /^react:(up|heart|laugh|party|think|clap):(.+)$/.exec(k)
+    if (!m || v !== true) continue
+    const list = out[m[1] as string] ?? []
+    list.push(m[2] as string)
+    out[m[1] as string] = list
+  }
+  for (const uids of Object.values(out)) uids.sort()
+  return out
+}
+
+/** The reactions a note carries as `page` holds it. */
+export const reactionsIn = async (page: Page, id: string) => reactionsOfElement(await item(page, id))
+
+/** Hovers the note, opens the picker from the row's add button, and picks `code`, like a person with a mouse. */
+export async function reactWithMouse(page: Page, id: string, code: string) {
+  await hoverNote(page, id)
+  const add = reactionRow(page, id).getByTestId('note-reaction-add')
+  await expect(add).toBeVisible()
+  await add.click()
+  await expect(reactionPicker(page)).toBeVisible()
+  await pickerOption(page, code).click()
+  await expect(reactionPicker(page)).toHaveCount(0)
 }
 
 /** The vote dot / result badge on an element (`id` is the element id). */
