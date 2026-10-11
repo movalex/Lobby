@@ -260,6 +260,26 @@ services:
         sync: false # gpt-5.4-mini
       - key: OPENAI_BASE_URL
         sync: false # unset = https://api.openai.com/v1
+      # Wave N (lead-only; landed by the wave N foundation, read by WS5's and WS4's code). A build that does not read
+      # a key runs unchanged; each rolls back by value (a restart), without code. Every code default is fail-closed.
+      # Capture the room (WS5): photos and board images go to OpenAI only with DRAFTROOM_AI_VISION=on (unset, empty or
+      # off: the photo routes answer 404; transcripts still work). Per-day caps count the ai_usage ledger, per person
+      # and in all; DRAFTROOM_AI_VISION_MODEL stays unset (OPENAI_MODEL is used).
+      - key: DRAFTROOM_AI_VISION
+        value: "on"
+      - key: DRAFTROOM_AI_VISION_USER_DAILY
+        value: "10"
+      - key: DRAFTROOM_AI_VISION_GLOBAL_DAILY
+        value: "150"
+      - key: DRAFTROOM_AI_TRANSCRIPT_MAX_CHARS
+        value: "60000"
+      - key: DRAFTROOM_AI_TRANSCRIPT_USER_DAILY
+        value: "10"
+      - key: DRAFTROOM_AI_VISION_TIMEOUT_MS
+        value: "60000"
+      # Since your last visit (WS4): private visit markers older than this many days are deleted by the sweeper.
+      - key: DRAFTROOM_VISITS_RETENTION_DAYS
+        value: "180"
       - fromGroup: draftroom-staging-secrets
       - fromGroup: draftroom-staging-worker-token
 
@@ -313,6 +333,12 @@ services:
       # above 1.25x the largest queue is closed with RECONNECT. The 0.5c-512mb instance has 512 MB in all.
       - key: DRAFTROOM_OUTBOUND_BUDGET_MB
         value: "128"
+      # Wave N (lead-only; landed by the wave N foundation, read by WS2's sync): emoji reactions on notes. Unset, empty
+      # or off: every reaction write is refused UNAVAILABLE and stored ones stay (fail-closed). The documented rollback
+      # below wave N sets it off, runs POST /internal/maintenance/strip-keys {prefix: 'react:'}, then deploys the older
+      # sync. DRAFTROOM_WS_DEFLATE above stays off (the wave M hold).
+      - key: DRAFTROOM_REACTIONS
+        value: "on"
       # The canvas engine: Lobby's element sync (apps/sync/src/engine-switch.ts). Never roll back by
       # changing this value: a rollback deploys the bridge release R0, which ignores it
       # (docs/EXCALIDRAW-CUTOVER.md "Rollback to R0").

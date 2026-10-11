@@ -139,3 +139,23 @@ test('render.yaml: the wave M keys (the lead applies them through the Render API
   assert.equal(sync('DRAFTROOM_DB_POOL_MAX'), null)
   assert.equal(api('DRAFTROOM_WS_DEFLATE'), null)
 })
+
+test('render.yaml: the wave N keys (the lead applies them through the Render API before each deploy)', () => {
+  const api = (k) => envValue(RENDER_YAML, 'draftroom-staging-api', k)
+  const sync = (k) => envValue(RENDER_YAML, 'draftroom-staging-sync', k)
+  assert.equal(api('DRAFTROOM_AI_VISION'), 'on')
+  assert.equal(api('DRAFTROOM_AI_VISION_USER_DAILY'), '10')
+  assert.equal(api('DRAFTROOM_AI_VISION_GLOBAL_DAILY'), '150')
+  assert.equal(api('DRAFTROOM_AI_TRANSCRIPT_MAX_CHARS'), '60000')
+  assert.equal(api('DRAFTROOM_AI_TRANSCRIPT_USER_DAILY'), '10')
+  assert.equal(api('DRAFTROOM_AI_VISION_TIMEOUT_MS'), '60000')
+  assert.equal(api('DRAFTROOM_VISITS_RETENTION_DAYS'), '180')
+  // the vision model stays OPENAI_MODEL's (no key)
+  assert.equal(api('DRAFTROOM_AI_VISION_MODEL'), null)
+  assert.equal(sync('DRAFTROOM_REACTIONS'), 'on')
+  // the wave M hold stays
+  assert.equal(sync('DRAFTROOM_WS_DEFLATE'), 'off')
+  // each in its own service only
+  assert.equal(sync('DRAFTROOM_AI_VISION'), null)
+  assert.equal(api('DRAFTROOM_REACTIONS'), null)
+})
