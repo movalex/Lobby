@@ -19,11 +19,22 @@
 //
 // Without E2E_OLD_WEB_DIST the specs that need it are skipped (they say so). For the next bump, freeze the build
 // that is deployed then (its canvas-schema as a new fixture) and point E2E_OLD_WEB_DIST at its web.
+//
+// Wave N (CONTRACTS_REV 13): the deployed web is 3c83611 (rev 12; frozen in
+// packages/canvas-schema/test/fixtures/rev12-3c83611). Its tabs are opened with `{ schemas: REV12_SCHEMAS }`
+// (n-compat-rev12.spec.ts), or left unrelayed and watched with `watchOldSocket` (CDP: the browser's own socket, so
+// permessage-deflate is negotiated with the sync itself, and every frame is still parsed with the old schemas):
+//
+//   git archive 3c83611 | tar -x -C <dir> && cd <dir> && pnpm install --frozen-lockfile --offline --ignore-scripts
+//   VITE_DRAFTROOM_DEV_AUTH=1 GIT_COMMIT=3c83611e5c2b pnpm --filter @draftroom/web exec vite build --outDir <dist>
+//   cd <this tree>/e2e && E2E_OLD_WEB_DIST=<dist> E2E_OLD_WEB_COMMIT=3c83611 E2E_PORT_BASE=<base> \
+//     pnpm exec playwright test excalidraw/n-compat-rev12.spec.ts --project=chromium --workers=1
 
 import { existsSync, statSync } from 'node:fs'
 import { extname, join, normalize, resolve, sep } from 'node:path'
 import { type Browser, type BrowserContext, expect, type Page, type WebSocketRoute } from '@playwright/test'
-import * as Old from '../../packages/canvas-schema/test/fixtures/rev11-437b4e7/protocol.ts'
+import * as Rev11 from '../../packages/canvas-schema/test/fixtures/rev11-437b4e7/protocol.ts'
+import * as Rev12 from '../../packages/canvas-schema/test/fixtures/rev12-3c83611/protocol.ts'
 import { CONNECT_URL } from '../spike-b/support/relay.ts'
 import { signInContext } from '../tests/support/api.ts'
 import { type CanvasSession, canvasCall, hash, waitForCanvas } from '../tests/support/canvas.ts'
@@ -73,6 +84,21 @@ export async function serveOldWeb(context: BrowserContext, dist: string, served:
   )
 }
 
+/** How a previous build parses the room's frames: its own frozen `ServerMessage` and snapshot decoder. */
+export interface OldFrameSchemas {
+  readonly ServerMessage: {
+    safeParse(v: unknown): {
+      success: boolean
+      error?: { issues: { message: string; path: PropertyKey[] }[] }
+    }
+  }
+  readonly decodeSnapshotFrame: (bytes: Uint8Array) => Promise<unknown>
+}
+/** The rev-11 web (437b4e7): l-compat-rev11.spec.ts. */
+export const REV11_SCHEMAS: OldFrameSchemas = Rev11 as unknown as OldFrameSchemas
+/** The rev-12 web deployed since hotfix H2 (3c83611): n-compat-rev12.spec.ts. */
+export const REV12_SCHEMAS: OldFrameSchemas = Rev12 as unknown as OldFrameSchemas
+
 /** A frame the previous build's socket would have dropped: its type and the first schema issue. */
 export interface DroppedFrame {
   readonly type: string
@@ -114,10 +140,13 @@ export interface OldTab extends CanvasSession {
 const typeOf = (text: string): string => /"type"\s*:\s*"([a-z.]{1,32})"/.exec(text.slice(0, 200))?.[1] ?? '?'
 
 /** Parses one server frame as the previous build's socket does; returns why it would drop it, or null. */
-async function droppedBy(m: string | Buffer): Promise<string | null> {
+export async function droppedBy(
+  m: string | Buffer,
+  schemas: OldFrameSchemas = REV11_SCHEMAS,
+): Promise<string | null> {
   if (typeof m !== 'string') {
     try {
-      await Old.decodeSnapshotFrame(new Uint8Array(m.buffer, m.byteOffset, m.byteLength))
+      await schemas.decodeSnapshotFrame(new Uint8Array(m.buffer, m.byteOffset, m.byteLength))
       return null
     } catch (e) {
       return `snapshot: ${String(e).slice(0, 200)}`
@@ -129,14 +158,23 @@ async function droppedBy(m: string | Buffer): Promise<string | null> {
   } catch {
     return 'not JSON'
   }
-  const r = Old.ServerMessage.safeParse(json)
+  const r = schemas.ServerMessage.safeParse(json)
   if (r.success) return null
-  const i = r.error.issues[0]
+  const i = r.error?.issues[0]
   return `${i?.message ?? 'invalid'} at ${(i?.path ?? []).join('.')}`
 }
 
-/** Opens `board` as `user` in the previous build (see the header); waits for its canvas and its welcome. */
-export async function openOldTab(browser: Browser, board: string, user: TestUser): Promise<OldTab> {
+/**
+ * Opens `board` as `user` in the previous build (see the header); waits for its canvas and its welcome. Its frames
+ * are parsed with `o.schemas` (default: the rev-11 web's).
+ */
+export async function openOldTab(
+  browser: Browser,
+  board: string,
+  user: TestUser,
+  o: { schemas?: OldFrameSchemas } = {},
+): Promise<OldTab> {
+  const schemas = o.schemas ?? REV11_SCHEMAS
   if (!OLD_WEB_DIST) throw new Error(OLD_WEB_SKIP_REASON)
   const context = await browser.newContext()
   const served: string[] = []
@@ -172,7 +210,7 @@ export async function openOldTab(browser: Browser, board: string, user: TestUser
       socket.types.set(type, (socket.types.get(type) ?? 0) + 1)
       if (typeof m === 'string') socket.frames.push(m)
       const bytes = typeof m === 'string' ? Buffer.byteLength(m) : m.byteLength
-      void droppedBy(m).then((issue) => {
+      void droppedBy(m, schemas).then((issue) => {
         if (issue) socket.dropped.push({ type, issue, bytes })
       })
       ws.send(m)
@@ -260,4 +298,80 @@ export async function expectOldTabHolds(
     .toBe(0)
   expect(old.socket.dropped, 'frames the previous build’s socket would drop').toEqual([])
   expect(old.pageErrors, 'page errors in the previous build').toEqual([])
+}
+
+// ---- an unrelayed previous build's tab, watched through CDP (wave N) -----------------------------------------------
+
+/** What the browser's own board socket of a previous build's tab did (CDP), every frame parsed with its schemas. */
+export interface OldSocketWatch {
+  /** the connect URL of every board socket the page opened (a reconnect is a second one) */
+  readonly connectUrls: string[]
+  /** Sec-WebSocket-Extensions of every board socket handshake */
+  readonly extensions: string[]
+  /** server frames its schemas refuse (its socket drops each one whole) */
+  readonly dropped: DroppedFrame[]
+  /** every server text frame, in order */
+  readonly frames: string[]
+  /** the type of every frame the page SENT (`push`, `presence`, `hello`, …) */
+  readonly sent: string[]
+  /** CLOSING notices the page received (the room sends one before every terminal close, INVALID_MESSAGE included) */
+  readonly closing: string[]
+  /** resolves once every frame received so far has been parsed */
+  settled(): Promise<void>
+}
+
+/**
+ * Watches a page's board sockets through CDP (call before it opens the board). Not a relay: the browser talks to
+ * the sync itself, so permessage-deflate is negotiated as in production, and CDP hands over each frame as the page
+ * gets it (inflated); text frames are parsed with `schemas`, the binary snapshot decoded with them.
+ */
+export async function watchOldSocket(page: Page, schemas: OldFrameSchemas): Promise<OldSocketWatch> {
+  const pending: Promise<void>[] = []
+  const w: OldSocketWatch = {
+    connectUrls: [],
+    extensions: [],
+    dropped: [],
+    frames: [],
+    sent: [],
+    closing: [],
+    settled: async () => {
+      await Promise.all(pending)
+    },
+  }
+  const cdp = await page.context().newCDPSession(page)
+  await cdp.send('Network.enable')
+  const boardSockets = new Set<string>()
+  cdp.on('Network.webSocketCreated', (e) => {
+    if (!/\/connect\//.test(e.url)) return
+    boardSockets.add(e.requestId)
+    w.connectUrls.push(e.url)
+  })
+  cdp.on('Network.webSocketHandshakeResponseReceived', (e) => {
+    if (!boardSockets.has(e.requestId)) return
+    const h = e.response.headers as Record<string, string>
+    w.extensions.push(
+      Object.entries(h).find(([k]) => k.toLowerCase() === 'sec-websocket-extensions')?.[1] ?? '',
+    )
+  })
+  cdp.on('Network.webSocketFrameReceived', (e) => {
+    if (!boardSockets.has(e.requestId)) return
+    const { opcode, payloadData } = e.response
+    const m = opcode === 2 ? Buffer.from(payloadData, 'base64') : payloadData
+    const type = typeof m === 'string' ? typeOf(m) : 'snapshot'
+    if (typeof m === 'string') {
+      w.frames.push(m)
+      if (m.startsWith('{"type":"notice"') && m.includes('"CLOSING"')) w.closing.push(m.slice(0, 200))
+    }
+    const bytes = typeof m === 'string' ? Buffer.byteLength(m) : m.byteLength
+    pending.push(
+      droppedBy(m, schemas).then((issue) => {
+        if (issue) w.dropped.push({ type, issue, bytes })
+      }),
+    )
+  })
+  cdp.on('Network.webSocketFrameSent', (e) => {
+    if (!boardSockets.has(e.requestId)) return
+    w.sent.push(typeOf(e.response.payloadData))
+  })
+  return w
 }
