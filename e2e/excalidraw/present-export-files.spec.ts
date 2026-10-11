@@ -472,6 +472,10 @@ test.describe('PDF export', () => {
 
     await openBoardExport(a.page)
     await expect(summary).toHaveText('One page per frame, in presentation order (2 pages).')
+    // N6-5: these steps check today's image pages; once the vector choice is offered (VECTOR_PDF), they choose
+    // "Image pages" (remembered for the rest of the test), which must give exactly today's output
+    const imagePages = dialog.getByTestId('export-pdf-pages-image')
+    if (await imagePages.count()) await imagePages.check()
 
     await test.step('cancel while a page is rendering: no file, "Export cancelled."', async () => {
       // Hold the original upload's download: the export then waits inside page 2 (Intro has the image).
