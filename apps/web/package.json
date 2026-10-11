@@ -13,6 +13,7 @@
     "probe:layout": "node test/engine-probe/a3/run.ts"
   },
   "dependencies": {
+    "@cantoo/pdf-lib": "catalog:",
     "@clerk/react": "catalog:",
     "@draftroom/board-ops": "workspace:*",
     "@draftroom/canvas-schema": "workspace:*",
@@ -25,7 +26,6 @@
     "@excalidraw/excalidraw": "catalog:",
     "@excalidraw/fractional-indexing": "catalog:",
     "@excalidraw/math": "catalog:",
-    "pdf-lib": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
     "zod": "catalog:"
@@ -34,6 +34,7 @@
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
+    "pdf-lib": "catalog:",
     "vite": "catalog:"
   }
 }

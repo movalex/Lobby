@@ -1,4 +1,4 @@
-// Module worker: assembles the PDF with pdf-lib off the main thread (PNG decoding and deflate of
+// Module worker: assembles the PDF with @cantoo/pdf-lib off the main thread (PNG decoding and deflate of
 // multi-megapixel pages would otherwise block the board for seconds). Loaded by pdf-client.ts.
 import { createPdfBuilder, type PdfBuilder } from './pdf-build.ts'
 import type { PdfWorkerRequest, PdfWorkerResponse } from './pdf-protocol.ts'

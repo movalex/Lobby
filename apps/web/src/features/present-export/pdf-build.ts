@@ -1,4 +1,5 @@
-// Assembles the PDF export with pdf-lib: one page per rendered frame image, each under a header band
+// Assembles the PDF export with @cantoo/pdf-lib (wave N, N6-2: the MIT fork of pdf-lib, a drop-in for every
+// call here; the tests still read its output with the original pdf-lib): one page per rendered frame image, each under a header band
 // with the frame's title (planPdfPage: frame-sized pages, or uniform 16:9 / A4 landscape pages with
 // the frame fitted in), frame names as bookmarks, and an invisible text layer so the pages' text can
 // be searched, selected and copied. No DOM here, so it runs (and is tested) in Node.
@@ -23,7 +24,7 @@ import {
   setCharacterSqueeze,
   setTextRenderingMode,
   TextRenderingMode,
-} from 'pdf-lib'
+} from '@cantoo/pdf-lib'
 import { type PdfPageFormat, type PdfPagePlan, planPdfPage } from './pdf-layout.ts'
 
 export interface PdfTextItem {
