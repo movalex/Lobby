@@ -586,6 +586,61 @@ function withOlderLobby(
   return { ...el, customData: cd } as SceneElement
 }
 
+/**
+ * N1-6: a read-only map of `base` that answers the ids in `over` with `overlay` and the rest with `base`; anything that
+ * iterates it gets the whole map, built once.
+ */
+class OverlayMap implements ReadonlyMap<string, SceneElement> {
+  private whole: Map<string, SceneElement> | null = null
+  private readonly base: ReadonlyMap<string, SceneElement>
+  private readonly over: ReadonlySet<string>
+  private readonly overlay: (id: string) => SceneElement | undefined
+  constructor(
+    base: ReadonlyMap<string, SceneElement>,
+    over: ReadonlySet<string>,
+    overlay: (id: string) => SceneElement | undefined,
+  ) {
+    this.base = base
+    this.over = over
+    this.overlay = overlay
+  }
+  get(id: string): SceneElement | undefined {
+    return this.over.has(id) ? this.overlay(id) : this.base.get(id)
+  }
+  has(id: string): boolean {
+    return this.get(id) !== undefined
+  }
+  private all(): Map<string, SceneElement> {
+    if (!this.whole) {
+      const m = new Map(this.base)
+      for (const id of this.over) {
+        const el = this.overlay(id)
+        if (el) m.set(id, el)
+      }
+      this.whole = m
+    }
+    return this.whole
+  }
+  get size(): number {
+    return this.all().size
+  }
+  forEach(fn: (value: SceneElement, key: string, map: ReadonlyMap<string, SceneElement>) => void): void {
+    for (const [k, v] of this.all()) fn(v, k, this)
+  }
+  entries(): MapIterator<[string, SceneElement]> {
+    return this.all().entries()
+  }
+  keys(): MapIterator<string> {
+    return this.all().keys()
+  }
+  values(): MapIterator<SceneElement> {
+    return this.all().values()
+  }
+  [Symbol.iterator](): MapIterator<[string, SceneElement]> {
+    return this.all()[Symbol.iterator]()
+  }
+}
+
 /** N1-7 (wave N): the `customData.lobby` keys of `el` whose class a room of revision `rev` does not know. */
 function newerKeysOf(el: SceneElement, rev: number): string[] {
   const out: string[] = []
@@ -1539,7 +1594,7 @@ export class LobbyEngineCore implements EngineCore {
     const ctx = this.editingContext()
     const gestureNow = gestureActive(this.gesture)
     let localMap: Map<string, SceneElement> | null = null
-    let baseMap: Map<string, SceneElement> | null = null
+    let baseMap: ReadonlyMap<string, SceneElement> | null = null
     const derivedArrows = new Set<string>()
     const labels: SceneElement[] = []
     for (const el of changed) {
@@ -1688,10 +1743,17 @@ export class LobbyEngineCore implements EngineCore {
     }
   }
 
-  private baseMap(): Map<string, SceneElement> {
-    const m = new Map(this.confirmedMap)
-    for (const p of this.flying()) for (const id of p.sent.keys()) m.set(id, this.base(id) as SceneElement)
-    return m
+  /**
+   * Every element's `base` (the server copy overlaid with this tab's pushes out), as a map: the confirmed map itself
+   * when no push is out, else a view that overlays the few ids the pushes carry (N1-6: it was a copy of the whole
+   * confirmed map, built at every scan that met a bound arrow: each pointer move of a drag on a 10k board).
+   */
+  private baseMap(): ReadonlyMap<string, SceneElement> {
+    const flying = this.flying()
+    if (!flying.length) return this.confirmedMap
+    const ids = new Set<string>()
+    for (const p of flying) for (const id of p.sent.keys()) ids.add(id)
+    return new OverlayMap(this.confirmedMap, ids, (id) => this.base(id))
   }
 
   private track(id: string, groups: Set<GroupKey>, isNew: boolean): void {

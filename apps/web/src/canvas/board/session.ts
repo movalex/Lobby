@@ -82,7 +82,13 @@ import { CHUNKED_APPLY, DIFF_APPLY, setDevChecks, WORKER_DECODE } from '../sync/
 import { bump } from '../sync/headless/scene.ts'
 import { createSnapshotDecoder, type SnapshotDecoder } from '../sync/transport/snapshot-decoder.ts'
 import { connectQuery, createSocketTransport, type SocketTransport } from '../sync/transport/socket.ts'
-import type { OfflineQueueStore, SaveStatus, SceneAdapter, SceneElement } from '../sync/types.ts'
+import type {
+  GestureState,
+  OfflineQueueStore,
+  SaveStatus,
+  SceneAdapter,
+  SceneElement,
+} from '../sync/types.ts'
 import { IDLE_GESTURE } from '../sync/types.ts'
 import { install as installFacade } from '../test-facade.ts'
 import { attachCustomTools, type CustomToolClick } from '../tools/customTools.ts'
@@ -215,6 +221,8 @@ export class LobbyBoardSession {
   private readonly concernListeners = new Map<BoardConcern, Set<() => void>>()
   private readonly eventListeners = new Map<BoardEvent, Set<(...a: never[]) => void>>()
   private lastTool: string | null = null
+  /** N1-6: the engine's last gesture state (the drag that holds the pointer) */
+  private gestureNow: GestureState | null = null
   private lastEditing: string | null = null
   private rootEl: HTMLElement | null = null
   private contentSink: ContentSink | null = null
@@ -854,6 +862,30 @@ export class LobbyBoardSession {
     this.concern('editing')
   }
 
+  /**
+   * N1-6 (wave N): what is under the pointer, for the outer input layer (`hovered`, a double-tap). While a drag moves
+   * the selection, the pointer is over what it drags: the topmost selected element whose box holds the point, looked
+   * up by id (a hit test of the whole scene per pointer move cost a quarter of a 10k board's drag frames: the hover
+   * readers re-ask after every change batch). Otherwise the canvas's own hit test, as before.
+   */
+  private pointerHit(p: ScenePoint): ReturnType<LobbyCanvas['hitTest']> {
+    const g = this.gestureNow
+    const canvas = this.canvas
+    if (!canvas) return null
+    if (g?.dragging && g.selectedElementIds.length) {
+      let top: ReturnType<LobbyCanvas['hitTest']> = null
+      for (const id of g.selectedElementIds) {
+        const el = canvas.get(id)
+        if (!el || el.isDeleted) continue
+        const b = canvas.bounds(id)
+        if (!b || p.x < b.x || p.y < b.y || p.x > b.x + b.width || p.y > b.y + b.height) continue
+        if (!top || ((el.index as string) ?? '') > ((top.index as string) ?? '')) top = el
+      }
+      return top
+    }
+    return canvas.hitTest(p)
+  }
+
   /** N1-4: the elements a chunked install shows first: those in the canvas's current view (none before attach). */
   private idsInInitialView(elements: readonly SceneElement[]): ReadonlySet<string> {
     const api = this.api
@@ -1025,6 +1057,7 @@ export class LobbyBoardSession {
           }
         }
         presence.onGesture(g)
+        this.gestureNow = g
         const el = this.input.editorLease
         presence.setEditing(el && el.phase !== 'idle' ? el.leaseId : null)
         const tool = port.tool()
@@ -1086,7 +1119,7 @@ export class LobbyBoardSession {
       },
       isGrantedEditor: (ta) => this.input.editorLease?.isWritable(ta) ?? false,
       toScene: (x, y) => this.input.toScene(x, y),
-      hit: (p) => this.canvas?.hitTest(p) ?? null,
+      hit: (p) => this.pointerHit(p),
       listeners: () => [...(this.eventListeners.get('input') ?? [])] as ((e: CanvasInputEvent) => void)[],
       onPointerChange: () => this.concern('pointer'),
       onHoverChange: () => this.concern('hover'),
