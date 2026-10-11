@@ -49,6 +49,7 @@ import type {
 } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { useMediaQuery } from '../../../ui/useMedia.ts'
+import { announcerFor } from '../../a11y/ported/announcer.ts'
 import { BURST_MS } from '../reactions.ts'
 import { elementLabel } from './elements.ts'
 import {
@@ -216,7 +217,6 @@ function Layer({ ctx }: { ctx: Ctx }) {
   const reduced = useMediaQuery(REDUCED_MOTION_QUERY)
   const phone = useMediaQuery(PHONE_QUERY)
   const picker = useValue(pickerOf(canvas))
-  const [said, setSaid] = useState('')
 
   // Every note with reactions, once per document change (the camera does not move this).
   const stored = useValue('dr-wk-react-stored', () => {
@@ -396,7 +396,8 @@ function Layer({ ctx }: { ctx: Ctx }) {
     if (picker && (!offered || alive === 0)) closePicker()
   }, [picker, offered, alive, closePicker])
 
-  const told = useCallback((text: string) => setSaid(text), [])
+  // what was done is said through the board's own announcer (its polite region), never a live region of this layer
+  const told = useCallback((text: string) => announcerFor(canvas).sayPolitely(text), [canvas])
   const onToggle = useCallback(
     (ids: readonly string[], code: ReactionCode, viaKeyboard: boolean) => {
       const mineAll = ids.every((id) => canvas.get(id)?.customData?.lobby?.[`react:${code}:${me}`] === true)
@@ -426,7 +427,7 @@ function Layer({ ctx }: { ctx: Ctx }) {
     return () => doc.removeEventListener('pointerdown', onDown, true)
   }, [picker, canvas, closePicker])
 
-  // (the live region is there from the start: one added together with its words is not announced)
+  if (rows.length === 0 && !picker) return null
   return (
     <div className="dr-wk-nr-layer" data-testid="note-reactions-layer">
       {rows.map((r) => (
@@ -483,9 +484,6 @@ function Layer({ ctx }: { ctx: Ctx }) {
           onLeave={hoverLeave}
         />
       )}
-      <p className="dr-sr-only" aria-live="polite" data-testid="reaction-announce">
-        {said}
-      </p>
     </div>
   )
 }

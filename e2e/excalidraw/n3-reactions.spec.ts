@@ -77,6 +77,8 @@ test('two tabs: the row appears on both within one round trip; a viewer sees it 
   await hoverNote(b.page, N1)
   await expect(reactionRow(b.page, N1).getByTestId('note-reaction-add')).toBeVisible()
   await reactWithMouse(b.page, N1, 'up')
+  // what was done is said through the board's own polite announcer (no live region of its own)
+  await expect(b.page.getByTestId('canvas-announcer-tool')).toContainText('Added your 👍 Thumbs up reaction')
 
   // within one round trip it is on every tab
   const startedAt = Date.now()
