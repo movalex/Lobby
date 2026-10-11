@@ -30,6 +30,7 @@ import { noteSceneWalk } from '../sync/walks.ts'
 import type { LodTarget } from './cull.ts'
 import { installFrameNameGuard } from './frame-names.ts'
 import {
+  LOD_ZOOM,
   type LodBitmap,
   type LodElement,
   LodModel,
@@ -418,8 +419,11 @@ export function installLod(o: LodOptions): LodHandle {
     const visible = sizeAware ? model.visibleCount(view) : 0
     active = enabled && !disposed && lodActiveAt(zoom, live, visible, sizeAware)
     threshold = lodThreshold(live, visible, sizeAware)
+    // N1-5: the loose-element tiles on a large board only (a small one keeps the pass as it was)
+    model.setTilesActive(sizeAware && threshold > LOD_ZOOM)
     const bucketWas = model.bucket
-    model.setBucket(lodBucketOf(zoom, sizeAware))
+    // the bucket follows the zoom while the pass is on; off, it stays the last one (its bitmaps kept for the next time)
+    if (active) model.setBucket(lodBucketOf(zoom, sizeAware))
     if (active && was && model.bucket !== bucketWas) {
       apply()
       scheduleWork()
@@ -440,6 +444,8 @@ export function installLod(o: LodOptions): LodHandle {
     canvas.on('change', (c: CanvasChange) => {
       const map = elements()
       model.changed([...c.created, ...c.updated, ...c.deleted], (id) => map.get(id), now())
+      // N1-5: a board that grew past (or fell below) the large-board size turns the larger threshold and the tiles on (off)
+      if (sizeAware && c.created.length + c.deleted.length > 0) updateActive()
       if (active) {
         apply()
         scheduleWork(model.nextDue() !== null ? (model.nextDue() as number) - now() + 5 : 0)

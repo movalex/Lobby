@@ -158,6 +158,20 @@ describe('N1-5: tiles, staleness and the memory cap', () => {
     expect(merged?.get('b')).toEqual({ offset: LOD_CULL_OFFSET })
   })
 
+  it('tiles inactive (a small board): loose elements stay the engine’s, no tile is due, stats count frames only', () => {
+    const s = scene([frame('F1', 0, 0), note('N1', 'F1'), rect('a', 5000, 5000)])
+    const m = new LodModel<string>({ sizeAware: true })
+    m.reset(s.all())
+    m.setTilesActive(false)
+    expect(m.tilesOfElement('a')).toHaveLength(1)
+    expect(m.due(0)).toEqual(['F1'])
+    renderDue(m, 0)
+    expect([...m.culled()]).toEqual(['N1'])
+    expect(m.stats()).toMatchObject({ frames: 1, tiles: 1, ready: 1, stale: 0 })
+    m.setTilesActive(true)
+    expect(m.due(0)).toEqual([tileId(2, 2)])
+  })
+
   it('a loose element over a frame stays live (no tile: a tile is drawn above the frames)', () => {
     const s = scene([frame('F1', 0, 0), note('N1', 'F1'), rect('over', 900, 700), rect('away', 5000, 5000)])
     const m = new LodModel<string>({ sizeAware: true })

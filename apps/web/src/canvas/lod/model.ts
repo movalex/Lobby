@@ -204,6 +204,8 @@ export class LodModel<B = unknown> {
   private readonly labels = new Set<string>()
   private culledCache: Set<string> | null = null
   private bucketNow: number = LOD_ZOOM
+  /** N1-5: the tiles are drawn (a large board, see setTilesActive); kept in the bookkeeping either way */
+  private tilesOn = true
   private bytes = 0
   private evictions = 0
   /** called with every bitmap the model lets go of (replaced, its region gone or stale, evicted, a reset) */
@@ -227,6 +229,20 @@ export class LodModel<B = unknown> {
   }
 
   /** The bucket the reads below answer for (index.ts sets it from the zoom: lodBucketOf). */
+  /**
+   * N1-5: whether the loose-element tiles are drawn and culled (index.ts: on a large board, the size-aware regime);
+   * off, a loose element is the engine's as before wave N, and the tiles are only kept up to date.
+   */
+  setTilesActive(on: boolean): void {
+    if (on === this.tilesOn) return
+    this.tilesOn = on
+    this.culledCache = null
+  }
+
+  get tilesActive(): boolean {
+    return this.tilesOn
+  }
+
   setBucket(bucket: number): void {
     if (bucket === this.bucketNow) return
     this.bucketNow = bucket
@@ -354,7 +370,7 @@ export class LodModel<B = unknown> {
   due(now: number, first?: (rect: LodRect) => boolean): string[] {
     const out: string[] = []
     for (const [id, r] of this.regions) {
-      if (this.state(r) !== 'stale' || now - r.changedAt < LOD_QUIET_MS) continue
+      if (!this.on(r) || this.state(r) !== 'stale' || now - r.changedAt < LOD_QUIET_MS) continue
       out.push(id)
     }
     if (!first) return out
@@ -366,7 +382,7 @@ export class LodModel<B = unknown> {
   nextDue(): number | null {
     let t: number | null = null
     for (const r of this.regions.values()) {
-      if (this.state(r) !== 'stale') continue
+      if (!this.on(r) || this.state(r) !== 'stale') continue
       const at = r.changedAt + LOD_QUIET_MS
       t = t === null ? at : Math.min(t, at)
     }
@@ -418,7 +434,7 @@ export class LodModel<B = unknown> {
     const frames: { id: string; bitmap: LodBitmap<B> }[] = []
     const tiles: { id: string; bitmap: LodBitmap<B> }[] = []
     for (const [id, r] of this.regions) {
-      if (this.busyRegions.has(id) || this.state(r) !== 'ready') continue
+      if (!this.on(r) || this.busyRegions.has(id) || this.state(r) !== 'ready') continue
       const d = r.drawn.get(this.bucketNow)
       if (!d?.bitmap) continue
       if (now !== undefined) d.usedAt = now
@@ -485,6 +501,7 @@ export class LodModel<B = unknown> {
       if (r.kind === 'frame') frames++
       else tiles++
       bitmaps += [...r.drawn.values()].filter((d) => d.bitmap).length
+      if (!this.on(r)) continue
       const s = this.state(r)
       if (s === 'ready') ready++
       else if (s === 'stale') stale++
@@ -507,6 +524,11 @@ export class LodModel<B = unknown> {
   }
 
   // ---- internals ----
+
+  /** A region the pass works on now (a tile only while tiles are active). */
+  private on(r: Region<B>): boolean {
+    return r.kind === 'frame' || this.tilesOn
+  }
 
   private state(r: Region<B>): 'stale' | 'rendering' | 'ready' {
     if (r.rendering === this.bucketNow) return 'rendering'
