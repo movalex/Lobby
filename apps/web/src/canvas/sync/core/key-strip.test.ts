@@ -11,7 +11,8 @@ import { closePage } from '../testing/cached.ts'
 import { note, text } from '../testing/elements.ts'
 import { stored } from '../testing/fakeRoom.ts'
 import { createHarness, type Harness, type TestClient } from '../testing/harness.ts'
-import type { SceneElement } from '../types.ts'
+import type { SceneElement, ServerInbound } from '../types.ts'
+import { CONTRACTS_WAIT_MS } from './engine.ts'
 import { lobbyOf } from './fields.ts'
 import { createMemoryOfflineStore } from './offline-memory.ts'
 
@@ -249,5 +250,82 @@ describe('N1-7: a rev-12 room never gets a key it cannot take', () => {
     expect(REACT in lobbyOf(a.get('n1') as SceneElement)).toBe(false)
     expect(a.core.saveStatus.state).toBe('saved')
     expect(CONTRACTS_REV).toBeLessThan(REACTIONS_REV + 1)
+  })
+})
+
+// The review of N1-7: the wait for the room's `contracts` frame starts once the welcome's snapshot is installed, not
+// at the welcome. A big board's decode (and install) can take longer than CONTRACTS_WAIT_MS; a revision assumed from
+// a wait armed at the welcome stripped a reaction queued offline before the frame behind the snapshot said 13.
+describe('N1-7: the contracts wait starts at the welcome’s tail (a slow open)', () => {
+  it(`the snapshot reaches the core ${CONTRACTS_WAIT_MS + 500} ms after its welcome: the queued reaction waits for the frame, then goes at ${REACTIONS_REV}`, async () => {
+    const h = room(REACTIONS_REV)
+    const store = createMemoryOfflineStore()
+    const a = h.client('alice', { offline: store })
+    await flushMicro()
+    h.settle()
+    h.room.cut(a.transport)
+    h.settle()
+    reactAndEdit(a)
+    h.settle()
+    await flushMicro()
+    closePage(a)
+    await flushMicro()
+    // the next page's first socket: its reset welcome at once, the snapshot and every frame behind it (the socket's
+    // in-order chain) only after a slow decode
+    const b = h.client('alice', { offline: store, tab: 'tab2' })
+    const session = (b.transport as unknown as { session: { deliver: ((m: ServerInbound) => void) | null } })
+      .session
+    const deliver = session.deliver as (m: ServerInbound) => void
+    const held: ServerInbound[] = []
+    let decoding = false
+    session.deliver = (m) => {
+      if (m.type === 'snapshot') decoding = true
+      if (decoding) held.push(m)
+      else deliver(m)
+    }
+    const refusals = watchRefusals(b)
+    await flushMicro()
+    h.settle()
+    expect(held[0]?.type, 'the snapshot is still decoding').toBe('snapshot')
+    expect(
+      b.logs.some((l) => l.event === 'key_rev_assumed'),
+      'no revision assumed while it decodes',
+    ).toBe(false)
+    h.clock.advance(CONTRACTS_WAIT_MS + 500)
+    expect(b.logs.some((l) => l.event === 'key_rev_assumed')).toBe(false)
+    // decoded: the snapshot, its catch-up and the room's contracts frame, in order
+    decoding = false
+    for (const m of held.splice(0)) deliver(m)
+    await flushMicro()
+    h.settle()
+    await flushMicro()
+    h.settle()
+    expect(
+      b.logs.some((l) => l.event === 'lobby_key_stripped'),
+      'the reaction was never stripped',
+    ).toBe(false)
+    expect(lobbyOf(h.room.elements.get('n1') as SceneElement)[REACT]).toBe(true)
+    expect(h.room.elements.get('n1')?.backgroundColor).toBe('#ffc9c9')
+    expect(h.room.elements.get('t1')?.text).toBe('new words')
+    expect(refusals.n).toBe(0)
+    expect(b.core.saveStatus.state).toBe('saved')
+    expect(await b.hash()).toBe(await h.roomHash())
+  })
+
+  it('a room that sends no contracts frame: the revision is assumed CONTRACTS_WAIT_MS after the tail, not before', async () => {
+    const h = createHarness({ seed: seed() })
+    h.room.contractsRev = null
+    const a = h.client('alice')
+    await flushMicro()
+    // the welcome and its snapshot (a cold open) at once
+    h.clock.advance(1)
+    h.clock.advance(1)
+    const tailAt = h.clock.now()
+    expect(a.logs.some((l) => l.event === 'key_rev_assumed')).toBe(false)
+    h.clock.advance(CONTRACTS_WAIT_MS - 10)
+    expect(a.logs.some((l) => l.event === 'key_rev_assumed')).toBe(false)
+    h.clock.advance(20)
+    expect(a.logs.some((l) => l.event === 'key_rev_assumed')).toBe(true)
+    expect(h.clock.now() - tailAt).toBeGreaterThanOrEqual(CONTRACTS_WAIT_MS)
   })
 })

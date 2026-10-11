@@ -871,7 +871,8 @@ export class LobbyEngineCore implements EngineCore {
   private roomRev: number | null = null
   /**
    * N1-7 (wave N): the revision taken for this socket's room when its `contracts` frame did not come within
-   * CONTRACTS_WAIT_MS of its welcome (a room before rev 10 sends none): the key classes it knows (keyRev)
+   * CONTRACTS_WAIT_MS of its welcome's tail (the snapshot installed: a room before rev 10 sends none): the key classes
+   * it knows (keyRev)
    */
   private assumedRoomRev: number | null = null
   private keyRevTimer: unknown = null
@@ -2306,9 +2307,10 @@ export class LobbyEngineCore implements EngineCore {
     this.priorPoint = { epoch: this.epoch, clock: this.clock }
     this.welcome = w
     this.welcomes++
-    // a new socket (or a resync): what its room speaks comes with its `contracts` frame, after this one
+    // a new socket (or a resync): what its room speaks comes with its `contracts` frame, after this one (and after
+    // its snapshot and catch-up): nothing assumed until the welcome's tail has run (armKeyRev there)
     this.roomRev = null
-    this.armKeyRev()
+    this.disarmKeyRev()
     this.epoch = w.epoch
     this.horizon = w.horizon
     this.serverDoc = { ...w.doc }
@@ -2492,6 +2494,9 @@ export class LobbyEngineCore implements EngineCore {
 
   /** The rest of a welcome once its scene is installed (after the last chunk of a chunked install). */
   private welcomeTail(after?: () => void): void {
+    // N1-7: the wait for this socket's `contracts` frame starts now, with the snapshot installed (a slow open's decode
+    // and a chunked install come before it): the frame is right behind, in the socket's chain or the chunks' inbox
+    this.armKeyRev()
     // CONTRACTS_REV 11 (wave D2): on a reconnect whose room is expected to say its revision, what goes out
     // now waits for that `contracts` frame (right behind this welcome and its snapshot and catch-up), so its
     // pushes carry receipt ids. Before, a reconnect's replays went out with none, and when that socket dropped
@@ -2818,10 +2823,22 @@ export class LobbyEngineCore implements EngineCore {
     return this.roomRev ?? this.assumedRoomRev
   }
 
-  /** N1-7: at a welcome, the wait for its room's `contracts` frame; a room that sends none counts as UNANNOUNCED_REV. */
-  private armKeyRev(): void {
+  /** N1-7: a new welcome: no revision is assumed for its socket's room, and no wait runs, until its tail (armKeyRev). */
+  private disarmKeyRev(): void {
     this.assumedRoomRev = null
     if (this.keyRevTimer !== null) this.clearTimer(this.keyRevTimer)
+    this.keyRevTimer = null
+  }
+
+  /**
+   * N1-7: at a welcome's tail (its snapshot and catch-up installed), the wait for its room's `contracts` frame; a room
+   * that sends none within CONTRACTS_WAIT_MS counts as UNANNOUNCED_REV. Armed at the tail, not the welcome: a big
+   * board's decode and install may take longer than the wait, and a key of an added class assumed unknown meanwhile
+   * would be stripped from a queued change (a reaction replayed at that welcome) before the real frame said 13.
+   */
+  private armKeyRev(): void {
+    this.disarmKeyRev()
+    if (this.roomRev !== null) return
     this.keyRevTimer = this.setTimer(() => {
       this.keyRevTimer = null
       if (this.stopped || this.roomRev !== null || !this.connected || !this.welcome) return
