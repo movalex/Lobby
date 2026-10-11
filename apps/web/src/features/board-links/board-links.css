@@ -96,15 +96,20 @@
 .dr-cnav__linked {
   position: relative;
 }
+/* the navigation panel sits at the bottom left: its button is one row (icon, count), its list opens above, leftwards */
+.dr-cnav__linked .dr-cnav__linked-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 .dr-cnav__linked-count {
-  margin-left: 4px;
   font-size: 12px;
   font-weight: 600;
 }
 .dr-cnav__linked-list {
   position: absolute;
-  right: 0;
-  bottom: calc(100% + 6px);
+  left: 0;
+  bottom: calc(100% + 10px);
   z-index: 2;
   width: 280px;
   max-height: 320px;

@@ -5,12 +5,15 @@
 // Shared by the navigation panel (canvas-ux NavigationPanel.tsx) and the palette command 'board-links.backlinks'.
 import type { Backlink } from '@draftroom/contracts'
 import { useEffect } from 'react'
+import { roomReadyOf } from '../../canvas/api/room-ready.ts'
 import { boardElementPath } from '../../lib/deep-link.ts'
 import { type Atom, atom, useValue } from '../../lib/signals.ts'
 import { backlinks as fetchBacklinks } from './client.ts'
 
 /** How long the list is kept before it is asked again (on the next look). */
 export const BACKLINKS_TTL_MS = 2 * 60_000
+/** The navigation panel asks this long after the board is ready, out of the board-open burst (K1-4). */
+export const BACKLINKS_OPEN_DELAY_MS = 2_000
 
 export interface BacklinksState {
   /** null: unknown, or the api cannot say (the section stays hidden) */
@@ -67,14 +70,21 @@ export function backlinksStoreOf(owner: object, boardId: string): BacklinksStore
 }
 
 /**
- * The boards that link here (null: unknown or hidden), asked when the component mounts (reactive). `enabled` false
- * (a name-only guest, whom the api refuses anyway): nothing is asked, null.
+ * The boards that link here (null: unknown or hidden), asked BACKLINKS_OPEN_DELAY_MS after the board is ready (not in
+ * the board-open burst), reactive. `enabled` false (a name-only guest, whom the api refuses anyway): nothing is
+ * asked, null.
  */
-export function useBacklinks(owner: object, boardId: string, enabled = true): readonly Backlink[] | null {
-  const store = backlinksStoreOf(owner, boardId)
+export function useBacklinks(
+  ctx: { readonly canvas: object; readonly registries: object; readonly board: { readonly id: string } },
+  enabled = true,
+): readonly Backlink[] | null {
+  const store = backlinksStoreOf(ctx.registries, ctx.board.id)
+  const ready = useValue(roomReadyOf(ctx.canvas))
   useEffect(() => {
-    if (enabled) void store.refresh()
-  }, [store, enabled])
+    if (!enabled || !ready) return
+    const t = setTimeout(() => void store.refresh(), BACKLINKS_OPEN_DELAY_MS)
+    return () => clearTimeout(t)
+  }, [store, enabled, ready])
   const list = useValue('board-links.backlinks', () => store.state.get().list, [store])
   return enabled ? list : null
 }

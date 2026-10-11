@@ -219,7 +219,7 @@ function LinkedFromItem({ link }: { link: Backlink }) {
 /** N7-5: "Linked from" (hidden while there is nothing to show, or the api cannot say). */
 function LinkedFrom({ ctx }: { ctx: CanvasFeatureContext }) {
   // a name-only guest is refused "Linked from" by the api: never asked
-  const list = useBacklinks(ctx.registries, ctx.board.id, knownUserKind(ctx.me.user.id) !== 'guest')
+  const list = useBacklinks(ctx, knownUserKind(ctx.me.user.id) !== 'guest')
   const [open, setOpen] = useState(false)
   const listId = useId()
   const rootRef = useRef<HTMLDivElement>(null)
@@ -239,7 +239,7 @@ function LinkedFrom({ ctx }: { ctx: CanvasFeatureContext }) {
     <div className="dr-cnav__linked" ref={rootRef} data-testid="linked-from">
       <button
         type="button"
-        className="dr-cnav__btn"
+        className="dr-cnav__btn dr-cnav__linked-btn"
         data-testid="navigation.linked-from"
         title={label}
         aria-label={label}
