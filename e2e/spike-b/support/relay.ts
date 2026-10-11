@@ -10,6 +10,10 @@
 //    each reconnect at once instead;
 //  - drops every frame from the server to the page while armed (`dropDown`, RCPT-2): the page's pushes still
 //    reach the room, their acks and the room's `changes` never reach the page (a lost ack);
+//  - holds every frame from the server to the page, in order, from the moment the page sends a frame a
+//    predicate picks (`holdDown`, hotfix H2): that frame's answers (the room's `changes` echo and its `ack`)
+//    and everything behind them arrive late, as over a slow network, while the page's own frames still go
+//    up at once; released by the test or after a time limit. `watchUp` reports each frame the page sends;
 //  - restores it (`restoreSocket`): new sockets go through again. By default the held sockets are closed
 //    too, so the page reconnects now (L7); `release: false` leaves them held until the page unloads
 //    (D5: "the route holds the old page's reconnect until the page unloads", so a reload must restore
@@ -81,6 +85,22 @@ interface RelayState {
   /** drop every server frame to the page while true (RCPT-2) */
   dropDown: boolean
   droppedDown: string[]
+  /** H2: the armed or running down-hold (holdDown), or null */
+  downHold: DownHoldState | null
+  /** H2: every frame the page sends on a relayed socket, in order (watchUp) */
+  upWatchers: Set<(frame: string | Buffer) => void>
+}
+
+interface DownHoldState {
+  /** picks the page frame that starts the hold (the hold is armed until then) */
+  readonly when: (frame: string | Buffer) => boolean
+  /** the page sent the frame: server frames are held from here on */
+  running: boolean
+  /** the held deliveries, in order */
+  readonly queue: (() => void)[]
+  readonly types: string[]
+  timer: ReturnType<typeof setTimeout> | null
+  readonly start: () => void
 }
 
 const states = new WeakMap<Page, RelayState>()
@@ -180,16 +200,28 @@ function relay(st: RelayState, ws: WebSocketRoute): void {
     lastDown: 0,
   }
   st.conns.add(conn)
-  ws.onMessage((m) =>
+  ws.onMessage((m) => {
+    for (const w of [...st.upWatchers]) w(m)
+    // H2: the hold starts before the frame goes up, so every answer to it is held
+    const h = st.downHold
+    if (h && !h.running && h.when(m)) h.start()
     schedule(st, conn, 'up', () => {
       if (conn.open) server.send(m)
-    }),
-  )
+    })
+  })
   server.onMessage((m) =>
     schedule(st, conn, 'down', () => {
       if (!conn.open) return
       if (st.dropDown) {
         st.droppedDown.push(frameType(m))
+        return
+      }
+      const h = st.downHold
+      if (h?.running) {
+        h.types.push(frameType(m))
+        h.queue.push(() => {
+          if (conn.open) ws.send(m)
+        })
         return
       }
       ws.send(m)
@@ -227,6 +259,8 @@ export async function attachRelay(page: Page): Promise<void> {
     cuts: 0,
     dropDown: false,
     droppedDown: [],
+    downHold: null,
+    upWatchers: new Set(),
   }
   states.set(page, st)
   await page.routeWebSocket(CONNECT_URL, (ws) => {
@@ -304,6 +338,67 @@ export function dropDown(page: Page, on: boolean): readonly string[] {
   st.dropDown = on
   if (on) st.droppedDown = []
   return [...st.droppedDown]
+}
+
+/** A hold of a page's server frames (holdDown). */
+export interface DownHold {
+  /** resolves when the page sent the frame that started the hold (held from then on) */
+  readonly started: Promise<void>
+  /** the types of the server frames held so far (bodies may carry board text) */
+  held(): readonly string[]
+  /** lets every held frame through now, in order, and ends the hold (the time limit does the same) */
+  release(): void
+}
+
+/**
+ * H2 (the lost words): from the moment this page sends a frame `when` picks (default: at once), every frame
+ * the server sends its board socket is held, in order, until `release()` or `ms` later (default 300 ms):
+ * the room's answers to that frame (its `changes` echo, its `ack`) and all frames behind them reach the page
+ * late, as over a slow network; the page's own frames still go up at once. One hold per page at a time.
+ */
+export function holdDown(
+  page: Page,
+  opts: { when?: (frame: string | Buffer) => boolean; ms?: number } = {},
+): DownHold {
+  const st = stateOf(page)
+  if (st.downHold) throw new Error('this page already has a down-hold: release it first')
+  const ms = opts.ms ?? 300
+  if (!Number.isFinite(ms) || ms <= 0) throw new Error('a hold needs a positive time limit (ms)')
+  let resolveStarted: () => void = () => {}
+  const started = new Promise<void>((r) => {
+    resolveStarted = r
+  })
+  const end = () => {
+    if (st.downHold !== h) return
+    st.downHold = null
+    if (h.timer) clearTimeout(h.timer)
+    h.timer = null
+    for (const run of h.queue.splice(0)) run()
+  }
+  const h: DownHoldState = {
+    when: opts.when ?? (() => true),
+    running: false,
+    queue: [],
+    types: [],
+    timer: null,
+    start: () => {
+      h.running = true
+      h.timer = setTimeout(end, ms)
+      resolveStarted()
+    },
+  }
+  st.downHold = h
+  if (!opts.when) h.start()
+  return { started, held: () => [...h.types], release: end }
+}
+
+/** Calls `fn` with every frame this page sends on a relayed board socket, in order; returns the removal. */
+export function watchUp(page: Page, fn: (frame: string | Buffer) => void): () => void {
+  const st = stateOf(page)
+  st.upWatchers.add(fn)
+  return () => {
+    st.upWatchers.delete(fn)
+  }
 }
 
 export function relayStats(page: Page): RelayStats {
