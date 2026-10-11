@@ -11,6 +11,7 @@
 //
 //   N1_PERF=1 E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/n1-cold-open-10k.spec.ts --project=chromium --workers=1
 import { writeFileSync } from 'node:fs'
+import { logProfile, startProfile, stopProfile, summarizeProfile } from '../perf/fps.ts'
 import { expect, test, waitForCanvas } from '../tests/support/canvas.ts'
 import { BIG_BOARD_ELEMENTS, median, readOpen, seedBigBoard, watchOpen } from './support/big-board.ts'
 
@@ -65,9 +66,29 @@ test('N1-4: a cold open of the 10k board at CPU 4x: first content soon after the
       firstAfterReceivedMs: after(received),
       firstAfterDecodedMs: after(decoded),
       longestTaskMs: Math.round(longest),
+      marks: Object.entries(o.marks)
+        .map(([k, v]) => `${k.slice(6)}@${Math.round(v)}`)
+        .join(' ') as never,
+      longTasks: o.longTasks
+        .filter((t) => t.duration >= 100)
+        .map((t) => `${Math.round(t.start)}+${Math.round(t.duration)}`)
+        .join(' ') as unknown as number,
       elements: o.elements,
     })
     expect(o.elements).toBeGreaterThanOrEqual(BIG_BOARD_ELEMENTS - 1)
+  }
+  // N1_OPEN_PROFILE=1: one more open under the V8 profiler, from the navigation to editable (the top functions logged)
+  if (process.env.N1_OPEN_PROFILE === '1') {
+    await startProfile(cdp)
+    await a.page.goto(`/b/${board}?nocache=1`)
+    await waitForCanvas(a.page, 600_000)
+    await a.page.waitForFunction(
+      () => (window as unknown as { __n1?: { editable: number | null } }).__n1?.editable != null,
+      undefined,
+      { timeout: 600_000, polling: 250 },
+    )
+    const profile = await stopProfile(cdp, testInfo.outputPath('cold-open.cpuprofile'))
+    logProfile((l) => console.log(`[n1-profile] ${l}`), 'cold open', summarizeProfile(profile, 1), 40)
   }
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 })
   const pick = (k: string) => median(runs.map((r) => (r[k] ?? Number.NaN) as number))

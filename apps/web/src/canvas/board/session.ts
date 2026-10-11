@@ -530,11 +530,17 @@ export class LobbyBoardSession {
     if (e.kind === 'applying') {
       // N1-4: the chunks show at once (no skeleton), read-only, until the last one; the welcome that follows sets the
       // role (a socket that went first leaves it read-only until the next welcome)
-      if (e.on) this.set({ applying: true, readonly: true, role: 'viewer' })
-      else this.set({ applying: false })
+      if (e.on) {
+        if (!this.snap.applying) timelineMark('lobby.chunks.start')
+        this.set({ applying: true, readonly: true, role: 'viewer' })
+      } else {
+        timelineMark('lobby.chunks.end')
+        this.set({ applying: false })
+      }
       return
     }
     if (e.kind === 'welcome') {
+      timelineMark('lobby.welcome')
       // wave N: how this open's snapshot went into the scene (once per session)
       const how = this.core.resetApply
       if (!this.applyCounted && how) {
@@ -1469,3 +1475,12 @@ export class LobbyBoardSession {
 
 // biome-ignore lint/suspicious/noExplicitAny: Excalidraw's element helpers, typed loosely on purpose
 const ElementLib = ExcalidrawElementNs as any
+
+/** A user-timing mark (the N1 specs read the board page's timeline); never throws. */
+function timelineMark(name: string): void {
+  try {
+    performance.mark(name)
+  } catch {
+    // no user timing
+  }
+}

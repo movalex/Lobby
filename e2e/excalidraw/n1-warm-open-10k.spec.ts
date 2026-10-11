@@ -81,6 +81,13 @@ test('N1-3: a warm open of the 10k board at CPU 4x and Fast 4G: painted by 1.5 s
       paintedMs: painted === null ? null : Math.round(painted),
       editableMs: o.editable === null ? null : Math.round(o.editable),
       longestAfterPaintMs: Math.round(longest),
+      marks: Object.entries(o.marks)
+        .map(([k, v]) => `${k.slice(6)}@${Math.round(v)}`)
+        .join(' ') as never,
+      longTasks: o.longTasks
+        .filter((t) => t.duration >= 100)
+        .map((t) => `${Math.round(t.start)}+${Math.round(t.duration)}`)
+        .join(' '),
       apply: how,
       elements: o.elements,
     })

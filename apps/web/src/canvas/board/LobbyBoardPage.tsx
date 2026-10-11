@@ -329,6 +329,15 @@ function OpeningSkeleton({ board, role, workspace }: Pick<SessionProps, 'board' 
   )
 }
 
+/** A user-timing mark (the N1 specs read the board page's timeline); never throws. */
+function timelineMark(name: string): void {
+  try {
+    performance.mark(name)
+  } catch {
+    // no user timing
+  }
+}
+
 const connOf = (s: LobbyBoardSnapshot): ConnState =>
   s.phase === 'ready'
     ? 'online'
@@ -505,7 +514,11 @@ function LobbyBoardScreen({
   const welcomed = snap.welcomed
   useEffect(() => {
     if (!ctx || !welcomed) return
-    return installCanvasFeatures(CANVAS_FEATURES, ctx)
+    // wave N (the N1 specs): the features' install on the page's timeline
+    timelineMark('lobby.features.start')
+    const uninstall = installCanvasFeatures(CANVAS_FEATURES, ctx)
+    timelineMark('lobby.features.end')
+    return uninstall
   }, [ctx, welcomed])
   // a feature tool's onExit when another tool takes over (Escape, a toolbar button, setTool)
   useEffect(() => {
