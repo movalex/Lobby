@@ -22,9 +22,15 @@ import {
   test,
   waitForCanvas,
 } from '../tests/support/canvas.ts'
-import { BIG_BOARD_ELEMENTS, seedBigBoard } from './support/big-board.ts'
+import { BIG_BOARD_ELEMENTS } from './support/big-board.ts'
 
 test.use({ syncEnv: { DRAFTROOM_REACTIONS: 'on' } })
+
+/** WS1's seed helper (support/big-board.ts), looked up at run time: the foundation does not export it, and this spec must typecheck on a branch without it. */
+type SeedBigBoard = (
+  page: Page,
+  boardId: string,
+) => Promise<{ board: { noteIds: string[] }; elements: number }>
 
 /** Reacted notes (the first notes of frame 0: the board's densest part, in view at zoom 1 around the first). */
 const REACTED = 30
@@ -76,6 +82,11 @@ test('N3-1: rows draw on the 10k board and dragging a reacted note adds no whole
   board,
 }, testInfo) => {
   test.setTimeout(900_000)
+  const { seedBigBoard } = (await import('./support/big-board.ts')) as unknown as {
+    seedBigBoard?: SeedBigBoard
+  }
+  test.skip(!seedBigBoard, "needs WS1's seedBigBoard (support/big-board.ts)")
+  if (!seedBigBoard) return
   const a = await canvasSession('alice')
   const seeded = await seedBigBoard(a.page, board)
   expect(seeded.elements).toBe(BIG_BOARD_ELEMENTS)
