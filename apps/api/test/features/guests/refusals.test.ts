@@ -109,6 +109,23 @@ function refusedCalls(board: string, other: string, userId: string): [string, Me
     ['DELETE /api/workspaces/:wid/templates/:bid', 'DELETE', `${ws}/templates/${board}`, undefined],
     ['POST /api/workspaces/:wid/templates/:bid/use', 'POST', `${ws}/templates/${board}/use`, {}],
     ['POST /api/workspaces/:wid/ai/ask', 'POST', `${ws}/ai/ask`, { question: 'What did we decide?' }],
+    // Wave N (landed by the foundation; pending until implemented, as above)
+    ['POST /api/boards/:bid/visit', 'POST', `${b}/visit`, undefined],
+    ['POST /api/boards/:bid/visit/seen', 'POST', `${b}/visit/seen`, undefined],
+    ['POST /api/boards/:bid/ai/capture/photo', 'POST', `${b}/ai/capture/photo?mode=notes`, {}],
+    [
+      'POST /api/boards/:bid/ai/capture/board-image',
+      'POST',
+      `${b}/ai/capture/board-image`,
+      { elementId: 'img-1' },
+    ],
+    [
+      'POST /api/boards/:bid/ai/capture/transcript',
+      'POST',
+      `${b}/ai/capture/transcript`,
+      { text: 'We decided.' },
+    ],
+    ['GET /api/boards/:bid/backlinks', 'GET', `${b}/backlinks`, undefined],
     // Requesting access: to their own board and to any other.
     ['POST /api/boards/:bid/access-requests', 'POST', `${b}/access-requests`, { role: 'editor' }],
     [

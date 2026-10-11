@@ -1,6 +1,7 @@
 // The one place feature modules are registered (integration owner). Each feature owns its folder.
 import type { FastifyInstance } from 'fastify'
 import { registerAi } from './ai/index.ts'
+import { registerBoardLinks } from './board-links/index.ts'
 import { registerBoardOpen } from './board-open/index.ts'
 import { registerComments } from './comments/index.ts'
 import type { FeatureContext } from './context.ts'
@@ -13,6 +14,7 @@ import { registerLinkPreview } from './link-preview/index.ts'
 import { registerSearch } from './search/index.ts'
 import { registerThumbnails } from './thumbnails/index.ts'
 import { registerUsage } from './usage/index.ts'
+import { registerVisits } from './visits/index.ts'
 import { registerWorkshops } from './workshops/index.ts'
 import { registerWsTemplates } from './ws-templates/index.ts'
 
@@ -40,4 +42,8 @@ export async function registerFeatures(
   await registerBoardOpen(app, ctx)
   await registerUsage(app, ctx)
   await registerWsTemplates(app, ctx)
+  // Wave N (the foundation; WS4 owns this list after it): since your last visit (WS4) and links between boards (WS7);
+  // Capture the room (WS5) is inside 'ai'. Their routes are pending until implemented (./pending-routes.ts).
+  await registerVisits(app, ctx)
+  await registerBoardLinks(app, ctx)
 }

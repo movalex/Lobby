@@ -66,6 +66,19 @@ export const WS_TEMPLATES_GUESTS =
 export const WORKSPACE_ASK_GUESTS =
   'Asking across boards is for people with an account. Sign in with an account to use it.'
 
+/**
+ * Wave N (WS4, N4-1): visit markers are stored per account; a name-only guest keeps the device-local "Catch me up"
+ * window instead. Listed here so a guest is refused before any query.
+ */
+export const VISITS_GUESTS =
+  'Since your last visit is for people with an account. Sign in with an account to use it.'
+/** Wave N (WS5, N5-1): Capture the room sends photos and transcripts to OpenAI and costs money, like AI on a board. */
+export const CAPTURE_GUESTS =
+  'Capture the room is for people with an account. Sign in with an account to use it.'
+/** Wave N (WS7, N7-4): "Linked from" names other boards of the workspace, which a guest never sees. */
+export const BACKLINKS_GUESTS =
+  'Linked from is for people with an account. Sign in with an account to see the boards that link here.'
+
 /** `METHOD route-pattern` → the message a signed-in guest gets (403 GUEST_ACCOUNT_REQUIRED). */
 export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {
   // workspaces, projects and boards
@@ -109,6 +122,14 @@ export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {
   'DELETE /api/workspaces/:wid/templates/:bid': WS_TEMPLATES_GUESTS,
   'POST /api/workspaces/:wid/templates/:bid/use': WS_TEMPLATES_GUESTS,
   'POST /api/workspaces/:wid/ai/ask': WORKSPACE_ASK_GUESTS,
+  // wave N (landed by the foundation, pending until implemented: ../pending-routes.ts). GET board-cards has no row:
+  // a guest gets only unavailable faces there (WS7, N7-2).
+  'POST /api/boards/:bid/visit': VISITS_GUESTS,
+  'POST /api/boards/:bid/visit/seen': VISITS_GUESTS,
+  'POST /api/boards/:bid/ai/capture/photo': CAPTURE_GUESTS,
+  'POST /api/boards/:bid/ai/capture/board-image': CAPTURE_GUESTS,
+  'POST /api/boards/:bid/ai/capture/transcript': CAPTURE_GUESTS,
+  'GET /api/boards/:bid/backlinks': BACKLINKS_GUESTS,
 }
 
 export const guestRefused = (message: string) => new ApiError(403, 'GUEST_ACCOUNT_REQUIRED', message)

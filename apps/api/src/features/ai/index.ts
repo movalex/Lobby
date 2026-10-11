@@ -65,6 +65,7 @@ import { guestRefused } from '../guests/guard.ts'
 import { ticketName } from '../guests/label.ts'
 import { checkpointBeforeChange } from '../history/before-change.ts'
 import { AiLedger, InFlight, type InFlightLimits } from './budget.ts'
+import { registerCapture } from './capture.ts'
 import { aiConfigured } from './config.ts'
 import { clampRect, publishDone, publishWorking } from './live.ts'
 import { type ChatOutcome, createOpenAiClient, type OpenAiClient } from './openai.ts'
@@ -322,6 +323,8 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
   // wave M (M8-2): Ask across boards (./workspace-ask.ts), under the same per-minute and in-flight limits, ledger,
   // model client and per-board gate as the board's AI
   registerWorkspaceAsk(app, ctx, { runsPerUser, inFlight, ledger, client, loaders })
+  // wave N (WS5): Capture the room (./capture.ts; pending stubs until implemented)
+  registerCapture(app, ctx)
 
   app.get(AI_STATUS_ROUTE, async (req): Promise<AiStatus> => {
     const user = await ctx.requireUser(req)

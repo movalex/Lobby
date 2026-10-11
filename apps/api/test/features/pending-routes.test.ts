@@ -22,6 +22,21 @@ import {
  * (W5: GET /healthz/deep with M5-6, POST /api/usage and GET /internal/usage with M5-5, the open-state with M5-1; W7: POST /internal/access-many with M7-1; W8: the ask and the four template routes); the sync's /healthz/deep is W7's.
  */
 const WAVE_M_ROUTES: string[] = []
+/**
+ * Wave N (the foundation, OWNER: WS4 after it): the routes wave N adds, pending until their owners implement them
+ * (WS4: the visit routes, N4-1; WS5: the three capture routes, N5-1; WS7: board-cards N7-2 and backlinks N7-4). Each
+ * owner deletes its keys here and in PENDING_ROUTES in the same change.
+ */
+const WAVE_N_ROUTES: string[] = [
+  'POST /api/boards/:bid/visit',
+  'POST /api/boards/:bid/visit/seen',
+  'POST /api/boards/:bid/ai/capture/photo',
+  'POST /api/boards/:bid/ai/capture/board-image',
+  'POST /api/boards/:bid/ai/capture/transcript',
+  'GET /api/boards/:bid/board-cards',
+  'GET /api/boards/:bid/backlinks',
+]
+const PENDING_NOW = [...WAVE_M_ROUTES, ...WAVE_N_ROUTES]
 
 const UNKNOWN = { error: { code: 'NOT_FOUND', message: 'Not found.' } }
 
@@ -29,12 +44,19 @@ const fill = (pattern: string, board: string) =>
   pattern.replace(':bid', board).replace(':wid', DEV_STUDIO).replace(/:\w+/g, 'x')
 
 describe('the pending list', () => {
-  it('is exactly the wave M routes, each with its owner and plan item', () => {
-    expect(Object.keys(PENDING_ROUTES).sort()).toEqual([...WAVE_M_ROUTES].sort())
+  it('is exactly the wave M and wave N routes still pending, each with its owner and plan item', () => {
+    expect(Object.keys(PENDING_ROUTES).sort()).toEqual([...PENDING_NOW].sort())
     for (const [key, r] of Object.entries(PENDING_ROUTES)) {
-      expect(['W5', 'W7', 'W8'], key).toContain(r.owner)
-      expect(r.item, key).toMatch(/^M[5-8]-\d$/)
+      expect(['W5', 'W7', 'W8', 'WS4', 'WS5', 'WS7'], key).toContain(r.owner)
+      expect(r.item, key).toMatch(/^(M[5-8]|N[1-7])-\d$/)
     }
+  })
+
+  it('every wave N guest row is a pending route until its owner implements it (board-cards has no guest row)', () => {
+    const rows = Object.keys(GUEST_REFUSED_ROUTES).filter((k) => WAVE_N_ROUTES.includes(k))
+    expect(rows.sort()).toEqual(WAVE_N_ROUTES.filter((k) => !k.endsWith('/board-cards')).sort())
+    for (const k of rows) expect(isPendingRoute(k), k).toBe(true)
+    expect(Object.keys(CREATOR_ROUTES).filter((k) => WAVE_N_ROUTES.includes(k))).toEqual([])
   })
 
   it('every wave M guard row is a pending route until its owner implements it (the rows are in place before the routes)', () => {
@@ -72,7 +94,7 @@ describe('in the real app, a pending route answers like an unknown route', () =>
   afterEach(() => w.api.close())
 
   it('is not registered (nor its HEAD)', () => {
-    for (const key of WAVE_M_ROUTES) {
+    for (const key of PENDING_NOW) {
       const [method = '', url = ''] = key.split(' ')
       expect(w.api.app.hasRoute({ method: method as Method, url }), key).toBe(false)
       if (method === 'GET') expect(w.api.app.hasRoute({ method: 'HEAD', url }), `HEAD ${url}`).toBe(false)
@@ -90,7 +112,7 @@ describe('in the real app, a pending route answers like an unknown route', () =>
       ['the board owner', (m, url, body) => w.bob.req(m, url, body)],
       ['a guest', (m, url, body) => sam.req(m, url, body)],
     ]
-    for (const key of WAVE_M_ROUTES) {
+    for (const key of PENDING_NOW) {
       const [method = 'GET', pattern = ''] = key.split(' ') as [Method, string]
       const url = fill(pattern, w.board)
       const body = method === 'GET' || method === 'DELETE' ? undefined : {}
@@ -105,7 +127,13 @@ describe('in the real app, a pending route answers like an unknown route', () =>
       }
     }
     // nothing was written by any of it
-    for (const table of ['usage_daily', 'workspace_templates']) {
+    for (const table of [
+      'usage_daily',
+      'workspace_templates',
+      'board_visits',
+      'board_links',
+      'board_link_scans',
+    ]) {
       const n = await w.api.db.one<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`)
       expect(n.n, table).toBe(0)
     }

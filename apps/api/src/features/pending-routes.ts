@@ -1,4 +1,4 @@
-// Wave M foundation: the routes wave M adds, landed as contracts, guard rows and stub handlers BEFORE their owners
+// Wave M foundation (and wave N's, the same way): the routes a wave adds, landed as contracts, guard rows and stub handlers BEFORE their owners
 // implement them. OWNER: W5 (the guard lists and matrices are W5's after the foundation).
 //
 // A pending route is NOT registered: its path answers exactly as any unknown route does today (the root 404
@@ -13,7 +13,7 @@
 
 import type { FastifyInstance, RouteHandlerMethod } from 'fastify'
 
-export type PendingOwner = 'W5' | 'W7' | 'W8'
+export type PendingOwner = 'W5' | 'W7' | 'W8' | 'WS4' | 'WS5' | 'WS7'
 
 export interface PendingRoute {
   /** the workstream that implements it */
@@ -24,8 +24,17 @@ export interface PendingRoute {
 
 /** `METHOD route-pattern` (the guard lists' key format) → who implements it. */
 export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
-  // none left: W5 (open-state M5-1, usage M5-5, /healthz/deep M5-6), W7 (POST /internal/access-many M7-1) and W8
-  // (Ask across boards M8-2, the workspace templates M8-3) are implemented. To ship a W8 route hidden, add its key back.
+  // wave M: none left: W5 (open-state M5-1, usage M5-5, /healthz/deep M5-6), W7 (POST /internal/access-many M7-1)
+  // and W8 (Ask across boards M8-2, the workspace templates M8-3) are implemented. To ship a route hidden, add its
+  // key back.
+  // wave N (landed by the wave N foundation; each owner deletes its keys when it implements the route)
+  'POST /api/boards/:bid/visit': { owner: 'WS4', item: 'N4-1' },
+  'POST /api/boards/:bid/visit/seen': { owner: 'WS4', item: 'N4-1' },
+  'POST /api/boards/:bid/ai/capture/photo': { owner: 'WS5', item: 'N5-1' },
+  'POST /api/boards/:bid/ai/capture/board-image': { owner: 'WS5', item: 'N5-1' },
+  'POST /api/boards/:bid/ai/capture/transcript': { owner: 'WS5', item: 'N5-1' },
+  'GET /api/boards/:bid/board-cards': { owner: 'WS7', item: 'N7-2' },
+  'GET /api/boards/:bid/backlinks': { owner: 'WS7', item: 'N7-4' },
 }
 
 export const isPendingRoute = (
