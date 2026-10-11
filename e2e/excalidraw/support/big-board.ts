@@ -242,3 +242,98 @@ export async function seedBigBoard(page: SeedPage, boardId: string): Promise<See
     )
   return { board, elements: board.elements.length, ms: { images: t1 - t0, elements: Date.now() - t1 } }
 }
+
+// ---- what the N1 specs watch in the page ----------------------------------------------------------------------
+
+/** What `watchOpen` records in a page, from its navigation start (performance.now() ms). */
+export interface OpenWatch {
+  /** every long task (over 50 ms) of the page's main thread */
+  readonly longTasks: { readonly start: number; readonly duration: number }[]
+  /** the first frame the canvas held an element */
+  readonly firstElements: number | null
+  /** the first frame the board was editable: welcomed, not read-only, ready, Saved */
+  readonly editable: number | null
+  /** user-timing marks of the board page (lobby.snapshot.received / .decoded, lobby.cachedPaint) */
+  readonly marks: Record<string, number>
+  /** the scene's element count at the end */
+  readonly elements: number
+}
+
+/** Before every page load of `context`: a long-task observer and a per-frame watch of the open (read `readOpen`). */
+interface InitScriptContext {
+  addInitScript(fn: () => void): Promise<unknown>
+}
+export async function watchOpen(context: InitScriptContext): Promise<void> {
+  await context.addInitScript(() => {
+    const w = window as unknown as {
+      __n1: {
+        longTasks: { start: number; duration: number }[]
+        firstElements: number | null
+        editable: number | null
+      }
+      __lobbyBoard?: {
+        api?: { getSceneElements(): readonly unknown[] }
+        session: {
+          snapshot: { welcomed: boolean; readonly: boolean; phase: string; save: { state: string } }
+        }
+      }
+    }
+    w.__n1 = { longTasks: [], firstElements: null, editable: null }
+    try {
+      new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) w.__n1.longTasks.push({ start: e.startTime, duration: e.duration })
+      }).observe({ type: 'longtask', buffered: true })
+    } catch {
+      // no long-task timing in this browser
+    }
+    const tick = () => {
+      const b = w.__lobbyBoard
+      if (b) {
+        if (w.__n1.firstElements === null && (b.api?.getSceneElements().length ?? 0) > 0)
+          w.__n1.firstElements = performance.now()
+        const s = b.session.snapshot
+        if (
+          w.__n1.editable === null &&
+          s.welcomed &&
+          !s.readonly &&
+          s.phase === 'ready' &&
+          s.save.state === 'saved'
+        )
+          w.__n1.editable = performance.now()
+      }
+      if (w.__n1.editable === null || w.__n1.firstElements === null) requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  })
+}
+
+interface EvalPage {
+  evaluate<R>(fn: () => R | Promise<R>): Promise<R>
+}
+/** What `watchOpen` recorded on the current page. */
+export const readOpen = (page: EvalPage): Promise<OpenWatch> =>
+  page.evaluate(() => {
+    const w = window as unknown as {
+      __n1?: {
+        longTasks: { start: number; duration: number }[]
+        firstElements: number | null
+        editable: number | null
+      }
+      __lobbyBoard?: { api?: { getSceneElements(): readonly unknown[] } }
+    }
+    const marks: Record<string, number> = {}
+    for (const m of performance.getEntriesByType('mark'))
+      if (m.name.startsWith('lobby.') && !(m.name in marks)) marks[m.name] = m.startTime
+    return {
+      longTasks: w.__n1?.longTasks ?? [],
+      firstElements: w.__n1?.firstElements ?? null,
+      editable: w.__n1?.editable ?? null,
+      marks,
+      elements: w.__lobbyBoard?.api?.getSceneElements().length ?? 0,
+    }
+  })
+
+export const median = (xs: readonly number[]): number => {
+  const s = [...xs].filter((x) => Number.isFinite(x)).sort((a, b) => a - b)
+  return s.length ? (s[Math.floor((s.length - 1) / 2)] as number) : Number.NaN
+}

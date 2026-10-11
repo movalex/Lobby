@@ -1,7 +1,13 @@
-// A measurement, not part of the regular run (LOBBY_MEASURE_FPS=1): pan fps of the heavy board (the perf
-// seed's 20 frames, 4,500 notes, 200 images: e2e/perf/seed.ts HEAVY) on the Excalidraw board page at
-// Lobby's whole-board fit, at 0.25 and at 1, with sync running (the page's own socket is live), for the
-// level-of-detail pass of docs/EXCALIDRAW-MIGRATION.md §8.5 (wave 3b: ≥ 24 fps at Lobby's fit).
+// A measurement, not part of the regular run (LOBBY_MEASURE_FPS=1): pan fps of a big board on the Excalidraw board
+// page at Lobby's whole-board fit, at 0.25 and at 0.5 (and 1 on request), with sync running (the page's own socket is
+// live), for the level-of-detail pass of docs/EXCALIDRAW-MIGRATION.md §8.5 (wave 3b: ≥ 24 fps at Lobby's fit).
+//
+// Wave N (WS1, N1-5): the board is the 10k fixture (e2e/excalidraw/support/big-board.ts: 20 frames of notes, 400 bound
+// arrows, 50 images, 730 loose shapes; LOBBY_FPS_BOARD=heavy: the perf seed's heavy board, e2e/perf/seed.ts HEAVY), the
+// views default to fit, 0.25 and 0.5, and each view is measured at CPU 1x and 4x (LOBBY_FPS_CPU=1,4; 4x is the laptop
+// stand-in, the real laptop number stays an owner device check: PERF-laptop). With N1_PERF=1 the N1-5 targets are
+// asserted on the page as shipped (the default mode): a median of at least 55 fps at each view at 1x, and at least 30 at
+// 4x.
 //
 // Same method as spike A14 and spike B's perf-fps (e2e/spike/fixtures/perf-kit.ts `measureView`): the
 // headless shell with GPU flags, 1536×864 at DPR 1.25, the pointer at rest over the canvas, nothing
@@ -30,22 +36,70 @@ import { DPR, GPU_ARGS, gpuInfo, measureView, pan, VIEWPORT } from '../spike/fix
 import { signInContext } from '../tests/support/api.ts'
 import { expect, test, waitForCanvas } from '../tests/support/canvas.ts'
 import { WEB_URL } from '../tests/support/ports.ts'
+import { seedBigBoard } from './support/big-board.ts'
 
 test.skip(process.env.LOBBY_MEASURE_FPS !== '1', 'a measurement: LOBBY_MEASURE_FPS=1')
 test.setTimeout(60 * 60_000)
 // no Playwright trace or screenshots while measuring (a trace's screencast adds main-thread work)
 test.use({ trace: 'off', screenshot: 'off' })
 
-type View = 'fit' | '0.25' | '1' | '1-images'
+type View = 'fit' | '0.25' | '0.5' | '1' | '1-images'
 /**
- * LOBBY_FPS_VIEWS=fit,1 picks the views (default the three gate views). `1-images`: zoom 1 on frame 0's
- * image column (the `1` view has no image in it), e2e/perf/lib.ts `100-images`.
+ * LOBBY_FPS_VIEWS=fit,1 picks the views (default the N1-5 gate views: fit, 0.25, 0.5). `1-images`: zoom 1 on frame
+ * 0's image column (the `1` view has no image in it), e2e/perf/lib.ts `100-images`.
  */
 const VIEWS: readonly View[] = (process.env.LOBBY_FPS_VIEWS?.split(',') as View[] | undefined) ?? [
   'fit',
   '0.25',
-  '1',
+  '0.5',
 ]
+/** LOBBY_FPS_CPU=1,4 the CPU throttling rates each view is measured at */
+const CPUS: readonly number[] = (process.env.LOBBY_FPS_CPU ?? '1,4').split(',').map(Number)
+/** LOBBY_FPS_BOARD=heavy: the perf seed's heavy board; default the 10k fixture */
+const BOARD = process.env.LOBBY_FPS_BOARD === 'heavy' ? 'heavy' : 'big10k'
+/** N1-5's targets, asserted with N1_PERF=1: the median fps of each view at 1x and at 4x */
+const TARGET_FPS: Readonly<Record<number, number>> = { 1: 55, 4: 30 }
+
+/** frame `frameId` centred at `zoom` (the 0.25 view of e2e/perf/lib.ts setView, at any zoom). */
+function centreAt(page: Page, frameId: string, zoom: number) {
+  return page.evaluate(
+    async ({ frameId, zoom }) => {
+      type Box = { x: number; y: number; width: number; height: number }
+      const c = (
+        window as unknown as {
+          __lobbyBoard: {
+            canvas: {
+              select(ids: string[]): void
+              bounds(id: string): Box | null
+              items(): (Box & { isDeleted?: boolean; type: string; containerId?: string | null })[]
+              viewport: {
+                get(): Box & { zoom: number }
+                set(v: { zoom: number; x: number; y: number }): void
+              }
+            }
+          }
+        }
+      ).__lobbyBoard.canvas
+      c.select([])
+      const f = c.bounds(frameId)
+      if (!f) throw new Error(`no frame ${frameId}`)
+      const vp = c.viewport.get()
+      c.viewport.set({
+        zoom,
+        x: f.x + f.width / 2 - (vp.width * vp.zoom) / zoom / 2,
+        y: f.y + f.height / 2 - (vp.height * vp.zoom) / zoom / 2,
+      })
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+      const v = c.viewport.get()
+      const all = c.items().filter((e) => !e.isDeleted && !(e.type === 'text' && e.containerId))
+      const visible = all.filter(
+        (e) => e.x + e.width >= v.x && e.x <= v.x + v.width && e.y + e.height >= v.y && e.y <= v.y + v.height,
+      ).length
+      return { zoom: v.zoom, visible, total: all.length }
+    },
+    { frameId, zoom },
+  )
+}
 
 /** LOBBY_FPS_SPEC=frames,notes,images (a smaller board for a quick look); default the heavy board. */
 function spec(): HeavySpec {
@@ -98,7 +152,7 @@ const lodState = (page: Page) =>
     return lod ? lod.state() : null
   })
 
-test('heavy board: pan fps at Lobby’s fit, 0.25 and 1, per mode (the §8.5 level-of-detail gate)', async ({
+test('big board: pan fps at Lobby’s fit, 0.25 and 0.5, per mode and CPU rate (the §8.5 and N1-5 level-of-detail gate)', async ({
   canvasSession,
   users,
   board,
@@ -108,7 +162,25 @@ test('heavy board: pan fps at Lobby’s fit, 0.25 and 1, per mode (the §8.5 lev
   // 1. seed through the real protocol in a regular session, then close it (one page measures)
   const a = await canvasSession('alice')
   const lines: string[] = []
-  const seeded = await seedHeavyExcalidrawBoard(a.page, board, spec(), (s) => lines.push(s))
+  let seeded: {
+    spec: unknown
+    elements: number
+    items: number
+    images: { length: number }
+    frame0Notes: string[]
+  }
+  if (BOARD === 'heavy') seeded = await seedHeavyExcalidrawBoard(a.page, board, spec(), (s) => lines.push(s))
+  else {
+    const big = await seedBigBoard(a.page, board)
+    lines.push(`10k fixture: images ${big.ms.images} ms, elements ${big.ms.elements} ms`)
+    seeded = {
+      spec: 'the 10k fixture (e2e/excalidraw/support/big-board.ts)',
+      elements: big.elements,
+      items: big.elements - big.board.noteIds.length,
+      images: { length: big.board.elements.filter((e) => e.type === 'image').length },
+      frame0Notes: big.board.noteIds.slice(0, 1),
+    }
+  }
   log(`seed: ${lines.join(' | ')}`)
   const frame0 = await a.page.evaluate((note) => {
     const f = (window as unknown as { lobbyCanvas: { get(id: string): { frameId?: string | null } | null } })
@@ -154,68 +226,72 @@ test('heavy board: pan fps at Lobby’s fit, 0.25 and 1, per mode (the §8.5 lev
     await page.waitForTimeout(3_000)
 
     const hasLod = await page.evaluate(() => !!(window as unknown as { __lobbyLod?: unknown }).__lobbyLod)
-    const modes = (process.env.LOBBY_FPS_MODES ?? (hasLod ? 'lod-off,lod-on' : 'default'))
+    const modes = (
+      process.env.LOBBY_FPS_MODES ?? (hasLod && BOARD === 'heavy' ? 'lod-off,lod-on' : 'default')
+    )
       .split(',')
       .map((m) => m.trim())
       .filter(Boolean)
     const rows: Record<string, unknown>[] = []
-    for (const view of VIEWS) {
-      for (const mode of modes) {
-        if (!(await enterMode(page, mode))) {
-          log(`${mode}: not on this page, skipped`)
-          continue
-        }
-        const cam = await setView(
-          page,
-          view === '1' ? '100' : view === '1-images' ? '100-images' : view,
-          frame0,
-        )
-        await page.waitForTimeout(2_500)
-        const inView = await imagesInView(page)
-        const shown = await waitImagesLoaded(page, 60_000, inView)
-        // the pass renders its bitmaps once it is on: measure the steady state (the time it took is logged)
-        if (mode === 'lod-on') {
-          const t = Date.now()
-          await page.waitForFunction(
-            () => {
-              type S = { active: boolean; stale: number; rendering: number }
-              const s = (window as unknown as { __lobbyLod?: { state(): S } }).__lobbyLod?.state()
-              return !s?.active || (s.stale === 0 && s.rendering === 0)
-            },
-            undefined,
-            { timeout: 120_000, polling: 100 },
+    for (const cpu of CPUS)
+      for (const view of VIEWS) {
+        await cdp.send('Emulation.setCPUThrottlingRate', { rate: cpu })
+        for (const mode of modes) {
+          if (!(await enterMode(page, mode))) {
+            log(`${mode}: not on this page, skipped`)
+            continue
+          }
+          const cam =
+            view === '0.5'
+              ? await centreAt(page, frame0, 0.5)
+              : await setView(page, view === '1' ? '100' : view === '1-images' ? '100-images' : view, frame0)
+          await page.waitForTimeout(2_500)
+          const inView = await imagesInView(page)
+          const shown = await waitImagesLoaded(page, 60_000, inView)
+          // the pass renders its bitmaps once it is on: measure the steady state (the time it took is logged)
+          if (mode === 'lod-on' || mode === 'default') {
+            const t = Date.now()
+            await page.waitForFunction(
+              () => {
+                type S = { active: boolean; stale: number; rendering: number }
+                const s = (window as unknown as { __lobbyLod?: { state(): S } }).__lobbyLod?.state()
+                return !s?.active || (s.stale === 0 && s.rendering === 0)
+              },
+              undefined,
+              { timeout: 120_000, polling: 100 },
+            )
+            log(`${mode} ${view}: bitmaps ready ${Date.now() - t} ms after the 2.5 s settle`)
+            await page.waitForTimeout(500)
+          }
+          const r = await measureView(page, cdp, view, cam.zoom)
+          const state = await lodState(page)
+          rows.push({
+            cpu,
+            mode,
+            ...r,
+            visible: cam.visible,
+            total: cam.total,
+            imagesInView: shown.total,
+            imagesLoaded: shown.loaded,
+            lod: state,
+          })
+          log(
+            `cpu ${cpu}x ${mode} ${view} (zoom ${cam.zoom.toFixed(4)}, ${cam.visible}/${cam.total} in view, ${shown.loaded}/${shown.total} images in view loaded): ${r.reps
+              .map((x) => x.fps)
+              .join(
+                ' / ',
+              )} fps (median ${r.medianFps}; traced ${r.trace?.traceFps} fps drawn, main ${r.trace?.mainBusyPct}% busy; machine ${r.machineBusyPct}% busy)${state ? ` lod ${JSON.stringify(state)}` : ''}`,
           )
-          log(`${mode} ${view}: bitmaps ready ${Date.now() - t} ms after the 2.5 s settle`)
-          await page.waitForTimeout(500)
-        }
-        const r = await measureView(page, cdp, view, cam.zoom)
-        const state = await lodState(page)
-        rows.push({
-          mode,
-          ...r,
-          visible: cam.visible,
-          total: cam.total,
-          imagesInView: shown.total,
-          imagesLoaded: shown.loaded,
-          lod: state,
-        })
-        log(
-          `${mode} ${view} (zoom ${cam.zoom.toFixed(4)}, ${cam.visible}/${cam.total} in view, ${shown.loaded}/${shown.total} images in view loaded): ${r.reps
-            .map((x) => x.fps)
-            .join(
-              ' / ',
-            )} fps (median ${r.medianFps}; traced ${r.trace?.traceFps} fps drawn, main ${r.trace?.mainBusyPct}% busy; machine ${r.machineBusyPct}% busy)${state ? ` lod ${JSON.stringify(state)}` : ''}`,
-        )
-        if (process.env.LOBBY_FPS_PROFILE === '1') {
-          await startProfile(cdp)
-          const times = await pan(page, 3000, 600)
-          const profile = await stopProfile(cdp, testInfo.outputPath(`${mode}-${view}.cpuprofile`))
-          const s = summarizeProfile(profile, times.length)
-          logProfile(log, `${mode} ${view}`, s, 20)
-          await page.waitForTimeout(400)
+          if (process.env.LOBBY_FPS_PROFILE === '1') {
+            await startProfile(cdp)
+            const times = await pan(page, 3000, 600)
+            const profile = await stopProfile(cdp, testInfo.outputPath(`${mode}-${view}.cpuprofile`))
+            const s = summarizeProfile(profile, times.length)
+            logProfile(log, `${mode} ${view}`, s, 20)
+            await page.waitForTimeout(400)
+          }
         }
       }
-    }
     const result = {
       gpu,
       viewport: `${VIEWPORT.width}x${VIEWPORT.height} @${DPR}`,
@@ -224,9 +300,19 @@ test('heavy board: pan fps at Lobby’s fit, 0.25 and 1, per mode (the §8.5 lev
       board: { spec: seeded.spec, elements: seeded.elements, items: seeded.items },
       rows,
     }
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 })
     writeFileSync(testInfo.outputPath('lod-fps.json'), JSON.stringify(result, null, 2))
     testInfo.annotations.push({ type: 'lod-fps', description: JSON.stringify(result) })
     expect(rows.length).toBeGreaterThan(0)
+    // N1-5's targets on the page as shipped (N1_PERF=1)
+    if (process.env.N1_PERF === '1')
+      for (const row of rows) {
+        const r = row as { cpu: number; mode: string; view: string; medianFps: number }
+        if (r.mode !== 'default' && r.mode !== 'lod-on') continue
+        const target = TARGET_FPS[r.cpu]
+        if (target !== undefined)
+          expect(r.medianFps, `${r.view} at CPU ${r.cpu}x (${r.mode})`).toBeGreaterThanOrEqual(target)
+      }
     await context.close()
   } finally {
     await browser.close()
