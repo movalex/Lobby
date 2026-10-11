@@ -48,6 +48,25 @@ export const lobbyOf = (el: El): Record<string, unknown> => {
   return isObject(lobby) ? lobby : {}
 }
 
+/**
+ * `el` without its `customData.lobby` keys that start with `prefix` (wave N: the seed's reaction strip, the
+ * strip-keys maintenance route), and how many it had. An emptied `lobby` is left out, and then an emptied
+ * `customData`. `el` itself (and 0) when it has none. Nothing else of the element changes.
+ */
+export function withoutLobbyKeys(el: El, prefix: string): { el: El; removed: number } {
+  const custom = el.customData
+  if (!isObject(custom) || !isObject(custom.lobby)) return { el, removed: 0 }
+  const removed = Object.keys(custom.lobby).filter((k) => k.startsWith(prefix)).length
+  if (!removed) return { el, removed: 0 }
+  const lobby = Object.fromEntries(Object.entries(custom.lobby).filter(([k]) => !k.startsWith(prefix)))
+  const { lobby: _old, ...rest } = custom
+  const next: Record<string, unknown> = Object.keys(lobby).length ? { ...rest, lobby } : rest
+  const copy = { ...el }
+  if (Object.keys(next).length) copy.customData = next
+  else delete copy.customData
+  return { el: copy, removed }
+}
+
 /** The stable file facts of an image or file card (`customData.lobby.file`), as far as they are valid. */
 export interface ElementFile {
   readonly versionId: string

@@ -90,6 +90,8 @@ export interface MergeEnv {
   readonly epoch: string
   /** the room session `lb_deleted` rows name (one per room open; store.ts DeletedRowWrite.session) */
   readonly deletedSession: string
+  /** wave N (N2-5): the reactions kill switch (config.ts DRAFTROOM_REACTIONS); absent: on */
+  readonly reactions?: boolean
   nonce(): number
 }
 
@@ -241,6 +243,7 @@ export class PushApplier {
       tagExists: (key) => this.tagExists(key),
       tagDenied: (key) => this.docDeniedCodes.get(tagDefKey(key)) ?? null,
       fileRef: (v) => this.fileRef(v),
+      reactions: env.reactions !== false,
     }
   }
 

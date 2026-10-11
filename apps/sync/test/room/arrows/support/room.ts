@@ -59,6 +59,7 @@ export async function openRoomService(): Promise<RoomService> {
     DRAFTROOM_DATA_DIR: dir,
     DRAFTROOM_ENGINE: 'excalidraw',
     DRAFTROOM_TEST_HOOKS: '1',
+    DRAFTROOM_REACTIONS: 'on',
     IDLE_EVICT_MS: '600000',
   })
   const logs: string[] = []

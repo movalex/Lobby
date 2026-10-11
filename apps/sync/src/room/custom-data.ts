@@ -9,7 +9,8 @@
 //  3. identity-bound `plusOne:<uid>` and `react:<code>:<uid>` (wave N, CONTRACTS_REV 13), by the key's uid
 //     (canvas-schema reactions.ts `identityUidOf`): only where `<uid>` is the writer. A +1 added while a dot
 //     vote is open is VOTE_OPEN (UNAVAILABLE while the vote state is still unknown). A reaction never is: it
-//     goes on sticky notes only, and an owner may also remove anyone's ("Clear reactions");
+//     goes on sticky notes only, an owner may also remove anyone's ("Clear reactions"), and while the reactions
+//     kill switch is off (DRAFTROOM_REACTIONS) every reaction write is UNAVAILABLE;
 //  4. api-validated `file` (canonicalized from the file-refs answer; `versionId` must be the version in
 //     `fileId`; `name` is the client's) and `pdfPage` (derived from `fileId`'s `.p<n>`);
 //  5. free keys (`tag:*` needs its `tagDef:*` in lb_doc; the others are schema-checked only).
@@ -50,6 +51,11 @@ export interface CustomDataContext {
   readonly tagDenied?: (tagKey: string) => RejectCode | null
   /** the cached file-refs answer for a bare version id (undefined: the lookup failed or never ran) */
   readonly fileRef: (versionId: string) => FileRefAnswer | undefined
+  /**
+   * Wave N (N2-5): the reactions kill switch (config.ts DRAFTROOM_REACTIONS). False: every `react:` write is
+   * UNAVAILABLE (the keys already stored stay; an undelete's own keys come back with it). Absent: on.
+   */
+  readonly reactions?: boolean
 }
 
 export type Verdict<T> =
@@ -113,6 +119,8 @@ function checkKey(
         // the writer's own, added or removed; anyone's removed by an owner ("Clear reactions")
         const mine = uid !== null && uid === w.uid
         if (!mine && !(value === null && w.role === 'owner')) return bad('INVALID')
+        // the kill switch: nothing is written, the stored keys stay
+        if (ctx.reactions === false) return bad('UNAVAILABLE')
         // never VOTE_OPEN: a reaction is not a vote
         return { ok: true, value }
       }
@@ -157,7 +165,7 @@ function checkKey(
  * registry's `lockExempt` (canvas-schema custom-data.ts): the writer's own identity-bound key (`plusOne:<uid>`, a
  * +1 on a locked template note, and `react:<code>:<uid>`, a reaction on it, wave N; guests included), and
  * `present` on a frame from an account (a locked slide's order and skip mark). The key's class rules still apply
- * after this (checkPatchLobby: VOTE_OPEN, notes only). Another uid's key, an owner's "Clear
+ * after this (checkPatchLobby: VOTE_OPEN, notes only, the kill switch). Another uid's key, an owner's "Clear
  * reactions" included, stays LOCKED.
  */
 export function lockExemptKey(key: string, elementType: string, w: Writer): boolean {

@@ -30,14 +30,14 @@ import { checkElement, type WireElement } from '@draftroom/canvas-schema/element
 import { compareByIndex, indexKeysBetween, isValidIndexKey } from '@draftroom/canvas-schema/engine'
 import { checkInvariants } from '@draftroom/canvas-schema/invariants'
 import { MAX_ITEMS, MAX_LIVE_ELEMENTS, MAX_TAG_DEFS } from '@draftroom/canvas-schema/limits'
-import { isReactionKey } from '@draftroom/canvas-schema/reactions'
+import { REACTION_KEY_PREFIX } from '@draftroom/canvas-schema/reactions'
 import type { InternalRoute, RoomExtensionContext, ServerWriteChange } from '../engine-switch.ts'
 import { readJson } from '../http/body.ts'
 import { HttpError, sendJson } from '../http/respond.ts'
 import { importDoc } from '../room/migrate/convert-board.ts'
 import { boardParam, boardPath, writeBoard } from './board.ts'
 import { convertForSeed, seedRefusalError } from './convert-v1.ts'
-import { type El, isLabel, isObject } from './elements.ts'
+import { type El, isLabel, isObject, withoutLobbyKeys } from './elements.ts'
 
 /** A board is JSON of every element; generous, but bounded before parsing (as the tldraw seed). */
 export const SEED_LIMIT_BYTES = 64 * 1024 * 1024
@@ -106,17 +106,7 @@ function paintOrder(elements: readonly El[]): El[] {
  * emptied `lobby` (and then `customData`) is left out.
  */
 function withoutReactionKeys(el: El): El {
-  const custom = el.customData
-  if (!isObject(custom) || !isObject(custom.lobby)) return el
-  const keys = Object.keys(custom.lobby)
-  if (!keys.some(isReactionKey)) return el
-  const lobby = Object.fromEntries(Object.entries(custom.lobby).filter(([k]) => !isReactionKey(k)))
-  const { lobby: _old, ...rest } = custom
-  const next: Record<string, unknown> = Object.keys(lobby).length ? { ...rest, lobby } : rest
-  const copy = { ...el }
-  if (Object.keys(next).length) copy.customData = next
-  else delete copy.customData
-  return copy
+  return withoutLobbyKeys(el, REACTION_KEY_PREFIX).el
 }
 
 /** Validates content for a new board; throws 400 with codes and ids only (never board text). */

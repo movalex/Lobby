@@ -275,6 +275,8 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
   log(
     `[connect] permessage-deflate ${config.wsDeflate !== true ? 'off (DRAFTROOM_WS_DEFLATE is not on)' : 'on'}`,
   )
+  // wave N (N2-5): the reactions kill switch, fail-closed (config.ts parseReactions)
+  log(`[reactions] ${config.reactions === true ? 'on' : 'off (DRAFTROOM_REACTIONS is not on)'}`)
   const liveSockets = new Map<string, WebSocket>() // `${boardId}/${sid}` -> current ws
   // One expensive connect per macrotask (PERF-05, join-queue.ts): a crowd joining at once no longer
   // blocks everyone else's edits. Keyed per socket, not per session id (a replaced socket).

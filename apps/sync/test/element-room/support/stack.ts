@@ -62,6 +62,8 @@ export function useElementHarness(): ElementHarness {
           DRAFTROOM_ENGINE: 'excalidraw',
           DRAFTROOM_TEST_HOOKS: '1',
           DRAFTROOM_BACKUP_STORE: 'off',
+          // wave N (N2-5): reactions on, as render.yaml deploys the sync (the code's default is off)
+          DRAFTROOM_REACTIONS: 'on',
           DRAFTROOM_API_INTERNAL_URL: api.url,
           ...opts.env,
         },

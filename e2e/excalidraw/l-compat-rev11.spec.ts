@@ -83,7 +83,13 @@ const test = base.extend<{ oldTabs: OldTab[] }, { openai: FakeOpenAi }>({
   ],
 })
 
-test.use({ viewport: { width: 1440, height: 900 }, apiEnv: AI_API_ENV_3H, launchOptions: OLD_WEB_LAUNCH })
+// the sync as render.yaml deploys it from wave N (reactions on: the room says 13, which a rev-11 tab reads as "11 or later")
+test.use({
+  viewport: { width: 1440, height: 900 },
+  apiEnv: AI_API_ENV_3H,
+  syncEnv: { DRAFTROOM_REACTIONS: 'on' },
+  launchOptions: OLD_WEB_LAUNCH,
+})
 test.skip(!OLD_WEB_DIST, OLD_WEB_SKIP_REASON)
 test.beforeEach(({ openai }) => openai.reset())
 

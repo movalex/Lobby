@@ -1,20 +1,30 @@
-// The negative security suite, wave N (N2-3, N2-4): emoji reactions on notes, the identity-bound key class
+// The negative security suite, wave N (N2-3, N2-4, N2-5): emoji reactions on notes, the identity-bound key class
 // `react:<code>:<uid>` (canvas-schema reactions.ts; CONTRACTS_REV 13), one test per server rule:
 //  - the class (room/custom-data.ts): only the writer's own uid adds or removes its key, an owner also removes
 //    anyone's ("Clear reactions"), sticky notes only, never VOTE_OPEN, guests who can edit may react, read-only
 //    roles are refused, 120 keys per note within 6 KiB, and per-op validation still holds around them;
 //  - the writer rules for a socket below 13 (room/merge.ts, canvas-schema lobbyPatchOfWriter / lobbyCreateOfWriter):
 //    a patch never adds, changes or removes a reaction (dropped, the stored keys kept, no fix), and a create keeps
-//    only what its undelete source holds, every other key stripped with an ack fix `c:<key>: null`.
+//    only what its undelete source holds, every other key stripped with an ack fix `c:<key>: null`;
+//  - the kill switch DRAFTROOM_REACTIONS (config.ts, fail-closed): off refuses every reaction write UNAVAILABLE,
+//    changes nothing else, keeps the stored keys, and the room says 12.
 // Raw frames against the REAL sync server process (DRAFTROOM_ENGINE=excalidraw). A client of this build names its
 // revision in the connect URL (`rev=13`); one that names none is the rev-11 web, `rev=12` the deployed 3c83611 web.
 
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { CONNECT_REV_PARAM, CONTRACTS_REV, REACTIONS_REV } from '@draftroom/canvas-schema/protocol'
 import { reactionKey } from '@draftroom/canvas-schema/reactions'
 import { REACTION_CODES } from '@draftroom/contracts'
-import { describe, expect, it } from 'vitest'
+import { afterAll, describe, expect, it } from 'vitest'
 import type { ProtocolClientOptions } from '../harness/element-client.ts'
-import { type ElementStack, newBoardId, sharedElementStack } from '../harness/element-stack.ts'
+import {
+  createElementStack,
+  type ElementStack,
+  newBoardId,
+  sharedElementStack,
+} from '../harness/element-stack.ts'
 import { frame, noteWithLabel, rect, text } from '../harness/elements.ts'
 import { expectAccepted, expectNotStored, expectRefused, storedEl, storedLobby } from './support.ts'
 
@@ -386,5 +396,68 @@ describe('writers below 13 (N2-3): a rev-12 or rev-11 tab never adds, removes or
     expect(reactionsIn(await storedLobby(st, b, 'n1'))).toEqual([])
     await old.untilClock(a.clock)
     await st.converged(b, [a, old])
+  })
+})
+
+// ---- the kill switch (N2-5) -------------------------------------------------------------------------------------
+
+describe('DRAFTROOM_REACTIONS off (N2-5): every reaction write is UNAVAILABLE, nothing else changes, the stored keys stay', () => {
+  const dirs: string[] = []
+  afterAll(() => {
+    for (const d of dirs) rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  })
+
+  it('off (and unset): the room says 12; an add, a removal and an owner’s clear are UNAVAILABLE; other writes and an undelete land', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'dr-reactions-'))
+    dirs.push(dataDir)
+    const b = newBoardId()
+    // reactions made while the switch was on
+    const on = await createElementStack({ dataDir })
+    try {
+      const a = await tab13(on, b, 'alice', { role: 'owner' })
+      await a.create([...noteWithLabel('n1', 'idea'), ...noteWithLabel('n2', 'other', { x: 600 })])
+      expectAccepted(await a.patch('n1', { c: { [reactionKey('up', 'alice')]: true } }))
+      expectAccepted(await a.patch('n2', { c: { [reactionKey('clap', 'alice')]: true } }))
+    } finally {
+      await on.dispose()
+    }
+    for (const env of [{ DRAFTROOM_REACTIONS: 'off' }, { DRAFTROOM_REACTIONS: undefined }]) {
+      const st = await createElementStack({ dataDir, env })
+      try {
+        const a = await tab13(st, b, 'alice', { role: 'owner' })
+        expect(a.of('contracts').at(-1)).toEqual({ type: 'contracts', rev: 12 })
+        expect(st.server.logs()).toContain('[reactions] off (DRAFTROOM_REACTIONS is not on)')
+        const before = await st.snapshot(b)
+        expectRefused(await a.patch('n1', { c: { [reactionKey('heart', 'alice')]: true } }), 'UNAVAILABLE', a)
+        expectRefused(await a.patch('n1', { c: { [reactionKey('up', 'alice')]: null } }), 'UNAVAILABLE', a)
+        const bob = await tab13(st, b, 'bob')
+        expectRefused(await bob.patch('n1', { c: { [reactionKey('up', 'bob')]: true } }), 'UNAVAILABLE', bob)
+        // the owner's Clear reactions of someone else's key too
+        expectRefused(await a.patch('n1', { c: { [reactionKey('laugh', 'bob')]: null } }), 'UNAVAILABLE', a)
+        // nothing changed: same rows, same clock
+        const after = await st.snapshot(b)
+        expect(after.clock).toBe(before.clock)
+        expect(after.elements).toEqual(before.elements)
+        // the rest still lands, and the reactions stay on what is edited
+        expectAccepted(await a.patch('n1', { g: { style: { backgroundColor: '#d0bfff' } } }))
+        expect(reactionsIn(await storedLobby(st, b, 'n1'))).toEqual([reactionKey('up', 'alice')])
+        // an undelete brings the note's own reactions back with it (they are the tombstone's, not a write)
+        const held = structuredClone(a.confirmed.get('n2') as Record<string, unknown>)
+        const heldT = structuredClone(a.confirmed.get('n2.t') as Record<string, unknown>)
+        await a.push([
+          a.patchOp('n2', { g: { life: { isDeleted: true } } }),
+          a.patchOp('n2.t', { g: { life: { isDeleted: true } } }),
+        ])
+        const back = await a.push([
+          { k: 'c', el: { ...held, version: (held.version as number) + 2 } },
+          { k: 'c', el: { ...heldT, version: (heldT.version as number) + 2 } },
+        ])
+        expect(back.r.every((r) => r.ok)).toBe(true)
+        expect(reactionsIn(await storedLobby(st, b, 'n2'))).toEqual([reactionKey('clap', 'alice')])
+        await st.converged(b, [a, bob])
+      } finally {
+        await st.dispose()
+      }
+    }
   })
 })
