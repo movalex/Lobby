@@ -71,8 +71,9 @@ import {
   RESUME_FROM_CACHE,
 } from '../sync/adapter/snapshot-cache.ts'
 import { LobbyEngineCore } from '../sync/core/engine.ts'
-import { CHUNKED_APPLY, DIFF_APPLY, setDevChecks } from '../sync/flags.ts'
+import { CHUNKED_APPLY, DIFF_APPLY, setDevChecks, WORKER_DECODE } from '../sync/flags.ts'
 import { bump } from '../sync/headless/scene.ts'
+import { createSnapshotDecoder, type SnapshotDecoder } from '../sync/transport/snapshot-decoder.ts'
 import { connectQuery, createSocketTransport, type SocketTransport } from '../sync/transport/socket.ts'
 import type { OfflineQueueStore, SaveStatus, SceneAdapter, SceneElement } from '../sync/types.ts'
 import { IDLE_GESTURE } from '../sync/types.ts'
@@ -172,6 +173,8 @@ export class LobbyBoardSession {
   readonly settings: SettingsStore
   readonly tab: string
   readonly transport: SocketTransport
+  /** N1-1 (wave N): where this session's snapshot frames are decoded (a module Worker, or the main thread) */
+  private readonly decoder: SnapshotDecoder
   readonly core: LobbyEngineCore
   readonly lease: LeaseClient
   readonly input: CanvasInput
@@ -285,7 +288,15 @@ export class LobbyBoardSession {
       origin: location,
     })
     this.detach.push(() => this.tickets.cancel())
+    // N1-1: the snapshot decode off the main thread (WORKER_DECODE), its worker ended with this session
+    this.decoder = createSnapshotDecoder({
+      worker: WORKER_DECODE,
+      onDecoded: (side) => countUsage(`open.decode:${side}`),
+    })
+    const decoder = this.decoder
+    this.detach.push(() => decoder.dispose())
     this.transport = createSocketTransport({
+      decoder,
       // the tab id and, since CONTRACTS_REV 12, this build's revision (socket.ts connectQuery)
       url: async () => `${await this.tickets.uri()}&${connectQuery(this.tab)}`,
       // L7: the ticket goes in the handshake's Sec-WebSocket-Protocol, never in the socket URL

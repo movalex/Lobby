@@ -236,3 +236,45 @@ describe('a CLOSING notice makes the close that follows terminal (SMK-2, CONTRAC
     expect(t.attempts).toBe(1)
   })
 })
+
+// N1-1 (wave N): the snapshot frame's decode is handed to a decoder (a module worker's, ./snapshot-decoder.ts) and
+// awaited on the same in-order chain: whatever the decode takes, the frames behind it are delivered after it.
+describe('a slow snapshot decode keeps arrival order (N1-1)', () => {
+  it('frames after a snapshot are delivered after it, in order; a reset welcome warms the decoder', async () => {
+    FakeSocket.all = []
+    let release: (() => void) | null = null
+    let warmed = 0
+    const decoder = {
+      warm: () => {
+        warmed++
+      },
+      decode: (_bytes: Uint8Array) =>
+        new Promise<never>((resolve) => {
+          release = () =>
+            resolve({ type: 'snapshot', epoch: 'e', clock: 1, horizon: 0, elements: [], doc: {} } as never)
+        }),
+    }
+    const got: string[] = []
+    const t = createSocketTransport({
+      url: () => 'ws://x/connect/b',
+      WebSocketImpl: FakeSocket,
+      heartbeatMs: 0,
+      decoder,
+    })
+    t.onMessage((m) => got.push(m.type))
+    t.connect()
+    await flush()
+    const s = FakeSocket.all[0] as FakeSocket
+    s.open()
+    s.onmessage?.({ data: new Uint8Array([1, 2, 3]).buffer })
+    s.receive({ type: 'contracts', rev: 12 })
+    s.receive({ type: 'changes', clock: 2, ops: [] })
+    await flush()
+    expect(got).toEqual([])
+    ;(release as unknown as () => void)()
+    await flush()
+    expect(got).toEqual(['snapshot', 'contracts', 'changes'])
+    expect(warmed).toBe(0)
+    t.close()
+  })
+})

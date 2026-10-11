@@ -2324,7 +2324,7 @@ export class LobbyEngineCore implements EngineCore {
       this.adoptedLost.size === 0
     this.afterWelcome(this.epochReset ? null : { snapshotClock: frame.clock, before }, {
       chunk,
-      then: () => {
+      after: () => {
         if (this.welcome) this.emit({ kind: 'welcome', welcome: this.welcome })
       },
     })
@@ -2337,7 +2337,7 @@ export class LobbyEngineCore implements EngineCore {
    */
   private afterWelcome(
     reset: { snapshotClock: number; before: number } | null,
-    o: { readonly chunk?: boolean; readonly then?: () => void } = {},
+    o: { readonly chunk?: boolean; readonly after?: () => void } = {},
   ): void {
     this.resyncing = false
     // N1-3: a reset snapshot (same epoch) over a scene that shows a copy already: the warm open's painted cache (of
@@ -2414,7 +2414,7 @@ export class LobbyEngineCore implements EngineCore {
     // (an element only a held lost push carries, e.g. an adopted queue's create, waits for its decision)
     for (const id of this.current.keys())
       if (!this.confirmedMap.has(id) && !this.tracked.has(id) && !this.inflightHas(id)) this.vanish.add(id)
-    const tail = () => this.welcomeTail(o.then)
+    const tail = () => this.welcomeTail(o.after)
     if (reset !== null || this.epochReset) this.lastResetApply = diff ? 'diff' : 'full'
     // N1-4: chunked, the tail (the pushes, Saved, the welcome event) waits for the last chunk
     if (this.applyScene(all, { diff, chunked: o.chunk ? tail : undefined })) return
@@ -2422,7 +2422,7 @@ export class LobbyEngineCore implements EngineCore {
   }
 
   /** The rest of a welcome once its scene is installed (after the last chunk of a chunked install). */
-  private welcomeTail(then?: () => void): void {
+  private welcomeTail(after?: () => void): void {
     // CONTRACTS_REV 11 (wave D2): on a reconnect whose room is expected to say its revision, what goes out
     // now waits for that `contracts` frame (right behind this welcome and its snapshot and catch-up), so its
     // pushes carry receipt ids. Before, a reconnect's replays went out with none, and when that socket dropped
@@ -2433,7 +2433,7 @@ export class LobbyEngineCore implements EngineCore {
     this.retryDelay = 0
     this.updateSaved()
     this.emit({ kind: 'confirmed' })
-    then?.()
+    after?.()
   }
 
   /** A welcome's tail: everything pushable, the lease messages queued behind it, then the stale releases. */

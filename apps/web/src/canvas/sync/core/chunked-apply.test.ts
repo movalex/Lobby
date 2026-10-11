@@ -6,7 +6,6 @@
 import { hashElements } from '@draftroom/canvas-schema/hash'
 import { CONTRACTS_REV } from '@draftroom/canvas-schema/protocol'
 import { describe, expect, it } from 'vitest'
-import { bump } from '../headless/scene.ts'
 import { type CachedPage, openFromCache } from '../testing/cached.ts'
 import { arrow, binding, frame, note, rect, text } from '../testing/elements.ts'
 import { stored } from '../testing/fakeRoom.ts'
