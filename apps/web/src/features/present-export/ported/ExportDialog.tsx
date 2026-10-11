@@ -420,7 +420,7 @@ export function ExportDialog({
       // the frames' pages, then the optional report pages
       const extra = reportSpecs()
       const all = [...pdfPages, ...extra.specs]
-      const blob = await renderPdf(canvas, all, {
+      const { blob } = await renderPdf(canvas, all, {
         title: boardTitle,
         lossless: prefs.lossless,
         pageFormat: prefs.pdfFormat,

@@ -8,7 +8,11 @@
 //    bounds, unpadded;
 //  - revealed vote results are drawn as on the board (./badges.ts);
 //  - a PDF can end with a vote results page and a comments appendix (RETRO-05b, ./report.ts): text pages the
-//    browser draws (any script, as a page title is) with the same searchable text layer as a frame's page.
+//    browser draws (any script, as a page title is) with the same searchable text layer as a frame's page;
+//  - wave N (N6-3/N6-4): a PDF's frame pages can be VECTOR pages (`pagesKind: 'vector'`): the frame's SVG with
+//    `fonts: 'names'` and its images as display copies, drawn in the PDF worker with embedded subsets of Lobby's
+//    fonts (../vector/vector-page.ts). A frame the vector drawing cannot reproduce faithfully is drawn as today's
+//    image page instead, and the result names those pages (`imagePages`).
 // Hide note authors (RETRO-03a; 3f's `workshopSettingsOf(canvas).hideNoteAuthors`) needs nothing here:
 // notes on the new canvas draw no author name (CR-3F-4), exports never include overlays, and the engine's
 // exports embed no scene data (canvas/export/scene.ts `exportEmbedScene: false`), so the server's
@@ -185,6 +189,12 @@ export async function renderPng(
   return pngFrom(await bitmap(canvas, t, o), opts.scale)
 }
 
+/** An exported SVG's drawn size (its viewBox). */
+function svgSize(svg: string): { width: number; height: number } {
+  const m = /viewBox="\s*[\d.e+-]+[\s,]+[\d.e+-]+[\s,]+([\d.e+-]+)[\s,]+([\d.e+-]+)/.exec(svg)
+  return { width: Number(m?.[1] ?? 0), height: Number(m?.[2] ?? 0) }
+}
+
 export async function renderSvg(
   canvas: LobbyCanvas,
   t: ImageTarget,
@@ -199,9 +209,7 @@ export async function renderSvg(
   let svg = await canvas.export.svg(o)
   const results = exportResults(canvas)
   if (results) {
-    const m = /viewBox="\s*[\d.e+-]+[\s,]+[\d.e+-]+[\s,]+([\d.e+-]+)[\s,]+([\d.e+-]+)/.exec(svg)
-    const size = { width: Number(m?.[1] ?? 0), height: Number(m?.[2] ?? 0) }
-    const origin = originOf(canvas, t, o, size)
+    const origin = originOf(canvas, t, o, svgSize(svg))
     const badges = exportBadges(canvas, new Set(targetElements(canvas, t).map((e) => e.id)), results)
     svg = svgWithBadges(svg, shiftBadges(badges, origin))
   }
@@ -258,6 +266,8 @@ export function pageTexts(
   canvas: LobbyCanvas,
   members: readonly CanvasElement[],
   origin: Bounds,
+  /** wave N (N6-3): only the file cards' names (a vector page's text is real text already) */
+  opts: { cardsOnly?: boolean } = {},
 ): PdfTextItem[] {
   const order = new Map(canvas.items().map((e, i) => [e.id, i]))
   const boxes: { el: CanvasElement; b: Bounds; order: number }[] = []
@@ -281,6 +291,7 @@ export function pageTexts(
     if (covered(x)) continue
     const base = { x: x.b.x - origin.x, y: x.b.y - origin.y, w: x.b.width, h: x.b.height }
     if (x.el.type === 'text') {
+      if (opts.cardsOnly) continue
       const t = x.el as CanvasElement & {
         originalText?: string
         text?: string
@@ -444,6 +455,29 @@ async function reportPng(page: ReportPage): Promise<Uint8Array> {
  * plus a hidden text layer. pdf-lib loads with the first PDF (§2.2: a lazy import, in a worker when it
  * can). Yields between pages and checks `signal`.
  */
+/** How the frames' pages are drawn: vector (N6-3, sharp, real text) or images (today's raster pages). */
+export type PdfPagesKind = 'vector' | 'image'
+
+export interface PdfResult {
+  readonly blob: Blob
+  readonly pageCount: number
+  /**
+   * Vector exports: the 1-based numbers of the frame pages drawn as images instead (N6-4: effects the vector
+   * drawing does not reproduce, a font that could not be embedded…), with why. Empty for an image export.
+   */
+  readonly imagePages: readonly { readonly page: number; readonly reason: string }[]
+}
+
+/** A frame's SVG for its vector page: fonts by name only (the worker embeds them), images as display copies. */
+async function vectorSvg(canvas: LobbyCanvas, t: ImageTarget, o: ExportOptions): Promise<string> {
+  const opts: ExportOptions = { ...o, background: true, theme: 'light', files: 'display', fonts: 'names' }
+  const svg = await canvas.export.svg(opts)
+  const results = exportResults(canvas)
+  if (!results) return svg
+  const badges = exportBadges(canvas, new Set(targetElements(canvas, t).map((e) => e.id)), results)
+  return svgWithBadges(svg, shiftBadges(badges, originOf(canvas, t, opts, svgSize(svg))))
+}
+
 export async function renderPdf(
   canvas: LobbyCanvas,
   pages: readonly PdfPageSpec[],
@@ -451,11 +485,15 @@ export async function renderPdf(
     title: string
     lossless: boolean
     pageFormat?: PdfPageFormat
+    /** default 'image' (today's pages) */
+    pagesKind?: PdfPagesKind
     signal?: AbortSignal
     onProgress?(p: PdfProgress): void
   },
-): Promise<Blob> {
+): Promise<PdfResult> {
   const pageFormat = opts.pageFormat ?? 'fit'
+  const vector = opts.pagesKind === 'vector'
+  const imagePages: { page: number; reason: string }[] = []
   const [{ createPdfBuilderOffThread }, { bookmarkTitle, isWinAnsi }] = await Promise.all([
     import('../pdf-client.ts'),
     import('../pdf-build.ts'),
@@ -507,6 +545,26 @@ export async function renderPdf(
       }
       if (!bounds || bounds.width <= 0 || bounds.height <= 0) continue // deleted meanwhile
       const plan = planPdfPage(bounds.width, bounds.height, pageFormat)
+      if (vector) {
+        const title = bookmarkTitle(spec.title, builder.pageCount)
+        const headerImage = isWinAnsi(title) ? null : await titleImage(title, plan)
+        const svg = await vectorSvg(canvas, target, o).catch(() => null)
+        if (opts.signal?.aborted) throw new ExportCancelled()
+        const outcome = svg
+          ? await builder.addVectorPage({
+              title,
+              format: pageFormat,
+              widthPx: bounds.width,
+              heightPx: bounds.height,
+              svg,
+              ...(headerImage ? { headerImage } : {}),
+              texts: pageTexts(canvas, targetElements(canvas, target), bounds, { cardsOnly: true }),
+            })
+          : { vector: false as const, reason: 'the frame’s drawing could not be made' }
+        if (outcome.vector) continue
+        // N6-4: this page as an image (today's page), and the dialog says so
+        imagePages.push({ page: builder.pageCount + 1, reason: outcome.reason })
+      }
       const raster = pdfRasterScale(bounds.width, bounds.height, PDF_RASTER, plan.ptPerPx)
       const format = opts.lossless ? 'png' : 'jpeg'
       const c = await bitmap(canvas, target, {
@@ -533,8 +591,9 @@ export async function renderPdf(
     if (builder.pageCount === 0) throw new Error('Nothing to export: the frames were removed.')
     opts.onProgress?.({ done: total, total })
     await nextTask()
+    const pageCount = builder.pageCount
     const bytes = await builder.finish()
-    return new Blob([bytes as BlobPart], { type: 'application/pdf' })
+    return { blob: new Blob([bytes as BlobPart], { type: 'application/pdf' }), pageCount, imagePages }
   } finally {
     builder.dispose()
   }
