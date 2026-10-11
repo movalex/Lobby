@@ -621,7 +621,6 @@ const ReactionRow = memo(function ReactionRow(p: RowProps) {
           className="dr-wk-nr__add"
           data-testid="note-reaction-add"
           aria-label={`Add a reaction to ${label}`}
-          aria-haspopup="true"
           aria-expanded={p.pickerOpen}
           onClick={() => addRef.current && p.onClickOpen(row.id, addRef.current)}
           onFocus={(e) => {
@@ -660,7 +659,7 @@ function Names(props: {
   }, [canvas, code, props.noteId, props.me, props.hide, ctx.me.user])
   return (
     <span id={props.id} role="tooltip" className="dr-wk-nr__tip" data-testid="note-reaction-names">
-      <strong>{REACTION_CODE_LABELS[code]}</strong> {text}
+      <strong>{REACTION_CODE_LABELS[code]}:</strong> {text}
     </span>
   )
 }
@@ -791,7 +790,13 @@ export function ReactionPicker({
       onKeyDown={keys}
       onBlur={(e) => {
         const next = e.relatedTarget as Element | null
-        if (state.via === 'focus' && !next?.closest('[data-reaction-surface]')) onClose(false)
+        if (next?.closest('[data-reaction-surface]')) return
+        // opened by hovering or focusing the row: it goes with them. Opened on purpose (a click, the keyboard): it goes when
+        // the keyboard moves on to something else (Tab); the bar's button toggles it itself, and a press elsewhere is
+        // `Layer`'s pointerdown. No next element is the window losing focus, or a pick unmounting the button: it stays.
+        if (state.via === 'focus') onClose(false)
+        else if (state.via === 'click' && next && !next.closest('[data-testid="selection-reactions"]'))
+          onClose(false)
       }}
     >
       <span id={heading} className="dr-sr-only">
@@ -865,7 +870,6 @@ export function ReactionsBarButton({ ctx, selection }: { ctx: Ctx; selection: re
       className="dr-cux-selbar__btn"
       data-testid="selection-reactions"
       aria-label="React with an emoji"
-      aria-haspopup="true"
       aria-expanded={open}
       title="React with an emoji"
       onMouseDown={(e) => e.preventDefault()}

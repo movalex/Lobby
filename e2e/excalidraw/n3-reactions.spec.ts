@@ -169,6 +169,8 @@ test('who reacted: names on hover and focus, Someone for a person this tab never
   await expect(names).toBeVisible()
   await expect(names).toContainText('Celebrate')
   await expect(names).toContainText(`You and ${b.name}`)
+  // the label and the names are told apart (a colon: read aloud they are not one run of words)
+  await expect(names).toContainText(`Celebrate: You and ${b.name}`)
   expect(await names.textContent()).not.toContain('usr_')
   // the chip points at the list for assistive technology
   await expect(chip).toHaveAttribute('aria-describedby', /.+/)
@@ -322,6 +324,14 @@ test('the selection bar’s React button, the context menu’s React… and the 
   await a.page.keyboard.press('Escape')
   await expect(reactionPicker(a.page)).toHaveCount(0)
   await expect(add).toBeFocused()
+  // Tab out of a picker opened on purpose closes it: the keyboard has moved on (it does not stay open behind it)
+  await a.page.keyboard.press('Enter')
+  await expect(reactionPicker(a.page)).toBeVisible()
+  for (let i = 0; i < 12 && (await reactionPicker(a.page).count()) > 0; i++)
+    await a.page.keyboard.press('Tab')
+  await expect(reactionPicker(a.page)).toHaveCount(0)
+  await expect(add).toHaveAttribute('aria-expanded', 'false')
+  expect(await add.getAttribute('aria-haspopup')).toBeNull()
   await expect.poll(async () => stored(stack, board, N2)).toEqual({ heart: [a.id], up: [a.id] })
 })
 
