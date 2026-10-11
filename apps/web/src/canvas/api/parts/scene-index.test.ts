@@ -7,6 +7,7 @@ import type { CanvasElement, CanvasEventMap, CanvasPort } from '../../port.ts'
 import { createLobbyCanvas } from '../impl.ts'
 import { createFeatureRegistries } from '../registries.ts'
 import {
+  absorbIntoSceneIndex,
   hasLobbyKeyPrefix,
   itemsCallerOf,
   lobbyKindOf,
@@ -70,6 +71,10 @@ function scenePort(initial: CanvasElement[]) {
     apply(next: CanvasElement[], ids: string[]) {
       scene = next
       for (const l of listeners) l(ids)
+    },
+    /** the scene changes and nobody is told yet (an engine core's apply, before the engine's onChange) */
+    set(next: CanvasElement[]) {
+      scene = next
     },
   }
 }
@@ -274,6 +279,86 @@ describe('canvas.index is incremental and equals a full rebuild (N1-6)', () => {
     canvas.index.onChanged(() => heard.push(ids(canvas.index.notes())))
     s.apply([...SCENE, el('n4', 'stickynote', { index: 'a1' })], ['n4'])
     expect(heard).toEqual([['n1', 'n2', 'n4']])
+    dispose()
+  })
+})
+
+// The review of N1-6: `canvas.on('change')` handlers read `canvas.index` synchronously; the index must answer for the
+// very batch they hear. The board page's change stream is a port `changed` listener registered after the LobbyCanvas
+// (local batches), and remote batches (the engine core's `applied`) are absorbed first (absorbIntoSceneIndex).
+describe('canvas.index answers for the batch a change listener hears (N1-6, the review)', () => {
+  const answers = (
+    canvas: ReturnType<typeof createLobbyCanvas>['canvas'],
+    items: () => readonly CanvasElement[],
+  ) => ({
+    index: {
+      notes: ids(canvas.index.notes()),
+      frame: ids(canvas.index.byFrame('f1')),
+      react: ids(canvas.index.withLobbyKeyPrefix('react:')),
+    },
+    filter: {
+      notes: ids(items().filter((e) => e.type === 'stickynote')),
+      frame: ids(items().filter((e) => e.frameId === 'f1')),
+      react: ids(items().filter((e) => hasLobbyKeyPrefix(e, 'react:'))),
+    },
+  })
+
+  it('a local batch: the page’s listener, registered after the LobbyCanvas, reads an index that has it', () => {
+    const s = scenePort(SCENE)
+    const { canvas, dispose } = createLobbyCanvas({ port: s.port, registries: createFeatureRegistries() })
+    // built before the batches (a feature's overlay read it at mount)
+    canvas.index.notes()
+    const seen: ReturnType<typeof answers>[] = []
+    // the board page's change stream (session.ts), after createLobbyCanvas
+    const off = s.port.on('changed', () => seen.push(answers(canvas, s.port.items)))
+    let scene = SCENE
+    for (let i = 0; i < 3; i++) {
+      scene = [
+        ...scene,
+        el(`m${i}`, 'stickynote', {
+          index: `a${i + 1}`,
+          frameId: 'f1',
+          ...lobby({ 'react:up:usr_c': true }),
+        }),
+      ]
+      s.apply(scene, [`m${i}`])
+    }
+    expect(seen).toHaveLength(3)
+    for (const a of seen) expect(a.index).toEqual(a.filter)
+    expect(seen.at(-1)?.index.notes).toEqual(['n1', 'n2', 'm0', 'm1', 'm2'])
+    off()
+    dispose()
+  })
+
+  it('a remote batch (the core applied it; the port tells later): absorbed first, the index has it at once', () => {
+    const s = scenePort(SCENE)
+    const { canvas, dispose } = createLobbyCanvas({ port: s.port, registries: createFeatureRegistries() })
+    canvas.index.notes()
+    canvas.index.byFrame('f1')
+    canvas.index.withLobbyKeyPrefix('react:')
+    const next = [
+      ...SCENE.filter((e) => e.id !== 'n1'),
+      el('n1', 'stickynote', { isDeleted: true }),
+      el('p1', 'stickynote', { index: 'a5', frameId: 'f1', ...lobby({ 'react:up:usr_d': true }) }),
+    ]
+    s.set(next)
+    // before the absorb: the index still answers for the scene before the apply (what the review reproduced)
+    expect(ids(canvas.index.notes())).toEqual(['n1', 'n2'])
+    absorbIntoSceneIndex(s.port, ['n1', 'p1'])
+    const a = answers(canvas, s.port.items)
+    expect(a.index).toEqual(a.filter)
+    expect(a.index.notes).toEqual(['n2', 'p1'])
+    // the port's `changed` for the same ids, later: idempotent
+    s.apply(next, ['n1', 'p1'])
+    const b = answers(canvas, s.port.items)
+    expect(b.index).toEqual(b.filter)
+    // an index nobody built yet: nothing to absorb (its build reads the scene)
+    const s2 = scenePort(SCENE)
+    const c2 = createLobbyCanvas({ port: s2.port, registries: createFeatureRegistries() })
+    s2.set(next)
+    absorbIntoSceneIndex(s2.port, ['n1', 'p1'])
+    expect(ids(c2.canvas.index.notes())).toEqual(['n2', 'p1'])
+    c2.dispose()
     dispose()
   })
 })

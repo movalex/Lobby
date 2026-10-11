@@ -109,6 +109,7 @@ import type {
   TransportState,
 } from '../types.ts'
 import { IDLE_GESTURE } from '../types.ts'
+import { noteSceneWalk } from '../walks.ts'
 import {
   buildPatch,
   clone,
@@ -1445,6 +1446,7 @@ export class LobbyEngineCore implements EngineCore {
   private unseen(elements: readonly SceneElement[]): boolean {
     if (elements.length === 0) return false
     if (elements.length !== this.last.size) return true
+    noteSceneWalk('sync.unseen')
     for (const el of elements) {
       const k = this.known.get(el.id)
       if (!k || k.v !== el.version || k.vn !== el.versionNonce) return true
@@ -1463,6 +1465,9 @@ export class LobbyEngineCore implements EngineCore {
   }
 
   private scanNow(snapshot: SceneSnapshot): void {
+    // N1-6: the scan compares every element's version (Excalidraw's onChange names no changed element) and rebuilds
+    // the core's id map: one walk of the scene per scene change, counted (dev builds) for the drag spec's table
+    noteSceneWalk('sync.scan')
     const wasGesture = gestureActive(this.gesture)
     const prevEditing = this.gesture.editingTextElementId
     this.gesture = snapshot.gesture
@@ -1903,6 +1908,8 @@ export class LobbyEngineCore implements EngineCore {
   }
 
   private applySceneNow(ids: ReadonlySet<string>, chunked: (() => void) | undefined): boolean {
+    // N1-6: an apply rebuilds the whole element array (and the core's id map) around the ids it changes
+    noteSceneWalk('sync.apply')
     const hold = gestureActive(this.gesture) ? this.gestureIds() : new Set<string>()
     const out: SceneElement[] = []
     const seen = new Set<string>()

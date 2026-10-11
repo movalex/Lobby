@@ -42,6 +42,7 @@ import type {
   ScenePoint,
 } from '../api/lobby-canvas.ts'
 import {
+  absorbIntoSceneIndex,
   itemsCallerOf,
   noteSceneWalk,
   resetSceneWalks,
@@ -656,7 +657,11 @@ export class LobbyBoardSession {
     } else if (e.kind === 'applied') {
       const api = this.api
       if (api) {
-        const byId = new Map(api.getSceneElementsIncludingDeleted().map((x) => [x.id, x]))
+        // N1-6: lookups in the engine's own map (no whole-scene Map per apply: a peer's drag moves arrive here)
+        const byId = api.getSceneElementsMapIncludingDeleted()
+        // the scene index answers for these ids before a `change` listener reads it (the port's `changed` for them
+        // comes only with the engine's next onChange)
+        if (this.port) absorbIntoSceneIndex(this.port, e.ids)
         this.emitChange(this.classifier.applied(e.ids, (id) => byId.get(id) as never))
       }
       this.boardInput?.invalidateHover()
@@ -874,6 +879,13 @@ export class LobbyBoardSession {
    * up by id (a hit test of the whole scene per pointer move cost a quarter of a 10k board's drag frames: the hover
    * readers re-ask after every change batch). Otherwise the canvas's own hit test, as before.
    */
+  /**
+   * The board input's hit test (`hovered()`, the input stream's `hit`). N1-6: during a drag it is the topmost
+   * (highest index) selected element whose axis-aligned bounds hold the point, read from the drag's own selection
+   * instead of a hit test of the whole scene per move: what is being dragged, not necessarily what lies under the
+   * pointer (an unselected element above it, or the empty corner of a rotated box's bounds, still answer the
+   * dragged element). Outside a drag it is the engine's precise hit test.
+   */
   private pointerHit(p: ScenePoint): ReturnType<LobbyCanvas['hitTest']> {
     const g = this.gestureNow
     const canvas = this.canvas
@@ -940,8 +952,10 @@ export class LobbyBoardSession {
       bump: (el, patch) => bump(el, patch),
       install: (elements) => {
         // what undo installs is `history` in the change stream (marked before the scene reports it)
-        const current = new Map(api.getSceneElementsIncludingDeleted().map((e) => [e.id, e.version]))
-        this.classifier.markHistory(elements.filter((e) => current.get(e.id) !== e.version).map((e) => e.id))
+        const current = api.getSceneElementsMapIncludingDeleted()
+        this.classifier.markHistory(
+          elements.filter((e) => current.get(e.id)?.version !== e.version).map((e) => e.id),
+        )
         api.updateScene({ elements: elements as never, captureUpdate: CaptureUpdateAction.NEVER })
       },
       // F11: an undo or a redo re-selects what its step was made with (the port leaves out hidden ids)
@@ -1047,6 +1061,9 @@ export class LobbyBoardSession {
           !g.multiElementId
         // a camera move changes no element and no gesture: no step to record, no element scan (CR 3b-8)
         if ((changed.elements || changed.gesture) && idle && !g.editingTextElementId) undo.boundary()
+        // N1-6: the port's version scan (port-impl.ts afterSceneChange: every element's version, once per element
+        // change; Excalidraw's onChange names none), counted here at its one caller
+        if (changed.elements) noteSceneWalk('port.scan')
         port.afterSceneChange(changed.elements)
         const s = api.getAppState()
         const box = `${s.width}x${s.height}@${s.offsetLeft},${s.offsetTop}`
@@ -1074,15 +1091,6 @@ export class LobbyBoardSession {
           this.concern('tool')
         }
         this.concern('pointer')
-      }),
-    )
-    // the change stream (after the scan) and undo's availability
-    offs.push(
-      port.on('changed', (ids) => {
-        const byId = new Map(api.getSceneElementsIncludingDeleted().map((x) => [x.id, x]))
-        for (const c of this.classifier.scanned(ids, (id) => byId.get(id) as never)) this.emit('change', c)
-        this.concern('history')
-        this.boardInput?.invalidateHover()
       }),
     )
     // 2. spike B's input layer (allowlist, guard, double-click and double-tap, clipboard and drop)
@@ -1195,6 +1203,18 @@ export class LobbyBoardSession {
     offs.push(this.settings.subscribe(() => this.concern('settings')))
     offs.push(this.settings.subscribe(() => this.applyFocusFrames(api)))
     this.handle = createLobbyCanvas({ port, registries: this.registries, board: handles })
+    // the change stream (after the scan) and undo's availability. Registered after the LobbyCanvas, whose scene index
+    // listens to the same `changed` (port listeners run in registration order): a `change` listener reads an index
+    // that already answers for its batch (N1-6)
+    offs.push(
+      port.on('changed', (ids) => {
+        // N1-6: lookups in the engine's own map (no whole-scene Map per change: a drag's every move comes here)
+        const byId = api.getSceneElementsMapIncludingDeleted()
+        for (const c of this.classifier.scanned(ids, (id) => byId.get(id) as never)) this.emit('change', c)
+        this.concern('history')
+        this.boardInput?.invalidateHover()
+      }),
+    )
     // 3b: the level-of-detail pass for zoomed-out views (docs/EXCALIDRAW-MIGRATION.md §8.5)
     const lod = installLod({
       api,

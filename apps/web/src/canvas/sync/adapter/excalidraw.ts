@@ -16,6 +16,7 @@ import type { ExcalidrawElement } from '@excalidraw/excalidraw/element/types'
 import type { AppState, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import type { LobbyEngineCore } from '../core/engine.ts'
 import type { GestureState, SceneAdapter, SceneElement } from '../types.ts'
+import { noteSceneWalk } from '../walks.ts'
 
 type GestureAppState = Pick<
   AppState,
@@ -120,6 +121,8 @@ export function attachEngine(
   return api.onChange((_elements, appState) => {
     const elements = api.getSceneElementsIncludingDeleted() as unknown as readonly SceneElement[]
     const gesture = gestureOf(appState)
+    // N1-6: one loop over every element's version per onChange (a camera frame included), counted in dev builds
+    noteSceneWalk('sync.fingerprint')
     const fp = fingerprintOf(elements)
     const changed = !sameFingerprint(last, fp)
     last = fp
