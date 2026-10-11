@@ -96,13 +96,14 @@ function paintOrder(elements: readonly El[]): El[] {
 }
 
 /**
- * The element without its reaction keys (`customData.lobby` `react:*`, wave N). Until the sync takes
- * reactions (WS2, N2-4: the identity rules, the CONTRACTS_REV 13 bump) a board stores none, and seeded content
- * (an import, a duplicate, a restore, a template) is the one path that skips merge's identity checks, so
- * reaction keys never enter a board from it: they would be planted under other people's uids, and a rolled-back
- * sync refuses every edit of an element that carries one. An emptied `lobby` (and then `customData`) is left out.
- * WS2 (N2-4) decides whether content from this deployment (a duplicate, a restore) may keep them once the room
- * checks their identity; an archive import never keeps them (apps/api archive-v2.ts importCustomData).
+ * The element without its reaction keys (`customData.lobby` `react:*`, wave N, CONTRACTS_REV 13). Seeded content
+ * (an import, a duplicate, a restore as new, a template) is the one path that skips merge's identity checks
+ * (custom-data.ts: the writer's own uid, sticky notes only), so reaction keys never enter a board from it, from
+ * this deployment or another (decided in N2-4): a new board is a copy, and the key's own duplicate rule is
+ * `strip` (canvas-schema custom-data.ts), as a pasted or duplicated note's; a reaction is someone's mark on THAT
+ * board's note, which the copy's people never made; and a rolled-back sync refuses every edit of an element that
+ * carries one. An archive import drops them on the api side too (apps/api archive-v2.ts importCustomData). An
+ * emptied `lobby` (and then `customData`) is left out.
  */
 function withoutReactionKeys(el: El): El {
   const custom = el.customData

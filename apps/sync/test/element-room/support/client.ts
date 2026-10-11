@@ -42,6 +42,8 @@ export interface ClientOptions {
   readonly epoch?: string | null
   /** the elements this client already holds (a reconnect with `since`) */
   readonly confirmed?: ReadonlyMap<string, El>
+  /** more connect URL parameters, e.g. `{ rev: '13' }` (canvas-schema CONNECT_REV_PARAM; none: a rev-11 client) */
+  readonly query?: Readonly<Record<string, string>>
 }
 
 export const ticketFor = (boardId: string, user: string, role: TicketRole = 'editor', guest = false) =>
@@ -100,7 +102,7 @@ export class RawClient {
     const ticket =
       opts.ticket ?? ticketFor(opts.boardId, opts.user, opts.role ?? 'editor', opts.guest ?? false)
     const target = boardSocketTarget(
-      `${opts.wsUrl}/connect/${opts.boardId}?sessionId=${encodeURIComponent(this.tab)}`,
+      `${opts.wsUrl}/connect/${opts.boardId}?${new URLSearchParams({ ...opts.query, sessionId: this.tab })}`,
       ticket,
       opts.ticketIn,
     )

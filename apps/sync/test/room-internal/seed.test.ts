@@ -6,8 +6,11 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { isValidIndexKey } from '@draftroom/canvas-schema/engine'
 import { checkInvariants } from '@draftroom/canvas-schema/invariants'
+import { CONNECT_REV_PARAM, CONTRACTS_REV } from '@draftroom/canvas-schema/protocol'
+import { reactionKey } from '@draftroom/canvas-schema/reactions'
 import { draftroomSchema } from '@draftroom/tldraw-import/schema'
 import { describe, expect, it } from 'vitest'
+import { remapElements } from '../../../../packages/board-ops/src/elements/remap.ts'
 import { label, note, rect } from '../element-room/support/elements.ts'
 import { newBoardId, useElementHarness } from '../element-room/support/stack.ts'
 import { docRecord, pageRecord, note as tlNote } from '../migrate/tl-records.ts'
@@ -93,7 +96,7 @@ describe('seed (Excalidraw engine)', () => {
     expect(snap.elements[0]?.customData).toEqual(kept.customData)
   })
 
-  it('wave N foundation: stores no reaction key from seeded content (not on a note, not under anyone)', async () => {
+  it('wave N (decided in N2-4): stores no reaction key from seeded content (not on a note, not under anyone)', async () => {
     const st = await h.stack()
     const b = newBoardId()
     const tag = { 'tag:urgent': { name: 'Urgent', color: 'red' } }
@@ -114,6 +117,38 @@ describe('seed (Excalidraw engine)', () => {
     const odd = note('Q', { customData: { lobby: { 'react:nope:usr_x': true, 'react:up:': 'yes' } } })
     expect((await seed(st, b2, [odd])).status).toBe(201)
     expect((await st.snapshot(b2)).elements[0]?.customData).toBeUndefined()
+  })
+
+  it('wave N: a duplicate of a reacted board (its live elements, kept ids or remapped by board-ops) carries no reaction', async () => {
+    const st = await h.stack()
+    const a = newBoardId()
+    expect((await seed(st, a, sampleBoard())).status).toBe(201)
+    const ann = await st.client({
+      boardId: a,
+      user: 'ann',
+      query: { [CONNECT_REV_PARAM]: String(CONTRACTS_REV) },
+    })
+    const pv = (id: string) => ann.confirmed.get(id)?.version ?? 1
+    const ack = await ann.push([
+      { k: 'p', id: 'N1', pv: pv('N1'), c: { [reactionKey('up', 'ann')]: true } },
+      { k: 'p', id: 'N2', pv: pv('N2'), c: { [reactionKey('heart', 'ann')]: true } },
+    ])
+    expect(ack.r.every((r) => r.ok)).toBe(true)
+    const live = (await st.snapshot(a)).elements.filter((e) => !e.isDeleted)
+    expect(JSON.stringify(live)).toContain('react:')
+    // the api's duplicate (the live board as it is, kept ids) and a copy through board-ops (the registry's
+    // duplicate rule: a reaction key is `strip`)
+    const remapped = remapElements(live).elements
+    expect(JSON.stringify(remapped)).not.toContain('react:')
+    for (const content of [live, remapped]) {
+      const b = newBoardId()
+      expect((await seed(st, b, structuredClone(content) as never)).status).toBe(201)
+      const snap = await st.snapshot(b)
+      expect(snap.elements.length).toBe(content.length)
+      expect(JSON.stringify(snap.elements)).not.toContain('react:')
+    }
+    // the original keeps them
+    expect(JSON.stringify((await st.snapshot(a)).elements)).toContain(reactionKey('up', 'ann'))
   })
 
   it('converts tldraw records (a v1 checkpoint, a v1 archive) with the board converter', async () => {

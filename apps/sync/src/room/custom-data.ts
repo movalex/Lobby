@@ -6,8 +6,10 @@
 //  2. create-only `kind`, `ai`, `privateFrame`: only in the op that creates the element; `by` must be the
 //     writer's uid; a later change is INVALID; removal only by the `by` user (for `kind`, the creator) or
 //     an owner;
-//  3. identity-bound `plusOne:<uid>`: only where `<uid>` is the writer; an addition while a dot vote is
-//     open is VOTE_OPEN (UNAVAILABLE while the vote state is still unknown);
+//  3. identity-bound `plusOne:<uid>` and `react:<code>:<uid>` (wave N, CONTRACTS_REV 13), by the key's uid
+//     (canvas-schema reactions.ts `identityUidOf`): only where `<uid>` is the writer. A +1 added while a dot
+//     vote is open is VOTE_OPEN (UNAVAILABLE while the vote state is still unknown). A reaction never is: it
+//     goes on sticky notes only, and an owner may also remove anyone's ("Clear reactions");
 //  4. api-validated `file` (canonicalized from the file-refs answer; `versionId` must be the version in
 //     `fileId`; `name` is the client's) and `pdfPage` (derived from `fileId`'s `.p<n>`);
 //  5. free keys (`tag:*` needs its `tagDef:*` in lb_doc; the others are schema-checked only).
@@ -19,12 +21,12 @@ import {
   type LobbyServer,
   lobbyKeySpec,
   lobbyValueProblem,
-  plusOneUid,
   tagKeyOf,
 } from '@draftroom/canvas-schema/custom-data'
 import { TAG_DEF_KEY_PREFIX } from '@draftroom/canvas-schema/doc'
 import { pdfPageOf, versionIdOf } from '@draftroom/canvas-schema/limits'
 import type { RejectCode } from '@draftroom/canvas-schema/protocol'
+import { identityUidOf, isReactionKey } from '@draftroom/canvas-schema/reactions'
 import type { FileRefAnswer } from '../file-refs.ts'
 
 export interface Writer {
@@ -71,7 +73,10 @@ export function freshLobbyServer(w: Writer, now: number, text: boolean): LobbySe
 
 const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
-/** One key of a write: create (`isCreate`) or patch; `value` null removes. Returns the value to store. */
+/**
+ * One key of a write: create (`isCreate`) or patch of an element of `type`; `value` null removes. Returns the
+ * value to store.
+ */
 function checkKey(
   key: string,
   value: unknown,
@@ -79,6 +84,7 @@ function checkKey(
   isCreate: boolean,
   creatorUid: string | null,
   ctx: CustomDataContext,
+  type: string,
 ): Verdict<unknown> {
   const spec = lobbyKeySpec(key)
   if (!spec) return bad('INVALID')
@@ -100,7 +106,17 @@ function checkKey(
       return { ok: true, value }
     }
     case 'identity-bound': {
-      if (plusOneUid(key) !== w.uid) return bad('INVALID')
+      const uid = identityUidOf(key)
+      if (isReactionKey(key)) {
+        // wave N: a reaction goes on a sticky note only (a removal of one is never refused for the type)
+        if (value !== null && type !== 'stickynote') return bad('INVALID')
+        // the writer's own, added or removed; anyone's removed by an owner ("Clear reactions")
+        const mine = uid !== null && uid === w.uid
+        if (!mine && !(value === null && w.role === 'owner')) return bad('INVALID')
+        // never VOTE_OPEN: a reaction is not a vote
+        return { ok: true, value }
+      }
+      if (uid !== w.uid) return bad('INVALID')
       if (value === null) return { ok: true, value: null }
       if (key in stored) return { ok: true, value } // already there: not an addition
       if (ctx.voteOpen === null) return bad('UNAVAILABLE')
@@ -138,14 +154,16 @@ function checkKey(
 
 /**
  * Whether a patch of a LOCKED element may still write `key` (§2.4.3 step 5; CR-3F-2, CR-3b-4), by the
- * registry's `lockExempt` (canvas-schema custom-data.ts): the writer's own `plusOne:<uid>` (a +1 on a locked
- * template note, guests included), and `present` on a frame from an account (a locked slide's order and
- * skip mark). The key's class rules still apply after this (checkPatchLobby: VOTE_OPEN, another uid).
+ * registry's `lockExempt` (canvas-schema custom-data.ts): the writer's own identity-bound key (`plusOne:<uid>`, a
+ * +1 on a locked template note, and `react:<code>:<uid>`, a reaction on it, wave N; guests included), and
+ * `present` on a frame from an account (a locked slide's order and skip mark). The key's class rules still apply
+ * after this (checkPatchLobby: VOTE_OPEN, notes only). Another uid's key, an owner's "Clear
+ * reactions" included, stays LOCKED.
  */
 export function lockExemptKey(key: string, elementType: string, w: Writer): boolean {
   switch (lobbyKeySpec(key)?.lockExempt) {
     case 'own':
-      return plusOneUid(key) === w.uid
+      return identityUidOf(key) === w.uid
     case 'frame-account':
       return elementType === 'frame' && !w.guest
     default:
@@ -153,11 +171,12 @@ export function lockExemptKey(key: string, elementType: string, w: Writer): bool
   }
 }
 
-/** A create's `customData.lobby`: every key checked as written at creation. */
+/** A create's `customData.lobby` of an element of `type`: every key checked as written at creation. */
 export function checkCreateLobby(
   lobby: Readonly<Record<string, unknown>> | undefined,
   ctx: CustomDataContext,
   undeleteOf: Readonly<Record<string, unknown>> | null,
+  type: string,
 ): Verdict<Record<string, unknown>> {
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(lobby ?? {})) {
@@ -166,23 +185,24 @@ export function checkCreateLobby(
       out[k] = v
       continue
     }
-    const r = checkKey(k, v, {}, true, ctx.writer.uid, ctx)
+    const r = checkKey(k, v, {}, true, ctx.writer.uid, ctx, type)
     if (!r.ok) return r
     if (r.value !== null) out[k] = r.value
   }
   return { ok: true, value: out }
 }
 
-/** A patch's `c`: each key by its class. Returns the keys to apply (null removes). */
+/** A patch's `c` on an element of `type`: each key by its class. Returns the keys to apply (null removes). */
 export function checkPatchLobby(
   c: Readonly<Record<string, unknown>>,
   stored: Readonly<Record<string, unknown>>,
   creatorUid: string | null,
   ctx: CustomDataContext,
+  type: string,
 ): Verdict<Record<string, unknown>> {
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(c)) {
-    const r = checkKey(k, v, stored, false, creatorUid, ctx)
+    const r = checkKey(k, v, stored, false, creatorUid, ctx, type)
     if (!r.ok) return r
     out[k] = r.value
   }

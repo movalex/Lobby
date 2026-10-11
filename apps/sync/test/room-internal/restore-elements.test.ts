@@ -17,6 +17,8 @@
 import { join } from 'node:path'
 import { checkInvariants } from '@draftroom/canvas-schema/invariants'
 import { MAX_ITEMS } from '@draftroom/canvas-schema/limits'
+import { CONNECT_REV_PARAM, CONTRACTS_REV } from '@draftroom/canvas-schema/protocol'
+import { reactionKey } from '@draftroom/canvas-schema/reactions'
 import { RestoreElementsAnswer } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
 import { drDeletedDigests, tableDigest } from '../../src/room/migrate/digest.ts'
@@ -123,6 +125,47 @@ describe('restore-elements: a checkpoint’s elements back into the live board (
     // round 2: and says it wrote nothing (that clock may be a colleague's commit: there is nothing to undo)
     expect(res.wrote).toBe(true)
     expect(again.wrote).toBe(false)
+  })
+
+  it('wave N: reactions are each one’s own mark: a live note keeps the ones it has now; a re-created one comes back with the checkpoint’s', async () => {
+    const st = await h.stack()
+    const b = newBoardId()
+    expect((await seed(st, b, sampleBoard())).status).toBe(201)
+    const ann = await st.client({
+      boardId: b,
+      user: 'ann',
+      query: { [CONNECT_REV_PARAM]: String(CONTRACTS_REV) },
+    })
+    const v = (id: string) => ann.confirmed.get(id)?.version ?? 1
+    const react = (id: string, key: string, on: boolean) => ({
+      k: 'p',
+      id,
+      pv: v(id),
+      c: { [key]: on ? true : null },
+    })
+    // the checkpoint: N1 with ann's 'up', N2 with ann's 'heart'
+    await ann.push([
+      react('N1', reactionKey('up', 'ann'), true),
+      react('N2', reactionKey('heart', 'ann'), true),
+    ])
+    const cp = await copies(st, b)
+    // since then: N1's 'up' removed and a 'clap' added, N1 moved; N2 deleted
+    await ann.push([react('N1', reactionKey('up', 'ann'), false)])
+    await ann.push([react('N1', reactionKey('clap', 'ann'), true), move('N1', v('N1'), 700, 700)])
+    await ann.push([del('N2', v('N2')), del('N2.t', v('N2.t'))])
+    const res = await restore(st, b, ['N1', 'N2'], closure(cp, ['N1', 'N2']))
+    expect(res.skipped).toEqual([])
+    const { byId } = await byIdOf(st, b)
+    const reactions = (id: string) =>
+      Object.keys((byId.get(id)?.customData?.lobby ?? {}) as object).filter((k) => k.startsWith('react:'))
+    // the live note: its place from the checkpoint, its reactions as they are now (never the checkpoint's)
+    expect(byId.get('N1')?.x).toBe(cp.find((e) => e.id === 'N1')?.x)
+    expect(reactions('N1')).toEqual([reactionKey('clap', 'ann')])
+    // the re-created note: as the checkpoint held it, its reactions included
+    expect(byId.get('N2')?.isDeleted).toBe(false)
+    expect(reactions('N2')).toEqual([reactionKey('heart', 'ann')])
+    await ann.untilClock(res.clock)
+    expect(ann.schemaErrors).toEqual([])
   })
 
   it('a text under a lease is skipped LEASED (a label: its container’s lease); the rest is written', async () => {

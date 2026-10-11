@@ -181,9 +181,9 @@ const afterOf = (el: Elements.WireElement, lobby: Record<string, unknown>): Elem
 // ---- 1. what changed since the deployed web, by diff ---------------------------------------------------------------
 
 describe('the frozen 437b4e7 schemas', () => {
-  it('are the rev-11 contracts the deployed web runs, and this package is one revision on', () => {
+  it('are the rev-11 contracts the rev-11 web runs; this package is two revisions on (12, and 13: reader-rule-rev13.test.ts)', () => {
     expect(Old.CONTRACTS_REV).toBe(11)
-    expect(CONTRACTS_REV).toBe(12)
+    expect(CONTRACTS_REV).toBe(13)
     expect(UNANNOUNCED_REV).toBe(Old.CONTRACTS_REV)
   })
 })
