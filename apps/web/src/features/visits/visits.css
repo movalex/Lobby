@@ -1,0 +1,114 @@
+/* Wave N (WS4, N4-3): "Since you were here" — the chip in the top-centre stack and the outlines over what others did.
+   Only --dr-* tokens, so both themes work. The outlines are a picture (pointer-events none); the chip takes its own
+   clicks. Reduced motion: the outlines stay still until they are removed. Phone width: the chip wraps. */
+
+.dr-visits-outlines {
+  position: absolute;
+  inset: 0;
+  z-index: 304;
+  overflow: hidden;
+  pointer-events: none;
+}
+.dr-visits-outline {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--dr-live);
+  border-radius: 10px;
+  background: transparent;
+  animation: dr-visits-fade 15s linear forwards;
+}
+.dr-visits-outline--changed {
+  border-color: var(--dr-amber);
+}
+.dr-visits-outline--removed {
+  border-color: var(--dr-danger);
+  border-style: dashed;
+}
+/* the tour's stop: ringed, and it stays after the rest fade */
+.dr-visits-outline--ring {
+  border-width: 3px;
+  box-shadow:
+    0 0 0 3px var(--dr-surface),
+    var(--dr-shadow-pop);
+  animation: none;
+}
+@keyframes dr-visits-fade {
+  0%,
+  88% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dr-visits-outline {
+    animation: none;
+  }
+}
+
+.dr-visits-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 4px 4px 12px;
+  border: 1px solid var(--dr-accent-line);
+  border-radius: 18px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  box-shadow: var(--dr-shadow-pop);
+  font: 13px / 1.3 var(--dr-font);
+  pointer-events: auto;
+}
+.dr-visits-chip__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+.dr-visits-chip__text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.dr-visits-chip__lead {
+  color: var(--dr-ink-2);
+}
+.dr-visits-chip__btn {
+  padding: 4px 10px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 999px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 600 12.5px / 1.2 var(--dr-font);
+  cursor: pointer;
+}
+.dr-visits-chip__btn--next {
+  border-color: transparent;
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+}
+.dr-visits-chip__btn:hover {
+  background: var(--dr-hover);
+}
+.dr-visits-chip__btn:focus-visible,
+.dr-visits-chip__x:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+.dr-visits-chip__removed {
+  margin: 0;
+  padding: 0 12px 6px 18px;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+}
+.dr-visits-chip__removed li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 560px) {
+  .dr-visits-chip {
+    border-radius: 14px;
+  }
+}

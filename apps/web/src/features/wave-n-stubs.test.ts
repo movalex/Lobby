@@ -1,6 +1,7 @@
 // The wave N foundation's web stubs: each answers its safe default without a request (nothing changes on the board
-// page until its owner lands it), and each frozen id is a contract id. OWNERS: WS4 (visits), WS5 (capture), WS7 (board
-// links); each owner moves its part of this file into its own tests when it implements the client.
+// page until its owner lands it), and each frozen id is a contract id. OWNERS: WS5 (capture), WS7 (board links);
+// each owner moves its part of this file into its own tests when it implements the client. WS4's visits part moved to
+// visits/client.test.ts and visits/index.test.ts.
 import {
   BOARD_CARD_KIND,
   BoardCardsAnswer,
@@ -26,8 +27,6 @@ import {
   isBoardCard,
 } from './board-links/model.ts'
 import { CANVAS_FEATURES } from './canvas-registry.ts'
-import { fetchVisit, sendSeen } from './visits/client.ts'
-import { feature as visitsFeature } from './visits/index.tsx'
 
 let calls = 0
 const g = globalThis as { fetch?: unknown; navigator?: unknown }
@@ -45,11 +44,11 @@ afterEach(() => {
 })
 
 describe('the wave N features are registered and contribute nothing yet', () => {
-  it('visits and board-links are on the board page, empty', () => {
+  it('visits and board-links are on the board page; board-links is empty (visits is WS4’s, implemented: visits/*.test.ts)', () => {
     const ids = CANVAS_FEATURES.map((f) => f.id)
     expect(ids).toContain('visits')
     expect(ids).toContain('board-links')
-    for (const f of [visitsFeature, boardLinksFeature]) expect(Object.keys(f)).toEqual(['id'])
+    for (const f of [boardLinksFeature]) expect(Object.keys(f)).toEqual(['id'])
   })
 
   it('their palette commands are contract ids, pending until registered', () => {
@@ -65,12 +64,6 @@ describe('the wave N features are registered and contribute nothing yet', () => 
 })
 
 describe('the stubs answer their safe default without a request', () => {
-  it('visits: no visit to show, no beacon', async () => {
-    expect(await fetchVisit('b-board00001')).toBeNull()
-    expect(sendSeen('b-board00001')).toBe(false)
-    expect(calls).toBe(0)
-  })
-
   it('board links: every face unavailable, no backlinks', async () => {
     const answer = await boardCards('b-board00001', ['b-two0000001', 'b-three00001:frame-1'])
     expect(BoardCardsAnswer.parse(answer)).toEqual({

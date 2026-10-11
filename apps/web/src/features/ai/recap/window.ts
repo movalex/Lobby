@@ -2,9 +2,12 @@
 //  - 'session': since the start of the presenter's run of show (W5's agendaActuals: now less the time its
 //    sections took), else since the first edit today (the server's stamps, `lobbyServer`, never a client clock),
 //    else since midnight.
-//  - 'catch-up': since this device's last visit to the board, kept in localStorage per board (written when the
-//    board opens; the previous value is what Catch me up uses). Device-local by design (PRI-05c stays open): no
-//    per-person server storage. Empty, blocked or throwing storage means the last 24 hours.
+//  - 'catch-up': since the visit before this one. Wave N (N4-4): the SERVER's answer when there is one (the person's own
+//    visit marker, across their devices: features/visits hands it in through noteServerVisit, so the "Since you were
+//    here" highlights and this window are the same time); otherwise this device's last visit, kept in localStorage per
+//    board (written when the board opens; the previous value is what Catch me up uses): a name-only guest, an api
+//    without the visit route, a refused route, or a first visit (null) use it as before. Empty, blocked or throwing
+//    storage means the last 24 hours.
 //  - 'selection': the selected frames (or the selection itself), as a 'shapes' scope.
 // Pure but for the storage and the clock it is handed.
 
@@ -59,6 +62,19 @@ export function writeLastVisit(
 /** Per page: the visit before this one, read once when the board opened (null: none known). */
 const visitBefore = new Map<string, number | null>()
 
+/** Per page: the visit before this one as the SERVER stored it for this person (wave N, N4-4); absent: none known. */
+const serverVisit = new Map<string, number>()
+
+/**
+ * The api's answer for this board (features/visits): the person's previous visit time, or null (a first visit, or no
+ * answer: Catch me up then uses this device's last visit). A time that is not a positive finite number is no answer.
+ */
+export function noteServerVisit(boardId: string, previousSeenAt: number | null): void {
+  if (typeof previousSeenAt === 'number' && Number.isFinite(previousSeenAt) && previousSeenAt > 0)
+    serverVisit.set(boardId, Math.round(previousSeenAt))
+  else serverVisit.delete(boardId)
+}
+
 /** The board opened: remember the previous visit for Catch me up, then store this one. */
 export function noteVisit(
   boardId: string,
@@ -70,7 +86,8 @@ export function noteVisit(
 }
 
 /**
- * Catch me up's window: since the visit before this one on this device (`visit` true), else the last 24 hours.
+ * Catch me up's window: since the visit before this one (`visit` true): the server's when it answered, else this device's;
+ * else the last 24 hours.
  * The api clamps a window older than AI_RECAP_MAX_WINDOW_MS (the plan says so: ./plan.ts).
  */
 export function catchUpWindow(
@@ -78,6 +95,8 @@ export function catchUpWindow(
   now: number,
   storage: VisitStorage | null = browserStorage(),
 ): { since: number; visit: boolean } {
+  const server = serverVisit.get(boardId)
+  if (server !== undefined && server < now) return { since: server, visit: true }
   const before = visitBefore.has(boardId) ? visitBefore.get(boardId) : readLastVisit(boardId, storage)
   return before && before < now ? { since: before, visit: true } : { since: now - DAY_MS, visit: false }
 }
@@ -92,7 +111,10 @@ export function catchUpSince(
 }
 
 /** Forgets what this page remembered (tests). */
-export const resetVisits = () => visitBefore.clear()
+export const resetVisits = () => {
+  visitBefore.clear()
+  serverVisit.clear()
+}
 
 /** Local midnight before `now`. */
 export function midnightOf(now: number): number {
