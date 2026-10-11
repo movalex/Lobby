@@ -11,8 +11,10 @@
 //
 //  3. The guard (mountReactionGuard), for what the watch cannot reach: a reaction written to the off room by a way
 //     nothing watches (through the port), and a page reloaded with such a write still in its offline queue. The room
-//     that says 12 gets every unconfirmed reaction put back, the person is told, the page returns to Saved and nothing
-//     is stored. (Before the guard both stayed on "Can't save right now" for ever, with the reaction held locally.)
+//     that says 12 gets every unconfirmed reaction put back, the page returns to Saved and nothing is stored (and the
+//     person is told when the room refused it). Before the guard both stayed on "Can't save right now" for ever, with
+//     the reaction held locally. With WS1's core (N1-7) a key the room's revision cannot take is never sent, so the
+//     first case settles there without a refusal; the guard is what covers it without that core.
 //
 //   cd e2e && E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/n3-reactions-off.spec.ts --project=chromium --workers=1
 import type { Page } from '@playwright/test'
@@ -169,28 +171,32 @@ const roomRev = (page: Page) =>
     ).__lobbyBoard.canvas.room.contractsRev(),
   )
 
-test('a reaction that reaches the off room by a way nothing watches is put back all the same: told, Saved, nothing stored', async ({
+test('a reaction that reaches the off room by a way nothing watches is put back all the same: Saved, nothing stored, told when it was refused', async ({
   join,
   board,
   stack,
-}) => {
+}, testInfo) => {
   const a = await join('alice')
   await seed(a.page, { notes: [{ id: N, x: 40, y: 60, text: 'Warm-up game' }] })
   await expectItemsEverywhere([a], [N])
   await expectSaved(a.page)
   await expect.poll(() => roomRev(a.page)).toBe(12)
 
-  await writeThroughPort(a.page, N, `react:up:${a.id}`, true)
-  // the room refuses it UNAVAILABLE, which the engine retries for ever; the guard puts the key back
-  await expect(a.page.getByTestId('reaction-toast')).toContainText('Reactions are switched off right now', {
-    timeout: 20_000,
-  })
+  const key = `react:up:${a.id}`
+  await writeThroughPort(a.page, N, key, true)
+  // never "Can't save right now" for ever: the page settles with the key gone, here and in the room
+  await expect.poll(async () => (await reactionsIn(a.page, N)).up ?? null, { timeout: 20_000 }).toBeNull()
+  // Two cores, one outcome. A core that sends the key (before WS1's N1-7) is refused UNAVAILABLE and the guard puts
+  // the key back and tells the person; a core that holds a key the room's revision cannot take (N1-7) never sends it,
+  // so there is no refusal to tell.
+  const pushes = a.net.sentPushes().filter((p) => p.ops.some((op) => key in (op.c ?? {}))).length
+  testInfo.annotations.push({ type: 'key sent to the off room', description: String(pushes) })
+  if (pushes > 0)
+    await expect(a.page.getByTestId('reaction-toast')).toContainText('Reactions are switched off right now')
   await expectSaved(a.page)
   expect(await reactionsIn(a.page, N)).toEqual({})
   expect(reactionsOfElement(await storedElement(stack, board, N))).toEqual({})
-  expect(
-    a.net.sentPushes().filter((p) => p.ops.some((op) => `react:up:${a.id}` in (op.c ?? {}))).length,
-  ).toBeLessThan(4)
+  expect(a.net.sentPushes().filter((p) => p.ops.some((op) => key in (op.c ?? {}))).length).toBeLessThan(4)
 })
 
 test('a page reloaded with the write still in its offline queue: the room that is off puts it back at its frame', async ({
