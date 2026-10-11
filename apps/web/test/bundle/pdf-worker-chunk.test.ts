@@ -49,8 +49,10 @@ test('the PDF library is in the PDF worker (and one lazy chunk), never in the en
   ]
   assert.equal(workers.length, 1, 'exactly one PDF worker bundle')
   const worker = workers[0] as string
-  assert.ok(worker.includes('drawSvg'), 'the worker carries @cantoo/pdf-lib (drawSvg)')
-  assert.ok(worker.includes('registerFontkit'), 'and its font engine hook')
+  // drawSvg's own message: in the fork only (pdf-lib 1.17 has drawSvgPath and registerFontkit too)
+  assert.ok(worker.includes('This is not an svg. Ignoring'), 'the worker carries @cantoo/pdf-lib (drawSvg)')
+  assert.ok(worker.includes('registerFontkit'), 'and the font engine hook')
+  assert.ok(worker.includes('lobby-pdf-faces'), 'and the vector page (the face table it reads)')
   assert.equal(worker.match(/\bnew\s+Function\s*\(/g), null, 'no new Function( in the worker')
   assert.equal(worker.match(/(?<![\w$.])eval\s*\(/g), null, 'no eval( in the worker')
   const gz = gzipSync(worker).length
