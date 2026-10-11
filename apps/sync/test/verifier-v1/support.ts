@@ -21,6 +21,23 @@ export interface Proxy {
   delayUpMs: number
   /** frames dropped so far (server->client) */
   dropped: string[]
+  /**
+   * Hotfix H2: from the first client->server text frame this picks (set it before that frame is sent), every
+   * server->client frame is held, in order, until `releaseDown()`: the room's answers to that frame (its
+   * `changes` echo, its `ack`) and everything behind them reach the client late, as over a slow network,
+   * while the client's own frames still go up at once
+   */
+  holdDownFrom: ((clientFrame: string) => boolean) | null
+  /** the hold started (the picked frame went up) */
+  readonly holding: boolean
+  /** the server->client frames held so far (their text) */
+  readonly heldDown: readonly string[]
+  /** delivers every held frame, in order, and ends the hold */
+  releaseDown(): void
+  /** record every client->server text frame in `up` while true (H2: the order of the words and the release) */
+  recordUp: boolean
+  /** the client->server text frames recorded (recordUp), in order */
+  readonly up: readonly string[]
   /** terminates every proxied connection (the client sees 1006 and reconnects) */
   cutAll(): void
   close(): Promise<void>
@@ -30,12 +47,29 @@ export async function startProxy(upstreamWs: string): Promise<Proxy> {
   const wss = new WebSocketServer({ port: 0, host: '127.0.0.1' })
   await new Promise<void>((r) => wss.once('listening', () => r()))
   const conns: { client: WebSocket; up: WebSocket }[] = []
+  /** H2: the held server->client deliveries (holdDownFrom), in order */
+  const held: (() => void)[] = []
+  const heldText: string[] = []
+  const upText: string[] = []
+  let holding = false
   const p: Proxy = {
     url: `http://127.0.0.1:${(wss.address() as AddressInfo).port}`,
     dropDown: false,
     dropUp: false,
     delayUpMs: 0,
     dropped: [],
+    holdDownFrom: null,
+    get holding() {
+      return holding
+    },
+    heldDown: heldText,
+    releaseDown() {
+      holding = false
+      p.holdDownFrom = null
+      for (const run of held.splice(0)) run()
+    },
+    recordUp: false,
+    up: upText,
     cutAll() {
       for (const c of conns.splice(0)) {
         try {
@@ -70,6 +104,12 @@ export async function startProxy(upstreamWs: string): Promise<Proxy> {
       for (const [d, b] of pending.splice(0)) up.send(d, { binary: b })
     })
     client.on('message', (d, isBinary) => {
+      if (!isBinary) {
+        const text = d.toString()
+        if (p.recordUp) upText.push(text)
+        // H2: the hold starts before the picked frame goes up, so every answer to it is held
+        if (!holding && p.holdDownFrom?.(text)) holding = true
+      }
       if (p.dropUp) return
       if (p.delayUpMs > 0) {
         const wait = p.delayUpMs
@@ -84,6 +124,13 @@ export async function startProxy(upstreamWs: string): Promise<Proxy> {
     up.on('message', (d, isBinary) => {
       if (p.dropDown) {
         if (!isBinary) p.dropped.push(d.toString())
+        return
+      }
+      if (holding) {
+        if (!isBinary) heldText.push(d.toString())
+        held.push(() => {
+          if (client.readyState === WebSocket.OPEN) client.send(d, { binary: isBinary })
+        })
         return
       }
       if (client.readyState === WebSocket.OPEN) client.send(d, { binary: isBinary })

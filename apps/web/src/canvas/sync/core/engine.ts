@@ -785,6 +785,17 @@ export class LobbyEngineCore implements EngineCore {
   private readonly leasePending = new Set<string>()
   private readonly leaseHeld = new Set<string>()
   private readonly queuedLease: LeaseClientMessage[] = []
+  /**
+   * H2 (hotfix, wave M follow-up 0): releases held back behind their lease's last words. The editor's final
+   * push goes before its release (the session's FIFO, §2.4.3), but a label Excalidraw made when its editor
+   * opened has no server version until the room confirms its create, so words typed into it before that
+   * could not ride the release's flush and the release went first: the words then went up as a non-holder's
+   * write, or (a label made while the lease was pending) dropUngranted threw them away while Saved showed.
+   * Such a release waits here, the lease still held (`leaseHeld`), until a push carries every change of its
+   * lease (`leasedUnsent`), then goes right behind that push (`releaseReady`). An acquire of the id, the
+   * lease lost to another session, or a welcome that does not name this tab ends the wait.
+   */
+  private readonly releaseAfterPush = new Set<string>()
 
   // ---- presence
   private presenceLast = Number.NEGATIVE_INFINITY
@@ -1947,6 +1958,8 @@ export class LobbyEngineCore implements EngineCore {
     for (const id of [...this.leaseHeld])
       if (this.holders.get(id)?.sid !== w.sid) {
         this.leaseHeld.delete(id)
+        // (H2) a release held back for it: nothing to give back any more
+        this.releaseAfterPush.delete(id)
         lost.add(id)
       }
     const dropped = new Set<string>()
@@ -2087,9 +2100,11 @@ export class LobbyEngineCore implements EngineCore {
 
   /** A welcome's tail: everything pushable, the lease messages queued behind it, then the stale releases. */
   private sendAfterWelcome(): void {
+    // a release held back behind its lease's words (H2) goes at the end of this flush once they are out
+    const heldBack = new Set(this.releaseAfterPush)
     // lease messages asked for while disconnected go out now, behind any push
     this.flushNow(true)
-    const released = new Set<string>()
+    const released = new Set<string>([...heldBack].filter((id) => !this.releaseAfterPush.has(id)))
     for (const m of this.queuedLease.splice(0)) {
       this.transport.send(m)
       if (m.type === 'lease.release') released.add(m.id)
@@ -2544,6 +2559,9 @@ export class LobbyEngineCore implements EngineCore {
     }
     this.applyScene(affected)
     for (const e of refits) this.emit(e)
+    // H2: the echo of a label's create makes the words typed into it pushable: a release held back behind
+    // them goes now, after them
+    this.flushForReleases()
     // an edit that could not go out before this frame (a change waiting for its element) goes now
     if (this.hasPushable()) this.scheduleFlush(false)
     this.updateSaved()
@@ -2933,7 +2951,11 @@ export class LobbyEngineCore implements EngineCore {
     this.releaseHeld(affected)
     this.applyScene(affected)
     if (retry) this.scheduleRetry()
-    else this.scheduleFlush(false)
+    else {
+      // H2: the ack of a label's create (or its refusal): a release held back behind its words goes now
+      this.flushForReleases()
+      this.scheduleFlush(false)
+    }
     // the offline queue drops what this ack settled now, not on the next scan's 100 ms tick: a reload
     // right after "Saved" found the in-flight create still queued and replayed it (B4 D1)
     this.schedulePersist()
@@ -3196,6 +3218,8 @@ export class LobbyEngineCore implements EngineCore {
       if (reset.size) this.applyScene(reset)
     }
     this.updateSaved()
+    // H2: a release held back behind its lease's words goes right behind the push that carried them
+    this.releaseReady()
   }
 
   private sendPush(
@@ -3264,11 +3288,78 @@ export class LobbyEngineCore implements EngineCore {
     }
   }
 
+  /** Lease messages go out now: a socket with its welcome (and its snapshot), no welcome tail waiting. */
+  private leaseOnline(): boolean {
+    return this.connected && !!this.welcome && !this.awaitingSnapshot && this.contractsWait === null
+  }
+
   private sendLease(message: LeaseClientMessage): void {
-    const online = this.connected && !!this.welcome && !this.awaitingSnapshot && this.contractsWait === null
+    const online = this.leaseOnline()
     // the per-session FIFO (§2.4.3): the create before its acquire, the editor's final push (made while
     // the lease is still held, so its text is not gated) before its release
     if (online) this.flushNow(true)
+    if (message.type === 'lease.acquire') {
+      // H2: asked for again before its held-back release went: that release is not sent (the room still
+      // names this tab; the acquire renews the lease)
+      this.releaseAfterPush.delete(message.id)
+    } else if (online && this.leaseHeld.has(message.id) && this.leasedUnsent(message.id)) {
+      // H2: the flush above could not carry every change of this lease (the words typed into a label whose
+      // create the room has not confirmed yet): the release waits behind them, the lease still held
+      this.releaseAfterPush.add(message.id)
+      this.log('release_after_push', { id: message.id })
+      this.updateSaved()
+      return
+    }
+    this.sendLeaseNow(message, online)
+  }
+
+  /**
+   * H2: lease `id` has a change of this tab that no push carries yet: a text's words, layout or life (its
+   * `text`, `layout`, `life` groups) or a free text's own fit, the fit of its container, or the create of
+   * its label. They are the holder's, so the release waits for them (sendLease, releaseReady).
+   */
+  private leasedUnsent(id: string): boolean {
+    for (const [eid, t] of this.tracked) {
+      const el = this.current.get(eid)
+      if (!el) continue
+      if (isText(el)) {
+        if (leaseIdOf(el) !== id) continue
+        if ([...t.dirty].some((g) => LEASED_GROUPS.has(g) || g === 'fit')) return true
+        if (t.isNew && !this.confirmedMap.has(eid) && !this.inflightHas(eid)) return true
+      } else if (eid === id && t.dirty.has('fit')) return true
+    }
+    return false
+  }
+
+  /**
+   * H2: the releases held back behind their lease's words (sendLease): each goes once a push carries every
+   * change of its lease (called at the end of every flush, so right after the push that carried them), and is
+   * dropped, unsent, when the lease is no longer this tab's (lost to another session, or a welcome that does
+   * not name this tab): there is nothing to give back then.
+   */
+  private releaseReady(): void {
+    if (!this.releaseAfterPush.size) return
+    for (const id of [...this.releaseAfterPush]) {
+      if (!this.leaseHeld.has(id)) {
+        this.releaseAfterPush.delete(id)
+        continue
+      }
+      if (!this.leaseOnline() || this.leasedUnsent(id)) continue
+      this.releaseAfterPush.delete(id)
+      this.log('release_sent_after_push', { id })
+      this.sendLeaseNow({ type: 'lease.release', id }, true)
+    }
+  }
+
+  /**
+   * H2: a server frame (a `changes` echo, an ack) may have made the words a held-back release waits for
+   * pushable (the room confirmed their label's create): they go now, and the release right behind them.
+   */
+  private flushForReleases(): void {
+    if (this.releaseAfterPush.size && this.leaseOnline()) this.flushNow(true)
+  }
+
+  private sendLeaseNow(message: LeaseClientMessage, online: boolean): void {
     let unasked = false
     if (message.type === 'lease.acquire') {
       this.leaseReq.set(message.req, message.id)
@@ -3299,13 +3390,22 @@ export class LobbyEngineCore implements EngineCore {
     if (m.type === 'lease') {
       if (m.holder) this.holders.set(m.id, m.holder)
       else this.holders.delete(m.id)
-      if (m.holder && m.holder.sid !== this.welcome?.sid && this.leaseHeld.delete(m.id))
+      if (m.holder && m.holder.sid !== this.welcome?.sid && this.leaseHeld.delete(m.id)) {
+        // lost to another session: a release held back for it has nothing left to give back
+        this.releaseAfterPush.delete(m.id)
         this.dropLeased(m.id, affected)
+      }
     } else {
       this.leaseReq.delete(m.req)
       this.leasePending.delete(m.id)
-      if (m.type === 'lease.grant') this.leaseHeld.add(m.id)
-      else {
+      if (m.type === 'lease.grant') {
+        this.leaseHeld.add(m.id)
+        // H2: a text change made while this request was pending (the New element rule's editor opens at
+        // once: the label Excalidraw made then, and what was typed before the grant) was waiting for this
+        // grant only. It is the holder's now; kept marked, the release made it "ungranted" and dropUngranted
+        // threw the words away
+        for (const t of this.tracked.values()) if (t.needsLease === m.id) t.needsLease = undefined
+      } else {
         this.holders.set(m.id, m.holder)
         this.dropLeased(m.id, affected)
       }
