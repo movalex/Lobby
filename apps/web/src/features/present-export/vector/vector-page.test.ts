@@ -328,7 +328,7 @@ describe('vector pages', () => {
   })
 
   it('a real frame export (fonts: names, captured from the e2e board) reads with no problem; its text needs Nunito and Lobby’s CJK font', async () => {
-    const svg = readFileSync(new URL('./fixtures/intro-names.svg', import.meta.url), 'utf8')
+    const svg = readFileSync(new URL('./fixtures/intro-names.svg.xml', import.meta.url), 'utf8')
     const scene = readScene(svg)
     expect(scene.problems).toEqual([])
     expect(scene.leaves.filter((l) => l.noteShadow)).toHaveLength(1)
