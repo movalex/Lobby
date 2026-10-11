@@ -137,6 +137,11 @@ export interface LobbyBoardSnapshot {
    * read-only, and the save state still says connecting, until the last chunk and the welcome
    */
   readonly applying: boolean
+  /**
+   * N1-4: a chunked install the socket cut short left part of the board on the canvas: the page covers it with the
+   * skeleton ('Reconnecting…') until the next welcome, so a partial board is never presented as the board
+   */
+  readonly partial: boolean
 }
 
 export interface NoticeSink {
@@ -373,6 +378,7 @@ export class LobbyBoardSession {
       roster: [],
       cached: null,
       applying: false,
+      partial: false,
     }
     this.input = new CanvasInput({
       role: () => (this.snap.readonly ? 'readonly' : 'editor'),
@@ -536,10 +542,11 @@ export class LobbyBoardSession {
       // role (a socket that went first leaves it read-only until the next welcome)
       if (e.on) {
         if (!this.snap.applying) timelineMark('lobby.chunks.start')
-        this.set({ applying: true, readonly: true, role: 'viewer' })
+        this.set({ applying: true, partial: false, readonly: true, role: 'viewer' })
       } else {
         timelineMark('lobby.chunks.end')
-        this.set({ applying: false })
+        // cut short (the socket went): what shows is part of the board, covered until the next welcome
+        this.set({ applying: false, partial: !!e.aborted })
       }
       return
     }
@@ -587,6 +594,7 @@ export class LobbyBoardSession {
         role: lobbyRoleOf(this.ticketRole, readonly),
         roster: [...this.core.roster().values()],
         cached: null,
+        partial: false,
       })
       this.emit('docChanged', Object.keys(e.welcome.doc))
       this.concern('docKeys')

@@ -858,8 +858,9 @@ function LobbyBoardScreen({
               <SkeletonToolbar readonly={readonly} />
             </CachedCopy>
           )}
-          {/* N1-4 (wave N): a chunked cold open shows its chunks as they come, read-only (no skeleton) */}
-          {!snap.welcomed && !snap.applying && !showingCache && !closed && (
+          {/* N1-4 (wave N): a chunked cold open shows its chunks as they come, read-only (no skeleton); one the
+              socket cut short is covered again until the next welcome (part of a board is never shown as the board) */}
+          {(!snap.welcomed || snap.partial) && !snap.applying && !showingCache && !closed && (
             // K1-5: the skeleton's canvas (shimmer, greyed toolbar) until the first welcome
             <div
               className="dr-screen dr-screen--overlay lobby-canvas-screen lobby-canvas-screen--skeleton"
@@ -867,7 +868,11 @@ function LobbyBoardScreen({
             >
               <div className="lobby-skeleton__shimmer" aria-hidden="true" />
               <p role="status">
-                {snap.phase === 'preparing' ? 'Preparing this board…' : 'Connecting to board…'}
+                {snap.phase === 'preparing'
+                  ? 'Preparing this board…'
+                  : snap.partial
+                    ? 'Reconnecting to board…'
+                    : 'Connecting to board…'}
               </p>
               <SkeletonToolbar readonly={readonly} />
             </div>
