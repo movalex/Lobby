@@ -82,6 +82,15 @@ export const PROTO = 1 as const
  * `frameForReader` for its socket's revision (the connect URL's `rev`, CONNECT_REV_PARAM; none: UNANNOUNCED_REV
  * 11), and a write from an older socket keeps the fields it cannot know (`lobbyWriteOf`,
  * LOBBY_FIELD_ADDITIONS). A rev-12 client names its revision in the connect URL to every room.
+ * Revision 13 (wave N, LM-10; NOT YET: this package still says 12): emoji reactions on notes, the identity-bound
+ * key class `react:<code>:<uid>` (custom-data.ts, reactions.ts), the one wire change of wave N. The wave N
+ * foundation lands everything that is pure (the key's spec and budgets, REACTIONS_REV, LOBBY_KEY_ADDITIONS with the
+ * reader and writer rules below, proven against the deployed web's frozen rev-12 schemas in
+ * reader-rule-rev13.test.ts) and keeps CONTRACTS_REV at 12, so a room built from it says 12, no web offers a
+ * reaction, and its sync refuses every `react:` write (INVALID: its identity check knows only `plusOne:`). The
+ * bump to 13 lands with the sync's own rules for the class (the wave N plan's N2-4: `identityUidOf`, notes only,
+ * owner clear, the DRAFTROOM_REACTIONS kill switch) and its strip-keys route; the reader rule already serves every
+ * reader below REACTIONS_REV, so the bump changes no frame a rev-12 reader gets.
  */
 export const CONTRACTS_REV = 12
 /**
@@ -112,6 +121,14 @@ export const PRESENT_MINS_REV = 12
  * answers 404 (an older sync).
  */
 export const RESTORE_ELEMENTS_REV = 12
+/**
+ * The first contracts revision with emoji reactions on notes (wave N, LM-10): the `react:<code>:<uid>` keys of
+ * custom-data.ts. A reader below it never receives a patch that names one (LOBBY_KEY_ADDITIONS, `opForReader`),
+ * a writer below it never writes or removes one (`lobbyPatchOfWriter`, `lobbyCreateOfWriter`), and a web offers
+ * reacting only in a room whose `contracts` frame names this revision or later (CanvasPort `room.contractsRev()`).
+ * Above CONTRACTS_REV until the sync's rules for the class land (see CONTRACTS_REV).
+ */
+export const REACTIONS_REV = 13
 /**
  * The connect URL's parameter that names the contracts revision a client reads (CONTRACTS_REV 12 on):
  * `/connect/:boardId?sessionId=…&rev=<CONTRACTS_REV>`. It tells the room before its first frame (the welcome)
@@ -1026,8 +1043,40 @@ export const LOBBY_FIELD_ADDITIONS: readonly LobbyFieldAddition[] = [
   { key: 'present', field: 'mins', since: PRESENT_MINS_REV },
 ]
 
+/**
+ * A `customData.lobby` KEY CLASS added after revision 12 (wave N): every key with `prefix`. A reader below `since`
+ * refuses a patch that names one at all, a value or a null (its `LobbyPatch` knows no spec for the key, and a
+ * removal needs a known key too), and drops the whole frame that carries it; it takes a whole element that holds
+ * one (a WireElement's `customData.lobby` is a record of unknown values in every revision). A writer below `since`
+ * cannot know the class: it never adds, changes or removes such a key (`lobbyPatchOfWriter`), and a create it
+ * makes keeps only those its undelete source holds (`lobbyCreateOfWriter`).
+ */
+export interface LobbyKeyAddition {
+  readonly prefix: string
+  readonly since: number
+}
+/** Every `customData.lobby` key class added after revision 12 (custom-data.ts), with its revision. */
+export const LOBBY_KEY_ADDITIONS: readonly LobbyKeyAddition[] = [{ prefix: 'react:', since: REACTIONS_REV }]
+
+/** Whether a reader (or writer) of revision `rev` does not know the key class of `key` (LOBBY_KEY_ADDITIONS). */
+export function lobbyKeyNewerThan(rev: number, key: string): boolean {
+  for (const a of LOBBY_KEY_ADDITIONS) if (a.since > rev && key.startsWith(a.prefix)) return true
+  return false
+}
+
+/**
+ * The newest revision any addition names (CONTRACTS_REV, LOBBY_FIELD_ADDITIONS, LOBBY_KEY_ADDITIONS): a reader at
+ * or above it gets every frame as it is. Above CONTRACTS_REV while an addition lands ahead of its bump (wave N's
+ * reactions), so the rule already serves the readers of the revision the room says.
+ */
+export const READER_RULE_REV = Math.max(
+  CONTRACTS_REV,
+  ...LOBBY_FIELD_ADDITIONS.map((a) => a.since),
+  ...LOBBY_KEY_ADDITIONS.map((a) => a.since),
+)
+
 const additionsOf = (rev: number, key: string): LobbyFieldAddition[] =>
-  rev >= CONTRACTS_REV ? [] : LOBBY_FIELD_ADDITIONS.filter((a) => a.key === key && a.since > rev)
+  LOBBY_FIELD_ADDITIONS.filter((a) => a.key === key && a.since > rev)
 const isRecord = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v)
 
@@ -1067,6 +1116,54 @@ export function lobbyWriteOf(writer: number, key: string, written: unknown, stor
   return kept ? out : written
 }
 
+/**
+ * A patch's `c` from a writer of revision `writer` (wave N, LOBBY_KEY_ADDITIONS): without every key whose class that
+ * writer cannot know, a value or a null, so the stored value stays, in the same commit, with no fix (a rev-12 page
+ * has no reaction UI; such a key in its patch came from a diff against a copy it never wrote, and must never erase
+ * or forge someone's reaction). `c` itself when nothing is dropped; null when nothing is left (the op then writes
+ * no `customData.lobby` key at all). The writer is the build that made the change (OfflineEntry.rev,
+ * LostPushRecord.rev: §0b.4), which the room knows as the push's socket revision.
+ */
+export function lobbyPatchOfWriter(
+  writer: number,
+  c: Readonly<Record<string, unknown>>,
+): Record<string, unknown> | null {
+  let out: Record<string, unknown> | null = null
+  for (const k of Object.keys(c))
+    if (lobbyKeyNewerThan(writer, k)) {
+      out ??= { ...c }
+      delete out[k]
+    }
+  if (!out) return c as Record<string, unknown>
+  return Object.keys(out).length ? out : null
+}
+
+/**
+ * A create's `customData.lobby` from a writer of revision `writer` (wave N, LOBBY_KEY_ADDITIONS): a key whose class
+ * that writer cannot know is kept only when its undelete source (`undeleteOf`, the tombstone's lobby; null for a new
+ * id) holds the same value (an undo of a delete brings the reactions back, as checkCreateLobby's undelete rule), and
+ * every other one is stripped: a rev-12 Excalidraw-native paste or duplicate of a reacted note makes a copy without
+ * reactions, never INVALID. The room answers each stripped key with an ack fix `c:<key>: null`. `lobby` itself when
+ * nothing is stripped.
+ */
+export function lobbyCreateOfWriter(
+  writer: number,
+  lobby: Readonly<Record<string, unknown>> | undefined,
+  undeleteOf: Readonly<Record<string, unknown>> | null,
+): { lobby: Record<string, unknown> | undefined; stripped: string[] } {
+  const stripped: string[] = []
+  if (!lobby) return { lobby: undefined, stripped }
+  let out: Record<string, unknown> | null = null
+  for (const [k, v] of Object.entries(lobby)) {
+    if (!lobbyKeyNewerThan(writer, k)) continue
+    if (undeleteOf && k in undeleteOf && JSON.stringify(undeleteOf[k]) === JSON.stringify(v)) continue
+    out ??= { ...lobby }
+    delete out[k]
+    stripped.push(k)
+  }
+  return { lobby: out ?? (lobby as Record<string, unknown>), stripped }
+}
+
 /** The stored element of a `p` op's id, for a translation into a `c` op (the room: the batch's elements). */
 export type StoredElementOf = (id: string) => WireElement | undefined
 
@@ -1076,23 +1173,29 @@ export type StoredElementOf = (id: string) => WireElement | undefined
  *    `customData.lobby` values as they are (`CustomData.lobby` is a record of unknown values; only
  *    `LobbyPatch` checks them), and a new element field is an ELEMENT_SCHEMA_VERSION bump, which the hello
  *    handles. So a catch-up, a snapshot and every create reach every reader whole.
- *  - A `p` op whose `c` has a value with a field the reader does not know becomes the `c` op of the element as
- *    stored (`stored`): the reader parses it and loses nothing, so its copy stays the server's exactly (the
- *    client diffs its own pushes and decides lost ones against that copy). A deleted element is never sent in
- *    full (W5-02: a tombstone travels redacted), so its patch keeps its form with those fields left out, which
- *    changes nothing a reader compares (a tombstone is compared by hash.ts TOMBSTONE_KEYS only); and so does a
- *    patch whose stored element the caller does not have.
+ *  - A `p` op whose `c` has a value with a field the reader does not know, or names a key whose class the reader
+ *    does not know (LOBBY_KEY_ADDITIONS: a value or a null), becomes the `c` op of the element as stored
+ *    (`stored`): the reader parses it and loses nothing, so its copy stays the server's exactly (the client diffs
+ *    its own pushes and decides lost ones against that copy). A deleted element is never sent in full (W5-02: a
+ *    tombstone travels redacted), so its patch keeps its form with those fields and keys left out, which changes
+ *    nothing a reader compares (a tombstone is compared by hash.ts TOMBSTONE_KEYS only); and so does a patch whose
+ *    stored element the caller does not have. A `c` left empty is omitted (an older `LobbyPatch` refuses an empty
+ *    record); the op still carries its version, which the reader must learn.
  */
 export function opForReader(reader: number, op: ServerOp, stored?: StoredElementOf): ServerOp {
-  if (reader >= CONTRACTS_REV || op.k === 'c' || !op.c) return op
+  if (reader >= READER_RULE_REV || op.k === 'c' || !op.c) return op
   const c = op.c as Record<string, unknown>
-  const newer = Object.keys(c).filter((k) => lobbyValueNewerThan(reader, k, c[k]))
-  if (!newer.length) return op
+  const keys = Object.keys(c).filter((k) => lobbyKeyNewerThan(reader, k))
+  const values = Object.keys(c).filter((k) => !keys.includes(k) && lobbyValueNewerThan(reader, k, c[k]))
+  if (!keys.length && !values.length) return op
   const el = stored?.(op.id)
   if (el && !el.isDeleted && el.id === op.id && el.version === op.v) return { k: 'c', el }
   const patch: Record<string, unknown> = { ...c }
-  for (const k of newer) patch[k] = lobbyValueForReader(reader, k, c[k])
-  return { ...op, c: patch }
+  for (const k of keys) delete patch[k]
+  for (const k of values) patch[k] = lobbyValueForReader(reader, k, c[k])
+  if (Object.keys(patch).length) return { ...op, c: patch }
+  const { c: _c, ...rest } = op
+  return rest
 }
 
 /**
@@ -1109,15 +1212,19 @@ export function opForReader(reader: number, op: ServerOp, stored?: StoredElement
  *  - every other type (`welcome`'s other fields, `lease.*`, `roster`, `workshop`, `notice`, `pong`, `contracts`,
  *    `receipts`): unchanged, none of them changed after revision 11.
  * A later revision that adds a field or a value to any server message adds its rule here (and its field to
- * LOBBY_FIELD_ADDITIONS when it is one of a `customData.lobby` value), with a test that parses the downgraded
- * frames with the previous build's own frozen schemas (packages/canvas-schema/test/fixtures/).
+ * LOBBY_FIELD_ADDITIONS when it is one of a `customData.lobby` value, its key class to LOBBY_KEY_ADDITIONS when it
+ * is a new kind of key), with a test that parses the downgraded frames with the previous build's own frozen schemas
+ * (packages/canvas-schema/test/fixtures/). Wave N's reactions (REACTIONS_REV 13): `changes` and the catch-up by
+ * `opForReader`; an `ack`'s `fix` (`c:react:…: null` for a stripped create key) and a refusal's element pass as
+ * they are (FixFields and WireElement take unknown `customData.lobby` values); `contracts` 13 is read as "12 or
+ * later"; nothing else changes.
  */
 export function frameForReader(
   reader: number,
   frame: ServerMessage,
   stored?: StoredElementOf,
 ): ServerMessage {
-  if (reader >= CONTRACTS_REV) return frame
+  if (reader >= READER_RULE_REV) return frame
   switch (frame.type) {
     case 'changes': {
       const ops = mapSame(frame.ops, (op) => opForReader(reader, op, stored))

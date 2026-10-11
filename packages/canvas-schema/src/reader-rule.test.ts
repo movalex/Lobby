@@ -26,6 +26,7 @@ import {
   frameForReader,
   GROUP_FIELDS,
   LOBBY_FIELD_ADDITIONS,
+  LOBBY_KEY_ADDITIONS,
   lobbyValueForReader,
   lobbyValueNewerThan,
   lobbyWriteOf,
@@ -217,7 +218,7 @@ describe('what rev 12 changed in a server frame (a diff against the deployed web
       expect(OldElements.WireElement.safeParse(el).success, el.id).toBe(true)
   })
 
-  it('customData: the same keys, classes, sizes and rules; the one value change is present.mins', () => {
+  it('customData: the same keys, classes, sizes and rules (but wave N key classes); the one value change is present.mins', () => {
     const specs = (s: readonly Custom.LobbyKeySpec[]) =>
       s.map(({ match, name, class: cls, maxBytes, duplicate, lockExempt }) => ({
         match,
@@ -227,7 +228,9 @@ describe('what rev 12 changed in a server frame (a diff against the deployed web
         duplicate,
         lockExempt,
       }))
-    expect(specs(Custom.LOBBY_KEY_SPECS)).toEqual(specs(OldCustom.LOBBY_KEY_SPECS as never))
+    // wave N's key classes (LOBBY_KEY_ADDITIONS, reader-rule-rev13.test.ts) are left out of this rev-11 diff
+    const known = Custom.LOBBY_KEY_SPECS.filter((s) => !LOBBY_KEY_ADDITIONS.some((a) => a.prefix === s.name))
+    expect(specs(known)).toEqual(specs(OldCustom.LOBBY_KEY_SPECS as never))
     expect(Object.keys(Custom.LobbyServer.shape).sort()).toEqual(
       Object.keys(OldCustom.LobbyServer.shape).sort(),
     )

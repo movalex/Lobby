@@ -144,11 +144,18 @@ export const maxElementBytes = (type: string): number =>
       ? MAX_ELEMENT_BYTES.freedraw
       : MAX_ELEMENT_BYTES.default
 
-/** `customData.lobby` without the `plusOne:*` keys, as UTF-8 JSON bytes. */
+/** `customData.lobby` without the `plusOne:*` and `react:*` keys, as UTF-8 JSON bytes. */
 export const MAX_LOBBY_CUSTOM_DATA_BYTES = 8 * 1024
 /** `plusOne:*` keys: at most 200 (`PLUS_ONES_MAX`), with their own budget (uids up to 60 characters). */
 export const PLUS_ONES_MAX = 200
 export const PLUS_ONES_BUDGET_BYTES = 16 * 1024
+/**
+ * `react:<code>:<uid>` keys (wave N, CONTRACTS_REV 13; reactions.ts): at most 120 per element, within their own
+ * 6 KiB, so a note's whole customData.lobby (16 KiB of +1s, 6 KiB of reactions, 8 KiB of the rest) still fits
+ * the 32 KiB default element limit.
+ */
+export const REACTIONS_MAX = 120
+export const REACTIONS_BUDGET_BYTES = 6 * 1024
 /** `tag:*` keys per element (`MAX_TAGS_PER_SHAPE`). */
 export const MAX_TAGS_PER_ELEMENT = 10
 /** `tagDef:*` keys per board (`MAX_TAGS_PER_BOARD`). */

@@ -337,6 +337,38 @@ export const REACTION_LABELS: Readonly<Record<ReactionEmoji, string>> = {
   '🤔': 'Hmm',
   '👏': 'Applause',
 }
+/**
+ * Wave N (LM-10): the stored reactions on a note, `customData.lobby['react:<code>:<uid>'] = true`
+ * (canvas-schema reactions.ts; CONTRACTS_REV 13). A code names one of REACTION_EMOJIS, in the same order
+ * (the reaction row's order), so a stored key never carries an emoji (its variation selector and its
+ * bytes). The relayed event reactions above stay as they are.
+ */
+export const REACTION_CODES = ['up', 'heart', 'laugh', 'party', 'think', 'clap'] as const
+export const ReactionCode = z.enum(REACTION_CODES)
+export type ReactionCode = z.infer<typeof ReactionCode>
+/** The emoji each code stands for (REACTION_EMOJIS, in the same order). */
+export const REACTION_CODE_EMOJI: Readonly<Record<ReactionCode, ReactionEmoji>> = {
+  up: '👍',
+  heart: '❤️',
+  laugh: '😂',
+  party: '🎉',
+  think: '🤔',
+  clap: '👏',
+}
+/** Words for screen readers and tooltips, per code (REACTION_LABELS of its emoji). */
+export const REACTION_CODE_LABELS: Readonly<Record<ReactionCode, string>> = {
+  up: REACTION_LABELS['👍'],
+  heart: REACTION_LABELS['❤️'],
+  laugh: REACTION_LABELS['😂'],
+  party: REACTION_LABELS['🎉'],
+  think: REACTION_LABELS['🤔'],
+  clap: REACTION_LABELS['👏'],
+}
+/** The code of an emoji of REACTION_EMOJIS, or null. */
+export function reactionCodeOf(emoji: string): ReactionCode | null {
+  for (const c of REACTION_CODES) if (REACTION_CODE_EMOJI[c] === emoji) return c
+  return null
+}
 /** Per person (across boards): at most REACTION_RATE_MAX reactions in any REACTION_RATE_WINDOW_MS. */
 export const REACTION_RATE_MAX = 5
 export const REACTION_RATE_WINDOW_MS = 1000

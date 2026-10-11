@@ -257,6 +257,7 @@ describe('customData classes (§3.3)', () => {
       [
         'tag:',
         'plusOne:',
+        'react:',
         'file',
         'pdfPage',
         'kind',
@@ -284,6 +285,7 @@ describe('customData classes (§3.3)', () => {
     expect(exempt.sort()).toEqual([
       ['plusOne:', 'own'],
       ['present', 'frame-account'],
+      ['react:', 'own'],
     ])
     expect(lobbyKeySpec('plusOne:usr_0123456789')?.lockExempt).toBe('own')
     for (const k of ['tag:x', 'alt', 'file', 'kind', 'mindmap', 'prompt'])

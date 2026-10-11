@@ -22,8 +22,11 @@ import {
   MAX_UID_CHARS,
   PLUS_ONES_BUDGET_BYTES,
   PLUS_ONES_MAX,
+  REACTIONS_BUDGET_BYTES,
+  REACTIONS_MAX,
   VERSION_ID_PATTERN,
 } from './limits.ts'
+import { parseReactionKey, REACTION_KEY_PREFIX } from './reactions.ts'
 
 /** The two top-level `customData` keys (§3.3). Anything else is `INVALID`. */
 export const CUSTOM_DATA_KEYS = ['lobby', 'lobbyServer'] as const
@@ -34,7 +37,9 @@ export const CUSTOM_DATA_KEYS = ['lobby', 'lobbyServer'] as const
  * 2. `create-only` — accepted only in the op that creates the element; `by` must equal the writer's uid
  *    (stamped if absent); later changes are `INVALID`; removal allowed for the `by` user or an owner.
  * 3. `identity-bound` — `plusOne:<uid>`: add or remove only where `<uid>` is the writer's uid; an addition
- *    while a dot vote is open is `VOTE_OPEN`.
+ *    while a dot vote is open is `VOTE_OPEN`. `react:<code>:<uid>` (wave N, CONTRACTS_REV 13; reactions.ts):
+ *    the same owner rule (`identityUidOf`), on sticky notes only, never VOTE_OPEN, and an owner may remove
+ *    anyone's (the sync's rules, apps/sync/src/room/custom-data.ts).
  * 4. `api-validated` — `file` (canonicalized from the file-refs answer; `versionId` must equal the
  *    version in `fileId`; `name` is client-writable) and `pdfPage` (derived from the `.p<n>` suffix).
  * 5. `free` — zod per key.
@@ -87,6 +92,11 @@ const TagValue = z.strictObject({ name: z.string().min(1).max(100), color: z.str
  * The order of +1s is therefore not stored; readers order them by uid.
  */
 const PlusOneValue = z.literal(true)
+/**
+ * `react:<code>:<uid>` → `true` (wave N; reactions.ts), as short as a +1 for the same reason: REACTIONS_MAX keys
+ * must fit REACTIONS_BUDGET_BYTES.
+ */
+const ReactionValue = z.literal(true)
 /** `file`: the card's stable facts (§2.10.4); live facts come from the api at runtime, never from here. */
 export const FileValue = z.strictObject({
   assetId: z.string().regex(ASSET_ID_PATTERN),
@@ -162,6 +172,18 @@ export const LOBBY_KEY_SPECS: readonly LobbyKeySpec[] = [
     class: 'identity-bound',
     value: PlusOneValue,
     suffix: (uid) => Uid.safeParse(uid).success,
+    maxBytes: 32,
+    duplicate: 'strip',
+    lockExempt: 'own',
+  },
+  // wave N (LM-10; CONTRACTS_REV 13, protocol.ts REACTIONS_REV and LOBBY_KEY_ADDITIONS): a reader below 13
+  // never receives a patch that names one (protocol.ts opForReader), and a writer below 13 never writes one
+  {
+    match: 'prefix',
+    name: REACTION_KEY_PREFIX,
+    class: 'identity-bound',
+    value: ReactionValue,
+    suffix: (suffix) => parseReactionKey(REACTION_KEY_PREFIX + suffix) !== null,
     maxBytes: 32,
     duplicate: 'strip',
     lockExempt: 'own',
@@ -261,12 +283,15 @@ export type LobbyCheck = { ok: true } | { ok: false; code: 'INVALID' | 'TOO_LARG
 
 /**
  * The whole `customData.lobby` of one element: every key known and valid, at most 10 tags, at most 200
- * `plusOne:*` keys within their own 16 KiB, and everything else within 8 KiB (§3.5).
+ * `plusOne:*` keys within their own 16 KiB, at most 120 `react:*` keys within their own 6 KiB (wave N), and
+ * everything else within 8 KiB (§3.5).
  */
 export function checkLobbyData(lobby: Readonly<Record<string, unknown>>): LobbyCheck {
   let plusOnes = 0
+  let reactions = 0
   let tags = 0
   const plus: Record<string, unknown> = {}
+  const react: Record<string, unknown> = {}
   const rest: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(lobby)) {
     const problem = lobbyValueProblem(key, value)
@@ -274,6 +299,9 @@ export function checkLobbyData(lobby: Readonly<Record<string, unknown>>): LobbyC
     if (key.startsWith(PLUS_ONE_KEY_PREFIX)) {
       plusOnes++
       plus[key] = value
+    } else if (key.startsWith(REACTION_KEY_PREFIX)) {
+      reactions++
+      react[key] = value
     } else {
       if (key.startsWith(TAG_KEY_PREFIX)) tags++
       rest[key] = value
@@ -281,10 +309,14 @@ export function checkLobbyData(lobby: Readonly<Record<string, unknown>>): LobbyC
   }
   if (plusOnes > PLUS_ONES_MAX)
     return { ok: false, code: 'INVALID', detail: `more than ${PLUS_ONES_MAX} +1s` }
+  if (reactions > REACTIONS_MAX)
+    return { ok: false, code: 'INVALID', detail: `more than ${REACTIONS_MAX} reactions` }
   if (tags > MAX_TAGS_PER_ELEMENT)
     return { ok: false, code: 'INVALID', detail: `more than ${MAX_TAGS_PER_ELEMENT} tags` }
   if (jsonByteLength(plus) > PLUS_ONES_BUDGET_BYTES)
     return { ok: false, code: 'TOO_LARGE', detail: '+1 keys over their budget' }
+  if (jsonByteLength(react) > REACTIONS_BUDGET_BYTES)
+    return { ok: false, code: 'TOO_LARGE', detail: 'reaction keys over their budget' }
   if (jsonByteLength(rest) > MAX_LOBBY_CUSTOM_DATA_BYTES)
     return { ok: false, code: 'TOO_LARGE', detail: 'customData.lobby over its budget' }
   return { ok: true }
