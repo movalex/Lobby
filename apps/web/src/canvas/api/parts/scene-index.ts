@@ -12,9 +12,11 @@
  * hear a batch once the index answers for it.
  *
  * Fresh inside `canvas.on('change')` (the review of N1-6): a local batch reaches the board page's change stream through
- * the same port `changed` event, registered after this one (port listeners run in registration order); a remote one
- * (the engine core's `applied`: the scene changed, the engine's onChange and so the port's `changed` come later) is
- * absorbed first through `absorbIntoSceneIndex`, which the board page calls before it emits that batch. scene-index.test.ts holds every answer to a full rebuild
+ * the same port `changed` event, whose first listener is the LobbyCanvas's own, which hands the batch to this index
+ * (`sceneIndexChanged`) before it moves its `doc` source, in one signals batch (wave N.1: a reader of both ran twice,
+ * the first time on an index a batch behind); a remote one (the engine core's `applied`: the scene changed, the
+ * engine's onChange and so the port's `changed` come later) is absorbed first through `absorbIntoSceneIndex`, which
+ * the board page calls before it emits that batch. scene-index.test.ts holds every answer to a full rebuild
  * (`sceneIndexOf`) after random op sequences. Reads only: nothing here writes the scene.
  *
  * And the dev-only full-walk counter (`noteSceneWalk`, `sceneWalks`): dev-auth and dev builds count every walk of
@@ -348,6 +350,17 @@ export function paintOrderMemo(): (lists: readonly (readonly CanvasElement[])[])
 
 /** Per port: its index's absorb (a built index takes the ids now; an index not built yet reads the scene when it is). */
 const absorbers = new WeakMap<object, (ids: readonly string[]) => void>()
+/** Per port: its index's handler of the port's `changed` batch (the LobbyCanvas calls it: `sceneIndexChanged`). */
+const changedHandlers = new WeakMap<object, (ids: readonly string[]) => void>()
+
+/**
+ * Wave N.1: the LobbyCanvas hands the port's `changed` batch to the index of `port` here, in the same signals batch
+ * as its own `doc` source's bump, before it: a reader that tracks both (`canvas.get` and an index read: the note
+ * authors) runs once per batch, not once per source, and never reads the index before it answers for the batch.
+ */
+export function sceneIndexChanged(port: object, ids: readonly string[]): void {
+  changedHandlers.get(port)?.(ids)
+}
 
 /**
  * The board page, before it emits a batch the port has not reported yet (the engine core's `applied` ids): the scene
@@ -370,7 +383,7 @@ export function createSceneIndexPart(deps: PartDeps): SceneIndex {
     return index
   }
   absorbers.set(deps.port, (ids) => index?.update(ids, (id) => deps.port.get(id)))
-  deps.port.on('changed', (ids) => {
+  changedHandlers.set(deps.port, (ids) => {
     // the index answers for the batch first, then the readers and listeners hear it
     index?.update(ids, (id) => deps.port.get(id))
     changes.bump()

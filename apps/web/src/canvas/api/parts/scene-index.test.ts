@@ -337,6 +337,24 @@ describe('canvas.index is incremental and equals a full rebuild (N1-6)', () => {
     dispose()
   })
 
+  it('wave N.1: a reader of both the scene (`get`) and the index runs once per change batch, and reads it fresh', () => {
+    const s = scenePort(SCENE)
+    const { canvas, dispose } = createLobbyCanvas({ port: s.port, registries: createFeatureRegistries() })
+    const seen: string[] = []
+    const stop = signals.react('get-and-index', () => {
+      const x = canvas.get('n1')?.x
+      seen.push(`${x}:${ids(canvas.index.byType('stickynote')).join(',')}`)
+    })
+    expect(seen).toEqual(['0:n1,n2'])
+    s.apply(
+      [...SCENE.map((e) => (e.id === 'n1' ? el('n1', 'stickynote', { x: 5 }) : e)), el('n9', 'stickynote')],
+      ['n1', 'n9'],
+    )
+    expect(seen).toEqual(['0:n1,n2', '5:n1,n2,n9'])
+    stop()
+    dispose()
+  })
+
   it('a listener hears a batch once the index answers for it', () => {
     const s = scenePort(SCENE)
     const { canvas, dispose } = createLobbyCanvas({ port: s.port, registries: createFeatureRegistries() })
