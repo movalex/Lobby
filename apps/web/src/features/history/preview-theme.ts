@@ -11,11 +11,13 @@
 //  - each frame has no name of its own (the exporter's label for it is empty) and a text element named
 //    `lobby-preview-label:<frame id>` sits where the name goes, in Lobby's ink (stored as INK, which the table draws
 //    as CHALK in dark and as INK in light: the theme's ink, like the live canvas's frame names), and
-//  - each note's label is in `noteInkFor(fill, theme)` (W1's rule: the higher-contrast of INK and CHALK on that
-//    fill), written as the colour the exporter must be given to draw exactly that.
+//  - each note's label that is in a default ink is in `noteInkFor(fill, theme)` (W1's rule: the higher-contrast of INK
+//    and CHALK on that fill), written as the colour the exporter must be given to draw exactly that. A label in a colour
+//    the person chose keeps it (N1, wave M follow-up 2: it was drawn in the default ink), as on the live canvas, where
+//    only a default ink is answered differently (canvas/engine/theme.ts noteInkOverride).
 // Nothing here touches the live board or the checkpoint: the copy is what the bitmap is made from.
 
-import { CHALK, INK, noteInkFor } from '../../canvas/engine/theme.ts'
+import { CHALK, INK, lobbyDarkColor, noteInkFor } from '../../canvas/engine/theme.ts'
 
 type El = Readonly<Record<string, unknown>>
 
@@ -58,6 +60,12 @@ export function storedInkFor(ink: string, theme: 'light' | 'dark'): string | nul
 
 const str = (v: unknown): string | null => (typeof v === 'string' ? v : null)
 const num = (v: unknown, or = 0): number => (typeof v === 'number' && Number.isFinite(v) ? v : or)
+
+/**
+ * Whether a stored ink is a default one (the dark table draws it as CHALK: Lobby's INK, the engine's #1e1e1e, black),
+ * not a colour somebody picked: the same test as the live canvas's (canvas/engine/theme.ts noteInkOverride).
+ */
+const isDefaultInk = (c: unknown): boolean => typeof c === 'string' && lobbyDarkColor(c) === CHALK
 
 /** The fill a note's label sits on (its container's), or null when the element is not a note's label. */
 function noteFillOf(el: El, byId: ReadonlyMap<string, El>): string | null {
@@ -148,7 +156,7 @@ export function themedPreviewElements(elements: readonly unknown[], theme: 'ligh
       continue
     }
     const fill = noteFillOf(e, byId)
-    if (fill !== null) {
+    if (fill !== null && isDefaultInk(e.strokeColor)) {
       const stored = storedInkFor(noteInkFor(fill, theme), theme)
       out.push(stored !== null && stored !== e.strokeColor ? { ...e, strokeColor: stored } : e)
       continue

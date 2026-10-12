@@ -128,6 +128,23 @@ describe('note labels (noteInkFor)', () => {
     }
   })
 
+  it('N1 (wave M follow-up 2): a label in a colour the person chose keeps it, in both modes (only the default ink is swapped)', () => {
+    for (const mode of ['light', 'dark'] as const) {
+      for (const chosen of ['#e03131', '#2f9e44', '#f6c453']) {
+        const els = [note('n1', '#b2f2bb'), label('t1', 'n1', { strokeColor: chosen })]
+        const out = run(els, mode)
+        expect(byId(out, 't1'), `${mode} ${chosen}`).toBe(els[1])
+      }
+    }
+    // the default inks are still swapped: Excalidraw's #1e1e1e, Lobby's INK and black
+    for (const dflt of ['#1e1e1e', theme.INK, '#000000']) {
+      const out = run([note('n1', '#f6c453'), label('t1', 'n1', { strokeColor: dflt })], 'dark')
+      expect(drawn((byId(out, 't1') as Out).strokeColor as string, 'dark'), dflt).toBe(
+        theme.noteInkFor('#f6c453', 'dark'),
+      )
+    }
+  })
+
   it('a label that is not a note’s (a shape’s, a free text) is not touched', () => {
     const els = [
       { id: 'r1', type: 'rectangle', backgroundColor: '#b2f2bb' },
