@@ -25,6 +25,7 @@ import {
   PHOTO,
   postPhoto,
   seedCaptureRows,
+  seedSpentTokens,
   storedImage,
   transcript,
 } from './capture-support.ts'
@@ -631,5 +632,63 @@ describe('the capture’s own output cap (DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS
     for (const mode of ['notes', 'diagram', 'auto'])
       expect((await postPhoto(x, x.alice.cookie, x.board, PHOTO, { mode })).statusCode).toBe(200)
     for (const r of x.openai.requests) expect(userTextOf(r)).toContain('at most two decimals (such as 0.25)')
+  })
+})
+
+describe('what a capture reserves, and the budgets’ refusals', () => {
+  it('a 60,000-character meeting reserves a token per 3 bytes and the answers, not a token per byte: it runs for someone who used 80,000 tokens today', async () => {
+    const x = await world()
+    await seedSpentTokens(x, x.alice.userId, x.board, 80_000)
+    let text = ''
+    for (let i = 0; text.length < 60_000; i++)
+      text += `Speaker ${i % 4}: we went through point ${i} of the launch plan and agreed on the next step.\n`
+    text = text.slice(0, 60_000).trim()
+    const res = await transcript(x.alice, x.board, { text })
+    expect(res.statusCode, res.body).toBe(200)
+    const [row, ...more] = await captureRows(x.api)
+    expect(more).toEqual([])
+    // two parts of about 12,000 tokens, their answers and the themes call: about 54,000 (a token a byte: about 124,000)
+    expect(x.openai.requests.length).toBe(3)
+    expect(row?.reserved_tokens).toBeGreaterThan(60_000 / 3)
+    expect(row?.reserved_tokens).toBeLessThan(60_000)
+    expect(row?.charged_tokens).toBeLessThanOrEqual(row?.reserved_tokens ?? 0)
+  })
+
+  it('too little left for this capture is said as such (not “you’ve used your allowance”); a shorter transcript may still fit', async () => {
+    const x = await world({ env: { DRAFTROOM_AI_USER_DAILY_TOKENS: '10000' } })
+    const photo = await postPhoto(x, x.alice.cookie, x.board)
+    expectError(photo, 429, 'AI_USER_BUDGET')
+    expect(photo.json().error.message).toBe(
+      'There isn’t enough of your AI allowance left today for a photo capture. It resets at midnight UTC.',
+    )
+    expect(Number(photo.headers['retry-after'])).toBeGreaterThan(0)
+    const long = await transcript(x.alice, x.board, {
+      text: 'Ana: '.concat('a long point about the plan '.repeat(800)),
+    })
+    expectError(long, 429, 'AI_USER_BUDGET')
+    expect(long.json().error.message).toBe(
+      'There isn’t enough of your AI allowance left today for a transcript this long. A shorter one may fit; the allowance resets at midnight UTC.',
+    )
+    expect(x.openai.requests).toEqual([])
+    expect(await captureRows(x.api)).toEqual([])
+    // nothing was used: a short meeting fits what is left
+    expect((await transcript(x.alice, x.board, { text: MEETING })).statusCode).toBe(200)
+  })
+
+  it('the workspace’s and Lobby’s budgets say the same of this capture', async () => {
+    const ws = await world({ env: { DRAFTROOM_AI_DAILY_TOKENS: '10000' } })
+    const a = await postPhoto(ws, ws.alice.cookie, ws.board)
+    expectError(a, 429, 'AI_BUDGET_EXHAUSTED')
+    expect(a.json().error.message).toBe(
+      'There isn’t enough of this workspace’s AI budget left today for this capture. It resets at midnight UTC.',
+    )
+    await ws.close()
+    w = null
+    const all = await world({ env: { DRAFTROOM_AI_GLOBAL_DAILY_TOKENS: '10000' } })
+    const b = await postPhoto(all, all.alice.cookie, all.board)
+    expectError(b, 429, 'AI_GLOBAL_BUDGET')
+    expect(b.json().error.message).toBe(
+      'There isn’t enough of Lobby’s AI budget left today for this capture. It resets at midnight UTC.',
+    )
   })
 })

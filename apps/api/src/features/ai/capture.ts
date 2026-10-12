@@ -25,8 +25,9 @@
 // names the themes over the whole meeting when there was more than one part (capture-plan.ts).
 //
 // Cost (budget.ts): ONE ledger row per capture, 'capture-photo' or 'capture-transcript', whatever number of calls it
-// makes, reserved for the worst case of all of them (each prompt at a token per UTF-8 byte, the image at
-// CAPTURE_IMAGE_TOKENS_RESERVE, each call's output cap) before any call, under the same lock as the token budgets,
+// makes, reserved for all of them before any call (a photo's fixed words at a token per UTF-8 byte and the image at
+// CAPTURE_IMAGE_TOKENS_RESERVE; a transcript's prompts at prompt.ts's estimate of a token per 3 bytes, the one the input
+// cap is checked against: see transcriptCall; and each call's output cap), under the same lock as the token budgets,
 // and with the per-day caps (DRAFTROOM_AI_VISION_USER_DAILY / _GLOBAL_DAILY, DRAFTROOM_AI_TRANSCRIPT_USER_DAILY:
 // 429 AI_CAPTURE_DAILY_CAP) counted from the same rows. The row is settled with what the calls cost, success or not
 // (a failed call keeps its row and its charge). Logs hold counts and the run id only: never the image, the
@@ -62,7 +63,7 @@ import type { KeyedLimit } from '../../rate-limit.ts'
 import type { FeatureContext } from '../context.ts'
 import { CAPTURE_GUESTS, guestRefused } from '../guests/guard.ts'
 import { isPendingRoute, PENDING_ROUTES, type PendingRoute } from '../pending-routes.ts'
-import { type AiLedger, dailyCapReached, type InFlight } from './budget.ts'
+import { type AiLedger, dailyCapReached, type InFlight, type ReserveInput } from './budget.ts'
 import {
   badImage,
   type CheckedImage,
@@ -146,6 +147,22 @@ export const PHOTO_TOO_MUCH = {
 } as const satisfies Record<CaptureMode, string>
 export const TRANSCRIPT_TOO_MUCH =
   'There’s too much in this meeting to read at once. Try a shorter part of the transcript.'
+
+/** A token budget's refusal of a capture (budget.ts codes), in words that are true whatever is left; null: not one. */
+export function budgetWords(code: string, what: 'photo' | 'transcript'): string | null {
+  switch (code) {
+    case AI_ERROR_CODES.userBudget:
+      return what === 'transcript'
+        ? 'There isn’t enough of your AI allowance left today for a transcript this long. A shorter one may fit; the allowance resets at midnight UTC.'
+        : 'There isn’t enough of your AI allowance left today for a photo capture. It resets at midnight UTC.'
+    case AI_ERROR_CODES.workspaceBudget:
+      return 'There isn’t enough of this workspace’s AI budget left today for this capture. It resets at midnight UTC.'
+    case AI_ERROR_CODES.globalBudget:
+      return 'There isn’t enough of Lobby’s AI budget left today for this capture. It resets at midnight UTC.'
+    default:
+      return null
+  }
+}
 
 /** A failed capture call in the person's words (outcome.ts upstreamError, but for an answer cut off). */
 function callFailure(
@@ -244,6 +261,21 @@ export async function registerCapture(
     }
   }
 
+  /**
+   * The reservation (budget.ts). A budget's refusal is told in a capture's words: what is left today may be too little
+   * for this capture (it reserves what it may cost before any call) while being more than nothing, so "you've used your
+   * allowance" would not be true.
+   */
+  async function reserve(what: 'photo' | 'transcript', input: ReserveInput): Promise<{ id: string }> {
+    try {
+      return await ledger.reserve(input)
+    } catch (e) {
+      const words = e instanceof ApiError ? budgetWords(e.code, what) : null
+      if (e instanceof ApiError && words) throw new ApiError(e.status, e.code, words, { ...e.headers })
+      throw e
+    }
+  }
+
   async function settle(
     reply: FastifyReply,
     reservationId: string,
@@ -286,7 +318,7 @@ export async function registerCapture(
     const outputCap = Math.min(cap.maxOutputTokens, prompt.maxOutputTokens ?? cap.maxOutputTokens)
     const reserved =
       Math.max(promptTokens(prompt), promptTokensCeiling(prompt)) + CAPTURE_IMAGE_TOKENS_RESERVE + outputCap
-    const reservation = await ledger.reserve({
+    const reservation = await reserve('photo', {
       workspaceId: caller.access.board.workspace_id,
       boardId: caller.access.board.id,
       userId: caller.user.id,
@@ -506,13 +538,15 @@ export async function registerCapture(
     const prompts = parts.map((p, i) => meetingPrompt(p, i + 1, parts.length, title))
     // the capture's own output cap, as its transcript client sends it (index.ts)
     const outputCap = cap.maxOutputTokens
-    const mapReserve = prompts.map((p) => Math.max(promptTokens(p), promptTokensCeiling(p)) + outputCap)
-    // the reduce call's prompt is cut to 3 bytes a token of the input cap (so its estimate is within the cap, as
-    // every part's is) and its reservation is that many bytes, a token each: its worst case
-    const reduceBytes = cfg.maxInputTokens * 3
-    const reduceReserve = parts.length > 1 ? reduceBytes + 256 + outputCap : 0
+    // Each part reserves its prompt at prompt.ts's estimate (a token per 3 UTF-8 bytes: what the input cap is checked
+    // against), not at the token-per-byte ceiling a board run reserves. The transcript is the sender's own text, the
+    // ledger charges what OpenAI reports once the calls are done, and the in-flight limits bound what runs at once; at
+    // a token a byte, a 60,000-character meeting that costs a few thousand tokens reserved most of a person's day.
+    const mapReserve = prompts.map((p) => promptTokens(p) + outputCap)
+    // the reduce call's prompt is cut to the input cap by the same estimate (as every part's is), and reserved at it
+    const reduceReserve = parts.length > 1 ? cfg.maxInputTokens + outputCap : 0
     const reserved = mapReserve.reduce((a, b) => a + b, 0) + reduceReserve
-    const reservation = await ledger.reserve({
+    const reservation = await reserve('transcript', {
       workspaceId: caller.access.board.workspace_id,
       boardId: caller.access.board.id,
       userId: caller.user.id,
@@ -552,11 +586,11 @@ export async function registerCapture(
         // one reduce call names the themes over the whole meeting; its prompt is cut to its reservation
         let items = reduceItems(merged, REDUCE_MAX_NOTES)
         let prompt = themesPrompt(items)
-        while (items.length > 1 && promptTokensCeiling(prompt) > reduceBytes + 256) {
+        while (items.length > 1 && promptTokens(prompt) > cfg.maxInputTokens) {
           items = items.slice(0, Math.max(1, Math.floor(items.length * 0.8)))
           prompt = themesPrompt(items)
         }
-        if (promptTokensCeiling(prompt) <= reduceBytes + 256) {
+        if (promptTokens(prompt) <= cfg.maxInputTokens) {
           calls++
           const o = await client.chat(prompt).catch((): ChatOutcome => NETWORK_OUTCOME)
           charged += chargedFor(o, reduceReserve)

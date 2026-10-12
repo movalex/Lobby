@@ -161,6 +161,29 @@ export async function seedCaptureRows(
     )
 }
 
+/** Charges `tokens` to `userId` today (an earlier board run's ledger row, two hours ago: not a capture, not this hour). */
+export async function seedSpentTokens(
+  w: Pick<CaptureWorld, 'api'>,
+  userId: string,
+  board: string,
+  tokens: number,
+) {
+  const now = w.api.clock.now()
+  await w.api.db.query(
+    `INSERT INTO ai_usage (workspace_id, board_id, user_id, action, day, status, reserved_tokens,
+                           charged_tokens, created_at)
+     VALUES ($1, $2, $3, 'summarize', $4::date, 'done', $5, $5, $6)`,
+    [
+      DEV_STUDIO,
+      board,
+      userId,
+      now.toISOString().slice(0, 10),
+      tokens,
+      new Date(now.getTime() - 2 * 3_600_000),
+    ],
+  )
+}
+
 /** A stored image version of `board` with a display copy in the blob store (what the worker leaves). */
 export async function storedImage(
   w: Pick<CaptureWorld, 'api'>,
