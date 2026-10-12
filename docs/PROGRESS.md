@@ -1571,3 +1571,127 @@ cut-over on staging"; the runbook and the rehearsal: `docs/EXCALIDRAW-CUTOVER.md
     2. **Minor (security): transcript parts reserved their prompts at a token per 3 bytes.** Verified: a 60,000-character transcript of punctuation reserved 51,252 tokens for prompts of 63,367 bytes (close to a token a byte), so the budget check let a capture run about 3x past what it reserved. **Fix:** each part reserves `max(promptTokens, promptTokensCeiling)` plus its output cap, as board runs and photos do; the themes call is cut until its ceiling fits the input cap it reserves (it was cut by the estimate). Parts are still sized by the estimate, so 60,000 characters still fit in 2 parts, and, as for board runs, one call of symbol soup may send up to about 3x `DRAFTROOM_AI_MAX_INPUT_TOKENS` (accepted: the reservation and the ledger hold it). **Product effect:** a 60,000-character meeting now reserves 93,921 tokens while it runs in the test (was about 54,000; it was charged 16,757 by the fake), so it runs for someone who used 40,000 of the 150,000 today, no longer for someone who used 80,000 (the refusal says a shorter one may fit); the ledger still charges what OpenAI reports. On a very long meeting the themes call may see fewer notes; the notes it is not sent keep their part's theme. Tests: `capture.test.ts` "a transcript of punctuation soup ... reserves every call at a token per byte" (failed before: 51,252 < 63,367); the 60,000-character budget case and the 4-part case updated to the new rule.
     3. **Minor (regression): with reactions off, a checkpoint restore put reaction keys back after strip-keys.** Verified with the probe's steps: a re-created note took the checkpoint's `react:*` keys under `DRAFTROOM_REACTIONS=off`, so the board strip-keys had cleaned was dirty again before 104c6e0 went live. **Fix:** `applyRestoreElements` takes the sync's kill switch (`config.reactions`); off, a re-created element comes back without reaction keys (a live element keeps the marks it has now, as before). Test: `restore-elements.test.ts` "with DRAFTROOM_REACTIONS off a re-created note comes back without the checkpoint's reactions" (real sync process, SIGKILL, restart on the same data dir with reactions off, strip-keys, restore; failed before with `['react:heart:ann']`).
     - **Checks (on the final tree of this round):** `pnpm lint` (2,706 files, 0 errors, the same 4 older warnings); `pnpm -r typecheck` (all packages, 0 errors). Units (`--maxWorkers=4`): `apps/web` 4,810 passed / 2 skipped (its 6 `node --test` files fail to load under vitest, as always); `apps/api` (PGlite) 1,903 passed / 113 skipped; `apps/sync` 912 passed / 5 skipped / 6 failed, all six at vitest's 5 s timeout in files this round did not touch (`presence-rank` 4, `negative/reactions` 1, `disk-notice` 1); those three files alone with `--testTimeout=60000` 26/26. e2e chromium, one worker, `E2E_PORT_BASE=7700`: `n5-transcript`, `l2-wrapup`, `n4-since-visit`, `l7-time-travel`, `history-checkpoints` **27/27**. Not run: the whole e2e suite, the stale-client pairs (no wire or frame change), real Postgres (no SQL change), anything against Render, Clerk, R2 or the NAS. Not deployed; not merged to `main`.
+
+- **Excalidraw wave N.1: the wave N follow-ups (branch `wave-n1/integration`, worktree `Draftroom-n1int`, from `main` 047f19d5 = what staging runs: api, sync and web at 4fd0c2d, `CONTRACTS_REV` 13).** Four workstreams were run as background agents rather than a Workflow:
+  - `wave-n1/pdf` (`Draftroom-n1a`);
+  - `wave-n1/speed` (`n1b`);
+  - `wave-n1/web-polish` (`n1c`);
+  - `wave-n1/server` (`n1d`).
+
+  Then three read-only reviewers (sync and undo; server and security; PDF and web) and four fix branches:
+  - `fix-leftovers` (`n1e`);
+  - `fix-thumbs` (`n1f`);
+  - `fix-review` (`n1d`);
+  - `fix-pdf` (`n1c`).
+
+  Everything was merged with `--no-ff`, and no merge had a conflict. Merge order:
+  - pdf 66dfadb3, server ec616ed1, web-polish caba892f, speed c8b2836b;
+  - fix-leftovers aaefae67, fix-thumbs dbab8334, fix-review 0c8837e2, fix-pdf 4fb4ea7b.
+
+  Lead commits:
+  - 65884452: render.yaml `DRAFTROOM_OUTBOUND_BUDGET_MB` 128 → 64, and `scripts/nas-lint.sh`;
+  - c5c57215: `nas-pg-api.sh` runs packages/db with one worker and gains `--only`;
+  - 4fa6dfe5: `nas-lint.sh --write`;
+  - f284635f and aa0e589f: biome fixes.
+
+  What does not change:
+  - **No migration**, no `CONTRACTS_REV`, wire-frame, `ELEMENT_SCHEMA_VERSION` or `LOBBY_CLIENT_REV` change.
+  - The one new route is api → sync `GET /internal/clock`, behind the internal secret.
+
+  **The one dependency:** `@pdf-lib/fontkit` 1.1.1.
+  - Licence MIT. Its only dependency, pako 1.0.11, was already locked.
+  - The lockfile gains 13 lines, all its own. No install scripts. `licence:check` passes.
+  - It loads only in the PDF worker and the no-worker fallback chunk, which the bundle test proves.
+  - **Lint on this PC:** since 2026-10-12, Windows Smart App Control blocks `biome.exe` in every checkout ("An Application Control policy has blocked this file"). That is a security setting and is left alone. Every branch was linted on the NAS with `scripts/nas-lint.sh` (throwaway `draftroom-lint*` containers; the same Linux biome from the lockfile).
+  - **What wave N.1 brings.**
+    - **Vector PDF export is on** (`VECTOR_PDF = true`).
+      - Text is set in subsets of Lobby's own fonts, so it is selectable and searchable. Shapes are vector paths. Image pages are the fallback.
+      - fontkit's subsetter wrote broken glyphs for the woff2 faces, so the adapter rebuilds every glyph from its outline: every glyph of the 229 registered faces survives a round trip.
+      - A face is chosen per character by the glyphs it has, not by its declared `unicode-range`. Nunito's and Lilita's latin files declare 1,906 code points they lack (U+2011, U+202F, U+00A0 in Lilita, …). The order is: the next face of the family, then Helvetica, then Lobby's `any` face, then a browser-drawn picture with invisible text.
+      - A failure at save-time subsetting, a vector page over 30 s, or a document that cannot be finished: the export redoes the PDF with image pages. Cancel terminates the worker at once.
+      - A mid board (8 frames, 153 elements, one photo) exports at about 130 KB, against 2.1 MB as image pages. The PDF worker is 603 KB gzip (259 KB before) and loads only for a PDF export.
+      - The committed `csp:cutover` now seeds a board over the snapshot worker's floor and exports a PDF: both workers start, 0 violations, 0 foreign requests.
+    - **Big boards** (follow-up 2 and a profile-led pass):
+      - undo copies through `copyElement`, and reuses the copies it already holds;
+      - the features' per-move reads go through `canvas.index`;
+      - `afterSceneChange` compares by position;
+      - the cold open's chunks are cheaper;
+      - the board cache digest uses WebCrypto;
+      - on a large board the features install a frame after the welcome, and the canvas takes no input until they do.
+      - **`CHUNKED_APPLY` is on** (chunks of 600; `n4-since-visit` on the 10k board passed before it went on).
+      - `DIFF_APPLY` and `SIZE_AWARE_LOD` stay off: they do not reach their targets.
+    - **Measured on the final code** (aa0e589f, a quiet machine at 3-4% load, CPU 4x, 3 runs per spec; each run is 3 opens):
+      - cold open's longest task: medians 111/116/114 ms (target ≤200 ms; it was 741 ms on main): **met**;
+      - warm open painted: 1354/1343/1339 ms (≤1.5 s; 1870 on main): **met**;
+      - warm open editable over Fast 4G: 5334/5455/5238 ms (≤3.5 s; 6477 on main): **not met**. The 392 KB snapshot over Fast 4G is most of it; loopback is editable at about 1.8 s. It needs `RESUME_FROM_CACHE` with a lineage check, which is protocol work.
+      - 4x pan: 13.2-16.1 fps at fit, 8.8-9.7 at 0.25, 11.5-14.1 at 0.5 (≥30): **not met**. The cost is Excalidraw's own per-frame renderer.
+      - Cold open on loopback, editable: 2.67-2.69 s median.
+    - **The server and robustness follow-ups (wave M 5, 7, 8; wave N 5, 6):**
+      - the dashboard bell polls with a lagging `since` cursor (a seq is trusted once a whole answer ten or more seconds later still shows it; 204 when nothing is new);
+      - open-state has its own 60-a-minute limit;
+      - the share badge's first read waits for the stream's hello;
+      - `finalBackupOf` reads `offsiteOnly`;
+      - permessage-deflate deflates only frames of 1 KiB or more (ws 8.21 ignored its threshold);
+      - the outbound budget is 64 MiB (close line 80 MiB, under the 512 MB instance with the measured 310 MB RSS), and a binary frame many sockets share counts once until ws's send callback;
+      - the AI ledger row is settled when `answerOf` fails after the model call;
+      - a "seen" inside the api's 10 s interval is kept server-side;
+      - visit times are stored on the sync's clock (samples older than two intervals dropped), falling back to the api's own clock against an older sync;
+      - `NetworkLog.settle()` no longer hangs;
+      - a capture photo's 401 signs the page out, but only when `/api/me` says so;
+      - DEPLOY.md and EXCALIDRAW-CONTRACTS §0b/§12 cover rev 13.
+    - **The web follow-ups (wave M 1, 2, 3, 4, 6, 8; wave L):**
+      - in dark mode the note editor's ink is readable (12.27:1, was 1.14:1);
+      - the style tray's DOM order matches what is shown;
+      - a Hand-tool press on the chrome is no pan;
+      - `run-of-show-end` means the last section's own timer;
+      - a held laser stops after 30 s without a sample;
+      - the coach's 6 h vote cutoff uses the server clock;
+      - one beacon per leave;
+      - a hidden tab with words typed in any form or dialog shows the update notice instead of reloading;
+      - "Try it" is disabled with a reason when there is nowhere to go;
+      - a build without `VITE_PUBLIC_ORIGIN` has no og:image placeholder;
+      - Use template honours the dialog's Title and Project;
+      - the facade's `setViewport` stops the camera tween;
+      - and the smaller W2/W4/W6/W8 items in the web report.
+    - **Thumbnails:** a real race, on main too (4 of 12 runs of the spec file failed there). When the upload's answer came between the dashboard card's first draw and its listener, the "thumbnail sent" event was lost and the card kept its placeholder. Each tab now remembers its last announcement per board for 10 s, inside the api's 30 s upload limit. Result: 0 of 12 failing runs, plus two e2e tests that force both orders.
+  - **Review** (three reviewers, read-only; the findings as they reported them, every one fixed with a test that failed first):
+    - one MAJOR: characters the face's range claimed but its font lacked were drawn as .notdef boxes;
+    - minors:
+      - the save-time subset throw hung the export;
+      - Cancel could not stop a vector page;
+      - a shared snapshot was counted per socket, so a 40-joiner storm crossed the close line;
+      - the bell's `since` could miss an item that committed out of seq order;
+      - a stale clock sample could win for 25 min;
+      - the DEPLOY.md budget text;
+      - events in the gap before a big board's features install;
+      - inline-form typed work.
+    - Plus guard tests: every merge write path bumps `version`, and undo's adopted baseline equals the confirmed row.
+    - The sync and undo reviewer checked `CHUNKED_APPLY`, the lazy row copies, undo, `canvas.index`, the position compare, the receive-only rule and the cache digest, and found them sound.
+  - **The gate on aa0e589f** (E2E_PORT_BASE 7700 and 7704):
+    - lint on the NAS: 2,738 files, 0 errors, the same 4 older warnings;
+    - `pnpm -r typecheck`: 15 packages;
+    - `pnpm test`, every unit project: **861 files passed / 26 skipped, 9,348 tests passed / 125 skipped, 0 failed** (119 s);
+    - real Postgres (`scripts/nas-pg-api.sh aa0e589f`, PostgreSQL 18): api **218 files / 2,043 passed / 1 skipped**, packages/db **12 files, 82/82**. All `*.pg.test.ts` passed: `visits.pg`, `open-state.pg` (20 open-states on a pool of 5 in 98 ms) and `workspace-ask.pg` among them;
+    - the whole e2e suite on chromium, two shards, one worker each: **normally 980 passed, 0 failed, 14 skipped** (shard 1 503/503 in 22.6 min, shard 2 477 passed in 42.0 min); **with `E2E_DIRECT_EVENTS=1`: 980 passed, 0 failed, 14 skipped** (shard 1 503/503 in 22.3 min, shard 2 477 passed in 42.2 min).
+    - No stale-client pair was run: there is no `CONTRACTS_REV`, frame or wire change.
+    - The reviewer checked the cross-version paths in code:
+      - an old web sends no `since` and gets the whole list;
+      - a new web on an old api starts at 0;
+      - a new api on the old sync keeps its own clock;
+      - deflate's mixed per-message RSV1 is RFC 7692-legal, and ws orders the messages.
+  - **Not run:**
+    - Firefox and WebKit;
+    - PDF viewers other than pdf.js;
+    - real phones;
+    - the warm open's lineage work;
+    - anything against Render before the deploy.
+  - **Deploy order:** api, then sync (`DRAFTROOM_OUTBOUND_BUDGET_MB=64` first), then web. Every chunk hash changes.
+  - **Follow-ups:**
+    1. `RESUME_FROM_CACHE` with a lineage check, then DIFF_APPLY's gate again: the warm open's editable time.
+    2. An Excalidraw renderer change (per-frame visible-element and bound-text bounds) before the 4x pan can reach 30 fps.
+    3. Visits: a note made and deleted while away still counts as removed, because tombstones carry no creation time (needs a schema decision). Another device opened within the same 10 s still reads the older visit time.
+    4. The board's own bell (`features/comments/store.ts`) has the same out-of-order seq race as the dashboard's.
+    5. PDF: kerning is measured but not drawn, and hinting is dropped.
+    6. The toast host lives in the page (a refactor).
+    7. workshops-voting W5-03 fails without Playwright tracing, on main too.
+    8. The file-card layer rebuilds while images load.
