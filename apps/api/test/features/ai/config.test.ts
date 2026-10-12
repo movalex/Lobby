@@ -112,7 +112,10 @@ describe('parseCaptureConfig (wave N, WS5)', () => {
       transcriptUserDaily: 10,
       transcriptMaxChars: 60_000,
       visionTimeoutMs: 60_000,
+      // a capture call's own output cap: the board's 1,500 would cut a wall of 30 notes short
+      maxOutputTokens: 6_000,
     })
+    expect(parseAiConfig({}, false).maxOutputTokens).toBe(1_500)
     expect(parseCaptureConfig({ DRAFTROOM_AI_VISION: '' }).vision).toBe(false)
     expect(parseCaptureConfig({ DRAFTROOM_AI_VISION: 'off' }).vision).toBe(false)
     expect(parseCaptureConfig({ DRAFTROOM_AI_VISION: 'ON' }).vision).toBe(true)
@@ -130,6 +133,7 @@ describe('parseCaptureConfig (wave N, WS5)', () => {
         DRAFTROOM_AI_TRANSCRIPT_USER_DAILY: '5',
         DRAFTROOM_AI_TRANSCRIPT_MAX_CHARS: '20000',
         DRAFTROOM_AI_VISION_TIMEOUT_MS: '90000',
+        DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS: '9000',
       }),
     ).toEqual({
       vision: true,
@@ -139,13 +143,26 @@ describe('parseCaptureConfig (wave N, WS5)', () => {
       transcriptUserDaily: 5,
       transcriptMaxChars: 20_000,
       visionTimeoutMs: 90_000,
+      maxOutputTokens: 9_000,
     })
+    // the board's own output cap is not the capture's
+    expect(parseAiConfig({ DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS: '9000' }, false).maxOutputTokens).toBe(
+      1_500,
+    )
     const cases: [Record<string, string>, RegExp][] = [
       [{ DRAFTROOM_AI_VISION: 'yes' }, /DRAFTROOM_AI_VISION must be on or off/],
       [{ DRAFTROOM_AI_VISION_MODEL: 'gpt 5' }, /DRAFTROOM_AI_VISION_MODEL/],
       [{ DRAFTROOM_AI_TRANSCRIPT_MAX_CHARS: '60001' }, /DRAFTROOM_AI_TRANSCRIPT_MAX_CHARS must be between/],
       [{ DRAFTROOM_AI_VISION_USER_DAILY: '-2' }, /whole number/],
       [{ DRAFTROOM_AI_VISION_TIMEOUT_MS: '5' }, /DRAFTROOM_AI_VISION_TIMEOUT_MS/],
+      [
+        { DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS: '100' },
+        /DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS must be between/,
+      ],
+      [
+        { DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS: '16001' },
+        /DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS must be between/,
+      ],
     ]
     for (const [env, message] of cases)
       expect(() => parseCaptureConfig(env), JSON.stringify(env)).toThrow(message)

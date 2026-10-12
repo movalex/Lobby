@@ -135,6 +135,28 @@ const newRunId = (): string => newId('air')
 export const BOARD_IMAGE_MISSING = 'That image isn’t on this board, or Lobby can’t read it.'
 const noBoardImage = () => new ApiError(404, 'NOT_FOUND', BOARD_IMAGE_MISSING)
 
+/**
+ * An answer cut off at the capture's output cap (DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS): what was asked holds more
+ * than one answer can carry, so the person is told what to send instead (a retry of the same would end the same).
+ */
+export const PHOTO_TOO_MUCH = {
+  notes: 'There are too many notes in this photo to read at once. Try a closer photo of part of the wall.',
+  diagram: 'This diagram is too big to read at once. Try a closer photo of part of it.',
+  auto: 'There’s too much in this photo to read at once. Try a closer photo of part of it.',
+} as const satisfies Record<CaptureMode, string>
+export const TRANSCRIPT_TOO_MUCH =
+  'There’s too much in this meeting to read at once. Try a shorter part of the transcript.'
+
+/** A failed capture call in the person's words (outcome.ts upstreamError, but for an answer cut off). */
+function callFailure(
+  outcome: Extract<ChatOutcome, { ok: false }>,
+  what: CaptureMode | 'transcript',
+): ApiError {
+  if (outcome.kind !== 'truncated') return upstreamError(outcome)
+  const message = what === 'transcript' ? TRANSCRIPT_TOO_MUCH : PHOTO_TOO_MUCH[what]
+  return new ApiError(502, AI_ERROR_CODES.badOutput, message)
+}
+
 export async function registerCapture(
   app: FastifyInstance,
   ctx: FeatureContext,
@@ -260,7 +282,8 @@ export async function registerCapture(
     if (!client) throw notFound()
     await stillOn(caller.access)
     const prompt = photoPrompt(mode)
-    const outputCap = Math.min(cfg.maxOutputTokens, prompt.maxOutputTokens ?? cfg.maxOutputTokens)
+    // the capture's own output cap (a wall of notes is a long answer), as the vision client sends it
+    const outputCap = Math.min(cap.maxOutputTokens, prompt.maxOutputTokens ?? cap.maxOutputTokens)
     const reserved =
       Math.max(promptTokens(prompt), promptTokensCeiling(prompt)) + CAPTURE_IMAGE_TOKENS_RESERVE + outputCap
     const reservation = await ledger.reserve({
@@ -278,7 +301,7 @@ export async function registerCapture(
       .catch((): ChatOutcome => NETWORK_OUTCOME)
     const charged = chargedFor(outcome, reserved)
     let result: CaptureResult | null = null
-    let failure: ApiError = outcome.ok ? badOutput() : upstreamError(outcome)
+    let failure: ApiError = outcome.ok ? badOutput() : callFailure(outcome, mode)
     if (outcome.ok) {
       try {
         result = photoResult(mode, outcome.json)
@@ -481,7 +504,8 @@ export async function registerCapture(
     if (!parts.length) throw badRequest('There’s no text in the transcript to send.')
     await stillOn(caller.access)
     const prompts = parts.map((p, i) => meetingPrompt(p, i + 1, parts.length, title))
-    const outputCap = cfg.maxOutputTokens
+    // the capture's own output cap, as its transcript client sends it (index.ts)
+    const outputCap = cap.maxOutputTokens
     const mapReserve = prompts.map((p) => Math.max(promptTokens(p), promptTokensCeiling(p)) + outputCap)
     // the reduce call's prompt is cut to 3 bytes a token of the input cap (so its estimate is within the cap, as
     // every part's is) and its reservation is that many bytes, a token each: its worst case
@@ -510,7 +534,7 @@ export async function registerCapture(
     const answers: MeetingPart[] = []
     for (const o of outcomes) {
       if (!o.ok) {
-        failure ??= upstreamError(o)
+        failure ??= callFailure(o, 'transcript')
         continue
       }
       try {

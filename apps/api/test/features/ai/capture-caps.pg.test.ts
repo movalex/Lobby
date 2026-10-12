@@ -15,7 +15,15 @@ const ITER = Number(process.env.DRAFTROOM_PG_STRESS_ITER ?? 3)
 describe.skipIf(!PG_URL)('Capture the room caps on real Postgres (DRAFTROOM_TEST_DATABASE_URL)', () => {
   it('12 parallel photos from one person: 10 accepted, 2 refused by the day’s cap', async () => {
     for (let round = 0; round < ITER; round++) {
-      const w = await captureWorld({ inFlight: { user: 20, workspace: 20, total: 20 } })
+      // the token budgets lifted out of the way: only the day's cap may refuse
+      const w = await captureWorld({
+        inFlight: { user: 20, workspace: 20, total: 20 },
+        env: {
+          DRAFTROOM_AI_USER_DAILY_TOKENS: '100000000',
+          DRAFTROOM_AI_DAILY_TOKENS: '100000000',
+          DRAFTROOM_AI_GLOBAL_DAILY_TOKENS: '1000000000',
+        },
+      })
       try {
         const res = await Promise.all(Array.from({ length: 12 }, () => postPhoto(w, w.alice.cookie, w.board)))
         const ok = res.filter((r) => r.statusCode === 200)

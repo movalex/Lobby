@@ -15,6 +15,9 @@
 //   DRAFTROOM_AI_VISION=on|off, DRAFTROOM_AI_VISION_MODEL (default OPENAI_MODEL), DRAFTROOM_AI_VISION_USER_DAILY
 //   (10 a person), DRAFTROOM_AI_VISION_GLOBAL_DAILY (150 for all of Lobby), DRAFTROOM_AI_TRANSCRIPT_USER_DAILY (10 a
 //   person), DRAFTROOM_AI_TRANSCRIPT_MAX_CHARS (60,000, the contract's most), DRAFTROOM_AI_VISION_TIMEOUT_MS (60 s).
+// A capture's answer is longer than a board run's (a wall of 100 notes is strict JSON with a text, a colour and a box
+// each, about 40 tokens a note, and reasoning tokens count too), so capture calls have an output cap of their own:
+//   DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS (6,000; the board's DRAFTROOM_AI_MAX_OUTPUT_TOKENS is not raised for it).
 
 import {
   CAPTURE_DEFAULT_CAPS,
@@ -73,9 +76,20 @@ export interface CaptureConfig {
   transcriptUserDaily: number
   /** DRAFTROOM_AI_TRANSCRIPT_MAX_CHARS: the most of a transcript that is read (default and most 60,000). */
   transcriptMaxChars: number
-  /** DRAFTROOM_AI_VISION_TIMEOUT_MS: one photo call, answer included (default 60 s). */
+  /**
+   * DRAFTROOM_AI_VISION_TIMEOUT_MS: one photo call, answer included (default 60 s). A transcript part's call gets
+   * the longer of it and DRAFTROOM_AI_TIMEOUT_MS: its answer can be as long as a photo's.
+   */
   visionTimeoutMs: number
+  /**
+   * DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS: max_completion_tokens of every capture call (a photo, a board image, a
+   * transcript part and the themes call), reasoning included, and what each reserves for its answer (default 6,000).
+   */
+  maxOutputTokens: number
 }
+
+/** A capture call's output cap by default: the contract's 120 notes at about 40 tokens each, and the reasoning. */
+export const CAPTURE_MAX_OUTPUT_TOKENS_DEFAULT = 6_000
 
 export const DEFAULT_CAPTURE_CONFIG: Readonly<CaptureConfig> = Object.freeze<CaptureConfig>({
   vision: false,
@@ -85,6 +99,7 @@ export const DEFAULT_CAPTURE_CONFIG: Readonly<CaptureConfig> = Object.freeze<Cap
   transcriptUserDaily: CAPTURE_DEFAULT_CAPS.transcriptUserDaily,
   transcriptMaxChars: CAPTURE_TRANSCRIPT_MAX_CHARS,
   visionTimeoutMs: CAPTURE_VISION_TIMEOUT_MS_DEFAULT,
+  maxOutputTokens: CAPTURE_MAX_OUTPUT_TOKENS_DEFAULT,
 })
 
 export const DEFAULT_AI_CONFIG: Readonly<AiConfig> = Object.freeze<AiConfig>({
@@ -194,6 +209,7 @@ export function parseCaptureConfig(env: Env): CaptureConfig {
       CAPTURE_TRANSCRIPT_MAX_CHARS,
     ),
     visionTimeoutMs: int(env, 'DRAFTROOM_AI_VISION_TIMEOUT_MS', d.visionTimeoutMs, 1_000, 180_000),
+    maxOutputTokens: int(env, 'DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS', d.maxOutputTokens, 256, 16_000),
   }
 }
 

@@ -82,8 +82,12 @@ const PHOTO_SYSTEM = [
   'Never invent words, names or numbers that are not in the photo; leave out what you cannot read.',
 ].join(' ')
 
-const BOX_WORDS =
-  'A box is where the thing is in the photo, as fractions of the photo: x and y its top-left corner, w and h its width and height, each between 0 and 1.'
+// Two decimals are plenty for a layout (1% of the photo) and keep a wall of notes' answer short: every box is four
+// numbers, and the answer has to fit the capture's output cap (config.ts DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS).
+const BOX_WORDS = [
+  'A box is where the thing is in the photo, as fractions of the photo: x and y its top-left corner, w and h its',
+  'width and height, each between 0 and 1 with at most two decimals (such as 0.25).',
+].join(' ')
 
 const NOTES_WORDS = [
   `notes: every sticky note you can read (at most ${CAPTURE_NOTES_MAX}), in reading order (top to bottom, left to right).`,

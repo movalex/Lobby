@@ -12,6 +12,7 @@ import {
   type CaptureResult,
 } from '@draftroom/contracts'
 import { afterEach, describe, expect, it } from 'vitest'
+import { PHOTO_TOO_MUCH, TRANSCRIPT_TOO_MUCH } from '../../../src/features/ai/capture.ts'
 import { ORIGIN } from '../../helpers.ts'
 import { guestLink, joinAsGuest } from '../guests/support.ts'
 import { jpeg, png, webpLossy } from '../thumbnails/images.ts'
@@ -28,7 +29,7 @@ import {
   transcript,
 } from './capture-support.ts'
 import { FAKE_IMAGE_TOKENS, imagePartsOf, userTextOf } from './fake-openai.ts'
-import { expectError } from './support.ts'
+import { expectError, run } from './support.ts'
 
 let w: CaptureWorld | null = null
 afterEach(async () => {
@@ -375,6 +376,13 @@ describe('an image already on the board', () => {
   })
 })
 
+/** Token budgets far above anything a test spends: only the per-day capture caps can refuse. */
+const UNLIMITED_TOKENS = {
+  DRAFTROOM_AI_USER_DAILY_TOKENS: '100000000',
+  DRAFTROOM_AI_DAILY_TOKENS: '100000000',
+  DRAFTROOM_AI_GLOBAL_DAILY_TOKENS: '1000000000',
+}
+
 describe('the per-day caps', () => {
   it('over the person’s photo cap: 429 AI_CAPTURE_DAILY_CAP, the ledger as it was, nothing sent', async () => {
     const x = await world({ env: { DRAFTROOM_AI_VISION_USER_DAILY: '2' } })
@@ -421,7 +429,9 @@ describe('the per-day caps', () => {
   })
 
   it('12 photos at once from one person: exactly 10 are accepted (the cap holds under concurrency)', async () => {
-    const x = await world({ inFlight: { user: 20, workspace: 20, total: 20 } })
+    // the token budgets lifted out of the way (UNLIMITED_TOKENS), so only the day's cap can refuse: without its check in
+    // the reservation's transaction all 12 would pass the earlier read-only precheck together
+    const x = await world({ inFlight: { user: 20, workspace: 20, total: 20 }, env: UNLIMITED_TOKENS })
     const res = await Promise.all(Array.from({ length: 12 }, () => postPhoto(x, x.alice.cookie, x.board)))
     const codes = res.map((r) => r.statusCode).sort()
     expect(codes.filter((c) => c === 200)).toHaveLength(10)
@@ -547,5 +557,79 @@ describe('the transcript', () => {
       Array.from({ length: parts }, (_, i) => `Part ${i}`).sort(),
     )
     expect((await captureRows(x.api)).map((r) => r.status)).toEqual(['failed', 'done'])
+  })
+})
+
+describe('the capture’s own output cap (DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS)', () => {
+  it('every capture call may answer at length (6,000 tokens by default), and reserves that; the board’s AI keeps its own cap', async () => {
+    const x = await world({ env: { DRAFTROOM_AI_MAX_OUTPUT_TOKENS: '1000' } })
+    expect((await postPhoto(x, x.alice.cookie, x.board)).statusCode).toBe(200)
+    expect((await transcript(x.alice, x.board, { text: MEETING })).statusCode).toBe(200)
+    expect(x.openai.requests.map((r) => r.body.max_completion_tokens)).toEqual([6_000, 6_000])
+    // what a photo reserves: its prompt, the image and the whole answer it may give
+    const [photo] = await captureRows(x.api)
+    expect(photo?.reserved_tokens).toBeGreaterThan(6_000 + 10_000)
+    // the board's own AI (here Diagram from words) is not raised by it
+    const run_ = await run(x.bob, x.board, {
+      action: 'diagram',
+      shapeIds: [],
+      direction: 'down',
+      prompt: 'a flow',
+    })
+    expect(run_.statusCode, run_.body).toBe(200)
+    expect(x.openai.requests.at(-1)?.body.max_completion_tokens).toBe(1_000)
+  })
+
+  it('the operator’s value goes on every call of a long transcript (the parts and the themes call) and on photos', async () => {
+    const x = await world({
+      env: { DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS: '9000', DRAFTROOM_AI_MAX_INPUT_TOKENS: '1500' },
+    })
+    const text = Array.from({ length: 120 }, (_, i) => `Speaker ${i % 3}: point ${i} about the plan.`).join(
+      '\n',
+    )
+    expect((await transcript(x.alice, x.board, { text })).statusCode).toBe(200)
+    expect((await postPhoto(x, x.alice.cookie, x.board)).statusCode).toBe(200)
+    const caps = x.openai.requests.map((r) => r.body.max_completion_tokens)
+    expect(caps.length).toBeGreaterThan(2)
+    expect(new Set(caps)).toEqual(new Set([9_000]))
+  })
+
+  it('a wall too big for one answer (cut off at the cap): 502 that says to photograph part of it; the row is kept', async () => {
+    const x = await world()
+    const cut = { kind: 'content' as const, content: '{"notes":[{"text":"Shorter', finish: 'length' }
+    x.openai.next(cut)
+    const notes = await postPhoto(x, x.alice.cookie, x.board, PHOTO, { mode: 'notes' })
+    expectError(notes, 502, 'AI_BAD_OUTPUT')
+    expect(notes.json().error.message).toBe(PHOTO_TOO_MUCH.notes)
+    x.openai.next(cut)
+    const diagram = await postPhoto(x, x.alice.cookie, x.board, PHOTO, { mode: 'diagram' })
+    expect(diagram.json().error.message).toBe(PHOTO_TOO_MUCH.diagram)
+    x.openai.next(cut)
+    expect((await postPhoto(x, x.alice.cookie, x.board, PHOTO, { mode: 'auto' })).json().error.message).toBe(
+      PHOTO_TOO_MUCH.auto,
+    )
+    x.openai.next(cut)
+    const meeting = await transcript(x.alice, x.board, { text: MEETING })
+    expectError(meeting, 502, 'AI_BAD_OUTPUT')
+    expect(meeting.json().error.message).toBe(TRANSCRIPT_TOO_MUCH)
+    // the calls were made and cost what they cost: their rows stay, failed
+    expect((await captureRows(x.api)).map((r) => [r.action, r.status])).toEqual([
+      ['capture-photo', 'failed'],
+      ['capture-photo', 'failed'],
+      ['capture-photo', 'failed'],
+      ['capture-transcript', 'failed'],
+    ])
+    // any other unusable answer keeps the general words
+    x.openai.next({ kind: 'content', content: 'not json' })
+    expect((await postPhoto(x, x.alice.cookie, x.board)).json().error.message).toBe(
+      'The AI’s answer couldn’t be used. Try again.',
+    )
+  })
+
+  it('asks for boxes with at most two decimals (a shorter answer for a wall of notes)', async () => {
+    const x = await world()
+    for (const mode of ['notes', 'diagram', 'auto'])
+      expect((await postPhoto(x, x.alice.cookie, x.board, PHOTO, { mode })).statusCode).toBe(200)
+    for (const r of x.openai.requests) expect(userTextOf(r)).toContain('at most two decimals (such as 0.25)')
   })
 })

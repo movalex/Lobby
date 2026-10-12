@@ -336,24 +336,38 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
   // model client and per-board gate as the board's AI
   registerWorkspaceAsk(app, ctx, { runsPerUser, inFlight, ledger, client, loaders })
   // wave N (WS5): Capture the room (./capture.ts), under the same per-minute and in-flight limits, ledger and gate.
-  // Photos go through a client of their own: DRAFTROOM_AI_VISION_MODEL (else OPENAI_MODEL) and the vision timeout.
+  // Its calls go through clients of their own, with the capture's output cap (DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS:
+  // a wall of notes is a long answer; the board's own cap stays as it is): photos with DRAFTROOM_AI_VISION_MODEL
+  // (else OPENAI_MODEL) and the vision timeout, transcripts with OPENAI_MODEL and the longer of the two timeouts.
+  const capture = cfg.capture
   const visionClient: OpenAiClient | null =
-    cfg.apiKey && cfg.capture.vision
+    cfg.apiKey && capture.vision
       ? createOpenAiClient({
           apiKey: cfg.apiKey,
           baseUrl: cfg.baseUrl,
-          model: cfg.capture.visionModel ?? cfg.model,
-          timeoutMs: cfg.capture.visionTimeoutMs,
-          maxOutputTokens: cfg.maxOutputTokens,
+          model: capture.visionModel ?? cfg.model,
+          timeoutMs: capture.visionTimeoutMs,
+          maxOutputTokens: capture.maxOutputTokens,
           reasoningEffort: cfg.reasoningEffort,
           fetchImpl: aiSettings.fetchImpl,
         })
       : null
+  const transcriptClient: OpenAiClient | null = cfg.apiKey
+    ? createOpenAiClient({
+        apiKey: cfg.apiKey,
+        baseUrl: cfg.baseUrl,
+        model: cfg.model,
+        timeoutMs: Math.max(cfg.timeoutMs, capture.visionTimeoutMs),
+        maxOutputTokens: capture.maxOutputTokens,
+        reasoningEffort: cfg.reasoningEffort,
+        fetchImpl: aiSettings.fetchImpl,
+      })
+    : null
   await registerCapture(app, ctx, {
     runsPerUser,
     inFlight,
     ledger,
-    client,
+    client: transcriptClient,
     visionClient,
     loaders,
     pending: aiSettings.capturePending,
