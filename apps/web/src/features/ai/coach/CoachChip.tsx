@@ -21,7 +21,7 @@ import { computed, subscribeValue } from '../../../lib/signals.ts'
 import { countUsage } from '../../../lib/usage.ts'
 import { runCommand } from '../../canvas-ux/ported/commands.ts'
 import { getLive } from '../../present-export/live/ported/controller.ts'
-import { voteStarterOf } from '../../workshops/store.ts'
+import { serverNowOf, voteStarterOf } from '../../workshops/store.ts'
 import { SparkIcon } from '../icons.tsx'
 import { canBuildWithAi } from '../ported/gate.ts'
 import { AI_COMMAND_IDS } from '../ported/public.ts'
@@ -124,7 +124,7 @@ const livePresenter = (ctx: CanvasFeatureContext) =>
 export function sessionFactsOf(
   ctx: CanvasFeatureContext,
   presenter: string | null,
-  now: number = Date.now(),
+  now: number = serverNowOf(ctx.events),
 ): SessionFacts {
   // N1: last week's vote is no longer this session's: its starter does not keep the coach
   const vote = liveWorkshop(coachWorkshop(ctx.canvas).get(), now).vote
@@ -143,7 +143,7 @@ function useCoachStep(ctx: CanvasFeatureContext): CoachStep | null {
   const compute = () => {
     seedWorkshop(ctx)
     return JSON.stringify(
-      nextStep(liveWorkshop(coachWorkshop(canvas).get(), Date.now()), coachFacts(canvas), {
+      nextStep(liveWorkshop(coachWorkshop(canvas).get(), serverNowOf(ctx.events)), coachFacts(canvas), {
         facilitator: !canvas.readOnly() && runsSession(sessionFactsOf(ctx, presenter.get())),
         following: canvas.follow.current() !== null,
         ai: canBuildWithAi(aiStatus(canvas).get(), canvas.readOnly()),

@@ -19,7 +19,7 @@ import {
 import type { CanvasElement, CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { items } from '../../../canvas/api/index.ts'
 import { type Atom, atom } from '../../../lib/signals.ts'
-import { lastRevealedResults, voteActivityAtOf, voteStarterOf } from '../../workshops/store.ts'
+import { lastRevealedResults, serverNowOf, voteActivityAtOf, voteStarterOf } from '../../workshops/store.ts'
 import { aiKindWord } from '../ported/provenance.ts'
 import { perCanvas } from '../ported/runtime.ts'
 import { frameIndex, frameOfElement, idOfRef, isLive, isNote, noteFacts } from '../ported/target.ts'
@@ -125,7 +125,10 @@ export function listenWorkshop(ctx: Pick<CanvasFeatureContext, 'canvas' | 'event
   const seed = () => seedWorkshop(ctx)
   seed()
   const offs = [WORKSHOP_EVENTS.vote, WORKSHOP_EVENTS.results, PRIVATE_NOTES_EVENTS.changed].map((type) =>
-    ctx.events.on(type, (data) => slot.set(applyWorkshopEvent(slot.get(), type, data))),
+    // wave N.1: stamped with the server's clock, the one a seeded vote's stamps (the workshop store's) are on
+    ctx.events.on(type, (data) =>
+      slot.set(applyWorkshopEvent(slot.get(), type, data, serverNowOf(ctx.events))),
+    ),
   )
   // a reconnect: the stream starts over; what the workshop store holds then is the seed again
   offs.push(ctx.events.onResync(seed))
