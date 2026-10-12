@@ -128,23 +128,38 @@ export type InstalledFacade = LobbyCanvasFacade & Pick<LobbyCanvasFacadeV1, 'chi
 interface LobbyDocApi {
   set(entries: Readonly<Record<string, unknown>>): void
 }
+/** The parts of the board page's LobbyCanvas the facade uses: the document, and the camera's own animation (`viewport.stop`). */
+interface LobbyBoardCanvas {
+  doc?: LobbyDocApi
+  viewport?: { stop(): void }
+}
 /** The two `import.meta.env` values lib/identity.ts's DEV_AUTH_ENABLED reads (through a cast: see guardAllows). */
 type DevAuthEnv = { env: { DEV: boolean; VITE_DRAFTROOM_DEV_AUTH?: string } }
 /**
- * The board page's LobbyCanvas doc API, from its dev-auth debug handle (`window.__lobbyBoard.canvas`, set
- * by canvas/board/session.ts after this facade is installed, so it is looked up per call). Features write
- * the board document through `canvas.doc.set`, which also tells the page's own UI the keys changed
- * (`docWritten`); the engine's `setDoc` alone would not.
+ * The board page's LobbyCanvas, from its dev-auth debug handle (`window.__lobbyBoard.canvas`, set by
+ * canvas/board/session.ts after this facade is installed, so it is looked up per call), or null.
  */
-const lobbyDocApi = (): LobbyDocApi | null =>
+const lobbyBoardCanvas = (): LobbyBoardCanvas | null =>
   // DEV_AUTH_ENABLED, spelled out so the build replaces both values and folds the lookup away: no production
   // file may name the debug handle (e2e/excalidraw-builds/prod-build.spec.ts), and this facade's code is in
   // the bundle. (Importing lib/identity.ts would bring Vite's ImportMeta into the e2e harness's types.)
   (import.meta as unknown as DevAuthEnv).env.DEV ||
   (import.meta as unknown as DevAuthEnv).env.VITE_DRAFTROOM_DEV_AUTH === '1'
-    ? ((globalThis as { __lobbyBoard?: { canvas?: { doc?: LobbyDocApi } } }).__lobbyBoard?.canvas?.doc ??
-      null)
+    ? ((globalThis as { __lobbyBoard?: { canvas?: LobbyBoardCanvas } }).__lobbyBoard?.canvas ?? null)
     : null
+
+/**
+ * The page's LobbyCanvas doc API. Features write the board document through `canvas.doc.set`, which also tells the
+ * page's own UI the keys changed (`docWritten`); the engine's `setDoc` alone would not.
+ */
+const lobbyDocApi = (): LobbyDocApi | null => lobbyBoardCanvas()?.doc ?? null
+
+/**
+ * Wave N.1: stops the board's own camera animation (a focus, a fit, "go to"), as the page's `viewport.set` does before it
+ * moves the camera: the harness moves the camera through the port, and a tween still running would take it back on its
+ * next frame. Nothing to stop on a page with no board handle.
+ */
+const stopCameraAnimation = (): void => lobbyBoardCanvas()?.viewport?.stop()
 
 /**
  * Builds the facade on a port. Exported for the unit test; `install` is what the board page runs.
@@ -243,7 +258,10 @@ export function createFacade(port: CanvasPort): {
     setTool: (tool) => port.setTool(tool),
     sceneToScreen: (point) => copy(port.sceneToScreen(point)),
     bounds: (id) => copy(port.bounds(id)),
-    zoomToFit: () => port.viewport.fit(),
+    zoomToFit: () => {
+      stopCameraAnimation()
+      port.viewport.fit()
+    },
     editingId: () => port.editingId(),
     leaseHolder: (id) => copy(port.leaseHolder(id) ?? null),
     collaborators: () => port.collaborators().map(copy),
@@ -258,8 +276,14 @@ export function createFacade(port: CanvasPort): {
     session,
     allElements,
     viewport: () => copy(port.viewport.get()),
-    setViewport: (v) => port.viewport.set(v),
-    fit: (ids) => port.viewport.fit(ids),
+    setViewport: (v) => {
+      stopCameraAnimation()
+      port.viewport.set(v)
+    },
+    fit: (ids) => {
+      stopCameraAnimation()
+      port.viewport.fit(ids)
+    },
     screenToScene: (p) => copy(port.screenToScene(p)),
     changes: (after = 0) => log.filter((e) => e.seq > after).map((e) => ({ ...e, ids: [...e.ids] })),
     watch: (spec, timeoutMs = 30_000) =>

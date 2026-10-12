@@ -4,6 +4,7 @@
 import type { Page } from '@playwright/test'
 import type { LobbyCanvas } from '../../apps/web/src/canvas/api/lobby-canvas.ts'
 import {
+  canvasCall,
   createItem,
   createNote,
   expect,
@@ -12,6 +13,7 @@ import {
   item,
   items,
   test,
+  viewport,
   waitForItem,
 } from '../tests/support/canvas.ts'
 import { settled } from './board-kit.ts'
@@ -215,6 +217,40 @@ test('history: canUndo, undo and redo, and transact joinPrevious folding a deriv
     .poll(async () => [(await item(b.page, box))?.x, (await item(b.page, other))?.x])
     .toEqual([150, 350])
   await expectSaved(a.page)
+})
+
+test('wave N.1: the test facade’s setViewport and zoomToFit take the camera from a running animation (the page stops it first)', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await createNote(a.page, { x: 100, y: 100, text: 'Fit me' })
+  const animate = (to: { x: number; y: number; zoom: number }) =>
+    withCanvas(
+      a.page,
+      (c, v) => {
+        c.viewport.set(v, { animate: { durationMs: 1_500 } })
+        return c.viewport.moving()
+      },
+      to,
+    )
+  expect(await animate({ x: 800, y: 600, zoom: 0.5 })).toBe(true)
+  await canvasCall(a.page, 'setViewport', { x: 40, y: 30, zoom: 1 })
+  // longer than the animation: it must not have taken the camera back
+  await a.page.waitForTimeout(1_800)
+  let v = await viewport(a.page)
+  expect({ x: Math.round(v.x), y: Math.round(v.y), zoom: v.zoom }).toEqual({ x: 40, y: 30, zoom: 1 })
+  expect(await withCanvas(a.page, (c) => c.viewport.moving(), null)).toBe(false)
+  // and a zoom to fit the same way
+  expect(await animate({ x: 800, y: 600, zoom: 0.5 })).toBe(true)
+  await canvasCall(a.page, 'zoomToFit')
+  const fitted = await viewport(a.page)
+  await a.page.waitForTimeout(1_800)
+  v = await viewport(a.page)
+  expect({ x: Math.round(v.x), y: Math.round(v.y), zoom: v.zoom }).toEqual({
+    x: Math.round(fitted.x),
+    y: Math.round(fitted.y),
+    zoom: fitted.zoom,
+  })
 })
 
 test('the camera: an animated set is moving until it lands, stop() ends it, and a text editor opens through text.edit', async ({
