@@ -147,6 +147,11 @@ export interface PromptSituation {
   readonly guest: boolean | null
   /** this tab holds a text lease or has a text editor open (`holdsTextLease`) */
   readonly typing: boolean
+  /**
+   * Wave N.1: a presentation is on screen here. The slides cover the board's top-centre stack, so a prompt shown now would
+   * run out its seconds (and use up the week's ask) unseen; the moment is kept until the presentation is over.
+   */
+  readonly presenting?: boolean
   /** the throttle allows it (`promptDue`) */
   readonly due: boolean
   /** when the moment was noted, and now (ms) */
@@ -163,7 +168,7 @@ export function decideFeedbackPrompt(s: PromptSituation): PromptDecision {
   if (s.guest === true) return 'drop'
   if (s.now - s.noted > PROMPT_MOMENT_TTL_MS) return 'drop'
   if (!s.due) return 'drop'
-  if (s.guest === null || s.typing) return 'wait'
+  if (s.guest === null || s.typing || s.presenting === true) return 'wait'
   return 'show'
 }
 

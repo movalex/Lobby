@@ -20,6 +20,7 @@ import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
 import { useUserKind } from '../../invite/guest.tsx'
 import { useValue } from '../../lib/signals.ts'
 import { countUsage } from '../../lib/usage.ts'
+import { usePresentingHere } from '../workshops/ported/presenting.ts'
 import { TopCentreItem } from '../workshops/top-centre.ts'
 import { useWorkshop } from '../workshops/workshop-context.ts'
 import { feedbackApi } from './api.ts'
@@ -68,6 +69,9 @@ export function FeedbackPromptLayer({ ctx }: { ctx: CanvasFeatureContext }) {
     })
   }, [ctx.canvas])
 
+  // wave N.1: a presentation on screen covers this stack: the moment waits for its end
+  const presenting = usePresentingHere(ctx.canvas)
+
   // ask, wait or let it go (only an account is ever asked; a kind this tab does not know yet is waited for, N1)
   useEffect(() => {
     if (!pending || shown) return
@@ -75,6 +79,7 @@ export function FeedbackPromptLayer({ ctx }: { ctx: CanvasFeatureContext }) {
     const decision = decideFeedbackPrompt({
       guest: kind === null ? null : kind !== 'account',
       typing,
+      presenting,
       due: promptDue(me, now),
       noted: pending.at,
       now,
@@ -85,7 +90,7 @@ export function FeedbackPromptLayer({ ctx }: { ctx: CanvasFeatureContext }) {
     notePromptShown(me, now)
     countUsage('feedback.prompt.shown')
     setShown(pending.moment)
-  }, [pending, shown, kind, typing, me, bus])
+  }, [pending, shown, kind, typing, presenting, me, bus])
 
   return (
     <TopCentreItem slot="feedback">
