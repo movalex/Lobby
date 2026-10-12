@@ -4,7 +4,9 @@
 // canvas/sync/walks.ts, WS1's N1-6). The overlay reads the notes that carry a reaction through
 // `canvas.index.withLobbyKeyPrefix('react:')` (WS1's incremental index) and never `canvas.items()`. The same drag is
 // measured before and after the reactions are written, and the walk table must not grow:
-//  - no site but `items` may count a walk at all (an index rebuild per change, the LOD pass, a hit test: a new row);
+//  - no site but `items` and the engine's change detection (CHANGE_DETECTION below: the sync fingerprint, scan, unseen
+//    and apply passes and the port scan, about one walk per pointer move each, as WS1's n1-drag-10k.spec.ts
+//    classifies them) may count a walk at all (an index rebuild per change, the LOD pass, a hit test: a new row);
 //  - the `items` reads (the features' own, one row in a production bundle) must not grow with the reactions. An
 //    overlay that walked on every change whether or not a note had a reaction is note-reactions.test.ts's check
 //    ("never walks the scene"): the bundle does not name which feature read, so this table cannot tell.
@@ -31,6 +33,20 @@ type SeedBigBoard = (
   page: Page,
   boardId: string,
 ) => Promise<{ board: { noteIds: string[] }; elements: number }>
+
+/**
+ * The engine's change detection (WS1's n1-drag-10k.spec.ts classifies the same sites): Excalidraw's onChange names no
+ * changed element, so the sync adapter and the port scan the scene about once per scene change, bounded and not zero.
+ * They are the same with and without reactions (the per-site check below holds each to its `before`), and not the
+ * overlay's: the overlay reads `canvas.index`, which counts no walk of its own.
+ */
+const CHANGE_DETECTION: ReadonlySet<string> = new Set([
+  'sync.fingerprint',
+  'sync.scan',
+  'sync.unseen',
+  'sync.apply',
+  'port.scan',
+])
 
 /** Reacted notes (the first notes of frame 0: the board's densest part, in view at zoom 1 around the first). */
 const REACTED = 30
@@ -200,7 +216,7 @@ test('N3-1: rows draw on the 10k board and dragging a reacted note adds no whole
     )
   }
   expect(
-    table.filter((r) => r.site !== 'items' && r.after > 0),
-    'no whole-scene walk by Lobby canvas code or the index while dragging a reacted note',
+    table.filter((r) => !r.site.startsWith('items') && !CHANGE_DETECTION.has(r.site) && r.after > 0),
+    'no whole-scene walk by Lobby canvas code or the index (the engine’s change detection and the features’ own items reads aside) while dragging a reacted note',
   ).toEqual([])
 })
