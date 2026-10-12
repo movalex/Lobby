@@ -28,7 +28,14 @@ import { AI_COMMAND_IDS } from '../ported/public.ts'
 import { aiJob, aiStatus, setAiCtx } from '../ported/runtime.ts'
 import { idOfRef } from '../ported/target.ts'
 import { coachFacts, coachWorkshop, dismissedSteps, dismissStep, seedWorkshop } from './facts.ts'
-import { type CoachStep, nextStep, runsSession, type SessionFacts, stepKey } from './next-step.ts'
+import {
+  type CoachStep,
+  liveWorkshop,
+  nextStep,
+  runsSession,
+  type SessionFacts,
+  stepKey,
+} from './next-step.ts'
 
 /** W5's vote setup (features/workshops/commands.ts WORKSHOP_COMMAND_IDS.voteSetup). */
 const VOTE_SETUP = 'workshops.vote.setup'
@@ -114,8 +121,13 @@ const livePresenter = (ctx: CanvasFeatureContext) =>
   )
 
 /** What decides whether this person runs the session (./next-step.ts `runsSession`), as of now. */
-export function sessionFactsOf(ctx: CanvasFeatureContext, presenter: string | null): SessionFacts {
-  const vote = coachWorkshop(ctx.canvas).get().vote
+export function sessionFactsOf(
+  ctx: CanvasFeatureContext,
+  presenter: string | null,
+  now: number = Date.now(),
+): SessionFacts {
+  // N1: last week's vote is no longer this session's: its starter does not keep the coach
+  const vote = liveWorkshop(coachWorkshop(ctx.canvas).get(), now).vote
   return {
     me: ctx.me.user.id,
     role: ctx.role,
@@ -131,7 +143,7 @@ function useCoachStep(ctx: CanvasFeatureContext): CoachStep | null {
   const compute = () => {
     seedWorkshop(ctx)
     return JSON.stringify(
-      nextStep(coachWorkshop(canvas).get(), coachFacts(canvas), {
+      nextStep(liveWorkshop(coachWorkshop(canvas).get(), Date.now()), coachFacts(canvas), {
         facilitator: !canvas.readOnly() && runsSession(sessionFactsOf(ctx, presenter.get())),
         following: canvas.follow.current() !== null,
         ai: canBuildWithAi(aiStatus(canvas).get(), canvas.readOnly()),

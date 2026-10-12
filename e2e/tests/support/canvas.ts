@@ -224,8 +224,28 @@ export const select = (page: Page, ids: string[]): Promise<void> => canvasCall(p
 export const selectNone = (page: Page): Promise<void> => canvasCall(page, 'select', [])
 export const setTool = (page: Page, name: string): Promise<boolean> => canvasCall(page, 'setTool', name)
 export const zoomToFit = (page: Page): Promise<void> => canvasCall(page, 'zoomToFit')
-export const setViewport = (page: Page, v: Partial<Pick<Viewport, 'x' | 'y' | 'zoom'>>): Promise<void> =>
-  canvasCall(page, 'setViewport', v)
+/**
+ * Moves the camera through the harness. A camera animation of the board's own (a focus, a fit, "go to") is not stopped by
+ * the harness's raw set, and takes the camera back on its next frame (the wave L "L-compat 3" flake), so a running one is
+ * let finish first (at most 3 s; nothing to wait for on a page with no board handle). The page-side fix is test-facade.ts
+ * stopping it as the board's own viewport.set does (the canvas workstream's); this keeps specs deterministic until then.
+ */
+export const setViewport = async (
+  page: Page,
+  v: Partial<Pick<Viewport, 'x' | 'y' | 'zoom'>>,
+): Promise<void> => {
+  await page
+    .waitForFunction(
+      () => {
+        type W = { __lobbyBoard?: { canvas: { viewport: { moving(): boolean } } } }
+        return !(window as unknown as W).__lobbyBoard?.canvas.viewport.moving()
+      },
+      undefined,
+      { timeout: 3_000 },
+    )
+    .catch(() => undefined)
+  await canvasCall(page, 'setViewport', v)
+}
 /** A frame's live children in paint order (tldraw's `getSortedChildIdsForParent`; GAP-1). */
 export const children = (page: Page, frameId: string): Promise<string[]> =>
   canvasCall(page, 'children', frameId)

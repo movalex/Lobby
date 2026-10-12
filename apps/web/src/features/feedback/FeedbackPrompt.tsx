@@ -1,7 +1,8 @@
 // Wave M (W2, M2-5, S6): "How did this go in Lobby? [Good] [Something got in the way]", one line in the board's
 // top-centre stack after a facilitated moment (the rules: ./prompt.ts; the moments: ./prompt-moments.ts).
 //  - Good sends `feedbackPromptGoodText(moment)` ("Good (after a vote reveal)") through the feedback client as it is,
-//    with the usual context: POST /api/feedback, no new route, kind or field;
+//    with the usual context but the board's id alone, no title (N1: nothing is sent that the person has not seen):
+//    POST /api/feedback, no new route, kind or field;
 //  - Something got in the way opens the existing Send feedback dialog with `feedbackPromptIssuePrefill(moment)` in
 //    "What happened?", for the person to finish;
 //  - × says not now. It counts feedback.prompt.shown, .good and .issue (no text, no ids), asks a person at most once
@@ -23,7 +24,7 @@ import { TopCentreItem } from '../workshops/top-centre.ts'
 import { useWorkshop } from '../workshops/workshop-context.ts'
 import { feedbackApi } from './api.ts'
 import { APP_BUILD } from './build-info.ts'
-import { buildContext, toInput } from './model.ts'
+import { toInput } from './model.ts'
 import {
   decideFeedbackPrompt,
   holdsTextLease,
@@ -31,6 +32,7 @@ import {
   ownsMoment,
   PROMPT_VISIBLE_MS,
   promptDue,
+  promptGoodContext,
 } from './prompt.ts'
 import { momentsFor, noteFeedbackMoment } from './prompt-moments.ts'
 import { openFeedback } from './state.ts'
@@ -66,12 +68,12 @@ export function FeedbackPromptLayer({ ctx }: { ctx: CanvasFeatureContext }) {
     })
   }, [ctx.canvas])
 
-  // ask, wait or let it go (only an account is ever asked: an unknown kind is not one)
+  // ask, wait or let it go (only an account is ever asked; a kind this tab does not know yet is waited for, N1)
   useEffect(() => {
     if (!pending || shown) return
     const now = Date.now()
     const decision = decideFeedbackPrompt({
-      guest: kind !== 'account',
+      guest: kind === null ? null : kind !== 'account',
       typing,
       due: promptDue(me, now),
       noted: pending.at,
@@ -120,14 +122,15 @@ function PromptLine({
     countUsage('feedback.prompt.good')
     setPhase('sending')
     try {
-      const context = buildContext({
+      // the board by its id alone: the prompt shows nothing of what a Good sends (./prompt.ts promptGoodContext)
+      const context = promptGoodContext({
         pathname: location.pathname,
         userAgent: navigator.userAgent,
         width: window.innerWidth,
         height: window.innerHeight,
         build: APP_BUILD,
         now: new Date(),
-        board: { id: ctx.board.id, title: ctx.board.title },
+        boardId: ctx.board.id,
       })
       await feedbackApi().send(toInput(feedbackPromptGoodText(moment), '', context))
       setPhase('thanks')

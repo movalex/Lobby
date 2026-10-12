@@ -9,7 +9,7 @@ import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
 import { countUsage } from '../../lib/usage.ts'
 import { Dialog } from '../../ui/Dialog.tsx'
 import { listWsTemplates, removeWsTemplate, saveWsTemplate, WsTemplatesUnavailableError } from './client.ts'
-import { defaultTemplateName, templateNameOrNull, WS_CATEGORY_OPTIONS } from './model.ts'
+import { defaultTemplateName, savedTemplateNotice, templateNameOrNull, WS_CATEGORY_OPTIONS } from './model.ts'
 
 type Load =
   | { kind: 'loading' }
@@ -72,7 +72,7 @@ export function SaveTemplateDialog({ ctx, onClose }: { ctx: CanvasFeatureContext
       done(
         load.kind === 'ready' && load.existing
           ? `Workspace template “${clean}” updated.`
-          : `Saved as a workspace template. Everyone in ${ctx.workspace.name} can start a board from it.`,
+          : savedTemplateNotice(ctx.workspace.name),
       )
     } catch (err) {
       setPending(false)
@@ -112,8 +112,8 @@ export function SaveTemplateDialog({ ctx, onClose }: { ctx: CanvasFeatureContext
       title="Save as workspace template"
       description={
         <>
-          Everyone in <strong>{ctx.workspace.name}</strong> can start a new board from a copy of this board.
-          The copy gets this board’s content only, none of its sharing.
+          Members of <strong>{ctx.workspace.name}</strong> who can make boards can start a new board from a
+          copy of this board. The copy gets this board’s content only, none of its sharing.
         </>
       }
       onClose={onClose}

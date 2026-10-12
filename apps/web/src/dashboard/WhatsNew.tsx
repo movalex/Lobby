@@ -8,6 +8,7 @@ export function WhatsNewCard({
   items,
   pending = null,
   unavailable = [],
+  unavailableReason,
   onTry,
   onTellUs,
   onDismiss,
@@ -17,6 +18,8 @@ export function WhatsNewCard({
   pending?: TryKey | null
   /** "Try it" actions that cannot be done yet (what they need has not loaded): those buttons are disabled. */
   unavailable?: readonly TryKey[]
+  /** Why those buttons are disabled, when it is more than "still loading" (their tooltip). */
+  unavailableReason?: string
   onTry(action: TryAction): void
   /** Opens the feedback dialog. */
   onTellUs(): void
@@ -57,6 +60,7 @@ export function WhatsNewCard({
                 aria-label={`Try it: ${item.title}`}
                 aria-busy={pending === tryKey(item.tryIt) || undefined}
                 disabled={pending !== null || unavailable.includes(tryKey(item.tryIt))}
+                title={unavailable.includes(tryKey(item.tryIt)) ? unavailableReason : undefined}
                 onClick={() => item.tryIt && onTry(item.tryIt)}
               >
                 {pending === tryKey(item.tryIt) ? 'Opening…' : 'Try it'}

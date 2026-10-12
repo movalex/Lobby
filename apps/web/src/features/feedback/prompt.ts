@@ -12,7 +12,8 @@
 //  - the throttle (`promptDue`, `notePromptShown`): the day it was last shown, kept per person in localStorage (every
 //    read and write in try/catch); where storage is unavailable, at most once per tab session.
 
-import type { FeedbackPromptMoment } from '@draftroom/contracts'
+import type { FeedbackContext, FeedbackPromptMoment } from '@draftroom/contracts'
+import { buildContext, type ContextSources } from './model.ts'
 
 /** At most once per person per this long. */
 export const PROMPT_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000
@@ -142,8 +143,8 @@ export type PromptDecision =
   | 'drop'
 
 export interface PromptSituation {
-  /** a name-only guest */
-  readonly guest: boolean
+  /** a name-only guest; null: this tab does not know the person's kind yet (N1: the moment waits for it) */
+  readonly guest: boolean | null
   /** this tab holds a text lease or has a text editor open (`holdsTextLease`) */
   readonly typing: boolean
   /** the throttle allows it (`promptDue`) */
@@ -153,11 +154,24 @@ export interface PromptSituation {
   readonly now: number
 }
 
-/** Whether to ask now, later or not at all. The order is the order of the reasons: who, how long ago, how often, how busy. */
+/**
+ * Whether to ask now, later or not at all. The order is the order of the reasons: who, how long ago, how often, how busy.
+ * A kind that is not known yet (`guest: null`, /api/me has not answered) is a reason to wait, not to drop: it is dropped
+ * only when the moment is stale or the week's ask is used, as for anyone.
+ */
 export function decideFeedbackPrompt(s: PromptSituation): PromptDecision {
-  if (s.guest) return 'drop'
+  if (s.guest === true) return 'drop'
   if (s.now - s.noted > PROMPT_MOMENT_TTL_MS) return 'drop'
   if (!s.due) return 'drop'
-  if (s.typing) return 'wait'
+  if (s.guest === null || s.typing) return 'wait'
   return 'show'
+}
+
+/**
+ * The context block a one-click "Good" sends. The dialog lists its block before anything is sent; the prompt shows
+ * nothing of it, so it carries the board's id (not private) and never its title (a private word of the board).
+ */
+export function promptGoodContext(s: Omit<ContextSources, 'board'> & { boardId: string }): FeedbackContext {
+  const { boardId, ...rest } = s
+  return buildContext({ ...rest, board: { id: boardId, title: null } })
 }

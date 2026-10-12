@@ -218,6 +218,17 @@ describe('statusView: one dot for Saved and Live (K2-5)', () => {
     })
   })
 
+  it('N1: a board showing this device’s last copy says so beside the dot, not just “Connecting…” (the canvas pill’s words)', () => {
+    const v = statusView(save('cached', { label: 'Showing your last copy · connecting' }), 'connecting')
+    expect(v.tone).toBe('busy')
+    expect(v.label).toBe('Showing your last copy · connecting')
+    expect(v.saveText).toBe('Showing your last copy · connecting')
+    // without the engine's own line, the indicator's words for the state
+    expect(statusView(save('cached'), 'connecting').label).toBe('Showing your last copy · connecting')
+    // a plain connect (no copy shown) still says Connecting…
+    expect(statusView(save('connecting'), 'connecting').label).toBe('Connecting…')
+  })
+
   it('a viewer with the role pill: the connection alone', () => {
     const v = statusView(save('readonly', { readonly: true }), 'online', true)
     expect(v).toMatchObject({ tone: 'ok', label: null, saveText: '', connText: 'Live' })

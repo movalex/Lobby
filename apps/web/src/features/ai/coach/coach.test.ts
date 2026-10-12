@@ -28,9 +28,11 @@ import {
   actionsLabel,
   COACH_THEMES_MIN_NOTES,
   COACH_TOP_N,
+  COACH_VOTE_FRESH_MS,
   type CoachFacts,
   type CoachRole,
   type CoachWorkshop,
+  liveWorkshop,
   nextStep,
   runsSession,
   type SessionFacts,
@@ -231,7 +233,14 @@ describe('facts: the board and the workshop', () => {
       participants: 2,
       endsAt: null,
     })
-    expect(ws.vote).toEqual({ sessionId: SID, status: 'open', top: [], startedBy: null })
+    // (N1: and stamped with when it moved)
+    expect(ws.vote).toEqual({
+      sessionId: SID,
+      status: 'open',
+      top: [],
+      startedBy: null,
+      at: expect.any(Number),
+    })
     ws = applyWorkshopEvent(ws, WORKSHOP_EVENTS.results, {
       sessionId: SID,
       results: [
@@ -246,6 +255,7 @@ describe('facts: the board and the workshop', () => {
       status: 'revealed',
       top: ['shape:a', 'shape:b'],
       startedBy: null,
+      at: expect.any(Number),
     })
     expect(applyWorkshopEvent(ws, WORKSHOP_EVENTS.vote, { nope: 1 })).toBe(ws)
     const now = new Date().toISOString()
@@ -312,6 +322,8 @@ describe('facts: the board and the workshop', () => {
       top: ['shape:a', 'shape:b'],
       // M2-2: and who started it, which the stream never says
       startedBy: 'usr_facilitator0001',
+      // N1: and when it last moved (the session's latest stamp), which decides whether it is still this session's
+      at: Date.parse(iso),
     })
   })
 
@@ -325,7 +337,105 @@ describe('facts: the board and the workshop', () => {
       participants: 1,
     })
     expect(coachWorkshop(k.canvas).get().vote?.status).toBe('revealed')
+    // N1: a vote the stream just told of is fresh: stamped with the time it arrived
+    expect(Math.abs(Date.now() - (coachWorkshop(k.canvas).get().vote?.at ?? 0))).toBeLessThan(5_000)
     stop()
+  })
+
+  it('N1: applyWorkshopEvent stamps a vote event with the time it is applied at, and keeps who started it', () => {
+    const at = Date.UTC(2026, 9, 12, 9, 0, 0)
+    const open = applyWorkshopEvent(
+      NONE_WS,
+      WORKSHOP_EVENTS.vote,
+      {
+        sessionId: SID,
+        status: 'open',
+        totalVotesCast: 0,
+        participantsDone: 0,
+        participants: 2,
+        endsAt: null,
+      },
+      at,
+    )
+    expect(open.vote).toMatchObject({ sessionId: SID, status: 'open', at })
+    const later = at + 60_000
+    const revealed = applyWorkshopEvent(
+      { ...open, vote: { ...(open.vote as NonNullable<CoachWorkshop['vote']>), startedBy: 'usr_bob' } },
+      WORKSHOP_EVENTS.results,
+      {
+        sessionId: SID,
+        results: [{ shapeId: 'shape:a', count: 2, rank: 1 }],
+        totalVotesCast: 2,
+        participants: 1,
+      },
+      later,
+    )
+    expect(revealed.vote).toMatchObject({ status: 'revealed', startedBy: 'usr_bob', at: later })
+  })
+})
+
+describe('N1 (wave M follow-up 2): a stale vote’s starter does not keep the coach', () => {
+  const NOW = Date.UTC(2026, 9, 12, 15, 0, 0)
+  const vote = (at: number | null | undefined, startedBy: string | null = 'usr_bob'): CoachWorkshop => ({
+    brainstorm: { status: 'open', frameId: 'f1' },
+    vote: {
+      sessionId: SID,
+      status: 'revealed',
+      top: ['shape:a'],
+      startedBy,
+      ...(at === undefined ? {} : { at }),
+    },
+  })
+
+  it('a vote moved within the last few hours is this session’s; an older one is dropped, the brainstorm stays', () => {
+    expect(COACH_VOTE_FRESH_MS).toBe(6 * 60 * 60 * 1000)
+    const fresh = vote(NOW - 60_000)
+    expect(liveWorkshop(fresh, NOW)).toBe(fresh)
+    expect(liveWorkshop(vote(NOW - COACH_VOTE_FRESH_MS), NOW).vote).not.toBeNull()
+    const old = liveWorkshop(vote(NOW - COACH_VOTE_FRESH_MS - 1), NOW)
+    expect(old.vote).toBeNull()
+    expect(old.brainstorm).toEqual({ status: 'open', frameId: 'f1' })
+    // a vote whose age is not known stays (today's behaviour), and so does no vote at all
+    const unknown = vote(null)
+    expect(liveWorkshop(unknown, NOW)).toBe(unknown)
+    const noAt = vote(undefined)
+    expect(liveWorkshop(noAt, NOW)).toBe(noAt)
+    expect(liveWorkshop(NONE_WS, NOW)).toBe(NONE_WS)
+  })
+
+  it('the session’s facts: last week’s vote names nobody (the presenter or the owner runs it); this morning’s does', () => {
+    const k = aiKit()
+    const stale = vote(Date.now() - 3 * 24 * 60 * 60 * 1000)
+    coachWorkshop(k.canvas).set(stale)
+    expect(sessionFactsOf(k.ctx, 'usr_cy')).toMatchObject({ voteStarter: null, presenter: 'usr_cy' })
+    coachWorkshop(k.canvas).set(vote(Date.now() - 10 * 60 * 1000))
+    expect(sessionFactsOf(k.ctx, 'usr_cy')).toMatchObject({ voteStarter: 'usr_bob', presenter: 'usr_cy' })
+  })
+
+  it('the chip: with last week’s vote on the board the owner is the facilitator again, and the old starter is not', () => {
+    vi.stubGlobal('document', { querySelector: () => null })
+    try {
+      const few = [{ id: 'f1', type: 'frame', x: 0, y: 0, width: 2000, height: 1200, name: 'Ideas' } as El]
+      const withOldVote = (kit: ReturnType<typeof aiKit>) => {
+        coachWorkshop(kit.canvas).set({
+          brainstorm: null,
+          vote: {
+            sessionId: SID,
+            status: 'revealed',
+            top: ['shape:a'],
+            startedBy: 'usr_bob',
+            at: Date.now() - 7 * 24 * 60 * 60 * 1000,
+          },
+        })
+        return kit
+      }
+      // bob started that vote last week; he is no longer the one running this session
+      expect(renderIn(withOldVote(aiKit(few, { me: 'usr_bob' })), CoachOverlay), 'bob').not.toContain(
+        'coach-chip',
+      )
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })
 

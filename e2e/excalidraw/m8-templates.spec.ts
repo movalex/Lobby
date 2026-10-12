@@ -209,3 +209,62 @@ test('against an api answering 404 (no templates there yet), the picker hides it
     await ctx.close()
   }
 })
+
+// N1 (wave M follow-up 8): the New board dialog's Title and Project were ignored by a workspace template's "Use template"
+// (the copy was named for the template and put in the dashboard's project). Now they decide the copy's name and project.
+test('Use template names the copy by the dialog’s Title and puts it in the dialog’s Project; with no Title it is named for the template', async ({
+  board,
+  browser,
+  users,
+}) => {
+  test.setTimeout(120_000)
+  const key = word('proj')
+  const aliceApi = await users.api('alice')
+  const wid = users.devStudioId
+  const created = await aliceApi.fetch('POST', `/api/workspaces/${wid}/projects`, { name: `Pitch ${key}` })
+  const project = ((await created.json()) as { id: string }).id
+  expect(
+    (
+      await aliceApi.fetch('POST', `/api/workspaces/${wid}/templates`, {
+        boardId: board,
+        name: `Retro ${key}`,
+        category: 'review',
+      })
+    ).status(),
+  ).toBe(201)
+
+  const bobUser = await users.get('bob')
+  const bobApi = await users.api('bob')
+  const bobContext = await browser.newContext()
+  try {
+    await signInContext(bobContext, bobUser.handle, bobUser.name)
+    const page = await bobContext.newPage()
+    const useIt = async () => {
+      await page.getByTestId('template-category').filter({ hasText: 'Workspace' }).click()
+      const card = page.getByTestId('ws-template-card').filter({ hasText: `Retro ${key}` })
+      await expect(card).toBeVisible()
+      await card.getByTestId('ws-template-use').click()
+      await expect(page).toHaveURL(/\/b\/[a-z0-9_-]+$/, { timeout: 30_000 })
+      return new URL(page.url()).pathname.split('/b/')[1] ?? ''
+    }
+
+    await test.step('a Title and a Project in the dialog name and place the copy', async () => {
+      await openNewBoardDialog(page, wid)
+      await page.getByTestId('create-board-title').fill(`Sprint ${key}`)
+      await page.getByTestId('create-board-project').selectOption(project)
+      const copy = await useIt()
+      expect(copy).not.toBe(board)
+      const made = await bobApi.getBoard(copy)
+      expect(made.board).toMatchObject({ title: `Sprint ${key}`, projectId: project, visibility: 'private' })
+    })
+
+    await test.step('no Title and no Project: named for the template, in no project', async () => {
+      await openNewBoardDialog(page, wid)
+      const copy = await useIt()
+      const made = await bobApi.getBoard(copy)
+      expect(made.board).toMatchObject({ title: `Retro ${key}`, projectId: null })
+    })
+  } finally {
+    await bobContext.close()
+  }
+})

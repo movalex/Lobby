@@ -9,7 +9,8 @@ export { FEEDBACK_TEXT_MAX }
 /** The board the feedback is about, when it is sent from one. */
 export interface FeedbackBoard {
   id: string
-  title: string
+  /** null: the board is named by its id alone (the end-of-moment prompt's one-click Good) */
+  title: string | null
 }
 
 /** What the page knows about itself (injected, so tests need no browser). */

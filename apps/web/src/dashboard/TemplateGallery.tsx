@@ -12,7 +12,7 @@ import type { WorkspaceTemplate } from '@draftroom/contracts'
 import { type ReactNode, useEffect, useId, useMemo, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { listWsTemplates, startFromWsTemplate } from '../features/ws-templates/client.ts'
-import { filterWsTemplates, templateMeta } from '../features/ws-templates/model.ts'
+import { filterWsTemplates, templateMeta, useTemplateInput } from '../features/ws-templates/model.ts'
 import { boardPath, matchRoute, navigate } from '../lib/routing.ts'
 import { countUsage } from '../lib/usage.ts'
 import { createSampleBoard } from './sample-board.ts'
@@ -60,6 +60,7 @@ export function TemplateGallery({
   onSelect,
   onChoose,
   workspace,
+  title,
 }: {
   selected: TemplateChoice
   onSelect(choice: TemplateChoice, entry: CatalogEntry | null): void
@@ -67,6 +68,8 @@ export function TemplateGallery({
   onChoose(choice: TemplateChoice, entry: CatalogEntry | null): void
   /** Where a workspace template's copy goes; default: the dashboard route's workspace and project. */
   workspace?: GalleryWorkspace
+  /** The New board dialog's Title: a workspace template's copy is named by it (blank: for the template). */
+  title?: string
 }) {
   const { mod, error } = useCatalog()
   const searchId = useId()
@@ -157,7 +160,7 @@ export function TemplateGallery({
         </fieldset>
       </div>
       {showWorkspace && wsList.kind === 'ready' && target && (
-        <WorkspaceTemplates templates={wsList.templates} query={query} target={target} />
+        <WorkspaceTemplates templates={wsList.templates} query={query} target={target} title={title ?? ''} />
       )}
       {sample && (
         <ul className="dr-gallery__sample" aria-label="Sample board">
@@ -267,10 +270,12 @@ function WorkspaceTemplates({
   templates,
   query,
   target,
+  title,
 }: {
   templates: readonly WorkspaceTemplate[]
   query: string
   target: GalleryWorkspace
+  title: string
 }) {
   const [pending, setPending] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -279,7 +284,12 @@ function WorkspaceTemplates({
     setPending(t.boardId)
     setError(null)
     try {
-      const made = await startFromWsTemplate(target.id, t.boardId, { projectId: target.projectId })
+      // N1: the New board dialog's Title and Project go with it (the copy was named for the template, in the dashboard's project)
+      const made = await startFromWsTemplate(
+        target.id,
+        t.boardId,
+        useTemplateInput({ title, projectId: target.projectId }),
+      )
       countUsage('template.pick:workspace')
       navigate(boardPath(made.board.id))
     } catch (e) {

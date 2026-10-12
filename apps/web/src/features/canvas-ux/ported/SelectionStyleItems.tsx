@@ -9,6 +9,7 @@
 // the tray's included (the swatch row is reached by the arrow keys); a tray opened from the keyboard takes the
 // keyboard, and Escape in it closes it and gives the keyboard back to its button.
 import { type ReactNode, useContext, useEffect, useId, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import type { CanvasFeatureContext, SelectionBarItemSpec } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { countUsage } from '../../../lib/usage.ts'
@@ -264,6 +265,7 @@ export function SelectionStyleItems({ ctx }: { ctx: CanvasFeatureContext; select
   const compact = useContext(SelectionBarCompact)
   const model = useValue('cux-tier1', () => tierModel(canvas), [canvas])
   const tray = useValue(state.selectionTray)
+  const trayHost = useValue(state.selectionTrayHost)
   const dark = useValue('cux-theme', () => canvas.theme(), [canvas]) === 'dark'
   const trayId = useId()
   const trayRef = useRef<HTMLDivElement>(null)
@@ -289,17 +291,21 @@ export function SelectionStyleItems({ ctx }: { ctx: CanvasFeatureContext; select
     pickTier(canvas, control.id, row.id, value)
   }
   // Escape in an open tray is the bar's (./SelectionBar.tsx closeStyleTray): it closes the tray first
-  const trayBody = (rows: ReactNode) => (
-    <div
-      ref={trayRef}
-      id={trayId}
-      className="cux-selstyle__tray"
-      data-testid="selection-style-tray"
-      data-tray={tray ?? undefined}
-    >
-      {rows}
-    </div>
-  )
+  // N1: drawn into the bar's last box, so the tray is last in the DOM, after the arrange row, as it is on screen
+  const trayBody = (rows: ReactNode) => {
+    const body = (
+      <div
+        ref={trayRef}
+        id={trayId}
+        className="cux-selstyle__tray"
+        data-testid="selection-style-tray"
+        data-tray={tray ?? undefined}
+      >
+        {rows}
+      </div>
+    )
+    return trayHost ? createPortal(body, trayHost) : body
+  }
   const more = (
     <button
       type="button"

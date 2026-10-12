@@ -4,8 +4,9 @@
 // them. The real undo of a press is in e2e/excalidraw/l5-agenda.spec.ts.
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import type { CanvasElement, LobbyCanvas } from '../../../../canvas/api/index.ts'
+import { pendingUsage, resetUsageForTests } from '../../../../lib/usage.ts'
 import { workshopKit } from '../../../workshops/ported/ctx-kit.ts'
 import { el } from '../../../workshops/ported/test-kit.ts'
 import { autoOrderWrites, FramesPanel, presentOrderWrites, setMins } from './FramesPanel.tsx'
@@ -123,6 +124,27 @@ describe('a press is one write and one undo step', () => {
     const only = { ...(frameRows(c2.items() as never)[2] as ReturnType<typeof frameRows>[number]), mins: 3 }
     setMins(c2, only, null)
     expect(p2('f3')).toBeUndefined()
+  })
+})
+
+describe('N1 (wave M follow-up 2): planning minutes is counted as runofshow.set', () => {
+  beforeEach(() => resetUsageForTests())
+
+  it('one count per write that changed the minutes, none for a press that wrote nothing', () => {
+    const { canvas } = setup()
+    const rows = frameRows(canvas.items() as never)
+    const ideas = rows.find((r) => r.id === 'f2')
+    const warm = rows.find((r) => r.id === 'f1')
+    if (!ideas || !warm) throw new Error('no row')
+    expect(pendingUsage()['runofshow.set']).toBeUndefined()
+    expect(setMins(canvas, ideas, 10)).toBe(true)
+    expect(pendingUsage()['runofshow.set']).toBe(1)
+    // the same minutes again: no write, no count
+    expect(setMins(canvas, warm, 5)).toBe(false)
+    expect(pendingUsage()['runofshow.set']).toBe(1)
+    // taking the minutes away is a change of the run of show too
+    expect(setMins(canvas, warm, null)).toBe(true)
+    expect(pendingUsage()['runofshow.set']).toBe(2)
   })
 })
 

@@ -5,4 +5,4 @@
 // it renders where it is put.
 
 export type { TopCentreSlot } from '../../canvas/overlay/top-centre.ts'
-export { TopCentreItem } from '../../canvas/overlay/top-centre.tsx'
+export { TopCentreItem, useTopCentreRevision } from '../../canvas/overlay/top-centre.tsx'

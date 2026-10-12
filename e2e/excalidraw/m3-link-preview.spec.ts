@@ -54,8 +54,13 @@ test('the page a crawler gets for a board address is the same static page, with 
       expect(tag('og:type')).toBe('website')
       expect(tag('twitter:card')).toBe('summary')
       expect(tag('robots')).toMatch(/noindex/)
-      // the image is a brand PNG of this site (an absolute URL when the build has VITE_PUBLIC_ORIGIN, as Render's does)
-      expect(tag('og:image')).toMatch(/\/icon-512\.png$/)
+      // the image is a brand PNG of this site at an absolute URL when the build has VITE_PUBLIC_ORIGIN (Render's does); this
+      // run's build has none, so the image tags are dropped (N1: they used to keep the literal %VITE_PUBLIC_ORIGIN% in the
+      // address), and no placeholder is left anywhere in the page
+      expect(page).not.toMatch(/%[A-Za-z_][A-Za-z0-9_]*%/)
+      const image = tag('og:image')
+      if (image === undefined) expect(page).not.toMatch(/<meta[^>]*og:image/)
+      else expect(image).toMatch(/^https?:\/\/.+\/icon-512\.png$/)
       const png = await anonymous.get('/icon-512.png')
       expect(png.status()).toBe(200)
       expect(png.headers()['content-type']).toMatch(/image\/png/)
