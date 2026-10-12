@@ -1,6 +1,7 @@
-// Wave N (WS5, N5-2): the ways into Capture the room (./entries.ts): AI › "Capture the room…" for an editor with AI on,
-// the image entries only on a photo-like image (not a PDF page or a file card), nothing for viewers or before the AI
-// status, and the palette command held while the contracts list 'ai.capture' as pending.
+// Wave N (WS5, N5-2): the ways into Capture the room (./entries.ts) as the contracts have them now. While the contracts
+// list 'ai.capture' as pending (PENDING_PALETTE_COMMAND_IDS) nothing is offered: not the palette command, and not the
+// AI menu's entries either, even to an editor with AI on (they would only dead-end on the api's 404). Once the id
+// leaves that list (the integration) all of them follow the rules of ./entries-released.test.ts.
 import type { AiStatus } from '@draftroom/contracts'
 import { PENDING_PALETTE_COMMAND_IDS } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -8,7 +9,7 @@ import type { CanvasFeatureContext, LobbyCanvas, MenuTarget } from '../../../can
 import { COMMANDS, CONTEXT_MENU } from '../ported/menus.tsx'
 import { aiStatus } from '../ported/runtime.ts'
 import { AI_CAPTURE_COMMAND_ID, releaseCaptureCanvas, setCaptureCanvas } from './client.ts'
-import { CAPTURE_COMMAND, CAPTURE_MENU, captureCommandHeld, imageOf } from './entries.ts'
+import { CAPTURE_COMMAND, CAPTURE_MENU, captureCommandHeld } from './entries.ts'
 
 const ON: AiStatus = {
   enabled: true,
@@ -19,46 +20,32 @@ const ON: AiStatus = {
   budget: null,
   settings: null,
 }
-const els: Record<string, Record<string, unknown>> = {
-  photo: {
-    id: 'photo',
-    type: 'image',
-    fileId: 'ver_0123456789abcdef',
-    isDeleted: false,
-    customData: { lobby: { file: { kind: 'image' } } },
-  },
-  page: { id: 'page', type: 'image', fileId: 'ver_0123456789abcdef.p2', isDeleted: false },
-  card: {
-    id: 'card',
-    type: 'image',
-    fileId: 'ver_0123456789abcdef',
-    isDeleted: false,
-    customData: { lobby: { file: { kind: 'pdf' } } },
-  },
-  note: { id: 'note', type: 'stickynote', isDeleted: false },
+const photo = {
+  id: 'photo',
+  type: 'image',
+  fileId: 'ver_0123456789abcdef',
+  isDeleted: false,
+  customData: { lobby: { file: { kind: 'image' } } },
 }
-let readOnly = false
 const canvas = {
-  readOnly: () => readOnly,
-  get: (id: string) => els[id],
+  readOnly: () => false,
+  get: (id: string) => (id === 'photo' ? photo : undefined),
 } as unknown as LobbyCanvas
 const ctx = { canvas } as unknown as CanvasFeatureContext
-const at = (ids: string[], hit?: string): MenuTarget =>
-  ({ ids, point: { x: 0, y: 0 }, hit: hit ? (els[hit] as never) : null }) as unknown as MenuTarget
-const visible = (id: string, t: MenuTarget) => {
+const onPhoto = { ids: ['photo'], point: { x: 0, y: 0 }, hit: null } as unknown as MenuTarget
+const visible = (id: string) => {
   const e = CAPTURE_MENU.find((m) => m.id === id)
-  return typeof e?.visible === 'function' ? e.visible(ctx, t) : e?.visible !== false
+  return typeof e?.visible === 'function' ? e.visible(ctx, onPhoto) : e?.visible !== false
 }
 
 beforeEach(() => {
-  readOnly = false
   setCaptureCanvas(canvas)
   aiStatus(canvas).set(ON)
 })
 afterEach(() => releaseCaptureCanvas(canvas))
 
-describe('the entries', () => {
-  it('"Capture the room…" sits in the AI submenu for an editor with AI on; never before the status or read-only', () => {
+describe('held while the contracts list ai.capture as pending', () => {
+  it('the entries sit in the AI submenu', () => {
     const ai = CONTEXT_MENU.find((m) => m.id === 'ai')
     expect(ai?.submenu?.map((m) => m.id)).toEqual(
       expect.arrayContaining([
@@ -68,37 +55,16 @@ describe('the entries', () => {
         'ai.capture.photo-diagram',
       ]),
     )
-    expect(visible('ai.capture', at([]))).toBe(true)
-    readOnly = true
-    expect(visible('ai.capture', at([]))).toBe(false)
-    readOnly = false
-    aiStatus(canvas).set(null)
-    expect(visible('ai.capture', at([]))).toBe(false)
-    aiStatus(canvas).set({ ...ON, enabled: false, reason: 'guest', canInsert: false, canSummarize: false })
-    expect(visible('ai.capture', at([]))).toBe(false)
   })
 
-  it('the image entries only on one photo-like image (the selected one, or the one under the pointer)', () => {
-    expect(imageOf(ctx, at(['photo']))).toBe('photo')
-    expect(imageOf(ctx, at([], 'photo'))).toBe('photo')
-    for (const t of [at(['page']), at(['card']), at(['note']), at(['photo', 'note']), at([])])
-      expect(imageOf(ctx, t)).toBeNull()
-    expect(visible('ai.capture.photo-notes', at(['photo']))).toBe(true)
-    expect(visible('ai.capture.photo-diagram', at(['photo']))).toBe(true)
-    expect(visible('ai.capture.photo-notes', at(['note']))).toBe(false)
-  })
-})
-
-describe('the palette command', () => {
-  it('is held while the contracts list it as pending, and registered once they do not', () => {
-    const pending = (PENDING_PALETTE_COMMAND_IDS as readonly string[]).includes(AI_CAPTURE_COMMAND_ID)
-    expect(captureCommandHeld()).toBe(pending)
-    expect(COMMANDS.some((c) => c.id === AI_CAPTURE_COMMAND_ID)).toBe(!pending)
+  it('held: no menu entry and no palette command, even for an editor with AI on a photo; released: all of them', () => {
+    const held = (PENDING_PALETTE_COMMAND_IDS as readonly string[]).includes(AI_CAPTURE_COMMAND_ID)
+    expect(captureCommandHeld()).toBe(held)
+    for (const id of ['ai.capture', 'ai.capture.photo-notes', 'ai.capture.photo-diagram'])
+      expect(visible(id), id).toBe(!held)
+    expect(COMMANDS.some((c) => c.id === AI_CAPTURE_COMMAND_ID)).toBe(!held)
+    expect(CAPTURE_COMMAND.enabled?.(ctx)).toBe(!held)
     expect(captureCommandHeld([])).toBe(false)
     expect(captureCommandHeld([AI_CAPTURE_COMMAND_ID])).toBe(true)
-    expect(CAPTURE_COMMAND.id).toBe('ai.capture')
-    expect(CAPTURE_COMMAND.enabled?.(ctx)).toBe(true)
-    aiStatus(canvas).set({ ...ON, canInsert: false })
-    expect(CAPTURE_COMMAND.enabled?.(ctx)).toBe(false)
   })
 })
