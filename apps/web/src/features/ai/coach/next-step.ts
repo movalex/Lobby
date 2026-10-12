@@ -42,8 +42,9 @@ export interface CoachWorkshop {
      */
     readonly startedBy?: string | null
     /**
-     * N1: when the vote last moved (started, closed or revealed; ms since the epoch), or absent/null when not known. An
-     * old vote is not this session's (`liveWorkshop`).
+     * N1: when the vote last moved (started, closed or revealed; ms since the epoch on the SERVER's clock, wave N.1: a
+     * seeded vote carries the server's own stamps, and one the stream told of is stamped with the server's now), or
+     * absent/null when not known. An old vote is not this session's (`liveWorkshop`, given the server's now).
      */
     readonly at?: number | null
   } | null
@@ -56,8 +57,9 @@ export interface CoachWorkshop {
 export const COACH_VOTE_FRESH_MS = 6 * 60 * 60 * 1000
 
 /**
- * `ws` as this session sees it at `now`: without its vote when that is older than COACH_VOTE_FRESH_MS. A vote whose age
- * is not known counts as current (as before), and `ws` itself is returned when nothing is dropped.
+ * `ws` as this session sees it at `now` (the server's clock, `serverNowOf`): without its vote when that is older than
+ * COACH_VOTE_FRESH_MS. A vote whose age is not known counts as current (as before), and `ws` itself is returned when
+ * nothing is dropped.
  */
 export function liveWorkshop(ws: CoachWorkshop, now: number): CoachWorkshop {
   const at = ws.vote?.at

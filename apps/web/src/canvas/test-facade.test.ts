@@ -282,6 +282,32 @@ describe('test facade', () => {
     expect(hooks.allElements().map((e) => e.id)).toEqual(['r1', 'gone'])
   })
 
+  it('wave N.1: setViewport, fit and zoomToFit stop the board’s camera animation first (a running tween would take the camera back)', () => {
+    const g = globalThis as { __lobbyBoard?: unknown }
+    const f = fakePort()
+    const order: string[] = []
+    const { set, fit } = f.port.viewport
+    ;(f.port.viewport as { set: typeof set }).set = (v) => {
+      order.push('set')
+      set(v)
+    }
+    ;(f.port.viewport as { fit: typeof fit }).fit = (ids) => {
+      order.push('fit')
+      fit(ids)
+    }
+    g.__lobbyBoard = { canvas: { viewport: { stop: () => order.push('stop') } } }
+    try {
+      const { facade, hooks } = createFacade(f.port)
+      hooks.setViewport({ x: 5, zoom: 2 })
+      hooks.fit(['r1'])
+      facade.zoomToFit()
+      expect(order).toEqual(['stop', 'set', 'stop', 'fit', 'stop', 'fit'])
+      expect(hooks.viewport()).toMatchObject({ x: 5, zoom: 0.05 })
+    } finally {
+      delete g.__lobbyBoard
+    }
+  })
+
   it('select commits before it returns: a key pressed right after sees the selection (DANA-01)', async () => {
     // a port whose selection lives in "React state": select() is a state update, the reads see what is committed
     const f = fakePort()

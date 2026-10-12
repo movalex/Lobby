@@ -12,7 +12,7 @@ import type {
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { stampNoteDuplicates } from '../tools/notes.ts'
 import { interactionForRole, type LobbyRole } from './interaction.ts'
-import { CANVAS_LIGHT, installLobbyEngineTheme } from './theme.ts'
+import { CANVAS_LIGHT, installLobbyEngineTheme, watchNoteEditorInk } from './theme.ts'
 
 // Lobby's frame names and outlines, and its dark-mode colours, before anything is drawn (W5-10, W5-15)
 installLobbyEngineTheme()
@@ -104,6 +104,13 @@ export function ExcalidrawHost(props: ExcalidrawHostProps) {
       for (const d of detach.reverse()) d()
     }
   }, [readyApi, wiring])
+
+  // wave N.1: the text editor over a pastel note is as readable in dark mode as the note itself (theme.ts)
+  useEffect(() => {
+    const wrapper = wrapperRef.current
+    if (!wrapper || !readyApi) return
+    return watchNoteEditorInk(wrapper, readyApi)
+  }, [readyApi])
 
   const handleReady = useCallback(
     (api: ExcalidrawImperativeAPI) => {

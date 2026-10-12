@@ -35,6 +35,12 @@
 // while a note or its label is drawn, its default ink is answered with that choice, and a cached canvas drawn
 // with another ink is drawn again. Rendering only: stored colours never change, and a picked ink is left alone.
 //
+// Wave N.1: the same note's text EDITOR (the textarea over it while someone types) was still chalk on the pastel. The
+// engine sets its colour from the same dark cache (`applyDarkModeFilter(strokeColor)` in its textWysiwyg style update),
+// but outside any draw of the note, so the draw-time answer above never reaches it. `watchNoteEditorInk` (attached by
+// the host) sets the editor's own inline colour to the note's ink whenever the engine writes it, by the same rule
+// (`noteInkOverride`). Only its colour, only in dark mode; its text and layout are the engine's.
+//
 // Browser and Node (pure apart from the install).
 import { applyDarkModeFilter, FRAME_STYLE } from '@excalidraw/common'
 import { elementWithCanvasCache } from '@excalidraw/element'
@@ -265,7 +271,7 @@ export function noteInkFor(fill: string, theme: 'light' | 'dark'): string {
 }
 
 /** What the watch reads of an element the engine is about to draw. */
-interface DrawnElement {
+export interface DrawnElement {
   readonly id?: string
   readonly type?: string
   readonly containerId?: string | null
@@ -349,4 +355,76 @@ function installNoteInkWatch(): void {
     return set.call(this, key, value) as WeakMap<object, object>
   }
   watching = true
+}
+
+// ---- wave N.1: the text editor over a pastel note ---------------------------------------------------------------
+
+/** What the editor's ink reads of the engine (a slice of ExcalidrawImperativeAPI). */
+export interface EditorInkSource {
+  getAppState(): { readonly editingTextElement: DrawnElement | null; readonly theme?: string }
+  getSceneElementsMapIncludingDeleted(): ReadonlyMap<string, DrawnElement>
+  /** the engine's change callback (any scene or state change); returns the removal */
+  onChange(cb: () => void): () => void
+}
+
+/**
+ * The colour the engine's text editor should be in now: Lobby's INK when it edits the label of a note drawn in dark
+ * mode with that ink (`noteInkOverride`: a pastel fill, a default ink), else null (the engine's colour stands).
+ */
+export function noteEditorInk(
+  src: Pick<EditorInkSource, 'getAppState' | 'getSceneElementsMapIncludingDeleted'>,
+): string | null {
+  const state = src.getAppState()
+  const editing = state.editingTextElement
+  if (state.theme !== 'dark' || !editing?.containerId) return null
+  const elements = src.getSceneElementsMapIncludingDeleted()
+  // the scene's copy: the ink may have changed since the editor opened
+  return noteInkOverride(elements.get(editing.id ?? '') ?? editing, elements.get(editing.containerId) ?? null)
+}
+
+const EDITOR = 'textarea.excalidraw-wysiwyg'
+
+/**
+ * Keeps the colour of the engine's text editor readable on a pastel note in dark mode (see the header, wave N.1). The
+ * engine sets the textarea's colour on every layout (opening, typing, zoom, a theme change), so each textarea that
+ * appears under `root` is watched for style writes, and the colour is set again after them (before the next paint:
+ * a mutation observer runs as a microtask), and on the engine's own changes (the editing state may land after the
+ * textarea). Returns the stop.
+ */
+export function watchNoteEditorInk(root: HTMLElement, src: EditorInkSource): () => void {
+  const watched = new Map<HTMLElement, MutationObserver>()
+  const ink = (area: HTMLElement) => {
+    const color = noteEditorInk(src)
+    if (color !== null) area.style.color = color
+  }
+  const attach = (area: HTMLElement) => {
+    if (watched.has(area)) return
+    const style = new MutationObserver(() => {
+      ink(area)
+      style.takeRecords() // our own write is not the engine's
+    })
+    style.observe(area, { attributes: true, attributeFilter: ['style'] })
+    watched.set(area, style)
+    ink(area)
+  }
+  const scan = () => {
+    for (const [area, style] of watched) {
+      if (area.isConnected) continue
+      style.disconnect()
+      watched.delete(area)
+    }
+    for (const area of root.querySelectorAll<HTMLElement>(EDITOR)) attach(area)
+  }
+  const added = new MutationObserver(scan)
+  added.observe(root, { childList: true, subtree: true })
+  const offChange = src.onChange(() => {
+    for (const area of watched.keys()) ink(area)
+  })
+  scan()
+  return () => {
+    added.disconnect()
+    offChange()
+    for (const style of watched.values()) style.disconnect()
+    watched.clear()
+  }
 }

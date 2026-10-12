@@ -54,6 +54,7 @@ import { planDragArrows } from './drag-arrows.ts'
 import { onPresenceFollow, presenceFollowOf } from './follow-target.ts'
 import {
   LASER_RESEND_MS,
+  LASER_STILL_MAX_MS,
   LaserTrails,
   laserToolOn,
   laserTrailOut,
@@ -171,6 +172,8 @@ export class PresenceHub {
   private parkTimer: unknown = null
   /** M2-6: the timer that re-sends a held laser */
   private resendTimer: unknown = null
+  /** wave N.1: when the last pointer sample came (the hub's clock); the re-send does not count */
+  private lastPointerAt = Number.NEGATIVE_INFINITY
   /** the last sample's trail taken (a sample handed over again brings no new points) */
   private lastTrail: readonly PresencePoint[] | null = null
   /** the other sessions' lasers (CONTRACTS_REV 12) */
@@ -393,6 +396,7 @@ export class PresenceHub {
     this.pointer = s.pointer ? { x: Math.round(s.pointer.x), y: Math.round(s.pointer.y) } : null
     this.button = s.button
     this.idle = false
+    this.lastPointerAt = this.clock()
     // CONTRACTS_REV 12: the laser is pressed while the laser tool is active and the button down on the board;
     // the samples since the last message go with the next one (a selection-tool press never carries `t`)
     const was = this.laserDown
@@ -547,7 +551,15 @@ export class PresenceHub {
     const setT = this.o.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms))
     this.resendTimer = setT(() => {
       this.resendTimer = null
-      if (this.laserDown && this.rev12) this.send()
+      if (!this.laserDown || !this.rev12) return
+      // wave N.1: no pointer event for this long, still "pressed": its release was lost. The press ends here (t: null goes
+      // out once, the others' laser fades) instead of being re-sent for ever; the next real sample is a new press.
+      if (this.clock() - this.lastPointerAt >= LASER_STILL_MAX_MS) {
+        this.laserDown = false
+        this.button = 'up'
+        this.pendingTrail = []
+      }
+      this.send()
     }, LASER_RESEND_MS)
   }
 

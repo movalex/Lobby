@@ -1207,6 +1207,15 @@ export function voteStarterOf(events: object, sessionId: string): string | null 
   return stores.get(events)?.voteStarter(sessionId) ?? null
 }
 
+/**
+ * Wave N.1: the server's clock now (ms since the epoch) as this tab estimates it: its own clock plus the offset the workshop
+ * store of `events` keeps (measured on its own requests), else the stream's (`serverOffsetMs`). What a server's stamp (a vote's
+ * `createdAt`, the stream's times) is compared with: this browser's clock may be minutes or hours off.
+ */
+export function serverNowOf(events: Pick<EventSource, 'serverOffsetMs'> & object): number {
+  return Date.now() + (stores.get(events)?.serverOffsetMs() ?? events.serverOffsetMs())
+}
+
 /** N1: when vote `sessionId` last moved (ms since the epoch), as far as this tab's store knows; null when it does not. */
 export function voteActivityAtOf(events: object, sessionId: string): number | null {
   return stores.get(events)?.voteActivityAt(sessionId) ?? null

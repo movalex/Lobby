@@ -59,11 +59,7 @@ const repliesOf = (s: WorkshopCanvasSession): VisitReply[] =>
     .filter((r) => r.path.endsWith('/visit') && r.status === 200)
     .map((r) => JSON.parse(r.body) as VisitReply)
 
-/**
- * The visit answers this session's page received (its own, only), once `count` of them have been read. Not
- * `net.settle()`: that waits for every /api body of the page, and the body of a thumbnail upload the api refused (a 429
- * while another tab's picture is fresh) can stay pending for good.
- */
+/** The visit answers this session's page received (its own, only), once `count` of them have been read. */
 async function visitReplies(s: WorkshopCanvasSession, count: number): Promise<VisitReply[]> {
   await expect
     .poll(() => repliesOf(s).length, { timeout: 15_000, message: 'the visit answers this page received' })
@@ -333,6 +329,30 @@ test('Mark all seen inside the api’s write interval is still honoured by a rel
   expect(second).toEqual(first)
   await a2.page.waitForTimeout(2_500)
   await expect(chip(a2.page)).toHaveCount(0)
+})
+
+test('wave N.1: leaving the page sends one "seen" beacon (the page turning hidden and pagehide said it once each)', async ({
+  join,
+}) => {
+  const a = await join('alice')
+  await visitReplies(a, 1) // the api took this open's visit: there is something to say "seen" about
+  // Playwright does not report a request made while a page unloads, so the page's own lifecycle events are fired and the
+  // beacons counted where they are made: a tab closing turns the page hidden, then fires pagehide
+  const beacons = await a.page.evaluate(() => {
+    const seen: string[] = []
+    const send = navigator.sendBeacon.bind(navigator)
+    navigator.sendBeacon = (url, data) => {
+      // (the usage counters use a beacon too)
+      if (String(url).endsWith('/visit/seen')) seen.push(String(url))
+      return send(url, data)
+    }
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+    document.dispatchEvent(new Event('visibilitychange'))
+    window.dispatchEvent(new Event('pagehide'))
+    return seen
+  })
+  expect(beacons).toHaveLength(1)
+  expect(beacons[0]).toMatch(/\/visit\/seen$/)
 })
 
 /** The parts of the dev handle this spec drives (focus mode, following). */

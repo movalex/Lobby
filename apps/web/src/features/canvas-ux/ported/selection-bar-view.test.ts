@@ -1,6 +1,8 @@
 // The selection bar's view (./SelectionBar.tsx selectionBarView): when the bar is drawn, and its anchor. Wave M
 // (M1-4): with the Hand tool (a phone's first tool) a press reads as a pan wherever it lands, so a tap on the bar's
-// own buttons hid the bar under the finger and the tap was lost; only a pan that starts on the canvas hides it.
+// own buttons hid the bar under the finger and the tap was lost; only a pan that starts on the canvas hides it. Wave
+// N.1: the canvas's gesture() now says so itself (a Hand press off the canvas is 'tool', board/gesture.test.ts), so the
+// bar needs no look at the pointer.
 import { describe, expect, it } from 'vitest'
 import {
   type CanvasFeatureContext,
@@ -34,8 +36,8 @@ describe('selectionBarView', () => {
     expect(selectionBarView(ctxWith('resizing', null))).toBeNull()
   })
 
-  it('M1-4: a press on the bar with the Hand tool keeps it; a pan on the canvas hides it', () => {
-    expect(selectionBarView(ctxWith('panning', { overCanvas: false, down: true }))).not.toBeNull()
+  it('M1-4: a press on the bar with the Hand tool (a press of the tool) keeps it; a pan on the canvas hides it', () => {
+    expect(selectionBarView(ctxWith('tool', { overCanvas: false, down: true }))).not.toBeNull()
     expect(selectionBarView(ctxWith('panning', { overCanvas: true, down: true }))).toBeNull()
     expect(selectionBarView(ctxWith('panning', null))).toBeNull()
   })

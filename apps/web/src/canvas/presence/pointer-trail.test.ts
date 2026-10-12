@@ -14,13 +14,14 @@ function fakeWrapper() {
     addEventListener: (type: string, h: Handler) => handlers.set(type, h),
     removeEventListener: (type: string) => handlers.delete(type),
   }
-  const fire = (type: string, x: number, coalesced?: number[]) =>
+  const fire = (type: string, x: number, coalesced?: number[], extra: { buttons?: number } = {}) =>
     handlers.get(type)?.({
       isPrimary: true,
       pointerType: 'mouse',
       clientX: x,
       clientY: 0,
       target: wrapper,
+      ...extra,
       ...(coalesced
         ? { getCoalescedEvents: () => coalesced.map((cx) => ({ clientX: cx, clientY: 0 })) }
         : {}),
@@ -72,6 +73,26 @@ describe('the presence pointer’s in-between points (the laser trail)', () => {
     p.fire('pointerdown', 30)
     expect(p.samples.at(-1)).toMatchObject({ source: 'pointerdown', button: 'down' })
     expect(p.samples.at(-1)?.trail).toBeUndefined()
+    p.off()
+  })
+
+  it('wave N.1: a move with no button held after a press whose release was lost ends the press', () => {
+    const p = attach()
+    p.at(0)
+    p.fire('pointerdown', 0, undefined, { buttons: 1 })
+    p.at(100)
+    p.fire('pointermove', 20, undefined, { buttons: 1 })
+    expect(p.samples.at(-1)).toMatchObject({ source: 'pointermove', button: 'down' })
+    // the button went up somewhere this listener never saw (over the page's chrome, another window)
+    p.at(300)
+    p.fire('pointermove', 60, undefined, { buttons: 0 })
+    const release = p.samples.find((s) => s.source === 'pointerup')
+    expect(release).toMatchObject({ button: 'up', pointer: { x: 30, y: 0 } })
+    expect(p.samples.at(-1)?.button).toBe('up')
+    // and a free mouse after that stays up
+    p.at(500)
+    p.fire('pointermove', 80, undefined, { buttons: 0 })
+    expect(p.samples.at(-1)?.button).toBe('up')
     p.off()
   })
 

@@ -183,6 +183,14 @@ describe('the decision', () => {
     expect(decideFeedbackPrompt({ ...ok, typing: true })).toBe('wait')
     expect(decideFeedbackPrompt({ ...ok, typing: false })).toBe('show')
   })
+  it('wave N.1: waits while a presentation is on screen (the slides cover the board’s top-centre stack), shows once it is over', () => {
+    expect(decideFeedbackPrompt({ ...ok, presenting: true })).toBe('wait')
+    expect(decideFeedbackPrompt({ ...ok, presenting: false })).toBe('show')
+    // it does not outlive the moment’s freshness, a guest or the week’s ask
+    expect(decideFeedbackPrompt({ ...ok, presenting: true, now: T0 + PROMPT_MOMENT_TTL_MS + 1 })).toBe('drop')
+    expect(decideFeedbackPrompt({ ...ok, presenting: true, guest: true })).toBe('drop')
+    expect(decideFeedbackPrompt({ ...ok, presenting: true, due: false })).toBe('drop')
+  })
   it('N1 (wave M follow-up 2): a person whose kind is not known yet is waited for, not dropped; a guest still is', () => {
     // /api/me has not answered: the moment is kept (and asked again when the kind arrives)
     expect(decideFeedbackPrompt({ ...ok, guest: null })).toBe('wait')

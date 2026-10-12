@@ -8,6 +8,8 @@
 //  - a swatch note recoloured to a pastel while dark (its label unchanged, so its cached drawing must be redrawn)
 //    reads too;
 //  - rendering only: the stored inks are unchanged and switching the theme pushes nothing.
+// Wave N.1: the text editor over such a note (the textarea someone types in) took the same chalk, unreadable on the pastel;
+// it now takes the note's ink too, and a swatch note's editor keeps chalk on its designed dark fill.
 //
 //   E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/m1-dark-notes.spec.ts --project=chromium --workers=1
 import type { Page } from '@playwright/test'
@@ -19,6 +21,9 @@ import {
   pushedOps,
   sceneToScreen,
   setViewport,
+  startTextEditing,
+  stopTextEditing,
+  TEXT_EDITOR,
   test,
   updateItem,
 } from '../tests/support/canvas.ts'
@@ -158,4 +163,51 @@ test('M1-5 (FTU-9): in dark mode, notes of off-palette pastels read at 4.5:1 or 
     .flatMap((p) => p.ops.map((o) => (o.k === 'p' ? o.id : o.el.id)))
   expect([...new Set(touched)]).toEqual([ids.recoloured])
   expect((await item(a.page, ids.recoloured as string))?.backgroundColor).toBe('#ffc9c9')
+})
+
+const parseRgb = (css: string): Rgb => {
+  const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(css)
+  if (!m) throw new Error(`not a colour: ${css}`)
+  return { r: Number(m[1]), g: Number(m[2]), b: Number(m[3]) }
+}
+
+test('wave N.1: in dark mode the text editor over a pastel note reads at 4.5:1 or more on the note; a swatch note’s editor keeps chalk on its dark fill', async ({
+  canvasSession,
+}, testInfo) => {
+  const a = await canvasSession('alice')
+  await waitForA11y(a.page)
+  const mint = await createNote(a.page, { x: 0, y: 0, size: 150, text: 'Ag Ag', color: '#b2f2bb' })
+  await expectSaved(a.page)
+  const swatch = await createNote(a.page, { x: 220, y: 0, size: 150, text: 'Ag Ag', color: '#a6d8f3' })
+  await expectSaved(a.page)
+  await setViewport(a.page, { x: -40, y: -40, zoom: 1 })
+  await setTheme(a.page, 'dark')
+
+  const seen: string[] = []
+  const editorRatio = async (id: string) => {
+    await startTextEditing(a.page, id)
+    // the editor's colour, and the note's fill as dark mode draws it (the most common colour of a box in its middle)
+    const color = parseRgb(await a.page.locator(TEXT_EDITOR).evaluate((el) => getComputedStyle(el).color))
+    const b = await withCanvas(a.page, (c, x) => c.bounds(x), id)
+    if (!b) throw new Error(`no note ${id}`)
+    const tl = await sceneToScreen(a.page, { x: b.x, y: b.y })
+    const fill = (await inkOn(a.page, { x: tl.x + 20, y: tl.y + 55, width: 110, height: 40 })).bg
+    const r = Number(ratio(color, fill).toFixed(2))
+    seen.push(`${hex(color)} on ${hex(fill)} ${r}:1`)
+    await a.page.screenshot({ path: testInfo.outputPath(`m1-editor-${id}.png`) })
+    await stopTextEditing(a.page)
+    return { r, color, fill }
+  }
+
+  const pastel = await editorRatio(mint)
+  // the fill is the pastel as it is, and the editor reads on it
+  expect(
+    Math.abs(pastel.fill.r - 0xb2) + Math.abs(pastel.fill.g - 0xf2) + Math.abs(pastel.fill.b - 0xbb),
+  ).toBeLessThan(24)
+  expect(pastel.r, seen.join('; ')).toBeGreaterThanOrEqual(4.5)
+  // a swatch note: chalk on its designed dark fill (it read before, and still does)
+  const swatchEditor = await editorRatio(swatch)
+  expect(swatchEditor.r, seen.join('; ')).toBeGreaterThanOrEqual(4.5)
+  expect(hex(swatchEditor.color)).toBe('#f4f1ea')
+  console.log(`N.1 editor contrast (dark): ${seen.join('; ')}`)
 })

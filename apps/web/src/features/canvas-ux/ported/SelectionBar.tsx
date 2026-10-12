@@ -412,11 +412,10 @@ export function selectionBarView(ctx: CanvasFeatureContext): SelectionBarView | 
   if (!ids.length || canvas.editingId() !== null) return null
   // the style panel opened from the phone toolbar's Styles button covers the board's lower half
   if (state.stylesOpen.get()) return null
+  // wave M (M1-4): with the Hand tool (a phone's first tool, K5-3) a press on the bar's own buttons must not hide the
+  // bar under the finger. Wave N.1: gesture() reads such a press as the tool's ('tool'), not a pan: a pan starts on the canvas.
   const g = canvas.gesture()
-  // wave M (M1-4): with the Hand tool (a phone's first tool, K5-3) a press anywhere reads as a pan, a press on the
-  // bar's own buttons too: the bar went away under the finger and the tap was lost. A pan starts on the canvas.
-  const pressOnChrome = g === 'panning' && canvas.pointer()?.overCanvas === false
-  if (g !== 'idle' && g !== 'pressing' && g !== 'tool' && !pressOnChrome) return null
+  if (g !== 'idle' && g !== 'pressing' && g !== 'tool') return null
   const b = canvas.boundsOf(ids)
   if (!b) return null
   const vp = canvas.viewport.screenRect()

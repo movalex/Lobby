@@ -225,10 +225,11 @@ export const selectNone = (page: Page): Promise<void> => canvasCall(page, 'selec
 export const setTool = (page: Page, name: string): Promise<boolean> => canvasCall(page, 'setTool', name)
 export const zoomToFit = (page: Page): Promise<void> => canvasCall(page, 'zoomToFit')
 /**
- * Moves the camera through the harness. A camera animation of the board's own (a focus, a fit, "go to") is not stopped by
- * the harness's raw set, and takes the camera back on its next frame (the wave L "L-compat 3" flake), so a running one is
- * let finish first (at most 3 s; nothing to wait for on a page with no board handle). The page-side fix is test-facade.ts
- * stopping it as the board's own viewport.set does (the canvas workstream's); this keeps specs deterministic until then.
+ * Moves the camera through the harness. The page side stops the board's own camera animation first (test-facade.ts, wave N.1;
+ * board-canvas.spec.ts proves it), as the board's own viewport.set does: before, a running one (a focus, a fit, "go to")
+ * took the camera back on its next frame (the wave L "L-compat 3" flake). The wait below for a running one to finish
+ * (at most 3 s; nothing to wait for on a page with no board handle) is from before that and is no longer needed; it stays
+ * so that every spec keeps the timing it was written with.
  */
 export const setViewport = async (
   page: Page,

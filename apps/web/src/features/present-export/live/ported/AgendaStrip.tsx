@@ -82,10 +82,12 @@ export function AgendaStrip({ live, variant }: { live: LiveController; variant: 
   // The drift reads the recorder when a visit begins or ends and as time passes.
   useValue('dr-agenda-recorded', () => live.agenda.recorded.get(), [live])
   const now = useNow(true, 500)
+  // wave N.1: the presenter's record says when the live section was reached, so only a timer started since is its own
+  const sinceMs = variant === 'presenter' ? live.agenda.recorder.enteredAt(place?.slideId ?? '') : undefined
   const state = agendaOf(
     frames,
     place?.slideId ?? null,
-    { timer: snap.timer, nowMs: now, offsetMs: store.serverOffsetMs() },
+    { timer: snap.timer, nowMs: now, offsetMs: store.serverOffsetMs(), sinceMs },
     place?.presenterId ?? null,
   )
   // M2-5: the last section ran out: a moment (the presenter's only: a follower records and is asked nothing)

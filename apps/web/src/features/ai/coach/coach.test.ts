@@ -412,6 +412,66 @@ describe('N1 (wave M follow-up 2): a stale vote’s starter does not keep the co
     expect(sessionFactsOf(k.ctx, 'usr_cy')).toMatchObject({ voteStarter: 'usr_bob', presenter: 'usr_cy' })
   })
 
+  describe('wave N.1: a vote’s age is on the server’s clock (a vote’s stamps are the server’s; this browser’s clock may be hours off)', () => {
+    const HOUR = 60 * 60 * 1000
+    /** A kit whose browser clock is `-offsetMs` from the server's (offset = server minus browser, as events.serverOffsetMs). */
+    const kitWithOffset = (offsetMs: number, me = 'usr_ana', board?: El[]) => {
+      const k = aiKit(board, { me })
+      ;(k.ctx.events as unknown as { serverOffsetMs: () => number }).serverOffsetMs = () => offsetMs
+      return k
+    }
+    /** The vote's starter as the session's facts see it, for a vote the server stamped `ageMs` ago. */
+    const starterSeen = (offsetMs: number, ageMs: number) => {
+      const k = kitWithOffset(offsetMs)
+      coachWorkshop(k.canvas).set(vote(Date.now() + offsetMs - ageMs))
+      return sessionFactsOf(k.ctx, 'usr_cy').voteStarter
+    }
+
+    it('a browser hours ahead of the server does not make a fresh vote old, and one hours behind does not make an old vote new', () => {
+      expect(starterSeen(0, 5 * HOUR)).toBe('usr_bob')
+      expect(starterSeen(0, 7 * HOUR)).toBeNull()
+      // the browser's clock is 7 h ahead: a vote the server stamped 10 minutes ago reads 7 h 10 min old on it
+      expect(starterSeen(-7 * HOUR, 10 * 60_000)).toBe('usr_bob')
+      // the browser's clock is 7 h behind: a vote 7 h old by the server's reads brand new on it
+      expect(starterSeen(7 * HOUR, 7 * HOUR)).toBeNull()
+    })
+
+    it('the chip agrees: bob, ahead of the server by 7 h, still has the chip for his 10-minute-old vote', () => {
+      vi.stubGlobal('document', { querySelector: () => null })
+      try {
+        const few = [{ id: 'f1', type: 'frame', x: 0, y: 0, width: 2000, height: 1200, name: 'Ideas' } as El]
+        const bob = kitWithOffset(-7 * HOUR, 'usr_bob', few)
+        coachWorkshop(bob.canvas).set({
+          brainstorm: null,
+          vote: {
+            sessionId: SID,
+            status: 'revealed',
+            top: ['shape:n0', 'shape:n1', 'shape:n2'],
+            startedBy: 'usr_bob',
+            at: Date.now() - 7 * HOUR - 10 * 60_000,
+          },
+        })
+        expect(renderIn(bob, CoachOverlay)).toContain('Turn the top 3 into action items')
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
+    it('a vote the stream tells of is stamped with the server’s clock', () => {
+      const k = kitWithOffset(-7 * HOUR)
+      const stop = listenWorkshop(k.ctx)
+      k.emit(WORKSHOP_EVENTS.results, {
+        sessionId: SID,
+        results: [{ shapeId: 'shape:a', count: 2, rank: 1 }],
+        totalVotesCast: 2,
+        participants: 1,
+      })
+      const at = coachWorkshop(k.canvas).get().vote?.at ?? 0
+      expect(Math.abs(Date.now() - 7 * HOUR - at)).toBeLessThan(5_000)
+      stop()
+    })
+  })
+
   it('the chip: with last week’s vote on the board the owner is the facilitator again, and the old starter is not', () => {
     vi.stubGlobal('document', { querySelector: () => null })
     try {
