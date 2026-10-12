@@ -3,7 +3,7 @@
 // embedFont(bytes, { subset: true })). Its build bundles a pure-JS brotli decoder (no WASM, no eval), so it reads the
 // woff2 files under /excalidraw-assets/fonts/ as they are served: their metrics, layout and glyph outlines.
 //
-// Two adapters, both proven on every font file the build ships (fontkit.test.ts) and in a viewer (n6-vector-pdf):
+// The adapters, the first two proven on every font file the build ships (fontkit.test.ts) and in a viewer (n6):
 //  1. Subsets of a woff2 font. Every Lobby font is a woff2 file whose glyf and loca tables are TRANSFORMED (WOFF2 §5):
 //     fontkit decodes the outlines from the transformed streams, but its TrueType subsetter copies each glyph's raw
 //     bytes through loca offsets the transformed table does not have, so the subset's glyphs were bytes of the
@@ -16,6 +16,8 @@
 //     method (fontkit 2's sync API); @pdf-lib/fontkit's `encode(stream)` needs the stream it writes into, so the call
 //     threw. The subsets handed to the fork expose the stream API only (`includeGlyph`, `encodeStream`, `cff`): the
 //     path upstream pdf-lib takes with this same engine.
+//  3. (wave N.1) fontkit's `encodeStream()` runs the encode in a later tick: a throw there is reported on the
+//     stream (`reportEncodeErrors`), so the PDF's save rejects instead of never settling.
 // The adapters use fontkit internals (`_addGlyph`, `_getContours`, the subset's `glyf`/`loca`/`hmtx` arrays): the
 // version is pinned exactly in the catalog, and fontkit.test.ts fails if any of them moves.
 //
@@ -217,6 +219,27 @@ function writeGlyphsFromOutlines(subset: PdfLibSubset, font: PdfLibFont) {
   }
 }
 
+/**
+ * fontkit's `encodeStream()` runs the subset's `encode` in a later tick, outside any caller's try: a throw there
+ * (a glyph the woff2 adapter cannot write) escaped as an uncaught error and the stream never ended, so the PDF's save
+ * never settled (no PDF from the worker; a hung export on the page). The encode reports it on the stream instead,
+ * where @cantoo/pdf-lib's serializeFont listens: the save rejects, and the export makes image pages (wave N.1).
+ */
+function reportEncodeErrors(subset: PdfLibSubset) {
+  const encode = subset.encode
+  if (typeof encode !== 'function') return
+  subset.encode = function encodeReporting(this: PdfLibSubset, stream: unknown) {
+    try {
+      return encode.call(this, stream)
+    } catch (e) {
+      const s = stream as { emit?(event: string, error: unknown): unknown } | null
+      if (typeof s?.emit !== 'function') throw e
+      s.emit('error', e instanceof Error ? e : new Error(String(e)))
+      return undefined
+    }
+  }
+}
+
 /** The subset as the fork reads it: no `encode`, so it takes `encodeStream()` (adapter 2 in the header). */
 function streamOnly(subset: PdfLibSubset): PdfLibSubset {
   return {
@@ -239,6 +262,7 @@ export function adaptFontkit(engine: PdfLibFontkit): Fontkit {
         font.createSubset = () => {
           const subset = own()
           if (woff2 && !subset.cff) writeGlyphsFromOutlines(subset, font)
+          reportEncodeErrors(subset)
           return streamOnly(subset)
         }
       }

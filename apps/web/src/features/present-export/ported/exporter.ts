@@ -20,6 +20,7 @@
 // setting. workshops-facilitation.spec.ts RETRO-03a checks the files.
 import type { Bounds, CanvasElement, ExportOptions, LobbyCanvas } from '../../../canvas/api/index.ts'
 import type { PdfTextItem } from '../pdf-build.ts'
+import type { PdfTimeLimits } from '../pdf-client.ts'
 import { PDF_RASTER, type PdfPageFormat, pdfRasterScale, planPdfPage } from '../pdf-layout.ts'
 import { setPngDensity } from '../png-density.ts'
 import {
@@ -463,9 +464,67 @@ export interface PdfResult {
   readonly pageCount: number
   /**
    * Vector exports: the 1-based numbers of the frame pages drawn as images instead (N6-4: effects the vector
-   * drawing does not reproduce, a font that could not be embedded…), with why. Empty for an image export.
+   * drawing does not reproduce, a font that could not be embedded…; wave N.1: a page past its time limit, or every
+   * frame page when the vector document could not be finished), with why. Empty for an image export.
    */
   readonly imagePages: readonly { readonly page: number; readonly reason: string }[]
+}
+
+/**
+ * A vector document its builder could not finish (wave N.1): a vector page past its time limit (`page`: its spec's
+ * index), or a builder step that failed (the file not written, the worker lost). The export makes it again.
+ */
+class VectorDocumentFailed extends Error {
+  readonly page: number | null
+  constructor(page: number | null) {
+    super('the vector PDF could not be made')
+    this.name = 'VectorDocumentFailed'
+    this.page = page
+  }
+}
+
+const isVectorPageTimeout = (e: unknown) => e instanceof Error && e.name === 'PdfVectorPageTimeout'
+
+/** `p`, or ExportCancelled as soon as `signal` aborts (the step itself is stopped by the builder's dispose). */
+function abortable<T>(p: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return p
+  return new Promise<T>((resolve, reject) => {
+    const cancel = () => reject(new ExportCancelled())
+    if (signal.aborted) cancel()
+    signal.addEventListener('abort', cancel, { once: true })
+    p.then(
+      (v) => {
+        signal.removeEventListener('abort', cancel)
+        resolve(v)
+      },
+      (e: unknown) => {
+        signal.removeEventListener('abort', cancel)
+        reject(e)
+      },
+    )
+  })
+}
+
+/** How one attempt draws the frames. */
+interface PdfPlan {
+  /** vector pages for the frames (else image pages) */
+  readonly vector: boolean
+  /** frames (by spec index) drawn as image pages in a vector document, and why */
+  readonly asImages: ReadonlyMap<number, string>
+  /** an image document made because the vector one could not be: every frame page is named, with this reason */
+  readonly allImagesBecause?: string
+}
+
+type PdfOptions = {
+  title: string
+  lossless: boolean
+  pageFormat?: PdfPageFormat
+  /** default 'image' (today's pages) */
+  pagesKind?: PdfPagesKind
+  signal?: AbortSignal
+  onProgress?(p: PdfProgress): void
+  /** the builder's time limits (../pdf-client.ts PDF_TIME_LIMITS unless a test sets them) */
+  limits?: Partial<PdfTimeLimits>
 }
 
 /** A frame's SVG for its vector page: fonts by name only (the worker embeds them), images as display copies. */
@@ -478,49 +537,90 @@ async function vectorSvg(canvas: LobbyCanvas, t: ImageTarget, o: ExportOptions):
   return svgWithBadges(svg, shiftBadges(badges, originOf(canvas, t, opts, svgSize(svg))))
 }
 
+/**
+ * The PDF. A vector one its builder cannot finish (wave N.1) is made again: once with the page that went past its
+ * time limit as an image page, then, if that fails too, with every frame as an image page (the dialog names them).
+ */
 export async function renderPdf(
   canvas: LobbyCanvas,
   pages: readonly PdfPageSpec[],
-  opts: {
-    title: string
-    lossless: boolean
-    pageFormat?: PdfPageFormat
-    /** default 'image' (today's pages) */
-    pagesKind?: PdfPagesKind
-    signal?: AbortSignal
-    onProgress?(p: PdfProgress): void
-  },
+  opts: PdfOptions,
+): Promise<PdfResult> {
+  if (opts.pagesKind !== 'vector')
+    return renderPdfOnce(canvas, pages, opts, { vector: false, asImages: new Map() })
+  const asImages = new Map<number, string>()
+  try {
+    return await renderPdfOnce(canvas, pages, opts, { vector: true, asImages })
+  } catch (e) {
+    if (!(e instanceof VectorDocumentFailed)) throw e
+    if (e.page !== null) {
+      asImages.set(e.page, 'its vector drawing took too long')
+      try {
+        return await renderPdfOnce(canvas, pages, opts, { vector: true, asImages })
+      } catch (again) {
+        if (!(again instanceof VectorDocumentFailed)) throw again
+      }
+    }
+  }
+  const allImagesBecause = 'the vector PDF could not be finished'
+  return renderPdfOnce(canvas, pages, opts, { vector: false, asImages: new Map(), allImagesBecause })
+}
+
+async function renderPdfOnce(
+  canvas: LobbyCanvas,
+  pages: readonly PdfPageSpec[],
+  opts: PdfOptions,
+  how: PdfPlan,
 ): Promise<PdfResult> {
   const pageFormat = opts.pageFormat ?? 'fit'
-  const vector = opts.pagesKind === 'vector'
+  const signal = opts.signal
   const imagePages: { page: number; reason: string }[] = []
   const [{ createPdfBuilderOffThread }, { bookmarkTitle, isWinAnsi }] = await Promise.all([
     import('../pdf-client.ts'),
     import('../pdf-text.ts'),
   ])
-  const builder = await createPdfBuilderOffThread({ title: opts.title })
+  if (signal?.aborted) throw new ExportCancelled()
+  const builder = await createPdfBuilderOffThread({
+    title: opts.title,
+    ...(opts.limits ? { limits: opts.limits } : {}),
+  })
+  // Cancel stops the PDF worker at once, whatever page it is on; every wait for the builder ends with ExportCancelled
+  const stop = () => builder.dispose()
+  signal?.addEventListener('abort', stop, { once: true })
+  /** One builder step: cancellable; in a vector document any failure gives the document up (made again). */
+  const step = async <T>(p: Promise<T>, specIndex: number | null = null): Promise<T> => {
+    try {
+      return await abortable(p, signal)
+    } catch (e) {
+      if (signal?.aborted || e instanceof ExportCancelled) throw new ExportCancelled()
+      if (how.vector) throw new VectorDocumentFailed(isVectorPageTimeout(e) ? specIndex : null)
+      throw e
+    }
+  }
   try {
     const total = pages.length
     for (let i = 0; i < total; i++) {
       opts.onProgress?.({ done: i, total })
       await nextTask()
-      if (opts.signal?.aborted) throw new ExportCancelled()
+      if (signal?.aborted) throw new ExportCancelled()
       const spec = pages[i] as PdfPageSpec
       if (spec.kind === 'report') {
         const plan = planPdfPage(spec.page.width, spec.page.height, pageFormat)
         const title = bookmarkTitle(spec.title, builder.pageCount)
         const headerImage = isWinAnsi(title) ? null : await titleImage(title, plan)
         const bytes = await reportPng(spec.page)
-        if (opts.signal?.aborted) throw new ExportCancelled()
-        await builder.addPage({
-          title,
-          format: pageFormat,
-          widthPx: spec.page.width,
-          heightPx: spec.page.height,
-          image: { bytes, type: 'png' },
-          ...(headerImage ? { headerImage } : {}),
-          texts: reportTexts(spec.page),
-        })
+        if (signal?.aborted) throw new ExportCancelled()
+        await step(
+          builder.addPage({
+            title,
+            format: pageFormat,
+            widthPx: spec.page.width,
+            heightPx: spec.page.height,
+            image: { bytes, type: 'png' },
+            ...(headerImage ? { headerImage } : {}),
+            texts: reportTexts(spec.page),
+          }),
+        )
         continue
       }
       let target: ImageTarget
@@ -549,21 +649,26 @@ export async function renderPdf(
       // that falls back reuses them for its image page
       const title = bookmarkTitle(spec.title, builder.pageCount)
       const headerImage = isWinAnsi(title) ? null : await titleImage(title, plan)
-      if (vector) {
+      const forced = how.vector ? how.asImages.get(i) : how.allImagesBecause
+      if (forced !== undefined) imagePages.push({ page: builder.pageCount + 1, reason: forced })
+      else if (how.vector) {
         const svg = await vectorSvg(canvas, target, o).catch(() => null)
-        if (opts.signal?.aborted) throw new ExportCancelled()
+        if (signal?.aborted) throw new ExportCancelled()
         const outcome = svg
-          ? await builder.addVectorPage({
-              title,
-              format: pageFormat,
-              widthPx: bounds.width,
-              heightPx: bounds.height,
-              svg,
-              // a copy: the PDF worker takes (transfers) the bytes it is sent
-              ...(headerImage ? { headerImage: { ...headerImage, bytes: headerImage.bytes.slice() } } : {}),
-              // only the file cards' names: the rest of a vector page's text is drawn as real text
-              texts: pageTexts(canvas, targetElements(canvas, target), bounds, { cardsOnly: true }),
-            })
+          ? await step(
+              builder.addVectorPage({
+                title,
+                format: pageFormat,
+                widthPx: bounds.width,
+                heightPx: bounds.height,
+                svg,
+                // a copy: the PDF worker takes (transfers) the bytes it is sent
+                ...(headerImage ? { headerImage: { ...headerImage, bytes: headerImage.bytes.slice() } } : {}),
+                // only the file cards' names: the rest of a vector page's text is drawn as real text
+                texts: pageTexts(canvas, targetElements(canvas, target), bounds, { cardsOnly: true }),
+              }),
+              i,
+            )
           : { vector: false as const, reason: 'the frame’s drawing could not be made' }
         if (outcome.vector) continue
         // N6-4: this page as an image (today's page), and the dialog says so
@@ -578,25 +683,31 @@ export async function renderPdf(
         theme: 'light',
         files: 'original',
       })
-      if (opts.signal?.aborted) throw new ExportCancelled()
+      if (signal?.aborted) throw new ExportCancelled()
       const blob = await blobOf(c, format === 'png' ? 'image/png' : 'image/jpeg', 0.92)
-      await builder.addPage({
-        title,
-        format: pageFormat,
-        widthPx: bounds.width,
-        heightPx: bounds.height,
-        image: { bytes: new Uint8Array(await blob.arrayBuffer()), type: format },
-        ...(headerImage ? { headerImage } : {}),
-        texts: pageTexts(canvas, targetElements(canvas, target), bounds),
-      })
+      const bytes = new Uint8Array(await blob.arrayBuffer())
+      if (signal?.aborted) throw new ExportCancelled()
+      await step(
+        builder.addPage({
+          title,
+          format: pageFormat,
+          widthPx: bounds.width,
+          heightPx: bounds.height,
+          image: { bytes, type: format },
+          ...(headerImage ? { headerImage } : {}),
+          texts: pageTexts(canvas, targetElements(canvas, target), bounds),
+        }),
+      )
     }
     if (builder.pageCount === 0) throw new Error('Nothing to export: the frames were removed.')
     opts.onProgress?.({ done: total, total })
     await nextTask()
+    if (signal?.aborted) throw new ExportCancelled()
     const pageCount = builder.pageCount
-    const bytes = await builder.finish()
+    const bytes = await step(builder.finish())
     return { blob: new Blob([bytes as BlobPart], { type: 'application/pdf' }), pageCount, imagePages }
   } finally {
+    signal?.removeEventListener('abort', stop)
     builder.dispose()
   }
 }
