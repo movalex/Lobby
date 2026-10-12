@@ -26,6 +26,11 @@ export interface ApiLimits {
   streamRecheckMs: number
   /** POST /api/auth/sessions/revoke-all per signed-in user (each may call the identity provider). */
   revokeAll: RouteRateLimit
+  /**
+   * GET /api/boards/:bid/open-state per signed-in user (wave N.1): one READ ONLY transaction over eight panel reads,
+   * asked once per board open. A refusal (429) leaves the web on the parts' own routes.
+   */
+  openStates: RouteRateLimit
 }
 
 const MINUTE = 60_000
@@ -40,6 +45,9 @@ export const DEFAULT_LIMITS: ApiLimits = {
   streamOpens: { max: 120, timeWindow: MINUTE },
   streamRecheckMs: 10_000,
   revokeAll: { max: 10, timeWindow: MINUTE },
+  // asked once per board open (a re-entry within the answer's lifetime, OPEN_STATE_TTL_MS, asks nothing): a board a
+  // second is far past what anyone opens by hand; half the stream opens' 120, which count reconnects too
+  openStates: { max: 60, timeWindow: MINUTE },
 }
 
 /** Everything a route module needs; passed explicitly instead of Fastify decorators. */

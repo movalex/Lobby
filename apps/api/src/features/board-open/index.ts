@@ -5,7 +5,8 @@
 // The panel reads a board page fires when it opens took 0.4-1.1 s at p95 together on the 0.1-CPU Postgres, against
 // about 5 ms alone: each ran its own session lookup and access check, and they queued. This answers them together:
 //   1. the board's event position (hub.boardPosition), before anything is read;
-//   2. one session lookup (ctx.requireUser), and the 'me' freshen the threads route makes (no provider call inside
+//   2. one session lookup (ctx.requireUser), the caller's own rate limit (wave N.1: ApiLimits.openStates, 60 a
+//      minute; 429 RATE_LIMITED, nothing read), and the 'me' freshen the threads route makes (no provider call inside
 //      the transaction: freshenThen decides before it starts);
 //   3. one pooled client, one READ ONLY transaction: one access check (requireBoardAction 'view', the check every
 //      part's route makes first), then each part, one after the other (no fan-out), by the loader its own route
@@ -29,6 +30,7 @@ import type { FastifyInstance } from 'fastify'
 import { requireBoardAction } from '../../access.ts'
 import type { Params } from '../../context.ts'
 import { ApiError } from '../../errors.ts'
+import { keyedLimit } from '../../rate-limit.ts'
 import { createAiLoaders } from '../ai/index.ts'
 import type { FeatureContext } from '../context.ts'
 import { openStatePartsOf, type PartCaller } from './parts.ts'
@@ -69,8 +71,12 @@ export async function registerBoardOpen(app: FastifyInstance, ctx: FeatureContex
     if (missing.length) throw new Error(`open-state: no loader for ${missing.join(', ')}`)
   })
 
+  // wave N.1: its own per-person limit (ApiLimits.openStates), taken before anything about the board is read
+  const opens = keyedLimit(ctx.limits.openStates, ctx.now)
+
   app.get(OPEN_STATE_ROUTE, async (req, reply): Promise<OpenStateBody> => {
     const user = await ctx.requireUser(req)
+    opens.take(user.id)
     const { bid = '' } = req.params as Params
     // 1. before anything is read: an event published after this moves the position
     const position = ctx.events.boardPosition(bid)
