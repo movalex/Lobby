@@ -117,8 +117,10 @@ overrides:
 # against its container (A2), the frame clip's bounding-box fast path (C) and `isElementInViewportAt` (A1/A4); a second
 # patch, of @excalidraw/excalidraw (same exact version, MIT), keeps the renderer's renderable map across camera moves
 # (A3), runs its two viewport passes through `isElementInViewportAt` (A1/A4) and memoizes the two embeddable scans of
-# every update (E). Both builds (dist/dev, dist/prod) carry every hunk; apps/web/test/engine-probe/pan-speed.test.ts
-# checks them (an unpatched copy fails there). The edits are a script anchored on this nightly, re-applied after a bump:
+# every update (E); O-1b reads the viewport pass's bounds from a typed copy kept per renderable map (A5) and decides the
+# render-offset pass's elements by offset group (A4b). Both builds (dist/dev, dist/prod) carry every hunk;
+# apps/web/test/engine-probe/pan-speed.test.ts and the browser probe (`pnpm probe:browser`: pan) check them (an
+# unpatched copy fails there). The edits are a script anchored on this nightly, re-applied after a bump:
 # docs/research/excalidraw/wave-o/pan-patch.mjs (its header has the steps).
 patchedDependencies:
   '@excalidraw/element@0.18.0-1118751': patches/@excalidraw__element@0.18.0-1118751.patch

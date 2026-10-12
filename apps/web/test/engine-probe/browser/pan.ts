@@ -5,11 +5,13 @@
  *    picks from the scene, and its renderable map is kept across camera moves and replaced on a scene change;
  *  - E: the two embeddable scans see every scene change: a new embeddable gets its validation status, an iframe added
  *    is mounted and one deleted is unmounted, a status flipped by updateEmbedValidationStatus (its one writer) is
- *    rendered, and a camera move alone reuses both scans.
+ *    rendered, and a camera move alone reuses both scans;
+ *  - O-1b: the typed bounds see an element moved in place (its version bumped, no scene update), and the render-offset
+ *    pass answers as the engine's own algorithm with a far offset shared by many elements and a near one.
  * Nothing here fetches: the embeddable's link fails the default validator (example.com) and the one rendered later is
  * out of view (never initialized), the iframe is a srcdoc document.
  */
-import { isElementInViewport, newElement } from '@excalidraw/element'
+import { isElementInViewport, mutateElement, newElement } from '@excalidraw/element'
 import { CaptureUpdateAction } from '@excalidraw/excalidraw'
 
 // biome-ignore lint/suspicious/noExplicitAny: Excalidraw's own objects (the App instance, elements)
@@ -81,6 +83,8 @@ export interface PanEngineReport {
   statusFlipRendered: boolean
   /** a camera move alone reuses both scans */
   scansReusedOnMove: boolean
+  /** O-1b: the render-offset pass answers as the engine's algorithm, a far offset group and a near offset */
+  offsetPassAsEngine: boolean
 }
 
 export async function checkPanEngine(
@@ -169,6 +173,71 @@ export async function checkPanEngine(
     detail.push('after the scene change: the pick differs')
   }
 
+  // A5: an element moved in place without a scene update (its version bumped, the scene's nonce not): the typed bounds
+  // are computed again from the version, as the bounds cache does, so the next camera move sees it where it is now
+  const inPlace = api.getSceneElements().find((e) => e.id === 's5')
+  mutateElement(inPlace, new Map(api.getSceneElements().map((e) => [e.id, e])) as never, { x: -1500 })
+  api.updateScene({
+    appState: { scrollX: 1490, scrollY: 0, zoom: { value: 1 } },
+    captureUpdate: CaptureUpdateAction.NEVER,
+  })
+  await frames(2)
+  const silentSeen = (app?.visibleElements ?? []).some((e: Any) => e.id === 's5')
+  const afterMove = JSON.stringify((app?.visibleElements ?? []).map((e: Any) => e.id))
+  if (afterMove !== JSON.stringify(pick()) || !silentSeen) {
+    visibleAsEngine = false
+    detail.push(`after an in-place move: the pick differs (s5 in view ${silentSeen})`)
+  }
+
+  // A4b: the render-offset pass against the engine's own algorithm (written out here), with a far offset shared by many
+  // elements (the level-of-detail pass's cull) and a near one (a drag preview) that takes an element in and out of view
+  const offsetPassAsEngine = await (async () => {
+    const far = { x: 1e9, y: 1e9 }
+    const overrides = new Map<string, { offset: { x: number; y: number } }>()
+    for (let i = 10; i < 30; i++) overrides.set(`s${i}`, { offset: far })
+    overrides.set('s1', { offset: { x: 700, y: 260 } })
+    ;(api as Any).setElementRenderOverrides(overrides)
+    let ok = true
+    for (const c of [
+      { scrollX: 0, scrollY: 0, zoom: 1 },
+      { scrollX: -500, scrollY: -100, zoom: 1 },
+      { scrollX: -900, scrollY: -350, zoom: 1 },
+      { scrollX: 300, scrollY: 200, zoom: 0.5 },
+      { scrollX: -1e9 + 200, scrollY: -1e9 + 100, zoom: 1 },
+    ]) {
+      api.updateScene({
+        appState: { scrollX: c.scrollX, scrollY: c.scrollY, zoom: { value: c.zoom } },
+        captureUpdate: CaptureUpdateAction.NEVER,
+      })
+      await frames(2)
+      const st = api.getAppState()
+      const map = new Map(api.getSceneElements().map((e) => [e.id, e]))
+      const view = (sx: number, sy: number) => ({
+        zoom: st.zoom,
+        offsetLeft: st.offsetLeft,
+        offsetTop: st.offsetTop,
+        scrollX: sx,
+        scrollY: sy,
+      })
+      const inView = (e: Any, sx: number, sy: number) =>
+        isElementInViewport(e, st.width, st.height, view(sx, sy), map as never)
+      const documentVisible = new Set(api.getSceneElements().filter((e) => inView(e, st.scrollX, st.scrollY)))
+      const want = api.getSceneElements().filter((e) => {
+        const o = overrides.get(e.id)?.offset
+        if (!o || (e.type === 'text' && e.containerId)) return documentVisible.has(e)
+        return inView(e, st.scrollX + o.x, st.scrollY + o.y)
+      })
+      const got = app?.renderer?.lobbyLastOffsetsPass?.result ?? []
+      if (JSON.stringify(got.map((e: Any) => e.id)) !== JSON.stringify(want.map((e) => e.id))) {
+        ok = false
+        detail.push(`offsets at ${JSON.stringify(c)}: the pass ${got.length}, the engine ${want.length}`)
+      }
+    }
+    ;(api as Any).setElementRenderOverrides(null)
+    await frames(2)
+    return ok
+  })()
+
   // E: an embeddable whose link the default validator refuses (nothing is fetched)
   const base = api.getSceneElements()
   const embeddable = shape('emb', 100, 100, 'b0', { type: 'embeddable', link: 'https://example.com/a' })
@@ -239,6 +308,7 @@ export async function checkPanEngine(
     iframeUnmounted,
     statusFlipRendered,
     scansReusedOnMove,
+    offsetPassAsEngine,
   }
   // leave the page as it was for the next probe
   api.updateScene({

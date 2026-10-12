@@ -135,7 +135,7 @@ patchedDependencies:
     hash: 0251710a04a252e615a850bf406f4b8212f8c45f94971c0785215f787d81fac8
     path: patches/@excalidraw__element@0.18.0-1118751.patch
   '@excalidraw/excalidraw@0.18.0-1118751':
-    hash: c333035b204f1ae601c2cab3ec7ddd37d74c746b9e43b0ef0430e0807440deb7
+    hash: a46ea130e6790bacebf2ee101b094bbb6d9c1cae4f9e8606ad4c3b608fd110f5
     path: patches/@excalidraw__excalidraw@0.18.0-1118751.patch
 
 importers:
@@ -271,7 +271,7 @@ importers:
         version: 0.18.0-1118751(patch_hash=0251710a04a252e615a850bf406f4b8212f8c45f94971c0785215f787d81fac8)
       '@excalidraw/excalidraw':
         specifier: 'catalog:'
-        version: 0.18.0-1118751(patch_hash=c333035b204f1ae601c2cab3ec7ddd37d74c746b9e43b0ef0430e0807440deb7)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        version: 0.18.0-1118751(patch_hash=a46ea130e6790bacebf2ee101b094bbb6d9c1cae4f9e8606ad4c3b608fd110f5)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@excalidraw/fractional-indexing':
         specifier: 'catalog:'
         version: 0.18.0-1118751
@@ -3410,7 +3410,7 @@ snapshots:
       '@excalidraw/fractional-indexing': 0.18.0-1118751
       '@excalidraw/math': 0.18.0-1118751
 
-  '@excalidraw/excalidraw@0.18.0-1118751(patch_hash=c333035b204f1ae601c2cab3ec7ddd37d74c746b9e43b0ef0430e0807440deb7)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@excalidraw/excalidraw@0.18.0-1118751(patch_hash=a46ea130e6790bacebf2ee101b094bbb6d9c1cae4f9e8606ad4c3b608fd110f5)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
       '@braintree/sanitize-url': 6.0.2
       '@codemirror/commands': 6.11.1

@@ -644,10 +644,12 @@ describe('wave O pan speed-ups: static pins in both builds of @excalidraw/excali
 
   it.each(BUILDS)('%s: the A1/A4, A3 and E hunks are applied', (build) => {
     const src = builds[build]
-    // A1 and A4: the renderer's two viewport passes call the scalar test (the import, then two calls)
+    // A1/A4: the scalar test, in the engine's memoized offset pass (kept for its clear()) and in A4b's
     expect(count(src, build === 'dev' ? /isElementInViewportAt\(/ : /lobbyInViewAt\(/)).toBe(2)
-    // A3: the kept renderable map (its call and its definition)
+    // A3: the kept renderable map; A5 and A4b: the viewport pass and the offset pass (each a call and a definition)
     expect(count(src, /lobbyKeptRenderableElementsMap\(/)).toBe(2)
+    expect(count(src, /lobbyVisibleCanvasElements\(/)).toBe(2)
+    expect(count(src, /lobbyOffsetsPass\(/)).toBe(2)
     // E: both scans memoized, the statuses' one writer bumps their revision
     expect(count(src, /lobbyEmbeddablesUnchanged\(this\)/)).toBe(1)
     expect(count(src, /lobbyEmbeddablesToRender\(this,/)).toBe(1)
@@ -660,7 +662,8 @@ describe('wave O pan speed-ups: static pins in both builds of @excalidraw/excali
     const lines = builds.dev.split('\n')
     expect(lines[24161]).toContain('const isVisible = (element, offset) => isElementInViewportAt(')
     expect(lines[24223]).toContain('lobbyKeptRenderableElementsMap(')
-    expect(lines[24324]).toContain('if (isElementInViewportAt(')
+    expect(lines[24324]).toContain('return lobbyVisibleCanvasElements(')
+    expect(lines[24287]).toContain('return lobbyOffsetsPass(this, {')
     expect(lines[42582]).toContain('this.lobbyEmbedsRev')
     expect(lines[42586]).toContain('if (lobbyEmbeddablesUnchanged(this)) return;')
     expect(lines[48405]).toContain('lobbyEmbeddablesToRender(this,')

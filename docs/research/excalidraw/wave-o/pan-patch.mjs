@@ -6,6 +6,7 @@
 //   pnpm patch @excalidraw/element@0.18.0-1118751 --edit-dir <E>
 //   pnpm patch @excalidraw/excalidraw@0.18.0-1118751 --edit-dir <X>
 //   node pan-patch.mjs --part=o1 --element=<E> --excalidraw=<X>      (O-1: A1-A4, C, E; no pixel change)
+//   node pan-patch.mjs --part=o1b --excalidraw=<X>                   (O-1b, on a copy with O-1: A5 and the kept passes)
 //   pnpm patch-commit <E>; pnpm patch-commit <X>; then restore pnpm-workspace.yaml (patch-commit rewrites it: it
 //   sorts the catalog, drops the comments and `allowBuilds`) and add the patchedDependencies entry by hand
 //
@@ -19,7 +20,7 @@ import { join } from 'node:path'
 const arg = (name) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3)
 const part = arg('part')
 const dirs = { element: arg('element'), excalidraw: arg('excalidraw') }
-if (part !== 'o1') throw new Error('--part=o1')
+if (!['o1', 'o1b'].includes(part)) throw new Error('--part=o1 or o1b')
 
 const files = new Map()
 const file = (pkg, rel) => {
@@ -363,6 +364,252 @@ function lobbyEmbeddablesToRender(app, filter) {
 `
   append(dev, helpers)
   append(prod, helpers)
+}
+
+// ------------------------------------------------------------------------------------------------------------------
+// O-1b, @excalidraw/excalidraw: A5 and the kept passes (no pixel change), on a copy with O-1
+// ------------------------------------------------------------------------------------------------------------------
+if (part === 'o1b') {
+  const dev = file('excalidraw', X_DEV)
+  const prod = file('excalidraw', X_PROD)
+
+  // the viewport pass: A5's typed bounds, and the last frame's array again when the answer is the same
+  edit(
+    dev,
+    `    const visibleElements = [];
+    // Lobby patch (wave O, A1): isElementInViewport's test with the view as scalars (no two scene points per element):
+    // the same arithmetic, the same answer
+    for (const element of elementsMap.values()) {
+      if (isElementInViewportAt(
+        element,
+        width,
+        height,
+        zoom,
+        offsetLeft,
+        offsetTop,
+        scrollX,
+        scrollY,
+        elementsMap
+      )) {
+        visibleElements.push(element);
+      }
+    }
+    return visibleElements;`,
+    `    // Lobby patch (wave O, A1, A5): isElementInViewport's test over the renderable map with the view as scalars (no two
+    // scene points per element; the same arithmetic, the same answer), each element's bounds read from a typed copy kept
+    // per renderable map and checked against the versions the bounds cache checks, and the last frame's array again when
+    // the answer is the same (lobbyVisibleCanvasElements, after the module's last line)
+    return lobbyVisibleCanvasElements(
+      this,
+      elementsMap,
+      zoom,
+      offsetLeft,
+      offsetTop,
+      scrollX,
+      scrollY,
+      height,
+      width
+    );
+    // (the loop that was here: for each element of elementsMap, isElementInViewport(element, width, height, the view,
+    // elementsMap), the ones it keeps pushed in order; A1 made it isElementInViewportAt, which A5 inlines with the
+    // view's corners computed once a frame, adding the typed bounds and the kept array)
+    // (end of the Lobby patch)`,
+  )
+  edit(
+    prod,
+    'getVisibleCanvasElements({elementsMap:t,zoom:n,offsetLeft:o,offsetTop:r,scrollX:i,scrollY:a,height:s,width:l}){let d=[];for(let c of t.values())lobbyInViewAt(c,l,s,n,o,r,i,a,t)&&d.push(c);return d}',
+    'getVisibleCanvasElements({elementsMap:t,zoom:n,offsetLeft:o,offsetTop:r,scrollX:i,scrollY:a,height:s,width:l}){return lobbyVisibleCanvasElements(this,t,n,o,r,i,a,s,l)}',
+  )
+  // the render-offset pass, kept while its inputs and its decisions hold
+  edit(
+    dev,
+    `  getVisibleElementsWithRenderOffsets(visibleElements, elementsMap, appState, offsets) {
+    return this._getVisibleElementsWithRenderOffsets({`,
+    `  getVisibleElementsWithRenderOffsets(visibleElements, elementsMap, appState, offsets) {
+    return lobbyOffsetsPass(this, { // Lobby patch (wave O, A4b): the pass kept while its decisions hold`,
+  )
+  edit(
+    prod,
+    'getVisibleElementsWithRenderOffsets(t,n,o,r){return this._getVisibleElementsWithRenderOffsets({',
+    'getVisibleElementsWithRenderOffsets(t,n,o,r){return lobbyOffsetsPass(this,{',
+  )
+
+  const helpers = ({ BOUNDS, INVIEW, ISTEXT, CONTAINER, FRAMEID }) => `
+// ---- Lobby patch (wave O, O-1b; patches/@excalidraw__excalidraw@0.18.0-1118751.patch) ----------------------------
+// A5: per renderable map (A3 keeps one while the scene's nonce holds), its elements in order and their bounds in a typed
+// array, with the version each entry was computed at (and, for a bound text, the version of its container: the bounds
+// cache's own key, A2). An entry is computed again, through getElementBounds, when one of them moved. The test is
+// isElementInViewport's four comparisons, the view's corners computed as viewportCoordsToSceneCoords computes them.
+var lobbyBoundsByMap = /* @__PURE__ */ new WeakMap();
+function lobbyVisibleCanvasElements(renderer, elementsMap, zoom, offsetLeft, offsetTop, scrollX, scrollY, height, width) {
+  let c = lobbyBoundsByMap.get(elementsMap);
+  if (!c) {
+    const elements = [...elementsMap.values()];
+    const n = elements.length;
+    c = { elements, bounds: new Float64Array(n * 4), versions: new Float64Array(n).fill(NaN), containers: new Array(n).fill(null), containerVersions: new Float64Array(n) };
+    lobbyBoundsByMap.set(elementsMap, c);
+  }
+  const x1 = (offsetLeft - offsetLeft) / zoom.value - scrollX;
+  const y1 = (offsetTop - offsetTop) / zoom.value - scrollY;
+  const x2 = (offsetLeft + width - offsetLeft) / zoom.value - scrollX;
+  const y2 = (offsetTop + height - offsetTop) / zoom.value - scrollY;
+  const { elements, bounds, versions, containers, containerVersions } = c;
+  const visible = [];
+  for (let i = 0; i < elements.length; i++) {
+    const element = elements[i];
+    const container = containers[i];
+    const j = i * 4;
+    if (versions[i] !== element.version || container !== null && container.version !== containerVersions[i]) {
+      const b = ${BOUNDS}(element, elementsMap);
+      bounds[j] = b[0];
+      bounds[j + 1] = b[1];
+      bounds[j + 2] = b[2];
+      bounds[j + 3] = b[3];
+      versions[i] = element.version;
+      const owner = ${ISTEXT}(element) && element.containerId ? elementsMap.get(element.containerId) ?? null : null;
+      containers[i] = owner;
+      containerVersions[i] = owner ? owner.version : 0;
+    }
+    if (x1 <= bounds[j + 2] && y1 <= bounds[j + 3] && x2 >= bounds[j] && y2 >= bounds[j + 1]) {
+      visible.push(element);
+    }
+  }
+  // the last frame's array when this one holds the same elements in the same order (the render-offset pass and the
+  // visible set's cache key on its identity)
+  const last = renderer.lobbyLastVisible;
+  if (last && last.length === visible.length) {
+    let same = true;
+    for (let i = 0; i < visible.length; i++) {
+      if (last[i] !== visible[i]) {
+        same = false;
+        break;
+      }
+    }
+    if (same) return last;
+  }
+  renderer.lobbyLastVisible = visible;
+  return visible;
+}
+// A4b: Renderer._getVisibleElementsWithRenderOffsets, the same pass, with the offset elements decided by group. At
+// Lobby's fit the level-of-detail pass moves 4,850 elements out of the render with one far offset, and the pass built a
+// Set of every visible element, tested each of the 4,850 and filtered every visible element, on every frame. Here the
+// offset elements are grouped by offset (kept per offsets snapshot and map, built again when an element's version
+// moved), each group with the union of its elements' bounds: when the view, moved by a group's offset, misses that union
+// (isElementInViewportAt's four comparisons fail for the union, so for each element), none of the group is in view.
+// When that holds for every group, the engine's answer is the visible elements less the groups' members (the ones the
+// document shows are the ones it removes; it adds none): computed so, or the last frame's when its inputs are the same.
+// Anything else is the engine's own computation.
+function lobbyOffsetsPass(renderer, args) {
+  const { visibleElements, elementsMap, offsets, selectedElements, frameToHighlight, ...viewport } = args;
+  const last = renderer.lobbyLastOffsetsPass;
+  const sameInputs = !!last && last.visibleElements === visibleElements && last.elementsMap === elementsMap && last.offsets === offsets && last.selectedElements === selectedElements && last.frameToHighlight === frameToHighlight;
+  const needsFrameReordering = frameToHighlight && ${FRAMEID}(selectedElements) !== frameToHighlight.id;
+  const groups = lobbyOffsetGroupsOf(renderer, offsets, elementsMap);
+  if (!needsFrameReordering && lobbyOffsetGroupsUnseen(groups, viewport)) {
+    if (sameInputs && last.unseen) return last.result;
+    const filtered = visibleElements.filter((element) => !groups.members.has(element));
+    const result = filtered.length === visibleElements.length ? visibleElements : filtered;
+    renderer.lobbyLastOffsetsPass = { visibleElements, elementsMap, offsets, selectedElements, frameToHighlight, unseen: true, result };
+    return result;
+  }
+  // the engine's own computation
+  const documentVisible = renderer.getVisibleSet(visibleElements);
+  const added = /* @__PURE__ */ new Set();
+  const removed = /* @__PURE__ */ new Set();
+  for (const [id, offset] of offsets) {
+    const element = elementsMap.get(id);
+    if (!element || ${ISTEXT}(element) && ${CONTAINER}(element, elementsMap)) {
+      continue;
+    }
+    const visible = ${INVIEW}(element, viewport.width, viewport.height, viewport.zoom, viewport.offsetLeft, viewport.offsetTop, viewport.scrollX + offset.x, viewport.scrollY + offset.y, elementsMap);
+    if (documentVisible.has(element) !== visible) {
+      (visible ? added : removed).add(element);
+    }
+  }
+  let result;
+  if (!added.size && !removed.size) {
+    result = visibleElements;
+  } else if (!added.size && !needsFrameReordering) {
+    result = visibleElements.filter((element) => !removed.has(element));
+  } else {
+    const all = [];
+    for (const element of elementsMap.values()) {
+      if (added.has(element) || documentVisible.has(element) && !removed.has(element)) {
+        all.push(element);
+      }
+    }
+    result = needsFrameReordering ? renderer.sortSelectedElementsIntoHighlightedFrame({ visibleElements: all, selectedElements, frameToHighlight }) : all;
+  }
+  renderer.lobbyLastOffsetsPass = { visibleElements, elementsMap, offsets, selectedElements, frameToHighlight, unseen: false, result };
+  return result;
+}
+// the offset elements the pass tests (it skips a bound text: it keeps its container's visibility) grouped by offset,
+// each group with its elements' versions and the union of their bounds; kept per (offsets, map) while no version moved
+function lobbyOffsetGroupsOf(renderer, offsets, elementsMap) {
+  const kept = renderer.lobbyOffsetGroups;
+  if (kept && kept.offsets === offsets && kept.elementsMap === elementsMap && lobbyOffsetGroupsCurrent(kept)) {
+    return kept;
+  }
+  const byOffset = /* @__PURE__ */ new Map();
+  const members = /* @__PURE__ */ new Set();
+  const elements = [];
+  const versions = [];
+  for (const [id, offset] of offsets) {
+    const element = elementsMap.get(id);
+    if (!element || ${ISTEXT}(element) && ${CONTAINER}(element, elementsMap)) {
+      continue;
+    }
+    const key = offset.x + "," + offset.y;
+    let group = byOffset.get(key);
+    if (!group) {
+      group = { x: offset.x, y: offset.y, union: [Infinity, Infinity, -Infinity, -Infinity] };
+      byOffset.set(key, group);
+    }
+    const b = ${BOUNDS}(element, elementsMap);
+    group.union[0] = Math.min(group.union[0], b[0]);
+    group.union[1] = Math.min(group.union[1], b[1]);
+    group.union[2] = Math.max(group.union[2], b[2]);
+    group.union[3] = Math.max(group.union[3], b[3]);
+    members.add(element);
+    elements.push(element);
+    versions.push(element.version);
+  }
+  const groups = { offsets, elementsMap, list: [...byOffset.values()], members, elements, versions };
+  renderer.lobbyOffsetGroups = groups;
+  return groups;
+}
+function lobbyOffsetGroupsCurrent(groups) {
+  const { elements, versions } = groups;
+  for (let i = 0; i < elements.length; i++) {
+    if (elements[i].version !== versions[i]) return false;
+  }
+  return true;
+}
+function lobbyOffsetGroupsUnseen(groups, viewport) {
+  const z = viewport.zoom.value;
+  for (const g of groups.list) {
+    const sx = viewport.scrollX + g.x;
+    const sy = viewport.scrollY + g.y;
+    const x1 = (viewport.offsetLeft - viewport.offsetLeft) / z - sx;
+    const y1 = (viewport.offsetTop - viewport.offsetTop) / z - sy;
+    const x2 = (viewport.offsetLeft + viewport.width - viewport.offsetLeft) / z - sx;
+    const y2 = (viewport.offsetTop + viewport.height - viewport.offsetTop) / z - sy;
+    if (!(x1 > g.union[2] || y1 > g.union[3] || x2 < g.union[0] || y2 < g.union[1])) return false;
+  }
+  return true;
+}
+`
+  append(
+    dev,
+    helpers({
+      BOUNDS: 'getElementBounds4',
+      INVIEW: 'isElementInViewportAt',
+      ISTEXT: 'isTextElement10',
+      CONTAINER: 'getContainerElement3',
+      FRAMEID: 'getCommonFrameId',
+    }),
+  )
+  append(prod, helpers({ BOUNDS: 'S5', INVIEW: 'lobbyInViewAt', ISTEXT: 'gU', CONTAINER: 'hU', FRAMEID: 'Ak' }))
 }
 
 // ------------------------------------------------------------------------------------------------------------------
