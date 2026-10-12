@@ -459,6 +459,7 @@ export function createElementRoomServiceWith(
       for (const s of room.sessions)
         yield {
           pending: s.out.pending,
+          shared: s.out.shared,
           close: () => {
             metrics.inc('lobby_closes_total', { code: String(CLOSE_RECONNECT), reason: 'global-budget' })
             room.closeSession(s.identity.sid)

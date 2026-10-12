@@ -2,8 +2,13 @@
 // The per-session queues were capped (256 KiB presence skip, 8 MiB close) but their sum was not: above the
 // budget every session skips presence; above 1.25 times it the largest queues reconnect (4000), largest first;
 // `changes` frames are never skipped (a close, never a silent drop); the sum is lobby_outbound_bytes_queued.
+// Wave N.1 review: a frame many sockets hold (the cached gzip snapshot of a join storm) is one buffer, counted once.
+import { once } from 'node:events'
+import type { AddressInfo } from 'node:net'
 import { CLOSE_RECONNECT } from '@draftroom/canvas-schema/protocol'
 import { describe, expect, it } from 'vitest'
+import WebSocket, { WebSocketServer } from 'ws'
+import { elementSocketOf } from '../app.ts'
 import { DEFAULT_OUTBOUND_BUDGET_MB } from '../config.ts'
 import type { ElementSocket } from '../engine-switch.ts'
 import { RoomMetrics } from './metrics.ts'
@@ -131,5 +136,181 @@ describe('M7-5: the process-wide outbound budget', () => {
     expect(text).toMatch(/^lobby_outbound_budget_bytes 134217728$/m)
     expect(text).toMatch(/^lobby_outbound_over_budget 0$/m)
     m.stop()
+  })
+})
+
+const MiB = 1024 * 1024
+const sizeOf = (d: string | Uint8Array) => (typeof d === 'string' ? d.length : d.byteLength)
+const tick = () => new Promise<void>((r) => setImmediate(r))
+
+/**
+ * A slow client's socket: what is written stays in its buffer (bufferedAmount) until `drain` takes bytes from
+ * its head; a frame's write callback runs once all of it has left, as ws's does.
+ */
+function slowSocket() {
+  const writes: { left: number; done?: () => void }[] = []
+  const s: ElementSocket & {
+    bufferedAmount: number
+    readyState: number
+    closed: [number, string] | null
+    sent: number
+    drain(bytes: number): void
+  } = {
+    closed: null,
+    readyState: 1,
+    bufferedAmount: 0,
+    sent: 0,
+    send: (d, _o, done) => {
+      s.sent++
+      s.bufferedAmount += sizeOf(d)
+      writes.push({ left: sizeOf(d), ...(done ? { done } : {}) })
+    },
+    close: (c, r) => {
+      s.closed = [c, r]
+    },
+    drain(bytes: number) {
+      let n = bytes
+      while (n > 0 && writes.length) {
+        const w = writes[0] as { left: number; done?: () => void }
+        const k = Math.min(n, w.left)
+        w.left -= k
+        n -= k
+        s.bufferedAmount -= k
+        if (w.left === 0) {
+          writes.shift()
+          w.done?.()
+        }
+      }
+    },
+  }
+  return s
+}
+
+/** A joiner as the service's budget timer sees it (index.ts budgetEntries). */
+function joiner(budget: OutboundBudget) {
+  const sock = slowSocket()
+  const out = new Outbound(
+    sock,
+    () => {},
+    () => {},
+    budget,
+  )
+  return {
+    sock,
+    out,
+    entry: () => ({ pending: out.pending, shared: out.shared, close: () => out.overflow() }),
+  }
+}
+
+async function written(sessions: { sock: { sent: number } }[], frames: number) {
+  for (let i = 0; i < 100 && sessions.some((s) => s.sock.sent < frames); i++) await tick()
+  for (const s of sessions) expect(s.sock.sent).toBe(frames)
+}
+
+describe('wave N.1 review: a frame many sockets hold (the cached gzip snapshot) counts once in the budget', () => {
+  it('the same 2 MiB snapshot to 50 joiners (100 MiB summed per socket, one buffer held) closes nobody', async () => {
+    const budget = new OutboundBudget()
+    const snapshot = new Uint8Array(2 * MiB)
+    // as the room queues it (element-room.ts: one promise per cached snapshot)
+    const bytes = Promise.resolve(snapshot)
+    const welcome = '{"type":"welcome","reset":true}'
+    const joiners = Array.from({ length: 50 }, () => joiner(budget))
+    for (const j of joiners) {
+      j.out.send(Promise.resolve(welcome))
+      j.out.send(bytes)
+    }
+    await written(joiners, 2)
+    // every joiner's socket still holds it all (slow clients): 50 times 2 MiB by `pending`
+    for (const j of joiners) expect(j.out.pending).toBe(2 * MiB + welcome.length)
+    expect(budget.check(joiners.map((j) => j.entry()))).toBe(0)
+    for (const j of joiners) expect(j.sock.closed).toBeNull()
+    expect(budget.queued).toBe(2 * MiB + 50 * welcome.length)
+    expect(budget.over).toBe(false)
+    // once a joiner's socket has written it all, it holds nothing; the last one releases the buffer
+    for (const j of joiners) j.sock.drain(welcome.length + 2 * MiB)
+    for (const j of joiners) expect(j.out.shared).toEqual([])
+    budget.check(joiners.map((j) => j.entry()))
+    expect(budget.queued).toBe(0)
+  })
+
+  it('50 distinct 2 MiB frames still cross the 80 MiB line: the largest close, until the sum is under it', async () => {
+    const budget = new OutboundBudget()
+    const joiners = Array.from({ length: 50 }, () => joiner(budget))
+    for (const j of joiners) j.out.send(new Uint8Array(2 * MiB))
+    await written(joiners, 1)
+    // 100 MiB of distinct buffers: ten closes bring it to 80 MiB
+    expect(budget.check(joiners.map((j) => j.entry()))).toBe(10)
+    expect(joiners.filter((j) => j.sock.closed?.[0] === CLOSE_RECONNECT)).toHaveLength(10)
+    expect(budget.queued).toBe(80 * MiB)
+  })
+
+  it("a joiner's own bytes behind the shared snapshot still count, also once part of the snapshot has gone out", async () => {
+    const budget = new OutboundBudget()
+    const snapshot = new Uint8Array(2 * MiB)
+    // the catch-up and the changes since, after the snapshot: one string here, but bytes of every socket's own, since ws
+    // copies a text frame into each socket's buffer as it writes it
+    const text = 'x'.repeat(2.5 * MiB)
+    const joiners = Array.from({ length: 30 }, () => joiner(budget))
+    for (const j of joiners) {
+      j.out.send(snapshot)
+      j.out.send(text)
+    }
+    await written(joiners, 2)
+    // 2 MiB once and 30 times 2.5 MiB: 77 MiB, over the budget, under the close line
+    expect(budget.check(joiners.map((j) => j.entry()))).toBe(0)
+    expect(budget.queued).toBe(77 * MiB)
+    expect(budget.over).toBe(true)
+    // 1 MiB of each socket's snapshot has gone out: the buffer is still held (once), each joiner's 2.5 MiB too
+    for (const j of joiners) j.sock.drain(MiB)
+    expect(budget.check(joiners.map((j) => j.entry()))).toBe(0)
+    expect(budget.queued).toBe(77 * MiB)
+    // ten more joiners with text of their own: 102 MiB, and closing a joiner frees its own 2.5 MiB only, the
+    // shared buffer once its last holder is gone
+    const more = Array.from({ length: 10 }, () => joiner(budget))
+    for (const j of more) {
+      j.out.send(snapshot)
+      j.out.send(text)
+    }
+    await written(more, 2)
+    const all = [...joiners, ...more]
+    expect(budget.check(all.map((j) => j.entry()))).toBe(9)
+    expect(budget.queued).toBe(2 * MiB + 31 * 2.5 * MiB)
+  })
+
+  it('a snapshot dropped unsent (a socket no longer open) or a closed session holds nothing', async () => {
+    const budget = new OutboundBudget()
+    const snapshot = new Uint8Array(2 * MiB)
+    const a = joiner(budget)
+    const b = joiner(budget)
+    a.sock.readyState = 3
+    a.out.send(snapshot)
+    b.out.send(snapshot)
+    await written([b], 1)
+    expect(a.out.shared).toEqual([])
+    expect(b.out.shared).toHaveLength(1)
+    b.out.overflow()
+    expect(b.out.shared).toEqual([])
+  })
+
+  it('over a real ws socket (app.ts elementSocketOf) the snapshot is held until ws has written all of it', async () => {
+    const wss = new WebSocketServer({ host: '127.0.0.1', port: 0 })
+    await once(wss, 'listening')
+    const accepted = once(wss, 'connection') as Promise<[WebSocket]>
+    const client = new WebSocket(`ws://127.0.0.1:${(wss.address() as AddressInfo).port}`)
+    const got = new Promise<number>((r) => client.once('message', (d: Buffer) => r(d.byteLength)))
+    const [ws] = await accepted
+    try {
+      const out = new Outbound(elementSocketOf(ws), () => {})
+      const snapshot = new Uint8Array(2 * MiB)
+      out.send(snapshot)
+      expect(out.shared).toEqual([{ frame: snapshot, bytes: 2 * MiB, counted: 2 * MiB }])
+      expect(await got).toBe(2 * MiB)
+      for (let i = 0; i < 100 && out.shared.length; i++) await tick()
+      expect(out.shared).toEqual([])
+      expect(out.pending).toBe(0)
+    } finally {
+      client.close()
+      wss.close()
+    }
   })
 })

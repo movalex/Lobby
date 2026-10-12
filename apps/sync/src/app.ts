@@ -21,6 +21,7 @@ import { type DiskProbe, diskProbe } from './disk.ts'
 import {
   type ElementRoomDeps,
   type ElementRoomService,
+  type ElementSocket,
   extendElementRoom,
   type InternalRoute,
   registeredElementRoom,
@@ -86,6 +87,24 @@ export function deflateFrame(d: string | Uint8Array, o?: { readonly compress?: b
   if (d.length >= t) return true
   if (d.length * 3 < t) return false
   return Buffer.byteLength(d, 'utf8') >= t
+}
+
+/**
+ * A board socket as the room sees it (engine-switch.ts ElementSocket; the room's listeners are never bound to it): the
+ * send point decides deflate (deflateFrame), and ws's send callback says when a frame has left the socket's buffer
+ * (the outbound budget counts the one cached snapshot once while any socket holds it, room/outbound.ts).
+ */
+export function elementSocketOf(ws: WebSocket): ElementSocket {
+  return {
+    send: (d, o, done) => ws.send(d, { compress: deflateFrame(d, o) }, done),
+    close: (c, r) => ws.close(c, r),
+    get readyState() {
+      return ws.readyState
+    },
+    get bufferedAmount() {
+      return ws.bufferedAmount
+    },
+  }
 }
 
 /** The subprotocol a board socket speaks: the one the server answers with. */
@@ -374,17 +393,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
           ticketIssuedAt: iat,
           contractsRev,
         },
-        {
-          send: (d: string | Uint8Array, o?: { readonly compress?: boolean }) =>
-            ws.send(d, { compress: deflateFrame(d, o) }),
-          close: (c: number, r: string) => ws.close(c, r),
-          get readyState() {
-            return ws.readyState
-          },
-          get bufferedAmount() {
-            return ws.bufferedAmount
-          },
-        },
+        elementSocketOf(ws),
       )
     } catch (e) {
       log('room open failed', boardId, errorSummary(e)) // never the error object (L5)
