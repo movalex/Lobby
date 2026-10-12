@@ -4,7 +4,9 @@
 //
 // The parts' takers: export policy, the outside people and the threads (W5), W2's workshop, presentation and private
 // brainstorm, W4's AI status (since the wave M integration), all held to no separate read. The share badge takes its
-// part too, but refetches at the stream's first hello (its onResync bump): at most one GET /sharing, reported.
+// part too. It used to refetch at the stream's first hello (its onResync bump); since wave N.1 its first read waits for
+// that hello and is the open-state part (features/sharing/ported/badge-reads.ts): the owner makes no GET /sharing (held
+// to 0), a viewer at most one (reported).
 import type { Page } from '@playwright/test'
 import { signInContext } from '../tests/support/api.ts'
 import { expect, test } from '../tests/support/fixtures.ts'
@@ -32,7 +34,7 @@ const TAKEN_HERE: Record<string, string> = {
 }
 /** The reads the 404 fallback must make again before the page is quiet (the AI status waits for an idle moment). */
 const FALLBACK_READS = ['exportPolicy', 'outside', 'threads'] as const
-/** Taken, but read again at the stream's first hello (the share badge's resync): at most once. */
+/** Taken, with at most one read besides (the share badge: none for the owner since wave N.1). */
 const TAKEN_ELSEWHERE: Record<string, string> = {
   sharing: 'GET /api/boards/:id/sharing',
 }
@@ -65,8 +67,9 @@ const count = (calls: readonly ApiCall[], key: string) =>
   calls.filter((c) => `${c.method} ${c.path}` === key).length
 
 for (const who of [
-  { label: 'owner', handle: 'alice', role: null },
-  { label: 'viewer', handle: 'bob', role: 'viewer' as const },
+  // maxElsewhere: the most reads of a TAKEN_ELSEWHERE part (GET /sharing) the open may make
+  { label: 'owner', handle: 'alice', role: null, maxElsewhere: 0 },
+  { label: 'viewer', handle: 'bob', role: 'viewer' as const, maxElsewhere: 1 },
 ]) {
   test(`M5-1: a board open as the ${who.label} makes one open-state request and none of the reads it replaces`, async ({
     browser,
@@ -98,7 +101,7 @@ for (const who of [
       for (const [part, key] of Object.entries(TAKEN_HERE))
         expect(count(calls, key), `${part}: ${JSON.stringify(byPath)}`).toBe(0)
       for (const [part, key] of Object.entries(TAKEN_ELSEWHERE)) {
-        expect(count(calls, key), `${part}: ${JSON.stringify(byPath)}`).toBeLessThanOrEqual(1)
+        expect(count(calls, key), `${part}: ${JSON.stringify(byPath)}`).toBeLessThanOrEqual(who.maxElsewhere)
         testInfo.annotations.push({
           type: 'taken elsewhere',
           description: `${part}: ${count(calls, key)} × ${key}`,
