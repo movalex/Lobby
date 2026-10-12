@@ -173,6 +173,36 @@ describe('what reaches the prompt', () => {
     expect(r.citations).toEqual([{ boardId: a.id, boardTitle: 'Live board', elementIds: [`${a.id}-1`] }])
   })
 
+  // Wave N.1 (wave M follow-up 8, W8): the export-policy leg of aiGateFor (mayExport for this person) through the
+  // route. A board whose copying is limited to its editors sends nothing for a viewer (AI is a way of copying out of
+  // it), while its editors' asks still read it.
+  it('a board whose copying is limited to editors is left out for a viewer, and read for an editor', async () => {
+    w = await askWorld()
+    const open = await boardWith(w, 'Open board', ['Launch date: October'], { visibility: 'workspace_view' })
+    const limited = await boardWith(w, 'Editors-only board', ['Launch date: the board’s secret'], {
+      visibility: 'workspace_view',
+    })
+    await grantOn(w, limited.id, w.dave, 'editor')
+    await indexAll(w)
+    const pol = await w.bob.req('PUT', `/api/boards/${limited.id}/export-policy`, { exportPolicy: 'editors' })
+    expect(pol.statusCode, pol.body).toBe(200)
+    // carol views both boards (workspace view), but may not copy out of the limited one
+    w.openai.next(answer('October [1].', 'yes', [['b1.n1', 'b2.n1']]))
+    const r = await ask(w.carol, 'When is the launch date?')
+    const prompt = promptOf(w, 0)
+    expect(prompt).toContain('Launch date: October')
+    for (const words of ['secret', 'Editors-only board', limited.id]) expect(prompt, words).not.toContain(words)
+    expect(boardsOf(prompt)).toHaveLength(1)
+    expect(r.citations).toEqual([{ boardId: open.id, boardTitle: 'Open board', elementIds: [`${open.id}-1`] }])
+    // dave edits the limited board: it is his to copy from, so it is read for him
+    w.openai.next(answer('October [1], or the secret [2].', 'yes', [['b1.n1'], ['b2.n1']]))
+    const d = await ask(w.dave, 'When is the launch date?')
+    const davePrompt = promptOf(w, 1)
+    expect(davePrompt).toContain('Launch date: the board’s secret')
+    expect(boardsOf(davePrompt)).toHaveLength(2)
+    expect(d.citations.map((c) => c.boardId).sort()).toEqual([open.id, limited.id].sort())
+  })
+
   it('canvas text only: a comment thread’s words never reach the prompt', async () => {
     w = await askWorld()
     const a = await boardWith(w, 'Board', ['Budget: 10k'], { visibility: 'workspace_view' })
@@ -287,6 +317,49 @@ describe('the answer', () => {
     const r = await ask(w.carol, 'Which venue?')
     expect(r.citations.length).toBeGreaterThan(0)
     expect(r.exportAllowed).toBe(false)
+  })
+
+  // Wave N.1 (wave M follow-up 8, W8): answerOf reads the scope, the boards' access and their export policy again
+  // after the model answered. A failure there (a database error) went straight out as a 500 before the settlement,
+  // so the row kept its whole reservation as 'reserved' although OpenAI had reported what the call cost.
+  it('a failure after the model answered (reading the scope again) is a 500, and the call is still settled', async () => {
+    w = await askWorld()
+    await boardWith(w, 'Board', ['Budget: 10k'], { visibility: 'workspace_view' })
+    await indexAll(w)
+    w.openai.next({
+      kind: 'delayed',
+      ms: 300,
+      content: { answer: 'Ten thousand [1].', found: 'yes', citations: [{ ids: ['b1.n1'] }] },
+    })
+    // the scope read fails, but only once the model has the prompt (gather read the scope before it)
+    const db = w.api.db as unknown as { query: (sql: string, p?: unknown) => Promise<unknown> }
+    const query = db.query
+    let armed = false
+    db.query = function (this: unknown, sql: string, p?: unknown) {
+      if (armed && /FROM boards b\s+LEFT JOIN board_members bm/.test(sql)) {
+        armed = false
+        return Promise.reject(new Error('connection lost'))
+      }
+      return query.call(this, sql, p)
+    }
+    try {
+      const pending = askRaw(w.carol, 'What is the budget?')
+      await expect.poll(() => w?.openai.requests.length).toBe(1)
+      armed = true
+      const res = await pending
+      expect(res.statusCode, res.body).toBe(500)
+      expect(armed).toBe(false) // the failure was the one injected, after the call
+    } finally {
+      db.query = query
+    }
+    const rows = await usageRows(w.api)
+    expect(rows.map((r) => [r.action, r.status])).toEqual([[WORKSPACE_ASK_LEDGER_ACTION, 'failed']])
+    const [row] = rows
+    // what OpenAI reported, not the reservation
+    expect(row?.input_tokens).toBeGreaterThan(0)
+    expect(row?.output_tokens).toBeGreaterThan(0)
+    expect(row?.charged_tokens).toBe((row?.input_tokens ?? 0) + (row?.output_tokens ?? 0))
+    expect(row?.charged_tokens).toBeLessThan(row?.reserved_tokens ?? 0)
   })
 
   it('an unusable answer is a 502 and the call is still settled in the ledger', async () => {

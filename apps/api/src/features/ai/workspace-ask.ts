@@ -327,13 +327,19 @@ export function registerWorkspaceAsk(
           ? 0
           : reserved
     let result: WorkspaceAskResponse | null = null
-    let failure: ApiError = outcome.ok ? badOutput() : upstreamError(outcome)
+    // what the route answers when there is no result: an unusable answer, the model's failure, or (wave N.1) any
+    // error reading the scope again after the call, which is thrown only once the call is settled below
+    let failure: unknown = outcome.ok ? badOutput() : upstreamError(outcome)
+    let afterCall: 'bad-output' | 'error' = 'bad-output'
     if (outcome.ok) {
       try {
         result = await answerOf(a, outcome.json, items)
       } catch (e) {
-        if (!(e instanceof BadOutput)) throw e
-        failure = badOutput()
+        if (e instanceof BadOutput) failure = badOutput()
+        else {
+          failure = e
+          afterCall = 'error'
+        }
       }
     }
     try {
@@ -360,7 +366,7 @@ export function registerWorkspaceAsk(
           charged,
           ms: Date.now() - started,
           citations: result?.citations.length ?? 0,
-          outcome: result ? 'ok' : outcome.ok ? 'bad-output' : outcome.kind,
+          outcome: result ? 'ok' : outcome.ok ? afterCall : outcome.kind,
           upstreamStatus: outcome.ok ? null : outcome.status,
         },
       },
