@@ -110,6 +110,8 @@ export interface ApiDeps {
     streamOpens?: RouteRateLimit
     streamRecheckMs?: number
     revokeAll?: RouteRateLimit
+    /** wave N.1: GET /api/boards/:bid/open-state per person */
+    openStates?: RouteRateLimit
   }
   /** Board event hub (tests subscribe to it directly, or pass one with lower stream caps). */
   events?: EventHub
