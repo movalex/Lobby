@@ -368,7 +368,10 @@ describe('vector pages', () => {
     expect(asked).toEqual(['🎉@20'])
     const pdf = await inspect(await withG.finish())
     expect(pdf.images).toEqual([{ width: 1, height: 1 }])
-    expect(pdf.contents[0]).toContain(`<${hex('ok')}> Tj`)
+    // the space is text too (drawn in the standard font's run: the text keeps it)
+    expect(pdf.contents[0]).toContain(`<${hex('ok ')}> Tj`)
+    // the picture's text is there as invisible text (rendering mode 3) in the invisible-text font, code 1
+    expect(pdf.contents[0]).toMatch(/BT\n3 Tr\n[^\n]+ Tm\n\/LobbyText-\d+ 20 Tf\n<01> Tj\nET/)
   })
 
   it('without the vector environment a vector page is refused (image pages only)', async () => {

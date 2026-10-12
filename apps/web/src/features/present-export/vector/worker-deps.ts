@@ -7,7 +7,7 @@
 //    shows them.
 // Each answers null where the environment cannot (no OffscreenCanvas): the page then falls back to an image page.
 
-import { FACE_URL } from './text-layout.ts'
+import { FACE_URL, familyList } from './text-layout.ts'
 import type { GlyphPicture, VectorDeps } from './vector-page.ts'
 
 /** Pixels per text unit a glyph picture is drawn at (sharp when the PDF is zoomed in). */
@@ -18,6 +18,21 @@ const GLYPH_MAX_SIDE = 2048
 const TRANSCODE_MAX_PIXELS = 40_000_000
 
 const EMOJI_FONTS = '"Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", "Segoe UI Symbol", sans-serif'
+
+const GENERIC = /^(serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-[a-z-]+|emoji|math|fangsong)$/
+
+/**
+ * A picture's CSS font list: the line's own families first (as the board draws the character: in the worker Lobby's
+ * faces are not loaded, so the browser falls through to the next family, as the board does for a glyph its face
+ * lacks), then the emoji fonts. Names are quoted; generic families are not.
+ */
+export function pictureFonts(families: string | undefined): string {
+  const own = familyList(families)
+    .map((f) => f.replace(/["\\]/g, ''))
+    .filter(Boolean)
+    .map((f) => (GENERIC.test(f) ? f : `"${f}"`))
+  return own.length ? `${own.join(', ')}, ${EMOJI_FONTS}` : EMOJI_FONTS
+}
 
 type Offscreen = {
   new (
@@ -85,6 +100,7 @@ export async function drawGlyphs(
   sizePx: number,
   bold: boolean,
   color: string,
+  families?: string,
 ): Promise<GlyphPicture | null> {
   const Canvas = offscreen()
   if (!Canvas) return null
@@ -93,7 +109,7 @@ export async function drawGlyphs(
   try {
     const probe = new Canvas(1, 1).getContext('2d')
     if (!probe) return null
-    const font = `${bold ? '700 ' : ''}${px}px ${EMOJI_FONTS}`
+    const font = `${bold ? '700 ' : ''}${px}px ${pictureFonts(families)}`
     probe.font = font
     const m = probe.measureText(text)
     const ascent = Math.max(m.fontBoundingBoxAscent || 0, m.actualBoundingBoxAscent || 0, px * 0.8)

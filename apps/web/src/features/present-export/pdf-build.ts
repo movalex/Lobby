@@ -333,12 +333,38 @@ function dropPage(doc: PDFDocumentType, page: PDFPage, index: number) {
   }
 }
 
+/**
+ * How long writing the file may take (wave N.1): the save subsets the vector pages' fonts, and a save that never
+ * settles (a font engine stream that never ends) must not hold the export forever. Past it, finish() rejects and the
+ * export makes the document again with image pages.
+ */
+export const FINISH_TIME_LIMIT_MS = 120_000
+
+/** `p`, or a rejection with `message` once `ms` have passed. */
+export function withTimeLimit<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms)
+    p.then(
+      (v) => {
+        clearTimeout(timer)
+        resolve(v)
+      },
+      (e: unknown) => {
+        clearTimeout(timer)
+        reject(e)
+      },
+    )
+  })
+}
+
 /** An incremental builder: add pages as they are rendered (one image in memory at a time), then finish. */
 export async function createPdfBuilder(meta: {
   title: string
   now?: Date
   /** what vector pages need; without it every vector page falls back to an image page */
   vector?: PdfVectorEnv
+  /** FINISH_TIME_LIMIT_MS unless a test sets it */
+  finishMs?: number
 }): Promise<PdfBuilder> {
   const doc = await PDFDocument.create()
   if (meta.vector?.fontkit) doc.registerFontkit(meta.vector.fontkit)
@@ -449,7 +475,12 @@ export async function createPdfBuilder(meta: {
     },
     async finish() {
       addOutline(doc, outline)
-      return doc.save({ useObjectStreams: true, addDefaultPage: false })
+      resources?.finish()
+      return withTimeLimit(
+        doc.save({ useObjectStreams: true, addDefaultPage: false }),
+        meta.finishMs ?? FINISH_TIME_LIMIT_MS,
+        'the PDF could not be written in time',
+      )
     },
   }
 }

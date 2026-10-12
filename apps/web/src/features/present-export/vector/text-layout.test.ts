@@ -2,10 +2,13 @@
 import { describe, expect, it } from 'vitest'
 import { ownStyle, readScene } from './svg-scene.ts'
 import {
+  blankWidth,
   type Draw,
   FACE_URL,
   FaceIndex,
   familyList,
+  isEmojiSequence,
+  isRtl,
   layoutText,
   type Measure,
   parseFaceTable,
@@ -72,32 +75,96 @@ describe('the face table', () => {
   it('the first family with a face covering a character draws it; else Helvetica when it encodes it; else a glyph', () => {
     const idx = new FaceIndex([LATIN, CJK])
     const fams = ['Excalifont', 'Xiaolai', 'Segoe UI Emoji']
-    expect(idx.draw(0x41, fams)).toEqual({ kind: 'face', face: LATIN })
-    expect(idx.draw(0x65e5, fams)).toEqual({ kind: 'face', face: CJK })
+    expect(idx.draw(0x41, fams)).toEqual({ kind: 'face', face: LATIN, slot: 0 })
+    expect(idx.draw(0x65e5, fams)).toEqual({ kind: 'face', face: CJK, slot: 0 })
     expect(idx.draw(0x20ac, fams)).toEqual({ kind: 'standard' }) // € : no Lobby face here, Windows-1252 has it
     expect(idx.draw(0x1f600, fams)).toEqual({ kind: 'glyph' })
   })
 })
 
+describe('the face that draws a character: its range claims it AND its font has it (wave N.1)', () => {
+  const MAIN = { ...LATIN, unicodeRange: 'U+20-7e, U+a0-ff, U+2000-206F' }
+  const EXT = {
+    ...LATIN,
+    url: '/excalidraw-assets/fonts/Excalifont/Excalifont-Regular-x.woff2',
+    unicodeRange: 'U+300-36f, U+2010-2011',
+  }
+  // MAIN lacks U+2010, U+2011, U+00A0, U+2020, U+202F (it claims them); EXT has U+2011 and the marks; MAIN draws U+00C9
+  // and U+00E9 with one glyph (as Excalifont draws U+0020 and U+00A0 with one): U+00E9 is its second code point
+  const lacks = new Set([0x2010, 0x2011, 0xa0, 0x2020, 0x202f])
+  const has: Record<string, (cp: number) => number> = {
+    [MAIN.url]: (cp) => (lacks.has(cp) ? -1 : cp === 0xe9 ? 1 : 0),
+    [EXT.url]: (cp) => (cp === 0x2010 ? -1 : 0),
+  }
+  const idx = new FaceIndex([MAIN, EXT], { slot: (face, cp) => has[face.url]?.(cp) ?? -1 })
+  const fams = ['Excalifont', 'sans-serif']
+  const kind = (d: Draw | null) =>
+    d === null ? null : d.kind === 'face' ? `${d.face === MAIN ? 'main' : 'ext'}#${d.slot}` : d.kind
+  it('the next face of the family, then the standard font, then a picture; a missing space is a blank', () => {
+    expect(kind(idx.draw(0x41, fams))).toBe('main#0')
+    expect(kind(idx.draw(0x2011, fams))).toBe('ext#0') // MAIN claims it, EXT has it
+    expect(kind(idx.draw(0x2020, fams))).toBe('standard') // nobody has †: Helvetica encodes it
+    expect(kind(idx.draw(0x2010, fams))).toBe('glyph') // nobody has it, Helvetica cannot: a picture
+    // a no-break space nobody has: invisible text (Helvetica's 0xA0 reads back as U+0020)
+    expect(kind(idx.draw(0xa0, fams))).toBe('blank')
+    expect(kind(idx.draw(0x202f, fams))).toBe('blank')
+    expect(kind(idx.draw(0x200d, fams))).toBe('blank') // a format character draws nothing
+  })
+  it('a code point sharing a glyph with a smaller one is drawn from the next embedding (its own ToUnicode)', () => {
+    expect(kind(idx.draw(0xe9, fams))).toBe('main#1')
+  })
+  it('a cluster one font draws whole stays whole; else it is split into its code points', () => {
+    expect(kind(idx.drawCluster('é', fams))).toBe(null) // MAIN has e, only EXT has the mark
+    expect(kind(idx.drawCluster('́́', fams))).toBe('ext#0')
+    expect(kind(idx.drawCluster('a‍', fams))).toBe(null) // a format character in it: split
+    const leaf = readScene(
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text x="0" y="0" font-family="Excalifont" ' +
+        'font-size="20" style="white-space: pre;">Café a‑b</text></svg>',
+    ).leaves[0]
+    if (!leaf) throw new Error('no text')
+    const runs = layoutText(leaf.el, leaf.style, idx, measure, ownStyle)
+    expect(runs.map((r) => [r.text, kind(r.draw)])).toEqual([
+      ['Cafe', 'main#0'],
+      ['́', 'ext#0'],
+      [' a', 'main#0'],
+      ['‑', 'ext#0'],
+      ['b', 'main#0'],
+    ])
+  })
+  it('a letter with a ZWJ or U+FE0F is no emoji; U+FEFF is not right-to-left', () => {
+    expect(isEmojiSequence('a‍')).toBe(false)
+    expect(isEmojiSequence('a️')).toBe(false)
+    expect(isEmojiSequence('❤️')).toBe(true)
+    expect(isEmojiSequence('1️⃣')).toBe(true)
+    expect(isRtl(0xfeff)).toBe(false)
+    expect(isRtl(0x202e)).toBe(true)
+  })
+  it('blank widths: Unicode’s spaces, nothing for a format character', () => {
+    expect(blankWidth(' ', 20)).toBe(20)
+    expect(blankWidth(' ​', 20)).toBeCloseTo(4)
+    expect(blankWidth(' ', 10)).toBeCloseTo(2.78)
+  })
+})
+
 describe('layoutText', () => {
-  it('splits a line into runs by face, with whitespace between runs measured, never drawn', () => {
+  it('splits a line into runs by face; a space is drawn in the run of a font that has it (the text keeps it)', () => {
     const runs = layout(
       '<text x="0" y="20" font-family="Excalifont, Xiaolai, Segoe UI Emoji" font-size="20px" style="white-space: pre;">Hi 日本 go😀</text>',
     )
     expect(runs).toEqual([
       { text: 'Hi ', font: 'Excalifont', x: 0, y: 20 },
       { text: '日本', font: 'Xiaolai', x: 30, y: 20 },
-      // the space after a CJK run is a gap (Xiaolai's range has no space), so "go" starts after it
-      { text: 'go', font: 'Excalifont', x: 60, y: 20 },
+      // the space after a CJK run is Excalifont's (Xiaolai's range has no space): it opens the next Latin run
+      { text: ' go', font: 'Excalifont', x: 50, y: 20 },
       { text: '😀', font: 'glyph', x: 80, y: 20 },
     ])
   })
-  it('keeps leading spaces as an offset (white-space: pre), and anchors middle and end with the fonts’ widths', () => {
+  it('keeps leading spaces as text (white-space: pre), and anchors middle and end with the fonts’ widths', () => {
     expect(
       layout(
         '<text x="0" y="5" font-family="Excalifont" font-size="20" style="white-space: pre;">  ab</text>',
       ),
-    ).toEqual([{ text: 'ab', font: 'Excalifont', x: 20, y: 5 }])
+    ).toEqual([{ text: '  ab', font: 'Excalifont', x: 0, y: 5 }])
     expect(
       layout(
         '<text x="100" y="5" font-family="Excalifont" font-size="20" text-anchor="middle">abcd</text>',
@@ -127,7 +194,9 @@ describe('layoutText', () => {
     expect(runs.map((r) => [r.text, r.font])).toEqual([
       ['ok ', 'Excalifont'],
       ['👍🏽', 'glyph'],
+      [' ', 'Excalifont'],
       ['👨‍👩‍👧', 'glyph'],
+      [' ', 'Excalifont'],
       ['1️⃣', 'glyph'],
     ])
   })
