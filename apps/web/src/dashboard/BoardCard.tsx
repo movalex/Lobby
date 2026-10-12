@@ -1,7 +1,7 @@
 import { type BoardWithRole, NEW_CANVAS_CARD_NOTE, thumbnailPath } from '@draftroom/contracts'
 import { type CSSProperties, useEffect, useId, useState } from 'react'
 import { SharedOutsideMarker } from '../features/people/SharedOutside.tsx'
-import { onThumbnailUpdated } from '../features/thumbnails/card-events.ts'
+import { onThumbnailUpdated, recentThumbnail } from '../features/thumbnails/card-events.ts'
 import { formatRelativeTime } from '../lib/format.ts'
 import { can } from '../lib/permissions.ts'
 import { boardPath, linkClick } from '../lib/routing.ts'
@@ -30,8 +30,12 @@ export function BoardCardThumb({
 }) {
   const listed = board.status === 'trashed' ? null : (board.thumbnailVersion ?? null)
   // A thumbnail this tab sent after the list was fetched (e.g. the board just closed) wins until the
-  // list itself changes.
-  const [sent, setSent] = useState<{ version: string | null; over: string | null } | null>(null)
+  // list itself changes; also one whose answer came before this card was made (N1-THUMBS: the list was
+  // read before that upload was stored).
+  const [sent, setSent] = useState<{ version: string | null; over: string | null } | null>(() => {
+    const recent = board.status === 'trashed' ? null : recentThumbnail(board.id)
+    return recent ? { version: recent.version, over: listed } : null
+  })
   useEffect(() => {
     if (board.status === 'trashed') return
     return onThumbnailUpdated(board.id, (version) => setSent({ version, over: listed }))
