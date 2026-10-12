@@ -242,7 +242,13 @@ test('N5-2/N5-3: AI › Turn photo into a diagram on a selected image: read by i
   await a.page.getByRole('menuitem', { name: 'AI', exact: true }).click()
   await expect(a.page.getByRole('menuitem', { name: 'Turn photo into notes' })).toBeVisible()
   await a.page.getByRole('menuitem', { name: 'Turn photo into a diagram' }).click()
-  await continueCaptureNotice(a.page)
+  // the first use's notice (a fresh browser): its Cancel sends nothing and leaves the way to start it in the dialog
+  await expect(a.page.getByTestId('capture-notice')).toBeVisible()
+  await a.page.getByTestId('capture-notice-cancel').click()
+  await expect(captureDialog(a.page).getByTestId('capture-board-image-go')).toHaveText('Read the image')
+  expect(fake.calls).toHaveLength(0)
+  await captureDialog(a.page).getByTestId('capture-board-image-go').click()
+  expect(await continueCaptureNotice(a.page)).toBe(true)
   await expect.poll(() => fake.calls.length).toBe(1)
   expect(fake.calls[0]).toMatchObject({
     kind: 'board-image',
