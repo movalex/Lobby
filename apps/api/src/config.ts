@@ -7,6 +7,7 @@
 import { isIP } from 'node:net'
 import { join } from 'node:path'
 import { checkSecret } from '@draftroom/auth-tickets'
+import { VISITS_RETENTION_DAYS_DEFAULT } from '@draftroom/contracts'
 import { resolveDataDir } from '@draftroom/dev-assets'
 import { type CreatorPolicy, parseCreatorPolicy } from './auth/creators.ts'
 import { type AiConfig, parseAiConfig } from './features/ai/config.ts'
@@ -123,6 +124,11 @@ export interface ApiConfig {
    * people who read the feedback inbox and mark items done. Empty (unset): nobody does through the app.
    */
   feedbackAdmins: readonly string[]
+  /**
+   * DRAFTROOM_VISITS_RETENTION_DAYS (wave N, N4-1, features/visits/sweep.ts): per-person board visit times older than
+   * this many days are deleted. Default 180.
+   */
+  visitsRetentionDays: number
 }
 
 export interface UploadLimitsConfig {
@@ -594,5 +600,6 @@ export function loadConfig(env: Env = process.env): ApiConfig {
     creators: parseCreatorPolicy(env),
     linkPreviewTestOrigins: parseLinkPreviewTestOrigins(env, devAuth),
     feedbackAdmins,
+    visitsRetentionDays: int(env, 'DRAFTROOM_VISITS_RETENTION_DAYS', VISITS_RETENTION_DAYS_DEFAULT, 1, 3650),
   }
 }

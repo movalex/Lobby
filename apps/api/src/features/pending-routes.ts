@@ -28,8 +28,7 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   // and W8 (Ask across boards M8-2, the workspace templates M8-3) are implemented. To ship a route hidden, add its
   // key back.
   // wave N (landed by the wave N foundation; each owner deletes its keys when it implements the route)
-  'POST /api/boards/:bid/visit': { owner: 'WS4', item: 'N4-1' },
-  'POST /api/boards/:bid/visit/seen': { owner: 'WS4', item: 'N4-1' },
+  // WS4's visit routes (N4-1) are implemented (features/visits); to ship them hidden, add the two keys back
   'POST /api/boards/:bid/ai/capture/photo': { owner: 'WS5', item: 'N5-1' },
   'POST /api/boards/:bid/ai/capture/board-image': { owner: 'WS5', item: 'N5-1' },
   'POST /api/boards/:bid/ai/capture/transcript': { owner: 'WS5', item: 'N5-1' },
