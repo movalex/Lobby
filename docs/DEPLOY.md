@@ -741,6 +741,67 @@ Rollback within 48 h: the runbook's §7 with tag `lobby-r0` (= 38d3833; the api 
 it back as `Content-Security-Policy-Report-Only`) BEFORE R0's web is deployed (the lead's `web.mjs remove-csp` did this at the
 cut-over rehearsal; the Dashboard works too).
 
+## Waves M, N and N.1: keys, holds and the sync rollback
+
+Every key below rolls back by value with a restart, without code, and every code default is the safe one (a build that does not read a key runs unchanged). The lead applies render.yaml's keys through the Render API before each deploy (`scripts/smoke/render-yaml.test.mjs` lists them). Deploy order for all three waves: **api, then sync, then web** (the worker did not change).
+
+### Keys
+
+| Key | Service | Value | What it does |
+|---|---|---|---|
+| `DRAFTROOM_DB_POOL_MAX` | api | `5` | Wave M: the Postgres pool (2 to 20, or the api refuses to start; code default 10). |
+| `DRAFTROOM_WORKSPACE_QUOTA_MB` | api | `5120` | Wave M: stored originals per workspace (was 102400). |
+| `DRAFTROOM_AI_VISION` | api | `on` | Wave N, Capture the room: photos and board images go to OpenAI only with `on`. Unset, empty or `off`: the photo routes answer 404 and transcripts still work. |
+| `DRAFTROOM_AI_VISION_USER_DAILY`, `DRAFTROOM_AI_VISION_GLOBAL_DAILY` | api | `10`, `150` | Wave N: photo captures per person and in all, per UTC day (429 `AI_CAPTURE_DAILY_CAP`), counted in the AI ledger. |
+| `DRAFTROOM_AI_TRANSCRIPT_MAX_CHARS`, `DRAFTROOM_AI_TRANSCRIPT_USER_DAILY` | api | `60000`, `10` | Wave N: the longest transcript, and transcripts per person per day. |
+| `DRAFTROOM_AI_VISION_TIMEOUT_MS` | api | `60000` | Wave N: one vision or transcript call. |
+| `DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS` | api | unset (6000) | Wave N: the capture-only output cap. Not in render.yaml. |
+| `DRAFTROOM_VISITS_RETENTION_DAYS` | api | `180` | Wave N, Since your last visit: visit markers older than this are deleted by the sweeper. |
+| `DRAFTROOM_BACKUP_KEEP` | sync | `4` | Wave M: local backup copies kept per board (code default 12); offsite keeps its own. |
+| `DRAFTROOM_OUTBOUND_BUDGET_MB` | sync | `64` (render.yaml still says `128`: see below) | Wave M: queued outbound bytes across every session. Above it no session gets cursor frames; above 1.25 times it the largest queues reconnect (4000). |
+| `DRAFTROOM_WS_DEFLATE` | sync | `off` (**hold**) | Wave M: permessage-deflate on the board socket. Unset, empty and `off` are off; only `on` turns it on. |
+| `DRAFTROOM_REACTIONS` | sync | `on` | Wave N: emoji reactions. Unset, empty or `off`: every reaction write is refused UNAVAILABLE, stored keys stay, and the room's `contracts` frame says 12, so no web offers reacting. Anything else refuses to start. **Must be set** on the wave N sync, or reactions stay hidden. |
+
+**The outbound budget (wave N.1).** The code default is now 64 MiB, a close line of 80 MiB, and render.yaml should say `64` too (it still says `128`, the lead's file: change the value and its render-yaml test together). Why: the sync runs on 0.5c-512mb, 512 MB in all, and the migration queue already treats 440 MB of RSS as the ceiling. Measured: up to 147 MB RSS with 260 sessions and 310 MB while a conversion worker runs. With deflate on, each socket also keeps its zlib state, about 60 MB at 260 sessions. 310 + 60 + 160 MiB (the old close line) is past 512 MB before the budget closes anything; with 80 MiB it is about 455 MB. The budget counts a frame shared by many sockets once per socket, so the memory really held is at most the sum. A larger instance can raise the key.
+
+### Holds
+
+What stays off, and how to turn it on (or back off):
+
+- **Deflate** (`DRAFTROOM_WS_DEFLATE=off`, the wave M hold). The lost-words race is fixed (hotfix H2); deflate's ack time is still to be measured on staging (`lobby_ack_send_ms`). Since wave N.1 only frames of 1 KiB or more are deflated (`ws` ignored its own threshold while the server keeps its context), so acks and cursors no longer go through the zlib queue. Turning it on is a reviewed one-line change to render.yaml and a restart; check the board socket's `Sec-WebSocket-Extensions`, the ack times, and Firefox and Safari by hand. `off` and a restart is the kill switch.
+- **Vector PDF** (`VECTOR_PDF = false`, `apps/web/src/features/present-export/vector-pdf.ts`). Needs `@pdf-lib/fontkit` (one registry fetch, the lead's go-ahead) and the n6 fontkit branch and render-compare passing. A web-only redeploy.
+- **The speed flags** (`apps/web/src/canvas/sync/flags.ts`): `WORKER_DECODE` is on; `DIFF_APPLY`, `CHUNKED_APPLY` and `SIZE_AWARE_LOD` stay off (their speed targets are missed). Each is a web-only redeploy; switch them on one at a time after re-measuring.
+- **Reactions UI** (`REACTIONS_UI` in `apps/web/src/features/workshops/ported/note-reactions.ts`): `false` hides the reaction row (a web-only redeploy); `DRAFTROOM_REACTIONS=off` on the sync stops every reaction write.
+- **Capture the room**: `DRAFTROOM_AI_VISION=off` hides photos and board images; the three route keys back in `PENDING_ROUTES` with `ai.capture` back in `PENDING_PALETTE_COMMAND_IDS` hide it all.
+- **Board links**: the two route keys (`board-cards`, `backlinks`) back in `PENDING_ROUTES`.
+- **The warm open's resume** (`RESUME_FROM_CACHE = false`, wave M round 1): stays off until a resume can prove its lineage ([Postgres and platform snapshots](#postgres-and-platform-snapshots)).
+
+### What wave N.1 changes at deploy
+
+No migration, no `CONTRACTS_REV` change, no key to set (besides the outbound budget's value above).
+
+- **api**: open-state has its own per-person limit (60 a minute; a 429 leaves the web on the parts' own routes); a "seen" beacon inside the 10 s write interval is kept and written when it ends (and on shutdown); visit times are stored on the **sync's clock**, which the api measures from `GET /internal/clock` (every 30 s until known, then every 5 minutes; it logs `[clock] the sync's clock is +N ms from the api's`, the offset only). Against a sync without the route (404) the api keeps its own clock, as before, so api first is safe. Ask across boards settles its ledger row when the answer cannot be built after the model call.
+- **sync**: `GET /internal/clock` (internal secret); the 1 KiB deflate threshold (only matters with deflate on); the outbound budget's default; `convert-all` finds a final backup whose local copy already went offsite only.
+- **web**: the dashboard bell's 15 s poll asks only whether anything is new (the api's `since`, a 204); the share badge's first read waits for the stream's hello (one board open, no extra `GET /sharing`); a photo capture's 401 signs the page out like any other request.
+
+After the deploy: the api's log line `[clock] the sync's clock is …` within a minute (absent: the api cannot reach the new sync's route; visit times then use the api's own clock).
+
+### Rolling the sync back below wave N (to 104c6e0)
+
+A wave N board file can hold reaction keys, which 104c6e0 does not know: it refuses an edit or undo of a reacted note INVALID (`rollback-rev12.test.ts`). So, in this order:
+
+1. Set `DRAFTROOM_REACTIONS=off` on the sync service and restart it. Every reaction write is refused from then on, the stored keys stay, and the room's `contracts` frame says 12, so no web offers reacting. Since wave N round 1, a checkpoint restore under `off` puts no reaction keys back.
+2. Strip the keys. In the sync service's Shell (the route is internal and refused while maintenance is on):
+
+   ```sh
+   node -e "fetch('http://127.0.0.1:'+(process.env.PORT||10000)+'/internal/maintenance/strip-keys',{method:'POST',headers:{'content-type':'application/json','x-draftroom-internal':process.env.DRAFTROOM_INTERNAL_SECRET},body:JSON.stringify({prefix:'react:'})}).then(r=>r.text()).then(console.log)"
+   ```
+
+   It answers `{boards, rewritten, elements, keys, failed}`. Each board is rewritten through its own room in one server write (open tabs converge), a board without such a key is left as it is, and a second run changes nothing. `failed` must be 0 (the log names those boards by id only); run it again if it is not.
+3. Deploy 104c6e0 (Manual Deploy → *Deploy a specific commit*). Wave N checkpoints that hold reactions are refused on restore by the older sync.
+
+Rolling the api back below wave N: migrations 0031 (`board_visits`) and 0032 (`board_links`, `board_link_scans`) are new tables the older api never touches, so it needs only `DRAFTROOM_ALLOW_NEWER_SCHEMA=1` ([Rolling the api back past a migration](#rolling-the-api-back-past-a-migration)). The web rolls back as usual (the deployed web works against the new api and sync: the stale pairs in docs/PROGRESS.md).
+
 ## Rollback
 
 - **How.** Dashboard → service → Deploys → *Rollback*. Render reuses the earlier build artifact (no rebuild) and that deploy's environment variables. Disks, plan and static-site settings are *not* rolled back. A Dashboard rollback also disables autodeploy, which is already off.
@@ -749,6 +810,7 @@ cut-over rehearsal; the Dashboard works too).
 - **The Excalidraw canvas back to tldraw.** Only to the bridge release R0, never to an older build: [R0 at the cut-over and in a rollback](#r0-at-the-cut-over-and-in-a-rollback).
 - **R0 back to the build before it (`main` 79f0125), before the cut-over only.** R0's api records migration 0022 at start, so the older api refuses to start (`database has migration …, which this build does not know`) unless `DRAFTROOM_ALLOW_NEWER_SCHEMA=1` is set on the api service and the old commit is deployed with Manual Deploy → *Deploy a specific commit*, not *Rollback* ([Rolling the api back past a migration](#rolling-the-api-back-past-a-migration)). 0022 is additive for that build: the reason CHECK only gains `engine_migration`, which it never writes, and both new columns have defaults it never needs to set. Its sync and web roll back as usual. It ignores `holdUntil` (backups a run-all call held age out by count again), `format` and `newCanvas`, which only matter once the cut-over has happened. **Never after the cut-over**: that build opens a board born on the new canvas as an empty tldraw board and writes tldraw tables into it. This procedure has not been rehearsed.
 - **api past wave M (migrations 0029 and 0030).** Rolling the api back to wave L's build (`4e4a549`) needs no down migration, only `DRAFTROOM_ALLOW_NEWER_SCHEMA=1` and Manual Deploy → *Deploy a specific commit*, not *Rollback* ([Rolling the api back past a migration](#rolling-the-api-back-past-a-migration)). Without the flag that build refuses to start once the database has recorded `0029_usage_daily` and `0030_workspace_templates`. Both are new tables that the older build never reads or writes, and no existing table changes. The rolled-back api has no usage, open-state, workspace-template or Ask-across-boards routes, so a wave M web must fall back on their 404s (the wave M plan requires it of every new route; check it before relying on it). Rows written meanwhile stay and are used again after the roll-forward. This procedure has not been rehearsed.
+- **api or sync past wave N.** The sync needs the reactions steps first; the api needs only the flag: [Rolling the sync back below wave N](#rolling-the-sync-back-below-wave-n-to-104c6e0).
 - **api past milestone 3: don't.** A milestone-1/2 api build reads files from `meta.json` on a local disk that no longer exists. It would never see R2 objects or `asset_versions` rows, and it expects its co-located worker. Fix forward instead.
 - **Workers.** Roll a worker back only to a build that speaks the api's current worker protocol. The simplest way to stop previews is to stop the workers: jobs wait in Postgres.
 - **Canvas schema.** Don't roll sync back below a canvas-schema migration. Boards already migrated on disk can't be loaded by the older server (`Incompatible schema?`), and newer clients are refused (`SERVER_TOO_OLD`). Rolling back the web client is safe while every shape migration keeps its `down`: an older client is served down-migrated records. Roll back sync only when its schema didn't change.
