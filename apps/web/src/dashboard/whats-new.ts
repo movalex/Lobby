@@ -192,7 +192,8 @@ export function unavailableTries(input: {
 }
 
 /** Why a board-hint "Try it" is disabled once the list has arrived: there is no board to try it on and no Start row. */
-export const NO_PLACE_TO_TRY = 'You have no board to try this on yet. Open a board you were invited to, or make one.'
+export const NO_PLACE_TO_TRY =
+  'You have no board to try this on yet. Open a board you were invited to, or make one.'
 
 /**
  * Whether the card shows: on the landing view (Recent), there is something for this person, they are not a

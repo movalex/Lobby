@@ -98,9 +98,14 @@ test('Good sends "Good (after a vote reveal)" as a feedback text, with the usual
     (r) => r.method() === 'POST' && new URL(r.url()).pathname === '/api/feedback',
   )
   await a.page.getByTestId('feedback-prompt-good').click()
-  const body = (await sent).postDataJSON() as { text: string; context?: { boardId?: string; path?: string } }
+  const body = (await sent).postDataJSON() as {
+    text: string
+    context?: { boardId?: string; boardTitle?: string | null; path?: string }
+  }
   expect(body.text).toBe('Good (after a vote reveal)')
   expect(body.context?.boardId).toBe(board)
+  // N1: nothing the person has not seen goes with a one-click Good: the board by its id, never its title
+  expect(body.context?.boardTitle ?? null).toBeNull()
   expect(Object.keys(body).sort()).toEqual(['context', 'text']) // no kind, no moment, nothing the api would drop
   await expect(a.page.getByTestId('feedback-prompt-thanks')).toBeVisible()
   await expect(prompt(a.page)).toHaveCount(0, { timeout: 8_000 })

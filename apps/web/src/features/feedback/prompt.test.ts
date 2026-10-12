@@ -19,6 +19,7 @@ import {
   PROMPT_MOMENT_TTL_MS,
   type PromptStorage,
   promptDue,
+  promptGoodContext,
   promptKey,
   resetPromptForTests,
 } from './prompt.ts'
@@ -161,7 +162,13 @@ describe('words in progress: never while this tab holds a text lease or has an e
 })
 
 describe('the decision', () => {
-  const ok = { guest: false, typing: false, due: true, noted: T0, now: T0 + 1_000 }
+  const ok: Parameters<typeof decideFeedbackPrompt>[0] = {
+    guest: false,
+    typing: false,
+    due: true,
+    noted: T0,
+    now: T0 + 1_000,
+  }
   it('shows for an account that is due, not typing, with a fresh moment', () => {
     expect(decideFeedbackPrompt(ok)).toBe('show')
   })
@@ -176,11 +183,47 @@ describe('the decision', () => {
     expect(decideFeedbackPrompt({ ...ok, typing: true })).toBe('wait')
     expect(decideFeedbackPrompt({ ...ok, typing: false })).toBe('show')
   })
+  it('N1 (wave M follow-up 2): a person whose kind is not known yet is waited for, not dropped; a guest still is', () => {
+    // /api/me has not answered: the moment is kept (and asked again when the kind arrives)
+    expect(decideFeedbackPrompt({ ...ok, guest: null })).toBe('wait')
+    expect(decideFeedbackPrompt({ ...ok, guest: null, typing: true })).toBe('wait')
+    // ...but not for ever, and not when it could never show anyway
+    expect(decideFeedbackPrompt({ ...ok, guest: null, now: T0 + PROMPT_MOMENT_TTL_MS + 1 })).toBe('drop')
+    expect(decideFeedbackPrompt({ ...ok, guest: null, due: false })).toBe('drop')
+    // known: an account shows, a guest drops
+    expect(decideFeedbackPrompt({ ...ok, guest: false })).toBe('show')
+    expect(decideFeedbackPrompt({ ...ok, guest: true })).toBe('drop')
+  })
   it('a moment older than a few minutes is stale: dropped, even when typing or not due', () => {
     const late = { ...ok, now: T0 + PROMPT_MOMENT_TTL_MS + 1 }
     expect(decideFeedbackPrompt(late)).toBe('drop')
     expect(decideFeedbackPrompt({ ...late, typing: true })).toBe('drop')
     expect(decideFeedbackPrompt({ ...ok, now: T0 + PROMPT_MOMENT_TTL_MS })).toBe('show')
+  })
+})
+
+describe('N1 (wave M follow-up 2): what a one-click Good sends is only what the person has seen', () => {
+  const sources = {
+    pathname: '/b/board-1?token=secret#frag',
+    userAgent: 'UA',
+    width: 1280.4,
+    height: 720,
+    build: 'abc123',
+    now: new Date('2026-10-10T12:00:00Z'),
+  }
+  it('names the board by its id and never by its title (the title is a private word of the board)', () => {
+    const c = promptGoodContext({ ...sources, boardId: 'board-1' })
+    expect(c.boardId).toBe('board-1')
+    expect(c.boardTitle).toBeNull()
+    // the rest is the dialog's own block: no query or fragment, a rounded window, the build and the time
+    expect(c).toMatchObject({
+      path: '/b/board-1',
+      userAgent: 'UA',
+      viewport: { width: 1280, height: 720 },
+      build: 'abc123',
+      at: '2026-10-10T12:00:00.000Z',
+    })
+    expect(JSON.stringify(c)).not.toMatch(/secret|frag/)
   })
 })
 
