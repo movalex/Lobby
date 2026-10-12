@@ -11,7 +11,7 @@
 // tab, Ctrl/Cmd or a middle click in a new tab). Nothing shows while the list is unknown, empty, or the api cannot
 // answer (an older api's 404, a guest's refusal).
 import type { Backlink } from '@draftroom/contracts'
-import { type MouseEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
+import { type MouseEvent, type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
   type CanvasFeatureContext,
   currentPlatform,
@@ -23,7 +23,7 @@ import '../../../board-links/board-links.css'
 import { knownUserKind } from '../../../../invite/guest.tsx'
 import { useValue } from '../../../../lib/signals.ts'
 import { countUsage } from '../../../../lib/usage.ts'
-import { boardLinkHandlers } from '../../../board-links/open.ts'
+import { boardLinkHandlers, type OpenFrom, openFrom } from '../../../board-links/open.ts'
 import { Minimap } from './Minimap.tsx'
 import { minimapOpen, setMinimapOpen } from './state.ts'
 import { zoomIn, zoomOut, zoomTo100, zoomToFit, zoomToSelection } from './zoom.ts'
@@ -195,7 +195,7 @@ function ZoomMenu({ canvas, showValue }: { canvas: LobbyCanvas; showValue: boole
 }
 
 /** N7-5: one "Linked from" row: the board and "Go to the link". */
-function LinkedFromItem({ link }: { link: Backlink }) {
+function LinkedFromItem({ link, from }: { link: Backlink; from: OpenFrom }) {
   const path = backlinkPath(link)
   return (
     <li className="dr-cnav__linked-item" data-testid="linked-from-item" data-board-id={link.boardId}>
@@ -208,7 +208,7 @@ function LinkedFromItem({ link }: { link: Backlink }) {
         href={path}
         rel="noopener noreferrer"
         referrerPolicy="no-referrer"
-        {...boardLinkHandlers(path)}
+        {...boardLinkHandlers(path, { from })}
       >
         Go to the link
       </a>
@@ -223,6 +223,7 @@ function LinkedFrom({ ctx }: { ctx: CanvasFeatureContext }) {
   const [open, setOpen] = useState(false)
   const listId = useId()
   const rootRef = useRef<HTMLDivElement>(null)
+  const from = useMemo(() => openFrom(ctx), [ctx])
   useEffect(() => {
     if (!open) return
     const onDown = (e: PointerEvent) => {
@@ -271,7 +272,7 @@ function LinkedFrom({ ctx }: { ctx: CanvasFeatureContext }) {
             Linked from
           </li>
           {list.map((l) => (
-            <LinkedFromItem key={l.boardId} link={l} />
+            <LinkedFromItem key={l.boardId} link={l} from={from} />
           ))}
         </ul>
       )}

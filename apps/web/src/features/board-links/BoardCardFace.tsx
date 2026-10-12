@@ -6,15 +6,15 @@
 //  - anything else, and until the api answered: the neutral face, "Board you can't open" (or "Board link" while
 //    loading), with nothing about the target: a missing, a forbidden and a trashed board look the same. Name-only
 //    guests always see it (the api answers them nothing else).
-// Its "Open" link goes there (a plain click in this tab, through the router, `?el=` zooming to the element; Ctrl,
-// Cmd, Shift or a middle click: a new tab without opener or referrer). The rest of the face takes no pointer events:
-// selecting, moving and editing the card stay the canvas's.
+// Its "Open" link goes there (a plain click in this tab, through the router, `?el=` zooming to the element, or in
+// place for a link to this very board; Ctrl, Cmd, Shift or a middle click: a new tab without opener or referrer).
+// The rest of the face takes no pointer events: selecting, moving and editing the card stay the canvas's.
 import { type CSSProperties, useEffect, useState } from 'react'
 import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
 import { useValue } from '../../lib/signals.ts'
 import './board-links.css'
 import { faceStoreOf } from './faces.ts'
-import { boardLinkHandlers } from './open.ts'
+import { boardLinkHandlers, openFrom } from './open.ts'
 
 export function BoardCardFace({
   ctx,
@@ -40,7 +40,7 @@ export function BoardCardFace({
   const state = ok ? 'ok' : face ? 'unavailable' : 'loading'
   const title = ok ? ok.title : face ? 'Board you can’t open' : 'Board link'
   const thumb = ok && thumbFailed !== ok.thumbnailPath ? ok.thumbnailPath : null
-  const handlers = boardLinkHandlers(path, { counted: 'boardlinks.open' })
+  const handlers = boardLinkHandlers(path, { counted: 'boardlinks.open', from: openFrom(ctx) })
   return (
     <figure
       className="lobby-board-card"

@@ -4,6 +4,8 @@
 //    "Board link" (a scene scan finds no title or thumbnail of the target); its face shows the target's title to
 //    someone who can open it; a click on Open navigates in this tab and `?el=` lands on the frame; Ctrl/Cmd and a
 //    middle click open a new tab without opener or referrer;
+//  - a card that links a frame of the board it sits on (a "Copy link" pasted back) opens it in place: the frame is
+//    selected and the camera goes to it, without a navigation;
 //  - bob, who cannot view the target, sees the neutral face on the shared board while alice sees its title, and his
 //    page never asks for the target's thumbnail;
 //  - the palette command 'board-links.insert' picks a board from the permission-filtered list;
@@ -27,7 +29,7 @@ import {
 import { WEB_URL } from '../tests/support/ports.ts'
 import { foreignRequests } from './ai-kit.ts'
 import { focusBoard } from './media-kit.ts'
-import { grantClipboard, navRun, writeClipboard } from './navigation-kit.ts'
+import { cameraIdle, grantClipboard, inView, navRun, writeClipboard } from './navigation-kit.ts'
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
@@ -122,6 +124,45 @@ test('N7-1 a pasted board link becomes a board card: path only, the target’s f
     await waitForCanvas(a.page)
     await expect.poll(async () => (await boardCards(a.page)).length).toBe(1)
   })
+  expect(foreign).toEqual([])
+})
+
+test('N7-1 a card that links a frame of this same board: Open selects the frame and goes to it, in place', async ({
+  board,
+  canvasSession,
+}) => {
+  test.setTimeout(120_000)
+  const a = await canvasSession('alice')
+  const foreign = foreignRequests(a.page)
+  // far from the first view: only the card's Open brings it into view
+  const frameId = await createItem(a.page, 'frame', { x: 9000, y: 7000, width: 600, height: 400 })
+  await expectSaved(a.page)
+  expect(await inView(a.page, [frameId])).toBe(false)
+  await grantClipboard(a.context)
+  await pasteUrl(a.page, `${WEB_URL}/b/${board}?el=${frameId}`)
+  await expect.poll(async () => (await boardCards(a.page)).length, { timeout: 15_000 }).toBe(1)
+  const [card] = await boardCards(a.page)
+  if (!card) throw new Error('no card')
+  expect(card.link).toBe(`/b/${board}?el=${frameId}`)
+  await expect(face(a.page, card.id)).toHaveAttribute('data-state', 'ok', { timeout: 30_000 })
+  await expectSaved(a.page)
+  const before = a.page.url()
+  let navigated = 0
+  a.page.on('framenavigated', (f) => {
+    if (f === a.page.mainFrame()) navigated++
+  })
+  await face(a.page, card.id).getByTestId('board-card-open').click()
+  await expect.poll(() => selection(a.page), { timeout: 10_000 }).toEqual([frameId])
+  await cameraIdle(a.page)
+  await expect.poll(() => inView(a.page, [frameId]), { timeout: 10_000 }).toBe(true)
+  // no navigation, the address as it was; the board has the keyboard back (not the link)
+  expect(a.page.url()).toBe(before)
+  expect(navigated).toBe(0)
+  expect(await a.page.evaluate(() => document.activeElement?.getAttribute('data-testid') ?? null)).not.toBe(
+    'board-card-open',
+  )
+  // the card itself is still there and unchanged
+  expect((await boardCards(a.page)).map((c) => c.link)).toEqual([`/b/${board}?el=${frameId}`])
   expect(foreign).toEqual([])
 })
 

@@ -26,7 +26,7 @@ import type { PaletteEntry } from '../command-palette/model.ts'
 import { Palette } from '../command-palette/Palette.tsx'
 import { backlinkPath, backlinksStoreOf } from './backlinks.ts'
 import { BOARD_LINKS_BACKLINKS_COMMAND_ID, BOARD_LINKS_INSERT_COMMAND_ID } from './model.ts'
-import { openBoardPath } from './open.ts'
+import { openBoardPath, openFrom } from './open.ts'
 
 /** At most this many boards are offered by the insert picker (typing narrows them). */
 export const PICKER_MAX_BOARDS = 500
@@ -182,9 +182,9 @@ function BacklinksPicker({ ctx }: { ctx: CanvasFeatureContext }) {
       label: b.title,
       group: 'Linked from',
       detail: 'Go to the link',
-      run: () => openBoardPath(backlinkPath(b), 'here'),
+      run: () => openBoardPath(backlinkPath(b), 'here', openFrom(ctx)),
     }))
-  }, [list])
+  }, [list, ctx])
   return (
     <Palette
       label="Linked from"

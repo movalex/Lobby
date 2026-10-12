@@ -10,7 +10,8 @@ import {
   PALETTE_COMMAND_IDS,
   PENDING_PALETTE_COMMAND_IDS,
 } from '@draftroom/contracts'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { navigate } from '../../lib/routing.ts'
 import { CANVAS_FEATURES } from '../canvas-registry.ts'
 import { backlinkPath, createBacklinksStore } from './backlinks.ts'
 import { backlinks, boardCards, unavailableCards } from './client.ts'
@@ -24,7 +25,13 @@ import {
   boardPathOfUrl,
   isBoardCard,
 } from './model.ts'
-import { openWay } from './open.ts'
+import { boardLinkHandlers, openBoardPath, openWay } from './open.ts'
+
+// the router: a plain click on a link to another board goes through it (here only recorded)
+vi.mock('../../lib/routing.ts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../lib/routing.ts')>()),
+  navigate: vi.fn(),
+}))
 
 // ---- a fetch stub ---------------------------------------------------------------------------------------------
 
@@ -256,6 +263,59 @@ describe('pasting a relative board path, and opening a link', () => {
     expect(openWay(e({ button: 1 }))).toBe('tab')
     expect(openWay(e({ button: 2 }))).toBeNull()
     expect(openWay(e({ altKey: true }))).toBeNull()
+  })
+
+  it('a link to the board this page shows is applied in place; one to another board goes through the router', () => {
+    const shown: (string | null)[] = []
+    const from = { boardId: 'b-here000001', show: (el: string | null) => shown.push(el) }
+    vi.mocked(navigate).mockClear()
+    openBoardPath('/b/b-here000001?el=frame-1', 'here', from)
+    openBoardPath('/b/b-here000001', 'here', from)
+    expect(shown).toEqual(['frame-1', null])
+    expect(navigate).not.toHaveBeenCalled()
+    openBoardPath('/b/b-there00001?el=frame-1', 'here', from)
+    openBoardPath('/b/b-here000001?el=frame-1', 'here')
+    expect(vi.mocked(navigate).mock.calls).toEqual([
+      ['/b/b-there00001?el=frame-1'],
+      ['/b/b-here000001?el=frame-1'],
+    ])
+    expect(shown).toHaveLength(2)
+    // never anything but a Lobby-relative board path
+    openBoardPath('//evil.example/b/b-here000001', 'here', from)
+    openBoardPath('/w/wsp_0123456789', 'here', from)
+    expect(navigate).toHaveBeenCalledTimes(2)
+    expect(shown).toHaveLength(2)
+  })
+
+  it('the link handlers: a plain click opens (in place for this board); an Alt click only stops the download', () => {
+    const shown: (string | null)[] = []
+    const from = { boardId: 'b-here000001', show: (el: string | null) => shown.push(el) }
+    const click = (o: Partial<{ button: number; altKey: boolean }>) => {
+      const ev = {
+        button: 0,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        altKey: false,
+        ...o,
+        preventDefault: vi.fn(),
+        stopPropagation: vi.fn(),
+      }
+      boardLinkHandlers('/b/b-here000001?el=frame-1', { from }).onClick(ev)
+      return ev
+    }
+    vi.mocked(navigate).mockClear()
+    const plain = click({})
+    expect(plain.preventDefault).toHaveBeenCalled()
+    expect(shown).toEqual(['frame-1'])
+    const alt = click({ altKey: true })
+    expect(alt.preventDefault).toHaveBeenCalled()
+    expect(alt.stopPropagation).not.toHaveBeenCalled()
+    // a right click keeps the browser's own menu
+    const right = click({ button: 2 })
+    expect(right.preventDefault).not.toHaveBeenCalled()
+    expect(shown).toEqual(['frame-1'])
+    expect(navigate).not.toHaveBeenCalled()
   })
 })
 
