@@ -5,8 +5,11 @@
 //  - The PDF library lives in the PDF worker's own bundle (assets/pdf.worker-<hash>.js) and in one lazy chunk the
 //    page loads only when workers are unavailable (pdf-client.ts mainThreadBuilder). No PDF module is in the static
 //    closure of the entry (the dashboard) or of the board page: their size is not touched by the dependency.
-//  - The worker bundle has no `eval(` and no `new Function(` (the CSP has no 'unsafe-eval'; a PDF export must not
-//    need it).
+//  - While workers run, the PDF library never loads on the board's thread: read from the module graph, the only
+//    module outside the PDF chunks that imports into them is pdf-client.ts (its no-worker fallback). An
+//    exporter.ts that took its title helpers from pdf-build.ts again (not pdf-text.ts) fails here.
+//  - The worker bundle and every page chunk with a PDF package have no `eval(` and no `new Function(` (the CSP has
+//    no 'unsafe-eval'; a PDF export must not need it).
 //  - Its size is recorded on every run (console) and capped. Recorded (this machine, rolldown/Vite 8.3.1):
 //      pdf-lib 1.17.1, before wave N ........................ 428,590 B
 //      @cantoo/pdf-lib 2.11.1, same code (N6-2) ............. 573,960 B
@@ -17,7 +20,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { gzipSync } from 'node:zlib'
-import { build, type Rolldown } from 'vite'
+import { build, type Plugin, type Rolldown } from 'vite'
 
 const WEB = fileURLToPath(new URL('../../', import.meta.url))
 const norm = (id: string) => id.split('\\').join('/')
@@ -29,12 +32,31 @@ const PDF_PACKAGE =
 /** The worker bundle's budget, bytes (raw): fontkit's arrival is expected to fit under it. */
 const WORKER_BUDGET = 1_600_000
 
+/** The one module allowed to load the PDF library on the page: pdf-client.ts (mainThreadBuilder, no worker). */
+const FALLBACK_IMPORTER = /\/src\/features\/present-export\/pdf-client\.ts$/
+
+const NO_EVAL = (code: string, where: string) => {
+  assert.equal(code.match(/\bnew\s+Function\s*\(/g), null, `no new Function( in ${where}`)
+  assert.equal(code.match(/(?<![\w$.])eval\s*\(/g), null, `no eval( in ${where}`)
+}
+
 test('the PDF library is in the PDF worker (and one lazy chunk), never in the entry or the board page; no eval', async () => {
+  // every dynamic import of the page's module graph (module to module), to tell WHICH module loads the PDF chunk
+  const dynamicImports: { from: string; to: string }[] = []
+  const graph: Plugin = {
+    name: 'n6-dynamic-imports',
+    generateBundle() {
+      for (const id of this.getModuleIds())
+        for (const to of this.getModuleInfo(id)?.dynamicallyImportedIds ?? [])
+          dynamicImports.push({ from: norm(id), to: norm(to) })
+    },
+  }
   const result = await build({
     root: WEB,
     configFile: `${WEB}vite.config.ts`,
     logLevel: 'silent',
     define: { __LOBBY_COMMIT__: JSON.stringify('n6-pdf-worker-test') },
+    plugins: [graph],
     build: { write: false, emptyOutDir: false },
   })
   const outputs = (Array.isArray(result) ? result : [result]) as Rolldown.RolldownOutput[]
@@ -53,8 +75,7 @@ test('the PDF library is in the PDF worker (and one lazy chunk), never in the en
   assert.ok(worker.includes('This is not an svg. Ignoring'), 'the worker carries @cantoo/pdf-lib (drawSvg)')
   assert.ok(worker.includes('registerFontkit'), 'and the font engine hook')
   assert.ok(worker.includes('lobby-pdf-faces'), 'and the vector page (the face table it reads)')
-  assert.equal(worker.match(/\bnew\s+Function\s*\(/g), null, 'no new Function( in the worker')
-  assert.equal(worker.match(/(?<![\w$.])eval\s*\(/g), null, 'no eval( in the worker')
+  NO_EVAL(worker, 'the worker')
   const gz = gzipSync(worker).length
   console.log(`pdf worker bundle: ${worker.length} B raw, ${gz} B gzip`)
   assert.ok(
@@ -95,6 +116,24 @@ test('the PDF library is in the PDF worker (and one lazy chunk), never in the en
     'the fallback chunk is imported dynamically',
   )
   assert.ok(!chunks.some((c) => c.imports.includes(lazyName)), 'and never statically')
+  // the page's chunks with any PDF package carry the same fork code as the worker: no eval there either
+  const pdfChunks = chunks.filter((c) => pdfModules([c]).length > 0)
+  assert.ok(pdfChunks.includes(lazy[0] as Rolldown.OutputChunk))
+  for (const c of pdfChunks) NO_EVAL(c.code, c.fileName)
+  // and the PDF library never loads on the board's thread while workers run: of the modules outside the PDF chunks,
+  // only pdf-client.ts's no-worker fallback imports into them (exporter.ts takes the titles from pdf-text.ts, and a
+  // dynamic import('../pdf-build.ts') there would load the whole fork with every PDF export)
+  const inPdfChunk = new Set(pdfChunks.flatMap((c) => c.moduleIds.map(norm)))
+  assert.ok(dynamicImports.length > 0, 'the module graph was read')
+  const loaders = [
+    ...new Set(
+      dynamicImports.filter((e) => inPdfChunk.has(e.to) && !inPdfChunk.has(e.from)).map((e) => e.from),
+    ),
+  ]
+  assert.ok(
+    loaders.length > 0 && loaders.every((from) => FALLBACK_IMPORTER.test(from)),
+    `only pdf-client.ts loads the PDF chunk (found: ${loaders.map((f) => f.replace(/^.*\/src\//, 'src/')).join(', ')})`,
+  )
   console.log(
     `page fallback chunk ${lazyName}: ${(lazy[0] as Rolldown.OutputChunk).code.length} B; entry ${entry.code.length} B`,
   )
