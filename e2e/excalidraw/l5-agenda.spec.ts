@@ -219,7 +219,7 @@ test('L5-1: in a room that says revision 11 (a sync from before wave L) the minu
     server.onMessage((m) =>
       ws.send(
         typeof m === 'string'
-          ? m.replace('{"type":"contracts","rev":12}', '{"type":"contracts","rev":11}')
+          ? m.replace(/\{"type":"contracts","rev":\d+\}/, '{"type":"contracts","rev":11}')
           : m,
       ),
     )

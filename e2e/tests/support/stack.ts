@@ -31,7 +31,9 @@ import { API_PORT, API_URL, HOST, SYNC_PORT, SYNC_URL, WEB_URL } from './ports.t
 export const REPO_ROOT = resolve(import.meta.dirname, '../../..')
 export const FIXTURES_DIR = join(REPO_ROOT, 'tests/fixtures/generated')
 const API_ENTRY = join(REPO_ROOT, 'apps/api/src/server.ts')
-const SYNC_ENTRY = join(REPO_ROOT, 'apps/sync/src/server.ts')
+// E2E_SYNC_ENTRY (opt-in, a stale-pair run only): another build's sync entry, e.g. the deployed 104c6e0 tree's
+// apps/sync/src/server.ts (a git archive with its own install), to run this web against the sync that is live.
+const SYNC_ENTRY = process.env.E2E_SYNC_ENTRY || join(REPO_ROOT, 'apps/sync/src/server.ts')
 const WORKER_ENTRY = join(REPO_ROOT, 'apps/worker/src/worker.ts')
 const ORPHAN_GUARD = pathToFileURL(join(import.meta.dirname, 'orphan-guard.ts')).href
 
@@ -252,6 +254,9 @@ export const EXCALIDRAW_SYNC_ENV: Readonly<Record<string, string>> = {
   DRAFTROOM_ENGINE: 'excalidraw',
   DRAFTROOM_TEST_HOOKS: '1',
   DRAFTROOM_BACKUP_STORE: 'off',
+  // wave N: reactions on, as render.yaml deploys the sync (unset is off, fail-closed, and the room says 12); a spec
+  // sets 'off' through syncEnv
+  DRAFTROOM_REACTIONS: 'on',
 }
 
 /** The sync env of a stack, with the spec's extra env on top (never another engine). */
