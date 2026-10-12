@@ -5,8 +5,11 @@ import { resolveDataDir } from '@draftroom/dev-assets'
 import { BACKUP_DEFAULTS } from './backup/backup.ts'
 import type { BackupSigningSecrets } from './backup/signing.ts'
 
-/** DRAFTROOM_OUTBOUND_BUDGET_MB's default (M7-5): 128 MiB of queued outbound bytes across every session. */
-export const DEFAULT_OUTBOUND_BUDGET_MB = 128
+/**
+ * DRAFTROOM_OUTBOUND_BUDGET_MB's default (M7-5): 64 MiB of queued outbound bytes across every session (wave N.1; it was
+ * 128, a 160 MiB close line on the 512 MB instance: room/outbound.ts says why 64).
+ */
+export const DEFAULT_OUTBOUND_BUDGET_MB = 64
 
 export interface SyncConfig {
   /** NODE_ENV as checked by `parseNodeEnv` (M2): production, development or test, nothing else boots. */
@@ -88,7 +91,7 @@ export interface SyncConfig {
   /**
    * DRAFTROOM_OUTBOUND_BUDGET_MB (wave M, M7-5, CAP-MEM): the process-wide budget of queued outbound bytes, MiB.
    * Above it presence is skipped for every session; above 1.25 times it the largest queue is closed (RECONNECT).
-   * Default 128.
+   * Default 64 (wave N.1; it was 128).
    */
   outboundBudgetMb?: number
   /**

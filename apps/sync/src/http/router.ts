@@ -155,6 +155,14 @@ const NEUTRAL_ROUTES: Route[] = [
     methods: ['GET'],
     handle: (_req, res) => sendJson(res, 200, { engine: 'excalidraw' }),
   },
+  // Wave N.1 ("one clock"): this server's time, ms since the epoch. It stamps every element (`updated`, the creation
+  // stamp), and the api stores visit times on it so "Since your last visit" compares times from one clock
+  // (apps/api/src/sync-clock.ts measures the offset). An older sync has no such route (404: the api keeps its own).
+  {
+    re: /^\/internal\/clock$/,
+    methods: ['GET'],
+    handle: (_req, res) => sendJson(res, 200, { now: Date.now() }),
+  },
   // Bridge release R0: maintenance mode (sockets closed and refused; internal reads keep working)
   {
     re: /^\/internal\/maintenance$/,

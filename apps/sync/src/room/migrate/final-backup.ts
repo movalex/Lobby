@@ -45,15 +45,18 @@ export interface FinalBackup {
 const SHA_RE = /^[0-9a-f]{64}$/
 
 /**
- * The board's newest held, tldraw-described backup entry in the local manifest, or null when it has
- * none (no run-all ran, or every held entry is in an lb format). Throws when the manifest exists but
+ * The board's newest held, tldraw-described backup entry in the local manifest (its `backups` and, since wave M,
+ * its `offsiteOnly` entries), or null when it has none (no run-all ran, or every held entry is in an lb format).
+ * Throws when the manifest exists but
  * cannot be read (the caller decides; service.ts converts without the check and says so in its log).
  */
 export function finalBackupOf(backupsDir: string, boardId: string, now = Date.now()): FinalBackup | null {
   const manifest: BackupManifest | null = readManifest(backupsDir, boardId)
   if (!manifest) return null
   let newest: BackupManifest['backups'][number] | null = null
-  for (const e of manifest.backups) {
+  // M7-4: a held copy the offsite store holds may be gone locally (its entry in `offsiteOnly` until the hold ends):
+  // the final backup is the same entry wherever its copy is (its key is the offsite one either way)
+  for (const e of [...manifest.backups, ...(manifest.offsiteOnly ?? [])]) {
     if (!isHeld(e, now) || e.format !== undefined) continue
     if (typeof e.recordsSha256 !== 'string' || !SHA_RE.test(e.recordsSha256)) continue
     if (!newest || Date.parse(e.createdAt) >= Date.parse(newest.createdAt)) newest = e

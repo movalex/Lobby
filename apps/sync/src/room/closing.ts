@@ -10,12 +10,14 @@ import { CLOSE_TERMINAL } from '@draftroom/canvas-schema/protocol'
 
 /** What `closeTerminal` needs of a socket: `ws`'s WebSocket and `ElementSocket` both fit. */
 export interface ClosableSocket {
-  send(data: string): void
+  send(data: string, opts?: { readonly compress?: boolean }): void
   close(code: number, reason: string): void
   readonly readyState: number
 }
 
 const OPEN = 1
+/** A notice is a few dozen bytes: never through deflate (app.ts deflateFrame's threshold), on a raw `ws` socket too. */
+const PLAIN = Object.freeze({ compress: false })
 
 export const closingNotice = (reason: string): string =>
   JSON.stringify({ type: 'notice', code: 'CLOSING', detail: reason })
@@ -23,7 +25,7 @@ export const closingNotice = (reason: string): string =>
 /** The CLOSING notice, then the 4099 close. Never throws (a socket already closing is left to its handler). */
 export function closeTerminal(socket: ClosableSocket, reason: string): void {
   try {
-    if (socket.readyState === OPEN) socket.send(closingNotice(reason))
+    if (socket.readyState === OPEN) socket.send(closingNotice(reason), PLAIN)
   } catch {
     // a socket that failed mid-send is closing; its close handler cleans up
   }

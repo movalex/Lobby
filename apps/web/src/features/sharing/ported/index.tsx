@@ -12,6 +12,7 @@ import { openStateOrRoute } from '../../../lib/open-state.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { announceRemoteShareChange, openShareDialog, SHARE_CHANGED_EVENT, sharingApi } from '../api.ts'
 import { shareBadge, shareBadgeName, showsShareBadge } from '../model.ts'
+import { badgeReads } from './badge-reads.ts'
 import { exportAllowedOn, exportStateOf, syncExportPolicy } from './export-policy.ts'
 import '../sharing.css'
 
@@ -35,10 +36,12 @@ function ShareBadge({ ctx }: { ctx: CanvasFeatureContext }) {
   const api = ctx.api
 
   // Refetch on: the board changing (visibility), a sharing event on the board stream, a change made
-  // in this tab's Share dialog, and every stream (re)connect.
+  // in this tab's Share dialog, and every stream (re)connect. Wave N.1: the first read waits for the stream's first
+  // hello (./badge-reads.ts), so it is the board-open read's part and the hello reads nothing more; until it, the
+  // badge says what the board does (`tick` 0).
   useEffect(() => {
-    void tick
     void board.visibility
+    if (tick === 0) return
     const controller = new AbortController()
     // wave M (M5-1): the first fetch takes the board-open read's part, once (lib/open-state.ts); later ones read the route
     openStateOrRoute(
@@ -53,23 +56,25 @@ function ShareBadge({ ctx }: { ctx: CanvasFeatureContext }) {
   }, [api, board.id, board.visibility, tick])
 
   useEffect(() => {
-    const bump = () => setTick((n) => n + 1)
+    const reads = badgeReads(() => setTick((n) => n + 1))
     const offEvent = events.on('sharing.changed', () => {
-      bump()
+      reads.changed()
       announceRemoteShareChange(board.id) // an open Share dialog refetches too
     })
-    const offResync = events.onResync(bump)
+    // at once when the stream is already connected (the first read), then at every reconnect
+    const offResync = events.onResync(() => reads.hello())
     const onWindow = (e: Event) => {
       const detail = (e as CustomEvent<{ boardId?: string }>).detail
-      if (!detail?.boardId || detail.boardId === board.id) bump()
+      if (!detail?.boardId || detail.boardId === board.id) reads.changed()
     }
     window.addEventListener(SHARE_CHANGED_EVENT, onWindow)
     // Events are hints: a slow refresh while the tab is visible covers a missed or dead stream
     // (and access requests from people who are not on the board).
     const poll = setInterval(() => {
-      if (document.visibilityState === 'visible') bump()
+      if (document.visibilityState === 'visible') reads.changed()
     }, REFRESH_MS)
     return () => {
+      reads.stop()
       offEvent()
       offResync()
       window.removeEventListener(SHARE_CHANGED_EVENT, onWindow)

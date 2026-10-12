@@ -20,8 +20,8 @@
 // image that is not there) have words of their own and hide nothing. With no board open, or a status not read yet,
 // nothing is available and every capture rejects without a request. Requests are same-origin, with the session
 // cookie; the photo is a raw image/jpeg body, the rest JSON through the app's api client (so a 401 signs the page out,
-// as any other request's does; the photo's raw body cannot go through it, and its 401 is shown in the dialog, as an
-// upload's is). Nothing about them is stored.
+// as any other request's does; the photo's raw body cannot go through it, so since wave N.1 its 401 asks the app's
+// client GET /api/me, whose own 401 signs the page out the same way). Nothing about them is stored.
 import {
   type CaptureMode,
   type CaptureQuota,
@@ -124,6 +124,16 @@ async function sendJson(
   return answer
 }
 
+/**
+ * A photo route's 401 (wave N.1): the photo cannot go through the app's api client, so its refusal would only be the
+ * dialog's words while the page stayed signed in. The app's client asks who is signed in (GET /api/me): when the
+ * session has ended its own 401 signs the page out, as every other request's does; when it has not, nothing happens.
+ */
+function onPhotoRefused(err: ApiError): ApiError {
+  if (err.kind === 'unauthorized') void api.me().catch(() => {})
+  return err
+}
+
 /** The photo: a raw image/jpeg body, which the app's api client cannot send (it sends JSON). */
 async function send(
   kind: 'photo',
@@ -149,7 +159,7 @@ async function send(
     if (init.signal?.aborted) throw e
     throw new ApiError('network', 0, 'NETWORK', 'Can’t reach Lobby. Check your connection and try again.')
   }
-  if (!res.ok) throw refused(kind, await errorFromResponse(res))
+  if (!res.ok) throw refused(kind, onPhotoRefused(await errorFromResponse(res)))
   const parsed = CaptureResponse.safeParse(await res.json().catch(() => undefined))
   if (!parsed.success)
     throw new ApiError(
@@ -204,7 +214,7 @@ async function refusalWithoutPhoto(path: string, signal?: AbortSignal): Promise<
     return null
   }
   if (![401, 403, 404, 429].includes(res.status)) return null
-  return refused('photo', await errorFromResponse(res))
+  return refused('photo', onPhotoRefused(await errorFromResponse(res)))
 }
 
 export async function captureBoardImage(

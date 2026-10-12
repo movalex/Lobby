@@ -206,9 +206,55 @@ describe('the requests', () => {
       await expect(captureTranscript('b-board00001', 'x')).rejects.toMatchObject({ status: 401 })
       await expect(captureBoardImage('b-board00001', 'img-1', 'notes')).rejects.toMatchObject({ status: 401 })
       expect(signedOut).toBe(2)
-      // the photo's raw body cannot go through the app's client: its 401 is the dialog's error
-      await expect(capturePhoto('b-board00001', new Blob([]), 'notes')).rejects.toMatchObject({ status: 401 })
       expect(captureAvailable()).toBe(true)
+    } finally {
+      setUnauthorizedHandler(null)
+    }
+  })
+
+  // Wave N.1 (wave N follow-up 6, WS5): the photo's raw body cannot go through the app's api client, so its 401 was
+  // only the dialog's error: the page stayed signed in on an ended session until some other request noticed. Now a
+  // photo route's 401 asks the app's client who is signed in (GET /api/me): when the session has ended that 401 signs
+  // the page out exactly as every other request's does; when it has not, nothing else happens.
+  it('a 401 on the photo signs the page out too, through the app client’s own 401 (one GET /api/me)', async () => {
+    let signedOut = 0
+    setUnauthorizedHandler(() => {
+      signedOut++
+    })
+    try {
+      answer = () =>
+        new Response(JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'Sign in again.' } }), {
+          status: 401,
+        })
+      await expect(capturePhoto('b-board00001', new Blob([]), 'notes')).rejects.toMatchObject({ status: 401 })
+      await expect.poll(() => signedOut).toBe(1)
+      expect(sent.map((s) => `${s.method} ${s.url}`)).toEqual([
+        'POST /api/boards/b-board00001/ai/capture/photo?mode=notes',
+        'GET /api/me',
+      ])
+    } finally {
+      setUnauthorizedHandler(null)
+    }
+  })
+
+  it('a photo 401 while the session is still good (/api/me answers 200) signs nothing out', async () => {
+    let signedOut = 0
+    setUnauthorizedHandler(() => {
+      signedOut++
+    })
+    try {
+      answer = () =>
+        new Response(JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'Sign in again.' } }), {
+          status: 401,
+        })
+      const meOk = () => new Response(JSON.stringify({ nope: true }), { status: 200 })
+      const first = answer
+      let n = 0
+      answer = () => (n++ === 0 ? first() : meOk())
+      await expect(capturePhoto('b-board00001', new Blob([]), 'notes')).rejects.toMatchObject({ status: 401 })
+      await expect.poll(() => sent.length).toBe(2)
+      await new Promise((r) => setTimeout(r, 20))
+      expect(signedOut).toBe(0)
     } finally {
       setUnauthorizedHandler(null)
     }

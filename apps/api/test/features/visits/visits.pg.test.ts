@@ -4,11 +4,13 @@
 //    statement began; the two never read each other's write), and the stored time is the later of the two;
 //  - a first visit raced the same way: both see "no previous visit" and exactly one row is stored;
 //  - 20 people open the same board at once, and one person opens it from 8 tabs at once: no error, no deadlock, one row
-//    per (board, person), and the one person’s 8 tabs share one write and one answer.
-import { VisitAnswer, visitPath } from '@draftroom/contracts'
+//    per (board, person), and the one person’s 8 tabs share one write and one answer;
+//  - wave N.1: a "seen" kept inside the write interval is written before the next visits, which all read it as their
+//    previous time, and the tick's write of one person's kept time runs beside another person's 8 tabs.
+import { VISIT_WRITE_MIN_INTERVAL_MS, VisitAnswer, visitPath, visitSeenPath } from '@draftroom/contracts'
 import type { Db } from '@draftroom/db'
 import { openTestDb } from '@draftroom/db/testing'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { recordVisit } from '../../../src/features/visits/store.ts'
 import { type Client, createBoard, createTestApi, DEV_STUDIO, type TestApi } from '../../helpers.ts'
 
@@ -97,5 +99,50 @@ describe.skipIf(!PG_URL)('visit markers on a real Postgres', () => {
       [board, people.map((c) => c.userId)],
     )
     expect(rows.n).toBe(20)
+  })
+
+  // Wave N.1 (wave N follow-up 5): a "seen" inside the write interval is kept and written when the interval ends. The
+  // first call after the end writes it before its own write, and every tab that comes with it waits for that, so on a
+  // real pool (the kept write and the visits on different connections) each reads it as the previous time.
+  it('a kept "seen", then 8 tabs at once after the interval: each reads it as the previous time, one write of theirs', async () => {
+    const c = people[3] as Client
+    const first = VisitAnswer.parse((await c.req('POST', visitPath(board))).json())
+    api.clock.advance(4_000)
+    const before = api.clock.now().getTime()
+    expect((await c.req('POST', visitSeenPath(board))).statusCode).toBe(204)
+    const after = api.clock.now().getTime()
+    expect(await stored(c.userId)).toBe(first.seenAt) // kept, not written yet
+    api.clock.advance(VISIT_WRITE_MIN_INTERVAL_MS + 1)
+    const eight = await Promise.all(Array.from({ length: 8 }, () => c.req('POST', visitPath(board))))
+    const answers = eight.map((r) => VisitAnswer.parse(r.json()))
+    for (const a of answers) {
+      expect(a).toEqual(answers[0])
+      expect(a.previousSeenAt as number).toBeGreaterThanOrEqual(before)
+      expect(a.previousSeenAt as number).toBeLessThanOrEqual(after)
+    }
+    expect(await stored(c.userId)).toBe(answers[0]?.seenAt)
+  })
+
+  it('a kept "seen" written by the tick while another person’s tabs visit: no error, each row its own', async () => {
+    const a = people[4] as Client
+    const b = people[5] as Client
+    for (const c of [a, b]) VisitAnswer.parse((await c.req('POST', visitPath(board))).json())
+    api.clock.advance(3_000)
+    const before = api.clock.now().getTime()
+    expect((await a.req('POST', visitSeenPath(board))).statusCode).toBe(204)
+    const after = api.clock.now().getTime()
+    api.clock.advance(VISIT_WRITE_MIN_INTERVAL_MS)
+    // the tick (every second) writes a's kept time while b opens the board from 8 tabs
+    const bs = await Promise.all(Array.from({ length: 8 }, () => b.req('POST', visitPath(board))))
+    for (const r of bs) expect(r.statusCode, r.body).toBe(200)
+    await vi.waitFor(
+      async () => {
+        const t = (await stored(a.userId)) as number
+        expect(t).toBeGreaterThanOrEqual(before)
+        expect(t).toBeLessThanOrEqual(after)
+      },
+      { timeout: 8_000, interval: 50 },
+    )
+    expect(await stored(b.userId)).toBe(VisitAnswer.parse(bs[0]?.json()).seenAt)
   })
 })

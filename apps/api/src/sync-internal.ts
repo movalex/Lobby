@@ -77,6 +77,12 @@ export interface SyncInternalClient {
    * asked. Optional like placeNotes; a client without it is a tldraw sync.
    */
   engine?(): Promise<CanvasEngine>
+  /**
+   * Wave N.1: the sync server's clock, ms since the epoch (GET /internal/clock; ./sync-clock.ts measures the offset).
+   * Throws SyncUnavailable when sync cannot be asked or has no such route (an older sync: 404). Optional like
+   * placeNotes; a client without it leaves the api on its own clock.
+   */
+  clock?(): Promise<number>
 }
 
 export class SyncSeedConflict extends Error {
@@ -227,6 +233,27 @@ export function createHttpSyncInternalClient(opts: {
       }
       const body = (await res.json().catch(() => null)) as { engine?: unknown } | null
       return body?.engine === 'excalidraw' ? 'excalidraw' : 'tldraw'
+    },
+    async clock() {
+      let res: Response
+      try {
+        res = await fetch(`${base}/internal/clock`, {
+          headers: { [INTERNAL_SECRET_HEADER]: opts.secret },
+          signal: AbortSignal.timeout(Math.min(timeout, 2_000)),
+          redirect: 'error', // never forward the secret anywhere else
+        })
+      } catch (e) {
+        throw new SyncUnavailable(`sync unreachable: ${(e as Error).name}`)
+      }
+      if (!res.ok) {
+        await res.body?.cancel().catch(() => {})
+        throw new SyncUnavailable(`clock failed with ${res.status}`, res.status)
+      }
+      const body = (await res.json().catch(() => null)) as { now?: unknown } | null
+      const now = body?.now
+      if (typeof now !== 'number' || !Number.isSafeInteger(now) || now <= 0)
+        throw new SyncUnavailable('clock answered something else')
+      return now
     },
     async workshopState(boardId, body) {
       let res: Response

@@ -68,3 +68,29 @@ describe('sync internal client: boardText', () => {
     await expect(gone.boardText?.('b-one')).rejects.toBeInstanceOf(SyncUnavailable)
   })
 })
+
+// Wave N.1 ("one clock"): the sync's time for the visit markers (src/sync-clock.ts measures the offset).
+describe('sync internal client: clock', () => {
+  it('asks GET /internal/clock with the secret and answers the sync’s ms', async () => {
+    const { seen, baseUrl } = await serve(() => ({ status: 200, body: { now: 1_800_000_000_123 } }))
+    const client = createHttpSyncInternalClient({ baseUrl, secret: 's'.repeat(40) })
+    expect(await client.clock?.()).toBe(1_800_000_000_123)
+    expect(seen).toEqual([{ url: '/internal/clock', secret: 's'.repeat(40), method: 'GET' }])
+  })
+
+  it('an older sync (404), a failure or an answer that is not a time: SyncUnavailable', async () => {
+    for (const [status, body] of [
+      [404, { error: { code: 'NOT_FOUND' } }],
+      [500, {}],
+      [200, { now: 'soon' }],
+      [200, { now: 1.5 }],
+      [200, {}],
+    ] as const) {
+      const { baseUrl } = await serve(() => ({ status, body }))
+      const client = createHttpSyncInternalClient({ baseUrl, secret: 's'.repeat(40) })
+      await expect(client.clock?.(), JSON.stringify(body)).rejects.toBeInstanceOf(SyncUnavailable)
+      await new Promise<void>((r) => (server ? server.close(() => r()) : r()))
+      server = null
+    }
+  })
+})
