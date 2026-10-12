@@ -257,6 +257,10 @@ export const EXCALIDRAW_SYNC_ENV: Readonly<Record<string, string>> = {
   // wave N: reactions on, as render.yaml deploys the sync (unset is off, fail-closed, and the room says 12); a spec
   // sets 'off' through syncEnv
   DRAFTROOM_REACTIONS: 'on',
+  // wave N.1: the disk's free share, fixed (honoured with the test hooks only): a runner with a nearly full temp disk
+  // would otherwise turn the sync's low-disk paths on for every spec (no backups under 20 %, the DISK notice under
+  // 10 %: apps/sync/src/disk.ts); a low-disk spec sets its own through syncEnv
+  DRAFTROOM_TEST_DISK_FREE: '0.5',
 }
 
 /** The sync env of a stack, with the spec's extra env on top (never another engine). */
