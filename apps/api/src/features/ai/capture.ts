@@ -26,8 +26,8 @@
 //
 // Cost (budget.ts): ONE ledger row per capture, 'capture-photo' or 'capture-transcript', whatever number of calls it
 // makes, reserved for all of them before any call (a photo's fixed words at a token per UTF-8 byte and the image at
-// CAPTURE_IMAGE_TOKENS_RESERVE; a transcript's prompts at prompt.ts's estimate of a token per 3 bytes, the one the input
-// cap is checked against: see transcriptCall; and each call's output cap), under the same lock as the token budgets,
+// CAPTURE_IMAGE_TOKENS_RESERVE; a transcript's prompts at a token per UTF-8 byte too, the themes call's cut to fit the
+// input cap at that rate: see transcriptCall; and each call's output cap), under the same lock as the token budgets,
 // and with the per-day caps (DRAFTROOM_AI_VISION_USER_DAILY / _GLOBAL_DAILY, DRAFTROOM_AI_TRANSCRIPT_USER_DAILY:
 // 429 AI_CAPTURE_DAILY_CAP) counted from the same rows. The row is settled with what the calls cost, success or not
 // (a failed call keeps its row and its charge). Logs hold counts and the run id only: never the image, the
@@ -555,12 +555,12 @@ export async function registerCapture(
     const prompts = parts.map((p, i) => meetingPrompt(p, i + 1, parts.length, title))
     // the capture's own output cap, as its transcript client sends it (index.ts)
     const outputCap = cap.maxOutputTokens
-    // Each part reserves its prompt at prompt.ts's estimate (a token per 3 UTF-8 bytes: what the input cap is checked
-    // against), not at the token-per-byte ceiling a board run reserves. The transcript is the sender's own text, the
-    // ledger charges what OpenAI reports once the calls are done, and the in-flight limits bound what runs at once; at
-    // a token a byte, a 60,000-character meeting that costs a few thousand tokens reserved most of a person's day.
-    const mapReserve = prompts.map((p) => promptTokens(p) + outputCap)
-    // the reduce call's prompt is cut to the input cap by the same estimate (as every part's is), and reserved at it
+    // Each part reserves the most its prompt can cost (a token per UTF-8 byte, prompt.ts promptTokensCeiling), as board
+    // runs and photos do: the reservation is what gates the call, and punctuation or symbol soup tokenizes at close to a
+    // token a byte (wave N round 1). The ledger then charges what OpenAI reports. As for board runs, the input cap is
+    // checked against the estimate (a token per 3 bytes), so one call of such text may send up to about 3x the cap.
+    const mapReserve = prompts.map((p) => Math.max(promptTokens(p), promptTokensCeiling(p)) + outputCap)
+    // the reduce call's prompt is cut so that its most (a token a byte) fits the input cap, and reserved at it
     const reduceReserve = parts.length > 1 ? cfg.maxInputTokens + outputCap : 0
     const reserved = mapReserve.reduce((a, b) => a + b, 0) + reduceReserve
     const reservation = await reserve('transcript', {
@@ -603,11 +603,12 @@ export async function registerCapture(
         // one reduce call names the themes over the whole meeting; its prompt is cut to its reservation
         let items = reduceItems(merged, REDUCE_MAX_NOTES)
         let prompt = themesPrompt(items)
-        while (items.length > 1 && promptTokens(prompt) > cfg.maxInputTokens) {
+        const most = (p: typeof prompt) => Math.max(promptTokens(p), promptTokensCeiling(p))
+        while (items.length > 1 && most(prompt) > cfg.maxInputTokens) {
           items = items.slice(0, Math.max(1, Math.floor(items.length * 0.8)))
           prompt = themesPrompt(items)
         }
-        if (promptTokens(prompt) <= cfg.maxInputTokens) {
+        if (most(prompt) <= cfg.maxInputTokens) {
           calls++
           const o = await client.chat(prompt).catch((): ChatOutcome => NETWORK_OUTCOME)
           charged += chargedFor(o, reduceReserve)

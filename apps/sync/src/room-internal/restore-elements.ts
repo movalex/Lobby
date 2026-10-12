@@ -22,7 +22,8 @@
 //    (each one's own mark), the create-only keys, and `lobbyServer` (its author; `lastEditedBy` becomes the
 //    restorer when the words change).
 //  - a deleted (or compacted) element is re-created with its kept id and `created: null`, as the checkpoint
-//    held it (the "Recently deleted" precedent: its author and marks as they were).
+//    held it (the "Recently deleted" precedent: its author and marks as they were; its reactions only while the
+//    reactions kill switch is on, wave N round 1).
 //  - `removeAbsent` ("Undo restore"): an asked id the checkpoint lacks but the board has is removed, its label
 //    with it (it came back with the restore being undone). Wave L round 1: it is an undo, not a wholesale
 //    restore. `restoreClock` is the clock the undone restore committed at (every server write has a clock of its
@@ -175,8 +176,12 @@ function parseBody(raw: unknown): RestoreElementsBody {
   return parsed.data
 }
 
-/** The restore as a server write (runs inside the write's transaction, in the room's drain). */
-export function applyRestoreElements(tx: ServerWriteTx, body: RestoreElementsBody) {
+/**
+ * The restore as a server write (runs inside the write's transaction, in the room's drain). `reactions`: the sync's
+ * kill switch (config.ts DRAFTROOM_REACTIONS); off, a re-created element comes back without the checkpoint's
+ * reaction keys (wave N round 1), so a board strip-keys cleaned for the rollback stays clean.
+ */
+export function applyRestoreElements(tx: ServerWriteTx, body: RestoreElementsBody, reactions = false) {
   const { store } = tx
   const leaseHolderOf = (tx as Partial<ServerWriteLeaseView>).leaseHolderOf
   const leased = (id: unknown) => typeof id === 'string' && !!leaseHolderOf && leaseHolderOf(id) !== null
@@ -314,8 +319,9 @@ export function applyRestoreElements(tx: ServerWriteTx, body: RestoreElementsBod
           lastEditedBy: actor,
           lastEditedAt: tx.now,
         }
-    } else if (!server) {
-      server = lobbyServerOf(prevEl) ?? {
+    } else {
+      if (!reactions) for (const k of Object.keys(lobby)) if (isReactionKey(k)) delete lobby[k]
+      server ??= lobbyServerOf(prevEl) ?? {
         createdBy: actor,
         createdAt: tx.now,
         lastEditedBy: next.type === 'text' ? actor : null,
@@ -656,7 +662,13 @@ async function handle(
 ) {
   const boardId = boardParam(raw)
   const body = parseBody(await readJson(req, RESTORE_ELEMENTS_BODY_LIMIT_BYTES))
-  sendJson(res, 200, await writeBoard(ctx, boardId, (tx) => applyRestoreElements(tx, body)))
+  sendJson(
+    res,
+    200,
+    await writeBoard(ctx, boardId, (tx) =>
+      applyRestoreElements(tx, body, ctx.deps.config.reactions === true),
+    ),
+  )
 }
 
 export function restoreElementsRoutes(ctx: RoomExtensionContext): InternalRoute[] {

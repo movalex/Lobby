@@ -59,7 +59,7 @@ function layout(canvas: LobbyCanvas, plan: RecapPlan) {
     return b
   }
   y += text(plan.title, 36, plan.ai, 'heading').height + GAP
-  y += text(plan.scopeLabel, 18, false, 'item').height + GAP
+  y += text(plan.sharedLabel, 18, false, 'item').height + GAP
   if (plan.headline) y += text(plan.headline, 20, true, 'item').height + SECTION_GAP
   else y += SECTION_GAP - GAP
   if (plan.plannedVsActual?.length) {

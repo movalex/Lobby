@@ -22,7 +22,7 @@ const cell = (s: string) => mdText(s).replace(/\|/g, '\\|')
 const minutes = (n: number | null) => (n === null ? '—' : `${n} min`)
 
 export function recapMarkdown(p: RecapPlan): string {
-  const lines: string[] = [`# ${flat(p.title)}`, '', `_${p.scopeLabel}_`]
+  const lines: string[] = [`# ${flat(p.title)}`, '', `_${p.sharedLabel}_`]
   if (p.headline) lines.push('', mdText(p.headline))
   const list = (title: string, items: readonly string[]) => {
     if (!items.length) return

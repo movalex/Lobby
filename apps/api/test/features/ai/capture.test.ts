@@ -42,6 +42,12 @@ const world = async (opts: Parameters<typeof captureWorld>[0] = {}) => {
   return w
 }
 
+/** a request's system message, user text and schema in UTF-8 bytes (its most, at a token a byte, less the framing) */
+const requestBytes = (r: Parameters<typeof userTextOf>[0]) =>
+  Buffer.byteLength(userTextOf(r), 'utf8') +
+  Buffer.byteLength(String(r.body.messages?.[0]?.content ?? ''), 'utf8') +
+  Buffer.byteLength(JSON.stringify(r.body.response_format?.json_schema?.schema), 'utf8')
+
 const MEETING = [
   'Ana: We should move the shoot to the 14th.',
   'Bo: Agreed, the studio is free then.',
@@ -529,9 +535,12 @@ describe('the transcript', () => {
       expect(Math.ceil(bytes / 3) + 64).toBeLessThanOrEqual(1500)
       expect(userTextOf(r)).toMatch(/part [1-4] of 4/)
     }
-    // the reduce named every note of the parts into one theme (the fake's answer)
+    // the reduce's prompt is cut until its most (a token per UTF-8 byte) fits the input cap (wave N round 1); it named
+    // every note it was sent into one theme (the fake's answer), and the notes it was not sent keep their part's theme
+    const reduce = x.openai.requests[4]
+    expect(reduce && requestBytes(reduce)).toBeLessThanOrEqual(1500)
     const result = CaptureResponse.parse(res.json()).result as Extract<CaptureResult, { kind: 'transcript' }>
-    expect(result.themes.map((t) => t.name)).toEqual(['Whole meeting'])
+    expect(result.themes[0]?.name).toBe('Whole meeting')
     expect(result.decisions).toEqual(['Decision 1', 'Decision 2', 'Decision 3', 'Decision 4'])
     // one ledger row for the five calls, charged what they cost, never more than reserved
     const [row, ...more] = await captureRows(x.api)
@@ -671,9 +680,9 @@ describe('the capture’s own output cap (DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS
 })
 
 describe('what a capture reserves, and the budgets’ refusals', () => {
-  it('a 60,000-character meeting reserves a token per 3 bytes and the answers, not a token per byte: it runs for someone who used 80,000 tokens today', async () => {
+  it('a 60,000-character meeting reserves a token per byte and the answers (wave N round 1): it runs for someone who used 40,000 tokens today', async () => {
     const x = await world()
-    await seedSpentTokens(x, x.alice.userId, x.board, 80_000)
+    await seedSpentTokens(x, x.alice.userId, x.board, 40_000)
     let text = ''
     for (let i = 0; text.length < 60_000; i++)
       text += `Speaker ${i % 4}: we went through point ${i} of the launch plan and agreed on the next step.\n`
@@ -682,11 +691,26 @@ describe('what a capture reserves, and the budgets’ refusals', () => {
     expect(res.statusCode, res.body).toBe(200)
     const [row, ...more] = await captureRows(x.api)
     expect(more).toEqual([])
-    // two parts of about 12,000 tokens, their answers and the themes call: about 54,000 (a token a byte: about 124,000)
+    // two parts of about 32,000 bytes at a token a byte, their answers, and the themes call cut to the input cap
     expect(x.openai.requests.length).toBe(3)
-    expect(row?.reserved_tokens).toBeGreaterThan(60_000 / 3)
-    expect(row?.reserved_tokens).toBeLessThan(60_000)
+    expect(row?.reserved_tokens).toBeGreaterThan(60_000)
+    expect(row?.reserved_tokens).toBeLessThan(110_000)
     expect(row?.charged_tokens).toBeLessThanOrEqual(row?.reserved_tokens ?? 0)
+  })
+
+  it('a transcript of punctuation soup (near a token a byte) reserves every call at a token per byte, as board runs do', async () => {
+    // wave N round 1: the reservation is what gates the call, so it must hold the most each prompt can cost
+    const x = await world()
+    const soup = '!@#$%^&*()[]{};:<>?/|~`+=-_,.'
+    let text = ''
+    for (let i = 0; text.length < 60_000; i++) text += `${soup.slice(i % 7)}${soup}\n`
+    text = text.slice(0, 60_000).trim()
+    const res = await transcript(x.alice, x.board, { text })
+    expect(res.statusCode, res.body).toBe(200)
+    const [row] = await captureRows(x.api)
+    const bytes = x.openai.requests.reduce((sum, r) => sum + requestBytes(r), 0)
+    expect(bytes).toBeGreaterThan(60_000)
+    expect(row?.reserved_tokens).toBeGreaterThanOrEqual(bytes)
   })
 
   it('too little left for this capture is said as such (not “you’ve used your allowance”); a shorter transcript may still fit', async () => {

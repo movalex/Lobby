@@ -168,6 +168,37 @@ describe('restore-elements: a checkpoint’s elements back into the live board (
     expect(ann.schemaErrors).toEqual([])
   })
 
+  it('wave N round 1: with DRAFTROOM_REACTIONS off a re-created note comes back without the checkpoint’s reactions (the rollback stays clean after strip-keys)', async () => {
+    const dataDir = h.dataDir()
+    const on = await h.stack({ dataDir })
+    const b = newBoardId()
+    expect((await seed(on, b, sampleBoard())).status).toBe(201)
+    const ann = await on.client({
+      boardId: b,
+      user: 'ann',
+      query: { [CONNECT_REV_PARAM]: String(CONTRACTS_REV) },
+    })
+    const v = (id: string) => ann.confirmed.get(id)?.version ?? 1
+    await ann.push([{ k: 'p', id: 'N2', pv: v('N2'), c: { [reactionKey('heart', 'ann')]: true } }])
+    const cp = await copies(on, b)
+    expect(Object.keys(cp.find((e) => e.id === 'N2')?.customData?.lobby ?? {})).toContain(
+      reactionKey('heart', 'ann'),
+    )
+    await ann.push([del('N2', v('N2')), del('N2.t', v('N2.t'))])
+    ann.terminate()
+    await on.server.kill('SIGKILL')
+    // the documented rollback: reactions off, then the strip, then (here) a restore before the older sync is live
+    const off = await h.stack({ dataDir, env: { DRAFTROOM_REACTIONS: 'off' } })
+    const stripped = await call(off, 'POST', '/internal/maintenance/strip-keys', { prefix: 'react:' })
+    expect(stripped.status).toBe(200)
+    const res = await restore(off, b, ['N2'], closure(cp, ['N2']))
+    expect(res.skipped).toEqual([])
+    const { byId } = await byIdOf(off, b)
+    expect(byId.get('N2')?.isDeleted).toBe(false)
+    const keys = Object.keys((byId.get('N2')?.customData?.lobby ?? {}) as object)
+    expect(keys.filter((k) => k.startsWith('react:'))).toEqual([])
+  })
+
   it('a text under a lease is skipped LEASED (a label: its container’s lease); the rest is written', async () => {
     const st = await h.stack()
     const b = newBoardId()

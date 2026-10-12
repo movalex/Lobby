@@ -351,6 +351,7 @@ describe('Copy as Markdown', () => {
     title: 'Recap · 8 Oct',
     scope: 'session',
     scopeLabel: 'This session',
+    sharedLabel: 'This session',
     ai: true,
     aiNote: null,
     headline: 'We picked the summer beach screenings and agreed who does what.',
@@ -504,6 +505,31 @@ describe('what a recap says it covers', () => {
     expect((await runRecap(fresh.ctx, 'catch-up', NOW))?.plan?.scopeLabel).toBe(
       `Since ${recapWhen(NOW - DAY_MS)} (the last 24 hours)`,
     )
+  })
+
+  it('the visit time stays in the private panel: the Recap frame and the Markdown say only "Since your last visit"', async () => {
+    // wave N round 1: the time is the server's private visit marker; on the shared board it would be a read receipt
+    const seen = NOW - 5 * 3_600_000
+    writeLastVisit(BOARD_ID, seen)
+    const k = aiKit(board(), { status: OFF })
+    const plan = (await runRecap(k.ctx, 'catch-up', NOW))?.plan as RecapPlan
+    expect(plan.scopeLabel).toBe(`Since your last visit, ${recapWhen(seen)}`)
+    const made = applyRecap(k.canvas, plan, 'usr_ana')
+    const words = made.ids
+      .map(
+        (id) =>
+          k.canvas.items().find((e) => e.id === id) as {
+            text?: string
+            originalText?: string
+            name?: string
+          },
+      )
+      .flatMap((e) => [e?.text, e?.originalText, e?.name])
+      .filter((t): t is string => typeof t === 'string')
+    expect(words).toContain('Since your last visit')
+    expect(words.join('\n')).not.toContain(recapWhen(seen))
+    expect(recapMarkdown(plan)).toContain('_Since your last visit_')
+    expect(recapMarkdown(plan)).not.toContain(recapWhen(seen))
   })
 
   it('a selection recap keeps only the votes on what is in the selected frames; this tab’s last vote is titled so', () => {

@@ -44,6 +44,9 @@ export interface RecapPlan {
   readonly scope: RecapScopeName
   /** "This session", "The selected frames", "Since your last visit, 8 Oct, 09:12", "Since 24 Sep, 16:00 (the last 14 days)" */
   readonly scopeLabel: string
+  /** what the Recap frame and the Markdown say: scopeLabel without the visit time, which is private (the server keeps
+   *  it for this person only; on the shared board it would be a read receipt) */
+  readonly sharedLabel: string
   /** the AI sections are in */
   readonly ai: boolean
   /** why there are none, when there are none ("AI is off on this board.") */
@@ -100,9 +103,10 @@ export function recapWhen(at: number): string {
 const WINDOW_DAYS = Math.round(AI_RECAP_MAX_WINDOW_MS / 86_400_000)
 
 /** Catch me up's label: since the last visit, or the last 24 hours, or the clamp. */
-function catchUpLabel(from: number | null, clamped: boolean, visit: boolean): string {
+function catchUpLabel(from: number | null, clamped: boolean, visit: boolean, shared: boolean): string {
   if (from === null) return SCOPE_LABELS['catch-up']
   if (clamped) return `Since ${recapWhen(from)} (the last ${WINDOW_DAYS} days)`
+  if (visit && shared) return SCOPE_LABELS['catch-up'] // the visit time is private: never on the board
   return visit ? `Since your last visit, ${recapWhen(from)}` : `Since ${recapWhen(from)} (the last 24 hours)`
 }
 
@@ -146,7 +150,11 @@ export function recapPlan(input: RecapInput): RecapPlan {
     scope: input.scope,
     scopeLabel:
       input.scope === 'catch-up'
-        ? catchUpLabel(from, clamped, input.visit === true)
+        ? catchUpLabel(from, clamped, input.visit === true, false)
+        : SCOPE_LABELS[input.scope],
+    sharedLabel:
+      input.scope === 'catch-up'
+        ? catchUpLabel(from, clamped, input.visit === true, true)
         : SCOPE_LABELS[input.scope],
     ai: r !== null,
     aiNote: r ? null : input.aiNote,
