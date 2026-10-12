@@ -545,9 +545,11 @@ export async function renderPdf(
       }
       if (!bounds || bounds.width <= 0 || bounds.height <= 0) continue // deleted meanwhile
       const plan = planPdfPage(bounds.width, bounds.height, pageFormat)
+      // the page's title and its header picture (a title the standard font cannot show), made once: a vector page
+      // that falls back reuses them for its image page
+      const title = bookmarkTitle(spec.title, builder.pageCount)
+      const headerImage = isWinAnsi(title) ? null : await titleImage(title, plan)
       if (vector) {
-        const title = bookmarkTitle(spec.title, builder.pageCount)
-        const headerImage = isWinAnsi(title) ? null : await titleImage(title, plan)
         const svg = await vectorSvg(canvas, target, o).catch(() => null)
         if (opts.signal?.aborted) throw new ExportCancelled()
         const outcome = svg
@@ -557,7 +559,9 @@ export async function renderPdf(
               widthPx: bounds.width,
               heightPx: bounds.height,
               svg,
-              ...(headerImage ? { headerImage } : {}),
+              // a copy: the PDF worker takes (transfers) the bytes it is sent
+              ...(headerImage ? { headerImage: { ...headerImage, bytes: headerImage.bytes.slice() } } : {}),
+              // only the file cards' names: the rest of a vector page's text is drawn as real text
               texts: pageTexts(canvas, targetElements(canvas, target), bounds, { cardsOnly: true }),
             })
           : { vector: false as const, reason: 'the frame’s drawing could not be made' }
@@ -576,8 +580,6 @@ export async function renderPdf(
       })
       if (opts.signal?.aborted) throw new ExportCancelled()
       const blob = await blobOf(c, format === 'png' ? 'image/png' : 'image/jpeg', 0.92)
-      const title = bookmarkTitle(spec.title, builder.pageCount)
-      const headerImage = isWinAnsi(title) ? null : await titleImage(title, plan)
       await builder.addPage({
         title,
         format: pageFormat,

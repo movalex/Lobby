@@ -3,12 +3,11 @@
 // It is also the N6-1 spike: fontkit must read the self-hosted woff2 files (brotli), or this fails at the embed.
 //
 // SKIPPED while @pdf-lib/fontkit is not installed (./fontkit.ts answers null): this branch could not fetch it.
-// The fonts are the installed engine's own dist/prod/fonts files (read from disk, as the build serves them).
+// The fonts are the files the build serves (canvas/export/test-fixtures.ts reads them from the installed engine).
 import { readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
 import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRawStream } from 'pdf-lib'
 import { describe, expect, it } from 'vitest'
+import { servedFontFile } from '../../../canvas/export/test-fixtures.ts'
 import { createPdfBuilder } from '../pdf-build.ts'
 import { loadFontkit } from './fontkit.ts'
 
@@ -17,19 +16,6 @@ const PNG = Uint8Array.from(
   atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=='),
   (c) => c.charCodeAt(0),
 )
-
-/** /excalidraw-assets/fonts/<Family>/<file>.woff2 → the installed engine's file (what the build serves). */
-function fontFile(url: string): Uint8Array | null {
-  const m = /^\/excalidraw-assets\/fonts\/([\w-]+)\/([\w.-]+\.woff2)$/.exec(url)
-  if (!m) return null
-  const require = createRequire(new URL('../../../../package.json', import.meta.url))
-  const dir = join(dirname(require.resolve('@excalidraw/excalidraw')), 'fonts')
-  try {
-    return new Uint8Array(readFileSync(join(dir, m[1] as string, m[2] as string)))
-  } catch {
-    return null
-  }
-}
 
 describe.skipIf(!fontkit)('vector pages with Lobby’s fonts (needs @pdf-lib/fontkit)', () => {
   it('Latin, CJK and emoji: embedded subset TrueType fonts with ToUnicode, the emoji a picture, no page image', async () => {
@@ -43,7 +29,7 @@ describe.skipIf(!fontkit)('vector pages with Lobby’s fonts (needs @pdf-lib/fon
       vector: {
         fontkit,
         deps: {
-          fetchFace: async (url) => fontFile(url),
+          fetchFace: async (url) => servedFontFile(url),
           glyphs: async () => ({ png: PNG, width: 20, ascent: 16, descent: 4 }),
         },
       },

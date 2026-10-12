@@ -10,6 +10,7 @@
 // handed in, so this is tested in Node.
 
 import { inRanges, parseUnicodeRange, type Ranges } from '../../../canvas/export/fonts.ts'
+import { isWinAnsiCodePoint } from '../pdf-text.ts'
 import { num, type Style } from './svg-scene.ts'
 import { textOf, type XElement } from './svg-tree.ts'
 
@@ -71,13 +72,8 @@ export type Draw =
   | { readonly kind: 'standard' }
   | { readonly kind: 'glyph' }
 
-// Windows-1252 (what the standard PDF fonts encode): ASCII, Latin-1 and these 27 code points (pdf-build.ts isWinAnsi).
-const WIN_ANSI_EXTRA = new Set([
-  0x20ac, 0x201a, 0x192, 0x201e, 0x2026, 0x2020, 0x2021, 0x2c6, 0x2030, 0x160, 0x2039, 0x152, 0x17d, 0x2018,
-  0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x2dc, 0x2122, 0x161, 0x203a, 0x153, 0x17e, 0x178,
-])
-export const winAnsi = (cp: number) =>
-  (cp >= 0x20 && cp <= 0x7e) || (cp >= 0xa0 && cp <= 0xff) || WIN_ANSI_EXTRA.has(cp)
+/** Whether the standard PDF fonts (Helvetica) encode a code point: Windows-1252 (../pdf-text.ts, one table). */
+export const winAnsi = isWinAnsiCodePoint
 
 /** Right-to-left scripts (Hebrew, Arabic, Syriac, Thaana, N'Ko…): never laid out here (the page is drawn as an image). */
 export const isRtl = (cp: number) =>

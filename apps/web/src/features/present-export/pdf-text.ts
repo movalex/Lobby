@@ -11,12 +11,13 @@ const WIN_ANSI_EXTRA = new Set(
 
 /** Whether the standard PDF font can show all of `text` (else the browser draws it as an image). */
 export function isWinAnsi(text: string): boolean {
-  for (const ch of text.normalize('NFC')) {
-    const cp = ch.codePointAt(0) ?? 0
-    if ((cp >= 0x20 && cp <= 0x7e) || (cp >= 0xa0 && cp <= 0xff) || WIN_ANSI_EXTRA.has(cp)) continue
-    return false
-  }
+  for (const ch of text.normalize('NFC')) if (!isWinAnsiCodePoint(ch.codePointAt(0) ?? 0)) return false
   return true
+}
+
+/** Whether the standard PDF fonts encode this code point (the vector page's text runs read the same table). */
+export function isWinAnsiCodePoint(cp: number): boolean {
+  return (cp >= 0x20 && cp <= 0x7e) || (cp >= 0xa0 && cp <= 0xff) || WIN_ANSI_EXTRA.has(cp)
 }
 
 /** Single-line, bounded title text ('' when nothing is left). */
