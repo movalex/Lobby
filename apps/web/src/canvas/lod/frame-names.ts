@@ -24,6 +24,7 @@
  * a scene change) and writes the stylesheet. Browser only for the install.
  */
 import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
+import { noteSceneWalk } from '../sync/walks.ts'
 
 export interface NameBox {
   readonly x: number
@@ -93,6 +94,13 @@ interface FrameLike {
   readonly height: number
 }
 
+/** The ids of a change batch (LobbyCanvas `change`). */
+export interface ChangedIds {
+  readonly created: readonly string[]
+  readonly updated: readonly string[]
+  readonly deleted: readonly string[]
+}
+
 export interface FrameNameGuard {
   /** the frames whose name is hidden now */
   hidden(): ReadonlySet<string>
@@ -112,7 +120,11 @@ export interface FrameNameGuard {
 export function installFrameNameGuard(o: {
   readonly api: ExcalidrawImperativeAPI
   readonly root: HTMLElement
-  readonly subscribe?: (onChange: () => void) => () => void
+  /**
+   * the scene's change listener; with the changed ids (N1-6, wave N), a batch that touches no frame (a note dragged on
+   * a 10k board, every pointer move) re-reads nothing
+   */
+  readonly subscribe?: (onChange: (changed?: ChangedIds) => void) => () => void
 }): FrameNameGuard {
   const { api, root } = o
   const doc = root.ownerDocument
@@ -130,10 +142,34 @@ export function installFrameNameGuard(o: {
   let lastKey = ''
 
   const framesNow = (): FrameLike[] => {
-    frames ??= (api.getSceneElements() as unknown as readonly FrameLike[]).filter(
-      (e) => e.type === 'frame' && !e.isDeleted,
-    )
+    if (!frames) {
+      noteSceneWalk('frame-names.frames')
+      frames = (api.getSceneElements() as unknown as readonly FrameLike[]).filter(
+        (e) => e.type === 'frame' && !e.isDeleted,
+      )
+    }
     return frames
+  }
+  /**
+   * N1-6: a change batch moves the frames list by its ids alone (no walk): false when it touches no frame (one this
+   * guard knows, or one that is a frame now). Before the list exists there is nothing to move.
+   */
+  const applyChange = (c: ChangedIds): boolean => {
+    if (!frames) return true
+    const map = api.getSceneElementsMapIncludingDeleted() as unknown as ReadonlyMap<string, FrameLike>
+    let byId: Map<string, FrameLike> | null = null
+    for (const list of [c.created, c.updated, c.deleted])
+      for (const id of list) {
+        const el = map.get(id)
+        const isFrame = el?.type === 'frame' && !el.isDeleted
+        if (!isFrame && !frames.some((f) => f.id === id)) continue
+        byId ??= new Map(frames.map((f) => [f.id, f]))
+        byId.delete(id)
+        if (isFrame && el) byId.set(id, el)
+      }
+    if (!byId) return false
+    frames = [...byId.values()]
+    return true
   }
 
   const measure = () => {
@@ -192,8 +228,10 @@ export function installFrameNameGuard(o: {
   offs.push(() => win.removeEventListener('resize', onResize))
   if (o.subscribe)
     offs.push(
-      o.subscribe(() => {
-        frames = null
+      o.subscribe((changed) => {
+        if (changed) {
+          if (!applyChange(changed)) return
+        } else frames = null
         dirty = true
         schedule()
       }),

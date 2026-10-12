@@ -36,7 +36,9 @@ import {
   Pong,
   ServerMessage,
 } from '@draftroom/canvas-schema/protocol'
+import { timelineMark as mark } from '../timeline.ts'
 import type { ServerInbound, Transport, TransportClose, TransportState } from '../types.ts'
+import { type SnapshotDecode, SnapshotDecodeLost } from './snapshot-protocol.ts'
 
 /**
  * The connect URL's query beyond the ticket: the tab id (`sessionId`) and, since CONTRACTS_REV 12, the contracts
@@ -82,7 +84,16 @@ export interface SocketTransportOptions {
   readonly heartbeatMs?: number
   readonly now?: () => number
   readonly log?: (event: string, detail: Readonly<Record<string, unknown>>) => void
+  /**
+   * N1-1 (wave N): where the binary snapshot frame is decoded (./snapshot-decoder.ts: a module Worker, or the main
+   * thread); absent: `decodeSnapshotFrame` here, as before. Its `warm(bytes)` runs at a reset welcome with the
+   * welcome's size hint (`snapshot.bytes`, the frame's gzip length: the frame follows).
+   */
+  readonly decoder?: SnapshotDecode
 }
+
+/** N1-1: the close a socket is dropped with when the snapshot worker lost its frame (the next welcome resends it). */
+export const DECODE_LOST_CLOSE = { code: 4000, reason: 'decode' } as const
 
 export interface SocketTransport extends Transport {
   /** opens the first socket (idempotent) */
@@ -212,6 +223,10 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
         // the close that follows is terminal with this reason, whatever its frame says (SMK-2)
         if (r.data.type === 'notice' && r.data.code === 'CLOSING' && gen === generation)
           announced = r.data.detail || 'UNKNOWN_ERROR'
+        // N1-1: a reset welcome's snapshot frame follows: the decoder's worker starts while it downloads, when the
+        // welcome's size hint says it is large enough to decode there (a small board's never starts one)
+        if (r.data.type === 'welcome' && r.data.reset && r.data.snapshot)
+          opts.decoder?.warm(r.data.snapshot.bytes)
         opts.onRaw?.(r.data)
         deliver(r.data)
         return
@@ -219,11 +234,21 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
       const bytes = await bytesOf(data)
       if (!bytes) return
       try {
-        const frame = await decodeSnapshotFrame(bytes)
+        // wave N (the N1 specs): the decode's window on the page's timeline
+        mark('lobby.snapshot.received')
+        const frame = await (opts.decoder ? opts.decoder.decode(bytes) : decodeSnapshotFrame(bytes))
+        mark('lobby.snapshot.decoded')
         if (gen !== generation) return
         opts.onRaw?.(frame)
         deliver(frame)
       } catch (err) {
+        if (err instanceof SnapshotDecodeLost && gen === generation && !stopped) {
+          // the worker died with the frame (its bytes went with it): this socket goes, and the reconnect's welcome
+          // brings the snapshot again (decoded on the main thread from then on)
+          opts.log?.('snapshot_decode_lost', {})
+          dropSocket(DECODE_LOST_CLOSE)
+          return
+        }
         opts.log?.('snapshot_frame_invalid', { error: String(err).slice(0, 200) })
       }
     })
@@ -239,6 +264,20 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
     if (announced === null || (code === CLOSE_TERMINAL && reason)) return { code, reason }
     opts.log?.('socket_close_announced', { code, reason: announced })
     return { code: CLOSE_TERMINAL, reason: announced }
+  }
+  /** Drops the current socket now (reported closed with `close`, then a reconnect), as the heartbeat's drop does. */
+  const dropSocket = (close: TransportClose) => {
+    const sock = ws
+    generation++
+    ws = null
+    stopBeat()
+    try {
+      sock?.close(close.code, close.reason)
+    } catch {
+      // closing a dead socket may throw: it is gone either way
+    }
+    setState('closed', close)
+    scheduleReconnect()
   }
   /** Every heartbeatMs on an open socket: a ping; a drop when the previous ping got no pong in time. */
   const startBeat = (sock: WebSocketLike, gen: number) => {

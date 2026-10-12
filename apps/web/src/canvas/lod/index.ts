@@ -25,9 +25,21 @@
 import type { BinaryFiles, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 import type { CanvasChange, LobbyCanvas } from '../api/lobby-canvas.ts'
+import { SIZE_AWARE_LOD } from '../sync/flags.ts'
+import { noteSceneWalk } from '../sync/walks.ts'
 import type { LodTarget } from './cull.ts'
 import { installFrameNameGuard } from './frame-names.ts'
-import { type LodBitmap, type LodElement, LodModel, type LodRect, lodActiveAt, lodScale } from './model.ts'
+import {
+  LOD_ZOOM,
+  type LodBitmap,
+  type LodElement,
+  LodModel,
+  type LodRect,
+  lodActiveAt,
+  lodBucketOf,
+  lodScale,
+  lodThreshold,
+} from './model.ts'
 
 export { createLodTarget, type LodTarget } from './cull.ts'
 export { LOD_ZOOM } from './model.ts'
@@ -44,13 +56,27 @@ export interface LodOptions {
   readonly root: HTMLElement
   /** default true */
   readonly enabled?: boolean
+  /** N1-5: the size-aware pass (zoom buckets, the memory cap, loose-element tiles); default SIZE_AWARE_LOD */
+  readonly sizeAware?: boolean
 }
 
 export interface LodState {
   readonly enabled: boolean
+  /** N1-5: the size-aware pass is on (SIZE_AWARE_LOD, or the page's override, or setSizeAware) */
+  readonly sizeAware: boolean
   readonly active: boolean
   readonly zoom: number
   readonly frames: number
+  /** N1-5: the loose-element tiles */
+  readonly tiles: number
+  /** N1-5: the zoom bucket the bitmaps are drawn for, and the zoom below which the pass is on now */
+  readonly bucket: number
+  readonly threshold: number
+  readonly bitmaps: number
+  readonly bytes: number
+  readonly evicted: number
+  readonly live: number
+  readonly pendingInView: number
   readonly ready: number
   readonly stale: number
   readonly rendering: number
@@ -68,6 +94,8 @@ export interface LodState {
 
 export interface LodHandle {
   setEnabled(on: boolean): void
+  /** N1-5 (the fps spec's comparison): the size-aware pass on or off (SIZE_AWARE_LOD), the model rebuilt */
+  setSizeAware(on: boolean): void
   state(): LodState
   dispose(): void
 }
@@ -235,7 +263,9 @@ export function installLod(o: LodOptions): LodHandle {
     layer.forget(b.image)
     closeImage(b.image)
   }
-  const model = new LodModel<Image>({ onDrop: release })
+  let sizeAware = o.sizeAware ?? SIZE_AWARE_LOD
+  let model = new LodModel<Image>({ onDrop: release, sizeAware })
+  let threshold = 0
   let enabled = o.enabled ?? true
   let active = false
   let disposed = false
@@ -249,6 +279,7 @@ export function installLod(o: LodOptions): LodHandle {
 
   const elements = () =>
     api.getSceneElementsMapIncludingDeleted() as unknown as ReadonlyMap<string, LodElement>
+  noteSceneWalk('lod.reset')
   model.reset(elements().values())
 
   const viewNow = () => {
@@ -284,7 +315,7 @@ export function installLod(o: LodOptions): LodHandle {
         return
       }
       if (!layer.mount(o.root)) return
-      const settled = layer.paint(model.drawable(), viewNow(), win.devicePixelRatio || 1)
+      const settled = layer.paint(model.drawable(now()), viewNow(), win.devicePixelRatio || 1)
       // a new scale: paint once more when it has held, which asks for the copies at that scale
       if (!settled && settleTimer === null)
         settleTimer = setTimeout(() => {
@@ -326,7 +357,7 @@ export function installLod(o: LodOptions): LodHandle {
     let bitmap: Bitmap | null = null
     const t0 = now()
     try {
-      bitmap = await renderFrame(next, job.rect)
+      bitmap = await renderRegion(next, job)
     } catch (e) {
       stats.failures++
       console.warn('lod: a frame could not be rendered', next, e)
@@ -336,19 +367,28 @@ export function installLod(o: LodOptions): LodHandle {
     stats.renders++
     stats.renderMs += now() - t0
     if (disposed) return
-    if (model.finish(next, job.version, bitmap)) apply()
+    if (model.finish(next, job.version, bitmap, now())) apply()
     else if (bitmap) release(bitmap)
     // yield to input between renders
     scheduleWork(16)
   }
 
-  const renderFrame = async (frameId: string, rect: LodRect): Promise<Bitmap | null> => {
+  /**
+   * One region's bitmap at its job's bucket: a frame's own export (its members clipped to it), or (N1-5) a tile's
+   * loose elements clipped to the tile's rectangle.
+   */
+  const renderRegion = async (
+    id: string,
+    job: { rect: LodRect; bucket: number; kind: 'frame' | 'tile'; members: readonly string[] },
+  ): Promise<Bitmap | null> => {
     const { exportSceneCanvas } = await import('../export/scene.ts')
-    const scale = lodScale(rect, win.devicePixelRatio || 1)
+    const rect = job.rect
+    const scale = lodScale(rect, win.devicePixelRatio || 1, job.bucket)
+    if (job.kind === 'tile' && !job.members.length) return null
     const out = await exportSceneCanvas(
       { api, boardId: null, resolver: null, isHidden: o.isHidden },
       {
-        frameId,
+        ...(job.kind === 'frame' ? { frameId: id } : { ids: job.members, bounds: rect }),
         scale,
         maxSide: 4096,
         background: false,
@@ -368,13 +408,33 @@ export function installLod(o: LodOptions): LodHandle {
   /** The model's frames match the scene's (a snapshot installed without a change batch): else rebuilt. */
   const reconcile = () => {
     let frames = 0
+    noteSceneWalk('lod.reconcile')
     for (const e of elements().values()) if (e.type === 'frame' && !e.isDeleted) frames++
     if (frames !== model.stats().frames) model.reset(elements().values())
   }
 
   const updateActive = () => {
     const was = active
-    active = enabled && !disposed && lodActiveAt(api.getAppState().zoom.value)
+    const s = api.getAppState()
+    const zoom = s.zoom.value
+    // N1-5: the board's size and what is in view decide the zoom it turns on below; the bucket follows the zoom
+    const z = zoom || 1
+    const view = { x: -s.scrollX, y: -s.scrollY, width: s.width / z, height: s.height / z }
+    const live = model.liveCount()
+    const visible = sizeAware ? model.visibleCount(view) : 0
+    model.setView(view)
+    active = enabled && !disposed && lodActiveAt(zoom, live, visible, sizeAware)
+    threshold = lodThreshold(live, visible, sizeAware)
+    // N1-5: the loose-element tiles on a large board only (a small one keeps the pass as it was)
+    model.setTilesActive(sizeAware && threshold > LOD_ZOOM)
+    const bucketWas = model.bucket
+    // the bucket follows the zoom while the pass is on; off, it stays the last one (its bitmaps kept for the next time)
+    if (active) model.setBucket(lodBucketOf(zoom, sizeAware))
+    if (active && was && model.bucket !== bucketWas) {
+      apply()
+      scheduleWork()
+      return
+    }
     if (active !== was) {
       if (active) reconcile()
       apply()
@@ -390,6 +450,8 @@ export function installLod(o: LodOptions): LodHandle {
     canvas.on('change', (c: CanvasChange) => {
       const map = elements()
       model.changed([...c.created, ...c.updated, ...c.deleted], (id) => map.get(id), now())
+      // N1-5: a board that grew past (or fell below) the large-board size turns the larger threshold and the tiles on (off)
+      if (sizeAware && c.created.length + c.deleted.length > 0) updateActive()
       if (active) {
         apply()
         scheduleWork(model.nextDue() !== null ? (model.nextDue() as number) - now() + 5 : 0)
@@ -422,6 +484,7 @@ export function installLod(o: LodOptions): LodHandle {
         if (added.length) {
           const fresh = new Set(added)
           const ids: string[] = []
+          noteSceneWalk('lod.files')
           for (const e of elements().values()) {
             const fileId = (e as { fileId?: string | null }).fileId
             if (e.type === 'image' && fileId && fresh.has(fileId)) ids.push(e.id)
@@ -445,13 +508,25 @@ export function installLod(o: LodOptions): LodHandle {
       updateActive()
       if (!on) layer.clear()
     },
+    setSizeAware(on) {
+      if (on === sizeAware) return
+      sizeAware = on
+      model.reset([])
+      model = new LodModel<Image>({ onDrop: release, sizeAware })
+      noteSceneWalk('lod.reset')
+      model.reset(elements().values())
+      active = false
+      updateActive()
+    },
     state() {
       const s = model.stats()
       return {
         enabled,
+        sizeAware,
         active,
         zoom: api.getAppState().zoom.value,
         ...s,
+        threshold,
         drawn: layer.drawn,
         renders: stats.renders,
         renderMs: Math.round(stats.renderMs),

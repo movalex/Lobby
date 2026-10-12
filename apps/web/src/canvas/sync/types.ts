@@ -160,6 +160,32 @@ export interface EngineCoreOptions {
   readonly clearTimer?: (handle: unknown) => void
   /** `echo_suspect` and other diagnostics (dev and test builds fail the run on it) */
   readonly log?: (event: string, detail: Readonly<Record<string, unknown>>) => void
+  /** Wave N (WS1, N1-3/N1-4): how a reset welcome's snapshot is installed (absent: sync/flags.ts, one apply) */
+  readonly snapshotApply?: SnapshotApplyOptions
+}
+
+/** Wave N (WS1): how a reset welcome's snapshot is installed in the scene. */
+export interface SnapshotApplyOptions {
+  /**
+   * N1-3: over a scene that shows a copy already (a warm open's painted cache, a reconnect's reset), keep every
+   * scene element the snapshot row equals by (id, version, versionNonce, isDeleted). Default: DIFF_APPLY.
+   */
+  readonly diff?: boolean
+  /** N1-4: a cold open's large snapshot is installed in chunks, one per frame (absent or null: one apply). */
+  readonly chunks?: ChunkScheduler | null
+}
+
+/** N1-4: the frames a chunked install runs on (the board page's requestAnimationFrame; tests' manual clock). */
+export interface ChunkScheduler {
+  /** a snapshot of more than this many elements is chunked (CHUNK_THRESHOLD) */
+  readonly threshold: number
+  /** about this many elements per chunk (CHUNK_SIZE; a container and its labels are never split) */
+  readonly size: number
+  /** runs `fn` at the next frame; returns a handle for `cancel` */
+  frame(fn: () => void): unknown
+  cancel(handle: unknown): void
+  /** the ids the first chunk takes besides every frame: the elements inside the initial view */
+  first?(elements: readonly SceneElement[]): ReadonlySet<string>
 }
 
 /** The per-tab offline queue store (§2.5.6). The browser's is IndexedDB with a Web Locks lock per tab. */

@@ -4,6 +4,8 @@
  * `browser/add-files.ts` (`checkAddFiles`); `add-files.test.ts` shows they fail on an engine that replaces.
  *
  *   node apps/web/test/engine-probe/add-files/run-browser.ts [--port=7752]   (default: E2E_PORT_BASE + 36 when set)
+ *
+ * Then (wave N) the render-cull probe, so `pnpm probe:browser` runs it too: ../render-cull/run-browser.ts.
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -34,3 +36,5 @@ try {
 } finally {
   await s.close()
 }
+// wave N (WS1, N1-5): the render-override cull probe, in its own page (it only ever sets a failing exit code)
+await import('../render-cull/run-browser.ts')

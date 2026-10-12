@@ -13,6 +13,7 @@ import { runA8InBrowser } from './a8.ts'
 import { type AddFilesApi, checkAddFiles } from './add-files.ts'
 import { calibrate } from './calibrate.ts'
 import { layoutCorpusInBrowser } from './layout-corpus.ts'
+import { checkRenderCull } from './render-cull.ts'
 
 type Api = Parameters<NonNullable<React.ComponentProps<typeof Excalidraw>['onExcalidrawAPI']>>[0]
 
@@ -26,6 +27,7 @@ declare global {
       layout?: (labels: CorpusLabel[]) => ReturnType<typeof layoutCorpusInBrowser>
       a8?: () => ReturnType<typeof runA8InBrowser>
       addFiles?: () => ReturnType<typeof checkAddFiles>
+      renderCull?: () => ReturnType<typeof checkRenderCull>
     }
   }
 }
@@ -47,6 +49,7 @@ const onApi = (api: Api) => {
       window.__probe.layout = (labels) => layoutCorpusInBrowser(labels)
       window.__probe.a8 = () => runA8InBrowser(api)
       window.__probe.addFiles = () => checkAddFiles(api as unknown as AddFilesApi)
+      window.__probe.renderCull = () => checkRenderCull(api)
       window.__probe.ready = true
     } else if (performance.now() - started > 30_000) {
       window.__probe.error = 'Excalidraw did not register its font faces within 30 s'

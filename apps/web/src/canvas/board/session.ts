@@ -41,6 +41,14 @@ import type {
   LobbyTx,
   ScenePoint,
 } from '../api/lobby-canvas.ts'
+import {
+  absorbIntoSceneIndex,
+  itemsCallerOf,
+  noteSceneWalk,
+  resetSceneWalks,
+  sceneWalks,
+  sceneWalksCounted,
+} from '../api/parts/scene-index.ts'
 import { createFeatureRegistries, type ExternalContent, type FeatureRegistries } from '../api/registries.ts'
 import { markRoomReady, ROOM_READY_FALLBACK_MS, roomReadyOf } from '../api/room-ready.ts'
 import type { LobbyRole } from '../engine/interaction.ts'
@@ -54,6 +62,7 @@ import { installBoardOverrides, overridesLodTarget } from '../overrides.ts'
 import { createCanvasPort, type LobbyCanvasPort } from '../port-impl.ts'
 import { PresenceHub } from '../presence/hub.ts'
 import { attachPresencePointer, type PresenceSample } from '../presence/pointer.ts'
+import { animationFrames, idsInView } from '../sync/adapter/chunk-frames.ts'
 import { attachEngine, createExcalidrawScene } from '../sync/adapter/excalidraw.ts'
 import { type GuestQueue, guestOfflineQueue } from '../sync/adapter/offline-guest.ts'
 import { createIdbOfflineStore, type IdbOfflineStore, tabId } from '../sync/adapter/offline-idb.ts'
@@ -70,9 +79,18 @@ import {
   RESUME_FROM_CACHE,
 } from '../sync/adapter/snapshot-cache.ts'
 import { LobbyEngineCore } from '../sync/core/engine.ts'
+import { SPEED_FLAGS_KEY, setDevChecks, setSpeedFlagOverrides, speedFlag } from '../sync/flags.ts'
 import { bump } from '../sync/headless/scene.ts'
+import { timelineMark } from '../sync/timeline.ts'
+import { createSnapshotDecoder, type SnapshotDecoder } from '../sync/transport/snapshot-decoder.ts'
 import { connectQuery, createSocketTransport, type SocketTransport } from '../sync/transport/socket.ts'
-import type { OfflineQueueStore, SaveStatus, SceneAdapter, SceneElement } from '../sync/types.ts'
+import type {
+  GestureState,
+  OfflineQueueStore,
+  SaveStatus,
+  SceneAdapter,
+  SceneElement,
+} from '../sync/types.ts'
 import { IDLE_GESTURE } from '../sync/types.ts'
 import { install as installFacade } from '../test-facade.ts'
 import { attachCustomTools, type CustomToolClick } from '../tools/customTools.ts'
@@ -86,6 +104,9 @@ import { BoardInput } from './input.ts'
 import { PeerStore } from './peers.ts'
 import { groupsWithoutHiddenMembers } from './select-groups.ts'
 import { SettingsStore } from './settings.ts'
+
+// N1-2 (wave N): the core deep-freezes its confirmed copies in the Vite dev server (and vitest), never in a build
+setDevChecks(import.meta.env.DEV)
 
 export type BoardPhase = 'connecting' | 'preparing' | 'ready' | 'offline' | 'closed'
 
@@ -111,6 +132,16 @@ export interface LobbyBoardSnapshot {
    * interaction), until the first welcome replaces it; when that copy was saved. Null otherwise.
    */
   readonly cached: { readonly savedAt: number; readonly exact: boolean } | null
+  /**
+   * N1-4 (wave N): a cold open's large snapshot is being installed in chunks: the canvas shows them (no skeleton),
+   * read-only, and the save state still says connecting, until the last chunk and the welcome
+   */
+  readonly applying: boolean
+  /**
+   * N1-4: a chunked install the socket cut short left part of the board on the canvas: the page covers it with the
+   * skeleton ('Reconnecting…') until the next welcome, so a partial board is never presented as the board
+   */
+  readonly partial: boolean
 }
 
 export interface NoticeSink {
@@ -162,6 +193,8 @@ export class LobbyBoardSession {
   readonly settings: SettingsStore
   readonly tab: string
   readonly transport: SocketTransport
+  /** N1-1 (wave N): where this session's snapshot frames are decoded (a module Worker, or the main thread) */
+  private readonly decoder: SnapshotDecoder
   readonly core: LobbyEngineCore
   readonly lease: LeaseClient
   readonly input: CanvasInput
@@ -195,6 +228,8 @@ export class LobbyBoardSession {
   private readonly concernListeners = new Map<BoardConcern, Set<() => void>>()
   private readonly eventListeners = new Map<BoardEvent, Set<(...a: never[]) => void>>()
   private lastTool: string | null = null
+  /** N1-6: the engine's last gesture state (the drag that holds the pointer) */
+  private gestureNow: GestureState | null = null
   private lastEditing: string | null = null
   private rootEl: HTMLElement | null = null
   private contentSink: ContentSink | null = null
@@ -220,6 +255,13 @@ export class LobbyBoardSession {
   /** what the last welcome said this person is (null: no welcome yet): only an account's copy is kept */
   private welcomedGuest: boolean | null = null
   private usageCounted = false
+  /** wave N: `open.apply:<how>` counted for this session's first welcome */
+  private applyCounted = false
+  /** N1-1 (e2e, debug): where this session's snapshot frames decode now (null: the worker is starting) */
+  get decodeSide(): 'worker' | 'main' | null {
+    return this.decoder.side
+  }
+
   /** M6 (e2e, debug): what the open did with the cache */
   readonly cacheInfo: {
     painted: boolean
@@ -233,6 +275,8 @@ export class LobbyBoardSession {
 
   constructor(o: LobbyBoardSessionOptions) {
     this.o = o
+    // wave N (WS1): a dev-auth page (the e2e build, local dev; never a production bundle) may switch a speed part
+    if (DEV_AUTH_ENABLED) readSpeedFlagOverrides()
     this.tab = tabId()
     this.ticketRole = o.first.role
     this.cacheOff = !o.cache
@@ -273,7 +317,15 @@ export class LobbyBoardSession {
       origin: location,
     })
     this.detach.push(() => this.tickets.cancel())
+    // N1-1: the snapshot decode off the main thread (WORKER_DECODE), its worker ended with this session
+    this.decoder = createSnapshotDecoder({
+      worker: speedFlag('WORKER_DECODE'),
+      onDecoded: (side) => countUsage(`open.decode:${side}`),
+    })
+    const decoder = this.decoder
+    this.detach.push(() => decoder.dispose())
     this.transport = createSocketTransport({
+      decoder,
       // the tab id and, since CONTRACTS_REV 12, this build's revision (socket.ts connectQuery)
       url: async () => `${await this.tickets.uri()}&${connectQuery(this.tab)}`,
       // L7: the ticket goes in the handshake's Sec-WebSocket-Protocol, never in the socket URL
@@ -301,6 +353,11 @@ export class LobbyBoardSession {
       scene: this.sceneAdapter(),
       tab: this.tab,
       offline,
+      // wave N (WS1): a warm open's reset welcome as a diff (N1-3), a cold open's large one in chunks (N1-4)
+      snapshotApply: {
+        diff: speedFlag('DIFF_APPLY'),
+        chunks: speedFlag('CHUNKED_APPLY') ? animationFrames((els) => this.idsInInitialView(els)) : null,
+      },
     })
     const me = { sid: `${o.first.user.id}:${this.tab}`, uid: o.first.user.id, name: o.first.user.name }
     this.lease = new LeaseClient(this.core.leaseConnect, me)
@@ -320,6 +377,8 @@ export class LobbyBoardSession {
       edit: null,
       roster: [],
       cached: null,
+      applying: false,
+      partial: false,
     }
     this.input = new CanvasInput({
       role: () => (this.snap.readonly ? 'readonly' : 'editor'),
@@ -478,7 +537,27 @@ export class LobbyBoardSession {
   // ---- the engine core's events --------------------------------------------------------------------------
 
   private onCoreEvent(e: Parameters<Parameters<LobbyEngineCore['on']>[0]>[0]): void {
+    if (e.kind === 'applying') {
+      // N1-4: the chunks show at once (no skeleton), read-only, until the last one; the welcome that follows sets the
+      // role (a socket that went first leaves it read-only until the next welcome)
+      if (e.on) {
+        if (!this.snap.applying) timelineMark('lobby.chunks.start')
+        this.set({ applying: true, partial: false, readonly: true, role: 'viewer' })
+      } else {
+        timelineMark('lobby.chunks.end')
+        // cut short (the socket went): what shows is part of the board, covered until the next welcome
+        this.set({ applying: false, partial: !!e.aborted })
+      }
+      return
+    }
     if (e.kind === 'welcome') {
+      timelineMark('lobby.welcome')
+      // wave N: how this open's snapshot went into the scene (once per session)
+      const how = this.core.resetApply
+      if (!this.applyCounted && how) {
+        this.applyCounted = true
+        countUsage(`open.apply:${how}`)
+      }
       this.welcomedGuest = e.welcome.you.guest
       if (e.welcome.you.guest) {
         this.guest = true
@@ -515,6 +594,7 @@ export class LobbyBoardSession {
         role: lobbyRoleOf(this.ticketRole, readonly),
         roster: [...this.core.roster().values()],
         cached: null,
+        partial: false,
       })
       this.emit('docChanged', Object.keys(e.welcome.doc))
       this.concern('docKeys')
@@ -588,7 +668,11 @@ export class LobbyBoardSession {
     } else if (e.kind === 'applied') {
       const api = this.api
       if (api) {
-        const byId = new Map(api.getSceneElementsIncludingDeleted().map((x) => [x.id, x]))
+        // N1-6: lookups in the engine's own map (no whole-scene Map per apply: a peer's drag moves arrive here)
+        const byId = api.getSceneElementsMapIncludingDeleted()
+        // the scene index answers for these ids before a `change` listener reads it (the port's `changed` for them
+        // comes only with the engine's next onChange)
+        if (this.port) absorbIntoSceneIndex(this.port, e.ids)
         this.emitChange(this.classifier.applied(e.ids, (id) => byId.get(id) as never))
       }
       this.boardInput?.invalidateHover()
@@ -800,6 +884,46 @@ export class LobbyBoardSession {
     this.concern('editing')
   }
 
+  /**
+   * N1-6 (wave N): what is under the pointer, for the outer input layer (`hovered`, a double-tap). While a drag moves
+   * the selection, the pointer is over what it drags: the topmost selected element whose box holds the point, looked
+   * up by id (a hit test of the whole scene per pointer move cost a quarter of a 10k board's drag frames: the hover
+   * readers re-ask after every change batch). Otherwise the canvas's own hit test, as before.
+   */
+  /**
+   * The board input's hit test (`hovered()`, the input stream's `hit`). N1-6: during a drag it is the topmost
+   * (highest index) selected element whose axis-aligned bounds hold the point, read from the drag's own selection
+   * instead of a hit test of the whole scene per move: what is being dragged, not necessarily what lies under the
+   * pointer (an unselected element above it, or the empty corner of a rotated box's bounds, still answer the
+   * dragged element). Outside a drag it is the engine's precise hit test.
+   */
+  private pointerHit(p: ScenePoint): ReturnType<LobbyCanvas['hitTest']> {
+    const g = this.gestureNow
+    const canvas = this.canvas
+    if (!canvas) return null
+    if (g?.dragging && g.selectedElementIds.length) {
+      let top: ReturnType<LobbyCanvas['hitTest']> = null
+      for (const id of g.selectedElementIds) {
+        const el = canvas.get(id)
+        if (!el || el.isDeleted) continue
+        const b = canvas.bounds(id)
+        if (!b || p.x < b.x || p.y < b.y || p.x > b.x + b.width || p.y > b.y + b.height) continue
+        if (!top || ((el.index as string) ?? '') > ((top.index as string) ?? '')) top = el
+      }
+      return top
+    }
+    return canvas.hitTest(p)
+  }
+
+  /** N1-4: the elements a chunked install shows first: those in the canvas's current view (none before attach). */
+  private idsInInitialView(elements: readonly SceneElement[]): ReadonlySet<string> {
+    const api = this.api
+    if (!api) return new Set()
+    const s = api.getAppState()
+    const z = s.zoom.value || 1
+    return idsInView(elements, { x: -s.scrollX, y: -s.scrollY, width: s.width / z, height: s.height / z })
+  }
+
   // ---- the scene the core reads and applies (the api arrives after the engine initialises) ----------
 
   private sceneAdapter(): SceneAdapter {
@@ -839,8 +963,10 @@ export class LobbyBoardSession {
       bump: (el, patch) => bump(el, patch),
       install: (elements) => {
         // what undo installs is `history` in the change stream (marked before the scene reports it)
-        const current = new Map(api.getSceneElementsIncludingDeleted().map((e) => [e.id, e.version]))
-        this.classifier.markHistory(elements.filter((e) => current.get(e.id) !== e.version).map((e) => e.id))
+        const current = api.getSceneElementsMapIncludingDeleted()
+        this.classifier.markHistory(
+          elements.filter((e) => current.get(e.id)?.version !== e.version).map((e) => e.id),
+        )
         api.updateScene({ elements: elements as never, captureUpdate: CaptureUpdateAction.NEVER })
       },
       // F11: an undo or a redo re-selects what its step was made with (the port leaves out hidden ids)
@@ -885,6 +1011,10 @@ export class LobbyBoardSession {
         }
       },
       readOnly: () => this.snap.readonly,
+      // N1-6: a drag's frame children from the scene index (no walk of the scene at a drag's start)
+      frameChildren: (frameId) =>
+        (this.handle?.canvas.index.byFrame(frameId) as unknown as readonly SceneElement[] | undefined) ??
+        null,
     })
     this.presence = presence
     this.registries.dragger.provide((id) => presence.draggerOf(id))
@@ -900,6 +1030,15 @@ export class LobbyBoardSession {
       },
     })
     this.port = port
+    // N1-6 (dev and dev-auth builds): every `canvas.items()` read is a walk of the whole scene by its caller, counted
+    // per site (`window.__lobbyWalks`; e2e/excalidraw/n1-drag-10k.spec.ts counts them per pointer move)
+    if (sceneWalksCounted()) {
+      const items = port.items.bind(port)
+      ;(port as { items: typeof port.items }).items = () => {
+        noteSceneWalk(itemsCallerOf(new Error().stack))
+        return items()
+      }
+    }
     // the image loader (one per page; 3g's file cards and exports find it through the registries)
     const files = installBoardFiles({
       api,
@@ -933,6 +1072,9 @@ export class LobbyBoardSession {
           !g.multiElementId
         // a camera move changes no element and no gesture: no step to record, no element scan (CR 3b-8)
         if ((changed.elements || changed.gesture) && idle && !g.editingTextElementId) undo.boundary()
+        // N1-6: the port's version scan (port-impl.ts afterSceneChange: every element's version, once per element
+        // change; Excalidraw's onChange names none), counted here at its one caller
+        if (changed.elements) noteSceneWalk('port.scan')
         port.afterSceneChange(changed.elements)
         const s = api.getAppState()
         const box = `${s.width}x${s.height}@${s.offsetLeft},${s.offsetTop}`
@@ -949,6 +1091,7 @@ export class LobbyBoardSession {
           }
         }
         presence.onGesture(g)
+        this.gestureNow = g
         const el = this.input.editorLease
         presence.setEditing(el && el.phase !== 'idle' ? el.leaseId : null)
         const tool = port.tool()
@@ -959,15 +1102,6 @@ export class LobbyBoardSession {
           this.concern('tool')
         }
         this.concern('pointer')
-      }),
-    )
-    // the change stream (after the scan) and undo's availability
-    offs.push(
-      port.on('changed', (ids) => {
-        const byId = new Map(api.getSceneElementsIncludingDeleted().map((x) => [x.id, x]))
-        for (const c of this.classifier.scanned(ids, (id) => byId.get(id) as never)) this.emit('change', c)
-        this.concern('history')
-        this.boardInput?.invalidateHover()
       }),
     )
     // 2. spike B's input layer (allowlist, guard, double-click and double-tap, clipboard and drop)
@@ -1010,7 +1144,7 @@ export class LobbyBoardSession {
       },
       isGrantedEditor: (ta) => this.input.editorLease?.isWritable(ta) ?? false,
       toScene: (x, y) => this.input.toScene(x, y),
-      hit: (p) => this.canvas?.hitTest(p) ?? null,
+      hit: (p) => this.pointerHit(p),
       listeners: () => [...(this.eventListeners.get('input') ?? [])] as ((e: CanvasInputEvent) => void)[],
       onPointerChange: () => this.concern('pointer'),
       onHoverChange: () => this.concern('hover'),
@@ -1080,6 +1214,18 @@ export class LobbyBoardSession {
     offs.push(this.settings.subscribe(() => this.concern('settings')))
     offs.push(this.settings.subscribe(() => this.applyFocusFrames(api)))
     this.handle = createLobbyCanvas({ port, registries: this.registries, board: handles })
+    // the change stream (after the scan) and undo's availability. Registered after the LobbyCanvas, whose scene index
+    // listens to the same `changed` (port listeners run in registration order): a `change` listener reads an index
+    // that already answers for its batch (N1-6)
+    offs.push(
+      port.on('changed', (ids) => {
+        // N1-6: lookups in the engine's own map (no whole-scene Map per change: a drag's every move comes here)
+        const byId = api.getSceneElementsMapIncludingDeleted()
+        for (const c of this.classifier.scanned(ids, (id) => byId.get(id) as never)) this.emit('change', c)
+        this.concern('history')
+        this.boardInput?.invalidateHover()
+      }),
+    )
     // 3b: the level-of-detail pass for zoomed-out views (docs/EXCALIDRAW-MIGRATION.md §8.5)
     const lod = installLod({
       api,
@@ -1087,6 +1233,7 @@ export class LobbyBoardSession {
       canvas: this.handle.canvas,
       isHidden: (id) => this.registries.hidden.isHidden(id),
       root,
+      sizeAware: speedFlag('SIZE_AWARE_LOD'),
     })
     offs.push(() => lod.dispose())
     // the test facade and the debug handle (dev-auth builds only: the facade checks the guard itself)
@@ -1100,6 +1247,10 @@ export class LobbyBoardSession {
     const uninstallFacade = installFacade(facadePort, this.registries)
     if (uninstallFacade) offs.push(uninstallFacade)
     if (DEV_AUTH_ENABLED) {
+      ;(window as unknown as { __lobbyWalks?: unknown }).__lobbyWalks = {
+        counts: () => sceneWalks(),
+        reset: () => resetSceneWalks(),
+      }
       ;(window as unknown as { __lobbyBoard?: unknown }).__lobbyBoard = {
         session: this,
         core: this.core,
@@ -1356,3 +1507,13 @@ export class LobbyBoardSession {
 
 // biome-ignore lint/suspicious/noExplicitAny: Excalidraw's element helpers, typed loosely on purpose
 const ElementLib = ExcalidrawElementNs as any
+
+/** Wave N (WS1): this dev-auth page's speed-part overrides (sync/flags.ts SPEED_FLAGS_KEY); none when unreadable. */
+function readSpeedFlagOverrides(): void {
+  try {
+    const raw = globalThis.localStorage?.getItem(SPEED_FLAGS_KEY)
+    setSpeedFlagOverrides(raw ? JSON.parse(raw) : {})
+  } catch {
+    setSpeedFlagOverrides({})
+  }
+}

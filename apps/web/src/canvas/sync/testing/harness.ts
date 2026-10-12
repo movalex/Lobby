@@ -12,6 +12,7 @@ import type { GestureState, OfflineQueueStore, SceneElement } from '../types.ts'
 import { IDLE_GESTURE } from '../types.ts'
 import { FakeRoom } from './fakeRoom.ts'
 import { createManualClock, type ManualClock } from './manualClock.ts'
+import { checkSharingOnApply } from './sharing.ts'
 
 export interface TestClient {
   readonly name: string
@@ -34,7 +35,14 @@ export interface Harness {
   readonly room: FakeRoom
   client(
     name: string,
-    o?: { readonly?: boolean; latencyMs?: number; offline?: OfflineQueueStore; tab?: string },
+    o?: {
+      readonly?: boolean
+      latencyMs?: number
+      offline?: OfflineQueueStore
+      tab?: string
+      /** N1-3: the reset welcome's diff apply (default: sync/flags.ts DIFF_APPLY, which ships off) */
+      diff?: boolean
+    },
   ): TestClient
   /** runs every queued frame and timer */
   settle(): void
@@ -49,7 +57,9 @@ export function createHarness(o: { seed?: readonly Record<string, unknown>[] } =
     clock,
     room,
     client(name, co = {}) {
-      const scene = createMapScene()
+      // N1-2: every apply of the core is followed by the no-sharing assertion (./sharing.ts)
+      let coreRef: LobbyEngineCore | null = null
+      const scene = checkSharingOnApply(createMapScene(), () => coreRef)
       const transport = room.connect({
         uid: name,
         tab: co.tab ?? 'tab1',
@@ -66,7 +76,9 @@ export function createHarness(o: { seed?: readonly Record<string, unknown>[] } =
         setTimer: clock.setTimer,
         clearTimer: clock.clearTimer,
         log: (event, detail) => logs.push({ event, detail }),
+        ...(co.diff !== undefined ? { snapshotApply: { diff: co.diff } } : {}),
       })
+      coreRef = core
       core.start()
       const c: TestClient = {
         name,

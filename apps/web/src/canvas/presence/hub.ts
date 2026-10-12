@@ -49,6 +49,7 @@ import {
 } from '@draftroom/canvas-schema/protocol'
 import type { LobbyEngineCore } from '../sync/core/engine.ts'
 import type { GestureState, SceneElement } from '../sync/types.ts'
+import { noteSceneWalk } from '../sync/walks.ts'
 import { planDragArrows } from './drag-arrows.ts'
 import { onPresenceFollow, presenceFollowOf } from './follow-target.ts'
 import {
@@ -89,6 +90,12 @@ export interface PresenceHubOptions {
   readonly elements: () => readonly SceneElement[]
   /** the scene by id (the bound arrows of a peer's drag, D1); built from `elements` when absent */
   readonly elementMap?: () => ReadonlyMap<string, SceneElement>
+  /**
+   * N1-6 (wave N): the live children of a frame (the scene index, `canvas.index.byFrame`), for a drag's ids: a drag
+   * then reads no whole scene at all. Absent (or null: no index yet): one walk at the drag's start
+   */
+  readonly frameChildren?: (frameId: string) => readonly SceneElement[] | null
+
   /** the visible scene rectangle (with this tab's zoom `z` when the page knows it) */
   readonly view: () => PresenceViewRect | null
   readonly readOnly: () => boolean
@@ -363,8 +370,7 @@ export class PresenceHub {
 
   private planArrows(offsets: ReadonlyMap<string, { x: number; y: number }>) {
     if (!this.o.overrides?.setPreviewHidden) return null
-    const map = this.o.elementMap?.() ?? new Map(this.o.elements().map((e) => [e.id, e]))
-    return planDragArrows(map, offsets)
+    return planDragArrows(this.o.elementMap?.() ?? this.mapOfElements(), offsets)
   }
 
   private setArrowCopies(sid: string, copies: SceneElement[]): void {
@@ -430,10 +436,11 @@ export class PresenceHub {
     const selChanged = sel.length !== this.sel.length || sel.some((id, i) => id !== this.sel[i])
     this.sel = sel
     if (g.dragging && g.selectedElementIds.length > 0 && !this.o.readOnly()) {
-      const els = this.o.elements()
-      const byId = new Map(els.map((e) => [e.id, e]))
+      // N1-6: the engine's own map (no walk per pointer move on a 10k board); a scene built from `elements` only
+      // where the page gives none (tests)
+      const byId = this.o.elementMap?.() ?? this.mapOfElements()
       if (!this.localDrag) {
-        const ids = this.dragIds(g.selectedElementIds, els)
+        const ids = this.dragIds(g.selectedElementIds, byId)
         const anchor = g.selectedElementIds.find((id) => byId.has(id)) as string | undefined
         const a = anchor ? byId.get(anchor) : undefined
         if (!anchor || !a) return
@@ -464,16 +471,35 @@ export class PresenceHub {
     if (selChanged) this.send()
   }
 
-  private dragIds(selected: readonly string[], els: readonly SceneElement[]): string[] {
+  /** The scene by id from `elements` (a page that gives no `elementMap`): one walk. */
+  private mapOfElements(): ReadonlyMap<string, SceneElement> {
+    noteSceneWalk('presence.elements')
+    return new Map(this.o.elements().map((e) => [e.id, e]))
+  }
+
+  /**
+   * A local drag's ids, at its start: the selection, the live children of every selected frame (the scene index;
+   * one walk only without it), without the bound labels (a label follows its container's offset; the container
+   * is what moves).
+   */
+  private dragIds(selected: readonly string[], byId: ReadonlyMap<string, SceneElement>): string[] {
     const out = new Set(selected)
-    for (const el of els) {
-      if (el.isDeleted) continue
-      const frameId = (el as { frameId?: string | null }).frameId
-      if (frameId && out.has(frameId)) out.add(el.id)
+    const frames = selected.filter((id) => byId.get(id)?.type === 'frame')
+    if (frames.length) {
+      const indexed = frames.map((f) => this.o.frameChildren?.(f) ?? null)
+      if (indexed.every((c) => c !== null)) {
+        for (const children of indexed) for (const el of children ?? []) if (!el.isDeleted) out.add(el.id)
+      } else {
+        noteSceneWalk('presence.dragStart')
+        for (const el of byId.values()) {
+          if (el.isDeleted) continue
+          const frameId = (el as { frameId?: string | null }).frameId
+          if (frameId && out.has(frameId)) out.add(el.id)
+        }
+      }
     }
-    // a label follows its container's offset; the container is what moves
     return [...out].filter((id) => {
-      const el = els.find((e) => e.id === id)
+      const el = byId.get(id)
       return !(el?.type === 'text' && (el as { containerId?: string | null }).containerId)
     })
   }
