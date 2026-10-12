@@ -25,8 +25,38 @@ describe('vector PDF', () => {
     expect(imagePagesSentence([2, 3, 5, 3])).toBe('Pages 2, 3 and 5 were exported as images')
   })
   it('warns above 50 MB only', () => {
-    expect(pdfSizeNote(PDF_SIZE_WARN_BYTES)).toBeNull()
-    expect(pdfSizeNote(63 * 1024 * 1024)).toMatch(/^This PDF is 63 MB/)
+    const today = { pagesKind: 'image', vectorOffered: false, lossless: false } as const
+    expect(pdfSizeNote(PDF_SIZE_WARN_BYTES, today)).toBeNull()
+    expect(pdfSizeNote(63 * 1024 * 1024, today)).toMatch(/^This PDF is 63 MB/)
+  })
+  it('the size advice names only options the dialog shows and that make the file smaller', () => {
+    const big = 63 * 1024 * 1024
+    const head = 'This PDF is 63 MB: too large for most email and chat attachments. For a smaller file, '
+    // today's dialog (VECTOR_PDF off): there is no Pages choice to point at
+    expect(pdfSizeNote(big, { pagesKind: 'image', vectorOffered: false, lossless: true })).toBe(
+      `${head}export fewer frames or turn off Lossless images.`,
+    )
+    expect(pdfSizeNote(big, { pagesKind: 'image', vectorOffered: false, lossless: false })).toBe(
+      `${head}export fewer frames.`,
+    )
+    // already on Image pages: never told to choose them
+    expect(pdfSizeNote(big, { pagesKind: 'image', vectorOffered: true, lossless: true })).toBe(
+      `${head}export fewer frames or turn off Lossless images.`,
+    )
+    expect(pdfSizeNote(big, { pagesKind: 'image', vectorOffered: true, lossless: false })).toBe(
+      `${head}export fewer frames.`,
+    )
+    // on Vector pages: Image pages is a real, visible choice
+    expect(pdfSizeNote(big, { pagesKind: 'vector', vectorOffered: true, lossless: true })).toBe(
+      `${head}export fewer frames or choose Image pages without lossless images.`,
+    )
+    expect(pdfSizeNote(big, { pagesKind: 'vector', vectorOffered: true, lossless: false })).toBe(
+      `${head}export fewer frames or choose Image pages.`,
+    )
+    // a vector kind without the offer (cannot happen: the dialog forces 'image') never names a hidden choice
+    expect(pdfSizeNote(big, { pagesKind: 'vector', vectorOffered: false, lossless: false })).toBe(
+      `${head}export fewer frames.`,
+    )
   })
   it('the switch: off until the font engine lands; the dev preview only behind the local-dev guard', () => {
     expect(VECTOR_PDF).toBe(false)

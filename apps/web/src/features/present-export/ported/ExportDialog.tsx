@@ -459,7 +459,7 @@ export function ExportDialog({
       if (pagesKind === 'vector') countUsage('export.pdf.vector')
       else countUsage('export.pdf.raster')
       const fallback = imagePagesSentence(result.imagePages.map((p) => p.page))
-      const size = pdfSizeNote(blob.size)
+      const size = pdfSizeNote(blob.size, { pagesKind, vectorOffered, lossless: prefs.lossless })
       if (fallback || size) setPdfNotes({ imagePages: fallback, size })
       const cut =
         extra.notShown > 0

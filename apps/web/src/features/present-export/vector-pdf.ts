@@ -49,9 +49,30 @@ export function imagePagesSentence(pages: readonly number[]): string {
     : `Pages ${list(sorted)} were exported as images`
 }
 
-/** The size note: "This PDF is 63 MB: …" (null below the limit). */
-export function pdfSizeNote(bytes: number): string | null {
+/** What the export was made with, for the size note's advice. */
+export interface PdfSizeContext {
+  /** the pages the export drew ('image' whenever the vector choice is not offered) */
+  readonly pagesKind: 'vector' | 'image'
+  /** whether the vector choice was offered in the dialog (VECTOR_PDF or the dev preview) */
+  readonly vectorOffered: boolean
+  readonly lossless: boolean
+}
+
+/**
+ * The size note: "This PDF is 63 MB: …" (null below the limit). Its advice names only options the dialog shows and
+ * that would make the file smaller: Image pages only when the vector choice is offered and was the one used, and
+ * Lossless images only when it was on.
+ */
+export function pdfSizeNote(bytes: number, ctx: PdfSizeContext): string | null {
   if (!(bytes > PDF_SIZE_WARN_BYTES)) return null
   const mb = Math.round(bytes / (1024 * 1024))
-  return `This PDF is ${fmt.format(mb)} MB: too large for most email and chat attachments. Export fewer frames, or choose Image pages without lossless images for a smaller file.`
+  const vector = ctx.vectorOffered && ctx.pagesKind === 'vector'
+  const option = vector
+    ? ctx.lossless
+      ? ' or choose Image pages without lossless images'
+      : ' or choose Image pages'
+    : ctx.lossless
+      ? ' or turn off Lossless images'
+      : ''
+  return `This PDF is ${fmt.format(mb)} MB: too large for most email and chat attachments. For a smaller file, export fewer frames${option}.`
 }
