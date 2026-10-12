@@ -8,10 +8,10 @@ import {
   visitSeenPath,
 } from '@draftroom/contracts'
 import { openTestDb } from '@draftroom/db/testing'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadConfig } from '../../../src/config.ts'
 import { PENDING_ROUTES, type PendingRoute } from '../../../src/features/pending-routes.ts'
-import { sweepVisits } from '../../../src/features/visits/sweep.ts'
+import { sweepVisits, visitsSweepSettings } from '../../../src/features/visits/sweep.ts'
 import { createBoard, createTestApi, DEV_STUDIO, testEnv } from '../../helpers.ts'
 import { countQueries } from '../../query-count.ts'
 import { errorCode, guestLink, joinAsGuest, setupWorld, type World } from '../guests/support.ts'
@@ -336,6 +336,46 @@ describe('retention and cascades', () => {
     const ctx = { db: w.api.db, now: w.api.clock.now, config: w.api.config }
     expect(await sweepVisits(ctx)).toBe(1500)
     expect(await rowCount()).toBe(0)
+  })
+
+  describe('the sweeper’s timers (the app starts it when it is ready)', () => {
+    const saved = { ...visitsSweepSettings }
+    afterEach(() => {
+      Object.assign(visitsSweepSettings, saved)
+    })
+    const gone = (board: string, userId: string) =>
+      vi.waitFor(async () => expect(await stored(board, userId)).toBeNull(), { timeout: 8_000, interval: 25 })
+
+    it('the first pass runs soon after the app is ready, and prunes only what is past the retention', async () => {
+      await seed(w.board, w.bob.userId, 200)
+      await seed(w.board, w.alice.userId, 1)
+      visitsSweepSettings.firstDelayMs = 50
+      visitsSweepSettings.intervalMs = 60 * 60 * 1000 // not what runs here
+      // a second app over the same database: its onReady starts the timers (the first app's are the long default)
+      const second = await createTestApi({ db: w.api.db })
+      try {
+        await gone(w.board, w.bob.userId)
+        expect(await stored(w.board, w.alice.userId)).not.toBeNull()
+      } finally {
+        await second.close()
+      }
+    })
+
+    it('the interval keeps sweeping, and closing the app stops the timers', async () => {
+      visitsSweepSettings.firstDelayMs = 60 * 60 * 1000 // not what runs here
+      visitsSweepSettings.intervalMs = 100
+      const second = await createTestApi({ db: w.api.db })
+      try {
+        await seed(w.board, w.bob.userId, 200)
+        await gone(w.board, w.bob.userId)
+      } finally {
+        await second.close()
+      }
+      // nothing sweeps after the app is closed (the database is still open: this one is the first app’s)
+      await seed(w.board, w.bob.userId, 200)
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      expect(await stored(w.board, w.bob.userId)).not.toBeNull()
+    })
   })
 
   it('deleting the board, or the account, deletes its rows (ON DELETE CASCADE)', async () => {
