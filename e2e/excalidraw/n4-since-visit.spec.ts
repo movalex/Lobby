@@ -5,9 +5,14 @@
 //  - the visit time is alice's own: bob's page never receives it (no request, no response, no event, no socket frame);
 //  - alice's tab only receives: it pushes no element while the highlights are up;
 //  - a Mark all seen the api drops (inside its 10 s write interval) is still honoured by a reload of the same tab;
+//  - the server's re-snap of an arrow bound to a moved note is not a change (in the real room the arrow carries the
+//    commit's own time), with no checkpoint; and with one from before the visit (the real history routes) a note made
+//    and deleted while she was away is not "removed" either;
 //  - a name-only guest makes no visit request at all and keeps the device-local Catch me up.
 import type { Browser, Page } from '@playwright/test'
 import {
+  createItem,
+  deleteItem,
   expectSaved,
   item,
   itemBounds,
@@ -16,8 +21,10 @@ import {
   startTextEditingWithKeyboard,
   stopTextEditing,
   typeText,
+  updateItem,
   viewport,
 } from '../tests/support/canvas.ts'
+import { boundEnds } from './history-kit.ts'
 import {
   expect,
   seed,
@@ -89,17 +96,51 @@ const recapWhenIn = (page: Page, ms: number) =>
     ms,
   )
 
-/** alice makes three notes, stays long enough that leaving is written, and leaves. Returns when she left. */
-async function aliceVisitsAndLeaves(join: (h: string) => Promise<WorkshopCanvasSession>) {
-  const t0 = Date.now()
-  const a = await join('alice')
-  await seed(a.page, {
+/** The board of the first test: three notes (one stays, one is reworded, one is deleted). */
+const threeNotes = (page: Page) =>
+  seed(page, {
     notes: [
       { id: 'n4-keep', x: 0, y: 0, text: 'Kept as it was' },
       { id: 'n4-edit', x: 260, y: 0, text: 'Will be reworded' },
       { id: 'n4-del', x: 520, y: 0, text: 'Will be deleted' },
     ],
   })
+
+/** Two notes with an arrow between them, its ends bound (the server derives where they sit), and a third note. */
+async function arrowBoard(page: Page) {
+  await seed(page, {
+    notes: [
+      { id: 'n4-a', x: 0, y: 0, text: 'Left note' },
+      { id: 'n4-b', x: 520, y: 0, text: 'Right note' },
+      { id: 'n4-del', x: 260, y: 400, text: 'Will be deleted' },
+    ],
+  })
+  await createItem(page, 'arrow', {
+    id: 'n4-arrow',
+    x: 230,
+    y: 60,
+    points: [
+      [0, 0],
+      [280, 0],
+    ],
+  })
+  await expectSaved(page)
+  await updateItem(page, 'n4-arrow', {
+    startBinding: { elementId: 'n4-a', fixedPoint: [1, 0.5], mode: 'orbit' },
+    endBinding: { elementId: 'n4-b', fixedPoint: [0, 0.5], mode: 'orbit' },
+  })
+  await expectSaved(page)
+  await expect.poll(() => boundEnds(page, 'n4-arrow')).toEqual(['end->n4-b', 'start->n4-a'])
+}
+
+/** alice sets a board up, stays long enough that leaving is written, and leaves. Returns the session she left. */
+async function aliceVisitsAndLeaves(
+  join: (h: string) => Promise<WorkshopCanvasSession>,
+  setUp: (a: WorkshopCanvasSession) => Promise<void> = (a) => threeNotes(a.page),
+) {
+  const t0 = Date.now()
+  const a = await join('alice')
+  await setUp(a)
   // the visit was written when she opened it; leaving writes a newer time only after the interval
   await pastSince(a.page, t0, WRITE_INTERVAL_MS + 1_200)
   await a.page.goto('about:blank')
@@ -256,9 +297,11 @@ test('alice visits and leaves; bob adds 2 notes, edits 1 and deletes 1; alice re
     expect(own[0]?.previousSeenAt).toBeNull() // his first visit: alice’s are not his
     for (const t of times) expect(own[0]?.seenAt).not.toBe(t)
     // nothing bob’s page was sent (HTTP bodies, the event stream) or received on the canvas socket carries them
-    // (a page that received nothing would pass this: it received the board, so the check has something to read)
+    // (a page that received nothing would pass this: it received the board, and the scan finds a visit time where there is
+    // one, bob’s own, so the check has something to read)
     expect(b.net.responses.length).toBeGreaterThan(3)
     expect(b.net.wsFrames.length).toBeGreaterThan(0)
+    expect(b.net.responses.some((r) => r.body.includes(String(own[0]?.seenAt)))).toBe(true)
     const has = (text: string) => needles.some((n) => text.includes(n))
     expect(b.net.responses.filter((r) => has(r.body)).map((r) => r.path)).toEqual([])
     expect(b.net.events.filter((e) => has(e.raw)).map((e) => e.type)).toEqual([])
@@ -289,6 +332,127 @@ test('Mark all seen inside the api’s write interval is still honoured by a rel
   expect(second).toEqual(first)
   await a2.page.waitForTimeout(2_500)
   await expect(chip(a2.page)).toHaveCount(0)
+})
+
+/** The parts of the dev handle this spec drives (focus mode, following). */
+type QuietWindow = {
+  __lobbyBoard?: {
+    canvas: {
+      follow: { current(): string | null; start(sid: string): void; stop(): void }
+      presence: { peers(): { sid: string; uid: string }[] }
+      settings: { set(p: { focusMode: boolean }): void }
+    }
+  }
+}
+
+/** An element as a page holds it: the server's commit time and where it sits. */
+const stampOf = async (page: Page, id: string) =>
+  (await item(page, id)) as unknown as { updated: number; x: number; y: number }
+
+test('a bound arrow that only followed a moved note is not a change: the server re-snaps it in the note’s own commit', async ({
+  join,
+}) => {
+  const a1 = await aliceVisitsAndLeaves(join, (a) => arrowBoard(a.page))
+  void a1
+  const b = await join('bob', 'editor')
+  await expect.poll(async () => (await item(b.page, 'n4-arrow')) !== null).toBe(true)
+  const before = await stampOf(b.page, 'n4-arrow')
+  await updateItem(b.page, 'n4-a', { y: 220 }) // the arrow’s left end follows it
+  await expectSaved(b.page)
+
+  const a2 = await join('alice')
+  await expect(chip(a2.page)).toBeVisible({ timeout: 30_000 })
+  await test.step('the real room re-snapped the arrow in the commit that moved the note', async () => {
+    const [note, arrow] = await Promise.all([stampOf(a2.page, 'n4-a'), stampOf(a2.page, 'n4-arrow')])
+    expect(note.y).toBe(220)
+    // there was a server change to leave out: the arrow is not where it was, and carries the note’s commit time
+    expect(arrow.x !== before.x || arrow.y !== before.y).toBe(true)
+    expect(arrow.updated).toBe(note.updated)
+  })
+  await test.step('the chip counts the note once and not the arrow', async () => {
+    await expect(chip(a2.page)).toHaveAttribute('data-added', '0')
+    await expect(chip(a2.page)).toHaveAttribute('data-changed', '1')
+    await expect(chip(a2.page)).toHaveAttribute('data-removed', '0')
+    await expect(a2.page.locator('[data-testid="visit-outline"][data-id="n4-a"]')).toHaveCount(1)
+    await expect(a2.page.locator('[data-testid="visit-outline"][data-id="n4-arrow"]')).toHaveCount(0)
+  })
+  await test.step('the chip and the outlines step aside in focus mode and while she follows bob, and are back after', async () => {
+    const focus = (on: boolean) =>
+      a2.page.evaluate(
+        (focusMode) => (window as unknown as QuietWindow).__lobbyBoard?.canvas.settings.set({ focusMode }),
+        on,
+      )
+    await focus(true)
+    await expect(chip(a2.page)).toHaveCount(0)
+    await expect(outlines(a2.page)).toHaveCount(0)
+    await focus(false)
+    await expect(chip(a2.page)).toBeVisible()
+    await expect(a2.page.locator('[data-testid="visit-outline"][data-id="n4-a"]')).toHaveCount(1)
+
+    // following bob (a Shift-click on his cursor chip does the same): the chip steps aside until she stops
+    const sid = await (
+      await a2.page.waitForFunction(
+        (uid) =>
+          (window as unknown as QuietWindow).__lobbyBoard?.canvas.presence.peers().find((p) => p.uid === uid)
+            ?.sid ?? null,
+        b.id,
+      )
+    ).jsonValue()
+    await a2.page.evaluate(
+      (target) => (window as unknown as QuietWindow).__lobbyBoard?.canvas.follow.start(target),
+      sid as string,
+    )
+    await expect
+      .poll(() =>
+        a2.page.evaluate(
+          () => (window as unknown as QuietWindow).__lobbyBoard?.canvas.follow.current() ?? null,
+        ),
+      )
+      .toBe(sid)
+    await expect(chip(a2.page)).toHaveCount(0)
+    await expect(outlines(a2.page)).toHaveCount(0)
+    await a2.page.evaluate(() => (window as unknown as QuietWindow).__lobbyBoard?.canvas.follow.stop())
+    await expect(chip(a2.page)).toBeVisible()
+  })
+})
+
+test('with a checkpoint from before the visit, a note made and deleted while she was away is not “removed”', async ({
+  join,
+  board,
+}) => {
+  const a1 = await aliceVisitsAndLeaves(join, async (a) => {
+    await arrowBoard(a.page)
+    // the board as she saw it, saved before she leaves
+    const res = await a.api.fetch('POST', `/api/boards/${board}/snapshots`, { name: 'Before' })
+    expect(res.status(), await res.text()).toBe(201)
+  })
+  void a1
+
+  const b = await join('bob', 'editor')
+  await expect.poll(async () => (await item(b.page, 'n4-del')) !== null).toBe(true)
+  await updateItem(b.page, 'n4-a', { y: 220 })
+  await expectSaved(b.page)
+  await deleteItem(b.page, 'n4-del') // she had seen this one
+  await seed(b.page, { notes: [{ id: 'n4-ghost', x: 800, y: 400, text: 'Here and gone' }] })
+  await deleteItem(b.page, 'n4-ghost') // she never saw this one
+  await expectSaved(b.page)
+
+  const a2 = await join('alice')
+  await expect(chip(a2.page)).toBeVisible({ timeout: 30_000 })
+  await test.step('the checkpoint narrows the counts: the note moved, the one she had seen deleted; the arrow and the ghost are left out', async () => {
+    await expect(chip(a2.page)).toHaveAttribute('data-added', '0')
+    await expect(chip(a2.page)).toHaveAttribute('data-changed', '1')
+    await expect(chip(a2.page)).toHaveAttribute('data-removed', '1')
+    await a2.page.getByTestId('visits-removed-toggle').click()
+    const list = a2.page.getByTestId('visits-removed-list')
+    await expect(list).toContainText('Will be deleted')
+    await expect(list).not.toContainText('Here and gone')
+  })
+  await test.step('it read the checkpoint through the history routes: the list, then one content', async () => {
+    const paths = a2.net.responses.map((r) => r.path)
+    expect(paths.filter((p) => /\/snapshots$/.test(p)).length).toBeGreaterThanOrEqual(1)
+    expect(paths.filter((p) => /\/snapshots\/[^/]+\/content$/.test(p))).toHaveLength(1)
+  })
 })
 
 test('a name-only guest asks for no visit time and keeps the device-local Catch me up', async ({
