@@ -683,6 +683,15 @@ export interface SceneIndex {
   /** @owner 2C · the live elements whose `customData.lobby.kind` is `kind` (`board-card`, `link-card`) */
   byKind(kind: string): readonly CanvasElement[]
   /**
+   * @owner 2C · wave N.1: the live elements of an element `type` (`frame`, `image`, `rectangle`), for a feature that
+   * draws something per frame or per image without walking the scene on every change
+   */
+  byType(type: string): readonly CanvasElement[]
+  /** @owner 2C · wave N.1: the live elements whose `customData.lobby` has the key `key` (exactly: `file`) */
+  withLobbyKey(key: string): readonly CanvasElement[]
+  /** @owner 2C · wave N.1: how many live elements the scene holds (labels included: `items().length`) */
+  count(): number
+  /**
    * @owner 2C · called after the scene applied a batch, with the ids that changed (created, updated or deleted;
    * local or remote), once the index answers for it. Returns the unsubscribe.
    */

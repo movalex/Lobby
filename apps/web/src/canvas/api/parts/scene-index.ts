@@ -46,6 +46,12 @@ export function hasLobbyKeyPrefix(el: CanvasElement, prefix: string): boolean {
   return false
 }
 
+/** Whether `el`'s `customData.lobby` has the key `key` (exactly). */
+export function hasLobbyKey(el: CanvasElement, key: string): boolean {
+  const lobby = lobbyOf(el)
+  return !!lobby && Object.hasOwn(lobby, key)
+}
+
 /** `el`'s `customData.lobby.kind`, or null. */
 export function lobbyKindOf(el: CanvasElement): string | null {
   const kind = lobbyOf(el)?.kind
@@ -59,6 +65,9 @@ export function sceneIndexOf(items: () => readonly CanvasElement[]): Omit<SceneI
     withLobbyKeyPrefix: (prefix) => (prefix ? items().filter((e) => hasLobbyKeyPrefix(e, prefix)) : []),
     byFrame: (frameId) => items().filter((e) => e.frameId === frameId),
     byKind: (kind) => items().filter((e) => lobbyKindOf(e) === kind),
+    byType: (type) => items().filter((e) => e.type === type),
+    withLobbyKey: (key) => (key ? items().filter((e) => hasLobbyKey(e, key)) : []),
+    count: () => items().length,
   }
 }
 
@@ -100,9 +109,12 @@ export function itemsCallerOf(stack: string | undefined): string {
 interface Entry {
   readonly el: CanvasElement
   readonly note: boolean
+  readonly type: string
   readonly frame: string | null
   readonly kind: string | null
   readonly keys: readonly string[]
+  /** the paint key (`index`) the element had when it was put */
+  readonly paint: unknown
 }
 
 /** Paint order: (index, id), as the scene keeps its array. */
@@ -128,17 +140,31 @@ const remove = (m: Map<string, Set<string>>, k: string, id: string) => {
   if (!s.size) m.delete(k)
 }
 
+const sameKeys = (a: readonly string[], b: readonly string[]) =>
+  a.length === b.length && a.every((k, i) => k === b[i])
+
+const hasPrefix = (keys: readonly string[], prefix: string) =>
+  keys.some((k) => k.length > prefix.length && k.startsWith(prefix))
+
 /**
  * The index's state: built from a full list once, then moved per changed id. Pure (no port, no signals):
  * `get(id)` reads an element's current copy (undefined or deleted: gone). Exported for the tests.
+ *
+ * Wave N.1: a changed id that is still the SAME object, with the same type, frame, kind, lobby keys and paint key as
+ * when it was put (the engine's in-place moves: every pointer move of a drag), leaves every set and every cached
+ * answer as it is: the answers hold that object, in the same place. Before, each such move dropped and re-sorted every
+ * answer the element was in (the 4,400 notes of the 10k board, per move of a note).
  */
 export class IncrementalSceneIndex {
   private readonly entries = new Map<string, Entry>()
   private readonly noteIds = new Set<string>()
+  private readonly types = new Map<string, Set<string>>()
   private readonly frames = new Map<string, Set<string>>()
   private readonly kinds = new Map<string, Set<string>>()
   /** per prefix asked for so far: the ids with a key of it (prefixes nobody asked for are not kept) */
   private readonly prefixes = new Map<string, Set<string>>()
+  /** per exact key asked for so far: the ids that have it */
+  private readonly exact = new Map<string, Set<string>>()
   /** the sorted answers, per query, until a change touches them */
   private readonly cache = new Map<string, CanvasElement[]>()
 
@@ -149,10 +175,24 @@ export class IncrementalSceneIndex {
   /** Elements `ids` changed (created, updated, deleted, or gone from the scene): `get` reads them now. */
   update(ids: Iterable<string>, get: (id: string) => CanvasElement | undefined): void {
     for (const id of ids) {
-      this.drop(id)
       const el = get(id)
+      const had = this.entries.get(id)
+      if (had && el && !el.isDeleted && had.el === el && this.unmoved(had, el)) continue
+      this.drop(id)
       if (el && !el.isDeleted) this.put(el)
     }
+  }
+
+  /** `el` (its entry's own object) is where its entry put it: every set and answer still holds. */
+  private unmoved(e: Entry, el: CanvasElement): boolean {
+    const lobby = lobbyOf(el)
+    return (
+      e.type === el.type &&
+      e.paint === el.index &&
+      e.frame === ((el.frameId as string | null | undefined) ?? null) &&
+      e.kind === lobbyKindOf(el) &&
+      sameKeys(e.keys, lobby ? Object.keys(lobby) : [])
+    )
   }
 
   notes(): readonly CanvasElement[] {
@@ -165,12 +205,24 @@ export class IncrementalSceneIndex {
     if (!set) {
       // the first ask for this prefix: the index's own entries, once (never the scene)
       set = new Set()
-      for (const [id, e] of this.entries)
-        if (e.keys.some((k) => k.length > prefix.length && k.startsWith(prefix))) set.add(id)
+      for (const [id, e] of this.entries) if (hasPrefix(e.keys, prefix)) set.add(id)
       this.prefixes.set(prefix, set)
     }
     const s = set
     return this.answer(`p:${prefix}`, () => s)
+  }
+
+  withLobbyKey(key: string): readonly CanvasElement[] {
+    if (!key) return []
+    let set = this.exact.get(key)
+    if (!set) {
+      // the first ask for this key: the index's own entries, once (never the scene)
+      set = new Set()
+      for (const [id, e] of this.entries) if (e.keys.includes(key)) set.add(id)
+      this.exact.set(key, set)
+    }
+    const s = set
+    return this.answer(`x:${key}`, () => s)
   }
 
   byFrame(frameId: string): readonly CanvasElement[] {
@@ -179,6 +231,14 @@ export class IncrementalSceneIndex {
 
   byKind(kind: string): readonly CanvasElement[] {
     return this.answer(`k:${kind}`, () => this.kinds.get(kind))
+  }
+
+  byType(type: string): readonly CanvasElement[] {
+    return this.answer(`t:${type}`, () => this.types.get(type))
+  }
+
+  count(): number {
+    return this.entries.size
   }
 
   private answer(key: string, set: () => ReadonlySet<string> | undefined): readonly CanvasElement[] {
@@ -199,17 +259,20 @@ export class IncrementalSceneIndex {
     const e: Entry = {
       el,
       note: el.type === 'stickynote',
+      type: el.type,
       frame: (el.frameId as string | null | undefined) ?? null,
       kind: lobbyKindOf(el),
       keys: lobby ? Object.keys(lobby) : [],
+      paint: el.index,
     }
     this.entries.set(el.id, e)
     this.touch(e)
     if (e.note) this.noteIds.add(el.id)
+    add(this.types, e.type, el.id)
     if (e.frame) add(this.frames, e.frame, el.id)
     if (e.kind) add(this.kinds, e.kind, el.id)
-    for (const [prefix, set] of this.prefixes)
-      if (e.keys.some((k) => k.length > prefix.length && k.startsWith(prefix))) set.add(el.id)
+    for (const [prefix, set] of this.prefixes) if (hasPrefix(e.keys, prefix)) set.add(el.id)
+    for (const [key, set] of this.exact) if (e.keys.includes(key)) set.add(el.id)
   }
 
   private drop(id: string): void {
@@ -218,19 +281,65 @@ export class IncrementalSceneIndex {
     this.entries.delete(id)
     this.touch(e)
     this.noteIds.delete(id)
+    remove(this.types, e.type, id)
     if (e.frame) remove(this.frames, e.frame, id)
     if (e.kind) remove(this.kinds, e.kind, id)
     for (const set of this.prefixes.values()) set.delete(id)
+    for (const set of this.exact.values()) set.delete(id)
   }
 
   /** The cached answers `e` is (or was) part of go. */
   private touch(e: Entry): void {
     if (e.note) this.cache.delete('n')
+    this.cache.delete(`t:${e.type}`)
     if (e.frame) this.cache.delete(`f:${e.frame}`)
     if (e.kind) this.cache.delete(`k:${e.kind}`)
-    for (const prefix of this.prefixes.keys())
-      if (e.keys.some((k) => k.length > prefix.length && k.startsWith(prefix)))
-        this.cache.delete(`p:${prefix}`)
+    for (const prefix of this.prefixes.keys()) if (hasPrefix(e.keys, prefix)) this.cache.delete(`p:${prefix}`)
+    for (const key of this.exact.keys()) if (e.keys.includes(key)) this.cache.delete(`x:${key}`)
+  }
+}
+
+/**
+ * Wave N.1: lists of live elements, each in paint order (the index's answers), as ONE list in paint order with each id
+ * once: what a feature that needs a few kinds of element in the scene's own order (the opaque elements above a note,
+ * the cards a face may cover) reads instead of `canvas.items()`. A merge, linear in the elements.
+ */
+export function mergeInPaintOrder(lists: readonly (readonly CanvasElement[])[]): CanvasElement[] {
+  const live = lists.filter((l) => l.length > 0)
+  if (live.length === 0) return []
+  if (live.length === 1) return [...(live[0] as readonly CanvasElement[])]
+  const at = live.map(() => 0)
+  const seen = new Set<string>()
+  const out: CanvasElement[] = []
+  for (;;) {
+    let best = -1
+    for (let i = 0; i < live.length; i++) {
+      const el = (live[i] as readonly CanvasElement[])[at[i] as number]
+      if (!el) continue
+      if (best < 0 || paintOrder(el, (live[best] as readonly CanvasElement[])[at[best] as number] as CanvasElement) < 0)
+        best = i
+    }
+    if (best < 0) return out
+    const el = (live[best] as readonly CanvasElement[])[at[best] as number] as CanvasElement
+    at[best] = (at[best] as number) + 1
+    if (seen.has(el.id)) continue
+    seen.add(el.id)
+    out.push(el)
+  }
+}
+
+/**
+ * `mergeInPaintOrder`, remembered: while each list is the same array as at the last call (the index keeps its answers
+ * until a change touches them: through a drag's moves), the same answer, merged once.
+ */
+export function paintOrderMemo(): (lists: readonly (readonly CanvasElement[])[]) => readonly CanvasElement[] {
+  let last: readonly (readonly CanvasElement[])[] = []
+  let answer: readonly CanvasElement[] = []
+  return (lists) => {
+    if (lists.length === last.length && lists.every((l, i) => l === last[i])) return answer
+    last = [...lists]
+    answer = mergeInPaintOrder(lists)
+    return answer
   }
 }
 
@@ -278,6 +387,9 @@ export function createSceneIndexPart(deps: PartDeps): SceneIndex {
     withLobbyKeyPrefix: (prefix) => read((i) => i.withLobbyKeyPrefix(prefix)),
     byFrame: (frameId) => read((i) => i.byFrame(frameId)),
     byKind: (kind) => read((i) => i.byKind(kind)),
+    byType: (type) => read((i) => i.byType(type)),
+    withLobbyKey: (key) => read((i) => i.withLobbyKey(key)),
+    count: () => read((i) => i.count()),
     onChanged: (listener) => {
       listeners.add(listener)
       return () => listeners.delete(listener)
