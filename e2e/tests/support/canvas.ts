@@ -237,10 +237,8 @@ export const setViewport = async (
   await page
     .waitForFunction(
       () => {
-        const b = (
-          window as unknown as { __lobbyBoard?: { canvas: { viewport: { moving(): boolean } } } }
-        ).__lobbyBoard
-        return !b || !b.canvas.viewport.moving()
+        type W = { __lobbyBoard?: { canvas: { viewport: { moving(): boolean } } } }
+        return !(window as unknown as W).__lobbyBoard?.canvas.viewport.moving()
       },
       undefined,
       { timeout: 3_000 },
