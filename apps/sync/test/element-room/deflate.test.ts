@@ -309,8 +309,7 @@ describe('M7-2: permessage-deflate on the board socket', () => {
       const bytes = Buffer.byteLength(text, 'utf8')
       expect(f.rsv1, `${bytes} bytes: ${text.slice(0, 60)}`).toBe(bytes >= 1024)
     }
-    const frameOf = (id: string) =>
-      texts.find((f) => RawFrames.text(f).includes(`"${id}"`)) as Frame
+    const frameOf = (id: string) => texts.find((f) => RawFrames.text(f).includes(`"${id}"`)) as Frame
     expect(frameOf('small-1').rsv1).toBe(false)
     expect(frameOf('big-24').rsv1).toBe(true)
     expect(frameOf('small-2').rsv1).toBe(false)

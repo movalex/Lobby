@@ -32,7 +32,13 @@ describe('readBody', () => {
     const ok = response('GET', 200, async () => '{"ok":true}')
     expect(await readBody(ok, '/api/me', 30)).toEqual({ body: '{"ok":true}', unread: null })
     // a body whose text is the word itself is still a body
-    expect(await readBody(response('GET', 200, async () => 'timeout'), '/api/x', 30)).toEqual({
+    expect(
+      await readBody(
+        response('GET', 200, async () => 'timeout'),
+        '/api/x',
+        30,
+      ),
+    ).toEqual({
       body: 'timeout',
       unread: null,
     })
