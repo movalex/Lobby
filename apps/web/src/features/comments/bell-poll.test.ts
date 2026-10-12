@@ -1,8 +1,11 @@
 // Wave M, M5-3 (CAP-BELL-POLL): the board's bell poll asks only whether anything is new. The minute poll sends the
 // `seq` of the last answer as `since`; a 204 keeps what the bell shows. Every other refresh asks for the whole list,
 // and so does a poll NOTIFICATIONS_WHOLE_REFRESH_MS after the last whole answer (the M5-3 review: what the seq misses).
+// Wave O (the dashboard bell's wave N.1 fix, shared: lib/inbox-poll.ts): a seq is taken at INSERT, before COMMIT, so a
+// lower one can commit after a higher one was listed; the poll sends a seq only once a whole answer asked for
+// INBOX_SEQ_SETTLE_MS after it was first seen shows it again.
 import type { ListNotificationsResponse, NotificationItem } from '@draftroom/contracts'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createApiClient } from '../../api/client.ts'
 import { type CommentsApi, createCommentsApi } from './api.ts'
 import { LOBBY_SIGNALS } from './cells.ts'
@@ -50,11 +53,34 @@ describe('createCommentsApi().notifications (the request)', () => {
 })
 
 describe('CommentsStore: the bell (M5-3)', () => {
+  /** the poll's interval (ported/index.tsx NOTIFICATIONS_POLL_MS) */
+  const POLL = 60_000
   let store: CommentsStore | null = null
+  let t = 1_000_000
+  let now: ReturnType<typeof vi.spyOn> | null = null
+  beforeEach(() => {
+    t = 1_000_000
+    now = vi.spyOn(Date, 'now').mockImplementation(() => t)
+  })
   afterEach(() => {
     store?.dispose()
     store = null
+    now?.mockRestore()
+    now = null
   })
+
+  /** A store over `notifications`, as the board page builds it. */
+  function storeOver(notifications: (signal?: AbortSignal, since?: number) => Promise<unknown>) {
+    store = new CommentsStore({
+      signals: LOBBY_SIGNALS,
+      boardId: BOARD,
+      meId: ME,
+      canComment: true,
+      api: { notifications: vi.fn(notifications) } as unknown as CommentsApi,
+      storage: null,
+    })
+    return store
+  }
 
   function make(answers: (ListNotificationsResponse | null)[]) {
     const sent: (number | undefined)[] = []
@@ -76,28 +102,104 @@ describe('CommentsStore: the bell (M5-3)', () => {
     return { store, sent }
   }
 
-  it('the poll sends the seq of the last answer, and a 204 keeps what the bell shows', async () => {
+  it('the poll sends a seq once a later whole answer still shows it, and a 204 keeps what the bell shows', async () => {
     const first = { notifications: [item(1)], unreadCount: 1, seq: 5 }
-    const { store: s, sent } = make([first, null, null])
+    const { store: s, sent } = make([first, first, null, null])
     await s.refreshNotifications() // a whole refresh (the board opened): since 0
     expect(s.notifications.get()).toEqual({ notifications: [item(1)], unreadCount: 1 })
+    t += POLL
+    await s.refreshNotifications({ onlyIfNew: true }) // seq 5 is not settled yet: the whole list once more
+    t += POLL
     await s.refreshNotifications({ onlyIfNew: true })
+    t += POLL
     await s.refreshNotifications({ onlyIfNew: true })
-    expect(sent).toEqual([0, 5, 5])
+    expect(sent).toEqual([0, 0, 5, 5])
     expect(s.notifications.get()).toEqual({ notifications: [item(1)], unreadCount: 1 })
   })
 
-  it('a newer answer replaces the list and its seq is sent next', async () => {
+  it('a newer answer replaces the list; its seq is sent once a later poll has shown it again', async () => {
     const { store: s, sent } = make([
       { notifications: [item(1)], unreadCount: 1, seq: 5 },
+      { notifications: [item(1)], unreadCount: 1, seq: 5 },
+      { notifications: [item(2), item(1)], unreadCount: 2, seq: 6 },
       { notifications: [item(2), item(1)], unreadCount: 2, seq: 6 },
       null,
     ])
     await s.refreshNotifications()
-    await s.refreshNotifications({ onlyIfNew: true })
+    for (let i = 0; i < 3; i++) {
+      t += POLL
+      await s.refreshNotifications({ onlyIfNew: true })
+    }
     expect(s.notifications.get().unreadCount).toBe(2)
+    t += POLL
     await s.refreshNotifications({ onlyIfNew: true })
-    expect(sent).toEqual([0, 5, 6])
+    expect(sent).toEqual([0, 0, 5, 5, 6])
+  })
+
+  it('wave O: an item whose seq is lower than one already shown (committed later) is not missed', async () => {
+    // the api: a notification's seq is taken at INSERT, before COMMIT, so two transactions for one person commit
+    // out of seq order; `since` is answered 204 when the newest committed seq equals it, else the whole list
+    const committed = new Map<number, NotificationItem>([[5, item(5)]])
+    const sent: (number | undefined)[] = []
+    const s = storeOver(async (_signal, since) => {
+      sent.push(since)
+      const seqs = [...committed.keys()].sort((a, b) => b - a)
+      const max = seqs[0] ?? 0
+      if (since === max) return null
+      const notifications = seqs.map((q) => committed.get(q) as NotificationItem)
+      return { notifications, unreadCount: notifications.length, seq: max }
+    })
+    const shown = () => s.notifications.get().notifications.map((n) => n.id)
+    await s.refreshNotifications() // the board opened
+    t += POLL
+    await s.refreshNotifications({ onlyIfNew: true }) // seq 5 settles
+    t += POLL
+    await s.refreshNotifications({ onlyIfNew: true }) // a 204
+    // a reply takes seq 6 and is still committing; a mention takes 7 and commits first; the next poll sees 7 only
+    committed.set(7, item(7))
+    t += POLL
+    await s.refreshNotifications({ onlyIfNew: true })
+    expect(shown()).toEqual([item(7).id, item(5).id])
+    committed.set(6, item(6)) // a moment later
+    t += POLL
+    await s.refreshNotifications({ onlyIfNew: true })
+    expect(shown()).toEqual([item(7).id, item(6).id, item(5).id])
+    expect(s.notifications.get().unreadCount).toBe(3)
+    t += POLL
+    await s.refreshNotifications({ onlyIfNew: true }) // settled at 7: the 204s again
+    expect(sent).toEqual([0, 0, 5, 5, 5, 7])
+    expect(shown()).toHaveLength(3)
+  })
+
+  it('wave O: a whole refresh right after a new seq does not settle it: the next poll still asks for the whole list', async () => {
+    const same = { notifications: [item(1)], unreadCount: 1, seq: 5 }
+    const { store: s, sent } = make([same, same, same, null])
+    await s.refreshNotifications() // the board opened
+    t += 1_000
+    await s.refreshNotifications() // the tab focused a second later: whole, but too soon to settle seq 5
+    t += POLL
+    await s.refreshNotifications({ onlyIfNew: true })
+    expect(sent.at(-1)).toBe(0)
+    t += POLL
+    await s.refreshNotifications({ onlyIfNew: true })
+    expect(sent).toEqual([0, 0, 0, 5])
+  })
+
+  it('wave O: a 204 to a cursor older than the list shown (the newer items were removed): the whole list next', async () => {
+    const { store: s, sent } = make([
+      { notifications: [item(1)], unreadCount: 1, seq: 5 },
+      { notifications: [item(1)], unreadCount: 1, seq: 5 },
+      { notifications: [item(2), item(1)], unreadCount: 2, seq: 6 },
+      null, // since 5: the newest is 5 again (6 was deleted with its thread)
+      { notifications: [item(1)], unreadCount: 1, seq: 5 },
+    ])
+    await s.refreshNotifications()
+    for (let i = 0; i < 4; i++) {
+      t += POLL
+      await s.refreshNotifications({ onlyIfNew: true })
+    }
+    expect(sent).toEqual([0, 0, 5, 5, 0])
+    expect(s.notifications.get().unreadCount).toBe(1)
   })
 
   it('every other refresh asks for the whole list (since 0): read marks made elsewhere do not change the seq', async () => {
@@ -112,33 +214,29 @@ describe('CommentsStore: the bell (M5-3)', () => {
   })
 
   it('a quiet tab: a poll 5 minutes after the last whole answer asks for the whole list (a read mark made elsewhere shows)', async () => {
-    const now = vi.spyOn(Date, 'now')
-    try {
-      let t = 1_000_000
-      now.mockImplementation(() => t)
-      const { store: s, sent } = make([
-        { notifications: [item(1)], unreadCount: 1, seq: 5 },
-        null,
-        null,
-        // read in another tab: the same seq, a new unread count
-        { notifications: [item(1, '2026-10-10T11:00:00.000Z')], unreadCount: 0, seq: 5 },
-        null,
-      ])
-      await s.refreshNotifications() // the board opened: whole
-      t += 60_000
-      await s.refreshNotifications({ onlyIfNew: true })
-      t += NOTIFICATIONS_WHOLE_REFRESH_MS - 60_001
-      await s.refreshNotifications({ onlyIfNew: true }) // still within the window: cheap
-      expect(s.notifications.get().unreadCount).toBe(1)
-      t += 1
-      await s.refreshNotifications({ onlyIfNew: true }) // the window ended: whole
-      expect(s.notifications.get().unreadCount).toBe(0)
-      t += 60_000
-      await s.refreshNotifications({ onlyIfNew: true }) // cheap again, counted from that whole answer
-      expect(sent).toEqual([0, 5, 5, 0, 5])
-    } finally {
-      now.mockRestore()
-    }
+    const { store: s, sent } = make([
+      { notifications: [item(1)], unreadCount: 1, seq: 5 },
+      { notifications: [item(1)], unreadCount: 1, seq: 5 }, // seq 5 settles
+      null,
+      null,
+      // read in another tab: the same seq, a new unread count
+      { notifications: [item(1, '2026-10-10T11:00:00.000Z')], unreadCount: 0, seq: 5 },
+      null,
+    ])
+    await s.refreshNotifications() // the board opened: whole
+    t += POLL
+    await s.refreshNotifications({ onlyIfNew: true }) // whole: seq 5 settles
+    t += POLL
+    await s.refreshNotifications({ onlyIfNew: true })
+    t += NOTIFICATIONS_WHOLE_REFRESH_MS - POLL - 1
+    await s.refreshNotifications({ onlyIfNew: true }) // still within the window: cheap
+    expect(s.notifications.get().unreadCount).toBe(1)
+    t += 1
+    await s.refreshNotifications({ onlyIfNew: true }) // the window ended: whole
+    expect(s.notifications.get().unreadCount).toBe(0)
+    t += POLL
+    await s.refreshNotifications({ onlyIfNew: true }) // cheap again, counted from that whole answer
+    expect(sent).toEqual([0, 0, 5, 5, 0, 5])
   })
 
   it('a 204 to "since 0" means the bell is empty', async () => {
@@ -193,6 +291,7 @@ describe('CommentsStore: the bell (M5-3)', () => {
     const sent: (number | undefined)[] = []
     const answers: Promise<ListNotificationsResponse | null>[] = [
       Promise.resolve({ notifications: [item(1)], unreadCount: 1, seq: 5 }),
+      Promise.resolve({ notifications: [item(1)], unreadCount: 1, seq: 5 }), // seq 5 settles
       new Promise((r) => {
         releaseWhole = r
       }),
@@ -213,12 +312,14 @@ describe('CommentsStore: the bell (M5-3)', () => {
       storage: null,
     })
     await store.refreshNotifications()
+    t += POLL
+    await store.refreshNotifications()
     const whole = store.refreshNotifications() // e.g. the bell opened: since 0
     await store.refreshNotifications({ onlyIfNew: true }) // the minute poll: since 5, a 204 first
     // read in another tab: the same seq, nothing unread
     releaseWhole({ notifications: [item(1, '2026-10-10T11:00:00.000Z')], unreadCount: 0, seq: 5 })
     await whole
-    expect(sent).toEqual([0, 0, 5])
+    expect(sent).toEqual([0, 0, 0, 5])
     expect(store.notifications.get().unreadCount).toBe(0)
   })
 
@@ -228,17 +329,48 @@ describe('CommentsStore: the bell (M5-3)', () => {
       const { store: s, sent } = make([
         { notifications: [], unreadCount: 0, seq: 3 },
         { notifications: [], unreadCount: 0, seq: 3 },
+        { notifications: [], unreadCount: 0, seq: 3 },
         null,
       ])
       await s.refreshNotifications()
+      await vi.advanceTimersByTimeAsync(POLL)
+      await s.refreshNotifications() // seq 3 settles
       s.scheduleNotificationsRefresh(0) // whole
       s.scheduleNotificationsRefresh(0, { onlyIfNew: true })
       await vi.advanceTimersByTimeAsync(0)
       s.scheduleNotificationsRefresh(0, { onlyIfNew: true })
       await vi.advanceTimersByTimeAsync(0)
-      expect(sent).toEqual([0, 0, 3])
+      expect(sent).toEqual([0, 0, 0, 3])
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('a failed request keeps the list the bell shows, and the next refresh asks again', async () => {
+    const answers: (ListNotificationsResponse | Error)[] = [
+      { notifications: [item(1)], unreadCount: 1, seq: 5 },
+      new Error('offline'),
+      { notifications: [item(2), item(1)], unreadCount: 2, seq: 6 },
+    ]
+    const s = storeOver(async () => {
+      const next = answers.shift()
+      if (next === undefined || next instanceof Error) throw next ?? new Error('no more answers')
+      return next
+    })
+    await s.refreshNotifications()
+    await s.refreshNotifications()
+    expect(s.notifications.get().unreadCount).toBe(1)
+    await s.refreshNotifications()
+    expect(s.notifications.get().unreadCount).toBe(2)
+  })
+
+  it('an answer that lands after dispose is dropped', async () => {
+    let release: (v: ListNotificationsResponse) => void = () => {}
+    const s = storeOver(() => new Promise((r) => (release = r)))
+    const pending = s.refreshNotifications()
+    s.dispose()
+    release({ notifications: [item(1)], unreadCount: 1, seq: 5 })
+    await pending
+    expect(s.notifications.get()).toEqual({ notifications: [], unreadCount: 0 })
   })
 })
