@@ -316,7 +316,10 @@ export function mergeInPaintOrder(lists: readonly (readonly CanvasElement[])[]):
     for (let i = 0; i < live.length; i++) {
       const el = (live[i] as readonly CanvasElement[])[at[i] as number]
       if (!el) continue
-      if (best < 0 || paintOrder(el, (live[best] as readonly CanvasElement[])[at[best] as number] as CanvasElement) < 0)
+      if (
+        best < 0 ||
+        paintOrder(el, (live[best] as readonly CanvasElement[])[at[best] as number] as CanvasElement) < 0
+      )
         best = i
     }
     if (best < 0) return out

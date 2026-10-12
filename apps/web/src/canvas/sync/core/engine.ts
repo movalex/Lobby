@@ -2240,7 +2240,8 @@ export class LobbyEngineCore implements EngineCore {
       arr = c.next
     } else {
       arr = []
-      for (let k = 0; k < c.next.length; k++) if (c.placed.has((c.next[k] as SceneElement).id)) arr.push(own(k))
+      for (let k = 0; k < c.next.length; k++)
+        if (c.placed.has((c.next[k] as SceneElement).id)) arr.push(own(k))
     }
     const t1 = nowMs()
     this.scene.apply(arr)

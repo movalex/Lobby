@@ -116,8 +116,8 @@ export const loadCheckpointPreview = () => import('../preview/index.ts').then((m
 // CR-3A-4 follow-up: the words a read-only role copies from the selection (canvas/board/copy-text.ts, pure),
 // so canvas-ux's menus can offer Copy only where there is something to copy. Additive: no LobbyCanvas member.
 export { selectionText } from '../board/copy-text.ts'
-// Wave K.1 (follow-up 5): the first welcome and its catch-up are applied (the board session marks it). Additive.
-export { markRoomReady, ROOM_READY_FALLBACK_MS, roomReadyOf } from './room-ready.ts'
 // Wave N.1: a few of the scene index's answers as one list in the scene's paint order (a feature that needs the opaque
 // elements above a note, or the cards a face may cover, reads them instead of `items()`). Additive.
 export { mergeInPaintOrder, paintOrderMemo } from './parts/scene-index.ts'
+// Wave K.1 (follow-up 5): the first welcome and its catch-up are applied (the board session marks it). Additive.
+export { markRoomReady, ROOM_READY_FALLBACK_MS, roomReadyOf } from './room-ready.ts'

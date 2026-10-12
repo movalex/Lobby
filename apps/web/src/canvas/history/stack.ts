@@ -16,6 +16,8 @@
  * what was selected when the step began, comes back with an undo, `selection.after` with a redo
  * (`StepResult.selection`; the caller re-selects what is still there).
  */
+
+import { copyElement } from '../sync/core/fields.ts'
 import { type ApplyContext, type ApplyResult, applyChanges, type Direction } from './apply.ts'
 import {
   diffElement,
@@ -26,7 +28,6 @@ import {
   type Scene,
   type Side,
 } from './diff.ts'
-import { copyElement } from '../sync/core/fields.ts'
 import { clone, deepEqual, fieldGroup, type GroupName } from './fields.ts'
 
 export interface TrackedChange extends ElementChange {

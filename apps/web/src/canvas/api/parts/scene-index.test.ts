@@ -250,8 +250,10 @@ describe('canvas.index is incremental and equals a full rebuild (N1-6)', () => {
               const fs = frames().filter((f) => f !== target.id)
               t.frameId = fs.length && r() < 0.7 ? pick(fs) : null
             } else {
-              const cd = (t.customData ?? (t.customData = {})) as { lobby?: Record<string, unknown> }
-              const l = cd.lobby ?? (cd.lobby = {})
+              if (!t.customData) t.customData = {}
+              const cd = t.customData as { lobby?: Record<string, unknown> }
+              if (!cd.lobby) cd.lobby = {}
+              const l = cd.lobby
               l[`${pick(PREFIXES)}u${Math.floor(r() * 4)}`] = true
             }
             next = target

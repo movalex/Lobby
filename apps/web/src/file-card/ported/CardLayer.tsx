@@ -112,7 +112,7 @@ const placeOf = (all: readonly CanvasElement[]): ReadonlyMap<string, number> => 
   let m = places.get(all)
   if (!m) {
     const built = new Map<string, number>()
-    all.forEach((e, i) => built.set(e.id, i))
+    for (let i = 0; i < all.length; i++) built.set((all[i] as CanvasElement).id, i)
     places.set(all, built)
     m = built
   }
