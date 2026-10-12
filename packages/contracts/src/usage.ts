@@ -181,9 +181,9 @@ export type PaletteCommandId = (typeof PALETTE_COMMAND_IDS)[number]
  * registers the command, apps/web/src/lib/usage.test.ts checks the two lists).
  */
 export const PENDING_PALETTE_COMMAND_IDS: readonly PaletteCommandId[] = [
-  'reactions.react',
-  // board-links.insert and board-links.backlinks: registered by WS7 (features/board-links)
-  'ai.capture',
+  // wave N: none left. reactions.react is registered by WS3 (features/workshops), board-links.insert and
+  // board-links.backlinks by WS7 (features/board-links), ai.capture by WS5 (features/ai/capture; listing it here
+  // again holds the whole capture feature on the web).
 ]
 
 /**

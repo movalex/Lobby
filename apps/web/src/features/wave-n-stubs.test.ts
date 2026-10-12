@@ -36,11 +36,9 @@ describe('the wave N features are registered and contribute nothing yet', () => 
     expect(ids).toContain('board-links')
   })
 
-  it('their palette commands are contract ids, pending until registered', () => {
-    for (const id of [AI_CAPTURE_COMMAND_ID]) {
-      expect(PALETTE_COMMAND_IDS as readonly string[]).toContain(id)
-      expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).toContain(id)
-    }
+  it('the capture palette command is a contract id, registered (WS5: features/ai/capture/entries.ts)', () => {
+    expect(PALETTE_COMMAND_IDS as readonly string[]).toContain(AI_CAPTURE_COMMAND_ID)
+    expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).not.toContain(AI_CAPTURE_COMMAND_ID)
   })
 })
 
