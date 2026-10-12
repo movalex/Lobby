@@ -9,7 +9,10 @@
 //
 // What does not count, because nobody did it:
 //  - a bound label counts for its container, once: a note whose label was typed into is one changed note, a new note
-//    with its label is one added note, and a label alone is never an entry of its own;
+//    with its label is one added note, and a label alone is never an entry of its own. A deleted label is read the same
+//    way from the commit time alone (a tombstone keeps no `containerId`): the one that shares its commit with a deleted
+//    container, or with a live container that changed, is that container's label (the one known error: a free text
+//    deleted in the very same commit as a changed shape is folded away with it);
 //  - a server re-snap of an arrow: the server moves a bound arrow (and its label) in the SAME commit that moved its
 //    target, so every commit that touched the arrow carries the target's `updated`. An arrow all of whose touches
 //    are such commits only followed its shapes: it is "derived", not changed. (With a checkpoint from before the
@@ -154,16 +157,27 @@ export function whatChanged(input: WhatChangedInput): VisitChanges | null {
     if (hidden(t.id)) continue
     removedAll.push({ id: t.id, type: t.type, updated })
   }
-  // A deleted container takes its label with it in one commit; a tombstone has no `containerId`, so a deleted text
-  // that shares its commit with a deleted container-capable element is that label (counts for the container).
+  // A deleted container takes its label with it in one commit, and a label cleared while its container stays is
+  // deleted in the commit that changed the container. A tombstone has no `containerId` (it is redacted to id, type,
+  // version, index and `updated`), so a deleted text is read as that label when its commit is the commit of a deleted
+  // container-capable element or of a live added/changed one: it counts for the container, not as a removal of its own.
+  // This is a guess from the commit time, kept to those two cases: a free text deleted in the very same commit as a
+  // changed shape (one multi-element edit) is folded away with it, which undercounts by one and is the rarer mistake.
   const containerCommits = new Set<number>()
   for (const r of removedAll) if (CONTAINER_TYPES.has(r.type)) containerCommits.add(r.updated)
+  for (const id of [...addedSet, ...changedSet]) {
+    const e = liveById.get(id)
+    const u = e ? num(e.updated) : null
+    if (e && u !== null && CONTAINER_TYPES.has(e.type)) containerCommits.add(u)
+  }
+  // the commits of the removals that stand: a folded label does not free an arrow's end, its container's own commit does
   const removed: RemovedItem[] = []
+  const deleteCommits = new Set<number>()
   for (const r of removedAll) {
     if (r.type === 'text' && containerCommits.has(r.updated)) continue
     removed.push({ id: r.id, type: r.type })
+    deleteCommits.add(r.updated)
   }
-  const deleteCommits = new Set<number>(removedAll.map((r) => r.updated))
 
   // ---- arrows that only followed their shapes ----
   let derived = 0

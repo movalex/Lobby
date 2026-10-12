@@ -61,11 +61,17 @@ export async function computeHighlights(
   let refined = false
 
   if (changes.refinable && deps.checkpointElements && live.length + tombstones.length < MAX_DIFF_ELEMENTS) {
+    // The request is the page's too: when the wait runs out the request is cancelled, so a slow checkpoint is not
+    // downloaded and parsed on the main thread after the chip has already shown the timestamps' answer.
+    const request = new AbortController()
+    const cancel = () => request.abort()
+    signal.addEventListener('abort', cancel, { once: true })
     try {
       const got = await Promise.race([
-        deps.checkpointElements(answer.previousSeenAt, signal),
+        deps.checkpointElements(answer.previousSeenAt, request.signal),
         (deps.after ?? wait)(deps.refineWaitMs ?? REFINE_WAIT_MS),
       ])
+      if (got === 'timeout') request.abort()
       if (signal.aborted) return null
       if (got && got !== 'timeout') {
         changes = refineWithCheckpoint(changes, got, live, deps.isHidden ? { isHidden: deps.isHidden } : {})
@@ -73,6 +79,8 @@ export async function computeHighlights(
       }
     } catch {
       // the timestamps' answer stands
+    } finally {
+      signal.removeEventListener('abort', cancel)
     }
     if (changes.total === 0) return null
   }

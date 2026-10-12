@@ -118,7 +118,7 @@ describe('computeHighlights', () => {
     expect(arrow.calls.checkpoint).toBe(1)
   })
 
-  it('a checkpoint narrows the removed to what it had, with its name; made-and-deleted while away drops out', async () => {
+  it('a checkpoint names and places the removed it knew; one it never had (a stale checkpoint) is still counted', async () => {
     const cp = [
       {
         id: 'kept',
@@ -141,7 +141,7 @@ describe('computeHighlights', () => {
     ]
     const { d } = deps({
       live: [el('edit', 'stickynote', { updated: AFTER })],
-      tombstones: [tomb('kept', 'stickynote', AFTER), tomb('phantom', 'stickynote', AFTER)],
+      tombstones: [tomb('kept', 'stickynote', AFTER), tomb('later', 'stickynote', AFTER)],
       checkpointElements: async () => cp,
     })
     const found = await computeHighlights(d, answer(), signal())
@@ -153,15 +153,86 @@ describe('computeHighlights', () => {
         name: 'Note “Ship it”',
         bounds: { x: 10, y: 20, width: 100, height: 100 },
       },
+      { id: 'later', type: 'stickynote' },
     ])
+    expect(found?.changes.counts.removed).toBe(2)
   })
 
-  it('a checkpoint that leaves nothing means nothing to show', async () => {
+  it('a deletion alone still shows the chip when the checkpoint is older than the deleted item', async () => {
     const { d } = deps({
-      tombstones: [tomb('phantom', 'stickynote', AFTER)],
-      checkpointElements: async () => [],
+      tombstones: [tomb('later', 'stickynote', AFTER)],
+      checkpointElements: async () => [], // the stale checkpoint knows nothing of it
+    })
+    const found = await computeHighlights(d, answer(), signal())
+    expect(found?.changes.counts).toEqual({ added: 0, changed: 0, removed: 1 })
+  })
+
+  it('a checkpoint that finds no net change in what looked changed means nothing to show', async () => {
+    // an arrow touched after the visit whose content is what the checkpoint had: nothing a person did
+    const same = {
+      id: 'a',
+      type: 'arrow',
+      x: 0,
+      y: 0,
+      width: 10,
+      height: 10,
+      angle: 0,
+      version: 3,
+      points: [
+        [0, 0],
+        [10, 10],
+      ],
+      startBinding: null,
+      endBinding: null,
+    }
+    const { d } = deps({
+      live: [{ ...el('a', 'arrow', { updated: AFTER }), ...same } as VisitElement],
+      checkpointElements: async () => [same],
     })
     expect(await computeHighlights(d, answer(), signal())).toBeNull()
+  })
+
+  it('cancels the checkpoint request when the wait runs out, and when the page goes away; a timely one is left alone', async () => {
+    let slowSignal: AbortSignal | undefined
+    const slow = deps({
+      tombstones: [tomb('gone', 'stickynote', AFTER)],
+      checkpointElements: (_s, sig) => {
+        slowSignal = sig
+        return new Promise(() => {})
+      },
+      after: async () => 'timeout',
+    })
+    expect((await computeHighlights(slow.d, answer(), signal()))?.refined).toBe(false)
+    expect(slowSignal?.aborted).toBe(true) // not downloaded and parsed after the chip showed the timestamps' answer
+
+    let quickSignal: AbortSignal | undefined
+    const quick = deps({
+      tombstones: [tomb('gone', 'stickynote', AFTER)],
+      checkpointElements: async (_s, sig) => {
+        quickSignal = sig
+        return []
+      },
+      after: () => new Promise(() => {}),
+    })
+    expect((await computeHighlights(quick.d, answer(), signal()))?.refined).toBe(true)
+    expect(quickSignal?.aborted).toBe(false)
+
+    const page = new AbortController()
+    let pageSignal: AbortSignal | undefined
+    const away = deps({
+      tombstones: [tomb('gone', 'stickynote', AFTER)],
+      checkpointElements: (_s, sig) => {
+        pageSignal = sig
+        return new Promise(() => {})
+      },
+      after: () => new Promise(() => {}),
+    })
+    const pending = computeHighlights(away.d, answer(), page.signal)
+    for (let i = 0; i < 6; i++) await Promise.resolve()
+    expect(pageSignal?.aborted).toBe(false)
+    page.abort()
+    expect(pageSignal?.aborted).toBe(true)
+    void pending
   })
 
   it('does not wait for a slow checkpoint, and keeps the timestamps’ answer when it fails or is refused', async () => {

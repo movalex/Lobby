@@ -6,15 +6,24 @@
 // 'derived'. So, over the timestamp result:
 //  - changed: only what the diff also calls a change (geometry, text, style), or an element new since the checkpoint
 //    (made before the visit, then edited after it); 'derived' arrows and elements with no net difference are dropped;
-//  - removed: only what the checkpoint had (it was on the board at some point before the visit), with the name and the
-//    place the checkpoint knew it by, which a tombstone does not keep;
+//  - removed: every removal the timestamps found is kept, and the checkpoint only adds the name and the place it knew
+//    the item by, which a tombstone does not keep. It is NOT a filter: auto checkpoints are hourly or made when the last
+//    editor leaves, so the newest one before the visit is usually a session or more stale, and a note made after it,
+//    seen by this person and then deleted while they were away, is absent from it. Dropping what the checkpoint lacks
+//    would hide a real deletion (and the chip, if it was the only change). The price is the opposite error, a note made
+//    and deleted entirely while they were away is counted as removed, which is rare and the cheaper mistake;
 //  - added: unchanged (the server's creation stamp is exact).
 // Pure; a board of 20,000 elements or more is not compared (the caller skips it: MAX_DIFF_ELEMENTS).
 
 import { type DiffBounds, type DiffEntry, diffCheckpoint } from '../history/ported/diff.ts'
 import { finish, type RemovedItem, type VisitChanges } from './model.ts'
 
-/** Boards at or over this many elements keep the timestamps' answer: the diff walks both sides' fields. */
+/**
+ * Boards at or over this many elements keep the timestamps' answer: the diff walks both sides' fields. (Measured in
+ * Node on synthetic notes and arrows: the diff itself takes about 5 ms at 10,000 elements and 11 to 16 ms at 20,000, so
+ * it is not what costs at open; the cost that is bounded is the checkpoint download, which ./run.ts cancels when its
+ * wait runs out.)
+ */
 export const MAX_DIFF_ELEMENTS = 20_000
 
 /** The diff kinds that are a person's change to an element that was already on the board. */
@@ -35,12 +44,10 @@ export function refineWithCheckpoint(
     if (entry && REAL_CHANGES.has(entry.kind)) changed.push(id)
     else if (entry?.kind === 'derived') derived++
   }
-  const removed: RemovedItem[] = []
-  for (const r of changes.removed) {
+  const removed: RemovedItem[] = changes.removed.map((r) => {
     const entry = byId.get(r.id)
-    if (entry?.kind !== 'removed') continue
-    removed.push({ ...r, name: entry.name, bounds: boundsOf(entry.bounds) })
-  }
+    return entry?.kind === 'removed' ? { ...r, name: entry.name, bounds: boundsOf(entry.bounds) } : r
+  })
   return finish(changes.seenAt, changes.added, changed, removed, derived, false)
 }
 

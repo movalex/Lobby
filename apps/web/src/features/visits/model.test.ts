@@ -152,6 +152,34 @@ describe('whatChanged: bound labels count for their container, once', () => {
   })
 })
 
+describe('whatChanged: a label cleared while its container stays', () => {
+  it('is the container’s change, not a removal of its own (the tombstone shares the container’s commit)', () => {
+    const r = run([note('n', { updated: AFTER })], [tomb('n.t', 'text', AFTER)])
+    expect(r?.changed).toEqual(['n'])
+    expect(r?.removed).toEqual([])
+    expect(r?.counts).toEqual({ added: 0, changed: 1, removed: 0 })
+    // an arrow’s label the same way
+    const arrow = run([el('a', 'arrow', { updated: AFTER })], [tomb('a.t', 'text', AFTER)])
+    expect(arrow?.removed).toEqual([])
+    expect(arrow?.changed).toEqual(['a'])
+  })
+
+  it('a text deleted in another commit than the container’s change is still its own removal', () => {
+    const r = run([note('n', { updated: AFTER })], [tomb('free', 'text', AFTER + 9)])
+    expect(r?.removed).toEqual([{ id: 'free', type: 'text' }])
+    expect(r?.counts).toEqual({ added: 0, changed: 1, removed: 1 })
+    // and a note that was NOT touched since the visit shares no commit with it
+    const untouched = run([note('n')], [tomb('free', 'text', AFTER)])
+    expect(untouched?.removed).toEqual([{ id: 'free', type: 'text' }])
+  })
+
+  it('known limit: a free text deleted in the very same commit as a changed shape is folded into it (one undercount)', () => {
+    const r = run([note('n', { updated: AFTER })], [tomb('free', 'text', AFTER)])
+    expect(r?.removed).toEqual([])
+    expect(r?.counts).toEqual({ added: 0, changed: 1, removed: 0 })
+  })
+})
+
 describe('whatChanged: the server’s re-snaps are not changes (without a checkpoint)', () => {
   // B —A→ C, C moved at AFTER: the server re-snapped A (and its label) in the same commit
   const B = el('B', 'rectangle')
@@ -370,7 +398,19 @@ describe('refineWithCheckpoint: the checkpoint from before the visit makes it ex
     expect(refined.changed).toEqual(['C', 'A'])
   })
 
-  it('removed: only what the checkpoint had, with its name and its place; made-and-deleted while away is not removed', () => {
+  it('a STALE checkpoint does not hide a deletion: a note made after it, seen, then deleted while away is still removed', () => {
+    // The newest checkpoint before the visit was made a session before it. "seen" was made after that checkpoint and
+    // before the visit, and someone deleted it while she was away. It is the only change: the chip must still show.
+    const live = [Bn] as unknown as El[]
+    const timestamps = run(live, [tomb('seen', 'stickynote', AFTER)])
+    expect(timestamps?.counts).toEqual({ added: 0, changed: 0, removed: 1 })
+    const refined = refineWithCheckpoint(timestamps as NonNullable<typeof timestamps>, [Bc], live)
+    expect(refined.removed).toEqual([{ id: 'seen', type: 'stickynote' }])
+    expect(refined.counts).toEqual({ added: 0, changed: 0, removed: 1 })
+    expect(refined.total).toBe(1)
+  })
+
+  it('removed: every removal the timestamps found is kept; the checkpoint adds a name and a place to those it knew', () => {
     const kept = base('kept', 'stickynote', { x: 40, y: 80, boundElements: [{ id: 'kept.t', type: 'text' }] })
     const keptLabel = base('kept.t', 'text', {
       containerId: 'kept',
@@ -393,8 +433,9 @@ describe('refineWithCheckpoint: the checkpoint from before the visit makes it ex
         name: 'Note “Ship it”',
         bounds: { x: 40, y: 80, width: 100, height: 100 },
       },
+      { id: 'phantom', type: 'stickynote' }, // the checkpoint never had it: no name, no place, still counted
     ])
-    expect(refined.counts.removed).toBe(1)
+    expect(refined.counts.removed).toBe(2)
   })
 
   it('drops a "changed" element with no net difference from the checkpoint, keeps one made after it and edited since', () => {

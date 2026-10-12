@@ -6,8 +6,9 @@
 //  - alice's tab only receives: it pushes no element while the highlights are up;
 //  - a Mark all seen the api drops (inside its 10 s write interval) is still honoured by a reload of the same tab;
 //  - the server's re-snap of an arrow bound to a moved note is not a change (in the real room the arrow carries the
-//    commit's own time), with no checkpoint; and with one from before the visit (the real history routes) a note made
-//    and deleted while she was away is not "removed" either;
+//    commit's own time), with no checkpoint; and with one from before the visit (the real history routes) the arrow
+//    is left out too, while every removal stays counted: the checkpoint only names them, it never filters them (a
+//    checkpoint older than what she saw must not hide a deletion: the stale-checkpoint test);
 //  - a name-only guest makes no visit request at all and keeps the device-local Catch me up.
 import type { Browser, Page } from '@playwright/test'
 import {
@@ -416,7 +417,7 @@ test('a bound arrow that only followed a moved note is not a change: the server 
   })
 })
 
-test('with a checkpoint from before the visit, a note made and deleted while she was away is not “removed”', async ({
+test('with a checkpoint from before the visit: the arrow that only followed is left out, removed items get their names, and a note made and deleted while she was away is still counted', async ({
   join,
   board,
 }) => {
@@ -434,21 +435,57 @@ test('with a checkpoint from before the visit, a note made and deleted while she
   await expectSaved(b.page)
   await deleteItem(b.page, 'n4-del') // she had seen this one
   await seed(b.page, { notes: [{ id: 'n4-ghost', x: 800, y: 400, text: 'Here and gone' }] })
-  await deleteItem(b.page, 'n4-ghost') // she never saw this one
+  await deleteItem(b.page, 'n4-ghost') // she never saw this one (the timestamps cannot tell: it is counted, see below)
   await expectSaved(b.page)
 
   const a2 = await join('alice')
   await expect(chip(a2.page)).toBeVisible({ timeout: 30_000 })
-  await test.step('the checkpoint narrows the counts: the note moved, the one she had seen deleted; the arrow and the ghost are left out', async () => {
+  await test.step('the checkpoint narrows the changed (the note moved, the arrow only followed) and keeps every removal', async () => {
     await expect(chip(a2.page)).toHaveAttribute('data-added', '0')
     await expect(chip(a2.page)).toHaveAttribute('data-changed', '1')
-    await expect(chip(a2.page)).toHaveAttribute('data-removed', '1')
+    // the checkpoint is not a filter on removals: it cannot know what she saw after it, so the ghost counts too
+    await expect(chip(a2.page)).toHaveAttribute('data-removed', '2')
     await a2.page.getByTestId('visits-removed-toggle').click()
     const list = a2.page.getByTestId('visits-removed-list')
     await expect(list).toContainText('Will be deleted')
-    await expect(list).not.toContainText('Here and gone')
+    await expect(list).toContainText('Here and gone')
   })
   await test.step('it read the checkpoint through the history routes: the list, then one content', async () => {
+    const paths = a2.net.responses.map((r) => r.path)
+    expect(paths.filter((p) => /\/snapshots$/.test(p)).length).toBeGreaterThanOrEqual(1)
+    expect(paths.filter((p) => /\/snapshots\/[^/]+\/content$/.test(p))).toHaveLength(1)
+  })
+})
+
+test('a checkpoint older than what she saw does not hide a deletion: made after it, seen, deleted while away is still removed', async ({
+  join,
+  board,
+}) => {
+  const a1 = await aliceVisitsAndLeaves(join, async (a) => {
+    await seed(a.page, { notes: [{ id: 'n4-keep', x: 0, y: 0, text: 'Kept as it was' }] })
+    await expectSaved(a.page)
+    // the checkpoint is from an hour before she leaves in real life: it has the first note only
+    const res = await a.api.fetch('POST', `/api/boards/${board}/snapshots`, { name: 'Early' })
+    expect(res.status(), await res.text()).toBe(201)
+    // made after the checkpoint, and seen by her before she left
+    await seed(a.page, { notes: [{ id: 'n4-del', x: 260, y: 0, text: 'Made after the checkpoint' }] })
+    await expectSaved(a.page)
+  })
+  void a1
+
+  const b = await join('bob', 'editor')
+  await expect.poll(async () => (await item(b.page, 'n4-del')) !== null).toBe(true)
+  await deleteItem(b.page, 'n4-del') // the only change while she was away
+  await expectSaved(b.page)
+
+  const a2 = await join('alice')
+  await test.step('the chip still shows the deletion, though the checkpoint never had that note', async () => {
+    await expect(chip(a2.page)).toBeVisible({ timeout: 30_000 })
+    await expect(chip(a2.page)).toHaveAttribute('data-added', '0')
+    await expect(chip(a2.page)).toHaveAttribute('data-changed', '0')
+    await expect(chip(a2.page)).toHaveAttribute('data-removed', '1')
+  })
+  await test.step('it did read the stale checkpoint (the list, then one content): the refinement ran and kept the removal', async () => {
     const paths = a2.net.responses.map((r) => r.path)
     expect(paths.filter((p) => /\/snapshots$/.test(p)).length).toBeGreaterThanOrEqual(1)
     expect(paths.filter((p) => /\/snapshots\/[^/]+\/content$/.test(p))).toHaveLength(1)
