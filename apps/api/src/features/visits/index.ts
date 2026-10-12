@@ -77,16 +77,21 @@ export async function registerVisits(app: FastifyInstance, ctx: FeatureContext):
     await gate.settle(key, at.getTime())
     const recent = gate.recent(key, at.getTime())
     if (recent) {
-      // inside the interval: nothing is written; the earlier visit's answer, else the stored time
+      // inside the interval: nothing is written; the earlier visit's answer, else the stored time, unless a "seen"
+      // kept since is newer (wave N.1: Mark all seen in one tab, then another opens): that time, which will be stored
       if (recent.answer) {
         try {
-          return await recent.answer
+          const shared = await recent.answer
+          const kept = gate.keptAt(key)
+          return kept !== null && kept > shared.seenAt ? { previousSeenAt: kept, seenAt: kept } : shared
         } catch {
           // that write failed: this call may try for itself below
         }
       }
       const stored = await storedVisit(db, boardId, user.id)
-      if (stored !== null) return { previousSeenAt: stored, seenAt: stored }
+      const kept = gate.keptAt(key)
+      const latest = kept !== null && (stored === null || kept > stored) ? kept : stored
+      if (latest !== null) return { previousSeenAt: latest, seenAt: latest }
     }
 
     const write = recordVisit(db, boardId, user.id, at)

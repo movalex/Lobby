@@ -116,6 +116,14 @@ export class VisitWriteGate {
     this.trails.add(key)
   }
 
+  /**
+   * The "seen" time kept for `key`, not written yet (null when none): a visit inside the interval answers it when it is
+   * newer than what it would answer otherwise, so another tab or device opened right after Mark all seen agrees.
+   */
+  keptAt(key: string): number | null {
+    return this.entries.get(key)?.trail?.at ?? null
+  }
+
   /** A write that failed is not a write: the next call may try again. */
   forget(key: string, entry: Entry): void {
     if (this.entries.get(key) === entry && !entry.trail && !entry.writing) this.entries.delete(key)
