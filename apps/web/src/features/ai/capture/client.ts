@@ -169,11 +169,42 @@ export async function capturePhoto(
   opts: { signal?: AbortSignal } = {},
 ): Promise<CaptureResponse> {
   if (!photoCaptureAvailable()) throw new CaptureUnavailableError()
-  return send('photo', capturePhotoPath(boardId, mode), {
-    body: jpeg,
-    contentType: 'image/jpeg',
-    ...(opts.signal ? { signal: opts.signal } : {}),
-  })
+  const path = capturePhotoPath(boardId, mode)
+  const signal = opts.signal ? { signal: opts.signal } : {}
+  try {
+    return await send('photo', path, { body: jpeg, contentType: 'image/jpeg', ...signal })
+  } catch (e) {
+    // The api refuses a photo before it reads the body (the day's cap, access, vision off), and a proxy on the way
+    // can drop such an answer while the upload is still going: the browser then sees only a network error. Asked
+    // again without the photo, the api gives the same refusal before reading anything (and an empty body is never
+    // sent on to OpenAI or counted), so the person sees why; with no refusal, the network error stands.
+    if (!isApiError(e) || e.kind !== 'network' || opts.signal?.aborted) throw e
+    const why = await refusalWithoutPhoto(path, opts.signal)
+    throw why ?? e
+  }
+}
+
+/** The refusal the photo route gives a request with no photo (401, 403, 404, 429), or null for anything else. */
+async function refusalWithoutPhoto(path: string, signal?: AbortSignal): Promise<Error | null> {
+  let res: Response
+  try {
+    res = await fetch(path, {
+      method: 'POST',
+      headers: {
+        'content-type': 'image/jpeg',
+        accept: 'application/json',
+        [LOBBY_CLIENT_HEADER]: String(LOBBY_CLIENT_REV),
+      },
+      body: new Blob([], { type: 'image/jpeg' }),
+      credentials: 'same-origin',
+      cache: 'no-store',
+      ...(signal ? { signal } : {}),
+    })
+  } catch {
+    return null
+  }
+  if (![401, 403, 404, 429].includes(res.status)) return null
+  return refused('photo', await errorFromResponse(res))
 }
 
 export async function captureBoardImage(

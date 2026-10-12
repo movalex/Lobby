@@ -223,6 +223,74 @@ describe('the requests', () => {
     expect(captureAvailable()).toBe(true)
   })
 
+  it('a photo upload lost on the way asks again without the photo, and shows the refusal the api gives then', async () => {
+    const capped = () =>
+      new Response(
+        JSON.stringify({
+          error: { code: 'AI_CAPTURE_DAILY_CAP', message: 'You’ve used your 10 photo captures for today.' },
+        }),
+        { status: 429 },
+      )
+    const answers: (() => Response)[] = []
+    answer = () => {
+      const next = answers.shift()
+      if (!next) throw new TypeError('Failed to fetch')
+      return next()
+    }
+    // the upload fails as a network error; the second request has no photo and gets the refusal
+    answers.push(() => {
+      throw new TypeError('Failed to fetch')
+    }, capped)
+    await expect(
+      capturePhoto('b-board00001', new Blob([new Uint8Array(4096)]), 'notes'),
+    ).rejects.toMatchObject({
+      status: 429,
+      code: 'AI_CAPTURE_DAILY_CAP',
+      message: 'You’ve used your 10 photo captures for today.',
+    })
+    expect(sent.map((s) => [s.url, s.headers['content-type'], (s.body as Blob).size])).toEqual([
+      ['/api/boards/b-board00001/ai/capture/photo?mode=notes', 'image/jpeg', 4096],
+      ['/api/boards/b-board00001/ai/capture/photo?mode=notes', 'image/jpeg', 0],
+    ])
+    // nothing to refuse (the api says the empty body is not a photo): the network error stands
+    sent = []
+    answers.push(
+      () => {
+        throw new TypeError('Failed to fetch')
+      },
+      () =>
+        new Response(JSON.stringify({ error: { code: 'AI_CAPTURE_BAD_IMAGE', message: 'Not a photo.' } }), {
+          status: 415,
+        }),
+    )
+    await expect(
+      capturePhoto('b-board00001', new Blob([new Uint8Array(4096)]), 'notes'),
+    ).rejects.toMatchObject({
+      kind: 'network',
+    })
+    expect(sent).toHaveLength(2)
+    // vision turned off meanwhile: the unknown route's 404 hides photos, as on the first request
+    answers.push(() => {
+      throw new TypeError('Failed to fetch')
+    }, notFound())
+    await expect(capturePhoto('b-board00001', new Blob([]), 'notes')).rejects.toBeInstanceOf(
+      CaptureUnavailableError,
+    )
+    expect(photoCaptureAvailable()).toBe(false)
+  })
+
+  it('a cancelled photo is not asked again', async () => {
+    const abort = new AbortController()
+    answer = () => {
+      abort.abort()
+      throw new DOMException('aborted', 'AbortError')
+    }
+    await expect(
+      capturePhoto('b-board00001', new Blob([]), 'notes', { signal: abort.signal }),
+    ).rejects.toMatchObject({ name: 'AbortError' })
+    expect(sent).toHaveLength(1)
+  })
+
   it('an answer that is not the contract’s is refused', async () => {
     answer = () => new Response(JSON.stringify({ runId: 'x', result: {} }), { status: 200 })
     await expect(captureTranscript('b-board00001', 'x')).rejects.toMatchObject({ kind: 'bad-response' })

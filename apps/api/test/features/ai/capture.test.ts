@@ -205,6 +205,31 @@ describe('the photo', () => {
     ])
   })
 
+  it('a request without the photo (the web asks so after a lost upload) gets the same refusal, else a 415: never a call or a row', async () => {
+    const x = await world({ env: { DRAFTROOM_AI_VISION_USER_DAILY: '1' } })
+    const empty = Buffer.alloc(0)
+    expectError(
+      await postPhoto(x, x.alice.cookie, x.board, empty, { contentType: 'image/jpeg' }),
+      415,
+      'AI_CAPTURE_BAD_IMAGE',
+    )
+    expect(x.openai.requests).toEqual([])
+    expect(await captureRows(x.api)).toEqual([])
+    // the refusals come before any body is read, the same with or without the photo
+    expectError(
+      await postPhoto(x, x.dave.cookie, x.board, empty, { contentType: 'image/jpeg' }),
+      403,
+      'FORBIDDEN',
+    )
+    expect((await postPhoto(x, x.alice.cookie, x.board)).statusCode).toBe(200)
+    expectError(
+      await postPhoto(x, x.alice.cookie, x.board, empty, { contentType: 'image/jpeg' }),
+      429,
+      CAPTURE_ERROR_CODES.dailyCap,
+    )
+    expect(await captureRows(x.api)).toHaveLength(1)
+  })
+
   it('refuses what is not a JPEG, PNG or WebP (415), past 4 MiB (413) or past 4096 px (413), before any call', async () => {
     const x = await world()
     const gif = Buffer.concat([Buffer.from('GIF89a'), Buffer.alloc(64)])
