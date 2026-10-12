@@ -20,9 +20,12 @@
 //
 // Wave N (WS7, N7-4): links between boards ride on the canvas refresh. Every text request asks for them
 // (`?links=1`); a changed answer that carries `links` replaces the board's board_links rows and records its
-// board_link_scans row, in one transaction of their own right after the text's (a failure there is logged and
-// never fails the search index). An answer without `links` (a sync older than wave N ignores the parameter), an
-// unchanged one, or one whose links do not parse keeps the rows as they are. A one-time backfill then fetches,
+// board_link_scans row, in one transaction of their own right after the text's, which also moves the board's
+// canvas source time (the text's transaction leaves it behind for such an answer). A failure there never fails the
+// search index: it is logged, and the board stays stale with the usual failure backoff, so a later refresh fetches
+// it again and retries. A slower process's older answer never replaces a newer one (replaceBoardLinks). An answer
+// without `links` (a sync older than wave N ignores the parameter), an unchanged one, or one whose links do not
+// parse keeps the rows as they are. A one-time backfill then fetches,
 // without `since`, the boards that were indexed before but never had their links scanned (the `unchanged`
 // short-cut would skip them forever), a batch per pass: it pauses while the sync answers without links (an older
 // sync: retried every LINKS_BACKFILL_PAUSE_MS) and, once no such board is left, never runs again in this process.
@@ -321,6 +324,7 @@ export class SearchIndexer {
       return 'gone'
     }
     const sourceAt = row.updated_at // read BEFORE the text (see the top of this file)
+    const askedAt = this.now()
     let answer: BoardTextAnswer
     try {
       if (!this.sync.boardText) throw new Error('the sync client cannot read board text')
@@ -341,6 +345,10 @@ export class SearchIndexer {
     const text = answer.unchanged ? null : canvasEntries(answer)
     const links = answer.unchanged ? null : linksOf(answer)
     if (!answer.unchanged) this.syncLinks = answer.links !== undefined
+    // N7-4: links to write after the text: until they are written (writeLinks), the board's canvas source time and
+    // its failure backoff stay where they were, so a failed or interrupted links write leaves the board stale for
+    // the next refresh (and a failure that persists backs off)
+    const linksPending = text !== null && links !== null
     const at = this.now()
     const result = await this.db.transaction(async (tx): Promise<RefreshResult> => {
       if (!(await this.stillIndexable(tx, boardId))) return 'gone'
@@ -352,48 +360,81 @@ export class SearchIndexer {
             canvas_truncated, failures, retry_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 0, NULL)
          ON CONFLICT (board_id) DO UPDATE SET
-           canvas_source_at = EXCLUDED.canvas_source_at,
+           canvas_source_at = CASE WHEN $9::boolean THEN board_search_state.canvas_source_at
+                                   ELSE EXCLUDED.canvas_source_at END,
            canvas_clock = EXCLUDED.canvas_clock,
            canvas_indexed_at = EXCLUDED.canvas_indexed_at,
            canvas_bytes = CASE WHEN $8::boolean THEN board_search_state.canvas_bytes ELSE EXCLUDED.canvas_bytes END,
            canvas_truncated = CASE WHEN $8::boolean THEN board_search_state.canvas_truncated
                                    ELSE EXCLUDED.canvas_truncated END,
-           failures = 0,
-           retry_at = NULL`,
+           failures = CASE WHEN $9::boolean THEN board_search_state.failures ELSE 0 END,
+           retry_at = CASE WHEN $9::boolean THEN board_search_state.retry_at END`,
         [
           boardId,
           row.workspace_id,
-          sourceAt,
+          linksPending ? null : sourceAt,
           answer.clock,
           at,
           text?.bytes ?? 0,
           text?.truncated ?? false,
           text === null,
+          linksPending,
         ],
       )
       return text ? 'indexed' : 'unchanged'
     })
-    if (result === 'indexed' && links) await this.writeLinks(boardId, links, answer.clock)
+    if (result === 'indexed' && links)
+      await this.writeLinks(boardId, row.workspace_id, links, { clock: answer.clock, sourceAt, askedAt })
     return result
   }
 
   /**
-   * N7-4: replaces the board's links (one transaction of their own, after the text's). Never throws: a failure
-   * is logged (the board id only) and leaves the rows and the scan as they were, for the next refresh.
+   * N7-4: replaces the board's links (one transaction of their own, after the text's), and only then moves the
+   * board's canvas source time to the text's (the text transaction left it behind). Never throws: a failure is
+   * logged (the board id only), keeps the rows and the scan as they were, and leaves the board stale with the
+   * search index's failure backoff, so a later pass or search fetches it again (without `since`) and retries.
    */
-  private async writeLinks(boardId: string, links: readonly BoardTextLink[], clock: number): Promise<void> {
+  private async writeLinks(
+    boardId: string,
+    workspaceId: string,
+    links: readonly BoardTextLink[],
+    answer: { clock: number; sourceAt: Date; askedAt: Date },
+  ): Promise<void> {
     try {
       await this.db.transaction(async (tx) => {
         // The board row first (access.ts lock order, step 1), FOR NO KEY UPDATE: two writers of one board's links
         // (two api processes overlap during a deploy) take turns, so the second DELETE sees the first one's rows
-        // and the board never ends with both sets; a reader sees one set or the other (backlinks.pg.test.ts). A
-        // board deleted meanwhile is skipped (its rows cascade away anyway).
+        // and the board never ends with both sets; a reader sees one set or the other (backlinks.pg.test.ts); and
+        // the slower one's older answer never replaces a newer one recorded meanwhile (replaceBoardLinks). A board
+        // deleted meanwhile is skipped (its rows cascade away anyway).
         const cur = await tx.maybeOne('SELECT id FROM boards WHERE id = $1 FOR NO KEY UPDATE', [boardId])
-        if (cur) await replaceBoardLinks(tx, boardId, links, clock, this.now())
+        if (!cur) return
+        await replaceBoardLinks(tx, boardId, links, answer.clock, this.now(), answer.askedAt)
+        await tx.query(
+          `UPDATE board_search_state
+              SET canvas_source_at = GREATEST(canvas_source_at, $2::timestamptz), failures = 0, retry_at = NULL
+            WHERE board_id = $1`,
+          [boardId, answer.sourceAt],
+        )
       })
     } catch (e) {
       this.warn(e, 'board links could not be indexed', boardId)
+      await this.recordLinksFailure(boardId, workspaceId).catch((err: unknown) =>
+        this.warn(err, 'search could not record a failure', boardId),
+      )
     }
+  }
+
+  /**
+   * N7-4: the links of a freshly indexed board could not be written. The board is made stale (its canvas source
+   * time cleared, so even a board whose text the recent re-check fetched is fetched again) and backs off like a
+   * failed text read (15 s doubling, at most 30 min), so a failure that persists is not retried on every pass.
+   */
+  private async recordLinksFailure(boardId: string, workspaceId: string): Promise<void> {
+    await this.recordFailure(boardId, workspaceId)
+    await this.db.query('UPDATE board_search_state SET canvas_source_at = NULL WHERE board_id = $1', [
+      boardId,
+    ])
   }
 
   /**

@@ -13,10 +13,13 @@ import type { Queryable } from '@draftroom/db'
 import type { BoardRole, BoardStatus, BoardVisibility } from '@draftroom/permissions'
 
 /**
- * Replaces every link FROM `fromBoard` with `links` (inside the caller's transaction) and records the scan at
- * `clock`. A link to the board itself is not indexed (backlinks never name the board itself), nor one to a board
- * that does not exist (the foreign key; a board made later is linked at the next scan). At most
- * BOARD_TEXT_LINKS_MAX rows, one per (element, target). Returns how many rows it wrote.
+ * Replaces every link FROM `fromBoard` with `links` (inside the caller's transaction, which holds the board row's
+ * lock) and records the scan at `clock`. A link to the board itself is not indexed (backlinks never name the board
+ * itself), nor one to a board that does not exist (the foreign key; a board made later is linked at the next scan).
+ * At most BOARD_TEXT_LINKS_MAX rows, one per (element, target). Returns how many rows it wrote, or null when it
+ * wrote nothing because a newer answer was recorded meanwhile: a scan of a higher clock written after this answer
+ * was asked (`askedAt`; two api processes overlap during a deploy, and the slower one holds the older answer). A
+ * higher clock recorded before that is replaced as usual (a board file restored from a backup goes back in clock).
  */
 export async function replaceBoardLinks(
   tx: Queryable,
@@ -24,7 +27,13 @@ export async function replaceBoardLinks(
   links: readonly BoardTextLink[],
   clock: number,
   at: Date,
-): Promise<number> {
+  askedAt: Date = at,
+): Promise<number | null> {
+  const scan = await tx.maybeOne<{ links_clock: number; scanned_at: Date }>(
+    'SELECT links_clock::float8 AS links_clock, scanned_at FROM board_link_scans WHERE board_id = $1',
+    [fromBoard],
+  )
+  if (scan && scan.links_clock > clock && scan.scanned_at.getTime() >= askedAt.getTime()) return null
   await tx.query('DELETE FROM board_links WHERE from_board = $1', [fromBoard])
   const seen = new Set<string>()
   const rows: BoardTextLink[] = []

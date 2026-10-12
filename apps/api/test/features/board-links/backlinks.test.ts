@@ -6,6 +6,7 @@
 
 import { BACKLINKS_MAX, BacklinksAnswer } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { replaceBoardLinks } from '../../../src/features/board-links/store.ts'
 import { LINKS_BACKFILL_PAUSE_MS } from '../../../src/features/search/indexer.ts'
 import { type Client, createBoard, DEV_STUDIO } from '../../helpers.ts'
 import { touch } from '../search/support.ts'
@@ -83,6 +84,97 @@ describe('the indexer stores the links of a board', () => {
     )
     expect(await w.indexer.refreshCanvas(b.A, { since: state.c })).toBe('unchanged')
     expect(await rowsFrom(b.A)).toHaveLength(1)
+  })
+
+  it('a links write that fails leaves the board stale with the failure backoff; a later pass fetches it again and writes them', async () => {
+    const { b } = w
+    w.sync.setLinks(b.A, [{ el: 'card-1', to: b.D }])
+    await index(b.A)
+    // A's links transaction fails (a dropped connection) for its next `failing` writes
+    let failing = 2
+    const db = w.api.db as { transaction: typeof w.api.db.transaction }
+    const transaction = db.transaction.bind(w.api.db)
+    db.transaction = (fn) =>
+      transaction((tx) =>
+        fn({
+          ...tx,
+          query: (sql, params) => {
+            if (failing > 0 && String(sql).startsWith('DELETE FROM board_links') && params?.[0] === b.A) {
+              failing--
+              throw new Error('connection reset')
+            }
+            return tx.query(sql, params)
+          },
+        }),
+      )
+    const state = () =>
+      w.api.db.one<{ source: Date | null; failures: number; retry: Date | null }>(
+        `SELECT canvas_source_at AS source, failures, retry_at AS retry FROM board_search_state WHERE board_id = $1`,
+        [b.A],
+      )
+    // the backoff in whole seconds from now (the test clock also moves with real time)
+    const backoff = (retry: Date | null) =>
+      retry ? Math.round((retry.getTime() - w.api.clock.now().getTime()) / 1_000) : null
+    w.sync.setLinks(b.A, [{ el: 'card-3', to: b.C }])
+    // the text is indexed all the same; the links keep their rows, and the board is stale again, backing off
+    await index(b.A)
+    expect(await rowsFrom(b.A)).toEqual([{ from_element: 'card-1', to_board: b.D, to_element: null }])
+    const s1 = await state()
+    expect(s1.source).toBeNull()
+    expect(s1.failures).toBe(1)
+    expect(backoff(s1.retry)).toBe(15)
+    // within the backoff: not fetched; after it: fetched again (without since), and it fails once more (doubling)
+    w.sync.asked.length = 0
+    await w.indexer.runPass()
+    expect(w.sync.asked.filter((a) => a.boardId === b.A)).toEqual([])
+    w.api.clock.advance(15_001)
+    await w.indexer.runPass()
+    expect(w.sync.asked.filter((a) => a.boardId === b.A)).toEqual([
+      { boardId: b.A, since: undefined, links: true },
+    ])
+    const s2 = await state()
+    expect(s2.failures).toBe(2)
+    expect(backoff(s2.retry)).toBe(30)
+    // the database is fine again: the next pass after the backoff writes the links and the board is fresh
+    w.sync.asked.length = 0
+    w.api.clock.advance(30_001)
+    await w.indexer.runPass()
+    expect(w.sync.asked.filter((a) => a.boardId === b.A)).toHaveLength(1)
+    expect(await rowsFrom(b.A)).toEqual([{ from_element: 'card-3', to_board: b.C, to_element: null }])
+    const s3 = await state()
+    const board = await w.api.db.one<{ updated_at: Date }>('SELECT updated_at FROM boards WHERE id = $1', [
+      b.A,
+    ])
+    expect(s3).toEqual({ source: board.updated_at, failures: 0, retry: null })
+    w.sync.asked.length = 0
+    await w.indexer.runPass()
+    expect(w.sync.asked.filter((a) => a.boardId === b.A)).toEqual([])
+  })
+
+  it('an older answer never replaces a newer one recorded after it was asked (two api processes during a deploy)', async () => {
+    const { b } = w
+    const links = async () => (await rowsFrom(b.A)).map((r) => r.from_element)
+    const replace = (el: string, clock: number, at: number, askedAt: number) =>
+      w.api.db.transaction((tx) =>
+        replaceBoardLinks(tx, b.A, [{ el, to: b.D }], clock, new Date(at), new Date(askedAt)),
+      )
+    const t0 = Date.parse('2026-10-11T10:00:00Z')
+    // the faster process records clock 20 at t0
+    expect(await replace('newer', 20, t0, t0 - 2_000)).toBe(1)
+    // the slower one asked before that (its answer is clock 10): nothing is written
+    expect(await replace('older', 10, t0 + 1_000, t0 - 5_000)).toBeNull()
+    expect(await links()).toEqual(['newer'])
+    // the same clock, or a newer one, replaces as usual
+    expect(await replace('same', 20, t0 + 2_000, t0 - 5_000)).toBe(1)
+    expect(await links()).toEqual(['same'])
+    // a lower clock asked after the higher one was recorded (a board file restored from a backup): replaced
+    expect(await replace('restored', 5, t0 + 60_000, t0 + 30_000)).toBe(1)
+    expect(await links()).toEqual(['restored'])
+    const scan = await w.api.db.one<{ n: number }>(
+      'SELECT links_clock::int AS n FROM board_link_scans WHERE board_id = $1',
+      [b.A],
+    )
+    expect(scan.n).toBe(5)
   })
 
   it('cascades: deleting either board for good takes its links out and in', async () => {
