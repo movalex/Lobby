@@ -313,20 +313,23 @@ describe('a "seen" inside the write interval is kept and written when the interv
     }
   })
 
-  // The e2e (n4-since-visit, "the next open shows none") found it: a visit inside the interval answered the STORED time
-  // while a newer "seen" was kept, so another browser opened right after Mark all seen showed the chip again.
-  it('a visit inside the interval while a "seen" is kept answers that time (another device right after Mark all seen)', async () => {
+  // Inside the interval of a VISIT write, a reload or a second tab still reads that visit's answer (the gate's promise:
+  // tabs opened together agree; the tab that marked it seen remembers so, web visits/ack.ts). The kept time is stored
+  // when the interval ends, so every open after that reads it.
+  it('inside a visit’s interval a reload still reads that visit’s answer; the kept "seen" is read after it', async () => {
     const first = parseAnswer((await w.bob.req('POST', visitPath(w.board))).body)
     w.api.clock.advance(4_000)
     const win = await seen(w.bob, w.board) // kept: inside the visit's interval
     w.api.clock.advance(2_000)
-    const reload = parseAnswer((await w.bob.req('POST', visitPath(w.board))).body)
-    within(reload.previousSeenAt, win)
-    expect(reload.seenAt).toBe(reload.previousSeenAt)
-    expect(reload.previousSeenAt as number).toBeGreaterThan(first.seenAt)
+    expect(parseAnswer((await w.bob.req('POST', visitPath(w.board))).body)).toEqual(first)
+    w.api.clock.advance(VISIT_WRITE_MIN_INTERVAL_MS)
+    within(parseAnswer((await w.bob.req('POST', visitPath(w.board))).body).previousSeenAt, win)
   })
 
-  it('the same once the tick wrote one kept time and another "seen" is kept in the interval that write began', async () => {
+  // The e2e (n4-since-visit, "the next open shows none") found it: once the tick's write of one kept time began an
+  // interval, a visit inside it answered the STORED time while a newer "seen" (Mark all seen) was kept, so another
+  // browser opened right after Mark all seen showed the chip again. It answers the kept time now.
+  it('once the tick wrote one kept time, a visit in the interval it began answers a newer kept "seen"', async () => {
     parseAnswer((await w.bob.req('POST', visitPath(w.board))).body)
     w.api.clock.advance(4_000)
     const firstSeen = await seen(w.bob, w.board)
