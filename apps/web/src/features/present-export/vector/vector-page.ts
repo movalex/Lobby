@@ -113,14 +113,22 @@ function bytesOfDataUrl(href: string): { bytes: Uint8Array; mime: string } | nul
   }
 }
 
-/** FNV-1a over a string (the image cache key across pages: the same photo on several frames is embedded once). */
-function hashOf(s: string): string {
-  let h = 0x811c9dc5
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i)
-    h = Math.imul(h, 0x01000193)
+/**
+ * The image cache key across pages (the same photo on several frames is embedded once): the SHA-256 of the image's
+ * data URL, so two different photos never share one; the whole data URL where no SubtleCrypto exists (a page served
+ * over plain http on a LAN address is no secure context), which is exact too.
+ */
+async function imageKey(href: string): Promise<string> {
+  const subtle = globalThis.crypto?.subtle
+  if (!subtle) return `href:${href}`
+  try {
+    const digest = new Uint8Array(await subtle.digest('SHA-256', new TextEncoder().encode(href)))
+    let hex = ''
+    for (const b of digest) hex += b.toString(16).padStart(2, '0')
+    return `sha256:${hex}`
+  } catch {
+    return `href:${href}`
   }
-  return `${(h >>> 0).toString(36)}:${s.length}`
 }
 
 const isPng = (b: Uint8Array) =>
@@ -188,8 +196,9 @@ export class VectorResources {
     return image
   }
 
-  image(href: string): Promise<PDFImage | null> {
-    const key = hashOf(href)
+  async image(href: string): Promise<PDFImage | null> {
+    const key = await imageKey(href)
+    // nothing awaits between this look-up and the set below: two calls for one image share one embedding
     let p = this.images.get(key)
     if (!p) {
       const decoded = bytesOfDataUrl(href)

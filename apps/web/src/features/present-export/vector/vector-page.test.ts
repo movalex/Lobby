@@ -171,6 +171,45 @@ describe('vector pages', () => {
     expect(pdf.imageObjects).toBe(1)
   })
 
+  it('two different photos never share one embedding, even when a weak hash of their data URLs collides', async () => {
+    // a red and a blue 1×1 PNG (a tEXt chunk varied until they collide): equal length, equal 32-bit FNV-1a hash,
+    // which the cache key once was
+    const RED =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXRFWHRuNgAwMDNtOWkKBW1uAAAAD0lEQVR4AQEEAPv/AP8AAAMBAQCNHeWCAAAAAElFTkSuQmCC'
+    const BLUE =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXRFWHRuNgAwMDA4bm9uXkB9AAAAD0lEQVR4AQEEAPv/AAAA/wEDAQB8wnTbAAAAAElFTkSuQmCC'
+    const fnv = (s: string) => {
+      let h = 0x811c9dc5
+      for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193)
+      return h >>> 0
+    }
+    expect(RED).not.toBe(BLUE)
+    expect([RED.length, fnv(RED)]).toEqual([BLUE.length, fnv(BLUE)])
+    const b = await createPdfBuilder({ title: 'Board', vector: { deps: noFonts } })
+    const svg = frameSvg(
+      '<g transform="translate(10 10)"><use href="#image-r" width="50" height="50"></use></g><g transform="translate(100 10)"><use href="#image-b" width="50" height="50"></use></g>',
+      `<symbol id="image-r"><image href="${RED}" preserveAspectRatio="none" width="100%" height="100%"></image></symbol><symbol id="image-b"><image href="${BLUE}" preserveAspectRatio="none" width="100%" height="100%"></image></symbol>`,
+    )
+    expect(await b.addVectorPage(page(svg))).toEqual({ vector: true })
+    const pdf = await inspect(await b.finish())
+    expect(pdf.imageObjects).toBe(2)
+    const drawn = [...(pdf.contents[0] as string).matchAll(/\/(\S+) Do/g)].map((m) => m[1])
+    expect(drawn).toHaveLength(2)
+    expect(new Set(drawn).size).toBe(2)
+
+    // no SubtleCrypto (a page on a plain-http LAN address): keyed by the whole data URL, exact as well, and the same
+    // photo twice is still embedded once
+    vi.stubGlobal('crypto', {})
+    try {
+      const c = await createPdfBuilder({ title: 'Board', vector: { deps: noFonts } })
+      expect(await c.addVectorPage(page(svg))).toEqual({ vector: true })
+      expect(await c.addVectorPage(page(svg, { title: 'Two' }))).toEqual({ vector: true })
+      expect((await inspect(await c.finish())).imageObjects).toBe(2)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('dashes are drawn natively and an arrow label’s hole is an even-odd clip', async () => {
     const b = await createPdfBuilder({ title: 'Board', vector: { deps: noFonts } })
     const out = await b.addVectorPage(
