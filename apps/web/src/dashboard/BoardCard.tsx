@@ -30,15 +30,16 @@ export function BoardCardThumb({
 }) {
   const listed = board.status === 'trashed' ? null : (board.thumbnailVersion ?? null)
   // A thumbnail this tab sent after the list was fetched (e.g. the board just closed) wins until the
-  // list itself changes; also one whose answer came before this card was made (N1-THUMBS: the list was
-  // read before that upload was stored).
-  const [sent, setSent] = useState<{ version: string | null; over: string | null } | null>(() => {
-    const recent = board.status === 'trashed' ? null : recentThumbnail(board.id)
-    return recent ? { version: recent.version, over: listed } : null
-  })
+  // list itself changes.
+  const [sent, setSent] = useState<{ version: string | null; over: string | null } | null>(null)
   useEffect(() => {
     if (board.status === 'trashed') return
-    return onThumbnailUpdated(board.id, (version) => setSent({ version, over: listed }))
+    const off = onThumbnailUpdated(board.id, (version) => setSent({ version, over: listed }))
+    // N1-THUMBS: also one whose answer came before this card listened (the list was read before that
+    // upload was stored), before the card was made or between its first render and this effect
+    const recent = recentThumbnail(board.id)
+    if (recent) setSent({ version: recent.version, over: listed })
+    return off
   }, [board.id, board.status, listed])
   const version = sent && sent.over === listed ? sent.version : listed
   const [failed, setFailed] = useState<string | null>(null)

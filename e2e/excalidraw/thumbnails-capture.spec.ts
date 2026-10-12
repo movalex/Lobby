@@ -464,12 +464,12 @@ test('thumbnails (F11): back to the dashboard 1.5 s after an edit, the card stil
 })
 
 /**
- * N1-THUMBS: the F11 tests' flake (main and wave N.1 alike), forced. Leaving the board sends its picture (PUT) as the
- * dashboard asks for its board list (GET): the api read the list before the upload was stored (no thumbnail yet), and
- * the upload's answer, which the card listens for, reached the page before the card listened. Here the upload waits
- * until the api has answered the list, and the page gets the list only once the upload's answer is in: announced
- * before the list makes the card (`before-card`), or handed over the moment the card is in the DOM, before React ran
- * the card's effects, its listener among them (`at-card`).
+ * N1-THUMBS: the F11 tests' flake (main and wave N.1 alike), forced. Leaving the board sends its picture
+ * (PUT) as the dashboard asks for its board list (GET): the api read the list before the upload was stored
+ * (no thumbnail yet), and the upload's answer, which the card listens for, reached the page before the card
+ * listened. Here the upload waits until the api has answered the list, and the page gets the list only once
+ * the upload's answer is in: announced before the list makes the card (`before-card`), or handed over the
+ * moment the card is in the DOM, before React ran the card's effects, its listener among them (`at-card`).
  */
 async function leaveInRace(alice: CanvasSession, board: string, order: 'before-card' | 'at-card') {
   const { page } = alice

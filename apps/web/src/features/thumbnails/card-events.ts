@@ -3,15 +3,16 @@
 // reload. Same tab only; other tabs and people see it with their next board list.
 //
 // N1-THUMBS: leaving a board sends its picture as the dashboard asks for its list. The list can be read
-// before the upload is stored and reach the page after the upload's answer, before any card is there
-// to hear it: a card made then takes this tab's recent announcement (`recentThumbnail`).
+// before the upload is stored, and the upload's answer can reach the page before the card listens
+// (before the list made it, or between its first render and its effects): a card that starts listening
+// then takes this tab's recent announcement (`recentThumbnail`).
 
 import { THUMBNAIL_MIN_INTERVAL_MS } from '@draftroom/contracts'
 
 export const THUMBNAIL_UPDATED_EVENT = 'draftroom:thumbnail-updated'
 
 /**
- * How long this tab's announcement counts for a card made after it. Well inside the api's one upload
+ * How long this tab's announcement counts for a card that listens after it. Well inside the api's one upload
  * per board every THUMBNAIL_MIN_INTERVAL_MS (anyone's): no board list read meanwhile can hold a picture
  * newer than the announced one.
  */
