@@ -41,7 +41,27 @@ export interface CoachWorkshop {
      * (./facts.ts seedWorkshop fills it in).
      */
     readonly startedBy?: string | null
+    /**
+     * N1: when the vote last moved (started, closed or revealed; ms since the epoch), or absent/null when not known. An
+     * old vote is not this session's (`liveWorkshop`).
+     */
+    readonly at?: number | null
   } | null
+}
+
+/**
+ * N1 (wave M follow-up 2): a vote that last moved longer ago than this is a past meeting's, not this session's: it neither
+ * names who runs the session nor gives the coach a step. (The vote stays on the board and in History.)
+ */
+export const COACH_VOTE_FRESH_MS = 6 * 60 * 60 * 1000
+
+/**
+ * `ws` as this session sees it at `now`: without its vote when that is older than COACH_VOTE_FRESH_MS. A vote whose age
+ * is not known counts as current (as before), and `ws` itself is returned when nothing is dropped.
+ */
+export function liveWorkshop(ws: CoachWorkshop, now: number): CoachWorkshop {
+  const at = ws.vote?.at
+  return ws.vote && typeof at === 'number' && now - at > COACH_VOTE_FRESH_MS ? { ...ws, vote: null } : ws
 }
 
 export interface CoachFrameNotes {

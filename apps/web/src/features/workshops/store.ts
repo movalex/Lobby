@@ -269,7 +269,7 @@ export class WorkshopStore {
   /** L5-3: the last vote this tab saw revealed, kept when a newer vote opens (lastRevealedResults) */
   private lastRevealed: LastRevealedResults | null = null
   /** M2-2: who started the vote `lastRevealed` is of (a user id) */
-  private lastRevealedBy: { sessionId: string; startedBy: string } | null = null
+  private lastRevealedBy: { sessionId: string; startedBy: string; at: number | null } | null = null
   private alertSeq = 0
   private resultsNews: WorkshopSnapshot['resultsNews'] = null
   private newsSeq = 0
@@ -368,7 +368,11 @@ export class WorkshopStore {
         participants: vote.participants,
         results: vote.results.map((r) => ({ ref: r.shapeId, count: r.count, rank: r.rank })),
       }
-      this.lastRevealedBy = { sessionId: vote.session.id, startedBy: vote.session.createdBy }
+      this.lastRevealedBy = {
+        sessionId: vote.session.id,
+        startedBy: vote.session.createdBy,
+        at: voteActivityMs(vote.session),
+      }
     }
     const sid = vote?.session.id
     return {
@@ -1084,6 +1088,16 @@ export class WorkshopStore {
     return this.lastRevealedBy?.sessionId === sessionId ? this.lastRevealedBy.startedBy : null
   }
 
+  /**
+   * N1: when vote `sessionId` last moved (it was started, closed or revealed; ms since the epoch), if it is the vote this
+   * store holds or the last it saw revealed, else null.
+   */
+  voteActivityAt(sessionId: string): number | null {
+    const vote = this.state?.vote
+    if (vote?.session.id === sessionId) return voteActivityMs(vote.session)
+    return this.lastRevealedBy?.sessionId === sessionId ? this.lastRevealedBy.at : null
+  }
+
   raiseTimerAlert() {
     this.alertSeq++
     this.emit()
@@ -1191,4 +1205,21 @@ export function lastRevealedResults(events: object): LastRevealedResults | null 
  */
 export function voteStarterOf(events: object, sessionId: string): string | null {
   return stores.get(events)?.voteStarter(sessionId) ?? null
+}
+
+/** N1: when vote `sessionId` last moved (ms since the epoch), as far as this tab's store knows; null when it does not. */
+export function voteActivityAtOf(events: object, sessionId: string): number | null {
+  return stores.get(events)?.voteActivityAt(sessionId) ?? null
+}
+
+/** The latest of a vote session's own stamps (started, closed, revealed), ms since the epoch, or null if none parse. */
+function voteActivityMs(session: {
+  createdAt: string
+  closedAt: string | null
+  revealedAt: string | null
+}): number | null {
+  const times = [session.createdAt, session.closedAt, session.revealedAt]
+    .map((t) => (t === null ? Number.NaN : Date.parse(t)))
+    .filter((n) => Number.isFinite(n))
+  return times.length ? Math.max(...times) : null
 }

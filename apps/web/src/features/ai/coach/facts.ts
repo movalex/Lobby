@@ -19,7 +19,7 @@ import {
 import type { CanvasElement, CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { items } from '../../../canvas/api/index.ts'
 import { type Atom, atom } from '../../../lib/signals.ts'
-import { lastRevealedResults, voteStarterOf } from '../../workshops/store.ts'
+import { lastRevealedResults, voteActivityAtOf, voteStarterOf } from '../../workshops/store.ts'
 import { aiKindWord } from '../ported/provenance.ts'
 import { perCanvas } from '../ported/runtime.ts'
 import { frameIndex, frameOfElement, idOfRef, isLive, isNote, noteFacts } from '../ported/target.ts'
@@ -38,8 +38,16 @@ const topOf = (results: readonly { shapeId?: string; ref?: string; count: number
     .sort((a, b) => a.rank - b.rank || b.count - a.count)
     .map((r) => (r.shapeId ?? r.ref) as string)
 
-/** A workshop event applied to the coach's state (pure). Unknown or malformed data changes nothing. */
-export function applyWorkshopEvent(ws: CoachWorkshop, type: string, data: unknown): CoachWorkshop {
+/**
+ * A workshop event applied to the coach's state (pure). Unknown or malformed data changes nothing. A vote event moves the
+ * vote, so it is stamped `now` (N1: how old a vote is decides whether it is still this session's, ./next-step.ts).
+ */
+export function applyWorkshopEvent(
+  ws: CoachWorkshop,
+  type: string,
+  data: unknown,
+  now: number = Date.now(),
+): CoachWorkshop {
   if (type === WORKSHOP_EVENTS.vote) {
     const ev = WorkshopVoteEvent.safeParse(data)
     if (!ev.success) return ws
@@ -52,6 +60,7 @@ export function applyWorkshopEvent(ws: CoachWorkshop, type: string, data: unknow
         top: same && ev.data.status === 'revealed' ? (ws.vote?.top ?? []) : [],
         // the event does not say who started it; the same vote keeps what is known (seedWorkshop asks the store)
         startedBy: same ? (ws.vote?.startedBy ?? null) : null,
+        at: now,
       },
     }
   }
@@ -65,6 +74,7 @@ export function applyWorkshopEvent(ws: CoachWorkshop, type: string, data: unknow
         status: 'revealed',
         top: topOf(ev.data.results),
         startedBy: ws.vote?.sessionId === ev.data.sessionId ? (ws.vote.startedBy ?? null) : null,
+        at: now,
       },
     }
   }
@@ -104,6 +114,7 @@ export function seedWorkshop(ctx: Pick<CanvasFeatureContext, 'canvas' | 'events'
       status: 'revealed',
       top: topOf(last.results),
       startedBy: voteStarterOf(ctx.events, last.sessionId),
+      at: voteActivityAtOf(ctx.events, last.sessionId),
     },
   })
 }
