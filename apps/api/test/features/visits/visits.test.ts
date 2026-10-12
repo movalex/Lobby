@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadConfig } from '../../../src/config.ts'
 import { PENDING_ROUTES, type PendingRoute } from '../../../src/features/pending-routes.ts'
 import { sweepVisits, visitsSweepSettings } from '../../../src/features/visits/sweep.ts'
-import { createBoard, createTestApi, DEV_STUDIO, testEnv } from '../../helpers.ts'
+import { type Client, createBoard, createTestApi, DEV_STUDIO, type TestApi, testEnv } from '../../helpers.ts'
 import { countQueries } from '../../query-count.ts'
 import { errorCode, guestLink, joinAsGuest, setupWorld, type World } from '../guests/support.ts'
 
@@ -164,9 +164,9 @@ describe('the write interval: one write per 10 seconds per (person, board)', () 
     expect(await rowCount()).toBe(3)
   })
 
-  it('"seen" writes the time, and inside the interval of a write it writes nothing (204 either way)', async () => {
+  it('"seen" writes the time, and inside the interval of a write it writes nothing at once (204 either way)', async () => {
     const first = parseAnswer((await w.bob.req('POST', visitPath(w.board))).body)
-    // inside the interval of the visit: accepted, nothing written
+    // inside the interval of the visit: accepted, nothing written now (its time is kept for the interval's end)
     w.api.clock.advance(4_000)
     const quick = await w.bob.req('POST', visitSeenPath(w.board))
     expect(quick.statusCode).toBe(204)
@@ -180,7 +180,7 @@ describe('the write interval: one write per 10 seconds per (person, board)', () 
     expect(after).not.toBeNull()
     expect(Math.abs((after as number) - at)).toBeLessThan(5_000)
     expect(after as number).toBeGreaterThan(first.seenAt)
-    // a second seen inside its interval: nothing
+    // a second seen inside its interval: nothing at once
     w.api.clock.advance(1_000)
     expect((await w.bob.req('POST', visitSeenPath(w.board))).statusCode).toBe(204)
     expect(await stored(w.board, w.bob.userId)).toBe(after)
@@ -221,6 +221,109 @@ describe('the write interval: one write per 10 seconds per (person, board)', () 
       [w.board, w.bob.userId, new Date(high - DAY)],
     )
     expect(await stored(w.board, w.bob.userId)).toBe(high)
+  })
+})
+
+// Wave N.1 (wave N follow-up 5, WS4): a "Mark all seen" or a leave beacon inside the write interval wrote nothing, so
+// the server kept the time of the write before it and the next visit showed again what the person had marked seen
+// (only the tab that marked it remembered, ack.ts). The interval still allows one write, but a "seen" inside it is
+// kept (the latest one) and written when the interval ends: by the api's own tick, by the next visit of that person
+// and board before it writes (so its previous time includes it), or when the api closes.
+describe('a "seen" inside the write interval is kept and written when the interval ends', () => {
+  /** The api's clock (Date.now() and the test's offset) runs on: the time a request stores lies in this window. */
+  type Window = { before: number; after: number }
+  const seen = async (c: Client, board: string, api: TestApi = w.api): Promise<Window> => {
+    const before = api.clock.now().getTime()
+    expect((await c.req('POST', visitSeenPath(board))).statusCode).toBe(204)
+    return { before, after: api.clock.now().getTime() }
+  }
+  const within = (t: number | null | undefined, win: Window) => {
+    expect(t).not.toBeNull()
+    expect(t as number).toBeGreaterThanOrEqual(win.before)
+    expect(t as number).toBeLessThanOrEqual(win.after)
+  }
+  /** The stored time, once the api's tick (every second, real time) has written what it kept. */
+  const storedSoon = (board: string, userId: string, win: Window) =>
+    vi.waitFor(async () => within(await stored(board, userId), win), { timeout: 8_000, interval: 50 })
+  const seenWithin = async () => {
+    const first = parseAnswer((await w.bob.req('POST', visitPath(w.board))).body)
+    w.api.clock.advance(4_000)
+    const win = await seen(w.bob, w.board)
+    expect(await stored(w.board, w.bob.userId)).toBe(first.seenAt) // nothing written yet: one write per interval
+    return { first, win }
+  }
+
+  it('the api writes it once the interval has ended, without another request', async () => {
+    const { win } = await seenWithin()
+    w.api.clock.advance(VISIT_WRITE_MIN_INTERVAL_MS)
+    await storedSoon(w.board, w.bob.userId, win)
+  })
+
+  it('the next visit after the interval reads it as the previous time (Mark all seen holds on every device)', async () => {
+    const { win } = await seenWithin()
+    w.api.clock.advance(VISIT_WRITE_MIN_INTERVAL_MS + 1)
+    const next = parseAnswer((await w.bob.req('POST', visitPath(w.board))).body)
+    within(next.previousSeenAt, win)
+    expect(next.seenAt).toBeGreaterThan(win.after)
+    expect(await stored(w.board, w.bob.userId)).toBe(next.seenAt)
+  })
+
+  it('only the latest of several is kept, and a time never moves the stored one back', async () => {
+    const first = parseAnswer((await w.bob.req('POST', visitPath(w.board))).body)
+    w.api.clock.advance(2_000)
+    await seen(w.bob, w.board)
+    w.api.clock.advance(3_000)
+    const last = await seen(w.bob, w.board)
+    w.api.clock.advance(VISIT_WRITE_MIN_INTERVAL_MS)
+    await storedSoon(w.board, w.bob.userId, last)
+    expect(last.before).toBeGreaterThan(first.seenAt)
+  })
+
+  it('the kept write starts the next interval: a "seen" right after it is kept again, not written at once', async () => {
+    const { win } = await seenWithin()
+    w.api.clock.advance(VISIT_WRITE_MIN_INTERVAL_MS)
+    await storedSoon(w.board, w.bob.userId, win)
+    const written = await stored(w.board, w.bob.userId)
+    w.api.clock.advance(1_000)
+    const again = await seen(w.bob, w.board)
+    expect(await stored(w.board, w.bob.userId)).toBe(written)
+    w.api.clock.advance(VISIT_WRITE_MIN_INTERVAL_MS)
+    await storedSoon(w.board, w.bob.userId, again)
+  })
+
+  it('closing the api writes what it kept (a deploy inside the interval loses no Mark all seen)', async () => {
+    const db = await openTestDb()
+    const api = await createTestApi({ db })
+    try {
+      const bob = await api.login('bob')
+      const board = await createBoard(bob, DEV_STUDIO, 'Closing')
+      parseAnswer((await bob.req('POST', visitPath(board))).body)
+      api.clock.advance(3_000)
+      const win = await seen(bob, board, api)
+      await api.close()
+      const row = await db.maybeOne<{ seen_at: Date }>(
+        'SELECT seen_at FROM board_visits WHERE board_id = $1 AND user_id = $2',
+        [board, bob.userId],
+      )
+      within(row?.seen_at.getTime(), win)
+    } finally {
+      await db.close()
+    }
+  })
+
+  it('another person’s "seen" is kept apart', async () => {
+    expect(
+      (await w.bob.req('PUT', `/api/boards/${w.board}/members/${w.carol.userId}`, { role: 'viewer' }))
+        .statusCode,
+    ).toBe(200)
+    parseAnswer((await w.bob.req('POST', visitPath(w.board))).body)
+    parseAnswer((await w.carol.req('POST', visitPath(w.board))).body)
+    w.api.clock.advance(2_000)
+    const bobs = await seen(w.bob, w.board)
+    const carolBefore = await stored(w.board, w.carol.userId)
+    w.api.clock.advance(VISIT_WRITE_MIN_INTERVAL_MS)
+    await storedSoon(w.board, w.bob.userId, bobs)
+    expect(await stored(w.board, w.carol.userId)).toBe(carolBefore)
   })
 })
 
