@@ -1,13 +1,17 @@
-// Assembles the PDF export with pdf-lib: one page per rendered frame image, each under a header band
-// with the frame's title (planPdfPage: frame-sized pages, or uniform 16:9 / A4 landscape pages with
-// the frame fitted in), frame names as bookmarks, and an invisible text layer so the pages' text can
-// be searched, selected and copied. No DOM here, so it runs (and is tested) in Node.
+// Assembles the PDF export with @cantoo/pdf-lib (wave N, N6-2: the MIT fork of pdf-lib, a drop-in for every call
+// here; the tests still read its output with the original pdf-lib): one page per frame, each under a header band with
+// the frame's title (planPdfPage: frame-sized pages, or uniform 16:9 / A4 landscape pages with the frame fitted in),
+// frame names as bookmarks. No DOM here, so it runs (and is tested) in Node.
 //
-// Honesty note: pages are raster images of the frames (tldraw renders text through HTML, and there is
-// no SVG-to-PDF vector path or font subsetting with the installed dependencies). The hidden text layer
-// uses the standard Helvetica font, so characters outside Windows-1252 are left out of it (the visible
-// image still shows them).
+// Two kinds of page:
+//  - image pages (`addPage`, today's): a raster image of the frame plus an invisible text layer so its text can be
+//    searched, selected and copied. That layer uses the standard Helvetica font, so characters outside Windows-1252
+//    are left out of it (the visible image still shows them);
+//  - vector pages (`addVectorPage`, wave N, N6-3): the frame's SVG drawn as PDF vector graphics with real text in
+//    embedded subsets of Lobby's own fonts (./vector/vector-page.ts). A frame the vector drawing cannot reproduce
+//    faithfully is not drawn at all: the call says why, and the caller adds an image page in its place.
 import {
+  PDFArray,
   PDFDocument,
   type PDFDocument as PDFDocumentType,
   type PDFFont,
@@ -15,7 +19,7 @@ import {
   type PDFImage,
   PDFName,
   type PDFPage,
-  type PDFRef,
+  PDFRef,
   popGraphicsState,
   pushGraphicsState,
   rgb,
@@ -23,8 +27,16 @@ import {
   setCharacterSqueeze,
   setTextRenderingMode,
   TextRenderingMode,
-} from 'pdf-lib'
+} from '@cantoo/pdf-lib'
 import { type PdfPageFormat, type PdfPagePlan, planPdfPage } from './pdf-layout.ts'
+import { bookmarkTitle, cleanTitle, FALLBACK_DOCUMENT_TITLE, isWinAnsi } from './pdf-text.ts'
+import {
+  drawVectorFrame,
+  prepareVectorFrame,
+  type VectorDeps,
+  type VectorOutcome,
+  VectorResources,
+} from './vector/vector-page.ts'
 
 export interface PdfTextItem {
   text: string
@@ -111,10 +123,39 @@ export interface PdfPageInput {
   texts?: readonly PdfTextItem[]
 }
 
+/** A vector page (wave N, N6-3): the frame's SVG instead of its image. */
+export interface PdfVectorPageInput {
+  title: string
+  format?: PdfPageFormat
+  headerImage?: { bytes: Uint8Array; widthPt: number; heightPt: number }
+  /** the area the SVG shows, in board px (its viewBox) */
+  widthPx: number
+  heightPx: number
+  /** the frame's SVG with `fonts: 'names'` (its face table, no @font-face) and its images as data: URLs */
+  svg: string
+  /**
+   * Text the drawing has only as pixels (a file card's name on its face), for the invisible text layer. The vector
+   * page's own text is real text and is never repeated here.
+   */
+  texts?: readonly PdfTextItem[]
+}
+
 export interface PdfBuilder {
   addPage(page: PdfPageInput): Promise<void>
+  /**
+   * Adds a vector page, or adds nothing and says why the frame cannot be one (the caller then adds an image page
+   * with `addPage` in its place).
+   */
+  addVectorPage(page: PdfVectorPageInput): Promise<VectorOutcome>
   readonly pageCount: number
   finish(): Promise<Uint8Array>
+}
+
+/** What a vector page needs to embed fonts (fontkit) and to read what pdf-lib cannot (the worker's deps). */
+export interface PdfVectorEnv {
+  /** @pdf-lib/fontkit (N6-1); without it no Lobby font can be embedded and text pages fall back to images */
+  readonly fontkit?: Parameters<PDFDocumentType['registerFontkit']>[0] | null
+  readonly deps: VectorDeps
 }
 
 /** Keeps what the standard font can encode (Windows-1252); tabs become spaces, other characters go. */
@@ -136,40 +177,7 @@ export function sanitizeForStandardFont(text: string, charset: ReadonlySet<numbe
     .trim()
 }
 
-// Windows-1252 (what the standard PDF fonts encode): ASCII, Latin-1 and these 27 code points.
-const WIN_ANSI_EXTRA = new Set(
-  [0x20ac, 0x201a, 0x192, 0x201e, 0x2026, 0x2020, 0x2021, 0x2c6, 0x2030, 0x160, 0x2039, 0x152, 0x17d]
-    .concat([0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x2dc, 0x2122, 0x161, 0x203a, 0x153])
-    .concat([0x17e, 0x178]),
-)
-
-/** Whether the standard PDF font can show all of `text` (else the browser draws it as an image). */
-export function isWinAnsi(text: string): boolean {
-  for (const ch of text.normalize('NFC')) {
-    const cp = ch.codePointAt(0) ?? 0
-    if ((cp >= 0x20 && cp <= 0x7e) || (cp >= 0xa0 && cp <= 0xff) || WIN_ANSI_EXTRA.has(cp)) continue
-    return false
-  }
-  return true
-}
-
-/** Single-line, bounded title text ('' when nothing is left). */
-function cleanTitle(title: string): string {
-  const clean = String(title ?? '')
-    // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters do not belong in a title
-    .replace(/[\u0000-\u001f\u007f]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-  const chars = Array.from(clean)
-  return chars.length > 200 ? `${chars.slice(0, 199).join('')}…` : clean
-}
-
-/** Bookmark titles: trimmed, bounded, never empty. */
-export function bookmarkTitle(title: string, index: number): string {
-  return cleanTitle(title) || `Page ${index + 1}`
-}
-
-export const FALLBACK_DOCUMENT_TITLE = 'Lobby board'
+export { bookmarkTitle, FALLBACK_DOCUMENT_TITLE, isWinAnsi } from './pdf-text.ts'
 
 function drawHiddenText(
   page: PDFPage,
@@ -310,9 +318,31 @@ function addOutline(doc: PDFDocumentType, entries: { title: string; ref: PDFRef 
   doc.catalog.set(PDFName.of('PageMode'), PDFName.of('UseOutlines'))
 }
 
+/** Removes a page that was being drawn, with its content streams (nothing of it is written to the file). */
+function dropPage(doc: PDFDocumentType, page: PDFPage, index: number) {
+  const contents = page.node.Contents()
+  doc.removePage(index)
+  if (contents instanceof PDFArray)
+    for (let i = 0; i < contents.size(); i++) {
+      const ref = contents.get(i)
+      if (ref instanceof PDFRef) doc.context.delete(ref)
+    }
+  else if (contents) {
+    const ref = page.node.get(PDFName.of('Contents'))
+    if (ref instanceof PDFRef) doc.context.delete(ref)
+  }
+}
+
 /** An incremental builder: add pages as they are rendered (one image in memory at a time), then finish. */
-export async function createPdfBuilder(meta: { title: string; now?: Date }): Promise<PdfBuilder> {
+export async function createPdfBuilder(meta: {
+  title: string
+  now?: Date
+  /** what vector pages need; without it every vector page falls back to an image page */
+  vector?: PdfVectorEnv
+}): Promise<PdfBuilder> {
   const doc = await PDFDocument.create()
+  if (meta.vector?.fontkit) doc.registerFontkit(meta.vector.fontkit)
+  const resources = meta.vector ? new VectorResources(doc, meta.vector.deps) : null
   doc.setTitle(cleanTitle(meta.title) || FALLBACK_DOCUMENT_TITLE, { showInWindowTitleBar: true })
   doc.setCreator('Lobby')
   doc.setProducer('Lobby')
@@ -366,6 +396,56 @@ export async function createPdfBuilder(meta: { title: string; now?: Date }): Pro
         }
       }
       outline.push({ title, ref: page.ref })
+    },
+    async addVectorPage(input) {
+      if (!resources) return { vector: false, reason: 'vector pages are not available here' }
+      resources.beginPage()
+      const prepared = await prepareVectorFrame(input.svg, resources).catch(
+        (): { ok: false; reason: string } => ({ ok: false, reason: 'the frame could not be prepared' }),
+      )
+      if (!prepared.ok) {
+        resources.discardPage()
+        return { vector: false, reason: prepared.reason }
+      }
+      const plan = planPdfPage(input.widthPx, input.heightPx, input.format ?? 'fit')
+      const index = doc.getPageCount()
+      const page = doc.addPage([plan.width, plan.height])
+      try {
+        page.drawRectangle({ x: 0, y: 0, width: plan.width, height: plan.height, color: rgb(1, 1, 1) })
+        drawVectorFrame(
+          page,
+          prepared.frame,
+          {
+            x: plan.image.x,
+            top: plan.height - plan.image.y,
+            width: plan.image.width,
+            height: plan.image.height,
+          },
+          resources,
+        )
+      } catch {
+        // N6-4: any failure of the fork's drawing leaves no trace: the page and what it embedded go
+        dropPage(doc, page, index)
+        resources.discardPage()
+        return { vector: false, reason: 'the vector drawing failed' }
+      }
+      resources.keepPage()
+      const { font: f, charset: cs } = await ensureFont()
+      const title = bookmarkTitle(input.title, outline.length)
+      const header =
+        input.headerImage && !isWinAnsi(title)
+          ? { ...input.headerImage, embedded: await doc.embedPng(input.headerImage.bytes) }
+          : null
+      drawHeader(page, plan, title, f, cs, header)
+      for (const item of input.texts ?? []) {
+        try {
+          drawHiddenText(page, f, cs, item, plan.ptPerPx, plan.height, plan.image)
+        } catch {
+          // as on image pages: the hidden layer never fails the export
+        }
+      }
+      outline.push({ title, ref: page.ref })
+      return { vector: true }
     },
     async finish() {
       addOutline(doc, outline)

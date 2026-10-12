@@ -14,7 +14,11 @@
 //
 // Hidden elements (a collapsed mind-map branch, §4.7) are left out of both: render overrides do not
 // change exports, so the exporter filters them itself.
-import { FONT_FAMILY_FALLBACKS, getFontFamilyFallbacks } from '@excalidraw/common'
+import {
+  CJK_HAND_DRAWN_FALLBACK_FONT,
+  FONT_FAMILY_FALLBACKS,
+  getFontFamilyFallbacks,
+} from '@excalidraw/common'
 import type { ExcalidrawElement, NonDeletedExcalidrawElement } from '@excalidraw/element/types'
 import { exportToBlob, exportToSvg, Fonts } from '@excalidraw/excalidraw'
 import type { AppState, BinaryFileData, BinaryFiles } from '@excalidraw/excalidraw/types'
@@ -23,6 +27,9 @@ import {
   type FaceInfo,
   type FamilyInfo,
   fontFaceRule,
+  type NamedFace,
+  namedFacesOf,
+  sameOriginFaces,
   selectFaces,
   selfContainedProblems,
   woff2DataUrl,
@@ -179,6 +186,27 @@ export async function fontFaceRules(
     }
   }
   return { rules, urls }
+}
+
+/**
+ * Wave N (WS6): the faces a `fonts: 'names'` SVG names (fonts.ts FACES_METADATA_ID), for a consumer that embeds
+ * them itself: what `fontFaceRules` would embed for these elements, as same-origin PATHS (never a foreign font;
+ * nothing is fetched here).
+ */
+export function namedFaces(
+  elements: readonly ExcalidrawElement[],
+  opts: Pick<SvgExportOptions, 'origin'> & { registered?: ReadonlyMap<number, FamilyInfo> } = {},
+): NamedFace[] {
+  return sameOriginFaces(
+    namedFacesOf(
+      charsPerFamily(elements as unknown as Iterable<{ type: string }>),
+      opts.registered ?? registeredFaces(),
+      fallbackFamilies,
+      // Lobby's own CJK font, for CJK in a family without a CJK fallback (Nunito, Lilita One…)
+      [FONT_FAMILY_FALLBACKS[CJK_HAND_DRAWN_FALLBACK_FONT]],
+    ),
+    opts.origin ?? pageOrigin(),
+  )
 }
 
 /** The board (or `only`) as a standalone SVG. */

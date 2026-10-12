@@ -233,6 +233,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@cantoo/pdf-lib':
+        specifier: 'catalog:'
+        version: 2.11.1(html-entities@2.6.0)
       '@clerk/react':
         specifier: 'catalog:'
         version: 6.17.2(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -269,9 +272,6 @@ importers:
       '@excalidraw/math':
         specifier: 'catalog:'
         version: 0.18.0-1118751
-      pdf-lib:
-        specifier: 'catalog:'
-        version: 1.17.1
       react:
         specifier: 'catalog:'
         version: 19.3.0
@@ -291,6 +291,9 @@ importers:
       '@vitejs/plugin-react':
         specifier: 'catalog:'
         version: 6.1.1(vite@8.3.1(@types/node@24.19.0))
+      pdf-lib:
+        specifier: 'catalog:'
+        version: 1.17.1
       vite:
         specifier: 'catalog:'
         version: 8.3.1(@types/node@24.19.0)

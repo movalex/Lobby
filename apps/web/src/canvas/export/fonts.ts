@@ -142,6 +142,90 @@ export function selfContainedProblems(svgText: string): string[] {
   return problems
 }
 
+/**
+ * Wave N (WS6, the vector PDF): the id of the `<metadata>` element a `fonts: 'names'` SVG carries instead of
+ * `@font-face` rules. Its text is JSON `{"v":1,"faces":[FaceInfo…]}`: the faces `fontFaceRules` would embed, with
+ * their same-origin paths, so the PDF worker fetches and embeds (subsets of) exactly those files itself.
+ */
+export const FACES_METADATA_ID = 'lobby-pdf-faces'
+
+/**
+ * The faces whose files are on `origin`, with their URLs as same-origin PATHS (the 'names' face table; a foreign
+ * face, which the host rewrite never leaves, is dropped: no request ever leaves Lobby's origin).
+ */
+export function sameOriginFaces<F extends FaceInfo>(faces: readonly F[], origin: string): F[] {
+  const out: F[] = []
+  for (const face of faces) {
+    const url = face.url
+    if (url.startsWith('/') && !url.startsWith('//')) {
+      out.push(face)
+      continue
+    }
+    try {
+      const u = new URL(url)
+      if (u.origin === origin) out.push({ ...face, url: u.pathname })
+    } catch {
+      // not a URL: left out
+    }
+  }
+  return out
+}
+
+/** A face of the 'names' table; `any`: a last resort for characters no family of their own covers (CJK). */
+export interface NamedFace extends FaceInfo {
+  readonly any?: true
+}
+
+/**
+ * The faces of a 'names' SVG: `selectFaces`' (each family and its own fallbacks, as the 'embedded' SVG), then, for
+ * characters still uncovered, the faces of `lastResort` families marked `any` (Lobby's own CJK font for text in
+ * Nunito or Lilita One, whose CJK the board draws with a system font: the PDF then has real, searchable CJK text in
+ * Lobby's CJK font instead of a picture of it).
+ */
+export function namedFacesOf(
+  chars: ReadonlyMap<number, ReadonlySet<string>>,
+  registered: ReadonlyMap<number, FamilyInfo>,
+  fallbacksOf: (family: number) => readonly number[],
+  lastResort: readonly number[],
+): NamedFace[] {
+  const own = selectFaces(chars, registered, fallbacksOf)
+  const ranges = new Map(own.map((f) => [f, parseUnicodeRange(f.unicodeRange)]))
+  const covered = (family: number, ch: string) => {
+    const names = new Set(
+      [family, ...fallbacksOf(family)].flatMap((id) => registered.get(id)?.faces.map((f) => f.family) ?? []),
+    )
+    const cp = ch.codePointAt(0) ?? 0
+    return own.some((f) => names.has(f.family) && inRanges(cp, ranges.get(f) as Ranges))
+  }
+  const left = new Map<number, Set<string>>()
+  for (const [family, set] of chars) {
+    const rest = new Set([...set].filter((ch) => !covered(family, ch)))
+    if (rest.size) left.set(-1 - left.size, rest)
+  }
+  const extra = left.size ? selectFaces(left, registered, () => lastResort) : []
+  const seen = new Set(own.map((f) => `${f.family}|${f.url}`))
+  // every face of a last-resort family is marked, also one a family listed itself (Excalifont's Xiaolai)
+  const resort = new Set(lastResort.flatMap((id) => registered.get(id)?.faces.map((f) => f.family) ?? []))
+  return [...own, ...extra.filter((f) => !seen.has(`${f.family}|${f.url}`))].map(
+    (f): NamedFace => (resort.has(f.family) ? { ...f, any: true } : f),
+  )
+}
+
+/** The face table a 'names' SVG carries (JSON in its FACES_METADATA_ID element). */
+export function facesTable(faces: readonly NamedFace[]): { v: 1; faces: NamedFace[] } {
+  return {
+    v: 1,
+    faces: faces.map((f) => ({
+      family: f.family,
+      url: f.url,
+      unicodeRange: f.unicodeRange,
+      weight: f.weight,
+      style: f.style,
+      ...(f.any ? { any: true as const } : {}),
+    })),
+  }
+}
+
 /** ArrayBuffer → `data:font/woff2;base64,…` (no FileReader needed). */
 export function woff2DataUrl(bytes: ArrayBuffer): string {
   const u8 = new Uint8Array(bytes)

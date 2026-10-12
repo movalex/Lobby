@@ -31,7 +31,7 @@ import type {
 import { setPngDensity } from '../../features/present-export/png-density.ts'
 import type { ExportOptions } from '../api/lobby-canvas.ts'
 import { type Derivative, type FileKey, parseFileKey } from '../files/loader.ts'
-import { selfContainedProblems } from './fonts.ts'
+import { FACES_METADATA_ID, facesTable, selfContainedProblems } from './fonts.ts'
 import { softNoteShadows } from './note-shadow.ts'
 import {
   EXPORT_BOUNDS_FRAME_ID,
@@ -43,7 +43,7 @@ import {
   reparentToBounds,
 } from './plan.ts'
 import { withoutLinks } from './select.ts'
-import { fontFaceRules } from './svg.ts'
+import { fontFaceRules, namedFaces } from './svg.ts'
 
 /** Which bytes an export draws for an uploaded image (see the header). */
 export type ExportFileSource = 'original' | 'display' | 'canvas'
@@ -375,11 +375,13 @@ export async function exportSceneSvg(ctx: SceneExportContext, opts: SceneExportO
     exportingFrame: p.exportingFrame as never,
     skipInliningFonts: true,
   })
-  // wave N (WS6): `fonts: 'names'` leaves the faces to the consumer (the PDF worker embeds subset fonts itself)
-  const { rules, urls } =
-    opts.fonts === 'names'
-      ? { rules: [] as string[], urls: [] as string[] }
-      : await fontFaceRules(p.elements, ctx.fetchImpl ? { fetchImpl: ctx.fetchImpl } : {})
+  // wave N (WS6): `fonts: 'names'` leaves the faces to the consumer (the PDF worker embeds subset fonts itself):
+  // no @font-face at all, only the table of the faces the text needs (fonts.ts FACES_METADATA_ID), same-origin
+  // paths, nothing fetched here
+  const names = opts.fonts === 'names'
+  const { rules, urls } = names
+    ? { rules: [] as string[], urls: [] as string[] }
+    : await fontFaceRules(p.elements, ctx.fetchImpl ? { fetchImpl: ctx.fetchImpl } : {})
   let style = svg.querySelector('style.style-fonts')
   if (!style) {
     style = svg.ownerDocument.createElementNS('http://www.w3.org/2000/svg', 'style')
@@ -387,6 +389,12 @@ export async function exportSceneSvg(ctx: SceneExportContext, opts: SceneExportO
     ;(svg.querySelector('defs') ?? svg).appendChild(style)
   }
   style.textContent = `\n${rules.join('\n')}\n`
+  if (names) {
+    const meta = svg.ownerDocument.createElementNS('http://www.w3.org/2000/svg', 'metadata')
+    meta.setAttribute('id', FACES_METADATA_ID)
+    meta.textContent = JSON.stringify(facesTable(namedFaces(p.elements)))
+    ;(svg.querySelector('defs') ?? svg).appendChild(meta)
+  }
   const text = new XMLSerializer().serializeToString(svg)
   const problems = selfContainedProblems(text)
   if (problems.length) throw new Error(`the exported SVG is not self-contained: ${problems.join(', ')}`)

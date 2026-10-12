@@ -1,10 +1,13 @@
 // The Export dialog on the Excalidraw page (the port of ../ExportDialog.tsx; same layout, test ids,
 // preferences and copy): PNG/SVG of the selection, a frame or the whole board (1×/2×/4×, transparent
-// background), copy as PNG, a PDF with one page per frame, and CSV of the board's text.
+// background), copy as PNG, a PDF with one page per frame, and CSV of the board's text. Wave N (N6-5): the PDF's
+// pages are vector pages (sharp, real text) or image pages (today's), behind the VECTOR_PDF switch; a vector export
+// says which pages it had to draw as images (N6-4) and warns about a file above 50 MB.
 
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { Bounds, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { countUsage } from '../../../lib/usage.ts'
 import { Dialog } from '../../../ui/Dialog.tsx'
 import { controllerOf as commentsControllerOf } from '../../comments/ported/controller.ts'
 import { exportPolicyOn, exportPolicySentence } from '../../sharing/ported/export-policy.ts'
@@ -20,6 +23,7 @@ import {
   type PdfPageFormat,
 } from '../pdf-layout.ts'
 import { pickPdfFrames, slideTitle } from '../slides.ts'
+import { imagePagesSentence, pdfSizeNote, vectorPdfOffered } from '../vector-pdf.ts'
 import { exportResults } from './badges.ts'
 import type { Controller, ExportRequest } from './controller.ts'
 import { boardCsv, csvBlob, csvRowCount } from './csv.ts'
@@ -32,6 +36,7 @@ import {
   type ImageTarget,
   originalBytes,
   type PdfPageSpec,
+  type PdfPagesKind,
   renderPdf,
   renderPng,
   renderSvg,
@@ -57,11 +62,19 @@ interface Prefs {
   transparent: boolean
   lossless: boolean
   pdfFormat: PdfPageFormat
+  /** N6-5: vector pages (the default) or image pages */
+  pdfPages: PdfPagesKind
 }
 
 const PREFS_KEY = 'draftroom.export.v1'
 // 1×: the frame or selection at the size it has on the board (F14). 2× and 4× stay a click away.
-const DEFAULT_PREFS: Prefs = { scale: 1, transparent: false, lossless: false, pdfFormat: 'fit' }
+const DEFAULT_PREFS: Prefs = {
+  scale: 1,
+  transparent: false,
+  lossless: false,
+  pdfFormat: 'fit',
+  pdfPages: 'vector',
+}
 
 function readPrefs(): Prefs {
   try {
@@ -73,6 +86,7 @@ function readPrefs(): Prefs {
       transparent: raw?.transparent === true,
       lossless: raw?.lossless === true,
       pdfFormat: isPdfPageFormat(raw?.pdfFormat) ? raw.pdfFormat : DEFAULT_PREFS.pdfFormat,
+      pdfPages: raw?.pdfPages === 'image' ? 'image' : DEFAULT_PREFS.pdfPages,
     }
   } catch {
     return DEFAULT_PREFS
@@ -187,6 +201,11 @@ export function ExportDialog({
   const [svgOriginals, setSvgOriginals] = useState(false)
   const [busy, setBusy] = useState<{ kind: BusyKind; done?: number; total?: number } | null>(null)
   const [status, setStatus] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null)
+  // N6-4/N6-5: after a PDF, which pages were drawn as images and whether the file is large (cleared by any export)
+  const [pdfNotes, setPdfNotes] = useState<{ imagePages: string; size: string | null } | null>(null)
+  // VECTOR_PDF off: image pages only, and the choice is not shown
+  const [vectorOffered] = useState(() => vectorPdfOffered())
+  const pagesKind: PdfPagesKind = vectorOffered ? prefs.pdfPages : 'image'
 
   const updatePrefs = (patch: Partial<Prefs>) => {
     setPrefs((p) => {
@@ -366,6 +385,7 @@ export function ExportDialog({
   const run = async (kind: BusyKind, task: () => Promise<string>) => {
     setBusy({ kind })
     setStatus(null)
+    setPdfNotes(null)
     try {
       const done = await task()
       setStatus({ tone: 'ok', text: done })
@@ -420,19 +440,27 @@ export function ExportDialog({
       // the frames' pages, then the optional report pages
       const extra = reportSpecs()
       const all = [...pdfPages, ...extra.specs]
-      const blob = await renderPdf(canvas, all, {
+      const result = await renderPdf(canvas, all, {
         title: boardTitle,
         lossless: prefs.lossless,
         pageFormat: prefs.pdfFormat,
+        pagesKind,
         signal: controllerAbort.signal,
         onProgress: ({ done, total }) => setBusy({ kind: 'pdf', done, total }),
       })
+      const blob = result.blob
       const name = exportFilename(
         boardTitle,
         'pdf',
         pdfPick.source === 'selection' ? 'selected frames' : undefined,
       )
       downloadBlob(blob, name)
+      // literal events (scripts/usage-events.test.ts reads them)
+      if (pagesKind === 'vector') countUsage('export.pdf.vector')
+      else countUsage('export.pdf.raster')
+      const fallback = imagePagesSentence(result.imagePages.map((p) => p.page))
+      const size = pdfSizeNote(blob.size, { pagesKind, vectorOffered, lossless: prefs.lossless })
+      if (fallback || size) setPdfNotes({ imagePages: fallback, size })
       const cut =
         extra.notShown > 0
           ? ` ${plural(extra.notShown, 'item')} did not fit the page limit of the results and comments pages and ${extra.notShown === 1 ? 'was' : 'were'} left out.`
@@ -653,6 +681,33 @@ export function ExportDialog({
               Include {plural(pdfPick.skippedCount, 'frame')} set to skip in presentation
             </label>
           )}
+          {vectorOffered && (
+            <fieldset className="dr-pe-choices" data-testid="export-pdf-pages" disabled={disabled}>
+              <legend className="dr-pe-legend">Pages</legend>
+              <label className="dr-pe-choice">
+                <input
+                  type="radio"
+                  name={`${uid}-pdf-pages`}
+                  value="vector"
+                  data-testid="export-pdf-pages-vector"
+                  checked={pagesKind === 'vector'}
+                  onChange={() => updatePrefs({ pdfPages: 'vector' })}
+                />
+                Vector (sharp, selectable text)
+              </label>
+              <label className="dr-pe-choice">
+                <input
+                  type="radio"
+                  name={`${uid}-pdf-pages`}
+                  value="image"
+                  data-testid="export-pdf-pages-image"
+                  checked={pagesKind === 'image'}
+                  onChange={() => updatePrefs({ pdfPages: 'image' })}
+                />
+                Image pages
+              </label>
+            </fieldset>
+          )}
           <label className="dr-pe-inline">
             Page size
             <select
@@ -679,7 +734,9 @@ export function ExportDialog({
               disabled={disabled}
               onChange={(e) => updatePrefs({ lossless: e.target.checked })}
             />
-            Lossless images (larger file, slower)
+            {pagesKind === 'vector'
+              ? 'Lossless images on image pages (larger file, slower)'
+              : 'Lossless images (larger file, slower)'}
           </label>
           <fieldset className="dr-pe-choices" data-testid="export-pdf-extras" disabled={disabled}>
             <legend className="dr-pe-legend">Add to the end of the PDF</legend>
@@ -738,11 +795,12 @@ export function ExportDialog({
               </p>
             )}
           </fieldset>
-          <p className="dr-pe-hint">
+          <p className="dr-pe-hint" data-testid="export-pdf-hint">
             Every page has a header with its frame’s name (also a PDF bookmark). “Fit each frame” sizes each
             page to its frame; 16:9 and A4 give every page the same landscape size with the frame fitted in.
-            Pages are sharp images of your frames (drawn from the original uploads). Text is searchable and
-            can be copied, but it is not editable vector text.
+            {pagesKind === 'vector'
+              ? ' Vector pages stay sharp at any zoom, and their text is real text you can select and search, in every script Lobby’s fonts cover. A frame with effects vector pages cannot draw is exported as an image page instead, and this dialog says which. Vote results and comments pages are images with searchable text.'
+              : ' Pages are sharp images of your frames (drawn from the original uploads). Text is searchable and can be copied, but it is not editable vector text.'}
           </p>
           <div className="dr-pe-actions">
             <button
@@ -780,6 +838,17 @@ export function ExportDialog({
                   : 'Saving the file…'}
               </span>
             </div>
+          )}
+          {pdfNotes?.imagePages && (
+            <p className="dr-pe-note" data-testid="export-pdf-fallback" role="status">
+              {pdfNotes.imagePages}: they use effects vector pages cannot draw, so they are pictures of the
+              frame (their text is still searchable).
+            </p>
+          )}
+          {pdfNotes?.size && (
+            <p className="dr-pe-note dr-pe-note--warn" data-testid="export-pdf-size-warning" role="status">
+              {pdfNotes.size}
+            </p>
           )}
         </section>
 
