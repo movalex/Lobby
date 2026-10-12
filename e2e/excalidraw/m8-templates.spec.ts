@@ -221,11 +221,8 @@ test('Use template names the copy by the dialog’s Title and puts it in the dia
   const key = word('proj')
   const aliceApi = await users.api('alice')
   const wid = users.devStudioId
-  const project = (
-    (await (await aliceApi.fetch('POST', `/api/workspaces/${wid}/projects`, { name: `Pitch ${key}` })).json()) as {
-      id: string
-    }
-  ).id
+  const created = await aliceApi.fetch('POST', `/api/workspaces/${wid}/projects`, { name: `Pitch ${key}` })
+  const project = ((await created.json()) as { id: string }).id
   expect(
     (
       await aliceApi.fetch('POST', `/api/workspaces/${wid}/templates`, {

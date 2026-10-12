@@ -19,7 +19,9 @@ describe('who the save dialog says can use a template', () => {
   it('the dialog names members who can make boards, not everyone in the workspace', () => {
     const html = renderToStaticMarkup(createElement(SaveTemplateDialog, { ctx, onClose() {} }))
     expect(html).not.toMatch(/Everyone in/i)
-    expect(html).toMatch(/<strong>Studio<\/strong> who can make boards can start a new board from a copy of this board/)
+    expect(html).toMatch(
+      /<strong>Studio<\/strong> who can make boards can start a new board from a copy of this board/,
+    )
     // what the copy carries is still said
     expect(html).toContain('none of its sharing')
   })

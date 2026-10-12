@@ -87,7 +87,10 @@ function outOfOrder(buttons: readonly Btn[]): string | null {
   for (let i = 1; i < buttons.length; i++) {
     const a = buttons[i - 1] as Btn
     const b = buttons[i] as Btn
-    if (!readsAfter(a, b)) return `${b.id} (${Math.round(b.left)},${Math.round(b.top)}) after ${a.id} (${Math.round(a.left)},${Math.round(a.top)})`
+    if (!readsAfter(a, b)) {
+      const at = (x: Btn) => `${x.id} (${Math.round(x.left)},${Math.round(x.top)})`
+      return `${at(b)} after ${at(a)}`
+    }
   }
   return null
 }
