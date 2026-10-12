@@ -11,10 +11,12 @@ import { openTestDb } from '@draftroom/db/testing'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadConfig } from '../../../src/config.ts'
 import { PENDING_ROUTES, type PendingRoute } from '../../../src/features/pending-routes.ts'
+import { visitsClockOf } from '../../../src/features/visits/clock.ts'
 import { sweepVisits, visitsSweepSettings } from '../../../src/features/visits/sweep.ts'
 import { type Client, createBoard, createTestApi, DEV_STUDIO, type TestApi, testEnv } from '../../helpers.ts'
 import { countQueries } from '../../query-count.ts'
 import { errorCode, guestLink, joinAsGuest, setupWorld, type World } from '../guests/support.ts'
+import { FakeSync } from '../workshops/support.ts'
 
 let w: World
 beforeEach(async () => {
@@ -324,6 +326,45 @@ describe('a "seen" inside the write interval is kept and written when the interv
     w.api.clock.advance(VISIT_WRITE_MIN_INTERVAL_MS)
     await storedSoon(w.board, w.bob.userId, bobs)
     expect(await stored(w.board, w.carol.userId)).toBe(carolBefore)
+  })
+})
+
+// Wave N.1 (wave N follow-up 5, "one clock"): the page compares the visit time with the sync's element stamps, and the
+// two servers' clocks differ. Visit times are stored on the sync's clock (GET /internal/clock, measured by the api:
+// src/sync-clock.ts); while it is not known (an older sync, an unreachable one) on the api's own, as before.
+describe('visit times are on the sync’s clock (one clock with the element stamps)', () => {
+  const SKEW = 5_000
+  const skewedSync = (api: () => TestApi) =>
+    Object.assign(new FakeSync(), { clock: async () => api().clock.now().getTime() + SKEW })
+
+  it('a sync 5 s ahead: the visit and "seen" times stored are its time, not the api’s', async () => {
+    await w.api.close()
+    let api: TestApi | null = null
+    w = await setupWorld({ sync: skewedSync(() => api as TestApi) })
+    api = w.api
+    expect(await visitsClockOf(w.api.app)?.measure()).toBeGreaterThan(SKEW - 1_000)
+    const before = w.api.clock.now().getTime()
+    const first = parseAnswer((await w.bob.req('POST', visitPath(w.board))).body)
+    const after = w.api.clock.now().getTime()
+    expect(first.seenAt).toBeGreaterThanOrEqual(before + SKEW - 1_000)
+    expect(first.seenAt).toBeLessThanOrEqual(after + SKEW + 1_000)
+    expect(await stored(w.board, w.bob.userId)).toBe(first.seenAt)
+    pass()
+    const seenBefore = w.api.clock.now().getTime()
+    expect((await w.bob.req('POST', visitSeenPath(w.board))).statusCode).toBe(204)
+    const seen = (await stored(w.board, w.bob.userId)) as number
+    expect(seen).toBeGreaterThanOrEqual(seenBefore + SKEW - 1_000)
+    expect(seen).toBeLessThanOrEqual(w.api.clock.now().getTime() + SKEW + 1_000)
+  })
+
+  it('a sync without the route (an older build): the api’s own clock, as before', async () => {
+    await w.api.close()
+    w = await setupWorld({ sync: new FakeSync() })
+    expect(await visitsClockOf(w.api.app)?.measure()).toBeNull()
+    const before = w.api.clock.now().getTime()
+    const first = parseAnswer((await w.bob.req('POST', visitPath(w.board))).body)
+    expect(first.seenAt).toBeGreaterThanOrEqual(before)
+    expect(first.seenAt).toBeLessThanOrEqual(w.api.clock.now().getTime())
   })
 })
 

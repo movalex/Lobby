@@ -15,7 +15,9 @@
 //  - at most one write per VISIT_WRITE_MIN_INTERVAL_MS per (person, board) (./gate.ts): a faster visit answers 200 with
 //    what the earlier one answered (or the stored time) and writes nothing; a faster "seen" answers 204 and its time is
 //    kept and written when the interval ends (wave N.1: the server keeps a Mark all seen, not only the tab);
-//  - rows past DRAFTROOM_VISITS_RETENTION_DAYS are deleted (./sweep.ts); the board's and the account's deletion cascade.
+//  - rows past DRAFTROOM_VISITS_RETENTION_DAYS are deleted (./sweep.ts); the board's and the account's deletion cascade;
+//  - (wave N.1) the times are the sync's clock, which stamps every element the page compares them with (./clock.ts;
+//    the api's own while the sync's is not known).
 //
 // Pending (../pending-routes.ts): putting 'POST /api/boards/:bid/visit' and '…/visit/seen' back in PENDING_ROUTES hides
 // both (the unknown route's 404), and the web's fetchVisit() then answers null: the chip stays hidden.
@@ -34,6 +36,7 @@ import { notFound } from '../../errors.ts'
 import type { FeatureContext } from '../context.ts'
 import { guestRefused, VISITS_GUESTS } from '../guests/guard.ts'
 import { routeUnlessPending } from '../pending-routes.ts'
+import { startVisitsClock } from './clock.ts'
 import { VISIT_TRAIL_TICK_MS, VisitWriteGate } from './gate.ts'
 import { markSeen, recordVisit, storedVisit } from './store.ts'
 import { startVisitsSweeper } from './sweep.ts'
@@ -45,9 +48,13 @@ const vanished = (e: unknown) => pgErrorCode(e) === '23503'
 export const visitsTrailSettings = { tickMs: VISIT_TRAIL_TICK_MS }
 
 export async function registerVisits(app: FastifyInstance, ctx: FeatureContext): Promise<void> {
-  const { db, now } = ctx
+  const { db } = ctx
+  // wave N.1, one clock: the sync's, which stamps the elements these times are compared with (./clock.ts); the
+  // stored times, the write interval and its tick all read it
+  const clock = startVisitsClock(app, ctx)
+  const now = () => clock.now()
   const gate = new VisitWriteGate(VISIT_WRITE_MIN_INTERVAL_MS)
-  // the "seen" times kept for the end of their interval (./gate.ts) are written by this tick, a later call, or the close
+  // the "seen" times kept for the end of their interval (./gate.ts) are written by this tick, a later call or the close
   const tick = setInterval(() => gate.flushDue(now().getTime()), visitsTrailSettings.tickMs)
   tick.unref()
   app.addHook('onClose', async () => {
