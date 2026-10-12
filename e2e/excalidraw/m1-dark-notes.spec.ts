@@ -186,12 +186,12 @@ test('wave N.1: in dark mode the text editor over a pastel note reads at 4.5:1 o
   const seen: string[] = []
   const editorRatio = async (id: string) => {
     await startTextEditing(a.page, id)
-    // the editor's colour, and the note's fill as dark mode draws it (read where no text is: the note's corner)
+    // the editor's colour, and the note's fill as dark mode draws it (the most common colour of a box in its middle)
     const color = parseRgb(await a.page.locator(TEXT_EDITOR).evaluate((el) => getComputedStyle(el).color))
     const b = await withCanvas(a.page, (c, x) => c.bounds(x), id)
     if (!b) throw new Error(`no note ${id}`)
     const tl = await sceneToScreen(a.page, { x: b.x, y: b.y })
-    const fill = (await inkOn(a.page, { x: tl.x + 6, y: tl.y + 6, width: 8, height: 8 })).bg
+    const fill = (await inkOn(a.page, { x: tl.x + 20, y: tl.y + 55, width: 110, height: 40 })).bg
     const r = Number(ratio(color, fill).toFixed(2))
     seen.push(`${hex(color)} on ${hex(fill)} ${r}:1`)
     await a.page.screenshot({ path: testInfo.outputPath(`m1-editor-${id}.png`) })

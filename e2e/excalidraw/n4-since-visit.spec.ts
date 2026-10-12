@@ -336,13 +336,23 @@ test('wave N.1: leaving the page sends one "seen" beacon (the page turning hidde
 }) => {
   const a = await join('alice')
   await visitReplies(a, 1) // the api took this open's visit: there is something to say "seen" about
-  const beacons: string[] = []
-  a.page.context().on('request', (r) => {
-    if (r.url().endsWith('/visit/seen')) beacons.push(r.method())
+  // Playwright does not report a request made while a page unloads, so the page's own lifecycle events are fired and the
+  // beacons counted where they are made: a tab closing turns the page hidden, then fires pagehide
+  const beacons = await a.page.evaluate(() => {
+    const seen: string[] = []
+    const send = navigator.sendBeacon.bind(navigator)
+    navigator.sendBeacon = (url, data) => {
+      // (the usage counters use a beacon too)
+      if (String(url).endsWith('/visit/seen')) seen.push(String(url))
+      return send(url, data)
+    }
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' })
+    document.dispatchEvent(new Event('visibilitychange'))
+    window.dispatchEvent(new Event('pagehide'))
+    return seen
   })
-  await a.page.goto('about:blank')
-  await a.page.waitForTimeout(1_000)
-  expect(beacons).toEqual(['POST'])
+  expect(beacons).toHaveLength(1)
+  expect(beacons[0]).toMatch(/\/visit\/seen$/)
 })
 
 /** The parts of the dev handle this spec drives (focus mode, following). */
