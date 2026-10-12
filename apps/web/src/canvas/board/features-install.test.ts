@@ -4,9 +4,11 @@
 // (its own text box, its own menu). Now the canvas takes no input until they are: a press, a double-click, a
 // right-click, a wheel or a key in the window does nothing; hovering, a press's end, Lobby's own synthetic keys and
 // Tab go through. Stubbed frame and task timers; the input stream as the board's input layer dispatches it.
+// Wave O: a hidden tab runs no animation frame, so a big board opened in a background tab never installed them until
+// the tab was shown; a fallback timer (FRAME_FALLBACK_MS, as the chunked apply's) installs on whichever comes first.
 import { describe, expect, it } from 'vitest'
 import type { CanvasInputEvent, LobbyCanvas } from '../api/lobby-canvas.ts'
-import { type InstallTimers, installFeaturesAfterWelcome } from './features-install.ts'
+import { FRAME_FALLBACK_MS, type InstallTimers, installFeaturesAfterWelcome } from './features-install.ts'
 
 type Listener = (e: CanvasInputEvent) => void
 
@@ -42,7 +44,7 @@ function board(n: number) {
 
 function timers() {
   const frames = new Map<number, () => void>()
-  const tasks = new Map<number, () => void>()
+  const tasks = new Map<number, { fn: () => void; ms: number }>()
   let next = 1
   const t: InstallTimers = {
     requestAnimationFrame: (fn) => {
@@ -50,19 +52,30 @@ function timers() {
       return next++
     },
     cancelAnimationFrame: (id) => void frames.delete(id),
-    setTimeout: (fn) => {
-      tasks.set(next, fn)
+    setTimeout: (fn, ms) => {
+      tasks.set(next, { fn, ms })
       return next++
     },
     clearTimeout: (id) => void tasks.delete(id as number),
   }
-  const run = (m: Map<number, () => void>) => {
-    for (const [id, fn] of [...m]) {
-      m.delete(id)
-      fn()
-    }
+  /** Runs what is due: a timer cancelled by an earlier one in the same run does not fire. */
+  const runFrames = () => {
+    for (const [id, fn] of [...frames]) if (frames.delete(id)) fn()
   }
-  return { t, frame: () => run(frames), task: () => run(tasks), frames, tasks }
+  const runTasks = (ms: number) => {
+    for (const [id, task] of [...tasks]) if (task.ms === ms && tasks.delete(id)) task.fn()
+  }
+  return {
+    t,
+    /** the animation frame (a hidden tab never runs it) */
+    frame: runFrames,
+    /** the task the frame starts (a timer of 0 ms) */
+    task: () => runTasks(0),
+    /** the fallback timer that does not wait for a frame */
+    fallback: () => runTasks(FRAME_FALLBACK_MS),
+    frames,
+    tasks,
+  }
 }
 
 /** The features as the page installs them: canvas-ux's listener takes a double-click and a right-click. */
@@ -153,6 +166,77 @@ describe('installFeaturesAfterWelcome', () => {
     const off2 = installFeaturesAfterWelcome(b.canvas, 100, g.install, tm.t)
     tm.frame()
     tm.task()
+    expect(g.installs()).toBe(1)
+    off2()
+    expect(b.listeners.size).toBe(0)
+  })
+
+  it('wave O: a hidden tab runs no frame: the fallback timer installs the features, once, and the gate opens', () => {
+    const b = board(500)
+    const f = features(b)
+    const tm = timers()
+    const off = installFeaturesAfterWelcome(b.canvas, 100, f.install, tm.t)
+    expect(b.input({ type: 'double-click' })).toBe(true) // gated while waiting
+    expect(f.installs()).toBe(0)
+    tm.fallback()
+    expect(f.installs()).toBe(1)
+    b.input({ type: 'double-click' })
+    b.input({ type: 'pointer-down' })
+    expect(f.got).toEqual(['double-click'])
+    expect(b.engine).toEqual(['pointer-down'])
+    // nothing is left waiting; were the tab shown and the frame to come, it finds nothing to do
+    expect(tm.frames.size).toBe(0)
+    expect(tm.tasks.size).toBe(0)
+    tm.frame()
+    tm.task()
+    tm.fallback()
+    expect(f.installs()).toBe(1)
+    off()
+    expect(b.listeners.size).toBe(0)
+  })
+
+  it('wave O: the fallback comes between the frame and its task: one install, the task finds nothing left', () => {
+    const b = board(500)
+    const f = features(b)
+    const tm = timers()
+    installFeaturesAfterWelcome(b.canvas, 100, f.install, tm.t)
+    tm.frame()
+    expect(f.installs()).toBe(0)
+    tm.fallback()
+    expect(f.installs()).toBe(1)
+    tm.task()
+    expect(f.installs()).toBe(1)
+    expect(tm.tasks.size).toBe(0)
+  })
+
+  it('wave O: the frame and its task came first: the fallback is cancelled, one install', () => {
+    const b = board(500)
+    const f = features(b)
+    const tm = timers()
+    installFeaturesAfterWelcome(b.canvas, 100, f.install, tm.t)
+    tm.frame()
+    tm.task()
+    expect(f.installs()).toBe(1)
+    expect(tm.tasks.size).toBe(0)
+    tm.fallback()
+    expect(f.installs()).toBe(1)
+  })
+
+  it('wave O: torn down before either: no frame, no task and no fallback is left, and nothing installs', () => {
+    const b = board(500)
+    const f = features(b)
+    const tm = timers()
+    const off = installFeaturesAfterWelcome(b.canvas, 100, f.install, tm.t)
+    off()
+    expect(tm.frames.size).toBe(0)
+    expect(tm.tasks.size).toBe(0)
+    tm.fallback()
+    expect(f.installs()).toBe(0)
+    expect(b.listeners.size).toBe(0)
+    // torn down after the fallback installed them: their listeners go
+    const g = features(b)
+    const off2 = installFeaturesAfterWelcome(b.canvas, 100, g.install, tm.t)
+    tm.fallback()
     expect(g.installs()).toBe(1)
     off2()
     expect(b.listeners.size).toBe(0)
