@@ -115,12 +115,24 @@ export class UndoController {
           // of a large board applies about a thousand at a time)
           const get = o.scene.get
           const now = get ? null : sceneMap()
-          for (const id of e.ids)
-            if (!e.same?.has(id))
-              this.history.absorb(
-                e.before.get(id) as HistEl | undefined,
-                (now ? now.get(id) : (get?.(id) as HistEl | undefined)) as HistEl | undefined,
-              )
+          for (const id of e.ids) {
+            if (e.same?.has(id)) continue
+            const before = e.before.get(id) as HistEl | undefined
+            const after = (now ? now.get(id) : (get?.(id) as HistEl | undefined)) as HistEl | undefined
+            // (wave N.1: an element new to the scene that is a copy of its server row takes that row as undo's copy:
+            // the confirmed rows are never written, and the stack never writes its copies; no second copy of every
+            // element of a snapshot installed in chunks)
+            const conf = !before && after ? o.core.confirmed(id) : undefined
+            if (
+              conf &&
+              after &&
+              conf.version === after.version &&
+              conf.versionNonce === after.versionNonce &&
+              conf.type === after.type
+            )
+              this.history.adopt([conf as unknown as HistEl])
+            else this.history.absorb(before, after)
+          }
         } else if (e.kind === 'push') this.history.markPushed(e.record.seq, e.ids)
       }),
       o.core.onAck((ack) => this.history.onAck(ack as never, sceneMap())),
