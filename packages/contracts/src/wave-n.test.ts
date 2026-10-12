@@ -244,9 +244,11 @@ describe('reaction codes and the wave N usage events', () => {
     }
     expect(new Set(USAGE_EVENTS).size).toBe(USAGE_EVENTS.length)
     const wn = ['reactions.react', 'board-links.insert', 'board-links.backlinks', 'ai.capture']
-    for (const id of wn) {
-      expect(PALETTE_COMMAND_IDS as readonly string[]).toContain(id)
+    for (const id of wn) expect(PALETTE_COMMAND_IDS as readonly string[]).toContain(id)
+    // WS7 registered the board-links commands; the others are pending until their owners register them
+    for (const id of ['reactions.react', 'ai.capture'])
       expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).toContain(id)
-    }
+    for (const id of ['board-links.insert', 'board-links.backlinks'])
+      expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).not.toContain(id)
   })
 })

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  boardElementPath,
   elementsLink,
   hasDeepLinkParam,
   legacyIdsOf,
@@ -54,6 +55,25 @@ describe('new links (?el=, ?view=)', () => {
     expect(hasDeepLinkParam(`${BASE}?thread=t1`)).toBe(false)
     expect(withoutParams(`${BASE}?el=a&thread=t1#x`, ['el', 'view', 'd'])).toBe('/b/brd_1?thread=t1#x')
     expect(linkBase(`${BASE}?el=a#x`)).toBe(BASE)
+  })
+})
+
+describe('wave N (N7-5): a board at one element', () => {
+  it('builds /b/<id>?el=<id> (or the bare board) and reads back as the element link', () => {
+    expect(boardElementPath('b-two0000001', 'card-1')).toBe('/b/b-two0000001?el=card-1')
+    expect(boardElementPath('b-two0000001', null)).toBe('/b/b-two0000001')
+    expect(boardElementPath('b-two0000001')).toBe('/b/b-two0000001')
+    const withColon = boardElementPath('b-two0000001', 'n.1:x')
+    expect(withColon).toBe('/b/b-two0000001?el=n.1%3Ax')
+    expect(readDeepLink(new URL(withColon, BASE).toString())).toEqual({ kind: 'elements', ids: ['n.1:x'] })
+  })
+
+  it('a stored board-card path (its ?el= id unencoded) opens at that element too', () => {
+    expect(readDeepLink(new URL('/b/b-two0000001?el=n.1:x', BASE).toString())).toEqual({
+      kind: 'elements',
+      ids: ['n.1:x'],
+    })
+    expect(hasDeepLinkParam(new URL('/b/b-two0000001?el=frame-1', BASE).toString())).toBe(true)
   })
 })
 

@@ -19,6 +19,14 @@
 
 // The route itself is room-internal/text.ts (the Excalidraw engine's); this module keeps the answer's
 // vocabulary, its limits and `cleanText`.
+//
+// Wave N (WS7, N7-3; @draftroom/contracts sync-internal.ts BoardTextLinks): with `?links=1` a changed answer
+// also carries `links`, after every other field: each live element whose `link` is a Lobby-relative board path
+// (`/b/<id>[?el=<id>]`), in element id order, at most BOARD_TEXT_LINKS_MAX. Without the parameter the answer is
+// byte for byte the wave M one, so an older api (which never asks) reads exactly what it read before, and an older
+// sync simply ignores the parameter (the api then keeps the links it indexed). Still read-only.
+
+import type { BoardTextLink } from '@draftroom/contracts'
 
 /** The most text (UTF-8 bytes) one answer carries; the API asks for its own share of 1 MiB. */
 export const BOARD_TEXT_MAX_BYTES = 1024 * 1024
@@ -47,7 +55,10 @@ export interface BoardText {
 
 export type BoardTextAnswer =
   | { boardId: string; clock: number; unchanged: true }
-  | ({ boardId: string; clock: number; unchanged: false } & BoardText)
+  | ({ boardId: string; clock: number; unchanged: false } & BoardText & {
+        /** only when asked for (`?links=1`): the board links of its live elements (N7-3) */
+        links?: BoardTextLink[]
+      })
 
 // biome-ignore lint/suspicious/noControlCharactersInRegex: the point is to remove control characters
 const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g

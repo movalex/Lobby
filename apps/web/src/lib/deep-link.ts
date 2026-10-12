@@ -144,6 +144,15 @@ export function elementsLink(base: string, ids: readonly string[]): string {
   return `${base}?${ELEMENTS_PARAM}=${clean.map((id) => encodeURIComponent(id)).join(',')}`
 }
 
+/**
+ * Wave N (WS7, N7-5): the in-app path of a board, at one element when given (`/b/<id>?el=<id>`), as "Linked from"'s
+ * "Go to the link" opens it. Read back by `readDeepLink` like any `?el=` link, so the board zooms to the element.
+ */
+export function boardElementPath(boardId: string, elementId?: string | null): string {
+  const base = `/b/${encodeURIComponent(boardId)}`
+  return elementId ? elementsLink(base, [elementId]) : base
+}
+
 /** `<base>?view=<x>,<y>,<w>,<h>` (rounded to whole scene pixels). */
 export function viewLink(base: string, r: LinkRect): string {
   const n = (v: number) => String(Math.round(v))

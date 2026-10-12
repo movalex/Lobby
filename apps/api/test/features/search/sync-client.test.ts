@@ -46,6 +46,20 @@ describe('sync internal client: boardText', () => {
     ])
   })
 
+  it('wave N (N7-4): asks for the board links with ?links=1 only when told to', async () => {
+    const { seen, baseUrl } = await serve(() => ({
+      status: 200,
+      body: { boardId: 'b-one', clock: 7, unchanged: true },
+    }))
+    const client = createHttpSyncInternalClient({ baseUrl, secret: 's'.repeat(40) })
+    await client.boardText?.('b-one', { maxBytes: 1000, links: true })
+    await client.boardText?.('b-one', { since: 3, links: false })
+    expect(seen.map((s) => s.url)).toEqual([
+      '/internal/boards/b-one/text?maxBytes=1000&links=1',
+      '/internal/boards/b-one/text?since=3',
+    ])
+  })
+
   it('turns a refusal or an unreachable server into SyncUnavailable', async () => {
     const { baseUrl } = await serve(() => ({ status: 503, body: { error: { code: 'SHUTTING_DOWN' } } }))
     const client = createHttpSyncInternalClient({ baseUrl, secret: 's'.repeat(40) })

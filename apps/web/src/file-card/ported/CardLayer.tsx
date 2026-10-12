@@ -12,10 +12,18 @@
 // scaled with the zoom, so it moves and resizes with its element. Opaque elements painted above a card
 // (a note, a filled shape, an image) cut a hole in its face, so they stay visible over it.
 // Live facts come from the api's meta (./meta.ts), never from the element.
+//
+// Wave N (WS7, N7-1/N7-2): board cards too (a link-card rectangle of kind 'board-card' whose `link` is a
+// Lobby-relative board path): features/board-links/BoardCardFace.tsx draws the target's face (title, frame name,
+// thumbnail) when this viewer can open it, else the neutral face. Link and board cards are found through the scene
+// index by their kind (`canvas.index.byKind`), so a board with none of them asks nothing of each element for them.
+import { BOARD_CARD_KIND } from '@draftroom/contracts'
 import { type CSSProperties, type PointerEvent, useEffect, useRef, useState } from 'react'
 import { derivativeUrl, originalUrl } from '../../assets/contract.ts'
 import { useAssetMeta } from '../../assets/meta-store.ts'
-import type { CanvasFeatureContext, LobbyCanvas } from '../../canvas/api/index.ts'
+import type { CanvasElement, CanvasFeatureContext, LobbyCanvas } from '../../canvas/api/index.ts'
+import { BoardCardFace } from '../../features/board-links/BoardCardFace.tsx'
+import { boardCardOf } from '../../features/board-links/model.ts'
 import { useUserKind } from '../../invite/guest.tsx'
 import { extensionLabel, formatBytes, formatDuration, pluralize } from '../../lib/format.ts'
 import { useValue } from '../../lib/signals.ts'
@@ -24,7 +32,7 @@ import '../file-card.css'
 import { CONVERSION_DETAIL, CONVERSION_NOTE, cardOfficeFormat, isConvertedPreview } from '../office.ts'
 import { previewPages } from '../pdf-pages.ts'
 import { downloadsAllowed } from './downloads.ts'
-import { LinkFace, linkOf, titleOf } from './link-cards.tsx'
+import { LINK_CARD_KIND, LinkFace, linkOf, titleOf } from './link-cards.tsx'
 import { localPreviewsOf, PREVIEW_GRACE_MS } from './local-previews.ts'
 import './media.css'
 import { mediaMetaStore } from './meta.ts'
@@ -44,11 +52,13 @@ const STRIP_MAX = 4
 
 interface Entry {
   readonly id: string
-  readonly kind: 'card' | 'pending' | 'link'
+  readonly kind: 'card' | 'pending' | 'link' | 'board'
   /** a file element's facts (a link card has none) */
   readonly facts: FileFacts
   /** a link card's URL and title (D2) */
   readonly link?: { readonly url: string; readonly title: string }
+  /** N7-1: a board card's stored path and its board-cards target */
+  readonly board?: { readonly path: string; readonly target: string }
   /** the element box in scene units, and its rotation */
   readonly box: Box
   readonly angle: number
@@ -72,26 +82,65 @@ const NO_FACTS = {
   sizeBytes: 0,
 } as const satisfies FileFacts
 
+/**
+ * N7-1: the ids of the link and board cards, from the scene index (by kind), or null when the canvas has no index
+ * (then every element's kind is read as before).
+ */
+function cardIdsOf(canvas: LobbyCanvas): ReadonlySet<string> | null {
+  const index = (canvas as Partial<LobbyCanvas>).index
+  if (!index) return null
+  try {
+    const ids = new Set<string>()
+    for (const kind of [LINK_CARD_KIND, BOARD_CARD_KIND])
+      for (const el of index.byKind(kind)) ids.add((el as CanvasElement).id)
+    return ids
+  } catch {
+    return null
+  }
+}
+
 /** The entries to draw, in paint order (reactive: items, loader states, hidden ids). */
 function entriesOf(canvas: LobbyCanvas): Entry[] {
   const items = canvas.items()
   const out: Entry[] = []
   const editing = canvas.editingId()
+  const cardIds = cardIdsOf(canvas)
   // K1-8: the opaque elements in a grid, built once per pass and only when a card needs its holes
   let grid: Occluders | null = null
   const holesAbove = (index: number, box: Box) => {
     if (!grid) grid = new Occluders(items, (id) => canvas.isHidden(id))
     return grid.holesAbove(index, box)
   }
+  // a card whose words are being edited shows its plain canvas face (and the editor) meanwhile
+  const editedNow = (el: CanvasElement) =>
+    !!editing &&
+    (editing === el.id ||
+      ((el as { boundElements?: readonly { id: string }[] | null }).boundElements ?? []).some(
+        (b) => b.id === editing,
+      ))
   items.forEach((el, index) => {
-    const url = linkOf(el as never)
-    // a link card whose words are being edited shows its plain canvas face (and the editor) meanwhile
-    const edited =
-      !!editing &&
-      (editing === el.id ||
-        ((el as { boundElements?: readonly { id: string }[] | null }).boundElements ?? []).some(
-          (b) => b.id === editing,
-        ))
+    const aCard = cardIds === null || cardIds.has(el.id)
+    // N7-1: a board card (its kind, and a Lobby-relative board path)
+    const card = aCard && el.type === 'rectangle' ? boardCardOf(el as never) : null
+    const board = card ? { path: card.path, target: card.target } : null
+    if (board) {
+      if (editedNow(el) || canvas.isHidden(el.id)) return
+      const box = { x: el.x, y: el.y, w: el.width, h: el.height }
+      out.push({
+        id: el.id,
+        kind: 'board',
+        facts: NO_FACTS,
+        board,
+        box,
+        angle: el.angle ?? 0,
+        holes: el.angle ? [] : holesAbove(index, box),
+        state: null,
+        radius: cornerRadiusOf(el as never),
+      })
+      return
+    }
+    const url = aCard ? linkOf(el as never) : null
+    const edited = editedNow(el)
     if (url && !edited && !canvas.isHidden(el.id)) {
       const box = { x: el.x, y: el.y, w: el.width, h: el.height }
       out.push({
@@ -203,6 +252,17 @@ export function MediaSceneLayer({ ctx }: { ctx: CanvasFeatureContext }) {
         if (e.kind === 'link' && e.link)
           return (
             <LinkFace key={e.id} ctx={ctx} id={e.id} url={e.link.url} title={e.link.title} style={style} />
+          )
+        if (e.kind === 'board' && e.board)
+          return (
+            <BoardCardFace
+              key={e.id}
+              ctx={ctx}
+              id={e.id}
+              path={e.board.path}
+              target={e.board.target}
+              style={style}
+            />
           )
         return e.kind === 'card' ? (
           <CardFace key={e.id} ctx={ctx} id={e.id} facts={e.facts} style={style} />

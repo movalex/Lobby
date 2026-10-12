@@ -15,9 +15,20 @@
 // page's onLinkOpen) opens the page in a new tab, with no opener and no referrer; a double-click edits
 // its words like any shape's (the face steps aside while the editor is open). A name-only guest may only hold Lobby-relative links (canvas-schema
 // `isAllowedLink`), so their pasted URL stays plain text, as before.
+//
+// Wave N (WS7, N7-1): a pasted URL that opens a board of this Lobby (this page's origin or VITE_PUBLIC_ORIGIN, or
+// the relative path itself: `/b/<id>`, optionally `?el=<id>`) becomes a BOARD CARD instead: the same rounded
+// rectangle with `customData.lobby.kind = 'board-card'` and `link` = the Lobby-relative path, and nothing else about
+// the target (no title, no thumbnail URL: its face comes at view time from a permission-checked route, drawn by
+// features/board-links/BoardCardFace.tsx through ./CardLayer.tsx). Its bound label says "Board link", so exports,
+// thumbnails and search never show what a viewer may not see. A relative link is allowed for anyone who can edit,
+// guests included (`isAllowedLink`). `linkOf` stays http(s)-only; features/board-links/model.ts `boardLinkOf` reads
+// the relative form. A URL of another origin, or a Lobby URL that is not exactly one board (several `?el=` ids,
+// `?view=`, a hash) stays a normal link card. An older web (3c83611) shows the rectangle, its label and the engine's
+// link badge, which opens the board in the tab (the board page's onLinkOpen).
 import { LOBBY_INK } from '@draftroom/board-ops/elements'
 import { isAllowedLink } from '@draftroom/canvas-schema/limits'
-import { type LinkPreview, linkPreviewPath } from '@draftroom/contracts'
+import { BOARD_CARD_KIND, BOARD_CARD_LABEL, type LinkPreview, linkPreviewPath } from '@draftroom/contracts'
 import { type CSSProperties, useEffect, useState } from 'react'
 import type {
   CanvasElement,
@@ -27,12 +38,17 @@ import type {
   LobbyCanvas,
   ScenePoint,
 } from '../../canvas/api/index.ts'
+import { boardPathOfUrl } from '../../features/board-links/model.ts'
 import { knownUserKind } from '../../invite/guest.tsx'
+import { countUsage } from '../../lib/usage.ts'
 
 export const LINK_CARD_KIND = 'link-card'
 export const LINK_CARD_W = 320
 export const LINK_CARD_MIN_H = 88
 export const LINK_CARD_RADIUS = 10
+/** N7-1: a board card is taller than a link card (its face shows the board's thumbnail). */
+export const BOARD_CARD_W = 320
+export const BOARD_CARD_H = 220
 /** How long a paste waits for the page's title before the card lands with its site name only. */
 export const LINK_PREVIEW_WAIT_MS = 3_000
 const FONT_FAMILY = 6
@@ -81,6 +97,54 @@ export function labelOf(preview: LinkPreview, url: string): string {
   const site = preview.siteName?.trim()
   const second = site && site.toLowerCase() !== host.toLowerCase() ? `${site} · ${host}` : host
   return title && title !== host ? `${title}\n${second}` : second
+}
+
+// ---- N7-1: which card a pasted URL makes ------------------------------------------------------------------
+
+/** The origins whose board URLs are this Lobby's: the page's own, and VITE_PUBLIC_ORIGIN (Render's build sets it). */
+export function lobbyOrigins(): string[] {
+  const out: string[] = []
+  try {
+    if (typeof location !== 'undefined' && location.origin && location.origin !== 'null')
+      out.push(location.origin)
+  } catch {}
+  const env = (import.meta as unknown as { env?: { VITE_PUBLIC_ORIGIN?: unknown } }).env
+  const pub = typeof env?.VITE_PUBLIC_ORIGIN === 'string' ? env.VITE_PUBLIC_ORIGIN.trim() : ''
+  if (pub) {
+    try {
+      const o = new URL(pub).origin
+      if (!out.includes(o)) out.push(o)
+    } catch {}
+  }
+  return out
+}
+
+/**
+ * What a pasted URL becomes: a board card for a URL of one of `origins` (or the relative path) that opens exactly one
+ * board (features/board-links/model.ts `boardPathOfUrl`: `/b/<id>`, optionally one `?el=<id>`), with the stored
+ * Lobby-relative path; else a link card for an http(s) URL; else nothing (it stays text).
+ */
+export function cardForUrl(
+  url: string,
+  origins: readonly string[],
+):
+  | { readonly kind: 'board-card'; readonly link: string }
+  | { readonly kind: 'link-card'; readonly url: string }
+  | null {
+  const raw = url.trim()
+  for (const origin of origins.length ? origins : ['http://lobby.invalid']) {
+    // a relative path counts as the page's own (the first origin); an absolute URL must name one of them
+    if (raw.startsWith('/') && origin !== (origins[0] ?? 'http://lobby.invalid')) continue
+    const link = boardPathOfUrl(raw, origin)
+    if (link) return { kind: 'board-card', link }
+  }
+  if (raw.startsWith('/')) return null
+  try {
+    const u = new URL(raw)
+    return u.protocol === 'https:' || u.protocol === 'http:' ? { kind: 'link-card', url: raw } : null
+  } catch {
+    return null
+  }
 }
 
 // ---- the api ------------------------------------------------------------------------------------------
@@ -208,14 +272,47 @@ export function placeLinkCard(
   preview: LinkPreview,
   at: ScenePoint | null,
 ): string {
+  return placeCard(
+    ctx,
+    { link: url, kind: LINK_CARD_KIND, words: labelOf(preview, url), label: 'Add link' },
+    at,
+  )
+}
+
+/**
+ * N7-1: creates the board card for `link` (a Lobby-relative board path, `/b/<id>[?el=<id>]`) at `at` (the view's
+ * centre when null), in one undo step, selected; returns its id. Its label is BOARD_CARD_LABEL, never the target's
+ * title: nothing about the target is stored.
+ */
+export function placeBoardCard(ctx: CanvasFeatureContext, link: string, at: ScenePoint | null): string {
+  const id = placeCard(
+    ctx,
+    { link, kind: BOARD_CARD_KIND, words: BOARD_CARD_LABEL, label: 'Add board link', minH: BOARD_CARD_H },
+    at,
+  )
+  countUsage('boardlinks.insert')
+  return id
+}
+
+/** Whether this person may put the board card for `link` on the board (the server checks it again). */
+export function canBoardCard(ctx: CanvasFeatureContext, link: string): boolean {
+  // a Lobby-relative link: allowed for anyone who can edit, name-only guests included (canvas-schema isAllowedLink)
+  return !ctx.canvas.readOnly() && link.startsWith('/b/') && isAllowedLink(link, { guest: true })
+}
+
+function placeCard(
+  ctx: CanvasFeatureContext,
+  card: { link: string; kind: string; words: string; label: string; minH?: number },
+  at: ScenePoint | null,
+): string {
   const canvas = ctx.canvas
   const vp = canvas.viewport.get()
   const point = at ?? { x: vp.x + vp.width / 2, y: vp.y + vp.height / 2 }
-  const original = labelOf(preview, url)
+  const original = card.words
   const text = wrap(canvas, original, LINK_CARD_W - 2 * PAD)
   const m = canvas.text.measure(text || ' ', { fontFamily: FONT_FAMILY, fontSize: LABEL_SIZE })
   const w = LINK_CARD_W
-  const h = Math.max(LINK_CARD_MIN_H, Math.ceil(m.height) + 2 * PAD)
+  const h = Math.max(card.minH ?? LINK_CARD_MIN_H, Math.ceil(m.height) + 2 * PAD)
   let x = point.x - w / 2
   let y = point.y - h / 2
   const frame = frameAt(canvas, point)
@@ -227,7 +324,7 @@ export function placeLinkCard(
   const frameId = frame && frame.w >= w && frame.h >= h ? frame.id : null
   const id = newId()
   const labelId = `${id}.t`
-  canvas.transact('Add link', (tx) => {
+  canvas.transact(card.label, (tx) => {
     tx.create('rectangle', {
       id,
       x: round2(x),
@@ -240,10 +337,10 @@ export function placeLinkCard(
       strokeWidth: 1,
       roughness: 0,
       roundness: { type: 3, value: LINK_CARD_RADIUS },
-      link: url,
+      link: card.link,
       boundElements: [{ id: labelId, type: 'text' }],
       ...(frameId ? { frameId } : {}),
-      customData: { lobby: { kind: LINK_CARD_KIND } },
+      customData: { lobby: { kind: card.kind } },
     })
     tx.create('text', {
       id: labelId,
@@ -304,7 +401,15 @@ export const linkContentHandler: ContentHandlerSpec = {
   kinds: ['url'],
   priority: 100,
   handle(content, ctx, at) {
-    if (content.kind !== 'url' || !canLinkCard(ctx, content.url)) return false
+    if (content.kind !== 'url') return false
+    // N7-1: a URL that opens a board of this Lobby is a board card (no page is read for it)
+    const card = cardForUrl(content.url, lobbyOrigins())
+    if (card?.kind === 'board-card') {
+      if (!canBoardCard(ctx, card.link)) return false
+      placeBoardCard(ctx, card.link, at)
+      return true
+    }
+    if (!canLinkCard(ctx, content.url)) return false
     void insertLinkCard(ctx, content.url, at)
     return true
   },

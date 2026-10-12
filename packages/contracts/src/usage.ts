@@ -182,8 +182,7 @@ export type PaletteCommandId = (typeof PALETTE_COMMAND_IDS)[number]
  */
 export const PENDING_PALETTE_COMMAND_IDS: readonly PaletteCommandId[] = [
   'reactions.react',
-  'board-links.insert',
-  'board-links.backlinks',
+  // board-links.insert and board-links.backlinks: registered by WS7 (features/board-links)
   'ai.capture',
 ]
 

@@ -5,7 +5,7 @@
 //    http(s)-only `linkOf` of file-card/ported/link-cards.tsx stays as it is);
 //  - `boardPathOfUrl(url, origin)` turns a pasted same-origin board URL into the stored relative path, and refuses a
 //    foreign origin (that stays a normal link card).
-import { BOARD_CARD_KIND, boardLinkPath, parseBoardLinkPath } from '@draftroom/contracts'
+import { BOARD_CARD_KIND, boardCardTarget, boardLinkPath, parseBoardLinkPath } from '@draftroom/contracts'
 
 /** The palette commands WS7 registers (contracts usage.ts PALETTE_COMMAND_IDS; pending until then). */
 export const BOARD_LINKS_INSERT_COMMAND_ID = 'board-links.insert'
@@ -25,6 +25,19 @@ export function boardLinkOf(el: LinkedElement): { boardId: string; elementId: st
 export function isBoardCard(el: LinkedElement): boolean {
   const kind = (el.customData as { lobby?: { kind?: unknown } } | undefined)?.lobby?.kind
   return kind === BOARD_CARD_KIND && boardLinkOf(el) !== null
+}
+
+/** What a board card's face needs (N7-2): its stored path, its board-cards target, and what it opens; null otherwise. */
+export function boardCardOf(el: LinkedElement): {
+  readonly path: string
+  readonly target: string
+  readonly boardId: string
+  readonly elementId: string | null
+} | null {
+  if (!isBoardCard(el)) return null
+  const t = boardLinkOf(el)
+  if (!t) return null
+  return { path: el.link as string, target: boardCardTarget(t.boardId, t.elementId), ...t }
 }
 
 /**

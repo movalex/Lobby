@@ -17,9 +17,23 @@
 // waits a bounded time for them. Refreshes of one board never overlap (in-process; one API instance,
 // docs/DEPLOY.md). Failures to reach the sync server back off per board (15 s doubling, at most 30 min).
 // Nothing here logs board text.
+//
+// Wave N (WS7, N7-4): links between boards ride on the canvas refresh. Every text request asks for them
+// (`?links=1`); a changed answer that carries `links` replaces the board's board_links rows and records its
+// board_link_scans row, in one transaction of their own right after the text's, which also moves the board's
+// canvas source time (the text's transaction leaves it behind for such an answer). A failure there never fails the
+// search index: it is logged, and the board stays stale with the usual failure backoff, so a later refresh fetches
+// it again and retries. A slower process's older answer never replaces a newer one (replaceBoardLinks). An answer
+// without `links` (a sync older than wave N ignores the parameter), an unchanged one, or one whose links do not
+// parse keeps the rows as they are. A one-time backfill then fetches,
+// without `since`, the boards that were indexed before but never had their links scanned (the `unchanged`
+// short-cut would skip them forever), a batch per pass: it pauses while the sync answers without links (an older
+// sync: retried every LINKS_BACKFILL_PAUSE_MS) and, once no such board is left, never runs again in this process.
 
 import { FILE_CARD_TYPE } from '@draftroom/canvas-schema'
 import {
+  type BoardTextLink,
+  BoardTextLinks,
   rewriteMentionTokens,
   SEARCH_CANVAS_TEXT_BYTES,
   SEARCH_COMMENT_TEXT_BYTES,
@@ -29,6 +43,7 @@ import type { Db, Queryable } from '@draftroom/db'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import type { SyncInternalClient } from '../../sync-internal.ts'
+import { replaceBoardLinks } from '../board-links/store.ts'
 import { cleanIndexText } from './query.ts'
 import { freshness, type ScopedBoard } from './scope.ts'
 import {
@@ -83,6 +98,8 @@ const RETRY_BASE_S = 15
 const RETRY_MAX_S = 30 * 60
 /** How long closing the app waits for running refreshes. */
 const CLOSE_WAIT_MS = 3_000
+/** N7-4: while the sync answers without `links` (older than wave N), the links backfill waits this long. */
+export const LINKS_BACKFILL_PAUSE_MS = 10 * 60_000
 
 const KIND_OF_TYPE: Readonly<Record<string, SearchHitKind>> = {
   note: 'note',
@@ -114,9 +131,21 @@ const BoardTextAnswer = z.discriminatedUnion('unchanged', [
     truncated: z.boolean(),
     bytes: z.number().int().min(0),
     entries: z.array(BoardTextEntry).max(10_000),
+    // N7-4: checked on its own (linksOf), so a links field this build cannot read never fails the text
+    links: z.unknown().optional(),
   }),
 ])
 type BoardTextAnswer = z.infer<typeof BoardTextAnswer>
+
+/**
+ * The links of a changed answer: the list, or null to keep the indexed rows (an older sync sent none; or they do
+ * not parse, which a sync of this wave never sends).
+ */
+export function linksOf(answer: Extract<BoardTextAnswer, { unchanged: false }>): BoardTextLink[] | null {
+  if (answer.links === undefined) return null
+  const parsed = BoardTextLinks.safeParse(answer.links)
+  return parsed.success ? parsed.data : null
+}
 
 export type RefreshResult = 'indexed' | 'unchanged' | 'gone' | 'failed'
 
@@ -126,6 +155,8 @@ export interface PassResult {
   purged: number
   /** Boards the pass looked at (a full batch means there may be more). */
   looked: number
+  /** N7-4: boards the links backfill fetched in this pass (a full batch means there may be more). */
+  linksBackfill: number
 }
 
 interface Log {
@@ -174,6 +205,12 @@ export class SearchIndexer {
   private timer: ReturnType<typeof setTimeout> | null = null
   private pass: Promise<PassResult> | null = null
   private stopped = false
+  /** N7-4: whether the last changed text answer carried `links` (null: none seen yet). */
+  private syncLinks: boolean | null = null
+  /** N7-4: the one-time links backfill found nothing left to do (it never runs again in this process). */
+  private linksBackfillDone = false
+  /** N7-4: the backfill waits until then (the sync answered without links: older than wave N). */
+  private linksBackfillPausedUntil = 0
 
   constructor(opts: {
     db: Db
@@ -210,7 +247,7 @@ export class SearchIndexer {
     this.timer = setTimeout(() => {
       this.timer = null
       void this.runPass()
-        .then((r) => r.looked >= this.settings.batch)
+        .then((r) => r.looked >= this.settings.batch || r.linksBackfill >= this.settings.batch)
         .catch((e: unknown) => {
           this.warn(e, 'search index pass failed')
           return false
@@ -287,12 +324,14 @@ export class SearchIndexer {
       return 'gone'
     }
     const sourceAt = row.updated_at // read BEFORE the text (see the top of this file)
+    const askedAt = this.now()
     let answer: BoardTextAnswer
     try {
       if (!this.sync.boardText) throw new Error('the sync client cannot read board text')
       const raw = await this.sync.boardText(boardId, {
         ...(since === null ? {} : { since }),
         maxBytes: SEARCH_CANVAS_TEXT_BYTES,
+        links: true,
       })
       answer = BoardTextAnswer.parse(raw)
       if (answer.boardId !== boardId) throw new Error('the sync server answered for another board')
@@ -304,8 +343,14 @@ export class SearchIndexer {
       return 'failed'
     }
     const text = answer.unchanged ? null : canvasEntries(answer)
+    const links = answer.unchanged ? null : linksOf(answer)
+    if (!answer.unchanged) this.syncLinks = answer.links !== undefined
+    // N7-4: links to write after the text: until they are written (writeLinks), the board's canvas source time and
+    // its failure backoff stay where they were, so a failed or interrupted links write leaves the board stale for
+    // the next refresh (and a failure that persists backs off)
+    const linksPending = text !== null && links !== null
     const at = this.now()
-    return this.db.transaction(async (tx) => {
+    const result = await this.db.transaction(async (tx): Promise<RefreshResult> => {
       if (!(await this.stillIndexable(tx, boardId))) return 'gone'
       if (text)
         await replaceEntries(tx, { id: boardId, workspaceId: row.workspace_id }, 'canvas', text.entries)
@@ -315,27 +360,124 @@ export class SearchIndexer {
             canvas_truncated, failures, retry_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, 0, NULL)
          ON CONFLICT (board_id) DO UPDATE SET
-           canvas_source_at = EXCLUDED.canvas_source_at,
+           canvas_source_at = CASE WHEN $9::boolean THEN board_search_state.canvas_source_at
+                                   ELSE EXCLUDED.canvas_source_at END,
            canvas_clock = EXCLUDED.canvas_clock,
            canvas_indexed_at = EXCLUDED.canvas_indexed_at,
            canvas_bytes = CASE WHEN $8::boolean THEN board_search_state.canvas_bytes ELSE EXCLUDED.canvas_bytes END,
            canvas_truncated = CASE WHEN $8::boolean THEN board_search_state.canvas_truncated
                                    ELSE EXCLUDED.canvas_truncated END,
-           failures = 0,
-           retry_at = NULL`,
+           failures = CASE WHEN $9::boolean THEN board_search_state.failures ELSE 0 END,
+           retry_at = CASE WHEN $9::boolean THEN board_search_state.retry_at END`,
         [
           boardId,
           row.workspace_id,
-          sourceAt,
+          linksPending ? null : sourceAt,
           answer.clock,
           at,
           text?.bytes ?? 0,
           text?.truncated ?? false,
           text === null,
+          linksPending,
         ],
       )
       return text ? 'indexed' : 'unchanged'
     })
+    if (result === 'indexed' && links)
+      await this.writeLinks(boardId, row.workspace_id, links, { clock: answer.clock, sourceAt, askedAt })
+    return result
+  }
+
+  /**
+   * N7-4: replaces the board's links (one transaction of their own, after the text's), and only then moves the
+   * board's canvas source time to the text's (the text transaction left it behind). Never throws: a failure is
+   * logged (the board id only), keeps the rows and the scan as they were, and leaves the board stale with the
+   * search index's failure backoff, so a later pass or search fetches it again (without `since`) and retries.
+   */
+  private async writeLinks(
+    boardId: string,
+    workspaceId: string,
+    links: readonly BoardTextLink[],
+    answer: { clock: number; sourceAt: Date; askedAt: Date },
+  ): Promise<void> {
+    try {
+      await this.db.transaction(async (tx) => {
+        // The board row first (access.ts lock order, step 1), FOR NO KEY UPDATE: two writers of one board's links
+        // (two api processes overlap during a deploy) take turns, so the second DELETE sees the first one's rows
+        // and the board never ends with both sets; a reader sees one set or the other (backlinks.pg.test.ts); and
+        // the slower one's older answer never replaces a newer one recorded meanwhile (replaceBoardLinks). A board
+        // deleted meanwhile is skipped (its rows cascade away anyway).
+        const cur = await tx.maybeOne('SELECT id FROM boards WHERE id = $1 FOR NO KEY UPDATE', [boardId])
+        if (!cur) return
+        await replaceBoardLinks(tx, boardId, links, answer.clock, this.now(), answer.askedAt)
+        await tx.query(
+          `UPDATE board_search_state
+              SET canvas_source_at = GREATEST(canvas_source_at, $2::timestamptz), failures = 0, retry_at = NULL
+            WHERE board_id = $1`,
+          [boardId, answer.sourceAt],
+        )
+      })
+    } catch (e) {
+      this.warn(e, 'board links could not be indexed', boardId)
+      await this.recordLinksFailure(boardId, workspaceId).catch((err: unknown) =>
+        this.warn(err, 'search could not record a failure', boardId),
+      )
+    }
+  }
+
+  /**
+   * N7-4: the links of a freshly indexed board could not be written. The board is made stale (its canvas source
+   * time cleared, so even a board whose text the recent re-check fetched is fetched again) and backs off like a
+   * failed text read (15 s doubling, at most 30 min), so a failure that persists is not retried on every pass.
+   */
+  private async recordLinksFailure(boardId: string, workspaceId: string): Promise<void> {
+    await this.recordFailure(boardId, workspaceId)
+    await this.db.query('UPDATE board_search_state SET canvas_source_at = NULL WHERE board_id = $1', [
+      boardId,
+    ])
+  }
+
+  /**
+   * N7-4, the one-time links backfill (see the top of this file): a batch of the boards that were indexed but
+   * never had their links scanned, fetched without `since`. Returns how many it fetched.
+   */
+  private async backfillLinks(): Promise<number> {
+    if (this.linksBackfillDone || this.stopped) return 0
+    const now = this.now()
+    if (now.getTime() < this.linksBackfillPausedUntil) return 0
+    const never = `FROM boards b
+       JOIN board_search_state s ON s.board_id = b.id
+       LEFT JOIN board_link_scans l ON l.board_id = b.id
+      WHERE b.status <> 'trashed' AND l.board_id IS NULL AND s.canvas_indexed_at IS NOT NULL`
+    const rows = await this.db.query<{ id: string }>(
+      `SELECT b.id ${never} AND (s.retry_at IS NULL OR s.retry_at <= $1)
+        ORDER BY b.updated_at DESC, b.id
+        LIMIT $2`,
+      [now, this.settings.batch],
+    )
+    if (!rows.rows.length) {
+      // what is left (if anything) only waits for its retry: done once nothing is left at all
+      const left = await this.db.query(`SELECT b.id ${never} LIMIT 1`)
+      if (!left.rows.length) this.linksBackfillDone = true
+      return 0
+    }
+    let fetched = 0
+    for (const r of rows.rows) {
+      if (this.stopped) break
+      const result = await this.refreshCanvas(r.id)
+      fetched++
+      // an answer without links: the sync is older than wave N; try again later instead of fetching everything
+      if (result === 'indexed' && this.syncLinks === false) {
+        this.linksBackfillPausedUntil = this.now().getTime() + LINKS_BACKFILL_PAUSE_MS
+        break
+      }
+    }
+    return fetched
+  }
+
+  /** N7-4 (tests): whether the one-time links backfill has finished. */
+  linksBackfillFinished(): boolean {
+    return this.linksBackfillDone
   }
 
   private async recordFailure(boardId: string, workspaceId: string): Promise<void> {
@@ -499,7 +641,7 @@ export class SearchIndexer {
         LIMIT $2`,
       [now, this.settings.batch],
     )
-    const out: PassResult = { canvas: 0, comments: 0, purged, looked: rows.rows.length }
+    const out: PassResult = { canvas: 0, comments: 0, purged, looked: rows.rows.length, linksBackfill: 0 }
     for (const r of rows.rows) {
       if (this.stopped) break
       const fr = freshness(
@@ -524,6 +666,8 @@ export class SearchIndexer {
       if (fr.canvasStale && !fr.backoff && (await this.refreshCanvas(r.id)) !== 'failed') out.canvas++
       if (fr.commentsStale && (await this.refreshComments(r.id)) === 'indexed') out.comments++
     }
+    // N7-4: after the stale boards, the boards whose links were never scanned (until none is left)
+    out.linksBackfill = await this.backfillLinks()
     return out
   }
 }
