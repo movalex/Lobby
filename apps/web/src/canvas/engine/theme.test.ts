@@ -1,7 +1,8 @@
 // W5-10 and W5-15 (wave 5, 2C): frame names and outlines that read, and Lobby's dark-mode colours.
-import { beforeAll, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { contrastRatio } from '../../features/a11y/ported/contrast.ts'
 import { NOTE_PALETTE } from '../../features/canvas-ux/palette.ts'
+import type { EditorInkSource } from './theme.ts'
 
 // the engine creates its dark-mode cache only in a browser (`typeof window`): stand one in before it loads
 ;(globalThis as { window?: unknown }).window ??= globalThis
@@ -164,5 +165,155 @@ describe('wave M (M1-5): a note of an off-palette fill and its label are drawn i
     cache.set(rect, drawing)
     expect(cache.get(rect)).toBe(drawing)
     expect(dark('#1e1e1e')).toBe(theme.CHALK)
+  })
+})
+
+describe('wave N.1: the text editor over a pastel note reads in dark mode (the render was fixed in M1-5, the editor was not)', () => {
+  const PASTEL = '#b2f2bb'
+  interface El {
+    id: string
+    type: string
+    containerId?: string | null
+    strokeColor: string
+    backgroundColor?: string
+  }
+  interface Scene {
+    editing: El | null
+    elements: El[]
+    theme?: 'light' | 'dark'
+  }
+  const label: El = { id: 'l1', type: 'text', containerId: 'n1', strokeColor: '#1e1e1e' }
+  const noteOf = (fill: string): El => ({
+    id: 'n1',
+    type: 'stickynote',
+    backgroundColor: fill,
+    strokeColor: '#1e1e1e',
+  })
+  /** The engine slice the watch reads, over `scene` (read at each ask, so a test may change it). */
+  const sourceOf = (scene: Scene) => {
+    const listeners = new Set<() => void>()
+    const src: EditorInkSource = {
+      getAppState: () => ({ editingTextElement: scene.editing, theme: scene.theme ?? 'dark' }),
+      getSceneElementsMapIncludingDeleted: () => new Map(scene.elements.map((e) => [e.id, e])),
+      onChange: (cb) => {
+        listeners.add(cb)
+        return () => void listeners.delete(cb)
+      },
+    }
+    const changed = () => {
+      for (const l of listeners) l()
+    }
+    return { src, changed }
+  }
+
+  it('noteEditorInk: INK for the label of a pastel note being edited in dark mode; nothing else changes', () => {
+    const on = (scene: Scene) => theme.noteEditorInk(sourceOf(scene).src)
+    expect(on({ editing: label, elements: [noteOf(PASTEL), label] })).toBe(theme.INK)
+    // the scene's copy of the label wins over the one the editor opened with (the ink may have changed since)
+    const picked = { ...label, strokeColor: '#e03131' }
+    expect(on({ editing: label, elements: [noteOf(PASTEL), picked] })).toBeNull()
+    // a swatch note keeps CHALK (its designed dark fill), light mode and a free text keep the engine's colour
+    expect(on({ editing: label, elements: [noteOf('#a6d8f3'), label] })).toBeNull()
+    expect(on({ editing: label, elements: [noteOf(PASTEL), label], theme: 'light' })).toBeNull()
+    const free = { ...label, containerId: null }
+    expect(on({ editing: free, elements: [noteOf(PASTEL), free] })).toBeNull()
+    expect(on({ editing: null, elements: [noteOf(PASTEL), label] })).toBeNull()
+    // a label whose note is not in the scene (yet)
+    expect(on({ editing: label, elements: [label] })).toBeNull()
+  })
+
+  describe('watchNoteEditorInk', () => {
+    interface Area {
+      style: { color: string }
+      isConnected: boolean
+    }
+    class FakeObserver {
+      static all: FakeObserver[] = []
+      target: unknown = null
+      readonly cb: () => void
+      constructor(cb: () => void) {
+        this.cb = cb
+        FakeObserver.all.push(this)
+      }
+      observe(target: unknown) {
+        this.target = target
+      }
+      disconnect() {
+        FakeObserver.all = FakeObserver.all.filter((o) => o !== this)
+      }
+      takeRecords() {
+        return []
+      }
+    }
+    /** The browser tells the observers of `target` that it changed. */
+    const fire = (target: unknown) => {
+      for (const o of [...FakeObserver.all]) if (o.target === target) o.cb()
+    }
+    beforeEach(() => {
+      FakeObserver.all = []
+      vi.stubGlobal('MutationObserver', FakeObserver)
+    })
+    afterEach(() => vi.unstubAllGlobals())
+
+    /** A board root whose textareas are `areas.list`. */
+    const rootOf = (areas: { list: Area[] }) =>
+      ({ querySelectorAll: () => areas.list }) as unknown as HTMLElement
+    const chalkArea = (): Area => ({ style: { color: theme.CHALK }, isConnected: true })
+
+    it('inks an editor the moment it appears, and again whenever the engine writes its own colour', () => {
+      const area = chalkArea()
+      const areas = { list: [] as Area[] }
+      const root = rootOf(areas)
+      const stop = theme.watchNoteEditorInk(
+        root,
+        sourceOf({ editing: label, elements: [noteOf(PASTEL), label] }).src,
+      )
+      // Excalidraw appends its textarea, already styled with the dark cache's answer
+      areas.list = [area]
+      fire(root)
+      expect(area.style.color).toBe(theme.INK)
+      // every layout (typing, zoom, a scene update) sets the colour again
+      area.style.color = theme.CHALK
+      fire(area)
+      expect(area.style.color).toBe(theme.INK)
+      stop()
+      expect(FakeObserver.all).toEqual([])
+    })
+
+    it('the editing state landing after the textarea does: the next change applies the ink', () => {
+      const area = chalkArea()
+      const scene: Scene = { editing: null, elements: [noteOf(PASTEL), label] }
+      const { src, changed } = sourceOf(scene)
+      theme.watchNoteEditorInk(rootOf({ list: [area] }), src)
+      expect(area.style.color).toBe(theme.CHALK)
+      scene.editing = label
+      changed()
+      expect(area.style.color).toBe(theme.INK)
+    })
+
+    it('leaves a swatch note’s editor (CHALK on its designed dark fill) and light mode alone', () => {
+      const scenes: Scene[] = [
+        { editing: label, elements: [noteOf('#a6d8f3'), label] },
+        { editing: label, elements: [noteOf(PASTEL), label], theme: 'light' },
+      ]
+      for (const scene of scenes) {
+        const area = chalkArea()
+        theme.watchNoteEditorInk(rootOf({ list: [area] }), sourceOf(scene).src)
+        fire(area)
+        expect(area.style.color).toBe(theme.CHALK)
+      }
+    })
+
+    it('forgets an editor that left the page', () => {
+      const area = chalkArea()
+      const areas = { list: [area] }
+      const root = rootOf(areas)
+      theme.watchNoteEditorInk(root, sourceOf({ editing: label, elements: [noteOf(PASTEL), label] }).src)
+      expect(FakeObserver.all).toHaveLength(2) // the root's and the editor's
+      area.isConnected = false
+      areas.list = []
+      fire(root)
+      expect(FakeObserver.all).toHaveLength(1)
+    })
   })
 })
