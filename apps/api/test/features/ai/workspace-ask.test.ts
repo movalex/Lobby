@@ -191,9 +191,12 @@ describe('what reaches the prompt', () => {
     const r = await ask(w.carol, 'When is the launch date?')
     const prompt = promptOf(w, 0)
     expect(prompt).toContain('Launch date: October')
-    for (const words of ['secret', 'Editors-only board', limited.id]) expect(prompt, words).not.toContain(words)
+    for (const words of ['secret', 'Editors-only board', limited.id])
+      expect(prompt, words).not.toContain(words)
     expect(boardsOf(prompt)).toHaveLength(1)
-    expect(r.citations).toEqual([{ boardId: open.id, boardTitle: 'Open board', elementIds: [`${open.id}-1`] }])
+    expect(r.citations).toEqual([
+      { boardId: open.id, boardTitle: 'Open board', elementIds: [`${open.id}-1`] },
+    ])
     // dave edits the limited board: it is his to copy from, so it is read for him
     w.openai.next(answer('October [1], or the secret [2].', 'yes', [['b1.n1'], ['b2.n1']]))
     const d = await ask(w.dave, 'When is the launch date?')

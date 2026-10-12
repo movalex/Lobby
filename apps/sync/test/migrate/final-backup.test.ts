@@ -150,9 +150,9 @@ describe('finalBackupOf: the newest held, tldraw-described entry of the local ma
     const final = await heldBackup(rooms, backups, boardId, NOW - 40 * 60_000)
     expect(finalBackupOf(backups, boardId, NOW)?.file).toBe(final.file)
     // the offsite store holds the final copy: its local file goes, its entry moves to offsiteOnly
-    expect(await dropLocalBackups(backups, boardId, (e) => e.file === final.file, () => new Date(NOW))).toEqual([
-      final.file,
-    ])
+    const at = () => new Date(NOW)
+    const dropped = await dropLocalBackups(backups, boardId, (e) => e.file === final.file, at)
+    expect(dropped).toEqual([final.file])
     const m = readManifest(backups, boardId)
     expect(m?.backups.map((e) => e.file)).toEqual([earlier.file])
     expect(m?.offsiteOnly?.map((e) => e.file)).toEqual([final.file])
@@ -165,7 +165,7 @@ describe('finalBackupOf: the newest held, tldraw-described entry of the local ma
       holdUntil: final.holdUntil,
     })
     // and once every copy is offsite only, too
-    await dropLocalBackups(backups, boardId, () => true, () => new Date(NOW))
+    await dropLocalBackups(backups, boardId, () => true, at)
     expect(readManifest(backups, boardId)?.backups).toEqual([])
     expect(finalBackupOf(backups, boardId, NOW)?.file).toBe(final.file)
     // a hold that has passed counts for nothing, local or offsite only

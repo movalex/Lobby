@@ -36,7 +36,8 @@ export async function readBody(
   path: string,
   timeoutMs: number = BODY_READ_TIMEOUT_MS,
 ): Promise<BodyRead> {
-  if (isRefusedUpload(res.request().method(), path, res.status())) return { body: '', unread: 'refused-upload' }
+  if (isRefusedUpload(res.request().method(), path, res.status()))
+    return { body: '', unread: 'refused-upload' }
   let timer: ReturnType<typeof setTimeout> | null = null
   const timeout = new Promise<typeof TIMEOUT>((resolve) => {
     timer = setTimeout(() => resolve(TIMEOUT), timeoutMs)

@@ -27,7 +27,8 @@ describe('readBody', () => {
   })
 
   it('a body that never comes is given up on after the timeout; a body that comes is read', async () => {
-    expect(await readBody(response('GET', 200, never), '/api/me', 30)).toEqual({ body: '', unread: 'timeout' })
+    const late = await readBody(response('GET', 200, never), '/api/me', 30)
+    expect(late).toEqual({ body: '', unread: 'timeout' })
     const ok = response('GET', 200, async () => '{"ok":true}')
     expect(await readBody(ok, '/api/me', 30)).toEqual({ body: '{"ok":true}', unread: null })
     // a body whose text is the word itself is still a body
