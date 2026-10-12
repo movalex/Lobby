@@ -14,10 +14,81 @@ import { boardPath } from '../lib/routing.ts'
 
 export function notificationsApi(api: ApiClient) {
   return {
-    list: (signal?: AbortSignal) =>
-      api.request('GET', '/api/me/notifications', { schema: ListNotificationsResponse, signal }),
+    /**
+     * The bell. `since` (wave M, M5-3; the dashboard's since wave N.1): the `seq` of the last answer applied (0 when
+     * none); a 204 (nothing added or removed since) resolves null. Without it, today's request and body.
+     */
+    list: async (since?: number, signal?: AbortSignal): Promise<ListNotificationsResponse | null> => {
+      const path =
+        since === undefined
+          ? '/api/me/notifications'
+          : `/api/me/notifications?since=${Math.max(0, Math.floor(since))}`
+      // a 204 has no body: the optional schema reads it as undefined (nothing new)
+      const res = await api.request('GET', path, { schema: ListNotificationsResponse.optional(), signal })
+      return res ?? null
+    },
     markRead: (sel: { ids: string[] } | { all: true }) =>
       api.request('POST', '/api/me/notifications/read', { body: sel, schema: null }),
+  }
+}
+
+/**
+ * What the cheap poll cannot see (a read mark made in another tab or on a board, a removed item that was not the
+ * newest, a board renamed): a poll this long after the last whole answer asks for the whole list instead, so a quiet
+ * dashboard's bell and card lines are never more than this stale (the board bell's NOTIFICATIONS_WHOLE_REFRESH_MS).
+ */
+export const DASHBOARD_WHOLE_REFRESH_MS = 5 * 60_000
+
+export interface InboxPoll {
+  /**
+   * Reads the bell. `onlyIfNew` (the 15 s poll) sends the `seq` of the last answer, and a 204 keeps what is shown;
+   * every other refresh asks for the whole list (since 0, which only an empty bell answers with a 204), and so does a
+   * poll DASHBOARD_WHOLE_REFRESH_MS after the last whole answer. Never rejects: a failure keeps what is shown.
+   */
+  refresh(opts?: { onlyIfNew?: boolean }): Promise<void>
+  /** Something changed the list here (a read mark): an answer already on its way is not shown. */
+  invalidate(): void
+}
+
+/** The dashboard bell's refreshes (wave N.1: the board bell's cursor, CommentsStore.refreshNotifications). */
+export function createInboxPoll(deps: {
+  list(since: number): Promise<ListNotificationsResponse | null>
+  show(inbox: ListNotificationsResponse): void
+}): InboxPoll {
+  let seq: number | null = null
+  let wholeAt = Number.NEGATIVE_INFINITY
+  let asked = 0
+  let applied = 0
+  return {
+    async refresh(opts = {}) {
+      const cheap =
+        opts.onlyIfNew === true && seq !== null && Date.now() - wholeAt < DASHBOARD_WHOLE_REFRESH_MS
+      const since = cheap && seq !== null ? seq : 0
+      const mine = ++asked
+      let res: ListNotificationsResponse | null
+      try {
+        res = await deps.list(since)
+      } catch {
+        return // keep the last list; the bell just shows what it had
+      }
+      if (mine < applied) return
+      // a poll's 204 applies nothing, so it never makes a whole answer still on its way "older"
+      if (res === null && since > 0) return
+      applied = mine
+      wholeAt = Date.now()
+      if (res === null) {
+        // "since 0" answered so: there is nothing at all
+        seq = 0
+        deps.show({ notifications: [], unreadCount: 0 })
+        return
+      }
+      const { seq: next, ...inbox } = res
+      seq = next ?? null // an api from before wave M sends none: since 0 every time, as before
+      deps.show(inbox)
+    },
+    invalidate() {
+      applied = ++asked
+    },
   }
 }
 

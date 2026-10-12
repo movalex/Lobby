@@ -12,6 +12,7 @@ import { navigate } from '../lib/routing.ts'
 import {
   BELL_EMPTY,
   BELL_NOTE,
+  createInboxPoll,
   GRANTED_TEXT,
   KIND_TEXT,
   markLocallyRead,
@@ -30,40 +31,40 @@ export interface DashboardInbox {
   markRead(sel: { ids: string[] } | { all: true }): void
 }
 
-/** The caller's notifications: on load, when the tab comes back, and every 15 s while visible. */
+/**
+ * The caller's notifications: the whole list on load, when the tab comes back or is focused, when the panel opens and
+ * after marking read; every 15 s while visible, only whether anything is new (wave N.1: the `since` cursor, a 204
+ * after one indexed read on the api), and the whole list again 5 minutes after the last whole one (./notifications.ts
+ * createInboxPoll).
+ */
 export function useDashboardInbox(): DashboardInbox {
   const [inbox, setInbox] = useState<ListNotificationsResponse | null>(null)
-  const seq = useRef(0)
-  const refresh = useCallback(() => {
-    const mine = ++seq.current
-    inboxApi.list().then(
-      (r) => {
-        if (mine === seq.current) setInbox(r)
-      },
-      () => {}, // keep the last list; the bell just shows no count
-    )
-  }, [])
+  const [poll] = useState(() => createInboxPoll({ list: (since) => inboxApi.list(since), show: setInbox }))
+  const refresh = useCallback(() => void poll.refresh(), [poll])
   useEffect(() => {
-    refresh()
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') refresh()
+    void poll.refresh()
+    const tick = () => {
+      if (document.visibilityState === 'visible') void poll.refresh({ onlyIfNew: true })
     }
-    const t = setInterval(onVisible, REFRESH_MS)
-    document.addEventListener('visibilitychange', onVisible)
-    window.addEventListener('focus', onVisible)
+    const onShown = () => {
+      if (document.visibilityState === 'visible') void poll.refresh()
+    }
+    const t = setInterval(tick, REFRESH_MS)
+    document.addEventListener('visibilitychange', onShown)
+    window.addEventListener('focus', onShown)
     return () => {
       clearInterval(t)
-      document.removeEventListener('visibilitychange', onVisible)
-      window.removeEventListener('focus', onVisible)
+      document.removeEventListener('visibilitychange', onShown)
+      window.removeEventListener('focus', onShown)
     }
-  }, [refresh])
+  }, [poll])
   const markRead = useCallback(
     (sel: { ids: string[] } | { all: true }) => {
-      seq.current++ // a list already on its way predates this
+      poll.invalidate() // a list already on its way predates this
       setInbox((cur) => (cur ? markLocallyRead(cur, sel, new Date().toISOString()) : cur))
       inboxApi.markRead(sel).then(refresh, refresh)
     },
-    [refresh],
+    [poll, refresh],
   )
   return { inbox, refresh, markRead }
 }
