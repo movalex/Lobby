@@ -168,6 +168,33 @@ export function planHintTry(input: {
 }
 
 /**
+ * The "Try it" buttons that cannot be pressed now. While the board list has not arrived: the top-bar item's and every
+ * board hint's. Once it has: the board hints of a person for whom `planHintTry` finds nowhere to go (no board to open and
+ * no Start row: a client, or someone who asked to be spared the templates), so no button does nothing (N1, wave M follow-up
+ * 3); the card says why (`NO_PLACE_TO_TRY`).
+ */
+export function unavailableTries(input: {
+  listReady: boolean
+  boards: readonly { readonly id: string; readonly role: BoardRole; readonly status: BoardStatus }[]
+  startRow: boolean
+  items: readonly WhatsNewItem[]
+}): TryKey[] {
+  const hints = input.items.flatMap((i) => (i.tryIt && typeof i.tryIt === 'object' ? [tryKey(i.tryIt)] : []))
+  if (!input.listReady) return ['board', ...hints]
+  const none = planHintTry({
+    listReady: true,
+    boards: input.boards,
+    hint: 'ask',
+    startRow: input.startRow,
+    boardAddress: (id) => id,
+  })
+  return none.kind === 'none' ? hints : []
+}
+
+/** Why a board-hint "Try it" is disabled once the list has arrived: there is no board to try it on and no Start row. */
+export const NO_PLACE_TO_TRY = 'You have no board to try this on yet. Open a board you were invited to, or make one.'
+
+/**
  * Whether the card shows: on the landing view (Recent), there is something for this person, they are not a
  * name-only guest (a guest sees only the boards of their link), and they have not dismissed this version.
  */

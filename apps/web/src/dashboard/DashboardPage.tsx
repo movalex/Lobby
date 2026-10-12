@@ -80,12 +80,13 @@ import { newBoardPath } from './template-paths.ts'
 import { useCatalog, whenIdle } from './use-catalog.ts'
 import { WhatsNewCard } from './WhatsNew.tsx'
 import {
+  NO_PLACE_TO_TRY,
   planBoardTry,
   planHintTry,
   showWhatsNew,
   type TryAction,
   type TryKey,
-  tryKey,
+  unavailableTries,
   WHATS_NEW_VERSION,
   whatsNewFor,
 } from './whats-new.ts'
@@ -329,10 +330,18 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   // The card says only what is true for this person: the row if they get it (not while a search or another
   // view hides it for now: "Try it" brings it back), the workspace menu's Internal only control if they have
   // one (owners and admins, and anyone while it is on; a plain member has none).
+  const startRowForCard = startRowOffered({ canCreate, guest, pickerHidden: readPickerHidden(me.user.id) })
   const newItems = whatsNewFor({
     canCreate,
-    startRow: startRowOffered({ canCreate, guest, pickerHidden: readPickerHidden(me.user.id) }),
+    startRow: startRowForCard,
     internalOnly: internalOnlyShown(internal.settings, projectList),
+  })
+  // "Try it" buttons with nowhere to go yet (the list is on its way) or at all (no board and no Start row): disabled
+  const tryUnavailable = unavailableTries({
+    listReady: boards.status === 'ready',
+    boards: boards.data ?? [],
+    startRow: startRowForCard,
+    items: newItems,
   })
   const whatsNewShown = showWhatsNew({
     items: newItems,
@@ -873,16 +882,8 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
           <WhatsNewCard
             items={newItems}
             pending={tryPending}
-            unavailable={
-              boards.status === 'ready'
-                ? []
-                : [
-                    'board',
-                    ...newItems.flatMap((i) =>
-                      i.tryIt && typeof i.tryIt === 'object' ? [tryKey(i.tryIt)] : [],
-                    ),
-                  ]
-            }
+            unavailable={tryUnavailable}
+            unavailableReason={boards.status === 'ready' ? NO_PLACE_TO_TRY : undefined}
             onTry={tryNew}
             onTellUs={() => openFeedback(null)}
             onDismiss={() => {

@@ -19,6 +19,7 @@ import {
   showWhatsNew,
   type TryAction,
   tryKey,
+  unavailableTries,
   WHATS_NEW_ITEMS,
   WHATS_NEW_MAX_ITEMS,
   WHATS_NEW_MIN_ITEMS,
@@ -181,6 +182,57 @@ describe('"Try it" on a wave L item opens the board they opened last that they c
       to: '/b/b-view?try=ask',
     })
     expect(plan({ boards: [] })).toEqual({ kind: 'none' })
+  })
+})
+
+describe('N1 (wave M follow-up 3): a "Try it" with nowhere to go is disabled and says why, never a button that does nothing', () => {
+  const base = {
+    boards: [] as readonly (typeof EDITOR_BOARD)[],
+    startRow: false,
+    items: WHATS_NEW_ITEMS,
+  }
+  const hintKeys = WHATS_NEW_ITEMS.flatMap((i) => (i.tryIt ? [tryKey(i.tryIt)] : []))
+
+  it('while the board list has not arrived: the board button and every board hint wait', () => {
+    expect(unavailableTries({ ...base, listReady: false })).toEqual(['board', ...hintKeys])
+  })
+
+  it('a person with no board and no Start row (a client, or one who hid the templates): every board hint is unavailable', () => {
+    const none = unavailableTries({ ...base, listReady: true })
+    expect(none).toEqual(hintKeys)
+    // what planHintTry says for the same person
+    expect(
+      planHintTry({
+        listReady: true,
+        boards: [],
+        hint: 'ask',
+        startRow: false,
+        boardAddress: boardTryPath,
+      }),
+    ).toEqual({ kind: 'none' })
+  })
+
+  it('a board they can open, or the Start row, is somewhere to go: nothing is unavailable', () => {
+    expect(unavailableTries({ ...base, listReady: true, boards: [VIEWER_BOARD] })).toEqual([])
+    expect(unavailableTries({ ...base, listReady: true, boards: [EDITOR_BOARD] })).toEqual([])
+    expect(unavailableTries({ ...base, listReady: true, startRow: true })).toEqual([])
+  })
+
+  it('the card gives a disabled button its reason as its title, and an enabled one none', () => {
+    const card = WhatsNewCard({
+      items: creator,
+      unavailable: ['board-hint:ask'],
+      unavailableReason: 'Open or make a board first.',
+      onTry() {},
+      onTellUs() {},
+      onDismiss() {},
+    })
+    const buttons = byTestId(card, 'whats-new-try')
+    const ask = buttons.find((b) => b.props['data-action'] === 'board-hint:ask')
+    const palette = buttons.find((b) => b.props['data-action'] === 'board-hint:palette')
+    expect(ask?.props.disabled).toBe(true)
+    expect(ask?.props.title).toBe('Open or make a board first.')
+    expect(palette?.props.title).toBeUndefined()
   })
 })
 

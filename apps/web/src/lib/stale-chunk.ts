@@ -120,7 +120,7 @@ const NO_WORDS = new Set([
  * feedback page). A pre-filled field counts too: asking the person is cheap, losing a message is not. Never throws.
  */
 export function domHasTypedWork(
-  doc: Pick<Document, 'querySelectorAll'> | undefined = globalThis.document,
+  doc: { querySelectorAll(selector: string): ArrayLike<unknown> } | undefined = globalThis.document,
 ): boolean {
   try {
     if (!doc) return false
