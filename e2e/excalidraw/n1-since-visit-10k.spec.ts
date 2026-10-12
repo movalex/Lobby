@@ -28,7 +28,13 @@ const boardIn = (page: Page) =>
             }
           ).__lobbyBoard
           const s = b?.session.snapshot
-          return !!s && s.welcomed && !s.applying && s.save.state === 'saved' && b.api.getSceneElements().length >= n
+          return (
+            !!s &&
+            s.welcomed &&
+            !s.applying &&
+            s.save.state === 'saved' &&
+            b.api.getSceneElements().length >= n
+          )
         }, BIG_BOARD_ELEMENTS - 1),
       { timeout: 300_000 },
     )

@@ -19,7 +19,7 @@
  *
  * NODE-SAFE: no engine and no DOM imports here (the board handles bring the engine).
  */
-import { source, transact as batch } from '../../lib/signals.ts'
+import { transact as batch, source } from '../../lib/signals.ts'
 import {
   bind as bindTx,
   duplicate as duplicateTx,
