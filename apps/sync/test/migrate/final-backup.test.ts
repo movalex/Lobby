@@ -11,7 +11,13 @@ import { DatabaseSync } from 'node:sqlite'
 import { createTableTextMetrics, installServerTextMetrics } from '@draftroom/canvas-schema/engine'
 import type { TLRecord } from '@draftroom/tldraw-import/tldraw'
 import { describe, expect, it } from 'vitest'
-import { type BackupEntry, backupBoard, inspectBoardDb } from '../../src/backup/backup.ts'
+import {
+  type BackupEntry,
+  backupBoard,
+  dropLocalBackups,
+  inspectBoardDb,
+  readManifest,
+} from '../../src/backup/backup.ts'
 import { offsiteKeys } from '../../src/backup/offsite-manifest.ts'
 import { OFFSITE_PREFIX } from '../../src/backup/store.ts'
 import { convertBoardFile } from '../../src/room/migrate/convert-board.ts'
@@ -127,6 +133,43 @@ describe('finalBackupOf: the newest held, tldraw-described entry of the local ma
     // an unreadable manifest throws (the service converts without the check and logs it)
     writeFileSync(join(backups, boardId, 'manifest.json'), '{"format":"something-else"}')
     expect(() => finalBackupOf(backups, boardId, NOW)).toThrow(/not readable/)
+  })
+
+  // Wave N.1 (wave M follow-up 7, W7): M7-4 removes a held copy locally once the offsite store holds it and moves its
+  // entry to the manifest's `offsiteOnly` until the hold ends. The final backup is then offsite only, and still the
+  // one the conversion must check against: before this, convert-all found no final backup (no digest check, a null
+  // `backupKey`) for every board whose held copy had gone offsite.
+  it('reads the held entries that went offsite only (M7-4 offsiteOnly), and never one whose hold ended', async () => {
+    const dataDir = tempDir()
+    const rooms = join(dataDir, 'rooms')
+    const backups = join(dataDir, 'backups')
+    const boardId = 'b-final-offs'
+    seedBoardRecords(rooms, boardId, fixtureRecords('brainstorm'))
+    // an earlier held set (a quiet-time run-all), then the final set after maintenance went on
+    const earlier = await heldBackup(rooms, backups, boardId, NOW - 2 * DAY)
+    const final = await heldBackup(rooms, backups, boardId, NOW - 40 * 60_000)
+    expect(finalBackupOf(backups, boardId, NOW)?.file).toBe(final.file)
+    // the offsite store holds the final copy: its local file goes, its entry moves to offsiteOnly
+    expect(await dropLocalBackups(backups, boardId, (e) => e.file === final.file, () => new Date(NOW))).toEqual([
+      final.file,
+    ])
+    const m = readManifest(backups, boardId)
+    expect(m?.backups.map((e) => e.file)).toEqual([earlier.file])
+    expect(m?.offsiteOnly?.map((e) => e.file)).toEqual([final.file])
+    // still the final backup: the newest held, tldraw-described entry, wherever its copy is
+    expect(finalBackupOf(backups, boardId, NOW)).toEqual({
+      key: offsiteKeys.file(OFFSITE_PREFIX, boardId, final.file),
+      recordsSha256: final.recordsSha256,
+      file: final.file,
+      documentClock: final.documentClock,
+      holdUntil: final.holdUntil,
+    })
+    // and once every copy is offsite only, too
+    await dropLocalBackups(backups, boardId, () => true, () => new Date(NOW))
+    expect(readManifest(backups, boardId)?.backups).toEqual([])
+    expect(finalBackupOf(backups, boardId, NOW)?.file).toBe(final.file)
+    // a hold that has passed counts for nothing, local or offsite only
+    expect(finalBackupOf(backups, boardId, NOW + 91 * DAY)).toBeNull()
   })
 })
 
