@@ -9,7 +9,7 @@
 //  - two tabs: the row appears on both within one round trip; a viewer sees it with no controls and pushes nothing
 //    (the CDP socket frames), and a forged react write from her is refused; the server holds the person's own key;
 //  - a reaction is no undo step (Ctrl+Z undoes the edit before it), a locked note takes it, an owner clears a note's
-//    reactions and the other tabs converge, an editor is not offered the clear;
+//    reactions and the other tabs converge, an editor is not offered the clear, nor an owner on a locked note;
 //  - who reacted (hover and focus), "Someone" for a person it does not know, aria labels and axe in both themes;
 //  - the keyboard (Enter on the add button, arrows, Enter, Escape) and a name-only guest who can edit;
 //  - a phone: a tap on the add button opens the picker as a sheet and a tap reacts.
@@ -274,6 +274,56 @@ test('an owner clears a note’s reactions from the context menu and the other t
   // the tabs end on the server’s copy
   expect(await reactionsIn(b.page, N1)).toEqual({})
   expect(await reactionsIn(c.page, N1)).toEqual({})
+})
+
+test('an owner is not offered Clear reactions on a locked note (the room keeps another person’s key under a lock); unlocking brings it back', async ({
+  join,
+  stack,
+  board,
+}) => {
+  const a = await join('alice')
+  const b = await join('bob', 'editor')
+  await twoNotes(a.page)
+  await expectItemsEverywhere([b], [N1, N2])
+  for (const s of [a, b]) await showAll(s.page)
+  await reactWithMouse(b.page, N1, 'clap')
+  await expect(reactionChip(a.page, N1, 'clap')).toHaveAttribute('data-count', '1')
+  await updateItem(a.page, N1, { locked: true })
+  await expectSaved(a.page)
+  await expect.poll(async () => (await item(b.page, N1))?.locked).toBe(true)
+
+  const menuAt = async () => {
+    await select(a.page, [N1])
+    const { x, y } = await itemCenterOnScreen(a.page, N1)
+    await a.page.mouse.click(x, y, { button: 'right' })
+    await expect(a.page.getByTestId('context-menu')).toBeVisible()
+  }
+
+  // locked: React… yes, Clear reactions no (the context menu and the picker)
+  await menuAt()
+  await expect(a.page.getByTestId('context-menu.reactions-react')).toBeVisible()
+  await expect(a.page.getByTestId('context-menu.reactions-clear')).toHaveCount(0)
+  await a.page.keyboard.press('Escape')
+  await select(a.page, [N1])
+  await a.page.getByTestId('selection-reactions').click()
+  await expect(reactionPicker(a.page)).toBeVisible()
+  await expect(a.page.getByTestId('note-reactions-clear')).toHaveCount(0)
+  await a.page.keyboard.press('Escape')
+  await expect(reactionPicker(a.page)).toHaveCount(0)
+
+  // nothing was sent that the room would refuse: the page stays Saved, bob’s reaction is stored and shown
+  await expectSaved(a.page)
+  await expect.poll(async () => stored(stack, board, N1)).toEqual({ clap: [b.id] })
+  await expect(reactionChip(a.page, N1, 'clap')).toHaveAttribute('data-count', '1')
+
+  // unlocked: the clear is offered again and reaches the other tab
+  await updateItem(a.page, N1, { locked: false })
+  await expectSaved(a.page)
+  await menuAt()
+  await a.page.getByTestId('context-menu.reactions-clear').click()
+  for (const s of [a, b]) await expect(reactionRow(s.page, N1).getByTestId('note-reaction')).toHaveCount(0)
+  await expect.poll(async () => stored(stack, board, N1)).toEqual({})
+  await expectSaved(a.page)
 })
 
 test('the selection bar’s React button, the context menu’s React… and the keyboard reach the same picker', async ({
