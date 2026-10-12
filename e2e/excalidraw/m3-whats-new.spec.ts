@@ -231,6 +231,36 @@ test('with no board at all Try it goes to the Start row and makes nothing', asyn
   }
 })
 
+// N1 (wave M follow-up 3): with no board and the template row switched off ("Don't show templates on new boards") there is
+// nowhere to take them: the buttons are disabled, with the reason, instead of doing nothing.
+test('with no board and the Start row switched off, Try it is disabled and says why (it used to do nothing)', async ({
+  browser,
+}) => {
+  test.setTimeout(120_000)
+  const p = await creator(browser, 'm3x', 'Nico Nowhere')
+  try {
+    await p.page.addInitScript(
+      (key) => localStorage.setItem(key, '1'),
+      `draftroom:template-picker-hidden:${p.me.user.id}`,
+    )
+    await openDashboard(p.page, p.wid)
+    expect(await p.api.listBoards(p.wid)).toHaveLength(0)
+    await expect(card(p.page)).toBeVisible()
+    await expect(p.page.locator('[data-testid="start-tile"]')).toHaveCount(0)
+    const buttons = card(p.page).locator('[data-testid="whats-new-try"]')
+    expect(await buttons.count()).toBeGreaterThan(2)
+    for (const b of await buttons.all()) {
+      await expect(b).toBeDisabled()
+      await expect(b).toHaveAttribute('title', /no board to try this on/i)
+    }
+    // and nothing was made
+    await p.page.waitForTimeout(500)
+    expect(await p.api.listBoards(p.wid)).toHaveLength(0)
+  } finally {
+    await p.context.close()
+  }
+})
+
 test('an empty board’s card has "Search or do" and, with AI on, "Diagram from words"; the first opens the palette', async ({
   browser,
 }) => {
