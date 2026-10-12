@@ -33,9 +33,10 @@ export function FrameHeads({ ctx }: { ctx: CanvasFeatureContext }) {
   const frames = useValue(
     'people-frame-heads-frames',
     (): Frame[] =>
-      canvas
-        .items()
-        .filter((e) => e.type === 'frame' && !e.isDeleted && !canvas.isHidden(e.id))
+      // wave N.1: the live frames from the scene index (no walk of the whole scene per change)
+      canvas.index
+        .byType('frame')
+        .filter((e) => !canvas.isHidden(e.id))
         .map((e) => ({
           id: e.id,
           x: e.x,

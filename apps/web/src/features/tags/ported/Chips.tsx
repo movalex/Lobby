@@ -15,6 +15,7 @@
 // element, so a note lying on another note no longer covers the chips of the one below; and a remote
 // drag's preview moves the note before its chips (they follow on the drop, like the hit test, §2.7).
 
+import { TAG_KEY_PREFIX } from '@draftroom/canvas-schema/custom-data'
 import type { TagDef } from '@draftroom/contracts'
 import { type CSSProperties, memo, useMemo } from 'react'
 import type { CanvasElement, CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
@@ -127,7 +128,11 @@ function useChipBoxes(rt: TagsRuntime): Signal<ChipBox[]> {
     () =>
       computed(
         'tags.chip-boxes',
-        () => chipBoxes(rt.canvas.items(), rt.board.get(), (id) => rt.canvas.isHidden(id)),
+        // wave N.1: the elements with a `tag:` key, from the scene index (no walk of the whole scene per change)
+        () =>
+          chipBoxes(rt.canvas.index.withLobbyKeyPrefix(TAG_KEY_PREFIX), rt.board.get(), (id) =>
+            rt.canvas.isHidden(id),
+          ),
         { isEqual: sameBoxes },
       ),
     [rt],

@@ -177,9 +177,10 @@ export function LockedFrameBadges({ ctx }: { ctx: CanvasFeatureContext }) {
   const badges = useValue(
     'cux-locked-frames',
     () =>
-      canvas
-        .items()
-        .filter((e) => e.type === 'frame' && e.locked && !(e as { isDeleted?: boolean }).isDeleted)
+      // wave N.1: the live frames from the scene index (no walk of the whole scene per change)
+      canvas.index
+        .byType('frame')
+        .filter((e) => e.locked)
         .map((f) => ({ id: f.id, at: canvas.sceneToOverlay({ x: f.x, y: f.y }) })),
     [canvas],
   )

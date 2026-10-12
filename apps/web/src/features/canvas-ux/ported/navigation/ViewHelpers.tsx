@@ -46,7 +46,8 @@ export function BackToContent({ ctx }: { ctx: CanvasFeatureContext }) {
       // re-check when the camera or the content changes (the reads themselves are untracked); nothing
       // until the first view is decided (the camera the board opens with is not the person's)
       canvas.viewport.get()
-      canvas.items()
+      // (wave N.1: the scene index's count tracks every content change as `items()` did, without its walk)
+      canvas.index.count()
       const decided = startViewResult(canvas).get() !== null
       untracked(() => {
         if (!decided) {

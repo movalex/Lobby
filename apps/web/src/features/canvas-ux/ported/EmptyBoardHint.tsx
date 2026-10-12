@@ -182,7 +182,10 @@ function templatePending(): boolean {
  * joiner's cached snapshot can be empty for a moment before the rows behind it land).
  */
 export function boardLooksEmpty(ctx: Pick<CanvasFeatureContext, 'canvas'>): boolean {
-  return roomReadyOf(ctx.canvas).get() && ctx.canvas.items().length === 0 && !templatePending()
+  // wave N.1: the live count from the scene index (a canvas without one, a test's: its items)
+  const index = (ctx.canvas as Partial<CanvasFeatureContext['canvas']>).index
+  const live = index ? index.count() : ctx.canvas.items().length
+  return roomReadyOf(ctx.canvas).get() && live === 0 && !templatePending()
 }
 
 const useEmpty = (ctx: CanvasFeatureContext) =>
