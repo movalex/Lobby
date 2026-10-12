@@ -1,17 +1,19 @@
 // Wave N, WS6 (N6-3, N6-4, N6-5): vector PDF pages, checked as FILES (pdf-lib reads the pages, their images and
 // where each image is drawn; pdf.js reads the text a viewer finds).
 //  - a frame of shapes and a photo is a vector page: no full-page image, the photo an image XObject at its own
-//    place; Lobby-font text is real text (CJK included) once the font engine (@pdf-lib/fontkit, N6-1) is installed,
-//    and until then that page is honestly an image page and the dialog says so (and the run FAILS if the
-//    VECTOR_PDF switch is on without the font engine);
+//    place, the shapes vector path objects; Lobby-font text is real text (CJK included) in embedded subsets of
+//    Lobby's own fonts (the font engine, @pdf-lib/fontkit, N6-1, wave N.1): a viewer finds it and draws it; without
+//    the font engine that page is honestly an image page and the dialog says so (and the run FAILS if the VECTOR_PDF
+//    switch is on without the font engine);
 //  - each vector page, drawn by pdf.js, matches the image page of the same frame pixel for pixel within
-//    anti-aliasing and JPEG noise (a shape, a clip or a photo out of place fails);
+//    anti-aliasing and JPEG noise (a shape, a clip, a photo or a line of text out of place, or text not drawn, fails);
 //  - the dialog lists exactly the pages it exported as images ('Pages 3 and 5 were exported as images');
 //  - "Image pages" gives today's output exactly (the pages, their sizes and byte-identical images);
 //  - no request leaves Lobby's origins (the page's and the PDF worker's), and no File System Access picker opens
 //    (a picker call would be a download the download events do not see).
-// The vector option is behind VECTOR_PDF (off until the font engine lands); these specs turn on its local-dev
-// preview (vector-pdf.ts VECTOR_PDF_DEV_PREVIEW_KEY, read only behind the dev-auth guard the e2e build has).
+// The vector option is behind VECTOR_PDF (on since wave N.1); these specs set its local-dev key (vector-pdf.ts
+// VECTOR_PDF_DEV_PREVIEW_KEY, read only behind the dev-auth guard the e2e build has): '1' offers vector pages whatever
+// the switch, '0' shows today's image-pages-only dialog to compare with.
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -139,6 +141,72 @@ async function embeddedSubsetFonts(bytes: Buffer): Promise<string[]> {
   return names
 }
 
+/** What each page's content streams paint: path objects filled or stroked (shapes), text-showing operators. */
+async function paintOps(bytes: Buffer): Promise<{ paths: number; texts: number; images: number }[]> {
+  const { PDFDocument, PDFRawStream, PDFArray, decodePDFRawStream } = pdfLib()
+  const doc = await PDFDocument.load(new Uint8Array(bytes), { updateMetadata: false })
+  const paint = new Set(['f', 'F', 'f*', 'S', 's', 'B', 'B*', 'b', 'b*'])
+  const show = new Set(['Tj', 'TJ', "'", '"'])
+  return doc.getPages().map((page) => {
+    const c = page.node.Contents()
+    const streams = c instanceof PDFArray ? c.asArray().map((r) => doc.context.lookup(r)) : [c]
+    let text = ''
+    for (const s of streams)
+      if (s instanceof PDFRawStream)
+        text += `${new TextDecoder('latin1').decode(decodePDFRawStream(s).decode())}\n`
+    const ops = text
+      .replace(/\((?:\\.|[^\\)])*\)|<[0-9A-Fa-f\s]*>/g, ' ')
+      .split(/\s+/)
+      .filter((t) => /^[A-Za-z*'"]+$/.test(t))
+    return {
+      paths: ops.filter((o) => paint.has(o)).length,
+      texts: ops.filter((o) => show.has(o)).length,
+      images: ops.filter((o) => o === 'Do').length,
+    }
+  })
+}
+
+interface PdfJsTextItem {
+  str?: string
+  hasEOL?: boolean
+}
+
+/**
+ * Each page's text as a viewer's search reads it (pdf.js's find: the items' strings one after the other, a line break
+ * at each end of line). A line drawn in several runs (one per Lobby font file: CJK comes in many) reads as one word
+ * when the runs are placed end to end, as a viewer finds it; support/present-export.ts pdfPageTexts puts a space
+ * between items instead (what a word-by-word copy gives).
+ */
+async function viewerTexts(bytes: Buffer): Promise<string[]> {
+  const root = dirname(e2eRequire.resolve('pdfjs-dist/package.json'))
+  const pdfjs = (await import(pathToFileURL(join(root, 'legacy/build/pdf.mjs')).href)) as {
+    getDocument(src: Record<string, unknown>): {
+      promise: Promise<{
+        numPages: number
+        getPage(n: number): Promise<{ getTextContent(): Promise<{ items: PdfJsTextItem[] }> }>
+      }>
+      destroy(): Promise<void>
+    }
+  }
+  const task = pdfjs.getDocument({
+    data: new Uint8Array(bytes),
+    standardFontDataUrl: `${root.replaceAll('\\', '/')}/standard_fonts/`,
+    useSystemFonts: false,
+    verbosity: 0,
+  })
+  try {
+    const doc = await task.promise
+    const out: string[] = []
+    for (let n = 1; n <= doc.numPages; n++) {
+      const { items } = await (await doc.getPage(n)).getTextContent()
+      out.push(items.map((i) => `${i.str ?? ''}${i.hasEOL ? '\n' : ''}`).join(''))
+    }
+    return out
+  } finally {
+    await task.destroy()
+  }
+}
+
 interface Rendered {
   width: number
   height: number
@@ -206,17 +274,27 @@ async function renderPages(bytes: Buffer, scale: number, name: string): Promise<
   }
 }
 
+/** A rectangle of a rendered page, pixels (x1, y1 excluded). */
+interface Box {
+  x0: number
+  y0: number
+  x1: number
+  y1: number
+}
+const inBox = (x: number, y: number, b?: Box) => !!b && x >= b.x0 && x < b.x1 && y >= b.y0 && y < b.y1
+
 /**
  * The share of `a`'s pixels with no close match (every channel within `tolerance`) in `b` within one pixel: what
  * anti-aliasing, JPEG noise and a sub-pixel offset leave alone, and what a shape, a clip or an image drawn in the
  * wrong place (or not at all) does not.
  */
-function unmatched(a: Rendered, b: Rendered, tolerance: number): number {
+function unmatched(a: Rendered, b: Rendered, tolerance: number, skip?: Box): number {
   if (a.width !== b.width || a.height !== b.height) return 1
   const { width: w, height: h } = a
   let bad = 0
   for (let y = 0; y < h; y++)
     for (let x = 0; x < w; x++) {
+      if (inBox(x, y, skip)) continue
       const i = (y * w + x) * 4
       let best = 255
       for (let dy = -1; dy <= 1 && best > tolerance; dy++)
@@ -237,9 +315,20 @@ function unmatched(a: Rendered, b: Rendered, tolerance: number): number {
   return bad / (w * h)
 }
 
+/** Dark pixels (every channel under 100: text and outlines) in `box`. */
+function ink(r: Rendered, box: Box): number {
+  let n = 0
+  for (let y = Math.max(0, box.y0); y < Math.min(r.height, box.y1); y++)
+    for (let x = Math.max(0, box.x0); x < Math.min(r.width, box.x1); x++) {
+      const i = (y * r.width + x) * 4
+      if (Math.max(r.data[i] as number, r.data[i + 1] as number, r.data[i + 2] as number) < 100) n++
+    }
+  return n
+}
+
 /** A vector page against the image page of the same frame: both ways (a thing missing on either side counts). */
-const pageMismatch = (vector: Rendered, image: Rendered) =>
-  Math.max(unmatched(vector, image, 48), unmatched(image, vector, 48))
+const pageMismatch = (vector: Rendered, image: Rendered, skip?: Box) =>
+  Math.max(unmatched(vector, image, 48, skip), unmatched(image, vector, 48, skip))
 
 /** Every request (the page's and its workers') that leaves Lobby's origins: none may (the e2e network assertion). */
 function watchOrigins(context: BrowserContext) {
@@ -278,11 +367,9 @@ async function countPickers(page: Page) {
 const boardTitle = async (users: Users, board: string) =>
   (await (await users.api('alice')).getBoard(board)).board.title
 
+/** The dev key: vector pages offered ('1'), or today's image-pages-only dialog ('0'), whatever VECTOR_PDF says. */
 async function previewVector(page: Page, on: boolean) {
-  await page.evaluate(({ key, on }) => (on ? localStorage.setItem(key, '1') : localStorage.removeItem(key)), {
-    key: PREVIEW_KEY,
-    on,
-  })
+  await page.evaluate(({ key, on }) => localStorage.setItem(key, on ? '1' : '0'), { key: PREVIEW_KEY, on })
 }
 
 /** N6_PDF_DIR=<folder>: keeps the exported PDFs there, to look at (debugging only). */
@@ -390,13 +477,28 @@ test.describe('N6 vector PDF', () => {
     expect(shapes?.images[0]?.height).toBeCloseTo(168.75, 0)
     expect(shapes?.images[0]?.px.width).toBeLessThanOrEqual(2048) // the display copy, not a 3× frame raster
 
+    const painted = await paintOps(pdf.bytes)
+    test.info().annotations.push({ type: 'painted', description: JSON.stringify(painted) })
+    // the shapes page: the frame's background and both rectangles (fill and outline) are vector path objects,
+    // drawn with no picture but the photo
+    expect(painted[1]?.paths).toBeGreaterThanOrEqual(5)
+    expect(painted[1]?.images).toBe(1)
     if (FONTKIT) {
       // page 1 (Intro): real text in embedded subsets of Lobby's fonts, CJK included; no image at all
       await expect(dialog.getByTestId('export-pdf-fallback')).toHaveCount(0)
       expect(placed[0]?.images).toEqual([])
       expect(texts[0]).toContain('Kickoff agenda')
-      expect(texts[0]).toContain('日本語のメモ')
-      expect((await embeddedSubsetFonts(pdf.bytes)).length).toBeGreaterThan(0)
+      // the CJK line comes in runs (one per Lobby font file of its range), end to end: a viewer finds it whole
+      const found = await viewerTexts(pdf.bytes)
+      expect(found[0]).toContain('Kickoff agenda')
+      expect(found[0]).toContain('日本語のメモ')
+      const fonts = await embeddedSubsetFonts(pdf.bytes)
+      expect(fonts.some((f) => /Nunito/i.test(f))).toBe(true)
+      expect(fonts.some((f) => /Xiaolai/i.test(f))).toBe(true)
+      // text-showing operators and the note's own path, no picture at all on the page
+      expect(painted[0]?.texts).toBeGreaterThanOrEqual(5)
+      expect(painted[0]?.paths).toBeGreaterThanOrEqual(2)
+      expect(painted[0]?.images).toBe(0)
     } else {
       // without the font engine, Lobby-font text is never drawn in a stand-in: page 1 is today's image page, and
       // the dialog says so; its hidden text layer still finds the Latin words
@@ -421,8 +523,10 @@ test.describe('N6 vector PDF', () => {
     // what a viewer shows: each vector page drawn by pdf.js matches the image page of the same frame (today's
     // picture of it, drawn by the canvas) within anti-aliasing and JPEG noise: the shapes, the photo, its clip and
     // every transform in place. Measured (2× render, 1200 × 956 px): 0.000% unmatched here, the photo drawn 2 px
-    // off 0.146%, the shapes 2 px off 0.313%. When the font engine lands, page 1 compares real text with the
-    // canvas's text: its tolerance is decided then, with this measure, never by loosening the shapes' one.
+    // off 0.146%, the shapes 2 px off 0.313%. Page 1 compares the real text (pdf.js drawing the embedded subsets)
+    // with the canvas's text under the same tolerance (wave N.1, measured: 0.0157% with the CJK box below left out;
+    // 0.257% when the subsets' glyphs were empty, the text invisible), and its ink: the dark pixels of the page body
+    // (measured 2,028 vector, 1,872 image) and of the CJK line (949 and 825; 0 with empty glyphs).
     await dialog.getByTestId('export-pdf-pages-image').check()
     const imagePdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
     keep('vector-as-images.pdf', imagePdf.bytes)
@@ -432,19 +536,279 @@ test.describe('N6 vector PDF', () => {
       await renderPages(imagePdf.bytes, 2, 'images'),
     ]
     expect(vectorShown.map((p) => [p.width, p.height])).toEqual(imageShown.map((p) => [p.width, p.height]))
-    const mismatch = vectorShown.map((p, i) => pageMismatch(p, imageShown[i] as Rendered))
+    // the CJK line's box (rendered at 2 px a point: x 1.5 px and y 56 + 1.5 px a board px): the image page draws it in
+    // whatever CJK font the browser falls back to (Nunito's list has no Lobby CJK face), the vector page in Lobby's
+    // Xiaolai, so it is left out of the pixel match and checked as ink on its own
+    const cjk: Box = { x0: 75, y0: 56 + 1.5 * 388, x1: 1.5 * 260, y1: 56 + 1.5 * 436 }
+    const skipFor = (i: number) => (FONTKIT && i === 0 ? cjk : undefined)
+    const mismatch = vectorShown.map((p, i) => pageMismatch(p, imageShown[i] as Rendered, skipFor(i)))
     test.info().annotations.push({
       type: 'vector vs image pages',
       description: mismatch.map((m, i) => `page ${i + 1}: ${(m * 100).toFixed(4)}% unmatched`).join('; '),
     })
+    const body = (r: Rendered): Box => ({ x0: 0, y0: 2 * BAND, x1: r.width, y1: r.height })
+    const inks = vectorShown.map((p, i) => [
+      ink(p, body(p)),
+      ink(imageShown[i] as Rendered, body(p)),
+      ink(p, cjk),
+      ink(imageShown[i] as Rendered, cjk),
+    ])
+    test.info().annotations.push({
+      type: 'ink (vector, image; the CJK box)',
+      description: JSON.stringify(inks),
+    })
     for (const [i, m] of mismatch.entries())
       expect(m, `page ${i + 1} looks like its image page`).toBeLessThan(0.0002)
+    if (FONTKIT) {
+      // the text is drawn, not only there to be found: as much ink as the canvas's text, the CJK line included
+      const [vBody, iBody, vCjk, iCjk] = inks[0] as [number, number, number, number]
+      expect(vBody / iBody).toBeGreaterThan(0.8)
+      expect(vBody / iBody).toBeLessThan(1.25)
+      expect(vCjk, 'the CJK line is drawn').toBeGreaterThan(0.6 * iCjk)
+    }
 
     // the PDF worker read Lobby's own font files, same-origin (the face table of the 'names' SVG)
     expect(net.fonts.length).toBeGreaterThan(0)
     expect(net.fonts.every((p) => /^\/excalidraw-assets\/fonts\/[\w-]+\/[\w.-]+\.woff2$/.test(p))).toBe(true)
     expect(net.foreign).toEqual([])
     expect(await pickers()).toEqual({ showSaveFilePicker: 0, showOpenFilePicker: 0, showDirectoryPicker: 0 })
+  })
+
+  test('a mid board (8 frames, 150 elements, a photo): every page vector, its words found whole, its shapes paths, each font embedded once; the file is smaller than image pages', async ({
+    canvasSession,
+    users,
+    board,
+  }) => {
+    test.skip(!FONTKIT, '@pdf-lib/fontkit is not installed: Lobby-font text makes image pages')
+    test.setTimeout(240_000)
+    const a = await canvasSession('alice')
+    const net = watchOrigins(a.context)
+    const W = 960
+    const H = 540
+    const frames = Array.from({ length: 8 }, (_, i) => ({
+      id: `n6m-f${i + 1}`,
+      name: `Workshop step ${i + 1}`,
+      x: (i % 4) * (W + 200),
+      y: Math.floor(i / 4) * (H + 200),
+      w: W,
+      h: H,
+      index: i,
+    }))
+    await seedDeck(a.page, { frames })
+    const NOTES = [
+      'Interview five customers before the beta',
+      'Ship the onboarding checklist',
+      'Pricing page draft for review',
+      'Fix the export dialog copy',
+      'Weekly sync moves to Thursday',
+      'Accessibility audit of the board',
+    ]
+    const titleOf = (i: number) => `Step ${i + 1}: what we learned, and what we try next`
+    // one transact a frame: a title (Excalifont), six notes (Nunito), three shapes (one dashed), two arrows
+    for (const [i, f] of frames.entries())
+      await a.page.evaluate(
+        ({ f, i, notes, title }) => {
+          const canvas = (
+            window as unknown as {
+              __lobbyBoard: {
+                canvas: {
+                  transact<T>(
+                    label: string,
+                    fn: (tx: {
+                      createMany(items: { kind: string; props: Record<string, unknown> }[]): string[]
+                      setFrame(ids: string[], frameId: string | null): void
+                    }) => T,
+                  ): T
+                }
+              }
+            }
+          ).__lobbyBoard.canvas
+          canvas.transact('seed mid board', (tx) => {
+            const p = `n6m-${i}`
+            const ids = tx.createMany([
+              {
+                kind: 'text',
+                props: { id: `${p}-t`, x: f.x + 40, y: f.y + 24, text: title, fontFamily: 5, fontSize: 28 },
+              },
+              ...notes.map((text, n) => ({
+                kind: 'note',
+                props: {
+                  id: `${p}-n${n}`,
+                  x: f.x + 40 + (n % 3) * 210,
+                  y: f.y + 90 + Math.floor(n / 3) * 210,
+                  text,
+                },
+              })),
+              {
+                kind: 'rectangle',
+                props: {
+                  id: `${p}-r`,
+                  x: f.x + 700,
+                  y: f.y + 100,
+                  width: 200,
+                  height: 110,
+                  backgroundColor: '#a5d8ff',
+                  fillStyle: 'solid',
+                },
+              },
+              {
+                kind: 'ellipse',
+                props: {
+                  id: `${p}-e`,
+                  x: f.x + 700,
+                  y: f.y + 260,
+                  width: 200,
+                  height: 110,
+                  backgroundColor: '#b2f2bb',
+                  fillStyle: 'solid',
+                },
+              },
+              {
+                kind: 'diamond',
+                props: {
+                  id: `${p}-d`,
+                  x: f.x + 720,
+                  y: f.y + 400,
+                  width: 160,
+                  height: 110,
+                  strokeStyle: 'dashed',
+                },
+              },
+              {
+                kind: 'arrow',
+                props: {
+                  id: `${p}-a1`,
+                  x: f.x + 800,
+                  y: f.y + 215,
+                  width: 0,
+                  height: 40,
+                  points: [
+                    [0, 0],
+                    [0, 40],
+                  ],
+                },
+              },
+              {
+                kind: 'arrow',
+                props: {
+                  id: `${p}-a2`,
+                  x: f.x + 660,
+                  y: f.y + 200,
+                  width: 36,
+                  height: 0,
+                  points: [
+                    [0, 0],
+                    [36, 0],
+                  ],
+                },
+              },
+            ])
+            tx.setFrame(ids, f.id)
+          })
+        },
+        { f, i, notes: NOTES, title: titleOf(i) },
+      )
+    await expectSaved(a.page)
+    const [first, second] = frames as [(typeof frames)[number], (typeof frames)[number]]
+    await placeUploadedImage(a.page, users, board, first, { x: 40, y: 320, w: 320, h: 180 })
+    await expectSaved(a.page)
+    await selectNone(a.page)
+    const elements = await a.page.evaluate(() => {
+      const w = window as unknown as { lobbyCanvas: { items(): unknown[] } }
+      return w.lobbyCanvas.items().length
+    })
+    expect(elements).toBeGreaterThanOrEqual(150)
+    // frame 2's SVG as the PDF worker gets it (apps/web vector/fixtures/mid-frame.svg.xml is one, for the unit tests)
+    const frame2 = await a.page.evaluate(
+      (id) =>
+        (
+          window as unknown as {
+            __lobbyBoard?: { canvas: { export: { svg(o: Record<string, unknown>): Promise<string> } } }
+          }
+        ).__lobbyBoard?.canvas.export.svg({
+          frameId: id,
+          fonts: 'names',
+          files: 'display',
+          background: true,
+        }) ?? '',
+      second.id,
+    )
+    keep('mid-frame.svg', Buffer.from(frame2))
+    expect(frame2).toMatch(/^<svg/)
+
+    await previewVector(a.page, true)
+    await openBoardExport(a.page)
+    const dialog = a.page.getByTestId('export-dialog')
+    await expect(dialog.getByTestId('export-pdf-pages-vector')).toBeChecked()
+    const t0 = Date.now()
+    const vector = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
+    const vectorMs = Date.now() - t0
+    keep('mid-vector.pdf', vector.bytes)
+    await expect(dialog.getByTestId('export-status')).toContainText('(8 pages)')
+    await expect(dialog.getByTestId('export-pdf-fallback')).toHaveCount(0)
+    await dialog.getByTestId('export-pdf-pages-image').check()
+    const t1 = Date.now()
+    const images = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
+    const imageMs = Date.now() - t1
+    keep('mid-images.pdf', images.bytes)
+
+    // every page a vector page: no picture but the photo on page 1, the shapes and notes path objects, real text
+    const placed = await imagePlacements(vector.bytes)
+    expect(placed.map((p) => p.images.length)).toEqual([1, 0, 0, 0, 0, 0, 0, 0])
+    const painted = await paintOps(vector.bytes)
+    for (const [i, p] of painted.entries()) {
+      expect(p.paths, `page ${i + 1}: notes and shapes as paths`).toBeGreaterThanOrEqual(12)
+      expect(p.texts, `page ${i + 1}: text-showing operators`).toBeGreaterThanOrEqual(7)
+    }
+    // the words a viewer finds, whole: every note's and the title's (the notes wrap over lines in the PDF as on the
+    // board; a line break between two words is a word boundary, as in the viewer's search)
+    const found = await viewerTexts(vector.bytes)
+    for (const [i, text] of found.entries()) {
+      const words = new Set(text.split(/\s+/).filter(Boolean))
+      for (const w of [...NOTES.join(' ').split(' '), ...titleOf(i).split(' ')])
+        expect(words, `page ${i + 1}: "${w}" whole`).toContain(w)
+    }
+    // what a viewer shows, page by page against the image pages: the same picture within glyph-edge noise. The text
+    // is a larger share of these pages than of the first test's: the PDF draws each glyph at its own advance (no
+    // kerning pairs, which the canvas applies), so the long lines' glyph edges move by up to a pixel at this scale.
+    const [vShown, iShown] = [
+      await renderPages(vector.bytes, 2, 'mid-v'),
+      await renderPages(images.bytes, 2, 'mid-i'),
+    ]
+    const midMismatch = vShown.map((p, i) => pageMismatch(p, iShown[i] as Rendered))
+    const midInk = vShown.map((p, i) => {
+      const box = { x0: 0, y0: 2 * BAND, x1: p.width, y1: p.height }
+      return [ink(p, box), ink(iShown[i] as Rendered, box)]
+    })
+    // measured (2× render, 1440 × 866 px a page): 0.059% to 0.080% unmatched, the ink 1.02× the image pages'
+    test.info().annotations.push({
+      type: 'mid board: vector vs image pages',
+      description: JSON.stringify({ midMismatch, midInk }),
+    })
+    for (const [i, m] of midMismatch.entries()) {
+      expect(m, `page ${i + 1} looks like its image page`).toBeLessThan(0.0012)
+      const [v, im] = midInk[i] as [number, number]
+      expect(v / im, `page ${i + 1}: its text and outlines are drawn`).toBeGreaterThan(0.95)
+      expect(v / im, `page ${i + 1}: nothing drawn twice`).toBeLessThan(1.06)
+    }
+    // each Lobby font is embedded once for the whole document (a subset shared by every page), not once a page
+    const fonts = await embeddedSubsetFonts(vector.bytes)
+    expect(fonts.length).toBeGreaterThanOrEqual(2) // Nunito (notes), Excalifont (titles)
+    expect(fonts.length).toBeLessThanOrEqual(4)
+    const sizes = {
+      elements,
+      vectorBytes: vector.bytes.length,
+      imageBytes: images.bytes.length,
+      vectorMs,
+      imageMs,
+      fonts,
+    }
+    test.info().annotations.push({ type: 'mid board PDF', description: JSON.stringify(sizes) })
+    console.log(`[n6] mid board PDF ${JSON.stringify(sizes)}`)
+    expect(vector.bytes.length, 'vector pages make a smaller file than image pages').toBeLessThan(
+      images.bytes.length,
+    )
+    expect(net.foreign).toEqual([])
   })
 
   test('N6-4: the dialog lists exactly the pages it exported as images (Pages 3 and 5), and those pages alone are pictures', async ({
@@ -537,7 +901,7 @@ test.describe('N6 vector PDF', () => {
     await selectNone(a.page)
     const dialog = a.page.getByTestId('export-dialog')
 
-    // today's dialog (the vector option not offered: VECTOR_PDF off and no preview)
+    // today's dialog (the vector option not offered: the dev key '0', as with VECTOR_PDF off)
     await previewVector(a.page, false)
     await openBoardExport(a.page)
     await expect(dialog.getByTestId('export-pdf-pages')).toHaveCount(0)

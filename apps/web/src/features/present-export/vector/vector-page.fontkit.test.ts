@@ -1,8 +1,8 @@
 // N6-3 acceptance with the font engine (N6-1: @pdf-lib/fontkit): a frame whose text is Latin, CJK and emoji gives a
 // PDF whose fonts are EMBEDDED SUBSETS of Lobby's own font files (FontFile2, a ToUnicode map), the emoji a picture.
-// It is also the N6-1 spike: fontkit must read the self-hosted woff2 files (brotli), or this fails at the embed.
-//
-// SKIPPED while @pdf-lib/fontkit is not installed (./fontkit.ts answers null): this branch could not fetch it.
+// It is also the N6-1 spike: fontkit must read the self-hosted woff2 files (brotli), or this fails at the embed (it
+// passed with @pdf-lib/fontkit 1.1.1, wave N.1; that the embedded glyphs are the fonts' own outlines is
+// ./fontkit.test.ts and ./vector-fidelity.test.ts).
 // The fonts are the files the build serves (canvas/export/test-fixtures.ts reads them from the installed engine).
 import { readFileSync } from 'node:fs'
 import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRawStream } from 'pdf-lib'
@@ -17,7 +17,7 @@ const PNG = Uint8Array.from(
   (c) => c.charCodeAt(0),
 )
 
-describe.skipIf(!fontkit)('vector pages with Lobby’s fonts (needs @pdf-lib/fontkit)', () => {
+describe('vector pages with Lobby’s fonts (@pdf-lib/fontkit)', () => {
   it('Latin, CJK and emoji: embedded subset TrueType fonts with ToUnicode, the emoji a picture, no page image', async () => {
     // the real frame export captured from the e2e board (Nunito text, CJK in Lobby's Xiaolai), plus an emoji
     const svg = readFileSync(new URL('./fixtures/intro-names.svg.xml', import.meta.url), 'utf8').replace(
@@ -63,9 +63,7 @@ describe.skipIf(!fontkit)('vector pages with Lobby’s fonts (needs @pdf-lib/fon
 })
 
 describe('the font engine', () => {
-  it('is reported honestly: installed, or this branch’s missing N6-1 dependency', () => {
-    // @pdf-lib/fontkit could not be added in this branch (no registry fetch allowed): the suite above is skipped
-    // until it is. This test only pins that the loader never throws.
-    expect(fontkit === null || typeof fontkit.create === 'function').toBe(true)
+  it('is installed (N6-1, wave N.1): the suite above runs, never skipped', () => {
+    expect(typeof fontkit?.create).toBe('function')
   })
 })

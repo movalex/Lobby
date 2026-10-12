@@ -5,26 +5,32 @@ import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 
 /**
  * The kill switch: false hides "Vector (sharp, selectable text)" (a web-only redeploy), and every PDF is made of
- * image pages, as before wave N. It stays false until @pdf-lib/fontkit is installed (./vector/fontkit.ts): without
- * it no Lobby font can be embedded, so nearly every page would fall back to an image.
+ * image pages, as before wave N. On since wave N.1: the font engine (@pdf-lib/fontkit, ./vector/fontkit.ts) embeds
+ * subsets of Lobby's own fonts, and its gates passed (vector-page.fontkit.test.ts and fontkit.test.ts on the files the
+ * build serves, n6-vector-pdf's font engine branch and its render compare, csp:cutover's PDF export).
  */
-export const VECTOR_PDF: boolean = false
+export const VECTOR_PDF: boolean = true
 
 /** The local-development preview key (the e2e suite's builds and the dev server only; ignored in production). */
 export const VECTOR_PDF_DEV_PREVIEW_KEY = 'lobby.dev.vectorPdf'
 
 /**
- * Whether the dialog offers vector pages: VECTOR_PDF, or (behind the local-dev guard only, never in a production
- * build) the preview key set to '1', so the e2e suite exercises the vector path and its fallbacks before the switch
- * is turned on.
+ * Whether the dialog offers vector pages: VECTOR_PDF; behind the local-dev guard only (never in a production build)
+ * the preview key overrides it: '1' offers them whatever the switch, '0' shows the image-pages-only dialog (as with
+ * the switch off), so the e2e suite checks both dialogs on either setting.
  */
 export function vectorPdfOffered(devGuard: boolean = DEV_AUTH_ENABLED): boolean {
-  if (VECTOR_PDF) return true
-  if (!devGuard) return false
+  const preview = devGuard ? previewKey() : null
+  if (preview === '0') return false
+  return VECTOR_PDF || preview === '1'
+}
+
+/** The preview key's value (a blocked storage reads as unset). */
+function previewKey(): string | null {
   try {
-    return globalThis.localStorage?.getItem(VECTOR_PDF_DEV_PREVIEW_KEY) === '1'
+    return globalThis.localStorage?.getItem(VECTOR_PDF_DEV_PREVIEW_KEY) ?? null
   } catch {
-    return false
+    return null
   }
 }
 

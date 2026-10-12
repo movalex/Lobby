@@ -58,19 +58,25 @@ describe('vector PDF', () => {
       `${head}export fewer frames.`,
     )
   })
-  it('the switch: off until the font engine lands; the dev preview only behind the local-dev guard', () => {
-    expect(VECTOR_PDF).toBe(false)
+  it('the switch: on since the font engine landed (wave N.1); the dev keys only behind the local-dev guard', () => {
+    expect(VECTOR_PDF).toBe(true)
     g.localStorage = { getItem: (k: string) => store.get(k) ?? null }
-    expect(vectorPdfOffered(true)).toBe(false)
+    expect(vectorPdfOffered(true)).toBe(true)
+    expect(vectorPdfOffered(false)).toBe(true)
     store.set(VECTOR_PDF_DEV_PREVIEW_KEY, '1')
     expect(vectorPdfOffered(true)).toBe(true)
+    // '0': today's image-pages-only dialog, for the specs that compare with it; dev only
+    store.set(VECTOR_PDF_DEV_PREVIEW_KEY, '0')
+    expect(vectorPdfOffered(true)).toBe(false)
     // a production build (no dev guard) never reads the key
-    expect(vectorPdfOffered(false)).toBe(false)
+    expect(vectorPdfOffered(false)).toBe(true)
+    store.set(VECTOR_PDF_DEV_PREVIEW_KEY, 'off')
+    expect(vectorPdfOffered(true)).toBe(true)
     g.localStorage = {
       getItem: () => {
         throw new Error('blocked')
       },
     }
-    expect(vectorPdfOffered(true)).toBe(false)
+    expect(vectorPdfOffered(true)).toBe(true)
   })
 })
