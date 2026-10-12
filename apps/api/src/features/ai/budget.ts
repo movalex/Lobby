@@ -20,6 +20,8 @@ import {
   AI_ERROR_CODES,
   type AiAction,
   type AiBudget,
+  CAPTURE_ERROR_CODES,
+  type CAPTURE_LEDGER_ACTIONS,
   type WORKSPACE_ASK_LEDGER_ACTION,
 } from '@draftroom/contracts'
 import type { Db, Queryable } from '@draftroom/db'
@@ -46,6 +48,22 @@ export const unavailable = () =>
 function untilMidnight(now: Date): Record<string, string> {
   const s = Math.max(1, Math.ceil((nextUtcMidnight(now).getTime() - now.getTime()) / 1000))
   return { 'retry-after': String(s) }
+}
+
+/** Wave N (WS5): the 429 of a capture's per-day cap, the person's or everyone's. */
+export function dailyCapReached(
+  cap: { user: number; what: string },
+  whose: 'user' | 'global',
+  now: Date,
+): ApiError {
+  return new ApiError(
+    429,
+    CAPTURE_ERROR_CODES.dailyCap,
+    whose === 'user'
+      ? `You’ve used your ${cap.user} ${cap.what} for today. They reset at midnight UTC.`
+      : `Lobby’s ${cap.what} for today are used up. They reset at midnight UTC.`,
+    untilMidnight(now),
+  )
 }
 
 export interface InFlightLimits {
@@ -91,14 +109,33 @@ export class InFlight {
   }
 }
 
+/** Wave N (WS5): the ledger actions of Capture the room ('capture-photo', 'capture-transcript'). */
+export type CaptureLedgerAction = (typeof CAPTURE_LEDGER_ACTIONS)[keyof typeof CAPTURE_LEDGER_ACTIONS]
+
 export interface ReserveInput {
   workspaceId: string
   boardId: string
   userId: string
-  /** A board action, or wave M's ask across boards (its board_id is then 'ws:<workspace id>'). */
-  action: AiAction | typeof WORKSPACE_ASK_LEDGER_ACTION
+  /**
+   * A board action, wave M's ask across boards (its board_id is then 'ws:<workspace id>'), or wave N's capture
+   * actions (one row per capture, whatever number of model calls it makes).
+   */
+  action: AiAction | typeof WORKSPACE_ASK_LEDGER_ACTION | CaptureLedgerAction
   /** The worst case: estimated input plus the output cap. */
   tokens: number
+  /**
+   * Wave N (WS5): per-day caps on this action's rows (UTC day, every status counted, failed calls too): the
+   * person's and everyone's (null: none). Checked in the same transaction, under the same lock, as the budgets, so
+   * concurrent requests cannot together pass a cap. `what` names the captures in the refusal ("photo captures").
+   */
+  dailyCap?: { user: number; global: number | null; what: string }
+}
+
+/** Today's rows of each capture action (UTC day): the person's, and everyone's. */
+export interface CaptureCounts {
+  photoUser: number
+  photoAll: number
+  transcriptUser: number
 }
 
 export interface Settlement {
@@ -146,6 +183,16 @@ export class AiLedger {
             `You’ve used AI ${L.callsPerUserPerHour} times in the last hour. Try again a little later.`,
             { 'retry-after': String(Math.max(1, Math.ceil(wait / 1000))) },
           )
+        }
+        if (input.dailyCap) {
+          const cap = input.dailyCap
+          const n = await tx.one<{ user_n: number; all_n: number }>(
+            `SELECT count(*) FILTER (WHERE user_id = $3)::int AS user_n, count(*)::int AS all_n
+               FROM ai_usage WHERE day = $1::date AND action = $2`,
+            [day, input.action, input.userId],
+          )
+          if (n.user_n >= cap.user) throw dailyCapReached(cap, 'user', now)
+          if (cap.global !== null && n.all_n >= cap.global) throw dailyCapReached(cap, 'global', now)
         }
         const used = await tx.one<{ user_tokens: number; ws_tokens: number; all_tokens: number }>(
           `SELECT coalesce(sum(charged_tokens) FILTER (WHERE user_id = $2), 0)::float8 AS user_tokens,
@@ -199,6 +246,18 @@ export class AiLedger {
         WHERE id = $1::bigint AND status = 'reserved'`,
       [id, s.status, clamp(s.inputTokens), clamp(s.outputTokens), clamp(s.charged) ?? 0, this.now()],
     )
+  }
+
+  /** Wave N (WS5): today's capture rows (UTC day) of this person and of everyone, for the quota in each answer. */
+  async captureCounts(userId: string, q: Queryable = this.db): Promise<CaptureCounts> {
+    const row = await q.one<{ photo_user: number; photo_all: number; transcript_user: number }>(
+      `SELECT count(*) FILTER (WHERE action = 'capture-photo' AND user_id = $2)::int AS photo_user,
+              count(*) FILTER (WHERE action = 'capture-photo')::int AS photo_all,
+              count(*) FILTER (WHERE action = 'capture-transcript' AND user_id = $2)::int AS transcript_user
+         FROM ai_usage WHERE day = $1::date AND action IN ('capture-photo', 'capture-transcript')`,
+      [utcDay(this.now()), userId],
+    )
+    return { photoUser: row.photo_user, photoAll: row.photo_all, transcriptUser: row.transcript_user }
   }
 
   /**

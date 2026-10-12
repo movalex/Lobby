@@ -56,6 +56,29 @@ export interface ChatRequest {
    * it and the configured one goes, so a call can lower the effort but never raise it.
    */
   reasoningEffort?: ReasoningEffort
+  /**
+   * Wave N (WS5, Capture the room): an image the user message comes with. It goes in this request's body only, as
+   * a `data:` URL (detail high): never a link, never stored, logged or cached (the caller drops the bytes after).
+   */
+  image?: ChatImage
+}
+
+export interface ChatImage {
+  readonly mimeType: 'image/jpeg' | 'image/png' | 'image/webp'
+  readonly bytes: Uint8Array
+}
+
+/** The user message's content: its text, or (with an image) the text and the image as a data URL. */
+export function userContent(req: Pick<ChatRequest, 'user' | 'image'>): string | Record<string, unknown>[] {
+  if (!req.image) return req.user
+  const data = Buffer.from(req.image.bytes.buffer, req.image.bytes.byteOffset, req.image.bytes.byteLength)
+  return [
+    { type: 'text', text: req.user },
+    {
+      type: 'image_url',
+      image_url: { url: `data:${req.image.mimeType};base64,${data.toString('base64')}`, detail: 'high' },
+    },
+  ]
 }
 
 /** The lower of two efforts (config.ts REASONING_EFFORTS runs from the least to the most). */
@@ -161,7 +184,7 @@ export function createOpenAiClient(opts: OpenAiClientOptions): OpenAiClient {
         model: opts.model,
         messages: [
           { role: 'system', content: req.system },
-          { role: 'user', content: req.user },
+          { role: 'user', content: userContent(req) },
         ],
         response_format: {
           type: 'json_schema',

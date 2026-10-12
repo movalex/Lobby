@@ -8,6 +8,22 @@
 //   person can create (every account gets a personal workspace) and by the people in one workspace:
 //   150k tokens per person per day, and 2M tokens per day for the whole of Lobby.
 // DRAFTROOM_AI=off is the kill switch: nothing is called, the feature is hidden.
+//
+// Wave N (WS5, N5-1): Capture the room (capture.ts) adds its own knobs (AiConfig.capture). Photos and board images
+// go to OpenAI only with DRAFTROOM_AI_VISION=on (unset or empty is off: fail-closed), and every capture is held to
+// per-day caps counted from the ledger's rows, on top of the token budgets above:
+//   DRAFTROOM_AI_VISION=on|off, DRAFTROOM_AI_VISION_MODEL (default OPENAI_MODEL), DRAFTROOM_AI_VISION_USER_DAILY
+//   (10 a person), DRAFTROOM_AI_VISION_GLOBAL_DAILY (150 for all of Lobby), DRAFTROOM_AI_TRANSCRIPT_USER_DAILY (10 a
+//   person), DRAFTROOM_AI_TRANSCRIPT_MAX_CHARS (60,000, the contract's most), DRAFTROOM_AI_VISION_TIMEOUT_MS (60 s).
+// A capture's answer is longer than a board run's (a wall of 100 notes is strict JSON with a text, a colour and a box
+// each, about 40 tokens a note, and reasoning tokens count too), so capture calls have an output cap of their own:
+//   DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS (6,000; the board's DRAFTROOM_AI_MAX_OUTPUT_TOKENS is not raised for it).
+
+import {
+  CAPTURE_DEFAULT_CAPS,
+  CAPTURE_TRANSCRIPT_MAX_CHARS,
+  CAPTURE_VISION_TIMEOUT_MS_DEFAULT,
+} from '@draftroom/contracts'
 
 type Env = Record<string, string | undefined>
 
@@ -42,7 +58,49 @@ export interface AiConfig {
    * the output cap). `off` = not sent, for models without the parameter.
    */
   reasoningEffort: ReasoningEffort | null
+  /** Wave N (WS5): Capture the room. */
+  capture: CaptureConfig
 }
+
+/** Capture the room's knobs (see the header). */
+export interface CaptureConfig {
+  /** DRAFTROOM_AI_VISION=on | off (unset or empty: off): photos and board images may be sent to OpenAI. */
+  vision: boolean
+  /** DRAFTROOM_AI_VISION_MODEL; null: OPENAI_MODEL. */
+  visionModel: string | null
+  /** DRAFTROOM_AI_VISION_USER_DAILY: photo and board-image captures per person per UTC day (default 10). */
+  visionUserDaily: number
+  /** DRAFTROOM_AI_VISION_GLOBAL_DAILY: photo and board-image captures for all of Lobby per UTC day (default 150). */
+  visionGlobalDaily: number
+  /** DRAFTROOM_AI_TRANSCRIPT_USER_DAILY: transcript captures per person per UTC day (default 10). */
+  transcriptUserDaily: number
+  /** DRAFTROOM_AI_TRANSCRIPT_MAX_CHARS: the most of a transcript that is read (default and most 60,000). */
+  transcriptMaxChars: number
+  /**
+   * DRAFTROOM_AI_VISION_TIMEOUT_MS: one photo call, answer included (default 60 s). A transcript part's call gets
+   * the longer of it and DRAFTROOM_AI_TIMEOUT_MS: its answer can be as long as a photo's.
+   */
+  visionTimeoutMs: number
+  /**
+   * DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS: max_completion_tokens of every capture call (a photo, a board image, a
+   * transcript part and the themes call), reasoning included, and what each reserves for its answer (default 6,000).
+   */
+  maxOutputTokens: number
+}
+
+/** A capture call's output cap by default: the contract's 120 notes at about 40 tokens each, and the reasoning. */
+export const CAPTURE_MAX_OUTPUT_TOKENS_DEFAULT = 6_000
+
+export const DEFAULT_CAPTURE_CONFIG: Readonly<CaptureConfig> = Object.freeze<CaptureConfig>({
+  vision: false,
+  visionModel: null,
+  visionUserDaily: CAPTURE_DEFAULT_CAPS.visionUserDaily,
+  visionGlobalDaily: CAPTURE_DEFAULT_CAPS.visionGlobalDaily,
+  transcriptUserDaily: CAPTURE_DEFAULT_CAPS.transcriptUserDaily,
+  transcriptMaxChars: CAPTURE_TRANSCRIPT_MAX_CHARS,
+  visionTimeoutMs: CAPTURE_VISION_TIMEOUT_MS_DEFAULT,
+  maxOutputTokens: CAPTURE_MAX_OUTPUT_TOKENS_DEFAULT,
+})
 
 export const DEFAULT_AI_CONFIG: Readonly<AiConfig> = Object.freeze<AiConfig>({
   enabled: true,
@@ -57,6 +115,7 @@ export const DEFAULT_AI_CONFIG: Readonly<AiConfig> = Object.freeze<AiConfig>({
   userDailyTokens: 150_000,
   globalDailyTokens: 2_000_000,
   reasoningEffort: 'low',
+  capture: DEFAULT_CAPTURE_CONFIG,
 })
 
 const read = (env: Env, name: string): string | undefined => {
@@ -123,6 +182,34 @@ export function parseAiConfig(env: Env, production: boolean): AiConfig {
     userDailyTokens: int(env, 'DRAFTROOM_AI_USER_DAILY_TOKENS', d.userDailyTokens, 0, 100_000_000),
     globalDailyTokens: int(env, 'DRAFTROOM_AI_GLOBAL_DAILY_TOKENS', d.globalDailyTokens, 0, 1_000_000_000),
     reasoningEffort,
+    capture: parseCaptureConfig(env),
+  }
+}
+
+/** Capture the room's knobs (AiConfig.capture). Unset, empty or `off` DRAFTROOM_AI_VISION is off. */
+export function parseCaptureConfig(env: Env): CaptureConfig {
+  const d = DEFAULT_CAPTURE_CONFIG
+  const vision = read(env, 'DRAFTROOM_AI_VISION')?.toLowerCase() ?? 'off'
+  if (vision !== 'on' && vision !== 'off') throw new Error('DRAFTROOM_AI_VISION must be on or off')
+  const visionModel = read(env, 'DRAFTROOM_AI_VISION_MODEL') ?? null
+  if (visionModel !== null && !MODEL_RE.test(visionModel))
+    throw new Error('DRAFTROOM_AI_VISION_MODEL must be a model name such as gpt-5.4-mini')
+  return {
+    vision: vision === 'on',
+    visionModel,
+    visionUserDaily: int(env, 'DRAFTROOM_AI_VISION_USER_DAILY', d.visionUserDaily, 0, 1_000),
+    visionGlobalDaily: int(env, 'DRAFTROOM_AI_VISION_GLOBAL_DAILY', d.visionGlobalDaily, 0, 100_000),
+    transcriptUserDaily: int(env, 'DRAFTROOM_AI_TRANSCRIPT_USER_DAILY', d.transcriptUserDaily, 0, 1_000),
+    // never past the contract's most (CaptureTranscriptRequest refuses longer text anyway)
+    transcriptMaxChars: int(
+      env,
+      'DRAFTROOM_AI_TRANSCRIPT_MAX_CHARS',
+      d.transcriptMaxChars,
+      1_000,
+      CAPTURE_TRANSCRIPT_MAX_CHARS,
+    ),
+    visionTimeoutMs: int(env, 'DRAFTROOM_AI_VISION_TIMEOUT_MS', d.visionTimeoutMs, 1_000, 180_000),
+    maxOutputTokens: int(env, 'DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS', d.maxOutputTokens, 256, 16_000),
   }
 }
 

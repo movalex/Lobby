@@ -1059,6 +1059,8 @@ const CAPTURE_ROUTE = /\/api\/boards\/([^/]+)\/ai\/capture\/(photo|board-image|t
 
 export interface CaptureCall {
   boardId: string
+  /** the request body as sent: kept only when the fake was made with `keepBodies` (test data, never logged) */
+  body?: Buffer
   kind: 'photo' | 'board-image' | 'transcript'
   /** the photo's `mode` query, or the board-image body's mode */
   mode: string | null
@@ -1084,7 +1086,7 @@ const NOT_FOUND = { error: { code: 'NOT_FOUND', message: 'Not found.' } }
  */
 export async function fakeCapture(
   page: Page,
-  opts: { unavailable?: boolean; vision?: boolean } = {},
+  opts: { unavailable?: boolean; vision?: boolean; keepBodies?: boolean } = {},
 ): Promise<CaptureFake> {
   const calls: CaptureCall[] = []
   const queued: CaptureResponse[] = []
@@ -1112,6 +1114,7 @@ export async function fakeCapture(
       contentType: req.headers()['content-type'] ?? null,
       bytes: body?.length ?? 0,
       status: 200,
+      ...(opts.keepBodies && body ? { body: Buffer.from(body) } : {}),
     }
     calls.push(call)
     const fulfil = (status: number, payload: unknown) => {
@@ -1142,4 +1145,95 @@ export async function fakeCapture(
     },
     dispose: () => page.unroute(CAPTURE_GLOB, handler),
   }
+}
+
+// ---- wave N (WS5): the Capture the room UI -----------------------------------------------------------------------
+
+/** The capture dialog. */
+export const captureDialog = (page: Page) => page.getByTestId('capture-dialog')
+
+/** Right-clicks empty canvas (the view's right part) and opens AI › Capture the room…. */
+export async function openCaptureFromMenu(page: Page): Promise<void> {
+  const box = await page.locator('[data-lobby-board-canvas]').boundingBox()
+  if (!box) throw new Error('no canvas')
+  await page.mouse.click(box.x + box.width * 0.75, box.y + box.height * 0.55, { button: 'right' })
+  await expect(page.getByTestId('context-menu-root')).toBeVisible()
+  await page.getByRole('menuitem', { name: 'AI', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Capture the room…' }).click()
+  await expect(captureDialog(page)).toBeVisible()
+}
+
+/** Presses Continue on the first-use notice when it shows (the notice is once per person and kind, per device). */
+export async function continueCaptureNotice(page: Page): Promise<boolean> {
+  const notice = page.getByTestId('capture-notice')
+  const started = page
+    .getByTestId('capture-busy')
+    .or(page.getByTestId('ai-preview-panel'))
+    .or(page.getByTestId('capture-error'))
+  await expect(notice.or(started).first()).toBeVisible({ timeout: 20_000 })
+  if (!(await notice.isVisible())) return false
+  await page.getByTestId('capture-notice-continue').click()
+  return true
+}
+
+const be16 = (n: number) => [(n >> 8) & 0xff, n & 0xff]
+
+/**
+ * A phone-like JPEG of `width` × `height`: drawn by the page's own canvas (a sticky wall: coloured squares), then an
+ * EXIF APP1 segment with a GPS tag and a comment with a place spliced in after its SOI, as a camera writes them.
+ */
+export async function phonePhoto(page: Page, width = 3000, height = 2000): Promise<Buffer> {
+  const bytes = await page.evaluate(
+    async ({ w, h }) => {
+      const c = new OffscreenCanvas(w, h)
+      const ctx = c.getContext('2d') as OffscreenCanvasRenderingContext2D
+      ctx.fillStyle = '#d9d4c7'
+      ctx.fillRect(0, 0, w, h)
+      const colours = ['#f8e48f', '#f6bfc4', '#cde7a2', '#f4a874']
+      for (let i = 0; i < 6; i++) {
+        ctx.fillStyle = colours[i % colours.length] as string
+        ctx.fillRect((i % 2) * w * 0.5 + w * 0.06, Math.floor(i / 2) * h * 0.2 + h * 0.08, w * 0.14, w * 0.14)
+      }
+      const blob = await c.convertToBlob({ type: 'image/jpeg', quality: 0.9 })
+      return [...new Uint8Array(await blob.arrayBuffer())]
+    },
+    { w: width, h: height },
+  )
+  const ascii = (s: string) => [...s].map((ch) => ch.charCodeAt(0))
+  const tiff = [0x49, 0x49, 0x2a, 0, 8, 0, 0, 0, 1, 0, 0x25, 0x88, 4, 0, 1, 0, 0, 0, 26, 0, 0, 0]
+  const exif = [...ascii('Exif'), 0, 0, ...tiff, ...ascii('GPS 51.5072N 0.1276W')]
+  const comment = ascii('Taken at the studio, 51.5072N')
+  const app1 = [0xff, 0xe1, ...be16(exif.length + 2), ...exif]
+  const com = [0xff, 0xfe, ...be16(comment.length + 2), ...comment]
+  return Buffer.from([...bytes.slice(0, 2), ...app1, ...com, ...bytes.slice(2)])
+}
+
+/** A JPEG's frame size and whether it still carries metadata segments (APP1-APP15, COM). */
+export function jpegFacts(b: Buffer): { width: number; height: number; metadata: number[] } {
+  if (b[0] !== 0xff || b[1] !== 0xd8) throw new Error('not a JPEG')
+  const metadata: number[] = []
+  let o = 2
+  let width = 0
+  let height = 0
+  while (o + 4 <= b.length) {
+    const marker = b[o + 1] ?? 0
+    const len = ((b[o + 2] ?? 0) << 8) | (b[o + 3] ?? 0)
+    if ((marker >= 0xe1 && marker <= 0xef) || marker === 0xfe) metadata.push(marker)
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+      height = ((b[o + 5] ?? 0) << 8) | (b[o + 6] ?? 0)
+      width = ((b[o + 7] ?? 0) << 8) | (b[o + 8] ?? 0)
+    }
+    if (marker === 0xda) break
+    o += 2 + len
+  }
+  return { width, height, metadata }
+}
+
+/** No element of the scene holds an image, a data or blob URL, or a link (a scan of every element's JSON). */
+export function sceneHoldsNoImage(elements: readonly object[]): string[] {
+  return elements.flatMap((e) => {
+    const json = JSON.stringify(e)
+    const bad = ['data:', 'blob:', 'http:', 'https:'].filter((s) => json.includes(s))
+    return bad.length ? [`${(e as { id?: string }).id}: ${bad.join(', ')}`] : []
+  })
 }

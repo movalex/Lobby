@@ -88,3 +88,64 @@ export const expandDone = (n: number) => `Added ${plural(n, 'sub-topic')}.`
 /** The toast after Mind map from a prompt: "Drafted a mind map with 6 branches." */
 export const mindmapDone = (branches: number) =>
   `Drafted a mind map with ${plural(branches, 'branch', 'branches')}.`
+
+// ---- Capture the room (wave N, WS5) ----------------------------------------------------------------------------
+
+/**
+ * N5-5: the notices of Capture the room, in the owner's words: shown on a person's first photo or transcript
+ * capture (a Continue, no checkbox) and always in the dialog's footer.
+ */
+export const CAPTURE_PHOTO_NOTICE =
+  'Sends this photo to OpenAI to read the notes or diagram. Lobby doesn’t keep the photo unless you add it to the board.'
+export const CAPTURE_TRANSCRIPT_NOTICE =
+  'Sends this transcript’s text to OpenAI. Lobby doesn’t keep the transcript; only the notes you apply are saved.'
+
+/** "7 photo captures left today" (the api's answer; nothing before the first one). */
+export const photosLeftLine = (n: number) => `${plural(n, 'photo capture')} left today`
+export const transcriptsLeftLine = (n: number) => `${plural(n, 'transcript capture')} left today`
+
+/** The length meter: "12,345 / 60,000 characters". */
+export const lengthMeter = (n: number, max: number) =>
+  `${n.toLocaleString('en-US')} / ${max.toLocaleString('en-US')} characters`
+
+/** Past the limit: "Only the first 60,000 characters will be used." */
+export const truncationNotice = (max: number) =>
+  `Only the first ${max.toLocaleString('en-US')} characters will be used.`
+
+/** The preview's count line for notes from a photo: "Adds 6 notes in 2 groups" ("…; the groups become frames"). */
+export function captureNotesLine(p: { notes: number; groups: number; frames: number }): string {
+  const groups = p.groups ? ` in ${plural(p.groups, 'group')}` : ''
+  const frames = p.frames
+    ? `; ${p.frames === p.groups ? 'each group is a frame' : plural(p.frames, 'frame')}`
+    : ''
+  return `Adds ${plural(p.notes, 'note')}${groups}${frames}`
+}
+
+/** The preview's count line for a meeting: "Adds 3 themes (5 notes), 2 decisions and 3 actions". */
+export function captureMeetingLine(p: {
+  themes: number
+  notes: number
+  decisions: number
+  actions: number
+}): string {
+  return `Adds ${plural(p.themes, 'theme')} (${plural(p.notes, 'note')}), ${plural(p.decisions, 'decision')} and ${plural(p.actions, 'action')}`
+}
+
+/** An action as its sticky note says it: "Ana: Book the studio" (plain text; the owner is a name, never a user). */
+export const captureActionText = (a: { text: string; owner?: string }) =>
+  a.owner ? `${a.owner}: ${a.text}` : a.text
+
+/** The meeting frame's name: "Meeting — Launch sync", else "Meeting — 11 Oct 2026". */
+export function meetingFrameName(title: string | undefined, at: Date): string {
+  const t = (title ?? '').replace(/\s+/g, ' ').trim()
+  if (t) return `Meeting — ${cut(t, 80)}`
+  const date = at.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+  return `Meeting — ${date}`
+}
+
+/** Said when nothing was found to add. */
+export const CAPTURE_NOTHING = {
+  notes: 'Lobby found no sticky notes it could read in this photo. Try a sharper photo, closer to the wall.',
+  diagram: 'Lobby found no diagram in this photo: it needs two or more boxes with words.',
+  transcript: 'Lobby found nothing to add from this transcript.',
+} as const

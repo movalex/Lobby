@@ -4,7 +4,12 @@
 import { describe, expect, it } from 'vitest'
 import { loadConfig } from '../../../src/config.ts'
 import { budgetPercent, InFlight, nextUtcMidnight, utcDay } from '../../../src/features/ai/budget.ts'
-import { DEFAULT_AI_CONFIG, parseAiConfig } from '../../../src/features/ai/config.ts'
+import {
+  DEFAULT_AI_CONFIG,
+  DEFAULT_CAPTURE_CONFIG,
+  parseAiConfig,
+  parseCaptureConfig,
+} from '../../../src/features/ai/config.ts'
 import { readUsage } from '../../../src/features/ai/openai.ts'
 import { testEnv } from '../../helpers.ts'
 
@@ -57,6 +62,7 @@ describe('parseAiConfig', () => {
       userDailyTokens: 50_000,
       globalDailyTokens: 0,
       reasoningEffort: null,
+      capture: { ...DEFAULT_CAPTURE_CONFIG },
     })
   })
 
@@ -93,6 +99,73 @@ describe('parseAiConfig', () => {
     expect(parseAiConfig({ OPENAI_BASE_URL: 'http://127.0.0.1:9/v1' }, false).baseUrl).toBe(
       'http://127.0.0.1:9/v1',
     )
+  })
+})
+
+describe('parseCaptureConfig (wave N, WS5)', () => {
+  it('fail-closed: vision is off unless DRAFTROOM_AI_VISION=on; the caps and limits default to the contract’s', () => {
+    expect(parseCaptureConfig({})).toEqual({
+      vision: false,
+      visionModel: null,
+      visionUserDaily: 10,
+      visionGlobalDaily: 150,
+      transcriptUserDaily: 10,
+      transcriptMaxChars: 60_000,
+      visionTimeoutMs: 60_000,
+      // a capture call's own output cap: the board's 1,500 would cut a wall of 30 notes short
+      maxOutputTokens: 6_000,
+    })
+    expect(parseAiConfig({}, false).maxOutputTokens).toBe(1_500)
+    expect(parseCaptureConfig({ DRAFTROOM_AI_VISION: '' }).vision).toBe(false)
+    expect(parseCaptureConfig({ DRAFTROOM_AI_VISION: 'off' }).vision).toBe(false)
+    expect(parseCaptureConfig({ DRAFTROOM_AI_VISION: 'ON' }).vision).toBe(true)
+    expect(parseAiConfig({}, false).capture.vision).toBe(false)
+    expect(loadConfig(testEnv('./.data-test-never-created')).ai.capture.vision).toBe(false)
+  })
+
+  it('reads every knob, and refuses bad values (a transcript never past the contract’s 60,000 characters)', () => {
+    expect(
+      parseCaptureConfig({
+        DRAFTROOM_AI_VISION: 'on',
+        DRAFTROOM_AI_VISION_MODEL: 'gpt-5.4-vision',
+        DRAFTROOM_AI_VISION_USER_DAILY: '3',
+        DRAFTROOM_AI_VISION_GLOBAL_DAILY: '0',
+        DRAFTROOM_AI_TRANSCRIPT_USER_DAILY: '5',
+        DRAFTROOM_AI_TRANSCRIPT_MAX_CHARS: '20000',
+        DRAFTROOM_AI_VISION_TIMEOUT_MS: '90000',
+        DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS: '9000',
+      }),
+    ).toEqual({
+      vision: true,
+      visionModel: 'gpt-5.4-vision',
+      visionUserDaily: 3,
+      visionGlobalDaily: 0,
+      transcriptUserDaily: 5,
+      transcriptMaxChars: 20_000,
+      visionTimeoutMs: 90_000,
+      maxOutputTokens: 9_000,
+    })
+    // the board's own output cap is not the capture's
+    expect(parseAiConfig({ DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS: '9000' }, false).maxOutputTokens).toBe(
+      1_500,
+    )
+    const cases: [Record<string, string>, RegExp][] = [
+      [{ DRAFTROOM_AI_VISION: 'yes' }, /DRAFTROOM_AI_VISION must be on or off/],
+      [{ DRAFTROOM_AI_VISION_MODEL: 'gpt 5' }, /DRAFTROOM_AI_VISION_MODEL/],
+      [{ DRAFTROOM_AI_TRANSCRIPT_MAX_CHARS: '60001' }, /DRAFTROOM_AI_TRANSCRIPT_MAX_CHARS must be between/],
+      [{ DRAFTROOM_AI_VISION_USER_DAILY: '-2' }, /whole number/],
+      [{ DRAFTROOM_AI_VISION_TIMEOUT_MS: '5' }, /DRAFTROOM_AI_VISION_TIMEOUT_MS/],
+      [
+        { DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS: '100' },
+        /DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS must be between/,
+      ],
+      [
+        { DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS: '16001' },
+        /DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS must be between/,
+      ],
+    ]
+    for (const [env, message] of cases)
+      expect(() => parseCaptureConfig(env), JSON.stringify(env)).toThrow(message)
   })
 })
 
