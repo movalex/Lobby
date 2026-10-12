@@ -6,11 +6,21 @@
 //  - above 8 MiB queued (socket buffer plus this queue) it is closed with 4000 RECONNECT and resyncs;
 //  - the process-wide budget (wave M, M7-5, CAP-MEM; `OutboundBudget`, checked by the service every 250 ms,
 //    index.ts): the per-session queues are capped but their sum was not (a join storm on a big board after a
-//    deploy). Above the budget (DRAFTROOM_OUTBOUND_BUDGET_MB, 128 MiB) every session is `congested`: no cursor
+//    deploy). Above the budget (DRAFTROOM_OUTBOUND_BUDGET_MB, 64 MiB) every session is `congested`: no cursor
 //    frames for anyone, as the 256 KiB per-session skip does for one. Above 1.25 times it, the largest queues are
 //    closed with 4000 RECONNECT, largest first, until the sum is back under 1.25 times the budget. Nothing else is
 //    ever skipped: a `changes` frame, an ack or a welcome is queued or its session is closed (it resyncs), never
 //    dropped. Before wave M the service closed the largest buffer above a fixed 64 MiB.
+//    Why 64 MiB (a close line of 80 MiB; wave N.1, it was 128 and 160): the sync runs on 0.5c-512mb, 512 MB in all,
+//    and the migration queue's runtime gate already treats 440 MB of RSS as the most it may reach (migrate/queue.ts
+//    RUNTIME_RSS_LIMIT_MB). Measured: at most 147 MB RSS with 260 sessions, 310 MB while a conversion worker runs (the
+//    B9/L1 runs, docs/PROGRESS.md). On top of that, with DRAFTROOM_WS_DEFLATE=on, each socket keeps its deflate
+//    context (windowBits 15, memLevel 7: 192 KiB) and an inflate window: about 60 MB at 260 sessions. 310 + 60 + 160
+//    MiB of queues is past 512 MB before the budget closes anything; 310 + 60 + 80 MiB (84 MB) is about 455 MB, inside
+//    the instance with room for the garbage collector. The sum also counts a frame shared by many sockets (one
+//    broadcast string, the one cached snapshot) once per socket, so the bytes really held are at most this, and
+//    usually far less: the line is reached on the way to memory trouble, not in it. A larger instance can raise the
+//    key; a value only ever needs a restart.
 //
 // Large frames are written in slices (B9's event-loop tail): a frame of DEFER_ABOVE_BYTES or more (a
 // welcome with a 200-entry roster or a catch-up, the gzip snapshot, the `changes` of a 100-note frame drag:
@@ -29,7 +39,7 @@ export const OUTBOUND = {
   skipPresenceAbove: 256 * 1024,
   closeAbove: 8 * 1024 * 1024,
   /** the process-wide budget's default (config.ts DEFAULT_OUTBOUND_BUDGET_MB), bytes */
-  globalBudget: 128 * 1024 * 1024,
+  globalBudget: 64 * 1024 * 1024,
   /** above this times the budget, the largest queues are closed */
   closeFactor: 1.25,
 } as const

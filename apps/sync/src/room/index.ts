@@ -5,7 +5,7 @@
 //
 // The service: opens a board's room synchronously on the first socket (race-free, like
 // RoomRegistry.getOrCreate), evicts it after IDLE_EVICT_MS without sessions, serves the room's internal
-// routes and /internal/metrics, enforces the global outbound budget (M7-5: DRAFTROOM_OUTBOUND_BUDGET_MB, 128 MiB;
+// routes and /internal/metrics, enforces the global outbound budget (M7-5: DRAFTROOM_OUTBOUND_BUDGET_MB, 64 MiB;
 // outbound.ts OutboundBudget) and the snapshot cache
 // budget (64 MiB, one entry per board), and with DRAFTROOM_TEST_HOOKS=1 registers the test hooks
 // (snapshot with tombstones, lease-hook, fail-commit; test-hooks.ts).

@@ -300,9 +300,9 @@ describe('wave M keys (render.yaml: DRAFTROOM_WS_DEFLATE=off (the hold), DRAFTRO
       expect(() => loadConfig({ ...base, DRAFTROOM_BACKUP_KEEP: v })).toThrow(/DRAFTROOM_BACKUP_KEEP/)
   })
 
-  it('DRAFTROOM_OUTBOUND_BUDGET_MB (M7-5): 128 MiB by default, 8 to 4096', () => {
-    expect(loadConfig(base).outboundBudgetMb).toBe(128)
-    expect(loadConfig({ ...base, DRAFTROOM_OUTBOUND_BUDGET_MB: '64' }).outboundBudgetMb).toBe(64)
+  it('DRAFTROOM_OUTBOUND_BUDGET_MB (M7-5): 64 MiB by default since wave N.1 (it was 128), 8 to 4096', () => {
+    expect(loadConfig(base).outboundBudgetMb).toBe(64)
+    expect(loadConfig({ ...base, DRAFTROOM_OUTBOUND_BUDGET_MB: '128' }).outboundBudgetMb).toBe(128)
     for (const v of ['7', '4097', '1.5'])
       expect(() => loadConfig({ ...base, DRAFTROOM_OUTBOUND_BUDGET_MB: v })).toThrow(
         /DRAFTROOM_OUTBOUND_BUDGET_MB/,

@@ -4,6 +4,7 @@
 // `changes` frames are never skipped (a close, never a silent drop); the sum is lobby_outbound_bytes_queued.
 import { CLOSE_RECONNECT } from '@draftroom/canvas-schema/protocol'
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_OUTBOUND_BUDGET_MB } from '../config.ts'
 import type { ElementSocket } from '../engine-switch.ts'
 import { RoomMetrics } from './metrics.ts'
 import { OUTBOUND, Outbound, OutboundBudget } from './outbound.ts'
@@ -45,9 +46,13 @@ function session(budget: OutboundBudget, buffered: number) {
 }
 
 describe('M7-5: the process-wide outbound budget', () => {
-  it('the default is 128 MiB, the close factor 1.25; a session outside any budget is never over it', () => {
-    expect(OUTBOUND.globalBudget).toBe(128 * 1024 * 1024)
+  it('the default is 64 MiB, the close factor 1.25; a session outside any budget is never over it', () => {
+    // wave N.1 (wave M follow-up 7): 128 MiB put the close line at 160 MiB on the 0.5c-512mb instance; 64 MiB puts it
+    // at 80 MiB (outbound.ts says why), and the config's default is the same number
+    expect(OUTBOUND.globalBudget).toBe(64 * 1024 * 1024)
+    expect(OUTBOUND.globalBudget).toBe(DEFAULT_OUTBOUND_BUDGET_MB * 1024 * 1024)
     expect(OUTBOUND.closeFactor).toBe(1.25)
+    expect(OUTBOUND.globalBudget * OUTBOUND.closeFactor).toBe(80 * 1024 * 1024)
     expect(new OutboundBudget().bytes).toBe(OUTBOUND.globalBudget)
     const lone = new Outbound(socket(1_000), () => {})
     expect(lone.congested).toBe(false)
