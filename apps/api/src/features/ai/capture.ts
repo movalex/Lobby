@@ -135,6 +135,9 @@ const newRunId = (): string => newId('air')
  */
 export const BOARD_IMAGE_MISSING = 'That image isn’t on this board, or Lobby can’t read it.'
 const noBoardImage = () => new ApiError(404, 'NOT_FOUND', BOARD_IMAGE_MISSING)
+/** A board this person cannot see: a 404 in words of its own (it says nothing about whether the board exists). */
+export const BOARD_MISSING = 'This board isn’t there, or you can’t open it.'
+const noBoard = () => new ApiError(404, 'NOT_FOUND', BOARD_MISSING)
 
 /**
  * An answer cut off at the capture's output cap (DRAFTROOM_AI_CAPTURE_MAX_OUTPUT_TOKENS): what was asked holds more
@@ -198,7 +201,15 @@ export async function registerCapture(
 
   /** View access, then the gate: AI on for this board and this person, and allowed to add to it. */
   async function boardFor(bid: string, userId: string): Promise<BoardAccess> {
-    const access = await requireBoardAction(db, bid, userId, 'view')
+    let access: BoardAccess
+    try {
+      access = await requireBoardAction(db, bid, userId, 'view')
+    } catch (e) {
+      // a board this person cannot open (any more) says so in words of its own: the web reads the bare 404 as the
+      // capture routes, or vision, not being there, and would hide the photo entries until a reload
+      if (e instanceof ApiError && e.status === 404) throw noBoard()
+      throw e
+    }
     const g = await loaders.aiGateFor(access, userId)
     if (g.reason === 'turned-off' || g.reason === 'not-configured') throw notFound()
     if (g.reason === 'guest') throw guestRefused(CAPTURE_GUESTS)

@@ -95,8 +95,18 @@ describe('who may capture', () => {
       expectError(await transcript(c, x.board, { text: MEETING }), 403, 'FORBIDDEN')
     }
     const erin = await x.api.login('erin')
-    expectError(await postPhoto(x, erin.cookie, x.other), 404, 'NOT_FOUND')
-    expectError(await transcript(erin, x.other, { text: MEETING }), 404, 'NOT_FOUND')
+    // a board this person cannot open says so in words of its own (the web reads a bare "Not found." as the routes or
+    // vision not being there); an unknown board id the same
+    for (const board of [x.other, 'b-nosuchboard1']) {
+      for (const res of [
+        await postPhoto(x, erin.cookie, board),
+        await boardImage(erin, board, { elementId: 'img-1' }),
+        await transcript(erin, board, { text: MEETING }),
+      ]) {
+        expectError(res, 404, 'NOT_FOUND')
+        expect(res.json().error.message).toBe('This board isn’t there, or you can’t open it.')
+      }
+    }
     expect(x.openai.requests).toEqual([])
     expect((await postPhoto(x, x.bob.cookie, x.board)).statusCode).toBe(200)
     expect((await transcript(x.alice, x.board, { text: MEETING })).statusCode).toBe(200)

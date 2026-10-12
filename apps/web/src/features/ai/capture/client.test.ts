@@ -4,6 +4,7 @@
 // (no capture on the api), and the board image's own 404 hiding nothing.
 import type { AiStatus, CaptureResponse } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { setUnauthorizedHandler } from '../../../api/client.ts'
 import type { LobbyCanvas } from '../../../canvas/api/index.ts'
 import { aiStatus } from '../ported/runtime.ts'
 import {
@@ -190,6 +191,36 @@ describe('the requests', () => {
       code: 'AI_CAPTURE_DAILY_CAP',
     })
     expect(photoCaptureAvailable()).toBe(true)
+  })
+
+  it('a 401 on the board image or the transcript signs the page out, as any request of the app does', async () => {
+    let signedOut = 0
+    setUnauthorizedHandler(() => {
+      signedOut++
+    })
+    try {
+      answer = () =>
+        new Response(JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'Sign in again.' } }), {
+          status: 401,
+        })
+      await expect(captureTranscript('b-board00001', 'x')).rejects.toMatchObject({ status: 401 })
+      await expect(captureBoardImage('b-board00001', 'img-1', 'notes')).rejects.toMatchObject({ status: 401 })
+      expect(signedOut).toBe(2)
+      // the photo's raw body cannot go through the app's client: its 401 is the dialog's error
+      await expect(capturePhoto('b-board00001', new Blob([]), 'notes')).rejects.toMatchObject({ status: 401 })
+      expect(captureAvailable()).toBe(true)
+    } finally {
+      setUnauthorizedHandler(null)
+    }
+  })
+
+  it('a board this person cannot open any more (its own 404 words) hides nothing', async () => {
+    answer = notFound('This board isn’t there, or you can’t open it.')
+    await expect(captureBoardImage('b-board00001', 'img-1', 'notes')).rejects.toMatchObject({ status: 404 })
+    await expect(capturePhoto('b-board00001', new Blob([]), 'notes')).rejects.toMatchObject({ status: 404 })
+    await expect(captureTranscript('b-board00001', 'x')).rejects.toMatchObject({ status: 404 })
+    expect(photoCaptureAvailable()).toBe(true)
+    expect(captureAvailable()).toBe(true)
   })
 
   it('an answer that is not the contract’s is refused', async () => {

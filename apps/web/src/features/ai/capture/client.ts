@@ -19,7 +19,9 @@
 // transcript route's means the api has no capture at all (everything is hidden). The board image's own 404s (an
 // image that is not there) have words of their own and hide nothing. With no board open, or a status not read yet,
 // nothing is available and every capture rejects without a request. Requests are same-origin, with the session
-// cookie; the photo is a raw image/jpeg body, the rest JSON. Nothing about them is stored.
+// cookie; the photo is a raw image/jpeg body, the rest JSON through the app's api client (so a 401 signs the page out,
+// as any other request's does; the photo's raw body cannot go through it, and its 401 is shown in the dialog, as an
+// upload's is). Nothing about them is stored.
 import {
   type CaptureMode,
   type CaptureQuota,
@@ -30,7 +32,7 @@ import {
   LOBBY_CLIENT_HEADER,
   LOBBY_CLIENT_REV,
 } from '@draftroom/contracts'
-import { ApiError, errorFromResponse } from '../../../api/client.ts'
+import { ApiError, api, errorFromResponse, isApiError } from '../../../api/client.ts'
 import type { LobbyCanvas } from '../../../canvas/api/index.ts'
 import { atom } from '../../../lib/signals.ts'
 import { canBuildWithAi } from '../ported/gate.ts'
@@ -95,8 +97,36 @@ const learn = (patch: Partial<CaptureFacts>) => captureFacts.set({ ...captureFac
 
 type Kind = 'photo' | 'board-image' | 'transcript'
 
+/** A refusal: the unknown route's 404 (or vision off) makes this page stop offering what is not there. */
+function refused(kind: Kind, err: ApiError): Error {
+  if (err.status === 404 && err.code === 'NOT_FOUND' && err.message === UNKNOWN_ROUTE) {
+    if (kind === 'transcript') learn({ missing: true })
+    else learn({ visionOff: true })
+    return new CaptureUnavailableError()
+  }
+  return err
+}
+
+/** A JSON capture (the board image, the transcript) through the app's api client (see the header). */
+async function sendJson(
+  kind: Exclude<Kind, 'photo'>,
+  path: string,
+  body: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<CaptureResponse> {
+  let answer: CaptureResponse
+  try {
+    answer = await api.request('POST', path, { body, schema: CaptureResponse, ...(signal ? { signal } : {}) })
+  } catch (e) {
+    throw isApiError(e) ? refused(kind, e) : e
+  }
+  learn({ quota: answer.quota })
+  return answer
+}
+
+/** The photo: a raw image/jpeg body, which the app's api client cannot send (it sends JSON). */
 async function send(
-  kind: Kind,
+  kind: 'photo',
   path: string,
   init: { body: BodyInit; contentType: string; signal?: AbortSignal },
 ): Promise<CaptureResponse> {
@@ -119,16 +149,7 @@ async function send(
     if (init.signal?.aborted) throw e
     throw new ApiError('network', 0, 'NETWORK', 'Can’t reach Lobby. Check your connection and try again.')
   }
-  if (!res.ok) {
-    const err = await errorFromResponse(res)
-    // the unknown route's 404 (or vision off): this page stops offering what is not there
-    if (err.status === 404 && err.code === 'NOT_FOUND' && err.message === UNKNOWN_ROUTE) {
-      if (kind === 'transcript') learn({ missing: true })
-      else learn({ visionOff: true })
-      throw new CaptureUnavailableError()
-    }
-    throw err
-  }
+  if (!res.ok) throw refused(kind, await errorFromResponse(res))
   const parsed = CaptureResponse.safeParse(await res.json().catch(() => undefined))
   if (!parsed.success)
     throw new ApiError(
@@ -162,11 +183,7 @@ export async function captureBoardImage(
   opts: { signal?: AbortSignal } = {},
 ): Promise<CaptureResponse> {
   if (!photoCaptureAvailable()) throw new CaptureUnavailableError()
-  return send('board-image', captureBoardImagePath(boardId), {
-    body: JSON.stringify({ elementId, mode }),
-    contentType: 'application/json',
-    ...(opts.signal ? { signal: opts.signal } : {}),
-  })
+  return sendJson('board-image', captureBoardImagePath(boardId), { elementId, mode }, opts.signal)
 }
 
 export async function captureTranscript(
@@ -177,9 +194,10 @@ export async function captureTranscript(
 ): Promise<CaptureResponse> {
   if (!captureAvailable()) throw new CaptureUnavailableError()
   const t = title?.trim()
-  return send('transcript', captureTranscriptPath(boardId), {
-    body: JSON.stringify({ text, ...(t ? { title: t } : {}) }),
-    contentType: 'application/json',
-    ...(opts.signal ? { signal: opts.signal } : {}),
-  })
+  return sendJson(
+    'transcript',
+    captureTranscriptPath(boardId),
+    { text, ...(t ? { title: t } : {}) },
+    opts.signal,
+  )
 }
