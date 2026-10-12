@@ -105,6 +105,7 @@ import {
   readOnlyDropNotice,
   withoutElements,
 } from './content.ts'
+import { installFeaturesAfterWelcome } from './features-install.ts'
 import { CRASH_PROBE_FEATURE, PROBE_FEATURE } from './probe.tsx'
 import { LobbyBoardSession, type LobbyBoardSnapshot } from './session.ts'
 import { duplicateLobbyData } from './tx.ts'
@@ -507,31 +508,16 @@ function LobbyBoardScreen({
 
   // CANVAS_FEATURES, once per canvas, after the first welcome (docs/EXCALIDRAW-CONTRACTS.md §4)
   const welcomed = snap.welcomed
+  // (wave N.1: on a large board a frame and a task after it; ./features-install.ts)
   useEffect(() => {
     if (!ctx || !welcomed) return
-    let uninstall: (() => void) | null = null
-    const install = () => {
+    return installFeaturesAfterWelcome(ctx.canvas, FEATURES_LATER_ABOVE, () => {
       // wave N (the N1 specs): the features' install on the page's timeline
       timelineMark('lobby.features.start')
-      uninstall = installCanvasFeatures(CANVAS_FEATURES, ctx)
+      const uninstall = installCanvasFeatures(CANVAS_FEATURES, ctx)
       timelineMark('lobby.features.end')
-    }
-    // wave N.1: on a large board the features' first computations (their overlays over thousands of elements) were
-    // most of the welcome's long task; they install once the board has shown itself editable (the next frame), in a
-    // task of their own. A smaller board installs them at once, as before.
-    if (ctx.canvas.items().length <= FEATURES_LATER_ABOVE) {
-      install()
-      return () => uninstall?.()
-    }
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const frame = requestAnimationFrame(() => {
-      timer = setTimeout(install, 0)
+      return uninstall
     })
-    return () => {
-      cancelAnimationFrame(frame)
-      if (timer !== null) clearTimeout(timer)
-      uninstall?.()
-    }
   }, [ctx, welcomed])
   // a feature tool's onExit when another tool takes over (Escape, a toolbar button, setTool)
   useEffect(() => {
