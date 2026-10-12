@@ -7,11 +7,15 @@
 // previous time as the first one did, even while the first write is still in flight (the promise is shared).
 //
 // Wave N.1 (wave N follow-up 5): a "seen" inside the interval (Mark all seen, or the leave beacon of a short stay) is
-// not dropped: its time is KEPT (the latest one) and written when the interval ends, so the server holds it, not only
-// the tab that sent it. That write is the interval's one write, and it starts the next interval. It is written by
-// whichever comes first: the gate's tick (`flushDue`, every VISIT_TRAIL_TICK_MS), the next call for the same key once
-// the interval is over (`settle`: a visit must read it as its previous time), the key being forgotten past the cap,
-// or the api closing (`flushAll`). seen_at never moves back (GREATEST), so a late or repeated write changes nothing.
+// not dropped: its time is KEPT (the latest one) and written once the interval has ended, so the server holds it, not
+// only the tab that sent it. It is written by whichever comes first: the gate's tick (`flushDue`, every
+// VISIT_TRAIL_TICK_MS), the next call for the same key once the interval is over (`settle`: a visit must read it as
+// its previous time), the key being forgotten past the cap, or the api closing (`flushAll`). That write does not begin
+// an interval of its own: the intervals stay those of the calls (so a Mark all seen just after it is written at once,
+// and a call inside an interval answers as before wave N.1), which allows at most two writes in any 10 s. A visit inside
+// an interval answers as before (the earlier visit's answer, else the stored time), not the kept time: tabs opened
+// together agree, and the tab that marked it seen remembers so (web visits/ack.ts); every open after the interval reads
+// it. seen_at never moves back (GREATEST), so a late or repeated write changes nothing.
 // The key is the person's own id and the board: nothing here is ever looked up by anyone else.
 
 import type { VisitAnswer } from '@draftroom/contracts'
@@ -82,7 +86,7 @@ export class VisitWriteGate {
   async settle(key: string, atMs: number): Promise<void> {
     const e = this.entries.get(key)
     if (!e) return
-    if (e.trail && this.ended(e, atMs)) this.flush(key, e, null)
+    if (e.trail && this.ended(e, atMs)) this.flush(key, e)
     await e.writing
   }
 
@@ -90,7 +94,7 @@ export class VisitWriteGate {
   note(key: string, atMs: number, answer: Promise<VisitAnswer> | null): Entry {
     const prev = this.entries.get(key)
     // a kept "seen" of the entry this one replaces is written, never dropped (an older time changes nothing: GREATEST)
-    if (prev?.trail) this.flush(key, prev, null)
+    if (prev?.trail) this.flush(key, prev)
     const e: Entry = { at: atMs, answer, trail: null, writing: null }
     this.entries.delete(key)
     this.entries.set(key, e)
@@ -98,7 +102,7 @@ export class VisitWriteGate {
       const oldest = this.entries.keys().next().value
       if (oldest === undefined) break
       const gone = this.entries.get(oldest)
-      if (gone?.trail) this.flush(oldest, gone, null)
+      if (gone?.trail) this.flush(oldest, gone)
       this.entries.delete(oldest)
     }
     return e
@@ -116,21 +120,13 @@ export class VisitWriteGate {
     this.trails.add(key)
   }
 
-  /**
-   * The "seen" time kept for `key`, not written yet (null when none): a visit inside the interval answers it when it is
-   * newer than what it would answer otherwise, so another tab or device opened right after Mark all seen agrees.
-   */
-  keptAt(key: string): number | null {
-    return this.entries.get(key)?.trail?.at ?? null
-  }
-
   /** A write that failed is not a write: the next call may try again. */
   forget(key: string, entry: Entry): void {
     if (this.entries.get(key) === entry && !entry.trail && !entry.writing) this.entries.delete(key)
     else if (this.entries.get(key) === entry) entry.at = Number.NEGATIVE_INFINITY // ended: the next call writes
   }
 
-  /** The tick: writes every kept "seen" whose interval has ended at `atMs`; each write starts the next interval. */
+  /** The tick: writes every kept "seen" whose interval has ended at `atMs`. */
   flushDue(atMs: number): void {
     for (const key of [...this.trails]) {
       const e = this.entries.get(key)
@@ -138,7 +134,7 @@ export class VisitWriteGate {
         this.trails.delete(key)
         continue
       }
-      if (this.ended(e, atMs)) this.flush(key, e, atMs)
+      if (this.ended(e, atMs)) this.flush(key, e)
     }
   }
 
@@ -146,26 +142,18 @@ export class VisitWriteGate {
   async flushAll(): Promise<void> {
     for (const key of [...this.trails]) {
       const e = this.entries.get(key)
-      if (e?.trail) this.flush(key, e, null)
+      if (e?.trail) this.flush(key, e)
       else this.trails.delete(key)
     }
     await Promise.all([...this.inflight])
   }
 
-  /**
-   * Writes `e`'s kept "seen" (taken from it at once). `startsAt`: the tick's write is the one write of the interval
-   * that begins then (a "seen" right after it is kept again); null when a caller's own write follows (it notes its
-   * own interval) or the api is closing.
-   */
-  private flush(key: string, e: Entry, startsAt: number | null): void {
+  /** Writes `e`'s kept "seen" (taken from it at once); the entry's interval is left as it is. */
+  private flush(key: string, e: Entry): void {
     const t = e.trail
     if (!t) return
     e.trail = null
     this.trails.delete(key)
-    if (startsAt !== null) {
-      e.at = startsAt
-      e.answer = null
-    }
     const w = t
       .write(new Date(t.at))
       .catch(() => {}) // a lost kept "seen" only means the next visit shows a little more (nothing is logged)

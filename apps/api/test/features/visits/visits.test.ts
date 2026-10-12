@@ -281,16 +281,19 @@ describe('a "seen" inside the write interval is kept and written when the interv
     expect(last.before).toBeGreaterThan(first.seenAt)
   })
 
-  it('the kept write starts the next interval: a "seen" right after it is kept again, not written at once', async () => {
+  // The e2e (n4-since-visit, "the next open shows none") found it: when the tick's write of a kept time began an
+  // interval of its own, the Mark all seen that followed was kept instead of written, and another browser opened right
+  // after it read the older stored time and showed the chip again. The tick's write begins no interval now.
+  it('the kept write begins no interval of its own: a "seen" once the call’s interval is over is written at once', async () => {
     const { win } = await seenWithin()
     w.api.clock.advance(VISIT_WRITE_MIN_INTERVAL_MS)
-    await storedSoon(w.board, w.bob.userId, win)
-    const written = await stored(w.board, w.bob.userId)
+    await storedSoon(w.board, w.bob.userId, win) // the tick's write
     w.api.clock.advance(1_000)
-    const again = await seen(w.bob, w.board)
-    expect(await stored(w.board, w.bob.userId)).toBe(written)
-    w.api.clock.advance(VISIT_WRITE_MIN_INTERVAL_MS)
-    await storedSoon(w.board, w.bob.userId, again)
+    const markAll = await seen(w.bob, w.board) // the visit's interval is over: written now, not kept
+    within(await stored(w.board, w.bob.userId), markAll)
+    // and another browser opened right after it reads it
+    w.api.clock.advance(500)
+    within(parseAnswer((await w.bob.req('POST', visitPath(w.board))).body).previousSeenAt, markAll)
   })
 
   it('closing the api writes what it kept (a deploy inside the interval loses no Mark all seen)', async () => {
@@ -326,20 +329,23 @@ describe('a "seen" inside the write interval is kept and written when the interv
     within(parseAnswer((await w.bob.req('POST', visitPath(w.board))).body).previousSeenAt, win)
   })
 
-  // The e2e (n4-since-visit, "the next open shows none") found it: once the tick's write of one kept time began an
-  // interval, a visit inside it answered the STORED time while a newer "seen" (Mark all seen) was kept, so another
-  // browser opened right after Mark all seen showed the chip again. It answers the kept time now.
-  it('once the tick wrote one kept time, a visit in the interval it began answers a newer kept "seen"', async () => {
+  // n4-since-visit's same-tab reload: inside the interval of a "seen" write, a visit answers the stored time, and a
+  // reload after a kept Mark all seen answers the same (the tab remembers what it marked seen, web visits/ack.ts).
+  it('inside a "seen" write’s interval a visit and a reload after a kept "seen" read the same stored time', async () => {
     parseAnswer((await w.bob.req('POST', visitPath(w.board))).body)
-    w.api.clock.advance(4_000)
-    const firstSeen = await seen(w.bob, w.board)
-    w.api.clock.advance(VISIT_WRITE_MIN_INTERVAL_MS)
-    await storedSoon(w.board, w.bob.userId, firstSeen) // the tick's write: its interval starts now
-    w.api.clock.advance(2_000)
-    const markAll = await seen(w.bob, w.board) // kept again
+    pass()
+    expect((await w.bob.req('POST', visitSeenPath(w.board))).statusCode).toBe(204) // the leave beacon: written
+    const left = (await stored(w.board, w.bob.userId)) as number
+    w.api.clock.advance(1_500)
+    const open = parseAnswer((await w.bob.req('POST', visitPath(w.board))).body)
+    expect(open).toEqual({ previousSeenAt: left, seenAt: left })
     w.api.clock.advance(1_000)
-    const other = parseAnswer((await w.bob.req('POST', visitPath(w.board))).body)
-    within(other.previousSeenAt, markAll)
+    const markAll = await seen(w.bob, w.board) // kept
+    w.api.clock.advance(500)
+    expect(parseAnswer((await w.bob.req('POST', visitPath(w.board))).body)).toEqual(open)
+    // written once the interval is over
+    w.api.clock.advance(VISIT_WRITE_MIN_INTERVAL_MS)
+    await storedSoon(w.board, w.bob.userId, markAll)
   })
 
   it('another person’s "seen" is kept apart', async () => {
