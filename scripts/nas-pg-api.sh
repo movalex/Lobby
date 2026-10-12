@@ -5,7 +5,7 @@
 #
 #   DRY_RUN=1 (the default): every SSH/Docker command is printed, nothing touches the NAS.
 #   DRY_RUN=0: under the standing NAS approval for throwaway draftroom-* names.
-# Usage: DRY_RUN=0 bash scripts/nas-pg-api.sh <commit> [--max-workers N] [--keep]
+# Usage: DRY_RUN=0 bash scripts/nas-pg-api.sh <commit> [--max-workers N] [--only api|db] [--keep]
 #
 # What it does, in order: preflight (df, MemAvailable, nothing named draftroom-pg* yet), the commit's tracked
 # source (git archive; refused if it would hold .env*, .data, node_modules or test-results) into
@@ -15,7 +15,9 @@
 # removed) with UTF8, max_connections 300 and its data on the container's writable layer (a 16 MB tmpfs over
 # /var/lib/postgresql keeps Docker from creating an anonymous volume), fsync/synchronous_commit/
 # full_page_writes off (the tests check locks, races and migrations, not durability), then
-# `vitest run --project api --maxWorkers=N` and `vitest run --project packages packages/db` in a runner
+# `vitest run --project api --maxWorkers=N` and `vitest run --project packages packages/db --maxWorkers=1` (its
+# files share one database and their PGlite workers outgrew the 2.5 GB runner: SIGKILLs, then a dropped relation
+# under a neighbour, waves N and N.1) in a runner
 # container, and the cleanup by name (also on failure, unless --keep): containers, the network, the folder.
 # Never `prune`, `rm $(docker ps -aq)`, `compose down`, a Docker restart, or anything not named draftroom-pg*.
 # Evidence (logs, vitest JSON) goes to $EVIDENCE_DIR on the workstation.
@@ -44,15 +46,18 @@ SHA="${1:?usage: nas-pg-api.sh <commit> [--max-workers N] [--keep]}"
 shift
 MW=4
 KEEP=0
+ONLY=
 while (($#)); do
   case "$1" in
     --max-workers) MW="$2"; shift ;;
+    --only) ONLY="$2"; shift ;;
     --keep) KEEP=1 ;;
     *) log "unknown option $1"; exit 2 ;;
   esac
   shift
 done
 [[ "$MW" =~ ^[0-9]+$ ]] || { log "--max-workers takes a number"; exit 2; }
+[[ -z "$ONLY" || "$ONLY" == api || "$ONLY" == db ]] || { log "--only takes api or db"; exit 2; }
 
 nas() {
   if [[ "$DRY_RUN" != "0" ]]; then
@@ -157,7 +162,7 @@ run_suite() {
   sed 's/\x1b\[[0-9;]*m//g' "$EVIDENCE_DIR/$name.log" | grep -E '^\s+(Test Files|Tests|Duration)' | tee -a "$LOG" || true
   log "suite $name exit $code"
 }
-run_suite api --project api --maxWorkers="$MW"
-run_suite db --project packages packages/db
+[[ "$ONLY" == db ]] || run_suite api --project api --maxWorkers="$MW"
+[[ "$ONLY" == api ]] || run_suite db --project packages packages/db --maxWorkers=1
 nas "docker logs --tail 50 $C_PG" >"$EVIDENCE_DIR/postgres.log" 2>&1 || true
 log "done; evidence in $EVIDENCE_DIR"
