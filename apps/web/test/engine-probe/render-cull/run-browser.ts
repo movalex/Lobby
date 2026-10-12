@@ -2,7 +2,7 @@
  * Wave N (WS1, N1-5) probe: a render-override offset still culls on the pinned nightly (the level-of-detail pass's
  * seam, apps/web/src/canvas/lod/cull.ts), against a mounted <Excalidraw> of the pinned build in headless Chromium. The
  * check itself is `browser/render-cull.ts` (`checkRenderCull`). `pnpm probe:browser` runs it after the addFiles probe
- * (add-files/run-browser.ts imports this file when it is done).
+ * (add-files/run-browser.ts imports this file when it is done), then wave O's pan probe (../pan/run-browser.ts).
  *
  *   node apps/web/test/engine-probe/render-cull/run-browser.ts [--port=7753]   (default: E2E_PORT_BASE + 37 when set)
  */
@@ -35,3 +35,5 @@ try {
 } finally {
   await s.close()
 }
+// wave O (WO-PAN): the pan speed-ups probe, in its own page (it only ever sets a failing exit code)
+await import('../pan/run-browser.ts')
