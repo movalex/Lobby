@@ -1,6 +1,7 @@
 // Wave N.1 (wave N follow-up 5, "one clock"): the api's measure of the sync server's clock (src/sync-clock.ts), which
 // the visit times are stored on. NTP-style: offset = sync - (sent + received) / 2; a slow round trip is not used; of
-// the kept samples the shortest round trip wins; a failure keeps what is known; unknown means the api's own clock.
+// the kept samples the shortest round trip wins, of those still recent that agree with the newest (so a clock step is
+// followed at once); a failure keeps what is known; unknown means the api's own clock.
 import { describe, expect, it } from 'vitest'
 import { createSyncClock, SYNC_CLOCK } from '../src/sync-clock.ts'
 
@@ -49,7 +50,8 @@ describe('createSyncClock', () => {
     const w = world()
     w.answers.push({ skew: 9_000, rtt: SYNC_CLOCK.maxRttMs + 1 })
     expect(await w.clock.measure()).toBeNull()
-    w.answers.push({ skew: 100, rtt: 400 }, { skew: 120, rtt: 6 }, { skew: 300, rtt: 300 })
+    // offsets that agree within half their round trips (300 ± 150 could not be 120 ± 3: a clock would have moved)
+    w.answers.push({ skew: 100, rtt: 400 }, { skew: 120, rtt: 6 }, { skew: 200, rtt: 300 })
     await w.clock.measure()
     await w.clock.measure()
     await w.clock.measure()
@@ -60,6 +62,37 @@ describe('createSyncClock', () => {
       await w.clock.measure()
     }
     expect(w.clock.offsetMs()).toBe(150)
+  })
+
+  it('a clock step is followed at the next measurement, though the older samples had shorter round trips', async () => {
+    // wave N.1 review: the shortest of the last 5 had no age bound, so after a step the old offset won for 25 min
+    const w = world()
+    for (let i = 0; i < SYNC_CLOCK.keep; i++) {
+      w.answers.push({ skew: 40, rtt: 4 })
+      await w.clock.measure()
+      w.advance(SYNC_CLOCK.intervalMs)
+    }
+    expect(w.clock.offsetMs()).toBe(40)
+    // the sync's clock steps 3 s ahead (an NTP correction); its next answer comes back a little slower
+    w.answers.push({ skew: 3_040, rtt: 6 })
+    expect(await w.clock.measure()).toBe(3_040)
+    expect(w.logs.at(-1)).toBe("[clock] the sync's clock moved: now +3040 ms from the api's")
+    w.advance(SYNC_CLOCK.intervalMs)
+    w.answers.push({ skew: 3_041, rtt: 8 })
+    expect(await w.clock.measure()).toBe(3_040) // the old samples stay out; the shorter of the new ones
+  })
+
+  it('a sample from more than two intervals before the newest is not used, however short its round trip', async () => {
+    const w = world()
+    w.answers.push({ skew: 100, rtt: 2 })
+    await w.clock.measure()
+    w.advance(SYNC_CLOCK.intervalMs)
+    // agrees with the 2 ms one within their error bounds (half of each round trip): the 2 ms one is still better
+    w.answers.push({ skew: 110, rtt: 30 })
+    expect(await w.clock.measure()).toBe(100)
+    w.advance(SYNC_CLOCK.intervalMs)
+    w.answers.push({ skew: 112, rtt: 30 })
+    expect(await w.clock.measure()).toBe(112)
   })
 
   it('a failed read keeps the offset in use; a large move is logged (the offset only)', async () => {

@@ -17,10 +17,15 @@
 //    B9/L1 runs, docs/PROGRESS.md). On top of that, with DRAFTROOM_WS_DEFLATE=on, each socket keeps its deflate
 //    context (windowBits 15, memLevel 7: 192 KiB) and an inflate window: about 60 MB at 260 sessions. 310 + 60 + 160
 //    MiB of queues is past 512 MB before the budget closes anything; 310 + 60 + 80 MiB (84 MB) is about 455 MB, inside
-//    the instance with room for the garbage collector. The sum also counts a frame shared by many sockets (one
-//    broadcast string, the one cached snapshot) once per socket, so the bytes really held are at most this, and
-//    usually far less: the line is reached on the way to memory trouble, not in it. A larger instance can raise the
-//    key; a value only ever needs a restart.
+//    the instance with room for the garbage collector. A larger instance can raise the key; a value only ever needs a
+//    restart.
+//    A frame many sockets hold is one buffer (wave N.1 review): the cached gzip snapshot of a join storm (40 joiners of
+//    a board with a 2 MiB snapshot were 80 MiB by the per-socket sum, the close line, while one buffer was held, and
+//    the joiners, the largest queues, were the ones sent to reconnect, to ask for a reset again). ws writes a binary
+//    frame to each socket's buffer without copying it, so the sum counts each such frame once while any session
+//    holds it, queued or in its socket's buffer until its write completes (the send callback); each session's own
+//    bytes are the rest of its `pending`. A text frame is not counted once: ws copies it into each socket's buffer
+//    as it writes it (and deflates it per socket), so a broadcast string is per-socket memory once written.
 //
 // Large frames are written in slices (B9's event-loop tail): a frame of DEFER_ABOVE_BYTES or more (a
 // welcome with a 200-entry roster or a catch-up, the gzip snapshot, the `changes` of a 100-note frame drag:
@@ -44,16 +49,32 @@ export const OUTBOUND = {
   closeFactor: 1.25,
 } as const
 
-/** One session as the budget sees it: its bytes waiting, and how to close it (4000 RECONNECT). */
-export interface BudgetEntry {
-  readonly pending: number
-  close(): void
+/** A frame other sessions may hold too (the cached gzip snapshot), as one session's budget entry names it. */
+export interface SharedPart {
+  /** the frame itself: the same object in every session that holds it */
+  readonly frame: object
+  /** its size, counted once however many sessions hold it */
+  readonly bytes: number
+  /** how many of this session's `pending` bytes are this frame */
+  readonly counted: number
 }
 
 /**
+ * One session as the budget sees it: its bytes waiting, the frames in them that other sessions may hold too, and
+ * how to close it (4000 RECONNECT).
+ */
+export interface BudgetEntry {
+  readonly pending: number
+  readonly shared?: readonly SharedPart[]
+  close(): void
+}
+
+const NO_PARTS: readonly SharedPart[] = Object.freeze([])
+
+/**
  * The process-wide outbound budget (M7-5). `check` (the service's 250 ms timer) sums every session's bytes
- * waiting, sets `over` (every Outbound reads it: congested, no presence) and closes the largest queues above
- * `closeFactor` times the budget. `queued` is the last sum (lobby_outbound_bytes_queued).
+ * waiting, a frame many of them hold once, sets `over` (every Outbound reads it: congested, no presence) and
+ * closes the largest queues above `closeFactor` times the budget. `queued` is the last sum.
  */
 export class OutboundBudget {
   /** the budget, bytes */
@@ -69,17 +90,42 @@ export class OutboundBudget {
   /** Sums `entries`, closes the largest above closeFactor times the budget; returns how many it closed. */
   check(entries: Iterable<BudgetEntry>): number {
     const list = [...entries]
+    const parts = list.map((e) => e.shared ?? NO_PARTS)
+    // each shared frame once, while any session holds it; a session's own bytes are the rest of its pending
+    const holders = new Map<object, { bytes: number; n: number }>()
+    const own = list.map((e, i) => {
+      let n = Math.max(0, e.pending)
+      for (const p of parts[i] as readonly SharedPart[]) {
+        n -= p.counted
+        const h = holders.get(p.frame)
+        if (h) h.n++
+        else holders.set(p.frame, { bytes: p.bytes, n: 1 })
+      }
+      return Math.max(0, n)
+    })
     let total = 0
-    for (const e of list) total += Math.max(0, e.pending)
+    for (const n of own) total += n
+    for (const h of holders.values()) total += h.bytes
     let closed = 0
     const closeAbove = this.bytes * OUTBOUND.closeFactor
     if (total > closeAbove) {
-      list.sort((a, b) => b.pending - a.pending)
-      for (const e of list) {
+      // largest first, by what closing the session frees: its own bytes and the shared frames no one else holds
+      const frees = own.map((n, i) => {
+        let f = n
+        for (const p of parts[i] as readonly SharedPart[]) if (holders.get(p.frame)?.n === 1) f += p.bytes
+        return f
+      })
+      const order = own.map((_, i) => i).sort((a, b) => (frees[b] as number) - (frees[a] as number))
+      for (const i of order) {
         if (total <= closeAbove) break
-        const n = Math.max(0, e.pending)
+        const e = list[i] as BudgetEntry
         e.close()
-        total -= n
+        total -= own[i] as number
+        for (const p of parts[i] as readonly SharedPart[]) {
+          const h = holders.get(p.frame) as { bytes: number; n: number }
+          h.n--
+          if (h.n === 0) total -= h.bytes
+        }
         closed++
       }
     }
@@ -104,6 +150,15 @@ type Frame = string | Uint8Array
 type Entry = Frame | Promise<Frame | null>
 
 const sizeOf = (f: Frame) => (typeof f === 'string' ? f.length : f.byteLength)
+
+/** A binary frame this session holds, which other sessions may hold too (the budget counts it once). */
+interface Hold {
+  readonly frame: Uint8Array
+  /** handed to the socket, whose write has not completed yet */
+  written: boolean
+  /** bytes handed to the socket after it while it was in its buffer (the buffer drains in order) */
+  after: number
+}
 
 /** The process-wide flusher of deferred sessions: dirty sessions written in slices, in the order they were marked. */
 class Flusher {
@@ -144,6 +199,8 @@ export class Outbound {
   closed = false
   /** bytes handed to the socket (metrics) */
   sentBytes = 0
+  /** the binary frames queued or in the socket's buffer (`shared`) */
+  private readonly holds: Hold[] = []
 
   private readonly socket: ElementSocket
   private readonly onOverflow: () => void
@@ -166,6 +223,34 @@ export class Outbound {
     return (this.socket.bufferedAmount ?? 0) + this.queuedBytes
   }
 
+  /**
+   * The binary frames in `pending` (the gzip snapshot: one buffer, written to every joiner's socket uncopied), each
+   * with how many of `pending`'s bytes are it, for the process-wide budget, which counts each frame once.
+   */
+  get shared(): readonly SharedPart[] {
+    if (!this.holds.length) return NO_PARTS
+    const buffered = this.socket.bufferedAmount ?? 0
+    return this.holds.map((h) => {
+      const bytes = h.frame.byteLength
+      // queued: all of it; in the socket's buffer: what of the buffer was not written after it (at most all of it)
+      const counted = h.written ? Math.min(bytes, Math.max(0, buffered - h.after)) : bytes
+      return { frame: h.frame, bytes, counted }
+    })
+  }
+
+  private hold(frame: Uint8Array): void {
+    this.holds.push({ frame, written: false, after: 0 })
+  }
+
+  private queuedHold(frame: Uint8Array): Hold | undefined {
+    return this.holds.find((h) => h.frame === frame && !h.written)
+  }
+
+  private release(h: Hold): void {
+    const i = this.holds.indexOf(h)
+    if (i >= 0) this.holds.splice(i, 1)
+  }
+
   /** Whether cursor frames should be skipped (backpressure: this session's, or the process's budget, M7-5). */
   get congested(): boolean {
     return this.budget.over || this.pending > OUTBOUND.skipPresenceAbove
@@ -175,6 +260,7 @@ export class Outbound {
     if (this.closed) return
     const known = typeof entry === 'string' || entry instanceof Uint8Array
     if (known) this.queuedBytes += sizeOf(entry)
+    if (entry instanceof Uint8Array) this.hold(entry)
     this.queue.push(entry)
     if (this.deferred) return
     if (!known || sizeOf(entry) >= DEFER_ABOVE_BYTES) {
@@ -202,6 +288,7 @@ export class Outbound {
             this.flushing = false
             this.queue[0] = f ?? ''
             if (f) this.queuedBytes += sizeOf(f)
+            if (f instanceof Uint8Array && !this.closed) this.hold(f)
             this.flush()
           },
           () => {
@@ -215,16 +302,25 @@ export class Outbound {
       this.queue.shift()
       const n = sizeOf(head)
       this.queuedBytes -= n
+      const hold = typeof head === 'string' ? undefined : this.queuedHold(head)
+      if (hold) this.release(hold)
       if (n === 0) continue
       if (this.socket.readyState !== 1) continue
       try {
-        // M7-2: the one binary frame is the gzip snapshot: deflating it again costs CPU and saves nothing
+        for (const h of this.holds) if (h.written) h.after += n
+        // M7-2: the one binary frame is the gzip snapshot: deflating it again costs CPU and saves nothing. It is
+        // held until ws has written all of it (the callback runs then, or with an error once the socket is gone)
         if (typeof head === 'string') this.socket.send(head)
-        else this.socket.send(head, NO_COMPRESS)
+        else if (hold) {
+          hold.written = true
+          this.holds.push(hold)
+          this.socket.send(head, NO_COMPRESS, () => this.release(hold))
+        } else this.socket.send(head, NO_COMPRESS)
         this.sentBytes += n
         this.onSent(n)
       } catch {
         // a socket that failed mid-send is closing; its close handler cleans up
+        if (hold) this.release(hold)
       }
     }
     if (this.pending > OUTBOUND.closeAbove) this.overflow()
@@ -236,6 +332,7 @@ export class Outbound {
     this.closed = true
     this.queue.length = 0
     this.queuedBytes = 0
+    this.holds.length = 0
     try {
       this.socket.close(CLOSE_RECONNECT, 'RECONNECT')
     } catch {
@@ -248,5 +345,6 @@ export class Outbound {
     this.closed = true
     this.queue.length = 0
     this.queuedBytes = 0
+    this.holds.length = 0
   }
 }

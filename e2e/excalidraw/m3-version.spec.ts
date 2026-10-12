@@ -224,3 +224,44 @@ test('the dashboard with words typed into the New board dialog: a newer build is
     await p.context.close()
   }
 })
+
+// Wave N.1 review: a form's field outside any dialog counts too (the sidebar's New project name, half typed); the
+// dashboard's search does not hold an update back (a query is typed again in a moment).
+test('the dashboard with a project name half typed in the sidebar: no reload while hidden; a search alone does not stop one', async ({
+  browser,
+}) => {
+  test.setTimeout(120_000)
+  const p = await signedInContext(browser, freshHandle('m3p'), {
+    name: 'Pat Project',
+    email: 'lobby-test-m3p@darkburn.com',
+  })
+  try {
+    await p.page.clock.install()
+    await openDashboard(p.page, personalWorkspace(p.me))
+    const { state } = await serveVersion(p.page)
+    state.commit = NEWER
+    await p.page.evaluate(() => {
+      ;(window as { __m3?: number }).__m3 = 1
+    })
+    await p.page.getByTestId('dashboard-search').fill('roadmap')
+    await p.page.getByTestId('create-project').click()
+    await p.page.getByTestId('create-project-name').fill('Q4 launch')
+    await setShown(p.page, state, false)
+    await setShown(p.page, state, true)
+    await expect.poll(() => state.asks.length).toBe(1)
+    await setShown(p.page, state, false)
+    await p.page.waitForTimeout(800)
+    expect(await marker(p.page)).toBe(1)
+    await setShown(p.page, state, true)
+    await expect(p.page.getByTestId('stale-chunk-notice')).toContainText('Lobby has been updated')
+    await expect(p.page.getByTestId('create-project-name')).toHaveValue('Q4 launch')
+    expect(await marker(p.page)).toBe(1)
+    // the name given up (Escape), only the search left: the next hidden moment reloads into the new build
+    await p.page.getByTestId('create-project-name').press('Escape')
+    await expect(p.page.getByTestId('create-project-name')).toHaveCount(0)
+    await setShown(p.page, state, false)
+    await expect.poll(() => marker(p.page).catch(() => 'reloading'), { timeout: 30_000 }).toBeUndefined()
+  } finally {
+    await p.context.close()
+  }
+})

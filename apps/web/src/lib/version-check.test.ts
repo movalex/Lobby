@@ -403,27 +403,87 @@ describe('N1 (wave M follow-up 3): a hidden tab with words typed into a dialog i
   })
 })
 
-describe('domHasTypedWork: words in a field of an open dialog or the feedback form', () => {
-  const field = (type: string | null, value: string) => ({ type, value })
-  const doc = (fields: { type: string | null; value: string }[]) => ({
-    querySelectorAll: (selector: string) => {
-      // the selector names the places a person types into: dialogs and the feedback form
-      expect(selector).toMatch(/dialog/)
-      return fields
-    },
+describe('domHasTypedWork: words in a field of an open dialog or a form', () => {
+  /** A selector list's top-level parts (a comma inside `:is(...)` separates nothing). */
+  const parts = (selector: string) => {
+    const out: string[] = []
+    let depth = 0
+    let cur = ''
+    for (const ch of selector) {
+      if (ch === '(') depth++
+      if (ch === ')') depth--
+      if (ch === ',' && depth === 0) {
+        out.push(cur.trim())
+        cur = ''
+      } else cur += ch
+    }
+    out.push(cur.trim())
+    return out
+  }
+  /**
+   * A field as a page holds it: its tag, type, value and the places it sits in (the selectors its ancestors
+   * match). The fake document answers `querySelectorAll` ("<field>" or "<ancestor> <field>" parts) and each
+   * field's `closest` by those places, so what is matched is what the selectors name.
+   */
+  interface Fake {
+    tag: 'input' | 'textarea'
+    type: string
+    value: string
+    places: string[]
+  }
+  const field = (type: string, value: string, places: string[] = []): Fake => ({
+    tag: type === 'textarea' ? 'textarea' : 'input',
+    type,
+    value,
+    places,
+  })
+  const matches = (f: Fake, part: string) => {
+    const space = part.indexOf(' ')
+    const [ancestor, target] = space < 0 ? [null, part] : [part.slice(0, space), part.slice(space + 1)]
+    const isField = target === f.tag || target === ':is(input, textarea)'
+    return isField && (ancestor === null || f.places.includes(ancestor))
+  }
+  const doc = (fields: Fake[]) => ({
+    querySelectorAll: (selector: string) =>
+      fields
+        .filter((f) => parts(selector).some((p) => matches(f, p)))
+        .map((f) => ({
+          type: f.type,
+          value: f.value,
+          closest: (s: string) => (parts(s).some((p) => f.places.includes(p)) ? {} : null),
+        })),
+  })
+  const DIALOG = '[role="dialog"]'
+  const OPEN_DIALOG = 'dialog[open]'
+
+  it('a text field, a search or a textarea with something in it, in an open dialog, is typed work; blank is not', () => {
+    expect(domHasTypedWork(doc([field('text', 'Sprint 12', [DIALOG])]))).toBe(true)
+    expect(domHasTypedWork(doc([field('email', 'a@b.co', [OPEN_DIALOG])]))).toBe(true)
+    expect(domHasTypedWork(doc([field('textarea', 'a long feedback message', [DIALOG, 'form'])]))).toBe(true)
+    // New board's template search: closing the dialog loses it with the rest
+    expect(domHasTypedWork(doc([field('search', 'retro', [DIALOG])]))).toBe(true)
+    expect(domHasTypedWork(doc([field('text', '', [DIALOG]), field('text', '   ', [DIALOG])]))).toBe(false)
+    expect(domHasTypedWork(doc([]))).toBe(false)
   })
 
-  it('a text field, a search or a textarea with something in it is typed work; empty or blank is not', () => {
-    expect(domHasTypedWork(doc([field('text', 'Sprint 12')]))).toBe(true)
-    expect(domHasTypedWork(doc([field('email', 'a@b.co')]))).toBe(true)
-    expect(domHasTypedWork(doc([field(null, 'a long feedback message')]))).toBe(true)
-    expect(domHasTypedWork(doc([field('text', ''), field('text', '   ')]))).toBe(false)
-    expect(domHasTypedWork(doc([]))).toBe(false)
+  it("wave N.1 review: a form's text field with words is typed work (the sidebar's New project name, a rename)", () => {
+    expect(domHasTypedWork(doc([field('text', 'Q4 launch', ['form'])]))).toBe(true)
+    expect(domHasTypedWork(doc([field('textarea', 'what broke', ['form'])]))).toBe(true)
+    expect(domHasTypedWork(doc([field('text', '', ['form'])]))).toBe(false)
+  })
+
+  it('a search box outside a dialog is not: a query is typed again in a moment, and must not hold updates back', () => {
+    // the dashboard's search (no form), a search field in a form, and a form that is a search landmark
+    expect(domHasTypedWork(doc([field('search', 'roadmap')]))).toBe(false)
+    expect(domHasTypedWork(doc([field('search', 'roadmap', ['form'])]))).toBe(false)
+    expect(domHasTypedWork(doc([field('text', 'roadmap', ['form', '[role="search"]'])]))).toBe(false)
+    // and a field in no form and no dialog holds nothing a reload loses either
+    expect(domHasTypedWork(doc([field('text', 'x')]))).toBe(false)
   })
 
   it('a checkbox, a radio, a file, a hidden field or a button holds no words', () => {
     for (const type of ['checkbox', 'radio', 'file', 'hidden', 'button', 'submit', 'range', 'color'])
-      expect(domHasTypedWork(doc([field(type, 'on')])), type).toBe(false)
+      expect(domHasTypedWork(doc([field(type, 'on', [DIALOG, 'form'])])), type).toBe(false)
   })
 
   it('a page it cannot read is no typed work (never blocks an update by throwing)', () => {
