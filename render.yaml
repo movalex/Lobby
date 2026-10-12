@@ -330,9 +330,11 @@ services:
       - key: DRAFTROOM_BACKUP_KEEP
         value: "4"
       # The process-wide budget for queued outbound bytes (CAP-MEM): above it presence is skipped for everyone,
-      # above 1.25x the largest queue is closed with RECONNECT. The 0.5c-512mb instance has 512 MB in all.
+      # above 1.25x the largest queue is closed with RECONNECT. The 0.5c-512mb instance has 512 MB in all: the sync
+      # measured up to 310 MB RSS with a conversion worker plus about 60 MB of zlib state, so 64 (close line 80 MiB;
+      # it was 128 and 160) keeps the line under the instance (wave N.1, apps/sync/src/config.ts).
       - key: DRAFTROOM_OUTBOUND_BUDGET_MB
-        value: "128"
+        value: "64"
       # Wave N (lead-only; landed by the wave N foundation, read by WS2's sync): emoji reactions on notes. Unset, empty
       # or off: every reaction write is refused UNAVAILABLE and stored ones stay (fail-closed). The documented rollback
       # below wave N sets it off, runs POST /internal/maintenance/strip-keys {prefix: 'react:'}, then deploys the older
