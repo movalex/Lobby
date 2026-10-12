@@ -94,7 +94,7 @@ export class UndoController {
     this.now = o.now ?? (() => Date.now())
     const sceneMap = () => this.sceneMap('live')
     // attached after the welcome: start from the scene as it is (nothing before this is undoable)
-    if (o.core.welcome) this.history.reset(this.sceneMap('reset'))
+    if (o.core.welcome) this.resetHistory()
     this.restSelection = this.selectionNow()
     let epoch = o.core.welcome?.epoch ?? null
     this.off.push(
@@ -104,14 +104,16 @@ export class UndoController {
           // reconnect to the same epoch keeps the stacks (B3 L6 3f: an edit made offline is undone after
           // its replay); what changed meanwhile arrived as the core's 'applied' event and was absorbed like any remote edit
           if (epoch === null || e.welcome.epoch !== epoch) {
-            this.history.reset(this.sceneMap('reset'))
+            this.resetHistory()
             this.restSelection = this.selectionNow()
             this.settleUntil = 0
           }
           epoch = e.welcome.epoch
         } else if (e.kind === 'applied') {
           const now = sceneMap()
-          for (const id of e.ids) this.history.absorb(e.before.get(id) as HistEl | undefined, now.get(id))
+          // (wave N.1: a new copy of the row the scene showed brings nothing to take in: `same`)
+          for (const id of e.ids)
+            if (!e.same?.has(id)) this.history.absorb(e.before.get(id) as HistEl | undefined, now.get(id))
         } else if (e.kind === 'push') this.history.markPushed(e.record.seq, e.ids)
       }),
       o.core.onAck((ack) => this.history.onAck(ack as never, sceneMap())),
@@ -120,6 +122,19 @@ export class UndoController {
 
   dispose(): void {
     for (const f of this.off.splice(0)) f()
+  }
+
+  /** ids `sceneMap` gave a stand-in for (a held arrow's path, a label another session holds) at its last call */
+  private substituted = new Set<string>()
+
+  /**
+   * The stacks start afresh from the scene (a first welcome, another epoch). Wave N.1: an element the scene map takes
+   * as it is keeps the stack's copy of it when that copy is of the same version (LobbyHistory.reset `reuse`).
+   */
+  private resetHistory(): void {
+    const scene = this.sceneMap('reset')
+    const substituted = this.substituted
+    this.history.reset(scene, (el) => !substituted.has(el.id))
   }
 
   /**
@@ -147,6 +162,8 @@ export class UndoController {
    */
   private sceneMap(mode: 'live' | 'record' | 'reset'): Scene {
     const m = new Map<string, HistEl>()
+    const substituted = new Set<string>()
+    this.substituted = substituted
     const hide = mode !== 'live'
     const holders = hide ? this.o.core.leaseHolders() : null
     const me = this.o.core.sid
@@ -159,6 +176,7 @@ export class UndoController {
             el.id,
             withGroupsFrom(el, base as unknown as SceneElement, heldGroups(el)) as unknown as HistEl,
           )
+          substituted.add(el.id)
           continue
         }
       }
@@ -168,6 +186,7 @@ export class UndoController {
         const conf = h && h.sid !== me ? this.o.core.confirmed(el.id) : undefined
         if (conf) {
           m.set(el.id, withGroupsFrom(el, conf, LEASED_GROUPS) as unknown as HistEl)
+          substituted.add(el.id)
           continue
         }
       }

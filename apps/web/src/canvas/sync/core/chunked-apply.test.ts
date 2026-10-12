@@ -179,6 +179,10 @@ describe('N1-4: a cold open of a large board in chunks', () => {
     const p = coldOpen(h, f)
     h.settle()
     expect(f.pending).toBe(1)
+    // wave N.1: the first chunk too goes in at the next frame, not in the task that read the snapshot
+    expect(p.scene.map.size).toBe(0)
+    f.step()
+    expect(f.pending).toBe(1)
     expect(p.core.saveStatus.state).not.toBe('saved')
     expect(p.core.cacheContent()).toBeNull()
     // a drag on an element of the first chunk (a frame) while the rest arrives: the canvas is read-only meanwhile
@@ -268,6 +272,33 @@ describe('N1-4: a cold open of a large board in chunks', () => {
     expect(await hashElements(p.core.elements().values())).toBe(await h.roomHash())
     expect([...p.scene.map.keys()].sort()).toEqual([...h.room.elements.keys()].sort())
     expect(p.pushes()).toBe(0)
+  })
+
+  it('wave N.1: the snapshot task installs nothing; the welcome comes at the frame after the last chunk, which holds the whole board', () => {
+    const h = createHarness({ seed: randomBoard(13) })
+    h.room.contractsRev = CONTRACTS_REV
+    const f = frames({ threshold: 10, size: 6 })
+    const p = coldOpen(h, f)
+    const applies: number[] = []
+    const apply = p.scene.apply.bind(p.scene)
+    ;(p.scene as { apply: typeof apply }).apply = (els) => {
+      applies.push(els.length)
+      apply(els)
+    }
+    h.settle()
+    expect(applies).toEqual([])
+    const welcomes = () => p.events.filter((e) => e.kind === 'welcome').length
+    // the chunks, one per frame, until one installs the whole board
+    while (applies.at(-1) !== h.room.elements.size) {
+      expect(f.step()).toBe(true)
+      expect(welcomes()).toBe(0)
+    }
+    expect(f.pending).toBe(1)
+    expect(p.core.saveStatus.state).not.toBe('saved')
+    f.step()
+    expect(welcomes()).toBe(1)
+    expect(p.core.saveStatus.state).toBe('saved')
+    expect(f.pending).toBe(0)
   })
 
   it('at or under the threshold (or with no scheduler) the snapshot goes in one apply, as before', () => {

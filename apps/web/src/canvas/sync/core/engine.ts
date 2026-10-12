@@ -252,8 +252,18 @@ export type CoreEvent =
    * server's copy stands (replayLost): the user is told (Change not saved), the change is not dropped silently
    */
   | { kind: 'superseded'; id: string; groups: readonly GroupKey[] }
-  /** elements the core just installed in the scene (changed ids), with the copies before */
-  | { kind: 'applied'; ids: readonly string[]; before: ReadonlyMap<string, SceneElement | undefined> }
+  /**
+   * elements the core just installed in the scene (changed ids), with the copies before. Wave N.1: `same`, the ids
+   * among them whose new copy is the row the scene showed (a clean element rebuilt from a server copy of the same id,
+   * version and versionNonce: a new object of the same element, e.g. a reset welcome over the copy a cached paint
+   * showed); undo has nothing to take in from them
+   */
+  | {
+      kind: 'applied'
+      ids: readonly string[]
+      before: ReadonlyMap<string, SceneElement | undefined>
+      same?: ReadonlySet<string>
+    }
   | { kind: 'transport'; state: TransportState; close?: TransportClose }
   | { kind: 'welcome'; welcome: Welcome }
   | { kind: 'echo_suspect'; ids: readonly string[] }
@@ -684,6 +694,8 @@ export class LobbyEngineCore implements EngineCore {
   private applyDiff = false
   /** Wave N (usage `open.apply:<how>`): how the last reset welcome's snapshot was installed */
   private lastResetApply: 'diff' | 'chunked' | 'full' | null = null
+  /** wave N.1: set by `rebuild` when it made a new copy of the row the scene showed (applySceneNow reads it) */
+  private rebuiltSame = false
   /** N1-3: the epoch of the cached copy this core painted, until its first welcome (a diff needs the same) */
   private paintedEpoch: string | null = null
   /**
@@ -1876,7 +1888,10 @@ export class LobbyEngineCore implements EngineCore {
     if (groups.size === 0) {
       // N1-3: a reset welcome over a copy the scene shows: an element its row equals stays the scene's object (the
       // engine's shape cache stays warm); the confirmed map keeps the decoded row, a separate object
-      if (this.applyDiff && sameRow(local, conf)) return local
+      const same = sameRow(local, conf)
+      if (this.applyDiff && same) return local
+      // (wave N.1: a new copy of the same row: undo has nothing to take in from it, `applied.same`)
+      if (same) this.rebuiltSame = true
       return keepLocalFileSuffix(copyElement(conf), local)
     }
     const out = keepLocalFileSuffix(copyGroups(conf, local, groups), local) as Record<string, unknown>
@@ -1916,6 +1931,8 @@ export class LobbyEngineCore implements EngineCore {
     const seen = new Set<string>()
     const before = new Map<string, SceneElement | undefined>()
     const touched: string[] = []
+    // wave N.1: the touched ids whose new copy is the same row (rebuild's `rebuiltSame`)
+    const same = new Set<string>()
     const put = (id: string, el: SceneElement | undefined) => {
       if (!el) return
       seen.add(id)
@@ -1937,11 +1954,14 @@ export class LobbyEngineCore implements EngineCore {
         }
         // rebuilt from the current base: nothing held back for it any more
         this.heldRemote.delete(el.id)
+        this.rebuiltSame = false
         const next = this.rebuild(el.id)
         if (next !== el || !this.known.has(el.id)) {
           before.set(el.id, this.known.has(el.id) ? el : this.last.get(el.id))
           touched.push(el.id)
+          if (this.rebuiltSame && this.known.has(el.id)) same.add(el.id)
         }
+        this.rebuiltSame = false
         put(el.id, next)
         continue
       }
@@ -2026,7 +2046,7 @@ export class LobbyEngineCore implements EngineCore {
     this.scene.apply(next)
     measure('lobby.updateScene', t1)
     this.echoGuard()
-    this.emit({ kind: 'applied', ids: touched, before })
+    this.emit({ kind: 'applied', ids: touched, before, ...(same.size ? { same } : {}) })
     return false
   }
 
@@ -2058,11 +2078,21 @@ export class LobbyEngineCore implements EngineCore {
     const s = this.chunks
     if (!s || next.length <= s.threshold) return null
     const size = Math.max(1, s.size)
-    const ids = new Set(next.map((el) => el.id))
+    // wave N.1: the same plan as before in fewer passes over the snapshot (it was about 120 ms of the cold open's
+    // snapshot task at CPU 4x on the 10k board): one pass for the ids and the labels, one per part of the plan
+    const ids = new Set<string>()
+    for (const el of next) ids.add(el.id)
     const labelsOf = new Map<string, string[]>()
+    /** a label's container in this snapshot, by the label's id */
+    const holder = new Map<string, string>()
     for (const el of next) {
-      const c = isText(el) ? containerOf(el) : null
-      if (c && ids.has(c)) labelsOf.set(c, [...(labelsOf.get(c) ?? []), el.id])
+      if (!isText(el)) continue
+      const c = containerOf(el)
+      if (!c || !ids.has(c)) continue
+      holder.set(el.id, c)
+      const list = labelsOf.get(c)
+      if (list) list.push(el.id)
+      else labelsOf.set(c, [el.id])
     }
     const view = s.first?.(next) ?? new Set<string>()
     const placed = new Set<string>()
@@ -2072,28 +2102,33 @@ export class LobbyEngineCore implements EngineCore {
       if (placed.has(id)) return
       placed.add(id)
       cur.push(id)
-      for (const l of labelsOf.get(id) ?? []) take(l)
+      const labels = labelsOf.get(id)
+      if (labels) for (const l of labels) take(l)
     }
     // a label goes with its container
     const takeEl = (el: SceneElement) => {
-      const c = isText(el) ? containerOf(el) : null
-      take(c && ids.has(c) ? c : el.id)
+      const c = holder.get(el.id)
+      if (c) take(c)
       take(el.id)
     }
     for (const el of next) if (el.type === 'frame') take(el.id)
     const frames = cur.length
-    for (const el of next) if (view.has(el.id) && cur.length - frames < size) takeEl(el)
+    if (view.size) for (const el of next) if (view.has(el.id) && cur.length - frames < size) takeEl(el)
     plan.push(cur)
     cur = []
-    const rest = [...next.filter((el) => view.has(el.id)), ...next.filter((el) => !view.has(el.id))]
-    for (const el of rest) {
-      if (placed.has(el.id)) continue
-      if (cur.length >= size) {
-        plan.push(cur)
-        cur = []
+    const pass = (inView: boolean) => {
+      for (const el of next) {
+        if (placed.has(el.id) || (view.size > 0 && view.has(el.id) !== inView)) continue
+        if (cur.length >= size) {
+          plan.push(cur)
+          cur = []
+        }
+        takeEl(el)
       }
-      takeEl(el)
     }
+    // the rest of the view first, then everything else, each in index order (with no view: one pass)
+    if (view.size) pass(true)
+    pass(false)
     if (cur.length) plan.push(cur)
     return plan.length > 1 ? plan : null
   }
@@ -2122,14 +2157,18 @@ export class LobbyEngineCore implements EngineCore {
     this.lastResetApply = 'chunked'
     this.log('chunked_apply', { elements: next.length, chunks: plan.length })
     this.emit({ kind: 'applying', on: true, applied: 0, total: next.length })
-    this.applyChunk()
+    // wave N.1: the first chunk at the next frame too, not in the task that read the snapshot (the snapshot's own
+    // bookkeeping is that task's whole work: one long task fewer on a cold open of a large board)
+    this.chunk.handle = (this.chunks as ChunkScheduler).frame(() => this.applyChunk())
     return true
   }
 
   /**
    * One chunk: the scene gets every element of the chunks so far, in index order (CaptureUpdateAction.NEVER, the
-   * adapter's apply), and the history absorbs them (`applied`); the next one at the next frame. After the last: the
-   * echo guard, the welcome's tail, the applies that waited, then the frames that arrived meanwhile, in order.
+   * adapter's apply), and the history absorbs them (`applied`); the next one at the next frame. After the last, at
+   * the frame after it (wave N.1: the whole board's install and the welcome's tail were one long task): the echo
+   * guard, the welcome's tail, the applies that waited, then the frames that arrived meanwhile, in order. Until then
+   * the install is still under way (frames wait in the inbox, scene changes are not scanned).
    */
   private applyChunk(): void {
     const c = this.chunk
@@ -2150,6 +2189,14 @@ export class LobbyEngineCore implements EngineCore {
       c.handle = (this.chunks as ChunkScheduler).frame(() => this.applyChunk())
       return
     }
+    c.handle = (this.chunks as ChunkScheduler).frame(() => this.finishChunks())
+  }
+
+  /** After the last chunk (see applyChunk): the install is over. */
+  private finishChunks(): void {
+    const c = this.chunk
+    if (!c || this.stopped) return
+    c.handle = null
     this.chunk = null
     this.echoGuard()
     this.log('chunked_apply_done', { elements: c.next.length, chunks: c.plan.length })

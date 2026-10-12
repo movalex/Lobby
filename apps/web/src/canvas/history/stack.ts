@@ -269,10 +269,29 @@ export class LobbyHistory {
     return this.lastLocal.get(id)
   }
 
-  /** Start from a scene (welcome, reset): no steps, `lastLocal` = the scene. */
-  reset(scene: Scene) {
+  /**
+   * Start from a scene (welcome, reset): no steps, `lastLocal` = the scene.
+   *
+   * Wave N.1: `reuse(el)` says the scene entry is the scene's own element (not a stand-in the caller built); such an
+   * element whose `lastLocal` copy has its version and versionNonce keeps that copy (the version fast path of `record`:
+   * the same version and nonce are the same element), instead of a new copy of every element of the board at each
+   * welcome. The copies a cached paint or a snapshot's chunks absorbed are those copies.
+   */
+  reset(scene: Scene, reuse?: (el: HistEl) => boolean) {
     const next = new Map<string, HistEl>()
-    for (const [id, el] of scene) next.set(id, copyOf(el))
+    for (const [id, el] of scene) {
+      const had = reuse ? this.lastLocal.get(id) : undefined
+      if (
+        had &&
+        had.version !== undefined &&
+        had.version === el.version &&
+        had.versionNonce === el.versionNonce &&
+        had.type === el.type &&
+        reuse?.(el)
+      )
+        next.set(id, had)
+      else next.set(id, copyOf(el))
+    }
     this.lastLocal = next
     this.undos = []
     this.redos = []
