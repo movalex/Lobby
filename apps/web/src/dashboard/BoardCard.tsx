@@ -1,7 +1,7 @@
 import { type BoardWithRole, NEW_CANVAS_CARD_NOTE, thumbnailPath } from '@draftroom/contracts'
 import { type CSSProperties, useEffect, useId, useState } from 'react'
 import { SharedOutsideMarker } from '../features/people/SharedOutside.tsx'
-import { onThumbnailUpdated } from '../features/thumbnails/card-events.ts'
+import { onThumbnailUpdated, recentThumbnail } from '../features/thumbnails/card-events.ts'
 import { formatRelativeTime } from '../lib/format.ts'
 import { can } from '../lib/permissions.ts'
 import { boardPath, linkClick } from '../lib/routing.ts'
@@ -34,7 +34,12 @@ export function BoardCardThumb({
   const [sent, setSent] = useState<{ version: string | null; over: string | null } | null>(null)
   useEffect(() => {
     if (board.status === 'trashed') return
-    return onThumbnailUpdated(board.id, (version) => setSent({ version, over: listed }))
+    const off = onThumbnailUpdated(board.id, (version) => setSent({ version, over: listed }))
+    // N1-THUMBS: also one whose answer came before this card listened (the list was read before that
+    // upload was stored), before the card was made or between its first render and this effect
+    const recent = recentThumbnail(board.id)
+    if (recent) setSent({ version: recent.version, over: listed })
+    return off
   }, [board.id, board.status, listed])
   const version = sent && sent.over === listed ? sent.version : listed
   const [failed, setFailed] = useState<string | null>(null)

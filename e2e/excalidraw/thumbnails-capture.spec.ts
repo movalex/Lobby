@@ -463,6 +463,98 @@ test('thumbnails (F11): back to the dashboard 1.5 s after an edit, the card stil
   expect(((await meta.json()) as { thumbnail: { width: number } | null }).thumbnail?.width).toBe(480)
 })
 
+/**
+ * N1-THUMBS: the F11 tests' flake (main and wave N.1 alike), forced. Leaving the board sends its picture
+ * (PUT) as the dashboard asks for its board list (GET): the api read the list before the upload was stored
+ * (no thumbnail yet), and the upload's answer, which the card listens for, reached the page before the card
+ * listened. Here the upload waits until the api has answered the list, and the page gets the list only once
+ * the upload's answer is in: announced before the list makes the card (`before-card`), or handed over the
+ * moment the card is in the DOM, before React ran the card's effects, its listener among them (`at-card`).
+ */
+async function leaveInRace(alice: CanvasSession, board: string, order: 'before-card' | 'at-card') {
+  const { page } = alice
+  await drawSomething(page, 'Race')
+  await expect(captureState(page)).toHaveAttribute('data-state', 'rendered', { timeout: 20_000 })
+  let listRead = () => {}
+  const listWasRead = new Promise<void>((resolve) => {
+    listRead = resolve
+  })
+  await page.route(
+    (url) => url.pathname === `/api/boards/${board}/thumbnail`,
+    async (route) => {
+      if (route.request().method() === 'PUT') await listWasRead
+      await route.continue()
+    },
+  )
+  await page.route(
+    (url) => /^\/api\/workspaces\/[^/]+\/boards$/.test(url.pathname),
+    async (route) => {
+      const res = await route.fetch()
+      listRead()
+      await route.fulfill({ response: res })
+    },
+  )
+  await page.evaluate(
+    ([bid, when]) => {
+      const gate = () => {
+        let open = () => {}
+        const opened = new Promise<void>((resolve) => {
+          open = resolve
+        })
+        return { open, opened }
+      }
+      const answered = gate()
+      const announced = gate()
+      const cardMade = gate()
+      window.addEventListener('draftroom:thumbnail-updated', () => announced.open())
+      new MutationObserver((_, observer) => {
+        if (!document.querySelector(`[data-testid="board-card"][data-board-id="${bid}"]`)) return
+        observer.disconnect()
+        cardMade.open()
+      }).observe(document.body, { subtree: true, childList: true })
+      const real = window.fetch.bind(window)
+      window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : String(input), location.href)
+        const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase()
+        const res = await real(input, init)
+        if (method === 'PUT' && url.pathname === `/api/boards/${bid}/thumbnail`) {
+          answered.open()
+          if (when === 'at-card') await cardMade.opened
+        } else if (method === 'GET' && /^\/api\/workspaces\/[^/]+\/boards$/.test(url.pathname))
+          await (when === 'at-card' ? answered.opened : announced.opened)
+        return res
+      }
+    },
+    [board, order] as const,
+  )
+  const sent = page.waitForResponse(
+    (r) => r.request().method() === 'PUT' && r.url().endsWith(`/api/boards/${board}/thumbnail`),
+    { timeout: 15_000 },
+  )
+  await backToDashboard(alice)
+  const res = await sent
+  expect(res.status()).toBe(200)
+  const version = ((await res.json()) as { thumbnail: { version: string } }).thumbnail.version
+  const img = card(page, board).getByTestId('board-thumbnail')
+  await expect(img).toBeVisible({ timeout: 10_000 })
+  await expect(img).toHaveAttribute('data-version', version)
+  expect((await decoded(img)).colours).toBeGreaterThan(8)
+}
+
+test('thumbnails (F11): the card shows an upload whose answer came before the board list reached the page', async ({
+  canvasSession,
+  board,
+}) => {
+  await leaveInRace(await canvasSession('alice'), board, 'before-card')
+})
+
+test('thumbnails (F11): the card shows an upload whose answer came between the card and its listener', async ({
+  canvasSession,
+  board,
+}) => {
+  await leaveInRace(await canvasSession('alice'), board, 'at-card')
+})
+
 test('thumbnails (F11): the placeholder of a board without a thumbnail is dark on the dark theme', async ({
   canvasSession,
   board,
