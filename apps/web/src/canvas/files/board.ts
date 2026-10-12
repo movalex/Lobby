@@ -81,21 +81,33 @@ export function installBoardFiles(opts: BoardFilesOptions): BoardFiles {
   let scheduled = false
   let disposed = false
   let lastKeys = ''
+  // wave N.1: the scene's image elements, per element array. The engine replaces the array whenever elements come,
+  // go or are replaced (its moves in place keep it, and the images are read live), so a camera move (onChange on
+  // every frame of a pan) reads the images only, not every element of the board four times
+  let lastElements: readonly ImageLike[] | null = null
+  let images: readonly ImageLike[] = []
 
   const sync = () => {
     scheduled = false
     if (disposed) return
     const elements = api.getSceneElements() as unknown as readonly ImageLike[]
-    resolver.learn(elements)
-    const shown = visibleImages(elements, api.getAppState())
-    loader.syncScene(elements, new Set(shown.map((s) => s.fileId)))
+    const fresh = elements !== lastElements
+    if (fresh) {
+      lastElements = elements
+      images = elements.filter((e) => e.type === 'image')
+      resolver.learn(images)
+    }
+    const shown = visibleImages(images, api.getAppState())
+    loader.syncScene(images, new Set(shown.map((s) => s.fileId)))
     // Keys no live element uses any more: revoked (exports hold what they read).
-    const inUse = new Set<string>()
-    for (const e of elements) if (e.type === 'image' && e.fileId && !e.isDeleted) inUse.add(e.fileId)
-    const keys = [...inUse].sort().join(',')
-    if (keys !== lastKeys) {
-      lastKeys = keys
-      loader.retainOnly(inUse)
+    if (fresh) {
+      const inUse = new Set<string>()
+      for (const e of images) if (e.fileId && !e.isDeleted) inUse.add(e.fileId)
+      const keys = [...inUse].sort().join(',')
+      if (keys !== lastKeys) {
+        lastKeys = keys
+        loader.retainOnly(inUse)
+      }
     }
     if (upgrades && opts.upgrades) {
       const dpr = opts.upgrades.dpr?.() ?? (globalThis as { devicePixelRatio?: number }).devicePixelRatio ?? 1

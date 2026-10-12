@@ -81,6 +81,7 @@ import {
   purgeBoardCache,
   takeBoardCache,
 } from '../sync/adapter/snapshot-cache.ts'
+import { CHUNK_THRESHOLD } from '../sync/flags.ts'
 import { timelineMark } from '../sync/timeline.ts'
 import { BoardSkeleton, SkeletonToolbar } from './BoardSkeleton.tsx'
 import { boardCacheAllowed } from './cache-access.ts'
@@ -119,6 +120,8 @@ const ShareDialog = lazy(
 
 /** Longest an in-app navigation waits for this board's last changes to be acknowledged. */
 const LEAVE_WAIT_MS = 5_000
+/** wave N.1: a board of more elements than this installs its features after the welcome's frame (a large board) */
+const FEATURES_LATER_ABOVE = CHUNK_THRESHOLD
 
 /** /b/:bid — loads the board (and the caller's role) from the API, then opens the canvas. */
 export function LobbyBoardPage({ boardId }: { boardId: string }) {
@@ -506,11 +509,29 @@ function LobbyBoardScreen({
   const welcomed = snap.welcomed
   useEffect(() => {
     if (!ctx || !welcomed) return
-    // wave N (the N1 specs): the features' install on the page's timeline
-    timelineMark('lobby.features.start')
-    const uninstall = installCanvasFeatures(CANVAS_FEATURES, ctx)
-    timelineMark('lobby.features.end')
-    return uninstall
+    let uninstall: (() => void) | null = null
+    const install = () => {
+      // wave N (the N1 specs): the features' install on the page's timeline
+      timelineMark('lobby.features.start')
+      uninstall = installCanvasFeatures(CANVAS_FEATURES, ctx)
+      timelineMark('lobby.features.end')
+    }
+    // wave N.1: on a large board the features' first computations (their overlays over thousands of elements) were
+    // most of the welcome's long task; they install once the board has shown itself editable (the next frame), in a
+    // task of their own. A smaller board installs them at once, as before.
+    if (ctx.canvas.items().length <= FEATURES_LATER_ABOVE) {
+      install()
+      return () => uninstall?.()
+    }
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const frame = requestAnimationFrame(() => {
+      timer = setTimeout(install, 0)
+    })
+    return () => {
+      cancelAnimationFrame(frame)
+      if (timer !== null) clearTimeout(timer)
+      uninstall?.()
+    }
   }, [ctx, welcomed])
   // a feature tool's onExit when another tool takes over (Escape, a toolbar button, setTool)
   useEffect(() => {

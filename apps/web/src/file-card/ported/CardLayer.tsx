@@ -106,6 +106,18 @@ function cardIdsOf(canvas: LobbyCanvas): ReadonlySet<string> | null {
 
 /** Wave N.1: per canvas, the merge of its face candidates (memoized while the index's answers stand). */
 const candidateMemos = new WeakMap<object, ReturnType<typeof paintOrderMemo>>()
+/** Wave N.1: each element's place in a scene array (its paint order), per array */
+const places = new WeakMap<readonly CanvasElement[], ReadonlyMap<string, number>>()
+const placeOf = (all: readonly CanvasElement[]): ReadonlyMap<string, number> => {
+  let m = places.get(all)
+  if (!m) {
+    const built = new Map<string, number>()
+    all.forEach((e, i) => built.set(e.id, i))
+    places.set(all, built)
+    m = built
+  }
+  return m
+}
 
 /** The entries to draw, in paint order (reactive: items, loader states, hidden ids). */
 function entriesOf(canvas: LobbyCanvas): Entry[] {
@@ -133,16 +145,12 @@ function entriesOf(canvas: LobbyCanvas): Entry[] {
   // K1-8: the opaque elements in a grid, built once per pass and only when a card needs its holes
   let grid: Occluders | null = null
   // (with the index: each candidate's place among all the scene's elements, which the grid's paint order is)
-  let place: Map<string, number> | null = null
+  let place: ReadonlyMap<string, number> | null = null
   const holesAbove = (el: CanvasElement, at: number, box: Box) => {
     if (!grid) {
       const all = sceneIndex ? canvas.items() : items
       grid = new Occluders(all, (id) => canvas.isHidden(id))
-      if (sceneIndex) {
-        const m = new Map<string, number>()
-        all.forEach((e, i) => m.set(e.id, i))
-        place = m
-      }
+      if (sceneIndex) place = placeOf(all)
     }
     return grid.holesAbove(place ? (place.get(el.id) ?? at) : at, box)
   }
