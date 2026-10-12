@@ -13,10 +13,30 @@ import { constants, createInflateRaw, gunzipSync } from 'node:zlib'
 import { ELEMENT_SCHEMA_VERSION, PROTO } from '@draftroom/canvas-schema/protocol'
 import { describe, expect, it } from 'vitest'
 import WebSocket from 'ws'
+import { deflateFrame, WS_DEFLATE_OPTIONS } from '../../src/app.ts'
 import { boardSocketTarget } from '../harness/tickets.ts'
 import { ticketFor } from './support/client.ts'
 import { rect } from './support/elements.ts'
 import { type ElementStack, newBoardId, useElementHarness } from './support/stack.ts'
+
+describe('deflateFrame: what the send point offers to permessage-deflate (wave N.1)', () => {
+  it('at or over 1 KiB of UTF-8 only, never a frame its sender sends plain', () => {
+    expect(WS_DEFLATE_OPTIONS.threshold).toBe(1024)
+    expect(deflateFrame('a'.repeat(1023))).toBe(false)
+    expect(deflateFrame('a'.repeat(1024))).toBe(true)
+    // counted in UTF-8 bytes, not UTF-16 units: 342 × 'é' is 684 bytes, 512 × 'é' is 1 024
+    expect(deflateFrame('é'.repeat(342))).toBe(false)
+    expect(deflateFrame('é'.repeat(512))).toBe(true)
+    expect(deflateFrame('€'.repeat(341))).toBe(false) // 1 023 bytes
+    expect(deflateFrame('€'.repeat(342))).toBe(true) // 1 026 bytes
+    expect(deflateFrame(new Uint8Array(1023))).toBe(false)
+    expect(deflateFrame(new Uint8Array(1024))).toBe(true)
+    // the gzip snapshot: never, however large
+    expect(deflateFrame(new Uint8Array(100_000), { compress: false })).toBe(false)
+    expect(deflateFrame('a'.repeat(5_000), { compress: false })).toBe(false)
+    expect(deflateFrame('a'.repeat(5_000), {})).toBe(true)
+  })
+})
 
 const h = useElementHarness()
 /** Deflate is off unless the key says on (the hold; round-2 refix): the negotiation cases ask for it. */
@@ -252,10 +272,51 @@ describe('M7-2: permessage-deflate on the board socket', () => {
     const changes = raw.frames.find((f) => f.opcode === 1 && RawFrames.text(f).includes('"more-24"')) as Frame
     expect(changes.rsv1).toBe(true)
     expect(changes.payload.length).toBeLessThan(RawFrames.text(changes).length)
-    // with the server's context kept, `ws` deflates small frames too (its threshold applies only without context
-    // takeover: ws/lib/sender.js); every text frame read back is whole JSON
+    // every text frame read back is whole JSON (small ones uncompressed, large ones deflated: the next test)
     for (const f of raw.frames.filter((x) => x.opcode === 1))
       expect(() => JSON.parse(RawFrames.text(f))).not.toThrow()
+    raw.close()
+  })
+
+  // Wave N.1 (wave M follow-up 7): `ws` applies `threshold` only to a sender without context takeover (ws 8.21
+  // lib/sender.js: `rsv1 = byteLength >= threshold` only when `server_no_context_takeover` was negotiated), and the
+  // server keeps its context, so every text frame was deflated, acks and cursors included (the ack times wave M
+  // measured). The send point now asks for compression only at or over WS_DEFLATE_OPTIONS.threshold (1 KiB).
+  it('the 1 KiB threshold applies with the server’s context kept: smaller text frames go uncompressed', async () => {
+    const st = await h.stack({ env: DEFLATE_ON })
+    const b = newBoardId()
+    const raw = await RawFrames.open(st, b, 'raw', true)
+    expect(raw.extensions).toMatch(/^permessage-deflate/)
+    expect(raw.extensions).not.toContain('server_no_context_takeover')
+    raw.hello()
+    await raw.until(
+      () => raw.frames.some((f) => f.opcode === 1 && RawFrames.text(f).includes('"contracts"')),
+      'contracts',
+    )
+    const writer = await st.client({ boardId: b, user: 'writer' })
+    // one small rectangle (a `changes` frame well under 1 KiB), then 25 (well over it), then one small again: the
+    // compressed frame between two plain ones reads back right (one inflate stream for the connection)
+    await writer.create([rect('small-1')])
+    await writer.create(Array.from({ length: 25 }, (_, i) => rect(`big-${i}`, { y: 400 + i * 10 })))
+    await writer.create([rect('small-2', { x: 900 })])
+    const textOf = (id: string) => () =>
+      raw.frames.some((f) => f.opcode === 1 && RawFrames.text(f).includes(`"${id}"`))
+    await raw.until(textOf('small-2'), 'the last changes frame')
+    const texts = raw.frames.filter((f) => f.opcode === 1)
+    for (const f of texts) {
+      const text = RawFrames.text(f)
+      expect(() => JSON.parse(text)).not.toThrow()
+      const bytes = Buffer.byteLength(text, 'utf8')
+      expect(f.rsv1, `${bytes} bytes: ${text.slice(0, 60)}`).toBe(bytes >= 1024)
+    }
+    const frameOf = (id: string) =>
+      texts.find((f) => RawFrames.text(f).includes(`"${id}"`)) as Frame
+    expect(frameOf('small-1').rsv1).toBe(false)
+    expect(frameOf('big-24').rsv1).toBe(true)
+    expect(frameOf('small-2').rsv1).toBe(false)
+    // at least one frame on each side of the line
+    expect(texts.filter((f) => f.rsv1).length).toBeGreaterThan(0)
+    expect(texts.filter((f) => !f.rsv1).length).toBeGreaterThan(1)
     raw.close()
   })
 

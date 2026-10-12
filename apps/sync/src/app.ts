@@ -58,11 +58,13 @@ export const MAINTENANCE_REASON = 'MAINTENANCE'
 // protocol frame, CONTRACTS_REV or reader-frame change: a client that does not offer it (or an edge that strips
 // the header) talks uncompressed, exactly as before. Level 1 and memLevel 7 keep the CPU and the per-socket
 // memory small (the server keeps its context per socket for the ratio; the client is asked not to, which costs
-// nothing here: client frames are small). At most 4 zlib jobs run at once, process-wide. `threshold` (1 KiB) only
-// applies to a sender without context takeover (ws/lib/sender.js), so with the server's context kept every text
-// frame is deflated: a small cursor frame compresses well against the ones before it (the M7-7 NAS run measures
-// the CPU). The gzip snapshot is sent with `compress: false` (room/outbound.ts). Deflate runs only with
-// DRAFTROOM_WS_DEFLATE=on; off or unset is the kill switch (config.ts; a restart), so the deflate hold fails closed.
+// nothing here: client frames are small). At most 4 zlib jobs run at once, process-wide. `threshold` (1 KiB): `ws`
+// itself applies it only to a sender WITHOUT context takeover (ws 8.21 lib/sender.js), so with the server's context
+// kept it deflated every text frame, acks and cursors included, each through the shared zlib queue (wave M's ack
+// times). The send point decides instead (deflateFrame below): a frame under the threshold goes uncompressed (RSV1
+// clear; permessage-deflate decides per message, and the context carries over the compressed ones). The gzip
+// snapshot is sent with `compress: false` (room/outbound.ts). Deflate runs only with DRAFTROOM_WS_DEFLATE=on; off or
+// unset is the kill switch (config.ts; a restart), so the deflate hold fails closed.
 export const WS_DEFLATE_OPTIONS = Object.freeze({
   zlibDeflateOptions: Object.freeze({ level: 1, memLevel: 7 }),
   threshold: 1024,
@@ -70,6 +72,21 @@ export const WS_DEFLATE_OPTIONS = Object.freeze({
   clientNoContextTakeover: true,
   serverNoContextTakeover: false,
 })
+
+/**
+ * Whether a frame is offered to permessage-deflate (wave N.1): never when its sender says `compress: false` (the gzip
+ * snapshot), else only at or over WS_DEFLATE_OPTIONS.threshold UTF-8 bytes. Without the extension negotiated `ws`
+ * sends it plain whatever this says.
+ */
+export function deflateFrame(d: string | Uint8Array, o?: { readonly compress?: boolean }): boolean {
+  if (o?.compress === false) return false
+  const t = WS_DEFLATE_OPTIONS.threshold
+  if (typeof d !== 'string') return d.byteLength >= t
+  // a UTF-16 unit is 1 to 3 UTF-8 bytes: only a short string with non-ASCII text needs counting
+  if (d.length >= t) return true
+  if (d.length * 3 < t) return false
+  return Buffer.byteLength(d, 'utf8') >= t
+}
 
 /** The subprotocol a board socket speaks: the one the server answers with. */
 export const BOARD_SOCKET_PROTOCOL = 'lobby.board.v1'
@@ -359,7 +376,7 @@ export function createSyncServer(config: SyncConfig, opts: SyncServerOptions = {
         },
         {
           send: (d: string | Uint8Array, o?: { readonly compress?: boolean }) =>
-            o ? ws.send(d, { compress: o.compress !== false }) : ws.send(d),
+            ws.send(d, { compress: deflateFrame(d, o) }),
           close: (c: number, r: string) => ws.close(c, r),
           get readyState() {
             return ws.readyState
