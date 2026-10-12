@@ -10,8 +10,8 @@
     <!-- Wave M (M3-6, S1.2): a board link pasted into a chat tool or a meeting invite unfurls as a generic "Lobby board".
          Every /b/<id> serves this one page, so these tags are static: no board title, thumbnail or word of a board is ever
          in them, and nothing here is read from a board. og:image is an absolute URL built at build time from
-         VITE_PUBLIC_ORIGIN (render.yaml: Vite replaces the percent-delimited name when the build has it set, which Render's does)
-         to a brand PNG of this site. The app is for signed-in colleagues, not for search engines: noindex. apps/web/src/lib/link-preview.test.ts
+         VITE_PUBLIC_ORIGIN (render.yaml: Vite replaces the percent-delimited name when the build has it set, which Render's does;
+         a build without it drops the og:image tags, vite.config.ts dropUnsetPublicOrigin) to a brand PNG of this site. The app is for signed-in colleagues, not for search engines: noindex. apps/web/src/lib/link-preview.test.ts
          asserts all of it against the built page. -->
     <meta name="robots" content="noindex, nofollow" />
     <meta property="og:site_name" content="Lobby" />

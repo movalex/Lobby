@@ -172,6 +172,37 @@ export function versionJson(commit: string): Plugin {
   }
 }
 
+// ---- wave N1 (wave M follow-up 3): no half-made og:image ----------------------------------------------------------
+//
+// index.html's og:image is `%VITE_PUBLIC_ORIGIN%/icon-512.png`: Vite fills the percent-delimited name in when the build
+// has VITE_PUBLIC_ORIGIN (render.yaml sets it), and otherwise leaves it as it is, so a local or CI build served a link
+// preview image at the address "%VITE_PUBLIC_ORIGIN%/icon-512.png". A build without the origin now drops the og:image
+// tags (the image, its size and its alt) instead: a preview with no picture, never one with a broken address. Runs before
+// Vite's own replacement, so the unset-variable warning is not printed for a tag that is gone.
+
+/** The og:image family of tags that name the origin. */
+const OG_IMAGE_TAGS = /[ \t]*<meta\b[^>]*\bproperty="og:image(?::[a-z]+)?"[^>]*>[ \t]*\r?\n?/g
+
+/** `html` without its og:image tags when `origin` is unset or blank; unchanged when the build has an origin. */
+export function withoutUnsetOrigin(html: string, origin: string | undefined): string {
+  return origin?.trim() ? html : html.replace(OG_IMAGE_TAGS, '')
+}
+
+export function dropUnsetPublicOrigin(): Plugin {
+  let origin: string | undefined
+  return {
+    name: 'lobby-drop-unset-public-origin',
+    configResolved(config) {
+      const value = (config.env as Record<string, unknown>).VITE_PUBLIC_ORIGIN
+      origin = typeof value === 'string' ? value : undefined
+    },
+    transformIndexHtml: {
+      order: 'pre',
+      handler: (html) => withoutUnsetOrigin(html, origin),
+    },
+  }
+}
+
 /** The commit of this build: __LOBBY_COMMIT__ and /version.json say the same. */
 export const LOBBY_COMMIT = buildCommit()
 
@@ -185,6 +216,7 @@ export default defineConfig({
     engine,
     hashedHeadScripts(),
     versionJson(LOBBY_COMMIT),
+    dropUnsetPublicOrigin(),
   ],
   define: { __LOBBY_COMMIT__: JSON.stringify(LOBBY_COMMIT) },
   resolve: {

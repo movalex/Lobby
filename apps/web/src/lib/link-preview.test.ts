@@ -9,6 +9,9 @@ import { fileURLToPath } from 'node:url'
 import { build, type Rolldown } from 'vite'
 import { describe, expect, it } from 'vitest'
 
+// the build's own plugin (apps/web/vite.config.ts): the page below is built with it, as the real build is
+const { dropUnsetPublicOrigin } = await import('../../vite.config.ts')
+
 const WEB = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SOURCE = readFileSync(path.join(WEB, 'index.html'), 'utf8')
 const ORIGIN = 'https://lobby.example'
@@ -31,6 +34,7 @@ async function builtIndex(env: string | null): Promise<string> {
       configFile: false,
       root,
       envDir: root,
+      plugins: [dropUnsetPublicOrigin()],
       logLevel: 'silent',
       build: { write: false, outDir: path.join(root, 'dist'), emptyOutDir: true },
     })) as Rolldown.RolldownOutput | Rolldown.RolldownOutput[]
@@ -151,14 +155,24 @@ describe('the link preview tags in index.html (M3-6)', () => {
     }
   })
 
-  it('a build without the origin leaves only that one name unreplaced (nothing else is lost or invented)', async () => {
+  it('N1 (wave M follow-up 3): a build without the origin has no og:image tags and no placeholder (nothing else is lost)', async () => {
     const built = await builtIndex(null)
-    expect([...built.matchAll(/%[A-Za-z_][A-Za-z0-9_]*%/g)].map((x) => x[0])).toEqual([
-      '%VITE_PUBLIC_ORIGIN%',
-    ])
+    // no literal %VITE_PUBLIC_ORIGIN% in an og:image a crawler would try to fetch
+    expect([...built.matchAll(/%[A-Za-z_][A-Za-z0-9_]*%/g)].map((x) => x[0])).toEqual([])
     const m = metas(built)
+    for (const k of ['og:image', 'og:image:width', 'og:image:height', 'og:image:alt'])
+      expect(m.has(k), k).toBe(false)
+    // the rest of the card is still there
     expect(m.get('og:title')).toBe('Lobby board')
-    expect(m.get('og:image')).toBe('%VITE_PUBLIC_ORIGIN%/icon-512.png')
+    expect(m.get('og:description')).toBe('Open to view in Lobby')
+    expect(m.get('twitter:card')).toBe('summary')
+    expect(m.get('robots')).toMatch(/\bnoindex\b/)
+  })
+
+  it('a blank origin counts as unset (an empty variable in the environment)', async () => {
+    const built = await builtIndex('   ')
+    expect([...built.matchAll(/%[A-Za-z_][A-Za-z0-9_]*%/g)]).toEqual([])
+    expect(metas(built).has('og:image')).toBe(false)
   })
 })
 

@@ -240,6 +240,10 @@ export function statusView(save: DotSave, conn: ConnState, saveHidden = false): 
           : 'ok'
   let label: string | null = null
   if (tone === 'danger' || tone === 'warn') label = saveText && state !== 'saved' ? saveText : connText
+  else if (tone === 'busy' && state === 'cached')
+    // N1 (wave M W6): the board is showing this device's last copy while it connects; the canvas pill says so, and the
+    // bar says the same words (not a bare "Connecting…" beside a board that already shows a copy)
+    label = saveText || CONN_LABEL.connecting
   else if (tone === 'busy' && (conn === 'connecting' || state === 'connecting')) label = CONN_LABEL.connecting
   const saveTip = quietSave
     ? null

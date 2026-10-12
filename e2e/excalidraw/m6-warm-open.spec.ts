@@ -414,6 +414,10 @@ test('M6-2: read-only until the welcome; a peer edit made while closed appears a
   await expect(a.page.getByTestId('cached-copy-label')).toHaveText('Showing your last copy · connecting')
   await expect(a.page.getByTestId('save-status')).toHaveAttribute('data-state', 'cached')
   await expect(a.page.getByTestId('save-status')).toHaveText('Showing your last copy · connecting')
+  // N1 (wave M follow-up 6): the top bar's dot says the same, not a bare "Connecting…" beside a board that is showing a copy
+  await expect(a.page.getByTestId('board-status').locator('.dr-status__label')).toHaveText(
+    'Showing your last copy · connecting',
+  )
   await expect(a.page.getByTestId('sync-loading')).toHaveCount(0)
   await expect.poll(() => sockets.held()).toBeGreaterThanOrEqual(1)
   const before = await cacheState(a.page)
