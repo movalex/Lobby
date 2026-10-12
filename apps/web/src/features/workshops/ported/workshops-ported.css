@@ -132,3 +132,239 @@
     top: 60px;
   }
 }
+
+/* ---- Emoji reactions on notes (wave N, N3-1 to N3-3; ./NoteReactions.tsx) -------------------------------------
+   A compact row under each note with reactions: one chip per emoji with its count, then an add button for people
+   who can react, and a picker. Colours are theme tokens (note-reactions-contrast.test.ts checks every state in
+   both themes). The layer takes no pointer: the chips, the add button and the picker do. */
+
+.dr-wk-nr-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 248;
+  overflow: hidden;
+  pointer-events: none;
+}
+/* an open top-bar popover or menu comes over the rows, as it does over the workshop layer */
+.dr-board:has(.dr-topbar [aria-expanded="true"]) .dr-wk-nr-layer {
+  z-index: 16;
+}
+.dr-wk-nr {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  box-sizing: border-box;
+  font: 600 12px / 1 var(--dr-font);
+  pointer-events: auto;
+}
+.dr-wk-nr__wrap {
+  position: relative;
+  display: inline-flex;
+}
+.dr-wk-nr__chip,
+.dr-wk-nr__add {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  box-sizing: border-box;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 999px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 18%);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dr-wk-nr__chip:hover,
+.dr-wk-nr__add:hover,
+.dr-wk-nr__add[aria-expanded="true"] {
+  border-color: var(--dr-navy);
+}
+.dr-wk-nr__chip[data-mine="true"] {
+  border-color: var(--dr-accent-line);
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+}
+.dr-wk-nr__chip[aria-disabled="true"] {
+  cursor: default;
+}
+.dr-wk-nr__chip:focus-visible,
+.dr-wk-nr__add:focus-visible,
+.dr-wk-nr-picker button:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 2px;
+}
+.dr-wk-nr__emoji {
+  font-size: 14px;
+  line-height: 1;
+}
+.dr-wk-nr__n {
+  min-width: 1ch;
+  text-align: center;
+}
+.dr-wk-nr__add {
+  justify-content: center;
+  width: 28px;
+  padding: 0;
+  color: var(--dr-ink-2);
+}
+.dr-wk-nr__add:hover {
+  color: var(--dr-ink);
+}
+/* who reacted: above the emoji (the layer clips at the canvas's bottom edge, where the rows often are) */
+.dr-wk-nr__tip {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 4px);
+  z-index: 2;
+  box-sizing: border-box;
+  max-width: 260px;
+  padding: 5px 9px;
+  border-radius: 8px;
+  background: var(--dr-inverse);
+  color: var(--dr-on-inverse);
+  font: 500 12px / 1.3 var(--dr-font);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+/* the burst of an added reaction, above its chip (the Facilitate bursts' rules; ../workshops.css .dr-wk-burst) */
+.dr-wk-nr__burst {
+  top: 0;
+  left: 50%;
+  pointer-events: none;
+}
+.dr-wk-nr__burst .dr-wk-burst__emoji {
+  font-size: 22px;
+}
+.dr-wk-nr__burst .dr-wk-burst__emoji[data-copy="spark"] {
+  font-size: 16px;
+}
+
+.dr-wk-nr-picker {
+  position: absolute;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-sizing: border-box;
+  width: 244px;
+  padding: 4px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 12px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  box-shadow: var(--dr-shadow-pop);
+  font: 13px / 1.3 var(--dr-font);
+  pointer-events: auto;
+}
+.dr-wk-nr-picker__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 2px;
+}
+.dr-wk-nr-picker__emoji {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dr-wk-nr-picker__emoji span {
+  transition: transform 120ms ease-out;
+}
+.dr-wk-nr-picker__emoji:hover {
+  background: var(--dr-hover);
+}
+.dr-wk-nr-picker__emoji:active span {
+  transform: scale(1.25);
+}
+.dr-wk-nr-picker__emoji[aria-pressed="true"] {
+  background: var(--dr-accent-bg);
+  box-shadow: inset 0 0 0 1.5px var(--dr-accent-line);
+}
+.dr-wk-nr-picker__clear,
+.dr-wk-nr-picker__close {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 8px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 600 12.5px var(--dr-font);
+  cursor: pointer;
+}
+.dr-wk-nr-picker__clear {
+  color: var(--dr-danger);
+}
+.dr-wk-nr-picker__clear:hover,
+.dr-wk-nr-picker__close:hover {
+  background: var(--dr-hover);
+}
+.dr-wk-nr-picker__head {
+  overflow: hidden;
+  padding: 4px 6px 0;
+  color: var(--dr-ink-2);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* a phone has no hover: the picker is a sheet above the bottom toolbar and the "All tools" button (as the
+   workshop message stack, above), with touch-size buttons */
+.dr-wk-nr-picker--sheet {
+  top: auto;
+  right: 8px;
+  bottom: 132px;
+  left: 8px;
+  width: auto;
+  padding: 8px;
+  gap: 8px;
+  border-radius: 16px;
+}
+.dr-wk-nr-picker--sheet .dr-wk-nr-picker__emoji {
+  width: 48px;
+  height: 48px;
+  font-size: 26px;
+}
+.dr-wk-nr-picker--sheet .dr-wk-nr-picker__clear,
+.dr-wk-nr-picker--sheet .dr-wk-nr-picker__close {
+  min-height: 44px;
+}
+/* touch: bigger chips (WCAG 2.5.8 asks 24 px; a finger is happier with more) */
+@media (pointer: coarse) {
+  .dr-wk-nr__chip,
+  .dr-wk-nr__add {
+    height: 32px;
+    padding-inline: 10px;
+  }
+  .dr-wk-nr__add {
+    width: 36px;
+  }
+  .dr-wk-nr__emoji {
+    font-size: 16px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dr-wk-nr-picker__emoji span {
+    transition: none;
+  }
+  .dr-wk-nr-picker__emoji:active span {
+    transform: none;
+  }
+}
