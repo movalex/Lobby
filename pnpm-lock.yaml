@@ -48,6 +48,9 @@ catalogs:
     '@napi-rs/canvas':
       specifier: 1.0.9
       version: 1.0.9
+    '@pdf-lib/fontkit':
+      specifier: 1.1.1
+      version: 1.1.1
     '@playwright/test':
       specifier: 1.63.0
       version: 1.63.0
@@ -272,6 +275,9 @@ importers:
       '@excalidraw/math':
         specifier: 'catalog:'
         version: 0.18.0-1118751
+      '@pdf-lib/fontkit':
+        specifier: 'catalog:'
+        version: 1.1.1
       react:
         specifier: 'catalog:'
         version: 19.3.0
@@ -923,6 +929,9 @@ packages:
 
   '@oxc-project/types@0.151.0':
     resolution: {integrity: sha512-J1yXrIlNDZVzE3ada310xeAw7nH8yCAyLPuUIsjKatFPmfn5bS1oW+cM+QsGOtVWd5nhSpbwZWx/rue+r5Z+PA==}
+
+  '@pdf-lib/fontkit@1.1.1':
+    resolution: {integrity: sha512-KjMd7grNapIWS/Dm0gvfHEilSyAmeLvrEGVcqLGi0VYebuqqzTbgF29efCx7tvx+IEbG3zQciRSWl3GkUSvjZg==}
 
   '@pdf-lib/standard-fonts@1.0.0':
     resolution: {integrity: sha512-hU30BK9IUN/su0Mn9VdlVKsWBS6GyhVfqjwl1FjZN4TxP6cCw0jP2w7V3Hf5uX7M0AZJ16vey9yE0ny7Sa59ZA==}
@@ -3707,6 +3716,10 @@ snapshots:
       '@napi-rs/canvas-win32-x64-msvc': 1.0.9
 
   '@oxc-project/types@0.151.0': {}
+
+  '@pdf-lib/fontkit@1.1.1':
+    dependencies:
+      pako: 1.0.11
 
   '@pdf-lib/standard-fonts@1.0.0':
     dependencies:
