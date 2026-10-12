@@ -396,10 +396,16 @@ export async function registerCapture(
           throw imageTooLarge(TOO_MANY_BYTES)
         throw err
       })
-      // A refusal sent before the body was read must not keep the connection (the client may still be sending
-      // up to 4 MiB we are not going to read).
+      // A refusal sent before the body was read (the onRequest checks below, or a declared length past the limit):
+      // when the answer is done Node reads the rest of the body and drops it, so the browser finishes its upload and
+      // then shows the refusal. Closing under an upload in flight resets the connection, and the reset can drop the
+      // answer the browser has not read yet (a network error, or a proxy's 502, instead of the 429 or 403:
+      // capture-socket.test.ts). The drain is bounded by the declared length, at most CAPTURE_PHOTO_MAX_BYTES, and by
+      // app.ts's arrival timeouts; a body that could be endless (chunked, or declared past the limit) is not read: it
+      // closes the connection.
       scope.addHook('onSend', async (req, reply, payload) => {
-        if (reply.statusCode >= 400 && !req.raw.complete) reply.header('connection', 'close')
+        if (reply.statusCode >= 400 && !req.raw.complete && !drainable(req.headers))
+          reply.header('connection', 'close')
         return payload
       })
       const callers = new WeakMap<FastifyRequest, Caller & { mode: CaptureMode }>()
@@ -651,6 +657,14 @@ export async function registerCapture(
     if (!result) throw failure ?? badOutput()
     return { runId, result, quota: await quotaFor(caller.user.id) }
   }
+}
+
+/** A photo body that may be read to its end and dropped: a declared length within CAPTURE_PHOTO_MAX_BYTES. */
+export function drainable(headers: FastifyRequest['headers']): boolean {
+  if (headers['transfer-encoding'] !== undefined) return false
+  const raw = headers['content-length']
+  if (typeof raw !== 'string' || !/^\d+$/.test(raw)) return false
+  return Number(raw) <= CAPTURE_PHOTO_MAX_BYTES
 }
 
 /** A stored blob as bytes, refusing (and dropping the stream) past CAPTURE_PHOTO_MAX_BYTES. */
