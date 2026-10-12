@@ -66,6 +66,11 @@ export type AgendaTimer =
       readonly status: 'running' | 'paused' | 'finished'
       readonly leftMs: number
       readonly overMs: number
+      /**
+       * Wave N.1: the timer was started once the presenter reached this section (see `AgendaClock.sinceMs`). A timer left
+       * on the board by the section before is not this section's own, however it reads. True when no record says otherwise.
+       */
+      readonly own: boolean
     }
   /** someone else started the timer and it runs: the presenter's slide change never stops it */
   | { readonly kind: 'held'; readonly holderId: string }
@@ -89,7 +94,15 @@ export interface AgendaClock {
   readonly nowMs: number
   /** server time minus this browser's time (the workshop store's `serverOffsetMs()`) */
   readonly offsetMs: number
+  /**
+   * Wave N.1: when the presenter reached the live section (this browser's Date.now(), the presenter's record:
+   * `AgendaRecorder.enteredAt`), or null when the record is not on it. Absent: no record to compare (a follower's read).
+   */
+  readonly sinceMs?: number | null
 }
+
+/** A timer started this long (ms) before the presenter's arrival still counts as the section's (clock estimates differ). */
+export const OWN_TIMER_SLACK_MS = 5_000
 
 /**
  * Where the live presentation is in the run of show, or null when there is no agenda (no section has
@@ -131,7 +144,20 @@ function timerOf(clock: AgendaClock, presenterId: string | null): AgendaTimer {
     return phase === 'finished' ? { kind: 'none' } : { kind: 'held', holderId: timer.startedBy as string }
   const ends = Date.parse(timer.endsAt ?? '')
   const overMs = phase === 'finished' && !Number.isNaN(ends) ? Math.max(0, nowMs + offsetMs - ends) : 0
-  return { kind: 'section', status: phase, leftMs: timerRemainingMs(timer, nowMs, offsetMs), overMs }
+  return {
+    kind: 'section',
+    status: phase,
+    leftMs: timerRemainingMs(timer, nowMs, offsetMs),
+    overMs,
+    own: startedAfterArrival(timer, clock),
+  }
+}
+
+/** Whether `timer` was started once the presenter reached the section (on the server's clock), per the clock's record. */
+function startedAfterArrival(timer: WorkshopTimer, { sinceMs, offsetMs }: AgendaClock): boolean {
+  if (sinceMs === undefined) return true
+  const started = Date.parse(timer.startedAt ?? '')
+  return sinceMs !== null && !Number.isNaN(started) && started >= sinceMs + offsetMs - OWN_TIMER_SLACK_MS
 }
 
 /** "+0:42 over" */
@@ -140,13 +166,15 @@ export const overText = (overMs: number) => `+${formatClock(overMs)} over`
 /**
  * M2-5: the run of show is over: the live section is the last and its timer has run out (the strip says "+0:42 over").
  * The presenter is asked how it went (./feedback/prompt.ts); a last section with no minutes never ends this way, and the
- * presentation's own stop is a moment of its own.
+ * presentation's own stop is a moment of its own. Wave N.1: it is the last section's OWN timer that ran out: the section
+ * before's, still finished on the board as the presenter arrives, ended nothing (`AgendaTimer.own`).
  */
 export const runOfShowEnded = (state: AgendaState | null): boolean =>
   !!state &&
   state.index === state.total - 1 &&
   state.timer.kind === 'section' &&
-  state.timer.status === 'finished'
+  state.timer.status === 'finished' &&
+  state.timer.own
 
 /**
  * Whether the strip's line shows a countdown (or how far past its end the section is): then the separate timer
@@ -376,6 +404,12 @@ export class AgendaRecorder {
   /** The section the visit in progress is in, or null. */
   currentId(): string | null {
     return this.record?.current?.id ?? null
+  }
+
+  /** When the visit in progress began (this browser's clock) if it is in section `id`, else null. */
+  enteredAt(id: string): number | null {
+    const cur = this.record?.current
+    return cur?.id === id ? cur.since : null
   }
 
   /**

@@ -94,7 +94,7 @@ describe('what the shared timer means for the live section', () => {
   it('the presenter’s running timer is the section’s: time left from the server’s end time and clock offset', () => {
     const t = running()
     const s = agendaOf(frames(), 'f1', clock(t, T0 + 10_000), ME)
-    expect(s?.timer).toEqual({ kind: 'section', status: 'running', leftMs: 110_000, overMs: 0 })
+    expect(s?.timer).toEqual({ kind: 'section', status: 'running', leftMs: 110_000, overMs: 0, own: true })
     // this browser's clock is 3 s behind the server's: its Date.now() reads 3 s early, the offset puts it right
     const behind = agendaOf(frames(), 'f1', clock(t, T0 + 10_000 - 3_000, 3_000), ME)
     expect(behind?.timer).toMatchObject({ leftMs: 110_000 })
@@ -103,7 +103,7 @@ describe('what the shared timer means for the live section', () => {
   it('past its end time it is over: how long ago it ended ("+0:42 over"), before the server even says finished', () => {
     const t = running()
     const s = agendaOf(frames(), 'f1', clock(t, T0 + 120_000 + 42_000), ME)
-    expect(s?.timer).toEqual({ kind: 'section', status: 'finished', leftMs: 0, overMs: 42_000 })
+    expect(s?.timer).toEqual({ kind: 'section', status: 'finished', leftMs: 0, overMs: 42_000, own: true })
     expect(overText(42_000)).toBe('+0:42 over')
     // the server's own finished state reads the same
     const done = running({ status: 'finished', remainingMs: 0 })
@@ -120,6 +120,7 @@ describe('what the shared timer means for the live section', () => {
       status: 'paused',
       leftMs: 75_000,
       overMs: 0,
+      own: true,
     })
   })
 
@@ -220,6 +221,54 @@ describe('the run of show is over (M2-5)', () => {
   })
 })
 
+describe('the run of show is over: the last section’s OWN timer (wave N.1)', () => {
+  // the section before ran 2 minutes from T0 and its timer is still on the board, finished, when the presenter moves on
+  const before = running({ durationMs: 120_000, endsAt: new Date(T0 + 120_000).toISOString() })
+  const REACHED = T0 + 200_000 // the presenter reached the last section (his browser's clock)
+  const last = (timer: WorkshopTimer | null, at: number, sinceMs: number | null, offsetMs = 0) =>
+    agendaOf(frames(), 'f4', { timer, nowMs: at, offsetMs, sinceMs }, ME)
+  const started = (ms: number, durationMs = 60_000) =>
+    running({
+      durationMs,
+      startedAt: new Date(ms).toISOString(),
+      endsAt: new Date(ms + durationMs).toISOString(),
+    })
+
+  it('the section before’s finished timer, left on the board, does not end the run as the presenter arrives', () => {
+    expect(runOfShowEnded(last(before, REACHED + 5_000, REACHED))).toBe(false)
+    // …and neither does it later (the last section never started a timer of its own)
+    expect(runOfShowEnded(last(before, REACHED + 600_000, REACHED))).toBe(false)
+  })
+
+  it('the last section’s own timer, started once the presenter reached it, ends the run when it runs out', () => {
+    const own = started(REACHED + 1_000)
+    expect(runOfShowEnded(last(own, REACHED + 30_000, REACHED))).toBe(false) // running
+    expect(runOfShowEnded(last(own, REACHED + 62_000, REACHED))).toBe(true) // finished at +61 s
+    // started by hand a minute into the section, the same
+    expect(runOfShowEnded(last(started(REACHED + 60_000), REACHED + 125_000, REACHED))).toBe(true)
+  })
+
+  it('the browser’s clock and the server’s may differ: the timer’s start is compared on the server’s clock', () => {
+    const OFFSET = 3_600_000 // the server is an hour ahead of this browser
+    const own = started(REACHED + OFFSET + 1_000)
+    expect(runOfShowEnded(last(own, REACHED + 62_000, REACHED, OFFSET))).toBe(true)
+    // the section before’s timer, as the server stamped it, is still not this section’s
+    const prev = running({
+      durationMs: 120_000,
+      startedAt: new Date(T0 + OFFSET).toISOString(),
+      endsAt: new Date(T0 + OFFSET + 120_000).toISOString(),
+    })
+    expect(runOfShowEnded(last(prev, REACHED + 5_000, REACHED, OFFSET))).toBe(false)
+  })
+
+  it('a record that is not on this section (or a timer with no start) ends nothing; a read with no record (a follower’s) is as before', () => {
+    const own = started(REACHED + 1_000)
+    expect(runOfShowEnded(last(own, REACHED + 62_000, null))).toBe(false)
+    expect(runOfShowEnded(last({ ...own, startedAt: null }, REACHED + 62_000, REACHED))).toBe(false)
+    expect(runOfShowEnded(agendaOf(frames(), 'f4', clock(before, REACHED + 5_000), ME))).toBe(true)
+  })
+})
+
 describe('drift (presenter only)', () => {
   const sections = sectionsOf(frames()) // 2 + 10 + (none) + 5 = 17 min
   it('is planned against projected: finished sections count what they took, the rest their plan', () => {
@@ -313,6 +362,26 @@ describe('the presenter’s record', () => {
       { frameId: 'f1', name: 'Warm-up', plannedMin: 2, actualMs: 150_000 },
       { frameId: 'f2', name: 'Ideas', plannedMin: 10, actualMs: 300_000 },
     ])
+  })
+
+  it('says when the visit in progress began (wave N.1: a section’s own timer is one started after it), also after a reload', () => {
+    const storage = memoryStorage()
+    const c = clockAt()
+    const r = new AgendaRecorder('b-board', { storage, now: c.now })
+    expect(r.enteredAt('f1')).toBeNull() // nothing on record
+    r.begin(sections)
+    r.enter('f1', sections)
+    c.advance(130_000)
+    r.enter('f2', sections)
+    expect(r.enteredAt('f2')).toBe(T0 + 130_000)
+    expect(r.enteredAt('f1')).toBeNull() // that visit is closed
+    c.advance(60_000)
+    // back to f1: a new visit, from now
+    r.enter('f1', sections)
+    expect(r.enteredAt('f1')).toBe(T0 + 190_000)
+    expect(new AgendaRecorder('b-board', { storage, now: c.now }).enteredAt('f1')).toBe(T0 + 190_000)
+    r.stop()
+    expect(r.enteredAt('f1')).toBeNull()
   })
 
   it('entering the section already being visited changes nothing (a reload of the presenting tab)', () => {
