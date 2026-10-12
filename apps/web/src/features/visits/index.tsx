@@ -5,7 +5,8 @@
 //
 // The visit time is the person's own, private, per board (the api's visit markers, ./client.ts; migration 0031):
 // nobody else ever learns when they came. This page asks for it as the board opens (the api answers the PREVIOUS visit
-// and stores this one), and when the page is left it sends one "seen" beacon, so the next visit measures from here.
+// and stores this one), and when the page is hidden or left (visibilitychange to hidden, pagehide, or the board closing)
+// it sends a "seen" beacon, so the next visit measures from here.
 // A name-only guest keeps the device-local Catch me up window and makes no request at all. An api without the route
 // (a 404), a refusal or a network error leaves the chip hidden and everything else as it was.
 //
@@ -103,8 +104,16 @@ export const feature: CanvasFeature = {
     const leave = () => {
       if (visited) sendSeen(boardId)
     }
-    const win = ctx.canvas.container()?.ownerDocument.defaultView ?? globalThis
+    const doc = ctx.canvas.container()?.ownerDocument
+    const win = doc?.defaultView ?? globalThis
+    // pagehide alone is not enough: phones (iOS Safari, Android app switching) often fire none of it, and a background
+    // tab the browser discards (Memory Saver) or a crash never does. The page turning hidden is the last moment that
+    // is reliably seen, so it says "seen" too (the api writes at most once per 10 s per person and board).
+    const hide = () => {
+      if (doc?.visibilityState === 'hidden') leave()
+    }
     win.addEventListener?.('pagehide', leave)
+    doc?.addEventListener?.('visibilitychange', hide)
 
     void (async () => {
       const answer = await fetchVisit(boardId)
@@ -135,6 +144,7 @@ export const feature: CanvasFeature = {
       abort.abort()
       if (fade) clearTimeout(fade)
       win.removeEventListener?.('pagehide', leave)
+      doc?.removeEventListener?.('visibilitychange', hide)
       leave()
       visitsView(ctx.canvas).set(null)
       noteServerVisit(boardId, null)

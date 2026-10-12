@@ -112,3 +112,15 @@
     border-radius: 14px;
   }
 }
+
+/* A finger needs 40 to 44 px: the chip only appears after a change, so nothing else covers its buttons on a phone. */
+@media (pointer: coarse) {
+  .dr-visits-chip .dr-visits-chip__btn {
+    min-height: 44px;
+    padding: 0 14px;
+  }
+  .dr-visits-chip .dr-visits-chip__x {
+    width: 44px;
+    height: 44px;
+  }
+}

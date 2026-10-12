@@ -74,10 +74,29 @@ function fakeWindow() {
   }
 }
 
+/** The page's document: a visibility state and 'visibilitychange' listeners, like a browser's. */
+function fakeDocument(win: ReturnType<typeof fakeWindow>) {
+  const w = fakeWindow()
+  const doc = {
+    defaultView: win,
+    visibilityState: 'visible' as 'visible' | 'hidden',
+    addEventListener: w.addEventListener,
+    removeEventListener: w.removeEventListener,
+    listeners: w.listeners,
+    /** the browser turns the page hidden (a tab switch, an app switch on a phone) or visible and says so */
+    setVisibility(state: 'visible' | 'hidden') {
+      doc.visibilityState = state
+      w.fire('visibilitychange')
+    },
+  }
+  return doc
+}
+
 interface Fake {
   ctx: CanvasFeatureContext
   canvas: LobbyCanvas
   win: ReturnType<typeof fakeWindow>
+  doc: ReturnType<typeof fakeDocument>
   writes: string[]
   zoomed: { bounds: unknown; opts: unknown }[]
 }
@@ -85,6 +104,7 @@ interface Fake {
 /** A board with one note added and one edited since SEEN, and one deleted, as the scene holds them. */
 function fakeCtx(o: { guest?: boolean; role?: string } = {}): Fake {
   const win = fakeWindow()
+  const doc = fakeDocument(win)
   const writes: string[] = []
   const zoomed: Fake['zoomed'] = []
   const note = (id: string, created: number, updated: number) => ({
@@ -109,7 +129,7 @@ function fakeCtx(o: { guest?: boolean; role?: string } = {}): Fake {
     throw new Error(`the visits feature called canvas.${name}`)
   }
   const canvas = {
-    container: () => ({ ownerDocument: { defaultView: win } }),
+    container: () => ({ ownerDocument: doc }),
     items: () => live,
     engine: { elements: () => new Map([...live, dead].map((e) => [e.id, e])) },
     isHidden: () => false,
@@ -135,7 +155,7 @@ function fakeCtx(o: { guest?: boolean; role?: string } = {}): Fake {
     // no history access: the optional reads fail quietly and the timestamps' answer stands
     api: { request: async () => Promise.reject(new Error('403')) },
   } as unknown as CanvasFeatureContext
-  return { ctx, canvas, win, writes, zoomed }
+  return { ctx, canvas, win, doc, writes, zoomed }
 }
 
 /** Lets the fetch, the room wait and the compute run. */
@@ -154,6 +174,7 @@ describe('on a board page', () => {
     expect(requests).toEqual([])
     expect(visitsView(f.canvas).get()).toBeNull()
     expect(f.win.listeners('pagehide')).toBe(0)
+    expect(f.doc.listeners('visibilitychange')).toBe(0)
     expect(catchUpWindow(BOARD, AFTER, null).visit).toBe(false)
   })
 
@@ -200,6 +221,7 @@ describe('on a board page', () => {
       await settle()
       expect(visitsView(f.canvas).get(), String(status)).toBeNull()
       f.win.fire('pagehide')
+      f.doc.setVisibility('hidden')
       cleanup?.()
       expect(beacons, String(status)).toEqual([])
     }
@@ -218,6 +240,31 @@ describe('on a board page', () => {
     expect(f.win.listeners('pagehide')).toBe(0)
     expect(visitsView(f.canvas).get()).toBeNull()
     expect(catchUpWindow(BOARD, AFTER + 1, null).visit).toBe(false) // forgotten with the page
+  })
+
+  it('also says "seen" when the page turns hidden (phones and discarded tabs often fire no pagehide), and not when it turns visible', async () => {
+    const f = fakeCtx()
+    const cleanup = feature.onMount?.(f.ctx)
+    // before the api has taken this open's visit there is nothing to say "seen" about
+    f.doc.setVisibility('hidden')
+    expect(beacons).toEqual([])
+    f.doc.setVisibility('visible')
+    markRoomReady(f.canvas)
+    await settle()
+    expect(f.doc.listeners('visibilitychange')).toBe(1)
+    f.doc.setVisibility('hidden')
+    expect(beacons).toEqual([`/api/boards/${BOARD}/visit/seen`])
+    f.doc.setVisibility('visible')
+    expect(beacons).toHaveLength(1)
+    f.doc.setVisibility('hidden') // hidden again: another beacon (the api collapses repeats inside 10 s)
+    expect(beacons).toHaveLength(2)
+    // the chip is untouched by any of it: this is not Mark all seen
+    expect(visitsView(f.canvas).get()).toMatchObject({ hidden: false, outlines: true })
+    cleanup?.()
+    expect(f.doc.listeners('visibilitychange')).toBe(0)
+    const after = beacons.length
+    f.doc.setVisibility('hidden') // a closed board's page says nothing more
+    expect(beacons).toHaveLength(after)
   })
 
   it('the outlines fade after 15 seconds; the chip stays until Mark all seen', async () => {
