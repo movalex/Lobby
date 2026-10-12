@@ -63,6 +63,13 @@ const ALLOWED_HOSTS = new Set([
   'json-schema.org',
   'rolldown.rs',
 ])
+/**
+ * Wave N (WS6, N6-1): XML namespace names of @cantoo/pdf-lib's XMP and PDF/A metadata (its api/pdfa/xmp.js and
+ * facturx.js), written into a PDF's metadata stream and never requested. Allowed in the PDF chunks only (the PDF
+ * worker and the no-worker fallback), so the same host anywhere else in the build still fails.
+ */
+const PDF_NAMESPACE_HOSTS = new Set(['ns.adobe.com', 'purl.org', 'www.aiim.org'])
+const PDF_CHUNK = /[\\/]assets[\\/](pdf\.worker|pdf-build)-[\w-]+\.js$/
 
 function* walk(dir: string): Generator<string> {
   for (const name of readdirSync(dir)) {
@@ -177,8 +184,11 @@ test('the build carries no tldraw (packages, classes, the embed allowlist) and n
   const hosts = new Set<string>()
   for (const f of walk(PROD_DIST)) {
     if (!/\.(m?js|css|html)$/.test(f)) continue
-    for (const m of readFileSync(f, 'utf8').matchAll(/https?:\/\/([a-z0-9.-]+\.[a-z]{2,})/g))
-      hosts.add(m[1] as string)
+    for (const m of readFileSync(f, 'utf8').matchAll(/https?:\/\/([a-z0-9.-]+\.[a-z]{2,})/g)) {
+      const host = m[1] as string
+      if (PDF_NAMESPACE_HOSTS.has(host) && PDF_CHUNK.test(f)) continue
+      hosts.add(host)
+    }
   }
   expect([...hosts].filter((h) => !h.endsWith('.invalid') && !ALLOWED_HOSTS.has(h)).sort()).toEqual([])
   expect(hosts.has('clerk.com')).toBe(true) // positive control: the scan read the chunks
