@@ -60,7 +60,7 @@ import {
   setAiCtx,
 } from './runtime.ts'
 import { regionTile } from './shimmer.ts'
-import { type AiTarget, boardTarget, isLive, NONE, refOf } from './target.ts'
+import { type AiTarget, boardTarget, isLive, NONE, omittedNotice, refOf } from './target.ts'
 
 const enc = encodeURIComponent
 const NOTICE_KEY = 'dr-ai'
@@ -153,6 +153,9 @@ export function cancelAiJob(canvas: LobbyCanvas) {
   })
 }
 
+/** The runs already counted as `ai.open:<kind>` (a run that waits for the notice comes back as the same request). */
+const openCounted = new WeakSet<object>()
+
 /** Longest wait for this tab's last edits to reach the server before an AI request. */
 const SAVE_WAIT_MS = 3000
 
@@ -195,8 +198,12 @@ export async function runAi(
     if (at) aiMenu(canvas).set({ at, target, view: 'notice', pending: req })
     return
   }
-  // M4-6: what people use (the event name only: no text, no ids)
-  countUsage(`ai.open:${req.into ? req.into.kind : req.action}`)
+  // M4-6: what people use (the event name only: no text, no ids). N1: once per run, though the api's "notice first" can send
+  // the same run round again (the notice's Continue calls this with the same request)
+  if (!openCounted.has(req)) {
+    openCounted.add(req)
+    countUsage(`ai.open:${req.into ? req.into.kind : req.action}`)
+  }
   // A summary always opens in the private panel first (DANA-04).
   const mode = req.action === 'summarize' ? (req.mode ?? 'panel') : undefined
   // wave L: where it is (the live shimmer others see, L2-1e), and the vote the action items follow (L2-4)
@@ -229,7 +236,12 @@ export async function runAi(
     if (where) aiMenu(canvas).set({ at: where, target, view: 'notice', pending: req })
     return
   }
-  if (out) applyResult(canvas, out, target, req, job.opener)
+  if (out) {
+    applyResult(canvas, out, target, req, job.opener)
+    // N1: the request named only the first AI_MAX_REQUEST_SHAPES objects of a bigger target: say so
+    const capped = omittedNotice(target)
+    if (capped) ctx.notify({ key: 'ai-capped', text: capped, testId: 'ai-capped', timeoutMs: 9000 })
+  }
 }
 
 /** The rect a run is about, as the api takes it (`at`: the live shimmer's place), or null. */
@@ -441,7 +453,12 @@ const ACTION_WORDS: Record<AiAction, string> = {
  * else the selection's bounds. An answer without a run id cannot be a wave L api's (a wave K api refuses the
  * wave L actions with 400): it counts as an answer that could not be used.
  */
-export async function runPublic(ctx: CanvasFeatureContext, input: AiRunInput): Promise<AiResult | null> {
+export async function runPublic(
+  ctx: CanvasFeatureContext,
+  input: AiRunInput,
+  /** `counted`: the caller already counted this ask as `ai.open:<action>` (N1: an ask never counts twice) */
+  opts: { counted?: boolean } = {},
+): Promise<AiResult | null> {
   setAiCtx(ctx)
   const { canvas } = ctx
   await ensureAiStatus(canvas)
@@ -455,7 +472,7 @@ export async function runPublic(ctx: CanvasFeatureContext, input: AiRunInput): P
     return refuse('Only editors can add AI results to this board.')
   if (aiJob(canvas).get())
     return refuse('Lobby is still working on another AI request. Wait for it to finish.')
-  countUsage(`ai.open:${input.action}`)
+  if (!opts.counted) countUsage(`ai.open:${input.action}`)
   let acknowledged = input.acknowledged === true
   const words = noticeWords(input as Pick<AiRunInput, 'action'> & { shapeIds?: readonly string[] })
   if (!status.noticeAccepted && !acknowledged) {

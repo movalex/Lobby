@@ -45,7 +45,13 @@ export const WHOLE_BOARD: AiTarget = { ...NONE, label: 'the whole board' }
  * While another AI request of this tab is running (themes, a recap, …) it asks nothing and leaves the open answer
  * alone: the person is told to wait.
  */
-export async function askBoard(ctx: CanvasFeatureContext, question: string, target: AiTarget): Promise<void> {
+export async function askBoard(
+  ctx: CanvasFeatureContext,
+  question: string,
+  target: AiTarget,
+  /** `counted`: the caller already counted this ask as `ai.open:ask` (the all-boards ask that fell back to this board) */
+  opts: { counted?: boolean } = {},
+): Promise<void> {
   const { canvas } = ctx
   const q = question.replace(/\s+/g, ' ').trim().slice(0, AI_ASK_QUESTION_MAX)
   if (!q) return
@@ -69,11 +75,15 @@ export async function askBoard(ctx: CanvasFeatureContext, question: string, targ
   aiAnswer(canvas).set(mine)
   // one private panel at a time: the summary or a recap closes
   openingPrivatePanel(canvas, 'answer')
-  const r = await runPublic(ctx, {
-    action: 'ask',
-    question: q,
-    shapeIds: target.ids.slice(0, AI_MAX_REQUEST_SHAPES).map(refOf),
-  })
+  const r = await runPublic(
+    ctx,
+    {
+      action: 'ask',
+      question: q,
+      shapeIds: target.ids.slice(0, AI_MAX_REQUEST_SHAPES).map(refOf),
+    },
+    opts,
+  )
   if (aiAnswer(canvas).get() !== mine) return // replaced or closed meanwhile
   if (r?.action !== 'ask') {
     aiAnswer(canvas).set(null)

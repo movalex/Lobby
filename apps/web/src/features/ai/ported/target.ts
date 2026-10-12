@@ -33,6 +33,21 @@ export interface AiTarget {
   bounds: Bounds | null
   /** The selection is exactly one mind-map topic (K7: "Expand with AI" is offered); its element id. */
   topicId?: string
+  /**
+   * N1: how many objects are past AI_MAX_REQUEST_SHAPES and so not in `ids` (absent: none). The api cannot be asked about
+   * more than it is told of, so the person is told (`omittedNotice`).
+   */
+  omitted?: number
+}
+
+/** What a cut list of `n` objects adds to a target: how many were left out, when any were. */
+const omittedOf = (n: number): { omitted?: number } =>
+  n > AI_MAX_REQUEST_SHAPES ? { omitted: n - AI_MAX_REQUEST_SHAPES } : {}
+
+/** The words for a target whose list was cut at the request cap, or null when nothing was left out. */
+export function omittedNotice(t: Pick<AiTarget, 'ids' | 'omitted'>): string | null {
+  if (!t.omitted || t.omitted <= 0) return null
+  return `AI read ${t.ids.length} of the ${t.ids.length + t.omitted} things here, the most it takes at once. Select fewer, or one frame, to cover the rest.`
 }
 
 /** Objects looked at when counting (a huge frame stops counting here: the api has its own caps). */
@@ -253,6 +268,7 @@ export function selectionTarget(canvas: LobbyCanvas): AiTarget | null {
   return {
     ...(only && isTopicElement(only) ? { topicId: only.id } : {}),
     kind: 'selection',
+    ...omittedOf(els.length),
     ids: els.slice(0, AI_MAX_REQUEST_SHAPES).map((e) => e.id),
     label: describe(els, notes),
     notes,
@@ -283,6 +299,7 @@ function frameTarget(canvas: LobbyCanvas, frame: CanvasElement): AiTarget {
   const { notes, prompts, texts } = count(canvas, [frame, ...loose])
   return {
     kind: 'frame',
+    ...omittedOf(loose.length + 1),
     ids: [frame.id, ...loose.map((e) => e.id)].slice(0, AI_MAX_REQUEST_SHAPES),
     label: describe([frame], notes),
     notes,
@@ -329,6 +346,7 @@ export function boardTarget(canvas: LobbyCanvas): AiTarget {
   const { notes, prompts, texts } = count(canvas, roots)
   return {
     kind: 'none',
+    ...omittedOf(roots.length),
     ids: roots.slice(0, AI_MAX_REQUEST_SHAPES).map((e) => e.id),
     label: 'the whole board',
     notes,

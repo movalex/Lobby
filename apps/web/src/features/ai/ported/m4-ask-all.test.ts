@@ -6,8 +6,9 @@
 //  - What people use is counted by event name only: ai.open:<kind>, ai.ask.scope:<board|all>, sort.run:<kind>,
 //    pieces.insert.
 import { installServerTextMetrics } from '@draftroom/canvas-schema/engine'
-import type { WorkspaceAskResponse } from '@draftroom/contracts'
+import { AI_ERROR_CODES, type WorkspaceAskResponse } from '@draftroom/contracts'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ApiError } from '../../../api/client.ts'
 import { pendingUsage, resetUsageForTests } from '../../../lib/usage.ts'
 import { insertPiece } from '../../pieces/insert.ts'
 import { sortBy } from '../../sort/run.ts'
@@ -31,6 +32,7 @@ const {
   canAddWorkspaceAnswer,
   citationHref,
 } = await import('./ask-all.ts')
+const { aiMenu } = await import('./runtime.ts')
 const { selectionTarget } = await import('./target.ts')
 const { aiKit, note } = await import('./test-kit.ts')
 
@@ -122,6 +124,9 @@ describe('Ask all boards (M4-6)', () => {
     expect(k.notify).toHaveBeenCalledWith(expect.objectContaining({ text: ALL_BOARDS_FALLBACK }))
     expect(aiAnswer(k.canvas).get()).toMatchObject({ status: 'done', question: 'budget?' })
     expect(pendingUsage()['ai.ask.scope:board']).toBe(1)
+    // N1 (wave M follow-up 4): one ask is one ai.open:ask, though the all-boards ask fell back to this board's
+    expect(pendingUsage()['ai.open:ask']).toBe(1)
+    expect(pendingUsage()['ai.ask.scope:all']).toBe(1)
   })
 })
 
@@ -133,6 +138,29 @@ describe('usage counts in the AI, sort and Pieces features (M4-6)', () => {
     if (!target) throw new Error('no target')
     k.answer({ action: 'actions', items: [], truncated: false, budget: null, runId: RUN })
     await runAi(k.canvas, { action: 'actions' }, target)
+    expect(pendingUsage()['ai.open:actions']).toBe(1)
+  })
+
+  it('N1 (wave M follow-up 4): a run the api wants the notice for after all is counted once, not again when it is run with the notice', async () => {
+    const k = aiKit([...note('a', 0, 0, 'One'), ...note('b', 300, 0, 'Two')])
+    k.canvas.select(['a', 'b'])
+    const target = selectionTarget(k.canvas)
+    if (!target) throw new Error('no target')
+    const req = { action: 'actions' } as const
+    const at = { x: 10, top: 10, bottom: 10 }
+    k.answer(
+      () => {
+        throw new ApiError('invalid', 400, AI_ERROR_CODES.noticeRequired, 'Accept the notice first.')
+      },
+      { action: 'actions', items: [], truncated: false, budget: null, runId: RUN },
+    )
+    await runAi(k.canvas, req, target, { at })
+    // the notice is up with the run waiting; nothing has been done yet
+    const waiting = aiMenu(k.canvas).get()
+    expect(waiting).toMatchObject({ view: 'notice', pending: req })
+    // Continue: the same run, with the notice accepted
+    await runAi(k.canvas, waiting?.pending ?? req, target, { acknowledged: true })
+    expect(k.requests).toHaveLength(2)
     expect(pendingUsage()['ai.open:actions']).toBe(1)
   })
 

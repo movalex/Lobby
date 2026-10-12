@@ -91,7 +91,8 @@ export async function askAllBoards(ctx: CanvasFeatureContext, question: string):
     if (e instanceof WorkspaceAskUnavailableError) {
       // the switch has gone (the client latched it off); this board answers instead
       ctx.notify({ key: 'dr-ai', text: ALL_BOARDS_FALLBACK, testId: 'ai-ask-fallback', timeoutMs: 6000 })
-      await askBoard(ctx, q, WHOLE_BOARD)
+      // (already counted above as ai.open:ask: one ask is one count, whoever answers it)
+      await askBoard(ctx, q, WHOLE_BOARD, { counted: true })
       return
     }
     ctx.notify({

@@ -130,6 +130,12 @@ export function provenanceOfSelection(
   }
 }
 
+/** The words the chip shows. */
+export const PROVENANCE_CHIP_TEXT = 'AI-made'
+
+/** The chip's accessible name: it starts with the words it shows (WCAG 2.5.3), then says what pressing it opens. */
+export const provenanceChipLabel = (): string => `${PROVENANCE_CHIP_TEXT}: details`
+
 /** The chip's selection-bar entry: shown while the selection holds something AI made. */
 export const PROVENANCE_ITEM: SelectionBarItemSpec = {
   id: AI_PROVENANCE_ITEM_ID,
@@ -167,7 +173,7 @@ const ProvenanceChip = memo(function ProvenanceChip() {
         ref={ref}
         type="button"
         className="dr-cux-selbar__btn dr-ai-provchip"
-        aria-label="Made with AI: details"
+        aria-label={provenanceChipLabel()}
         title={provenanceLine(info)}
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -175,7 +181,7 @@ const ProvenanceChip = memo(function ProvenanceChip() {
         onClick={() => setOpen((o) => !o)}
       >
         <SparkIcon size={13} />
-        <span>AI-made</span>
+        <span>{PROVENANCE_CHIP_TEXT}</span>
       </button>
       {open && (
         <InPopoverLayer canvas={canvas}>

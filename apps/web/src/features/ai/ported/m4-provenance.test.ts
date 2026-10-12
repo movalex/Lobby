@@ -11,6 +11,8 @@ import { applyNotes } from './apply.ts'
 import { aiLens, aiMadeCount, lensBannerText, toggleAiLens } from './lens.tsx'
 import {
   actionOf,
+  PROVENANCE_CHIP_TEXT,
+  provenanceChipLabel,
   provenanceLine,
   provenanceOfSelection,
   provenanceTime,
@@ -112,6 +114,17 @@ describe('the "AI-made" chip (M4-2)', () => {
     expect(actionOf(board([]), el('heading'))).toBe('AI')
     expect(provenanceTime(null)).toBe('just now')
     expect(provenanceTime(AT, new Date(2027, 0, 1).getTime())).toBe('8 Oct 2026, 14:05')
+  })
+})
+
+describe('N1 (wave M follow-up 4): the chip’s accessible name starts with the words it shows (WCAG 2.5.3, Label in Name)', () => {
+  it('contains the visible text, so a person who speaks "click AI-made" reaches it', () => {
+    expect(PROVENANCE_CHIP_TEXT).toBe('AI-made')
+    const label = provenanceChipLabel()
+    expect(label.toLowerCase()).toContain(PROVENANCE_CHIP_TEXT.toLowerCase())
+    expect(label.startsWith(PROVENANCE_CHIP_TEXT)).toBe(true)
+    // and still says what pressing it does
+    expect(label).toMatch(/details/)
   })
 })
 
