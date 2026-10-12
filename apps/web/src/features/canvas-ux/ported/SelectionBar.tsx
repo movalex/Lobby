@@ -14,7 +14,7 @@
 // panel, the bottom toolbar, W2's top-centre stack and the navigation panel, and past the selection's flow '+'
 // handles; it registers itself as the 'selection-bar' obstacle. When the full bar fits nowhere it folds to compact,
 // and while one of its popovers (More, a style tray) still covers the style panel, the panel steps aside.
-import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { CanvasFeatureContext, SelectionBarItemSpec } from '../../../canvas/api/index.ts'
 import {
   OBSTACLE_IDS,
@@ -487,6 +487,8 @@ export function SelectionBar({ ctx }: { ctx: CanvasFeatureContext }) {
   const view = useValue('cux-selbar', () => selectionBarView(ctx), [ctx])
   const [moreOpen, setMoreOpen] = useState(false)
   const tray = useValue(state.selectionTray)
+  // N1: the box tier one's tray is drawn into (the bar's last child; a stable callback, so it is set once per mount)
+  const trayHostRef = useCallback((el: HTMLDivElement | null) => state.selectionTrayHost.set(el), [state])
   const moreId = useId()
   const sel = view?.sel ?? ''
   useEffect(() => {
@@ -664,6 +666,8 @@ export function SelectionBar({ ctx }: { ctx: CanvasFeatureContext }) {
             )}
           </>
         )}
+        {/* N1: tier one's tray is drawn into this box, last in the DOM as it is on screen (WCAG 2.4.3) */}
+        <div ref={trayHostRef} className="cux-selbar__tray-host" />
       </SelectionBarCompact.Provider>
     </div>
   )

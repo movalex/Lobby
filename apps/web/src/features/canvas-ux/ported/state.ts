@@ -61,6 +61,12 @@ export interface CanvasUxState {
    * changes.
    */
   readonly stylePanelYield: Atom<boolean>
+  /**
+   * N1 (wave M follow-up 1, WCAG 2.4.3): the selection bar's last box, where tier one's style tray is drawn. The tray is
+   * drawn last (under the arrange row and More's row), so it is last in the DOM too, and the keyboard reaches it in the
+   * order it is drawn in. null while no bar is drawn (the tray then stays where its item is).
+   */
+  readonly selectionTrayHost: Atom<HTMLElement | null>
 }
 
 const states = new WeakMap<LobbyCanvas, CanvasUxState>()
@@ -83,6 +89,7 @@ export function uxState(canvas: LobbyCanvas): CanvasUxState {
       fillChosen: atom('cux-fill-chosen', false),
       selectionTray: atom<string | null>('cux-selection-tray', null),
       stylePanelYield: atom('cux-style-panel-yield', false),
+      selectionTrayHost: atom<HTMLElement | null>('cux-selection-tray-host', null),
     }
     states.set(canvas, s)
   }
