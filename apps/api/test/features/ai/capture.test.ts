@@ -702,3 +702,19 @@ describe('what a capture reserves, and the budgets’ refusals', () => {
     )
   })
 })
+
+describe('how much of a transcript is read', () => {
+  it('at the default input cap, 132,000 bytes of Chinese (the web cuts there: TRANSCRIPT_READ_BYTES) are read whole', async () => {
+    const x = await world({ env: UNLIMITED_TOKENS })
+    const line = `${'会议讨论了项目计划和下一步行动安排确认时间表'.repeat(2)}\n`
+    let text = ''
+    while (Buffer.byteLength(text + line, 'utf8') <= 132_000) text += line
+    text = text.trim()
+    expect(text.length).toBeLessThan(60_000)
+    x.logs.length = 0
+    const res = await transcript(x.alice, x.board, { text })
+    expect(res.statusCode, res.body).toBe(200)
+    const log = x.logs.find((l) => l.msg === 'ai capture') as { ai: { parts: number; truncated: boolean } }
+    expect(log.ai).toMatchObject({ parts: 4, truncated: false })
+  })
+})

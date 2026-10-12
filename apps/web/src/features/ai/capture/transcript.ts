@@ -119,27 +119,57 @@ export function parseTranscript(text: string, format: TranscriptFormat): string 
   return once(lines).join('\n').trim()
 }
 
+/**
+ * About what the api reads of a transcript at its default settings, in UTF-8 bytes (apps/api capture.ts: at most 4
+ * parts of about 34,000 bytes each, the AI input cap's estimate of 3 bytes a token, a part never splitting a line that
+ * fits), with room for where the parts' lines end. Writing in Latin letters reaches the 60,000-character limit first;
+ * text of 3 bytes a character (Chinese, Japanese, Korean) reaches this one at about 44,000 characters, so the dialog
+ * says how much will be used instead of the api leaving the rest out unsaid. (A very long paragraph with no line
+ * breaks, or a lower input cap on the api, can still leave a little more out.)
+ */
+export const TRANSCRIPT_READ_BYTES = 132_000
+
+/** How many UTF-16 units of `t` fit in `maxBytes` UTF-8 bytes (never half a surrogate pair). */
+function fitBytes(t: string, maxBytes: number): number {
+  let bytes = 0
+  for (let i = 0; i < t.length; i++) {
+    const c = t.charCodeAt(i)
+    const pair = c >= 0xd800 && c <= 0xdbff && i + 1 < t.length
+    const n = c < 0x80 ? 1 : c < 0x800 ? 2 : pair ? 4 : 3
+    if (bytes + n > maxBytes) return i
+    bytes += n
+    if (pair) i++
+  }
+  return t.length
+}
+
 export interface TranscriptLimit {
-  /** what is sent: at most `max` characters */
+  /** what is sent: at most `max` characters, and at most TRANSCRIPT_READ_BYTES */
   readonly text: string
   readonly length: number
   readonly truncated: boolean
-  /** "Only the first 60,000 characters will be used." past the limit, else null */
+  /** "Only the first 60,000 characters will be used." past the limit (with the number that fits), else null */
   readonly notice: string | null
 }
 
-/** The transcript within the capture's limit, and the notice past it. */
-export function transcriptLimit(text: string, max: number = CAPTURE_TRANSCRIPT_MAX_CHARS): TranscriptLimit {
+/** The transcript within the capture's limits, and the notice past them. */
+export function transcriptLimit(
+  text: string,
+  max: number = CAPTURE_TRANSCRIPT_MAX_CHARS,
+  maxBytes: number = TRANSCRIPT_READ_BYTES,
+): TranscriptLimit {
   const t = text.trim()
-  if (t.length <= max) return { text: t, length: t.length, truncated: false, notice: null }
   // never half a surrogate pair at the cut
-  let cutAt = max
+  let cutAt = Math.min(t.length, max)
   const code = t.charCodeAt(cutAt - 1)
-  if (code >= 0xd800 && code <= 0xdbff) cutAt--
+  if (cutAt < t.length && code >= 0xd800 && code <= 0xdbff) cutAt--
+  cutAt = Math.min(cutAt, fitBytes(t, maxBytes))
+  if (cutAt >= t.length) return { text: t, length: t.length, truncated: false, notice: null }
+  const kept = t.slice(0, cutAt).trimEnd()
   return {
-    text: t.slice(0, cutAt).trimEnd(),
+    text: kept,
     length: t.length,
     truncated: true,
-    notice: truncationNotice(max),
+    notice: truncationNotice(cutAt === max ? max : kept.length),
   }
 }

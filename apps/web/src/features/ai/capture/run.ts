@@ -8,7 +8,8 @@
 //    (./diagram.ts, W4's writer), or a meeting frame (./meeting.ts).
 // 3. It is shown first (the shared AI preview, with its words and counts); Apply writes it in ONE undo step with the
 //    `ai` provenance, brings it into this tab's view (../reveal.ts) and says AI made it (with the one-step Undo);
-//    Try again is a new capture; Discard writes nothing.
+//    Try again is a new capture (it counts toward the day's captures), shown under way in the dialog again, with its
+//    Cancel and the count left; Discard writes nothing.
 // 4. Only then, and only when the person ticked "Also add the photo to the board", the photo takes the normal
 //    upload path (canvas.files.insert): the downsized JPEG, beside the result. Otherwise nothing of the photo is kept.
 // Usage events (names only): ai.capture.photo / .boardimage / .transcript when a request goes, ai.capture.apply.
@@ -54,6 +55,8 @@ export interface CaptureDialogState {
   readonly id: number
   readonly tab: 'photo' | 'transcript'
   readonly boardImage?: { readonly elementId: string; readonly mode: CaptureMode }
+  /** reopened for a Try again from the preview: it shows that capture under way, and starts nothing itself */
+  readonly retry?: true
 }
 export const captureDialog = perCanvas<Atom<CaptureDialogState | null>>(() =>
   atom<CaptureDialogState | null>('lobby-capture-dialog', null),
@@ -71,6 +74,16 @@ export function openCaptureDialog(
   })
 }
 export const closeCaptureDialog = (canvas: LobbyCanvas) => captureDialog(canvas).set(null)
+
+/** The dialog again for a Try again (see CaptureDialogState.retry). */
+function reopenForRetry(canvas: LobbyCanvas, src: CaptureSource): void {
+  captureDialog(canvas).set({
+    id: ++seq,
+    tab: src.kind === 'transcript' ? 'transcript' : 'photo',
+    ...(src.kind === 'board-image' ? { boardImage: { elementId: src.elementId, mode: src.mode } } : {}),
+    retry: true,
+  })
+}
 
 /** A capture under way, or its failure (the dialog shows it); null when none. Never stored. */
 export interface CaptureJob {
@@ -223,8 +236,8 @@ export async function runCapture(ctx: CanvasFeatureContext, src: CaptureSource):
         return null
       }
       slot.set(job('error', captureErrorText(e, src.kind)))
-      // a retry that failed has no dialog to show it in
-      if (tries > 0 || !captureDialog(canvas).get())
+      // with no dialog to show it in (closed meanwhile), the failure is a notice
+      if (!captureDialog(canvas).get())
         ctx.notify({
           key: NOTICE_KEY,
           text: captureErrorText(e, src.kind),
@@ -242,6 +255,8 @@ export async function runCapture(ctx: CanvasFeatureContext, src: CaptureSource):
     const choice = await showAiPreview(ctx, planned.preview)
     if (choice === 'retry') {
       ctx.notify({ key: NOTICE_KEY, text: 'Asking AI again…', testId: 'capture-again', timeoutMs: 4000 })
+      // shown under way again: its stage, its Cancel, and how many captures are left today
+      reopenForRetry(canvas, src)
       continue
     }
     if (choice !== 'apply' || canvas.readOnly()) return null

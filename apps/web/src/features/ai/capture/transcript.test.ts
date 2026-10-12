@@ -3,7 +3,7 @@
 // notice past 60,000 characters.
 import { CAPTURE_TRANSCRIPT_MAX_CHARS } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
-import { formatOf, parseTranscript, transcriptLimit } from './transcript.ts'
+import { formatOf, parseTranscript, TRANSCRIPT_READ_BYTES, transcriptLimit } from './transcript.ts'
 
 const VTT = `WEBVTT
 Kind: captions
@@ -95,5 +95,24 @@ describe('the limit', () => {
     // never half an emoji at the cut
     const emoji = transcriptLimit(`${'x'.repeat(9)}😀abc`, 10)
     expect(emoji.text).toBe('x'.repeat(9))
+  })
+
+  it('text of 3 bytes a character is cut where the api stops reading, and the notice says how much is used', () => {
+    expect(TRANSCRIPT_READ_BYTES).toBe(132_000)
+    // 50,000 characters of Chinese are 150,000 bytes: the api reads about 44,000 of them
+    const cjk = transcriptLimit('会'.repeat(50_000))
+    expect(cjk.truncated).toBe(true)
+    expect(cjk.length).toBe(50_000)
+    expect(cjk.text).toHaveLength(44_000)
+    expect(new TextEncoder().encode(cjk.text).length).toBeLessThanOrEqual(TRANSCRIPT_READ_BYTES)
+    expect(cjk.notice).toBe('Only the first 44,000 characters will be used.')
+    // Latin text within 60,000 characters is read whole
+    expect(transcriptLimit('Ana: ok. '.repeat(6_000).slice(0, 54_000)).truncated).toBe(false)
+    // accented Latin (2 bytes a letter) at the character limit still fits the bytes
+    expect(transcriptLimit('é'.repeat(60_000)).truncated).toBe(false)
+    // never half an emoji at a byte cut either (4 bytes each)
+    const emoji = transcriptLimit('😀'.repeat(10), 100, 10)
+    expect(emoji.text).toBe('😀😀')
+    expect(emoji.notice).toBe('Only the first 4 characters will be used.')
   })
 })

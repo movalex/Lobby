@@ -3,14 +3,17 @@
 //
 // - Photo: "Take photo" (the phone's camera: accept image/*, capture environment), "Choose file", and Notes, Diagram
 //   or Auto; "Put each group in a frame" (notes) and "Also add the photo to the board" (off: nothing of the photo is
-//   kept unless it is ticked). Opened from an image's context menu it reads that image (no file to pick).
+//   kept unless it is ticked). Opened from an image's context menu it reads that image at once (no file to pick);
+//   when nothing is under way there (the notice's Cancel, a Cancel, a failure) its button starts it again.
 // - Meeting transcript: paste the text, or open a .txt, .vtt, .srt or .md file (parsed here: ./transcript.ts), an
-//   optional title, and a length meter; past 60,000 characters "Only the first 60,000 characters will be used."
+//   optional title, and a length meter; past 60,000 characters "Only the first 60,000 characters will be used." (past
+//   what the api reads, for text of 3 bytes a character, the notice gives that smaller number: ./transcript.ts).
 // - The notices (N5-5): on a person's first photo or transcript capture the dialog shows what is sent where, with a
 //   Continue (no checkbox); the same words are always in its footer, with the per-day count the last answer gave
 //   ("7 photo captures left today").
 // - While a capture runs the dialog says what it is doing, with Cancel; a failure stays in the dialog. Once there is an
-//   answer the dialog closes and the shared AI preview shows it (./run.ts).
+//   answer the dialog closes and the shared AI preview shows it (./run.ts); the preview's Try again opens it again,
+//   showing that capture under way (with Cancel and the count left).
 // Keys, pointers and the wheel inside it stay out of the canvas; Escape closes it.
 import { CAPTURE_TITLE_MAX_CHARS, CAPTURE_TRANSCRIPT_MAX_CHARS, type CaptureMode } from '@draftroom/contracts'
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react'
@@ -150,11 +153,12 @@ function CaptureDialog({ ctx }: { ctx: CanvasFeatureContext }) {
     void runCapture(ctx, src)
   }
 
-  // opened on a board image: it starts at once (after the notice the first time)
+  // opened on a board image: it starts at once (after the notice the first time); reopened for a Try again, the
+  // capture is already under way
   const started = useRef(false)
   useEffect(() => {
     const image = state?.boardImage
-    if (!image || started.current) return
+    if (!image || started.current || state?.retry) return
     started.current = true
     start({ kind: 'board-image', elementId: image.elementId, mode: image.mode, frames })
   })
@@ -253,9 +257,10 @@ function CaptureDialog({ ctx }: { ctx: CanvasFeatureContext }) {
             ? 'Turns the selected image into a diagram.'
             : 'Turns the selected image into notes.'}
         </p>
-        {job?.stage === 'error' && (
-          <div className="dr-ai-form__row">
-            <span className="dr-ai-form__spacer" />
+        {/* nothing under way (a failure, a Cancel, or the notice's Cancel): the way to start it is here */}
+        <div className="dr-ai-form__row">
+          <span className="dr-ai-form__spacer" />
+          {job?.stage === 'error' ? (
             <button
               type="button"
               className="dr-btn dr-btn--sm"
@@ -264,8 +269,17 @@ function CaptureDialog({ ctx }: { ctx: CanvasFeatureContext }) {
             >
               Try again
             </button>
-          </div>
-        )}
+          ) : (
+            <button
+              type="button"
+              className="dr-btn dr-btn--primary dr-btn--sm"
+              data-testid="capture-board-image-go"
+              onClick={() => start({ kind: 'board-image', elementId: boardImage.elementId, mode, frames })}
+            >
+              Read the image
+            </button>
+          )}
+        </div>
       </div>
     )
   } else if (tab === 'photo') {

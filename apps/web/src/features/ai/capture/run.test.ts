@@ -216,6 +216,62 @@ describe('a photo', () => {
 })
 
 describe('a board image and a transcript', () => {
+  it('Try again shows that capture under way in the dialog again (its stage and Cancel); Cancel there writes nothing', async () => {
+    const { f, ctx } = setup()
+    openCaptureDialog(ctx)
+    let signal: AbortSignal | undefined
+    capturePhoto.mockResolvedValueOnce(NOTES).mockImplementationOnce(
+      (_b: string, _j: Blob, _m: string, o: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          signal = o.signal
+          o.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+        }),
+    )
+    showAiPreview.mockResolvedValueOnce('retry')
+    const run = runCapture(ctx, photoSrc())
+    await vi.waitFor(() => expect(capturePhoto).toHaveBeenCalledTimes(2))
+    // the dialog closed for the preview, and is open again for the second capture, under way
+    expect(captureDialog(f.canvas).get()).toMatchObject({ tab: 'photo', retry: true })
+    expect(captureJob(f.canvas).get()?.stage).toBe('reading')
+    cancelCapture(f.canvas)
+    expect(await run).toBeNull()
+    expect(signal?.aborted).toBe(true)
+    expect(captureDialog(f.canvas).get()).not.toBeNull()
+    expect(f.live()).toEqual([])
+  })
+
+  it('a board image’s Try again reopens on that image (starting nothing itself); its failure shows in the dialog', async () => {
+    const { f, ctx, notices } = setup()
+    captureBoardImage
+      .mockResolvedValueOnce(NOTES)
+      .mockRejectedValueOnce(
+        new ApiError(
+          'rate-limited',
+          429,
+          'AI_CAPTURE_DAILY_CAP',
+          'You’ve used your 10 photo captures for today.',
+        ),
+      )
+    showAiPreview.mockResolvedValueOnce('retry')
+    openCaptureDialog(ctx, { boardImage: { elementId: 'img-1', mode: 'notes' } })
+    expect(
+      await runCapture(ctx, { kind: 'board-image', elementId: 'img-1', mode: 'notes', frames: true }),
+    ).toBeNull()
+    expect(captureBoardImage).toHaveBeenCalledTimes(2)
+    expect(captureDialog(f.canvas).get()).toMatchObject({
+      tab: 'photo',
+      boardImage: { elementId: 'img-1', mode: 'notes' },
+      retry: true,
+    })
+    expect(captureJob(f.canvas).get()).toMatchObject({
+      stage: 'error',
+      message: 'You’ve used your 10 photo captures for today.',
+    })
+    // in the dialog, not as a notice
+    expect(notices.map((n) => n.testId)).not.toContain('capture-error')
+    expect(f.live()).toEqual([])
+  })
+
   it('a board image goes by its id and lands beside it', async () => {
     const { ctx } = setup()
     captureBoardImage.mockResolvedValue(NOTES)
