@@ -25,9 +25,9 @@
 //      so the reset welcome's snapshot frame is over the snapshot worker's 16 KiB floor (wave N, N1-1) and is
 //      decoded in that module worker under the policy; the shapes sit in two small clusters at the far left and
 //      right of the first visit's fit, clear of the points the flow clicks. Then a note by hand (N, a click,
-//      typing, Escape, Saved), a free text by double-click, a PDF export (wave N, WS6: the PDF module worker, its
-//      vector pages' font engine fetching Lobby's fonts), a wheel zoom and a pan, a reload and the note opened
-//      again. The flow fails unless both workers started.
+//      typing, Escape, Saved), a note by double-click on empty canvas (RETRO-21b), a PDF export of the whole
+//      board (wave N, WS6: the PDF module worker, its vector pages' font engine fetching Lobby's fonts), a wheel
+//      zoom and a pan, a reload and the note opened again. The flow fails unless both workers started.
 // Collected per flow: securitypolicyviolation events, console messages about CSP, report-uri bodies,
 // requests to any non-local host (aborted before they leave), page errors. Exit 0 when every flow ran with
 // 0 violations, 0 CSP console messages and 0 foreign requests. Report:
@@ -453,7 +453,8 @@ async function boardFlow(page: Page, notes: Record<string, unknown>, boardId: st
   await page.waitForTimeout(700)
   notes.saveAfterNote = await attr(page, 'save-status', 'data-state')
   await step(page, notes, 'a note by hand (N, click, the text editor, Saved)')
-  // a free text by double-click on empty canvas
+  // a double-click on empty canvas: a sticky note there, its editor open (RETRO-21b; it made the engine's free
+  // text before, hence the words typed)
   await page.mouse.dblclick(box.x + box.width * 0.7, box.y + box.height * 0.3)
   await page.waitForSelector(TEXT_EDITOR, { timeout: 10_000 })
   await page.waitForFunction(
@@ -467,7 +468,7 @@ async function boardFlow(page: Page, notes: Record<string, unknown>, boardId: st
   await page.keyboard.type('Free text under CSP', { delay: 15 })
   await page.keyboard.press('Escape')
   await waitForAttr(page, 'save-status', 'data-state', 'saved', 30_000)
-  await step(page, notes, 'a free text by double-click')
+  await step(page, notes, 'a note by double-click on empty canvas (RETRO-21b)')
   // wave N (WS6, N6-1): a PDF export: the PDF module worker (@cantoo/pdf-lib, and for its vector pages the font
   // engine fetching Lobby's fonts) runs under the policy (a violation inside the worker reaches report-uri). A click
   // on empty canvas first: with nothing selected the page is the whole board (the seeded shapes and both notes)
