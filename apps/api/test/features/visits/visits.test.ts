@@ -385,7 +385,15 @@ describe('what is logged', () => {
       api.clock.advance(VISIT_WRITE_MIN_INTERVAL_MS + 1)
       const b = parseAnswer((await bob.req('POST', visitPath(board))).body)
       await bob.req('POST', visitSeenPath(board))
-      const log = lines.join('')
+      // each line's own `time` is the moment it was written, which is the moment of the request (the api's clock here
+      // is the real one plus an offset): the visit time and the log line's time can be the same millisecond. What must
+      // not be in the log is a visit time in any other field.
+      const log = lines
+        .map((l) => {
+          const { time: _written, ...rest } = JSON.parse(l) as Record<string, unknown>
+          return JSON.stringify(rest)
+        })
+        .join('\n')
       expect(log).toContain('/api/boards/:bid/visit')
       for (const t of [a.seenAt, b.seenAt, b.previousSeenAt as number])
         expect(log, `the time ${t}`).not.toContain(String(t))
