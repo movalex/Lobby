@@ -3,14 +3,17 @@
 //  - `ok` (this viewer can open the target now): the board's thumbnail (the same-origin thumbnail route, which checks
 //    access itself; a board with none shows its initial), its title and, for a card that opens a frame, the frame's
 //    name;
-//  - anything else, and until the api answered: the neutral face, "Board you can't open" (or "Board link" while
-//    loading), with nothing about the target: a missing, a forbidden and a trashed board look the same. Name-only
-//    guests always see it (the api answers them nothing else).
+//  - `unavailable`: the neutral face, "Board you can't open", with nothing about the target: a missing, a forbidden
+//    and a trashed board look the same;
+//  - until the api answered, while it cannot say (an older api, a restart: ./faces.ts asks again), and always for a
+//    name-only guest (the api answers them nothing else, whether or not they could open the board): the same
+//    neutral face, worded "Board link".
 // Its "Open" link goes there (a plain click in this tab, through the router, `?el=` zooming to the element, or in
 // place for a link to this very board; Ctrl, Cmd, Shift or a middle click: a new tab without opener or referrer).
 // The rest of the face takes no pointer events: selecting, moving and editing the card stay the canvas's.
 import { type CSSProperties, useEffect, useState } from 'react'
 import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
+import { knownUserKind } from '../../invite/guest.tsx'
 import { useValue } from '../../lib/signals.ts'
 import './board-links.css'
 import { faceStoreOf } from './faces.ts'
@@ -33,12 +36,16 @@ export function BoardCardFace({
   style: CSSProperties
 }) {
   const store = faceStoreOf(ctx.registries, ctx.board.id)
-  useEffect(() => store.want([target]), [store, target])
+  // asked now, and again while it is on screen whenever it goes stale or the api could not say
+  useEffect(() => store.watch(target), [store, target])
   const face = useValue('board-card-face', () => store.face(target), [store, target])
+  const unknown = useValue('board-card-face-unknown', () => store.unknown(target), [store, target])
   const [thumbFailed, setThumbFailed] = useState<string | null>(null)
   const ok = face?.state === 'ok' ? face : null
-  const state = ok ? 'ok' : face ? 'unavailable' : 'loading'
-  const title = ok ? ok.title : face ? 'Board you can’t open' : 'Board link'
+  const state = ok ? 'ok' : face ? 'unavailable' : unknown ? 'unknown' : 'loading'
+  // a guest is answered `unavailable` for every board: "can’t open" would be wrong for one they can open
+  const guest = knownUserKind(ctx.me.user.id) === 'guest'
+  const title = ok ? ok.title : face && !guest ? 'Board you can’t open' : 'Board link'
   const thumb = ok && thumbFailed !== ok.thumbnailPath ? ok.thumbnailPath : null
   const handlers = boardLinkHandlers(path, { counted: 'boardlinks.open', from: openFrom(ctx) })
   return (
@@ -48,7 +55,11 @@ export function BoardCardFace({
       data-lobby-board-card={id}
       data-state={state}
       aria-label={
-        ok ? `Board link: ${ok.title}${ok.frameName ? `, ${ok.frameName}` : ''}` : `Board link: ${title}`
+        ok
+          ? `Board link: ${ok.title}${ok.frameName ? `, ${ok.frameName}` : ''}`
+          : title === 'Board link'
+            ? title
+            : `Board link: ${title}`
       }
       style={style}
     >

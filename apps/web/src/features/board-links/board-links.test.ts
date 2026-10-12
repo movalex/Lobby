@@ -5,7 +5,7 @@
 import {
   BOARD_CARD_KIND,
   BOARD_CARDS_MAX_IDS,
-  type BoardCardsAnswer,
+  type BoardCardFace,
   BoardCardsAnswer as BoardCardsAnswerSchema,
   PALETTE_COMMAND_IDS,
   PENDING_PALETTE_COMMAND_IDS,
@@ -14,8 +14,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { navigate } from '../../lib/routing.ts'
 import { CANVAS_FEATURES } from '../canvas-registry.ts'
 import { backlinkPath, createBacklinksStore } from './backlinks.ts'
-import { backlinks, boardCards, unavailableCards } from './client.ts'
-import { createFaceStore, FACE_TTL_MS } from './faces.ts'
+import { askBoardCards, type BoardCardsOutcome, backlinks, boardCards, unavailableCards } from './client.ts'
+import { createFaceStore, FACE_RETRY_MS, FACE_TICK_MS, FACE_TTL_MS, retryDelay } from './faces.ts'
 import { feature, relativeBoardPath, relativeBoardPathHandler } from './index.tsx'
 import {
   BOARD_LINKS_BACKLINKS_COMMAND_ID,
@@ -162,6 +162,49 @@ describe('the client', () => {
     }
   })
 
+  it('askBoardCards tells what the api decided from what it could not say (never cached as unavailable)', async () => {
+    const ok = {
+      state: 'ok',
+      title: 'Design',
+      frameName: null,
+      thumbnailPath: '/api/boards/b-two0000001/thumbnail',
+    }
+    answer = () => ({ status: 200, body: { cards: { 'b-two0000001': ok } } })
+    // a 200 answer decides every target it was asked (one it left out is unavailable); a non-target never goes out
+    expect(await askBoardCards(B, ['b-two0000001', 'b-three00001', 'not a target'])).toEqual({
+      cards: {
+        'b-two0000001': ok,
+        'b-three00001': { state: 'unavailable' },
+        'not a target': { state: 'unavailable' },
+      },
+      unknown: [],
+    })
+    for (const a of [
+      { status: 404, body: { error: { code: 'NOT_FOUND' } } },
+      { status: 403, body: { error: { code: 'GUEST_ACCOUNT_REQUIRED' } } },
+      { status: 429, body: {} },
+      { status: 503, body: {} },
+      { status: 200, body: { cards: { x: 1 } } },
+      new TypeError('Failed to fetch'),
+    ] as Answer[]) {
+      answer = () => a
+      expect(await askBoardCards(B, ['b-two0000001', 'not a target'])).toEqual({
+        cards: { 'not a target': { state: 'unavailable' } },
+        unknown: ['b-two0000001'],
+      })
+    }
+    // more than one request: only the failed one is unknown
+    const many = Array.from(
+      { length: BOARD_CARDS_MAX_IDS + 2 },
+      (_, i) => `b-many${String(i).padStart(6, '0')}`,
+    )
+    let n = 0
+    answer = () => (n++ === 0 ? { status: 200, body: { cards: {} } } : { status: 502, body: {} })
+    const got = await askBoardCards(B, many)
+    expect(Object.keys(got.cards)).toHaveLength(BOARD_CARDS_MAX_IDS)
+    expect(got.unknown).toEqual(many.slice(BOARD_CARDS_MAX_IDS))
+  })
+
   it('backlinks parses the answer', async () => {
     const list = [{ boardId: 'b-two0000001', title: 'Roadmap', elementId: 'card-1' }]
     answer = () => ({ status: 200, body: { backlinks: list } })
@@ -171,36 +214,171 @@ describe('the client', () => {
 })
 
 describe('the face store', () => {
-  it('batches the faces cards want, keeps them for the TTL, asks again after it', async () => {
+  const ok: BoardCardFace = {
+    state: 'ok',
+    title: 'Design',
+    frameName: null,
+    thumbnailPath: '/api/boards/a01/thumbnail',
+  }
+  /** A store over a scripted api: `reply` decides each ask (default: every target unavailable). */
+  function world() {
     let t = 0
     const asked: string[][] = []
     const timers: (() => void)[] = []
+    const ticks: (() => void)[] = []
+    const visible: (() => void)[] = []
+    let hidden = false
+    let reply = (targets: readonly string[]): BoardCardsOutcome => ({
+      cards: Object.fromEntries(targets.map((x) => [x, { state: 'unavailable' as const }])),
+      unknown: [],
+    })
     const store = createFaceStore(B, {
       now: () => t,
       schedule: (fn) => timers.push(fn),
-      fetchFaces: async (_b, targets): Promise<BoardCardsAnswer> => {
+      every: (fn) => {
+        ticks.push(fn)
+        return () => ticks.splice(ticks.indexOf(fn), 1)
+      },
+      onVisible: (fn) => {
+        visible.push(fn)
+        return () => visible.splice(visible.indexOf(fn), 1)
+      },
+      hidden: () => hidden,
+      fetchFaces: async (_b, targets) => {
         asked.push([...targets])
-        return { cards: Object.fromEntries(targets.map((x) => [x, { state: 'unavailable' as const }])) }
+        return reply(targets)
       },
     })
+    /** runs the batch timer and lets the answer land */
+    const flush = async () => {
+      while (timers.length) timers.shift()?.()
+      await new Promise((r) => setTimeout(r, 0))
+    }
+    return {
+      store,
+      asked,
+      timers,
+      ticks,
+      visible,
+      flush,
+      advance: (ms: number) => {
+        t += ms
+      },
+      setHidden: (h: boolean) => {
+        hidden = h
+      },
+      setReply: (fn: typeof reply) => {
+        reply = fn
+      },
+    }
+  }
+
+  it('batches the faces cards want, keeps them for the TTL, asks again after it', async () => {
+    const w = world()
+    const { store, asked, timers } = w
     store.want(['a01'])
     store.want(['a02', 'a01'])
     expect(store.face('a01')).toBeNull()
     expect(timers).toHaveLength(1)
-    timers.shift()?.()
-    await new Promise((r) => setTimeout(r, 0))
+    await w.flush()
     expect(asked).toEqual([['a01', 'a02']])
     expect(store.face('a01')).toEqual({ state: 'unavailable' })
+    expect(store.unknown('a01')).toBe(false)
     // fresh: nothing asked
     store.want(['a01'])
     expect(timers).toHaveLength(0)
     // stale: asked again (the old face stays shown meanwhile)
-    t += FACE_TTL_MS + 1
+    w.advance(FACE_TTL_MS + 1)
     store.want(['a01'])
     expect(store.face('a01')).toEqual({ state: 'unavailable' })
-    timers.shift()?.()
-    await new Promise((r) => setTimeout(r, 0))
+    await w.flush()
     expect(asked).toEqual([['a01', 'a02'], ['a01']])
+  })
+
+  it('a failed ask is never kept as unavailable: neutral and unknown, asked again after a short retry that doubles', async () => {
+    const w = world()
+    const { store, asked } = w
+    w.setReply((targets) => ({ cards: {}, unknown: [...targets] })) // an api restarting: 502s
+    store.want(['a01'])
+    await w.flush()
+    expect(store.face('a01')).toBeNull()
+    expect(store.unknown('a01')).toBe(true)
+    // within the retry: not asked again; after it: asked
+    w.advance(FACE_RETRY_MS - 1)
+    store.want(['a01'])
+    await w.flush()
+    expect(asked).toHaveLength(1)
+    w.advance(1)
+    store.want(['a01'])
+    await w.flush()
+    expect(asked).toHaveLength(2)
+    // the second failure waits twice as long
+    expect(retryDelay(2)).toBe(2 * FACE_RETRY_MS)
+    w.advance(FACE_RETRY_MS)
+    store.want(['a01'])
+    await w.flush()
+    expect(asked).toHaveLength(2)
+    w.advance(FACE_RETRY_MS)
+    // the api is back: the real face, kept for the TTL
+    w.setReply(() => ({ cards: { a01: ok }, unknown: [] }))
+    store.want(['a01'])
+    await w.flush()
+    expect(asked).toHaveLength(3)
+    expect(store.face('a01')).toEqual(ok)
+    expect(store.unknown('a01')).toBe(false)
+    // a refresh that fails keeps the face it had (and retries soon, not after a whole TTL)
+    w.advance(FACE_TTL_MS)
+    w.setReply((targets) => ({ cards: {}, unknown: [...targets] }))
+    store.want(['a01'])
+    await w.flush()
+    expect(store.face('a01')).toEqual(ok)
+    expect(store.unknown('a01')).toBe(false)
+    w.advance(FACE_RETRY_MS)
+    store.want(['a01'])
+    await w.flush()
+    expect(asked).toHaveLength(5)
+    // the retry never waits longer than the TTL
+    expect(retryDelay(40)).toBe(FACE_TTL_MS)
+  })
+
+  it('a watched face is asked again while the page stays open: on its tick once stale, and when the tab is shown again', async () => {
+    const w = world()
+    const { store, asked, ticks, visible } = w
+    w.setReply((targets) => ({ cards: {}, unknown: [...targets] }))
+    const stop1 = store.watch('a01')
+    const stop2 = store.watch('a01') // a second card with the same target
+    expect(ticks).toHaveLength(1)
+    expect(visible).toHaveLength(1)
+    await w.flush()
+    expect(asked).toEqual([['a01']])
+    // a tick before the retry is due: nothing
+    ticks[0]?.()
+    await w.flush()
+    expect(asked).toHaveLength(1)
+    // due, but the tab is hidden: nothing until it is shown again
+    w.advance(FACE_TICK_MS)
+    w.setHidden(true)
+    ticks[0]?.()
+    await w.flush()
+    expect(asked).toHaveLength(1)
+    w.setHidden(false)
+    w.setReply(() => ({ cards: { a01: ok }, unknown: [] }))
+    visible[0]?.()
+    await w.flush()
+    expect(asked).toHaveLength(2)
+    expect(store.face('a01')).toEqual(ok)
+    // stale after the TTL: the tick asks again
+    w.advance(FACE_TTL_MS)
+    ticks[0]?.()
+    await w.flush()
+    expect(asked).toHaveLength(3)
+    // once no card watches any more, the tick and the listener stop
+    stop1()
+    stop1()
+    expect(ticks).toHaveLength(1)
+    stop2()
+    expect(ticks).toHaveLength(0)
+    expect(visible).toHaveLength(0)
   })
 })
 

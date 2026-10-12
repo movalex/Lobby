@@ -9,7 +9,9 @@
 //  - bob, who cannot view the target, sees the neutral face on the shared board while alice sees its title, and his
 //    page never asks for the target's thumbnail;
 //  - the palette command 'board-links.insert' picks a board from the permission-filtered list;
-//  - an older api (the route answering 404) leaves neutral faces, and the card still navigates;
+//  - an older api (the route answering 404) leaves neutral "Board link" faces (never "Board you can't open"), the
+//    card still navigates, and once the api answers again the face comes back while the page stays open;
+//  - a name-only guest sees the neutral face worded "Board link";
 //  - nothing leaves Lobby's origins (the e2e network assertion).
 //
 //   E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/n7-board-cards.spec.ts --project=chromium --workers=1
@@ -28,6 +30,7 @@ import {
 } from '../tests/support/canvas.ts'
 import { WEB_URL } from '../tests/support/ports.ts'
 import { foreignRequests } from './ai-kit.ts'
+import { guestOn, ORIGIN, tokenOf } from './guests-kit.ts'
 import { focusBoard } from './media-kit.ts'
 import { cameraIdle, grantClipboard, inView, navRun, writeClipboard } from './navigation-kit.ts'
 
@@ -241,9 +244,51 @@ test('N7-2 an older api (board-cards answers 404): neutral faces, and the card s
   await expect.poll(async () => (await boardCards(a.page)).length, { timeout: 15_000 }).toBe(1)
   const [card] = await boardCards(a.page)
   if (!card) throw new Error('no card')
-  await expect(face(a.page, card.id)).toHaveAttribute('data-state', 'unavailable', { timeout: 30_000 })
+  // the api could not say: the neutral face, worded "Board link" (alice can open this board)
+  await expect(face(a.page, card.id)).toHaveAttribute('data-state', 'unknown', { timeout: 30_000 })
+  await expect(face(a.page, card.id).getByTestId('board-card-title')).toHaveText('Board link')
   await expectSaved(a.page)
+  await test.step('the api answers again: the face comes back while the page stays open', async () => {
+    await a.page.unroute('**/api/boards/*/board-cards?**')
+    // retried after 15 s, checked every 15 s
+    await expect(face(a.page, card.id)).toHaveAttribute('data-state', 'ok', { timeout: 60_000 })
+    await expect(face(a.page, card.id).getByTestId('board-card-title')).toHaveText(title)
+  })
   await face(a.page, card.id).getByTestId('board-card-open').click()
   await expect.poll(() => new URL(a.page.url()).pathname, { timeout: 20_000 }).toBe(`/b/${target}`)
   await waitForCanvas(a.page)
+})
+
+test('N7-2 a name-only guest sees the neutral face worded “Board link”, never “Board you can’t open”', async ({
+  board,
+  browser,
+  canvasSession,
+  users,
+}) => {
+  test.setTimeout(150_000)
+  const target = await users.createBoard(unique('N7 Guest target'))
+  const a = await canvasSession('alice')
+  await grantClipboard(a.context)
+  await pasteUrl(a.page, `${WEB_URL}/b/${target}`)
+  await expect.poll(async () => (await boardCards(a.page)).length, { timeout: 15_000 }).toBe(1)
+  const [card] = await boardCards(a.page)
+  if (!card) throw new Error('no card')
+  await expectSaved(a.page)
+  const alice = await users.api('alice')
+  const link = await alice.request.post(`${WEB_URL}/api/boards/${board}/review-links`, {
+    headers: ORIGIN,
+    data: { allowGuests: true },
+  })
+  expect(link.status(), await link.text()).toBe(201)
+  const context = await browser.newContext()
+  try {
+    const guest = await guestOn(context, tokenOf(((await link.json()) as { url: string }).url), 'Sam Client')
+    const foreign = foreignRequests(guest.page)
+    await expect(face(guest.page, card.id)).toHaveAttribute('data-state', 'unavailable', { timeout: 30_000 })
+    await expect(face(guest.page, card.id).getByTestId('board-card-title')).toHaveText('Board link')
+    await expect(face(guest.page, card.id).getByTestId('board-card-thumbnail')).toHaveCount(0)
+    expect(foreign).toEqual([])
+  } finally {
+    await context.close()
+  }
 })
