@@ -11,7 +11,8 @@
 // BIG_BOARD_HASH is the hash.ts hash of the GENERATED elements of BIG_BOARD_ID with placeholder images (a change to
 // the generator or to this file changes it, and ./big-board.test.ts says so); the room stamps its own `updated`,
 // `lobbyServer` and index keys on a seed, so a seeded board's hash is read from the room, never compared with this.
-import type { BrowserContext } from '@playwright/test'
+import { writeFileSync } from 'node:fs'
+import type { BrowserContext, CDPSession } from '@playwright/test'
 import type { WireElement } from '../../../packages/canvas-schema/src/elements.ts'
 import { checkElement } from '../../../packages/canvas-schema/src/elements.ts'
 import { indexKeysBetween } from '../../../packages/canvas-schema/src/engine/index.ts'
@@ -394,4 +395,73 @@ export async function speedFlags(
     },
     { key: SPEED_FLAGS_KEY, value: JSON.stringify(flags) },
   )
+}
+
+// ---- Chrome traces (the N1 speed work: excalidraw/n1-open-trace.spec.ts, navigation-lod-fps.spec.ts) ----------------
+
+/** A Chrome trace event (the JSON trace format). */
+export interface TraceEvent {
+  name: string
+  cat: string
+  ph: string
+  ts: number
+  dur?: number
+  pid: number
+  tid: number
+  args?: { name?: string; data?: Record<string, unknown> }
+}
+
+/** A Chrome trace of `fn` through `cdp` (main-thread events, the compositor's frames), written to `file`; returns its events. */
+export async function chromeTrace(cdp: CDPSession, file: string, fn: () => Promise<unknown>) {
+  await cdp.send('Tracing.start', {
+    transferMode: 'ReturnAsStream',
+    traceConfig: {
+      includedCategories: [
+        'toplevel',
+        'devtools.timeline',
+        'disabled-by-default-devtools.timeline',
+        'disabled-by-default-devtools.timeline.frame',
+        'blink.user_timing',
+        'cc',
+        'gpu',
+        'v8',
+      ],
+      excludedCategories: ['*'],
+    },
+  })
+  await fn()
+  const complete = new Promise<string>((resolve) =>
+    cdp.once('Tracing.tracingComplete', (e) => resolve(e.stream ?? '')),
+  )
+  await cdp.send('Tracing.end')
+  const stream = await complete
+  let text = ''
+  for (;;) {
+    const chunk = await cdp.send('IO.read', { handle: stream, size: 4 * 1024 * 1024 })
+    text += chunk.base64Encoded ? Buffer.from(chunk.data, 'base64').toString('utf8') : chunk.data
+    if (chunk.eof) break
+  }
+  await cdp.send('IO.close', { handle: stream })
+  writeFileSync(file, text)
+  const parsed = JSON.parse(text) as { traceEvents?: TraceEvent[] } | TraceEvent[]
+  return Array.isArray(parsed) ? parsed : (parsed.traceEvents ?? [])
+}
+
+/** Self time (µs) per event name on the renderer's main thread: each complete event's duration less its children's. */
+export function mainThreadSelf(events: readonly TraceEvent[]): Map<string, number> {
+  const main = events.find((e) => e.name === 'thread_name' && e.args?.name === 'CrRendererMain')
+  const own = events.filter((e) => main && e.pid === main.pid && e.tid === main.tid && e.ph === 'X')
+  own.sort((x, y) => x.ts - y.ts || (y.dur ?? 0) - (x.dur ?? 0))
+  const children = new Map<TraceEvent, number>()
+  const stack: TraceEvent[] = []
+  for (const e of own) {
+    while (stack.length && (stack.at(-1) as TraceEvent).ts + ((stack.at(-1) as TraceEvent).dur ?? 0) <= e.ts)
+      stack.pop()
+    const parent = stack.at(-1)
+    if (parent) children.set(parent, (children.get(parent) ?? 0) + (e.dur ?? 0))
+    stack.push(e)
+  }
+  const self = new Map<string, number>()
+  for (const e of own) self.set(e.name, (self.get(e.name) ?? 0) + (e.dur ?? 0) - (children.get(e) ?? 0))
+  return self
 }
