@@ -841,8 +841,8 @@ export function ExportDialog({
           )}
           {pdfNotes?.imagePages && (
             <p className="dr-pe-note" data-testid="export-pdf-fallback" role="status">
-              {pdfNotes.imagePages}: vector pages could not draw them, so they are pictures of the frame (their
-              text is still searchable).
+              {pdfNotes.imagePages}: vector pages could not draw them, so they are pictures of the frame
+              (their text is still searchable).
             </p>
           )}
           {pdfNotes?.size && (

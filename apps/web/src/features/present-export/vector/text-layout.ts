@@ -219,8 +219,7 @@ export class FaceIndex {
 }
 
 const sameDraw = (a: Draw, b: Draw) =>
-  a.kind === b.kind &&
-  (a.kind !== 'face' || (b.kind === 'face' && a.face === b.face && a.slot === b.slot))
+  a.kind === b.kind && (a.kind !== 'face' || (b.kind === 'face' && a.face === b.face && a.slot === b.slot))
 
 /** The run's measures with the font that draws it (advance width; ascent above and descent below the baseline, >= 0). */
 export interface Measure {

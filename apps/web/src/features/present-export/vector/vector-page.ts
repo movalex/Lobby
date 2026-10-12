@@ -198,7 +198,12 @@ function glyphSlots(font: PDFFont): ((cp: number) => number) | null {
       // a cmap fontkit cannot list: no glyph is known to be shared
     }
     const out = new Map<number, number[]>()
-    for (const [gid, cps] of byGlyph) if (cps.length > 1) out.set(gid, cps.sort((a, b) => a - b))
+    for (const [gid, cps] of byGlyph)
+      if (cps.length > 1)
+        out.set(
+          gid,
+          cps.sort((a, b) => a - b),
+        )
     return out
   }
   return (cp) => {

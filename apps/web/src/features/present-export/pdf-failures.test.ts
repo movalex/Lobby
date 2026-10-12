@@ -127,7 +127,10 @@ async function within<T>(p: Promise<T>, ms: number): Promise<T | 'still waiting'
 
 describe('finding 2: the font subsetting at save time cannot hang or lose the export', () => {
   it('the worker’s builder: a subset encode that throws in fontkit’s later tick makes finish() reject', async () => {
-    const b = await createPdfBuilder({ title: 'T', vector: { fontkit: brokenFontkit('throws'), deps: deps() } })
+    const b = await createPdfBuilder({
+      title: 'T',
+      vector: { fontkit: brokenFontkit('throws'), deps: deps() },
+    })
     expect(await b.addVectorPage(vectorPage)).toEqual({ vector: true })
     const done = within(
       b.finish().then(
