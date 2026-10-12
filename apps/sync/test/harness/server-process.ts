@@ -27,6 +27,12 @@ export interface SyncServerOptions {
   /** Extra env for the child, e.g. { IDLE_EVICT_MS: '200', TEXT_LEASE_MS: '1500' }. `undefined` removes a key. */
   env?: Record<string, string | undefined>
   startTimeoutMs?: number
+  /**
+   * Another build's sync entrypoint (its `apps/sync/src/server.ts`, with its own node_modules), run from its repo
+   * root (the folder three levels above it): the rollback pairs run a previous deployed sync (wave N: 104c6e0, from
+   * `git archive`) on a board file this build wrote. Default: this tree's.
+   */
+  entry?: string
 }
 
 export interface SyncServer {
@@ -125,8 +131,9 @@ export async function spawnSyncServer(opts: SyncServerOptions): Promise<SyncServ
     output += `\n--- start port=${port} ---\n`
     const startedAt = output.length
     exit = null
-    const c = spawn(process.execPath, ['--import', PRELOAD, SERVER_ENTRY], {
-      cwd: REPO_ROOT,
+    const entry = opts.entry ?? SERVER_ENTRY
+    const c = spawn(process.execPath, ['--import', PRELOAD, entry], {
+      cwd: opts.entry ? fileURLToPath(new URL('../../../', pathToFileURL(opts.entry))) : REPO_ROOT,
       env: childEnv(port, opts),
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       windowsHide: true,

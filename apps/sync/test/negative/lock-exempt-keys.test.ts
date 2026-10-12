@@ -3,9 +3,12 @@
 // The writer’s own `plusOne:<uid>` (an account’s or a guest’s +1 on a locked template note) and an
 // account’s `present` on a locked frame (the facilitator orders and skips locked slides) pass the lock;
 // another uid’s +1, other keys, geometry, a guest’s `present` and `present` on a locked non-frame stay
-// LOCKED. A +1 keeps its own rules (VOTE_OPEN).
+// LOCKED. A +1 keeps its own rules (VOTE_OPEN). Wave N: the writer’s own reaction (`react:<code>:<uid>`)
+// passes the lock the same way; another uid’s, an owner’s clear included, stays LOCKED.
 // Raw frames against the REAL sync server process (DRAFTROOM_ENGINE=excalidraw), the protocol harness.
 
+import { CONNECT_REV_PARAM, CONTRACTS_REV } from '@draftroom/canvas-schema/protocol'
+import { reactionKey } from '@draftroom/canvas-schema/reactions'
 import { describe, expect, it } from 'vitest'
 import type { PatchBody } from '../harness/element-client.ts'
 import { type ElementStack, newBoardId, sharedElementStack } from '../harness/element-stack.ts'
@@ -53,6 +56,45 @@ describe('CR-3F-2, CR-3b-4: the keys a lock lets through', () => {
     await bob.until(() => bob.of('workshop').some((w) => w.voteOpen), 'the vote-open broadcast')
     expectRefused(await bob.patch('n1', { c: { 'plusOne:bob': true } }), 'VOTE_OPEN', bob)
     expect(await storedLobby(st, b, 'n1')).toEqual({ 'plusOne:guest-pat': true })
+  })
+
+  it('wave N: the writer’s own reaction (an account’s, a guest’s) lands on a locked note; another uid’s, an owner’s clear of it and a move stay LOCKED', async () => {
+    const st = shared.get()
+    const b = newBoardId()
+    const rev13 = { query: { [CONNECT_REV_PARAM]: String(CONTRACTS_REV) } }
+    const fac = await st.client({ boardId: b, user: 'fac', role: 'owner', ...rev13 })
+    await fac.create(noteWithLabel('n1', 'template prompt'))
+    expectAccepted(await fac.patch('n1', { g: { meta: { locked: true } } }))
+    const bob = await st.client({ boardId: b, user: 'bob', ...rev13 })
+    const g = await st.client({ boardId: b, user: 'guest-rex', guest: true, ...rev13 })
+    await bob.untilClock(fac.clock)
+    expectAccepted(await bob.patch('n1', { c: { [reactionKey('up', 'bob')]: true } }))
+    await g.untilClock(bob.clock)
+    expectAccepted(await g.patch('n1', { c: { [reactionKey('heart', 'guest-rex')]: true } }))
+    // another uid's: LOCKED (the lock answers first; unlocked it is INVALID, reactions.test.ts)
+    expectRefused(await bob.patch('n1', { c: { [reactionKey('up', 'guest-rex')]: true } }), 'LOCKED', bob)
+    expectRefused(await g.patch('n1', { c: { [reactionKey('up', 'bob')]: null } }), 'LOCKED', g)
+    // an owner's Clear reactions of someone else's key on a locked note: LOCKED too (it unlocks first)
+    await fac.untilClock(g.clock)
+    expectRefused(await fac.patch('n1', { c: { [reactionKey('up', 'bob')]: null } }), 'LOCKED', fac)
+    // a reaction with a move in one patch: the reaction lands, the move is denied (partial accept)
+    await bob.untilClock(fac.clock)
+    const mixed = await bob.patch('n1', {
+      g: { pos: { x: 900, y: 900 } },
+      c: { [reactionKey('up', 'bob')]: null, [reactionKey('clap', 'bob')]: true },
+    })
+    expect(mixed).toMatchObject({ ok: true, denied: { code: 'LOCKED', groups: ['pos'] } })
+    const s = await storedEl(st, b, 'n1')
+    expect([s.x, s.y, s.locked]).toEqual([0, 0, true])
+    expect(await storedLobby(st, b, 'n1')).toEqual({
+      [reactionKey('heart', 'guest-rex')]: true,
+      [reactionKey('clap', 'bob')]: true,
+    })
+    // a reaction is no vote: a locked note takes one while a dot vote is open
+    await st.setWorkshop(b, { voteOpen: true, anonymous: false })
+    await bob.until(() => bob.of('workshop').some((w) => w.voteOpen), 'the vote-open broadcast')
+    expectAccepted(await bob.patch('n1', { c: { [reactionKey('think', 'bob')]: true } }))
+    expectRefused(await bob.patch('n1', { c: { 'plusOne:bob': true } }), 'VOTE_OPEN', bob)
   })
 
   it('an account reorders and skips a locked frame (present); a guest’s present on it, and present on a locked non-frame, stay LOCKED', async () => {

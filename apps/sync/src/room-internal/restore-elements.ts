@@ -18,8 +18,9 @@
 // arrow and its label), named by the container's id or the label's.
 //  - a live element gets the checkpoint's copy: every field group (geometry as whole `path` units for arrows
 //    and lines, style, text, layout, membership, meta, file), its kept `id`, `version` above both, a fresh
-//    nonce. What another person owns stays as it is now: `plusOne:<uid>` keys (each one's own mark), the
-//    create-only keys, and `lobbyServer` (its author; `lastEditedBy` becomes the restorer when the words change).
+//    nonce. What another person owns stays as it is now: `plusOne:<uid>` and (wave N) `react:<code>:<uid>` keys
+//    (each one's own mark), the create-only keys, and `lobbyServer` (its author; `lastEditedBy` becomes the
+//    restorer when the words change).
 //  - a deleted (or compacted) element is re-created with its kept id and `created: null`, as the checkpoint
 //    held it (the "Recently deleted" precedent: its author and marks as they were).
 //  - `removeAbsent` ("Undo restore"): an asked id the checkpoint lacks but the board has is removed, its label
@@ -49,6 +50,7 @@ import { stripEngineArtifacts } from '@draftroom/canvas-schema/groups'
 import { canonicalJson } from '@draftroom/canvas-schema/hash'
 import { checkInvariants, groupParents, type Violation } from '@draftroom/canvas-schema/invariants'
 import { GROUP_NAMES } from '@draftroom/canvas-schema/protocol'
+import { isReactionKey } from '@draftroom/canvas-schema/reactions'
 import {
   RESTORE_ELEMENTS_BODY_LIMIT_BYTES,
   type RestoreElementsAnswer,
@@ -80,7 +82,8 @@ const allGroupsAt = (prev: Gclock | null, clock: number): Gclock => {
   for (const name of GROUP_NAMES) g[name] = clock
   return g
 }
-const isPlusOne = (k: string) => k.startsWith('plusOne:')
+/** An identity-bound key (a +1; a reaction, wave N): each one's own mark, never rewritten on a live element. */
+const isOwnMark = (k: string) => k.startsWith('plusOne:') || isReactionKey(k)
 /** customData.lobby keys only their writer's create sets (canvas-schema custom-data.ts class 2). */
 const CREATE_ONLY = new Set(['kind', 'ai', 'privateFrame'])
 const lobbyOf = (el: El | null | undefined): Record<string, unknown> => {
@@ -302,8 +305,8 @@ export function applyRestoreElements(tx: ServerWriteTx, body: RestoreElementsBod
     let server = lobbyServerOf(copy)
     if (prevLive && prevEl) {
       const nowLobby = lobbyOf(prevEl)
-      for (const k of Object.keys(lobby)) if (isPlusOne(k) || CREATE_ONLY.has(k)) delete lobby[k]
-      for (const [k, v] of Object.entries(nowLobby)) if (isPlusOne(k) || CREATE_ONLY.has(k)) lobby[k] = v
+      for (const k of Object.keys(lobby)) if (isOwnMark(k) || CREATE_ONLY.has(k)) delete lobby[k]
+      for (const [k, v] of Object.entries(nowLobby)) if (isOwnMark(k) || CREATE_ONLY.has(k)) lobby[k] = v
       server = lobbyServerOf(prevEl)
       if (next.type === 'text' && next.originalText !== prevEl.originalText)
         server = {

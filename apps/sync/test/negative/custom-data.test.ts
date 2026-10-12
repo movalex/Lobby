@@ -190,26 +190,7 @@ describe('§3.3 class 3: identity-bound plusOne:<uid>', () => {
   })
 })
 
-describe('wave N foundation: a rev-12 room takes no reaction key (react:<code>:<uid>)', () => {
-  // canvas-schema knows the key class (REACTIONS_REV 13), but this room says CONTRACTS_REV 12 and its identity check
-  // knows only plusOne:, so every reaction write is refused, the writer's own included. WS2's N2-4 replaces this
-  // test with the class rules when the room says 13.
-  it('a reaction, the writer’s own or another uid’s, in a create or a patch, is INVALID and nothing is stored', async () => {
-    const st = shared.get()
-    const b = newBoardId()
-    const a = await st.client({ boardId: b, user: 'alice' })
-    await a.create([note('n1')])
-    expectRefused(await a.patch('n1', { c: { 'react:up:alice': true } }), 'INVALID', a)
-    expectRefused(await a.patch('n1', { c: { 'react:up:bob': true } }), 'INVALID', a)
-    expectRefused(
-      await a.createOne(note('n2', { customData: { lobby: { 'react:heart:alice': true } } })),
-      'INVALID',
-      a,
-    )
-    expect(await storedLobby(st, b, 'n1')).toEqual({})
-    await expectNotStored(st, b, ['n2'])
-  })
-})
+// wave N (CONTRACTS_REV 13): the class rules of react:<code>:<uid> are in ./reactions.test.ts
 
 describe('§3.3 class 4: api-validated file and pdfPage', () => {
   it('file facts are canonicalized from the api (only name is the client’s); pdfPage comes from the fileId', async () => {

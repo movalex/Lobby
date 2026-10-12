@@ -19,6 +19,7 @@
 //
 // How to build that dist: ./l-compat-kit.ts. Without it every test here is skipped, saying so.
 import type { Page } from '@playwright/test'
+import { CONTRACTS_REV } from '../../packages/canvas-schema/src/protocol.ts'
 import { attachRelay, cut } from '../spike-b/support/relay.ts'
 import { type FakeOpenAi, startFakeOpenAi } from '../tests/support/ai.ts'
 import {
@@ -82,7 +83,13 @@ const test = base.extend<{ oldTabs: OldTab[] }, { openai: FakeOpenAi }>({
   ],
 })
 
-test.use({ viewport: { width: 1440, height: 900 }, apiEnv: AI_API_ENV_3H, launchOptions: OLD_WEB_LAUNCH })
+// the sync as render.yaml deploys it from wave N (reactions on: the room says 13, which a rev-11 tab reads as "11 or later")
+test.use({
+  viewport: { width: 1440, height: 900 },
+  apiEnv: AI_API_ENV_3H,
+  syncEnv: { DRAFTROOM_REACTIONS: 'on' },
+  launchOptions: OLD_WEB_LAUNCH,
+})
 test.skip(!OLD_WEB_DIST, OLD_WEB_SKIP_REASON)
 test.beforeEach(({ openai }) => openai.reset())
 
@@ -139,7 +146,7 @@ interface Pair {
 /**
  * This tree's tab (alice, the owner) and the previous build's (bob, an editor), on the test's board; checks that
  * the previous build is what runs (its own entry script, a connect URL with no revision) and that this tree's tab
- * names its revision (rev 12).
+ * names its revision (CONTRACTS_REV: 12 in wave L, 13 since wave N).
  */
 async function pair(
   join: (h: string, role?: 'owner' | 'editor') => Promise<WorkshopCanvasSession>,
@@ -153,7 +160,7 @@ async function pair(
   a.page.on('websocket', (ws) => aUrls.push(ws.url()))
   await reloadBoard(a)
   expect(aUrls.length).toBeGreaterThan(0)
-  for (const u of aUrls) expect(new URL(u).searchParams.get('rev')).toBe('12')
+  for (const u of aUrls) expect(new URL(u).searchParams.get('rev')).toBe(String(CONTRACTS_REV))
   const old = await openOldTab(browser, board, await users.grant(board, 'bob', 'editor'))
   oldTabs.push(old)
   expect(old.served.some((p) => p.startsWith('/assets/index-'))).toBe(true)
@@ -352,7 +359,7 @@ test('L-compat 1b (the offline queue across the deploy): a reorder the 437b4e7 t
 }) => {
   // Wave L compat refix, round 1: the room keeps the minutes for a rev-11 SOCKET's write, but a queue the 437b4e7
   // page left in IndexedDB is taken over by this tree's web after a reload (or by its next tab of the board) and
-  // sent on a socket that names rev 12, which the room writes whole. Before the fix the reorder erased them.
+  // sent on a socket that names its revision (12 then, 13 since wave N), which the room writes whole. Before the fix the reorder erased them.
   test.setTimeout(180_000)
   const p = await pair(join, browser, board, users, oldTabs)
   const { a, old } = p
@@ -400,7 +407,7 @@ test('L-compat 1b (the offline queue across the deploy): a reorder the 437b4e7 t
     await next.goto(`/b/${board}`)
     await waitForCanvas(next)
     expect(urls.length).toBeGreaterThan(0)
-    for (const u of urls) expect(new URL(u).searchParams.get('rev')).toBe('12')
+    for (const u of urls) expect(new URL(u).searchParams.get('rev')).toBe(String(CONTRACTS_REV))
     await expect.poll(async () => (await stored('cq-f3'))?.index, { timeout: 20_000 }).toBe(1)
     await expectSaved(next)
     expect((await saveState(next)).lastReject).toBeNull()
@@ -469,7 +476,7 @@ test('L-compat 1c (the offline queue across the deploy, the other way): a remova
     await waitForCanvas(t2)
     await expectSaved(t2)
     expect(urls.length).toBeGreaterThan(0)
-    for (const u of urls) expect(new URL(u).searchParams.get('rev')).toBe('12')
+    for (const u of urls) expect(new URL(u).searchParams.get('rev')).toBe(String(CONTRACTS_REV))
     await t2.getByTestId('dock-tab-frames').click()
     await expect(row(t2, 'cr-f1').getByTestId('frame-mins')).toContainText('5 min')
     await cut(t2, { mode: 'hold' })
@@ -480,7 +487,7 @@ test('L-compat 1c (the offline queue across the deploy, the other way): a remova
     // queued with this web's revision, in this web's form
     await expect
       .poll(async () => (await queuedGroups(t2, board))['cr-f1'] ?? [], { timeout: 10_000 })
-      .toEqual(['c:present', 'rev:12', 'form:q2'])
+      .toEqual(['c:present', `rev:${CONTRACTS_REV}`, 'form:q2'])
     await t2.close()
     expect(await stored('cr-f1')).toEqual({ index: 1, mins: 5 })
   })
@@ -498,7 +505,9 @@ test('L-compat 1c (the offline queue across the deploy, the other way): a remova
     // before the fix it adopted the queue, sent {index: 1} on its rev-11 socket (the room kept the minutes) and
     // cleared the record: the removal was gone for good, with Saved showing
     await t1.waitForTimeout(1_000)
-    expect(await queuedGroups(t1, board)).toEqual({ 'cr-f1': ['c:present', 'rev:12', 'form:q2'] })
+    expect(await queuedGroups(t1, board)).toEqual({
+      'cr-f1': ['c:present', `rev:${CONTRACTS_REV}`, 'form:q2'],
+    })
     expect(await stored('cr-f1')).toEqual({ index: 1, mins: 5 })
     await t1.close()
   })

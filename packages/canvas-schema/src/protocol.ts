@@ -82,17 +82,23 @@ export const PROTO = 1 as const
  * `frameForReader` for its socket's revision (the connect URL's `rev`, CONNECT_REV_PARAM; none: UNANNOUNCED_REV
  * 11), and a write from an older socket keeps the fields it cannot know (`lobbyWriteOf`,
  * LOBBY_FIELD_ADDITIONS). A rev-12 client names its revision in the connect URL to every room.
- * Revision 13 (wave N, LM-10; NOT YET: this package still says 12): emoji reactions on notes, the identity-bound
- * key class `react:<code>:<uid>` (custom-data.ts, reactions.ts), the one wire change of wave N. The wave N
- * foundation lands everything that is pure (the key's spec and budgets, REACTIONS_REV, LOBBY_KEY_ADDITIONS with the
- * reader and writer rules below, proven against the deployed web's frozen rev-12 schemas in
- * reader-rule-rev13.test.ts) and keeps CONTRACTS_REV at 12, so a room built from it says 12, no web offers a
- * reaction, and its sync refuses every `react:` write (INVALID: its identity check knows only `plusOne:`). The
- * bump to 13 lands with the sync's own rules for the class (the wave N plan's N2-4: `identityUidOf`, notes only,
- * owner clear, the DRAFTROOM_REACTIONS kill switch) and its strip-keys route; the reader rule already serves every
- * reader below REACTIONS_REV, so the bump changes no frame a rev-12 reader gets.
+ * Revision 13 (wave N, LM-10): emoji reactions on notes, the identity-bound key class `react:<code>:<uid>` (value
+ * true; custom-data.ts, reactions.ts), the one wire change of wave N. Only the reacting person adds or removes
+ * their key, on sticky notes only, never refused for an open vote; an owner may remove anyone's ("Clear
+ * reactions"); the sync decides (apps/sync/src/room/custom-data.ts). Readers below 13 (the deployed 3c83611 web,
+ * the rev-11 web) never get a patch that names one: `frameForReader` turns it into the `c` op of the stored
+ * element (LOBBY_KEY_ADDITIONS, `opForReader`; proven against the deployed build's frozen schemas in
+ * reader-rule-rev13.test.ts). Writers below 13 never add, change or remove one (`lobbyPatchOfWriter`: dropped with
+ * the stored value kept; `lobbyCreateOfWriter`: a create keeps only what its undelete source holds, every other one
+ * stripped with an ack fix `c:<key>: null`). A web offers reacting only in a room whose `contracts` frame names
+ * REACTIONS_REV; a rev-12 web reads 13 as "12 or later". ELEMENT_SCHEMA_VERSION, presence, the message types and
+ * the welcome are unchanged.
+ * DEPLOY: a sync built from the wave N foundation alone must never be deployed (it said 12 and knew no reaction
+ * rule); 13 means the sync's rules for the class (N2-4), its DRAFTROOM_REACTIONS kill switch and the strip-keys
+ * route (N2-5). With DRAFTROOM_REACTIONS off the room refuses every reaction write UNAVAILABLE and its `contracts`
+ * frame says 12, so no web offers reacting; the rollback below wave N is: off, strip-keys, then the older sync.
  */
-export const CONTRACTS_REV = 12
+export const CONTRACTS_REV = 13
 /**
  * The first contracts revision whose presence has `f`, `view.z` and `followers` (see `CONTRACTS_REV`).
  * A client sends them only to a room whose `contracts` frame names this revision or a later one.
@@ -126,7 +132,6 @@ export const RESTORE_ELEMENTS_REV = 12
  * custom-data.ts. A reader below it never receives a patch that names one (LOBBY_KEY_ADDITIONS, `opForReader`),
  * a writer below it never writes or removes one (`lobbyPatchOfWriter`, `lobbyCreateOfWriter`), and a web offers
  * reacting only in a room whose `contracts` frame names this revision or later (CanvasPort `room.contractsRev()`).
- * Above CONTRACTS_REV until the sync's rules for the class land (see CONTRACTS_REV).
  */
 export const REACTIONS_REV = 13
 /**

@@ -12,8 +12,8 @@
 //     becomes the `c` op of the stored element); `frameForReader(13, frame)` is the frame itself;
 //  4. the writer side: a rev-12 writer never writes, removes or forges a reaction (`lobbyPatchOfWriter`,
 //     `lobbyCreateOfWriter`).
-// The foundation keeps CONTRACTS_REV 12 (the room says 12 until the sync's rules land), and the rule already serves
-// every reader below REACTIONS_REV, so the bump to 13 changes no frame a rev-12 reader gets.
+// This package says CONTRACTS_REV 13 (the room says 13 once the sync's rules for the class landed, N2-4); the rule
+// serves every reader below REACTIONS_REV, as it did while the foundation still said 12.
 
 import { REACTION_CODES } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
@@ -132,9 +132,10 @@ const opsOf = (f: ServerMessage) => (f as { ops: ServerOp[] }).ops
 // ---- 1. the fixture, and what wave N changes in a server frame ------------------------------------------------------
 
 describe('the frozen 3c83611 schemas', () => {
-  it('are the rev-12 contracts the deployed web and sync run; this package still says 12, reactions are 13', () => {
+  it('are the rev-12 contracts the deployed web and sync run; this package says 13, the reactions revision', () => {
     expect(Old.CONTRACTS_REV).toBe(12)
-    expect(CONTRACTS_REV).toBe(12)
+    expect(CONTRACTS_REV).toBe(13)
+    expect(CONTRACTS_REV).toBe(REACTIONS_REV)
     expect(REACTIONS_REV).toBe(13)
     expect(READER_RULE_REV).toBe(13)
     expect(UNANNOUNCED_REV).toBe(11)

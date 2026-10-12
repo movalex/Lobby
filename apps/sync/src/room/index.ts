@@ -236,6 +236,7 @@ export function createElementRoomServiceWith(
       snapshotBudget,
       outboundBudget,
       ...(deps.disk ? { disk: deps.disk } : {}),
+      reactions: config.reactions === true,
     })
     const hooks = pendingHooks.get(boardId)
     if (hooks) {

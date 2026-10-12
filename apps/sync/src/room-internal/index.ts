@@ -13,6 +13,8 @@
 //   POST /internal/boards/:bid/deleted/restore    deleted.ts
 //   POST /internal/boards/:bid/restore-elements   restore-elements.ts (wave L, L7-2: a checkpoint's elements
 //                                                 back into the live board; canvas-schema RESTORE_ELEMENTS_REV)
+//   POST /internal/maintenance/strip-keys         strip-keys.ts (wave N, N2-5: every board's react:* keys out, the
+//                                                 rollback step below CONTRACTS_REV 13)
 //
 // Every one sits behind the router's internal-secret check, like every internal route.
 
@@ -22,6 +24,7 @@ import { deletedRoutes } from './deleted.ts'
 import { placeNotesRoutes } from './place-notes.ts'
 import { restoreElementsRoutes } from './restore-elements.ts'
 import { seedRoutes } from './seed.ts'
+import { stripKeysRoutes } from './strip-keys.ts'
 import { textRoutes } from './text.ts'
 
 export function roomInternalRoutes(ctx: RoomExtensionContext): InternalRoute[] {
@@ -32,6 +35,7 @@ export function roomInternalRoutes(ctx: RoomExtensionContext): InternalRoute[] {
     ...assetRefsRoutes(ctx),
     ...deletedRoutes(ctx),
     ...restoreElementsRoutes(ctx),
+    ...stripKeysRoutes(ctx),
   ]
 }
 

@@ -58,6 +58,7 @@ import {
   Op,
   PRESENCE_LASER_REV,
   PROTO,
+  REACTIONS_REV,
   REJECT_CODE_INFO,
   type RejectCode,
   type ServerMessage,
@@ -149,6 +150,12 @@ export interface RoomDeps {
   readonly outboundBudget?: OutboundBudget
   /** M7-4: the disk's free share (disk.ts); absent: statfs */
   readonly disk?: DiskProbe
+  /**
+   * Wave N (N2-5): the reactions kill switch (config.ts DRAFTROOM_REACTIONS; absent: off, fail-closed). Off: every
+   * reaction write is refused UNAVAILABLE (merge.ts, custom-data.ts) and the `contracts` frame says REACTIONS_REV - 1,
+   * so no web offers reacting; the keys already stored stay and every reader still gets them.
+   */
+  readonly reactions?: boolean
 }
 
 type FifoItem =
@@ -292,6 +299,17 @@ const SERVER_IDENTITY: SessionIdentity = {
 
 /** The room's revision, to every session right after its welcome (CONTRACTS_REV 10; the same for every reader). */
 const CONTRACTS_MESSAGE = frameOf({ type: 'contracts', rev: CONTRACTS_REV })
+/**
+ * Wave N (N2-5): the revision a room says while its reactions kill switch is off (DRAFTROOM_REACTIONS): the one
+ * before reactions, so a rev-13 web offers no reaction and strips reaction keys from its pushes as it does for an
+ * older sync (canvas-schema `lobbyKeyNewerThan`), instead of retrying writes the room refuses UNAVAILABLE. Every
+ * other rev-13 rule (the reader and writer rules) stays: they key on the socket's revision, not on this frame.
+ */
+export const CONTRACTS_REV_WITHOUT_REACTIONS = REACTIONS_REV - 1
+const CONTRACTS_MESSAGE_WITHOUT_REACTIONS = frameOf({
+  type: 'contracts',
+  rev: CONTRACTS_REV_WITHOUT_REACTIONS,
+})
 
 export class Session {
   readonly key = ++handleSeq
@@ -954,7 +972,7 @@ export class ElementRoom {
     // CONTRACTS_REV 10: the revision this room speaks, so a rev-10 client may send `f` and `view.z` on this
     // socket (a rev-9 client drops the frame as unknown); then everyone's current cursors (above 41
     // sessions the 40 this joiner starts with), so a late joiner does not wait for the next move
-    s.send(CONTRACTS_MESSAGE)
+    s.send(this.deps.reactions === true ? CONTRACTS_MESSAGE : CONTRACTS_MESSAGE_WITHOUT_REACTIONS)
     const peers = this.presence.welcomeFrame(s.key, s.identity.sid)
     if (peers) s.send(presenceFrame(peers))
   }
@@ -1091,6 +1109,7 @@ export class ElementRoom {
       now,
       epoch: this.store.meta.epoch,
       deletedSession: this.deletedSession,
+      reactions: this.deps.reactions === true,
       nonce: () => Math.floor(Math.random() * 2 ** 31),
     }
   }

@@ -545,6 +545,21 @@ export class BoardStore {
     return (this.st.deletedCount.get() as { n: number }).n
   }
 
+  // ---- wave N: the strip-keys maintenance (room-internal/strip-keys.ts) ---------------------------
+
+  /** Ids of the stored elements (live or tombstones) whose row JSON holds `needle` (a filter: parse to be sure). */
+  elementIdsWith(needle: string): string[] {
+    return (this.st.elementIdsWith.all(needle) as { id: string }[]).map((r) => r.id)
+  }
+  /** The "Recently deleted" rows whose element JSON holds `needle` (a filter: parse to be sure). */
+  deletedRowsWith(needle: string): { seq: number; data: string }[] {
+    return this.st.deletedRowsWith.all(needle) as { seq: number; data: string }[]
+  }
+  /** Rewrites one "Recently deleted" row's element JSON (only the strip-keys maintenance does). */
+  rewriteDeletedData(seq: number, data: string): void {
+    this.st.deletedRewrite.run(data, seq)
+  }
+
   // ---- compaction (§2.6): at room open ---------------------------------------------------------
 
   /**
@@ -659,6 +674,9 @@ function prepareStatements(db: DatabaseSync) {
     deletedInsert: `INSERT INTO lb_deleted (batch, element_id, type, container_id, frame_id, data, deleted_by,
          deleted_by_name, deleted_at, epoch, origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'live')`,
     deletedCount: 'SELECT count(*) AS n FROM lb_deleted',
+    elementIdsWith: 'SELECT id FROM lb_elements WHERE instr(data, ?) > 0 ORDER BY id',
+    deletedRowsWith: 'SELECT seq, data FROM lb_deleted WHERE instr(data, ?) > 0 ORDER BY seq',
+    deletedRewrite: 'UPDATE lb_deleted SET data = ? WHERE seq = ?',
     deletedBy: 'SELECT deleted_by FROM lb_deleted WHERE element_id = ? ORDER BY seq DESC LIMIT 1',
     deletedNth: 'SELECT batch FROM lb_deleted ORDER BY seq DESC LIMIT 1 OFFSET ?',
     deletedBatchFloor: 'SELECT min(seq) AS s FROM lb_deleted WHERE batch = ?',

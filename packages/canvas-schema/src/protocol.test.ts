@@ -818,8 +818,8 @@ describe('CONTRACTS_REV 12: the shared laser, present.mins and the restore marke
       typeof PeerPresence.parse
     >
 
-  it('is revision 12; the laser, present.mins and the restore route all start at it', () => {
-    expect(CONTRACTS_REV).toBe(12)
+  it('the laser, present.mins and the restore route all start at revision 12 (the room says 13 since wave N)', () => {
+    expect(CONTRACTS_REV).toBe(13)
     expect(PRESENCE_LASER_REV).toBe(12)
     expect(PRESENT_MINS_REV).toBe(12)
     expect(RESTORE_ELEMENTS_REV).toBe(12)

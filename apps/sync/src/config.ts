@@ -74,6 +74,13 @@ export interface SyncConfig {
    */
   wsDeflate?: boolean
   /**
+   * DRAFTROOM_REACTIONS (wave N, N2-5): the reactions kill switch; only `on` takes emoji reactions on notes
+   * (canvas-schema reactions.ts, CONTRACTS_REV 13). `off`, empty or unset: off (fail-closed, like
+   * DRAFTROOM_WS_DEFLATE): every reaction write is refused UNAVAILABLE, the keys already stored stay, and the room's
+   * `contracts` frame says 12 so no web offers reacting. A restart switches it. Absent here (a hand-made config): off.
+   */
+  reactions?: boolean
+  /**
    * DRAFTROOM_BACKUP_KEEP (wave M, M7-4, CAP-DISK): local backup copies kept per board (offsite keeps its own
    * history). Default BACKUP_DEFAULTS.keep (12); render.yaml sets 4.
    */
@@ -472,6 +479,7 @@ export function loadConfig(env: Env = process.env): SyncConfig {
     testHooks: parseTestHooks(env),
     bootMaintenance: parseBootMaintenance(env),
     wsDeflate: parseWsDeflate(env),
+    reactions: parseReactions(env),
     backupKeep: int(env, 'DRAFTROOM_BACKUP_KEEP', BACKUP_DEFAULTS.keep, 1, 1_000),
     outboundBudgetMb: int(env, 'DRAFTROOM_OUTBOUND_BUDGET_MB', DEFAULT_OUTBOUND_BUDGET_MB, 8, 4_096),
     testDiskFree: parseTestDiskFree(env),
@@ -514,6 +522,19 @@ export function parseWsDeflate(env: Env): boolean {
   if (raw === 'on') return true
   if (raw === undefined || raw === 'off') return false
   throw new Error('DRAFTROOM_WS_DEFLATE must be on or off')
+}
+
+/**
+ * DRAFTROOM_REACTIONS (wave N, N2-5): `on` = the room takes emoji reactions on notes; `off`, empty or unset = it
+ * refuses them (UNAVAILABLE) and says contracts 12. Fail-closed: a service that lacks the key takes none. The
+ * rollback below wave N sets it off, runs POST /internal/maintenance/strip-keys {prefix: 'react:'}, then deploys
+ * the older sync (docs/DEPLOY.md).
+ */
+export function parseReactions(env: Env): boolean {
+  const raw = read(env, 'DRAFTROOM_REACTIONS')?.toLowerCase()
+  if (raw === 'on') return true
+  if (raw === undefined || raw === 'off') return false
+  throw new Error('DRAFTROOM_REACTIONS must be on or off')
 }
 
 /** DRAFTROOM_BOOT_MAINTENANCE: 1 = start in maintenance, 0 or absent = start serving. */

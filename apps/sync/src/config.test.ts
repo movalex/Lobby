@@ -310,6 +310,25 @@ describe('wave M keys (render.yaml: DRAFTROOM_WS_DEFLATE=off (the hold), DRAFTRO
   })
 })
 
+describe('wave N keys (render.yaml: DRAFTROOM_REACTIONS=on)', () => {
+  it('DRAFTROOM_REACTIONS (N2-5): off unless on (fail-closed: unset, empty and off are all off); anything else is refused', () => {
+    expect(loadConfig(base).reactions).toBe(false)
+    expect(loadConfig({ ...base, DRAFTROOM_REACTIONS: '' }).reactions).toBe(false)
+    expect(loadConfig({ ...base, DRAFTROOM_REACTIONS: '   ' }).reactions).toBe(false)
+    expect(loadConfig({ ...base, DRAFTROOM_REACTIONS: 'off' }).reactions).toBe(false)
+    expect(loadConfig({ ...base, DRAFTROOM_REACTIONS: 'OFF' }).reactions).toBe(false)
+    expect(loadConfig({ ...base, DRAFTROOM_REACTIONS: 'on' }).reactions).toBe(true)
+    expect(loadConfig({ ...base, DRAFTROOM_REACTIONS: ' On ' }).reactions).toBe(true)
+    for (const v of ['1', 'true', 'yes', 'of', 'onn'])
+      expect(() => loadConfig({ ...base, DRAFTROOM_REACTIONS: v })).toThrow(
+        /DRAFTROOM_REACTIONS must be on or off/,
+      )
+    // in production too: a service that lacks the key takes no reaction
+    expect(loadConfig(prod).reactions).toBe(false)
+    expect(loadConfig({ ...prod, DRAFTROOM_REACTIONS: 'on' }).reactions).toBe(true)
+  })
+})
+
 describe('DRAFTROOM_TEST_DISK_FREE (M7-4/M7-6 tests): a fixed free share, with the test hooks only', () => {
   it('is null without DRAFTROOM_TEST_HOOKS=1, read with it, and refused when malformed', () => {
     expect(loadConfig({ ...base, DRAFTROOM_TEST_DISK_FREE: '0.15' }).testDiskFree).toBeNull()

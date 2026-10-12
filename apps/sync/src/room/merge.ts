@@ -42,9 +42,13 @@ import {
   type CreateOp,
   type DerivedRow,
   GROUP_NAMES,
+  lobbyCreateOfWriter,
+  lobbyKeyNewerThan,
+  lobbyPatchOfWriter,
   lobbyWriteOf,
   type PatchOp,
   pathUnitProblem,
+  READER_RULE_REV,
   type RejectCode,
 } from '@draftroom/canvas-schema/protocol'
 import type { FileRefAnswer, FileRefsCache } from '../file-refs.ts'
@@ -86,6 +90,8 @@ export interface MergeEnv {
   readonly epoch: string
   /** the room session `lb_deleted` rows name (one per room open; store.ts DeletedRowWrite.session) */
   readonly deletedSession: string
+  /** wave N (N2-5): the reactions kill switch (config.ts DRAFTROOM_REACTIONS); absent: on */
+  readonly reactions?: boolean
   nonce(): number
 }
 
@@ -237,6 +243,7 @@ export class PushApplier {
       tagExists: (key) => this.tagExists(key),
       tagDenied: (key) => this.docDeniedCodes.get(tagDefKey(key)) ?? null,
       fileRef: (v) => this.fileRef(v),
+      reactions: env.reactions !== false,
     }
   }
 
@@ -387,6 +394,27 @@ export class PushApplier {
     return out ?? (c as Record<string, unknown>)
   }
 
+  /**
+   * CONTRACTS_REV 13 (canvas-schema LOBBY_KEY_ADDITIONS): a create over a tombstone from a writer of an older
+   * revision keeps the tombstone's keys whose class that writer cannot know (reactions) and that its create does not
+   * carry: it never saw them, so leaving them out is no removal (as `lobbyWriteOf` keeps a value's unknown fields).
+   * `lobbyCreateOfWriter` already took out the ones it carries but its undelete source does not hold. `lobby` itself
+   * when nothing is kept (every writer of this revision); the ack's fix names each kept key (`c:<key>`).
+   */
+  private keepUnknownKeys(
+    lobby: Readonly<Record<string, unknown>>,
+    stored: Readonly<Record<string, unknown>>,
+  ): Record<string, unknown> {
+    if (this.writerRev >= READER_RULE_REV) return lobby as Record<string, unknown>
+    let out: Record<string, unknown> | null = null
+    for (const [k, v] of Object.entries(stored))
+      if (lobbyKeyNewerThan(this.writerRev, k) && !(k in lobby)) {
+        out ??= { ...lobby }
+        out[k] = clone(v)
+      }
+    return out ?? (lobby as Record<string, unknown>)
+  }
+
   private fileProblem(el: El): RejectCode | null {
     if (el.type !== 'image') return null
     const fileId = el.fileId as string
@@ -494,17 +522,29 @@ export class PushApplier {
       if (cap) return this.reject(i, cap)
     }
     const prevLobby = (prev?.customData?.lobby as Record<string, unknown> | undefined) ?? null
+    // CONTRACTS_REV 13 (canvas-schema `lobbyCreateOfWriter`): a create from an older revision keeps the keys it
+    // cannot know (reactions) only where its undelete source holds them (an undo of a delete); every other one is
+    // stripped, never refused (a rev-12 Excalidraw paste of a reacted note), and the ack's fix says `c:<key>: null`
+    // (fixOf compares the pushed copy with the stored one)
     const lobby = checkCreateLobby(
-      pushed.customData?.lobby as Record<string, unknown> | undefined,
+      lobbyCreateOfWriter(
+        this.writerRev,
+        pushed.customData?.lobby as Record<string, unknown> | undefined,
+        prevLobby,
+      ).lobby,
       this.ctx,
       prevLobby,
+      pushed.type,
     )
     if (!lobby.ok) return this.reject(i, lobby.code)
     const fileCode = this.fileProblem(pushed)
     if (fileCode) return this.reject(i, fileCode)
     // a create over a tombstone from an older revision keeps what it cannot know of the keys it writes
-    // (CONTRACTS_REV 12, keepUnknownFields); the ack's fix names the stored value
-    const lobbyValue = prevLobby ? this.keepUnknownFields(lobby.value, prevLobby) : lobby.value
+    // (CONTRACTS_REV 12, keepUnknownFields) and the keys whose class it cannot know at all (CONTRACTS_REV 13,
+    // keepUnknownKeys: the reactions it never saw stay); the ack's fix names the stored value
+    const lobbyValue = prevLobby
+      ? this.keepUnknownKeys(this.keepUnknownFields(lobby.value, prevLobby), prevLobby)
+      : lobby.value
 
     let next = stripEngineArtifacts({ ...clone(pushed) }) as El
     // guests can neither lock nor unlock (§3.5), a create included: a guest's element (or its undelete of a
@@ -607,7 +647,12 @@ export class PushApplier {
       string,
       Record<string, unknown>
     >
-    let c: Record<string, unknown> | undefined = op.c ? { ...op.c } : undefined
+    // CONTRACTS_REV 13 (canvas-schema `lobbyPatchOfWriter`): the keys a writer of an older revision cannot know
+    // (reactions), a value or a null, are dropped before anything else reads the patch: the stored value stays, in
+    // the same commit, with no fix (a rev-12 page has no reaction UI: such a key came from a diff against a copy it
+    // never wrote, and must never erase or forge someone's reaction)
+    const cOfWriter = op.c ? lobbyPatchOfWriter(this.writerRev, op.c) : null
+    let c: Record<string, unknown> | undefined = cOfWriter ? { ...cOfWriter } : undefined
     let fit = op.fit
     let denied: { groups: string[]; code: RejectCode } | undefined
     const deny = (names: string[], code: RejectCode) => {
@@ -704,6 +749,7 @@ export class PushApplier {
         storedLobby,
         (cur.customData?.lobbyServer?.createdBy?.uid as string | undefined) ?? null,
         this.ctx,
+        cur.type,
       )
       if (!v.ok) return this.reject(i, v.code)
       cApplied = v.value

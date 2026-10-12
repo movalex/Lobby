@@ -42,6 +42,9 @@ export const ELEMENT_ENGINE_ENV: Readonly<Record<string, string>> = {
   DRAFTROOM_TEST_HOOKS: '1',
   // until 2B ports the backup job to lb_* files (docs/EXCALIDRAW-CONTRACTS.md §9.3)
   DRAFTROOM_BACKUP_STORE: 'off',
+  // wave N (N2-5): reactions on, as render.yaml deploys the sync (the code's default is off, fail-closed; the
+  // kill-switch tests set it off or remove it)
+  DRAFTROOM_REACTIONS: 'on',
 }
 
 /** A fresh board id of the api's shape (`b-` + 10 characters). */
@@ -94,6 +97,8 @@ export interface ElementStackOptions {
   readonly env?: Record<string, string | undefined>
   /** reuse a data dir (a restart on the same board files); default: a fresh temp dir, removed on dispose */
   readonly dataDir?: string
+  /** another build's sync entrypoint (server-process.ts SyncServerOptions.entry: the rollback pairs) */
+  readonly entry?: string
 }
 
 export async function createElementStack(opts: ElementStackOptions = {}): Promise<ElementStack> {
@@ -105,6 +110,7 @@ export async function createElementStack(opts: ElementStackOptions = {}): Promis
     server = await spawnSyncServer({
       dataDir,
       env: { ...ELEMENT_ENGINE_ENV, DRAFTROOM_API_INTERNAL_URL: api.url, ...opts.env },
+      ...(opts.entry ? { entry: opts.entry } : {}),
     })
   } catch (e) {
     await api.close()
