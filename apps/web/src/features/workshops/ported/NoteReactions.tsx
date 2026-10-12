@@ -55,6 +55,7 @@ import { elementLabel } from './elements.ts'
 import {
   canClearReactions,
   clear,
+  clearableNotes,
   closeReactionPicker,
   isReactionTarget,
   nameResolver,
@@ -68,7 +69,6 @@ import {
   react,
   reactionArgs,
   reactionChipsOf,
-  reactionKeysOf,
   reactionLabel,
   reactionsOffered,
   reactionsOn,
@@ -707,9 +707,10 @@ export function ReactionPicker({
         out.push(code)
     return out.join(' ')
   }, [canvas, ids, me])
-  const anyReactions = useValue(
+  // something an owner's clear reaches: a note with reactions that is not locked (a lock keeps another person's key)
+  const anyClearable = useValue(
     'dr-wk-react-any',
-    () => ids.some((id) => reactionKeysOf(canvas.get(id)).length > 0),
+    () => clearableNotes(canvas, ids).clearable.length > 0,
     [canvas, ids],
   )
   const label = useValue(
@@ -720,7 +721,7 @@ export function ReactionPicker({
         : `React to ${ids.length} notes`,
     [canvas, ids],
   )
-  const withClear = owner && anyReactions
+  const withClear = owner && anyClearable
   const size = canvas.container()?.getBoundingClientRect() ?? { width: 800, height: 600 }
   const h = PICKER_H + (withClear ? PICKER_CLEAR_H : 0)
 
@@ -951,7 +952,7 @@ export const CONTEXT_MENU: readonly MenuEntrySpec[] = [
     visible: (ctx, target) =>
       reactionsUi() &&
       canClearReactions(ctx) &&
-      notesOf(ctx, target.ids).some((id) => reactionKeysOf(ctx.canvas.get(id)).length > 0),
+      clearableNotes(ctx.canvas, target.ids).clearable.length > 0,
     run: (ctx, target) => {
       clear(ctx, notesOf(ctx, target.ids))
     },

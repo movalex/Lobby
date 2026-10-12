@@ -212,6 +212,7 @@ export const reactorNamesHidden = (canvas: LobbyCanvas): boolean => workshopSett
 export const REACTIONS_OFF_TEXT = 'Reactions are switched off right now'
 export const REACTIONS_FULL_TEXT = 'This note has the most reactions it can hold'
 export const REACTIONS_NOT_YET_TEXT = 'Reactions are not available on this board yet'
+export const REACTIONS_LOCKED_TEXT = 'Unlock a note to clear its reactions'
 
 export interface ReactionWriteResult {
   readonly ok: boolean
@@ -221,6 +222,8 @@ export interface ReactionWriteResult {
   readonly added?: boolean
   /** How many notes the write changed. */
   readonly changed?: number
+  /** A clear only: how many notes with reactions it left alone because they are locked (see `clearableNotes`). */
+  readonly locked?: number
 }
 
 type LobbyPatch = Record<string, true | null>
@@ -302,13 +305,36 @@ export const canClearReactions = (ctx: Pick<CanvasFeatureContext, 'role' | 'canv
   ctx.role === 'owner' && reactionsOffered(ctx.canvas)
 
 /**
- * "Clear reactions" (an owner): removes every `react:*` key of the notes among `ids`, anyone's, in one `transact`
- * with `skipUndo`. Nothing to clear is not a write.
+ * The notes among `ids` that carry reactions, and whether a clear reaches them. A LOCKED note keeps another person's
+ * `react:*` key (the key spec's `lockExempt: 'own'`: only the writer's own key passes a lock, an owner's clear
+ * included), so a clear would be refused (LOCKED) and the page would sit on "not saved". It is not offered for a
+ * locked note: `clearable` are the unlocked ones, `locked` the ones left out. Reactive (`get` and `isLocked` are).
+ */
+export function clearableNotes(
+  canvas: Pick<LobbyCanvas, 'get' | 'isLocked'>,
+  ids: readonly string[],
+): { readonly clearable: string[]; readonly locked: string[] } {
+  const clearable: string[] = []
+  const locked: string[] = []
+  for (const id of reactionTargets(canvas, ids)) {
+    if (reactionKeysOf(canvas.get(id)).length === 0) continue
+    ;(canvas.isLocked(id) ? locked : clearable).push(id)
+  }
+  return { clearable, locked }
+}
+
+/**
+ * "Clear reactions" (an owner): removes every `react:*` key of the unlocked notes among `ids`, anyone's, in one
+ * `transact` with `skipUndo`. Nothing to clear is not a write. A locked note is left alone (see `clearableNotes`):
+ * when that leaves nothing to clear, the answer is a refusal that says to unlock it, and a clear that did reach some
+ * notes says how many it left (`locked`).
  */
 export function clearReactions(canvas: LobbyCanvas, ids: readonly string[]): ReactionWriteResult {
   if (!reactionsOffered(canvas)) return NOT_OFFERED
+  const { clearable, locked } = clearableNotes(canvas, ids)
+  if (clearable.length === 0 && locked.length > 0) return { ok: false, message: REACTIONS_LOCKED_TEXT }
   const patches: [string, LobbyPatch][] = []
-  for (const id of reactionTargets(canvas, ids)) {
+  for (const id of clearable) {
     const keys = reactionKeysOf(canvas.get(id))
     if (keys.length) patches.push([id, Object.fromEntries(keys.map((k) => [k, null]))])
   }
@@ -325,7 +351,7 @@ export function clearReactions(canvas: LobbyCanvas, ids: readonly string[]): Rea
     return { ok: false, message: 'That did not work.' }
   }
   countUsage('reactions.clear')
-  return { ok: true, changed: patches.length }
+  return { ok: true, changed: patches.length, ...(locked.length ? { locked: locked.length } : {}) }
 }
 
 // ---- refusals ----------------------------------------------------------------------------------------------------
@@ -530,20 +556,21 @@ export function react(
   return r
 }
 
-/** "Clear reactions" with its watch (see `react`). */
+/** "Clear reactions" with its watch (see `react`). Locked notes are left alone, and the person is told so. */
 export function clear(
   ctx: Pick<CanvasFeatureContext, 'canvas' | 'notify'>,
   ids: readonly string[],
 ): ReactionWriteResult {
   const { canvas } = ctx
   const before = new Map<string, string[]>()
-  for (const id of reactionTargets(canvas, ids)) before.set(id, reactionKeysOf(canvas.get(id)))
+  for (const id of clearableNotes(canvas, ids).clearable) before.set(id, reactionKeysOf(canvas.get(id)))
   const r = clearReactions(canvas, ids)
   if (!r.ok) {
     ctx.notify({ key: 'reaction', text: r.message ?? 'That did not work.', testId: 'reaction-toast' })
     return r
   }
   if (r.changed) watchReactionWrites(canvas, ctx.notify, before)
+  if (r.locked) ctx.notify({ key: 'reaction', text: REACTIONS_LOCKED_TEXT, testId: 'reaction-toast' })
   return r
 }
 

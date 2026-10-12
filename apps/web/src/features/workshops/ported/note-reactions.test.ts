@@ -22,6 +22,7 @@ import { NoteReactionsLayer, ReactionPicker } from './NoteReactions.tsx'
 import {
   canClearReactions,
   clear,
+  clearableNotes,
   clearReactions,
   closeReactionPicker,
   mountReactionGuard,
@@ -30,6 +31,7 @@ import {
   pickerOf,
   REACTIONS_COMMAND_ID,
   REACTIONS_FULL_TEXT,
+  REACTIONS_LOCKED_TEXT,
   REACTIONS_NOT_YET_TEXT,
   REACTIONS_OFF_TEXT,
   REACTIONS_SELECTION_ITEM_ID,
@@ -460,6 +462,88 @@ describe('Clear reactions (an owner, N2-4)', () => {
     expect(canClearReactions(kit([], { role: 'editor' }).ctx)).toBe(false)
     expect(canClearReactions(kit([], { role: 'owner', rev: 12 }).ctx)).toBe(false)
     expect(canClearReactions(kit([], { role: 'owner', readOnly: true }).ctx)).toBe(false)
+  })
+})
+
+describe('Clear reactions on a locked note (N3-2: the server keeps another person’s key under a lock)', () => {
+  const others = keys(['up', BOB], ['heart', CAL])
+
+  it('clearableNotes: a note with reactions that is not locked; the locked ones apart; none and gone ignored', () => {
+    const k = kit(
+      [
+        ...reacted('open', others),
+        ...reacted('shut', others, { locked: true }),
+        ...reacted('bare', undefined),
+        ...reacted('bareShut', undefined, { locked: true }),
+      ],
+      { role: 'owner' },
+    )
+    expect(clearableNotes(k.f.canvas, ['open', 'shut', 'bare', 'bareShut', 'nope', 'open'])).toEqual({
+      clearable: ['open'],
+      locked: ['shut'],
+    })
+  })
+
+  it('a clear that reaches nothing but locked notes writes nothing, counts nothing, and says to unlock', () => {
+    const before = { ...pendingUsage() }
+    const k = kit([...reacted('shut', others, { locked: true })], { role: 'owner' })
+    expect(clearReactions(k.f.canvas, ['shut'])).toEqual({ ok: false, message: REACTIONS_LOCKED_TEXT })
+    expect(k.f.steps).toEqual([])
+    expect(k.f.canvas.get('shut')?.customData?.lobby).toEqual(others)
+    const r = clear(k.ctx, ['shut'])
+    expect(r.ok).toBe(false)
+    expect(k.notices.map((n) => [n.text, n.testId])).toEqual([[REACTIONS_LOCKED_TEXT, 'reaction-toast']])
+    expect(k.f.steps).toEqual([])
+    expect((pendingUsage()['reactions.clear'] ?? 0) - (before['reactions.clear'] ?? 0)).toBe(0)
+  })
+
+  it('a selection of an unlocked and a locked note clears the unlocked one in one skipUndo write and says what it left', () => {
+    const k = kit([...reacted('open', others), ...reacted('shut', others, { locked: true })], {
+      role: 'owner',
+    })
+    expect(clearReactions(k.f.canvas, ['open', 'shut'])).toEqual({ ok: true, changed: 1, locked: 1 })
+    expect(k.f.canvas.get('open')?.customData?.lobby).toEqual({})
+    expect(k.f.canvas.get('shut')?.customData?.lobby).toEqual(others)
+    expect(k.f.steps).toEqual(['clear reactions'])
+    expect(k.f.options).toEqual([{ skipUndo: true }])
+    // (the write touched the unlocked note only: no op on the locked one for the room to refuse)
+    const k2 = kit([...reacted('open', others), ...reacted('shut', others, { locked: true })], {
+      role: 'owner',
+    })
+    clear(k2.ctx, ['open', 'shut'])
+    expect(k2.notices.map((n) => n.text)).toEqual([REACTIONS_LOCKED_TEXT])
+    expect(k2.f.canvas.get('shut')?.customData?.lobby).toEqual(others)
+  })
+
+  it('the context menu and the picker do not offer it for a locked note, and do for an unlocked one', () => {
+    const k = kit(
+      [...reacted('open', others), ...reacted('shut', others, { locked: true }), ...reacted('bare', undefined)],
+      { role: 'owner' },
+    )
+    const entry = (feature.contextMenu ?? []).find((m) => m.id === 'reactions-clear')
+    const target = (ids: string[]) => ({ ids, point: null, hit: null })
+    expect(entry?.visible?.(k.ctx, target(['open']))).toBe(true)
+    expect(entry?.visible?.(k.ctx, target(['shut']))).toBe(false)
+    // one unlocked note with reactions is enough to offer it for a selection (the locked one is left alone)
+    expect(entry?.visible?.(k.ctx, target(['open', 'shut']))).toBe(true)
+    expect(entry?.visible?.(k.ctx, target(['shut', 'bare']))).toBe(false)
+    const picker = (ids: string[]) =>
+      renderToStaticMarkup(
+        createElement(ReactionPicker, {
+          ctx: k.ctx,
+          state: { ids, anchor: { x: 300, top: 100, bottom: 130 }, via: 'click', seq: 1 },
+          phone: false,
+          owner: true,
+          onPick: () => {},
+          onClear: () => {},
+          onClose: () => {},
+          onEnter: () => {},
+          onLeave: () => {},
+        }),
+      )
+    expect(picker(['open'])).toContain('data-testid="note-reactions-clear"')
+    expect(picker(['shut'])).not.toContain('note-reactions-clear')
+    expect(picker(['shut', 'bare'])).not.toContain('note-reactions-clear')
   })
 })
 
