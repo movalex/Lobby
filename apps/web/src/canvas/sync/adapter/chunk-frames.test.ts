@@ -51,7 +51,7 @@ describe('animationFrames', () => {
     vi.stubGlobal('cancelAnimationFrame', () => {})
     const s = animationFrames(() => new Set())
     expect(s.threshold).toBe(2_000)
-    expect(s.size).toBe(1_000)
+    expect(s.size).toBe(600)
     let ran = 0
     s.frame(() => ran++)
     frames.shift()?.()

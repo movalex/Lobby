@@ -1,4 +1,4 @@
-// N1-4 (wave N, the review): a chunked cold open (CHUNKED_APPLY, turned on for this page: it ships off) whose socket is
+// N1-4 (wave N, the review): a chunked cold open (CHUNKED_APPLY: on since wave N.1, and set for this page) whose socket is
 // cut while the chunks go in. The core keeps the chunks already shown and asks for everything again at the next
 // welcome (engine.ts abortChunks); the board page never presents that part of the board as the board: the skeleton
 // covers it ('Reconnecting to board…') until the next welcome, which installs the whole board (one apply over the kept

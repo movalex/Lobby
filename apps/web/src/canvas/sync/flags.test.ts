@@ -15,11 +15,11 @@ afterEach(() => {
 })
 
 describe('the speed parts (sync/flags.ts)', () => {
-  it('ship as their gates allow: the worker decode on, the other three off until their speed targets pass', () => {
+  it('ship as their gates allow: the worker decode and (wave N.1) the chunked install on, the other two off until their speed targets pass', () => {
     expect({ WORKER_DECODE, DIFF_APPLY, CHUNKED_APPLY, SIZE_AWARE_LOD }).toEqual({
       WORKER_DECODE: true,
       DIFF_APPLY: false,
-      CHUNKED_APPLY: false,
+      CHUNKED_APPLY: true,
       SIZE_AWARE_LOD: false,
     })
     for (const name of Object.keys(SPEED_FLAGS) as (keyof typeof SPEED_FLAGS)[])
