@@ -1,4 +1,4 @@
-import type { Op, PatchOp } from '@draftroom/canvas-schema/protocol'
+import { CONTRACTS_REV, type Op, type PatchOp } from '@draftroom/canvas-schema/protocol'
 import { describe, expect, it } from 'vitest'
 import { frame } from '../testing/elements.ts'
 import { stored } from '../testing/fakeRoom.ts'
@@ -188,7 +188,7 @@ describe('an offline queue a rev-11 page left, taken over by this page after a r
     bob.core.persistNow()
     await flushMicro()
     const entries = structuredClone(store.entries()) as OfflineEntry[]
-    expect(entries.map((e) => (e as { rev?: number }).rev)).toEqual([12])
+    expect(entries.map((e) => (e as { rev?: number }).rev)).toEqual([CONTRACTS_REV])
     bob.core.stop()
     const bob2 = await reload(h, entries)
     expect(patchesOf(bob2, 'f1').map((p) => p.c?.present)).toEqual([{ index: 2 }])
@@ -248,7 +248,7 @@ describe("an older page's offline create, taken over by this page: the create's 
     bob2.core.persistNow()
     await flushMicro()
     const again = structuredClone(store2.entries()) as OfflineEntry[]
-    expect(again.map((e) => [e.element.id, (e as { rev?: number }).rev])).toEqual([['f2', 12]])
+    expect(again.map((e) => [e.element.id, (e as { rev?: number }).rev])).toEqual([['f2', CONTRACTS_REV]])
     bob2.core.stop()
     const bob3 = await reload(h, again, 'tab1')
     expect(patchesOf(bob3, 'f2').map((p) => p.c?.present)).toEqual([{ index: 3 }])
