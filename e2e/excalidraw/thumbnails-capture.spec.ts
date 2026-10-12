@@ -463,6 +463,61 @@ test('thumbnails (F11): back to the dashboard 1.5 s after an edit, the card stil
   expect(((await meta.json()) as { thumbnail: { width: number } | null }).thumbnail?.width).toBe(480)
 })
 
+test('thumbnails (F11): the card shows an upload whose answer came before the board list reached the page', async ({
+  canvasSession,
+  board,
+}) => {
+  // N1-THUMBS: the F11 tests' flake (main and wave N.1 alike). Leaving the board sends its picture (PUT) as the
+  // dashboard asks for its board list (GET): the list was read before the upload was stored (no thumbnail yet), and
+  // the upload's answer, which the card listens for, came before the list had made the card. Forced here: the upload
+  // waits until the api has answered the list, and the list reaches the page only after the upload's answer.
+  const alice = await canvasSession('alice')
+  const { page } = alice
+  await drawSomething(page, 'Race')
+  await expect(captureState(page)).toHaveAttribute('data-state', 'rendered', { timeout: 20_000 })
+  await page.evaluate((type) => {
+    window.addEventListener(type, () => {
+      ;(window as unknown as { __thumbAnnounced?: boolean }).__thumbAnnounced = true
+    })
+  }, 'draftroom:thumbnail-updated')
+  let listRead = () => {}
+  const listWasRead = new Promise<void>((resolve) => {
+    listRead = resolve
+  })
+  await page.route(
+    (url) => url.pathname === `/api/boards/${board}/thumbnail`,
+    async (route) => {
+      if (route.request().method() === 'PUT') await listWasRead
+      await route.continue()
+    },
+  )
+  await page.route(
+    (url) => /^\/api\/workspaces\/[^/]+\/boards$/.test(url.pathname),
+    async (route) => {
+      const res = await route.fetch()
+      listRead()
+      await page.waitForFunction(
+        () => (window as unknown as { __thumbAnnounced?: boolean }).__thumbAnnounced === true,
+        undefined,
+        { timeout: 15_000 },
+      )
+      await route.fulfill({ response: res })
+    },
+  )
+  const sent = page.waitForResponse(
+    (r) => r.request().method() === 'PUT' && r.url().endsWith(`/api/boards/${board}/thumbnail`),
+    { timeout: 15_000 },
+  )
+  await backToDashboard(alice)
+  const res = await sent
+  expect(res.status()).toBe(200)
+  const version = ((await res.json()) as { thumbnail: { version: string } }).thumbnail.version
+  const img = card(page, board).getByTestId('board-thumbnail')
+  await expect(img).toBeVisible({ timeout: 10_000 })
+  await expect(img).toHaveAttribute('data-version', version)
+  expect((await decoded(img)).colours).toBeGreaterThan(8)
+})
+
 test('thumbnails (F11): the placeholder of a board without a thumbnail is dark on the dark theme', async ({
   canvasSession,
   board,
