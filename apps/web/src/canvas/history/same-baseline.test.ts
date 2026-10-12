@@ -57,7 +57,7 @@ function watch(core: LobbyEngineCore, scene: MapScene) {
       if (e.same?.has(id)) {
         checked.same++
         pending.set(id, 'same')
-      } else if (!e.before.get(id) && !!kept && kept === core.confirmed(id)) {
+      } else if (!e.before.get(id) && kept && kept === core.confirmed(id)) {
         checked.adopted++
         pending.set(id, 'adopted')
       }
