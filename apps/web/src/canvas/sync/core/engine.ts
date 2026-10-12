@@ -1055,6 +1055,11 @@ export class LobbyEngineCore implements EngineCore {
     return true
   }
 
+  /** Wave N.1: a snapshot is being installed in chunks (the scene is the core's, read-only, until the last one). */
+  get installing(): boolean {
+    return this.chunk !== null
+  }
+
   /** Wave N: how the last reset welcome's snapshot went into the scene (N1-3 diff, N1-4 chunks, whole); null: none yet. */
   get resetApply(): 'diff' | 'chunked' | 'full' | null {
     return this.lastResetApply

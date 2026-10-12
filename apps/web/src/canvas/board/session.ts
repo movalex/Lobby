@@ -942,6 +942,11 @@ export class LobbyBoardSession {
       apply: (elements) => {
         if (this.api) scene(this.api).apply(elements)
       },
+      // wave N.1: a lookup in the engine's own map (undo's absorb of an apply's ids, without a walk of the scene)
+      get: (id) =>
+        this.api
+          ? (this.api.getSceneElementsMapIncludingDeleted().get(id) as unknown as SceneElement | undefined)
+          : undefined,
     }
   }
 

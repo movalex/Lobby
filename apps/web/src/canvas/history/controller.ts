@@ -110,10 +110,17 @@ export class UndoController {
           }
           epoch = e.welcome.epoch
         } else if (e.kind === 'applied') {
-          const now = sceneMap()
-          // (wave N.1: a new copy of the row the scene showed brings nothing to take in: `same`)
+          // (wave N.1: a new copy of the row the scene showed brings nothing to take in: `same`; and the apply's ids
+          // are looked up in the scene's own map when it has one, without a walk of every element: a chunked install
+          // of a large board applies about a thousand at a time)
+          const get = o.scene.get
+          const now = get ? null : sceneMap()
           for (const id of e.ids)
-            if (!e.same?.has(id)) this.history.absorb(e.before.get(id) as HistEl | undefined, now.get(id))
+            if (!e.same?.has(id))
+              this.history.absorb(
+                e.before.get(id) as HistEl | undefined,
+                (now ? now.get(id) : (get?.(id) as HistEl | undefined)) as HistEl | undefined,
+              )
         } else if (e.kind === 'push') this.history.markPushed(e.record.seq, e.ids)
       }),
       o.core.onAck((ack) => this.history.onAck(ack as never, sceneMap())),
@@ -205,6 +212,9 @@ export class UndoController {
   boundary(label?: string): Entry | null {
     // inside `outside`: the write is being installed, and is never part of a step
     if (this.installingOutside > 0) return null
+    // wave N.1: while the core installs a snapshot in chunks the scene is its own (read-only, every chunk absorbed):
+    // nothing can be a step, and the record's pass over every element is skipped
+    if (this.o.core.installing) return null
     const now = this.selectionNow()
     const entry = this.history.record(this.sceneMap('record'), label, {
       before: this.restSelection,
