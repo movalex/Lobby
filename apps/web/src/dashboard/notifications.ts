@@ -39,10 +39,21 @@ export function notificationsApi(api: ApiClient) {
  */
 export const DASHBOARD_WHOLE_REFRESH_MS = 5 * 60_000
 
+/**
+ * The poll's cursor lags (wave N.1 review). A notification's `seq` is taken at INSERT, before its transaction commits,
+ * so two transactions for one person can commit out of seq order: a list read between the two commits shows the
+ * higher seq without the lower one, and a poll sending that seq would get 204s (the newest is still that one) until
+ * the next whole refresh. So the poll sends a seq only once a whole answer asked for at least this long after the seq
+ * was first seen shows it again; until then it sends the last such seq, which the api answers with the whole list
+ * (the newest it lists, not a delta: there is nothing to merge). The poll after a change, about 15 s later, is that
+ * answer, and the 204s resume behind it: shorter than the poll's interval, so one poll is enough.
+ */
+export const DASHBOARD_SEQ_SETTLE_MS = 10_000
+
 export interface InboxPoll {
   /**
-   * Reads the bell. `onlyIfNew` (the 15 s poll) sends the `seq` of the last answer, and a 204 keeps what is shown;
-   * every other refresh asks for the whole list (since 0, which only an empty bell answers with a 204), and so does a
+   * Reads the bell. `onlyIfNew` (the 15 s poll) sends the last settled `seq` (DASHBOARD_SEQ_SETTLE_MS), and a 204 keeps
+   * what is shown; every other refresh asks for the whole list (since 0, which only an empty bell answers with a 204), and so does a
    * poll DASHBOARD_WHOLE_REFRESH_MS after the last whole answer. Never rejects: a failure keeps what is shown.
    */
   refresh(opts?: { onlyIfNew?: boolean }): Promise<void>
@@ -55,15 +66,20 @@ export function createInboxPoll(deps: {
   list(since: number): Promise<ListNotificationsResponse | null>
   show(inbox: ListNotificationsResponse): void
 }): InboxPoll {
+  /** the seq of the list shown, and when it was first seen */
   let seq: number | null = null
+  let seenAt = Number.NEGATIVE_INFINITY
+  /** the seq the poll sends: one that a whole answer showed again DASHBOARD_SEQ_SETTLE_MS after it was first seen */
+  let cursor: number | null = null
   let wholeAt = Number.NEGATIVE_INFINITY
   let asked = 0
   let applied = 0
   return {
     async refresh(opts = {}) {
       const cheap =
-        opts.onlyIfNew === true && seq !== null && Date.now() - wholeAt < DASHBOARD_WHOLE_REFRESH_MS
-      const since = cheap && seq !== null ? seq : 0
+        opts.onlyIfNew === true && cursor !== null && Date.now() - wholeAt < DASHBOARD_WHOLE_REFRESH_MS
+      const since = cheap && cursor !== null ? cursor : 0
+      const sentAt = Date.now()
       const mine = ++asked
       let res: ListNotificationsResponse | null
       try {
@@ -72,18 +88,31 @@ export function createInboxPoll(deps: {
         return // keep the last list; the bell just shows what it had
       }
       if (mine < applied) return
-      // a poll's 204 applies nothing, so it never makes a whole answer still on its way "older"
-      if (res === null && since > 0) return
+      // a poll's 204 applies nothing, so it never makes a whole answer still on its way "older". Sent behind the list
+      // shown (a seq not settled yet), it means the newer items were removed: the whole list next time
+      if (res === null && since > 0) {
+        if (since !== seq) cursor = null
+        return
+      }
       applied = mine
       wholeAt = Date.now()
       if (res === null) {
-        // "since 0" answered so: there is nothing at all
+        // "since 0" answered so: there is nothing at all (an item committed later makes the newest differ from 0)
         seq = 0
+        cursor = 0
+        seenAt = Date.now()
         deps.show({ notifications: [], unreadCount: 0 })
         return
       }
       const { seq: next, ...inbox } = res
-      seq = next ?? null // an api from before wave M sends none: since 0 every time, as before
+      if (next === undefined) {
+        // an api from before wave M sends none: since 0 every time, as before
+        seq = null
+        cursor = null
+      } else if (next !== seq) {
+        seq = next
+        seenAt = Date.now()
+      } else if (sentAt - seenAt >= DASHBOARD_SEQ_SETTLE_MS) cursor = next
       deps.show(inbox)
     },
     invalidate() {
