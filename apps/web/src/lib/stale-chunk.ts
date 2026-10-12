@@ -25,8 +25,9 @@
  * as a stale chunk's and one more that stops a reload for a build the page already reloaded for (a cache that keeps
  * serving the old page would otherwise reload it every minute); when a guard says no, the notice with its button. A
  * board opened after the new version was seen shows the notice when it registers. Wave N1 (wave M follow-up 3): not while
- * the page holds words typed into a dialog's field or the feedback form (`domHasTypedWork`): the person left the tab with
- * a message half written, and a silent reload would lose it; they get the notice with its button when they come back. Counted (lib/usage.ts, the
+ * the page holds words typed into a dialog's field or a form's (`domHasTypedWork`; a form's since the
+ * wave N.1 review: the sidebar's New project name): the person left the tab with something half written, and a
+ * silent reload would lose it; they get the notice with its button when they come back. Counted (lib/usage.ts, the
  * contract's fixed events): `stalechunk.notice` (a chunk failed), `version.notice` (a newer build was seen), and
  * `stalechunk.reload` for every reload this handler makes or the Reload button makes, whatever the cause.
  *
@@ -95,11 +96,13 @@ interface Env {
 interface FieldLike {
   readonly type?: string | null
   readonly value?: unknown
+  closest?(selector: string): unknown
 }
 
-/** Where a person types something that is not saved anywhere yet: a dialog's fields and the feedback page's form. */
-const TYPED_WORK_FIELDS =
-  'dialog[open] :is(input, textarea), [role="dialog"] :is(input, textarea), [aria-modal="true"] :is(input, textarea), form textarea'
+/** An open dialog: any field in it with words is typed work (a reload closes the dialog and loses them). */
+const TYPED_WORK_DIALOG = 'dialog[open], [role="dialog"], [aria-modal="true"]'
+/** A search landmark: a query typed into it is no typed work outside a dialog (see below). */
+const SEARCH_LANDMARK = '[role="search"], search'
 /** Inputs that hold no words (their value is a state or a choice, not text a person wrote). */
 const NO_WORDS = new Set([
   'checkbox',
@@ -115,18 +118,24 @@ const NO_WORDS = new Set([
 ])
 
 /**
- * Whether the page holds words a reload would lose: a text field, search field or textarea with something in it, in an
- * open dialog (New board's title, a rename, an invitation's address, the feedback dialog) or in a form's textarea (the
- * feedback page). A pre-filled field counts too: asking the person is cheap, losing a message is not. Never throws.
+ * Whether the page holds words a reload would lose: a text field, search field or textarea with something in
+ * it, in an open dialog (New board's title, a rename, an invitation's address, the feedback dialog), or a text
+ * field or textarea in a form (the sidebar's New project name, the feedback page). Not a search box outside a
+ * dialog (the dashboard's search; a search field, or a form that is a search landmark): a query is typed again in
+ * a moment, and a box left with one must not keep an old build open for hours. A pre-filled field counts too:
+ * asking the person is cheap, losing a message is not. Never throws.
  */
 export function domHasTypedWork(
   doc: { querySelectorAll(selector: string): ArrayLike<unknown> } | undefined = globalThis.document,
 ): boolean {
   try {
     if (!doc) return false
-    for (const el of Array.from(doc.querySelectorAll(TYPED_WORK_FIELDS)) as FieldLike[]) {
-      if (el.type && NO_WORDS.has(String(el.type).toLowerCase())) continue
-      if (typeof el.value === 'string' && el.value.trim() !== '') return true
+    for (const el of Array.from(doc.querySelectorAll('input, textarea')) as FieldLike[]) {
+      const type = String(el.type ?? '').toLowerCase()
+      if (NO_WORDS.has(type) || typeof el.value !== 'string' || el.value.trim() === '') continue
+      if (el.closest?.(TYPED_WORK_DIALOG)) return true
+      if (type === 'search' || el.closest?.(SEARCH_LANDMARK)) continue
+      if (el.closest?.('form')) return true
     }
   } catch {
     // a page that cannot be read holds nothing we know of
@@ -297,7 +306,7 @@ export function createStaleChunkHandler(env: Env = defaultEnv) {
       const again = readVersionReload()
       const reloadedFor =
         again !== null && again.served === served && env.now() - again.at < VERSION_RELOAD_GUARD_MS
-      // N1: words typed into a dialog or the feedback form: the notice, not a reload that would lose them
+      // N1: words typed into a dialog or a form: the notice, not a reload that would lose them
       const typing = env.typedWork?.() === true
       if (!recent && !reloadedFor && !typing && writeGuard() && writeVersionReload(served)) {
         reloading = true
