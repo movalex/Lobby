@@ -7,6 +7,7 @@ import type { UsageEvent } from '@draftroom/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createStaleChunkHandler,
+  domHasTypedWork,
   RELOAD_GUARD_MS,
   RELOAD_KEY,
   STALE_NOTICE_KEY,
@@ -44,6 +45,8 @@ function page(opts: { visible?: boolean; commit?: string; served?: string; stora
     /** every fetch of /version.json, and whether the tab was shown */
     asks: [] as boolean[],
     failing: false,
+    /** words typed into a dialog's field (the page's typed work) */
+    typing: false,
     reloads: 0,
     counts: [] as UsageEvent[],
     store,
@@ -112,6 +115,7 @@ function page(opts: { visible?: boolean; commit?: string; served?: string; stora
     now: () => p.t,
     online: () => true,
     storage: p.storage,
+    typedWork: () => p.typing,
     setTimeout: (fn, ms) => p.versionEnv.setTimeout(fn, ms),
     count: (e) => void p.counts.push(e),
   })
@@ -365,6 +369,71 @@ describe('a newer build outside a board: a silent reload while the tab is hidden
     expect(p.reloads).toBe(0)
     expect(handler.notice()).toMatchObject({ key: STALE_NOTICE_KEY })
     check.stop()
+  })
+})
+
+describe('N1 (wave M follow-up 3): a hidden tab with words typed into a dialog is not reloaded', () => {
+  it('typed work in the page: no silent reload; the notice with its button waits for the person', async () => {
+    const { p, handler } = page({ served: NEW })
+    p.typing = true
+    const check = startVersionCheck(p.versionEnv, handler)
+    p.advance(VERSION_CHECK_MS)
+    await settle()
+    p.show(false)
+    expect(p.reloads).toBe(0)
+    expect(handler.notice()).toMatchObject({ key: STALE_NOTICE_KEY, text: STALE_NOTICE_TEXT })
+    expect(handler.notice()?.action?.label).toBe('Reload')
+    expect(p.counts).toEqual(['version.notice'])
+    // and no guard was written for a reload that did not happen
+    expect(p.store.get(RELOAD_KEY)).toBeUndefined()
+    expect(p.store.get(VERSION_RELOAD_KEY)).toBeUndefined()
+    check.stop()
+  })
+
+  it('the words gone (the dialog closed) before the tab is hidden: the silent reload as before', async () => {
+    const { p, handler } = page({ served: NEW })
+    p.typing = true
+    const check = startVersionCheck(p.versionEnv, handler)
+    p.advance(VERSION_CHECK_MS)
+    await settle()
+    p.typing = false
+    p.show(false)
+    expect(p.reloads).toBe(1)
+    check.stop()
+  })
+})
+
+describe('domHasTypedWork: words in a field of an open dialog or the feedback form', () => {
+  const field = (type: string | null, value: string) => ({ type, value })
+  const doc = (fields: { type: string | null; value: string }[]) => ({
+    querySelectorAll: (selector: string) => {
+      // the selector names the places a person types into: dialogs and the feedback form
+      expect(selector).toMatch(/dialog/)
+      return fields
+    },
+  })
+
+  it('a text field, a search or a textarea with something in it is typed work; empty or blank is not', () => {
+    expect(domHasTypedWork(doc([field('text', 'Sprint 12')]))).toBe(true)
+    expect(domHasTypedWork(doc([field('email', 'a@b.co')]))).toBe(true)
+    expect(domHasTypedWork(doc([field(null, 'a long feedback message')]))).toBe(true)
+    expect(domHasTypedWork(doc([field('text', ''), field('text', '   ')]))).toBe(false)
+    expect(domHasTypedWork(doc([]))).toBe(false)
+  })
+
+  it('a checkbox, a radio, a file, a hidden field or a button holds no words', () => {
+    for (const type of ['checkbox', 'radio', 'file', 'hidden', 'button', 'submit', 'range', 'color'])
+      expect(domHasTypedWork(doc([field(type, 'on')])), type).toBe(false)
+  })
+
+  it('a page it cannot read is no typed work (never blocks an update by throwing)', () => {
+    expect(
+      domHasTypedWork({
+        querySelectorAll: () => {
+          throw new Error('SecurityError')
+        },
+      }),
+    ).toBe(false)
   })
 })
 

@@ -5,6 +5,7 @@
 //  - on the dashboard: nothing is asked while the tab is hidden, one ask when it is shown, one every 15 minutes while it
 //    stays shown; a newer commit is no visible change while the tab is shown, and the page reloads once the tab is
 //    hidden; a reload for a build is not repeated (the guard): the notice with its Reload button instead;
+//  - with words typed into a dialog (N1): no reload while the tab is hidden, the notice instead, the words still there;
 //  - on a board: the existing "Lobby has been updated" notice, never a reload by itself; its Reload reloads;
 //  - the request is /version.json only, without credentials.
 //
@@ -186,4 +187,40 @@ test('on a board a newer build is the stale-chunk notice, never a reload by itse
     await expect.poll(() => marker(a.page).catch(() => 'reloading'), { timeout: 30_000 }).toBeUndefined()
     await waitForCanvas(a.page)
   })
+})
+
+// N1 (wave M follow-up 3): a hidden dashboard tab with a message half written in a dialog is not reloaded under it.
+test('the dashboard with words typed into the New board dialog: a newer build is not reloaded for while the tab is hidden; the notice waits', async ({
+  browser,
+}) => {
+  test.setTimeout(120_000)
+  const p = await signedInContext(browser, freshHandle('m3t'), {
+    name: 'Tess Typing',
+    email: 'lobby-test-m3t@darkburn.com',
+  })
+  try {
+    await p.page.clock.install()
+    await openDashboard(p.page, personalWorkspace(p.me))
+    const { state } = await serveVersion(p.page)
+    state.commit = NEWER
+    await p.page.evaluate(() => {
+      ;(window as { __m3?: number }).__m3 = 1
+    })
+    // words in a dialog's field
+    await p.page.getByTestId('create-board').click()
+    await p.page.getByTestId('create-board-title').fill('Q4 offsite plan')
+    // a newer build is seen while the tab is shown (nothing visible), then the tab is hidden
+    await setShown(p.page, state, false)
+    await setShown(p.page, state, true)
+    await expect.poll(() => state.asks.length).toBe(1)
+    await setShown(p.page, state, false)
+    await p.page.waitForTimeout(800)
+    expect(await marker(p.page)).toBe(1)
+    await setShown(p.page, state, true)
+    await expect(p.page.getByTestId('stale-chunk-notice')).toContainText('Lobby has been updated')
+    await expect(p.page.getByTestId('create-board-title')).toHaveValue('Q4 offsite plan')
+    expect(await marker(p.page)).toBe(1)
+  } finally {
+    await p.context.close()
+  }
 })
