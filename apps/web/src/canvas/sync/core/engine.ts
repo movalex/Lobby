@@ -705,7 +705,7 @@ export class LobbyEngineCore implements EngineCore {
    */
   private chunk: {
     readonly next: SceneElement[]
-    readonly plan: string[][]
+    plan: string[][]
     readonly touched: ReadonlySet<string>
     readonly before: ReadonlyMap<string, SceneElement | undefined>
     readonly done: () => void
@@ -714,6 +714,8 @@ export class LobbyEngineCore implements EngineCore {
     i: number
     handle: unknown
     readonly later: Set<string>
+    /** wave N.1: ids whose entry in `next` is still the server's row, copied as their chunk goes in */
+    readonly uncopied: Set<string>
   } | null = null
   private readonly inbox: ServerInbound[] = []
   /** N1-4: this tab's epoch and clock before the last welcome (a chunked install cut short goes back to them) */
@@ -724,7 +726,7 @@ export class LobbyEngineCore implements EngineCore {
   clock = 0
   epoch: string | null = null
   private horizon = 0
-  private readonly confirmedMap = new Map<string, SceneElement>()
+  private confirmedMap = new Map<string, SceneElement>()
   private serverDoc: Record<string, unknown> = {}
   /**
    * Per board-document key, the clock of the write that last set or removed it on the server: the
@@ -1974,11 +1976,22 @@ export class LobbyEngineCore implements EngineCore {
       }
       put(el.id, el)
     }
+    // wave N.1: a cold open's chunked install (nothing of this tab's, a large snapshot) copies each server row as its
+    // chunk goes in (applyChunk), not every row in the task that read the snapshot; the scene never gets a row itself
+    const lazy =
+      !!chunked &&
+      !!this.chunks &&
+      this.confirmedMap.size > this.chunks.threshold &&
+      this.tracked.size === 0 &&
+      this.flying().length === 0 &&
+      hold.size === 0
+    const uncopied = new Set<string>()
     for (const [id, el] of this.confirmedMap) {
       if (seen.has(id) || this.vanish.has(id)) continue
       before.set(id, undefined)
       touched.push(id)
-      put(id, copyElement(el))
+      if (lazy) uncopied.add(id)
+      put(id, lazy ? el : copyElement(el))
     }
     this.vanish.clear()
     if (touched.length === 0) return false
@@ -2002,7 +2015,10 @@ export class LobbyEngineCore implements EngineCore {
     // (§2.5.4); the array is then only sorted by (index, id)
     const t0 = nowMs()
     let next: SceneElement[]
-    if (out.some(ownUnacked)) {
+    // (wave N.1: with nothing tracked, nothing out and no gesture, no element can be this client's to re-key: the
+    // check of every element is skipped, as on a cold open's snapshot)
+    const mine = this.tracked.size > 0 || this.flying().length > 0 || hold.size > 0
+    if (mine && out.some(ownUnacked)) {
       const pre = indexPrePass(out, {
         isOwnUnacked: ownUnacked,
         isInFlight: (el) => this.inflightHas(el.id),
@@ -2040,8 +2056,20 @@ export class LobbyEngineCore implements EngineCore {
         this.known.delete(id)
         this.last.delete(id)
       }
+    if (chunked && this.startChunks(next, touched, before, chunked, uncopied)) {
+      this.readScene(next)
+      return true
+    }
+    // (an install that did not start in chunks after all: every row copied now, as before)
+    if (uncopied.size)
+      for (let k = 0; k < next.length; k++) {
+        const el = next[k] as SceneElement
+        if (!uncopied.has(el.id)) continue
+        const copy = copyElement(el)
+        next[k] = copy
+        this.last.set(copy.id, copy)
+      }
     this.readScene(next)
-    if (chunked && this.startChunks(next, touched, before, chunked)) return true
     const t1 = nowMs()
     this.scene.apply(next)
     measure('lobby.updateScene', t1)
@@ -2133,33 +2161,45 @@ export class LobbyEngineCore implements EngineCore {
     return plan.length > 1 ? plan : null
   }
 
-  /** Starts the chunked install of `next` (false: one apply instead). `done` runs after the last chunk. */
+  /**
+   * Starts the chunked install of `next` (false: one apply instead). `done` runs after the last chunk. `uncopied`: the
+   * ids whose entry in `next` is still the server's row (each is copied as its chunk goes in).
+   *
+   * Wave N.1: the plan and the first chunk come at the next frame, not in the task that read the snapshot (the
+   * snapshot's own bookkeeping is that task's whole work: one long task fewer on a cold open of a large board). A
+   * snapshot the plan cannot split goes in at that frame in one chunk.
+   */
   private startChunks(
     next: SceneElement[],
     touched: readonly string[],
     before: ReadonlyMap<string, SceneElement | undefined>,
     done: () => void,
+    uncopied: Set<string>,
   ): boolean {
-    const plan = this.chunkPlan(next)
-    if (!plan) return false
-    this.chunk = {
+    const s = this.chunks
+    if (!s || next.length <= s.threshold) return false
+    const c = {
       next,
-      plan,
+      plan: [] as string[][],
       touched: new Set(touched),
       before,
       done,
       prior: this.priorPoint,
-      placed: new Set(),
+      placed: new Set<string>(),
       i: 0,
-      handle: null,
-      later: new Set(),
+      handle: null as unknown,
+      later: new Set<string>(),
+      uncopied,
     }
+    this.chunk = c
     this.lastResetApply = 'chunked'
-    this.log('chunked_apply', { elements: next.length, chunks: plan.length })
     this.emit({ kind: 'applying', on: true, applied: 0, total: next.length })
-    // wave N.1: the first chunk at the next frame too, not in the task that read the snapshot (the snapshot's own
-    // bookkeeping is that task's whole work: one long task fewer on a cold open of a large board)
-    this.chunk.handle = (this.chunks as ChunkScheduler).frame(() => this.applyChunk())
+    c.handle = s.frame(() => {
+      if (this.chunk !== c || this.stopped) return
+      c.plan = this.chunkPlan(next) ?? [next.map((el) => el.id)]
+      this.log('chunked_apply', { elements: next.length, chunks: c.plan.length })
+      this.applyChunk()
+    })
     return true
   }
 
@@ -2178,7 +2218,25 @@ export class LobbyEngineCore implements EngineCore {
     for (const id of ids) c.placed.add(id)
     c.i++
     const last = c.i >= c.plan.length
-    const arr = last ? c.next : c.next.filter((el) => c.placed.has(el.id))
+    // (wave N.1: the rows of this chunk become the scene's own copies now, in `next` and the core's view of the scene)
+    const own = (k: number): SceneElement => {
+      const el = c.next[k] as SceneElement
+      if (!c.uncopied.has(el.id)) return el
+      const copy = copyElement(el)
+      c.next[k] = copy
+      c.uncopied.delete(el.id)
+      this.current.set(copy.id, copy)
+      this.last.set(copy.id, copy)
+      return copy
+    }
+    let arr: SceneElement[]
+    if (last) {
+      if (c.uncopied.size) for (let k = 0; k < c.next.length; k++) own(k)
+      arr = c.next
+    } else {
+      arr = []
+      for (let k = 0; k < c.next.length; k++) if (c.placed.has((c.next[k] as SceneElement).id)) arr.push(own(k))
+    }
     const t1 = nowMs()
     this.scene.apply(arr)
     measure('lobby.updateScene', t1)
@@ -2414,8 +2472,9 @@ export class LobbyEngineCore implements EngineCore {
     }
     this.awaitingSnapshot = false
     const mark = this.holdMark(null)
-    const had = new Map(this.confirmedMap)
-    this.confirmedMap.clear()
+    // (wave N.1: the old map is the one the rows replace; a new map instead of a copy of the old and a clear)
+    const had = this.confirmedMap
+    this.confirmedMap = new Map()
     for (const el of frame.elements)
       this.confirm(el.id, keepTombstoneContent(had.get(el.id), el as unknown as SceneElement))
     this.holdRecord(mark)
