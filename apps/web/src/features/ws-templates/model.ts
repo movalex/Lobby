@@ -4,6 +4,7 @@
 
 import {
   type MeAccess,
+  type UseWorkspaceTemplateInput,
   type WorkspaceTemplate,
   WS_TEMPLATE_CATEGORIES,
   WS_TEMPLATE_NAME_MAX,
@@ -42,6 +43,31 @@ export function canSaveWsTemplate(f: SaveFacts): boolean {
 export function defaultTemplateName(boardTitle: string): string {
   const t = boardTitle.replace(/\s+/g, ' ').trim()
   return [...t].slice(0, WS_TEMPLATE_NAME_MAX).join('').trim() || 'Team template'
+}
+
+/**
+ * The notice after a save. A template is started by creating a board, which only members who may make boards can do (the
+ * api's creator rule), so it names them, not everyone in the workspace (N1, wave M follow-up 8).
+ */
+export const savedTemplateNotice = (workspaceName: string): string =>
+  `Saved as a workspace template. Members of ${workspaceName} who can make boards can start a board from it.`
+
+/** The api's longest title of a board (UTF-16 units, as its schema counts them). */
+const BOARD_TITLE_MAX = 120
+
+/**
+ * The body of "Use template" from the New board dialog (N1, wave M follow-up 8): its Title (blank: none, the api names the
+ * copy for the template) and its Project (null: the workspace itself). A title is trimmed and cut at the api's length
+ * without splitting a character.
+ */
+export function useTemplateInput(o: { title?: string; projectId: string | null }): UseWorkspaceTemplateInput {
+  let title = ''
+  for (const ch of (o.title ?? '').trim()) {
+    if (title.length + ch.length > BOARD_TITLE_MAX) break
+    title += ch
+  }
+  title = title.trim()
+  return { projectId: o.projectId, ...(title ? { title } : {}) }
 }
 
 /** A name the api accepts (trimmed, 1..80), or null. */

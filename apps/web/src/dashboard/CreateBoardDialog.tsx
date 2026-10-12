@@ -3,7 +3,7 @@
 // canvas-ux feature inserts the template once on that first open.
 
 import type { Board, Project } from '@draftroom/contracts'
-import { type FormEvent, useId, useState } from 'react'
+import { type FormEvent, useId, useMemo, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { Dialog } from '../ui/Dialog.tsx'
 import { readPickerHidden, writePickerHidden } from './prefs.ts'
@@ -39,6 +39,12 @@ export function CreateBoardDialog({
   const [hidePicker, setHidePicker] = useState(() => readPickerHidden(userId))
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
+
+  // a workspace template's "Use template" goes where this dialog's Project says (not where the dashboard happens to be)
+  const galleryWorkspace = useMemo(
+    () => ({ id: workspaceId, projectId: project || null }),
+    [workspaceId, project],
+  )
 
   const create = async (pick: TemplateChoice, picked: CatalogEntry | null) => {
     const t = title.trim() || picked?.name || 'Untitled board'
@@ -77,6 +83,8 @@ export function CreateBoardDialog({
     >
       <div className="dr-newboard">
         <TemplateGallery
+          workspace={galleryWorkspace}
+          title={title}
           selected={choice}
           onSelect={(c, e) => {
             setChoice(c)
