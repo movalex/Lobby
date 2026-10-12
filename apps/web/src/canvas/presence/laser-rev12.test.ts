@@ -15,7 +15,7 @@ import { z } from 'zod'
 import type { LobbyEngineCore } from '../sync/core/engine.ts'
 import { setPresenceFollow } from './follow-target.ts'
 import { PresenceHub, type PresenceHubOptions } from './hub.ts'
-import { lasersOf, setLaserToolSource } from './laser.ts'
+import { LASER_STILL_MAX_MS, lasersOf, setLaserToolSource } from './laser.ts'
 
 /** Rev 11's `presence` in, as a rev-11 room parses it (strict: `f` and `view.z`, no `t`, no `trail`). */
 const PresenceIn11 = z.strictObject({
@@ -507,6 +507,42 @@ describe('M2-6: a laser held still stays visible to the others', () => {
     const k = m.flushed.length
     m.advance(10_000)
     expect(m.flushed.length).toBe(k)
+    m.dispose()
+  })
+
+  it('wave N.1: a press whose release was lost (still down, not moving) expires: the others see it end and nothing is re-sent after', () => {
+    const m = meeting()
+    m.aliceHub.onPointer(m.sample(100, 'down'))
+    m.advance(60)
+    m.aliceHub.onPointer(m.sample(120, 'down', [{ x: 110, y: 1 }]))
+    // held still for a long while is a laser held still (M2-6): it stays visible up to the limit…
+    m.advance(LASER_STILL_MAX_MS - 1_000)
+    expect(m.seen()?.active).toBe(true)
+    // …and past it the press counts as released: t: null goes out once, the laser fades on its own
+    m.advance(2_000)
+    expect(m.seen()?.active ?? false).toBe(false)
+    expect(m.flushed.at(-1)).toMatchObject({ t: null })
+    m.advance(1_500)
+    expect(m.seen()).toBeUndefined()
+    const n = m.flushed.length
+    m.advance(20_000)
+    expect(m.flushed.length).toBe(n)
+    // a real pointer event after it is a new press (the person is still there and pressing)
+    m.aliceHub.onPointer(m.sample(130, 'down'))
+    m.advance(100)
+    expect(m.seen()?.active).toBe(true)
+    m.dispose()
+  })
+
+  it('a laser that keeps moving never expires, however long the press lasts', () => {
+    const m = meeting()
+    m.aliceHub.onPointer(m.sample(0, 'down'))
+    for (let i = 1; i <= 80; i++) {
+      m.advance(1_000)
+      m.aliceHub.onPointer(m.sample(i, 'down'))
+    }
+    m.advance(200)
+    expect(m.seen()?.active).toBe(true)
     m.dispose()
   })
 

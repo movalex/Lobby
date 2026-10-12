@@ -91,6 +91,15 @@ export function attachPresencePointer(wrapper: HTMLElement, opts: PresencePointe
   const onMove = (e: PointerEvent) => {
     if (!e.isPrimary) return
     left = false
+    // a move with no button held, after a press this listener never saw end (let go over the page's chrome, in another
+    // window): the press is over. Sent as the release it is, so the laser (and a drag marker) do not follow a free mouse.
+    if (button === 'down' && e.buttons === 0) {
+      cancelTrailing()
+      button = 'up'
+      between = []
+      sample(e, 'pointerup', opts.toScene(e.clientX, e.clientY))
+      return
+    }
     keep(e)
     const wait = lastSent + interval - now()
     if (wait <= 0) {

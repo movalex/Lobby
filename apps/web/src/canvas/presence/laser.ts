@@ -31,6 +31,12 @@ export const LASER_HOLD_MS = 3_000
  * other laser message (no protocol change), and goes through the same 20 Hz gate (./hub.ts).
  */
 export const LASER_RESEND_MS = 1_000
+/**
+ * Wave N.1: a laser pressed and held still re-sends only this long since the last pointer event. A release this tab never
+ * saw (the button let go over the page's chrome, another window, a cancelled touch) would otherwise keep re-sending for
+ * ever, and the others' laser would never go. Past it the press counts as released: the laser fades like any other.
+ */
+export const LASER_STILL_MAX_MS = 30_000
 /** The span one entry's samples are spread over when the previous entry is older (the room's 10 Hz tick). */
 const FRAME_SPAN_MS = 100
 
