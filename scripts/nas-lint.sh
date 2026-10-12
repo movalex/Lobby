@@ -5,7 +5,9 @@
 #
 #   DRY_RUN=1 (the default): every SSH/Docker command is printed, nothing touches the NAS.
 #   DRY_RUN=0: under the standing NAS approval for throwaway draftroom-* names.
-# Usage: DRY_RUN=0 bash scripts/nas-lint.sh <commit> [--keep]
+# Usage: DRY_RUN=0 bash scripts/nas-lint.sh <commit> [--write] [--keep]
+#   --write: `biome check --write .` (its safe fixes and the formatter, never --unsafe) and the changes come back as
+#   $EVIDENCE_DIR/biome-write.patch (apply with `git apply -p1`), then a plain check reports what is left.
 #
 # The same shape as nas-pg-api.sh: preflight (df, nothing named draftroom-lint* yet), the commit's whole tracked
 # tree (git archive; refused if it would hold .env*, .data, node_modules or test-results) into
@@ -31,11 +33,13 @@ mkdir -p "$EVIDENCE_DIR"
 LOG="$EVIDENCE_DIR/nas-lint-$(date -u +%Y%m%dT%H%M%SZ).log"
 log() { printf '%s %s\n' "$(date -u +%H:%M:%S)" "$*" | tee -a "$LOG" >&2; }
 
-SHA="${1:?usage: nas-lint.sh <commit> [--keep]}"
+SHA="${1:?usage: nas-lint.sh <commit> [--write] [--keep]}"
 shift
 KEEP=0
+WRITE=0
 while (($#)); do
   case "$1" in
+    --write) WRITE=1 ;;
     --keep) KEEP=1 ;;
     *) log "unknown option $1"; exit 2 ;;
   esac
@@ -103,6 +107,12 @@ git -C "$REPO" archive --format=tar "$sha" | nas_stdin "tar -x -C $S/src"
 # 3. the install (the only container with network), then biome with no network
 nas "docker image inspect '$IMG' >/dev/null 2>&1 || docker pull '$IMG'"
 nas "docker run --rm --name $C_INSTALL --user $U -e HOME=/home/lint -e CI=true -v $S/src:/app -v $S/store:/store -v $S/home:/home/lint -w /app '$IMG' npx --yes $PNPM install --frozen-lockfile --ignore-scripts --store-dir /store" | tail -3 | tee -a "$LOG"
+if ((WRITE)); then
+  # a copy of the tree without node_modules, biome's fixes, then the difference as a -p1 patch
+  nas "docker run --rm --name $C_RUN --user $U --network none --cpus=4 --memory=2g -e HOME=/home/lint -v $S:/work -w /work/src '$IMG' sh -c 'mkdir -p /work/orig && tar --exclude=./node_modules --exclude=\"*/node_modules\" -cf - . | tar -xf - -C /work/orig && node_modules/.bin/biome check --write . >/dev/null 2>&1; cd /work && diff -ruN -x node_modules orig src > /work/biome-write.patch; test $? -le 1'" | tee -a "$LOG"
+  nas "cat $S/biome-write.patch" >"$EVIDENCE_DIR/biome-write.patch"
+  log "biome --write: $(grep -c '^+++ ' "$EVIDENCE_DIR/biome-write.patch" || true) file(s) changed -> $EVIDENCE_DIR/biome-write.patch"
+fi
 code=0
 nas "docker run --rm --name $C_RUN --user $U --network none --cpus=4 --memory=2g -e HOME=/home/lint -v $S/src:/app -v $S/home:/home/lint -w /app '$IMG' node_modules/.bin/biome check ." \
   >"$EVIDENCE_DIR/biome.log" 2>&1 || code=$?
