@@ -14,6 +14,7 @@ import {
   AI_SETTINGS_EVENT,
 } from '@draftroom/contracts'
 import {
+  type CSSProperties,
   type ReactNode,
   useEffect,
   useId,
@@ -32,6 +33,7 @@ import { linkClick } from '../../../lib/routing.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { isTextEntry, onFocusLeave, trapTab, tryFocus } from '../../../ui/focus.ts'
 import { exportAllowed } from '../../canvas-ux/ported/export-gate.ts'
+import { useTopCentreRevision } from '../../workshops/top-centre.ts'
 import { anchorRect } from '../board-chrome.ts'
 import { InPopoverLayer, useBoardPlacement } from '../board-popover.tsx'
 import { budgetLine, groupNames } from '../copy.ts'
@@ -821,15 +823,37 @@ function NoticeView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: st
   )
 }
 
+/** The gap between the top-centre stack's last item and the pill under it (px; the stack's own gap, canvas/overlay). */
+const BUSY_GAP = 8
+
 function Busy() {
   const { canvas } = useCanvasFeatureContext()
   const job = useValue('lobby-ai-job', () => aiJob(canvas).get(), [canvas])
   const ref = useIsolated<HTMLDivElement>()
+  // N1 (wave M follow-up 2): under the top-centre stack, wherever its last item ends (the invitation, the spotlight bar,
+  // the follow pills, the coach's chip, the prompt); ai.css puts it at its own place when the stack is empty
+  const stackRevision = useTopCentreRevision()
+  const [below, setBelow] = useState<number | null>(null)
+  const running = job !== null
+  useLayoutEffect(() => {
+    void stackRevision
+    const el = ref.current
+    if (!running || !el) return
+    const stack = el.ownerDocument.querySelector('[data-lobby-top-centre]')
+    const origin = el.offsetParent?.getBoundingClientRect()
+    let bottom = Number.NEGATIVE_INFINITY
+    for (const c of stack?.children ?? []) {
+      const r = c.getBoundingClientRect()
+      if (r.height > 0) bottom = Math.max(bottom, r.bottom)
+    }
+    setBelow(origin && Number.isFinite(bottom) ? Math.ceil(bottom - origin.top + BUSY_GAP) : null)
+  }, [stackRevision, running, ref])
   if (!job) return null
   return (
     <div
       ref={ref}
       className="dr-ai-busy"
+      style={below === null ? undefined : ({ '--dr-ai-busy-below': `${below}px` } as CSSProperties)}
       role="status"
       aria-live="polite"
       data-testid="ai-busy"

@@ -239,7 +239,8 @@
 /* ---- busy pill ---------------------------------------------------------------------------------- */
 .dr-ai-busy {
   position: absolute;
-  top: 58px;
+  /* its own place, or under the top-centre stack when that reaches lower (Overlay.tsx sets --dr-ai-busy-below) */
+  top: max(58px, var(--dr-ai-busy-below, 0px));
   left: 50%;
   display: flex;
   align-items: center;
@@ -305,7 +306,7 @@
     max-width: none;
   }
   .dr-ai-busy {
-    top: 104px;
+    top: max(104px, var(--dr-ai-busy-below, 0px));
   }
 }
 
