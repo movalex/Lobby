@@ -227,19 +227,62 @@ describe('on a board page', () => {
     }
   })
 
-  it('sends one "seen" beacon when the page is hidden, and again when the board is left', async () => {
+  it('a board left while it is in front says "seen" once (the cleanup), and forgets the visit with the page', async () => {
     const f = fakeCtx()
     const cleanup = feature.onMount?.(f.ctx)
     markRoomReady(f.canvas)
     await settle()
     expect(f.win.listeners('pagehide')).toBe(1)
+    expect(f.win.listeners('pageshow')).toBe(1)
+    expect(beacons).toEqual([])
+    cleanup?.()
+    expect(beacons).toEqual([`/api/boards/${BOARD}/visit/seen`])
+    expect(f.win.listeners('pagehide')).toBe(0)
+    expect(f.win.listeners('pageshow')).toBe(0)
+    expect(visitsView(f.canvas).get()).toBeNull()
+    expect(catchUpWindow(BOARD, AFTER + 1, null).visit).toBe(false) // forgotten with the page
+  })
+
+  it('wave N.1: leaving the page sends ONE beacon: hidden, then pagehide, then the board closing say it once', async () => {
+    const f = fakeCtx()
+    const cleanup = feature.onMount?.(f.ctx)
+    markRoomReady(f.canvas)
+    await settle()
+    // a tab closed: the browser turns the page hidden, then fires pagehide (and a React unmount may follow)
+    f.doc.setVisibility('hidden')
+    f.win.fire('pagehide')
+    cleanup?.()
+    expect(beacons).toEqual([`/api/boards/${BOARD}/visit/seen`])
+  })
+
+  it('wave N.1: pagehide alone says it once, and the cleanup after it says nothing more', async () => {
+    const f = fakeCtx()
+    const cleanup = feature.onMount?.(f.ctx)
+    markRoomReady(f.canvas)
+    await settle()
     f.win.fire('pagehide')
     expect(beacons).toEqual([`/api/boards/${BOARD}/visit/seen`])
     cleanup?.()
-    expect(beacons).toHaveLength(2) // the cleanup says it too (the api writes at most once per 10 s)
-    expect(f.win.listeners('pagehide')).toBe(0)
-    expect(visitsView(f.canvas).get()).toBeNull()
-    expect(catchUpWindow(BOARD, AFTER + 1, null).visit).toBe(false) // forgotten with the page
+    expect(beacons).toHaveLength(1)
+  })
+
+  it('wave N.1: a page that came back in front (a tab switch back, a back-forward restore) says "seen" again when it leaves', async () => {
+    const f = fakeCtx()
+    const cleanup = feature.onMount?.(f.ctx)
+    markRoomReady(f.canvas)
+    await settle()
+    f.win.fire('pagehide')
+    expect(beacons).toHaveLength(1)
+    // restored from the back-forward cache: pageshow, the page is in front again
+    f.win.fire('pageshow')
+    f.win.fire('pagehide')
+    expect(beacons).toHaveLength(2)
+    // the person is back in front, then switches away again, then the board closes while hidden: once for that visit
+    f.doc.setVisibility('visible')
+    f.doc.setVisibility('hidden')
+    expect(beacons).toHaveLength(3)
+    cleanup?.()
+    expect(beacons).toHaveLength(3)
   })
 
   it('also says "seen" when the page turns hidden (phones and discarded tabs often fire no pagehide), and not when it turns visible', async () => {
@@ -256,7 +299,7 @@ describe('on a board page', () => {
     expect(beacons).toEqual([`/api/boards/${BOARD}/visit/seen`])
     f.doc.setVisibility('visible')
     expect(beacons).toHaveLength(1)
-    f.doc.setVisibility('hidden') // hidden again: another beacon (the api collapses repeats inside 10 s)
+    f.doc.setVisibility('hidden') // hidden again, after it was in front: another beacon (the api collapses repeats inside 10 s)
     expect(beacons).toHaveLength(2)
     // the chip is untouched by any of it: this is not Mark all seen
     expect(visitsView(f.canvas).get()).toMatchObject({ hidden: false, outlines: true })

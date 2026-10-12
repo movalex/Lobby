@@ -101,18 +101,31 @@ export const feature: CanvasFeature = {
     /** the api took this open's visit: only then is there anything to say "seen" about */
     let visited = false
     let fade: ReturnType<typeof setTimeout> | null = null
-    const leave = () => {
-      if (visited) sendSeen(boardId)
-    }
     const doc = ctx.canvas.container()?.ownerDocument
     const win = doc?.defaultView ?? globalThis
+    /**
+     * Wave N.1: "seen" has gone out since the page was last in front of the person. A page that is left says it once: a
+     * tab closing turns the page hidden, then fires pagehide, and a React unmount may follow, which sent a beacon each. The
+     * page coming back in front (a tab switch back, a back-forward restore) lets the next leave say it again.
+     */
+    let said = false
+    const leave = () => {
+      if (!visited || said) return
+      said = true
+      sendSeen(boardId)
+    }
+    const inFront = () => {
+      if (doc?.visibilityState !== 'hidden') said = false
+    }
     // pagehide alone is not enough: phones (iOS Safari, Android app switching) often fire none of it, and a background
     // tab the browser discards (Memory Saver) or a crash never does. The page turning hidden is the last moment that
     // is reliably seen, so it says "seen" too (the api writes at most once per 10 s per person and board).
     const hide = () => {
       if (doc?.visibilityState === 'hidden') leave()
+      else inFront()
     }
     win.addEventListener?.('pagehide', leave)
+    win.addEventListener?.('pageshow', inFront)
     doc?.addEventListener?.('visibilitychange', hide)
 
     void (async () => {
@@ -144,6 +157,7 @@ export const feature: CanvasFeature = {
       abort.abort()
       if (fade) clearTimeout(fade)
       win.removeEventListener?.('pagehide', leave)
+      win.removeEventListener?.('pageshow', inFront)
       doc?.removeEventListener?.('visibilitychange', hide)
       leave()
       visitsView(ctx.canvas).set(null)

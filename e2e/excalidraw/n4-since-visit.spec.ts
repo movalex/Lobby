@@ -59,11 +59,7 @@ const repliesOf = (s: WorkshopCanvasSession): VisitReply[] =>
     .filter((r) => r.path.endsWith('/visit') && r.status === 200)
     .map((r) => JSON.parse(r.body) as VisitReply)
 
-/**
- * The visit answers this session's page received (its own, only), once `count` of them have been read. Not
- * `net.settle()`: that waits for every /api body of the page, and the body of a thumbnail upload the api refused (a 429
- * while another tab's picture is fresh) can stay pending for good.
- */
+/** The visit answers this session's page received (its own, only), once `count` of them have been read. */
 async function visitReplies(s: WorkshopCanvasSession, count: number): Promise<VisitReply[]> {
   await expect
     .poll(() => repliesOf(s).length, { timeout: 15_000, message: 'the visit answers this page received' })
@@ -333,6 +329,20 @@ test('Mark all seen inside the api’s write interval is still honoured by a rel
   expect(second).toEqual(first)
   await a2.page.waitForTimeout(2_500)
   await expect(chip(a2.page)).toHaveCount(0)
+})
+
+test('wave N.1: leaving the page sends one "seen" beacon (the page turning hidden and pagehide said it once each)', async ({
+  join,
+}) => {
+  const a = await join('alice')
+  await visitReplies(a, 1) // the api took this open's visit: there is something to say "seen" about
+  const beacons: string[] = []
+  a.page.context().on('request', (r) => {
+    if (r.url().endsWith('/visit/seen')) beacons.push(r.method())
+  })
+  await a.page.goto('about:blank')
+  await a.page.waitForTimeout(1_000)
+  expect(beacons).toEqual(['POST'])
 })
 
 /** The parts of the dev handle this spec drives (focus mode, following). */
