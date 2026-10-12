@@ -9,6 +9,7 @@ import { type Api, type BoardRole, signInContext } from './api.ts'
 import { edit, read, type Session, shapeCenterOnScreen, waitForBoard } from './board.ts'
 import type { BoxLike, VecLike } from './editor.ts'
 import { test as base, expect } from './fixtures.ts'
+import { readBody } from './network-bodies.ts'
 import type { TestUser } from './users.ts'
 
 // ---- network recording ---------------------------------------------------------------------------
@@ -57,6 +58,12 @@ export class NetworkLog {
   readonly responses: RecordedResponse[] = []
   readonly events: RecordedEvent[] = []
   readonly wsFrames: string[] = []
+  /**
+   * Wave N.1: the responses whose body was not read (recorded in `responses` with an empty body): a thumbnail upload
+   * the api refused, or a body still pending after BODY_READ_TIMEOUT_MS (./network-bodies.ts). A spec that must see
+   * every body asserts this is empty.
+   */
+  readonly unread: { path: string; status: number; why: 'refused-upload' | 'timeout' }[] = []
   private readonly pending = new Set<Promise<void>>()
   private cdp: CDPSession | null = null
 
@@ -64,14 +71,13 @@ export class NetworkLog {
     page.on('response', (res) => {
       const url = new URL(res.url())
       if (!url.pathname.startsWith('/api/') || /\/events$/.test(url.pathname)) return
-      const p: Promise<void> = res
-        .text()
-        .then(
-          (body) => {
-            this.responses.push({ url: res.url(), path: url.pathname, status: res.status(), body })
-          },
-          () => {},
-        )
+      const p: Promise<void> = readBody(res, url.pathname)
+        .then((read) => {
+          if (!read) return // the browser could not give it (a failed request): not recorded, as before
+          const status = res.status()
+          this.responses.push({ url: res.url(), path: url.pathname, status, body: read.body })
+          if (read.unread) this.unread.push({ path: url.pathname, status, why: read.unread })
+        })
         .finally(() => this.pending.delete(p))
       this.pending.add(p)
     })
@@ -129,7 +135,7 @@ export class NetworkLog {
     await cdp.send('Network.enable')
   }
 
-  /** Waits for response bodies still being read. */
+  /** Waits for response bodies still being read (each at most BODY_READ_TIMEOUT_MS: it always ends). */
   async settle() {
     while (this.pending.size > 0) await Promise.all([...this.pending])
   }
