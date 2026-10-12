@@ -72,6 +72,40 @@ export interface HandleDeps {
 
 const excalidrawContainer = (root: HTMLElement) => root.querySelector<HTMLElement>('.excalidraw')
 
+/** The engine's app state the gesture reads. */
+export interface GestureState {
+  readonly editingTextElement: unknown
+  readonly isResizing: boolean
+  readonly isRotating: boolean
+  readonly selectedElementsAreBeingDragged: boolean
+  readonly selectionElement: unknown
+  readonly newElement: unknown
+  readonly multiElement: unknown
+  readonly activeTool: { readonly type: string }
+}
+
+/**
+ * What the pointer is doing (`LobbyCanvas.gesture()`): the engine's state, the editor lease's phase and the pointer.
+ * Pure.
+ */
+export function gestureOf(
+  s: GestureState,
+  editorPhase: string,
+  p: { readonly down: boolean; readonly overCanvas?: boolean } | null,
+): CanvasGesture {
+  if (s.editingTextElement || editorPhase !== 'idle') return 'editing-text'
+  if (s.isResizing) return 'resizing'
+  if (s.isRotating) return 'rotating'
+  if (s.selectedElementsAreBeingDragged) return 'dragging'
+  if (s.selectionElement) return 'box-selecting'
+  if (s.newElement || s.multiElement) return 'drawing'
+  const tool = s.activeTool.type
+  // a press on the board's chrome (a toolbar or selection-bar button) is not a pan, whatever the tool does
+  if (tool === 'hand' && p?.down && p.overCanvas !== false) return 'panning'
+  if (tool !== 'selection' && tool !== 'lasso') return 'tool'
+  return p?.down ? 'pressing' : 'idle'
+}
+
 /**
  * A connector's kind as the engine's `currentItemArrowType` (CR-W5-3A-1, W5-40): straight is 'sharp' (no
  * roundness), curved is 'round', and an elbow is 'elbow'. The engine reads this, not `currentItemRoundness`
@@ -271,21 +305,8 @@ export function createBoardHandles(d: HandleDeps): BoardHandles & {
     return { x: x1 + w / 2 - s.width / zoom / 2, y: y1 + h / 2 - s.height / zoom / 2, zoom }
   }
 
-  const gesture = (): CanvasGesture => {
-    const s = api.getAppState()
-    const editing = d.input.editorLease?.phase ?? 'idle'
-    if (s.editingTextElement || editing !== 'idle') return 'editing-text'
-    if (s.isResizing) return 'resizing'
-    if (s.isRotating) return 'rotating'
-    if (s.selectedElementsAreBeingDragged) return 'dragging'
-    if (s.selectionElement) return 'box-selecting'
-    if (s.newElement || s.multiElement) return 'drawing'
-    const p = d.board.pointer()
-    const tool = s.activeTool.type
-    if (tool === 'hand' && p?.down) return 'panning'
-    if (tool !== 'selection' && tool !== 'lasso') return 'tool'
-    return p?.down ? 'pressing' : 'idle'
-  }
+  const gesture = (): CanvasGesture =>
+    gestureOf(api.getAppState(), d.input.editorLease?.phase ?? 'idle', d.board.pointer())
 
   const labelTarget = (id: string): { leaseId: string; textId: string | null } | null => {
     const el = port.get(id)

@@ -26,6 +26,7 @@ import {
   leaseHolder,
   pushedOps,
   select,
+  setTool,
   setViewport,
   startTextEditing,
   stopTextEditing,
@@ -260,6 +261,41 @@ test('M1-4: a viewer gets no tier one (the bar has Copy link only)', async ({ ca
   await barSettled(v.page)
   await expect(bar(v.page).getByTestId('copy-link-selection')).toBeVisible()
   await expect(bar(v.page).locator('[data-testid^="selection-style"]')).toHaveCount(0)
+})
+
+test('wave N.1: with the Hand tool a press on the bar reads as a press of the tool (the bar stays); a press on the canvas pans (the bar goes)', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  await waitForA11y(a.page)
+  const n = await createNote(a.page, { x: 0, y: 0, text: 'Pan me' })
+  await expectSaved(a.page)
+  await setViewport(a.page, { x: -300, y: -200, zoom: 1 })
+  expect(await setTool(a.page, 'hand')).toBe(true)
+  await select(a.page, [n])
+  await barSettled(a.page)
+  const gesture = () => withCanvas(a.page, (c: LobbyCanvas) => c.gesture(), null)
+  expect(await gesture()).toBe('tool')
+
+  // a press on one of the bar's own buttons: not a pan, so the bar stays under the finger
+  const button = await bar(a.page).locator('button').first().boundingBox()
+  if (!button) throw new Error('no bar button')
+  await a.page.mouse.move(button.x + button.width / 2, button.y + button.height / 2)
+  await a.page.mouse.down()
+  await expect.poll(gesture).toBe('tool')
+  await expect(bar(a.page)).toBeVisible()
+  await a.page.mouse.up()
+
+  // a press on the empty canvas: a pan, and the bar steps aside while it lasts
+  const empty = await a.page.locator('[data-lobby-board-canvas]').boundingBox()
+  if (!empty) throw new Error('no canvas')
+  await a.page.mouse.move(empty.x + empty.width - 60, empty.y + empty.height - 60)
+  await a.page.mouse.down()
+  await expect.poll(gesture).toBe('panning')
+  await expect(bar(a.page)).toHaveCount(0)
+  await a.page.mouse.up()
+  await expect.poll(gesture).toBe('tool')
+  await expect(bar(a.page)).toBeVisible()
 })
 
 test('M1-4 a11y: the bar is a toolbar of labelled buttons (axe and by hand); Alt+F10 and the arrows reach the tray; Escape closes the tray, then leaves the bar', async ({
