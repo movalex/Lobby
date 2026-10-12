@@ -227,3 +227,51 @@ describe('a write outside the history and the server’s fix for its push (W5-26
     expect(undo.history.undoSize).toBe(0)
   })
 })
+
+// Wave N.1: a cached paint's elements, which the board page owns outright, become undo's own copies (no copy).
+describe('a write of owned elements outside the history (wave N.1, the cached paint)', () => {
+  it('records nothing of the paint; the first edit after it is a step whose undo goes back to the painted values', () => {
+    const owned = [stored(note('N', 'a0')), stored(rect('R', 'a1', { x: 10 }))] as SceneElement[]
+    const scene = createMapScene()
+    const core = {
+      welcome: null,
+      on: () => () => {},
+      onAck: () => () => {},
+      leaseHolders: () => new Map(),
+      isDerivedHeld: () => false,
+      confirmed: () => undefined,
+      sid: 's',
+    } as unknown as LobbyEngineCore
+    const undo = new UndoController({
+      core,
+      scene,
+      bump,
+      install: (els) => scene.apply(els),
+    })
+    let painted = false
+    undo.outsideOwned(
+      () => {
+        scene.apply(owned.map((el) => ({ ...el })))
+        painted = true
+      },
+      () => (painted ? owned : []),
+    )
+    // the stack's copies are the owned objects themselves
+    expect(undo.history.lastLocalOf('R')).toBe(owned[1] as unknown as HistEl)
+    expect(undo.boundary()).toBeNull()
+    expect(undo.history.undoSize).toBe(0)
+    scene.apply(
+      [...scene.map.values()].map((el) => (el.id === 'R' ? bump(el, { x: 99 }) : el)) as SceneElement[],
+    )
+    expect(undo.boundary()).not.toBeNull()
+    expect(undo.undo()).not.toBeNull()
+    expect(scene.map.get('R')?.x).toBe(10)
+    // nothing installed: nothing adopted
+    const other = new UndoController({ core, scene: createMapScene(), bump })
+    other.outsideOwned(
+      () => {},
+      () => [],
+    )
+    expect(other.history.lastLocalOf('R')).toBeUndefined()
+  })
+})

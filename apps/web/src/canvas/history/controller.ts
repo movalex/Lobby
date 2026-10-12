@@ -253,6 +253,21 @@ export class UndoController {
   }
 
   /**
+   * Wave N.1: `outside` for a write of elements that were not in the scene, which the caller owns outright: `owned()`,
+   * read once `install` has run, gives objects nobody else holds or writes whose scene copies the write installed (a
+   * cached paint's parsed record). The stack takes them as its copies: no diff, no copy of every element of the board.
+   */
+  outsideOwned(install: () => void, owned: () => Iterable<SceneElement>): void {
+    this.installingOutside++
+    try {
+      install()
+    } finally {
+      this.installingOutside--
+    }
+    this.history.adopt(owned() as Iterable<HistEl>)
+  }
+
+  /**
    * Runs `write` (one `CanvasPort.transact`, which records its own step) as part of this tab's previous
    * step (`LobbyHistory.mergeTop`): what the user did before and was not recorded yet becomes its own
    * step first. No join when nothing precedes it, after an undo or a redo, or when `write` recorded

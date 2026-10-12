@@ -298,6 +298,14 @@ export class LobbyHistory {
   }
 
   /**
+   * Wave N.1: elements that came into the scene outside any step, given as objects the caller owns outright (nobody
+   * else holds or writes them; the scene got its own copies of them): the stack's copy of each is the object itself.
+   */
+  adopt(elements: Iterable<HistEl>) {
+    for (const el of elements) this.lastLocal.set(el.id, el)
+  }
+
+  /**
    * A step boundary (end of a gesture, a text-editor close, one keyboard action, one `transact`).
    * Returns the new entry, or null when nothing but server-owned or local-only fields changed.
    * `selection`: the one the step was made with (kept on the entry, never a change).

@@ -698,11 +698,13 @@ export class LobbyBoardSession {
     if (exportStateOf(this.o.boardId).canExport.get() === false) return false
     const resume = RESUME_FROM_CACHE && rec.exact
     let painted = false
-    undo.outside(
+    // wave N.1: the record's parsed elements are this page's alone (the scene and the core get copies of them): undo
+    // takes them as its own copies of what the paint put in the scene, instead of copying every element again
+    undo.outsideOwned(
       () => {
         painted = this.core.startFromCache(rec, { resume })
       },
-      rec.elements.map((el) => [el.id, undefined] as const),
+      () => (painted ? rec.elements : []),
     )
     if (!painted) return false
     this.cacheShown = rec
