@@ -708,11 +708,10 @@ export function ReactionPicker({
     return out.join(' ')
   }, [canvas, ids, me])
   // something an owner's clear reaches: a note with reactions that is not locked (a lock keeps another person's key)
-  const anyClearable = useValue(
-    'dr-wk-react-any',
-    () => clearableNotes(canvas, ids).clearable.length > 0,
-    [canvas, ids],
-  )
+  const anyClearable = useValue('dr-wk-react-any', () => clearableNotes(canvas, ids).clearable.length > 0, [
+    canvas,
+    ids,
+  ])
   const label = useValue(
     'dr-wk-nr-picker-label',
     () =>
@@ -950,9 +949,7 @@ export const CONTEXT_MENU: readonly MenuEntrySpec[] = [
     order: 19,
     label: 'Clear reactions',
     visible: (ctx, target) =>
-      reactionsUi() &&
-      canClearReactions(ctx) &&
-      clearableNotes(ctx.canvas, target.ids).clearable.length > 0,
+      reactionsUi() && canClearReactions(ctx) && clearableNotes(ctx.canvas, target.ids).clearable.length > 0,
     run: (ctx, target) => {
       clear(ctx, notesOf(ctx, target.ids))
     },

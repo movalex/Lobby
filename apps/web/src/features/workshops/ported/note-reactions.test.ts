@@ -517,7 +517,11 @@ describe('Clear reactions on a locked note (N3-2: the server keeps another perso
 
   it('the context menu and the picker do not offer it for a locked note, and do for an unlocked one', () => {
     const k = kit(
-      [...reacted('open', others), ...reacted('shut', others, { locked: true }), ...reacted('bare', undefined)],
+      [
+        ...reacted('open', others),
+        ...reacted('shut', others, { locked: true }),
+        ...reacted('bare', undefined),
+      ],
       { role: 'owner' },
     )
     const entry = (feature.contextMenu ?? []).find((m) => m.id === 'reactions-clear')
