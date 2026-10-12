@@ -24,6 +24,7 @@ import { isReadonlyRole } from '../../../../board/access.ts'
 import { type CanvasFeatureContext, geometry, type LobbyCanvas } from '../../../../canvas/api/index.ts'
 import { knownUserKind, useUserKind } from '../../../../invite/guest.tsx'
 import { useValue } from '../../../../lib/signals.ts'
+import { countUsage } from '../../../../lib/usage.ts'
 import { stepMins } from '../../../present-export/live/agenda.ts'
 import { moveItem, rowNumberLabel, toggleInSelection } from '../../frame-order.ts'
 import { ArrowDownIcon, ArrowUpIcon, DragHandleIcon, EyeOffIcon, LinkIcon } from '../../icons.tsx'
@@ -109,6 +110,8 @@ function applyWrites(
 export function setMins(canvas: LobbyCanvas, row: FrameRow, mins: number | null): boolean {
   if (mins === row.mins) return false
   applyWrites(canvas, [{ id: row.id, present: presentWith(row, { mins }) }], 'set section minutes')
+  // N1 (wave M follow-up 2): planning a section's time is setting the run of show (the event name only)
+  countUsage('runofshow.set')
   return true
 }
 
