@@ -375,3 +375,25 @@ on the sync disk (§6).
   - Live check, a name-only guest: N, click, wait for the editor, type, then Escape at once and reload. The words were kept ("Second note words").
   - Cleanup: the link revoked, the board in Trash.
   - `DRAFTROOM_WS_DEFLATE` stays off for now: turn it on only after measuring its ack time on staging.
+- **2026-10-12 12:04-12:08Z, wave N deployed** (main `4fd0c2d`; 0 board connections in the 2 h before):
+  - api `dep-db6cp25ckfvc73d08qo0` (migrations 0031_board_visits and 0032_board_links);
+  - sync `dep-db6cpn942hec73bov6dg` (`CONTRACTS_REV` 13);
+  - web `dep-db6cqslckfvc73d0eklg`.
+  - Applied first through the Render API:
+    - api: `DRAFTROOM_AI_VISION=on`, `DRAFTROOM_AI_VISION_USER_DAILY=10`, `DRAFTROOM_AI_VISION_GLOBAL_DAILY=150`, `DRAFTROOM_AI_TRANSCRIPT_MAX_CHARS=60000`, `DRAFTROOM_AI_TRANSCRIPT_USER_DAILY=10`, `DRAFTROOM_AI_VISION_TIMEOUT_MS=60000` and `DRAFTROOM_VISITS_RETENTION_DAYS=180`;
+    - sync: `DRAFTROOM_REACTIONS=on` (the sync logs "[reactions] on"); `DRAFTROOM_WS_DEFLATE=off` stays (the wave M hold).
+  - After the deploy:
+    - api `/healthz/deep` 200; sync `/healthz/deep` ok; maintenance off;
+    - 0 error/FATAL lines; render.yaml drift 0;
+    - `/version.json` answers `{"commit":"4fd0c2d664be"}`.
+  - Live smoke: the first run failed 1 check, "bundle foreign hosts". It flagged the PDF fork's XMP namespace names (`ns.adobe.com`, `purl.org`, `www.aiim.org`), which are never requested. The smoke now treats them as identifiers only when every chunk naming them is a PDF chunk, the rule INT-5 gave the build's host scan. Rerun: 40 passed, 0 failed.
+  - Live check, the owner (Chase's signed-in browser) and a name-only guest on two new boards:
+    - **Reactions:** the owner's 🎉 reached the guest. The guest joined it, added 👍, removed 👍 and added ❤️, and every change reached the owner; the owner's 😂 reached the guest. The arrival time was not measured: one tab was always a hidden window, whose timers fire about once a second (the push waits 50 ms, `COALESCE_MS`), and both one-way times came out at 0.9-1.1 s.
+    - **Board links:** "Link to another board" placed a card for board A on board B (title and thumbnail), and the card's Open went to A. On A, "Linked from" listed B with "Go to the link"; `GET /api/boards/A/backlinks` answered B. The guest's request got 403, as designed.
+    - **Since your last visit:** the owner left A, the guest added a note, and the owner came back to "Since you were here (Mon 5:17 am): 1 added", with one outline, Next change and Mark all seen.
+    - AI capture was not tried live: the AI notice is the owner's to accept.
+  - Cleanup: the guest link revoked (200; the guest sees "Your guest access has ended"), both boards in Trash.
+  - Holds:
+    - `VECTOR_PDF` stays off until fontkit is added (follow-up N.1);
+    - of the four speed flags only `WORKER_DECODE` is on;
+    - deflate stays off.

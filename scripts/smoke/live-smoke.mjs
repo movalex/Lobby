@@ -96,6 +96,15 @@ const isNonRequestHost = (h) => h === 'www.w3.org' || h === 'json-schema.org' ||
 const DOC_LINK_HOSTS = new Set(['react.dev', 'github.com', 'rolldown.rs'])
 
 /**
+ * Wave N (N6-1): XML namespace names of @cantoo/pdf-lib's XMP and PDF/A metadata, written into a PDF's
+ * metadata stream and never requested. Identifiers only where every chunk naming them is a PDF chunk (the
+ * PDF worker, the no-worker fallback), as in the production build's host scan
+ * (e2e/excalidraw-builds/prod-build.spec.ts), so the same host in any other chunk is still foreign.
+ */
+const PDF_NAMESPACE_HOSTS = new Set(['ns.adobe.com', 'purl.org', 'www.aiim.org'])
+const PDF_CHUNK = /^(?:pdf\.worker|pdf-build)-[\w-]+\.js$/
+
+/**
  * Google Identity Services, the open sign-in's "Continue with Google" (apps/web/src/auth/GoogleSignIn.tsx,
  * docs/OPEN-SIGNIN.md). The script loads only where GET /api/auth/config offers Google, so it is the auth
  * provider's host there and an unused name everywhere else. Section 5 checks which one this server is.
@@ -490,10 +499,11 @@ const URL_HOST_RE = new RegExp(`(?:https?|wss?):(?:\\\\?/){2}(${HOST})(?![A-Za-z
 const PROTOCOL_RELATIVE_RE = new RegExp(`["'\`]//(${HOST})(?=[/"'\`?#])`, 'gi')
 const plainHost = (h) => h.replace(/\\/g, '').toLowerCase()
 
-function classify(host) {
+function classify(host, files) {
   if (OWN_HOSTS.has(host)) return 'own'
   if (isClerkHost(host)) return 'clerk'
   if (isNonRequestHost(host)) return 'non-request'
+  if (PDF_NAMESPACE_HOSTS.has(host) && files.every((f) => PDF_CHUNK.test(f))) return 'non-request'
   if (DOC_LINK_HOSTS.has(host)) return 'doc-link'
   if (host === GOOGLE_SIGNIN_HOST) return 'google-signin'
   if (EXPECT === 'r0' && R0_BUNDLE_HOSTS.has(host)) return 'r0-known'
@@ -515,7 +525,7 @@ function classify(host) {
   }
   const rows = [...hosts].map(([host, e]) => ({
     host,
-    cls: classify(host),
+    cls: classify(host, [...e.files]),
     kinds: [...e.kinds],
     files: [...e.files],
   }))
