@@ -1,14 +1,15 @@
 // N1-4 (wave N, PERF-3c): a cold open of the 10k board (e2e/excalidraw/support/big-board.ts) under a 4x slower CPU
-// (CDP), three times. The reset welcome's snapshot is installed in chunks of about 1,000 elements, one per frame
-// (CHUNKED_APPLY): the first holds the frames and what is in view, so something shows at once. Per open, from the
+// (CDP), three times. The reset welcome's snapshot is installed in chunks of about 600 elements (CHUNK_SIZE), one per
+// frame (CHUNKED_APPLY): the first holds the frames and what is in view, so something shows at once. Per open, from the
 // page's own timeline (performance.now(), the navigation's start):
 //  - the first element on the canvas, after the snapshot frame arrived (`lobby.snapshot.received`) and after its
 //    decoded frame reached the core (`lobby.snapshot.decoded`; the decode runs in the worker, N1-1);
 //  - the longest main-thread task from the snapshot's arrival to the board being editable (Saved).
 // Targets (medians): first content at or under 1.2 s after the snapshot reaches the core, the longest task at or
 // under 200 ms. A measurement (N1_PERF=1 runs it), not a laptop number (PERF-laptop stays an owner device check); the
-// numbers are attached as n1-cold-open-10k.json. N1_PERF_NET=fast4g adds Chrome's Fast 4G network. CHUNKED_APPLY ships
-// off until this gate passes (apps/web/src/canvas/sync/flags.ts); the spec turns it on for its page (`speedFlags`).
+// numbers are attached as n1-cold-open-10k.json. N1_PERF_NET=fast4g adds Chrome's Fast 4G network. CHUNKED_APPLY
+// ships on since wave N.1, when this gate passed (apps/web/src/canvas/sync/flags.ts); the spec turns it on for its
+// page all the same (`speedFlags`), so a kill switch set false is still measured.
 //
 //   N1_PERF=1 E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/n1-cold-open-10k.spec.ts --project=chromium --workers=1
 import { writeFileSync } from 'node:fs'

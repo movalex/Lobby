@@ -88,6 +88,11 @@ export interface SceneAdapter {
    * never through `reconcileElements`). The core runs the index pre-pass (E2) before calling it.
    */
   apply(elements: readonly SceneElement[]): void
+  /**
+   * Wave N.1, optional: one element of the scene by id (the engine's own map), for a reader that needs a few of them
+   * without a walk of the scene (undo's absorb of an apply's ids). Absent: readers walk `read().elements`.
+   */
+  get?(id: string): SceneElement | undefined
 }
 
 // ---- the transport ----------------------------------------------------------------------------------

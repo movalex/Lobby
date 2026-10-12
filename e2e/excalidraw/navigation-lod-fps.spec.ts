@@ -28,7 +28,8 @@
 //   size-off  the pass as before wave N (one bucket, frames only, below zoom 0.2)
 // LOBBY_FPS_MODES=a,b picks the modes (default: default, or lod-off,lod-on when the pass is on the page);
 // LOBBY_FPS_PROFILE=1 adds one V8 CPU-profiled pan per view and mode (the top functions are logged; the
-// raw .cpuprofile goes to the test's output folder).
+// raw .cpuprofile goes to the test's output folder). LOBBY_FPS_TRACE=1 adds one Chrome-traced pan per view and mode
+// (the main thread's self time per event, per frame, logged; the trace .json in the output folder).
 //
 //   LOBBY_MEASURE_FPS=1 E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e excalidraw -- navigation-lod-fps
 import { writeFileSync } from 'node:fs'
@@ -40,7 +41,7 @@ import { DPR, GPU_ARGS, gpuInfo, measureView, pan, VIEWPORT } from '../spike/fix
 import { signInContext } from '../tests/support/api.ts'
 import { expect, test, waitForCanvas } from '../tests/support/canvas.ts'
 import { WEB_URL } from '../tests/support/ports.ts'
-import { seedBigBoard } from './support/big-board.ts'
+import { chromeTrace, mainThreadSelf, seedBigBoard } from './support/big-board.ts'
 
 test.skip(process.env.LOBBY_MEASURE_FPS !== '1', 'a measurement: LOBBY_MEASURE_FPS=1')
 test.setTimeout(60 * 60_000)
@@ -316,6 +317,33 @@ test('big board: pan fps at Lobby’s fit, 0.25 and 0.5, per mode and CPU rate (
             const profile = await stopProfile(cdp, testInfo.outputPath(`${mode}-${view}.cpuprofile`))
             const s = summarizeProfile(profile, times.length)
             logProfile(log, `${mode} ${view}`, s, 20)
+            await page.waitForTimeout(400)
+          }
+          // LOBBY_FPS_TRACE=1 (wave N.1): one more pan under a full Chrome trace (written to the output folder, DevTools
+          // opens it), with the renderer main thread's self time per event per frame and the page's DOM and canvases
+          if (process.env.LOBBY_FPS_TRACE === '1') {
+            const dom = await page.evaluate(() => ({
+              nodes: document.querySelectorAll('*').length,
+              canvases: [...document.querySelectorAll('canvas')]
+                .map((c) => `${c.width}x${c.height}`)
+                .join(' '),
+            }))
+            let times: number[] = []
+            const events = await chromeTrace(
+              cdp,
+              testInfo.outputPath(`cpu${cpu}-${mode}-${view}.trace.json`),
+              async () => {
+                times = await pan(page, 3000, 600)
+              },
+            )
+            const frames = Math.max(1, times.length - 1)
+            log(
+              `  ${mode} ${view} traced pan: ${dom.nodes} DOM nodes, canvases ${dom.canvases}; main thread per frame:`,
+            )
+            for (const [name, us] of [...mainThreadSelf(events).entries()]
+              .sort((x, y) => y[1] - x[1])
+              .slice(0, 20))
+              log(`    ${(us / 1000 / frames).toFixed(2).padStart(8)} ms  ${name}`)
             await page.waitForTimeout(400)
           }
         }

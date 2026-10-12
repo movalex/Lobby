@@ -177,7 +177,13 @@ export function createMemoryIdb(): MemoryIdb {
           for (const op of ops.splice(0)) op()
           finish()
         })
-        if (!running) later(runNext)
+        // the runner is claimed now: two transactions made in one task while it was idle ran side by side before
+        // (each scheduled its own runNext), so a read-write one could commit a copy of a store staged before the
+        // other committed (wave N.1: a read's LRU touch then undid a write made right after it)
+        if (!running) {
+          running = true
+          later(runNext)
+        }
         return t
       },
     }

@@ -38,6 +38,7 @@ import {
   type StoredBoard,
   setBoardCacheForTests,
   sha256Hex,
+  sha256HexOf,
   storedRecordOf,
   takeBoardCache,
 } from './snapshot-cache.ts'
@@ -95,6 +96,39 @@ describe('the stored form', () => {
     const back = cacheRecordOf('b1', 'usr_a', content(sample), 5)
     expect(await hashElements(back?.elements ?? [])).toBe(await hashElements(sample))
     expect(cacheRecordOf('b1', 'usr_a', content([]), 5)?.elements).toEqual([])
+  })
+
+  it("a read's digest (wave N.1): WebCrypto's where there is one, the synchronous one without it or when it throws", async () => {
+    const texts = ['', 'abc', 'a'.repeat(1000), 'grüße 🙂 «quotes»', JSON.stringify(els(50))]
+    for (const t of texts) expect(await sha256HexOf(t)).toBe(sha256Hex(t))
+    const digest = vi.spyOn(globalThis.crypto.subtle, 'digest')
+    await sha256HexOf('abc')
+    expect(digest).toHaveBeenCalledTimes(1)
+    // a WebCrypto that throws: the synchronous digest, never a rejection
+    digest.mockRejectedValueOnce(new Error('NotSupportedError'))
+    expect(await sha256HexOf('abc')).toBe(sha256Hex('abc'))
+    digest.mockRestore()
+    // none at all (an http origin that is not localhost)
+    vi.stubGlobal('crypto', {})
+    for (const t of texts) expect(await sha256HexOf(t)).toBe(sha256Hex(t))
+  })
+
+  it('a read checks the record with WebCrypto, and a Sign out during that digest still hides the copy', async () => {
+    expect(await store.write('b1', 'usr_a', content(els(3)))).toBe(true)
+    const digest = vi.spyOn(globalThis.crypto.subtle, 'digest')
+    expect((await store.read('b1', 'usr_a'))?.elements).toHaveLength(3)
+    expect(digest).toHaveBeenCalled()
+    digest.mockRestore()
+    // the Sign out mark lands while the digest is under way
+    const marks = isolatedMarks()
+    setPageSignOutMarksForTests(marks)
+    const real = globalThis.crypto.subtle.digest.bind(globalThis.crypto.subtle)
+    const slow = vi.spyOn(globalThis.crypto.subtle, 'digest').mockImplementation(async (a, d) => {
+      marks.note('usr_a', Date.now() + 1)
+      return real(a as AlgorithmIdentifier, d as BufferSource)
+    })
+    expect(await store.read('b1', 'usr_a')).toBeNull()
+    slow.mockRestore()
   })
 
   it('a tombstone is stored as the server sends it (redacted), whatever content this tab kept under it', () => {

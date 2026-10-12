@@ -21,7 +21,12 @@ import { BOARD_CARD_KIND } from '@draftroom/contracts'
 import { type CSSProperties, type PointerEvent, useEffect, useRef, useState } from 'react'
 import { derivativeUrl, originalUrl } from '../../assets/contract.ts'
 import { useAssetMeta } from '../../assets/meta-store.ts'
-import type { CanvasElement, CanvasFeatureContext, LobbyCanvas } from '../../canvas/api/index.ts'
+import {
+  type CanvasElement,
+  type CanvasFeatureContext,
+  type LobbyCanvas,
+  paintOrderMemo,
+} from '../../canvas/api/index.ts'
 import { BoardCardFace } from '../../features/board-links/BoardCardFace.tsx'
 import { boardCardOf } from '../../features/board-links/model.ts'
 import { useUserKind } from '../../invite/guest.tsx'
@@ -99,17 +104,55 @@ function cardIdsOf(canvas: LobbyCanvas): ReadonlySet<string> | null {
   }
 }
 
+/** Wave N.1: per canvas, the merge of its face candidates (memoized while the index's answers stand). */
+const candidateMemos = new WeakMap<object, ReturnType<typeof paintOrderMemo>>()
+/** Wave N.1: each element's place in a scene array (its paint order), per array */
+const places = new WeakMap<readonly CanvasElement[], ReadonlyMap<string, number>>()
+const placeOf = (all: readonly CanvasElement[]): ReadonlyMap<string, number> => {
+  let m = places.get(all)
+  if (!m) {
+    const built = new Map<string, number>()
+    for (let i = 0; i < all.length; i++) built.set((all[i] as CanvasElement).id, i)
+    places.set(all, built)
+    m = built
+  }
+  return m
+}
+
 /** The entries to draw, in paint order (reactive: items, loader states, hidden ids). */
 function entriesOf(canvas: LobbyCanvas): Entry[] {
-  const items = canvas.items()
+  // wave N.1: the elements that can have a face (link and board cards by kind, files by their `file` key), from the
+  // scene index in paint order, instead of every element of the scene on every change (a drag's every move); the whole
+  // scene only when a face needs the holes the opaque elements above it cut. A canvas with no index (a test's): every
+  // element, as before
+  const sceneIndex = (canvas as Partial<LobbyCanvas>).index
+  let memo = sceneIndex ? candidateMemos.get(canvas) : undefined
+  if (sceneIndex && !memo) {
+    memo = paintOrderMemo()
+    candidateMemos.set(canvas, memo)
+  }
+  const items =
+    sceneIndex && memo
+      ? memo([
+          sceneIndex.byKind(LINK_CARD_KIND),
+          sceneIndex.byKind(BOARD_CARD_KIND),
+          sceneIndex.withLobbyKey('file'),
+        ])
+      : canvas.items()
   const out: Entry[] = []
   const editing = canvas.editingId()
   const cardIds = cardIdsOf(canvas)
   // K1-8: the opaque elements in a grid, built once per pass and only when a card needs its holes
   let grid: Occluders | null = null
-  const holesAbove = (index: number, box: Box) => {
-    if (!grid) grid = new Occluders(items, (id) => canvas.isHidden(id))
-    return grid.holesAbove(index, box)
+  // (with the index: each candidate's place among all the scene's elements, which the grid's paint order is)
+  let place: ReadonlyMap<string, number> | null = null
+  const holesAbove = (el: CanvasElement, at: number, box: Box) => {
+    if (!grid) {
+      const all = sceneIndex ? canvas.items() : items
+      grid = new Occluders(all, (id) => canvas.isHidden(id))
+      if (sceneIndex) place = placeOf(all)
+    }
+    return grid.holesAbove(place ? (place.get(el.id) ?? at) : at, box)
   }
   // a card whose words are being edited shows its plain canvas face (and the editor) meanwhile
   const editedNow = (el: CanvasElement) =>
@@ -133,7 +176,7 @@ function entriesOf(canvas: LobbyCanvas): Entry[] {
         board,
         box,
         angle: el.angle ?? 0,
-        holes: el.angle ? [] : holesAbove(index, box),
+        holes: el.angle ? [] : holesAbove(el, index, box),
         state: null,
         radius: cornerRadiusOf(el as never),
       })
@@ -150,7 +193,7 @@ function entriesOf(canvas: LobbyCanvas): Entry[] {
         link: { url, title: titleOf(canvas.text.of(el.id), url) },
         box,
         angle: el.angle ?? 0,
-        holes: el.angle ? [] : holesAbove(index, box),
+        holes: el.angle ? [] : holesAbove(el, index, box),
         state: null,
         // the rectangle under it is drawn with its own rounded corners
         radius: cornerRadiusOf(el as never),
@@ -163,14 +206,14 @@ function entriesOf(canvas: LobbyCanvas): Entry[] {
     const facts = factsOf(el) as FileFacts
     const box = { x: el.x, y: el.y, w: el.width, h: el.height }
     if (kind === 'card') {
-      const holes = el.angle ? [] : holesAbove(index, box)
+      const holes = el.angle ? [] : holesAbove(el, index, box)
       const radius = canvas.files.status(el.id) === 'loaded' ? cornerRadiusOf(el as never) : 0
       out.push({ id: el.id, kind: 'card', facts, box, angle: el.angle ?? 0, holes, state: null, radius })
       return
     }
     const st = canvas.files.status(el.id)
     if (st === 'loaded') return
-    const holes = el.angle ? [] : holesAbove(index, box)
+    const holes = el.angle ? [] : holesAbove(el, index, box)
     out.push({
       id: el.id,
       kind: 'pending',

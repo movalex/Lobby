@@ -16,6 +16,8 @@
  * what was selected when the step began, comes back with an undo, `selection.after` with a redo
  * (`StepResult.selection`; the caller re-selects what is still there).
  */
+
+import { copyElement } from '../sync/core/fields.ts'
 import { type ApplyContext, type ApplyResult, applyChanges, type Direction } from './apply.ts'
 import {
   diffElement,
@@ -135,6 +137,14 @@ export interface HistoryOptions {
 }
 
 const track = (c: ElementChange, unsent: Side): TrackedChange => ({ ...c, pending: [], unsent })
+
+/**
+ * A copy of a whole element for `lastLocal` (wave N.1, follow-up 2): canvas-schema's typed copy (sync/core/fields.ts
+ * `copyElement`, equal to `structuredClone` for every element of the schema at a fraction of its cost). The scene's own
+ * objects are mutated in place by the engine, so the stack keeps its own; a welcome's reset and a cached paint copy
+ * every element of the board (twice per 10k open, structuredClone was the larger part of both long tasks).
+ */
+const copyOf = (el: HistEl): HistEl => copyElement(el)
 
 /** A change of an existing element's `index` and nothing else. */
 const isIndexOnly = (c: ElementChange): boolean =>
@@ -260,11 +270,40 @@ export class LobbyHistory {
     return this.lastLocal.get(id)
   }
 
-  /** Start from a scene (welcome, reset): no steps, `lastLocal` = the scene. */
-  reset(scene: Scene) {
-    this.lastLocal = new Map([...scene].map(([id, el]) => [id, clone(el)]))
+  /**
+   * Start from a scene (welcome, reset): no steps, `lastLocal` = the scene.
+   *
+   * Wave N.1: `reuse(el)` says the scene entry is the scene's own element (not a stand-in the caller built); such an
+   * element whose `lastLocal` copy has its version and versionNonce keeps that copy (the version fast path of `record`:
+   * the same version and nonce are the same element), instead of a new copy of every element of the board at each
+   * welcome. The copies a cached paint or a snapshot's chunks absorbed are those copies.
+   */
+  reset(scene: Scene, reuse?: (el: HistEl) => boolean) {
+    const next = new Map<string, HistEl>()
+    for (const [id, el] of scene) {
+      const had = reuse ? this.lastLocal.get(id) : undefined
+      if (
+        had &&
+        had.version !== undefined &&
+        had.version === el.version &&
+        had.versionNonce === el.versionNonce &&
+        had.type === el.type &&
+        reuse?.(el)
+      )
+        next.set(id, had)
+      else next.set(id, copyOf(el))
+    }
+    this.lastLocal = next
     this.undos = []
     this.redos = []
+  }
+
+  /**
+   * Wave N.1: elements that came into the scene outside any step, given as objects the caller owns outright (nobody
+   * else holds or writes them; the scene got its own copies of them): the stack's copy of each is the object itself.
+   */
+  adopt(elements: Iterable<HistEl>) {
+    for (const el of elements) this.lastLocal.set(el.id, el)
   }
 
   /**
@@ -288,7 +327,7 @@ export class LobbyHistory {
       const c = diffElement(prev, el)
       if (prev) prevIndex.set(id, prev.index)
       if (!isEmptyChange(c)) changes.set(id, track(c, 'after'))
-      this.lastLocal.set(id, clone(el))
+      this.lastLocal.set(id, copyOf(el))
     }
     // ids that vanished from the scene without `isDeleted` (§2.5.2) are not steps
     for (const id of [...this.lastLocal.keys()]) if (!scene.has(id)) this.lastLocal.delete(id)
@@ -417,18 +456,19 @@ export class LobbyHistory {
     // left an empty label and never removed it (wave 2E, V1 P6)
     if (!last && before) return
     if (!last || !before) {
-      this.lastLocal.set(after.id, clone(after))
+      this.lastLocal.set(after.id, copyOf(after))
       return
     }
+    // (the change's values are diffElement's own copies, used here only: taken as they are)
     const c = diffElement(before, after)
     const next: Record<string, unknown> = { ...last }
-    for (const [f, fc] of Object.entries(c.fields)) next[f] = clone(fc.after)
+    for (const [f, fc] of Object.entries(c.fields)) next[f] = fc.after
     if (Object.keys(c.lobby).length) {
       const cd = (last.customData as Record<string, unknown> | undefined) ?? {}
       const lobby = { ...((cd.lobby as Record<string, unknown> | undefined) ?? {}) }
       for (const [k, fc] of Object.entries(c.lobby)) {
         if (fc.after === undefined) delete lobby[k]
-        else lobby[k] = clone(fc.after)
+        else lobby[k] = fc.after
       }
       next.customData = { ...cd, lobby }
     }
@@ -590,7 +630,7 @@ export class LobbyHistory {
     const lifeVersion = (id: string) => this.lifeFlips.get(id) ?? 0
     const res = applyChanges([...entry.changes.values()], dir, scene, { ...ctx, lifeVersion })
     // what this apply wrote is the local state now: never recorded as a new step
-    for (const [id, el] of res.elements) this.lastLocal.set(id, clone(el))
+    for (const [id, el] of res.elements) this.lastLocal.set(id, copyOf(el))
     if (res.applied.length) {
       const side: Side = dir === 'undo' ? 'before' : 'after'
       const mirror: Entry = {

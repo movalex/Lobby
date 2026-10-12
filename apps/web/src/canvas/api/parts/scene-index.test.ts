@@ -157,6 +157,8 @@ describe('canvas.index is incremental and equals a full rebuild (N1-6)', () => {
   }
   const PREFIXES = ['react:', 'plusOne:', 'tag:']
   const KINDS = ['board-card', 'link-card', 'highlight']
+  const TYPES = ['frame', 'stickynote', 'rectangle', 'text', 'arrow', 'image']
+  const EXACT = ['kind', 'react:u1', 'tag:u0', 'react:', 'nothing']
   const key = (i: number) => `a${i.toString(36).padStart(5, '0')}`
 
   for (const seed of [1, 2, 3, 5, 8, 13, 21, 34])
@@ -194,6 +196,12 @@ describe('canvas.index is incremental and equals a full rebuild (N1-6)', () => {
           expect(ids(canvas.index.byFrame(f)), `${when}: frame ${f}`).toEqual(ids(ref.byFrame(f)))
         for (const k of [...KINDS, 'none'])
           expect(ids(canvas.index.byKind(k)), `${when}: kind ${k}`).toEqual(ids(ref.byKind(k)))
+        // wave N.1: by type, by an exact key, the count
+        for (const t of TYPES)
+          expect(ids(canvas.index.byType(t)), `${when}: type ${t}`).toEqual(ids(ref.byType(t)))
+        for (const k of EXACT)
+          expect(ids(canvas.index.withLobbyKey(k)), `${when}: key ${k}`).toEqual(ids(ref.withLobbyKey(k)))
+        expect(canvas.index.count(), `${when}: count`).toBe(ref.count())
       }
       check('built')
       for (let step = 0; step < 400; step++) {
@@ -229,9 +237,26 @@ describe('canvas.index is incremental and equals a full rebuild (N1-6)', () => {
           } else if (op < 0.93) {
             lobby.kind = r() < 0.3 ? 7 : pick(KINDS)
             next = { ...target, customData: { lobby } } as CanvasElement
-          } else {
+          } else if (op < 0.96) {
             // a reorder: a new index key (paint order changes)
             next = { ...target, index: `Z${key(n++)}` } as CanvasElement
+          } else {
+            // wave N.1: the engine's in-place write (the same object: a drag's move, its key, its frame, a lobby key)
+            const t = target as unknown as Record<string, unknown>
+            const how = r()
+            if (how < 0.4) t.x = (t.x as number) + 1
+            else if (how < 0.6) t.index = `Z${key(n++)}`
+            else if (how < 0.8) {
+              const fs = frames().filter((f) => f !== target.id)
+              t.frameId = fs.length && r() < 0.7 ? pick(fs) : null
+            } else {
+              if (!t.customData) t.customData = {}
+              const cd = t.customData as { lobby?: Record<string, unknown> }
+              if (!cd.lobby) cd.lobby = {}
+              const l = cd.lobby
+              l[`${pick(PREFIXES)}u${Math.floor(r() * 4)}`] = true
+            }
+            next = target
           }
           scene = scene.map((e, i) => (i === at ? next : e))
           changed.add(target.id)
@@ -268,6 +293,65 @@ describe('canvas.index is incremental and equals a full rebuild (N1-6)', () => {
     }
     expect(sceneWalksCounted()).toBe(true)
     expect(sceneWalks()['index.build']).toBe(1)
+    dispose()
+  })
+
+  it('wave N.1: an in-place move of the same object keeps every cached answer; a key, frame or lobby change does not', () => {
+    const notes = [0, 1, 2].map((i) => el(`n${i}`, 'stickynote', { index: `a${i}`, frameId: 'f1' }))
+    const scene = [el('f1', 'frame', { index: 'Zz' }), ...notes]
+    const s = scenePort(scene)
+    const { canvas, dispose } = createLobbyCanvas({ port: s.port, registries: createFeatureRegistries() })
+    const before = canvas.index.notes()
+    const inFrame = canvas.index.byFrame('f1')
+    const byType = canvas.index.byType('stickynote')
+    const n1 = notes[1] as unknown as Record<string, unknown>
+    // a drag's moves: the engine mutates the element in place
+    for (let i = 0; i < 5; i++) {
+      n1.x = i * 10
+      s.apply(scene, ['n1'])
+      expect(canvas.index.notes()).toBe(before)
+      expect(canvas.index.byFrame('f1')).toBe(inFrame)
+      expect(canvas.index.byType('stickynote')).toBe(byType)
+    }
+    expect(canvas.index.notes()[1]?.x).toBe(40)
+    // a new paint key in place: re-sorted
+    n1.index = 'a9'
+    s.apply(scene, ['n1'])
+    expect(ids(canvas.index.notes())).toEqual(['n0', 'n2', 'n1'])
+    // out of its frame in place: gone from it
+    n1.frameId = null
+    s.apply(scene, ['n1'])
+    expect(ids(canvas.index.byFrame('f1'))).toEqual(['n0', 'n2'])
+    // a lobby key added in place: found by it
+    n1.customData = { lobby: { 'plusOne:usr_a': true } }
+    s.apply(scene, ['n1'])
+    expect(ids(canvas.index.withLobbyKeyPrefix('plusOne:'))).toEqual(['n1'])
+    ;(n1.customData as { lobby: Record<string, unknown> }).lobby.file = { assetId: 'a' }
+    s.apply(scene, ['n1'])
+    expect(ids(canvas.index.withLobbyKey('file'))).toEqual(['n1'])
+    // deleted in place: gone
+    n1.isDeleted = true
+    s.apply(scene, ['n1'])
+    expect(ids(canvas.index.notes())).toEqual(['n0', 'n2'])
+    expect(canvas.index.count()).toBe(3)
+    dispose()
+  })
+
+  it('wave N.1: a reader of both the scene (`get`) and the index runs once per change batch, and reads it fresh', () => {
+    const s = scenePort(SCENE)
+    const { canvas, dispose } = createLobbyCanvas({ port: s.port, registries: createFeatureRegistries() })
+    const seen: string[] = []
+    const stop = signals.react('get-and-index', () => {
+      const x = canvas.get('n1')?.x
+      seen.push(`${x}:${ids(canvas.index.byType('stickynote')).join(',')}`)
+    })
+    expect(seen).toEqual(['0:n1,n2'])
+    s.apply(
+      [...SCENE.map((e) => (e.id === 'n1' ? el('n1', 'stickynote', { x: 5 }) : e)), el('n9', 'stickynote')],
+      ['n1', 'n9'],
+    )
+    expect(seen).toEqual(['0:n1,n2', '5:n1,n2,n9'])
+    stop()
     dispose()
   })
 

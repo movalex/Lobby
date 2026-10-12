@@ -9,6 +9,7 @@
 // A LOCKED note (a facilitator's template prompt) takes +1s like any other (CR-3F-2): the sync server lets
 // the writer's own `plusOne:<uid>` key past the lock (the registry's `lockExempt`, canvas-schema
 // custom-data.ts), as the tldraw board did; every other change of the note stays locked.
+import { PLUS_ONE_KEY_PREFIX } from '@draftroom/canvas-schema/custom-data'
 import { useMemo, useState } from 'react'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
@@ -43,10 +44,12 @@ export function PlusOnes({ ctx, voting = false }: { ctx: Ctx; voting?: boolean }
   const editable = canPlusOne(ctx) && !readOnly && !voting
   const [said, setSaid] = useState('')
 
-  // Notes that have +1s (ids only: recomputed on document changes, not camera moves).
+  // Notes that have +1s (ids only: recomputed on document changes, not camera moves). Wave N.1: the elements with a
+  // `plusOne:` key, from the scene index (no walk of the whole scene on every change: a drag's every move).
   const counted = useValue('dr-wk-plusone-notes', () => {
     const out: string[] = []
-    for (const el of canvas.items()) if (isPlusOneTarget(el) && plusOnesOf(el).length > 0) out.push(el.id)
+    for (const el of canvas.index.withLobbyKeyPrefix(PLUS_ONE_KEY_PREFIX))
+      if (isPlusOneTarget(el) && plusOnesOf(el).length > 0) out.push(el.id)
     return out.join(' ')
   }, [canvas])
 

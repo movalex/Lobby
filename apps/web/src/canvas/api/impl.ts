@@ -19,7 +19,7 @@
  *
  * NODE-SAFE: no engine and no DOM imports here (the board handles bring the engine).
  */
-import { source } from '../../lib/signals.ts'
+import { transact as batch, source } from '../../lib/signals.ts'
 import {
   bind as bindTx,
   duplicate as duplicateTx,
@@ -59,7 +59,7 @@ import { createExportPart } from './parts/export.ts'
 import { createFilesPart } from './parts/files.ts'
 import { createFollowPart } from './parts/follow.ts'
 import { createNavigationPart } from './parts/navigation.ts'
-import { createSceneIndexPart } from './parts/scene-index.ts'
+import { createSceneIndexPart, sceneIndexChanged } from './parts/scene-index.ts'
 import { createStylesPart } from './parts/styles.ts'
 import { createToolsPart } from './parts/tools.ts'
 import type { PartDeps } from './parts/types.ts'
@@ -212,6 +212,10 @@ const COMPOSED_BY_2C: ReadonlySet<string> = new Set([
   'index.withLobbyKeyPrefix',
   'index.byFrame',
   'index.byKind',
+  // wave N.1: by element type, by an exact lobby key, the live count
+  'index.byType',
+  'index.withLobbyKey',
+  'index.count',
   'index.onChanged',
   'text.of',
   'visibleBounds',
@@ -346,6 +350,9 @@ export const LOBBY_CANVAS_MEMBERS: readonly MemberInfo[] = [
       ['index.withLobbyKeyPrefix', '2C'],
       ['index.byFrame', '2C'],
       ['index.byKind', '2C'],
+      ['index.byType', '2C'],
+      ['index.withLobbyKey', '2C'],
+      ['index.count', '2C'],
       ['index.onChanged', '2C'],
       ['tx.reorder', '2C'],
       ['tx.setFrame', '2C'],
@@ -513,7 +520,14 @@ export function createLobbyCanvas(deps: LobbyCanvasDeps): LobbyCanvasHandle {
     room: source('canvas.room'),
   }
   const offs = [
-    port.on('changed', () => sources.doc.bump()),
+    // wave N.1: the scene index takes the batch first, then the doc source moves, in one signals batch (a reader of
+    // both runs once per batch: parts/scene-index.ts sceneIndexChanged)
+    port.on('changed', (ids) =>
+      batch(() => {
+        sceneIndexChanged(port, ids)
+        sources.doc.bump()
+      }),
+    ),
     port.on('selectionChanged', () => sources.selection.bump()),
     port.on('viewportChanged', () => sources.viewport.bump()),
   ]

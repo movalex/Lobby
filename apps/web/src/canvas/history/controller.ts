@@ -94,7 +94,7 @@ export class UndoController {
     this.now = o.now ?? (() => Date.now())
     const sceneMap = () => this.sceneMap('live')
     // attached after the welcome: start from the scene as it is (nothing before this is undoable)
-    if (o.core.welcome) this.history.reset(this.sceneMap('reset'))
+    if (o.core.welcome) this.resetHistory()
     this.restSelection = this.selectionNow()
     let epoch = o.core.welcome?.epoch ?? null
     this.off.push(
@@ -104,14 +104,35 @@ export class UndoController {
           // reconnect to the same epoch keeps the stacks (B3 L6 3f: an edit made offline is undone after
           // its replay); what changed meanwhile arrived as the core's 'applied' event and was absorbed like any remote edit
           if (epoch === null || e.welcome.epoch !== epoch) {
-            this.history.reset(this.sceneMap('reset'))
+            this.resetHistory()
             this.restSelection = this.selectionNow()
             this.settleUntil = 0
           }
           epoch = e.welcome.epoch
         } else if (e.kind === 'applied') {
-          const now = sceneMap()
-          for (const id of e.ids) this.history.absorb(e.before.get(id) as HistEl | undefined, now.get(id))
+          // (wave N.1: a new copy of the row the scene showed brings nothing to take in: `same`; and the apply's ids
+          // are looked up in the scene's own map when it has one, without a walk of every element: a chunked install
+          // of a large board applies about a thousand at a time)
+          const get = o.scene.get
+          const now = get ? null : sceneMap()
+          for (const id of e.ids) {
+            if (e.same?.has(id)) continue
+            const before = e.before.get(id) as HistEl | undefined
+            const after = (now ? now.get(id) : (get?.(id) as HistEl | undefined)) as HistEl | undefined
+            // (wave N.1: an element new to the scene that is a copy of its server row takes that row as undo's copy:
+            // the confirmed rows are never written, and the stack never writes its copies; no second copy of every
+            // element of a snapshot installed in chunks)
+            const conf = !before && after ? o.core.confirmed(id) : undefined
+            if (
+              conf &&
+              after &&
+              conf.version === after.version &&
+              conf.versionNonce === after.versionNonce &&
+              conf.type === after.type
+            )
+              this.history.adopt([conf as unknown as HistEl])
+            else this.history.absorb(before, after)
+          }
         } else if (e.kind === 'push') this.history.markPushed(e.record.seq, e.ids)
       }),
       o.core.onAck((ack) => this.history.onAck(ack as never, sceneMap())),
@@ -120,6 +141,19 @@ export class UndoController {
 
   dispose(): void {
     for (const f of this.off.splice(0)) f()
+  }
+
+  /** ids `sceneMap` gave a stand-in for (a held arrow's path, a label another session holds) at its last call */
+  private substituted = new Set<string>()
+
+  /**
+   * The stacks start afresh from the scene (a first welcome, another epoch). Wave N.1: an element the scene map takes
+   * as it is keeps the stack's copy of it when that copy is of the same version (LobbyHistory.reset `reuse`).
+   */
+  private resetHistory(): void {
+    const scene = this.sceneMap('reset')
+    const substituted = this.substituted
+    this.history.reset(scene, (el) => !substituted.has(el.id))
   }
 
   /**
@@ -147,6 +181,8 @@ export class UndoController {
    */
   private sceneMap(mode: 'live' | 'record' | 'reset'): Scene {
     const m = new Map<string, HistEl>()
+    const substituted = new Set<string>()
+    this.substituted = substituted
     const hide = mode !== 'live'
     const holders = hide ? this.o.core.leaseHolders() : null
     const me = this.o.core.sid
@@ -159,6 +195,7 @@ export class UndoController {
             el.id,
             withGroupsFrom(el, base as unknown as SceneElement, heldGroups(el)) as unknown as HistEl,
           )
+          substituted.add(el.id)
           continue
         }
       }
@@ -168,6 +205,7 @@ export class UndoController {
         const conf = h && h.sid !== me ? this.o.core.confirmed(el.id) : undefined
         if (conf) {
           m.set(el.id, withGroupsFrom(el, conf, LEASED_GROUPS) as unknown as HistEl)
+          substituted.add(el.id)
           continue
         }
       }
@@ -186,6 +224,9 @@ export class UndoController {
   boundary(label?: string): Entry | null {
     // inside `outside`: the write is being installed, and is never part of a step
     if (this.installingOutside > 0) return null
+    // wave N.1: while the core installs a snapshot in chunks the scene is its own (read-only, every chunk absorbed):
+    // nothing can be a step, and the record's pass over every element is skipped
+    if (this.o.core.installing) return null
     const now = this.selectionNow()
     const entry = this.history.record(this.sceneMap('record'), label, {
       before: this.restSelection,
@@ -221,6 +262,21 @@ export class UndoController {
     }
     const now = this.sceneMap('live')
     for (const [id, before] of changed) this.history.absorb(before as HistEl | undefined, now.get(id))
+  }
+
+  /**
+   * Wave N.1: `outside` for a write of elements that were not in the scene, which the caller owns outright: `owned()`,
+   * read once `install` has run, gives objects nobody else holds or writes whose scene copies the write installed (a
+   * cached paint's parsed record). The stack takes them as its copies: no diff, no copy of every element of the board.
+   */
+  outsideOwned(install: () => void, owned: () => Iterable<SceneElement>): void {
+    this.installingOutside++
+    try {
+      install()
+    } finally {
+      this.installingOutside--
+    }
+    this.history.adopt(owned() as Iterable<HistEl>)
   }
 
   /**

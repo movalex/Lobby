@@ -39,8 +39,8 @@
  * offline copy says its links are not kept. A warm open's socket names the cached clock in its hello like a
  * reconnect, so the room's reconnect counters count it as one.
  *
- * The pure helpers (cacheJsonOf, cacheElementsOf, storedRecordOf, cacheRecordOf, sha256Hex, hasUrl) are node-safe;
- * the store is browser-only.
+ * The pure helpers (cacheJsonOf, cacheElementsOf, storedRecordOf, cacheRecordOf, sha256Hex, sha256HexOf, hasUrl) are
+ * node-safe; the store is browser-only.
  */
 import { redactTombstone } from '@draftroom/canvas-schema/elements'
 import { CONTRACTS_REV, ELEMENT_SCHEMA_VERSION } from '@draftroom/canvas-schema/protocol'
@@ -301,6 +301,28 @@ export function storedRecordOf(
   }
 }
 
+/**
+ * The same digest for a READ (wave N.1): WebCrypto's where the page has it (native, off the main thread: the
+ * synchronous digest of a 10k board's 6.5 MB text was about 200 ms of the warm open's main thread at CPU 4x, on the
+ * way to its paint), else `sha256Hex`, so an http origin that is not localhost (no `crypto.subtle`) reads its records
+ * like any other, and a WebCrypto that throws (the W6 review: hash.ts's dropped every record) falls back to it too.
+ * A write keeps the synchronous digest (`pagehide` must start its transaction in that task). Never rejects.
+ */
+export async function sha256HexOf(text: string): Promise<string> {
+  const subtle = (globalThis as { crypto?: { subtle?: SubtleCrypto } }).crypto?.subtle
+  if (subtle && typeof subtle.digest === 'function') {
+    try {
+      const d = new Uint8Array(await subtle.digest('SHA-256', new TextEncoder().encode(text)))
+      let hex = ''
+      for (const b of d) hex += b.toString(16).padStart(2, '0')
+      return hex
+    } catch {
+      // the synchronous digest below
+    }
+  }
+  return sha256Hex(text)
+}
+
 /** A stored record as the board page uses it (its text parsed); null when the text is not its elements. */
 export function boardOfStored(r: StoredBoard): CachedBoard | null {
   let elements: unknown
@@ -506,16 +528,20 @@ export function createBoardCacheStore(o: BoardCacheOptions = {}): BoardCacheStor
     // saved before this person's latest Sign out in this browser (another tab wrote it back): never shown
     const out = marks().at(uid)
     if (out !== null && raw.savedAt <= out) return drop()
-    // the hash of what was stored: anything else is not the copy that was written. The synchronous digest (the
-    // write's own), which needs no WebCrypto: an http origin that is not localhost (the NAS rehearsal over the LAN)
-    // has no crypto.subtle, where hash.ts's WebCrypto digest threw and dropped every record (the W6 review)
+    // the hash of what was stored: anything else is not the copy that was written. WebCrypto's digest where the page
+    // has it (`sha256HexOf`, off the main thread), else the synchronous one (the write's own), which needs no
+    // WebCrypto: an http origin that is not localhost (the NAS rehearsal over the LAN) has no crypto.subtle, where
+    // hash.ts's WebCrypto digest threw and dropped every record (the W6 review)
     let digest: string | null
     try {
-      digest = sha256Hex(raw.json)
+      digest = await sha256HexOf(raw.json)
     } catch {
       digest = null
     }
     if (digest !== raw.hash) return drop()
+    // (again after the digest's wait: a Sign out in another tab meanwhile)
+    const outNow = marks().at(uid)
+    if (outNow !== null && raw.savedAt <= outNow) return drop()
     const board = boardOfStored(raw)
     if (!board) return drop()
     void safely(undefined, (db) => touch(db, raw)).catch(() => {})

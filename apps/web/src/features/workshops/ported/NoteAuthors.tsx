@@ -15,7 +15,7 @@
 // views of big boards pay nothing) or on notes smaller than MIN_NOTE_PX on screen; exports never draw it
 // (overlays are not exported, docs/research/excalidraw/wave3/3E.md item 11), whatever the setting.
 import { memo, useMemo } from 'react'
-import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
+import { type CanvasFeatureContext, type LobbyCanvas, paintOrderMemo } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { THEME_FILTER } from '../../canvas-ux/ported/style-vocabulary.ts'
 import { type NoteAuthor, noteAuthorsOf } from './note-authors.ts'
@@ -36,14 +36,21 @@ export function NoteAuthorsLayer({ ctx }: { ctx: CanvasFeatureContext }) {
   return off || far ? null : <NoteAuthors canvas={canvas} />
 }
 
+/**
+ * Wave N.1: what noteAuthorsOf reads (the notes and the elements that may cover one: images and filled shapes), from the
+ * scene index in paint order, instead of every element of the scene on every change (a drag's every move).
+ */
+const COVER_TYPES = ['stickynote', 'image', 'rectangle', 'ellipse', 'diamond'] as const
+
 function NoteAuthors({ canvas }: { canvas: LobbyCanvas }) {
+  const inPaintOrder = useMemo(() => paintOrderMemo(), [])
   // what to draw follows the elements (and this tab's editor); where, the camera. K3-6: and this tab's save
   // state: the server stamps a label's editor in its answer to the edit, which lands without a new element
   // version (the board's change signal), so the label of the note just typed in showed only at the board's
   // next change; the save settling is when that answer is in.
   const all = useValue('dr-wk-authors', () => {
     canvas.saveStatus()
-    return noteAuthorsOf(canvas.items(), {
+    return noteAuthorsOf(inPaintOrder(COVER_TYPES.map((t) => canvas.index.byType(t))), {
       get: (id) => canvas.get(id),
       hidden: (id) => canvas.isHidden(id),
       editing: canvas.editingId(),

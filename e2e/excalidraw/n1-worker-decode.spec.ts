@@ -3,9 +3,9 @@
 // in the decode: between the binary frame's arrival (`lobby.snapshot.received`) and its decoded frame reaching the
 // core (`lobby.snapshot.decoded`), only the slices' short structured clones run on the page. The board is the 10k
 // fixture (e2e/excalidraw/support/big-board.ts), seeded through the real protocol; the open is a cold one
-// (`?nocache=1`: the snapshot is the room's). The numbers are attached (n1-worker-decode.json). CHUNKED_APPLY ships off
-// (apps/web/src/canvas/sync/flags.ts: its speed gate is not met yet); this spec turns it on for its page (a dev-auth
-// override, ./support/big-board.ts `speedFlags`) to check the chunked install's read-only frames as well.
+// (`?nocache=1`: the snapshot is the room's). The numbers are attached (n1-worker-decode.json). CHUNKED_APPLY ships on
+// since wave N.1 (apps/web/src/canvas/sync/flags.ts); this spec sets it for its page all the same (a dev-auth override,
+// ./support/big-board.ts `speedFlags`) to check the chunked install's read-only frames as well.
 import { writeFileSync } from 'node:fs'
 import { expect, test, waitForCanvas } from '../tests/support/canvas.ts'
 import { BIG_BOARD_ELEMENTS, readOpen, seedBigBoard, speedFlags, watchOpen } from './support/big-board.ts'

@@ -171,9 +171,9 @@ for (const n of [5_000, 10_000])
     const writes: { syncMs: number; totalMs: number }[] = []
     for (let i = 0; i < 3; i++) {
       cold.push(await openOnce(a.page, `/b/${board}?nocache=1`))
-      // a copy for the warm open (the session's own write, timed)
-      await a.page.goto(`/b/${board}`)
-      await waitForCanvas(a.page, 600_000)
+      // a copy for the warm open (the session's own write, timed), once the welcome is in: a session writes no
+      // copy before its welcome says it is an account's, and waitForCanvas can resolve before the welcome
+      await openOnce(a.page, `/b/${board}`)
       const w = await timedFlush(a.page)
       expect(w.kept).toBe(true)
       writes.push(w)

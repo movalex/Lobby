@@ -86,7 +86,8 @@ interface Entry {
 
 const entriesOf = (canvas: CanvasFeatureContext['canvas']): Entry[] => {
   const out: Entry[] = []
-  for (const el of canvas.items()) {
+  // wave N.1: the elements with a `customData.lobby.file`, from the scene index (no walk of the scene per change)
+  for (const el of canvas.index.withLobbyKey('file')) {
     if (!isGifElement(el) || canvas.isHidden(el.id)) continue
     out.push({
       id: el.id,

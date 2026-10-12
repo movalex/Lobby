@@ -17,11 +17,17 @@
  *    draws loose elements as grid tiles (lod/model.ts). Off: below zoom 0.2 only, frames only, as before.
  *
  * Each is on at merge only once its gate passes (the wave N brief). WORKER_DECODE's has (no main-thread long task over
- * 200 ms in the decode, the enforced CSP). The other three are off: their correctness gates pass, their speed targets
- * do not yet (the WS1 report's numbers: a 10k warm open painted 2.2 s and editable 6.6 s against 1.5 s and 3.5 s, a
- * cold open's longest task 0.95 s against 0.2 s, the 4x pan 13 to 18 fps against 30). Off, each path is the one before
- * wave N exactly. A dev-auth build (the e2e build, local dev; never a production bundle: DEV_AUTH_ENABLED) may turn one
- * on or off for its page (`speedFlag`, `setSpeedFlagOverrides`: the board session reads them from localStorage
+ * 200 ms in the decode, the enforced CSP). Wave N.1: CHUNKED_APPLY's has: a 10k cold open at CPU 4x, the longest task
+ * from the snapshot to editable 129 ms and the first content 239 ms after the decode (medians of 9 opens; targets 200 ms
+ * and 1.2 s; 741 ms before wave N.1), with the n1-*, sync durability, collab, warm-open and workshops specs passing with
+ * it on, and since your last visit on the 10k board (n1-since-visit-10k). The other two are off: their correctness
+ * gates pass, their speed targets do not (wave N.1, CPU 4x, medians of 9 opens: a 10k warm open painted 1.40 s and
+ * editable 5.6 s against 1.5 s and 3.5 s, its longest task after the paint 424 ms against 250 ms; the editable time is
+ * the 392 KB reset snapshot over Chrome's Fast 4G emulation, whose WebSocket frames arrive at about 100 KB/s, 3 to 5 s
+ * after the welcome, where an HTTP download runs at 3 MB/s; on loopback the same open is editable at 1.8 s. The 4x pan
+ * is 7 to 11 fps against 30, the engine's own per-frame work). Off, each path is the one before wave N exactly.
+ * A dev-auth build (the e2e build, local dev; never a production bundle: DEV_AUTH_ENABLED) may turn one on or off for
+ * its page (`speedFlag`, `setSpeedFlagOverrides`: the board session reads them from localStorage
  * SPEED_FLAGS_KEY), so the N1 specs measure and gate a part that ships off.
  *
  * And the dev checks (`devChecks()`): in vitest and the Vite dev server (never in a production build, the
@@ -34,7 +40,7 @@
 
 export const WORKER_DECODE = true
 export const DIFF_APPLY = false
-export const CHUNKED_APPLY = false
+export const CHUNKED_APPLY = true
 export const SIZE_AWARE_LOD = false
 
 /** The four parts by name (what a dev-auth page's override names). */
@@ -66,8 +72,12 @@ export function setSpeedFlagOverrides(raw: unknown): Partial<Record<SpeedFlag, b
 
 /** A cold open's snapshot is chunked above this many elements (CHUNKED_APPLY). */
 export const CHUNK_THRESHOLD = 2_000
-/** About this many elements per chunk (a container and its labels are never split). */
-export const CHUNK_SIZE = 1_000
+/**
+ * About this many elements per chunk (a container and its labels are never split). Wave N.1: 600, was 1,000. A late
+ * chunk's work is the engine's pass over every element installed so far plus its own new elements' (their shapes, the
+ * engine's store copies, the core's copies): at CPU 4x on the 10k board the late chunks of 1,000 took about 200 ms.
+ */
+export const CHUNK_SIZE = 600
 
 const vitest = (): boolean => {
   try {

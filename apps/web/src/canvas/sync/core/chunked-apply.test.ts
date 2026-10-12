@@ -179,6 +179,10 @@ describe('N1-4: a cold open of a large board in chunks', () => {
     const p = coldOpen(h, f)
     h.settle()
     expect(f.pending).toBe(1)
+    // wave N.1: the first chunk too goes in at the next frame, not in the task that read the snapshot
+    expect(p.scene.map.size).toBe(0)
+    f.step()
+    expect(f.pending).toBe(1)
     expect(p.core.saveStatus.state).not.toBe('saved')
     expect(p.core.cacheContent()).toBeNull()
     // a drag on an element of the first chunk (a frame) while the rest arrives: the canvas is read-only meanwhile
@@ -270,6 +274,33 @@ describe('N1-4: a cold open of a large board in chunks', () => {
     expect(p.pushes()).toBe(0)
   })
 
+  it('wave N.1: the snapshot task installs nothing; the welcome comes at the frame after the last chunk, which holds the whole board', () => {
+    const h = createHarness({ seed: randomBoard(13) })
+    h.room.contractsRev = CONTRACTS_REV
+    const f = frames({ threshold: 10, size: 6 })
+    const p = coldOpen(h, f)
+    const applies: number[] = []
+    const apply = p.scene.apply.bind(p.scene)
+    ;(p.scene as { apply: typeof apply }).apply = (els) => {
+      applies.push(els.length)
+      apply(els)
+    }
+    h.settle()
+    expect(applies).toEqual([])
+    const welcomes = () => p.events.filter((e) => e.kind === 'welcome').length
+    // the chunks, one per frame, until one installs the whole board
+    while (applies.at(-1) !== h.room.elements.size) {
+      expect(f.step()).toBe(true)
+      expect(welcomes()).toBe(0)
+    }
+    expect(f.pending).toBe(1)
+    expect(p.core.saveStatus.state).not.toBe('saved')
+    f.step()
+    expect(welcomes()).toBe(1)
+    expect(p.core.saveStatus.state).toBe('saved')
+    expect(f.pending).toBe(0)
+  })
+
   it('at or under the threshold (or with no scheduler) the snapshot goes in one apply, as before', () => {
     const h = createHarness({ seed: randomBoard(2) })
     h.room.contractsRev = CONTRACTS_REV
@@ -279,5 +310,37 @@ describe('N1-4: a cold open of a large board in chunks', () => {
     expect(f.pending).toBe(0)
     expect(p.logs.some((l) => l.event === 'chunked_apply')).toBe(false)
     expect(p.scene.map.size).toBe(h.room.elements.size)
+  })
+})
+
+// Wave N.1: undo during a chunked install: no step while the core installs (the boundary skips its pass), every chunk
+// taken in, and after the welcome nothing is undoable; a change made then is one step.
+describe('N1-4, wave N.1: undo on a chunked cold open', () => {
+  it('records nothing during the chunks and nothing at the welcome; the first change after it is one step', async () => {
+    const { UndoController } = await import('../../history/controller.ts')
+    const { bump } = await import('../headless/scene.ts')
+    const h = createHarness({ seed: randomBoard(17) })
+    h.room.contractsRev = CONTRACTS_REV
+    const f = frames({ threshold: 10, size: 5 })
+    const p = coldOpen(h, f)
+    const undo = new UndoController({ core: p.core, scene: p.scene, bump })
+    h.settle()
+    while (f.pending) {
+      expect(p.core.installing).toBe(true)
+      expect(undo.boundary()).toBeNull()
+      f.step()
+    }
+    h.settle()
+    expect(p.core.installing).toBe(false)
+    expect(undo.boundary()).toBeNull()
+    expect(undo.history.undoSize).toBe(0)
+    const id = [...p.scene.map.values()].find((e) => e.type === 'rectangle' && !e.isDeleted)?.id as string
+    const x = p.scene.map.get(id)?.x
+    p.scene.apply([...p.scene.map.values()].map((e) => (e.id === id ? bump(e, { x: 4242 }) : e)))
+    p.core.onSceneChange(p.scene.read())
+    expect(undo.boundary()).not.toBeNull()
+    expect(undo.history.undoSize).toBe(1)
+    expect(undo.undo()).not.toBeNull()
+    expect(p.scene.map.get(id)?.x).toBe(x)
   })
 })
