@@ -11,6 +11,9 @@
 //    either page.
 // n6-vector-pdf.spec.ts checks the same file in pdf.js (the text it finds, and its drawing against the image page).
 import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import * as pdfLibFontkit from '@pdf-lib/fontkit'
 import {
   decodePDFRawStream,
@@ -27,6 +30,7 @@ import { describe, expect, it } from 'vitest'
 import { servedFontFile } from '../../../canvas/export/test-fixtures.ts'
 import { createPdfBuilder } from '../pdf-build.ts'
 import { loadFontkit, type OutlinePoint } from './fontkit.ts'
+import { isRtl } from './text-layout.ts'
 
 interface FkGlyph {
   readonly id: number
@@ -111,6 +115,40 @@ const TOKEN = /<[0-9A-Fa-f\s]*>|\((?:\\.|[^\\)])*\)|\[|\]|\/[^\s/<>[\]()]+|[^\s/
 
 /** The operators that paint a path (fill, stroke or both), not the clip-only `n`. */
 const PAINT = new Set(['f', 'F', 'f*', 'S', 's', 'B', 'B*', 'b', 'b*'])
+
+/** WinAnsiEncoding's codes 0x80–0x9F (the standard font's text: Latin-1 elsewhere). */
+const WIN_ANSI_HIGH = new Map(
+  Object.entries({
+    0x80: 0x20ac,
+    0x82: 0x201a,
+    0x83: 0x192,
+    0x84: 0x201e,
+    0x85: 0x2026,
+    0x86: 0x2020,
+    0x87: 0x2021,
+    0x88: 0x2c6,
+    0x89: 0x2030,
+    0x8a: 0x160,
+    0x8b: 0x2039,
+    0x8c: 0x152,
+    0x8e: 0x17d,
+    0x91: 0x2018,
+    0x92: 0x2019,
+    0x93: 0x201c,
+    0x94: 0x201d,
+    0x95: 0x2022,
+    0x96: 0x2013,
+    0x97: 0x2014,
+    0x98: 0x2dc,
+    0x99: 0x2122,
+    0x9a: 0x161,
+    0x9b: 0x203a,
+    0x9c: 0x153,
+    0x9e: 0x17e,
+    0x9f: 0x178,
+  }).map(([k, v]) => [Number(k), v]),
+)
+const winAnsiText = (code: number) => String.fromCodePoint(WIN_ANSI_HIGH.get(code) ?? code)
 
 /** A glyph code its font's ToUnicode map does not name (U+FFFD). */
 const MISSING = '�'
@@ -202,7 +240,7 @@ function readPage(doc: PDFDocument, index: number): PageRead {
             for (let i = 0; i + step <= hex.length; i += step) {
               const code = Number.parseInt(hex.slice(i, i + step), 16)
               codes.push(code)
-              text += info?.toUnicode.get(code) ?? (info?.cid ? MISSING : String.fromCharCode(code))
+              text += info?.toUnicode.get(code) ?? (info?.cid ? MISSING : winAnsiText(code))
             }
           } else if (o.startsWith('(')) text += o.slice(1, -1)
         runs.push({ font, text, codes })
@@ -313,5 +351,273 @@ describe('a vector PDF read back from its bytes (two real frame exports, the ser
     expect(mid.filter((o) => o === 'S').length, 'outlines stroked').toBeGreaterThanOrEqual(4)
     expect(mid.filter((o) => o === 'c').length, 'the ellipse as Bézier curves').toBeGreaterThanOrEqual(4)
     expect(mid).toContain('d') // the dashed diamond's dash pattern
+  })
+})
+
+// ---- wave N.1 review (finding 1): a character a face's unicode-range claims but its font has no glyph for ---------
+// The canvas's browser falls through to the face's family's next face, then the next family, per glyph; the PDF must
+// too: a run is never laid out in a font without the glyph (fontkit would draw its .notdef: a box in Nunito, nothing
+// in Lilita One, Comic Shanns and Excalifont). What no Lobby font has is a picture drawn by the browser (as emoji
+// are), and every such character, and every space no font has, is still in the text (ToUnicode) exactly.
+
+/** Lobby's faces as the engine registers them (family, served file, declared unicode-range: the browser's form). */
+const GOOGLE_LATIN =
+  'U+0-FF, U+131, U+152-153, U+2BB-2BC, U+2C6, U+2DA, U+2DC, U+304, U+308, U+329, U+2000-206F, U+2074, U+20AC, ' +
+  'U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD'
+const GOOGLE_LATIN_EXT =
+  'U+100-2AF, U+304, U+308, U+329, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, ' +
+  'U+2C60-2C7F, U+A720-A7FF'
+const lobbyFace = (family: string, file: string, unicodeRange: string, weight = '400') => ({
+  family,
+  url: `/excalidraw-assets/fonts/${file}`,
+  unicodeRange,
+  weight,
+  style: 'normal',
+})
+const NUNITO_LATIN_EXT = lobbyFace(
+  'Nunito',
+  'Nunito/Nunito-Regular-XRXI3I6Li01BKofiOc5wtlZ2di8HDIkhdTo3j6zbXWjgevT5.woff2',
+  GOOGLE_LATIN_EXT,
+  '500',
+)
+const NUNITO_LATIN = lobbyFace(
+  'Nunito',
+  'Nunito/Nunito-Regular-XRXI3I6Li01BKofiOc5wtlZ2di8HDIkhdTQ3j6zbXWjgeg.woff2',
+  GOOGLE_LATIN,
+  '500',
+)
+const LILITA_LATIN = lobbyFace(
+  'Lilita One',
+  'Lilita/Lilita-Regular-i7dPIFZ9Zz-WBtRtedDbYEF8RXi4EwQ.woff2',
+  GOOGLE_LATIN,
+)
+const EXCALIFONT_LATIN = lobbyFace(
+  'Excalifont',
+  'Excalifont/Excalifont-Regular-a88b72a24fb54c9f94e3b5fdaa7481c9.woff2',
+  'U+20-7E, U+A0-A3, U+A5-A6, U+A8-AB, U+AD-B1, U+B4, U+B6-B8, U+BA-FF, U+131, U+152-153, U+2BC, U+2C6, U+2DA, ' +
+    'U+2DC, U+304, U+308, U+2013-2014, U+2018-201A, U+201C-201E, U+2020, U+2022, U+2024-2026, U+2030, ' +
+    'U+2039-203A, U+20AC, U+2122, U+2212',
+)
+const EXCALIFONT_MARKS = lobbyFace(
+  'Excalifont',
+  'Excalifont/Excalifont-Regular-623ccf21b21ef6b3a0d87738f77eb071.woff2',
+  'U+300-301, U+303',
+)
+const NUNITO_CSS = 'Nunito, sans-serif, Segoe UI Emoji'
+const LILITA_CSS = 'Lilita One, sans-serif, Segoe UI Emoji'
+const EXCALIFONT_CSS = 'Excalifont, Xiaolai, sans-serif, Segoe UI Emoji'
+
+const xmlText = (s: string) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+
+interface Line {
+  readonly css: string
+  readonly text: string
+}
+
+/** A 600×400 frame of text lines (each a note's line as Excalidraw writes it) with a 'names' face table. */
+function linesFrame(lines: readonly Line[], faces: readonly object[]): string {
+  const texts = lines.map(
+    (l, i) =>
+      `<g transform="translate(20 ${20 + i * 30}) rotate(0 100 12)"><text x="0" y="19.08" ` +
+      `font-family="${l.css}" font-size="20px" fill="#1e1e1e" text-anchor="start" style="white-space: pre;" ` +
+      `direction="ltr" dominant-baseline="alphabetic">${xmlText(l.text)}</text></g>`,
+  )
+  return (
+    '<svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" width="600" height="400">' +
+    `<defs><metadata id="lobby-pdf-faces">${xmlText(JSON.stringify({ v: 1, faces }))}</metadata></defs>` +
+    `<rect x="0" y="0" width="600" height="400" fill="#ffffff"></rect>${texts.join('')}</svg>`
+  )
+}
+
+const PICTURE = Uint8Array.from(
+  atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg=='),
+  (c) => c.charCodeAt(0),
+)
+
+/** One vector page of `lines`, made as the worker makes it, with the browser's glyph pictures stood in for. */
+async function linesPdf(lines: readonly Line[], faces: readonly object[]) {
+  const fontkit = await loadFontkit()
+  if (!fontkit) throw new Error('the font engine did not load')
+  const pictured: string[] = []
+  const b = await createPdfBuilder({
+    title: 'Glyphs',
+    now: new Date(0),
+    vector: {
+      fontkit,
+      deps: {
+        fetchFace: async (url) => servedFontFile(url),
+        glyphs: async (text, size) => {
+          pictured.push(text)
+          const width = [...text].length * size * 0.5
+          return { png: PICTURE, width, ascent: size * 0.8, descent: size * 0.2 }
+        },
+      },
+    },
+  })
+  const svg = linesFrame(lines, faces)
+  const outcome = await b.addVectorPage({ title: 'Glyphs', widthPx: 600, heightPx: 400, svg })
+  return { outcome, bytes: await b.finish(), pictured }
+}
+
+/** The text pdf.js finds on each page (its own text items in order, a line break where it ends a line). */
+async function pdfJsText(bytes: Uint8Array): Promise<string[]> {
+  // pdf.js is the e2e package's (its devDependency): the viewer the e2e specs read exported PDFs with
+  const e2e = createRequire(new URL('../../../../../../e2e/package.json', import.meta.url))
+  const root = dirname(e2e.resolve('pdfjs-dist/package.json'))
+  const pdfjs = (await import(pathToFileURL(join(root, 'legacy/build/pdf.mjs')).href)) as {
+    getDocument(src: object): {
+      promise: Promise<{
+        numPages: number
+        getPage(n: number): Promise<{
+          getTextContent(o?: object): Promise<{ items: { str?: string; hasEOL?: boolean }[] }>
+        }>
+      }>
+      destroy(): Promise<void>
+    }
+  }
+  const task = pdfjs.getDocument({
+    data: bytes.slice(),
+    standardFontDataUrl: `${root.replaceAll('\\', '/')}/standard_fonts/`,
+    useSystemFonts: false,
+    verbosity: 0,
+  })
+  try {
+    const d = await task.promise
+    const out: string[] = []
+    for (let n = 1; n <= d.numPages; n++) {
+      const content = await (await d.getPage(n)).getTextContent({ disableNormalization: true })
+      out.push(content.items.map((i) => `${i.str ?? ''}${i.hasEOL ? '\n' : ''}`).join(''))
+    }
+    return out
+  } finally {
+    await task.destroy()
+  }
+}
+
+/**
+ * A line as pdf.js reports it: pdf.js itself folds every Unicode space into U+0020 and drops format characters
+ * (\p{Cf}: ZWJ, soft hyphen, BOM…) in every document (its getTextContent has no option to keep them).
+ */
+const asPdfJsReads = (line: string) => line.replace(/\s/gu, ' ').replace(/\p{Cf}/gu, '')
+
+/** Every line of the page, read through the fonts' ToUnicode maps: the runs in order, end to end, exactly. */
+function expectLines(page: PageRead, lines: readonly string[]) {
+  const runs = page.runs.filter((r) => r.text !== 'Glyphs')
+  let at = 0
+  for (const line of lines) {
+    let got = ''
+    while (got.length < line.length && at < runs.length) got += (runs[at++] as PageRead['runs'][number]).text
+    expect(got, `the line ${JSON.stringify(line)}`).toBe(line)
+  }
+  expect(at, 'no text beyond the lines').toBe(runs.length)
+}
+
+/** No text-showing operator of an embedded (CID) font draws glyph 0, the font's .notdef. */
+function expectNoNotdef(page: PageRead) {
+  for (const r of page.runs) {
+    const font = page.fonts.get(r.font)
+    if (font?.cid) expect(r.codes, `${font.baseFont} "${r.text}"`).not.toContain(0)
+  }
+}
+
+/** The code points a face declares (C0 and C1 controls aside) that its font file has no glyph for. */
+function declaredButMissing(face: { url: string; unicodeRange: string }): number[] {
+  const font = engine.create(servedFontFile(face.url) as Uint8Array)
+  const out: number[] = []
+  for (const part of face.unicodeRange.split(',')) {
+    const m = /U\+([0-9A-F]+)(?:-([0-9A-F]+))?/i.exec(part.trim()) as RegExpExecArray
+    const lo = Number.parseInt(m[1] as string, 16)
+    const hi = m[2] ? Number.parseInt(m[2], 16) : lo
+    for (let cp = lo; cp <= hi; cp++)
+      if (cp >= 0x20 && !(cp >= 0x7f && cp <= 0x9f) && !font.hasGlyphForCodePoint(cp)) out.push(cp)
+  }
+  return out
+}
+
+describe('a character a face’s range claims but its font lacks: never a box or a gap, always in the text', () => {
+  it('a Nunito note "non‑breaking 12 345 †": each character in a font that has it, the text exact', async () => {
+    const line = 'non‑breaking 12 345 †'
+    // as the canvas names them: Nunito's latin-ext face (it declares U+2020) before its latin one
+    const faces = [NUNITO_LATIN_EXT, NUNITO_LATIN]
+    const { outcome, bytes } = await linesPdf([{ css: NUNITO_CSS, text: line }], faces)
+    expect(outcome).toEqual({ vector: true })
+    const page = readPage(await PDFDocument.load(bytes), 0)
+    expectNoNotdef(page)
+    expectLines(page, [line])
+    expect((await pdfJsText(bytes))[0]).toContain(asPdfJsReads(line))
+  })
+
+  it('a Lilita One note with U+00A0 (its latin file claims it, has none): a no-break space, not a gap', async () => {
+    const line = 'Lilita One rocks'
+    const { outcome, bytes } = await linesPdf([{ css: LILITA_CSS, text: line }], [LILITA_LATIN])
+    expect(outcome).toEqual({ vector: true })
+    const page = readPage(await PDFDocument.load(bytes), 0)
+    expectNoNotdef(page)
+    expectLines(page, [line])
+    expect((await pdfJsText(bytes))[0]).toContain(asPdfJsReads(line))
+  })
+
+  it('an Excalifont note whose accent its latin file lacks: the mark comes from Excalifont’s own marks file', async () => {
+    const line = 'Café au lait'
+    const faces = [EXCALIFONT_LATIN, EXCALIFONT_MARKS]
+    const { outcome, bytes } = await linesPdf([{ css: EXCALIFONT_CSS, text: line }], faces)
+    expect(outcome).toEqual({ vector: true })
+    const page = readPage(await PDFDocument.load(bytes), 0)
+    expectNoNotdef(page)
+    expectLines(page, [line])
+    expect((await pdfJsText(bytes))[0]).toContain(asPdfJsReads(line))
+  })
+
+  it('Excalifont draws U+0020 and U+00A0 with one glyph: each keeps its own text (a second embedding for U+00A0)', async () => {
+    const line = 'a b c d e'
+    const { outcome, bytes } = await linesPdf([{ css: EXCALIFONT_CSS, text: line }], [EXCALIFONT_LATIN])
+    expect(outcome).toEqual({ vector: true })
+    const page = readPage(await PDFDocument.load(bytes), 0)
+    expectNoNotdef(page)
+    expectLines(page, [line])
+    // two embedded subsets of the one file, each glyph named one text by its ToUnicode
+    const subsets = new Set([...page.fonts.values()].filter((f) => f.cid).map((f) => f.baseFont))
+    expect(subsets.size).toBe(2)
+    expect((await pdfJsText(bytes))[0]).toContain(asPdfJsReads(line))
+  })
+
+  it('every code point Nunito’s and Lilita One’s latin files claim but lack: no .notdef, each one in the text', async () => {
+    const lines: Line[] = []
+    const faces = [NUNITO_LATIN_EXT, NUNITO_LATIN, LILITA_LATIN]
+    for (const [face, css, count] of [
+      [NUNITO_LATIN, NUNITO_CSS, 100],
+      [LILITA_LATIN, LILITA_CSS, 112],
+    ] as const) {
+      const missing = declaredButMissing(face)
+      expect(missing.length, face.url).toBe(count)
+      // the right-to-left marks among them reorder the line on the board: such a page is an image page (as RTL text)
+      const rtl = missing.filter(isRtl)
+      expect(rtl, face.url).toEqual([0x200f, 0x202b, 0x202e, 0x2067])
+      expect((await linesPdf([{ css, text: `a${String.fromCodePoint(0x202e)}b` }], faces)).outcome).toEqual({
+        vector: false,
+        reason: 'it has right-to-left text',
+      })
+      // the rest each after a letter the face has, ten to a line
+      const rest = missing.filter((cp) => !isRtl(cp))
+      for (let i = 0; i < rest.length; i += 10) {
+        const text = rest
+          .slice(i, i + 10)
+          .map((cp) => `a${String.fromCodePoint(cp)}`)
+          .join('')
+        lines.push({ css, text })
+      }
+    }
+    const { outcome, bytes, pictured } = await linesPdf(lines, faces)
+    expect(outcome).toEqual({ vector: true })
+    const page = readPage(await PDFDocument.load(bytes), 0)
+    expectNoNotdef(page)
+    expectLines(
+      page,
+      lines.map((l) => l.text),
+    )
+    // what no Lobby font here has is a picture (‑, ‒, ‰, ⁂…); the spaces and format characters are not
+    expect(pictured).toContain('‑')
+    const hex = (t: string) => [...t].map((c) => (c.codePointAt(0) as number).toString(16))
+    expect(pictured.filter((t) => /\s|\p{Cf}/u.test(t)).map(hex)).toEqual([])
   })
 })

@@ -21,6 +21,10 @@
 //      + @pdf-lib/fontkit 1.1.1 and its adapter (wave N.1) .. 1,224,313 B (gzip 603,000; its fallback chunk 621,365 B)
 //  - Every font file the build emits (served at /excalidraw-assets/fonts/) goes through the vector PDF font engine
 //    (vector/fontkit.ts) with every glyph in a subset, and comes back with its own outlines and advances.
+//  - Wave N.1 (review finding 1): what each served face's unicode-range (as the build's engine registers it) claims
+//    and its font file has no glyph for, counted: the vector PDF never lays a character out in a face without its
+//    glyph (vector/text-layout.ts re-routes it; vector-fidelity.test.ts proves it on Nunito's and Lilita One's), and
+//    this count is the guard that an engine or font change is looked at again.
 // About 20 s.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -217,4 +221,74 @@ test('every font file the build serves survives a vector PDF subset (the font en
     `served fonts through a subset: ${fonts.length} files, ${glyphs} glyphs, ${Date.now() - started} ms`,
   )
   assert.ok(glyphs > 40_000, `every glyph (${glyphs})`)
+})
+
+/** Declared but missing (recorded, wave N.1): code points a served face's range claims, C0/C1 controls aside. */
+const DECLARED_BUT_MISSING = 1906
+
+test('every face the build serves: the code points its unicode-range claims and its font has no glyph for', async () => {
+  const { chunks, assets } = await buildOnce()
+  const FONT = /^excalidraw-assets\/fonts\/([\w-]+\/[\w.-]+\.woff2)$/
+  const files = new Map<string, Uint8Array>()
+  for (const a of assets) {
+    const m = FONT.exec(a.fileName)
+    if (m) files.set(m[1] as string, new Uint8Array(a.source as Uint8Array))
+  }
+  assert.equal(files.size, 233, 'the served font files')
+  // the engine's font registrations as the build ships them: {uri:`./fonts/<file>`,descriptors:{unicodeRange:…}},
+  // a range either a string or one of the engine's named Google Fonts ranges ({LATIN:`U+…`,…})
+  const code = chunks.map((c) => c.code).join('\n')
+  const NAMED = /\b(LATIN|LATIN_EXT|CYRILIC_EXT|CYRILIC|VIETNAMESE):([`"'])(U\+[0-9A-Fa-fU, +-]+)\2/g
+  const named = new Map<string, string>()
+  for (const m of code.matchAll(NAMED)) named.set(m[1] as string, m[3] as string)
+  assert.equal(named.size, 5, 'the engine’s Google Fonts ranges')
+  const FACE =
+    /\{uri:([`"'])\.\/fonts\/([\w-]+\/[\w.-]+\.woff2)\1(?:,descriptors:\{unicodeRange:(?:([`"'])([^`"']*)\3|[\w$]+\.([A-Z_]+)))?/g
+  const faces: { file: string; range: string | null }[] = []
+  for (const m of code.matchAll(FACE))
+    faces.push({ file: m[2] as string, range: m[4] ?? (m[5] ? (named.get(m[5]) ?? null) : null) })
+  const registered = faces.filter((f) => !/^Liberation\//.test(f.file))
+  // every served file but the UI's Assistant is a registered face; Cascadia and Virgil claim everything
+  assert.equal(registered.length, 229, 'the registered faces')
+  for (const f of registered) assert.ok(files.has(f.file), `${f.file} is served`)
+  assert.deepEqual(
+    [...files.keys()].filter((f) => !registered.some((r) => r.file === f)).map((f) => f.split('/')[0]),
+    ['Assistant', 'Assistant', 'Assistant', 'Assistant'],
+  )
+  const whole = registered.filter((f) => !f.range).map((f) => f.file.split('/')[0])
+  assert.deepEqual(whole.sort(), ['Cascadia', 'Virgil'])
+  const { rawFontkit } = await import('../../src/features/present-export/vector/fontkit-roundtrip.ts')
+  const engine = rawFontkit as unknown as {
+    create(b: Uint8Array): { hasGlyphForCodePoint(cp: number): boolean }
+  }
+  let declared = 0
+  let missing = 0
+  const byFace: string[] = []
+  for (const f of registered) {
+    if (!f.range) continue
+    const font = engine.create(files.get(f.file) as Uint8Array)
+    let lacks = 0
+    for (const part of f.range.split(',')) {
+      const m = /^\s*U\+([0-9A-Fa-f]+)(?:-([0-9A-Fa-f]+))?\s*$/.exec(part)
+      assert.ok(m, `${f.file}: a range part ${part}`)
+      const lo = Number.parseInt(m[1] as string, 16)
+      const hi = m[2] ? Number.parseInt(m[2], 16) : lo
+      for (let cp = lo; cp <= hi; cp++) {
+        if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f)) continue
+        declared++
+        if (!font.hasGlyphForCodePoint(cp)) lacks++
+      }
+    }
+    missing += lacks
+    if (lacks) byFace.push(`${f.file.split('/')[0]} ${lacks}`)
+  }
+  console.log(
+    `served faces: ${registered.length} registered (${whole.length} whole-range), ${declared} declared code points, ` +
+      `${missing} without a glyph (${byFace.join(', ')})`,
+  )
+  assert.equal(
+    missing,
+    DECLARED_BUT_MISSING,
+    `declared but missing (${byFace.join(', ')}): look at them again`,
+  )
 })

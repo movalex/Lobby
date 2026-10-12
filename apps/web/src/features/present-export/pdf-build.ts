@@ -449,6 +449,7 @@ export async function createPdfBuilder(meta: {
     },
     async finish() {
       addOutline(doc, outline)
+      resources?.finish()
       return doc.save({ useObjectStreams: true, addDefaultPage: false })
     },
   }

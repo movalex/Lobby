@@ -1,8 +1,11 @@
-// One vector PDF page from a frame's SVG (wave N, N6-3/N6-4), drawn with @cantoo/pdf-lib's drawSvg:
-//  - text: each line split by the face that draws each character (./text-layout.ts), every run drawn in an embedded
-//    subset of Lobby's own font file for that range (fetched same-origin, embedded through fontkit), so the text is
-//    real, selectable and searchable in every script Lobby's fonts cover; characters no Lobby font has (emoji) are
-//    drawn as small pictures at their place;
+// One vector PDF page from a frame's SVG (wave N, N6-3/N6-4), drawn with @cantoo/pdf-lib:
+//  - text: each line split by the face that draws each character (./text-layout.ts: a face whose range claims it AND
+//    whose font has the glyph, wave N.1), every run drawn in an embedded subset of Lobby's own font file for that
+//    range (fetched same-origin, embedded through fontkit), so the text is real, selectable and searchable in every
+//    script Lobby's fonts cover; characters no Lobby font has (emoji, a symbol) are drawn as small pictures at their
+//    place, and they and the spaces no font has keep their text as invisible text (./invisible-text.ts). Text is
+//    written with text operators here, not through drawSvg, whose text runner trims a run and turns every Unicode
+//    space into U+0020;
 //  - images: taken out of the SVG and drawn natively (embedJpg / embedPng; other formats transcoded) at their
 //    transform, under their crop mask and their symbol's viewport, so photos keep their pixels and text stays vector
 //    (Excalidraw writes an image's rounded-corner clip-path in the SVG namespace, which browsers ignore: so does
@@ -19,26 +22,38 @@
 import {
   appendBezierCurve,
   appendQuadraticCurve,
+  beginText,
   clip,
   clipEvenOdd,
   closePath,
   colorString,
   endPath,
+  endText,
   FillRule,
   LineCapStyle,
   lineTo,
   moveTo,
   type PDFDocument,
   type PDFFont,
+  PDFHexString,
   type PDFImage,
+  type PDFName,
   type PDFOperator,
   type PDFPage,
   type PDFRef,
   popGraphicsState,
   pushGraphicsState,
   StandardFonts,
+  setFillingColor,
+  setFontAndSize,
+  setGraphicsState,
+  setTextMatrix,
+  setTextRenderingMode,
+  showText,
+  TextRenderingMode,
 } from '@cantoo/pdf-lib'
 import { FACES_METADATA_ID } from '../../../canvas/export/fonts.ts'
+import { type InvisibleSegment, InvisibleText } from './invisible-text.ts'
 import {
   applyMatrix,
   type ClipRef,
@@ -55,14 +70,18 @@ import {
   symbolImage,
   translation,
 } from './svg-scene.ts'
-import { escapeAttr, escapeText, refId, type XElement } from './svg-tree.ts'
+import { escapeAttr, refId, type XElement } from './svg-tree.ts'
 import {
+  blankWidth,
+  clusters,
   type Draw,
   FaceIndex,
+  type FaceGlyphs,
   hasRtl,
   layoutText,
   type Measure,
   type PdfFace,
+  type PlacedRun,
   parseFaceTable,
 } from './text-layout.ts'
 
@@ -80,8 +99,17 @@ export interface VectorDeps {
   fetchFace(url: string): Promise<Uint8Array | null>
   /** an image pdf-lib cannot embed (WebP, GIF…) as PNG or JPEG, or null when this environment cannot */
   transcode?(bytes: Uint8Array, mime: string): Promise<{ bytes: Uint8Array; type: 'png' | 'jpeg' } | null>
-  /** characters no Lobby font draws, as a picture, or null when this environment cannot */
-  glyphs?(text: string, sizePx: number, bold: boolean, color: string): Promise<GlyphPicture | null>
+  /**
+   * characters no Lobby font draws, as a picture (with the line's CSS font-family list first, as the board draws
+   * them), or null when this environment cannot
+   */
+  glyphs?(
+    text: string,
+    sizePx: number,
+    bold: boolean,
+    color: string,
+    families?: string,
+  ): Promise<GlyphPicture | null>
 }
 
 export type VectorOutcome = { readonly vector: true } | { readonly vector: false; readonly reason: string }
@@ -131,45 +159,114 @@ async function imageKey(href: string): Promise<string> {
   }
 }
 
+const glyphKey = (text: string, size: number, bold: boolean, fill: string, families: string) =>
+  `${text}\u0000${size}\u0000${bold}\u0000${fill}\u0000${families}`
+
 const isPng = (b: Uint8Array) =>
   b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47
 const isJpeg = (b: Uint8Array) => b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff
 
+/** What fontkit's font (inside an embedded PDFFont) gives the glyph check: its cmap. */
+interface FontkitCmapFont {
+  readonly characterSet?: readonly number[]
+  readonly _cmapProcessor?: { lookup(cp: number): number }
+}
+
+/**
+ * A face's glyphs as text-layout.ts asks for them (FaceGlyphs `slot`): -1 when the font has no glyph for a code
+ * point; else 0, or n for the n-th code point (in code point order) of a glyph the font draws for several. Read
+ * from the cmap only (fontkit's glyph objects keep the code point they were first made for, and the subset's
+ * ToUnicode is written from them: so a glyph is only ever laid out for the one code point of its embedding). Null
+ * when the font engine's cmap cannot be read (the face then cannot be used: no guess at its glyphs).
+ */
+function glyphSlots(font: PDFFont): ((cp: number) => number) | null {
+  const fk = (font as unknown as { embedder?: { font?: FontkitCmapFont } }).embedder?.font
+  const cmap = fk?._cmapProcessor
+  if (!fk || typeof cmap?.lookup !== 'function') return null
+  let shared: Map<number, number[]> | null = null
+  const sharedGlyphs = () => {
+    const byGlyph = new Map<number, number[]>()
+    try {
+      for (const cp of fk.characterSet ?? []) {
+        const gid = cmap.lookup(cp)
+        if (!gid) continue
+        const list = byGlyph.get(gid)
+        if (list) list.push(cp)
+        else byGlyph.set(gid, [cp])
+      }
+    } catch {
+      // a cmap fontkit cannot list: no glyph is known to be shared
+    }
+    const out = new Map<number, number[]>()
+    for (const [gid, cps] of byGlyph) if (cps.length > 1) out.set(gid, cps.sort((a, b) => a - b))
+    return out
+  }
+  return (cp) => {
+    const gid = cmap.lookup(cp)
+    if (!gid) return -1
+    shared ??= sharedGlyphs()
+    const group = shared.get(gid)
+    return group ? group.indexOf(cp) : 0
+  }
+}
+
+/** One embedding of a Lobby face: the PDF font, and which code points it draws (glyphSlots). */
+export interface LoadedFace {
+  readonly font: PDFFont
+  slot(cp: number): number
+}
+
 /** The document's shared fonts, images and glyph pictures (embedded once, used by every page). */
 export class VectorResources {
-  private readonly faces = new Map<string, Promise<PDFFont | null>>()
+  private readonly bytes = new Map<string, Promise<Uint8Array | null>>()
+  private readonly faces = new Map<string, Promise<LoadedFace | null>>()
   private readonly standard = new Map<boolean, Promise<PDFFont>>()
   private readonly images = new Map<string, Promise<PDFImage | null>>()
   private readonly glyphs = new Map<string, Promise<{ image: PDFImage; pic: GlyphPicture } | null>>()
   /** objects embedded for the page being prepared (dropped from the file when it falls back) */
   private pageRefs: PDFRef[] = []
   private pageKeys: string[] = []
-  /** the font family keys drawSvg reads (`fonts` option) */
-  private readonly keys = new Map<PDFFont, string>()
 
   readonly doc: PDFDocument
   readonly deps: VectorDeps
+  /** the invisible text of pictures and blanks (./invisible-text.ts) */
+  readonly invisible: InvisibleText
   constructor(doc: PDFDocument, deps: VectorDeps) {
     this.doc = doc
     this.deps = deps
+    this.invisible = new InvisibleText(doc)
   }
 
-  face(face: PdfFace): Promise<PDFFont | null> {
-    let p = this.faces.get(face.url)
+  /** Embedding `slot` of a face (see Draw `slot`: 0 its own; each is a subset with its own ToUnicode). */
+  face(face: PdfFace, slot = 0): Promise<LoadedFace | null> {
+    const key = `${slot}\u0000${face.url}`
+    let p = this.faces.get(key)
     if (!p) {
       p = (async () => {
-        const bytes = await this.deps.fetchFace(face.url).catch(() => null)
-        if (!bytes) return null
+        let bytes = this.bytes.get(face.url)
+        if (!bytes) {
+          bytes = this.deps.fetchFace(face.url).catch(() => null)
+          this.bytes.set(face.url, bytes)
+        }
+        const data = await bytes
+        if (!data) return null
         try {
           // throws without a registered fontkit, or for a file fontkit cannot read
-          return await this.doc.embedFont(bytes, { subset: true })
+          const font = await this.doc.embedFont(data, { subset: true })
+          const slots = glyphSlots(font)
+          return slots ? { font, slot: slots } : null
         } catch {
           return null
         }
       })()
-      this.faces.set(face.url, p)
+      this.faces.set(key, p)
     }
     return p
+  }
+
+  /** Writes what is written once for the whole document (the invisible text's fonts), before it is saved. */
+  finish() {
+    this.invisible.write()
   }
 
   helvetica(bold: boolean): Promise<PDFFont> {
@@ -209,12 +306,12 @@ export class VectorResources {
     return p
   }
 
-  glyph(text: string, sizePx: number, bold: boolean, color: string) {
-    const key = `${text}\u0000${sizePx}\u0000${bold}\u0000${color}`
+  glyph(text: string, sizePx: number, bold: boolean, color: string, families: string) {
+    const key = glyphKey(text, sizePx, bold, color, families)
     let p = this.glyphs.get(key)
     if (!p) {
       p = (async () => {
-        const pic = (await this.deps.glyphs?.(text, sizePx, bold, color).catch(() => null)) ?? null
+        const pic = (await this.deps.glyphs?.(text, sizePx, bold, color, families).catch(() => null)) ?? null
         if (!pic || !isPng(pic.png)) return null
         const image = await this.doc.embedPng(pic.png)
         await image.embed()
@@ -225,22 +322,6 @@ export class VectorResources {
       this.pageKeys.push(`g:${key}`)
     }
     return p
-  }
-
-  /** The family key drawSvg's `fonts` map knows this font by. */
-  keyOf(font: PDFFont): string {
-    let k = this.keys.get(font)
-    if (!k) {
-      k = `LobbyPdfFont${this.keys.size}`
-      this.keys.set(font, k)
-    }
-    return k
-  }
-
-  fontsMap(): Record<string, PDFFont> {
-    const out: Record<string, PDFFont> = {}
-    for (const [font, key] of this.keys) out[key] = font
-    return out
   }
 
   /** Starts a page: what it embeds from now on is its own until `keepPage`. */
@@ -286,6 +367,25 @@ type Op =
       readonly ctm: Matrix
       readonly style: Readonly<Record<string, string>>
       readonly opacity: number
+      readonly clips: readonly ClipRef[]
+    }
+  /** a text run in an embedded font: `matrix` maps its text space (y up, the baseline at 0) into root user space */
+  | {
+      readonly kind: 'text'
+      readonly font: PDFFont
+      readonly text: string
+      readonly matrix: Matrix
+      readonly size: number
+      readonly fill: Colour
+      readonly opacity: number
+      readonly clips: readonly ClipRef[]
+    }
+  /** invisible text (./invisible-text.ts) where a picture or a blank is drawn */
+  | {
+      readonly kind: 'invisible'
+      readonly segments: readonly InvisibleSegment[]
+      readonly matrix: Matrix
+      readonly size: number
       readonly clips: readonly ClipRef[]
     }
 
@@ -410,52 +510,67 @@ export async function prepareVectorFrame(
     return { ok: false, reason: 'the frame’s drawing could not be read' }
   }
   if (scene.problems.length) return { ok: false, reason: `it uses ${scene.problems.join(', ')}` }
-  const faces = new FaceIndex(parseFaceTable(scene.metadata.get(FACES_METADATA_ID)))
+  const table = parseFaceTable(scene.metadata.get(FACES_METADATA_ID))
   const texts = scene.leaves.filter((l) => l.el.name === 'text')
   if (texts.some((t) => hasRtl(t.el))) return { ok: false, reason: 'it has right-to-left text' }
 
-  // pass 1: which fonts and glyph pictures the text needs (any measure will do to find them)
+  // pass 1: which faces (and embeddings of them), and which glyph pictures, the text needs. A face's glyphs are
+  // known once it is loaded: until then it is taken at its range's word, then the text is laid out again with what
+  // its font really has, until every face the text lands in is loaded (any measure will do to find them)
+  const loaded = new Map<string, LoadedFace>()
+  const faceKey = (face: PdfFace, slot: number) => `${slot}\u0000${face.url}`
+  const asked = new Map<string, { face: PdfFace; slot: number }>()
+  const glyphs: FaceGlyphs = {
+    slot(face, cp) {
+      const own = loaded.get(faceKey(face, 0))
+      if (own) return own.slot(cp)
+      asked.set(faceKey(face, 0), { face, slot: 0 })
+      return 0
+    },
+  }
+  const faces = new FaceIndex(table, glyphs)
   const rough: Measure = {
     width: (_d, text, size) => text.length * size * 0.5,
     ascent: (_d, size) => size * 0.8,
     descent: (_d, size) => size * 0.2,
   }
-  const needFaces = new Set<PdfFace>()
-  const needGlyphs = new Map<string, { text: string; size: number; bold: boolean; fill: string }>()
-  for (const t of texts)
-    for (const r of layoutText(t.el, t.style, faces, rough, ownStyle)) {
-      if (r.draw.kind === 'face') needFaces.add(r.draw.face)
-      else if (r.draw.kind === 'glyph')
-        needGlyphs.set(`${r.text}\u0000${r.sizePx}\u0000${r.bold}\u0000${r.fill}`, {
-          text: r.text,
-          size: r.sizePx,
-          bold: r.bold,
-          fill: r.fill,
-        })
+  const needGlyphs = new Map<string, PlacedRun>()
+  let load: [string, { face: PdfFace; slot: number }][] = []
+  do {
+    asked.clear()
+    needGlyphs.clear()
+    for (const t of texts)
+      for (const r of layoutText(t.el, t.style, faces, rough, ownStyle)) {
+        if (r.draw.kind === 'face')
+          asked.set(faceKey(r.draw.face, r.draw.slot), { face: r.draw.face, slot: r.draw.slot })
+        else if (r.draw.kind === 'glyph')
+          needGlyphs.set(glyphKey(r.text, r.sizePx, r.bold, r.fill, r.families), r)
+      }
+    // in the face table's order (the first one that cannot be embedded is the one the reason names)
+    load = [...asked.entries()]
+      .filter(([k]) => !loaded.has(k))
+      .sort(([, a], [, b]) => table.indexOf(a.face) - table.indexOf(b.face) || a.slot - b.slot)
+    for (const [k, { face, slot }] of load) {
+      const f = await res.face(face, slot)
+      if (!f) return { ok: false, reason: `the font ${face.family} could not be embedded` }
+      loaded.set(k, f)
     }
-  const fontOf = new Map<PdfFace, PDFFont>()
-  for (const face of needFaces) {
-    const f = await res.face(face)
-    if (!f) return { ok: false, reason: `the font ${face.family} could not be embedded` }
-    fontOf.set(face, f)
-  }
-  // the standard font measures spaces between runs too
+  } while (load.length > 0)
   const helv = await res.helvetica(false)
   const helvBold = await res.helvetica(true)
   const glyphOf = new Map<string, { image: PDFImage; pic: GlyphPicture }>()
-  for (const [key, g] of needGlyphs) {
-    const got = await res.glyph(g.text, g.size, g.bold, g.fill)
+  for (const [key, r] of needGlyphs) {
+    const got = await res.glyph(r.text, r.sizePx, r.bold, r.fill, r.families)
     if (!got) return { ok: false, reason: 'it has characters none of Lobby’s fonts can show' }
     glyphOf.set(key, got)
   }
   const fontFor = (d: Draw, bold: boolean): PDFFont =>
-    d.kind === 'face' ? (fontOf.get(d.face) ?? helv) : bold ? helvBold : helv
-  const glyphKey = (text: string, size: number, bold: boolean, fill: string) =>
-    `${text}\u0000${size}\u0000${bold}\u0000${fill}`
+    (d.kind === 'face' ? loaded.get(faceKey(d.face, d.slot))?.font : null) ?? (bold ? helvBold : helv)
   const measure: Measure = {
     width: (d, text, size, bold) => {
+      if (d.kind === 'blank') return blankWidth(text, size)
       if (d.kind === 'glyph') {
-        // a glyph run is measured as its picture (keyed by its own fill, found below); fall back to the size
+        // a glyph run is measured as its picture (keyed by its own fill and families, found below); else the size
         for (const [k, g] of glyphOf)
           if (k.startsWith(`${text}\u0000${size}\u0000${bold}\u0000`)) return g.pic.width
         return size
@@ -463,12 +578,30 @@ export async function prepareVectorFrame(
       return fontFor(d, bold).widthOfTextAtSize(text, size)
     },
     ascent: (d, size, bold) =>
-      d.kind === 'glyph' ? size * 0.8 : fontFor(d, bold).heightAtSize(size, { descender: false }),
+      d.kind === 'glyph' || d.kind === 'blank'
+        ? size * 0.8
+        : fontFor(d, bold).heightAtSize(size, { descender: false }),
     descent: (d, size, bold) => {
-      if (d.kind === 'glyph') return size * 0.2
+      if (d.kind === 'glyph' || d.kind === 'blank') return size * 0.2
       const f = fontFor(d, bold)
       return Math.max(0, f.heightAtSize(size) - f.heightAtSize(size, { descender: false }))
     },
+  }
+  /** Invisible text over a picture or a blank: one code a grapheme cluster, the run's width shared among them. */
+  const invisible = (r: PlacedRun, ctm: Matrix, clips: readonly ClipRef[]): Op => {
+    const pieces = clusters(r.text)
+    const per = r.sizePx > 0 ? (r.width / r.sizePx) * 1000 : 0
+    const widths =
+      r.draw.kind === 'blank'
+        ? pieces.map((p) => (blankWidth(p, r.sizePx) / (r.sizePx || 1)) * 1000)
+        : pieces.map(() => per / (pieces.length || 1))
+    return {
+      kind: 'invisible',
+      segments: res.invisible.segments(pieces, widths),
+      matrix: multiply(ctm, [1, 0, 0, -1, r.x, r.y]),
+      size: r.sizePx,
+      clips,
+    }
   }
 
   // pass 2: the drawing steps, in paint order
@@ -478,8 +611,12 @@ export async function prepareVectorFrame(
     switch (el.name) {
       case 'text': {
         for (const r of layoutText(el, style, faces, measure, ownStyle)) {
+          if (r.draw.kind === 'blank') {
+            ops.push(invisible(r, ctm, clips))
+            continue
+          }
           if (r.draw.kind === 'glyph') {
-            const g = glyphOf.get(glyphKey(r.text, r.sizePx, r.bold, r.fill))
+            const g = glyphOf.get(glyphKey(r.text, r.sizePx, r.bold, r.fill, r.families))
             if (!g) return { ok: false, reason: 'it has characters none of Lobby’s fonts can show' }
             const top = r.y - g.pic.ascent
             const h = g.pic.ascent + g.pic.descent
@@ -491,20 +628,20 @@ export async function prepareVectorFrame(
               clips,
               box: null,
             })
+            ops.push(invisible(r, ctm, clips))
             continue
           }
-          const font = fontFor(r.draw, r.bold)
-          const key = res.keyOf(font)
           const fc = colour(r.fill)
           if (!fc) continue
-          const fo = clamp01(opacity * r.fillOpacity * fc.alpha)
           ops.push({
-            kind: 'svg',
+            kind: 'text',
+            font: fontFor(r.draw, r.bold),
+            text: r.text,
+            matrix: multiply(ctm, [1, 0, 0, -1, r.x, r.y]),
+            size: r.sizePx,
+            fill: fc,
+            opacity: clamp01(opacity * r.fillOpacity * fc.alpha),
             clips,
-            xml:
-              `<text transform="${matrixAttr(ctm)}" x="${fmt(r.x)}" y="${fmt(r.y)}" font-family="${key}" ` +
-              `font-size="${fmt(r.sizePx)}" font-weight="400" font-style="normal" fill="${escapeAttr(r.fill)}" ` +
-              `fill-opacity="${fmt(fo)}">${escapeText(r.text)}</text>`,
           })
         }
         break
@@ -825,8 +962,52 @@ export function drawVectorFrame(
   // root user space → PDF points (y up), exactly as drawSvg maps the root viewBox into {x, y, width, height}
   const toPage: Matrix = [s, 0, 0, -s, area.x + dx - s * vb.x, area.top - dy + s * vb.y]
   const svgOpen = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${fmt(vb.x)} ${fmt(vb.y)} ${fmt(vb.width)} ${fmt(vb.height)}" width="${fmt(vb.width)}" height="${fmt(vb.height)}">`
-  const drawOpts = { x: area.x, y: area.top, width: area.width, height: area.height, fonts: res.fontsMap() }
+  const drawOpts = { x: area.x, y: area.top, width: area.width, height: area.height }
   const rootClip = rectClipOps(translation(vb.x, vb.y), toPage, vb.width, vb.height)
+  // the page's resource names for the fonts and the fill opacities its text uses
+  const fontNames = new Map<PDFRef, PDFName>()
+  const fontName = (ref: PDFRef, tag: string) => {
+    let n = fontNames.get(ref)
+    if (!n) {
+      n = page.node.newFontDictionary(tag, ref)
+      fontNames.set(ref, n)
+    }
+    return n
+  }
+  const opacities = new Map<number, PDFName>()
+  const opacityName = (ca: number) => {
+    let n = opacities.get(ca)
+    if (!n) {
+      n = page.node.newExtGState('GS', res.doc.context.obj({ Type: 'ExtGState', ca }))
+      opacities.set(ca, n)
+    }
+    return n
+  }
+  /** One text run (in its font, filled) or invisible text, as a text object; inside the caller's q … Q. */
+  const textOps = (op: Extract<Op, { kind: 'text' | 'invisible' }>): PDFOperator[] => {
+    const m = multiply(toPage, op.matrix)
+    if (op.kind === 'invisible') {
+      const out: PDFOperator[] = [beginText(), setTextRenderingMode(TextRenderingMode.Invisible)]
+      out.push(setTextMatrix(...m))
+      for (const seg of op.segments)
+        out.push(setFontAndSize(fontName(seg.font, 'LobbyText'), op.size), showText(PDFHexString.of(seg.hex)))
+      out.push(endText())
+      return out
+    }
+    const body = [
+      beginText(),
+      setTextRenderingMode(TextRenderingMode.Fill),
+      setFillingColor(op.fill.rgb),
+      setFontAndSize(fontName(op.font.ref, op.font.name), op.size),
+      setTextMatrix(...m),
+      showText(op.font.encodeText(op.text)),
+      endText(),
+    ]
+    const ca = Math.round(op.opacity * 1000) / 1000
+    return ca < 1
+      ? [pushGraphicsState(), setGraphicsState(opacityName(ca)), ...body, popGraphicsState()]
+      : body
+  }
 
   let i = 0
   const ops = frame.ops
@@ -856,6 +1037,18 @@ export function drawVectorFrame(
           k++
         }
         page.drawSvg(`${svgOpen}${xml}</svg>`, drawOpts)
+        continue
+      }
+      if (op.kind === 'text' || op.kind === 'invisible') {
+        // consecutive text runs: one q … Q under the frame's own clip, as drawSvg drew them
+        page.pushOperators(pushGraphicsState(), ...rootClip)
+        while (k < group.length) {
+          const t = group[k] as Op
+          if (t.kind !== 'text' && t.kind !== 'invisible') break
+          page.pushOperators(...textOps(t))
+          k++
+        }
+        page.pushOperators(popGraphicsState())
         continue
       }
       if (op.kind === 'image') {
