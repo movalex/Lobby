@@ -155,6 +155,10 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
     for (const l of [...listeners[e]]) (l as (...a: Parameters<CanvasEventMap[E]>) => void)(...args)
   }
   const versions = new Map<string, number>()
+  /** wave N.1: the element array of the last scan (afterSceneChange), and its elements and their versions by position */
+  let lastScan: readonly ExcalidrawElement[] | null = null
+  let lastEls: ExcalidrawElement[] = []
+  let lastVersions: number[] = []
   let lastSelection = ''
   let toolMode: PortToolMode | null = null
   const gestureHooks = new Set<GestureElementHook>()
@@ -574,10 +578,29 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
       if (elementsChanged) {
         const changed: string[] = []
         const els = all()
-        for (const e of els) {
-          if (versions.get(e.id) === e.version) continue
-          versions.set(e.id, e.version)
-          changed.push(e.id)
+        // wave N.1: the same array as at the last scan (the engine moved elements in place: a drag's every move) is
+        // compared by position against the versions that scan saw, no lookup per element; another array goes through
+        // the map, as before
+        if (els === lastScan && els.length === lastVersions.length) {
+          for (let i = 0; i < els.length; i++) {
+            const e = els[i] as ExcalidrawElement
+            if (lastEls[i] === e && lastVersions[i] === e.version) continue
+            lastEls[i] = e
+            lastVersions[i] = e.version
+            if (versions.get(e.id) === e.version) continue
+            versions.set(e.id, e.version)
+            changed.push(e.id)
+          }
+        } else
+          for (const e of els) {
+            if (versions.get(e.id) === e.version) continue
+            versions.set(e.id, e.version)
+            changed.push(e.id)
+          }
+        if (els !== lastScan || els.length !== lastVersions.length) {
+          lastScan = els
+          lastEls = els.slice()
+          lastVersions = els.map((e) => e.version)
         }
         // an element that left the scene is a change too, and forgotten: when it comes back at the same
         // version it is one again (a warm open's paint, then the room's older reset snapshot without it, then

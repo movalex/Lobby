@@ -373,6 +373,28 @@ describe("the port's changed event", () => {
     port.afterSceneChange()
     expect(heard).toHaveLength(3)
   })
+
+  it('wave N.1: in-place moves of the same array (a drag) are named by position; a swapped element too', () => {
+    const els = [rect('a', 'a0'), rect('b', 'a1'), rect('c', 'a2')]
+    const { api, port } = portOn(els)
+    const heard: string[][] = []
+    port.on('changed', (ids) => heard.push([...ids]))
+    port.afterSceneChange()
+    expect(heard).toEqual([['a', 'b', 'c']])
+    const arr = api.getSceneElementsIncludingDeleted() as unknown as Record<string, unknown>[]
+    // the engine mutates in place (mutateElement): the array stays, a version moves
+    const b = arr[1] as Record<string, unknown>
+    b.x = 5
+    b.version = (b.version as number) + 1
+    port.afterSceneChange()
+    expect(heard.at(-1)).toEqual(['b'])
+    port.afterSceneChange()
+    expect(heard).toHaveLength(2)
+    // another object at a position of the same array, at the same version: still named
+    arr[2] = { ...(arr[2] as Record<string, unknown>), id: 'd' }
+    port.afterSceneChange()
+    expect(heard.at(-1)).toEqual(['d', 'c'])
+  })
 })
 
 describe('CanvasPort reads (CR 3b-7)', () => {
