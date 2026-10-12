@@ -74,7 +74,7 @@ describe('readScene', () => {
   it('flattens groups: the paint order, each leaf’s transform to the root, inherited style and folded opacity', () => {
     const s = readScene(
       svg(
-        '<g transform="translate(10 10)" opacity="0.5" stroke="#ff0000"><g transform="translate(5 0)"><path d="M0 0 L10 0" fill="none" stroke-width="2" opacity="0.5"></path></g><text x="0" y="16" font-family="Excalifont, Xiaolai" font-size="20px" fill="#1e1e1e" style="white-space: pre;">Hi</text></g>',
+        '<g transform="translate(10 10)" stroke="#ff0000"><g transform="translate(5 0)" opacity="0.5"><path d="M0 0 L10 0" fill="none" stroke-width="2" opacity="0.5"></path></g><text x="0" y="16" font-family="Excalifont, Xiaolai" font-size="20px" fill="#1e1e1e" stroke="none" style="white-space: pre;">Hi</text></g>',
       ),
     )
     expect(s.problems).toEqual([])
@@ -86,6 +86,51 @@ describe('readScene', () => {
     expect(path?.opacity).toBeCloseTo(0.25)
     expect(s.leaves[2]?.style['white-space']).toBe('pre')
     expect(s.leaves[2]?.style['font-size']).toBe('20px')
+  })
+  it('group opacity over more than one paint is a problem (a browser composites the group once); one paint is not', () => {
+    const GROUP = 'a partly transparent group'
+    const problems = (body: string, defs = '') => readScene(svg(body, defs)).problems
+    // Excalidraw's semi-transparent sticky note: a group with opacity over its shadow, its body and its edge
+    expect(
+      problems(
+        '<g opacity="0.5"><path d="M4 4 L14 4 L14 14 Z" fill="#000" fill-opacity="0.16" stroke="none"></path><path d="M0 0 L10 0 L10 10 Z" fill="#fff9b1" stroke="none"></path></g>',
+      ),
+    ).toEqual([GROUP])
+    // one element with its own opacity, filled and stroked (the stroke would show the fill through)
+    expect(
+      problems('<path d="M0 0 L10 0 L10 10 Z" fill="#a5d8ff" stroke="#1971c2" opacity="0.5"></path>'),
+    ).toEqual([GROUP])
+    // Lobby's note with its soft shadow (the page draws a light copy under it) in a semi-transparent group
+    expect(
+      problems(
+        `<g opacity="0.6"><path d="M0 0 L10 0 L10 10 Z" fill="#fff9b1" stroke="none" filter="url(#${NOTE_SHADOW_FILTER})"></path></g>`,
+        `<filter id="${NOTE_SHADOW_FILTER}"><feGaussianBlur stdDeviation="3"/></filter>`,
+      ),
+    ).toEqual([GROUP])
+    // opacity over ONE paint is exact: a stroke-only path, a filled shape, a text, an image
+    expect(problems('<g opacity="0.5"><path d="M0 0 L10 0" fill="none" stroke="#000"></path></g>')).toEqual(
+      [],
+    )
+    expect(problems('<rect width="5" height="5" fill="#f00" opacity="0.5"></rect>')).toEqual([])
+    expect(problems('<text x="0" y="10" fill="#000" opacity="0.5">Hi</text>')).toEqual([])
+    expect(
+      problems(
+        '<g opacity="0.5"><use href="#image-f" width="10" height="10" opacity="0.5"></use></g>',
+        `<symbol id="image-f"><image href="data:image/png;base64,AAAA" width="100%" height="100%"></image></symbol>`,
+      ),
+    ).toEqual([])
+    // Excalidraw's shapes carry fill-opacity and stroke-opacity (each paint composited alone, as the page does)
+    expect(
+      problems(
+        '<g stroke-opacity="0.5" fill-opacity="0.5"><path d="M0 0 L10 0 L10 10 Z" fill="#a5d8ff" stroke="none"></path><path d="M0 0 L10 0 L10 10 Z" fill="none" stroke="#1971c2"></path></g>',
+      ),
+    ).toEqual([])
+    // and an opaque group is never a problem
+    expect(
+      problems(
+        '<g opacity="1"><path d="M0 0 L10 0 L10 10 Z" fill="#a5d8ff" stroke="#000"></path><path d="M0 0 L1 1" stroke="#000"></path></g>',
+      ),
+    ).toEqual([])
   })
   it('Lobby’s soft note shadow is not a problem: the note is marked for its light copy', () => {
     expect(NOTE_SHADOW_FILTER).toBe(NOTE_SHADOW_FILTER_ID)

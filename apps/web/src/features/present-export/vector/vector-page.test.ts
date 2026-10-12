@@ -244,6 +244,19 @@ describe('vector pages', () => {
     expect(pdf.imageObjects).toBe(1) // the image page's own image only
   })
 
+  it('N6-4: a semi-transparent note (group opacity over its paints) falls back, and says why', async () => {
+    const b = await createPdfBuilder({ title: 'Board', vector: { deps: noFonts } })
+    const out = await b.addVectorPage(
+      page(
+        frameSvg(
+          '<g opacity="0.5" transform="translate(40 40)"><path d="M4 4 L124 4 L124 124 L4 124 Z" fill="#000" fill-opacity="0.16"></path><path d="M0 0 L120 0 L120 120 L0 120 Z" fill="#fff9b1"></path></g>',
+        ),
+      ),
+    )
+    expect(out).toEqual({ vector: false, reason: 'it uses a partly transparent group' })
+    expect(b.pageCount).toBe(0)
+  })
+
   it('N6-4: a drawSvg throw falls back, and the page and its embedded images leave the file', async () => {
     const b = await createPdfBuilder({ title: 'Board', vector: { deps: noFonts } })
     vi.spyOn(CantooPage.prototype, 'drawSvg').mockImplementation(() => {

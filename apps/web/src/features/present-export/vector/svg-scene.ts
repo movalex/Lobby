@@ -9,7 +9,9 @@
 // `white-space: pre`; images as a <symbol> with one data: <image> used by <use>, under a crop <mask> and a
 // rounded-corner <clipPath>; frame clips (<clipPath> of a <rect>); an arrow's label hole (a <mask> of a white rect
 // minus a black one); the vote badges (a <text> with <tspan>s); and Lobby's soft note shadow (one <filter>,
-// export-svg-notes.ts), which the PDF draws as a light offset copy of the note.
+// export-svg-notes.ts), which the PDF draws as a light offset copy of the note. Opacity is folded into each paint,
+// which is exact for Excalidraw's shapes (fill-opacity and stroke-opacity) but not for an `opacity` over more than
+// one paint (a semi-transparent sticky note's group): such a page is an image page (`paintCount`).
 
 import { idMap, parseXml, refId, type XElement } from './svg-tree.ts'
 
@@ -361,6 +363,21 @@ export function textProblem(text: XElement, style: Style): string | null {
   return null
 }
 
+const painted = (v: string | undefined, initial: boolean) => (v === undefined ? initial : v !== 'none')
+
+/**
+ * How many times a leaf paints (its fill and its stroke are two; an image, one; Lobby's soft note shadow adds its
+ * light copy). The page folds an element's `opacity` into each paint, where a browser composites the element (and
+ * a group with everything in it) once: equal only when one paint is all there is under it.
+ */
+export function paintCount(leaf: Pick<Leaf, 'el' | 'style' | 'noteShadow'>): number {
+  const { el, style } = leaf
+  let n: number
+  if (el.name === 'use' || el.name === 'image') n = 1
+  else n = (el.name !== 'line' && painted(style.fill, true) ? 1 : 0) + (painted(style.stroke, false) ? 1 : 0)
+  return n + (leaf.noteShadow ? 1 : 0)
+}
+
 /** Reads an exported SVG into the page's draw list and its problems. Throws SvgReadError when it is not XML. */
 export function readScene(svgText: string): SvgScene {
   const root = parseXml(svgText)
@@ -437,7 +454,17 @@ export function readScene(svgText: string): SvgScene {
       return
     }
     let ctm = multiply(parentCtm, t)
-    const op = opacity * Math.min(1, Math.max(0, num(own.opacity ?? '1') ?? 1))
+    const ownOpacity = Math.min(1, Math.max(0, num(own.opacity ?? '1') ?? 1))
+    const op = opacity * ownOpacity
+    // group opacity (Excalidraw's on a semi-transparent sticky note) over more than one paint: a browser composites
+    // the group once (a note hides its own shadow), the page each paint (the shadow would show through)
+    const first = leaves.length
+    const groupOpacityCheck = () => {
+      if (ownOpacity >= 1) return
+      let paints = 0
+      for (let i = first; i < leaves.length; i++) paints += paintCount(leaves[i] as Leaf)
+      if (paints > 1) note('a partly transparent group')
+    }
     if (own['mix-blend-mode'] && own['mix-blend-mode'] !== 'normal') note('a blend mode')
     let noteShadow = false
     if (own.filter && own.filter !== 'none') {
@@ -461,6 +488,7 @@ export function readScene(svgText: string): SvgScene {
       if (/^url\(/i.test(own[k] ?? '')) note('a gradient or pattern')
     if (CONTAINERS.has(el.name)) {
       for (const c of el.children) if (typeof c !== 'string') visit(c, ctm, style, op, here)
+      groupOpacityCheck()
       return
     }
     if (style.visibility === 'hidden' || style.visibility === 'collapse') return
@@ -516,6 +544,7 @@ export function readScene(svgText: string): SvgScene {
           note(`a <${el.name}> it cannot read`)
     }
     leaves.push({ el, ctm, style, opacity: op, clips: here, noteShadow })
+    groupOpacityCheck()
   }
 
   for (const c of root.children) if (typeof c !== 'string') visit(c, IDENTITY, {}, 1, [])
