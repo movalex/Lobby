@@ -7,8 +7,11 @@
 // its bottom edge. The column registers its box as the `top-centre` obstacle (lib/overlay-obstacles.ts) so popovers
 // keep clear of it, and remote cursors and compass chips keep under or away from it (chrome.tsx).
 
-/** The things in the stack, top to bottom. The toasts are not one of them: they follow the stack's bottom edge. */
-export const TOP_CENTRE_SLOTS = ['invite', 'spotlight', 'follow', 'coach', 'feedback'] as const
+/**
+ * The things in the stack, top to bottom. The toasts are not one of them: they follow the stack's bottom edge. Wave N
+ * adds 'since', the "Since you were here" chip (features/visits), under the follow pill.
+ */
+export const TOP_CENTRE_SLOTS = ['invite', 'spotlight', 'follow', 'since', 'coach', 'feedback'] as const
 export type TopCentreSlot = (typeof TOP_CENTRE_SLOTS)[number]
 
 /** The gap between two things in the stack, and between the stack and the toasts under it (px). */

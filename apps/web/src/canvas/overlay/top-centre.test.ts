@@ -12,9 +12,9 @@ import {
 } from './top-centre.ts'
 
 describe('the stack: the order and the gaps', () => {
-  it('holds, top to bottom: the invitation, the spotlight bar, the follow pill, the coach chip, the feedback prompt', () => {
-    expect(TOP_CENTRE_SLOTS).toEqual(['invite', 'spotlight', 'follow', 'coach', 'feedback'])
-    expect(TOP_CENTRE_SLOTS.map(slotOrder)).toEqual([0, 1, 2, 3, 4])
+  it('holds, top to bottom: the invitation, the spotlight bar, the follow pill, the since chip, the coach chip, the feedback prompt', () => {
+    expect(TOP_CENTRE_SLOTS).toEqual(['invite', 'spotlight', 'follow', 'since', 'coach', 'feedback'])
+    expect(TOP_CENTRE_SLOTS.map(slotOrder)).toEqual([0, 1, 2, 3, 4, 5])
   })
 
   it('stacks each item under the one before with a fixed 8 px gap, whatever order it is given in', () => {
