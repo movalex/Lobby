@@ -18,13 +18,14 @@
  *
  * Each is on at merge only once its gate passes (the wave N brief). WORKER_DECODE's has (no main-thread long task over
  * 200 ms in the decode, the enforced CSP). Wave N.1: CHUNKED_APPLY's has: a 10k cold open at CPU 4x, the longest task
- * from the snapshot to editable 149 ms and the first content 229 ms after the decode (medians of 9 opens; targets 200 ms
- * and 1.2 s), with the n1-*, sync durability, collab, warm-open and workshops specs passing with it on, and since your
- * last visit on the 10k board (n1-since-visit-10k). The other two are off: their correctness gates pass, their speed
- * targets do not (wave N.1, CPU 4x, medians of 9: a 10k warm open painted 1.64 s and editable 5.8 s against 1.5 s and
- * 3.5 s, its longest task after the paint 548 ms against 250 ms; the editable time is the 392 KB reset snapshot over
- * Chrome's Fast 4G emulation, whose WebSocket frames arrive at about 100 KB/s, 3 to 5 s after the welcome; the 4x pan
- * 6 to 10 fps against 30, mostly the engine's own per-frame work). Off, each path is the one before wave N exactly.
+ * from the snapshot to editable 129 ms and the first content 239 ms after the decode (medians of 9 opens; targets 200 ms
+ * and 1.2 s; 741 ms before wave N.1), with the n1-*, sync durability, collab, warm-open and workshops specs passing with
+ * it on, and since your last visit on the 10k board (n1-since-visit-10k). The other two are off: their correctness
+ * gates pass, their speed targets do not (wave N.1, CPU 4x, medians of 9 opens: a 10k warm open painted 1.40 s and
+ * editable 5.6 s against 1.5 s and 3.5 s, its longest task after the paint 424 ms against 250 ms; the editable time is
+ * the 392 KB reset snapshot over Chrome's Fast 4G emulation, whose WebSocket frames arrive at about 100 KB/s, 3 to 5 s
+ * after the welcome, where an HTTP download runs at 3 MB/s; on loopback the same open is editable at 1.8 s. The 4x pan
+ * is 7 to 11 fps against 30, the engine's own per-frame work). Off, each path is the one before wave N exactly.
  * A dev-auth build (the e2e build, local dev; never a production bundle: DEV_AUTH_ENABLED) may turn one on or off for
  * its page (`speedFlag`, `setSpeedFlagOverrides`: the board session reads them from localStorage
  * SPEED_FLAGS_KEY), so the N1 specs measure and gate a part that ships off.
