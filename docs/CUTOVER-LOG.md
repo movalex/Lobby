@@ -397,3 +397,25 @@ on the sync disk (§6).
     - `VECTOR_PDF` stays off until fontkit is added (follow-up N.1);
     - of the four speed flags only `WORKER_DECODE` is on;
     - deflate stays off.
+- **2026-10-12 19:28-19:32Z, wave N.1 deployed** (main `1821a65`; 0 board connections in the 4 h before):
+  - api `dep-db6j9sij9qps73ck8mq0`. The script was called with an empty commit, so Render deployed the branch head, which is the same commit.
+  - sync `dep-db6jaf49v7es73fn3ghg`;
+  - web `dep-db6jb60473hc73dj1l1g`.
+  - No migration and no `CONTRACTS_REV` change. Applied first through the Render API: sync `DRAFTROOM_OUTBOUND_BUDGET_MB=64` (it was 128). `DRAFTROOM_REACTIONS=on` and `DRAFTROOM_WS_DEFLATE=off` are unchanged.
+  - After the deploy:
+    - api `/healthz/deep` 200; sync `/healthz/deep` ok; maintenance off; `GET /internal/clock` 200;
+    - 0 error/FATAL lines; render.yaml drift 0;
+    - live smoke 40 passed, 0 failed;
+    - `/version.json` answers `{"commit":"1821a6592a37"}`.
+  - Gate at `aa0e589f` (docs/PROGRESS.md wave N.1):
+    - lint on the NAS: 2,738 files, 0 errors;
+    - units: 9,348 passed;
+    - real PG: api 2,043 passed, db 82/82;
+    - whole e2e 980/980 normally and 980/980 with direct events (14 skipped in each).
+  - Live check, the owner on a new board: a note "Vector PDF non‑breaking 12 345 † check" (U+2011, U+2020) exported with "Export as PDF…" and vector pages. The file was caught in the page, not downloaded.
+    - 6,619 bytes, `%PDF-1.7`;
+    - 2 embedded TrueType subsets (`/FontFile2`, Type0 and CIDFontType2), 3 ToUnicode maps holding U+2011 and U+2020, and 8 text-show operators.
+    - Cleanup: the board in Trash.
+  - Holds:
+    - `DIFF_APPLY` and `SIZE_AWARE_LOD` stay off. `CHUNKED_APPLY` and `VECTOR_PDF` are on.
+    - Deflate stays off.
