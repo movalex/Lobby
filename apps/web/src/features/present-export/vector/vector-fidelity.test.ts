@@ -18,7 +18,7 @@ import {
   PDFDict,
   PDFDocument,
   PDFName,
-  PDFNumber,
+  type PDFNumber,
   PDFRawStream,
   PDFRef,
   PDFStream,
@@ -95,7 +95,9 @@ function parseToUnicode(cmap: string): Map<number, string> {
           out.set(c, base.slice(0, -1) + String.fromCharCode(base.charCodeAt(base.length - 1) + (c - lo)))
       } else {
         const list = [...(m[4] as string).matchAll(/<([0-9A-Fa-f]+)>/g)].map((x) => utf16(x[1] as string))
-        list.forEach((t, i) => out.set(lo + i, t))
+        list.forEach((t, i) => {
+          out.set(lo + i, t)
+        })
       }
     }
   return out
@@ -146,7 +148,9 @@ function fontInfo(doc: PDFDocument, dict: PDFDict): PdfFontInfo {
       const c = (items[i] as PDFNumber).asNumber()
       const next = items[i + 1]
       if (next instanceof PDFArray) {
-        next.asArray().forEach((v, k) => widths.set(c + k, (v as PDFNumber).asNumber()))
+        next.asArray().forEach((v, k) => {
+          widths.set(c + k, (v as PDFNumber).asNumber())
+        })
         i += 2
       } else {
         const c2 = (next as PDFNumber).asNumber()
@@ -283,7 +287,10 @@ describe('a vector PDF read back from its bytes (two real frame exports, the ser
             const g = want[k] as FkGlyph
             const label = `${info.baseFont} "${r.text}" glyph ${k}`
             expect(embedded.getGlyph(cid).advanceWidth, `${label} advance`).toBe(g.advanceWidth)
-            expect(info.widths.get(cid), `${label} /W`).toBeCloseTo((g.advanceWidth * 1000) / src.unitsPerEm, 0)
+            expect(info.widths.get(cid), `${label} /W`).toBeCloseTo(
+              (g.advanceWidth * 1000) / src.unitsPerEm,
+              0,
+            )
             glyphs++
           })
         }

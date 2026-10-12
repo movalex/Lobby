@@ -207,7 +207,10 @@ function writeGlyphsFromOutlines(subset: PdfLibSubset, font: PdfLibFont) {
     if (maxp)
       for (const gid of this.glyphs ?? []) {
         const contours = font.getGlyph(gid)._getContours()
-        maxp.maxPoints = Math.max(maxp.maxPoints, contours.reduce((s, c) => s + c.length, 0))
+        maxp.maxPoints = Math.max(
+          maxp.maxPoints,
+          contours.reduce((s, c) => s + c.length, 0),
+        )
         maxp.maxContours = Math.max(maxp.maxContours, contours.length)
       }
     return encode.call(this, stream)
