@@ -295,16 +295,24 @@ function overlap(a: Uint8ClampedArray, b: Uint8ClampedArray, dx: number, dy: num
   const H = c.height
   let pixels = 0
   let max = 0
+  const cells = new Map<string, number>()
   for (let y = Math.max(0, -dy); y < Math.min(H, H - dy); y++)
     for (let x = Math.max(0, -dx); x < Math.min(W, W - dx); x++) {
       const i = (y * W + x) * 4
       const j = ((y + dy) * W + (x + dx)) * 4
       let m = 0
       for (let k = 0; k < 4; k++) m = Math.max(m, Math.abs((a[i + k] as number) - (b[j + k] as number)))
-      if (m) pixels++
+      if (!m) continue
+      pixels++
       if (m > max) max = m
+      if (m > 8) {
+        const key = `${Math.floor(x / 64) * 64},${Math.floor(y / 64) * 64}`
+        cells.set(key, (cells.get(key) ?? 0) + 1)
+      }
     }
-  return { pixels, max, cells: [] }
+  // where it differs by more than 8 levels: up to 4 cells of 64 device px (x, y, pixels)
+  const top = [...cells.entries()].sort((p, q) => q[1] - p[1]).slice(0, 4)
+  return { pixels, max, cells: top.map(([k, n]) => [...(k.split(',').map(Number) as [number, number]), n]) }
 }
 
 /** Ink that is not the background: the view shows something. */
@@ -345,10 +353,25 @@ export interface PanBlitStale {
   near: string[]
 }
 
+export interface PanBlitScratch {
+  /** the scratch canvas was seen (a canvas of the static canvas's size made during a pan) */
+  seen: boolean
+  /** its size at the render at rest (0 x 0: freed) */
+  atRest: [number, number]
+  /** the next pan sized it again and went on blitting */
+  sizedAgain: boolean
+  blitsAgain: number
+  fullVsBlit: Diff
+  control: Diff
+  /** what is drawn where the control differs most */
+  near: string[]
+}
+
 export async function checkPanBlit(apiIn: unknown): Promise<{
   ok: boolean
   views: PanBlitView[]
   stale: PanBlitStale[]
+  scratch: PanBlitScratch
   detail: string[]
 }> {
   const api = apiIn as Api
@@ -435,6 +458,7 @@ export async function checkPanBlit(apiIn: unknown): Promise<{
       const s1 = snapped()
       const d = overlap(c0, c1, s1.x - s0.x, s1.y - s0.y)
       floor.pixels = Math.max(floor.pixels, d.pixels)
+      if (d.max > floor.max) floor.cells = d.cells
       floor.max = Math.max(floor.max, d.max)
     }
     await move(start.x, start.y)
@@ -601,6 +625,71 @@ export async function checkPanBlit(apiIn: unknown): Promise<{
   })
   const lost = getPanBlitStats().lost
 
+  // The scratch canvas the shifted frame waits in (W x H x 4 bytes and a GPU texture): freed at the render at rest (its
+  // size 0) and sized again by the next blit. A lost scratch context, by its contextlost event or by isContextLost()
+  // before the event comes (a lost context draws nothing), must give a full render at once. The probe finds the scratch
+  // canvas among the canvases made while it pans: the one of the static canvas's size.
+  const made: HTMLCanvasElement[] = []
+  const create = document.createElement
+  Object.defineProperty(document, 'createElement', {
+    configurable: true,
+    value(this: Document, tag: string, options?: ElementCreationOptions) {
+      const el = create.call(this, tag, options)
+      if (String(tag).toLowerCase() === 'canvas') made.push(el as HTMLCanvasElement)
+      return el
+    },
+  })
+  const scratchNow = () => {
+    const c = document.querySelector(STATIC) as HTMLCanvasElement
+    return made.findLast((m) => m.width === c.width && m.height === c.height) ?? null
+  }
+  let scratch: PanBlitScratch
+  try {
+    api.updateScene({
+      appState: { zoom: { value: 0.5 }, scrollX: 1400, scrollY: 900, theme: 'light', selectedElementIds: {} },
+      captureUpdate: CaptureUpdateAction.NEVER,
+    })
+    await frames(3)
+    resetPanBlitStats()
+    await pan(8)
+    const seen = scratchNow()
+    await sleep(300)
+    const atRest: [number, number] = seen ? [seen.width, seen.height] : [-1, -1]
+    const restLast = getPanBlitStats().last
+    if (restLast !== 'rest') detail.push(`scratch: no render at rest (${restLast})`)
+    resetPanBlitStats()
+    await pan(20)
+    const sizedAgain = scratchNow() !== null
+    const blitsAgain = getPanBlitStats().blit
+    const blit = grab()
+    const full = await fullRender()
+    const control = await controlHere()
+    scratch = {
+      seen: !!seen,
+      atRest,
+      sizedAgain,
+      blitsAgain,
+      fullVsBlit: diff(full, blit),
+      control,
+      near: near(control),
+    }
+    await staleCase('a lost scratch context (its contextlost event)', () => {
+      const s = scratchNow()
+      if (!s) detail.push('scratch contextlost: no scratch canvas in the pan')
+      s?.dispatchEvent(new Event('contextlost'))
+    })
+    await staleCase('a lost scratch context (isContextLost before the event; it draws nothing)', () => {
+      const ctx = scratchNow()?.getContext('2d')
+      if (!ctx) detail.push('scratch isContextLost: no scratch canvas in the pan')
+      else {
+        Object.defineProperty(ctx, 'isContextLost', { configurable: true, value: () => true })
+        Object.defineProperty(ctx, 'drawImage', { configurable: true, value: () => {} })
+      }
+    })
+  } finally {
+    delete (document as unknown as { createElement?: unknown }).createElement
+  }
+
   setPanBlit(false)
   api.updateScene({
     elements: [],
@@ -635,5 +724,16 @@ export async function checkPanBlit(apiIn: unknown): Promise<{
     ok = false
     detail.push('the lost context was not seen')
   }
-  return { ok, views, stale, detail }
+  if (
+    !scratch.seen ||
+    scratch.atRest[0] !== 0 ||
+    scratch.atRest[1] !== 0 ||
+    !scratch.sizedAgain ||
+    scratch.blitsAgain < 15 ||
+    !within(scratch.fullVsBlit, scratch.control)
+  ) {
+    ok = false
+    detail.push(`the scratch canvas: ${JSON.stringify(scratch)}`)
+  }
+  return { ok, views, stale, scratch, detail }
 }

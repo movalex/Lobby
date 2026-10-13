@@ -48,7 +48,9 @@ try {
     )
     .join('; ')
   const blitWhy = b.detail.length ? `; ${b.detail.join('; ')}` : ''
-  console.log(`pan blit: ${blitPass ? 'PASS' : 'FAIL'} — ${views}; ${stale}${blitWhy}`)
+  const sc = b.scratch
+  const scratch = `scratch seen ${sc.seen}, at rest ${sc.atRest.join(' x ')}, sized again ${sc.sizedAgain} (${sc.blitsAgain} blits, ${sc.fullVsBlit.pixels} px from a full render, control ${sc.control.pixels} px)`
+  console.log(`pan blit: ${blitPass ? 'PASS' : 'FAIL'} — ${views}; ${stale}; ${scratch}${blitWhy}`)
   writeFileSync(
     `${outDir}pan-browser.json`,
     JSON.stringify({ browser: s.browserVersion, pass: pass && blitPass, engine: r, blit: b }, null, 1),
