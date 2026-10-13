@@ -847,42 +847,71 @@ function lobbyOffsetGroupsUnseen(groups, viewport) {
 function o2Element(file) {
   const dev = file('element', EL_DEV)
   const prod = file('element', EL_PROD)
-  // drawElementFromCanvas rounds an element's anchor to whole device pixels. The anchor term carries the scroll, and
-  // the context's transform, read back with getTransform, is single precision (scale(1 / 1.25) is kept as
-  // 0.800000011920929, so at zoom 0.5 the factor is 0.5000000075): the scroll's share of the term is off by about 1.5e-8
-  // times the scroll, past SNAP_TIE_BIAS (1e-6) on any real board. An anchor on an exact half pixel (a row of grid
-  // notes at 0.5 x 1.25 dpr) then rounded one way at one scroll and the other way at another: a pixel apart. With the
-  // scroll snapped to whole device pixels (snapScrollToDevicePixels), its share is a whole number: added as one, the
-  // rest rounded with the tie bias. Anything else (a scroll off the pixel grid, a transform other than the zoom times a
-  // right angle) rounds as before.
+  // drawElementFromCanvas rounds an element's anchor to whole device pixels: Math.round(p * anchorX + q * anchorY + t)
+  // per axis, where p, q, t are that row of the context's transform read back with getTransform and anchorX / anchorY
+  // carry the scroll. Blink takes scale's and translate's arguments in single precision (scale(1 / 1.25) reads back
+  // 0.800000011920929, so at zoom 0.5 the factor is 0.5000000075), so the scroll's share of that sum is off by about
+  // 1.5e-8 times the scroll, past SNAP_TIE_BIAS (1e-6) on any real board; and a mirrored image (scale -1) or an element
+  // turned by a right angle has the centre, scroll included and rounded to single precision, in t (twice it, for a
+  // mirror). An anchor on an exact half pixel (a row of grid notes at 0.5 x 1.25 dpr) then rounded one way at one
+  // scroll and the other way at another: a pixel apart. In exact arithmetic the scroll's share of the sum is the
+  // snapped scroll's whole device pixels, whatever the turn or the mirror (the transform turns about the element's
+  // centre on a context scaled by the zoom). So, when the scroll is snapped (snapScrollToDevicePixels) and the
+  // transform is that one (p and q the zoom times -1, 0 or 1, t the translation of the turn about the centre), the rest
+  // is computed from the scene coordinates alone, rounded with the tie bias, and the whole pixels added: the same
+  // answer at every snapped scroll. Anything else (a scroll off the pixel grid, another transform) is the engine's own
+  // formula, unchanged.
   edit(
     dev,
     `      Math.round(a2 * anchorX + c * anchorY + e) + Math.round(a2 * dx + c * dy + SNAP_TIE_BIAS),
       Math.round(b2 * anchorX + d * anchorY + f) + Math.round(b2 * dx + d * dy + SNAP_TIE_BIAS)`,
-    `      lobbySnapAnchor(a2, c, e, anchorX, anchorY, anchorSceneX, anchorSceneY, positionOffset, anchorPadding, appState, devicePixelRatio) + Math.round(a2 * dx + c * dy + SNAP_TIE_BIAS),
-      lobbySnapAnchor(b2, d, f, anchorX, anchorY, anchorSceneX, anchorSceneY, positionOffset, anchorPadding, appState, devicePixelRatio) + Math.round(b2 * dx + d * dy + SNAP_TIE_BIAS) // Lobby patch, wave O T`,
+    `      lobbySnapAnchor(0, a2, c, e, anchorX, anchorY, anchorSceneX, anchorSceneY, anchorPadding, x1, y1, x2, y2, positionOffset, appState, devicePixelRatio) + Math.round(a2 * dx + c * dy + SNAP_TIE_BIAS),
+      lobbySnapAnchor(1, b2, d, f, anchorX, anchorY, anchorSceneX, anchorSceneY, anchorPadding, x1, y1, x2, y2, positionOffset, appState, devicePixelRatio) + Math.round(b2 * dx + d * dy + SNAP_TIE_BIAS) // Lobby patch, wave O T`,
   )
+  // the prod function from SNAP_TIE_BIAS's definition to the snapped setTransform, so that every name the new call
+  // passes is pinned by what it is: nu the bias; a the dpr, l the padding, [d, c, u, p] the element's x1, y1, x2, y2,
+  // r the render offset, i the app state, (m, h) the centre the transform turns about; b, y, w, S, I, A the transform
+  // read back; N, k the anchor's scene x, y, z its padding, U, D the engine's anchor terms
+  const drawFromCanvas =
+    'nu=1e-6,Aa=(e,t,n,i,o,r)=>{let s=e.element,a=window.devicePixelRatio,l=ho(s),[d,c,u,p]=q(s,o),m=((d+u)/2+r.x+i.scrollX)*a,h=((c+p)/2+r.y+i.scrollY)*a;t.save(),t.scale(1/a,1/a);let f=ee(s,o);if(W(s)&&f){let[,,,,b,y]=q(f,o),w=Math.max(Yn(d,u),Yn(c,p))*a+l*10;t.beginPath(),t.rect(m-w,h-w,w*2,w*2),t.rect((b-f.width/2-Wn+r.x+i.scrollX)*a,(y-f.height/2-Wn+r.y+i.scrollY)*a,(f.width+Wn*2)*a,(f.height+Wn*2)*a),t.clip("evenodd")}t.translate(m,h),t.rotate(s.angle),"scale"in e.element&&!BE(s,n)&&t.scale(e.element.scale[0],e.element.scale[1]),t.translate(-m,-h);let g=(d+r.x+i.scrollX)*a-l,E=(c+r.y+i.scrollY)*a-l,x=t.getTransform();if(au(s,i)){let{a:b,b:y,c:w,d:S,e:I,f:A}=x,T=$(s)?Oe(s,o):null,O=T&&!T.angle?T:s,v=O===s?null:q(O,o),N=v?.[0]??d,k=v?.[1]??c,z=O===s?l:ho(O),U=(N+r.x+i.scrollX)*a-z,D=(k+r.y+i.scrollY)*a-z,B=(d-N)*a+z-l,P=(c-k)*a+z-l;t.setTransform(b,y,w,S,'
+  exported(prod, 'q', 'getElementAbsoluteCoords')
   edit(
     prod,
-    'Math.round(b*U+w*D+I)+Math.round(b*B+w*P+nu),Math.round(y*U+S*D+A)+Math.round(y*B+S*P+nu)',
-    'lobbySnapAnchor(b,w,I,U,D,N,k,r,z,i,a)+Math.round(b*B+w*P+nu),lobbySnapAnchor(y,S,A,U,D,N,k,r,z,i,a)+Math.round(y*B+S*P+nu)',
+    `${drawFromCanvas}Math.round(b*U+w*D+I)+Math.round(b*B+w*P+nu),Math.round(y*U+S*D+A)+Math.round(y*B+S*P+nu))`,
+    `${drawFromCanvas}lobbySnapAnchor(0,b,w,I,U,D,N,k,z,d,c,u,p,r,i,a)+Math.round(b*B+w*P+nu),lobbySnapAnchor(1,y,S,A,U,D,N,k,z,d,c,u,p,r,i,a)+Math.round(y*B+S*P+nu))`,
   )
   const snap = (BIAS) => `
 // ---- Lobby patch (wave O, O-2; patches/@excalidraw__element@0.18.0-1118751.patch) --------------------------------
-// T: one coordinate of drawElementFromCanvas's snapped position, p * anchorX + q * anchorY + t rounded, with the
-// snapped scroll's share added as the whole number of device pixels it is (see the patch script for why).
-function lobbySnapAnchor(p, q, t, anchorX, anchorY, sceneX, sceneY, offset, padding, appState, dpr) {
+// T: one coordinate (row 0: x, row 1: y) of drawElementFromCanvas's snapped position. The engine rounds
+// p * anchorX + q * anchorY + t (p, q, t: that row of the transform it read back, which the context keeps with its
+// arguments in single precision; anchorX / anchorY: the anchor in device px, scroll included). In exact arithmetic the
+// scroll's share of that sum is the scroll in device px (the transform is the zoom times a turn by a right angle or a
+// mirror, about the element's centre), so with the scroll snapped to whole device pixels (wx, wy) the rest is computed
+// from the scene coordinates alone, rounded with the tie bias, and the whole pixels added: an element lands on the same
+// device pixels at every snapped scroll. Otherwise (a scroll off the pixel grid, another transform) the engine's own
+// formula. (See docs/research/excalidraw/wave-o/pan-patch.mjs for why.)
+function lobbySnapAnchor(row, p, q, t, anchorX, anchorY, sceneX, sceneY, padding, x1, y1, x2, y2, offset, appState, dpr) {
   const zoom = appState.zoom.value;
   const sx = appState.scrollX * zoom * dpr;
   const sy = appState.scrollY * zoom * dpr;
   const wx = Math.round(sx);
   const wy = Math.round(sy);
-  const kx = Math.round(p / zoom);
-  const ky = Math.round(q / zoom);
-  if (!(zoom > 0) || Math.abs(sx - wx) > 1e-6 || Math.abs(sy - wy) > 1e-6 || Math.abs(p / zoom - kx) > 1e-3 || Math.abs(q / zoom - ky) > 1e-3) {
-    return Math.round(p * anchorX + q * anchorY + t + ${BIAS});
+  const kp = Math.round(p / zoom);
+  const kq = Math.round(q / zoom);
+  // the centre the engine turns and mirrors the element about, as it has it (scroll included)
+  const cx = ((x1 + x2) / 2 + offset.x + appState.scrollX) * dpr;
+  const cy = ((y1 + y2) / 2 + offset.y + appState.scrollY) * dpr;
+  // that turn's translation: the zoom times the centre less the turned centre
+  const tt = zoom * ((row === 0 ? cx : cy) - kp * cx - kq * cy);
+  if (!(zoom > 0) || Math.abs(sx - wx) > 1e-6 || Math.abs(sy - wy) > 1e-6 || Math.abs(p / zoom - kp) > 1e-3 || Math.abs(q / zoom - kq) > 1e-3 || Math.abs(t - tt) > 1e-3 + 1e-6 * Math.abs(tt)) {
+    return Math.round(p * anchorX + q * anchorY + t);
   }
-  return Math.round(p * ((sceneX + offset.x) * dpr - padding) + q * ((sceneY + offset.y) * dpr - padding) + t + ${BIAS}) + kx * wx + ky * wy;
+  // the same sum without the scroll: the anchor and the centre in device px from the scene's origin
+  const ax = (sceneX + offset.x) * dpr - padding;
+  const ay = (sceneY + offset.y) * dpr - padding;
+  const fx = ((x1 + x2) / 2 + offset.x) * dpr;
+  const fy = ((y1 + y2) / 2 + offset.y) * dpr;
+  return Math.round(zoom * (kp * (ax - fx) + kq * (ay - fy) + (row === 0 ? fx : fy)) + ${BIAS}) + (row === 0 ? wx : wy);
 }
 `
   append(dev, snap('SNAP_TIE_BIAS'))

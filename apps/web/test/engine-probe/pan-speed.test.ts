@@ -415,38 +415,12 @@ describe('wave O pan speed-ups: static pins in both builds of @excalidraw/excali
 })
 
 describe('wave O O-2: the pan blit and the tie bias, static pins', () => {
-  it.each(BUILDS)('%s element build: T, the element snap rounds the same at every scroll', (build) => {
+  it.each(BUILDS)('%s element build: T is in drawElementFromCanvas (behaviour: pan-snap.test.ts)', (build) => {
     const src = readDist('element', build)
-    // its two calls (dev: one a line; prod: one line) and its definition
+    // its two calls (one per axis; prod: on one line) and its definition
     expect(count(src, /lobbySnapAnchor\(/)).toBe(3)
-    // the shipped function itself, lifted out of the build and run on Chrome's single-precision transform: at zoom 0.5
-    // and dpr 1.25 the context's scale is 0.625 x float32(0.8) = 0.5000000074505806, not 0.5
-    const at = src.indexOf('function lobbySnapAnchor(')
-    const body = src.slice(at, src.indexOf('\n}\n', at) + 2)
-    const bias = build === 'dev' ? 'SNAP_TIE_BIAS' : 'nu'
-    const snap = new Function(bias, `${body}\nreturn lobbySnapAnchor`)(1e-6) as (...a: unknown[]) => number
-    const zoom = 0.5
-    const dpr = 1.25
-    const k = zoom * dpr
-    const q = 0.625 * Math.fround(0.8)
-    // a row of notes at y 732 (padding 20): its anchor term is an exact half pixel at every snapped scroll
-    const shifts = { old: new Set<number>(), now: new Set<number>() }
-    for (let raw = -40_000; raw <= 40_000; raw += 37.3) {
-      const scrollY = Math.round(raw * k) / k
-      const whole = Math.round(scrollY * k)
-      const anchorY = (732 + scrollY) * dpr - 20
-      const appState = { zoom: { value: zoom }, scrollX: 0, scrollY }
-      shifts.old.add(Math.round(q * anchorY + 1e-6) - whole)
-      shifts.now.add(snap(0, q, 0, 0, anchorY, 0, 732, { x: 0, y: 0 }, 20, appState, dpr) - whole)
-    }
-    // the engine's own rounding (with the bias) lands the row a pixel apart at some scrolls; the patch's never does
-    expect(shifts.old.size).toBe(2)
-    expect([...shifts.now]).toEqual([Math.round(q * (732 * dpr - 20) + 1e-6)])
-    // off the pixel grid (an unsnapped scroll) or with another transform it rounds as before
-    const appState = { zoom: { value: zoom }, scrollX: 0, scrollY: 10.3 }
-    const anchorY = (732 + 10.3) * dpr - 20
-    const before = Math.round(q * anchorY + 1e-6)
-    expect(snap(0, q, 0, 0, anchorY, 0, 732, { x: 0, y: 0 }, 20, appState, dpr)).toBe(before)
+    expect(count(src, /lobbySnapAnchor\(0,/)).toBe(1)
+    expect(count(src, /lobbySnapAnchor\(1,/)).toBe(1)
   })
 
   it.each(BUILDS)(

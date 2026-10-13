@@ -229,6 +229,22 @@ function scene(): Any[] {
         status: 'saved',
       } as never),
     )
+  // mirrored images (element patch T: a mirror's transform carries the centre, scroll included, twice) and a turned one
+  for (const [i, scale] of ([[-1, 1], [1, -1], [-1, -1], [1, 1]] as const).entries())
+    add(
+      newImageElement({
+        ...STYLE,
+        type: 'image',
+        x: -1800 + i * 420,
+        y: -1500.37,
+        width: 320.123,
+        height: 240.217,
+        angle: i === 3 ? Math.PI / 2 : 0,
+        fileId: IMAGE_FILE,
+        status: 'saved',
+        scale: [...scale],
+      } as never),
+    )
   const keys = generateNKeysBetween(null, null, out.length)
   return out.map((el, i) => ({ ...el, index: keys[i] }))
 }
