@@ -190,7 +190,9 @@ function installPanTools(page: Page) {
             d[di + 2] = 0
             d[di + 3] = 255
           }
-        parts.forEach((img, k) => ctx.putImageData(img, 0, ch * k))
+        parts.forEach((img, k) => {
+          ctx.putImageData(img, 0, ch * k)
+        })
         return out.toDataURL('image/png').split(',')[1] as string
       },
       zoom: (a, b) => {
@@ -374,11 +376,7 @@ async function dumpPng(
   const base = name.replace(/[^a-z0-9.]+/gi, '-')
   writeFileSync(test.info().outputPath(`${base}.png`), Buffer.from(png, 'base64'))
   const z = await page.evaluate(({ a, b }) => (window as unknown as PanWindow).__pan.zoom(a, b), { a, b })
-  if (z)
-    writeFileSync(
-      test.info().outputPath(`${base}-zoom-${z.x}-${z.y}.png`),
-      Buffer.from(z.png, 'base64'),
-    )
+  if (z) writeFileSync(test.info().outputPath(`${base}-zoom-${z.x}-${z.y}.png`), Buffer.from(z.png, 'base64'))
 }
 
 /** Frame `frameId` centred at `zoom` (navigation-lod-fps.spec.ts `centreAt`). */

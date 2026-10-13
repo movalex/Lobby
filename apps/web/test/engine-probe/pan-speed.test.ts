@@ -259,7 +259,7 @@ function engineFrameClip(
   map: Map<string, El>,
   groups?: Map<string, boolean>,
 ) {
-  if (!appState.frameRendering || !appState.frameRendering.clip) return false
+  if (!appState.frameRendering?.clip) return false
   const self =
     X.isElementIntersectingFrame(element, frame, map) || X.isElementContainingFrame(element, frame, map)
   if (self) {
@@ -708,19 +708,22 @@ describe('wave O O-2: the pan blit and the tie bias, static pins', () => {
     expect(snap(0, q, 0, 0, anchorY, 0, 732, { x: 0, y: 0 }, 20, appState, dpr)).toBe(before)
   })
 
-  it.each(BUILDS)('%s excalidraw build: every static render goes through the blit, which is exported', (build) => {
-    const chunk = readDist('excalidraw', build, build === 'dev' ? 'chunk-FN755BR4.js' : 'chunk-K5UJM3GG.js')
-    const index = readDist('excalidraw', build)
-    // the throttled render and the direct one, and the definition
-    expect(count(chunk, /lobbyRenderStaticScene\(/)).toBe(3)
-    // the engine's own render is left as it is: the blit shifts the frame into a scratch copy and copies it back
-    expect(count(chunk, /lobbyPanBlitScratchOf\(/)).toBe(2)
-    expect(count(index, /setPanBlit/)).toBeGreaterThanOrEqual(1)
-    expect(count(index, /getPanBlitStats/)).toBeGreaterThanOrEqual(1)
-    // StaticCanvas hands the canvas nonce to the render
-    const nonce = build === 'dev' ? /canvasNonce: props\.canvasNonce/ : /canvasNonce:e\.canvasNonce/
-    expect(count(index, nonce)).toBe(1)
-  })
+  it.each(BUILDS)(
+    '%s excalidraw build: every static render goes through the blit, which is exported',
+    (build) => {
+      const chunk = readDist('excalidraw', build, build === 'dev' ? 'chunk-FN755BR4.js' : 'chunk-K5UJM3GG.js')
+      const index = readDist('excalidraw', build)
+      // the throttled render and the direct one, and the definition
+      expect(count(chunk, /lobbyRenderStaticScene\(/)).toBe(3)
+      // the engine's own render is left as it is: the blit shifts the frame into a scratch copy and copies it back
+      expect(count(chunk, /lobbyPanBlitScratchOf\(/)).toBe(2)
+      expect(count(index, /setPanBlit/)).toBeGreaterThanOrEqual(1)
+      expect(count(index, /getPanBlitStats/)).toBeGreaterThanOrEqual(1)
+      // StaticCanvas hands the canvas nonce to the render
+      const nonce = build === 'dev' ? /canvasNonce: props\.canvasNonce/ : /canvasNonce:e\.canvasNonce/
+      expect(count(index, nonce)).toBe(1)
+    },
+  )
 
   const devChunk = readDist('excalidraw', 'dev', 'chunk-FN755BR4.js')
   const devIndex = readDist('excalidraw', 'dev')

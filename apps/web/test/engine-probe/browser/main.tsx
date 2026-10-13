@@ -13,8 +13,8 @@ import { runA8InBrowser } from './a8.ts'
 import { type AddFilesApi, checkAddFiles } from './add-files.ts'
 import { calibrate } from './calibrate.ts'
 import { layoutCorpusInBrowser } from './layout-corpus.ts'
-import { checkPanBlit } from './pan-blit.ts'
 import { checkPanEngine } from './pan.ts'
+import { checkPanBlit } from './pan-blit.ts'
 import { checkRenderCull } from './render-cull.ts'
 
 type Api = Parameters<NonNullable<React.ComponentProps<typeof Excalidraw>['onExcalidrawAPI']>>[0]

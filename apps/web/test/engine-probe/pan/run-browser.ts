@@ -44,7 +44,7 @@ try {
   const stale = b.stale
     .map(
       (c) =>
-        `${c.name}: full at once ${c.fullAtOnce}, ${c.blitsAfter} blits, ${c.fullVsBlit.pixels} px (max ${c.fullVsBlit.max}), control ${c.control.pixels} px (max ${c.control.max}) near ${c.near.join(" ")}`,
+        `${c.name}: full at once ${c.fullAtOnce}, ${c.blitsAfter} blits, ${c.fullVsBlit.pixels} px (max ${c.fullVsBlit.max}), control ${c.control.pixels} px (max ${c.control.max}) near ${c.near.join(' ')}`,
     )
     .join('; ')
   const blitWhy = b.detail.length ? `; ${b.detail.join('; ')}` : ''
