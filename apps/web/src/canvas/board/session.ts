@@ -19,7 +19,7 @@
 import { CLOSE_TERMINAL, type RosterEntry, type ServerMessage } from '@draftroom/canvas-schema/protocol'
 import type { TicketResponse } from '@draftroom/contracts'
 import * as ExcalidrawElementNs from '@excalidraw/element'
-import { CaptureUpdateAction } from '@excalidraw/excalidraw'
+import { CaptureUpdateAction, getPanBlitStats, resetPanBlitStats, setPanBlit } from '@excalidraw/excalidraw'
 import type { AppState as ExcalidrawAppState, ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import { api as apiClient } from '../../api/client.ts'
 import { createTicketUri, ticketInProtocol } from '../../board/ticket.ts'
@@ -1243,6 +1243,9 @@ export class LobbyBoardSession {
       sizeAware: speedFlag('SIZE_AWARE_LOD'),
     })
     offs.push(() => lod.dispose())
+    // wave O (WO-PAN, O-2): the static canvas's pan blit (sync/flags.ts PAN_BLIT; the engine patch's switch, one for the
+    // page: its state is per canvas, so another engine on the page is drawn as exactly)
+    setPanBlit(speedFlag('PAN_BLIT'))
     // the test facade and the debug handle (dev-auth builds only: the facade checks the guard itself)
     // CR-3A-9: the facade's `tool` / `setTool` go through the LobbyCanvas (3a's tools part: the
     // highlighter and the read-only Hand), not the raw port, which reports `freedraw` and `select` for them
@@ -1254,6 +1257,12 @@ export class LobbyBoardSession {
     const uninstallFacade = installFacade(facadePort, this.registries)
     if (uninstallFacade) offs.push(uninstallFacade)
     if (DEV_AUTH_ENABLED) {
+      // wave O: the pan blit's switch and counters, for the specs (e2e/excalidraw/o2-pan-blit.spec.ts)
+      ;(window as unknown as { __lobbyPanBlit?: unknown }).__lobbyPanBlit = {
+        set: setPanBlit,
+        stats: getPanBlitStats,
+        reset: resetPanBlitStats,
+      }
       ;(window as unknown as { __lobbyWalks?: unknown }).__lobbyWalks = {
         counts: () => sceneWalks(),
         reset: () => resetSceneWalks(),

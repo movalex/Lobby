@@ -112,5 +112,21 @@ overrides:
 # (docker/*.Dockerfile, deploy/nas/deploy-worker.sh, scripts/nas-pg-api.sh) must copy patches/ next to this file.
 # After any @excalidraw/element bump, regenerate the patch (`pnpm patch @excalidraw/element@<version>`, redo the
 # edits listed in the test's header, `pnpm patch-commit`; then restore this file's comments, patch-commit rewrites it).
+#
+# Wave O (WO-PAN, O-1): the pan speed-ups, no pixel change. The element patch also carries a bound text's bounds cached
+# against its container (A2), the frame clip's bounding-box fast path (C) and `isElementInViewportAt` (A1/A4); a second
+# patch, of @excalidraw/excalidraw (same exact version, MIT), keeps the renderer's renderable map across camera moves
+# (A3), runs its two viewport passes through `isElementInViewportAt` (A1/A4) and memoizes the two embeddable scans of
+# every update (E); O-1b reads the viewport pass's bounds from a typed copy kept per renderable map (A5) and decides the
+# render-offset pass's elements by offset group (A4b). Both builds (dist/dev, dist/prod) carry every hunk;
+# apps/web/test/engine-probe/pan-speed.test.ts and the browser probe (`pnpm probe:browser`: pan) check them (an
+# unpatched copy fails there). The edits are a script anchored on this nightly, re-applied after a bump:
+# docs/research/excalidraw/wave-o/pan-patch.mjs (its header has the steps).
+# Wave O (O-2): the pan blit. The excalidraw patch routes the static render through a blit that keeps the last frame,
+# shifted, on a pure pan, and exports its switch (`setPanBlit`, off until Lobby turns it on: sync/flags.ts PAN_BLIT);
+# the element patch rounds the element snap the same at every scroll (T: the canvas keeps its transform in single
+# precision, so an exact half-pixel tie flipped with the scroll). Checked by pan-speed.test.ts, the browser probe
+# (pan-blit) and e2e/excalidraw/o2-pan-blit.spec.ts.
 patchedDependencies:
   '@excalidraw/element@0.18.0-1118751': patches/@excalidraw__element@0.18.0-1118751.patch
+  '@excalidraw/excalidraw@0.18.0-1118751': patches/@excalidraw__excalidraw@0.18.0-1118751.patch

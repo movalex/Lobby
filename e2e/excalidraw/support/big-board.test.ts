@@ -51,7 +51,13 @@ describe('the 10k big board fixture', () => {
 
   it('the speed-part overrides the specs set are the web page’s own key and names (sync/flags.ts)', () => {
     expect(SPEED_FLAGS_KEY).toBe(WEB_SPEED_FLAGS_KEY)
-    const names: (keyof SpeedFlags)[] = ['WORKER_DECODE', 'DIFF_APPLY', 'CHUNKED_APPLY', 'SIZE_AWARE_LOD']
+    const names: (keyof SpeedFlags)[] = [
+      'WORKER_DECODE',
+      'DIFF_APPLY',
+      'CHUNKED_APPLY',
+      'SIZE_AWARE_LOD',
+      'PAN_BLIT',
+    ]
     expect(Object.keys(SPEED_FLAGS).sort()).toEqual([...names].sort())
   })
 })

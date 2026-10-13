@@ -25,7 +25,7 @@ export const buildProbePage = async () => {
  * takes +1 to +3, the fake OpenAI servers +3, +10 and +23, the link-preview site +30. probe-ports.test.ts scans e2e/ for
  * a collision, so a new kit that takes one of these fails there.
  */
-export const PROBE_PORT_OFFSET = { a3: 34, a8: 35, addFiles: 36, renderCull: 37 } as const
+export const PROBE_PORT_OFFSET = { a3: 34, a8: 35, addFiles: 36, renderCull: 37, pan: 38 } as const
 
 /**
  * The probe server's port: `--port=N`, else inside this run's E2E_PORT_BASE range (base + `offset`, so runs on one
@@ -48,11 +48,18 @@ export interface ProbeSession {
   close: () => Promise<void>
 }
 
-export const openProbePage = async (port = 7750): Promise<ProbeSession> => {
+/** `deviceScaleFactor`: the page's device pixel ratio (wave O's pan probe takes the e2e suite's 1.25). */
+export const openProbePage = async (
+  port = 7750,
+  opts: { deviceScaleFactor?: number } = {},
+): Promise<ProbeSession> => {
   const { chromium } = e2eRequire('@playwright/test') as PW
   const { server, url, served } = await startProbeServer(port)
   const browser = await chromium.launch({ headless: true })
-  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    ...(opts.deviceScaleFactor ? { deviceScaleFactor: opts.deviceScaleFactor } : {}),
+  })
   const foreignRequests: string[] = []
   await context.route('**/*', (route) => {
     const u = new URL(route.request().url())

@@ -1,6 +1,7 @@
 /**
- * Wave N, WS1 (big boards): the kill switches of the client receive path's four speed parts. Each part is
- * independent, so a regression is a web-only redeploy with that one flag false (docs/DEPLOY.md hold rules):
+ * Wave N, WS1 (big boards): the kill switches of the client receive path's four speed parts, and (wave O) of the pan
+ * blit. Each part is independent, so a regression is a web-only redeploy with that one flag false (docs/DEPLOY.md hold
+ * rules):
  *
  *  - WORKER_DECODE: the reset welcome's gzip snapshot is decoded (gunzip, JSON.parse, the zod parse) in a
  *    module Worker (transport/snapshot.worker.ts), not on the main thread. Off: socket.ts decodes it in the
@@ -15,6 +16,10 @@
  *  - SIZE_AWARE_LOD: the level-of-detail pass turns on below zoom 0.35 on boards of more than 1,500 live
  *    elements (or with more than 3,000 in view), keeps its bitmaps per zoom bucket under a memory cap, and
  *    draws loose elements as grid tiles (lod/model.ts). Off: below zoom 0.2 only, frames only, as before.
+ *  - PAN_BLIT (wave O, O-2; a render part, not the receive path's): a pure pan keeps the static canvas's last frame,
+ *    shifted by the move, and draws only the edges it exposed and the ink of the elements that came into or left the
+ *    view (the engine patch's pan blit: patches/@excalidraw__excalidraw@0.18.0-1118751.patch, `setPanBlit`; the
+ *    board session sets it). Off: every pan frame redraws every visible element, as before.
  *
  * Each is on at merge only once its gate passes (the wave N brief). WORKER_DECODE's has (no main-thread long task over
  * 200 ms in the decode, the enforced CSP). Wave N.1: CHUNKED_APPLY's has: a 10k cold open at CPU 4x, the longest task
@@ -26,6 +31,11 @@
  * the 392 KB reset snapshot over Chrome's Fast 4G emulation, whose WebSocket frames arrive at about 100 KB/s, 3 to 5 s
  * after the welcome, where an HTTP download runs at 3 MB/s; on loopback the same open is editable at 1.8 s. The 4x pan
  * is 7 to 11 fps against 30, the engine's own per-frame work). Off, each path is the one before wave N exactly.
+ * Wave O: PAN_BLIT's gate passes: its frames are a full render's within the GPU raster's own floor at Lobby's fit, 0.25,
+ * 0.5 and 1 (e2e/excalidraw/o2-pan-blit.spec.ts; the engine probe pan-blit at five zooms), no stale pixel after images
+ * load, a remote change, a selection or theme change or under a peer's laser and cursor (0 px apart from a full
+ * render), and the 4x pan on the 10k board is fit 32.6-34.3, 0.25 50.1-56.7, 0.5 58.3 fps (medians of 3 runs; 22.6-26.5,
+ * 25.4-25.9 and 44.4-48.1 with it off).
  * A dev-auth build (the e2e build, local dev; never a production bundle: DEV_AUTH_ENABLED) may turn one on or off for
  * its page (`speedFlag`, `setSpeedFlagOverrides`: the board session reads them from localStorage
  * SPEED_FLAGS_KEY), so the N1 specs measure and gate a part that ships off.
@@ -42,9 +52,10 @@ export const WORKER_DECODE = true
 export const DIFF_APPLY = false
 export const CHUNKED_APPLY = true
 export const SIZE_AWARE_LOD = false
+export const PAN_BLIT = true
 
-/** The four parts by name (what a dev-auth page's override names). */
-export const SPEED_FLAGS = { WORKER_DECODE, DIFF_APPLY, CHUNKED_APPLY, SIZE_AWARE_LOD } as const
+/** The parts by name (what a dev-auth page's override names). */
+export const SPEED_FLAGS = { WORKER_DECODE, DIFF_APPLY, CHUNKED_APPLY, SIZE_AWARE_LOD, PAN_BLIT } as const
 export type SpeedFlag = keyof typeof SPEED_FLAGS
 
 /** The localStorage key a dev-auth page reads its overrides from: JSON, e.g. `{"DIFF_APPLY":true}`. */

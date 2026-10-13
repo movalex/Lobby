@@ -370,7 +370,7 @@ export const median = (xs: readonly number[]): number => {
 
 /** The speed parts by name (sync/flags.ts SPEED_FLAGS); a part that ships off is on for the specs that gate it. */
 export type SpeedFlags = Partial<
-  Record<'WORKER_DECODE' | 'DIFF_APPLY' | 'CHUNKED_APPLY' | 'SIZE_AWARE_LOD', boolean>
+  Record<'WORKER_DECODE' | 'DIFF_APPLY' | 'CHUNKED_APPLY' | 'SIZE_AWARE_LOD' | 'PAN_BLIT', boolean>
 >
 
 /** sync/flags.ts SPEED_FLAGS_KEY: the localStorage key a dev-auth page reads its overrides from. */
