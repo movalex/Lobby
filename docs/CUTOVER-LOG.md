@@ -419,3 +419,18 @@ on the sync disk (§6).
   - Holds:
     - `DIFF_APPLY` and `SIZE_AWARE_LOD` stay off. `CHUNKED_APPLY` and `VECTOR_PDF` are on.
     - Deflate stays off.
+- **2026-10-13 04:09-04:12Z, wave O deployed** (main `d57a877`; 0 board connections in the 3 h before).
+  - Deploys: api `dep-db6qtql9fdbs73e0ou5g`, sync `dep-db6qu7ij9qps73a6cpf0`, web `dep-db6qul0u01pc73b86e70`. All three load the patched `@excalidraw/element`.
+  - No env change, no migration, no `CONTRACTS_REV` change.
+  - After the deploy:
+    - api `/healthz/deep` 200; sync `/healthz/deep` ok; maintenance off;
+    - 0 error/FATAL lines; render.yaml drift 0;
+    - live smoke 40 passed, 0 failed;
+    - `/version.json` answers `{"commit":"d57a87700e98"}`.
+  - Gate: docs/PROGRESS.md wave O. Units 9,425 passed; whole e2e 982 passed twice. The one failure in each run, K5-5, was a test race and is fixed. The L6-1 laser lag at 311 ms against 300 is a threshold flake that also happens without wave O.
+  - Live check, the owner on a new board: a note, then wheel pans in four directions. The note was drawn whole at every step, with no stale strips, and came back to its place; the board said Saved and Live.
+  - Cleanup: the board in Trash.
+  - Holds:
+    - `PAN_BLIT` on;
+    - `DIFF_APPLY` and `SIZE_AWARE_LOD` off;
+    - deflate off.
