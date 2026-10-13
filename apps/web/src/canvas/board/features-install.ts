@@ -30,6 +30,13 @@ const WINDOW_TIMERS: InstallTimers = {
   clearTimeout: (id) => clearTimeout(id as ReturnType<typeof setTimeout>),
 }
 
+/**
+ * Wave O: how long the install waits for an animation frame. A hidden tab runs none (a big board opened in a
+ * background tab would install nothing until the tab was shown), so the install does not wait longer than this: the
+ * same 100 ms as the chunked apply's frames (../sync/adapter/chunk-frames.ts animationFrames).
+ */
+export const FRAME_FALLBACK_MS = 100
+
 /** Whether the engine may act on `e` while the features are not installed yet (see the header). */
 export function passesBeforeFeatures(e: CanvasInputEvent): boolean {
   if (e.type === 'pointer-move' || e.type === 'pointer-up') return true
@@ -38,8 +45,9 @@ export function passesBeforeFeatures(e: CanvasInputEvent): boolean {
 
 /**
  * Installs the features (`install`, which returns their uninstall): at once when the board has `laterAbove`
- * elements or fewer, else a frame and a task later, the canvas taking no input meanwhile. Returns the cleanup
- * (before the install: nothing is installed, and the canvas takes input again).
+ * elements or fewer, else a frame and a task later (or FRAME_FALLBACK_MS later, whichever comes first, and only once),
+ * the canvas taking no input meanwhile. Returns the cleanup (before the install: nothing is installed, and the canvas
+ * takes input again).
  */
 export function installFeaturesAfterWelcome(
   canvas: Pick<LobbyCanvas, 'items' | 'on'>,
@@ -56,17 +64,40 @@ export function installFeaturesAfterWelcome(
     gate = null
   }
   let uninstall: (() => void) | null = null
-  let timer: unknown = null
-  const frame = timers.requestAnimationFrame(() => {
-    timer = timers.setTimeout(() => {
-      timer = null
-      open()
-      uninstall = install()
+  let done = false
+  let frame: number | null = null
+  let task: unknown = null
+  let fallback: unknown = null
+  const cancelWaits = () => {
+    if (frame !== null) timers.cancelAnimationFrame(frame)
+    if (task !== null) timers.clearTimeout(task)
+    if (fallback !== null) timers.clearTimeout(fallback)
+    frame = null
+    task = null
+    fallback = null
+  }
+  // whichever comes first installs, once: the frame's task, or the fallback (a task of its own already)
+  const go = () => {
+    if (done) return
+    done = true
+    cancelWaits()
+    open()
+    uninstall = install()
+  }
+  frame = timers.requestAnimationFrame(() => {
+    frame = null
+    task = timers.setTimeout(() => {
+      task = null
+      go()
     }, 0)
   })
+  fallback = timers.setTimeout(() => {
+    fallback = null
+    go()
+  }, FRAME_FALLBACK_MS)
   return () => {
-    timers.cancelAnimationFrame(frame)
-    if (timer !== null) timers.clearTimeout(timer)
+    done = true
+    cancelWaits()
     open()
     uninstall?.()
   }

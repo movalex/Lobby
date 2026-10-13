@@ -14,6 +14,7 @@ import {
   type CommentThreadVisibility,
   type ListNotificationsResponse,
 } from '@draftroom/contracts'
+import { createInboxPoll, INBOX_WHOLE_REFRESH_MS, type InboxPoll } from '../../lib/inbox-poll.ts'
 import type { CommentsApi } from './api.ts'
 import type { Cell, SignalsKit } from './cells.ts'
 import { bodyFromDraft, type Draft, EMPTY_DRAFT, type Mentionable, pruneMentions } from './mentions.ts'
@@ -58,7 +59,7 @@ export const MENTIONABLES_MISS_REFETCH_MS = 5_000
  * device, or a notification removed that was not the newest (its comment deleted, access revoked): one poll this long
  * after the last whole answer asks for the whole list instead, so a quiet tab's bell is never more than this stale.
  */
-export const NOTIFICATIONS_WHOLE_REFRESH_MS = 5 * 60_000
+export const NOTIFICATIONS_WHOLE_REFRESH_MS = INBOX_WHOLE_REFRESH_MS
 
 export interface CommentsStoreOptions {
   boardId: string
@@ -124,13 +125,12 @@ export class CommentsStore {
   private notificationsTimer: ReturnType<typeof setTimeout> | null = null
   /** M5-3: whether the scheduled refresh must be a whole one (any caller that asked for one wins). */
   private notificationsTimerWhole = false
-  /** M5-3: the `seq` of the last bell answer applied (null: none yet, or an api that sends none). */
-  private notificationsSeq: number | null = null
-  /** M5-3: bell requests sent, and the newest one applied (an older answer never overwrites a newer one). */
-  private notificationsAsked = 0
-  private notificationsApplied = 0
-  /** M5-3 review: when the last whole bell answer was applied (a 200, or a 204 to "since 0"); -Infinity: none yet. */
-  private notificationsWholeAt = Number.NEGATIVE_INFINITY
+  /**
+   * The bell's requests and cursor (M5-3, wave O: the dashboard bell's lagging cursor, lib/inbox-poll.ts): the seq
+   * the minute poll sends is one a whole answer showed again INBOX_SEQ_SETTLE_MS after it was first seen, because a
+   * seq is taken at INSERT, before COMMIT, so a lower one can commit after a higher one was listed.
+   */
+  private readonly inbox: InboxPoll
   private mentionablesLoading: Promise<void> | null = null
   private mentionablesSeq = 0
   private mentionablesAskedAt = 0
@@ -166,6 +166,15 @@ export class CommentsStore {
     this.showResolved = atom('dr-comments.show-resolved', readFlag(opts.storage, showResolvedKey(opts.meId)))
     this.canComment = atom('dr-comments.can-comment', opts.canComment)
     this.drafts = readDrafts(opts.storage, draftsKey(opts.boardId, opts.meId))
+    this.inbox = createInboxPoll({
+      list: async (since) => {
+        const res = await this.api.notifications(undefined, since)
+        // dispose()d while the request was on its way: the answer is dropped, and the cursor does not move
+        if (this.disposed) throw new Error('disposed')
+        return res
+      },
+      show: (list) => this.notifications.set(list),
+    })
   }
 
   /** (Re)connects after dispose (React StrictMode mounts features twice). */
@@ -555,42 +564,16 @@ export class CommentsStore {
   }
 
   /**
-   * Reads the bell. Wave M (M5-3, CAP-BELL-POLL): `onlyIfNew` (the minute poll) sends the `seq` of the last answer,
-   * and a 204 (nothing added or removed since) keeps the list as it is, after one cheap query on the api. Every
-   * other refresh (opening the bell, a board event, a reconnect, the tab shown or focused, after marking read)
+   * Reads the bell. Wave M (M5-3, CAP-BELL-POLL): `onlyIfNew` (the minute poll) sends the `seq` of the last settled
+   * answer, and a 204 (nothing added or removed since) keeps the list as it is, after one cheap query on the api.
+   * Every other refresh (opening the bell, a board event, a reconnect, the tab shown or focused, after marking read)
    * asks for the whole list: read marks made elsewhere do not change the seq. Both send `since`, so the answer
    * carries the seq to send next; a whole refresh sends 0, which only an empty bell answers with a 204. A poll
    * NOTIFICATIONS_WHOLE_REFRESH_MS or more after the last whole answer is a whole one (what the seq cannot see).
+   * Wave O: the seq is settled before it is sent (see `inbox`). Never rejects: a failure keeps the list shown.
    */
-  async refreshNotifications(opts: { onlyIfNew?: boolean } = {}): Promise<void> {
-    const cheap =
-      opts.onlyIfNew &&
-      this.notificationsSeq !== null &&
-      Date.now() - this.notificationsWholeAt < NOTIFICATIONS_WHOLE_REFRESH_MS
-    const since = cheap && this.notificationsSeq !== null ? this.notificationsSeq : 0
-    const asked = ++this.notificationsAsked
-    try {
-      const res = await this.api.notifications(undefined, since)
-      if (this.disposed || asked < this.notificationsApplied) return
-      // A poll's 204 applies nothing, so it never makes a whole answer still on its way "older" (round 1 refix).
-      if (res === null && since > 0) return
-      this.notificationsApplied = asked
-      if (res === null) {
-        // nothing newer than `since`; and "since 0" answered so means there is nothing at all
-        if (since === 0) {
-          this.notificationsSeq = 0
-          this.notificationsWholeAt = Date.now()
-          this.notifications.set({ notifications: [], unreadCount: 0 })
-        }
-        return
-      }
-      const { seq, ...list } = res
-      this.notificationsSeq = seq ?? null
-      this.notificationsWholeAt = Date.now()
-      this.notifications.set(list)
-    } catch {
-      // keep the previous list; the next refresh tries again
-    }
+  refreshNotifications(opts: { onlyIfNew?: boolean } = {}): Promise<void> {
+    return this.inbox.refresh(opts)
   }
 
   scheduleNotificationsRefresh(delayMs = 400, opts: { onlyIfNew?: boolean } = {}) {
