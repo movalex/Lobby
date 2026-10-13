@@ -9,13 +9,14 @@
  *  - A2: a bound text's bounds are cached against its container (the same object at the same version). Here its bounds
  *    equal an uncached computation after a move, a resize and a rotation of its arrow or container (a new object or
  *    an in-place mutation), a text edit, an undo (the old object back), a remote change and a container removed;
- *  - C: shouldApplyFrameClip's bounding-box fast path. Here it equals the engine's own three tests (transcribed below
- *    from the pinned source) and leaves the same group bookkeeping, on the 10k board's notes and a corpus that touches,
- *    crosses, contains and sits a hair inside frames, rotated and grouped;
+ *  - C: shouldApplyFrameClip's bounding-box fast path. Here it equals the engine's own three tests (transcribed in
+ *    pan/corpus.ts from the pinned source) and leaves the same group bookkeeping, on the 10k board's notes and a
+ *    corpus that touches, crosses, contains and sits a hair inside frames, rotated and grouped;
  *  - static pins: both builds of @excalidraw/excalidraw carry the A1, A3, A4 and E hunks (the renderer and the app
  *    cannot load in Node; the browser probe `pnpm probe:browser` mounts them: render-cull and embeddables).
  * Both builds of @excalidraw/element are loaded (dist/dev: Vitest and the dev server; dist/prod: the web bundle and the
- * sync service), as apps/web/src/canvas/engine/arrow-geometry.test.ts does for W5-53.
+ * sync service), as apps/web/src/canvas/engine/arrow-geometry.test.ts does for W5-53. pan-prod.test.ts checks A1, A2
+ * and C again in the prod build as the sync server's own `node` loads it; pan-snap.test.ts checks T (O-2).
  */
 import { createRequire } from 'node:module'
 import { dirname, join } from 'node:path'
