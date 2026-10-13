@@ -4,8 +4,8 @@
 // pins the patch's behaviour in BOTH builds the app can load (dist/dev is what Vitest and the dev server read,
 // dist/prod, minified, is what the web bundle and the sync service read), and fails when the patch is not applied.
 //
-// The patch, to redo it after an @excalidraw/element bump (`pnpm patch @excalidraw/element@<version>`, edit the
-// copy in the dir pnpm names, `pnpm patch-commit <dir>`, then restore the comments pnpm-workspace.yaml loses):
+// The patch is generated: docs/research/excalidraw/wave-o/pan-patch.mjs (part w553) makes these edits on a clean
+// install, with wave O's after them, and writes both patch files (its header has the steps after a bump):
 //   1. binding.ts: next to `BASE_BINDING_GAP = 5` add `getOrbitBindingGap = (t) => 1 + t.strokeWidth / 2`.
 //   2. binding.ts `updateBoundPoint`: its two `intersectElementWithLineSegment(..., getBindingGap(x))` calls (the
 //      bound end's `outlinePoint` and the other end's `otherOutlinePoint`) take `getOrbitBindingGap(x)`. Nothing

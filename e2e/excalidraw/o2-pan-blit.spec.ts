@@ -6,7 +6,10 @@
 //     frame (a blit) against the render at rest (the blit's own full render, 120 ms later) and against a full render of
 //     the same camera with the blit off; a control first (two full renders whole device pixels apart, their overlap
 //     compared: the GPU raster's own translation floor);
-//  2. stale pixels, each in the middle of a pan at 0.5: images that finish loading (their bytes held until the pan
+//  2. with the board's grid on (Lobby's grid setting: Excalidraw's grid mode), at 0.5, 1 and 2: the same pan, its last
+//     frame against a full render (the grid's dashed lines start their pattern at the scroll modulo the grid size, so
+//     a shifted frame's dashes and a later band's would disagree), within a control taken with the grid off;
+//  3. stale pixels, each in the middle of a pan at 0.5: images that finish loading (their bytes held until the pan
 //     runs), a remote change (bob moves a note in view), a selection change (of a note with a link: its link icon
 //     goes), a theme switch, and bob's laser and cursor over the view (Lobby's overlays, never the static canvas). Each
 //     must end the blit at once (a full render) and the pan's last frame must equal a full render.
@@ -54,6 +57,7 @@ type PanWindow = {
       }
       bounds(id: string): { x: number; y: number; width: number; height: number } | null
       select(ids: string[]): void
+      settings: { set(patch: { grid?: boolean }): void; get(): { grid: boolean } }
     }
   }
   lobbyCanvas: {
@@ -509,6 +513,67 @@ test('O-2 pan blit: its frames are a full render’s, at Lobby’s fit, 0.25, 0.
       results[view] = { control, reps }
     }
     writeFileSync(test.info().outputPath('pan-blit-pixels.json'), JSON.stringify(results, null, 1))
+    await context.close()
+  } finally {
+    await browser.close()
+  }
+})
+
+test('O-2 pan blit: with the board’s grid on, its frames are a full render’s, at 0.5, 1 and 2', async ({
+  canvasSession,
+  users,
+  board,
+}) => {
+  const log = (s: string) => console.log(`[pan-blit] ${s}`)
+  const a = await canvasSession('alice')
+  const big = await seedBigBoard(a.page, board)
+  const frame0 = await frameOf(a.page, big.board.noteIds[0] as string)
+  await a.context.close()
+  const browser = await chromium.launch({ headless: true, args: GPU_ARGS })
+  const results: Record<string, unknown> = {}
+  try {
+    const { context, page } = await openMeasured(browser, await users.get('alice'), board, big.elements)
+    const imgs = await waitImagesLoaded(page, 180_000)
+    expect(imgs.failed).toBe(0)
+    const grid = async (on: boolean) => {
+      const now = await page.evaluate((on) => {
+        const { settings } = (window as unknown as PanWindow).__lobbyBoard.canvas
+        settings.set({ grid: on })
+        return settings.get().grid
+      }, on)
+      expect(now, 'the board’s grid setting').toBe(on)
+      await frames(page)
+    }
+    for (const zoom of [0.5, 1, 2]) {
+      await centreAt(page, frame0 as string, zoom)
+      await page.waitForTimeout(1_500)
+      await waitImagesLoaded(page, 60_000, await imagesInView(page))
+      await waitLodReady(page)
+      // the control with the grid off: two full renders at other scrolls draw the grid's dashes at another phase
+      await grid(false)
+      await page.waitForTimeout(300)
+      const control = await controlHere(page)
+      await grid(true)
+      await page.waitForTimeout(300)
+      log(`grid ${zoom} control: ${JSON.stringify(control)}`)
+      const reps: unknown[] = []
+      for (let rep = 0; rep < 2; rep++) {
+        const r = await pan(page, 40)
+        await page.waitForTimeout(300)
+        await fullRender(page, '__full')
+        const full = await diffOf(page, '__panEnd', '__full')
+        const at = `grid ${zoom} rep ${rep}`
+        log(`${at}: ${r.stats.blit} blits, ${r.stats.full} full; full ${JSON.stringify(full)}`)
+        reps.push({ stats: r.stats, full })
+        if (full.pixels && full.bbox) await dumpPng(page, '__panEnd', '__full', full.bbox, `grid-${at}`)
+        expect.soft(withinFloor(full, control), `${at}: ${JSON.stringify(full)} apart`).toBe(true)
+        // the blit stays off while the grid is drawn: every frame of the pan is a full render
+        expect.soft(r.stats.blit, `${at}: blits`).toBe(0)
+      }
+      results[String(zoom)] = { control, reps }
+    }
+    await grid(false)
+    writeFileSync(test.info().outputPath('pan-blit-grid.json'), JSON.stringify(results, null, 1))
     await context.close()
   } finally {
     await browser.close()

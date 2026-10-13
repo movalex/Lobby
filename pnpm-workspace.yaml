@@ -110,8 +110,9 @@ overrides:
 # re-snap, the history roll-forward) resolves this one patched copy, so they agree to the pixel; an unpatched copy of
 # any of them would re-snap arrows back to the old gap. Images that install from a manifests-only layer
 # (docker/*.Dockerfile, deploy/nas/deploy-worker.sh, scripts/nas-pg-api.sh) must copy patches/ next to this file.
-# After any @excalidraw/element bump, regenerate the patch (`pnpm patch @excalidraw/element@<version>`, redo the
-# edits listed in the test's header, `pnpm patch-commit`; then restore this file's comments, patch-commit rewrites it).
+# Both patch files are generated from a clean install by docs/research/excalidraw/wave-o/pan-patch.mjs (W5-53's edits
+# are its part w553); after any @excalidraw bump, rerun it (its header has the steps), never hand-edit a patch:
+# apps/web/test/engine-probe/pan-patch.test.ts fails unless the files are its output byte for byte.
 #
 # Wave O (WO-PAN, O-1): the pan speed-ups, no pixel change. The element patch also carries a bound text's bounds cached
 # against its container (A2), the frame clip's bounding-box fast path (C) and `isElementInViewportAt` (A1/A4); a second
