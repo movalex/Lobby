@@ -1040,8 +1040,10 @@ var renderStaticScene = (renderConfig, throttle) => {
 // compares, every renderConfig value) and the canvas's size, the rough canvas, the scene map, the in-place caches'
 // sizes. Any other render is a full one: an export, the grid drawn (strokeGrid starts each dashed line's pattern at the
 // scroll modulo the grid size, so once the scroll crosses a grid line a shifted frame's dashes and a later band's are at
-// another phase), a drag, a zoom, a change of any input, a move of a third of the canvas or more, bands over 60 % of it. A render at rest (LOBBY_PAN_BLIT_REST_MS after the last blit) is a full one, and
-// so is the first render after the canvas loses its context. Off unless Lobby turns it on (setPanBlit).
+// another phase), a drag, a zoom, a change of any input, a move of a third of the canvas or more, bands over 60 % of it.
+// A render at rest (LOBBY_PAN_BLIT_REST_MS after the last blit) is a full one, and so is the first render after the
+// canvas or its scratch canvas loses its context. The scratch canvas (the canvas's size: W x H x 4 bytes and a GPU
+// texture) is freed at rest and sized again by the next blit. Off unless Lobby turns it on (setPanBlit).
 var lobbyPanBlitOn = false;
 var LOBBY_PAN_BLIT_REST_MS = 120;
 var lobbyPanBlitStates = /* @__PURE__ */ new WeakMap();
@@ -1141,7 +1143,7 @@ function lobbyPanBlitHook(canvas) {
   lobbyPanBlitHooked.add(canvas);
   canvas.addEventListener("contextlost", () => {
     lobbyPanBlitDrop(canvas);
-    lobbyPanBlitScratch.delete(canvas);
+    lobbyPanBlitFree(canvas, true);
     lobbyPanBlitCounts.lost++;
   });
   canvas.addEventListener("contextrestored", () => {
@@ -1150,16 +1152,33 @@ function lobbyPanBlitHook(canvas) {
     if (last && lobbyPanBlitOn) ${R}(last);
   });
 }
-// the canvas's scratch copy (the shifted frame waits there while the bands are drawn), the canvas's size
+// the canvas's scratch copy (the shifted frame waits there while the bands are drawn), the canvas's size; made on the
+// first blit, sized again by the first blit after it was freed. If its context is lost the copy back would blank
+// everything but the bands: the canvas's blit state goes with it, so the next render is a full one (with a new scratch)
 function lobbyPanBlitScratchOf(canvas) {
   let s = lobbyPanBlitScratch.get(canvas);
   if (!s) {
-    s = canvas.ownerDocument.createElement("canvas");
-    lobbyPanBlitScratch.set(canvas, s);
+    const scratch = canvas.ownerDocument.createElement("canvas");
+    scratch.addEventListener("contextlost", () => {
+      if (lobbyPanBlitScratch.get(canvas) !== scratch) return;
+      lobbyPanBlitDrop(canvas);
+      lobbyPanBlitFree(canvas, true);
+      lobbyPanBlitCounts.lost++;
+    });
+    lobbyPanBlitScratch.set(canvas, scratch);
+    s = scratch;
   }
   if (s.width !== canvas.width) s.width = canvas.width;
   if (s.height !== canvas.height) s.height = canvas.height;
   return s;
+}
+// the scratch canvas's backing store freed (its size 0); with forget, the scratch canvas itself is dropped too
+function lobbyPanBlitFree(canvas, forget) {
+  const s = lobbyPanBlitScratch.get(canvas);
+  if (!s) return;
+  s.width = 0;
+  s.height = 0;
+  if (forget) lobbyPanBlitScratch.delete(canvas);
 }
 function lobbyPanBlitFull(canvas, config, appState, key, ink) {
   ${R}(config);
@@ -1183,7 +1202,7 @@ function lobbyRenderStaticScene(config) {
     if (canvas) {
       lobbyPanBlitDrop(canvas);
       lobbyPanBlitLast.delete(canvas);
-      lobbyPanBlitScratch.delete(canvas);
+      lobbyPanBlitFree(canvas, true);
     }
     ${R}(config);
     if (canvas && lobbyPanBlitOn && !config.renderConfig.isExporting) {
@@ -1259,9 +1278,16 @@ function lobbyRenderStaticScene(config) {
     lobbyPanBlitFull(canvas, config, appState, key, state.ink);
     return;
   }
-  // the previous frame, shifted, into the scratch copy ("copy": what the shift leaves is cleared)
+  // the previous frame, shifted, into the scratch copy ("copy": what the shift leaves is cleared); a scratch context lost
+  // before its contextlost event came (it draws nothing): a full render, and a new scratch canvas next time
   const scratch = lobbyPanBlitScratchOf(canvas);
   const sctx = scratch.getContext("2d");
+  if (!sctx || sctx.isContextLost?.()) {
+    lobbyPanBlitFree(canvas, true);
+    lobbyPanBlitCounts.lost++;
+    lobbyPanBlitFull(canvas, config, appState, key, state.ink);
+    return;
+  }
   sctx.save();
   sctx.setTransform(1, 0, 0, 1, 0, 0);
   sctx.globalCompositeOperation = "copy";
@@ -1303,6 +1329,7 @@ function lobbyRenderStaticScene(config) {
     const last = lobbyPanBlitLast.get(canvas);
     if (!last) return;
     ${R}(last);
+    lobbyPanBlitFree(canvas, false);
     lobbyPanBlitCounts.rest++;
     lobbyPanBlitCounts.last = "rest";
   }, LOBBY_PAN_BLIT_REST_MS);

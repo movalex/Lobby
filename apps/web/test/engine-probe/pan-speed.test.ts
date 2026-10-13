@@ -432,6 +432,10 @@ describe('wave O O-2: the pan blit and the tie bias, static pins', () => {
       expect(count(chunk, /lobbyRenderStaticScene\(/)).toBe(3)
       // the engine's own render is left as it is: the blit shifts the frame into a scratch copy and copies it back
       expect(count(chunk, /lobbyPanBlitScratchOf\(/)).toBe(2)
+      // the scratch canvas: freed at rest, freed and dropped with the blit's state, its own lost context hooked and checked
+      expect(count(chunk, /lobbyPanBlitFree\(canvas, false\)/)).toBe(1)
+      expect(count(chunk, /scratch\.addEventListener\("contextlost"/)).toBe(1)
+      expect(count(chunk, /sctx\.isContextLost\?\.\(\)/)).toBe(1)
       // no blit while the grid is drawn (renderGrid's default is true): its dash pattern follows the scroll
       expect(count(chunk, /const grid = config\.renderConfig\.renderGrid !== false;/)).toBe(1)
       expect(count(index, /setPanBlit/)).toBeGreaterThanOrEqual(1)
