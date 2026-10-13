@@ -4,9 +4,11 @@
  * and arrows, elbow arrows, lines, freedraw, big text, frames with children, links, images) is panned along a path of
  * fractional steps at five zooms with the blit on; the static canvas is then compared, pixel by pixel, with the render
  * at rest (the blit's own full render, LOBBY_PAN_BLIT_REST_MS later) and with a full render of the same camera with the
- * blit off. The same with grid mode on, at 0.5, 1 and 2 (the grid's dash pattern follows the scroll: no blit then). Then the inputs that must end a blit, each mid-pan: a scene change, a selection change, a theme switch, an
- * image that finishes loading and a lost canvas context; each must give a full render at once, and the pan's last frame
- * must again equal a full render.
+ * blit off. The same with grid mode on, at 0.5, 1 and 2 (the grid's dash pattern follows the scroll: no blit then).
+ * Then the inputs that must end a blit, each mid-pan: a scene change, a selection change, a theme switch, an image that
+ * finishes loading, a lost canvas context and a lost scratch-canvas context (its event, or isContextLost before it);
+ * each must give a full render at once, and the pan's last frame must again equal a full render. The scratch canvas
+ * must be freed (0 x 0) at the render at rest and sized again by the next pan.
  * The canvas is read through a copy (drawImage into a canvas of the probe's own): Chrome moves a canvas read back often
  * to another rasterizer, whose anti-aliasing differs (the wave O scout's finding).
  */
@@ -687,7 +689,7 @@ export async function checkPanBlit(apiIn: unknown): Promise<{
       }
     })
   } finally {
-    delete (document as unknown as { createElement?: unknown }).createElement
+    Reflect.deleteProperty(document, 'createElement')
   }
 
   setPanBlit(false)
