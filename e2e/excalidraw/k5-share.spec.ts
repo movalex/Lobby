@@ -150,6 +150,9 @@ test('K5-5: the order: Invite people, People with access, Copy board link, then 
   await page.setViewportSize({ width: 1280, height: 900 })
   await openShareFromButton(page)
   const dialog = shareDialog(page)
+  // the workspace's members section comes with its own read (the member list, ShareDialog.tsx): the order is read once
+  // it is there, or a slow answer (a whole e2e run's load) reads the order without it
+  await expect(dialog.getByTestId('workspace-members')).toBeAttached()
   const order = await dialog
     .locator('.dr-share > [data-testid]')
     .evaluateAll((els) => els.map((e) => e.getAttribute('data-testid')))
