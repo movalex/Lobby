@@ -971,7 +971,9 @@ var renderStaticScene = (renderConfig, throttle) => {
 };
 //# sourceMappingURL=chunk-FN755BR4.js.map`,
   )
-  edit(prod, ',sU as ua,Ze as va};', ',sU as ua,Ze as va,lobbySetPanBlit,lobbyGetPanBlitStats,lobbyResetPanBlitStats};')
+  // (prod: an export statement of its own after the blit, below, and the package's index re-exports them from the
+  // chunk in one more: the chunk's minified export list and the index's import of the chunk are single lines of 20 KB
+  // and 200 KB, and an edit there would carry each whole line, old and new, in the patch)
   edit(
     devIndex,
     `  zoomToFitBounds
@@ -988,11 +990,13 @@ var renderStaticScene = (renderConfig, throttle) => {
 };
 `,
   )
-  edit(prodIndex, 'import{A as ra,B as Td,', 'import{lobbySetPanBlit,lobbyGetPanBlitStats,lobbyResetPanBlitStats,A as ra,B as Td,')
-  edit(
+  defined(prodIndex, /\bimport\{[^}]*\}from"\.\/chunk-K5UJM3GG\.js"/, 'the prod index imports the blit chunk once')
+  append(
     prodIndex,
-    ',ai as zoomToFitBounds};',
-    ',ai as zoomToFitBounds,lobbySetPanBlit as setPanBlit,lobbyGetPanBlitStats as getPanBlitStats,lobbyResetPanBlitStats as resetPanBlitStats};',
+    `
+// ---- Lobby patch (wave O, O-2): the pan blit's switch and counters, from its chunk
+export{lobbySetPanBlit as setPanBlit,lobbyGetPanBlitStats as getPanBlitStats,lobbyResetPanBlitStats as resetPanBlitStats}from"./chunk-K5UJM3GG.js";
+`,
   )
   // StaticCanvas hands the canvas nonce to the render (the blit's key: a scene.triggerUpdate, an image or a font
   // arriving, changes nothing else)
@@ -1354,6 +1358,13 @@ function lobbyRenderStaticScene(config) {
       LABEL: imported(prod, 'getBoundTextElement', 'Bf'),
       ISTEXT: imported(prod, 'isTextElement', 'vf'),
     }),
+  )
+  append(
+    prod,
+    `
+// ---- Lobby patch (wave O, O-2): the pan blit's switch and counters, exported by the chunk
+export{lobbySetPanBlit,lobbyGetPanBlitStats,lobbyResetPanBlitStats};
+`,
   )
 
   // the declarations
