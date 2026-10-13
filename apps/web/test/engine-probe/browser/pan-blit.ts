@@ -4,7 +4,7 @@
  * and arrows, elbow arrows, lines, freedraw, big text, frames with children, links, images) is panned along a path of
  * fractional steps at five zooms with the blit on; the static canvas is then compared, pixel by pixel, with the render
  * at rest (the blit's own full render, LOBBY_PAN_BLIT_REST_MS later) and with a full render of the same camera with the
- * blit off. Then the inputs that must end a blit, each mid-pan: a scene change, a selection change, a theme switch, an
+ * blit off. The same with grid mode on, at 0.5, 1 and 2 (the grid's dash pattern follows the scroll: no blit then). Then the inputs that must end a blit, each mid-pan: a scene change, a selection change, a theme switch, an
  * image that finishes loading and a lost canvas context; each must give a full render at once, and the pan's last frame
  * must again equal a full render.
  * The canvas is read through a copy (drawImage into a canvas of the probe's own): Chrome moves a canvas read back often
@@ -300,6 +300,11 @@ function inked(a: Uint8ClampedArray): number {
 
 export interface PanBlitView {
   zoom: number
+  /**
+   * grid mode on (the control is then taken with it off: two full renders at other scrolls draw its dashes at another
+   * phase, so with it on they are not the raster's floor)
+   */
+  grid: boolean
   /** two full renders whole device pixels apart, their overlap: the raster's own floor */
   control: Diff
   blits: number
@@ -420,27 +425,35 @@ export async function checkPanBlit(apiIn: unknown): Promise<{
     return floor
   }
 
-  setPanBlit(true)
-  const views: PanBlitView[] = []
-  for (const zoom of [0.1, 0.25, 0.5, 1, 2]) {
+  const setGrid = async (on: boolean) => {
+    api.updateScene({ appState: { gridModeEnabled: on }, captureUpdate: CaptureUpdateAction.NEVER })
+    await frames(2)
+  }
+  /** a pan of 40 frames at `zoom` with the blit on: its last frame against the render at rest and a full render */
+  const view = async (zoom: number, grid: boolean): Promise<PanBlitView> => {
     api.updateScene({
       appState: { zoom: { value: zoom }, scrollX: 1400 / zoom / 2, scrollY: 900 / zoom / 2 },
       captureUpdate: CaptureUpdateAction.NEVER,
     })
     await frames(3)
+    if (grid) await setGrid(false)
     const control = await controlHere()
+    if (grid) await setGrid(true)
     resetPanBlitStats()
     await pan(40)
     const s = getPanBlitStats()
     const blit = grab()
-    if (s.last !== 'blit') detail.push(`zoom ${zoom}: the pan's last render was ${s.last}, not a blit`)
+    const at = `zoom ${zoom}${grid ? ' (grid)' : ''}`
+    if (!grid && s.last !== 'blit') detail.push(`${at}: the pan's last render was ${s.last}, not a blit`)
     await sleep(300)
     const restStats = getPanBlitStats()
-    if (restStats.last !== 'rest') detail.push(`zoom ${zoom}: no render at rest (${restStats.last})`)
+    if (!grid && restStats.last !== 'rest') detail.push(`${at}: no render at rest (${restStats.last})`)
     const rest = grab()
     const full = await fullRender()
-    views.push({
+    if (grid) await setGrid(false)
+    return {
       zoom,
+      grid,
       control,
       blits: s.blit,
       fullsDuringPan: s.full,
@@ -448,8 +461,16 @@ export async function checkPanBlit(apiIn: unknown): Promise<{
       restVsBlit: diff(rest, blit),
       fullVsBlit: diff(full, blit),
       restVsFull: diff(rest, full),
-    })
+    }
   }
+
+  setPanBlit(true)
+  const views: PanBlitView[] = []
+  for (const zoom of [0.1, 0.25, 0.5, 1, 2]) views.push(await view(zoom, false))
+  // grid mode on: strokeGrid starts each dashed line's pattern at the scroll modulo the grid size, so the dashes of a
+  // shifted frame and of a band drawn at a later scroll disagree once the scroll crosses a grid line; every frame of
+  // the pan must still be a full render's (0.5: the grid's smallest zoom with dashed lines; 1; 2)
+  for (const zoom of [0.5, 1, 2]) views.push(await view(zoom, true))
 
   // the inputs that must end a blit, each in the middle of a pan at zoom 0.5
   const stale: PanBlitStale[] = []
@@ -580,9 +601,13 @@ export async function checkPanBlit(apiIn: unknown): Promise<{
     d.max <= Math.max(16, floor.max) && d.pixels <= 2 * floor.pixels + 200
   let ok = detail.length === 0
   for (const v of views) {
-    if (v.blits < 30 || v.inked < 1000 || v.restVsFull.pixels || !within(v.fullVsBlit, v.control)) {
+    // with the grid on the blit stays off: the pan's frames are full renders (strokeGrid's dash phase follows the scroll)
+    const blitsOk = v.grid ? v.blits === 0 : v.blits >= 30
+    if (!blitsOk || v.inked < 1000 || v.restVsFull.pixels || !within(v.fullVsBlit, v.control)) {
       ok = false
-      detail.push(`zoom ${v.zoom}: ${JSON.stringify(v.fullVsBlit)}, the control ${JSON.stringify(v.control)}`)
+      detail.push(
+        `zoom ${v.zoom}${v.grid ? ' (grid)' : ''}: ${v.blits} blits, ${JSON.stringify(v.fullVsBlit)}, the control ${JSON.stringify(v.control)}`,
+      )
     }
   }
   for (const c of stale)

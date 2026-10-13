@@ -38,7 +38,7 @@ try {
   const views = b.views
     .map(
       (v) =>
-        `${v.zoom}: control ${v.control.pixels} px (max ${v.control.max}), ${v.blits} blits, rest ${v.restVsBlit.pixels} px, full ${v.fullVsBlit.pixels} px (max ${v.fullVsBlit.max}), rest vs full ${v.restVsFull.pixels} px`,
+        `${v.zoom}${v.grid ? ' grid' : ''}: control ${v.control.pixels} px (max ${v.control.max}), ${v.blits} blits, rest ${v.restVsBlit.pixels} px, full ${v.fullVsBlit.pixels} px (max ${v.fullVsBlit.max}), rest vs full ${v.restVsFull.pixels} px`,
     )
     .join('; ')
   const stale = b.stale
