@@ -48,11 +48,18 @@ export interface ProbeSession {
   close: () => Promise<void>
 }
 
-export const openProbePage = async (port = 7750): Promise<ProbeSession> => {
+/** `deviceScaleFactor`: the page's device pixel ratio (wave O's pan probe takes the e2e suite's 1.25). */
+export const openProbePage = async (
+  port = 7750,
+  opts: { deviceScaleFactor?: number } = {},
+): Promise<ProbeSession> => {
   const { chromium } = e2eRequire('@playwright/test') as PW
   const { server, url, served } = await startProbeServer(port)
   const browser = await chromium.launch({ headless: true })
-  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } })
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    ...(opts.deviceScaleFactor ? { deviceScaleFactor: opts.deviceScaleFactor } : {}),
+  })
   const foreignRequests: string[] = []
   await context.route('**/*', (route) => {
     const u = new URL(route.request().url())

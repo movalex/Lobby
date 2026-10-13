@@ -1,8 +1,9 @@
-// Wave N (WS1, the review): the four speed parts' shipped values and a dev-auth page's overrides (./flags.ts).
+// Wave N (WS1, the review): the speed parts' shipped values and a dev-auth page's overrides (./flags.ts); wave O: the pan blit.
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   CHUNKED_APPLY,
   DIFF_APPLY,
+  PAN_BLIT,
   SIZE_AWARE_LOD,
   SPEED_FLAGS,
   setSpeedFlagOverrides,
@@ -15,12 +16,13 @@ afterEach(() => {
 })
 
 describe('the speed parts (sync/flags.ts)', () => {
-  it('ship as their gates allow: the worker decode and (wave N.1) the chunked install on, the other two off until their speed targets pass', () => {
-    expect({ WORKER_DECODE, DIFF_APPLY, CHUNKED_APPLY, SIZE_AWARE_LOD }).toEqual({
+  it('ship as their gates allow: the worker decode, (wave N.1) the chunked install and (wave O) the pan blit on, the other two off until their speed targets pass', () => {
+    expect({ WORKER_DECODE, DIFF_APPLY, CHUNKED_APPLY, SIZE_AWARE_LOD, PAN_BLIT }).toEqual({
       WORKER_DECODE: true,
       DIFF_APPLY: false,
       CHUNKED_APPLY: true,
       SIZE_AWARE_LOD: false,
+      PAN_BLIT: true,
     })
     for (const name of Object.keys(SPEED_FLAGS) as (keyof typeof SPEED_FLAGS)[])
       expect(speedFlag(name), name).toBe(SPEED_FLAGS[name])

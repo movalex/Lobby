@@ -672,3 +672,107 @@ describe('wave O pan speed-ups: static pins in both builds of @excalidraw/excali
     expect(lines[47779]).toContain('__publicField(this, "savePointer"')
   })
 })
+
+describe('wave O O-2: the pan blit and the tie bias, static pins', () => {
+  it.each(BUILDS)('%s element build: T, the element snap rounds the same at every scroll', (build) => {
+    const src = readDist('element', build)
+    // its two calls (dev: one a line; prod: one line) and its definition
+    expect(count(src, /lobbySnapAnchor\(/)).toBe(3)
+    // the shipped function itself, lifted out of the build and run on Chrome's single-precision transform: at zoom 0.5
+    // and dpr 1.25 the context's scale is 0.625 x float32(0.8) = 0.5000000074505806, not 0.5
+    const at = src.indexOf('function lobbySnapAnchor(')
+    const body = src.slice(at, src.indexOf('\n}\n', at) + 2)
+    const bias = build === 'dev' ? 'SNAP_TIE_BIAS' : 'nu'
+    const snap = new Function(bias, `${body}\nreturn lobbySnapAnchor`)(1e-6) as (...a: unknown[]) => number
+    const zoom = 0.5
+    const dpr = 1.25
+    const k = zoom * dpr
+    const q = 0.625 * Math.fround(0.8)
+    // a row of notes at y 732 (padding 20): its anchor term is an exact half pixel at every snapped scroll
+    const shifts = { old: new Set<number>(), now: new Set<number>() }
+    for (let raw = -40_000; raw <= 40_000; raw += 37.3) {
+      const scrollY = Math.round(raw * k) / k
+      const whole = Math.round(scrollY * k)
+      const anchorY = (732 + scrollY) * dpr - 20
+      const appState = { zoom: { value: zoom }, scrollX: 0, scrollY }
+      shifts.old.add(Math.round(q * anchorY + 1e-6) - whole)
+      shifts.now.add(snap(0, q, 0, 0, anchorY, 0, 732, { x: 0, y: 0 }, 20, appState, dpr) - whole)
+    }
+    // the engine's own rounding (with the bias) lands the row a pixel apart at some scrolls; the patch's never does
+    expect(shifts.old.size).toBe(2)
+    expect([...shifts.now]).toEqual([Math.round(q * (732 * dpr - 20) + 1e-6)])
+    // off the pixel grid (an unsnapped scroll) or with another transform it rounds as before
+    const appState = { zoom: { value: zoom }, scrollX: 0, scrollY: 10.3 }
+    const anchorY = (732 + 10.3) * dpr - 20
+    const before = Math.round(q * anchorY + 1e-6)
+    expect(snap(0, q, 0, 0, anchorY, 0, 732, { x: 0, y: 0 }, 20, appState, dpr)).toBe(before)
+  })
+
+  it.each(BUILDS)('%s excalidraw build: every static render goes through the blit, which is exported', (build) => {
+    const chunk = readDist('excalidraw', build, build === 'dev' ? 'chunk-FN755BR4.js' : 'chunk-K5UJM3GG.js')
+    const index = readDist('excalidraw', build)
+    // the throttled render and the direct one, and the definition
+    expect(count(chunk, /lobbyRenderStaticScene\(/)).toBe(3)
+    // the engine's own render is left as it is: the blit shifts the frame into a scratch copy and copies it back
+    expect(count(chunk, /lobbyPanBlitScratchOf\(/)).toBe(2)
+    expect(count(index, /setPanBlit/)).toBeGreaterThanOrEqual(1)
+    expect(count(index, /getPanBlitStats/)).toBeGreaterThanOrEqual(1)
+    // StaticCanvas hands the canvas nonce to the render
+    const nonce = build === 'dev' ? /canvasNonce: props\.canvasNonce/ : /canvasNonce:e\.canvasNonce/
+    expect(count(index, nonce)).toBe(1)
+  })
+
+  const devChunk = readDist('excalidraw', 'dev', 'chunk-FN755BR4.js')
+  const devIndex = readDist('excalidraw', 'dev')
+  const devElement = readDist('element', 'dev')
+  /** the text from `from` (its last occurrence with `last`: esbuild marks a file's sections again) to `to` */
+  const between = (src: string, from: string, to: string, last = false) => {
+    const a = last ? src.lastIndexOf(from) : src.indexOf(from)
+    const b = src.indexOf(to, a + from.length)
+    expect(a, from).toBeGreaterThanOrEqual(0)
+    expect(b, to).toBeGreaterThan(a)
+    return src.slice(a, b)
+  }
+  const fields = (src: string, re: RegExp) => new Set([...src.matchAll(re)].map((m) => m[1] as string))
+  const keyFields = fields(
+    between(devChunk, 'function lobbyPanBlitKey(', 'function lobbySameKey('),
+    /\ba\.(\w+)/g,
+  )
+
+  it('the key holds every app state field the StaticCanvas memo compares (areEqual: getRelevantAppStateProps)', () => {
+    const memo = fields(
+      between(devIndex, 'var getRelevantAppStateProps2 = (appState) => {', 'return relevantAppStateProps;'),
+      /appState\.(\w+)/g,
+    )
+    expect(memo.size).toBeGreaterThan(20)
+    for (const f of memo) if (f !== 'scrollX' && f !== 'scrollY') expect([...keyFields], f).toContain(f)
+  })
+
+  it('and every one the static render reads (the scene, the link icons, the element renderer)', () => {
+    const reads = new Set([
+      ...fields(
+        between(devChunk, '// renderer/staticScene.ts', '// renderer/staticSvgScene.ts'),
+        /appState\??\.(\w+)/g,
+      ),
+      ...fields(
+        between(devElement, '// src/renderElement.ts', '// src/shape.ts', true),
+        /appState\??\.(\w+)/g,
+      ),
+    ])
+    expect(reads.size).toBeGreaterThan(8)
+    for (const f of reads) if (f !== 'scrollX' && f !== 'scrollY') expect([...keyFields], f).toContain(f)
+  })
+
+  it('its copy of getCanvasPadding is the engine’s (an element draws only into its cached canvas’s margin)', () => {
+    const engine = between(devElement, 'var getCanvasPadding = (element) => {', '\n};')
+    const copy = between(devChunk, 'function lobbyCanvasPadding(el) {', '\n}')
+    const cases = (s: string) =>
+      s
+        .replace(/\belement\b/g, 'el')
+        .replace(/if \((.+)\) \{\s*return (\d+);\s*\}\s*return (\d+);/, 'return $1 ? $2 : $3;')
+        .replace(/\s+/g, '')
+    expect(cases(copy).replace(/^functionlobbyCanvasPadding\(el\)\{/, '')).toBe(
+      cases(engine).replace(/^varg?etCanvasPadding=\(el\)=>\{/, ''),
+    )
+  })
+})

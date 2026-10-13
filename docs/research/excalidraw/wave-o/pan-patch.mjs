@@ -7,6 +7,7 @@
 //   pnpm patch @excalidraw/excalidraw@0.18.0-1118751 --edit-dir <X>
 //   node pan-patch.mjs --part=o1 --element=<E> --excalidraw=<X>      (O-1: A1-A4, C, E; no pixel change)
 //   node pan-patch.mjs --part=o1b --excalidraw=<X>                   (O-1b, on a copy with O-1: A5 and the kept passes)
+//   node pan-patch.mjs --part=o2 --element=<E> --excalidraw=<X>      (O-2, on a copy with O-1b: T and the pan blit B)
 //   pnpm patch-commit <E>; pnpm patch-commit <X>; then restore pnpm-workspace.yaml (patch-commit rewrites it: it
 //   sorts the catalog, drops the comments and `allowBuilds`) and add the patchedDependencies entry by hand
 //
@@ -20,7 +21,7 @@ import { join } from 'node:path'
 const arg = (name) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3)
 const part = arg('part')
 const dirs = { element: arg('element'), excalidraw: arg('excalidraw') }
-if (!['o1', 'o1b'].includes(part)) throw new Error('--part=o1 or o1b')
+if (!['o1', 'o1b', 'o2'].includes(part)) throw new Error('--part=o1, o1b or o2')
 
 const files = new Map()
 const file = (pkg, rel) => {
@@ -610,6 +611,453 @@ function lobbyOffsetGroupsUnseen(groups, viewport) {
     }),
   )
   append(prod, helpers({ BOUNDS: 'S5', INVIEW: 'lobbyInViewAt', ISTEXT: 'gU', CONTAINER: 'hU', FRAMEID: 'Ak' }))
+}
+
+// ------------------------------------------------------------------------------------------------------------------
+// O-2, @excalidraw/element: T, the element snap rounds the same at every scroll
+// ------------------------------------------------------------------------------------------------------------------
+if (part === 'o2') {
+  const dev = file('element', EL_DEV)
+  const prod = file('element', EL_PROD)
+  // drawElementFromCanvas rounds an element's anchor to whole device pixels. The anchor term carries the scroll, and
+  // the context's transform, read back with getTransform, is single precision (scale(1 / 1.25) is kept as
+  // 0.800000011920929, so at zoom 0.5 the factor is 0.5000000075): the scroll's share of the term is off by about 1.5e-8
+  // times the scroll, past SNAP_TIE_BIAS (1e-6) on any real board. An anchor on an exact half pixel (a row of grid
+  // notes at 0.5 x 1.25 dpr) then rounded one way at one scroll and the other way at another: a pixel apart. With the
+  // scroll snapped to whole device pixels (snapScrollToDevicePixels), its share is a whole number: added as one, the
+  // rest rounded with the tie bias. Anything else (a scroll off the pixel grid, a transform other than the zoom times a
+  // right angle) rounds as before.
+  edit(
+    dev,
+    `      Math.round(a2 * anchorX + c * anchorY + e) + Math.round(a2 * dx + c * dy + SNAP_TIE_BIAS),
+      Math.round(b2 * anchorX + d * anchorY + f) + Math.round(b2 * dx + d * dy + SNAP_TIE_BIAS)`,
+    `      lobbySnapAnchor(a2, c, e, anchorX, anchorY, anchorSceneX, anchorSceneY, positionOffset, anchorPadding, appState, devicePixelRatio) + Math.round(a2 * dx + c * dy + SNAP_TIE_BIAS),
+      lobbySnapAnchor(b2, d, f, anchorX, anchorY, anchorSceneX, anchorSceneY, positionOffset, anchorPadding, appState, devicePixelRatio) + Math.round(b2 * dx + d * dy + SNAP_TIE_BIAS) // Lobby patch, wave O T`,
+  )
+  edit(
+    prod,
+    'Math.round(b*U+w*D+I)+Math.round(b*B+w*P+nu),Math.round(y*U+S*D+A)+Math.round(y*B+S*P+nu)',
+    'lobbySnapAnchor(b,w,I,U,D,N,k,r,z,i,a)+Math.round(b*B+w*P+nu),lobbySnapAnchor(y,S,A,U,D,N,k,r,z,i,a)+Math.round(y*B+S*P+nu)',
+  )
+  const snap = (BIAS) => `
+// ---- Lobby patch (wave O, O-2; patches/@excalidraw__element@0.18.0-1118751.patch) --------------------------------
+// T: one coordinate of drawElementFromCanvas's snapped position, p * anchorX + q * anchorY + t rounded, with the
+// snapped scroll's share added as the whole number of device pixels it is (see the patch script for why).
+function lobbySnapAnchor(p, q, t, anchorX, anchorY, sceneX, sceneY, offset, padding, appState, dpr) {
+  const zoom = appState.zoom.value;
+  const sx = appState.scrollX * zoom * dpr;
+  const sy = appState.scrollY * zoom * dpr;
+  const wx = Math.round(sx);
+  const wy = Math.round(sy);
+  const kx = Math.round(p / zoom);
+  const ky = Math.round(q / zoom);
+  if (!(zoom > 0) || Math.abs(sx - wx) > 1e-6 || Math.abs(sy - wy) > 1e-6 || Math.abs(p / zoom - kx) > 1e-3 || Math.abs(q / zoom - ky) > 1e-3) {
+    return Math.round(p * anchorX + q * anchorY + t + ${BIAS});
+  }
+  return Math.round(p * ((sceneX + offset.x) * dpr - padding) + q * ((sceneY + offset.y) * dpr - padding) + t + ${BIAS}) + kx * wx + ky * wy;
+}
+`
+  append(dev, snap('SNAP_TIE_BIAS'))
+  append(prod, snap('nu'))
+}
+
+// ------------------------------------------------------------------------------------------------------------------
+// O-2, @excalidraw/excalidraw: B, the pan blit
+// ------------------------------------------------------------------------------------------------------------------
+if (part === 'o2') {
+  const dev = file('excalidraw', 'dist/dev/chunk-FN755BR4.js')
+  const prod = file('excalidraw', 'dist/prod/chunk-K5UJM3GG.js')
+  const devIndex = file('excalidraw', X_DEV)
+  const prodIndex = file('excalidraw', X_PROD)
+
+  // the static render's two callers (the throttled one and the direct one) go through the blit, which calls the
+  // engine's own _renderStaticScene, unchanged, for every full render and for the elements a blit draws again
+  edit(
+    dev,
+    `var renderStaticSceneThrottled = throttleRAF(
+  (config) => {
+    _renderStaticScene(config);
+  }
+);
+var renderStaticScene = (renderConfig, throttle) => {
+  if (throttle) {
+    renderStaticSceneThrottled(renderConfig);
+    return;
+  }
+  _renderStaticScene(renderConfig);
+};`,
+    `var renderStaticSceneThrottled = throttleRAF(
+  (config) => {
+    lobbyRenderStaticScene(config); // Lobby patch (wave O, B): the pan blit decides
+  }
+);
+var renderStaticScene = (renderConfig, throttle) => {
+  if (throttle) {
+    renderStaticSceneThrottled(renderConfig);
+    return;
+  }
+  lobbyRenderStaticScene(renderConfig);
+};`,
+  )
+  edit(
+    prod,
+    'Pf=Xf(e=>{It(e)}),mt=(e,U)=>{if(U){Pf(e);return}It(e)};',
+    'Pf=Xf(e=>{lobbyRenderStaticScene(e)}),mt=(e,U)=>{if(U){Pf(e);return}lobbyRenderStaticScene(e)};',
+  )
+  // the switch and the counters, exported by the chunk and the package
+  edit(
+    dev,
+    `  normalizeFile
+};
+//# sourceMappingURL=chunk-FN755BR4.js.map`,
+    `  normalizeFile, lobbySetPanBlit, lobbyGetPanBlitStats, lobbyResetPanBlitStats
+};
+//# sourceMappingURL=chunk-FN755BR4.js.map`,
+  )
+  edit(prod, ',sU as ua,Ze as va};', ',sU as ua,Ze as va,lobbySetPanBlit,lobbyGetPanBlitStats,lobbyResetPanBlitStats};')
+  edit(
+    devIndex,
+    `  zoomToFitBounds
+} from "./chunk-FN755BR4.js";`,
+    `  zoomToFitBounds, lobbySetPanBlit, lobbyGetPanBlitStats, lobbyResetPanBlitStats
+} from "./chunk-FN755BR4.js";`,
+  )
+  edit(
+    devIndex,
+    `  zoomToFitBounds
+};
+`,
+    `  zoomToFitBounds, lobbySetPanBlit as setPanBlit, lobbyGetPanBlitStats as getPanBlitStats, lobbyResetPanBlitStats as resetPanBlitStats
+};
+`,
+  )
+  edit(
+    prodIndex,
+    'import{A as ra,B as Td,',
+    'import{lobbySetPanBlit,lobbyGetPanBlitStats,lobbyResetPanBlitStats,A as ra,B as Td,',
+  )
+  edit(
+    prodIndex,
+    ',ai as zoomToFitBounds};',
+    ',ai as zoomToFitBounds,lobbySetPanBlit as setPanBlit,lobbyGetPanBlitStats as getPanBlitStats,lobbyResetPanBlitStats as resetPanBlitStats};',
+  )
+  // StaticCanvas hands the canvas nonce to the render (the blit's key: a scene.triggerUpdate, an image or a font
+  // arriving, changes nothing else)
+  edit(
+    devIndex,
+    `        appState: props.appState,
+        renderConfig: props.renderConfig
+      },
+      isRenderThrottlingEnabled()`,
+    `        appState: props.appState,
+        renderConfig: props.renderConfig, canvasNonce: props.canvasNonce
+      },
+      isRenderThrottlingEnabled()`,
+  )
+  edit(
+    prodIndex,
+    'appState:e.appState,renderConfig:e.renderConfig},ps())',
+    'appState:e.appState,renderConfig:e.renderConfig,canvasNonce:e.canvasNonce},ps())',
+  )
+
+  const blit = ({ R, SNAP, BOUNDS, LABEL, ISTEXT }) => `
+// ---- Lobby patch (wave O, O-2; patches/@excalidraw__excalidraw@0.18.0-1118751.patch): the pan blit ---------------
+// A render whose inputs other than the scroll are the ones of this canvas's last render, and whose scroll moved by
+// whole device pixels (snapScrollToDevicePixels makes it so), keeps the last frame shifted by the move and draws again
+// only four bands at the canvas's edges: the exposed strips, widened to hold the ink of every element whose visibility
+// changed (one that came into view drew nothing in the shifted pixels, one that left view drew into them). The bands are
+// drawn by the engine's own full render of the elements whose ink reaches into them (so, there, exactly as a full render
+// draws: no clip of ours), then everything else is the shifted frame again, copied back from a scratch canvas through
+// a pixel-aligned rectangle. The shifted pixels are a full render's because every element and the grid land on the same
+// device pixels at every snapped scroll (element patch T rounds the element snap the same at every scroll).
+// The inputs: the StaticCanvas memo's own (areEqual: the canvas nonce, the scale, the renderable map, the app state it
+// compares, every renderConfig value) and the canvas's size, the rough canvas, the scene map, the in-place caches'
+// sizes. Any other render is a full one: an export, a drag, a zoom, a change of any input, a move of a third of the
+// canvas or more, bands over 60 % of it. A render at rest (LOBBY_PAN_BLIT_REST_MS after the last blit) is a full one, and
+// so is the first render after the canvas loses its context. Off unless Lobby turns it on (setPanBlit).
+var lobbyPanBlitOn = false;
+var LOBBY_PAN_BLIT_REST_MS = 120;
+var lobbyPanBlitStates = /* @__PURE__ */ new WeakMap();
+var lobbyPanBlitLast = /* @__PURE__ */ new WeakMap();
+var lobbyPanBlitScratch = /* @__PURE__ */ new WeakMap();
+var lobbyPanBlitHooked = /* @__PURE__ */ new WeakSet();
+var lobbyPanBlitCounts = { full: 0, blit: 0, rest: 0, lost: 0, elements: 0, area: 0, last: "" };
+function lobbySetPanBlit(on) {
+  lobbyPanBlitOn = on === true;
+}
+function lobbyGetPanBlitStats() {
+  return { on: lobbyPanBlitOn, ...lobbyPanBlitCounts };
+}
+function lobbyResetPanBlitStats() {
+  lobbyPanBlitCounts = { full: 0, blit: 0, rest: 0, lost: 0, elements: 0, area: 0, last: "" };
+}
+function lobbyPanBlitKey(config) {
+  const a = config.appState;
+  const r = config.renderConfig;
+  const key = [
+    config.canvasNonce, config.scale, config.rc, config.elementsMap, config.allElementsMap, config.canvas.width,
+    config.canvas.height, a.zoom.value, a.width, a.height, a.offsetLeft, a.offsetTop, a.theme, a.viewBackgroundColor,
+    a.viewModeEnabled, a.openDialog, a.hoveredElementIds, a.shouldCacheIgnoreZoom, a.exportScale,
+    a.selectedElementsAreBeingDragged, a.gridSize, a.gridStep, a.frameRendering, a.selectedElementIds,
+    a.frameToHighlight, a.editingGroupId, a.currentHoveredFontFamily, a.croppingElementId, a.suggestedBinding,
+    a.editingTextElement, a.newElement, a.activeEmbeddable, r.imageCache?.size, r.embedsValidationStatus?.size,
+    r.elementsPendingErasure?.size
+  ];
+  for (const k in r) key.push(k, r[k]);
+  return key;
+}
+function lobbySameKey(p, q) {
+  if (p.length !== q.length) return false;
+  for (let i = 0; i < p.length; i++) if (p[i] !== q[i]) return false;
+  return true;
+}
+// getCanvasPadding (element package): the margin of an element's cached canvas, all it can draw into beyond its box
+function lobbyCanvasPadding(el) {
+  switch (el.type) {
+    case "freedraw":
+      return el.strokeWidth * 12;
+    case "text":
+      return el.fontSize / 2;
+    case "arrow":
+      return el.endArrowhead || el.endArrowhead ? 40 : 20;
+    default:
+      return 20;
+  }
+}
+// where an element can put ink, in scene px: its bounds, the margin of its cached canvas (a square margin, so up to
+// sqrt 2 of it rotated; a frame draws its outline itself, 1 / zoom outside), its link icon, two device px of snap and
+// anti-aliasing
+function lobbyInkMargin(el, zoom, dpr) {
+  let m = el.type === "frame" || el.type === "magicframe" ? 1 / zoom : lobbyCanvasPadding(el) / dpr * (el.angle ? Math.SQRT2 : 1);
+  if (el.link) m += 40 / Math.max(1, zoom);
+  return m + 2 / (zoom * dpr);
+}
+// an element's ink box with its bound text's (drawn with it), at its render offset; kept per canvas while the key holds
+function lobbyInkOf(el, config, zoom, dpr, ink) {
+  let box = ink.get(el);
+  if (box) return box;
+  const map = config.elementsMap;
+  const b = ${BOUNDS}(el, map);
+  const m = lobbyInkMargin(el, zoom, dpr);
+  box = [b[0] - m, b[1] - m, b[2] + m, b[3] + m];
+  const label = ${LABEL}(el, map);
+  if (label) {
+    const t = ${BOUNDS}(label, map);
+    const tm = lobbyInkMargin(label, zoom, dpr);
+    box[0] = Math.min(box[0], t[0] - tm);
+    box[1] = Math.min(box[1], t[1] - tm);
+    box[2] = Math.max(box[2], t[2] + tm);
+    box[3] = Math.max(box[3], t[3] + tm);
+  }
+  const owner = ${ISTEXT}(el) && el.containerId ? config.allElementsMap.get(el.containerId) ?? el : el;
+  const offset = config.renderConfig.elementRenderOverrides?.get(owner.id)?.offset;
+  if (offset && (offset.x || offset.y)) {
+    box[0] += offset.x;
+    box[1] += offset.y;
+    box[2] += offset.x;
+    box[3] += offset.y;
+  }
+  ink.set(el, box);
+  return box;
+}
+// the render loop draws a bound text with its container, not by itself
+function lobbyDrawnAlone(el, elementsMap) {
+  return !(${ISTEXT}(el) && el.containerId && elementsMap.has(el.containerId));
+}
+function lobbyPanBlitDrop(canvas) {
+  const s = lobbyPanBlitStates.get(canvas);
+  if (s?.rest) clearTimeout(s.rest);
+  lobbyPanBlitStates.delete(canvas);
+}
+function lobbyPanBlitHook(canvas) {
+  if (lobbyPanBlitHooked.has(canvas)) return;
+  lobbyPanBlitHooked.add(canvas);
+  canvas.addEventListener("contextlost", () => {
+    lobbyPanBlitDrop(canvas);
+    lobbyPanBlitScratch.delete(canvas);
+    lobbyPanBlitCounts.lost++;
+  });
+  canvas.addEventListener("contextrestored", () => {
+    lobbyPanBlitDrop(canvas);
+    const last = lobbyPanBlitLast.get(canvas);
+    if (last && lobbyPanBlitOn) ${R}(last);
+  });
+}
+// the canvas's scratch copy (the shifted frame waits there while the bands are drawn), the canvas's size
+function lobbyPanBlitScratchOf(canvas) {
+  let s = lobbyPanBlitScratch.get(canvas);
+  if (!s) {
+    s = canvas.ownerDocument.createElement("canvas");
+    lobbyPanBlitScratch.set(canvas, s);
+  }
+  if (s.width !== canvas.width) s.width = canvas.width;
+  if (s.height !== canvas.height) s.height = canvas.height;
+  return s;
+}
+function lobbyPanBlitFull(canvas, config, appState, key, ink) {
+  ${R}(config);
+  lobbyPanBlitStates.set(canvas, {
+    key,
+    scrollX: appState.scrollX,
+    scrollY: appState.scrollY,
+    visible: config.visibleElements,
+    visibleSet: null,
+    ink: ink ?? /* @__PURE__ */ new WeakMap(),
+    rest: 0
+  });
+  lobbyPanBlitCounts.full++;
+  lobbyPanBlitCounts.last = "full";
+}
+function lobbyRenderStaticScene(config) {
+  const canvas = config.canvas;
+  if (!canvas || !lobbyPanBlitOn || config.renderConfig.isExporting) {
+    if (canvas) {
+      lobbyPanBlitDrop(canvas);
+      lobbyPanBlitLast.delete(canvas);
+      lobbyPanBlitScratch.delete(canvas);
+    }
+    ${R}(config);
+    return;
+  }
+  lobbyPanBlitHook(canvas);
+  lobbyPanBlitLast.set(canvas, config);
+  const state = lobbyPanBlitStates.get(canvas);
+  if (state?.rest) {
+    clearTimeout(state.rest);
+    state.rest = 0;
+  }
+  const appState = ${SNAP}(config.appState, config.scale);
+  const key = lobbyPanBlitKey(config);
+  const same = !!state && lobbySameKey(state.key, key);
+  const zoom = appState.zoom.value;
+  const dpr = config.scale;
+  const k = zoom * dpr;
+  const W = canvas.width;
+  const H = canvas.height;
+  let dx = 0;
+  let dy = 0;
+  let blit = false;
+  if (same && !appState.selectedElementsAreBeingDragged) {
+    const fx = (appState.scrollX - state.scrollX) * k;
+    const fy = (appState.scrollY - state.scrollY) * k;
+    dx = Math.round(fx);
+    dy = Math.round(fy);
+    blit = (dx !== 0 || dy !== 0) && Math.abs(fx - dx) < 1e-3 && Math.abs(fy - dy) < 1e-3 && Math.abs(dx) * 3 < W && Math.abs(dy) * 3 < H;
+  }
+  if (!blit) {
+    lobbyPanBlitFull(canvas, config, appState, key, same ? state.ink : null);
+    return;
+  }
+  // the bands, in device px: the exposed strips, then the cheapest band that holds the ink of each element whose
+  // visibility changed (its ink lies within its margin of the strips or of the canvas's edges)
+  let L = dx > 0 ? dx : 0;
+  let Rt = dx < 0 ? -dx : 0;
+  let T = dy > 0 ? dy : 0;
+  let B = dy < 0 ? -dy : 0;
+  const map = config.elementsMap;
+  const visible = config.visibleElements;
+  const oldSet = state.visibleSet ?? new Set(state.visible);
+  const newSet = new Set(visible);
+  const cover = (el) => {
+    const box = lobbyInkOf(el, config, zoom, dpr, state.ink);
+    const x1 = Math.floor((box[0] + appState.scrollX) * k);
+    const y1 = Math.floor((box[1] + appState.scrollY) * k);
+    const x2 = Math.ceil((box[2] + appState.scrollX) * k);
+    const y2 = Math.ceil((box[3] + appState.scrollY) * k);
+    if (x2 <= 0 || y2 <= 0 || x1 >= W || y1 >= H) return;
+    const l = x2 * H;
+    const r = (W - x1) * H;
+    const t = y2 * W;
+    const b = (H - y1) * W;
+    const min = Math.min(l, r, t, b);
+    if (min === l) L = Math.max(L, x2);
+    else if (min === r) Rt = Math.max(Rt, W - x1);
+    else if (min === t) T = Math.max(T, y2);
+    else B = Math.max(B, H - y1);
+  };
+  for (const el of visible) if (!oldSet.has(el) && lobbyDrawnAlone(el, map)) cover(el);
+  for (const el of state.visible) if (!newSet.has(el) && lobbyDrawnAlone(el, map)) cover(el);
+  L = Math.min(L, W);
+  Rt = Math.min(Rt, W);
+  T = Math.min(T, H);
+  B = Math.min(B, H);
+  const area = (L + Rt) * H + (T + B) * W;
+  if (area > W * H * 0.6 || L + Rt >= W || T + B >= H) {
+    lobbyPanBlitFull(canvas, config, appState, key, state.ink);
+    return;
+  }
+  // the previous frame, shifted, into the scratch copy ("copy": what the shift leaves is cleared)
+  const scratch = lobbyPanBlitScratchOf(canvas);
+  const sctx = scratch.getContext("2d");
+  sctx.save();
+  sctx.setTransform(1, 0, 0, 1, 0, 0);
+  sctx.globalCompositeOperation = "copy";
+  sctx.drawImage(canvas, dx, dy);
+  sctx.restore();
+  // in scene px: every visible element whose ink box reaches into a band, drawn by the engine's full render
+  const sxL = L / k - appState.scrollX;
+  const sxR = (W - Rt) / k - appState.scrollX;
+  const syT = T / k - appState.scrollY;
+  const syB = (H - B) / k - appState.scrollY;
+  const members = [];
+  for (const el of visible) {
+    if (!lobbyDrawnAlone(el, map)) continue;
+    const box = lobbyInkOf(el, config, zoom, dpr, state.ink);
+    if (L && box[0] < sxL || Rt && box[2] > sxR || T && box[1] < syT || B && box[3] > syB) members.push(el);
+  }
+  ${R}({ ...config, visibleElements: members });
+  // everywhere but the bands: the shifted frame, copied back through a pixel-aligned rectangle
+  const ctx = canvas.getContext("2d");
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.beginPath();
+  ctx.rect(L, T, W - L - Rt, H - T - B);
+  ctx.clip();
+  ctx.globalCompositeOperation = "copy";
+  ctx.drawImage(scratch, 0, 0);
+  ctx.restore();
+  state.scrollX = appState.scrollX;
+  state.scrollY = appState.scrollY;
+  state.visible = visible;
+  state.visibleSet = newSet;
+  lobbyPanBlitCounts.blit++;
+  lobbyPanBlitCounts.elements += members.length;
+  lobbyPanBlitCounts.area += area;
+  lobbyPanBlitCounts.last = "blit";
+  state.rest = setTimeout(() => {
+    if (lobbyPanBlitStates.get(canvas) !== state || !lobbyPanBlitOn) return;
+    state.rest = 0;
+    const last = lobbyPanBlitLast.get(canvas);
+    if (!last) return;
+    ${R}(last);
+    lobbyPanBlitCounts.rest++;
+    lobbyPanBlitCounts.last = "rest";
+  }, LOBBY_PAN_BLIT_REST_MS);
+}
+`
+  append(dev, blit({ R: '_renderStaticScene', SNAP: 'snapScrollToDevicePixels', BOUNDS: 'getElementBounds', LABEL: 'getBoundTextElement', ISTEXT: 'isTextElement2' }))
+  append(prod, blit({ R: 'It', SNAP: 'lt', BOUNDS: '$U', LABEL: 'Bf', ISTEXT: 'vf' }))
+
+  // the declarations
+  const types = file('excalidraw', 'dist/types/excalidraw/renderer/staticScene.d.ts')
+  if (types)
+    types.src += `/** Lobby patch (wave O, O-2): the pan blit's switch (off by default): a pure pan keeps the last frame shifted. */
+export declare const setPanBlit: (on: boolean) => void;
+/** Lobby patch (wave O, O-2): the pan blit's counters since the last reset (renders by kind, region area in px). */
+export declare const getPanBlitStats: () => {
+    on: boolean;
+    full: number;
+    blit: number;
+    rest: number;
+    lost: number;
+    elements: number;
+    area: number;
+    last: string;
+};
+export declare const resetPanBlitStats: () => void;
+`
+  const index = file('excalidraw', 'dist/types/excalidraw/index.d.ts')
+  if (index) index.src += 'export { setPanBlit, getPanBlitStats, resetPanBlitStats } from "./renderer/staticScene";\n'
 }
 
 // ------------------------------------------------------------------------------------------------------------------

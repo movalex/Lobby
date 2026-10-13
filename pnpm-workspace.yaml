@@ -122,6 +122,11 @@ overrides:
 # apps/web/test/engine-probe/pan-speed.test.ts and the browser probe (`pnpm probe:browser`: pan) check them (an
 # unpatched copy fails there). The edits are a script anchored on this nightly, re-applied after a bump:
 # docs/research/excalidraw/wave-o/pan-patch.mjs (its header has the steps).
+# Wave O (O-2): the pan blit. The excalidraw patch routes the static render through a blit that keeps the last frame,
+# shifted, on a pure pan, and exports its switch (`setPanBlit`, off until Lobby turns it on: sync/flags.ts PAN_BLIT);
+# the element patch rounds the element snap the same at every scroll (T: the canvas keeps its transform in single
+# precision, so an exact half-pixel tie flipped with the scroll). Checked by pan-speed.test.ts, the browser probe
+# (pan-blit) and e2e/excalidraw/o2-pan-blit.spec.ts.
 patchedDependencies:
   '@excalidraw/element@0.18.0-1118751': patches/@excalidraw__element@0.18.0-1118751.patch
   '@excalidraw/excalidraw@0.18.0-1118751': patches/@excalidraw__excalidraw@0.18.0-1118751.patch

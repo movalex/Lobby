@@ -13,6 +13,7 @@ import { runA8InBrowser } from './a8.ts'
 import { type AddFilesApi, checkAddFiles } from './add-files.ts'
 import { calibrate } from './calibrate.ts'
 import { layoutCorpusInBrowser } from './layout-corpus.ts'
+import { checkPanBlit } from './pan-blit.ts'
 import { checkPanEngine } from './pan.ts'
 import { checkRenderCull } from './render-cull.ts'
 
@@ -30,6 +31,7 @@ declare global {
       addFiles?: () => ReturnType<typeof checkAddFiles>
       renderCull?: () => ReturnType<typeof checkRenderCull>
       pan?: () => ReturnType<typeof checkPanEngine>
+      panBlit?: () => ReturnType<typeof checkPanBlit>
     }
   }
 }
@@ -53,6 +55,7 @@ const onApi = (api: Api) => {
       window.__probe.addFiles = () => checkAddFiles(api as unknown as AddFilesApi)
       window.__probe.renderCull = () => checkRenderCull(api)
       window.__probe.pan = () => checkPanEngine(api)
+      window.__probe.panBlit = () => checkPanBlit(api)
       window.__probe.ready = true
     } else if (performance.now() - started > 30_000) {
       window.__probe.error = 'Excalidraw did not register its font faces within 30 s'
