@@ -29,9 +29,9 @@ import {
   cameras,
   clipState,
   corpus,
-  edgeSweep,
   type El,
   type Engine,
+  edgeSweep,
   engineFrameClip,
   mapOf,
   STYLE,
@@ -416,13 +416,16 @@ describe('wave O pan speed-ups: static pins in both builds of @excalidraw/excali
 })
 
 describe('wave O O-2: the pan blit and the tie bias, static pins', () => {
-  it.each(BUILDS)('%s element build: T is in drawElementFromCanvas (behaviour: pan-snap.test.ts)', (build) => {
-    const src = readDist('element', build)
-    // its two calls (one per axis; prod: on one line) and its definition
-    expect(count(src, /lobbySnapAnchor\(/)).toBe(3)
-    expect(count(src, /lobbySnapAnchor\(0,/)).toBe(1)
-    expect(count(src, /lobbySnapAnchor\(1,/)).toBe(1)
-  })
+  it.each(BUILDS)(
+    '%s element build: T is in drawElementFromCanvas (behaviour: pan-snap.test.ts)',
+    (build) => {
+      const src = readDist('element', build)
+      // its two calls (one per axis; prod: on one line) and its definition
+      expect(count(src, /lobbySnapAnchor\(/)).toBe(3)
+      expect(count(src, /lobbySnapAnchor\(0,/)).toBe(1)
+      expect(count(src, /lobbySnapAnchor\(1,/)).toBe(1)
+    },
+  )
 
   it.each(BUILDS)(
     '%s excalidraw build: every static render goes through the blit, which is exported',

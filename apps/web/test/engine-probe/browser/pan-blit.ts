@@ -232,7 +232,14 @@ function scene(): Any[] {
       } as never),
     )
   // mirrored images (element patch T: a mirror's transform carries the centre, scroll included, twice) and a turned one
-  for (const [i, scale] of ([[-1, 1], [1, -1], [-1, -1], [1, 1]] as const).entries())
+  for (const [i, scale] of (
+    [
+      [-1, 1],
+      [1, -1],
+      [-1, -1],
+      [1, 1],
+    ] as const
+  ).entries())
     add(
       newImageElement({
         ...STYLE,

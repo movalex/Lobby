@@ -23,9 +23,9 @@ import {
   cameras,
   clipState,
   corpus,
-  edgeSweep,
   type El,
   type Engine,
+  edgeSweep,
   engineFrameClip,
   mapOf,
   STYLE,
@@ -82,7 +82,15 @@ for (const [els, map, seed] of [
   const m = map ?? mapOf(els)
   const cams = cameras(X, els, m, seed)
   for (const [k, cam] of cams.entries())
-    for (const offset of [{ x: 0, y: 0 }, ...(k < 8 ? [{ x: 1e9, y: 1e9 }, { x: 37.25, y: -12.5 }] : [])]) {
+    for (const offset of [
+      { x: 0, y: 0 },
+      ...(k < 8
+        ? [
+            { x: 1e9, y: 1e9 },
+            { x: 37.25, y: -12.5 },
+          ]
+        : []),
+    ]) {
       const a = answers(X, els, m, cam, offset)
       visibleA1 += offset.x === 0 ? a.visible : 0
       for (let i = 0; i < a.engine.length; i++)
