@@ -1009,8 +1009,9 @@ var renderStaticScene = (renderConfig, throttle) => {
 // device pixels at every snapped scroll (element patch T rounds the element snap the same at every scroll).
 // The inputs: the StaticCanvas memo's own (areEqual: the canvas nonce, the scale, the renderable map, the app state it
 // compares, every renderConfig value) and the canvas's size, the rough canvas, the scene map, the in-place caches'
-// sizes. Any other render is a full one: an export, a drag, a zoom, a change of any input, a move of a third of the
-// canvas or more, bands over 60 % of it. A render at rest (LOBBY_PAN_BLIT_REST_MS after the last blit) is a full one, and
+// sizes. Any other render is a full one: an export, the grid drawn (strokeGrid starts each dashed line's pattern at the
+// scroll modulo the grid size, so once the scroll crosses a grid line a shifted frame's dashes and a later band's are at
+// another phase), a drag, a zoom, a change of any input, a move of a third of the canvas or more, bands over 60 % of it. A render at rest (LOBBY_PAN_BLIT_REST_MS after the last blit) is a full one, and
 // so is the first render after the canvas loses its context. Off unless Lobby turns it on (setPanBlit).
 var lobbyPanBlitOn = false;
 var LOBBY_PAN_BLIT_REST_MS = 120;
@@ -1147,13 +1148,19 @@ function lobbyPanBlitFull(canvas, config, appState, key, ink) {
 }
 function lobbyRenderStaticScene(config) {
   const canvas = config.canvas;
-  if (!canvas || !lobbyPanBlitOn || config.renderConfig.isExporting) {
+  // the grid is drawn unless renderGrid is false (_renderStaticScene's own default)
+  const grid = config.renderConfig.renderGrid !== false;
+  if (!canvas || !lobbyPanBlitOn || config.renderConfig.isExporting || grid) {
     if (canvas) {
       lobbyPanBlitDrop(canvas);
       lobbyPanBlitLast.delete(canvas);
       lobbyPanBlitScratch.delete(canvas);
     }
     ${R}(config);
+    if (canvas && lobbyPanBlitOn && !config.renderConfig.isExporting) {
+      lobbyPanBlitCounts.full++;
+      lobbyPanBlitCounts.last = "grid";
+    }
     return;
   }
   lobbyPanBlitHook(canvas);
