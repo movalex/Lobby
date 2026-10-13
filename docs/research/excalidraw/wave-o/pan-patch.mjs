@@ -1,63 +1,268 @@
-// Wave O (WO-PAN): the engine edits of Lobby's pan speed-ups, applied to the copies `pnpm patch` extracts, so the patch
-// can be redone after an @excalidraw bump. Every edit is anchored on the pinned nightly (0.18.0-1118751): an anchor that
-// is not found exactly once fails the run, and so does an in-place edit that changes the file's line count (the engine
-// probes and Lobby's docs cite dist/dev line numbers; new code goes after the last line of the module).
+// Lobby's engine patches, generated: patches/@excalidraw__element@0.18.0-1118751.patch and
+// patches/@excalidraw__excalidraw@0.18.0-1118751.patch (pnpm-workspace.yaml patchedDependencies) are this script's output,
+// byte for byte. It reads the clean install of both packages from the pnpm store (the lockfile's integrity names the
+// store's index of the package; each file's content is checked against its integrity there), applies the edits of
+// every part in order, and writes the patches the way `pnpm patch-commit` writes them (its own `git diff` call and
+// rewrites), over the files the edits touch only (so no stanza for the files outside the package's `files`).
 //
-//   pnpm patch @excalidraw/element@0.18.0-1118751 --edit-dir <E>
-//   pnpm patch @excalidraw/excalidraw@0.18.0-1118751 --edit-dir <X>
-//   node pan-patch.mjs --part=o1 --element=<E> --excalidraw=<X>      (O-1: A1-A4, C, E; no pixel change)
-//   node pan-patch.mjs --part=o1b --excalidraw=<X>                   (O-1b, on a copy with O-1: A5 and the kept passes)
-//   node pan-patch.mjs --part=o2 --element=<E> --excalidraw=<X>      (O-2, on a copy with O-1b: T and the pan blit B)
-//   pnpm patch-commit <E>; pnpm patch-commit <X>; then restore pnpm-workspace.yaml (patch-commit rewrites it: it
-//   sorts the catalog, drops the comments and `allowBuilds`) and add the patchedDependencies entry by hand
+//   node docs/research/excalidraw/wave-o/pan-patch.mjs --write    the patches, then `pnpm install --offline` (the
+//                                                                  lockfile takes their new hashes)
+//   node docs/research/excalidraw/wave-o/pan-patch.mjs --check    exit 1 unless the committed patches are the output
+//                                                                  and the lockfile holds their hashes
+//                                                                  (apps/web/test/engine-probe/pan-patch.test.ts)
 //
-// `pnpm patch` applies the existing patch to the copy it extracts: after a bump, extract with --ignore-existing (the
-// element copy then needs W5-53's edits first: apps/web/src/canvas/engine/arrow-geometry.test.ts lists them). The
-// excalidraw patch-commit also lists the package's CHANGELOG.md and history.ts as deleted (they are outside its `files`):
-// drop those two stanzas from the patch, then `pnpm install` so the lockfile takes the patch's new hash.
-import { readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+// The parts, applied in this order:
+//   w553  W5-53 (wave J, J6a), element only: the orbit binding gap and the arrowhead stroke scale
+//         (apps/web/src/canvas/engine/arrow-geometry.test.ts pins them)
+//   o1    wave O O-1: A1-A4, C, E; no pixel change
+//   o1b   wave O O-1b: A5 and the kept passes (A4b)
+//   o2    wave O O-2: T (the element snap rounds the same at every scroll) and B (the pan blit)
+//
+// Every edit is anchored on the pinned nightly (0.18.0-1118751): an anchor that is not found exactly once fails the run,
+// and so does an in-place edit that changes a dev file's line count (the engine probes and Lobby's docs cite dist/dev
+// line numbers; new code goes after the last line of the module). The prod builds are minified: every minified name a
+// new line of code calls is checked first, against the build's own `local as name` binding (its export list, or its
+// import from @excalidraw/element) or, for a module-local function, against a definition that says what it is
+// (`exported`, `imported`, `defined` below). A name that still exists but now means something else fails the run.
+//
+// After an @excalidraw bump: bump VERSION, `pnpm install` (with the patchedDependencies entries removed while the old
+// patches cannot apply), run --write, fix each anchor the run names, then put the entries back and `pnpm install`.
+// The bump PR runs the engine probe suite and the full gate (AGENTS.md).
+import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
-const arg = (name) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3)
-const part = arg('part')
-const dirs = { element: arg('element'), excalidraw: arg('excalidraw') }
-if (!['o1', 'o1b', 'o2'].includes(part)) throw new Error('--part=o1, o1b or o2')
-
-const files = new Map()
-const file = (pkg, rel) => {
-  const dir = dirs[pkg]
-  if (!dir) return null
-  const path = join(dir, rel)
-  if (!files.has(path)) files.set(path, { path, src: readFileSync(path, 'utf8'), lines: null, appended: [] })
-  const f = files.get(path)
-  f.lines ??= f.src.split('\n').length
-  return f
+export const VERSION = '0.18.0-1118751'
+export const REPO = fileURLToPath(new URL('../../../../', import.meta.url))
+export const PACKAGES = { element: '@excalidraw/element', excalidraw: '@excalidraw/excalidraw' }
+export const PATCH_FILES = {
+  element: `patches/@excalidraw__element@${VERSION}.patch`,
+  excalidraw: `patches/@excalidraw__excalidraw@${VERSION}.patch`,
 }
+
+// ------------------------------------------------------------------------------------------------------------------
+// The clean install, from the pnpm store
+// ------------------------------------------------------------------------------------------------------------------
+
+/** The pnpm store this workspace installed from (node_modules/.modules.yaml), or `PNPM_STORE_DIR`. */
+export function storeDir(repo = REPO) {
+  if (process.env.PNPM_STORE_DIR) return process.env.PNPM_STORE_DIR
+  const modules = readFileSync(join(repo, 'node_modules/.modules.yaml'), 'utf8')
+  const m = modules.match(/"?storeDir"?:\s*"?((?:[^"\\\n]|\\.)+)"?/)
+  if (!m) throw new Error('node_modules/.modules.yaml names no storeDir (set PNPM_STORE_DIR)')
+  return m[1].replace(/\\\\/g, '\\')
+}
+
+const sha512hex = (integrity) => Buffer.from(integrity.replace(/^sha512-/, ''), 'base64').toString('hex')
+
+/**
+ * `(pkg, rel) => text`: a file of the clean install of `pkg` at VERSION. The store's index of the package is found by the
+ * lockfile's integrity of its tarball; each file is read by its own integrity and checked against it.
+ */
+export function storeSource(repo = REPO) {
+  const store = storeDir(repo)
+  const lock = readFileSync(join(repo, 'pnpm-lock.yaml'), 'utf8')
+  const indexes = new Map()
+  const index = (name) => {
+    if (indexes.has(name)) return indexes.get(name)
+    const key = `\n  '${name}@${VERSION}':\n    resolution: {integrity: `
+    const at = lock.indexOf(key)
+    if (at < 0) throw new Error(`pnpm-lock.yaml: no package entry ${name}@${VERSION}`)
+    const integrity = lock.slice(at + key.length, lock.indexOf('}', at + key.length))
+    const hex = sha512hex(integrity)
+    const path = join(store, 'index', hex.slice(0, 2), `${hex.slice(2, 64)}-${name.replace('/', '+')}@${VERSION}.json`)
+    const json = JSON.parse(readFileSync(path, 'utf8'))
+    indexes.set(name, json)
+    return json
+  }
+  return (pkg, rel) => {
+    const name = PACKAGES[pkg]
+    const entry = index(name).files[rel]
+    if (!entry) throw new Error(`${name}@${VERSION} has no file ${rel}`)
+    const hex = sha512hex(entry.integrity)
+    const bytes = readFileSync(
+      join(store, 'files', hex.slice(0, 2), `${hex.slice(2)}${entry.mode & 0o111 ? '-exec' : ''}`),
+    )
+    if (createHash('sha512').update(bytes).digest('hex') !== hex)
+      throw new Error(`the store's copy of ${name}/${rel} is not the one the lockfile installed`)
+    return bytes.toString('utf8')
+  }
+}
+
+// ------------------------------------------------------------------------------------------------------------------
+// The edits
+// ------------------------------------------------------------------------------------------------------------------
 
 /** Replaces the one occurrence of `from` with `to`; with `sameLines`, `to` keeps `from`'s line count. */
 const edit = (f, from, to, { sameLines = true } = {}) => {
-  if (!f) return
   const n = f.src.split(from).length - 1
-  if (n !== 1) throw new Error(`${f.path}: anchor found ${n} times:\n${from.slice(0, 300)}`)
+  if (n !== 1) throw new Error(`${f.label}: anchor found ${n} times:\n${from.slice(0, 300)}`)
   if (sameLines && from.split('\n').length !== to.split('\n').length)
-    throw new Error(`${f.path}: the edit changes the line count:\n${from.slice(0, 300)}`)
+    throw new Error(`${f.label}: the edit changes the line count:\n${from.slice(0, 300)}`)
   f.src = f.src.replace(from, () => to)
 }
 
 /** Code added after the module's last statement (before a dev build's sourceMappingURL comment). */
 const append = (f, code) => {
-  if (f) f.appended.push(code)
+  f.appended.push(code)
+}
+
+const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const NAME = '[\\w$]+'
+
+/** The bindings of every `export{...}` statement of a minified module, `local as name` (or a bare `name`). */
+const exportBindings = (src) => {
+  const out = []
+  for (const m of src.matchAll(/(?:^|[;}\n])export\{([^}]*)\}(?!from)/g))
+    for (const b of (m[1] ?? '').split(',')) out.push(b.trim())
+  return out
+}
+
+/** The bindings of every `import{...}from"<from>"` statement of a minified module. */
+const importBindings = (src, from) => {
+  const out = []
+  for (const m of src.matchAll(new RegExp(`import\\{([^}]*)\\}from"${esc(from)}"`, 'g')))
+    for (const b of (m[1] ?? '').split(',')) out.push(b.trim())
+  return out
+}
+
+/** `local` is the module's own name for its export `name`: its export list says `local as name`. */
+const exported = (f, local, name) => {
+  if (!exportBindings(f.src).includes(`${local} as ${name}`))
+    throw new Error(`${f.label}: "${local}" is not the build's ${name} (no "${local} as ${name}" in its exports)`)
+  return local
+}
+
+/** `local` is the module's import of `name` from @excalidraw/element: one of its imports says `name as local`. */
+const imported = (f, name, local) => {
+  if (!importBindings(f.src, '@excalidraw/element').includes(`${name} as ${local}`))
+    throw new Error(`${f.label}: "${local}" is not its import of ${name} (no "${name} as ${local}" from @excalidraw/element)`)
+  return local
+}
+
+/** A module-local function, pinned by a definition (or a use) that says what it is: `re` matches exactly once. */
+const defined = (f, re, what) => {
+  const n = [...f.src.matchAll(new RegExp(re.source, 'g'))].length
+  if (n !== 1) throw new Error(`${f.label}: ${what}: ${n} matches of ${re.source}`)
 }
 
 const EL_DEV = 'dist/dev/index.js'
 const EL_PROD = 'dist/prod/index.js'
 const X_DEV = 'dist/dev/index.js'
 const X_PROD = 'dist/prod/index.js'
+const X_DEV_CHUNK = 'dist/dev/chunk-FN755BR4.js'
+const X_PROD_CHUNK = 'dist/prod/chunk-K5UJM3GG.js'
+
+// ------------------------------------------------------------------------------------------------------------------
+// W5-53 (wave J, J6a), @excalidraw/element: the orbit binding gap, the arrowhead stroke scale
+// ------------------------------------------------------------------------------------------------------------------
+function w553(file) {
+  const dev = file('element', EL_DEV)
+  const prod = file('element', EL_PROD)
+
+  // 1. binding.ts: next to BASE_BINDING_GAP, the gap an orbit-mode bound end keeps from its target's outline
+  edit(
+    dev,
+    'var BASE_BINDING_GAP = 5;\n',
+    'var BASE_BINDING_GAP = 5; var ORBIT_BINDING_GAP = 1; var getOrbitBindingGap = (bindTarget) => ORBIT_BINDING_GAP + (Number(bindTarget.strokeWidth) || 0) / 2;\n',
+  )
+  exported(prod, 'Be', 'getBindingGap')
+  edit(
+    prod,
+    'var Bn=5,hg=10,po=10/1.5,xr=1,Be=e=>Bn+e.strokeWidth/2,',
+    'var Bn=5,hg=10,po=10/1.5,xr=1,Be=e=>Bn+e.strokeWidth/2,getOrbitBindingGap=e=>1+(Number(e.strokeWidth)||0)/2,',
+  )
+  // 2. updateBoundPoint: its two intersections (the other end's outline point, the bound end's) take the orbit gap
+  edit(
+    dev,
+    `    elementsMap,
+    intersector,
+    getBindingGap(otherBindable)
+  ).sort(`,
+    `    elementsMap,
+    intersector,
+    getOrbitBindingGap(otherBindable)
+  ).sort(`,
+  )
+  edit(
+    dev,
+    `    elementsMap,
+    intersector,
+    getBindingGap(bindableElement)
+  ).sort(`,
+    `    elementsMap,
+    intersector,
+    getOrbitBindingGap(bindableElement)
+  ).sort(`,
+  )
+  edit(
+    prod,
+    'p=a&&u&&pt(a,o,u,Be(a)).sort((b,y)=>tt(b,s)-tt(y,s))[0],m=u&&pt(i,o,u,Be(i))',
+    'p=a&&u&&pt(a,o,u,getOrbitBindingGap(a)).sort((b,y)=>tt(b,s)-tt(y,s))[0],m=u&&pt(i,o,u,getOrbitBindingGap(i))',
+  )
+  // 3. bounds.ts: next to the arrowhead sizes, the stroke scale, and getArrowheadPoints multiplies the size by it
+  edit(
+    dev,
+    'var CROWFOOT_ARROWHEAD_SIZE = 15;\n',
+    'var CROWFOOT_ARROWHEAD_SIZE = 15; var getArrowheadStrokeScale = (strokeWidth) => Math.min(1, Math.max(0.4, (Number(strokeWidth) || 0) / 4));\n',
+  )
+  edit(
+    dev,
+    '  const size = getArrowheadSize(arrowhead);\n',
+    '  const size = getArrowheadSize(arrowhead) * getArrowheadStrokeScale(element.strokeWidth);\n',
+  )
+  exported(prod, 'ox', 'getArrowheadSize')
+  exported(prod, 'rt', 'getArrowheadPoints')
+  edit(prod, ',nx=20,ix=15,', ',nx=20,ix=15,getArrowheadStrokeScale=e=>Math.min(1,Math.max(.4,(Number(e)||0)/4)),')
+  edit(prod, ',w=ox(i)', ',w=ox(i)*getArrowheadStrokeScale(e.strokeWidth)')
+  // 4. both exported, and declared
+  edit(
+    dev,
+    `  getArrowheadPoints,
+  getArrowheadSize,
+  getBaseFontSize,`,
+    `  getArrowheadPoints,
+  getArrowheadSize,
+  getArrowheadStrokeScale,
+  getOrbitBindingGap,
+  getBaseFontSize,`,
+    { sameLines: false },
+  )
+  edit(
+    prod,
+    ',rt as getArrowheadPoints,ox as getArrowheadSize,',
+    ',rt as getArrowheadPoints,ox as getArrowheadSize,getArrowheadStrokeScale,getOrbitBindingGap,',
+  )
+  const binding = file('element', 'dist/types/element/src/binding.d.ts')
+  const getBindingGapType =
+    'export declare const getBindingGap: (bindTarget: Pick<ExcalidrawBindableElement, "strokeWidth">) => number;\n'
+  edit(
+    binding,
+    getBindingGapType,
+    `${getBindingGapType}/** Lobby patch (W5-53): how far a bound end in orbit mode sits off its target's outline: 1 + strokeWidth / 2 (the engine's own getBindingGap is 5 + strokeWidth / 2, still used by everything else). */
+export declare const getOrbitBindingGap: (bindTarget: Pick<ExcalidrawBindableElement, "strokeWidth">) => number;
+`,
+    { sameLines: false },
+  )
+  const bounds = file('element', 'dist/types/element/src/bounds.d.ts')
+  const getArrowheadSizeType = 'export declare const getArrowheadSize: (arrowhead: Arrowhead) => number;\n'
+  edit(
+    bounds,
+    getArrowheadSizeType,
+    `${getArrowheadSizeType}/** Lobby patch (W5-53): the factor getArrowheadPoints multiplies a head's size by: strokeWidth / 4, from 0.4 to 1. */
+export declare const getArrowheadStrokeScale: (strokeWidth: number) => number;
+`,
+    { sameLines: false },
+  )
+}
 
 // ------------------------------------------------------------------------------------------------------------------
 // O-1, @excalidraw/element
 // ------------------------------------------------------------------------------------------------------------------
-if (part === 'o1') {
+function o1Element(file) {
   const dev = file('element', EL_DEV)
   const prod = file('element', EL_PROD)
 
@@ -86,10 +291,13 @@ if (part === 'o1') {
       bounds, lobbyContainer, lobbyContainerVersion: lobbyContainer?.version
     });`,
   )
+  // getBounds(element, elementsMap, nonRotated): t is the element and n the map in both prod edits
+  const getBounds =
+    'static getBounds(t,n,i=!1){let o=i&&t.angle!==0?e.nonRotatedBoundsCache.get(t):e.boundsCache.get(t);'
   edit(
     prod,
-    'if(o?.version&&o.version===t.version&&!ye(t))return o.bounds;',
-    'if(o?.version&&o.version===t.version&&(!ye(t)||lobbyBoundTextCacheHit(o,t,n)))return o.bounds;',
+    `${getBounds}if(o?.version&&o.version===t.version&&!ye(t))return o.bounds;`,
+    `${getBounds}if(o?.version&&o.version===t.version&&(!ye(t)||lobbyBoundTextCacheHit(o,t,n)))return o.bounds;`,
   )
   edit(
     prod,
@@ -103,6 +311,9 @@ if (part === 'o1') {
     '  const shouldClipElementItself = isElementIntersectingFrame(element, frame, elementsMap) || isElementContainingFrame(element, frame, elementsMap);',
     '  if (lobbyFrameClipNotNeeded(element, frame, elementsMap)) return false; /* Lobby patch, wave O C */ const shouldClipElementItself = isElementIntersectingFrame(element, frame, elementsMap) || isElementContainingFrame(element, frame, elementsMap);',
   )
+  exported(prod, 'KM', 'shouldApplyFrameClip')
+  exported(prod, 'Li', 'isElementIntersectingFrame')
+  exported(prod, 'Pa', 'isElementContainingFrame')
   edit(
     prod,
     'KM=(e,t,n,i,o)=>{if(!n.frameRendering||!n.frameRendering.clip)return!1;let r=Li(e,t,i)||Pa(e,t,i);',
@@ -154,23 +365,28 @@ function lobbyFrameClipNotNeeded(element, frame, elementsMap) {
 }
 `
   append(dev, helpers('getElementBounds', 'isBoundToContainer', 'elementsAreInFrameBounds'))
-  append(prod, helpers('ae', 'ye', 'Un'))
+  append(
+    prod,
+    helpers(
+      exported(prod, 'ae', 'getElementBounds'),
+      exported(prod, 'ye', 'isBoundToContainer'),
+      exported(prod, 'Un', 'elementsAreInFrameBounds'),
+    ),
+  )
 
   // the declaration, next to isElementInViewport's
   const types = file('element', 'dist/types/element/src/sizeHelpers.d.ts')
-  if (types) {
-    const at = types.src.indexOf('export declare const isElementCompletelyInViewport')
-    if (at < 0) throw new Error(`${types.path}: no isElementCompletelyInViewport declaration`)
-    types.src = `${types.src.slice(0, at)}/** Lobby patch (wave O, O-1): isElementInViewport's answer with the view as scalars (no allocation per call). */
+  const at = types.src.indexOf('export declare const isElementCompletelyInViewport')
+  if (at < 0) throw new Error(`${types.label}: no isElementCompletelyInViewport declaration`)
+  types.src = `${types.src.slice(0, at)}/** Lobby patch (wave O, O-1): isElementInViewport's answer with the view as scalars (no allocation per call). */
 export declare const isElementInViewportAt: (element: ExcalidrawElement, width: number, height: number, zoom: Zoom, offsetLeft: number, offsetTop: number, scrollX: number, scrollY: number, elementsMap: ElementsMap) => boolean;
 ${types.src.slice(at)}`
-  }
 }
 
 // ------------------------------------------------------------------------------------------------------------------
 // O-1, @excalidraw/excalidraw
 // ------------------------------------------------------------------------------------------------------------------
-if (part === 'o1') {
+function o1Excalidraw(file) {
   const dev = file('excalidraw', X_DEV)
   const prod = file('excalidraw', X_PROD)
 
@@ -237,10 +453,13 @@ if (part === 'o1') {
           elements,
           editingTextElement, newElement9); // Lobby patch (wave O, A3): kept across camera moves`,
   )
+  // _getRenderableElements' parameters: t is the canvas nonce, d the edited text, c the new element
+  const renderable =
+    '({canvasNonce:t,zoom:n,offsetLeft:o,offsetTop:r,scrollX:i,scrollY:a,height:s,width:l,editingTextElement:d,newElement:c})=>{'
   edit(
     prod,
-    'let p=this.scene.getNonDeletedElements(),{elementsMap:m,newElementCanvasElement:u}=this.getRenderableElementsMap({elements:p,editingTextElement:d,newElement:c})',
-    'let p=this.scene.getNonDeletedElements(),{elementsMap:m,newElementCanvasElement:u}=lobbyKeptRenderableElementsMap(this,t,p,d,c)',
+    `${renderable}let p=this.scene.getNonDeletedElements(),{elementsMap:m,newElementCanvasElement:u}=this.getRenderableElementsMap({elements:p,editingTextElement:d,newElement:c})`,
+    `${renderable}let p=this.scene.getNonDeletedElements(),{elementsMap:m,newElementCanvasElement:u}=lobbyKeptRenderableElementsMap(this,t,p,d,c)`,
   )
 
   // A1: the viewport test over the renderable map with the view as scalars
@@ -368,9 +587,9 @@ function lobbyEmbeddablesToRender(app, filter) {
 }
 
 // ------------------------------------------------------------------------------------------------------------------
-// O-1b, @excalidraw/excalidraw: A5 and the kept passes (no pixel change), on a copy with O-1
+// O-1b, @excalidraw/excalidraw: A5 and the kept passes (no pixel change), on top of O-1
 // ------------------------------------------------------------------------------------------------------------------
-if (part === 'o1b') {
+function o1b(file) {
   const dev = file('excalidraw', X_DEV)
   const prod = file('excalidraw', X_PROD)
 
@@ -610,13 +829,22 @@ function lobbyOffsetGroupsUnseen(groups, viewport) {
       FRAMEID: 'getCommonFrameId',
     }),
   )
-  append(prod, helpers({ BOUNDS: 'S5', INVIEW: 'lobbyInViewAt', ISTEXT: 'gU', CONTAINER: 'hU', FRAMEID: 'Ak' }))
+  append(
+    prod,
+    helpers({
+      BOUNDS: imported(prod, 'getElementBounds', 'S5'),
+      INVIEW: imported(prod, 'isElementInViewportAt', 'lobbyInViewAt'),
+      ISTEXT: imported(prod, 'isTextElement', 'gU'),
+      CONTAINER: imported(prod, 'getContainerElement', 'hU'),
+      FRAMEID: imported(prod, 'getCommonFrameId', 'Ak'),
+    }),
+  )
 }
 
 // ------------------------------------------------------------------------------------------------------------------
 // O-2, @excalidraw/element: T, the element snap rounds the same at every scroll
 // ------------------------------------------------------------------------------------------------------------------
-if (part === 'o2') {
+function o2Element(file) {
   const dev = file('element', EL_DEV)
   const prod = file('element', EL_PROD)
   // drawElementFromCanvas rounds an element's anchor to whole device pixels. The anchor term carries the scroll, and
@@ -664,9 +892,9 @@ function lobbySnapAnchor(p, q, t, anchorX, anchorY, sceneX, sceneY, offset, padd
 // ------------------------------------------------------------------------------------------------------------------
 // O-2, @excalidraw/excalidraw: B, the pan blit
 // ------------------------------------------------------------------------------------------------------------------
-if (part === 'o2') {
-  const dev = file('excalidraw', 'dist/dev/chunk-FN755BR4.js')
-  const prod = file('excalidraw', 'dist/prod/chunk-K5UJM3GG.js')
+function o2Excalidraw(file) {
+  const dev = file('excalidraw', X_DEV_CHUNK)
+  const prod = file('excalidraw', X_PROD_CHUNK)
   const devIndex = file('excalidraw', X_DEV)
   const prodIndex = file('excalidraw', X_PROD)
 
@@ -731,11 +959,7 @@ var renderStaticScene = (renderConfig, throttle) => {
 };
 `,
   )
-  edit(
-    prodIndex,
-    'import{A as ra,B as Td,',
-    'import{lobbySetPanBlit,lobbyGetPanBlitStats,lobbyResetPanBlitStats,A as ra,B as Td,',
-  )
+  edit(prodIndex, 'import{A as ra,B as Td,', 'import{lobbySetPanBlit,lobbyGetPanBlitStats,lobbyResetPanBlitStats,A as ra,B as Td,')
   edit(
     prodIndex,
     ',ai as zoomToFitBounds};',
@@ -758,6 +982,19 @@ var renderStaticScene = (renderConfig, throttle) => {
     prodIndex,
     'appState:e.appState,renderConfig:e.renderConfig},ps())',
     'appState:e.appState,renderConfig:e.renderConfig,canvasNonce:e.canvasNonce},ps())',
+  )
+
+  // the prod chunk's module-local names the blit calls: It is _renderStaticScene (its parameters, its first lines) and lt
+  // snapScrollToDevicePixels (what it does to a render's app state unless it exports)
+  defined(
+    prod,
+    /It=\(\{canvas:(\w+),rc:\w+,elementsMap:\w+,allElementsMap:\w+,visibleElements:\w+,scale:(\w+),appState:(\w+),renderConfig:(\w+)\}\)=>\{if\(\1===null\)return;let\{renderGrid:\w+=!0,isExporting:(\w+)\}=\4,\w+=\5\?\3:lt\(\3,\2\)/,
+    'It is _renderStaticScene and lt snapScrollToDevicePixels',
+  )
+  defined(
+    prod,
+    /[,;]lt=\(e,U\)=>\{let r=e\.zoom\.value\*U;if\(!\(r>0\)\)return e;let a=Math\.round\(e\.scrollX\*r\)\/r,d=Math\.round\(e\.scrollY\*r\)\/r;/,
+    'lt is snapScrollToDevicePixels',
   )
 
   const blit = ({ R, SNAP, BOUNDS, LABEL, ISTEXT }) => `
@@ -1035,13 +1272,30 @@ function lobbyRenderStaticScene(config) {
   }, LOBBY_PAN_BLIT_REST_MS);
 }
 `
-  append(dev, blit({ R: '_renderStaticScene', SNAP: 'snapScrollToDevicePixels', BOUNDS: 'getElementBounds', LABEL: 'getBoundTextElement', ISTEXT: 'isTextElement2' }))
-  append(prod, blit({ R: 'It', SNAP: 'lt', BOUNDS: '$U', LABEL: 'Bf', ISTEXT: 'vf' }))
+  append(
+    dev,
+    blit({
+      R: '_renderStaticScene',
+      SNAP: 'snapScrollToDevicePixels',
+      BOUNDS: 'getElementBounds',
+      LABEL: 'getBoundTextElement',
+      ISTEXT: 'isTextElement2',
+    }),
+  )
+  append(
+    prod,
+    blit({
+      R: 'It',
+      SNAP: 'lt',
+      BOUNDS: imported(prod, 'getElementBounds', '$U'),
+      LABEL: imported(prod, 'getBoundTextElement', 'Bf'),
+      ISTEXT: imported(prod, 'isTextElement', 'vf'),
+    }),
+  )
 
   // the declarations
   const types = file('excalidraw', 'dist/types/excalidraw/renderer/staticScene.d.ts')
-  if (types)
-    types.src += `/** Lobby patch (wave O, O-2): the pan blit's switch (off by default): a pure pan keeps the last frame shifted. */
+  types.src += `/** Lobby patch (wave O, O-2): the pan blit's switch (off by default): a pure pan keeps the last frame shifted. */
 export declare const setPanBlit: (on: boolean) => void;
 /** Lobby patch (wave O, O-2): the pan blit's counters since the last reset (renders by kind, region area in px). */
 export declare const getPanBlitStats: () => {
@@ -1057,16 +1311,158 @@ export declare const getPanBlitStats: () => {
 export declare const resetPanBlitStats: () => void;
 `
   const index = file('excalidraw', 'dist/types/excalidraw/index.d.ts')
-  if (index) index.src += 'export { setPanBlit, getPanBlitStats, resetPanBlitStats } from "./renderer/staticScene";\n'
+  index.src += 'export { setPanBlit, getPanBlitStats, resetPanBlitStats } from "./renderer/staticScene";\n'
 }
 
+export const PARTS = [
+  ['w553', [w553]],
+  ['o1', [o1Element, o1Excalidraw]],
+  ['o1b', [o1b]],
+  ['o2', [o2Element, o2Excalidraw]],
+]
+
 // ------------------------------------------------------------------------------------------------------------------
-for (const f of files.values()) {
-  if (f.appended.length) {
-    const code = f.appended.join('')
-    const map = f.src.lastIndexOf('\n//# sourceMappingURL=')
-    f.src = map >= 0 ? `${f.src.slice(0, map)}\n${code}${f.src.slice(map + 1)}` : `${f.src}${code}`
+// The patches
+// ------------------------------------------------------------------------------------------------------------------
+
+/**
+ * Every part applied to the clean install that `read(pkg, rel)` gives: the files they touch, before and after.
+ * `transform(pkg, rel, text)` may change a source as it is read (the tests plant a bump's renamed binding with it).
+ */
+export function edited(read = storeSource(), { transform } = {}) {
+  const files = new Map()
+  const file = (pkg, rel) => {
+    const id = `${pkg}/${rel}`
+    if (!files.has(id)) {
+      const before = transform ? transform(pkg, rel, read(pkg, rel)) : read(pkg, rel)
+      files.set(id, { pkg, rel, label: `${PACKAGES[pkg]}/${rel}`, before, src: before, appended: [] })
+    }
+    return files.get(id)
   }
-  writeFileSync(f.path, f.src)
-  console.log(`${f.path}: ${f.lines} -> ${f.src.split('\n').length} lines`)
+  for (const [, steps] of PARTS) for (const step of steps) step(file)
+  for (const f of files.values()) {
+    if (f.appended.length) {
+      const code = f.appended.join('')
+      const map = f.src.lastIndexOf('\n//# sourceMappingURL=')
+      f.src = map >= 0 ? `${f.src.slice(0, map)}\n${code}${f.src.slice(map + 1)}` : `${f.src}${code}`
+    }
+  }
+  return files
+}
+
+/**
+ * The patch `pnpm patch-commit` writes for these files: its `git diff` (the same flags, the same environment) of the
+ * clean files against the edited ones, with its rewrites of the paths. Only the edited files are compared.
+ */
+export function patchOf(files) {
+  const root = mkdtempSync(join(tmpdir(), 'lobby-pan-patch-'))
+  try {
+    const a = join(root, 'a')
+    const b = join(root, 'b')
+    for (const f of files) {
+      for (const [dir, text] of [
+        [a, f.before],
+        [b, f.src],
+      ]) {
+        mkdirSync(dirname(join(dir, f.rel)), { recursive: true })
+        writeFileSync(join(dir, f.rel), text)
+      }
+    }
+    const folderAN = a.replace(/\\/g, '/')
+    const folderBN = b.replace(/\\/g, '/')
+    let stdout = ''
+    try {
+      stdout = execFileSync(
+        'git',
+        [
+          '-c',
+          'core.safecrlf=false',
+          'diff',
+          '--src-prefix=a/',
+          '--dst-prefix=b/',
+          '--ignore-cr-at-eol',
+          '--irreversible-delete',
+          '--full-index',
+          '--no-index',
+          '--text',
+          '--no-ext-diff',
+          '--no-color',
+          folderAN,
+          folderBN,
+        ],
+        {
+          cwd: REPO,
+          env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' },
+          encoding: 'utf8',
+          maxBuffer: 256 * 1024 * 1024,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      )
+    } catch (err) {
+      // git diff exits 1 when the folders differ
+      if (err.status !== 1 || err.stderr?.length) throw err
+      stdout = err.stdout
+    }
+    const trim = (p) => p.replace(/^\/|\/$/g, '')
+    return stdout
+      .replace(new RegExp(`(a|b)(${esc(`/${trim(folderAN)}/`)})`, 'g'), '$1/')
+      .replace(new RegExp(`(a|b)${esc(`/${trim(folderBN)}/`)}`, 'g'), '$1/')
+      .replace(new RegExp(esc(`${folderAN}/`), 'g'), '')
+      .replace(new RegExp(esc(`${folderBN}/`), 'g'), '')
+      .replace(/\n\\ No newline at end of file\n$/, '\n')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+/** Both patches, as `pnpm patch-commit` would write them for the edited packages. */
+export function generate(read = storeSource(), opts = {}) {
+  const files = [...edited(read, opts).values()]
+  const out = {}
+  for (const pkg of Object.keys(PACKAGES)) out[pkg] = patchOf(files.filter((f) => f.pkg === pkg && f.src !== f.before))
+  return out
+}
+
+/** pnpm's hash of a patch file (createHexHashFromFile: sha256 of the text with CRLF read as LF). */
+export const patchHash = (text) => createHash('sha256').update(text.split('\r\n').join('\n')).digest('hex')
+
+/** What differs between the generated patches and the committed ones (and the lockfile's hashes of them): [] if nothing. */
+export function compare(generated, repo = REPO) {
+  const problems = []
+  const lock = readFileSync(join(repo, 'pnpm-lock.yaml'), 'utf8')
+  for (const [pkg, text] of Object.entries(generated)) {
+    const path = PATCH_FILES[pkg]
+    const committed = readFileSync(join(repo, path))
+    const want = Buffer.from(text, 'utf8')
+    if (!committed.equals(want)) {
+      let at = 0
+      while (at < want.length && committed[at] === want[at]) at++
+      problems.push(
+        `${path}: not the generator's output (${committed.length} B committed, ${want.length} B generated, first difference at byte ${at})`,
+      )
+    }
+    const key = `\n  '${PACKAGES[pkg]}@${VERSION}':\n    hash: `
+    const at = lock.indexOf(key)
+    const hash = at < 0 ? null : lock.slice(at + key.length, at + key.length + 64)
+    if (hash !== patchHash(text)) problems.push(`pnpm-lock.yaml: ${PACKAGES[pkg]}'s patch hash is ${hash}, not ${patchHash(text)}`)
+  }
+  return problems
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const mode = process.argv.includes('--write') ? 'write' : process.argv.includes('--check') ? 'check' : null
+  if (!mode) throw new Error('--write or --check')
+  const generated = generate()
+  if (mode === 'write') {
+    for (const [pkg, text] of Object.entries(generated)) {
+      writeFileSync(join(REPO, PATCH_FILES[pkg]), text, 'utf8')
+      console.log(`${PATCH_FILES[pkg]}: ${Buffer.byteLength(text)} B, hash ${patchHash(text)}`)
+    }
+    console.log('now `pnpm install --offline`: the lockfile takes the new hashes')
+  } else {
+    const problems = compare(generated)
+    for (const p of problems) console.error(p)
+    if (problems.length) process.exitCode = 1
+    else console.log('both patches are the generator’s output, and the lockfile holds their hashes')
+  }
 }
