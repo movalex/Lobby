@@ -54,6 +54,9 @@ function usePreviews(): Previews | undefined {
 export const optionId = (base: string, id: PieceId) => `${base}-${id}`
 
 /** The list of pieces: one option each, the active one marked. Pure markup (a Node test renders it). */
+/** The hint's count: the panel is named Shapes, so it counts shapes. */
+export const countText = (n: number): string => (n === 1 ? '1 shape' : `${n} shapes`)
+
 export function PieceList({
   base,
   results,
@@ -73,7 +76,7 @@ export function PieceList({
   onPoint?(index: number): void
   onDragStart?(e: React.DragEvent, id: PieceId): void
 }) {
-  if (results.length === 0) return <p className="dr-pieces__empty">No pieces match.</p>
+  if (results.length === 0) return <p className="dr-pieces__empty">No shapes match.</p>
   return (
     <div className="dr-pieces__list" role="listbox" aria-label="Shapes" id={`${base}-list`}>
       {results.map((p, i) => (
@@ -176,7 +179,7 @@ export function PiecesPanel({ ctx, close }: { ctx: CanvasFeatureContext; close()
         />
       </label>
       <fieldset className="dr-pieces__chips">
-        <legend className="dr-sr-only">Piece categories</legend>
+        <legend className="dr-sr-only">Shape categories</legend>
         {(
           [{ id: 'all', label: 'All' }, ...PIECE_CATEGORIES] as { id: PieceCategory | 'all'; label: string }[]
         ).map((c) => (
@@ -208,8 +211,8 @@ export function PiecesPanel({ ctx, close }: { ctx: CanvasFeatureContext; close()
         }}
       />
       <p className="dr-pieces__hint" aria-live="polite">
-        {results.length === 1 ? '1 piece' : `${results.length} pieces`}. Click or press Enter to add one to
-        the middle of the view, or drag it onto the board.
+        {countText(results.length)}. Click or press Enter to add one to the middle of the view, or drag it
+        onto the board.
       </p>
     </div>
   )

@@ -5,7 +5,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { INITIAL, onKey, type PanelState, reduce, resultsOf } from './model.ts'
-import { optionId, PieceList } from './PiecesPanel.tsx'
+import { countText, optionId, PieceList } from './PiecesPanel.tsx'
 
 const render = (s: PanelState, readonly = false) =>
   renderToStaticMarkup(
@@ -49,7 +49,14 @@ describe('the Pieces list', () => {
     )
   })
 
+  it('says shapes, not pieces, in what people read (the panel is named Shapes)', () => {
+    expect(countText(1)).toBe('1 shape')
+    expect(countText(0)).toBe('0 shapes')
+    expect(countText(12)).toBe('12 shapes')
+    expect(render(INITIAL).replace(/<[^>]*>/g, ' ')).not.toMatch(/pieces?/i)
+  })
+
   it('says so when nothing matches', () => {
-    expect(render(typed('zzzz'))).toContain('No pieces match.')
+    expect(render(typed('zzzz'))).toContain('No shapes match.')
   })
 })

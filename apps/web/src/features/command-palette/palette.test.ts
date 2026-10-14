@@ -49,7 +49,7 @@ const CORPUS = [
   'Select all',
   'Group',
   'Ungroup',
-  'Toggle locked',
+  'Lock or unlock',
   'Unlock all',
   'Bring to front',
   'Send to back',
@@ -78,7 +78,7 @@ describe('the scorer (fixed corpus)', () => {
     expect(top('ztf')).toBe('Zoom to fit')
     expect(top('undo')).toBe('Undo')
     expect(top('und')).toBe('Undo')
-    expect(top('lock')).toBe('Toggle locked')
+    expect(top('lock')).toBe('Lock or unlock')
     expect(top('kbd')).toBeDefined()
     expect(top('shortcuts')).toBe('Keyboard shortcuts')
     expect(top('minimap')).toBe('Show / hide minimap')
@@ -88,7 +88,7 @@ describe('the scorer (fixed corpus)', () => {
     const q = fold('group')
     expect(scoreEntry(q, 'Group')).toBeGreaterThan(scoreEntry(q, 'Group into themes'))
     expect(scoreEntry(q, 'Group into themes')).toBeGreaterThan(scoreEntry(q, 'Ungroup'))
-    expect(scoreEntry('unlock', 'Unlock all')).toBeGreaterThan(scoreEntry('unlock', 'Toggle locked'))
+    expect(scoreEntry('unlock', 'Unlock all')).toBeGreaterThan(scoreEntry('unlock', 'Lock or unlock'))
     expect(scoreEntry('xyzzy', 'Undo')).toBe(0)
   })
 
