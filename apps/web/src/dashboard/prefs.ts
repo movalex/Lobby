@@ -69,6 +69,20 @@ export function readWhatsNewDismissed(
   }
 }
 
+/**
+ * The release of the What's new card this person last saw or dismissed in this browser, or null when there is no
+ * record (a first visit: the dashboard greets them with the Welcome card, wave P). Storage that is missing or throws
+ * also reads as null.
+ */
+export function readWhatsNewSeen(userId: string, store: ReadStore = browserStorage()): string | null {
+  try {
+    const v = store?.getItem(whatsNewKey(userId))
+    return typeof v === 'string' && v !== '' ? v : null
+  } catch {
+    return null
+  }
+}
+
 export function writeWhatsNewDismissed(
   userId: string,
   version: string,

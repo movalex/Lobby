@@ -32,6 +32,7 @@ import { BoardDetailsDialog, DuplicateBoardDialog, MoveBoardDialog } from './Boa
 import { CreateBoardDialog } from './CreateBoardDialog.tsx'
 import { DashboardBell, useDashboardInbox } from './DashboardBell.tsx'
 import { dashboardApi, IMPORT_BODY_LIMIT_BYTES } from './dashboard-api.ts'
+import { HelpMenu } from './HelpMenu.tsx'
 import { useInternalOnly } from './InternalOnly.tsx'
 import { internalOnlyShown } from './internal-only-model.ts'
 import { LazyDialogBoundary } from './LazyDialogBoundary.tsx'
@@ -63,7 +64,7 @@ import { newsByBoard } from './notifications.ts'
 import {
   readPickerHidden,
   readViewMode,
-  readWhatsNewDismissed,
+  readWhatsNewSeen,
   type ViewMode,
   writeViewMode,
   writeWhatsNewDismissed,
@@ -78,18 +79,20 @@ import { SampleBoardButton } from './TemplateGallery.tsx'
 import type { CatalogEntry } from './template-catalog.ts'
 import { newBoardPath } from './template-paths.ts'
 import { useCatalog, whenIdle } from './use-catalog.ts'
+import { WelcomeCard } from './Welcome.tsx'
 import { WhatsNewCard } from './WhatsNew.tsx'
 import {
+  introCard,
   NO_PLACE_TO_TRY,
   planBoardTry,
   planHintTry,
-  showWhatsNew,
   type TryAction,
   type TryKey,
   unavailableTries,
   WHATS_NEW_VERSION,
   whatsNewFor,
 } from './whats-new.ts'
+import { isApplePlatform } from './welcome.ts'
 import { requestWorkspaceMenu } from './workspace-menu-request.ts'
 import './dashboard.css'
 
@@ -189,8 +192,10 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   const canCreateNow = useRef(canCreate)
   canCreateNow.current = canCreate
   const { mod: catalogMod } = useCatalog(catalogWanted)
-  // K4-5: the What's new card is dismissed per person (their browser's storage, which may be missing)
-  const [whatsNewGone, setWhatsNewGone] = useState(() => readWhatsNewDismissed(me.user.id, WHATS_NEW_VERSION))
+  // K4-5, wave P: which release of the What's new card this person last saw (their browser's storage, which may be
+  // missing). No record at all is a first visit: the Welcome card, not a changelog (P-002).
+  const [seenRelease, setSeenRelease] = useState(() => readWhatsNewSeen(me.user.id))
+  const welcomeFirst = seenRelease === null && !guest && section.kind === 'recent'
   const [now, setNow] = useState(() => new Date())
   // PRI-05a: what is new, without opening each board (the board bell's inbox).
   const inbox = useDashboardInbox()
@@ -200,13 +205,16 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   // template catalog for its thumbnails (a guest, an outside account, the All / Archived / Trash / project
   // views and a search in progress never pay for the chunk). It is fetched once the page is idle, so the
   // dashboard's first paint never waits for the template builders.
-  const startRowShown = showStartRow({
-    canCreate,
-    guest,
-    section,
-    searching: query.trim().length > 0,
-    pickerHidden: readPickerHidden(me.user.id),
-  })
+  // The Welcome card has the three starts, so a first visit does not also get the row of twelve (P-009).
+  const startRowShown =
+    !welcomeFirst &&
+    showStartRow({
+      canCreate,
+      guest,
+      section,
+      searching: query.trim().length > 0,
+      pickerHidden: readPickerHidden(me.user.id),
+    })
   useEffect(() => (startRowShown ? whenIdle(() => setCatalogWanted(true)) : undefined), [startRowShown])
 
   // K4-5: "Try it" on the row's item: the row is shown (a search was cleared for it) and its first tile
@@ -343,12 +351,14 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
     startRow: startRowForCard,
     items: newItems,
   })
-  const whatsNewShown = showWhatsNew({
-    items: newItems,
-    guest,
-    dismissed: whatsNewGone,
-    landing: section.kind === 'recent',
-  })
+  const intro = introCard({ seen: seenRelease, items: newItems, guest, landing: section.kind === 'recent' })
+  const whatsNewShown = intro === 'whats-new'
+  const welcomeShown = intro === 'welcome'
+  // Whatever card they saw is remembered at this release: neither shows again until the next one
+  const rememberIntro = () => {
+    writeWhatsNewDismissed(me.user.id, WHATS_NEW_VERSION)
+    setSeenRelease(WHATS_NEW_VERSION)
+  }
   const menu = { canCreate, canMove: inWorkspace }
   const defaultProjectId = section.kind === 'project' ? section.projectId : null
 
@@ -497,7 +507,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
     setStarting(choice)
     try {
       const board = await api.createBoard(workspace.id, {
-        title: startTitle(entry),
+        title: startTitle(entry, choice),
         projectId: defaultProjectId,
       })
       navigate(newBoardPath(board.id, choice === 'blank' ? null : choice))
@@ -696,6 +706,11 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
             />
           </div>
           <div className="dr-dash__spacer" />
+          <HelpMenu
+            canTour={canCreate}
+            onTour={() => void startFromRow('lobby-tour', null)}
+            onFeedback={() => openFeedback(null)}
+          />
           <DashboardBell {...inbox} />
           <UserMenu />
         </header>
@@ -878,6 +893,22 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
           />
         )}
 
+        {welcomeShown && (
+          <WelcomeCard
+            canCreate={canCreate}
+            pending={starting}
+            apple={isApplePlatform()}
+            onStart={(choice) => {
+              rememberIntro()
+              void startFromRow(choice, null)
+            }}
+            onMoreTemplates={() => {
+              if (canCreate) setCreating(true)
+            }}
+            onDismiss={rememberIntro}
+          />
+        )}
+
         {whatsNewShown && (
           <WhatsNewCard
             items={newItems}
@@ -886,10 +917,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
             unavailableReason={boards.status === 'ready' ? NO_PLACE_TO_TRY : undefined}
             onTry={tryNew}
             onTellUs={() => openFeedback(null)}
-            onDismiss={() => {
-              writeWhatsNewDismissed(me.user.id, WHATS_NEW_VERSION)
-              setWhatsNewGone(true)
-            }}
+            onDismiss={rememberIntro}
           />
         )}
 

@@ -1,8 +1,8 @@
 // Wave K (K4-5): the Feedback pill and the What's new card on the dashboard, in a real browser against the real
 // api. Zero real feedback items arrived in the first week; pilot users had no way to learn what wave K moved.
 //   - the pill opens the existing dialog, and what is sent arrives at the api with its context and its author;
-//   - the card lists its items, "Tell us" opens the same dialog (wave M, M3-3: the card is wave L's now, its "Try it" of each item
-//     is m3-whats-new.spec.ts; the wave K items and their Try it tests went with them);
+//   - the card lists its items, "Tell us" opens the same dialog (wave P: the card is for people who have been here
+//     before; a first visit gets the Welcome card, p-first-run.spec.ts);
 //   - dismissing the card is remembered for that person in that browser (a reload keeps it hidden; another
 //     person on the browser, and a cleared storage, see it again), and a browser whose storage throws still
 //     renders the page.
@@ -12,6 +12,7 @@ import { expect, test } from '../tests/support/canvas.ts'
 import {
   freshHandle,
   openDashboard,
+  type Person,
   personalWorkspace,
   signedInContext,
 } from '../tests/support/dashboard-share.ts'
@@ -24,6 +25,15 @@ test.use({ viewport: { width: 1360, height: 860 } })
 
 const CREATOR = 'lobby-test-k4f@darkburn.com'
 
+/** Makes this person a returning one: this browser has seen an earlier release of the card (wave P: else, the Welcome). */
+async function returning(p: Person) {
+  await p.page.goto('/')
+  await p.page.evaluate(
+    (key) => localStorage.setItem(key, '2026-10-wave-l'),
+    `draftroom:whats-new-dismissed:${p.me.user.id}`,
+  )
+}
+
 test('the Feedback pill opens the dialog and one item reaches the api; the Whatâ€™s new card dismisses and stays dismissed', async ({
   browser,
   users,
@@ -33,33 +43,20 @@ test('the Feedback pill opens the dialog and one item reaches the api; the Whatâ
   const wid = personalWorkspace(p.me)
   const marker = `k4 pill ${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`
   try {
+    await returning(p)
     await openDashboard(p.page, wid)
     const card = p.page.getByTestId('whats-new')
     const pill = p.page.getByTestId('feedback-pill')
 
-    await test.step('the card lists three to five items with a way to try each, and a Tell us button', async () => {
+    await test.step('the card lists three to six items and a Tell us button, and no button that could look dead', async () => {
       await expect(card).toBeVisible()
       const items = card.getByTestId('whats-new-item')
       expect(await items.count()).toBeGreaterThanOrEqual(3)
-      expect(await items.count()).toBeLessThanOrEqual(5)
-      expect(await card.getByTestId('whats-new-try').count()).toBeGreaterThanOrEqual(3)
+      expect(await items.count()).toBeLessThanOrEqual(6)
+      await expect(card.getByTestId('whats-new-try')).toHaveCount(0)
       await expect(card.getByTestId('whats-new-tell-us')).toHaveText('Tell us')
       await expect(pill).toBeVisible()
       await capture('k4-whats-new.png', p.page, testInfo)
-    })
-
-    await test.step('each Try it goes to a board with a hint (wave L, M3-3: m3-whats-new.spec.ts follows them)', async () => {
-      expect(
-        await card
-          .getByTestId('whats-new-try')
-          .evaluateAll((els) => els.map((e) => e.getAttribute('data-action'))),
-      ).toEqual([
-        'board-hint:palette',
-        'board-hint:ask',
-        'board-hint:diagram',
-        'board-hint:time-travel',
-        'board-hint:run-of-show',
-      ])
     })
 
     await test.step('Tell us opens the feedback dialog, and Escape closes it', async () => {
@@ -103,17 +100,20 @@ test('the Feedback pill opens the dialog and one item reaches the api; the Whatâ
       await expect(p.page.getByTestId('feedback-pill')).toBeVisible()
     })
 
-    await test.step('it is remembered for this person: a cleared storage shows it again', async () => {
+    await test.step('it is remembered for this person: a cleared storage is a first visit, which gets the Welcome', async () => {
       await p.page.evaluate(() => localStorage.clear())
       await p.page.reload()
-      await expect(p.page.getByTestId('whats-new')).toBeVisible()
+      await expect(p.page.getByTestId('welcome')).toBeVisible()
+      await expect(p.page.getByTestId('whats-new')).toHaveCount(0)
     })
   } finally {
     await p.context.close()
   }
 })
 
-test('a browser whose storage throws still renders the dashboard, with the card', async ({ browser }) => {
+test('a browser whose storage throws still renders the dashboard, with the Welcome card', async ({
+  browser,
+}) => {
   const p = await signedInContext(browser, freshHandle('k4t'), { name: 'Tess Throws', email: CREATOR })
   try {
     // a private window or blocked site data: touching localStorage throws
@@ -127,10 +127,11 @@ test('a browser whose storage throws still renders the dashboard, with the card'
     })
     await openDashboard(p.page, personalWorkspace(p.me))
     await expect(p.page.getByTestId('dashboard')).toBeVisible()
-    await expect(p.page.getByTestId('whats-new')).toBeVisible()
-    await p.page.getByTestId('whats-new-dismiss').click()
+    // nothing can be remembered, so it is a first visit
+    await expect(p.page.getByTestId('welcome')).toBeVisible()
+    await p.page.getByTestId('welcome-dismiss').click()
     // it goes for now; nothing could be remembered
-    await expect(p.page.getByTestId('whats-new')).toHaveCount(0)
+    await expect(p.page.getByTestId('welcome')).toHaveCount(0)
     await expect(p.page.getByTestId('feedback-pill')).toBeVisible()
   } finally {
     await p.context.close()
@@ -142,6 +143,7 @@ test('the card is not shown to a person who cannot create, and what it shows is 
 }) => {
   const p = await signedInContext(browser, freshHandle('k4m'), { name: 'Mo Member', email: CREATOR })
   try {
+    await returning(p)
     // a member who may not create (the UI hides what they cannot use; the api still decides)
     const outside = { creator: false, reason: 'outside', email: 'client@client.example.test' }
     for (const url of ['**/api/auth/me', '**/api/me'])
@@ -154,13 +156,12 @@ test('the card is not shown to a person who cannot create, and what it shows is 
     await openDashboard(p.page, personalWorkspace(p.me))
     const card = p.page.getByTestId('whats-new')
     await expect(card).toBeVisible()
-    // wave L: what a person who cannot create can use is the palette, Ask and Time travel; the items that build on
-    // a board (diagrams, the run of show) are for people who can make boards
+    // what a person who cannot create can use; Capture the room makes notes on a board, so it is for people who can
     expect(
       await card
         .getByTestId('whats-new-item')
         .evaluateAll((els) => els.map((e) => e.getAttribute('data-item-id'))),
-    ).toEqual(['palette', 'ask', 'time-travel'])
+    ).toEqual(['vector-pdf', 'reactions', 'board-links', 'since-visit', 'big-boards'])
   } finally {
     await p.context.close()
   }

@@ -2,6 +2,7 @@
 // Recent boards. A click creates a private board from the tile and opens it (the same path as choosing a
 // template in New board: DashboardPage's `startFromRow`, then `?template=<id>` on the board). The row is a
 // plain function of its props (no hooks), so a component test can read it and press a tile.
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import type { StartChoice, StartTile } from './start-row-model.ts'
 import { TemplateThumb } from './TemplateGallery.tsx'
 import type { CatalogEntry } from './template-catalog.ts'
@@ -24,7 +25,7 @@ export function StartRow({
       <h2 id={START_ROW_HEADING_ID} className="dr-dash__group-title">
         Start something
       </h2>
-      <ul className="dr-start__list">
+      <StartScroller>
         {tiles.map((t) => (
           <li key={t.choice} className="dr-start__item">
             <button
@@ -52,7 +53,60 @@ export function StartRow({
             </button>
           </li>
         ))}
-      </ul>
+      </StartScroller>
     </section>
+  )
+}
+
+/**
+ * The row's scrolling list. When more tiles wait to the right (P-031: the row was cut at the edge with nothing to say
+ * so) it fades out there and has a "More templates" arrow; at the end both go away. Its own component (it has state),
+ * so StartRow stays a plain function.
+ */
+function StartScroller({ children }: { children: ReactNode }) {
+  const list = useRef<HTMLUListElement>(null)
+  const [more, setMore] = useState(false)
+  const measure = useCallback(() => {
+    const el = list.current
+    if (el) setMore(el.scrollWidth - el.clientWidth - el.scrollLeft > 4)
+  }, [])
+  useEffect(() => {
+    measure()
+    const el = list.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [measure])
+  return (
+    <div className="dr-start__scroller" data-more={more ? 'true' : 'false'} data-testid="start-scroller">
+      <ul className="dr-start__list" ref={list} onScroll={measure}>
+        {children}
+      </ul>
+      {more && (
+        <button
+          type="button"
+          className="dr-start__next"
+          data-testid="start-next"
+          aria-label="Show more templates"
+          title="Show more templates"
+          onClick={() => {
+            const el = list.current
+            el?.scrollBy({ left: Math.max(200, el.clientWidth * 0.7), behavior: 'smooth' })
+          }}
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path
+              d="M9 5l7 7-7 7"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      )}
+    </div>
   )
 }

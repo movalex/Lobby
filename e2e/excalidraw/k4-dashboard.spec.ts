@@ -29,6 +29,11 @@ const CREATOR = 'lobby-test-k4@darkburn.com'
 /** A creator with their own personal workspace (domain access: a Dark Burn address). */
 async function creator(browser: Parameters<typeof signedInContext>[0], name = 'Kay Four') {
   const p = await signedInContext(browser, freshHandle('k4'), { name, email: CREATOR })
+  // a returning person (wave P: a first visit gets the Welcome card in place of the template row)
+  await p.context.addInitScript(
+    (key) => localStorage.setItem(key, '2026-10-wave-l'),
+    `draftroom:whats-new-dismissed:${p.me.user.id}`,
+  )
   return { ...p, wid: personalWorkspace(p.me), api: new Api(p.context.request) }
 }
 
