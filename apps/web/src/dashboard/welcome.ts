@@ -8,7 +8,13 @@ export const WELCOME_INTRO =
   'Lobby is where the team brainstorms, plans and runs sessions together on one shared board. Everyone sees changes as they happen.'
 
 /** The three one-click starts: a blank board, a template, the Lobby tour. Their names are the Start row's. */
-export const WELCOME_STARTS: readonly { readonly choice: StartChoice; readonly name: string; readonly hint: string }[] = [
+export interface WelcomeStart {
+  readonly choice: StartChoice
+  readonly name: string
+  readonly hint: string
+}
+
+export const WELCOME_STARTS: readonly WelcomeStart[] = [
   { choice: 'blank', name: 'Blank board', hint: 'An empty canvas' },
   { choice: 'brainstorm', name: 'Brainstorm', hint: 'Notes to fill in with the team' },
   { choice: 'lobby-tour', name: 'Lobby tour', hint: 'A board that shows what Lobby can do' },

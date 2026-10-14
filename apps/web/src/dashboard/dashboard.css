@@ -1115,6 +1115,11 @@
   }
 }
 
+/* P-027: room under the last card for the Feedback pill (it sat on top of the What's new footer's button on a phone) */
+.dr-dash .dr-dash__main {
+  padding-bottom: 84px;
+}
+
 /* P-043: toasts on the dashboard sit at the bottom, where they do not cover the view toggles, the filters and New board
    in the header (the shared top-centre spot is for the board's own chrome). The Feedback pill is at the right. */
 .dr-dash .dr-notices {
