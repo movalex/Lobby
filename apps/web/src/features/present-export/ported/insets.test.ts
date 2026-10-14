@@ -136,7 +136,8 @@ describe('a slide never touches the view’s edges (P-039)', () => {
   for (const view of VIEWS)
     it(`at ${view.w}×${view.h}: every frame keeps the focus ring and a margin clear on top, left and right`, () => {
       expect(PRESENT_EDGE_MARGIN).toBeGreaterThan(RING_PX)
-      for (const top of [NO_TOP_CHROME, { ...NO_TOP_CHROME, timer: true }, { ...NO_TOP_CHROME, banner: true }]) {
+      const chromes = [NO_TOP_CHROME, { ...NO_TOP_CHROME, timer: true }, { ...NO_TOP_CHROME, banner: true }]
+      for (const top of chromes) {
         const insets = presentInsets(view, top, true)
         for (const f of FRAMES) {
           const r = onScreen(f, viewportFor(f, view, insets, PRESENT_ZOOM_RANGE))

@@ -150,6 +150,8 @@ export function fakeCanvas(elements: CanvasElement[] = []): FakeCanvas {
     select(ids: readonly string[]) {
       state.selection = [...ids]
     },
+    // not presenting (the timer banner of the spotlight layer asks: ./presenting.ts)
+    settings: { get: () => ({ focusMode: false }) },
     isHidden: () => false,
     isLocked: (id: string) => !!get(id)?.locked,
     readOnly: () => state.readOnly,
