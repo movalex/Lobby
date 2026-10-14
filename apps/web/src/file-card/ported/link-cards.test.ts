@@ -155,20 +155,59 @@ describe('N7-1: board cards from a pasted board link', () => {
   })
 })
 
+describe('P-017: a card inserted with no point lands in free space near the view’s centre', () => {
+  const overlaps = (a: Record<string, unknown>, b: { x: number; y: number; width: number; height: number }) =>
+    (a.x as number) < b.x + b.width &&
+    b.x < (a.x as number) + (a.width as number) &&
+    (a.y as number) < b.y + b.height &&
+    b.y < (a.y as number) + (a.height as number)
+
+  it('a note at the centre: the card goes beside it, not on it, and stays near the centre', () => {
+    const created: { type: string; props: Record<string, unknown> }[] = []
+    const note = { id: 'n1', type: 'stickynote', x: 400, y: 300, width: 200, height: 200 }
+    const ctx = fakeCtx({ created, selected: [], items: [note] })
+    placeBoardCard(ctx, '/b/b-two0000001', null)
+    const rect = created[0]?.props ?? {}
+    expect(overlaps(rect, note)).toBe(false)
+    const cx = (rect.x as number) + (rect.width as number) / 2
+    const cy = (rect.y as number) + (rect.height as number) / 2
+    expect(Math.hypot(cx - 500, cy - 400)).toBeLessThan(500)
+  })
+
+  it('an empty view: the centre itself; a point given (a paste at the pointer) is kept as it is', () => {
+    const created: { type: string; props: Record<string, unknown> }[] = []
+    placeBoardCard(fakeCtx({ created, selected: [] }), '/b/b-two0000001', null)
+    expect(created[0]?.props).toMatchObject({ x: 500 - 160, y: 400 - BOARD_CARD_H / 2 })
+    const pasted: { type: string; props: Record<string, unknown> }[] = []
+    const note = { id: 'n1', type: 'stickynote', x: 400, y: 300, width: 200, height: 200 }
+    placeBoardCard(fakeCtx({ created: pasted, selected: [], items: [note] }), '/b/b-two0000001', {
+      x: 500,
+      y: 400,
+    })
+    expect(pasted[0]?.props).toMatchObject({ x: 500 - 160, y: 400 - BOARD_CARD_H / 2 })
+  })
+})
+
 /** The parts of a feature context placing a card uses. */
 function fakeCtx(opts: {
   created: { type: string; props: Record<string, unknown> }[]
   selected: string[][]
   readOnly?: boolean
+  items?: { id: string; type: string; x: number; y: number; width: number; height: number }[]
 }): CanvasFeatureContext {
+  const els = opts.items ?? []
   const canvas = {
     readOnly: () => opts.readOnly ?? false,
     viewport: { get: () => ({ x: 0, y: 0, width: 1000, height: 800, zoom: 1 }) },
     text: { measure: (s: string) => ({ width: s.length * 8, height: 20 }) },
-    items: () => [],
+    items: () => els,
+    get: (id: string) => els.find((e) => e.id === id),
     isLocked: () => false,
     isHidden: () => false,
-    bounds: () => null,
+    bounds: (id: string) => {
+      const e = els.find((x) => x.id === id)
+      return e ? { x: e.x, y: e.y, width: e.width, height: e.height } : null
+    },
     transact: (
       _label: string,
       fn: (tx: { create(type: string, props: Record<string, unknown>): void }) => void,

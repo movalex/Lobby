@@ -10,8 +10,8 @@
 // bound label holding the title and the site, so exports, thumbnails, search and the PDF text layer read
 // it without the overlay. The icon is never stored: every viewer's overlay asks the api (cached there).
 //
-// A link card lands at the paste point (the view's centre otherwise), inside the unlocked frame under
-// it, in one undo step. Its face's ↗ link (and the engine's link badge on its corner, through the board
+// A link card lands at the paste point (otherwise in free space near the view's centre, P-017), inside the unlocked
+// frame under it, in one undo step. Its face's ↗ link (and the engine's link badge on its corner, through the board
 // page's onLinkOpen) opens the page in a new tab, with no opener and no referrer; a double-click edits
 // its words like any shape's (the face steps aside while the editor is open). A name-only guest may only hold Lobby-relative links (canvas-schema
 // `isAllowedLink`), so their pasted URL stays plain text, as before.
@@ -39,6 +39,7 @@ import type {
   ScenePoint,
 } from '../../canvas/api/index.ts'
 import { boardPathOfUrl } from '../../features/board-links/model.ts'
+import { findEmptySpot, findEmptySpotWithin } from '../../features/canvas-ux/placement.ts'
 import { knownUserKind } from '../../invite/guest.tsx'
 import { countUsage } from '../../lib/usage.ts'
 
@@ -249,6 +250,21 @@ function wrap(canvas: LobbyCanvas, text: string, max: number): string {
   return out.join('\n')
 }
 
+/** P-017: how far a card placed in free space keeps from what is there, and the grid it looks on (scene px). */
+const CARD_GAP = { gap: 24, step: 40, maxRings: 20 } as const
+
+/** P-017: what a card placed in free space keeps clear of: every visible element's box but frames and labels. */
+function obstaclesOf(canvas: LobbyCanvas) {
+  const out: { x: number; y: number; w: number; h: number }[] = []
+  for (const el of canvas.items()) {
+    if (el.type === 'frame' || (el as { isDeleted?: boolean }).isDeleted || canvas.isHidden(el.id)) continue
+    if (el.type === 'text' && (el as { containerId?: string | null }).containerId) continue
+    const b = canvas.bounds(el.id)
+    if (b) out.push({ x: b.x, y: b.y, w: b.width, h: b.height })
+  }
+  return out
+}
+
 /** The innermost unlocked, visible frame under `at`, with its bounds. */
 function frameAt(canvas: LobbyCanvas, at: ScenePoint) {
   let best: { id: string; x: number; y: number; w: number; h: number } | null = null
@@ -316,12 +332,32 @@ function placeCard(
   let x = point.x - w / 2
   let y = point.y - h / 2
   const frame = frameAt(canvas, point)
+  const inFrame = !!frame && frame.w >= w && frame.h >= h
   // inside its frame when it fits there (a frame clips what pokes out of it)
-  if (frame && frame.w >= w && frame.h >= h) {
+  if (frame && inFrame) {
     x = Math.min(Math.max(x, frame.x), frame.x + frame.w - w)
     y = Math.min(Math.max(y, frame.y), frame.y + frame.h - h)
   }
-  const frameId = frame && frame.w >= w && frame.h >= h ? frame.id : null
+  // P-017 (wave P): a card inserted with no point (a menu, the board links panel) lands in free space near the view's
+  // centre, never on what is there (a paste or a drop keeps the point the person chose)
+  if (!at) {
+    const obstacles = obstaclesOf(canvas)
+    const spot =
+      frame && inFrame
+        ? findEmptySpotWithin(
+            { w, h },
+            point,
+            obstacles,
+            { x: frame.x, y: frame.y, w: frame.w, h: frame.h },
+            CARD_GAP,
+          )
+        : findEmptySpot({ w, h }, point, obstacles, CARD_GAP)
+    if (spot) {
+      x = spot.x
+      y = spot.y
+    }
+  }
+  const frameId = frame && inFrame ? frame.id : null
   const id = newId()
   const labelId = `${id}.t`
   canvas.transact(card.label, (tx) => {

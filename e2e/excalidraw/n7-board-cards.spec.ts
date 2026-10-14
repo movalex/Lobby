@@ -191,6 +191,9 @@ test('N7-2 bob, who cannot view the target, sees the neutral face on the shared 
   await expectSaved(a.page)
   await expect(face(a.page, card.id)).toHaveAttribute('data-state', 'ok', { timeout: 30_000 })
   await expect(face(a.page, card.id).getByTestId('board-card-title')).toHaveText(title)
+  // P-046: a target with no thumbnail yet shows a board picture, never a giant initial
+  await expect(face(a.page, card.id).getByTestId('board-card-icon')).toBeVisible()
+  await expect(face(a.page, card.id).locator('.lobby-board-card__thumb')).toHaveText('')
   // bob: the card arrives through the room; its face is the neutral one
   await expect(face(b.page, card.id)).toBeVisible({ timeout: 30_000 })
   await expect(face(b.page, card.id)).toHaveAttribute('data-state', 'unavailable', { timeout: 30_000 })

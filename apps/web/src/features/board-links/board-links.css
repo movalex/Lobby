@@ -28,9 +28,17 @@
   height: 100%;
   object-fit: cover;
 }
-.lobby-board-card__glyph {
-  font: 700 40px / 1 var(--dr-font);
+/* P-046: a board with no thumbnail: a board picture in the muted ink (never its initial) */
+.lobby-board-card__icon {
+  width: 56px;
+  height: 42px;
   color: var(--dr-ink-2, #4a5566);
+  opacity: 0.8;
+}
+.lobby-board-card[data-state="unavailable"] .lobby-board-card__icon,
+.lobby-board-card[data-state="unknown"] .lobby-board-card__icon,
+.lobby-board-card[data-state="loading"] .lobby-board-card__icon {
+  opacity: 0.45;
 }
 .lobby-board-card[data-state="unavailable"] .lobby-board-card__thumb,
 .lobby-board-card[data-state="unknown"] .lobby-board-card__thumb,
