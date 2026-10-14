@@ -9,9 +9,11 @@
 
 /**
  * The things in the stack, top to bottom. The toasts are not one of them: they follow the stack's bottom edge. Wave N
- * adds 'since', the "Since you were here" chip (features/visits), under the follow pill.
+ * adds 'since', the "Since you were here" chip (features/visits), under the follow pill. Wave P (P-047) adds 'ai': the
+ * "Dana is using AI" pills of runs whose area is off screen (features/ai working.tsx), which sat at a fixed spot on
+ * top of the since and coach chips (and of one another); the own run's busy pill already goes under the stack.
  */
-export const TOP_CENTRE_SLOTS = ['invite', 'spotlight', 'follow', 'since', 'coach', 'feedback'] as const
+export const TOP_CENTRE_SLOTS = ['invite', 'spotlight', 'follow', 'since', 'coach', 'ai', 'feedback'] as const
 export type TopCentreSlot = (typeof TOP_CENTRE_SLOTS)[number]
 
 /** The gap between two things in the stack, and between the stack and the toasts under it (px). */

@@ -17,7 +17,7 @@ import {
   waitForItem,
 } from '../tests/support/canvas.ts'
 import { focusBoard, settled } from './board-kit.ts'
-import { toolbarIds, undoKey, waitForCanvasUx, withCanvas } from './canvas-ux-kit.ts'
+import { showStylePanel, toolbarIds, undoKey, waitForCanvasUx, withCanvas } from './canvas-ux-kit.ts'
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
@@ -123,6 +123,8 @@ test('RETRO-20 / R16: the style panel shows for a selection or a creation tool, 
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
+  // P-021: the style panel opens on request; this person has it open
+  await showStylePanel(a.page)
   await waitForCanvasUx(a.page)
   const panel = a.page.getByTestId('style.panel')
   const rect = await settled(
@@ -166,6 +168,8 @@ test('COL-06 note palette: two selected notes show the 13 Lobby colours, one pic
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
+  // P-021: the style panel opens on request; this person has it open
+  await showStylePanel(a.page)
   const b = await canvasSession('bob')
   await waitForCanvasUx(a.page)
   const n1 = await settled(a.page, createNote(a.page, { x: 100, y: 100, text: 'one', color: '#f8e48f' }))
@@ -193,6 +197,8 @@ test('style: colour, fill, dash and size on a shape are one undo step each, map 
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
+  // P-021: the style panel opens on request; this person has it open
+  await showStylePanel(a.page)
   const b = await canvasSession('bob')
   await waitForCanvasUx(a.page)
   const rect = await settled(
@@ -235,10 +241,12 @@ test('style: colour, fill, dash and size on a shape are one undo step each, map 
   expect(next.strokeColor).toBe('#e03131')
 })
 
-test('style: a font and a size on a note lay its label out again in one undo step', async ({
+test('style: a font and a size on a note (P-011: the note’s size) lay its label out again in one undo step', async ({
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
+  // P-021: the style panel opens on request; this person has it open
+  await showStylePanel(a.page)
   const b = await canvasSession('bob')
   await waitForCanvasUx(a.page)
   const note = await settled(a.page, createNote(a.page, { x: 100, y: 100, text: 'Grow me please' }))
@@ -253,15 +261,18 @@ test('style: a font and a size on a note lay its label out again in one undo ste
   await expect(a.page.getByTestId('style.font')).toBeVisible()
   await a.page.getByTestId('style.font.mono').click()
   await expect.poll(async () => (await labelOf(a.page))?.fontFamily).toBe(8)
+  // P-011: a note's Size is the note's (Extra large: 400 px), its words with it (44)
   await a.page.getByTestId('style.size.xl').click()
   await expect
     .poll(async () => (await labelOf(a.page)) as { baseFontSize?: number } | null)
-    .toMatchObject({ baseFontSize: 32 })
+    .toMatchObject({ baseFontSize: 44 })
+  await expect.poll(async () => (await item(a.page, note))?.width).toBe(400)
   await expect.poll(async () => (await labelOf(b.page))?.fontFamily).toBe(8)
   await expectConverged(a.page, [b.page])
   await undoKey(a.page)
   await expect
     .poll(async () => ((await labelOf(a.page)) as { baseFontSize?: number } | null)?.baseFontSize)
-    .not.toBe(32)
+    .not.toBe(44)
+  await expect.poll(async () => (await item(a.page, note))?.width).toBe(200)
   await expect.poll(async () => (await labelOf(a.page))?.fontFamily).toBe(8)
 })

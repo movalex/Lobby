@@ -37,7 +37,7 @@ import type { LobbyStyles, MixedStyles, StyleValues } from '../lobby-canvas.ts'
 import { NotImplementedError } from '../owners.ts'
 import type { PartDeps } from './types.ts'
 
-export type StylesPart = Pick<LobbyStyles, 'of' | 'apply'>
+export type StylesPart = Pick<LobbyStyles, 'of' | 'apply' | 'resizeNotes'>
 
 /** CR-3A-7: the board page's port member for the next font sizes (a bare port, in a unit test, has none). */
 type SizePort = { setNextFontSize?(slot: 'note' | 'text', size: number): void }
@@ -253,6 +253,61 @@ export function textWrites(
   return out
 }
 
+/**
+ * P-011 (wave P): notes of one size, as Miro's sticky sizes are: each note of `noteIds` becomes `side` wide with
+ * `side` as its base height (its top-left corner kept), its label's size ceiling becomes `fontSize`, and the
+ * engine's own note fit (`relayoutStickyNotes`) lays the words out in it again (the note grows below for words
+ * that do not fit, as it does while typing). On copies of `all`: id → changed fields (notes and labels).
+ */
+export function noteSizeWrites(
+  all: readonly CanvasElement[],
+  noteIds: readonly string[],
+  side: number,
+  fontSize: number,
+): Map<string, Record<string, unknown>> {
+  const out = new Map<string, Record<string, unknown>>()
+  const map = new Map<string, Copy>(all.map((e) => [e.id, structuredClone(e)]))
+  const before = new Map<string, Copy>()
+  const touch = (id: string) => {
+    if (!before.has(id)) before.set(id, structuredClone(map.get(id)))
+  }
+  const notes = new Set<string>()
+  for (const id of noteIds) {
+    const note = map.get(id) as Copy
+    if (note?.type !== 'stickynote' || note.isDeleted) continue
+    touch(id)
+    notes.add(id)
+    mutateElement(note, map as unknown as ElementsMap, { width: side, baseHeight: side })
+    const labelId = labelIdOf(note)
+    const label = labelId ? (map.get(labelId) as Copy) : null
+    if (label?.type === 'text' && !label.isDeleted) {
+      touch(label.id)
+      mutateElement(
+        label,
+        map as unknown as ElementsMap,
+        getBaseFontSizeUpdate(label as ExcalidrawTextElement, fontSize, map as unknown as ElementsMap),
+      )
+    }
+  }
+  if (!notes.size) return out
+  for (const e of relayoutStickyNotes([...map.values()] as ExcalidrawElement[], notes)) {
+    if (map.get(e.id) === e) continue
+    touch(e.id)
+    map.set(e.id, e)
+  }
+  for (const [id, prev] of before) {
+    const next = map.get(id)
+    if (!next || !prev) continue
+    const changed: Record<string, unknown> = {}
+    for (const k of Object.keys(next)) {
+      if (k === 'version' || k === 'versionNonce' || k === 'updated' || k === 'seed') continue
+      if (!sameValue(prev[k], next[k])) changed[k] = next[k]
+    }
+    if (Object.keys(changed).length) out.set(id, changed)
+  }
+  return out
+}
+
 export function createStylesPart(deps: PartDeps): StylesPart {
   const canvas = () => deps.self()
   /** A board-page member on a canvas without the board page (unit tests): its fallback. */
@@ -322,5 +377,32 @@ export function createStylesPart(deps: PartDeps): StylesPart {
       for (const [id, fields] of writes) tx.update(id, fields)
     })
   }
-  return { of, apply }
+  const resizeNotes = (side: number, fontSize: number, ids?: readonly string[]): void => {
+    const c = canvas()
+    if (orElse(() => c.readOnly(), false)) return
+    if (!(side > 0) || !(fontSize > 0)) return
+    const me = c.editingId()
+    const noteIds = [
+      ...new Set(
+        (ids ?? c.selection)
+          .map((id) => c.get(id))
+          .filter((e): e is CanvasElement => !!e && !(e as { isDeleted?: boolean }).isDeleted)
+          .map((e) => (isLabel(e) ? (c.get(e.containerId as string) ?? e) : e))
+          .filter((e) => e.type === 'stickynote' && !c.isLocked(e.id))
+          .filter((e) => {
+            // the lease: someone else typing in it owns its words' layout and its fit (§2.9.4)
+            const holder = c.leaseHolder(e.id)
+            return !holder || me === e.id || holder.sid === c.engine?.welcome?.sid
+          })
+          .map((e) => e.id),
+      ),
+    ]
+    if (!noteIds.length) return
+    const writes = noteSizeWrites(c.items(), noteIds, side, fontSize)
+    if (!writes.size) return
+    c.transact('note size', (tx) => {
+      for (const [id, fields] of writes) tx.update(id, fields)
+    })
+  }
+  return { of, apply, resizeNotes }
 }

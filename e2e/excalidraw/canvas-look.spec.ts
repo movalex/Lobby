@@ -35,7 +35,7 @@ import {
   updateItem,
 } from '../tests/support/canvas.ts'
 import { focusBoard, settled } from './board-kit.ts'
-import { waitForCanvasUx } from './canvas-ux-kit.ts'
+import { showStylePanel, waitForCanvasUx } from './canvas-ux-kit.ts'
 import { grantClipboard, writeClipboard } from './navigation-kit.ts'
 
 test.use({ viewport: { width: 1440, height: 900 } })
@@ -71,6 +71,8 @@ test('CR-3A-7: the note tool’s panel sets the next note’s colour, size and f
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
+  // P-021: the style panel opens on request; this person has it open
+  await showStylePanel(a.page)
   await waitForCanvasUx(a.page)
   await focusBoard(a.page)
   const palette = a.page.getByTestId('note-palette')

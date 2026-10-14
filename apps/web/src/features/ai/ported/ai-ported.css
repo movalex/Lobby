@@ -1,10 +1,11 @@
-/* The Excalidraw board page (the wave-3 integration): the style panel there is a host slot at the top right,
-   drawn above every overlay layer, so it covered the summary's buttons whenever the selection stayed. The
-   summary opens at the top left of the canvas instead, under the board menu. Loaded by the ported feature only, so the
+/* The Excalidraw board page. The wave-3 integration moved the AI panels (the summary, the Ask answer) to the top left,
+   under the board menu, because the style panel (a host slot at the top right, drawn above every overlay layer) was
+   open on every selection and covered their buttons; there they sat under the board menu's own popover (P-044, wave
+   P). The style panel now opens only on request (P-021), so the panels are back at the top right, clear of the board
+   menu; while the style panel is open at the right, they sit to its left. Loaded by the ported feature only, so the
    tldraw page and the normal build never see it. */
 @media (min-width: 481px) {
-  [data-lobby-board-canvas] .dr-ai-panel {
-    right: auto;
-    left: 12px;
+  [data-lobby-board-canvas]:has(.cux-style-place[data-side="right"] [data-testid="style.panel"]) .dr-ai-panel {
+    right: calc(12px + 216px + 12px);
   }
 }

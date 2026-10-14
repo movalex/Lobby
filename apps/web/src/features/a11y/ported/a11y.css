@@ -8,16 +8,28 @@
   line-height: 1.4;
 }
 
-/* ---- the board's focus ring (W5-45; ./FocusRing.tsx): 2 px of the focus colour just inside the canvas ---- */
+/* ---- the board's focus indicator (W5-45; ./FocusRing.tsx) ----
+   P-034 (wave P): four corner marks in the focus colour just inside the canvas, not a ring around all of it: the
+   keyboard's place is still plain to see (WCAG 2.4.7), and the board is not framed in blue after every key. */
 
 .dr-a11y-focus-ring {
+  --ring: var(--dr-focus);
+  --len: 22px;
+  --w: 3px;
+  --at: 4px;
   position: absolute;
   inset: 0;
-  border-radius: 2px;
-  box-shadow:
-    inset 0 0 0 2px var(--dr-focus),
-    inset 0 0 0 4px var(--dr-surface);
   pointer-events: none;
+  background:
+    linear-gradient(var(--ring) 0 0) var(--at) var(--at) / var(--len) var(--w),
+    linear-gradient(var(--ring) 0 0) var(--at) var(--at) / var(--w) var(--len),
+    linear-gradient(var(--ring) 0 0) calc(100% - var(--at)) var(--at) / var(--len) var(--w),
+    linear-gradient(var(--ring) 0 0) calc(100% - var(--at)) var(--at) / var(--w) var(--len),
+    linear-gradient(var(--ring) 0 0) var(--at) calc(100% - var(--at)) / var(--len) var(--w),
+    linear-gradient(var(--ring) 0 0) var(--at) calc(100% - var(--at)) / var(--w) var(--len),
+    linear-gradient(var(--ring) 0 0) calc(100% - var(--at)) calc(100% - var(--at)) / var(--len) var(--w),
+    linear-gradient(var(--ring) 0 0) calc(100% - var(--at)) calc(100% - var(--at)) / var(--w) var(--len);
+  background-repeat: no-repeat;
 }
 
 /* ---- the content list ---- */

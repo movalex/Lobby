@@ -364,6 +364,12 @@ export interface LobbyStyles {
   of(ids?: readonly string[]): MixedStyles
   /** @owner 3a · setStyleForSelectedShapes: one undo step on `ids` (default: the selection) and the next-style */
   apply(patch: StyleValues, ids?: readonly string[]): void
+  /**
+   * @owner 3a · P-011: the notes of `ids` (default: the selection) become `side` square with their label's size
+   * ceiling `fontSize`, the words fitted again; one undo step. Locked notes and notes another session is typing
+   * in are left as they are.
+   */
+  resizeNotes(side: number, fontSize: number, ids?: readonly string[]): void
 }
 
 // ---- transactions -------------------------------------------------------------------------------------------

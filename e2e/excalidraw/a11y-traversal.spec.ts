@@ -294,8 +294,12 @@ test('W5-45: the board shows a focus ring when the keyboard arrives (Tab, F6, Es
     for (let i = 0; i < 6 && !(await boardHasFocus(a.page)); i++) await a.page.keyboard.press('Tab')
     await expect.poll(() => boardHasFocus(a.page)).toBe(true)
     await expect(ring).toBeVisible()
-    const shadow = await ring.evaluate((el) => getComputedStyle(el).boxShadow)
-    expect(shadow).toContain('inset')
+    // P-034: corner marks in the focus colour, not a ring around the whole canvas
+    const look = await ring.evaluate((el) => {
+      const cs = getComputedStyle(el)
+      return { shadow: cs.boxShadow, marks: (cs.backgroundImage.match(/linear-gradient/g) ?? []).length }
+    })
+    expect(look).toEqual({ shadow: 'none', marks: 8 })
     // it covers the canvas region and lets every click through
     const [r, c] = await Promise.all([
       ring.boundingBox(),

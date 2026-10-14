@@ -2,10 +2,11 @@
 // only where a field applies, labels where the rules say so). Text layout needs a browser canvas, so the
 // text fields' relayout is checked by the e2e spec (e2e/excalidraw/canvas-ux-toolbar.spec.ts); here only
 // that they are routed to the label.
+import { installServerTextMetrics } from '@draftroom/canvas-schema/engine'
 import { describe, expect, it } from 'vitest'
 import type { CanvasElement } from '../../port.ts'
 import { createFeatureRegistries } from '../registries.ts'
-import { createStylesPart, stylesOf } from './styles.ts'
+import { createStylesPart, noteSizeWrites, stylesOf } from './styles.ts'
 
 const el = (id: string, type: string, extra: Record<string, unknown> = {}): CanvasElement =>
   ({
@@ -155,5 +156,49 @@ describe('apply', () => {
     expect(ops.n1).toEqual({ backgroundColor: '#a6d8f3' })
     expect(ops.a1).toBeUndefined()
     expect(next[0]).toMatchObject({ elbowed: true })
+  })
+})
+
+describe('P-011: noteSizeWrites (a note’s Size is the note’s)', () => {
+  installServerTextMetrics()
+  const note = el('n', 'stickynote', {
+    width: 200,
+    height: 200,
+    baseHeight: 200,
+    backgroundColor: '#f8e48f',
+    boundElements: [{ id: 'n.t', type: 'text' }],
+  })
+  const label = el('n.t', 'text', {
+    x: 20,
+    y: 80,
+    width: 160,
+    height: 28,
+    text: 'Hero film idea',
+    originalText: 'Hero film idea',
+    fontSize: 22,
+    baseFontSize: 22,
+    fontFamily: 6,
+    lineHeight: 1.25,
+    textAlign: 'center',
+    verticalAlign: 'middle',
+    containerId: 'n',
+    autoResize: true,
+  })
+
+  it('makes the note `side` square from its top-left corner, its words’ ceiling `fontSize`, laid out in it', () => {
+    const w = noteSizeWrites([note, label], ['n'], 400, 44)
+    const n = w.get('n') ?? {}
+    expect(n).toMatchObject({ width: 400, baseHeight: 400 })
+    expect((n.height as number | undefined) ?? 400).toBeGreaterThanOrEqual(400)
+    expect(n.x ?? 0).toBe(0)
+    expect(n.y ?? 0).toBe(0)
+    const t = w.get('n.t') ?? {}
+    expect(t.baseFontSize).toBe(44)
+    // the words are laid out again inside the bigger note
+    expect(typeof t.x === 'number' && typeof t.width === 'number' && t.x + t.width <= 400).toBe(true)
+  })
+
+  it('only notes: a rectangle or a label alone is left as it is', () => {
+    expect(noteSizeWrites([note, label, el('r', 'rectangle')], ['r'], 400, 44).size).toBe(0)
   })
 })

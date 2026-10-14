@@ -15,9 +15,15 @@
  *    refix) gets a connection notice instead, with no Reload: a reload then would land on the browser's
  *    offline page, with changes the sync server cannot acknowledge yet;
  *  - offline, on a board or not (round 2 refix: the board route itself is "not on a board" while its code
- *    loads), the failure is the network's, not a deploy's: the connection notice, no Reload, no reload, and
- *    never "Lobby has been updated". A lazy page that passes an offline fallback to `recoverChunk` draws it
- *    (the board route's waits for the connection, then reloads once: `reloadWhenOnline`).
+ *    loads), the failure is the network's, not a deploy's: no Reload, no reload, and never "Lobby has been
+ *    updated". Outside a board the connection notice says so; on a board nothing is said (wave P, P-003: the
+ *    board's own offline banner already says the changes are kept and will sync, and a chunk that failed in the
+ *    background, an export or a level-of-detail render, was nobody's request). A part that failed offline and
+ *    fails again once the browser is back online (a browser may keep a failed module import) gets the calm
+ *    OFFLINE_RETURN_TEXT, with the Reload button. A lazy page that passes an offline fallback to `recoverChunk`
+ *    draws it (the board route's waits for the connection, then reloads once: `reloadWhenOnline`);
+ *  - P-003 (wave P): a board notice never interrupts typing: while a text editor is open on the board
+ *    (`StaleChunkBoard.editing`) it waits, and shows once the editor has closed.
  *
  * Wave M (M3-5, S2): a tab also learns about a new build without failing to load a chunk first (lib/version-check.ts
  * asks /version.json while the tab is visible). `newVersion` is its entry: on a board the same notice (the Reload button
@@ -61,6 +67,11 @@ export const STALE_NOTICE_KEY = 'stale-chunk'
 export const STALE_NOTICE_TEXT = 'Lobby has been updated. Reload to keep working with the new version.'
 export const OFFLINE_CHUNK_TEXT =
   'This part of Lobby could not load while you are offline. Reload the page once you are back online to use it.'
+/** P-003: a part of Lobby that failed to load offline, failing again once the browser is back online. */
+export const OFFLINE_RETURN_TEXT =
+  'Part of Lobby did not finish loading while you were offline. Reload when you are ready to use it again.'
+/** How often a board notice held back while someone types looks again (P-003). */
+export const EDITING_RECHECK_MS = 500
 
 export interface StaleNotice {
   key: string
@@ -76,6 +87,8 @@ export interface StaleChunkBoard {
   /** changes this tab made that the sync server has not acknowledged yet (or uploads on their way) */
   unsent(): boolean
   notify(n: StaleNotice): void
+  /** P-003: a text editor is open on the board (a notice waits until it closes). Default: never. */
+  editing?(): boolean
 }
 
 interface Env {
@@ -169,6 +182,10 @@ export function createStaleChunkHandler(env: Env = defaultEnv) {
   /** M3-5: a newer build was seen (lib/version-check.ts); a board opened later shows the notice at once */
   let versionStale = false
   let versionNoticed = false
+  /** P-003: a chunk failed while the browser was offline on a board (nothing was said then) */
+  let failedOffline = false
+  /** P-003: the board notice waiting for an open text editor to close (the latest one) */
+  let held: { board: StaleChunkBoard; notice: StaleNotice } | null = null
   const count = (event: UsageEvent) => (env.count ?? countUsage)(event)
   const listeners = new Set<Listener>()
   const emit = () => {
@@ -246,30 +263,54 @@ export function createStaleChunkHandler(env: Env = defaultEnv) {
     timeoutMs: null,
   })
 
-  const staleNotice = (): StaleNotice => ({
+  const staleNotice = (text: string = STALE_NOTICE_TEXT): StaleNotice => ({
     key: STALE_NOTICE_KEY,
-    text: STALE_NOTICE_TEXT,
+    text,
     testId: 'stale-chunk-notice',
     timeoutMs: null,
     action: { label: 'Reload', testId: 'stale-chunk-reload', onClick: reloadWhenSent },
   })
 
+  /** P-003: a board notice, once no text editor is open on that board (looked at again every EDITING_RECHECK_MS). */
+  const notifyBoard = (b: StaleChunkBoard, n: StaleNotice) => {
+    const waiting = held !== null
+    held = { board: b, notice: n }
+    if (waiting) return
+    const tryNow = () => {
+      const h = held
+      if (!h) return
+      if (board !== h.board) {
+        held = null
+        return
+      }
+      if (h.board.editing?.() === true) {
+        env.setTimeout(tryNow, EDITING_RECHECK_MS)
+        return
+      }
+      held = null
+      h.board.notify(h.notice)
+    }
+    tryNow()
+  }
+
   return {
     /** A chunk could not be loaded (see the header for what happens). Returns what was done. */
-    report(_error?: unknown): 'notice' | 'reload' | 'reloading' {
+    report(_error?: unknown): 'notice' | 'reload' | 'reloading' | 'quiet' {
       if (reloading) return 'reloading'
-      // offline (on a board or not): the network's failure; a reload would show the browser's offline page
+      // offline (on a board or not): the network's failure; a reload would show the browser's offline page. On a
+      // board nothing is said (P-003): its offline banner says the changes are kept and will sync
       if (!env.online()) {
-        if (board) board.notify(offlineNotice())
-        else {
-          notice = offlineNotice()
-          emit()
+        if (board) {
+          failedOffline = true
+          return 'quiet'
         }
+        notice = offlineNotice()
+        emit()
         return 'notice'
       }
       if (board) {
         count('stalechunk.notice')
-        board.notify(staleNotice())
+        notifyBoard(board, staleNotice(failedOffline ? OFFLINE_RETURN_TEXT : STALE_NOTICE_TEXT))
         return 'notice'
       }
       const last = readGuard()
@@ -297,7 +338,7 @@ export function createStaleChunkHandler(env: Env = defaultEnv) {
       versionStale = true
       if (board) {
         countVersionNotice()
-        board.notify(staleNotice())
+        notifyBoard(board, staleNotice())
         return 'notice'
       }
       if (!hidden) return 'wait'
@@ -327,10 +368,11 @@ export function createStaleChunkHandler(env: Env = defaultEnv) {
         env.setTimeout(() => {
           if (board !== b) return
           countVersionNotice()
-          b.notify(staleNotice())
+          notifyBoard(b, staleNotice())
         }, 0)
       return () => {
         if (board === b) board = null
+        if (held?.board === b) held = null
       }
     },
     /** Whether the browser says it is online (`recoverChunk` picks its offline fallback by it). */

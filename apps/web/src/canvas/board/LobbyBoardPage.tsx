@@ -343,6 +343,37 @@ const connOf = (s: LobbyBoardSnapshot): ConnState =>
         ? 'error'
         : 'connecting'
 
+/**
+ * P-003 (wave P): the board's connection as the page shows it. The browser's own offline (navigator.onLine, its
+ * `offline` and `online` events) is said at once: the socket only notices a dead network on its next missed
+ * heartbeat, up to 30 s later, and until then the board looked live while nothing could be sent.
+ */
+export const connWith = (s: LobbyBoardSnapshot, browserOnline: boolean): ConnState =>
+  browserOnline || s.phase === 'closed' ? connOf(s) : 'offline'
+
+const subscribeOnline = (l: () => void) => {
+  window.addEventListener('online', l)
+  window.addEventListener('offline', l)
+  return () => {
+    window.removeEventListener('online', l)
+    window.removeEventListener('offline', l)
+  }
+}
+/** Whether the browser says it is online (P-003). */
+function useBrowserOnline(): boolean {
+  return useSyncExternalStore(
+    subscribeOnline,
+    () => navigator.onLine !== false,
+    () => true,
+  )
+}
+
+/** P-003: the offline banner's words (calm: what happens to the changes, nothing to do). */
+export const OFFLINE_BANNER_TEXT =
+  'Offline – your changes are kept on this device and will sync when you are back online.'
+export const OFFLINE_BANNER_GUEST_TEXT =
+  'Offline – your changes are kept in this tab and will sync when you are back online. Keep this tab open until then.'
+
 const RANK: Record<BoardRole, number> = { viewer: 1, commenter: 2, editor: 3, owner: 4 }
 
 function LobbyBoardView({
@@ -437,6 +468,7 @@ function LobbyBoardScreen({
     (l) => session.subscribe(l),
     () => session.snapshot,
   )
+  const browserOnline = useBrowserOnline()
   useRegistries(session.registries)
   // A feature whose dock tabs depend on state the page cannot see (workshops: a guest sees Voting and
   // Private notes only while a session runs) says so with this window event: the dock is drawn again.
@@ -582,6 +614,8 @@ function LobbyBoardScreen({
     () =>
       registerStaleChunkBoard({
         unsent: () => session.snapshot.save.pending > 0 || uploadsInFlight(session.registries) > 0,
+        // P-003: a "Lobby has been updated" notice never lands while someone is typing
+        editing: () => (session.snapshot.edit?.phase ?? 'idle') !== 'idle',
         notify,
       }),
     [session, notify],
@@ -777,7 +811,7 @@ function LobbyBoardScreen({
   )
 
   const focusMode = settings.focusMode
-  const conn = connOf(snap)
+  const conn = connWith(snap, browserOnline)
   const closed = snap.phase === 'closed'
   const closeReason = snap.closeReason
   const terminalShown = closed && closeReason !== 'FORBIDDEN' && closeReason !== 'NOT_FOUND'
@@ -825,8 +859,8 @@ function LobbyBoardScreen({
             ? // M6-4: the copy on screen is this device's, read-only until the connection returns
               `${cachedOfflineLabel(snap.cached.savedAt, undefined, snap.save.offlineChanges)}${snap.cached.exact ? '' : ' (links and web addresses are not kept in it)'}. You can edit once you are back online.`
             : snap.guest
-              ? "You're offline. Changes you make are kept in this tab only until the connection returns; reloading now would lose them."
-              : "You're offline. Changes you make are kept on this device and sync when the connection returns."}
+              ? OFFLINE_BANNER_GUEST_TEXT
+              : OFFLINE_BANNER_TEXT}
         </div>
       )}
       <div className="dr-board__body">

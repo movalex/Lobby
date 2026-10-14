@@ -1,7 +1,7 @@
 // OWNER: WS7 (wave N, N7-1, N7-2). A board card's face, drawn by the media feature's scene layer
 // (file-card/ported/CardLayer.tsx) over the card's rectangle, in scene units (it moves and scales with it):
 //  - `ok` (this viewer can open the target now): the board's thumbnail (the same-origin thumbnail route, which checks
-//    access itself; a board with none shows its initial), its title and, for a card that opens a frame, the frame's
+//    access itself; a board with none shows a board picture, P-046), its title and, for a card that opens a frame, the frame's
 //    name;
 //  - `unavailable`: the neutral face, "Board you can't open", with nothing about the target: a missing, a forbidden
 //    and a trashed board look the same;
@@ -18,6 +18,36 @@ import { useValue } from '../../lib/signals.ts'
 import './board-links.css'
 import { faceStoreOf } from './faces.ts'
 import { boardLinkHandlers, openFrom } from './open.ts'
+
+/**
+ * P-046 (wave P): the picture of a board with no thumbnail (yet), or one this viewer cannot see: a board with a few
+ * notes on it, in the face's muted ink. Never the title's first letter (a giant "L" read as a broken image).
+ */
+function BoardIcon() {
+  return (
+    <svg
+      className="lobby-board-card__icon"
+      data-testid="board-card-icon"
+      viewBox="0 0 48 36"
+      width="56"
+      height="42"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <rect x="1.5" y="1.5" width="45" height="33" rx="4" fill="none" stroke="currentColor" strokeWidth="2" />
+      <rect x="8" y="8" width="10" height="10" rx="1.5" fill="currentColor" opacity="0.55" />
+      <rect x="21" y="8" width="10" height="10" rx="1.5" fill="currentColor" opacity="0.35" />
+      <rect x="8" y="21" width="10" height="8" rx="1.5" fill="currentColor" opacity="0.35" />
+      <path
+        d="M22 25h16M22 29h11"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        opacity="0.55"
+      />
+    </svg>
+  )
+}
 
 export function BoardCardFace({
   ctx,
@@ -75,9 +105,7 @@ export function BoardCardFace({
             onError={() => setThumbFailed(thumb)}
           />
         ) : (
-          <span className="lobby-board-card__glyph">
-            {ok ? (ok.title.trim()[0] ?? 'B').toUpperCase() : ''}
-          </span>
+          <BoardIcon />
         )}
       </div>
       <figcaption className="lobby-board-card__text">

@@ -22,6 +22,7 @@ import { FRAME_NAME_BAND_PX } from './FrameRename.tsx'
 import { createNoteAt, frameAt } from './notes.ts'
 import { editPolygonLabel, polygonHolderAt } from './polygons.ts'
 import { uxState } from './state.ts'
+import { isPlainShape } from './type-to-label.ts'
 
 /** W5-59: the accessible name of the text editor open on `el` (the element whose words it edits). Pure. */
 export function editorName(el: CanvasElement | undefined): string {
@@ -134,11 +135,12 @@ export function installCanvasEvents(ctx: CanvasFeatureContext): () => void {
       const el = prev ? canvas.get(prev) : undefined
       const byEscape = escaped !== null && escaped === prev
       escaped = null
-      if (el?.type !== 'stickynote') {
+      // P-005: a plain shape typed into (./type-to-label.ts) is left as a note is
+      if (!el || (el.type !== 'stickynote' && !isPlainShape(el))) {
         state.leftEditing.set(null)
         return
       }
-      // Escape leaves the note selected (the engine may clear the selection when an editor it opened
+      // Escape leaves the note (or shape) selected (the engine may clear the selection when an editor it opened
       // for a new note closes): the next key is a command for it, Enter edits it again
       if (byEscape && canvas.selection.length === 0 && !(el as { isDeleted?: boolean }).isDeleted)
         canvas.select([el.id])

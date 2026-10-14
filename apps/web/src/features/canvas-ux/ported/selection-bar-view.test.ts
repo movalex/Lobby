@@ -9,13 +9,19 @@ import {
   type CanvasGesture,
   createFeatureRegistries,
 } from '../../../canvas/api/index.ts'
+import { FRAME_NAME_BAND_PX } from './FrameRename.tsx'
 import { selectionBarView } from './SelectionBar.tsx'
 
-function ctxWith(gesture: CanvasGesture, pointer: { overCanvas: boolean; down: boolean } | null) {
+function ctxWith(
+  gesture: CanvasGesture,
+  pointer: { overCanvas: boolean; down: boolean } | null,
+  type = 'stickynote',
+) {
   const registries = createFeatureRegistries()
   registries.selectionBar.register({ id: 'x.item', order: 10, component: () => null })
   const canvas = {
     selection: ['n1'],
+    get: (id: string) => (id === 'n1' ? { id, type } : undefined),
     editingId: () => null,
     gesture: () => gesture,
     pointer: () => pointer,
@@ -34,6 +40,15 @@ describe('selectionBarView', () => {
     }
     expect(selectionBarView(ctxWith('dragging', null))).toBeNull()
     expect(selectionBarView(ctxWith('resizing', null))).toBeNull()
+  })
+
+  it('P-040: a selected frame’s name (drawn above it) counts as part of the selection: the bar keeps clear of it', () => {
+    expect(selectionBarView(ctxWith('idle', null, 'frame'))?.anchor).toEqual({
+      x: 100,
+      y: 100 - FRAME_NAME_BAND_PX,
+      w: 200,
+      h: 100 + FRAME_NAME_BAND_PX,
+    })
   })
 
   it('M1-4: a press on the bar with the Hand tool (a press of the tool) keeps it; a pan on the canvas hides it', () => {

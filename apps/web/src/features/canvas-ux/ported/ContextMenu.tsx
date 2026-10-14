@@ -2,7 +2,7 @@
 // ../ContextMenu.tsx over tldraw's DefaultContextMenu): Lobby's own menu, from every feature's
 // `contextMenu` entries (./Menu.tsx), opened by a right-click (the engine's own menu never opens) or by
 // Shift+F10 / the menu key for the selection (A11Y-04). canvas-ux's own entries, in tldraw's words:
-// Cut / Copy / Paste (W5-33) / Duplicate, Group / Ungroup / Toggle locked / Delete, Arrange (align, distribute) and
+// Cut / Copy / Paste (W5-33) / Duplicate, Group / Ungroup / Lock or Unlock (P-013) / Delete, Arrange (align, distribute) and
 // Reorder, Select all, and MAK-05 "Unlock all" while the board has locked elements (a locked element
 // cannot be selected by a click, so this is where people look). Other features add theirs (Comment, AI,
 // mind map, tags, arrange as grid, select by type, the start view, the exports). While exporting is off
@@ -92,7 +92,8 @@ export const CONTEXT_MENU_ENTRIES: readonly MenuEntrySpec[] = [
     id: 'toggle-lock',
     group: 'edit',
     order: 30,
-    label: '',
+    // P-013: what it will do, in Lobby's words (a mixed selection locks all of it)
+    label: (c) => (selected(c).length > 0 && selected(c).every((e) => e.locked) ? 'Unlock' : 'Lock'),
     command: CMD.toggleLock,
     visible: (c) => editable(c) && atLeast(1)(c),
   },

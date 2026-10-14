@@ -12,9 +12,20 @@ import {
 } from './top-centre.ts'
 
 describe('the stack: the order and the gaps', () => {
-  it('holds, top to bottom: the invitation, the spotlight bar, the follow pill, the since chip, the coach chip, the feedback prompt', () => {
-    expect(TOP_CENTRE_SLOTS).toEqual(['invite', 'spotlight', 'follow', 'since', 'coach', 'feedback'])
-    expect(TOP_CENTRE_SLOTS.map(slotOrder)).toEqual([0, 1, 2, 3, 4, 5])
+  it('holds, top to bottom: the invitation, the spotlight bar, the follow pill, the since chip, the coach chip, the AI pills (P-047), the feedback prompt', () => {
+    expect(TOP_CENTRE_SLOTS).toEqual(['invite', 'spotlight', 'follow', 'since', 'coach', 'ai', 'feedback'])
+    expect(TOP_CENTRE_SLOTS.map(slotOrder)).toEqual([0, 1, 2, 3, 4, 5, 6])
+  })
+
+  it('P-047: the since chip, the coach chip and the AI pills shown together never overlap, 8 px apart', () => {
+    const layout = layoutStack([
+      { slot: 'ai', height: 26 },
+      { slot: 'coach', height: 32 },
+      { slot: 'since', height: 36 },
+    ])
+    expect(layout.items.map((i) => i.slot)).toEqual(['since', 'coach', 'ai'])
+    for (let i = 1; i < layout.items.length; i++)
+      expect((layout.items[i]?.top ?? 0) - (layout.items[i - 1]?.bottom ?? 0)).toBe(TOP_CENTRE_GAP)
   })
 
   it('stacks each item under the one before with a fixed 8 px gap, whatever order it is given in', () => {

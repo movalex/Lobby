@@ -249,7 +249,9 @@ export function statusView(save: DotSave, conn: ConnState, saveHidden = false): 
           ? 'busy'
           : 'ok'
   let label: string | null = null
-  if (tone === 'danger' || tone === 'warn') label = saveText && state !== 'saved' ? saveText : connText
+  // P-003: offline while the engine still counts its changes as on their way ('saving'): the words are "Offline"
+  if (tone === 'danger' || tone === 'warn')
+    label = saveText && state !== 'saved' && !(conn === 'offline' && state === 'saving') ? saveText : connText
   else if (tone === 'busy' && state === 'cached')
     // N1 (wave M W6): the board is showing this device's last copy while it connects; the canvas pill says so, and the
     // bar says the same words (not a bare "Connecting…" beside a board that already shows a copy)

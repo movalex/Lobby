@@ -16,6 +16,7 @@ import { countUsage } from '../../../lib/usage.ts'
 import { STYLE_PANEL_SELECTOR } from './obstacles.ts'
 import { SelectionBarCompact } from './selection-bar-context.ts'
 import { uxState } from './state.ts'
+import { setStylePanelOpen, stylePanelOpen } from './style-panel-place.ts'
 import {
   pickTier,
   SELECTION_TOOLBAR_TIER1,
@@ -101,6 +102,56 @@ const FILL_ICON: Readonly<Record<string, ReactNode>> = {
   ),
 }
 
+/**
+ * P-020 (wave P): what a control's button in the bar shows, when its option's own face would be a bare glyph ("L",
+ * "–", "100"): a picture of what the control changes. The options in its tray keep their faces (S, M, L, XL; 25%…),
+ * under the row's legend, and every button keeps its tooltip with the control's name and value.
+ */
+const CONTROL_ICON: Readonly<Partial<Record<TierControl['id'], ReactNode>>> = {
+  // a big and a small letter: the text's size
+  'font-size': (
+    <>
+      <path d="M3 19 8.5 5 14 19M5.2 14h6.6" />
+      <path d="M15 19l3-7.5 3 7.5M16 16.5h4" strokeWidth="1.5" />
+    </>
+  ),
+  // a paint bucket: the fill
+  fill: (
+    <>
+      <path d="M5 11.5 11.5 5l7 7-6.5 6.5a1.5 1.5 0 0 1-2.1 0L5 13.6a1.5 1.5 0 0 1 0-2.1z" />
+      <path d="M5 12h13.5" />
+      <path d="M20 15.5s1.5 1.9 1.5 2.8a1.5 1.5 0 0 1-3 0c0-.9 1.5-2.8 1.5-2.8z" fill="currentColor" />
+    </>
+  ),
+  // three lines, thin to thick: the stroke width
+  'stroke-width': (
+    <>
+      <path d="M4 6h16" strokeWidth="1" />
+      <path d="M4 11.5h16" strokeWidth="2.2" />
+      <path d="M4 17.5h16" strokeWidth="3.6" />
+    </>
+  ),
+  // a half-filled circle on a checked ground: the opacity
+  opacity: (
+    <>
+      <circle cx="12" cy="12" r="8" />
+      <path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor" fillOpacity="0.45" stroke="none" />
+    </>
+  ),
+}
+
+/** The stroke style control's button: a zigzag line drawn in the selection's style (or solid when mixed). */
+function strokeStyleControl(value: string | undefined): ReactNode {
+  const dash = value === 'dashed' ? '4 3' : value === 'dotted' ? '0.5 3.2' : undefined
+  return (
+    <path
+      d="M3 17 9 9l5 6 7-9"
+      strokeDasharray={dash}
+      strokeWidth={value === 'dotted' ? 2.6 : undefined}
+    />
+  )
+}
+
 /** A colour as the canvas draws it: the stored (light) colour, through Excalidraw's filter in dark mode. */
 function Dot({ color, mixed, dark }: { color?: string | undefined; mixed?: boolean; dark: boolean }) {
   return (
@@ -165,6 +216,23 @@ function face(control: TierControl['id'], row: TierRow, o: TierOption | null, da
   }
 }
 
+/** P-011: a note's Size button: a small and a big note, one inside the other (the note itself changes size). */
+const NOTE_SIZE_ICON = (
+  <>
+    <rect x="3" y="9" width="9" height="9" rx="1.5" />
+    <path d="M9 5.5V4.5A1.5 1.5 0 0 1 10.5 3h9A1.5 1.5 0 0 1 21 4.5v9a1.5 1.5 0 0 1-1.5 1.5h-1" />
+    <path d="M14.5 9.5 18 6M18 6h-3M18 6v3" />
+  </>
+)
+
+/** What a control's button in the bar shows (P-020): a picture where its option's face is a glyph. */
+function controlFace(control: TierControl, row: TierRow, o: TierOption | null, dark: boolean): ReactNode {
+  if (control.face === 'note-size') return <Icon>{NOTE_SIZE_ICON}</Icon>
+  if (control.id === 'stroke-style') return <Icon>{strokeStyleControl(o?.value)}</Icon>
+  const icon = CONTROL_ICON[control.id]
+  return icon ? <Icon>{icon}</Icon> : face(control.id, row, o, dark)
+}
+
 /** The option a row's value names (null: mixed or none of them). */
 const chosen = (row: TierRow) => row.options.find((o) => o.value === row.value) ?? null
 
@@ -223,7 +291,10 @@ function TrayRow({
   )
 }
 
-/** "More styles": the style panel (the phone's sheet; on a wide canvas the panel shown, pointed out). */
+/**
+ * "Styles": the style panel (the phone's sheet; on a wide canvas the panel, which opens only on request, P-021: this
+ * button opens it, pointed out, and closes it again; the choice is kept, ./style-panel-place.ts).
+ */
 function moreStyles(ctx: CanvasFeatureContext, fromKeyboard: boolean) {
   const { canvas } = ctx
   const state = uxState(canvas)
@@ -236,6 +307,11 @@ function moreStyles(ctx: CanvasFeatureContext, fromKeyboard: boolean) {
     state.stylesOpen.set(true)
     return
   }
+  if (stylePanelOpen.get()) {
+    setStylePanelOpen(false)
+    return
+  }
+  setStylePanelOpen(true)
   const doc = canvas.container()?.ownerDocument ?? document
   requestAnimationFrame(() => {
     const panel = doc.querySelector<HTMLElement>(STYLE_PANEL_SELECTOR)
@@ -263,6 +339,7 @@ export function SelectionStyleItems({ ctx }: { ctx: CanvasFeatureContext; select
   const { canvas } = ctx
   const state = uxState(canvas)
   const compact = useContext(SelectionBarCompact)
+  const panelOpen = useValue(stylePanelOpen)
   const model = useValue('cux-tier1', () => tierModel(canvas), [canvas])
   const tray = useValue(state.selectionTray)
   const trayHost = useValue(state.selectionTrayHost)
@@ -306,13 +383,16 @@ export function SelectionStyleItems({ ctx }: { ctx: CanvasFeatureContext; select
     )
     return trayHost ? createPortal(body, trayHost) : body
   }
+  // P-021: on a wide bar it opens and closes the style panel (pressed while it is open)
+  const panelShown = panelOpen && !compact
   const more = (
     <button
       type="button"
       className="dr-cux-selbar__btn"
       data-testid="selection-style-more"
-      aria-label="More styles"
-      title="More styles"
+      aria-label={panelShown ? 'Hide styles' : 'More styles'}
+      title={panelShown ? 'Hide styles' : 'More styles'}
+      aria-pressed={compact ? undefined : panelShown}
       onMouseDown={(e) => e.preventDefault()}
       onClick={(e) => moreStyles(ctx, e.detail === 0)}
     >
@@ -342,7 +422,7 @@ export function SelectionStyleItems({ ctx }: { ctx: CanvasFeatureContext; select
             state.selectionTray.set(allOpen ? null : ALL_STYLES_TRAY)
           }}
         >
-          {first && firstRow ? face(first.id, firstRow, chosen(firstRow), dark) : <StylesIcon />}
+          {first && firstRow ? controlFace(first, firstRow, chosen(firstRow), dark) : <StylesIcon />}
         </button>
         {allOpen &&
           trayBody(
@@ -377,7 +457,7 @@ export function SelectionStyleItems({ ctx }: { ctx: CanvasFeatureContext; select
             onMouseDown={(e) => e.preventDefault()}
             onClick={(e) => toggle(c.id, e)}
           >
-            {face(c.id, row, chosen(row), dark)}
+            {controlFace(c, row, chosen(row), dark)}
           </button>
         )
       })}

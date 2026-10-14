@@ -29,6 +29,7 @@ import { FeatureBoundary } from '../../FeatureHostCore.tsx'
 import { AlignIcons, LockIcon } from '../icons.tsx'
 import { unitsOf } from './align.ts'
 import { CMD, runCommand, selectedRoots } from './commands.ts'
+import { FRAME_NAME_BAND_PX } from './FrameRename.tsx'
 import { barObstacles, clientRectOf, STYLE_PANEL_SELECTOR, selectionHandlesRect } from './obstacles.ts'
 import { SelectionBarCompact } from './selection-bar-context.ts'
 import { uxState } from './state.ts'
@@ -427,11 +428,14 @@ export function selectionBarView(ctx: CanvasFeatureContext): SelectionBarView | 
     .sorted(ctx.registries.selectionBar)
     .filter((i) => (i.visible ? i.visible(ctx, ids) : true))
   if (!items.length) return null
+  // P-040 (wave P): a selected frame's name is drawn above the frame (FRAME_NAME_BAND_PX, screen px): it is part of what
+  // the bar keeps clear of, so the bar never sits on the names of the frames an AI capture just made
+  const band = ids.some((id) => canvas.get(id)?.type === 'frame') ? FRAME_NAME_BAND_PX : 0
   const anchor = {
     x: Math.min(tl.x, br.x),
-    y: Math.min(tl.y, br.y),
+    y: Math.min(tl.y, br.y) - band,
     w: Math.abs(br.x - tl.x),
-    h: Math.abs(br.y - tl.y),
+    h: Math.abs(br.y - tl.y) + band,
   }
   return { sel: ids.join(' '), ids, anchor, vw: vp.width, vh: vp.height, items }
 }

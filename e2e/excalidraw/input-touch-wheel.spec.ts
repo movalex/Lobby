@@ -24,7 +24,7 @@ import {
 import type { Users } from '../tests/support/users.ts'
 import { openPhoneSession } from './a11y-kit.ts'
 import { emptyCanvasPoint, settled } from './board-kit.ts'
-import { waitForCanvasUx, withCanvas } from './canvas-ux-kit.ts'
+import { showStylePanel, waitForCanvasUx, withCanvas } from './canvas-ux-kit.ts'
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
@@ -512,6 +512,8 @@ test('W5-40 (CR-W5-3A-1): new connectors are straight, Straight after Elbow draw
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
+  // P-021: the style panel opens on request; this person has it open
+  await showStylePanel(a.page)
   const page = a.page
   const { draw, live, pickKind } = await drawing(page)
 

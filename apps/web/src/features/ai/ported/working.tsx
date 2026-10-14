@@ -9,6 +9,7 @@
 import { AI_EVENTS, AI_WORKING_TTL_MS, AiDoneEvent, AiWorkingEvent } from '@draftroom/contracts'
 import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { type Atom, atom, useValue } from '../../../lib/signals.ts'
+import { TopCentreItem } from '../../workshops/top-centre.ts'
 import { SparkIcon } from '../icons.tsx'
 import { useReducedMotion } from './Placeholders.tsx'
 import { aiJob, aiOwnRuns, perCanvas } from './runtime.ts'
@@ -143,9 +144,11 @@ export function AiWorkingOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
     box: { x: number; y: number; w: number; h: number } | null
   }[]
   if (!shown.length) return null
+  const areas = shown.filter((s) => s.box)
+  const pills = shown.filter((s) => !s.box)
   return (
     <div className="dr-ai-working" data-motion={still ? 'still' : 'shimmer'}>
-      {shown.map((s) =>
+      {areas.map((s) =>
         s.box ? (
           <div
             key={s.runId}
@@ -158,17 +161,26 @@ export function AiWorkingOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
               <SparkIcon size={12} /> {s.label}
             </span>
           </div>
-        ) : (
-          <div
-            key={s.runId}
-            className="dr-ai-working__pill"
-            data-testid="ai-working"
-            data-run={s.runId}
-            role="status"
-          >
-            <SparkIcon size={12} /> {s.label.replace(/ here$/, '')}
+        ) : null,
+      )}
+      {pills.length > 0 && (
+        // P-047: the runs whose area is off screen are pills in the board's top-centre stack, one under the other,
+        // never on the since chip, the coach's chip or each other
+        <TopCentreItem slot="ai">
+          <div className="dr-ai-working__pills">
+            {pills.map((s) => (
+              <div
+                key={s.runId}
+                className="dr-ai-working__pill"
+                data-testid="ai-working"
+                data-run={s.runId}
+                role="status"
+              >
+                <SparkIcon size={12} /> {s.label.replace(/ here$/, '')}
+              </div>
+            ))}
           </div>
-        ),
+        </TopCentreItem>
       )}
     </div>
   )

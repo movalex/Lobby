@@ -30,6 +30,7 @@ import {
 } from '../tests/support/canvas.ts'
 import {
   bell,
+  CORNER_PIN_GAP,
   canvasHasFocus,
   canvasRect,
   centerOn,
@@ -88,6 +89,9 @@ test('commenter on a read-only canvas: C, click a note, Enter posts; the owner s
     const list = threadPopover(c.page, threadId).getByTestId('comment-item')
     await expect(list).toHaveCount(1)
     await expect(list).toContainText('Can we warm up the grade here?')
+    // P-014: posting goes back to Select (Miro does), so the next click on the board starts nothing
+    await expect.poll(() => currentTool(c.page)).toBe('select')
+    await expect(c.page.getByTestId('tools.comment')).toHaveAttribute('aria-pressed', 'false')
   })
 
   await test.step('alice sees the pin appear live; the server stored a shape thread by carol', async () => {
@@ -102,13 +106,20 @@ test('commenter on a read-only canvas: C, click a note, Enter posts; the owner s
     const anchor = uvOf(stored)
     expect(anchor.u).toBeCloseTo(0.25, 1)
     expect(anchor.v).toBeCloseTo(0.75, 1)
+    // P-037: the anchor is kept where carol clicked, and the pin sits inside the note's top-right corner, clear of
+    // its words
     await expectPinOnAnchor(a.page, threadId, note, anchor.u, anchor.v)
+    const corner = await screenPointOnElement(a.page, note, 1, 0)
+    const pinBox = await pin(a.page, threadId).boundingBox()
+    expect(Math.abs((pinBox ? pinBox.x + pinBox.width : 0) - (corner.x - CORNER_PIN_GAP))).toBeLessThanOrEqual(2)
+    expect(Math.abs((pinBox?.y ?? 0) - (corner.y + CORNER_PIN_GAP))).toBeLessThanOrEqual(2)
   })
 
   await test.step('a click on the empty board pins a point comment there (Shift+Enter adds a line)', async () => {
     await c.page.keyboard.press('Escape')
     await expect(threadPopover(c.page)).toHaveCount(0)
-    expect(await currentTool(c.page)).toBe('comment')
+    expect(await currentTool(c.page)).toBe('select')
+    await pressCommentTool(c.page)
     const spot = await emptyCanvasPoint(c.page)
     await c.page.mouse.click(spot.x, spot.y)
     const composer = composerIn(c.page, 'new')
@@ -887,24 +898,25 @@ test('one page: a legacy point anchor that names a tldraw page is drawn on the b
   await expect(threadPopover(a.page, thread.id)).toBeVisible()
 })
 
-test('after posting, Esc leaves the thread with focus on the canvas, the next Esc returns to select, and shortcuts work again', async ({
+test('after posting, the tool is back to select (P-014); Esc leaves the thread with focus on the canvas, and shortcuts work again', async ({
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
   const note = await noteAt(a.page, 0, 0, 'Storyboard 1')
   let threadId = ''
 
-  await test.step('post, Esc: the thread closes, the board has focus, the tool is still comment', async () => {
+  await test.step('post: the tool is select again; Esc: the thread closes, the board has focus', async () => {
     await pressCommentTool(a.page)
     threadId = await commentOnElement(a.page, note, 'Looks good')
     await expect(threadPopover(a.page, threadId)).toBeVisible()
+    await expect.poll(() => currentTool(a.page)).toBe('select')
     await a.page.keyboard.press('Escape')
     await expect(threadPopover(a.page)).toHaveCount(0)
     await expect.poll(() => canvasHasFocus(a.page)).toBe(true)
-    expect(await currentTool(a.page)).toBe('comment')
+    expect(await currentTool(a.page)).toBe('select')
   })
 
-  await test.step('the next Esc returns to select, and the board shortcuts (N) work', async () => {
+  await test.step('the board shortcuts (N) work', async () => {
     await a.page.keyboard.press('Escape')
     await expect.poll(() => currentTool(a.page)).toBe('select')
     await a.page.keyboard.press('n')

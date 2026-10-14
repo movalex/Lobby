@@ -34,6 +34,7 @@ import { exportAllowed, notifyExportOff } from './export-gate.ts'
 import { editAdjacentNote, type NoteDirection } from './notes.ts'
 import { placeAtCenter, placeableTool } from './place.ts'
 import { uxState } from './state.ts'
+import { typesOnKey } from './type-to-label.ts'
 
 /** The tool letters the allowlist routes (canvas/input/keymap.ts TOOL_KEYS, without M: navigation's). */
 export const TOOL_LETTERS: Readonly<Record<string, string>> = {
@@ -67,11 +68,11 @@ export const DEFERRING_KEYS: ReadonlySet<string> = new Set([
   'canvas-ux.tool-lock-key',
 ])
 
-/** One selected sticky note: the allowlist's type-to-edit takes printable keys (canvas/input/keymap.ts). */
-const typeToEditTarget = (ctx: CanvasFeatureContext) => {
-  const sel = ctx.canvas.selection
-  return sel.length === 1 && ctx.canvas.get(sel[0] as string)?.type === 'stickynote'
-}
+/**
+ * One selected sticky note, or a plain shape (P-005, ./type-to-label.ts): the allowlist's type-to-edit takes
+ * printable keys (canvas/input/keymap.ts).
+ */
+const typeToEditTarget = (ctx: CanvasFeatureContext) => typesOnKey(ctx.canvas)
 
 const plain = (e: KeyEventLike) => !e.ctrlKey && !e.metaKey && !e.altKey
 

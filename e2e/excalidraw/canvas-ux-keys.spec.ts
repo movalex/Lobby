@@ -14,6 +14,8 @@ import {
   item,
   items,
   itemText,
+  leaseHolder,
+  sceneToScreen,
   select,
   selectNone,
   setViewport,
@@ -86,12 +88,15 @@ test('Miro keys: Ctrl+Shift+L locks and keeps the selection (Delete does nothing
     expect((await item(a.page, r2))?.isDeleted).toBe(false)
     await a.page.keyboard.press('ControlOrMeta+Shift+L')
     await expect.poll(async () => (await item(a.page, r2))?.locked).toBe(false)
-    // a bare Shift+L does nothing; a later L proves the key was handled
-    await select(a.page, [r3])
+    // a bare Shift+L does nothing; a later L proves the key was handled (with nothing selected: on a selected
+    // shape both would be letters for its label, P-005)
+    await selectNone(a.page)
+    await focusBoard(a.page)
     await a.page.keyboard.press('Shift+L')
     await a.page.keyboard.press('l')
     await expect.poll(() => tool(a.page)).toBe('arrow')
     expect((await item(a.page, r3))?.locked).toBe(false)
+    expect(await itemText(a.page, r3)).toBe('')
     await a.page.keyboard.press('v')
   })
 
@@ -116,7 +121,7 @@ test('Miro keys: Ctrl+Shift+L locks and keeps the selection (Delete does nothing
       })),
     )
     const kbdOf = (label: string) => rows.find((r) => r.label === label)?.kbd[0] ?? null
-    expect(kbdOf('Toggle locked')).toMatch(/^(Ctrl\+Shift\+L|⇧⌘L)$/)
+    expect(kbdOf('Lock or unlock')).toMatch(/^(Ctrl\+Shift\+L|⇧⌘L)$/)
     expect(kbdOf('Bring to front')).toBe('PgUp')
     expect(kbdOf('Send backward')).toMatch(/^(Shift\+PgDn|⇧PgDn)$/)
     expect(kbdOf('Connector')).toBe('L')
@@ -162,9 +167,9 @@ test('type-to-edit: typing on one selected note appends to it; T and C still pic
     await expect.poll(() => itemText(b.page, n)).toBe('SayHello')
   })
 
-  await test.step('with a shape that is not a note selected, T picks the text tool', async () => {
-    await clickItem(a.page, g)
-    await expect.poll(() => withCanvas(a.page, (c) => c.selection, null)).toEqual([g])
+  await test.step('with nothing selected, T picks the text tool (and a shape is not typed into)', async () => {
+    await selectNone(a.page)
+    await focusBoard(a.page)
     await a.page.keyboard.press('t')
     await expect.poll(() => tool(a.page)).toBe('text')
     expect(await itemText(a.page, g)).toBe('')
@@ -191,6 +196,87 @@ test('type-to-edit: typing on one selected note appends to it; T and C still pic
     expect(await editingId(v.page)).toBeNull()
     expect(await itemText(v.page, n)).toBe('SayHello')
     expect(await itemText(a.page, n)).toBe('SayHello')
+  })
+})
+
+test('P-005: a shape just drawn takes the words typed on it as its label, through the lease (bob sees them); a selected ellipse types "e", not the eraser; a locked shape and the shape just left keep the tool letters', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  const b = await canvasSession('bob')
+  await waitForCanvasUx(a.page)
+  await focusBoard(a.page)
+
+  let rect = ''
+  await test.step('R, drag: the new rectangle is selected and the tool is back to select', async () => {
+    await a.page.keyboard.press('r')
+    await expect.poll(() => tool(a.page)).toBe('rectangle')
+    const from = await sceneToScreen(a.page, { x: 300, y: 200 })
+    await a.page.mouse.move(from.x, from.y)
+    await a.page.mouse.down()
+    await a.page.mouse.move(from.x + 160, from.y + 100, { steps: 6 })
+    await a.page.mouse.up()
+    await expect.poll(() => withCanvas(a.page, (c) => c.selection.length, null)).toBe(1)
+    rect = (await withCanvas(a.page, (c) => c.selection[0] as string, null)) ?? ''
+    expect((await item(a.page, rect))?.type).toBe('rectangle')
+    await expect.poll(() => tool(a.page)).toBe('select')
+  })
+
+  await test.step('typing at full speed labels it: no tool letter runs, and the label is leased to alice', async () => {
+    await a.page.keyboard.type('Shape label') // h, a, p, e, l are tool letters: none may pick its tool
+    await expect.poll(() => itemText(a.page, rect)).toBe('Shape label')
+    expect(await editingId(a.page)).toBe(rect)
+    expect(await tool(a.page)).toBe('select')
+    await expect.poll(async () => (await leaseHolder(b.page, rect))?.name ?? null).toBeTruthy()
+    await a.page.keyboard.press('Escape')
+    await expect.poll(() => editingId(a.page)).toBeNull()
+    await expect.poll(() => itemText(b.page, rect)).toBe('Shape label')
+    await expect.poll(async () => (await leaseHolder(b.page, rect)) ?? null).toBeNull()
+  })
+
+  await test.step('the shape just left keeps the tool letters (E picks the eraser, nothing is typed)', async () => {
+    await expect.poll(() => withCanvas(a.page, (c) => c.selection, null)).toEqual([rect])
+    await a.page.keyboard.press('e')
+    await expect.poll(() => tool(a.page)).toBe('eraser')
+    expect(await itemText(a.page, rect)).toBe('Shape label')
+    await a.page.keyboard.press('v')
+    await expect.poll(() => tool(a.page)).toBe('select')
+  })
+
+  await test.step('a clicked ellipse takes "e" and "h" as letters', async () => {
+    const o = await settled(
+      a.page,
+      createItem(a.page, 'ellipse', {
+        x: 700,
+        y: 200,
+        width: 180,
+        height: 120,
+        backgroundColor: '#dce1f8',
+        fillStyle: 'solid',
+      }),
+    )
+    await clickItem(a.page, o)
+    await expect.poll(() => withCanvas(a.page, (c) => c.selection, null)).toEqual([o])
+    await a.page.keyboard.type('eh')
+    await expect.poll(() => itemText(a.page, o)).toBe('eh')
+    expect(await tool(a.page)).toBe('select')
+    await a.page.keyboard.press('Escape')
+    await expect.poll(() => editingId(a.page)).toBeNull()
+  })
+
+  await test.step('a locked shape is not typed into: T picks the text tool', async () => {
+    const l = await settled(
+      a.page,
+      createItem(a.page, 'rectangle', { x: 300, y: 500, width: 160, height: 100, locked: true }),
+    )
+    await select(a.page, [l])
+    await focusBoard(a.page)
+    await select(a.page, [l])
+    await a.page.keyboard.press('t')
+    await expect.poll(() => tool(a.page)).toBe('text')
+    expect(await itemText(a.page, l)).toBe('')
+    expect(await editingId(a.page)).toBeNull()
+    await a.page.keyboard.press('v')
   })
 })
 

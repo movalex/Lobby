@@ -50,14 +50,18 @@ const labelOf = (page: Page, id: string) =>
       ).find((b) => b.type === 'text')?.id ?? null,
     id,
   )
-/** A note's fill and its label's size as the size picker reads it (the base size). */
+/** A note's fill, its width (P-011: a note's Size is the note's) and its label's base size. */
 async function noteStyle(page: Page, id: string) {
-  const el = (await item(page, id)) as { backgroundColor?: string } | null
+  const el = (await item(page, id)) as { backgroundColor?: string; width?: number } | null
   const label = await labelOf(page, id)
   const t = label
     ? ((await item(page, label)) as { fontSize?: number; baseFontSize?: number | null } | null)
     : null
-  return { fill: el?.backgroundColor ?? null, size: t?.baseFontSize ?? t?.fontSize ?? null }
+  return {
+    fill: el?.backgroundColor ?? null,
+    width: el?.width ?? null,
+    size: t?.baseFontSize ?? t?.fontSize ?? null,
+  }
 }
 
 async function barSettled(page: Page) {
@@ -85,7 +89,7 @@ async function pick(page: Page, control: string, row: string, value: string) {
   await tray.getByTestId(`selection-style.${row}.${value}`).click()
 }
 
-test('M1-4: a note colour and a size from the bar: one undo step each for both notes; bob sees each and pushes nothing; a label bob is typing in is skipped', async ({
+test('M1-4 / P-011: a note colour and a note size from the bar: one undo step each for both notes; bob sees each and pushes nothing; a label bob is typing in is skipped', async ({
   canvasSession,
 }, testInfo) => {
   const a = await canvasSession('alice')
@@ -120,11 +124,17 @@ test('M1-4: a note colour and a size from the bar: one undo step each for both n
     )
   })
 
-  await test.step('a size pick: both labels at the XL base size, one step; bob sees it', async () => {
+  await test.step('P-011: a size pick resizes both notes (XL: 400 px) with their words (44), one step; bob sees it', async () => {
+    expect(start.width).toBe(200)
     await pick(a.page, 'font-size', 'font-size', 'xl')
     await expectSaved(a.page)
     for (const p of [a.page, b.page])
-      for (const id of [n1, n2]) await expect.poll(async () => (await noteStyle(p, id)).size).toBe(32)
+      for (const id of [n1, n2])
+        await expect.poll(async () => noteStyle(p, id)).toMatchObject({ width: 400, size: 44 })
+    // the note grew from its top-left corner: it is where it was
+    expect((await item(a.page, n1))?.x).toBe(0)
+    expect((await item(a.page, n1))?.y).toBe(0)
+    await expect(bar(a.page).getByTestId('selection-style-font-size')).toHaveAttribute('aria-label', 'Size: Extra large')
     await a.page.screenshot({ path: testInfo.outputPath('m1-4-note-tray.png') })
   })
 
@@ -133,7 +143,9 @@ test('M1-4: a note colour and a size from the bar: one undo step each for both n
     await a.page.keyboard.press('ControlOrMeta+z')
     await expectSaved(a.page)
     for (const id of [n1, n2])
-      await expect.poll(() => noteStyle(a.page, id)).toEqual({ fill: '#a6d8f3', size: start.size })
+      await expect
+        .poll(() => noteStyle(a.page, id))
+        .toEqual({ fill: '#a6d8f3', width: start.width, size: start.size })
     await a.page.keyboard.press('ControlOrMeta+z')
     await expectSaved(a.page)
     for (const p of [a.page, b.page])
@@ -150,8 +162,8 @@ test('M1-4: a note colour and a size from the bar: one undo step each for both n
     await barSettled(a.page)
     await pick(a.page, 'font-size', 'font-size', 'l')
     await expectSaved(a.page)
-    await expect.poll(async () => (await noteStyle(a.page, n2)).size).toBe(26)
-    expect((await noteStyle(a.page, n1)).size).toBe(start.size)
+    await expect.poll(async () => noteStyle(a.page, n2)).toMatchObject({ width: 300, size: 33 })
+    expect(await noteStyle(a.page, n1)).toMatchObject({ width: start.width, size: start.size })
     await stopTextEditing(b.page)
   })
 })

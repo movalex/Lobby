@@ -52,6 +52,24 @@ function followedView(
   return { sid: st.sid, color: safeColor(p.color, p.uid), view: p.view, paused: st.status === 'paused' }
 }
 
+/**
+ * P-048 (wave P): how one element is painted in the minimap (pure). A frame is its outline; a note or an image its
+ * fill; anything else (shapes, texts, lines) its fill when it has one AND an outline in the minimap's ink, so an
+ * unfilled rectangle, a light one or a line reads on the minimap's white as plainly as a note does.
+ */
+export function minimapPaint(
+  e: { readonly type: string; readonly backgroundColor?: unknown },
+  colors: { readonly ink: string; readonly fill: string },
+): { readonly fill: string | null; readonly stroke: string | null } {
+  if (e.type === 'frame') return { fill: null, stroke: colors.ink }
+  const own =
+    typeof e.backgroundColor === 'string' && e.backgroundColor !== 'transparent' && e.backgroundColor !== ''
+      ? e.backgroundColor
+      : null
+  if (e.type === 'stickynote' || e.type === 'image') return { fill: own ?? colors.fill, stroke: null }
+  return { fill: own, stroke: colors.ink }
+}
+
 function draw(canvasEl: HTMLCanvasElement, canvas: LobbyCanvas): Mapping {
   const dpr = window.devicePixelRatio || 1
   if (canvasEl.width !== MINIMAP_W * dpr) {
@@ -87,17 +105,15 @@ function draw(canvasEl: HTMLCanvasElement, canvas: LobbyCanvas): Mapping {
     const p = toMini(m, b.x, b.y)
     const w = Math.max(1, b.width * m.scale)
     const h = Math.max(1, b.height * m.scale)
-    if (e.type === 'frame') {
-      g.strokeStyle = ink
-      g.lineWidth = 1
-      g.strokeRect(p.x, p.y, w, h)
-    } else {
-      const bg =
-        typeof e.backgroundColor === 'string' && e.backgroundColor !== 'transparent'
-          ? e.backgroundColor
-          : fill
-      g.fillStyle = bg
+    const paint = minimapPaint(e, { ink, fill })
+    if (paint.fill) {
+      g.fillStyle = paint.fill
       g.fillRect(p.x, p.y, w, h)
+    }
+    if (paint.stroke) {
+      g.strokeStyle = paint.stroke
+      g.lineWidth = 1
+      g.strokeRect(p.x + 0.5, p.y + 0.5, Math.max(1, w - 1), Math.max(1, h - 1))
     }
   }
   const vp = toMini(m, view.x, view.y)

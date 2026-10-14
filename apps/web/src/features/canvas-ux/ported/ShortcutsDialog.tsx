@@ -45,7 +45,7 @@ const BUILT_IN_EDIT: readonly ShortcutRow[] = [
 
 /** The keys canvas-ux documents (the tldraw dialog's "Board" group). */
 const BOARD_ROWS: readonly ShortcutRow[] = [
-  { label: 'Type on a selected note to edit it', keys: [{ text: 'A–Z' }] },
+  { label: 'Type on a selected note or shape to edit its words', keys: [{ text: 'A–Z' }] },
   { label: 'Edit the selected note (caret at the end)', keys: ['enter'] },
   { label: 'New note beside (while editing a note)', keys: ['tab'] },
   { label: 'New note below (while editing a note)', keys: ['mod+enter'] },
