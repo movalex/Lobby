@@ -115,7 +115,7 @@ const TABLE: readonly (readonly [string, Expect])[] = [
     { ops: [op('recolor', ['n1', 'n2', 'n4'], { color: 'black' })] },
   ],
   ['make the images red', { error: /Nothing here takes a colour/ }],
-  ['make the green notes red', { error: /^No Fern or Pistachio notes on this board.$/ }],
+  ['make the green notes red', { error: /^No green notes on this board.$/ }],
   ['make the notes in Backlog yellow', { error: /No frame on this board is called “backlog”/ }],
   // ---- select, find, zoom ----
   ['select all red notes', { ops: [op('select', ['n1', 'n2', 'n4'])], find: true }],
@@ -252,7 +252,7 @@ describe('the local grammar (a table of phrases on a fixed board)', () => {
 
   it('says what it will do, in words', () => {
     const r = grammar('make the red notes in Ideas yellow', FACTS)
-    expect(r?.ok && r.title).toBe('Make 2 Coral notes in “Ideas” Butter')
+    expect(r?.ok && r.title).toBe('Make 2 red notes in “Ideas” yellow')
     const z = grammar('zoom to retro', FACTS)
     expect(z?.ok && z.title).toBe('Zoom to frame “Retro”')
     const l = grammar('lock these', FACTS)

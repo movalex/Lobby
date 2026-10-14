@@ -23,8 +23,9 @@
 //
 // Colours (wave M, M3-4; ./colours.ts): the words are the pickers' ("butter", "blush", "sky"…), the hue families
 // ("yellow" is Butter and Marigold, "pink" is Blush and Coral) and the older names ("light red"); a family on the
-// target side matches all its swatches, on the destination side it means its first. Every reply names colours by
-// the picker's label (Butter, Coral, Light red on a shape), never by the stored name ("light red" for a pink note).
+// target side matches all its swatches, on the destination side it means its first. P-012: every reply says a colour in
+// the word the person typed ("Make 6 yellow notes blue"), never the palette's own name for a swatch (Butter, Iris) nor
+// the stored one (`black` for a Butter note).
 import {
   AI_COMMAND_FRAME_NAME_MAX_CHARS,
   AI_COMMAND_INSTRUCTION_MAX,
@@ -38,13 +39,10 @@ import {
   type ColourSpace,
   type ColourWord,
   capitalised,
-  colourLabel,
   colourWord,
   covers,
   destinationIn,
-  labelsOf,
   listWords,
-  namesIn,
 } from './colours.ts'
 
 // ---- the board, as the grammar sees it ---------------------------------------------------------------------
@@ -561,8 +559,6 @@ const KIND_NOUN: Readonly<Record<KindName, readonly [string, string]>> = {
   image: ['image', 'images'],
   file: ['file', 'files'],
 }
-/** The picker's label for a colour name on an item of this kind (a note's Butter, a shape's Black…). */
-export const COLOUR_LABEL = (c: AiColorName, kind: KindName = 'note'): string => colourLabel(c, spaceOf(kind))
 /** Notes are named by the sticky-note picker; everything else the grammar colours by the style panel's. */
 const spaceOf = (kind: KindName): ColourSpace => (kind === 'note' ? 'note' : 'stroke')
 /** Whether an item has the colour a target names. */
@@ -600,32 +596,14 @@ export function frameNamed(
   return holds.length === 1 ? (holds[0] ?? null) : null
 }
 
-/**
- * The colour part of a phrase. With the items that matched: the labels they carry, once each ("Butter and Marigold").
- * Without any (nothing matched): the labels the word covers ("Blush or Coral"), as the pickers name them.
- */
-function colourPhrase(t: TargetSpec, picked: readonly FactItem[] | null): string | null {
-  const w = t.colour
-  if (!w) return null
-  if (picked?.length) {
-    const labels = labelsOf(picked.flatMap((i) => (i.color ? [[i.color, spaceOf(i.kind)] as const] : [])))
-    return labels.length ? listWords(labels, 'and') : capitalised(w.word)
-  }
-  const spaces: ColourSpace[] = t.kind === null ? ['note', 'stroke'] : [spaceOf(t.kind)]
-  const labels = labelsOf(spaces.flatMap((sp) => namesIn(w, sp).map((n) => [n, sp] as const)))
-  return labels.length ? listWords(labels, 'or') : capitalised(w.word)
-}
+/** The colour part of a phrase: the word the person typed (P-012: "yellow", not Butter and Marigold). */
+const colourPhrase = (t: TargetSpec): string | null => t.colour?.word ?? null
 
 /** The phrase that names what a target picked: 'selected Coral notes in “Ideas”'. */
-function describe(
-  t: TargetSpec,
-  n: number,
-  frameName: string | null,
-  picked: readonly FactItem[] | null,
-): string {
+function describe(t: TargetSpec, n: number, frameName: string | null): string {
   const parts: string[] = []
   if (t.selection) parts.push('selected')
-  const colour = colourPhrase(t, picked)
+  const colour = colourPhrase(t)
   if (colour) parts.push(colour)
   const noun = t.kind ? KIND_NOUN[t.kind] : (['item', 'items'] as const)
   parts.push(n === 1 ? noun[0] : noun[1])
@@ -722,21 +700,21 @@ export function resolveCommand(cmd: ParsedCommand, facts: BoardFacts): Resolved 
     const nouns = [...new Set(picked.map((i) => KIND_NOUN[i.kind][1]))]
     return {
       ok: false,
-      reason: `${capitalised(listWords(nouns, 'and'))} do not come in ${capitalised(recolour.word)}.`,
+      reason: `${capitalised(listWords(nouns, 'and'))} do not come in ${recolour.word}.`,
     }
   }
   picked = takesIt
   const n = picked.length
-  const what = describe(t, n, frame?.name ?? null, picked)
+  const what = describe(t, n, frame?.name ?? null)
   if (!n)
     return {
       ok: false,
       reason:
         matched.length && cmd.verb === 'recolor'
-          ? `Nothing here takes a colour: no ${describe(t, 2, frame?.name ?? null, null)}.`
+          ? `Nothing here takes a colour: no ${describe(t, 2, frame?.name ?? null)}.`
           : matched.length
             ? 'A frame cannot go inside another frame.'
-            : `No ${describe(t, 2, frame?.name ?? null, null)} on this board.`,
+            : `No ${describe(t, 2, frame?.name ?? null)} on this board.`,
     }
   const ids = picked.map((i) => i.id)
   const find = FIND_VERBS.has(cmd.verb)
@@ -753,17 +731,14 @@ export function resolveCommand(cmd: ParsedCommand, facts: BoardFacts): Resolved 
       const word = cmd.colour as ColourWord
       // one op per destination (a note takes the word's note name, everything else its stroke name)
       const byColour = new Map<AiColorName, string[]>()
-      const to: (readonly [AiColorName, ColourSpace])[] = []
       for (const i of picked) {
-        const space = spaceOf(i.kind)
-        const color = destinationIn(word, space) as AiColorName
+        const color = destinationIn(word, spaceOf(i.kind)) as AiColorName
         byColour.set(color, [...(byColour.get(color) ?? []), i.id])
-        to.push([color, space])
       }
       const ops = [...byColour].flatMap(([color, group]) =>
         chunked(group, (x) => ({ op: 'recolor', ids: x, color })),
       )
-      return done(ops, `Make ${n} ${what} ${labelsOf(to).join(' / ')}`)
+      return done(ops, `Make ${n} ${what} ${word.word}`)
     }
     case 'select':
       return done(
