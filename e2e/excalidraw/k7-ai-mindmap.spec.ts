@@ -367,11 +367,13 @@ test('Mind map from a prompt, from the commands (the empty board’s "Ideas with
 }) => {
   const a = await canvasSession('alice')
 
-  await test.step('the empty board’s "Ideas with AI" (the command the hint dispatches): the ideas prompt, a mind map as the result', async () => {
+  await test.step('the empty board’s "Ideas with AI" (the command the hint dispatches): the ideas prompt on sticky notes; choosing the mind map', async () => {
     // offered once the status is known (the first read waits for an idle moment)
     await expect.poll(() => navRun(a.page, 'ai.ideas')).toBe(true)
+    // P-041: the prompt opens on sticky notes; the mind map is chosen here
+    await expect(a.page.getByTestId('ai-ideas-as-notes')).toBeChecked()
+    await a.page.getByTestId('ai-ideas-as-map').check()
     await expect(a.page.getByTestId('ai-ideas-as-map')).toBeChecked()
-    await expect(a.page.getByTestId('ai-ideas-as-notes')).not.toBeChecked()
     await a.page.getByTestId('ai-ideas-prompt').fill('Brand refresh')
     await a.page.getByTestId('ai-ideas-count').selectOption('4')
     await expect(a.page.getByTestId('ai-ideas-go')).toHaveText('Draft it')
@@ -434,7 +436,7 @@ test('Mind map from a prompt, from the commands (the empty board’s "Ideas with
 })
 
 // Wave K integration (K2-4 with K7-3): the empty board's card dispatches the registered 'ai.ideas' command.
-test('The empty board’s card offers "Ideas with AI" once the AI status is known; it opens the ideas prompt set to a mind map', async ({
+test('The empty board’s card offers "Ideas with AI" once the AI status is known; it opens the ideas prompt set to sticky notes', async ({
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
@@ -446,8 +448,9 @@ test('The empty board’s card offers "Ideas with AI" once the AI status is know
   await expect(ideas).toHaveText(/Ideas with AI/)
   await ideas.click()
   await expect(a.page.getByTestId('ai-ideas-prompt')).toBeVisible()
-  await expect(a.page.getByTestId('ai-ideas-as-map')).toBeChecked()
-  await expect(a.page.getByTestId('ai-ideas-as-notes')).not.toBeChecked()
+  // P-041: it opens on sticky notes, as the button says; the map is a choice
+  await expect(a.page.getByTestId('ai-ideas-as-notes')).toBeChecked()
+  await expect(a.page.getByTestId('ai-ideas-as-map')).not.toBeChecked()
 })
 
 // ---- K7-4: the wait feels deliberate, and the status read leaves the open burst ----------------------------------

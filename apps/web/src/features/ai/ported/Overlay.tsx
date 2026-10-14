@@ -25,7 +25,6 @@ import {
 } from 'react'
 import {
   type CanvasFeatureContext,
-  items,
   type LobbyCanvas,
   useCanvasFeatureContext,
 } from '../../../canvas/api/index.ts'
@@ -425,15 +424,13 @@ function IdeasView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: str
   const { canvas } = useCanvasFeatureContext()
   const [prompt, setPrompt] = useState('')
   const [count, setCount] = useState(AI_IDEAS_DEFAULT)
-  // K7-3: the ideas can land as sticky notes or as the first ring of a new mind map; on an empty board with
-  // nothing selected (where the empty board's "Ideas with AI" opens this prompt) a map is the better start
+  // K7-3: the ideas can land as sticky notes or as the first ring of a new mind map. P-041: it opens on sticky notes,
+  // as "Ideas with AI" says, wherever it is opened from (the empty board has its own "Start a mind map")
   const canMap = canBuildWithAi(
     useValue('lobby-ai-ideas-status', () => aiStatus(canvas).get(), [canvas]),
     canvas.readOnly(),
   )
-  const [asMap, setAsMap] = useState(
-    () => menu.target.kind === 'none' && items.contentItems(canvas.items()).length === 0,
-  )
+  const [asMap, setAsMap] = useState(false)
   const map = canMap && asMap
   const inputId = useId()
   const countId = useId()
@@ -475,26 +472,28 @@ function IdeasView({ menu, titleId, onClose }: { menu: AiMenuState; titleId: str
             <legend id={resultId} className="dr-ai-form__label">
               Show them as
             </legend>
-            <label className="dr-ai-form__radio">
-              <input
-                type="radio"
-                name={resultId}
-                data-testid="ai-ideas-as-notes"
-                checked={!asMap}
-                onChange={() => setAsMap(false)}
-              />
-              Sticky notes
-            </label>
-            <label className="dr-ai-form__radio">
-              <input
-                type="radio"
-                name={resultId}
-                data-testid="ai-ideas-as-map"
-                checked={asMap}
-                onChange={() => setAsMap(true)}
-              />
-              Mind map
-            </label>
+            <div className="dr-ai-form__choices">
+              <label className="dr-ai-form__radio">
+                <input
+                  type="radio"
+                  name={resultId}
+                  data-testid="ai-ideas-as-notes"
+                  checked={!asMap}
+                  onChange={() => setAsMap(false)}
+                />
+                Sticky notes
+              </label>
+              <label className="dr-ai-form__radio">
+                <input
+                  type="radio"
+                  name={resultId}
+                  data-testid="ai-ideas-as-map"
+                  checked={asMap}
+                  onChange={() => setAsMap(true)}
+                />
+                Mind map
+              </label>
+            </div>
           </fieldset>
         )}
         <div className="dr-ai-form__row">
