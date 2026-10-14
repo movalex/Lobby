@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { loadWorkshop, workshopKit } from '../../workshops/ported/ctx-kit.ts'
 import { aiJob } from '../ported/runtime.ts'
 import { AI_ON, aiKit, type El, note, renderIn } from '../ported/test-kit.ts'
-import { CoachOverlay, refusedHint, sessionFactsOf } from './CoachChip.tsx'
+import { actOnStep, CoachOverlay, refusedHint, sessionFactsOf } from './CoachChip.tsx'
 import {
   applyWorkshopEvent,
   coachFacts,
@@ -213,7 +213,7 @@ describe('facts: the board and the workshop', () => {
       }),
     ])
     const f = coachFacts(k.canvas)
-    expect(f.frames).toEqual([{ frameId: 'f1', ungrouped: ids(8).map((_, i) => `f1-n${i}`) }])
+    expect(f.frames).toEqual([{ frameId: 'f1', ungrouped: ids(8).map((_, i) => `f1-n${i}`), groups: [] }])
     expect(f.themeLabels).toBe(1)
     expect([...f.themeNotes].sort()).toEqual(['f2-n0', 'f2-n1', 'f2-n2'])
     expect(f.actionItems).toBe(1)
@@ -221,6 +221,58 @@ describe('facts: the board and the workshop', () => {
     expect(
       coachFacts(aiKit([{ ...frame('r', 0), customData: { lobby: { kind: 'recap' } } }]).canvas).recap,
     ).toBe(true)
+  })
+
+  // P-007: the tour's Retro frame holds 12 notes under three boxes; the chip offered themes, then argued with itself
+  const box = (id: string, y: number, text: string, frameId: string): El[] => [
+    {
+      id,
+      type: 'rectangle',
+      x: 1400,
+      y,
+      width: 200,
+      height: 60,
+      frameId,
+      boundElements: [{ id: `${id}.t`, type: 'text' }],
+    },
+    {
+      id: `${id}.t`,
+      type: 'text',
+      containerId: id,
+      originalText: text,
+      x: 1410,
+      y: y + 10,
+      width: 80,
+      height: 20,
+      frameId,
+    },
+  ]
+
+  it('P-007: notes that already sit under boxes in their frame are not offered for themes', () => {
+    const k = owner(
+      aiKit([
+        frame('f1', 0),
+        ...box('g1', 100, 'Went well', 'f1'),
+        ...box('g2', 400, 'To improve', 'f1'),
+        ...notesIn('f1', 12, 40),
+      ]),
+    )
+    const f = coachFacts(k.canvas)
+    expect(f.frames).toHaveLength(1)
+    expect(f.frames[0]?.groups).toEqual(['Went well', 'To improve'])
+    expect(nextStep(NONE_WS, f, FACILITATOR)).toBeNull()
+    // a revealed brainstorm in that frame is not offered either
+    const bs: CoachWorkshop = { brainstorm: { status: 'revealed', frameId: 'f1' }, vote: null }
+    expect(nextStep(bs, f, FACILITATOR)).toBeNull()
+    vi.stubGlobal('document', { querySelector: () => null })
+    expect(renderIn(k, CoachOverlay)).not.toContain('coach-chip')
+    vi.unstubAllGlobals()
+  })
+
+  it('P-007: the same notes with no boxes are offered', () => {
+    const f = coachFacts(aiKit([frame('f1', 0), ...notesIn('f1', 12, 40)]).canvas)
+    expect(f.frames[0]?.groups).toEqual([])
+    expect(nextStep(NONE_WS, f, FACILITATOR)?.id).toBe('themes')
   })
 
   it('follows the vote and the brainstorm on the event stream; garbage changes nothing', () => {
@@ -593,6 +645,27 @@ describe('dismissals and the chip', () => {
     }
     // the same board with AI usable: the chip
     expect(renderIn(owner(aiKit(board)), CoachOverlay)).toContain('Group these 9 notes into themes')
+  })
+
+  it('P-007: a click that ran the step takes the chip away for the day; one that could not run keeps it', () => {
+    const board = [
+      { id: 'f1', type: 'frame', x: 0, y: 0, width: 2000, height: 1200, name: 'Ideas' } as El,
+      ...Array.from({ length: 9 }, (_, i) =>
+        note(`n${i}`, 40 + (i % 4) * 220, 100 + Math.floor(i / 4) * 220, `Idea ${i}`, { frameId: 'f1' }),
+      ).flat(),
+    ]
+    const k = aiKit(board)
+    const step = nextStep(NONE_WS, coachFacts(k.canvas), FACILITATOR)
+    expect(step?.id).toBe('themes')
+    if (!step) return
+    const id = k.ctx.board.id
+    // the command is not there (nothing registered in this kit): a refusal says why, and the chip stays
+    expect(actOnStep(k.ctx, step, () => false)).toBe(false)
+    expect(dismissedSteps(id).has(stepKey(step))).toBe(false)
+    expect(k.notify).toHaveBeenCalled()
+    // it ran: the chip is gone for the day
+    expect(actOnStep(k.ctx, step, () => true)).toBe(true)
+    expect(dismissedSteps(id).has(stepKey(step))).toBe(true)
   })
 
   it('a click that cannot run says why (never silent); Wrap up needs no AI and has no hint', () => {

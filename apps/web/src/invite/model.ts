@@ -92,12 +92,29 @@ export function splitGuestMarker(name: string): [string, string | null] {
 }
 
 /**
+ * P-023: a name that ends in a parenthesis already ("Taylor (client)") takes a marker inside it, not after it: "Taylor
+ * (client, guest)", never "Taylor (client) (guest)". Without one the marker is its own: "Sam (guest)", "Alice (you)".
+ */
+const ENDS_IN_PARENS = /^(.*\S)\s*\(([^()]*)\)$/
+
+/** [the name without its closing parenthetical, the marker with it] for `words` ("guest, you"), parts that join to the name. */
+function markedParts(base: string, words: string): [string, string] {
+  const m = ENDS_IN_PARENS.exec(base.trim())
+  return m ? [m[1] as string, ` (${m[2]}, ${words})`] : [base, ` (${words})`]
+}
+
+/** A guest's name as it is read in a list or a comment: "Sam (guest)", and "Taylor (client, guest)" (P-023). */
+export function guestLabel(name: string): string {
+  const [base, marker] = splitGuestMarker(name)
+  return marker ? markedParts(base, 'guest').join('') : name
+}
+
+/**
  * F14: someone's own name where "(you)" is added: "Dana Whitfield (guest, you)", never
  * "Dana Whitfield (guest) (you)"; "Alice (you)" for an account.
  */
 export function ownName(name: string): string {
-  const [base, marker] = splitGuestMarker(name)
-  return marker ? `${base} (guest, you)` : `${name} (you)`
+  return ownNameParts(name).join('')
 }
 
 /**
@@ -107,7 +124,7 @@ export function ownName(name: string): string {
  */
 export function ownNameParts(name: string): [string, string] {
   const [base, marker] = splitGuestMarker(name)
-  return marker ? [base, ' (guest, you)'] : [name, ' (you)']
+  return markedParts(marker ? base : name, marker ? 'guest, you' : 'you')
 }
 
 /**

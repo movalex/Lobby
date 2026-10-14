@@ -1,11 +1,9 @@
-// OWNER: W3 (wave M, M3-4). The colour words of the plain-language grammar (./grammar.ts), and the labels its replies
-// use. Pure.
+// OWNER: W3 (wave M, M3-4). The colour words of the plain-language grammar (./grammar.ts). Pure. Its replies say a
+// colour in the word the person typed (P-012), so there are no labels here.
 //
-// The words people see are the picker's: the sticky-note picker names its 13 swatches (Butter, Marigold, Apricot,
-// Blush, Coral, Lilac, Plum, Iris, Sky, Fern, Pistachio, Stone, Paper: ../../canvas-ux/palette.ts NOTE_PALETTE), the
-// style panel names a shape's, a text's and a connector's stroke colours (Black, Red, Light red…: ../../canvas-ux/
-// ported/style-vocabulary.ts COLOR_LABELS). The words the grammar accepts are generated from the first, plus the hue
-// families people say instead ("yellow" is Butter and Marigold, "pink" is Blush and Coral), plus the older names it
+// The words the grammar accepts: the sticky-note picker's 13 swatch names (Butter, Marigold, Apricot, Blush, Coral,
+// Lilac, Plum, Iris, Sky, Fern, Pistachio, Stone, Paper: ../../canvas-ux/palette.ts NOTE_PALETTE; they stay words so
+// whoever reads a swatch's tooltip can type it), plus the hue families people say instead ("yellow" is Butter and Marigold, "pink" is Blush and Coral), plus the older names it
 // always took ("light red", "lime", "gray"). Wave L accepted only the older names, so "make the yellow notes blue" found
 // no yellow note on a board of default (Butter) notes and "make all pink notes yellow" answered "No light red notes".
 //
@@ -17,9 +15,8 @@
 // "make the connectors yellow" the yellow stroke, "make them black" does nothing to a note).
 import type { AiColorName } from '@draftroom/contracts'
 import { NOTE_PALETTE } from '../../canvas-ux/palette.ts'
-import { COLOR_LABELS } from '../../canvas-ux/ported/style-vocabulary.ts'
 
-/** Which picker names a colour: a note's, or the style panel's (everything else the grammar can colour). */
+/** Which colours an item takes: a note's, or a stroke's (everything else the grammar can colour). */
 export type ColourSpace = 'note' | 'stroke'
 
 export interface ColourWord {
@@ -30,23 +27,6 @@ export interface ColourWord {
   /** the names it covers on a shape, a text or a connector, the preferred destination first */
   readonly stroke: readonly AiColorName[]
 }
-
-const NOTE_LABEL: ReadonlyMap<AiColorName, string> = new Map(NOTE_PALETTE.map((s) => [s.name, s.label]))
-/** A name's place in its picker (the order a list of labels is told in). */
-const NOTE_ORDER: ReadonlyMap<AiColorName, number> = new Map(NOTE_PALETTE.map((s, i) => [s.name, i]))
-const STROKE_ORDER: ReadonlyMap<AiColorName, number> = new Map(
-  (Object.keys(COLOR_LABELS) as AiColorName[]).map((n, i) => [n, i]),
-)
-
-/** The label the picker of `space` shows for a colour name ('black' is Butter on a note and Black on a shape). */
-export function colourLabel(name: AiColorName, space: ColourSpace): string {
-  return (space === 'note' ? NOTE_LABEL.get(name) : COLOR_LABELS[name]) ?? COLOR_LABELS[name]
-}
-
-/** Every label a reply may name a colour by: both pickers'. */
-export const PICKER_LABELS: readonly string[] = [
-  ...new Set([...NOTE_PALETTE.map((s) => s.label), ...Object.values(COLOR_LABELS)]),
-]
 
 /** Hue families and the older names: both lists are covered by the word, in the order a destination takes them. */
 const SAME = (...names: AiColorName[]) => ({ note: names, stroke: names })
@@ -108,27 +88,11 @@ export const covers = (w: ColourWord, name: AiColorName | null, space: ColourSpa
 export const destinationIn = (w: ColourWord, space: ColourSpace): AiColorName | null =>
   namesIn(w, space)[0] ?? null
 
-const order = (name: AiColorName, space: ColourSpace) =>
-  (space === 'note' ? NOTE_ORDER : STROKE_ORDER).get(name) ?? 99
-
-/** Labels in picker order, once each: [name, space] pairs from a note's or a shape's side. */
-export function labelsOf(pairs: readonly (readonly [AiColorName, ColourSpace])[]): string[] {
-  const seen = new Set<string>()
-  const out: { label: string; at: number; space: number }[] = []
-  for (const [name, space] of pairs) {
-    const label = colourLabel(name, space)
-    if (seen.has(label)) continue
-    seen.add(label)
-    out.push({ label, at: order(name, space), space: space === 'note' ? 0 : 1 })
-  }
-  return out.sort((a, b) => a.space - b.space || a.at - b.at).map((x) => x.label)
-}
-
-/** "A", "A or B", "A, B or C" (a reply that says what was not found) or with "and" (what was found). */
+/** "A", "A or B", "A, B or C" (or with "and": what a reply lists). */
 export function listWords(labels: readonly string[], joiner: 'or' | 'and'): string {
   if (labels.length <= 1) return labels[0] ?? ''
   return `${labels.slice(0, -1).join(', ')} ${joiner} ${labels[labels.length - 1]}`
 }
 
-/** The word as a sentence would write it when it names no picker colour ('Black' for a note). */
+/** A word as a sentence would start with it. */
 export const capitalised = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1)

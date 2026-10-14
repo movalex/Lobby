@@ -23,6 +23,7 @@ import { type ReactNode, type RefObject, useEffect, useId, useLayoutEffect, useR
 import { flushSync } from 'react-dom'
 import { UserMenu } from '../auth/UserMenu.tsx'
 import { Mark } from '../brand/Wordmark.tsx'
+import { useMayGiveFeedback } from '../features/feedback/audience.ts'
 import { openFeedback } from '../features/feedback/state.ts'
 import { useBoardOutside } from '../features/people/outside.ts'
 import { useIsGuest } from '../invite/guest.tsx'
@@ -104,7 +105,8 @@ export function TopBarFrame({
   const bar = useRef<HTMLElement>(null)
   const crowded = useTopBarFit(bar, narrow)
   const menu = narrow || crowded
-  const plan = topBarPlan(width, crowded)
+  // P-023: Feedback is the team's: an external client or a name-only guest does not see it
+  const plan = topBarPlan(width, crowded, useMayGiveFeedback())
   const inBar = new Set(plan.bar)
   const inMenu = new Set(plan.menu)
   // The role pill already says what a viewer/commenter can do: a second "View only" is noise (RETRO-17).

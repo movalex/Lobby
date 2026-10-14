@@ -73,6 +73,16 @@ export function sanitizeFilename(
 }
 
 /**
+ * A frame's name for a file's name (P-026): without the number a deck puts in front of it ("1 · Welcome" is "Welcome";
+ * a middle dot in a file name reads as noise). A name that is only a number, or has no such prefix, stays as it is.
+ */
+export function frameFileQualifier(name: string): string {
+  const trimmed = name.trim()
+  const rest = trimmed.replace(/^\d+\s*[·.:)–-]\s+/, '').trim()
+  return rest || trimmed
+}
+
+/**
  * `<board title>[ - <qualifier>].<ext>`, e.g. "Spring campaign - Moodboard.png". The whole name stays
  * under MAX_NAME_BYTES of UTF-8 by shortening the title first, then the qualifier.
  */

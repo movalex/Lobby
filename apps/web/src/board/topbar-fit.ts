@@ -142,7 +142,17 @@ export interface BarPlan {
  * feature controls that are not pinned into "⋯"; a phone keeps the title, the dot, the pinned controls and
  * Share, and moves the rest (with the bell, the comment tool, the people list, Feedback and the account) into "⋯".
  */
-export function topBarPlan(width: BarWidth, crowded = false): BarPlan {
+export function topBarPlan(width: BarWidth, crowded = false, feedback = true): BarPlan {
+  const plan = layoutOf(width, crowded)
+  if (feedback) return plan
+  // P-023: Feedback is the team's: not for guests or external clients
+  return {
+    bar: plan.bar.filter((p) => p !== 'feedback'),
+    menu: plan.menu.filter((p) => p !== 'feedback'),
+  }
+}
+
+function layoutOf(width: BarWidth, crowded: boolean): BarPlan {
   if (width === 'phone')
     return {
       bar: ['live', 'status', 'pinned', 'overflow', 'share'],

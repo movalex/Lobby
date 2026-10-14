@@ -15,8 +15,10 @@
 import type { Page } from '@playwright/test'
 import { expect, test } from '../tests/support/canvas.ts'
 import {
+  listedPerson,
   memberRow,
   openMoreWaysToShare,
+  openPeopleList,
   openShareFromButton,
   shareDialog,
   signedInContext,
@@ -113,16 +115,16 @@ test('Share dialog: workshop joiners say "workshop link" with its time, the work
       contentType: 'image/png',
     })
 
-    // The picker offers carol (an account), never the name-only guest from the other board.
-    const picker = dialog.getByTestId('share-add-member')
-    await expect(picker.locator(`option[value="${carol.id}"]`)).toHaveCount(1)
-    await expect(picker.locator(`option[value="${wesId}"]`)).toHaveCount(0)
+    // P-022: the invite field's list (a click on the empty field) offers carol (an account), never the name-only
+    // guest from the other board; there is no second "pick someone" row.
+    const picker = await openPeopleList(page)
+    await expect(listedPerson(picker, carol.id)).toHaveCount(1)
+    await expect(listedPerson(picker, wesId)).toHaveCount(0)
     await expect(picker).not.toContainText('(guest)')
-    // While someone is typed above, the suggestions are the picker: no second invite row.
-    await dialog.getByTestId('share-invite-input').fill('@carol')
-    await expect(picker).toHaveCount(0)
-    await dialog.getByTestId('share-invite-input').fill('')
-    await expect(picker).toHaveCount(1)
+    await expect(dialog.getByTestId('share-add-member')).toHaveCount(0)
+    // typed, the same list is narrowed to what starts the text
+    await dialog.getByTestId('share-invite-input').fill('@caro')
+    await expect(listedPerson(picker, carol.id)).toHaveCount(1)
 
     // Revoking: the confirmation replaces "Revoke…", and the review link row says "Review link".
     await revoke.click()

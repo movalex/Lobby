@@ -10,6 +10,7 @@ import {
   goneCopy,
   guestJoinError,
   guestJoinHint,
+  guestLabel,
   invitationSummary,
   inviteUnreachable,
   isEmailMismatch,
@@ -198,6 +199,17 @@ describe("someone's own name (F14)", () => {
     expect(ownName('Alice Park')).toBe('Alice Park (you)')
     expect(ownNameParts('Kai (guest)')).toEqual(['Kai', ' (guest, you)'])
     expect(ownNameParts('Alice')).toEqual(['Alice', ' (you)'])
+  })
+
+  it('P-023: a name that already ends in a parenthesis takes the marker inside it, never a second pair', () => {
+    expect(ownName('Taylor (client) (guest)')).toBe('Taylor (client, guest, you)')
+    expect(ownName('Taylor (client)')).toBe('Taylor (client, you)')
+    expect(ownNameParts('Taylor (client) (guest)')).toEqual(['Taylor', ' (client, guest, you)'])
+    expect(ownNameParts('Taylor (client)')).toEqual(['Taylor', ' (client, you)'])
+    // the guest marker of someone else's name, in the same way
+    expect(guestLabel('Taylor (client) (guest)')).toBe('Taylor (client, guest)')
+    expect(guestLabel('Sam (guest)')).toBe('Sam (guest)')
+    expect(guestLabel('Alice (CEO)')).toBe('Alice (CEO)')
   })
 })
 

@@ -557,7 +557,7 @@ test('W5-37: a note in a PNG export or a copy has a soft shadow (a fade, not a h
   if (!b) throw new Error('no bounds')
 
   await test.step('a selection PNG at 1x', async () => {
-    await openBoardExport(a.page)
+    await openBoardExport(a.page, { expand: true })
     const dialog = a.page.getByTestId('export-dialog')
     await expect(dialog).toBeVisible()
     await expect(dialog.getByTestId('export-area-selection')).toBeChecked()
@@ -602,7 +602,7 @@ test('W5-37: frame names add no height to a PNG exported from focus mode; the bo
   await createItem(a.page, 'note', { id: 'fn-note', x: 80, y: 80, text: 'In the frame', frameId: 'fn-frame' })
   await settled(a.page, Promise.resolve())
   const exportBoard = async () => {
-    await openBoardExport(a.page)
+    await openBoardExport(a.page, { expand: true })
     const dialog = a.page.getByTestId('export-dialog')
     await expect(dialog).toBeVisible()
     await dialog.getByTestId('export-area-board').check()

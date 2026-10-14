@@ -411,22 +411,29 @@
 }
 
 /* K7-3: "Show them as" in the ideas prompt (sticky notes or a mind map) */
+/* P-041: the label above, the two choices in one row under it (they used to wrap beside a floated legend) */
 .dr-ai-form__choice {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 14px;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
   margin: 0;
   padding: 0;
   border: 0;
 }
 .dr-ai-form__choice > legend {
-  float: left;
-  margin-right: 10px;
   padding: 0;
+  margin-bottom: 6px;
+}
+.dr-ai-form__choices {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 18px;
 }
 .dr-ai-form__radio {
   display: inline-flex;
+  white-space: nowrap;
   align-items: center;
   gap: 6px;
   color: var(--dr-ink);

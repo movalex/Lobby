@@ -1,9 +1,10 @@
-// The feedback entries of the account menu (wave J5): "Send feedback" for everybody signed in (a name-only
-// guest included), and "Feedback inbox" for the people the api says read it (GET /api/feedback/access, asked
+// The feedback entries of the account menu (wave J5): "Send feedback" for the team (P-023: no longer a name-only
+// guest or an external client), and "Feedback inbox" for the people the api says read it (GET /api/feedback/access, asked
 // when the menu opens; a failure shows nothing, never a guess). The dialog is FeedbackHost's: this only asks.
 import { useEffect, useState } from 'react'
 import { linkClick } from '../../lib/routing.ts'
 import { feedbackApi } from './api.ts'
+import { useMayGiveFeedback } from './audience.ts'
 import { openFeedback } from './state.ts'
 import './feedback.css'
 
@@ -44,6 +45,9 @@ export function FeedbackMenuEntries({
   onDone(): void
 }) {
   const admin = useFeedbackAdmin(userId, !guest)
+  // P-023: Feedback is the team's: an external client sees no entry (a guest's account menu has nothing else of it)
+  const may = useMayGiveFeedback()
+  if (!may) return null
   return (
     <div className="dr-account__feedback">
       <button

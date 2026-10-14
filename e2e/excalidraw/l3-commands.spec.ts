@@ -82,7 +82,7 @@ test('"make all red notes yellow": the grammar’s Do line, the preview, Apply; 
   await openPalette(a.page)
   await a.page.keyboard.type('make all red notes yellow')
   await expect(activeOption(a.page)).toHaveAttribute('data-entry-id', 'do:grammar')
-  await expect(activeOption(a.page)).toContainText('Make 3 Coral notes Butter')
+  await expect(activeOption(a.page)).toContainText('Make 3 red notes yellow')
   await a.page.keyboard.press('Enter')
   await expect(palette(a.page)).toHaveCount(0)
   // three notes change: the shared preview first, nothing written before Apply
@@ -125,7 +125,7 @@ test('a viewer’s palette refuses a change and says why; "find the red notes" s
   await expect(v.page.getByTestId('command-palette-status')).toContainText('not change it')
   await expect(palette(v.page)).toBeVisible()
   await v.page.getByTestId('command-palette-input').fill('find the red notes')
-  await expect(activeOption(v.page)).toContainText('Find 1 Coral note')
+  await expect(activeOption(v.page)).toContainText('Find 1 red note')
   await v.page.keyboard.press('Enter')
   await expect(palette(v.page)).toHaveCount(0)
   await expect.poll(() => selection(v.page)).toEqual([red])

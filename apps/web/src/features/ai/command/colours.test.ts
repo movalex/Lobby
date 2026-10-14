@@ -1,10 +1,11 @@
 // W3 (wave M, M3-4, FTU-3): plain-language commands know the colour names people see. "make the yellow notes blue"
-// finds the default (Butter) notes, "pink" is Blush and Coral, the replies name colours by the pickers' labels, and a
-// colour word that is also a frame's name still goes to the frame.
+// finds the default (Butter) notes, "pink" is Blush and Coral, and a colour word that is also a frame's name still goes
+// to the frame. P-012 (wave P): the replies say the colours in the person's own words ("Make 6 yellow notes blue"),
+// never the palette's internal names (Butter, Iris).
 import { describe, expect, it } from 'vitest'
 import { NOTE_PALETTE } from '../../canvas-ux/palette.ts'
 import { COLOR_LABELS } from '../../canvas-ux/ported/style-vocabulary.ts'
-import { COLOUR_WORDS, colourWord, listWords, PICKER_LABELS } from './colours.ts'
+import { COLOUR_WORDS, colourWord, listWords } from './colours.ts'
 import { applyCompiled, compileCommand } from './compile.ts'
 import { boardFacts } from './facts.ts'
 import { type BoardFacts, type FactItem, grammar } from './grammar.ts'
@@ -65,23 +66,22 @@ describe('the colour words', () => {
   })
 
   it('tell a list of labels in words', () => {
-    expect(listWords(['Blush'], 'or')).toBe('Blush')
-    expect(listWords(['Blush', 'Coral'], 'or')).toBe('Blush or Coral')
-    expect(listWords(['Butter', 'Marigold', 'Apricot'], 'and')).toBe('Butter, Marigold and Apricot')
-    expect(PICKER_LABELS).toEqual(expect.arrayContaining(['Butter', 'Paper', 'Light red', 'Black']))
+    expect(listWords(['pink'], 'or')).toBe('pink')
+    expect(listWords(['pink', 'red'], 'or')).toBe('pink or red')
+    expect(listWords(['notes', 'shapes', 'text'], 'and')).toBe('notes, shapes and text')
   })
 })
 
 describe('plain-language commands know the colour names people see (M3-4, FTU-3)', () => {
-  it('"make the yellow notes blue" on default notes is six recolours, named by their labels', () => {
+  it('"make the yellow notes blue" on default notes is six recolours, in the words the person typed', () => {
     const r = grammar('make the yellow notes blue', DEFAULT_NOTES)
     expect(r?.ok).toBe(true)
     if (!r?.ok) return
     expect(r.ops).toHaveLength(1)
     expect(r.ops[0]).toMatchObject({ op: 'recolor', color: 'blue' })
     expect(ids(r)).toEqual(Array.from({ length: 6 }, (_, i) => `shape:d${i}`).sort())
-    // the labels of the pickers (Butter is what the picker calls the default note), never "black" or "yellow"
-    expect(r.title).toBe('Make 6 Butter notes Iris')
+    // P-012: never the palette's own names (Butter, Iris) nor the stored ones ("black")
+    expect(r.title).toBe('Make 6 yellow notes blue')
   })
 
   it('on a real board of six default notes it compiles to six recolours in one undo step', () => {
@@ -95,7 +95,7 @@ describe('plain-language commands know the colour names people see (M3-4, FTU-3)
     const c = compileCommand(b.canvas, r.ops, 'do')
     applyCompiled(b.canvas, c, r.title)
     expect(b.steps).toHaveLength(1)
-    expect(b.steps[0]?.label).toBe('Make 6 Butter notes Iris')
+    expect(b.steps[0]?.label).toBe('Make 6 yellow notes blue')
     expect(
       updatedIds(b.steps[0])
         .filter((id) => !id.endsWith('-label'))
@@ -107,19 +107,19 @@ describe('plain-language commands know the colour names people see (M3-4, FTU-3)
     })
   })
 
-  it('"make the butter notes sky" understands the picker’s own names', () => {
+  it('"make the butter notes sky" understands the picker’s own names, and says them as typed', () => {
     const r = grammar('make the butter notes sky', DEFAULT_NOTES)
-    expect(r?.ok && r.title).toBe('Make 6 Butter notes Sky')
+    expect(r?.ok && r.title).toBe('Make 6 butter notes sky')
     expect(r?.ok && r.ops[0]).toMatchObject({ op: 'recolor', color: 'light-blue' })
   })
 
   it('"make all pink notes yellow" on a board without pink says which colours it looked for', () => {
     const r = grammar('make all pink notes yellow', DEFAULT_NOTES)
     expect(r?.ok).toBe(false)
-    if (r && !r.ok) expect(r.reason).toBe('No Blush or Coral notes on this board.')
-    // one colour: no "or"
+    if (r && !r.ok) expect(r.reason).toBe('No pink notes on this board.')
+    // a word names one colour: no "or"
     const one = grammar('select the sky notes', DEFAULT_NOTES)
-    expect(one?.ok === false && one.reason).toBe('No Sky notes on this board.')
+    expect(one?.ok === false && one.reason).toBe('No sky notes on this board.')
   })
 
   it('a family on the target side matches every swatch of it; the reply names the ones found', () => {
@@ -136,14 +136,14 @@ describe('plain-language commands know the colour names people see (M3-4, FTU-3)
     }
     const notes = grammar('select the yellow notes', board)
     expect(ids(notes)).toEqual(['shape:b', 'shape:m'])
-    expect(notes?.ok && notes.title).toBe('Select 2 Butter and Marigold notes')
+    expect(notes?.ok && notes.title).toBe('Select 2 yellow notes')
     // a shape’s black is ink, not Butter: "yellow" never picks it, and "black" never picks a note
     const shapes = grammar('select the yellow shapes', board)
     expect(ids(shapes)).toEqual(['shape:x'])
-    expect(shapes?.ok && shapes.title).toBe('Select 1 Yellow shape')
+    expect(shapes?.ok && shapes.title).toBe('Select 1 yellow shape')
     expect(ids(grammar('select the black shapes', board))).toEqual(['shape:k'])
     const blackNotes = grammar('select the black notes', board)
-    expect(blackNotes?.ok === false && blackNotes.reason).toBe('No Black notes on this board.')
+    expect(blackNotes?.ok === false && blackNotes.reason).toBe('No black notes on this board.')
   })
 
   it('a family as a destination is its first swatch, per kind: Butter for a note, the yellow stroke for a shape', () => {
@@ -159,7 +159,7 @@ describe('plain-language commands know the colour names people see (M3-4, FTU-3)
       { op: 'recolor', ids: ['shape:n'], color: 'black' },
       { op: 'recolor', ids: ['shape:s'], color: 'yellow' },
     ])
-    expect(r.title).toBe('Make 2 items Butter / Yellow')
+    expect(r.title).toBe('Make 2 items yellow')
     // the same stored name for both is one op
     const violet = grammar('make everything violet', board)
     expect(violet?.ok && violet.ops).toHaveLength(1)
@@ -169,7 +169,7 @@ describe('plain-language commands know the colour names people see (M3-4, FTU-3)
     const notes: BoardFacts = { frames: [], items: [item('n', { color: 'red' })], selection: [] }
     const r = grammar('make the red notes black', notes)
     expect(r?.ok).toBe(false)
-    if (r && !r.ok) expect(r.reason).toBe('Notes do not come in Black.')
+    if (r && !r.ok) expect(r.reason).toBe('Notes do not come in black.')
     // shapes and connectors take it; a note beside them is left as it is
     const mixed: BoardFacts = {
       frames: [],
@@ -178,7 +178,7 @@ describe('plain-language commands know the colour names people see (M3-4, FTU-3)
     }
     const m = grammar('make everything black', mixed)
     expect(m?.ok && m.ops).toEqual([{ op: 'recolor', ids: ['shape:s'], color: 'black' }])
-    expect(m?.ok && m.title).toBe('Make 1 item Black')
+    expect(m?.ok && m.title).toBe('Make 1 item black')
   })
 
   it('every picker label is a word, and finds exactly its own swatch', () => {
@@ -190,7 +190,7 @@ describe('plain-language commands know the colour names people see (M3-4, FTU-3)
       }
       const r = grammar(`select the ${s.label.toLowerCase()} notes`, board)
       expect(ids(r), s.label).toEqual(['shape:mine'])
-      expect(r?.ok && r.title, s.label).toBe(`Select 1 ${s.label} note`)
+      expect(r?.ok && r.title, s.label).toBe(`Select 1 ${s.label.toLowerCase()} note`)
     }
   })
 
@@ -203,10 +203,10 @@ describe('plain-language commands know the colour names people see (M3-4, FTU-3)
     const frame = grammar('zoom to sky', withFrame)
     expect(frame?.ok && frame.title).toBe('Zoom to frame “Sky”')
     const colour = grammar('zoom to sky', { frames: [], items: withFrame.items.slice(1), selection: [] })
-    expect(colour?.ok && colour.title).toBe('Zoom to 1 Sky item')
+    expect(colour?.ok && colour.title).toBe('Zoom to 1 sky item')
     // nothing of either: the same reply as for any colour, not a frame error
     const none = grammar('zoom to sky', { frames: [], items: [], selection: [] })
-    expect(none?.ok === false && none.reason).toBe('No Sky items on this board.')
+    expect(none?.ok === false && none.reason).toBe('No sky items on this board.')
   })
 
   it('a frame found only because the words were a guess is marked, so the palette can rank it under a command', () => {
@@ -222,7 +222,7 @@ describe('plain-language commands know the colour names people see (M3-4, FTU-3)
     expect(named?.ok && named.guess).toBeUndefined()
   })
 
-  it('no reply names a colour any other way than by a picker label (every colour word, on several boards)', () => {
+  it('P-012: no reply names a palette colour the person did not say (every colour word, on several boards)', () => {
     const words = [...NOTE_PALETTE.map((s) => s.label.toLowerCase()), ...COLOUR_WORDS.map((w) => w.word)]
     const everything: BoardFacts = {
       frames: [{ id: 'f', name: 'Retro' }],
@@ -248,9 +248,9 @@ describe('plain-language commands know the colour names people see (M3-4, FTU-3)
       `tag the ${w} notes as later`,
       `zoom to ${w}`,
     ])
-    // a word of the reply that is a stored colour name: it must be one of the pickers' labels, capitalised
-    const stored =
-      /\b(?:light[ -])?(?:red|blue|green|violet|yellow|orange|grey|gray|black|white|pink|purple)\b/gi
+    // the palette's own names (Butter, Iris…): only when the phrase said them itself; and no colour is capitalised
+    const swatches = NOTE_PALETTE.map((s) => s.label)
+    const capitalised = /\b(?:Light )?(?:Red|Blue|Green|Violet|Yellow|Orange|Grey|Gray|Black|White|Pink|Purple)\b/
     let replies = 0
     for (const board of boards) {
       for (const phrase of phrases) {
@@ -258,8 +258,11 @@ describe('plain-language commands know the colour names people see (M3-4, FTU-3)
         if (!r) continue
         const text = r.ok ? r.title : r.reason
         replies++
-        for (const m of text.matchAll(stored))
-          expect(PICKER_LABELS, `${JSON.stringify(phrase)} → ${text}`).toContain(m[0])
+        const said = phrase.toLowerCase()
+        for (const name of swatches)
+          if (new RegExp(`\\b${name}\\b`, 'i').test(text))
+            expect(said, `${JSON.stringify(phrase)} → ${text}`).toContain(name.toLowerCase())
+        expect(text, `${JSON.stringify(phrase)} → ${text}`).not.toMatch(capitalised)
       }
     }
     expect(replies).toBeGreaterThan(400)

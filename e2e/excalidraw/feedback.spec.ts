@@ -12,6 +12,12 @@
 import type { Page } from '@playwright/test'
 import { signInContext } from '../tests/support/api.ts'
 import { expect, items, test, tool } from '../tests/support/canvas.ts'
+import {
+  freshHandle,
+  openDashboard,
+  personalWorkspace,
+  signedInContext,
+} from '../tests/support/dashboard-share.ts'
 import { WEB_URL } from '../tests/support/ports.ts'
 import { guestOn, ORIGIN, tokenOf } from './guests-kit.ts'
 
@@ -205,6 +211,53 @@ test('a name-only guest sends from the board menu, and the inbox shows them as a
     expect(probe.status()).toBe(404)
   } finally {
     await context.close()
+  }
+})
+
+// P-023 (wave P): the Feedback pill is Lobby's own (the team's): an external client sees no pill, on a board or on the
+// dashboard. (The board's "Send feedback" menu row is canvas-ux's and is not part of this.)
+test('P-023: a name-only guest sees no Feedback pill on the board, and an outside account none on the dashboard', async ({
+  browser,
+  board,
+  users,
+}) => {
+  const alice = await users.api('alice')
+  const link = await alice.request.post(`${WEB_URL}/api/boards/${board}/review-links`, {
+    headers: ORIGIN,
+    data: { allowGuests: true },
+  })
+  expect(link.status(), await link.text()).toBe(201)
+  const token = tokenOf(((await link.json()) as { url: string }).url)
+  const context = await browser.newContext()
+  try {
+    const guest = await guestOn(context, token, 'Taylor (client)')
+    await expect(guest.page.getByTestId('share-button')).toBeVisible()
+    await expect(guest.page.getByTestId('topbar-feedback')).toHaveCount(0)
+  } finally {
+    await context.close()
+  }
+  // the dashboard: a team member's pill is there; an account outside the creator domains has none
+  const outside = { creator: false, reason: 'outside', email: 'client@client.example.test' }
+  for (const [name, email, pill] of [
+    ['Tess Team', 'lobby-test-p023@darkburn.com', true],
+    ['Olive Outside', 'lobby-test-p023o@darkburn.com', false],
+  ] as const) {
+    const p = await signedInContext(browser, freshHandle('p023'), { name, email })
+    try {
+      if (!pill)
+        for (const url of ['**/api/auth/me', '**/api/me'])
+          await p.page.route(url, async (route) => {
+            const res = await route.fetch()
+            if (res.status() !== 200) return route.fulfill({ response: res })
+            const body = (await res.json()) as Record<string, unknown>
+            return route.fulfill({ response: res, json: { ...body, access: outside } })
+          })
+      await openDashboard(p.page, personalWorkspace(p.me))
+      await expect(p.page.getByTestId('dashboard')).toBeVisible()
+      await expect(p.page.getByTestId('feedback-pill')).toHaveCount(pill ? 1 : 0)
+    } finally {
+      await p.context.close()
+    }
   }
 })
 

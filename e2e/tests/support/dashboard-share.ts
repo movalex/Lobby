@@ -90,6 +90,24 @@ export const memberRow = (page: Page, userId: string) =>
 export const requestRow = (page: Page, userId: string) =>
   shareDialog(page).locator(`[data-testid="access-request-row"][data-user-id="${userId}"]`)
 
+/**
+ * P-022: the people who can still be given access are the invite field's own list (a click on the empty field opens
+ * it); there is no second "pick someone from the workspace" row. Returns the listbox.
+ */
+export async function openPeopleList(page: Page): Promise<Locator> {
+  const dialog = shareDialog(page)
+  const input = dialog.getByTestId('share-invite-input')
+  await input.fill('')
+  await input.click()
+  const list = dialog.getByTestId('share-invite-suggestions')
+  await expect(list).toBeVisible()
+  return list
+}
+
+/** One person in the invite field's list. */
+export const listedPerson = (list: Locator, userId: string) =>
+  list.locator(`[data-testid="share-invite-suggestion"][data-user-id="${userId}"]`)
+
 export async function openShareFromButton(page: Page) {
   await page.getByTestId('share-button').click()
   await expect(shareDialog(page)).toBeVisible()

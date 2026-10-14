@@ -235,3 +235,17 @@ describe('statusView: one dot for Saved and Live (K2-5)', () => {
     expect(v.title).toBe(`${CONN_TITLE.online}.`)
   })
 })
+
+describe('topBarPlan: Feedback is for the team (P-023)', () => {
+  it('without it, no width has Feedback in the bar or in the menu; the rest is as it was', () => {
+    for (const width of ['wide', 'tablet', 'phone'] as const)
+      for (const crowded of [false, true]) {
+        const plan = topBarPlan(width, crowded, false)
+        const same = topBarPlan(width, crowded)
+        expect(plan.bar).not.toContain('feedback')
+        expect(plan.menu).not.toContain('feedback')
+        expect(plan.bar).toEqual(same.bar.filter((p) => p !== 'feedback'))
+        expect(plan.menu).toEqual(same.menu.filter((p) => p !== 'feedback'))
+      }
+  })
+})
