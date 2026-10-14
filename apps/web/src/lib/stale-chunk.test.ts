@@ -5,9 +5,11 @@ import { describe, expect, it } from 'vitest'
 import { createBoardCode } from './prefetch-board.ts'
 import {
   createStaleChunkHandler,
+  EDITING_RECHECK_MS,
   installStaleChunkRecovery,
   isStaleChunkError,
   OFFLINE_CHUNK_TEXT,
+  OFFLINE_RETURN_TEXT,
   RELOAD_GUARD_MS,
   RELOAD_KEY,
   recoverChunk,
@@ -218,19 +220,63 @@ describe('on a board: a notice, never a reload by itself', () => {
     expect(e.reloads).toBe(1)
   })
 
-  it('offline (wave K round 1 refix): a connection notice, not “Lobby has been updated”, and no Reload to the offline page', () => {
+  it('offline (P-003, wave P): nothing at all, no notice and no reload (the board’s offline banner speaks)', () => {
     const e = env({ offline: true })
     const h = createStaleChunkHandler(e)
     const notices: StaleNotice[] = []
     h.registerBoard({ unsent: () => true, notify: (n) => notices.push(n) })
+    expect(h.report(STALE)).toBe('quiet')
+    expect(h.report(STALE)).toBe('quiet')
+    e.advance(UNSENT_WAIT_MS * 2)
+    expect(notices).toHaveLength(0)
+    expect(h.notice()).toBeNull()
+    expect(e.reloads).toBe(0)
+  })
+
+  it('P-003: a part that failed offline and fails again back online gets the calm words, with Reload', () => {
+    let online = false
+    const e = { ...env(), online: () => online }
+    const h = createStaleChunkHandler(e)
+    const notices: StaleNotice[] = []
+    h.registerBoard({ unsent: () => false, notify: (n) => notices.push(n) })
+    expect(h.report(STALE)).toBe('quiet')
+    online = true
     expect(h.report(STALE)).toBe('notice')
     expect(notices).toHaveLength(1)
+    expect(notices[0]?.text).toBe(OFFLINE_RETURN_TEXT)
     expect(notices[0]?.text).not.toBe(STALE_NOTICE_TEXT)
-    expect(notices[0]?.text).toMatch(/offline/i)
-    expect(notices[0]).toMatchObject({ key: STALE_NOTICE_KEY, testId: 'stale-chunk-offline-notice' })
-    expect(notices[0]?.action).toBeUndefined()
-    e.advance(UNSENT_WAIT_MS * 2)
+    expect(notices[0]?.action?.label).toBe('Reload')
     expect(e.reloads).toBe(0)
+  })
+
+  it('P-003: never while someone types: the notice waits for the text editor to close', () => {
+    const e = env()
+    const h = createStaleChunkHandler(e)
+    const notices: StaleNotice[] = []
+    let editing = true
+    h.registerBoard({ unsent: () => false, editing: () => editing, notify: (n) => notices.push(n) })
+    expect(h.report(STALE)).toBe('notice')
+    expect(h.newVersion(false, 'abcdef1')).toBe('notice')
+    e.advance(EDITING_RECHECK_MS * 10)
+    expect(notices).toHaveLength(0)
+    editing = false
+    e.advance(EDITING_RECHECK_MS)
+    expect(notices).toHaveLength(1) // the latest one, once
+    expect(notices[0]).toMatchObject({ key: STALE_NOTICE_KEY, text: STALE_NOTICE_TEXT })
+    e.advance(EDITING_RECHECK_MS * 4)
+    expect(notices).toHaveLength(1)
+    expect(e.reloads).toBe(0)
+  })
+
+  it('P-003: a held notice is dropped when its board leaves', () => {
+    const e = env()
+    const h = createStaleChunkHandler(e)
+    const notices: StaleNotice[] = []
+    const off = h.registerBoard({ unsent: () => false, editing: () => true, notify: (n) => notices.push(n) })
+    h.report(STALE)
+    off()
+    e.advance(EDITING_RECHECK_MS * 4)
+    expect(notices).toHaveLength(0)
   })
 
   it('the board leaving: the next failure is outside a board again', () => {

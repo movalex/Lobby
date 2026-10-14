@@ -199,6 +199,12 @@ describe('statusView: one dot for Saved and Live (K2-5)', () => {
     expect(quiet.label).toBe('Offline')
   })
 
+  it('P-003: the browser is offline before the socket notices (its changes still "saving"): the words say Offline', () => {
+    const v = statusView(save('saving'), 'offline')
+    expect(v.tone).toBe('warn')
+    expect(v.label).toBe('Offline')
+  })
+
   it('a refused change or an ended connection is red, with its words', () => {
     expect(statusView(save('rejected'), 'online')).toMatchObject({
       tone: 'danger',
