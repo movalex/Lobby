@@ -4,7 +4,7 @@ The preview worker makes thumbnails, PDF page images, video posters and (wave 4)
 
 Office documents (DOCX, PPTX, XLSX, ODT, ODP, ODS) are converted to PDF by LibreOffice in a second container of the same image, the **office sidecar**, which has no network and no secrets. See [Office previews](#office-previews-wave-4).
 
-Status: **deployed as `nas-1` for staging (2026-09-28, the milestone-3 image, see docs/PROGRESS.md); the Office sidecar is written and proven with throwaway containers but not deployed yet** ([Office previews](#office-previews-wave-4)). Before the deploy, the image was built on the NAS and the worker ran from this compose file against a throwaway api that stored files in the real R2 bucket; see [NAS proof](#nas-proof-2026-09-27) for what was checked.
+Status: **deployed as `nas-1` for staging (2026-09-28, the milestone-3 image, see docs/PROGRESS.md); the Office sidecar has run beside it on the NAS since the same day (`[office] listening` in its log; the worker logs "office previews: LibreOffice sidecar")** ([Office previews](#office-previews-wave-4)). Before the deploy, the image was built on the NAS and the worker ran from this compose file against a throwaway api that stored files in the real R2 bucket; see [NAS proof](#nas-proof-2026-09-27) for what was checked.
 
 ## What runs where
 
@@ -140,7 +140,7 @@ What was run: the real images and this compose file on the NAS (Docker 29.6.2, C
 
 ## Office previews (wave 4)
 
-**Not deployed.** The running `draftroom-worker` still has the milestone-3 image. The integration step deploys this with `bash deploy/nas/deploy-worker.sh` (one build, both containers).
+**Deployed.** The sidecar has run on the NAS since 2026-09-28 (`[office] listening` in its log, and the worker logs "office previews: LibreOffice sidecar"). `bash deploy/nas/deploy-worker.sh` builds and starts both containers (one build).
 
 How it works:
 
