@@ -176,6 +176,58 @@ export function anchorPoint(canvas: LobbyCanvas, anchor: CommentAnchor): Point |
   return p.kind === 'placed' ? p.point : null
 }
 
+/** An element whose words a pin on its anchor would cover: a note, a text, or a shape with a label. */
+function holdsWords(el: CanvasElement): boolean {
+  if (el.type === 'stickynote' || el.type === 'text') return true
+  const bound = (el as { boundElements?: readonly { type?: string }[] | null }).boundElements
+  return !!bound?.some((b) => b.type === 'text')
+}
+
+/**
+ * P-037 (wave P): where a thread's pin is drawn. On an element with words (a note, a text, a labelled shape) its
+ * top-right corner, as Miro attaches a comment to an object, so the pin never sits on the words (`pinCornerOf` says
+ * which way it goes from there); its anchor (u, v) is kept as stored. Anywhere else (a picture, a bare shape, the
+ * board) the anchor itself. Null for an orphan.
+ */
+export function pinPoint(canvas: LobbyCanvas, anchor: CommentAnchor): Point | null {
+  if (anchor.kind === 'shape') {
+    const el = elementOf(canvas, anchor.shapeId)
+    if (el && holdsWords(el)) return elementFrame(el).toPage({ x: el.width, y: 0 })
+  }
+  return anchorPoint(canvas, anchor)
+}
+
+/**
+ * P-037: the element whose top-right corner a pin sits at, and how: `inside` the corner of a note or a labelled
+ * shape (their words keep clear of the corner, and the pin stays on screen however close the note is to the top of
+ * the view; more pins go leftwards), `beside` a text, right of its first line (more pins go rightwards). Null: the
+ * pin is on its anchor.
+ */
+export function pinCornerOf(
+  canvas: LobbyCanvas,
+  anchor: CommentAnchor,
+): { readonly id: string; readonly side: 'inside' | 'beside' } | null {
+  if (anchor.kind !== 'shape') return null
+  const el = elementOf(canvas, anchor.shapeId)
+  if (!el || !holdsWords(el)) return null
+  return { id: el.id, side: el.type === 'text' ? 'beside' : 'inside' }
+}
+
+/**
+ * P-037: where the pin's pointed bottom-left corner goes from the element's corner (overlay px, pure): `nth` is the
+ * pin's place among the pins on that corner, `size` the pin's size and `gap` the space kept.
+ */
+export function cornerPinOffset(
+  side: 'inside' | 'beside',
+  nth: number,
+  size: number,
+  gap: number,
+): { readonly dx: number; readonly dy: number } {
+  return side === 'inside'
+    ? { dx: -(gap + size) - nth * (size + gap), dy: gap + size }
+    : { dx: gap + nth * (size + gap), dy: size }
+}
+
 function targetOf(el: CanvasElement): ClickTarget {
   const file = elementsApi.lobbyValue(el, 'file') as { assetId?: unknown; versionId?: unknown } | undefined
   const type = shapeTypeOf(el) ?? el.type

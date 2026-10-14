@@ -121,10 +121,29 @@ export async function emptyCanvasPoint(page: Page): Promise<{ x: number; y: numb
   return { x: Math.round(box.x + box.width * 0.72), y: Math.round(box.y + box.height * 0.7) }
 }
 
-/** Where a pin should sit on screen for a shape anchor, and where its pointed bottom-left corner is. */
+/** P-037: an element whose words a pin would cover (a note, a text, a labelled shape): its pin sits on its corner. */
+async function holdsWords(page: Page, id: string): Promise<boolean> {
+  const el = (await item(page, id)) as { type?: string; boundElements?: { type: string }[] | null } | null
+  return (
+    el?.type === 'stickynote' || el?.type === 'text' || !!el?.boundElements?.some((b) => b.type === 'text')
+  )
+}
+
+/** P-037: the gap a pin keeps inside a note's top-right corner (comments/ported/CommentsOverlay.tsx PIN_GAP). */
+export const CORNER_PIN_GAP = 4
+
+/**
+ * Where a pin should sit on screen for a shape anchor, and where its pointed bottom-left corner is: the anchor (u, v),
+ * or, on an element that holds words (P-037: the pin never covers them), just inside its top-right corner.
+ */
 export async function pinPlacement(page: Page, threadId: string, id: string, u: number, v: number) {
-  const expected = await screenPointOnElement(page, id, u, v)
+  const words = await holdsWords(page, id)
+  const point = await screenPointOnElement(page, id, words ? 1 : u, words ? 0 : v)
   const box = await page.locator(`[data-testid="comment-pin"][data-thread-id="${threadId}"]`).boundingBox()
+  const expected =
+    words && box
+      ? { x: point.x - CORNER_PIN_GAP - box.width, y: point.y + CORNER_PIN_GAP + box.height }
+      : point
   return { expected, actual: box ? { x: box.x, y: box.y + box.height } : null }
 }
 

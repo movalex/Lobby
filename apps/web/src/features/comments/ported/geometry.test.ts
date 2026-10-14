@@ -8,8 +8,11 @@ import {
   anchorAt,
   anchorForKeyboard,
   anchorPoint,
+  cornerPinOffset,
   describeAnchor,
   elementFrame,
+  pinCornerOf,
+  pinPoint,
   placeOnBoard,
 } from './geometry.ts'
 import { readingOrder, stepLevel, stepSelection } from './keys.ts'
@@ -220,5 +223,52 @@ describe('keyboard stepping in the comment tool', () => {
     expect(sel()).toEqual(['i'])
     stepLevel(c, 'out')
     expect(sel()).toEqual(['f'])
+  })
+})
+
+describe('P-037: where a pin sits (clear of an element’s words)', () => {
+  const note = el('note1', { x: 0, y: 0, width: 200, height: 100 })
+  const turned = el('note2', { x: 100, y: 50, width: 200, height: 100, angle: Math.PI / 2 })
+  const text = el('text1', { type: 'text', x: 0, y: 400, width: 120, height: 30 })
+  const boxed = el('rect1', {
+    type: 'rectangle',
+    x: 300,
+    y: 300,
+    width: 100,
+    height: 80,
+    boundElements: [{ id: 'rect1.t', type: 'text' }],
+  })
+  const bare = el('rect2', { type: 'rectangle', x: 600, y: 300, width: 100, height: 80 })
+  const photo = el('img1', { type: 'image', x: 0, y: 600, width: 200, height: 100 })
+  const canvas = fakeCanvas([note, turned, text, boxed, bare, photo])
+  const on = (id: string, u = 0.5, v = 0.5) => ({ kind: 'shape' as const, shapeId: `shape:${id}`, u, v })
+
+  it('on a note, a text or a labelled shape: the element’s top-right corner, wherever it was clicked', () => {
+    expect(pinPoint(canvas, on('note1', 0.25, 0.75))).toEqual({ x: 200, y: 0 })
+    expect(pinPoint(canvas, on('text1'))).toEqual({ x: 120, y: 400 })
+    expect(pinPoint(canvas, on('rect1', 0.1, 0.9))).toEqual({ x: 400, y: 300 })
+    const corner = pinPoint(canvas, on('note2'))
+    // the box's top-right corner turned a quarter about its centre (200, 100)
+    expect(corner?.x).toBeCloseTo(250)
+    expect(corner?.y).toBeCloseTo(200)
+  })
+
+  it('inside a note’s or a labelled shape’s corner (more pins leftwards), beside a text (more rightwards)', () => {
+    expect(pinCornerOf(canvas, on('note1'))).toEqual({ id: 'note1', side: 'inside' })
+    expect(pinCornerOf(canvas, on('rect1'))).toEqual({ id: 'rect1', side: 'inside' })
+    expect(pinCornerOf(canvas, on('text1'))).toEqual({ id: 'text1', side: 'beside' })
+    expect(pinCornerOf(canvas, on('img1'))).toBeNull()
+    // the pin's pointed bottom-left corner, from the element's top-right corner (30 px pins, 4 px apart)
+    expect(cornerPinOffset('inside', 0, 30, 4)).toEqual({ dx: -34, dy: 34 })
+    expect(cornerPinOffset('inside', 1, 30, 4)).toEqual({ dx: -68, dy: 34 })
+    expect(cornerPinOffset('beside', 0, 30, 4)).toEqual({ dx: 4, dy: 30 })
+    expect(cornerPinOffset('beside', 1, 30, 4)).toEqual({ dx: 38, dy: 30 })
+  })
+
+  it('on a picture, a bare shape or the board: the spot itself (the anchor)', () => {
+    expect(pinPoint(canvas, on('img1', 0.25, 0.5))).toEqual(anchorPoint(canvas, on('img1', 0.25, 0.5)))
+    expect(pinPoint(canvas, on('rect2', 0.25, 0.5))).toEqual({ x: 625, y: 340 })
+    expect(pinPoint(canvas, { kind: 'point', x: 5, y: 6 } as never)).toEqual({ x: 5, y: 6 })
+    expect(pinPoint(canvas, on('gone'))).toBeNull()
   })
 })

@@ -25,6 +25,7 @@ import { createPortal } from 'react-dom'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { initialsFor, safeColor } from '../../../lib/identity.ts'
 import { useValue } from '../../../lib/signals.ts'
+import { toolLock } from '../../canvas-ux/ported/tool-lock.ts'
 import { ExternalTag } from '../../people/ExternalTag.tsx'
 import { Composer } from '../Composer.tsx'
 import { CheckIcon, CloseIcon } from '../icons.tsx'
@@ -34,12 +35,22 @@ import { pinFaceStyle } from '../pin-face.ts'
 import { NEW_THREAD_DRAFT } from '../store.ts'
 import { ThreadView } from '../ThreadView.tsx'
 import { COMMENT_TOOL_ID, canCommentIn, controllerFor, focusBoard } from './controller.ts'
-import { anchorPoint, canvasSize, describeAnchor, keepAnchorAboveSheet, toolbarBand } from './geometry.ts'
+import {
+  canvasSize,
+  cornerPinOffset,
+  describeAnchor,
+  keepAnchorAboveSheet,
+  pinCornerOf,
+  pinPoint,
+  toolbarBand,
+} from './geometry.ts'
 
 /** Below this zoom level markers are small dots. */
 const DOT_ZOOM = 0.25
 /** Markers this far outside the canvas are not rendered. */
 const CULL = 60
+/** P-037: the gap between pins side by side on one element's corner (overlay px). */
+const PIN_GAP = 4
 
 interface PlacedPin {
   id: string
@@ -176,11 +187,19 @@ export function CommentsOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
     const open = store.openThreadId.get()
     const vp = canvasSize(canvas)
     const out: PlacedPin[] = []
-    for (const t of Object.values(threads)) {
+    // P-037: pins on one element's corner sit side by side along its top edge, oldest first (geometry.ts)
+    const onCorner = new Map<string, number>()
+    const ordered = Object.values(threads).sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    for (const t of ordered) {
       if (t.status === 'resolved' && !showResolved && t.id !== open) continue
-      const pt = anchorPoint(canvas, t.anchor)
+      const pt = pinPoint(canvas, t.anchor)
       if (!pt) continue
-      const s = canvas.sceneToOverlay(pt)
+      const corner = pinCornerOf(canvas, t.anchor)
+      const nth = corner ? (onCorner.get(corner.id) ?? 0) : 0
+      if (corner) onCorner.set(corner.id, nth + 1)
+      const at = canvas.sceneToOverlay(pt)
+      const off = corner ? cornerPinOffset(corner.side, nth, PIN, PIN_GAP) : { dx: 0, dy: 0 }
+      const s = { x: at.x + off.dx, y: at.y + off.dy }
       if (s.x < -CULL || s.y < -CULL || s.x > vp.w + CULL || s.y > vp.h + CULL) continue
       const first = t.comments[0]
       out.push({
@@ -341,7 +360,7 @@ function NewThreadComposer({ ctx, host }: { ctx: CanvasFeatureContext; host: HTM
   const pending = useValue('dr-comments.pending', () => store.pending.get(), [store])
   const point = useValue(
     'dr-comments.pending-point',
-    () => (pending ? anchorPoint(canvas, pending.anchor) : null),
+    () => (pending ? pinPoint(canvas, pending.anchor) : null),
     [canvas, pending],
   )
   const where = useValue(
@@ -363,6 +382,13 @@ function NewThreadComposer({ ctx, host }: { ctx: CanvasFeatureContext; host: HTM
   const cancel = () => {
     store.cancelNewThread()
     focusBoard(canvas)
+  }
+  // P-014: a posted comment puts the tool back to Select (as Miro does, and as a note or a text does after one
+  // placement), so the next click on the board starts nothing; the tool lock (Q) keeps the comment tool
+  const post = async (draft: Parameters<typeof store.createThread>[1]) => {
+    const thread = await store.createThread(pending.anchor, draft)
+    if (thread && !toolLock.get() && canvas.tool() === COMMENT_TOOL_ID) canvas.setTool('select')
+    return thread !== null
   }
   return (
     <>
@@ -431,7 +457,7 @@ function NewThreadComposer({ ctx, host }: { ctx: CanvasFeatureContext; host: HTM
               placeholder="Add a comment… (@ to mention)"
               submitLabel="Post"
               autoFocus
-              onSubmit={async (draft) => (await store.createThread(pending.anchor, draft)) !== null}
+              onSubmit={post}
               onCancel={cancel}
             />
           </div>
@@ -453,7 +479,7 @@ function OpenThread({ ctx, host }: { ctx: CanvasFeatureContext; host: HTMLElemen
   )
   const point = useValue(
     'dr-comments.open-point',
-    () => (thread ? anchorPoint(canvas, thread.anchor) : null),
+    () => (thread ? pinPoint(canvas, thread.anchor) : null),
     [canvas, thread],
   )
   const where = useValue(
