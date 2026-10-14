@@ -33,6 +33,7 @@ import {
   startRefusedText,
   viewsIntersect,
 } from './spotlight.ts'
+import { TimerBanner } from './TimerBanner.tsx'
 
 type Ctx = CanvasFeatureContext
 
@@ -146,22 +147,26 @@ export function SpotlightLayer({ ctx }: { ctx: Ctx }) {
       data-motion={reduced ? 'still' : 'pulse'}
     >
       {dim && rect && <Dim rect={rect} />}
-      {/* M2-1: the bar (or the chip that brings it back) is in the board's top-centre stack, with the other bars */}
+      {/* M2-1: the bar (or the chip that brings it back) is in the board's top-centre stack, with the other
+          bars. P-016: the session timer shares its box (a stack slot is one box; the timer comes first). */}
       <TopCentreItem slot="spotlight">
-        {s && !hidden && placed && <SpotlightBar ctx={ctx} store={store} placed={placed} />}
-        {s && hidden && (
-          <button
-            type="button"
-            className="dr-wk-spot__chip"
-            data-testid="spotlight-show"
-            onClick={() => {
-              store.showSpotlight()
-              ctx.canvas.focus({ preventScroll: true })
-            }}
-          >
-            Show the spotlight
-          </button>
-        )}
+        <div className="dr-wk-topbox">
+          <TimerBanner ctx={ctx} />
+          {s && !hidden && placed && <SpotlightBar ctx={ctx} store={store} placed={placed} />}
+          {s && hidden && (
+            <button
+              type="button"
+              className="dr-wk-spot__chip"
+              data-testid="spotlight-show"
+              onClick={() => {
+                store.showSpotlight()
+                ctx.canvas.focus({ preventScroll: true })
+              }}
+            >
+              Show the spotlight
+            </button>
+          )}
+        </div>
       </TopCentreItem>
     </div>
   )

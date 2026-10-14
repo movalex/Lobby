@@ -4,6 +4,8 @@ import {
   crossedZero,
   describeClock,
   formatClock,
+  inLastSeconds,
+  LAST_SECONDS_MS,
   parseDurationInput,
   TIMES_UP_ALERT_MS,
   timerDisplayPhase,
@@ -138,5 +140,15 @@ describe("time's up, then quiet (RETRO-12)", () => {
     expect(timerDisplayPhase({ ...running(0), status: 'paused' }, SERVER_T0 + 999_999, 0)).toBe('paused')
     expect(timerDisplayPhase({ ...running(0), status: 'stopped' }, SERVER_T0, 0)).toBe('stopped')
     expect(timerDisplayPhase(null, SERVER_T0, 0)).toBe('idle')
+  })
+})
+
+describe('the last seconds (P-016)', () => {
+  it('are the final ten seconds with some time left, not before and not at zero', () => {
+    expect(LAST_SECONDS_MS).toBe(10_000)
+    expect(inLastSeconds(10_001)).toBe(false)
+    expect(inLastSeconds(10_000)).toBe(true)
+    expect(inLastSeconds(1)).toBe(true)
+    expect(inLastSeconds(0)).toBe(false)
   })
 })

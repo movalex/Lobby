@@ -113,14 +113,17 @@ export function dotInk(fill: string): '#ffffff' | '#000000' {
 }
 
 /**
- * P-015: whether anybody voted: the reveal celebrates (confetti, a feedback question) only when someone did. A
- * vote nobody cast a dot in ends calmly.
+ * P-015: whether anybody voted: the reveal celebrates (confetti, a feedback question) only when someone
+ * did. A vote nobody cast a dot in ends calmly.
  */
-export function votesWereCast(v: { totalVotesCast: number; results?: readonly VoteResult[] | null }): boolean {
+export function votesWereCast(v: {
+  totalVotesCast: number
+  results?: readonly VoteResult[] | null
+}): boolean {
   return v.totalVotesCast > 0 || !!v.results?.some((r) => r.count > 0)
 }
 
-/** The end line of a revealed vote: "Voting is over: 5 votes from 2 people." / "Voting is over. No votes were cast." */
+/** The end line of a revealed vote: "Voting is over: 5 votes from 2 people." or "... No votes were cast." */
 export function finalLine(v: { totalVotesCast: number; participants: number }): string {
   if (v.totalVotesCast === 0) return 'Voting is over. No votes were cast.'
   const votes = `${v.totalVotesCast} vote${v.totalVotesCast === 1 ? '' : 's'}`

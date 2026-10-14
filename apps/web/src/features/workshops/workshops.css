@@ -1443,3 +1443,60 @@ li[data-rank="1"] .dr-wk-rank__bar {
   gap: 6px;
   color: var(--dr-ink-2);
 }
+
+/* P-016: the stack's spotlight box holds the timer pill above the spotlight bar. */
+.dr-wk-topbox {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.dr-wk-topbox:empty {
+  display: none;
+}
+/* the stack's own box around it takes no place and no gap while nothing is in it */
+.lobby-top-centre__item:has(> .dr-wk-topbox:empty) {
+  display: none;
+}
+
+/* P-016: the session timer, a pill at the top centre of the canvas for everyone (./ported/TimerBanner.tsx). */
+.dr-wk-banner-timer {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 18px;
+  border-radius: 999px;
+  background: var(--dr-navy);
+  color: #fff;
+  font: 700 22px/1.1 var(--dr-mono);
+  font-variant-numeric: tabular-nums;
+  box-shadow: var(--dr-shadow);
+}
+.dr-wk-banner-timer__note {
+  font: 650 13px var(--dr-font);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.dr-wk-banner-timer[data-state="paused"] {
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+}
+/* the last ten seconds, and the zero that follows */
+.dr-wk-banner-timer[data-urgent="true"],
+.dr-wk-banner-timer[data-state="finished"] {
+  background: var(--dr-danger-fill);
+  color: var(--dr-on-danger);
+}
+.dr-wk-banner-timer[data-urgent="true"] {
+  animation: dr-wk-banner-timer-pulse 1s ease-in-out infinite;
+}
+@keyframes dr-wk-banner-timer-pulse {
+  50% {
+    transform: scale(1.06);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dr-wk-banner-timer[data-urgent="true"] {
+    animation: none;
+  }
+}
