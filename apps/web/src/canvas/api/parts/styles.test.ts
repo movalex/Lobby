@@ -3,7 +3,7 @@
 // text fields' relayout is checked by the e2e spec (e2e/excalidraw/canvas-ux-toolbar.spec.ts); here only
 // that they are routed to the label.
 import { installServerTextMetrics } from '@draftroom/canvas-schema/engine'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { CanvasElement } from '../../port.ts'
 import { createFeatureRegistries } from '../registries.ts'
 import { createStylesPart, noteSizeWrites, stylesOf } from './styles.ts'
@@ -200,5 +200,23 @@ describe('P-011: noteSizeWrites (a note’s Size is the note’s)', () => {
 
   it('only notes: a rectangle or a label alone is left as it is', () => {
     expect(noteSizeWrites([note, label, el('r', 'rectangle')], ['r'], 400, 44).size).toBe(0)
+  })
+
+  it('wave P review: on a big board only the picked notes and their labels are copied, not every element', () => {
+    const board: CanvasElement[] = [note, label]
+    for (let i = 0; i < 10_000; i++) board.push(el(`r${i}`, 'rectangle', { x: i * 10, y: 500 }))
+    const clone = vi.spyOn(globalThis, 'structuredClone')
+    try {
+      const started = performance.now()
+      const w = noteSizeWrites(board, ['n'], 400, 44)
+      const ms = performance.now() - started
+      expect(w.get('n')).toMatchObject({ width: 400, baseHeight: 400 })
+      expect([...w.keys()].sort()).toEqual(['n', 'n.t'])
+      // the note and its label: a working copy and the copy it is compared with, each
+      expect(clone.mock.calls.length).toBeLessThanOrEqual(4)
+      expect(ms).toBeLessThan(50)
+    } finally {
+      clone.mockRestore()
+    }
   })
 })
