@@ -742,7 +742,7 @@ export async function captureEventStreams(page: Page): Promise<void> {
  * How many of `page`'s kept board event streams are open (see captureEventStreams). Only the cookie
  * transport's EventSource is kept: on the direct transport (the api has DRAFTROOM_EVENTS_ORIGIN, as under
  * E2E_DIRECT_EVENTS=1) the stream is a fetch and this stays 0, so a spec that injects pins the cookie
- * stream (l2-trust "P-047").
+ * stream (l2-ai-pills.spec.ts).
  */
 export const openEventStreams = (page: Page): Promise<number> =>
   page.evaluate(
