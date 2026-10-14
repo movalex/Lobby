@@ -67,17 +67,19 @@ for (const size of [PHONE, PIXEL_7]) {
         await expect.poll(() => lobbyTool(page)).toBe('select')
       })
 
-      await test.step('the board menu opens by tap, and Board, Edit, Export, Preferences and the shortcuts can be tapped', async () => {
+      await test.step('the board menu opens by tap, and Board, Edit, Export, Preferences and Send feedback can be tapped (no Keyboard shortcuts row: a phone has no keyboard)', async () => {
         await page.getByTestId('main-menu.button').tap()
         await expect(page.getByTestId('main-menu.button')).toHaveAttribute('aria-expanded', 'true')
         const menu = page.getByTestId('main-menu-root')
         await expect(menu).toBeVisible()
         const entries = await menu.getByRole('menuitem').allTextContents()
-        for (const want of [/Board/, /Edit/, /Export/, /Preferences/, /Keyboard shortcuts/])
+        for (const want of [/Board/, /Edit/, /Export/, /Preferences/, /Send feedback/])
           expect(
             entries.some((t) => want.test(t)),
             `${want} in ${JSON.stringify(entries)}`,
           ).toBe(true)
+        // P-027: desktop-only rows stay off a phone's menu
+        expect(entries.some((t) => /Keyboard shortcuts/.test(t))).toBe(false)
         expect(await coveredControls(page, ['[data-testid="main-menu-root"]'])).toEqual([])
         await page.keyboard.press('Escape')
       })
