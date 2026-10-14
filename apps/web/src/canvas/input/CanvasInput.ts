@@ -37,6 +37,7 @@ import type { ExcalidrawImperativeAPI } from '@excalidraw/excalidraw/types'
 import type { LeaseClient } from '../lease/client.ts'
 import { type EditNotice, EditorLease, type EditState, type EditTrace } from '../lease/editorLease.ts'
 import { bufferedKeyOf } from '../lease/replay.ts'
+import type { LeaseThing } from '../lease/words.ts'
 import { classifyDoubleClick, type DblClickElement } from './dblclick.ts'
 import { DoubleTapMirror, TAP_MAX_MS, TAP_SLOP_PX } from './doubleTap.ts'
 import { classifyKey, type KeyContext, type KeyVerdict, keyLikeOf, type LobbyKeyAction } from './keymap.ts'
@@ -96,7 +97,7 @@ export interface CanvasInputOptions {
   onDoubleTap?: (scene: { x: number; y: number }, screen: { x: number; y: number }) => boolean
   /** A double-click / double-tap on empty canvas (editors): Lobby creates a text there. */
   onEmptyDoubleClick?: (scene: { x: number; y: number }) => void
-  onDeny?: (leaseId: string, holderName: string) => void
+  onDeny?: (leaseId: string, holderName: string, thing: LeaseThing) => void
   /** The sync engine: whether an element is on the server (EditorLease `isConfirmed`, L3). */
   isConfirmed?: (id: string) => boolean
   /** Notices for the user: a deny, a cancelled open, unsaved text ("Copy my text"), a lost lease. */

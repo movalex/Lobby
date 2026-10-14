@@ -180,9 +180,12 @@ export function engineRejectTitle(code: string | null | undefined): string {
   return why ? `Your last change was not saved: ${why}` : SAVE_TITLE.rejected
 }
 
-/** The toast for an engine reject (null for LEASED: the lease notice already says who is typing). */
-export function engineRejectNotice(code: string, holder?: string | null): string | null {
-  if (code === 'LEASED') return holder ? `Change not saved — ${holder} is typing in this note` : null
+/**
+ * The toast for an engine reject (null for LEASED with no holder known). `thing`: what the leased element is
+ * called (wave P review, P-005: canvas/lease/words.ts), "note" by default.
+ */
+export function engineRejectNotice(code: string, holder?: string | null, thing = 'note'): string | null {
+  if (code === 'LEASED') return holder ? `Change not saved — ${holder} is typing in this ${thing}` : null
   if (code === 'READ_ONLY') return 'You can only view this board, so your change was not saved.'
   if (code === 'GONE') return 'Someone else deleted that object, so your change to it was not saved.'
   const why = engineRejectReason(code)

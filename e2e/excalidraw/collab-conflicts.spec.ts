@@ -111,6 +111,51 @@ test('text lease: bob cannot type into the note alice is typing in; he takes ove
   await expectServerConverged(stack, board, [a.page, b.page])
 })
 
+// Wave P review (P-005): a denied lease on a shape or a free text said "is typing in this note". The words name the
+// element's kind: this shape, this text, this note.
+test('text lease: the deny names what alice is typing in (this shape, this text), never "this note" for them', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  const b = await canvasSession('bob')
+  const R = await createItem(a.page, 'rectangle', {
+    x: 100,
+    y: 120,
+    width: 200,
+    height: 120,
+    backgroundColor: '#a6d8f3',
+    fillStyle: 'solid',
+  })
+  const T = await createItem(a.page, 'text', { x: 480, y: 140, text: 'free words' })
+  await waitForItem(b.page, R)
+  await waitForItem(b.page, T)
+  // what bob is told: the toasts and the lease notice
+  const told = async () => [
+    ...(await toastTexts(b.page)),
+    ...(await b.page.getByTestId('lease-notice').allInnerTexts()),
+  ]
+  for (const [id, thing] of [
+    [R, 'shape'],
+    [T, 'text'],
+  ] as const) {
+    await startTextEditingWithKeyboard(a.page, id)
+    await typeText(a.page, ' more')
+    await expect(typingBadge(b.page, id)).toHaveAttribute('data-holder', a.name)
+    // bob asks for it the keyboard's way (select, Enter)
+    await select(b.page, [id])
+    await focusCanvas(b.page)
+    await b.page.keyboard.press('Enter')
+    await expect.poll(told).toContainEqual(expect.stringContaining(`${a.name} is typing in this ${thing}`))
+    expect((await told()).filter((t) => t.includes('this note'))).toEqual([])
+    await expect(b.page.locator(TEXT_EDITOR)).toHaveCount(0)
+    await b.page.keyboard.press('Escape')
+    const dismiss = b.page.getByTestId('lease-notice').getByRole('button', { name: 'Dismiss' })
+    if (await dismiss.isVisible()) await dismiss.click()
+    await stopTextEditing(a.page)
+    await expect(typingBadge(b.page, id)).toHaveCount(0)
+  }
+})
+
 test('text lease: a lease held by a tab that vanished mid-typing ends, and someone else can type', async ({
   canvasSession,
   users,
