@@ -1385,7 +1385,8 @@ export class LobbyBoardSession {
   private onToolClick(c: CustomToolClick): void {
     if (this.snap.readonly || !this.port || !this.api) return
     if (c.tool === 'note') {
-      const size = 200
+      // P-011: the note tool's Size is the next note's size (200 px until one is picked)
+      const size = this.port.nextNoteSide()
       // W5-01: a note made inside a frame is its child (tldraw's), in the same step as its create
       const id = this.createInFrame('note', { x: c.x, y: c.y }, (tx) =>
         tx.create('note', { x: c.x - size / 2, y: c.y - size / 2, size }),

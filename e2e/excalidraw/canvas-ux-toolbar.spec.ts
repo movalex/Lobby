@@ -179,7 +179,7 @@ test('COL-06 note palette: two selected notes show the 13 Lobby colours, one pic
   await expect(palette).toBeVisible()
   await expect(palette.getByTestId('note-color')).toHaveCount(13)
   await expect(palette.locator('legend')).toHaveText('Note color (mixed)')
-  await expect(palette.locator('[data-color="white"]')).toHaveAttribute('aria-label', 'Paper')
+  await expect(palette.locator('[data-color="white"]')).toHaveAttribute('aria-label', 'White')
   await palette.locator('[data-color="light-blue"]').click()
   const sky = '#a6d8f3'
   await expect.poll(async () => (await item(a.page, n1))?.backgroundColor).toBe(sky)

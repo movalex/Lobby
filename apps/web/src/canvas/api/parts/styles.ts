@@ -66,6 +66,8 @@ export const FIELDS: Readonly<Record<Exclude<Field, TextField>, readonly string[
   arrowKind: [],
   // the next note's fill (CR-3A-7): a next-style value only (a note's own fill is `backgroundColor`)
   noteColor: [],
+  // the next note's side (P-011): a next-style value only (a note's own size is its width)
+  noteSize: [],
 }
 
 export const TEXT_FIELDS = ['fontFamily', 'fontSize', 'textAlign', 'verticalAlign'] as const

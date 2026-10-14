@@ -24,6 +24,7 @@ import {
 } from '../../../canvas/api/index.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { getTheme, THEME_PREFERENCES, type ThemePreference } from '../../../theme/theme.ts'
+import { useMayGiveFeedback } from '../../feedback/audience.ts'
 import { openFeedback } from '../../feedback/state.ts'
 import { EXPORT_OFF_ENTRY, gatedEntries } from './ContextMenu.tsx'
 import { CMD } from './commands.ts'
@@ -90,7 +91,11 @@ function phoneWidth(): boolean {
     : false
 }
 
-export function mainMenuRows(ctx: CanvasFeatureContext): MenuRow[][] {
+/**
+ * `mayGiveFeedback` (P-023): Send feedback is the team's, as the Feedback pill is (features/feedback/audience.ts): an
+ * external client, a name-only guest or an account not at a creator domain is not offered it.
+ */
+export function mainMenuRows(ctx: CanvasFeatureContext, mayGiveFeedback = true): MenuRow[][] {
   const entries = gatedEntries(ctx, ctx.registries.mainMenu.list())
   const target: MenuTarget = { ids: ctx.canvas.selection, point: null, hit: null }
   const rows = (groups: readonly MenuGroup[]) => groupRows(entries, ctx, target, 'menu', groups)
@@ -182,7 +187,7 @@ export function mainMenuRows(ctx: CanvasFeatureContext): MenuRow[][] {
       uxState(ctx.canvas).shortcutsOpen.set(true)
     },
   }
-  // Wave J5: Send feedback, for every role (a viewer or a guest has things to report too)
+  // Wave J5: Send feedback, for every role of the team (a viewer has things to report too); P-023: not a guest or an outsider
   const feedback: MenuRow = {
     id: 'feedback',
     label: 'Send feedback',
@@ -193,13 +198,14 @@ export function mainMenuRows(ctx: CanvasFeatureContext): MenuRow[][] {
         ctx.canvas.focus({ preventScroll: true }),
       ),
   }
-  return [top, ...middle, [prefs, ...(phone ? [] : [help]), feedback]]
+  return [top, ...middle, [prefs, ...(phone ? [] : [help]), ...(mayGiveFeedback ? [feedback] : [])]]
 }
 
 export function MainMenu({ ctx }: { ctx: CanvasFeatureContext }) {
   const { canvas } = ctx
   const state = uxState(canvas)
   const open = useValue(state.mainMenuOpen)
+  const mayGiveFeedback = useMayGiveFeedback()
   // what the entries read (the selection, the document, the settings) while it is open
   useValue(
     'cux-main-menu-deps',
@@ -261,7 +267,7 @@ export function MainMenu({ ctx }: { ctx: CanvasFeatureContext }) {
       {open && (
         <div className="cux-menu cux-menu--main" data-testid="main-menu-root">
           <MenuList
-            rows={mainMenuRows(ctx)}
+            rows={mainMenuRows(ctx, mayGiveFeedback)}
             prefix="main-menu"
             label="Board menu"
             testId="main-menu"

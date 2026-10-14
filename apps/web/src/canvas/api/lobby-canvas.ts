@@ -350,6 +350,11 @@ export interface StyleValues {
    * own (the note tool, Add a sticky note, a double-click). Reads as Lobby's default note fill until set.
    */
   readonly noteColor?: string
+  /**
+   * P-011, next-style only: the side (px) of the next note (S/M/L/XL: 150, 200, 300, 400), taken by the note tool's click
+   * and the dock's Add a sticky note. Reads as Lobby's 200 px note until set.
+   */
+  readonly noteSize?: number
 }
 export type ArrowKind = 'straight' | 'curved' | 'elbow'
 /** Per field: the shared value, or 'mixed' when the selection differs. */

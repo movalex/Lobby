@@ -337,3 +337,25 @@ describe('styles.apply: a font size picked on a selection is the next size of th
     expect(s.engineSize()).toBe(26)
   })
 })
+
+describe('the next note’s size (P-011): the note tool’s Size', () => {
+  it('starts at Lobby’s 200 px note, takes a side, and ignores nonsense', () => {
+    const t = portOn()
+    expect(t.port.nextNoteSide()).toBe(200)
+    t.port.setNextNoteSide(400)
+    expect(t.port.nextNoteSide()).toBe(400)
+    for (const bad of [0, -3, Number.NaN, Number.POSITIVE_INFINITY]) t.port.setNextNoteSide(bad)
+    expect(t.port.nextNoteSide()).toBe(400)
+  })
+
+  it('is the note’s own: no tool change or font pick touches it', () => {
+    const t = portOn()
+    t.port.setNextNoteSide(300)
+    t.engineTool(NOTE_TOOL)
+    t.pick(33)
+    t.engineTool(TEXT_TOOL)
+    t.pick(44)
+    t.engineTool(SELECT)
+    expect(t.port.nextNoteSide()).toBe(300)
+  })
+})

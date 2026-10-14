@@ -3,7 +3,7 @@
 //     build, time) BEFORE sending; the keys typed into it never reach the canvas; the message arrives with
 //     its context and its author taken from the session;
 //   - from the dashboard: the account menu has it too;
-//   - a name-only guest sends from the board menu and shows as a guest;
+//   - a name-only guest has no Send feedback row in the board menu (P-023) and is not an inbox reader;
 //   - the inbox (/feedback) opens only for the person named in DRAFTROOM_FEEDBACK_ADMINS: they see the
 //     messages newest first, mark one done and reopen it; everybody else (a member, a guest) gets the page
 //     a mistyped address gets, no menu entry, and a 404 from the api.
@@ -179,7 +179,7 @@ test('from the dashboard: the account menu has Send feedback (and no inbox for a
   }
 })
 
-test('a name-only guest sends from the board menu, and the inbox shows them as a guest', async ({
+test('P-023: a name-only guest has no Send feedback row in the board menu, and is not an inbox reader', async ({
   browser,
   board,
   users,
@@ -194,18 +194,9 @@ test('a name-only guest sends from the board menu, and the inbox shows them as a
   const context = await browser.newContext()
   try {
     const guest = await guestOn(context, token, 'Sam Client')
-    const marker = unique('guest')
-    await openFromBoardMenu(guest.page)
-    await guest.page.getByTestId('feedback-text').fill(marker)
-    await guest.page.getByTestId('feedback-submit').click()
-    await expect(guest.page.getByTestId('feedback-sent')).toBeVisible()
-
-    const list = (await (await alice.request.get(`${WEB_URL}/api/feedback?status=all&limit=200`)).json()) as {
-      items: { text: string; kind: string; name: string; userId: string }[]
-    }
-    const sent = list.items.find((i) => i.text === marker)
-    expect(sent).toMatchObject({ kind: 'guest', userId: guest.id })
-    expect(sent?.name).toContain('Sam Client')
+    await guest.page.getByTestId('main-menu.button').click()
+    await expect(guest.page.getByRole('menuitem', { name: 'Preferences' })).toBeVisible()
+    await expect(guest.page.getByRole('menuitem', { name: 'Send feedback' })).toHaveCount(0)
     // a guest is not an inbox reader
     const probe = await context.request.get(`${WEB_URL}/api/feedback`)
     expect(probe.status()).toBe(404)
@@ -215,7 +206,7 @@ test('a name-only guest sends from the board menu, and the inbox shows them as a
 })
 
 // P-023 (wave P): the Feedback pill is Lobby's own (the team's): an external client sees no pill, on a board or on the
-// dashboard. (The board's "Send feedback" menu row is canvas-ux's and is not part of this.)
+// dashboard; the board menu's "Send feedback" row follows the same rule (the test above).
 test('P-023: a name-only guest sees no Feedback pill on the board, and an outside account none on the dashboard', async ({
   browser,
   board,

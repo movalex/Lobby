@@ -340,6 +340,19 @@ describe('the board menu on a phone', () => {
   })
 })
 
+// P-023: Send feedback is the team's, in the board menu as in the pill and the account menu
+describe('the board menu’s Send feedback, for the people it is not offered to', () => {
+  it('has no feedback row for a guest or an outsider, whatever the role', () => {
+    for (const readOnly of [false, true]) {
+      const ids = mainMenuRows(ctxWith({ readOnly }), false)
+        .flat()
+        .map((r) => r.id)
+      expect(ids, String(readOnly)).not.toContain('feedback')
+      expect(ids, String(readOnly)).toContain('preferences')
+    }
+  })
+})
+
 // Wave J5: the Send feedback button, in the board menu for everybody (a viewer or a commenter has things to report).
 describe('the board menu’s Send feedback', () => {
   it('opens the feedback dialog for this board, enabled for every role, and gives the keyboard back to the board', () => {

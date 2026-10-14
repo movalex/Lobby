@@ -125,7 +125,8 @@ function AddNoteButton({ ctx, onPress }: { ctx: CanvasFeatureContext; onPress():
         onPress()
         canvas.focus({ preventScroll: true })
         const v = canvas.viewport.get()
-        const size = 200
+        // P-011: the next note's size (the note tool's Size; 200 px until one is picked)
+        const size = canvas.styles.next().noteSize ?? 200
         const centre = { x: v.x + v.width / 2, y: v.y + v.height / 2 }
         // W5-01: inside the unlocked frame at the view's centre, in the same step
         const frame = frameAt(canvas, centre, { unlockedOnly: true })

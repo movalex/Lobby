@@ -67,7 +67,6 @@ import {
   fontNameOf,
   HIGHLIGHT_SHADES,
   highlightNameOf,
-  LABEL_SIZE,
   NEXT_STROKE_WIDTH,
   NOTE_FONT,
   NOTE_SIDE,
@@ -118,8 +117,8 @@ export type StyleKind =
 
 /**
  * Creation tools whose next shape the panel sets (Lobby tool names). CR-3A-7: the note tool's next note
- * takes the note colour, the label size and the font picked here (`styles.setNext`: the note palette's
- * fill as `noteColor`, the label size from LABEL_SIZE), and the text tool's next text its colour, size,
+ * takes the note colour, its size and the font picked here (`styles.setNext`: the note palette's
+ * fill as `noteColor`, the size from NOTE_SIDE and NOTE_FONT (P-011)), and the text tool's next text its colour, size,
  * font and alignment (sizes from TEXT_SIZE), as on tldraw.
  */
 export const STYLED_TOOLS: Readonly<Record<string, StyleKind>> = {
@@ -345,7 +344,8 @@ export function pickSize(canvas: LobbyCanvas, t: Target, size: SizeName) {
   write(canvas, 'size', w, stepped)
   if (!t.next) return
   // CR-3A-7: the note tool's next note takes a label size, the text tool's next text a font size
-  if (has(t, 'note')) canvas.styles.setNext({ fontSize: LABEL_SIZE[size] })
+  // P-011: the note tool's Size is the next note's size, its words scaled with it (as for a selected note)
+  if (has(t, 'note')) canvas.styles.setNext({ fontSize: NOTE_FONT[size], noteSize: NOTE_SIDE[size] })
   else if (has(t, 'text')) canvas.styles.setNext({ fontSize: TEXT_SIZE[size] })
   else canvas.styles.setNext({ strokeWidth: NEXT_STROKE_WIDTH[size] })
 }
@@ -459,8 +459,8 @@ function NoteColorPicker({ canvas, t }: { canvas: LobbyCanvas; t: Target }) {
             data-testid="note-color"
             data-color={s.name}
             aria-pressed={current === s.name}
-            aria-label={`${s.label}${current === s.name ? ' (selected)' : ''}`}
-            title={s.label}
+            aria-label={`${s.plain}${current === s.name ? ' (selected)' : ''}`}
+            title={s.plain}
             tabIndex={rovingTab(names, current, i)}
             // as the canvas draws it: the light values, through Excalidraw's dark filter in dark mode
             style={{
@@ -851,7 +851,7 @@ export function StylePanelBody({ ctx, onClose }: { ctx: CanvasFeatureContext; on
   const size = (() => {
     const names: (SizeName | null)[] = []
     if (t.next) {
-      if (noteTool) names.push(sizeNameOf(styles.fontSize, LABEL_SIZE))
+      if (noteTool) names.push(sizeNameOf((styles as { noteSize?: number }).noteSize ?? NOTE_SIDE.m, NOTE_SIDE))
       else if (textTool) names.push(sizeNameOf(styles.fontSize, TEXT_SIZE))
       else names.push(sizeNameOf((styles as { strokeWidth?: number }).strokeWidth, NEXT_STROKE_WIDTH))
     } else

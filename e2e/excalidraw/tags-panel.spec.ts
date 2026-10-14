@@ -181,7 +181,7 @@ test('Tags panel: "Show only" fades everything else for alice alone; rename, rec
       .toEqual(['blocked', 'idea', 'user-research'])
   })
 
-  await test.step('recolour “Idea” to Coral: bob’s chips change colour', async () => {
+  await test.step('recolour “Idea” to red: bob’s chips change colour', async () => {
     await row(a.page, 'idea').getByTestId('tag-edit').click()
     await a.page.locator('[data-testid="tag-color"][data-color="red"]').click()
     await expect(a.page.locator('[data-testid="tag-color"][data-color="red"]')).toHaveAttribute(

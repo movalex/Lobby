@@ -12,8 +12,19 @@
  * adds 'since', the "Since you were here" chip (features/visits), under the follow pill. Wave P (P-047) adds 'ai': the
  * "Dana is using AI" pills of runs whose area is off screen (features/ai working.tsx), which sat at a fixed spot on
  * top of the since and coach chips (and of one another); the own run's busy pill already goes under the stack.
+ * P-016 follow-up adds 'timer', the running session timer's pill (features/workshops TimerBanner), which shared the
+ * spotlight's box and so was one box with it; it has its own place, above the spotlight bar.
  */
-export const TOP_CENTRE_SLOTS = ['invite', 'spotlight', 'follow', 'since', 'coach', 'ai', 'feedback'] as const
+export const TOP_CENTRE_SLOTS = [
+  'invite',
+  'timer',
+  'spotlight',
+  'follow',
+  'since',
+  'coach',
+  'ai',
+  'feedback',
+] as const
 export type TopCentreSlot = (typeof TOP_CENTRE_SLOTS)[number]
 
 /** The gap between two things in the stack, and between the stack and the toasts under it (px). */

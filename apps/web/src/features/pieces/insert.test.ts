@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import type { ExternalContent } from '../../canvas/api/index.ts'
 import { type El, fakeCanvas, fakeCtx, frameEl } from '../sort/test-kit.ts'
 import { COMMANDS, DROP_HANDLER, PIECE_COMMAND_IDS } from './commands.ts'
-import { frameAtPoint, insertPiece } from './insert.ts'
+import { failureText, frameAtPoint, insertPiece } from './insert.ts'
 import { dragPayload } from './model.ts'
 
 installServerTextMetrics()
@@ -100,6 +100,15 @@ describe('insertPiece', () => {
       new Set(['piece-browser']),
     )
     expect(new Set(els.map((e) => (e.groupIds as string[]).join())).size).toBe(1)
+  })
+})
+
+describe('what is told when an insert did not happen', () => {
+  it('says shapes, not pieces (the panel is named Shapes)', () => {
+    for (const reason of ['readonly', 'too-many-shapes', 'unknown'] as const)
+      expect(failureText(reason), reason).not.toMatch(/pieces?/i)
+    expect(failureText('too-many-shapes')).toBe('This board has too many objects to add this shape.')
+    expect(failureText('unknown')).toBe('The shape could not be added.')
   })
 })
 

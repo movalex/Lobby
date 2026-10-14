@@ -91,7 +91,7 @@ function ColorPicker({
     <fieldset className="dr-pn-colors" data-testid="pn-colors">
       <legend className="dr-sr-only">{label}</legend>
       {NOTE_PALETTE.map((s) => (
-        <label key={s.name} className="dr-pn-color" title={s.label}>
+        <label key={s.name} className="dr-pn-color" title={s.plain}>
           <input
             type="radio"
             name={name}
@@ -104,7 +104,7 @@ function ColorPicker({
           <span className="dr-pn-color__chip" style={{ background: s[mode].fill, color: s[mode].text }}>
             <span aria-hidden="true">Aa</span>
           </span>
-          <span className="dr-sr-only">{s.label}</span>
+          <span className="dr-sr-only">{s.plain}</span>
         </label>
       ))}
     </fieldset>

@@ -281,8 +281,8 @@ function TagEditor({
               data-dr-tag-color={sw.name}
               data-testid="tag-color"
               data-color={sw.name}
-              aria-label={sw.label}
-              title={sw.label}
+              aria-label={sw.plain}
+              title={sw.plain}
               aria-pressed={row.color === sw.name}
               onClick={() => recolor(sw.name)}
             />

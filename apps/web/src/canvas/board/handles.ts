@@ -468,16 +468,19 @@ export function createBoardHandles(d: HandleDeps): BoardHandles & {
       next() {
         const base = nextStyles(api) as Record<string, unknown>
         for (const [k, v] of Object.entries(pendingNext)) if (base[k] === v) delete pendingNext[k]
-        const out = { ...base, ...pendingNext }
+        const out: Record<string, unknown> = { ...base, ...pendingNext, noteSize: port.nextNoteSide() }
         // the connector kind just set reads back as its elbow flag too
         if (typeof pendingNext.arrowKind === 'string') out.elbowed = pendingNext.arrowKind === 'elbow'
         return out as StyleValues
       },
       setNext(patch) {
+        // P-011: the next note's side is the port's own (the engine keeps none)
+        if (patch.noteSize !== undefined) port.setNextNoteSide(patch.noteSize)
         const appState = nextStylePatch(patch)
+        if (!Object.keys(appState).length && patch.noteSize !== undefined) return d.changed('tool')
         if (!Object.keys(appState).length) return
         for (const [k, v] of Object.entries(patch)) {
-          if (v === undefined || k === 'strokeWidth') continue
+          if (v === undefined || k === 'strokeWidth' || k === 'noteSize') continue
           // a legacy elbowed / roundness pair is a connector pick: its roundness never reaches the engine's
           // corners, so it must not wait there to be read back
           if (k === 'roundness' && !('currentItemRoundness' in appState)) continue

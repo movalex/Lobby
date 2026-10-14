@@ -26,8 +26,13 @@ export type NoteColorName =
 export interface NoteSwatch {
   /** tldraw colour-style value stored on the note. */
   name: NoteColorName
-  /** Draftroom's name, shown in the picker. */
+  /** Draftroom's own name for the swatch (Butter, Iris, ...): not shown to people; sort headings and exports keep it. */
   label: string
+  /**
+   * P-012: the plain colour name people see (the picker's tooltips and labels) and say: the words the AI and the command
+   * palette use (ai/command/colours.ts takes each as a word for its swatch). Distinct across the 13.
+   */
+  plain: string
   light: { fill: string; text: string }
   dark: { fill: string; text: string }
 }
@@ -43,82 +48,100 @@ export const NOTE_PALETTE: readonly NoteSwatch[] = [
   {
     name: 'black',
     label: 'Butter',
+    plain: 'Yellow',
     light: { fill: '#f8e48f', text: INK },
     dark: { fill: '#5e5222', text: CHALK },
   },
   {
     name: 'yellow',
     label: 'Marigold',
+    plain: 'Gold',
     light: { fill: '#f6c453', text: INK },
     dark: { fill: '#6e4f12', text: CHALK },
   },
   {
     name: 'orange',
     label: 'Apricot',
+    plain: 'Orange',
     light: { fill: '#f4a874', text: INK },
     dark: { fill: '#70401f', text: CHALK },
   },
   {
     name: 'light-red',
     label: 'Blush',
+    plain: 'Pink',
     light: { fill: '#f6bfc4', text: INK },
     dark: { fill: '#6b3740', text: CHALK },
   },
   {
     name: 'red',
     label: 'Coral',
+    plain: 'Red',
     light: { fill: '#ef8c82', text: INK },
     dark: { fill: '#7d2f28', text: CHALK },
   },
   {
     name: 'light-violet',
     label: 'Lilac',
+    plain: 'Lavender',
     light: { fill: '#e3c9f4', text: INK },
     dark: { fill: '#573f6e', text: CHALK },
   },
   {
     name: 'violet',
     label: 'Plum',
+    plain: 'Purple',
     light: { fill: '#c5a4ea', text: INK },
     dark: { fill: '#4a3275', text: CHALK },
   },
   {
     name: 'blue',
     label: 'Iris',
+    plain: 'Blue',
     light: { fill: '#a7b7f6', text: INK },
     dark: { fill: '#2f4180', text: CHALK },
   },
   {
     name: 'light-blue',
     label: 'Sky',
+    plain: 'Light blue',
     light: { fill: '#a6d8f3', text: INK },
     dark: { fill: '#1d4f6e', text: CHALK },
   },
   {
     name: 'green',
     label: 'Fern',
+    plain: 'Green',
     light: { fill: '#93cfa6', text: INK },
     dark: { fill: '#1e5439', text: CHALK },
   },
   {
     name: 'light-green',
     label: 'Pistachio',
+    plain: 'Light green',
     light: { fill: '#cde7a2', text: INK },
     dark: { fill: '#3f5b20', text: CHALK },
   },
   {
     name: 'grey',
     label: 'Stone',
+    plain: 'Grey',
     light: { fill: '#d6d9de', text: INK },
     dark: { fill: '#41474f', text: CHALK },
   },
   {
     name: 'white',
     label: 'Paper',
+    plain: 'White',
     light: { fill: '#ffffff', text: INK },
     dark: { fill: '#e6e2d8', text: INK },
   },
 ]
+
+/** The plain colour name of a stored note colour (the shared map: the picker's labels, the grammar's words). */
+export function noteColourName(name: string): string {
+  return (NOTE_PALETTE.find((s) => s.name === name) ?? NOTE_PALETTE[0])?.plain ?? 'Yellow'
+}
 
 /** WCAG 2.x relative luminance of a #rrggbb colour. */
 export function relativeLuminance(hex: string): number {

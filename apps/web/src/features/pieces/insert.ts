@@ -122,8 +122,8 @@ export function failureText(reason: Extract<InsertPieceResult, { ok: false }>['r
     case 'readonly':
       return 'You can view this board but not add to it.'
     case 'too-many-shapes':
-      return 'This board has too many objects to add this piece.'
+      return 'This board has too many objects to add this shape.'
     default:
-      return 'The piece could not be added.'
+      return 'The shape could not be added.'
   }
 }

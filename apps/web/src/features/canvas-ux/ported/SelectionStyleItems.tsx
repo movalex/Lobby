@@ -232,7 +232,7 @@ function controlFace(control: TierControl, row: TierRow, o: TierOption | null, d
 /** The option a row's value names (null: mixed or none of them). */
 const chosen = (row: TierRow) => row.options.find((o) => o.value === row.value) ?? null
 
-/** A control's button label with its value: "Note color: Butter", "Size: mixed". */
+/** A control's button label with its value: "Note color: Yellow", "Size: mixed". */
 function controlLabel(c: TierControl): string {
   const values = c.rows.map((r) =>
     r.value === 'mixed' ? 'mixed' : (chosen(r)?.label ?? (r.value === null ? 'none' : r.value)),

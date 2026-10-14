@@ -491,7 +491,7 @@ export function parseCommand(input: string): ParsedCommand | null {
     return target ? { verb: 'distribute', target, axis } : null
   }
 
-  // lock (a bare "lock" is the Toggle locked command's)
+  // lock (a bare "lock" is the Lock or unlock command's)
   m = /^lock(?:\s+down)?\s+(.+)$/.exec(s)
   if (m) {
     const target = parseTarget(m[1] as string)

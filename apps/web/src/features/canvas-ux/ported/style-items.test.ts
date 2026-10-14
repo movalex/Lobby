@@ -214,14 +214,14 @@ describe('notes: colour, size, alignment', () => {
   const two = (a: string, b: string, sa = 22, sb = 22, al = 'center', bl = 'center') =>
     kit([...note('n1', a, sa, al), ...note('n2', b, sb, bl, sb === 22 ? 200 : 400)], ['n1', 'n2'])
 
-  it('the controls, with the note palette’s names; mixed values read mixed', () => {
+  it('the controls, with the note palette’s plain names; mixed values read mixed', () => {
     const same = two('#f8e48f', '#f8e48f')
     const c = tierModel(same.canvas)
     expect(c?.kind).toBe('note')
     expect(c?.controls.map((x) => x.id)).toEqual(['note-colour', 'font-size', 'text-align'])
     const colour = control(c?.controls, 'note-colour')
     expect(colour.rows[0]?.options).toHaveLength(13)
-    expect(colour.rows[0]?.options[0]).toMatchObject({ value: 'black', label: 'Butter', color: '#f8e48f' })
+    expect(colour.rows[0]?.options[0]).toMatchObject({ value: 'black', label: 'Yellow', color: '#f8e48f' })
     expect(readValue(same, 'note-colour')).toBe('black')
     expect(readValue(same, 'font-size')).toBe('m')
     expect(readValue(same, 'text-align')).toBe('center')

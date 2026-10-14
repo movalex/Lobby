@@ -76,19 +76,19 @@ test('CR-3A-7: the note tool’s panel sets the next note’s colour, size and f
   await waitForCanvasUx(a.page)
   await focusBoard(a.page)
   const palette = a.page.getByTestId('note-palette')
-  /** No size button is pressed: the tool's own next size (the engine's 20, before a pick) is on neither scale. */
+  /** No size button is pressed: the text tool's own next size (the engine's 20, before a pick) is on neither scale. */
   const noSizePressed = async () => {
     for (const s of ['s', 'm', 'l', 'xl'])
       await expect(a.page.getByTestId(`style.size.${s}`)).toHaveAttribute('aria-pressed', 'false')
   }
 
-  await test.step('nothing picked yet: the engine’s next size (20) is on neither scale, so no size is pressed', async () => {
+  await test.step('nothing picked yet: the text’s next size (20) is on neither scale, so none is pressed; the next note is Lobby’s 200 px one, Medium (P-011)', async () => {
     await setTool(a.page, 'text')
     await expect(a.page.getByTestId('style.size.s')).toBeVisible()
     await noSizePressed()
     await setTool(a.page, 'note')
     await expect(palette).toBeVisible()
-    await noSizePressed()
+    await expect(a.page.getByTestId('style.size.m')).toHaveAttribute('aria-pressed', 'true')
   })
 
   await test.step('the note tool', async () => {
@@ -107,17 +107,18 @@ test('CR-3A-7: the note tool’s panel sets the next note’s colour, size and f
     const note = made.find((e) => e.type === 'stickynote')
     const label = made.find((e) => e.type === 'text')
     expect(note?.backgroundColor).toBe('#a6d8f3')
-    // the label: Large (tldraw's label size 26) in Mono (Comic Shanns, 8)
+    // P-011: Large is the note's size (300 px, as for a selected note), its words with it (33), in Mono (Comic Shanns, 8)
+    expect(note?.width).toBe(300)
     expect(label?.fontFamily).toBe(8)
-    expect(label?.baseFontSize ?? label?.fontSize).toBe(26)
+    expect(label?.baseFontSize ?? label?.fontSize).toBe(33)
   })
 
-  await test.step('the text tool starts from its own size: the note’s L (26) is not the next text’s', async () => {
+  await test.step('the text tool starts from its own size: the note’s L (33) is not the next text’s', async () => {
     await selectNone(a.page)
     await setTool(a.page, 'text')
     await expect(a.page.getByTestId('style.size.xl')).toBeVisible()
     await noSizePressed()
-    // a text made before any pick is the engine's 20, not the note's 26 (it was 26: one next size for both)
+    // a text made before any pick is the engine's 20, not the note's 33 (it was 26: one next size for both)
     const made = await makeByHand(a.page, await canvasPoint(a.page, 0.15, 0.3), 'Plain')
     expect(made.find((e) => e.type === 'text')?.fontSize).toBe(20)
   })
@@ -142,7 +143,7 @@ test('CR-3A-7: the note tool’s panel sets the next note’s colour, size and f
     })
   })
 
-  await test.step('each tool keeps its own size: back on the note tool its L is still pressed, and the next note’s label is 26, not the text’s 44', async () => {
+  await test.step('each tool keeps its own size: back on the note tool its L is still pressed, and the next note is 300 px with 33 px words, not the text’s 44', async () => {
     await selectNone(a.page)
     await setTool(a.page, 'note')
     await expect(palette).toBeVisible()
@@ -150,7 +151,8 @@ test('CR-3A-7: the note tool’s panel sets the next note’s colour, size and f
     await expect(a.page.getByTestId('style.size.xl')).toHaveAttribute('aria-pressed', 'false')
     const made = await makeByHand(a.page, await canvasPoint(a.page, 0.75, 0.3), 'Again')
     const label = made.find((e) => e.type === 'text')
-    expect(label?.baseFontSize ?? label?.fontSize).toBe(26)
+    expect(made.find((e) => e.type === 'stickynote')?.width).toBe(300)
+    expect(label?.baseFontSize ?? label?.fontSize).toBe(33)
     // and the text tool still has its XL (44)
     await selectNone(a.page)
     await setTool(a.page, 'text')

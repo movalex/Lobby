@@ -158,7 +158,7 @@ describe('the shortcuts dialog’s search (L3-2: the palette’s scorer over the
       id: 'edit',
       title: 'Edit',
       rows: [
-        { label: 'Toggle locked', keys: ['mod+shift+l'] },
+        { label: 'Lock or unlock', keys: ['mod+shift+l'] },
         { label: 'Undo', keys: ['mod+z'] },
       ],
     },
@@ -168,7 +168,7 @@ describe('the shortcuts dialog’s search (L3-2: the palette’s scorer over the
   it('keeps the rows whose words or keys match, best first; an empty query keeps everything', () => {
     expect(filterSections(sections, '', 'other')).toEqual(sections)
     expect(filterSections(sections, 'lock', 'other').map((s) => s.rows.map((r) => r.label))).toEqual([
-      ['Toggle locked'],
+      ['Lock or unlock'],
     ])
     expect(filterSections(sections, 'ctrl+k', 'other').map((s) => s.rows.map((r) => r.label))).toEqual([
       ['Command palette'],
