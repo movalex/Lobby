@@ -457,7 +457,8 @@ export function recoverChunk<T>(
 }
 
 /** What `recoverChunk` and `retryingImport` tell (the page's handler by default). */
-type RecoverHandler = Pick<StaleChunkHandler, 'report'> & Partial<Pick<StaleChunkHandler, 'online' | 'loaded'>>
+type RecoverHandler = Pick<StaleChunkHandler, 'report'> &
+  Partial<Pick<StaleChunkHandler, 'online' | 'loaded'>>
 
 /** One try at a lazy part's import (`retryingImport`). */
 export interface ImportAttempt<T> {

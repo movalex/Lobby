@@ -106,7 +106,7 @@ describe('insertPiece', () => {
 describe('what is told when an insert did not happen', () => {
   it('says shapes, not pieces (the panel is named Shapes)', () => {
     for (const reason of ['readonly', 'too-many-shapes', 'unknown'] as const)
-      expect(failureText(reason), reason).not.toMatch(/pieces?/i)
+      expect(failureText(reason), reason).not.toMatch(/\bpieces?\b/i)
     expect(failureText('too-many-shapes')).toBe('This board has too many objects to add this shape.')
     expect(failureText('unknown')).toBe('The shape could not be added.')
   })

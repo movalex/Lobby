@@ -108,7 +108,7 @@ import {
 } from './content.ts'
 import { installFeaturesAfterWelcome } from './features-install.ts'
 import { CRASH_PROBE_FEATURE, PROBE_FEATURE } from './probe.tsx'
-import { LobbyBoardSession, type LobbyBoardSnapshot } from './session.ts'
+import { LobbyBoardSession } from './session.ts'
 import { duplicateLobbyData } from './tx.ts'
 import { onUploads, uploadsInFlight } from './uploads.ts'
 import './board.css'

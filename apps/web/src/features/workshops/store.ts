@@ -445,7 +445,10 @@ export class WorkshopStore {
       return this.castNow(shapeId, 1)
     }
     const p = run()
-    const settled = p.then(() => undefined, () => undefined)
+    const settled = p.then(
+      () => undefined,
+      () => undefined,
+    )
     this.joining = settled
     void settled.then(() => {
       if (this.joining === settled) this.joining = null

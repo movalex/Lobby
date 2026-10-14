@@ -148,7 +148,8 @@ const commitsOf = (live: Iterable<VisitElement>, me: string, seenAt: number): Se
     const created = num(ls.createdAt)
     if (created !== null && created > seenAt && uidOf(ls.createdBy) === me) out.add(created)
     const edited = num(ls.lastEditedAt)
-    if (ls.lastEditedBy && edited !== null && edited > seenAt && uidOf(ls.lastEditedBy) === me) out.add(edited)
+    if (ls.lastEditedBy && edited !== null && edited > seenAt && uidOf(ls.lastEditedBy) === me)
+      out.add(edited)
   }
   return out
 }

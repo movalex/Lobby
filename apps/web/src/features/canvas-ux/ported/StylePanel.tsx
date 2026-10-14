@@ -851,7 +851,8 @@ export function StylePanelBody({ ctx, onClose }: { ctx: CanvasFeatureContext; on
   const size = (() => {
     const names: (SizeName | null)[] = []
     if (t.next) {
-      if (noteTool) names.push(sizeNameOf((styles as { noteSize?: number }).noteSize ?? NOTE_SIDE.m, NOTE_SIDE))
+      if (noteTool)
+        names.push(sizeNameOf((styles as { noteSize?: number }).noteSize ?? NOTE_SIDE.m, NOTE_SIDE))
       else if (textTool) names.push(sizeNameOf(styles.fontSize, TEXT_SIZE))
       else names.push(sizeNameOf((styles as { strokeWidth?: number }).strokeWidth, NEXT_STROKE_WIDTH))
     } else

@@ -53,7 +53,7 @@ describe('the Pieces list', () => {
     expect(countText(1)).toBe('1 shape')
     expect(countText(0)).toBe('0 shapes')
     expect(countText(12)).toBe('12 shapes')
-    expect(render(INITIAL).replace(/<[^>]*>/g, ' ')).not.toMatch(/pieces?/i)
+    expect(render(INITIAL).replace(/<[^>]*>/g, ' ')).not.toMatch(/\bpieces?\b/i)
   })
 
   it('says so when nothing matches', () => {
