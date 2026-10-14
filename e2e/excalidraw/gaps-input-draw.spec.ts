@@ -90,6 +90,9 @@ test('drawing with the real pointer: R, O and P strokes and the line from More e
   let ellipse: CanvasElement
   await test.step('O: an ellipse by drag', async () => {
     const before = await ids(a.page)
+    // P-005: a letter typed on the rectangle just drawn (still selected) would label it: Escape lets it go first
+    await a.page.keyboard.press('Escape')
+    await expect.poll(() => selection(a.page)).toEqual([])
     await a.page.keyboard.press('o')
     await expect.poll(() => tool(a.page)).toBe('ellipse')
     await dragScene(a.page, { x: 420, y: 150 }, { x: 620, y: 270 })

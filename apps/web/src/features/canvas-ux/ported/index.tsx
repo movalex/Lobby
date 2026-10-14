@@ -45,6 +45,7 @@ import { StylePanel } from './StylePanel.tsx'
 import { anyMenuOpen, closeMenus, uxState } from './state.ts'
 import { Toolbar } from './Toolbar.tsx'
 import { toolLock } from './tool-lock.ts'
+import { installTypeToLabel } from './type-to-label.ts'
 
 const isModalOpen = (doc: Document) => doc.querySelector('dialog[open]') !== null
 
@@ -91,6 +92,8 @@ function mount(ctx: CanvasFeatureContext): () => void {
   // wave M (M1-3): the style panel and the bottom toolbar are chrome other popovers keep clear of
   cleanups.push(installChromeObstacles(doc))
   cleanups.push(installCanvasEvents(ctx))
+  // P-005: typing on the one selected shape labels it (the allowlist's lease flow)
+  cleanups.push(installTypeToLabel(ctx))
   cleanups.push(installChromeHistoryKeys(ctx))
   cleanups.push(installLockedHint(ctx))
   cleanups.push(installCopyGuard(ctx))

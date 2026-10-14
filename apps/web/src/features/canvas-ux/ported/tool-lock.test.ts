@@ -33,6 +33,8 @@ function fake(opts: {
     selection: opts.selection ?? [],
     get: (id: string) => (opts.types?.[id] ? { id, type: opts.types[id] } : undefined),
     readOnly: () => opts.readOnly ?? false,
+    editingId: () => null,
+    isLocked: () => false,
     tool: () => tool,
     setTool: (t: string) => {
       tool = t
@@ -90,13 +92,15 @@ describe('setToolLock', () => {
 })
 
 describe('the Q key', () => {
-  it('turns the lock on with nothing or a shape selected', () => {
+  it('turns the lock on with nothing, an image or a drawing selected', () => {
     expect(lockKey).toBeDefined()
     expect(lockKey?.match?.(q, fake({}).ctx)).toBe(true)
-    expect(lockKey?.match?.(q, fake({ selection: ['r'], types: { r: 'rectangle' } }).ctx)).toBe(true)
+    expect(lockKey?.match?.(q, fake({ selection: ['i'], types: { i: 'image' } }).ctx)).toBe(true)
+    expect(lockKey?.match?.(q, fake({ selection: ['d'], types: { d: 'freedraw' } }).ctx)).toBe(true)
   })
-  it('steps aside for type-to-edit on one selected note, a feature’s type-to-edit rule, a read-only role and Shift', () => {
+  it('steps aside for type-to-edit on one selected note or shape (P-005), a feature’s type-to-edit rule, a read-only role and Shift', () => {
     expect(lockKey?.match?.(q, fake({ selection: ['n'], types: { n: 'stickynote' } }).ctx)).toBe(false)
+    expect(lockKey?.match?.(q, fake({ selection: ['r'], types: { r: 'rectangle' } }).ctx)).toBe(false)
     const topic = fake({ selection: ['t'], types: { t: 'rectangle' } })
     topic.registries.typeToEdit.register({ id: 'mindmap', applies: (id) => id === 't', start: () => true })
     expect(lockKey?.match?.(q, topic.ctx)).toBe(false)

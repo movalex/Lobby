@@ -261,3 +261,28 @@ describe('the key context', () => {
     )
   })
 })
+
+describe('a type-to-edit rule that leaves the edit to the lease flow (P-005: a shape’s label)', () => {
+  const key = { key: 'S', code: 'KeyS', shiftKey: true } as KeyboardEvent
+  const run = (t: ReturnType<typeof setup>, action: string) =>
+    (t.input as unknown as { runAction(a: string, e: KeyboardEvent): void }).runAction(action, key)
+
+  it('asks for the lease on the selected element, with the key as the first one typed', () => {
+    const t = setup({ selected: ['i1'] })
+    const start = vi.fn(() => false)
+    ;(t.input.opts as { typeToEdit?: unknown }).typeToEdit = { applies: () => true, start }
+    run(t, 'typeToEdit')
+    expect(start).toHaveBeenCalledWith('i1', 'S')
+    expect(t.requestEdit).toHaveBeenCalledWith('i1', {
+      reason: 'P2-type',
+      caretEnd: true,
+      firstKey: { key: 'S', code: 'KeyS', shiftKey: true },
+    })
+  })
+
+  it('a rule that starts the edit itself asks for no lease here', () => {
+    const t = setup({ selected: ['i1'], typeToEdit: true })
+    run(t, 'typeToEdit')
+    expect(t.requestEdit).not.toHaveBeenCalled()
+  })
+})

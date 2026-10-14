@@ -13,6 +13,7 @@ import type {
   WheelPreference,
   ZoomLimits,
 } from '../../../../canvas/api/index.ts'
+import { typesOnKey } from '../type-to-label.ts'
 import { contentBounds } from './camera.ts'
 
 const ANIMATE = { animate: true } as const
@@ -420,11 +421,10 @@ export function zoomToSelection(canvas: LobbyCanvas) {
 }
 
 /**
- * The single unlocked note a printable key types into (type-to-edit, COL-04): a navigation key that is a
- * printable character (M, =, -, Shift+1…) leaves it to type-to-edit then, as on the tldraw board.
+ * The single unlocked note (or plain shape, P-005) a printable key types into (type-to-edit, COL-04): a navigation
+ * key that is a printable character (M, =, -, Shift+1…) leaves it to type-to-edit then, as on the tldraw board.
  */
 export function typeToEditTarget(canvas: LobbyCanvas): boolean {
-  if (canvas.readOnly() || canvas.editingId() !== null || canvas.selection.length !== 1) return false
-  const el = canvas.get(canvas.selection[0] as string)
-  return !!el && el.type === 'stickynote' && !canvas.isLocked(el.id)
+  // P-005: a plain shape takes the keys too (its label)
+  return typesOnKey(canvas)
 }

@@ -78,6 +78,8 @@ test('zoom keys: Ctrl+0 = 100% (browser zoom untouched), Alt+1 fits all, Alt+2 g
   })
 
   await test.step('Shift+1 fits too, and Ctrl+= / Ctrl+- step the zoom', async () => {
+    // (with nothing selected: on one selected shape, ! and - are letters for its label, P-005)
+    await select(a.page, [])
     await setView(a.page, { x: -20_000, y: -20_000, zoom: 1 })
     await a.page.keyboard.press('Shift+1')
     await expect.poll(() => inView(a.page, [R1, R2, FAR] as string[])).toBe(true)
