@@ -3,8 +3,9 @@
 // request (./refine.ts), and name the removed items for editors. Read-only: it asks the scene and the api and writes
 // nothing; the highlights are an overlay. Every optional step that fails or takes too long leaves the timestamps' answer.
 import type { VisitAnswer } from '@draftroom/contracts'
-import { type RemovedItem, type VisitChanges, type VisitElement, whatChanged } from './model.ts'
+import { finish, type RemovedItem, type VisitChanges, type VisitElement, whatChanged } from './model.ts'
 import { MAX_DIFF_ELEMENTS, refineWithCheckpoint } from './refine.ts'
+import type { DeletedInfo } from './sources.ts'
 
 /** How long the chip waits for a checkpoint to sharpen the counts before it shows the timestamps' answer. */
 export const REFINE_WAIT_MS = 2_000
@@ -17,10 +18,12 @@ export interface HighlightDeps {
   /** every deleted element the scene holds (the engine's elements that are deleted) */
   tombstones(): Iterable<VisitElement>
   isHidden?(id: string): boolean
+  /** the viewing person's user id (P-006): what they made, edited or deleted themselves is not "since you were here" */
+  me?: string
   /** the elements of the checkpoint before the visit (../visits/sources.ts), or null; absent: no refinement */
   checkpointElements?(seenAt: number, signal: AbortSignal): Promise<readonly unknown[] | null>
-  /** names for the removed items (editors with an account), or null; absent: counts only */
-  removedNames?(signal: AbortSignal): Promise<ReadonlyMap<string, string> | null>
+  /** names (and deleters) for the removed items (editors with an account), or null; absent: counts only */
+  removedNames?(signal: AbortSignal): Promise<ReadonlyMap<string, DeletedInfo> | null>
   /** a timer, so a test can run without waiting */
   after?(ms: number): Promise<'timeout'>
   /** the refine wait, ms */
@@ -55,6 +58,7 @@ export async function computeHighlights(
     live,
     tombstones,
     ...(deps.isHidden ? { isHidden: deps.isHidden } : {}),
+    ...(deps.me ? { me: deps.me } : {}),
   }
   let changes = whatChanged(input)
   if (!changes || changes.total === 0) return null
@@ -88,15 +92,25 @@ export async function computeHighlights(
   if (changes.removed.length && deps.removedNames) {
     const names = await deps.removedNames(signal).catch(() => null)
     if (signal.aborted) return null
-    if (names) changes = withNames(changes, names)
+    if (names) changes = withNames(changes, names, deps.me)
+    if (changes.total === 0) return null
   }
   return { changes, refined }
 }
 
-function withNames(changes: VisitChanges, names: ReadonlyMap<string, string>): VisitChanges {
-  const removed: RemovedItem[] = changes.removed.map((r) => {
-    const name = r.name ?? names.get(r.id)
-    return name ? { ...r, name } : r
-  })
-  return { ...changes, removed }
+/** The removed items with their names; the ones the viewer deleted themselves (P-006) are left out. */
+function withNames(
+  changes: VisitChanges,
+  names: ReadonlyMap<string, DeletedInfo>,
+  me: string | undefined,
+): VisitChanges {
+  const removed: RemovedItem[] = []
+  for (const r of changes.removed) {
+    const known = names.get(r.id)
+    if (me && known?.by === me) continue
+    const name = r.name ?? known?.name
+    removed.push(name ? { ...r, name } : r)
+  }
+  if (removed.length === changes.removed.length) return { ...changes, removed }
+  return finish(changes.seenAt, changes.added, changes.changed, removed, changes.derived, changes.refinable)
 }

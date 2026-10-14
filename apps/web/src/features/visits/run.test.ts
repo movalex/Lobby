@@ -41,6 +41,7 @@ function deps(over: Over = {}) {
     live: () => over.live ?? [],
     tombstones: () => over.tombstones ?? [],
     ...(over.isHidden ? { isHidden: over.isHidden } : {}),
+    ...(over.me ? { me: over.me } : {}),
     ...(over.checkpointElements
       ? {
           checkpointElements: (...a) => {
@@ -260,7 +261,7 @@ describe('computeHighlights', () => {
   it('names the removed for editors from "Recently deleted"; a checkpoint’s name is kept; no names is a count', async () => {
     const { d, calls } = deps({
       tombstones: [tomb('a', 'stickynote', AFTER), tomb('b', 'rectangle', AFTER + 1)],
-      removedNames: async () => new Map([['a', 'Note “Budget”']]),
+      removedNames: async () => new Map([['a', { name: 'Note “Budget”', by: 'usr_them' }]]),
     })
     const found = await computeHighlights(d, answer(), signal())
     expect(calls.names).toBe(1)
@@ -276,6 +277,49 @@ describe('computeHighlights', () => {
     expect((await computeHighlights(refused.d, answer(), signal()))?.changes.removed).toEqual([
       { id: 'a', type: 'stickynote' },
     ])
+  })
+
+  it('P-006: what I deleted myself is not "removed" (the list says who deleted it); the rest still is', async () => {
+    const { d } = deps({
+      me: 'usr_me',
+      tombstones: [
+        tomb('mine', 'stickynote', AFTER),
+        tomb('theirs', 'stickynote', AFTER + 1),
+        tomb('x', 'rectangle', AFTER + 2),
+      ],
+      removedNames: async () =>
+        new Map([
+          ['mine', { name: 'Note “Mine”', by: 'usr_me' }],
+          ['theirs', { name: 'Note “Theirs”', by: 'usr_them' }],
+        ]),
+    })
+    const found = await computeHighlights(d, answer(), signal())
+    // 'x' is not on the list (it was beyond its cap, say): it stays, as a count
+    expect(found?.changes.removed).toEqual([
+      { id: 'theirs', type: 'stickynote', name: 'Note “Theirs”' },
+      { id: 'x', type: 'rectangle' },
+    ])
+    expect(found?.changes.counts.removed).toBe(2)
+  })
+
+  it('P-006: when everything that changed was mine there is nothing to show', async () => {
+    const { d } = deps({
+      me: 'usr_me',
+      tombstones: [tomb('mine', 'stickynote', AFTER)],
+      removedNames: async () => new Map([['mine', { name: 'Note “Mine”', by: 'usr_me' }]]),
+    })
+    expect(await computeHighlights(d, answer(), signal())).toBeNull()
+  })
+
+  it('P-006: the scene’s elements I made are filtered with me', async () => {
+    const madeBy = (uid: string) => ({
+      updated: AFTER,
+      customData: { lobbyServer: { createdAt: AFTER, createdBy: { uid, name: uid, guest: false } } },
+    })
+    const mine = el('mine', 'stickynote', madeBy('usr_me'))
+    const theirs = el('theirs', 'stickynote', madeBy('usr_them'))
+    const { d } = deps({ me: 'usr_me', live: [mine, theirs] })
+    expect((await computeHighlights(d, answer(), signal()))?.changes.added).toEqual(['theirs'])
   })
 
   it('what the scene hides is left out', async () => {
@@ -324,7 +368,7 @@ describe('the optional reads', () => {
       } as never,
       'b-1',
     )
-    expect(names?.get('abc')).toBe('Note “Budget”')
+    expect(names?.get('abc')).toEqual({ name: 'Note “Budget”', by: 'u' })
     expect(
       await deletedNames(
         {
