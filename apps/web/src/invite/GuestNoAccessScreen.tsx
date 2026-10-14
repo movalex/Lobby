@@ -46,7 +46,7 @@ export function GuestNoAccessScreen({ revoked }: { revoked: boolean }) {
   }
 
   // DANA2-07: a revoked guest reads the guest-ended screen's message word for word (that screen
-  // follows within seconds), with no button that leads nowhere: no "Go to your boards" (they have
+  // follows within seconds), with no button that leads nowhere: no "Back to your boards" (they have
   // none left), and signing in with an account as a quiet link.
   if (revoked)
     return (
@@ -75,7 +75,7 @@ export function GuestNoAccessScreen({ revoked }: { revoked: boolean }) {
       actions={
         <>
           <a className="dr-btn dr-btn--primary" href="/" onClick={linkClick('/')}>
-            Go to your boards
+            Back to your boards
           </a>
           <button type="button" className="dr-btn" data-testid="guest-no-access-signin" onClick={signIn}>
             Sign in with an account

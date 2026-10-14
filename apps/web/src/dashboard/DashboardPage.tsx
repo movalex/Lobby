@@ -32,6 +32,7 @@ import { BoardDetailsDialog, DuplicateBoardDialog, MoveBoardDialog } from './Boa
 import { CreateBoardDialog } from './CreateBoardDialog.tsx'
 import { DashboardBell, useDashboardInbox } from './DashboardBell.tsx'
 import { dashboardApi, IMPORT_BODY_LIMIT_BYTES } from './dashboard-api.ts'
+import { HelpMenu } from './HelpMenu.tsx'
 import { useInternalOnly } from './InternalOnly.tsx'
 import { internalOnlyShown } from './internal-only-model.ts'
 import { LazyDialogBoundary } from './LazyDialogBoundary.tsx'
@@ -63,7 +64,7 @@ import { newsByBoard } from './notifications.ts'
 import {
   readPickerHidden,
   readViewMode,
-  readWhatsNewDismissed,
+  readWhatsNewSeen,
   type ViewMode,
   writeViewMode,
   writeWhatsNewDismissed,
@@ -78,12 +79,14 @@ import { SampleBoardButton } from './TemplateGallery.tsx'
 import type { CatalogEntry } from './template-catalog.ts'
 import { newBoardPath } from './template-paths.ts'
 import { useCatalog, whenIdle } from './use-catalog.ts'
+import { WelcomeCard } from './Welcome.tsx'
 import { WhatsNewCard } from './WhatsNew.tsx'
+import { isApplePlatform } from './welcome.ts'
 import {
+  introCard,
   NO_PLACE_TO_TRY,
   planBoardTry,
   planHintTry,
-  showWhatsNew,
   type TryAction,
   type TryKey,
   unavailableTries,
@@ -189,8 +192,10 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   const canCreateNow = useRef(canCreate)
   canCreateNow.current = canCreate
   const { mod: catalogMod } = useCatalog(catalogWanted)
-  // K4-5: the What's new card is dismissed per person (their browser's storage, which may be missing)
-  const [whatsNewGone, setWhatsNewGone] = useState(() => readWhatsNewDismissed(me.user.id, WHATS_NEW_VERSION))
+  // K4-5, wave P: which release of the What's new card this person last saw (their browser's storage, which may be
+  // missing). No record at all is a first visit: the Welcome card, not a changelog (P-002).
+  const [seenRelease, setSeenRelease] = useState(() => readWhatsNewSeen(me.user.id))
+  const welcomeFirst = seenRelease === null && !guest && section.kind === 'recent'
   const [now, setNow] = useState(() => new Date())
   // PRI-05a: what is new, without opening each board (the board bell's inbox).
   const inbox = useDashboardInbox()
@@ -200,13 +205,16 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   // template catalog for its thumbnails (a guest, an outside account, the All / Archived / Trash / project
   // views and a search in progress never pay for the chunk). It is fetched once the page is idle, so the
   // dashboard's first paint never waits for the template builders.
-  const startRowShown = showStartRow({
-    canCreate,
-    guest,
-    section,
-    searching: query.trim().length > 0,
-    pickerHidden: readPickerHidden(me.user.id),
-  })
+  // The Welcome card has the three starts, so a first visit does not also get the row of twelve (P-009).
+  const startRowShown =
+    !welcomeFirst &&
+    showStartRow({
+      canCreate,
+      guest,
+      section,
+      searching: query.trim().length > 0,
+      pickerHidden: readPickerHidden(me.user.id),
+    })
   useEffect(() => (startRowShown ? whenIdle(() => setCatalogWanted(true)) : undefined), [startRowShown])
 
   // K4-5: "Try it" on the row's item: the row is shown (a search was cleared for it) and its first tile
@@ -343,12 +351,14 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
     startRow: startRowForCard,
     items: newItems,
   })
-  const whatsNewShown = showWhatsNew({
-    items: newItems,
-    guest,
-    dismissed: whatsNewGone,
-    landing: section.kind === 'recent',
-  })
+  const intro = introCard({ seen: seenRelease, items: newItems, guest, landing: section.kind === 'recent' })
+  const whatsNewShown = intro === 'whats-new'
+  const welcomeShown = intro === 'welcome'
+  // Whatever card they saw is remembered at this release: neither shows again until the next one
+  const rememberIntro = () => {
+    writeWhatsNewDismissed(me.user.id, WHATS_NEW_VERSION)
+    setSeenRelease(WHATS_NEW_VERSION)
+  }
   const menu = { canCreate, canMove: inWorkspace }
   const defaultProjectId = section.kind === 'project' ? section.projectId : null
 
@@ -449,7 +459,19 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   const createProject = async (name: string) => {
     const p = await api.createProject(workspace.id, name)
     projects.update((list) => [...list, p])
-    navigate(workspacePath(workspace.id, { kind: 'project', projectId: p.id }))
+    // Stay where they are (P-045: it jumped into the empty project, so moving a board there needed a trip back to
+    // All boards): the lobby is in the sidebar and in Move to…, and the notice offers to open it.
+    notify({
+      key: `project:${p.id}`,
+      text: `Project lobby “${p.name}” created`,
+      testId: 'dashboard-toast',
+      timeoutMs: 8000,
+      action: {
+        label: 'Open it',
+        testId: 'project-open-new',
+        onClick: () => navigate(workspacePath(workspace.id, { kind: 'project', projectId: p.id })),
+      },
+    })
   }
   const renameProject = async (project: Project, name: string) => {
     try {
@@ -497,7 +519,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
     setStarting(choice)
     try {
       const board = await api.createBoard(workspace.id, {
-        title: startTitle(entry),
+        title: startTitle(entry, choice),
         projectId: defaultProjectId,
       })
       navigate(newBoardPath(board.id, choice === 'blank' ? null : choice))
@@ -599,7 +621,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
         err instanceof Error && err.message === 'not-json'
           ? 'That file is not a Lobby board export (.json).'
           : isApiError(err) && err.kind === 'not-found'
-            ? 'Importing is not available on this server yet.'
+            ? 'Importing is not available on this server.'
             : isApiError(err)
               ? err.message
               : 'The board could not be imported.'
@@ -696,6 +718,11 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
             />
           </div>
           <div className="dr-dash__spacer" />
+          <HelpMenu
+            canTour={canCreate}
+            onTour={() => void startFromRow('lobby-tour', null)}
+            onFeedback={() => openFeedback(null)}
+          />
           <DashboardBell {...inbox} />
           <UserMenu />
         </header>
@@ -878,6 +905,22 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
           />
         )}
 
+        {welcomeShown && (
+          <WelcomeCard
+            canCreate={canCreate}
+            pending={starting}
+            apple={isApplePlatform()}
+            onStart={(choice) => {
+              rememberIntro()
+              void startFromRow(choice, null)
+            }}
+            onMoreTemplates={() => {
+              if (canCreate) setCreating(true)
+            }}
+            onDismiss={rememberIntro}
+          />
+        )}
+
         {whatsNewShown && (
           <WhatsNewCard
             items={newItems}
@@ -886,10 +929,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
             unavailableReason={boards.status === 'ready' ? NO_PLACE_TO_TRY : undefined}
             onTry={tryNew}
             onTellUs={() => openFeedback(null)}
-            onDismiss={() => {
-              writeWhatsNewDismissed(me.user.id, WHATS_NEW_VERSION)
-              setWhatsNewGone(true)
-            }}
+            onDismiss={rememberIntro}
           />
         )}
 
@@ -928,7 +968,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
         )}
         {boards.status === 'ready' && visible.length === 0 && !contentSearching && (
           <div className="dr-empty" data-testid="dashboard-empty">
-            <EmptyArt />
+            <EmptyArt kind={section.kind} />
             <h2 className="dr-empty__title">{empty.title}</h2>
             <p className="dr-muted">
               {owner !== 'anyone' && !query ? 'No boards match the owner filter.' : empty.body}
@@ -1072,7 +1112,9 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   )
 }
 
-function EmptyArt() {
+function EmptyArt({ kind }: { kind: DashboardSection['kind'] }) {
+  // P-033: the empty Trash is a bin, not the "make a note" picture
+  if (kind === 'trash') return <TrashArt />
   return (
     <svg className="dr-empty__art" viewBox="0 0 120 80" aria-hidden="true">
       <rect
@@ -1106,6 +1148,32 @@ function EmptyArt() {
         transform="rotate(4 66 42)"
       />
       <path d="M86 40h14M93 33v14" stroke="var(--dr-navy)" strokeWidth="2.4" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function TrashArt() {
+  return (
+    <svg className="dr-empty__art" data-testid="empty-art-trash" viewBox="0 0 120 80" aria-hidden="true">
+      <rect
+        x="6"
+        y="8"
+        width="108"
+        height="64"
+        rx="8"
+        fill="var(--dr-surface)"
+        stroke="var(--dr-line-strong)"
+        strokeDasharray="4 4"
+      />
+      <path
+        d="M46 30h28l-2.2 28a3 3 0 0 1-3 2.8H51.2a3 3 0 0 1-3-2.8zM42 30h36M54 30v-4h12v4"
+        fill="none"
+        stroke="var(--dr-navy)"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M56 37v16M64 37v16" stroke="var(--dr-line-strong)" strokeWidth="2.2" strokeLinecap="round" />
     </svg>
   )
 }

@@ -63,7 +63,7 @@ function ClerkExchange({ onDone, appearance }: { onDone(): void; appearance: Cle
         if (await refresh()) {
           signedOutMarks.clear()
           onDone()
-        } else setError({ message: 'Signed in with Clerk, but Lobby did not start a session.', retry: true })
+        } else setError({ message: 'Signed in, but Lobby did not start a session.', retry: true })
       } catch (e) {
         // Domain access: ACCOUNT_DISABLED (no retry) and IDENTITY_UNAVAILABLE (retry) have their words.
         setError(exchangeErrorView(isApiError(e) ? e : null))

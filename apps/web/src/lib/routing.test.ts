@@ -51,6 +51,14 @@ describe('matchRoute', () => {
     expect(matchRoute('/b/..%2Fetc').name).toBe('invalid-board')
   })
 
+  it('P-019: an address that cannot be one of Lobby’s board ids is not a board to ask access to', () => {
+    expect(matchRoute('/b/not-a-board')).toEqual({ name: 'invalid-board', raw: 'not-a-board' })
+    expect(matchRoute('/b/abc')).toEqual({ name: 'invalid-board', raw: 'abc' })
+    expect(matchRoute('/b/b-3k9x0q2m7a').name).toBe('board')
+    // a well-formed id of a board that is gone cannot be told from one they lack access to: the api answers alike
+    expect(matchRoute('/b/b-zzzzzzzzzz').name).toBe('board')
+  })
+
   it('treats malformed workspace/project ids and unknown paths as not found', () => {
     for (const p of [
       '/w/not-a-workspace',

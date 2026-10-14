@@ -448,7 +448,7 @@ describe('invite by email', () => {
     expect(emailInviteHint(true)).toBe(
       'We email them an invitation to this board that works only for that address. People who already use Lobby get access right away.',
     )
-    expect(emailInviteHint(false)).toContain('needs Clerk sign-in')
+    expect(emailInviteHint(false)).toContain('needs a Lobby account')
     // Domain access: every invitation to an address works only for that address.
     expect(emailInviteHint(false)).toContain('works only for that address')
     // The @handle field keeps its link-only wording on a server that cannot email.
@@ -502,7 +502,7 @@ describe('invite by email', () => {
 
   it('no email went out: the link to copy, and why, for every reason', () => {
     const reasons = {
-      email_not_configured: 'This server can’t send email: that needs Clerk sign-in.',
+      email_not_configured: 'This server can’t send email: that needs a Lobby account.',
       existing_account: 'pat@client.example has a sign-in account but hasn’t opened Lobby yet',
       invalid_email: 'The email service didn’t accept pat@client.example.',
       rate_limited: 'The email service is limiting invitations right now.',

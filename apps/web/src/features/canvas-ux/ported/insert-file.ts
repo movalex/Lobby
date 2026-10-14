@@ -45,7 +45,7 @@ export async function insertFiles(ctx: CanvasFeatureContext, files: readonly Fil
       tone: 'error',
       text:
         e instanceof NotImplementedError
-          ? 'Adding files is not available on this canvas yet.'
+          ? 'Adding files is not available on this canvas.'
           : 'The files could not be added to this board.',
       testId: 'insert-file-error',
     })

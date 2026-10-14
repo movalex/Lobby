@@ -129,7 +129,7 @@ describe('withoutElements', () => {
 
 describe('notices', () => {
   it('say how many files were left out and why', () => {
-    expect(filesLeftOutNotice(1)).toMatch(/^One image or file was left out .* another board .* Upload it/)
+    expect(filesLeftOutNotice(1)).toMatch(/^One image or file was left out .* another board. Upload it/)
     expect(filesLeftOutNotice(3)).toMatch(/^3 images or files were left out .* Upload them/)
   })
 

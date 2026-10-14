@@ -14,7 +14,7 @@ export const feature: CanvasFeature = {
   panels: [
     {
       id: PANEL_ID,
-      label: 'Pieces',
+      label: 'Shapes',
       icon: PiecesIcon,
       order: 35,
       // inserting is editing: viewers, commenters and archived boards get no panel

@@ -27,6 +27,8 @@ const PROJECT_ID_RE = /^prj_[0-9A-Za-z]{10,40}$/
 const MAX_TOKEN = 512
 
 export const isBoardId = (v: unknown): v is string => typeof v === 'string' && BOARD_ID_RE.test(v)
+/** Lobby's api makes every board id as b- and letters or digits; anything else after /b/ is not one of its boards. */
+const LOBBY_BOARD_ID_RE = /^b-[a-z0-9]{6,62}$/
 export const isWorkspaceId = (v: unknown): v is string => typeof v === 'string' && WORKSPACE_ID_RE.test(v)
 
 function decode(segment: string): string | null {
@@ -49,7 +51,9 @@ export function matchRoute(pathname: string): Route {
   if (head === 'b' && a !== undefined && parts.length === 2) {
     const raw = decode(a)
     if (raw === null) return { name: 'invalid-board', raw: a }
-    return isBoardId(raw) ? { name: 'board', boardId: raw } : { name: 'invalid-board', raw }
+    return isBoardId(raw) && LOBBY_BOARD_ID_RE.test(raw)
+      ? { name: 'board', boardId: raw }
+      : { name: 'invalid-board', raw }
   }
 
   if (head === 'invite' && a !== undefined && parts.length === 2) {

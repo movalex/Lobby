@@ -230,7 +230,7 @@ export function InvitePage({ token }: { token: string }) {
             href="/"
             onClick={linkClick('/')}
           >
-            Go to your boards
+            Back to your boards
           </a>
         )}
       </>

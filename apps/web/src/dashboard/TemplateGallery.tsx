@@ -17,6 +17,7 @@ import { boardPath, matchRoute, navigate } from '../lib/routing.ts'
 import { countUsage } from '../lib/usage.ts'
 import { createSampleBoard } from './sample-board.ts'
 import type { CatalogEntry, TemplateCategory, TemplateId, TemplatePreview } from './template-catalog.ts'
+import { thumbWindow, touches } from './template-thumb.ts'
 import { useCatalog } from './use-catalog.ts'
 import './template-gallery.css'
 
@@ -401,16 +402,18 @@ export function SampleBoardButton({
 
 /** Frames as labelled sections, notes as coloured squares, boxes and text lines inside them. */
 export function TemplateThumb({ preview }: { preview: TemplatePreview }) {
-  const { bounds } = preview
-  // Stroke widths and corner radii follow the template's size. A strip wider than 3:1 (the six-frame
-  // tour) is sized by its height instead, or its outlines would be as thick as its frames are tall.
-  const size = Math.min(Math.max(bounds.w, bounds.h), bounds.h * 3)
+  // A strip wider than 3:1 (the six-frame tour) shows its first frame (thumbWindow), and nothing outside it is drawn.
+  // Stroke widths and corner radii follow the size of what is shown.
+  const bounds = thumbWindow(preview)
+  const size = Math.max(bounds.w, bounds.h)
   const pad = size * 0.03
   const view = `${bounds.x - pad} ${bounds.y - pad} ${bounds.w + pad * 2} ${bounds.h + pad * 2}`
   const unit = size / 160
+  const frames = preview.frames.filter((f) => touches(f, bounds))
+  const items = preview.items.filter((it) => touches(it, bounds))
   return (
     <svg viewBox={view} preserveAspectRatio="xMidYMid meet" className="dr-tthumb" aria-hidden="true">
-      {preview.frames.map((f) => (
+      {frames.map((f) => (
         <g key={`${f.x},${f.y},${f.name}`}>
           <rect
             x={f.x}
@@ -424,7 +427,7 @@ export function TemplateThumb({ preview }: { preview: TemplatePreview }) {
           />
         </g>
       ))}
-      {preview.items.map((it, i) =>
+      {items.map((it, i) =>
         it.kind === 'note' || it.kind === 'swatch' ? (
           <rect key={i} x={it.x} y={it.y} width={it.w} height={it.h} rx={unit} fill={it.color} />
         ) : it.kind === 'box' ? (

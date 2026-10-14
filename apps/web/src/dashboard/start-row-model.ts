@@ -71,7 +71,12 @@ export function showStartRow(input: {
   return startRowOffered(input) && input.section.kind === 'recent' && !input.searching
 }
 
-/** The title a board made from a tile starts with: the template's name, or "Untitled board". */
-export function startTitle(entry: Pick<CatalogEntry, 'name'> | null): string {
-  return entry?.name ?? 'Untitled board'
+/**
+ * The title a board made from a tile starts with: the template's name, or "Untitled board". Before the catalog has
+ * loaded (the Welcome card and the Help menu start a template without it) the tile's own name stands in.
+ */
+export function startTitle(entry: Pick<CatalogEntry, 'name'> | null, choice?: StartChoice): string {
+  if (entry) return entry.name
+  if (choice === 'blank') return 'Untitled board'
+  return START_TILES.find((t) => t.choice === choice)?.name ?? 'Untitled board'
 }

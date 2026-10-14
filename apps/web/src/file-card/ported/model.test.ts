@@ -4,6 +4,7 @@ import type { CanvasElement } from '../../canvas/api/index.ts'
 import {
   CARD_RADIUS,
   CARD_ROUNDNESS,
+  type CardView,
   cardViewOf,
   cornerRadiusOf,
   displaySizeFromHeader,
@@ -13,6 +14,8 @@ import {
   fileItemKind,
   imageSizeFromHeader,
   pageOfFileId,
+  PREVIEW_SLOW_MS,
+  previewStateText,
   thumbSizeOf,
 } from './model.ts'
 
@@ -29,6 +32,30 @@ const facts = (kind: string, extra: Record<string, unknown> = {}) => ({
 })
 const el = (fileId: string, file: unknown, type = 'image'): CanvasElement =>
   ({ id: 'e1', type, fileId, customData: { lobby: { file } }, x: 0, y: 0, width: 10, height: 10 }) as never
+
+describe('what a card without its picture says (wave P)', () => {
+  const state = (status: CardView['status'], over: Partial<CardView> = {}) => ({ status, missing: false, ...over })
+
+  it('says Queued, Generating and Loading while it waits, as before', () => {
+    expect(previewStateText(state('queued'), false, true)).toBe('Queued for preview…')
+    expect(previewStateText(state('processing'), false, true)).toBe('Generating preview…')
+    expect(previewStateText(state('loading'), false, true)).toBe('Loading preview…')
+  })
+
+  it('after the wait it says the preview is taking longer and the file can still be downloaded', () => {
+    expect(PREVIEW_SLOW_MS).toBe(120_000)
+    const slow = 'Preview is taking longer than usual; you can still download the file.'
+    expect(previewStateText(state('queued'), true, true)).toBe(slow)
+    expect(previewStateText(state('processing'), true, true)).toBe(slow)
+    // downloads turned off on this board: no promise of a download
+    expect(previewStateText(state('queued'), true, false)).toBe('Preview is taking longer than usual.')
+  })
+
+  it('a card whose file is missing keeps saying so, slow or not; "loading" never says slow', () => {
+    expect(previewStateText(state('queued', { missing: true }), true, true)).toBe('Preview unavailable')
+    expect(previewStateText(state('loading'), true, true)).toBe('Loading preview…')
+  })
+})
 
 describe('file facts and kinds', () => {
   it('reads well-formed facts only', () => {

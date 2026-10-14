@@ -287,6 +287,49 @@ describe('menus', () => {
   })
 })
 
+// P-027: what a phone's board menu leaves out (no keyboard to list shortcuts for, no mouse wheel to set)
+describe('the board menu on a phone', () => {
+  const withWidth = <T>(phone: boolean, run: () => T): T => {
+    const g = globalThis as { window?: unknown }
+    const before = Object.getOwnPropertyDescriptor(g, 'window')
+    Object.defineProperty(g, 'window', {
+      configurable: true,
+      value: { matchMedia: (q: string) => ({ matches: phone && q === '(max-width: 600px)' }) },
+    })
+    try {
+      return run()
+    } finally {
+      if (before) Object.defineProperty(g, 'window', before)
+      else Reflect.deleteProperty(g, 'window')
+    }
+  }
+  const idsOf = (phone: boolean) =>
+    withWidth(phone, () => {
+      const rows = mainMenuRows(ctxWith())
+      const prefs = rows
+        .flat()
+        .find((r) => r.id === 'preferences')
+        ?.submenu?.flat()
+        .map((r) => r.id)
+      return { top: rows.flat().map((r) => r.id), prefs }
+    })
+
+  it('has no Keyboard shortcuts row and no Input device, but keeps Preferences and Send feedback', () => {
+    const phone = idsOf(true)
+    expect(phone.top).toContain('preferences')
+    expect(phone.top).toContain('feedback')
+    expect(phone.top).not.toContain('keyboard-shortcuts')
+    expect(phone.prefs).not.toContain('input-device')
+    expect(phone.prefs).toContain('toggle-grid')
+  })
+
+  it('a wider window keeps both', () => {
+    const wide = idsOf(false)
+    expect(wide.top).toContain('keyboard-shortcuts')
+    expect(wide.prefs).toContain('input-device')
+  })
+})
+
 // Wave J5: the Send feedback button, in the board menu for everybody (a viewer or a commenter has things to report).
 describe('the board menu’s Send feedback', () => {
   it('opens the feedback dialog for this board, enabled for every role, and gives the keyboard back to the board', () => {

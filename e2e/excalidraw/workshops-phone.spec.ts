@@ -226,7 +226,7 @@ test('R2 R3 R4 R5 R6 W5-07: guests take part but never facilitate; a brainstorm 
       await guest.getByTestId('pn-add').click()
       await expect(guest.getByTestId('pn-note-text')).toHaveText('Too many meetings mid-sprint')
       await shot(guest, 'lc-r2-guest-phone-writing.png', testInfo)
-      await guest.getByRole('button', { name: 'Close Private notes' }).click()
+      await guest.getByRole('button', { name: 'Close Private brainstorm' }).click()
       await expect(guest.getByTestId('pn-panel')).toHaveCount(0)
     })
 

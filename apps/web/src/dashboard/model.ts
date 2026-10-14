@@ -7,6 +7,7 @@ import {
   canCreateInWorkspace,
   type WorkspaceRole,
 } from '../lib/permissions.ts'
+import { formatRelativeTime } from '../lib/format.ts'
 import type { DashboardSection } from '../lib/routing.ts'
 import { CREATOR_DOMAINS, creatorDomainsInWords } from './creator-config.ts'
 
@@ -388,9 +389,9 @@ export function emptyState(
   }
 }
 
-/** DSH-03: what the Trash promises (no automatic purge exists yet, so nothing expires). */
+/** DSH-03: what the Trash promises (nothing is purged automatically, so nothing expires). */
 export const TRASH_NOTE =
-  'Deleted boards stay here, with all their content and files, until an owner restores them. Lobby does not empty the trash automatically yet.'
+  'Deleted boards stay here, with all their content and files, until an owner restores them. Nothing in the trash is deleted automatically.'
 
 // ---- owner filter (DSH-04) -----------------------------------------------------------------------
 
@@ -476,26 +477,46 @@ export function importedToast(created: {
   return `Imported “${created.board.title}”.${notes.length ? ` ${notes.join(' ')}` : ''}`
 }
 
+// ---- what a card says about time ------------------------------------------------------------------
+
+/** A board saved this soon after it was made was not edited by anyone: making it saved it (P-042). */
+const MADE_WINDOW_MS = 2_000
+
+/**
+ * The time line of a board's card: when it was trashed; "Created …" for a board nobody has changed since it was made
+ * (it used to say "Edited just now" for one nobody had touched); otherwise when it was last edited.
+ */
+export function boardWhen(
+  board: Pick<BoardWithRole, 'status' | 'trashedAt' | 'createdAt' | 'updatedAt'>,
+  now: Date,
+): string {
+  if (board.status === 'trashed') {
+    return `Trashed ${formatRelativeTime(board.trashedAt ?? board.updatedAt, now)}`
+  }
+  const made = Date.parse(board.createdAt)
+  const changed = Date.parse(board.updatedAt)
+  const neverEdited = Number.isFinite(made) && Number.isFinite(changed) && changed - made <= MADE_WINDOW_MS
+  const [word, at] = neverEdited ? ['Created', board.createdAt] : ['Edited', board.updatedAt]
+  return `${word} ${formatRelativeTime(at, now)}`
+}
+
 // ---- thumbnails ----------------------------------------------------------------------------------
 
 /** Paper-and-ink pairs that sit well next to the navy/amber brand. */
 const THUMB_PALETTES = [
-  { bg: '#e8eef7', ink: '#1f3a5f', note: '#f6c863' },
-  { bg: '#f6ecdf', ink: '#8a4b12', note: '#f0a53a' },
-  { bg: '#e4f1ea', ink: '#17663f', note: '#9ad3b0' },
-  { bg: '#efe8f7', ink: '#5b3cc4', note: '#f3b6c8' },
-  { bg: '#fbe9e7', ink: '#a3211a', note: '#fbd38d' },
-  { bg: '#e6f2f4', ink: '#0e7490', note: '#b9e2f0' },
-  { bg: '#f3f0e3', ink: '#6b5b12', note: '#e9d77a' },
-  { bg: '#eceff3', ink: '#334155', note: '#fda4af' },
+  { bg: '#e8eef7', ink: '#1f3a5f' },
+  { bg: '#f6ecdf', ink: '#8a4b12' },
+  { bg: '#e4f1ea', ink: '#17663f' },
+  { bg: '#efe8f7', ink: '#5b3cc4' },
+  { bg: '#fbe9e7', ink: '#a3211a' },
+  { bg: '#e6f2f4', ink: '#0e7490' },
+  { bg: '#f3f0e3', ink: '#6b5b12' },
+  { bg: '#eceff3', ink: '#334155' },
 ] as const
 
 export interface ThumbStyle {
   bg: string
   ink: string
-  note: string
-  /** 0..3: which of the placeholder compositions to draw. */
-  layout: number
 }
 
 function hash(s: string) {
@@ -511,7 +532,7 @@ function hash(s: string) {
 export function thumbStyle(boardId: string): ThumbStyle {
   const h = hash(boardId)
   const p = THUMB_PALETTES[h % THUMB_PALETTES.length] ?? THUMB_PALETTES[0]
-  return { ...p, layout: (h >>> 8) % 4 }
+  return { ...p }
 }
 
 // ---- workspaces ----------------------------------------------------------------------------------

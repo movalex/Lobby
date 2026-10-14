@@ -72,9 +72,9 @@ export async function runSignOut(steps: SignOutSteps): Promise<SignOutOutcome> {
         steps.marks.clear()
         return {
           status: 'unsupported',
-          title: 'Not available yet.',
+          title: 'Not available.',
           detail:
-            'Signing out of every device is not available on this server yet. Nothing was changed; use “Sign out” to end this session.',
+            'Signing out of every device is not available on this server. Nothing was changed; use “Sign out” to end this session.',
           retryable: false,
         }
       }

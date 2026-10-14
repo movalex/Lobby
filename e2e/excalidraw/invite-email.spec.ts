@@ -47,7 +47,7 @@ test('invite by email without Clerk: a wrong address is refused at the field, th
     await expect(section.getByLabel('Email address to invite')).toBeVisible()
     await expect(section.getByLabel('Role for the person you email')).toHaveValue('commenter')
     await expect(section.getByTestId('share-email-hint')).toHaveText(
-      'This server can’t send email (that needs Clerk sign-in): you get a one-time link that works only for that address, to send them instead.',
+      'This server can’t send email (that needs a Lobby account): you get a one-time link that works only for that address, to send them instead.',
     )
     await expect(section.getByTestId('share-email-submit')).toHaveText('Send invite')
   })
@@ -79,7 +79,7 @@ test('invite by email without Clerk: a wrong address is refused at the field, th
     await expect(result).toHaveAttribute('data-mode', 'link')
     await expect(result).toContainText('Couldn’t email — copy this link instead.')
     await expect(result).toContainText(
-      'This server can’t send email: that needs Clerk sign-in. Send the link to sam@client.example.test yourself.',
+      'This server can’t send email: that needs a Lobby account. Send the link to sam@client.example.test yourself.',
     )
     await expect(result).toContainText(
       'It works once, only for sam@client.example.test, as “Can view”, until',

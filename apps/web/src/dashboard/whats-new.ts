@@ -1,22 +1,20 @@
-// "What's new" (wave K, K4-5; wave L's card, wave M, M3-3): a dismissible card on the dashboard that says what changed and
-// where it went. Wave K moved controls (Internal only now sits behind the workspace tile, the board's top bar is calmer, a
-// phone starts with the Hand tool); wave L brought the command palette, Ask this board, Diagram from words, Time travel
-// and the live meeting's run of show, spotlight and vote results, and the card still described wave K to the returning
-// colleague (FTU-4). Three to five items, each with a "Try it" that goes to the thing; the card is remembered as
-// dismissed per person (prefs.ts) until a new version of it is published here. Pure data and rules; WhatsNew.tsx draws it.
-//
-// Every item is shown only to people it is true for, and its "Try it" goes to something that is there: wave L's items
-// land on a board they can edit with a `?try=<hint>` (features/command-palette/try-hints.ts: the board shows a coach mark
-// on the thing, once, and takes the parameter out of the address bar), or, for someone with no board to try it on, on the
-// Start row. The wave K items stay in this file's history; `WHATS_NEW_VERSION` resets everybody's "dismissed".
+// "What's new" (wave K, K4-5; wave L's card, wave M, M3-3; wave P): a dismissible card on the dashboard for people who have
+// been here before and says what changed since. A first visit gets the Welcome card instead (Welcome.tsx), never this
+// changelog (wave P, P-002). Each item is shown only to people it is true for; it may have a "Try it" that goes to
+// the thing: a wave L item's lands on a board they can edit with a `?try=<hint>` (features/command-palette/try-hints.ts:
+// the board shows a coach mark on the thing, once, and takes the parameter out of the address bar), or, for someone with
+// no board to try it on, on the Start row. Wave P's items describe things found in the board itself and have no
+// button: a button that does nothing visible is worse than none. The card is remembered as dismissed per person
+// (prefs.ts) until a new version of it is published here (`WHATS_NEW_VERSION` resets everybody's "dismissed").
+// Pure data and rules; WhatsNew.tsx draws it.
 
 import type { TryHint } from '../features/command-palette/try-hints.ts'
 import { type BoardRole, type BoardStatus, can } from '../lib/permissions.ts'
 
 /** Bump it when the card says something new: everybody sees it once more. */
-export const WHATS_NEW_VERSION = '2026-10-wave-l'
+export const WHATS_NEW_VERSION = '2026-10-wave-p'
 export const WHATS_NEW_MIN_ITEMS = 3
-export const WHATS_NEW_MAX_ITEMS = 5
+export const WHATS_NEW_MAX_ITEMS = 6
 
 /** "Try it" on a wave L item: a board they can edit, with a coach mark on the thing (see the header). */
 export interface BoardHintTry {
@@ -60,39 +58,46 @@ export interface WhatsNewItem {
 
 export const WHATS_NEW_ITEMS: readonly WhatsNewItem[] = [
   {
-    id: 'palette',
-    title: 'Ctrl+K: do it in words',
-    body: 'Search or do… in a board’s top bar (Ctrl+K) finds anything, and “make the yellow notes blue” just works.',
-    tryIt: hintTry('palette'),
+    id: 'vector-pdf',
+    title: 'Sharper PDF export',
+    body: 'Export a board or its frames as a PDF with selectable text and a bookmark for each frame.',
+    tryIt: null,
     for: 'everyone',
   },
   {
-    id: 'ask',
-    title: 'Ask this board / Wrap up',
-    body: 'Ask a question and get an answer with sources, or Wrap up a session into decisions and actions.',
-    tryIt: hintTry('ask'),
+    id: 'reactions',
+    title: 'Reactions on notes',
+    body: 'Point at a note and react with an emoji or a +1 instead of writing a comment.',
+    tryIt: null,
     for: 'everyone',
   },
   {
-    id: 'diagram',
-    title: 'Diagram from words and Mermaid paste',
-    body: 'Describe a process and get a flowchart, or paste a Mermaid diagram onto the board.',
-    tryIt: hintTry('diagram'),
+    id: 'board-links',
+    title: 'Links between boards',
+    body: 'Put a card on a board that opens another board; “Linked from” shows what points at this one.',
+    tryIt: null,
+    for: 'everyone',
+  },
+  {
+    id: 'since-visit',
+    title: 'What changed since your last visit',
+    body: 'Reopen a board and a chip tells you what other people added or changed while you were away.',
+    tryIt: null,
+    for: 'everyone',
+  },
+  {
+    id: 'capture',
+    title: 'Capture the room',
+    body: 'Turn a photo of a whiteboard, or a meeting transcript, into notes on the board.',
+    tryIt: null,
     for: 'creators',
   },
   {
-    id: 'time-travel',
-    title: 'Time travel: bring back just what you need',
-    body: 'Scrub an earlier version of a board in History and restore only the pieces you want.',
-    tryIt: hintTry('time-travel'),
+    id: 'big-boards',
+    title: 'Smoother big boards',
+    body: 'Panning and zooming boards with thousands of notes is smoother.',
+    tryIt: null,
     for: 'everyone',
-  },
-  {
-    id: 'run-of-show',
-    title: 'Run of show, spotlight and vote results',
-    body: 'Plan minutes per frame, spotlight a note for everyone, and put ranked vote results on the board.',
-    tryIt: hintTry('run-of-show'),
-    for: 'creators',
   },
 ]
 
@@ -195,15 +200,26 @@ export function unavailableTries(input: {
 export const NO_PLACE_TO_TRY =
   'You have no board to try this on yet. Open a board you were invited to, or make one.'
 
+/** Which card the dashboard greets this person with. */
+export type Intro = 'welcome' | 'whats-new'
+
 /**
- * Whether the card shows: on the landing view (Recent), there is something for this person, they are not a
- * name-only guest (a guest sees only the boards of their link), and they have not dismissed this version.
+ * Which card shows, if any (P-002, P-009). It is decided by what this browser remembers for this person (prefs.ts
+ * `readWhatsNewSeen`): nothing at all means a first visit, which gets the short Welcome (what Lobby is, three one-click
+ * starts, the keys), never a changelog about a product they have not seen; a remembered earlier release means they
+ * have been here, so they get "What's new" once for this release; the current release remembered means neither.
+ * Only on the landing view, and never for a name-only guest (they see only the boards of their link).
  */
-export function showWhatsNew(input: {
+export function introCard(input: {
+  /** The release this person last saw or dismissed here, or null when this browser has no record of them. */
+  seen: string | null
+  version?: string
   items: readonly WhatsNewItem[]
   guest: boolean
-  dismissed: boolean
   landing: boolean
-}): boolean {
-  return input.landing && !input.guest && !input.dismissed && input.items.length > 0
+}): Intro | null {
+  if (!input.landing || input.guest) return null
+  if (input.seen === null) return 'welcome'
+  if (input.seen === (input.version ?? WHATS_NEW_VERSION)) return null
+  return input.items.length > 0 ? 'whats-new' : null
 }

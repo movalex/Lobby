@@ -83,11 +83,20 @@ function sub(id: string, label: string, rows: MenuRow[][]): MenuRow | null {
   return rows.length ? { id, label, disabled: false, submenu: rows } : null
 }
 
+/** A phone-width window (the same width the phone sheet and the phone chrome use). */
+function phoneWidth(): boolean {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(max-width: 600px)').matches
+    : false
+}
+
 export function mainMenuRows(ctx: CanvasFeatureContext): MenuRow[][] {
   const entries = gatedEntries(ctx, ctx.registries.mainMenu.list())
   const target: MenuTarget = { ids: ctx.canvas.selection, point: null, hit: null }
   const rows = (groups: readonly MenuGroup[]) => groupRows(entries, ctx, target, 'menu', groups)
   const settings = ctx.canvas.settings.get()
+  // P-027: a phone has no keyboard shortcuts to list and no mouse wheel to set (they were on a phone's menu)
+  const phone = phoneWidth()
   // the app's theme controller (none without a document: the unit tests)
   const theme = typeof document === 'undefined' ? null : getTheme()
   const top: MenuRow[] = [
@@ -118,24 +127,28 @@ export function mainMenuRows(ctx: CanvasFeatureContext): MenuRow[][] {
           run: () => ctx.canvas.settings.set({ grid: !ctx.canvas.settings.get().grid }),
         },
       ],
-      [
-        {
-          id: 'input-device',
-          label: 'Input device',
-          disabled: false,
-          submenu: [
-            WHEEL_PREFERENCES.map(
-              (pref): MenuRow => ({
-                id: `input-device-${pref}`,
-                label: INPUT_DEVICE_LABELS[pref],
+      ...(phone
+        ? []
+        : [
+            [
+              {
+                id: 'input-device',
+                label: 'Input device',
                 disabled: false,
-                checked: settings.wheel === pref,
-                run: () => ctx.canvas.settings.set({ wheel: pref }),
-              }),
-            ),
-          ],
-        },
-      ],
+                submenu: [
+                  WHEEL_PREFERENCES.map(
+                    (pref): MenuRow => ({
+                      id: `input-device-${pref}`,
+                      label: INPUT_DEVICE_LABELS[pref],
+                      disabled: false,
+                      checked: settings.wheel === pref,
+                      run: () => ctx.canvas.settings.set({ wheel: pref }),
+                    }),
+                  ),
+                ],
+              },
+            ],
+          ]),
       ...(theme
         ? [
             [
@@ -180,7 +193,7 @@ export function mainMenuRows(ctx: CanvasFeatureContext): MenuRow[][] {
         ctx.canvas.focus({ preventScroll: true }),
       ),
   }
-  return [top, ...middle, [prefs, help, feedback]]
+  return [top, ...middle, [prefs, ...(phone ? [] : [help]), feedback]]
 }
 
 export function MainMenu({ ctx }: { ctx: CanvasFeatureContext }) {

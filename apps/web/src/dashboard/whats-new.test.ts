@@ -10,13 +10,13 @@ import { boardTryPath, isTryHint, type TryHint, tryHintOf } from '../features/co
 import { FeedbackHost } from '../features/feedback/FeedbackHost.tsx'
 import { FeedbackPill } from '../features/feedback/FeedbackPill.tsx'
 import { closeFeedback, feedbackRequest } from '../features/feedback/state.ts'
-import { readWhatsNewDismissed, writeWhatsNewDismissed } from './prefs.ts'
+import { readWhatsNewDismissed, readWhatsNewSeen, writeWhatsNewDismissed } from './prefs.ts'
 import { byTestId, fire, textOf } from './test-tree.ts'
 import { WhatsNewCard } from './WhatsNew.tsx'
 import {
+  introCard,
   planBoardTry,
   planHintTry,
-  showWhatsNew,
   type TryAction,
   tryKey,
   unavailableTries,
@@ -24,6 +24,7 @@ import {
   WHATS_NEW_MAX_ITEMS,
   WHATS_NEW_MIN_ITEMS,
   WHATS_NEW_VERSION,
+  type WhatsNewItem,
   whatsNewFor,
 } from './whats-new.ts'
 
@@ -39,11 +40,31 @@ const memoryStore = () => {
 
 // the people the card is for, in the terms the dashboard computes them
 const ownerCreator = { canCreate: true, startRow: true, internalOnly: true }
+const nobody = { canCreate: false, startRow: false, internalOnly: false }
 const creator = whatsNewFor(ownerCreator)
 const ids = (who: Parameters<typeof whatsNewFor>[0]) => whatsNewFor(who).map((i) => i.id)
 
-describe('the card’s items (wave L, M3-3)', () => {
-  it('are three to five for a creator, each with a title, a sentence and a unique id', () => {
+/**
+ * Wave L's five items, the ones that had a "Try it" with a hint. Wave P's card has none (its items are found in the
+ * board itself), but the mechanism stays for the next release: these keep its rules under test.
+ */
+const hintItem = (id: TryHint, title: string, forWho: WhatsNewItem['for']): WhatsNewItem => ({
+  id,
+  title,
+  body: 'A sentence.',
+  tryIt: { kind: 'board-hint', hint: id },
+  for: forWho,
+})
+const HINT_ITEMS: readonly WhatsNewItem[] = [
+  hintItem('palette', 'Ctrl+K: do it in words', 'everyone'),
+  hintItem('ask', 'Ask this board / Wrap up', 'everyone'),
+  hintItem('diagram', 'Diagram from words and Mermaid paste', 'creators'),
+  hintItem('time-travel', 'Time travel: bring back just what you need', 'everyone'),
+  hintItem('run-of-show', 'Run of show, spotlight and vote results', 'creators'),
+]
+
+describe('the card’s items (wave P)', () => {
+  it('are three to six for a creator, each with a title, a sentence and a unique id', () => {
     expect(creator.length).toBeGreaterThanOrEqual(WHATS_NEW_MIN_ITEMS)
     expect(creator.length).toBeLessThanOrEqual(WHATS_NEW_MAX_ITEMS)
     expect(WHATS_NEW_ITEMS.length).toBeLessThanOrEqual(WHATS_NEW_MAX_ITEMS)
@@ -55,22 +76,26 @@ describe('the card’s items (wave L, M3-3)', () => {
     }
   })
 
-  it('are wave L’s five, in the card’s order, under the version that resets everybody’s dismissed card', () => {
-    expect(WHATS_NEW_VERSION).toBe('2026-10-wave-l')
+  it('are what changed since wave L, in the card’s order, under the version that resets the dismissed card', () => {
+    expect(WHATS_NEW_VERSION).toBe('2026-10-wave-p')
     expect(WHATS_NEW_ITEMS.map((i) => i.title)).toEqual([
-      'Ctrl+K: do it in words',
-      'Ask this board / Wrap up',
-      'Diagram from words and Mermaid paste',
-      'Time travel: bring back just what you need',
-      'Run of show, spotlight and vote results',
+      'Sharper PDF export',
+      'Reactions on notes',
+      'Links between boards',
+      'What changed since your last visit',
+      'Capture the room',
+      'Smoother big boards',
     ])
-    // each item’s id is its hint: the same names count \`whatsnew.try:<id>\` (the contract’s USAGE_WHATS_NEW_IDS)
-    expect(WHATS_NEW_ITEMS.map((i) => i.id)).toEqual([...USAGE_WHATS_NEW_IDS])
   })
 
-  it('go to something: each "Try it" is a board with a hint from the allowlist, resolved to a URL', () => {
-    for (const i of WHATS_NEW_ITEMS) {
-      expect(i.tryIt, i.id).toMatchObject({ kind: 'board-hint', hint: i.id })
+  it('have no "Try it" that could look dead: what they describe is found in the board itself (P-002)', () => {
+    for (const i of WHATS_NEW_ITEMS) expect(i.tryIt, i.id).toBeNull()
+    const card = WhatsNewCard({ items: creator, onTry() {}, onTellUs() {}, onDismiss() {} })
+    expect(renderToStaticMarkup(card)).not.toContain('Try it')
+  })
+
+  it('the old items’ hints still resolve to a board with a hint from the allowlist', () => {
+    for (const i of HINT_ITEMS) {
       const plan = planHintTry({
         listReady: true,
         boards: [EDITOR_BOARD],
@@ -85,6 +110,7 @@ describe('the card’s items (wave L, M3-3)', () => {
       expect(tryHintOf(new URL(plan.to, 'http://lobby.invalid').search)).toBe(i.id)
       expect(isTryHint(i.id)).toBe(true)
     }
+    expect(HINT_ITEMS.map((i) => i.id)).toEqual([...USAGE_WHATS_NEW_IDS])
     expect(tryHintOf('?try=nope')).toBeNull()
     expect(tryHintOf('?try=')).toBeNull()
     expect(tryHintOf('')).toBeNull()
@@ -93,34 +119,20 @@ describe('the card’s items (wave L, M3-3)', () => {
 
   it('the new version resets the dismissed state of the old card', () => {
     const store = memoryStore()
-    writeWhatsNewDismissed('usr_alice', '2026-10-wave-k', store)
-    expect(readWhatsNewDismissed('usr_alice', '2026-10-wave-k', store)).toBe(true)
+    writeWhatsNewDismissed('usr_alice', '2026-10-wave-l', store)
+    expect(readWhatsNewDismissed('usr_alice', '2026-10-wave-l', store)).toBe(true)
     expect(readWhatsNewDismissed('usr_alice', WHATS_NEW_VERSION, store)).toBe(false)
-    expect(
-      showWhatsNew({
-        items: creator,
-        guest: false,
-        dismissed: readWhatsNewDismissed('usr_alice', WHATS_NEW_VERSION, store),
-        landing: true,
-      }),
-    ).toBe(true)
+    const seen = readWhatsNewSeen('usr_alice', store)
+    expect(introCard({ items: HINT_ITEMS, guest: false, seen, landing: true })).toBe('whats-new')
   })
 
   it('show a person only what is true for them', () => {
     // an owner or admin who can create has all of it
     expect(creator.map((i) => i.id)).toEqual(WHATS_NEW_ITEMS.map((i) => i.id))
-    // someone who can neither create nor open the Internal only control: what a viewer, a commenter or a plain member can use
-    expect(ids({ canCreate: false, startRow: false, internalOnly: false })).toEqual([
-      'palette',
-      'ask',
-      'time-travel',
-    ])
-    // a creator who asked to be spared the template row still gets all of wave L’s items
-    expect(ids({ canCreate: true, startRow: false, internalOnly: false })).toEqual(
-      WHATS_NEW_ITEMS.map((i) => i.id),
-    )
-    // and nobody gets a "Try it" for a thing that needs more than they have
-    for (const who of [ownerCreator, { canCreate: false, startRow: false, internalOnly: false }]) {
+    // someone who cannot create: not Capture the room (it makes notes on a board they cannot edit)
+    expect(ids(nobody)).toEqual(['vector-pdf', 'reactions', 'board-links', 'since-visit', 'big-boards'])
+    // and nobody gets an item for a thing that needs more than they have
+    for (const who of [ownerCreator, nobody]) {
       for (const i of whatsNewFor(who)) {
         if (i.for === 'creators') expect(who.canCreate, i.id).toBe(true)
         if (i.for === 'start-row') expect(who.startRow, i.id).toBe(true)
@@ -128,14 +140,46 @@ describe('the card’s items (wave L, M3-3)', () => {
       }
     }
   })
+})
 
-  it('show on the landing view for people with something to read, never to a name-only guest or after dismissal', () => {
-    const base = { items: creator, guest: false, dismissed: false, landing: true }
-    expect(showWhatsNew(base)).toBe(true)
-    expect(showWhatsNew({ ...base, dismissed: true })).toBe(false)
-    expect(showWhatsNew({ ...base, guest: true })).toBe(false)
-    expect(showWhatsNew({ ...base, landing: false })).toBe(false)
-    expect(showWhatsNew({ ...base, items: [] })).toBe(false)
+describe('which card greets a person (wave P, P-002, P-009)', () => {
+  const base = { items: HINT_ITEMS, guest: false, landing: true }
+
+  it('a first visit (nothing remembered) gets the Welcome, never a changelog of a product they have not seen', () => {
+    expect(introCard({ ...base, seen: null })).toBe('welcome')
+  })
+
+  it('someone who has seen an earlier release gets What’s new, once; after it, neither', () => {
+    expect(introCard({ ...base, seen: '2026-10-wave-l' })).toBe('whats-new')
+    expect(introCard({ ...base, seen: '2026-10-wave-k' })).toBe('whats-new')
+    expect(introCard({ ...base, seen: WHATS_NEW_VERSION })).toBeNull()
+  })
+
+  it('shows on the landing view only, and never to a name-only guest', () => {
+    for (const seen of [null, '2026-10-wave-l']) {
+      expect(introCard({ ...base, seen, landing: false })).toBeNull()
+      expect(introCard({ ...base, seen, guest: true })).toBeNull()
+    }
+  })
+
+  it('a returning person with nothing new to read gets nothing, a newcomer still gets the Welcome', () => {
+    expect(introCard({ ...base, seen: '2026-10-wave-l', items: [] })).toBeNull()
+    expect(introCard({ ...base, seen: null, items: [] })).toBe('welcome')
+  })
+
+  it('what this browser remembers is the version, per person; a blocked store reads as a first visit', () => {
+    const store = memoryStore()
+    expect(readWhatsNewSeen('usr_alice', store)).toBeNull()
+    writeWhatsNewDismissed('usr_alice', WHATS_NEW_VERSION, store)
+    expect(readWhatsNewSeen('usr_alice', store)).toBe(WHATS_NEW_VERSION)
+    expect(readWhatsNewSeen('usr_bob', store)).toBeNull()
+    expect(readWhatsNewSeen('usr_alice', null)).toBeNull()
+    const blocked = {
+      getItem: () => {
+        throw new Error('SecurityError')
+      },
+    }
+    expect(readWhatsNewSeen('usr_alice', blocked)).toBeNull()
   })
 })
 
@@ -189,9 +233,9 @@ describe('N1 (wave M follow-up 3): a "Try it" with nowhere to go is disabled and
   const base = {
     boards: [] as readonly (typeof EDITOR_BOARD)[],
     startRow: false,
-    items: WHATS_NEW_ITEMS,
+    items: HINT_ITEMS,
   }
-  const hintKeys = WHATS_NEW_ITEMS.flatMap((i) => (i.tryIt ? [tryKey(i.tryIt)] : []))
+  const hintKeys = HINT_ITEMS.flatMap((i) => (i.tryIt ? [tryKey(i.tryIt)] : []))
 
   it('while the board list has not arrived: the board button and every board hint wait', () => {
     expect(unavailableTries({ ...base, listReady: false })).toEqual(['board', ...hintKeys])
@@ -220,7 +264,7 @@ describe('N1 (wave M follow-up 3): a "Try it" with nowhere to go is disabled and
 
   it('the card gives a disabled button its reason as its title, and an enabled one none', () => {
     const card = WhatsNewCard({
-      items: creator,
+      items: HINT_ITEMS,
       unavailable: ['board-hint:ask'],
       unavailableReason: 'Open or make a board first.',
       onTry() {},
@@ -238,7 +282,7 @@ describe('N1 (wave M follow-up 3): a "Try it" with nowhere to go is disabled and
 
 describe('the card', () => {
   const calls = { onTry: vi.fn<(a: TryAction) => void>(), onTellUs: vi.fn(), onDismiss: vi.fn() }
-  const card = WhatsNewCard({ items: creator, ...calls })
+  const card = WhatsNewCard({ items: HINT_ITEMS, ...calls })
 
   beforeEach(() => {
     for (const fn of Object.values(calls)) fn.mockClear()
@@ -249,11 +293,11 @@ describe('the card', () => {
     expect(html).toContain('data-testid="whats-new"')
     expect(html).toContain('What’s new in Lobby')
     const items = byTestId(card, 'whats-new-item')
-    expect(items).toHaveLength(creator.length)
-    for (const i of creator) expect(html).toContain(i.title)
+    expect(items).toHaveLength(HINT_ITEMS.length)
+    for (const i of HINT_ITEMS) expect(html).toContain(i.title)
     const tries = byTestId(card, 'whats-new-try')
     expect(tries.map((t) => t.props['data-action'])).toEqual(
-      creator.filter((i) => i.tryIt).map((i) => tryKey(i.tryIt as TryAction)),
+      HINT_ITEMS.filter((i) => i.tryIt).map((i) => tryKey(i.tryIt as TryAction)),
     )
     expect(tries.map((t) => t.props['data-action'])).toEqual([
       'board-hint:palette',
@@ -274,7 +318,7 @@ describe('the card', () => {
       calls.onTry.mockClear()
       fire(t)
       expect(calls.onTry).toHaveBeenCalledTimes(1)
-      expect(calls.onTry.mock.calls[0]?.[0]).toBe(creator[n]?.tryIt)
+      expect(calls.onTry.mock.calls[0]?.[0]).toBe(HINT_ITEMS[n]?.tryIt)
     }
     fire(byTestId(card, 'whats-new-tell-us')[0] as never)
     expect(calls.onTellUs).toHaveBeenCalledTimes(1)
@@ -317,7 +361,7 @@ describe('the card while a "Try it" is under way', () => {
 
   it('shows "Opening…" on the button in flight and disables every "Try it" until it is done', () => {
     const busy = WhatsNewCard({
-      items: creator,
+      items: HINT_ITEMS,
       pending: 'board-hint:ask',
       onTry() {},
       onTellUs() {},
@@ -335,9 +379,9 @@ describe('the card while a "Try it" is under way', () => {
   })
 
   it('disables only the "Try it" whose place is not ready yet (the board list has not arrived)', () => {
-    const keys = creator.flatMap((i) => (i.tryIt ? [tryKey(i.tryIt)] : []))
+    const keys = HINT_ITEMS.flatMap((i) => (i.tryIt ? [tryKey(i.tryIt)] : []))
     const waiting = WhatsNewCard({
-      items: creator,
+      items: HINT_ITEMS,
       unavailable: keys.filter((k) => k !== 'board-hint:palette'),
       onTry() {},
       onTellUs() {},
@@ -351,7 +395,7 @@ describe('the card while a "Try it" is under way', () => {
       ['board-hint:run-of-show', true],
     ])
     // nothing pending, nothing unavailable: all enabled
-    const idle = WhatsNewCard({ items: creator, onTry() {}, onTellUs() {}, onDismiss() {} })
+    const idle = WhatsNewCard({ items: HINT_ITEMS, onTry() {}, onTellUs() {}, onDismiss() {} })
     expect(enabled(idle).every(([, off]) => !off)).toBe(true)
   })
 })
@@ -408,7 +452,7 @@ describe('dismissing it is remembered per viewer', () => {
         expect(readWhatsNewDismissed('usr_alice', WHATS_NEW_VERSION)).toBe(false)
         expect(() => writeWhatsNewDismissed('usr_alice', WHATS_NEW_VERSION)).not.toThrow()
         expect(
-          renderToStaticMarkup(WhatsNewCard({ items: creator, onTry() {}, onTellUs() {}, onDismiss() {} })),
+          renderToStaticMarkup(WhatsNewCard({ items: HINT_ITEMS, onTry() {}, onTellUs() {}, onDismiss() {} })),
         ).toContain('data-testid="whats-new"')
       } finally {
         if (original) Object.defineProperty(globalThis, 'localStorage', original)

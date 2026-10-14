@@ -1,8 +1,8 @@
 import { type BoardWithRole, NEW_CANVAS_CARD_NOTE, thumbnailPath } from '@draftroom/contracts'
-import { type CSSProperties, useEffect, useId, useState } from 'react'
+import { type CSSProperties, useEffect, useState } from 'react'
 import { SharedOutsideMarker } from '../features/people/SharedOutside.tsx'
 import { onThumbnailUpdated, recentThumbnail } from '../features/thumbnails/card-events.ts'
-import { formatRelativeTime } from '../lib/format.ts'
+import { initialsFor } from '../lib/identity.ts'
 import { can } from '../lib/permissions.ts'
 import { boardPath, linkClick } from '../lib/routing.ts'
 import { MenuButton } from '../ui/Menu.tsx'
@@ -11,6 +11,7 @@ import {
   type BoardMenuAction,
   type BoardMenuContext,
   boardMenuItems,
+  boardWhen,
   ROLE_LABEL,
   thumbStyle,
 } from './model.ts'
@@ -26,7 +27,7 @@ import './dashboard.css'
 export function BoardCardThumb({
   board,
 }: {
-  board: { id: string; status: BoardWithRole['status']; thumbnailVersion?: string | null }
+  board: { id: string; title?: string; status: BoardWithRole['status']; thumbnailVersion?: string | null }
 }) {
   const listed = board.status === 'trashed' ? null : (board.thumbnailVersion ?? null)
   // A thumbnail this tab sent after the list was fetched (e.g. the board just closed) wins until the
@@ -43,7 +44,7 @@ export function BoardCardThumb({
   }, [board.id, board.status, listed])
   const version = sent && sent.over === listed ? sent.version : listed
   const [failed, setFailed] = useState<string | null>(null)
-  if (!version || failed === version) return <BoardThumb boardId={board.id} />
+  if (!version || failed === version) return <BoardThumb boardId={board.id} title={board.title} />
   return (
     <img
       className="dr-bcard__img"
@@ -62,14 +63,15 @@ export function BoardCardThumb({
 }
 
 /**
- * A deterministic, colored placeholder for boards without a thumbnail. Its colours are presentation
- * attributes (the light look); dashboard.css recolours the classed parts on the dark theme from the
- * same palette (the --th-* properties), so a card there is not a bright pastel block (F11).
+ * The placeholder of a board with no picture yet (P-004): one calm, neutral design for every such board, never a drawing
+ * that could pass for the board's content. A tint that is stable per board id (so a board keeps its colour in every
+ * view and for every viewer), the board's initials, and "No preview yet". Its colours are presentation attributes (the
+ * light look); dashboard.css recolours the classed parts on the dark theme from the same palette (--th-*).
  */
-export function BoardThumb({ boardId }: { boardId: string }) {
+export function BoardThumb({ boardId, title }: { boardId: string; title?: string }) {
   const t = thumbStyle(boardId)
-  const dots = useId()
-  const palette = { '--th-bg': t.bg, '--th-ink': t.ink, '--th-note': t.note } as CSSProperties
+  const palette = { '--th-bg': t.bg, '--th-ink': t.ink } as CSSProperties
+  const named = !!title && !/^untitled/i.test(title.trim())
   return (
     <svg
       className="dr-thumb"
@@ -79,192 +81,45 @@ export function BoardThumb({ boardId }: { boardId: string }) {
       aria-hidden="true"
       style={palette}
     >
-      <defs>
-        <pattern id={dots} width="10" height="10" patternUnits="userSpaceOnUse">
-          <circle className="dr-thumb__dot" cx="1" cy="1" r="0.8" fill={t.ink} opacity="0.14" />
-        </pattern>
-      </defs>
       <rect className="dr-thumb__bg" width="160" height="100" fill={t.bg} />
-      <rect width="160" height="100" fill={`url(#${dots})`} />
-      {t.layout === 0 && (
-        <g>
-          <path
-            className="dr-thumb__ink"
-            d="M52 44 C 70 30, 86 64, 104 50"
-            stroke={t.ink}
-            strokeWidth="1.6"
-            fill="none"
-            opacity="0.55"
-          />
-          <rect
-            className="dr-thumb__note"
-            x="26"
-            y="30"
-            width="30"
-            height="30"
-            rx="2"
-            fill={t.note}
-            transform="rotate(-4 41 45)"
-          />
-          <rect
-            className="dr-thumb__note"
-            x="100"
-            y="34"
-            width="30"
-            height="30"
-            rx="2"
-            fill={t.note}
-            transform="rotate(3 115 49)"
-          />
-          <rect
-            className="dr-thumb__card dr-thumb__ink"
-            x="64"
-            y="58"
-            width="30"
-            height="30"
-            rx="2"
-            fill="#fff"
-            stroke={t.ink}
-            strokeOpacity="0.2"
-          />
-          <path
-            className="dr-thumb__ink"
-            d="M70 68h18M70 74h12"
-            stroke={t.ink}
-            strokeWidth="1.6"
-            strokeLinecap="round"
-            opacity="0.5"
-          />
-        </g>
+      {named ? (
+        <text
+          className="dr-thumb__initials"
+          data-testid="board-thumb-initials"
+          x="80"
+          y="52"
+          textAnchor="middle"
+          fontSize="30"
+          fontWeight="700"
+          fill={t.ink}
+        >
+          {initialsFor(title)}
+        </text>
+      ) : (
+        <rect
+          className="dr-thumb__ink"
+          x="62"
+          y="26"
+          width="36"
+          height="28"
+          rx="5"
+          fill="none"
+          stroke={t.ink}
+          strokeWidth="2"
+          opacity="0.5"
+        />
       )}
-      {t.layout === 1 && (
-        <g>
-          <rect
-            className="dr-thumb__card dr-thumb__ink"
-            x="22"
-            y="18"
-            width="116"
-            height="66"
-            rx="4"
-            fill="#fff"
-            stroke={t.ink}
-            strokeOpacity="0.35"
-          />
-          <path className="dr-thumb__ink" d="M22 30h116" stroke={t.ink} strokeOpacity="0.2" />
-          <rect className="dr-thumb__note" x="32" y="40" width="26" height="26" rx="2" fill={t.note} />
-          <rect
-            className="dr-thumb__note"
-            x="66"
-            y="40"
-            width="26"
-            height="26"
-            rx="2"
-            fill={t.note}
-            opacity="0.75"
-          />
-          <path
-            className="dr-thumb__ink"
-            d="M102 44h26M102 52h20M102 60h24"
-            stroke={t.ink}
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            opacity="0.45"
-          />
-        </g>
-      )}
-      {t.layout === 2 && (
-        <g className="dr-thumb__ink" stroke={t.ink} strokeWidth="1.6" fill="none">
-          <rect
-            className="dr-thumb__card"
-            x="18"
-            y="38"
-            width="34"
-            height="22"
-            rx="5"
-            fill="#fff"
-            strokeOpacity="0.5"
-          />
-          <rect
-            className="dr-thumb__note"
-            x="64"
-            y="20"
-            width="34"
-            height="22"
-            rx="5"
-            fill={t.note}
-            stroke="none"
-          />
-          <rect
-            className="dr-thumb__card"
-            x="64"
-            y="58"
-            width="34"
-            height="22"
-            rx="5"
-            fill="#fff"
-            strokeOpacity="0.5"
-          />
-          <rect
-            className="dr-thumb__note"
-            x="110"
-            y="38"
-            width="34"
-            height="22"
-            rx="11"
-            fill={t.note}
-            stroke="none"
-            opacity="0.8"
-          />
-          <path d="M52 46l12-12M52 52l12 14M98 31l12 12M98 69l12-12" opacity="0.5" strokeLinecap="round" />
-        </g>
-      )}
-      {t.layout === 3 && (
-        <g className="dr-thumb__ink" stroke={t.ink} strokeWidth="1.6" strokeLinecap="round">
-          <path d="M80 50L40 28M80 50L40 74M80 50L122 26M80 50L124 72" opacity="0.4" />
-          <circle className="dr-thumb__note" cx="80" cy="50" r="14" fill={t.note} stroke="none" />
-          <rect
-            className="dr-thumb__card"
-            x="22"
-            y="20"
-            width="30"
-            height="16"
-            rx="8"
-            fill="#fff"
-            strokeOpacity="0.35"
-          />
-          <rect
-            className="dr-thumb__card"
-            x="22"
-            y="66"
-            width="30"
-            height="16"
-            rx="8"
-            fill="#fff"
-            strokeOpacity="0.35"
-          />
-          <rect
-            className="dr-thumb__card"
-            x="108"
-            y="18"
-            width="30"
-            height="16"
-            rx="8"
-            fill="#fff"
-            strokeOpacity="0.35"
-          />
-          <rect
-            className="dr-thumb__note"
-            x="110"
-            y="64"
-            width="30"
-            height="16"
-            rx="8"
-            fill={t.note}
-            stroke="none"
-            opacity="0.7"
-          />
-        </g>
-      )}
+      <text
+        className="dr-thumb__label"
+        x="80"
+        y="78"
+        textAnchor="middle"
+        fontSize="8.5"
+        fontWeight="600"
+        fill={t.ink}
+      >
+        No preview yet
+      </text>
     </svg>
   )
 }
@@ -305,10 +160,7 @@ export function BoardCard<
   const canStar = !!onStar && can(board.role, 'view', board.status)
   const canOpen = items.some((i) => i.action === 'open')
   const href = boardPath(board.id)
-  const when =
-    board.status === 'trashed'
-      ? `Trashed ${formatRelativeTime(board.trashedAt ?? board.updatedAt, now)}`
-      : `Edited ${formatRelativeTime(board.updatedAt, now)}`
+  const when = boardWhen(board, now)
 
   const body = (
     <div className="dr-bcard__thumb">

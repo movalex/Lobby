@@ -152,7 +152,7 @@ export function createTicketUri(opts: TicketUriOptions) {
     opts.syncOrigin === undefined ? buildTimeSyncOrigin() : (opts.syncOrigin ?? undefined),
   )
   // A build misconfiguration: say so once (the socket then tries the page origin, as before).
-  if (!target.ok) console.error(`Draftroom: ${target.error}; connecting to this page's origin instead.`)
+  if (!target.ok) console.error(`Lobby: ${target.error}; connecting to this page's origin instead.`)
   const wsBase = () => `${target.base}/connect/${encodeURIComponent(opts.boardId)}`
 
   async function attempt(): Promise<string> {

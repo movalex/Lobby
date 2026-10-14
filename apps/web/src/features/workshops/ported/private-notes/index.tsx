@@ -16,7 +16,7 @@ import { PrivateNotesIcon, PrivateNotesPanel } from './PrivateNotesPanel.tsx'
 
 export const privateNotesPanel: CanvasPanelSpec = {
   id: PRIVATE_PANEL_ID,
-  label: 'Private notes',
+  label: 'Private brainstorm',
   icon: PrivateNotesIcon,
   // right after Voting (../index.tsx, W5-50)
   order: 45,

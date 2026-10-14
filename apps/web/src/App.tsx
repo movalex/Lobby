@@ -156,8 +156,9 @@ function Routes() {
     case 'invalid-board':
       return (
         <MessageScreen
-          title="That board link isn't valid"
-          body="Board links look like /b/b-3k9x0q2m7a. Check that you copied the whole link."
+          testId="board-not-found"
+          title="This board doesn't exist or was deleted"
+          body="That link isn't one of Lobby's board links. Board links look like /b/b-3k9x0q2m7a: check that you copied the whole link."
         />
       )
     default:

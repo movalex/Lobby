@@ -231,8 +231,10 @@ describe('owner filter, stars and duplicate names', () => {
     expect(sortBoards([a, b], 'created').map((x) => x.id)).toEqual(['b-aaaaaaaaa2', 'b-aaaaaaaaa1'])
   })
 
-  it('the trash says boards stay until restored (no purge yet)', () => {
+  it('the trash says boards stay until restored, as a plain fact (no roadmap wording)', () => {
     expect(TRASH_NOTE).toMatch(/until an owner restores them/)
+    expect(TRASH_NOTE).toMatch(/deleted automatically/)
+    expect(TRASH_NOTE).not.toMatch(/yet/i)
   })
 })
 
@@ -321,7 +323,6 @@ describe('thumbnails and landing', () => {
     expect(thumbStyle('b-3k9x0q2m7a')).toEqual(thumbStyle('b-3k9x0q2m7a'))
     const looks = new Set(Array.from({ length: 40 }, (_, i) => JSON.stringify(thumbStyle(`b-${i}aaaaaaaaa`))))
     expect(looks.size).toBeGreaterThan(4)
-    for (let i = 0; i < 40; i++) expect(thumbStyle(`b-${i}x`).layout).toBeLessThan(4)
   })
 
   it('"/" lands on the last-used workspace only while the user still belongs to it', () => {

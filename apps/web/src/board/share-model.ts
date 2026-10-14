@@ -563,7 +563,7 @@ export function advancedSummary(policy: 'editors' | 'everyone' | 'everyone-inclu
 export function emailInviteHint(canEmail: boolean): string {
   return canEmail
     ? 'We email them an invitation to this board that works only for that address. People who already use Lobby get access right away.'
-    : 'This server can’t send email (that needs Clerk sign-in): you get a one-time link that works only for that address, to send them instead.'
+    : 'This server can’t send email (that needs a Lobby account): you get a one-time link that works only for that address, to send them instead.'
 }
 
 /** The "@handle, name or email" field's hint for an address, pointing at the email form when it can email. */
@@ -625,7 +625,7 @@ export interface EmailInviteOutcome {
 
 const FALLBACK_DETAIL: Record<EmailInviteFallbackReason, (email: string) => string> = {
   email_not_configured: (email) =>
-    `This server can’t send email: that needs Clerk sign-in. Send the link to ${email} yourself.`,
+    `This server can’t send email: that needs a Lobby account. Send the link to ${email} yourself.`,
   existing_account: (email) =>
     `${email} has a sign-in account but hasn’t opened Lobby yet, and invitation emails only go to new people. Send them the link yourself.`,
   invalid_email: (email) =>

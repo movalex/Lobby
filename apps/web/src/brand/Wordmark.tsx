@@ -31,7 +31,7 @@ export function Mark({ size = 24, tone = 'auto' }: { size?: number; tone?: Tone 
 }
 
 /**
- * Mark + "Lobby" (the short lockup), or "DBC Lobby" (`variant="dbc"`, the sign-in lockup). The text
+ * Mark + "Lobby" (the short lockup), or "DBC Lobby" (`variant="dbc"`, kept for a lockup that names the company; nothing uses it since wave P: the product is "Lobby" everywhere). The text
  * is real text, so the accessible name is the product name. `mark={false}` drops the mark where a
  * larger one (the sign-in hero) already stands next to it.
  */
