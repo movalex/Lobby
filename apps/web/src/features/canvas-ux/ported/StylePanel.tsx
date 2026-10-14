@@ -350,7 +350,6 @@ export function pickSize(canvas: LobbyCanvas, t: Target, size: SizeName) {
   else canvas.styles.setNext({ strokeWidth: NEXT_STROKE_WIDTH[size] })
 }
 
-
 export function textTargets(t: Target) {
   return [
     ...t.els.filter((e) => ['text', 'note', 'shape', 'arrow'].includes(kindOf(e)) && !isPolygonLine(e)),
