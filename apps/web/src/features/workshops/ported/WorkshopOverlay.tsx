@@ -343,10 +343,12 @@ function MyDots({
  * A primary click (no drag) on an eligible object adds a vote. With the select tool the press never
  * reaches the engine (Miro's voting mode works the same way): a vote click must not SELECT the object,
  * because everyone's selection is shared as presence (PRF-07; the sync server also drops `sel` while a
- * vote is open). A double-click on it is one vote and never opens the note's editor. The hand tool pans
- * and never votes (wave P review). Presses with modifiers (Shift+drag still moves a note), on empty canvas
- * or on objects the vote does not accept go to the engine as usual; plain clicks select, move and edit
- * again after "I'm done", "Skip" or once voting ends.
+ * vote is open). A double-click on it is one vote and never opens the note's editor. The hand tool pans;
+ * with a mouse or a pen it never votes (wave P review), but a finger's tap without a drag votes as with the
+ * select tool: a phone rests on Hand (K5-3, a11y PhoneSheet `PHONE_REST_TOOL`) and its card says "Tap
+ * objects to vote", so without that a phone could not vote at all. Presses with modifiers (Shift+drag still
+ * moves a note), on empty canvas or on objects the vote does not accept go to the engine as usual; plain
+ * clicks select, move and edit again after "I'm done", "Skip" or once voting ends.
  *
  * Before this person joined (the banner is up, P-001), a press goes to the engine as usual (wave P review:
  * every press was the vote's, so someone who had not joined could not move a note): a drag moves the note,
@@ -387,14 +389,26 @@ function ClickToVote({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
       void refusedClick(ctx, store, store.getSnapshot().vote?.session.id ?? '', elementId)
     /** a press before this person joined: the engine has it; a click without a drag joins and votes */
     let toJoin: { x: number; y: number; id: string } | null = null
+    /** a finger's press with the hand tool (a phone rests on Hand): the engine pans; a tap votes */
+    let handTap: { x: number; y: number } | null = null
     return canvas.on('input', (e) => {
-      if (e.type === 'key-down' || e.type === 'wheel' || e.type === 'pinch') return
+      if (e.type === 'pinch') {
+        handTap = null // a second finger: a pinch, not a tap
+        return
+      }
+      if (e.type === 'key-down' || e.type === 'wheel') return
       if (e.type === 'pointer-down') {
         pressed = null
         other = null
         toJoin = null
+        handTap = null
         if (e.button !== 0 || !plainPress(e)) return
-        if (canvas.tool() !== 'select' || canvas.editingId()) return
+        const tool = canvas.tool()
+        if (tool === 'hand') {
+          if (e.pointerType === 'touch') handTap = { x: e.screen.x, y: e.screen.y }
+          return
+        }
+        if (tool !== 'select' || canvas.editingId()) return
         const click = voteClickAt(canvas, e.scene, rule)
         if (click.kind === 'none') return
         if (click.kind === 'not-in-vote') {
@@ -416,9 +430,19 @@ function ClickToVote({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
         const p = pressed
         const o = other
         const j = toJoin
+        const h = handTap
         pressed = null
         other = null
         toJoin = null
+        handTap = null
+        if (h) {
+          if (e.button !== 0 || !plainPress(e) || canvas.tool() !== 'hand') return
+          if (Math.hypot(e.screen.x - h.x, e.screen.y - h.y) > CLICK_SLOP_PX) return
+          const click = voteClickAt(canvas, e.scene, rule)
+          if (click.kind === 'vote') vote(click.target.id)
+          else if (click.kind === 'not-in-vote') refuse(click.target.id)
+          return
+        }
         if (o) {
           if (Math.hypot(e.screen.x - o.x, e.screen.y - o.y) <= CLICK_SLOP_PX) refuse(o.id)
           return

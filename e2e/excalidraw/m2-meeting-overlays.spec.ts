@@ -57,6 +57,30 @@ const stackRects = (page: Page) =>
     }
   })
 
+/**
+ * Moves `page`'s camera until scene point `scene` is at screen point `at`, reading back after each move. One
+ * computed move is not enough: the camera can still be settling on its own (bob's once centred on the spotlit
+ * note between the viewport read and the point read, and the move made from the two was 300 px off).
+ */
+const bringTo = async (page: Page, scene: { x: number; y: number }, at: { x: number; y: number }) => {
+  await expect
+    .poll(
+      async () => {
+        const now = await sceneToScreen(page, scene)
+        const off = Math.hypot(now.x - at.x, now.y - at.y)
+        if (off < 1) return 0
+        const view = await viewport(page)
+        await setViewport(page, {
+          x: view.x + (now.x - at.x) / view.zoom,
+          y: view.y + (now.y - at.y) / view.zoom,
+        })
+        return off
+      },
+      { intervals: [100, 250, 500] },
+    )
+    .toBe(0)
+}
+
 const startSpotlight = async (a: Parameters<typeof post>[0], board: string, id: string) => {
   const res = await post(a, `/api/boards/${board}/spotlight`, { refs: [`shape:${id}`], bringEveryone: false })
   expect(res.status(), await res.text()).toBe(200)
@@ -85,12 +109,7 @@ test('a remote cursor parked on the spotlight bar is hidden while it is there, a
   await a.page.mouse.move(spot.x, spot.y)
   await expect(cursor).toBeVisible()
   await expect(cursor).not.toHaveAttribute('data-obscured', /.*/)
-  const view = await viewport(b.page)
-  const now = await sceneToScreen(b.page, scene)
-  await setViewport(b.page, {
-    x: view.x + (now.x - onBob.x) / view.zoom,
-    y: view.y + (now.y - onBob.y) / view.zoom,
-  })
+  await bringTo(b.page, scene, onBob)
 
   await test.step('parked on the bar: hidden, and the button is what is under the point', async () => {
     await expect(cursor).toHaveAttribute('data-obscured', 'true')
@@ -106,12 +125,7 @@ test('a remote cursor parked on the spotlight bar is hidden while it is there, a
 
   await test.step("a chip over the bar's text is hidden too, not only one over a button", async () => {
     const text = await box(b.page.getByTestId('spotlight-text'))
-    const here = await sceneToScreen(b.page, scene)
-    const v2 = await viewport(b.page)
-    await setViewport(b.page, {
-      x: v2.x + (here.x - (text.x + text.w / 2)) / v2.zoom,
-      y: v2.y + (here.y - (text.y + text.h / 2)) / v2.zoom,
-    })
+    await bringTo(b.page, scene, { x: text.x + text.w / 2, y: text.y + text.h / 2 })
     await expect(cursor).toHaveAttribute('data-obscured', 'true')
     await expect(cursor).toBeHidden()
   })

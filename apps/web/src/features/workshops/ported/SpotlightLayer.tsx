@@ -148,25 +148,26 @@ export function SpotlightLayer({ ctx }: { ctx: Ctx }) {
     >
       {dim && rect && <Dim rect={rect} />}
       {/* M2-1: the bar (or the chip that brings it back) is in the board's top-centre stack, with the other
-          bars. P-016: the session timer has its own slot (the "timer" box, above the spotlight's). */}
+          bars. P-016: the session timer has its own slot (the "timer" box, above the spotlight's). The bar
+          is the slot's own child, with no box around it: the stack's rule puts only an item's child in the
+          column (a bar one box further in kept its own `position: absolute; top: 12px` and sat over the
+          invitation, unmeasured). */}
       <TimerBanner ctx={ctx} />
       <TopCentreItem slot="spotlight">
-        <div className="dr-wk-topbox">
-          {s && !hidden && placed && <SpotlightBar ctx={ctx} store={store} placed={placed} />}
-          {s && hidden && (
-            <button
-              type="button"
-              className="dr-wk-spot__chip"
-              data-testid="spotlight-show"
-              onClick={() => {
-                store.showSpotlight()
-                ctx.canvas.focus({ preventScroll: true })
-              }}
-            >
-              Show the spotlight
-            </button>
-          )}
-        </div>
+        {s && !hidden && placed && <SpotlightBar ctx={ctx} store={store} placed={placed} />}
+        {s && hidden && (
+          <button
+            type="button"
+            className="dr-wk-spot__chip"
+            data-testid="spotlight-show"
+            onClick={() => {
+              store.showSpotlight()
+              ctx.canvas.focus({ preventScroll: true })
+            }}
+          >
+            Show the spotlight
+          </button>
+        )}
       </TopCentreItem>
     </div>
   )

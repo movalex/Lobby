@@ -1449,21 +1449,6 @@ li[data-rank="1"] .dr-wk-rank__bar {
   color: var(--dr-ink-2);
 }
 
-/* the stack's spotlight box (the bar, or the chip that brings it back); the session timer has its own slot */
-.dr-wk-topbox {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-}
-.dr-wk-topbox:empty {
-  display: none;
-}
-/* the stack's own box around it takes no place and no gap while nothing is in it */
-.lobby-top-centre__item:has(> .dr-wk-topbox:empty) {
-  display: none;
-}
-
 /* P-016: the session timer, a pill at the top centre of the canvas for everyone (./ported/TimerBanner.tsx). */
 .dr-wk-banner-timer {
   display: inline-flex;
