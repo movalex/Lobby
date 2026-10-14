@@ -106,3 +106,27 @@ test('P-003 review: Share clicked while offline does nothing visible; back onlin
     await expect(notice).toHaveCount(0)
   })
 })
+
+// Wave P review: Windows and VPNs often report navigator.onLine false (with an `offline` event) while the network
+// works. The board said "Offline" while its socket was live. Now the browser's signal starts a quick probe of the
+// socket: a socket that answers is trusted (the board stays Live), and only one that does not shows offline.
+test('P-003 review: a wrong offline signal while the socket is live: the board stays Live and edits sync', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  const b = await canvasSession('bob')
+  const page = a.page
+  await expect(connPill(page)).toHaveAttribute('data-state', 'online')
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => false })
+    window.dispatchEvent(new Event('offline'))
+  })
+  await page.waitForTimeout(3_000)
+  await expect(page.getByTestId('offline-banner')).toHaveCount(0)
+  await expect(connPill(page)).toHaveAttribute('data-state', 'online')
+  const note = await createNote(page, { x: 320, y: 200, text: 'Still live' })
+  await expectSaved(page)
+  await waitForItem(b.page, note)
+  await expect.poll(() => itemText(b.page, note)).toBe('Still live')
+  await expect(page.getByTestId('offline-banner')).toHaveCount(0)
+})

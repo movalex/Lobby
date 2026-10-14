@@ -45,7 +45,7 @@ import { AccessActorHint, blockedEditHint, isReadonlyRole, roleChangeNotice } fr
 import type { NoticeInput } from '../../board/board-context.ts'
 import { NoticeRegion, useNotices } from '../../board/Notices.tsx'
 import { SyncErrorScreen } from '../../board/SyncErrorScreen.tsx'
-import { BoardAccount, type ConnState, TopBarFrame } from '../../board/TopBarFrame.tsx'
+import { BoardAccount, TopBarFrame } from '../../board/TopBarFrame.tsx'
 import { firstTicketWhileStarting } from '../../board/ticket.ts'
 import { CANVAS_FEATURES } from '../../features/canvas-registry.ts'
 import { type BoardEvents, createBoardEvents } from '../../features/events.ts'
@@ -96,6 +96,7 @@ import {
   topBarItems,
   useRegistries,
 } from './chrome.tsx'
+import { connWith, useSocketProbe } from './connection.ts'
 import {
   type ClipboardElement,
   contentOf,
@@ -339,23 +340,6 @@ function OpeningSkeleton({ board, role, workspace }: Pick<SessionProps, 'board' 
     />
   )
 }
-
-const connOf = (s: LobbyBoardSnapshot): ConnState =>
-  s.phase === 'ready'
-    ? 'online'
-    : s.phase === 'offline'
-      ? 'offline'
-      : s.phase === 'closed'
-        ? 'error'
-        : 'connecting'
-
-/**
- * P-003 (wave P): the board's connection as the page shows it. The browser's own offline (navigator.onLine, its
- * `offline` and `online` events) is said at once: the socket only notices a dead network on its next missed
- * heartbeat, up to 30 s later, and until then the board looked live while nothing could be sent.
- */
-export const connWith = (s: LobbyBoardSnapshot, browserOnline: boolean): ConnState =>
-  browserOnline || s.phase === 'closed' ? connOf(s) : 'offline'
 
 const subscribeOnline = (l: () => void) => {
   window.addEventListener('online', l)
@@ -817,7 +801,10 @@ function LobbyBoardScreen({
   )
 
   const focusMode = settings.focusMode
-  const conn = connWith(snap, browserOnline)
+  // wave P review: the browser's offline signal is checked against a live socket (connection.ts)
+  const probeSocket = useCallback((ms: number) => session.transport.probe(ms), [session])
+  const socketProbe = useSocketProbe(probeSocket, browserOnline, snap.phase)
+  const conn = connWith(snap, browserOnline, socketProbe)
   const closed = snap.phase === 'closed'
   const closeReason = snap.closeReason
   const terminalShown = closed && closeReason !== 'FORBIDDEN' && closeReason !== 'NOT_FOUND'

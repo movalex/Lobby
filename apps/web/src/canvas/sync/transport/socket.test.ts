@@ -133,6 +133,35 @@ describe('the board socket heartbeat', () => {
     t.close()
   })
 
+  it('probe (wave P review): a ping now; true when its pong comes back in time, false when not or with no socket; nothing is dropped', async () => {
+    const { clock, t } = start(15_000)
+    await flush()
+    const s1 = FakeSocket.all[0] as FakeSocket
+    // not open yet: no socket to ask
+    expect(await t.probe(1_500)).toBe(false)
+    s1.open()
+    const answered = t.probe(1_500)
+    expect(pings(s1)).toBe(1)
+    clock.advance(200)
+    s1.receive({ type: 'pong' })
+    expect(await answered).toBe(true)
+    const silent = t.probe(1_500)
+    expect(pings(s1)).toBe(2)
+    let settled: boolean | null = null
+    void silent.then((ok) => {
+      settled = ok
+    })
+    clock.advance(1_400)
+    await flush()
+    expect(settled).toBeNull()
+    clock.advance(200)
+    await flush()
+    expect(settled).toBe(false)
+    // display only: the socket stays, the heartbeat decides
+    expect(s1.closed).toBeNull()
+    t.close()
+  })
+
   it('0 turns it off', async () => {
     FakeSocket.all = []
     const clock = createManualClock()
