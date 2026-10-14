@@ -260,7 +260,6 @@ export const feature: CanvasFeature = {
     {
       id: 'board-links.linked-from-top',
       order: 14,
-      overflowCaption: 'Linked from',
       component: LinkedFromTopBar,
     },
   ],
