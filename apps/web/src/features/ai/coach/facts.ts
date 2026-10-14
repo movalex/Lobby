@@ -22,7 +22,15 @@ import { type Atom, atom } from '../../../lib/signals.ts'
 import { lastRevealedResults, serverNowOf, voteActivityAtOf, voteStarterOf } from '../../workshops/store.ts'
 import { aiKindWord } from '../ported/provenance.ts'
 import { perCanvas } from '../ported/runtime.ts'
-import { frameIndex, frameOfElement, idOfRef, isLive, isNote, noteFacts } from '../ported/target.ts'
+import {
+  existingGroups,
+  frameIndex,
+  frameOfElement,
+  idOfRef,
+  isLive,
+  isNote,
+  noteFacts,
+} from '../ported/target.ts'
 import type { CoachFacts, CoachFrameNotes, CoachWorkshop } from './next-step.ts'
 
 /** Elements looked at when the board's facts are read (a huge board stops counting here). */
@@ -174,7 +182,13 @@ export function coachFacts(
     // the team's notes (a template's prompt notes are not ideas: the rule Group into themes uses)
     const { ideas } = splitThemeNotes(notes, (n) => noteFacts(canvas as LobbyCanvas, n))
     if (labelled.has(frameId)) themeNotes.push(...ideas.map((n) => n.id))
-    else frames.push({ frameId, ungrouped: ideas.map((n) => n.id) })
+    else {
+      // P-007: boxes in the frame that the notes already sit under (a retro's columns): Group into themes asks before
+      // it regroups those, so the coach does not offer it
+      const frame = frameId ? canvas.get(frameId) : undefined
+      const groups = frame ? existingGroups(canvas as LobbyCanvas, [frame]) : []
+      frames.push({ frameId, ungrouped: ideas.map((n) => n.id), groups })
+    }
   }
   return { frames, themeLabels, themeNotes, actionItems, recap }
 }

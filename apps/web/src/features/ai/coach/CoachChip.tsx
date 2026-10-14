@@ -2,8 +2,8 @@
 // control (K3-3) in a screen layer of the AI feature. Facilitators only: editors with an account who run the session
 // (wave M, M2-2, ./next-step.ts `runsSession`: the vote's starter, else the live presenter, else the board's owner
 // while nobody presents), hidden while following someone in present mode, and per board dismissible ("Not now",
-// kept in localStorage). It counts its showing and its use (coach.shown, coach.run: no id, no text). It makes no
-// request, no sound, and writes nothing until it is clicked; a click runs an existing command by id (canvas-ux
+// kept in localStorage; also once a click has run its step: P-007). It counts its showing and its use (coach.shown,
+// coach.run: no id, no text). It makes no request, no sound, and writes nothing until it is clicked; a click runs an existing command by id (canvas-ux
 // runCommand), with that command's own gate, notice and server checks:
 //   themes  → 'ai.themes' on the notes it names (they are selected first);
 //   vote    → W5's 'workshops.vote.setup' {scope: 'selection', refs: the theme notes};
@@ -61,6 +61,25 @@ export function runStep(ctx: CanvasFeatureContext, step: CoachStep): boolean {
     case 'wrapup':
       return runCommand(ctx, AI_COMMAND_IDS.recap, 'menu', { scope: 'session' })
   }
+}
+
+/**
+ * A click on the chip (P-007): counts it and runs the step. A step that ran takes the chip away for the day (it was acted
+ * on; it used to stay on screen all session); one that could not run says why and keeps the chip. True when it ran.
+ */
+export function actOnStep(
+  ctx: CanvasFeatureContext,
+  step: CoachStep,
+  run: (ctx: CanvasFeatureContext, step: CoachStep) => boolean = runStep,
+): boolean {
+  countUsage('coach.run')
+  if (run(ctx, step)) {
+    dismissStep(ctx.board.id, stepKey(step))
+    return true
+  }
+  const hint = refusedHint(ctx, step)
+  if (hint) ctx.notify({ key: 'dr-ai', timeoutMs: 6000, ...hint })
+  return false
 }
 
 /** What the chip says when its step could not run (null: nothing to say; Wrap up always runs). */
@@ -199,10 +218,7 @@ function CoachChip({ ctx }: { ctx: CanvasFeatureContext }) {
           className="dr-ai-coach__run"
           data-testid="coach-run"
           onClick={() => {
-            countUsage('coach.run')
-            if (runStep(ctx, step)) return
-            const hint = refusedHint(ctx, step)
-            if (hint) ctx.notify({ key: 'dr-ai', timeoutMs: 6000, ...hint })
+            if (actOnStep(ctx, step)) setDismissed(dismissedSteps(ctx.board.id))
           }}
         >
           <SparkIcon size={13} />

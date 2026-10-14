@@ -2,7 +2,8 @@
 // stream said: WORKSHOP_EVENTS and the private brainstorm's), the board's facts (./facts.ts) and the person's role,
 // the one next step to offer, or none. The pilot's signal: a vote with three people present got no ballots, and
 // a brainstorm got no notes; the coach chains the tools that already exist, one chip at a time:
-//   1. a revealed brainstorm, or 8 or more ungrouped team notes in one frame: "Group these N notes into themes";
+//   1. a revealed brainstorm, or 8 or more ungrouped team notes in one frame: "Group these N notes into themes"
+//      (not where the notes already sit under boxes: P-007, the tour's retro);
 //   2. theme labels and no vote yet: "Start a 3-dot vote on the themes";
 //   3. a revealed vote (and no action items yet): "Turn the top 5 into action items" ("the top 3" when the vote
 //      has only 3 results, "Turn the winner into an action item" when it has one: wave M, M2-2);
@@ -71,6 +72,11 @@ export interface CoachFrameNotes {
   readonly frameId: string | null
   /** the team's notes there that no AI theme groups yet (element ids) */
   readonly ungrouped: readonly string[]
+  /**
+   * P-007: names of the boxes the notes already sit under in this frame (a retro's columns; `existingGroups`). Group into
+   * themes would ask before regrouping them, so the coach does not offer it there. Absent: none.
+   */
+  readonly groups?: readonly string[]
 }
 
 export interface CoachFacts {
@@ -141,10 +147,13 @@ export function nextStep(ws: CoachWorkshop, facts: CoachFacts, role: CoachRole):
   const bs = ws.brainstorm
   const fromBrainstorm =
     bs && (bs.status === 'revealed' || bs.status === 'placed')
-      ? facts.frames.find((f) => f.frameId === bs.frameId && f.ungrouped.length >= COACH_BRAINSTORM_MIN_NOTES)
+      ? facts.frames.find(
+          (f) =>
+            f.frameId === bs.frameId && f.ungrouped.length >= COACH_BRAINSTORM_MIN_NOTES && !f.groups?.length,
+        )
       : undefined
   const crowded = [...facts.frames]
-    .filter((f) => f.ungrouped.length >= COACH_THEMES_MIN_NOTES)
+    .filter((f) => f.ungrouped.length >= COACH_THEMES_MIN_NOTES && !f.groups?.length)
     .sort((a, b) => b.ungrouped.length - a.ungrouped.length)[0]
   const group = fromBrainstorm ?? crowded
   if (group && role.ai)
