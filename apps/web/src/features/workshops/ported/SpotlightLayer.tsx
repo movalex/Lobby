@@ -148,10 +148,10 @@ export function SpotlightLayer({ ctx }: { ctx: Ctx }) {
     >
       {dim && rect && <Dim rect={rect} />}
       {/* M2-1: the bar (or the chip that brings it back) is in the board's top-centre stack, with the other
-          bars. P-016: the session timer shares its box (a stack slot is one box; the timer comes first). */}
+          bars. P-016: the session timer has its own slot (the "timer" box, above the spotlight's). */}
+      <TimerBanner ctx={ctx} />
       <TopCentreItem slot="spotlight">
         <div className="dr-wk-topbox">
-          <TimerBanner ctx={ctx} />
           {s && !hidden && placed && <SpotlightBar ctx={ctx} store={store} placed={placed} />}
           {s && hidden && (
             <button

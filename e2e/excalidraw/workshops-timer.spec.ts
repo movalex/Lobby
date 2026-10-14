@@ -344,6 +344,7 @@ test('P-016: a running timer is a readable pill at the top centre for everyone, 
     for (const p of pages) {
       await expect(pill(p)).toHaveCount(0)
       // and the stack's box for it takes no place (no gap above the other top-centre bars)
+      await expect(p.locator('[data-testid="top-centre-stack"] > [data-slot="timer"]')).toHaveCount(0)
       await expect(p.locator('[data-testid="top-centre-stack"] > [data-slot="spotlight"]')).toBeHidden()
     }
   })
@@ -379,6 +380,36 @@ test('P-016: a running timer is a readable pill at the top centre for everyone, 
     expect((await post(a, `/api/boards/${board}/timer`, { action: 'stop' })).status()).toBe(200)
     for (const p of pages) await expect(pill(p)).toHaveCount(0)
   })
+})
+
+// P-016 follow-up: the timer pill has its own slot in the top-centre stack, so a spotlight and the timer at once are two
+// boxes, the timer above the spotlight bar, and neither covers the other.
+test('P-016: the timer pill and the spotlight bar on at once stack in their own slots and do not overlap', async ({
+  join,
+  board,
+}) => {
+  const a = await join('alice')
+  const b = await join('bob', 'editor')
+  await seed(a.page, { notes: [{ id: 'p016-spot', x: 0, y: 0, text: 'Look here' }] })
+  await expectItemsEverywhere([b], ['p016-spot'])
+  const start = await post(a, `/api/boards/${board}/timer`, { action: 'start', durationMs: 120_000 })
+  expect(start.status()).toBe(200)
+  const spot = await post(a, `/api/boards/${board}/spotlight`, { refs: ['shape:p016-spot'] })
+  expect(spot.status()).toBe(200)
+  for (const p of [a.page, b.page]) {
+    const stack = p.getByTestId('top-centre-stack')
+    await expect(stack.getByTestId('timer-banner')).toBeVisible()
+    await expect(stack.getByTestId('spotlight-bar')).toBeVisible()
+    await expect(stack.locator('> [data-slot="timer"]')).toHaveCount(1)
+    await expect(stack.locator('> [data-slot="spotlight"]')).toHaveCount(1)
+    const timer = await stack.locator('> [data-slot="timer"]').boundingBox()
+    const bar = await stack.locator('> [data-slot="spotlight"]').boundingBox()
+    expect(timer && bar, 'both laid out').toBeTruthy()
+    if (timer && bar) {
+      expect(timer.y, 'the timer is above the spotlight').toBeLessThan(bar.y)
+      expect(timer.y + timer.height, 'no overlap').toBeLessThanOrEqual(bar.y + 0.5)
+    }
+  }
 })
 
 // P-038: "Not set" is words, so it is in the interface font; only the clock's digits are monospaced.

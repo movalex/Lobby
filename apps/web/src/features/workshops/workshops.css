@@ -1449,7 +1449,7 @@ li[data-rank="1"] .dr-wk-rank__bar {
   color: var(--dr-ink-2);
 }
 
-/* P-016: the stack's spotlight box holds the timer pill above the spotlight bar. */
+/* the stack's spotlight box (the bar, or the chip that brings it back); the session timer has its own slot */
 .dr-wk-topbox {
   display: flex;
   flex-direction: column;

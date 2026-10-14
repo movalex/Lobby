@@ -12,9 +12,29 @@ import {
 } from './top-centre.ts'
 
 describe('the stack: the order and the gaps', () => {
-  it('holds, top to bottom: the invitation, the spotlight bar, the follow pill, the since chip, the coach chip, the AI pills (P-047), the feedback prompt', () => {
-    expect(TOP_CENTRE_SLOTS).toEqual(['invite', 'spotlight', 'follow', 'since', 'coach', 'ai', 'feedback'])
-    expect(TOP_CENTRE_SLOTS.map(slotOrder)).toEqual([0, 1, 2, 3, 4, 5, 6])
+  it('holds, top to bottom: the invitation, the session timer (P-016), the spotlight bar, the follow pill, the since chip, the coach chip, the AI pills (P-047), the feedback prompt', () => {
+    expect(TOP_CENTRE_SLOTS).toEqual([
+      'invite',
+      'timer',
+      'spotlight',
+      'follow',
+      'since',
+      'coach',
+      'ai',
+      'feedback',
+    ])
+    expect(TOP_CENTRE_SLOTS.map(slotOrder)).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
+  })
+
+  it('P-016: the timer pill and the spotlight bar shown together are two boxes, the timer above, 8 px apart', () => {
+    const layout = layoutStack([
+      { slot: 'spotlight', height: 40 },
+      { slot: 'timer', height: 44 },
+    ])
+    expect(layout.items).toEqual([
+      { slot: 'timer', top: 0, bottom: 44 },
+      { slot: 'spotlight', top: 44 + TOP_CENTRE_GAP, bottom: 44 + TOP_CENTRE_GAP + 40 },
+    ])
   })
 
   it('P-047: the since chip, the coach chip and the AI pills shown together never overlap, 8 px apart', () => {
