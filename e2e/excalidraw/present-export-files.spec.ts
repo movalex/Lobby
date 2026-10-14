@@ -117,12 +117,12 @@ test.describe('image exports', () => {
     const files = trackRequests(a.page, isFileRequest)
     const dialog = a.page.getByTestId('export-dialog')
 
-    await openBoardExport(a.page)
+    await openBoardExport(a.page, { expand: true })
     await expect(dialog).toBeVisible()
     await dialog.getByTestId('export-frame').selectOption(F.intro)
     await expect(dialog.getByTestId('export-area-frame')).toBeChecked()
     await dialog.getByTestId('export-scale').selectOption('2')
-    await expect(dialog.getByTestId('export-size-hint')).toHaveText('PNG ≈ 1,600 × 1,200 px')
+    await expect(dialog.getByTestId('export-size-hint')).toHaveText('PNG size: about 1,600 × 1,200 px')
 
     await test.step('frame PNG at 2×: exact size, opaque, marked 2×, from the original upload', async () => {
       const png = await downloadFrom(a.page, () => dialog.getByTestId('export-png').click())
@@ -174,7 +174,7 @@ test.describe('image exports', () => {
       // Two notes on a diagonal: the selection's top-left corner is empty board.
       await select(a.page, [N.intro, N.plan])
       const sel = await unionBounds(a.page, [N.intro, N.plan])
-      await openBoardExport(a.page)
+      await openBoardExport(a.page, { expand: true })
       await expect(dialog.getByTestId('export-area-selection')).toBeChecked()
       await expect(dialog.getByTestId('export-scale')).toHaveValue('2') // remembered
       await dialog.getByTestId('export-transparent').check()
@@ -221,6 +221,56 @@ test.describe('image exports', () => {
       expect(bigInfo.pixelsPerMetre).toEqual([ppm(4)])
     })
     expect(files.paths().filter((p) => DERIVATIVE_PATH.test(p))).toEqual([])
+  })
+
+  // P-026 (wave P): the dialog opens on the whole board (the selection when there is one), in plain words, with the
+  // size and page options folded; a frame's file is named after the frame, not its number in the deck.
+  test('P-026: opens on the whole board with the options folded, in plain words; the selection when there is one; a frame file is named after the frame', async ({
+    canvasSession,
+    users,
+    board,
+  }) => {
+    const a = await canvasSession('alice')
+    const title = await boardTitle(users, board)
+    await seedDeck(a.page, DECK)
+    // the camera on one frame: it used to be the frame in view that the image export opened on
+    await zoomToFit(a.page)
+    const dialog = a.page.getByTestId('export-dialog')
+
+    await openBoardExport(a.page)
+    await expect(dialog.getByTestId('export-area-board')).toBeChecked()
+    await expect(dialog.getByTestId('export-area-frame')).not.toBeChecked()
+    await expect(dialog.getByTestId('export-area-selection')).toBeDisabled()
+    // folded: the size and the page options are one click away, their summaries say the setting
+    await expect(dialog.getByTestId('export-image-options')).not.toHaveAttribute('open', /.*/)
+    await expect(dialog.getByTestId('export-pdf-options')).not.toHaveAttribute('open', /.*/)
+    await expect(dialog.getByTestId('export-size-hint')).toContainText('PNG size: about')
+    await expect(dialog.getByTestId('export-pdf-options-summary')).toContainText('Fit each frame')
+    await expect(dialog.getByTestId('export-scale')).toBeHidden()
+    await expect(dialog.getByTestId('export-pdf-hint')).toBeHidden()
+    // plain words
+    const text = (await dialog.textContent()) ?? ''
+    for (const jargon of ['Vector', 'vector pages', 'PNG ≈'])
+      expect(text, jargon).not.toContain(jargon)
+    await expect(dialog.getByTestId('export-png')).toHaveText('Download PNG')
+    await expect(dialog.getByTestId('export-pdf')).toHaveText('Download PDF')
+    await a.page.keyboard.press('Escape')
+    await expect(dialog).toHaveCount(0)
+
+    await test.step('with something selected it opens on the selection', async () => {
+      await select(a.page, [N.intro])
+      await openBoardExport(a.page)
+      await expect(dialog.getByTestId('export-area-selection')).toBeChecked()
+      await a.page.keyboard.press('Escape')
+      await expect(dialog).toHaveCount(0)
+    })
+
+    await test.step('a frame’s file is named after the frame', async () => {
+      await openBoardExport(a.page)
+      await dialog.getByTestId('export-frame').selectOption(F.intro)
+      const png = await downloadFrom(a.page, () => dialog.getByTestId('export-png').click())
+      expect(png.name).toBe(`${title} - Intro.png`)
+    })
   })
 
   // 3a renders the context menu (host slot `contextMenu`) from the registry entries this feature adds
@@ -377,7 +427,7 @@ test.describe('file cards in exports', () => {
     expect(cards.map((c) => c.facts.name).sort()).toEqual([...FILES].sort())
 
     const dialog = a.page.getByTestId('export-dialog')
-    await openBoardExport(a.page)
+    await openBoardExport(a.page, { expand: true })
     await expect(dialog).toBeVisible()
     await dialog.getByTestId('export-area-board').check()
     await dialog.getByTestId('export-scale').selectOption('2')
@@ -470,7 +520,7 @@ test.describe('PDF export', () => {
     const dialog = a.page.getByTestId('export-dialog')
     const summary = dialog.getByTestId('export-pdf-summary')
 
-    await openBoardExport(a.page)
+    await openBoardExport(a.page, { expand: true })
     await expect(summary).toHaveText('One page per frame, in presentation order (2 pages).')
     // N6-5: these steps check today's image pages; once the vector choice is offered (VECTOR_PDF), they choose
     // "Image pages" (remembered for the rest of the test), which must give exactly today's output
@@ -743,7 +793,7 @@ test.describe('PDF export', () => {
       await expect(withResults).not.toBeChecked()
       await expect(withComments).toBeEnabled()
       // 1 open thread everyone sees and 1 resolved; the team-only one is not counted yet
-      await expect(dialog.getByText('Comments appendix (1 open, 1 resolved)')).toBeVisible()
+      await expect(dialog.getByText('Comments page (1 open, 1 resolved)')).toBeVisible()
       await expect(withTeam).not.toBeChecked()
       await expect(dialog.getByTestId('export-pdf-extras')).toContainText('Include 1 team-only thread')
       // nothing is added unless chosen
@@ -755,7 +805,7 @@ test.describe('PDF export', () => {
       await withResults.check()
       await withComments.check()
       await expect(summary).toHaveText(
-        'One page per frame, in presentation order (2 pages). Then a vote results page and a comments appendix at the end.',
+        'One page per frame, in presentation order (2 pages). Then a vote results page and a comments page at the end.',
       )
       const pdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
       expect(pdf.name).toBe(`${title}.pdf`)
@@ -802,7 +852,7 @@ test.describe('PDF export', () => {
 
     await test.step('"Include the team-only thread": it is in the file and marked', async () => {
       await withTeam.check()
-      await expect(dialog.getByText('Comments appendix (2 open, 1 resolved)')).toBeVisible()
+      await expect(dialog.getByText('Comments page (2 open, 1 resolved)')).toBeVisible()
       const pdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
       const texts = await pdfPageTexts(pdf.bytes)
       const comments = texts[3] ?? ''
@@ -812,7 +862,7 @@ test.describe('PDF export', () => {
       await withTeam.uncheck()
     })
 
-    await test.step('a board that hides note authors: the appendix names nobody', async () => {
+    await test.step('a board that hides note authors: the comments page names nobody', async () => {
       await a.page.evaluate(() =>
         (
           window as unknown as {
@@ -821,7 +871,7 @@ test.describe('PDF export', () => {
         ).__lobbyBoard.canvas.doc.set({ workshop: { hideNoteAuthors: true, hideCursors: false } }),
       )
       await expect(dialog.getByTestId('export-pdf-authors-hint')).toHaveText(
-        'This board hides note authors, so the appendix lists the comments without who wrote them.',
+        'This board hides note authors, so the comments page lists them without who wrote them.',
       )
       const pdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
       const comments = (await pdfPageTexts(pdf.bytes))[3] ?? ''
@@ -838,7 +888,7 @@ test.describe('PDF export', () => {
       const info = await readPdf(pdf.bytes)
       expect(info.outline.map((o) => o.title)).toEqual(['Plan', 'Intro', 'Vote results'])
       await a.page.keyboard.press('Escape')
-      await openBoardExport(a.page)
+      await openBoardExport(a.page, { expand: true })
       await expect(withResults).not.toBeChecked()
       await expect(withComments).not.toBeChecked()
     })

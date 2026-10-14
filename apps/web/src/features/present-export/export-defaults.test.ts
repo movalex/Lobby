@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { frameInView, openingScale } from './export-defaults.ts'
+import { frameInView, openingArea, openingScale } from './export-defaults.ts'
 
 // The Lobby tour's row: six 1600 x 1000 frames, 480 apart (packages/templates lobby-tour).
 const TOUR = Array.from({ length: 6 }, (_, i) => ({
@@ -62,5 +62,26 @@ describe('openingScale', () => {
   it('stays at the smallest when nothing fits, and keeps the remembered size with no area', () => {
     expect(openingScale<S>(4, SCALES, { w: 40_000, h: 2_000 })).toBe(1)
     expect(openingScale<S>(2, SCALES, null)).toBe(2)
+  })
+})
+
+// P-026 (wave P): the image export opens on the whole board, or on the selection when there is one. It used to open on
+// the frame in view ("Frame: 1 · Welcome" on the tour, a file named after one frame when the person wanted the board).
+describe('openingArea', () => {
+  it('is the whole board with nothing selected, whatever frame the camera shows', () => {
+    expect(openingArea({ selected: 0, selectedFrame: false })).toBe('board')
+    // the frame that fills the view is no longer a reason
+    expect(frameInView({ x: f2.x - 40, y: f2.y - 40, w: f2.w + 80, h: f2.h + 80 }, TOUR)).toBe('shape:f2')
+  })
+
+  it('is the selection when something is selected', () => {
+    expect(openingArea({ selected: 3, selectedFrame: false })).toBe('selection')
+    expect(openingArea({ selected: 1, selectedFrame: false })).toBe('selection')
+  })
+
+  it('is that frame when the selection is exactly one frame (it is the selection)', () => {
+    expect(openingArea({ selected: 1, selectedFrame: true })).toBe('frame')
+    // a frame among other things is a selection
+    expect(openingArea({ selected: 2, selectedFrame: true })).toBe('selection')
   })
 })

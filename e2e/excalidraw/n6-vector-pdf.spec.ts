@@ -446,12 +446,12 @@ test.describe('N6 vector PDF', () => {
     expect(table.faces.map((f) => f.family)).toContain('Xiaolai')
 
     await previewVector(a.page, true)
-    await openBoardExport(a.page)
+    await openBoardExport(a.page, { expand: true })
     const dialog = a.page.getByTestId('export-dialog')
     // N6-5: offered, on by default
     await expect(dialog.getByTestId('export-pdf-pages-vector')).toBeChecked()
     await expect(dialog.getByTestId('export-pdf-pages-image')).not.toBeChecked()
-    await expect(dialog.getByTestId('export-pdf-hint')).toContainText('Vector pages stay sharp at any zoom')
+    await expect(dialog.getByTestId('export-pdf-hint')).toContainText('Sharp pages stay crisp at any zoom')
     const pdf = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
     expect(pdf.name).toBe(`${title}.pdf`)
     keep('vector.pdf', pdf.bytes)
@@ -737,7 +737,7 @@ test.describe('N6 vector PDF', () => {
     expect(frame2).toMatch(/^<svg/)
 
     await previewVector(a.page, true)
-    await openBoardExport(a.page)
+    await openBoardExport(a.page, { expand: true })
     const dialog = a.page.getByTestId('export-dialog')
     await expect(dialog.getByTestId('export-pdf-pages-vector')).toBeChecked()
     const t0 = Date.now()
@@ -903,7 +903,7 @@ test.describe('N6 vector PDF', () => {
 
     // today's dialog (the vector option not offered: the dev key '0', as with VECTOR_PDF off)
     await previewVector(a.page, false)
-    await openBoardExport(a.page)
+    await openBoardExport(a.page, { expand: true })
     await expect(dialog.getByTestId('export-pdf-pages')).toHaveCount(0)
     const today = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
     await a.page.keyboard.press('Escape')
@@ -911,9 +911,9 @@ test.describe('N6 vector PDF', () => {
 
     // the preview on, "Image pages" chosen
     await previewVector(a.page, true)
-    await openBoardExport(a.page)
+    await openBoardExport(a.page, { expand: true })
     await dialog.getByTestId('export-pdf-pages-image').check()
-    await expect(dialog.getByTestId('export-pdf-hint')).toContainText('Pages are sharp images of your frames')
+    await expect(dialog.getByTestId('export-pdf-hint')).toContainText('Pages are images of your frames')
     const images = await downloadFrom(a.page, () => dialog.getByTestId('export-pdf').click())
     await expect(dialog.getByTestId('export-pdf-fallback')).toHaveCount(0)
     await a.page.keyboard.press('Escape')
@@ -930,7 +930,7 @@ test.describe('N6 vector PDF', () => {
     expect(await pdfPageTexts(images.bytes)).toEqual(await pdfPageTexts(today.bytes))
 
     // remembered: the next opening is on Image pages
-    await openBoardExport(a.page)
+    await openBoardExport(a.page, { expand: true })
     await expect(dialog.getByTestId('export-pdf-pages-image')).toBeChecked()
   })
 })

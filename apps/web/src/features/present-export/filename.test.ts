@@ -3,6 +3,7 @@ import {
   exportFilename,
   FALLBACK_FILENAME,
   MAX_BASE_CHARS,
+  frameFileQualifier,
   MAX_NAME_BYTES,
   sanitizeFilename,
 } from './filename.ts'
@@ -81,5 +82,26 @@ describe('exportFilename', () => {
     const name = exportFilename('日本語のボード'.repeat(40), 'png', 'フレーム'.repeat(30))
     expect(bytes(name)).toBeLessThanOrEqual(MAX_NAME_BYTES)
     expect(name.endsWith('.png')).toBe(true)
+  })
+})
+
+// P-026: a frame's file is named after the frame, not after its place in the deck ("Lobby tour - 1 · Welcome.png").
+describe('frameFileQualifier', () => {
+  it('drops the number a deck puts in front of a frame name', () => {
+    expect(frameFileQualifier('1 · Welcome')).toBe('Welcome')
+    expect(frameFileQualifier('12 · Mood board')).toBe('Mood board')
+    expect(frameFileQualifier('3. Plan')).toBe('Plan')
+    expect(frameFileQualifier('2 - Retro')).toBe('Retro')
+    expect(exportFilename('Lobby tour', 'png', frameFileQualifier('1 · Welcome'))).toBe(
+      'Lobby tour - Welcome.png',
+    )
+  })
+
+  it('keeps a name that is only a number, a name without one, and what is not a prefix', () => {
+    expect(frameFileQualifier('2024')).toBe('2024')
+    expect(frameFileQualifier('Welcome')).toBe('Welcome')
+    expect(frameFileQualifier('2024 plan')).toBe('2024 plan')
+    expect(frameFileQualifier('1 · ')).toBe('1 ·')
+    expect(frameFileQualifier('')).toBe('')
   })
 })

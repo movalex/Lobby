@@ -1,9 +1,10 @@
 // What the Export dialog starts on (F14, round-2 demo walk). It used to open on "Whole board" at the
 // remembered 2×, which on the six-frame Lobby tour meant a 20,800 px PNG and a yellow "larger than
-// browsers can reliably draw" warning before anyone had chosen anything. Now it opens on what the
-// person is looking at: the selection, else the frame that fills the view, else the whole board, at
-// their remembered size stepped down (for this opening only) until the image fits the browser's
-// canvas limits. Pure; ExportDialog.tsx reads the editor.
+// browsers can reliably draw" warning before anyone had chosen anything. F14 then opened on what the person was
+// looking at (the frame that fills the view), which gave "Frame: 1 · Welcome" and a file for one frame when someone
+// asked to export the board (P-026, wave P). Now it opens on the selection when there is one, else the whole board,
+// at their remembered size stepped down (for this opening only) until the image fits the browser's canvas limits.
+// Pure; ExportDialog.tsx reads the editor.
 
 import { exceedsCanvasLimits, imagePixelSize } from './pdf-layout.ts'
 
@@ -12,6 +13,12 @@ export interface RectLike {
   y: number
   w: number
   h: number
+}
+
+/** What the image export opens on (P-026): the selection, a single selected frame as that frame, else the board. */
+export function openingArea(s: { selected: number; selectedFrame: boolean }): 'selection' | 'frame' | 'board' {
+  if (s.selected === 0) return 'board'
+  return s.selected === 1 && s.selectedFrame ? 'frame' : 'selection'
 }
 
 /** The frame counts as "the one in view" when it covers at least this share of the viewport… */

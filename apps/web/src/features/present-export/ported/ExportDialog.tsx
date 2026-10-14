@@ -13,8 +13,8 @@ import { controllerOf as commentsControllerOf } from '../../comments/ported/cont
 import { exportPolicyOn, exportPolicySentence } from '../../sharing/ported/export-policy.ts'
 import { workshopSettingsOf } from '../../workshops/ported/session-settings.ts'
 import { downloadBlob } from '../download.ts'
-import { frameInView, openingScale } from '../export-defaults.ts'
-import { exportFilename } from '../filename.ts'
+import { frameInView, openingArea, openingScale } from '../export-defaults.ts'
+import { exportFilename, frameFileQualifier } from '../filename.ts'
 import {
   exceedsCanvasLimits,
   imagePixelSize,
@@ -108,6 +108,10 @@ const formatBytes = (n: number) =>
     ? `${fmt.format(Math.round(n / (1024 * 1024)))} MB`
     : `${fmt.format(Math.max(1, Math.round(n / 1024)))} KB`
 
+/** The size choices in words: 1× is the size it has on the board. */
+const scaleLabel = (s: ImageScale) =>
+  s === 1 ? '1× (as on the board)' : s === 2 ? '2× (sharper)' : `${s}× (sharpest)`
+
 const rectOf = (b: Bounds | null) => (b ? { w: b.width, h: b.height } : null)
 
 /** A refusal with its own words (the status line shows them; any other failure gets the general text). */
@@ -162,20 +166,14 @@ export function ExportDialog({
     [boardId],
   )
 
-  // F14: open on what the person is looking at. A selected frame, else the selection, else the frame
-  // that fills the view, else the whole board (export-defaults.ts).
+  // P-026: open on the selection if there is one (a single selected frame is that frame), else the whole board
+  // (export-defaults.ts); the frame list starts on the selected frame, else the one in view.
   const [opening] = useState(() => {
     const selectedFrame = selectedIds.find((id) => canvas.get(id)?.type === 'frame')
     const v = canvas.viewport.get()
     const viewed = frameInView({ x: v.x, y: v.y, w: v.width, h: v.height }, outline)
-    const area: Area =
-      selectedIds.length === 1 && selectedFrame
-        ? 'frame'
-        : selectedIds.length > 0
-          ? 'selection'
-          : viewed
-            ? 'frame'
-            : 'board'
+    // P-026: the selection, else the whole board (the frame in view only picks which frame the list starts on)
+    const area: Area = openingArea({ selected: selectedIds.length, selectedFrame: !!selectedFrame })
     const frameId = selectedFrame ?? viewed ?? outline[0]?.id ?? ''
     const b =
       area === 'selection'
@@ -289,7 +287,7 @@ export function ExportDialog({
     effectiveArea === 'selection'
       ? 'selection'
       : effectiveArea === 'frame'
-        ? frameName(canvas, frameId) || 'frame'
+        ? frameFileQualifier(frameName(canvas, frameId)) || 'frame'
         : undefined
 
   const byId = new Map(order.map((e) => [e.id, e]))
@@ -340,7 +338,7 @@ export function ExportDialog({
   const resultsAvailable = resultRowCount > 0
   const addResults = withResults && resultsAvailable
   const addComments = withComments && commentsAvailable
-  const extraPages = [addResults ? 'a vote results page' : null, addComments ? 'a comments appendix' : null]
+  const extraPages = [addResults ? 'a vote results page' : null, addComments ? 'a comments page' : null]
     .filter((x): x is string => x !== null)
     .join(' and ')
 
@@ -482,6 +480,7 @@ export function ExportDialog({
     })
 
   const disabled = busy !== null
+  const pageFormatLabel = PDF_PAGE_FORMATS.find((f) => f.id === prefs.pdfFormat)?.label ?? ''
   const pdfProgress = busy?.kind === 'pdf' && busy.total ? { done: busy.done ?? 0, total: busy.total } : null
   const nothing = shapeCount === 0
 
@@ -507,19 +506,18 @@ export function ExportDialog({
           <h3 id={`${uid}-img`} className="dr-pe-section__title">
             Image
           </h3>
-          <fieldset className="dr-pe-choices" disabled={disabled || nothing}>
+          <fieldset className="dr-pe-choices dr-pe-choices--stack" disabled={disabled || nothing}>
             <legend className="dr-pe-legend">What to export</legend>
             <label className="dr-pe-choice">
               <input
                 type="radio"
                 name={`${uid}-area`}
-                value="selection"
-                data-testid="export-area-selection"
-                checked={effectiveArea === 'selection'}
-                disabled={!hasSelection}
-                onChange={() => setArea('selection')}
+                value="board"
+                data-testid="export-area-board"
+                checked={effectiveArea === 'board'}
+                onChange={() => setArea('board')}
               />
-              Selection{hasSelection ? ` (${plural(selectedIds.length, 'object')})` : ' (nothing selected)'}
+              Whole board
             </label>
             <label className="dr-pe-choice">
               <input
@@ -531,7 +529,7 @@ export function ExportDialog({
                 disabled={outline.length === 0}
                 onChange={() => setArea('frame')}
               />
-              Frame
+              One frame
               <select
                 className="dr-input dr-select dr-select--compact dr-pe-frame-select"
                 aria-label="Frame to export"
@@ -555,58 +553,18 @@ export function ExportDialog({
               <input
                 type="radio"
                 name={`${uid}-area`}
-                value="board"
-                data-testid="export-area-board"
-                checked={effectiveArea === 'board'}
-                onChange={() => setArea('board')}
+                value="selection"
+                data-testid="export-area-selection"
+                checked={effectiveArea === 'selection'}
+                disabled={!hasSelection}
+                onChange={() => setArea('selection')}
               />
-              Whole board
+              {hasSelection
+                ? `What I selected (${plural(selectedIds.length, 'object')})`
+                : 'What I selected (nothing selected)'}
             </label>
           </fieldset>
 
-          <div className="dr-pe-row">
-            <label className="dr-pe-inline">
-              Size
-              <select
-                className="dr-input dr-select dr-select--compact"
-                data-testid="export-scale"
-                value={scale}
-                disabled={disabled}
-                onChange={(e) => {
-                  const next = Number(e.target.value) as ImageScale
-                  setScale(next)
-                  updatePrefs({ scale: next })
-                }}
-              >
-                {IMAGE_SCALES.map((s) => (
-                  <option key={s} value={s}>
-                    {s}×
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="dr-pe-inline">
-              <input
-                type="checkbox"
-                data-testid="export-transparent"
-                checked={prefs.transparent}
-                disabled={disabled}
-                onChange={(e) => updatePrefs({ transparent: e.target.checked })}
-              />
-              Transparent background
-            </label>
-            {sizeHint && (
-              <span className="dr-pe-hint" data-testid="export-size-hint">
-                PNG ≈ {fmt.format(sizeHint.want.width)} × {fmt.format(sizeHint.want.height)} px
-              </span>
-            )}
-          </div>
-          {sizeHint?.reduced && (
-            <p className="dr-pe-note dr-pe-note--warn" data-testid="export-size-warning">
-              That is larger than browsers can reliably draw (about 16,000 px per side), so the PNG may come
-              out smaller. For more detail, choose a smaller size or export frames one at a time.
-            </p>
-          )}
           <div className="dr-pe-actions">
             <button
               type="button"
@@ -637,22 +595,70 @@ export function ExportDialog({
               {busy?.kind === 'copy' ? 'Copying…' : 'Copy as PNG'}
             </button>
           </div>
-          <label className="dr-pe-inline">
-            <input
-              type="checkbox"
-              data-testid="export-svg-originals"
-              checked={svgOriginals}
-              disabled={disabled}
-              onChange={(e) => setSvgOriginals(e.target.checked)}
-            />
-            SVG: embed the original uploads
-            {originalsSize > 0 ? ` (large: about ${formatBytes(originalsSize)})` : ' (large file)'}
-          </label>
-          <p className="dr-pe-hint" data-testid="export-image-source">
-            {svgOriginals
-              ? 'PNG, Copy and SVG use the original uploads.'
-              : 'PNG and Copy use the original uploads. SVG embeds sharp previews, so the file stays small enough to share.'}
-          </p>
+          {sizeHint?.reduced && (
+            <p className="dr-pe-note dr-pe-note--warn" data-testid="export-size-warning">
+              This is bigger than most browsers can draw (about 16,000 px on a side), so the PNG may come out
+              smaller. Pick a smaller size under “Size and options”, or export one frame at a time.
+            </p>
+          )}
+          <details className="dr-pe-more" data-testid="export-image-options">
+            <summary className="dr-pe-more__summary" data-testid="export-image-options-toggle">
+              <span className="dr-pe-more__title">Size and options</span>
+              {sizeHint && (
+                <span className="dr-pe-more__sub" data-testid="export-size-hint">
+                  PNG size: about {fmt.format(sizeHint.want.width)} × {fmt.format(sizeHint.want.height)} px
+                </span>
+              )}
+            </summary>
+            <div className="dr-pe-row">
+              <label className="dr-pe-inline">
+                Size
+                <select
+                  className="dr-input dr-select dr-select--compact"
+                  data-testid="export-scale"
+                  value={scale}
+                  disabled={disabled}
+                  onChange={(e) => {
+                    const next = Number(e.target.value) as ImageScale
+                    setScale(next)
+                    updatePrefs({ scale: next })
+                  }}
+                >
+                  {IMAGE_SCALES.map((s) => (
+                    <option key={s} value={s}>
+                      {scaleLabel(s)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="dr-pe-inline">
+                <input
+                  type="checkbox"
+                  data-testid="export-transparent"
+                  checked={prefs.transparent}
+                  disabled={disabled}
+                  onChange={(e) => updatePrefs({ transparent: e.target.checked })}
+                />
+                Transparent background
+              </label>
+            </div>
+            <label className="dr-pe-inline">
+              <input
+                type="checkbox"
+                data-testid="export-svg-originals"
+                checked={svgOriginals}
+                disabled={disabled}
+                onChange={(e) => setSvgOriginals(e.target.checked)}
+              />
+              SVG: include full-size uploaded images
+              {originalsSize > 0 ? ` (adds about ${formatBytes(originalsSize)})` : ' (larger file)'}
+            </label>
+            <p className="dr-pe-hint" data-testid="export-image-source">
+              {svgOriginals
+                ? 'PNG, Copy and SVG use the full-size uploads.'
+                : 'PNG and Copy use the full-size uploads. The SVG uses lighter previews, so the file stays small enough to share.'}
+            </p>
+          </details>
         </section>
 
         <section className="dr-pe-section" aria-labelledby={`${uid}-pdf`}>
@@ -681,65 +687,12 @@ export function ExportDialog({
               Include {plural(pdfPick.skippedCount, 'frame')} set to skip in presentation
             </label>
           )}
-          {vectorOffered && (
-            <fieldset className="dr-pe-choices" data-testid="export-pdf-pages" disabled={disabled}>
-              <legend className="dr-pe-legend">Pages</legend>
-              <label className="dr-pe-choice">
-                <input
-                  type="radio"
-                  name={`${uid}-pdf-pages`}
-                  value="vector"
-                  data-testid="export-pdf-pages-vector"
-                  checked={pagesKind === 'vector'}
-                  onChange={() => updatePrefs({ pdfPages: 'vector' })}
-                />
-                Vector (sharp, selectable text)
-              </label>
-              <label className="dr-pe-choice">
-                <input
-                  type="radio"
-                  name={`${uid}-pdf-pages`}
-                  value="image"
-                  data-testid="export-pdf-pages-image"
-                  checked={pagesKind === 'image'}
-                  onChange={() => updatePrefs({ pdfPages: 'image' })}
-                />
-                Image pages
-              </label>
-            </fieldset>
-          )}
-          <label className="dr-pe-inline">
-            Page size
-            <select
-              className="dr-input dr-select dr-select--compact"
-              data-testid="export-pdf-page-size"
-              value={prefs.pdfFormat}
-              disabled={disabled}
-              onChange={(e) => {
-                if (isPdfPageFormat(e.target.value)) updatePrefs({ pdfFormat: e.target.value })
-              }}
-            >
-              {PDF_PAGE_FORMATS.map((f) => (
-                <option key={f.id} value={f.id}>
-                  {f.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="dr-pe-inline">
-            <input
-              type="checkbox"
-              data-testid="export-pdf-lossless"
-              checked={prefs.lossless}
-              disabled={disabled}
-              onChange={(e) => updatePrefs({ lossless: e.target.checked })}
-            />
-            {pagesKind === 'vector'
-              ? 'Lossless images on image pages (larger file, slower)'
-              : 'Lossless images (larger file, slower)'}
-          </label>
-          <fieldset className="dr-pe-choices" data-testid="export-pdf-extras" disabled={disabled}>
-            <legend className="dr-pe-legend">Add to the end of the PDF</legend>
+          <fieldset
+            className="dr-pe-choices dr-pe-choices--stack"
+            data-testid="export-pdf-extras"
+            disabled={disabled}
+          >
+            <legend className="dr-pe-legend">Also add at the end</legend>
             <label className="dr-pe-choice">
               <input
                 type="checkbox"
@@ -765,7 +718,7 @@ export function ExportDialog({
                 disabled={!commentsAvailable}
                 onChange={(e) => setWithComments(e.target.checked)}
               />
-              Comments appendix
+              Comments page
               {commentsAvailable ? ` (${commentCounts.open} open, ${commentCounts.resolved} resolved)` : ''}
             </label>
             {!commentsAvailable && (
@@ -791,17 +744,82 @@ export function ExportDialog({
             )}
             {addComments && authorsHidden && (
               <p className="dr-pe-hint" data-testid="export-pdf-authors-hint">
-                This board hides note authors, so the appendix lists the comments without who wrote them.
+                This board hides note authors, so the comments page lists them without who wrote them.
               </p>
             )}
           </fieldset>
-          <p className="dr-pe-hint" data-testid="export-pdf-hint">
-            Every page has a header with its frame’s name (also a PDF bookmark). “Fit each frame” sizes each
-            page to its frame; 16:9 and A4 give every page the same landscape size with the frame fitted in.
-            {pagesKind === 'vector'
-              ? ' Vector pages stay sharp at any zoom, and their text is real text you can select and search, in every script Lobby’s fonts cover. A frame with effects vector pages cannot draw is exported as an image page instead, and this dialog says which. Vote results and comments pages are images with searchable text.'
-              : ' Pages are sharp images of your frames (drawn from the original uploads). Text is searchable and can be copied, but it is not editable vector text.'}
-          </p>
+          <details className="dr-pe-more" data-testid="export-pdf-options">
+            <summary className="dr-pe-more__summary" data-testid="export-pdf-options-toggle">
+              <span className="dr-pe-more__title">Page style and size</span>
+              <span className="dr-pe-more__sub" data-testid="export-pdf-options-summary">
+                {pagesKind === 'vector' ? 'Sharp pages' : 'Image pages'} · {pageFormatLabel}
+              </span>
+            </summary>
+            {vectorOffered && (
+              <fieldset className="dr-pe-choices" data-testid="export-pdf-pages" disabled={disabled}>
+                <legend className="dr-pe-legend">Pages</legend>
+                <label className="dr-pe-choice">
+                  <input
+                    type="radio"
+                    name={`${uid}-pdf-pages`}
+                    value="vector"
+                    data-testid="export-pdf-pages-vector"
+                    checked={pagesKind === 'vector'}
+                    onChange={() => updatePrefs({ pdfPages: 'vector' })}
+                  />
+                  Sharp pages (text you can select)
+                </label>
+                <label className="dr-pe-choice">
+                  <input
+                    type="radio"
+                    name={`${uid}-pdf-pages`}
+                    value="image"
+                    data-testid="export-pdf-pages-image"
+                    checked={pagesKind === 'image'}
+                    onChange={() => updatePrefs({ pdfPages: 'image' })}
+                  />
+                  Image pages
+                </label>
+              </fieldset>
+            )}
+            <label className="dr-pe-inline">
+              Page size
+              <select
+                className="dr-input dr-select dr-select--compact"
+                data-testid="export-pdf-page-size"
+                value={prefs.pdfFormat}
+                disabled={disabled}
+                onChange={(e) => {
+                  if (isPdfPageFormat(e.target.value)) updatePrefs({ pdfFormat: e.target.value })
+                }}
+              >
+                {PDF_PAGE_FORMATS.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="dr-pe-inline">
+              <input
+                type="checkbox"
+                data-testid="export-pdf-lossless"
+                checked={prefs.lossless}
+                disabled={disabled}
+                onChange={(e) => updatePrefs({ lossless: e.target.checked })}
+              />
+              {pagesKind === 'vector'
+                ? 'Lossless images on image pages (larger file, slower)'
+                : 'Lossless images (larger file, slower)'}
+            </label>
+            <p className="dr-pe-hint" data-testid="export-pdf-hint">
+              Every page has its frame’s name as a header and a PDF bookmark. “Fit each frame” makes each page
+              the size of its frame; 16:9 and A4 give every page the same landscape size.
+              {pagesKind === 'vector'
+                ? ' Sharp pages stay crisp at any zoom, and their text can be selected and searched. A frame with effects they cannot draw becomes an image page instead, and this dialog says which. Vote results and comments pages are images with searchable text.'
+                : ' Pages are images of your frames, drawn from the full-size uploads. Their text can be searched and copied, but not edited.'}
+            </p>
+          </details>
           <div className="dr-pe-actions">
             <button
               ref={pdfButton}
@@ -841,7 +859,7 @@ export function ExportDialog({
           )}
           {pdfNotes?.imagePages && (
             <p className="dr-pe-note" data-testid="export-pdf-fallback" role="status">
-              {pdfNotes.imagePages}: vector pages could not draw them, so they are pictures of the frame
+              {pdfNotes.imagePages}: sharp pages could not draw their effects, so they are images of the frame
               (their text is still searchable).
             </p>
           )}
@@ -858,8 +876,8 @@ export function ExportDialog({
           </h3>
           <p className="dr-pe-text">
             {hasSelection
-              ? `The text of the selection (${plural(selectedIds.length, 'object')} and what they contain): one row per object with its type, frame, color, position and tags.`
-              : 'The text of every object on the board: one row per object with its type, frame, color, position and tags.'}
+              ? `A spreadsheet of the text in the selection (${plural(selectedIds.length, 'object')} and what they contain): one row per object, with its type, frame, color, position and tags.`
+              : 'A spreadsheet of the text on the board: one row per object, with its type, frame, color, position and tags.'}
           </p>
           <div className="dr-pe-actions">
             <button

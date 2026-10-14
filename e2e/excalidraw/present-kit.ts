@@ -411,9 +411,22 @@ export async function pngRegionStats(
  * K3-3: the Export dialog from the board menu (Board menu ▸ Export ▸ Export…). The top bar has no Export icon
  * now (UXD-01); Ctrl/Cmd+P opens the dialog at PDF.
  */
-export async function openBoardExport(page: Page): Promise<void> {
+export async function openBoardExport(page: Page, opts: { expand?: boolean } = {}): Promise<void> {
   await page.getByTestId('main-menu.button').click()
   await page.getByTestId('main-menu-sub.export-button').click()
   await page.getByTestId('main-menu.export-dialog').click()
   await expect(page.getByTestId('export-dialog')).toBeVisible()
+  if (opts.expand) await expandExportOptions(page.getByTestId('export-dialog'))
+}
+
+/**
+ * P-026: the Export dialog folds its size and page options under "Size and options" and "Page style and size"; this
+ * opens both, as someone who wants them would (the choices stay open while the dialog does).
+ */
+export async function expandExportOptions(dialog: Locator): Promise<void> {
+  for (const id of ['export-image-options', 'export-pdf-options']) {
+    const details = dialog.getByTestId(id)
+    if ((await details.getAttribute('open')) === null) await details.getByTestId(`${id}-toggle`).click()
+    await expect(details).toHaveAttribute('open', '')
+  }
 }

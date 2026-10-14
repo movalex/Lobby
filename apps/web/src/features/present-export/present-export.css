@@ -51,6 +51,13 @@
   padding: 0;
   border: 0;
 }
+/* P-026: the choices one under the other (they wrapped to odd lines beside each other) */
+.dr-pe-choices--stack {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: flex-start;
+  gap: 8px;
+}
 .dr-pe-legend {
   width: 100%;
   margin-bottom: 6px;
@@ -87,6 +94,63 @@
 .dr-pe-row .dr-select {
   height: 30px;
   font-size: 13px;
+}
+/* P-026: the less used options, folded under their section; the summary says the setting */
+.dr-pe-more {
+  margin-top: 12px;
+}
+.dr-pe-more > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 10px;
+  min-height: 28px;
+  padding: 4px 0;
+  list-style: none;
+  cursor: pointer;
+}
+.dr-pe-more > summary::-webkit-details-marker {
+  display: none;
+}
+.dr-pe-more > summary:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 2px;
+}
+.dr-pe-more__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--dr-ink);
+  font-size: 13px;
+  font-weight: 650;
+}
+.dr-pe-more__title::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-right: 1.8px solid currentColor;
+  border-bottom: 1.8px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+.dr-pe-more[open] .dr-pe-more__title::before {
+  transform: rotate(45deg);
+}
+.dr-pe-more > summary:hover .dr-pe-more__title {
+  text-decoration: underline;
+}
+.dr-pe-more__sub {
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.dr-pe-more > :not(summary) {
+  margin-top: 8px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dr-pe-more__title::before {
+    transition: none;
+  }
 }
 .dr-pe-actions {
   display: flex;
