@@ -259,7 +259,8 @@ export function textWrites(
  * P-011 (wave P): notes of one size, as Miro's sticky sizes are: each note of `noteIds` becomes `side` wide with
  * `side` as its base height (its top-left corner kept), its label's size ceiling becomes `fontSize`, and the
  * engine's own note fit (`relayoutStickyNotes`) lays the words out in it again (the note grows below for words
- * that do not fit, as it does while typing). On copies of `all`: id → changed fields (notes and labels).
+ * that do not fit, as it does while typing). On copies of the notes and their labels only (wave P review: not of
+ * every element of `all`, on every pick; the fit reads nothing else): id → changed fields (notes and labels).
  */
 export function noteSizeWrites(
   all: readonly CanvasElement[],
@@ -268,7 +269,18 @@ export function noteSizeWrites(
   fontSize: number,
 ): Map<string, Record<string, unknown>> {
   const out = new Map<string, Record<string, unknown>>()
-  const map = new Map<string, Copy>(all.map((e) => [e.id, structuredClone(e)]))
+  const byId = new Map<string, CanvasElement>(all.map((e) => [e.id, e]))
+  const map = new Map<string, Copy>()
+  const copy = (id: string | null | undefined) => {
+    const e = id ? byId.get(id) : undefined
+    if (e && !map.has(e.id)) map.set(e.id, structuredClone(e))
+  }
+  for (const id of noteIds) {
+    const note = byId.get(id)
+    if (note?.type !== 'stickynote') continue
+    copy(id)
+    copy(labelIdOf(note))
+  }
   const before = new Map<string, Copy>()
   const touch = (id: string) => {
     if (!before.has(id)) before.set(id, structuredClone(map.get(id)))

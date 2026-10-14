@@ -14,6 +14,7 @@ import {
   RELOAD_KEY,
   recoverChunk,
   reloadWhenOnline,
+  retryingImport,
   STALE_NOTICE_KEY,
   STALE_NOTICE_TEXT,
   type StaleNotice,
@@ -23,6 +24,10 @@ import {
 const STALE = new TypeError(
   'Failed to fetch dynamically imported module: https://lobby.example/assets/LobbyBoardPage-Ab12Cd.js',
 )
+const STALE_OTHER = new TypeError(
+  'Failed to fetch dynamically imported module: https://lobby.example/assets/scene-Ef34Gh.js',
+)
+const SAFARI = new TypeError('Importing a module script failed.')
 
 function env(opts: { storage?: 'ok' | 'throws' | 'none'; now?: number; offline?: boolean } = {}) {
   const store = new Map<string, string>()
@@ -249,6 +254,55 @@ describe('on a board: a notice, never a reload by itself', () => {
     expect(e.reloads).toBe(0)
   })
 
+  it('wave P review: the offline words are for the file that failed offline; a deploy later (another file) gets the update words', () => {
+    let online = false
+    const e = { ...env(), online: () => online }
+    const h = createStaleChunkHandler(e)
+    const notices: StaleNotice[] = []
+    h.registerBoard({ unsent: () => false, notify: (n) => notices.push(n) })
+    expect(h.report(STALE)).toBe('quiet')
+    online = true
+    // the browser kept its failed import: the same file fails again, as often as it is asked for
+    h.report(STALE)
+    h.report(new TypeError(STALE.message))
+    expect(notices.map((n) => n.text)).toEqual([OFFLINE_RETURN_TEXT, OFFLINE_RETURN_TEXT])
+    // hours later, a real deploy
+    h.report(STALE_OTHER)
+    expect(notices).toHaveLength(3)
+    expect(notices[2]?.text).toBe(STALE_NOTICE_TEXT)
+  })
+
+  it('wave P review: a failure that names no file (Safari) gets the offline words once, for both of its reports', () => {
+    let online = false
+    const e = { ...env(), online: () => online }
+    const h = createStaleChunkHandler(e)
+    const notices: StaleNotice[] = []
+    h.registerBoard({ unsent: () => false, notify: (n) => notices.push(n) })
+    expect(h.report(SAFARI)).toBe('quiet')
+    online = true
+    const again = new TypeError(SAFARI.message)
+    h.report(again) // Vite's event
+    h.report(again) // the import's rejection: the same failure
+    expect(notices.map((n) => n.text)).toEqual([OFFLINE_RETURN_TEXT, OFFLINE_RETURN_TEXT])
+    // hours later, a real deploy
+    h.report(new TypeError(SAFARI.message))
+    expect(notices[2]?.text).toBe(STALE_NOTICE_TEXT)
+  })
+
+  it('wave P review: a part that loads after an offline failure clears it (a deploy later gets the update words)', () => {
+    let online = false
+    const e = { ...env(), online: () => online }
+    const h = createStaleChunkHandler(e)
+    const notices: StaleNotice[] = []
+    h.registerBoard({ unsent: () => false, notify: (n) => notices.push(n) })
+    expect(h.report(STALE)).toBe('quiet')
+    online = true
+    h.loaded()
+    h.report(STALE)
+    expect(notices).toHaveLength(1)
+    expect(notices[0]?.text).toBe(STALE_NOTICE_TEXT)
+  })
+
   it('P-003: never while someone types: the notice waits for the text editor to close', () => {
     const e = env()
     const h = createStaleChunkHandler(e)
@@ -365,6 +419,65 @@ describe('the sources', () => {
     const fine = recoverChunk(() => Promise.resolve({ default: 'page' }), fallback, handler)
     expect(await fine()).toEqual({ default: 'page' })
     expect(reports).toHaveLength(1)
+  })
+})
+
+describe('retryingImport (wave P review: a lazy part that failed to load is asked for again)', () => {
+  function handler() {
+    const h = {
+      reports: [] as unknown[],
+      loads: 0,
+      report: (e: unknown) => {
+        h.reports.push(e)
+        return 'quiet' as const
+      },
+      loaded: () => {
+        h.loads++
+      },
+    }
+    return h
+  }
+
+  it('a failed attempt draws the fallback; once drawn, the next open imports again and can succeed', async () => {
+    const h = handler()
+    let calls = 0
+    let offline = true
+    const load = () => {
+      calls++
+      return offline ? Promise.reject(STALE) : Promise.resolve({ default: 'dialog' })
+    }
+    const imports = retryingImport(load, { default: 'nothing' }, h)
+    const first = imports.attempt()
+    expect(await first.result()).toEqual({ default: 'nothing' })
+    expect(h.reports).toEqual([STALE])
+    // the same mount draws again (a retry render after the suspense): the same attempt, no second import
+    expect(imports.attempt()).toBe(first)
+    expect(await first.result()).toEqual({ default: 'nothing' })
+    expect(calls).toBe(1)
+    imports.shown(first)
+    offline = false
+    const second = imports.attempt()
+    expect(second).not.toBe(first)
+    expect(await second.result()).toEqual({ default: 'dialog' })
+    expect(calls).toBe(2)
+    expect(h.loads).toBe(1)
+    // a loaded attempt is kept
+    imports.shown(second)
+    expect(imports.attempt()).toBe(second)
+    expect(calls).toBe(2)
+  })
+
+  it('other errors are thrown, not drawn as the fallback', async () => {
+    const h = handler()
+    const imports = retryingImport(() => Promise.reject(new Error('a bug')), { default: 'nothing' }, h)
+    await expect(imports.attempt().result()).rejects.toThrow('a bug')
+    expect(h.reports).toHaveLength(0)
+  })
+
+  it('recoverChunk tells the handler a part loaded', async () => {
+    const h = handler()
+    await recoverChunk(() => Promise.resolve({ default: 'page' }), { default: 'x' }, h)()
+    expect(h.loads).toBe(1)
   })
 })
 

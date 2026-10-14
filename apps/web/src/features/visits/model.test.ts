@@ -427,6 +427,48 @@ describe('whatChanged: the viewing person’s own changes do not count (P-006)',
     expect(r?.total).toBe(0)
   })
 
+  // wave P review: only a change whose latest commit is mine is skipped
+  it('a note I made while away (another device) that a colleague moved later counts as changed, not added', () => {
+    const r = runAs([
+      stamped('mine', 'stickynote', { createdAt: AFTER, updated: AFTER + 30, createdBy: ME }),
+      stamped('mine-untouched', 'stickynote', { createdAt: AFTER + 5, updated: AFTER + 5, createdBy: ME }),
+    ])
+    expect(r?.added).toEqual([])
+    expect(r?.changed).toEqual(['mine'])
+  })
+
+  it('a label I added to a colleague’s note, then the colleague moved the note (and its label): the move counts', () => {
+    const r = runAs([
+      stamped('n', 'stickynote', { createdBy: THEM, updated: AFTER + 40 }),
+      stamped('n.t', 'text', {
+        createdAt: AFTER,
+        updated: AFTER + 40,
+        createdBy: ME,
+        lastEditedBy: ME,
+        lastEditedAt: AFTER,
+        containerId: 'n',
+      }),
+    ])
+    expect(r?.changed).toEqual(['n'])
+  })
+
+  it('a note my label typing re-fit (its latest commit is my typing’s) is mine; a commit of the same time by a colleague’s own stamps is theirs', () => {
+    const r = runAs([
+      stamped('n', 'stickynote', { createdBy: THEM, updated: AFTER + 60 }),
+      stamped('n.t', 'text', {
+        createdBy: THEM,
+        updated: AFTER + 60,
+        lastEditedBy: ME,
+        lastEditedAt: AFTER + 60,
+        containerId: 'n',
+      }),
+      // made by a colleague in a commit of the same millisecond: its own stamps say whose it is
+      stamped('theirs', 'stickynote', { createdAt: AFTER + 60, updated: AFTER + 60, createdBy: THEM }),
+    ])
+    expect(r?.added).toEqual(['theirs'])
+    expect(r?.changed).toEqual([])
+  })
+
   it('without a viewer (no `me`) nothing is filtered, as before', () => {
     const live = [stamped('mine', 'stickynote', { createdAt: AFTER, updated: AFTER, createdBy: ME })]
     expect(whatChanged({ seenAt: SEEN, live, tombstones: [] })?.added).toEqual(['mine'])

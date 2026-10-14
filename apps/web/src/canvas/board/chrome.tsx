@@ -37,6 +37,7 @@ import { currentPlatform, formatChord } from '../api/keys.ts'
 import type { LobbyCanvas } from '../api/lobby-canvas.ts'
 import type { FeatureOverlaySpec, FeatureRegistries, HostSlotName } from '../api/registries.ts'
 import type { EditNotice, EditState } from '../lease/editorLease.ts'
+import { editingNow, opening } from '../lease/words.ts'
 import { useLongPress } from '../overlay/long-press.ts'
 import {
   TopCentreContext,
@@ -1034,6 +1035,7 @@ export function PendingAffordance({ edit }: { edit: EditState | null }) {
   const phase = edit?.phase ?? 'idle'
   const buffered = edit?.buffered ?? 0
   const lost = edit?.lost?.name ?? null
+  const thing = edit?.thing ?? 'note'
   const show = phase === 'pending' || phase === 'opening' || !!lost
   return (
     <div
@@ -1044,11 +1046,7 @@ export function PendingAffordance({ edit }: { edit: EditState | null }) {
       role="status"
       hidden={!show}
     >
-      {lost
-        ? `Not saved — ${lost} is editing this note now`
-        : buffered > 0
-          ? `Opening the note… (${buffered} typed, Esc cancels)`
-          : 'Opening the note… (Esc cancels)'}
+      {lost ? editingNow(lost, thing) : opening(thing, buffered)}
     </div>
   )
 }

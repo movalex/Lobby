@@ -28,7 +28,7 @@
 import '../engine/engineGlobals.ts'
 import type { Board, BoardDetail, Me, TicketResponse } from '@draftroom/contracts'
 import {
-  lazy,
+  type ComponentProps,
   type ReactNode,
   Suspense,
   useCallback,
@@ -45,7 +45,7 @@ import { AccessActorHint, blockedEditHint, isReadonlyRole, roleChangeNotice } fr
 import type { NoticeInput } from '../../board/board-context.ts'
 import { NoticeRegion, useNotices } from '../../board/Notices.tsx'
 import { SyncErrorScreen } from '../../board/SyncErrorScreen.tsx'
-import { BoardAccount, type ConnState, TopBarFrame } from '../../board/TopBarFrame.tsx'
+import { BoardAccount, TopBarFrame } from '../../board/TopBarFrame.tsx'
 import { firstTicketWhileStarting } from '../../board/ticket.ts'
 import { CANVAS_FEATURES } from '../../features/canvas-registry.ts'
 import { type BoardEvents, createBoardEvents } from '../../features/events.ts'
@@ -54,7 +54,7 @@ import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 import type { BoardRole } from '../../lib/permissions.ts'
 import { rememberBoardTitle, takeBoardDetail, takeBoardTicket } from '../../lib/prefetch-board.ts'
 import { boardPath, navigate, setLeaveGuard } from '../../lib/routing.ts'
-import { recoverChunk, registerStaleChunkBoard } from '../../lib/stale-chunk.ts'
+import { lazyRetrying, registerStaleChunkBoard } from '../../lib/stale-chunk.ts'
 import { useResource } from '../../lib/useResource.ts'
 import { CachedCopy } from '../../sync-quality/CachedCopy.tsx'
 import { cachedOfflineLabel } from '../../sync-quality/copy.ts'
@@ -96,6 +96,7 @@ import {
   topBarItems,
   useRegistries,
 } from './chrome.tsx'
+import { connWith, useSocketProbe } from './connection.ts'
 import {
   type ClipboardElement,
   contentOf,
@@ -112,11 +113,17 @@ import { duplicateLobbyData } from './tx.ts'
 import { onUploads, uploadsInFlight } from './uploads.ts'
 import './board.css'
 
-// K1-7: a stale chunk draws nothing here (the board's notice offers the reload) rather than unmounting the board
-const ShareDialog = lazy(
-  recoverChunk(() => import('../../board/ShareDialog.tsx').then((m) => ({ default: m.ShareDialog })), {
-    default: () => null,
-  } as unknown as { default: typeof import('../../board/ShareDialog.tsx').ShareDialog }),
+type ShareDialogProps = ComponentProps<typeof import('../../board/ShareDialog.tsx').ShareDialog>
+/** A Share dialog whose code did not load: nothing drawn, and the dialog closes, so the next Share opens it again. */
+function ShareDialogUnavailable({ onClose }: ShareDialogProps) {
+  useEffect(() => onClose(), [onClose])
+  return null
+}
+// K1-7: a stale chunk draws nothing here (the board's notice offers the reload) rather than unmounting the board;
+// wave P review: and the next Share asks for the code again (one that failed offline opens once back online)
+const ShareDialog = lazyRetrying<ShareDialogProps>(
+  () => import('../../board/ShareDialog.tsx').then((m) => ({ default: m.ShareDialog })),
+  ShareDialogUnavailable,
 )
 
 /** Longest an in-app navigation waits for this board's last changes to be acknowledged. */
@@ -333,23 +340,6 @@ function OpeningSkeleton({ board, role, workspace }: Pick<SessionProps, 'board' 
     />
   )
 }
-
-const connOf = (s: LobbyBoardSnapshot): ConnState =>
-  s.phase === 'ready'
-    ? 'online'
-    : s.phase === 'offline'
-      ? 'offline'
-      : s.phase === 'closed'
-        ? 'error'
-        : 'connecting'
-
-/**
- * P-003 (wave P): the board's connection as the page shows it. The browser's own offline (navigator.onLine, its
- * `offline` and `online` events) is said at once: the socket only notices a dead network on its next missed
- * heartbeat, up to 30 s later, and until then the board looked live while nothing could be sent.
- */
-export const connWith = (s: LobbyBoardSnapshot, browserOnline: boolean): ConnState =>
-  browserOnline || s.phase === 'closed' ? connOf(s) : 'offline'
 
 const subscribeOnline = (l: () => void) => {
   window.addEventListener('online', l)
@@ -811,7 +801,10 @@ function LobbyBoardScreen({
   )
 
   const focusMode = settings.focusMode
-  const conn = connWith(snap, browserOnline)
+  // wave P review: the browser's offline signal is checked against a live socket (connection.ts)
+  const probeSocket = useCallback((ms: number) => session.transport.probe(ms), [session])
+  const socketProbe = useSocketProbe(probeSocket, browserOnline, snap.phase)
+  const conn = connWith(snap, browserOnline, socketProbe)
   const closed = snap.phase === 'closed'
   const closeReason = snap.closeReason
   const terminalShown = closed && closeReason !== 'FORBIDDEN' && closeReason !== 'NOT_FOUND'

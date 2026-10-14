@@ -102,6 +102,12 @@ export interface SocketTransport extends Transport {
   sendRaw(frame: ClientMessage | string): void
   /** the number of sockets opened so far */
   readonly attempts: number
+  /**
+   * Wave P review (P-003): whether the room still answers this socket: a ping now, true once a pong arrives within
+   * ms, false otherwise or with no open socket. For the page's offline signal only: nothing is dropped (the
+   * heartbeat decides that).
+   */
+  probe(ms: number): Promise<boolean>
 }
 
 const DEFAULT_BACKOFF = [250, 500, 1000, 2000, 4000, 5000] as const
@@ -198,8 +204,10 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
     // Behind a slow frame (a large snapshot's decode, a busy page) the pong waited in the chain, the next
     // beat found the ping "unanswered" and tore down a healthy socket. Only a short frame is looked at (a
     // pong is ~15 bytes); it is still validated and delivered in order below.
-    if (gen === generation && typeof data === 'string' && data.length <= PONG_MAX && isPong(data))
+    if (gen === generation && typeof data === 'string' && data.length <= PONG_MAX && isPong(data)) {
       awaitingPong = false
+      for (const answer of [...probes]) answer(true)
+    }
     chain = chain.then(async () => {
       if (gen !== generation) return
       if (typeof data === 'string') {
@@ -255,6 +263,8 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
   }
 
   let lastFrameAt = 0
+  /** the probes waiting for a pong (`probe`) */
+  const probes = new Set<(answered: boolean) => void>()
   /** a ping is out and its pong has not come back */
   let awaitingPong = false
   /** the reason a `notice` CLOSING announced on the current socket, or null */
@@ -395,6 +405,21 @@ export function createSocketTransport(opts: SocketTransportOptions): SocketTrans
     },
     send(message) {
       if (ws && ws.readyState === OPEN) ws.send(JSON.stringify(message))
+    },
+    probe(ms) {
+      const sock = ws
+      if (!sock || sock.readyState !== OPEN) return Promise.resolve(false)
+      return new Promise<boolean>((resolve) => {
+        let timeout: unknown = null
+        const answer = (answered: boolean) => {
+          if (!probes.delete(answer)) return
+          if (timeout !== null) clearTimer(timeout)
+          resolve(answered)
+        }
+        probes.add(answer)
+        timeout = setTimer(() => answer(false), ms)
+        sock.send(JSON.stringify({ type: 'ping' }))
+      })
     },
     sendRaw(frame) {
       if (ws && ws.readyState === OPEN) ws.send(typeof frame === 'string' ? frame : JSON.stringify(frame))

@@ -57,6 +57,7 @@ import { UndoController } from '../history/controller.ts'
 import { CanvasInput } from '../input/CanvasInput.ts'
 import { LeaseClient } from '../lease/client.ts'
 import type { EditNotice, EditState } from '../lease/editorLease.ts'
+import { leaseThingOf, typingIn } from '../lease/words.ts'
 import { installLod } from '../lod/index.ts'
 import { installBoardOverrides, overridesLodTarget } from '../overrides.ts'
 import { createCanvasPort, type LobbyCanvasPort } from '../port-impl.ts'
@@ -419,10 +420,10 @@ export class LobbyBoardSession {
         const content = contentOf(e.dataTransfer)
         if (content) void this.contentSink?.(content, this.input.toScene(e.clientX, e.clientY), 'drop')
       },
-      onDeny: (leaseId, holder) =>
+      onDeny: (leaseId, holder, thing) =>
         o.notices.notify({
           key: `lease:${leaseId}`,
-          text: `${holder} is typing in this note`,
+          text: typingIn(holder, thing),
           testId: 'lease-toast',
         }),
       onNotice: (n) => this.set({ notice: { ...n, id: ++this.noticeSeq } }),
@@ -634,8 +635,10 @@ export class LobbyBoardSession {
         this.set({ phase: 'preparing' })
     } else if (e.kind === 'reject') {
       const el = this.core.confirmed(e.id) as { containerId?: string | null } | undefined
-      const holder = this.core.leaseHolders().get(el?.containerId ?? e.id)?.name ?? null
-      const text = engineRejectNotice(e.code, holder)
+      const leaseId = el?.containerId ?? e.id
+      const holder = this.core.leaseHolders().get(leaseId)?.name ?? null
+      const leased = this.core.confirmed(leaseId) as { type: string } | undefined
+      const text = engineRejectNotice(e.code, holder, leaseThingOf(leased))
       if (text)
         this.o.notices.notify({ key: 'save-rejected', text, tone: 'error', testId: 'save-rejected-toast' })
     } else if (e.kind === 'superseded') {

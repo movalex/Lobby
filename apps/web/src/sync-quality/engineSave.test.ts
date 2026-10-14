@@ -62,6 +62,10 @@ describe('the Excalidraw engine save indicator (§2.5.7)', () => {
     expect(saveLabel('retrying')).toBe("Can't save right now — retrying")
     expect(engineRejectReason('INVALID')).toBeNull()
     expect(engineRejectNotice('LEASED', 'Alice')).toBe('Change not saved — Alice is typing in this note')
+    // wave P review (P-005): the leased element's kind
+    expect(engineRejectNotice('LEASED', 'Alice', 'shape')).toBe(
+      'Change not saved — Alice is typing in this shape',
+    )
     expect(engineRejectNotice('LEASED')).toBeNull()
   })
 

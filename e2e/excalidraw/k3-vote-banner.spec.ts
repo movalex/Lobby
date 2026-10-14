@@ -5,12 +5,15 @@
 // clicked notes and nothing happened until they found "Join").
 // The store's rules are unit-tested (features/workshops/store.test.ts "the Vote started banner").
 import type { Page } from '@playwright/test'
+import { itemBounds, setTool } from '../tests/support/canvas.ts'
+import { workshopState } from '../tests/support/workshops.ts'
 import {
   clickElement,
   dot,
   expect,
   expectItemsEverywhere,
   post,
+  reachableCenter,
   seed,
   showAll,
   test,
@@ -189,4 +192,97 @@ test('P-015: ending a vote nobody voted in is calm: no confetti, "No votes were 
       'Voting is over. No votes were cast. Everyone sees the results.',
     )
   })
+})
+
+// Wave P review (P-001): with the banner up, every press on a note was the vote's, so someone who had not joined could
+// not move a note, and the hand tool's click joined and voted too. Now, before joining, a press goes to the board (a
+// drag moves the note, nothing is cast) and only a click without a drag joins and votes; the hand tool never votes.
+test('P-001 review: before joining, a drag moves a note and casts nothing, and the hand tool never votes', async ({
+  join,
+  board,
+}) => {
+  const a = await join('alice')
+  const b = await join('bob', 'editor')
+  await seed(a.page, { notes: NOTES })
+  await expectItemsEverywhere(
+    [b],
+    NOTES.map((n) => n.id),
+  )
+  await showAll(b.page)
+  await startVote(a, board)
+  await expect(banner(b.page)).toBeVisible()
+
+  await test.step('a drag on a note moves it; nothing is cast and the banner stays', async () => {
+    const before = await itemBounds(b.page, 'k3v-a')
+    if (!before) throw new Error('no bounds')
+    const at = await reachableCenter(b.page, 'k3v-a')
+    await b.page.mouse.move(at.x, at.y)
+    await b.page.mouse.down()
+    await b.page.mouse.move(at.x + 60, at.y + 90, { steps: 6 })
+    await b.page.mouse.move(at.x + 120, at.y + 180, { steps: 6 })
+    await b.page.mouse.up()
+    await expect.poll(async () => (await itemBounds(b.page, 'k3v-a'))?.y ?? 0).toBeGreaterThan(before.y + 60)
+    await b.page.waitForTimeout(500)
+    expect(casts(b)).toEqual([])
+    await expect(dot(b.page, 'k3v-a')).toHaveCount(0)
+    await expect(banner(b.page)).toBeVisible()
+  })
+
+  await test.step('the hand tool: a click on a note casts nothing', async () => {
+    expect(await setTool(b.page, 'hand')).toBe(true)
+    await clickElement(b.page, 'k3v-b')
+    await b.page.waitForTimeout(1_000)
+    expect(casts(b)).toEqual([])
+    await expect(dot(b.page, 'k3v-b')).toHaveCount(0)
+    await expect(banner(b.page)).toBeVisible()
+    expect(await setTool(b.page, 'select')).toBe(true)
+  })
+
+  await test.step('with the select tool, a click without a drag joins and votes', async () => {
+    await clickElement(b.page, 'k3v-c')
+    await expect(dot(b.page, 'k3v-c')).toHaveAttribute('data-count', '1')
+    await expect(banner(b.page)).toHaveCount(0)
+    await expect.poll(() => casts(b).length).toBe(1)
+  })
+})
+
+// Wave P review (P-001): the click that joins marked this person in at once, while the join was still being
+// confirmed with the server, so a second click cast its dot before the join's own: two votes racing the join. Now a
+// vote click while the join is being confirmed waits for it, and each click is one dot, cast after the join.
+test('P-001 review: a second click while the join is being confirmed waits for it: one dot per click, both after the join', async ({
+  join,
+  board,
+}) => {
+  const a = await join('alice')
+  const b = await join('bob', 'editor')
+  await seed(a.page, { notes: NOTES })
+  await expectItemsEverywhere(
+    [b],
+    NOTES.map((n) => n.id),
+  )
+  await showAll(b.page)
+  await startVote(a, board)
+  await expect(banner(b.page)).toBeVisible()
+  const first = await reachableCenter(b.page, 'k3v-a')
+  const second = await reachableCenter(b.page, 'k3v-b')
+  // the join's confirmation takes a while
+  await b.page.route('**/workshop', async (route) => {
+    await new Promise((r) => setTimeout(r, 1_500))
+    await route.continue()
+  })
+  const before = b.net.responses.length
+  await b.page.mouse.click(first.x, first.y)
+  await b.page.waitForTimeout(300)
+  await b.page.mouse.click(second.x, second.y)
+  await expect(dot(b.page, 'k3v-a')).toHaveAttribute('data-count', '1')
+  await expect(dot(b.page, 'k3v-b')).toHaveAttribute('data-count', '1')
+  await expect(remaining(b.page)).toHaveText('1 of 3 left')
+  await expect.poll(() => casts(b).length).toBe(2)
+  const after = b.net.responses.slice(before).map((r) => r.path)
+  const joined = after.findIndex((p) => p.endsWith('/workshop'))
+  const firstCast = after.findIndex((p) => p.endsWith('/cast'))
+  expect(joined, after.join(', ')).toBeGreaterThanOrEqual(0)
+  expect(firstCast, after.join(', ')).toBeGreaterThan(joined)
+  await b.page.unroute('**/workshop')
+  expect((await workshopState(b.api, board)).vote?.myVotes).toEqual({ 'shape:k3v-a': 1, 'shape:k3v-b': 1 })
 })

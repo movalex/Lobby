@@ -344,9 +344,14 @@ function MyDots({
  * reaches the engine (Miro's voting mode works the same way): a vote click must not SELECT the object,
  * because everyone's selection is shared as presence (PRF-07; the sync server also drops `sel` while a
  * vote is open). A double-click on it is one vote and never opens the note's editor. The hand tool pans
- * as usual, and its clicks without a drag vote. Presses with modifiers (Shift+drag still moves a note), on
- * empty canvas or on objects the vote does not accept go to the engine as usual; plain clicks select,
- * move and edit again after "I'm done", "Skip" or once voting ends.
+ * and never votes (wave P review). Presses with modifiers (Shift+drag still moves a note), on empty canvas
+ * or on objects the vote does not accept go to the engine as usual; plain clicks select, move and edit
+ * again after "I'm done", "Skip" or once voting ends.
+ *
+ * Before this person joined (the banner is up, P-001), a press goes to the engine as usual (wave P review:
+ * every press was the vote's, so someone who had not joined could not move a note): a drag moves the note,
+ * and only a click without a drag joins and casts the first dot. Until that join is answered, the store
+ * holds every other cast back (`WorkshopStore.joinAndCast`), so a second click never races it.
  *
  * The object a click lands on is the topmost one under it (W5-03). When the vote does not take it (a note
  * outside the vote's frame on top of one inside, a shape over a note in a notes-only vote), the click
@@ -380,25 +385,25 @@ function ClickToVote({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
     // A refused click is decided again on the vote open now (G1): from this vote's id.
     const refuse = (elementId: string) =>
       void refusedClick(ctx, store, store.getSnapshot().vote?.session.id ?? '', elementId)
-    let handDown: { x: number; y: number } | null = null
+    /** a press before this person joined: the engine has it; a click without a drag joins and votes */
+    let toJoin: { x: number; y: number; id: string } | null = null
     return canvas.on('input', (e) => {
       if (e.type === 'key-down' || e.type === 'wheel' || e.type === 'pinch') return
       if (e.type === 'pointer-down') {
         pressed = null
         other = null
-        handDown = null
+        toJoin = null
         if (e.button !== 0 || !plainPress(e)) return
-        const tool = canvas.tool()
-        if (tool === 'hand') {
-          handDown = { x: e.screen.x, y: e.screen.y }
-          return
-        }
-        if (tool !== 'select' || canvas.editingId()) return
+        if (canvas.tool() !== 'select' || canvas.editingId()) return
         const click = voteClickAt(canvas, e.scene, rule)
         if (click.kind === 'none') return
         if (click.kind === 'not-in-vote') {
           // The engine selects or moves it as usual; a click without a drag says why nothing was cast.
           other = { x: e.screen.x, y: e.screen.y, id: click.target.id }
+          return
+        }
+        if (store.getSnapshot().participation !== 'joined') {
+          toJoin = { x: e.screen.x, y: e.screen.y, id: click.target.id }
           return
         }
         e.handled()
@@ -410,25 +415,27 @@ function ClickToVote({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
       if (e.type === 'pointer-up') {
         const p = pressed
         const o = other
-        const h = handDown
+        const j = toJoin
         pressed = null
         other = null
-        handDown = null
+        toJoin = null
         if (o) {
           if (Math.hypot(e.screen.x - o.x, e.screen.y - o.y) <= CLICK_SLOP_PX) refuse(o.id)
+          return
+        }
+        if (j) {
+          // a drag moved the note (the engine had the press); a click without one joins and votes, and, being
+          // a vote click, leaves nothing selected
+          if (Math.hypot(e.screen.x - j.x, e.screen.y - j.y) > CLICK_SLOP_PX) return
+          canvas.select([])
+          vote(j.id)
           return
         }
         if (p) {
           e.handled()
           if (Math.hypot(e.screen.x - p.x, e.screen.y - p.y) > CLICK_SLOP_PX) return
           vote(p.id)
-          return
         }
-        if (!h || e.button !== 0 || !plainPress(e) || canvas.tool() !== 'hand') return
-        if (Math.hypot(e.screen.x - h.x, e.screen.y - h.y) > CLICK_SLOP_PX) return
-        const click = voteClickAt(canvas, e.scene, rule)
-        if (click.kind === 'vote') vote(click.target.id)
-        else if (click.kind === 'not-in-vote') refuse(click.target.id)
         return
       }
       // A double-click on an object the vote takes (the second click of it already voted, or was one

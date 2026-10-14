@@ -876,7 +876,7 @@ async function canvasPoint(page: Page, p: { x: number; y: number }) {
   return at
 }
 
-test('W5-03: a click on a note the vote does not take, lying over one it takes, casts nothing and says so (select and hand tools, the vote tool); only clicked notes are ranked', async ({
+test('W5-03: a click on a note the vote does not take, lying over one it takes, casts nothing and says so (the select and vote tools; the hand tool never votes); only clicked notes are ranked', async ({
   join,
   board,
 }) => {
@@ -934,14 +934,19 @@ test('W5-03: a click on a note the vote does not take, lying over one it takes, 
   })
 
   await test.step('hand tool and the vote tool: the same click casts nothing either', async () => {
-    for (const name of ['hand', 'vote']) {
-      expect(await setTool(b.page, name)).toBe(true)
-      const at = await canvasPoint(b.page, overlap)
-      await b.page.mouse.click(at.x, at.y)
-      await expect(toast, name).toHaveText(NOT_IN)
-      await noVotesYet()
-      await dismiss()
-    }
+    // wave P review: the hand tool pans and never votes, so its click says nothing either
+    expect(await setTool(b.page, 'hand')).toBe(true)
+    const viaHand = await canvasPoint(b.page, overlap)
+    await b.page.mouse.click(viaHand.x, viaHand.y)
+    await b.page.waitForTimeout(1_000)
+    await expect(toast).toHaveCount(0)
+    await noVotesYet()
+    expect(await setTool(b.page, 'vote')).toBe(true)
+    const at = await canvasPoint(b.page, overlap)
+    await b.page.mouse.click(at.x, at.y)
+    await expect(toast).toHaveText(NOT_IN)
+    await noVotesYet()
+    await dismiss()
     expect(await setTool(b.page, 'select')).toBe(true)
     await selectNone(b.page)
   })

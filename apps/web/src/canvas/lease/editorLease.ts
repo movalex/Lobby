@@ -54,6 +54,15 @@ import type { LeaseClient, LeaseEvent, LeaseOutcome } from './client.ts'
 import { bufferText, decideEngineChange, denyNewClose, type EditPhase, refreshOnGrant } from './openRule.ts'
 import type { LeaseHolder } from './protocol.ts'
 import { type BufferedKey, replayKeys } from './replay.ts'
+import {
+  deletedBeforeOpen,
+  didNotOpen,
+  didNotOpenTyped,
+  editingNow,
+  type LeaseThing,
+  leaseThingOf,
+  typingIn,
+} from './words.ts'
 
 export type { EditPhase }
 export type EditOrigin = 'lobby' | 'guard' | 'new'
@@ -94,6 +103,8 @@ export interface EditState {
   buffered: number
   /** The lease went to someone else while the editor was open (§2.9.3). */
   lost: LeaseHolder | null
+  /** Wave P review (P-005): what the lease's element is called (./words.ts); null with no lease */
+  thing: LeaseThing | null
 }
 
 export interface EditorLeaseOptions {
@@ -102,7 +113,8 @@ export interface EditorLeaseOptions {
   lease: LeaseClient
   /** Events Lobby dispatches itself; the allowlist lets them through. */
   synthetic: WeakSet<Event>
-  onDeny?: (leaseId: string, holderName: string) => void
+  /** a deny; `thing` is what the lease's element is called (./words.ts) */
+  onDeny?: (leaseId: string, holderName: string, thing: LeaseThing) => void
   onNotice?: (notice: EditNotice) => void
   /** Every change of phase, lease, buffer or loss (the pending affordance, §2.9.5). */
   onState?: (state: EditState) => void
@@ -210,6 +222,7 @@ export class EditorLease {
       origin: s?.origin ?? null,
       buffered: s?.buffer.length ?? 0,
       lost: s?.lost ?? null,
+      thing: s ? this.thingOf(s.leaseId) : null,
     }
   }
 
@@ -391,7 +404,7 @@ export class EditorLease {
           this.notice({
             kind: 'left-pending',
             leaseId: s.leaseId,
-            message: 'The note did not open, so what you typed was not saved.',
+            message: didNotOpenTyped(this.thingOf(s.leaseId)),
             text: typed,
           })
         }
@@ -479,13 +492,14 @@ export class EditorLease {
       if (gone) {
         this.trace('label-gone', { leaseId: s.leaseId, label, gone, phase: s.phase })
         const typed = this.typedText(s, ta)
+        const thing = this.thingOf(s.leaseId)
         this.notice({
           kind: 'label-gone',
           leaseId: s.leaseId,
           message:
             gone === 'deleted'
-              ? 'This note was deleted while you were typing. Your text was not saved.'
-              : 'This note was changed by someone else while you were typing. Your text was not saved.',
+              ? `This ${thing} was deleted while you were typing. Your text was not saved.`
+              : `This ${thing} was changed by someone else while you were typing. Your text was not saved.`,
           text: typed,
         })
         this.closeOwnWithoutSubmit(s, `label-${gone}`)
@@ -498,7 +512,7 @@ export class EditorLease {
       this.trace('target-gone', { leaseId: s.leaseId })
       this.cancelWithNotice(s, {
         kind: 'target-gone',
-        message: 'This note was deleted before it opened.',
+        message: deletedBeforeOpen(this.thingOf(s.leaseId)),
       })
       return true
     }
@@ -510,12 +524,13 @@ export class EditorLease {
     })
     if (other !== undefined) {
       this.trace('cancel-selection', { leaseId: s.leaseId, selected: other, buffered: s.buffer.length })
+      const thing = this.thingOf(s.leaseId)
       this.cancelWithNotice(s, {
         kind: 'cancelled-selection',
         message:
           s.buffer.length > 0
-            ? 'You selected something else, so the note did not open and what you typed was discarded.'
-            : 'You selected something else, so the note did not open.',
+            ? `You selected something else, so the ${thing} did not open and what you typed was discarded.`
+            : `You selected something else, so the ${thing} did not open.`,
       })
       return true
     }
@@ -603,11 +618,11 @@ export class EditorLease {
       }
       this.setSession(null)
       this.closeTextarea(s.textarea, 'deny')
-      this.o.onDeny?.(s.leaseId, outcome.holder.name)
+      this.o.onDeny?.(s.leaseId, outcome.holder.name, this.thingOf(s.leaseId))
       this.notice({
         kind: 'deny',
         leaseId: s.leaseId,
-        message: `${outcome.holder.name} is typing in this note`,
+        message: typingIn(outcome.holder.name, this.thingOf(s.leaseId)),
         text: null,
         holder: outcome.holder.name,
       })
@@ -617,7 +632,7 @@ export class EditorLease {
     if (s.origin === 'lobby') {
       const target = this.element(s.selectId)
       if (!target || target.isDeleted) {
-        this.giveUp(s, 'target-gone', 'This note was deleted before it opened.')
+        this.giveUp(s, 'target-gone', deletedBeforeOpen(this.thingOf(s.leaseId)))
         return
       }
       this.openViaEnter(s)
@@ -671,11 +686,11 @@ export class EditorLease {
     this.notice({
       kind: 'new-denied',
       leaseId: s.leaseId,
-      message: `Not saved — ${holder} is editing this note now`,
+      message: editingNow(holder, this.thingOf(s.leaseId)),
       text: typed,
       holder,
     })
-    this.o.onDeny?.(s.leaseId, holder)
+    this.o.onDeny?.(s.leaseId, holder, this.thingOf(s.leaseId))
   }
 
   /** Selects the target and lets Excalidraw open its editor with a synthetic Enter. */
@@ -727,7 +742,7 @@ export class EditorLease {
         const label = editing ?? null
         const lease = label ? (label.containerId ?? label.id) : null
         if (lease !== null && lease !== s.leaseId) {
-          this.giveUp(s, 'wrong-element', 'The note did not open. Please try again.')
+          this.giveUp(s, 'wrong-element', didNotOpen(this.thingOf(s.leaseId)))
           return
         }
         if (label && !this.labelOf.has(ta)) this.labelOf.set(ta, label.id)
@@ -809,11 +824,7 @@ export class EditorLease {
   private finishOpen(s: Session, ta: HTMLTextAreaElement): void {
     if (s.lost || (s.origin !== 'new' && !this.o.lease.isHeld(s.leaseId))) {
       // The lease went elsewhere between the grant and the focus: never writable.
-      this.giveUp(
-        s,
-        'lost-before-open',
-        `Not saved — ${s.lost?.name ?? 'someone else'} is editing this note now`,
-      )
+      this.giveUp(s, 'lost-before-open', editingNow(s.lost?.name ?? 'someone else', this.thingOf(s.leaseId)))
       return
     }
     const keys = s.buffer.splice(0)
@@ -876,7 +887,7 @@ export class EditorLease {
       this.notice({
         kind: 'open-failed',
         leaseId: s.leaseId,
-        message: 'The note did not open, so what you typed was not saved.',
+        message: didNotOpenTyped(this.thingOf(s.leaseId)),
         text,
       })
     }
@@ -904,7 +915,7 @@ export class EditorLease {
     this.notice({
       kind: 'lost',
       leaseId: s.leaseId,
-      message: `Not saved — ${s.lost.name} is editing this note now`,
+      message: editingNow(s.lost.name, this.thingOf(s.leaseId)),
       text: ta ? this.typedText(s, ta) : null,
       holder: s.lost.name,
     })
@@ -927,6 +938,11 @@ export class EditorLease {
 
   private element(id: string): ExcalidrawElement | undefined {
     return this.o.api.getSceneElementsIncludingDeleted().find((e) => e.id === id)
+  }
+
+  /** Wave P review (P-005): what the lease's element is called in a message (./words.ts). */
+  private thingOf(leaseId: string): LeaseThing {
+    return leaseThingOf(this.element(leaseId))
   }
 
   /** The keys buffered while pending, as text (null: none). */
