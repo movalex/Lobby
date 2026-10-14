@@ -291,7 +291,7 @@ test('MAK-18 arrange as grid in frames: children stay inside their frame; a lock
 const entryLabels = async (page: Page, prefix: string) =>
   (await navEntries(page, 'contextMenu')).filter((e) => e.id.startsWith(`${prefix}/`)).map((e) => e.label)
 
-test('MAK-17 select by type: Select all on this page › Notes / Text / Connectors / Shapes / Frames (inside frames too, never locked); Keep only narrows a mixed selection, looking inside a selected frame; a viewer can use it', async ({
+test('MAK-17 select by type: Select by type › Notes / Text / Connectors / Shapes / Frames (inside frames too, never locked); Keep only narrows a mixed selection, looking inside a selected frame; a viewer can use it', async ({
   canvasSession,
 }) => {
   const a = await canvasSession('alice')

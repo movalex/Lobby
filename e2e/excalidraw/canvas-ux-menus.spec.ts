@@ -121,7 +121,8 @@ test('context menu: a right-click on a note selects it and offers its entries; D
     // one element: no arrange (align needs two) and no group
     await expect(a.page.getByTestId('context-menu-sub.arrange-button')).toHaveCount(0)
     await expect(a.page.getByTestId('context-menu.group')).toHaveCount(0)
-    await expect(a.page.getByTestId('context-menu.toggle-lock')).toHaveText('Toggle lockedCtrl+Shift+L')
+    // P-013: Lobby's words ("Unlock" once it is locked)
+    await expect(a.page.getByTestId('context-menu.toggle-lock')).toHaveText(/^Lock(Ctrl\+Shift\+L|⇧⌘L)$/)
   })
 
   await test.step('Duplicate: a copy with the same words, selected, one undo step', async () => {

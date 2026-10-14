@@ -78,7 +78,7 @@ test('Ctrl+K, "lock", Enter locks the selection in one undo step; Ctrl+Z unlocks
   await openPalette(a.page)
   await a.page.keyboard.type('lock')
   await expect(activeOption(a.page)).toHaveAttribute('data-entry-id', 'cmd:canvas-ux.toggle-lock')
-  await expect(activeOption(a.page)).toContainText('Toggle locked')
+  await expect(activeOption(a.page)).toContainText('Lock or unlock')
   await a.page.keyboard.press('Enter')
   await expect(palette(a.page)).toHaveCount(0)
   await expect

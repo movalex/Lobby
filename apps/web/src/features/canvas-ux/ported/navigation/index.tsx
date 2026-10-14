@@ -318,7 +318,8 @@ const CONTEXT_MENU: readonly MenuEntrySpec[] = [
     id: 'navigation.select-all-type',
     group: 'select',
     order: 10,
-    label: 'Select all on this page',
+    // P-013: Lobby has no pages
+    label: 'Select by type',
     visible: (ctx) => boardCategoryCounts(ctx.canvas).length > 0,
     submenu: categoryEntry(
       'navigation.select-all',

@@ -424,7 +424,8 @@ const BASE_COMMANDS: readonly CommandSpec[] = [
   },
   {
     id: CMD.toggleLock,
-    label: 'Toggle locked',
+    // P-013: Lobby's words (the context menu says "Lock" or "Unlock" for the selection)
+    label: 'Lock or unlock',
     kbd: ['mod+shift+l'],
     enabled: (ctx) => editable(ctx) && selectionAtLeast(1)(ctx),
     run: (ctx, source) => {
