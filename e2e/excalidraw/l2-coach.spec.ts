@@ -226,7 +226,10 @@ test('a dismissed chip stays dismissed on that board (a reload too); a viewer ne
 
 // P-007 (wave P): the Lobby tour's Retro frame holds 12 notes under three boxes. The chip offered "Group these 12 notes
 // into themes", whose click only said "These notes are already grouped", and then stayed on screen for the session.
-test('P-007: the Lobby tour gets no themes chip (its notes already sit under boxes)', async ({ join, board }) => {
+test('P-007: the Lobby tour gets no themes chip (its notes already sit under boxes)', async ({
+  join,
+  board,
+}) => {
   const a = await join('alice')
   await a.page.goto(`/b/${board}?template=lobby-tour`)
   await waitForCanvas(a.page)

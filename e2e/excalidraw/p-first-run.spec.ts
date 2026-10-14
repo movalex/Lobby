@@ -15,7 +15,6 @@
 import type { Locator, Page } from '@playwright/test'
 import { Api } from '../tests/support/api.ts'
 import { test as base, expect, waitForCanvas } from '../tests/support/canvas.ts'
-import { capture } from '../tests/support/screenshots.ts'
 import {
   chooseFromMenu,
   freshHandle,
@@ -24,6 +23,7 @@ import {
   personalWorkspace,
   signedInContext,
 } from '../tests/support/dashboard-share.ts'
+import { capture } from '../tests/support/screenshots.ts'
 
 const test = base
 test.use({ viewport: { width: 1440, height: 900 } })
@@ -332,7 +332,9 @@ test('the sign-in page says "Lobby" (by Dark Burn), never "DBC Lobby"', async ({
   }
 })
 
-test('the board’s top bar shows a workspace name like "Omar Haddad’s workspace" in full', async ({ browser }) => {
+test('the board’s top bar shows a workspace name like "Omar Haddad’s workspace" in full', async ({
+  browser,
+}) => {
   test.setTimeout(120_000)
   const p = await creator(browser, 'Omar Haddad')
   try {

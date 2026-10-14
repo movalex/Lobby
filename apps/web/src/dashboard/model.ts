@@ -1,4 +1,5 @@
 import type { BoardWithRole, MeAccess, Project, WorkspaceSummary } from '@draftroom/contracts'
+import { formatRelativeTime } from '../lib/format.ts'
 import {
   type BoardRole,
   type BoardStatus,
@@ -7,7 +8,6 @@ import {
   canCreateInWorkspace,
   type WorkspaceRole,
 } from '../lib/permissions.ts'
-import { formatRelativeTime } from '../lib/format.ts'
 import type { DashboardSection } from '../lib/routing.ts'
 import { CREATOR_DOMAINS, creatorDomainsInWords } from './creator-config.ts'
 

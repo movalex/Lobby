@@ -452,7 +452,9 @@ describe('dismissing it is remembered per viewer', () => {
         expect(readWhatsNewDismissed('usr_alice', WHATS_NEW_VERSION)).toBe(false)
         expect(() => writeWhatsNewDismissed('usr_alice', WHATS_NEW_VERSION)).not.toThrow()
         expect(
-          renderToStaticMarkup(WhatsNewCard({ items: HINT_ITEMS, onTry() {}, onTellUs() {}, onDismiss() {} })),
+          renderToStaticMarkup(
+            WhatsNewCard({ items: HINT_ITEMS, onTry() {}, onTellUs() {}, onDismiss() {} }),
+          ),
         ).toContain('data-testid="whats-new"')
       } finally {
         if (original) Object.defineProperty(globalThis, 'localStorage', original)

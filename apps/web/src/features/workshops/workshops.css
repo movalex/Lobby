@@ -1473,7 +1473,7 @@ li[data-rank="1"] .dr-wk-rank__bar {
   border-radius: 999px;
   background: var(--dr-navy);
   color: #fff;
-  font: 700 22px/1.1 var(--dr-mono);
+  font: 700 22px / 1.1 var(--dr-mono);
   font-variant-numeric: tabular-nums;
   box-shadow: var(--dr-shadow);
 }

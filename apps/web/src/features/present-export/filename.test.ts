@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   exportFilename,
   FALLBACK_FILENAME,
-  MAX_BASE_CHARS,
   frameFileQualifier,
+  MAX_BASE_CHARS,
   MAX_NAME_BYTES,
   sanitizeFilename,
 } from './filename.ts'

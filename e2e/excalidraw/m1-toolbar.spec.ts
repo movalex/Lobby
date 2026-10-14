@@ -134,7 +134,10 @@ test('M1-4 / P-011: a note colour and a note size from the bar: one undo step ea
     // the note grew from its top-left corner: it is where it was
     expect((await item(a.page, n1))?.x).toBe(0)
     expect((await item(a.page, n1))?.y).toBe(0)
-    await expect(bar(a.page).getByTestId('selection-style-font-size')).toHaveAttribute('aria-label', 'Size: Extra large')
+    await expect(bar(a.page).getByTestId('selection-style-font-size')).toHaveAttribute(
+      'aria-label',
+      'Size: Extra large',
+    )
     await a.page.screenshot({ path: testInfo.outputPath('m1-4-note-tray.png') })
   })
 

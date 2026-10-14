@@ -250,7 +250,8 @@ describe('plain-language commands know the colour names people see (M3-4, FTU-3)
     ])
     // the palette's own names (Butter, Iris…): only when the phrase said them itself; and no colour is capitalised
     const swatches = NOTE_PALETTE.map((s) => s.label)
-    const capitalised = /\b(?:Light )?(?:Red|Blue|Green|Violet|Yellow|Orange|Grey|Gray|Black|White|Pink|Purple)\b/
+    const capitalised =
+      /\b(?:Light )?(?:Red|Blue|Green|Violet|Yellow|Orange|Grey|Gray|Black|White|Pink|Purple)\b/
     let replies = 0
     for (const board of boards) {
       for (const phrase of phrases) {

@@ -16,7 +16,10 @@ export interface RectLike {
 }
 
 /** What the image export opens on (P-026): the selection, a single selected frame as that frame, else the board. */
-export function openingArea(s: { selected: number; selectedFrame: boolean }): 'selection' | 'frame' | 'board' {
+export function openingArea(s: {
+  selected: number
+  selectedFrame: boolean
+}): 'selection' | 'frame' | 'board' {
   if (s.selected === 0) return 'board'
   return s.selected === 1 && s.selectedFrame ? 'frame' : 'selection'
 }

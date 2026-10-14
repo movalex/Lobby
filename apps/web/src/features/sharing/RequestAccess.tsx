@@ -216,9 +216,7 @@ function RequestAccessForm({
       >
         {pending ? 'Sending…' : currentRole ? `Request ${ROLE_WORD[role]} access` : 'Request access'}
       </button>
-      <p className="dr-reqaccess__hint">
-        The owners are notified in Lobby.
-      </p>
+      <p className="dr-reqaccess__hint">The owners are notified in Lobby.</p>
     </form>
   )
 }

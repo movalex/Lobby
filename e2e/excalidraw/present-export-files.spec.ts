@@ -250,8 +250,7 @@ test.describe('image exports', () => {
     await expect(dialog.getByTestId('export-pdf-hint')).toBeHidden()
     // plain words
     const text = (await dialog.textContent()) ?? ''
-    for (const jargon of ['Vector', 'vector pages', 'PNG ≈'])
-      expect(text, jargon).not.toContain(jargon)
+    for (const jargon of ['Vector', 'vector pages', 'PNG ≈']) expect(text, jargon).not.toContain(jargon)
     await expect(dialog.getByTestId('export-png')).toHaveText('Download PNG')
     await expect(dialog.getByTestId('export-pdf')).toHaveText('Download PDF')
     await a.page.keyboard.press('Escape')

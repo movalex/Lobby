@@ -111,7 +111,9 @@ test('commenter on a read-only canvas: C, click a note, Enter posts; the owner s
     await expectPinOnAnchor(a.page, threadId, note, anchor.u, anchor.v)
     const corner = await screenPointOnElement(a.page, note, 1, 0)
     const pinBox = await pin(a.page, threadId).boundingBox()
-    expect(Math.abs((pinBox ? pinBox.x + pinBox.width : 0) - (corner.x - CORNER_PIN_GAP))).toBeLessThanOrEqual(2)
+    expect(
+      Math.abs((pinBox ? pinBox.x + pinBox.width : 0) - (corner.x - CORNER_PIN_GAP)),
+    ).toBeLessThanOrEqual(2)
     expect(Math.abs((pinBox?.y ?? 0) - (corner.y + CORNER_PIN_GAP))).toBeLessThanOrEqual(2)
   })
 

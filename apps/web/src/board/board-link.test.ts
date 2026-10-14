@@ -9,7 +9,10 @@ import { BoardLink } from './ShareDialog.tsx'
 
 const board = (visibility: Board['visibility']): Board => ({ id: 'b-abc1234567', visibility }) as Board
 
-const render = (visibility: Board['visibility'], over: { editable?: boolean; linkNote?: string | null } = {}) =>
+const render = (
+  visibility: Board['visibility'],
+  over: { editable?: boolean; linkNote?: string | null } = {},
+) =>
   renderToStaticMarkup(
     createElement(BoardLink, {
       board: board(visibility),

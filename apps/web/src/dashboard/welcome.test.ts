@@ -88,7 +88,11 @@ describe('the Help menu', () => {
     expect(sections.map((s) => s.title)).toEqual(['On a board', 'On the dashboard'])
     const rows = sections.flatMap((s) => s.rows)
     expect(rows.some((r) => r.keys === 'Ctrl+E' && /boards/i.test(r.does))).toBe(true)
-    expect(helpShortcuts(true).flatMap((s) => s.rows).every((r) => !r.keys.includes('Ctrl+'))).toBe(true)
+    expect(
+      helpShortcuts(true)
+        .flatMap((s) => s.rows)
+        .every((r) => !r.keys.includes('Ctrl+')),
+    ).toBe(true)
   })
 
   it('knows a Mac from the rest', () => {

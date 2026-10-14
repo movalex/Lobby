@@ -350,10 +350,6 @@ export function pickSize(canvas: LobbyCanvas, t: Target, size: SizeName) {
   else canvas.styles.setNext({ strokeWidth: NEXT_STROKE_WIDTH[size] })
 }
 
-/** `styles.apply` folded into the previous step (a second kind of the same pick). */
-function applyJoined(canvas: LobbyCanvas, patch: StyleValues, ids: readonly string[]) {
-  canvas.transact('style', () => canvas.styles.apply(patch, ids), { joinPrevious: true })
-}
 
 export function textTargets(t: Target) {
   return [

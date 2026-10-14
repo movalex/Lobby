@@ -234,7 +234,7 @@ describe('owner filter, stars and duplicate names', () => {
   it('the trash says boards stay until restored, as a plain fact (no roadmap wording)', () => {
     expect(TRASH_NOTE).toMatch(/until an owner restores them/)
     expect(TRASH_NOTE).toMatch(/deleted automatically/)
-    expect(TRASH_NOTE).not.toMatch(/yet/i)
+    expect(TRASH_NOTE).not.toMatch(/\byet\b/i)
   })
 })
 

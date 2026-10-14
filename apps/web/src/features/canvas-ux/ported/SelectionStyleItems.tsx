@@ -16,7 +16,6 @@ import { countUsage } from '../../../lib/usage.ts'
 import { STYLE_PANEL_SELECTOR } from './obstacles.ts'
 import { SelectionBarCompact } from './selection-bar-context.ts'
 import { uxState } from './state.ts'
-import { setStylePanelOpen, stylePanelOpen } from './style-panel-place.ts'
 import {
   pickTier,
   SELECTION_TOOLBAR_TIER1,
@@ -25,6 +24,7 @@ import {
   type TierRow,
   tierModel,
 } from './style-items.ts'
+import { setStylePanelOpen, stylePanelOpen } from './style-panel-place.ts'
 import { THEME_FILTER } from './style-vocabulary.ts'
 import { stylesFold } from './toolbar-layout.ts'
 
@@ -144,11 +144,7 @@ const CONTROL_ICON: Readonly<Partial<Record<TierControl['id'], ReactNode>>> = {
 function strokeStyleControl(value: string | undefined): ReactNode {
   const dash = value === 'dashed' ? '4 3' : value === 'dotted' ? '0.5 3.2' : undefined
   return (
-    <path
-      d="M3 17 9 9l5 6 7-9"
-      strokeDasharray={dash}
-      strokeWidth={value === 'dotted' ? 2.6 : undefined}
-    />
+    <path d="M3 17 9 9l5 6 7-9" strokeDasharray={dash} strokeWidth={value === 'dotted' ? 2.6 : undefined} />
   )
 }
 

@@ -5,7 +5,8 @@
    menu; while the style panel is open at the right, they sit to its left. Loaded by the ported feature only, so the
    tldraw page and the normal build never see it. */
 @media (min-width: 481px) {
-  [data-lobby-board-canvas]:has(.cux-style-place[data-side="right"] [data-testid="style.panel"]) .dr-ai-panel {
+  [data-lobby-board-canvas]:has(.cux-style-place[data-side="right"] [data-testid="style.panel"])
+    .dr-ai-panel {
     right: calc(12px + 216px + 12px);
   }
 }

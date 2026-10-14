@@ -477,11 +477,10 @@ function OpenThread({ ctx, host }: { ctx: CanvasFeatureContext; host: HTMLElemen
     () => (openId ? store.threads.get()[openId] : undefined),
     [store, openId],
   )
-  const point = useValue(
-    'dr-comments.open-point',
-    () => (thread ? pinPoint(canvas, thread.anchor) : null),
-    [canvas, thread],
-  )
+  const point = useValue('dr-comments.open-point', () => (thread ? pinPoint(canvas, thread.anchor) : null), [
+    canvas,
+    thread,
+  ])
   const where = useValue(
     'dr-comments.open-where',
     () => (thread ? describeAnchor(canvas, thread.anchor) : ''),

@@ -29,7 +29,6 @@ export type TryAction = 'start-row' | 'templates' | 'board' | 'workspace-menu' |
 export type TryKey = string
 export const tryKey = (a: TryAction): TryKey => (typeof a === 'string' ? a : `board-hint:${a.hint}`)
 
-const hintTry = (hint: TryHint): BoardHintTry => ({ kind: 'board-hint', hint })
 
 /**
  * Who an item is true for: everybody; people who can make boards here; people who get the template row (a

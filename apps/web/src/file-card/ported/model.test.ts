@@ -13,8 +13,8 @@ import {
   factsOf,
   fileItemKind,
   imageSizeFromHeader,
-  pageOfFileId,
   PREVIEW_SLOW_MS,
+  pageOfFileId,
   previewStateText,
   thumbSizeOf,
 } from './model.ts'
@@ -34,7 +34,11 @@ const el = (fileId: string, file: unknown, type = 'image'): CanvasElement =>
   ({ id: 'e1', type, fileId, customData: { lobby: { file } }, x: 0, y: 0, width: 10, height: 10 }) as never
 
 describe('what a card without its picture says (wave P)', () => {
-  const state = (status: CardView['status'], over: Partial<CardView> = {}) => ({ status, missing: false, ...over })
+  const state = (status: CardView['status'], over: Partial<CardView> = {}) => ({
+    status,
+    missing: false,
+    ...over,
+  })
 
   it('says Queued, Generating and Loading while it waits, as before', () => {
     expect(previewStateText(state('queued'), false, true)).toBe('Queued for preview…')
