@@ -7,6 +7,7 @@ import {
   clusterBadges,
   csvCell,
   describeProgress,
+  finalLine,
   localCastCheck,
   notInVoteText,
   optimisticBallot,
@@ -16,6 +17,8 @@ import {
   shapeLabel,
   topResults,
   voteClick,
+  votePromptText,
+  votesWereCast,
 } from './voting.ts'
 
 const rt = (...lines: string[]) => ({
@@ -173,6 +176,34 @@ describe('what a click while voting does (W5-03)', () => {
     expect(notInVoteText({ scope: 'board', shapeTypes: ['note', 'geo'] }, null)).toBe(
       'Not part of this vote.',
     )
+  })
+})
+
+describe('the prompt that tells everyone a vote is on (P-001)', () => {
+  it('says what to click and how many votes are left', () => {
+    expect(votePromptText({ shapeTypes: ['note'] }, 3)).toBe(
+      'Voting is on: click notes to vote, 3 votes left.',
+    )
+    expect(votePromptText({ shapeTypes: null }, 1)).toBe('Voting is on: click objects to vote, 1 vote left.')
+    expect(votePromptText({ shapeTypes: ['note', 'geo'] }, 5, true)).toBe(
+      'Voting is on: tap objects to vote, 5 votes left.',
+    )
+  })
+})
+
+describe('an empty vote ends calmly (P-015)', () => {
+  it('somebody voted when votes were cast or a result has a count', () => {
+    expect(votesWereCast({ totalVotesCast: 0 })).toBe(false)
+    expect(votesWereCast({ totalVotesCast: 0, results: [] })).toBe(false)
+    expect(votesWereCast({ totalVotesCast: 2, results: [] })).toBe(true)
+    const counted = [{ shapeId: 'shape:a', count: 1, rank: 1 }]
+    expect(votesWereCast({ totalVotesCast: 0, results: counted })).toBe(true)
+  })
+
+  it('the end line says no votes were cast, not "0 votes from 0 people"', () => {
+    expect(finalLine({ totalVotesCast: 0, participants: 0 })).toBe('Voting is over. No votes were cast.')
+    expect(finalLine({ totalVotesCast: 1, participants: 1 })).toBe('Voting is over: 1 vote from 1 person.')
+    expect(finalLine({ totalVotesCast: 5, participants: 2 })).toBe('Voting is over: 5 votes from 2 people.')
   })
 })
 

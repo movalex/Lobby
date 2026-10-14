@@ -7,6 +7,13 @@
 // `seenAt` is this person's PREVIOUS visit time (the api's answer, ./client.ts), so only what happened while they were
 // away counts. null (a first visit, a guest, an api without the route) means no result.
 //
+// What does not count, because the person did it themselves (P-006, `me`): an element the server credits to them
+// (`customData.lobbyServer.createdBy`) is not "added", and one whose latest commit was their own edit of its words
+// (`lastEditedBy` at that commit's time) is not "changed": a label they typed into, or added, does not change its
+// note. The server stamps no author on a move, a resize or a restyle, so those cannot be told apart by who made them:
+// they count as changes (the known limit; a per-commit author would need a wire change). A removal by them is left
+// out in ./run.ts, from the "Recently deleted" list that names who deleted it.
+//
 // What does not count, because nobody did it:
 //  - a bound label counts for its container, once: a note whose label was typed into is one changed note, a new note
 //    with its label is one added note, and a label alone is never an entry of its own. A deleted label is read the same
@@ -80,6 +87,8 @@ export interface WhatChangedInput {
   readonly tombstones: Iterable<VisitElement>
   /** the scene's hidden set (LobbyCanvas.isHidden): collapsed branches are not compared */
   readonly isHidden?: (id: string) => boolean
+  /** the viewing person's user id: what they made or last edited themselves is not counted; null or absent: all */
+  readonly me?: string | null
 }
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
@@ -91,6 +100,34 @@ export function createdAtOf(el: VisitElement): number | null {
   const ls = (cd as { lobbyServer?: unknown }).lobbyServer
   if (typeof ls !== 'object' || ls === null) return null
   return num((ls as { createdAt?: unknown }).createdAt)
+}
+
+const serverStampsOf = (el: VisitElement): Record<string, unknown> | null => {
+  const cd = el.customData
+  if (typeof cd !== 'object' || cd === null) return null
+  const ls = (cd as { lobbyServer?: unknown }).lobbyServer
+  return typeof ls === 'object' && ls !== null ? (ls as Record<string, unknown>) : null
+}
+
+const uidOf = (attribution: unknown): string | null => {
+  if (typeof attribution !== 'object' || attribution === null) return null
+  const uid = (attribution as { uid?: unknown }).uid
+  return typeof uid === 'string' ? uid : null
+}
+
+/** Whether the server credits `me` with making the element. */
+const madeBy = (el: VisitElement, me: string): boolean => uidOf(serverStampsOf(el)?.createdBy) === me
+
+/**
+ * Whether the element's latest commit (`updated`) was `me` editing its words: the server stamps `lastEditedBy` and
+ * `lastEditedAt` in the same commit as `updated`. A later commit of anyone's (a move, a restyle) leaves `updated`
+ * past `lastEditedAt`, and is not theirs to claim.
+ */
+const lastEditedBy = (el: VisitElement, me: string): boolean => {
+  const ls = serverStampsOf(el)
+  const at = num(ls?.lastEditedAt)
+  const updated = num(el.updated)
+  return uidOf(ls?.lastEditedBy) === me && at !== null && updated !== null && at >= updated
 }
 
 const containerOf = (el: VisitElement): string | null =>
@@ -117,6 +154,7 @@ export function whatChanged(input: WhatChangedInput): VisitChanges | null {
   const { seenAt } = input
   if (seenAt === null || !Number.isFinite(seenAt) || seenAt <= 0) return null
   const hidden = input.isHidden ?? (() => false)
+  const me = input.me ?? null
 
   const liveById = new Map<string, VisitElement>()
   for (const e of input.live) if (!e.isDeleted) liveById.set(e.id, e)
@@ -126,6 +164,8 @@ export function whatChanged(input: WhatChangedInput): VisitChanges | null {
   const changedSet = new Set<string>()
   /** container id → the commits (`updated`) of its label's touches since the visit; a new label is `null` (not derivable) */
   const labelTouches = new Map<string, Set<number | null>>()
+  /** container id → the commits of the viewer's own label touches (a new label, or words typed into one) */
+  const myLabelCommits = new Map<string, Set<number>>()
   for (const e of liveById.values()) {
     const container = containerOf(e)
     const target = container ?? e.id
@@ -135,6 +175,15 @@ export function whatChanged(input: WhatChangedInput): VisitChanges | null {
     const updated = num(e.updated)
     const isNew = created !== null && created > seenAt
     const touched = isNew || (updated !== null && updated > seenAt)
+    // P-006: what the viewer made, or last edited the words of, is theirs, not "since you were here"
+    if (me !== null && touched && (isNew ? madeBy(e, me) : lastEditedBy(e, me))) {
+      if (container !== null && updated !== null) {
+        const mine = myLabelCommits.get(container) ?? new Set<number>()
+        mine.add(updated)
+        myLabelCommits.set(container, mine)
+      }
+      continue
+    }
     if (container !== null) {
       if (!touched) continue
       const set = labelTouches.get(container) ?? new Set<number | null>()
@@ -147,6 +196,14 @@ export function whatChanged(input: WhatChangedInput): VisitChanges | null {
   }
   // a label typed into (or added to) an existing element changes that element
   for (const container of labelTouches.keys()) if (!addedSet.has(container)) changedSet.add(container)
+  // ... unless the viewer was the one who typed: the commit that put their label there also touched the element (its
+  // `boundElements`, its fit), and that touch is theirs too, when no one else's label touch is left
+  for (const [container, commits] of myLabelCommits) {
+    if (labelTouches.has(container) || addedSet.has(container)) continue
+    const own = liveById.get(container)
+    const updated = own ? num(own.updated) : null
+    if (updated !== null && commits.has(updated)) changedSet.delete(container)
+  }
 
   // ---- tombstones: removed items, and the commit times of what was deleted ----
   const removedAll: { id: string; type: string; updated: number }[] = []

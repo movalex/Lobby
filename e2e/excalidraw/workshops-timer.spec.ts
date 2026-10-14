@@ -327,3 +327,91 @@ test("the timer: a teammate can't pause the facilitator's running timer; the own
   await alicePop.getByTestId('timer-pause').click()
   await expect(carol.page.getByTestId('facilitate-button')).toHaveAttribute('data-timer-state', 'paused')
 })
+
+// P-016: a running session timer is prominent for everyone: a pill at the top centre of the canvas (not only the
+// Facilitate button's small figure), with the last ten seconds emphasised.
+test('P-016: a running timer is a readable pill at the top centre for everyone, red in the last ten seconds', async ({
+  join,
+  board,
+}, testInfo) => {
+  const a = await join('alice')
+  const b = await join('bob', 'editor')
+  const c = await join('carol', 'viewer')
+  const pages = [a.page, b.page, c.page]
+  const pill = (p: (typeof pages)[number]) => p.getByTestId('timer-banner')
+
+  await test.step('no timer: no pill', async () => {
+    for (const p of pages) {
+      await expect(pill(p)).toHaveCount(0)
+      // and the stack's box for it takes no place (no gap above the other top-centre bars)
+      await expect(p.locator('[data-testid="top-centre-stack"] > [data-slot="spotlight"]')).toBeHidden()
+    }
+  })
+
+  await test.step('alice starts 20 s: the pill is at the top centre of the canvas for all three', async () => {
+    expect(
+      (await post(a, `/api/boards/${board}/timer`, { action: 'start', durationMs: 20_000 })).status(),
+    ).toBe(200)
+    for (const p of pages) {
+      await expect(pill(p)).toBeVisible()
+      await expect(pill(p)).toHaveAttribute('data-state', 'running')
+      await expect(pill(p)).toHaveAttribute('data-urgent', 'false')
+      await expect(p.getByTestId('top-centre-stack').getByTestId('timer-banner')).toBeVisible()
+      const box = await pill(p).boundingBox()
+      const view = p.viewportSize()
+      expect(box && view, 'laid out').toBeTruthy()
+      if (box && view) {
+        expect(Math.abs(box.x + box.width / 2 - view.width / 2), 'centred').toBeLessThan(80)
+        expect(box.height, 'readable').toBeGreaterThanOrEqual(36)
+      }
+      const size = await pill(p).evaluate((el) => Number.parseFloat(getComputedStyle(el).fontSize))
+      expect(size).toBeGreaterThanOrEqual(18)
+    }
+    await capture('p016-timer-banner.png', c.page, testInfo)
+  })
+
+  await test.step('in the last ten seconds it is emphasised, everywhere', async () => {
+    for (const p of pages) await expect(pill(p)).toHaveAttribute('data-urgent', 'true', { timeout: 15_000 })
+    await capture('p016-timer-banner-urgent.png', c.page, testInfo)
+  })
+
+  await test.step('alice stops it: the pill is gone for everyone', async () => {
+    expect((await post(a, `/api/boards/${board}/timer`, { action: 'stop' })).status()).toBe(200)
+    for (const p of pages) await expect(pill(p)).toHaveCount(0)
+  })
+})
+
+// P-038: "Not set" is words, so it is in the interface font; only the clock's digits are monospaced.
+test('P-038: the timer popover says "Not set" in the interface font, a running clock in the clock font', async ({
+  join,
+  board,
+}) => {
+  const a = await join('alice')
+  const fonts = async (p: typeof a.page) => {
+    const clock = p.getByTestId('workshop-popover').locator('.dr-wk-pop__clock')
+    return clock.evaluate((el) => {
+      const root = getComputedStyle(document.documentElement)
+      return {
+        family: getComputedStyle(el).fontFamily,
+        mono: root.getPropertyValue('--dr-mono').trim(),
+        ui: root.getPropertyValue('--dr-font').trim(),
+        text: el.textContent?.trim() ?? '',
+      }
+    })
+  }
+  await openWorkshopPopover(a.page)
+  const idle = await fonts(a.page)
+  expect(idle.text).toBe('Not set')
+  expect(idle.mono, 'the clock font token').not.toBe('')
+  expect(idle.family).toBe(idle.ui)
+  expect(idle.family).not.toBe(idle.mono)
+  await closeWorkshopPopover(a.page)
+
+  expect(
+    (await post(a, `/api/boards/${board}/timer`, { action: 'start', durationMs: 300_000 })).status(),
+  ).toBe(200)
+  await openWorkshopPopover(a.page)
+  const running = await fonts(a.page)
+  expect(running.text).toMatch(/^\d+:\d{2}$/)
+  expect(running.family).toBe(running.mono)
+})

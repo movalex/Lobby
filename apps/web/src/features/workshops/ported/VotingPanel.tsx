@@ -15,7 +15,7 @@ import { ownsMoment } from '../../feedback/prompt.ts'
 import { noteFeedbackMoment } from '../../feedback/prompt-moments.ts'
 import { describeClock, formatClock } from '../countdown.ts'
 import type { WorkshopStore } from '../store.ts'
-import { describeProgress, describeVoted, resultsCsv, topResults, votedOf } from '../voting.ts'
+import { describeProgress, describeVoted, finalLine, resultsCsv, topResults, votedOf } from '../voting.ts'
 import { useIsFacilitator, useNow, useWorkshop } from '../workshop-context.ts'
 import { zoomToBounds } from './camera.ts'
 import { elementIdOf, labelOfRef, typeNameOfRef } from './elements.ts'
@@ -337,8 +337,7 @@ function CurrentVote({
       {/* K3-2: the end is plain to see: the vote is over, and how it went */}
       {s.status === 'revealed' && (
         <p className="dr-wk-final" role="status" data-testid="vote-final">
-          Voting is over: {vote.totalVotesCast} vote{vote.totalVotesCast === 1 ? '' : 's'} from{' '}
-          {vote.participants} {vote.participants === 1 ? 'person' : 'people'}. Everyone sees the results.
+          {finalLine(vote)} Everyone sees the results.
         </p>
       )}
       {s.status === 'revealed' && vote.results && (
@@ -430,7 +429,7 @@ function Results({
   if (results.length === 0)
     return (
       <p className="dr-muted" data-testid={testId}>
-        Nobody voted.
+        No votes were cast.
       </p>
     )
   return (

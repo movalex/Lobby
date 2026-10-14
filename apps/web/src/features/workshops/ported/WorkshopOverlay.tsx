@@ -42,7 +42,16 @@ import { formatClock, timerDisplayPhase, timerRemainingMs } from '../countdown.t
 import { HandToasts, PresentingHands } from '../Hands.tsx'
 import { resultsCardShown } from '../results-card.ts'
 import type { WorkshopStore } from '../store.ts'
-import { badgeScale, clusterBadges, describeVoted, dotInk, revealConfetti, topResults } from '../voting.ts'
+import {
+  badgeScale,
+  clusterBadges,
+  describeVoted,
+  dotInk,
+  revealConfetti,
+  topResults,
+  votePromptText,
+  votesWereCast,
+} from '../voting.ts'
 import { useIsFacilitator, useNow, useWorkshop } from '../workshop-context.ts'
 import { followingNow, stopFollowing, zoomToBounds } from './camera.ts'
 import { isEligibleElement, labelOfRef, refOf } from './elements.ts'
@@ -128,6 +137,20 @@ export async function castVote(ctx: Ctx, store: WorkshopStore, shapeId: string, 
   const snap = store.getSnapshot()
   if (r.ok && snap.ballot && snap.vote)
     store.announce(castAnnouncement(delta, snap.ballot.myRemaining, snap.vote.session.votesPerPerson))
+}
+
+/**
+ * P-001: the first click on an object during a vote this person has not joined yet: joins and casts the
+ * dot at once (no "Join" to find first), saying what went wrong and announcing the vote like any other.
+ */
+export async function joinAndCastVote(ctx: Ctx, store: WorkshopStore, sessionId: string, shapeId: string) {
+  countUsage('vote.join.banner')
+  const r = await store.joinAndCast(sessionId, shapeId)
+  if (r && !r.ok && r.error)
+    ctx.notify({ key: 'vote-cast', text: r.error, testId: 'vote-toast', timeoutMs: 3500 })
+  const snap = store.getSnapshot()
+  if (r?.ok && snap.ballot && snap.vote)
+    store.announce(castAnnouncement(1, snap.ballot.myRemaining, snap.vote.session.votesPerPerson))
 }
 
 function useCast(ctx: Ctx, store: WorkshopStore) {
@@ -217,9 +240,9 @@ export function WorkshopLayer({ ctx }: { ctx: Ctx }) {
       {/* +1s sit under the vote markers (both are on shapes; votes win while a vote runs). */}
       {!presenting && <PlusOnes ctx={ctx} voting={open} />}
       {joined && snap.ballot && <MyDots ctx={ctx} store={store} myVotes={snap.ballot.myVotes} />}
-      {voting && <ClickToVote ctx={ctx} store={store} />}
+      {/* P-001: the first click of someone who has not joined yet joins and votes (the banner is up). */}
+      {(voting || (snap.voteBanner && !presenting)) && <ClickToVote ctx={ctx} store={store} />}
       {voting && <SelectedStepper ctx={ctx} store={store} />}
-      {snap.voteBanner && !presenting && <ClickToOffer ctx={ctx} store={store} />}
       {/* One stack, top to bottom, so messages never cover each other (RETRO-11). */}
       {!presenting && (
         <div className="dr-wk-stack" data-testid="workshop-stack">
@@ -249,11 +272,13 @@ export function WorkshopTopLayer({ ctx }: { ctx: Ctx }) {
   // Phones: the timer pill sits in the top bar's "⋯" menu, so a running timer also floats on the
   // canvas, read-only (final review R2).
   const phone = useMediaQuery(PHONE_QUERY)
+  // P-015: no confetti for a vote nobody cast a dot in
+  const celebrate = !!snap.vote && votesWereCast(snap.vote)
   return (
     <>
       <div className="dr-wk-top" data-testid="workshop-top">
         <TimerFlash seq={snap.alertSeq} />
-        <RevealConfetti seq={snap.resultsNews?.seq ?? null} />
+        <RevealConfetti seq={celebrate ? (snap.resultsNews?.seq ?? null) : null} />
         {(presenting || phone) && (
           <PresentingTimer ctx={ctx} store={store} corner={presenting ? 'left' : 'right'} />
         )}
@@ -344,7 +369,11 @@ function ClickToVote({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
       if (last.id === ref && t - last.at < SAME_SHAPE_DEBOUNCE_MS) return // a double-click is one vote
       last.id = ref
       last.at = t
-      void castRef.current(ref, 1)
+      const snap = store.getSnapshot()
+      const sid = snap.vote?.session.id
+      // not in the vote yet: this click joins it and is the first dot (P-001)
+      if (snap.participation !== 'joined' && sid) void joinAndCastVote(ctx, store, sid, ref)
+      else void castRef.current(ref, 1)
     }
     let pressed: { x: number; y: number; id: string } | null = null
     let other: { x: number; y: number; id: string } | null = null
@@ -653,24 +682,22 @@ const firstWord = (name: string) => name.trim().split(/\s+/)[0] ?? name
 
 /**
  * K3-1: the "Vote started" banner (the vote's join card, RETRO-11's stack): who started it, what the vote
- * takes and how many dots this person has, one click to join and vote ("Join and vote"), or, after a click on
- * an object before joining, one click to join and give that object its first dot. Up once per vote for each
- * person who may vote here and has neither joined nor said "Not now" (../store.ts `voteBanner`); the
- * keyboard help is its description (K3-6).
+ * takes and how many votes this person has left ("Voting is on: click notes to vote, 3 votes left"), a
+ * button to join and vote, and (P-001) a plain click on an object joins and casts the first dot at once. Up
+ * once per vote for each person who may vote here and has neither joined nor said "Not now" (../store.ts
+ * `voteBanner`); the keyboard help is its description (K3-6).
  */
 export function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
   const keysId = useId()
   const snap = store.getSnapshot()
   const banner = snap.voteBanner
   const vote = snap.vote
-  const offer = snap.joinOffer
   const by = useValue(
     'dr-wk-banner-by',
     () =>
       banner ? (ctx.canvas.collaborators().find((c) => c.uid === banner.createdBy)?.name ?? null) : null,
     [ctx.canvas, banner?.createdBy],
   )
-  const [busy, setBusy] = useState(false)
   // K3-1 (wave K integration, the K3 review): the banner takes no focus, so a screen reader is told a vote
   // began, in the board's polite live region (one set of live regions per board), once per banner shown
   const bannerSeq = banner?.seq
@@ -689,24 +716,13 @@ export function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
   if (!banner || !vote || vote.session.id !== banner.sessionId) return null
   const s = vote.session
   const left = vote.myRemaining
+  const rule = voteRuleOf(s)
   const startedBy =
     by && banner.createdBy !== ctx.me.user.id ? `${firstWord(by)} started a vote` : 'Vote started'
-  const target = offer ? labelOfRef(offer.shapeId, (id) => ctx.canvas.get(id)) : null
   // M2 usage: how often the banner is what brings someone into a vote (a count, nothing else)
   const joinVote = () => {
     countUsage('vote.join.banner')
     return store.joinVote(s.id)
-  }
-  const joinAndCast = async () => {
-    countUsage('vote.join.banner')
-    setBusy(true)
-    const r = await store.joinAndCast()
-    setBusy(false)
-    if (r && !r.ok && r.error)
-      ctx.notify({ key: 'vote-cast', text: r.error, testId: 'vote-toast', timeoutMs: 3500 })
-    const after = store.getSnapshot()
-    if (r?.ok && after.ballot && after.vote)
-      store.announce(castAnnouncement(1, after.ballot.myRemaining, after.vote.session.votesPerPerson))
   }
   return (
     <div
@@ -716,14 +732,13 @@ export function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
       aria-describedby={keysId}
       data-testid="vote-join-prompt"
       data-banner-seq={banner.seq}
-      data-offer={offer?.shapeId}
     >
       <p className="dr-wk-banner__eyebrow" data-testid="vote-banner-by">
         <span className="dr-wk-chip__dot" aria-hidden="true" />
         {startedBy}
       </p>
       <p>
-        <strong>{s.title}</strong> — you have {left} vote{left === 1 ? '' : 's'} to place on
+        <strong>{s.title}</strong> — place your votes on
         {s.scope === 'frame'
           ? ' objects in one frame'
           : s.scope === 'selection'
@@ -731,52 +746,28 @@ export function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
             : ' objects on the board'}
         .
       </p>
-      <p className="dr-wk-hint">
+      <p className="dr-wk-hint dr-wk-banner__on">
         <span className="dr-wk-hint--fine" data-testid="vote-click-hint">
-          Click objects to vote; click your dot to take one back.
+          {votePromptText(rule, left)} Click your dot to take one back.
         </span>
         {/* Touch screens (final review R6): no keyboard to talk about. */}
         <span className="dr-wk-hint--coarse" data-testid="vote-touch-hint">
-          Tap objects to vote; tap your dot to take one back.
+          {votePromptText(rule, left, true)} Tap your dot to take one back.
         </span>
       </p>
       <span id={keysId} className="dr-sr-only" data-testid="vote-keys-hint">
         {VOTE_KEYS_HELP}
       </span>
       <div className="dr-wk-row">
-        {offer && target !== null ? (
-          <>
-            <button
-              type="button"
-              className="dr-btn dr-btn--primary dr-btn--sm dr-wk-banner__cast"
-              data-testid="vote-join-cast"
-              aria-describedby={keysId}
-              disabled={busy}
-              onClick={() => void joinAndCast()}
-            >
-              Join and vote for “{target}”
-            </button>
-            <button
-              type="button"
-              className="dr-btn dr-btn--sm"
-              data-testid="vote-join"
-              disabled={busy}
-              onClick={() => void joinVote()}
-            >
-              Join
-            </button>
-          </>
-        ) : (
-          <button
-            type="button"
-            className="dr-btn dr-btn--primary dr-btn--sm"
-            data-testid="vote-join"
-            aria-describedby={keysId}
-            onClick={() => void joinVote()}
-          >
-            Join and vote
-          </button>
-        )}
+        <button
+          type="button"
+          className="dr-btn dr-btn--primary dr-btn--sm"
+          data-testid="vote-join"
+          aria-describedby={keysId}
+          onClick={() => void joinVote()}
+        >
+          Join and vote
+        </button>
         <button
           type="button"
           className="dr-btn dr-btn--sm dr-btn--ghost"
@@ -795,40 +786,6 @@ export function JoinPrompt({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
       </div>
     </div>
   )
-}
-
-/**
- * K3-1: before joining, a plain click (no drag) on an object the open vote takes offers to join and give it
- * a dot (the banner's "Join and vote for …"). The press is not claimed: the object is selected and moves as
- * usual, and nothing is cast until the person joins.
- */
-function ClickToOffer({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
-  const rule = useRule(store)
-  const sid = store.getSnapshot().voteBanner?.sessionId ?? null
-  useEffect(() => {
-    if (!rule || !sid) return
-    const canvas = ctx.canvas
-    let pressed: { x: number; y: number; id: string } | null = null
-    return canvas.on('input', (e) => {
-      if (e.type === 'pointer-down') {
-        pressed = null
-        if (e.button !== 0 || !plainPress(e) || canvas.editingId()) return
-        const tool = canvas.tool()
-        if (tool !== 'select' && tool !== 'hand') return
-        const click = voteClickAt(canvas, e.scene, rule)
-        if (click.kind === 'vote') pressed = { x: e.screen.x, y: e.screen.y, id: click.target.id }
-        return
-      }
-      if (e.type === 'pointer-up') {
-        const p = pressed
-        pressed = null
-        if (!p || Math.hypot(e.screen.x - p.x, e.screen.y - p.y) > CLICK_SLOP_PX) return
-        const ref = refOf(p.id)
-        if (ref) store.offerJoin(sid, ref)
-      }
-    })
-  }, [ctx, rule, sid, store])
-  return null
 }
 
 function VotingBar({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
@@ -976,7 +933,7 @@ function ResultsCard({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
   return (
     <section className="dr-wk-results-card" aria-label="Vote results" data-testid="vote-results-card">
       <div className="dr-wk-results-card__head">
-        <strong>Results are in</strong>
+        <strong>{top.length === 0 ? 'No votes were cast' : 'Results are in'}</strong>
         <span className="dr-muted">{vote.session.title}</span>
         <button
           type="button"
@@ -987,9 +944,7 @@ function ResultsCard({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
           ×
         </button>
       </div>
-      {top.length === 0 ? (
-        <p className="dr-muted">Nobody voted.</p>
-      ) : (
+      {top.length > 0 && (
         <ol className="dr-wk-results-card__list">
           {top.map((r) => (
             <li key={r.shapeId} data-testid="vote-results-card-row" data-shape-id={r.shapeId}>
@@ -1004,17 +959,19 @@ function ResultsCard({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
           ))}
         </ol>
       )}
-      <button
-        type="button"
-        className="dr-btn dr-btn--sm dr-btn--primary"
-        data-testid="vote-results-card-all"
-        onClick={() => {
-          store.dismissResultsNews('see-all')
-          ctx.openPanel('voting')
-        }}
-      >
-        See all results
-      </button>
+      {top.length > 0 && (
+        <button
+          type="button"
+          className="dr-btn dr-btn--sm dr-btn--primary"
+          data-testid="vote-results-card-all"
+          onClick={() => {
+            store.dismissResultsNews('see-all')
+            ctx.openPanel('voting')
+          }}
+        >
+          See all results
+        </button>
+      )}
     </section>
   )
 }

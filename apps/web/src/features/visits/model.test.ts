@@ -275,6 +275,165 @@ describe('whatChanged: only what the scene shows', () => {
   })
 })
 
+// P-006: what the viewing person did themselves is not "since you were here": the server stamps who made an element
+// (customData.lobbyServer.createdBy) and who last edited its words (lastEditedBy, at the commit's time).
+describe('whatChanged: the viewing person’s own changes do not count (P-006)', () => {
+  const ME = 'usr_me'
+  const THEM = 'usr_them'
+  const by = (uid: string | null) => (uid === null ? null : { uid, name: uid, guest: false })
+  /** An element with the server's authorship stamps. */
+  const stamped = (
+    id: string,
+    type: string,
+    o: {
+      createdAt?: number
+      updated?: number
+      createdBy?: string | null
+      lastEditedBy?: string | null
+      lastEditedAt?: number
+    } & Record<string, unknown> = {},
+  ): El => {
+    const {
+      createdAt = BEFORE,
+      updated = BEFORE,
+      createdBy = null,
+      lastEditedBy = null,
+      lastEditedAt,
+      ...rest
+    } = o
+    return {
+      ...el(id, type, { created: null, updated, ...rest }),
+      customData: {
+        lobbyServer: {
+          createdBy: by(createdBy),
+          createdAt,
+          lastEditedBy: by(lastEditedBy),
+          lastEditedAt: lastEditedAt ?? createdAt,
+        },
+      },
+    }
+  }
+  const runAs = (live: El[], tombstones: El[] = []) => whatChanged({ seenAt: SEEN, live, tombstones, me: ME })
+
+  it('a note I made after the visit is not "added"; a colleague’s is', () => {
+    const r = runAs([
+      stamped('mine', 'stickynote', { createdAt: AFTER, updated: AFTER, createdBy: ME }),
+      stamped('theirs', 'stickynote', { createdAt: AFTER, updated: AFTER, createdBy: THEM }),
+    ])
+    expect(r?.added).toEqual(['theirs'])
+    expect(r?.counts).toEqual({ added: 1, changed: 0, removed: 0 })
+  })
+
+  it('my own note and its label, made after the visit, count for nothing at all', () => {
+    const r = runAs([
+      stamped('mine', 'stickynote', { createdAt: AFTER, updated: AFTER, createdBy: ME }),
+      stamped('mine.t', 'text', {
+        createdAt: AFTER,
+        updated: AFTER,
+        createdBy: ME,
+        lastEditedBy: ME,
+        containerId: 'mine',
+      }),
+    ])
+    expect(r?.total).toBe(0)
+  })
+
+  it('an element nobody is credited with (an anonymous reveal) or with no stamps still counts', () => {
+    const r = runAs([
+      stamped('anon', 'stickynote', { createdAt: AFTER, updated: AFTER, createdBy: null }),
+      el('plain', 'rectangle', { created: AFTER, updated: AFTER }),
+    ])
+    expect(r?.added).toEqual(['anon', 'plain'])
+  })
+
+  it('words I typed last are my change, not a change since the visit; someone else’s later edit is', () => {
+    const r = runAs([
+      stamped('free-mine', 'text', {
+        createdBy: THEM,
+        updated: AFTER,
+        lastEditedBy: ME,
+        lastEditedAt: AFTER,
+      }),
+      stamped('free-theirs', 'text', {
+        createdBy: ME,
+        updated: AFTER,
+        lastEditedBy: THEM,
+        lastEditedAt: AFTER,
+      }),
+      // I typed, then a colleague moved it (a later commit): the later change is not mine
+      stamped('moved-after', 'text', {
+        createdBy: ME,
+        updated: AFTER + 10,
+        lastEditedBy: ME,
+        lastEditedAt: AFTER,
+      }),
+    ])
+    expect(r?.changed).toEqual(['free-theirs', 'moved-after'])
+  })
+
+  it('a label I typed into an existing note does not change the note (nor the commit’s own touch of the note)', () => {
+    const r = runAs([
+      stamped('n', 'stickynote', { createdBy: THEM, updated: AFTER }),
+      stamped('n.t', 'text', {
+        createdBy: THEM,
+        updated: AFTER,
+        lastEditedBy: ME,
+        lastEditedAt: AFTER,
+        containerId: 'n',
+      }),
+    ])
+    expect(r?.total).toBe(0)
+  })
+
+  it('a label a colleague typed still changes the note, whoever made it', () => {
+    const r = runAs([
+      stamped('n', 'stickynote', { createdBy: ME, updated: AFTER }),
+      stamped('n.t', 'text', {
+        createdBy: ME,
+        updated: AFTER,
+        lastEditedBy: THEM,
+        lastEditedAt: AFTER,
+        containerId: 'n',
+      }),
+    ])
+    expect(r?.changed).toEqual(['n'])
+  })
+
+  it('a colleague’s later change to a note I labelled still counts', () => {
+    const r = runAs([
+      stamped('n', 'stickynote', { createdBy: THEM, updated: AFTER + 50 }),
+      stamped('n.t', 'text', {
+        createdBy: THEM,
+        updated: AFTER,
+        lastEditedBy: ME,
+        lastEditedAt: AFTER,
+        containerId: 'n',
+      }),
+    ])
+    expect(r?.changed).toEqual(['n'])
+  })
+
+  it('a new label I added to someone else’s shape is mine', () => {
+    const r = runAs([
+      stamped('box', 'rectangle', { createdBy: THEM, updated: AFTER }),
+      stamped('box.t', 'text', {
+        createdAt: AFTER,
+        updated: AFTER,
+        createdBy: ME,
+        lastEditedBy: ME,
+        containerId: 'box',
+      }),
+    ])
+    expect(r?.total).toBe(0)
+  })
+
+  it('without a viewer (no `me`) nothing is filtered, as before', () => {
+    const live = [stamped('mine', 'stickynote', { createdAt: AFTER, updated: AFTER, createdBy: ME })]
+    expect(whatChanged({ seenAt: SEEN, live, tombstones: [] })?.added).toEqual(['mine'])
+    expect(whatChanged({ seenAt: SEEN, live, tombstones: [], me: null })?.added).toEqual(['mine'])
+  })
+})
+
 describe('whatChanged: cost at 10,000 elements', () => {
   it('takes 30 ms or less in Node (bench recorded)', () => {
     const live: El[] = []

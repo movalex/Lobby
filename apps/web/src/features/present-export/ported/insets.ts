@@ -24,6 +24,12 @@ export const PRESENT_TOP_STACKED_INSET = 116
  * tall), the gap, the strip's row (about 34 px) and a gap.
  */
 export const PRESENT_TOP_AGENDA_INSET = 104
+/**
+ * P-039: a slide never touches the view's top, left or right edge: this much of the surround always shows around it. A
+ * slide flush against the top looked cut off, and the presentation's keyboard focus ring (2 px, 4 px in from the edge:
+ * present-export.css `.dr-present:focus-visible`) showed over it as a blue line across the slide's top.
+ */
+export const PRESENT_EDGE_MARGIN = 16
 /** At most this share of the view's height goes to insets (a phone held sideways keeps a usable slide). */
 export const PRESENT_INSET_MAX_SHARE = 0.4
 
@@ -44,7 +50,8 @@ export const NO_TOP_CHROME: PresentTopChrome = { timer: false, hands: false, ban
 /**
  * The insets a slide is fitted in: the top row(s) of floating chrome and the control bar (`bar`: the
  * presentation has slides, so the bar is drawn; it fades while idle but keeps its place, so the slide never
- * jumps when the pointer moves). Never more than PRESENT_INSET_MAX_SHARE of the height in all.
+ * jumps when the pointer moves). With slides, the top is at least PRESENT_EDGE_MARGIN and the sides are
+ * PRESENT_EDGE_MARGIN (P-039). Never more than PRESENT_INSET_MAX_SHARE of the height in all.
  */
 export function presentInsets(view: { w: number; h: number }, top: PresentTopChrome, bar: boolean): Insets {
   let t =
@@ -54,6 +61,8 @@ export function presentInsets(view: { w: number; h: number }, top: PresentTopChr
         ? PRESENT_TOP_INSET
         : 0
   let b = bar ? PRESENT_BAR_INSET : 0
+  const side = bar ? PRESENT_EDGE_MARGIN : 0
+  if (bar) t = Math.max(t, PRESENT_EDGE_MARGIN)
   const max = Math.max(0, view.h) * PRESENT_INSET_MAX_SHARE
   // L5-1: the strip under the banner (the banner is the strip's anchor: no banner, no strip)
   if (top.banner && top.agenda) t = Math.max(t, PRESENT_TOP_AGENDA_INSET)
@@ -63,7 +72,7 @@ export function presentInsets(view: { w: number; h: number }, top: PresentTopChr
     b = Math.floor(b * k)
   }
   if (t === 0 && b === 0) return { ...NO_INSETS }
-  return { top: t, right: 0, bottom: b, left: 0 }
+  return { top: t, right: side, bottom: b, left: side }
 }
 
 /** Two rectangles share any area (touching edges do not count). */

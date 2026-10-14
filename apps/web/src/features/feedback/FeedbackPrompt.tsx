@@ -22,6 +22,7 @@ import { useValue } from '../../lib/signals.ts'
 import { countUsage } from '../../lib/usage.ts'
 import { usePresentingHere } from '../workshops/ported/presenting.ts'
 import { TopCentreItem } from '../workshops/top-centre.ts'
+import { votesWereCast } from '../workshops/voting.ts'
 import { useWorkshop } from '../workshops/workshop-context.ts'
 import { feedbackApi } from './api.ts'
 import { APP_BUILD } from './build-info.ts'
@@ -53,11 +54,13 @@ export function FeedbackPromptLayer({ ctx }: { ctx: CanvasFeatureContext }) {
   // a vote revealed in front of this tab by its starter is a moment (the card's news: the tab saw the results come in)
   const newsSeq = snap.resultsNews?.seq
   const starter = snap.vote?.session.createdBy ?? null
+  // P-015: a vote nobody cast a dot in is not a moment worth asking about
+  const anyVotes = !!snap.vote && votesWereCast(snap.vote)
   useEffect(() => {
-    if (newsSeq === undefined) return
+    if (newsSeq === undefined || !anyVotes) return
     if (ownsMoment('vote-reveal', { me, voteStarter: starter, presenter: null }))
       noteFeedbackMoment(ctx.canvas, 'vote-reveal')
-  }, [newsSeq, starter, me, ctx.canvas])
+  }, [newsSeq, starter, anyVotes, me, ctx.canvas])
 
   // words in progress: an open editor, or a text lease held by this tab (reactive: leases and the roster)
   const typing = useValue('dr-fb-typing', () => {

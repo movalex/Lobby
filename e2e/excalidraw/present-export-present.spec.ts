@@ -287,6 +287,46 @@ test.describe('present mode', () => {
     await expect(ui.button).toBeFocused()
   })
 
+  test('P-039: a slide keeps a margin from the top and sides, and the keyboard focus ring is not drawn over it', async ({
+    canvasSession,
+  }) => {
+    const a = await canvasSession('alice')
+    await seedDeck(a.page, DECK)
+    await zoomToFit(a.page)
+    const ui = presentUi(a.page)
+    // the keyboard opens it and steps through it, so the presentation's focus ring shows (`:focus-visible`)
+    await ui.button.focus()
+    await a.page.keyboard.press('Enter')
+    await expect(ui.overlay).toBeVisible()
+    await expect(ui.counter).toHaveText('1 / 2')
+    await a.page.keyboard.press('ArrowRight')
+    await expect(ui.counter).toHaveText('2 / 2')
+    await expectSlideOnScreen(a.page, F.plan)
+    await nextFrames(a.page)
+
+    const win = await a.page.getByTestId('present-mask').boundingBox()
+    const view = a.page.viewportSize()
+    if (!win || !view) throw new Error('no presentation window')
+    expect(win.y, 'the slide does not touch the top edge').toBeGreaterThanOrEqual(16)
+    expect(win.x, 'nor the left edge').toBeGreaterThanOrEqual(16)
+    expect(view.width - (win.x + win.width), 'nor the right edge').toBeGreaterThanOrEqual(16)
+    // the ring (2 px, 4 px in from the view's edge) is there, and it is on the surround, not on the slide
+    const ring = await ui.overlay.evaluate((el) => {
+      const s = getComputedStyle(el)
+      return { style: s.outlineStyle, width: Number.parseFloat(s.outlineWidth) }
+    })
+    expect(ring).toEqual({ style: 'solid', width: 2 })
+    // the rows just inside the slide's top edge are the slide's own (before, the ring's line showed there)
+    const midX = Math.round(win.x + win.width / 2)
+    const rows = [1, 2, 3, 4, 5].map((d) => ({ x: midX, y: Math.round(win.y) + d }))
+    const px = await pngPixels(a.page, await a.page.screenshot(), rows)
+    const lum = ([r, g, b]: number[]) => 0.2126 * (r ?? 0) + 0.7152 * (g ?? 0) + 0.0722 * (b ?? 0)
+    const notSlide = px.map((p, i) => ({ at: rows[i], p })).filter(({ p }) => lum(p) < 200)
+    expect(notSlide, `not the slide's own: ${JSON.stringify(notSlide)}`).toEqual([])
+    await a.page.keyboard.press('Escape')
+    await expect(ui.overlay).toHaveCount(0)
+  })
+
   test("present: a collaborator's cursor disappears from the presenter's slides and comes back after present-exit", async ({
     canvasSession,
   }) => {

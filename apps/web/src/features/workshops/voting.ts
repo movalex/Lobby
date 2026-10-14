@@ -112,6 +112,24 @@ export function dotInk(fill: string): '#ffffff' | '#000000' {
   return contrastRatio('#ffffff', hex) >= contrastRatio('#000000', hex) ? '#ffffff' : '#000000'
 }
 
+/**
+ * P-015: whether anybody voted: the reveal celebrates (confetti, a feedback question) only when someone
+ * did. A vote nobody cast a dot in ends calmly.
+ */
+export function votesWereCast(v: {
+  totalVotesCast: number
+  results?: readonly VoteResult[] | null
+}): boolean {
+  return v.totalVotesCast > 0 || !!v.results?.some((r) => r.count > 0)
+}
+
+/** The end line of a revealed vote: "Voting is over: 5 votes from 2 people." or "... No votes were cast." */
+export function finalLine(v: { totalVotesCast: number; participants: number }): string {
+  if (v.totalVotesCast === 0) return 'Voting is over. No votes were cast.'
+  const votes = `${v.totalVotesCast} vote${v.totalVotesCast === 1 ? '' : 's'}`
+  return `Voting is over: ${votes} from ${v.participants} ${v.participants === 1 ? 'person' : 'people'}.`
+}
+
 /** K3-5: one piece of the reveal's confetti. */
 export interface ConfettiPiece {
   /** where it starts across the view, % */
@@ -303,6 +321,23 @@ export function notInVoteText(
         : ''
   if (!notesOnly && !where) return 'Not part of this vote.'
   return `Not part of this vote: only ${notesOnly ? 'sticky notes' : 'objects'}${where} take votes.`
+}
+
+/**
+ * P-001: the one line that tells everyone a vote is on, what to click and how many votes they have:
+ * "Voting is on: click notes to vote, 3 votes left." (touch screens: "tap"). It says "notes" when the vote
+ * takes only sticky notes, else "objects".
+ */
+export function votePromptText(
+  rule: { shapeTypes: readonly string[] | null },
+  left: number,
+  touch = false,
+): string {
+  const notesOnly = rule.shapeTypes?.length === 1 && rule.shapeTypes[0] === 'note'
+  const verb = touch ? 'tap' : 'click'
+  const what = notesOnly ? 'notes' : 'objects'
+  const votes = `${left} vote${left === 1 ? '' : 's'}`
+  return `Voting is on: ${verb} ${what} to vote, ${votes} left.`
 }
 
 /**

@@ -72,7 +72,7 @@ for (const size of [
     await expect(overlay).toBeVisible()
     const timer = a.page.getByTestId('timer-floating')
     await expect(timer).toBeVisible()
-    await expect.soft(overlay).toHaveAttribute('data-insets', '64|0|80|0')
+    await expect.soft(overlay).toHaveAttribute('data-insets', '64|16|80|16')
 
     const check = async (frameId: string, top: number, extra: Locator[] = []) => {
       await wake(a.page)
@@ -98,7 +98,7 @@ for (const size of [
       }
       // and it still uses the room it has: it fills the free band on one side
       const vp = a.page.viewportSize() ?? size
-      expect(Math.max(slide.w / vp.width, slide.h / (vp.height - top - 80))).toBeGreaterThan(0.97)
+      expect(Math.max(slide.w / (vp.width - 32), slide.h / (vp.height - top - 80))).toBeGreaterThan(0.97)
       return slide
     }
 
@@ -117,7 +117,7 @@ for (const size of [
       expect((await post(a, `/api/boards/${board}/hand`, { raised: true })).status()).toBe(200)
       const hands = a.page.getByTestId('hands-floating')
       await expect(hands).toBeVisible()
-      await expect.soft(overlay).toHaveAttribute('data-insets', '116|0|80|0')
+      await expect.soft(overlay).toHaveAttribute('data-insets', '116|16|80|16')
       await check('k3-tall', 116, [hands])
       await a.page.screenshot({ path: testInfo.outputPath(`k3-insets-hands-${size.width}.png`) })
     })
@@ -126,7 +126,7 @@ for (const size of [
       expect((await post(a, `/api/boards/${board}/timer`, { action: 'stop' })).status()).toBe(200)
       expect((await post(a, `/api/boards/${board}/hand`, { raised: false })).status()).toBe(200)
       await expect(timer).toHaveCount(0)
-      await expect.soft(overlay).toHaveAttribute('data-insets', '0|0|80|0')
+      await expect.soft(overlay).toHaveAttribute('data-insets', '16|16|80|16')
       await wake(a.page)
       await expect
         .poll(
@@ -136,7 +136,9 @@ for (const size of [
         )
         .toBe(true)
       const slide = await frameOnScreen(a.page, 'k3-tall')
-      expect(slide.y).toBeLessThan(2) // the tall slide reaches the top edge again
+      // the tall slide takes the top back, down to the margin every slide keeps (P-039)
+      expect(slide.y).toBeGreaterThanOrEqual(15)
+      expect(slide.y).toBeLessThan(18)
       expect(overlap(slide, await rectOf(a.page.getByTestId('present-controls')))).toBe(false)
     })
 

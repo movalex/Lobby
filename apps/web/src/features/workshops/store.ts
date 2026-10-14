@@ -105,8 +105,6 @@ export interface WorkshopSnapshot {
    * its announcement), not again for every count update, refetch or a stretch of not being eligible.
    */
   voteBanner: VoteBanner | null
-  /** K3-1: an object this person clicked before joining: the banner offers to join and give it a dot. */
-  joinOffer: { sessionId: string; shapeId: string } | null
   /** L5-2: the board's spotlight (the objects a facilitator is talking about), or null */
   spotlight: Spotlight | null
   /** L5-2: this person pressed Esc (or Hide) for this spotlight: it is dimmed for them no more, for nobody else */
@@ -282,7 +280,6 @@ export class WorkshopStore {
   /** K3-1: the banner's seq per vote, given the first time the vote's banner came up. */
   private readonly bannerSeqs = new Map<string, number>()
   private bannerSeq = 0
-  private joinOffer: WorkshopSnapshot['joinOffer'] = null
   /** L5-2: the spotlight, the version of that state and which spotlight this person hid (spotlightKey) */
   private spotlight: Spotlight | null = null
   private spotlightVersion: SpotlightVersion | null = null
@@ -393,20 +390,19 @@ export class WorkshopStore {
       hands: this.hands,
       myHand: this.hands.find((h) => h.userId === this.userId) ?? null,
       toolsRequest: this.toolsRequest,
-      ...this.bannerAndOffer(vote, sid ? this.readParticipation(sid, vote) : null),
+      voteBanner: this.bannerFor(vote, sid ? this.readParticipation(sid, vote) : null),
       spotlight: this.spotlight,
       spotlightHidden: !!this.spotlight && this.spotlightHiddenKey === spotlightKey(this.spotlight),
       spotlightEnded: this.spotlightEnded,
     }
   }
 
-  /** K3-1: the banner for `vote` (see WorkshopSnapshot.voteBanner), and the click offer that goes with it. */
-  private bannerAndOffer(
+  /** K3-1: the banner for `vote` (see WorkshopSnapshot.voteBanner). */
+  private bannerFor(
     vote: WorkshopVoteState | null,
     participation: Participation | null,
-  ): Pick<WorkshopSnapshot, 'voteBanner' | 'joinOffer'> {
-    if (vote?.session.status !== 'open' || participation !== null || !this.voteEligible)
-      return { voteBanner: null, joinOffer: null }
+  ): WorkshopSnapshot['voteBanner'] {
+    if (vote?.session.status !== 'open' || participation !== null || !this.voteEligible) return null
     const s = vote.session
     let seq = this.bannerSeqs.get(s.id)
     if (seq === undefined) {
@@ -414,15 +410,12 @@ export class WorkshopStore {
       this.bannerSeqs.set(s.id, seq)
     }
     return {
-      voteBanner: {
-        sessionId: s.id,
-        title: s.title,
-        votesPerPerson: s.votesPerPerson,
-        scope: s.scope,
-        createdBy: s.createdBy,
-        seq,
-      },
-      joinOffer: this.joinOffer?.sessionId === s.id ? this.joinOffer : null,
+      sessionId: s.id,
+      title: s.title,
+      votesPerPerson: s.votesPerPerson,
+      scope: s.scope,
+      createdBy: s.createdBy,
+      seq,
     }
   }
 
@@ -434,35 +427,15 @@ export class WorkshopStore {
   }
 
   /**
-   * K3-1: a click on an object the open vote takes, before joining it: the banner offers to join and give it
-   * a dot. Nothing is sent (no cast before the join); only while the banner is up.
+   * P-001: a click on an object the open vote takes, before this person joined: it is the vote. Joins (the
+   * vote confirmed with the server first, G1), then casts one dot on the object if that vote is still the
+   * open one. The cast is sent after the join. Null when the vote is no longer the open one.
    */
-  offerJoin(sessionId: string, shapeId: string) {
-    const banner = this.snap.voteBanner
-    if (banner?.sessionId !== sessionId) return
-    if (this.joinOffer?.sessionId === sessionId && this.joinOffer.shapeId === shapeId) return
-    this.joinOffer = { sessionId, shapeId }
-    this.emit()
-  }
-
-  clearJoinOffer() {
-    if (!this.joinOffer) return
-    this.joinOffer = null
-    this.emit()
-  }
-
-  /**
-   * K3-1: the banner's "Join and vote" with an object picked: joins (the vote confirmed with the server
-   * first, G1), then casts one dot on it if that vote is still the open one. The cast is sent after the join.
-   */
-  async joinAndCast(): Promise<ActionResult | null> {
-    const offer = this.joinOffer
-    if (!offer) return null
-    this.joinOffer = null
-    await this.joinVote(offer.sessionId)
+  async joinAndCast(sessionId: string, shapeId: string): Promise<ActionResult | null> {
+    await this.joinVote(sessionId)
     const vote = this.state?.vote
-    if (vote?.session.id !== offer.sessionId || vote.session.status !== 'open') return null
-    return this.cast(offer.shapeId, 1)
+    if (vote?.session.id !== sessionId || vote.session.status !== 'open') return null
+    return this.cast(shapeId, 1)
   }
 
   /**
@@ -1142,7 +1115,6 @@ export class WorkshopStore {
   }
 
   setParticipation(sid: string, v: Participation) {
-    if (this.joinOffer?.sessionId === sid) this.joinOffer = null
     try {
       this.storage?.setItem(this.participationKey(sid), v)
     } catch {

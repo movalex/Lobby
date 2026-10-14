@@ -7,6 +7,7 @@ import {
   intersects,
   NO_TOP_CHROME,
   PRESENT_BAR_INSET,
+  PRESENT_EDGE_MARGIN,
   PRESENT_TOP_AGENDA_INSET,
   PRESENT_TOP_INSET,
   PRESENT_TOP_STACKED_INSET,
@@ -50,14 +51,15 @@ describe('present mode keeps the chrome off the slide (K3-4)', () => {
     const view = { w: 1440, h: 900 }
     expect(presentInsets(view, { ...NO_TOP_CHROME, timer: true }, true)).toEqual({
       top: PRESENT_TOP_INSET,
-      right: 0,
+      right: PRESENT_EDGE_MARGIN,
       bottom: PRESENT_BAR_INSET,
-      left: 0,
+      left: PRESENT_EDGE_MARGIN,
     })
     expect(PRESENT_TOP_INSET).toBe(64)
     expect(PRESENT_BAR_INSET).toBe(80)
-    // nothing at the top: the slide may use the full height above the bar
-    expect(presentInsets(view, NO_TOP_CHROME, true)).toEqual({ top: 0, right: 0, bottom: 80, left: 0 })
+    // nothing at the top: the slide still keeps a margin from the top, left and right edges (P-039), and the full
+    // height above the bar otherwise
+    expect(presentInsets(view, NO_TOP_CHROME, true)).toEqual({ top: 16, right: 16, bottom: 80, left: 16 })
     // raised hands alone, or the live banner, take one row; the timer with hands under it, two
     expect(presentInsets(view, { ...NO_TOP_CHROME, hands: true }, true).top).toBe(64)
     expect(presentInsets(view, { ...NO_TOP_CHROME, banner: true }, true).top).toBe(64)
@@ -127,18 +129,47 @@ describe('present mode keeps the chrome off the slide (K3-4)', () => {
   })
 })
 
+describe('a slide never touches the view’s edges (P-039)', () => {
+  // the presentation's focus ring is 2 px wide, 4 px in from the edge (present-export.css .dr-present:focus-visible):
+  // with the slide flush against the top it showed as a blue line across the top of the slide
+  const RING_PX = 4
+  for (const view of VIEWS)
+    it(`at ${view.w}×${view.h}: every frame keeps the focus ring and a margin clear on top, left and right`, () => {
+      expect(PRESENT_EDGE_MARGIN).toBeGreaterThan(RING_PX)
+      const chromes = [NO_TOP_CHROME, { ...NO_TOP_CHROME, timer: true }, { ...NO_TOP_CHROME, banner: true }]
+      for (const top of chromes) {
+        const insets = presentInsets(view, top, true)
+        for (const f of FRAMES) {
+          const r = onScreen(f, viewportFor(f, view, insets, PRESENT_ZOOM_RANGE))
+          expect(r.y, `${f.w}×${f.h} top`).toBeGreaterThan(RING_PX)
+          expect(r.x, `${f.w}×${f.h} left`).toBeGreaterThan(RING_PX)
+          expect(r.x + r.w, `${f.w}×${f.h} right`).toBeLessThan(view.w - RING_PX)
+        }
+      }
+    })
+
+  it('no slides, no margin (nothing is fitted)', () => {
+    expect(presentInsets({ w: 1440, h: 900 }, NO_TOP_CHROME, false)).toEqual({
+      top: 0,
+      right: 0,
+      bottom: 0,
+      left: 0,
+    })
+  })
+})
+
 describe('the run of show’s strip under the live banner (L5-1)', () => {
   const view = { w: 1440, h: 900 }
   it('takes one more row at the top, only under a banner; everything else is as it was', () => {
     expect(presentInsets(view, { ...NO_TOP_CHROME, banner: true }, true).top).toBe(PRESENT_TOP_INSET)
     expect(presentInsets(view, { ...NO_TOP_CHROME, banner: true, agenda: true }, true)).toEqual({
       top: PRESENT_TOP_AGENDA_INSET,
-      right: 0,
+      right: PRESENT_EDGE_MARGIN,
       bottom: PRESENT_BAR_INSET,
-      left: 0,
+      left: PRESENT_EDGE_MARGIN,
     })
     // no banner, no strip; and `agenda: false` is the same as leaving it out
-    expect(presentInsets(view, { ...NO_TOP_CHROME, agenda: true }, true).top).toBe(0)
+    expect(presentInsets(view, { ...NO_TOP_CHROME, agenda: true }, true).top).toBe(PRESENT_EDGE_MARGIN)
     expect(presentInsets(view, { ...NO_TOP_CHROME, banner: true, agenda: false }, true)).toEqual(
       presentInsets(view, { ...NO_TOP_CHROME, banner: true }, true),
     )

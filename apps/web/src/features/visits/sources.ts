@@ -60,16 +60,23 @@ export function removedName(type: string, label: string): string {
   return short ? `${word} “${short}”` : word
 }
 
-/** id → name for the removed items "Recently deleted" lists (its `shapeId` is `shape:<element id>`). */
+/** What "Recently deleted" says of a removed item: its name, and the id of whoever deleted it (P-006). */
+export interface DeletedInfo {
+  readonly name: string
+  readonly by: string
+}
+
+/** id → name and deleter for the removed items "Recently deleted" lists (its `shapeId` is `shape:<element id>`). */
 export async function deletedNames(
   api: Pick<HistoryApi, 'listDeleted'>,
   boardId: string,
   signal?: AbortSignal,
-): Promise<ReadonlyMap<string, string> | null> {
+): Promise<ReadonlyMap<string, DeletedInfo> | null> {
   try {
     const { entries } = await api.listDeleted(boardId, signal)
-    const out = new Map<string, string>()
-    for (const e of entries) out.set(e.shapeId.replace(/^shape:/, ''), removedName(e.type, e.label))
+    const out = new Map<string, DeletedInfo>()
+    for (const e of entries)
+      out.set(e.shapeId.replace(/^shape:/, ''), { name: removedName(e.type, e.label), by: e.deletedBy.id })
     return out
   } catch {
     return null

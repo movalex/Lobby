@@ -65,6 +65,7 @@ export function highlightDeps(ctx: CanvasFeatureContext): HighlightDeps {
     live: () => canvas.items() as unknown as readonly VisitElement[],
     tombstones: () => tombstonesOf(ctx),
     isHidden: (id) => canvas.isHidden(id),
+    me: ctx.me.user.id,
     checkpointElements: (seenAt, signal) => checkpointElementsBefore(history, boardId, seenAt, signal),
     // "Recently deleted" is for editors with an account; viewers see a count
     ...(account && can(ctx.role, 'edit', ctx.board.status)

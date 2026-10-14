@@ -331,6 +331,65 @@ test('Mark all seen inside the api’s write interval is still honoured by a rel
   await expect(chip(a2.page)).toHaveCount(0)
 })
 
+/**
+ * alice has been here before (so her next opening is a new visit), then comes back for a short visit: the api writes
+ * the leaving time only after its 10 s interval, so the visit time left behind is the opening, and what she makes in
+ * this visit comes after it. Her own notes used to count as new.
+ */
+async function aliceShortVisit(
+  join: (h: string) => Promise<WorkshopCanvasSession>,
+  work: (a: WorkshopCanvasSession) => Promise<void>,
+) {
+  await aliceVisitsAndLeaves(join, async () => {})
+  const a = await join('alice')
+  await visitReplies(a, 1)
+  await work(a)
+  await a.page.goto('about:blank')
+  await a.page.waitForTimeout(800)
+}
+
+// P-006: "Since you were here" is about what OTHERS did.
+test('P-006: what alice made herself in her last visit is not "since you were here"; what bob made is', async ({
+  join,
+}) => {
+  await aliceShortVisit(join, (a) =>
+    seed(a.page, { notes: [{ id: 'p6-mine', x: 0, y: 0, text: 'Day 1: studio' }] }),
+  )
+
+  const b = await join('bob', 'editor')
+  await expect.poll(async () => (await item(b.page, 'p6-mine')) !== null).toBe(true)
+  await seed(b.page, { notes: [{ id: 'p6-theirs', x: 260, y: 0, text: 'Bob’s idea' }] })
+
+  const a2 = await join('alice')
+  await expect(chip(a2.page)).toBeVisible({ timeout: 30_000 })
+  await expect(chip(a2.page)).toHaveAttribute('data-added', '1')
+  await expect(chip(a2.page)).toHaveAttribute('data-changed', '0')
+  await expect(chip(a2.page)).toHaveAttribute('data-removed', '0')
+  await showAll(a2.page)
+  await expect(a2.page.locator('[data-testid="visit-outline"][data-id="p6-theirs"]')).toHaveCount(1)
+  await expect(a2.page.locator('[data-testid="visit-outline"][data-id="p6-mine"]')).toHaveCount(0)
+})
+
+test('P-006: when only alice changed the board while she was away there is no chip', async ({ join }) => {
+  await aliceShortVisit(join, async (a) => {
+    await seed(a.page, {
+      notes: [
+        { id: 'p6-a', x: 0, y: 0, text: 'One' },
+        { id: 'p6-b', x: 260, y: 0, text: 'Two' },
+      ],
+    })
+    await startTextEditingWithKeyboard(a.page, 'p6-b')
+    await typeText(a.page, ' and more')
+    await stopTextEditing(a.page)
+    await expectSaved(a.page)
+  })
+
+  const a2 = await join('alice')
+  await visitReplies(a2, 1)
+  await a2.page.waitForTimeout(2_500) // the highlights' decision is made by now
+  await expect(chip(a2.page)).toHaveCount(0)
+})
+
 test('wave N.1: leaving the page sends one "seen" beacon (the page turning hidden and pagehide said it once each)', async ({
   join,
 }) => {

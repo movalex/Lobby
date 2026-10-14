@@ -61,6 +61,13 @@ export function timerDisplayPhase(
   return localNowMs + offsetMs - ends >= TIMES_UP_ALERT_MS ? 'ended' : 'finished'
 }
 
+/** P-016: the last seconds of a running timer, which the timer pill on the canvas emphasises. */
+export const LAST_SECONDS_MS = 10_000
+
+/** Whether `remainingMs` of a running timer is in the last seconds: some time left, at most LAST_SECONDS_MS. */
+export const inLastSeconds = (remainingMs: number): boolean =>
+  remainingMs > 0 && remainingMs <= LAST_SECONDS_MS
+
 /** "4:05", "0:09", "1:02:03". Rounds up, so the display reaches 0:00 exactly when time is up. */
 export function formatClock(ms: number): string {
   const total = Math.max(0, Math.ceil(ms / 1000))

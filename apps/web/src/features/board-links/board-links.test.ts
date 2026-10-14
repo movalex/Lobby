@@ -13,7 +13,13 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { navigate } from '../../lib/routing.ts'
 import { CANVAS_FEATURES } from '../canvas-registry.ts'
-import { backlinkPath, createBacklinksStore } from './backlinks.ts'
+import {
+  BACKLINKS_EARLY_DELAY_MS,
+  BACKLINKS_OPEN_DELAY_MS,
+  backlinkPath,
+  createBacklinksStore,
+  linkedFromLabel,
+} from './backlinks.ts'
 import { askBoardCards, type BoardCardsOutcome, backlinks, boardCards, unavailableCards } from './client.ts'
 import { createFaceStore, FACE_RETRY_MS, FACE_TICK_MS, FACE_TTL_MS, retryDelay } from './faces.ts'
 import { feature, relativeBoardPath, relativeBoardPathHandler } from './index.tsx'
@@ -512,5 +518,15 @@ describe('the feature', () => {
     const insert = feature.commands?.find((c) => c.id === BOARD_LINKS_INSERT_COMMAND_ID)
     expect(insert?.readOnlyAllowed).toBeFalsy()
     expect(feature.contentHandlers).toEqual([relativeBoardPathHandler])
+  })
+
+  it('P-018: "Linked from N boards" is in the top bar and the board menu, asked sooner than the navigation panel', () => {
+    expect(linkedFromLabel(1)).toBe('Linked from 1 board')
+    expect(linkedFromLabel(3)).toBe('Linked from 3 boards')
+    expect(feature.topBar?.map((t) => t.id)).toEqual(['board-links.linked-from-top'])
+    expect(feature.topBar?.[0]?.overflowCaption).toBe('Linked from')
+    const entry = feature.mainMenu?.find((m) => m.id === 'board-links.linked-from')
+    expect(entry?.group).toBe('board')
+    expect(BACKLINKS_EARLY_DELAY_MS).toBeLessThan(BACKLINKS_OPEN_DELAY_MS)
   })
 })
