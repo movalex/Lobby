@@ -676,6 +676,41 @@ describe('the "Vote started" banner (K3-1)', () => {
     expect(snap.ballot?.myVotes).toEqual({ 'shape:note1': 1 })
   })
 
+  it('wave P review: a cast while the join is being confirmed waits for the join and its dot', async () => {
+    const h = harness({ timer: null, vote: voteState(), serverNow: ISO(0) })
+    await h.store.refresh()
+    const order: string[] = []
+    let confirmJoin: () => void = () => {}
+    h.next(async (c) => {
+      order.push(`${c.method} ${c.path}`)
+      await new Promise<void>((r) => {
+        confirmJoin = r
+      })
+      return WorkshopState.parse({ timer: null, vote: voteState(), serverNow: ISO(1) })
+    })
+    const castAnswer = (myVotes: Record<string, number>) => (c: Call) => {
+      order.push(`${c.method} ${c.path} ${(c.body as { shapeId: string }).shapeId}`)
+      return voteState({ myVotes, myRemaining: 3 - Object.keys(myVotes).length })
+    }
+    h.next(castAnswer({ 'shape:note1': 1 }))
+    h.next(castAnswer({ 'shape:note1': 1, 'shape:note2': 1 }))
+    const joined = h.store.joinAndCast(SID, 'shape:note1')
+    // the banner is gone at once; a second click comes while the join is still being asked
+    expect(h.store.getSnapshot().participation).toBe('joined')
+    const second = h.store.cast('shape:note2', 1)
+    await flush()
+    expect(order).toEqual([`GET /api/boards/b-abc1234567/workshop`])
+    confirmJoin()
+    expect((await joined)?.ok).toBe(true)
+    expect((await second).ok).toBe(true)
+    expect(order).toEqual([
+      `GET /api/boards/b-abc1234567/workshop`,
+      `POST /api/votes/${SID}/cast shape:note1`,
+      `POST /api/votes/${SID}/cast shape:note2`,
+    ])
+    expect(h.store.getSnapshot().ballot?.myVotes).toEqual({ 'shape:note1': 1, 'shape:note2': 1 })
+  })
+
   it('P-001: nothing is cast when the vote it was for is no longer the open one', async () => {
     const h = harness({ timer: null, vote: voteState(), serverNow: ISO(0) })
     await h.store.refresh()

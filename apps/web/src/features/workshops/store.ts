@@ -250,6 +250,8 @@ export class WorkshopStore {
   private clock: { offsetMs: number; rttMs: number; at: number } | null = null
   private pending: PendingCast[] = []
   private queue: Promise<unknown> = Promise.resolve()
+  /** Wave P review: a join (and its dot) still being answered (`joinAndCast`), or null. */
+  private joining: Promise<void> | null = null
   private seq = 0
   private appliedSeq = 0
   /**
@@ -430,12 +432,25 @@ export class WorkshopStore {
    * P-001: a click on an object the open vote takes, before this person joined: it is the vote. Joins (the
    * vote confirmed with the server first, G1), then casts one dot on the object if that vote is still the
    * open one. The cast is sent after the join. Null when the vote is no longer the open one.
+   *
+   * Wave P review: the join marks this person in at once (the banner goes), while the server is still asked. Until
+   * the join and its dot are answered, every other cast waits for them (`cast`), so a second click never sends its
+   * dot before the join's: no vote races the join.
    */
-  async joinAndCast(sessionId: string, shapeId: string): Promise<ActionResult | null> {
-    await this.joinVote(sessionId)
-    const vote = this.state?.vote
-    if (vote?.session.id !== sessionId || vote.session.status !== 'open') return null
-    return this.cast(shapeId, 1)
+  joinAndCast(sessionId: string, shapeId: string): Promise<ActionResult | null> {
+    const run = async (): Promise<ActionResult | null> => {
+      await this.joinVote(sessionId)
+      const vote = this.state?.vote
+      if (vote?.session.id !== sessionId || vote.session.status !== 'open') return null
+      return this.castNow(shapeId, 1)
+    }
+    const p = run()
+    const settled = p.then(() => undefined, () => undefined)
+    this.joining = settled
+    void settled.then(() => {
+      if (this.joining === settled) this.joining = null
+    })
+    return p
   }
 
   /**
@@ -896,6 +911,13 @@ export class WorkshopStore {
    * answered; a refusal rolls the dot back and explains why.
    */
   cast(shapeId: string, delta: 1 | -1): Promise<ActionResult> {
+    // wave P review: a cast while this person's join is still being answered goes after it (`joinAndCast`)
+    const joining = this.joining
+    if (joining) return joining.then(() => this.castNow(shapeId, delta))
+    return this.castNow(shapeId, delta)
+  }
+
+  private castNow(shapeId: string, delta: 1 | -1): Promise<ActionResult> {
     const vote = this.state?.vote
     if (vote?.session.status !== 'open')
       return Promise.resolve({ ok: false, error: 'Voting has ended.', code: 'VOTE_CLOSED' })
