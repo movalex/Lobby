@@ -609,7 +609,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
         err instanceof Error && err.message === 'not-json'
           ? 'That file is not a Lobby board export (.json).'
           : isApiError(err) && err.kind === 'not-found'
-            ? 'Importing is not available on this server yet.'
+            ? 'Importing is not available on this server.'
             : isApiError(err)
               ? err.message
               : 'The board could not be imported.'

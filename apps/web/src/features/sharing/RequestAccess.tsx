@@ -32,6 +32,15 @@ const ACCESS_NAME: Record<RequestableRole, string> = {
   viewer: 'View',
 }
 
+/**
+ * How long to wait before look number `attempt` (0 is the first) for the owner's approval: quick at first, when an owner
+ * who is already looking approves, then slower, never more than 30 s, so a page left open does not fill the console.
+ */
+export function approvalPollDelay(attempt: number): number {
+  const steps = [5_000, 5_000, 10_000, 15_000, 30_000]
+  return steps[Math.min(Math.max(0, Math.floor(attempt)), steps.length - 1)] ?? 30_000
+}
+
 type RequestAccessProps = Parameters<typeof RequestAccessForm>[0]
 
 /**
@@ -95,14 +104,22 @@ function RequestAccessForm({
     return () => controller.abort()
   }, [boardId, currentRole])
 
-  // Someone without access: look for the approval now and then (the board opens once it is granted).
+  // Someone without access: look for the approval now and then (the board opens once it is granted). Every look
+  // that finds nothing is a 404 the browser's console shows, so the looks space out (P-030, approvalPollDelay).
   const check = useCallback(() => onApprovedCheck?.(), [onApprovedCheck])
   useEffect(() => {
     if (!sent || currentRole || !onApprovedCheck) return
-    const t = setInterval(() => {
-      if (document.visibilityState === 'visible') check()
-    }, 5_000)
-    return () => clearInterval(t)
+    let attempt = 0
+    let timer: ReturnType<typeof setTimeout>
+    const next = () => {
+      timer = setTimeout(() => {
+        if (document.visibilityState === 'visible') check()
+        attempt += 1
+        next()
+      }, approvalPollDelay(attempt))
+    }
+    next()
+    return () => clearTimeout(timer)
   }, [sent, currentRole, onApprovedCheck, check])
 
   if (!roles.length) return null
@@ -200,7 +217,7 @@ function RequestAccessForm({
         {pending ? 'Sending…' : currentRole ? `Request ${ROLE_WORD[role]} access` : 'Request access'}
       </button>
       <p className="dr-reqaccess__hint">
-        The owners get an in-app notification (Lobby does not send email yet).
+        The owners are notified in Lobby.
       </p>
     </form>
   )

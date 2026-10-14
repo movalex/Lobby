@@ -360,8 +360,8 @@ test('F14, R2-11, DANA2-07: a commenting phone guest: no link badge, "(guest, yo
     const expectOneMessage = async () => {
       await expect(main.getByRole('heading', { level: 1 })).toHaveText('Your guest access has ended')
       await expect(main).toContainText('ask whoever shared the link with you for a new one')
-      await expect(main.getByRole('link', { name: 'Go to your boards' })).toHaveCount(0)
-      await expect(main.getByRole('button', { name: /Go to your boards|request/i })).toHaveCount(0)
+      await expect(main.getByRole('link', { name: 'Back to your boards' })).toHaveCount(0)
+      await expect(main.getByRole('button', { name: /Back to your boards|request/i })).toHaveCount(0)
       await expect(main.locator('.dr-btn')).toHaveCount(0) // only the quiet "Sign in" link
       await expect(main.getByRole('button', { name: 'Sign in' })).toBeVisible()
     }

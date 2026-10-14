@@ -584,22 +584,17 @@
 :root[data-theme="dark"] .dr-bcard--row .dr-bcard__img {
   padding: 4px;
 }
-/* The placeholder (BoardCard.tsx BoardThumb) on the dark theme: the board's own palette (--th-*),
-   mixed into the dark surfaces, instead of a bright pastel block (F11). */
+/* The placeholder (BoardCard.tsx BoardThumb) on the dark theme: the board's own tint (--th-*), mixed into the
+   dark surfaces, instead of a bright pastel block (F11). */
 :root[data-theme="dark"] .dr-thumb__bg {
   fill: color-mix(in srgb, var(--th-bg) 10%, var(--dr-inset));
-}
-:root[data-theme="dark"] .dr-thumb__dot {
-  fill: #ffffff;
-}
-:root[data-theme="dark"] .dr-thumb__card {
-  fill: var(--dr-surface);
 }
 :root[data-theme="dark"] .dr-thumb__ink {
   stroke: color-mix(in srgb, var(--th-ink) 30%, #d9d6cc);
 }
-:root[data-theme="dark"] .dr-thumb__note {
-  fill: color-mix(in srgb, var(--th-note) 62%, var(--dr-inset));
+:root[data-theme="dark"] .dr-thumb__initials,
+:root[data-theme="dark"] .dr-thumb__label {
+  fill: color-mix(in srgb, var(--th-ink) 30%, #d9d6cc);
 }
 
 /* ---- A11Y-06 / DANA-11: the sidebar folds into a "Menu" button at 760 px and below ------------- */

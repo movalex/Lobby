@@ -176,7 +176,7 @@ describe('runSignOut (SCA-4): sign out everywhere', () => {
     const out = await runSignOut(s)
     expect(out).toMatchObject({ status: 'unsupported', retryable: false })
     if (out.status !== 'unsupported') throw new Error('unreachable')
-    expect(out.detail).toContain('not available on this server yet')
+    expect(out.detail).toContain('not available on this server.')
     expect(log).toEqual(['mark:pending', 'revoke-all', 'unmark'])
     expect(marks.read()).toBeNull()
   })

@@ -175,8 +175,8 @@ export function withoutElements<T extends ClipboardElement>(
 /** The notice for `n` file elements left out of a paste (CRIT-38). */
 export function filesLeftOutNotice(n: number): string {
   return n === 1
-    ? 'One image or file was left out of the paste: images and files can’t be copied from another board yet. Upload it to this board instead.'
-    : `${n} images or files were left out of the paste: images and files can’t be copied from another board yet. Upload them to this board instead.`
+    ? 'One image or file was left out of the paste: images and files can’t be copied from another board. Upload it to this board instead.'
+    : `${n} images or files were left out of the paste: images and files can’t be copied from another board. Upload them to this board instead.`
 }
 
 /**

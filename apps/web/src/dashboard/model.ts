@@ -388,9 +388,9 @@ export function emptyState(
   }
 }
 
-/** DSH-03: what the Trash promises (no automatic purge exists yet, so nothing expires). */
+/** DSH-03: what the Trash promises (nothing is purged automatically, so nothing expires). */
 export const TRASH_NOTE =
-  'Deleted boards stay here, with all their content and files, until an owner restores them. Lobby does not empty the trash automatically yet.'
+  'Deleted boards stay here, with all their content and files, until an owner restores them. Nothing in the trash is deleted automatically.'
 
 // ---- owner filter (DSH-04) -----------------------------------------------------------------------
 
@@ -480,22 +480,19 @@ export function importedToast(created: {
 
 /** Paper-and-ink pairs that sit well next to the navy/amber brand. */
 const THUMB_PALETTES = [
-  { bg: '#e8eef7', ink: '#1f3a5f', note: '#f6c863' },
-  { bg: '#f6ecdf', ink: '#8a4b12', note: '#f0a53a' },
-  { bg: '#e4f1ea', ink: '#17663f', note: '#9ad3b0' },
-  { bg: '#efe8f7', ink: '#5b3cc4', note: '#f3b6c8' },
-  { bg: '#fbe9e7', ink: '#a3211a', note: '#fbd38d' },
-  { bg: '#e6f2f4', ink: '#0e7490', note: '#b9e2f0' },
-  { bg: '#f3f0e3', ink: '#6b5b12', note: '#e9d77a' },
-  { bg: '#eceff3', ink: '#334155', note: '#fda4af' },
+  { bg: '#e8eef7', ink: '#1f3a5f' },
+  { bg: '#f6ecdf', ink: '#8a4b12' },
+  { bg: '#e4f1ea', ink: '#17663f' },
+  { bg: '#efe8f7', ink: '#5b3cc4' },
+  { bg: '#fbe9e7', ink: '#a3211a' },
+  { bg: '#e6f2f4', ink: '#0e7490' },
+  { bg: '#f3f0e3', ink: '#6b5b12' },
+  { bg: '#eceff3', ink: '#334155' },
 ] as const
 
 export interface ThumbStyle {
   bg: string
   ink: string
-  note: string
-  /** 0..3: which of the placeholder compositions to draw. */
-  layout: number
 }
 
 function hash(s: string) {
@@ -511,7 +508,7 @@ function hash(s: string) {
 export function thumbStyle(boardId: string): ThumbStyle {
   const h = hash(boardId)
   const p = THUMB_PALETTES[h % THUMB_PALETTES.length] ?? THUMB_PALETTES[0]
-  return { ...p, layout: (h >>> 8) % 4 }
+  return { ...p }
 }
 
 // ---- workspaces ----------------------------------------------------------------------------------

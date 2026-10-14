@@ -109,7 +109,7 @@ export function DuplicateBoardDialog({
     } catch (err) {
       setError(
         isApiError(err) && err.kind === 'not-found'
-          ? 'This board could not be duplicated. Duplicating may not be available on this server yet.'
+          ? 'This board could not be duplicated. Duplicating is not available on this server.'
           : isApiError(err)
             ? err.message
             : 'The board was not duplicated. Try again.',

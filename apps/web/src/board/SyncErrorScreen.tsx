@@ -72,7 +72,7 @@ function ActionButton({
   if (action === 'boards')
     return (
       <a className={cls} href="/" onClick={linkClick('/')} data-testid="sync-boards">
-        Go to your boards
+        Back to your boards
       </a>
     )
   if (action === 'retry')

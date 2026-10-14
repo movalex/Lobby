@@ -55,7 +55,7 @@ export function MessageScreen({
         <div className="dr-row dr-row--wrap">
           {actions ?? (
             <a className="dr-btn dr-btn--primary" href="/" onClick={linkClick('/')}>
-              Go to your boards
+              Back to your boards
             </a>
           )}
         </div>
@@ -132,7 +132,7 @@ export function NoAccessScreen({
           <p>
             {revoked
               ? `Your access was removed or changed while you had it open, or the ${thing} was moved to trash.`
-              : `It may not exist, it may have been moved to trash, or it hasn't been shared with you.`}
+              : `It may not exist or may have been deleted, or it hasn't been shared with you.`}
           </p>
           {/* An old invite link cannot bring back access that was removed (PRI-04). */}
           <p>
@@ -157,7 +157,7 @@ export function NoAccessScreen({
       actions={
         <>
           <a className="dr-btn dr-btn--primary" href="/" onClick={linkClick('/')}>
-            Go to your boards
+            Back to your boards
           </a>
           <button type="button" className="dr-btn" onClick={() => void signOut({ returnTo: here })}>
             Sign in as someone else
