@@ -78,8 +78,7 @@ export function BoardThumb({ boardId, title }: { boardId: string; title?: string
       data-testid="board-thumb-placeholder"
       viewBox="0 0 160 100"
       preserveAspectRatio="xMidYMid slice"
-      role="img"
-      aria-label="No preview yet"
+      aria-hidden="true"
       style={palette}
     >
       <rect className="dr-thumb__bg" width="160" height="100" fill={t.bg} />
@@ -93,7 +92,6 @@ export function BoardThumb({ boardId, title }: { boardId: string; title?: string
           fontSize="30"
           fontWeight="700"
           fill={t.ink}
-          opacity="0.8"
         >
           {initialsFor(title)}
         </text>
@@ -119,7 +117,6 @@ export function BoardThumb({ boardId, title }: { boardId: string; title?: string
         fontSize="8.5"
         fontWeight="600"
         fill={t.ink}
-        opacity="0.7"
       >
         No preview yet
       </text>

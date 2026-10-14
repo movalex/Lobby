@@ -197,6 +197,12 @@ test('the Start row fades out at the right edge and has an arrow that scrolls it
     }
     await expect(scroller).toHaveAttribute('data-more', 'false')
     await expect(next).toHaveCount(0)
+
+    // P-032: the Lobby tour tile shows its first frame, not a thin strip of six tiny ones
+    const tour = p.page.locator('[data-testid="start-tile"][data-template-id="lobby-tour"] svg.dr-tthumb')
+    await expect(tour).toBeVisible({ timeout: 15_000 })
+    const [, , w, h] = ((await tour.getAttribute('viewBox')) ?? '').split(' ').map(Number)
+    expect((w ?? 0) / (h ?? 1)).toBeLessThan(2)
   } finally {
     await p.context.close()
   }

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { createSampleBoard, SAMPLE_BOARD } from './sample-board.ts'
 import { CATEGORIES, filterTemplates, previewFromPlan, templateCatalog } from './template-catalog.ts'
 import { newBoardPath, TEMPLATE_IDS } from './template-paths.ts'
+import { thumbWindow, touches } from './template-thumb.ts'
 
 describe('template picker catalog (PRE-01)', () => {
   const catalog = templateCatalog()
@@ -122,5 +123,29 @@ describe('template picker catalog (PRE-01)', () => {
   it('opens a new board with ?template=<id> only when a template was picked', () => {
     expect(newBoardPath('b-3k9x0q2m7a', null)).toBe('/b/b-3k9x0q2m7a')
     expect(newBoardPath('b-3k9x0q2m7a', 'mood-board')).toBe('/b/b-3k9x0q2m7a?template=mood-board')
+  })
+})
+
+describe('the gallery thumbnail of a wide strip (wave P, P-032)', () => {
+  const catalog = templateCatalog()
+
+  it('shows the Lobby tour’s first frame filling the thumbnail, not a thin strip of six tiny frames', () => {
+    const tour = catalog.find((e) => e.id === 'lobby-tour')
+    if (!tour) throw new Error('no tour')
+    const win = thumbWindow(tour.preview)
+    // the strip is wider than 3:1; what is shown is one frame, about 16:10
+    expect(tour.preview.bounds.w / tour.preview.bounds.h).toBeGreaterThan(3)
+    expect(win.w / win.h).toBeLessThan(2)
+    const first = tour.preview.frames.reduce((a, f) => (f.x < a.x ? f : a))
+    expect(win).toEqual({ x: first.x, y: first.y, w: first.w, h: first.h })
+    // and there is something to see in it: notes, boxes or text inside that frame
+    const inside = tour.preview.items.filter((it) => touches(it, win))
+    expect(inside.length).toBeGreaterThan(2)
+    expect(tour.preview.frames.filter((f) => touches(f, win))).toHaveLength(1)
+  })
+
+  it('leaves every other template as it was: all of it', () => {
+    for (const e of catalog.filter((c) => c.id !== 'lobby-tour'))
+      expect(thumbWindow(e.preview), e.id).toEqual(e.preview.bounds)
   })
 })
