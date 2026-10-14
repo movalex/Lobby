@@ -1,7 +1,8 @@
 // K3-1 (wave K): the one real vote with three people connected got no ballots: participants had to find
 // "Join the vote" first. Now everyone who may vote gets a "Vote started" banner when a vote starts (once per
 // vote), with who started it and how many dots they have; one click joins, and they can vote at once. A
-// click on a note before joining offers to join and give it a dot, and nothing is cast before the join.
+// click on a note before joining joins and casts at once (P-001: a vote ended with 0 votes because people
+// clicked notes and nothing happened until they found "Join").
 // The store's rules are unit-tested (features/workshops/store.test.ts "the Vote started banner").
 import type { Page } from '@playwright/test'
 import {
@@ -60,7 +61,7 @@ test('K3-1: a vote starts: the colleague gets the banner at once, joins with one
     expect(after).toBeLessThan(5_000)
     await expect(b.page.getByTestId('vote-banner-by')).toHaveText(`${a.name.split(' ')[0]} started a vote`)
     await expect(banner(b.page)).toContainText('Pick our next experiment')
-    await expect(banner(b.page)).toContainText('you have 3 votes')
+    await expect(b.page.getByTestId('vote-click-hint')).toContainText('3 votes left')
     await expect(banner(b.page).getByTestId('vote-join')).toHaveText('Join and vote')
     // wave K integration (the K3 review): the board's polite live region says it (the banner takes no focus)
     await expect(b.page.getByTestId('canvas-announcer-tool')).toHaveText(
@@ -90,7 +91,7 @@ test('K3-1: a vote starts: the colleague gets the banner at once, joins with one
   })
 })
 
-test('K3-1: a click on a note before joining offers to join and vote for it; nothing is cast before the join', async ({
+test('P-001: a click on a note before joining joins and casts at once; the prompt says voting is on', async ({
   join,
   board,
 }) => {
@@ -106,21 +107,17 @@ test('K3-1: a click on a note before joining offers to join and vote for it; not
   await startVote(a, board)
   await expect(banner(b.page)).toBeVisible()
 
-  await test.step('bob clicks a note first: the banner offers "Join and vote for “Shorter standups”"; no cast yet', async () => {
-    await clickElement(b.page, 'k3v-b')
-    const offer = banner(b.page).getByTestId('vote-join-cast')
-    await expect(offer).toHaveText('Join and vote for “Shorter standups”')
-    await expect(banner(b.page)).toHaveAttribute('data-offer', 'shape:k3v-b')
-    await expect(dot(b.page, 'k3v-b')).toHaveCount(0)
-    await b.page.waitForTimeout(500) // a cast would have been answered by now
-    expect(casts(b)).toEqual([])
+  await test.step('the prompt says voting is on, what to click and how many votes are left', async () => {
+    await expect(b.page.getByTestId('vote-click-hint')).toContainText(
+      'Voting is on: click objects to vote, 3 votes left.',
+    )
   })
 
-  await test.step('one click: joined, and the note has his dot (the cast after the join)', async () => {
+  await test.step('bob clicks a note first: his dot is on it at once, he is in, no Join needed', async () => {
     const before = b.net.responses.length
-    await banner(b.page).getByTestId('vote-join-cast').click()
-    await expect(banner(b.page)).toHaveCount(0)
+    await clickElement(b.page, 'k3v-b')
     await expect(dot(b.page, 'k3v-b')).toHaveAttribute('data-count', '1')
+    await expect(banner(b.page)).toHaveCount(0)
     await expect(remaining(b.page)).toHaveText('2 of 3 left')
     await expect.poll(() => casts(b).length).toBe(1)
     const after = b.net.responses.slice(before).map((r) => r.path)
@@ -128,6 +125,12 @@ test('K3-1: a click on a note before joining offers to join and vote for it; not
     const cast = after.findIndex((p) => p.endsWith('/cast'))
     expect(join, after.join(', ')).toBeGreaterThanOrEqual(0)
     expect(cast).toBeGreaterThan(join) // the join confirms the vote with the server first (G1)
+  })
+
+  await test.step('the next click on another note is an ordinary vote', async () => {
+    await clickElement(b.page, 'k3v-c')
+    await expect(dot(b.page, 'k3v-c')).toHaveAttribute('data-count', '1')
+    await expect(remaining(b.page)).toHaveText('1 of 3 left')
   })
 
   await test.step('a viewer may vote too: her banner; "Not now" puts it away for good', async () => {

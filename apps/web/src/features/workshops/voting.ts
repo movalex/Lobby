@@ -306,6 +306,23 @@ export function notInVoteText(
 }
 
 /**
+ * P-001: the one line that tells everyone a vote is on, what to click and how many votes they have:
+ * "Voting is on: click notes to vote, 3 votes left." (touch screens: "tap"). It says "notes" when the vote
+ * takes only sticky notes, else "objects".
+ */
+export function votePromptText(
+  rule: { shapeTypes: readonly string[] | null },
+  left: number,
+  touch = false,
+): string {
+  const notesOnly = rule.shapeTypes?.length === 1 && rule.shapeTypes[0] === 'note'
+  const verb = touch ? 'tap' : 'click'
+  const what = notesOnly ? 'notes' : 'objects'
+  const votes = `${left} vote${left === 1 ? '' : 's'}`
+  return `Voting is on: ${verb} ${what} to vote, ${votes} left.`
+}
+
+/**
  * Whether a +1/-1 can be offered locally (the server decides; this avoids sending requests that are
  * certain to fail, like a 6th vote of 5 or a second dot where one per object is allowed).
  */

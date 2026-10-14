@@ -612,7 +612,7 @@ test('RETRO-06: a keyboard-only participant votes: Tab to an object’s +, Enter
     /Tab from the board goes to an object/,
   )
   await expect(prompt.getByTestId('vote-click-hint')).toHaveText(
-    'Click objects to vote; click your dot to take one back.',
+    'Voting is on: click objects to vote, 3 votes left. Click your dot to take one back.',
   )
   await prompt.getByTestId('vote-join').press('Enter')
   await expect(b.page.getByTestId('vote-remaining')).toHaveText('3 of 3 left')

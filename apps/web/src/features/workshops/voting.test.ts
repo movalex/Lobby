@@ -16,6 +16,7 @@ import {
   shapeLabel,
   topResults,
   voteClick,
+  votePromptText,
 } from './voting.ts'
 
 const rt = (...lines: string[]) => ({
@@ -172,6 +173,18 @@ describe('what a click while voting does (W5-03)', () => {
     )
     expect(notInVoteText({ scope: 'board', shapeTypes: ['note', 'geo'] }, null)).toBe(
       'Not part of this vote.',
+    )
+  })
+})
+
+describe('the prompt that tells everyone a vote is on (P-001)', () => {
+  it('says what to click and how many votes are left', () => {
+    expect(votePromptText({ shapeTypes: ['note'] }, 3)).toBe(
+      'Voting is on: click notes to vote, 3 votes left.',
+    )
+    expect(votePromptText({ shapeTypes: null }, 1)).toBe('Voting is on: click objects to vote, 1 vote left.')
+    expect(votePromptText({ shapeTypes: ['note', 'geo'] }, 5, true)).toBe(
+      'Voting is on: tap objects to vote, 5 votes left.',
     )
   })
 })

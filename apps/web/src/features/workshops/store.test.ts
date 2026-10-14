@@ -653,12 +653,10 @@ describe('the "Vote started" banner (K3-1)', () => {
     expect(other.store.getSnapshot().voteBanner).toBeNull()
   })
 
-  it('a click on a note before joining offers join and cast; nothing is cast before the join', async () => {
+  it('P-001: a click on a note before joining joins and casts at once, the join first', async () => {
     const h = harness({ timer: null, vote: voteState(), serverNow: ISO(0) })
     await h.store.refresh()
-    h.store.offerJoin(SID, 'shape:note1')
-    expect(h.store.getSnapshot().joinOffer).toEqual({ sessionId: SID, shapeId: 'shape:note1' })
-    expect(h.calls.filter((c) => c.path.endsWith('/cast'))).toEqual([])
+    expect(h.store.getSnapshot().voteBanner).not.toBeNull()
     const order: string[] = []
     h.next((c) => {
       order.push(`${c.method} ${c.path}`)
@@ -668,25 +666,29 @@ describe('the "Vote started" banner (K3-1)', () => {
       order.push(`${c.method} ${c.path}`)
       return voteState({ myVotes: { 'shape:note1': 1 }, myRemaining: 2 })
     })
-    const r = await h.store.joinAndCast()
+    const r = await h.store.joinAndCast(SID, 'shape:note1')
     expect(r?.ok).toBe(true)
     expect(order).toEqual([`GET /api/boards/b-abc1234567/workshop`, `POST /api/votes/${SID}/cast`])
     expect(h.calls.at(-1)?.body).toEqual({ shapeId: 'shape:note1', delta: 1 })
     const snap = h.store.getSnapshot()
     expect(snap.participation).toBe('joined')
     expect(snap.voteBanner).toBeNull()
-    expect(snap.joinOffer).toBeNull()
     expect(snap.ballot?.myVotes).toEqual({ 'shape:note1': 1 })
   })
 
-  it('no offer without a banner (joined, skipped, or another vote)', async () => {
+  it('P-001: nothing is cast when the vote it was for is no longer the open one', async () => {
     const h = harness({ timer: null, vote: voteState(), serverNow: ISO(0) })
     await h.store.refresh()
-    h.store.offerJoin('vot_another0000000000', 'shape:x')
-    expect(h.store.getSnapshot().joinOffer).toBeNull()
-    h.store.setParticipation(SID, 'skipped')
-    h.store.offerJoin(SID, 'shape:x')
-    expect(h.store.getSnapshot().joinOffer).toBeNull()
+    h.next(() =>
+      WorkshopState.parse({
+        timer: null,
+        vote: voteState({ session: { ...voteState().session, status: 'closed' } }),
+        serverNow: ISO(1),
+      }),
+    )
+    const r = await h.store.joinAndCast(SID, 'shape:note1')
+    expect(r).toBeNull()
+    expect(h.calls.filter((c) => c.path.endsWith('/cast'))).toEqual([])
   })
 })
 

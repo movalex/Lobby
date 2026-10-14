@@ -572,11 +572,11 @@ button.dr-wk-badge--group:focus-visible {
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
-.dr-wk-banner__cast {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* P-001: the line that says voting is on, what to click and how many votes are left. */
+.dr-wk-banner__on {
+  color: var(--dr-ink);
+  font-size: 13.5px;
+  font-weight: 600;
 }
 @keyframes dr-wk-banner-in {
   from {
