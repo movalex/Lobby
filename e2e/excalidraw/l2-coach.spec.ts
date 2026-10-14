@@ -9,7 +9,7 @@
 //   E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/l2-coach.spec.ts --project=chromium --workers=1
 import type { Page } from '@playwright/test'
 import { type FakeOpenAi, startFakeOpenAi } from '../tests/support/ai.ts'
-import { expectSaved, items, saveState } from '../tests/support/canvas.ts'
+import { expectSaved, items, saveState, waitForCanvas } from '../tests/support/canvas.ts'
 import { pushCount } from '../tests/support/excalidraw.ts'
 import {
   AI_API_ENV_3H,
@@ -222,4 +222,42 @@ test('a dismissed chip stays dismissed on that board (a reload too); a viewer ne
   await expect.poll(async () => (await items(v.page)).filter((e) => e.type === 'stickynote').length).toBe(8)
   await v.page.waitForTimeout(1_000)
   await expect(chip(v.page)).toHaveCount(0)
+})
+
+// P-007 (wave P): the Lobby tour's Retro frame holds 12 notes under three boxes. The chip offered "Group these 12 notes
+// into themes", whose click only said "These notes are already grouped", and then stayed on screen for the session.
+test('P-007: the Lobby tour gets no themes chip (its notes already sit under boxes)', async ({ join, board }) => {
+  const a = await join('alice')
+  await a.page.goto(`/b/${board}?template=lobby-tour`)
+  await waitForCanvas(a.page)
+  await expect
+    .poll(async () => (await items(a.page)).filter((e) => e.type === 'frame').length, { timeout: 30_000 })
+    .toBeGreaterThanOrEqual(6)
+  await expectSaved(a.page)
+  await expect(a.page.getByTestId('facilitate-button')).toBeAttached()
+  // the coach looks again once the board has been still for a moment (COACH_SETTLE_MS)
+  await a.page.waitForTimeout(2_000)
+  await expect(chip(a.page)).toHaveCount(0)
+})
+
+test('P-007: a chip that was acted on is gone, and stays gone after a reload', async ({ join }) => {
+  const a = await join('alice')
+  await seed(a.page, { frames: [{ id: 'p7-f', x: 0, y: 0, w: 1400, h: 700, name: 'Ideas' }] })
+  await seed(a.page, {
+    notes: Array.from({ length: 8 }, (_, i) => ({
+      id: `p7-${i}`,
+      x: 60 + (i % 4) * 230,
+      y: 80 + Math.floor(i / 4) * 260,
+      text: `Idea ${i}`,
+      frameId: 'p7-f',
+    })),
+  })
+  await expect(chip(a.page)).toHaveAttribute('data-step', 'themes', { timeout: 20_000 })
+  await a.page.getByTestId('coach-run').click()
+  // it opens the notice, then the preview; either way the suggestion is spent
+  await expect(chip(a.page)).toHaveCount(0)
+  await a.page.reload()
+  await expect(a.page.getByTestId('facilitate-button')).toBeAttached()
+  await a.page.waitForTimeout(1_500)
+  await expect(chip(a.page)).toHaveCount(0)
 })
