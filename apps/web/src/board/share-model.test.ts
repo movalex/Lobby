@@ -448,7 +448,7 @@ describe('invite by email', () => {
     expect(emailInviteHint(true)).toBe(
       'We email them an invitation to this board that works only for that address. People who already use Lobby get access right away.',
     )
-    expect(emailInviteHint(false)).toContain('needs Clerk sign-in')
+    expect(emailInviteHint(false)).toContain('needs a Lobby account')
     // Domain access: every invitation to an address works only for that address.
     expect(emailInviteHint(false)).toContain('works only for that address')
     // The @handle field keeps its link-only wording on a server that cannot email.

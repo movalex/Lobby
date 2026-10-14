@@ -1170,15 +1170,17 @@
   padding: 0;
   list-style: none;
 }
-.dr-welcome__start {
+.dr-welcome .dr-welcome__start {
   display: grid;
+  justify-items: start;
   gap: 1px;
   height: auto;
-  min-width: 170px;
+  min-width: 190px;
   padding: 9px 14px;
+  line-height: 1.3;
   text-align: left;
 }
-.dr-welcome__start span {
+.dr-welcome .dr-welcome__start span {
   font-size: 12px;
   font-weight: 400;
 }
@@ -1254,7 +1256,7 @@
   font-weight: 700;
 }
 @media (max-width: 560px) {
-  .dr-welcome__start {
+  .dr-welcome .dr-welcome__start {
     flex: 1 1 100%;
   }
   .dr-welcome__keys {

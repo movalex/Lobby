@@ -15,6 +15,7 @@
 import type { Locator, Page } from '@playwright/test'
 import { Api } from '../tests/support/api.ts'
 import { test as base, expect, waitForCanvas } from '../tests/support/canvas.ts'
+import { capture } from '../tests/support/screenshots.ts'
 import {
   chooseFromMenu,
   freshHandle,
@@ -57,7 +58,7 @@ const inside = async (loc: Locator, height: number) => {
 
 test('a first visit gets the Welcome card with Create a board above the fold; the Help menu has the tour, the shortcuts and feedback', async ({
   browser,
-}) => {
+}, testInfo) => {
   test.setTimeout(180_000)
   const p = await creator(browser, 'Nia New')
   try {
@@ -86,6 +87,7 @@ test('a first visit gets the Welcome card with Create a board above the fold; th
       const create = p.page.getByTestId('dashboard-empty').getByRole('button', { name: 'Create a board' })
       await inside(create, 900)
       await inside(p.page.getByTestId('create-board'), 900)
+      await capture('p-welcome-desktop.png', p.page, testInfo)
     })
 
     await test.step('the Help menu lists the tour, the keyboard shortcuts and Send feedback', async () => {
@@ -97,6 +99,7 @@ test('a first visit gets the Welcome card with Create a board above the fold; th
       await expect(dialog).toBeVisible()
       await expect(dialog).toContainText('Search or do anything')
       await expect(dialog).toContainText('Ctrl+K')
+      await capture('p-help-shortcuts.png', p.page, testInfo)
       await p.page.keyboard.press('Escape')
       await expect(dialog).toHaveCount(0)
       await p.page.getByTestId('help-menu').click()
@@ -140,13 +143,14 @@ test('Take the Lobby tour in the Help menu makes the tour board and opens it', a
 
 test('on a phone the Welcome fits, with Create a board on the first screen and no sideways scroll', async ({
   browser,
-}) => {
+}, testInfo) => {
   test.setTimeout(120_000)
   const p = await creator(browser, 'Pia Phone', { width: 390, height: 844 })
   try {
     await openDashboard(p.page, p.wid)
     await expect(p.page.getByTestId('welcome')).toBeVisible()
     await inside(p.page.getByTestId('create-board'), 844)
+    await capture('p-welcome-phone.png', p.page, testInfo)
     const scrollsSideways = await p.page.evaluate(
       () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
     )
@@ -181,7 +185,7 @@ test('a returning person gets What’s new once, for this release, and no change
 
 test('the Start row fades out at the right edge and has an arrow that scrolls it; at the end both go', async ({
   browser,
-}) => {
+}, testInfo) => {
   test.setTimeout(120_000)
   const p = await creator(browser, 'Sam Scroll')
   try {
@@ -191,6 +195,7 @@ test('the Start row fades out at the right edge and has an arrow that scrolls it
     await expect(scroller).toHaveAttribute('data-more', 'true')
     const next = p.page.getByTestId('start-next')
     await expect(next).toBeVisible()
+    await capture('p-start-row-fade.png', p.page, testInfo)
     for (let i = 0; i < 6 && (await scroller.getAttribute('data-more')) === 'true'; i++) {
       await next.click()
       await p.page.waitForTimeout(500)
@@ -210,7 +215,7 @@ test('the Start row fades out at the right edge and has an arrow that scrolls it
 
 test('boards: a neutral placeholder with initials, the same in Recent and All boards; a board nobody edited says Created', async ({
   browser,
-}) => {
+}, testInfo) => {
   test.setTimeout(120_000)
   const p = await creator(browser, 'Pat Placeholder')
   try {
@@ -227,6 +232,7 @@ test('boards: a neutral placeholder with initials, the same in Recent and All bo
     await expect(card).toContainText(/Created (just now|\d+ min ago)/)
     await expect(card).not.toContainText('Edited')
     const all = await art.evaluate((el) => el.outerHTML)
+    await capture('p-placeholder-card.png', p.page, testInfo)
 
     // a board nobody has opened is not in Recent: open it, and come back
     await p.page.goto(`/b/${board.id}`)
