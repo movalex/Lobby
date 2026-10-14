@@ -3,9 +3,9 @@
 // to the frame. P-012 (wave P): the replies say the colours in the person's own words ("Make 6 yellow notes blue"),
 // never the palette's internal names (Butter, Iris).
 import { describe, expect, it } from 'vitest'
-import { NOTE_PALETTE } from '../../canvas-ux/palette.ts'
+import { NOTE_PALETTE, noteColourName } from '../../canvas-ux/palette.ts'
 import { COLOR_LABELS } from '../../canvas-ux/ported/style-vocabulary.ts'
-import { COLOUR_WORDS, colourWord, listWords } from './colours.ts'
+import { COLOUR_WORDS, colourWord, destinationIn, listWords } from './colours.ts'
 import { applyCompiled, compileCommand } from './compile.ts'
 import { boardFacts } from './facts.ts'
 import { type BoardFacts, type FactItem, grammar } from './grammar.ts'
@@ -267,5 +267,15 @@ describe('plain-language commands know the colour names people see (M3-4, FTU-3)
       }
     }
     expect(replies).toBeGreaterThan(400)
+  })
+})
+
+describe('P-012: the picker’s plain names are the grammar’s words', () => {
+  it('every swatch’s plain name is a colour word that, as a destination, is that very swatch', () => {
+    for (const s of NOTE_PALETTE) {
+      const w = colourWord(noteColourName(s.name).toLowerCase())
+      expect(w, noteColourName(s.name)).not.toBeNull()
+      expect(w ? destinationIn(w, 'note') : null, noteColourName(s.name)).toBe(s.name)
+    }
   })
 })

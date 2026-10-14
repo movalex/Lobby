@@ -109,7 +109,7 @@ test('M1-4 / P-011: a note colour and a note size from the bar: one undo step ea
   // tier one first: the note controls, then More styles, then the rest of the bar
   await expect(bar(a.page).getByTestId('selection-style-note-colour')).toHaveAttribute(
     'aria-label',
-    /^Note color: Butter$/,
+    /^Note color: Yellow$/,
   )
 
   await test.step('a colour pick: both notes, one step; bob sees it', async () => {

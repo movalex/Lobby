@@ -459,8 +459,8 @@ function NoteColorPicker({ canvas, t }: { canvas: LobbyCanvas; t: Target }) {
             data-testid="note-color"
             data-color={s.name}
             aria-pressed={current === s.name}
-            aria-label={`${s.label}${current === s.name ? ' (selected)' : ''}`}
-            title={s.label}
+            aria-label={`${s.plain}${current === s.name ? ' (selected)' : ''}`}
+            title={s.plain}
             tabIndex={rovingTab(names, current, i)}
             // as the canvas draws it: the light values, through Excalidraw's dark filter in dark mode
             style={{

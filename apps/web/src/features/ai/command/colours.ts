@@ -1,11 +1,13 @@
 // OWNER: W3 (wave M, M3-4). The colour words of the plain-language grammar (./grammar.ts). Pure. Its replies say a
 // colour in the word the person typed (P-012), so there are no labels here.
 //
-// The words the grammar accepts: the sticky-note picker's 13 swatch names (Butter, Marigold, Apricot, Blush, Coral,
-// Lilac, Plum, Iris, Sky, Fern, Pistachio, Stone, Paper: ../../canvas-ux/palette.ts NOTE_PALETTE; they stay words so
-// whoever reads a swatch's tooltip can type it), plus the hue families people say instead ("yellow" is Butter and Marigold, "pink" is Blush and Coral), plus the older names it
-// always took ("light red", "lime", "gray"). Wave L accepted only the older names, so "make the yellow notes blue" found
-// no yellow note on a board of default (Butter) notes and "make all pink notes yellow" answered "No light red notes".
+// The words the grammar accepts: the sticky-note picker's 13 plain names (yellow, gold, orange, pink, red, lavender,
+// purple, blue, light blue, green, light green, grey, white: NOTE_PALETTE's `plain`, what the picker's tooltips show),
+// the 13 older internal names (Butter, Marigold, Apricot, Blush, Coral, Lilac, Plum, Iris, Sky, Fern, Pistachio, Stone,
+// Paper: ../../canvas-ux/palette.ts NOTE_PALETTE; they stay words so whoever learned them can still type them), plus the
+// hue families people say ("yellow" is Butter and Marigold, "pink" is Blush and Coral), plus the older names it always
+// took ("light red", "lime", "gray"). Wave L accepted only the older names, so "make the yellow notes blue" found no
+// yellow note on a board of default (Butter) notes and "make all pink notes yellow" answered "No light red notes".
 //
 // Two vocabularies, because Lobby stores one set of 13 names for both and they do not mean the same thing: a note's
 // `black` is Butter (the default note, tldraw's default colour name), a stroke's `black` is ink. So a word names
@@ -59,11 +61,13 @@ const FAMILIES: readonly (readonly [string, Pick<ColourWord, 'note' | 'stroke'>]
 ]
 
 const table = new Map<string, ColourWord>()
-// the swatch labels first (a note's own words), the families after them (they never replace a swatch's word)
-for (const s of NOTE_PALETTE) {
-  const word = s.label.toLowerCase()
-  table.set(word, { word, note: [s.name], stroke: [] })
-}
+// the swatch names first (a note's own words: the plain one the picker shows, and the older internal one), the
+// families after them (a family's word, "yellow" or "pink", replaces a swatch's own and covers its whole hue)
+for (const s of NOTE_PALETTE)
+  for (const name of [s.label, s.plain]) {
+    const word = name.toLowerCase()
+    table.set(word, { word, note: [s.name], stroke: [] })
+  }
 for (const [word, lists] of FAMILIES) table.set(word, { word, ...lists })
 
 /** Every colour word, longest first (a regular expression must try "light blue" before "blue"). */

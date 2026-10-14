@@ -119,7 +119,7 @@ const COLOR_OPTIONS: readonly TierOption[] = COLOR_NAMES.map((n) => ({
 }))
 const NOTE_OPTIONS: readonly TierOption[] = NOTE_PALETTE.map((s) => ({
   value: s.name,
-  label: s.label,
+  label: s.plain,
   color: s.light.fill,
   ink: s.light.text,
 }))
