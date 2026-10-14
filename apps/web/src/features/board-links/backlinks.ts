@@ -14,6 +14,11 @@ import { backlinks as fetchBacklinks } from './client.ts'
 export const BACKLINKS_TTL_MS = 2 * 60_000
 /** The navigation panel asks this long after the board is ready, out of the board-open burst (K1-4). */
 export const BACKLINKS_OPEN_DELAY_MS = 2_000
+/**
+ * P-018: the top bar's "Linked from N" entry asks sooner (one small request, which the navigation panel then reuses):
+ * a button that appears two seconds after everything else is not found.
+ */
+export const BACKLINKS_EARLY_DELAY_MS = 300
 
 export interface BacklinksState {
   /** null: unknown, or the api cannot say (the section stays hidden) */
@@ -70,21 +75,22 @@ export function backlinksStoreOf(owner: object, boardId: string): BacklinksStore
 }
 
 /**
- * The boards that link here (null: unknown or hidden), asked BACKLINKS_OPEN_DELAY_MS after the board is ready (not in
- * the board-open burst), reactive. `enabled` false (a name-only guest, whom the api refuses anyway): nothing is
- * asked, null.
+ * The boards that link here (null: unknown or hidden), asked `delayMs` (BACKLINKS_OPEN_DELAY_MS) after the board is
+ * ready (not in the board-open burst), reactive. `enabled` false (a name-only guest, whom the api refuses anyway):
+ * nothing is asked, null.
  */
 export function useBacklinks(
   ctx: { readonly canvas: object; readonly registries: object; readonly board: { readonly id: string } },
   enabled = true,
+  delayMs = BACKLINKS_OPEN_DELAY_MS,
 ): readonly Backlink[] | null {
   const store = backlinksStoreOf(ctx.registries, ctx.board.id)
   const ready = useValue(roomReadyOf(ctx.canvas))
   useEffect(() => {
     if (!enabled || !ready) return
-    const t = setTimeout(() => void store.refresh(), BACKLINKS_OPEN_DELAY_MS)
+    const t = setTimeout(() => void store.refresh(), delayMs)
     return () => clearTimeout(t)
-  }, [store, enabled, ready])
+  }, [store, enabled, ready, delayMs])
   const list = useValue('board-links.backlinks', () => store.state.get().list, [store])
   return enabled ? list : null
 }
@@ -92,3 +98,6 @@ export function useBacklinks(
 /** Where "Go to the link" goes: the linking board, at the linking element (`/b/<from>?el=<element>`). */
 export const backlinkPath = (b: Pick<Backlink, 'boardId' | 'elementId'>): string =>
   boardElementPath(b.boardId, b.elementId)
+
+/** "Linked from 1 board" / "Linked from 3 boards" (the top bar entry's name and the board menu's row). */
+export const linkedFromLabel = (n: number): string => `Linked from ${n} ${n === 1 ? 'board' : 'boards'}`

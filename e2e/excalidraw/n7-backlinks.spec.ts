@@ -19,6 +19,7 @@ import {
   waitForCanvas,
 } from '../tests/support/canvas.ts'
 import { WEB_URL } from '../tests/support/ports.ts'
+import { capture } from '../tests/support/screenshots.ts'
 import { foreignRequests } from './ai-kit.ts'
 import { focusBoard } from './media-kit.ts'
 import { grantClipboard, navRun, writeClipboard } from './navigation-kit.ts'
@@ -72,7 +73,7 @@ test('N7-5 board A links board B; after the indexer tick B’s panel lists A, an
   canvasSession,
   users,
   browser,
-}) => {
+}, testInfo) => {
   test.setTimeout(180_000)
   const aTitle = (await (await users.api('alice')).getBoard(board)).board.title
   const target = await users.createBoard(unique('N7 Linked'))
@@ -90,6 +91,25 @@ test('N7-5 board A links board B; after the indexer tick B’s panel lists A, an
   const alice = await users.get('alice')
   const b = await openCanvasSession(browser, target, alice)
   const foreign = foreignRequests(b.page)
+  await test.step('P-018: the top bar says "Linked from 1 board" early; the board menu lists it too', async () => {
+    const top = b.page.getByTestId('linked-from-top')
+    // asked as soon as the board is ready, not after the navigation panel's own delay (2 s)
+    await expect(top).toBeVisible({ timeout: 1_800 })
+    await expect(top).toHaveText('Linked from 1')
+    await expect(top).toHaveAttribute('aria-label', 'Linked from 1 board')
+    await capture('p018-linked-from-top.png', b.page, testInfo)
+    await b.page.getByTestId('main-menu.button').click()
+    await b.page.getByTestId('main-menu-sub.dr-board-button').click()
+    await expect(b.page.getByRole('menuitem', { name: 'Linked from 1 board' })).toBeVisible()
+    await b.page.keyboard.press('Escape')
+    await top.click()
+    const list = b.page.getByRole('listbox', { name: 'Linked from results' })
+    await expect(list.getByTestId('command-palette-option').filter({ hasText: aTitle })).toBeVisible({
+      timeout: 15_000,
+    })
+    await b.page.keyboard.press('Escape')
+    await expect(b.page.getByRole('combobox', { name: 'Linked from' })).toHaveCount(0)
+  })
   await expect(linkedFrom(b.page)).toBeVisible({ timeout: 20_000 })
   await expect(linkedFrom(b.page)).toHaveAttribute('aria-label', 'Linked from 1 board')
   await linkedFrom(b.page).click()
@@ -155,6 +175,7 @@ test('N7-5 a viewer of B who cannot view A sees nothing; an older api (404) hide
     .waitForResponse((r) => r.url().includes(`/api/boards/${target}/backlinks`), { timeout: 20_000 })
     .catch(() => {})
   await expect(linkedFrom(c.page)).toHaveCount(0)
+  await expect(c.page.getByTestId('linked-from-top')).toHaveCount(0)
   expect(await c.page.content()).not.toContain(board)
   await c.context.close()
 
@@ -177,5 +198,6 @@ test('N7-5 a viewer of B who cannot view A sees nothing; an older api (404) hide
   await expect.poll(() => refused, { timeout: 20_000 }).toBeGreaterThan(0)
   await expect(page.getByTestId('navigation-panel')).toBeVisible()
   await expect(linkedFrom(page)).toHaveCount(0)
+  await expect(page.getByTestId('linked-from-top')).toHaveCount(0)
   await context.close()
 })

@@ -24,9 +24,16 @@ import { type Atom, atom, useValue } from '../../lib/signals.ts'
 import { countUsage } from '../../lib/usage.ts'
 import type { PaletteEntry } from '../command-palette/model.ts'
 import { Palette } from '../command-palette/Palette.tsx'
-import { backlinkPath, backlinksStoreOf } from './backlinks.ts'
+import {
+  BACKLINKS_EARLY_DELAY_MS,
+  backlinkPath,
+  backlinksStoreOf,
+  linkedFromLabel,
+  useBacklinks,
+} from './backlinks.ts'
 import { BOARD_LINKS_BACKLINKS_COMMAND_ID, BOARD_LINKS_INSERT_COMMAND_ID } from './model.ts'
 import { openBoardPath, openFrom } from './open.ts'
+import './board-links.css'
 
 /** At most this many boards are offered by the insert picker (typing narrows them). */
 export const PICKER_MAX_BOARDS = 500
@@ -207,8 +214,67 @@ function PickerOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
   )
 }
 
+/**
+ * P-018: "Linked from N" in the top bar, once the api says boards link here (nothing while it does not, for a
+ * name-only guest, or when it cannot say). It opens the same list as the palette command. Asked as soon as the
+ * board is ready.
+ */
+function LinkedFromTopBar({ ctx }: { ctx: CanvasFeatureContext }) {
+  const list = useBacklinks(ctx, !isGuest(ctx), BACKLINKS_EARLY_DELAY_MS)
+  if (!list?.length) return null
+  const label = linkedFromLabel(list.length)
+  return (
+    <button
+      type="button"
+      className="dr-btn dr-btn--sm dr-linked-from-top"
+      data-testid="linked-from-top"
+      aria-label={label}
+      title={label}
+      onClick={() => openPicker(ctx, 'backlinks')}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        width="16"
+        height="16"
+        aria-hidden="true"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
+      </svg>
+      <span>Linked from {list.length}</span>
+    </button>
+  )
+}
+
+/** The boards that link here, as the board menu and the top bar know them now (empty: unknown or none). */
+const knownBacklinks = (ctx: CanvasFeatureContext) =>
+  isGuest(ctx) ? [] : (backlinksStoreOf(ctx.registries, ctx.board.id).state.get().list ?? [])
+
 export const feature: CanvasFeature = {
   id: 'board-links',
+  topBar: [
+    {
+      id: 'board-links.linked-from-top',
+      order: 14,
+      overflowCaption: 'Linked from',
+      component: LinkedFromTopBar,
+    },
+  ],
+  mainMenu: [
+    {
+      // P-018: where the boards that link here are found, next to Catch me up
+      id: 'board-links.linked-from',
+      group: 'board',
+      order: 57,
+      label: (ctx) => linkedFromLabel(knownBacklinks(ctx).length),
+      visible: (ctx) => knownBacklinks(ctx).length > 0,
+      run: (ctx) => openPicker(ctx, 'backlinks'),
+    },
+  ],
   commands: [
     {
       id: BOARD_LINKS_INSERT_COMMAND_ID,

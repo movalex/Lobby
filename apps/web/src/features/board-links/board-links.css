@@ -166,3 +166,11 @@
   outline: 2px solid var(--dr-focus, #2563eb);
   outline-offset: 1px;
 }
+
+/* P-018: the top bar's "Linked from N" entry (./index.tsx). */
+.dr-linked-from-top {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
