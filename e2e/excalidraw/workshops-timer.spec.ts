@@ -380,3 +380,38 @@ test('P-016: a running timer is a readable pill at the top centre for everyone, 
     for (const p of pages) await expect(pill(p)).toHaveCount(0)
   })
 })
+
+// P-038: "Not set" is words, so it is in the interface font; only the clock's digits are monospaced.
+test('P-038: the timer popover says "Not set" in the interface font, a running clock in the clock font', async ({
+  join,
+  board,
+}) => {
+  const a = await join('alice')
+  const fonts = async (p: typeof a.page) => {
+    const clock = p.getByTestId('workshop-popover').locator('.dr-wk-pop__clock')
+    return clock.evaluate((el) => {
+      const root = getComputedStyle(document.documentElement)
+      return {
+        family: getComputedStyle(el).fontFamily,
+        mono: root.getPropertyValue('--dr-mono').trim(),
+        ui: root.getPropertyValue('--dr-font').trim(),
+        text: el.textContent?.trim() ?? '',
+      }
+    })
+  }
+  await openWorkshopPopover(a.page)
+  const idle = await fonts(a.page)
+  expect(idle.text).toBe('Not set')
+  expect(idle.mono, 'the clock font token').not.toBe('')
+  expect(idle.family).toBe(idle.ui)
+  expect(idle.family).not.toBe(idle.mono)
+  await closeWorkshopPopover(a.page)
+
+  expect(
+    (await post(a, `/api/boards/${board}/timer`, { action: 'start', durationMs: 300_000 })).status(),
+  ).toBe(200)
+  await openWorkshopPopover(a.page)
+  const running = await fonts(a.page)
+  expect(running.text).toMatch(/^\d+:\d{2}$/)
+  expect(running.family).toBe(running.mono)
+})

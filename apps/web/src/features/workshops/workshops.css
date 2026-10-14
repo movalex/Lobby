@@ -246,6 +246,11 @@
   font: 600 15px var(--dr-mono);
   font-variant-numeric: tabular-nums;
 }
+/* P-038: "Not set" and "Time's up" are words: the interface font; only digits are monospaced. */
+.dr-wk-pop__clock[data-state="idle"],
+.dr-wk-pop__clock[data-state="finished"] {
+  font-family: var(--dr-font);
+}
 .dr-wk-pop__clock[data-state="finished"] {
   color: var(--dr-danger);
 }

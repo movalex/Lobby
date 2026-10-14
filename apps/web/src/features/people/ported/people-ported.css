@@ -11,6 +11,14 @@
   align-items: center;
   gap: 10px;
 }
+/* P-036: "Following" and the name side by side on one line (the name is a flex box of its own, so inside
+   an inline span it broke the line). */
+.dr-people-following--ported .dr-people-following__text {
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+  white-space: nowrap;
+}
 /* W5-23: while someone's "is presenting" invitation shows, the label stays, under it (index.tsx sets its
    top): a follower keeps their way out until they join, say Not now or stop (people.css gives the
    invitation the spot on the tldraw page, where tldraw draws its own "Stop following"). */
@@ -65,12 +73,6 @@
   max-width: 14ch;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.dr-people-following--paused .dr-people-following__text {
-  min-width: 0;
-  display: inline-flex;
-  align-items: baseline;
   white-space: nowrap;
 }
 .dr-people-following--paused .dr-people-following__stop:focus-visible,

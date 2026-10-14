@@ -117,6 +117,12 @@ test('W5-51: following from the people list shows "Following Alice Park" and one
     c.follow.start(sid)
   }, aliceSid)
   await expect(followingLabel(b.page)).toContainText('Following Alice Park')
+  // P-036: one line ("Following" and the name side by side), not stacked beside the button
+  const line = await followingLabel(b.page).evaluate((el) => {
+    const lineHeight = Number.parseFloat(getComputedStyle(el).lineHeight)
+    return { height: el.getBoundingClientRect().height, lineHeight }
+  })
+  expect(line.height, 'the pill is one line tall').toBeLessThan(line.lineHeight * 2)
   const stop = stopButton(b.page)
   await expect(stop).toHaveText('Stop following')
   expect(await borders(stop)).toEqual([0, 0, 0, 0])
