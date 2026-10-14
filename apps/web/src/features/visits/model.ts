@@ -7,12 +7,17 @@
 // `seenAt` is this person's PREVIOUS visit time (the api's answer, ./client.ts), so only what happened while they were
 // away counts. null (a first visit, a guest, an api without the route) means no result.
 //
-// What does not count, because the person did it themselves (P-006, `me`): an element the server credits to them
-// (`customData.lobbyServer.createdBy`) is not "added", and one whose latest commit was their own edit of its words
-// (`lastEditedBy` at that commit's time) is not "changed": a label they typed into, or added, does not change its
-// note. The server stamps no author on a move, a resize or a restyle, so those cannot be told apart by who made them:
-// they count as changes (the known limit; a per-commit author would need a wire change). A removal by them is left
-// out in ./run.ts, from the "Recently deleted" list that names who deleted it.
+// What does not count, because the person did it themselves (P-006, `me`): a change whose LATEST commit is theirs. An
+// element's own stamps name the author of its latest commit when that commit created it (`createdBy` at `createdAt`)
+// or edited its words (`lastEditedBy` at `lastEditedAt`); a later commit (a move, a re-fit) names nobody, and it is
+// theirs when its time is that of a commit the stamps credit to them elsewhere (their typing re-fit the note: the
+// label's edit and the fit are one commit). So a label they typed into, or added, does not change its note. What they
+// made is never "added", but a colleague's later commit to it (a move of a note they made on another device) is a
+// change (wave P review: before, what they made was skipped whatever came after, and so was a note whose label they
+// had added, when a colleague later moved it). The server stamps no author on a move, a resize or a restyle, so their
+// own moves count as changes (the known limit; a per-commit author would need a wire change), and a colleague's move
+// that their own later typing re-fit over is not seen (they edited the note after it). A removal by them is left out
+// in ./run.ts, from the "Recently deleted" list that names who deleted it.
 //
 // What does not count, because nobody did it:
 //  - a bound label counts for its container, once: a note whose label was typed into is one changed note, a new note
@@ -119,15 +124,33 @@ const uidOf = (attribution: unknown): string | null => {
 const madeBy = (el: VisitElement, me: string): boolean => uidOf(serverStampsOf(el)?.createdBy) === me
 
 /**
- * Whether the element's latest commit (`updated`) was `me` editing its words: the server stamps `lastEditedBy` and
- * `lastEditedAt` in the same commit as `updated`. A later commit of anyone's (a move, a restyle) leaves `updated`
- * past `lastEditedAt`, and is not theirs to claim.
+ * Who made the element's latest commit (`updated`), as far as its own stamps say: its maker when that commit is the
+ * one that created it (`createdAt`), the last editor of its words when it is that edit (`lastEditedAt`: the server
+ * stamps both in the same commit as `updated`). Undefined when the stamps do not say: a later commit (a move, a
+ * restyle, a re-fit) carries no author. Null: a commit nobody is credited with.
  */
-const lastEditedBy = (el: VisitElement, me: string): boolean => {
+const latestAuthor = (el: VisitElement): string | null | undefined => {
   const ls = serverStampsOf(el)
-  const at = num(ls?.lastEditedAt)
   const updated = num(el.updated)
-  return uidOf(ls?.lastEditedBy) === me && at !== null && updated !== null && at >= updated
+  if (!ls || updated === null) return undefined
+  const editedAt = num(ls.lastEditedAt)
+  if (ls.lastEditedBy && editedAt !== null && editedAt >= updated) return uidOf(ls.lastEditedBy)
+  if (num(ls.createdAt) === updated) return uidOf(ls.createdBy)
+  return undefined
+}
+
+/** The commits the stamps credit to `me` (an element's creation, an edit of its words), by their time. */
+const commitsOf = (live: Iterable<VisitElement>, me: string, seenAt: number): Set<number> => {
+  const out = new Set<number>()
+  for (const e of live) {
+    const ls = serverStampsOf(e)
+    if (!ls) continue
+    const created = num(ls.createdAt)
+    if (created !== null && created > seenAt && uidOf(ls.createdBy) === me) out.add(created)
+    const edited = num(ls.lastEditedAt)
+    if (ls.lastEditedBy && edited !== null && edited > seenAt && uidOf(ls.lastEditedBy) === me) out.add(edited)
+  }
+  return out
 }
 
 const containerOf = (el: VisitElement): string | null =>
@@ -164,8 +187,17 @@ export function whatChanged(input: WhatChangedInput): VisitChanges | null {
   const changedSet = new Set<string>()
   /** container id → the commits (`updated`) of its label's touches since the visit; a new label is `null` (not derivable) */
   const labelTouches = new Map<string, Set<number | null>>()
-  /** container id → the commits of the viewer's own label touches (a new label, or words typed into one) */
-  const myLabelCommits = new Map<string, Set<number>>()
+  // P-006: the commits the viewer made since the visit (wave P review: a change is skipped only when its latest commit
+  // is one of them, so a colleague's later move of something the viewer made or labelled still counts)
+  const myCommits = me !== null ? commitsOf(liveById.values(), me, seenAt) : new Set<number>()
+  const latestIsMine = (e: VisitElement, updated: number | null): boolean => {
+    if (me === null) return false
+    const author = latestAuthor(e)
+    // the element's own stamps name its latest commit's author; else (a re-fit, a move) the commit's time says
+    // whether it was one of the viewer's (their typing re-fit the note: the label's edit and the fit are one commit)
+    if (author !== undefined) return author === me
+    return updated !== null && myCommits.has(updated)
+  }
   for (const e of liveById.values()) {
     const container = containerOf(e)
     const target = container ?? e.id
@@ -175,35 +207,22 @@ export function whatChanged(input: WhatChangedInput): VisitChanges | null {
     const updated = num(e.updated)
     const isNew = created !== null && created > seenAt
     const touched = isNew || (updated !== null && updated > seenAt)
-    // P-006: what the viewer made, or last edited the words of, is theirs, not "since you were here"
-    if (me !== null && touched && (isNew ? madeBy(e, me) : lastEditedBy(e, me))) {
-      if (container !== null && updated !== null) {
-        const mine = myLabelCommits.get(container) ?? new Set<number>()
-        mine.add(updated)
-        myLabelCommits.set(container, mine)
-      }
-      continue
-    }
+    if (!touched) continue
+    // P-006: a change whose latest commit is the viewer's is theirs, not "since you were here"
+    if (latestIsMine(e, updated)) continue
+    // what the viewer made is never "added" to them; a later commit by someone else changes it
+    const addedForMe = isNew && !(me !== null && madeBy(e, me))
     if (container !== null) {
-      if (!touched) continue
       const set = labelTouches.get(container) ?? new Set<number | null>()
-      set.add(isNew ? null : updated)
+      set.add(addedForMe ? null : updated)
       labelTouches.set(container, set)
       continue
     }
-    if (isNew) addedSet.add(e.id)
-    else if (touched) changedSet.add(e.id)
+    if (addedForMe) addedSet.add(e.id)
+    else changedSet.add(e.id)
   }
   // a label typed into (or added to) an existing element changes that element
   for (const container of labelTouches.keys()) if (!addedSet.has(container)) changedSet.add(container)
-  // ... unless the viewer was the one who typed: the commit that put their label there also touched the element (its
-  // `boundElements`, its fit), and that touch is theirs too, when no one else's label touch is left
-  for (const [container, commits] of myLabelCommits) {
-    if (labelTouches.has(container) || addedSet.has(container)) continue
-    const own = liveById.get(container)
-    const updated = own ? num(own.updated) : null
-    if (updated !== null && commits.has(updated)) changedSet.delete(container)
-  }
 
   // ---- tombstones: removed items, and the commit times of what was deleted ----
   const removedAll: { id: string; type: string; updated: number }[] = []
