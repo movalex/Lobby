@@ -58,6 +58,9 @@ export function useSession(): SessionValue {
   return v
 }
 
+/** The session, or null outside a <SessionProvider> (a component that can also be rendered bare). */
+export const useSessionOrNull = (): SessionValue | null => useContext(SessionContext)
+
 /** The signed-in user; only call below a signed-in guard. */
 export function useMe(): Me {
   const { state } = useSession()

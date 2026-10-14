@@ -16,7 +16,7 @@ import { UserMenu } from '../auth/UserMenu.tsx'
 import { NoticeRegion, useNotices } from '../board/Notices.tsx'
 import { isPaletteKey, paletteKeyOf } from '../features/command-palette/keys.ts'
 import { boardTryPath } from '../features/command-palette/try-hints.ts'
-import { FeedbackPill } from '../features/feedback/FeedbackPill.tsx'
+import { TeamFeedbackPill } from '../features/feedback/FeedbackPill.tsx'
 import { openFeedback } from '../features/feedback/state.ts'
 import { useIsGuest } from '../invite/guest.tsx'
 import { absoluteUrl, copyText } from '../lib/clipboard.ts'
@@ -1067,7 +1067,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
       )}
       <NoticeRegion notices={notices} onDismiss={dismiss} />
       {/* K4-5: Feedback is one click away, on the dashboard as on a board */}
-      <FeedbackPill />
+      <TeamFeedbackPill />
     </div>
   )
 }

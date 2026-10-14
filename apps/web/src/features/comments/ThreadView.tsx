@@ -3,7 +3,7 @@
 
 import type { CommentThread, ThreadComment } from '@draftroom/contracts'
 import { useState } from 'react'
-import { ownName } from '../../invite/model.ts'
+import { guestLabel, ownName } from '../../invite/model.ts'
 import { formatDateTime, formatRelativeTime } from '../../lib/format.ts'
 import { initialsFor, safeColor } from '../../lib/identity.ts'
 import { ExternalTag } from '../people/ExternalTag.tsx'
@@ -77,7 +77,7 @@ function CommentItem({
       <div className="dr-ccomment__main">
         <div className="dr-ccomment__head">
           <span className="dr-ccomment__author">
-            {mine ? ownName(comment.author.name) : comment.author.name}
+            {mine ? ownName(comment.author.name) : guestLabel(comment.author.name)}
             {external && <ExternalTag domain={outside.people.get(comment.author.id) ?? null} />}
           </span>
           <time
