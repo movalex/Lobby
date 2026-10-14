@@ -12,8 +12,8 @@
 // 150 ms pause in typing; a newer query aborts the older one. The static lines are ranked at once.
 //
 // Wave M (M3-2, M3-3): an empty field starts with Recent, then Try (the lines the index marks as starters: what wave L
-// offers), then the groups, and last "Not available right now" (every line that cannot run, each saying why); no line is
-// chosen until an arrow key or the pointer picks one. A "Try it" from the What's new card opens it with one line coached.
+// offers), then the groups; the lines that cannot run now show only once something is typed (each saying why; wave P:
+// the empty palette ended in a long grey tail of them); no line is chosen until an arrow key or the pointer picks one. A "Try it" from the What's new card opens it with one line coached.
 import { type KeyboardEvent, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { isPaletteKey, paletteKeyOf } from './keys.ts'
 import {
@@ -71,8 +71,11 @@ export const UNAVAILABLE_SECTION = 'unavailable'
  *
  * With nothing typed (M3-2, FTU-4): Recent (this person's own picks that can run), then Try (the lines the index marks
  * as starters: what wave L offers, in its order, the ones that can run first, the rest with their reasons), then the
- * groups with the lines that can run, and last "Not available right now" with every other line that cannot run (it used
- * to open on Undo, Redo and a screenful of "Select something first"). A palette whose lines mark no starters has no Try.
+ * groups with the lines that can run. The lines that cannot run now (media.crop with no picture selected, the mind map's
+ * keys with no map) are left out until something is typed: typing ranks them all, and a line that cannot run says why.
+ * Only a line the person picked before (Recent) stays, with its reason, under "Not available right now" (wave P, a long
+ * grey tail of contextual lines; it used to open on Undo, Redo and a screenful of "Select something first" before that).
+ * A palette whose lines mark no starters has no Try.
  */
 export function paletteSections(
   entries: readonly PaletteEntry[],
@@ -100,10 +103,8 @@ export function paletteSections(
     const unavailable: PaletteEntry[] = picks.filter((e) => !runnable(e))
     for (const e of entries) {
       if (shown.has(e.id)) continue
-      if (!runnable(e)) {
-        if (!unavailable.some((u) => u.id === e.id)) unavailable.push(e)
-        continue
-      }
+      // a line that cannot run now is found by typing, not listed (the picks above are the only ones kept)
+      if (!runnable(e)) continue
       groups.set(e.group, [...(groups.get(e.group) ?? []), e])
     }
     const out: Section[] = []

@@ -2,7 +2,6 @@ import { type BoardWithRole, NEW_CANVAS_CARD_NOTE, thumbnailPath } from '@draftr
 import { type CSSProperties, useEffect, useState } from 'react'
 import { SharedOutsideMarker } from '../features/people/SharedOutside.tsx'
 import { onThumbnailUpdated, recentThumbnail } from '../features/thumbnails/card-events.ts'
-import { formatRelativeTime } from '../lib/format.ts'
 import { initialsFor } from '../lib/identity.ts'
 import { can } from '../lib/permissions.ts'
 import { boardPath, linkClick } from '../lib/routing.ts'
@@ -12,6 +11,7 @@ import {
   type BoardMenuAction,
   type BoardMenuContext,
   boardMenuItems,
+  boardWhen,
   ROLE_LABEL,
   thumbStyle,
 } from './model.ts'
@@ -163,10 +163,7 @@ export function BoardCard<
   const canStar = !!onStar && can(board.role, 'view', board.status)
   const canOpen = items.some((i) => i.action === 'open')
   const href = boardPath(board.id)
-  const when =
-    board.status === 'trashed'
-      ? `Trashed ${formatRelativeTime(board.trashedAt ?? board.updatedAt, now)}`
-      : `Edited ${formatRelativeTime(board.updatedAt, now)}`
+  const when = boardWhen(board, now)
 
   const body = (
     <div className="dr-bcard__thumb">

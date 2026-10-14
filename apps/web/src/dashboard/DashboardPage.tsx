@@ -81,6 +81,7 @@ import { newBoardPath } from './template-paths.ts'
 import { useCatalog, whenIdle } from './use-catalog.ts'
 import { WelcomeCard } from './Welcome.tsx'
 import { WhatsNewCard } from './WhatsNew.tsx'
+import { isApplePlatform } from './welcome.ts'
 import {
   introCard,
   NO_PLACE_TO_TRY,
@@ -92,7 +93,6 @@ import {
   WHATS_NEW_VERSION,
   whatsNewFor,
 } from './whats-new.ts'
-import { isApplePlatform } from './welcome.ts'
 import { requestWorkspaceMenu } from './workspace-menu-request.ts'
 import './dashboard.css'
 
@@ -459,7 +459,19 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   const createProject = async (name: string) => {
     const p = await api.createProject(workspace.id, name)
     projects.update((list) => [...list, p])
-    navigate(workspacePath(workspace.id, { kind: 'project', projectId: p.id }))
+    // Stay where they are (P-045: it jumped into the empty project, so moving a board there needed a trip back to
+    // All boards): the lobby is in the sidebar and in Move to…, and the notice offers to open it.
+    notify({
+      key: `project:${p.id}`,
+      text: `Project lobby “${p.name}” created`,
+      testId: 'dashboard-toast',
+      timeoutMs: 8000,
+      action: {
+        label: 'Open it',
+        testId: 'project-open-new',
+        onClick: () => navigate(workspacePath(workspace.id, { kind: 'project', projectId: p.id })),
+      },
+    })
   }
   const renameProject = async (project: Project, name: string) => {
     try {
@@ -956,7 +968,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
         )}
         {boards.status === 'ready' && visible.length === 0 && !contentSearching && (
           <div className="dr-empty" data-testid="dashboard-empty">
-            <EmptyArt />
+            <EmptyArt kind={section.kind} />
             <h2 className="dr-empty__title">{empty.title}</h2>
             <p className="dr-muted">
               {owner !== 'anyone' && !query ? 'No boards match the owner filter.' : empty.body}
@@ -1100,7 +1112,9 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
   )
 }
 
-function EmptyArt() {
+function EmptyArt({ kind }: { kind: DashboardSection['kind'] }) {
+  // P-033: the empty Trash is a bin, not the "make a note" picture
+  if (kind === 'trash') return <TrashArt />
   return (
     <svg className="dr-empty__art" viewBox="0 0 120 80" aria-hidden="true">
       <rect
@@ -1134,6 +1148,32 @@ function EmptyArt() {
         transform="rotate(4 66 42)"
       />
       <path d="M86 40h14M93 33v14" stroke="var(--dr-navy)" strokeWidth="2.4" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function TrashArt() {
+  return (
+    <svg className="dr-empty__art" data-testid="empty-art-trash" viewBox="0 0 120 80" aria-hidden="true">
+      <rect
+        x="6"
+        y="8"
+        width="108"
+        height="64"
+        rx="8"
+        fill="var(--dr-surface)"
+        stroke="var(--dr-line-strong)"
+        strokeDasharray="4 4"
+      />
+      <path
+        d="M46 30h28l-2.2 28a3 3 0 0 1-3 2.8H51.2a3 3 0 0 1-3-2.8zM42 30h36M54 30v-4h12v4"
+        fill="none"
+        stroke="var(--dr-navy)"
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M56 37v16M64 37v16" stroke="var(--dr-line-strong)" strokeWidth="2.2" strokeLinecap="round" />
     </svg>
   )
 }

@@ -36,7 +36,7 @@ async function insertAndTell(
 export const COMMANDS: readonly CommandSpec[] = [
   {
     id: PIECE_COMMAND_IDS.open,
-    label: 'Pieces',
+    label: 'Shapes',
     group: 'Insert',
     keywords: ['shapes', 'kit', 'flowchart', 'wireframe', 'org chart', 'storyboard', 'library'],
     run: (ctx) => ctx.openPanel(ctx.activePanel === PANEL_ID ? null : PANEL_ID),

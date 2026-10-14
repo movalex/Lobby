@@ -49,6 +49,8 @@ import {
   type FileFacts,
   factsOf,
   fileItemKind,
+  PREVIEW_SLOW_MS,
+  previewStateText,
 } from './model.ts'
 import { type Box, Occluders } from './occluders.ts'
 import { openPdfViewer } from './viewer-state.ts'
@@ -466,6 +468,20 @@ function swallowTapClick(x: number, y: number): void {
   window.setTimeout(() => window.removeEventListener('click', stop, true), TAP_CLICK_MS)
 }
 
+/** Whether `active` has been true for `ms` without a break (false again as soon as it is not). */
+function useElapsed(active: boolean, ms: number): boolean {
+  const [elapsed, setElapsed] = useState(false)
+  useEffect(() => {
+    if (!active) {
+      setElapsed(false)
+      return
+    }
+    const timer = setTimeout(() => setElapsed(true), ms)
+    return () => clearTimeout(timer)
+  }, [active, ms])
+  return elapsed
+}
+
 function Preview({
   view,
   coverSrc,
@@ -482,6 +498,9 @@ function Preview({
   onViewPages: (() => void) | null
 }) {
   const [playing, setPlaying] = useState(false)
+  // a card still waiting for its preview after PREVIEW_SLOW_MS says so (the worker may be down)
+  const waiting = !view.missing && (view.status === 'queued' || view.status === 'processing')
+  const slow = useElapsed(waiting, PREVIEW_SLOW_MS)
   // F5: a touch or pen tap opens the viewer on pointerup; the click that some browsers still send after
   // it is then ignored, on this button and on the viewer that is now under the finger.
   const tappedAt = useRef(0)
@@ -524,15 +543,7 @@ function Preview({
         <span className="dr-fc__badge-kind" aria-hidden="true">
           {extensionLabel(view.name, view.kind)}
         </span>
-        <p>
-          {view.missing
-            ? 'Preview unavailable'
-            : view.status === 'queued'
-              ? 'Queued for preview…'
-              : view.status === 'processing'
-                ? 'Generating preview…'
-                : 'Loading preview…'}
-        </p>
+        <p data-testid="file-card-state">{previewStateText(view, slow, canDownload)}</p>
         {view.kind === 'pdf' && view.pageCount != null && <PagesBadge n={view.pageCount} />}
         {view.kind === 'video' && view.durationMs != null && <DurationBadge ms={view.durationMs} />}
       </div>

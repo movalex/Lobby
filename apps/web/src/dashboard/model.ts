@@ -7,6 +7,7 @@ import {
   canCreateInWorkspace,
   type WorkspaceRole,
 } from '../lib/permissions.ts'
+import { formatRelativeTime } from '../lib/format.ts'
 import type { DashboardSection } from '../lib/routing.ts'
 import { CREATOR_DOMAINS, creatorDomainsInWords } from './creator-config.ts'
 
@@ -474,6 +475,29 @@ export function importedToast(created: {
       n === 1 ? '1 file was left out and shows as missing.' : `${n} files were left out and show as missing.`,
     )
   return `Imported “${created.board.title}”.${notes.length ? ` ${notes.join(' ')}` : ''}`
+}
+
+// ---- what a card says about time ------------------------------------------------------------------
+
+/** A board saved this soon after it was made was not edited by anyone: making it saved it (P-042). */
+const MADE_WINDOW_MS = 2_000
+
+/**
+ * The time line of a board's card: when it was trashed; "Created …" for a board nobody has changed since it was made
+ * (it used to say "Edited just now" for one nobody had touched); otherwise when it was last edited.
+ */
+export function boardWhen(
+  board: Pick<BoardWithRole, 'status' | 'trashedAt' | 'createdAt' | 'updatedAt'>,
+  now: Date,
+): string {
+  if (board.status === 'trashed') {
+    return `Trashed ${formatRelativeTime(board.trashedAt ?? board.updatedAt, now)}`
+  }
+  const made = Date.parse(board.createdAt)
+  const changed = Date.parse(board.updatedAt)
+  const neverEdited = Number.isFinite(made) && Number.isFinite(changed) && changed - made <= MADE_WINDOW_MS
+  const [word, at] = neverEdited ? ['Created', board.createdAt] : ['Edited', board.updatedAt]
+  return `${word} ${formatRelativeTime(at, now)}`
 }
 
 // ---- thumbnails ----------------------------------------------------------------------------------

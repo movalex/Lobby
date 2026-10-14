@@ -365,6 +365,12 @@ code {
   font-size: 16px;
   line-height: 1.5;
 }
+.dr-signin__by {
+  margin: 2px 0 0;
+  color: var(--dr-ink-2);
+  font-size: 13px;
+  letter-spacing: 0.02em;
+}
 .dr-signin__brand .dr-home__tagline {
   max-width: 380px;
   margin-top: 12px;
@@ -513,7 +519,8 @@ code {
      drops below about 24 characters); "Dev Stu… / Lobby t…" cut both. */
   flex: none;
   overflow: hidden;
-  max-width: 18ch;
+  /* wide enough for a name like "Omar Haddad's workspace" (P-035: "Omar Haddad's w…" with room to spare) */
+  max-width: 28ch;
   color: var(--dr-ink-2);
   font-size: 13.5px;
   text-decoration: none;
@@ -2409,6 +2416,14 @@ html[data-dr-presenting] .dr-board__account {
 }
 html[data-dr-presenting] .dr-phone-hint {
   display: none;
+}
+/* P-027: on an empty board the hint sat on top of the "Start your board" card. While the hint shows, the card
+   starts below it (the hint is about 100 px tall, under the board menu). */
+@media (max-width: 600px) {
+  :root:has(.dr-phone-hint) .cux-empty-hint {
+    top: calc(var(--dr-topbar-h) + 184px);
+    transform: translateX(-50%);
+  }
 }
 
 /* ---- K5-4 (wave K): 40 px touch targets in the board chrome; words for icon-only overflow items ------- */

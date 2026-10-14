@@ -77,6 +77,31 @@ export interface CardView {
   readonly missing: boolean
 }
 
+/** How long a card may say "Queued for preview…" or "Generating preview…" before it says it is taking longer (wave P). */
+export const PREVIEW_SLOW_MS = 120_000
+
+/**
+ * What a card without its picture says. `slow`: it has been waiting for its preview longer than PREVIEW_SLOW_MS (the
+ * preview worker may be down or busy: without this a card said "Queued for preview…" for ever), and the file is still
+ * there to download (unless this board turned downloads off).
+ */
+export function previewStateText(
+  view: Pick<CardView, 'status' | 'missing'>,
+  slow: boolean,
+  canDownload: boolean,
+): string {
+  if (view.missing) return 'Preview unavailable'
+  const waiting = view.status === 'queued' || view.status === 'processing'
+  if (waiting && slow) {
+    return canDownload
+      ? 'Preview is taking longer than usual; you can still download the file.'
+      : 'Preview is taking longer than usual.'
+  }
+  if (view.status === 'queued') return 'Queued for preview…'
+  if (view.status === 'processing') return 'Generating preview…'
+  return 'Loading preview…'
+}
+
 const nonNegInt = (v: number | null | undefined) =>
   typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v) : null
 

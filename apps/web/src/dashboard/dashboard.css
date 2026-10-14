@@ -1115,6 +1115,18 @@
   }
 }
 
+/* P-043: toasts on the dashboard sit at the bottom, where they do not cover the view toggles, the filters and New board
+   in the header (the shared top-centre spot is for the board's own chrome). The Feedback pill is at the right. */
+.dr-dash .dr-notices {
+  top: auto;
+  bottom: 24px;
+}
+@media (max-width: 600px) {
+  .dr-dash .dr-notices {
+    bottom: 76px;
+  }
+}
+
 /* ---- Wave P: the Welcome card (a first visit), the Help menu and its shortcuts ------------------------ */
 .dr-welcome {
   max-width: 820px;

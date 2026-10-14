@@ -107,12 +107,12 @@ export function SignInPage() {
     )
   }
 
-  // Open email sign-in serves a shared workspace that is not DBC's: no DBC lockup or DBC tagline.
+  // Open email sign-in serves a shared workspace that is not Dark Burn's: no "by Dark Burn" line or DBC tagline.
   const open = config?.providers.includes('email') === true
   return (
     <main className="dr-signin" data-testid="signin-page">
       <div className="dr-signin__inner">
-        {/* The glowing hero already carries the mark, so the "DBC Lobby" lockup beside it is text only. */}
+        {/* The glowing hero already carries the mark, so the "Lobby" lockup beside it is text only. */}
         <header className="dr-signin__brand">
           <img
             className="dr-signin__hero"
@@ -122,7 +122,13 @@ export function SignInPage() {
             alt=""
             draggable={false}
           />
-          <Wordmark size="lg" variant={open ? 'short' : 'dbc'} mark={false} />
+          <Wordmark size="lg" mark={false} />
+          {/* P-029: one product name, here and in the app: "Lobby"; Dark Burn is the subtitle */}
+          {!open && (
+            <p className="dr-signin__by" data-testid="signin-by">
+              by Dark Burn
+            </p>
+          )}
           <p className="dr-home__tagline" data-testid="signin-tagline">
             {open ? openSignInTagline(config?.sharedWorkspaceName) : SIGN_IN_TAGLINE}
           </p>

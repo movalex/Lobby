@@ -502,7 +502,7 @@ describe('invite by email', () => {
 
   it('no email went out: the link to copy, and why, for every reason', () => {
     const reasons = {
-      email_not_configured: 'This server can’t send email: that needs Clerk sign-in.',
+      email_not_configured: 'This server can’t send email: that needs a Lobby account.',
       existing_account: 'pat@client.example has a sign-in account but hasn’t opened Lobby yet',
       invalid_email: 'The email service didn’t accept pat@client.example.',
       rate_limited: 'The email service is limiting invitations right now.',

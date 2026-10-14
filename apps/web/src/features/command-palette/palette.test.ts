@@ -551,38 +551,57 @@ describe('the empty palette (M3-2, FTU-4.3, FTU-12)', () => {
     errors.mockRestore()
   })
 
-  it('puts the lines that cannot run last, each with its reason, and the ones that can run before them', () => {
+  it('leaves the lines that cannot run out of the empty palette (no grey tail of "Not available right now")', () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
     const list = boardEntries(boardCtx(false, askOn), 'other')
     const sections = paletteSections(list, '', [])
-    const last = sections[sections.length - 1]
-    expect(last?.id).toBe(UNAVAILABLE_SECTION)
-    expect(last?.title).toBe('Not available right now')
-    expect(last?.entries.length ?? 0).toBeGreaterThan(5)
-    for (const e of last?.entries ?? []) expect(e.disabledReason, e.id).toBeTruthy()
-    // outside Try, no line that cannot run comes before one that can
+    expect(sections.map((s) => s.id)).not.toContain(UNAVAILABLE_SECTION)
+    // outside Try, every line shown can run
     const rest = sections.filter((s) => s.id !== TRY_SECTION).flatMap((s) => s.entries)
-    const firstDisabled = rest.findIndex((e) => !!e.disabledReason)
-    expect(firstDisabled).toBeGreaterThan(0)
-    expect(rest.slice(firstDisabled).every((e) => !!e.disabledReason)).toBe(true)
-    expect(rest.slice(0, firstDisabled).every((e) => !e.disabledReason)).toBe(true)
-    // inside Try, the ones that can run are first
+    expect(rest.length).toBeGreaterThan(0)
+    expect(rest.every((e) => !e.disabledReason)).toBe(true)
+    // inside Try, the ones that can run are first, and the ones that cannot keep their reasons
     const tryLines = sections.find((s) => s.id === TRY_SECTION)?.entries ?? []
     const firstOff = tryLines.findIndex((e) => !!e.disabledReason)
     if (firstOff >= 0) expect(tryLines.slice(firstOff).every((e) => !!e.disabledReason)).toBe(true)
-    // every line of the index is in exactly one place
+    // every line is in at most one place; the ones left out are exactly lines that cannot run
     const placed = sections.flatMap((s) => s.entries.map((e) => e.id))
     expect(new Set(placed).size).toBe(placed.length)
-    expect(new Set(placed)).toEqual(new Set(list.map((e) => e.id)))
+    const left = list.filter((e) => !placed.includes(e.id))
+    expect(left.length).toBeGreaterThan(5)
+    for (const e of left) expect(e.disabledReason, e.id).toBeTruthy()
     errors.mockRestore()
+  })
+
+  it('typing finds a line that cannot run now, with its reason', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const list = boardEntries(boardCtx(false, askOn), 'other')
+    const left = list.filter((e) => !!e.disabledReason && !e.starter)
+    const hidden = left[0]
+    expect(hidden).toBeDefined()
+    if (!hidden) return
+    const matches = paletteSections(list, hidden.label, []).find((s) => s.id === 'matches')
+    expect(matches?.entries.map((e) => e.id)).toContain(hidden.id)
+    errors.mockRestore()
+  })
+
+  it('a line the person picked before stays under Recent even when it cannot run now, with its reason', () => {
+    const off = entry('Crop', { group: 'Media', disabledReason: 'Select a picture first' })
+    const on = entry('Alpha', { group: 'One' })
+    const sections = paletteSections([off, on], '', [off.recentKey as string])
+    expect(sections.find((s) => s.id === UNAVAILABLE_SECTION)?.entries.map((e) => e.id)).toEqual([off.id])
+    expect(sections.map((s) => s.id)).toEqual(['group:One', UNAVAILABLE_SECTION])
   })
 
   it('a palette whose lines mark no starters has no Try (the dashboard’s), and typing is the ranked list as before', () => {
     const a = entry('Alpha', { group: 'One' })
     const b = entry('Beta', { group: 'Two', disabledReason: 'Not today' })
     const sections = paletteSections([a, b], '', [])
-    expect(sections.map((s) => s.id)).toEqual(['group:One', UNAVAILABLE_SECTION])
+    expect(sections.map((s) => s.id)).toEqual(['group:One'])
     expect(paletteSections([a, b], 'alp', []).map((s) => s.id)).toEqual(['matches'])
+    // Beta cannot run now: typing finds it, with its reason
+    const typed = paletteSections([a, b], 'bet', [])
+    expect(typed[0]?.entries.map((e) => [e.label, e.disabledReason])).toEqual([['Beta', 'Not today']])
   })
 
   it('Undo and Redo show their keys, as Cut does (the engine takes the chords, so the registry has none)', () => {

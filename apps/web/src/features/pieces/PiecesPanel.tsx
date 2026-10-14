@@ -75,7 +75,7 @@ export function PieceList({
 }) {
   if (results.length === 0) return <p className="dr-pieces__empty">No pieces match.</p>
   return (
-    <div className="dr-pieces__list" role="listbox" aria-label="Pieces" id={`${base}-list`}>
+    <div className="dr-pieces__list" role="listbox" aria-label="Shapes" id={`${base}-list`}>
       {results.map((p, i) => (
         <div
           key={p.id}
@@ -143,12 +143,12 @@ export function PiecesPanel({ ctx, close }: { ctx: CanvasFeatureContext; close()
   return (
     <div className="dr-pieces" data-testid="pieces-panel">
       <label className="dr-pieces__search">
-        <span className="dr-sr-only">Search pieces</span>
+        <span className="dr-sr-only">Search shapes</span>
         <input
           ref={input}
           type="search"
           className="dr-input"
-          placeholder="Search pieces"
+          placeholder="Search shapes"
           role="combobox"
           aria-expanded={results.length > 0}
           aria-controls={results.length > 0 ? `${base}-list` : undefined}
