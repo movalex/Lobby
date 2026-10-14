@@ -2272,6 +2272,12 @@ button.dr-pill--role:disabled {
 html[data-dr-presenting] .dr-board__account {
   display: none;
 }
+/* P-028 (wave P): while a top-bar popover is open the bar is lifted over the board's layers (features/workshops
+   workshops.css, R2-07: z-index 320); the badge, drawn over the bar's right end, is lifted with it, so it never
+   disappears under the bar's background while the bell or Facilitate is open. */
+.dr-board:has(.dr-topbar [aria-expanded="true"]) .dr-board__account {
+  z-index: 321;
+}
 /* In the "⋯" menu there is room for the words a narrow bar hides (the feature CSS drops them). */
 .dr-overflow .dr-pe-present {
   width: auto;

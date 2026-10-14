@@ -146,6 +146,21 @@ test('on a 3-frame board the numbered sources select the summer notes and bring 
   const panel = await ask(a.page, 'Which concepts mention summer?')
   expect(fake.of('ask')[0]?.body).toMatchObject({ action: 'ask', shapeIds: [] })
   await expect(panel.getByTestId('ai-answer-text')).toContainText('The board mentions it')
+  await test.step('P-044: the answer is clear of the board menu: its button, and the menu once it opens', async () => {
+    const clear = (p: { x: number; y: number; width: number; height: number } | null, q: typeof p) =>
+      !!p &&
+      !!q &&
+      (p.x + p.width <= q.x || q.x + q.width <= p.x || p.y + p.height <= q.y || q.y + q.height <= p.y)
+    const menuButton = a.page.getByTestId('main-menu.button')
+    expect(clear(await panel.boundingBox(), await menuButton.boundingBox())).toBe(true)
+    await menuButton.click()
+    const menu = a.page.getByTestId('main-menu-root')
+    await expect(menu).toBeVisible()
+    expect(clear(await panel.boundingBox(), await menu.boundingBox())).toBe(true)
+    await a.page.keyboard.press('Escape')
+    await expect(menu).toHaveCount(0)
+    await expect(panel).toBeVisible()
+  })
   const before = await pushCount(a.page)
   await panel.getByTestId('ai-answer-cite').first().click()
   await test.step('the sources: selected and in view, nothing written', async () => {

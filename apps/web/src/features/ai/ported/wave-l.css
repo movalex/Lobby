@@ -180,11 +180,12 @@
   top: -12px;
   left: 8px;
 }
-.dr-ai-working__pill {
-  position: absolute;
-  top: 58px;
-  left: 50%;
-  transform: translateX(-50%);
+/* P-047 (wave P): in the top-centre stack (canvas/overlay/top-centre.css), one under the other */
+.dr-ai-working__pills {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
 }
 .dr-ai-working[data-motion="still"] .dr-ai-working__area {
   animation: none;
