@@ -38,7 +38,7 @@ import type { CanvasRegistries } from './registries.ts'
 import type { LobbyEngineCore } from './sync/core/engine.ts'
 import { compareIndexThenId } from './sync/index-keys.ts'
 import type { SaveStatus } from './sync/types.ts'
-import { buildNote, nextNoteFill } from './tools/notes.ts'
+import { buildNote, LOBBY_NOTE_SIZE, nextNoteFill } from './tools/notes.ts'
 import { activeLobbyTool, CUSTOM_TOOLS, setTool as setLobbyTool } from './tools/tools.ts'
 
 // biome-ignore lint/suspicious/noExplicitAny: the element package's constructors, typed loosely here
@@ -109,6 +109,13 @@ export interface LobbyCanvasPort extends CanvasPort {
   nextFontSize(slot: NextSizeSlot): number
   /** CR-3A-7: sets the next font size of a kind of text (a pick on a selection of that kind); no undo step. */
   setNextFontSize(slot: NextSizeSlot, size: number): void
+  /**
+   * P-011: the side (px) of the next note: the note tool's Size (S/M/L/XL: 150, 200, 300, 400), taken by the note tool's
+   * click and the dock's Add a sticky note. Lobby's 200 px note until one is picked; the engine has no such value.
+   */
+  nextNoteSide(): number
+  /** P-011: sets the next note's side; nonsense (not a positive finite number) is ignored. No undo step. */
+  setNextNoteSide(side: number): void
   /**
    * CR-3A-9, the gesture-element hook: `hook` sees each element the engine starts drawing (its `newElement`)
    * once, in the scene change it appears in, before the sync engine pushes anything of it (the core holds an
@@ -217,6 +224,8 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
     const now = engineSize()
     if (now !== null) nextSizes[sizeSlot] = now
   }
+  // P-011: the next note's side (the note tool's Size); the engine keeps no such value
+  let nextNoteSide = LOBBY_NOTE_SIZE
   const nextSizeOf = (slot: NextSizeSlot): number =>
     slot === sizeSlot ? (engineSize() ?? nextSizes[slot]) : nextSizes[slot]
 
@@ -534,6 +543,10 @@ export function createCanvasPort(deps: PortDeps): LobbyCanvasPort {
       return done
     },
     nextFontSize: (slot) => nextSizeOf(slot),
+    nextNoteSide: () => nextNoteSide,
+    setNextNoteSide(side) {
+      if (Number.isFinite(side) && side > 0) nextNoteSide = side
+    },
     setNextFontSize(slot, size) {
       if (!Number.isFinite(size) || size <= 0) return
       nextSizes[slot] = size

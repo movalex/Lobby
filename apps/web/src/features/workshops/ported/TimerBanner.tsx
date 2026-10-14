@@ -5,9 +5,9 @@
 // Read-only: the timer is still set in the Facilitate popover. While presenting, and on phones, the floating
 // read-only timers of ./WorkshopOverlay.tsx stay (the stack is not drawn over the slides; a phone has no room).
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
-import { TopCentreItem } from '../../../canvas/overlay/top-centre.tsx'
 import { PHONE_QUERY, useMediaQuery } from '../../../ui/useMedia.ts'
 import { formatClock, inLastSeconds, timerDisplayPhase, timerRemainingMs } from '../countdown.ts'
+import { TopCentreItem } from '../top-centre.ts'
 import { useNow, useWorkshop } from '../workshop-context.ts'
 import { usePresentingHere } from './presenting.ts'
 import { StopwatchIcon } from './WorkshopBar.tsx'
