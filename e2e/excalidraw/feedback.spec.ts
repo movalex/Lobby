@@ -195,8 +195,8 @@ test('P-023: a name-only guest has no Send feedback row in the board menu, and i
   try {
     const guest = await guestOn(context, token, 'Sam Client')
     await guest.page.getByTestId('main-menu.button').click()
-    await expect(guest.page.getByTestId('main-menu.preferences')).toBeVisible()
-    await expect(guest.page.getByTestId('main-menu.feedback')).toHaveCount(0)
+    await expect(guest.page.getByRole('menuitem', { name: 'Preferences' })).toBeVisible()
+    await expect(guest.page.getByRole('menuitem', { name: 'Send feedback' })).toHaveCount(0)
     // a guest is not an inbox reader
     const probe = await context.request.get(`${WEB_URL}/api/feedback`)
     expect(probe.status()).toBe(404)
