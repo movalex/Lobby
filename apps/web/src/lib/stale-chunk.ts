@@ -22,6 +22,11 @@
  *    fails again once the browser is back online (a browser may keep a failed module import) gets the calm
  *    OFFLINE_RETURN_TEXT, with the Reload button. A lazy page that passes an offline fallback to `recoverChunk`
  *    draws it (the board route's waits for the connection, then reloads once: `reloadWhenOnline`);
+ *  - wave P review: those offline words are kept for the file that failed offline (the browser keeps its failed
+ *    import), not for the tab's lifetime: another file failing later (a deploy hours later) gets the update words,
+ *    and a part that loads clears them (`loaded`). A lazy part a person opens (the board's Share dialog) uses
+ *    `lazyRetrying`: React.lazy keeps a failed import for the tab's lifetime, so a Share clicked offline did nothing
+ *    for the rest of the tab and its code was never asked for again; now the next open asks for it again;
  *  - P-003 (wave P): a board notice never interrupts typing: while a text editor is open on the board
  *    (`StaleChunkBoard.editing`) it waits, and shows once the editor has closed.
  *
@@ -43,17 +48,24 @@
  */
 
 import type { UsageEvent } from '@draftroom/contracts'
+import { type ComponentType, createElement, lazy, useEffect, useState } from 'react'
 import { countUsage } from './usage.ts'
 
 /** A failed dynamic import or chunk preload, as Chrome, Firefox, Safari and Vite word it. */
 export function isStaleChunkError(e: unknown): boolean {
-  const message =
-    e instanceof Error ? e.message : typeof e === 'string' ? e : ((e as { message?: unknown })?.message ?? '')
-  if (typeof message !== 'string') return false
   return /Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed|Unable to preload CSS|ChunkLoadError|Loading chunk [\w-]+ failed/i.test(
-    message,
+    chunkKey(e),
   )
 }
+
+/** A failed chunk's words (Chrome and Firefox name its file; Safari does not), '' for none. */
+export function chunkKey(e: unknown): string {
+  const message =
+    e instanceof Error ? e.message : typeof e === 'string' ? e : ((e as { message?: unknown })?.message ?? '')
+  return typeof message === 'string' ? message : ''
+}
+/** Whether a chunk's words (`chunkKey`) name its file. */
+const namesFile = (key: string) => /\.(m?js|css)\b/i.test(key)
 
 /** A reload within this long of the last automatic one is not made again (a loop guard). */
 export const RELOAD_GUARD_MS = 60_000
@@ -182,8 +194,15 @@ export function createStaleChunkHandler(env: Env = defaultEnv) {
   /** M3-5: a newer build was seen (lib/version-check.ts); a board opened later shows the notice at once */
   let versionStale = false
   let versionNoticed = false
-  /** P-003: a chunk failed while the browser was offline on a board (nothing was said then) */
-  let failedOffline = false
+  /**
+   * P-003: the chunks that failed offline on a board (nothing was said then), by their error's words (`chunkKey`).
+   * Wave P review: no longer one flag for the tab's lifetime. The same file failing again once back online is the
+   * browser keeping its failed import (Chromium does): the offline words, again if asked again. Another file is a
+   * deploy's. A failure that names no file (Safari's words) gets the offline words once. A part that loads clears all.
+   */
+  const failedOffline = new Set<string>()
+  /** the failure last given the offline words: Vite reports one failure twice (its event, then the import) */
+  let offlineWordsFor: unknown = null
   /** P-003: the board notice waiting for an open text editor to close (the latest one) */
   let held: { board: StaleChunkBoard; notice: StaleNotice } | null = null
   const count = (event: UsageEvent) => (env.count ?? countUsage)(event)
@@ -295,13 +314,14 @@ export function createStaleChunkHandler(env: Env = defaultEnv) {
 
   return {
     /** A chunk could not be loaded (see the header for what happens). Returns what was done. */
-    report(_error?: unknown): 'notice' | 'reload' | 'reloading' | 'quiet' {
+    report(error?: unknown): 'notice' | 'reload' | 'reloading' | 'quiet' {
       if (reloading) return 'reloading'
+      const key = chunkKey(error)
       // offline (on a board or not): the network's failure; a reload would show the browser's offline page. On a
       // board nothing is said (P-003): its offline banner says the changes are kept and will sync
       if (!env.online()) {
         if (board) {
-          failedOffline = true
+          failedOffline.add(key)
           return 'quiet'
         }
         notice = offlineNotice()
@@ -309,8 +329,15 @@ export function createStaleChunkHandler(env: Env = defaultEnv) {
         return 'notice'
       }
       if (board) {
+        const offlineBefore =
+          failedOffline.has(key) || (typeof error === 'object' && error !== null && error === offlineWordsFor)
+        if (offlineBefore) {
+          offlineWordsFor = error
+          // words that name no file: said once (a later failure, a deploy hours later, is a deploy's)
+          if (!namesFile(key)) failedOffline.delete(key)
+        }
         count('stalechunk.notice')
-        notifyBoard(board, staleNotice(failedOffline ? OFFLINE_RETURN_TEXT : STALE_NOTICE_TEXT))
+        notifyBoard(board, staleNotice(offlineBefore ? OFFLINE_RETURN_TEXT : STALE_NOTICE_TEXT))
         return 'notice'
       }
       const last = readGuard()
@@ -375,6 +402,11 @@ export function createStaleChunkHandler(env: Env = defaultEnv) {
         if (held?.board === b) held = null
       }
     },
+    /** A lazy part loaded (`recoverChunk`, `lazyRetrying`): an earlier offline failure is over. */
+    loaded() {
+      failedOffline.clear()
+      offlineWordsFor = null
+    },
     /** Whether the browser says it is online (`recoverChunk` picks its offline fallback by it). */
     online: () => env.online(),
     /** The notice to draw outside a board (null: none). */
@@ -407,15 +439,110 @@ export const registerStaleChunkBoard = (b: StaleChunkBoard) => staleChunks.regis
 export function recoverChunk<T>(
   load: () => Promise<T>,
   fallback: T,
-  handler: Pick<StaleChunkHandler, 'report'> & Partial<Pick<StaleChunkHandler, 'online'>> = staleChunks,
+  handler: RecoverHandler = staleChunks,
   offline?: T,
 ): () => Promise<T> {
   return () =>
-    load().catch((e: unknown) => {
-      if (!isStaleChunkError(e)) throw e
-      handler.report(e)
-      return offline !== undefined && handler.online?.() === false ? offline : fallback
-    })
+    load().then(
+      (m) => {
+        handler.loaded?.()
+        return m
+      },
+      (e: unknown) => {
+        if (!isStaleChunkError(e)) throw e
+        handler.report(e)
+        return offline !== undefined && handler.online?.() === false ? offline : fallback
+      },
+    )
+}
+
+/** What `recoverChunk` and `retryingImport` tell (the page's handler by default). */
+type RecoverHandler = Pick<StaleChunkHandler, 'report'> & Partial<Pick<StaleChunkHandler, 'online' | 'loaded'>>
+
+/** One try at a lazy part's import (`retryingImport`). */
+export interface ImportAttempt<T> {
+  /** the import, started on the first call (a stale chunk resolves to the fallback, reported) */
+  result(): Promise<T>
+  /** it failed with a stale chunk (the fallback was its result) */
+  readonly failed: boolean
+}
+
+/**
+ * Wave P review: the import behind `lazyRetrying`. One attempt at a time; a failed one (reported, resolved to
+ * `fallback`) is kept until its fallback has been drawn (`shown`: the same mount drawing again after its suspense
+ * imports nothing again), and the attempt after that imports again. A loaded attempt is kept. Other errors throw.
+ */
+export function retryingImport<T>(
+  load: () => Promise<T>,
+  fallback: T,
+  handler: RecoverHandler = staleChunks,
+) {
+  let current: ImportAttempt<T> | null = null
+  const start = (): ImportAttempt<T> => {
+    let promise: Promise<T> | null = null
+    let failed = false
+    return {
+      get failed() {
+        return failed
+      },
+      result: () => {
+        promise ??= load().then(
+          (m) => {
+            handler.loaded?.()
+            return m
+          },
+          (e: unknown) => {
+            if (!isStaleChunkError(e)) throw e
+            failed = true
+            handler.report(e)
+            return fallback
+          },
+        )
+        return promise
+      },
+    }
+  }
+  return {
+    /** the attempt to draw now */
+    attempt(): ImportAttempt<T> {
+      current ??= start()
+      return current
+    },
+    /** `a` has been drawn: if it failed, the next attempt imports again */
+    shown(a: ImportAttempt<T>) {
+      if (a.failed && current === a) current = null
+    },
+  }
+}
+
+/**
+ * Wave P review: a lazy component whose import is tried again. React.lazy keeps what its import resolved to for the
+ * page's lifetime, so a part that failed to load offline stayed its fallback for the rest of the tab. Here each mount
+ * keeps one attempt (`retryingImport`); a failed one draws `Fallback` with the same props (the Share dialog's closes
+ * itself), and the next mount (the next open) imports again. Drawn inside a Suspense.
+ */
+export function lazyRetrying<P extends object>(
+  load: () => Promise<{ default: ComponentType<P> }>,
+  Fallback: ComponentType<P>,
+  handler: RecoverHandler = staleChunks,
+): ComponentType<P> {
+  type Loaded = { default: ComponentType<P> }
+  const imports = retryingImport<Loaded>(load, { default: Fallback }, handler)
+  const lazies = new WeakMap<ImportAttempt<Loaded>, ComponentType<P>>()
+  const lazyOf = (a: ImportAttempt<Loaded>): ComponentType<P> => {
+    let c = lazies.get(a)
+    if (!c) {
+      c = lazy(a.result) as unknown as ComponentType<P>
+      lazies.set(a, c)
+    }
+    return c
+  }
+  return function Retrying(props: P) {
+    // a mount that suspends keeps no state: the initializer runs again and gets the same attempt until it was shown
+    const [a] = useState(() => imports.attempt())
+    useEffect(() => imports.shown(a), [a])
+    return createElement(lazyOf(a), props)
+  }
 }
 
 /**

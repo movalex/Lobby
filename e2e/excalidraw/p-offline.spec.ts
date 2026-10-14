@@ -55,3 +55,54 @@ test('P-003: offline mid-edit shows a clear offline banner at once; a chunk that
     await expect.poll(() => itemText(b.page, note)).toBe('Typed while offline')
   })
 })
+
+// Wave P review: the Share dialog's code, asked for while offline, failed to load and React.lazy kept the failure
+// for the tab's lifetime: Share did nothing for the rest of the tab, and the code was never asked for again (so
+// not even a notice came). Now the failed open says nothing (the banner speaks) and closes itself, and the next
+// open asks for the code again: the dialog opens, or, where the browser keeps its failed import (Chromium does),
+// one calm notice says that part did not finish loading while offline (never "Lobby has been updated"), and its
+// Reload brings the dialog back.
+test('P-003 review: Share clicked while offline does nothing visible; back online, Share opens the dialog or says why once', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  const page = a.page
+  await a.context.setOffline(true)
+  await expect(page.getByTestId('offline-banner')).toBeVisible({ timeout: 3_000 })
+
+  await test.step('offline: Share shows nothing, no dialog and no notice', async () => {
+    await page.getByTestId('share-button').click()
+    await page.waitForTimeout(2_000)
+    await expect(page.getByTestId('share-dialog')).toHaveCount(0)
+    await expect(page.getByTestId('stale-chunk-notice')).toHaveCount(0)
+    await expect(page.getByTestId('stale-chunk-offline-notice')).toHaveCount(0)
+  })
+
+  await a.context.setOffline(false)
+  await expect(page.getByTestId('offline-banner')).toHaveCount(0, { timeout: 30_000 })
+  const dialog = page.getByTestId('share-dialog')
+  const notice = page.getByTestId('stale-chunk-notice')
+  await test.step('back online: Share opens the dialog, or one calm notice with Reload', async () => {
+    await page.getByTestId('share-button').click()
+    await expect(dialog.or(notice)).toBeVisible()
+  })
+  if ((await dialog.count()) > 0) return
+
+  await test.step('the notice: the offline words, once; Share again adds no second one', async () => {
+    await expect(notice).toHaveCount(1)
+    await expect(notice).toContainText('did not finish loading while you were offline')
+    await expect(notice).not.toContainText('has been updated')
+    await page.getByTestId('share-button').click()
+    await page.waitForTimeout(1_000)
+    await expect(notice).toHaveCount(1)
+    await expect(notice).toContainText('did not finish loading while you were offline')
+  })
+
+  await test.step('its Reload: the board again, and Share opens the dialog', async () => {
+    await page.getByTestId('stale-chunk-reload').click()
+    await expect(page.getByTestId('lobby-board')).toHaveAttribute('data-phase', 'ready', { timeout: 30_000 })
+    await page.getByTestId('share-button').click()
+    await expect(dialog).toBeVisible()
+    await expect(notice).toHaveCount(0)
+  })
+})

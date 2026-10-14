@@ -28,7 +28,7 @@
 import '../engine/engineGlobals.ts'
 import type { Board, BoardDetail, Me, TicketResponse } from '@draftroom/contracts'
 import {
-  lazy,
+  type ComponentProps,
   type ReactNode,
   Suspense,
   useCallback,
@@ -54,7 +54,7 @@ import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 import type { BoardRole } from '../../lib/permissions.ts'
 import { rememberBoardTitle, takeBoardDetail, takeBoardTicket } from '../../lib/prefetch-board.ts'
 import { boardPath, navigate, setLeaveGuard } from '../../lib/routing.ts'
-import { recoverChunk, registerStaleChunkBoard } from '../../lib/stale-chunk.ts'
+import { lazyRetrying, registerStaleChunkBoard } from '../../lib/stale-chunk.ts'
 import { useResource } from '../../lib/useResource.ts'
 import { CachedCopy } from '../../sync-quality/CachedCopy.tsx'
 import { cachedOfflineLabel } from '../../sync-quality/copy.ts'
@@ -112,11 +112,17 @@ import { duplicateLobbyData } from './tx.ts'
 import { onUploads, uploadsInFlight } from './uploads.ts'
 import './board.css'
 
-// K1-7: a stale chunk draws nothing here (the board's notice offers the reload) rather than unmounting the board
-const ShareDialog = lazy(
-  recoverChunk(() => import('../../board/ShareDialog.tsx').then((m) => ({ default: m.ShareDialog })), {
-    default: () => null,
-  } as unknown as { default: typeof import('../../board/ShareDialog.tsx').ShareDialog }),
+type ShareDialogProps = ComponentProps<typeof import('../../board/ShareDialog.tsx').ShareDialog>
+/** A Share dialog whose code did not load: nothing drawn, and the dialog closes, so the next Share opens it again. */
+function ShareDialogUnavailable({ onClose }: ShareDialogProps) {
+  useEffect(() => onClose(), [onClose])
+  return null
+}
+// K1-7: a stale chunk draws nothing here (the board's notice offers the reload) rather than unmounting the board;
+// wave P review: and the next Share asks for the code again (one that failed offline opens once back online)
+const ShareDialog = lazyRetrying<ShareDialogProps>(
+  () => import('../../board/ShareDialog.tsx').then((m) => ({ default: m.ShareDialog })),
+  ShareDialogUnavailable,
 )
 
 /** Longest an in-app navigation waits for this board's last changes to be acknowledged. */
