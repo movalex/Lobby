@@ -25,9 +25,11 @@ import {
   freshHandle,
   invitations,
   inviteToken,
+  listedPerson,
   mainCard,
   memberRow,
   openDashboard,
+  openPeopleList,
   openShareFromButton,
   personalWorkspace,
   requestRow,
@@ -243,16 +245,16 @@ test('a board owner who is a plain member: the picker and a typed @handle tag an
       expect((await aliceApi.fetch('POST', `/api/access-requests/${req?.id}/approve`, {})).status()).toBe(200)
     })
 
-    await test.step('bob’s picker says External · client.example.test; Add asks first, Cancel adds nothing', async () => {
+    await test.step('bob’s list says External · client.example.test; Invite asks first, Cancel adds nothing', async () => {
       await bob.page.goto(`/b/${bobBoard}`)
       await waitForLobbyBoard(bob.page)
       await openShareFromButton(bob.page)
       const dialog = shareDialog(bob.page)
-      const option = dialog.locator(`[data-testid="share-add-member"] option[value="${pat.me.user.id}"]`)
-      await expect(option).toHaveAttribute('data-external', 'true')
+      const option = listedPerson(await openPeopleList(bob.page), pat.me.user.id)
+      await expect(option.getByTestId('external-tag')).toHaveAttribute('data-domain', 'client.example.test')
       await expect(option).toContainText('External · client.example.test')
-      await dialog.getByTestId('share-add-member').selectOption(pat.me.user.id)
-      await dialog.getByTestId('share-add-submit').click()
+      await option.click()
+      await dialog.getByTestId('share-invite-submit').click()
       await expect(confirmBox(bob.page).getByTestId('outside-confirm-text')).toHaveText(
         outsideSentence(`Pat Client (${hint})`),
       )

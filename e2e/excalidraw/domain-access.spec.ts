@@ -23,11 +23,13 @@ import {
   freshHandle,
   invitations,
   inviteToken,
+  listedPerson,
   mainCard,
   memberRow,
   menuActions,
   openDashboard,
   openMoreWaysToShare,
+  openPeopleList,
   openShareFromButton,
   personalWorkspace,
   requestRow,
@@ -407,7 +409,6 @@ test('a board owner who is not a creator: the Share dialog only reduces access (
       await expect(dialog.getByTestId('member-list')).toBeVisible()
       for (const id of [
         'share-invite-input',
-        'share-add-member',
         'review-link-create',
         'share-workshop-shortcut',
         'share-more',
@@ -695,12 +696,10 @@ test('a creator managing an outside member: Owner is off with the reason in word
       await a.page.setViewportSize({ width: 1280, height: 720 })
     })
 
-    await test.step('"Or pick someone from the workspace…" lists nils, and offers edit, comment or view only', async () => {
+    await test.step('the invite field’s list (a click on it empty) lists nils, and offers edit, comment or view only', async () => {
       const dialog = shareDialog(a.page)
-      await expect(
-        dialog.getByTestId('share-add-member').locator(`option[value="${nilsNow.me.user.id}"]`),
-      ).toHaveCount(1)
-      await expect(dialog.getByTestId('share-add-role').locator('option')).toHaveText([
+      await expect(listedPerson(await openPeopleList(a.page), nilsNow.me.user.id)).toHaveCount(1)
+      await expect(dialog.getByTestId('share-invite-role').locator('option')).toHaveText([
         'Can edit',
         'Can comment',
         'Can view',

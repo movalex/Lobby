@@ -21,7 +21,7 @@ const carolS: WorkspaceMember = {
 const WS: WorkspaceMember[] = [wsMember('bob', 'member'), wsMember('carol', 'member'), carolS]
 const BOARD: BoardMember[] = [member('alice', 'owner', 'grant'), member('carol', 'viewer', 'grant')]
 
-const render = (text: string) =>
+const render = (text: string, over: Partial<Parameters<typeof InvitePeople>[0]> = {}) =>
   renderToStaticMarkup(
     createElement(InvitePeople, {
       boardId: 'b-abc1234567',
@@ -29,12 +29,12 @@ const render = (text: string) =>
       workspaceMembers: WS,
       boardMembers: BOARD,
       addable: [],
-      pendingAdd: false,
       canEmail: false,
       ownEmail: 'alice@dev.invalid',
       onGrant: async () => true,
       onLinkCreated: () => {},
       initialText: text,
+      ...over,
     }),
   )
 
@@ -96,6 +96,32 @@ describe('the invite field', () => {
     const hintId = html.match(/<p id="([^"]+)"[^>]*data-testid="share-invite-hint"/)?.[1]
     expect(hintId).toBeTruthy()
     expect(html).toContain(`aria-describedby="${hintId}"`)
+  })
+})
+
+describe('P-022: one field, no second row to pick someone from the workspace', () => {
+  const bob = WS[0] as WorkspaceMember
+  it('has no "Or pick someone" select, with people to add or without', () => {
+    for (const html of [render(''), render('', { addable: [bob] })]) {
+      expect(html).not.toContain('share-add-member')
+      expect(html).not.toContain('Or pick someone')
+      expect(html).not.toContain('share-add-submit')
+      // one role select, one Invite button
+      expect(count(html, '<select')).toBe(1)
+      expect(count(html, 'data-testid="share-invite-submit"')).toBe(1)
+    }
+  })
+
+  it('an empty field with people who can be added lists them when it is opened (a click), and not before', () => {
+    const closed = render('', { addable: [bob] })
+    expect(closed).toMatch(/<input[^>]*aria-expanded="false"/)
+    expect(closed).not.toContain('role="listbox"')
+    const open = render('', { addable: [bob], initialOpen: true })
+    expect(open).toMatch(/<input[^>]*aria-expanded="true"/)
+    expect(count(open, 'role="option"')).toBe(1)
+    expect(open).toContain(`data-user-id="${bob.user.id}"`)
+    // nobody to add: nothing to open
+    expect(render('', { addable: [], initialOpen: true })).not.toContain('role="listbox"')
   })
 })
 

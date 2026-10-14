@@ -18,7 +18,9 @@ import type { Locator, Page } from '@playwright/test'
 import { expect, test } from '../tests/support/canvas.ts'
 import {
   closeShare,
+  listedPerson,
   openMoreWaysToShare,
+  openPeopleList,
   openShareFromButton,
   shareDialog,
 } from '../tests/support/dashboard-share.ts'
@@ -179,9 +181,10 @@ test('F4: someone given access while the board is open can be @mentioned at once
   await test.step('alice adds dave in the Share dialog: @Dav finds him right away', async () => {
     await openShareFromButton(page)
     const dialog = shareDialog(page)
-    await dialog.getByTestId('share-add-member').selectOption(dave.id)
-    await dialog.getByTestId('share-add-role').selectOption('editor')
-    await dialog.getByTestId('share-add-submit').click()
+    // P-022: picked from the invite field's list (a click on the empty field), then Invite
+    await listedPerson(await openPeopleList(page), dave.id).click()
+    await dialog.getByTestId('share-invite-role').selectOption('editor')
+    await dialog.getByTestId('share-invite-submit').click()
     await expect(dialog.locator(`[data-testid="member-row"][data-user-id="${dave.id}"]`)).toBeVisible()
     await closeShare(page)
     await pressCommentTool(page)

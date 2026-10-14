@@ -1,19 +1,30 @@
 /* Sharing feature (dashboard-share): Share dialog additions, header badge, request-access form.
    Reuses the tokens and classes of apps/web/src/styles.css (never edited here). */
 
-/* The Share dialog holds more sections now: a little wider, and it scrolls within the viewport. */
+/* The Share dialog holds more sections now: a little wider, and it scrolls within the viewport. P-022: it is
+   anchored near the top (the browser centres a dialog, so it re-centred, its top edge moving, whenever a hint, a
+   list or a folded section grew): its top edge stays and it grows downward, then scrolls. */
 .dr-dialog--lg:has(.dr-sharing) {
   width: min(640px, calc(100vw - 32px));
+  margin-top: min(8vh, 64px);
+  margin-bottom: auto;
+  max-height: calc(100vh - min(8vh, 64px) - 24px);
   overflow-y: auto;
 }
 .dr-sharing .dr-share__section + .dr-share__section {
   margin-top: 18px;
 }
+/* position: the suggestions float over what is under the field, they do not push it down (P-022) */
 .dr-sharing__invite {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+/* room for two lines: the hint under the field changes with what is typed (P-022) */
+.dr-sharing .dr-share__hint[data-testid="share-invite-hint"] {
+  min-height: calc(2 * 1.45em);
 }
 .dr-sharing__invite-input {
   flex: 1 1 220px;
@@ -285,23 +296,6 @@
   opacity: 0.6;
   cursor: progress;
 }
-.dr-sharing__footer {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  margin-top: 18px;
-  padding-top: 14px;
-  border-top: 1px solid var(--dr-line);
-}
-/* K5-5: Copy board link sits after the people and the workspace access; the folded sections follow it. */
-.dr-sharing .dr-sharing__footer + .dr-share__section {
-  margin-top: 14px;
-}
-.dr-sharing__footer .dr-share__hint {
-  margin: 0;
-  flex: 1 1 200px;
-}
 
 /* ---- header badge (PRS-03) -------------------------------------------------------------------- */
 
@@ -491,8 +485,13 @@
 
 /* ---- K5-5 (wave K): the invite field's suggestion list (InviteField.tsx) and phones ------------------- */
 
+/* P-022: floats under the field (the dialog's top edge and the sections below it stay where they are) */
 .dr-sharing__suggestions {
-  flex: 1 1 100%;
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
   display: grid;
   gap: 1px;
   max-height: 248px;
@@ -557,4 +556,23 @@
   .dr-sharing .dr-share__add .dr-select--compact {
     flex: 1 1 auto;
   }
+}
+
+/* P-022: "Board link": who can open it with the link, and Copy board link, in one row */
+.dr-sharing__boardlink-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+.dr-sharing__boardlink-select {
+  flex: 1 1 200px;
+  min-width: 0;
+  font-weight: 600;
+}
+.dr-sharing__boardlink-copy {
+  flex: none;
+}
+.dr-sharing__boardlink-hint {
+  margin-top: 8px;
 }

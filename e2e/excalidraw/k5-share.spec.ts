@@ -3,7 +3,8 @@
 //    real suggestion list (a listbox, not a datalist) with one hint that names the person; ArrowDown /
 //    ArrowUp move, Enter or a press picks, Escape closes the list and leaves the dialog open; Invite grants
 //    as before (the server decides). A name that starts no one is said once.
-//  - The order: Invite people, People with access (the workspace access under it), Copy board link, then
+//  - The order: Invite people, People with access, Board link (who can open it with the link, and Copy board
+//    link: one section, P-022 wave P), then
 //    the collapsed "Guests and clients" (client and workshop links, invite by email, one-time links), then
 //    the collapsed "Advanced" (export and download), then the workspace's members. The client card's
 //    "Change" unfolds Advanced and puts the keyboard on the setting.
@@ -142,7 +143,7 @@ test('K5-5: the start of a colleague’s @handle or name lists them; one hint na
   })
 })
 
-test('K5-5: the order: Invite people, People with access, Copy board link, then Guests and clients, then Advanced; Change on the client card unfolds Advanced', async ({
+test('K5-5 / P-022: the order: Invite people, People with access, Board link (access + copy), then Guests and clients, then Advanced; Change on the client card unfolds Advanced', async ({
   canvasSession,
 }, testInfo) => {
   const a = await canvasSession('alice')
@@ -159,12 +160,16 @@ test('K5-5: the order: Invite people, People with access, Copy board link, then 
   expect(order).toEqual([
     'share-invite',
     'share-people',
-    'share-visibility',
-    'share-copy-section',
+    'share-link',
     'share-more',
     'share-advanced',
     'workspace-members',
   ])
+  // P-022: who can open the link and Copy board link are one section; there is one way to add a person (the field)
+  await expect(dialog.getByTestId('share-link').getByTestId('visibility-select')).toBeVisible()
+  await expect(dialog.getByTestId('share-link').getByTestId('share-copy-link')).toBeVisible()
+  await expect(dialog.getByTestId('share-add-member')).toHaveCount(0)
+  await expect(dialog.getByTestId('share-invite')).toHaveCount(1)
   // the folded ones are folded, and their summaries say what is inside
   await expect(dialog.getByTestId('share-more')).not.toHaveAttribute('open', /.*/)
   await expect(dialog.getByTestId('share-advanced')).not.toHaveAttribute('open', /.*/)
@@ -255,4 +260,38 @@ test('K5-5 (review refix): while the automatic copy of a new email-locked link i
     expect(await note.textContent()).not.toContain(FAILED)
     await expect(note).toContainText(FAILED, { timeout: 5000 })
   })
+})
+
+// P-022 (wave P): the dialog used to re-centre on every change (its top edge moved 75 -> 48 -> 24 px as the
+// hint, the list and the folded sections grew): it keeps its top edge now, and grows downward.
+test('P-022: the dialog keeps its top edge as the hint, the list and the folded sections grow', async ({
+  canvasSession,
+}) => {
+  const a = await canvasSession('alice')
+  const page = a.page
+  await page.setViewportSize({ width: 1280, height: 800 })
+  await openShareFromButton(page)
+  const dialog = shareDialog(page)
+  await expect(dialog.getByTestId('workspace-members')).toBeAttached()
+  const top = async () => Math.round((await dialog.boundingBox())?.y ?? -1)
+  const first = await top()
+  expect(first).toBeGreaterThanOrEqual(0)
+  const input = dialog.getByTestId('share-invite-input')
+  // a name that starts no one: the hint changes
+  await input.fill('Someone New')
+  await expect(dialog.getByTestId('share-invite-hint')).toContainText('No one in')
+  expect(await top()).toBe(first)
+  // an address: the hint changes again
+  await input.fill('someone@client.example.test')
+  await expect(dialog.getByTestId('share-invite-hint')).not.toContainText('No one in')
+  expect(await top()).toBe(first)
+  await input.fill('')
+  await openMoreWaysToShare(page)
+  expect(await top()).toBe(first)
+  await dialog.getByTestId('share-advanced-toggle').click()
+  await expect(dialog.getByTestId('share-advanced')).toHaveAttribute('open', '')
+  expect(await top()).toBe(first)
+  // it grows downward only and stays on the screen (the rest scrolls inside it)
+  const box = await dialog.boundingBox()
+  expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(800)
 })

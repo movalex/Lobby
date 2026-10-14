@@ -5,13 +5,16 @@
 // sees who has access and can ask for more. The API enforces every rule; this only offers what the
 // shared permission rules allow.
 //
-// Order (K5-5, wave K; it opened on the client-link policy text before): "Invite people" first (the field
-// lists the people whose @handle or name starts with what is typed: ../features/sharing/InviteField.tsx),
-// pending requests, "People with access" with the workspace access under it, "Copy board link", then the
+// Order (K5-5, wave K; P-022, wave P: one way in, then who is in, then the link): "Invite people" first, ONE field
+// with a role (it lists the people whose @handle or name starts with what is typed, and every person who can still
+// be given access when it is clicked empty: ../features/sharing/InviteField.tsx; it was a second "Or pick someone
+// from the workspace" row), pending requests, "People with access", "Board link" (who can open it with the link, and
+// Copy board link, one section), then the
 // collapsed "Guests and clients" (the client review link: comment, 14 days, join with just a name, created
 // and copied by one button; the workshop link; invite by email; one-time invite links; its summary names
 // what is open inside, and it opens by itself while a client or workshop link is open), then the collapsed "Advanced"
-// (export and download; its summary says the setting), then the workspace's members. Someone who may only
+// (export and download; its summary says the setting), then the workspace's members. The dialog keeps its top edge
+// as it grows (sharing.css), and the hint under the field keeps room for two lines. Someone who may only
 // reduce access sees every open link and the export setting without unfolding anything. Every guest option
 // sits above its Create button and applies to the link that button makes (once a link is open, the box says
 // "for the next link"); a link that exists has its own box in its row (G2: PATCH review-links/:id).
@@ -93,7 +96,6 @@ import { Dialog } from '../ui/Dialog.tsx'
 import { boardLinkCopyFailed, copyBounded, copyFailedText, copyNote } from './share-copy.ts'
 import {
   type AccessDetail,
-  ADD_MEMBER_ROLES,
   ADDRESS_CHECK_FAILED,
   ADVANCED_SECTION_TITLE,
   accessSource,
@@ -130,7 +132,6 @@ import {
   parseInviteTarget,
   pendingInviteLabel,
   pickedText,
-  pickerOptionText,
   ROLE_OPTION_LABEL,
   raisesAccess,
   removalNote,
@@ -513,7 +514,6 @@ export function ShareDialog({
             workspaceMembers={wsMembers.data ?? []}
             boardMembers={rows}
             addable={addable}
-            pendingAdd={pendingUser === 'add'}
             canEmail={canEmail}
             ownEmail={access?.email ?? null}
             onGrant={(userId, r) => run('add', () => api.putMember(board.id, userId, r))}
@@ -584,9 +584,9 @@ export function ShareDialog({
           {!canManage && <p className="dr-share__note">Only board owners can change who has access.</p>}
         </section>
 
-        {/* Who in the workspace can open it, right under who has access (PRI-07: and an open link, for
-            people who cannot manage access). */}
-        <VisibilitySection
+        {/* P-022: the link and who can open it with it, right under who has access (PRI-07: and an open link,
+            for people who cannot manage access). */}
+        <BoardLink
           board={board}
           workspaceName={workspace.name}
           canRaise={canShare}
@@ -631,8 +631,6 @@ export function ShareDialog({
               />
             </section>
           )}
-
-        <CopyBoardLink boardId={board.id} />
 
         {/* DANA-03 / K5-5: client and workshop links, invite by email and one-time links, one click away.
             The summary names what is open inside; an open link unfolds it on the first load (a
@@ -769,19 +767,19 @@ export function InvitePeople({
   workspaceMembers,
   boardMembers,
   addable,
-  pendingAdd,
   canEmail,
   ownEmail,
   onGrant,
   onLinkCreated,
   initialText = '',
+  initialOpen = false,
 }: {
   boardId: string
   workspaceName: string
   workspaceMembers: readonly WorkspaceMember[]
   boardMembers: readonly BoardMember[]
+  /** Workspace members who can still be given access: the list a click on the empty field opens (P-022). */
   addable: readonly WorkspaceMember[]
-  pendingAdd: boolean
   /** This server can email invitations (the "Invite by email" form below does). */
   canEmail: boolean
   /** The signed-in account's own address (`Me.access.email`): never locked a link to (fixer round 3). */
@@ -791,6 +789,8 @@ export function InvitePeople({
   onLinkCreated(): void
   /** What the field starts with (the markup test; the dialog starts empty). */
   initialText?: string
+  /** The empty field starts with its list open (the markup test; the dialog starts closed). */
+  initialOpen?: boolean
 }) {
   const inputId = useId()
   const listId = useId()
@@ -801,7 +801,9 @@ export function InvitePeople({
   const [text, setText] = useState(initialText)
   // K5-5: someone picked from the list (by id: two people may share a name), while the field still says them
   const [picked, setPicked] = useState<{ id: string; text: string } | null>(null)
-  const [list, setList] = useState<SuggestState>(initialText.trim() ? { open: true, active: 0 } : CLOSED)
+  const [list, setList] = useState<SuggestState>(
+    initialText.trim() || initialOpen ? { open: true, active: 0 } : CLOSED,
+  )
   const [role, setRole] = useState<Exclude<BoardRole, 'owner'>>('editor')
   const [roleTouched, setRoleTouched] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -816,7 +818,8 @@ export function InvitePeople({
   const target: InviteTarget = pickedMember
     ? targetFor(pickedMember, boardMembers)
     : parseInviteTarget(text, workspaceMembers, boardMembers)
-  const suggestions = target.kind === 'partial' ? target.matches : []
+  // P-022: an empty field lists everyone who can be given access (the "Or pick someone from the workspace" row's job)
+  const suggestions = target.kind === 'partial' ? target.matches : text.trim() === '' ? addable : []
   const { confirm, box } = useOutsideAsk()
   // Fixer round 3 (§21): said at once, while typing, and nothing is created for it.
   const ownAddress = target.kind === 'email' && isOwnAddress(target.email, ownEmail)
@@ -958,6 +961,9 @@ export function InvitePeople({
             const m = r.pick === null ? null : suggestions[r.pick]
             if (m) pick(m)
           }}
+          onOpen={() => {
+            if (text.trim() === '' && addable.length > 0) setList({ open: true, active: 0 })
+          }}
           onBlur={() => setList((l) => ({ ...l, open: false }))}
         />
         <label htmlFor={roleId} className="dr-sr-only">
@@ -1035,89 +1041,7 @@ export function InvitePeople({
           </p>
         </div>
       )}
-      {/* F13: while someone is typed above, the suggestions list is the picker; a second one below
-          would read as another invite row. */}
-      {addable.length > 0 && text.trim() === '' && (
-        <AddMember
-          candidates={addable}
-          pending={pendingAdd}
-          onAdd={(userId, r) => {
-            void onGrant(userId, r)
-          }}
-        />
-      )}
     </section>
-  )
-}
-
-function AddMember({
-  candidates,
-  pending,
-  onAdd,
-}: {
-  candidates: readonly WorkspaceMember[]
-  pending: boolean
-  onAdd(userId: string, role: BoardRole): void
-}) {
-  const personId = useId()
-  const roleId = useId()
-  const [userId, setUserId] = useState('')
-  // Never owner here (like Invite people): ownership is set on the person's row, which knows who may own.
-  const [role, setRole] = useState<Exclude<BoardRole, 'owner'>>('editor')
-  const { confirm, box } = useOutsideAsk()
-  return (
-    <>
-      <form
-        className="dr-share__add"
-        onSubmit={async (e) => {
-          e.preventDefault()
-          const picked = candidates.find((m) => m.user.id === userId)
-          if (!picked) return
-          // Wave J: someone outside Dark Burn / TPG is asked about first.
-          if (!(await confirmPerson(confirm, picked, 'Give access'))) return
-          onAdd(picked.user.id, role)
-          setUserId('')
-        }}
-      >
-        <label htmlFor={personId} className="dr-sr-only">
-          Person from the workspace
-        </label>
-        <select
-          id={personId}
-          className="dr-input dr-select"
-          data-testid="share-add-member"
-          value={userId}
-          onChange={(e) => setUserId(e.target.value)}
-        >
-          <option value="">Or pick someone from the workspace…</option>
-          {candidates.map((m) => (
-            <option key={m.user.id} value={m.user.id} data-external={m.outside === true || undefined}>
-              {pickerOptionText(m)}
-            </option>
-          ))}
-        </select>
-        <label htmlFor={roleId} className="dr-sr-only">
-          Their role on this board
-        </label>
-        <select
-          id={roleId}
-          className="dr-input dr-select dr-select--compact"
-          data-testid="share-add-role"
-          value={role}
-          onChange={(e) => setRole(e.target.value as Exclude<BoardRole, 'owner'>)}
-        >
-          {ADD_MEMBER_ROLES.map((r) => (
-            <option key={r} value={r}>
-              {ROLE_OPTION_LABEL[r]}
-            </option>
-          ))}
-        </select>
-        <button type="submit" className="dr-btn" data-testid="share-add-submit" disabled={!userId || pending}>
-          Add
-        </button>
-      </form>
-      {box}
-    </>
   )
 }
 
@@ -1448,9 +1372,14 @@ function AccessRequestRow({
   )
 }
 
-// ---- visibility ----------------------------------------------------------------------------------
+// ---- the board link ------------------------------------------------------------------------------
 
-function VisibilitySection({
+/**
+ * P-022: "Board link": who can open it with the link (the board's workspace access: private, or everyone in the
+ * workspace can view or edit) and Copy board link, one section (they were two, "Workspace access" under the people and
+ * "Copy board link" at the foot). Exported for its markup test.
+ */
+export function BoardLink({
   board,
   workspaceName,
   editable,
@@ -1469,41 +1398,71 @@ function VisibilitySection({
 }) {
   const id = useId()
   const [pending, setPending] = useState(false)
+  const [copied, setCopied] = useState<boolean | null>(null)
+  const url = absoluteUrl(boardPath(board.id))
   const current = VISIBILITY_OPTIONS.find((o) => o.value === board.visibility)
   return (
-    <section className="dr-share__section" data-testid="share-visibility">
-      <label htmlFor={id} className="dr-share__heading">
-        Workspace access
-      </label>
-      <div className="dr-share__visibility">
+    <section
+      className="dr-share__section dr-sharing__boardlink"
+      aria-labelledby={`${id}-h`}
+      data-testid="share-link"
+    >
+      <h3 id={`${id}-h`} className="dr-share__heading">
+        Board link
+      </h3>
+      <div className="dr-sharing__boardlink-row" data-testid="share-visibility">
         <span className="dr-share__visicon" aria-hidden="true" data-visibility={board.visibility} />
-        <div className="dr-share__vistext">
-          <select
-            id={id}
-            className="dr-input dr-select"
-            data-testid="visibility-select"
-            value={board.visibility}
-            disabled={!editable || pending}
-            onChange={async (e) => {
-              setPending(true)
-              await onChange(e.target.value as BoardVisibility)
-              setPending(false)
-            }}
+        <label htmlFor={id} className="dr-sr-only">
+          Who can open the board link
+        </label>
+        <select
+          id={id}
+          className="dr-input dr-select dr-sharing__boardlink-select"
+          data-testid="visibility-select"
+          value={board.visibility}
+          disabled={!editable || pending}
+          onChange={async (e) => {
+            setPending(true)
+            await onChange(e.target.value as BoardVisibility)
+            setPending(false)
+          }}
+        >
+          {visibilityChoices(board.visibility, canRaise).map((o) => (
+            <option key={o.value} value={o.value} disabled={o.disabled}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <span className="dr-sharing__boardlink-copy" data-testid="share-copy-section">
+          <button
+            type="button"
+            className="dr-btn"
+            data-testid="share-copy-link"
+            onClick={async () => setCopied(await copyBounded(url))}
           >
-            {visibilityChoices(board.visibility, canRaise).map((o) => (
-              <option key={o.value} value={o.value} disabled={o.disabled}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-          <p className="dr-share__hint">{current?.describe(workspaceName)}</p>
-          {linkNote && (
-            <p className="dr-share__hint dr-sharing__linknote" data-testid="share-link-note">
-              {linkNote}
-            </p>
-          )}
-        </div>
+            <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+              <path
+                d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.9"
+                strokeLinecap="round"
+              />
+            </svg>
+            {copied ? 'Board link copied' : 'Copy board link'}
+          </button>
+        </span>
       </div>
+      <p className="dr-share__hint dr-sharing__boardlink-hint" role="status">
+        {copied === false
+          ? boardLinkCopyFailed(url)
+          : `${current?.describe(workspaceName) ?? ''} Anyone else who opens the link can request access.`}
+      </p>
+      {linkNote && (
+        <p className="dr-share__hint dr-sharing__linknote" data-testid="share-link-note">
+          {linkNote}
+        </p>
+      )}
     </section>
   )
 }
@@ -2861,36 +2820,5 @@ function ReviewLinkRow({
         )}
       </div>
     </li>
-  )
-}
-
-function CopyBoardLink({ boardId }: { boardId: string }) {
-  const [copied, setCopied] = useState<boolean | null>(null)
-  const url = absoluteUrl(boardPath(boardId))
-  return (
-    <footer className="dr-sharing__footer" data-testid="share-copy-section">
-      <button
-        type="button"
-        className="dr-btn"
-        data-testid="share-copy-link"
-        onClick={async () => setCopied(await copyBounded(url))}
-      >
-        <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
-          <path
-            d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.9"
-            strokeLinecap="round"
-          />
-        </svg>
-        {copied ? 'Board link copied' : 'Copy board link'}
-      </button>
-      <span className="dr-share__hint" role="status">
-        {copied === false
-          ? boardLinkCopyFailed(url)
-          : 'Only people with access can open it. Anyone else who opens it can request access.'}
-      </span>
-    </footer>
   )
 }

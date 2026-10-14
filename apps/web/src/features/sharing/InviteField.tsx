@@ -7,7 +7,8 @@
 // (the field keeps the keyboard: aria-activedescendant), Enter or a press picks (the field then says
 // "@handle", or the name), Escape closes the list and leaves the dialog open, Tab leaves. Picking grants
 // nothing: Invite does, as before, and the server has the final word. The hint under the field is one line,
-// said once (share-model.ts inviteHintText).
+// said once (share-model.ts inviteHintText). P-022: a click on the empty field (or ArrowDown) lists everyone in the
+// workspace who can still be given access, so there is no second "pick someone" row.
 import type { OutsideStatus, WorkspaceMember } from '@draftroom/contracts'
 import type { KeyboardEvent, Ref } from 'react'
 import { initialsFor, safeColor } from '../../lib/identity.ts'
@@ -74,6 +75,7 @@ export function InviteInput({
   inputRef,
   onChange,
   onKey,
+  onOpen,
   onBlur,
 }: {
   id: string
@@ -87,6 +89,8 @@ export function InviteInput({
   onChange(text: string): void
   /** A key the list handled (the event's default is already prevented). */
   onKey(e: KeyboardEvent<HTMLInputElement>): void
+  /** A click on the field (P-022: with nothing typed, it opens the list of people who can be given access). */
+  onOpen?(): void
   onBlur(): void
 }) {
   const open = state.open && count > 0
@@ -109,6 +113,7 @@ export function InviteInput({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       onKeyDown={onKey}
+      onClick={onOpen}
       onBlur={onBlur}
     />
   )
