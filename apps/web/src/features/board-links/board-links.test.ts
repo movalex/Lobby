@@ -524,7 +524,9 @@ describe('the feature', () => {
     expect(linkedFromLabel(1)).toBe('Linked from 1 board')
     expect(linkedFromLabel(3)).toBe('Linked from 3 boards')
     expect(feature.topBar?.map((t) => t.id)).toEqual(['board-links.linked-from-top'])
-    expect(feature.topBar?.[0]?.overflowCaption).toBe('Linked from')
+    // no overflow caption: the button says "Linked from N" itself, and on a phone a caption stood empty
+    // over nothing when no board links here (a11y-phone-reach W5-50)
+    expect(feature.topBar?.[0]?.overflowCaption).toBeUndefined()
     const entry = feature.mainMenu?.find((m) => m.id === 'board-links.linked-from')
     expect(entry?.group).toBe('board')
     expect(BACKLINKS_EARLY_DELAY_MS).toBeLessThan(BACKLINKS_OPEN_DELAY_MS)
