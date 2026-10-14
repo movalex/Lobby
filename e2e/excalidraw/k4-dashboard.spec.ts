@@ -159,7 +159,7 @@ test('"Start something" is not for accounts that cannot create (the api still re
   }
 })
 
-test('a name-only guest gets neither the template row nor the What’s new card, only the Feedback pill', async ({
+test('a name-only guest gets neither the template row, the What’s new card nor the Feedback pill (P-023)', async ({
   browser,
 }) => {
   test.setTimeout(120_000)
@@ -175,7 +175,8 @@ test('a name-only guest gets neither the template row nor the What’s new card,
     await expect(guest.page.getByTestId('start-row')).toHaveCount(0)
     await expect(guest.page.getByTestId('whats-new')).toHaveCount(0)
     await expect(guest.page.getByTestId('create-board')).toHaveCount(0)
-    await expect(guest.page.getByTestId('feedback-pill')).toBeVisible()
+    // P-023: Feedback is the team's; a name-only guest is not offered it
+    await expect(guest.page.getByTestId('feedback-pill')).toHaveCount(0)
   } finally {
     await guestContext.close()
     await p.context.close()
