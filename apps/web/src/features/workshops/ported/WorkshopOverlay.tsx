@@ -50,6 +50,7 @@ import {
   revealConfetti,
   topResults,
   votePromptText,
+  votesWereCast,
 } from '../voting.ts'
 import { useIsFacilitator, useNow, useWorkshop } from '../workshop-context.ts'
 import { followingNow, stopFollowing, zoomToBounds } from './camera.ts'
@@ -271,11 +272,13 @@ export function WorkshopTopLayer({ ctx }: { ctx: Ctx }) {
   // Phones: the timer pill sits in the top bar's "⋯" menu, so a running timer also floats on the
   // canvas, read-only (final review R2).
   const phone = useMediaQuery(PHONE_QUERY)
+  // P-015: no confetti for a vote nobody cast a dot in
+  const celebrate = !!snap.vote && votesWereCast(snap.vote)
   return (
     <>
       <div className="dr-wk-top" data-testid="workshop-top">
         <TimerFlash seq={snap.alertSeq} />
-        <RevealConfetti seq={snap.resultsNews?.seq ?? null} />
+        <RevealConfetti seq={celebrate ? (snap.resultsNews?.seq ?? null) : null} />
         {(presenting || phone) && (
           <PresentingTimer ctx={ctx} store={store} corner={presenting ? 'left' : 'right'} />
         )}
@@ -930,7 +933,7 @@ function ResultsCard({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
   return (
     <section className="dr-wk-results-card" aria-label="Vote results" data-testid="vote-results-card">
       <div className="dr-wk-results-card__head">
-        <strong>Results are in</strong>
+        <strong>{top.length === 0 ? 'No votes were cast' : 'Results are in'}</strong>
         <span className="dr-muted">{vote.session.title}</span>
         <button
           type="button"
@@ -941,9 +944,7 @@ function ResultsCard({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
           ×
         </button>
       </div>
-      {top.length === 0 ? (
-        <p className="dr-muted">Nobody voted.</p>
-      ) : (
+      {top.length > 0 && (
         <ol className="dr-wk-results-card__list">
           {top.map((r) => (
             <li key={r.shapeId} data-testid="vote-results-card-row" data-shape-id={r.shapeId}>
@@ -958,17 +959,19 @@ function ResultsCard({ ctx, store }: { ctx: Ctx; store: WorkshopStore }) {
           ))}
         </ol>
       )}
-      <button
-        type="button"
-        className="dr-btn dr-btn--sm dr-btn--primary"
-        data-testid="vote-results-card-all"
-        onClick={() => {
-          store.dismissResultsNews('see-all')
-          ctx.openPanel('voting')
-        }}
-      >
-        See all results
-      </button>
+      {top.length > 0 && (
+        <button
+          type="button"
+          className="dr-btn dr-btn--sm dr-btn--primary"
+          data-testid="vote-results-card-all"
+          onClick={() => {
+            store.dismissResultsNews('see-all')
+            ctx.openPanel('voting')
+          }}
+        >
+          See all results
+        </button>
+      )}
     </section>
   )
 }

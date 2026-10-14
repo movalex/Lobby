@@ -88,6 +88,22 @@ describe('the Voting panel for the facilitator (K3-2)', () => {
     expect(text(html)).toContain('0 of 1 done · 2 votes cast')
   })
 
+  it('P-015: a reveal nobody voted in ends calmly: "No votes were cast", not "0 votes from 0 people"', async () => {
+    const kit = workshopKit({ others: [COLLEAGUE], elements: [...note('n1', 'Weekly demo')] })
+    await loadWorkshop(kit, {
+      timer: null,
+      vote: vote(
+        { participants: 0, totalVotesCast: 0, results: [] },
+        { status: 'revealed', closedAt: iso(-1_000), revealedAt: iso(-500) },
+      ),
+      serverNow: iso(0),
+    })
+    const html = panel(kit)
+    expect(text(html)).toContain('Voting is over. No votes were cast. Everyone sees the results.')
+    expect(text(html)).not.toContain('0 votes from 0 people')
+    expect(text(html)).toContain('No votes were cast.')
+  })
+
   it('after the reveal: a final state, the results, and the next vote', async () => {
     const kit = workshopKit({ others: [COLLEAGUE], elements: [...note('n1', 'Weekly demo')] })
     await loadWorkshop(kit, {

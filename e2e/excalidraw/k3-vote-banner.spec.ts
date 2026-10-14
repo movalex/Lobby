@@ -153,3 +153,40 @@ test('P-001: a click on a note before joining joins and casts at once; the promp
     await expect(banner(d.page)).toHaveCount(0)
   })
 })
+
+// P-015: a vote nobody cast a dot in used to end with confetti, "0 votes from 0 people" and a survey question.
+test('P-015: ending a vote nobody voted in is calm: no confetti, "No votes were cast", no survey', async ({
+  join,
+  board,
+}) => {
+  const a = await join('alice')
+  const b = await join('bob', 'editor')
+  await seed(a.page, { notes: NOTES })
+  await expectItemsEverywhere(
+    [b],
+    NOTES.map((n) => n.id),
+  )
+  const sid = await startVote(a, board)
+  await expect(banner(b.page)).toBeVisible()
+  expect((await post(a, `/api/votes/${sid}/reveal`)).status()).toBe(200)
+
+  await test.step('bob: the card says nothing was cast; there is no confetti and no list', async () => {
+    const card = b.page.getByTestId('vote-results-card')
+    await expect(card).toBeVisible()
+    await expect(card).toContainText('No votes were cast')
+    await expect(card.getByTestId('vote-results-card-row')).toHaveCount(0)
+    await b.page.waitForTimeout(600)
+    await expect(b.page.getByTestId('vote-confetti')).toHaveCount(0)
+  })
+
+  await test.step('alice, who ran it: no confetti and no "How did this go?" question', async () => {
+    await expect(a.page.getByTestId('vote-results-card')).toBeVisible()
+    await a.page.waitForTimeout(1_500)
+    await expect(a.page.getByTestId('vote-confetti')).toHaveCount(0)
+    await expect(a.page.getByTestId('feedback-prompt')).toHaveCount(0)
+    await a.page.getByTestId('dock-tab-voting').click()
+    await expect(a.page.getByTestId('vote-final')).toHaveText(
+      'Voting is over. No votes were cast. Everyone sees the results.',
+    )
+  })
+})
