@@ -164,6 +164,8 @@ const LANDED_PARTS: ReadonlySet<string> = new Set([
   // 3a: parts/styles.ts
   'styles.of',
   'styles.apply',
+  // wave P (P-011): note sizes, in 3a's part
+  'styles.resizeNotes',
   // 3c: parts/follow.ts
   'follow.current',
   'follow.start',
@@ -317,6 +319,7 @@ export const LOBBY_CANVAS_MEMBERS: readonly MemberInfo[] = [
       ['styles.setNext', '2C'],
       ['styles.of', '3a'],
       ['styles.apply', '3a'],
+      ['styles.resizeNotes', '3a'],
       ['presence.peers', '2C'],
       ['presence.peer', '2C'],
       // wave L (W6 for the wave): composed from the C0 registries' `dragger`

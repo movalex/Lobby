@@ -38,6 +38,7 @@ import {
   selectIds,
   showBounds,
 } from './ai-kit.ts'
+import { showStylePanel } from './canvas-ux-kit.ts'
 
 const test = base.extend<object, { openai: FakeOpenAi }>({
   openai: [
@@ -103,6 +104,8 @@ test.describe('on a 1440 x 900 window', () => {
     canvasSession,
   }) => {
     const a = await canvasSession('alice')
+    // P-021: the style panel opens on request; this person has it open
+    await showStylePanel(a.page)
     const foreign = foreignRequests(a.page)
     const ids = await rightHandNotes(a.page)
     await selectIds(a.page, ids)

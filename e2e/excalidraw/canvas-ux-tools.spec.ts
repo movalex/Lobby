@@ -18,7 +18,7 @@ import {
 } from '../tests/support/canvas.ts'
 import { openPhoneSession, PHONE, scrollsSideways } from './a11y-kit.ts'
 import { focusBoard, settled } from './board-kit.ts'
-import { toolbarIds, waitForCanvasUx, withCanvas } from './canvas-ux-kit.ts'
+import { showStylePanel, toolbarIds, waitForCanvasUx, withCanvas } from './canvas-ux-kit.ts'
 import { waitForNavigation } from './navigation-kit.ts'
 
 test.use({ viewport: { width: 1440, height: 900 } })
@@ -140,6 +140,8 @@ test('the highlighter: in More and on Shift+D; a stroke is a wide half-transpare
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
+  // P-021: the style panel opens on request; this person has it open
+  await showStylePanel(a.page)
   const b = await canvasSession('bob')
   await waitForCanvasUx(a.page)
   const penColor = (await withCanvas(a.page, (c) => c.styles.next(), null)).strokeColor
@@ -328,6 +330,8 @@ test('the toolbar by canvas width: at 700 px the quick actions sit on the toolba
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
+  // P-021: the style panel opens on request; this person has it open
+  await showStylePanel(a.page)
   await waitForCanvasUx(a.page)
   const n = await settled(a.page, createNote(a.page, { x: 100, y: 100, text: 'Wide' }))
   await select(a.page, [n])

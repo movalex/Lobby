@@ -48,8 +48,10 @@ const base = (id: string, type: string, extra: Record<string, unknown> = {}): Ca
     ...extra,
   }) as unknown as CanvasElement
 
-const note = (id: string, fill: string, size: number, align = 'center') => [
+const note = (id: string, fill: string, size: number, align = 'center', width = 200) => [
   base(id, 'stickynote', {
+    width,
+    height: width,
     backgroundColor: fill,
     strokeColor: '#1b2330',
     boundElements: [{ id: `${id}-t`, type: 'text' }],
@@ -92,6 +94,7 @@ function kit(els: CanvasElement[], selection: string[], opts: { readOnly?: boole
   const get = (id: string) => map.get(id)
   const transacts: { label: string; ops: [string, Record<string, unknown>][]; join: boolean }[] = []
   const applies: { patch: StyleValues; ids: readonly string[] }[] = []
+  const resizes: { side: number; fontSize: number; ids: readonly string[] }[] = []
   const canvas = {
     get,
     items: () => [...map.values()],
@@ -115,6 +118,15 @@ function kit(els: CanvasElement[], selection: string[], opts: { readOnly?: boole
           join: false,
         })
       },
+      // P-011: the real one is one transact too (canvas/api/parts/styles.ts noteSizeWrites); recorded as one here
+      resizeNotes: (side: number, fontSize: number, ids?: readonly string[]) => {
+        resizes.push({ side, fontSize, ids: ids ?? selection })
+        transacts.push({
+          label: 'note size',
+          ops: (ids ?? selection).map((id) => [id, { width: side }]),
+          join: false,
+        })
+      },
       next: () => ({}),
       setNext: () => {},
     },
@@ -128,7 +140,7 @@ function kit(els: CanvasElement[], selection: string[], opts: { readOnly?: boole
       transacts.push({ label, ops, join: o?.joinPrevious === true })
     },
   }
-  return { canvas: canvas as unknown as LobbyCanvas, transacts, applies }
+  return { canvas: canvas as unknown as LobbyCanvas, transacts, applies, resizes }
 }
 
 const control = (controls: readonly TierControl[] | undefined, id: TierStyleKind) => {
@@ -198,8 +210,9 @@ describe('which selections get tier one', () => {
 })
 
 describe('notes: colour, size, alignment', () => {
+  // P-011: a note's size is its width (Medium: 200); the second note's width follows its words' size here
   const two = (a: string, b: string, sa = 22, sb = 22, al = 'center', bl = 'center') =>
-    kit([...note('n1', a, sa, al), ...note('n2', b, sb, bl)], ['n1', 'n2'])
+    kit([...note('n1', a, sa, al), ...note('n2', b, sb, bl, sb === 22 ? 200 : 400)], ['n1', 'n2'])
 
   it('the controls, with the note palette’s names; mixed values read mixed', () => {
     const same = two('#f8e48f', '#f8e48f')
@@ -229,10 +242,14 @@ describe('notes: colour, size, alignment', () => {
     ])
   })
 
-  it('a size pick is one styles.apply of the label size on the notes (it lays the words out, skips a leased label)', () => {
+  it('P-011: a size pick resizes the notes, their words with them: one styles.resizeNotes (it lays the words out, skips a leased note)', () => {
     const k = two('#f8e48f', '#a6d8f3', 22, 32)
     expectOneStep(k, 'font-size', 'font-size', 'xl')
-    expect(k.applies).toEqual([{ patch: { fontSize: 32 }, ids: ['n1', 'n2'] }])
+    expect(k.resizes).toEqual([{ side: 400, fontSize: 44, ids: ['n1', 'n2'] }])
+    expect(k.applies).toEqual([])
+    // a note's size reads from the note, not from its words
+    expect(readValue(kit(note('n3', '#f8e48f', 32, 'center', 300), ['n3']), 'font-size')).toBe('l')
+    expect(readValue(kit(note('n4', '#f8e48f', 22, 'center', 260), ['n4']), 'font-size')).toBeNull()
   })
 
   it('an alignment pick is one styles.apply on the notes', () => {

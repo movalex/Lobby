@@ -26,6 +26,7 @@ import {
 } from '../tests/support/canvas.ts'
 import { openPhoneSession } from './a11y-kit.ts'
 import { emptyCanvasPoint } from './board-kit.ts'
+import { showStylePanel } from './canvas-ux-kit.ts'
 
 const avatar = (s: CanvasSession, of: CanvasSession) =>
   s.page.locator(`[data-testid="presence-user"][data-user-id="${of.id}"]`)
@@ -641,6 +642,8 @@ test('W5-32: the style panel does not hide a chip: with a tool picked, a chip fo
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
+  // P-021: the style panel opens on request; this person has it open
+  await showStylePanel(a.page)
   const b = await canvasSession('bob')
   const at = await hover(b)
   await expect(cursorOf(a, b)).toBeVisible()

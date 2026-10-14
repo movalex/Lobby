@@ -16,7 +16,7 @@ import { applySnapDefault, SNAP_DEFAULT_KEY, startToolFor } from './defaults.ts'
 import { blocksNativeCopy, exportAllowedWith, exportGate } from './export-gate.ts'
 import { mainMenuRows } from './MainMenu.tsx'
 import { groupRows, type MenuRow, resolveEntry } from './Menu.tsx'
-import { sharedOf, showStylePanel } from './StylePanel.tsx'
+import { kindOf, sharedOf, showStylePanel } from './StylePanel.tsx'
 
 describe('style panel visibility (RETRO-20, R16)', () => {
   it('shows for a selection or a creation tool whose next shape it sets; never for frames only', () => {
@@ -29,6 +29,16 @@ describe('style panel visibility (RETRO-20, R16)', () => {
     expect(showStylePanel(['note'], 'select')).toBe(true)
     expect(showStylePanel(['frame', 'frame'], 'select')).toBe(false)
     expect(showStylePanel(['frame', 'note'], 'select')).toBe(true)
+  })
+  it('P-017: a link card or a board card is a card, not a shape: no shape styles for it (alone or with a frame)', () => {
+    const rect = (kind?: string) =>
+      ({ id: 'r', type: 'rectangle', customData: kind ? { lobby: { kind } } : undefined }) as never
+    expect(kindOf(rect('link-card'))).toBe('card')
+    expect(kindOf(rect('board-card'))).toBe('card')
+    expect(kindOf(rect())).toBe('shape')
+    expect(showStylePanel(['card'], 'select')).toBe(false)
+    expect(showStylePanel(['card', 'frame'], 'select')).toBe(false)
+    expect(showStylePanel(['card', 'note'], 'select')).toBe(true)
   })
   it('a control reads mixed only when the values differ, null for a value outside the vocabulary', () => {
     expect(sharedOf([])).toBeUndefined()

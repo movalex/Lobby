@@ -4,7 +4,7 @@
 // or the real UI.
 import type { Page } from '@playwright/test'
 import type { LobbyCanvas } from '../../apps/web/src/canvas/api/lobby-canvas.ts'
-import { expect, item, items, sceneToScreen } from '../tests/support/canvas.ts'
+import { expect, item, items, sceneToScreen, waitForCanvas } from '../tests/support/canvas.ts'
 
 /** Runs `fn(canvas, arg)` in the page against the board page's LobbyCanvas (serialized into the page). */
 export async function withCanvas<T, A>(
@@ -94,4 +94,16 @@ export async function undoKey(page: Page): Promise<void> {
 export async function redoKey(page: Page): Promise<void> {
   await page.evaluate(() => document.querySelector<HTMLElement>('.excalidraw')?.focus())
   await page.keyboard.press('ControlOrMeta+Shift+z')
+}
+
+/**
+ * P-021 (wave P): the style panel opens only on request (the selection bar's Styles button), a choice this browser
+ * keeps. Specs that work in the panel open it the way a returning person has it: the choice stored, the board
+ * opened again.
+ */
+export async function showStylePanel(page: Page): Promise<void> {
+  await page.evaluate(() => localStorage.setItem('lobby:style-panel-open', 'true'))
+  await page.reload()
+  await waitForCanvas(page)
+  await waitForCanvasUx(page)
 }

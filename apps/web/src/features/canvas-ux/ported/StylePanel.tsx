@@ -14,7 +14,15 @@
 // Lobby's muted ink in dark mode (W5-41, canvas-tools.css); D4's polygons styled on their outline, their
 // see-through holder taking only the label's text styles (./polygons.ts); the folded panel on a low canvas
 // (W5-46, ./toolbar-layout.ts stylesFold).
-import { type ComponentType, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, useId } from 'react'
+import {
+  type ComponentType,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
 import type {
   ArrowKind,
   CanvasElement,
@@ -29,6 +37,7 @@ import { selectedRoots } from './commands.ts'
 import { TOOL_ICONS } from './icons.tsx'
 import { isPolygonHolder, isPolygonLine, POLYGON_TOOLS } from './polygons.ts'
 import { uxState } from './state.ts'
+import { LEFT_INSET, setStylePanelOpen, stylePanelOpen, stylePanelSide } from './style-panel-place.ts'
 import {
   ALIGN_LABELS,
   ALIGNS,
@@ -60,8 +69,11 @@ import {
   highlightNameOf,
   LABEL_SIZE,
   NEXT_STROKE_WIDTH,
+  NOTE_FONT,
+  NOTE_SIDE,
   noteColorOf,
   noteFillOf,
+  noteSizeNameOf,
   OPACITY_STEPS,
   opacityStepOf,
   SHADES,
@@ -100,6 +112,8 @@ export type StyleKind =
   | 'highlight'
   | 'frame'
   | 'image'
+  /** P-017: a link card or a board card (a rectangle Lobby draws as a card): never styled as a shape */
+  | 'card'
   | 'other'
 
 /**
@@ -123,9 +137,14 @@ export const STYLED_TOOLS: Readonly<Record<string, StyleKind>> = {
   ...Object.fromEntries(POLYGON_TOOLS.map((t) => [t.id, 'shape' as const])),
 }
 
+/** P-017: the cards Lobby draws over a rectangle (file-card/ported/link-cards.tsx): no shape styles. */
+const CARD_KINDS: ReadonlySet<unknown> = new Set(['link-card', 'board-card'])
+
 export function kindOf(el: CanvasElement): StyleKind {
   // D4: a polygon's outline is a shape (colour, fill, dash, size); its holder is set apart in targetOf
   if (isPolygonLine(el)) return 'shape'
+  const lobbyKind = (el.customData as { lobby?: { kind?: unknown } } | undefined)?.lobby?.kind
+  if (CARD_KINDS.has(lobbyKind)) return 'card'
   switch (items.itemKindOf(el)) {
     case 'note':
       return 'note'
@@ -150,9 +169,9 @@ export function kindOf(el: CanvasElement): StyleKind {
   }
 }
 
-/** RETRO-20 / R16: shown for a selection (not frames only) or a creation tool. Pure. */
+/** RETRO-20 / R16: shown for a selection (not frames or cards only, P-017) or a creation tool. Pure. */
 export function showStylePanel(kinds: readonly StyleKind[], toolId: string | null): boolean {
-  if (kinds.length) return !kinds.every((k) => k === 'frame')
+  if (kinds.length) return !kinds.every((k) => k === 'frame' || k === 'card')
   return toolId !== null && toolId in STYLED_TOOLS
 }
 
@@ -169,7 +188,8 @@ export interface Target {
 export function targetOf(canvas: LobbyCanvas): Target | null {
   const roots = selectedRoots(canvas)
   const holders = roots.filter((e) => isPolygonHolder(e, canvas))
-  const els = roots.filter((e) => kindOf(e) !== 'frame' && !holders.includes(e))
+  // frames and cards (P-017) are not styled: what else is selected is
+  const els = roots.filter((e) => kindOf(e) !== 'frame' && kindOf(e) !== 'card' && !holders.includes(e))
   const selectedKinds = roots.filter((e) => !holders.includes(e)).map(kindOf)
   const tool = canvas.tool()
   if (!showStylePanel(selectedKinds, tool)) return null
@@ -309,10 +329,11 @@ export function pickSize(canvas: LobbyCanvas, t: Target, size: SizeName) {
     stepped = true
   }
   if (notes.length) {
-    if (stepped) {
-      // one undo step for the whole pick
-      applyJoined(canvas, { fontSize: LABEL_SIZE[size] }, notes)
-    } else canvas.styles.apply({ fontSize: LABEL_SIZE[size] }, notes)
+    // P-011: a note's size is the note's (S/M/L/XL notes, as Miro's stickies), its words scaled with it
+    const resize = () => canvas.styles.resizeNotes(NOTE_SIDE[size], NOTE_FONT[size], notes)
+    // one undo step for the whole pick
+    if (stepped) canvas.transact('note size', resize, { joinPrevious: true })
+    else resize()
     stepped = true
   }
   const w: Writes = new Map()
@@ -631,8 +652,92 @@ export function StylePanel({ ctx }: { ctx: CanvasFeatureContext }) {
   const room = useCanvasRoom(ctx.canvas)
   // wave M (M1-3): it steps aside while a popover of the selection bar fits nowhere clear of it
   const yieldToBar = useValue(uxState(ctx.canvas).stylePanelYield)
-  if (stylesFold(room) || yieldToBar) return null
-  return <StylePanelBody ctx={ctx} />
+  // P-021: only once asked for (the selection bar's Styles button; ./style-panel-place.ts)
+  const open = useValue(stylePanelOpen)
+  if (stylesFold(room) || yieldToBar || !open) return null
+  return <PlacedStylePanel ctx={ctx} />
+}
+
+/** The selection's box on screen (client px) as a string the panel's placement re-runs on, or null. */
+const selectionBoxKey = (canvas: LobbyCanvas): string | null => {
+  const b = canvas.selection.length ? canvas.boundsOf(canvas.selection) : null
+  if (!b) return null
+  canvas.viewport.get()
+  const a = canvas.sceneToScreen({ x: b.x, y: b.y })
+  const z = canvas.sceneToScreen({ x: b.x + b.width, y: b.y + b.height })
+  return [a.x, a.y, z.x - a.x, z.y - a.y].map(Math.round).join(',')
+}
+
+/**
+ * P-021: the open panel, at the canvas's top right unless the selection is under it there; then at the top left,
+ * under the board menu (./style-panel-place.ts `stylePanelSide`). A move of the panel, never of the camera.
+ */
+function PlacedStylePanel({ ctx }: { ctx: CanvasFeatureContext }) {
+  const { canvas } = ctx
+  const ref = useRef<HTMLDivElement>(null)
+  const sel = useValue('cux-style-avoid', () => selectionBoxKey(canvas), [canvas])
+  const [shift, setShift] = useState<{ x: number; y: number } | null>(null)
+  useLayoutEffect(() => {
+    const el = ref.current
+    const slot = el?.parentElement
+    const host = canvas.container()
+    if (!el || !slot || !host) return
+    const place = () => {
+      const r = slot.getBoundingClientRect()
+      const c = host.getBoundingClientRect()
+      const right = { x: r.left, y: r.top, w: r.width, h: r.height }
+      const dx = c.left + LEFT_INSET.x - r.left
+      const dy = c.top + LEFT_INSET.y - r.top
+      const left = { x: r.left + dx, y: r.top + dy, w: r.width, h: r.height }
+      const box = sel ? sel.split(',').map(Number) : null
+      const selection = box ? { x: box[0] ?? 0, y: box[1] ?? 0, w: box[2] ?? 0, h: box[3] ?? 0 } : null
+      const side = stylePanelSide(right, left, selection)
+      setShift((prev) => {
+        const next = side === 'left' ? { x: Math.round(dx), y: Math.round(dy) } : null
+        return prev?.x === next?.x && prev?.y === next?.y ? prev : next
+      })
+    }
+    place()
+    const ro = new ResizeObserver(place)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [canvas, sel])
+  return (
+    <div
+      ref={ref}
+      className="cux-style-place"
+      data-side={shift ? 'left' : 'right'}
+      data-testid="style.panel-place"
+      style={shift ? { transform: `translate(${shift.x}px, ${shift.y}px)` } : undefined}
+    >
+      <StylePanelBody ctx={ctx} onClose={() => closeStylePanel(ctx)} />
+    </div>
+  )
+}
+
+/** P-021: the panel's × (the keyboard goes back to the board, which keeps the selection). */
+function closeStylePanel(ctx: CanvasFeatureContext) {
+  setStylePanelOpen(false)
+  ctx.canvas.focus({ preventScroll: true })
+}
+
+/** P-021: the open panel's ×. */
+function CloseStyles({ onClose }: { onClose: () => void }) {
+  return (
+    <button
+      type="button"
+      className="cux-style__close"
+      data-testid="style.panel-close"
+      aria-label="Hide styles"
+      title="Hide styles"
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onClose}
+    >
+      <svg viewBox="0 0 24 24" width={14} height={14} aria-hidden="true" focusable="false">
+        <path d="M6 6l12 12M18 6 6 18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      </svg>
+    </button>
+  )
 }
 
 /** Whether the style panel has something to style (a selection that is not only frames, or a styled tool). */
@@ -674,7 +779,7 @@ export function summaryKind(els: readonly CanvasElement[]): string {
   return els.length === 1 ? `${word[0]?.toUpperCase()}${word.slice(1)}` : `${els.length} ${word}s`
 }
 
-export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
+export function StylePanelBody({ ctx, onClose }: { ctx: CanvasFeatureContext; onClose?: () => void }) {
   const { canvas } = ctx
   const readOnly = useValue('cux-readonly', () => canvas.readOnly(), [canvas])
   const t = useValue('cux-style-target', () => (readOnly ? null : targetOf(canvas)), [canvas, readOnly])
@@ -696,6 +801,7 @@ export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
       >
         <span className="cux-style__summary-kind">{summaryKind(t.els)}</span>
         <OpacityPicker canvas={canvas} t={t} value={styles.opacity as number | 'mixed' | undefined} />
+        {onClose && <CloseStyles onClose={onClose} />}
       </section>
     )
   // the highlighter's next stroke: its colour only (tldraw's highlighter has colour and size; the size here
@@ -703,6 +809,7 @@ export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
   if (t.next && has(t, 'highlight'))
     return (
       <section className="cux-style" aria-label="Styles" data-testid="style.panel">
+        {onClose && <CloseStyles onClose={onClose} />}
         <div className="cux-style__section">
           <ColorPicker canvas={canvas} t={t} value={highlightNameOf(styles.strokeColor)} highlight />
         </div>
@@ -756,7 +863,8 @@ export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
       for (const el of t.els) {
         const k = kindOf(el)
         if (k === 'text') names.push(sizeNameOf(canvas.styles.of([el.id]).fontSize, TEXT_SIZE))
-        else if (k === 'note') names.push(sizeNameOf(canvas.styles.of([el.id]).fontSize, LABEL_SIZE))
+        // P-011: a note's size is its own (its width), not its words'
+        else if (k === 'note') names.push(noteSizeNameOf(el))
         else if (k === 'draw')
           names.push(sizeNameOf((el as { strokeWidth?: number }).strokeWidth, FREEDRAW_WIDTH))
         else if (['shape', 'arrow', 'line'].includes(k))
@@ -797,6 +905,7 @@ export function StylePanelBody({ ctx }: { ctx: CanvasFeatureContext }) {
 
   return (
     <section className="cux-style" aria-label="Styles" data-testid="style.panel">
+      {onClose && <CloseStyles onClose={onClose} />}
       <div className="cux-style__section">
         {allNotes ? (
           <NoteColorPicker canvas={canvas} t={t} />

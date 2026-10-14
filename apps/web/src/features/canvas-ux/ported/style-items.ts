@@ -46,8 +46,8 @@ import {
   FILLS,
   type FillName,
   fillNameOf,
-  LABEL_SIZE,
   noteColorOf,
+  noteSizeNameOf,
   OPACITY_STEPS,
   opacityStepOf,
   SHADES,
@@ -92,6 +92,8 @@ export interface TierControl {
   /** the control's name ('Note color', 'Size', …): its button's label with the value */
   readonly label: string
   readonly rows: readonly TierRow[]
+  /** P-011/P-020: the picture of its button when it is not the id's own (a note's Size is the note's size) */
+  readonly face?: 'note-size'
 }
 
 /**
@@ -151,11 +153,11 @@ export function tierControls(canvas: LobbyCanvas, t: Target, kind: TierKind): Ti
   })
   const fontSize = (scale: Readonly<Record<SizeName, number>>): TierControl => ({
     id: 'font-size',
-    label: 'Size',
+    label: 'Text size',
     rows: [
       {
         id: 'font-size',
-        legend: 'Size',
+        legend: 'Text size',
         options: sizeOptions,
         value: shared(els.map((e) => sizeNameOf(canvas.styles.of([e.id]).fontSize, scale))),
       },
@@ -212,7 +214,20 @@ export function tierControls(canvas: LobbyCanvas, t: Target, kind: TierKind): Ti
             },
           ],
         },
-        fontSize(LABEL_SIZE),
+        // P-011: a note's Size is the note's own (S/M/L/XL notes, its words scaled with it)
+        {
+          id: 'font-size',
+          label: 'Size',
+          face: 'note-size',
+          rows: [
+            {
+              id: 'font-size',
+              legend: 'Size',
+              options: sizeOptions,
+              value: shared(els.map((e) => noteSizeNameOf(e))),
+            },
+          ],
+        },
         align(),
       ]
     case 'text':
@@ -299,7 +314,7 @@ export function pickTier(canvas: LobbyCanvas, control: TierStyleKind, row: strin
       break
     case 'font-size':
     case 'stroke-width':
-      // a note's label size, a text's size, a shape's or a connector's stroke width (the panel's Size)
+      // a note's size (P-011), a text's size, a shape's or a connector's stroke width (the panel's Size)
       pickSize(canvas, t, value as SizeName)
       break
     case 'text-align':

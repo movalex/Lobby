@@ -13,6 +13,7 @@
 import type { Page } from '@playwright/test'
 import { createNote, expect, expectSaved, select, setViewport, test } from '../tests/support/canvas.ts'
 import { waitForA11y } from './a11y-kit.ts'
+import { showStylePanel } from './canvas-ux-kit.ts'
 
 const bar = (page: Page) => page.getByTestId('selection-bar')
 const panel = (page: Page) => page.getByTestId('style.panel')
@@ -140,6 +141,8 @@ test.describe('at 900 x 700', () => {
     canvasSession,
   }, testInfo) => {
     const a = await canvasSession('alice')
+    // P-021: the style panel opens on request; this person has it open
+    await showStylePanel(a.page)
     await twoNotesSelected(a.page)
     await expect(panel(a.page)).toBeVisible()
     await expect(bar(a.page)).toHaveAttribute('data-compact', 'true')
@@ -175,6 +178,8 @@ test.describe('at 1440 x 900, the same selection', () => {
 
   test('N1 (W1): the full bar, not folded, where it fits', async ({ canvasSession }) => {
     const a = await canvasSession('alice')
+    // P-021: the style panel opens on request; this person has it open
+    await showStylePanel(a.page)
     await twoNotesSelected(a.page)
     await expect(panel(a.page)).toBeVisible()
     await expect(bar(a.page)).not.toHaveAttribute('data-compact', 'true')
@@ -189,6 +194,8 @@ test.describe('at 720 x 700', () => {
     canvasSession,
   }, testInfo) => {
     const a = await canvasSession('alice')
+    // P-021: the style panel opens on request; this person has it open
+    await showStylePanel(a.page)
     await twoNotesSelected(a.page)
     await expect(panel(a.page)).toBeVisible()
     await expect(bar(a.page)).toHaveAttribute('data-compact', 'true')

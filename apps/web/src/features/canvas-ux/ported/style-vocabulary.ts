@@ -210,6 +210,19 @@ export const TEXT_SIZE: Readonly<Record<SizeName, number>> = { s: 18, m: 24, l: 
 /** Note and label font size per size (tldraw's LABEL_FONT_SIZES). */
 export const LABEL_SIZE: Readonly<Record<SizeName, number>> = { s: 18, m: 22, l: 26, xl: 32 }
 
+/**
+ * P-011 (wave P): a note's side per size. Size is the note's own, as Miro's sticky sizes are (Medium is Lobby's
+ * 200 px note), and its words scale with it (NOTE_FONT).
+ */
+export const NOTE_SIDE: Readonly<Record<SizeName, number>> = { s: 150, m: 200, l: 300, xl: 400 }
+/** P-011: a note's words per size: Medium's 22 px scaled with the note (the note's fit shrinks long words from there). */
+export const NOTE_FONT: Readonly<Record<SizeName, number>> = { s: 17, m: 22, l: 33, xl: 44 }
+
+/** P-011: a note's size, by its width (null: a width none of the sizes has, a note resized by hand). */
+export function noteSizeNameOf(el: { readonly width?: unknown }): SizeName | null {
+  return typeof el.width === 'number' ? sizeNameOf(Math.round(el.width), NOTE_SIDE) : null
+}
+
 /** The size name nearest to a value on one of the scales (a converted board may hold scaled values). */
 export function sizeNameOf(value: unknown, scale: Readonly<Record<SizeName, number>>): SizeName | null {
   if (typeof value !== 'number' || !Number.isFinite(value)) return null

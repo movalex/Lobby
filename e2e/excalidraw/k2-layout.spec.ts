@@ -16,6 +16,7 @@ import {
   zoomToFit,
 } from '../tests/support/canvas.ts'
 import { WEB_URL } from '../tests/support/ports.ts'
+import { showStylePanel } from './canvas-ux-kit.ts'
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
@@ -85,6 +86,8 @@ test('K2-7 (UXD-09): a shape near the right edge: the selection bar is drawn cle
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
+  // P-021: the style panel opens on request; this person has it open
+  await showStylePanel(a.page)
   await waitForCanvas(a.page)
   const id = await createItem(a.page, 'rectangle', { x: 0, y: 0, width: 160, height: 120 })
   await expectSaved(a.page)
@@ -119,6 +122,8 @@ test('K2-7 (UXD-09): an image selection shows a single-row style panel (its kind
   users,
 }, testInfo) => {
   const a = await canvasSession('alice')
+  // P-021: the style panel opens on request; this person has it open
+  await showStylePanel(a.page)
   await waitForCanvas(a.page)
   const api = await users.api('alice')
   const bytes = makePng(640, 360, 3)

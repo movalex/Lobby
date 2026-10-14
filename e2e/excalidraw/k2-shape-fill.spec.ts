@@ -15,6 +15,7 @@ import {
   waitForTextEditor,
 } from '../tests/support/canvas.ts'
 import { focusBoard } from './board-kit.ts'
+import { showStylePanel } from './canvas-ux-kit.ts'
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
@@ -42,6 +43,8 @@ test('K2-3: a new rectangle is filled light and moves when dragged from its cent
   canvasSession,
 }, testInfo) => {
   const a = await canvasSession('alice')
+  // P-021: the style panel opens on request; this person has it open
+  await showStylePanel(a.page)
   await focusBoard(a.page)
   const known = new Set((await items(a.page)).map((e) => e.id))
 

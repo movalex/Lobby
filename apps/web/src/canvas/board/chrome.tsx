@@ -713,8 +713,8 @@ function cornerControls(): AvoidRect[] {
 
 /**
  * The host slots that sit over the canvas's edge and cover chips (chrome.tsx SLOT_STYLE, board.css), measured: the
- * style panel (top right, 216 px wide, as high as its tools: it is open whenever a drawing tool is active or
- * anything is selected, and opaque, above the overlay) and the navigation panel (bottom left; above the
+ * style panel (top right, 216 px wide, as high as its tools: open once asked for, P-021, and opaque, above the
+ * overlay) and the navigation panel (bottom left; above the
  * toolbar's row on a narrow screen). The board menu and the toolbar are a fixed place (`cornerControls`,
  * `EDGE_MARGINS`).
  */

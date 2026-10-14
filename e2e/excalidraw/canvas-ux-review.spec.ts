@@ -31,7 +31,14 @@ import {
 import { WEB_URL } from '../tests/support/ports.ts'
 import { openPhoneSession } from './a11y-kit.ts'
 import { emptyCanvasPoint, focusBoard, settled } from './board-kit.ts'
-import { boardHasFocus, notes, undoKey, waitForCanvasUx, withCanvas } from './canvas-ux-kit.ts'
+import {
+  boardHasFocus,
+  notes,
+  showStylePanel,
+  undoKey,
+  waitForCanvasUx,
+  withCanvas,
+} from './canvas-ux-kit.ts'
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
@@ -279,6 +286,8 @@ test('D4: the polygon tools: in More in tldraw’s order; a drag draws the shape
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
+  // P-021: the style panel opens on request; this person has it open
+  await showStylePanel(a.page)
   const b = await canvasSession('bob')
   const page = a.page
   await waitForCanvasUx(page)
@@ -512,6 +521,8 @@ test('W5-40 to W5-42: font buttons in their own faces, icon arrowheads, a labell
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
+  // P-021: the style panel opens on request; this person has it open
+  await showStylePanel(a.page)
   const page = a.page
   await waitForCanvasUx(page)
   const rect = await settled(

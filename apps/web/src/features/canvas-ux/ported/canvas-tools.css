@@ -655,3 +655,39 @@
 .cux-style--summary .cux-style__opacity input {
   width: 120px;
 }
+
+/* P-021 (wave P): the style panel opens on request; its × hides it again. Open, it moves to the top left while the
+   selection is under it at the top right (the transform is set by StylePanel.tsx). */
+.cux-style-place > .cux-style {
+  position: relative;
+}
+.cux-style-place > .cux-style:not(.cux-style--summary) {
+  padding-top: 8px;
+}
+.cux-style__close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dr-ink-2);
+  cursor: pointer;
+}
+.cux-style--summary .cux-style__close {
+  position: static;
+  flex: none;
+}
+.cux-style__close:hover {
+  background: var(--dr-hover, rgb(0 0 0 / 6%));
+  color: var(--dr-ink);
+}
+.cux-style__close:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}

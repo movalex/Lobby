@@ -22,6 +22,7 @@ import {
 } from '../tests/support/canvas.ts'
 import type { Users } from '../tests/support/users.ts'
 import { PHONE, waitForA11y } from './a11y-kit.ts'
+import { showStylePanel } from './canvas-ux-kit.ts'
 
 async function openSession(
   browser: Browser,
@@ -143,6 +144,8 @@ test('M1-3 at 1440 x 900: notes on the right half with the style panel open: no 
   users,
 }, testInfo) => {
   const a = await openSession(browser, board, users, { width: 1440, height: 900 }, false)
+  // P-021: the style panel opens on request; this person has it open
+  await showStylePanel(a.page)
   try {
     const page = a.page
     const notes = [
