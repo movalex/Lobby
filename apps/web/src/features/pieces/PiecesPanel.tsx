@@ -15,10 +15,10 @@ import { dragPayload, INITIAL, onKey, type PanelState, reduce, resultsOf } from 
 import { PiecePreview, type PreviewEl } from './Preview.tsx'
 import './pieces.css'
 
-type Previews = ReadonlyMap<PieceId, readonly PreviewEl[]>
+export type Previews = ReadonlyMap<PieceId, readonly PreviewEl[]>
 
 /** The previews, drawn from the pieces' own elements once the builders have loaded. */
-function usePreviews(): Previews | undefined {
+export function usePreviews(): Previews | undefined {
   const [previews, set] = useState<Previews | undefined>(undefined)
   useEffect(() => {
     let live = true

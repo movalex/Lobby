@@ -1,0 +1,513 @@
+/* The Elements panel (wave Q, WS3). Only --dr-* tokens, so both themes work. Square tiles in a grid (the icons small,
+   the shapes and library items larger), tabs as an underlined row, the options as one quiet bar. On a phone (below
+   600 px; the host makes the panel a full-width sheet) the tiles shrink, the icon names go, and the options fold
+   behind one button. */
+
+.dr-el {
+  -webkit-tap-highlight-color: transparent;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  height: 100%;
+  color: var(--dr-ink);
+  font: 14px / 1.35 var(--dr-font);
+}
+.dr-el__search .dr-input {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+/* ---- tabs ---------------------------------------------------------------------------------------------------- */
+.dr-el__tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--dr-line);
+}
+.dr-el__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: -1px;
+  padding: 7px 10px 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--dr-ink-2);
+  font: 600 13px var(--dr-font);
+  cursor: pointer;
+}
+.dr-el__tab:hover {
+  color: var(--dr-ink);
+}
+.dr-el__tab[aria-selected="true"] {
+  border-bottom-color: var(--dr-accent-ink);
+  color: var(--dr-ink);
+}
+.dr-el__tab:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: -2px;
+  border-radius: 6px 6px 0 0;
+}
+.dr-el__count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--dr-chip);
+  color: var(--dr-ink-2);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 17px;
+  text-align: center;
+}
+
+/* ---- the insert options bar ------------------------------------------------------------------------------------ */
+.dr-el__options-toggle {
+  display: none;
+}
+.dr-el__options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: var(--dr-inset);
+  font-size: 12.5px;
+}
+.dr-el__opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.dr-el__swatch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px 3px 4px;
+  border: 1px solid var(--dr-line);
+  border-radius: 999px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: inherit;
+  cursor: pointer;
+}
+.dr-el__swatch {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 18%);
+}
+.dr-el__swatch[data-default] {
+  background: conic-gradient(var(--dr-ink) 0 50%, var(--dr-surface) 0);
+}
+.dr-el__colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  width: 100%;
+}
+.dr-el__swatch-pick {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+}
+.dr-el__swatch-pick[aria-checked="true"] {
+  border-color: var(--dr-accent-ink);
+}
+.dr-el__swatch-pick .dr-el__swatch {
+  width: 20px;
+  height: 20px;
+}
+.dr-el__sizes {
+  gap: 0;
+  border: 1px solid var(--dr-line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.dr-el__size {
+  min-width: 30px;
+  padding: 3px 8px;
+  border: 0;
+  background: var(--dr-surface);
+  color: var(--dr-ink-2);
+  font: 600 12px var(--dr-font);
+  cursor: pointer;
+}
+.dr-el__size + .dr-el__size {
+  border-left: 1px solid var(--dr-line);
+}
+.dr-el__size[aria-pressed="true"] {
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+}
+.dr-el__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--dr-ink-2);
+  cursor: pointer;
+}
+.dr-el__swatch-btn:focus-visible,
+.dr-el__swatch-pick:focus-visible,
+.dr-el__size:focus-visible,
+.dr-el__options-toggle:focus-visible,
+.dr-el__folder-btn:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+
+/* ---- chips and the library bar ------------------------------------------------------------------------------- */
+.dr-el__chips,
+.dr-el__scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.dr-el__chip {
+  padding: 3px 10px;
+  border: 1px solid var(--dr-line);
+  border-radius: 999px;
+  background: var(--dr-chip);
+  color: var(--dr-ink);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.dr-el__chip:hover {
+  background: var(--dr-hover);
+}
+.dr-el__chip[aria-pressed="true"] {
+  border-color: var(--dr-accent-line);
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+  font-weight: 600;
+}
+.dr-el__chip:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+.dr-el__libbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+.dr-el__libbar .dr-el__scope {
+  grid-column: 1 / -1;
+}
+.dr-el__folder {
+  min-width: 0;
+}
+.dr-el__folder .dr-select {
+  width: 100%;
+}
+.dr-el__folder-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--dr-line);
+  border-radius: 8px;
+  background: var(--dr-surface);
+  color: var(--dr-ink-2);
+  fill: currentColor;
+  cursor: pointer;
+}
+
+/* ---- the tiles ---------------------------------------------------------------------------------------------- */
+.dr-el__results {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 120px;
+  margin: 0 -4px;
+  padding: 2px 4px 4px;
+  overflow-y: auto;
+}
+.dr-el__listbox {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-radius: 8px;
+  outline: none;
+}
+.dr-el__listbox:focus-visible {
+  box-shadow: 0 0 0 2px var(--dr-focus);
+}
+.dr-el__section-title {
+  margin: 0 0 6px;
+  color: var(--dr-ink-2);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.dr-el-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+}
+[data-tab="icons"] .dr-el-grid {
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  gap: 6px;
+}
+.dr-el-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 6px;
+  border: 1px solid var(--dr-line);
+  border-radius: 10px;
+  background: var(--dr-surface);
+  cursor: grab;
+  transition: box-shadow 120ms ease, border-color 120ms ease;
+  user-select: none;
+}
+.dr-el-tile:hover {
+  border-color: var(--dr-line-strong);
+  box-shadow: var(--dr-shadow);
+}
+.dr-el-tile[data-active] {
+  border-color: var(--dr-focus);
+  outline: 2px solid var(--dr-focus);
+  outline-offset: -2px;
+}
+.dr-el-tile[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.6;
+}
+.dr-el-tile__art {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 64px;
+  border-radius: 6px;
+  background: #f9fafb;
+  overflow: hidden;
+}
+.dr-el-tile__art--icon {
+  height: 44px;
+  background: transparent;
+  color: var(--dr-ink);
+}
+.dr-el-tile__art .dr-pieces__preview,
+.dr-el-tile__art .dr-el-preview {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+}
+.dr-el-tile__name {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--dr-ink);
+  font-size: 12px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-el-tile--icon .dr-el-tile__name {
+  color: var(--dr-ink-2);
+  font-size: 11px;
+}
+.dr-el-tile__star {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--dr-surface);
+  color: var(--dr-ink-2);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  opacity: 0;
+  cursor: pointer;
+}
+.dr-el-tile:hover .dr-el-tile__star,
+.dr-el-tile[data-active] .dr-el-tile__star,
+.dr-el-tile__star[data-on] {
+  opacity: 1;
+}
+.dr-el-tile__star[data-on] {
+  color: var(--dr-amber);
+  fill: currentColor;
+}
+.dr-el__more {
+  align-self: center;
+}
+.dr-el__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 2px;
+  color: var(--dr-ink-2);
+  font-size: 13px;
+}
+.dr-el__empty p {
+  margin: 0;
+}
+.dr-el__note,
+.dr-el__hint,
+.dr-el__credit {
+  margin: 0;
+  color: var(--dr-ink-2);
+  font-size: 12px;
+}
+.dr-el__credit a {
+  color: inherit;
+}
+.dr-el-menu {
+  z-index: 1000;
+}
+
+/* ---- the save dialog --------------------------------------------------------------------------------------- */
+.dr-el-save__preview {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 132px;
+  border: 1px solid var(--dr-line);
+  border-radius: 10px;
+  background: #f9fafb;
+}
+.dr-el-save__preview .dr-el-preview {
+  width: 100%;
+  height: 100%;
+}
+.dr-el-save__count {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  color: #5f6b7a;
+  font-size: 11.5px;
+}
+.dr-el-save__scope {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.dr-el-save__scope legend {
+  margin: 14px 0 6px;
+  padding: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.dr-form .dr-el-save__radio {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--dr-line);
+  border-radius: 10px;
+  font-weight: 400;
+  cursor: pointer;
+}
+.dr-el-save__radio:has(input:checked) {
+  border-color: var(--dr-accent-line);
+  background: var(--dr-accent-tint);
+}
+.dr-el-save__radio input {
+  margin: 2px 0 0;
+}
+.dr-el-save__radio-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.dr-el-save__radio-name {
+  font-weight: 600;
+}
+.dr-el-save__radio:has(input:disabled) {
+  color: var(--dr-ink-2);
+  cursor: default;
+}
+.dr-el-save__hint {
+  display: block;
+  margin: 0;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+}
+
+/* ---- the dark theme: no white card in a dark panel ------------------------------------------------------------ */
+:root[data-theme="dark"] .dr-el-tile__art:not(.dr-el-tile__art--icon),
+:root[data-theme="dark"] .dr-el-save__preview {
+  background: var(--dr-surface-2, var(--dr-inset));
+}
+:root[data-theme="dark"] .dr-el-tile__art .dr-pp-shape {
+  fill: color-mix(in srgb, var(--pf) 34%, var(--dr-surface-2, var(--dr-inset)));
+  stroke: var(--dr-ink-2);
+}
+:root[data-theme="dark"] .dr-el-tile__art .dr-pp-line,
+:root[data-theme="dark"] .dr-el-tile__art .dr-pp-frame {
+  stroke: var(--dr-ink-2);
+}
+:root[data-theme="dark"] .dr-el-tile__art .dr-pp-text {
+  fill: var(--dr-ink-2);
+}
+
+/* ---- the phone sheet (the host's full-width panel below 600 px) ---------------------------------------------- */
+@media (max-width: 599px) {
+  .dr-el__options-toggle {
+    display: inline-flex;
+    align-self: flex-start;
+    padding: 6px 12px;
+    border: 1px solid var(--dr-line);
+    border-radius: 999px;
+    background: var(--dr-surface);
+    color: var(--dr-ink);
+    font: 600 13px var(--dr-font);
+  }
+  .dr-el__options:not([data-open]) {
+    display: none;
+  }
+  .dr-el-grid,
+  [data-tab="icons"] .dr-el-grid {
+    grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+  }
+  .dr-el-tile {
+    min-height: 56px;
+  }
+  .dr-el-tile--icon .dr-el-tile__name {
+    display: none;
+  }
+  .dr-el-tile__art {
+    height: 48px;
+  }
+  .dr-el-tile__art--icon {
+    height: 40px;
+  }
+  .dr-el__tab {
+    min-height: 44px;
+  }
+  .dr-el__chip {
+    min-height: 32px;
+  }
+}

@@ -1,9 +1,12 @@
 // L8-3: the pieces' commands and the drop handler. One command per piece for the palette ('Insert decision'),
 // one to open the panel, and the content handler that turns a piece dragged from the panel onto the board
 // into the piece, at the pointer.
+import { ELEMENTS_PANEL_ID } from '@draftroom/contracts'
 import { insertLabel, PIECE_CATEGORIES, PIECES, type PieceInfo } from '@draftroom/templates/pieces/catalog'
 import { isReadonlyRole } from '../../board/access.ts'
 import type { CanvasFeatureContext, CommandSpec, ContentHandlerSpec } from '../../canvas/api/index.ts'
+import { elementsPanelOn } from '../elements/flags.ts'
+import { elementsState } from '../elements/state.ts'
 import { failureText, insertPiece } from './insert.ts'
 import { pieceOfDrop } from './model.ts'
 
@@ -39,7 +42,15 @@ export const COMMANDS: readonly CommandSpec[] = [
     label: 'Shapes',
     group: 'Insert',
     keywords: ['shapes', 'kit', 'flowchart', 'wireframe', 'org chart', 'storyboard', 'library'],
-    run: (ctx) => ctx.openPanel(ctx.activePanel === PANEL_ID ? null : PANEL_ID),
+    run: (ctx) => {
+      // wave Q: with the Elements panel on, the shapes are its Shapes tab
+      if (elementsPanelOn()) {
+        if (ctx.activePanel === ELEMENTS_PANEL_ID) return ctx.openPanel(null)
+        elementsState(ctx.canvas).requestedTab.set('shapes')
+        return ctx.openPanel(ELEMENTS_PANEL_ID)
+      }
+      ctx.openPanel(ctx.activePanel === PANEL_ID ? null : PANEL_ID)
+    },
   },
   ...PIECES.map(
     (info): CommandSpec => ({
