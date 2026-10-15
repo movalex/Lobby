@@ -1,7 +1,7 @@
 // The wave Q foundation's web side: the 'elements' feature is registered and contributes nothing while ELEMENTS_PANEL is
-// off, the library client answers its safe defaults without a request, and the contracts the four workstreams share
-// agree with the engine-side limits and lists they mirror. OWNER: WS3 (it moves its parts into features/elements tests
-// when it implements the panel and the client).
+// off, the library client answers its safe defaults on an api without the routes, and the contracts the four
+// workstreams share agree with the engine-side limits and lists they mirror. OWNER: WS3 (the client's own tests are
+// features/elements/client.test.ts; the panel's, features/elements/*.test.ts).
 import { LOBBY_COLOR_NAMES } from '@draftroom/board-ops/elements'
 import { lobbyKeySpec } from '@draftroom/canvas-schema/custom-data'
 import {
@@ -32,6 +32,7 @@ import {
 } from '@draftroom/contracts'
 import { PIECE_IDS, pieceKind } from '@draftroom/templates/pieces/catalog'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { ApiError } from '../api/client.ts'
 import type { CanvasFeatureContext } from '../canvas/api/index.ts'
 import { CANVAS_FEATURES } from './canvas-registry.ts'
 import {
@@ -49,11 +50,14 @@ import {
   patchLibraryItem,
   placeLibraryItem,
   putLibraryMark,
+  resetLibraryClient,
   restoreLibraryItem,
   saveLibraryItem,
+  setLibraryRequester,
 } from './elements/client.ts'
 import { ELEMENTS_PANEL } from './elements/flags.ts'
 import { ELEMENTS_PANEL_SPEC, elementsFeature, feature } from './elements/index.tsx'
+import { fakeLibraryApi } from './elements/test-kit.ts'
 import { PANEL_ID as PIECES_PANEL_ID } from './pieces/commands.ts'
 
 let calls = 0
@@ -106,50 +110,64 @@ describe('the elements feature (WS3)', () => {
   })
 })
 
-describe('the library client stub answers its safe default without a request', () => {
-  it('reads answer empty; writes reject unavailable', async () => {
-    expect(libraryAvailable()).toBe(false)
-    expect(await listLibrary(W, { scope: 'personal' })).toEqual({ items: [], nextCursor: null })
-    expect(await getLibraryItem(W, ITEM)).toBeNull()
-    expect(await listLibraryFolders(W, 'workspace')).toEqual([])
-    expect(await listLibraryMarks(W)).toEqual({ favourites: [], recents: [] })
-    expect(await putLibraryMark(W, { key: 'piece:decision', favourite: true })).toBeNull()
-    const writes: (() => Promise<unknown>)[] = [
-      () =>
-        saveLibraryItem(W, {
-          scope: 'personal',
-          name: 'A',
-          tags: [],
-          folderId: null,
-          sourceBoardId: 'b-board01',
-          elements: [{ id: 'a' }],
-        }),
-      () => patchLibraryItem(W, ITEM, { revision: 1, name: 'B' }),
-      () => deleteLibraryItem(W, ITEM),
-      () => restoreLibraryItem(W, ITEM),
-      () =>
-        importLibrary(W, {
-          scope: 'personal',
-          fileName: 'a.excalidrawlib',
-          licence: 'MIT',
-          author: null,
-          folderId: null,
-          items: [{ name: 'A', elements: [{ id: 'a' }] }],
-        }),
-      () => createLibraryFolder(W, { scope: 'personal', name: 'F' }),
-      () => patchLibraryFolder(W, FOLDER, { name: 'G' }),
-      () => deleteLibraryFolder(W, FOLDER),
-      () => placeLibraryItem('b-board01', ITEM),
-    ]
-    for (const write of writes) {
-      const err = await write().then(
+describe('the library client against an api without the library routes (WS2 pending: 404)', () => {
+  it('the list latches the library off; reads answer empty and writes reject unavailable, with no more requests', async () => {
+    resetLibraryClient()
+    const calls = fakeLibraryApi(() => new ApiError('not-found', 404, 'NOT_FOUND', 'Not found'))
+    try {
+      expect(libraryAvailable(W)).toBe(true)
+      expect(await listLibrary(W, { scope: 'personal' })).toEqual({ items: [], nextCursor: null })
+      expect(libraryAvailable(W)).toBe(false)
+      expect(calls).toHaveLength(1)
+      expect(await getLibraryItem(W, ITEM)).toBeNull()
+      expect(await listLibraryFolders(W, 'workspace')).toEqual([])
+      expect(await listLibraryMarks(W)).toEqual({ favourites: [], recents: [] })
+      expect(await putLibraryMark(W, { key: 'piece:decision', favourite: true })).toBeNull()
+      const writes: (() => Promise<unknown>)[] = [
+        () =>
+          saveLibraryItem(W, {
+            scope: 'personal',
+            name: 'A',
+            tags: [],
+            folderId: null,
+            sourceBoardId: 'b-board01',
+            elements: [{ id: 'a' }],
+          }),
+        () => patchLibraryItem(W, ITEM, { revision: 1, name: 'B' }),
+        () => deleteLibraryItem(W, ITEM),
+        () => restoreLibraryItem(W, ITEM),
+        () =>
+          importLibrary(W, {
+            scope: 'personal',
+            fileName: 'a.excalidrawlib',
+            licence: 'MIT',
+            author: null,
+            folderId: null,
+            items: [{ name: 'A', elements: [{ id: 'a' }] }],
+          }),
+        () => createLibraryFolder(W, { scope: 'personal', name: 'F' }),
+        () => patchLibraryFolder(W, FOLDER, { name: 'G' }),
+        () => deleteLibraryFolder(W, FOLDER),
+      ]
+      for (const write of writes) {
+        const err = await write().then(
+          () => null,
+          (e: unknown) => e,
+        )
+        expect(err).toBeInstanceOf(LibraryRequestError)
+        expect((err as LibraryRequestError).code).toBe('unavailable')
+      }
+      expect(calls).toHaveLength(1)
+      // /place belongs to the board, not the workspace: its own 404 is its answer
+      const placed = await placeLibraryItem('b-board01', ITEM).then(
         () => null,
         (e: unknown) => e,
       )
-      expect(err).toBeInstanceOf(LibraryRequestError)
-      expect((err as LibraryRequestError).code).toBe('unavailable')
+      expect((placed as LibraryRequestError).code).toBe('NOT_FOUND')
+    } finally {
+      setLibraryRequester(null)
+      resetLibraryClient()
     }
-    expect(calls).toBe(0)
   })
 })
 
