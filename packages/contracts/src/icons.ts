@@ -56,7 +56,11 @@ export const ICON_SET_VERSION_PATTERN = /^\d{1,4}\.\d{1,4}\.\d{1,4}$/
 export const IconName = z.string().max(ICON_NAME_MAX).regex(ICON_NAME_PATTERN)
 const SetVersion = z.string().regex(ICON_SET_VERSION_PATTERN)
 const GridCoord = z.number().finite().gte(ICON_GRID_MIN).lte(ICON_GRID_MAX)
-const GridSize = z.number().finite().gte(0).lte(ICON_GRID_MAX - ICON_GRID_MIN)
+const GridSize = z
+  .number()
+  .finite()
+  .gte(0)
+  .lte(ICON_GRID_MAX - ICON_GRID_MIN)
 
 /** `customData.lobby.kind` of every element of an inserted icon (create-only; canvas-schema KindValue accepts it). */
 export const ICON_ELEMENT_KIND = 'icon'

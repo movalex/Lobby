@@ -74,7 +74,10 @@ describe('the pinned icon packages', () => {
       string,
       IconNode[]
     >
-    const lucideTags = readIconSetJson('lucide', ICON_SET_PACKAGES.lucide.metaFile) as Record<string, string[]>
+    const lucideTags = readIconSetJson('lucide', ICON_SET_PACKAGES.lucide.metaFile) as Record<
+      string,
+      string[]
+    >
     // 1.49.0: 1,857 icons, every one tagged; no categories in the package
     expect(Object.keys(lucideNodes)).toHaveLength(1857)
     expect(Object.keys(lucideTags).sort()).toEqual(Object.keys(lucideNodes).sort())

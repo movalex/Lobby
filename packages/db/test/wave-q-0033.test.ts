@@ -197,7 +197,9 @@ describe('wave Q migration', () => {
     expect(defs.library_items_tags_idx).toMatch(/USING gin \(tags\)/)
     expect(defs.library_item_files_ver_idx).toMatch(/\(workspace_id, version_id\)/)
     expect(defs.library_marks_recent_idx).toMatch(/\(user_id, workspace_id, used_at DESC\)/)
-    expect(defs.library_folders_name_idx).toMatch(/UNIQUE INDEX .*COALESCE\(owner_id, ''::text\), lower\(name\)/)
+    expect(defs.library_folders_name_idx).toMatch(
+      /UNIQUE INDEX .*COALESCE\(owner_id, ''::text\), lower\(name\)/,
+    )
   })
 })
 

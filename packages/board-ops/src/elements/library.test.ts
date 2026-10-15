@@ -117,7 +117,7 @@ describe('serializeLibraryItem', () => {
     const els = byId(item.elements)
     const image = [...els.values()].find((e) => e.type === 'image') as El
     expect(image.fileId).toBe('ver_0123456789abcdef')
-    expect((lobbyOf(image)?.file as El).versionId).toBe('ver_0123456789abcdef')
+    expect((lobbyOf(image)?.file as El | undefined)?.versionId).toBe('ver_0123456789abcdef')
     const groups = new Set([...els.values()].map((e) => (e.groupIds as string[]).join()))
     expect(groups.size).toBe(1)
     expect([...groups][0]).not.toBe('G1')
