@@ -146,7 +146,9 @@ describe('serializeLibraryItem', () => {
       expect(r, JSON.stringify(el).slice(0, 80)).toEqual({ ok: false, problem: 'inline-data', count: 1 })
     }
     // a word that only ends in "data" is no scheme
-    expect(serialize([{ ...rect, link: 'https://lobby.example/metadata:x' } as unknown as WireElement]).ok).toBe(true)
+    expect(
+      serialize([{ ...rect, link: 'https://lobby.example/metadata:x' } as unknown as WireElement]).ok,
+    ).toBe(true)
   })
 
   it('refuses types no board holds; an unknown customData key is dropped, not stored', () => {

@@ -6,7 +6,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { previewColor } from '../pieces/Preview.tsx'
-import { type ItemPreviewEl, ItemPreview } from './Previews.tsx'
+import { ItemPreview, type ItemPreviewEl } from './Previews.tsx'
 
 const el = (over: Partial<ItemPreviewEl>): ItemPreviewEl => ({
   type: 'rectangle',

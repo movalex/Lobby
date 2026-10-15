@@ -70,10 +70,10 @@ async function insideInternalOnly(q: Queryable, board: Pick<BoardRow, 'id'>): Pr
 async function requireSourceExport(q: Queryable, item: ItemRow, userId: string): Promise<void> {
   const source = item.source as { kind?: unknown; boardId?: unknown } | null
   if (source?.kind !== 'board' || typeof source.boardId !== 'string') return
-  const board = await q.maybeOne<{ id: string }>('SELECT id FROM boards WHERE id = $1 AND workspace_id = $2', [
-    source.boardId,
-    item.workspace_id,
-  ])
+  const board = await q.maybeOne<{ id: string }>(
+    'SELECT id FROM boards WHERE id = $1 AND workspace_id = $2',
+    [source.boardId, item.workspace_id],
+  )
   if (!board) {
     if (item.source_export_limited && item.created_by !== userId) throw exportDisabled()
     return

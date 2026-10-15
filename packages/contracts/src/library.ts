@@ -479,4 +479,5 @@ export const libraryFolderPath = (wid: string, fid: string) => `${ws(wid)}/folde
 export const libraryMarksPath = (wid: string) => `${ws(wid)}/marks`
 export const libraryPlacePath = (boardId: string, id: string) =>
   `/api/boards/${enc(boardId)}/library/items/${enc(id)}/place`
-export const libraryPlaceConfirmPath = (boardId: string, id: string) => `${libraryPlacePath(boardId, id)}/confirm`
+export const libraryPlaceConfirmPath = (boardId: string, id: string) =>
+  `${libraryPlacePath(boardId, id)}/confirm`

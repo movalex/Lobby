@@ -80,7 +80,11 @@ describe('the review fixes’ migration', () => {
     const q = db
     await q.query(`INSERT INTO users (id, name, handle, color) VALUES ($1, 'alice', 'alice', '#3355ff')`, [U])
     await q.query(`INSERT INTO workspaces (id, name, created_by) VALUES ($1, 'Studio', $2)`, [W, U])
-    await q.query(`INSERT INTO boards (id, workspace_id, title, created_by) VALUES ($1, $2, 'Board', $3)`, [B, W, U])
+    await q.query(`INSERT INTO boards (id, workspace_id, title, created_by) VALUES ($1, $2, 'Board', $3)`, [
+      B,
+      W,
+      U,
+    ])
     const pending = (ver = VER) =>
       q.query('INSERT INTO library_place_pending (board_id, asset_id, version_id) VALUES ($1, $2, $3)', [
         B,

@@ -133,7 +133,9 @@ describe('wave Q migration', () => {
     const all = loadMigrations()
     await migrate(d, { migrations: all.filter((m) => m.version <= 32) })
     const before = { columns: await columnsOf(d), constraints: await constraintsOf(d) }
-    expect((await migrate(d, { migrations: all.filter((m) => m.version <= 33) })).applied).toEqual(['0033_library'])
+    expect((await migrate(d, { migrations: all.filter((m) => m.version <= 33) })).applied).toEqual([
+      '0033_library',
+    ])
     const after = { columns: await columnsOf(d), constraints: await constraintsOf(d) }
     expect(after.columns.filter((k) => !isNew(k))).toEqual(before.columns)
     expect(after.constraints.filter((k) => !isNew(k))).toEqual(before.constraints)

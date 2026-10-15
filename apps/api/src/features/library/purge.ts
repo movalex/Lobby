@@ -114,7 +114,10 @@ export function startLibraryPurge(app: FastifyInstance, ctx: FeatureContext): vo
           if (n) app.log.info({ feature: 'library', purged: n }, 'library purge')
           const s = await sweepPlacePending(ctx.db, ctx.now(), boardShowsVia(ctx.sync))
           if (s.removed || s.unread)
-            app.log.info({ feature: 'library', unconfirmedLinks: s.removed, unreadBoards: s.unread }, 'library sweep')
+            app.log.info(
+              { feature: 'library', unconfirmedLinks: s.removed, unreadBoards: s.unread },
+              'library sweep',
+            )
         })
         .catch((e) => app.log.warn({ err: { message: (e as Error)?.message } }, 'library purge failed'))
         .finally(() => {

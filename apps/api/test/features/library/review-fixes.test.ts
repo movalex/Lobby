@@ -10,9 +10,9 @@
 import {
   EXPORT_DISABLED_CODE,
   LIBRARY_LIMITS,
+  ListLibraryResponse,
   libraryListPath,
   libraryPlaceConfirmPath,
-  ListLibraryResponse,
 } from '@draftroom/contracts'
 import { openTestDb } from '@draftroom/db/testing'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -99,10 +99,14 @@ describe('#2 /place decides the internal-only rule under the workspace row lock'
     expect(inside).toBe(-1)
     const project = await newProject(w.carol, WS, 'Secret')
     expect((await setProject(w.owner, project, true)).statusCode).toBe(200)
-    expect((await w.carol.req('PATCH', `/api/boards/${w.source}`, { projectId: project })).statusCode).toBe(200)
+    expect((await w.carol.req('PATCH', `/api/boards/${w.source}`, { projectId: project })).statusCode).toBe(
+      200,
+    )
     expect(answer(await place(w.dave, w.target, s.id))).toBe('409 INTERNAL_ONLY')
     const refused = txWith(w.transactions, /AS inside FROM boards b JOIN workspaces w/)
-    expect(at(refused, /AS inside FROM boards b JOIN workspaces w/)).toBeGreaterThan(at(refused, /FOR SHARE OF i/))
+    expect(at(refused, /AS inside FROM boards b JOIN workspaces w/)).toBeGreaterThan(
+      at(refused, /FOR SHARE OF i/),
+    )
     expect(at(refused, /FROM workspaces WHERE id = \$1 FOR SHARE/)).toBe(0)
   })
 })
@@ -129,7 +133,11 @@ describe('#3 the links a place makes stay only once its push is confirmed', () =
     })
     expect(await linksOn(w, dropped)).toEqual([v.versionId])
     // past the hour: the unconfirmed link goes, the confirmed one stays
-    expect(await sweepPlacePending(w.api.db, later(w), showsNothing)).toEqual({ removed: 1, kept: 0, unread: 0 })
+    expect(await sweepPlacePending(w.api.db, later(w), showsNothing)).toEqual({
+      removed: 1,
+      kept: 0,
+      unread: 0,
+    })
     expect(await linksOn(w, dropped)).toEqual([])
     expect(await linksOn(w, kept)).toEqual([v.versionId])
     expect(await fileStatus(w.dave, v, kept)).toBe(200)
@@ -161,7 +169,11 @@ describe('#3 the links a place makes stay only once its push is confirmed', () =
     expect(await pendingOn(w, shown)).toBe(0)
     // the unread board keeps its row for the next pass, which removes the link once it can read the board
     expect(await pendingOn(w, unread)).toBe(1)
-    expect(await sweepPlacePending(w.api.db, later(w), showsNothing)).toEqual({ removed: 1, kept: 0, unread: 0 })
+    expect(await sweepPlacePending(w.api.db, later(w), showsNothing)).toEqual({
+      removed: 1,
+      kept: 0,
+      unread: 0,
+    })
     expect(await linksOn(w, unread)).toEqual([])
   })
 
@@ -173,7 +185,9 @@ describe('#3 the links a place makes stay only once its push is confirmed', () =
     await placedOk(w.dave, b, s.id)
     w.api.clock.advance(PLACE_PENDING_MS - 60_000)
     await placedOk(w.dave, b, s.id)
-    expect(await sweepPlacePending(w.api.db, later(w, 30 * 60_000), showsNothing)).toMatchObject({ removed: 0 })
+    expect(await sweepPlacePending(w.api.db, later(w, 30 * 60_000), showsNothing)).toMatchObject({
+      removed: 0,
+    })
     expect(await linksOn(w, b)).toEqual([v.versionId])
     await placedOk(w.carol, w.source, s.id)
     expect(await pendingOn(w, w.source)).toBe(0)
@@ -198,9 +212,9 @@ describe('#4 a removed member’s personal library', () => {
     const shared = await saved(w.dave, w.source)
     const folder = await w.dave.req('POST', `${LIB}/folders`, { scope: 'personal', name: 'Mine' })
     expect(folder.statusCode).toBe(201)
-    expect((await w.dave.req('PUT', `${LIB}/marks`, { key: 'piece:decision', favourite: true })).statusCode).toBe(
-      200,
-    )
+    expect(
+      (await w.dave.req('PUT', `${LIB}/marks`, { key: 'piece:decision', favourite: true })).statusCode,
+    ).toBe(200)
     const removed = await w.owner.req('DELETE', `/api/workspaces/${WS}/members/${w.dave.userId}`)
     expect(removed.statusCode, removed.body).toBe(200)
     const row = await w.api.db.one<{ deleted_at: Date | null }>(
@@ -211,7 +225,9 @@ describe('#4 a removed member’s personal library', () => {
     // the workspace's item stays: it belongs to the workspace
     expect(await count(w.api, 'library_items WHERE id = $1 AND deleted_at IS NULL', [shared.id])).toBe(1)
     expect(await count(w.api, 'library_folders WHERE owner_id = $1', [w.dave.userId])).toBe(0)
-    expect(await count(w.api, 'library_marks WHERE user_id = $1 AND workspace_id = $2', [w.dave.userId, WS])).toBe(0)
+    expect(
+      await count(w.api, 'library_marks WHERE user_id = $1 AND workspace_id = $2', [w.dave.userId, WS]),
+    ).toBe(0)
     const audit = await w.api.db.one<{ detail: { personalLibraryItemsDeleted?: number } }>(
       "SELECT detail FROM audit_events WHERE action = 'workspace.member.remove' ORDER BY id DESC LIMIT 1",
     )
@@ -242,9 +258,9 @@ describe('#6 /place honours the source board’s export policy', () => {
     const w = await world()
     const s = await saved(w.dave, w.source)
     // dave saved it while he could; then the board is limited to its editors and he only views it
-    expect((await w.carol.req('PATCH', `/api/boards/${w.source}`, { visibility: 'workspace_view' })).statusCode).toBe(
-      200,
-    )
+    expect(
+      (await w.carol.req('PATCH', `/api/boards/${w.source}`, { visibility: 'workspace_view' })).statusCode,
+    ).toBe(200)
     expect((await limit(w, w.source, 'editors')).statusCode).toBe(200)
     expect(answer(await place(w.dave, w.target, s.id))).toBe(`403 ${EXPORT_DISABLED_CODE}`)
     // pat only views it too; carol, its owner, and the workspace's admin edit it
@@ -281,22 +297,40 @@ describe('#6 /place honours the source board’s export policy', () => {
 
   it('a save still needs view access to its source board and its export policy (the shapes come from there)', async () => {
     const w = await world()
-    expect((await w.carol.req('PATCH', `/api/boards/${w.source}`, { visibility: 'workspace_view' })).statusCode).toBe(
-      200,
-    )
+    expect(
+      (await w.carol.req('PATCH', `/api/boards/${w.source}`, { visibility: 'workspace_view' })).statusCode,
+    ).toBe(200)
     expect((await limit(w, w.source, 'editors')).statusCode).toBe(200)
-    expect(answer(await w.dave.req('POST', `${LIB}/items`, { scope: 'personal', name: 'X', sourceBoardId: w.source, elements: [rect('a')] }))).toBe('403 LIBRARY_EXPORT_REFUSED')
+    expect(
+      answer(
+        await w.dave.req('POST', `${LIB}/items`, {
+          scope: 'personal',
+          name: 'X',
+          sourceBoardId: w.source,
+          elements: [rect('a')],
+        }),
+      ),
+    ).toBe('403 LIBRARY_EXPORT_REFUSED')
     const priv = await createBoard(w.carol, WS, 'Carol only')
-    expect(answer(await w.dave.req('POST', `${LIB}/items`, { scope: 'personal', name: 'X', sourceBoardId: priv, elements: [rect('a')] }))).toBe('404 NOT_FOUND')
+    expect(
+      answer(
+        await w.dave.req('POST', `${LIB}/items`, {
+          scope: 'personal',
+          name: 'X',
+          sourceBoardId: priv,
+          elements: [rect('a')],
+        }),
+      ),
+    ).toBe('404 NOT_FOUND')
   })
 })
 
 describe('#7 the favourites cap is counted under a lock of the caller’s marks', () => {
   it('the PUT takes the advisory lock of (person, workspace) first, before it reads or counts anything', async () => {
     const w = await world()
-    expect((await w.dave.req('PUT', `${LIB}/marks`, { key: 'piece:decision', favourite: true })).statusCode).toBe(
-      200,
-    )
+    expect(
+      (await w.dave.req('PUT', `${LIB}/marks`, { key: 'piece:decision', favourite: true })).statusCode,
+    ).toBe(200)
     const tx = txWith(w.transactions, /INSERT INTO library_marks/)
     const lock = at(tx, /pg_advisory_xact_lock/)
     expect(lock).toBe(0)

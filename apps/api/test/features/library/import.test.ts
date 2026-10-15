@@ -112,7 +112,10 @@ describe('importing a library', () => {
       body({
         items: [
           { name: 'Fine', elements: [rect('a')] },
-          { name: 'Beacon', elements: [rect('b', 0, 0, { backgroundColor: 'url(https://evil.example/x#p)' })] },
+          {
+            name: 'Beacon',
+            elements: [rect('b', 0, 0, { backgroundColor: 'url(https://evil.example/x#p)' })],
+          },
         ],
       }),
     )

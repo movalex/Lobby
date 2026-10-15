@@ -27,8 +27,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { PLACE_PENDING_MS, sweepPlacePending } from '../../../src/features/library/purge.ts'
 import { type AssetGcDeps, collectWorkspace } from '../../../src/files/gc.ts'
 import { createBoard, createTestApi } from '../../helpers.ts'
-import { newProject, setProject } from '../outside/internal-only-support.ts'
 import { type PausingDb, pausingDb, waitedOrFinished } from '../../race-support.ts'
+import { newProject, setProject } from '../outside/internal-only-support.ts'
 import {
   answer,
   count,
