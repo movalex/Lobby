@@ -13,13 +13,14 @@
 // labels are laid out again; every item then passes board-ops serializeLibraryItem (canvas-schema checks, the item's
 // limits). The result is an ImportLibraryInput the api validates again as a save, plus a report of counts for the
 // dialog (never content). Images inside a library are skipped, not uploaded: see ./normalise.ts for why.
+
+import type { WireElement } from '@draftroom/canvas-schema/elements'
 import {
   ImportLibraryInput,
   LIBRARY_DEFAULT_LICENCE,
   LIBRARY_LIMITS,
   type LibraryScope,
 } from '@draftroom/contracts'
-import type { WireElement } from '@draftroom/canvas-schema/elements'
 import { type ItemCuts, type ItemResult, noCuts, normaliseLibraryItem } from './normalise.ts'
 
 /** The three pure engine functions the import uses, so tests can stand in for the engine. */

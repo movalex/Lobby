@@ -102,9 +102,10 @@ describe('inserting an icon', () => {
       ok: false,
       reason: 'unknown',
     })
-    expect(
-      await insertTile(ctx, { source: 'icon', id: 'lucide:x' }, { ...opts(), icons: null }),
-    ).toEqual({ ok: false, reason: 'unavailable' })
+    expect(await insertTile(ctx, { source: 'icon', id: 'lucide:x' }, { ...opts(), icons: null })).toEqual({
+      ok: false,
+      reason: 'unavailable',
+    })
     const ro = fakeCanvas([], { readOnly: true })
     expect(await insertTile(ctxOf(ro).ctx, { source: 'icon', id: 'lucide:x' }, opts())).toEqual({
       ok: false,
@@ -155,7 +156,6 @@ const placed = () => {
 }
 
 describe('inserting a library item', () => {
-
   it('asks /place first (the files are linked before anything is pushed), then writes one step', async () => {
     const f = fakeCanvas([])
     let stepsAtPlace = -1

@@ -7,7 +7,15 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { purgeDeletedLibraryItems } from '../../src/features/library/purge.ts'
 import { originalKey } from '../../src/files/blobs.ts'
 import { type AssetGcDeps, collectWorkspace } from '../../src/files/gc.ts'
-import { image, itemUrl, type LibWorld, libraryWorld, saved, uploadTo, WS } from '../features/library/support.ts'
+import {
+  image,
+  itemUrl,
+  type LibWorld,
+  libraryWorld,
+  saved,
+  uploadTo,
+  WS,
+} from '../features/library/support.ts'
 
 const DAY = 86_400_000
 let w: LibWorld | undefined
@@ -122,7 +130,10 @@ describe('the library purge', () => {
     const live = await saved(lw.carol, lw.source)
     const now = lw.api.clock.now().getTime()
     const deletedAt = (id: string, days: number) =>
-      lw.api.db.query('UPDATE library_items SET deleted_at = $2 WHERE id = $1', [id, new Date(now - days * DAY)])
+      lw.api.db.query('UPDATE library_items SET deleted_at = $2 WHERE id = $1', [
+        id,
+        new Date(now - days * DAY),
+      ])
     await deletedAt(old.id, 31)
     await deletedAt(recent.id, 29)
     expect(await purgeDeletedLibraryItems(lw.api.db, lw.api.clock.now())).toBe(1)

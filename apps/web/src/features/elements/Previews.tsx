@@ -88,8 +88,7 @@ function drawnItem(el: ItemPreviewEl, key: number, thumb: (fileId: string) => st
       />
     )
   }
-  if (el.type === 'freedraw')
-    return drawn({ ...el, type: 'line', backgroundColor: 'transparent' }, key)
+  if (el.type === 'freedraw') return drawn({ ...el, type: 'line', backgroundColor: 'transparent' }, key)
   return drawn(el, key)
 }
 

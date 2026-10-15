@@ -12,8 +12,8 @@ import {
   ICON_SET_IDS,
   ICON_SET_NAMES,
   ICON_SIZES,
-  INSERT_COLOR_NAMES,
   type IconSetId,
+  INSERT_COLOR_NAMES,
   type InsertColorName,
   type InsertOptions,
   type LibraryFolder,
@@ -227,10 +227,14 @@ export function ElementsPanel({ ctx, close }: { readonly ctx: CanvasFeatureConte
       }
       return
     }
-    const r = await insertTile(ctx, { source: t.source, id: t.id }, {
-      options,
-      icons: icons.status === 'ready' ? icons.api : undefined,
-    })
+    const r = await insertTile(
+      ctx,
+      { source: t.source, id: t.id },
+      {
+        options,
+        icons: icons.status === 'ready' ? icons.api : undefined,
+      },
+    )
     if (!r.ok) {
       notifyFailure(insertFailureText(r.reason))
       return

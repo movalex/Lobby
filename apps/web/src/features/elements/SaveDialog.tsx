@@ -131,12 +131,7 @@ export function SaveDialog({
   }
 
   return (
-    <Dialog
-      title="Save to library"
-      description={DESCRIPTION}
-      onClose={onClose}
-      testId="element-save-dialog"
-    >
+    <Dialog title="Save to library" description={DESCRIPTION} onClose={onClose} testId="element-save-dialog">
       {!payload ? (
         <>
           <p className="dr-field-error" role="alert" data-testid="element-save-problem">

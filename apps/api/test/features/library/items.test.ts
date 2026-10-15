@@ -7,9 +7,9 @@ import {
   LIBRARY_RATE_LIMITS,
   LibraryItem,
   LibraryItemSummary,
+  ListLibraryResponse,
   libraryListPath,
   libraryRestorePath,
-  ListLibraryResponse,
 } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createBoard } from '../../helpers.ts'
@@ -80,7 +80,10 @@ describe('saving a selection', () => {
     expect(d.source).toEqual({ kind: 'board', boardId: w.source })
     expect(d.canEdit).toBe(false)
     for (const who of [w.owner, w.admin, w.dave, w.pat, w.vic])
-      expect((await list(who)).items.map((i) => i.id), who.userId).toEqual([s.id])
+      expect(
+        (await list(who)).items.map((i) => i.id),
+        who.userId,
+      ).toEqual([s.id])
     // the stored row: the author is the caller; the audit row names no names
     const audit = await w.api.db.query<{ action: string; target: string; detail: El; actor_id: string }>(
       "SELECT action, target, detail, actor_id FROM audit_events WHERE action LIKE 'library.%'",

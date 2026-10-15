@@ -286,7 +286,9 @@
   border-radius: 10px;
   background: var(--dr-surface);
   cursor: grab;
-  transition: box-shadow 120ms ease, border-color 120ms ease;
+  transition:
+    box-shadow 120ms ease,
+    border-color 120ms ease;
   user-select: none;
 }
 .dr-el-tile:hover {

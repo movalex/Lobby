@@ -84,7 +84,8 @@ const alnum = () => {
   return s
 }
 
-const LIST = /\/api\/workspaces\/([^/]+)\/library(?:\/(items|folders|marks|import)(?:\/([^/?]+)(?:\/(restore))?)?)?(?:\?.*)?$/
+const LIST =
+  /\/api\/workspaces\/([^/]+)\/library(?:\/(items|folders|marks|import)(?:\/([^/?]+)(?:\/(restore))?)?)?(?:\?.*)?$/
 const PLACE = /\/api\/boards\/([^/]+)\/library\/items\/([^/]+)\/place$/
 
 /** Installs the double on `page` (both the workspace routes and the board's /place). */

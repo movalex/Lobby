@@ -26,7 +26,10 @@ test("render.yaml: the static site's headers, the enforced CSP on one line", () 
   assert.equal(headerFor(headers, '/excalidraw-assets/*', 'Cache-Control'), 'public, max-age=604800')
   // wave Q: the icons' hashed index and shards, a year; their fixed-name LICENSES.txt, a day
   assert.equal(headerFor(headers, '/lobby-assets/*', 'Cache-Control'), 'public, max-age=31536000, immutable')
-  assert.equal(headerFor(headers, '/lobby-assets/icons/LICENSES.txt', 'Cache-Control'), 'public, max-age=86400')
+  assert.equal(
+    headerFor(headers, '/lobby-assets/icons/LICENSES.txt', 'Cache-Control'),
+    'public, max-age=86400',
+  )
   // wave M (S2, M3-5): the build's version file is never cached (open tabs compare it with their own commit)
   assert.equal(headerFor(headers, '/version.json', 'Cache-Control'), 'no-store')
   const csp = expectedCsp(headers)

@@ -190,9 +190,7 @@ export function patchLibraryItem(
   id: string,
   input: PatchLibraryItemInput,
 ): Promise<LibraryItemSummary> {
-  return write(workspaceId, () =>
-    call('PATCH', libraryItemPath(workspaceId, id), LibraryItemSummary, input),
-  )
+  return write(workspaceId, () => call('PATCH', libraryItemPath(workspaceId, id), LibraryItemSummary, input))
 }
 
 export function deleteLibraryItem(workspaceId: string, id: string): Promise<void> {

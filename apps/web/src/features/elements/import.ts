@@ -56,8 +56,7 @@ export async function importLibraryFile(
 ): Promise<ImportOutcome> {
   let r: NormaliseLibraryResult
   try {
-    const normalise =
-      deps.normalise ?? (await import('../../canvas/library/index.ts')).normaliseExcalidrawLib
+    const normalise = deps.normalise ?? (await import('../../canvas/library/index.ts')).normaliseExcalidrawLib
     r = await normalise(file, { scope: opts.scope, folderId: opts.folderId })
   } catch (e) {
     console.warn('elements: the library file could not be read', e)

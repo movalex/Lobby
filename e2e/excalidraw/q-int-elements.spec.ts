@@ -46,7 +46,9 @@ import { foreignRequests, openElements, tab, tile, tileIds } from './q3-kit.ts'
 test.use({ viewport: { width: 1440, height: 900 } })
 test.describe.configure({ timeout: 180_000 })
 
-const LIBRARY_FIXTURES = fileURLToPath(new URL('../../apps/web/src/canvas/library/fixtures/', import.meta.url))
+const LIBRARY_FIXTURES = fileURLToPath(
+  new URL('../../apps/web/src/canvas/library/fixtures/', import.meta.url),
+)
 
 type Lobby = { kind?: string; alt?: string }
 const lobbyOf = (e: CanvasElement) => (e.customData as { lobby?: Lobby } | undefined)?.lobby
@@ -134,7 +136,9 @@ test('Q-int: a real icon is found, inserted as one group, recoloured, resized an
     expect(parts.every((p) => p.type === 'line')).toBe(true)
     expect(new Set(parts.map((p) => (p.groupIds as string[]).join())).size).toBe(1)
     expect((parts[0]?.groupIds as string[]).length).toBe(1)
-    await expect.poll(async () => [...(await selection(a.page))].sort()).toEqual(parts.map((p) => p.id).sort())
+    await expect
+      .poll(async () => [...(await selection(a.page))].sort())
+      .toEqual(parts.map((p) => p.id).sort())
     await expect.poll(async () => (await iconEls(b.page, alt)).length).toBe(parts.length)
     // its index and shard came from this origin, as JSON
     expect(icons.some((i) => /\/index\.[0-9a-f]+\.json$/.test(i.url) && i.status === 200)).toBe(true)
@@ -145,7 +149,10 @@ test('Q-int: a real icon is found, inserted as one group, recoloured, resized an
   const box0 = boxOf(parts)
 
   await test.step('the style panel’s blue recolours every part in one step', async () => {
-    await select(a.page, parts.map((p) => p.id))
+    await select(
+      a.page,
+      parts.map((p) => p.id),
+    )
     await a.page.getByTestId('style.color.blue').click()
     await expect
       .poll(async () => (await iconEls(a.page, alt)).map((p) => p.strokeColor))
@@ -201,7 +208,9 @@ test('Q-int: every Shapes category lists its pieces, each with a drawing, and it
         .locator('[data-testid="element-tile"][data-source="piece"]')
         .evaluateAll((tiles) =>
           tiles
-            .filter((t) => !t.querySelector('svg[data-piece-preview] :is(rect, ellipse, polygon, polyline, path)'))
+            .filter(
+              (t) => !t.querySelector('svg[data-piece-preview] :is(rect, ellipse, polygon, polyline, path)'),
+            )
             .map((t) => t.getAttribute('data-tile-id')),
         )
       expect(blank, `${c.id}: tiles without a drawing`).toEqual([])
@@ -354,7 +363,10 @@ test('Q-int: a member without a work address cannot save to the workspace librar
     await tile(page, 'icon', 'lucide:check').click()
     await expect.poll(async () => (await iconEls(page, 'Lucide icon: check')).length).toBeGreaterThan(0)
     await expectSaved(page)
-    await select(page, (await iconEls(page, 'Lucide icon: check')).map((e) => e.id))
+    await select(
+      page,
+      (await iconEls(page, 'Lucide icon: check')).map((e) => e.id),
+    )
     await page.getByTestId('selection-save-to-library').click()
     await expect(page.getByTestId('element-save-scope-workspace')).toBeDisabled()
     await expect(page.getByTestId('element-save-workspace-reason')).toContainText('needs a work address')
@@ -414,11 +426,16 @@ test('Q-int: a name-only guest has Icons and Shapes only, inserts both, and asks
     await tab(g, 'shapes').click()
     await g.getByTestId('element-search').fill('decision')
     await tile(g, 'piece', 'decision').click()
-    await expect.poll(async () => (await items(g)).filter((e) => kindOf(e) === 'piece-decision').length).toBe(2)
+    await expect
+      .poll(async () => (await items(g)).filter((e) => kindOf(e) === 'piece-decision').length)
+      .toBe(2)
     await expectSaved(g)
     await expect.poll(async () => (await iconEls(a.page, 'Lucide icon: heart')).length).toBeGreaterThan(0)
     // the selection bar offers no Save to library to a guest
-    await select(g, (await iconEls(g, 'Lucide icon: heart')).map((e) => e.id))
+    await select(
+      g,
+      (await iconEls(g, 'Lucide icon: heart')).map((e) => e.id),
+    )
     await expect(g.getByTestId('selection-save-to-library')).toHaveCount(0)
     expect(library).toEqual([])
   } finally {

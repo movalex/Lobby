@@ -4,7 +4,7 @@
 // Shift+F10 opens its actions. The star is a mouse shortcut of the "Add to favourites" action (hidden from screen
 // readers, who get the action and the option's own "favourite" in its name).
 import { libraryThumbPath } from '@draftroom/contracts'
-import { memo, type MouseEvent, type ReactNode, useRef } from 'react'
+import { type MouseEvent, memo, type ReactNode, useRef } from 'react'
 import type { Previews } from '../pieces/PiecesPanel.tsx'
 import { PiecePreview } from '../pieces/Preview.tsx'
 import { type IconsState, useIconGeometry, useItemElements, useSeen } from './hooks.ts'

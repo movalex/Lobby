@@ -7,15 +7,7 @@
 import AxeBuilder from '@axe-core/playwright'
 import type { Page } from '@playwright/test'
 import { expect, expectSaved, select, test } from '../tests/support/canvas.ts'
-import {
-  fakeAi,
-  makeFrame,
-  makeNotes,
-  sortRun,
-  twelve,
-  waitForSort,
-  withShapesPanel,
-} from './l8-kit.ts'
+import { fakeAi, makeFrame, makeNotes, sortRun, twelve, waitForSort, withShapesPanel } from './l8-kit.ts'
 
 const AXE_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice']
 

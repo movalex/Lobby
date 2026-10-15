@@ -3,9 +3,9 @@ export {
   type LibraryEngine,
   type LibraryImportReport,
   type LibraryRefusal,
+  loadLibraryEngine,
   type NormaliseLibraryOptions,
   type NormaliseLibraryResult,
-  loadLibraryEngine,
   normaliseExcalidrawLib,
 } from './excalidrawlib.ts'
 export {

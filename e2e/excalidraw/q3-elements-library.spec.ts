@@ -109,7 +109,9 @@ test('Q3: a selection saved from the selection bar goes to the library as portab
     const [id] = [...lib.items.keys()]
     await openElements(a.page)
     await tile(a.page, 'item', id as string).hover()
-    await tile(a.page, 'item', id as string).getByTestId('element-star').click()
+    await tile(a.page, 'item', id as string)
+      .getByTestId('element-star')
+      .click()
     await expect.poll(() => lib.marks.get(`item:${id}`)?.favourite).toBe(true)
     await expect(a.page.getByTestId('element-section-favourites').getByTestId('element-tile')).toHaveCount(1)
   })

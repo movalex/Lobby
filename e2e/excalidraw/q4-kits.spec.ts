@@ -123,7 +123,10 @@ for (const category of NEW_CATEGORIES) {
           expect(guides.length, p.id).toBeGreaterThan(0)
           for (const g of guides) {
             expect(g.locked, p.id).toBe(true)
-            expect(frames.map((f) => f.id), p.id).toContain(g.frameId)
+            expect(
+              frames.map((f) => f.id),
+              p.id,
+            ).toContain(g.frameId)
           }
         }
         // the named formats are all there
