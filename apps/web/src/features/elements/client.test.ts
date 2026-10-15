@@ -1,7 +1,7 @@
 // Wave Q (WS3): the web library client against WS2's routes, with a fake api client (the routes and their answers are
 // the contracts'). Every answer is parsed with its schema, a 404 to the list latches the library off for that
 // workspace (later reads answer empty with no request, writes reject 'unavailable'), other read failures answer the
-// safe default, and writes reject with the api's own code.
+// safe default, and writes reject with the api's own code. And the marks store (./marks.ts) on top of it.
 import { libraryItemPath, libraryListPath, libraryMarksPath, libraryPlacePath } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ApiError } from '../../api/client.ts'
@@ -21,6 +21,7 @@ import {
   setLibraryRequester,
   subscribeLibrary,
 } from './client.ts'
+import { createMarksStore } from './marks.ts'
 import { type FakeCall, fakeLibraryApi, summary, TEST_ITEM, TEST_WORKSPACE } from './test-kit.ts'
 
 const W = TEST_WORKSPACE
@@ -142,5 +143,46 @@ describe('the library client', () => {
       path: libraryMarksPath(W),
       body: { key: 'piece:process', favourite: true },
     })
+  })
+})
+
+describe('the marks store (favourites and recents)', () => {
+  it('a star shows at once and goes back when the api refuses it; uses go in front, built-ins stamped', async () => {
+    answer = (c) => {
+      const used = { key: 'piece:process', favourite: false, usedAt: '2026-10-15' }
+      if (c.method === 'GET') return { favourites: [], recents: [used] }
+      const body = c.body as { key: string; favourite?: boolean }
+      if (body.key === 'piece:decision' && body.favourite) return new ApiError('server', 500, 'HTTP_500', 'x')
+      return { key: body.key, favourite: body.favourite ?? false, usedAt: null }
+    }
+    const store = createMarksStore(W, () => true)
+    await store.load()
+    expect(store.state.get()).toMatchObject({ loaded: true, favourites: [], recents: ['piece:process'] })
+    const starring = store.setFavourite('piece:decision', true)
+    expect(store.isFavourite('piece:decision')).toBe(true)
+    expect(await starring).toBe(false)
+    expect(store.isFavourite('piece:decision')).toBe(false)
+    expect(await store.setFavourite('piece:button', true)).toBe(true)
+    expect(store.state.get().favourites).toEqual(['piece:button'])
+    store.used('piece:button', true)
+    store.used(`item:${ITEM}`, false)
+    expect(store.state.get().recents).toEqual([`item:${ITEM}`, 'piece:button', 'piece:process'])
+    expect(calls.filter((c) => c.method === 'PUT').map((c) => c.body)).toEqual([
+      { key: 'piece:decision', favourite: true },
+      { key: 'piece:button', favourite: true },
+      { key: 'piece:button', used: true },
+    ])
+  })
+
+  it('without the library: no request, recents of this tab only, no stars', async () => {
+    answer = () => {
+      throw new Error('no request expected')
+    }
+    const store = createMarksStore(W, () => false)
+    await store.load()
+    expect(await store.setFavourite('piece:decision', true)).toBe(false)
+    store.used('piece:decision', true)
+    expect(store.state.get()).toMatchObject({ favourites: [], recents: ['piece:decision'] })
+    expect(calls).toEqual([])
   })
 })

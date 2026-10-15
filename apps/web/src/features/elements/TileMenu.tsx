@@ -1,7 +1,9 @@
 // OWNER: WS3 (wave Q). A tile's actions (a right-click, the context-menu key or Shift+F10 on the active tile): a small
 // menu at the pointer or under the tile (WAI-ARIA menu: it takes the keyboard on its first item, the arrows, Home and End
-// move, Enter runs, Escape or a click elsewhere closes it and gives the keyboard back to where it was).
+// move, Enter runs, Escape or a click elsewhere closes it and gives the keyboard back to where it was). It is drawn in
+// the page's body, so the dock's own stacking never puts the board's canvas over it.
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 export interface TileMenuItem {
   readonly id: string
@@ -47,7 +49,7 @@ export function TileMenu({
   }, [onClose])
 
   const last = items.length - 1
-  return (
+  const menu = (
     <div
       ref={ref}
       role="menu"
@@ -88,4 +90,5 @@ export function TileMenu({
       ))}
     </div>
   )
+  return typeof document === 'undefined' ? menu : createPortal(menu, document.body)
 }
