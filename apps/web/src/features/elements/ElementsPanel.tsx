@@ -28,6 +28,7 @@ import { countUsage } from '../../lib/usage.ts'
 import { usePreviews } from '../pieces/PiecesPanel.tsx'
 import { deleteLibraryFolder, deleteLibraryItem, restoreLibraryItem } from './client.ts'
 import { type IconsState, useElementsAccess, useFolders, useIcons, useLibraryList } from './hooks.ts'
+import { importLibraryFile, LIBRARY_FILE_ACCEPT } from './import.ts'
 import { insertFailureText, insertTile } from './insert.ts'
 import { FolderDialog, ItemDialog, libraryErrorText } from './LibraryDialogs.tsx'
 import { marksOf } from './marks.ts'
@@ -119,6 +120,8 @@ export function ElementsPanel({ ctx, close }: { readonly ctx: CanvasFeatureConte
   const [folderDialog, setFolderDialog] = useState<{ folder: LibraryFolder | null } | null>(null)
   const search = useRef<HTMLInputElement>(null)
   const grid = useRef<HTMLDivElement>(null)
+  const importInput = useRef<HTMLInputElement>(null)
+  const [importing, setImporting] = useState(false)
   const readonly = ctx.canvas.readOnly()
 
   const icons = useIcons()
@@ -236,6 +239,19 @@ export function ElementsPanel({ ctx, close }: { readonly ctx: CanvasFeatureConte
     // on a phone the sheet covers the board: it closes so the new element shows
     if (onPhone()) close()
     else ctx.canvas.focus({ preventScroll: true })
+  }
+
+  const importFile = async (file: File) => {
+    setImporting(true)
+    const folderId = folder === 'all' || folder === 'none' || folder === 'deleted' ? null : folder
+    const r = await importLibraryFile(workspaceId, file, { scope, folderId })
+    setImporting(false)
+    if (!r.ok) {
+      ctx.notify({ key: 'elements-library', tone: 'error', text: r.text, testId: 'element-import-failed' })
+      return
+    }
+    ctx.notify({ key: 'elements-library', text: r.text, testId: 'element-imported' })
+    bump()
   }
 
   const star = async (t: Tile, on: boolean) => {
@@ -600,8 +616,24 @@ export function ElementsPanel({ ctx, close }: { readonly ctx: CanvasFeatureConte
             </select>
           </label>
           {canManageFolders && (
+            <input
+              ref={importInput}
+              type="file"
+              accept={LIBRARY_FILE_ACCEPT}
+              hidden
+              data-testid="element-import-input"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                e.target.value = ''
+                if (file) void importFile(file)
+              }}
+            />
+          )}
+          {canManageFolders && (
             <FolderActions
               folder={selectedFolder}
+              importing={importing}
+              onImport={() => importInput.current?.click()}
               onNew={() => setFolderDialog({ folder: null })}
               onRename={(f) => setFolderDialog({ folder: f })}
               onDelete={(f) => {
@@ -750,11 +782,15 @@ export function ElementsPanel({ ctx, close }: { readonly ctx: CanvasFeatureConte
 
 function FolderActions({
   folder,
+  importing,
+  onImport,
   onNew,
   onRename,
   onDelete,
 }: {
   folder: LibraryFolder | null
+  importing: boolean
+  onImport(): void
   onNew(): void
   onRename(f: LibraryFolder): void
   onDelete(f: LibraryFolder): void
@@ -766,14 +802,17 @@ function FolderActions({
     items.push({ id: 'rename', label: 'Rename folder…', run: () => onRename(folder) })
     items.push({ id: 'delete', label: 'Delete folder', tone: 'danger', run: () => onDelete(folder) })
   }
+  if (!importing)
+    items.push({ id: 'import', label: 'Import a library file (.excalidrawlib)…', run: onImport })
   return (
     <>
       <button
         ref={ref}
         type="button"
         className="dr-el__folder-btn"
-        aria-label="Folder actions"
-        title="Folder actions"
+        aria-label="Folder and import actions"
+        title="Folders and import"
+        aria-busy={importing || undefined}
         aria-haspopup="menu"
         aria-expanded={!!open}
         data-testid="element-folder-actions"
@@ -790,7 +829,7 @@ function FolderActions({
       </button>
       {open && (
         <TileMenu
-          label="Folder actions"
+          label="Folder and import actions"
           at={open}
           items={items}
           onClose={(refocus) => {
