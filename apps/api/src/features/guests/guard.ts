@@ -154,6 +154,7 @@ export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {
   'GET /api/workspaces/:wid/library/marks': LIBRARY_GUESTS,
   'PUT /api/workspaces/:wid/library/marks': LIBRARY_GUESTS,
   'POST /api/boards/:bid/library/items/:id/place': LIBRARY_GUESTS,
+  'POST /api/boards/:bid/library/items/:id/place/confirm': LIBRARY_GUESTS,
 }
 
 export const guestRefused = (message: string) => new ApiError(403, 'GUEST_ACCOUNT_REQUIRED', message)

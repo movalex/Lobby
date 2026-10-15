@@ -16,6 +16,7 @@
 //   GET    /api/workspaces/:wid/library/marks                                     → 200 ListLibraryMarksResponse
 //   PUT    /api/workspaces/:wid/library/marks          PutLibraryMarkInput        → 200 LibraryMark
 //   POST   /api/boards/:bid/library/items/:id/place                               → 200 PlaceLibraryItemResponse
+//   POST   /api/boards/:bid/library/items/:id/place/confirm                       → 204 (the push succeeded: links stay)
 //   GET    /api/workspaces/:wid/library/items/:id/files/:ver/thumb                → the version's thumb derivative
 //
 // Who (all server-side; the guards first, then a fail-closed check in the route):
@@ -407,6 +408,8 @@ export const LIBRARY_ROUTES = {
   folder: '/api/workspaces/:wid/library/folders/:fid',
   marks: '/api/workspaces/:wid/library/marks',
   place: '/api/boards/:bid/library/items/:id/place',
+  /** after the push of a place's elements succeeded: the links it made stay (review fix; docs/WAVE-Q-CONTRACTS.md §9) */
+  placeConfirm: '/api/boards/:bid/library/items/:id/place/confirm',
 } as const
 
 const R = LIBRARY_ROUTES
@@ -427,6 +430,7 @@ export const LIBRARY_ROUTE_KEYS = [
   `GET ${R.marks}`,
   `PUT ${R.marks}`,
   `POST ${R.place}`,
+  `POST ${R.placeConfirm}`,
 ] as const
 export type LibraryRouteKey = (typeof LIBRARY_ROUTE_KEYS)[number]
 
@@ -475,3 +479,4 @@ export const libraryFolderPath = (wid: string, fid: string) => `${ws(wid)}/folde
 export const libraryMarksPath = (wid: string) => `${ws(wid)}/marks`
 export const libraryPlacePath = (boardId: string, id: string) =>
   `/api/boards/${enc(boardId)}/library/items/${enc(id)}/place`
+export const libraryPlaceConfirmPath = (boardId: string, id: string) => `${libraryPlacePath(boardId, id)}/confirm`

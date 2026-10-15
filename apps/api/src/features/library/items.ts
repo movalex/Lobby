@@ -32,7 +32,7 @@ import { ApiError, conflict, forbidden, notFound, parse } from '../../errors.ts'
 import { DERIVATIVE_MIMES } from '../../files/mime.ts'
 import type { KeyedLimit } from '../../rate-limit.ts'
 import type { FeatureContext } from '../context.ts'
-import { mayExport } from '../export-control/policy.ts'
+import { loadExportPolicy, mayExport } from '../export-control/policy.ts'
 import {
   fileNotServable,
   insertItemFiles,
@@ -96,6 +96,10 @@ export async function sourceBoard(
   if (!(await mayExport(q, access, userId))) throw exportRefused()
   return access
 }
+
+/** Whether a board's export policy limits copying to its editors (stored on an item saved from it: 0034). */
+export const exportLimited = async (q: Queryable, boardId: string) =>
+  (await loadExportPolicy(q, boardId)) === 'editors'
 
 /** The checked elements of a save from `boardId` (serializer, then the file checks). */
 async function prepare(q: Queryable, workspaceId: string, boardId: string, elements: readonly unknown[]) {
@@ -245,6 +249,7 @@ export function registerLibraryItems(
               item,
               source: { kind: 'board', boardId: board.board.id },
               internalOnly: await savedInternalOnly(tx, board.board.id),
+              exportLimited: await exportLimited(tx, board.board.id),
               at: ctx.now(),
             })
             await audit(tx, {
@@ -319,6 +324,7 @@ export function registerLibraryItems(
               set('source = ?::jsonb', JSON.stringify({ kind: 'board', boardId }))
               // new content from an internal-only board makes the item internal; it never becomes less so
               set('internal_only = internal_only OR ?', await savedInternalOnly(tx, boardId))
+              set('source_export_limited = ?', await exportLimited(tx, boardId))
             }
             await tx.query(`UPDATE library_items SET ${sets.join(', ')} WHERE id = $1`, params)
             if (replaced) {
@@ -468,6 +474,8 @@ export async function insertItem(
     item: PreparedItem
     source: Record<string, unknown>
     internalOnly: boolean
+    /** the source board limits copying to its editors (import: false) */
+    exportLimited: boolean
     at: Date
   },
 ): Promise<void> {
@@ -475,8 +483,9 @@ export async function insertItem(
   await tx.query(
     `INSERT INTO library_items (id, workspace_id, owner_id, folder_id, name, tags, elements, element_count,
        image_count, bytes, width, height, source, internal_only, revision, created_by, updated_by, created_at,
-       updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6::text[], $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb, $14, 1, $15, $15, $16, $16)`,
+       updated_at, source_export_limited)
+     VALUES ($1, $2, $3, $4, $5, $6::text[], $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb, $14, 1, $15, $15, $16, $16,
+             $17)`,
     [
       v.id,
       caller.workspaceId,
@@ -494,6 +503,7 @@ export async function insertItem(
       v.internalOnly,
       caller.userId,
       v.at,
+      v.exportLimited,
     ],
   )
   await insertItemFiles(tx, v.id, caller.workspaceId, item.files)

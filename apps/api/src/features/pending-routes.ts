@@ -30,7 +30,7 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   // wave N: none left. WS4's visit routes (N4-1, features/visits), WS5's three capture routes (N5-1,
   // features/ai/capture.ts) and WS7's board-cards (N7-2) and backlinks (N7-4) are implemented; to ship one hidden,
   // add its key back.
-  // wave Q: none left. WS2 implemented the element library's 15 routes (@draftroom/contracts LIBRARY_ROUTE_KEYS,
+  // wave Q: none left. WS2 implemented the element library's 16 routes (@draftroom/contracts LIBRARY_ROUTE_KEYS,
   // features/library: Q2-1 list and read, Q2-2 save/change/delete/restore, Q2-3 place and thumbs, Q2-4 import, Q2-5
   // folders, Q2-6 marks); to ship one hidden, add its key back.
 }

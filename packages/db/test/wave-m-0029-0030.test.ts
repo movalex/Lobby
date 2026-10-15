@@ -51,6 +51,7 @@ describe('wave M migrations', () => {
       '0031_board_visits',
       '0032_board_links',
       '0033_library',
+      '0034_library_place',
     ])
     expect(all.map((m) => m.version)).toEqual(all.map((_, i) => i + 1))
   })

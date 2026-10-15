@@ -140,6 +140,8 @@ export interface ItemRow {
   /** effective: the stored flag, or the source board's project is internal only now */
   internal_only: boolean
   revision: number
+  /** the source board's export policy limited copying when the item was saved (0034; /place reads it once the board is gone) */
+  source_export_limited: boolean
   created_by: string | null
   created_by_name: string | null
   created_at: Date
@@ -154,7 +156,7 @@ const INTERNAL_EFFECTIVE = '(i.internal_only OR COALESCE(sp.internal_only, false
 
 export const ITEM_COLUMNS = `i.id, i.workspace_id, i.owner_id, i.folder_id, i.name, i.tags, i.element_count,
   i.image_count, i.width::float8 AS width, i.height::float8 AS height, i.source, ${INTERNAL_EFFECTIVE} AS internal_only,
-  i.revision, i.created_by, u.name AS created_by_name, i.created_at, i.updated_at, i.deleted_at,
+  i.revision, i.source_export_limited, i.created_by, u.name AS created_by_name, i.created_at, i.updated_at, i.deleted_at,
   i.updated_at::text AS cursor_at`
 
 export const ITEM_FROM = `FROM library_items i

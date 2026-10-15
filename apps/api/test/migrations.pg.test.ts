@@ -658,18 +658,21 @@ describe.skipIf(!PG_URL)('every migration after 0008 on a real Postgres holding 
       if (t !== 'schema_migrations') expect(afterCounts[t], t).toBe(n)
     // Wave M (the foundation): 0029_usage_daily and 0030_workspace_templates are new tables only (no existing
     // object changed, checked above), empty after the upgrade.
-    expect(upgrade.slice(-5, -3)).toEqual(['0029_usage_daily', '0030_workspace_templates'])
+    expect(upgrade.slice(-6, -4)).toEqual(['0029_usage_daily', '0030_workspace_templates'])
     expect(afterCounts.usage_daily).toBe(0)
     expect(afterCounts.workspace_templates).toBe(0)
     // Wave N (the foundation): 0031_board_visits and 0032_board_links are new tables only, empty after the upgrade.
-    expect(upgrade.slice(-3, -1)).toEqual(['0031_board_visits', '0032_board_links'])
+    expect(upgrade.slice(-4, -2)).toEqual(['0031_board_visits', '0032_board_links'])
     expect(afterCounts.board_visits).toBe(0)
     expect(afterCounts.board_links).toBe(0)
     expect(afterCounts.board_link_scans).toBe(0)
     // Wave Q (the foundation): 0033_library is new tables only, empty after the upgrade.
-    expect(upgrade.slice(-1)).toEqual(['0033_library'])
+    expect(upgrade.slice(-2, -1)).toEqual(['0033_library'])
     for (const t of ['library_folders', 'library_items', 'library_item_files', 'library_marks'])
       expect(afterCounts[t], t).toBe(0)
+    // The wave Q review fixes: 0034_library_place is a new table and a defaulted column of 0033's library_items.
+    expect(upgrade.slice(-1)).toEqual(['0034_library_place'])
+    expect(afterCounts.library_place_pending).toBe(0)
   })
 
   it('the checksum guard accepts re-runs (also from a CRLF checkout) and refuses an edited file', async () => {

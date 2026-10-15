@@ -16,17 +16,19 @@
 //   GET    /api/workspaces/:wid/library/marks                    the caller's favourites and recents       marks.ts
 //   PUT    /api/workspaces/:wid/library/marks                    star / unstar / stamp a use               marks.ts
 //   POST   /api/boards/:bid/library/items/:id/place              an item's elements, files linked first    place.ts
+//   POST   /api/boards/:bid/library/items/:id/place/confirm      its push succeeded: the links stay          place.ts
 //
 // Guards first: every route refuses a name-only guest (guests/guard.ts, LIBRARY_GUEST_ROUTE_KEYS), and the eight
 // writes freshen the caller for the in-route creator check of the workspace scope (domain-access/guard.ts,
 // LIBRARY_CREATOR_IN_ROUTE_KEYS). Then every rule again in the route, failing closed (model.ts), with authorship from
 // the session only. Rate limits per person (LIBRARY_RATE_LIMITS): saves (POST items, PATCH with elements) 60 a
-// minute, imports 5, places 120. The hourly purge removes items deleted more than 30 days ago (purge.ts); the file
-// collector counts library_item_files as references until then (files/gc.ts).
+// minute, imports 5, places 120 (and 120 confirms). The hourly purge removes items deleted more than 30 days ago
+// (purge.ts); the file collector counts library_item_files as references until then (files/gc.ts). The same hourly
+// pass sweeps the links of places never confirmed (purge.ts sweepPlacePending).
 //
 // Lock order (access.ts): every library write takes the workspace row FOR NO KEY UPDATE first (with the caller's
-// membership read again under it), then the item or folder row; a place takes only the item row FOR SHARE, then
-// writes board_asset_links. No content, no names and no element data are logged; audit rows carry ids, scopes and
+// membership read again under it), then the item or folder row; a place takes the workspace row FOR SHARE (its
+// membership read again under it), then the item row FOR SHARE, then writes board_asset_links. No content, no names and no element data are logged; audit rows carry ids, scopes and
 // counts. A route listed in ../pending-routes.ts again is not registered (it ships hidden: the unknown route's 404).
 
 import { LIBRARY_RATE_LIMITS } from '@draftroom/contracts'
@@ -47,6 +49,8 @@ export async function registerLibrary(app: FastifyInstance, ctx: FeatureContext)
     save: limit(LIBRARY_RATE_LIMITS.save),
     import: limit(LIBRARY_RATE_LIMITS.import),
     place: limit(LIBRARY_RATE_LIMITS.place),
+    // one confirm follows each place
+    confirm: limit(LIBRARY_RATE_LIMITS.place),
   }
   registerLibraryItems(app, ctx, limits)
   registerLibraryImport(app, ctx, limits)

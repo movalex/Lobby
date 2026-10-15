@@ -6,7 +6,7 @@
 // guard lists and the in-route checks are each proven alone elsewhere (guests/refusals.test.ts,
 // domain-access/creation-matrix.test.ts); here the whole app answers.
 
-import { LIBRARY_RATE_LIMITS } from '@draftroom/contracts'
+import { LIBRARY_RATE_LIMITS, libraryPlaceConfirmPath } from '@draftroom/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Client } from '../../helpers.ts'
 import type { GuestClient } from '../guests/support.ts'
@@ -271,6 +271,19 @@ const ROWS: Row[] = [
     name: "place carol's personal item",
     expect: OWN('200'),
     call: async (c, f) => place(c, w.target, await f.personal()),
+  },
+  {
+    // review fix: the confirm after a place's push; the board's edit and the library's members, as the place
+    name: 'confirm a place on a board the caller can edit (vic: one he only views)',
+    expect: { ...all('204'), vic: '403 FORBIDDEN' },
+    call: async (c, f, who) =>
+      c.req(
+        'POST',
+        libraryPlaceConfirmPath(
+          who === 'vic' ? w.viewOnly : who === 'sam' ? w.guestBoard : w.target,
+          (await f.item()).id,
+        ),
+      ),
   },
 ]
 

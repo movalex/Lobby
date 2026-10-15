@@ -244,6 +244,7 @@ describe('shipped migrations', () => {
       '0031_board_visits',
       '0032_board_links',
       '0033_library',
+      '0034_library_place',
     ])
   })
 
@@ -283,6 +284,7 @@ describe('shipped migrations', () => {
       '0031_board_visits',
       '0032_board_links',
       '0033_library',
+      '0034_library_place',
     ])
     expect(await migrate(db)).toEqual({ applied: [], newer: [] })
     expect(await tableNames()).toEqual([
@@ -324,6 +326,7 @@ describe('shipped migrations', () => {
       'library_item_files',
       'library_items',
       'library_marks',
+      'library_place_pending',
       'notifications',
       'preview_jobs',
       'private_brainstorms',
@@ -395,6 +398,7 @@ describe('shipped migrations', () => {
       '0031_board_visits',
       '0032_board_links',
       '0033_library',
+      '0034_library_place',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))
     const inv = await db.one<{ multi_use: boolean; use_count: number }>(

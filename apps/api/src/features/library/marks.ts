@@ -27,6 +27,12 @@ import {
 } from './model.ts'
 
 const R = LIBRARY_ROUTES
+/**
+ * pg_advisory_xact_lock namespace (the two-key form) of one person's marks in one workspace ("LBMK"): a PUT takes it
+ * first, so two stars at once count the favourites one after the other (a row lock cannot hold a row not there yet).
+ */
+export const LIBRARY_MARKS_LOCK_NS = 0x4c424d4b
+
 /** Uses kept per person and workspace besides the favourites (the panel shows the last LIBRARY_LIMITS.recents). */
 export const LIBRARY_KEPT_USES = 50
 
@@ -138,6 +144,10 @@ export function registerLibraryMarks(app: FastifyInstance, ctx: FeatureContext):
       )
         throw notFound()
       return db.transaction(async (tx) => {
+        await tx.query('SELECT pg_advisory_xact_lock($1::int, hashtext($2::text))', [
+          LIBRARY_MARKS_LOCK_NS,
+          `${user.id}:${wid}`,
+        ])
         const at = ctx.now()
         if (input.used) await stampUse(tx, caller, input.key, at)
         if (input.favourite !== undefined) {

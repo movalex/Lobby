@@ -79,9 +79,9 @@ const summary = {
 }
 
 describe('the library routes and their guard keys (WS2)', () => {
-  it('15 routes, keyed METHOD pattern; a guest is refused all of them; 8 writes are creator-gated in the route', () => {
-    expect(LIBRARY_ROUTE_KEYS).toHaveLength(15)
-    expect(new Set(LIBRARY_ROUTE_KEYS).size).toBe(15)
+  it('16 routes, keyed METHOD pattern; a guest is refused all of them; 8 writes are creator-gated in the route', () => {
+    expect(LIBRARY_ROUTE_KEYS).toHaveLength(16)
+    expect(new Set(LIBRARY_ROUTE_KEYS).size).toBe(16)
     for (const k of LIBRARY_ROUTE_KEYS)
       expect(k).toMatch(/^(GET|POST|PUT|PATCH|DELETE) \/api\/(workspaces\/:wid|boards\/:bid)\/library\b/)
     expect([...LIBRARY_GUEST_ROUTE_KEYS].sort()).toEqual([...LIBRARY_ROUTE_KEYS].sort())

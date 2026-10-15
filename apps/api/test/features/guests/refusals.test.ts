@@ -176,6 +176,12 @@ function refusedCalls(board: string, other: string, userId: string): [string, Me
       `${b}/library/items/${LIB_ITEM}/place`,
       undefined,
     ],
+    [
+      'POST /api/boards/:bid/library/items/:id/place/confirm',
+      'POST',
+      `${b}/library/items/${LIB_ITEM}/place/confirm`,
+      undefined,
+    ],
     // Requesting access: to their own board and to any other.
     ['POST /api/boards/:bid/access-requests', 'POST', `${b}/access-requests`, { role: 'editor' }],
     [

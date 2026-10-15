@@ -122,7 +122,8 @@ describe('wave Q migration', () => {
   it('is 0033_library, right after wave N’s 0032 (contiguous)', () => {
     const all = loadMigrations()
     expect(all.find((m) => m.version === 33)?.name).toBe('0033_library')
-    expect(all.at(-1)?.version).toBe(33)
+    // the review fixes' 0034 follows (wave-q-0034.test.ts)
+    expect(all.filter((m) => m.version > 33).map((m) => m.name)).toEqual(['0034_library_place'])
     expect(all.map((m) => m.version)).toEqual(all.map((_, i) => i + 1))
   })
 
@@ -132,7 +133,7 @@ describe('wave Q migration', () => {
     const all = loadMigrations()
     await migrate(d, { migrations: all.filter((m) => m.version <= 32) })
     const before = { columns: await columnsOf(d), constraints: await constraintsOf(d) }
-    expect((await migrate(d)).applied).toEqual(['0033_library'])
+    expect((await migrate(d, { migrations: all.filter((m) => m.version <= 33) })).applied).toEqual(['0033_library'])
     const after = { columns: await columnsOf(d), constraints: await constraintsOf(d) }
     expect(after.columns.filter((k) => !isNew(k))).toEqual(before.columns)
     expect(after.constraints.filter((k) => !isNew(k))).toEqual(before.constraints)

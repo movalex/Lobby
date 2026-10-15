@@ -12,6 +12,7 @@ import {
   libraryItemsPath,
   libraryPlacePath,
 } from '@draftroom/contracts'
+import type { Db, Queryable } from '@draftroom/db'
 import { newId } from '@draftroom/dev-assets'
 import type { LightMyRequestResponse } from 'fastify'
 import { expect } from 'vitest'
@@ -218,4 +219,43 @@ export async function addThumb(api: TestApi, v: { assetId: string; versionId: st
     [id, v.versionId, bytes, key],
   )
   return body
+}
+
+/**
+ * A Db whose transactions' statements are recorded, one list per transaction in order (whitespace folded), for the
+ * tests of what a route locks and reads inside its transaction (PGlite runs one transaction at a time, so the races
+ * themselves are the .pg tests').
+ */
+export function recordingDb(base: Db): { db: Db; transactions: string[][] } {
+  const transactions: string[][] = []
+  const wrap = (tx: Queryable, log: string[]): Queryable => {
+    const note = (sql: string) => log.push(sql.replace(/\s+/g, ' ').trim())
+    return {
+      query: (sql, params) => {
+        note(sql)
+        return tx.query(sql, params)
+      },
+      one: (sql, params) => {
+        note(sql)
+        return tx.one(sql, params)
+      },
+      maybeOne: (sql, params) => {
+        note(sql)
+        return tx.maybeOne(sql, params)
+      },
+      exec: (sql) => tx.exec(sql),
+    }
+  }
+  return {
+    db: {
+      ...base,
+      transaction: (fn) =>
+        base.transaction((tx) => {
+          const log: string[] = []
+          transactions.push(log)
+          return fn(wrap(tx, log))
+        }),
+    },
+    transactions,
+  }
 }

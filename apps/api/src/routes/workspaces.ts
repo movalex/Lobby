@@ -545,6 +545,17 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
           RETURNING bm.board_id`,
         [wid, uid],
       )
+      // 3) Their personal element library here (wave Q review fix): its items go to "Recently deleted", so the
+      // library's purge removes them after 30 days (until then they keep their files, like any deleted item); a
+      // later re-add brings none of them back by itself (only their own restore would). Their personal folders and
+      // their favourites and recents here go now. (Their workspace-library items stay: they belong to the workspace.)
+      const library = await tx.query(
+        `UPDATE library_items SET deleted_at = $3, updated_at = $3, revision = revision + 1
+          WHERE workspace_id = $1 AND owner_id = $2 AND deleted_at IS NULL`,
+        [wid, uid, at],
+      )
+      await tx.query('DELETE FROM library_folders WHERE workspace_id = $1 AND owner_id = $2', [wid, uid])
+      await tx.query('DELETE FROM library_marks WHERE workspace_id = $1 AND user_id = $2', [wid, uid])
       await audit(tx, {
         workspaceId: wid,
         actorId: user.id,
@@ -559,6 +570,7 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
             ? { invitationsToThemRevoked: left.invitationsToThem.length }
             : {}),
           accessRequestsDenied: left.requests.length,
+          ...(library.rowCount ? { personalLibraryItemsDeleted: library.rowCount } : {}),
           // multi-use links stay: who made them is on each row and here, so a manager can revoke them
           linksKept: left.linksKept.count,
           ...(left.linksKept.count ? { linkIdsKept: left.linksKept.ids } : {}),

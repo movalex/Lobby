@@ -12,12 +12,22 @@
 // - The file collector during a save, either order: GC holds the version's row (FOR UPDATE) while it deletes it, so
 //   the save's library_item_files row waits on its foreign key, then fails: 400 LIBRARY_FILE_NOT_SERVABLE, no item;
 //   a save under way holds the version (its foreign key) and GC, once it gets the row, sees the file row and keeps it.
+// The review fixes (docs/WAVE-Q-CONTRACTS.md §9):
+// - #2 the Internal only switch turned on while a place runs, either order: the switch under way holds the workspace
+//   row, so the place waits and then refuses (409 INTERNAL_ONLY, nothing linked); a place under way holds it FOR
+//   SHARE, so the switch waits and the place lands first.
+// - #3 a confirm racing the hourly sweep, either order: both delete the pending row first, so the confirm first keeps
+//   the link (the sweep then finds nothing), the sweep first removes it (the confirm then finds nothing: 204).
+// - #7 two stars at the favourites cap minus one: the PUT takes the (person, workspace) advisory lock first, so the
+//   second waits and then counts the first one's favourite: 409 LIBRARY_FULL.
 
-import { LIBRARY_LIMITS } from '@draftroom/contracts'
+import { LIBRARY_LIMITS, libraryPlaceConfirmPath } from '@draftroom/contracts'
 import { openTestDb } from '@draftroom/db/testing'
 import { afterEach, describe, expect, it } from 'vitest'
+import { PLACE_PENDING_MS, sweepPlacePending } from '../../../src/features/library/purge.ts'
 import { type AssetGcDeps, collectWorkspace } from '../../../src/files/gc.ts'
-import { createTestApi } from '../../helpers.ts'
+import { createBoard, createTestApi } from '../../helpers.ts'
+import { newProject, setProject } from '../outside/internal-only-support.ts'
 import { type PausingDb, pausingDb, waitedOrFinished } from '../../race-support.ts'
 import {
   answer,
@@ -72,6 +82,35 @@ const FOLDER_DELETE_HOLDS = /DELETE FROM library_folders/
 const GC_HOLDS = /FROM asset_versions WHERE id = \$1 AND workspace_id = \$2 FOR UPDATE/
 /** A save's transaction, stopped once its library_item_files rows are written (their foreign key holds the version). */
 const FILES_HOLD = /INSERT INTO library_item_files/
+
+/** The Internal only switch of a project, stopped once it has turned it (it holds the workspace row and the project). */
+const SWITCH_HOLDS = /UPDATE projects SET internal_only = \$2 WHERE id = \$1/
+/** A confirm's transaction, stopped once it has deleted the pending rows. */
+const CONFIRM_HOLDS = /DELETE FROM library_place_pending p\s+USING library_item_files f/
+/** The sweep's transaction for one board, stopped once it has deleted the board's old pending rows. */
+const SWEEP_HOLDS = /DELETE FROM library_place_pending WHERE board_id = \$1 AND created_at <= \$2/
+/** A mark's PUT, stopped once it holds the (person, workspace) advisory lock. */
+const MARKS_HOLD = /pg_advisory_xact_lock/
+
+const showsNothing = async () => new Set<string>()
+const confirmOf = (c: LibWorld['carol'], board: string, id: string) =>
+  c.req('POST', libraryPlaceConfirmPath(board, id))
+const star = (c: LibWorld['carol'], key: string) => c.req('PUT', `${LIB}/marks`, { key, favourite: true })
+const pastTheHour = (w: LibWorld) => new Date(w.api.clock.now().getTime() + PLACE_PENDING_MS + 60_000)
+
+/** An item saved from a board of a project that is not internal only (yet), and the project. */
+async function itemInProject(w: LibWorld) {
+  const project = await newProject(w.carol, WS, 'Soon secret')
+  const inside = await createBoard(w.carol, WS, 'Inside')
+  const moved = await w.carol.req('PATCH', `/api/boards/${inside}`, {
+    projectId: project,
+    visibility: 'workspace_edit',
+  })
+  expect(moved.statusCode, moved.body).toBe(200)
+  const s = await saved(w.carol, inside)
+  expect(s.internalOnly).toBe(false)
+  return { project, item: s.id }
+}
 
 /** The collector, with every board read as showing nothing. */
 const gc = (w: LibWorld): AssetGcDeps => ({
@@ -242,5 +281,111 @@ describe.skipIf(!PG)('the element library against concurrent writes (real Postgr
     expect(answer(s)).toBe('201')
     expect(r?.deleted.versions).toBe(0)
     expect(await count(w.api, 'asset_versions WHERE id = $1', [v.versionId])).toBe(1)
+  })
+
+  it('#2 the Internal only switch under way, then a place: the place waits, then 409 INTERNAL_ONLY, nothing linked', async () => {
+    const w = await world()
+    const { project, item } = await itemInProject(w)
+    const pause = w.paused.arm(SWITCH_HOLDS, 'after')
+    const switching = setProject(w.owner, project, true)
+    const pid = await pause.reached
+    const placing = place(w.dave, w.target, item)
+    try {
+      expect(await waitedOrFinished(w.api.db, pid, placing)).toBe('waited')
+    } finally {
+      pause.release()
+    }
+    const [sw, p] = await Promise.all([switching, placing])
+    expect(sw.statusCode, sw.body).toBe(200)
+    expect(answer(p)).toBe('409 INTERNAL_ONLY')
+    expect(await count(w.api, 'board_asset_links WHERE board_id = $1', [w.target])).toBe(0)
+    expect(await count(w.api, 'library_marks WHERE user_id = $1', [w.dave.userId])).toBe(0)
+  })
+
+  it('#2 a place under way, then the switch: the switch waits; the place lands first, the next one is refused', async () => {
+    const w = await world()
+    const { project, item } = await itemInProject(w)
+    const pause = w.paused.arm(PLACE_HOLDS, 'after')
+    const placing = place(w.dave, w.target, item)
+    const pid = await pause.reached
+    const switching = setProject(w.owner, project, true)
+    try {
+      expect(await waitedOrFinished(w.api.db, pid, switching)).toBe('waited')
+    } finally {
+      pause.release()
+    }
+    const [p, sw] = await Promise.all([placing, switching])
+    expect(answer(p)).toBe('200')
+    expect(sw.statusCode, sw.body).toBe(200)
+    expect(answer(await place(w.dave, w.target, item))).toBe('409 INTERNAL_ONLY')
+  })
+
+  it('#3 a confirm under way, then the sweep: the sweep waits, finds nothing to remove; the link stays', async () => {
+    const w = await world()
+    const v = await uploadTo(w, w.carol, w.source, 'hero.png')
+    const s = await saved(w.carol, w.source, { elements: [image('i', v)] })
+    expect(answer(await place(w.dave, w.target, s.id))).toBe('200')
+    const pause = w.paused.arm(CONFIRM_HOLDS, 'after')
+    const confirming = confirmOf(w.dave, w.target, s.id)
+    const pid = await pause.reached
+    const sweeping = sweepPlacePending(w.api.db, pastTheHour(w), showsNothing)
+    try {
+      expect(await waitedOrFinished(w.api.db, pid, sweeping)).toBe('waited')
+    } finally {
+      pause.release()
+    }
+    const [c, r] = await Promise.all([confirming, sweeping])
+    expect(answer(c)).toBe('204')
+    expect(r).toEqual({ removed: 0, kept: 0, unread: 0 })
+    expect(await count(w.api, 'board_asset_links WHERE board_id = $1', [w.target])).toBe(1)
+    expect(await count(w.api, 'library_place_pending')).toBe(0)
+  })
+
+  it('#3 the sweep under way, then a confirm: the confirm waits, then finds nothing (204); the link is gone', async () => {
+    const w = await world()
+    const v = await uploadTo(w, w.carol, w.source, 'hero.png')
+    const s = await saved(w.carol, w.source, { elements: [image('i', v)] })
+    expect(answer(await place(w.dave, w.target, s.id))).toBe('200')
+    const pause = w.paused.arm(SWEEP_HOLDS, 'after')
+    const sweeping = sweepPlacePending(w.api.db, pastTheHour(w), showsNothing)
+    const pid = await pause.reached
+    const confirming = confirmOf(w.dave, w.target, s.id)
+    try {
+      expect(await waitedOrFinished(w.api.db, pid, confirming)).toBe('waited')
+    } finally {
+      pause.release()
+    }
+    const [r, c] = await Promise.all([sweeping, confirming])
+    expect(r).toEqual({ removed: 1, kept: 0, unread: 0 })
+    expect(answer(c)).toBe('204')
+    expect(await count(w.api, 'board_asset_links WHERE board_id = $1', [w.target])).toBe(0)
+    expect(await count(w.api, 'library_place_pending')).toBe(0)
+  })
+
+  it('#7 two stars with one favourite of room: the second waits for the first, then 409 LIBRARY_FULL', async () => {
+    const w = await world()
+    await w.api.db.query(
+      `INSERT INTO library_marks (user_id, workspace_id, key, favourite)
+       SELECT $1, $2, 'piece:p' || g, true FROM generate_series(1, $3::int) AS g`,
+      [w.dave.userId, WS, LIBRARY_LIMITS.favourites - 1],
+    )
+    const pause = w.paused.arm(MARKS_HOLD, 'after')
+    const first = star(w.dave, 'piece:decision')
+    const pid = await pause.reached
+    const second = star(w.dave, 'piece:process')
+    try {
+      expect(await waitedOrFinished(w.api.db, pid, second)).toBe('waited')
+    } finally {
+      pause.release()
+    }
+    const [a, b] = await Promise.all([first, second])
+    expect(answer(a)).toBe('200')
+    expect(answer(b)).toBe('409 LIBRARY_FULL')
+    expect(
+      await count(w.api, 'library_marks WHERE user_id = $1 AND workspace_id = $2 AND favourite', [
+        w.dave.userId,
+        WS,
+      ]),
+    ).toBe(LIBRARY_LIMITS.favourites)
   })
 })

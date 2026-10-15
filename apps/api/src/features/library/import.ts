@@ -91,6 +91,7 @@ export function registerLibraryImport(
             item,
             source,
             internalOnly: false,
+            exportLimited: false,
             at,
           })
         await audit(tx, {
