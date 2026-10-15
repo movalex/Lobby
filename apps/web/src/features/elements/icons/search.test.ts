@@ -12,7 +12,8 @@ beforeAll(() => {
   const catalog = iconCatalogOf(pinnedIcons().index, () => Promise.reject(new Error('no fetch here')))
   search = createIconSearch(catalog.entries)
   total = catalog.entries.length
-})
+  // the generation: about 4 s alone, more under the full suite's load
+}, 120_000)
 
 const keys = (q: string, opts?: IconSearchOptions) => search.search(q, opts).map((e) => e.key)
 

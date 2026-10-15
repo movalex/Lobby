@@ -123,7 +123,8 @@ let sources: SourceIcon[]
 beforeAll(() => {
   generated = pinnedIcons()
   sources = readSourceIcons()
-})
+  // the generation: about 4 s alone, more under the full suite's load
+}, 120_000)
 
 const shardFiles = () => generated.files.filter((f) => ICON_SHARD_FILE_PATTERN.test(f.name))
 

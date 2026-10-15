@@ -33,7 +33,8 @@ beforeAll(() => {
     if (!f.name.startsWith('shard-')) continue
     for (const entry of Object.entries(IconShard.parse(JSON.parse(f.content)).icons)) all.push(entry)
   }
-})
+  // the generation: about 4 s alone, more under the full suite's load
+}, 120_000)
 
 const split = (key: string) => key.split(':') as ['lucide' | 'tabler', string]
 

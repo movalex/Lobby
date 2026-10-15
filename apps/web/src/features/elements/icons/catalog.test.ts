@@ -3,7 +3,7 @@
 // SPA's index.html where a file should be, a schema mismatch, no index in this build), retried after a failure.
 import { ICON_ASSET_PREFIX } from '@draftroom/contracts'
 import { pinnedIcons } from '@draftroom/icon-sets/generate'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { builtIconIndexFile, IconLoadError, loadIconCatalog } from './catalog.ts'
 
 const served = () => new Map(pinnedIcons().files.map((f) => [`${ICON_ASSET_PREFIX}${f.name}`, f.content]))
@@ -25,6 +25,11 @@ function fakeFetch(files: Map<string, string>, override?: (url: string) => Respo
 }
 
 const indexFile = () => pinnedIcons().indexFile
+
+// the generation (about 4 s alone, more under the full suite's load) runs once, in a hook with room for it
+beforeAll(() => {
+  pinnedIcons()
+}, 120_000)
 
 describe('loadIconCatalog', () => {
   it('reads the index once, then each shard once and only when an icon in it is asked for', async () => {
