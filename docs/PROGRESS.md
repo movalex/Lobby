@@ -1728,3 +1728,66 @@ cut-over on staging"; the runbook and the rehearsal: `docs/EXCALIDRAW-CUTOVER.md
     - No real Postgres run: no SQL change.
   - **Deferred, by decision:** warm-open resume from the device cache with a lineage check (design in the session scratchpad, `wave-o/resume-design.md`). It needs `CONTRACTS_REV` 14 and the §0b proof (about 2.4k lines) and revisits M6-3's divergence risk. It gains only about 0.6-0.8 s on a real link: most of the 5.3 s is Fast 4G emulation throttling the WebSocket to about 100 KB/s. The visits fix for a note made and deleted while away rides on the same bump.
   - **Deploy:** api, sync and web, because all three load the patched element. No env change.
+- **Excalidraw wave P: the team-ready release (branch `wave-p/integration`, worktree `Draftroom-pint`, from `main` 67e357a9 = staging d57a877).** The owner asked for Lobby "with all finished and useful features" before he sends it to the whole team.
+  - **Two audits:**
+    - a journey audit (an agent using Lobby on the e2e stack like a new teammate, desktop and 390x844 touch, 19 journeys): 0 blockers, 8 major, 22 minor, 18 polish (P-001..P-048);
+    - a read-only unfinished-feature audit: 43 items, 2 to verify, 4 to fix, 37 fine; no stub commands, no pending routes, no "Draftroom" in visible copy, dev surfaces build-folded.
+  - **Four fix branches, then a leftovers branch, a review (opus, adversarial), review fixes and gate fixes, all merged with `--no-ff`:**
+    - `wave-p/workshops`;
+    - `ai-share`;
+    - `dashboard`;
+    - `canvas`;
+    - `leftovers`;
+    - `review-fixes`;
+    - `gate-fixes`.
+  - **Web only:** no api, sync, packages, migration or `CONTRACTS_REV` change.
+  - **What changes for a user:**
+    - **Typing and notes:**
+      - typing on a selected shape labels it (through the text lease; the canvas/input allowlist is unchanged as the only path);
+      - note Size resizes the note (150/200/300/400 px);
+      - plain colour names (Yellow, Blue …) in pickers and AI replies;
+      - Lock/Unlock wording; the comment tool returns to Select.
+    - **Panels and chrome:**
+      - the style panel opens only on request, remembered per browser;
+      - recognisable toolbar icons;
+      - comment pins at a note's corner;
+      - link cards placed in free space with a board icon;
+      - a quiet focus indicator;
+      - one top-centre stack: since, AI pills, invite, timer, spotlight.
+    - **Offline and updates:**
+      - offline shows at once ("Offline – your changes are kept"), but only when the socket also looks gone (a ping decides), so a wrong browser signal no longer shows Offline;
+      - reload notices wait while someone is typing;
+      - lazy dialogs retry after an offline failure.
+    - **Workshops:**
+      - dot voting: a click on a note joins and votes (a drag still drags; a finger tap with the Hand tool votes, a mouse's Hand never does); no confetti for an empty vote;
+      - the running timer is a pill everyone sees;
+      - since-your-last-visit leaves out your own changes, but not a colleague's later change to them;
+      - "Linked from N" in the top bar and the board menu;
+      - present slides keep a margin.
+    - **First run and dashboard:**
+      - a first visit gets a Welcome card (Blank board / Brainstorm / Lobby tour, the keys); "What's new" only for returning users, updated;
+      - a Help menu (tour, shortcuts, feedback);
+      - one neutral thumbnail placeholder;
+      - "Created …" for never-edited boards;
+      - no roadmap "… yet" wording; "Lobby" everywhere (the sign-in page said "DBC Lobby");
+      - the palette hides unavailable commands until you type;
+      - a file card says when its preview takes longer than usual.
+    - **Sharing, AI and export:**
+      - a simpler Share dialog (invite field, people with access, Board link, then Guests and clients and Advanced folded) that no longer jumps;
+      - Feedback hidden for guests and outsiders everywhere;
+      - the tour's AI chip no longer argues with itself;
+      - "Ideas with AI" opens on sticky notes;
+      - export opens on the whole board (or the selection) with plain wording.
+  - **Not done, by decision:**
+    - since-visit can't leave out your own moves and restyles, because the server stamps no author on them (a wire change);
+    - a 404 board and a board you can't open answer alike, on purpose (no leak of existence);
+    - the search index for "Linked from" still runs every 15 s.
+  - **Gate** on 3da3726a:
+    - lint on the NAS: 0 errors, the 4 older warnings; typecheck: 15 packages;
+    - `pnpm test`: **880 files passed / 26 skipped, 9,566 tests passed / 125 skipped, 0 failed**;
+    - `pnpm probe:browser`: 3/3; `test:arrows`: 85/85;
+    - the whole e2e suite on chromium, two shards: **normally 1,017 passed, 0 failed, 14 skipped; with `E2E_DIRECT_EVENTS=1` 1,017 passed, 0 failed, 14 skipped**.
+    - The first gate run had 5 failures, fixed in `wave-p/gate-fixes`:
+      - two product bugs: the spotlight bar outside the top-centre stack's measured slot; phones (resting on Hand) could not vote;
+      - two outdated tests;
+      - one harness bug (an EventSource injection the direct stream never reads).
