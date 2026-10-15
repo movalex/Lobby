@@ -18,6 +18,14 @@ export type AuditAction =
   // authz-006: a workspace member's role changed, or the member was removed (with their board grants)
   | 'workspace.member.role'
   | 'workspace.member.remove'
+  // wave Q (WS2, features/library): an element library item saved, deleted or restored, a library imported, a
+  // folder made or deleted (ids, scopes and counts only: never names or content)
+  | 'library.item.create'
+  | 'library.item.delete'
+  | 'library.item.restore'
+  | 'library.import'
+  | 'library.folder.create'
+  | 'library.folder.delete'
 
 /** Written in the same transaction as the change it describes, so the log never disagrees with it. */
 export async function audit(

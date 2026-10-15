@@ -8,6 +8,8 @@
 //     and trashed ones included);
 //   - a checkpoint of the workspace names it (its body, read once: asset_gc_snapshot_refs), or a
 //     board_asset_links row does (a board made from content that showed it);
+//   - an element library item shows it (library_item_files, wave Q): a deleted item's rows count too until the
+//     library's purge removes the item, 30 days after its delete (features/library/purge.ts);
 //   - its board is in the trash (a restore brings the board back with its files);
 //   - it is in flight: uploaded less than ASSET_GC_IN_FLIGHT_DAYS ago, or its preview job is running.
 // An image or video asset record counts only while a shape uses it (gc-refs.ts explains why).
@@ -251,6 +253,14 @@ async function gatherReferences(deps: AssetGcDeps, workspaceId: string): Promise
       )
     ).rows,
   )
+  add(
+    (
+      await deps.db.query<{ version_id: string }>(
+        'SELECT DISTINCT version_id FROM library_item_files WHERE workspace_id = $1',
+        [workspaceId],
+      )
+    ).rows,
+  )
   const checkpointsFailed = await scanCheckpoints(deps, workspaceId)
   add(
     (
@@ -380,6 +390,9 @@ async function deleteVersion(
       return null
     const held = await tx.one<{ held: boolean }>(
       `SELECT EXISTS (SELECT 1 FROM board_asset_links WHERE workspace_id = $1 AND version_id = $2)
+           -- a library item's: a save's foreign key holds the version row, so it commits before this lock (seen
+           -- here) or waits for it and then finds the version gone (the save refuses it)
+           OR EXISTS (SELECT 1 FROM library_item_files WHERE workspace_id = $1 AND version_id = $2)
            OR EXISTS (SELECT 1 FROM asset_gc_snapshot_refs WHERE workspace_id = $1 AND version_id = $2)
            OR EXISTS (SELECT 1 FROM boards WHERE id = $3 AND status = 'trashed')
            OR EXISTS (SELECT 1 FROM preview_jobs WHERE version_id = $2 AND status = 'running')

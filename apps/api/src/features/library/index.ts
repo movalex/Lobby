@@ -1,41 +1,57 @@
-// OWNER: WS2 (wave Q, the element library; stubs landed by the wave Q foundation). The library routes
-// (@draftroom/contracts library.ts; migration 0033_library; docs/WAVE-Q-CONTRACTS.md §2):
+// OWNER: WS2 (wave Q, the element library). The library routes (@draftroom/contracts library.ts; migration
+// 0033_library; docs/WAVE-Q-CONTRACTS.md §2):
 //
-//   GET    /api/workspaces/:wid/library                          list (summaries, paged)
-//   GET    /api/workspaces/:wid/library/items/:id                one item with its elements
-//   POST   /api/workspaces/:wid/library/items                    save a selection
-//   PATCH  /api/workspaces/:wid/library/items/:id                rename, retag, move, replace (revision-checked)
-//   DELETE /api/workspaces/:wid/library/items/:id                soft delete
-//   POST   /api/workspaces/:wid/library/items/:id/restore        undo a delete (30 days)
-//   GET    /api/workspaces/:wid/library/items/:id/files/:ver/thumb   a preview image of a version the item shows
-//   POST   /api/workspaces/:wid/library/import                   a normalised .excalidrawlib
-//   GET    /api/workspaces/:wid/library/folders                  folders of a scope
-//   POST   /api/workspaces/:wid/library/folders                  new folder
-//   PATCH  /api/workspaces/:wid/library/folders/:fid             rename, reorder
-//   DELETE /api/workspaces/:wid/library/folders/:fid             delete (its items stay, folderless)
-//   GET    /api/workspaces/:wid/library/marks                    the caller's favourites and recents
-//   PUT    /api/workspaces/:wid/library/marks                    star / unstar / stamp a use
-//   POST   /api/boards/:bid/library/items/:id/place              an item's elements for this board, files linked first
+//   GET    /api/workspaces/:wid/library                          list (summaries, paged)                  items.ts
+//   GET    /api/workspaces/:wid/library/items/:id                one item with its elements                items.ts
+//   POST   /api/workspaces/:wid/library/items                    save a selection                          items.ts
+//   PATCH  /api/workspaces/:wid/library/items/:id                rename, retag, move, replace (revision)   items.ts
+//   DELETE /api/workspaces/:wid/library/items/:id                soft delete                               items.ts
+//   POST   /api/workspaces/:wid/library/items/:id/restore        undo a delete (30 days)                   items.ts
+//   GET    /api/workspaces/:wid/library/items/:id/files/:ver/thumb   a preview of a version it shows       items.ts
+//   POST   /api/workspaces/:wid/library/import                   a normalised .excalidrawlib               import.ts
+//   GET    /api/workspaces/:wid/library/folders                  folders of a scope                        folders.ts
+//   POST   /api/workspaces/:wid/library/folders                  new folder                                folders.ts
+//   PATCH  /api/workspaces/:wid/library/folders/:fid             rename, reorder                           folders.ts
+//   DELETE /api/workspaces/:wid/library/folders/:fid             delete (its items stay, folderless)       folders.ts
+//   GET    /api/workspaces/:wid/library/marks                    the caller's favourites and recents       marks.ts
+//   PUT    /api/workspaces/:wid/library/marks                    star / unstar / stamp a use               marks.ts
+//   POST   /api/boards/:bid/library/items/:id/place              an item's elements, files linked first    place.ts
 //
-// The guard rows are in place: every route refuses a name-only guest (guests/guard.ts, LIBRARY_GUEST_ROUTE_KEYS), and
-// the eight writes freshen the caller for the in-route creator check of the workspace scope (domain-access/guard.ts,
-// LIBRARY_CREATOR_IN_ROUTE_KEYS). Every check the contract lists is the route's own as well (fail closed), with
-// authorship from the session only. Pending (../pending-routes.ts): none is registered until WS2 implements it, so
-// each answers 404 NOT_FOUND like any unknown route, and the web's library client answers empty
-// (apps/web/src/features/elements/client.ts).
+// Guards first: every route refuses a name-only guest (guests/guard.ts, LIBRARY_GUEST_ROUTE_KEYS), and the eight
+// writes freshen the caller for the in-route creator check of the workspace scope (domain-access/guard.ts,
+// LIBRARY_CREATOR_IN_ROUTE_KEYS). Then every rule again in the route, failing closed (model.ts), with authorship from
+// the session only. Rate limits per person (LIBRARY_RATE_LIMITS): saves (POST items, PATCH with elements) 60 a
+// minute, imports 5, places 120. The hourly purge removes items deleted more than 30 days ago (purge.ts); the file
+// collector counts library_item_files as references until then (files/gc.ts).
+//
+// Lock order (access.ts): every library write takes the workspace row FOR NO KEY UPDATE first (with the caller's
+// membership read again under it), then the item or folder row; a place takes only the item row FOR SHARE, then
+// writes board_asset_links. No content, no names and no element data are logged; audit rows carry ids, scopes and
+// counts. A route listed in ../pending-routes.ts again is not registered (it ships hidden: the unknown route's 404).
 
-import { LIBRARY_ROUTE_KEYS } from '@draftroom/contracts'
+import { LIBRARY_RATE_LIMITS } from '@draftroom/contracts'
 import type { FastifyInstance } from 'fastify'
-import { notFound } from '../../errors.ts'
+import { keyedLimit } from '../../rate-limit.ts'
 import type { FeatureContext } from '../context.ts'
-import { type PendingMethod, routeUnlessPending } from '../pending-routes.ts'
+import { registerLibraryFolders } from './folders.ts'
+import { registerLibraryImport } from './import.ts'
+import { registerLibraryItems } from './items.ts'
+import { registerLibraryMarks } from './marks.ts'
+import { registerLibraryPlace } from './place.ts'
+import { startLibraryPurge } from './purge.ts'
 
-export async function registerLibrary(app: FastifyInstance, _ctx: FeatureContext): Promise<void> {
-  const stub = async () => {
-    throw notFound()
+export async function registerLibrary(app: FastifyInstance, ctx: FeatureContext): Promise<void> {
+  const limit = (l: { max: number; windowMs: number }) =>
+    keyedLimit({ max: l.max, timeWindow: l.windowMs }, ctx.now)
+  const limits = {
+    save: limit(LIBRARY_RATE_LIMITS.save),
+    import: limit(LIBRARY_RATE_LIMITS.import),
+    place: limit(LIBRARY_RATE_LIMITS.place),
   }
-  for (const key of LIBRARY_ROUTE_KEYS) {
-    const [method, url] = key.split(' ') as [PendingMethod, string]
-    routeUnlessPending(app, method, url, stub)
-  }
+  registerLibraryItems(app, ctx, limits)
+  registerLibraryImport(app, ctx, limits)
+  registerLibraryFolders(app, ctx)
+  registerLibraryMarks(app, ctx)
+  registerLibraryPlace(app, ctx, limits)
+  startLibraryPurge(app, ctx)
 }

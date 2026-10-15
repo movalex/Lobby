@@ -30,24 +30,9 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   // wave N: none left. WS4's visit routes (N4-1, features/visits), WS5's three capture routes (N5-1,
   // features/ai/capture.ts) and WS7's board-cards (N7-2) and backlinks (N7-4) are implemented; to ship one hidden,
   // add its key back.
-  // wave Q (landed by the wave Q foundation): the element library (@draftroom/contracts LIBRARY_ROUTE_KEYS), every
-  // route WS2's (features/library): Q2-1 list and read, Q2-2 save/change/delete/restore, Q2-3 place and thumbs, Q2-4
-  // import, Q2-5 folders, Q2-6 marks. WS2 deletes each key here in the change that implements it.
-  'GET /api/workspaces/:wid/library': { owner: 'WS2', item: 'Q2-1' },
-  'GET /api/workspaces/:wid/library/items/:id': { owner: 'WS2', item: 'Q2-1' },
-  'POST /api/workspaces/:wid/library/items': { owner: 'WS2', item: 'Q2-2' },
-  'PATCH /api/workspaces/:wid/library/items/:id': { owner: 'WS2', item: 'Q2-2' },
-  'DELETE /api/workspaces/:wid/library/items/:id': { owner: 'WS2', item: 'Q2-2' },
-  'POST /api/workspaces/:wid/library/items/:id/restore': { owner: 'WS2', item: 'Q2-2' },
-  'GET /api/workspaces/:wid/library/items/:id/files/:ver/thumb': { owner: 'WS2', item: 'Q2-3' },
-  'POST /api/workspaces/:wid/library/import': { owner: 'WS2', item: 'Q2-4' },
-  'GET /api/workspaces/:wid/library/folders': { owner: 'WS2', item: 'Q2-5' },
-  'POST /api/workspaces/:wid/library/folders': { owner: 'WS2', item: 'Q2-5' },
-  'PATCH /api/workspaces/:wid/library/folders/:fid': { owner: 'WS2', item: 'Q2-5' },
-  'DELETE /api/workspaces/:wid/library/folders/:fid': { owner: 'WS2', item: 'Q2-5' },
-  'GET /api/workspaces/:wid/library/marks': { owner: 'WS2', item: 'Q2-6' },
-  'PUT /api/workspaces/:wid/library/marks': { owner: 'WS2', item: 'Q2-6' },
-  'POST /api/boards/:bid/library/items/:id/place': { owner: 'WS2', item: 'Q2-3' },
+  // wave Q: none left. WS2 implemented the element library's 15 routes (@draftroom/contracts LIBRARY_ROUTE_KEYS,
+  // features/library: Q2-1 list and read, Q2-2 save/change/delete/restore, Q2-3 place and thumbs, Q2-4 import, Q2-5
+  // folders, Q2-6 marks); to ship one hidden, add its key back.
 }
 
 export const isPendingRoute = (
