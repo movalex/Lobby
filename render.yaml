@@ -82,6 +82,13 @@ services:
       - type: rewrite
         source: /excalidraw-assets/*
         destination: https://draftroom-staging-api.onrender.com/excalidraw-assets/*
+      # Wave Q: Lobby's generated assets (the built-in icons' index, shards and LICENSES.txt under
+      # /lobby-assets/icons/, apps/web/build/lobby-assets.ts). The same rule as the fonts: a real file is served
+      # as-is, a miss goes to the api, whose plain 404 (apps/api/test/static-prefixes-404.test.ts) the icon
+      # loader reads as "not served", never the SPA's index.html. Must stay BEFORE the SPA fallback.
+      - type: rewrite
+        source: /lobby-assets/*
+        destination: https://draftroom-staging-api.onrender.com/lobby-assets/*
       # SPA fallback. Render skips rules for paths where a file exists, so hashed assets are served as-is.
       - type: rewrite
         source: /*
@@ -137,6 +144,16 @@ services:
       - path: /excalidraw-assets/*
         name: Cache-Control
         value: public, max-age=604800
+      # Wave Q: the icons' index and shards are content-hashed (index.<hash>.json, shard-<n>.<hash>.json; the
+      # build names the index through a define), so a year and immutable. LICENSES.txt is the one fixed name: it
+      # gets a day of its own below. Render's precedence between two matching rules for one header is UNVERIFIED:
+      # check both answers' Cache-Control after the first deploy (curl -I).
+      - path: /lobby-assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+      - path: /lobby-assets/icons/LICENSES.txt
+        name: Cache-Control
+        value: public, max-age=86400
       # Wave M (S2, M3-5): the build's /version.json ({"commit": …}, apps/web/vite.config.ts versionJson) is how an
       # open tab learns about a new build (W3's lib/version-check.ts), so it is never cached anywhere.
       - path: /version.json

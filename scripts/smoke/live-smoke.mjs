@@ -484,6 +484,18 @@ if (EXPECT === 'excalidraw') {
   } catch (e) {
     fail('excalidraw-assets missing path', e.message)
   }
+  try {
+    // Wave Q: the same for Lobby's generated assets (the icons): a miss is a 404, never index.html.
+    const missing = '/lobby-assets/icons/not-there.json'
+    const r = await http(`${base}${missing}`)
+    check(
+      r.status === 404,
+      'lobby-assets missing path',
+      `GET ${missing} -> ${describe(r)}${r.status === 200 && isHtml(r) ? ' (the SPA fallback answered; the /lobby-assets/* rewrite is missing or below /*)' : ''}`,
+    )
+  } catch (e) {
+    fail('lobby-assets missing path', e.message)
+  }
 }
 
 // ---- 4. foreign hosts in the bundle --------------------------------------------------------------------

@@ -24,6 +24,9 @@ test("render.yaml: the static site's headers, the enforced CSP on one line", () 
   assert.equal(headerFor(headers, '/assets/*', 'Cache-Control'), 'public, max-age=31536000, immutable')
   // K1-6 (wave K): the self-hosted fonts, a week
   assert.equal(headerFor(headers, '/excalidraw-assets/*', 'Cache-Control'), 'public, max-age=604800')
+  // wave Q: the icons' hashed index and shards, a year; their fixed-name LICENSES.txt, a day
+  assert.equal(headerFor(headers, '/lobby-assets/*', 'Cache-Control'), 'public, max-age=31536000, immutable')
+  assert.equal(headerFor(headers, '/lobby-assets/icons/LICENSES.txt', 'Cache-Control'), 'public, max-age=86400')
   // wave M (S2, M3-5): the build's version file is never cached (open tabs compare it with their own commit)
   assert.equal(headerFor(headers, '/version.json', 'Cache-Control'), 'no-store')
   const csp = expectedCsp(headers)
@@ -36,9 +39,48 @@ test("render.yaml: the static site's headers, the enforced CSP on one line", () 
   assert.deepEqual(cspDifferences(csp.value, csp.value), [])
   // Only the static site's own headers: nothing from another service.
   assert.ok(
-    headers.every((h) => ['/*', '/assets/*', '/excalidraw-assets/*', '/version.json'].includes(h.path)),
+    headers.every((h) =>
+      [
+        '/*',
+        '/assets/*',
+        '/excalidraw-assets/*',
+        '/lobby-assets/*',
+        '/lobby-assets/icons/LICENSES.txt',
+        '/version.json',
+      ].includes(h.path),
+    ),
     JSON.stringify(headers),
   )
+})
+
+/** The static site's rewrite rules in order: [source, destination]. */
+function staticRewrites(yaml) {
+  const lines = yaml.replace(/\r\n?/g, '\n').split('\n')
+  const start = lines.findIndex((l) => l.trimEnd() === '    name: draftroom-staging-web')
+  const out = []
+  let inRoutes = false
+  for (let i = start + 1; i < lines.length && !/^ {2}- type:/.test(lines[i]); i++) {
+    if (/^ {4}[a-zA-Z]/.test(lines[i])) inRoutes = lines[i].trim() === 'routes:'
+    if (!inRoutes || lines[i].trim() !== '- type: rewrite') continue
+    const source = /^\s*source:\s*(\S+)/.exec(lines[i + 1] ?? '')?.[1]
+    const destination = /^\s*destination:\s*(\S+)/.exec(lines[i + 2] ?? '')?.[1]
+    out.push([source, destination])
+  }
+  return out
+}
+
+test("render.yaml: the static site's asset prefixes go to the api (its 404) before the SPA fallback", () => {
+  const rewrites = staticRewrites(RENDER_YAML)
+  const at = (source) => rewrites.findIndex(([s]) => s === source)
+  const spa = at('/*')
+  assert.ok(spa >= 0, JSON.stringify(rewrites))
+  assert.equal(rewrites[spa][1], '/index.html')
+  assert.equal(spa, rewrites.length - 1, 'the SPA fallback is the last rule')
+  for (const prefix of ['/excalidraw-assets', '/lobby-assets']) {
+    const i = at(`${prefix}/*`)
+    assert.ok(i >= 0 && i < spa, `${prefix}/* is rewritten before the SPA fallback`)
+    assert.equal(rewrites[i][1], `https://draftroom-staging-api.onrender.com${prefix}/*`)
+  }
 })
 
 test('a live policy is compared directive by directive (order and case do not matter)', () => {
