@@ -7,7 +7,7 @@ import { DEFAULT_INSERT_OPTIONS, libraryPlaceConfirmPath, libraryPlacePath } fro
 import { instantiatePiece } from '@draftroom/templates/pieces'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
-import type { SaveStatus } from '../../canvas/sync/types.ts'
+import type { EngineCore, SaveStatus } from '../../canvas/sync/types.ts'
 import { fakeCanvas, fakeCtx } from '../sort/test-kit.ts'
 import { resetLibraryClient, setLibraryRequester } from './client.ts'
 import { insertTile, whenPushed } from './insert.ts'
@@ -19,13 +19,13 @@ installServerTextMetrics()
 /** An engine the test drives: which ids the room holds, and the save status. */
 function fakeEngine() {
   const confirmed = new Set<string>()
-  const acks = new Set<() => void>()
+  const acks = new Set<Parameters<EngineCore['onAck']>[0]>()
   const statuses = new Set<(s: SaveStatus) => void>()
   let status: SaveStatus = { state: 'saved', pending: 0, offlineChanges: 0, lastReject: null }
   return {
     engine: {
       confirmed: (id: string) => (confirmed.has(id) ? ({ id } as never) : undefined),
-      onAck: (l: () => void) => {
+      onAck: (l: Parameters<EngineCore['onAck']>[0]) => {
         acks.add(l)
         return () => acks.delete(l)
       },
@@ -39,7 +39,7 @@ function fakeEngine() {
     },
     ack(ids: readonly string[]) {
       for (const id of ids) confirmed.add(id)
-      for (const l of acks) l()
+      for (const l of acks) l({} as never)
     },
     status(s: Partial<SaveStatus>) {
       status = { ...status, ...s }
