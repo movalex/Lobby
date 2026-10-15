@@ -78,3 +78,5 @@ for (const dpr of BLIT_DPRS) {
 
 writeFileSync(`${outDir}pan-browser.json`, JSON.stringify({ pass: allPass, ...out }, null, 1))
 if (!allPass) process.exitCode = 1
+// wave Q (WS1): the built-in icons as Excalidraw draws them, in its own page (it only ever sets a failing exit code)
+await import('../icons/run-browser.ts')

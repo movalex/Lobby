@@ -13,7 +13,8 @@
   },
   "scripts": {
     "typecheck": "tsc -p .",
-    "report": "node src/report.ts"
+    "report": "node src/report.ts",
+    "fidelity": "node scripts/raster-fidelity.ts"
   },
   "dependencies": {
     "@draftroom/contracts": "workspace:*",
