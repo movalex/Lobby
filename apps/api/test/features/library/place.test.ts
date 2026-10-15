@@ -11,9 +11,11 @@ import {
   ListLibraryMarksResponse,
   PlaceLibraryItemResponse,
 } from '@draftroom/contracts'
+import { newId } from '@draftroom/dev-assets'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { fileRefsFor } from '../../../src/routes/engine-internal.ts'
 import { createBoard } from '../../helpers.ts'
+import { derivativeKey } from '../../../src/files/blobs.ts'
 import { fileStatus } from '../history/helpers.ts'
 import { newProject, setProject } from '../outside/internal-only-support.ts'
 import {
@@ -218,5 +220,34 @@ describe('the thumb of a version an item shows', () => {
     expect((await w.carol.req('DELETE', itemUrl(s.id))).statusCode).toBe(204)
     expect((await w.carol.req('GET', `${itemUrl(s.id)}/files/${v.versionId}/thumb`)).statusCode).toBe(200)
     expect(answer(await w.pat.req('GET', thumb(s.id, v.versionId)))).toBe('404 NOT_FOUND')
+  })
+})
+
+describe('the thumb of a placed PDF page (review fix)', () => {
+  it('?page=n serves that page’s rendering (the cover thumb for page 1); a page it lacks or a bad page: 404', async () => {
+    const v = await uploadTo(w, w.carol, w.source, 'deck.png')
+    const page = async (n: number, role: 'page' | 'thumb', bytes: number) => {
+      const id = newId('drv')
+      const key = derivativeKey(v.assetId, v.versionId, id, 'webp')
+      const body = Buffer.alloc(bytes, n)
+      await w.api.blobs.put(key, body, { contentType: 'image/webp', contentLength: bytes })
+      await w.api.db.query(
+        `INSERT INTO asset_derivatives (id, version_id, position, role, page, width, height, mime_type, bytes, blob_key)
+         VALUES ($1, $2, $3, $4, $5, 10, 10, 'image/webp', $6, $7)`,
+        [id, v.versionId, n, role, n, bytes, key],
+      )
+      return body
+    }
+    const cover = await page(1, 'thumb', 30)
+    const third = await page(3, 'page', 33)
+    const s = await saved(w.carol, w.source, { elements: [image('i', v, { fileId: `${v.versionId}.p3` })] })
+    const get = (q: string) => w.pat.req('GET', `${thumb(s.id, v.versionId)}${q}`)
+    const res = await get('?page=3')
+    expect(res.statusCode, res.body).toBe(200)
+    expect(res.rawPayload.equals(third)).toBe(true)
+    expect((await get('?page=1')).rawPayload.equals(cover)).toBe(true)
+    expect((await get('')).rawPayload.equals(cover)).toBe(true)
+    for (const q of ['?page=2', '?page=0', '?page=x', '?page=10000', '?page=3.5'])
+      expect(answer(await get(q)), q).toBe('404 NOT_FOUND')
   })
 })

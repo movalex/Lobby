@@ -465,8 +465,9 @@ export function libraryListPath(workspaceId: string, query: Partial<ListLibraryQ
 export const libraryItemsPath = (wid: string) => `${ws(wid)}/items`
 export const libraryItemPath = (wid: string, id: string) => `${ws(wid)}/items/${enc(id)}`
 export const libraryRestorePath = (wid: string, id: string) => `${libraryItemPath(wid, id)}/restore`
-export const libraryThumbPath = (wid: string, id: string, versionId: string) =>
-  `${libraryItemPath(wid, id)}/files/${enc(versionId)}/thumb`
+/** The thumb of a version an item shows; with `page`, that page of a PDF (a placed PDF page, `ver_….p<n>`). */
+export const libraryThumbPath = (wid: string, id: string, versionId: string, page?: number) =>
+  `${libraryItemPath(wid, id)}/files/${enc(versionId)}/thumb${page === undefined ? '' : `?page=${page}`}`
 export const libraryImportPath = (wid: string) => `${ws(wid)}/import`
 export const libraryFoldersPath = (wid: string, scope?: LibraryScope) =>
   scope ? `${ws(wid)}/folders?scope=${scope}` : `${ws(wid)}/folders`

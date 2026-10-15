@@ -69,6 +69,8 @@ const R = LIBRARY_ROUTES
 /** A save's body: the elements (≤ 256 KiB once serialized) and a small envelope, with room for the client's form. */
 export const SAVE_BODY_LIMIT = 2 * LIBRARY_LIMITS.itemBytes
 const FOREIGN_KEY_VIOLATION = '23503'
+/** A PDF page of the thumb route (`?page=n`). */
+const THUMB_PAGE = /^[1-9][0-9]{0,3}$/
 
 const NOT_YOURS = 'Only its author or a workspace owner or admin can change this library item.'
 const EXPORT_REFUSED =
@@ -404,15 +406,23 @@ export function registerLibraryItems(
         (await findItem(db, caller, id, { state: 'live', now })) ??
         (deleted && canEditItem(deleted, caller) ? deleted : null)
       if (!row || !LIBRARY_VERSION_ID_PATTERN.test(ver)) throw notFound()
-      // only a version the item shows (library_item_files), of the item's own workspace, and only its published thumb
+      // a placed PDF page (`ver_….p<n>`) asks for its page: ?page=n (1-9999, as canvas-schema FILE_ID_PATTERN)
+      const pageParam = (req.query as { page?: unknown } | undefined)?.page
+      if (pageParam !== undefined && !(typeof pageParam === 'string' && THUMB_PAGE.test(pageParam)))
+        throw notFound()
+      const page = pageParam === undefined ? null : Number(pageParam)
+      // only a version the item shows (library_item_files), of the item's own workspace, and only a published
+      // preview: its thumb, or with a page that page's smallest rendering (the cover's thumb counts for page 1)
       const d = await db.maybeOne<{ blob_key: string; mime_type: string; bytes: number }>(
         `SELECT d.blob_key, d.mime_type, d.bytes::float8 AS bytes
            FROM library_item_files f
            JOIN asset_versions v ON v.asset_id = f.asset_id AND v.id = f.version_id AND v.workspace_id = f.workspace_id
-           JOIN asset_derivatives d ON d.version_id = v.id AND d.role = 'thumb'
+           JOIN asset_derivatives d ON d.version_id = v.id
           WHERE f.item_id = $1 AND f.version_id = $2 AND f.workspace_id = $3
-          ORDER BY d.position LIMIT 1`,
-        [id, ver, wid],
+            AND (CASE WHEN $4::int IS NULL THEN d.role = 'thumb'
+                      ELSE d.role IN ('page', 'thumb') AND d.page = $4::int END)
+          ORDER BY d.width NULLS LAST, d.position LIMIT 1`,
+        [id, ver, wid, page],
       )
       if (!d || !DERIVATIVE_MIMES.includes(d.mime_type)) throw notFound()
       const obj = await ctx.blobs.get(d.blob_key)

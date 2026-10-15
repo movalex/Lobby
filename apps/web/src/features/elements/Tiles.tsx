@@ -3,6 +3,7 @@
 // board drops it at the pointer (text/plain `lobby-element:<source>:<id>`); a right-click, the context-menu key or
 // Shift+F10 opens its actions. The star is a mouse shortcut of the "Add to favourites" action (hidden from screen
 // readers, who get the action and the option's own "favourite" in its name).
+import { FILE_ID_PATTERN, pdfPageOf, versionIdOf } from '@draftroom/canvas-schema/limits'
 import { libraryThumbPath } from '@draftroom/contracts'
 import { type MouseEvent, memo, type ReactNode, useRef } from 'react'
 import type { Previews } from '../pieces/PiecesPanel.tsx'
@@ -33,6 +34,17 @@ function IconArt({
   )
 }
 
+/**
+ * Where an item tile loads the image of `fileId`: its version's thumb, or for a placed PDF page (`ver_….p<n>`) that
+ * page's rendering; null (the placeholder) for anything that is not a Lobby file id.
+ */
+export const itemThumb =
+  (workspaceId: string, itemId: string) =>
+  (fileId: string): string | null => {
+    if (!FILE_ID_PATTERN.test(fileId)) return null
+    return libraryThumbPath(workspaceId, itemId, versionIdOf(fileId), pdfPageOf(fileId) ?? undefined)
+  }
+
 function ItemArt({ tile, workspaceId }: { tile: Tile & { source: 'item' }; workspaceId: string }) {
   const ref = useRef<HTMLSpanElement>(null)
   const seen = useSeen(ref)
@@ -44,7 +56,7 @@ function ItemArt({ tile, workspaceId }: { tile: Tile & { source: 'item' }; works
         elements={elements}
         width={tile.item.width}
         height={tile.item.height}
-        thumb={(ver) => libraryThumbPath(workspaceId, tile.id, ver)}
+        thumb={itemThumb(workspaceId, tile.id)}
       />
     </span>
   )
