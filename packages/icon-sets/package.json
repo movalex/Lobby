@@ -1,0 +1,18 @@
+{
+  "name": "@draftroom/icon-sets",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./files": "./src/files.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@draftroom/contracts": "workspace:*",
+    "@tabler/icons": "catalog:",
+    "lucide-static": "catalog:"
+  }
+}

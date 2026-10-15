@@ -19,6 +19,7 @@
     "@draftroom/canvas-schema": "workspace:*",
     "@draftroom/contracts": "workspace:*",
     "@draftroom/dev-assets": "workspace:*",
+    "@draftroom/icon-sets": "workspace:*",
     "@draftroom/permissions": "workspace:*",
     "@draftroom/templates": "workspace:*",
     "@excalidraw/common": "catalog:",

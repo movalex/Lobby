@@ -74,6 +74,8 @@ export default defineConfig({
             'packages/auth-tickets/src/**/*.test.ts',
             'packages/board-ops/src/**/*.test.ts',
             'packages/templates/src/**/*.test.ts',
+            // wave Q (the foundation): the pinned icon sets and, from WS1, their generator and converter
+            'packages/icon-sets/src/**/*.test.ts',
             'packages/blob-store/src/**/*.test.ts',
             'packages/blob-store/test/**/*.test.ts',
             // spike B: O4's converter package
