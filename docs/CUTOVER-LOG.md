@@ -434,3 +434,11 @@ on the sync disk (§6).
     - `PAN_BLIT` on;
     - `DIFF_APPLY` and `SIZE_AWARE_LOD` off;
     - deflate off.
+- **2026-10-15 01:10Z, wave P deployed: the team-ready release** (web only, main `ad288ee`, `dep-db82frij9qps73bcv1i0`; api and sync stay at d57a877). Three board connections in the 3 h before; a web deploy reconnects nobody, and open tabs are offered the update, which now waits while someone types.
+  - After the deploy: 0 error/FATAL lines; render.yaml drift 0; live smoke 40 passed, 0 failed; `/version.json` answers `{"commit":"ad288eee7d10"}`.
+  - Gate: docs/PROGRESS.md wave P. Units 9,566 passed; whole e2e 1,017 passed in both runs.
+  - Live check, the owner's browser:
+    - the dashboard shows the Welcome card, the Help menu and the neutral "No preview yet" placeholder, with no "DBC Lobby";
+    - a Word file (`document.docx`, 1.3 KB) was dropped onto a new board: it was queued, then made into a 3-page preview by the NAS worker's LibreOffice sidecar ("Preview made from a PDF conversion", View pages).
+  - The type-on-a-shape check could not be driven by hand (both browser windows were hidden, so no screenshots). It is covered by `canvas-ux-keys` in both whole e2e runs.
+  - Cleanup: the guest link revoked, the board in Trash.
