@@ -166,11 +166,9 @@ test('Q3: one search over the sources; the arrows and Enter insert; Escape clear
     await search.fill('')
     await search.press('ArrowRight')
     await expect(search).not.toHaveAttribute('aria-activedescendant', domEnd(firstArrow))
-    const second = await a.page
-      .getByTestId('element-section-results')
-      .getByTestId('element-tile')
-      .nth(1)
-      .getAttribute('data-tile-id')
+    // the active tile (Recent comes first when there is one): Enter inserts it
+    const activeId = await search.getAttribute('aria-activedescendant')
+    const second = await a.page.locator(`[id="${activeId}"]`).getAttribute('data-tile-id')
     await search.press('Enter')
     const [set, name] = (second ?? ':').split(':')
     const alt = `${set === 'tabler' ? 'Tabler' : 'Lucide'} icon: ${name}`

@@ -841,15 +841,17 @@ test('L-compat 3 (no AI): a pasted Mermaid chart, the flow’s next shape, sort 
     })
   })
 
-  await test.step('W8: pieces from the Pieces panel (Decision, a button, a persona; then a stage and a shot)', async () => {
-    await a.page.getByTestId('dock-tab-pieces').click()
-    await expect(a.page.getByTestId('pieces-panel')).toBeVisible()
+  // wave Q: the pieces are the Elements panel's Shapes tab (the Pieces dock panel retired with ELEMENTS_PANEL on)
+  await test.step('W8: pieces from the Elements panel’s Shapes tab (Decision, a button, a persona; then a stage and a shot)', async () => {
+    await a.page.getByTestId('dock-tab-elements').click()
+    await expect(a.page.getByTestId('elements-panel')).toBeVisible()
+    await a.page.locator('[data-testid="element-tab"][data-tab="shapes"]').click()
     await liveThenCaughtUp(p, stack, board, async (r) => {
       await setViewport(a.page, { x: 3_000 + r * 3_000, y: 5_000, zoom: 1 })
       for (const word of r ? ['stage', 'shot'] : ['dec', 'button', 'persona']) {
         const count = await pieceCount(a.page)
-        await a.page.getByTestId('piece-search').fill(word)
-        await a.page.getByTestId('piece-search').press('Enter')
+        await a.page.getByTestId('element-search').fill(word)
+        await a.page.getByTestId('element-search').press('Enter')
         await expect.poll(() => pieceCount(a.page)).toBeGreaterThan(count)
         await expectSaved(a.page)
       }
