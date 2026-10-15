@@ -6,6 +6,7 @@ import react from '@vitejs/plugin-react'
 import { defineConfig, type Plugin, type ProxyOptions } from 'vite'
 import { excalidrawAssets } from './build/excalidraw-assets.ts'
 import { excalidrawHostRewrite } from './build/excalidraw-host-rewrite.ts'
+import { lobbyAssets } from './build/lobby-assets.ts'
 
 // The browser talks to ONE origin; Vite proxies the API (sessions, boards, file routes) to apps/api
 // and the canvas WebSocket to apps/sync. Same-origin keeps the session cookie first-party and lets the
@@ -212,6 +213,8 @@ export default defineConfig({
   plugins: [
     react(),
     excalidrawAssets(),
+    // wave Q (WS1): the built-in icons under /lobby-assets/icons/ (./build/lobby-assets.ts)
+    lobbyAssets(),
     excalidrawHostRewrite(),
     engine,
     hashedHeadScripts(),
