@@ -69,7 +69,8 @@ change that implements it, and the refusal and creation matrices then hold the r
   ws-templates does), else 403 `LIBRARY_EXPORT_REFUSED`. A save from an internal-only project sets `internalOnly`.
 - `/place`: item and board in the same workspace (else 404, no leak); the caller reads the item and edits the board.
 - Authorship comes from the session only. Lock order: the workspace row first for create and delete (as ws-templates);
-  `/place` takes `FOR SHARE` on the item row, so a delete and a place run one after the other.
+  `/place` takes the workspace row `FOR SHARE`, then the item row `FOR SHARE`, so a delete, the Internal only switch, a
+  member removal and a place run one after the other (§9).
 - No content and no names in logs; audit events for create, delete and import.
 - Rate limits per person (`LIBRARY_RATE_LIMITS`): saves 60/min, imports 5/min, places 120/min.
 
@@ -229,3 +230,40 @@ fetches libraries.excalidraw.com or any other origin.
 - **Lucide has no categories in its package**; Tabler's `Brand` category is recommended out.
 - The serializer lives in `packages/board-ops/src/elements/library.ts` (as the scout proposed), outside the listed
   foundation folders: the web and the api must agree on it.
+
+## 9. Review fixes (wave Q integration)
+
+- **Colours never make a request.** The web draws a stored colour only when it is #hex, rgb()/rgba()/hsl()/hsla() with
+  numeric arguments, a CSS named colour or `transparent` (`features/pieces/Preview.tsx previewColor`; anything else is
+  the default), in SVG attributes and in `--pf`. Server side, canvas-schema's element schema refuses a
+  `strokeColor`/`backgroundColor` holding `url(`, a function call with a non-numeric argument (`var()`, `calc()`,
+  `color-mix()`, `image-set()`), `;`, `<`, `>`, a quote or a backslash (`limits.ts isAllowedColor`). That changes the
+  room's validation without a `CONTRACTS_REV` bump: it only refuses writes (no frame changes shape), the engine's
+  palette and colour input never make such a colour, and the frozen rev 11/12 fixture tests pass. Saves and imports
+  refuse such an item (`invalid`). The serializer's `data:`/`blob:` check matches anywhere in a string, not only at
+  its start.
+- **`/place` decides under the workspace row** (§2.2): the internal-only rule, the caller's membership and the export
+  policy are read inside its transaction.
+- **Links a place makes are pending until confirmed** (migration `0034_library_place`). Each `board_asset_links` row
+  `/place` creates gets a `library_place_pending` row; a link already there gets none, a still-pending one a fresh
+  hour. `POST /api/boards/:bid/library/items/:id/place/confirm` (no body, 204; the board's edit and the library's
+  members, as `/place`) deletes them; the web calls it once the room holds the inserted elements (`insert.ts
+  whenPushed`; a reject or 10 minutes: no confirm). The hourly sweep (`purge.ts sweepPlacePending`) deletes a pending
+  row older than an hour and its link, unless the board shows that version (sync's asset refs, canvas or "Recently
+  deleted": a push whose confirm was lost, then an undo, keeps its link); a board sync cannot read keeps its rows. A
+  confirm and the sweep both delete the pending row first, so they run one after the other. Residual: a push more than
+  an hour after its place, landing between the sweep's read and its delete, can lose its link (the image then shows
+  as missing on that board).
+- **A member removal** sends the person's personal items in that workspace to "Recently deleted" (the 30-day purge),
+  and deletes their personal folders and their marks there; their workspace-library items stay (the workspace's). A
+  re-add brings nothing back by itself: only their own explicit restore within the window would.
+- **The source board's export policy travels with an item.** `/place` answers 403 `EXPORT_DISABLED` when the source
+  board still exists, its policy is `editors` and the caller is below editor there (or cannot see it). Once that board
+  is gone, `library_items.source_export_limited` (the policy at save, or at a PATCH that replaced the elements) lets
+  only the person who saved the item place it. A save naming `sourceBoardId` still needs view access to that board and
+  its export policy. **Residual risk:** shapes and words cannot be fingerprinted, so nothing proves the elements came
+  from the named board; whoever may copy them can redraw or paste them anywhere they may write.
+- **Favourites cap:** `PUT …/marks` takes a `pg_advisory_xact_lock` of (person, workspace) first, so two stars count
+  one after the other.
+- **PDF pages in tiles:** a tile asks `…/files/<versionIdOf(fileId)>/thumb?page=<n>` for a placed PDF page; the route
+  serves that page's smallest rendering (`?page` 1-9999, else 404).
