@@ -150,9 +150,12 @@ export const LibraryElements = z
   .min(1)
   .max(LIBRARY_LIMITS.itemElements)
 
-/** Where an item came from (shown in its details; the board id only to those who may still see it). */
+/**
+ * Where an item came from (shown in its details). `boardId` is null for a caller who cannot view that board (any
+ * more): the api answers it only to those who may still see it (stored, it is always set).
+ */
 export const LibraryItemSource = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('board'), boardId: BoardIdLike }),
+  z.strictObject({ kind: z.literal('board'), boardId: BoardIdLike.nullable() }),
   z.strictObject({
     kind: z.literal('excalidrawlib'),
     fileName: z.string().min(1).max(LIBRARY_LIMITS.fileNameChars),

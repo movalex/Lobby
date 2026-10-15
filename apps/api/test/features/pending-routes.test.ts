@@ -35,10 +35,10 @@ const WAVE_M_ROUTES: string[] = []
  */
 const WAVE_N_ROUTES: string[] = []
 /**
- * Wave Q (the foundation, OWNER: WS2 after it): the element library's routes, all pending until WS2 implements them
- * (features/library). WS2 deletes its keys here and in PENDING_ROUTES in the same change.
+ * Wave Q (the foundation, OWNER: WS2 after it): the element library's routes, pending until WS2 implemented them
+ * (features/library, all 15: none left). To ship one hidden, add its key back here and in PENDING_ROUTES.
  */
-const WAVE_Q_ROUTES: string[] = [...LIBRARY_ROUTE_KEYS]
+const WAVE_Q_ROUTES: string[] = []
 const PENDING_NOW = [...WAVE_M_ROUTES, ...WAVE_N_ROUTES, ...WAVE_Q_ROUTES]
 
 const UNKNOWN = { error: { code: 'NOT_FOUND', message: 'Not found.' } }
@@ -56,7 +56,7 @@ describe('the pending list', () => {
     for (const key of WAVE_Q_ROUTES) expect(PENDING_ROUTES[key]?.owner, key).toBe('WS2')
   })
 
-  it('every wave Q route has its guest row (all of them) and the eight writes their in-route creator rows', () => {
+  it('every wave Q route has its guest row (all of them) and the eight writes their in-route creator rows, all live', () => {
     // the api's guard lists hold exactly the contract's keys
     const guestRows = Object.keys(GUEST_REFUSED_ROUTES).filter((k) => k.includes('/library'))
     expect(guestRows.sort()).toEqual([...LIBRARY_GUEST_ROUTE_KEYS].sort())
@@ -64,9 +64,10 @@ describe('the pending list', () => {
     const creatorRows = Object.entries(CREATOR_ROUTES).filter(([k]) => k.includes('/library'))
     expect(creatorRows.map(([k]) => k).sort()).toEqual([...LIBRARY_CREATOR_IN_ROUTE_KEYS].sort())
     for (const [k, rule] of creatorRows) expect(rule, k).toEqual({ purpose: 'create', refuse: 'in-route' })
-    // a pending row is held as an unknown route by both matrices until WS2 implements it
+    // WS2 implemented every one of them: the refusal and creation matrices hold each to its guard rows
     for (const k of [...guestRows, ...creatorRows.map(([key]) => key)])
-      expect(isPendingRoute(k), k).toBe(true)
+      expect(isPendingRoute(k), k).toBe(false)
+    expect(LIBRARY_ROUTE_KEYS.filter((k) => isPendingRoute(k))).toEqual([])
   })
 
   it('every wave N guest row is a pending route until its owner implements it (board-cards has no guest row)', () => {
