@@ -143,7 +143,11 @@ function partOf(node: IconNode): Part | null {
         const cx = numAttr(attrs, 'cx', 0)
         const cy = numAttr(attrs, 'cy', 0)
         if (r <= 0) return null
-        return { sources: [ellipseSubpath(cx, cy, r, r)], filled, shape: { t: 'ellipse', cx, cy, rx: r, ry: r } }
+        return {
+          sources: [ellipseSubpath(cx, cy, r, r)],
+          filled,
+          shape: { t: 'ellipse', cx, cy, rx: r, ry: r },
+        }
       }
       case 'ellipse': {
         const rx = numAttr(attrs, 'rx')
@@ -163,7 +167,11 @@ function partOf(node: IconNode): Part | null {
         const ryA = attrs.ry === undefined ? undefined : numAttr(attrs, 'ry')
         const rx = Math.min(Math.max(0, rxA ?? ryA ?? 0), w / 2)
         const ry = Math.min(Math.max(0, ryA ?? rxA ?? 0), h / 2)
-        return { sources: [rectSubpath(x, y, w, h, rxA, ryA)], filled, shape: { t: 'rect', x, y, w, h, rx, ry } }
+        return {
+          sources: [rectSubpath(x, y, w, h, rxA, ryA)],
+          filled,
+          shape: { t: 'rect', x, y, w, h, rx, ry },
+        }
       }
       case 'line': {
         const p0: Pt = [numAttr(attrs, 'x1', 0), numAttr(attrs, 'y1', 0)]
@@ -181,7 +189,7 @@ function partOf(node: IconNode): Part | null {
   throw new Refused('unsupported-element', el)
 }
 
-/** The full ellipse a subpath of arcs only draws (shared centre and radii, a full turn, back at its start), or null. */
+/** The full ellipse a subpath of arcs only draws (shared centre and radii, a full turn, back at its start). */
 function arcsEllipse(sp: Subpath): { cx: number; cy: number; rx: number; ry: number } | null {
   const first = sp.segments[0]
   if (!first || first.k !== 'A') return null
@@ -199,13 +207,15 @@ function arcsEllipse(sp: Subpath): { cx: number; cy: number; rx: number; ry: num
   return { cx: first.cx, cy: first.cy, rx: first.rx, ry: first.ry }
 }
 
+const endOf = (sp: Subpath): Pt =>
+  sp.segments.length ? (sp.segments[sp.segments.length - 1] as { p1: Pt }).p1 : sp.start
+
 /** Continuous subpaths (the next one starts where the last ended: `m0 0`) as one. */
 function joinContinuous(sps: readonly Subpath[]): Subpath[] {
   const out: Subpath[] = []
   for (const sp of sps) {
     const prev = out[out.length - 1]
-    const end = prev?.segments.length ? (prev.segments[prev.segments.length - 1] as { p1: Pt }).p1 : prev?.start
-    if (prev && !prev.closed && end && same(end, sp.start)) {
+    if (prev && !prev.closed && same(endOf(prev), sp.start)) {
       const segments = [...prev.segments, ...sp.segments]
       const last = segments[segments.length - 1] as { p1: Pt } | undefined
       // closed only when the joined path is back at its own start (the second one's Z closed the second one)
@@ -215,16 +225,15 @@ function joinContinuous(sps: readonly Subpath[]): Subpath[] {
   return out
 }
 
-const endOf = (sp: Subpath): Pt =>
-  sp.segments.length ? (sp.segments[sp.segments.length - 1] as { p1: Pt }).p1 : sp.start
-
 /** Whether `p` is inside the polygon `poly` (even-odd; the polygon's last point joins its first). */
 function inside(p: Pt, poly: readonly Pt[]): boolean {
   let hit = false
   for (let n = 0, m = poly.length - 1; n < poly.length; m = n++) {
     const a = poly[n] as Pt
     const b = poly[m] as Pt
-    if (a[1] > p[1] !== b[1] > p[1] && p[0] < ((b[0] - a[0]) * (p[1] - a[1])) / (b[1] - a[1]) + a[0]) hit = !hit
+    const aAbove = a[1] > p[1]
+    const bAbove = b[1] > p[1]
+    if (aAbove !== bAbove && p[0] < ((b[0] - a[0]) * (p[1] - a[1])) / (b[1] - a[1]) + a[0]) hit = !hit
   }
   return hit
 }
@@ -251,14 +260,10 @@ function lineFrom(pts: Pt[], closed: boolean, filled: boolean): Piece {
     const p = rounded[0] as Pt
     rounded.push([r2(p[0] + 1 / SCALE), p[1]])
   }
-  const flat = rounded.flatMap((p) => [p[0], p[1]])
-  const prim: IconPrimitive =
-    filled && isClosed
-      ? { t: 'line', p: flat, closed: true, f: true }
-      : isClosed
-        ? { t: 'line', p: flat, closed: true }
-        : { t: 'line', p: flat }
-  return { prim, joinable: !isClosed && !filled, pts: rounded }
+  const line = { t: 'line' as const, p: rounded.flatMap((p) => [p[0], p[1]]) }
+  if (!isClosed) return { prim: line, joinable: !filled, pts: rounded }
+  const prim: IconPrimitive = filled ? { ...line, closed: true, f: true } : { ...line, closed: true }
+  return { prim, joinable: false, pts: rounded }
 }
 
 function ellipsePrim(e: { cx: number; cy: number; rx: number; ry: number }, filled: boolean): IconPrimitive {
@@ -278,15 +283,13 @@ function partPieces(part: Part): Piece[] {
     const w = r2(shape.w)
     const h = r2(shape.h)
     const base = { t: 'rect' as const, x, y, w, h }
-    const plain: IconPrimitive =
-      shape.rx === 0 && shape.ry === 0
-        ? base
-        : shape.rx === shape.ry
-          ? { ...base, r: r2(shape.rx) }
-          : { ...base, r: r2(Math.min(shape.rx, shape.ry)) }
+    // SVG draws square corners when either radius is 0
+    const square = shape.rx === 0 || shape.ry === 0
+    const plain: IconPrimitive = square ? base : { ...base, r: r2(shape.rx) }
     const prim: IconPrimitive = filled ? { ...plain, f: true } : plain
     const ref = part.sources.map((sp) => sample(sp, REFERENCE_STEP))
-    if (shape.rx === shape.ry && hausdorff(ref, drawn(prim)) <= RECT_BUDGET) return [{ prim, joinable: false }]
+    if ((square || shape.rx === shape.ry) && hausdorff(ref, drawn(prim)) <= RECT_BUDGET)
+      return [{ prim, joinable: false }]
     // Excalidraw cannot draw this corner closely enough (an elliptic corner, or a radius over a quarter of the
     // shorter side): the outline as a line
   }
@@ -296,7 +299,8 @@ function partPieces(part: Part): Piece[] {
     const rings = sources.map((sp) => flatten(sp, FLATTEN_TOL))
     for (let a = 0; a < rings.length; a++)
       for (let b = 0; b < rings.length; b++)
-        if (a !== b && inside(rings[a]?.[0] as Pt, rings[b] as Pt[])) throw new Refused('holed-fill', 'nested rings')
+        if (a !== b && inside(rings[a]?.[0] as Pt, rings[b] as Pt[]))
+          throw new Refused('holed-fill', 'nested rings')
   }
   return sources.map((sp) => {
     const ell = arcsEllipse(sp)
@@ -348,7 +352,8 @@ function checkCaps(geometry: readonly IconPrimitive[]): void {
     throw new Refused('too-many-parts', `${geometry.length} parts (at most ${ICON_MAX_PRIMITIVES})`)
   for (const p of geometry) {
     if (p.t === 'line') {
-      if (p.p.length / 2 > ICON_MAX_LINE_POINTS) throw new Refused('too-many-points', `${p.p.length / 2} points`)
+      if (p.p.length / 2 > ICON_MAX_LINE_POINTS)
+        throw new Refused('too-many-points', `${p.p.length / 2} points`)
       if (!p.p.every(inGrid)) throw new Refused('outside-grid', 'a point outside the grid')
     } else if (!inGrid(p.x) || !inGrid(p.y) || !inGrid(p.x + p.w) || !inGrid(p.y + p.h))
       throw new Refused('outside-grid', `${p.t} outside the grid`)
@@ -380,7 +385,7 @@ export interface ConvertOptions {
   readonly measure?: boolean
 }
 
-/** One icon's nodes to its geometry, or the reason it cannot be drawn with Excalidraw's elements. Never throws. */
+/** One icon's nodes to its geometry, or why Excalidraw's elements cannot draw it. Never throws. */
 export function convertIcon(nodes: readonly IconNode[], opts: ConvertOptions = {}): ConvertResult {
   try {
     const parts = nodes.map(partOf).filter((p): p is Part => p !== null)

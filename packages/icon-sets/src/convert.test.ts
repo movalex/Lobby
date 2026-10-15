@@ -17,8 +17,12 @@ function ok(nodes: IconNode[]): IconPrimitive[] {
 
 describe('convertIcon', () => {
   it('circles and ellipses are ellipse primitives; a filled circle is filled', () => {
-    expect(ok([['circle', { cx: '12', cy: '12', r: '10' }]])).toEqual([{ t: 'ellipse', x: 2, y: 2, w: 20, h: 20 }])
-    expect(ok([['ellipse', { cx: 12, cy: 6, rx: 8, ry: 3 }]])).toEqual([{ t: 'ellipse', x: 4, y: 3, w: 16, h: 6 }])
+    expect(ok([['circle', { cx: '12', cy: '12', r: '10' }]])).toEqual([
+      { t: 'ellipse', x: 2, y: 2, w: 20, h: 20 },
+    ])
+    expect(ok([['ellipse', { cx: 12, cy: 6, rx: 8, ry: 3 }]])).toEqual([
+      { t: 'ellipse', x: 4, y: 3, w: 16, h: 6 },
+    ])
     expect(ok([['circle', { cx: '7.5', cy: '7.5', r: '.5', fill: 'currentColor' }]])).toEqual([
       { t: 'ellipse', x: 7, y: 7, w: 1, h: 1, f: true },
     ])
@@ -63,7 +67,9 @@ describe('convertIcon', () => {
   })
 
   it('lines, polylines and polygons; a closed path is a closed line without its repeated point', () => {
-    expect(ok([['line', { x1: '2', y1: '2', x2: '22', y2: '22' }]])).toEqual([{ t: 'line', p: [2, 2, 22, 22] }])
+    expect(ok([['line', { x1: '2', y1: '2', x2: '22', y2: '22' }]])).toEqual([
+      { t: 'line', p: [2, 2, 22, 22] },
+    ])
     expect(ok([['polyline', { points: '22 12 18 12 15 21 9 3' }]])).toEqual([
       { t: 'line', p: [22, 12, 18, 12, 15, 21, 9, 3] },
     ])
@@ -103,9 +109,8 @@ describe('convertIcon', () => {
       const r = convertIcon(nodes)
       return r.ok ? 'ok' : r.reason
     }
-    expect(refused([path('M12 3a9 9 0 0 1 8 5l-8 4z', { fill: 'currentColor', stroke: 'none' })])).toBe(
-      'fill-only-part',
-    )
+    const pie = path('M12 3a9 9 0 0 1 8 5l-8 4z', { fill: 'currentColor', stroke: 'none' })
+    expect(refused([pie])).toBe('fill-only-part')
     expect(refused([path('M2 2h20v20h-20zM8 8h8v8h-8z', { fill: 'currentColor' })])).toBe('holed-fill')
     expect(refused([path('M2 2h20', { opacity: '.5' })])).toBe('unsupported-attribute')
     expect(refused([path('M2 2h20', { 'fill-rule': 'evenodd' })])).toBe('unsupported-attribute')

@@ -260,7 +260,14 @@ export function ellipseSubpath(cx: number, cy: number, rx: number, ry: number): 
 }
 
 /** An SVG rect (rx/ry as SVG 1.1 resolves them: a missing one equals the other, each at most half the side). */
-export function rectSubpath(x: number, y: number, w: number, h: number, rxIn?: number, ryIn?: number): Subpath {
+export function rectSubpath(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  rxIn?: number,
+  ryIn?: number,
+): Subpath {
   let rx = rxIn ?? ryIn ?? 0
   let ry = ryIn ?? rxIn ?? 0
   rx = Math.min(Math.max(0, rx), w / 2)

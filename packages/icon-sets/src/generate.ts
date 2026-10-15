@@ -169,14 +169,21 @@ const quantile = (sorted: readonly number[], q: number) =>
   sorted.length ? (sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))] as number) : 0
 const round4 = (v: number) => Math.round(v * 1e4) / 1e4
 
+interface SetStats {
+  total: number
+  included: number
+  excluded: Map<ExcludedReason, string[]>
+  details: string[]
+}
+
+/** Code-unit order (never a locale's). */
+const byCodeUnits = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
+
 /** Converts the given icons (default: both pinned sets) into the served files and the report. */
 export function generateIcons(source: readonly SourceIcon[] = readSourceIcons()): GeneratedIcons {
   const entries: IconIndexEntry[] = []
   const shards: Record<string, IconGeometry>[] = Array.from({ length: ICON_SHARD_COUNT }, () => ({}))
-  const perSet = new Map<
-    IconSetId,
-    { total: number; included: number; excluded: Map<ExcludedReason, string[]>; details: string[] }
-  >()
+  const perSet = new Map<IconSetId, SetStats>()
   for (const set of ICON_SET_IDS) perSet.set(set, { total: 0, included: 0, excluded: new Map(), details: [] })
   const distances: [string, number][] = []
   let primitives = 0
@@ -207,16 +214,15 @@ export function generateIcons(source: readonly SourceIcon[] = readSourceIcons())
     }
     stats.included++
     const shard = shardOf(icon.set, icon.name)
-    ;(shards[shard] as Record<string, IconGeometry>)[iconKey(icon.set, icon.name)] = result.geometry
+    const bucket = shards[shard] as Record<string, IconGeometry>
+    bucket[iconKey(icon.set, icon.name)] = result.geometry
     entries.push([icon.set, icon.name, [...icon.tags], icon.category, shard])
     distances.push([iconKey(icon.set, icon.name), result.hausdorff ?? 0])
     primitives += result.geometry.length
     maxPrimitives = Math.max(maxPrimitives, result.geometry.length)
     for (const p of result.geometry) if (p.t === 'line') linePoints += p.p.length / 2
   }
-  entries.sort((a, b) =>
-    a[0] === b[0] ? (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0) : a[0] < b[0] ? -1 : 1,
-  )
+  entries.sort((a, b) => byCodeUnits(a[0], b[0]) || byCodeUnits(a[1], b[1]))
 
   const shardFiles: GeneratedFile[] = shards.map((icons, shard) => {
     const sorted: Record<string, IconGeometry> = {}
@@ -251,9 +257,10 @@ export function generateIcons(source: readonly SourceIcon[] = readSourceIcons())
   const shardSizes = shardFiles.map((f) => bytes(f.content))
   const report: IconBuildReport = {
     sets: ICON_SET_IDS.map((id) => {
-      const s = perSet.get(id) as NonNullable<ReturnType<typeof perSet.get>>
+      const s = perSet.get(id) as SetStats
       const excluded: Partial<Record<ExcludedReason, string[]>> = {}
-      for (const reason of [...s.excluded.keys()].sort()) excluded[reason] = [...(s.excluded.get(reason) ?? [])].sort()
+      for (const reason of [...s.excluded.keys()].sort())
+        excluded[reason] = [...(s.excluded.get(reason) ?? [])].sort()
       return {
         id,
         version: ICON_SET_PACKAGES[id].version,
@@ -309,8 +316,7 @@ export function formatReport(report: IconBuildReport, opts: { names?: boolean } 
   const f = report.fidelity
   lines.push(`fidelity (Hausdorff, grid units): mean ${f.mean}, p50 ${f.p50}, p99 ${f.p99}, max ${f.max}`)
   const z = report.sizes
-  lines.push(
-    `files: index ${kb(z.index)}, ${ICON_SHARD_COUNT} shards ${kb(z.shardsTotal)} (${kb(z.shardMin)} to ${kb(z.shardMax)}), licences ${kb(z.licences)}`,
-  )
+  const shards = `${ICON_SHARD_COUNT} shards ${kb(z.shardsTotal)} (${kb(z.shardMin)} to ${kb(z.shardMax)})`
+  lines.push(`files: index ${kb(z.index)}, ${shards}, licences ${kb(z.licences)}`)
   return lines.join('\n')
 }

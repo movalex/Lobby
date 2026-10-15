@@ -92,8 +92,10 @@ export function drawn(p: IconPrimitive): Pt[][] {
 // ---- the Hausdorff distance -----------------------------------------------------------------------------------
 
 type Seg = readonly [number, number, number, number]
+/** Polylines: each a list of points. */
+export type Polylines = readonly (readonly Pt[])[]
 
-function segmentsOf(lines: readonly (readonly Pt[])[]): Seg[] {
+function segmentsOf(lines: Polylines): Seg[] {
   const out: Seg[] = []
   for (const line of lines) {
     if (line.length === 1) {
@@ -110,7 +112,7 @@ function segmentsOf(lines: readonly (readonly Pt[])[]): Seg[] {
 }
 
 /** Every vertex, and points along every segment at most `step` apart. */
-function densify(lines: readonly (readonly Pt[])[], step: number): Pt[] {
+function densify(lines: Polylines, step: number): Pt[] {
   const out: Pt[] = []
   for (const line of lines) {
     if (!line.length) continue
@@ -184,11 +186,7 @@ class SegGrid {
 }
 
 /** The largest distance from a point of `from` (densified to `step`) to the nearest segment of `to`. */
-export function directedHausdorff(
-  from: readonly (readonly Pt[])[],
-  to: readonly (readonly Pt[])[],
-  step = 0.05,
-): number {
+export function directedHausdorff(from: Polylines, to: Polylines, step = 0.05): number {
   const grid = new SegGrid(segmentsOf(to))
   let worst = 0
   for (const p of densify(from, step)) {
@@ -199,10 +197,6 @@ export function directedHausdorff(
 }
 
 /** The symmetric Hausdorff distance between two sets of polylines. */
-export function hausdorff(
-  a: readonly (readonly Pt[])[],
-  b: readonly (readonly Pt[])[],
-  step = 0.05,
-): number {
+export function hausdorff(a: Polylines, b: Polylines, step = 0.05): number {
   return Math.max(directedHausdorff(a, b, step), directedHausdorff(b, a, step))
 }

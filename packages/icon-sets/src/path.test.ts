@@ -16,8 +16,8 @@ import {
 } from './path.ts'
 
 const close = (a: Pt, b: Pt, eps = 1e-9) => Math.hypot(a[0] - b[0], a[1] - b[1]) <= eps
-const ends = (d: string) =>
-  parsePath(d).map((sp) => [sp.start, ...sp.segments.map((s) => s.p1)].map((p) => p.map((v) => +v.toFixed(6))))
+const round6 = (p: Pt) => p.map((v) => +v.toFixed(6))
+const ends = (d: string) => parsePath(d).map((sp) => [sp.start, ...sp.segments.map((s) => s.p1)].map(round6))
 
 describe('parsePath', () => {
   it('reads lines in every spelling: M/L/H/V, relative, implicit linetos after a moveto, Z back to the start', () => {
@@ -165,7 +165,8 @@ describe('flatten and sample', () => {
 
   it('the shapes: an ellipse of four quarter arcs, a rect with SVG radii (clamped to half a side)', () => {
     const e = ellipseSubpath(12, 12, 10, 5)
-    for (const p of sample(e, 0.05)) expect(((p[0] - 12) / 10) ** 2 + ((p[1] - 12) / 5) ** 2).toBeCloseTo(1, 9)
+    for (const p of sample(e, 0.05))
+      expect(((p[0] - 12) / 10) ** 2 + ((p[1] - 12) / 5) ** 2).toBeCloseTo(1, 9)
     const r = rectSubpath(2, 2, 20, 4, 3)
     // ry defaults to rx (3), clamped to half the height (2)
     const corner = r.segments.find((s) => s.k === 'A') as Extract<Segment, { k: 'A' }>

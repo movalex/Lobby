@@ -145,7 +145,8 @@ describe('the generated icon files', () => {
   it('hold an index that matches its schema, sorted by set and name, one entry per icon, naming the shards', () => {
     const index = IconIndex.parse(JSON.parse(generated.files[0]?.content ?? ''))
     expect(index.shards).toEqual(shardFiles().map((f) => f.name))
-    for (const [n, name] of index.shards.entries()) expect(ICON_SHARD_FILE_PATTERN.exec(name)?.[1]).toBe(String(n))
+    for (const [n, name] of index.shards.entries())
+      expect(ICON_SHARD_FILE_PATTERN.exec(name)?.[1]).toBe(String(n))
     const keys = index.icons.map(([set, name]) => iconKey(set, name))
     expect(new Set(keys).size).toBe(keys.length)
     expect([...keys].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))).toEqual(keys)
