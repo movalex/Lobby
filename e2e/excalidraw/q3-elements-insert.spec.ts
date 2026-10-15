@@ -172,7 +172,8 @@ test('Q3: one search over the sources; the arrows and Enter insert; Escape clear
       .nth(1)
       .getAttribute('data-tile-id')
     await search.press('Enter')
-    const alt = `Lucide icon: ${second?.split(':')[1]}`
+    const [set, name] = (second ?? ':').split(':')
+    const alt = `${set === 'tabler' ? 'Tabler' : 'Lucide'} icon: ${name}`
     await expect.poll(async () => (await iconEls(a.page, alt)).length).toBeGreaterThan(0)
   })
 

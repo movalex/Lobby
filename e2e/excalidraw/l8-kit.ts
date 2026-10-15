@@ -196,3 +196,21 @@ export async function expectArrowsDerived(page: Page, arrowIds: readonly string[
     })
     .toBeLessThanOrEqual(tolerance)
 }
+
+/**
+ * Wave Q: the Shapes (Pieces) dock panel retired when ELEMENTS_PANEL turned on (the Elements panel's Shapes tab has the
+ * pieces); it is the board's again whenever that switch is off. The specs of that panel turn the switch off for their
+ * page (the dev-auth override, localStorage lobby.elementsPanel = '0') and reload, so the fallback stays tested.
+ */
+export async function withShapesPanel(page: Page): Promise<void> {
+  await page.context().addInitScript(() => {
+    try {
+      localStorage.setItem('lobby.elementsPanel', '0')
+    } catch {
+      // no storage: the page runs the shipped value
+    }
+  })
+  await page.reload()
+  await waitForCanvas(page)
+  await expect(page.getByTestId('dock-tab-pieces')).toBeVisible({ timeout: 30_000 })
+}

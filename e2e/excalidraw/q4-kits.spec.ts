@@ -28,6 +28,7 @@ import {
   test,
 } from '../tests/support/canvas.ts'
 import { API_URL, WEB_URL } from '../tests/support/ports.ts'
+import { withShapesPanel } from './l8-kit.ts'
 import { undoKey } from './navigation-kit.ts'
 
 test.use({ viewport: { width: 1440, height: 900 } })
@@ -65,8 +66,9 @@ for (const category of NEW_CATEGORIES) {
     const a = await canvasSession('alice')
     const b = await canvasSession('bob')
     const foreign = foreignRequests(a.page)
-    const tab = '[data-testid="dock-tab-pieces"]'
-    await a.page.waitForFunction((s) => !!document.querySelector(s), tab, { timeout: 30_000 })
+    // wave Q: the Shapes panel is the switch-off fallback (l8-kit.ts withShapesPanel); the shipped Elements panel's
+    // Shapes tab inserts every category in q-int-elements.spec.ts
+    await withShapesPanel(a.page)
     await setViewport(a.page, { x: 0, y: 0, zoom: 0.5 })
     await a.page.getByTestId('dock-tab-pieces').click()
     await expect(a.page.getByTestId('pieces-panel')).toBeVisible()

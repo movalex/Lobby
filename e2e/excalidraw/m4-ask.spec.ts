@@ -28,7 +28,7 @@ import {
   foreignRequests,
   workspaceAskAvailable,
 } from './ai-kit.ts'
-import { sortRun, waitForSort } from './l8-kit.ts'
+import { sortRun, waitForSort, withShapesPanel } from './l8-kit.ts'
 
 const test = base.extend<object, { openai: FakeOpenAi }>({
   openai: [
@@ -81,9 +81,8 @@ test('M4-6: in the dark theme the Pieces cards are not white blocks: their previ
   const a = await canvasSession('alice')
   await a.page.emulateMedia({ colorScheme: 'dark' })
   await expect(a.page.locator('html')).toHaveAttribute('data-theme', 'dark')
-  await a.page.waitForFunction(() => !!document.querySelector('[data-testid="dock-tab-pieces"]'), undefined, {
-    timeout: 30_000,
-  })
+  // wave Q: the Shapes panel is the switch-off fallback (l8-kit.ts withShapesPanel)
+  await withShapesPanel(a.page)
   await a.page.getByTestId('dock-tab-pieces').click()
   const panel = a.page.getByTestId('pieces-panel')
   await expect(panel).toBeVisible()

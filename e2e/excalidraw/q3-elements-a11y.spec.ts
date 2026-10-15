@@ -69,9 +69,10 @@ test('Q3: the keyboard: the search box keeps it and names the active tile; the t
   await openElements(a.page)
   const search = a.page.getByTestId('element-search')
   await expect(search).toBeFocused()
-  // the shipped sets (wave Q integration): "arrow" lists the arrows first
-  await search.fill('arrow')
-  await expect(tile(a.page, 'icon', 'lucide:arrow-left')).toBeVisible({ timeout: 15_000 })
+  // the shipped sets (wave Q integration): the first icons of the index, read from the grid
+  await expect(a.page.locator('[data-testid="element-tile"][data-source="icon"]').first()).toBeVisible({
+    timeout: 15_000,
+  })
   const active = () => search.getAttribute('aria-activedescendant')
   const shown = await a.page
     .getByTestId('element-section-results')

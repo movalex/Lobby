@@ -27,7 +27,7 @@ import {
 import { pushCount } from '../tests/support/excalidraw.ts'
 import { AI_API_ENV_3H, elementAt, FAKE_OPENAI_PORT_3H, fakeAiRuns, foreignRequests } from './ai-kit.ts'
 import { focusBoard } from './board-kit.ts'
-import { sortRun, waitForSort } from './l8-kit.ts'
+import { sortRun, waitForSort, withShapesPanel } from './l8-kit.ts'
 import { grantClipboard, writeClipboard } from './navigation-kit.ts'
 
 const test = base.extend<object, { openai: FakeOpenAi }>({
@@ -157,9 +157,8 @@ test('M4-4: a Piece inserted with Enter while a 2x2 frame fills the middle of th
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
-  await a.page.waitForFunction(() => !!document.querySelector('[data-testid="dock-tab-pieces"]'), undefined, {
-    timeout: 30_000,
-  })
+  // wave Q: the Shapes panel is the switch-off fallback (l8-kit.ts withShapesPanel)
+  await withShapesPanel(a.page)
   await setViewport(a.page, { x: 0, y: 0, zoom: 0.8 })
   const v = await viewport(a.page)
   // a 2x2 frame over the middle of the view

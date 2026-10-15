@@ -21,9 +21,10 @@ import {
   setViewport,
   test,
   updateItem,
+  waitForCanvas,
 } from '../tests/support/canvas.ts'
 import { API_URL, WEB_URL } from '../tests/support/ports.ts'
-import { makeFrame, withCanvas } from './l8-kit.ts'
+import { makeFrame, withCanvas, withShapesPanel } from './l8-kit.ts'
 import { focusCanvas, undoKey } from './navigation-kit.ts'
 
 test.use({ viewport: { width: 1440, height: 900 } })
@@ -48,10 +49,8 @@ const openPieces = async (page: Page) => {
   await expect(page.getByTestId('pieces-panel')).toBeVisible()
 }
 
-const waitForPieces = (page: Page) =>
-  page.waitForFunction(() => !!document.querySelector('[data-testid="dock-tab-pieces"]'), undefined, {
-    timeout: 30_000,
-  })
+/** The Shapes panel on this page (wave Q: the switch off, see l8-kit.ts withShapesPanel). */
+const waitForPieces = (page: Page) => withShapesPanel(page)
 
 test('L8-3: the panel lists the kits, finds Decision for "dec", and the arrow keys plus Enter insert a piece in one undo step; a second tab sees it', async ({
   canvasSession,
@@ -278,6 +277,9 @@ test('L8-3: a viewer has no Pieces panel, and a piece dropped on their board is 
   const a = await canvasSession('alice')
   const v = await canvasSession('bob', { role: 'viewer' })
   await waitForPieces(a.page)
+  await v.page.context().addInitScript(() => localStorage.setItem('lobby.elementsPanel', '0'))
+  await v.page.reload()
+  await waitForCanvas(v.page)
   await expect(a.page.getByTestId('dock-tab-pieces')).toBeVisible()
   await expect(v.page.getByTestId('dock-tab-pieces')).toHaveCount(0)
   await v.page.evaluate(() => {

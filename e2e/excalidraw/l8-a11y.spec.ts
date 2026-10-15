@@ -7,7 +7,15 @@
 import AxeBuilder from '@axe-core/playwright'
 import type { Page } from '@playwright/test'
 import { expect, expectSaved, select, test } from '../tests/support/canvas.ts'
-import { fakeAi, makeFrame, makeNotes, sortRun, twelve, waitForSort } from './l8-kit.ts'
+import {
+  fakeAi,
+  makeFrame,
+  makeNotes,
+  sortRun,
+  twelve,
+  waitForSort,
+  withShapesPanel,
+} from './l8-kit.ts'
 
 const AXE_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice']
 
@@ -29,6 +37,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
   }) => {
     const a = await canvasSession('alice')
     await a.page.emulateMedia({ colorScheme })
+    await withShapesPanel(a.page)
     await a.page.getByTestId('dock-tab-pieces').click()
     await expect(a.page.getByTestId('pieces-panel')).toBeVisible()
     // the drawings are there before the audit looks
