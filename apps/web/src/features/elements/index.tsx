@@ -108,7 +108,7 @@ const SaveBarButton = memo(function SaveBarButton({ selection }: { selection: re
       type="button"
       className="dr-cux-selbar__btn"
       aria-label="Save to library"
-      title="Save a copy of the selection to the library"
+      title="Save to library"
       data-testid="selection-save-to-library"
       onMouseDown={(e) => e.preventDefault()}
       onClick={() => openSave(ctx, selection)}
@@ -128,7 +128,6 @@ const SaveBarButton = memo(function SaveBarButton({ selection }: { selection: re
         <path d="M6 3.5h12v17l-6-4-6 4z" />
         <path d="M12 7.5v5M9.5 10h5" />
       </svg>
-      <span>Save to library</span>
     </button>
   )
 })

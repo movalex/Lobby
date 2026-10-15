@@ -209,8 +209,8 @@ export function SaveDialog({
                   setFolder(null)
                 }}
               />
-              <span>
-                The workspace library
+              <span className="dr-el-save__radio-text">
+                <span className="dr-el-save__radio-name">The workspace library</span>
                 <span className="dr-el-save__hint">Everyone in {ctx.workspace.name} can use it.</span>
               </span>
             </label>
@@ -231,8 +231,8 @@ export function SaveDialog({
                   setFolder(null)
                 }}
               />
-              <span>
-                My library
+              <span className="dr-el-save__radio-text">
+                <span className="dr-el-save__radio-name">My library</span>
                 <span className="dr-el-save__hint">Only you see it.</span>
               </span>
             </label>

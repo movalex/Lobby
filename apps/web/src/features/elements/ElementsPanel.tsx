@@ -70,16 +70,18 @@ const writeTab = (tab: ElementTab) => {
     // a convenience only
   }
 }
-const onPhone = () => {
+const matches = (query: string) => {
   try {
-    return globalThis.matchMedia?.(PHONE_QUERY).matches ?? false
+    return globalThis.matchMedia?.(query).matches ?? false
   } catch {
     return false
   }
 }
+const onPhone = () => matches(PHONE_QUERY)
 
 const HINT =
   'Click or press Enter to add to the middle of the view, or drag onto the board. Right-click for more.'
+const TOUCH_HINT = 'Tap to add to the middle of the view. Press and hold for more.'
 
 const COLOR_LABEL = (c: InsertColorName) => {
   const w = c.replace('-', ' ')
@@ -592,52 +594,53 @@ export function ElementsPanel({ ctx, close }: { readonly ctx: CanvasFeatureConte
 
       {readonly && <p className="dr-el__note">You can view this board but not add to it.</p>}
 
-      <div
-        ref={grid}
-        className="dr-el__results"
-        id={`${base}-grid`}
-        role="listbox"
-        aria-label={ELEMENT_TABS.find((t) => t.id === shownTab)?.label}
-        aria-activedescendant={currentId}
-        tabIndex={0}
-        data-testid="element-grid"
-        onKeyDown={(e) => onKeys(e, false)}
-      >
-        {sections.map((s) =>
-          s.tiles.length === 0 ? null : (
-            <div key={s.id} role="group" aria-label={s.title ?? 'Results'} className="dr-el__section">
-              {s.title && (
-                <div className="dr-el__section-title" aria-hidden="true">
-                  {s.title}
+      <div ref={grid} className="dr-el__results">
+        <div
+          className="dr-el__listbox"
+          id={`${base}-grid`}
+          role="listbox"
+          aria-label={ELEMENT_TABS.find((t) => t.id === shownTab)?.label}
+          aria-activedescendant={currentId}
+          tabIndex={0}
+          data-testid="element-grid"
+          onKeyDown={(e) => onKeys(e, false)}
+        >
+          {sections.map((s) =>
+            s.tiles.length === 0 ? null : (
+              <div key={s.id} role="group" aria-label={s.title ?? 'Results'} className="dr-el__section">
+                {s.title && (
+                  <div className="dr-el__section-title" aria-hidden="true">
+                    {s.title}
+                  </div>
+                )}
+                <div className="dr-el-grid" data-section={s.id} data-testid={`element-section-${s.id}`}>
+                  {s.tiles.map((t) => {
+                    const domId = tileDomId(base, s.id, t)
+                    return (
+                      <TileView
+                        key={tileKey(t)}
+                        tile={t}
+                        domId={domId}
+                        active={domId === currentId}
+                        disabled={readonly}
+                        favourite={access.library ? markState.favourites.includes(tileMarkKey(t)) : null}
+                        icons={icons}
+                        previews={previews}
+                        workspaceId={workspaceId}
+                        iconInk={iconInk}
+                        deleted={t.source === 'item' && !!t.item.deletedAt}
+                        onPick={(x) => void insert(x)}
+                        onPoint={() => setActive(flat.findIndex((f) => f.section === s.id && f.tile === t))}
+                        onStar={(x, on) => void star(x, on)}
+                        onActions={(x, p) => openActions(x, p)}
+                      />
+                    )
+                  })}
                 </div>
-              )}
-              <div className="dr-el-grid" data-section={s.id} data-testid={`element-section-${s.id}`}>
-                {s.tiles.map((t) => {
-                  const domId = tileDomId(base, s.id, t)
-                  return (
-                    <TileView
-                      key={tileKey(t)}
-                      tile={t}
-                      domId={domId}
-                      active={domId === currentId}
-                      disabled={readonly}
-                      favourite={access.library ? markState.favourites.includes(tileMarkKey(t)) : null}
-                      icons={icons}
-                      previews={previews}
-                      workspaceId={workspaceId}
-                      iconInk={iconInk}
-                      deleted={t.source === 'item' && !!t.item.deletedAt}
-                      onPick={(x) => void insert(x)}
-                      onPoint={() => setActive(flat.findIndex((f) => f.section === s.id && f.tile === t))}
-                      onStar={(x, on) => void star(x, on)}
-                      onActions={(x, p) => openActions(x, p)}
-                    />
-                  )
-                })}
               </div>
-            </div>
-          ),
-        )}
+            ),
+          )}
+        </div>
         <EmptyState
           tab={shownTab}
           icons={icons}
@@ -664,7 +667,7 @@ export function ElementsPanel({ ctx, close }: { readonly ctx: CanvasFeatureConte
       </div>
 
       <p className="dr-el__hint" aria-live="polite">
-        {flat.length ? HINT : ''}
+        {flat.length ? (matches('(pointer: coarse)') ? TOUCH_HINT : HINT) : ''}
       </p>
       {shownTab === 'icons' && icons.status === 'ready' && (
         <p className="dr-el__credit">
