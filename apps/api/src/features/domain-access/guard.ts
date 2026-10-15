@@ -52,6 +52,18 @@ export const CREATOR_ROUTES: Readonly<Record<string, CreatorRoute>> = {
   'POST /api/workspaces/:wid/templates': { purpose: 'create', refuse: 'always' },
   'DELETE /api/workspaces/:wid/templates/:bid': { purpose: 'create', refuse: 'always' },
   'POST /api/workspaces/:wid/templates/:bid/use': { purpose: 'create', refuse: 'always' },
+  // wave Q (WS2; landed by the foundation, pending until implemented: ../pending-routes.ts): the element library's
+  // writes (@draftroom/contracts LIBRARY_CREATOR_IN_ROUTE_KEYS). The workspace library is a creator's to add to and
+  // change; the personal library is everyone's own, so the route decides from the scope (the body's, or the stored
+  // item's or folder's) and calls requireCreator for 'workspace'.
+  'POST /api/workspaces/:wid/library/items': { purpose: 'create', refuse: 'in-route' },
+  'PATCH /api/workspaces/:wid/library/items/:id': { purpose: 'create', refuse: 'in-route' },
+  'DELETE /api/workspaces/:wid/library/items/:id': { purpose: 'create', refuse: 'in-route' },
+  'POST /api/workspaces/:wid/library/items/:id/restore': { purpose: 'create', refuse: 'in-route' },
+  'POST /api/workspaces/:wid/library/import': { purpose: 'create', refuse: 'in-route' },
+  'POST /api/workspaces/:wid/library/folders': { purpose: 'create', refuse: 'in-route' },
+  'PATCH /api/workspaces/:wid/library/folders/:fid': { purpose: 'create', refuse: 'in-route' },
+  'DELETE /api/workspaces/:wid/library/folders/:fid': { purpose: 'create', refuse: 'in-route' },
 }
 
 const routeKey = (req: FastifyRequest) =>

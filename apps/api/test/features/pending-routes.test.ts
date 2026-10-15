@@ -2,6 +2,12 @@
 // (src/features/pending-routes.ts): not registered, so it answers exactly as an unknown route does today, for every
 // kind of caller. The branch deploys with no behaviour change, and an old web or sync gets the 404 its downgrade
 // path expects (the wave M stale pairs (c) and (d)).
+import {
+  LIBRARY_CREATOR_IN_ROUTE_KEYS,
+  LIBRARY_GUEST_ROUTE_KEYS,
+  LIBRARY_GUESTS_MESSAGE,
+  LIBRARY_ROUTE_KEYS,
+} from '@draftroom/contracts'
 import Fastify from 'fastify'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CREATOR_ROUTES } from '../../src/features/domain-access/guard.ts'
@@ -28,7 +34,12 @@ const WAVE_M_ROUTES: string[] = []
  * routes (N4-1), WS5 the three capture routes (N5-1), WS7 board-cards (N7-2) and backlinks (N7-4).
  */
 const WAVE_N_ROUTES: string[] = []
-const PENDING_NOW = [...WAVE_M_ROUTES, ...WAVE_N_ROUTES]
+/**
+ * Wave Q (the foundation, OWNER: WS2 after it): the element library's routes, all pending until WS2 implements them
+ * (features/library). WS2 deletes its keys here and in PENDING_ROUTES in the same change.
+ */
+const WAVE_Q_ROUTES: string[] = [...LIBRARY_ROUTE_KEYS]
+const PENDING_NOW = [...WAVE_M_ROUTES, ...WAVE_N_ROUTES, ...WAVE_Q_ROUTES]
 
 const UNKNOWN = { error: { code: 'NOT_FOUND', message: 'Not found.' } }
 
@@ -36,12 +47,26 @@ const fill = (pattern: string, board: string) =>
   pattern.replace(':bid', board).replace(':wid', DEV_STUDIO).replace(/:\w+/g, 'x')
 
 describe('the pending list', () => {
-  it('is exactly the wave M and wave N routes still pending, each with its owner and plan item', () => {
+  it('is exactly the wave M, N and Q routes still pending, each with its owner and plan item', () => {
     expect(Object.keys(PENDING_ROUTES).sort()).toEqual([...PENDING_NOW].sort())
     for (const [key, r] of Object.entries(PENDING_ROUTES)) {
-      expect(['W5', 'W7', 'W8', 'WS4', 'WS5', 'WS7'], key).toContain(r.owner)
-      expect(r.item, key).toMatch(/^(M[5-8]|N[1-7])-\d$/)
+      expect(['W5', 'W7', 'W8', 'WS2', 'WS4', 'WS5', 'WS7'], key).toContain(r.owner)
+      expect(r.item, key).toMatch(/^(M[5-8]|N[1-7]|Q[1-4])-\d$/)
     }
+    for (const key of WAVE_Q_ROUTES) expect(PENDING_ROUTES[key]?.owner, key).toBe('WS2')
+  })
+
+  it('every wave Q route has its guest row (all of them) and the eight writes their in-route creator rows', () => {
+    // the api's guard lists hold exactly the contract's keys
+    const guestRows = Object.keys(GUEST_REFUSED_ROUTES).filter((k) => k.includes('/library'))
+    expect(guestRows.sort()).toEqual([...LIBRARY_GUEST_ROUTE_KEYS].sort())
+    for (const k of guestRows) expect(GUEST_REFUSED_ROUTES[k], k).toBe(LIBRARY_GUESTS_MESSAGE)
+    const creatorRows = Object.entries(CREATOR_ROUTES).filter(([k]) => k.includes('/library'))
+    expect(creatorRows.map(([k]) => k).sort()).toEqual([...LIBRARY_CREATOR_IN_ROUTE_KEYS].sort())
+    for (const [k, rule] of creatorRows) expect(rule, k).toEqual({ purpose: 'create', refuse: 'in-route' })
+    // a pending row is held as an unknown route by both matrices until WS2 implements it
+    for (const k of [...guestRows, ...creatorRows.map(([key]) => key)])
+      expect(isPendingRoute(k), k).toBe(true)
   })
 
   it('every wave N guest row is a pending route until its owner implements it (board-cards has no guest row)', () => {
@@ -125,6 +150,10 @@ describe('in the real app, a pending route answers like an unknown route', () =>
       'board_visits',
       'board_links',
       'board_link_scans',
+      'library_folders',
+      'library_items',
+      'library_item_files',
+      'library_marks',
     ]) {
       const n = await w.api.db.one<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`)
       expect(n.n, table).toBe(0)

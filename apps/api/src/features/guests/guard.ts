@@ -23,7 +23,7 @@
 // Registered on the root instance, so Fastify binds it to every root route at ready time (like the
 // dashboard's own root hooks). The answer is the same for every board id, so it reveals nothing.
 
-import { PutMemberInput, TransferOwnershipInput } from '@draftroom/contracts'
+import { LIBRARY_GUESTS_MESSAGE, PutMemberInput, TransferOwnershipInput } from '@draftroom/contracts'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { isUserId, requireBoardAction } from '../../access.ts'
 import { userKind } from '../../auth/users.ts'
@@ -79,6 +79,13 @@ export const CAPTURE_GUESTS =
 export const BACKLINKS_GUESTS =
   'Linked from is for people with an account. Sign in with an account to see the boards that link here.'
 
+/**
+ * Wave Q (WS2, the element library): a library is the workspace's (or the person's), and a guest never sees the
+ * workspace. Guests keep the built-in icons and shapes (static, client-side). Listed here so a guest is refused before
+ * any workspace or board check.
+ */
+export const LIBRARY_GUESTS = LIBRARY_GUESTS_MESSAGE
+
 /** `METHOD route-pattern` → the message a signed-in guest gets (403 GUEST_ACCOUNT_REQUIRED). */
 export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {
   // workspaces, projects and boards
@@ -130,6 +137,23 @@ export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {
   'POST /api/boards/:bid/ai/capture/board-image': CAPTURE_GUESTS,
   'POST /api/boards/:bid/ai/capture/transcript': CAPTURE_GUESTS,
   'GET /api/boards/:bid/backlinks': BACKLINKS_GUESTS,
+  // wave Q (landed by the foundation, pending until implemented: ../pending-routes.ts): the element library, every
+  // route (@draftroom/contracts LIBRARY_GUEST_ROUTE_KEYS)
+  'GET /api/workspaces/:wid/library': LIBRARY_GUESTS,
+  'GET /api/workspaces/:wid/library/items/:id': LIBRARY_GUESTS,
+  'POST /api/workspaces/:wid/library/items': LIBRARY_GUESTS,
+  'PATCH /api/workspaces/:wid/library/items/:id': LIBRARY_GUESTS,
+  'DELETE /api/workspaces/:wid/library/items/:id': LIBRARY_GUESTS,
+  'POST /api/workspaces/:wid/library/items/:id/restore': LIBRARY_GUESTS,
+  'GET /api/workspaces/:wid/library/items/:id/files/:ver/thumb': LIBRARY_GUESTS,
+  'POST /api/workspaces/:wid/library/import': LIBRARY_GUESTS,
+  'GET /api/workspaces/:wid/library/folders': LIBRARY_GUESTS,
+  'POST /api/workspaces/:wid/library/folders': LIBRARY_GUESTS,
+  'PATCH /api/workspaces/:wid/library/folders/:fid': LIBRARY_GUESTS,
+  'DELETE /api/workspaces/:wid/library/folders/:fid': LIBRARY_GUESTS,
+  'GET /api/workspaces/:wid/library/marks': LIBRARY_GUESTS,
+  'PUT /api/workspaces/:wid/library/marks': LIBRARY_GUESTS,
+  'POST /api/boards/:bid/library/items/:id/place': LIBRARY_GUESTS,
 }
 
 export const guestRefused = (message: string) => new ApiError(403, 'GUEST_ACCOUNT_REQUIRED', message)

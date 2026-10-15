@@ -10,6 +10,7 @@ import { registerDomainAccess } from './domain-access/index.ts'
 import { registerExportControl } from './export-control/index.ts'
 import { registerGuests } from './guests/index.ts'
 import { registerHistory } from './history/index.ts'
+import { registerLibrary } from './library/index.ts'
 import { registerLinkPreview } from './link-preview/index.ts'
 import { registerSearch } from './search/index.ts'
 import { registerThumbnails } from './thumbnails/index.ts'
@@ -46,4 +47,7 @@ export async function registerFeatures(
   // Capture the room (WS5) is inside 'ai'. Their routes are pending until implemented (./pending-routes.ts).
   await registerVisits(app, ctx)
   await registerBoardLinks(app, ctx)
+  // Wave Q (the foundation; WS2 owns this line after it): the element library. Its routes are pending until
+  // implemented (./pending-routes.ts).
+  await registerLibrary(app, ctx)
 }

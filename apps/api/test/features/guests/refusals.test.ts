@@ -40,6 +40,9 @@ const SNAPSHOT = 'snp_0123456789abcdefghij'
 const INVITATION = 'inv_0123456789abcdefghij'
 const REQUEST = 'acr_0123456789abcdefghij'
 const PROJECT = 'prj_0123456789abcdefghij'
+const LIB_ITEM = 'lbi_0123456789abcdefghij'
+const LIB_FOLDER = 'lbf_0123456789abcdefghij'
+const LIB_VER = 'ver_0123456789abcdefghij'
 
 /**
  * Every refused route (its pattern first), called the way a client would, on the guest's own board
@@ -48,6 +51,7 @@ const PROJECT = 'prj_0123456789abcdefghij'
 function refusedCalls(board: string, other: string, userId: string): [string, Method, string, unknown][] {
   const b = `/api/boards/${board}`
   const ws = `/api/workspaces/${DEV_STUDIO}`
+  const lib = `${ws}/library`
   return [
     ['POST /api/workspaces/:wid/boards', 'POST', `${ws}/boards`, { title: 'Mine' }],
     ['POST /api/workspaces/:wid/projects', 'POST', `${ws}/projects`, { name: 'Mine' }],
@@ -126,6 +130,52 @@ function refusedCalls(board: string, other: string, userId: string): [string, Me
       { text: 'We decided.' },
     ],
     ['GET /api/boards/:bid/backlinks', 'GET', `${b}/backlinks`, undefined],
+    // Wave Q (landed by the foundation; pending until implemented, as above): the element library
+    ['GET /api/workspaces/:wid/library', 'GET', `${ws}/library?scope=workspace`, undefined],
+    ['GET /api/workspaces/:wid/library/items/:id', 'GET', `${lib}/items/${LIB_ITEM}`, undefined],
+    [
+      'POST /api/workspaces/:wid/library/items',
+      'POST',
+      `${lib}/items`,
+      { scope: 'personal', name: 'Mine', sourceBoardId: board, elements: [{ id: 'a', type: 'rectangle' }] },
+    ],
+    ['PATCH /api/workspaces/:wid/library/items/:id', 'PATCH', `${lib}/items/${LIB_ITEM}`, { revision: 1 }],
+    ['DELETE /api/workspaces/:wid/library/items/:id', 'DELETE', `${lib}/items/${LIB_ITEM}`, undefined],
+    ['POST /api/workspaces/:wid/library/items/:id/restore', 'POST', `${lib}/items/${LIB_ITEM}/restore`, {}],
+    [
+      'GET /api/workspaces/:wid/library/items/:id/files/:ver/thumb',
+      'GET',
+      `${lib}/items/${LIB_ITEM}/files/${LIB_VER}/thumb`,
+      undefined,
+    ],
+    [
+      'POST /api/workspaces/:wid/library/import',
+      'POST',
+      `${lib}/import`,
+      { scope: 'personal', fileName: 'a.excalidrawlib', items: [{ name: 'A', elements: [{ id: 'a' }] }] },
+    ],
+    ['GET /api/workspaces/:wid/library/folders', 'GET', `${lib}/folders?scope=personal`, undefined],
+    ['POST /api/workspaces/:wid/library/folders', 'POST', `${lib}/folders`, { scope: 'personal', name: 'F' }],
+    [
+      'PATCH /api/workspaces/:wid/library/folders/:fid',
+      'PATCH',
+      `${lib}/folders/${LIB_FOLDER}`,
+      { name: 'G' },
+    ],
+    ['DELETE /api/workspaces/:wid/library/folders/:fid', 'DELETE', `${lib}/folders/${LIB_FOLDER}`, undefined],
+    ['GET /api/workspaces/:wid/library/marks', 'GET', `${lib}/marks`, undefined],
+    [
+      'PUT /api/workspaces/:wid/library/marks',
+      'PUT',
+      `${lib}/marks`,
+      { key: 'piece:decision', favourite: true },
+    ],
+    [
+      'POST /api/boards/:bid/library/items/:id/place',
+      'POST',
+      `${b}/library/items/${LIB_ITEM}/place`,
+      undefined,
+    ],
     // Requesting access: to their own board and to any other.
     ['POST /api/boards/:bid/access-requests', 'POST', `${b}/access-requests`, { role: 'editor' }],
     [
