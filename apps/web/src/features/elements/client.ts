@@ -20,6 +20,7 @@
 //   createLibraryFolder(workspaceId, input) / patchLibraryFolder(workspaceId, fid, input): Promise<LibraryFolder>
 //   deleteLibraryFolder(workspaceId, fid): Promise<void>
 //   placeLibraryItem(boardId, id): Promise<PlaceLibraryItemResponse>        call BEFORE the elements are pushed
+//   confirmLibraryPlace(boardId, id): Promise<void>                        AFTER their push succeeded: the links stay
 //
 // Downgrade: an api without the library (before WS2's routes, or a rollback) answers 404 to the list. That latches the
 // library off for that workspace in this tab: libraryAvailable(workspaceId) turns false (the panel hides the Library
@@ -47,6 +48,7 @@ import {
   libraryItemsPath,
   libraryListPath,
   libraryMarksPath,
+  libraryPlaceConfirmPath,
   libraryPlacePath,
   libraryRestorePath,
   type PatchLibraryFolderInput,
@@ -233,4 +235,14 @@ export function deleteLibraryFolder(workspaceId: string, fid: string): Promise<v
 
 export function placeLibraryItem(boardId: string, id: string): Promise<PlaceLibraryItemResponse> {
   return write(null, () => call('POST', libraryPlacePath(boardId, id), PlaceLibraryItemResponse))
+}
+
+/**
+ * Review fix (docs/WAVE-Q-CONTRACTS.md §9): the push of a place's elements succeeded, so the file links that place
+ * made on the board stay (unconfirmed ones are swept after an hour, unless the board shows them by then).
+ */
+export function confirmLibraryPlace(boardId: string, id: string): Promise<void> {
+  return write(null, async () => {
+    await call('POST', libraryPlaceConfirmPath(boardId, id), null)
+  })
 }

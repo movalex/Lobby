@@ -5,7 +5,8 @@
 //  - an icon: its geometry from WS1's shard, as elements at the chosen size and colour (./icons-port.ts);
 //  - a shape: the piece built at the origin (@draftroom/templates/pieces), recoloured when a colour is chosen;
 //  - a library item: POST /place first (it links the item's files into this board BEFORE anything is pushed: sync
-//    caches a negative file-refs answer for 30 s), then its elements.
+//    caches a negative file-refs answer for 30 s), then its elements; once the room has them (their push acked), POST
+//    /place/confirm keeps the links /place made (review fix: unconfirmed links are swept after an hour).
 // Then the usage count and, for built-ins, a stamped use (the api stamps items itself on /place).
 import { lobbyColor } from '@draftroom/board-ops/elements'
 import {
@@ -19,7 +20,8 @@ import { isPieceId } from '@draftroom/templates/pieces/catalog'
 import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
 import { countUsage } from '../../lib/usage.ts'
 import { loadPieces } from '../pieces/insert.ts'
-import { placeLibraryItem } from './client.ts'
+import type { EngineCore } from '../../canvas/sync/types.ts'
+import { confirmLibraryPlace, placeLibraryItem } from './client.ts'
 import { type IconsApi, loadIconsApi } from './icons-port.ts'
 import { type PlaceFailure, placeElements } from './place.ts'
 
@@ -69,6 +71,48 @@ async function fontsReady(): Promise<void> {
   } catch {
     // measure with what there is
   }
+}
+
+/** How long an insert waits for the room to take its elements before it gives up confirming (the sweep decides then). */
+export const PUSH_CONFIRM_TIMEOUT_MS = 10 * 60_000
+
+type PushWatch = Pick<EngineCore, 'confirmed' | 'onAck' | 'onSaveStatus' | 'saveStatus'>
+
+/**
+ * Resolves true once the room holds every one of `ids` (the engine's confirmed copy), or once the engine went from
+ * unsaved changes to saved with nothing pending after they were written (a re-keyed id); false when one of them was
+ * refused, on a timeout or without an engine. Never rejects.
+ */
+export function whenPushed(
+  engine: PushWatch | null | undefined,
+  ids: readonly string[],
+  timeoutMs = PUSH_CONFIRM_TIMEOUT_MS,
+): Promise<boolean> {
+  if (!engine || !ids.length) return Promise.resolve(false)
+  return new Promise((resolve) => {
+    let dirty = engine.saveStatus.pending > 0
+    let done = false
+    const offs: (() => void)[] = []
+    const finish = (ok: boolean) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      for (const off of offs) off()
+      resolve(ok)
+    }
+    const check = () => {
+      if (done) return
+      const s = engine.saveStatus
+      if (s.lastReject && ids.includes(s.lastReject.id)) return finish(false)
+      if (ids.every((id) => engine.confirmed(id))) return finish(true)
+      if (s.pending > 0) dirty = true
+      else if (dirty && s.state === 'saved') finish(true)
+    }
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    offs.push(engine.onAck(() => queueMicrotask(check)))
+    offs.push(engine.onSaveStatus(() => check()))
+    check()
+  })
 }
 
 const fromPlace = (r: ReturnType<typeof placeElements>, markKey: string): InsertResult =>
@@ -133,15 +177,20 @@ export async function insertTile(
     }
     if (canvas.readOnly()) return { ok: false, reason: 'readonly' }
     const label = `insert ${answer.item.name || o.itemName || 'library item'}`
-    const r = fromPlace(
-      placeElements(
-        canvas,
-        { label, elements: answer.elements },
-        { ...place, keepTogether: o.options.keepTogether },
-      ),
-      libraryMarkKey({ source: 'item', id: target.id }),
+    const placed = placeElements(
+      canvas,
+      { label, elements: answer.elements },
+      { ...place, keepTogether: o.options.keepTogether },
     )
+    const r = fromPlace(placed, libraryMarkKey({ source: 'item', id: target.id }))
     if (r.ok) countUsage('elements.insert.item')
+    // the links /place made stay once the room has the elements (nothing to confirm for an item without files)
+    if (placed.ok && answer.files.length) {
+      const boardId = ctx.board.id
+      void whenPushed(canvas.engine, placed.allIds).then((pushed) =>
+        pushed ? confirmLibraryPlace(boardId, target.id).catch(() => undefined) : undefined,
+      )
+    }
     return r
   } catch (e) {
     console.error('elements: insert failed', e)
