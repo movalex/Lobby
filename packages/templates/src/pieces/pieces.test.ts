@@ -175,9 +175,11 @@ describe.each(PIECE_IDS.map((id) => [id] as const))('piece %s', (id: PieceId) =>
     for (const e of piece.elements) expect(e.groupIds, e.type).toEqual(g)
   })
 
-  it('keeps a bound label after its container, and never locks anything or nests a frame', () => {
+  it('keeps a bound label after its container, locks only a deliverable’s guides, and never nests a frame', () => {
     for (const e of piece.elements) {
-      expect(e.locked, e.type).toBe(false)
+      // the guides inside a deliverable frame are locked (they stay out of the way of what is put in the frame)
+      if (e.locked) expect(info.category, e.type).toBe('deliverables')
+      if (e.locked) expect(e.type).not.toBe('frame')
       if (e.type === 'text' && e.containerId) {
         const c = piece.elements.findIndex((x) => x.id === e.containerId)
         expect(c).toBeGreaterThanOrEqual(0)
@@ -186,7 +188,13 @@ describe.each(PIECE_IDS.map((id) => [id] as const))('piece %s', (id: PieceId) =>
       if (e.type === 'frame') expect(e.frameId).toBeNull()
     }
     expect(piece.frame).toBe(!!info.frame)
-    if (info.frame) expect(piece.elements.every((e) => e.frameId === null)).toBe(true)
+    // a frame piece's other elements belong to a frame of the piece (a swimlane has none)
+    if (info.frame) {
+      const frames = new Set(piece.elements.filter((e) => e.type === 'frame').map((e) => e.id))
+      expect(frames.size).toBeGreaterThan(0)
+      for (const e of piece.elements)
+        if (e.type !== 'frame') expect(e.frameId === null || frames.has(e.frameId), e.type).toBe(true)
+    }
   })
 
   it('has the size the catalogue says (to a pixel or two) and its elements inside its bounds', () => {
@@ -214,8 +222,9 @@ describe.each(PIECE_IDS.map((id) => [id] as const))('piece %s', (id: PieceId) =>
     piece.elements.forEach((e, i) => {
       const m = moved.elements[i]
       expect(m?.type).toBe(e.type)
-      expect(Math.abs((m?.x as number) - (e.x as number) - 500)).toBeLessThan(0.01)
-      expect(Math.abs((m?.y as number) - (e.y as number) + 300)).toBeLessThan(0.01)
+      // (positions are kept to two decimals: a label centred at a fraction can land one hundredth apart)
+      expect(Math.abs((m?.x as number) - (e.x as number) - 500)).toBeLessThan(0.02)
+      expect(Math.abs((m?.y as number) - (e.y as number) + 300)).toBeLessThan(0.02)
       expect(m?.width).toBe(e.width)
       expect(m?.height).toBe(e.height)
     })
@@ -229,6 +238,8 @@ describe.each(PIECE_IDS.map((id) => [id] as const))('piece %s', (id: PieceId) =>
       expect((piece.elements[0] as { name: string }).name).toBe('Swimlane')
       return
     }
+    // a free arrow has no words to type (it is a line to drag onto things)
+    if (piece.elements.every((e) => e.type === 'arrow')) return
     if (id === 'image') expect(words).toEqual(['Image'])
     else expect(words.length).toBeGreaterThan(0)
     for (const w of words) expect(w.trim().length).toBeGreaterThan(0)

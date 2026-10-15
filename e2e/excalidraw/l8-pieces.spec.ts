@@ -9,6 +9,7 @@
 //
 //   E2E_PORT_BASE=7580 pnpm exec playwright test excalidraw/l8-pieces --project=chromium --workers=1   (from e2e/)
 import type { Page, Request } from '@playwright/test'
+import { PIECES } from '../../packages/templates/src/pieces/catalog.ts'
 import {
   type CanvasElement,
   expect,
@@ -64,7 +65,8 @@ test('L8-3: the panel lists the kits, finds Decision for "dec", and the arrow ke
   const options = a.page.getByTestId('piece-option')
 
   await test.step('every piece is listed with its drawing; the categories and the search narrow them', async () => {
-    await expect(options).toHaveCount(22)
+    // (every piece of the catalogue: the 22 of wave L and the kits wave Q adds)
+    await expect(options).toHaveCount(PIECES.length)
     await expect(a.page.locator('[data-piece-preview="decision"] polygon')).toHaveCount(1, {
       timeout: 15_000,
     })

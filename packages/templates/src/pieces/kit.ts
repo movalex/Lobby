@@ -68,6 +68,17 @@ export function alignLabelLeft(elements: readonly El[], container: El): void {
   Object.assign(label, lay.text)
 }
 
+/** A label that reads from the top left (a notes field's placeholder), laid out again inside its container. */
+export function alignLabelTopLeft(elements: readonly El[], container: El): void {
+  const label = labelOfEl(elements, container.id)
+  if (!label) return
+  label.textAlign = 'left'
+  label.verticalAlign = 'top'
+  const lay = layoutBoundText(container as unknown as EngineElement, label as unknown as TextElement)
+  Object.assign(container, lay.container)
+  Object.assign(label, lay.text)
+}
+
 /** An image slot a person can select and move with its piece (the builder makes slots locked). */
 export function unlockSlot(el: El): void {
   el.locked = false
@@ -75,7 +86,7 @@ export function unlockSlot(el: El): void {
 
 // ---- lines and polygons -------------------------------------------------------------------------------------------------
 
-type Pt = readonly [number, number]
+export type Pt = readonly [number, number]
 
 export interface LineStyle {
   stroke: LobbyColor
@@ -239,3 +250,138 @@ export function finish(elements: readonly El[], o: FinishOptions): WireElement[]
 
 export const FRAME_STROKE = LOBBY_FRAME_STROKE
 export const freshId: IdSource = newElementId
+
+// ---- arrows, curves and outlines (wave Q: the arrows, callouts and block-arrow kits) -------------------------------------
+
+export type ArrowheadName = 'arrow' | 'bar' | 'circle' | 'circle_outline' | 'triangle' | 'triangle_outline'
+
+export interface ArrowStyle {
+  stroke: LobbyColor
+  width?: number
+  dashed?: boolean
+  /** the head at the first point (default none) */
+  start?: ArrowheadName | null
+  /** the head at the last point (default an open arrowhead) */
+  end?: ArrowheadName | null
+  /** a curve through three points (Excalidraw's round arrow); two points stay straight */
+  curved?: boolean
+}
+
+/**
+ * A free `arrow` element through `points` (scene coordinates): bound to nothing, so a person can drag its ends onto
+ * shapes afterwards (the room then derives the bound ends). Straight, or curved with three points. `updated` comes
+ * from `like`, an element already emitted, else the clock.
+ */
+export function arrowEl(like: El | undefined, newId: IdSource, points: readonly Pt[], style: ArrowStyle): El {
+  const abs = points.map(([x, y]) => [round2(x), round2(y)] as const)
+  const [x0, y0] = abs[0] as Pt
+  const rel = abs.map(([x, y]) => [round2(x - x0), round2(y - y0)] as [number, number])
+  const xs = rel.map((p) => p[0])
+  const ys = rel.map((p) => p[1])
+  return {
+    id: newId(),
+    type: 'arrow',
+    x: x0,
+    y: y0,
+    width: Math.max(...xs) - Math.min(...xs),
+    height: Math.max(...ys) - Math.min(...ys),
+    angle: 0,
+    strokeColor: lobbyColor(style.stroke).solid,
+    backgroundColor: 'transparent',
+    fillStyle: 'solid',
+    strokeWidth: style.width ?? 3.5,
+    strokeStyle: style.dashed ? 'dashed' : 'solid',
+    roundness: style.curved && rel.length > 2 ? { type: 2 } : null,
+    roughness: 0,
+    opacity: 100,
+    seed: randomInt31(),
+    version: 1,
+    versionNonce: randomInt31(),
+    index: null,
+    isDeleted: false,
+    groupIds: [],
+    frameId: null,
+    boundElements: null,
+    updated: like?.updated ?? Date.now(),
+    created: null,
+    link: null,
+    locked: false,
+    points: rel,
+    startBinding: null,
+    endBinding: null,
+    startArrowhead: style.start ?? null,
+    endArrowhead: style.end === undefined ? 'arrow' : style.end,
+    elbowed: false,
+  }
+}
+
+/** `n` points of the quarter circle around (`cx`, `cy`) from `from` to `to` degrees, inclusive (0 = right, 90 = down). */
+export function arcPoints(cx: number, cy: number, r: number, from: number, to: number, n = 6): Pt[] {
+  return Array.from({ length: n + 1 }, (_, i) => {
+    const a = ((from + ((to - from) * i) / n) * Math.PI) / 180
+    return [cx + r * Math.cos(a), cy + r * Math.sin(a)] as Pt
+  })
+}
+
+export interface BubbleTail {
+  /** where its base starts, as a fraction of the width */
+  at: number
+  /** how far it reaches past the bottom edge, and how wide its base is */
+  length: number
+  width: number
+  /** where its tip sits across, in board units from the left (default: over the middle of its base) */
+  tipX?: number
+}
+
+/** `pts` without a point equal to the one before it (the arcs of neighbouring corners share their ends). */
+function dedupe(pts: readonly Pt[]): Pt[] {
+  return pts.filter((p, i) => i === 0 || p[0] !== (pts[i - 1] as Pt)[0] || p[1] !== (pts[i - 1] as Pt)[1])
+}
+
+/**
+ * The closed outline of a rounded `w` by `h` box with an optional tail under it, clockwise from the top edge,
+ * smooth (the corners are drawn from short segments) and ending on its first point. The tail points past the
+ * bottom edge, so the outline is taller than `h`.
+ */
+export function bubbleOutline(w: number, h: number, radius: number, tail?: BubbleTail): Pt[] {
+  const r = Math.min(radius, w / 2, h / 2)
+  const pts: Pt[] = [[r, 0]]
+  pts.push(...arcPoints(w - r, r, r, -90, 0))
+  pts.push(...arcPoints(w - r, h - r, r, 0, 90))
+  if (tail) {
+    const left = w * tail.at
+    pts.push([left + tail.width, h], [tail.tipX ?? left + tail.width / 2, h + tail.length], [left, h])
+  }
+  pts.push(...arcPoints(r, h - r, r, 90, 180))
+  pts.push(...arcPoints(r, r, r, 180, 270))
+  pts.push([r, 0])
+  return dedupe(pts.map(([x, y]) => [round2(x), round2(y)] as Pt))
+}
+
+export type Direction = 'right' | 'left' | 'up' | 'down'
+
+/**
+ * A block arrow pointing `dir`, the corners of a `w` by `h` box, closed: a shaft `shaft` (0-1) of the cross
+ * size thick, and a head `head` (0-1) of the length long.
+ */
+export function blockArrow(dir: Direction, w: number, h: number, shaft = 0.46, head = 0.38): Pt[] {
+  if (dir === 'up' || dir === 'down') {
+    // drawn pointing right in the turned box, then turned a quarter (right becomes down), and flipped for up
+    const down = blockArrow('right', h, w, shaft, head).map(([x, y]) => [w - y, x] as Pt)
+    return dir === 'down' ? down : down.map(([x, y]) => [x, h - y] as Pt)
+  }
+  const y0 = (h * (1 - shaft)) / 2
+  const y1 = h - y0
+  const neck = w * (1 - head)
+  const right: Pt[] = [
+    [0, y0],
+    [neck, y0],
+    [neck, 0],
+    [w, h / 2],
+    [neck, h],
+    [neck, y1],
+    [0, y1],
+    [0, y0],
+  ]
+  return dir === 'right' ? right : right.map(([x, y]) => [w - x, y] as Pt)
+}
