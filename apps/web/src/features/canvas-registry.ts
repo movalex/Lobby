@@ -5,6 +5,7 @@
 // feature folders). Wave M: lead-only; the foundation registers 'ws-templates' and 'ai-workspace-ask' (W8's).
 // Wave N: lead-only; the foundation registers 'visits' (WS4's) and 'board-links' (WS7's), empty. Reactions are inside
 // workshops (WS3, workshops/ported/note-reactions.ts) and Capture the room inside ai (WS5): no feature of their own.
+// Wave Q: lead-only; the foundation registers 'elements' (WS3's), contributing nothing while ELEMENTS_PANEL is false.
 import type { CanvasFeature } from '../canvas/api/index.ts'
 import { feature as mediaFeature } from '../file-card/ported/index.tsx'
 import { feature as a11yFeature } from './a11y/ported/index.tsx'
@@ -16,6 +17,7 @@ import { feature as navigationFeature } from './canvas-ux/ported/navigation/inde
 import { feature as commandPaletteFeature } from './command-palette/index.tsx'
 import { feature as commentsFeature } from './comments/ported/index.tsx'
 import { feature as cursorChatFeature } from './cursor-chat/ported/index.tsx'
+import { feature as elementsFeature } from './elements/index.tsx'
 import { feature as flowFeature } from './flow/ported/index.tsx'
 import { feature as historyFeature } from './history/ported/index.tsx'
 import { feature as mindmapFeature } from './mindmap/ported/index.tsx'
@@ -65,4 +67,6 @@ export const CANVAS_FEATURES: readonly CanvasFeature[] = [
   // wave N (registered empty by the foundation; WS4 and WS7 fill them): since your last visit, links between boards
   visitsFeature,
   boardLinksFeature,
+  // wave Q (registered by the foundation, hidden behind ELEMENTS_PANEL; WS3 fills it): the Elements panel
+  elementsFeature,
 ]
