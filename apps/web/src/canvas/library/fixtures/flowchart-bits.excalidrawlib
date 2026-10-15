@@ -1,0 +1,382 @@
+{
+ "type": "excalidrawlib",
+ "version": 2,
+ "source": "https://excalidraw.com",
+ "libraryItems": [
+  {
+   "id": "lib-process",
+   "status": "published",
+   "created": 1700000000000,
+   "name": "Process step",
+   "elements": [
+    {
+     "id": "p1",
+     "type": "rectangle",
+     "x": 0,
+     "y": 0,
+     "width": 180,
+     "height": 80,
+     "angle": 0,
+     "strokeColor": "#1e1e1e",
+     "backgroundColor": "#a5d8ff",
+     "fillStyle": "solid",
+     "strokeWidth": 2,
+     "strokeStyle": "solid",
+     "roughness": 1,
+     "opacity": 100,
+     "groupIds": [],
+     "frameId": null,
+     "index": null,
+     "roundness": {
+      "type": 3
+     },
+     "seed": 1000,
+     "version": 3,
+     "versionNonce": 1001,
+     "isDeleted": false,
+     "boundElements": [
+      {
+       "id": "p1t",
+       "type": "text"
+      }
+     ],
+     "updated": 1700000000000,
+     "link": null,
+     "locked": false
+    },
+    {
+     "id": "p1t",
+     "type": "text",
+     "x": 60,
+     "y": 27,
+     "width": 60,
+     "height": 25,
+     "angle": 0,
+     "strokeColor": "#1e1e1e",
+     "backgroundColor": "transparent",
+     "fillStyle": "solid",
+     "strokeWidth": 2,
+     "strokeStyle": "solid",
+     "roughness": 1,
+     "opacity": 100,
+     "groupIds": [],
+     "frameId": null,
+     "index": null,
+     "roundness": null,
+     "seed": 1002,
+     "version": 3,
+     "versionNonce": 1003,
+     "isDeleted": false,
+     "boundElements": null,
+     "updated": 1700000000000,
+     "link": null,
+     "locked": false,
+     "text": "Step",
+     "originalText": "Step",
+     "fontSize": 20,
+     "fontFamily": 1,
+     "textAlign": "center",
+     "verticalAlign": "middle",
+     "containerId": "p1",
+     "baseFontSize": null,
+     "autoResize": true,
+     "lineHeight": 1.25
+    }
+   ]
+  },
+  {
+   "id": "lib-decision",
+   "status": "published",
+   "created": 1700000000000,
+   "name": "Decision",
+   "elements": [
+    {
+     "id": "d1",
+     "type": "diamond",
+     "x": 0,
+     "y": 0,
+     "width": 200,
+     "height": 140,
+     "angle": 0,
+     "strokeColor": "#1e1e1e",
+     "backgroundColor": "#ffec99",
+     "fillStyle": "solid",
+     "strokeWidth": 2,
+     "strokeStyle": "solid",
+     "roughness": 1,
+     "opacity": 100,
+     "groupIds": [],
+     "frameId": null,
+     "index": null,
+     "roundness": null,
+     "seed": 1004,
+     "version": 3,
+     "versionNonce": 1005,
+     "isDeleted": false,
+     "boundElements": [
+      {
+       "id": "d1t",
+       "type": "text"
+      }
+     ],
+     "updated": 1700000000000,
+     "link": null,
+     "locked": false
+    },
+    {
+     "id": "d1t",
+     "type": "text",
+     "x": 40,
+     "y": 57,
+     "width": 120,
+     "height": 25,
+     "angle": 0,
+     "strokeColor": "#1e1e1e",
+     "backgroundColor": "transparent",
+     "fillStyle": "solid",
+     "strokeWidth": 2,
+     "strokeStyle": "solid",
+     "roughness": 1,
+     "opacity": 100,
+     "groupIds": [],
+     "frameId": null,
+     "index": null,
+     "roundness": null,
+     "seed": 1006,
+     "version": 3,
+     "versionNonce": 1007,
+     "isDeleted": false,
+     "boundElements": null,
+     "updated": 1700000000000,
+     "link": null,
+     "locked": false,
+     "text": "Yes or no?",
+     "originalText": "Yes or no?",
+     "fontSize": 20,
+     "fontFamily": 2,
+     "textAlign": "center",
+     "verticalAlign": "middle",
+     "containerId": "d1",
+     "baseFontSize": null,
+     "autoResize": true,
+     "lineHeight": 1.25
+    }
+   ]
+  },
+  {
+   "id": "lib-flow",
+   "status": "published",
+   "created": 1700000000000,
+   "name": "Two steps and an arrow",
+   "elements": [
+    {
+     "id": "f1",
+     "type": "rectangle",
+     "x": 0,
+     "y": 0,
+     "width": 120,
+     "height": 60,
+     "angle": 0,
+     "strokeColor": "#1e1e1e",
+     "backgroundColor": "transparent",
+     "fillStyle": "solid",
+     "strokeWidth": 2,
+     "strokeStyle": "solid",
+     "roughness": 1,
+     "opacity": 100,
+     "groupIds": [
+      "g1"
+     ],
+     "frameId": null,
+     "index": null,
+     "roundness": null,
+     "seed": 1008,
+     "version": 3,
+     "versionNonce": 1009,
+     "isDeleted": false,
+     "boundElements": [
+      {
+       "id": "fa",
+       "type": "arrow"
+      }
+     ],
+     "updated": 1700000000000,
+     "link": null,
+     "locked": false
+    },
+    {
+     "id": "f2",
+     "type": "rectangle",
+     "x": 240,
+     "y": 0,
+     "width": 120,
+     "height": 60,
+     "angle": 0,
+     "strokeColor": "#1e1e1e",
+     "backgroundColor": "transparent",
+     "fillStyle": "solid",
+     "strokeWidth": 2,
+     "strokeStyle": "solid",
+     "roughness": 1,
+     "opacity": 100,
+     "groupIds": [
+      "g1"
+     ],
+     "frameId": null,
+     "index": null,
+     "roundness": null,
+     "seed": 1010,
+     "version": 3,
+     "versionNonce": 1011,
+     "isDeleted": false,
+     "boundElements": [
+      {
+       "id": "fa",
+       "type": "arrow"
+      }
+     ],
+     "updated": 1700000000000,
+     "link": null,
+     "locked": false
+    },
+    {
+     "id": "fa",
+     "type": "arrow",
+     "x": 120,
+     "y": 30,
+     "width": 120,
+     "height": 0,
+     "angle": 0,
+     "strokeColor": "#1e1e1e",
+     "backgroundColor": "transparent",
+     "fillStyle": "solid",
+     "strokeWidth": 2,
+     "strokeStyle": "solid",
+     "roughness": 1,
+     "opacity": 100,
+     "groupIds": [
+      "g1"
+     ],
+     "frameId": null,
+     "index": null,
+     "roundness": null,
+     "seed": 1012,
+     "version": 3,
+     "versionNonce": 1013,
+     "isDeleted": false,
+     "boundElements": null,
+     "updated": 1700000000000,
+     "link": null,
+     "locked": false,
+     "points": [
+      [
+       0,
+       0
+      ],
+      [
+       120,
+       0
+      ]
+     ],
+     "startBinding": {
+      "elementId": "f1",
+      "fixedPoint": [
+       1,
+       0.5001
+      ],
+      "mode": "orbit"
+     },
+     "endBinding": {
+      "elementId": "f2",
+      "fixedPoint": [
+       0,
+       0.5001
+      ],
+      "mode": "orbit"
+     },
+     "startArrowhead": null,
+     "endArrowhead": "arrow",
+     "elbowed": false
+    }
+   ]
+  },
+  {
+   "id": "lib-note",
+   "status": "published",
+   "created": 1700000000000,
+   "elements": [
+    {
+     "id": "n1",
+     "type": "rectangle",
+     "x": 0,
+     "y": 0,
+     "width": 200,
+     "height": 100,
+     "angle": 0,
+     "strokeColor": "#1e1e1e",
+     "backgroundColor": "#ffc9c9",
+     "fillStyle": "solid",
+     "strokeWidth": 2,
+     "strokeStyle": "solid",
+     "roughness": 1,
+     "opacity": 100,
+     "groupIds": [],
+     "frameId": null,
+     "index": null,
+     "roundness": null,
+     "seed": 1014,
+     "version": 3,
+     "versionNonce": 1015,
+     "isDeleted": false,
+     "boundElements": [
+      {
+       "id": "n1t",
+       "type": "text"
+      }
+     ],
+     "updated": 1700000000000,
+     "link": null,
+     "locked": false
+    },
+    {
+     "id": "n1t",
+     "type": "text",
+     "x": 40,
+     "y": 37,
+     "width": 120,
+     "height": 25,
+     "angle": 0,
+     "strokeColor": "#1e1e1e",
+     "backgroundColor": "transparent",
+     "fillStyle": "solid",
+     "strokeWidth": 2,
+     "strokeStyle": "solid",
+     "roughness": 1,
+     "opacity": 100,
+     "groupIds": [],
+     "frameId": null,
+     "index": null,
+     "roundness": null,
+     "seed": 1016,
+     "version": 3,
+     "versionNonce": 1017,
+     "isDeleted": false,
+     "boundElements": null,
+     "updated": 1700000000000,
+     "link": null,
+     "locked": false,
+     "text": "Note to self",
+     "originalText": "Note to self",
+     "fontSize": 20,
+     "fontFamily": 3,
+     "textAlign": "center",
+     "verticalAlign": "middle",
+     "containerId": "n1",
+     "baseFontSize": null,
+     "autoResize": true,
+     "lineHeight": 1.25
+    }
+   ]
+  }
+ ]
+}
