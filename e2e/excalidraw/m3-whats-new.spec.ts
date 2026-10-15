@@ -57,7 +57,7 @@ test('a returning creator sees the wave P card and the Start row above the board
   try {
     await p.api.createBoard(p.wid, 'Planning')
     await p.api.createBoard(p.wid, 'Retro')
-    // a person who dismissed wave L's card: that version is remembered, wave P's is a new card
+    // a person who dismissed wave L's card: that version is remembered, wave Q's is a new card
     await p.page.goto('/')
     await p.page.evaluate(
       ([key]) => localStorage.setItem(key as string, '2026-10-wave-l'),
@@ -66,13 +66,13 @@ test('a returning creator sees the wave P card and the Start row above the board
     await openDashboard(p.page, p.wid)
     await expect(card(p.page)).toBeVisible()
 
-    await test.step('six items, what changed since wave L, and no button that could look dead', async () => {
+    await test.step('six items, the Elements panel first, and no button that could look dead', async () => {
       const titles = await card(p.page).getByTestId('whats-new-item').locator('strong').allTextContents()
       expect(titles).toEqual([
-        'Sharper PDF export',
-        'Reactions on notes',
+        'Icons in the Elements panel',
+        'Shape and deliverable kits',
+        'A library for your team',
         'Links between boards',
-        'What changed since your last visit',
         'Capture the room',
         'Smoother big boards',
       ])
@@ -91,7 +91,7 @@ test('a returning creator sees the wave P card and the Start row above the board
       expect(news).toBeLessThan(860)
     })
 
-    await test.step('dismissing wave P’s card is remembered under its own version', async () => {
+    await test.step('dismissing wave Q’s card is remembered under its own version', async () => {
       await card(p.page).getByTestId('whats-new-dismiss').click()
       await expect(card(p.page)).toHaveCount(0)
       expect(
@@ -99,7 +99,7 @@ test('a returning creator sees the wave P card and the Start row above the board
           (key) => localStorage.getItem(key),
           `draftroom:whats-new-dismissed:${p.me.user.id}`,
         ),
-      ).toBe('2026-10-wave-p')
+      ).toBe('2026-10-wave-q')
       await p.page.reload()
       await expect(p.page.getByTestId('dashboard')).toBeVisible()
       await expect(card(p.page)).toHaveCount(0)

@@ -1,4 +1,4 @@
-// "What's new" (wave K, K4-5; wave L's card, wave M, M3-3; wave P): a dismissible card on the dashboard for people who have
+// "What's new" (wave K, K4-5; wave L's card, wave M, M3-3; wave P; wave Q): a dismissible card on the dashboard for people who have
 // been here before and says what changed since. A first visit gets the Welcome card instead (Welcome.tsx), never this
 // changelog (wave P, P-002). Each item is shown only to people it is true for; it may have a "Try it" that goes to
 // the thing: a wave L item's lands on a board they can edit with a `?try=<hint>` (features/command-palette/try-hints.ts:
@@ -12,7 +12,7 @@ import type { TryHint } from '../features/command-palette/try-hints.ts'
 import { type BoardRole, type BoardStatus, can } from '../lib/permissions.ts'
 
 /** Bump it when the card says something new: everybody sees it once more. */
-export const WHATS_NEW_VERSION = '2026-10-wave-p'
+export const WHATS_NEW_VERSION = '2026-10-wave-q'
 export const WHATS_NEW_MIN_ITEMS = 3
 export const WHATS_NEW_MAX_ITEMS = 6
 
@@ -54,18 +54,26 @@ export interface WhatsNewItem {
   for: Audience
 }
 
+// Wave Q's three (the Elements panel) first, then three of wave P's for people who never saw that card.
 export const WHATS_NEW_ITEMS: readonly WhatsNewItem[] = [
   {
-    id: 'vector-pdf',
-    title: 'Sharper PDF export',
-    body: 'Export a board or its frames as a PDF with selectable text and a bookmark for each frame.',
+    id: 'elements-icons',
+    title: 'Icons in the Elements panel',
+    body: 'Search thousands of Lucide and Tabler icons and add one in any of Lobby’s colours, in three sizes.',
     tryIt: null,
     for: 'everyone',
   },
   {
-    id: 'reactions',
-    title: 'Reactions on notes',
-    body: 'Point at a note and react with an emoji or a +1 instead of writing a comment.',
+    id: 'elements-kits',
+    title: 'Shape and deliverable kits',
+    body: 'The Shapes tab adds arrows, callouts, badges, sticky-note kits, device frames, storyboards and deliverables.',
+    tryIt: null,
+    for: 'everyone',
+  },
+  {
+    id: 'elements-library',
+    title: 'A library for your team',
+    body: 'Save a selection to your workspace’s library or your own, then place it on any board in the workspace.',
     tryIt: null,
     for: 'everyone',
   },
@@ -73,13 +81,6 @@ export const WHATS_NEW_ITEMS: readonly WhatsNewItem[] = [
     id: 'board-links',
     title: 'Links between boards',
     body: 'Put a card on a board that opens another board; “Linked from” shows what points at this one.',
-    tryIt: null,
-    for: 'everyone',
-  },
-  {
-    id: 'since-visit',
-    title: 'What changed since your last visit',
-    body: 'Reopen a board and a chip tells you what other people added or changed while you were away.',
     tryIt: null,
     for: 'everyone',
   },

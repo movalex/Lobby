@@ -357,9 +357,9 @@ describe('the Elements panel (WS3)', () => {
     expect(ELEMENTS_PANEL_ID).toBe('elements')
   })
 
-  it('the panel command is a palette id, pending until WS3 registers it; the new usage events are valid', () => {
+  it('the panel command is a palette id, no longer pending (the integration turned the panel on); the new usage events are valid', () => {
     expect(PALETTE_COMMAND_IDS as readonly string[]).toContain(ELEMENTS_OPEN_COMMAND_ID)
-    expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).toContain(ELEMENTS_OPEN_COMMAND_ID)
+    expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).not.toContain(ELEMENTS_OPEN_COMMAND_ID)
     expect(isUsageEvent(`palette.run:${ELEMENTS_OPEN_COMMAND_ID}`)).toBe(true)
     for (const e of [
       'elements.insert.icon',

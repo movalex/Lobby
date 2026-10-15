@@ -82,20 +82,24 @@ const ctxAs = (role: string, status = 'active') =>
   ({ role, board: { status } }) as unknown as CanvasFeatureContext
 
 describe('the elements feature (WS3)', () => {
-  it('is registered on the board page, after the wave N features, and contributes nothing while the flag is off', () => {
-    expect(ELEMENTS_PANEL).toBe(false)
+  it('is registered on the board page, after the wave N features, and is on: the Elements panel replaces Shapes', () => {
+    expect(ELEMENTS_PANEL).toBe(true)
     const ids = CANVAS_FEATURES.map((f) => f.id)
     expect(ids.at(-1)).toBe('elements')
     expect(ids.indexOf('elements')).toBeGreaterThan(ids.indexOf('board-links'))
-    expect(feature).toEqual({ id: 'elements' })
-    // the Shapes panel is still the board's
+    expect(feature).toEqual(elementsFeature(true))
+    // the Elements panel is the board's; the Shapes panel's dock entry has retired
     const panels = CANVAS_FEATURES.flatMap((f) => f.panels ?? []).map((p) => p.id)
-    expect(panels).toContain(PIECES_PANEL_ID)
-    expect(panels).not.toContain(ELEMENTS_PANEL_ID)
-    // its command is a contract id, held pending, and no feature registers it yet
-    expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).toContain(ELEMENTS_OPEN_COMMAND_ID)
+    expect(panels).toContain(ELEMENTS_PANEL_ID)
+    expect(panels).not.toContain(PIECES_PANEL_ID)
+    // its command is registered once, and no longer pending
+    expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).not.toContain(ELEMENTS_OPEN_COMMAND_ID)
     const commands = CANVAS_FEATURES.flatMap((f) => f.commands ?? []).map((c) => c.id)
-    expect(commands).not.toContain(ELEMENTS_OPEN_COMMAND_ID)
+    expect(commands.filter((c) => c === ELEMENTS_OPEN_COMMAND_ID)).toHaveLength(1)
+  })
+
+  it('switched off, it contributes nothing', () => {
+    expect(elementsFeature(false)).toEqual({ id: 'elements' })
   })
 
   it('switched on, it is one dock panel at the Shapes panel’s place, for people who can edit', () => {

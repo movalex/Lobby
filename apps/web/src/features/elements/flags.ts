@@ -1,15 +1,15 @@
-// OWNER: WS3 (wave Q, the Elements panel; landed by the wave Q foundation). The panel's switch. While it is false the
-// 'elements' feature contributes nothing (no panel, no command, no drop handler) and the Shapes panel (features/pieces)
-// is the board's, exactly as before wave Q. The lead turns it on at the wave Q integration, in the change that also
-// moves 'elements.open' out of PENDING_PALETTE_COMMAND_IDS; the Shapes panel's dock entry then retires by itself
-// (features/pieces/index.tsx reads elementsPanelOn(); the `pieces.*` palette commands stay).
+// OWNER: WS3 (wave Q, the Elements panel; landed by the wave Q foundation). The panel's switch: ON since the wave Q
+// integration, in the change that also moved 'elements.open' out of PENDING_PALETTE_COMMAND_IDS. The Shapes panel's
+// dock entry retires by itself (features/pieces/index.tsx reads elementsPanelOn(); the `pieces.*` palette commands
+// stay). Set back to false, the 'elements' feature contributes nothing (no panel, no command, no drop handler) and the
+// Shapes panel is the board's, exactly as before wave Q (then list 'elements.open' as pending again).
 //
 // A dev-auth build (the e2e build, local dev; never a production bundle: DEV_AUTH_ENABLED) may turn the panel on for
 // its page, as the speed flags do (canvas/sync/flags.ts): localStorage ELEMENTS_PANEL_KEY = '1', read once when the
 // board's features load. The q3-* specs set it with an init script and reload.
 import { DEV_AUTH_ENABLED } from '../../lib/identity.ts'
 
-export const ELEMENTS_PANEL = false
+export const ELEMENTS_PANEL = true
 
 /** The localStorage key a dev-auth page reads its override from ('1' on, '0' off). */
 export const ELEMENTS_PANEL_KEY = 'lobby.elementsPanel'

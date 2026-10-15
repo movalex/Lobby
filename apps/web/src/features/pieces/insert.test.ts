@@ -5,6 +5,7 @@ import { installServerTextMetrics } from '@draftroom/canvas-schema/engine'
 import { insertLabel, PIECES } from '@draftroom/templates/pieces/catalog'
 import { describe, expect, it } from 'vitest'
 import type { ExternalContent } from '../../canvas/api/index.ts'
+import { elementsState } from '../elements/state.ts'
 import { type El, fakeCanvas, fakeCtx, frameEl } from '../sort/test-kit.ts'
 import { COMMANDS, DROP_HANDLER, PIECE_COMMAND_IDS } from './commands.ts'
 import { failureText, frameAtPoint, insertPiece } from './insert.ts'
@@ -168,11 +169,18 @@ describe('the commands', () => {
     expect(f.selected).toHaveLength(1)
   })
 
-  it('opens and closes the panel', () => {
+  it('opens the Elements panel on its Shapes tab (wave Q: the Shapes dock entry has retired), and closes it', () => {
     const opened: (string | null)[] = []
     const f = fakeCanvas([])
     const { ctx } = fakeCtx(f.canvas, { openPanel: (id: string | null) => void opened.push(id) } as never)
     COMMANDS.find((c) => c.id === 'pieces.open')?.run(ctx, 'palette')
-    expect(opened).toEqual(['pieces'])
+    expect(opened).toEqual(['elements'])
+    expect(elementsState(f.canvas).requestedTab.get()).toBe('shapes')
+    const open = fakeCtx(f.canvas, {
+      openPanel: (id: string | null) => void opened.push(id),
+      activePanel: 'elements',
+    } as never).ctx
+    COMMANDS.find((c) => c.id === 'pieces.open')?.run(open, 'palette')
+    expect(opened).toEqual(['elements', null])
   })
 })
