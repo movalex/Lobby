@@ -106,6 +106,24 @@ describe('importing a library', () => {
     expect(await count(w.api, 'library_item_files')).toBe(0)
   })
 
+  it('refuses an item whose colours hold a url() (review fix): skipped as not valid, nothing stored of it', async () => {
+    const r = await imported(
+      w.carol,
+      body({
+        items: [
+          { name: 'Fine', elements: [rect('a')] },
+          { name: 'Beacon', elements: [rect('b', 0, 0, { backgroundColor: 'url(https://evil.example/x#p)' })] },
+        ],
+      }),
+    )
+    expect(r).toEqual({ created: 1, skipped: 1, warnings: ['1 item was not valid and left out.'] })
+    expect((await items()).map((i) => i.name)).toEqual(['Fine'])
+    const stored = await w.api.db.one<{ n: number }>(
+      "SELECT count(*)::int AS n FROM library_items WHERE elements::text ILIKE '%url(%'",
+    )
+    expect(stored.n).toBe(0)
+  })
+
   it('who: a creator into the workspace library, anyone into their own; the outsider 403 CREATOR_REQUIRED', async () => {
     expect(answer(await w.pat.req('POST', `${LIB}/import`, body()))).toBe('403 CREATOR_REQUIRED')
     await imported(w.pat, body({ scope: 'personal' }))

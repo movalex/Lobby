@@ -131,6 +131,29 @@ export const MAX_BOUND_ELEMENTS = 1_000
 export const MAX_FRAME_NAME_CHARS = 200
 export const MAX_COLOR_CHARS = 64
 
+/** A CSS function call with no nested parentheses: its name and its arguments. */
+const COLOR_CALL = /[a-z-]*\s*\(([^()]*)\)/gi
+/** One argument of a colour function: a number (with %, an angle unit or an exponent), or `none`. */
+const COLOR_ARG = /^(?:[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?(?:%|deg|rad|grad|turn)?|none)$/i
+
+/**
+ * Whether a stored `strokeColor` / `backgroundColor` is safe to put into CSS or an SVG attribute (wave Q review
+ * fix): never a `url(…)` (or any function call whose arguments are not all numbers: `var()`, `image-set()`,
+ * `color-mix()`, `calc()`), never `;`, `<`, `>`, a quote or a backslash (a CSS escape). Hex, names and
+ * rgb()/hsl()/oklch()-style numeric colours pass. Not a full CSS colour parser: the web's drawings allow even less
+ * (apps/web features/pieces/Preview.tsx previewColor). The engine's palette and colour input only make colours this
+ * accepts.
+ */
+export function isAllowedColor(color: string): boolean {
+  if (/[;<>"'\\]/.test(color)) return false
+  let numeric = true
+  const rest = color.replace(COLOR_CALL, (_call, args: string) => {
+    if (!args.split(/[\s,/]+/).every((a) => a === '' || COLOR_ARG.test(a))) numeric = false
+    return ' '
+  })
+  return numeric && !/[()]/.test(rest)
+}
+
 /** Element JSON bytes (UTF-8 of `JSON.stringify(element)`), per type (§3.5): the worst case per type. */
 export const MAX_ELEMENT_BYTES = {
   text: 144 * 1024,

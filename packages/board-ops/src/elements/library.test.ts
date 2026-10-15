@@ -135,11 +135,18 @@ describe('serializeLibraryItem', () => {
       { ...image, fileId: 'data:image/png;base64,AAAA' },
       { ...image, customData: { lobby: { alt: 'blob:https://x/y' } } },
       { ...rect, customData: { lobby: { deep: { deeper: ['data:x'] } } } },
+      // not only at the start (review fix): inside a CSS url(), after other words, after a query
+      { ...rect, customData: { lobby: { alt: 'url(data:image/svg+xml,<svg/>)' } } },
+      { ...image, customData: { lobby: { alt: 'see blob:https://x/y' } } },
+      { ...rect, link: 'https://lobby.example/?u=blob:https://lobby.example/uuid' },
+      { ...rect, customData: { lobby: { deep: ['x,DATA:text/html,1'] } } },
     ]
     for (const el of cases) {
       const r = serialize([el as unknown as WireElement])
       expect(r, JSON.stringify(el).slice(0, 80)).toEqual({ ok: false, problem: 'inline-data', count: 1 })
     }
+    // a word that only ends in "data" is no scheme
+    expect(serialize([{ ...rect, link: 'https://lobby.example/metadata:x' } as unknown as WireElement]).ok).toBe(true)
   })
 
   it('refuses types no board holds; an unknown customData key is dropped, not stored', () => {

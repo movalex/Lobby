@@ -104,6 +104,10 @@ describe('saving a selection', () => {
       ['data: link', [rect('d', 0, 0, { link: 'data:text/html,hi' })]],
       ['broken element', [rect('x', 0, 0, { width: 'wide' })]],
       ['nothing live', [rect('gone', 0, 0, { isDeleted: true })]],
+      // review fix: a colour that would make every viewer of the tile fetch a URL
+      ['url() fill', [rect('u', 0, 0, { backgroundColor: 'url(https://evil.example/x#p)' })]],
+      ['url() stroke', [rect('s', 0, 0, { strokeColor: 'red;background:url(https://evil.example/y)' })]],
+      ['data: in customData', [rect('c', 0, 0, { customData: { lobby: { alt: 'x url(data:image/png,1)' } } })]],
     ]
     for (const [what, elements] of bad) {
       const res = await save(w.carol, w.source, { elements })

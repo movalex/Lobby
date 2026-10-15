@@ -16,6 +16,7 @@ import {
   GUEST_BOARD_ITEM_CAP,
   GUEST_ITEM_CAP,
   GUEST_TAG_DEF_CAP,
+  isAllowedColor,
   isAllowedLink,
   isLobbyFontFamily,
   jsonByteLength,
@@ -107,6 +108,42 @@ describe('element schemas (§3.1, §3.5)', () => {
     expect(code({ ...E.arrow, points: raw })).toBe('TOO_LARGE')
     // a rectangle over 32 KiB (a huge link is refused first; use the frame name budget instead)
     expect(code({ ...E.frame, name: 'n'.repeat(201) })).toBe('INVALID')
+  })
+
+  it('colours never hold a url(), a non-numeric function or markup (wave Q review fix)', () => {
+    for (const c of [
+      '#1e1e1e',
+      'transparent',
+      'red',
+      'currentColor',
+      'rgb(255, 0, 0)',
+      'rgba(255,0,0,.5)',
+      'rgb(10% 20% 30% / 50%)',
+      'hsl(120deg 50% 50%)',
+      'oklch(0.7 0.1 200)',
+    ]) {
+      expect(isAllowedColor(c), c).toBe(true)
+      expect(code({ ...E.rectangle, strokeColor: c, backgroundColor: c }), c).toBe('ok')
+    }
+    for (const c of [
+      'url(https://evil.example/x#p)',
+      'URL (#p)',
+      'red;background:url(x)',
+      'rgb(1, 2, 3) url(https://evil.example/z)',
+      'var(--x)',
+      'color-mix(in srgb, red, blue)',
+      'rgb(calc(1), 2, 3)',
+      'rgb(1, 2, 3',
+      '#fff"',
+      "#fff'",
+      'r\\65 d',
+      '<b>',
+      'red>',
+    ]) {
+      expect(isAllowedColor(c), c).toBe(false)
+      expect(code({ ...E.rectangle, backgroundColor: c }), c).toBe('INVALID')
+      expect(code({ ...E.rectangle, strokeColor: c }), c).toBe('INVALID')
+    }
   })
 
   it('freedraw pressures match its points', () => {

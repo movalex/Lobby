@@ -18,6 +18,7 @@ import {
   COORD_LIMIT,
   ELEMENT_ID_PATTERN,
   FILE_ID_PATTERN,
+  isAllowedColor,
   isAllowedLink,
   jsonByteLength,
   MAX_BOUND_ELEMENTS,
@@ -58,7 +59,7 @@ const Coord = z.number().finite().gte(-COORD_LIMIT).lte(COORD_LIMIT)
 /** A point relative to the element's `x`, `y` (a `LocalPoint`). */
 export const LocalPoint = z.tuple([Coord, Coord])
 const Angle = z.number().finite().gte(-1_000).lte(1_000)
-const Color = z.string().max(MAX_COLOR_CHARS)
+const Color = z.string().max(MAX_COLOR_CHARS).refine(isAllowedColor, 'colour not allowed')
 const Int = z.number().int()
 const NonNegInt = Int.nonnegative()
 const Epoch = z.number().finite().nonnegative()

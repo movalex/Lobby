@@ -101,8 +101,11 @@ type El = Record<string, unknown>
 const isObj = (v: unknown): v is El => typeof v === 'object' && v !== null && !Array.isArray(v)
 const finite = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 
-/** A URL scheme the library never stores (inline or page-local content). */
-const INLINE_URL = /^\s*(?:data|blob):/i
+/**
+ * A URL scheme the library never stores (inline or page-local content), anywhere in a string: at its start, and after
+ * anything that is not part of a scheme name (inside a CSS `url(…)`, after a word, a comma or a query's `=`).
+ */
+const INLINE_URL = /(?:^|[^a-z0-9+.-])(?:data|blob)\s*:/i
 
 /** Whether any string inside `value` (any depth) is a data: or blob: URL. */
 function holdsInlineUrl(value: unknown, depth = 0): boolean {

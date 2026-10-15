@@ -30,6 +30,52 @@ export interface PreviewEl {
 
 const none = (c: string) => (c === 'transparent' ? 'none' : c)
 
+/** The CSS named colours (CSS Color 4), lower case; `transparent` is handled on its own. */
+const NAMED_COLORS = new Set(
+  `aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood
+  cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray
+  darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen
+  darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue
+  firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew
+  hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan
+  lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray
+  lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue
+  mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred
+  midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid
+  palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple
+  rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue
+  slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white
+  whitesmoke yellow yellowgreen`.split(/\s+/),
+)
+const HEX_COLOR = /^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i
+/** rgb()/rgba()/hsl()/hsla() whose 3 or 4 arguments are numbers (with %, an angle unit or `none`), nothing else. */
+const COLOR_FUNCTION = /^(?:rgba?|hsla?)\(([^()]*)\)$/i
+const NUMERIC_ARG = /^(?:[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?(?:%|deg|rad|grad|turn)?|none)$/i
+
+/**
+ * A stored colour as a drawing may use it, or `fallback`. An element's colours are data (a library item is another
+ * person's): only #hex, rgb()/rgba()/hsl()/hsla() with numeric arguments, the CSS named colours and `transparent`
+ * reach an SVG attribute or the `--pf` custom property, so no colour can make a request (`url(…)`) or break out.
+ */
+export function previewColor(c: unknown, fallback: string): string {
+  if (typeof c !== 'string') return fallback
+  const s = c.trim()
+  if (!s || s.length > 64) return fallback
+  if (HEX_COLOR.test(s)) return s
+  const lower = s.toLowerCase()
+  if (lower === 'transparent' || NAMED_COLORS.has(lower)) return s
+  const m = COLOR_FUNCTION.exec(s)
+  if (m) {
+    const args = (m[1] ?? '').split(/[\s,/]+/).filter(Boolean)
+    if (args.length >= 3 && args.length <= 4 && args.every((a) => NUMERIC_ARG.test(a))) return s
+  }
+  return fallback
+}
+
+/** The drawing's defaults (canvas-schema's new-element colours). */
+const DEFAULT_STROKE = '#1e1e1e'
+const DEFAULT_FILL = 'transparent'
+
 type Pt = readonly [number, number]
 
 /** A curve through every point (Catmull-Rom as cubic Béziers), as an arrow with roundness draws. */
@@ -78,8 +124,8 @@ const fillVar = (fill: string) => (fill === 'none' ? undefined : ({ '--pf': fill
 
 /** One element as SVG, in the piece's own units (null for a bound label: its container shows it). */
 export function drawn(el: PreviewEl, key: number): ReactNode {
-  const stroke = none(el.strokeColor)
-  const fill = none(el.backgroundColor)
+  const stroke = none(previewColor(el.strokeColor, DEFAULT_STROKE))
+  const fill = none(previewColor(el.backgroundColor, DEFAULT_FILL))
   const look = { className: fill === 'none' ? 'dr-pp-line' : 'dr-pp-shape', style: fillVar(fill) }
   const dash = el.strokeStyle === 'dashed' ? '6 5' : el.strokeStyle === 'dotted' ? '2 4' : undefined
   switch (el.type) {
