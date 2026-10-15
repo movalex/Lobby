@@ -5,10 +5,15 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./files": "./src/files.ts"
+    "./files": "./src/files.ts",
+    "./generate": "./src/generate.ts",
+    "./convert": "./src/convert.ts",
+    "./measure": "./src/measure.ts",
+    "./path": "./src/path.ts"
   },
   "scripts": {
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p .",
+    "report": "node src/report.ts"
   },
   "dependencies": {
     "@draftroom/contracts": "workspace:*",

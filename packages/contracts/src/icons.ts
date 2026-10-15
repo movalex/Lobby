@@ -112,7 +112,8 @@ export const ICON_SHARD_VERSION = 1
 
 /**
  * One primitive on the 24-unit grid, drawn with the icon's stroke (and filled with it when `f`):
- *  - `line`: an open or closed polyline, `p` = flat `[x0, y0, x1, y1, …]` (arcs and Béziers flattened);
+ *  - `line`: an open or closed polyline, `p` = flat `[x0, y0, x1, y1, …]` (arcs and Béziers flattened; a closed
+ *    line does not repeat its first point; `f` only with `closed`);
  *  - `ellipse`: its bounding box (a circle is an ellipse with w = h);
  *  - `rect`: its box and corner radius `r` (0 = square corners).
  */
@@ -125,6 +126,8 @@ export const IconPrimitive = z.discriminatedUnion('t', [
       .max(ICON_MAX_LINE_POINTS * 2)
       .refine((p) => p.length % 2 === 0, 'p holds x, y pairs'),
     closed: z.literal(true).optional(),
+    /** filled with the stroke's colour (a closed line only: Tabler's filled dots, squares and stacks; WS1) */
+    f: z.literal(true).optional(),
   }),
   z.strictObject({
     t: z.literal('ellipse'),
