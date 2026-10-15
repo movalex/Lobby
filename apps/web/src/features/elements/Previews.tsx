@@ -59,7 +59,7 @@ export interface ItemPreviewEl extends PreviewEl {
   readonly isDeleted?: boolean
 }
 
-/** One stored element as SVG (images from `thumb`, arrows and free lines as polylines, the rest as a shape's). */
+/** One stored element as SVG (images from `thumb`, free lines as polylines, the rest as a shape's). */
 function drawnItem(el: ItemPreviewEl, key: number, thumb: (fileId: string) => string | null): ReactNode {
   if (el.isDeleted) return null
   if (el.type === 'image') {
@@ -88,7 +88,7 @@ function drawnItem(el: ItemPreviewEl, key: number, thumb: (fileId: string) => st
       />
     )
   }
-  if (el.type === 'arrow' || el.type === 'freedraw')
+  if (el.type === 'freedraw')
     return drawn({ ...el, type: 'line', backgroundColor: 'transparent' }, key)
   return drawn(el, key)
 }

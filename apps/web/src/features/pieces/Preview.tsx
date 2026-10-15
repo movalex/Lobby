@@ -18,8 +18,10 @@ export interface PreviewEl {
   readonly strokeColor: string
   readonly backgroundColor: string
   readonly strokeStyle?: string
-  readonly roundness?: { value?: number } | null
+  readonly roundness?: { type?: number; value?: number } | null
   readonly points?: readonly (readonly [number, number])[]
+  readonly startArrowhead?: string | null
+  readonly endArrowhead?: string | null
   readonly containerId?: string | null
   readonly fontSize?: number
   readonly textAlign?: string
@@ -27,6 +29,49 @@ export interface PreviewEl {
 }
 
 const none = (c: string) => (c === 'transparent' ? 'none' : c)
+
+type Pt = readonly [number, number]
+
+/** A curve through every point (Catmull-Rom as cubic Béziers), as an arrow with roundness draws. */
+export function smoothPath(pts: readonly Pt[]): string {
+  const at = (i: number) => pts[Math.max(0, Math.min(pts.length - 1, i))] as Pt
+  const first = at(0)
+  let d = `M${first[0]},${first[1]}`
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const [a, b, c, e] = [at(i - 1), at(i), at(i + 1), at(i + 2)]
+    const c1 = [b[0] + (c[0] - a[0]) / 6, b[1] + (c[1] - a[1]) / 6]
+    const c2 = [c[0] - (e[0] - b[0]) / 6, c[1] - (e[1] - b[1]) / 6]
+    d += ` C${c1[0]},${c1[1]} ${c2[0]},${c2[1]} ${c[0]},${c[1]}`
+  }
+  return d
+}
+
+/** An open arrowhead (two short strokes) at `tip`, pointing away from `from`. */
+function arrowhead(tip: Pt, from: Pt, key: string, stroke: string): ReactNode {
+  const dx = tip[0] - from[0]
+  const dy = tip[1] - from[1]
+  const len = Math.hypot(dx, dy)
+  if (!len) return null
+  const [ux, uy] = [dx / len, dy / len]
+  const size = 16
+  const wing = (sign: number) => {
+    const a = (sign * 28 * Math.PI) / 180
+    const [rx, ry] = [ux * Math.cos(a) - uy * Math.sin(a), ux * Math.sin(a) + uy * Math.cos(a)]
+    return `${tip[0] - rx * size},${tip[1] - ry * size}`
+  }
+  return (
+    <polyline
+      key={key}
+      points={`${wing(1)} ${tip[0]},${tip[1]} ${wing(-1)}`}
+      fill="none"
+      stroke={stroke}
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="dr-pp-line"
+    />
+  )
+}
 
 /** A fill the dark theme can mix into its surface (`--pf`, ./pieces.css), as an inline custom property. */
 const fillVar = (fill: string) => (fill === 'none' ? undefined : ({ '--pf': fill } as CSSProperties))
@@ -36,7 +81,7 @@ export function drawn(el: PreviewEl, key: number): ReactNode {
   const stroke = none(el.strokeColor)
   const fill = none(el.backgroundColor)
   const look = { className: fill === 'none' ? 'dr-pp-line' : 'dr-pp-shape', style: fillVar(fill) }
-  const dash = el.strokeStyle === 'dashed' ? '6 5' : undefined
+  const dash = el.strokeStyle === 'dashed' ? '6 5' : el.strokeStyle === 'dotted' ? '2 4' : undefined
   switch (el.type) {
     case 'rectangle':
     case 'frame':
@@ -55,6 +100,58 @@ export function drawn(el: PreviewEl, key: number): ReactNode {
           {...(el.type === 'frame' ? { className: 'dr-pp-frame' } : look)}
         />
       )
+    case 'stickynote':
+      // a sticky note: a square of its colour, no outline (its words are its bound text, drawn by nobody here)
+      return (
+        <rect
+          key={key}
+          x={el.x}
+          y={el.y}
+          width={el.width}
+          height={el.height}
+          rx={Math.min(6, el.width / 8)}
+          fill={fill === 'none' ? '#f6c453' : fill}
+          stroke="none"
+          className="dr-pp-shape dr-pp-note"
+          style={fillVar(fill === 'none' ? '#f6c453' : fill)}
+        />
+      )
+    case 'arrow': {
+      const pts = (el.points ?? []).map(([px, py]): Pt => [el.x + px, el.y + py])
+      if (pts.length < 2) return null
+      const ink = stroke === 'none' ? '#1d1d1d' : stroke
+      const curved = el.roundness != null && pts.length > 2
+      const line = curved ? (
+        <path
+          key={`${key}.l`}
+          d={smoothPath(pts)}
+          fill="none"
+          stroke={ink}
+          strokeWidth={2}
+          strokeDasharray={dash}
+          strokeLinecap="round"
+          className="dr-pp-line"
+        />
+      ) : (
+        <polyline
+          key={`${key}.l`}
+          points={pts.map(([px, py]) => `${px},${py}`).join(' ')}
+          fill="none"
+          stroke={ink}
+          strokeWidth={2}
+          strokeDasharray={dash}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="dr-pp-line"
+        />
+      )
+      const n = pts.length
+      return [
+        line,
+        el.endArrowhead ? arrowhead(pts[n - 1] as Pt, pts[n - 2] as Pt, `${key}.e`, ink) : null,
+        el.startArrowhead ? arrowhead(pts[0] as Pt, pts[1] as Pt, `${key}.s`, ink) : null,
+      ]
+    }
     case 'ellipse':
       return (
         <ellipse
