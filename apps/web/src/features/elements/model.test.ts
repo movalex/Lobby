@@ -1,11 +1,12 @@
-// Wave Q (WS3): the Elements panel's model in Node: one search over icons (through the icons port, here the dev test
-// double), shapes and library items; Favourites and Recents from mark keys (a stale icon version, an unknown piece, a
+// Wave Q (WS3): the Elements panel's model in Node: one search over icons (through the icons port and WS1's catalog,
+// here over the test double's fourteen icons), shapes and library items; Favourites and Recents from mark keys (a stale icon version, an unknown piece, a
 // gone item hidden); the grid's keys across sections; tags and names; and the panel's small rules (access, options,
 // the dev override).
 import { DEFAULT_INSERT_OPTIONS, libraryMarkKey, parseElementDrag } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
 import { elementsAccess } from './access.ts'
 import { elementsPanelOverride } from './flags.ts'
+import * as ws1 from './icons/index.ts'
 import * as double from './icons-double.ts'
 import { adapt } from './icons-port.ts'
 import {
@@ -25,7 +26,7 @@ import { INSERT_OPTIONS_KEY, loadInsertOptions, parseInsertOptions, saveInsertOp
 import { summary } from './test-kit.ts'
 
 const api = adapt(double, 'double')
-if (!api) throw new Error('the double has the four exports')
+if (!api) throw new Error('the double has the two exports')
 const index = await api.loadIndex()
 const icons = { api, index }
 
@@ -35,10 +36,11 @@ const search = (query: string, items = [summary()]) =>
 describe('one search over the three sources', () => {
   it('"arrow" finds the arrow icons first, and its tab counts tell the other sources apart', () => {
     const r = search('arrow')
+    // WS1's ranking: the name starts with the query, then the shorter name first
     expect(r.icons.map((t) => t.id).slice(0, 3)).toEqual([
+      'lucide:arrow-up',
       'lucide:arrow-left',
       'lucide:arrow-right',
-      'lucide:arrow-up',
     ])
     expect(r.icons.every((t) => t.source === 'icon')).toBe(true)
     // the library item is not about arrows
@@ -63,6 +65,29 @@ describe('one search over the three sources', () => {
     expect(parseElementDrag(tileDrag(t))).toEqual({ source: 'icon', id: t.id })
     expect(countLabel(5)).toBe('5')
     expect(countLabel(1000)).toBe('99+')
+  })
+
+  it('lists Tabler’s categories (Lucide has none) and narrows the icons to one', () => {
+    expect(api.categories(index, 'lucide')).toEqual([])
+    expect(api.categories(index, 'tabler').map((c) => c.name)).toEqual(['Electrical', 'Map', 'System'])
+    expect(api.categories(index, null).map((c) => c.count)).toEqual([1, 1, 1])
+    const r = searchAll({
+      query: '',
+      icons,
+      iconSet: 'all',
+      iconCategory: 'Map',
+      shapeCategory: 'all',
+      items: [],
+    })
+    expect(r.icons.map((t) => t.id)).toEqual(['tabler:flag'])
+  })
+
+  it('binds WS1’s real module, and an icon the index lacks has no geometry', async () => {
+    expect(adapt(ws1)?.origin).toBe('ws1')
+    expect(adapt({})).toBeNull()
+    expect(await api.loadGeometry(index, 'lucide', 'not-an-icon')).toBeNull()
+    expect((await api.loadGeometry(index, 'tabler', 'flag'))?.length).toBe(2)
+    expect(() => api.search({ ...index }, 'x')).toThrow(/did not load/)
   })
 })
 

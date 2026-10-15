@@ -107,6 +107,7 @@ export function ElementsPanel({ ctx, close }: { readonly ctx: CanvasFeatureConte
   const [active, setActive] = useState(0)
   const [limit, setLimit] = useState(PAGE_SIZE)
   const [iconSet, setIconSet] = useState<IconSetId | 'all'>('all')
+  const [iconCategory, setIconCategory] = useState<string | null>(null)
   const [shapeCategory, setShapeCategory] = useState<PieceCategory | 'all'>('all')
   const [scope, setScope] = useState<LibraryScope>('workspace')
   const [folder, setFolder] = useState('all')
@@ -161,10 +162,17 @@ export function ElementsPanel({ ctx, close }: { readonly ctx: CanvasFeatureConte
         query,
         icons: icons.status === 'ready' ? { api: icons.api, index: icons.index } : null,
         iconSet,
+        iconCategory,
         shapeCategory,
         items: deletedView ? lib.items : lib.items.filter((i) => !i.deletedAt),
       }),
-    [query, icons, iconSet, shapeCategory, lib.items, deletedView],
+    [query, icons, iconSet, iconCategory, shapeCategory, lib.items, deletedView],
+  )
+  // the icon categories of the chosen set (Tabler's; Lucide has none)
+  const iconCategories = useMemo(
+    () =>
+      icons.status === 'ready' ? icons.api.categories(icons.index, iconSet === 'all' ? null : iconSet) : [],
+    [icons, iconSet],
   )
   const itemsById = useMemo(() => new Map(lib.items.map((i) => [i.id, i])), [lib.items])
   const iconIndex = icons.status === 'ready' ? icons.index : null
@@ -495,6 +503,7 @@ export function ElementsPanel({ ctx, close }: { readonly ctx: CanvasFeatureConte
               data-chip={s}
               onClick={() => {
                 setIconSet(s)
+                setIconCategory(null)
                 setActive(0)
                 setLimit(PAGE_SIZE)
               }}
@@ -502,6 +511,28 @@ export function ElementsPanel({ ctx, close }: { readonly ctx: CanvasFeatureConte
               {s === 'all' ? 'All' : ICON_SET_NAMES[s]}
             </button>
           ))}
+          {iconCategories.length > 0 && (
+            <label className="dr-el__category">
+              <span className="dr-sr-only">Icon category</span>
+              <select
+                className="dr-input dr-select dr-select--compact"
+                value={iconCategory ?? ''}
+                data-testid="element-icon-category"
+                onChange={(e) => {
+                  setIconCategory(e.target.value || null)
+                  setActive(0)
+                  setLimit(PAGE_SIZE)
+                }}
+              >
+                <option value="">All categories</option>
+                {iconCategories.map((c) => (
+                  <option key={c.name} value={c.name}>
+                    {c.name} ({c.count})
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </fieldset>
       )}
       {shownTab === 'shapes' && (

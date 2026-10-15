@@ -177,6 +177,13 @@
   padding: 0;
   border: 0;
 }
+.dr-el__category {
+  min-width: 0;
+  margin-left: auto;
+}
+.dr-el__category .dr-select {
+  max-width: 12rem;
+}
 .dr-el__chip {
   padding: 3px 10px;
   border: 1px solid var(--dr-line);

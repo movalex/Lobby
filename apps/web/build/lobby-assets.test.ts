@@ -71,8 +71,9 @@ test('the dev server serves the generated files and 404s (not index.html) everyt
   })
   try {
     await server.listen()
-    const { port } = server.httpServer?.address() as AddressInfo
-    const base = `http://127.0.0.1:${port}`
+    const address = server.httpServer?.address() as AddressInfo | null | undefined
+    assert.ok(address)
+    const base = `http://127.0.0.1:${address.port}`
     const index = await get(base, `/lobby-assets/icons/${small.indexFile}`)
     assert.equal(index.status, 200)
     assert.match(index.type, /application\/json/)

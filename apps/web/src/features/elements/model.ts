@@ -94,6 +94,8 @@ export interface SearchInput {
   readonly query: string
   readonly icons: { readonly api: IconsApi; readonly index: IconIndex } | null
   readonly iconSet: IconSetId | 'all'
+  /** one of the icon categories (Tabler's), or null for every icon */
+  readonly iconCategory?: string | null
   readonly shapeCategory: PieceCategory | 'all'
   /** the Library tab's loaded items (already filtered by scope and folder) */
   readonly items: readonly LibraryItemSummary[]
@@ -123,7 +125,8 @@ export function searchAll(s: SearchInput): SearchResults {
   const icons: Tile[] = []
   if (s.icons) {
     const set = s.iconSet === 'all' ? null : s.iconSet
-    for (const [iset, name] of s.icons.api.search(s.icons.index, s.query.trim(), { set })) {
+    const category = s.iconCategory ?? null
+    for (const [iset, name] of s.icons.api.search(s.icons.index, s.query.trim(), { set, category })) {
       const t = iconTile(s.icons.index, iset, name)
       if (t) icons.push(t)
     }

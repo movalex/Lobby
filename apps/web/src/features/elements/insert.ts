@@ -96,7 +96,7 @@ export async function insertTile(
       // an icon is one group already (WS1's elements): no second group around it
       const version = index.sets.find((s) => s.id === key.set)?.version ?? '0.0.0'
       const markKey = libraryMarkKey({ source: 'icon', ...key, version })
-      const r = fromPlace(placeElements(canvas, source, place), markKey)
+      const r = fromPlace(placeElements(canvas, source, { ...place, keepTogether: false }), markKey)
       if (r.ok) countUsage('elements.insert.icon')
       return r
     }

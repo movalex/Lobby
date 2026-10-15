@@ -84,7 +84,7 @@ describe('parsePath', () => {
     expect(t.c).toEqual([7, 3])
     // S without a cubic before it takes the current point
     const [s] = parsePath('M0 0S1 1 2 0')
-    expect((s?.segments[0] as Extract<Segment, { k: 'C' }>).c1).toEqual([0, 0])
+    expect((s?.segments[0] as Extract<Segment, { k: 'C' }> | undefined)?.c1).toEqual([0, 0])
   })
 
   it('reads arcs with compact flags (Lucide writes "a2 2 0 012 2" and "a.5.5 0 0 1 .923 0")', () => {

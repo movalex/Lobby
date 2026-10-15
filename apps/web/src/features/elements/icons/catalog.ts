@@ -43,6 +43,8 @@ export class IconLoadError extends Error {
 }
 
 export interface IconCatalog {
+  /** the index it was built from (the Elements panel keeps it as its handle: set versions, an icon's presence) */
+  readonly index: IconIndex
   readonly sets: readonly IconSetInfo[]
   /** every icon, in index order (set, then name) */
   readonly entries: readonly IconEntry[]
@@ -109,6 +111,7 @@ export function iconCatalogOf(index: IconIndex, doFetch: typeof fetch): IconCata
     return p
   }
   return {
+    index,
     sets: index.sets,
     entries,
     get: (key) => byKey.get(key),

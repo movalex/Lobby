@@ -192,7 +192,7 @@ function partOf(node: IconNode): Part | null {
 /** The full ellipse a subpath of arcs only draws (shared centre and radii, a full turn, back at its start). */
 function arcsEllipse(sp: Subpath): { cx: number; cy: number; rx: number; ry: number } | null {
   const first = sp.segments[0]
-  if (!first || first.k !== 'A') return null
+  if (first?.k !== 'A') return null
   let turn = 0
   for (const s of sp.segments) {
     if (s.k !== 'A') return null

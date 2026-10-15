@@ -198,7 +198,7 @@ describe('what an outside library must not bring in', () => {
     const json = JSON.stringify(r.input)
     expect(json).not.toMatch(/data:|blob:|javascript:/i)
     expect(json).not.toMatch(/lobbyServer|board-card|someone/)
-    const links = (r.input.items[0]?.elements as { link: string | null }[]).map((e) => e.link)
+    const links = ((r.input.items[0]?.elements ?? []) as { link: string | null }[]).map((e) => e.link)
     expect(links.filter((l) => l !== null)).toEqual(['https://example.com/page'])
     expect(links.filter((l) => l === null)).toHaveLength(2)
     expect(r.report.cuts.links).toBe(2)
@@ -210,7 +210,7 @@ describe('what an outside library must not bring in', () => {
   it('reads an unknown font as Nunito', async () => {
     const r = await run(fixture('unsafe.excalidrawlib'))
     if (!r.ok) throw new Error(r.code)
-    const text = (r.input.items[3]?.elements as unknown as Text[]).find((e) => e.type === 'text')
+    const text = ((r.input.items[3]?.elements ?? []) as unknown as Text[]).find((e) => e.type === 'text')
     expect(text?.fontFamily).toBe(6)
   })
 
