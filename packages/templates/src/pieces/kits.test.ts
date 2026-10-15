@@ -91,6 +91,8 @@ describe('the new categories', () => {
         searchPieces(query).map((p) => p.id),
         query,
       ).toContain(id)
+    // the older searches are not crowded out by a new piece's tags (the Shapes e2e narrows "dec" to Decision)
+    expect(searchPieces('dec').map((p) => p.id)).toEqual(['decision'])
     // a number badge by its number
     expect(searchPieces('number 7')[0]?.id).toBe('number-7')
   })

@@ -95,8 +95,9 @@ const FITTED_CONTAINERS = new Set(['rectangle', 'ellipse', 'diamond'])
 export function cleanLibraryElements(
   elements: readonly unknown[],
   now: number = Date.now(),
-): { elements: El[]; cuts: ItemCuts } {
+): { elements: El[]; cuts: ItemCuts; reasons: string[] } {
   const cuts = noCuts()
+  const reasons: string[] = []
   const kept: El[] = []
   for (const raw of elements) {
     if (!isObj(raw)) {
@@ -133,6 +134,8 @@ export function cleanLibraryElements(
       el.fontFamily = FONT_MAP[el.fontFamily as number] ?? FALLBACK_FONT
       cuts.fonts++
     }
+    // a legacy arrow has no `elbowed` (the engine's restore leaves it undefined); the room wants the boolean
+    if (el.type === 'arrow' && typeof el.elbowed !== 'boolean') el.elbowed = false
     el.created = null
     if (typeof el.updated !== 'number') el.updated = now
     el.locked = false
@@ -141,10 +144,15 @@ export function cleanLibraryElements(
   relayLabels(kept, cuts)
   const ok: El[] = []
   for (const el of kept) {
-    if (checkElement(el).ok) ok.push(el)
-    else cuts.invalid++
+    const check = checkElement(el)
+    if (check.ok) ok.push(el)
+    else {
+      cuts.invalid++
+      // the schema's own words (a field path and what it expected): never the element's content
+      reasons.push(`${String(el.type)}: ${check.detail}`.slice(0, 160))
+    }
   }
-  return { elements: ok, cuts }
+  return { elements: ok, cuts, reasons }
 }
 
 /** Lays each bound label out again with the engine's text layout, in the face it now has. */
@@ -167,8 +175,14 @@ function relayLabels(elements: El[], cuts: ItemCuts): void {
 
 /** One item as the import body wants it, or why it was left out. */
 export type ItemResult =
-  | { ok: true; name: string; elements: WireElement[]; cuts: ItemCuts }
-  | { ok: false; problem: LibraryItemProblem | 'no-elements'; count: number; cuts: ItemCuts }
+  | { ok: true; name: string; elements: WireElement[]; cuts: ItemCuts; reasons: string[] }
+  | {
+      ok: false
+      problem: LibraryItemProblem | 'no-elements'
+      count: number
+      cuts: ItemCuts
+      reasons: string[]
+    }
 
 /**
  * An item of an `.excalidrawlib` (its name, if it has one, and its restored elements) as an import item: cleaned,
@@ -180,16 +194,16 @@ export function normaliseLibraryItem(
   position: number,
   now?: number,
 ): ItemResult {
-  const { elements, cuts } = cleanLibraryElements(item.elements, now)
-  if (!elements.length) return { ok: false, problem: 'no-elements', count: 0, cuts }
+  const { elements, cuts, reasons } = cleanLibraryElements(item.elements, now)
+  if (!elements.length) return { ok: false, problem: 'no-elements', count: 0, cuts, reasons }
   const made = serializeLibraryItem(elements, {
     limits: IMPORT_ITEM_LIMITS,
     ...(now !== undefined ? { now } : {}),
   })
-  if (!made.ok) return { ok: false, problem: made.problem, count: made.count, cuts }
+  if (!made.ok) return { ok: false, problem: made.problem, count: made.count, cuts, reasons }
   const given = typeof item.name === 'string' ? item.name.trim() : ''
   const name = [...(given || made.item.suggestedName || `Imported item ${position + 1}`)]
     .slice(0, LIBRARY_LIMITS.nameChars)
     .join('')
-  return { ok: true, name, elements: made.item.elements, cuts }
+  return { ok: true, name, elements: made.item.elements, cuts, reasons }
 }

@@ -235,6 +235,24 @@ describe('what an outside library must not bring in', () => {
     if (out.ok) expect((out.elements[0] as { frameId: string | null }).frameId).toBeNull()
   })
 
+  it('gives a legacy arrow the elbowed flag the room wants', () => {
+    const arrow = {
+      ...rect('ar'),
+      type: 'arrow',
+      points: [
+        [0, 0],
+        [50, 20],
+      ],
+      startBinding: null,
+      endBinding: null,
+      startArrowhead: null,
+      endArrowhead: 'arrow',
+    }
+    const out = normaliseLibraryItem({ elements: [arrow] }, 0)
+    expect(out.ok).toBe(true)
+    if (out.ok) expect(out.elements[0]).toMatchObject({ type: 'arrow', elbowed: false })
+  })
+
   it('unlocks what was locked and sets the fields the room expects', () => {
     const odd = { ...rect('a'), locked: true, created: 5, updated: undefined }
     const { elements } = cleanLibraryElements([odd], 77)

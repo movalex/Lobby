@@ -62,6 +62,8 @@ export interface LibraryImportReport {
   itemsWithImages: number
   /** what was left out or changed, summed over the items */
   cuts: ItemCuts
+  /** why elements failed canvas-schema's check: its own field-path wording, at most 10 distinct */
+  invalidReasons: string[]
 }
 
 export type NormaliseLibraryResult =
@@ -199,6 +201,7 @@ export async function normaliseExcalidrawLib(
     skipped: [],
     itemsWithImages: 0,
     cuts: noCuts(),
+    invalidReasons: [],
   }
   const skip = (index: number, problem: string) => {
     report.itemsSkipped++
@@ -213,6 +216,9 @@ export async function normaliseExcalidrawLib(
     const r: ItemResult = normaliseLibraryItem(item, index, opts.now)
     for (const k of ADD) report.cuts[k] += r.cuts[k]
     if (r.cuts.images) report.itemsWithImages++
+    for (const why of r.reasons)
+      if (report.invalidReasons.length < 10 && !report.invalidReasons.includes(why))
+        report.invalidReasons.push(why)
     if (r.ok) made.push({ index, name: r.name, elements: r.elements })
     else skip(index, r.problem)
   }
