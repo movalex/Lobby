@@ -194,6 +194,9 @@ describe('the library schemas (WS2, WS3)', () => {
     expect(LibraryItem.safeParse({ ...detail, files }).success).toBe(false)
     const source = { kind: 'url', url: 'https://x' }
     expect(LibraryItem.safeParse({ ...detail, source }).success).toBe(false)
+    // a board's id only to those who may still view it
+    for (const boardId of ['b-board01', null])
+      expect(LibraryItem.safeParse({ ...detail, source: { kind: 'board', boardId } }).success).toBe(true)
     const placed = {
       item: { id: ITEM, name: 'A', revision: 3 },
       elements: [EL],
