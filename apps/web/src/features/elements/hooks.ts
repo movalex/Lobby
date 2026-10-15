@@ -168,12 +168,12 @@ export function useLibraryList(workspaceId: string, q: LibraryQuery): LibraryLis
   const [state, setState] = useState<ListState>({ items: [], cursor: null, loading: false })
   const [page, setPage] = useState<string | null>(null)
   // a new query starts again from its first page
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the inputs that start a new list
+  // (the inputs that start a new list)
   useEffect(() => {
     setPage(null)
     setState({ items: [], cursor: null, loading: q.enabled })
   }, [workspaceId, q.scope, q.folder, q.enabled, q.version])
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `version` re-reads the page after a change
+  // `version` re-reads the page after a change
   useEffect(() => {
     if (!q.enabled) return
     let live = true
@@ -211,7 +211,7 @@ export function useFolders(
   version: number,
 ): readonly LibraryFolder[] {
   const [folders, setFolders] = useState<readonly LibraryFolder[]>([])
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `version` re-reads the folders after a change
+  // `version` re-reads the folders after a change
   useEffect(() => {
     if (!enabled) {
       setFolders([])

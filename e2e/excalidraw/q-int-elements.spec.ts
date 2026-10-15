@@ -62,8 +62,15 @@ function boxOf(els: readonly CanvasElement[]) {
   const ys: number[] = []
   for (const e of els) {
     const pts = (e as { points?: [number, number][] }).points
-    if (pts) for (const [px, py] of pts) xs.push(e.x + px), ys.push(e.y + py)
-    else xs.push(e.x, e.x + e.width), ys.push(e.y, e.y + e.height)
+    if (pts) {
+      for (const [px, py] of pts) {
+        xs.push(e.x + px)
+        ys.push(e.y + py)
+      }
+    } else {
+      xs.push(e.x, e.x + e.width)
+      ys.push(e.y, e.y + e.height)
+    }
   }
   const x = Math.min(...xs)
   const y = Math.min(...ys)
@@ -135,7 +142,7 @@ test('Q-int: a real icon is found, inserted as one group, recoloured, resized an
     parts = await iconEls(a.page, alt)
     expect(parts.every((p) => p.type === 'line')).toBe(true)
     expect(new Set(parts.map((p) => (p.groupIds as string[]).join())).size).toBe(1)
-    expect((parts[0]?.groupIds as string[]).length).toBe(1)
+    expect((parts[0]?.groupIds as string[] | undefined)?.length).toBe(1)
     await expect
       .poll(async () => [...(await selection(a.page))].sort())
       .toEqual(parts.map((p) => p.id).sort())

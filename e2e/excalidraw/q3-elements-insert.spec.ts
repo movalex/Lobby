@@ -40,8 +40,15 @@ function boxOf(els: CanvasElement[]) {
   const ys: number[] = []
   for (const e of els) {
     const pts = (e as { points?: [number, number][] }).points
-    if (pts) for (const [px, py] of pts) xs.push(e.x + px), ys.push(e.y + py)
-    else xs.push(e.x, e.x + e.width), ys.push(e.y, e.y + e.height)
+    if (pts) {
+      for (const [px, py] of pts) {
+        xs.push(e.x + px)
+        ys.push(e.y + py)
+      }
+    } else {
+      xs.push(e.x, e.x + e.width)
+      ys.push(e.y, e.y + e.height)
+    }
   }
   const x = Math.min(...xs)
   const y = Math.min(...ys)
@@ -92,7 +99,7 @@ test('Q3: the Elements panel takes the Shapes panel’s place; a click inserts a
       expect(p.strokeWidth).toBe(16)
     }
     expect(new Set(parts.map((p) => (p.groupIds as string[]).join())).size).toBe(1)
-    expect((parts[0]?.groupIds as string[]).length).toBe(1)
+    expect((parts[0]?.groupIds as string[] | undefined)?.length).toBe(1)
     const box = boxOf(parts)
     expect(box.w).toBeGreaterThan(100)
     expect(box.w).toBeLessThan(200)

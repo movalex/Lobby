@@ -414,14 +414,13 @@ export function ElementsPanel({ ctx, close }: { readonly ctx: CanvasFeatureConte
       >
         Options
       </button>
-      <div
+      <fieldset
         className="dr-el__options"
         id={`${base}-options`}
-        role="group"
-        aria-label="Insert options"
         data-open={optionsOpen || undefined}
         data-testid="element-options"
       >
+        <legend className="dr-sr-only">Insert options</legend>
         {shownTab !== 'library' && (
           <div className="dr-el__opt">
             <button
@@ -482,13 +481,13 @@ export function ElementsPanel({ ctx, close }: { readonly ctx: CanvasFeatureConte
           Lock
         </label>
         {colorsOpen && shownTab !== 'library' && (
-          <div className="dr-el__colors" id={`${base}-colors`} role="radiogroup" aria-label="Colour">
+          <fieldset className="dr-el__colors" id={`${base}-colors`}>
+            <legend className="dr-sr-only">Colour</legend>
             {[null, ...INSERT_COLOR_NAMES].map((c) => (
               <button
                 key={c ?? 'default'}
                 type="button"
-                role="radio"
-                aria-checked={options.color === c}
+                aria-pressed={options.color === c}
                 aria-label={c ? COLOR_LABEL(c) : 'Default colour'}
                 title={c ? COLOR_LABEL(c) : 'Default colour'}
                 className="dr-el__swatch-pick"
@@ -506,9 +505,9 @@ export function ElementsPanel({ ctx, close }: { readonly ctx: CanvasFeatureConte
                 />
               </button>
             ))}
-          </div>
+          </fieldset>
         )}
-      </div>
+      </fieldset>
 
       {shownTab === 'icons' && icons.status === 'ready' && (
         <fieldset className="dr-el__chips">
@@ -674,7 +673,7 @@ export function ElementsPanel({ ctx, close }: { readonly ctx: CanvasFeatureConte
         >
           {sections.map((s) =>
             s.tiles.length === 0 ? null : (
-              <div key={s.id} role="group" aria-label={s.title ?? 'Results'} className="dr-el__section">
+              <fieldset key={s.id} aria-label={s.title ?? 'Results'} className="dr-el__section">
                 {s.title && (
                   <div className="dr-el__section-title" aria-hidden="true">
                     {s.title}
@@ -704,7 +703,7 @@ export function ElementsPanel({ ctx, close }: { readonly ctx: CanvasFeatureConte
                     )
                   })}
                 </div>
-              </div>
+              </fieldset>
             ),
           )}
         </div>

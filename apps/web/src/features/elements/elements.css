@@ -70,6 +70,9 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 12px;
+  min-width: 0;
+  margin: 0;
+  border: 0;
   padding: 6px 8px;
   border-radius: 10px;
   background: var(--dr-inset);
@@ -110,6 +113,10 @@
   flex-wrap: wrap;
   gap: 4px;
   width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 .dr-el__swatch-pick {
   display: inline-grid;
@@ -122,7 +129,7 @@
   background: transparent;
   cursor: pointer;
 }
-.dr-el__swatch-pick[aria-checked="true"] {
+.dr-el__swatch-pick[aria-pressed="true"] {
   border-color: var(--dr-accent-ink);
 }
 .dr-el__swatch-pick .dr-el__swatch {
@@ -256,6 +263,12 @@
 }
 .dr-el__listbox:focus-visible {
   box-shadow: 0 0 0 2px var(--dr-focus);
+}
+.dr-el__section {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 .dr-el__section-title {
   margin: 0 0 6px;

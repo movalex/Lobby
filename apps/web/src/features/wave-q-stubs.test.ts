@@ -73,6 +73,8 @@ beforeEach(() => {
 })
 afterEach(() => {
   g.fetch = fetchBefore
+  // the library client goes through its requester; it never calls fetch itself
+  expect(calls).toBe(0)
 })
 
 const W = 'wsp_0123456789abcdefghij'
