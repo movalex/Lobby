@@ -34,7 +34,10 @@ for (const mode of ['light', 'dark'] as const) {
     await reloadWithElements(a.page)
     await openElements(a.page)
     const panel = '[data-testid="elements-panel"]'
-    await expect(tile(a.page, 'icon', 'lucide:star')).toBeVisible({ timeout: 15_000 })
+    // the shipped sets (wave Q integration): the first icons of the index
+    await expect(a.page.locator('[data-testid="element-tile"][data-source="icon"]').first()).toBeVisible({
+      timeout: 15_000,
+    })
     await expectClean(a.page, panel, `icons (${mode})`)
     await a.page.getByTestId('element-color').click()
     await expectClean(a.page, panel, `icons with the colours open (${mode})`)
@@ -66,12 +69,17 @@ test('Q3: the keyboard: the search box keeps it and names the active tile; the t
   await openElements(a.page)
   const search = a.page.getByTestId('element-search')
   await expect(search).toBeFocused()
+  // the shipped sets (wave Q integration): "arrow" lists the arrows first
+  await search.fill('arrow')
   await expect(tile(a.page, 'icon', 'lucide:arrow-left')).toBeVisible({ timeout: 15_000 })
   const active = () => search.getAttribute('aria-activedescendant')
-  const first = await active()
-  expect(first).toMatch(/arrow-left$/)
+  const shown = await a.page
+    .getByTestId('element-section-results')
+    .getByTestId('element-tile')
+    .evaluateAll((els) => els.map((e) => e.id))
+  expect(await active()).toBe(shown[0])
   await search.press('ArrowRight')
-  expect(await active()).toMatch(/arrow-right$/)
+  expect(await active()).toBe(shown[1])
   await search.press('ArrowDown')
   // four columns at this width: a row down from the second tile is the sixth
   const ids = await a.page

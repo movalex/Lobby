@@ -362,6 +362,18 @@
   color: var(--dr-amber);
   fill: currentColor;
 }
+/* A touch screen's tap adjustment snaps a tap near a small tile's middle to the star (the nearest thing with a click
+   handler), so a tap meant to insert would only toggle the favourite. There the star is a mark only; press and hold
+   opens the tile's actions, which have "Add to favourites". */
+@media (pointer: coarse) {
+  .dr-el-tile__star {
+    pointer-events: none;
+  }
+  .dr-el-tile:hover .dr-el-tile__star:not([data-on]),
+  .dr-el-tile[data-active] .dr-el-tile__star:not([data-on]) {
+    opacity: 0;
+  }
+}
 .dr-el__more {
   align-self: center;
 }

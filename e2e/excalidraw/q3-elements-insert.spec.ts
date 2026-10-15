@@ -1,7 +1,7 @@
 // Wave Q, WS3: the Elements panel on the real board page against the real api and sync server, turned on for the page
-// by the dev-auth override (ELEMENTS_PANEL ships false until the lead's integration). The icons are the panel's dev
-// test double until WS1's sets land (apps/web/src/features/elements/icons-double.ts): the insert path, the undo step,
-// sync and the drop are what this spec proves, not the icon set. What must hold: the Elements panel takes the Shapes
+// by the dev-auth override (moot since the integration ships ELEMENTS_PANEL on). The icons are WS1's generated sets
+// since the integration, so each test searches for the icon it uses: the insert path, the undo step, sync and the drop
+// are what this spec proves, not the icon set. What must hold: the Elements panel takes the Shapes
 // panel's dock place; a click inserts an icon at the middle of the view as native elements (kind 'icon') in one undo
 // step, at the size and colour chosen, and a second tab sees it; the search narrows the tiles and the arrows plus
 // Enter insert; an icon dragged into a frame lands in it, centred on the pointer; a shape from the Shapes tab is the
@@ -59,6 +59,7 @@ test('Q3: the Elements panel takes the Shapes panel’s place; a click inserts a
   await setViewport(a.page, { x: 0, y: 0, zoom: 1 })
   await openElements(a.page)
   await expect(tab(a.page, 'icons')).toHaveAttribute('aria-selected', 'true')
+  await a.page.getByTestId('element-search').fill('star')
   await expect(tile(a.page, 'icon', 'lucide:star')).toBeVisible({ timeout: 15_000 })
   const before = (await items(a.page)).length
 
@@ -82,6 +83,7 @@ test('Q3: the Elements panel takes the Shapes panel’s place; a click inserts a
     await a.page.getByTestId('element-color').click()
     await a.page.locator('[data-testid="element-color-pick"][data-color="red"]').click()
     await expect(a.page.getByTestId('element-color')).toHaveAttribute('data-color', 'red')
+    await a.page.getByTestId('element-search').fill('arrow right')
     await tile(a.page, 'icon', 'lucide:arrow-right').click()
     await expect.poll(async () => (await iconEls(a.page, 'Lucide icon: arrow-right')).length).toBe(2)
     const parts = await iconEls(a.page, 'Lucide icon: arrow-right')
@@ -125,39 +127,45 @@ test('Q3: one search over the sources; the arrows and Enter insert; Escape clear
   await setViewport(a.page, { x: 0, y: 0, zoom: 1 })
   await openElements(a.page)
   const search = a.page.getByTestId('element-search')
-  await expect(tile(a.page, 'icon', 'lucide:star')).toBeVisible({ timeout: 15_000 })
+  await expect(a.page.locator('[data-testid="element-tile"][data-source="icon"]').first()).toBeVisible({
+    timeout: 15_000,
+  })
+  /** a tile id as the end of its DOM id (Tiles.tsx tileDomId) */
+  const domEnd = (id: string) => new RegExp(`${id.replace(/[^A-Za-z0-9_-]/g, '_')}$`)
 
-  await test.step('"arrow" narrows the icons; the tabs count each source’s matches', async () => {
+  let firstArrow = ''
+  await test.step('"arrow" narrows the icons to arrows, many of them; the tabs count each source’s matches', async () => {
     await search.fill('arrow')
-    await expect
-      .poll(() => tileIds(a.page))
-      .toEqual(['lucide:arrow-left', 'lucide:arrow-right', 'lucide:arrow-up'])
-    await expect(tab(a.page, 'icons').locator('.dr-el__count')).toHaveText('3')
-    await expect(search).toHaveAttribute('aria-activedescendant', /arrow-left$/)
+    await expect.poll(async () => (await tileIds(a.page)).length).toBeGreaterThan(20)
+    const ids = (await tileIds(a.page)) as string[]
+    expect(ids.slice(0, 10).every((id) => /arrow/.test(id))).toBe(true)
+    await expect(tab(a.page, 'icons').locator('.dr-el__count')).toHaveText('99+')
+    firstArrow = ids[0] as string
+    await expect(search).toHaveAttribute('aria-activedescendant', domEnd(firstArrow))
   })
 
-  await test.step('"decision" finds no icon: the panel points at the Shapes tab, which has it', async () => {
-    await search.fill('decision')
+  await test.step('"swimlane" finds no icon: the panel points at the Shapes tab, which has it', async () => {
+    await search.fill('swimlane')
     await expect(a.page.getByTestId('element-empty')).toContainText('No icons match.')
     await a.page.locator('[data-testid="element-other-tab"][data-tab="shapes"]').click()
     await expect(tab(a.page, 'shapes')).toHaveAttribute('aria-selected', 'true')
-    await expect.poll(() => tileIds(a.page)).toEqual(['decision'])
+    await expect.poll(() => tileIds(a.page)).toEqual(['swimlane'])
   })
 
   await test.step('Enter inserts the active shape; ArrowDown then Enter the next one of a longer list', async () => {
     await search.focus()
     await search.press('Enter')
-    await expect.poll(async () => (await pieceEls(a.page, 'piece-decision')).length).toBe(2)
+    await expect.poll(async () => (await pieceEls(a.page, 'piece-swimlane')).length).toBeGreaterThan(0)
     await expectSaved(a.page)
     await search.fill('arrow')
     await tab(a.page, 'icons').click()
     await search.focus()
     await search.press('ArrowRight')
     // with something typed, Right moves the caret, not the tile
-    await expect(search).toHaveAttribute('aria-activedescendant', /arrow-left$/)
+    await expect(search).toHaveAttribute('aria-activedescendant', domEnd(firstArrow))
     await search.fill('')
     await search.press('ArrowRight')
-    await expect(search).not.toHaveAttribute('aria-activedescendant', /arrow-left$/)
+    await expect(search).not.toHaveAttribute('aria-activedescendant', domEnd(firstArrow))
     const second = await a.page
       .getByTestId('element-section-results')
       .getByTestId('element-tile')
@@ -187,6 +195,7 @@ test('Q3: an icon dragged into a frame lands in it, centred on the pointer, in o
   const frame = await makeFrame(a.page, 100, 100, 700, 600, 'Screen')
   await setViewport(a.page, { x: 0, y: 0, zoom: 0.6 })
   await openElements(a.page)
+  await a.page.getByTestId('element-search').fill('house')
   await expect(tile(a.page, 'icon', 'lucide:house')).toBeVisible({ timeout: 15_000 })
   await expectSaved(a.page)
 
@@ -200,14 +209,15 @@ test('Q3: an icon dragged into a frame lands in it, centred on the pointer, in o
 
   await test.step('the house icon dropped on the frame: every part joins it, centred on the pointer', async () => {
     await dragTo('icon', 'lucide:house', { x: 400, y: 300 })
-    await expect.poll(async () => (await iconEls(a.page, 'Lucide icon: house')).length).toBe(2)
+    await expect.poll(async () => (await iconEls(a.page, 'Lucide icon: house')).length).toBeGreaterThan(0)
+    await expectSaved(a.page)
     const parts = await iconEls(a.page, 'Lucide icon: house')
     for (const p of parts) expect(p.frameId).toBe(frame)
     const box = boxOf(parts)
     expect(box.x + box.w / 2).toBeCloseTo(400, -1)
     expect(box.y + box.h / 2).toBeCloseTo(300, -1)
     await expectSaved(a.page)
-    await expect.poll(async () => (await iconEls(b.page, 'Lucide icon: house')).length).toBe(2)
+    await expect.poll(async () => (await iconEls(b.page, 'Lucide icon: house')).length).toBe(parts.length)
     for (const p of await iconEls(b.page, 'Lucide icon: house')) expect(p.frameId).toBe(frame)
   })
 
@@ -218,6 +228,7 @@ test('Q3: an icon dragged into a frame lands in it, centred on the pointer, in o
   })
 
   await test.step('a Button dragged from the Shapes tab is the piece, in the frame', async () => {
+    await a.page.getByTestId('element-search').fill('')
     await tab(a.page, 'shapes').click()
     await dragTo('piece', 'button', { x: 450, y: 450 })
     await expect.poll(async () => (await pieceEls(a.page, 'piece-button')).length).toBe(2)
@@ -256,6 +267,7 @@ test('Q3: in the dark theme the panel’s tiles are the panel’s own surfaces, 
   for (const bg of backgrounds) expect(['rgb(255, 255, 255)', 'rgb(249, 250, 251)']).not.toContain(bg)
   await a.page.screenshot({ path: testInfo.outputPath('q3-dark-shapes.png') })
   await tab(a.page, 'icons').click()
+  await a.page.getByTestId('element-search').fill('star')
   await expect(tile(a.page, 'icon', 'lucide:star')).toBeVisible({ timeout: 15_000 })
   // the icon drawings take the theme's ink
   const stroke = await a.page

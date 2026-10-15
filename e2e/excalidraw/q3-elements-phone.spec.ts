@@ -105,13 +105,16 @@ test('Q3 guest: a name-only guest has Icons and Shapes, no Library tab, inserts 
     await expect(tab(g, 'library')).toHaveCount(0)
     await expect(g.getByTestId('element-search')).toHaveAttribute('placeholder', 'Search icons and shapes')
     // no star: favourites are the library's
+    await g.getByTestId('element-search').fill('heart')
     await expect(tile(g, 'icon', 'lucide:heart')).toBeVisible({ timeout: 15_000 })
     await expect(tile(g, 'icon', 'lucide:heart').getByTestId('element-star')).toHaveCount(0)
     await g.screenshot({ path: testInfo.outputPath('q3-guest-panel.png') })
     await tile(g, 'icon', 'lucide:heart').click()
-    await expect.poll(async () => (await items(g)).filter((e) => kindOf(e) === 'icon').length).toBe(1)
+    const iconCount = async (p: typeof g) => (await items(p)).filter((e) => kindOf(e) === 'icon').length
+    await expect.poll(() => iconCount(g)).toBeGreaterThan(0)
     await expectSaved(g)
-    await expect.poll(async () => (await items(a.page)).filter((e) => kindOf(e) === 'icon').length).toBe(1)
+    const n = await iconCount(g)
+    await expect.poll(() => iconCount(a.page)).toBe(n)
     expect(library).toEqual([])
   } finally {
     await context.close()
