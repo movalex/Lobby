@@ -58,6 +58,16 @@ export {
 } from './frames.ts'
 export { type IdSource, newElementId, randomInt31 } from './ids.ts'
 export {
+  itemBoundsOf,
+  itemBoxOf,
+  type LibraryItemLimits,
+  type LibraryItemPayload,
+  type LibraryItemProblem,
+  type LibraryItemResult,
+  type SerializeLibraryItemOptions,
+  serializeLibraryItem,
+} from './library.ts'
+export {
   isLobbyColorName,
   LOBBY_COLOR_NAMES,
   LOBBY_FRAME_STROKE,
