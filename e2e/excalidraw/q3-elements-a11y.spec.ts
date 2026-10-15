@@ -64,7 +64,8 @@ for (const mode of ['light', 'dark'] as const) {
 test('Q3: the keyboard: the search box keeps it and names the active tile; the tabs and the grid take arrows', async ({
   canvasSession,
 }) => {
-  const a = await canvasSession('alice')
+  // someone with no marks yet: alice's Recents (from the other specs on the same stack) would come before the results
+  const a = await canvasSession('quinn', { role: 'editor' })
   await reloadWithElements(a.page)
   await openElements(a.page)
   const search = a.page.getByTestId('element-search')
