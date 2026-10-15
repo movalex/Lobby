@@ -17,9 +17,16 @@ import { createBoardBuilder } from '../builder.ts'
 import { type TemplateBounds, TemplateError, type TemplatePoint, unionRects } from '../common.ts'
 import { planToScene } from '../scene/emit.ts'
 import { type PieceId, pieceInfo, pieceKind } from './catalog.ts'
+import { ARROW_PIECES } from './arrows.ts'
+import { BADGE_PIECES } from './badges.ts'
+import { CALLOUT_PIECES } from './callouts.ts'
+import { DELIVERABLE_PIECES } from './deliverables.ts'
+import { DEVICE_PIECES } from './devices.ts'
 import { FLOWCHART_PIECES } from './flowchart.ts'
 import { finish, freshId, type PieceDef } from './kit.ts'
 import { PEOPLE_PIECES } from './people.ts'
+import { STICKY_KIT_PIECES } from './sticky-kits.ts'
+import { STORYBOARD_PIECES } from './storyboard.ts'
 import { WIREFRAME_PIECES } from './wireframe.ts'
 
 export * from './catalog.ts'
@@ -31,6 +38,13 @@ const DEFS: Readonly<Record<PieceId, PieceDef>> = Object.freeze({
   ...FLOWCHART_PIECES,
   ...WIREFRAME_PIECES,
   ...PEOPLE_PIECES,
+  ...ARROW_PIECES,
+  ...CALLOUT_PIECES,
+  ...BADGE_PIECES,
+  ...STICKY_KIT_PIECES,
+  ...DEVICE_PIECES,
+  ...STORYBOARD_PIECES,
+  ...DELIVERABLE_PIECES,
 })
 
 export interface PieceContext {
