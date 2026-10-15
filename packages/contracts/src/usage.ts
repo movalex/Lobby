@@ -173,6 +173,8 @@ export const PALETTE_COMMAND_IDS = [
   'board-links.insert',
   'board-links.backlinks',
   'ai.capture',
+  // wave Q (frozen by the wave Q foundation, pending until WS3 registers it): open the Elements panel
+  'elements.open',
 ] as const
 export type PaletteCommandId = (typeof PALETTE_COMMAND_IDS)[number]
 
@@ -184,6 +186,8 @@ export const PENDING_PALETTE_COMMAND_IDS: readonly PaletteCommandId[] = [
   // wave N: none left. reactions.react is registered by WS3 (features/workshops), board-links.insert and
   // board-links.backlinks by WS7 (features/board-links), ai.capture by WS5 (features/ai/capture; listing it here
   // again holds the whole capture feature on the web).
+  // wave Q: the Elements panel's command, registered by WS3 (features/elements) when ELEMENTS_PANEL turns on.
+  'elements.open',
 ]
 
 /**
@@ -303,6 +307,14 @@ export const USAGE_FIXED_EVENTS = [
   'boardlinks.insert',
   'boardlinks.open',
   'boardlinks.backlinks',
+  // wave Q (frozen by the wave Q foundation): the Elements panel (WS3: inserts by source, saves, favourites) and the
+  // .excalidrawlib import (WS4)
+  'elements.insert.icon',
+  'elements.insert.piece',
+  'elements.insert.item',
+  'elements.save',
+  'elements.favourite',
+  'elements.import',
 ] as const
 
 /** Events with a parameter (`<name>:<value>`), each value from its fixed list. */
