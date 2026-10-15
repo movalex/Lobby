@@ -39,7 +39,9 @@ for (const mode of ['light', 'dark'] as const) {
     await a.page.getByTestId('element-color').click()
     await expectClean(a.page, panel, `icons with the colours open (${mode})`)
     await tab(a.page, 'shapes').click()
-    await expect(a.page.locator('[data-piece-preview="decision"] polygon')).toHaveCount(1, { timeout: 15_000 })
+    await expect(a.page.locator('[data-piece-preview="decision"] polygon')).toHaveCount(1, {
+      timeout: 15_000,
+    })
     await expectClean(a.page, panel, `shapes (${mode})`)
     await a.page.getByTestId('element-search').fill('process')
     await tile(a.page, 'piece', 'process').click()

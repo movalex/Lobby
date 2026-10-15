@@ -31,7 +31,8 @@ const lobbyOf = (e: CanvasElement) =>
   (e.customData as { lobby?: { kind?: string; alt?: string } } | undefined)?.lobby
 const iconEls = async (page: Page, alt?: string) =>
   (await items(page)).filter((e) => lobbyOf(e)?.kind === 'icon' && (!alt || lobbyOf(e)?.alt === alt))
-const pieceEls = async (page: Page, kind: string) => (await items(page)).filter((e) => lobbyOf(e)?.kind === kind)
+const pieceEls = async (page: Page, kind: string) =>
+  (await items(page)).filter((e) => lobbyOf(e)?.kind === kind)
 
 /** The box of a set of elements (linear elements by their points). */
 function boxOf(els: CanvasElement[]) {
@@ -97,7 +98,10 @@ test('Q3: the Elements panel takes the Shapes panel’s place; a click inserts a
     // the choice is remembered for this viewer
     await a.page.getByTestId('dock-panel-close').click()
     await openElements(a.page)
-    await expect(a.page.locator('[data-testid="element-size"][data-size="L"]')).toHaveAttribute('aria-pressed', 'true')
+    await expect(a.page.locator('[data-testid="element-size"][data-size="L"]')).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
   })
 
   await test.step('one Ctrl+Z takes the whole arrow away, another the star; the second tab follows', async () => {
@@ -125,7 +129,9 @@ test('Q3: one search over the sources; the arrows and Enter insert; Escape clear
 
   await test.step('"arrow" narrows the icons; the tabs count each source’s matches', async () => {
     await search.fill('arrow')
-    await expect.poll(() => tileIds(a.page)).toEqual(['lucide:arrow-left', 'lucide:arrow-right', 'lucide:arrow-up'])
+    await expect
+      .poll(() => tileIds(a.page))
+      .toEqual(['lucide:arrow-left', 'lucide:arrow-right', 'lucide:arrow-up'])
     await expect(tab(a.page, 'icons').locator('.dr-el__count')).toHaveText('3')
     await expect(search).toHaveAttribute('aria-activedescendant', /arrow-left$/)
   })
@@ -158,7 +164,8 @@ test('Q3: one search over the sources; the arrows and Enter insert; Escape clear
       .nth(1)
       .getAttribute('data-tile-id')
     await search.press('Enter')
-    await expect.poll(async () => (await iconEls(a.page, `Lucide icon: ${second?.split(':')[1]}`)).length).toBeGreaterThan(0)
+    const alt = `Lucide icon: ${second?.split(':')[1]}`
+    await expect.poll(async () => (await iconEls(a.page, alt)).length).toBeGreaterThan(0)
   })
 
   await test.step('Escape clears what is typed, a second Escape closes the panel', async () => {
@@ -240,7 +247,9 @@ test('Q3: in the dark theme the panel’s tiles are the panel’s own surfaces, 
   await reloadWithElements(a.page)
   await openElements(a.page)
   await tab(a.page, 'shapes').click()
-  await expect(a.page.locator('[data-piece-preview="decision"] polygon')).toHaveCount(1, { timeout: 15_000 })
+  await expect(a.page.locator('[data-piece-preview="decision"] polygon')).toHaveCount(1, {
+    timeout: 15_000,
+  })
   const backgrounds = await a.page
     .locator('.dr-el-tile, .dr-el-tile__art')
     .evaluateAll((els) => [...new Set(els.map((e) => getComputedStyle(e).backgroundColor))])

@@ -7,7 +7,14 @@
 //   E2E_PORT_BASE=7760 pnpm exec playwright test excalidraw/q3-elements-phone --project=chromium --workers=1   (from e2e/)
 import type { BrowserContext, Request } from '@playwright/test'
 import { signInContext } from '../tests/support/api.ts'
-import { type CanvasElement, expect, expectSaved, items, test, waitForCanvas } from '../tests/support/canvas.ts'
+import {
+  type CanvasElement,
+  expect,
+  expectSaved,
+  items,
+  test,
+  waitForCanvas,
+} from '../tests/support/canvas.ts'
 import { PHONE, scrollsSideways } from './a11y-kit.ts'
 import { createGuestLink, guestOn, tokenOf } from './guests-kit.ts'
 import { elementsPanelOn, openElements, tab, tile } from './q3-kit.ts'
@@ -29,7 +36,12 @@ test('Q3 phone: the panel is a full-width sheet with the options folded; a tap i
   users,
 }, testInfo) => {
   const alice = await users.get('alice')
-  const context = await browser.newContext({ viewport: PHONE, hasTouch: true, isMobile: true, deviceScaleFactor: 2 })
+  const context = await browser.newContext({
+    viewport: PHONE,
+    hasTouch: true,
+    isMobile: true,
+    deviceScaleFactor: 2,
+  })
   try {
     await signInContext(context, alice.handle, alice.name)
     await elementsPanelOn(context)
@@ -62,7 +74,8 @@ test('Q3 phone: the panel is a full-width sheet with the options folded; a tap i
 
     await test.step('a tap inserts the shape and closes the sheet so it shows', async () => {
       await tile(page, 'piece', 'decision').tap()
-      await expect.poll(async () => (await items(page)).filter((e) => kindOf(e) === 'piece-decision').length).toBe(2)
+      const decisions = async () => (await items(page)).filter((e) => kindOf(e) === 'piece-decision')
+      await expect.poll(async () => (await decisions()).length).toBe(2)
       await expect(page.getByTestId('dock-panel-elements')).toHaveCount(0)
       await expectSaved(page)
       expect(await scrollsSideways(page)).toBe(false)

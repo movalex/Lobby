@@ -174,7 +174,8 @@ export async function libraryDouble(page: Page, opts: { canEdit?: boolean } = {}
       if (method === 'PATCH') {
         if (body.revision !== item.summary.revision) return fail(route, 409, 'LIBRARY_STALE_REVISION')
         const { revision: _r, sourceBoardId: _s, ...patch } = body
-        item.summary = { ...item.summary, ...patch, revision: Number(item.summary.revision) + 1, updatedAt: now() }
+        const revision = Number(item.summary.revision) + 1
+        item.summary = { ...item.summary, ...patch, revision, updatedAt: now() }
         return json(route, 200, item.summary)
       }
       if (method === 'DELETE') {
@@ -217,7 +218,9 @@ export async function libraryDouble(page: Page, opts: { canEdit?: boolean } = {}
         const all = [...d.marks.entries()].map(([key, v]) => ({ key, ...v }))
         return json(route, 200, {
           favourites: all.filter((m) => m.favourite),
-          recents: all.filter((m) => m.usedAt).sort((a, b) => String(b.usedAt).localeCompare(String(a.usedAt))),
+          recents: all
+            .filter((m) => m.usedAt)
+            .sort((a, b) => String(b.usedAt).localeCompare(String(a.usedAt))),
         })
       }
       if (method === 'PUT') {

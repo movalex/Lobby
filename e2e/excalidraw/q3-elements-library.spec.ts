@@ -8,6 +8,7 @@
 //
 //   E2E_PORT_BASE=7760 pnpm exec playwright test excalidraw/q3-elements-library --project=chromium --workers=1   (from e2e/)
 import type { Page } from '@playwright/test'
+import { Api, signInContext } from '../tests/support/api.ts'
 import {
   type CanvasElement,
   clickItem,
@@ -20,7 +21,6 @@ import {
   test,
   waitForCanvas,
 } from '../tests/support/canvas.ts'
-import { Api, signInContext } from '../tests/support/api.ts'
 import { freshHandle } from '../tests/support/dashboard-share.ts'
 import { undoKey } from './navigation-kit.ts'
 import { elementsPanelOn, libraryDouble, openElements, reloadWithElements, tab, tile } from './q3-kit.ts'
@@ -63,10 +63,17 @@ test('Q3: a selection saved from the selection bar goes to the library as portab
     await a.page.getByTestId('element-save-name').fill('Flow step')
     await a.page.getByTestId('element-save-tags').fill('Flow, Step')
     await a.page.getByTestId('element-save-submit').click()
-    await expect(a.page.getByTestId('element-saved')).toContainText('Saved “Flow step” to the workspace library.')
+    await expect(a.page.getByTestId('element-saved')).toContainText(
+      'Saved “Flow step” to the workspace library.',
+    )
     expect(lib.saves).toHaveLength(1)
-    const sent = lib.saves[0] as { scope: string; name: string; tags: string[]; sourceBoardId: string; elements: Record<string, unknown>[] }
-    expect(sent).toMatchObject({ scope: 'workspace', name: 'Flow step', tags: ['flow', 'step'], sourceBoardId: board })
+    const sent = lib.saves[0] as { elements: Record<string, unknown>[] }
+    expect(sent).toMatchObject({
+      scope: 'workspace',
+      name: 'Flow step',
+      tags: ['flow', 'step'],
+      sourceBoardId: board,
+    })
     // the box and its label, item-local ids, the box at the origin, nothing server-bound
     expect(sent.elements).toHaveLength(2)
     for (const e of sent.elements) {
