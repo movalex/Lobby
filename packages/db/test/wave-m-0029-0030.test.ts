@@ -46,10 +46,11 @@ describe('wave M migrations', () => {
     const all = loadMigrations()
     expect(all.find((m) => m.version === 29)?.name).toBe('0029_usage_daily')
     expect(all.find((m) => m.version === 30)?.name).toBe('0030_workspace_templates')
-    // wave N's 0031 and 0032 follow (wave-n-0031-0032.test.ts)
+    // wave N's 0031 and 0032 follow (wave-n-0031-0032.test.ts), then wave Q's 0033 (wave-q-0033.test.ts)
     expect(all.filter((m) => m.version > 30).map((m) => m.name)).toEqual([
       '0031_board_visits',
       '0032_board_links',
+      '0033_library',
     ])
     expect(all.map((m) => m.version)).toEqual(all.map((_, i) => i + 1))
   })

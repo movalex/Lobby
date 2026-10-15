@@ -1,7 +1,7 @@
 // 0031_board_visits (owner WS4) and 0032_board_links (owner WS7), landed by the wave N foundation: three new tables,
 // nothing existing changed (an upgrade from 0030 keeps every column and constraint), their keys, CHECKs and
 // cascades. Runs on PGlite, and on a real Postgres with DRAFTROOM_TEST_DATABASE_URL set (src/testing.ts openTestDb).
-// 0033 and 0034 are reserved for wave N and stay unused (the lead holds them; migrations stay contiguous).
+// Wave N left 0033 and 0034 unused; wave Q took 0033 (0033_library, wave-q-0033.test.ts). Migrations stay contiguous.
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { type Db, loadMigrations, migrate, openPglite, pgErrorCode } from '../src/index.ts'
@@ -61,11 +61,11 @@ const count = async (q: Db, table: string) =>
   (await q.one<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`)).n
 
 describe('wave N migrations', () => {
-  it('are 0031_board_visits and 0032_board_links, right after 0030 (contiguous; 0033 and 0034 unused)', () => {
+  it('are 0031_board_visits and 0032_board_links, right after 0030 (contiguous; wave Q’s 0033 follows)', () => {
     const all = loadMigrations()
     expect(all.find((m) => m.version === 31)?.name).toBe('0031_board_visits')
     expect(all.find((m) => m.version === 32)?.name).toBe('0032_board_links')
-    expect(all.at(-1)?.version).toBe(32)
+    expect(all.find((m) => m.version === 33)?.name).toBe('0033_library')
     expect(all.map((m) => m.version)).toEqual(all.map((_, i) => i + 1))
   })
 
@@ -75,7 +75,10 @@ describe('wave N migrations', () => {
     const all = loadMigrations()
     await migrate(d, { migrations: all.filter((m) => m.version <= 30) })
     const before = { columns: await columnsOf(d), constraints: await constraintsOf(d) }
-    expect((await migrate(d)).applied).toEqual(['0031_board_visits', '0032_board_links'])
+    expect((await migrate(d, { migrations: all.filter((m) => m.version <= 32) })).applied).toEqual([
+      '0031_board_visits',
+      '0032_board_links',
+    ])
     const after = { columns: await columnsOf(d), constraints: await constraintsOf(d) }
     const isNew = (k: string) =>
       k.startsWith('board_visits.') || k.startsWith('board_links.') || k.startsWith('board_link_scans.')
