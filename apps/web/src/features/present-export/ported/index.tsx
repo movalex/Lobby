@@ -11,6 +11,8 @@ import type {
   CommandSpec,
   MenuEntrySpec,
 } from '../../../canvas/api/index.ts'
+import { downloadBoardBackup } from '../../../dashboard/import-backup/download.ts'
+import { knownUserKind } from '../../../invite/guest.tsx'
 import { useValue } from '../../../lib/signals.ts'
 import { workshopSettingsOf } from '../../workshops/ported/session-settings.ts'
 import { getController } from './controller.ts'
@@ -74,6 +76,11 @@ const controllerOf = (ctx: CanvasFeatureContext) => {
   c.attach({ id: ctx.board.id, title: ctx.board.title, notify: ctx.notify })
   return c
 }
+
+const BACKUP_LABEL = 'Download backup (.lobby)'
+/** Backups are for people with an account (the api refuses a name-only guest the ticket) who may export here. */
+const backupAllowed = (ctx: CanvasFeatureContext) =>
+  controllerOf(ctx).exportAllowed() && knownUserKind(ctx.me.user.id) !== 'guest'
 
 /**
  * The shortcuts and menu actions (tldraw's `dr-present`, `dr-export`, and its own `print`,
@@ -140,6 +147,17 @@ const COMMANDS: readonly CommandSpec[] = [
     readOnlyAllowed: true,
     run: (ctx) => controllerOf(ctx).quickExport('svg', 'board'),
   },
+  // wave R (WS4): the board and its files as a .lobby backup, from the api's own origin (dashboard/import-backup)
+  {
+    id: 'present-export.backup',
+    label: BACKUP_LABEL,
+    readOnlyAllowed: true,
+    keywords: ['backup', 'lobby', 'zip', 'archive'],
+    enabled: (ctx) => backupAllowed(ctx),
+    run: (ctx) => {
+      if (backupAllowed(ctx)) void downloadBoardBackup(ctx.board.id, ctx.notify)
+    },
+  },
 ]
 
 const exportAllowed = (ctx: CanvasFeatureContext) => controllerOf(ctx).exportAllowed()
@@ -196,6 +214,15 @@ const MAIN_MENU: readonly MenuEntrySpec[] = [
     ],
   },
   { id: 'print', group: 'export', order: 22, label: 'Export as PDF…', command: 'present-export.print' },
+  // wave R (WS4): this line is WS4's
+  {
+    id: 'backup',
+    group: 'export',
+    order: 23,
+    label: BACKUP_LABEL,
+    command: 'present-export.backup',
+    visible: (ctx) => backupAllowed(ctx),
+  },
 ]
 
 export const feature: CanvasFeature = {

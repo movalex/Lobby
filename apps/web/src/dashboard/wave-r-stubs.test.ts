@@ -1,5 +1,5 @@
 // The wave R foundation's web side (docs/WAVE-R-CONTRACTS.md §7): nothing changes for a user. The Import control is
-// today's single button while its switches are off (a dev-auth page may turn them on); the import, Miro, backup and
+// today's single button while its switches are off (a dev-auth page may turn them on); the import, Miro and
 // chat hook clients answer empty and reject writes with 'unavailable', without a single request.
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -15,7 +15,6 @@ import {
   putChatPrefs,
   testChatHook,
 } from '../features/notify-settings/client.ts'
-import { backupTicket, restoreBackup } from './import-backup/client.ts'
 import { IMPORT_MENU_FLAGS, IMPORT_MENU_KEYS, importMenuFlags } from './import-menu/flags.ts'
 import { ImportMenu, importMenuEntries } from './import-menu/ImportMenu.tsx'
 import { listMiroBoards, startMiroImport } from './import-miro/client.ts'
@@ -112,8 +111,6 @@ describe('the wave R clients (stubs)', () => {
       startMiroImport(W, 'token-0123456789abcdef', { boards: [{ miroBoardId: 'uXjVOD1Ab2c=' }] }),
       ImportRequestError,
     )
-    await rejectsUnavailable(backupTicket('b-abc1234567'), ImportRequestError)
-    await rejectsUnavailable(restoreBackup(W, new Blob(['PK'])), ImportRequestError)
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
