@@ -92,6 +92,39 @@ export function imagePartsOf(req: SeenRequest): { url: string; detail: string | 
 export const userTextOf = (req: SeenRequest): string =>
   textOf(req.body.messages?.find((m) => m.role === 'user')?.content)
 
+/** The script the api put between the prompt's <<<SCRIPT / SCRIPT>>> lines (wave T, the storyboard breakdown). */
+export function scriptOf(req: SeenRequest): string {
+  return scriptIn(userTextOf(req))
+}
+
+function scriptIn(user: string): string {
+  const open = '<<<SCRIPT\n'
+  const start = user.indexOf(open)
+  const end = user.lastIndexOf('\nSCRIPT>>>')
+  return start < 0 || end < 0 ? '' : user.slice(start + open.length, end)
+}
+
+/**
+ * Wave T (WS2): a model's breakdown of the script in a user message (lobby_storyboard): one panel per non-empty line,
+ * at most 12, the first a wide shot of 3 seconds, the rest close-ups with no duration.
+ */
+export function storyboardAnswer(user: string): unknown {
+  const lines = scriptIn(user)
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .slice(0, 12)
+  return {
+    panels: lines.map((l, k) => ({
+      camera: k === 0 ? 'WIDE' : 'CU',
+      action: l,
+      dialogue: '',
+      sfx: '',
+      seconds: k === 0 ? 3 : null,
+    })),
+  }
+}
+
 /** The items the api put between the prompt's <<<ITEMS / ITEMS>>> lines. */
 export function itemsOf(req: SeenRequest): FakeItem[] {
   const user = userTextOf(req)
@@ -133,6 +166,8 @@ export function defaultAnswer(req: SeenRequest): unknown {
       const n = Number(/Write exactly (\d+) new/.exec(user)?.[1] ?? 3)
       return { ideas: Array.from({ length: n }, (_, k) => `Fresh idea number ${k + 1}`) }
     }
+    case 'lobby_storyboard':
+      return storyboardAnswer(user)
     default: {
       const waveL = waveLAnswer(schema, items)
       if (waveL !== undefined) return waveL

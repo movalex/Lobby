@@ -64,8 +64,8 @@ const ids = { type: 'array', items: str }
 const oneOf = (values: readonly string[]) => ({ type: 'string', enum: [...values] })
 
 /**
- * A run this api builds prompts for: every action but the pending wave T ones (index.ts LIVE_AI_ACTIONS; WS2 adds
- * `storyboard` with its prompt, schema and plan).
+ * A run this file builds prompts for: every action but wave T's `storyboard`, which reads no board items and has its
+ * prompt, schema and plan in ./storyboard.ts (index.ts picks it).
  */
 type PromptInput = Exclude<AiRunInput, { action: AiWaveTAction }>
 

@@ -41,7 +41,6 @@ import {
   AI_ACTIONS,
   AI_ERROR_CODES,
   AI_RECAP_MAX_WINDOW_MS,
-  AI_WAVE_T_ACTIONS,
   type AiAction,
   type AiBudget,
   type AiOffReason,
@@ -50,7 +49,6 @@ import {
   type AiSettings,
   type AiStatus,
   type AiTopVoted,
-  type AiWaveTAction,
 } from '@draftroom/contracts'
 import { newId, type Queryable } from '@draftroom/db'
 import { can } from '@draftroom/permissions'
@@ -87,7 +85,7 @@ import {
   themesPlan,
   votedActionsPlan,
 } from './plan.ts'
-import { buildPrompt, overheadTokens, promptTokens, promptTokensCeiling } from './prompt.ts'
+import { buildPrompt, overheadTokens, type Prompt, promptTokens, promptTokensCeiling } from './prompt.ts'
 import { aiOn, loadAiSwitches, registerAiSettings, settingsFor } from './settings.ts'
 import {
   allShapeIds,
@@ -102,6 +100,7 @@ import {
   shapesOf,
   themeLabelOf,
 } from './sources.ts'
+import { fitScript, storyboardOverheadTokens, storyboardPlan, storyboardPrompt } from './storyboard.ts'
 import { revealedTallies, topVotedOf, votedSessionTallies } from './tallies.ts'
 import { registerWorkspaceAsk } from './workspace-ask.ts'
 
@@ -147,16 +146,16 @@ type AiPlan = AiResult extends infer R
   : never
 
 /**
- * The actions this api runs: since wave L (W1) all ten the contracts name, but wave T's `storyboard`, which is
- * pending until WS2 lands its handler (docs/WAVE-T-CONTRACTS.md §4): an action outside this set gets the 400
- * BAD_REQUEST an unknown action gets, with nothing read, reserved or sent. WS2 removes it from PENDING_AI_ACTIONS.
+ * The actions this api runs: every one the contracts name, wave T's `storyboard` included since WS2 landed its
+ * handler (./storyboard.ts; docs/WAVE-T-CONTRACTS.md §4). An action held here would get the 400 BAD_REQUEST an
+ * unknown action gets, with nothing read, reserved or sent (the pattern a later wave's pending action follows).
  */
-export const PENDING_AI_ACTIONS: ReadonlySet<string> = new Set<AiWaveTAction>(AI_WAVE_T_ACTIONS)
+export const PENDING_AI_ACTIONS: ReadonlySet<string> = new Set<AiAction>()
 export const LIVE_AI_ACTIONS: ReadonlySet<string> = new Set<AiAction>(
   AI_ACTIONS.filter((a) => !PENDING_AI_ACTIONS.has(a)),
 )
 /** A run input of an action this api runs (see LIVE_AI_ACTIONS). */
-export type LiveAiRunInput = Exclude<AiRunInput, { action: AiWaveTAction }>
+export type LiveAiRunInput = AiRunInput
 const isLive = (input: AiRunInput): input is LiveAiRunInput => LIVE_AI_ACTIONS.has(input.action)
 
 /** A run id (contracts AiRunId: `air_` and 20 base62 characters), one per run, never stored. */
@@ -447,9 +446,13 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
     boardId: string,
     voted: ReadonlyMap<string, number> | null,
   ): Promise<{ sources: Sources; windowFrom: number | null; topVoted: AiTopVoted[] }> {
-    const tokenBudget = Math.max(0, cfg.maxInputTokens - overheadTokens(input))
+    const tokenBudget =
+      input.action === 'storyboard' ? 0 : Math.max(0, cfg.maxInputTokens - overheadTokens(input))
     const wholeBoard = (ids: readonly string[]) => (ids.length ? ids : allShapeIds(shapes))
     switch (input.action) {
+      case 'storyboard':
+        // wave T: the pasted script is the whole input; nothing of the board is read
+        return { sources: { items: [], frames: [], truncated: false }, windowFrom: null, topVoted: [] }
       case 'recap': {
         const nowMs = now().getTime()
         const floor = nowMs - AI_RECAP_MAX_WINDOW_MS
@@ -534,27 +537,40 @@ export async function registerAi(app: FastifyInstance, ctx: FeatureContext): Pro
     voted: ReadonlyMap<string, number> | null,
   ): Promise<AiResult> {
     const userId = user.id
-    let snapshot: BoardSnapshotJson
-    try {
-      snapshot = await ctx.sync.snapshot(access.board.id)
-    } catch {
-      throw new ApiError(
-        503,
-        AI_ERROR_CODES.unavailable,
-        'Lobby couldn’t read the board just now. Try again in a moment.',
-      )
+    // wave T: a storyboard breakdown reads nothing of the board (its script is the input), so no snapshot
+    let shapes: ShapeMap = new Map()
+    if (input.action !== 'storyboard') {
+      let snapshot: BoardSnapshotJson
+      try {
+        snapshot = await ctx.sync.snapshot(access.board.id)
+      } catch {
+        throw new ApiError(
+          503,
+          AI_ERROR_CODES.unavailable,
+          'Lobby couldn’t read the board just now. Try again in a moment.',
+        )
+      }
+      shapes = shapesOf(snapshot)
     }
-    const shapes = shapesOf(snapshot)
     const gathered = await gather(input, shapes, access.board.id, voted)
     let sources = gathered.sources
-    // The input cap is a hard one: should the whole prompt still come out over it, items go from the
-    // end (their aliases stay as they are) until it fits.
-    let prompt = buildPrompt(input, sources)
-    while (promptTokens(prompt) > cfg.maxInputTokens && sources.items.length > 0) {
-      sources = { ...sources, items: sources.items.slice(0, -1), truncated: true }
+    let prompt: Prompt
+    if (input.action === 'storyboard') {
+      // the script is cut to what the input cap leaves (at a line break), and `truncated` says so
+      const fit = fitScript(input.script, cfg.maxInputTokens - storyboardOverheadTokens(input))
+      if (!fit.script) throw badRequest('script: nothing of the script fits the AI input limit')
+      sources = { ...sources, truncated: fit.truncated }
+      prompt = storyboardPrompt(input, fit.script)
+    } else {
+      // The input cap is a hard one: should the whole prompt still come out over it, items go from the
+      // end (their aliases stay as they are) until it fits.
       prompt = buildPrompt(input, sources)
+      while (promptTokens(prompt) > cfg.maxInputTokens && sources.items.length > 0) {
+        sources = { ...sources, items: sources.items.slice(0, -1), truncated: true }
+        prompt = buildPrompt(input, sources)
+      }
+      refuseEmpty(input, sources)
     }
-    refuseEmpty(input, sources)
 
     // The owner may have switched AI off while the board was being read (the gate ran before that):
     // read the switch again, so nothing is sent once it is off.
@@ -727,5 +743,7 @@ function toPlan(input: LiveAiRunInput, json: unknown, c: PlanContext): AiPlan {
       return { action: 'sort', lens: input.lens, ...sortPlan(json, c.sent) }
     case 'score':
       return { action: 'score', axes: input.axes, ...scorePlan(json, c.sent) }
+    case 'storyboard':
+      return { action: 'storyboard', ...storyboardPlan(json, input.maxPanels) }
   }
 }

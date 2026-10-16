@@ -38,6 +38,8 @@ import {
 } from './present-export/ported/badges.ts'
 import { exportSectionsFor, registerExportSection } from './present-export/ported/export-sections.ts'
 
+/** The wave T features whose workstream has landed (they are no longer empty). */
+const LANDED = ['storyboard']
 const WAVE_T_FEATURES = ['storyboard', 'storyboard-play', 'cards', 'kanban', 'card-table', 'timeline']
 
 describe('the wave T switches', () => {
@@ -89,7 +91,9 @@ describe('the wave T features and entries', () => {
     expect(at.every((i) => i >= 0)).toBe(true)
     expect([...at].sort((a, b) => a - b)).toEqual(at)
     expect(ids.at(-1)).toBe('elements')
-    for (const id of WAVE_T_FEATURES) expect(CANVAS_FEATURES.find((f) => f.id === id)).toEqual({ id })
+    // a workstream that landed fills its own (WS2: storyboard); the rest are still empty
+    for (const id of WAVE_T_FEATURES.filter((x) => !LANDED.includes(x)))
+      expect(CANVAS_FEATURES.find((f) => f.id === id)).toEqual({ id })
   })
 
   it('every entry runs one of the wave T palette ids, each pending until its owner registers it', () => {
