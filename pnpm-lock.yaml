@@ -190,6 +190,9 @@ importers:
       '@draftroom/dev-assets':
         specifier: workspace:*
         version: link:../../packages/dev-assets
+      '@draftroom/miro-import':
+        specifier: workspace:*
+        version: link:../../packages/miro-import
       '@draftroom/permissions':
         specifier: workspace:*
         version: link:../../packages/permissions
@@ -226,6 +229,9 @@ importers:
       '@draftroom/dev-assets':
         specifier: workspace:*
         version: link:../../packages/dev-assets
+      '@draftroom/miro-import':
+        specifier: workspace:*
+        version: link:../../packages/miro-import
       '@draftroom/permissions':
         specifier: workspace:*
         version: link:../../packages/permissions
@@ -432,6 +438,18 @@ importers:
       lucide-static:
         specifier: 'catalog:'
         version: 1.49.0
+
+  packages/miro-import:
+    dependencies:
+      '@draftroom/board-ops':
+        specifier: workspace:*
+        version: link:../board-ops
+      '@draftroom/canvas-schema':
+        specifier: workspace:*
+        version: link:../canvas-schema
+      '@draftroom/contracts':
+        specifier: workspace:*
+        version: link:../contracts
 
   packages/permissions: {}
 

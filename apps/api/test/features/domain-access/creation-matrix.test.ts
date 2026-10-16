@@ -7,9 +7,12 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { FAKE_MIRO_TOKEN, type FakeMiro, startFakeMiro } from '@draftroom/miro-import/fake-miro'
+import { RETRO_ID } from '@draftroom/miro-import/fixtures'
 import type { LightMyRequestResponse } from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CREATOR_ROUTES } from '../../../src/features/domain-access/guard.ts'
+import { importRunnerOf } from '../../../src/features/imports/index.ts'
 import { isPendingRoute } from '../../../src/features/pending-routes.ts'
 import { type Client, createBoard, createTestApi, DEV_STUDIO, devEmail, type TestApi } from '../../helpers.ts'
 import {
@@ -20,8 +23,14 @@ import {
 import { baseRecords, createFakeSync, type FakeSync, noteRec } from '../history/helpers.ts'
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
-/** Wave R's job id in the probes (the import routes are pending: no such row exists) */
+/** Wave R's job id in the probes: a paused Miro job of alice's (WS1: resume is live). */
 const IMPORT_JOB = 'imp_0123456789abcdefghij'
+/** The calls that start work and answer 202 (WS1: a Miro import and a resume; WS4: a backup restore). */
+const ACCEPTED = new Set([
+  'POST /api/workspaces/:wid/imports/miro',
+  'POST /api/imports/:id/resume',
+  'POST /api/workspaces/:wid/backups',
+])
 /** The api's webhook key in these tests (chat hooks are off without it) */
 const WEBHOOK_SECRET = 'test-webhook-secret-0123456789abcdefghij'
 const ALWAYS = Object.entries(CREATOR_ROUTES)
@@ -40,6 +49,8 @@ interface World {
   receiver: FakeReceiver
   /** a chat hook of Dev Studio, on the fake receiver */
   hook: string
+  /** the fake Miro the import routes reach (DRAFTROOM_MIRO_TEST_ORIGINS) */
+  miro: FakeMiro
   sync: FakeSync
   logs: Record<string, unknown>[]
   alice: Client // Dev Studio owner, a creator (dev)
@@ -59,9 +70,14 @@ async function world(opts: { guard?: boolean } = {}): Promise<World> {
   const sync = createFakeSync()
   const logs: Record<string, unknown>[] = []
   const receiver = await startFakeReceiver()
+  const miro = await startFakeMiro()
   const api = await createTestApi({
     ...(opts.guard === false ? { domainAccessGuard: false } : {}),
-    env: { DRAFTROOM_WEBHOOK_SECRET: WEBHOOK_SECRET, DRAFTROOM_CHAT_HOOK_TEST_ORIGINS: receiver.origin },
+    env: {
+      DRAFTROOM_WEBHOOK_SECRET: WEBHOOK_SECRET,
+      DRAFTROOM_CHAT_HOOK_TEST_ORIGINS: receiver.origin,
+      DRAFTROOM_MIRO_TEST_ORIGINS: `${miro.api},${miro.files}`,
+    },
     deps: {
       syncInternal: sync,
       logger: { level: 'info', stream: { write: (l: string) => void logs.push(JSON.parse(l)) } },
@@ -112,10 +128,18 @@ async function world(opts: { guard?: boolean } = {}): Promise<World> {
   ).toBe(202)
   const request = (await api.db.one<{ id: string }>('SELECT id FROM access_requests')).id
   const archive = (await alice.req('GET', `/api/boards/${board}/export`)).json()
+  // a paused Miro job of alice's, for the resume probe (WS1)
+  await api.db.query(
+    `INSERT INTO board_imports (id, batch_id, workspace_id, created_by, source, source_ref, title, position, status,
+                                progress, created_at, updated_at)
+     VALUES ('imb_0123456789abcdefghij', $1, $2, $3, 'miro', $4, 'Retro', 0, 'paused', '{}'::jsonb, now(), now())`,
+    [IMPORT_JOB, DEV_STUDIO, alice.userId, RETRO_ID],
+  )
   sync.seeds.length = 0
   sync.snapshots.length = 0
   logs.length = 0
   return {
+    miro,
     api,
     receiver,
     hook,
@@ -197,18 +221,18 @@ function probe(
       `/api/workspaces/${wid}/templates/${bid}/use`,
       {},
     ],
-    // wave R (the foundation; pending until WS1, WS2 and WS4 implement them)
+    // wave R: WS1 (Miro, resume), WS4 (a backup restore), WS2 (chat hooks)
     'POST /api/workspaces/:wid/imports/miro/boards': [
       'POST',
       `/api/workspaces/${wid}/imports/miro/boards`,
-      {},
+      { token: FAKE_MIRO_TOKEN },
     ],
     'POST /api/workspaces/:wid/imports/miro': [
       'POST',
       `/api/workspaces/${wid}/imports/miro`,
-      { boards: [{ miroBoardId: 'uXjVOD1Ab2c=' }] },
+      { token: FAKE_MIRO_TOKEN, boards: [{ miroBoardId: RETRO_ID }] },
     ],
-    'POST /api/imports/:id/resume': ['POST', `/api/imports/${IMPORT_JOB}/resume`, {}],
+    'POST /api/imports/:id/resume': ['POST', `/api/imports/${IMPORT_JOB}/resume`, { token: FAKE_MIRO_TOKEN }],
     'POST /api/workspaces/:wid/backups': ['POST', `/api/workspaces/${wid}/backups`, {}],
     'GET /api/workspaces/:wid/chat-hooks': ['GET', `/api/workspaces/${wid}/chat-hooks`, undefined],
     'POST /api/workspaces/:wid/chat-hooks': [
@@ -269,6 +293,7 @@ let w: World
 afterEach(async () => {
   await w?.api.close()
   await w?.receiver.close()
+  await w?.miro.close()
 })
 
 describe('the creation matrix', () => {
@@ -342,9 +367,11 @@ describe('the creation matrix', () => {
       const [method, url, body] = probe(w, key)
       const res = await w.alice.req(method, url, body)
       // A create or share call that answers 204 created nothing, so only a DELETE row (wave M's template removal,
-      // M8-3) may answer 204, and it must.
-      const ok = key.startsWith('DELETE ') ? [204] : [200, 201]
+      // M8-3) may answer 204, and it must; a call that starts a job (wave R) answers 202.
+      const ok = key.startsWith('DELETE ') ? [204] : ACCEPTED.has(key) ? [202] : [200, 201]
       expect(ok, `${key}: ${res.statusCode} ${res.body}`).toContain(res.statusCode)
+      // a job it started runs to its end before the next call (one unfinished job per person)
+      await importRunnerOf(w.api.app)?.idle()
     }
   })
 

@@ -17,6 +17,7 @@
     "@draftroom/contracts": "workspace:*",
     "@draftroom/db": "workspace:*",
     "@draftroom/dev-assets": "workspace:*",
+    "@draftroom/miro-import": "workspace:*",
     "@draftroom/permissions": "workspace:*",
     "@draftroom/tldraw-import": "workspace:*",
     "@fastify/cookie": "catalog:",

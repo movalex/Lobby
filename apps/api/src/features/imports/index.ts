@@ -16,12 +16,11 @@
 // source is registered and a job started): the rows of a process that is gone become `interrupted` (at start-up, then
 // every IMPORT_STALE_HEARTBEAT_MS), and the hourly sweep removes importing boards nobody will finish.
 
-import { IMPORT_ROUTE_KEYS, IMPORT_STALE_HEARTBEAT_MS } from '@draftroom/contracts'
+import { IMPORT_STALE_HEARTBEAT_MS } from '@draftroom/contracts'
 import type { FastifyInstance } from 'fastify'
 import { errorFacts } from '../../egress/index.ts'
-import { notFound } from '../../errors.ts'
 import type { FeatureContext } from '../context.ts'
-import { type PendingMethod, routeUnlessPending } from '../pending-routes.ts'
+import { registerImportRoutes } from './routes.ts'
 import { createImportRunner, type ImportRunner } from './runner.ts'
 
 export const IMPORT_SWEEP_INTERVAL_MS = 60 * 60_000
@@ -73,12 +72,6 @@ export async function registerImports(app: FastifyInstance, ctx: FeatureContext)
     await runner.close()
   })
 
-  // pending until WS1 implements them (R1-4): never registered while listed in PENDING_ROUTES
-  const stub = async () => {
-    throw notFound()
-  }
-  for (const key of IMPORT_ROUTE_KEYS) {
-    const [method, url] = key.split(' ') as [PendingMethod, string]
-    routeUnlessPending(app, method, url, stub)
-  }
+  // the six job routes (WS1, R1-4): ./routes.ts
+  await registerImportRoutes(app, ctx, runner)
 }

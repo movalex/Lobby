@@ -1,27 +1,16 @@
 // The wave R foundation's web side (docs/WAVE-R-CONTRACTS.md §7): nothing changes for a user. The Import control is
-// today's single button while its switches are off (a dev-auth page may turn them on); the import, Miro and backup
-// clients answer empty and reject writes with 'unavailable', without a single request. (The chat hook client is live since
-// WS2: features/notify-settings/client.test.ts.)
+// today's single button while its switches are off (a dev-auth page may turn them on); the backup client answers
+// empty and rejects writes with 'unavailable', without a single request. (WS2 made the chat hook client live:
+// features/notify-settings/client.test.ts; WS1 the import job and Miro clients: import-miro/client.test.ts.)
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { backupTicket, restoreBackup } from './import-backup/client.ts'
 import { IMPORT_MENU_FLAGS, IMPORT_MENU_KEYS, importMenuFlags } from './import-menu/flags.ts'
 import { ImportMenu, importMenuEntries } from './import-menu/ImportMenu.tsx'
-import { listMiroBoards, startMiroImport } from './import-miro/client.ts'
-import {
-  cancelImport,
-  getImportJob,
-  ImportRequestError,
-  importReportHref,
-  importsAvailable,
-  listImportJobs,
-  pauseImport,
-  resumeImport,
-} from './imports/client.ts'
+import { ImportRequestError } from './imports/client.ts'
 
 const W = 'wsp_0123456789abcdefghij'
-const IMP = 'imp_0123456789abcdefghij'
 
 describe('the Import control', () => {
   it('ships with every switch off', () => {
@@ -85,19 +74,7 @@ describe('the wave R clients (stubs)', () => {
     expect((e as { code: string }).code).toBe('unavailable')
   }
 
-  it('imports: empty reads, refused writes, no request', async () => {
-    expect(importsAvailable()).toBe(false)
-    expect(await getImportJob(IMP)).toBeNull()
-    expect(await listImportJobs(W, { mine: true })).toEqual([])
-    expect(importReportHref(IMP)).toBe(`/api/imports/${IMP}/report.csv`)
-    await rejectsUnavailable(cancelImport(IMP), ImportRequestError)
-    await rejectsUnavailable(pauseImport(IMP), ImportRequestError)
-    await rejectsUnavailable(resumeImport(IMP, 'token-0123456789abcdef'), ImportRequestError)
-    await rejectsUnavailable(listMiroBoards(W, 'token-0123456789abcdef'), ImportRequestError)
-    await rejectsUnavailable(
-      startMiroImport(W, 'token-0123456789abcdef', { boards: [{ miroBoardId: 'uXjVOD1Ab2c=' }] }),
-      ImportRequestError,
-    )
+  it('backup: refused writes, no request', async () => {
     await rejectsUnavailable(backupTicket('b-abc1234567'), ImportRequestError)
     await rejectsUnavailable(restoreBackup(W, new Blob(['PK'])), ImportRequestError)
     expect(fetchSpy).not.toHaveBeenCalled()

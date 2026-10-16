@@ -3,7 +3,7 @@
 // seeds before it creates the board row, so no ticket for the id exists yet and nothing can race the seed.
 // Still 409 when the board already has a file: seeding never overwrites.
 //
-// Two bodies:
+// Three bodies:
 //  - `{ format: 'lobby-elements', elements, doc }`: elements of the new canvas (a v2 checkpoint, the live
 //    board of a duplicate, a v2 archive). Live elements only (tombstones are dropped).
 //  - `{ snapshot: { schema, documents } }`: tldraw records, the body today's api sends (a v1 checkpoint, a
@@ -13,6 +13,12 @@
 //    them is refused 413 IMPORT_TOO_LARGE (records, bytes, heap) or 422 IMPORT_TOO_COMPLEX (time), and 503 BUSY
 //    when the one conversion place and its short queue are taken, or the process has no memory to spare for a
 //    worker just now. Nothing is created for a refused body.
+//  - `{ format: 'miro-v2', board, items, connectors, groups, tags, tagItems, members, files }` (wave R, WS1): what
+//    the api read from Miro for an import job (packages/miro-import sources.ts MiroSeedBody), converted in a worker
+//    thread with its own limits (./convert-miro.ts, the same rules as the v1 conversion) by packages/miro-import.
+//    The answer adds the board's `report` (contracts ImportBoardReport: counts, notes, a row per Miro item; ids
+//    and codes only), which the api stores with the job. No `import` doc key is written (ImportDocValue is the
+//    tldraw conversion's): Miro provenance lives in Postgres (board_imports).
 //
 // Either way every element passes the room's own per-element check (canvas-schema checkElement: the strict
 // schema, byte limits, the customData registry) and the cross-element invariants (§2.4.4), the board caps
@@ -31,11 +37,13 @@ import { compareByIndex, indexKeysBetween, isValidIndexKey } from '@draftroom/ca
 import { checkInvariants } from '@draftroom/canvas-schema/invariants'
 import { MAX_ITEMS, MAX_LIVE_ELEMENTS, MAX_TAG_DEFS } from '@draftroom/canvas-schema/limits'
 import { REACTION_KEY_PREFIX } from '@draftroom/canvas-schema/reactions'
+import type { ImportBoardReport } from '@draftroom/contracts'
 import type { InternalRoute, RoomExtensionContext, ServerWriteChange } from '../engine-switch.ts'
 import { readJson } from '../http/body.ts'
 import { HttpError, sendJson } from '../http/respond.ts'
 import { importDoc } from '../room/migrate/convert-board.ts'
 import { boardParam, boardPath, writeBoard } from './board.ts'
+import { convertMiroForSeed, miroRefusalError } from './convert-miro.ts'
 import { convertForSeed, seedRefusalError } from './convert-v1.ts'
 import { type El, isLabel, isObject, withoutLobbyKeys } from './elements.ts'
 
@@ -45,6 +53,8 @@ export const SEED_LIMIT_BYTES = 64 * 1024 * 1024
 export interface SeedContent {
   elements: WireElement[]
   doc: Record<string, unknown>
+  /** a Miro body's report (the seed answers with it); absent for the other formats */
+  report?: ImportBoardReport
 }
 
 const invalid = (message: string) => new HttpError(400, 'bad-request', message)
@@ -67,6 +77,16 @@ async function fromTldraw(snapshot: unknown, now: number): Promise<SeedContent> 
   for (const [key, def] of Object.entries(converted.doc.tagDefs)) doc[`tagDef:${key}`] = def
   doc.import = importDoc(now, converted.legacyPages, converted.legacyIds, converted.lossy)
   return { elements: converted.elements as unknown as WireElement[], doc }
+}
+
+/** A `miro-v2` body (wave R): Miro items → elements, the tag definitions and the report, in a worker thread. */
+async function fromMiro(body: Record<string, unknown>, now: number): Promise<SeedContent> {
+  if (!Array.isArray(body.items) || !Array.isArray(body.connectors))
+    throw invalid('A miro-v2 body needs items and connectors.')
+  const out = await convertMiroForSeed(body, now)
+  if (!out.ok) throw miroRefusalError(out.reason)
+  const { elements, doc, report } = out.converted
+  return { elements: elements as unknown as WireElement[], doc, report }
 }
 
 /**
@@ -158,8 +178,11 @@ export function prepareSeedContent(raw: SeedContent): SeedContent {
 export async function parseSeedBody(body: unknown, now: number): Promise<SeedContent> {
   if (!isObject(body)) throw invalid('Expected a JSON object.')
   if (body.snapshot !== undefined) return await fromTldraw(body.snapshot, now)
+  if (body.format === 'miro-v2') return await fromMiro(body, now)
   if (body.format !== 'lobby-elements' || !Array.isArray(body.elements))
-    throw invalid('Expected { format: "lobby-elements", elements, doc } or { snapshot }.')
+    throw invalid(
+      'Expected { format: "lobby-elements", elements, doc }, { format: "miro-v2", … } or { snapshot }.',
+    )
   const doc = body.doc === undefined ? {} : body.doc
   if (!isObject(doc)) throw invalid('doc must be an object.')
   return { elements: body.elements as WireElement[], doc }
@@ -168,7 +191,8 @@ export async function parseSeedBody(body: unknown, now: number): Promise<SeedCon
 async function handleSeed(ctx: RoomExtensionContext, req: IncomingMessage, res: ServerResponse, raw: string) {
   const boardId = boardParam(raw)
   const now = ctx.deps.now?.() ?? Date.now()
-  const content = prepareSeedContent(await parseSeedBody(await readJson(req, SEED_LIMIT_BYTES), now))
+  const parsed = await parseSeedBody(await readJson(req, SEED_LIMIT_BYTES), now)
+  const content = prepareSeedContent(parsed)
   const path = boardPath(ctx, boardId)
   if (existsSync(path) || ctx.service.roomIfOpen(boardId))
     throw new HttpError(
@@ -204,7 +228,12 @@ async function handleSeed(ctx: RoomExtensionContext, req: IncomingMessage, res: 
       for (const p of [path, `${path}-wal`, `${path}-shm`]) rmSync(p, { force: true })
     throw e
   }
-  sendJson(res, 201, { boardId, records: content.elements.length, format: 'lobby-elements' })
+  sendJson(res, 201, {
+    boardId,
+    records: content.elements.length,
+    format: 'lobby-elements',
+    ...(parsed.report ? { report: parsed.report } : {}),
+  })
 }
 
 export function seedRoutes(ctx: RoomExtensionContext): InternalRoute[] {

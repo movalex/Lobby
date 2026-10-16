@@ -81,6 +81,9 @@ export default defineConfig({
             // spike B: O4's converter package
             'packages/tldraw-import/src/**/*.test.ts',
             'packages/tldraw-import/test/**/*.test.ts',
+            // wave R (WS1): the Miro converter
+            'packages/miro-import/src/**/*.test.ts',
+            'packages/miro-import/test/**/*.test.ts',
           ],
           testTimeout: 60_000,
         },
