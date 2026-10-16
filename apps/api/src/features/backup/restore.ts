@@ -87,7 +87,23 @@ const REPORT_ROWS = 500
 /** How long a job's board waits for this process's route to hand it the spool it is writing. */
 const SPOOL_HANDOVER_MS = 10_000
 
+/** How long a refused restore waits for its job to end before it answers (a busy runner may hold it in its queue). */
+const JOB_SETTLE_MS = 10_000
+
 export const spoolKey = (importId: string) => `imports/${importId}/backup.lobby`
+
+/** Waits (bounded) until every row of the job has ended. */
+async function jobEnded(db: Queryable, importId: string, ms: number): Promise<void> {
+  const until = Date.now() + ms
+  while (Date.now() < until) {
+    const open = await db.one<{ n: number }>(
+      `SELECT count(*)::int AS n FROM board_imports WHERE batch_id = $1 AND status IN ('queued', 'running')`,
+      [importId],
+    )
+    if (open.n === 0) return
+    await new Promise((r) => setTimeout(r, 25))
+  }
+}
 
 // The body has not been read when these are thrown: close the connection instead of draining it.
 const CLOSE = { connection: 'close' }
@@ -241,6 +257,8 @@ export async function handleRestore(
           : IMPORT_CODES.internal
     settle({ ok: false, code })
     await deleteQuietly(ctx.blobs, [key], () => {})
+    // the refusal answers once its job has ended (failed with this code), so the person can try again at once
+    await jobEnded(db, importId, JOB_SETTLE_MS)
     if (code === IMPORT_CODES.internal) throw e
     if (e instanceof ReceiveError && e.reason !== 'TOO_LARGE')
       throw new ApiError(400, 'UPLOAD_INCOMPLETE', 'The upload ended early.', CLOSE)
