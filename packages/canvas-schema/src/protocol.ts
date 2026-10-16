@@ -29,6 +29,7 @@ import {
   MAX_SEL_IDS,
   WIRE_LIMITS,
 } from './limits.ts'
+import { PLANNING_KEY_CLASSES } from './planning-keys.ts'
 
 /** The wire protocol version (`hello.proto`, `welcome.proto`). */
 export const PROTO = 1 as const
@@ -97,8 +98,20 @@ export const PROTO = 1 as const
  * rule); 13 means the sync's rules for the class (N2-4), its DRAFTROOM_REACTIONS kill switch and the strip-keys
  * route (N2-5). With DRAFTROOM_REACTIONS off the room refuses every reaction write UNAVAILABLE and its `contracts`
  * frame says 12, so no web offers reacting; the rollback below wave N is: off, strip-keys, then the older sync.
+ * Revision 14 (wave T, storyboards and planning walls; docs/WAVE-T-CONTRACTS.md): four `customData.lobby` key classes
+ * (planning-keys.ts; custom-data.ts): work cards `card:status|who|start|due` on rectangles and sticky notes, storyboard
+ * panels `sb:of|pos|dur` on frames and their head `sb:head` on a free text, and the frame keys `kanban` and
+ * `timeline`. Readers below 14 (the deployed 6769e07 web) never get a patch that names one (LOBBY_KEY_ADDITIONS,
+ * `opForReader`; proven against its frozen schemas in reader-rule-rev14.test.ts), and writers below 14 never add,
+ * change or remove one (`lobbyPatchOfWriter`, `lobbyCreateOfWriter`, the room's `keepUnknownKeys`). No new message
+ * type, field or code; ELEMENT_SCHEMA_VERSION, presence and the welcome are unchanged.
+ * DEPLOY: the room says 14 only while its DRAFTROOM_PLANNING kill switch is on (and DRAFTROOM_REACTIONS too: the
+ * `contracts` frame names the newest revision whose switches are all on, apps/sync element-room.ts); off (unset:
+ * fail-closed) it refuses every planning write UNAVAILABLE, keeps the stored keys and says 13, so no web offers
+ * planning. A sync of the wave T foundation alone also refuses every planning write with the switch on (INVALID,
+ * until WS1's rules land). The rollback below 14: off, strip-keys for the four classes, then the older sync.
  */
-export const CONTRACTS_REV = 13
+export const CONTRACTS_REV = 14
 /**
  * The first contracts revision whose presence has `f`, `view.z` and `followers` (see `CONTRACTS_REV`).
  * A client sends them only to a room whose `contracts` frame names this revision or a later one.
@@ -134,6 +147,13 @@ export const RESTORE_ELEMENTS_REV = 12
  * reacting only in a room whose `contracts` frame names this revision or later (CanvasPort `room.contractsRev()`).
  */
 export const REACTIONS_REV = 13
+/**
+ * The first contracts revision with the planning key classes (wave T: planning-keys.ts PLANNING_KEY_CLASSES). A
+ * reader below it never receives a patch that names one (LOBBY_KEY_ADDITIONS, `opForReader`), a writer below it
+ * never writes or removes one, and a web offers storyboards, cards, Kanbans and timelines only in a room whose
+ * `contracts` frame names this revision or later (CanvasPort `room.contractsRev()`).
+ */
+export const PLANNING_REV = 14
 /**
  * The connect URL's parameter that names the contracts revision a client reads (CONTRACTS_REV 12 on):
  * `/connect/:boardId?sessionId=…&rev=<CONTRACTS_REV>`. It tells the room before its first frame (the welcome)
@@ -1060,8 +1080,14 @@ export interface LobbyKeyAddition {
   readonly prefix: string
   readonly since: number
 }
-/** Every `customData.lobby` key class added after revision 12 (custom-data.ts), with its revision. */
-export const LOBBY_KEY_ADDITIONS: readonly LobbyKeyAddition[] = [{ prefix: 'react:', since: REACTIONS_REV }]
+/**
+ * Every `customData.lobby` key class added after revision 12 (custom-data.ts), with its revision. Wave T's `kanban` and
+ * `timeline` are exact keys: no other key starts with either (custom-data test), so the prefix is the key.
+ */
+export const LOBBY_KEY_ADDITIONS: readonly LobbyKeyAddition[] = [
+  { prefix: 'react:', since: REACTIONS_REV },
+  ...PLANNING_KEY_CLASSES.map((prefix) => ({ prefix, since: PLANNING_REV })),
+]
 
 /** Whether a reader (or writer) of revision `rev` does not know the key class of `key` (LOBBY_KEY_ADDITIONS). */
 export function lobbyKeyNewerThan(rev: number, key: string): boolean {
@@ -1222,7 +1248,8 @@ export function opForReader(reader: number, op: ServerOp, stored?: StoredElement
  * (packages/canvas-schema/test/fixtures/). Wave N's reactions (REACTIONS_REV 13): `changes` and the catch-up by
  * `opForReader`; an `ack`'s `fix` (`c:react:…: null` for a stripped create key) and a refusal's element pass as
  * they are (FixFields and WireElement take unknown `customData.lobby` values); `contracts` 13 is read as "12 or
- * later"; nothing else changes.
+ * later"; nothing else changes. Wave T's planning keys (PLANNING_REV 14) take the same rule for readers below 14:
+ * `changes` and the catch-up by `opForReader`, `contracts` 14 read as "13 or later".
  */
 export function frameForReader(
   reader: number,

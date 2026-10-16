@@ -311,6 +311,17 @@ describe('customData classes (§3.3)', () => {
         'prompt',
         'slot',
         'swatch',
+        // wave T (planning-keys.ts)
+        'card:status',
+        'card:who',
+        'card:start',
+        'card:due',
+        'sb:of',
+        'sb:pos',
+        'sb:dur',
+        'sb:head',
+        'kanban',
+        'timeline',
       ].sort(),
     )
     expect(lobbyKeySpec('plusOne:usr_0123456789')?.class).toBe('identity-bound')
@@ -319,6 +330,12 @@ describe('customData classes (§3.3)', () => {
     expect(lobbyKeySpec('ai')?.duplicate).toBe('strip')
     expect(lobbyKeySpec('present')?.duplicate).toBe('strip-index')
     expect(lobbyKeySpec('whatever')).toBeNull()
+    expect(lobbyKeySpec('card:who')?.class).toBe('api-validated')
+    expect(lobbyKeySpec('card:status')?.class).toBe('free')
+    expect(lobbyKeySpec('sb:of')?.duplicate).toBe('relink-keep')
+    expect(lobbyKeySpec('sb:head')?.duplicate).toBe('relink-keep')
+    expect(lobbyKeySpec('card:other')).toBeNull()
+    expect(lobbyKeySpec('sb:')).toBeNull()
   })
 
   it('a lock lets through only the writer’s own +1 and a frame’s present (CR-3F-2, CR-3b-4)', () => {

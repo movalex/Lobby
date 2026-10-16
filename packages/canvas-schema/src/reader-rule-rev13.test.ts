@@ -12,8 +12,9 @@
 //     becomes the `c` op of the stored element); `frameForReader(13, frame)` is the frame itself;
 //  4. the writer side: a rev-12 writer never writes, removes or forges a reaction (`lobbyPatchOfWriter`,
 //     `lobbyCreateOfWriter`).
-// This package says CONTRACTS_REV 13 (the room says 13 once the sync's rules for the class landed, N2-4); the rule
-// serves every reader below REACTIONS_REV, as it did while the foundation still said 12.
+// This package said CONTRACTS_REV 13 (the room says 13 once the sync's rules for the class landed, N2-4); the rule
+// serves every reader below REACTIONS_REV, as it did while the foundation still said 12. Since wave T it says 14
+// (reader-rule-rev14.test.ts proves wave T's key classes against the rev-13 web); what is pinned here still holds.
 
 import { REACTION_CODES } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
@@ -132,14 +133,16 @@ const opsOf = (f: ServerMessage) => (f as { ops: ServerOp[] }).ops
 // ---- 1. the fixture, and what wave N changes in a server frame ------------------------------------------------------
 
 describe('the frozen 3c83611 schemas', () => {
-  it('are the rev-12 contracts the deployed web and sync run; this package says 13, the reactions revision', () => {
+  it('are the rev-12 contracts the wave N deploy found; this package is past the reactions revision (14 since wave T)', () => {
     expect(Old.CONTRACTS_REV).toBe(12)
-    expect(CONTRACTS_REV).toBe(13)
-    expect(CONTRACTS_REV).toBe(REACTIONS_REV)
+    expect(CONTRACTS_REV).toBe(14)
+    expect(CONTRACTS_REV).toBeGreaterThan(REACTIONS_REV)
     expect(REACTIONS_REV).toBe(13)
-    expect(READER_RULE_REV).toBe(13)
+    expect(READER_RULE_REV).toBe(14)
     expect(UNANNOUNCED_REV).toBe(11)
-    expect(LOBBY_KEY_ADDITIONS).toEqual([{ prefix: 'react:', since: REACTIONS_REV }])
+    expect(LOBBY_KEY_ADDITIONS.filter((a) => a.since <= REACTIONS_REV)).toEqual([
+      { prefix: 'react:', since: REACTIONS_REV },
+    ])
     expect(LOBBY_FIELD_ADDITIONS).toEqual([{ key: 'present', field: 'mins', since: PRESENT_MINS_REV }])
   })
 })
@@ -180,7 +183,12 @@ describe('what wave N changes in a server frame (a diff against the deployed web
         duplicate,
         lockExempt,
       }))
-    const now = specs(Custom.LOBBY_KEY_SPECS)
+    // wave T's classes (since 14) are reader-rule-rev14.test.ts's diff
+    const now = specs(
+      Custom.LOBBY_KEY_SPECS.filter(
+        (s) => !LOBBY_KEY_ADDITIONS.some((a) => a.since > REACTIONS_REV && s.name.startsWith(a.prefix)),
+      ),
+    )
     const before = specs(OldCustom.LOBBY_KEY_SPECS as never)
     const added = now.filter((s) => !before.some((b) => b.name === s.name))
     expect(added).toEqual([

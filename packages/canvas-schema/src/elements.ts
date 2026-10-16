@@ -32,6 +32,7 @@ import {
   MAX_TEXT_CHARS,
   maxElementBytes,
 } from './limits.ts'
+import { planningElementProblem } from './planning-keys.ts'
 
 /** Types Lobby stores (§3.1). */
 export const ELEMENT_TYPES = [
@@ -390,6 +391,13 @@ export function checkElement(raw: unknown): ElementCheck {
   if (lobby) {
     const check = checkLobbyData(lobby)
     if (!check.ok) return check
+    // wave T (CONTRACTS_REV 14): which element types the planning keys go on, and their cross-key rules
+    const planning = planningElementProblem(
+      el.type,
+      (el as { containerId?: string | null }).containerId,
+      lobby,
+    )
+    if (planning) return { ok: false, code: 'INVALID', detail: planning }
   }
   return { ok: true, element: el }
 }

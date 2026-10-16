@@ -181,9 +181,9 @@ const afterOf = (el: Elements.WireElement, lobby: Record<string, unknown>): Elem
 // ---- 1. what changed since the deployed web, by diff ---------------------------------------------------------------
 
 describe('the frozen 437b4e7 schemas', () => {
-  it('are the rev-11 contracts the rev-11 web runs; this package is two revisions on (12, and 13: reader-rule-rev13.test.ts)', () => {
+  it('are the rev-11 contracts the rev-11 web runs; this package is three revisions on (12; 13: reader-rule-rev13.test.ts; 14: reader-rule-rev14.test.ts)', () => {
     expect(Old.CONTRACTS_REV).toBe(11)
-    expect(CONTRACTS_REV).toBe(13)
+    expect(CONTRACTS_REV).toBe(14)
     expect(UNANNOUNCED_REV).toBe(Old.CONTRACTS_REV)
   })
 })
@@ -228,8 +228,11 @@ describe('what rev 12 changed in a server frame (a diff against the deployed web
         duplicate,
         lockExempt,
       }))
-    // wave N's key classes (LOBBY_KEY_ADDITIONS, reader-rule-rev13.test.ts) are left out of this rev-11 diff
-    const known = Custom.LOBBY_KEY_SPECS.filter((s) => !LOBBY_KEY_ADDITIONS.some((a) => a.prefix === s.name))
+    // wave N's and wave T's key classes (LOBBY_KEY_ADDITIONS, reader-rule-rev13.test.ts, reader-rule-rev14.test.ts) are
+    // left out of this rev-11 diff (wave T's are exact keys of a class: `card:status` of `card:`)
+    const known = Custom.LOBBY_KEY_SPECS.filter(
+      (s) => !LOBBY_KEY_ADDITIONS.some((a) => s.name.startsWith(a.prefix)),
+    )
     expect(specs(known)).toEqual(specs(OldCustom.LOBBY_KEY_SPECS as never))
     expect(Object.keys(Custom.LobbyServer.shape).sort()).toEqual(
       Object.keys(OldCustom.LobbyServer.shape).sort(),

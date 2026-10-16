@@ -26,6 +26,20 @@ import {
   REACTIONS_MAX,
   VERSION_ID_PATTERN,
 } from './limits.ts'
+import {
+  CARD_DUE_KEY,
+  CARD_START_KEY,
+  CARD_STATUS_KEY,
+  CARD_WHO_KEY,
+  KANBAN_KEY,
+  PLANNING_VALUES,
+  type PlanningKey,
+  SB_DUR_KEY,
+  SB_HEAD_KEY,
+  SB_OF_KEY,
+  SB_POS_KEY,
+  TIMELINE_KEY,
+} from './planning-keys.ts'
 import { parseReactionKey, REACTION_KEY_PREFIX } from './reactions.ts'
 
 /** The two top-level `customData` keys (§3.3). Anything else is `INVALID`. */
@@ -43,15 +57,20 @@ export const CUSTOM_DATA_KEYS = ['lobby', 'lobbyServer'] as const
  * 4. `api-validated` — `file` (canonicalized from the file-refs answer; `versionId` must equal the
  *    version in `fileId`; `name` is client-writable) and `pdfPage` (derived from the `.p<n>` suffix).
  * 5. `free` — zod per key.
+ * Wave T (CONTRACTS_REV 14, planning-keys.ts): the planning keys `card:status|who|start|due`, `sb:of|pos|dur|head`,
+ * `kanban` and `timeline` are `free` but for `card:who`, which is `api-validated` (an account with a role on the
+ * board, from the api's assignee-refs answer); their per-element rules are planning-keys.ts planningElementProblem.
  */
 export type CustomDataClass = 'server-owned' | 'create-only' | 'identity-bound' | 'api-validated' | 'free'
 
 /**
  * What `onDuplicate` (Ctrl+D, Alt-drag, paste) does with a key (§3.3 "On duplicate / paste"):
  * `keep` it; `strip` it; `relink` the element ids inside it to the copies, or strip it when the copy
- * leaves the tree (`mindmap`, `mindmapEdge`); `strip-index` removes only `present.index`.
+ * leaves the tree (`mindmap`, `mindmapEdge`); `strip-index` removes only `present.index`; `relink-keep` (wave T:
+ * `sb:of`, `sb:head`) points the element ids inside it at the copies where the copy set has them and KEEPS every other
+ * one (planning-keys.ts relinkKeep: a panel copied without its head joins the same storyboard).
  */
-export type DuplicateRule = 'keep' | 'strip' | 'relink' | 'strip-index'
+export type DuplicateRule = 'keep' | 'strip' | 'relink' | 'strip-index' | 'relink-keep'
 
 export interface LobbyKeySpec {
   /** `exact`: the key is `name`; `prefix`: the key is `name` + a suffix (`tag:<tagKey>`, `plusOne:<uid>`). */
@@ -152,6 +171,20 @@ const PresentValue = z.strictObject({
 /** `prompt`, `slot`, `swatch`: a template's marker (a short word such as `image`, `color` or `true`). */
 const MarkerValue = z.union([z.boolean(), z.string().min(1).max(64)])
 
+/** A planning key's spec (wave T, planning-keys.ts): exact, its value and size from PLANNING_VALUES. */
+const planningSpec = (
+  name: PlanningKey,
+  duplicate: DuplicateRule,
+  cls: 'free' | 'api-validated' = 'free',
+): LobbyKeySpec => ({
+  match: 'exact',
+  name,
+  class: cls,
+  value: PLANNING_VALUES[name].value,
+  maxBytes: PLANNING_VALUES[name].maxBytes,
+  duplicate,
+})
+
 export const TAG_KEY_PREFIX = 'tag:'
 export const PLUS_ONE_KEY_PREFIX = 'plusOne:'
 
@@ -245,6 +278,19 @@ export const LOBBY_KEY_SPECS: readonly LobbyKeySpec[] = [
   { match: 'exact', name: 'prompt', class: 'free', value: MarkerValue, maxBytes: 72, duplicate: 'keep' },
   { match: 'exact', name: 'slot', class: 'free', value: MarkerValue, maxBytes: 72, duplicate: 'keep' },
   { match: 'exact', name: 'swatch', class: 'free', value: MarkerValue, maxBytes: 72, duplicate: 'keep' },
+  // wave T (CONTRACTS_REV 14, protocol.ts PLANNING_REV and LOBBY_KEY_ADDITIONS; planning-keys.ts): a reader below 14
+  // never receives a patch that names one, and a writer below 14 never writes one. No lock exemption: a locked card
+  // or panel stays as it is. A copied card is a card, a copied panel a panel (relinked to a copied head).
+  planningSpec(CARD_STATUS_KEY, 'keep'),
+  planningSpec(CARD_WHO_KEY, 'keep', 'api-validated'),
+  planningSpec(CARD_START_KEY, 'keep'),
+  planningSpec(CARD_DUE_KEY, 'keep'),
+  planningSpec(SB_OF_KEY, 'relink-keep'),
+  planningSpec(SB_POS_KEY, 'keep'),
+  planningSpec(SB_DUR_KEY, 'keep'),
+  planningSpec(SB_HEAD_KEY, 'relink-keep'),
+  planningSpec(KANBAN_KEY, 'keep'),
+  planningSpec(TIMELINE_KEY, 'keep'),
 ]
 
 const EXACT = new Map(LOBBY_KEY_SPECS.filter((s) => s.match === 'exact').map((s) => [s.name, s]))

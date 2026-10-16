@@ -1,6 +1,6 @@
 // Freezes the wire schemas a deployed web build parses server frames with, as a test fixture (the per-reader
 // downgrade rule, docs/EXCALIDRAW-CONTRACTS.md §0b): canvas-schema's protocol.ts and every module it imports
-// (custom-data, doc, elements, hash, limits; from wave N also reactions) and the @draftroom/contracts modules those
+// (custom-data, doc, elements, hash, limits; from wave N also reactions; from wave T also planning-keys) and the @draftroom/contracts modules those
 // import (tags, mindmap; from wave N also workshops), each exactly as `git show <commit>:<path>` gives it, with
 // a header naming the commit and the blob, and the `@draftroom/contracts` import pointed at the frozen copies
 // beside it. The stale-pair tests parse the room's frames with them (packages/canvas-schema/src/reader-rule.test.ts,
@@ -42,6 +42,10 @@ const FILES = [
     'packages/contracts/src/workshops.ts',
     { optional: true, onlyWith: 'packages/canvas-schema/src/reactions.ts' },
   ],
+  // wave T (CONTRACTS_REV 14 on): custom-data.ts, elements.ts and protocol.ts import ./planning-keys.ts (zod, limits.ts
+  // and the bare @excalidraw/fractional-indexing, which resolves from the fixture folder as it is). Optional: a commit
+  // before wave T has none (the rev-13 freeze and older).
+  ['planning-keys.ts', 'packages/canvas-schema/src/planning-keys.ts', { optional: true }],
 ]
 /** What each frozen file imports from @draftroom/contracts, and the frozen copies that hold it. */
 const CONTRACTS_IMPORTS = {

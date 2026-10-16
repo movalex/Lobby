@@ -818,14 +818,14 @@ describe('CONTRACTS_REV 12: the shared laser, present.mins and the restore marke
       typeof PeerPresence.parse
     >
 
-  it('the laser, present.mins and the restore route all start at revision 12 (the room says 13 since wave N)', () => {
-    expect(CONTRACTS_REV).toBe(13)
+  it('the laser, present.mins and the restore route all start at revision 12 (the room says 14 since wave T)', () => {
+    expect(CONTRACTS_REV).toBe(14)
     expect(PRESENCE_LASER_REV).toBe(12)
     expect(PRESENT_MINS_REV).toBe(12)
     expect(RESTORE_ELEMENTS_REV).toBe(12)
     expect(MAX_LASER_TRAIL_POINTS).toBe(6)
     expect(MAX_LASER_TRAIL_POINTS_WIRE).toBeGreaterThan(MAX_LASER_TRAIL_POINTS)
-    expect([9, 10, 11, 12, 13].map(presenceReaderRev)).toEqual([9, 10, 10, 12, 12])
+    expect([9, 10, 11, 12, 13, 14].map(presenceReaderRev)).toEqual([9, 10, 10, 12, 12, 12])
   })
 
   it('(a) a rev-11 tab in a rev-12 room: everything it sends parses as before (the new fields are optional)', () => {
