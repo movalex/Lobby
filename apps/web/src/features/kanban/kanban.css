@@ -1,0 +1,236 @@
+/* Kanban columns (wave T, WS4): an overlay in scene units over each Kanban frame (it scales with the camera). The
+   header band names each column, counts its cards and warns, with an icon and words, over the WIP limit or when cards
+   stand in another column than their status's. Only the controls take pointers. */
+
+.dr-kanban-scene {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+.dr-kanban {
+  position: absolute;
+  pointer-events: none;
+}
+.dr-kanban-col {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  box-sizing: border-box;
+}
+.dr-kanban-col:not([data-first]) {
+  border-left: 2px dashed color-mix(in srgb, var(--dr-line-strong) 70%, transparent);
+}
+.dr-kanban-head {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 14px;
+  border-bottom: 2px solid color-mix(in srgb, var(--dr-line-strong) 80%, transparent);
+  /* the overlay is above the canvas: the band is light enough to show what lies under it */
+  background: color-mix(in srgb, var(--dr-surface) 72%, transparent);
+  color: var(--dr-ink);
+  font: 600 16px / 1.2 var(--dr-font);
+}
+.dr-kanban-head__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.dr-kanban-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 4px;
+  margin: 0 -4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: 700 18px / 1.2 var(--dr-font);
+  text-align: left;
+  pointer-events: auto;
+}
+button.dr-kanban-name {
+  cursor: text;
+}
+button.dr-kanban-name:hover {
+  background: var(--dr-hover);
+}
+span.dr-kanban-name {
+  pointer-events: none;
+}
+.dr-kanban-rename {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 2px solid var(--dr-focus);
+  border-radius: 6px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 700 18px / 1.2 var(--dr-font);
+  pointer-events: auto;
+}
+.dr-kanban-count {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 8px;
+  box-sizing: border-box;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--dr-chip);
+  color: var(--dr-ink);
+  font: 700 13px / 1 var(--dr-font);
+}
+.dr-kanban-head[data-over] .dr-kanban-count {
+  background: var(--dr-danger-bg);
+  color: var(--dr-danger);
+}
+.dr-kanban-menu,
+.dr-kanban-hidden,
+.dr-kanban-tidy {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: var(--dr-ink);
+  font: 600 13px / 1 var(--dr-font);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.dr-kanban-menu {
+  margin-left: auto;
+  font-size: 18px;
+}
+.dr-kanban-hidden {
+  border-color: var(--dr-line-strong);
+  color: var(--dr-placeholder);
+}
+.dr-kanban-menu:hover,
+.dr-kanban-hidden:hover {
+  background: var(--dr-hover);
+}
+.dr-kanban-strays {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--dr-warn);
+  font: 600 13px / 1.2 var(--dr-font);
+}
+.dr-kanban-strays span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-kanban-tidy {
+  height: 24px;
+  border-color: var(--dr-warn-line);
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+}
+.dr-kanban-tidy:hover {
+  border-color: var(--dr-warn);
+}
+
+/* ---- the column menu (screen pixels) ------------------------------------------------------------------------------ */
+.dr-kanban-popover {
+  position: absolute;
+  width: 240px;
+  box-sizing: border-box;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-radius: var(--dr-radius);
+  border: 1px solid var(--dr-line);
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  box-shadow: var(--dr-shadow-pop);
+  pointer-events: auto;
+  font: 14px / 1.4 var(--dr-font);
+}
+.dr-kanban-popover__title {
+  margin: 2px 6px 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--dr-placeholder);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dr-kanban-popover__item {
+  min-height: 34px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--dr-ink);
+  font: 14px / 1.2 var(--dr-font);
+  text-align: left;
+  cursor: pointer;
+}
+.dr-kanban-popover__item:hover:not(:disabled) {
+  background: var(--dr-hover);
+}
+.dr-kanban-popover__item:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.dr-kanban-popover__wip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--dr-line);
+  margin-top: 4px;
+  font-size: 13px;
+}
+.dr-kanban-popover__wip label {
+  flex: none;
+}
+.dr-kanban-popover__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-kanban-popover__list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px;
+}
+
+/* ---- focus (last) ------------------------------------------------------------------------------------------------- */
+button.dr-kanban-name:focus-visible,
+.dr-kanban-menu:focus-visible,
+.dr-kanban-hidden:focus-visible,
+.dr-kanban-tidy:focus-visible,
+.dr-kanban-popover__item:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+.dr-kanban-count__n {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}

@@ -1,0 +1,472 @@
+/* Work cards (wave T, WS4). UI uses the --dr-* tokens from styles.css (both themes). Every status has its own icon and
+   words, so none rests on colour alone; each pair is AA text on its own fill. */
+
+/* ---- the status colour pairs (chips, the selection bar, the popover's buttons, the table) ------------------------ */
+.dr-card-status,
+.dr-card-statusbtn {
+  --dr-card-fill: var(--dr-chip);
+  --dr-card-ink: var(--dr-ink);
+  --dr-card-line: var(--dr-line-strong);
+}
+[data-status="doing"].dr-card-status,
+[data-status="doing"].dr-card-statusbtn {
+  --dr-card-fill: var(--dr-accent-bg);
+  --dr-card-ink: var(--dr-accent-ink);
+  --dr-card-line: var(--dr-accent-line);
+}
+[data-status="review"].dr-card-status,
+[data-status="review"].dr-card-statusbtn {
+  --dr-card-fill: var(--dr-warn-bg);
+  --dr-card-ink: var(--dr-warn);
+  --dr-card-line: var(--dr-warn-line);
+}
+[data-status="blocked"].dr-card-status,
+[data-status="blocked"].dr-card-statusbtn {
+  --dr-card-fill: var(--dr-danger-bg);
+  --dr-card-ink: var(--dr-danger);
+  --dr-card-line: color-mix(in srgb, var(--dr-danger) 40%, transparent);
+}
+[data-status="done"].dr-card-status,
+[data-status="done"].dr-card-statusbtn {
+  --dr-card-fill: var(--dr-live-bg);
+  --dr-card-ink: var(--dr-live);
+  --dr-card-line: color-mix(in srgb, var(--dr-live) 45%, transparent);
+}
+
+/* ---- the chips on the canvas (scene units: they scale with the camera; below 100 % they keep their size) -------- */
+.dr-card-scene {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+.dr-card-box {
+  position: absolute;
+  pointer-events: none;
+}
+.dr-card-chips {
+  --s: var(--dr-card-s, 1);
+  position: absolute;
+  left: calc(8px * var(--s));
+  right: calc(8px * var(--s));
+  bottom: calc(8px * var(--s));
+  display: flex;
+  align-items: center;
+  gap: calc(4px * var(--s));
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: 600 calc(11px * var(--s)) / 1 var(--dr-font);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  pointer-events: auto;
+  overflow: hidden;
+  border-radius: calc(10px * var(--s));
+}
+.dr-card-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: calc(4px * var(--s, 1));
+  height: calc(20px * var(--s, 1));
+  padding: 0 calc(8px * var(--s, 1)) 0 calc(6px * var(--s, 1));
+  border-radius: 999px;
+  border: 1px solid var(--dr-card-line, var(--dr-line-strong));
+  background: var(--dr-card-fill, var(--dr-surface));
+  color: var(--dr-card-ink, var(--dr-ink));
+  white-space: nowrap;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.08);
+}
+.dr-card-chip[data-compact] {
+  padding: 0 calc(4px * var(--s, 1));
+}
+.dr-card-chip svg {
+  flex: none;
+  width: calc(12px * var(--s, 1));
+  height: calc(12px * var(--s, 1));
+}
+.dr-card-chip__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dr-card-due {
+  --dr-card-fill: var(--dr-surface);
+  --dr-card-ink: var(--dr-ink);
+}
+.dr-card-due[data-soon] {
+  --dr-card-fill: var(--dr-warn-bg);
+  --dr-card-ink: var(--dr-warn);
+  --dr-card-line: var(--dr-warn-line);
+}
+.dr-card-due[data-overdue] {
+  --dr-card-fill: var(--dr-danger-bg);
+  --dr-card-ink: var(--dr-danger);
+  --dr-card-line: color-mix(in srgb, var(--dr-danger) 40%, transparent);
+}
+.dr-card-avatar {
+  flex: none;
+  margin-left: auto;
+  display: inline-grid;
+  place-items: center;
+  width: calc(22px * var(--s, 1));
+  height: calc(22px * var(--s, 1));
+  border-radius: 50%;
+  background: var(--dr-navy);
+  color: var(--dr-on-navy);
+  box-shadow: 0 0 0 calc(2px * var(--s, 1)) var(--dr-card-avatar, var(--dr-surface));
+  font: 700 calc(9.5px * var(--s, 1)) / 1 var(--dr-font);
+  letter-spacing: 0.02em;
+}
+.dr-card-avatar[data-gone] {
+  background: var(--dr-chip);
+  color: var(--dr-ink);
+  box-shadow: 0 0 0 calc(1px * var(--s, 1)) var(--dr-line-strong);
+}
+.dr-card-avatar--lg {
+  --s: 1.2;
+  margin-left: 0;
+}
+
+/* ---- the selection bar ------------------------------------------------------------------------------------------ */
+.dr-card-barslot {
+  display: inline-flex;
+  align-items: center;
+}
+.dr-cux-selbar__btn.dr-card-barbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  padding: 0 8px 0 4px;
+  white-space: nowrap;
+  color: var(--dr-ink);
+  font: 600 12.5px / 1 var(--dr-font);
+}
+.dr-card-barbtn .dr-card-chip {
+  --s: 1;
+  height: 22px;
+  box-shadow: none;
+}
+.dr-card-barbtn__more {
+  font-weight: 600;
+}
+
+/* ---- buttons and fields ---------------------------------------------------------------------------------------- */
+.dr-card-iconbtn {
+  display: inline-grid;
+  place-items: center;
+  min-width: 32px;
+  min-height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dr-card-iconbtn--sm {
+  min-width: 28px;
+  min-height: 28px;
+  font-size: 17px;
+}
+.dr-card-iconbtn:hover {
+  background: var(--dr-hover);
+}
+.dr-card-btn,
+.dr-card-linkbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--dr-line-strong);
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 600 13px / 1 var(--dr-font);
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dr-card-btn:hover:not(:disabled),
+.dr-card-linkbtn:hover:not(:disabled) {
+  background: var(--dr-hover);
+}
+.dr-card-btn:disabled,
+.dr-card-linkbtn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.dr-card-linkbtn {
+  border-color: transparent;
+  background: none;
+  padding: 0 6px;
+}
+.dr-card-linkbtn--danger {
+  color: var(--dr-danger);
+}
+.dr-card-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 34px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--dr-field-line);
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 13px / 1.2 var(--dr-font);
+  color-scheme: light dark;
+}
+.dr-card-input:disabled {
+  background: var(--dr-inset);
+  color: var(--dr-ink);
+}
+.dr-card-muted {
+  color: var(--dr-placeholder);
+  font-weight: 400;
+}
+
+/* ---- the popover ------------------------------------------------------------------------------------------------ */
+.dr-card-popover {
+  position: absolute;
+  width: min(340px, calc(100% - 16px));
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-radius: var(--dr-radius);
+  border: 1px solid var(--dr-line);
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  box-shadow: var(--dr-shadow-pop);
+  pointer-events: auto;
+  font: 14px / 1.4 var(--dr-font);
+}
+.dr-card-popover__head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: auto auto;
+  column-gap: 8px;
+  align-items: start;
+}
+.dr-card-popover__kicker {
+  grid-column: 1;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dr-placeholder);
+}
+.dr-card-popover__title {
+  grid-column: 1;
+  margin: 2px 0 0;
+  font-size: 15px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.dr-card-popover__head .dr-card-iconbtn {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+.dr-card-popover__foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid var(--dr-line);
+  padding-top: 10px;
+}
+.dr-card-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.dr-card-field__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--dr-placeholder);
+}
+.dr-card-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dr-card-statusbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 32px;
+  padding: 0 10px 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--dr-line-strong);
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 600 13px / 1 var(--dr-font);
+  cursor: pointer;
+}
+.dr-card-statusbtn svg {
+  color: var(--dr-card-ink);
+}
+.dr-card-statusbtn:hover:not(:disabled) {
+  background: var(--dr-hover);
+}
+.dr-card-statusbtn[aria-pressed="true"] {
+  background: var(--dr-card-fill);
+  color: var(--dr-card-ink);
+  border-color: var(--dr-card-ink);
+  box-shadow: inset 0 0 0 1px var(--dr-card-ink);
+}
+.dr-card-statusbtn:disabled {
+  cursor: default;
+}
+.dr-card-statusbtn:disabled:not([aria-pressed="true"]) {
+  opacity: 0.55;
+}
+.dr-card-dates {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.dr-card-date {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.dr-card-hint {
+  font-size: 12px;
+  color: var(--dr-placeholder);
+}
+.dr-card-hint [data-overdue] {
+  color: var(--dr-danger);
+  font-weight: 650;
+}
+.dr-card-who {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.dr-card-person {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+  font-weight: 600;
+}
+.dr-card-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--dr-line);
+  background: var(--dr-inset);
+}
+.dr-card-people {
+  max-height: 200px;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-card-personbtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--dr-ink);
+  font: 14px / 1.2 var(--dr-font);
+  text-align: left;
+  cursor: pointer;
+}
+.dr-card-personbtn .dr-card-avatar {
+  margin-left: 0;
+}
+.dr-card-personbtn:hover,
+.dr-card-personbtn[aria-pressed="true"] {
+  background: var(--dr-hover);
+}
+.dr-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.dr-card-problem {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--dr-danger-bg);
+  color: var(--dr-danger);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* ---- focus (last: it wins over every state above) ----------------------------------------------------------------- */
+.dr-card-chips:focus-visible {
+  outline: calc(2px * var(--s)) solid var(--dr-focus);
+  outline-offset: calc(2px * var(--s));
+}
+.dr-card-statusbtn:focus-visible,
+.dr-card-btn:focus-visible,
+.dr-card-iconbtn:focus-visible,
+.dr-card-linkbtn:focus-visible,
+.dr-card-personbtn:focus-visible,
+.dr-card-input:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .dr-card-popover {
+    animation: dr-card-in 120ms ease-out;
+  }
+  @keyframes dr-card-in {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+  }
+}
+
+/* a fieldset's legend sits on its border by default: here it is a plain label above the buttons */
+.dr-card-field > legend.dr-card-field__label {
+  float: left;
+  width: 100%;
+  margin-bottom: 6px;
+}
+.dr-card-field > legend + * {
+  clear: both;
+}
+/* an empty date reads as a hint, not as "mm/dd/yyyy" in full ink */
+.dr-card-input[type="date"][data-empty],
+.dr-ct-dateinput[data-empty] {
+  color: var(--dr-placeholder);
+}
