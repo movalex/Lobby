@@ -13,6 +13,12 @@
 //     opened through `files.crop` (CR-W5-3G-1), which first puts the image back on its thumb: a crop is
 //     written in the pixels of the thumb every tab loads, and a cropped image never switches to the
 //     2,048 px rendering (canvas/api/parts/files.ts).
+//   - Wave S (WS2, the versions switch): the upload sends X-Lobby-Supersedes with the deliverable's newest version
+//     (the version list's, else the element's), so the new file is a new VERSION of the same asset: the write is the
+//     same one, and `customData.lobby.file.assetId` stays. The entry reads "Upload new version". A newer version
+//     uploaded meanwhile: the upload goes on top of it (once); a chain that moved on on another board (a copy), or a
+//     version this board no longer serves: a fresh asset, as before wave S (that card's history starts again at v1).
+//     "Make current" (the version list) is the same write to an older version: no upload, no new version.
 //   - Alternative text: `customData.lobby.alt` (≤ 500 characters, canvas-schema custom-data.ts), one undo
 //     step; board search and the PDF text layer read it.
 //
@@ -36,6 +42,9 @@ import type {
   MenuEntrySpec,
   SelectionBarItemSpec,
 } from '../../canvas/api/index.ts'
+import { reviewFlags } from '../../features/review/flags.ts'
+import { supersedesHeader } from '../../features/review-viewer/versions/client.ts'
+import { versionStoreOf } from '../../features/review-viewer/versions/store.ts'
 import { formatBytes } from '../../lib/format.ts'
 import { type Atom, atom, useValue } from '../../lib/signals.ts'
 import { Dialog } from '../../ui/Dialog.tsx'
@@ -167,10 +176,26 @@ export async function replaceMedia(ctx: CanvasFeatureContext, id: string, file: 
   const size = kind === 'image' ? await nativeSize(file) : null
   const previews = localPreviewsOf(ctx.registries)
   const preview = size ? previews.make(file, size) : null
-  ctx.notify({ key, text: `Replacing ${facts.name || 'file'} with ${file.name}…`, timeoutMs: null })
+  const asVersion = reviewFlags().versions
+  ctx.notify({
+    key,
+    text: asVersion
+      ? `Uploading ${file.name} as a new version of ${facts.name || 'file'}…`
+      : `Replacing ${facts.name || 'file'} with ${file.name}…`,
+    timeoutMs: null,
+  })
+  const send = (supersedes: string | null) =>
+    trackBoardUpload(
+      ctx.registries,
+      uploadFile({
+        boardId: ctx.board.id,
+        file,
+        ...(supersedes ? { headers: supersedesHeader(supersedes) } : {}),
+      }),
+    )
   let meta: AssetVersionMeta
   try {
-    meta = await trackBoardUpload(ctx.registries, uploadFile({ boardId: ctx.board.id, file }))
+    meta = asVersion ? await uploadVersion(ctx, facts, send) : await send(null)
   } catch (e) {
     ctx.dismiss(key)
     if (preview) previews.drop(preview)
@@ -182,6 +207,8 @@ export async function replaceMedia(ctx: CanvasFeatureContext, id: string, file: 
     previews.keep(meta.versionId, preview)
     previews.drop(preview)
   }
+  // this tab's chip at once (the board event tells the other tabs)
+  if (asVersion) void versionStoreOf(ctx).refresh(meta.assetId)
   // as it is now: someone may have moved, locked or deleted it while the file was uploading
   const now = canvas.get(id)
   if (!now || now.isDeleted || canvas.readOnly() || canvas.isLocked(id)) {
@@ -195,19 +222,36 @@ export async function replaceMedia(ctx: CanvasFeatureContext, id: string, file: 
     })
     return false
   }
+  pointAtVersion(ctx, now, facts.kind, meta, size, asVersion ? 'Upload new version' : 'Replace media')
+  return true
+}
+
+/**
+ * The one write of Replace media, "Upload new version" and "Make current": element `el` (showing a file of kind
+ * `was`) shows `meta`'s version, in the box replacedGeometry gives it. One undo step named `label`.
+ */
+export function pointAtVersion(
+  ctx: CanvasFeatureContext,
+  el: CanvasElement,
+  was: AssetKind,
+  meta: AssetVersionMeta,
+  size: PixelSize | null,
+  label: string,
+): void {
+  const id = el.id
   const geometry = replacedGeometry(
     {
-      x: now.x,
-      y: now.y,
-      w: now.width,
-      h: now.height,
-      cropped: !!(now as { crop?: unknown }).crop,
-      kind: facts.kind,
+      x: el.x,
+      y: el.y,
+      w: el.width,
+      h: el.height,
+      cropped: !!(el as { crop?: unknown }).crop,
+      kind: was,
     },
     { kind: meta.kind, size },
   )
   const { box } = geometry
-  canvas.transact('Replace media', (tx) =>
+  ctx.canvas.transact(label, (tx) =>
     tx.update(id, {
       fileId: meta.versionId,
       x: round2(box.x),
@@ -220,7 +264,47 @@ export async function replaceMedia(ctx: CanvasFeatureContext, id: string, file: 
       customData: { lobby: { file: factsFromMeta(meta) } },
     }),
   )
-  return true
+}
+
+/** The code of the api's refusal of a superseded version that is not the newest (contracts asset-versions.ts). */
+const NOT_LATEST = 'VERSION_NOT_LATEST'
+
+/**
+ * Wave S: the upload as a new version of `facts`' deliverable. It supersedes the newest version the board serves (the
+ * version list's; else the element's own). A newer one uploaded meanwhile (409 with another latestVersionId): once on
+ * top of that one. The chain moved on on another board (409 naming the same version), or the version is not one this
+ * board serves (404): a fresh asset, and the person is told the history starts again.
+ */
+export async function uploadVersion(
+  ctx: Pick<CanvasFeatureContext, 'registries' | 'board' | 'events' | 'notify'>,
+  facts: FileFacts,
+  send: (supersedes: string | null) => Promise<AssetVersionMeta>,
+): Promise<AssetVersionMeta> {
+  const list = await versionStoreOf(ctx).whenLoaded(facts.assetId)
+  const first = list?.latestVersionId ?? facts.versionId
+  const fresh = async () => {
+    const meta = await send(null)
+    ctx.notify({
+      key: `media-version-fresh:${meta.versionId}`,
+      text: 'This file has a newer version on another board, so this upload starts its own version history here.',
+    })
+    return meta
+  }
+  try {
+    return await send(first)
+  } catch (e) {
+    if (!(e instanceof UploadError)) throw e
+    if (e.status === 404) return fresh()
+    if (e.code !== NOT_LATEST) throw e
+    const latest = typeof e.details.latestVersionId === 'string' ? e.details.latestVersionId : null
+    if (!latest || latest === first) return fresh()
+    try {
+      return await send(latest)
+    } catch (again) {
+      if (again instanceof UploadError && (again.status === 404 || again.code === NOT_LATEST)) return fresh()
+      throw again
+    }
+  }
 }
 
 /** "Replace media": a file picker, then `replaceMedia`. */
@@ -412,11 +496,14 @@ const REPLACE_ICON =
   'M4 12a8 8 0 0 1 13.7-5.6L20 8.7M20 4v4.7h-4.7M20 12a8 8 0 0 1-13.7 5.6L4 15.3M4 20v-4.7h4.7'
 const CROP_ICON = 'M6 2v14a2 2 0 0 0 2 2h14M2 6h14a2 2 0 0 1 2 2v14'
 
+/** Wave S: with the versions switch on, Replace media is "Upload new version" (the same command and write). */
+const asVersions = () => reviewFlags().versions
+
 export const editSelectionBar: readonly SelectionBarItemSpec[] = [
   {
     id: 'media.replace',
     order: 76,
-    visible: (ctx, selection) => !!canReplace(ctx, selection),
+    visible: (ctx, selection) => !asVersions() && !!canReplace(ctx, selection),
     component: ({ ctx, selection }) => (
       <button
         type="button"
@@ -424,6 +511,23 @@ export const editSelectionBar: readonly SelectionBarItemSpec[] = [
         data-testid="media-replace"
         aria-label="Replace media"
         title="Replace media"
+        onClick={() => startReplace(ctx, selection)}
+      >
+        <Icon d={REPLACE_ICON} />
+      </button>
+    ),
+  },
+  {
+    id: 'media.new-version',
+    order: 76,
+    visible: (ctx, selection) => asVersions() && !!canReplace(ctx, selection),
+    component: ({ ctx, selection }) => (
+      <button
+        type="button"
+        className="dr-iconbtn"
+        data-testid="media-new-version"
+        aria-label="Upload new version"
+        title="Upload new version"
         onClick={() => startReplace(ctx, selection)}
       >
         <Icon d={REPLACE_ICON} />
@@ -473,7 +577,15 @@ export const editMenu: readonly MenuEntrySpec[] = [
     order: 80,
     label: 'Replace media',
     command: 'media.replace',
-    visible: (ctx, target) => !!canReplace(ctx, target.ids),
+    visible: (ctx, target) => !asVersions() && !!canReplace(ctx, target.ids),
+  },
+  {
+    id: 'media.new-version',
+    group: 'edit',
+    order: 80,
+    label: 'Upload new version',
+    command: 'media.replace',
+    visible: (ctx, target) => asVersions() && !!canReplace(ctx, target.ids),
   },
   {
     id: 'media.crop',

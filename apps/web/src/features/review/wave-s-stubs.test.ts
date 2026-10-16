@@ -1,6 +1,7 @@
 // The wave S foundation's web side (docs/WAVE-S-CONTRACTS.md §7): nothing changes for a user. Every switch is off (a
-// dev-auth page may turn them on); "My notifications" offers no review kind; the review and version clients answer
-// empty and reject writes with 'unavailable' without a request; the review viewer's shell renders nothing while its
+// dev-auth page may turn them on); "My notifications" offers no review kind; the review client answers empty and
+// rejects writes with 'unavailable' without a request (WS2 made the version list live: it asks the api, and answers
+// null for any failure); the review viewer's shell renders nothing while its
 // switches are off, and its slots, state and layout are what WS1-WS3 build on.
 import { CHAT_HOOK_KINDS } from '@draftroom/contracts'
 import { createElement } from 'react'
@@ -92,10 +93,11 @@ describe('the wave S clients (stubs)', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
-  it('versions: no list, no request; the header Replace media will send', async () => {
+  it('versions (live since WS2): the list asks the api and answers null when it fails; the header', async () => {
     expect(await listAssetVersions(B, AST)).toBeNull()
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(String(fetchSpy.mock.calls[0]?.[0])).toBe(`/api/boards/${B}/asset-versions/${AST}`)
     expect(supersedesHeader(VER)).toEqual({ 'x-lobby-supersedes': VER })
-    expect(fetchSpy).not.toHaveBeenCalled()
   })
 })
 

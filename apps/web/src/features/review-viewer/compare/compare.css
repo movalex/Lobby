@@ -1,0 +1,221 @@
+/* WS2 (wave S): the review viewer's compare slot. Phones (≤ 720 px): the panes stack; the slider and the wipe take
+   touch (touch-action: none on the box). */
+
+.lobby-cmp {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  width: 100%;
+  min-height: 0;
+  padding: 12px;
+  gap: 8px;
+  box-sizing: border-box;
+}
+.lobby-cmp__note {
+  padding: 24px;
+  text-align: center;
+}
+.lobby-cmp__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.lobby-cmp__mode {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--dr-line-strong, #c4bfb0);
+  border-radius: 8px;
+  background: var(--dr-surface, #fff);
+  color: var(--dr-ink, #1b2330);
+  font: 500 14px / 1 var(--dr-font);
+  cursor: pointer;
+}
+.lobby-cmp__mode[aria-pressed="true"] {
+  background: var(--dr-navy, #1f3a5f);
+  border-color: var(--dr-navy, #1f3a5f);
+  color: var(--dr-on-navy, #fff);
+}
+.lobby-cmp__mode:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.lobby-cmp__zoom,
+.lobby-cmp__pages {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+}
+.lobby-cmp__hint {
+  margin: 0;
+  color: var(--dr-ink-2, #4a5566);
+  font-size: 13px;
+}
+.lobby-cmp__side {
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  min-height: 0;
+}
+.lobby-cmp__pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+}
+.lobby-cmp__pane figcaption {
+  padding: 4px 0;
+  font-size: 13px;
+  color: var(--dr-ink-2, #4a5566);
+}
+.lobby-cmp__frame {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 160px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--dr-inset, #faf9f5);
+  touch-action: none;
+  cursor: grab;
+}
+.lobby-cmp__frame > img,
+.lobby-cmp__frame > video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+}
+.lobby-cmp__frame--page {
+  cursor: default;
+}
+.lobby-cmp__missing {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--dr-ink-2, #4a5566);
+}
+.lobby-cmp__overlay {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+.lobby-cmp__stage {
+  flex: 1 1 auto;
+  display: grid;
+  place-items: center;
+  min-height: 200px;
+  overflow: hidden;
+}
+.lobby-cmp__box {
+  position: relative;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--dr-inset, #faf9f5);
+  touch-action: none;
+}
+.lobby-cmp__layer {
+  position: absolute;
+  inset: 0;
+}
+.lobby-cmp__layer > img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  pointer-events: none;
+}
+.lobby-cmp__divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgb(27 35 48 / 45%);
+  pointer-events: none;
+}
+.lobby-cmp__tag {
+  position: absolute;
+  top: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgb(27 35 48 / 70%);
+  color: #fff;
+  font-size: 12px;
+  pointer-events: none;
+}
+.lobby-cmp__tag--a {
+  left: 8px;
+}
+.lobby-cmp__tag--b {
+  right: 8px;
+}
+.lobby-cmp__range {
+  width: 100%;
+  min-height: 32px;
+}
+.lobby-cmp__video-root {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+.lobby-cmp__videos {
+  position: relative;
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  min-height: 0;
+}
+.lobby-cmp__video {
+  background: #000;
+}
+/* wipe and toggle: B over A in one frame */
+.lobby-cmp__videos--wipe,
+.lobby-cmp__videos--toggle {
+  grid-template-columns: 1fr;
+}
+.lobby-cmp__videos--wipe .lobby-cmp__pane,
+.lobby-cmp__videos--toggle .lobby-cmp__pane {
+  grid-area: 1 / 1;
+}
+.lobby-cmp__videos--toggle[data-shown="A"] .lobby-cmp__pane--b,
+.lobby-cmp__videos--toggle[data-shown="B"] .lobby-cmp__pane--a {
+  visibility: hidden;
+}
+.lobby-cmp__transport {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lobby-cmp__time {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+
+@media (max-width: 720px) {
+  .lobby-cmp {
+    padding: 8px;
+  }
+  .lobby-cmp__side,
+  .lobby-cmp__videos--side {
+    grid-template-columns: 1fr;
+    grid-auto-rows: minmax(160px, 1fr);
+  }
+  .lobby-cmp__mode {
+    min-height: 44px;
+  }
+}
