@@ -149,8 +149,10 @@ export function classifyUpload(mimeType: string, name: string): AssetKind {
   if (mime === 'application/pdf' || ext === 'pdf') return 'pdf'
   if (VIDEO_MIMES.has(mime) || ['mp4', 'm4v', 'mov', 'webm'].includes(ext)) return 'video'
   if (officeFormat(mime, name)) return 'pdf'
-  // Photoshop, Illustrator and TIFF files are previewed as flattened pages (wave R); HEIC stays an attachment.
-  if (designFormat(mime, name)?.preview === 'pages') return 'pdf'
+  // Photoshop, Illustrator and TIFF files are previewed as flattened pages (wave R) once the preview worker can make
+  // them (designPreviewsEnabled: DRAFTROOM_DESIGN_PREVIEWS); until then they are attachments, as before wave R.
+  // HEIC stays an attachment either way.
+  if (designFormat(mime, name)?.preview === 'pages' && designPreviewsEnabled()) return 'pdf'
   return 'other'
 }
 
@@ -225,6 +227,23 @@ export function isOfficeUpload(kind: AssetKind, mimeType: string, name: string):
 }
 
 // ---- design files (wave R, WS3; landed by the foundation) ----------------------------------------------------
+
+let designPreviewsOn = false
+
+/**
+ * Whether Photoshop, Illustrator and TIFF uploads are previewed as flattened pages (kind 'pdf') or are plain
+ * attachments (kind 'other', the 'other' limit), as before wave R. The api sets it from DRAFTROOM_DESIGN_PREVIEWS
+ * ("on" only; unset, empty or "off" is off) when it starts; the web sets it from what the api says (GET
+ * /api/auth/config `designPreviews`), so a browser classifies like the server. Off until told otherwise (fail closed). One answer per
+ * process: the api and the web each run one deployment's setting. HEIC (an attachment with a hint) is unaffected.
+ */
+export function setDesignPreviews(on: boolean): void {
+  designPreviewsOn = on
+}
+
+export function designPreviewsEnabled(): boolean {
+  return designPreviewsOn
+}
 
 export type DesignExt = 'psd' | 'ai' | 'tif' | 'tiff' | 'heic' | 'heif'
 
@@ -302,6 +321,7 @@ export function designUploadFormat(kind: AssetKind, mimeType: string, name: stri
   if (kind === 'pdf' && pdfOrOffice) return null
   const d = designFormat(mimeType, name)
   if (!d) return null
+  if (d.preview === 'pages' && !designPreviewsOn) return null
   return (d.preview === 'pages' ? kind === 'pdf' : kind === 'other') ? d : null
 }
 

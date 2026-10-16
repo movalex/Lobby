@@ -1,12 +1,13 @@
 import { mkdtempSync, readdirSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   claimNextJob,
   classifyUpload,
   dataLayout,
   derivativePath,
+  designPreviewsEnabled,
   enqueueJob,
   ensureLayout,
   finishJob,
@@ -21,6 +22,7 @@ import {
   type PreviewJob,
   requeueStale,
   sanitizeDisplayName,
+  setDesignPreviews,
   versionDir,
 } from './index.ts'
 
@@ -154,5 +156,29 @@ describe('job queue', () => {
     expect(again?.job.attempt).toBe(2)
     finishJob(l, alive, 'done')
     expect(readdirSync(l.jobs.done)).toEqual([`${alive.job.versionId}.json`])
+  })
+})
+
+describe('design uploads (DRAFTROOM_DESIGN_PREVIEWS)', () => {
+  afterEach(() => setDesignPreviews(false))
+
+  it('are plain attachments by default and while off, as before wave R', () => {
+    setDesignPreviews(false)
+    expect(designPreviewsEnabled()).toBe(false)
+    expect(classifyUpload('image/vnd.adobe.photoshop', 'art.psd')).toBe('other')
+    expect(classifyUpload('', 'layout.ai')).toBe('other')
+    expect(classifyUpload('image/tiff', 'scan.tif')).toBe('other')
+    expect(maxUploadBytes('other', 'image/tiff', 'scan.tif')).toBe(LIMITS.maxBytes.other)
+    expect(maxUploadBytes('other', 'image/vnd.adobe.photoshop', 'art.psd')).toBe(LIMITS.maxBytes.other)
+  })
+
+  it('on: PSD, AI and TIFF are flattened-page previews (kind pdf) with their own limits', () => {
+    setDesignPreviews(true)
+    expect(designPreviewsEnabled()).toBe(true)
+    expect(classifyUpload('image/vnd.adobe.photoshop', 'art.psd')).toBe('pdf')
+    expect(classifyUpload('', 'layout.ai')).toBe('pdf')
+    expect(classifyUpload('image/tiff', 'scan.tif')).toBe('pdf')
+    expect(maxUploadBytes('pdf', 'image/tiff', 'scan.tif')).toBe(100 * 1024 * 1024)
+    expect(maxUploadBytes('pdf', 'image/vnd.adobe.photoshop', 'art.psd')).toBe(200 * 1024 * 1024)
   })
 })

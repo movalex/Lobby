@@ -204,7 +204,27 @@ describe('CSRF', () => {
 describe('auth config and rate limit', () => {
   it('GET /api/auth/config names the dev provider', async () => {
     const res = await api.anon('GET', '/api/auth/config')
-    expect(AuthConfig.parse(res.json())).toEqual({ providers: ['dev'] })
+    expect(AuthConfig.parse(res.json())).toEqual({ providers: ['dev'], designPreviews: false })
+  })
+
+  it('GET /api/auth/config tells the web whether design files are previewed (DRAFTROOM_DESIGN_PREVIEWS)', async () => {
+    const on = await createTestApi({ env: { DRAFTROOM_DESIGN_PREVIEWS: 'on' } })
+    try {
+      expect(AuthConfig.parse((await on.anon('GET', '/api/auth/config')).json())).toEqual({
+        providers: ['dev'],
+        designPreviews: true,
+      })
+    } finally {
+      await on.close()
+    }
+    for (const value of ['off', '']) {
+      const off = await createTestApi({ env: { DRAFTROOM_DESIGN_PREVIEWS: value } })
+      try {
+        expect((await off.anon('GET', '/api/auth/config')).json()).toMatchObject({ designPreviews: false })
+      } finally {
+        await off.close()
+      }
+    }
   })
 
   it('rate-limits sign-in attempts', async () => {
@@ -240,6 +260,7 @@ describe('auth config and rate limit', () => {
       expect(AuthConfig.parse((await clerk.anon('GET', '/api/auth/config')).json())).toEqual({
         providers: ['clerk'],
         clerkPublishableKey: 'pk_test_unused',
+        designPreviews: false,
       })
     } finally {
       await clerk.close()

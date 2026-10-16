@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { type DataLayout, LIMITS, maxKindBytes, versionDir } from '@draftroom/dev-assets'
+import { type DataLayout, LIMITS, maxKindBytes, setDesignPreviews, versionDir } from '@draftroom/dev-assets'
 import agPsd from 'ag-psd'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
@@ -36,6 +36,10 @@ const PSD = 'image/vnd.adobe.photoshop'
 const MiB = 1024 * 1024
 
 let l: DataLayout
+// The api queues design files for this worker as kind 'pdf' only with DRAFTROOM_DESIGN_PREVIEWS=on: the ingest helpers
+// classify them the way that api does.
+setDesignPreviews(true)
+
 beforeAll(async () => {
   await ensureFixtures()
   l = tempLayout()

@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { setDesignPreviews } from '@draftroom/dev-assets'
+import { afterEach, describe, expect, it } from 'vitest'
 import type { CanvasElement, LobbyCanvas } from '../../canvas/api/index.ts'
 import { emptySlotsAt, factsFromMeta, layoutFiles, partitionUploads, sceneOf } from './insert.ts'
 
@@ -24,6 +25,34 @@ describe('partitionUploads', () => {
     expect(p.rejected.map((r) => `${r.file.name} ${r.reason}.`)).toEqual([
       'dunes.jpg is larger than 25 MB, the limit for images.',
     ])
+  })
+
+  describe('Photoshop and TIFF files follow the api (GET /api/auth/config designPreviews)', () => {
+    afterEach(() => setDesignPreviews(false))
+    const kinds = () =>
+      partitionUploads([
+        file('art.psd', 'image/vnd.adobe.photoshop'),
+        file('scan.tif', 'image/tiff'),
+        file('logo.ai', 'application/illustrator'),
+      ]).cards.map((c) => [c.file.name, c.kind])
+
+    it('are attachments while the api previews none', () => {
+      setDesignPreviews(false)
+      expect(kinds()).toEqual([
+        ['art.psd', 'other'],
+        ['scan.tif', 'other'],
+        ['logo.ai', 'other'],
+      ])
+    })
+
+    it('are flattened-page previews (kind pdf) once the api says so', () => {
+      setDesignPreviews(true)
+      expect(kinds()).toEqual([
+        ['art.psd', 'pdf'],
+        ['scan.tif', 'pdf'],
+        ['logo.ai', 'pdf'],
+      ])
+    })
   })
 
   it('facts from the upload answer', () => {
