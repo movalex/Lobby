@@ -154,6 +154,8 @@ export function registerGuestJoin(
           user: { id: userId, name },
           created: guestId === null,
           sessionExpiresAt: sessionExpiresAt.toISOString(),
+          // wave S (WS4): a link that opens the review page says so; absent: the board, exactly as before
+          ...(inv.landing === 'review' ? { landing: 'review' as const } : {}),
         } satisfies GuestJoined,
         session,
         // The cookie outlives the session row as far as the link could be extended (sessions.ts).

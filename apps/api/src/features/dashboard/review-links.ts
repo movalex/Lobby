@@ -217,6 +217,8 @@ interface InvitationListRow {
   role: ReviewLinkRole
   multi_use: boolean
   allow_guests: boolean
+  /** 0037_client_review: where the link opens. */
+  landing: 'board' | 'review'
   max_uses: number | null
   use_count: number
   created_at: Date
@@ -245,7 +247,7 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
     return ctx.identity.freshenThen(req, user, async () => {
       const mayShare = await ctx.identity.isCreatorUser(db, user.id)
       const rows = await db.query<InvitationListRow>(
-        `SELECT i.id, i.role, i.multi_use, i.allow_guests, i.max_uses, i.use_count, i.created_at, i.expires_at, i.token_hash,
+        `SELECT i.id, i.role, i.multi_use, i.allow_guests, i.landing, i.max_uses, i.use_count, i.created_at, i.expires_at, i.token_hash,
               u.id AS creator_id, u.name AS creator_name, i.invited_email
          FROM invitations i JOIN users u ON u.id = i.created_by
         WHERE i.board_id = $1 AND i.workspace_id = $2 AND i.revoked_at IS NULL AND i.redeemed_by IS NULL
@@ -275,6 +277,8 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
             ? new Date(r.created_at.getTime() + reviewLinkMaxLifetimeMs(r.role)).toISOString()
             : null,
           allowGuests: r.multi_use && r.allow_guests,
+          // wave S (WS4): absent for the board (and for single-use invitations), as from an older api
+          ...(r.multi_use && r.landing === 'review' ? { landing: 'review' as const } : {}),
           // Domain access: the full address a single-use invitation is locked to (this manager-only list is
           // the one response that carries it).
           email: r.multi_use ? null : r.invited_email,
@@ -323,8 +327,8 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
       const expiresAt = new Date(at.getTime() + lifetime)
       await tx.query(
         `INSERT INTO invitations (id, token_hash, workspace_id, board_id, role, created_by, created_at,
-                                  expires_at, multi_use, max_uses, allow_guests)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9, $10)`,
+                                  expires_at, multi_use, max_uses, allow_guests, landing)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9, $10, $11)`,
         [
           id,
           sha256hex(token),
@@ -336,6 +340,7 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
           expiresAt,
           input.maxUses,
           input.allowGuests,
+          input.landing ?? 'board',
         ],
       )
       await audit(tx, {
@@ -349,6 +354,7 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
           multiUse: true,
           maxUses: input.maxUses,
           ...(input.allowGuests ? { allowGuests: true } : {}),
+          ...(input.landing === 'review' ? { landing: 'review' } : {}),
         },
         at,
       })
@@ -364,6 +370,7 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
         expiresAt: expiresAt.toISOString(),
         maxUses: input.maxUses,
         allowGuests: input.allowGuests,
+        ...(input.landing === 'review' ? { landing: 'review' as const } : {}),
         limitedExport,
       }
     })
