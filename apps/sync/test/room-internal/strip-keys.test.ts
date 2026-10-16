@@ -149,7 +149,7 @@ describe('POST /internal/maintenance/strip-keys {prefix: react:}', () => {
     expect(await hashElements((await st.snapshot(b)).elements)).toBe(await alice.hash())
   })
 
-  it('only `react:` may be stripped (400 otherwise); internal secret only (401); refused while maintenance is on (503)', async () => {
+  it('only the listed key classes may be stripped (400 otherwise); internal secret only (401); refused while maintenance is on (503)', async () => {
     const st = await h.stack()
     for (const body of [{ prefix: 'plusOne:' }, { prefix: 'tag:' }, {}, { prefix: 'react:', x: 1 }, 'react:'])
       expect((await strip(st, body)).status, JSON.stringify(body)).toBe(400)
@@ -166,5 +166,16 @@ describe('POST /internal/maintenance/strip-keys {prefix: react:}', () => {
       status: 200,
       body: { boards: 0, rewritten: 0, elements: 0, keys: 0, failed: 0 },
     })
+  })
+
+  it('wave T: the four planning classes may be stripped too (the rollback below 14; WS1 proves it on real boards)', async () => {
+    const st = await h.stack()
+    for (const prefix of ['card:', 'sb:', 'kanban', 'timeline'])
+      expect(await strip(st, { prefix }), prefix).toEqual({
+        status: 200,
+        body: { boards: 0, rewritten: 0, elements: 0, keys: 0, failed: 0 },
+      })
+    for (const prefix of ['card', 'sb', 'card:status'])
+      expect((await strip(st, { prefix })).status, prefix).toBe(400)
   })
 })

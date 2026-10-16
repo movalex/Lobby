@@ -31,7 +31,7 @@ import { expectAccepted, expectNotStored, expectRefused, storedEl, storedLobby }
 const shared = sharedElementStack()
 
 type Opts = Omit<ProtocolClientOptions, 'wsUrl' | 'boardId' | 'user'>
-/** A tab of this build (rev 13 in its connect URL). */
+/** A tab of this build (CONTRACTS_REV in its connect URL: 13 when written, 14 since wave T). */
 const tab13 = (st: ElementStack, boardId: string, user: string, o: Opts = {}) =>
   st.client({ boardId, user, query: { [CONNECT_REV_PARAM]: String(CONTRACTS_REV) }, ...o })
 /** A tab of the deployed web 3c83611 (rev 12 in its connect URL). */
@@ -42,17 +42,23 @@ const reactionsIn = (lobby: Record<string, unknown>) =>
     .filter((k) => k.startsWith('react:'))
     .sort()
 
-describe('wave N: the room says 13 (REACTIONS_REV)', () => {
-  it('its contracts frame names 13 to every reader', async () => {
-    const st = shared.get()
-    const b = newBoardId()
-    expect(CONTRACTS_REV).toBe(REACTIONS_REV)
-    for (const c of [
-      await tab13(st, b, 'alice'),
-      await tab12(st, b, 'bob'),
-      await st.client({ boardId: b, user: 'carol' }),
-    ])
-      expect(c.of('contracts').at(-1)).toEqual({ type: 'contracts', rev: 13 })
+describe('wave N: the room says 13 (REACTIONS_REV) or later', () => {
+  it('with reactions on and planning off its contracts frame names 13 to every reader (14 with both on: planning-keys.test.ts)', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'dr-reactions-rev-'))
+    const st = await createElementStack({ dataDir, env: { DRAFTROOM_PLANNING: 'off' } })
+    try {
+      const b = newBoardId()
+      expect(CONTRACTS_REV).toBeGreaterThan(REACTIONS_REV)
+      for (const c of [
+        await tab13(st, b, 'alice'),
+        await tab12(st, b, 'bob'),
+        await st.client({ boardId: b, user: 'carol' }),
+      ])
+        expect(c.of('contracts').at(-1)).toEqual({ type: 'contracts', rev: 13 })
+    } finally {
+      await st.dispose()
+      rmSync(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    }
   })
 })
 

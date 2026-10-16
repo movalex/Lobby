@@ -92,6 +92,8 @@ export interface MergeEnv {
   readonly deletedSession: string
   /** wave N (N2-5): the reactions kill switch (config.ts DRAFTROOM_REACTIONS); absent: on */
   readonly reactions?: boolean
+  /** wave T: the planning kill switch (config.ts DRAFTROOM_PLANNING); absent: on */
+  readonly planning?: boolean
   nonce(): number
 }
 
@@ -244,6 +246,7 @@ export class PushApplier {
       tagDenied: (key) => this.docDeniedCodes.get(tagDefKey(key)) ?? null,
       fileRef: (v) => this.fileRef(v),
       reactions: env.reactions !== false,
+      planning: env.planning !== false,
     }
   }
 

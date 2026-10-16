@@ -60,6 +60,7 @@ export async function openRoomService(): Promise<RoomService> {
     DRAFTROOM_ENGINE: 'excalidraw',
     DRAFTROOM_TEST_HOOKS: '1',
     DRAFTROOM_REACTIONS: 'on',
+    DRAFTROOM_PLANNING: 'on',
     IDLE_EVICT_MS: '600000',
   })
   const logs: string[] = []

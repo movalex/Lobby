@@ -119,6 +119,26 @@ describe('seed (Excalidraw engine)', () => {
     expect((await st.snapshot(b2)).elements[0]?.customData).toBeUndefined()
   })
 
+  it('wave T foundation: stores no planning key from seeded content (WS1 decides which survive: WAVE-T-CONTRACTS §3.3)', async () => {
+    const st = await h.stack()
+    const b = newBoardId()
+    const tag = { 'tag:urgent': { name: 'Urgent', color: 'red' } }
+    const card = note('C', {
+      customData: {
+        lobby: { ...tag, 'card:status': 'doing', 'card:who': 'usr_someoneelse', 'card:due': '2026-10-30' },
+      },
+    })
+    const panel = rect('P', { customData: { lobby: { 'sb:of': 'H', 'sb:pos': 'a0', 'sb:dur': 2000 } } })
+    const res = await seed(st, b, [card, panel])
+    expect(res.status).toBe(201)
+    const snap = await st.snapshot(b)
+    const byId = new Map(snap.elements.map((e) => [e.id, e]))
+    expect(byId.get('C')?.customData).toEqual({ lobby: tag })
+    // stripped before the checks: a panel key on a rectangle is not refused, it is gone
+    expect(byId.get('P')?.customData).toBeUndefined()
+    expect(JSON.stringify(snap.elements)).not.toMatch(/card:|sb:|kanban|timeline/)
+  })
+
   it('wave N: a duplicate of a reacted board (its live elements, kept ids or remapped by board-ops) carries no reaction', async () => {
     const st = await h.stack()
     const a = newBoardId()

@@ -6,7 +6,8 @@
 // write). The rollback step for reactions: a sync below wave N runs `checkElement` on every element a push touches
 // (merge.ts) and its key registry has no `react:` spec, so it refuses every edit of a reacted note INVALID, every
 // undo of the delete of one, and every "Recently deleted" restore of one. The documented rollback below wave N is
-// DRAFTROOM_REACTIONS=off (restart), this route, then the older sync (docs/DEPLOY.md).
+// DRAFTROOM_REACTIONS=off (restart), this route, then the older sync (docs/DEPLOY.md). Wave T's rollback below 14 is
+// the same for each planning class (`card:`, `sb:`, `kanban`, `timeline`) after DRAFTROOM_PLANNING=off.
 //
 // Every board file of this server, one at a time:
 //  - read first, read-only (room-internal/board.ts `readBoardFile`): a board none of whose elements (live or
@@ -24,7 +25,12 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WireElement } from '@draftroom/canvas-schema/elements'
-import { STRIP_KEYS_ROUTE, type StripKeysAnswer, StripKeysRequest } from '@draftroom/contracts'
+import {
+  STRIP_KEYS_PREFIXES,
+  STRIP_KEYS_ROUTE,
+  type StripKeysAnswer,
+  StripKeysRequest,
+} from '@draftroom/contracts'
 import type {
   InternalRoute,
   RoomExtensionContext,
@@ -150,7 +156,7 @@ async function handleStripKeys(ctx: RoomExtensionContext, req: IncomingMessage, 
     throw new HttpError(
       400,
       'bad-request',
-      "Expected {prefix: 'react:'} (packages/contracts sync-internal.ts).",
+      `Expected {prefix: ${STRIP_KEYS_PREFIXES.map((p) => `'${p}'`).join(' | ')}} (packages/contracts sync-internal.ts).`,
     )
   sendJson(res, 200, await stripKeys(ctx, parsed.data.prefix))
 }

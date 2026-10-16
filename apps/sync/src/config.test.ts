@@ -329,6 +329,22 @@ describe('wave N keys (render.yaml: DRAFTROOM_REACTIONS=on)', () => {
   })
 })
 
+describe('wave T keys (render.yaml: DRAFTROOM_PLANNING=off until the lead turns it on at deploy)', () => {
+  it('DRAFTROOM_PLANNING: off unless on (fail-closed: unset, empty and off are all off); anything else is refused', () => {
+    expect(loadConfig(base).planning).toBe(false)
+    for (const v of ['', '   ', 'off', 'OFF'])
+      expect(loadConfig({ ...base, DRAFTROOM_PLANNING: v }).planning).toBe(false)
+    for (const v of ['on', ' On ']) expect(loadConfig({ ...base, DRAFTROOM_PLANNING: v }).planning).toBe(true)
+    for (const v of ['1', 'true', 'yes', 'of', 'onn'])
+      expect(() => loadConfig({ ...base, DRAFTROOM_PLANNING: v })).toThrow(
+        /DRAFTROOM_PLANNING must be on or off/,
+      )
+    // in production too: a service that lacks the key takes no planning write
+    expect(loadConfig(prod).planning).toBe(false)
+    expect(loadConfig({ ...prod, DRAFTROOM_PLANNING: 'on' }).planning).toBe(true)
+  })
+})
+
 describe('DRAFTROOM_TEST_DISK_FREE (M7-4/M7-6 tests): a fixed free share, with the test hooks only', () => {
   it('is null without DRAFTROOM_TEST_HOOKS=1, read with it, and refused when malformed', () => {
     expect(loadConfig({ ...base, DRAFTROOM_TEST_DISK_FREE: '0.15' }).testDiskFree).toBeNull()

@@ -56,6 +56,7 @@ import {
   frameForReader,
   type LeaseHookRequest,
   Op,
+  PLANNING_REV,
   PRESENCE_LASER_REV,
   PROTO,
   REACTIONS_REV,
@@ -156,6 +157,12 @@ export interface RoomDeps {
    * so no web offers reacting; the keys already stored stay and every reader still gets them.
    */
   readonly reactions?: boolean
+  /**
+   * Wave T: the planning kill switch (config.ts DRAFTROOM_PLANNING; absent: off, fail-closed). Off: every write of the
+   * planning key classes is refused UNAVAILABLE (custom-data.ts) and the `contracts` frame says at most
+   * PLANNING_REV - 1, so no web offers planning; the keys already stored stay and every reader still gets them.
+   */
+  readonly planning?: boolean
 }
 
 type FifoItem =
@@ -306,10 +313,28 @@ const CONTRACTS_MESSAGE = frameOf({ type: 'contracts', rev: CONTRACTS_REV })
  * other rev-13 rule (the reader and writer rules) stays: they key on the socket's revision, not on this frame.
  */
 export const CONTRACTS_REV_WITHOUT_REACTIONS = REACTIONS_REV - 1
-const CONTRACTS_MESSAGE_WITHOUT_REACTIONS = frameOf({
-  type: 'contracts',
-  rev: CONTRACTS_REV_WITHOUT_REACTIONS,
-})
+/**
+ * Wave T: the revision a room says while its planning kill switch is off (DRAFTROOM_PLANNING) and its reactions one
+ * is on: the one before planning, so a rev-14 web offers no planning and strips the planning keys from its pushes as
+ * it does for an older sync.
+ */
+export const CONTRACTS_REV_WITHOUT_PLANNING = PLANNING_REV - 1
+/**
+ * The revision the room's `contracts` frame names: the newest one whose kill switches are all on (each revision's
+ * switch covers it and every later one: reactions off says 12 whatever planning is). The reader and writer rules do
+ * not follow it: they key on each socket's own revision.
+ */
+export function contractsRevOf(switches: { reactions: boolean; planning: boolean }): number {
+  if (!switches.reactions) return CONTRACTS_REV_WITHOUT_REACTIONS
+  if (!switches.planning) return CONTRACTS_REV_WITHOUT_PLANNING
+  return CONTRACTS_REV
+}
+const CONTRACTS_MESSAGES = new Map(
+  [CONTRACTS_REV, CONTRACTS_REV_WITHOUT_PLANNING, CONTRACTS_REV_WITHOUT_REACTIONS].map((rev) => [
+    rev,
+    frameOf({ type: 'contracts', rev }),
+  ]),
+)
 
 export class Session {
   readonly key = ++handleSeq
@@ -972,7 +997,11 @@ export class ElementRoom {
     // CONTRACTS_REV 10: the revision this room speaks, so a rev-10 client may send `f` and `view.z` on this
     // socket (a rev-9 client drops the frame as unknown); then everyone's current cursors (above 41
     // sessions the 40 this joiner starts with), so a late joiner does not wait for the next move
-    s.send(this.deps.reactions === true ? CONTRACTS_MESSAGE : CONTRACTS_MESSAGE_WITHOUT_REACTIONS)
+    s.send(
+      CONTRACTS_MESSAGES.get(
+        contractsRevOf({ reactions: this.deps.reactions === true, planning: this.deps.planning === true }),
+      ) ?? CONTRACTS_MESSAGE,
+    )
     const peers = this.presence.welcomeFrame(s.key, s.identity.sid)
     if (peers) s.send(presenceFrame(peers))
   }
@@ -1110,6 +1139,7 @@ export class ElementRoom {
       epoch: this.store.meta.epoch,
       deletedSession: this.deletedSession,
       reactions: this.deps.reactions === true,
+      planning: this.deps.planning === true,
       nonce: () => Math.floor(Math.random() * 2 ** 31),
     }
   }

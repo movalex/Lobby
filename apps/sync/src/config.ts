@@ -84,6 +84,14 @@ export interface SyncConfig {
    */
   reactions?: boolean
   /**
+   * DRAFTROOM_PLANNING (wave T): the planning kill switch; only `on` takes the planning keys (canvas-schema
+   * planning-keys.ts: cards, storyboards, Kanbans, timelines; CONTRACTS_REV 14). `off`, empty or unset: off
+   * (fail-closed, like DRAFTROOM_REACTIONS): every write of the four key classes is refused UNAVAILABLE, the keys
+   * already stored stay, seeded content carries none, and the room's `contracts` frame says 13 so no web offers
+   * planning. A restart switches it. Absent here (a hand-made config): off.
+   */
+  planning?: boolean
+  /**
    * DRAFTROOM_BACKUP_KEEP (wave M, M7-4, CAP-DISK): local backup copies kept per board (offsite keeps its own
    * history). Default BACKUP_DEFAULTS.keep (12); render.yaml sets 4.
    */
@@ -483,6 +491,7 @@ export function loadConfig(env: Env = process.env): SyncConfig {
     bootMaintenance: parseBootMaintenance(env),
     wsDeflate: parseWsDeflate(env),
     reactions: parseReactions(env),
+    planning: parsePlanning(env),
     backupKeep: int(env, 'DRAFTROOM_BACKUP_KEEP', BACKUP_DEFAULTS.keep, 1, 1_000),
     outboundBudgetMb: int(env, 'DRAFTROOM_OUTBOUND_BUDGET_MB', DEFAULT_OUTBOUND_BUDGET_MB, 8, 4_096),
     testDiskFree: parseTestDiskFree(env),
@@ -538,6 +547,19 @@ export function parseReactions(env: Env): boolean {
   if (raw === 'on') return true
   if (raw === undefined || raw === 'off') return false
   throw new Error('DRAFTROOM_REACTIONS must be on or off')
+}
+
+/**
+ * DRAFTROOM_PLANNING (wave T): `on` = the room takes the planning keys; `off`, empty or unset = it refuses them
+ * (UNAVAILABLE) and says contracts 13. Fail-closed: a service that lacks the key takes none. The rollback below wave T
+ * sets it off, runs POST /internal/maintenance/strip-keys for `card:`, `sb:`, `kanban` and `timeline`, then
+ * deploys the older sync (docs/WAVE-T-CONTRACTS.md §3.4).
+ */
+export function parsePlanning(env: Env): boolean {
+  const raw = read(env, 'DRAFTROOM_PLANNING')?.toLowerCase()
+  if (raw === 'on') return true
+  if (raw === undefined || raw === 'off') return false
+  throw new Error('DRAFTROOM_PLANNING must be on or off')
 }
 
 /** DRAFTROOM_BOOT_MAINTENANCE: 1 = start in maintenance, 0 or absent = start serving. */

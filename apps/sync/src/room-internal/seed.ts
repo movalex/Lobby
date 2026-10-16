@@ -36,6 +36,7 @@ import { checkElement, type WireElement } from '@draftroom/canvas-schema/element
 import { compareByIndex, indexKeysBetween, isValidIndexKey } from '@draftroom/canvas-schema/engine'
 import { checkInvariants } from '@draftroom/canvas-schema/invariants'
 import { MAX_ITEMS, MAX_LIVE_ELEMENTS, MAX_TAG_DEFS } from '@draftroom/canvas-schema/limits'
+import { PLANNING_KEY_CLASSES } from '@draftroom/canvas-schema/planning-keys'
 import { REACTION_KEY_PREFIX } from '@draftroom/canvas-schema/reactions'
 import type { ImportBoardReport } from '@draftroom/contracts'
 import type { InternalRoute, RoomExtensionContext, ServerWriteChange } from '../engine-switch.ts'
@@ -129,6 +130,19 @@ function withoutReactionKeys(el: El): El {
   return withoutLobbyKeys(el, REACTION_KEY_PREFIX).el
 }
 
+/**
+ * The element without its planning keys (wave T, CONTRACTS_REV 14: `card:*`, `sb:*`, `kanban`, `timeline`).
+ * The wave T FOUNDATION's seed carries none, from any content, as its room takes none (custom-data.ts
+ * `planningPending`): `card:who` names a person, and seeds skip merge's identity checks. WS1 replaces this with
+ * the wave's rule (docs/WAVE-T-CONTRACTS.md §3.3: every key kept but `card:who`, which stays only when the
+ * assignee-refs answer for the target board names it; all four classes stripped while DRAFTROOM_PLANNING is off).
+ */
+function withoutPlanningKeys(el: El): El {
+  let out = el
+  for (const prefix of PLANNING_KEY_CLASSES) out = withoutLobbyKeys(out, prefix).el
+  return out
+}
+
 /** Validates content for a new board; throws 400 with codes and ids only (never board text). */
 export function prepareSeedContent(raw: SeedContent): SeedContent {
   const seen = new Set<string>()
@@ -136,7 +150,7 @@ export function prepareSeedContent(raw: SeedContent): SeedContent {
   for (const candidate of raw.elements) {
     if (!isObject(candidate)) throw invalid('Every element must be an object.')
     if (candidate.isDeleted === true) continue
-    const el = withoutReactionKeys({ ...(candidate as El) })
+    const el = withoutPlanningKeys(withoutReactionKeys({ ...(candidate as El) }))
     if (el.type === 'image') el.status = 'saved'
     if (typeof el.id !== 'string' || seen.has(el.id)) throw invalid('Element ids must be unique strings.')
     seen.add(el.id)

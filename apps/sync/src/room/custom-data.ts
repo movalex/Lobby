@@ -14,6 +14,12 @@
 //  4. api-validated `file` (canonicalized from the file-refs answer; `versionId` must be the version in
 //     `fileId`; `name` is the client's) and `pdfPage` (derived from `fileId`'s `.p<n>`);
 //  5. free keys (`tag:*` needs its `tagDef:*` in lb_doc; the others are schema-checked only).
+// Wave T (CONTRACTS_REV 14): the planning keys (canvas-schema planning-keys.ts: `card:*`, `sb:*`, `kanban`,
+// `timeline`). While the planning kill switch is off (DRAFTROOM_PLANNING) every write of one is UNAVAILABLE (the stored
+// keys stay; an undelete's own keys come back with it). With it on, the wave T FOUNDATION still refuses every write of
+// one INVALID: their rules (roles, guests, the assignee check through the api's assignee-refs, the audio ref) are WS1's
+// (docs/WAVE-T-CONTRACTS.md §3), which replaces `planningPending` below. Their types and cross-key rules are
+// checkElement's (planning-keys.ts planningElementProblem), for every writer.
 // A locked element takes only the registry's lock-exempt keys (lockExemptKey; merge.ts step 5).
 
 import {
@@ -26,6 +32,7 @@ import {
 } from '@draftroom/canvas-schema/custom-data'
 import { TAG_DEF_KEY_PREFIX } from '@draftroom/canvas-schema/doc'
 import { pdfPageOf, versionIdOf } from '@draftroom/canvas-schema/limits'
+import { isPlanningKey } from '@draftroom/canvas-schema/planning-keys'
 import type { RejectCode } from '@draftroom/canvas-schema/protocol'
 import { identityUidOf, isReactionKey } from '@draftroom/canvas-schema/reactions'
 import type { FileRefAnswer } from '../file-refs.ts'
@@ -56,7 +63,18 @@ export interface CustomDataContext {
    * UNAVAILABLE (the keys already stored stay; an undelete's own keys come back with it). Absent: on.
    */
   readonly reactions?: boolean
+  /**
+   * Wave T: the planning kill switch (config.ts DRAFTROOM_PLANNING). False: every planning key write is UNAVAILABLE
+   * (the keys already stored stay; an undelete's own keys come back with it). Absent: on.
+   */
+  readonly planning?: boolean
 }
+
+/**
+ * Wave T foundation: no planning key write is taken yet, whatever the switch says (WS1's rules replace this with
+ * their checks; the room test pins it). True until then.
+ */
+export const planningPending = true
 
 export type Verdict<T> =
   | { readonly ok: true; readonly value: T }
@@ -94,6 +112,11 @@ function checkKey(
 ): Verdict<unknown> {
   const spec = lobbyKeySpec(key)
   if (!spec) return bad('INVALID')
+  // wave T: the planning keys (the kill switch first: nothing is written, the stored keys stay)
+  if (isPlanningKey(key)) {
+    if (ctx.planning === false) return bad('UNAVAILABLE')
+    if (planningPending) return bad('INVALID')
+  }
   // the value's schema first (a patch's `c` was checked at parse time, a create's was not): a malformed
   // `file` on an image create read `versionId` of a string and answered UNAVAILABLE, retryable and
   // outside the abuse count (V2)

@@ -45,6 +45,8 @@ export const ELEMENT_ENGINE_ENV: Readonly<Record<string, string>> = {
   // wave N (N2-5): reactions on, as render.yaml deploys the sync (the code's default is off, fail-closed; the
   // kill-switch tests set it off or remove it)
   DRAFTROOM_REACTIONS: 'on',
+  // wave T: planning on, so the room speaks CONTRACTS_REV (14); the kill-switch tests set it off or remove it
+  DRAFTROOM_PLANNING: 'on',
 }
 
 /** A fresh board id of the api's shape (`b-` + 10 characters). */
