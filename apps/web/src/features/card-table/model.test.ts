@@ -16,7 +16,10 @@ import {
   tableCsv,
 } from './model.ts'
 
-const row = (id: string, over: Partial<TableRow> & { card?: Partial<TableRow['card']> } = {}): TableRow => ({
+const row = (
+  id: string,
+  over: Omit<Partial<TableRow>, 'card'> & { card?: Partial<TableRow['card']> } = {},
+): TableRow => ({
   id,
   title: id,
   who: '',

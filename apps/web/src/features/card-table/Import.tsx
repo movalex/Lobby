@@ -6,7 +6,7 @@
 // own paste.
 import { isAllowedLink } from '@draftroom/canvas-schema/limits'
 import { kanbanOf, type PlanningElement } from '@draftroom/canvas-schema/planning'
-import { useId, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
 import { useValue } from '../../lib/signals.ts'
 import { cardsOf } from '../cards/bridge.ts'
@@ -54,6 +54,8 @@ export function ImportForm({ ctx, onDone }: { ctx: CanvasFeatureContext; onDone(
     ctx,
   ])
   const guest = isGuest(ctx)
+  // assignees are matched against the people on the board now
+  useEffect(() => void cardsOf(ctx.canvas)?.people.refresh(), [ctx])
   const plan = importPlan(rows, mapping, {
     people,
     order: dateOrder,

@@ -4,7 +4,7 @@
 // board" (the card's popover), CSV out under the board's export policy and CSV in (./Import.tsx). The title is
 // read-only here: it is the card's label, edited on the canvas under the text lease (the popover's "Edit title").
 import { CARD_STATUS_LABELS, CARD_STATUSES, type CardStatus } from '@draftroom/canvas-schema/planning'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
 import { computed, useValue } from '../../lib/signals.ts'
 import { exportAllowed, guardExport } from '../canvas-ux/ported/export-gate.ts'
@@ -57,6 +57,8 @@ export function CardTablePanel({ ctx }: { ctx: CanvasFeatureContext; close(): vo
   const [scope, setScope] = useState<'board' | 'selection'>('board')
   const [importing, setImporting] = useState(false)
   const today = todayLocal()
+  // the people on the board now (someone may have been added since the board opened)
+  useEffect(() => void cardsOf(canvas)?.people.refresh(), [canvas])
   const selectionKey = useValue('card-table.selection', () => canvas.selection.join(' '), [canvas])
   const rowsSignal = useMemo(
     () =>
