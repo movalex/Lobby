@@ -161,7 +161,7 @@ test('the card is not shown to a person who cannot create, and what it shows is 
       await card
         .getByTestId('whats-new-item')
         .evaluateAll((els) => els.map((e) => e.getAttribute('data-item-id'))),
-    ).toEqual(['vector-pdf', 'reactions', 'board-links', 'since-visit', 'big-boards'])
+    ).toEqual(['elements-icons', 'elements-kits', 'elements-library', 'board-links', 'big-boards'])
   } finally {
     await p.context.close()
   }
