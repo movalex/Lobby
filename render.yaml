@@ -36,6 +36,15 @@ envVarGroups:
     envVars:
       - key: DRAFTROOM_WORKER_TOKEN
         generateValue: true # base64 256-bit, 44 chars (the api requires >= 32)
+  # Wave R (lead-only; landed by the wave R foundation, read by WS2's chat hooks): the key Slack and Teams webhook URLs
+  # are sealed with at rest (AES-256-GCM, apps/api/src/crypto/sealed.ts). In its OWN group, linked to the api only:
+  # sync and workers never need it, and the shared secrets group would hand it to sync. Unset, chat hooks are off
+  # (fail closed). Rotating it: copy the old value into DRAFTROOM_WEBHOOK_SECRET_PREVIOUS on the api (Dashboard) first,
+  # or every saved hook must be pasted again (docs/WAVE-R-CONTRACTS.md §4.3).
+  - name: draftroom-staging-webhook-secret
+    envVars:
+      - key: DRAFTROOM_WEBHOOK_SECRET
+        generateValue: true # base64 256-bit, 44 chars (the api requires >= 32 and a value no other secret has)
 
 databases:
   - name: draftroom-staging-db
@@ -299,6 +308,8 @@ services:
         value: "180"
       - fromGroup: draftroom-staging-secrets
       - fromGroup: draftroom-staging-worker-token
+      # wave R: chat hook URLs are sealed with it (api only)
+      - fromGroup: draftroom-staging-webhook-secret
 
   # ---------------------------------------------------------------------------------------------
   # sync: Lobby's element rooms (the Excalidraw canvas). EXACTLY ONE instance (one authoritative room

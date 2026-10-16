@@ -204,3 +204,51 @@ test('render.yaml: the wave N keys (the lead applies them through the Render API
   assert.equal(sync('DRAFTROOM_AI_VISION'), null)
   assert.equal(api('DRAFTROOM_REACTIONS'), null)
 })
+
+/** The env keys of group `group` with their lines (`- key:` and what follows until the next key or group). */
+function groupKeys(yaml, group) {
+  const lines = yaml.replace(/\r\n?/g, '\n').split('\n')
+  const start = lines.findIndex((l) => l.trimEnd() === `  - name: ${group}`)
+  if (start < 0) return null
+  const keys = {}
+  let key = null
+  for (let i = start + 1; i < lines.length && !/^ {2}- name:/.test(lines[i]) && !/^\S/.test(lines[i]); i++) {
+    const k = /^\s+- key: (\S+)/.exec(lines[i])
+    if (k) {
+      key = k[1]
+      keys[key] = []
+    } else if (key && lines[i].trim()) keys[key].push(lines[i].trim())
+  }
+  return keys
+}
+
+/** Whether the service named `service` links env group `group`. */
+function linksGroup(yaml, service, group) {
+  const lines = yaml.replace(/\r\n?/g, '\n').split('\n')
+  const start = lines.findIndex((l) => l.trimEnd() === `    name: ${service}`)
+  if (start < 0) return false
+  for (let i = start + 1; i < lines.length && !/^ {2}- type:/.test(lines[i]); i++)
+    if (lines[i].trim() === `- fromGroup: ${group}`) return true
+  return false
+}
+
+test('render.yaml: the wave R key (a generated secret in its own group, linked to the api only)', () => {
+  const keys = groupKeys(RENDER_YAML, 'draftroom-staging-webhook-secret')
+  assert.ok(keys, 'the group exists')
+  assert.deepEqual(Object.keys(keys), ['DRAFTROOM_WEBHOOK_SECRET'])
+  assert.match(keys.DRAFTROOM_WEBHOOK_SECRET.join(' '), /^generateValue: true\b/)
+  assert.equal(linksGroup(RENDER_YAML, 'draftroom-staging-api', 'draftroom-staging-webhook-secret'), true)
+  assert.equal(linksGroup(RENDER_YAML, 'draftroom-staging-sync', 'draftroom-staging-webhook-secret'), false)
+  // never in the shared group (sync would get it) nor as a plain value anywhere
+  assert.deepEqual(Object.keys(groupKeys(RENDER_YAML, 'draftroom-staging-secrets')).sort(), [
+    'DRAFTROOM_INTERNAL_SECRET',
+    'DRAFTROOM_TICKET_SECRET',
+  ])
+  assert.equal(envValue(RENDER_YAML, 'draftroom-staging-api', 'DRAFTROOM_WEBHOOK_SECRET'), null)
+  // the test seams are local development only: never in the Blueprint
+  for (const k of ['DRAFTROOM_MIRO_TEST_ORIGINS', 'DRAFTROOM_CHAT_HOOK_TEST_ORIGINS'])
+    assert.equal(RENDER_YAML.includes(k), false, k)
+  // the helpers read what they should
+  const sample = 'envVarGroups:\n  - name: g\n    envVars:\n      - key: A\n        value: x\n'
+  assert.deepEqual(groupKeys(sample, 'g'), { A: ['value: x'] })
+})

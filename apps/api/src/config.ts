@@ -119,6 +119,15 @@ export interface ApiConfig {
    * refuse otherwise. Local development only: it requires DRAFTROOM_DEV_AUTH=1 (refused in production).
    */
   linkPreviewTestOrigins: readonly string[]
+  /** Wave R: DRAFTROOM_MIRO_TEST_ORIGINS (local dev only): the fake Miro server's origins, or null. */
+  miroTestOrigins: { api: string; files: string | null } | null
+  /** Wave R: DRAFTROOM_CHAT_HOOK_TEST_ORIGINS (local dev only): the fake webhook receiver's origins, or null. */
+  chatHookTestOrigins: { slack: string; teams: string | null } | null
+  /**
+   * Wave R: DRAFTROOM_WEBHOOK_SECRET (and _PREVIOUS while rotating): the key chat hook URLs are sealed with. null when
+   * unset: chat hooks are off (fail closed).
+   */
+  webhookSecret: { current: string; previous: string | null } | null
   /**
    * DRAFTROOM_FEEDBACK_ADMINS (wave J5, features/feedback/admins.ts): normalised verified addresses of the
    * people who read the feedback inbox and mark items done. Empty (unset): nobody does through the app.
@@ -351,11 +360,16 @@ export function parseBlobStore(env: Env, dataDir: string, production: boolean): 
   return { kind: 'r2', accountId, accessKeyId, secretAccessKey, bucket, endpoint }
 }
 
-/** DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS: exact http(s) origins, behind the local-dev guard only. */
-export function parseLinkPreviewTestOrigins(env: Env, devAuth: boolean): string[] {
-  const raw = read(env, 'DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS')
+/** A list of exact http(s) origins in `name`, behind the local-dev guard only (an e2e fixture server's seam). */
+function parseTestOrigins(
+  env: Env,
+  name: string,
+  devAuth: boolean,
+  max = Number.POSITIVE_INFINITY,
+): string[] {
+  const raw = read(env, name)
   if (raw === undefined) return []
-  if (!devAuth) throw new Error('DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS requires DRAFTROOM_DEV_AUTH=1')
+  if (!devAuth) throw new Error(`${name} requires DRAFTROOM_DEV_AUTH=1`)
   const out: string[] = []
   for (const part of raw.split(',')) {
     const v = part.trim()
@@ -364,13 +378,69 @@ export function parseLinkPreviewTestOrigins(env: Env, devAuth: boolean): string[
     try {
       url = new URL(v)
     } catch {
-      throw new Error('DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS must list http(s) origins (scheme://host:port)')
+      throw new Error(`${name} must list http(s) origins (scheme://host:port)`)
     }
     if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.origin !== v.replace(/\/$/, ''))
-      throw new Error('DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS must list http(s) origins (scheme://host:port)')
+      throw new Error(`${name} must list http(s) origins (scheme://host:port)`)
     out.push(url.origin)
   }
+  if (out.length > max) throw new Error(`${name} lists at most ${max} origins`)
   return out
+}
+
+/** DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS: exact http(s) origins, behind the local-dev guard only. */
+export function parseLinkPreviewTestOrigins(env: Env, devAuth: boolean): string[] {
+  return parseTestOrigins(env, 'DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS', devAuth)
+}
+
+/**
+ * Wave R: the fake Miro server's two origins (e2e/tests/support/miro.ts), `<api>,<files>`: the first stands for
+ * https://api.miro.com, the second for the signed-download host. Behind the local-dev guard only.
+ */
+export function parseMiroTestOrigins(env: Env, devAuth: boolean): ApiConfig['miroTestOrigins'] {
+  const list = parseTestOrigins(env, 'DRAFTROOM_MIRO_TEST_ORIGINS', devAuth, 2)
+  return list[0] ? { api: list[0], files: list[1] ?? null } : null
+}
+
+/**
+ * Wave R: the fake webhook receiver (e2e/tests/support/chat-hooks.ts), `<slack>[,<teams>]`: each origin stands for
+ * that provider's webhook host; its path and query rules still apply. Behind the local-dev guard only.
+ */
+export function parseChatHookTestOrigins(env: Env, devAuth: boolean): ApiConfig['chatHookTestOrigins'] {
+  const list = parseTestOrigins(env, 'DRAFTROOM_CHAT_HOOK_TEST_ORIGINS', devAuth, 2)
+  return list[0] ? { slack: list[0], teams: list[1] ?? null } : null
+}
+
+/**
+ * Wave R: DRAFTROOM_WEBHOOK_SECRET, the key chat hook URLs are sealed with (crypto/sealed.ts), and
+ * DRAFTROOM_WEBHOOK_SECRET_PREVIOUS, the one being rotated away from (it only opens). Unset: null, and chat hooks are
+ * off (fail closed: no hook can be saved, sent to or read). Each is checkSecret-validated (at least 32 characters, no
+ * development placeholder in production) and must differ from every other secret of the api.
+ */
+export function parseWebhookSecret(
+  env: Env,
+  production: boolean,
+  others: readonly string[],
+): ApiConfig['webhookSecret'] {
+  const raw = read(env, 'DRAFTROOM_WEBHOOK_SECRET')
+  const previousRaw = read(env, 'DRAFTROOM_WEBHOOK_SECRET_PREVIOUS')
+  if (raw === undefined) {
+    if (previousRaw !== undefined)
+      throw new Error('DRAFTROOM_WEBHOOK_SECRET_PREVIOUS is set but DRAFTROOM_WEBHOOK_SECRET is not')
+    return null
+  }
+  const current = checkSecret('DRAFTROOM_WEBHOOK_SECRET', raw, production)
+  if (others.includes(current))
+    throw new Error('DRAFTROOM_WEBHOOK_SECRET must differ from every other secret of the api')
+  let previous: string | null = null
+  if (previousRaw !== undefined) {
+    previous = checkSecret('DRAFTROOM_WEBHOOK_SECRET_PREVIOUS', previousRaw, production)
+    if (previous === current || others.includes(previous))
+      throw new Error(
+        'DRAFTROOM_WEBHOOK_SECRET_PREVIOUS must differ from DRAFTROOM_WEBHOOK_SECRET and the other secrets',
+      )
+  }
+  return { current, previous }
 }
 
 /**
@@ -549,6 +619,13 @@ export function loadConfig(env: Env = process.env): ApiConfig {
       'DRAFTROOM_FEEDBACK_ADMINS needs a provider that verifies addresses: AUTH_PROVIDER=email lets anyone sign in as any address',
     )
 
+  const webhookSecret = parseWebhookSecret(env, production, [
+    ticketSecret,
+    internalSecret,
+    workerToken,
+    ...(openSignin?.partnerToken ? [openSignin.partnerToken] : []),
+  ])
+
   const dataDir = resolveDataDir(env)
   return {
     production,
@@ -599,6 +676,9 @@ export function loadConfig(env: Env = process.env): ApiConfig {
     ai: parseAiConfig(env, production),
     creators: parseCreatorPolicy(env),
     linkPreviewTestOrigins: parseLinkPreviewTestOrigins(env, devAuth),
+    miroTestOrigins: parseMiroTestOrigins(env, devAuth),
+    chatHookTestOrigins: parseChatHookTestOrigins(env, devAuth),
+    webhookSecret,
     feedbackAdmins,
     visitsRetentionDays: int(env, 'DRAFTROOM_VISITS_RETENTION_DAYS', VISITS_RETENTION_DAYS_DEFAULT, 1, 3650),
   }
