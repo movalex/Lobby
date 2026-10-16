@@ -5,11 +5,12 @@
 //
 //   - two api processes' delivery loops, run at the same time over one outbox, send each message exactly once;
 //   - the same notification queued by ten transactions at once gives one row per hook;
-//   - twenty-five hooks added at once leave exactly twenty (the workspace row lock), the rest answer 409;
+//   - twenty-five hooks added at once to a workspace that has one leave exactly twenty (the workspace row lock): 19
+//     are added and the other 6 answer 409, every request with room succeeds;
 //   - a person's choices changed while their membership is removed never answer 5xx;
 //   - a row claimed by a process that died is taken back after its lease and sent once.
 
-import { CHAT_DELIVERY, CHAT_HOOK_LIMITS } from '@draftroom/contracts'
+import { CHAT_DELIVERY, CHAT_HOOK_CODES, CHAT_HOOK_LIMITS } from '@draftroom/contracts'
 import { afterEach, describe, expect, it } from 'vitest'
 import { chatDeliveryOf, enqueueChatDeliveries } from '../../../src/features/chat-hooks/index.ts'
 import { createTestApi, DEV_STUDIO, type TestApi } from '../../helpers.ts'
@@ -113,6 +114,9 @@ describe.skipIf(!PG_URL)('chat notifications on real Postgres (DRAFTROOM_TEST_DA
   it(`${CHAT_HOOK_LIMITS.hooksPerWorkspace + 5} hooks added at once leave exactly ${CHAT_HOOK_LIMITS.hooksPerWorkspace}`, async () => {
     w = await chatWorld()
     const world = w
+    // chatWorld made one hook already: room for 19 more
+    const before = (await world.api.db.one<{ n: number }>('SELECT count(*)::int AS n FROM chat_hooks')).n
+    expect(before).toBe(1)
     const results = await Promise.all(
       Array.from({ length: CHAT_HOOK_LIMITS.hooksPerWorkspace + 5 }, (_, i) =>
         world.owner.req('POST', HOOKS, {
@@ -123,10 +127,14 @@ describe.skipIf(!PG_URL)('chat notifications on real Postgres (DRAFTROOM_TEST_DA
       ),
     )
     const codes = results.map((r) => r.statusCode)
-    expect(codes.filter((c) => c >= 500)).toEqual([])
+    expect(codes.filter((c) => c !== 201 && c !== 409)).toEqual([])
     const n = await world.api.db.one<{ n: number }>('SELECT count(*)::int AS n FROM chat_hooks')
     expect(n.n).toBe(CHAT_HOOK_LIMITS.hooksPerWorkspace)
-    expect(codes.filter((c) => c === 409)).toHaveLength(5)
+    // a request with room never fails: as many were added as there was room for, and only the rest were refused
+    const room = CHAT_HOOK_LIMITS.hooksPerWorkspace - before
+    expect(codes.filter((c) => c === 201)).toHaveLength(room)
+    expect(codes.filter((c) => c === 409)).toHaveLength(results.length - room)
+    for (const r of results.filter((x) => x.statusCode === 409)) expect(r.json().error.code).toBe(CHAT_HOOK_CODES.full)
   })
 
   it('changing a person’s choices while their membership is removed never answers 5xx', async () => {
