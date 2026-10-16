@@ -10,8 +10,25 @@ export type BoardRole = (typeof BOARD_ROLES)[number]
 export const BOARD_VISIBILITIES = ['private', 'workspace_view', 'workspace_edit'] as const
 export type BoardVisibility = (typeof BOARD_VISIBILITIES)[number]
 
+/** The statuses a board can be seen in (lists, routes, the dashboard's filters). */
 export const BOARD_STATUSES = ['active', 'archived', 'trashed'] as const
 export type BoardStatus = (typeof BOARD_STATUSES)[number]
+
+/**
+ * Wave R (migration 0035_board_imports): a board an import job is still building (Miro import, a backup restore) is
+ * stored with status `importing` until the job activates it in one transaction. It is NOT a BoardStatus: no
+ * list, filter, route or schema names it, `can()` refuses every action on it (and on any other status it does not
+ * know, so a build that meets a newer status fails closed), and the api's access loaders treat its row as missing.
+ */
+export const IMPORTING_BOARD_STATUS = 'importing'
+/** Every value boards.status may hold (0035's CHECK). */
+export const BOARD_ROW_STATUSES = [...BOARD_STATUSES, IMPORTING_BOARD_STATUS] as const
+export type BoardRowStatus = (typeof BOARD_ROW_STATUSES)[number]
+
+/** Whether a stored status is one a person may ever see the board in (fails closed on anything else). */
+export function isBoardStatus(status: unknown): status is BoardStatus {
+  return (BOARD_STATUSES as readonly unknown[]).includes(status)
+}
 
 export const BOARD_ACTIONS = [
   'view',
@@ -76,9 +93,11 @@ const ACTIVE: Record<BoardAction, BoardRole> = {
  * Whether `role` may perform `action` on a board in `status`.
  * - archived: read-only for everyone (view); owners may restore or trash it.
  * - trashed: nobody can open it; owners may restore it (it is listed in their trash).
+ * - anything else (wave R's `importing`, or a status a newer build added): nothing, for anyone.
  */
 export function can(role: BoardRole | null, action: BoardAction, status: BoardStatus = 'active'): boolean {
   if (!role) return false
+  if (!isBoardStatus(status)) return false
   if (status === 'trashed') return action === 'restore' && role === 'owner'
   if (status === 'archived') {
     if (action === 'view') return true

@@ -2,13 +2,18 @@ import { describe, expect, it } from 'vitest'
 import {
   BOARD_ACTIONS,
   BOARD_ROLES,
+  BOARD_ROW_STATUSES,
+  BOARD_STATUSES,
   BOARD_VISIBILITIES,
   type BoardRole,
+  type BoardStatus,
   can,
   canCreateContent,
   canCreateInWorkspace,
   canEditCanvas,
   canHandOutAccess,
+  IMPORTING_BOARD_STATUS,
+  isBoardStatus,
   resolveBoardRole,
   WORKSPACE_ROLES,
 } from './index.ts'
@@ -88,6 +93,26 @@ describe('can', () => {
       expect(canEditCanvas(role, 'trashed')).toBe(false)
       expect(can(role, 'restore', 'trashed')).toBe(role === 'owner')
     }
+  })
+
+  it('wave R: an importing board (and any status this build does not know) allows nothing, to anyone', () => {
+    // the stored value reaches can() as a BoardStatus-typed string from a row, so the check is at run time
+    for (const status of [IMPORTING_BOARD_STATUS, 'deleted', '', 'ACTIVE'] as unknown as BoardStatus[])
+      for (const role of BOARD_ROLES)
+        for (const action of BOARD_ACTIONS)
+          expect(can(role, action, status), `${status} ${role} ${action}`).toBe(false)
+    for (const role of BOARD_ROLES) {
+      expect(canEditCanvas(role, IMPORTING_BOARD_STATUS as unknown as BoardStatus)).toBe(false)
+      expect(canHandOutAccess(true, role, IMPORTING_BOARD_STATUS as unknown as BoardStatus)).toBe(false)
+    }
+  })
+
+  it('wave R: importing is a row status only, never a status anyone may list or see', () => {
+    expect(BOARD_STATUSES).toEqual(['active', 'archived', 'trashed'])
+    expect(BOARD_ROW_STATUSES).toEqual(['active', 'archived', 'trashed', 'importing'])
+    expect(isBoardStatus('importing')).toBe(false)
+    expect(BOARD_STATUSES.every((s) => isBoardStatus(s))).toBe(true)
+    expect(isBoardStatus(undefined)).toBe(false)
   })
 
   it('canvas editing is exactly owner/editor on active boards', () => {

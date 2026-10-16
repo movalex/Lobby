@@ -310,13 +310,19 @@ export type ErrorBody = z.infer<typeof ErrorBody>
 
 // Feature schemas (docs/FEATURES-M2-CONTRACTS.md): one file per feature, owned by that feature.
 export * from './ai.ts'
+// wave R foundation (WS4 owns it after): board backup and restore (.lobby)
+export * from './board-backup.ts'
 // wave N foundation (WS7 routes): board cards and backlinks
 export * from './board-links.ts'
 // wave M foundation (W5 owns these after it): the board-open read, usage counters, workspace templates
 export * from './board-open.ts'
+// wave R foundation (WS2 owns it after): notifications to Slack and Teams
+export * from './chat-hooks.ts'
 export * from './comments.ts'
 export * from './cursor-chat.ts'
 export * from './dashboard.ts'
+// wave R foundation (WS3 owns it after): design-file previews (PSD, AI, TIFF, HEIC)
+export * from './design-previews.ts'
 export * from './domain-access.ts'
 // wave Q foundation (WS3 owns it after): the Elements panel's drag payloads and insert options
 export * from './elements-panel.ts'
@@ -326,9 +332,13 @@ export * from './guests.ts'
 export * from './history.ts'
 // wave Q foundation (WS1, WS2 own them after): the built-in icons' index and shards, the element library
 export * from './icons.ts'
+// wave R foundation (shared by WS1 and WS4; the lead's): import jobs
+export * from './imports.ts'
 export * from './library.ts'
 export * from './link-preview.ts'
 export * from './mindmap.ts'
+// wave R foundation (WS1 owns it after): import from Miro
+export * from './miro-import.ts'
 export * from './outside.ts'
 export * from './present-live.ts'
 export * from './search.ts'
