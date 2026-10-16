@@ -65,11 +65,13 @@ export function isLowResolutionPreview(meta: AssetVersionMeta | null, props: Car
 /** The badge's words: "Flattened preview · PSD". */
 export const designBadgeText = (format: DesignFormatRow) => `${DESIGN_PREVIEW_BADGE} · ${format.label}`
 
-/** The hint a design card shows under its preview, or null: HEIC's (no preview) or the low-resolution note. */
+/** The hint a design card shows under its preview, or null: HEIC's (no preview), or the low-resolution note. */
 export function designHint(meta: AssetVersionMeta | null, props: CardProps): string | null {
   const format = cardDesignFormat(meta, props)
   if (format?.kind === 'heic') return DESIGN_PREVIEW_MESSAGES[DESIGN_PREVIEW_CODES.heic]
-  if (isLowResolutionPreview(meta, props)) return DESIGN_PREVIEW_MESSAGES[DESIGN_PREVIEW_CODES.psdThumbnailOnly]
+  if (isLowResolutionPreview(meta, props)) {
+    return DESIGN_PREVIEW_MESSAGES[DESIGN_PREVIEW_CODES.psdThumbnailOnly]
+  }
   return null
 }
 

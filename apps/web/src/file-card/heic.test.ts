@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { convertHeicPhotos, HEIC_MAX_PIXELS, type HeicDeps, heicAsJpeg, isHeicFile, jpegName } from './heic.ts'
+import {
+  convertHeicPhotos,
+  HEIC_MAX_PIXELS,
+  type HeicDeps,
+  heicAsJpeg,
+  isHeicFile,
+  jpegName,
+} from './heic.ts'
 
 const heic = (name = 'IMG_0001.HEIC', type = 'image/heic') => new File([new Uint8Array(64)], name, { type })
 
@@ -30,7 +37,8 @@ describe('HEIC photos in the uploader', () => {
     const out = await heicAsJpeg(heic(), deps)
     expect(out.name).toBe('IMG_0001.jpg')
     expect(out.type).toBe('image/jpeg')
-    expect(calls).toMatchObject({ decoded: 1, drawn: 1, closed: 1, encoded: [{ type: 'image/jpeg', quality: 0.9 }] })
+    expect(calls).toMatchObject({ decoded: 1, drawn: 1, closed: 1 })
+    expect(calls.encoded).toEqual([{ type: 'image/jpeg', quality: 0.9 }])
   })
 
   it('Chrome, Edge, Firefox: no decoder, so the file is uploaded unchanged (an attachment with the hint)', async () => {

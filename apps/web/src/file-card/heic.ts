@@ -6,7 +6,7 @@
 // re-encode also drops the photo's EXIF block (location included); the orientation is applied first.
 import { designFormatOf } from '@draftroom/contracts'
 
-/** Bigger pictures stay HEIC (an attachment): the canvas would need 4 bytes per pixel. iPhones take 12 or 48 MP. */
+/** Bigger pictures stay HEIC (an attachment): the canvas takes 4 bytes a pixel. iPhones take 12 or 48 MP. */
 export const HEIC_MAX_PIXELS = 50_000_000
 export const HEIC_JPEG_QUALITY = 0.9
 
@@ -53,7 +53,7 @@ export async function heicAsJpeg(file: File, deps: HeicDeps = browser()): Promis
   }
 }
 
-/** The files of one upload with their HEIC photos converted where possible (the others unchanged, in order). */
+/** The files of one upload with their HEIC photos converted where possible (the others unchanged). */
 export async function convertHeicPhotos(files: readonly File[], deps?: HeicDeps): Promise<File[]> {
   return Promise.all(files.map((f) => (isHeicFile(f) ? heicAsJpeg(f, deps) : f)))
 }

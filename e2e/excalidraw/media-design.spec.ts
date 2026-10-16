@@ -55,7 +55,8 @@ test('design previews: PSD, TIFF and AI become flattened previews with their typ
         await expect(card).toHaveAttribute('data-design', d.kind)
         await expect(card.getByTestId('file-card-design-badge')).toHaveText(`Flattened preview · ${d.label}`)
         await expect(card.getByTestId('file-card-design-hint')).toHaveCount(0)
-        await expect(card.getByTestId('file-card-pages')).toHaveText(d.pages === 1 ? '1 page' : `${d.pages} pages`)
+        const pages = d.pages === 1 ? '1 page' : `${d.pages} pages`
+        await expect(card.getByTestId('file-card-pages')).toHaveText(pages)
         await expect(card.getByTestId('file-card-preview')).toBeVisible()
         await expect(card).toHaveAttribute('aria-description', `${d.label}: ${d.file.name}`)
         await expect(card).not.toContainText(/editable/i)
@@ -107,14 +108,16 @@ test('design previews: a thumbnail-only PSD says it is low resolution, HEIC is a
     const card = await settled(a.page, 'nocomposite.psd', 'ready')
     await expect(card.getByTestId('file-card-preview')).toBeVisible()
     await expect(card.getByTestId('file-card-design-badge')).toHaveText('Flattened preview · PSD')
-    await expect(card.getByTestId('file-card-design-hint')).toHaveText(DESIGN_PREVIEW_MESSAGES.PSD_THUMBNAIL_ONLY)
+    const hint = card.getByTestId('file-card-design-hint')
+    await expect(hint).toHaveText(DESIGN_PREVIEW_MESSAGES.PSD_THUMBNAIL_ONLY)
   })
 
   await test.step('HEIC: kept as the photo itself, an attachment with the hint (Chromium cannot decode it)', async () => {
     const card = await settled(a.page, 'IMG_0001.HEIC', 'ready')
     await expect(card).toHaveAttribute('data-kind', 'other')
     await expect(card).toHaveAttribute('data-design', 'heic')
-    await expect(card.getByTestId('file-card-design-hint')).toHaveText(DESIGN_PREVIEW_MESSAGES.HEIC_NO_PREVIEW)
+    const hint = card.getByTestId('file-card-design-hint')
+    await expect(hint).toHaveText(DESIGN_PREVIEW_MESSAGES.HEIC_NO_PREVIEW)
     await expect(card.getByTestId('file-card-design-badge')).toHaveCount(0)
     await expect(card.getByTestId('file-card-download')).toHaveAttribute('download', 'IMG_0001.HEIC')
   })
