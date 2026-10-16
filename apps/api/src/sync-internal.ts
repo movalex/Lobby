@@ -31,6 +31,12 @@ export interface LobbySeed {
   format: 'lobby-elements'
   elements: unknown[]
   doc: Record<string, unknown>
+  /**
+   * Wave T: the content's `card:who` uids that are accounts with a role on the NEW board (its row does not exist
+   * when the seed runs, so the sync cannot ask assignee-refs for it): the sync keeps only these. An older sync
+   * ignores the field (and holds no planning key).
+   */
+  assignees?: string[]
 }
 
 export const isLobbySeed = (v: RoomSnapshotJson | LobbySeed): v is LobbySeed =>

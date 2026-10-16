@@ -35,7 +35,7 @@ import { docValueProblem } from '@draftroom/canvas-schema/doc'
 import { checkElement, type WireElement } from '@draftroom/canvas-schema/elements'
 import { compareByIndex, indexKeysBetween, isValidIndexKey } from '@draftroom/canvas-schema/engine'
 import { checkInvariants } from '@draftroom/canvas-schema/invariants'
-import { MAX_ITEMS, MAX_LIVE_ELEMENTS, MAX_TAG_DEFS } from '@draftroom/canvas-schema/limits'
+import { MAX_ITEMS, MAX_LIVE_ELEMENTS, MAX_TAG_DEFS, MAX_UID_CHARS } from '@draftroom/canvas-schema/limits'
 import { CARD_WHO_KEY, PLANNING_KEY_CLASSES } from '@draftroom/canvas-schema/planning-keys'
 import { REACTION_KEY_PREFIX } from '@draftroom/canvas-schema/reactions'
 import type { ImportBoardReport } from '@draftroom/contracts'
@@ -57,6 +57,12 @@ export interface SeedContent {
   doc: Record<string, unknown>
   /** a Miro body's report (the seed answers with it); absent for the other formats */
   report?: ImportBoardReport
+  /**
+   * Wave T: the uids the api names as accounts with access to the NEW board (`card:who` kept only for them). The api
+   * seeds before the board's row exists, so assignee-refs cannot answer for it (a 404); the api decides it in a
+   * dry run of the board's own transaction instead. Absent: the seed asks assignee-refs.
+   */
+  assignees?: readonly string[]
 }
 
 const invalid = (message: string) => new HttpError(400, 'bad-request', message)
@@ -224,22 +230,40 @@ export async function parseSeedBody(body: unknown, now: number): Promise<SeedCon
     )
   const doc = body.doc === undefined ? {} : body.doc
   if (!isObject(doc)) throw invalid('doc must be an object.')
-  return { elements: body.elements as WireElement[], doc }
+  if (body.assignees === undefined) return { elements: body.elements as WireElement[], doc }
+  const a = body.assignees
+  if (
+    !Array.isArray(a) ||
+    a.length > MAX_SEED_ASSIGNEES ||
+    !a.every((u) => typeof u === 'string' && u.length >= 1 && u.length <= MAX_UID_CHARS)
+  )
+    throw invalid(`assignees must be at most ${MAX_SEED_ASSIGNEES} uids.`)
+  return { elements: body.elements as WireElement[], doc, assignees: a as string[] }
 }
 
+/** At most this many uids in a seed's `assignees` (each card names one; a board names few people). */
+const MAX_SEED_ASSIGNEES = 1000
+
 /**
- * The seed's planning rule for `boardId` (`SeedPlanning`): the switch, and the assignee-refs answer for the target
- * board when the content names anyone. A lookup that fails (a 404: the api seeds a new board before its row exists;
+ * The seed's planning rule for `boardId` (`SeedPlanning`): the switch, and who may stay assigned when the content
+ * names anyone: the api's `assignees` for a new board (its row does not exist yet), else the assignee-refs answer
+ * for the target board. A lookup that fails (a 404: the api seeds a new board before its row exists;
  * an api without the route; the 3 s timeout) keeps no assignee: fail closed, the cards stay cards.
  */
 async function seedPlanningOf(
   ctx: RoomExtensionContext,
   boardId: string,
   elements: readonly unknown[],
+  named?: readonly string[],
 ): Promise<SeedPlanning> {
   if (ctx.deps.config.planning !== true) return { planning: false }
   const uids = seedAssigneeUids(elements)
   if (!uids.length) return { planning: true }
+  // the api named who has access to the new board (its row does not exist yet): no lookup
+  if (named) {
+    const set = new Set(named)
+    return { planning: true, keepAssignee: (uid) => set.has(uid) }
+  }
   const lookup =
     ctx.deps.assigneeRefs ??
     createAssigneeRefsClient({
@@ -259,7 +283,10 @@ async function handleSeed(ctx: RoomExtensionContext, req: IncomingMessage, res: 
   const boardId = boardParam(raw)
   const now = ctx.deps.now?.() ?? Date.now()
   const parsed = await parseSeedBody(await readJson(req, SEED_LIMIT_BYTES), now)
-  const content = prepareSeedContent(parsed, await seedPlanningOf(ctx, boardId, parsed.elements))
+  const content = prepareSeedContent(
+    parsed,
+    await seedPlanningOf(ctx, boardId, parsed.elements, parsed.assignees),
+  )
   const path = boardPath(ctx, boardId)
   if (existsSync(path) || ctx.service.roomIfOpen(boardId))
     throw new HttpError(

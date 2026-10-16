@@ -165,6 +165,29 @@ describe('seed (Excalidraw engine)', () => {
     expect(st.api.assigneeCalls.filter((c) => c.boardId === b2)).toEqual([
       { boardId: b2, uids: ['usr_member', 'usr_outsider'] },
     ])
+    // a new board whose row does not exist yet: the api names who will have access to it (`assignees`, decided in
+    // the board's own transaction), and the seed keeps only those, asking assignee-refs nothing
+    const b3 = newBoardId()
+    const before = st.api.assigneeCalls.length
+    const res3 = await call(st, 'POST', `/internal/boards/${b3}/seed`, {
+      format: 'lobby-elements',
+      elements: content(),
+      doc: {},
+      assignees: ['usr_member'],
+    })
+    expect(res3.status).toBe(201)
+    got = await lobbyOf(b3)
+    expect(got.get('C1')).toEqual({ ...kept, 'card:who': 'usr_member' })
+    expect(got.get('C2')).toEqual(kept)
+    expect(st.api.assigneeCalls.length).toBe(before)
+    // a malformed list is refused before anything is written
+    const bad3 = await call(st, 'POST', `/internal/boards/${newBoardId()}/seed`, {
+      format: 'lobby-elements',
+      elements: content(),
+      doc: {},
+      assignees: 'usr_member',
+    })
+    expect(bad3.status).toBe(400)
     // the element rules hold for seeded content too (a card key on a frame is refused, not stripped)
     const bad = frame('X', { customData: { lobby: { 'card:status': 'todo' } } })
     expect((await seed(st, newBoardId(), [bad])).status).toBe(400)

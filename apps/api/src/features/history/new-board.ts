@@ -18,7 +18,13 @@
 // an id collision or a leftover from an earlier failed attempt) just draws a new id. If the row
 // insert fails after a successful seed, the canvas file is an orphan nobody can open (logged).
 
-import { type InternalOnlyScope, NEW_CANVAS_BOARD_MESSAGE, NEW_CANVAS_ERROR } from '@draftroom/contracts'
+import { CARD_WHO_KEY } from '@draftroom/canvas-schema/planning-keys'
+import {
+  ASSIGNEE_REFS_MAX_UIDS,
+  type InternalOnlyScope,
+  NEW_CANVAS_BOARD_MESSAGE,
+  NEW_CANVAS_ERROR,
+} from '@draftroom/contracts'
 import { newBoardId, type Queryable } from '@draftroom/db'
 import type { BoardRole, BoardVisibility } from '@draftroom/permissions'
 import { BOARD_RETURNING, type BoardRow, requireCreatingRoleLocked } from '../../access.ts'
@@ -27,7 +33,9 @@ import { isOpenLookup } from '../../auth/creator-sql.ts'
 import { onNewCanvas } from '../../canvas-engine.ts'
 import { ApiError } from '../../errors.ts'
 import { assertBoardRoom } from '../../files/usage.ts'
+import { assigneeAccountsFor } from '../../routes/engine-internal.ts'
 import {
+  isLobbySeed,
   type LobbySeed,
   type RoomSnapshotJson,
   SyncNewCanvasBoard,
@@ -175,6 +183,51 @@ async function insertLinks(
   }
 }
 
+/** The `card:who` uids of element content, once each, in order. */
+function seedAssigneeUids(elements: readonly unknown[]): string[] {
+  const out = new Set<string>()
+  for (const el of elements) {
+    const who = (el as { customData?: { lobby?: Record<string, unknown> } } | null)?.customData?.lobby?.[
+      CARD_WHO_KEY
+    ]
+    if (typeof who === 'string') out.add(who)
+  }
+  return [...out]
+}
+
+class DryRun extends Error {}
+
+/**
+ * Who of `uids` would be an account with a role on the new board: its transaction (`build`) under a throwaway id,
+ * then assignee-refs' own rule (`assigneeAccountsFor`) inside it, then a rollback (nothing of it stays). A person
+ * whose access changes between this and the real transaction stays named, as one who later loses access does.
+ */
+async function dryRunAssignees(
+  ctx: FeatureContext,
+  build: (tx: Queryable, id: string) => Promise<NewBoard>,
+  uids: readonly string[],
+): Promise<string[]> {
+  let accounts: string[] = []
+  try {
+    await ctx.db.transaction(async (tx) => {
+      const probe = newBoardId()
+      await build(tx, probe)
+      for (let i = 0; i < uids.length; i += ASSIGNEE_REFS_MAX_UIDS)
+        accounts = accounts.concat(
+          await assigneeAccountsFor(
+            tx,
+            { id: probe, workspace_id: '', status: 'active' },
+            uids.slice(i, i + ASSIGNEE_REFS_MAX_UIDS),
+          ),
+        )
+      throw new DryRun('rolled back')
+    })
+  } catch (e) {
+    if (!(e instanceof DryRun)) throw e
+  }
+  return accounts
+}
+
 export async function createBoardFrom(
   ctx: FeatureContext,
   plan: NewBoardPlan,
@@ -198,6 +251,183 @@ export async function createBoardFrom(
   // empty. Converted boards (made before the cut-over) keep false. K6-1: asked BEFORE the seed (the K6
   // review), so a 503 CANVAS_STARTING while the engine is unknown leaves no orphan canvas file behind.
   const newCanvas = await onNewCanvas(ctx)
+  // The board's own transaction (run once for real below, and once as a dry run before the seed when the content
+  // names assignees): every row of the new board, its grants and links, decided under the workspace row lock.
+  const build = async (tx: Queryable, newId: string): Promise<NewBoard> => {
+    // Membership can change while the seed ran: decide again, inside the transaction. Lock order
+    // (access.ts): the workspace row FIRST, the creator's role after it (requireCreatingRoleLocked), so a
+    // member removal cannot leave the copy with an owner grant for someone who is no member: it waits and
+    // sweeps the grant written below, or went first and the creator is found gone (404).
+    await requireCreatingRoleLocked(tx, plan.workspaceId, plan.userId)
+    await ctx.identity.requireCreator(tx, plan.userId, 'create', {
+      route: `createBoardFrom:${plan.via}`,
+      by: 'route',
+    })
+    if (plan.inTx) await plan.inTx(tx)
+    await assertBoardRoom(tx, plan.workspaceId, ctx.config.storage.maxBoardsPerWorkspace)
+    let projectId = plan.projectId
+    if (projectId) {
+      const p = await tx.maybeOne('SELECT 1 AS ok FROM projects WHERE id = $1 AND workspace_id = $2', [
+        projectId,
+        plan.workspaceId,
+      ])
+      if (!p) projectId = null
+    }
+    // IO-2a: the copy's internal-only scope, read under the workspace row lock the switch takes.
+    const scope = plan.shareLike ? await scopeIn(tx, plan.workspaceId, projectId) : null
+    const at = ctx.now()
+    let row = await tx.maybeOne<BoardRow>(
+      `INSERT INTO boards (id, workspace_id, project_id, title, visibility, created_by, created_at, updated_at, new_canvas)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8) ON CONFLICT (id) DO NOTHING RETURNING ${BOARD_RETURNING}`,
+      [
+        newId,
+        plan.workspaceId,
+        projectId,
+        plan.title,
+        plan.shareLike?.visibility ?? 'private',
+        plan.userId,
+        at,
+        newCanvas,
+      ],
+    )
+    if (!row) throw new Error('board id already taken after seeding')
+    let kept: KeptSharing | null = null
+    // IO-10 (wave J refix round 2): an import outside every internal-only scope never links the stored
+    // files of an internal-only project's boards (files.ts fenceInternalOnlyFiles), decided here under the
+    // workspace row lock (requireCreatingRoleLocked) that the switch and a move take, on the copy's project.
+    const fence =
+      plan.via === 'import'
+        ? await fenceInternalOnlyFiles(
+            tx,
+            ctx,
+            { workspaceId: plan.workspaceId, userId: plan.userId, projectId },
+            plan.files,
+          )
+        : { kept: plan.files, fenced: [] }
+    await tx.query(
+      "INSERT INTO board_members (board_id, user_id, role, added_by, created_at) VALUES ($1, $2, 'owner', $2, $3)",
+      [newId, plan.userId, at],
+    )
+    if (plan.shareLike) {
+      // People grants only (the caller is the owner already); invitation/review links never carry over.
+      // Name-only guests (wave 3) never carry over either: they reach a board only through a guest
+      // link (docs/WAVE3-CONTRACTS.md §2 guests), and a copied grant would be tied to no link, so
+      // revoking the link with removal would leave them editing the copy (SEAM-03).
+      //
+      // Only people who still belong to the workspace get a grant, and their membership rows are read
+      // FOR SHARE and held to the end of this transaction (the lock order in access.ts: the membership,
+      // then the grant, as members.ts `loadTarget` does). A grant of someone who is no member gives
+      // nothing, but it comes back to life if they ever join again, so a source grant that already
+      // outlived its membership is not copied. A member removal (routes/workspaces.ts: the workspace row,
+      // then the membership, then a sweep of their grants) cannot run between this read and the insert:
+      // the workspace row, locked first in this transaction (requireCreatingRoleLocked), holds it off, and
+      // these row locks keep it so for any path that deletes a membership without that row (it waits for
+      // this transaction and sweeps the copy's grant too). Sorted by user, so two copies lock the rows in
+      // one order.
+      //
+      // Access that a review or workshop link gave (J2 / INV-4) is no "people" setting either: it ends with
+      // its link on the source (the link sweep), and a copied grant would be tied to no link and last for
+      // good. So a grant a multi-use link of the source CREATED (the link sweep's own test, review-links.ts
+      // `created_by_link`: a redemption at the grant's creation time through a link with the grant's role)
+      // is not copied, and nobody is locked for it; a grant an open workshop (edit) link RAISED is copied at
+      // the role it goes back to when that link ends (the redemption's previous_role). A review link's
+      // raise stays on the source, so it is copied as it is.
+      const grants = await tx.query<{ user_id: string; role: BoardRole }>(
+        `SELECT bm.user_id,
+                COALESCE((
+                  SELECT r.previous_role FROM invitation_redemptions r JOIN invitations i ON i.id = r.invitation_id
+                   WHERE r.board_id = bm.board_id AND r.user_id = bm.user_id AND i.multi_use
+                     AND i.swept_at IS NULL AND i.role = 'editor' AND bm.role = 'editor'
+                     AND r.previous_role IS NOT NULL
+                   ORDER BY array_position(ARRAY['viewer', 'commenter', 'editor']::text[], r.previous_role) DESC
+                   LIMIT 1
+                ), bm.role) AS role
+           FROM board_members bm
+           JOIN boards src ON src.id = bm.board_id AND src.workspace_id = $3
+           JOIN workspace_members wm ON wm.workspace_id = $3 AND wm.user_id = bm.user_id
+           JOIN users u ON u.id = bm.user_id AND u.kind <> 'guest'
+          WHERE bm.board_id = $1 AND bm.user_id <> $2
+            AND NOT EXISTS (
+              SELECT 1 FROM invitation_redemptions r JOIN invitations i ON i.id = r.invitation_id
+               WHERE r.board_id = bm.board_id AND r.user_id = bm.user_id AND i.multi_use
+                 AND r.redeemed_at = bm.created_at AND i.role = bm.role)
+          ORDER BY bm.user_id
+            FOR SHARE OF wm`,
+        [plan.shareLike.boardId, plan.userId, plan.workspaceId],
+      )
+      const creators = await ctx.identity.creatorsAmong(
+        tx,
+        grants.rows.map((g) => g.user_id),
+      )
+      // IO-2a (wave J pre-deploy review): while the copy's workspace or project is internal only, nobody
+      // outside is given new access there, so only confirmed creators' grants are copied (an account
+      // whose addresses are unconfirmed is left out too, failing closed; the route confirmed stale ones
+      // first, IO-6); the response says how many. Under open email sign-in every account is inside (the
+      // visibility rule's open branch; name-only guests are never copied, above), so nobody is left out
+      // there for not having opened Lobby for a day (IO-7, wave J refix round 1).
+      const filter = scope !== null && !isOpenLookup(ctx.identity.lookup)
+      const copied = filter ? grants.rows.filter((g) => creators.has(g.user_id)) : grants.rows
+      const people = copied.map((g) => g.user_id)
+      // D5: a copied owner grant of someone who is not a creator is at most editor.
+      const roles = copied.map((g) => (g.role === 'owner' && !creators.has(g.user_id) ? 'editor' : g.role))
+      await tx.query(
+        `INSERT INTO board_members (board_id, user_id, role, added_by, created_at)
+         SELECT $1, g.user_id, g.role, $2, $3
+           FROM unnest($4::text[], $5::text[]) AS g(user_id, role)
+          WHERE g.user_id <> $2
+         ON CONFLICT DO NOTHING`,
+        [newId, plan.userId, at, people, roles],
+      )
+      if (scope) {
+        // IO-2b's rule on the copy: its workspace visibility would give a member who is not inside new
+        // access, so the copy is private (and the response says so).
+        const madePrivate =
+          row.visibility !== 'private' &&
+          (await visibilityReachesOutside(tx, ctx, newId, plan.workspaceId, row.visibility))
+        if (madePrivate)
+          row = await tx.one<BoardRow>(
+            `UPDATE boards SET visibility = 'private' WHERE id = $1 RETURNING ${BOARD_RETURNING}`,
+            [newId],
+          )
+        kept = { scope, outsideLeftOut: grants.rows.length - copied.length, madePrivate }
+      }
+    }
+    await insertLinks(tx, plan.workspaceId, newId, fence.kept, at)
+    // AIPV-04: a copy of a board with AI off (an NDA client's board) keeps AI off; a copy never falls
+    // back to the workspace default (usually on). Restore-as-new, duplicate and (wave M) a workspace
+    // template, from a board of the same workspace; a board without its own choice gives a copy without one.
+    if (plan.from?.boardId && (plan.via === 'restore' || plan.via === 'duplicate' || plan.via === 'template'))
+      await tx.query(
+        `INSERT INTO board_ai_settings (board_id, workspace_id, enabled, updated_by, updated_at)
+         SELECT $1, $2, s.enabled, $3, $4 FROM board_ai_settings s
+          WHERE s.board_id = $5 AND s.workspace_id = $2`,
+        [newId, plan.workspaceId, plan.userId, at, plan.from.boardId],
+      )
+    await audit(tx, {
+      workspaceId: plan.workspaceId,
+      actorId: plan.userId,
+      action: 'board.create',
+      target: newId,
+      detail: {
+        via: plan.via,
+        ...(plan.from?.boardId ? { fromBoard: plan.from.boardId } : {}),
+        ...(plan.from?.snapshotId ? { fromSnapshot: plan.from.snapshotId } : {}),
+        keepSharing: !!plan.shareLike,
+        ...(kept ? { outsideLeftOut: kept.outsideLeftOut, madePrivate: kept.madePrivate } : {}),
+        files: fence.kept.length,
+        ...(fence.fenced.length ? { filesFenced: fence.fenced.length } : {}),
+      },
+      at,
+    })
+    return { row, kept, fenced: fence.fenced.length }
+  }
+
+  // Wave T: a card keeps its assignee only when that person has access to the NEW board. The seed runs before the
+  // board's row exists (so the sync's assignee-refs lookup for it would answer 404 and keep nobody): a dry run of the
+  // board's transaction, rolled back, says who would have a role on it, and the seed names them (`assignees`).
+  const uids = content.format === 'lobby-elements' ? seedAssigneeUids(content.elements) : []
+  if (uids.length && isLobbySeed(snapshot)) snapshot.assignees = await dryRunAssignees(ctx, build, uids)
+
   let boardId: string | null = null
   for (let attempt = 0; attempt < SEED_ATTEMPTS && !boardId; attempt++) {
     const id = newBoardId()
@@ -214,177 +444,7 @@ export async function createBoardFrom(
 
   const newId = boardId
   try {
-    return await ctx.db.transaction(async (tx) => {
-      // Membership can change while the seed ran: decide again, inside the transaction. Lock order
-      // (access.ts): the workspace row FIRST, the creator's role after it (requireCreatingRoleLocked), so a
-      // member removal cannot leave the copy with an owner grant for someone who is no member: it waits and
-      // sweeps the grant written below, or went first and the creator is found gone (404).
-      await requireCreatingRoleLocked(tx, plan.workspaceId, plan.userId)
-      await ctx.identity.requireCreator(tx, plan.userId, 'create', {
-        route: `createBoardFrom:${plan.via}`,
-        by: 'route',
-      })
-      if (plan.inTx) await plan.inTx(tx)
-      await assertBoardRoom(tx, plan.workspaceId, ctx.config.storage.maxBoardsPerWorkspace)
-      let projectId = plan.projectId
-      if (projectId) {
-        const p = await tx.maybeOne('SELECT 1 AS ok FROM projects WHERE id = $1 AND workspace_id = $2', [
-          projectId,
-          plan.workspaceId,
-        ])
-        if (!p) projectId = null
-      }
-      // IO-2a: the copy's internal-only scope, read under the workspace row lock the switch takes.
-      const scope = plan.shareLike ? await scopeIn(tx, plan.workspaceId, projectId) : null
-      const at = ctx.now()
-      let row = await tx.maybeOne<BoardRow>(
-        `INSERT INTO boards (id, workspace_id, project_id, title, visibility, created_by, created_at, updated_at, new_canvas)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8) ON CONFLICT (id) DO NOTHING RETURNING ${BOARD_RETURNING}`,
-        [
-          newId,
-          plan.workspaceId,
-          projectId,
-          plan.title,
-          plan.shareLike?.visibility ?? 'private',
-          plan.userId,
-          at,
-          newCanvas,
-        ],
-      )
-      if (!row) throw new Error('board id already taken after seeding')
-      let kept: KeptSharing | null = null
-      // IO-10 (wave J refix round 2): an import outside every internal-only scope never links the stored
-      // files of an internal-only project's boards (files.ts fenceInternalOnlyFiles), decided here under the
-      // workspace row lock (requireCreatingRoleLocked) that the switch and a move take, on the copy's project.
-      const fence =
-        plan.via === 'import'
-          ? await fenceInternalOnlyFiles(
-              tx,
-              ctx,
-              { workspaceId: plan.workspaceId, userId: plan.userId, projectId },
-              plan.files,
-            )
-          : { kept: plan.files, fenced: [] }
-      await tx.query(
-        "INSERT INTO board_members (board_id, user_id, role, added_by, created_at) VALUES ($1, $2, 'owner', $2, $3)",
-        [newId, plan.userId, at],
-      )
-      if (plan.shareLike) {
-        // People grants only (the caller is the owner already); invitation/review links never carry over.
-        // Name-only guests (wave 3) never carry over either: they reach a board only through a guest
-        // link (docs/WAVE3-CONTRACTS.md §2 guests), and a copied grant would be tied to no link, so
-        // revoking the link with removal would leave them editing the copy (SEAM-03).
-        //
-        // Only people who still belong to the workspace get a grant, and their membership rows are read
-        // FOR SHARE and held to the end of this transaction (the lock order in access.ts: the membership,
-        // then the grant, as members.ts `loadTarget` does). A grant of someone who is no member gives
-        // nothing, but it comes back to life if they ever join again, so a source grant that already
-        // outlived its membership is not copied. A member removal (routes/workspaces.ts: the workspace row,
-        // then the membership, then a sweep of their grants) cannot run between this read and the insert:
-        // the workspace row, locked first in this transaction (requireCreatingRoleLocked), holds it off, and
-        // these row locks keep it so for any path that deletes a membership without that row (it waits for
-        // this transaction and sweeps the copy's grant too). Sorted by user, so two copies lock the rows in
-        // one order.
-        //
-        // Access that a review or workshop link gave (J2 / INV-4) is no "people" setting either: it ends with
-        // its link on the source (the link sweep), and a copied grant would be tied to no link and last for
-        // good. So a grant a multi-use link of the source CREATED (the link sweep's own test, review-links.ts
-        // `created_by_link`: a redemption at the grant's creation time through a link with the grant's role)
-        // is not copied, and nobody is locked for it; a grant an open workshop (edit) link RAISED is copied at
-        // the role it goes back to when that link ends (the redemption's previous_role). A review link's
-        // raise stays on the source, so it is copied as it is.
-        const grants = await tx.query<{ user_id: string; role: BoardRole }>(
-          `SELECT bm.user_id,
-                  COALESCE((
-                    SELECT r.previous_role FROM invitation_redemptions r JOIN invitations i ON i.id = r.invitation_id
-                     WHERE r.board_id = bm.board_id AND r.user_id = bm.user_id AND i.multi_use
-                       AND i.swept_at IS NULL AND i.role = 'editor' AND bm.role = 'editor'
-                       AND r.previous_role IS NOT NULL
-                     ORDER BY array_position(ARRAY['viewer', 'commenter', 'editor']::text[], r.previous_role) DESC
-                     LIMIT 1
-                  ), bm.role) AS role
-             FROM board_members bm
-             JOIN boards src ON src.id = bm.board_id AND src.workspace_id = $3
-             JOIN workspace_members wm ON wm.workspace_id = $3 AND wm.user_id = bm.user_id
-             JOIN users u ON u.id = bm.user_id AND u.kind <> 'guest'
-            WHERE bm.board_id = $1 AND bm.user_id <> $2
-              AND NOT EXISTS (
-                SELECT 1 FROM invitation_redemptions r JOIN invitations i ON i.id = r.invitation_id
-                 WHERE r.board_id = bm.board_id AND r.user_id = bm.user_id AND i.multi_use
-                   AND r.redeemed_at = bm.created_at AND i.role = bm.role)
-            ORDER BY bm.user_id
-              FOR SHARE OF wm`,
-          [plan.shareLike.boardId, plan.userId, plan.workspaceId],
-        )
-        const creators = await ctx.identity.creatorsAmong(
-          tx,
-          grants.rows.map((g) => g.user_id),
-        )
-        // IO-2a (wave J pre-deploy review): while the copy's workspace or project is internal only, nobody
-        // outside is given new access there, so only confirmed creators' grants are copied (an account
-        // whose addresses are unconfirmed is left out too, failing closed; the route confirmed stale ones
-        // first, IO-6); the response says how many. Under open email sign-in every account is inside (the
-        // visibility rule's open branch; name-only guests are never copied, above), so nobody is left out
-        // there for not having opened Lobby for a day (IO-7, wave J refix round 1).
-        const filter = scope !== null && !isOpenLookup(ctx.identity.lookup)
-        const copied = filter ? grants.rows.filter((g) => creators.has(g.user_id)) : grants.rows
-        const people = copied.map((g) => g.user_id)
-        // D5: a copied owner grant of someone who is not a creator is at most editor.
-        const roles = copied.map((g) => (g.role === 'owner' && !creators.has(g.user_id) ? 'editor' : g.role))
-        await tx.query(
-          `INSERT INTO board_members (board_id, user_id, role, added_by, created_at)
-           SELECT $1, g.user_id, g.role, $2, $3
-             FROM unnest($4::text[], $5::text[]) AS g(user_id, role)
-            WHERE g.user_id <> $2
-           ON CONFLICT DO NOTHING`,
-          [newId, plan.userId, at, people, roles],
-        )
-        if (scope) {
-          // IO-2b's rule on the copy: its workspace visibility would give a member who is not inside new
-          // access, so the copy is private (and the response says so).
-          const madePrivate =
-            row.visibility !== 'private' &&
-            (await visibilityReachesOutside(tx, ctx, newId, plan.workspaceId, row.visibility))
-          if (madePrivate)
-            row = await tx.one<BoardRow>(
-              `UPDATE boards SET visibility = 'private' WHERE id = $1 RETURNING ${BOARD_RETURNING}`,
-              [newId],
-            )
-          kept = { scope, outsideLeftOut: grants.rows.length - copied.length, madePrivate }
-        }
-      }
-      await insertLinks(tx, plan.workspaceId, newId, fence.kept, at)
-      // AIPV-04: a copy of a board with AI off (an NDA client's board) keeps AI off; a copy never falls
-      // back to the workspace default (usually on). Restore-as-new, duplicate and (wave M) a workspace
-      // template, from a board of the same workspace; a board without its own choice gives a copy without one.
-      if (
-        plan.from?.boardId &&
-        (plan.via === 'restore' || plan.via === 'duplicate' || plan.via === 'template')
-      )
-        await tx.query(
-          `INSERT INTO board_ai_settings (board_id, workspace_id, enabled, updated_by, updated_at)
-           SELECT $1, $2, s.enabled, $3, $4 FROM board_ai_settings s
-            WHERE s.board_id = $5 AND s.workspace_id = $2`,
-          [newId, plan.workspaceId, plan.userId, at, plan.from.boardId],
-        )
-      await audit(tx, {
-        workspaceId: plan.workspaceId,
-        actorId: plan.userId,
-        action: 'board.create',
-        target: newId,
-        detail: {
-          via: plan.via,
-          ...(plan.from?.boardId ? { fromBoard: plan.from.boardId } : {}),
-          ...(plan.from?.snapshotId ? { fromSnapshot: plan.from.snapshotId } : {}),
-          keepSharing: !!plan.shareLike,
-          ...(kept ? { outsideLeftOut: kept.outsideLeftOut, madePrivate: kept.madePrivate } : {}),
-          files: fence.kept.length,
-          ...(fence.fenced.length ? { filesFenced: fence.fenced.length } : {}),
-        },
-        at,
-      })
-      return { row, kept, fenced: fence.fenced.length }
-    })
+    return await ctx.db.transaction((tx) => build(tx, newId))
   } catch (e) {
     log?.(`board ${newId} was seeded but its row was not created; its canvas file is unused`)
     throw e
