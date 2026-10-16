@@ -116,7 +116,7 @@ export function registerAiSettings(app: FastifyInstance, ctx: FeatureContext): v
       // Boards without their own choice change with it; the hint costs nothing on a board nobody has open.
       const boards = await tx.query<{ id: string }>(
         `SELECT b.id FROM boards b
-          WHERE b.workspace_id = $1 AND b.status <> 'trashed'
+          WHERE b.workspace_id = $1 AND b.status IN ('active', 'archived')
             AND NOT EXISTS (SELECT 1 FROM board_ai_settings s WHERE s.board_id = b.id)`,
         [wid],
       )

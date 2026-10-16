@@ -351,7 +351,9 @@ export function registerCheckpointAllRoutes(
   const boards = async () =>
     (
       await ctx.db.query<{ id: string; workspace_id: string }>(
-        'SELECT id, workspace_id FROM boards ORDER BY workspace_id, id',
+        // every status a person can see (an importing board, wave R, is nobody's yet)
+        `SELECT id, workspace_id FROM boards
+          WHERE status IN ('active', 'archived', 'trashed') ORDER BY workspace_id, id`,
       )
     ).rows
   const log = (message: string) => app.log.warn({ feature: 'history' }, message)

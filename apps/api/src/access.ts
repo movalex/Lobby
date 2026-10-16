@@ -72,6 +72,13 @@ type AccessRow = BoardRow & {
   board_grant: BoardRole | null
 }
 
+/**
+ * The statuses a person may ever meet a board in (packages/permissions BOARD_STATUSES). A board in any other
+ * status (wave R's `importing`: an import job is still building it) is treated as missing by every loader here, so
+ * every route that decides access through them answers it as an unknown board (404), whoever asks.
+ */
+const SEEN_STATUS_SQL = "b.status IN ('active', 'archived', 'trashed')"
+
 const ACCESS_COLUMNS = `${BOARD_COLUMNS}, w.name AS workspace_name, wm.role AS workspace_role, bm.role AS board_grant`
 
 function toAccess(row: AccessRow): BoardAccess {
@@ -151,7 +158,7 @@ export async function loadBoardAccess(
        JOIN workspaces w ON w.id = b.workspace_id
        LEFT JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = $2
        LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = $2
-      WHERE b.id = $1${opts.forUpdate ? ' FOR UPDATE OF b' : ''}`,
+      WHERE b.id = $1 AND ${SEEN_STATUS_SQL}${opts.forUpdate ? ' FOR UPDATE OF b' : ''}`,
     [boardId, userId],
   )
   return row ? toAccess(row) : null
@@ -189,7 +196,8 @@ export async function loadBoardAccessMany(
          JOIN boards b ON b.id = p.board_id
          JOIN workspaces w ON w.id = b.workspace_id
          LEFT JOIN workspace_members wm ON wm.workspace_id = b.workspace_id AND wm.user_id = p.user_id
-         LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = p.user_id`,
+         LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = p.user_id
+        WHERE ${SEEN_STATUS_SQL}`,
       [chunk.map((p) => p.boardId), chunk.map((p) => p.userId)],
     )
     for (const { pair_user, ...row } of rows.rows)

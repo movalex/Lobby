@@ -271,9 +271,12 @@ async function gatherReferences(deps: AssetGcDeps, workspaceId: string): Promise
     ).rows,
   )
   const boards = (
-    await deps.db.query<{ id: string }>('SELECT id FROM boards WHERE workspace_id = $1 ORDER BY id', [
-      workspaceId,
-    ])
+    // an importing board (wave R) has no canvas yet: its versions are held below (heldByRow), not scanned
+    await deps.db.query<{ id: string }>(
+      `SELECT id FROM boards
+        WHERE workspace_id = $1 AND status IN ('active', 'archived', 'trashed') ORDER BY id`,
+      [workspaceId],
+    )
   ).rows
   let boardsScanned = 0
   let boardsFailed = 0
@@ -321,9 +324,15 @@ async function gatherReferences(deps: AssetGcDeps, workspaceId: string): Promise
   }
 }
 
-/** Keeps a version whatever the other sources say: in flight, or its board can still be restored. */
+/**
+ * Keeps a version whatever the other sources say: in flight, its board can still be restored, or its board is still
+ * being imported (wave R: the job uploads before the canvas exists; a failed import removes them itself).
+ */
 const heldByRow = (r: VersionGcRow, inFlightCutoff: number) =>
-  r.created_at.getTime() > inFlightCutoff || r.board_status === 'trashed' || r.job_status === 'running'
+  r.created_at.getTime() > inFlightCutoff ||
+  r.board_status === 'trashed' ||
+  r.board_status === 'importing' ||
+  r.job_status === 'running'
 
 /** Retries object deletes of versions an earlier delete-mode pass removed. */
 async function retryPendingDeletes(deps: AssetGcDeps, workspaceId: string) {
@@ -394,7 +403,7 @@ async function deleteVersion(
            -- here) or waits for it and then finds the version gone (the save refuses it)
            OR EXISTS (SELECT 1 FROM library_item_files WHERE workspace_id = $1 AND version_id = $2)
            OR EXISTS (SELECT 1 FROM asset_gc_snapshot_refs WHERE workspace_id = $1 AND version_id = $2)
-           OR EXISTS (SELECT 1 FROM boards WHERE id = $3 AND status = 'trashed')
+           OR EXISTS (SELECT 1 FROM boards WHERE id = $3 AND status IN ('trashed', 'importing'))
            OR EXISTS (SELECT 1 FROM preview_jobs WHERE version_id = $2 AND status = 'running')
            -- a checkpoint made since the scan: its body is read by the next pass first
            OR EXISTS (SELECT 1 FROM board_snapshots s WHERE s.workspace_id = $1

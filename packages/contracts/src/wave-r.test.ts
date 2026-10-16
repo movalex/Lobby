@@ -323,7 +323,7 @@ const message = (over: Partial<ChatMessage> = {}): ChatMessage => ({
 })
 
 describe('chat hooks: messages', () => {
-  it('one sentence per kind; the opt-in kinds are notification kinds (never resolved, access_granted)', () => {
+  it('one sentence per kind; opt-in kinds are notification kinds (never resolved, access_granted)', () => {
     expect(chatMessageSentence(message())).toBe('Ana mentioned Ben on Pitch wall')
     expect(chatMessageSentence(message({ kind: 'reply' }))).toBe('Ana replied to Ben on Pitch wall')
     expect(chatMessageSentence(message({ kind: 'new_comment', actor: 'Client (guest)' }))).toBe(

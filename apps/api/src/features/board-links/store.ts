@@ -98,7 +98,7 @@ export async function backlinkCandidates(
               GROUP BY from_board) l
        JOIN boards b ON b.id = l.from_board
        LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = $3
-      WHERE b.workspace_id = $2 AND b.status <> 'trashed'
+      WHERE b.workspace_id = $2 AND b.status IN ('active', 'archived')
         AND ($4::boolean OR bm.role IS NOT NULL OR ($5::boolean AND b.visibility <> 'private'))
       ORDER BY b.updated_at DESC, b.id
       LIMIT $6`,

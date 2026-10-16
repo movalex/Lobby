@@ -135,7 +135,7 @@ async function boardsWithGrant(q: Queryable, workspaceId: string, userId: string
   const rows = await q.query<BoardAccessRow>(
     `SELECT b.id, b.visibility, bm.role AS grant
        FROM boards b LEFT JOIN board_members bm ON bm.board_id = b.id AND bm.user_id = $2
-      WHERE b.workspace_id = $1 AND b.status <> 'trashed'
+      WHERE b.workspace_id = $1 AND b.status IN ('active', 'archived')
       ORDER BY b.last_opened_at DESC NULLS LAST, b.id`,
     [workspaceId, userId],
   )

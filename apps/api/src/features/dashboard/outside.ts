@@ -679,7 +679,7 @@ export async function outsideAccessIn(
     ? await q.query<{ user_id: string; id: string; title: string; project_id: string | null; role: string }>(
         `SELECT bm.user_id, b.id, b.title, b.project_id, bm.role
            FROM board_members bm JOIN boards b ON b.id = bm.board_id
-          WHERE b.workspace_id = $1 AND b.status <> 'trashed' AND bm.user_id = ANY($2::text[])
+          WHERE b.workspace_id = $1 AND b.status IN ('active', 'archived') AND bm.user_id = ANY($2::text[])
           ORDER BY b.title, b.id`,
         [workspaceId, ids],
       )
@@ -709,7 +709,7 @@ export async function outsideAccessIn(
     `SELECT i.id, i.board_id, b.title, b.project_id, i.role, i.expires_at, i.allow_guests
        FROM invitations i JOIN boards b ON b.id = i.board_id AND b.workspace_id = i.workspace_id
       WHERE i.workspace_id = $1 AND i.multi_use AND i.revoked_at IS NULL AND i.expires_at > $2
-        AND b.status <> 'trashed'
+        AND b.status IN ('active', 'archived')
       ORDER BY i.expires_at, i.id
       LIMIT 200`,
     [workspaceId, deps.now()],
@@ -730,7 +730,7 @@ export async function outsideAccessIn(
        FROM invitations i LEFT JOIN boards b ON b.id = i.board_id AND b.workspace_id = i.workspace_id
       WHERE i.workspace_id = $1 AND NOT i.multi_use AND i.invited_email IS NOT NULL
         AND i.redeemed_by IS NULL AND i.revoked_at IS NULL AND i.expires_at > $2
-        AND (i.board_id IS NULL OR (b.id IS NOT NULL AND b.status <> 'trashed'))
+        AND (i.board_id IS NULL OR (b.id IS NOT NULL AND b.status IN ('active', 'archived')))
       ORDER BY i.expires_at, i.id
       LIMIT 500`,
     [workspaceId, deps.now()],

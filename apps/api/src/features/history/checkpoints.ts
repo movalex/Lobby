@@ -33,6 +33,7 @@ import {
   HISTORY_EVENTS,
 } from '@draftroom/contracts'
 import { newId, type Queryable } from '@draftroom/db'
+import { isBoardStatus } from '@draftroom/permissions'
 import type { FastifyInstance } from 'fastify'
 import { audit } from '../../audit.ts'
 import { isObject } from '../../canvas/lobby-elements.ts'
@@ -284,7 +285,7 @@ export function createCheckpointService(
   async function changed(boardId: string, at: Date) {
     await db.query(
       `INSERT INTO board_checkpoint_state (board_id, workspace_id, dirty_since, last_change_at)
-       SELECT id, workspace_id, $2::timestamptz, $2::timestamptz FROM boards WHERE id = $1 AND status <> 'trashed'
+       SELECT id, workspace_id, $2::timestamptz, $2::timestamptz FROM boards WHERE id = $1 AND status IN ('active', 'archived')
        ON CONFLICT (board_id) DO UPDATE SET
          dirty_since = COALESCE(board_checkpoint_state.dirty_since, EXCLUDED.dirty_since),
          last_change_at = GREATEST(board_checkpoint_state.last_change_at, EXCLUDED.last_change_at)`,
@@ -296,7 +297,7 @@ export function createCheckpointService(
     await db.query(
       `INSERT INTO board_checkpoint_state (board_id, workspace_id, dirty_since, last_change_at, session_ended_at)
        SELECT id, workspace_id, $2::timestamptz, $2::timestamptz, $2::timestamptz
-         FROM boards WHERE id = $1 AND status <> 'trashed'
+         FROM boards WHERE id = $1 AND status IN ('active', 'archived')
        ON CONFLICT (board_id) DO UPDATE SET
          dirty_since = COALESCE(board_checkpoint_state.dirty_since, EXCLUDED.dirty_since),
          last_change_at = GREATEST(board_checkpoint_state.last_change_at, EXCLUDED.last_change_at),
@@ -317,7 +318,8 @@ export function createCheckpointService(
       'SELECT workspace_id, status, new_canvas FROM boards WHERE id = $1',
       [boardId],
     )
-    if (!board) return { status: 'skipped', why: 'missing' }
+    // an importing board (wave R) is nobody's yet: as if it did not exist
+    if (!board || !isBoardStatus(board.status)) return { status: 'skipped', why: 'missing' }
     if (board.status === 'trashed') {
       await forget(boardId)
       return { status: 'skipped', why: 'trashed' }
@@ -437,7 +439,8 @@ export function createCheckpointService(
 
   async function captureEngineMigrationNow(boardId: string): Promise<MigrationCaptureOutcome> {
     const board = await db.maybeOne<{ workspace_id: string; new_canvas: boolean }>(
-      'SELECT workspace_id, new_canvas FROM boards WHERE id = $1',
+      `SELECT workspace_id, new_canvas FROM boards
+        WHERE id = $1 AND status IN ('active', 'archived', 'trashed')`,
       [boardId],
     )
     if (!board) return { status: 'skipped', why: 'missing' }
@@ -471,7 +474,8 @@ export function createCheckpointService(
 
   async function captureNamedNow(boardId: string, name: string): Promise<NamedCaptureOutcome> {
     const board = await db.maybeOne<{ workspace_id: string; new_canvas: boolean }>(
-      'SELECT workspace_id, new_canvas FROM boards WHERE id = $1',
+      `SELECT workspace_id, new_canvas FROM boards
+        WHERE id = $1 AND status IN ('active', 'archived', 'trashed')`,
       [boardId],
     )
     if (!board) return { status: 'skipped', why: 'missing' }

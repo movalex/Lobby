@@ -131,6 +131,23 @@ describe('search: freshness', () => {
     expect((await w.indexer.runPass()).purged).toBe(1)
     expect(await entriesOf(other)).toEqual([])
   })
+
+  it('wave R: an importing board (0035) is never indexed nor found, and leaves the index', async () => {
+    await edit(board, [note('n1', 'Zebra crossing')])
+    expect(boardsOf(await search(bob, DEV_STUDIO, 'zebra'))).toEqual([board])
+    // the status an import job's board has until activation (set here behind the api's back)
+    await w.api.db.query(`UPDATE boards SET status = 'importing' WHERE id = $1`, [board])
+    expect(boardsOf(await search(bob, DEV_STUDIO, 'zebra'))).toEqual([])
+    await edit(board, [note('n1', 'Zebra crossing again')])
+    await w.indexer.runPass()
+    expect(boardsOf(await search(bob, DEV_STUDIO, 'zebra'))).toEqual([])
+    expect(await w.indexer.refreshCanvas(board)).toBe('gone')
+    expect(await entriesOf(board)).toEqual([])
+    // activated: found again after its next edit
+    await w.api.db.query(`UPDATE boards SET status = 'active' WHERE id = $1`, [board])
+    await edit(board, [note('n1', 'Zebra crossing done')])
+    expect(boardsOf(await search(bob, DEV_STUDIO, 'zebra'))).toEqual([board])
+  })
 })
 
 describe('search: comment threads', () => {

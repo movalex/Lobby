@@ -287,7 +287,7 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
     const when = new Date(Math.min(at ?? current.getTime(), current.getTime()))
     // Trashed boards keep the time they were trashed (the trash list shows it).
     await db.query(
-      `UPDATE boards SET updated_at = $2 WHERE id = $1 AND updated_at < $2 AND status <> 'trashed'`,
+      `UPDATE boards SET updated_at = $2 WHERE id = $1 AND updated_at < $2 AND status IN ('active', 'archived')`,
       [bid, when],
     )
     return reply.code(204).send()

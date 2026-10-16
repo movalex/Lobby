@@ -40,6 +40,7 @@ import {
   type SearchHitKind,
 } from '@draftroom/contracts'
 import type { Db, Queryable } from '@draftroom/db'
+import { isOpenBoardStatus } from '@draftroom/permissions'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import type { SyncInternalClient } from '../../sync-internal.ts'
@@ -311,7 +312,7 @@ export class SearchIndexer {
     const cur = await tx.maybeOne<{ status: string }>('SELECT status FROM boards WHERE id = $1 FOR SHARE', [
       boardId,
     ])
-    if (cur && cur.status !== 'trashed') return true
+    if (cur && isOpenBoardStatus(cur.status)) return true
     if (cur) await purgeBoard(tx, boardId)
     return false
   }
@@ -319,7 +320,7 @@ export class SearchIndexer {
   private async canvas(boardId: string, since: number | null): Promise<RefreshResult> {
     const row = await this.boardRow(this.db, boardId)
     if (!row) return 'gone'
-    if (row.status === 'trashed') {
+    if (!isOpenBoardStatus(row.status)) {
       await purgeBoard(this.db, boardId)
       return 'gone'
     }
@@ -448,7 +449,7 @@ export class SearchIndexer {
     const never = `FROM boards b
        JOIN board_search_state s ON s.board_id = b.id
        LEFT JOIN board_link_scans l ON l.board_id = b.id
-      WHERE b.status <> 'trashed' AND l.board_id IS NULL AND s.canvas_indexed_at IS NOT NULL`
+      WHERE b.status IN ('active', 'archived') AND l.board_id IS NULL AND s.canvas_indexed_at IS NOT NULL`
     const rows = await this.db.query<{ id: string }>(
       `SELECT b.id ${never} AND (s.retry_at IS NULL OR s.retry_at <= $1)
         ORDER BY b.updated_at DESC, b.id
@@ -484,7 +485,7 @@ export class SearchIndexer {
     await this.db.query(
       `INSERT INTO board_search_state (board_id, workspace_id, failures, retry_at)
        SELECT $1, $2, 1, $3::timestamptz + make_interval(secs => $4::float8)
-        WHERE EXISTS (SELECT 1 FROM boards WHERE id = $1 AND status <> 'trashed')
+        WHERE EXISTS (SELECT 1 FROM boards WHERE id = $1 AND status IN ('active', 'archived'))
        ON CONFLICT (board_id) DO UPDATE SET
          failures = board_search_state.failures + 1,
          retry_at = $3::timestamptz + make_interval(
@@ -496,7 +497,7 @@ export class SearchIndexer {
   private async comments(boardId: string): Promise<RefreshResult> {
     const row = await this.boardRow(this.db, boardId)
     if (!row) return 'gone'
-    if (row.status === 'trashed') {
+    if (!isOpenBoardStatus(row.status)) {
       await purgeBoard(this.db, boardId)
       return 'gone'
     }
@@ -629,7 +630,7 @@ export class SearchIndexer {
               s.canvas_indexed_at, s.comments_source_at, s.retry_at
          FROM boards b
          LEFT JOIN board_search_state s ON s.board_id = b.id
-        WHERE b.status <> 'trashed'
+        WHERE b.status IN ('active', 'archived')
           AND (
             ((s.board_id IS NULL OR s.canvas_source_at IS NULL OR b.updated_at > s.canvas_source_at)
               AND (s.retry_at IS NULL OR s.retry_at <= $1))

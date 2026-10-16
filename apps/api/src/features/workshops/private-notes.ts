@@ -656,7 +656,7 @@ export function registerPrivateNotes(
       if (ended.changed && waiting.length > 0)
         await db
           .query(
-            `UPDATE boards SET updated_at = $2 WHERE id = $1 AND updated_at < $2 AND status <> 'trashed'`,
+            `UPDATE boards SET updated_at = $2 WHERE id = $1 AND updated_at < $2 AND status IN ('active', 'archived')`,
             [ended.row.board_id, at],
           )
           .catch((e) =>

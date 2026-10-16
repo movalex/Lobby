@@ -30,6 +30,15 @@ export function isBoardStatus(status: unknown): status is BoardStatus {
   return (BOARD_STATUSES as readonly unknown[]).includes(status)
 }
 
+/**
+ * A board someone can open (active or archived): what the lists, the search index and the background passes keep.
+ * Never "not trashed" (that would take in `importing`, or any status a newer build adds); SQL spells it
+ * `status IN ('active', 'archived')` (apps/api's tripwire test refuses `<> 'trashed'`).
+ */
+export function isOpenBoardStatus(status: unknown): status is 'active' | 'archived' {
+  return status === 'active' || status === 'archived'
+}
+
 export const BOARD_ACTIONS = [
   'view',
   'comment',

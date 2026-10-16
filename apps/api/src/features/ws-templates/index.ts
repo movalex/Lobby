@@ -107,7 +107,7 @@ async function liveTemplate(
   if (!isBoardId(boardId)) return null
   return q.maybeOne<TemplateRow & Pick<BoardRow, 'new_canvas' | 'project_id'>>(
     `${TEMPLATE_SELECT.replace('SELECT ', 'SELECT b.new_canvas, b.project_id, ')}
-     WHERE t.workspace_id = $1 AND t.board_id = $2 AND b.status <> 'trashed'${lock ? ' FOR SHARE OF t' : ''}`,
+     WHERE t.workspace_id = $1 AND t.board_id = $2 AND b.status IN ('active', 'archived')${lock ? ' FOR SHARE OF t' : ''}`,
     [workspaceId, boardId],
   )
 }
@@ -138,7 +138,7 @@ export async function registerWsTemplates(app: FastifyInstance, ctx: FeatureCont
       if (!LISTING_ROLES.has(role)) throw forbidden(MEMBERS_ONLY)
       const rows = await db.query<TemplateRow>(
         `${TEMPLATE_SELECT}
-       WHERE t.workspace_id = $1 AND b.status <> 'trashed'
+       WHERE t.workspace_id = $1 AND b.status IN ('active', 'archived')
        ORDER BY t.added_at DESC, t.board_id
        LIMIT ${WS_TEMPLATES_MAX}`,
         [wid],
@@ -182,7 +182,7 @@ export async function registerWsTemplates(app: FastifyInstance, ctx: FeatureCont
         const saved = await tx.maybeOne<{ board_id: string }>(
           `INSERT INTO workspace_templates (workspace_id, board_id, name, category, added_by, added_at)
          SELECT $1, b.id, $3, $4, $5, $6 FROM boards b
-          WHERE b.id = $2 AND b.workspace_id = $1 AND b.status <> 'trashed'
+          WHERE b.id = $2 AND b.workspace_id = $1 AND b.status IN ('active', 'archived')
          ON CONFLICT (workspace_id, board_id) DO UPDATE SET name = EXCLUDED.name, category = EXCLUDED.category
          RETURNING board_id`,
           [wid, input.boardId, input.name, input.category, user.id, ctx.now()],
