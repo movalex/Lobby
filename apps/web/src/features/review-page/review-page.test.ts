@@ -2,8 +2,8 @@
 // permission and status, which threads belong to an item, the picture cache key and scale, the sticky progress words, the
 // review client's answers (including the conflict and newer-version bodies), the live item merge, and the landing path.
 import type { CommentThread, GetReviewResponse, ReviewItem, ReviewRound } from '@draftroom/contracts'
-import { afterEach, describe, expect, it } from 'vitest'
-import { EMPTY_REVIEW, getReview, ReviewRequestError, setReviewFetch, setReviewStatus } from './client.ts'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { EMPTY_REVIEW, getReview, ReviewRequestError, setReviewStatus } from './client.ts'
 import { withItem } from './data.ts'
 import { landingPathFor } from './landing.ts'
 import {
@@ -292,8 +292,10 @@ describe('the live review', () => {
   })
 })
 
-describe('the review client', () => {
-  afterEach(() => setReviewFetch(null))
+describe('the review client (WS1, re-exported)', () => {
+  const setReviewFetch = (f: (url: RequestInfo | URL, init?: RequestInit) => Promise<Response>) =>
+    vi.stubGlobal('fetch', f)
+  afterEach(() => vi.unstubAllGlobals())
   const json = (status: number, body: unknown) =>
     new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
@@ -351,7 +353,7 @@ describe('the review client', () => {
     expect(res.item.status).toBe('approved')
   })
 
-  it('a 409 STATUS_CHANGED carries the current item, a NEWER_VERSION the version, a 404 is "unavailable"', async () => {
+  it('a 409 STATUS_CHANGED carries the current item, a NEWER_VERSION the version, a 404 its code', async () => {
     const current = item(1, { status: 'changes_requested', statusSeq: 4 })
     setReviewFetch(async () =>
       json(409, { error: { code: 'STATUS_CHANGED', message: 'changed' }, item: current }),
@@ -368,15 +370,14 @@ describe('the review client', () => {
 
     setReviewFetch(async () => json(404, { error: { code: 'NOT_FOUND', message: 'nope' } }))
     const gone = await setReviewStatus('b-board123', current.id, { status: 'approved' }).catch((e) => e)
-    expect(gone).toMatchObject({ code: 'unavailable', status: 404 })
+    expect(gone).toMatchObject({ code: 'NOT_FOUND', status: 404 })
   })
 })
 
 describe('where a link lands', () => {
-  it('the review page only for a review landing while the switch is on (off in this build), else the board', () => {
+  it('the review page only for a review landing while the switch is on (on in this build), else the board', () => {
     expect(landingPathFor('b-board123', undefined)).toBe('/b/b-board123')
     expect(landingPathFor('b-board123', 'board')).toBe('/b/b-board123')
-    // the switch is off by default: a review landing still opens the board
-    expect(landingPathFor('b-board123', 'review')).toBe('/b/b-board123')
+    expect(landingPathFor('b-board123', 'review')).toBe('/b/b-board123?view=review')
   })
 })
