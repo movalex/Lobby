@@ -451,7 +451,16 @@ describe('registration', () => {
     if (typeof off === 'function') off()
     expect(exportOverlayLayers().map((x) => x.id)).not.toContain('timeline')
     const cmd = feature.commands?.[0]
-    expect(cmd?.available?.({} as CanvasFeatureContext)).toBe(false)
+    // shipped on since the wave T integration; a dev-auth page that turns the switch off has no command
+    expect(cmd?.available?.({} as CanvasFeatureContext)).toBe(true)
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => (k === PLANNING_FLAG_KEYS.timeline ? '0' : null),
+    })
+    try {
+      expect(cmd?.available?.({} as CanvasFeatureContext)).toBe(false)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })
 
@@ -563,7 +572,10 @@ describe('the layer', () => {
 
   it('draws nothing with the switch off, or with no timeline', () => {
     expect(html([cardEl('c1', 'x', { 'card:status': 'todo', 'card:due': '2026-10-12' })]).out).toBe('')
-    vi.stubGlobal('localStorage', { getItem: () => null })
+    // the switch turned off (shipped on since the wave T integration)
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => (k === PLANNING_FLAG_KEYS.timeline ? '0' : null),
+    })
     expect(html(els()).out).toBe('')
   })
 })

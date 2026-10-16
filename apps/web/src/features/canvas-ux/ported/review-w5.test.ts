@@ -57,6 +57,8 @@ describe('W5-33: the menus', () => {
       'navigation:navigation.zoom-to-fit',
       'navigation:navigation.zoom-to-selection',
       'navigation:navigation.view.minimap',
+      // wave T (WS4): the card table, a view of the board's cards (not a camera row)
+      'card-table:card-table.open',
     ])
   })
 

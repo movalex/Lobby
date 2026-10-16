@@ -6,7 +6,9 @@
 //    or stepped by half a second) and the camera words; a click selects the panel on the board;
 //  - reorder by dragging a card, or with Alt+Left / Alt+Right on a focused card (Left / Right move the focus, Enter
 //    shows the panel, Home / End go to the ends); insert before / after, duplicate and delete the active panel;
-//  - Arrange: one row or a grid of 3, 4 or 6 per row; Script to boards…; Put panels in review.
+//  - Arrange: one row or a grid of 3, 4 or 6 per row; Script to boards…; Put panels in review;
+//  - Play animatic (wave T integration: WS3's player, for everyone who sees the strip, while `animatic` is on): the
+//    strip covers the selection bar's "Play animatic" when the selected panel sits low on the screen.
 // A person who cannot change the storyboard (a viewer, a room below 14) sees the strip without its write controls.
 import {
   formatDuration,
@@ -22,6 +24,8 @@ import { OBSTACLE_IDS } from '../../lib/overlay-obstacles.ts'
 import { useValue } from '../../lib/signals.ts'
 import { boardObstacles } from '../ai/board-chrome.ts'
 import { inPopoverLayer, usePopoverLayer } from '../ai/board-popover.tsx'
+import { planningShown } from '../planning/index.ts'
+import { isPlayerOpen, openPlayer } from '../storyboard-play/state.ts'
 import { anyOverlap, LAYOUTS, PICTURE_KIND, perRowOf, shotLabel } from './model.ts'
 import { arrange, deletePanels, duplicatePanel, insertPanel, movePanel, type Sb, setDuration } from './ops.ts'
 import { putPanelsInReview, reviewOffered } from './review.ts'
@@ -191,6 +195,19 @@ function Strip({ ctx, sb }: { ctx: CanvasFeatureContext; sb: Sb }) {
           </button>
         )}
         <div className="dr-sb-strip__tools">
+          {n > 0 && planningShown('animatic') && (
+            <button
+              type="button"
+              className="dr-btn dr-btn--sm dr-btn--ghost"
+              data-testid="sb-play"
+              title="Play the panels in order with their durations"
+              onClick={() => {
+                if (!isPlayerOpen(canvas)) openPlayer(canvas, sb.id)
+              }}
+            >
+              Play animatic
+            </button>
+          )}
           {canEdit && (
             <>
               <button

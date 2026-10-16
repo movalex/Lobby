@@ -1,7 +1,7 @@
 // The storyboard's export layer (wave T, WS2): the shot chips of the exported panels, in export coordinates, as
 // literal-colour SVG with searchable text; nothing for panels left out of the export; the head's line; the review
 // item label of a panel.
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { PLANNING_FLAG_KEYS } from '../planning/index.ts'
 import { chipSvg, STORYBOARD_OVERLAY, storyboardOverlaySvg } from './export-layer.ts'
 import { createStoryboard } from './ops.ts'
@@ -47,9 +47,18 @@ describe('the storyboard export layer', () => {
     const canvas = asCanvas(f)
     expect(STORYBOARD_OVERLAY.active(canvas)).toBe(false)
     createStoryboard(canvas, { title: 'Spot', aspect: '1:1', panels: [{}], at: { x: 0, y: 0 } }, ids)
-    // shipped off (a production build ignores overrides; here the switch reads the shipped value)
-    expect(STORYBOARD_OVERLAY.active(canvas)).toBe(false)
+    // shipped on since the wave T integration (here the switch reads the shipped value)
+    expect(STORYBOARD_OVERLAY.active(canvas)).toBe(true)
     expect(PLANNING_FLAG_KEYS.storyboard).toBe('lobby.planStoryboard')
+    // a dev-auth page that turns the switch off
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => (k === PLANNING_FLAG_KEYS.storyboard ? '0' : null),
+    })
+    try {
+      expect(STORYBOARD_OVERLAY.active(canvas)).toBe(false)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('escapes its words; a chip is literal colours', () => {
