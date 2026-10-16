@@ -229,4 +229,14 @@ describe('duplicateLobbyData', () => {
     })
     expect(duplicateLobbyData(undefined, new Map(), [])).toBeUndefined()
   })
+
+  it('wave T: relink-keep points a panel at a copied head and keeps it otherwise; card keys are kept', () => {
+    const lobby = { 'sb:of': 'h1', 'sb:pos': 'a0', 'card:status': 'todo' }
+    expect(duplicateLobbyData(lobby, new Map([['h1', 'h2']]), [])).toEqual({ ...lobby, 'sb:of': 'h2' })
+    expect(duplicateLobbyData(lobby, new Map(), [])).toEqual(lobby)
+    const head = { 'sb:head': { aspect: '16:9', audio: 'a1' } }
+    expect(duplicateLobbyData(head, new Map([['a1', 'a2']]), [])).toEqual({
+      'sb:head': { aspect: '16:9', audio: 'a2' },
+    })
+  })
 })

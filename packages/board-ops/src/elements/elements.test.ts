@@ -284,6 +284,30 @@ describe('remap', () => {
     expect(checkInvariants(r.elements as unknown as WireElement[])).toEqual([])
   })
 
+  it('wave T relink-keep: a copied panel points at a copied head, else keeps its storyboard; card keys stay', () => {
+    const head = { ...el('T'), id: 'H', customData: { lobby: { 'sb:head': { aspect: '16:9', audio: 'X' } } } }
+    const panel = {
+      ...el('F'),
+      id: 'P',
+      customData: { lobby: { 'sb:of': 'H', 'sb:pos': 'a0', 'sb:dur': 2000 } },
+    }
+    const card = {
+      ...el('R'),
+      id: 'C',
+      boundElements: null,
+      customData: { lobby: { 'card:status': 'doing', 'card:due': '2026-10-20' } },
+    }
+    const both = remapElements([head, panel, card] as never, { newId: seqIds('w') })
+    const lobbyOf = (r: typeof both, id: string) =>
+      (r.elements.find((e) => e.id === r.idMap.get(id))?.customData as Any | undefined)?.lobby
+    expect(lobbyOf(both, 'P')).toEqual({ 'sb:of': both.idMap.get('H'), 'sb:pos': 'a0', 'sb:dur': 2000 })
+    // the audio card was not copied: the head keeps it
+    expect(lobbyOf(both, 'H')).toEqual({ 'sb:head': { aspect: '16:9', audio: 'X' } })
+    expect(lobbyOf(both, 'C')).toEqual({ 'card:status': 'doing', 'card:due': '2026-10-20' })
+    const alone = remapElements([panel] as never, { newId: seqIds('v') })
+    expect(lobbyOf(alone, 'P')).toEqual({ 'sb:of': 'H', 'sb:pos': 'a0', 'sb:dur': 2000 })
+  })
+
   it('places the copies above indexAbove and refuses a bad key', () => {
     const r = remapElements(board, { indexAbove: 'a5' })
     for (const e of r.elements) expect((e.index as string) > 'a5').toBe(true)

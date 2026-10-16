@@ -11,6 +11,7 @@
     "./custom-data": "./src/custom-data.ts",
     "./reactions": "./src/reactions.ts",
     "./planning": "./src/planning.ts",
+    "./planning-keys": "./src/planning-keys.ts",
     "./limits": "./src/limits.ts",
     "./elements": "./src/elements.ts",
     "./doc": "./src/doc.ts",

@@ -13,6 +13,7 @@
  * Pure (Node-tested): reads go through the transaction's view (the scene plus this step's writes).
  */
 import { lobbyKeySpec } from '@draftroom/canvas-schema/custom-data'
+import { relinkKeep } from '@draftroom/canvas-schema/planning-keys'
 import { generateKeyBetween, generateNKeysBetween } from '@excalidraw/fractional-indexing'
 import type { CanvasElement, ItemKind, ReorderTo, ScenePoint } from '../api/lobby-canvas.ts'
 import type { CustomDataHandlerSpec } from '../registries.ts'
@@ -186,7 +187,8 @@ export function bind(view: TxView, arrowId: string, end: 'start' | 'end', target
  * A copy's `customData.lobby` (§3.3 "On duplicate / paste"): a feature's handler decides first (return
  * undefined to strip); otherwise the key's canvas-schema rule: `keep` copies it, `strip` drops it,
  * `relink` (element ids inside, with no handler to relink them) drops it, `strip-index` keeps `present`
- * without its `index`. An unknown key is dropped (the server would refuse it).
+ * without its `index`, `relink-keep` (wave T: `sb:of`, `sb:head`) points its ids at the copies the set has and
+ * keeps the others (canvas-schema planning relinkKeep). An unknown key is dropped (the server would refuse it).
  */
 export function duplicateLobbyData(
   lobby: Readonly<Record<string, unknown>> | undefined,
@@ -205,6 +207,7 @@ export function duplicateLobbyData(
     const spec = lobbyKeySpec(key)
     if (!spec) continue
     if (spec.duplicate === 'keep') out[key] = structuredClone(value)
+    else if (spec.duplicate === 'relink-keep') out[key] = structuredClone(relinkKeep(key, value, idMap))
     else if (spec.duplicate === 'strip-index' && value && typeof value === 'object') {
       const { index: _index, ...restValue } = value as Record<string, unknown>
       if (Object.keys(restValue).length) out[key] = restValue

@@ -11,7 +11,8 @@
  * - `customData.lobby` follows the key registry's duplicate rules (canvas-schema custom-data.ts): `strip`
  *   keys (`plusOne:*`, `ai`, `privateFrame`: identity-bound or identity-stamped) are removed; `relink` keys
  *   (`mindmap`, `mindmapEdge`) point at the copies, or are removed when a ref leaves the set; `strip-index`
- *   (`present`) loses its `index` unless `keepPresentIndex` (an import keeps the board's slide order).
+ *   (`present`) loses its `index` unless `keepPresentIndex` (an import keeps the board's slide order); `relink-keep`
+ *   (wave T: `sb:of`, `sb:head`) points at the copies where the set has them and keeps every other ref.
  *   `customData.lobbyServer` is server-owned and never copied: the server stamps it on create.
  * - Server-owned fields restart (`version` 1, a fresh `versionNonce`, `created` null, `updated` = now);
  *   `status` (images, local-only) is dropped; everything is live.
@@ -21,6 +22,7 @@
  */
 import { lobbyKeySpec } from '@draftroom/canvas-schema/custom-data'
 import { indexKeysBetween, isValidIndexKey } from '@draftroom/canvas-schema/engine'
+import { relinkKeep } from '@draftroom/canvas-schema/planning-keys'
 import { type IdSource, newElementId, randomInt31 } from './ids.ts'
 import { asElements, type BoardElement, compareByIndex, isLive } from './read.ts'
 
@@ -231,6 +233,10 @@ function remapLobby(
     const spec = lobbyKeySpec(key)
     if (!spec || spec.duplicate === 'strip') {
       cut.customData++
+      continue
+    }
+    if (spec.duplicate === 'relink-keep') {
+      out[key] = structuredClone(relinkKeep(key, value, idMap))
       continue
     }
     if (spec.duplicate === 'relink') {
