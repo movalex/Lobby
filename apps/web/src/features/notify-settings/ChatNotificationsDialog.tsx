@@ -98,6 +98,10 @@ export function ChatNotificationsDialog({
 
 type Probe = 'checking' | 'yes' | 'no'
 
+/** What the api said to a workspace's probe a moment ago (the bell opens often; the answer rarely changes). */
+const PROBE_TTL_MS = 60_000
+const probed = new Map<string, { at: number; yes: boolean }>()
+
 /**
  * The link in the bell that opens the dialog. It asks the api (the member's own choices, which any member may read)
  * whether chat notifications are on: off, or a role that may not have them (403), shows nothing; a member sees it only
@@ -116,24 +120,33 @@ export function ChatNotificationsEntry({
   requestOptions?: ChatHookRequestOptions
   children?: ReactNode
 }) {
-  const [probe, setProbe] = useState<Probe>('checking')
+  const key = `${workspaceId}:${canManage}`
+  const [probe, setProbe] = useState<Probe>(() => {
+    const known = requestOptions?.api ? undefined : probed.get(key)
+    if (!known || Date.now() - known.at >= PROBE_TTL_MS) return 'checking'
+    return known.yes ? 'yes' : 'no'
+  })
   const [open, setOpen] = useState(false)
   const api = requestOptions?.api
 
   useEffect(() => {
     const abort = new AbortController()
+    const known = probed.get(key)
+    if (known && Date.now() - known.at < PROBE_TTL_MS && !api) return
     setProbe('checking')
     getChatPrefs(workspaceId, { api, signal: abort.signal }).then(
       (data) => {
         if (abort.signal.aborted) return
-        setProbe(chatHooksAvailable() && (canManage || data.hooks.length > 0) ? 'yes' : 'no')
+        const yes = chatHooksAvailable() && (canManage || data.hooks.length > 0)
+        if (!api) probed.set(key, { at: Date.now(), yes })
+        setProbe(yes ? 'yes' : 'no')
       },
       () => {
         if (!abort.signal.aborted) setProbe('no')
       },
     )
     return () => abort.abort()
-  }, [workspaceId, canManage, api])
+  }, [workspaceId, canManage, api, key])
 
   if (probe !== 'yes') return null
   return (

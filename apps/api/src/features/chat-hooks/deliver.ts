@@ -37,6 +37,9 @@ import { HOOK_COLUMNS, type HookRow } from './store.ts'
 
 const HOUR_MS = 3_600_000
 const PURGE_EVERY_MS = HOUR_MS
+/** Leases last a minute and held-back rows wait a minute: neither needs a look every 2 s (the table has no index for them). */
+const LEASE_CHECK_MS = 15_000
+const ROLLUP_CHECK_MS = 30_000
 /** A held-back message waits this long for the roll-up (one "and N more" per hook per minute). */
 const ROLLUP_WAIT_MS = 60_000
 const ROLLUP_BATCH = 500
@@ -131,6 +134,10 @@ export function createChatDelivery(
   let timer: ReturnType<typeof setInterval> | null = null
   let running: Promise<TickResult> | null = null
   let lastPurge = Number.NEGATIVE_INFINITY
+  let leaseCheckedAt = Number.NEGATIVE_INFINITY
+  let rollupCheckedAt = Number.NEGATIVE_INFINITY
+  /** rows are held back (here or seen at the last look): look for ones that are due on every pass */
+  let rollupWatch = false
   let closing = false
 
   /** Waits until this hook may be posted to again (1 a second). */
@@ -441,11 +448,14 @@ export function createChatDelivery(
       await purge(at)
     }
     if (!box) return tally // hooks are off: nothing is sent, the purge above still ages the outbox out
-    await db.query(
-      `UPDATE chat_deliveries SET status = 'queued', lease_until = NULL, next_at = $1
-        WHERE status = 'sending' AND lease_until < $1`,
-      [at],
-    )
+    if (monotonic() - leaseCheckedAt >= LEASE_CHECK_MS) {
+      leaseCheckedAt = monotonic()
+      await db.query(
+        `UPDATE chat_deliveries SET status = 'queued', lease_until = NULL, next_at = $1
+          WHERE status = 'sending' AND lease_until < $1`,
+        [at],
+      )
+    }
     const claimed = await db.query<Claimed>(
       `UPDATE chat_deliveries
           SET status = 'sending', attempts = attempts + 1, lease_until = $3
@@ -458,11 +468,18 @@ export function createChatDelivery(
     tally.claimed = claimed.rows.length
     const byHook = new Map<string, Claimed[]>()
     for (const c of claimed.rows) byHook.set(c.hook_id, [...(byHook.get(c.hook_id) ?? []), c])
-    const due = await db.query<{ hook_id: string }>(
-      `SELECT DISTINCT hook_id FROM chat_deliveries WHERE status = 'coalesced' AND next_at <= $1 LIMIT 50`,
-      [at],
-    )
-    const hooks = new Set([...byHook.keys(), ...due.rows.map((r) => r.hook_id)])
+    let rollups: string[] = []
+    if (rollupWatch || monotonic() - rollupCheckedAt >= ROLLUP_CHECK_MS) {
+      rollupCheckedAt = monotonic()
+      const held = await db.query<{ hook_id: string; due: boolean }>(
+        `SELECT hook_id, bool_or(next_at <= $1) AS due FROM chat_deliveries
+          WHERE status = 'coalesced' GROUP BY hook_id LIMIT 50`,
+        [at],
+      )
+      rollupWatch = held.rows.length > 0
+      rollups = held.rows.filter((r) => r.due).map((r) => r.hook_id)
+    }
+    const hooks = new Set([...byHook.keys(), ...rollups])
     await Promise.all(
       [...hooks].map(async (hookId) => {
         for (const c of byHook.get(hookId) ?? []) {
@@ -481,6 +498,7 @@ export function createChatDelivery(
             ).catch(() => {})
           }
         }
+        if (!rollups.includes(hookId)) return
         try {
           await rollUp(hookId, tally)
         } catch (e) {
@@ -488,6 +506,8 @@ export function createChatDelivery(
         }
       }),
     )
+    // what this pass held back (or could not roll up yet) is looked at on the next one
+    if (tally.coalesced > 0 || tally.retried > 0) rollupWatch = true
     return tally
   }
 

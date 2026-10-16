@@ -18,8 +18,10 @@
 //
 // A message carries only the event, display names (cleanDisplayText), the board title (≤ 80 characters), a link back
 // to Lobby (which needs Lobby sign-in and board access) and, only when the hook's admin turned `includeSnippets` on, a
-// comment snippet of at most 140 characters, never from a team-only thread. Never element data, file names or
-// contents, emails or signed URLs. Slack payloads switch unfurling off.
+// comment snippet of at most 140 characters, never from a team-only thread. The same switch decides whether a PRIVATE
+// board's title may be named in the channel (else the message says CHAT_HIDDEN_BOARD_TITLE): a channel's audience is wider
+// than a private board's. Never element data, file names or contents, emails or signed URLs. Slack payloads switch
+// unfurling off.
 //
 // Do not import values from ./index.ts here: index.ts re-exports this module.
 
@@ -226,6 +228,7 @@ export const ChatHook = z.object({
   provider: ChatHookProvider,
   /** chatHookHint: never the URL itself */
   hint: z.string().max(120),
+  /** comment text AND the real title of a private board in the channel (both stay out unless the admin turned this on) */
   includeSnippets: z.boolean(),
   createdBy: z.object({ id: UserIdLike, name: z.string() }).nullable(),
   createdAt: z.string(),

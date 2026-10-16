@@ -66,6 +66,12 @@ export function WorkspaceHooksPanel({
     )
   const added = (hook: ChatHook) =>
     setLoad((cur) => (cur.kind === 'ready' ? { kind: 'ready', hooks: [...cur.hooks, hook] } : cur))
+  /** the api remembers when a hook last sent or failed: read the list again after a test */
+  const refresh = () =>
+    listChatHooks(workspaceId, { api }).then(
+      (hooks) => setLoad((cur) => (cur.kind === 'ready' ? { kind: 'ready', hooks } : cur)),
+      () => {},
+    )
   const removed = (id: string) =>
     setLoad((cur) => (cur.kind === 'ready' ? { kind: 'ready', hooks: cur.hooks.filter((h) => h.id !== id) } : cur))
 
@@ -107,6 +113,7 @@ export function WorkspaceHooksPanel({
               api={api}
               onChanged={replace}
               onRemoved={removed}
+              onTested={() => void refresh()}
             />
           ))}
         </ul>
@@ -122,12 +129,14 @@ function HookRow({
   api,
   onChanged,
   onRemoved,
+  onTested,
 }: {
   workspaceId: string
   hook: ChatHook
   api: ChatHookRequestOptions['api']
   onChanged(h: ChatHook): void
   onRemoved(id: string): void
+  onTested(): void
 }) {
   const [busy, setBusy] = useState<'test' | 'remove' | 'enable' | 'edit' | null>(null)
   const [result, setResult] = useState<{ text: string; ok: boolean } | null>(null)
@@ -171,6 +180,7 @@ function HookRow({
             void run('test', async () => {
               const r = await testChatHook(workspaceId, hook.id, { api })
               setResult({ text: testResultText(r, hook.provider), ok: r.status === 'sent' })
+              onTested()
             })
           }
         >
