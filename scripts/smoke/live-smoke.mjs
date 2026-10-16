@@ -91,9 +91,11 @@ const isNonRequestHost = (h) => h === 'www.w3.org' || h === 'json-schema.org' ||
 /**
  * Documentation links inside error messages of libraries outside the engine tree (the host-rewrite plugin
  * rewrites only @excalidraw/excalidraw's dependency tree): React's error decoder, pdf.js's issue tracker,
- * the bundler runtime. Named, not requested.
+ * the bundler runtime. Named, not requested. Wave R: miro.com (the Miro import dialog's "where to get a token"
+ * link and its board-link parser) and hooks.slack.com (the chat-hook form's URL rule and hint): text only; the api,
+ * never the browser, talks to them (AGENTS.md server egress), and the CSP's connect-src does not allow them.
  */
-const DOC_LINK_HOSTS = new Set(['react.dev', 'github.com', 'rolldown.rs'])
+const DOC_LINK_HOSTS = new Set(['react.dev', 'github.com', 'rolldown.rs', 'miro.com', 'hooks.slack.com'])
 
 /**
  * Wave N (N6-1): XML namespace names of @cantoo/pdf-lib's XMP and PDF/A metadata, written into a PDF's
