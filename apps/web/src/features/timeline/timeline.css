@@ -1,0 +1,117 @@
+/* Timeline frames (wave T, WS5). The SVG over a timeline frame takes no clicks; its bars do. The strip below a
+   selected timeline uses the --dr-* tokens (both themes). Bars and the ruler are drawn with literal colours from
+   paint.ts (the same markup the exports draw), a dark palette on a dark board. */
+.dr-tl {
+  position: absolute;
+  pointer-events: none;
+  overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.dr-tl-bar {
+  pointer-events: all;
+  cursor: pointer;
+  touch-action: none;
+  outline: none;
+}
+.dr-tl-bar[data-editable] {
+  cursor: grab;
+}
+.dr-tl-bar[data-dragging] {
+  cursor: grabbing;
+}
+.dr-tl-bar .dr-tl-focus {
+  opacity: 0;
+  pointer-events: none;
+}
+.dr-tl-bar:focus-visible .dr-tl-focus {
+  opacity: 1;
+}
+.dr-tl-bar .dr-tl-tip {
+  paint-order: stroke;
+  stroke: var(--dr-surface, #fff);
+  stroke-width: 3px;
+}
+
+.dr-tl-controls {
+  position: absolute;
+  z-index: 1;
+  max-width: calc(100% - 16px);
+  box-sizing: border-box;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  padding: 8px 10px;
+  border-radius: var(--dr-radius);
+  border: 1px solid var(--dr-line);
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  box-shadow: var(--dr-shadow-pop);
+  pointer-events: auto;
+  font: 13px / 1.3 var(--dr-font);
+}
+.dr-tl-seg {
+  display: inline-flex;
+  border: 1px solid var(--dr-line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.dr-tl-seg button,
+.dr-tl-today {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: inherit;
+  cursor: pointer;
+}
+.dr-tl-seg button + button {
+  border-left: 1px solid var(--dr-line);
+}
+.dr-tl-seg button[aria-pressed="true"] {
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+  font-weight: 600;
+}
+.dr-tl-today {
+  border: 1px solid var(--dr-line);
+  border-radius: 8px;
+}
+.dr-tl-seg button:focus-visible,
+.dr-tl-today:focus-visible,
+.dr-tl-field select:focus-visible,
+.dr-tl-field input:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+.dr-tl-seg button:disabled,
+.dr-tl-today:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.dr-tl-field {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--dr-ink-2);
+}
+.dr-tl-field select,
+.dr-tl-field input {
+  min-height: 32px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  border: 1px solid var(--dr-line);
+  border-radius: 8px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 13px / 1 var(--dr-font);
+}
+.dr-tl-problem {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--dr-warn);
+  font-size: 12px;
+}

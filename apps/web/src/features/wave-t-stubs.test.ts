@@ -89,14 +89,18 @@ describe('the wave T features and entries', () => {
     expect(at.every((i) => i >= 0)).toBe(true)
     expect([...at].sort((a, b) => a - b)).toEqual(at)
     expect(ids.at(-1)).toBe('elements')
-    for (const id of WAVE_T_FEATURES) expect(CANVAS_FEATURES.find((f) => f.id === id)).toEqual({ id })
+    // (WS5 filled 'timeline': features/timeline/timeline.test.ts pins what it contributes)
+    for (const id of WAVE_T_FEATURES.filter((f) => f !== 'timeline'))
+      expect(CANVAS_FEATURES.find((f) => f.id === id)).toEqual({ id })
   })
 
   it('every entry runs one of the wave T palette ids, each pending until its owner registers it', () => {
     expect(PLANNING_ENTRIES.map((e) => e.id).sort()).toEqual([...WAVE_T_PALETTE_COMMAND_IDS].sort())
     for (const id of WAVE_T_PALETTE_COMMAND_IDS) {
       expect(PALETTE_COMMAND_IDS as readonly string[]).toContain(id)
-      expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).toContain(id)
+      // (WS5 registered 'timeline.new')
+      if (id !== 'timeline.new') expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).toContain(id)
+      else expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).not.toContain(id)
     }
     for (const e of PLANNING_ENTRIES) expect(e.places.length, e.id).toBeGreaterThan(0)
   })
