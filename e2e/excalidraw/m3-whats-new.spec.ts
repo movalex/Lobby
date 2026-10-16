@@ -99,7 +99,7 @@ test('a returning creator sees the wave P card and the Start row above the board
           (key) => localStorage.getItem(key),
           `draftroom:whats-new-dismissed:${p.me.user.id}`,
         ),
-      ).toBe('2026-10-wave-q')
+      ).toBe('2026-10-wave-r')
       await p.page.reload()
       await expect(p.page.getByTestId('dashboard')).toBeVisible()
       await expect(card(p.page)).toHaveCount(0)
