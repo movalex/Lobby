@@ -283,6 +283,13 @@ export function barBox(
   return { x: s.x1, w: Math.max(MIN_BAR_W, s.x2 - s.x1), kind: 'bar', clippedLeft: s.clippedLeft }
 }
 
+/** A label goes inside a bar that holds it whole (or has room for a long stretch of it), else to the right of the bar. */
+function labelFitsInside(milestone: boolean, w: number, title: string): boolean {
+  if (milestone) return false
+  const room = w - 28
+  return room >= textWidth(title, BAR_FONT) || room >= 96
+}
+
 /** Whether a card is on this timeline: a due date in its range (and the tag, when the timeline filters by one). */
 export function onTimeline(t: TimelineValue, c: TimelineCard): boolean {
   if (c.due === null || !isPlanningDate(c.due) || c.due < t.start || c.due > t.end) return false
@@ -326,7 +333,7 @@ export function layoutTimeline(input: LayoutInput): Layout {
       const milestone = box.kind === 'milestone'
       const w = box.w
       const x1 = box.x
-      const inside = !milestone && w - 28 >= 36
+      const inside = labelFitsInside(milestone, w, card.title.trim() || 'Untitled card')
       const ownLabel = card.title.trim() || 'Untitled card'
       const reach = inside ? x1 + w : x1 + w + 6 + Math.min(textWidth(ownLabel, BAR_FONT), 160)
       let row = ends.findIndex((e) => e + 4 <= x1)
@@ -344,7 +351,7 @@ export function layoutTimeline(input: LayoutInput): Layout {
       const by = y + LANE_PAD + p.row * ROW_STEP + (ROW_STEP - BAR_H) / 2
       if (by + BAR_H > height - 2) continue
       const ownLabel = p.card.title.trim() || 'Untitled card'
-      const inside = p.kind === 'bar' && p.w - 28 >= 36
+      const inside = labelFitsInside(p.kind === 'milestone', p.w, ownLabel)
       const label = inside ? fitText(ownLabel, p.w - 28, BAR_FONT) : fitText(ownLabel, 160, BAR_FONT)
       bars.push({
         id: p.card.id,
