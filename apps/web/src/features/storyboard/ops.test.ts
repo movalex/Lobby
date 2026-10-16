@@ -178,7 +178,7 @@ describe('reorder, insert, duplicate, delete', () => {
   it('a duration, and a read-only canvas changes nothing', () => {
     const { f, canvas, made, sb } = board(2)
     setDuration(canvas, made.panelIds[0] as string, 2500)
-    expect(lobby(f.els.get(made.panelIds[0]))['sb:dur']).toBe(2500)
+    expect(lobby(f.els.get(made.panelIds[0] as string))['sb:dur']).toBe(2500)
     f.setReadOnly(true)
     f.transacts.length = 0
     expect(movePanel(canvas, sb(), 0, 1)).toBe(false)
