@@ -36,7 +36,9 @@ const common = { truncated: false, budget: null, runId: RUN }
 describe('wave L AI actions', () => {
   it('adds six actions after the four old ones, every name valid for the ledger CHECK (0028)', () => {
     expect(AI_ACTIONS.slice(0, 4)).toEqual([...AI_LEGACY_ACTIONS])
-    expect(AI_ACTIONS.slice(4)).toEqual(['recap', 'ask', 'command', 'diagram', 'sort', 'score'])
+    expect(AI_ACTIONS.slice(4, 10)).toEqual(['recap', 'ask', 'command', 'diagram', 'sort', 'score'])
+    // wave T's one action follows (wave-t.test.ts)
+    expect(AI_ACTIONS.slice(10)).toEqual(['storyboard'])
     for (const a of AI_ACTIONS) expect(AI_LEDGER_ACTION_PATTERN.test(a), a).toBe(true)
     expect(AI_LEDGER_ACTION_PATTERN.test('Bad Name')).toBe(false)
     expect(AI_LEDGER_ACTION_PATTERN.test('a'.repeat(33))).toBe(false)
