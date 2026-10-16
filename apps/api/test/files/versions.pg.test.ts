@@ -180,11 +180,12 @@ describe.skipIf(!PG_URL)('versions on real Postgres (DRAFTROOM_TEST_DATABASE_URL
     for (let i = 0; i < ITER * 2; i++) {
       const w = await world()
       const v1 = await upload(w.t, w.alice, w.board, 'cut.png')
-      // no board shows it; a complete pass marked it 40 days ago: delete mode may remove it now
-      w.t.clock.advance(41 * DAY)
-      await w.t.db.query('UPDATE asset_versions SET unreferenced_since = $2 WHERE id = $1', [
+      // no board shows it; a complete pass marked it 40 days ago: delete mode may remove it now. The version is
+      // aged in the database, not by moving the clock: 41 days on the clock would also expire bob's session (401)
+      await w.t.db.query('UPDATE asset_versions SET unreferenced_since = $2, created_at = $3 WHERE id = $1', [
         v1.versionId,
         new Date(w.t.clock.now().getTime() - 40 * DAY),
+        new Date(w.t.clock.now().getTime() - 41 * DAY),
       ])
       const [up] = await race<{ statusCode: number; body: string; json(): unknown } | unknown>(
         [
