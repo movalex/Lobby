@@ -1,0 +1,164 @@
+/* Chat notifications (wave R, WS2): the dialog, "My notifications" and the workspace's channels. Tokens from styles.css,
+   so the dark theme applies. */
+
+.dr-chat {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.dr-chat__tabs {
+  display: flex;
+  gap: 4px;
+  margin: 12px 0 0;
+  border-bottom: 1px solid var(--dr-line);
+}
+.dr-chat__tab {
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--dr-ink-2);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.dr-chat__tab[aria-selected="true"] {
+  border-bottom-color: var(--dr-accent-ink);
+  color: var(--dr-accent-ink);
+}
+.dr-chat__panel {
+  margin: 14px 0 0;
+  min-width: 0;
+}
+.dr-chat__hook {
+  margin: 0;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--dr-line);
+  border-radius: 10px;
+  min-width: 0;
+}
+.dr-chat__legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+}
+.dr-chat__badge {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--dr-chip);
+  color: var(--dr-ink-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+.dr-chat__badge--off {
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+}
+.dr-chat__kind {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 0 0;
+  font-size: 14px;
+  line-height: 1.4;
+}
+.dr-chat__kind input {
+  margin-top: 3px;
+}
+.dr-chat__note,
+.dr-chat__help {
+  margin: 0;
+  font-size: 12.5px;
+}
+.dr-chat__saved {
+  align-self: center;
+  margin-right: auto;
+  color: var(--dr-live);
+  font-size: 13px;
+}
+.dr-chat__warning {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--dr-warn-line);
+  border-radius: 10px;
+  background: var(--dr-warn-bg);
+  color: var(--dr-ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.dr-chat__list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-chat__hookrow {
+  padding: 12px;
+  border: 1px solid var(--dr-line);
+  border-radius: 10px;
+  background: var(--dr-surface);
+}
+.dr-chat__hookrow p {
+  margin: 4px 0 0;
+}
+.dr-chat__hookhead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.dr-chat__hint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.dr-chat__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 0;
+}
+.dr-chat__ok {
+  color: var(--dr-live);
+}
+.dr-chat__edit,
+.dr-chat__add {
+  margin: 12px 0 0;
+  padding: 12px;
+  border: 1px solid var(--dr-line);
+  border-radius: 10px;
+  background: var(--dr-inset);
+}
+.dr-chat__add {
+  background: none;
+}
+.dr-chat__h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.dr-chat__howto {
+  margin: 10px 0 0;
+  font-size: 13px;
+}
+.dr-chat__howto summary {
+  cursor: pointer;
+  color: var(--dr-accent-ink);
+}
+.dr-chat__howto ol {
+  margin: 8px 0 0;
+  padding-left: 20px;
+  line-height: 1.5;
+}
+
+/* the link under the bell's note (dashboard/DashboardBell.tsx `footer`): nothing is drawn while it has nothing to show */
+.dr-dbell__footer {
+  padding: 8px 14px;
+  border-top: 1px solid var(--dr-line);
+  font-size: 12.5px;
+}
+.dr-dbell__footer:empty {
+  display: none;
+}

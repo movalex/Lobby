@@ -39,6 +39,7 @@ import type { Params } from '../../context.ts'
 import { ApiError, conflict, notFound, parse } from '../../errors.ts'
 import { actorOf } from '../../notifier.ts'
 import { toUser } from '../../serialize.ts'
+import { enqueueChatDeliveries } from '../chat-hooks/outbox.ts'
 import type { FeatureContext } from '../context.ts'
 import {
   assertRaiseAllowed,
@@ -152,7 +153,7 @@ export async function notifyOwners(
   const exists = await tx.one<{ ok: boolean }>("SELECT to_regclass('notifications') IS NOT NULL AS ok")
   if (!exists.ok) return 0
   const inserted = await trySavepoint(tx, async () => {
-    const res = await tx.query(
+    const res = await tx.query<{ id: string }>(
       `WITH owners AS (
          SELECT bm.user_id FROM board_members bm
            JOIN workspace_members wm ON wm.workspace_id = $1 AND wm.user_id = bm.user_id
@@ -164,9 +165,11 @@ export async function notifyOwners(
           WHERE wm.workspace_id = $1 AND wm.role IN ('owner', 'admin') AND NOT EXISTS (SELECT 1 FROM owners)
        )
        INSERT INTO notifications (workspace_id, user_id, kind, board_id, actor_id, created_at)
-       SELECT $1, user_id, 'access_request', $2, $3, $4 FROM recipients WHERE user_id <> $3`,
+       SELECT $1, user_id, 'access_request', $2, $3, $4 FROM recipients WHERE user_id <> $3
+       RETURNING id`,
       [input.workspaceId, input.boardId, input.actorId, input.at],
     )
+    await enqueueChatDeliveries(tx, res.rows.map((r) => r.id))
     return res.rowCount
   })
   return inserted ?? 0

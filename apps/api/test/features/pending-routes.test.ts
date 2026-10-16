@@ -58,12 +58,10 @@ const WAVE_Q_ROUTES: string[] = []
 const WAVE_R_ROUTES: string[] = [
   ...IMPORT_ROUTE_KEYS,
   ...MIRO_IMPORT_ROUTE_KEYS,
-  ...CHAT_HOOK_ROUTE_KEYS,
   ...BACKUP_ROUTE_KEYS,
 ]
 const WAVE_R_OWNERS: Record<string, string> = {
   ...Object.fromEntries([...IMPORT_ROUTE_KEYS, ...MIRO_IMPORT_ROUTE_KEYS].map((k) => [k, 'WS1'])),
-  ...Object.fromEntries(CHAT_HOOK_ROUTE_KEYS.map((k) => [k, 'WS2'])),
   ...Object.fromEntries(BACKUP_ROUTE_KEYS.map((k) => [k, 'WS4'])),
 }
 const PENDING_NOW = [...WAVE_M_ROUTES, ...WAVE_N_ROUTES, ...WAVE_Q_ROUTES, ...WAVE_R_ROUTES]
@@ -94,11 +92,7 @@ describe('the pending list', () => {
       WAVE_R_ROUTES.filter((k) => k !== 'GET /api/boards/:bid/backup').sort(),
     )
     const message = (k: string) =>
-      (CHAT_HOOK_ROUTE_KEYS as readonly string[]).includes(k)
-        ? CHAT_HOOK_GUESTS_MESSAGE
-        : (BACKUP_ROUTE_KEYS as readonly string[]).includes(k)
-          ? BACKUP_GUESTS_MESSAGE
-          : IMPORT_GUESTS_MESSAGE
+      (BACKUP_ROUTE_KEYS as readonly string[]).includes(k) ? BACKUP_GUESTS_MESSAGE : IMPORT_GUESTS_MESSAGE
     for (const [k, m] of guestRows) expect(m, k).toBe(message(k))
     const creatorRows = Object.entries(CREATOR_ROUTES).filter(([k]) => WAVE_R_ROUTES.includes(k))
     const creates = [
@@ -106,7 +100,7 @@ describe('the pending list', () => {
       ...IMPORT_CREATOR_ROUTE_KEYS,
       ...BACKUP_CREATOR_ROUTE_KEYS,
     ]
-    expect(creatorRows.map(([k]) => k).sort()).toEqual([...creates, ...CHAT_HOOK_CREATOR_ROUTE_KEYS].sort())
+    expect(creatorRows.map(([k]) => k).sort()).toEqual([...creates].sort())
     for (const [k, rule] of creatorRows)
       expect(rule, k).toEqual({
         purpose: (creates as readonly string[]).includes(k) ? 'create' : 'share',
@@ -114,6 +108,20 @@ describe('the pending list', () => {
       })
     for (const k of [...guestRows.map(([key]) => key), ...creatorRows.map(([key]) => key)])
       expect(isPendingRoute(k), k).toBe(true)
+  })
+
+  it('every chat hook route (wave R, WS2) has its guard rows and is live', () => {
+    const guestRows = Object.entries(GUEST_REFUSED_ROUTES).filter(
+      ([k]) => k.includes('/chat-hooks') || k.includes('/chat-prefs'),
+    )
+    expect(guestRows.map(([k]) => k).sort()).toEqual([...CHAT_HOOK_ROUTE_KEYS].sort())
+    for (const [k, m] of guestRows) expect(m, k).toBe(CHAT_HOOK_GUESTS_MESSAGE)
+    const creatorRows = Object.entries(CREATOR_ROUTES).filter(
+      ([k]) => k.includes('/chat-hooks') || k.includes('/chat-prefs'),
+    )
+    expect(creatorRows.map(([k]) => k).sort()).toEqual([...CHAT_HOOK_CREATOR_ROUTE_KEYS].sort())
+    for (const [k, rule] of creatorRows) expect(rule, k).toEqual({ purpose: 'share', refuse: 'always' })
+    expect(CHAT_HOOK_ROUTE_KEYS.filter((k) => isPendingRoute(k))).toEqual([])
   })
 
   it('every wave Q route has its guest row (all of them) and the eight writes their in-route creator rows, all live', () => {
