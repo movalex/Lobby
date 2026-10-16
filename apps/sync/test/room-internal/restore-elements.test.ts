@@ -199,6 +199,48 @@ describe('restore-elements: a checkpoint’s elements back into the live board (
     expect(keys.filter((k) => k.startsWith('react:'))).toEqual([])
   })
 
+  it('wave T: the checkpoint’s planning keys come back as stored with the switch on; off, a live card keeps its keys now and a re-created one comes back without them', async () => {
+    const dataDir = h.dataDir()
+    const on = await h.stack({ dataDir })
+    const b = newBoardId()
+    expect((await seed(on, b, sampleBoard())).status).toBe(201)
+    const ann = await on.client({
+      boardId: b,
+      user: 'ann',
+      query: { [CONNECT_REV_PARAM]: String(CONTRACTS_REV) },
+    })
+    const v = (id: string) => ann.confirmed.get(id)?.version ?? 1
+    const planned = (id: string, c: Record<string, unknown>) => ({ k: 'p', id, pv: v(id), c })
+    const lobbyOf = (m: Map<string, El>, id: string) => (m.get(id)?.customData?.lobby ?? {}) as object
+    await ann.push([
+      planned('N1', { 'card:status': 'todo', 'card:due': '2026-10-30' }),
+      planned('N2', { 'card:status': 'doing' }),
+      planned('F', { kanban: { hidden: ['blocked'] } }),
+    ])
+    const cp = await copies(on, b)
+    // since then: N1 done, the Kanban relabelled, N2 deleted
+    await ann.push([planned('N1', { 'card:status': 'done' }), planned('F', { kanban: {} })])
+    await ann.push([del('N2', v('N2')), del('N2.t', v('N2.t'))])
+    const res = await restore(on, b, ['N1', 'N2'], closure(cp, ['N1', 'N2']))
+    expect(res.skipped).toEqual([])
+    let { byId } = await byIdOf(on, b)
+    expect(lobbyOf(byId, 'N1')).toEqual({ 'card:status': 'todo', 'card:due': '2026-10-30' })
+    expect(lobbyOf(byId, 'N2')).toEqual({ 'card:status': 'doing' })
+    // again from the same checkpoint with the switch off (the rollback's first step)
+    await ann.push([planned('N1', { 'card:status': 'done' })])
+    await ann.push([del('N2', v('N2')), del('N2.t', v('N2.t'))])
+    ann.terminate()
+    await on.server.kill('SIGKILL')
+    const off = await h.stack({ dataDir, env: { DRAFTROOM_PLANNING: 'off' } })
+    const again = await restore(off, b, ['N1', 'N2', 'F'], closure(cp, ['N1', 'N2', 'F']))
+    expect(again.skipped).toEqual([])
+    ;({ byId } = await byIdOf(off, b))
+    expect(lobbyOf(byId, 'N1')).toEqual({ 'card:status': 'done', 'card:due': '2026-10-30' })
+    expect(lobbyOf(byId, 'F')).toEqual({ kanban: {} })
+    expect(byId.get('N2')?.isDeleted).toBe(false)
+    expect(lobbyOf(byId, 'N2')).toEqual({})
+  })
+
   it('a text under a lease is skipped LEASED (a label: its container’s lease); the rest is written', async () => {
     const st = await h.stack()
     const b = newBoardId()

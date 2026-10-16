@@ -802,6 +802,33 @@ A wave N board file can hold reaction keys, which 104c6e0 does not know: it refu
 
 Rolling the api back below wave N: migrations 0031 (`board_visits`) and 0032 (`board_links`, `board_link_scans`) are new tables the older api never touches, so it needs only `DRAFTROOM_ALLOW_NEWER_SCHEMA=1` ([Rolling the api back past a migration](#rolling-the-api-back-past-a-migration)). The web rolls back as usual (the deployed web works against the new api and sync: the stale pairs in docs/PROGRESS.md).
 
+## Wave T: the planning switch and the sync rollback
+
+Wave T (storyboards, work cards, Kanbans, timelines) is `CONTRACTS_REV` 14: four `customData.lobby` key classes, `card:` (`status`, `who`, `start`, `due`), `sb:` (`of`, `pos`, `dur`, `head`), `kanban` and `timeline` (docs/WAVE-T-CONTRACTS.md). No migration.
+
+| Key | Service | Value | What it does |
+|---|---|---|---|
+| `DRAFTROOM_PLANNING` | sync | `off` at the deploy, then `on` | Only `on` takes the planning keys. Unset, empty or `off`: every write of one is refused UNAVAILABLE, the stored keys stay, seeded content carries none, a checkpoint restore puts none back on a re-created element, and the room's `contracts` frame says 13, so no web offers planning. Anything else refuses to start. The boot log says `[planning] on` or `[planning] off (DRAFTROOM_PLANNING is not on)`. |
+
+**Deploy order**: api (its `POST /internal/boards/:bid/assignee-refs`, which the sync asks before it stores a `card:who`), then the sync with `DRAFTROOM_PLANNING=off`, then the web, then `DRAFTROOM_PLANNING=on` and a restart. With the switch on, an assignment the api cannot answer (404 from an api without the route, a 503, 3 s without an answer) is refused UNAVAILABLE: fail closed. The web deployed before wave T (6769e07, rev 13) keeps working beside it: it parses every frame, its edits and moves keep the keys it cannot know, and its copy of a card is a plain note (`t-compat-rev13.spec.ts`, `stale-reader-rev13.test.ts`).
+
+### Rolling the sync back below wave T (to ba1704c)
+
+A wave T board file can hold planning keys, which ba1704c does not know: it refuses an edit of a card, a panel, a storyboard title, a Kanban or a timeline INVALID, and the undo of the delete of one (`rollback-rev13.test.ts`). A rollback **removes** card fields, storyboard order and durations, Kanban and timeline settings (the elements stay); they can be brought back from the checkpoints of step 2 after re-upgrading. In this order:
+
+1. Set `DRAFTROOM_PLANNING=off` on the sync service and restart it. The room says 13 (open rev-14 tabs stop offering planning), every planning write is refused, the stored keys stay.
+2. Save a named checkpoint (Version history → Save version, e.g. "before the wave T rollback") of each board that uses cards, storyboards, Kanbans or timelines. Those checkpoints hold the keys: the older sync refuses to restore them; restore them after re-upgrading.
+3. Strip the keys, once per class, in the sync service's Shell (the route is internal and refused while maintenance is on):
+
+   ```sh
+   for p in card: sb: kanban timeline; do node -e "fetch('http://127.0.0.1:'+(process.env.PORT||10000)+'/internal/maintenance/strip-keys',{method:'POST',headers:{'content-type':'application/json','x-draftroom-internal':process.env.DRAFTROOM_INTERNAL_SECRET},body:JSON.stringify({prefix:process.argv[1]})}).then(r=>r.text()).then(console.log)" "$p"; done
+   ```
+
+   Each answers `{boards, rewritten, elements, keys, failed}`; `failed` must be 0 for each (run it again if not; a second run changes nothing).
+4. Deploy ba1704c (Manual Deploy → *Deploy a specific commit*).
+
+The api rolls back as usual (no migration; the older api has no assignee-refs route, which only the wave T sync calls). The web rolls back as usual (the wave T web against the older sync reads 13, offers no planning and pushes no planning key: `t-compat-old-sync.spec.ts`).
+
 ## Rollback
 
 - **How.** Dashboard → service → Deploys → *Rollback*. Render reuses the earlier build artifact (no rebuild) and that deploy's environment variables. Disks, plan and static-site settings are *not* rolled back. A Dashboard rollback also disables autodeploy, which is already off.
@@ -811,6 +838,7 @@ Rolling the api back below wave N: migrations 0031 (`board_visits`) and 0032 (`b
 - **R0 back to the build before it (`main` 79f0125), before the cut-over only.** R0's api records migration 0022 at start, so the older api refuses to start (`database has migration …, which this build does not know`) unless `DRAFTROOM_ALLOW_NEWER_SCHEMA=1` is set on the api service and the old commit is deployed with Manual Deploy → *Deploy a specific commit*, not *Rollback* ([Rolling the api back past a migration](#rolling-the-api-back-past-a-migration)). 0022 is additive for that build: the reason CHECK only gains `engine_migration`, which it never writes, and both new columns have defaults it never needs to set. Its sync and web roll back as usual. It ignores `holdUntil` (backups a run-all call held age out by count again), `format` and `newCanvas`, which only matter once the cut-over has happened. **Never after the cut-over**: that build opens a board born on the new canvas as an empty tldraw board and writes tldraw tables into it. This procedure has not been rehearsed.
 - **api past wave M (migrations 0029 and 0030).** Rolling the api back to wave L's build (`4e4a549`) needs no down migration, only `DRAFTROOM_ALLOW_NEWER_SCHEMA=1` and Manual Deploy → *Deploy a specific commit*, not *Rollback* ([Rolling the api back past a migration](#rolling-the-api-back-past-a-migration)). Without the flag that build refuses to start once the database has recorded `0029_usage_daily` and `0030_workspace_templates`. Both are new tables that the older build never reads or writes, and no existing table changes. The rolled-back api has no usage, open-state, workspace-template or Ask-across-boards routes, so a wave M web must fall back on their 404s (the wave M plan requires it of every new route; check it before relying on it). Rows written meanwhile stay and are used again after the roll-forward. This procedure has not been rehearsed.
 - **api or sync past wave N.** The sync needs the reactions steps first; the api needs only the flag: [Rolling the sync back below wave N](#rolling-the-sync-back-below-wave-n-to-104c6e0).
+- **sync past wave T.** The planning switch off, named checkpoints and the strip first: [Rolling the sync back below wave T](#rolling-the-sync-back-below-wave-t-to-ba1704c).
 - **api past milestone 3: don't.** A milestone-1/2 api build reads files from `meta.json` on a local disk that no longer exists. It would never see R2 objects or `asset_versions` rows, and it expects its co-located worker. Fix forward instead.
 - **Workers.** Roll a worker back only to a build that speaks the api's current worker protocol. The simplest way to stop previews is to stop the workers: jobs wait in Postgres.
 - **Canvas schema.** Don't roll sync back below a canvas-schema migration. Boards already migrated on disk can't be loaded by the older server (`Incompatible schema?`), and newer clients are refused (`SERVER_TOO_OLD`). Rolling back the web client is safe while every shape migration keeps its `down`: an older client is served down-migrated records. Roll back sync only when its schema didn't change.

@@ -34,6 +34,15 @@ export interface ElementApi {
   /** delays every file-refs answer (ms) */
   fileRefsDelayMs: number
   workshopMode: 'ok' | 'error'
+  /**
+   * Wave T assignee-refs (POST): 'ok' answers from `setAssignees`, 'error' 503, 'hang' never, 'missing' 404
+   * board-not-found (a trashed board, a seed before its board row, an api without the route)
+   */
+  assigneeMode: ElementApiMode | 'missing'
+  /** every assignee-refs call: board and uids, in order */
+  readonly assigneeCalls: { boardId: string; uids: string[] }[]
+  /** the uids assignee-refs names accounts with a role on `boardId` */
+  setAssignees(boardId: string, uids: readonly string[]): void
   /** the access route: 'ok' answers from `setRole` (404 without one), 'error' 500, 'hang' never */
   accessMode: ElementApiMode
   /** a version the board's workspace owns (file-refs `ok`) */
@@ -65,6 +74,7 @@ export async function startElementApi(secret = TEST_INTERNAL_SECRET): Promise<El
   const foreign = new Set<string>()
   const workshops = new Map<string, { voteOpen: boolean; anonymous: boolean }>()
   const roles = new Map<string, TicketRole | null>()
+  const assignees = new Map<string, Set<string>>()
   const hanging = new Set<ServerResponse>()
   let unauthorized = 0
   const json = (res: ServerResponse, status: number, body: unknown) =>
@@ -75,6 +85,27 @@ export async function startElementApi(secret = TEST_INTERNAL_SECRET): Promise<El
     if (req.headers[INTERNAL_SECRET_HEADER] !== secret) {
       unauthorized++
       return json(res, 401, { error: { code: 'bad-secret', message: 'no' } })
+    }
+    const assigneeRoute = /^\/internal\/boards\/([^/]+)\/assignee-refs$/.exec(url.pathname)
+    if (req.method === 'POST' && assigneeRoute) {
+      let body = ''
+      req.setEncoding('utf8')
+      req.on('data', (d) => {
+        body += d
+      })
+      req.on('end', () => {
+        const boardId = decodeURIComponent(assigneeRoute[1] ?? '')
+        const uids = ((JSON.parse(body) as { uids?: string[] }).uids ?? []).map(String)
+        api.assigneeCalls.push({ boardId, uids })
+        if (api.assigneeMode === 'hang') return void hanging.add(res)
+        if (api.assigneeMode === 'error')
+          return json(res, 503, { error: { code: 'unavailable', message: 'down' } })
+        if (api.assigneeMode === 'missing')
+          return json(res, 404, { error: { code: 'board-not-found', message: 'no board' } })
+        const yes = assignees.get(boardId) ?? new Set<string>()
+        json(res, 200, { accounts: [...new Set(uids)].filter((u) => yes.has(u)) })
+      })
+      return
     }
     if (req.method === 'POST') {
       let body = ''
@@ -130,6 +161,9 @@ export async function startElementApi(secret = TEST_INTERNAL_SECRET): Promise<El
     fileRefsMode: 'ok',
     fileRefsDelayMs: 0,
     workshopMode: 'ok',
+    assigneeMode: 'ok',
+    assigneeCalls: [],
+    setAssignees: (b, uids) => void assignees.set(b, new Set(uids)),
     accessMode: 'ok',
     addFile: (ref) => void files.set(ref.versionId, ref),
     addForeign: (v) => void foreign.add(v),

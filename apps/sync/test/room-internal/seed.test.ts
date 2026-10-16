@@ -11,7 +11,7 @@ import { reactionKey } from '@draftroom/canvas-schema/reactions'
 import { draftroomSchema } from '@draftroom/tldraw-import/schema'
 import { describe, expect, it } from 'vitest'
 import { remapElements } from '../../../../packages/board-ops/src/elements/remap.ts'
-import { label, note, rect } from '../element-room/support/elements.ts'
+import { frame, label, note, rect, text } from '../element-room/support/elements.ts'
 import { newBoardId, useElementHarness } from '../element-room/support/stack.ts'
 import { docRecord, pageRecord, note as tlNote } from '../migrate/tl-records.ts'
 import { call, sampleBoard, seed } from './support.ts'
@@ -119,24 +119,77 @@ describe('seed (Excalidraw engine)', () => {
     expect((await st.snapshot(b2)).elements[0]?.customData).toBeUndefined()
   })
 
-  it('wave T foundation: stores no planning key from seeded content (WS1 decides which survive: WAVE-T-CONTRACTS §3.3)', async () => {
+  it('wave T: keeps the planning keys; card:who only when assignee-refs for the TARGET board names it (WAVE-T-CONTRACTS §3.3)', async () => {
     const st = await h.stack()
+    const tag = { 'tag:urgent': { name: 'Urgent', color: 'red' } }
+    const card = (id: string, who: string, x = 0) =>
+      note(id, {
+        x,
+        customData: { lobby: { ...tag, 'card:status': 'doing', 'card:who': who, 'card:due': '2026-10-30' } },
+      })
+    const head = text('H', {
+      y: 900,
+      text: 'Spot',
+      originalText: 'Spot',
+      customData: { lobby: { 'sb:head': { aspect: '16:9' } } },
+    })
+    const panel = frame('P', {
+      y: 1000,
+      customData: { lobby: { 'sb:of': 'H', 'sb:pos': 'a0', 'sb:dur': 2000 } },
+    })
+    const timeline = { start: '2026-10-01', end: '2026-12-31', scale: 'week', lanes: 'none' }
+    const wall = frame('K', { x: 1000, y: 1000, customData: { lobby: { timeline } } })
+    const content = () => [card('C1', 'usr_member'), card('C2', 'usr_outsider', 300), head, panel, wall]
+    const lobbyOf = async (b: string) =>
+      new Map(
+        (await st.snapshot(b)).elements.map((e) => [e.id, e.customData?.lobby as Record<string, unknown>]),
+      )
+    const kept = { ...tag, 'card:status': 'doing', 'card:due': '2026-10-30' }
+
+    // a new board (the api seeds before its board row exists: assignee-refs answers 404): no assignee kept
+    const b1 = newBoardId()
+    expect((await seed(st, b1, content())).status).toBe(201)
+    let got = await lobbyOf(b1)
+    expect(got.get('C1')).toEqual(kept)
+    expect(got.get('C2')).toEqual(kept)
+    expect(got.get('H')).toEqual({ 'sb:head': { aspect: '16:9' } })
+    expect(got.get('P')).toEqual({ 'sb:of': 'H', 'sb:pos': 'a0', 'sb:dur': 2000 })
+    expect(got.get('K')).toEqual({ timeline })
+    // a target the api knows: the one it names is kept, the other is not; one call for both uids
+    const b2 = newBoardId()
+    st.api.setAssignees(b2, ['usr_member'])
+    expect((await seed(st, b2, content())).status).toBe(201)
+    got = await lobbyOf(b2)
+    expect(got.get('C1')).toEqual({ ...kept, 'card:who': 'usr_member' })
+    expect(got.get('C2')).toEqual(kept)
+    expect(st.api.assigneeCalls.filter((c) => c.boardId === b2)).toEqual([
+      { boardId: b2, uids: ['usr_member', 'usr_outsider'] },
+    ])
+    // the element rules hold for seeded content too (a card key on a frame is refused, not stripped)
+    const bad = frame('X', { customData: { lobby: { 'card:status': 'todo' } } })
+    expect((await seed(st, newBoardId(), [bad])).status).toBe(400)
+  })
+
+  it('wave T: with DRAFTROOM_PLANNING off, seeded content carries no planning key (templates degrade to plain frames and notes)', async () => {
+    const st = await h.stack({ env: { DRAFTROOM_PLANNING: 'off' } })
     const b = newBoardId()
+    st.api.setAssignees(b, ['usr_member'])
     const tag = { 'tag:urgent': { name: 'Urgent', color: 'red' } }
     const card = note('C', {
       customData: {
-        lobby: { ...tag, 'card:status': 'doing', 'card:who': 'usr_someoneelse', 'card:due': '2026-10-30' },
+        lobby: { ...tag, 'card:status': 'doing', 'card:who': 'usr_member', 'card:due': '2026-10-30' },
       },
     })
+    // a panel key on a rectangle: stripped before the checks, not refused
     const panel = rect('P', { customData: { lobby: { 'sb:of': 'H', 'sb:pos': 'a0', 'sb:dur': 2000 } } })
     const res = await seed(st, b, [card, panel])
     expect(res.status).toBe(201)
     const snap = await st.snapshot(b)
     const byId = new Map(snap.elements.map((e) => [e.id, e]))
     expect(byId.get('C')?.customData).toEqual({ lobby: tag })
-    // stripped before the checks: a panel key on a rectangle is not refused, it is gone
     expect(byId.get('P')?.customData).toBeUndefined()
     expect(JSON.stringify(snap.elements)).not.toMatch(/card:|sb:|kanban|timeline/)
+    expect(st.api.assigneeCalls).toEqual([])
   })
 
   it('wave N: a duplicate of a reacted board (its live elements, kept ids or remapped by board-ops) carries no reaction', async () => {

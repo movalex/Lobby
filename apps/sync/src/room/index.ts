@@ -40,6 +40,7 @@ import {
   NOTICE_CODES,
   TERMINAL_CLOSE_REASONS,
 } from '@draftroom/canvas-schema/protocol'
+import { createAssigneeRefsClient } from '../assignee-refs.ts'
 import { STATFS_PROBE } from '../disk.ts'
 import {
   type ElementRoomDeps,
@@ -150,6 +151,10 @@ export function createElementRoomServiceWith(
   const fileRefs =
     deps.fileRefs ??
     createFileRefsClient({ baseUrl: config.apiInternalUrl, internalSecret: config.internalSecret })
+  // wave T: the card:who check (docs/WAVE-T-CONTRACTS.md §5)
+  const assigneeRefs =
+    deps.assigneeRefs ??
+    createAssigneeRefsClient({ baseUrl: config.apiInternalUrl, internalSecret: config.internalSecret })
   const workshopState =
     deps.workshopState ??
     createWorkshopStateClient({ baseUrl: config.apiInternalUrl, internalSecret: config.internalSecret })
@@ -228,6 +233,7 @@ export function createElementRoomServiceWith(
       now,
       leaseTtlMs,
       fileRefs,
+      assigneeRefs,
       workshopState,
       metrics,
       onSessionRemoved: deps.onSessionRemoved,

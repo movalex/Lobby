@@ -1,10 +1,8 @@
-// Wave T foundation (docs/WAVE-T-CONTRACTS.md §3): the room of CONTRACTS_REV 14 before WS1's rules land, against the
-// REAL sync server process. Pinned here (WS1 turns the INVALID ones around in its own planning-keys.test.ts and
-// removes them from this file):
+// Wave T foundation (docs/WAVE-T-CONTRACTS.md §3): the room of CONTRACTS_REV 14, against the REAL sync server process.
+// Pinned here (the rules with the switch on, which replaced the foundation's blanket INVALID, are WS1's
+// ./planning-keys.test.ts):
 //  - the kill switch DRAFTROOM_PLANNING (config.ts, fail-closed): on, the room says 14; off or unset, it says 13 and
 //    every planning write is UNAVAILABLE; with reactions off it says 12 whatever planning is;
-//  - with the switch on, the foundation's room still refuses every planning write INVALID (`planningPending`), a
-//    create, a patch adding a key and one removing one alike, by any role; other writes in the same push land;
 //  - the writer rules for a rev-13 tab (generic since wave N): its patch's planning keys are dropped (the rest of its
 //    `c` lands, no refusal), its create of a note carrying one is stripped with an ack fix (a plain note);
 //  - checkElement holds the types and cross-key rules (a card key on an ellipse is INVALID with the switch on, and
@@ -22,8 +20,8 @@ import {
   newBoardId,
   sharedElementStack,
 } from '../harness/element-stack.ts'
-import { ellipse, frame, noteWithLabel, text } from '../harness/elements.ts'
-import { expectAccepted, expectNotStored, expectRefused, storedLobby } from './support.ts'
+import { ellipse, frame, noteWithLabel } from '../harness/elements.ts'
+import { expectAccepted, expectRefused, storedLobby } from './support.ts'
 
 const shared = sharedElementStack()
 
@@ -82,32 +80,7 @@ describe('the planning kill switch: the revision the room says', () => {
   })
 })
 
-describe('the foundation refuses every planning write from a rev-14 tab', () => {
-  it('switch on: INVALID (pending WS1) for a create, an addition and a removal; the other ops of the push land', async () => {
-    const st = shared.get()
-    const b = newBoardId()
-    const a = await tab14(st, b, 'alice', { role: 'owner' })
-    const plain = await a.create([...noteWithLabel('n1', 'idea'), frame('f1'), text('t1')])
-    expect(plain.r.every((r) => r.ok)).toBe(true)
-    // a create of a card next to a plain note: the card is refused, the note lands
-    const ack = await a.create([
-      ...noteWithLabel('card1', 'Task', { customData: { lobby: CARD } }),
-      ...noteWithLabel('n2', 'other', { x: 600 }),
-    ])
-    const verdict = new Map(ack.r.map((r) => [r.id, r.ok ? 'ok' : r.code]))
-    expect(verdict.get('card1')).toBe('INVALID')
-    expect(verdict.get('card1.t')).not.toBe('ok')
-    expect([verdict.get('n2'), verdict.get('n2.t')]).toEqual(['ok', 'ok'])
-    await expectNotStored(st, b, ['card1'])
-    expectRefused(await a.patch('n1', { c: { 'card:status': 'doing' } }), 'INVALID', a)
-    expectRefused(await a.patch('f1', { c: { 'sb:of': 't1', 'sb:pos': 'a0' } }), 'INVALID', a)
-    expectRefused(await a.patch('f1', { c: { kanban: {} } }), 'INVALID', a)
-    expectRefused(await a.patch('t1', { c: { 'sb:head': { aspect: '16:9' } } }), 'INVALID', a)
-    // a removal of a key the element does not hold names the class too
-    expectRefused(await a.patch('n1', { c: { 'card:status': null } }), 'INVALID', a)
-    expect(await storedLobby(st, b, 'n1')).toEqual({})
-  })
-
+describe('the kill switch off refuses every planning write from a rev-14 tab', () => {
   it('switch off: UNAVAILABLE (retryable, nothing written); also for a key on the wrong type', async () => {
     await withEnv({ DRAFTROOM_PLANNING: 'off' }, async (st) => {
       const b = newBoardId()

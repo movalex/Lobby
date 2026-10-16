@@ -38,8 +38,17 @@ export interface ElementFakeApi {
   readonly accessCalls: string[]
   /** every POST /internal/access-many, its pairs as `board/user` (404s included) */
   readonly accessManyCalls: string[][]
+  /**
+   * Wave T assignee-refs: the uids that are accounts with a role on `boardId`. A board never set answers 404
+   * board-not-found, as the real api does for a board without a row (a seed's target before the api creates it).
+   */
+  setAssignees(boardId: string, uids: readonly string[]): void
+  /** every POST assignee-refs: board and uids */
+  readonly assigneeCalls: { boardId: string; uids: string[] }[]
   close(): Promise<void>
 }
+
+const ASSIGNEE_ROUTE = /^\/internal\/boards\/([^/]+)\/assignee-refs$/
 
 export async function startElementFakeApi(secret = TEST_INTERNAL_SECRET): Promise<ElementFakeApi> {
   const files = new Map<string, FileRef>()
@@ -47,6 +56,7 @@ export async function startElementFakeApi(secret = TEST_INTERNAL_SECRET): Promis
   const workshops = new Map<string, { voteOpen: boolean; anonymous: boolean }>()
   const roles = new Map<string, TicketRole | null>()
   const signedInSince = new Map<string, number | null>()
+  const assignees = new Map<string, Set<string>>()
   const hanging = new Set<ServerResponse>()
   const json = (res: ServerResponse, status: number, body: unknown) =>
     res.writeHead(status, { 'content-type': 'application/json' }).end(JSON.stringify(body))
@@ -77,6 +87,23 @@ export async function startElementFakeApi(secret = TEST_INTERNAL_SECRET): Promis
             users.filter((u) => signedInSince.has(u)).map((u) => [u, signedInSince.get(u) ?? null]),
           ),
         })
+      })
+      return
+    }
+    const assigneeRoute = ASSIGNEE_ROUTE.exec(url.pathname)
+    if (req.method === 'POST' && assigneeRoute) {
+      let body = ''
+      req.setEncoding('utf8')
+      req.on('data', (d) => {
+        body += d
+      })
+      req.on('end', () => {
+        const boardId = decodeURIComponent(assigneeRoute[1] ?? '')
+        const uids = ((JSON.parse(body) as { uids?: string[] }).uids ?? []).map(String)
+        api.assigneeCalls.push({ boardId, uids })
+        const yes = assignees.get(boardId)
+        if (!yes) return json(res, 404, { error: { code: 'board-not-found', message: 'no board' } })
+        json(res, 200, { accounts: [...new Set(uids)].filter((u) => yes.has(u)) })
       })
       return
     }
@@ -136,6 +163,8 @@ export async function startElementFakeApi(secret = TEST_INTERNAL_SECRET): Promis
     accessMany: false,
     accessCalls: [],
     accessManyCalls: [],
+    setAssignees: (b, uids) => void assignees.set(b, new Set(uids)),
+    assigneeCalls: [],
     async close() {
       for (const r of hanging) r.destroy()
       server.closeAllConnections()

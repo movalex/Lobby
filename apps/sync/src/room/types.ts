@@ -28,6 +28,11 @@ export interface PreparedPush {
   readonly doc?: { readonly set: Readonly<Record<string, unknown>> }
   /** file-refs answers resolved in stage 0 for this push (bare version id → answer) */
   readonly files: ReadonlyMap<string, FileRefAnswer>
+  /**
+   * Wave T: the assignee-refs answers stage 0 holds for this push (uid → an account with a role on the board), from
+   * the room cache or one lookup; a uid it lacks is unknown (its `card:who` write is UNAVAILABLE). Absent: none.
+   */
+  readonly assignees?: ReadonlyMap<string, boolean>
   /** when the push arrived (receive → ack metric) */
   readonly receivedAt: number
   /** a server write instead of client ops: the lease-expiry re-fit of one container (§2.9.4 rule 6) */
