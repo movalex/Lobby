@@ -63,7 +63,7 @@ const HINT_ITEMS: readonly WhatsNewItem[] = [
   hintItem('run-of-show', 'Run of show, spotlight and vote results', 'creators'),
 ]
 
-describe('the card’s items (wave Q)', () => {
+describe('the card’s items (wave R)', () => {
   it('are three to six for a creator, each with a title, a sentence and a unique id', () => {
     expect(creator.length).toBeGreaterThanOrEqual(WHATS_NEW_MIN_ITEMS)
     expect(creator.length).toBeLessThanOrEqual(WHATS_NEW_MAX_ITEMS)
@@ -76,15 +76,15 @@ describe('the card’s items (wave Q)', () => {
     }
   })
 
-  it('are the Elements panel and three of wave P’s, in the card’s order, under the version that resets the dismissed card', () => {
-    expect(WHATS_NEW_VERSION).toBe('2026-10-wave-q')
+  it('are wave R’s four and two of wave Q’s, in the card’s order, under the version that resets the dismissed card', () => {
+    expect(WHATS_NEW_VERSION).toBe('2026-10-wave-r')
     expect(WHATS_NEW_ITEMS.map((i) => i.title)).toEqual([
+      'Import from Miro (beta)',
+      'Slack and Teams notifications',
+      'Photoshop, Illustrator and TIFF previews',
+      'Board backups',
       'Icons in the Elements panel',
-      'Shape and deliverable kits',
       'A library for your team',
-      'Links between boards',
-      'Capture the room',
-      'Smoother big boards',
     ])
   })
 
@@ -129,13 +129,12 @@ describe('the card’s items (wave Q)', () => {
   it('show a person only what is true for them', () => {
     // an owner or admin who can create has all of it
     expect(creator.map((i) => i.id)).toEqual(WHATS_NEW_ITEMS.map((i) => i.id))
-    // someone who cannot create: not Capture the room (it makes notes on a board they cannot edit)
+    // someone who cannot create: not the Miro import nor backups (both make boards)
     expect(ids(nobody)).toEqual([
+      'chat-notifications',
+      'design-previews',
       'elements-icons',
-      'elements-kits',
       'elements-library',
-      'board-links',
-      'big-boards',
     ])
     // and nobody gets an item for a thing that needs more than they have
     for (const who of [ownerCreator, nobody]) {

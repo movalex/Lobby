@@ -1,4 +1,4 @@
-// "What's new" (wave K, K4-5; wave L's card, wave M, M3-3; wave P; wave Q): a dismissible card on the dashboard for people who have
+// "What's new" (wave K, K4-5; wave L's card, wave M, M3-3; wave P; wave Q; wave R): a dismissible card on the dashboard for people who have
 // been here before and says what changed since. A first visit gets the Welcome card instead (Welcome.tsx), never this
 // changelog (wave P, P-002). Each item is shown only to people it is true for; it may have a "Try it" that goes to
 // the thing: a wave L item's lands on a board they can edit with a `?try=<hint>` (features/command-palette/try-hints.ts:
@@ -12,7 +12,7 @@ import type { TryHint } from '../features/command-palette/try-hints.ts'
 import { type BoardRole, type BoardStatus, can } from '../lib/permissions.ts'
 
 /** Bump it when the card says something new: everybody sees it once more. */
-export const WHATS_NEW_VERSION = '2026-10-wave-q'
+export const WHATS_NEW_VERSION = '2026-10-wave-r'
 export const WHATS_NEW_MIN_ITEMS = 3
 export const WHATS_NEW_MAX_ITEMS = 6
 
@@ -54,8 +54,36 @@ export interface WhatsNewItem {
   for: Audience
 }
 
-// Wave Q's three (the Elements panel) first, then three of wave P's for people who never saw that card.
+// Wave R's four (bring the team over) first, then two of wave Q's (the Elements panel) for people who never saw that card.
 export const WHATS_NEW_ITEMS: readonly WhatsNewItem[] = [
+  {
+    id: 'miro-import',
+    title: 'Import from Miro (beta)',
+    body: 'Bring Miro boards over: Import, then Import from Miro, rebuilds each as a new private board, with a report of what changed.',
+    tryIt: null,
+    for: 'creators',
+  },
+  {
+    id: 'chat-notifications',
+    title: 'Slack and Teams notifications',
+    body: 'Mentions, replies and access requests can reach a Slack or Teams channel: see Chat notifications in the bell.',
+    tryIt: null,
+    for: 'everyone',
+  },
+  {
+    id: 'design-previews',
+    title: 'Photoshop, Illustrator and TIFF previews',
+    body: 'Upload a .psd, .ai or .tif file and its card on the board shows a preview; the original stays one click away.',
+    tryIt: null,
+    for: 'everyone',
+  },
+  {
+    id: 'board-backups',
+    title: 'Board backups',
+    body: 'Download a board as a .lobby backup from its menu, and restore one as a new board from Import on the dashboard.',
+    tryIt: null,
+    for: 'creators',
+  },
   {
     id: 'elements-icons',
     title: 'Icons in the Elements panel',
@@ -64,37 +92,9 @@ export const WHATS_NEW_ITEMS: readonly WhatsNewItem[] = [
     for: 'everyone',
   },
   {
-    id: 'elements-kits',
-    title: 'Shape and deliverable kits',
-    body: 'The Shapes tab adds arrows, callouts, badges, sticky-note kits, device frames, storyboards and deliverables.',
-    tryIt: null,
-    for: 'everyone',
-  },
-  {
     id: 'elements-library',
     title: 'A library for your team',
     body: 'Save a selection to your workspace’s library or your own, then place it on any board in the workspace.',
-    tryIt: null,
-    for: 'everyone',
-  },
-  {
-    id: 'board-links',
-    title: 'Links between boards',
-    body: 'Put a card on a board that opens another board; “Linked from” shows what points at this one.',
-    tryIt: null,
-    for: 'everyone',
-  },
-  {
-    id: 'capture',
-    title: 'Capture the room',
-    body: 'Turn a photo of a whiteboard, or a meeting transcript, into notes on the board.',
-    tryIt: null,
-    for: 'creators',
-  },
-  {
-    id: 'big-boards',
-    title: 'Smoother big boards',
-    body: 'Panning and zooming boards with thousands of notes is smoother.',
     tryIt: null,
     for: 'everyone',
   },
