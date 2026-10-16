@@ -150,7 +150,7 @@ describe('the panel order, the filters and the badge', () => {
 
   it('a frame’s pill sits above its name at the top-left; a file’s under its bottom-left corner', () => {
     const id = (p: { x: number; y: number }) => p
-    expect(badgeAnchor('frame', { x: 10, y: 100, width: 50, height: 50 }, id)).toEqual({ x: 10, y: 52 })
+    expect(badgeAnchor('frame', { x: 10, y: 100, width: 50, height: 50 }, id)).toEqual({ x: 10, y: 50 })
     expect(badgeAnchor('file', { x: 10, y: 100, width: 50, height: 50 }, id)).toEqual({ x: 10, y: 154 })
   })
 })

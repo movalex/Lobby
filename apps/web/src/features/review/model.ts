@@ -134,8 +134,8 @@ export function progressText(items: readonly ReviewItem[]): string {
 
 // ---- the badge ---------------------------------------------------------------------------------------------
 
-/** How tall the frame's name sits above it on screen (Excalidraw draws it there), so the pill goes above it. */
-export const FRAME_NAME_PX = 22
+/** How tall the frame's name band is above it on screen (canvas-ux FRAME_NAME_BAND_PX), so the pill goes above it. */
+export const FRAME_NAME_PX = 24
 export const PILL_HEIGHT_PX = 24
 
 /**
