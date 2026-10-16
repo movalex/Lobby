@@ -66,7 +66,7 @@ test('a returning creator sees the wave P card and the Start row above the board
     await openDashboard(p.page, p.wid)
     await expect(card(p.page)).toBeVisible()
 
-    await test.step('six items, wave R's first, and no button that could look dead', async () => {
+    await test.step('six items, wave R first, and no button that could look dead', async () => {
       const titles = await card(p.page).getByTestId('whats-new-item').locator('strong').allTextContents()
       expect(titles).toEqual([
         'Import from Miro (beta)',
