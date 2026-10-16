@@ -1,0 +1,235 @@
+/* OWNER: WS3 (wave T). The animatic player: a dark, full-window viewer in either theme (the pictures sit on white
+   paper in a dark surround, like the presenter's). Every control is at least 40 px (44 px on a touch screen). */
+.dr-animatic {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  display: flex;
+  flex-direction: column;
+  background: #101418;
+  color: #f3f4f6;
+  font:
+    14px / 1.4 ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+  outline: none;
+}
+.dr-animatic:fullscreen {
+  width: 100%;
+  height: 100%;
+}
+.dr-animatic__top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  min-height: 52px;
+}
+.dr-animatic__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.dr-animatic__chip {
+  flex: none;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: #2a3340;
+  color: #f9fafb;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.dr-animatic__name {
+  color: #cbd5e1;
+}
+.dr-animatic__close {
+  margin-left: auto;
+  font-size: 22px;
+}
+.dr-animatic__stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  margin: 0 12px;
+}
+.dr-animatic__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.dr-animatic__tap {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.dr-animatic__fields {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+  padding: 0 24px;
+}
+.dr-animatic__camera,
+.dr-animatic__subtitle {
+  margin: 0;
+  max-width: 80ch;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: rgba(16, 20, 24, 0.82);
+  text-align: center;
+}
+.dr-animatic__camera {
+  font-size: 13px;
+  color: #e5e7eb;
+}
+.dr-animatic__subtitle {
+  font-size: 20px;
+  font-weight: 600;
+  color: #ffffff;
+}
+.dr-animatic__empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: #e5e7eb;
+}
+.dr-animatic__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 4px;
+}
+.dr-animatic__btn {
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0 8px;
+  border: 1px solid #3b4654;
+  border-radius: 8px;
+  background: #1c232c;
+  color: #f9fafb;
+  font: inherit;
+  font-size: 16px;
+  cursor: pointer;
+}
+.dr-animatic__btn:hover {
+  background: #2a3340;
+}
+.dr-animatic__btn[aria-pressed="true"] {
+  background: #f0a53a;
+  border-color: #f0a53a;
+  color: #1b2330;
+}
+.dr-animatic__btn:focus-visible,
+.dr-animatic__speed select:focus-visible,
+.dr-animatic__range:focus-visible {
+  outline: 3px solid #93c5fd;
+  outline-offset: 2px;
+}
+.dr-animatic__text-btn {
+  font-size: 14px;
+}
+.dr-animatic__play {
+  min-width: 52px;
+}
+.dr-animatic__time {
+  min-width: 112px;
+  font-variant-numeric: tabular-nums;
+  color: #e5e7eb;
+}
+.dr-animatic__scrub {
+  position: relative;
+  flex: 1 1 200px;
+  min-width: 160px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+}
+.dr-animatic__ticks {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 50%;
+  height: 14px;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.dr-animatic__tick {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 14px;
+  margin-left: -1px;
+  background: #64748b;
+}
+.dr-animatic__range {
+  position: relative;
+  width: 100%;
+  margin: 0;
+  accent-color: #f0a53a;
+  background: transparent;
+}
+.dr-animatic__speed select {
+  min-height: 40px;
+  border: 1px solid #3b4654;
+  border-radius: 8px;
+  background: #1c232c;
+  color: #f9fafb;
+  font: inherit;
+  padding: 0 6px;
+}
+.dr-animatic__note {
+  margin: 0;
+  padding: 0 12px 10px;
+  min-height: 1.4em;
+  color: #cbd5e1;
+  font-size: 13px;
+}
+@media (pointer: coarse) {
+  .dr-animatic__btn,
+  .dr-animatic__speed select {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+@media (max-width: 600px) {
+  .dr-animatic__top {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .dr-animatic__stage {
+    margin: 0;
+  }
+  .dr-animatic__scrub {
+    order: -1;
+    flex-basis: 100%;
+  }
+  .dr-animatic__time {
+    min-width: 0;
+  }
+  .dr-animatic__subtitle {
+    font-size: 16px;
+  }
+}

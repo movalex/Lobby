@@ -62,6 +62,12 @@ export interface StartOptions {
   /** Ask the browser for full screen (needs a user gesture). Default: presenters yes, followers no. */
   fullscreen?: boolean
   leader?: PresentLeader | null
+  /**
+   * Wave T (WS3): the slides of this presentation instead of the board's frames in presentation order: "Present
+   * storyboard" gives a storyboard's panels in storyboard order (features/storyboard-play/present.ts). Read
+   * reactively while the presentation lasts (a panel moved or deleted meanwhile), and dropped when it ends.
+   */
+  slides?: () => Slide<string>[]
 }
 
 /** A view the presenter asks the canvas for (scene top-left and zoom). */
@@ -203,7 +209,12 @@ export const PRESENT_ZOOM_RANGE = { min: 0.02, max: 8 } as const
 export function createPresenter(canvas: LobbyCanvas): Presenter {
   const state = atom<PresentState | null>('lobby-present-state', null)
   const order$ = computed('lobby-present-order', () => presentationOrder(canvas))
-  const slides$ = computed('lobby-present-slides', () => slidesOf(order$.get()))
+  // the slides source (wave T, WS3): the board's frames unless a presentation brought its own (StartOptions.slides)
+  const source = atom<(() => Slide<string>[]) | null>('lobby-present-source', null)
+  const slides$ = computed('lobby-present-slides', () => {
+    const own = source.get()
+    return own ? own() : slidesOf(order$.get())
+  })
   const current$ = computed<CurrentSlide>('lobby-present-current', () => {
     const s = state.get()
     const slides = slides$.get()
@@ -420,13 +431,19 @@ export function createPresenter(canvas: LobbyCanvas): Presenter {
       focusTestId: active instanceof HTMLElement ? active.getAttribute('data-testid') : null,
     }
     const live = opts.slideId !== undefined
+    source.set(opts.slides ?? null)
     const slides = slides$.get()
-    if (slides.length === 0)
-      return { ok: false, reason: order$.get().length > 0 ? 'all-skipped' : 'no-frames' }
+    if (slides.length === 0) {
+      const own = opts.slides !== undefined
+      source.set(null)
+      return { ok: false, reason: !own && order$.get().length > 0 ? 'all-skipped' : 'no-frames' }
+    }
     stopHolding?.()
     const startIndex = live
       ? indexFor(opts.slideId, opts.index ?? 0)
-      : findStartIndex<string>(slides, order$.get(), selectedIds, (id) => containersOf(canvas, id))
+      : findStartIndex<string>(slides, opts.slides ? slides : order$.get(), selectedIds, (id) =>
+          containersOf(canvas, id),
+        )
     if (canvas.editingId()) canvas.text.stop()
     stopFollowing()
     canvas.select([])
@@ -568,6 +585,7 @@ export function createPresenter(canvas: LobbyCanvas): Presenter {
     for (const c of cleanups) c()
     cleanups = []
     state.set(null)
+    source.set(null)
     // Keys still held (the Esc or Enter that ended it) keep their keyup filtered, briefly.
     if (swallowed.size === 0) unlistenKeyup()
     else keyupTimer = setTimeout(unlistenKeyup, 2000)
