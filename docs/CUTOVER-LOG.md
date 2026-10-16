@@ -442,3 +442,23 @@ on the sync disk (§6).
     - a Word file (`document.docx`, 1.3 KB) was dropped onto a new board: it was queued, then made into a 3-page preview by the NAS worker's LibreOffice sidecar ("Preview made from a PDF conversion", View pages).
   - The type-on-a-shape check could not be driven by hand (both browser windows were hidden, so no screenshots). It is covered by `canvas-ux-keys` in both whole e2e runs.
   - Cleanup: the guest link revoked, the board in Trash.
+- **2026-10-16 06:47-06:50Z, wave Q deployed: the Elements panel** (main `b804aec`):
+  - api `dep-db8sgtavcj2c73b2h3r0` (migrations 0033_library, 0034_library_place);
+  - sync `dep-db8shfc9v7es73dnnqhg` (colour validation);
+  - web `dep-db8shv4s728c73au41vg`.
+  - The last board connection was 22 min before (a likely idle tab; the sync deploy's reconnect keeps edits).
+  - Applied first through the Render API (`wave-q-web.mjs`): the `/lobby-assets/*` rewrite to the api before the SPA fallback, and two Cache-Control headers. Drift 0.
+  - After the deploy:
+    - api `/healthz/deep` 200; sync `/healthz/deep` ok; maintenance off;
+    - 0 error/FATAL lines;
+    - live smoke 41 passed, 0 failed (with the new missing-icon check);
+    - `/version.json` answers `{"commit":"b804aec679b4"}`.
+  - `curl -I`:
+    - a missing `/lobby-assets/icons/…` file answers 404 application/json;
+    - `LICENSES.txt` answers 200 with `max-age=31536000, immutable`: Render applied the wider `/lobby-assets/*` rule, not the 1-day one (follow-up: give it a hashed name at the next icon bump).
+  - Live check, the owner on a new board:
+    - the Elements panel opens (Icons, Shapes, Library);
+    - "rocket" finds 4 icons, loaded from `/lobby-assets/icons/` (an index and 3 shards, 280-420 ms);
+    - the first icon inserted (Undo enabled, Saved);
+    - "steam" finds 6 icons and 5 Shapes (the Steam deliverable frames).
+    - Cleanup: the board in Trash.
