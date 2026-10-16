@@ -4,9 +4,11 @@
 // out of reach under it, and the board's own viewers - the PDF pages - still open over it, which focus mode would not allow).
 // It renders nothing unless the review page switch is on and the address says `?view=review`. "Open the board" and Escape
 // leave it (the address goes back to the board); keys pressed in it stop at the dialog, so the board's shortcuts and
-// Excalidraw never see them.
+// Excalidraw never see them. The page renders through a portal into a box inside the dialog: React listens on a
+// portal's container, so the page's own key handlers run there before the dialog stops the key (as in the review
+// viewer, features/review-viewer/ViewerHost.tsx).
 import { REVIEW_VIEW_PARAM, REVIEW_VIEW_VALUE } from '@draftroom/contracts'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
 import { boardPath, navigate, useLocationKey } from '../../lib/routing.ts'
@@ -30,6 +32,7 @@ function ReviewDialog({ ctx }: { ctx: CanvasFeatureContext }) {
   const close = () => navigate(boardPath(ctx.board.id), { replace: true })
   const closeRef = useRef(close)
   closeRef.current = close
+  const [keys, setKeys] = useState<HTMLDivElement | null>(null)
 
   useEffect(() => {
     const dialog = ref.current
@@ -63,7 +66,9 @@ function ReviewDialog({ ctx }: { ctx: CanvasFeatureContext }) {
         closeRef.current()
       }}
     >
-      <ReviewPage ctx={ctx} close={() => closeRef.current()} />
+      <div className="dr-rp__keys" ref={setKeys}>
+        {keys && createPortal(<ReviewPage ctx={ctx} close={() => closeRef.current()} />, keys)}
+      </div>
     </dialog>
   )
 }

@@ -8,9 +8,15 @@
 // closes when its element is deleted (here or by someone else). Keys pressed in it stop at the dialog: the board's
 // shortcuts and Excalidraw never see them (as in the PDF viewer); a key that lands outside it while it is open is
 // handed to it. Escape and a click on the backdrop close it.
-import { type ReactNode, useEffect, useId, useRef } from 'react'
+//
+// The dialog's content is rendered through a portal into its own panel (ViewerDialog): React listens on a portal's
+// container, so a key pressed inside reaches the slots' React handlers (a composer's Enter, the transport's keys) at
+// the panel first, and only then stops at the dialog, before <body> and the document where the board listens.
+import { type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useAssetMeta } from '../../assets/meta-store.ts'
 import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
+import { mediaMetaStore } from '../../file-card/ported/meta.ts'
 import { factsOf } from '../../file-card/ported/model.ts'
 import { useValue } from '../../lib/signals.ts'
 import { reviewFlags, reviewViewerEnabled } from '../review/flags.ts'
@@ -31,24 +37,50 @@ export const VIEWER_EMPTY_TEXT = 'Nothing to show for this file here yet.'
 
 export function ReviewViewerHost({ ctx }: { ctx: CanvasFeatureContext }) {
   const request = useValue('review-viewer-request', () => reviewViewerRequest(ctx.registries).get(), [ctx])
-  const file = useValue('review-viewer-file', () => {
+  const enabled = reviewViewerEnabled(reviewFlags())
+  const card = useValue('review-viewer-file', () => {
     if (!request) return null
     const el = ctx.canvas.get(request.elementId)
     const facts = el && !el.isDeleted ? factsOf(el) : null
     return facts && facts.assetId === request.assetId
-      ? { kind: facts.kind, name: facts.name, mimeType: facts.mimeType }
+      ? { kind: facts.kind, name: facts.name, mimeType: facts.mimeType, versionId: facts.versionId }
       : null
   }, [ctx, request])
+  // The version being viewed (a "v1" chip or the version list may ask for one the card no longer shows): its own
+  // name, type and kind, from its meta; the card's facts until that answers (they are the version's own when it is
+  // the card's).
+  const meta = useAssetMeta(
+    request && card && enabled ? mediaMetaStore : null,
+    ctx.board?.id ?? '',
+    request?.assetId ?? '',
+    request?.versionId ?? '',
+  ).meta
   // The element was deleted (or now shows another deliverable) while its viewer was open.
   useEffect(() => {
-    if (request && !file) closeReviewViewer(ctx.registries)
-  }, [ctx, request, file])
-  if (!request || !file || !reviewViewerEnabled(reviewFlags())) return null
+    if (request && !card) closeReviewViewer(ctx.registries)
+  }, [ctx, request, card])
+  if (!request || !card || !enabled) return null
+  const file = viewedFile(card, request.versionId, meta)
   const close = () => closeReviewViewer(ctx.registries)
   return createPortal(
     <ReviewViewer key={request.nonce} props={{ ctx, request, file, close }} />,
     document.body,
   )
+}
+
+/** The file the viewer names: the viewed version's meta when it has come, else the card's facts. */
+export function viewedFile(
+  card: { kind: ViewerFileKind; name: string; mimeType: string; versionId: string },
+  versionId: string,
+  meta: { versionId: string; name: string; mimeType: string; kind: ViewerFileKind } | null,
+): ViewerSlotProps['file'] {
+  if (meta && meta.versionId === versionId)
+    return { kind: meta.kind, name: meta.name || card.name, mimeType: meta.mimeType || card.mimeType }
+  return {
+    kind: card.kind,
+    name: card.versionId === versionId ? card.name : '',
+    mimeType: card.mimeType,
+  }
 }
 
 function Slot({ name, props }: { name: ViewerSlotName; props: ViewerSlotProps }) {
@@ -65,10 +97,18 @@ function Slot({ name, props }: { name: ViewerSlotName; props: ViewerSlotProps })
 
 function ReviewViewer({ props }: { props: ViewerSlotProps }) {
   const titleId = useId()
+  return (
+    <ViewerDialog labelledBy={titleId} onClose={props.close}>
+      <ViewerContent props={props} titleId={titleId} />
+    </ViewerDialog>
+  )
+}
+
+function ViewerContent({ props, titleId }: { props: ViewerSlotProps; titleId: string }) {
   const layout = viewerLayout(props.request)
   const main = layout[1] ?? 'body'
   return (
-    <ViewerDialog labelledBy={titleId} onClose={props.close}>
+    <>
       <header className="dr-rv__head">
         <h2 className="dr-rv__title" id={titleId}>
           {props.file.name || 'File'}
@@ -94,7 +134,7 @@ function ReviewViewer({ props }: { props: ViewerSlotProps }) {
           <Slot name="threads" props={props} />
         </aside>
       </div>
-    </ViewerDialog>
+    </>
   )
 }
 
@@ -111,6 +151,8 @@ function ViewerDialog({
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
   const openedAt = useRef(0)
+  // the panel is the portal container of the content (see the header): React handles its keys there
+  const [panel, setPanel] = useState<HTMLDivElement | null>(null)
 
   useEffect(() => {
     const dialog = ref.current
@@ -119,7 +161,7 @@ function ViewerDialog({
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
     if (!dialog.open) dialog.showModal()
     // Native listeners: the board's shortcuts listen on <body> and the document, so presses in here stop at the
-    // dialog (the slots handle their own keys with React handlers inside it).
+    // dialog, after React has handled them at the panel (the content's portal container, inside the dialog).
     const keydown = (e: KeyboardEvent) => e.stopPropagation()
     // A press that lands outside the dialog while it is open (focus fell onto <body>) is never the board's.
     const outside = (e: KeyboardEvent) => {
@@ -154,12 +196,21 @@ function ViewerDialog({
         }
       }}
     >
-      <div className="dr-rv__panel">{children}</div>
+      <div className="dr-rv__panel" ref={setPanel}>
+        {panel && createPortal(children, panel)}
+      </div>
     </dialog>
   )
 }
 
 /** Test seam: the modal without the portal and the dialog's showModal (react-dom/server renders it as markup). */
 export function ReviewViewerMarkup({ props }: { props: ViewerSlotProps }) {
-  return <ReviewViewer props={props} />
+  const titleId = useId()
+  return (
+    <dialog className="dr-rv" data-testid="review-viewer" aria-labelledby={titleId}>
+      <div className="dr-rv__panel">
+        <ViewerContent props={props} titleId={titleId} />
+      </div>
+    </dialog>
+  )
 }
