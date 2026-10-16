@@ -46,6 +46,7 @@ import {
   TOMBSTONE_TTL_MS,
   WIRE_LIMITS,
 } from '@draftroom/canvas-schema/limits'
+import { CARD_WHO_KEY } from '@draftroom/canvas-schema/planning-keys'
 import {
   type AckResult,
   CLOSE_RECONNECT,
@@ -69,6 +70,7 @@ import {
   type Welcome,
 } from '@draftroom/canvas-schema/protocol'
 import { SYNC_INTERNAL_TIMEOUT_MS } from '@draftroom/contracts'
+import { AssigneeRefsCache, type AssigneeRefsLookup } from '../assignee-refs.ts'
 import { DISK_NOTICE_RATIO, type DiskProbe, STATFS_PROBE } from '../disk.ts'
 import type {
   ElementSessionInfo,
@@ -135,6 +137,8 @@ export interface RoomDeps {
   readonly now: () => number
   readonly leaseTtlMs: number
   readonly fileRefs: FileRefsLookup
+  /** wave T: the api's assignee-refs (assignee-refs.ts); absent: every assignment is UNAVAILABLE (fail closed) */
+  readonly assigneeRefs?: AssigneeRefsLookup
   readonly workshopState: WorkshopStateLookup
   readonly metrics: RoomMetrics
   readonly onSessionRemoved: (
@@ -176,6 +180,7 @@ type FifoItem =
       rateRejected: boolean
       paid: boolean
       files: Map<string, FileRefAnswer>
+      assignees: Map<string, boolean>
       lookup: Promise<void> | null
       receivedAt: number
       rid?: string
@@ -444,6 +449,15 @@ const opIdOf = (raw: unknown): string => {
 }
 
 /** The version ids a parsed op needs resolved (bare, deduped by the caller). */
+/**
+ * Wave T: the uids a write names as `card:who` (canvas-schema planning-keys.ts), to resolve through assignee-refs in
+ * stage 0. A removal (null) and anything not a string name none (the schema refuses the latter).
+ */
+function assigneeUidsOf(op: Op): string[] {
+  const who = op.k === 'c' ? op.el.customData?.lobby?.[CARD_WHO_KEY] : op.c?.[CARD_WHO_KEY]
+  return typeof who === 'string' ? [who] : []
+}
+
 function fileIdsOf(op: Op): string[] {
   const out: string[] = []
   const bare = (f: string) => f.replace(/\.p[1-9][0-9]{0,3}$/, '')
@@ -467,6 +481,8 @@ export class ElementRoom {
   readonly leases: LeaseTable
   readonly presence: PresenceHub
   readonly fileCache: FileRefsCache
+  /** wave T: the assignee-refs answers (60 s for a yes, assignee-refs.ts) */
+  readonly assigneeCache: AssigneeRefsCache
   private readonly index = new IndexCache()
   private readonly groups = new GroupMap()
   private readonly counts: LiveCounts = { elements: 0, items: 0 }
@@ -532,6 +548,7 @@ export class ElementRoom {
     this.leases = new LeaseTable(deps.leaseTtlMs)
     this.presence = new PresenceHub(deps.now)
     this.fileCache = new FileRefsCache(deps.now)
+    this.assigneeCache = new AssigneeRefsCache(deps.now)
     try {
       this.store.compact(deps.now(), { maxTombstones: TOMBSTONE_MAX, ttlMs: TOMBSTONE_TTL_MS })
     } catch (e) {
@@ -717,6 +734,7 @@ export class ElementRoom {
       rateRejected: false,
       paid: false,
       files: new Map(),
+      assignees: new Map(),
       lookup: null,
       receivedAt: this.deps.now(),
       ...(msg.rid !== undefined ? { rid: msg.rid } : {}),
@@ -748,22 +766,59 @@ export class ElementRoom {
         if (hit) item.files.set(v, hit)
         else unknown.push(v)
       }
+      const lookups: Promise<void>[] = []
       if (unknown.length)
-        item.lookup = withTimeout(this.deps.fileRefs(this.boardId, unknown), SYNC_INTERNAL_TIMEOUT_MS).then(
-          (res) => {
-            this.fileCache.put(res)
-            for (const v of unknown) {
-              const a = this.fileCache.get(v)
-              if (a) item.files.set(v, a)
-            }
-            item.lookup = null
-          },
-          () => {
-            this.deps.log('[room] file-refs lookup failed', this.boardId, unknown.length)
-            this.deps.metrics.inc('lobby_file_refs_failures_total')
-            item.lookup = null
-          },
+        lookups.push(
+          withTimeout(this.deps.fileRefs(this.boardId, unknown), SYNC_INTERNAL_TIMEOUT_MS).then(
+            (res) => {
+              this.fileCache.put(res)
+              for (const v of unknown) {
+                const a = this.fileCache.get(v)
+                if (a) item.files.set(v, a)
+              }
+            },
+            () => {
+              this.deps.log('[room] file-refs lookup failed', this.boardId, unknown.length)
+              this.deps.metrics.inc('lobby_file_refs_failures_total')
+            },
+          ),
         )
+      // wave T: the uids its card:who writes name, resolved with one call (only a writer that may assign: an
+      // account of this revision on an editing socket, with the switch on; anyone else is refused without one)
+      const who = new Set<string>()
+      if (
+        this.deps.planning === true &&
+        !s.identity.readonly &&
+        !s.identity.guest &&
+        s.reader >= PLANNING_REV
+      )
+        for (const o of item.ops) if (o.op) for (const u of assigneeUidsOf(o.op)) who.add(u)
+      const unknownWho: string[] = []
+      for (const u of who) {
+        const hit = this.assigneeCache.get(u)
+        if (hit === undefined) unknownWho.push(u)
+        else item.assignees.set(u, hit)
+      }
+      const assigneeRefs = this.deps.assigneeRefs
+      if (unknownWho.length && assigneeRefs)
+        lookups.push(
+          withTimeout(assigneeRefs(this.boardId, unknownWho), SYNC_INTERNAL_TIMEOUT_MS).then(
+            (accounts) => {
+              this.assigneeCache.put(unknownWho, accounts)
+              for (const u of unknownWho) {
+                const a = this.assigneeCache.get(u)
+                if (a !== undefined) item.assignees.set(u, a)
+              }
+            },
+            () => {
+              this.deps.log('[room] assignee-refs lookup failed', this.boardId, unknownWho.length)
+            },
+          ),
+        )
+      if (lookups.length)
+        item.lookup = Promise.all(lookups).then(() => {
+          item.lookup = null
+        })
     }
     s.fifo.push(item)
     this.pump(s)
@@ -803,6 +858,7 @@ export class ElementRoom {
           ops: item.ops,
           ...(item.doc ? { doc: item.doc } : {}),
           files: item.files,
+          assignees: item.assignees,
           receivedAt: item.receivedAt,
           ...(item.rid !== undefined ? { rid: item.rid } : {}),
           writerRev: s.reader,

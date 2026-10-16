@@ -14,6 +14,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { WireElement } from '@draftroom/canvas-schema/elements'
 import type { FileRefsResponse, WorkshopStateBody } from '@draftroom/contracts'
+import type { AssigneeRefsLookup } from './assignee-refs.ts'
 import type { SyncConfig } from './config.ts'
 import type { DiskProbe } from './disk.ts'
 import type { BoardRole } from './permissions.ts'
@@ -128,6 +129,8 @@ export interface ElementRoomDeps {
   readonly now?: () => number
   /** replaces the HTTP client of GET <api>/internal/boards/:bid/file-refs (tests) */
   readonly fileRefs?: FileRefsLookup
+  /** wave T: replaces the HTTP client of POST <api>/internal/boards/:bid/assignee-refs (tests, the seed) */
+  readonly assigneeRefs?: AssigneeRefsLookup
   /** replaces the HTTP client of GET <api>/internal/boards/:bid/workshop-state (tests) */
   readonly workshopState?: WorkshopStateLookup
   /** after a session has left its room (any reason) */

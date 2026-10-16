@@ -15,11 +15,18 @@
 //     `fileId`; `name` is the client's) and `pdfPage` (derived from `fileId`'s `.p<n>`);
 //  5. free keys (`tag:*` needs its `tagDef:*` in lb_doc; the others are schema-checked only).
 // Wave T (CONTRACTS_REV 14): the planning keys (canvas-schema planning-keys.ts: `card:*`, `sb:*`, `kanban`,
-// `timeline`). While the planning kill switch is off (DRAFTROOM_PLANNING) every write of one is UNAVAILABLE (the stored
-// keys stay; an undelete's own keys come back with it). With it on, the wave T FOUNDATION still refuses every write of
-// one INVALID: their rules (roles, guests, the assignee check through the api's assignee-refs, the audio ref) are WS1's
-// (docs/WAVE-T-CONTRACTS.md §3), which replaces `planningPending` below. Their types and cross-key rules are
-// checkElement's (planning-keys.ts planningElementProblem), for every writer.
+// `timeline`; docs/WAVE-T-CONTRACTS.md §3.2). While the planning kill switch is off (DRAFTROOM_PLANNING) every write
+// of one is UNAVAILABLE (the stored keys stay; an undelete's own keys come back with it). With it on (`checkPlanning`):
+//  - every writer who may edit writes them (viewers and commenters are READ_ONLY before this, as for every element
+//    write), name-only guests included, but for `card:who`: a guest's assignment is INVALID (its removal is not);
+//  - `card:who` is api-validated: an ACCOUNT with a role on the board, from the assignee-refs answer stage 0 got for
+//    this push (element-room.ts, assignee-refs.ts): not one INVALID, not known (the lookup failed, a 404) UNAVAILABLE;
+//    a removal needs no answer, and a value already stored (or an undelete's own) is no new assignment;
+//  - `sb:head.audio`, when the write sets a new one, names a live element carrying a `file` key (on the board or
+//    created earlier in the same push); a ref already stored stays soft (its card may be deleted later);
+//  - no lock exemption (a locked card or panel takes none), and the room never writes one on its own (no server
+//    re-layout, renumbering or status: only the acting person's tab writes a layout, a Tidy or a drag).
+// Their types and cross-key rules are checkElement's (planning-keys.ts planningElementProblem), for every writer.
 // A locked element takes only the registry's lock-exempt keys (lockExemptKey; merge.ts step 5).
 
 import {
@@ -32,7 +39,12 @@ import {
 } from '@draftroom/canvas-schema/custom-data'
 import { TAG_DEF_KEY_PREFIX } from '@draftroom/canvas-schema/doc'
 import { pdfPageOf, versionIdOf } from '@draftroom/canvas-schema/limits'
-import { isPlanningKey } from '@draftroom/canvas-schema/planning-keys'
+import {
+  CARD_WHO_KEY,
+  isPlanningKey,
+  SB_HEAD_KEY,
+  type SbHeadValue,
+} from '@draftroom/canvas-schema/planning-keys'
 import type { RejectCode } from '@draftroom/canvas-schema/protocol'
 import { identityUidOf, isReactionKey } from '@draftroom/canvas-schema/reactions'
 import type { FileRefAnswer } from '../file-refs.ts'
@@ -68,13 +80,14 @@ export interface CustomDataContext {
    * (the keys already stored stay; an undelete's own keys come back with it). Absent: on.
    */
   readonly planning?: boolean
+  /**
+   * Wave T: whether a uid is an ACCOUNT with a role on this board, from the assignee-refs answer stage 0 got for this
+   * push (true / false), or undefined (not asked, or the lookup failed: the write is UNAVAILABLE). Absent: unknown.
+   */
+  readonly assignee?: (uid: string) => boolean | undefined
+  /** Wave T: whether `id` is a live element carrying a `file` key now (sb:head.audio). Absent: none is. */
+  readonly liveFileElement?: (id: string) => boolean
 }
-
-/**
- * Wave T foundation: no planning key write is taken yet, whatever the switch says (WS1's rules replace this with
- * their checks; the room test pins it). True until then.
- */
-export const planningPending = true
 
 export type Verdict<T> =
   | { readonly ok: true; readonly value: T }
@@ -98,6 +111,32 @@ export function freshLobbyServer(w: Writer, now: number, text: boolean): LobbySe
 const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
 /**
+ * A planning key of a write with the switch on (its value already schema-checked; `stored` is the element's lobby
+ * before the write, `{}` for a create). Types and cross-key rules are checkElement's, after the op.
+ */
+function checkPlanning(
+  key: string,
+  value: unknown,
+  stored: Readonly<Record<string, unknown>>,
+  ctx: CustomDataContext,
+): Verdict<unknown> {
+  if (value === null) return { ok: true, value: null } // a removal (unassigning, unmaking) is always the writer's
+  if (key === CARD_WHO_KEY) {
+    if (equal(stored[key], value)) return { ok: true, value } // already there: no new assignment
+    if (ctx.writer.guest) return bad('INVALID') // a name-only guest never assigns
+    const known = ctx.assignee?.(value as string)
+    if (known === undefined) return bad('UNAVAILABLE') // the lookup failed or the api had no answer: fail closed
+    return known ? { ok: true, value } : bad('INVALID')
+  }
+  if (key === SB_HEAD_KEY) {
+    const audio = (value as SbHeadValue).audio
+    const before = (stored[key] as SbHeadValue | undefined)?.audio
+    if (audio !== undefined && audio !== before && !ctx.liveFileElement?.(audio)) return bad('INVALID')
+  }
+  return { ok: true, value }
+}
+
+/**
  * One key of a write: create (`isCreate`) or patch of an element of `type`; `value` null removes. Returns the
  * value to store.
  */
@@ -113,14 +152,12 @@ function checkKey(
   const spec = lobbyKeySpec(key)
   if (!spec) return bad('INVALID')
   // wave T: the planning keys (the kill switch first: nothing is written, the stored keys stay)
-  if (isPlanningKey(key)) {
-    if (ctx.planning === false) return bad('UNAVAILABLE')
-    if (planningPending) return bad('INVALID')
-  }
+  if (isPlanningKey(key) && ctx.planning === false) return bad('UNAVAILABLE')
   // the value's schema first (a patch's `c` was checked at parse time, a create's was not): a malformed
   // `file` on an image create read `versionId` of a string and answered UNAVAILABLE, retryable and
   // outside the abuse count (V2)
   if (value !== null && lobbyValueProblem(key, value)) return bad('INVALID')
+  if (isPlanningKey(key)) return checkPlanning(key, value, stored, ctx)
   const w = ctx.writer
   switch (spec.class) {
     case 'create-only': {

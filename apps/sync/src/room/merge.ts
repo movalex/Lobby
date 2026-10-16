@@ -247,6 +247,9 @@ export class PushApplier {
       fileRef: (v) => this.fileRef(v),
       reactions: env.reactions !== false,
       planning: env.planning !== false,
+      // wave T: card:who from stage 0 (element-room.ts, assignee-refs.ts); sb:head.audio against the working set
+      assignee: (uid) => this.push.assignees?.get(uid),
+      liveFileElement: (id) => this.liveFileElement(id),
     }
   }
 
@@ -310,6 +313,16 @@ export class PushApplier {
     if (key in this.docWrites) return this.docWrites[key] !== null
     const d = this.env.store.docGet(key)
     return !!d && d.value !== null
+  }
+  /**
+   * Wave T (sb:head.audio, custom-data.ts checkPlanning): `id` is a live element carrying a `file` key: as this push
+   * has it so far, or created (live, with a `file`) by an op of this push (a head copied with its audio card may come
+   * before the card in the push).
+   */
+  private liveFileElement(id: string): boolean {
+    const hasFile = (el: El | null | undefined) => !!el && !el.isDeleted && !!el.customData?.lobby?.file
+    if (hasFile(this.live(id))) return true
+    return this.push.ops.some((pre) => pre.op?.k === 'c' && pre.op.el.id === id && hasFile(pre.op.el as El))
   }
   private fileRef(versionId: string): FileRefAnswer | undefined {
     return this.push.files.get(versionId) ?? this.env.fileCache.get(versionId)

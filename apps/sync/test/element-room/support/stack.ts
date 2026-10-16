@@ -64,8 +64,8 @@ export function useElementHarness(): ElementHarness {
           DRAFTROOM_BACKUP_STORE: 'off',
           // wave N (N2-5): reactions on, as render.yaml deploys the sync (the code's default is off)
           DRAFTROOM_REACTIONS: 'on',
-          // wave T: planning on, so the room speaks CONTRACTS_REV (14); the wave T foundation's room still refuses every
-          // planning write (planningPending); the kill-switch tests set it off or remove it
+          // wave T: planning on, so the room speaks CONTRACTS_REV (14) and takes the planning keys (WS1's rules); the
+          // kill-switch tests set it off or remove it
           DRAFTROOM_PLANNING: 'on',
           DRAFTROOM_API_INTERNAL_URL: api.url,
           ...opts.env,
