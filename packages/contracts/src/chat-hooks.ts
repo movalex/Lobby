@@ -27,6 +27,7 @@
 
 import { z } from 'zod'
 import { cleanDisplayText } from './outside.ts'
+import type { ReviewStatus, ReviewStatusReason } from './review-status.ts'
 import { parseUrl, type WhatwgUrl } from './whatwg-url.ts'
 
 const UserIdLike = z.string().regex(/^usr_[0-9A-Za-z]{10,40}$/)
@@ -43,7 +44,8 @@ export type ChatHookProvider = z.infer<typeof ChatHookProvider>
 
 /**
  * The notification kinds a person may send to a hook (contracts comments.ts NotificationKind): `resolved` and
- * `access_granted` stay bell-only. The 0036 CHECK holds chat_hook_prefs.kinds to this list.
+ * `access_granted` stay bell-only. The 0036 CHECK holds chat_hook_prefs.kinds to this list (0037 widened it with
+ * wave S's `review_status`, which a web build before LOBBY_CLIENT_REV 3 cannot parse: CHAT_HOOK_KINDS_SINCE_REV3).
  */
 export const CHAT_HOOK_KINDS = [
   'mention',
@@ -51,9 +53,15 @@ export const CHAT_HOOK_KINDS = [
   'new_comment',
   'access_request',
   'outsider_joined',
+  'review_status',
 ] as const
 export const ChatHookKind = z.enum(CHAT_HOOK_KINDS)
 export type ChatHookKind = z.infer<typeof ChatHookKind>
+/**
+ * Wave S (0037): the kinds a web build from before LOBBY_CLIENT_REV 3 cannot parse (ChatPrefsResponse's whole answer
+ * would fail). GET /api/me/chat-prefs leaves them out for such a build, and its PUT keeps what is stored for them.
+ */
+export const CHAT_HOOK_KINDS_SINCE_REV3: readonly ChatHookKind[] = ['review_status']
 
 export const CHAT_HOOK_LIMITS = {
   hooksPerWorkspace: 20,
@@ -66,6 +74,8 @@ export const CHAT_HOOK_LIMITS = {
   titleChars: 80,
   /** a display name in a message */
   nameInMessageChars: 80,
+  /** wave S: a review item's label or a round's title (only with includeSnippets, like a snippet) */
+  reviewLabelChars: 60,
   /** Slack: one section's text */
   slackSectionChars: 3_000,
   /** Teams: the whole card (Teams refuses about 28 KB) */
@@ -318,6 +328,39 @@ export interface ChatMessage {
   readonly snippet?: string
   /** for access_request: the role asked for */
   readonly role?: 'editor' | 'commenter' | 'viewer'
+  /**
+   * for review_status (wave S): what happened. `label` (the item's label, or for a round its title) only when the
+   * hook's includeSnippets is on, and never from a team-only note: it is the board's own words, like a snippet.
+   */
+  readonly review?: ChatReview
+}
+
+/** A review_status message's facts (contracts review.ts; the event is read from review_events at send time). */
+export type ChatReview =
+  | {
+      readonly event: 'status'
+      readonly status: ReviewStatus
+      readonly reason: ReviewStatusReason
+      readonly label?: string
+    }
+  | { readonly event: 'round_opened'; readonly itemCount: number; readonly label?: string }
+
+function reviewSentence(actor: string, board: string, r: ChatReview | undefined): string {
+  if (!r) return `${actor} updated a review on ${board}`
+  const label = r.label ? cap(r.label, CHAT_HOOK_LIMITS.reviewLabelChars) : ''
+  if (r.event === 'round_opened') {
+    const items = `${r.itemCount} ${r.itemCount === 1 ? 'item' : 'items'}`
+    return label
+      ? `${actor} started ${label} on ${board} (${items})`
+      : `${actor} started a review round on ${board} (${items})`
+  }
+  const what = label || 'an item'
+  if (r.reason === 'new_version')
+    return `${actor} uploaded a new version of ${what} on ${board}: awaiting review`
+  if (r.reason === 'new_round') return `${what} on ${board} is awaiting review again`
+  if (r.status === 'approved') return `${actor} approved ${what} on ${board}`
+  if (r.status === 'changes_requested') return `${actor} requested changes on ${what} on ${board}`
+  return `${actor} set ${what} on ${board} back to Awaiting review`
 }
 
 const cap = (s: string, n: number) => {
@@ -341,6 +384,8 @@ export function chatMessageSentence(m: ChatMessage): string {
       return `${actor} asked for ${m.role ?? 'edit'} access to ${board}`
     case 'outsider_joined':
       return `Someone from @${actor} opened ${board}`
+    case 'review_status':
+      return reviewSentence(actor, board, m.review)
   }
 }
 

@@ -150,3 +150,27 @@ export function canHandOutAccess(
 ): boolean {
   return creator && can(role, 'manage_access', status)
 }
+
+/**
+ * Wave S (client review; docs/WAVE-S-CONTRACTS.md §2): who may set a review status (Approve, Request changes,
+ * Awaiting review) on an item of a board. Anyone who may comment on it, a name-only guest on a commenter link
+ * included (the status then carries "(guest)"); a viewer link cannot. An archived board takes no status (nobody may
+ * comment there), and nor does a board in any status this build does not know.
+ */
+export function canSetReviewStatus(role: BoardRole | null, status: BoardStatus = 'active'): boolean {
+  return can(role, 'comment', status)
+}
+
+/**
+ * Wave S: who may manage a board's review (mark and unmark items, label and order them, start and close a round).
+ * Edit rights AND a sign-in account: a name-only guest on a workshop (editor) link never manages review.
+ * `kind` is the caller's users.kind as the server read it (never a request field); anything but 'account' fails
+ * closed.
+ */
+export function canManageReview(
+  role: BoardRole | null,
+  kind: 'account' | 'guest' | null | undefined,
+  status: BoardStatus = 'active',
+): boolean {
+  return kind === 'account' && can(role, 'edit', status)
+}

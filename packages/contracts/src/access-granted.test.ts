@@ -6,6 +6,7 @@ import {
   ListNotificationsResponse,
   NOTIFICATION_KINDS_SINCE_REV1,
   NOTIFICATION_KINDS_SINCE_REV2,
+  NOTIFICATION_KINDS_SINCE_REV3,
   NotificationKind,
 } from './index.ts'
 
@@ -36,8 +37,12 @@ describe('notification kind access_granted', () => {
     const before = z.enum(['mention', 'reply', 'resolved', 'access_request', 'new_comment'])
     const old = z.object({ notifications: z.array(z.object({ kind: before })), unreadCount: z.number() })
     expect(old.safeParse({ notifications: [item], unreadCount: 1 }).success).toBe(false)
-    // (wave J's 'outsider_joined' came later still: revision 2)
-    const later = [...NOTIFICATION_KINDS_SINCE_REV1, ...NOTIFICATION_KINDS_SINCE_REV2]
+    // (wave J's 'outsider_joined' came later still: revision 2; wave S's 'review_status': revision 3)
+    const later = [
+      ...NOTIFICATION_KINDS_SINCE_REV1,
+      ...NOTIFICATION_KINDS_SINCE_REV2,
+      ...NOTIFICATION_KINDS_SINCE_REV3,
+    ]
     for (const k of NotificationKind.options) expect(before.safeParse(k).success, k).toBe(!later.includes(k))
   })
 })

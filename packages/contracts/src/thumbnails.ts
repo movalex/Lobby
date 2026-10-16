@@ -13,6 +13,7 @@
 
 import { z } from 'zod'
 import { ListBoardsWithStarsResponse } from './dashboard.ts'
+import { BoardReviewCounts } from './review-status.ts'
 
 /** Image types the api accepts (checked against the bytes' magic numbers, not only the header). */
 export const THUMBNAIL_MIME_TYPES = ['image/webp', 'image/png', 'image/jpeg'] as const
@@ -72,7 +73,8 @@ export const BoardThumbnailFields = { thumbnailVersion: ThumbnailVersion.nullabl
 /**
  * The dashboard's board list: M1's list with the dashboard's `starred`, this `thumbnailVersion` and (wave
  * J, ./outside.ts) `sharedOutside`: the card's "Shared outside" marker (absent from an older server: read
- * it as false; optional, not defaulted, so code that builds a board of its own keeps compiling).
+ * it as false; optional, not defaulted, so code that builds a board of its own keeps compiling) and (wave S, WS1;
+ * ./review-status.ts) `review`: the counts of its live review items, absent when it has none.
  */
 export const ListBoardsWithThumbnailsResponse = z.object({
   get boards() {
@@ -80,6 +82,7 @@ export const ListBoardsWithThumbnailsResponse = z.object({
       ListBoardsWithStarsResponse.shape.boards.element.extend({
         ...BoardThumbnailFields,
         sharedOutside: z.boolean().optional(),
+        review: BoardReviewCounts.optional(),
       }),
     )
   },

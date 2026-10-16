@@ -13,6 +13,12 @@
 //   outside it is refused with NOT_ELIGIBLE) and lists no access_granted item (nor counts it as unread).
 // - rev 2 (0026, wave J outside markers): NotificationKind 'outsider_joined' with
 //   `NotificationItem.outsiderJoined`. Revisions 0 and 1 get no outsider_joined item (nor its count).
+// - rev 3 (0037, wave S client review): NotificationKind 'review_status' with `NotificationItem.review`, and the chat
+//   hook kind 'review_status' (chat-hooks.ts ChatHookKind, in GET /api/me/chat-prefs). Revisions 0 to 2 get no
+//   review_status bell item (nor its count), and their chat preferences are answered without the kind; a PUT of
+//   their choices keeps each hook's stored 'review_status' (they cannot know it, so they never turn it off).
+//   Additive fields that a z.object strips (`CommentThread.spot`, the board list's `review` counts, `landing`) need
+//   no revision.
 //
 // Raise LOBBY_CLIENT_REV when an enum of a response gains a value; the api keeps answering older
 // revisions what they can read.
@@ -20,7 +26,7 @@
 /** The request header (lower case, as Node exposes it) that carries the web build's revision. */
 export const LOBBY_CLIENT_HEADER = 'x-lobby-client'
 /** This build's revision (see the list above). */
-export const LOBBY_CLIENT_REV = 2
+export const LOBBY_CLIENT_REV = 3
 
 /** The revision a request declares: 0 without the header, or for a value that is not a small integer. */
 export function clientRevOf(value: string | readonly string[] | undefined): number {
@@ -34,3 +40,6 @@ export const knowsRev1 = (rev: number) => rev >= 1
 
 /** A revision that knows the 0026 value (notification kind 'outsider_joined'). */
 export const knowsRev2 = (rev: number) => rev >= 2
+
+/** A revision that knows the 0037 values (notification kind and chat hook kind 'review_status'). */
+export const knowsRev3 = (rev: number) => rev >= 3

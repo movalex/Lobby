@@ -61,6 +61,8 @@ export const KIND_TEXT: Record<NotificationItem['kind'], string> = {
   access_granted: 'approved your access request',
   // Wave J: an account outside Dark Burn / TPG opened a board you own for the first time.
   outsider_joined: OUTSIDER_JOINED_KIND_TEXT,
+  // Wave S (LOBBY_CLIENT_REV 3): a review item's status changed, or a round started (WS1 words it from item.review).
+  review_status: 'updated a review',
 }
 
 /** PRI-09b: what the approved request gave. */

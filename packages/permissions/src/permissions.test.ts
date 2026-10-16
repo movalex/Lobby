@@ -12,6 +12,8 @@ import {
   canCreateInWorkspace,
   canEditCanvas,
   canHandOutAccess,
+  canManageReview,
+  canSetReviewStatus,
   IMPORTING_BOARD_STATUS,
   isBoardStatus,
   resolveBoardRole,
@@ -141,5 +143,30 @@ describe('domain access predicates', () => {
         )
         expect(canHandOutAccess(false, role, status), `outside ${role} ${status}`).toBe(false)
       }
+  })
+})
+
+describe('wave S: review status and managing review', () => {
+  const statuses = ['active', 'archived', 'trashed', 'importing'] as const
+  it('setting a status is exactly commenting (owner, editor, commenter on an active board)', () => {
+    expect(BOARD_ROLES.filter((r) => canSetReviewStatus(r))).toEqual(['owner', 'editor', 'commenter'])
+    for (const role of [...BOARD_ROLES, null])
+      for (const status of statuses)
+        expect(canSetReviewStatus(role, status as BoardStatus), `${role} ${status}`).toBe(
+          can(role, 'comment', status as BoardStatus),
+        )
+    expect(canSetReviewStatus('owner', 'archived')).toBe(false)
+  })
+
+  it('managing review needs edit rights and an account: never a name-only guest, never off an active board', () => {
+    expect(BOARD_ROLES.filter((r) => canManageReview(r, 'account'))).toEqual(['owner', 'editor'])
+    for (const role of BOARD_ROLES) {
+      expect(canManageReview(role, 'guest'), role).toBe(false)
+      expect(canManageReview(role, null), role).toBe(false)
+      expect(canManageReview(role, undefined), role).toBe(false)
+      for (const status of ['archived', 'trashed', 'importing'])
+        expect(canManageReview(role, 'account', status as BoardStatus), `${role} ${status}`).toBe(false)
+    }
+    expect(canManageReview(null, 'account')).toBe(false)
   })
 })

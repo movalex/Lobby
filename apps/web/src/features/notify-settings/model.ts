@@ -25,6 +25,15 @@ export const KIND_LABEL: Readonly<Record<ChatHookKind, string>> = {
   new_comment: 'Someone starts a comment thread on a board I own',
   access_request: 'Someone asks for access to a board I manage',
   outsider_joined: 'Someone from outside opens a board I manage',
+  review_status: 'Someone approves or requests changes on a board I own or review',
+}
+
+/**
+ * The kinds "My notifications" offers: every kind but wave S's review_status until its switch is on (WS1, the
+ * review/flags.ts `status` switch). A kind already stored stays chosen (toggled keeps it), it is only not offered.
+ */
+export function offeredChatKinds(reviewStatus: boolean): readonly ChatHookKind[] {
+  return CHAT_HOOK_KINDS.filter((k) => k !== 'review_status' || reviewStatus)
 }
 
 export const MY_NOTIFICATIONS_INTRO =

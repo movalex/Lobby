@@ -1,7 +1,8 @@
 // "My notifications" (wave R, WS2): which events of this workspace reach me in which Slack or Teams channel. Everything is
 // off until chosen; the whole choice is saved together and the page says "Saved" only after the api answered.
-import { CHAT_HOOK_KINDS, type ChatHookKind, type ChatPrefsResponse } from '@draftroom/contracts'
+import type { ChatHookKind, ChatPrefsResponse } from '@draftroom/contracts'
 import { useEffect, useId, useState } from 'react'
+import { reviewFlags } from '../review/flags.ts'
 import {
   ChatHookRequestError,
   type ChatHookRequestOptions,
@@ -16,6 +17,7 @@ import {
   KIND_LABEL,
   MY_NOTIFICATIONS_INTRO,
   OFF_TEXT,
+  offeredChatKinds,
   PROVIDER_LABEL,
   prefsInput,
   requestErrorText,
@@ -131,7 +133,7 @@ export function MyNotificationsPanel({
             <span className="dr-chat__badge">{PROVIDER_LABEL[hook.provider]}</span>
             {hook.disabled && <span className="dr-chat__badge dr-chat__badge--off">Switched off</span>}
           </legend>
-          {CHAT_HOOK_KINDS.map((kind: ChatHookKind) => (
+          {offeredChatKinds(reviewFlags().status).map((kind: ChatHookKind) => (
             <label key={kind} className="dr-chat__kind">
               <input
                 type="checkbox"

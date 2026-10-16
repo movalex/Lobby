@@ -9,6 +9,7 @@
 // session that ends with the link, or after 7 days, whichever comes first.
 
 import { z } from 'zod'
+import { ReviewLanding } from './review-status.ts'
 
 /** Longest guest name, in characters (code points), after trimming. */
 export const GUEST_NAME_MAX = 40
@@ -153,6 +154,8 @@ export const GuestJoined = z.object({
   created: z.boolean(),
   /** When this browser's guest session ends (the link's expiry or 7 days, whichever comes first). */
   sessionExpiresAt: z.string(),
+  /** Wave S (WS4): where the link opens (review.ts reviewLandingPath); absent: the board (as from an older api). */
+  landing: ReviewLanding.optional(),
 })
 export type GuestJoined = z.infer<typeof GuestJoined>
 

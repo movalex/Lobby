@@ -7,6 +7,7 @@
 // name is prefixed (Comment*/Thread*/Notification*/Mention*) so it cannot collide with other modules.
 
 import { z } from 'zod'
+import { ReviewStatus, ReviewStatusReason } from './review-status.ts'
 
 // The web build's revision (migration 0024), which decides what the api may answer it (client-rev.ts).
 export * from './client-rev.ts'
@@ -78,6 +79,16 @@ export type CommentAnchor = z.infer<typeof CommentAnchor>
 export type CommentPointAnchor = z.infer<typeof CommentPointAnchor>
 export type CommentShapeAnchor = z.infer<typeof CommentShapeAnchor>
 export type CommentAssetAnchor = z.infer<typeof CommentAssetAnchor>
+
+/**
+ * Wave S (WS3, migration 0037 comment_threads.spot_u / spot_v): where on the image, the PDF page or the video frame a
+ * thread with an `asset` anchor points, (u, v) in [0, 1] of the picture's own box (top-left 0,0). Only with an
+ * `asset` anchor (a CHECK holds it). A TOP-LEVEL thread field, never inside the strict CommentAssetAnchor: a tab of
+ * an older build parses CommentThread with z.object (unknown keys stripped), so a spot never breaks its thread list
+ * or its board events, while a key inside the strict anchor would fail every thread that has one.
+ */
+export const CommentSpot = z.strictObject({ u: unit, v: unit })
+export type CommentSpot = z.infer<typeof CommentSpot>
 
 // ---- bodies and mentions -------------------------------------------------------------------------
 
@@ -186,6 +197,8 @@ export const CommentThread = z.object({
   resolvedAt: isoDate.nullable(),
   /** F10 (0020): who sees the thread; absent from an older api, which only had 'everyone' threads. */
   visibility: z.enum(['everyone', 'team']).default('everyone'),
+  /** Wave S (WS3): the spot on the file's picture (asset anchors only); absent when none, and from an older api. */
+  spot: CommentSpot.optional(),
   comments: z.array(ThreadComment),
 })
 export type CommentThread = z.infer<typeof CommentThread>
@@ -208,6 +221,11 @@ export const CreateThreadInput = z.strictObject({
   body: CommentBody,
   /** F10: 'everyone' when omitted; 'team' only from a team member (403 otherwise). */
   visibility: z.enum(['everyone', 'team']).optional(),
+  /**
+   * Wave S (WS3): a spot on the file's picture, only with an `asset` anchor (400 INVALID_ANCHOR otherwise). Until WS3
+   * stores it, the api refuses any thread that sends one (400 INVALID_ANCHOR): never accepted and then dropped.
+   */
+  spot: CommentSpot.optional(),
 })
 export const CreateCommentInput = z.strictObject({ body: CommentBody })
 export const EditCommentInput = z.strictObject({ body: CommentBody })
@@ -233,7 +251,10 @@ export const CommentsDeletedEvent = z.object({ threadId: CommentThreadId, commen
  * access_granted (PRI-09b, 0024): a board owner (the actor) approved your access request. The api lists
  * access_granted only to a web build that declares LOBBY_CLIENT_REV >= 1 (client-rev.ts);
  * outsider_joined (wave J, 0026): an account outside Dark Burn / TPG (the actor) opened one of your
- * boards for the first time; listed only to a web build that declares LOBBY_CLIENT_REV >= 2.
+ * boards for the first time; listed only to a web build that declares LOBBY_CLIENT_REV >= 2;
+ * review_status (wave S, 0037): a review item's status changed, or a review round started, on a board you own or
+ * whose items you marked or set (NotificationItem.review says which; never the actor's own); listed only to a web
+ * build that declares LOBBY_CLIENT_REV >= 3.
  */
 export const NotificationKind = z.enum([
   'mention',
@@ -243,12 +264,32 @@ export const NotificationKind = z.enum([
   'new_comment',
   'access_granted',
   'outsider_joined',
+  'review_status',
 ])
 export type NotificationKind = z.infer<typeof NotificationKind>
 /** Kinds a web build from before 0024 cannot parse: left out of its list and unread count. */
 export const NOTIFICATION_KINDS_SINCE_REV1: readonly NotificationKind[] = ['access_granted']
 /** Kinds a web build from before 0026 (revision 1) cannot parse. */
 export const NOTIFICATION_KINDS_SINCE_REV2: readonly NotificationKind[] = ['outsider_joined']
+/** Kinds a web build from before 0037 (revision 2) cannot parse. */
+export const NOTIFICATION_KINDS_SINCE_REV3: readonly NotificationKind[] = ['review_status']
+
+/**
+ * What a review_status notification is about (wave S, WS1 fills it from review_events at list time). `event`:
+ * `status` (one item's status changed: `status`, `reason`, `itemId`, `label`) or `round_opened` (a round started:
+ * `roundTitle`, `itemCount`). The label and round title are the board's own words, shown to the recipient (who may
+ * view the board); chat messages carry them only under the hook's snippet switch (chat-hooks.ts).
+ */
+export const NotificationReview = z.object({
+  event: z.enum(['status', 'round_opened']),
+  itemId: z.string().nullable(),
+  status: ReviewStatus.nullable(),
+  reason: ReviewStatusReason.nullable(),
+  label: z.string().nullable(),
+  roundTitle: z.string().nullable(),
+  itemCount: z.number().int().min(0).nullable(),
+})
+export type NotificationReview = z.infer<typeof NotificationReview>
 
 /** What an access-request notification asks for (the request itself, as it stands now). */
 export const NotificationAccessRequest = z.object({
@@ -281,6 +322,8 @@ export const NotificationItem = z.object({
    * recipient owns the board, so may see it); null when none is stored.
    */
   outsiderJoined: z.object({ emailDomain: z.string().nullable() }).nullable().optional(),
+  /** review_status only (wave S): which status or round (absent from an api before 0037). */
+  review: NotificationReview.nullable().optional(),
   createdAt: isoDate,
   readAt: isoDate.nullable(),
 })

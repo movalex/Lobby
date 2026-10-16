@@ -11,6 +11,7 @@ import { z } from 'zod'
 import { ACCOUNT_EMAIL_MAX_LENGTH, AccountEmail } from './domain-access.ts'
 import { BoardWithRole, InvitationId, User, UserId } from './index.ts'
 import { cleanDisplayText, OutsideFields } from './outside.ts'
+import { ReviewLanding } from './review-status.ts'
 
 const IsoDate = z.string()
 const Role = z.enum(BOARD_ROLES)
@@ -140,6 +141,11 @@ export const CreateReviewLinkInput = z
      * Guests get the link's role on this board only (docs/WAVE3-CONTRACTS.md §2 guests).
      */
     allowGuests: z.boolean().default(false),
+    /**
+     * Wave S (WS4): where the link opens, the board (as before) or its review page ("Open in review view"). Optional:
+     * the api stores 'board' when it is left out; an api before wave S strips it (the link opens the board).
+     */
+    landing: ReviewLanding.optional(),
   })
   .superRefine((v, ctx) => {
     if (v.role !== 'editor') return
@@ -198,6 +204,8 @@ export const ReviewLinkCreated = z.object({
   maxUses: z.number().int().nullable(),
   /** Wave 3 (guests): people can join with just a name. */
   allowGuests: z.boolean().default(false),
+  /** Wave S (WS4): where the link opens (absent: the board, as from an older api). */
+  landing: ReviewLanding.optional(),
 })
 export type ReviewLinkCreated = z.infer<typeof ReviewLinkCreated>
 
@@ -225,6 +233,8 @@ export const PendingInvitation = z.object({
    * for links and for invitations from before the lock). Only this manager-only list carries it.
    */
   email: z.string().nullable().default(null),
+  /** Wave S (WS4): where a multi-use link opens (absent: the board, as from an older api and for single-use invitations). */
+  landing: ReviewLanding.optional(),
 })
 export type PendingInvitation = z.infer<typeof PendingInvitation>
 

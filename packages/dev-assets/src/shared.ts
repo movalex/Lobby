@@ -23,6 +23,11 @@ export interface ProbeFacts {
   durationMs: number | null
   videoCodec: string | null
   audioCodec: string | null
+  /**
+   * Wave S (WS3, optional): frames per second from ffprobe's avg_frame_rate, for frame steps and hh:mm:ss:ff
+   * timecodes. Absent or null: unknown (the viewer steps at contracts MEDIA_COMMENT_RULES.defaultFrameRate).
+   */
+  frameRate?: number | null
 }
 
 /** `message` is shown to users: never include file paths, stack traces or raw tool output. */
@@ -385,3 +390,13 @@ export function metaUrl(boardId: string, assetId: string, versionId: string) {
 export function uploadUrl(boardId: string) {
   return `/api/boards/${encodeURIComponent(boardId)}/assets`
 }
+
+// ---- wave S: versions of a deliverable (docs/WAVE-S-CONTRACTS.md §3) --------------------------------------------
+
+/**
+ * The upload header that makes the upload a NEW VERSION of an existing deliverable: its value is the version it
+ * supersedes (`ver_…`, the newest servable on the board), and the new version keeps that version's asset id
+ * (contracts asset-versions.ts). Lower case, as Node exposes it. Until WS2 ships the api ignores it (a fresh asset,
+ * as before wave S).
+ */
+export const SUPERSEDES_HEADER = 'x-lobby-supersedes'

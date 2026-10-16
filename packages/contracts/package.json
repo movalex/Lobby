@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./fixtures/client-rev2": "./src/fixtures/client-rev2.ts"
   },
   "scripts": {
     "typecheck": "tsc -p ."

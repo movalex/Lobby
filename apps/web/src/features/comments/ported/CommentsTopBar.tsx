@@ -109,6 +109,7 @@ const KIND_TEXT: Record<NotificationItem['kind'], string> = {
   new_comment: 'commented', // DANA-02: a new thread on a board you own
   access_granted: 'approved your access request', // PRI-09b
   outsider_joined: OUTSIDER_JOINED_KIND_TEXT, // wave J (rendered with the name's External tag)
+  review_status: 'updated a review', // wave S (rev 3; WS1 words it from item.review)
 }
 
 const REQUEST_TEXT: Record<NotificationAccessRequest['role'], string> = {

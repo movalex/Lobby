@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { BoardTitle } from './board-title.ts'
 import { AccountEmail, ME_ACCESS_LEGACY, MeAccess } from './domain-access.ts'
 import { cleanDisplayText, OutsideFields } from './outside.ts'
+import { ReviewLanding } from './review-status.ts'
 
 export const BoardRole = z.enum(BOARD_ROLES)
 export const WorkspaceRole = z.enum(WORKSPACE_ROLES)
@@ -292,7 +293,12 @@ export const BOARD_IN_TRASH = {
     'This board is in the trash, so the invitation can’t be used right now. It works again if the board is restored before the link expires.',
 } as const
 
-export const InvitationAccepted = z.object({ workspaceId: WorkspaceId, boardId: BoardId.nullable() })
+export const InvitationAccepted = z.object({
+  workspaceId: WorkspaceId,
+  boardId: BoardId.nullable(),
+  /** Wave S (WS4): where a review link opens (review.ts reviewLandingPath); absent: the board (as from an older api). */
+  landing: ReviewLanding.optional(),
+})
 
 // ---- sync tickets ----------------------------------------------------------------------------------
 
@@ -316,6 +322,8 @@ export type ErrorBody = z.infer<typeof ErrorBody>
 
 // Feature schemas (docs/FEATURES-M2-CONTRACTS.md): one file per feature, owned by that feature.
 export * from './ai.ts'
+// wave S foundation (WS2 owns it after): versions of a deliverable, media comment rules
+export * from './asset-versions.ts'
 // wave R foundation (WS4 owns it after): board backup and restore (.lobby)
 export * from './board-backup.ts'
 // wave N foundation (WS7 routes): board cards and backlinks
@@ -348,6 +356,8 @@ export * from './mindmap.ts'
 export * from './miro-import.ts'
 export * from './outside.ts'
 export * from './present-live.ts'
+// wave S foundation (WS1 and WS4 own it after): client review (items, rounds, events, the review page, the summary)
+export * from './review.ts'
 export * from './search.ts'
 export * from './storage.ts'
 export * from './sync-internal.ts'
