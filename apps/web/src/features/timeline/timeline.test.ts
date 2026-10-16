@@ -12,6 +12,8 @@ import {
 } from '@draftroom/canvas-schema/planning'
 import { PLANNING_REV } from '@draftroom/canvas-schema/protocol'
 import { PENDING_PALETTE_COMMAND_IDS } from '@draftroom/contracts'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CanvasElement, CanvasFeatureContext, LobbyCanvas } from '../../canvas/api/index.ts'
 import { CANVAS_FEATURES } from '../canvas-registry.ts'
@@ -26,6 +28,7 @@ import { TIMELINE_EXPORT_LAYER, timelineSvg } from './export.ts'
 import { feature } from './index.tsx'
 import { barBox, fitText, layoutTimeline, MAX_BARS, onTimeline, type TimelineCard } from './layout.ts'
 import { setMemberNames } from './names.ts'
+import { TimelineLayer } from './Overlay.tsx'
 import { barPrims, DARK, framePrims, LIGHT, primsSvg } from './paint.ts'
 
 const T: TimelineValue = { start: '2026-10-05', end: '2026-12-27', scale: 'week', lanes: 'none' }
@@ -508,6 +511,63 @@ describe('switch on', () => {
   })
 })
 
+describe('the layer', () => {
+  beforeEach(() => {
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => (k === PLANNING_FLAG_KEYS.timeline ? '1' : null),
+    })
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  const html = (els: Record<string, unknown>[], o: { rev?: number | null; readOnly?: boolean } = {}) => {
+    const canvas = fakeCanvas(els, o)
+    const ctx = {
+      canvas,
+      api: { listMembers: async () => [] },
+      board: { id: 'b1' },
+    } as unknown as CanvasFeatureContext
+    return { canvas, out: renderToStaticMarkup(createElement(TimelineLayer, { ctx })) }
+  }
+  const els = () => [
+    frameEl('tl', 40, 60, T),
+    cardEl('c1', 'Write the brief', {
+      'card:status': 'doing',
+      'card:start': '2026-10-12',
+      'card:due': '2026-10-16',
+    }),
+    cardEl('c2', 'Launch', { 'card:status': 'todo', 'card:due': '2026-11-02' }),
+    cardEl('c3', 'Out of range', { 'card:status': 'todo', 'card:due': '2027-05-02' }),
+    cardEl('c4', 'No date', { 'card:status': 'todo' }),
+  ]
+
+  it('draws an svg over the frame with a focusable bar per card in range, and writes nothing', () => {
+    const { canvas, out } = html(els())
+    expect(out).toContain('data-testid="timeline"')
+    expect(out.match(/data-testid="timeline-bar"/g)).toHaveLength(2)
+    expect(out).toContain('data-card-id="c1"')
+    expect(out).toContain('data-kind="milestone"')
+    expect(out).not.toContain('data-card-id="c3"')
+    expect(out).not.toContain('group)')
+    expect(out).toContain('role="button"')
+    expect(out).toContain('tabindex="0"')
+    expect(out).toContain('aria-label="Write the brief, In progress, 2026-10-12 to 2026-10-16"')
+    expect(out).toContain('data-editable="true"')
+    expect(canvas.log.transacts).toEqual([])
+  })
+
+  it('a read-only page and an older room draw the bars without drag', () => {
+    expect(html(els(), { readOnly: true }).out).not.toContain('data-editable')
+    expect(html(els(), { rev: 13 }).out).not.toContain('data-editable')
+    expect(html(els(), { readOnly: true }).out).toContain('data-testid="timeline-bar"')
+  })
+
+  it('draws nothing with the switch off, or with no timeline', () => {
+    expect(html([cardEl('c1', 'x', { 'card:status': 'todo', 'card:due': '2026-10-12' })]).out).toBe('')
+    vi.stubGlobal('localStorage', { getItem: () => null })
+    expect(html(els()).out).toBe('')
+  })
+})
+
 describe('only the person who acts writes', () => {
   it('reading, laying out and exporting call no write (a receiving client pushes nothing)', () => {
     vi.stubGlobal('localStorage', {
@@ -623,6 +683,9 @@ function fakeCanvas(
     },
     isLocked: () => false,
     isHidden: () => false,
+    theme: () => 'light',
+    selection: [] as string[],
+    sceneToOverlay: (p: { x: number; y: number }) => p,
     readOnly: () => o.readOnly === true,
     room: { contractsRev: () => (o.rev === undefined ? PLANNING_REV : o.rev) },
     doc: { entries: () => new Map() },
@@ -630,7 +693,7 @@ function fakeCanvas(
       of: (id: string) => String((els.find((e) => e.id === id) as { text?: string } | undefined)?.text ?? ''),
     },
     viewport: {
-      get: () => ({ x: 0, y: 0, width: 1600, height: 900, zoom: 1 }),
+      get: () => ({ x: 0, y: 0, width: 1600, height: 900, zoom: 0.5 }),
       ensureVisible: () => {},
       screenRect: () => ({ x: 0, y: 0, width: 1600, height: 900 }),
     },

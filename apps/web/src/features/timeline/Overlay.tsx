@@ -1,15 +1,3 @@
-// OWNER: WS5 (wave T). The timeline on the board page: for each timeline frame, an SVG over it (a `scene` overlay layer,
-// never an element: the ruler, today marker, lanes and bars are what the cards' `card:start` and `card:due` say, so
-// there is nothing stored to keep in sync and nothing a receiving client writes). The layer takes no clicks; each bar
-// is a focusable, pointer-active group.
-//
-//  - drag a bar to move both dates, an edge to change one, a milestone to move its due date; the preview follows the
-//    pointer and ONE transaction (one undo step) writes the changed keys when the pointer is released;
-//  - click a bar: WS4's card popover (`openCardPopover`); double-click: zoom to the card;
-//  - a focused bar takes ←/→ (one unit) and Shift+←/→ (its end edge) here only: the keys are handled on the bar, the
-//    board's key allowlist never sees them;
-//  - read-only roles, a locked card and a room that does not take planning keys (`planningOffered`) get no drag.
-import type { TimelineValue } from '@draftroom/canvas-schema/planning'
 import { type KeyboardEvent, type PointerEvent, useEffect, useMemo, useRef, useState } from 'react'
 import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
 import { useValue } from '../../lib/signals.ts'
@@ -18,7 +6,7 @@ import { TimelineControls } from './Controls.tsx'
 import { timelineCards } from './cards.ts'
 import { shortDate, todayOf } from './dates.ts'
 import { type Dates, type DragMode, datePatch, nudgeDates, pointerDates, sameDates } from './drag.ts'
-import { type Bar, barBox, barDescription, type Layout, layoutTimeline, type TimelineCard } from './layout.ts'
+import { type Bar, barBox, barDescription, type Layout, layoutTimeline } from './layout.ts'
 import { setMemberNames } from './names.ts'
 import { barPrims, DARK, framePrims, LIGHT, type Palette, type Prim } from './paint.ts'
 import './timeline.css'
@@ -169,7 +157,10 @@ function TimelineView({
     // (the selector returns a fresh object on every change of the scene: compare by content below)
   )
   const valueKey = frame ? JSON.stringify(frame.value) : ''
-  const cards = useValue('timeline.cards', () => timelineCards(canvas), [canvas])
+  // the cards by content: a change elsewhere on the board (another element dragged at 60 fps) draws nothing again
+  const cardsNow = useValue('timeline.cards', () => timelineCards(canvas), [canvas])
+  const cardsKey = JSON.stringify(cardsNow)
+  const cards = useMemo(() => cardsNow, [cardsKey])
   const layout = useMemo<Layout | null>(
     () =>
       frame
@@ -345,7 +336,6 @@ function TimelineView({
 
   return (
     <>
-      group)
       <svg
         ref={svgRef}
         className="dr-tl"
@@ -455,5 +445,3 @@ function TimelineView({
 }
 
 const frameName = (el: object): string => ((el as { name?: string | null }).name ?? '').trim() || 'timeline'
-
-export type { TimelineCard, TimelineValue }

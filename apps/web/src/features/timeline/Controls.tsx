@@ -5,6 +5,7 @@
 // are taken (a rev-14 room, an editor).
 import {
   addDays,
+  snapDate,
   TIMELINE_KEY,
   TIMELINE_MAX_DAYS,
   type TimelineLanes,
@@ -16,7 +17,7 @@ import { useState } from 'react'
 import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
 import { useValue } from '../../lib/signals.ts'
 import { boardTagsOf } from '../tags/ported/model.ts'
-import { mondayOf, todayOf } from './dates.ts'
+import { todayOf } from './dates.ts'
 
 const SCALES: readonly { readonly id: TimelineScale; readonly label: string }[] = [
   { id: 'day', label: 'Days' },
@@ -47,7 +48,7 @@ export function rangeAroundToday(value: TimelineValue, today: string): { start: 
   const days = timelineDays(value)
   const back = Math.floor(days / 4)
   const raw = addDays(today, -back)
-  const start = raw === null ? null : value.scale === 'day' ? raw : mondayOf(raw)
+  const start = raw === null ? null : snapDate(raw, value.scale)
   const end = start === null ? null : addDays(start, days - 1)
   return start && end ? { start, end } : null
 }
