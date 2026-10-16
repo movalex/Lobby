@@ -222,6 +222,52 @@ export function isOfficeUpload(kind: AssetKind, mimeType: string, name: string):
   )
 }
 
+// ---- design files (wave R, WS3; landed by the foundation) ----------------------------------------------------
+
+export type DesignExt = 'psd' | 'ai' | 'tif' | 'tiff' | 'heic' | 'heif'
+
+export interface DesignFormat {
+  kind: 'psd' | 'ai' | 'tiff' | 'heic'
+  exts: readonly DesignExt[]
+  mimes: readonly string[]
+  /** 'pages': previewed as flattened pages (classified 'pdf', like Office); 'none': an attachment with a hint */
+  preview: 'pages' | 'none'
+  /** the upload limit; null: the PDF limit */
+  maxBytes: number | null
+}
+
+/**
+ * The design files the NAS worker previews as FLATTENED pages (Photoshop, Illustrator, TIFF) or keeps as an
+ * attachment with a hint (HEIC: no HEVC decoder on the server). The same rows as @draftroom/contracts
+ * design-previews.ts DESIGN_FORMAT_ROWS (the worker does not depend on contracts; an api test compares the two).
+ * DATA ONLY until WS3: classifyUpload and maxUploadBytes do not read it yet, so nothing changes for an upload;
+ * WS3 wires them in the same change that teaches the worker these formats.
+ */
+export const DESIGN_FORMATS: readonly DesignFormat[] = [
+  {
+    kind: 'psd',
+    exts: ['psd'],
+    mimes: ['image/vnd.adobe.photoshop', 'application/x-photoshop', 'application/photoshop'],
+    preview: 'pages',
+    maxBytes: 200 * MiB,
+  },
+  {
+    kind: 'ai',
+    exts: ['ai'],
+    mimes: ['application/illustrator', 'application/postscript'],
+    preview: 'pages',
+    maxBytes: null,
+  },
+  { kind: 'tiff', exts: ['tif', 'tiff'], mimes: ['image/tiff'], preview: 'pages', maxBytes: 100 * MiB },
+  {
+    kind: 'heic',
+    exts: ['heic', 'heif'],
+    mimes: ['image/heic', 'image/heif', 'image/heic-sequence', 'image/heif-sequence'],
+    preview: 'none',
+    maxBytes: null,
+  },
+]
+
 /** The upload size limit for a file of `kind` with this declared type and name (Office documents have their own). */
 export function maxUploadBytes(kind: AssetKind, mimeType: string, name: string): number {
   return isOfficeUpload(kind, mimeType, name) ? LIMITS.maxOfficeBytes : LIMITS.maxBytes[kind]
