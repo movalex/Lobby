@@ -1,7 +1,7 @@
 // Pure comment-thread logic for the web client (no React, no editor): read state per person, pin
 // states, panel filters and ordering, and the anchor geometry used to place pins. Unit-tested in Node.
 
-import type { CommentAnchor, CommentThread, ThreadComment } from '@draftroom/contracts'
+import type { CommentAnchor, CommentSpot, CommentThread, ThreadComment } from '@draftroom/contracts'
 import { commentPlainText } from '@draftroom/contracts'
 
 export type PinState = 'unread' | 'read' | 'resolved' | 'mentioned'
@@ -168,28 +168,89 @@ const AST_RE = /^ast_[0-9A-Za-z]{10,40}$/
 const VER_RE = /^ver_[0-9A-Za-z]{10,40}$/
 const MAX_COORD = 1e7
 
+/** Wave S (WS3): what a click knows beyond the target, from the board page's switches. */
+export interface ClickOptions {
+  /**
+   * The media comments switch (features/review/flags.ts): an image with a Lobby file gets an `asset` anchor pinned
+   * to its version, with the clicked spot; a placed PDF page names its page. Off: today's shape anchor on images.
+   */
+  readonly mediaComments?: boolean
+}
+
+/** A new comment's place: its anchor and (wave S, an image's asset anchor) the spot on the picture. */
+export interface ClickPlacement {
+  readonly anchor: CommentAnchor
+  readonly spot?: CommentSpot
+}
+
+const pageProp = (v: unknown): number | null =>
+  typeof v === 'number' && Number.isInteger(v) && v >= 1 && v <= 100_000 ? v : null
+
 /**
  * The anchor for a comment-tool click: on a file card -> asset anchor, on any other shape -> shape
- * anchor at the clicked spot, on empty canvas -> point anchor on the current page.
+ * anchor at the clicked spot, on empty canvas -> point anchor on the current page. Wave S (`mediaComments`): an
+ * image with a Lobby file -> asset anchor on its version, with the clicked spot; a placed PDF page -> its page.
  */
-export function anchorForClick(pagePoint: Point, target: ClickTarget | null, pageId: string): CommentAnchor {
+export function placementForClick(
+  pagePoint: Point,
+  target: ClickTarget | null,
+  pageId: string,
+  opts: ClickOptions = {},
+): ClickPlacement {
   if (target) {
     const assetId = target.props?.assetId
     const versionId = target.props?.versionId
-    if (
-      target.type === 'dr-file-card' &&
+    const ids =
       typeof assetId === 'string' &&
       AST_RE.test(assetId) &&
       typeof versionId === 'string' &&
       VER_RE.test(versionId)
-    ) {
-      return { kind: 'asset', shapeId: target.shapeId, assetId, versionId }
+        ? { assetId, versionId }
+        : null
+    if (target.type === 'dr-file-card' && ids) {
+      const page = opts.mediaComments ? pageProp(target.props?.pdfPage) : null
+      return { anchor: { kind: 'asset', shapeId: target.shapeId, ...ids, ...(page ? { page } : {}) } }
     }
-    return { kind: 'shape', shapeId: target.shapeId, ...uvFor(target.frame, pagePoint) }
+    if (target.type === 'image' && ids && opts.mediaComments)
+      return {
+        anchor: { kind: 'asset', shapeId: target.shapeId, ...ids },
+        spot: uvFor(target.frame, pagePoint),
+      }
+    return { anchor: { kind: 'shape', shapeId: target.shapeId, ...uvFor(target.frame, pagePoint) } }
   }
   const bound = (n: number) => Math.round(Math.max(-MAX_COORD, Math.min(MAX_COORD, n)) * 100) / 100
-  return { kind: 'point', x: bound(pagePoint.x), y: bound(pagePoint.y), pageId }
+  return { anchor: { kind: 'point', x: bound(pagePoint.x), y: bound(pagePoint.y), pageId } }
 }
+
+/** The anchor of placementForClick (callers that place no spot: the keyboard's comment, the tests). */
+export function anchorForClick(
+  pagePoint: Point,
+  target: ClickTarget | null,
+  pageId: string,
+  opts: ClickOptions = {},
+): CommentAnchor {
+  return placementForClick(pagePoint, target, pageId, opts).anchor
+}
+
+/**
+ * Wave S (WS3): whether the canvas shows a thread's pin: an `asset` anchor on the version its element shows now (or
+ * on an element that is gone: the orphan rules decide), and every anchor without a version. A thread keeps its
+ * version forever, so after "Replace media" or a new version its pin leaves the card and the comments panel and
+ * the review viewer list it on its own version. `currentVersionOf`: the version the anchored element shows (null:
+ * not on the board, or no file).
+ */
+export function shownOnCanvas(
+  anchor: CommentAnchor,
+  currentVersionOf: (shapeId: string) => string | null,
+): boolean {
+  if (anchor.kind !== 'asset') return true
+  const current = currentVersionOf(anchor.shapeId)
+  return current === null || current === anchor.versionId
+}
+
+/** The chip of a thread on another version than its element shows: "v1" once the version's number is known. */
+export const versionChipText = (n: number | null | undefined): string =>
+  typeof n === 'number' && Number.isInteger(n) && n >= 1 ? `v${n}` : 'Earlier version'
 
 /** What the board knows around an anchor right now (see geometry.ts `anchorContext`). */
 export interface AnchorContext {
@@ -205,6 +266,8 @@ export interface AnchorContext {
    * says which of 37 photos it is about. Null or absent when there is none.
    */
   fileName?: string | null
+  /** Wave S: an `asset` anchor on another version than its element shows now ("· earlier version"). */
+  otherVersion?: boolean
 }
 
 /** A file name on one line, at most 60 characters (the middle gives way, the extension stays). */
@@ -273,5 +336,6 @@ export function anchorLabel(
       : anchor.kind === 'asset' && anchor.timeMs !== undefined
         ? `, at ${Math.floor(anchor.timeMs / 60_000)}:${String(Math.floor((anchor.timeMs % 60_000) / 1000)).padStart(2, '0')}`
         : ''
-  return `${base}${detail}${elsewhere ? ' (another page)' : ''}`
+  const version = anchor.kind === 'asset' && context.otherVersion ? ' · earlier version' : ''
+  return `${base}${detail}${version}${elsewhere ? ' (another page)' : ''}`
 }

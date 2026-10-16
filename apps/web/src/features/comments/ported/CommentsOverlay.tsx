@@ -9,6 +9,11 @@
 // navigation panel, 3i's floating "Board actions"), as the tldraw page drew them above tldraw's panels:
 // the overlay root sits under the host slots, so a sheet in it was covered by the tools and the ≡ button
 // (W5-07). Beside their marker, popovers also end above the toolbar's row (`toolbarBand`).
+//
+// Wave S (WS3, the media comments switch: features/review/flags.ts): a thread on another version than its card or
+// image shows has no pin (its version keeps it; geometry.ts pinOnCanvas), an image's spot comment is pinned at its
+// spot, and the popover of a thread on a video, a PDF or an image opens the review viewer there ("Jump to 00:12.4",
+// "Open page 3"), with a "v1" chip (or "Earlier version") when the thread is on another version.
 
 import { type CommentThread, TEAM_ONLY_HINT } from '@draftroom/contracts'
 import {
@@ -27,10 +32,12 @@ import { initialsFor, safeColor } from '../../../lib/identity.ts'
 import { useValue } from '../../../lib/signals.ts'
 import { toolLock } from '../../canvas-ux/ported/tool-lock.ts'
 import { ExternalTag } from '../../people/ExternalTag.tsx'
+import { openThreadInViewer, viewerButtonText } from '../../review-viewer/threads/open.ts'
+import { useVersionNumbers } from '../../review-viewer/threads/versions.ts'
 import { Composer } from '../Composer.tsx'
 import { CheckIcon, CloseIcon } from '../icons.tsx'
 import { PIN_SIZE as PIN, type PopoverLayout, popoverLayout } from '../layout.ts'
-import { type PinState, pinState, snippet, unreadComments } from '../model.ts'
+import { type PinState, pinState, snippet, unreadComments, versionChipText } from '../model.ts'
 import { pinFaceStyle } from '../pin-face.ts'
 import { NEW_THREAD_DRAFT } from '../store.ts'
 import { ThreadView } from '../ThreadView.tsx'
@@ -40,7 +47,9 @@ import {
   cornerPinOffset,
   describeAnchor,
   keepAnchorAboveSheet,
+  onEarlierVersion,
   pinCornerOf,
+  pinOnCanvas,
   pinPoint,
   toolbarBand,
 } from './geometry.ts'
@@ -192,7 +201,9 @@ export function CommentsOverlay({ ctx }: { ctx: CanvasFeatureContext }) {
     const ordered = Object.values(threads).sort((a, b) => a.createdAt.localeCompare(b.createdAt))
     for (const t of ordered) {
       if (t.status === 'resolved' && !showResolved && t.id !== open) continue
-      const pt = pinPoint(canvas, t.anchor)
+      // wave S: a thread on another version of its file stays with that version (the viewer and the panel list it)
+      if (!pinOnCanvas(canvas, t.anchor)) continue
+      const pt = pinPoint(canvas, t.anchor, t.spot)
       if (!pt) continue
       const corner = pinCornerOf(canvas, t.anchor)
       const nth = corner ? (onCorner.get(corner.id) ?? 0) : 0
@@ -360,7 +371,7 @@ function NewThreadComposer({ ctx, host }: { ctx: CanvasFeatureContext; host: HTM
   const pending = useValue('dr-comments.pending', () => store.pending.get(), [store])
   const point = useValue(
     'dr-comments.pending-point',
-    () => (pending ? pinPoint(canvas, pending.anchor) : null),
+    () => (pending ? pinPoint(canvas, pending.anchor, pending.spot) : null),
     [canvas, pending],
   )
   const where = useValue(
@@ -386,7 +397,7 @@ function NewThreadComposer({ ctx, host }: { ctx: CanvasFeatureContext; host: HTM
   // P-014: a posted comment puts the tool back to Select (as Miro does, and as a note or a text does after one
   // placement), so the next click on the board starts nothing; the tool lock (Q) keeps the comment tool
   const post = async (draft: Parameters<typeof store.createThread>[1]) => {
-    const thread = await store.createThread(pending.anchor, draft)
+    const thread = await store.createThread(pending.anchor, draft, pending.spot ? { spot: pending.spot } : {})
     if (thread && !toolLock.get() && canvas.tool() === COMMENT_TOOL_ID) canvas.setTool('select')
     return thread !== null
   }
@@ -477,10 +488,11 @@ function OpenThread({ ctx, host }: { ctx: CanvasFeatureContext; host: HTMLElemen
     () => (openId ? store.threads.get()[openId] : undefined),
     [store, openId],
   )
-  const point = useValue('dr-comments.open-point', () => (thread ? pinPoint(canvas, thread.anchor) : null), [
-    canvas,
-    thread,
-  ])
+  const point = useValue(
+    'dr-comments.open-point',
+    () => (thread ? pinPoint(canvas, thread.anchor, thread.spot) : null),
+    [canvas, thread],
+  )
   const where = useValue(
     'dr-comments.open-where',
     () => (thread ? describeAnchor(canvas, thread.anchor) : ''),
@@ -542,6 +554,7 @@ function OpenThread({ ctx, host }: { ctx: CanvasFeatureContext; host: HTMLElemen
         }}
         onKeyUp={keepKeysInPopover}
       >
+        <ViewerLink ctx={ctx} thread={thread} />
         <ThreadView
           store={store}
           thread={thread}
@@ -552,5 +565,44 @@ function OpenThread({ ctx, host }: { ctx: CanvasFeatureContext; host: HTMLElemen
         />
       </section>
     </InPopoverLayer>
+  )
+}
+
+/**
+ * Wave S (WS3): the open thread's way into the review viewer, for a thread on a video, a PDF or an image (the media
+ * comments switch on): "Jump to 00:12.4", "Open page 3" or "Open in viewer", and the version chip ("v1", or "Earlier
+ * version" until the version list numbers it) when the thread is on another version than the card shows.
+ */
+function ViewerLink({ ctx, thread }: { ctx: CanvasFeatureContext; thread: CommentThread }) {
+  const { canvas } = ctx
+  const { store } = controllerFor(ctx)
+  const text = useValue('dr-comments.viewer-link', () => viewerButtonText(ctx, thread.anchor), [
+    ctx,
+    thread.anchor,
+  ])
+  const earlier = useValue('dr-comments.earlier-version', () => onEarlierVersion(canvas, thread.anchor), [
+    canvas,
+    thread.anchor,
+  ])
+  const numbers = useVersionNumbers(
+    ctx.board.id,
+    earlier && thread.anchor.kind === 'asset' ? thread.anchor.assetId : null,
+  )
+  if (!text) return null
+  const versionId = thread.anchor.kind === 'asset' ? thread.anchor.versionId : ''
+  const open = () => {
+    if (openThreadInViewer(ctx, thread.id, thread.anchor)) store.openThread(null)
+  }
+  return (
+    <div className="dr-cthread__viewer" data-testid="thread-viewer-row">
+      {earlier && (
+        <button type="button" className="dr-cteam" data-testid="thread-version-chip" onClick={open}>
+          {versionChipText(numbers.get(versionId))}
+        </button>
+      )}
+      <button type="button" className="dr-btn dr-btn--sm" data-testid="thread-open-viewer" onClick={open}>
+        {text}
+      </button>
+    </div>
   )
 }

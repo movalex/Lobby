@@ -8,11 +8,15 @@
 // - the dock panel `comments` with filters; orphans ("On a deleted object") re-attach when the object
 //   returns;
 // - @mentions from the board's members; the notifications bell (in-app only; no email);
-// - "Comment" in the context menu for the selection (A11Y2-04).
+// - "Comment" in the context menu for the selection (A11Y2-04);
+// - wave S (WS3, the media comments switch): "Review" in the selection bar for one video, PDF or image opens the
+//   review viewer, whose media slots (time, page and spot comments, exports) ../../review-viewer/threads/register.tsx
+//   fills.
 // Everything works for commenters on a read-only canvas; the API enforces every rule.
 
 import { COMMENTS_DELETED_EVENT, COMMENTS_THREAD_EVENT, CommentThreadId } from '@draftroom/contracts'
 import type { CanvasFeature, CanvasFeatureContext } from '../../../canvas/api/index.ts'
+import { reviewButton } from '../../review-viewer/threads/register.tsx'
 import { SHARE_CHANGED_EVENT } from '../../sharing/api.ts'
 import '../comments.css'
 import { commentToolHint } from '../copy.ts'
@@ -22,7 +26,7 @@ import { CommentsOverlay } from './CommentsOverlay.tsx'
 import { CommentsPanel } from './CommentsPanel.tsx'
 import { CommentsMenuItem, CommentsTopBar } from './CommentsTopBar.tsx'
 import { COMMENT_TOOL_ID, canCommentIn, controllerFor, focusThread, selectCommentTool } from './controller.ts'
-import { anchorAt, anchorForKeyboard } from './geometry.ts'
+import { anchorForKeyboard, placementAt } from './geometry.ts'
 import { COMMENT_TOOL_KEYS, placeCommentFromKeyboard } from './keys.ts'
 import { startNotificationsPoll } from './poll.ts'
 import { mountCommentTool } from './tool.ts'
@@ -91,7 +95,9 @@ function mount(ctx: CanvasFeatureContext): () => void {
       // The first click with something open just closes it (the draft stays); the next one places.
       if (store.closeAll()) return
       if (!store.canComment.get()) return
-      store.startNewThread(anchorAt(canvas, point))
+      // wave S (WS3): on an image (media comments switch on), the clicked spot goes with its asset anchor
+      const placed = placementAt(canvas, point)
+      store.startNewThread(placed.anchor, placed.spot)
     },
   })
 
@@ -239,6 +245,7 @@ export const feature: CanvasFeature = {
     },
   ],
   keys: COMMENT_TOOL_KEYS,
+  selectionBar: [reviewButton],
   overlays: [{ id: 'comments', layer: 'scene', order: 30, pointer: 'none', component: CommentsOverlay }],
   contextMenu: [
     {
