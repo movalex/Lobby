@@ -249,6 +249,7 @@ export class PushApplier {
       planning: env.planning !== false,
       // wave T: card:who from stage 0 (element-room.ts, assignee-refs.ts); sb:head.audio against the working set
       assignee: (uid) => this.push.assignees?.get(uid),
+      assigneeRefused: (uid) => this.push.assigneesRefused?.has(uid) === true,
       liveFileElement: (id) => this.liveFileElement(id),
     }
   }

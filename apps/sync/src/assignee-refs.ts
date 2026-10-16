@@ -60,6 +60,35 @@ export function createAssigneeRefsClient(opts: AssigneeRefsClientOpts): Assignee
  * one call per 10 s.
  */
 export const ASSIGNEE_REFS_NEGATIVE_MS = 10_000
+/**
+ * Flooding (wave T review): a push naming random uids skips the negative cache, so at most this many uids the cache
+ * lacks are asked per push (one call: the route's own cap); a write naming any other is INVALID before any lookup.
+ */
+export const ASSIGNEE_NEW_UIDS_PER_PUSH = 50
+/** A room's assignee-refs calls in a minute, all its sockets together: past it new uids are UNAVAILABLE, unasked. */
+export const ASSIGNEE_LOOKUPS_PER_MINUTE = 20
+
+/** A sliding-window count: `take()` is true (and counts) while fewer than `limit` were taken in the last `windowMs`. */
+export class LookupRate {
+  private readonly at: number[] = []
+  private readonly now: () => number
+  private readonly limit: number
+  private readonly windowMs: number
+  constructor(now: () => number, limit: number, windowMs: number) {
+    this.now = now
+    this.limit = limit
+    this.windowMs = windowMs
+  }
+
+  take(): boolean {
+    const now = this.now()
+    while (this.at.length && (this.at[0] as number) <= now - this.windowMs) this.at.shift()
+    if (this.at.length >= this.limit) return false
+    this.at.push(now)
+    return true
+  }
+}
+
 /** Entries a room keeps (an LRU): far more people than a board has. */
 export const ASSIGNEE_REFS_CACHE_ENTRIES = 2_000
 

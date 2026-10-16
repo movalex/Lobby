@@ -86,6 +86,8 @@ export interface CustomDataContext {
    * push (true / false), or undefined (not asked, or the lookup failed: the write is UNAVAILABLE). Absent: unknown.
    */
   readonly assignee?: (uid: string) => boolean | undefined
+  /** Wave T: a uid this push named past the cap of new uids per push: INVALID before any lookup. Absent: none. */
+  readonly assigneeRefused?: (uid: string) => boolean
   /** Wave T: whether `id` is a live element carrying a `file` key now (sb:head.audio). Absent: none is. */
   readonly liveFileElement?: (id: string) => boolean
 }
@@ -130,6 +132,7 @@ function checkPlanning(
     // says `c:card:who: null`, as lobbyCreateOfWriter does for the keys an older writer cannot know. A patch naming
     // one is an assignment, and stays INVALID
     if (ctx.writer.guest) return isCreate ? { ok: true, value: null } : bad('INVALID') // a guest never assigns
+    if (ctx.assigneeRefused?.(value as string)) return bad('INVALID') // past the push's cap of new uids: no lookup
     const known = ctx.assignee?.(value as string)
     if (known === undefined) return bad('UNAVAILABLE') // the lookup failed or the api had no answer: fail closed
     if (known) return { ok: true, value }

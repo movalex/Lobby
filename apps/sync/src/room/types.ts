@@ -33,6 +33,11 @@ export interface PreparedPush {
    * the room cache or one lookup; a uid it lacks is unknown (its `card:who` write is UNAVAILABLE). Absent: none.
    */
   readonly assignees?: ReadonlyMap<string, boolean>
+  /**
+   * Wave T: the uids this push named past the cap of new uids per push (assignee-refs.ts ASSIGNEE_NEW_UIDS_PER_PUSH):
+   * each write naming one is INVALID, refused before any lookup
+   */
+  readonly assigneesRefused?: ReadonlySet<string>
   /** when the push arrived (receive → ack metric) */
   readonly receivedAt: number
   /** a server write instead of client ops: the lease-expiry re-fit of one container (§2.9.4 rule 6) */

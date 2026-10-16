@@ -70,7 +70,13 @@ import {
   type Welcome,
 } from '@draftroom/canvas-schema/protocol'
 import { SYNC_INTERNAL_TIMEOUT_MS } from '@draftroom/contracts'
-import { AssigneeRefsCache, type AssigneeRefsLookup } from '../assignee-refs.ts'
+import {
+  ASSIGNEE_LOOKUPS_PER_MINUTE,
+  ASSIGNEE_NEW_UIDS_PER_PUSH,
+  AssigneeRefsCache,
+  type AssigneeRefsLookup,
+  LookupRate,
+} from '../assignee-refs.ts'
 import { DISK_NOTICE_RATIO, type DiskProbe, STATFS_PROBE } from '../disk.ts'
 import type {
   ElementSessionInfo,
@@ -181,6 +187,7 @@ type FifoItem =
       paid: boolean
       files: Map<string, FileRefAnswer>
       assignees: Map<string, boolean>
+      assigneesRefused: Set<string>
       lookup: Promise<void> | null
       receivedAt: number
       rid?: string
@@ -483,6 +490,8 @@ export class ElementRoom {
   readonly fileCache: FileRefsCache
   /** wave T: the assignee-refs answers (60 s for a yes, assignee-refs.ts) */
   readonly assigneeCache: AssigneeRefsCache
+  /** wave T: the room's rate of assignee-refs calls (assignee-refs.ts ASSIGNEE_LOOKUPS_PER_MINUTE) */
+  readonly assigneeRate: LookupRate
   private readonly index = new IndexCache()
   private readonly groups = new GroupMap()
   private readonly counts: LiveCounts = { elements: 0, items: 0 }
@@ -549,6 +558,7 @@ export class ElementRoom {
     this.presence = new PresenceHub(deps.now)
     this.fileCache = new FileRefsCache(deps.now)
     this.assigneeCache = new AssigneeRefsCache(deps.now)
+    this.assigneeRate = new LookupRate(deps.now, ASSIGNEE_LOOKUPS_PER_MINUTE, 60_000)
     try {
       this.store.compact(deps.now(), { maxTombstones: TOMBSTONE_MAX, ttlMs: TOMBSTONE_TTL_MS })
     } catch (e) {
@@ -735,6 +745,7 @@ export class ElementRoom {
       paid: false,
       files: new Map(),
       assignees: new Map(),
+      assigneesRefused: new Set(),
       lookup: null,
       receivedAt: this.deps.now(),
       ...(msg.rid !== undefined ? { rid: msg.rid } : {}),
@@ -796,11 +807,17 @@ export class ElementRoom {
       const unknownWho: string[] = []
       for (const u of who) {
         const hit = this.assigneeCache.get(u)
-        if (hit === undefined) unknownWho.push(u)
-        else item.assignees.set(u, hit)
+        if (hit === undefined) {
+          // flooding: at most ASSIGNEE_NEW_UIDS_PER_PUSH uids the cache lacks are asked; a write naming any other
+          // is INVALID, refused before any lookup (random uids skip the negative cache)
+          if (unknownWho.length < ASSIGNEE_NEW_UIDS_PER_PUSH) unknownWho.push(u)
+          else item.assigneesRefused.add(u)
+        } else item.assignees.set(u, hit)
       }
       const assigneeRefs = this.deps.assigneeRefs
-      if (unknownWho.length && assigneeRefs)
+      // the room's own rate of lookups (ASSIGNEE_LOOKUPS_PER_MINUTE, every socket of the room together): past it the
+      // uids stay unknown, so their writes are UNAVAILABLE (retryable) and the api is not asked
+      if (unknownWho.length && assigneeRefs && this.assigneeRate.take())
         lookups.push(
           withTimeout(assigneeRefs(this.boardId, unknownWho), SYNC_INTERNAL_TIMEOUT_MS).then(
             (accounts) => {
@@ -859,6 +876,7 @@ export class ElementRoom {
           ...(item.doc ? { doc: item.doc } : {}),
           files: item.files,
           assignees: item.assignees,
+          assigneesRefused: item.assigneesRefused,
           receivedAt: item.receivedAt,
           ...(item.rid !== undefined ? { rid: item.rid } : {}),
           writerRev: s.reader,

@@ -250,6 +250,50 @@ describe('card:who through assignee-refs', () => {
   })
 })
 
+describe('assignee lookups cannot be flooded', () => {
+  it('a push names at most 50 uids the cache lacks: they are asked in one call, the rest INVALID before any lookup', async () => {
+    const st = shared.get()
+    const b = newBoardId()
+    const uids = Array.from({ length: 55 }, (_, i) => `usr_flood${String(i).padStart(2, '0')}`)
+    // every one of them an account with access: the five past the cap are refused without being asked
+    st.api.setAssignees(b, uids)
+    const a = await tab(st, b, 'alice')
+    await a.create(
+      uids.map((_, i) => rect(`f${i}`, { x: i * 10, customData: { lobby: { 'card:status': 'todo' } } })),
+    )
+    const before = st.api.assigneeCalls.length
+    const ack = await a.push(uids.map((u, i) => a.patchOp(`f${i}`, { c: { 'card:who': u } })))
+    const codes = ack.r.map((r) => (r.ok ? 'ok' : r.code))
+    expect(codes.slice(0, 50)).toEqual(Array(50).fill('ok'))
+    expect(codes.slice(50)).toEqual(Array(5).fill('INVALID'))
+    expect(st.api.assigneeCalls.slice(before)).toEqual([{ boardId: b, uids: uids.slice(0, 50) }])
+    expect(a.isOpen).toBe(true)
+    // cached now: the same 50 again ask nothing
+    expectAccepted(await a.patch('f50', { c: { 'card:who': uids[0] as string } }))
+    expect(st.api.assigneeCalls.length).toBe(before + 1)
+  })
+
+  it('a room asks assignee-refs at most 20 times a minute: past that a new uid is UNAVAILABLE without a call; cached ones still work', async () => {
+    const st = shared.get()
+    const b = newBoardId()
+    const uids = Array.from({ length: 22 }, (_, i) => `usr_rate${String(i).padStart(2, '0')}`)
+    st.api.setAssignees(b, uids)
+    const a = await tab(st, b, 'alice')
+    await a.create([rect('r1', { customData: { lobby: { 'card:status': 'todo' } } })])
+    const before = st.api.assigneeCalls.length
+    for (const u of uids.slice(0, 20)) expectAccepted(await a.patch('r1', { c: { 'card:who': u } }))
+    expect(st.api.assigneeCalls.length).toBe(before + 20)
+    // a second tab of the same room shares the room's budget
+    const c = await tab(st, b, 'carol')
+    expectRefused(await c.patch('r1', { c: { 'card:who': uids[20] as string } }), 'UNAVAILABLE', c)
+    expectRefused(await a.patch('r1', { c: { 'card:who': uids[21] as string } }), 'UNAVAILABLE', a)
+    expect(st.api.assigneeCalls.length).toBe(before + 20)
+    // what the room already knows needs no call
+    expectAccepted(await a.patch('r1', { c: { 'card:who': uids[3] as string } }))
+    expect(await storedLobby(st, b, 'r1')).toEqual({ 'card:status': 'todo', 'card:who': uids[3] })
+  })
+})
+
 describe('sb:head.audio', () => {
   it('names a live element with a file when it is set (on the board or earlier/later in the same push); soft afterwards', async () => {
     const st = shared.get()
