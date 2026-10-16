@@ -1791,3 +1791,45 @@ cut-over on staging"; the runbook and the rehearsal: `docs/EXCALIDRAW-CUTOVER.md
       - two product bugs: the spotlight bar outside the top-centre stack's measured slot; phones (resting on Hand) could not vote;
       - two outdated tests;
       - one harness bug (an EventSource injection the direct stream never reads).
+- **Excalidraw wave Q: the Elements panel (branch `wave-q/integration`, worktree `Draftroom-qint`, from `main` cdd8ca2d = staging web ad288ee, api/sync d57a877).** The owner wants people to "create more icons and custom designs".
+  - **Research first:**
+    - ArtCraft (github.com/storytold/artcraft, MIT/Apache) was read and found unsuitable: it is a desktop Tauri app with no web build, its background removal is a paid hosted call, it has no icon or vector features, and it bundles unlicensed assets. So no code was reused.
+    - A Miro gap analysis and roadmap (67 rows; waves Q–W) is in the session scratchpad (`wave-q/roadmap.md`).
+  - **Foundation `wave-q/foundation`, then four workstreams, all merged with `--no-ff` without conflicts:**
+    - **WS1 icons:**
+      - Lucide 1.49.0 (ISC): 1,843 of 1,857 icons;
+      - Tabler 3.48.0 (MIT): 4,711 of 5,166 icons; Brand left out (trademarks);
+      - the icons are converted to Excalidraw line/ellipse/rect geometry on a 24 grid (mean 0.034 grid-unit error, raster IoU ≥0.93) and served as hashed `/lobby-assets/icons/` files (index 160 KiB gzip and 64 lazy shards);
+      - nothing is added to the board's entry chunk.
+    - **WS2 api:** 15 library routes (workspace and personal libraries, folders, search, favourites/recents, `/place`, import), every rule server-side and fail-closed; a 261-cell permission matrix; GC counts library files.
+    - **WS3 panel:** one Elements panel in the left dock (Icons, Shapes, Library), one search, click and drag insert through `placeElements` (one transaction, one undo step), colour and size options, "Save to library" from the selection bar and the context menu, management, the phone sheet.
+    - **WS4 kits:** 62 new pieces (84 in all), including 12 deliverable frames at exact pixel sizes with labelled safe zones (Steam capsules, YouTube banner, stories and reels), plus a `.excalidrawlib` import through Excalidraw's pure parse/restore only.
+  - **Dependencies:** `lucide-static` 1.49.0 and `@tabler/icons` 3.48.0, exact catalog pins in the new `packages/icon-sets`; no install scripts; licence check passes.
+  - **Migrations:**
+    - `0033_library`: folders, items, item files, marks;
+    - `0034_library_place`: pending /place links, and the item's captured export limit.
+  - **No `CONTRACTS_REV` change.** canvas-schema now refuses colour strings that are not colours (`isAllowedColor`: `url(`, non-numeric functions, `;`, `<`, `>`, quotes, `\`), checked against the rev 11/12 fixtures.
+  - **Review** (opus, adversarial): no critical or major findings. Seven minors, each fixed with a test that failed first:
+    - colours that could make a preview send requests;
+    - `/place`'s internal-only check now taken under the workspace lock;
+    - /place links that are never pushed now expire after 1 h (a sweep that also asks the sync whether the board shows the version);
+    - a removed member's personal items are soft-deleted;
+    - PDF-page tiles;
+    - the source board's export policy is enforced on /place;
+    - the favourites cap race (an advisory lock).
+  - **Gate** on f7987f3e (+ c3294d08, 2e293c54, both test-only):
+    - lint on the NAS: 0 errors;
+    - typecheck: 16 packages;
+    - `pnpm test`: **912 files / 10,864 tests passed, 0 failed**;
+    - real Postgres: api 227 files / 2,111 passed, db 95/95, `library.pg` 13/13, `migrations.pg` 7/7;
+    - `probe:browser` 3/3; `test:arrows` 85/85;
+    - the whole e2e on chromium twice: shard 1 533/533 in both runs, shard 2 514/515 normally and 515/516 with direct events.
+    - The failures:
+      - `p-first-run:163` and `k4-feedback-card:141`, both runs: they pinned wave P's What's new list. Updated, 14/14.
+      - `navigation-lod:78`, one run: a test reading the canvases before the next animation frame. Traced: the note is always drawn, so no user-visible flicker. Now read across 4 frames, 20/20.
+  - **render.yaml:** a `/lobby-assets/*` rewrite to the api before the SPA fallback (a miss is a plain 404), plus Cache-Control: immutable for the hashed files, one day for LICENSES.txt. Applied through the Render API (`wave-q-web.mjs`); drift 0.
+  - **Deploy:** api (0033, 0034), then sync (colour validation), then web (`ELEMENTS_PANEL` on).
+  - **Follow-ups:**
+    - the old Shapes-panel specs keep testing the panel-off fallback;
+    - a placed-library-item marker needs the deferred rev-14 bump;
+    - a scripted `updateItem` moves a note but not its bound text in the LOD bitmap (main too; drags are fine).
