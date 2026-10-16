@@ -2,7 +2,16 @@
 // without opening a board. Also feeds the "2 new · mentioned you" line on board cards.
 
 import type { ListNotificationsResponse, NotificationItem } from '@draftroom/contracts'
-import { type CSSProperties, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import {
+  type CSSProperties,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../api/client.ts'
 import { ExternalTag } from '../features/people/ExternalTag.tsx'
@@ -84,7 +93,15 @@ function BellIcon() {
   )
 }
 
-export function DashboardBell({ inbox, refresh, markRead }: DashboardInbox) {
+export function DashboardBell({
+  inbox,
+  refresh,
+  markRead,
+  footer,
+}: DashboardInbox & {
+  /** Wave R: a link under the note (chat notifications), rendered inside the panel */
+  footer?: ReactNode
+}) {
   const [open, setOpen] = useState(false)
   const wrap = useRef<HTMLDivElement>(null)
   const button = useRef<HTMLButtonElement>(null)
@@ -235,6 +252,7 @@ export function DashboardBell({ inbox, refresh, markRead }: DashboardInbox) {
             <p className="dr-dbell__note" data-testid="notifications-note">
               {BELL_NOTE}
             </p>
+            {footer && <div className="dr-dbell__footer">{footer}</div>}
           </section>,
           document.body,
         )}

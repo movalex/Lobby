@@ -18,6 +18,7 @@ import { isPaletteKey, paletteKeyOf } from '../features/command-palette/keys.ts'
 import { boardTryPath } from '../features/command-palette/try-hints.ts'
 import { TeamFeedbackPill } from '../features/feedback/FeedbackPill.tsx'
 import { openFeedback } from '../features/feedback/state.ts'
+import { ChatNotificationsEntry } from '../features/notify-settings/ChatNotificationsDialog.tsx'
 import { useIsGuest } from '../invite/guest.tsx'
 import { absoluteUrl, copyText } from '../lib/clipboard.ts'
 import { boardPath, type DashboardSection, navigate, workspacePath } from '../lib/routing.ts'
@@ -724,7 +725,16 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
             onTour={() => void startFromRow('lobby-tour', null)}
             onFeedback={() => openFeedback(null)}
           />
-          <DashboardBell {...inbox} />
+          <DashboardBell
+            {...inbox}
+            footer={
+              <ChatNotificationsEntry
+                workspaceId={workspace.id}
+                workspaceName={workspace.name}
+                canManage={workspace.role === 'owner' || workspace.role === 'admin'}
+              />
+            }
+          />
           <UserMenu />
         </header>
 
