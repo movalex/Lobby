@@ -1878,3 +1878,37 @@ cut-over on staging"; the runbook and the rehearsal: `docs/EXCALIDRAW-CUTOVER.md
     - confirm the Teams Workflows URL rule;
     - the dashboard list refreshes only on reload after a restore;
     - a crash in the milliseconds between the seed commit and saving its report still fails a Miro resume.
+- **Excalidraw wave S: "Client review" (branch `wave-s/integration`, worktree `Draftroom-wsint`, from `main` 9c359183 = staging api/web 1cdc2fb, sync ba1704c).**
+  - Foundation `wave-s/foundation` (contracts, migration `0037_client_review`, the GC rule that keeps whole version chains and comment-pinned versions, guard rows, `LOBBY_CLIENT_REV` 3 with frozen rev-2 schemas, the viewer shell), then four workstreams merged with `--no-ff`: `status`, `versions`, `media-comments`, `review-page`.
+  - **What it brings:**
+    - **Review status:** Pending / Changes requested / Approved on frames and file cards.
+      - Set by anyone who may comment, guests on commenter links shown as "Name (guest)"; managed by editors with an account.
+      - Canvas badges, a Review panel, rounds that take a named checkpoint, the history, dashboard counts, the `review_status` bell kind and chat-hook kind (capped and collapsed per actor).
+    - **Versions:** "Upload new version" (`X-Lobby-Supersedes`; one linear chain; only the board where the newest version was uploaded may supersede it); the "v3" chip; the version list.
+      - Compare: side by side, slider or onion skin for images; page by page for PDFs; synced A/B for video.
+      - A new version resets review status on its own board.
+      - A status accepts any version the board serves, and the badge shows "Approved v2 · v3 is newer" or "File replaced: review again".
+    - **Comments on media:** pinned to a time in a video (scrubber markers, click to seek), a PDF/Office page or an image spot; validated against the file; pinned to their version. Exported as CSV (formula-safe), Premiere markers or a CMX3600 EDL.
+    - **The client review page** (`/b/:bid?view=review`, phone-first; review links can land on it) and a summary PDF report (cover, then each item's picture, status, who and when, and comments).
+  - **Review** (opus, adversarial): no data-loss bugs. Five findings, each fixed with a test that failed first:
+    - a status lockout after Make current or undo, and an approval left on replaced content;
+    - a reset racing an approval;
+    - a linked board taking over a chain;
+    - uncapped review notifications;
+    - two definitions of "newest version".
+  - **Gate** on 943f9b58 (+ test-only commits up to ca6ef1be):
+    - `pnpm lint`: 0 errors; typecheck: 18 packages;
+    - `pnpm test`: **973 files / 11,476 tests passed, 0 failed**;
+    - real Postgres (NAS): api 260 files / 2,389 passed, db 16 files / 113 passed, with `review.pg`, `versions.pg` (3 races) and `migrations.pg`;
+    - `probe:browser` 3/3; `test:arrows` 85/85;
+    - the whole e2e on chromium: **normally 1,092 passed, 0 failed**; with `E2E_DIRECT_EVENTS=1`, 1,091 + 1.
+    - Test bugs found by the gate and real PG, each fixed:
+      - the one direct-events failure: s4's foreign-request list counted the direct event stream on the api origin; now 5/5 in both modes;
+      - real PG caught a race test that moved the clock 41 days (expiring the uploader's session);
+      - real PG also caught an index assertion that named the `public` schema.
+  - **Deploy:** api (0037), then web. The sync is unchanged. The worker's video frame-rate probe waits for the NAS worker rebuild (owner approval); until then the viewer assumes 25 fps.
+  - **Follow-ups:**
+    - "Include review status" in the export dialog (the summary PDF covers it);
+    - async walkthrough recordings are dropped (storage cost);
+    - a guest approval proves no identity;
+    - there is no video transcoding (ProRes/HEVC may not play).
