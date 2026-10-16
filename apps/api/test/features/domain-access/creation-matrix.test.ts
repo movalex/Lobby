@@ -12,12 +12,15 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { CREATOR_ROUTES } from '../../../src/features/domain-access/guard.ts'
 import { isPendingRoute } from '../../../src/features/pending-routes.ts'
 import { type Client, createBoard, createTestApi, DEV_STUDIO, devEmail, type TestApi } from '../../helpers.ts'
+import { makeBackup } from '../backup/support.ts'
 import { baseRecords, createFakeSync, type FakeSync, noteRec } from '../history/helpers.ts'
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 /** Wave R's job and hook ids in the probes (the routes are pending: no such rows exist) */
 const IMPORT_JOB = 'imp_0123456789abcdefghij'
 const HOOK = 'chk_0123456789abcdefghij'
+/** a valid, empty .lobby backup (wave R, WS4): a creator's restore of it is a 202 */
+const BACKUP = await makeBackup()
 const ALWAYS = Object.entries(CREATOR_ROUTES)
   .filter(([, r]) => r.refuse === 'always')
   .map(([key]) => key)
@@ -188,7 +191,7 @@ function probe(
       { boards: [{ miroBoardId: 'uXjVOD1Ab2c=' }] },
     ],
     'POST /api/imports/:id/resume': ['POST', `/api/imports/${IMPORT_JOB}/resume`, {}],
-    'POST /api/workspaces/:wid/backups': ['POST', `/api/workspaces/${wid}/backups`, {}],
+    'POST /api/workspaces/:wid/backups': ['POST', `/api/workspaces/${wid}/backups`, BACKUP],
     'GET /api/workspaces/:wid/chat-hooks': ['GET', `/api/workspaces/${wid}/chat-hooks`, undefined],
     'POST /api/workspaces/:wid/chat-hooks': [
       'POST',
@@ -319,7 +322,12 @@ describe('the creation matrix', () => {
       const res = await w.alice.req(method, url, body)
       // A create or share call that answers 204 created nothing, so only a DELETE row (wave M's template removal,
       // M8-3) may answer 204, and it must.
-      const ok = key.startsWith('DELETE ') ? [204] : [200, 201]
+      // a backup restore is an import job: 202 (its board comes when the job finishes)
+      const ok = key.startsWith('DELETE ')
+        ? [204]
+        : key === 'POST /api/workspaces/:wid/backups'
+          ? [202]
+          : [200, 201]
       expect(ok, `${key}: ${res.statusCode} ${res.body}`).toContain(res.statusCode)
     }
   })

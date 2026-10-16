@@ -240,7 +240,8 @@ function checkLocalHeader(head: Buffer, entry: ZipEntry): number {
     )
       throw new ZipFormatError('a local header disagrees with the directory')
   }
-  if (head.length < 30 + nameLen) throw new ZipFormatError('a bad local header')
+  if (nameLen !== Buffer.byteLength(entry.name, 'utf8') || head.length < 30 + nameLen)
+    throw new ZipFormatError('a local header disagrees with the directory')
   if (head.subarray(30, 30 + nameLen).toString('utf8') !== entry.name)
     throw new ZipFormatError('a local header disagrees with the directory')
   const start = entry.localHeaderOffset + 30 + nameLen + extraLen
@@ -248,12 +249,13 @@ function checkLocalHeader(head: Buffer, entry: ZipEntry): number {
   return start
 }
 
+/** The local header and the name it should carry, in one read (the directory check made room for both). */
+const localHeader = (src: RangeSource, entry: ZipEntry) =>
+  src.read(entry.localHeaderOffset, 30 + Buffer.byteLength(entry.name, 'utf8'))
+
 /** One entry's bytes (inflated when deflated), checked: its size and CRC-32 are the declared ones. */
 export async function readZipEntry(src: RangeSource, entry: ZipEntry): Promise<Buffer> {
-  const fixed = await src.read(entry.localHeaderOffset, 30)
-  const nameLen = fixed.readUInt16LE(26)
-  const head = Buffer.concat([fixed, await src.read(entry.localHeaderOffset + 30, nameLen)])
-  const start = checkLocalHeader(head, entry)
+  const start = checkLocalHeader(await localHeader(src, entry), entry)
   const data = await src.read(start, entry.compressedSize)
   let out: Buffer
   if (entry.method === 0) out = data
@@ -288,10 +290,7 @@ export async function* streamZipEntry(
   entry: ZipEntry,
 ): AsyncGenerator<Buffer, void, undefined> {
   if (entry.method !== 0) throw new ZipFormatError('only stored entries are streamed')
-  const fixed = await src.read(entry.localHeaderOffset, 30)
-  const nameLen = fixed.readUInt16LE(26)
-  const head = Buffer.concat([fixed, await src.read(entry.localHeaderOffset + 30, nameLen)])
-  const start = checkLocalHeader(head, entry)
+  const start = checkLocalHeader(await localHeader(src, entry), entry)
   let crc = 0
   let seen = 0
   for await (const chunk of src.stream(start, entry.compressedSize)) {

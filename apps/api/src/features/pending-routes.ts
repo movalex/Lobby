@@ -36,7 +36,8 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   // wave R (the foundation; docs/WAVE-R-CONTRACTS.md §1): every route of the wave, @draftroom/contracts
   // IMPORT_ROUTE_KEYS, MIRO_IMPORT_ROUTE_KEYS, CHAT_HOOK_ROUTE_KEYS and BACKUP_ROUTE_KEYS. WS1: the job routes (R1-4,
   // features/imports) and the Miro routes (R1-1, R1-2, features/imports/miro); WS2: chat hooks (R2-1 hooks, R2-2 test,
-  // R2-3 preferences; features/chat-hooks); WS4: backups (R4-1 download, R4-2 restore; features/backup).
+  // R2-3 preferences; features/chat-hooks). WS4 implemented the backups (R4-1 download, R4-2 restore; features/backup);
+  // to ship them hidden, add their keys back.
   'GET /api/imports/:id': { owner: 'WS1', item: 'R1-4' },
   'GET /api/workspaces/:wid/imports': { owner: 'WS1', item: 'R1-4' },
   'POST /api/imports/:id/cancel': { owner: 'WS1', item: 'R1-4' },
@@ -52,9 +53,6 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   'POST /api/workspaces/:wid/chat-hooks/:hid/test': { owner: 'WS2', item: 'R2-2' },
   'GET /api/me/chat-prefs': { owner: 'WS2', item: 'R2-3' },
   'PUT /api/me/chat-prefs': { owner: 'WS2', item: 'R2-3' },
-  'POST /api/boards/:bid/backup/ticket': { owner: 'WS4', item: 'R4-1' },
-  'GET /api/boards/:bid/backup': { owner: 'WS4', item: 'R4-1' },
-  'POST /api/workspaces/:wid/backups': { owner: 'WS4', item: 'R4-2' },
 }
 
 export const isPendingRoute = (
