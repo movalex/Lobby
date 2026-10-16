@@ -156,8 +156,9 @@ async function runMiroBoard(ctx: FeatureContext, step: ImportStep, reach: MiroRe
     const queue = [...refs.values()]
     let done = 0
     let failed = 0
+    let stopped = false
     const work = async () => {
-      for (let ref = queue.shift(); ref; ref = queue.shift()) {
+      for (let ref = queue.shift(); ref && !stopped; ref = queue.shift()) {
         await step.checkpoint()
         const outcome = await storeMiroFile(ctx, step, client, reach.egress, ref, budget)
         outcomes.set(ref.key, outcome)
@@ -167,7 +168,18 @@ async function runMiroBoard(ctx: FeatureContext, step: ImportStep, reach: MiroRe
       }
     }
     const streams = Math.min(IMPORT_CONCURRENCY.fileStreamsPerJob, queue.length)
-    await Promise.all(Array.from({ length: streams }, work))
+    // a stream that stops (a pause, a cancel, the quota) stops the others at their next file; the board is left to
+    // the runner only once none of them is still writing a version of it
+    const ends = await Promise.allSettled(
+      Array.from({ length: streams }, () =>
+        work().catch((e: unknown) => {
+          stopped = true
+          throw e
+        }),
+      ),
+    )
+    const first = ends.find((e): e is PromiseRejectedResult => e.status === 'rejected')
+    if (first) throw first.reason
   }
   const files: Record<string, MiroFileOutcome> = {}
   for (const [itemId, ref] of refOfItem) {
