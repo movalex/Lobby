@@ -5,103 +5,88 @@
 //  - the head's line: how many panels, the running time and the aspect;
 //  - for the one selected panel (an editor in a rev-14 room only): the "+" handles at its sides that insert a panel
 //    before or after it.
-// Focus mode (presenting) hides the layer.
-import { formatDuration, formatRunningTime, storyboardTimings } from '@draftroom/canvas-schema/planning'
+// Focus mode (presenting) hides the layer. On a big board the work per camera frame is the cull only: the rows are
+// in scene coordinates (chip-model.ts, each storyboard's reused while its elements keep their versions), one
+// container carries the camera's transform, and only the rows on screen are drawn.
+import { formatDuration } from '@draftroom/canvas-schema/planning'
+import { type CSSProperties, memo, useMemo } from 'react'
 import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
-import { useValue } from '../../lib/signals.ts'
-import { PANEL_HEADER, shotLabel } from './model.ts'
+import { computed, useValue } from '../../lib/signals.ts'
+import { type ChipModel, ChipModelCache, type ChipRow, type HeadRow, visibleRows } from './chip-model.ts'
+import { shotLabel } from './model.ts'
 import { insertPanel } from './ops.ts'
-import { boardsOf, offered, selectedPanelIndex, selectedStoryboard, shown } from './state.ts'
-
-interface PlacedChip {
-  readonly id: string
-  readonly n: number
-  readonly ms: number
-  readonly x: number
-  readonly y: number
-  readonly scale: number
-}
-
-interface PlacedHead {
-  readonly id: string
-  readonly x: number
-  readonly y: number
-  readonly scale: number
-  readonly text: string
-}
+import { offered, selectedPanelIndex, selectedStoryboard, shown } from './state.ts'
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
-
-function placed(ctx: CanvasFeatureContext): { chips: PlacedChip[]; heads: PlacedHead[] } {
-  const { canvas } = ctx
-  if (!shown()) return { chips: [], heads: [] }
-  const zoom = canvas.viewport.get().zoom // the camera: chips move with it
-  const scale = clamp(zoom, 0.7, 1.6)
-  const chips: PlacedChip[] = []
-  const heads: PlacedHead[] = []
-  for (const sb of boardsOf(canvas).values()) {
-    const t = storyboardTimings(sb)
-    t.panels.forEach((row) => {
-      const f = canvas.get(row.id)
-      if (!f || f.isDeleted || canvas.isHidden(row.id)) return
-      // inside the header band, its top-left inset by a quarter of the band
-      const p = canvas.sceneToOverlay({ x: f.x + 12, y: f.y + (PANEL_HEADER - 26) / 2 })
-      chips.push({ id: row.id, n: row.number, ms: row.durationMs, x: p.x, y: p.y, scale })
-    })
-    const head = sb.head ? canvas.get(sb.head.id) : undefined
-    if (head && !head.isDeleted && !canvas.isHidden(head.id)) {
-      const p = canvas.sceneToOverlay({ x: head.x + head.width + 16, y: head.y + head.height / 2 })
-      const aspect = sb.settings?.aspect ?? '16:9'
-      const n = sb.panels.length
-      heads.push({
-        id: head.id,
-        x: p.x,
-        y: p.y,
-        scale,
-        text: `${n} ${n === 1 ? 'panel' : 'panels'} · ${formatRunningTime(t.totalMs)} · ${aspect}`,
-      })
-    }
-  }
-  return { chips, heads }
-}
+const EMPTY: ChipModel = { chips: [], heads: [] }
 
 export function StoryboardChipsLayer({ ctx }: { ctx: CanvasFeatureContext }) {
-  const view = useValue('storyboard.chips', () => placed(ctx), [ctx])
-  if (!view.chips.length && !view.heads.length) return null
+  const { canvas } = ctx
+  // the rows: recomputed on a scene change (and then only for a storyboard whose elements changed), never per frame
+  const model = useValue(
+    useMemo(() => {
+      const cache = new ChipModelCache()
+      return computed('storyboard.chip-model', () => (shown() ? cache.build(canvas) : EMPTY))
+    }, [canvas]),
+  )
+  const v = useValue('storyboard.viewport', () => canvas.viewport.get(), [canvas])
+  const chips = useMemo(() => visibleRows(model.chips, v), [model, v])
+  const heads = useMemo(() => visibleRows(model.heads, v), [model, v])
+  if (!model.chips.length && !model.heads.length) return null
+  // the chips keep their screen size between 70 % and 160 % of the zoom, inside the camera's one transform
+  const s = clamp(v.zoom, 0.7, 1.6) / Math.max(v.zoom, 0.01)
   return (
     <div className="dr-sb-layer" data-testid="sb-chips">
-      {view.chips.map((c) => (
-        <div
-          key={c.id}
-          className="dr-sb-chip"
-          data-testid="sb-chip"
-          data-panel-id={c.id}
-          data-shot={c.n}
-          aria-hidden="true"
-          style={{ transform: `translate(${Math.round(c.x)}px, ${Math.round(c.y)}px) scale(${c.scale})` }}
-        >
-          <span className="dr-sb-chip__num">{shotLabel(c.n)}</span>
-          <span className="dr-sb-chip__dur">{formatDuration(c.ms)}</span>
-        </div>
-      ))}
-      {view.heads.map((h) => (
-        <div
-          key={h.id}
-          className="dr-sb-headline"
-          data-testid="sb-head-meta"
-          data-head-id={h.id}
-          aria-hidden="true"
-          style={{
-            transform: `translate(${Math.round(h.x)}px, ${Math.round(h.y)}px) translateY(-50%) scale(${h.scale})`,
-          }}
-        >
-          {h.text}
-        </div>
-      ))}
+      <div
+        className="dr-sb-scene"
+        style={
+          {
+            transform: `scale(${v.zoom}) translate(${-v.x}px, ${-v.y}px)`,
+            '--dr-sb-s': s,
+          } as CSSProperties
+        }
+      >
+        {chips.map((c) => (
+          <Chip key={c.id} c={c} />
+        ))}
+        {heads.map((h) => (
+          <HeadLine key={h.id} h={h} />
+        ))}
+      </div>
       <InsertHandles ctx={ctx} />
     </div>
   )
 }
+
+const Chip = memo(function Chip({ c }: { c: ChipRow }) {
+  return (
+    <div
+      className="dr-sb-chip"
+      data-testid="sb-chip"
+      data-panel-id={c.id}
+      data-shot={c.n}
+      aria-hidden="true"
+      style={{ transform: `translate(${c.x}px, ${c.y}px) scale(var(--dr-sb-s))` }}
+    >
+      <span className="dr-sb-chip__num">{shotLabel(c.n)}</span>
+      <span className="dr-sb-chip__dur">{formatDuration(c.ms)}</span>
+    </div>
+  )
+})
+
+const HeadLine = memo(function HeadLine({ h }: { h: HeadRow }) {
+  return (
+    <div
+      className="dr-sb-headline"
+      data-testid="sb-head-meta"
+      data-head-id={h.id}
+      aria-hidden="true"
+      style={{ transform: `translate(${h.x}px, ${h.y}px) translateY(-50%) scale(var(--dr-sb-s))` }}
+    >
+      {h.text}
+    </div>
+  )
+})
 
 /** The "+" handles of the one selected panel. */
 function InsertHandles({ ctx }: { ctx: CanvasFeatureContext }) {

@@ -157,10 +157,9 @@ function TimelineView({
     // (the selector returns a fresh object on every change of the scene: compare by content below)
   )
   const valueKey = frame ? JSON.stringify(frame.value) : ''
-  // the cards by content: a change elsewhere on the board (another element dragged at 60 fps) draws nothing again
-  const cardsNow = useValue('timeline.cards', () => timelineCards(canvas), [canvas])
-  const cardsKey = JSON.stringify(cardsNow)
-  const cards = useMemo(() => cardsNow, [cardsKey])
+  // the cards: timelineCards hands back the same list while no card changed (its rows are cached per card, by
+  // version), so a change elsewhere on the board (another element dragged at 60 fps) lays out and draws nothing again
+  const cards = useValue('timeline.cards', () => timelineCards(canvas), [canvas])
   const layout = useMemo<Layout | null>(
     () =>
       frame

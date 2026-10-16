@@ -165,14 +165,48 @@ export function gridPositions(
   return out
 }
 
-/** Whether two panel boxes overlap (the strip's "Panels overlap: Arrange" hint: concurrent layouts can collide). */
+const overlaps = (a: PanelBox, b: PanelBox) =>
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+
+const median = (v: number[]) => v.sort((a, b) => a - b)[v.length >> 1] ?? 0
+
+/** A box spanning more grid cells than this is checked against every box instead (a huge panel among small ones). */
+const MAX_CELLS = 4096
+
+/**
+ * Whether two panel boxes overlap (the strip's "Panels overlap: Arrange" hint: concurrent layouts can collide). A
+ * uniform grid of the median panel size: each box is checked only against those sharing a cell (linear for a laid
+ * out storyboard, not quadratic: the strip asks on every scene change).
+ */
 export function anyOverlap(boxes: readonly PanelBox[]): boolean {
-  for (let i = 0; i < boxes.length; i++)
-    for (let j = i + 1; j < boxes.length; j++) {
-      const a = boxes[i] as PanelBox
-      const b = boxes[j] as PanelBox
-      if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h) return true
+  const list = [...boxes]
+  if (list.length < 2) return false
+  const cw = Math.max(1, median(list.map((b) => b.w)))
+  const ch = Math.max(1, median(list.map((b) => b.h)))
+  const cells = new Map<string, number[]>()
+  const big: number[] = []
+  for (let i = 0; i < list.length; i++) {
+    const b = list[i] as PanelBox
+    for (const j of big) if (overlaps(list[j] as PanelBox, b)) return true
+    const x0 = Math.floor(b.x / cw)
+    const x1 = Math.floor((b.x + b.w) / cw)
+    const y0 = Math.floor(b.y / ch)
+    const y1 = Math.floor((b.y + b.h) / ch)
+    if ((x1 - x0 + 1) * (y1 - y0 + 1) > MAX_CELLS) {
+      for (let j = 0; j < i; j++) if (overlaps(list[j] as PanelBox, b)) return true
+      big.push(i)
+      continue
     }
+    for (let cx = x0; cx <= x1; cx++)
+      for (let cy = y0; cy <= y1; cy++) {
+        const key = `${cx},${cy}`
+        const cell = cells.get(key)
+        if (cell) {
+          for (const j of cell) if (overlaps(list[j] as PanelBox, b)) return true
+          cell.push(i)
+        } else cells.set(key, [i])
+      }
+  }
   return false
 }
 
