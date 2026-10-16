@@ -164,33 +164,45 @@ export const clientThread = (t: CommentThread) => t.status === 'open' && t.visib
 const anchorElement = (a: CommentAnchor): string | null =>
   a.kind === 'point' ? null : (fromShapeRef(a.shapeId) ?? a.shapeId)
 
-/**
- * The open, non-internal threads that belong to an item: pinned to its element (an `asset` or `shape` anchor), to an
- * element inside the frame, or (a frame) a point pin inside the frame's bounds. Oldest first.
- */
+export interface ThreadScope {
+  /** the ids of the elements inside the frame (frame items) */
+  readonly members: ReadonlySet<string>
+  readonly bounds: ElementBounds | null
+}
+
+/** Whether a thread is about an item: pinned to its element, to an element inside the frame, or (a frame) inside it. */
+function belongs(t: CommentThread, entry: Pick<PageEntry, 'item'>, scope: ThreadScope): boolean {
+  if (t.comments.length === 0 || t.visibility === 'team') return false
+  const id = entry.item.elementId
+  const isFrame = entry.item.kind === 'frame'
+  const a = t.anchor
+  if (a.kind === 'point') {
+    const b = scope.bounds
+    return isFrame && !!b && a.x >= b.x && a.y >= b.y && a.x <= b.x + b.width && a.y <= b.y + b.height
+  }
+  const target = anchorElement(a)
+  return target === id || (isFrame && target !== null && scope.members.has(target))
+}
+
+const byAge = (x: CommentThread, y: CommentThread) =>
+  Date.parse(x.createdAt) - Date.parse(y.createdAt) || x.id.localeCompare(y.id)
+
+/** The open, non-internal threads that belong to an item, oldest first. */
 export function threadsFor(
   threads: readonly CommentThread[],
   entry: Pick<PageEntry, 'item'>,
-  scope: {
-    /** the ids of the elements inside the frame (frame items) */
-    members: ReadonlySet<string>
-    bounds: ElementBounds | null
-  },
+  scope: ThreadScope,
 ): CommentThread[] {
-  const id = entry.item.elementId
-  const isFrame = entry.item.kind === 'frame'
-  return threads
-    .filter((t) => {
-      if (!clientThread(t) || t.comments.length === 0) return false
-      const a = t.anchor
-      if (a.kind === 'point') {
-        const b = scope.bounds
-        return isFrame && !!b && a.x >= b.x && a.y >= b.y && a.x <= b.x + b.width && a.y <= b.y + b.height
-      }
-      const target = anchorElement(a)
-      return target === id || (isFrame && target !== null && scope.members.has(target))
-    })
-    .sort((x, y) => Date.parse(x.createdAt) - Date.parse(y.createdAt) || x.id.localeCompare(y.id))
+  return threads.filter((t) => t.status === 'open' && belongs(t, entry, scope)).sort(byAge)
+}
+
+/** How many resolved, non-internal threads belong to an item (the summary counts them, it does not print them). */
+export function resolvedCount(
+  threads: readonly CommentThread[],
+  entry: Pick<PageEntry, 'item'>,
+  scope: ThreadScope,
+): number {
+  return threads.filter((t) => t.status === 'resolved' && belongs(t, entry, scope)).length
 }
 
 /**

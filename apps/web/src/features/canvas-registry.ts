@@ -25,6 +25,7 @@ import { feature as peopleFeature } from './people/ported/index.tsx'
 import { feature as piecesFeature } from './pieces/ported/index.tsx'
 import { feature as presentLiveFeature } from './present-export/live/ported/index.tsx'
 import { feature as presentExportFeature } from './present-export/ported/index.tsx'
+import { feature as reviewPageFeature } from './review-page/index.tsx'
 import { feature as sharingFeature } from './sharing/ported/index.tsx'
 import { feature as sortFeature } from './sort/ported/index.tsx'
 import { feature as tagsFeature } from './tags/ported/index.tsx'
@@ -69,4 +70,6 @@ export const CANVAS_FEATURES: readonly CanvasFeature[] = [
   boardLinksFeature,
   // wave Q (registered by the foundation, hidden behind ELEMENTS_PANEL; WS3 fills it): the Elements panel
   elementsFeature,
+  // wave S (WS4): the client review page, the ?view=review overlay; nothing while its switch is off
+  reviewPageFeature,
 ]
