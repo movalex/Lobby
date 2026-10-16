@@ -52,14 +52,14 @@ planning write of WS2-WS5 is refused (their unit tests use the canvas fakes; the
 | `sb:pos` | (a panel) | a base-62 fractional order key, ≤ 64 chars (`isOrderKey`, pinned against `engine/fractional.ts`) | keep | free |
 | `sb:dur` | (a panel) | ms, an integer 100..600,000 | keep | free |
 | `sb:head` | free text (no container) | `{aspect: '16:9'\|'9:16'\|'1:1'\|'4:5'\|'2.39:1', fps?: 24\|25\|30, defaultMs?, perRow?: 1-12, audio?: element id, audioOffsetMs?: ±60,000}` | **relink-keep** | free |
-| `kanban` | frame | `{labels?: {status: 1-40 chars}, hidden?: statuses (unique, one at least visible), wip?: {status: 1-99}}` | keep | free |
+| `kanban` | frame | `{labels?: {status: 1-40 chars}, hidden?: statuses (unique, one at least visible), wip?: {status: 1-99}}`, at most 1.25 KiB of JSON (`KANBAN_MAX_BYTES`: five 40-character CJK names fit; the web cuts a label by bytes) | keep | free |
 | `timeline` | frame | `{start, end (≤ 2 years), scale: day\|week\|month, lanes: none\|status\|assignee\|tag, tag?: tag key}` | keep | free |
 
 - **Element rules** (`planningElementProblem`, run by `checkElement` for every writer: the room's merge, the seed and
   every import): card keys only on rectangles and sticky notes and never without `card:status` (removing the status
   unmakes the card: the same op removes the other card keys, or INVALID); `start <= due`; panel keys only on frames
-  and a panel holds `sb:of` and `sb:pos` together; `kanban` and `timeline` only on frames, never both; `sb:head` only
-  on a free text. A shape conversion that changes a card's type must drop its card keys first (WS4).
+  and a panel holds `sb:of` and `sb:pos` together; `kanban` and `timeline` only on frames, never both, and never on a
+  panel (a frame is a panel or a wall); `sb:head` only on a free text. A shape conversion that changes a card's type must drop its card keys first (WS4).
 - **Duplicate** (`relink-keep`, `relinkKeep`): a copied head with its panels makes a second storyboard (the copies'
   `sb:of` point at the copied head); a panel copied without its head joins the same storyboard; a head copied with its
   audio card points at the copied card, else keeps the original. Every other key keeps (a copied card is a card).
@@ -91,18 +91,23 @@ planning write of WS2-WS5 is refused (their unit tests use the canvas fakes; the
 
 - **Roles**: viewers and commenters READ_ONLY (as every element write). Name-only guests who may edit (workshop links)
   may write status and dates and reorder panels, but a `card:who` write from a guest is INVALID (clearing one is
-  allowed). Lock: no exemption.
+  allowed; a guest's CREATE carrying one, a copy or a paste, lands without it, with an ack fix). Lock: no exemption.
 - **Assignee** (`card:who`): resolved before merge through §5, once per push batch for the uids the room's 60 s cache
   (`ASSIGNEE_REFS_CACHE_MS`) does not hold, with the file-refs pattern (`withTimeout`, fail closed): not an account
-  with access → INVALID (detail `ASSIGNEE`); lookup failed or the api answered 404 → UNAVAILABLE. Removing an
-  assignee needs no lookup. A person who later loses access stays named (the web shows "No longer on this board").
+  with access → INVALID on a patch (detail `ASSIGNEE`), stripped with an ack fix on a create (a copy of an assigned
+  card is never refused); lookup failed or the api answered 404 → UNAVAILABLE. Removing an assignee needs no lookup.
+  Flooding: at most 50 uids the cache lacks per push are asked (`ASSIGNEE_NEW_UIDS_PER_PUSH`; a write naming any
+  other is INVALID before any lookup), and a room makes at most 20 calls a minute (`ASSIGNEE_LOOKUPS_PER_MINUTE`;
+  past it new uids are UNAVAILABLE, unasked). A person who later loses access stays named (the web shows "No longer on this board").
 - **Audio**: `sb:head.audio` must name a live element carrying a `file` key at the write (soft afterwards).
 - **Echo**: no rule of the room writes a planning key on its own (no server re-layout or renumbering).
 
 ### 3.3 Seeds, archives, restore (WS1)
 
 - `prepareSeedContent` (templates, duplicate board, restore as new, import): keeps `sb:*`, `kanban`, `timeline`,
-  `card:status|start|due`; keeps `card:who` only when assignee-refs for the TARGET board names it, else strips it.
+  `card:status|start|due`; keeps `card:who` only when the person has access to the TARGET board, else strips it: a
+  new board's seed runs before its row exists, so the api names them (`LobbySeed.assignees`, from a rolled-back dry
+  run of the board's transaction) and the sync keeps only those; without `assignees` the sync asks assignee-refs.
   With `DRAFTROOM_PLANNING` off it strips all four classes (templates degrade to plain frames and notes).
 - `.lobby` v2 import (`archive-v2.ts importCustomData`) and workspace templates drop `card:who`; `lobby-elements.ts
   exportableElements` keeps every planning key.
