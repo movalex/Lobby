@@ -33,6 +33,7 @@ import { CreateBoardDialog } from './CreateBoardDialog.tsx'
 import { DashboardBell, useDashboardInbox } from './DashboardBell.tsx'
 import { dashboardApi, IMPORT_BODY_LIMIT_BYTES } from './dashboard-api.ts'
 import { HelpMenu } from './HelpMenu.tsx'
+import { ImportMenu } from './import-menu/ImportMenu.tsx'
 import { useInternalOnly } from './InternalOnly.tsx'
 import { internalOnlyShown } from './internal-only-model.ts'
 import { LazyDialogBoundary } from './LazyDialogBoundary.tsx'
@@ -821,16 +822,8 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
                   data-testid="import-board-file"
                   onChange={(e) => void onImportFile(e)}
                 />
-                <button
-                  type="button"
-                  className="dr-btn"
-                  data-testid="import-board"
-                  disabled={importing}
-                  title="Import a board exported from Lobby (.json)"
-                  onClick={() => importRef.current?.click()}
-                >
-                  {importing ? 'Importing…' : 'Import'}
-                </button>
+                {/* wave R: one button today; a menu once WS1's or WS4's entry is on (import-menu/flags.ts) */}
+                <ImportMenu importing={importing} onJson={() => importRef.current?.click()} />
                 {readPickerHidden(me.user.id) && (
                   <button
                     type="button"
