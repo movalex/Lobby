@@ -4,10 +4,11 @@
 // new-version reset WS2 calls, the dashboard counts, and the board events after COMMIT.
 
 import {
+  ListAssetVersionsResponse,
   ListNotificationsResponse,
   ListReviewEventsResponse,
   REVIEW_GUESTS_MESSAGE,
-  ReviewNewerVersionBody,
+  REVIEW_LIMITS,
   ReviewRoundResponse,
   ReviewStatusChangedBody,
   reviewActorLabel,
@@ -18,13 +19,17 @@ import {
   reviewRoundClosePath,
   reviewRoundsPath,
   SetReviewStatusResponse,
+  VersionNotLatestBody,
 } from '@draftroom/contracts'
 import { afterEach, describe, expect, it } from 'vitest'
 import { EventHub } from '../../../src/events/hub.ts'
 import { resetForNewVersion } from '../../../src/features/review/hooks.ts'
+import { REVIEW_NOTIFY_ACTOR_CAP, REVIEW_NOTIFY_BOARD_CAP } from '../../../src/features/review/store.ts'
 import { createBoard } from '../../helpers.ts'
-import { createFakeSync } from '../history/helpers.ts'
+import { guestLink, joinAsGuest } from '../guests/support.ts'
+import { createFakeSync, upload } from '../history/helpers.ts'
 import {
+  type Caller,
   codeOf,
   DEV_STUDIO,
   getReview,
@@ -34,6 +39,7 @@ import {
   rev3,
   reviewWorld,
   setStatus,
+  supersede,
   versionRow,
 } from './support.ts'
 
@@ -311,7 +317,7 @@ describe('one status write', () => {
     expect(now).toMatchObject({ status: 'approved', statusSeq: 2 })
   })
 
-  it('a file status is about the newest servable version: VERSION_REQUIRED, NEWER_VERSION, then "approved v2"', async () => {
+  it('a file status is about the version given (any this board serves): VERSION_REQUIRED, another board’s 404, "approved v2"', async () => {
     w = await reviewWorld()
     const world = w
     const v1 = await versionRow(world, world.board, { createdAt: new Date('2026-01-01T00:00:00Z') })
@@ -328,12 +334,25 @@ describe('one status write', () => {
       assetId: v1.assetId,
       createdAt: new Date('2026-01-02T00:00:00Z'),
     })
-    const old = await setStatus(world.ana, world.board, item.id, {
+    // a version of the asset on a board this one does not serve it from: 404, nothing changes
+    const elsewhere = await createBoard(world.bob, DEV_STUDIO, 'Elsewhere')
+    const v3 = await versionRow(world, elsewhere, {
+      assetId: v1.assetId,
+      createdAt: new Date('2026-01-03T00:00:00Z'),
+    })
+    const foreign = await setStatus(world.ana, world.board, item.id, {
       status: 'approved',
+      versionId: v3.versionId,
+    })
+    expect(foreign.statusCode).toBe(404)
+    expect(await count(world, "review_events WHERE kind = 'status'")).toBe(0)
+    // the older version the card shows (after an undo, "Make current", a restore): the status is about it
+    const old = await setStatus(world.ana, world.board, item.id, {
+      status: 'changes_requested',
       versionId: v1.versionId,
     })
-    expect(old.statusCode).toBe(409)
-    expect(ReviewNewerVersionBody.parse(old.json()).latestVersionId).toBe(v2.versionId)
+    expect(old.statusCode, old.body).toBe(200)
+    expect(SetReviewStatusResponse.parse(old.json()).item.statusVersionId).toBe(v1.versionId)
     const ok = await setStatus(world.ana, world.board, item.id, {
       status: 'approved',
       versionId: v2.versionId,
@@ -348,6 +367,141 @@ describe('one status write', () => {
       (await setStatus(world.ana, world.board, frame.id, { status: 'approved', versionId: v2.versionId }))
         .statusCode,
     ).toBe(400)
+  })
+
+  it('Make current, then approve v1: the status is about v1 while v2 is the newest (never 409 for the shown version)', async () => {
+    w = await reviewWorld()
+    const world = w
+    const v1 = await upload(world.api, world.bob, world.board, 'cut.png')
+    const item = await mark(world.bob, world.board, {
+      elementId: 'card-1',
+      kind: 'file',
+      assetId: v1.assetId,
+      label: 'Cut',
+    })
+    const first = await setStatus(world.ana, world.board, item.id, {
+      status: 'approved',
+      versionId: v1.versionId,
+    })
+    expect(first.statusCode, first.body).toBe(200)
+    // "Upload new version": v2 joins the chain and resets the item to pending about v2
+    const up = await supersede(world, world.bob, world.board, v1.versionId, 'cut-2.png')
+    expect(up.statusCode, up.body).toBe(201)
+    const v2 = up.json() as { assetId: string; versionId: string }
+    expect(v2.assetId).toBe(v1.assetId)
+    expect((await getReview(world.bob, world.board)).items[0]).toMatchObject({
+      status: 'pending',
+      statusVersionId: v2.versionId,
+    })
+    // the card is pointed back at v1 (the version list's "Make current", an undo, a checkpoint restore); the web sends
+    // the version the card shows
+    const again = await setStatus(world.ana, world.board, item.id, {
+      status: 'approved',
+      versionId: v1.versionId,
+    })
+    expect(again.statusCode, again.body).toBe(200)
+    const res = SetReviewStatusResponse.parse(again.json())
+    expect(res.item).toMatchObject({ status: 'approved', statusVersionId: v1.versionId })
+    expect(res.event.versionId).toBe(v1.versionId)
+    // the version list says which version got it
+    const list = ListAssetVersionsResponse.parse(
+      (await world.bob.req('GET', `/api/boards/${world.board}/asset-versions/${v1.assetId}`)).json(),
+    )
+    expect(list.latestVersionId).toBe(v2.versionId)
+    expect(list.versions.map((v) => v.review?.status ?? null)).toEqual(['approved', 'pending'])
+  })
+
+  it('a card that now shows another asset (a fresh-asset fallback): a status on it re-points the item to that asset', async () => {
+    w = await reviewWorld()
+    const world = w
+    const a = await versionRow(world, world.board)
+    const item = await mark(world.bob, world.board, {
+      elementId: 'card-1',
+      kind: 'file',
+      assetId: a.assetId,
+      label: 'Key art',
+    })
+    expect(
+      (await setStatus(world.ana, world.board, item.id, { status: 'approved', versionId: a.versionId }))
+        .statusCode,
+    ).toBe(200)
+    // Replace media made a fresh asset (another board held the chain, or a rev-2 tab): the element now names it
+    const b = await versionRow(world, world.board)
+    const res = await setStatus(world.ana, world.board, item.id, {
+      status: 'changes_requested',
+      versionId: b.versionId,
+      note: 'Darker sky',
+    })
+    expect(res.statusCode, res.body).toBe(200)
+    const got = SetReviewStatusResponse.parse(res.json())
+    expect(got.item).toMatchObject({
+      assetId: b.assetId,
+      status: 'changes_requested',
+      statusVersionId: b.versionId,
+    })
+    expect(got.event.versionId).toBe(b.versionId)
+    // the note is pinned to the new file's version, never a mix of the old asset and the new version
+    expect(got.thread?.anchor).toEqual({
+      kind: 'asset',
+      shapeId: 'shape:card-1',
+      assetId: b.assetId,
+      versionId: b.versionId,
+    })
+    // a new version of the NEW asset resets it; a version of the old one no longer does
+    const items = await world.api.db.transaction((tx) =>
+      resetForNewVersion(tx, {
+        workspaceId: DEV_STUDIO,
+        boardId: world.board,
+        assetId: a.assetId,
+        versionId: a.versionId,
+        actorId: world.bob.userId,
+      }),
+    )
+    expect(items).toEqual([])
+    // an asset this board does not serve: 404, the item stays as it is
+    const elsewhere = await createBoard(world.bob, DEV_STUDIO, 'Elsewhere')
+    const c = await versionRow(world, elsewhere)
+    expect(
+      (await setStatus(world.ana, world.board, item.id, { status: 'approved', versionId: c.versionId }))
+        .statusCode,
+    ).toBe(404)
+    expect((await getReview(world.bob, world.board)).items[0]).toMatchObject({
+      assetId: b.assetId,
+      status: 'changes_requested',
+    })
+  })
+
+  it('the newest version is the chain’s (supersedes), not created_at then id: two versions in one millisecond', async () => {
+    w = await reviewWorld()
+    const world = w
+    const at = new Date('2026-01-01T00:00:00Z')
+    // ids in the opposite order of the chain: `newer` sorts first by id, and supersedes `older`
+    const newer = await versionRow(world, world.board, { createdAt: at })
+    const older = await versionRow(world, world.board, { assetId: newer.assetId, createdAt: at })
+    await world.api.db.query('UPDATE asset_versions SET supersedes = $2 WHERE id = $1', [
+      newer.versionId,
+      older.versionId,
+    ])
+    const item = await mark(world.bob, world.board, {
+      elementId: 'card-1',
+      kind: 'file',
+      assetId: newer.assetId,
+      label: 'Cut',
+    })
+    const res = await setStatus(world.ana, world.board, item.id, {
+      status: 'approved',
+      versionId: newer.versionId,
+    })
+    expect(res.statusCode, res.body).toBe(200)
+    const list = ListAssetVersionsResponse.parse(
+      (await world.bob.req('GET', `/api/boards/${world.board}/asset-versions/${newer.assetId}`)).json(),
+    )
+    expect(list.versions.map((v) => v.versionId)).toEqual([older.versionId, newer.versionId])
+    expect(list.latestVersionId).toBe(newer.versionId)
+    // the upload agrees: the chain's head is the one to supersede
+    const up = await supersede(world, world.bob, world.board, older.versionId, 'cut-3.png')
+    expect(up.statusCode).toBe(409)
+    expect(VersionNotLatestBody.parse(up.json()).latestVersionId).toBe(newer.versionId)
   })
 
   it('a note is an everyone thread made in the same write (a frame: top-right; a file: on the version)', async () => {
@@ -408,14 +562,16 @@ describe('one status write', () => {
       assetId: v1.assetId,
       label: 'Cut',
     })
-    await versionRow(world, world.board, { assetId: v1.assetId })
+    // a version this board does not serve (uploaded to another board, not linked here)
+    const elsewhere = await createBoard(world.bob, DEV_STUDIO, 'Elsewhere')
+    const v2 = await versionRow(world, elsewhere, { assetId: v1.assetId })
     const before = await count(world, 'review_events')
     const res = await setStatus(world.ana, world.board, file.id, {
       status: 'changes_requested',
-      versionId: v1.versionId,
+      versionId: v2.versionId,
       note: 'Trim',
     })
-    expect(res.statusCode).toBe(409)
+    expect(res.statusCode).toBe(404)
     expect(await count(world, 'review_events')).toBe(before)
     expect(await count(world, 'comment_threads')).toBe(0)
     expect(await count(world, "notifications WHERE kind = 'review_status'")).toBe(0)
@@ -484,6 +640,71 @@ describe('one status write', () => {
       notifications: { kind: string }[]
     }
     expect(old.notifications.map((n) => n.kind)).not.toContain('review_status')
+  })
+
+  it('31+ flips from two guests stay capped: one bell row per item per actor (the latest), a cap per actor and per board', async () => {
+    w = await reviewWorld()
+    const world = w
+    const gus = await joinAsGuest(
+      world.api,
+      (await guestLink(world.bob, world.board, { role: 'commenter' })).url,
+      'Gus',
+    )
+    const flips = async (c: Caller, itemId: string, n: number) => {
+      for (let i = 0; i < n; i++) {
+        // past the per-minute write budget: the clock moves on, the bell's window (an hour) does not end
+        if (i > 0 && i % REVIEW_LIMITS.statusChangesPerMinute === 0) world.api.clock.advance(61_000)
+        const res = await setStatus(c, world.board, itemId, {
+          status: i % 2 ? 'approved' : 'changes_requested',
+        })
+        expect(res.statusCode, res.body).toBe(200)
+      }
+    }
+    const bobsRows = async () =>
+      (
+        await world.api.db.query<{ actor_id: string; status: string; item_id: string }>(
+          `SELECT n.actor_id, e.status, e.item_id FROM notifications n JOIN review_events e ON e.id = n.review_event_id
+            WHERE n.user_id = $1 AND n.kind = 'review_status' ORDER BY n.seq`,
+          [world.bob.userId],
+        )
+      ).rows
+    // one item flipped 31 times by each guest: ONE row per guest, naming the last flip
+    const one = await mark(world.bob, world.board, { elementId: 'frame-0', kind: 'frame', label: 'Key art' })
+    await flips(world.ana, one.id, 31)
+    await flips(gus, one.id, 31)
+    expect(await bobsRows()).toEqual([
+      { actor_id: world.ana.userId, status: 'changes_requested', item_id: one.id },
+      { actor_id: gus.userId, status: 'changes_requested', item_id: one.id },
+    ])
+    // reading them does not reopen the floodgates: many items, each flipped, stay under both caps
+    await world.api.db.query('UPDATE notifications SET read_at = now() WHERE user_id = $1', [
+      world.bob.userId,
+    ])
+    const items: string[] = []
+    for (let i = 1; i <= 40; i++)
+      items.push(
+        (await mark(world.bob, world.board, { elementId: `frame-${i}`, kind: 'frame', label: `F${i}` })).id,
+      )
+    for (const [k, id] of items.entries()) {
+      if (k > 0 && k % REVIEW_LIMITS.statusChangesPerMinute === 0) world.api.clock.advance(61_000)
+      expect((await setStatus(world.ana, world.board, id, { status: 'approved' })).statusCode).toBe(200)
+    }
+    for (const [k, id] of items.entries()) {
+      if (k > 0 && k % REVIEW_LIMITS.statusChangesPerMinute === 0) world.api.clock.advance(61_000)
+      expect((await setStatus(gus, world.board, id, { status: 'changes_requested' })).statusCode).toBe(200)
+    }
+    const rows = await bobsRows()
+    const of = (id: string) => rows.filter((r) => r.actor_id === id).length
+    expect(of(world.ana.userId)).toBe(REVIEW_NOTIFY_ACTOR_CAP)
+    expect(rows.length).toBe(REVIEW_NOTIFY_BOARD_CAP)
+    // the statuses themselves all applied
+    expect(
+      (await getReview(world.bob, world.board)).items.filter((i) => i.status === 'changes_requested'),
+    ).toHaveLength(41)
+    // an hour later the window is new
+    world.api.clock.advance(61 * 60_000)
+    expect((await setStatus(world.ana, world.board, one.id, { status: 'approved' })).statusCode).toBe(200)
+    expect((await bobsRows()).length).toBe(REVIEW_NOTIFY_BOARD_CAP + 1)
   })
 
   it('a board event after COMMIT, the same payload for every viewer; a refused write publishes nothing', async () => {

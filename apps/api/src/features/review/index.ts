@@ -18,9 +18,12 @@
 // 404 before any 403. The actor is always the session's user (every input is strict: an `actor` key is refused), and
 // an event keeps its name and kind as they were then (store.ts loadActor).
 //
-// One status write (§2.4): the board's notification lock first when the note may mention someone (comments' NC-V3
-// order), then the item row FOR UPDATE; a `fromSeq` other than the item's status_seq is 409 STATUS_CHANGED with the
-// item as it is now; a file item's status is about the newest version servable here (409 NEWER_VERSION otherwise).
+// One status write (§2.4): the board's notification lock first (comments' NC-V3 order: the bell's caps count, then
+// insert), then the item row FOR UPDATE; a `fromSeq` other than the item's status_seq is 409 STATUS_CHANGED with the
+// item as it is now; a file item's status is about the version the card shows, any version this board serves (after
+// "Make current", an undo or a restore the card shows an older one: "Approved v2" while v3 is newer is the web's to
+// say); a version of ANOTHER asset this board serves re-points the item to that asset (the card was given a fresh
+// asset by Replace media: the web shows "File replaced: review again" until a status is set on it).
 // The event, the item, the note thread, the notifications and the chat outbox rows commit together; the board events
 // (REVIEW_ITEM_EVENT, the note's thread) go out after COMMIT, the same payload for every viewer.
 //
@@ -63,7 +66,7 @@ import {
   readRoundCheckpoint,
 } from './checkpoint.ts'
 import { configureReviewHooks, resetItems } from './hooks.ts'
-import { createNoteThread, noteAnchor, noteMayMention } from './note.ts'
+import { createNoteThread, noteAnchor } from './note.ts'
 import {
   applyStatus,
   insertEvent,
@@ -80,13 +83,14 @@ import {
   notifyReview,
   type ReviewActorRow,
   reviewRecipients,
+  servableVersion,
   toEvent,
   toItem,
 } from './store.ts'
 
 type BoardRef = Pick<BoardRow, 'id' | 'workspace_id' | 'visibility' | 'status'>
 
-/** A 409 whose body carries more than the error (STATUS_CHANGED's item, NEWER_VERSION's latestVersionId). */
+/** A 409 whose body carries more than the error (STATUS_CHANGED's item). */
 class ReviewConflict extends ApiError {
   readonly extra: Record<string, unknown>
   constructor(code: string, message: string, extra: Record<string, unknown>) {
@@ -329,8 +333,9 @@ export async function registerReview(app: FastifyInstance, ctx: FeatureContext):
         const board = access.board
         if (!canSetReviewStatus(access.role, board.status)) throw forbidden(STATUS_MESSAGE)
         const actor = await actorIn(tx, user.id)
-        // the comments feature's order (NC-V3): the board's notification lock before any row lock
-        if (input.note !== undefined && noteMayMention(input.note)) await lockBoardNotifications(tx, board.id)
+        // the comments feature's order (NC-V3): the board's notification lock before any row lock (the bell's caps,
+        // and a note's mentions)
+        await lockBoardNotifications(tx, board.id)
         const row = await lockItem(tx, board, rvi, { live: true })
         if (!row) throw notFound()
         if (input.fromSeq !== undefined && Number(row.status_seq) !== input.fromSeq) {
@@ -340,16 +345,15 @@ export async function registerReview(app: FastifyInstance, ctx: FeatureContext):
           })
         }
         let versionId: string | null = null
+        let repoint: string | undefined
         if (row.kind === 'file') {
           if (!input.versionId)
             throw new ApiError(400, REVIEW_CODES.versionRequired, 'Say which version this status is about.')
-          const latest = row.asset_id ? await latestServableVersion(tx, board, row.asset_id) : null
-          if (!latest) throw notFound()
-          if (latest !== input.versionId)
-            throw new ReviewConflict(REVIEW_CODES.newerVersion, 'A newer version of this file is here.', {
-              latestVersionId: latest,
-            })
-          versionId = latest
+          // the version the card shows: any this board serves (404 otherwise: no probing of other boards)
+          const shown = await servableVersion(tx, board, input.versionId)
+          if (!shown) throw notFound()
+          versionId = input.versionId
+          if (shown.assetId !== row.asset_id) repoint = shown.assetId
         } else if (input.versionId !== undefined) throw badRequest('versionId: only for a file item')
         // the budget is spent only by a write that would happen (a refused one costs nothing)
         if (!statusLimiter.take(`${user.id}:${board.id}`))
@@ -363,7 +367,8 @@ export async function registerReview(app: FastifyInstance, ctx: FeatureContext):
         const thread =
           input.note !== undefined
             ? await createNoteThread(tx, board, {
-                anchor: noteAnchor(row, versionId),
+                // on the version given, of the asset the item names after this write (a re-point's new one)
+                anchor: noteAnchor({ ...row, asset_id: repoint ?? row.asset_id }, versionId),
                 body: input.note,
                 authorId: user.id,
                 at,
@@ -388,9 +393,10 @@ export async function registerReview(app: FastifyInstance, ctx: FeatureContext):
           by: user.id,
           at,
           versionId: row.kind === 'file' ? versionId : undefined,
+          ...(repoint ? { assetId: repoint } : {}),
         })
         const recipients = await reviewRecipients(tx, board, [row.id], user.id)
-        await notifyReview(tx, { board, eventId: ev.id, actorId: user.id, at }, recipients)
+        await notifyReview(tx, { board, eventId: ev.id, actorId: user.id, at, itemId: row.id }, recipients)
         const item = await loadItem(tx, board, row.id)
         if (!item) throw notFound()
         return { item, event: toEvent(ev), thread, board: board.id }
@@ -434,6 +440,8 @@ export async function registerReview(app: FastifyInstance, ctx: FeatureContext):
     let out: { round: ReviewRound; items: ReviewItem[]; changed: Set<string>; checkpointId: string | null }
     try {
       out = await db.transaction(async (tx) => {
+        // the board's notification lock first (NC-V3: before any lock; the bell's caps count, then insert)
+        await lockBoardNotifications(tx, pre.id)
         // History's save order: the workspace's checkpoint lock before any row lock, then the board row
         const n = await tx.maybeOne<{ next: number }>(
           'SELECT COALESCE(max(number), 0)::int + 1 AS next FROM review_rounds WHERE board_id = $1',

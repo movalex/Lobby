@@ -16,8 +16,9 @@
 //   - Wave S (WS2, the versions switch): the upload sends X-Lobby-Supersedes with the deliverable's newest version
 //     (the version list's, else the element's), so the new file is a new VERSION of the same asset: the write is the
 //     same one, and `customData.lobby.file.assetId` stays. The entry reads "Upload new version". A newer version
-//     uploaded meanwhile: the upload goes on top of it (once); a chain that moved on on another board (a copy), or a
-//     version this board no longer serves: a fresh asset, as before wave S (that card's history starts again at v1).
+//     uploaded meanwhile: the upload goes on top of it (once); a chain that moved on on another board, a version only
+//     linked here (a copy: only the board a chain's newest version was uploaded to continues it), or a version this
+//     board no longer serves: a fresh asset, as before wave S (that card's history starts again at v1).
 //     "Make current" (the version list) is the same write to an older version: no upload, no new version.
 //   - Alternative text: `customData.lobby.alt` (≤ 500 characters, canvas-schema custom-data.ts), one undo
 //     step; board search and the PDF text layer read it.
@@ -272,8 +273,10 @@ const NOT_LATEST = 'VERSION_NOT_LATEST'
 /**
  * Wave S: the upload as a new version of `facts`' deliverable. It supersedes the newest version the board serves (the
  * version list's; else the element's own). A newer one uploaded meanwhile (409 with another latestVersionId): once on
- * top of that one. The chain moved on on another board (409 naming the same version), or the version is not one this
- * board serves (404): a fresh asset, and the person is told the history starts again.
+ * top of that one. The chain moved on on another board, or its newest version was uploaded to another board and is
+ * only linked here (409 naming the same version: only the origin board continues a chain), or the version is not one
+ * this board serves (404): a fresh asset, and the person is told the history starts again (a review item on the card
+ * then reads "File replaced: review again").
  */
 export async function uploadVersion(
   ctx: Pick<CanvasFeatureContext, 'registries' | 'board' | 'events' | 'notify'>,
@@ -286,7 +289,7 @@ export async function uploadVersion(
     const meta = await send(null)
     ctx.notify({
       key: `media-version-fresh:${meta.versionId}`,
-      text: 'This file has a newer version on another board, so this upload starts its own version history here.',
+      text: 'This file’s versions are kept on another board, so this upload starts its own version history here.',
     })
     return meta
   }

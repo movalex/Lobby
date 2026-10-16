@@ -1,7 +1,7 @@
 // OWNER: WS4 (wave S, the client review page). One item of the page: its label and place in the list, a large picture
 // (a frame drawn by the exporter, lazily as it scrolls in; a file's own preview), the status pill (icon and words, never
 // colour alone) with who and when, the status controls and the item's open comments.
-import { type CommentThread, type ReviewCan, type ReviewItem, reviewPillText } from '@draftroom/contracts'
+import type { CommentThread, ReviewCan, ReviewItem } from '@draftroom/contracts'
 import { useEffect, useRef, useState } from 'react'
 import { derivativeUrl, originalUrl } from '../../assets/contract.ts'
 import { useAssetMeta } from '../../assets/meta-store.ts'
@@ -11,7 +11,9 @@ import { openPdfViewer } from '../../file-card/ported/viewer-state.ts'
 import { formatRelativeTime } from '../../lib/format.ts'
 import { useValue } from '../../lib/signals.ts'
 import type { CommentsStore } from '../comments/store.ts'
-import type { PageEntry } from './model.ts'
+import { type FileStanding, fileStanding, pillStatus, SAME } from '../review/model.ts'
+import { versionNumber, versionStoreOf } from '../review-viewer/versions/store.ts'
+import { entryPillText, entryStanding, type PageEntry } from './model.ts'
 import { type FramePictures, frameKey, previewDerivative } from './picture.ts'
 import { StatusControls } from './StatusControls.tsx'
 import { Threads } from './Threads.tsx'
@@ -45,19 +47,49 @@ const ICONS = {
   ),
 } as const
 
-/** The status pill: an icon and the words ("Approved · Ana (guest)"), with when. */
-export function StatusPill({ item }: { item: Pick<ReviewItem, 'status' | 'statusBy' | 'statusAt'> }) {
+/**
+ * The status pill: an icon and the words ("Approved · Ana (guest)"), with when. Against what the card shows: "Approved
+ * v2 · v3 is newer", or "File replaced: review again" (no who or when: they were about another file).
+ */
+export function StatusPill({
+  item,
+  standing = SAME,
+}: {
+  item: Pick<ReviewItem, 'status' | 'statusBy' | 'statusAt'>
+  standing?: FileStanding
+}) {
+  const status = pillStatus(item, standing)
   return (
-    <p className="dr-rp__pill" data-testid="review-item-status" data-status={item.status}>
+    <p
+      className="dr-rp__pill"
+      data-testid="review-item-status"
+      data-status={status}
+      data-standing={standing.kind === 'same' ? undefined : standing.kind}
+    >
       <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-        {ICONS[item.status]}
+        {ICONS[status]}
       </svg>
       <span>
-        {reviewPillText(item)}
-        {item.statusAt ? <span className="dr-rp__when"> · {formatRelativeTime(item.statusAt)}</span> : null}
+        {entryPillText(item, standing)}
+        {item.statusAt && standing.kind !== 'replaced' ? (
+          <span className="dr-rp__when"> · {formatRelativeTime(item.statusAt)}</span>
+        ) : null}
       </span>
     </p>
   )
+}
+
+/** The entry against its card, with this board's version numbers when the status is about another version. */
+function useEntryStanding(ctx: CanvasFeatureContext, entry: PageEntry): FileStanding {
+  const plain = entryStanding(entry)
+  const assetId = plain.kind === 'other' ? entry.item.assetId : null
+  const list = useValue(
+    'review-page.standing-list',
+    () => (assetId ? versionStoreOf(ctx).list(assetId).get() : null),
+    [ctx, assetId],
+  )
+  if (plain.kind !== 'other' || !entry.file) return plain
+  return fileStanding(entry.item, entry.file, (id) => versionNumber(list, id))
 }
 
 /** True once the element has been on screen (or near it): the picture is drawn then, not before. */
@@ -243,6 +275,7 @@ export function ItemCard({
   cardRef(el: HTMLElement | null): void
 }) {
   const { item } = entry
+  const standing = useEntryStanding(ctx, entry)
   return (
     <article
       ref={cardRef}
@@ -268,10 +301,11 @@ export function ItemCard({
       ) : (
         <FilePicture ctx={ctx} entry={entry} playable={playable} />
       )}
-      <StatusPill item={item} />
+      <StatusPill item={item} standing={standing} />
       <StatusControls
         boardId={ctx.board.id}
         entry={entry}
+        standing={standing}
         can={can}
         onApplied={onApplied}
         announce={announce}

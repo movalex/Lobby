@@ -13,7 +13,7 @@ import { frameTarget, renderPng } from '../present-export/ported/exporter.ts'
 import type { SummaryEntry } from '../present-export/review-summary/model.ts'
 import { listAssetVersions } from '../review-viewer/versions/client.ts'
 import { listReviewEvents } from './client.ts'
-import { type PageEntry, resolvedCount, type ThreadScope, threadsFor } from './model.ts'
+import { entryStanding, type PageEntry, resolvedCount, type ThreadScope, threadsFor } from './model.ts'
 import { previewDerivative } from './picture.ts'
 
 export interface SummaryProgress {
@@ -93,6 +93,13 @@ export async function downloadReviewSummary(args: {
   // 2. the model
   const summaryEntries: SummaryEntry[] = entries.map((e) => {
     const list = e.file ? versions.get(e.file.assetId) : undefined
+    // a card that now shows another file: nobody reviewed what the summary pictures (never its old "Approved")
+    if (entryStanding(e).kind === 'replaced')
+      return {
+        item: { ...e.item, status: 'pending', statusBy: null, statusAt: null, statusVersionId: null },
+        label: e.label,
+        version: null,
+      }
     const at = list?.find((v) => v.id === (e.item.statusVersionId ?? e.file?.versionId))
     return { item: e.item, label: e.label, version: list && at ? { n: at.n, of: list.length } : null }
   })

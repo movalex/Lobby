@@ -11,10 +11,11 @@ import {
   reviewPath,
   reviewStatusPath,
 } from '@draftroom/contracts'
+import { SUPERSEDES_HEADER } from '@draftroom/dev-assets'
 import type { LightMyRequestResponse } from 'fastify'
 import { expect } from 'vitest'
 import type { Client } from '../../helpers.ts'
-import { DEV_STUDIO } from '../../helpers.ts'
+import { DEV_STUDIO, ORIGIN } from '../../helpers.ts'
 import { type GuestClient, guestLink, joinAsGuest, setupWorld, type World } from '../guests/support.ts'
 
 export { DEV_STUDIO }
@@ -109,3 +110,30 @@ export function setStatus(
 
 export const codeOf = (res: LightMyRequestResponse) =>
   (res.json() as { error?: { code?: string } }).error?.code
+
+const PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+)
+
+/** "Upload new version": a PNG uploaded to `boardId` with X-Lobby-Supersedes naming `versionId`. */
+export function supersede(
+  w: World,
+  c: Client,
+  boardId: string,
+  versionId: string,
+  name = 'cut-2.png',
+): Promise<LightMyRequestResponse> {
+  return w.api.app.inject({
+    method: 'POST',
+    url: `/api/boards/${boardId}/assets`,
+    payload: PNG,
+    headers: {
+      origin: ORIGIN,
+      'content-type': 'image/png',
+      'x-file-name': name,
+      cookie: c.cookie,
+      [SUPERSEDES_HEADER]: versionId,
+    },
+  })
+}

@@ -10,7 +10,7 @@ import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
 import { useValue } from '../../lib/signals.ts'
 import { type Review, reviewOf } from './bridge.ts'
 import { badgeAnchor, pillLabel } from './model.ts'
-import { History, StatusForm, StatusPill } from './StatusForm.tsx'
+import { History, ReviewPill, StatusForm, StatusPill, useStanding } from './StatusForm.tsx'
 import './review.css'
 
 interface PlacedPill {
@@ -46,26 +46,32 @@ function Badges({ r }: { r: Review }) {
   return (
     <div className="dr-review-badges" data-testid="review-badges">
       {pills.map((p) => (
-        <button
-          key={p.item.id}
-          type="button"
-          className="dr-review-badge"
-          data-testid="review-badge"
-          data-element-id={p.item.elementId}
-          data-status={p.item.status}
-          aria-label={pillLabel(p.item)}
-          aria-haspopup="dialog"
-          aria-expanded={open?.itemId === p.item.id}
-          style={{ transform: `translate(${p.x}px, ${p.y}px)` }}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={() =>
-            r.store.popover.set(open?.itemId === p.item.id ? null : { itemId: p.item.id, from: 'badge' })
-          }
-        >
-          <StatusPill item={p.item} />
-        </button>
+        <Badge key={p.item.id} r={r} p={p} open={open?.itemId === p.item.id} />
       ))}
     </div>
+  )
+}
+
+function Badge({ r, p, open }: { r: Review; p: PlacedPill; open: boolean }) {
+  // against what the card shows now ("Approved v2 · v3 is newer", "File replaced: review again")
+  const standing = useStanding(r.ctx, p.item)
+  return (
+    <button
+      type="button"
+      className="dr-review-badge"
+      data-testid="review-badge"
+      data-element-id={p.item.elementId}
+      data-status={p.item.status}
+      data-standing={standing.kind === 'same' ? undefined : standing.kind}
+      aria-label={pillLabel(p.item, standing)}
+      aria-haspopup="dialog"
+      aria-expanded={open}
+      style={{ transform: `translate(${p.x}px, ${p.y}px)` }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={() => r.store.popover.set(open ? null : { itemId: p.item.id, from: 'badge' })}
+    >
+      <StatusPill item={p.item} standing={standing} />
+    </button>
   )
 }
 
@@ -134,7 +140,7 @@ function Popover({ r, item, at }: { r: Review; item: ReviewItem; at: { x: number
           ×
         </button>
       </header>
-      <StatusPill item={item} testId="review-popover-pill" />
+      <ReviewPill r={r} item={item} testId="review-popover-pill" />
       <StatusForm r={r} item={item} />
       <History r={r} item={item} />
       {can.manage && (

@@ -9,6 +9,9 @@ import { landingPathFor } from './landing.ts'
 import {
   type ElementFacts,
   entryLabel,
+  entryPillText,
+  entryStanding,
+  entryStatus,
   frameCacheKey,
   neighbours,
   pageEntries,
@@ -116,6 +119,48 @@ describe('progress, round and navigation words', () => {
     expect(progressText(entries)).toBe('2 of 4 approved')
     expect(progressDetail(entries)).toBe('1 with changes requested · 1 awaiting review')
     expect(progressDetail([{ item: item(1, { status: 'approved' }) }])).toBe('')
+  })
+
+  it('a file item against its card: "Approved v2 · v3 is newer"; a replaced file is "File replaced: review again"', () => {
+    const AST = 'ast_0123456789abcdefghij'
+    const V1 = 'ver_v1v1v1v1v1v1v1v1v1v1'
+    const V2 = 'ver_v2v2v2v2v2v2v2v2v2v2'
+    const file = (assetId: string, versionId: string) => ({
+      assetId,
+      versionId,
+      kind: 'image' as const,
+      name: 'a.png',
+    })
+    const approved = item(1, {
+      kind: 'file',
+      assetId: AST,
+      status: 'approved',
+      statusSeq: 1,
+      statusVersionId: V1,
+      statusBy: { id: null, name: 'Ana', kind: 'guest', external: false },
+    })
+    // the card shows v2 now: the approval was about v1 (numbers from the version list)
+    const shownV2 = { item: approved, file: file(AST, V2) }
+    expect(entryStanding(shownV2)).toEqual({ kind: 'other', statusN: null, shownN: null })
+    expect(entryPillText(approved, { kind: 'other', statusN: 1, shownN: 2 })).toBe(
+      'Approved v1 · v2 is newer · Ana (guest)',
+    )
+    expect(entryStatus(shownV2)).toBe('approved')
+    // the card shows another file: never the old "Approved"; it counts and answers as awaiting review
+    const replaced = { item: approved, file: file('ast_freshfreshfreshfresh', 'ver_freshfreshfreshfresh') }
+    expect(entryStanding(replaced)).toEqual({ kind: 'replaced' })
+    expect(entryPillText(approved, entryStanding(replaced))).toBe('File replaced: review again')
+    expect(entryStatus(replaced)).toBe('pending')
+    expect(progressText([replaced, { item: item(2, { status: 'approved' }) }])).toBe('1 of 2 approved')
+    expect(progressDetail([replaced])).toBe('1 awaiting review')
+    expect(statusButtons({ setStatus: true }, entryStatus(replaced)).map((b) => b.status)).toEqual([
+      'approved',
+      'changes_requested',
+    ])
+    // the version shown: as before
+    expect(entryPillText(approved, entryStanding({ item: approved, file: file(AST, V1) }))).toBe(
+      'Approved · Ana (guest)',
+    )
   })
 
   it('the round line shows only an open round', () => {

@@ -64,8 +64,16 @@ header; WS3 and WS4 add no route.
   "Changes requested", `approved` "Approved". Any status may follow any other. **Reasons**: `set`, `new_version`
   (WS2's upload; the uploader is the actor), `new_round`.
 - A **file** item names its `asset_id`; its status is about `status_version_id`, a version of that asset (0037's
-  composite key). A status for an older version than the newest servable one: 409 `NEWER_VERSION` with
-  `latestVersionId`, so "Approved" always means "approved vN".
+  composite key): the version the card **shows** when the status is set, any version this board serves (after "Make
+  current", an undo or a checkpoint restore the card shows an older one; a version the board does not serve is 404).
+  So "Approved" always means "approved vN": the badge, panel, popover and review page say "Approved v2 · v3 is newer"
+  (or "· this shows v1") when the card shows another version (`apps/web/src/features/review/model.ts fileStanding`).
+  `NEWER_VERSION` stays in the contracts for an older api; this one no longer sends it. (Integration fix: requiring
+  the newest version locked every status write after "Make current".)
+- A card that now shows **another asset** (Replace media's fresh-asset fallback: another board holds the chain, §3.1, or
+  a revision-2 tab replaced it) makes its item **stale**: the web shows "File replaced: review again" (icon and counts as
+  Awaiting review; never the old "Approved"; the summary PDF lists it as awaiting review), and a status set on it names
+  a version of the new asset, which **re-points** the item (`asset_id` and `status_version_id` change together).
 - **Rounds** (`rvr_…`, numbered 1..100 per board): optional; at most one open per board (`review_rounds_open_idx`).
   Starting one resets the picked items to pending (default: every live item not approved; `keepApproved` true) and
   takes a **named manual checkpoint** `reviewRoundCheckpointName(title)` ("Review round 2 sent"; no new checkpoint
@@ -111,7 +119,7 @@ decides). **No creator row**: marking for review neither creates a board nor han
 
 ### 2.4 One write
 
-The item row `FOR UPDATE`; a different `status_seq` than `fromSeq` → 409 (without `fromSeq` the write wins). The
+The board's notification lock first (`lockBoardNotifications`, comments' NC-V3 order), then the item row `FOR UPDATE`; a different `status_seq` than `fromSeq` → 409 (without `fromSeq` the write wins). The
 event, the item update, the optional note thread (an `everyone` thread through the comments store: a frame gets a
 `shape` anchor at `u=1, v=0`, a file an `asset` anchor on the version; mentions rewritten; ≤ 5,000 characters), the
 notifications and the chat outbox rows commit together. Board events `REVIEW_ITEM_EVENT` `{item}` and
@@ -123,7 +131,12 @@ notifications and the chat outbox rows commit together. Board events `REVIEW_ITE
   `notifications_review_check`). `NotificationItem.review` (`NotificationReview`): `event` `status` (`status`, `reason`,
   `itemId`, `label`) or `round_opened` (`roundTitle`, `itemCount`). Recipients: the board's owners, the person who
   marked the item, earlier status setters who are accounts; never the actor. A round start or a new-version reset is
-  ONE notification per recipient.
+  ONE notification per recipient. **Flood brakes** (`features/review/store.ts notifyReview`, under
+  `lockBoardNotifications`, which the status write, the round start and the upload of a new version take first):
+  repeated flips of one item by one actor collapse into one bell row while it is unread and its chat message has not
+  gone yet (the row moves to the latest event); within an hour a recipient gets at most 20 rows from one actor on one
+  board and 30 from everyone on it, read or not (`REVIEW_NOTIFY_*`; 0037's `notifications_review_window_idx`). Past a
+  cap the status still applies; it adds no bell row or chat message. The 30-a-minute write budget stays in front.
 - Chat hook kind `review_status` (`CHAT_HOOK_KINDS`; 0037 widens `chat_hook_prefs_kinds_check`); a
   many-recipient kind (one message per hook per event). `ChatMessage.review` (`ChatReview`) and `chatMessageSentence`:
   "Ana (guest) approved an item on Pitch wall"; the item label (or round title) only when the renderer passes it, i.e.
@@ -149,6 +162,9 @@ A version of a deliverable is a new `asset_versions` row with the **same `asset_
 replaces. 0037: `FOREIGN KEY (asset_id, supersedes) REFERENCES asset_versions (asset_id, id) ON DELETE SET NULL
 (supersedes)` (a chain stays inside one asset by key), `CHECK (supersedes <> id)`, `UNIQUE (supersedes)` (linear), an
 index `(asset_id, created_at)`. The element keeps its id and, across versions, its `customData.lobby.file.assetId`.
+"The newest version" has one definition everywhere (the upload, the list, the review store): the `supersedes` walk of
+`files/versions.ts chainOnBoard` and `latestServable`, upload order only between unlinked roots, never `created_at`
+then id (two versions in one millisecond keep their chain order).
 
 `POST /api/boards/:bid/assets` with **`X-Lobby-Supersedes: ver_…`** (`SUPERSEDES_HEADER` in
 `packages/dev-assets/src/shared.ts`), parsed before any body byte is read, after the edit check, like `X-File-Name`.
@@ -158,11 +174,17 @@ In the upload's one transaction, after the quota re-check:
   servable on this board (`files-auth.ts`) → else 404 (no probing); a malformed header → 400 `INVALID_SUPERSEDES`;
 - it must be the newest servable version of its asset → else 409 `VERSION_NOT_LATEST` (`VersionNotLatestBody`
   `{latestVersionId}`);
+- it must have been **uploaded to this board** (the chain's origin): a version only linked here (a copy shows what
+  its canvas showed) → 409 `VERSION_NOT_LATEST` naming that version, "This file’s versions are kept on another board.
+  Upload it here as a new file instead." The web's fallback then uploads a fresh asset (its review item reads "File
+  replaced: review again", §2.1). Another board never takes a chain over;
 - `versionKindsCompatible` (images replace images, the rest the rest; the web's `replaceRefusal`) → else 400
   `VERSION_KIND_MISMATCH`;
 - a second concurrent supersede of the same version fails the unique index → 409 `VERSION_NOT_LATEST`;
 - WS1's `resetForNewVersion(tx, {workspaceId, boardId, assetId, versionId, actorId})` (`features/review/hooks.ts`)
-  resets the asset's live items **on the upload board only**; after COMMIT the board event `ASSET_VERSION_EVENT`
+  resets the asset's live items **on the upload board only** (it locks every live item of the asset there, whatever its
+  status, and picks the non-pending ones after the locks: an approval being given at that moment is waited for and
+  reset, never left on the old version); after COMMIT the board event `ASSET_VERSION_EVENT`
   `{assetId, versionId}` and the returned items' `REVIEW_ITEM_EVENT`s, on that board. (Integration decision: copies of
   a card share its asset id, but each board's review is its own. A client reviewing board B was shown v1 there, B's
   cards still show v1, and B's "Approved" stays "approved v1" until a version is uploaded on B; the reset never

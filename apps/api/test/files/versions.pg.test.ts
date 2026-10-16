@@ -5,7 +5,11 @@
 //     unique index on `supersedes`, and the FOR SHARE re-check in the upload's transaction);
 //   - an upload superseding a version while a delete-mode pass collects it: either the version is deleted first and
 //     the upload is 404 (nothing stored), or the upload commits first and the version and its new successor both stay.
-//     Never a new version whose predecessor vanished under it.
+//     Never a new version whose predecessor vanished under it;
+//   - a new version while an approval of the item is being given on another connection (its row locked, 'approved'
+//     not committed): the upload's review reset waits for it and resets it to pending about the new version. (The reset
+//     used to lock with a `status <> 'pending'` filter in the same statement, so it skipped the item and the approval
+//     committed on the old version.)
 // Opt-in like apps/api/test/concurrency.pg.test.ts: set DRAFTROOM_TEST_DATABASE_URL (a database these tests may create
 // and drop schemas in) to run it; skipped otherwise. DRAFTROOM_PG_STRESS_ITER sets the rounds.
 
@@ -110,6 +114,62 @@ describe.skipIf(!PG_URL)('versions on real Postgres (DRAFTROOM_TEST_DATABASE_URL
       )
       expect(rows.rows.map((r) => r.supersedes).sort()).toEqual([v1.versionId, null].sort())
       expect(rows.rows.find((r) => r.supersedes === v1.versionId)?.id).toBe(winner)
+      await w.t.close()
+      api = undefined
+    }
+  })
+
+  it('a new version while an approval is being given (two connections): the approval is reset, never left on v1', async () => {
+    for (let i = 0; i < ITER; i++) {
+      const w = await world()
+      const v1 = await upload(w.t, w.alice, w.board, 'cut.png')
+      const marked = await w.alice.req('POST', `/api/boards/${w.board}/review/items`, {
+        elementId: 'card-1',
+        kind: 'file',
+        assetId: v1.assetId,
+        label: 'Cut',
+      })
+      expect(marked.statusCode, marked.body).toBe(201)
+      const itemId = (marked.json() as { item: { id: string } }).item.id
+      // connection 1: an approval that holds the item's row lock and has set 'approved', not committed yet
+      let holding: () => void = () => {}
+      const held = new Promise<void>((r) => {
+        holding = r
+      })
+      let release: () => void = () => {}
+      const gate = new Promise<void>((r) => {
+        release = r
+      })
+      const approval = w.t.db.transaction(async (tx) => {
+        await tx.query('SELECT id FROM review_items WHERE id = $1 FOR UPDATE', [itemId])
+        await tx.query(
+          `UPDATE review_items SET status = 'approved', status_seq = status_seq + 1, status_version_id = $2
+            WHERE id = $1`,
+          [itemId, v1.versionId],
+        )
+        holding()
+        await gate
+      })
+      await held
+      // connection 2: "Upload new version" (its reset runs in the upload's transaction) while the approval is open
+      const up = w.supersede(w.bob.cookie, v1, 'cut-2.png')
+      await sleep(300)
+      release()
+      await approval
+      const res = await up
+      expect(res.statusCode, res.body).toBe(201)
+      const v2 = res.json() as AssetVersionMeta
+      // the reset waited for the approval's lock, then saw 'approved' and reset it to pending about v2
+      const row = await w.t.db.one<{ status: string; status_version_id: string | null }>(
+        'SELECT status, status_version_id FROM review_items WHERE id = $1',
+        [itemId],
+      )
+      expect(row).toEqual({ status: 'pending', status_version_id: v2.versionId })
+      const ev = await w.t.db.one<{ reason: string; version_id: string }>(
+        "SELECT reason, version_id FROM review_events WHERE item_id = $1 AND kind = 'status' ORDER BY seq DESC LIMIT 1",
+        [itemId],
+      )
+      expect(ev).toEqual({ reason: 'new_version', version_id: v2.versionId })
       await w.t.close()
       api = undefined
     }

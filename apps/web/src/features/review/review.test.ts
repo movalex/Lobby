@@ -20,11 +20,17 @@ import {
   badgeAnchor,
   defaultLabel,
   eventLine,
+  fileStanding,
   filterRows,
   markableOf,
   orderItems,
+  pillLabel,
   pillLine,
+  pillStatus,
   progressText,
+  REPLACED_TEXT,
+  SAME,
+  standingText,
 } from './model.ts'
 import { type ReviewClient, ReviewStore } from './store.ts'
 
@@ -170,6 +176,71 @@ describe('the words', () => {
       statusBy: { id: null, name: 'Pat‮', kind: 'account', external: true },
     })
     expect(pillLine(outside, now)).toBe('Changes requested · Pat · External')
+  })
+
+  it('a file whose status is about another version than the card shows: "Approved v2 · v3 is newer"', () => {
+    const V2 = 'ver_v2v2v2v2v2v2v2v2v2v2'
+    const V3 = 'ver_v3v3v3v3v3v3v3v3v3v3'
+    const n = (id: string) => ({ [VER]: 1, [V2]: 2, [V3]: 3 })[id] ?? null
+    const approved = item({
+      kind: 'file',
+      elementId: 'card-1',
+      assetId: AST,
+      status: 'approved',
+      statusSeq: 1,
+      statusVersionId: V2,
+      statusBy: { id: null, name: 'Ana', kind: 'guest', external: false },
+    })
+    // the card shows v3: the approval was about v2
+    const newer = fileStanding(approved, { assetId: AST, versionId: V3 }, n)
+    expect(newer).toEqual({ kind: 'other', statusN: 2, shownN: 3 })
+    expect(pillLine(approved, now, newer)).toBe('Approved v2 · v3 is newer · Ana (guest)')
+    expect(pillLabel(approved, newer)).toBe(
+      'Review status of Key art B: Approved v2 · v3 is newer · Ana (guest)',
+    )
+    expect(pillStatus(approved, newer)).toBe('approved')
+    // "Make current" (or an undo) put v1 back on the card
+    const back = fileStanding(approved, { assetId: AST, versionId: VER }, n)
+    expect(standingText(approved, back)).toBe('Approved v2 · this shows v1')
+    // the version list not known (yet): still never a bare "Approved"
+    expect(standingText(approved, fileStanding(approved, { assetId: AST, versionId: V3 }))).toBe(
+      'Approved (another version) · this shows another version',
+    )
+    // the shown version: as before
+    expect(fileStanding(approved, { assetId: AST, versionId: V2 }, n)).toEqual(SAME)
+    expect(pillLine(approved, now, SAME)).toBe('Approved · Ana (guest)')
+    // Awaiting review says nothing about a version; a frame has none; a card the page cannot read: as stored
+    expect(fileStanding({ ...approved, status: 'pending' }, { assetId: AST, versionId: V3 }, n)).toEqual(SAME)
+    expect(fileStanding(item(), { assetId: AST, versionId: V3 }, n)).toEqual(SAME)
+    expect(fileStanding(approved, null, n)).toEqual(SAME)
+    // the card's own facts are what is compared (markableOf / factsOf)
+    expect(markableOf(file())).toMatchObject({ assetId: AST, versionId: VER })
+  })
+
+  it('a stale item (the card now shows another file): "File replaced: review again", never the old Approved', () => {
+    const approved = item({
+      kind: 'file',
+      elementId: 'card-1',
+      assetId: AST,
+      status: 'approved',
+      statusSeq: 1,
+      statusVersionId: VER,
+      statusBy: { id: null, name: 'Ana', kind: 'guest', external: false },
+      statusAt: '2026-10-16T10:00:00.000Z',
+    })
+    const fresh = { assetId: 'ast_freshfreshfreshfresh', versionId: 'ver_freshfreshfreshfresh' }
+    const stale = fileStanding(approved, fresh)
+    expect(stale).toEqual({ kind: 'replaced' })
+    expect(pillLine(approved, now, stale)).toBe(REPLACED_TEXT)
+    expect(REPLACED_TEXT).toBe('File replaced: review again')
+    expect(pillLabel(approved, stale)).not.toContain('Approved')
+    // its icon and colour read as Awaiting review, whatever the stored status
+    expect(pillStatus(approved, stale)).toBe('pending')
+    // the same for every stored status
+    for (const status of ['pending', 'changes_requested'] as const)
+      expect(pillLine({ ...approved, status }, now, fileStanding({ ...approved, status }, fresh))).toBe(
+        REPLACED_TEXT,
+      )
   })
 
   it('history rows', () => {

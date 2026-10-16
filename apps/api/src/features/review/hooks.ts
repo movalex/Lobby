@@ -9,8 +9,12 @@
 // docs/WAVE-S-CONTRACTS.md §3.1). Only the upload board hears the reset's REVIEW_ITEM_EVENTs. It goes back to 'pending' (event reason 'new_version', actor = the uploader, version = the new one), with the notifications
 // and chat outbox rows of the reset in the same transaction (ONE notification per recipient per board for the whole
 // reset). It returns the items it changed so the caller can publish REVIEW_ITEM_EVENT for each after COMMIT (never
-// before). The items are locked FOR UPDATE in id order (after the caller's own row locks: the upload holds no board
-// row lock, and a status write takes an item's lock only after its board's reads).
+// before). EVERY live item of the asset on that board is locked FOR UPDATE in id order, whatever its status, and only
+// then are the non-pending ones picked (from a read after the locks): a status filter in the locking statement would
+// skip an item an approval is setting at that moment (pending in the statement's snapshot, so never locked or waited
+// for), and that approval would then commit "approved" on the old version (apps/api/test/files/versions.pg.test.ts).
+// The locks come after the caller's own: the upload takes the board's notification lock first (the bell's caps), then
+// its workspace row; it holds no board row lock, and a status write takes an item's lock only after its board's reads.
 
 import type { ReviewItem } from '@draftroom/contracts'
 import type { Queryable } from '@draftroom/db'
@@ -95,10 +99,11 @@ export async function resetItems(
   }
   const eventId = opts.notifyEventId === undefined ? first : opts.notifyEventId
   if (eventId && (changed.length > 0 || opts.notifyEventId)) {
+    // about the items it changed (a pending one heard nothing new)
     const recipients = await reviewRecipients(
       tx,
       board,
-      rows.map((r) => r.id),
+      changed.length > 0 ? changed : rows.map((r) => r.id),
       opts.actor.id,
     )
     await notifyReview(tx, { board, eventId, actorId: opts.actor.id, at: opts.at }, recipients)
@@ -108,13 +113,13 @@ export async function resetItems(
 
 /** Resets the asset's live, non-pending review items to pending. Runs in the caller's transaction (`tx`). */
 export async function resetForNewVersion(tx: Queryable, reset: NewVersionReset): Promise<ReviewItem[]> {
-  // the live items on the asset on the upload board (open, and able to show the new version), locked in id order
+  // every live item on the asset on the upload board (open, and able to show the new version), locked in id order
+  // with no status filter (resetItems skips the pending ones, as read after the locks)
   const locked = await tx.query<{ id: string; board_id: string }>(
     `SELECT i.id, i.board_id FROM review_items i
        JOIN boards b ON b.id = i.board_id AND b.workspace_id = i.workspace_id AND b.status IN ('active', 'archived')
        JOIN asset_versions v ON v.id = $3 AND v.asset_id = i.asset_id AND v.workspace_id = i.workspace_id
       WHERE i.workspace_id = $1 AND i.asset_id = $2 AND i.board_id = $4 AND i.removed_at IS NULL
-        AND i.status <> 'pending'
         AND (v.board_id = i.board_id OR EXISTS (
               SELECT 1 FROM board_asset_links l
                WHERE l.workspace_id = i.workspace_id AND l.board_id = i.board_id AND l.asset_id = v.asset_id

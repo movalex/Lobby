@@ -65,7 +65,8 @@ CREATE TABLE review_items (
   status_seq bigint NOT NULL DEFAULT 0 CHECK (status_seq >= 0),
   status_by text REFERENCES users (id) ON DELETE SET NULL,
   status_at timestamptz,
-  -- the version a file item's status is about ("Approved v3"); it must be a version of the item's asset
+  -- the version a file item's status is about ("Approved v3"); it must be a version of the item's asset (any version
+  -- the board serves: the one its card showed). A status set on a version of ANOTHER asset re-points asset_id with it.
   status_version_id text,
   created_by text REFERENCES users (id) ON DELETE SET NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -130,7 +131,7 @@ ALTER TABLE asset_versions ADD CONSTRAINT asset_versions_supersedes_fk
 ALTER TABLE asset_versions ADD CONSTRAINT asset_versions_supersedes_check
   CHECK (supersedes IS NULL OR supersedes <> id);
 CREATE UNIQUE INDEX asset_versions_supersedes_idx ON asset_versions (supersedes) WHERE supersedes IS NOT NULL;
--- a chain in upload order (the version list, "the newest servable version")
+-- an asset's versions (files/versions.ts chainOnBoard: the chain is the supersedes walk, upload order only between roots)
 CREATE INDEX asset_versions_asset_created_idx ON asset_versions (asset_id, created_at);
 
 -- comments: the spot on an image, page or frame (both or neither, asset anchors only)
@@ -162,6 +163,10 @@ ALTER TABLE notifications ADD CONSTRAINT notifications_check
 ALTER TABLE notifications ADD CONSTRAINT notifications_review_check
   CHECK ((kind = 'review_status') = (review_event_id IS NOT NULL));
 CREATE INDEX notifications_review_event_idx ON notifications (review_event_id) WHERE review_event_id IS NOT NULL;
+-- the bell's review caps and the collapse of one actor's repeated flips (features/review/store.ts notifyReview): a
+-- recipient's review_status rows on one board within the window
+CREATE INDEX notifications_review_window_idx ON notifications (board_id, user_id, created_at)
+  WHERE kind = 'review_status';
 
 -- chat hooks: review_status may be opted into (contracts chat-hooks.ts CHAT_HOOK_KINDS)
 ALTER TABLE chat_hook_prefs DROP CONSTRAINT chat_hook_prefs_kinds_check;

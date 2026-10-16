@@ -3,7 +3,10 @@
 // buttons show for whoever GET /api/boards/:bid/review says `can.setStatus` (a viewer link sees the status and its
 // history, no buttons). "Request changes" asks for a note (an 'everyone' comment thread made with the status). A
 // status someone changed meanwhile asks first ("Ana (guest) just requested changes. Approve anyway?"); a file's
-// status is about the version its element shows.
+// status is about the version its element shows (any version the board serves: "Make current" back to v1 and approving
+// it is "Approved v1"). The pill says when the status is about another version than the card shows ("Approved v2 · v3
+// is newer"), and a card that now shows another file reads "File replaced: review again" (a status set then is about
+// the new file: the api re-points the item).
 
 import {
   REVIEW_CODES,
@@ -14,10 +17,22 @@ import {
   reviewActorLabel,
 } from '@draftroom/contracts'
 import { useEffect, useId, useState } from 'react'
+import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
+import { factsOf } from '../../file-card/ported/model.ts'
 import { useValue } from '../../lib/signals.ts'
+import { versionNumber, versionStoreOf } from '../review-viewer/versions/store.ts'
 import type { Review } from './bridge.ts'
 import { listReviewEvents, ReviewRequestError } from './client.ts'
-import { eventLine, pillLine, shownVersionOf } from './model.ts'
+import {
+  eventLine,
+  type FileStanding,
+  fileStanding,
+  pillLine,
+  pillStatus,
+  SAME,
+  type ShownFile,
+  shownVersionOf,
+} from './model.ts'
 
 const VERB: Record<ReviewStatus, string> = {
   approved: 'approved it',
@@ -63,19 +78,65 @@ export function StatusIcon({ status }: { status: ReviewStatus }) {
   )
 }
 
+/**
+ * How a file item stands against what its card shows now (model.ts fileStanding), with the version numbers of this
+ * board's list (WS2's store: asked only when the status is about another version). A frame: always the same.
+ */
+export function useStanding(ctx: CanvasFeatureContext, item: ReviewItem): FileStanding {
+  const shownKey = useValue('review.shown-file', () => {
+    if (item.kind !== 'file') return null
+    const el = ctx.canvas.get(item.elementId)
+    const f = el && !(el as { isDeleted?: boolean }).isDeleted ? factsOf(el) : null
+    return f ? `${f.assetId} ${f.versionId}` : null
+  }, [ctx, item.kind, item.elementId])
+  const shown: ShownFile | null = shownKey
+    ? { assetId: shownKey.split(' ')[0] as string, versionId: shownKey.split(' ')[1] as string }
+    : null
+  const plain = fileStanding(item, shown)
+  const assetId = plain.kind === 'other' ? item.assetId : null
+  const list = useValue(
+    'review.standing-list',
+    () => (assetId ? versionStoreOf(ctx).list(assetId).get() : null),
+    [ctx, assetId],
+  )
+  if (plain.kind !== 'other') return plain
+  return fileStanding(item, shown, (id) => versionNumber(list, id))
+}
+
 /** "Approved · Ana (guest) · 2 h ago" with its icon (words and shape, never colour alone). */
-export function StatusPill({ item, testId }: { item: ReviewItem; testId?: string }) {
+export function StatusPill({
+  item,
+  standing = SAME,
+  testId,
+}: {
+  item: ReviewItem
+  standing?: FileStanding
+  testId?: string
+}) {
+  const shown = pillStatus(item, standing)
   return (
-    <span className="dr-review-pill" data-status={item.status} data-testid={testId}>
-      <StatusIcon status={item.status} />
-      <span className="dr-review-pill__text">{pillLine(item)}</span>
+    <span
+      className="dr-review-pill"
+      data-status={shown}
+      data-standing={standing.kind === 'same' ? undefined : standing.kind}
+      data-testid={testId}
+    >
+      <StatusIcon status={shown} />
+      <span className="dr-review-pill__text">{pillLine(item, new Date(), standing)}</span>
     </span>
   )
+}
+
+/** The pill of an item on this board page: against what its card shows now. */
+export function ReviewPill({ r, item, testId }: { r: Review; item: ReviewItem; testId?: string }) {
+  const standing = useStanding(r.ctx, item)
+  return <StatusPill item={item} standing={standing} testId={testId} />
 }
 
 export function StatusForm({ r, item, compact = false }: { r: Review; item: ReviewItem; compact?: boolean }) {
   const can = useValue('review.can', () => r.store.state.get().can, [r])
   const live = useValue('review.form-item', () => r.store.item(item.id) ?? item, [r, item])
+  const standing = useStanding(r.ctx, live)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const [ask, setAsk] = useState<Ask | null>(null)
@@ -113,6 +174,12 @@ export function StatusForm({ r, item, compact = false }: { r: Review; item: Revi
 
   return (
     <div className="dr-review-form" data-testid="review-status-form">
+      {standing.kind === 'replaced' && (
+        <p className="dr-review-muted" data-testid="review-replaced">
+          This card shows another file now. Nobody has reviewed it yet
+          {can.setStatus ? ': a status you set is about the new file.' : '.'}
+        </p>
+      )}
       {can.setStatus ? (
         <>
           <fieldset className="dr-review-form__buttons">
@@ -124,7 +191,7 @@ export function StatusForm({ r, item, compact = false }: { r: Review; item: Revi
                 className="dr-review-btn"
                 data-status={s}
                 data-testid={`review-set-${s}`}
-                aria-pressed={live.status === s}
+                aria-pressed={standing.kind !== 'replaced' && live.status === s}
                 disabled={busy}
                 onClick={() => void submit(s, live.statusSeq)}
               >

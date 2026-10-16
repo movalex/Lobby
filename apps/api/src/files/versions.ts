@@ -114,7 +114,10 @@ export const latestServable = (chain: readonly ChainVersionRow[]): ChainVersionR
 /**
  * Why `versionId` cannot be superseded on `boardId` now (null: it can), for the upload's checks before the body and
  * again in its transaction: 'missing' (not a version of this workspace this board serves: a 404, no probing),
- * 'not-latest' (a newer servable version exists, or the version already has a successor, perhaps on another board).
+ * 'not-latest' (a newer servable version exists, or the version already has a successor, perhaps on another board),
+ * 'not-origin' (the newest version was uploaded to another board and is only LINKED here, as a copy links what its
+ * canvas showed: only the board it was uploaded to, its origin, continues the chain; a copy uploads a new file
+ * instead, which the web's fallback does, and the review item on the copy is then "File replaced: review again").
  */
 export async function supersedeCheck(
   q: Queryable,
@@ -125,7 +128,7 @@ export async function supersedeCheck(
 ): Promise<
   | { ok: true; version: ChainVersionRow }
   | { ok: false; reason: 'missing' }
-  | { ok: false; reason: 'not-latest'; latestVersionId: string }
+  | { ok: false; reason: 'not-latest' | 'not-origin'; latestVersionId: string }
 > {
   const row = await q.maybeOne<{ asset_id: string }>(
     `SELECT asset_id FROM asset_versions WHERE id = $1 AND workspace_id = $2${opts.lock ? ' FOR SHARE' : ''}`,
@@ -138,6 +141,7 @@ export async function supersedeCheck(
   const latest = latestServable(chain) as ChainVersionRow
   if (latest.id !== versionId || chain.some((v) => v.supersedes === versionId))
     return { ok: false, reason: 'not-latest', latestVersionId: latest.id }
+  if (version.board_id !== boardId) return { ok: false, reason: 'not-origin', latestVersionId: versionId }
   return { ok: true, version }
 }
 

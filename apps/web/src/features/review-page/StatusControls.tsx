@@ -12,8 +12,9 @@ import {
   reviewActorLabel,
 } from '@draftroom/contracts'
 import { useEffect, useId, useRef, useState } from 'react'
+import { type FileStanding, SAME } from '../review/model.ts'
 import { ReviewRequestError, setReviewStatus } from './client.ts'
-import { type PageEntry, REVIEW_NOTE_PLACEHOLDER, statusButtons } from './model.ts'
+import { entryStatus, type PageEntry, REVIEW_NOTE_PLACEHOLDER, statusButtons } from './model.ts'
 
 type Mode =
   | { kind: 'idle' }
@@ -46,18 +47,21 @@ export function conflictText(item: ReviewItem): string {
 export function StatusControls({
   boardId,
   entry,
+  standing = SAME,
   can,
   onApplied,
   announce,
 }: {
   boardId: string
   entry: PageEntry
+  /** against what the card shows: a replaced file answers as Awaiting review (its status is about another file) */
+  standing?: FileStanding
   can: ReviewCan
   onApplied(item: ReviewItem, thread?: CommentThread): void
   announce(text: string): void
 }) {
   const { item } = entry
-  const buttons = statusButtons(can, item.status)
+  const buttons = statusButtons(can, entryStatus(entry, standing))
   const [mode, setMode] = useState<Mode>({ kind: 'idle' })
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)

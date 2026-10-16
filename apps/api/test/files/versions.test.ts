@@ -226,32 +226,51 @@ describe('X-Lobby-Supersedes', () => {
     expect((await w.list(w.owner, w.board, v1.assetId)).status).toBe(404)
   })
 
-  it('a copy numbers only the versions it serves; once the chain moved on there, the original cannot continue it', async () => {
+  it('a copy numbers only the versions it serves, and never takes the chain over: only the origin board supersedes', async () => {
     const w = await world()
     const v1 = await w.up(w.owner, w.board, 'cut.png')
     const v2 = await w.up(w.owner, w.board, 'cut-2.png', v1.versionId)
-    // a client copy that shows v2 only (as a duplicate links what the canvas showed)
+    const v3 = await w.up(w.owner, w.board, 'cut-3.png', v2.versionId)
+    // a client copy that shows v3 only (as a duplicate links what the canvas showed)
     const copy = await createBoard(w.owner, DEV_STUDIO, 'Client copy')
     await w.t.db.query(
       'INSERT INTO board_asset_links (workspace_id, board_id, asset_id, version_id) VALUES ($1, $2, $3, $4)',
-      [DEV_STUDIO, copy, v2.assetId, v2.versionId],
+      [DEV_STUDIO, copy, v3.assetId, v3.versionId],
     )
     const onCopy = await w.list(w.owner, copy, v1.assetId)
     expect(onCopy.body?.versions.map((v) => [v.n, v.versionId, v.supersedes])).toEqual([
-      [1, v2.versionId, null],
+      [1, v3.versionId, null],
     ])
-    // v3 uploaded on the copy joins the chain there
-    const v3 = await w.up(w.owner, copy, 'cut-3.png', v2.versionId)
-    expect((await w.list(w.owner, copy, v1.assetId)).body?.versions.map((v) => v.n)).toEqual([1, 2])
-    // the original still shows v1, v2 (v3 is not servable there until it is linked)
-    expect((await w.list(w.owner, w.board, v1.assetId)).body?.latestVersionId).toBe(v2.versionId)
-    const again = await send(w.t, w.owner.cookie, w.board, 'cut-3b.png', { supersedes: v2.versionId })
-    expect(again.status).toBe(409)
-    expect(VersionNotLatestBody.parse(again.body)).toMatchObject({
-      latestVersionId: v2.versionId,
+    // the copy only links v3, uploaded on the origin board: superseding it from the copy is refused (the web then
+    // makes a fresh asset), before the body and with nothing stored
+    const before = await w.t.db.one<{ n: number }>('SELECT count(*)::int AS n FROM asset_versions')
+    const refused = await send(w.t, w.owner.cookie, copy, 'cut-4b.png', { supersedes: v3.versionId })
+    expect(refused.status).toBe(409)
+    expect(VersionNotLatestBody.parse(refused.body)).toMatchObject({
+      latestVersionId: v3.versionId,
+      error: {
+        code: ASSET_VERSION_CODES.notLatest,
+        message: 'This file’s versions are kept on another board. Upload it here as a new file instead.',
+      },
+    })
+    expect(refused.headers.connection).toBe('close')
+    expect((await w.t.db.one<{ n: number }>('SELECT count(*)::int AS n FROM asset_versions')).n).toBe(
+      before.n,
+    )
+    // a fresh upload on the copy works as ever
+    const fresh = await w.up(w.owner, copy, 'cut-4b.png')
+    expect(fresh.assetId).not.toBe(v1.assetId)
+    // the origin board still continues the chain
+    const v4 = await w.up(w.owner, w.board, 'cut-4.png', v3.versionId)
+    expect(v4.assetId).toBe(v1.assetId)
+    expect(await supersedesOf(w.t, v4.versionId)).toBe(v3.versionId)
+    // and once it moved on there, the copy (still showing v3) is told the chain moved on
+    const stale = await send(w.t, w.owner.cookie, copy, 'cut-5.png', { supersedes: v3.versionId })
+    expect(stale.status).toBe(409)
+    expect(VersionNotLatestBody.parse(stale.body)).toMatchObject({
+      latestVersionId: v3.versionId,
       error: { message: 'This file already has a newer version on another board.' },
     })
-    expect(v3.assetId).toBe(v1.assetId)
   })
 
   it('counts this version’s threads as the caller may see them; the last review status given to it', async () => {

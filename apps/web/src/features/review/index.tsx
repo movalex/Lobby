@@ -28,7 +28,7 @@ import { ReviewBadgesLayer, ReviewPopoverLayer } from './Badges.tsx'
 import { type Review, reviewOf, setReview } from './bridge.ts'
 import { reviewFlags } from './flags.ts'
 import { markSelection, REVIEW_PANEL_ID, ReviewPanel, selectedMarkable } from './Panel.tsx'
-import { History, StatusForm, StatusPill } from './StatusForm.tsx'
+import { History, ReviewPill, StatusForm } from './StatusForm.tsx'
 import { ReviewStore } from './store.ts'
 import './review.css'
 
@@ -168,7 +168,7 @@ function BarButton({ ctx }: { ctx: CanvasFeatureContext; selection: readonly str
             aria-haspopup="dialog"
             onClick={() => view.item && view.r.store.popover.set({ itemId: view.item.id, from: 'badge' })}
           >
-            <StatusPill item={view.item} />
+            <ReviewPill r={view.r} item={view.item} />
           </button>
         )
       )}
@@ -215,7 +215,7 @@ function ViewerStatus({ ctx, request }: ViewerSlotProps) {
   if (!r || !item) return null
   return (
     <div className="dr-review-viewer" data-testid="review-viewer-status">
-      <StatusPill item={item} />
+      <ReviewPill r={r} item={item} />
       <StatusForm r={r} item={item} compact />
       <History r={r} item={item} />
     </div>

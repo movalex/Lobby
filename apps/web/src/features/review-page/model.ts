@@ -10,8 +10,17 @@ import {
   type ReviewItem,
   type ReviewRound,
   type ReviewStatus,
+  reviewActorLabel,
   reviewCounts,
 } from '@draftroom/contracts'
+import {
+  type FileStanding,
+  fileStanding,
+  pillStatus,
+  REPLACED_TEXT,
+  SAME,
+  standingText,
+} from '../review/model.ts'
 
 export interface ElementBounds {
   readonly x: number
@@ -107,15 +116,45 @@ export function pageEntries(
   }))
 }
 
+/** An entry, or what counting needs of one (an item, and the file its card shows when known). */
+type EntryLike = Pick<PageEntry, 'item'> & { readonly file?: ElementFile | null }
+
+/**
+ * How an entry's status stands against its card (WS1's fileStanding, without version numbers): a card that now shows
+ * another file is 'replaced', and counts and reads as awaiting review (nobody approved what the client sees).
+ */
+export const entryStanding = (e: EntryLike): FileStanding =>
+  fileStanding(e.item, e.file ? { assetId: e.file.assetId, versionId: e.file.versionId } : null)
+
+/** The status the page counts and answers from: a replaced file's is Awaiting review. */
+export const entryStatus = (e: EntryLike, standing: FileStanding = entryStanding(e)) =>
+  pillStatus(e.item, standing)
+
+const countsOf = (entries: readonly EntryLike[]) =>
+  reviewCounts(entries.map((e) => ({ status: entryStatus(e), removedAt: e.item.removedAt })))
+
+/**
+ * The pill's words: "Approved · Ana (guest)", "Approved v2 · v3 is newer · Ana (guest)", "File replaced: review
+ * again" (who said it was about another file).
+ */
+export function entryPillText(
+  item: Pick<ReviewItem, 'status' | 'statusBy'>,
+  standing: FileStanding = SAME,
+): string {
+  if (standing.kind === 'replaced') return REPLACED_TEXT
+  const words = standingText(item, standing)
+  return item.statusBy ? `${words} · ${reviewActorLabel(item.statusBy)}` : words
+}
+
 /** The sticky header's words: "3 of 7 approved". */
-export function progressText(entries: readonly Pick<PageEntry, 'item'>[]): string {
-  const counts = reviewCounts(entries.map((e) => e.item))
+export function progressText(entries: readonly EntryLike[]): string {
+  const counts = countsOf(entries)
   return `${counts.approved} of ${entries.length} approved`
 }
 
 /** Extra words next to the progress when something needs attention ("2 with changes requested"). */
-export function progressDetail(entries: readonly Pick<PageEntry, 'item'>[]): string {
-  const counts = reviewCounts(entries.map((e) => e.item))
+export function progressDetail(entries: readonly EntryLike[]): string {
+  const counts = countsOf(entries)
   const parts: string[] = []
   if (counts.changes_requested > 0) parts.push(`${counts.changes_requested} with changes requested`)
   if (counts.pending > 0) parts.push(`${counts.pending} awaiting review`)

@@ -11,6 +11,7 @@ import {
   sanitizeDisplayName,
 } from '@draftroom/dev-assets'
 import type { FastifyReply, FastifyRequest } from 'fastify'
+import { lockBoardNotifications } from '../features/comments/notifications.ts'
 import { resetForNewVersion } from '../features/review/hooks.ts'
 import { SlidingWindowLimiter } from '../rate-limit.ts'
 import { deleteQuietly, originalKey } from './blobs.ts'
@@ -141,15 +142,24 @@ function parseSupersedes(raw: string | string[] | undefined): string | null {
 
 /**
  * 409 VERSION_NOT_LATEST. `latestVersionId` is the newest version this board serves; when it is the superseded one
- * itself, the chain moved on on another board (a copy that shares the deliverable): this board cannot continue it.
+ * itself, the chain moved on on another board (a copy that shares the deliverable), or (`linked`) that version was
+ * uploaded to another board and is only linked here: this board cannot continue it (only the origin board does), so
+ * the web uploads a fresh asset instead.
  */
-const notLatest = (superseded: string, latestVersionId: string, headers: Record<string, string> = {}) =>
+const notLatest = (
+  superseded: string,
+  latestVersionId: string,
+  headers: Record<string, string> = {},
+  opts: { linked?: boolean } = {},
+) =>
   new HttpError(
     409,
     ASSET_VERSION_CODES.notLatest,
-    latestVersionId === superseded
-      ? 'This file already has a newer version on another board.'
-      : 'A newer version of this file was uploaded meanwhile. Upload on top of the newest version instead.',
+    opts.linked
+      ? 'This file’s versions are kept on another board. Upload it here as a new file instead.'
+      : latestVersionId === superseded
+        ? 'This file already has a newer version on another board.'
+        : 'A newer version of this file was uploaded meanwhile. Upload on top of the newest version instead.',
     headers,
     { latestVersionId },
   )
@@ -177,7 +187,10 @@ async function checkSupersede(
   // not a version this board serves (another workspace's, another board's, or none): the same 404 as a missing file
   if (!check.ok && check.reason === 'missing')
     throw new HttpError(404, 'NOT_FOUND', 'Not found.', opts.headers)
-  if (!check.ok) throw notLatest(at.versionId, check.latestVersionId, opts.headers)
+  if (!check.ok)
+    throw notLatest(at.versionId, check.latestVersionId, opts.headers, {
+      linked: check.reason === 'not-origin',
+    })
   if (!versionKindsCompatible(check.version.kind, at.kind))
     throw new HttpError(
       400,
@@ -253,6 +266,9 @@ export async function handleUpload(
     })
     const now = deps.now?.() ?? new Date()
     row = await deps.db.transaction(async (tx) => {
+      // a new version may reset review items, whose bell rows are capped: the board's notification lock before any
+      // row lock (comments/notifications.ts NC-V3 order)
+      if (chain) await lockBoardNotifications(tx, boardId)
       // Serializes this workspace's uploads for the re-check (NO KEY: boards and members referencing
       // the workspace row are not blocked).
       await tx.query('SELECT id FROM workspaces WHERE id = $1 FOR NO KEY UPDATE', [workspaceId])

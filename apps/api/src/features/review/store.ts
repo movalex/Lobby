@@ -24,6 +24,7 @@ import {
 import { newId, type Queryable } from '@draftroom/db'
 import type { BoardRow } from '../../access.ts'
 import { type CreatorLookup, knownOutsideSql, matchParams } from '../../auth/creator-sql.ts'
+import { chainOnBoard, latestServable } from '../../files/versions.ts'
 import { enqueueChatDeliveries } from '../chat-hooks/outbox.ts'
 import { boardOwners } from '../comments/notifications.ts'
 import { idList, viewersAmong } from '../comments/store.ts'
@@ -339,25 +340,35 @@ export async function loadEvents(
 }
 
 /**
- * The newest version of `assetId` servable on this board (uploaded to it, or linked to it: files-auth.ts), with its
- * board still in the workspace. Null: none.
+ * The asset `versionId` belongs to when this board may serve it (uploaded to it, or linked to it with its uploading
+ * board in the workspace: files-auth.ts, through files/versions.ts chainOnBoard, the one definition of a chain).
+ * Null: not a version of this workspace this board serves (a 404, no probing).
+ */
+export async function servableVersion(
+  q: Queryable,
+  board: BoardKey,
+  versionId: string,
+): Promise<{ assetId: string } | null> {
+  const row = await q.maybeOne<{ asset_id: string }>(
+    'SELECT asset_id FROM asset_versions WHERE id = $1 AND workspace_id = $2',
+    [versionId, board.workspace_id],
+  )
+  if (!row) return null
+  const chain = await chainOnBoard(q, board.workspace_id, board.id, row.asset_id)
+  if (!chain.find((v) => v.id === versionId)?.servable) return null
+  return { assetId: row.asset_id }
+}
+
+/**
+ * The newest version of `assetId` this board serves, or null: none. The chain's (files/versions.ts latestServable over
+ * chainOnBoard: the `supersedes` walk), never created_at then id, so the review and the upload agree.
  */
 export async function latestServableVersion(
   q: Queryable,
   board: BoardKey,
   assetId: string,
 ): Promise<string | null> {
-  const row = await q.maybeOne<{ id: string }>(
-    `SELECT v.id FROM asset_versions v
-       JOIN boards owner ON owner.id = v.board_id AND owner.workspace_id = v.workspace_id
-      WHERE v.asset_id = $1 AND v.workspace_id = $2
-        AND (v.board_id = $3 OR EXISTS (
-              SELECT 1 FROM board_asset_links l
-               WHERE l.workspace_id = $2 AND l.board_id = $3 AND l.asset_id = v.asset_id AND l.version_id = v.id))
-      ORDER BY v.created_at DESC, v.id DESC LIMIT 1`,
-    [assetId, board.workspace_id, board.id],
-  )
-  return row?.id ?? null
+  return latestServable(await chainOnBoard(q, board.workspace_id, board.id, assetId))?.id ?? null
 }
 
 // ---- writes ---------------------------------------------------------------------------------------------------
@@ -433,18 +444,32 @@ export async function insertEvent(q: Queryable, e: NewEvent): Promise<EventRow> 
   return row
 }
 
-/** Sets an item's status (one more status change: status_seq + 1). */
+/**
+ * Sets an item's status (one more status change: status_seq + 1). `assetId`: a file item whose card now shows
+ * another asset (a fresh-asset fallback of Replace media) is re-pointed to it in the same statement, with the
+ * version (0037's composite key holds the pair together).
+ */
 export async function applyStatus(
   q: Queryable,
   itemId: string,
-  s: { status: ReviewStatus; by: string; at: Date; versionId: string | null | undefined },
+  s: { status: ReviewStatus; by: string; at: Date; versionId: string | null | undefined; assetId?: string },
 ): Promise<void> {
   await q.query(
     `UPDATE review_items
         SET status = $2, status_seq = status_seq + 1, status_by = $3, status_at = $4,
-            status_version_id = CASE WHEN $5::boolean THEN $6::text ELSE status_version_id END
+            status_version_id = CASE WHEN $5::boolean THEN $6::text ELSE status_version_id END,
+            asset_id = CASE WHEN $7::boolean THEN $8::text ELSE asset_id END
       WHERE id = $1`,
-    [itemId, s.status, s.by, s.at, s.versionId !== undefined, s.versionId ?? null],
+    [
+      itemId,
+      s.status,
+      s.by,
+      s.at,
+      s.versionId !== undefined,
+      s.versionId ?? null,
+      s.assetId !== undefined,
+      s.assetId ?? null,
+    ],
   )
 }
 
@@ -484,16 +509,71 @@ export async function reviewRecipients(
 }
 
 /**
+ * The bell's flood brakes for review_status (the comments' DANA-02 / NC-V4 caps, for review): within
+ * REVIEW_NOTIFY_WINDOW_MS, one recipient gets at most REVIEW_NOTIFY_ACTOR_CAP rows from one actor on one board and
+ * REVIEW_NOTIFY_BOARD_CAP from everyone on it (a name-only guest costs nothing but a name, so a per-actor cap alone
+ * multiplies by the guests one link lets in). Read or not: reading the bell never reopens the flood (the chat outbox
+ * follows the rows). Past a cap the step still applies and shows on the board, the panel and the review page; it just
+ * adds no bell row or chat message. The in-memory write budget (REVIEW_LIMITS.statusChangesPerMinute) stays in front.
+ */
+export const REVIEW_NOTIFY_WINDOW_MS = 60 * 60_000
+export const REVIEW_NOTIFY_ACTOR_CAP = 20
+export const REVIEW_NOTIFY_BOARD_CAP = 30
+
+/**
  * ONE review_status notification per recipient about `eventId` (on the event's board), with the chat outbox rows of
- * the people who opted in, in this transaction. Returns the notification ids.
+ * the people who opted in, in this transaction. `itemId` (a status write): a recipient who still holds an unread row
+ * from this actor about a status of this item within the window gets that row moved to the new event (the latest flip,
+ * on top of the bell; its chat message, still queued, is rendered from it at send time) instead of a new one. A row
+ * whose chat message already went (or is going) stays as it is: the new step is a new row, so the channel hears the
+ * latest status, and the caps bound it. Then the caps above. Call under
+ * lockBoardNotifications (comments/notifications.ts: the caps count, then insert). Returns the new notification ids.
  */
 export async function notifyReview(
   q: Queryable,
-  base: { board: BoardKey; eventId: string; actorId: string; at: Date },
+  base: { board: BoardKey; eventId: string; actorId: string; at: Date; itemId?: string },
   recipients: readonly string[],
 ): Promise<string[]> {
+  if (recipients.length === 0) return []
+  const since = new Date(base.at.getTime() - REVIEW_NOTIFY_WINDOW_MS)
+  let rest = [...recipients]
+  if (base.itemId) {
+    const prior = await q.query<{ id: string; user_id: string }>(
+      `SELECT DISTINCT ON (n.user_id) n.id, n.user_id
+         FROM notifications n
+         JOIN review_events e ON e.id = n.review_event_id AND e.board_id = n.board_id
+        WHERE n.board_id = $1 AND n.workspace_id = $2 AND n.kind = 'review_status' AND n.actor_id = $3
+          AND n.read_at IS NULL AND n.created_at > $4 AND e.kind = 'status' AND e.item_id = $5
+          AND n.user_id IN (SELECT jsonb_array_elements_text($6::jsonb))
+          AND NOT EXISTS (SELECT 1 FROM chat_deliveries d WHERE d.notification_id = n.id AND d.status <> 'queued')
+        ORDER BY n.user_id, n.seq DESC`,
+      [base.board.id, base.board.workspace_id, base.actorId, since, base.itemId, idList(rest)],
+    )
+    for (const p of prior.rows)
+      await q.query(
+        'UPDATE notifications SET review_event_id = $2, created_at = $3, seq = DEFAULT WHERE id = $1',
+        [p.id, base.eventId, base.at],
+      )
+    const moved = new Set(prior.rows.map((p) => p.user_id))
+    rest = rest.filter((id) => !moved.has(id))
+  }
+  if (rest.length === 0) return []
+  const counts = await q.query<{ user_id: string; mine: number; board: number }>(
+    `SELECT n.user_id, count(*) FILTER (WHERE n.actor_id = $3)::int AS mine, count(*)::int AS board
+       FROM notifications n
+      WHERE n.board_id = $1 AND n.workspace_id = $2 AND n.kind = 'review_status' AND n.created_at > $4
+        AND n.user_id IN (SELECT jsonb_array_elements_text($5::jsonb))
+      GROUP BY n.user_id`,
+    [base.board.id, base.board.workspace_id, base.actorId, since, idList(rest)],
+  )
+  const full = new Set(
+    counts.rows
+      .filter((r) => r.mine >= REVIEW_NOTIFY_ACTOR_CAP || r.board >= REVIEW_NOTIFY_BOARD_CAP)
+      .map((r) => r.user_id),
+  )
   const ids: string[] = []
-  for (const userId of recipients) {
+  for (const userId of rest) {
+    if (full.has(userId)) continue
     const row = await q.one<{ id: string }>(
       `INSERT INTO notifications (workspace_id, user_id, kind, board_id, actor_id, review_event_id, created_at)
        VALUES ($1, $2, 'review_status', $3, $4, $5, $6) RETURNING id`,

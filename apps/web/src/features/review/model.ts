@@ -66,6 +66,62 @@ export function shownVersionOf(el: CanvasElement | undefined | null): string | n
   return el ? (factsOf(el)?.versionId ?? null) : null
 }
 
+// ---- a file item against what its card shows ------------------------------------------------------------------
+
+/** The deliverable a file item's element shows now (customData.lobby.file). */
+export interface ShownFile {
+  readonly assetId: string
+  readonly versionId: string
+}
+
+/**
+ * How a file item's status stands against what its card shows (a frame, or a card the page cannot read: 'same'):
+ *   - 'same': the status is about the version shown (or it is Awaiting review: nothing was said about any version);
+ *   - 'other': the status is about another version of the same file ("Approved v2" while the card shows v3, after an
+ *     upload on another tab's chain, or v1 after "Make current", an undo or a restore); `statusN`/`shownN` are their
+ *     numbers on this board when the version list knows them;
+ *   - 'replaced': the card shows ANOTHER file (Replace media made a fresh asset: another board holds the chain, or an
+ *     older tab replaced it): nobody reviewed what is shown, so no status is shown for it until someone sets one (the
+ *     api then re-points the item to the new file).
+ */
+export type FileStanding =
+  | { readonly kind: 'same' }
+  | { readonly kind: 'other'; readonly statusN: number | null; readonly shownN: number | null }
+  | { readonly kind: 'replaced' }
+
+export const SAME: FileStanding = { kind: 'same' }
+
+/** The words of a replaced file's pill (never the old status: nobody approved what is shown). */
+export const REPLACED_TEXT = 'File replaced: review again'
+
+export function fileStanding(
+  item: Pick<ReviewItem, 'kind' | 'assetId' | 'status' | 'statusVersionId'>,
+  shown: ShownFile | null,
+  numberOf: (versionId: string) => number | null = () => null,
+): FileStanding {
+  if (item.kind !== 'file' || !shown) return SAME
+  if (item.assetId !== shown.assetId) return { kind: 'replaced' }
+  if (item.status === 'pending' || !item.statusVersionId || item.statusVersionId === shown.versionId)
+    return SAME
+  return { kind: 'other', statusN: numberOf(item.statusVersionId), shownN: numberOf(shown.versionId) }
+}
+
+/** "Approved", "Approved v2 · v3 is newer", "Approved v3 · this shows v2", "File replaced: review again". */
+export function standingText(item: Pick<ReviewItem, 'status'>, standing: FileStanding = SAME): string {
+  const label = REVIEW_STATUS_LABELS[item.status]
+  if (standing.kind === 'replaced') return REPLACED_TEXT
+  if (standing.kind === 'same') return label
+  const { statusN, shownN } = standing
+  const said = statusN ? `${label} v${statusN}` : `${label} (another version)`
+  const now =
+    statusN && shownN
+      ? shownN > statusN
+        ? `v${shownN} is newer`
+        : `this shows v${shownN}`
+      : 'this shows another version'
+  return `${said} · ${now}`
+}
+
 // ---- the panel ---------------------------------------------------------------------------------------------
 
 export type ReviewFilter = 'all' | ReviewStatus
@@ -157,19 +213,29 @@ export function badgeAnchor(
 
 // ---- words -------------------------------------------------------------------------------------------------
 
-/** The pill: "Approved · Ana (guest) · 2 h ago" (icon and text; never colour alone). */
+/**
+ * The pill: "Approved · Ana (guest) · 2 h ago", "Approved v2 · v3 is newer · Ana (guest) · 2 h ago" (icon and text;
+ * never colour alone); a replaced file only "File replaced: review again" (who and when were about another file).
+ */
 export function pillLine(
   item: Pick<ReviewItem, 'status' | 'statusBy' | 'statusAt'>,
   now: Date = new Date(),
+  standing: FileStanding = SAME,
 ): string {
-  const parts = [REVIEW_STATUS_LABELS[item.status]]
+  const parts = [standingText(item, standing)]
+  if (standing.kind === 'replaced') return parts[0] as string
   if (item.statusBy) parts.push(reviewActorLabel(item.statusBy))
   if (item.statusAt) parts.push(formatRelativeTime(item.statusAt, now))
   return parts.join(' · ')
 }
 
+/** The status the pill's icon and colour show: none for a replaced file (it reads as Awaiting review). */
+export const pillStatus = (item: Pick<ReviewItem, 'status'>, standing: FileStanding = SAME): ReviewStatus =>
+  standing.kind === 'replaced' ? 'pending' : item.status
+
 /** The pill's accessible name. */
-export const pillLabel = (item: ReviewItem) => `Review status of ${item.label}: ${pillLine(item)}`
+export const pillLabel = (item: ReviewItem, standing: FileStanding = SAME) =>
+  `Review status of ${item.label}: ${pillLine(item, new Date(), standing)}`
 
 /** One history row: "Approved by Ana (guest)", "Back to Awaiting review: new version", "Marked for review". */
 export function eventLine(e: ReviewEvent): string {

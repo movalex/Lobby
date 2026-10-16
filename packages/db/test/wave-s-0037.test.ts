@@ -326,6 +326,16 @@ describe('0037: review rounds, items and events', () => {
     const file = { kind: 'file', asset_id: AST, element_id: 'card-1' }
     expect(await sqlstate(reviewItem(q, { ...file, status_version_id: VX }))).toBe('23503')
     expect(await sqlstate(reviewItem(q, { ...file, status_version_id: V1 }))).toBe('no error')
+    // re-pointing a file item (its card now shows another asset): the asset and the version change together
+    const repoint = (asset: string, ver: string) =>
+      q.query('UPDATE review_items SET asset_id = $2, status_version_id = $3 WHERE id = $1', [
+        RVI,
+        asset,
+        ver,
+      ])
+    expect(await sqlstate(repoint(AST2, V1))).toBe('23503')
+    expect(await sqlstate(repoint(AST2, VX))).toBe('no error')
+    expect(await sqlstate(repoint(AST, V1))).toBe('no error')
     expect(await sqlstate(reviewItem(q, { id: 'rvi_item000000002' }))).toBe('no error')
     // the same element again while it is live: refused; removed, it can be marked again (a new live row)
     expect(await sqlstate(reviewItem(q, { id: 'rvi_item000000003' }))).toBe('23505')
@@ -438,6 +448,16 @@ describe('0037: review rounds, items and events', () => {
     expect(await sqlstate(ntf('review_status', RVE, B2))).toBe('23503')
     expect(await sqlstate(ntf('review_status', RVE))).toBe('no error')
     expect(await sqlstate(ntf('review_stats', null))).toBe('23514')
+    // the bell's review caps read a recipient's rows on one board within a window (features/review/store.ts)
+    expect(
+      await q.one<{ indexdef: string }>(
+        "SELECT indexdef FROM pg_indexes WHERE indexname = 'notifications_review_window_idx'",
+      ),
+    ).toEqual({
+      indexdef: expect.stringContaining(
+        "ON public.notifications USING btree (board_id, user_id, created_at) WHERE (kind = 'review_status'::text)",
+      ),
+    })
     await q.query('DELETE FROM review_events WHERE id = $1', [RVE])
     expect(await count(q, 'notifications')).toBe(0)
   })

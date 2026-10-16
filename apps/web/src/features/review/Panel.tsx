@@ -18,7 +18,7 @@ import {
   REVIEW_FILTERS,
   type ReviewFilter,
 } from './model.ts'
-import { StatusPill } from './StatusForm.tsx'
+import { ReviewPill } from './StatusForm.tsx'
 
 export const REVIEW_PANEL_ID = 'review'
 
@@ -219,7 +219,7 @@ function Panel({ r }: { r: Review }) {
           {shown.map(({ item, orphaned }) => (
             <li key={item.id} className="dr-review-row" data-testid="review-row" data-item-id={item.id}>
               <span className="dr-review-row__label">{item.label}</span>
-              <StatusPill item={item} />
+              <ReviewPill r={r} item={item} />
               {orphaned ? (
                 <span className="dr-review-muted">On a deleted object</span>
               ) : (
