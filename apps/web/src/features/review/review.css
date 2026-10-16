@@ -1,0 +1,305 @@
+/* Review status (wave S, WS1). UI uses the --dr-* tokens from styles.css (both themes): pending on the accent pair,
+   changes on the warning pair, approved on the live pair: AA text on its own background, with an icon and words so
+   a status never rests on colour alone. */
+
+/* ---- the pills on the canvas (screen pixels; the layer takes no clicks, the pills do) ------------------- */
+.dr-review-badges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.dr-review-badge {
+  position: absolute;
+  left: 0;
+  top: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  pointer-events: auto;
+  border-radius: 999px;
+}
+.dr-review-badge:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 2px;
+}
+.dr-review-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 280px;
+  height: 24px;
+  padding: 0 9px 0 7px;
+  border-radius: 999px;
+  border: 1px solid var(--dr-accent-line);
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+  font: 600 12px / 1 var(--dr-font);
+  white-space: nowrap;
+  box-shadow: var(--dr-shadow);
+}
+.dr-review-pill__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dr-review-pill[data-status="changes_requested"] {
+  border-color: var(--dr-warn-line);
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+}
+.dr-review-pill[data-status="approved"] {
+  border-color: color-mix(in srgb, var(--dr-live) 45%, transparent);
+  background: var(--dr-live-bg);
+  color: var(--dr-live);
+}
+
+/* ---- the popover ------------------------------------------------------------------------------------ */
+.dr-review-popover {
+  position: absolute;
+  width: min(320px, calc(100% - 16px));
+  max-height: min(70vh, 560px);
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-radius: var(--dr-radius);
+  border: 1px solid var(--dr-line);
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  box-shadow: var(--dr-shadow-pop);
+  pointer-events: auto;
+  font: 14px / 1.4 var(--dr-font);
+}
+.dr-review-popover__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.dr-review-popover__label {
+  overflow-wrap: anywhere;
+}
+.dr-review-popover__foot {
+  border-top: 1px solid var(--dr-line);
+  padding-top: 8px;
+}
+.dr-review-close {
+  min-width: 32px;
+  min-height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dr-review-close:hover {
+  background: var(--dr-hover);
+}
+
+/* ---- the form --------------------------------------------------------------------------------------- */
+.dr-review-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dr-review-form__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dr-review-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--dr-line-strong);
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 600 13px / 1 var(--dr-font);
+  cursor: pointer;
+}
+.dr-review-btn:hover:not(:disabled) {
+  background: var(--dr-hover);
+}
+.dr-review-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.dr-review-btn[aria-pressed="true"][data-status="approved"] {
+  background: var(--dr-live-bg);
+  color: var(--dr-live);
+  border-color: var(--dr-live);
+}
+.dr-review-btn[aria-pressed="true"][data-status="changes_requested"] {
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+  border-color: var(--dr-warn-line);
+}
+.dr-review-btn[aria-pressed="true"][data-status="pending"] {
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+  border-color: var(--dr-accent-line);
+}
+.dr-review-btn--primary {
+  background: var(--dr-navy);
+  color: var(--dr-on-navy);
+  border-color: var(--dr-navy);
+}
+.dr-review-btn--primary:hover:not(:disabled) {
+  background: var(--dr-navy-hover);
+}
+.dr-review-form__label {
+  font-size: 12px;
+  color: var(--dr-placeholder);
+}
+.dr-review-form__note {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--dr-field-line);
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 14px / 1.4 var(--dr-font);
+}
+.dr-review-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--dr-warn-bg);
+  color: var(--dr-warn);
+}
+.dr-review-muted {
+  margin: 0;
+  color: var(--dr-placeholder);
+  font-size: 12px;
+}
+
+/* ---- the history ------------------------------------------------------------------------------------ */
+.dr-review-history__title {
+  margin: 0 0 4px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--dr-placeholder);
+}
+.dr-review-history__list {
+  margin: 0;
+  padding: 0 0 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+
+/* ---- the panel -------------------------------------------------------------------------------------- */
+.dr-review-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  font: 14px / 1.4 var(--dr-font);
+  color: var(--dr-ink);
+}
+.dr-review-panel__progress {
+  margin: 0;
+  font-weight: 600;
+}
+.dr-review-panel__round {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--dr-inset);
+  border: 1px solid var(--dr-line);
+}
+.dr-review-panel__round p {
+  margin: 0;
+}
+.dr-review-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.dr-review-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dr-review-chip {
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--dr-line-strong);
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 13px / 1 var(--dr-font);
+  cursor: pointer;
+}
+.dr-review-chip[aria-pressed="true"] {
+  background: var(--dr-navy);
+  border-color: var(--dr-navy);
+  color: var(--dr-on-navy);
+}
+.dr-review-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dr-review-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid var(--dr-line);
+}
+.dr-review-row__label {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.dr-review-row .dr-review-pill {
+  box-shadow: none;
+}
+
+/* ---- the selection bar and the viewer --------------------------------------------------------------- */
+.dr-review-barslot {
+  display: inline-flex;
+  align-items: center;
+}
+.dr-review-barbtn {
+  width: auto;
+  padding: 0 8px;
+  white-space: nowrap;
+}
+.dr-review-barbtn .dr-review-pill {
+  box-shadow: none;
+  height: 22px;
+}
+.dr-review-viewer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+fieldset.dr-review-form__buttons,
+fieldset.dr-review-filters {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}

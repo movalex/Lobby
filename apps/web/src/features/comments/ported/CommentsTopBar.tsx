@@ -16,6 +16,8 @@ import { onFocusLeave } from '../../../ui/focus.ts'
 import { useTopBarWidth } from '../../../ui/useMedia.ts'
 import { ExternalTag } from '../../people/ExternalTag.tsx'
 import { OUTSIDER_JOINED_KIND_TEXT, outsiderJoinedText } from '../../people/outside.ts'
+import { reviewNotificationText } from '../../review/copy.ts'
+import { reviewFlags } from '../../review/flags.ts'
 import { BELL_EMPTY, BELL_NOTE } from '../copy.ts'
 import { BellIcon, CommentIcon } from '../icons.tsx'
 import { COMMENT_TOOL_ID, canCommentIn, controllerFor, focusThread, selectCommentTool } from './controller.ts'
@@ -109,7 +111,7 @@ const KIND_TEXT: Record<NotificationItem['kind'], string> = {
   new_comment: 'commented', // DANA-02: a new thread on a board you own
   access_granted: 'approved your access request', // PRI-09b
   outsider_joined: OUTSIDER_JOINED_KIND_TEXT, // wave J (rendered with the name's External tag)
-  review_status: 'updated a review', // wave S (rev 3; WS1 words it from item.review)
+  review_status: 'updated a review', // wave S (rev 3; worded from item.review: features/review/copy.ts)
 }
 
 const REQUEST_TEXT: Record<NotificationAccessRequest['role'], string> = {
@@ -184,6 +186,11 @@ function NotificationsBell({ ctx }: { ctx: CanvasFeatureContext }) {
           ? `${boardPath(n.boardId)}?thread=${encodeURIComponent(n.threadId)}`
           : boardPath(n.boardId),
       )
+      return
+    }
+    // wave S: a review step on this board opens the Review panel (with the status switch on)
+    if (n.kind === 'review_status') {
+      if (reviewFlags().status) ctx.openPanel('review')
       return
     }
     if (n.kind === 'access_request' || n.kind === 'outsider_joined') {
@@ -276,7 +283,8 @@ function NotificationsBell({ ctx }: { ctx: CanvasFeatureContext }) {
                           </span>
                         ) : (
                           <span>
-                            <strong>{n.actor?.name ?? 'Someone'}</strong> {KIND_TEXT[n.kind]}
+                            <strong>{n.actor?.name ?? 'Someone'}</strong>{' '}
+                            {n.kind === 'review_status' ? reviewNotificationText(n) : KIND_TEXT[n.kind]}
                             {n.boardId !== ctx.board.id ? ` on ${n.boardTitle}` : ''}
                           </span>
                         )}

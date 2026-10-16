@@ -16,6 +16,7 @@ import { createPortal } from 'react-dom'
 import { api } from '../api/client.ts'
 import { ExternalTag } from '../features/people/ExternalTag.tsx'
 import { outsiderJoinedText } from '../features/people/outside.ts'
+import { reviewNotificationText } from '../features/review/copy.ts'
 import { formatRelativeTime } from '../lib/format.ts'
 import { navigate } from '../lib/routing.ts'
 import {
@@ -224,7 +225,8 @@ export function DashboardBell({
                           </span>
                         ) : (
                           <span>
-                            <strong>{n.actor?.name ?? 'Someone'}</strong> {KIND_TEXT[n.kind]} on{' '}
+                            <strong>{n.actor?.name ?? 'Someone'}</strong>{' '}
+                            {n.kind === 'review_status' ? reviewNotificationText(n) : KIND_TEXT[n.kind]} on{' '}
                             {n.boardTitle}
                           </span>
                         )}

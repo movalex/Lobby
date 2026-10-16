@@ -1,6 +1,8 @@
 import { type BoardWithRole, NEW_CANVAS_CARD_NOTE, thumbnailPath } from '@draftroom/contracts'
 import { type CSSProperties, useEffect, useState } from 'react'
 import { SharedOutsideMarker } from '../features/people/SharedOutside.tsx'
+import { boardChipText } from '../features/review/copy.ts'
+import { reviewFlags } from '../features/review/flags.ts'
 import { onThumbnailUpdated, recentThumbnail } from '../features/thumbnails/card-events.ts'
 import { initialsFor } from '../lib/identity.ts'
 import { can } from '../lib/permissions.ts'
@@ -125,7 +127,13 @@ export function BoardThumb({ boardId, title }: { boardId: string; title?: string
 }
 
 export function BoardCard<
-  B extends BoardWithRole & { starred?: boolean; thumbnailVersion?: string | null; sharedOutside?: boolean },
+  B extends BoardWithRole & {
+    starred?: boolean
+    thumbnailVersion?: string | null
+    sharedOutside?: boolean
+    /** wave S (WS1): live review items per status (absent: none, or an api before wave S) */
+    review?: { pending: number; changes: number; approved: number }
+  },
 >({
   board,
   renaming,
@@ -161,6 +169,7 @@ export function BoardCard<
   const canOpen = items.some((i) => i.action === 'open')
   const href = boardPath(board.id)
   const when = boardWhen(board, now)
+  const reviewChip = reviewFlags().status && board.status !== 'trashed' ? boardChipText(board.review) : null
 
   const body = (
     <div className="dr-bcard__thumb">
@@ -249,6 +258,12 @@ export function BoardCard<
                   </svg>
                 )}
                 {newsLabel(news)}
+              </span>
+            )}
+            {/* Wave S (WS1): "2 awaiting · 1 change", with the review status switch on */}
+            {reviewChip && (
+              <span className="dr-bcard__news" data-testid="board-card-review">
+                {reviewChip}
               </span>
             )}
             <span>{when}</span>
