@@ -18,6 +18,7 @@ import {
   openShareFromButton,
   shareDialog,
 } from '../tests/support/dashboard-share.ts'
+import { API_URL } from '../tests/support/ports.ts'
 import { downloadFrom, pdfPageTexts, readPdf } from '../tests/support/present-export.ts'
 import { commentsApi, shapeAnchor } from './comments-kit.ts'
 import { seedDeck } from './present-kit.ts'
@@ -126,7 +127,15 @@ test('a client opens a review link made with "Open as review page" and lands on 
     const foreign: string[] = []
     g.on('request', (r) => {
       const u = new URL(r.url())
-      if (u.protocol !== 'data:' && u.protocol !== 'blob:' && u.origin !== new URL(WEB_URL).origin)
+      // E2E_DIRECT_EVENTS=1: the board's event stream is served on the api's own origin (wave H), which is Lobby's
+      const directStream =
+        u.origin === new URL(API_URL).origin && /^\/api\/boards\/[^/]+\/events$/.test(u.pathname)
+      if (
+        u.protocol !== 'data:' &&
+        u.protocol !== 'blob:' &&
+        u.origin !== new URL(WEB_URL).origin &&
+        !directStream
+      )
         foreign.push(r.url())
     })
     await expect(g).toHaveURL(/\/b\/[a-z0-9-]+\?view=review$/, { timeout: 30_000 })
