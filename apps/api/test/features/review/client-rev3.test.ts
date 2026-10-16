@@ -3,7 +3,9 @@
 // @draftroom/contracts/fixtures/client-rev2: one 'review_status' value in either answer fails the whole answer. So the
 // api answers a request that declares revision 2 (or none) without the kind, and a PUT of an older build's chat
 // choices keeps the review_status it cannot know. A rev-3 build gets it. Also here: the foundation's other stubs that
-// a stale or a new client could reach (a comment spot is refused until WS3 stores it; the review reset is a no-op).
+// a stale or a new client could reach (the review reset is a no-op). WS3 replaced the foundation's spot refusal with
+// its anchor checks (features/comments/media-anchors.test.ts); the case kept here: a spot on a version that is not on
+// the board, or without a file, is still refused and writes nothing.
 
 import {
   ChatPrefsResponse,
@@ -160,7 +162,7 @@ describe('chat preferences', () => {
 })
 
 describe('the other foundation stubs', () => {
-  it('a thread with a spot is refused (400 INVALID_ANCHOR) until WS3 stores it; nothing is written', async () => {
+  it('a spot on a version that is not on the board, or on no file, is refused (400 INVALID_ANCHOR); nothing is written', async () => {
     const world = await chatWorld()
     w = world
     const res = await world.ben.req('POST', `/api/boards/${world.boardId}/threads`, {
@@ -176,6 +178,13 @@ describe('the other foundation stubs', () => {
     })
     expect(res.statusCode, res.body).toBe(400)
     expect((res.json() as { error: { code: string } }).error.code).toBe('INVALID_ANCHOR')
+    const onBoard = await world.ben.req('POST', `/api/boards/${world.boardId}/threads`, {
+      anchor: { kind: 'point', x: 1, y: 2 },
+      body: 'Here',
+      spot: { u: 0.5, v: 0.5 },
+    })
+    expect(onBoard.statusCode, onBoard.body).toBe(400)
+    expect((onBoard.json() as { error: { code: string } }).error.code).toBe('INVALID_ANCHOR')
     expect((await world.api.db.one<{ n: number }>('SELECT count(*)::int AS n FROM comment_threads')).n).toBe(
       0,
     )

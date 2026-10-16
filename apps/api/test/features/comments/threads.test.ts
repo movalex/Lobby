@@ -3,7 +3,17 @@
 
 import { ListThreadsResponse, ThreadResponse } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { countRows, createThread, type Fixture, onShape, point, reply, setup } from './fixture.ts'
+import {
+  addVersion,
+  countRows,
+  createThread,
+  type Fixture,
+  onFile,
+  onShape,
+  point,
+  reply,
+  setup,
+} from './fixture.ts'
 
 let f: Fixture
 beforeEach(async () => {
@@ -106,18 +116,14 @@ describe('creating threads', () => {
       expect(res.statusCode, JSON.stringify(body)).toBe(400)
     }
     expect(await countRows(f.api, 'comment_threads')).toBe(0)
-    const ok = await createThread(f.commenter, f.boardId, 'x'.repeat(5000), {
-      kind: 'asset',
-      shapeId: 'shape:card1',
-      assetId: 'ast_0123456789abcdefghij',
-      versionId: 'ver_0123456789abcdefghij',
-      page: 3,
-    })
+    // wave S (WS3): an asset anchor names a version on this board (media-anchors.test.ts holds the refusals)
+    const pdf = await addVersion(f.api, f.owner, f.boardId, 'pdf', { pageCount: 4 })
+    const ok = await createThread(f.commenter, f.boardId, 'x'.repeat(5000), onFile(pdf, { page: 3 }))
     expect(ok.anchor).toEqual({
       kind: 'asset',
       shapeId: 'shape:card1',
-      assetId: 'ast_0123456789abcdefghij',
-      versionId: 'ver_0123456789abcdefghij',
+      assetId: pdf.assetId,
+      versionId: pdf.versionId,
       page: 3,
     })
   })

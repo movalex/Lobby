@@ -10,6 +10,7 @@
 
 import {
   CommentAnchor,
+  type CommentSpot,
   type CommentThread,
   type CommentThreadStatus,
   type CommentThreadVisibility,
@@ -54,6 +55,9 @@ export interface ThreadRow {
   resolved_by: string | null
   resolved_at: Date | null
   visibility: CommentThreadVisibility
+  /** Wave S (0037): the spot on the file's picture, both or neither (asset anchors only) */
+  spot_u: number | null
+  spot_v: number | null
 }
 
 export interface CommentRow {
@@ -75,7 +79,14 @@ const json = (v: unknown): unknown => (typeof v === 'string' ? JSON.parse(v) : v
 export const idList = (ids: readonly string[]) => JSON.stringify(ids)
 
 const THREAD_COLUMNS =
-  'id, workspace_id, board_id, anchor, status, created_by, created_at, updated_at, resolved_by, resolved_at, visibility'
+  'id, workspace_id, board_id, anchor, status, created_by, created_at, updated_at, resolved_by, resolved_at, visibility, spot_u, spot_v'
+
+/** The stored spot (0037: both or neither), as the thread answers it; null when none (or not a pair of numbers). */
+export function spotOf(row: Pick<ThreadRow, 'spot_u' | 'spot_v'>): CommentSpot | null {
+  const u = row.spot_u === null ? null : Number(row.spot_u)
+  const v = row.spot_v === null ? null : Number(row.spot_v)
+  return u !== null && v !== null && Number.isFinite(u) && Number.isFinite(v) ? { u, v } : null
+}
 
 export async function loadThreadRow(q: Queryable, threadId: string): Promise<ThreadRow | null> {
   return q.maybeOne<ThreadRow>(
@@ -213,6 +224,7 @@ export async function loadThreads(
     if (!list || list.length === 0) continue
     const anchor = CommentAnchor.safeParse(json(t.anchor))
     if (!anchor.success) continue // never stored unvalidated; skip rather than break the whole list
+    const spot = spotOf(t)
     out.push({
       id: t.id,
       boardId: t.board_id,
@@ -224,6 +236,8 @@ export async function loadThreads(
       resolvedBy: t.resolved_by ? ref(t.resolved_by) : null,
       resolvedAt: t.resolved_at ? iso(t.resolved_at) : null,
       visibility: t.visibility,
+      // wave S: a top-level optional field, which an older tab's z.object strips (contracts comments.ts CommentSpot)
+      ...(spot ? { spot } : {}),
       comments: list,
     })
   }
@@ -404,4 +418,66 @@ export async function viewersAmong(
     if (can(role, 'view', board.status)) out.set(r.id, r.name)
   }
   return out
+}
+
+// ---- wave S (WS3): media comments, the checks on an `asset` anchor and its spot ---------------------------------------
+
+interface AnchoredVersionRow {
+  kind: 'image' | 'pdf' | 'video' | 'other'
+  probe: unknown
+}
+
+const probeNumber = (probe: unknown, key: 'pageCount' | 'durationMs'): number | null => {
+  const src = json(probe)
+  const v = typeof src === 'object' && src !== null ? (src as Record<string, unknown>)[key] : undefined
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null
+}
+
+/**
+ * Why a new thread's `asset` anchor (and its optional spot) cannot be stored on this board, or null when it can
+ * (docs/WAVE-S-CONTRACTS.md §4; every refusal is 400 MEDIA_COMMENT_RULES.invalidAnchor):
+ * - a spot only with an `asset` anchor;
+ * - the version exists in the board's workspace, belongs to `assetId` and is servable on this board (uploaded to it,
+ *   or linked to it: files-auth.ts); the same answer whether it is missing or elsewhere (no probing);
+ * - `page` only on a PDF (Office documents are kind pdf), at most its page count when the probe knows it;
+ * - `timeMs` only on a video, at most its duration + MEDIA_COMMENT_RULES.timeSlackMs when the probe knows it;
+ * - a spot only on a picture: an image, a video, or a PDF page (so a PDF spot needs its page).
+ * Reads the version FOR SHARE (in the thread insert's transaction), so the file collector cannot delete a version
+ * under a thread being pinned to it (files/gc.ts keeps comment-pinned versions).
+ */
+export async function mediaAnchorProblem(
+  q: Queryable,
+  board: Pick<BoardRow, 'id' | 'workspace_id'>,
+  anchor: CommentAnchor,
+  spot: CommentSpot | undefined,
+  timeSlackMs: number,
+): Promise<string | null> {
+  if (anchor.kind !== 'asset') return spot === undefined ? null : 'A spot can only be on a file.'
+  const row = await q.maybeOne<AnchoredVersionRow>(
+    `SELECT v.kind, v.probe FROM asset_versions v
+      WHERE v.id = $1 AND v.asset_id = $2 AND v.workspace_id = $3
+        AND (v.board_id = $4 OR EXISTS (
+              SELECT 1 FROM board_asset_links l
+               WHERE l.workspace_id = $3 AND l.board_id = $4 AND l.asset_id = v.asset_id AND l.version_id = v.id))
+      FOR SHARE OF v`,
+    [anchor.versionId, anchor.assetId, board.workspace_id, board.id],
+  )
+  if (!row) return 'That file is not on this board.'
+  if (anchor.page !== undefined) {
+    if (row.kind !== 'pdf') return 'Only a PDF or a document has pages.'
+    const pages = probeNumber(row.probe, 'pageCount')
+    if (pages !== null && anchor.page > pages)
+      return `That document has ${pages} page${pages === 1 ? '' : 's'}.`
+  }
+  if (anchor.timeMs !== undefined) {
+    if (row.kind !== 'video') return 'Only a video has a time.'
+    const duration = probeNumber(row.probe, 'durationMs')
+    if (duration !== null && anchor.timeMs > duration + timeSlackMs)
+      return 'That time is past the end of the video.'
+  }
+  if (spot !== undefined) {
+    if (row.kind === 'other') return 'This file has no picture to point at.'
+    if (row.kind === 'pdf' && anchor.page === undefined) return 'A spot on a document needs its page.'
+  }
+  return null
 }

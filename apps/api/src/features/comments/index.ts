@@ -25,6 +25,12 @@
 // per-audience events decide on stored status: a staff tab idle for more than a day misses team-only
 // events until its next thread request or bell poll confirms it (the board's refetch then shows them).
 // Authors carry `external` (the "External" tag).
+//
+// Wave S (WS3, docs/WAVE-S-CONTRACTS.md §4): time-coded, page and spot comments. A new thread's `asset` anchor must
+// name a version servable on the board, of that asset; `page` only on a PDF and inside its page count, `timeMs` only
+// on a video and inside its duration (when the probe knows them); an optional `spot` {u, v} only with an asset anchor
+// (stored in 0037 spot_u / spot_v, answered as the thread's top-level `spot`). Every refusal is 400 INVALID_ANCHOR. A
+// thread keeps its version forever (replacing media never rewrites an anchor).
 
 import {
   COMMENT_BODY_MAX,
@@ -81,6 +87,7 @@ import {
   MAX_COMMENTS_PER_THREAD,
   MAX_THREADS_PER_BOARD,
   markRead,
+  mediaAnchorProblem,
   type TeamRule,
   type ThreadRow,
   teamAmong,
@@ -315,10 +322,6 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
     const user = await caller(req)
     const { bid = '' } = req.params as Params
     const input = parse(CreateThreadInput, req.body)
-    // Wave S (the foundation): a spot is WS3's to check and store (0037 spot_u / spot_v). Until then a thread that sends
-    // one is refused, never accepted with its spot dropped. WS3 replaces this line with its anchor checks.
-    if (input.spot !== undefined)
-      throw new ApiError(400, MEDIA_COMMENT_RULES.invalidAnchor, 'A spot on a file cannot be saved yet.')
     const visibility = input.visibility ?? 'everyone'
     const teamOnly = visibility === 'team'
     const { thread, board: ref } = await db.transaction(async (tx) => {
@@ -329,6 +332,16 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
       const board = access.board
       // NC-V3: before any row lock (the thread insert below locks the board row's key).
       await lockBoardNotifications(tx, board.id)
+      // Wave S (WS3): an `asset` anchor names a version servable here, its page or time is inside the file, and a
+      // spot (0037 spot_u / spot_v) only goes with one; after the permission check, so nobody probes versions.
+      const problem = await mediaAnchorProblem(
+        tx,
+        board,
+        input.anchor,
+        input.spot,
+        MEDIA_COMMENT_RULES.timeSlackMs,
+      )
+      if (problem) throw new ApiError(400, MEDIA_COMMENT_RULES.invalidAnchor, problem)
       const count = await tx.one<{ n: number }>(
         'SELECT count(*)::int AS n FROM comment_threads WHERE board_id = $1 AND workspace_id = $2',
         [board.id, board.workspace_id],
@@ -340,9 +353,20 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
       const threadId = newId('thr')
       const commentId = newId('cmt')
       await tx.query(
-        `INSERT INTO comment_threads (id, workspace_id, board_id, anchor, status, created_by, created_at, updated_at, visibility)
-         VALUES ($1, $2, $3, $4::jsonb, 'open', $5, $6, $6, $7)`,
-        [threadId, board.workspace_id, board.id, JSON.stringify(input.anchor), user.id, at, visibility],
+        `INSERT INTO comment_threads (id, workspace_id, board_id, anchor, status, created_by, created_at, updated_at, visibility,
+                                      spot_u, spot_v)
+         VALUES ($1, $2, $3, $4::jsonb, 'open', $5, $6, $6, $7, $8, $9)`,
+        [
+          threadId,
+          board.workspace_id,
+          board.id,
+          JSON.stringify(input.anchor),
+          user.id,
+          at,
+          visibility,
+          input.spot?.u ?? null,
+          input.spot?.v ?? null,
+        ],
       )
       await tx.query(
         `INSERT INTO comments (id, thread_id, workspace_id, board_id, author_id, body, created_at)
