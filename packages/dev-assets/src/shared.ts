@@ -149,6 +149,8 @@ export function classifyUpload(mimeType: string, name: string): AssetKind {
   if (mime === 'application/pdf' || ext === 'pdf') return 'pdf'
   if (VIDEO_MIMES.has(mime) || ['mp4', 'm4v', 'mov', 'webm'].includes(ext)) return 'video'
   if (officeFormat(mime, name)) return 'pdf'
+  // Photoshop, Illustrator and TIFF files are previewed as flattened pages (wave R); HEIC stays an attachment.
+  if (designFormat(mime, name)?.preview === 'pages') return 'pdf'
   return 'other'
 }
 
@@ -240,8 +242,8 @@ export interface DesignFormat {
  * The design files the NAS worker previews as FLATTENED pages (Photoshop, Illustrator, TIFF) or keeps as an
  * attachment with a hint (HEIC: no HEVC decoder on the server). The same rows as @draftroom/contracts
  * design-previews.ts DESIGN_FORMAT_ROWS (the worker does not depend on contracts; an api test compares the two).
- * DATA ONLY until WS3: classifyUpload and maxUploadBytes do not read it yet, so nothing changes for an upload;
- * WS3 wires them in the same change that teaches the worker these formats.
+ * classifyUpload makes the 'pages' rows kind 'pdf' (the worker previews them: apps/worker/src/{psd,tiff}.ts, and an
+ * Illustrator file is a PDF); maxUploadBytes reads their limits.
  */
 export const DESIGN_FORMATS: readonly DesignFormat[] = [
   {
@@ -268,9 +270,54 @@ export const DESIGN_FORMATS: readonly DesignFormat[] = [
   },
 ]
 
-/** The upload size limit for a file of `kind` with this declared type and name (Office documents have their own). */
+/**
+ * The design format of an upload by its declared type and name (the same rule as @draftroom/contracts
+ * designFormatOf): the extension first, else the type, where `application/postscript` alone is EPS or old
+ * PostScript, not Illustrator. Untrusted (the worker decides by content).
+ */
+export function designFormat(mimeType: string, name: string): DesignFormat | null {
+  const mime = baseMime(mimeType)
+  const ext = extOf(name)
+  const byExt = DESIGN_FORMATS.find((f) => (f.exts as readonly string[]).includes(ext))
+  if (byExt) return byExt
+  if (mime === 'application/postscript') return null
+  return DESIGN_FORMATS.find((f) => f.mimes.includes(mime)) ?? null
+}
+
+/** The design format a MIME type names exactly (the worker's sniffed type), or null. */
+export function designFormatByMime(mimeType: string | null | undefined): DesignFormat | null {
+  const mime = baseMime(mimeType ?? '')
+  if (!mime || mime === 'application/postscript') return null
+  return DESIGN_FORMATS.find((f) => f.mimes.includes(mime)) ?? null
+}
+
+/**
+ * A design upload with its own limit: classified 'pdf' by its design format ('pages'), or an attachment of a
+ * 'none' format (HEIC). A file the type or name makes an image, a PDF or an Office document keeps their limits.
+ */
+export function designUploadFormat(kind: AssetKind, mimeType: string, name: string): DesignFormat | null {
+  const mime = baseMime(mimeType)
+  const ext = extOf(name)
+  const pdfOrOffice = mime === 'application/pdf' || ext === 'pdf' || officeFormat(mimeType, name) !== null
+  if (kind === 'pdf' && pdfOrOffice) return null
+  const d = designFormat(mimeType, name)
+  if (!d) return null
+  return (d.preview === 'pages' ? kind === 'pdf' : kind === 'other') ? d : null
+}
+
+/** The upload size limit of a file of `kind` with this declared type and name (Office, design files: their own). */
 export function maxUploadBytes(kind: AssetKind, mimeType: string, name: string): number {
-  return isOfficeUpload(kind, mimeType, name) ? LIMITS.maxOfficeBytes : LIMITS.maxBytes[kind]
+  if (isOfficeUpload(kind, mimeType, name)) return LIMITS.maxOfficeBytes
+  const design = designUploadFormat(kind, mimeType, name)
+  if (design) return design.maxBytes ?? LIMITS.maxBytes.pdf
+  return LIMITS.maxBytes[kind]
+}
+
+/** The largest file of `kind` any upload may be (the worker's first size gate, before it knows the content). */
+export function maxKindBytes(kind: AssetKind): number {
+  if (kind !== 'pdf') return LIMITS.maxBytes[kind]
+  const design = DESIGN_FORMATS.filter((f) => f.preview === 'pages').map((f) => f.maxBytes ?? 0)
+  return Math.max(LIMITS.maxBytes.pdf, LIMITS.maxOfficeBytes, ...design)
 }
 
 /**

@@ -1,4 +1,4 @@
-import { type AssetKind, isOfficeUpload } from '@draftroom/dev-assets'
+import { type AssetKind, designUploadFormat, isOfficeUpload } from '@draftroom/dev-assets'
 
 /**
  * The only types ever served inline for each previewable kind; anything else is an attachment. Office
@@ -37,10 +37,13 @@ export function normalizeDeclaredMime(raw: string | undefined): string {
 
 /**
  * How a 413 names what the size limit is for, when that is not the kind's usual label: an Office
- * document (LIMITS.maxOfficeBytes, see dev-assets maxUploadBytes) is kind 'pdf' but not a PDF.
+ * document (LIMITS.maxOfficeBytes, see dev-assets maxUploadBytes) is kind 'pdf' but not a PDF, nor are
+ * Photoshop, Illustrator and TIFF files (their own limits: dev-assets DESIGN_FORMATS); HEIC is an attachment.
  */
 export function uploadLimitLabel(kind: AssetKind, declared: string, name: string): string | null {
-  return isOfficeUpload(kind, declared, name) ? 'Office documents' : null
+  if (isOfficeUpload(kind, declared, name)) return 'Office documents'
+  const design = designUploadFormat(kind, declared, name)
+  return design ? `${design.kind.toUpperCase()} files` : null
 }
 
 /**

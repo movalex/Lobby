@@ -21,6 +21,8 @@ export interface PdfOptions {
   /** V8 heap cap of the child in MB (WORKER_PDF_HEAP_MB); default PREVIEW.pdfChildHeapMb. */
   heapMb?: number
   signal?: AbortSignal
+  /** Refuse Illustrator's "saved without PDF Content" stub (NO_PDF_CONTENT): uploaded PDFs and .ai files. */
+  noPdfContentCheck?: boolean
 }
 
 export async function derivePdf(
@@ -38,6 +40,7 @@ export async function derivePdf(
     quality: PREVIEW.pageQuality,
     maxPages: LIMITS.maxPdfPages,
     maxImagePixels: PREVIEW.pdfEmbeddedImagePixels,
+    noPdfContentCheck: opts.noPdfContentCheck === true,
   }
   // One budget for the whole child run (import + load + every eager page).
   const timeoutMs = opts.timeoutMs ?? LIMITS.jobTimeoutMs
@@ -60,6 +63,7 @@ export async function derivePdf(
   }
   if (!res.ok) {
     if (res.reason === 'encrypted') throw new PreviewError('PDF_ENCRYPTED', res.name)
+    if (res.reason === 'no_pdf_content') throw new PreviewError('NO_PDF_CONTENT', res.name)
     if (res.reason === 'too_many_pages') {
       throw new PreviewError('PDF_TOO_MANY_PAGES', `${res.pageCount} pages`, {
         pageCount: res.pageCount ?? null,

@@ -8,8 +8,9 @@ import type { DerivativeWriter } from './derivatives.ts'
 import { PreviewError } from './errors.ts'
 
 // libvips loader class names (8.18.6). GIF is decoded by libnsgif, so its loaders are *Nsgif*;
-// unblocking *Gif* does nothing. SVG, PDF, TIFF, HEIF, matrix/csv/raw/vips stay blocked.
-const ALLOWED_LOADERS = [
+// unblocking *Gif* does nothing. SVG, PDF, HEIF, matrix/csv/raw/vips stay blocked. TIFF (wave R, tiff.ts) only from a
+// file: the TIFF buffer and source loaders stay blocked, and deriveImage (buffers) refuses the format anyway.
+export const ALLOWED_LOADERS: readonly string[] = [
   'VipsForeignLoadJpegFile',
   'VipsForeignLoadJpegBuffer',
   'VipsForeignLoadPngFile',
@@ -18,6 +19,7 @@ const ALLOWED_LOADERS = [
   'VipsForeignLoadWebpBuffer',
   'VipsForeignLoadNsgifFile',
   'VipsForeignLoadNsgifBuffer',
+  'VipsForeignLoadTiffFile',
 ]
 const ALLOWED_FORMATS = new Set(['jpeg', 'png', 'webp', 'gif'])
 
@@ -27,7 +29,7 @@ let configured = false
 export function lockedSharp(): typeof sharp {
   if (!configured) {
     sharp.block({ operation: ['VipsForeignLoad'] })
-    sharp.unblock({ operation: ALLOWED_LOADERS })
+    sharp.unblock({ operation: [...ALLOWED_LOADERS] })
     sharp.concurrency(2) // default is one thread per core; keep one job from saturating the box
     sharp.cache(false)
     configured = true
