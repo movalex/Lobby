@@ -455,7 +455,7 @@ describe('0037: review rounds, items and events', () => {
       ),
     ).toEqual({
       indexdef: expect.stringContaining(
-        "ON public.notifications USING btree (board_id, user_id, created_at) WHERE (kind = 'review_status'::text)",
+        "notifications USING btree (board_id, user_id, created_at) WHERE (kind = 'review_status'::text)",
       ),
     })
     await q.query('DELETE FROM review_events WHERE id = $1', [RVE])
