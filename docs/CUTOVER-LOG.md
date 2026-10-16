@@ -480,3 +480,8 @@ on the sync disk (§6).
   - Open:
     - the Miro probe needs a real token (until then Miro images and documents are placeholders);
     - the Teams URL rule is unconfirmed.
+- **2026-10-16 13:25-13:27Z, api and web at `1cdc2fb`: the design-preview gate.**
+  - Deploys: api `dep-db92be7f3r2c73frs0q0`, web `dep-db92brff3r2c73frte20`.
+  - `DRAFTROOM_DESIGN_PREVIEWS=off` was set on the api first. PSD/AI/TIFF stay attachments, as before wave R, until the NAS worker is rebuilt (`/api/auth/config` answers `designPreviews:false`).
+  - Drift 0; smoke 41/0; 0 error/FATAL lines.
+  - To turn the previews on: rebuild the NAS worker at main or later (the owner's approval is needed), then set the key to `on` and restart the api.
