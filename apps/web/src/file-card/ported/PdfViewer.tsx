@@ -22,6 +22,7 @@ import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
 import { useUserKind } from '../../invite/guest.tsx'
 import { pluralize } from '../../lib/format.ts'
 import { useValue } from '../../lib/signals.ts'
+import { DESIGN_PREVIEW_BADGE, FLATTENED_DETAIL, isFlattenedPreview } from '../design.ts'
 import { CONVERSION_DETAIL, CONVERSION_NOTE, documentLabel, isConvertedPreview } from '../office.ts'
 import {
   documentPageCount,
@@ -89,6 +90,8 @@ function PdfViewer({ ctx, facts, initialPage, onClose }: ViewerProps) {
   // Office documents are shown through their PDF conversion (office.ts): named for what they are.
   const label = documentLabel(snap.meta, facts)
   const converted = isConvertedPreview(snap.meta)
+  // Photoshop, Illustrator and TIFF files: flattened pages (design.ts)
+  const flattened = isFlattenedPreview(snap.meta, facts)
   const readonly = useValue('media-pdf-viewer-readonly', () => ctx.canvas.readOnly(), [ctx])
   // export-control: the page previews stay; the original is not offered while downloads are off.
   const kind = useUserKind()
@@ -389,6 +392,11 @@ function PdfViewer({ ctx, facts, initialPage, onClose }: ViewerProps) {
           {converted && (
             <p className="dr-pv__note" data-testid="pdf-viewer-conversion-note" role="note">
               {CONVERSION_NOTE}. {CONVERSION_DETAIL}
+            </p>
+          )}
+          {flattened && (
+            <p className="dr-pv__note" data-testid="pdf-viewer-design-note" role="note">
+              {DESIGN_PREVIEW_BADGE} of the {label} file. {FLATTENED_DETAIL}
             </p>
           )}
           {partial && (

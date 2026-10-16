@@ -11,6 +11,7 @@ import {
   officeFormat,
   officeFormatByMime,
 } from '../assets/contract.ts'
+import { designLabel } from './design.ts'
 
 type CardProps = Pick<FileCardShapeProps, 'kind' | 'mimeType' | 'name'>
 
@@ -36,7 +37,7 @@ export function isConvertedPreview(meta: AssetVersionMeta | null): boolean {
   return meta?.status === 'ready' && meta.kind === 'pdf' && officeFormatByMime(meta.mimeType) !== null
 }
 
-/** "Word document", "PowerPoint presentation"… or "PDF". */
+/** "Word document", "PowerPoint presentation"…, a design file's type ("PSD", design.ts), or "PDF". */
 export function documentLabel(meta: AssetVersionMeta | null, props: CardProps): string {
-  return cardOfficeFormat(meta, props)?.label ?? 'PDF'
+  return cardOfficeFormat(meta, props)?.label ?? designLabel(meta, props) ?? 'PDF'
 }

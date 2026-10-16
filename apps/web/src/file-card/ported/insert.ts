@@ -45,6 +45,7 @@ import type { CanvasElement, CanvasFeatureContext, LobbyCanvas, ScenePoint } fro
 import { unionRects } from '../../features/canvas-ux/placement.ts'
 import { formatBytes, pluralize } from '../../lib/format.ts'
 import { CARD_SIZE } from '../card-model.ts'
+import { convertHeicPhotos, isHeicFile } from '../heic.ts'
 import { localPreviewsOf } from './local-previews.ts'
 import {
   CARD_ROUNDNESS,
@@ -470,7 +471,9 @@ export async function insertFiles(
     ctx.notify({ key: 'readonly-upload', text: 'You can view this board but not add files to it.' })
     return []
   }
-  const { images, cards, rejected } = partitionUploads(files)
+  // HEIC photos become JPEGs where the browser can decode them (Safari); elsewhere they stay attachments (heic.ts)
+  const prepared = files.some(isHeicFile) ? await convertHeicPhotos(files) : files
+  const { images, cards, rejected } = partitionUploads(prepared)
   // the files refused before any byte is sent are named, after the upload notices (which they must
   // not push out of the notice region)
   const reject = () => {

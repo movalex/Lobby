@@ -48,6 +48,22 @@
 .dr-fc__note svg {
   flex: none;
 }
+/* Design files (wave R): the "Flattened preview · PSD" badge and the HEIC / low-resolution hint, one line each
+   (the whole text is the note's title). */
+.dr-fc__note-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dr-fc__note--hint {
+  color: var(--tl-color-text-1, var(--dr-ink));
+}
+.dr-fc[data-design="psd"] .dr-fc__icon {
+  background: #1f5fa8;
+}
+.dr-fc[data-design="ai"] .dr-fc__icon {
+  background: #a3530a;
+}
 .dr-fc[data-office="docx"] .dr-fc__icon,
 .dr-fc[data-office="odt"] .dr-fc__icon {
   background: #2b579a;
