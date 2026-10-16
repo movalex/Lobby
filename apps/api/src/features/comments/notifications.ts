@@ -32,6 +32,7 @@ import {
   resolveBoardRole,
   type WorkspaceRole,
 } from '@draftroom/permissions'
+import { enqueueChatDeliveries } from '../chat-hooks/outbox.ts'
 import { idList, onTeam } from './store.ts'
 
 export const MAX_NOTIFICATIONS_LISTED = 100
@@ -190,10 +191,11 @@ export async function insertNotifications(
   },
   recipients: readonly NewNotification[],
 ): Promise<void> {
+  const ids: string[] = []
   for (const r of recipients) {
-    await q.query(
+    const row = await q.one<{ id: string }>(
       `INSERT INTO notifications (workspace_id, user_id, kind, board_id, thread_id, comment_id, actor_id, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
       [
         base.workspaceId,
         r.userId,
@@ -205,10 +207,13 @@ export async function insertNotifications(
         base.at,
       ],
     )
+    ids.push(row.id)
   }
+  // wave R: opted-in people's chat messages, in this transaction (best effort: never fails the notification)
+  await enqueueChatDeliveries(q, ids)
 }
 
-interface NotificationRow {
+export interface NotificationRow {
   id: string
   kind: NotificationKind
   board_id: string
@@ -242,7 +247,7 @@ interface NotificationRow {
  * The list query's SELECT; `source` is the parameter that holds the running provider (wave J). `picked` (wave M,
  * M5-3): the rows come from a `picked` CTE (id, listed, counted) joined first, and its two flags are selected.
  */
-const selectSql = (
+export const selectSql = (
   source: string,
   picked = false,
 ) => `SELECT n.id, n.kind, n.board_id, n.thread_id, n.comment_id, n.created_at, n.read_at,${picked ? ' p.listed, p.counted,' : ''}
@@ -281,7 +286,7 @@ const selectSql = (
  * Whether the recipient may still see this notification: board access now, comment not deleted.
  * `creator`: the recipient is a confirmed creator (wave J: needed to be on the team).
  */
-function visible(r: NotificationRow, creator: boolean): boolean {
+export function visible(r: NotificationRow, creator: boolean): boolean {
   const role = resolveBoardRole({
     workspaceRole: r.workspace_role,
     boardGrant: r.board_grant,
@@ -301,7 +306,7 @@ function visible(r: NotificationRow, creator: boolean): boolean {
   return can(role, 'view', r.status)
 }
 
-function snippetOf(body: string | null): string | null {
+export function snippetOf(body: string | null): string | null {
   if (body === null) return null
   const text = commentPlainText(body).replace(/\s+/g, ' ').trim()
   return text.length > SNIPPET_MAX ? `${text.slice(0, SNIPPET_MAX - 1)}…` : text

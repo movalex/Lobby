@@ -12,12 +12,18 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { CREATOR_ROUTES } from '../../../src/features/domain-access/guard.ts'
 import { isPendingRoute } from '../../../src/features/pending-routes.ts'
 import { type Client, createBoard, createTestApi, DEV_STUDIO, devEmail, type TestApi } from '../../helpers.ts'
+import {
+  type FakeReceiver,
+  slackHookUrl,
+  startFakeReceiver,
+} from '../../../../../e2e/tests/support/chat-hooks.ts'
 import { baseRecords, createFakeSync, type FakeSync, noteRec } from '../history/helpers.ts'
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
-/** Wave R's job and hook ids in the probes (the routes are pending: no such rows exist) */
+/** Wave R's job id in the probes (the import routes are pending: no such row exists) */
 const IMPORT_JOB = 'imp_0123456789abcdefghij'
-const HOOK = 'chk_0123456789abcdefghij'
+/** The api's webhook key in these tests (chat hooks are off without it) */
+const WEBHOOK_SECRET = 'test-webhook-secret-0123456789abcdefghij'
 const ALWAYS = Object.entries(CREATOR_ROUTES)
   .filter(([, r]) => r.refuse === 'always')
   .map(([key]) => key)
@@ -30,6 +36,10 @@ const LIVE = ALWAYS.filter((key) => !isPendingRoute(key))
 
 interface World {
   api: TestApi
+  /** the fake Slack: a chat hook's test message goes here, never to the real service */
+  receiver: FakeReceiver
+  /** a chat hook of Dev Studio, on the fake receiver */
+  hook: string
   sync: FakeSync
   logs: Record<string, unknown>[]
   alice: Client // Dev Studio owner, a creator (dev)
@@ -48,8 +58,10 @@ interface World {
 async function world(opts: { guard?: boolean } = {}): Promise<World> {
   const sync = createFakeSync()
   const logs: Record<string, unknown>[] = []
+  const receiver = await startFakeReceiver()
   const api = await createTestApi({
     ...(opts.guard === false ? { domainAccessGuard: false } : {}),
+    env: { DRAFTROOM_WEBHOOK_SECRET: WEBHOOK_SECRET, DRAFTROOM_CHAT_HOOK_TEST_ORIGINS: receiver.origin },
     deps: {
       syncInternal: sync,
       logger: { level: 'info', stream: { write: (l: string) => void logs.push(JSON.parse(l)) } },
@@ -70,6 +82,13 @@ async function world(opts: { guard?: boolean } = {}): Promise<World> {
     [DEV_STUDIO, outsider.userId, member.userId],
   )
   const board = await createBoard(alice, DEV_STUDIO, 'Matrix board')
+  const hookRes = await alice.req('POST', `/api/workspaces/${DEV_STUDIO}/chat-hooks`, {
+    name: '#matrix',
+    provider: 'slack',
+    url: slackHookUrl(receiver.origin),
+  })
+  expect(hookRes.statusCode).toBe(201)
+  const hook = hookRes.json().id as string
   sync.setBoard(board, [...baseRecords(), noteRec('n1', 'content')])
   for (const u of [outsider, member])
     await api.db.query(
@@ -98,6 +117,8 @@ async function world(opts: { guard?: boolean } = {}): Promise<World> {
   logs.length = 0
   return {
     api,
+    receiver,
+    hook,
     sync,
     logs,
     alice,
@@ -197,12 +218,12 @@ function probe(
     ],
     'PATCH /api/workspaces/:wid/chat-hooks/:hid': [
       'PATCH',
-      `/api/workspaces/${wid}/chat-hooks/${HOOK}`,
+      `/api/workspaces/${wid}/chat-hooks/${w.hook}`,
       { name: '#renamed' },
     ],
     'POST /api/workspaces/:wid/chat-hooks/:hid/test': [
       'POST',
-      `/api/workspaces/${wid}/chat-hooks/${HOOK}/test`,
+      `/api/workspaces/${wid}/chat-hooks/${w.hook}/test`,
       {},
     ],
   }
@@ -245,7 +266,10 @@ const expectCreatorRequired = (res: LightMyRequestResponse, what: string) => {
 }
 
 let w: World
-afterEach(() => w?.api.close())
+afterEach(async () => {
+  await w?.api.close()
+  await w?.receiver.close()
+})
 
 describe('the creation matrix', () => {
   it('every CREATOR_ROUTES key is a registered route, or a pending one that is not (and the table has a probe for each "always" key)', async () => {

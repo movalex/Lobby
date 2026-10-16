@@ -354,13 +354,36 @@ export const teamsEscape = (s: string) => s.replace(/[\\`*_{}[\]()#+\-.!|<>~]/g,
 const snippetOf = (m: ChatMessage) =>
   m.snippet === undefined ? null : cap(m.snippet, CHAT_HOOK_LIMITS.snippetChars) || null
 
-/** The JSON body Slack's incoming webhook receives. */
-export function slackPayload(m: ChatMessage): Record<string, unknown> {
-  const sentence = chatMessageSentence(m)
-  const snippet = snippetOf(m)
-  const quote = snippet ? `\n>${slackEscape(snippet)}` : ''
-  const text = `${slackEscape(sentence)} · <${slackEscape(m.link)}|Open in Lobby>${quote}`
-  const workspace = cap(m.workspaceName, CHAT_HOOK_LIMITS.titleChars)
+/** What a message says in place of a private board's title (a hook that did not opt in to titles). */
+export const CHAT_HIDDEN_BOARD_TITLE = 'a private board'
+
+/**
+ * A message that is not one event: the test message, or the roll-up of what a cap held back. Its text is one plain
+ * sentence (escaped per provider like every other string); the link and workspace name are the event messages'.
+ */
+export interface ChatNotice {
+  readonly text: string
+  readonly link: string
+  readonly workspaceName: string
+}
+
+/** "and 12 more on Pitch wall" (one board, title allowed to show) or "and 12 more notifications". */
+export function chatRollupSentence(count: number, boardTitle: string | null): string {
+  const n = Math.max(1, Math.floor(count))
+  if (boardTitle) return `and ${n} more on ${cap(boardTitle, CHAT_HOOK_LIMITS.titleChars)}`
+  return n === 1 ? 'and 1 more notification' : `and ${n} more notifications`
+}
+
+function slackBody(
+  sentence: string,
+  link: string,
+  workspaceName: string,
+  snippet: string | null,
+): Record<string, unknown> {
+  const quote = snippet ? `
+>${slackEscape(snippet)}` : ''
+  const text = `${slackEscape(sentence)} · <${slackEscape(link)}|Open in Lobby>${quote}`
+  const workspace = cap(workspaceName, CHAT_HOOK_LIMITS.titleChars)
   return {
     // the notification's fallback text is mrkdwn too: escaped like the blocks (a `<!channel>` name stays text)
     text: slackEscape(sentence),
@@ -376,16 +399,19 @@ export function slackPayload(m: ChatMessage): Record<string, unknown> {
   }
 }
 
-/** The JSON body a Teams Workflows webhook receives (an Adaptive Card 1.4; only Action.OpenUrl). */
-export function teamsPayload(m: ChatMessage): Record<string, unknown> {
-  const snippet = snippetOf(m)
+function teamsBody(
+  sentence: string,
+  link: string,
+  workspaceName: string,
+  snippet: string | null,
+): Record<string, unknown> {
   const body: Record<string, unknown>[] = [
-    { type: 'TextBlock', text: teamsEscape(chatMessageSentence(m)), wrap: true, weight: 'Bolder' },
+    { type: 'TextBlock', text: teamsEscape(sentence), wrap: true, weight: 'Bolder' },
   ]
   if (snippet) body.push({ type: 'TextBlock', text: teamsEscape(snippet), wrap: true })
   body.push({
     type: 'TextBlock',
-    text: teamsEscape(`Lobby · ${cap(m.workspaceName, CHAT_HOOK_LIMITS.titleChars)}`),
+    text: teamsEscape(`Lobby · ${cap(workspaceName, CHAT_HOOK_LIMITS.titleChars)}`),
     isSubtle: true,
     spacing: 'None',
   })
@@ -400,11 +426,33 @@ export function teamsPayload(m: ChatMessage): Record<string, unknown> {
           type: 'AdaptiveCard',
           version: '1.4',
           body,
-          actions: [{ type: 'Action.OpenUrl', title: 'Open in Lobby', url: m.link }],
+          actions: [{ type: 'Action.OpenUrl', title: 'Open in Lobby', url: link }],
         },
       },
     ],
   }
+}
+
+/** The JSON body Slack's incoming webhook receives. */
+export function slackPayload(m: ChatMessage): Record<string, unknown> {
+  return slackBody(chatMessageSentence(m), m.link, m.workspaceName, snippetOf(m))
+}
+
+/** The JSON body a Teams Workflows webhook receives (an Adaptive Card 1.4; only Action.OpenUrl). */
+export function teamsPayload(m: ChatMessage): Record<string, unknown> {
+  return teamsBody(chatMessageSentence(m), m.link, m.workspaceName, snippetOf(m))
+}
+
+const noticeSentence = (n: ChatNotice) => cap(n.text, CHAT_HOOK_LIMITS.titleChars * 2)
+
+/** Slack's body for a test message or roll-up. */
+export function slackNoticePayload(n: ChatNotice): Record<string, unknown> {
+  return slackBody(noticeSentence(n), n.link, n.workspaceName, null)
+}
+
+/** Teams' body for a test message or roll-up. */
+export function teamsNoticePayload(n: ChatNotice): Record<string, unknown> {
+  return teamsBody(noticeSentence(n), n.link, n.workspaceName, null)
 }
 
 // ---- routes --------------------------------------------------------------------------------------------------------

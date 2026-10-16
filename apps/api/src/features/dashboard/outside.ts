@@ -95,6 +95,7 @@ import { ApiError, parse } from '../../errors.ts'
 import { keyedLimit, type RouteRateLimit } from '../../rate-limit.ts'
 import { toUser, type UserRow } from '../../serialize.ts'
 import { provideOpenStatePart } from '../board-open/parts.ts'
+import { enqueueChatDeliveries } from '../chat-hooks/outbox.ts'
 import type { FeatureContext } from '../context.ts'
 import { trySavepoint } from './shared.ts'
 
@@ -828,7 +829,7 @@ export async function notifyOutsiderJoined(
     )
     if (!board) return 0
     const inserted = await trySavepoint(tx, async () => {
-      const res = await tx.query(
+      const res = await tx.query<{ id: string }>(
         `WITH owners AS (
            SELECT bm.user_id FROM board_members bm
              JOIN workspace_members wm ON wm.workspace_id = $1 AND wm.user_id = bm.user_id
@@ -840,9 +841,11 @@ export async function notifyOutsiderJoined(
             WHERE wm.workspace_id = $1 AND wm.role IN ('owner', 'admin') AND NOT EXISTS (SELECT 1 FROM owners)
          )
          INSERT INTO notifications (workspace_id, user_id, kind, board_id, actor_id, created_at)
-         SELECT $1, user_id, 'outsider_joined', $2, $3, $4 FROM recipients WHERE user_id <> $3`,
+         SELECT $1, user_id, 'outsider_joined', $2, $3, $4 FROM recipients WHERE user_id <> $3
+         RETURNING id`,
         [board.workspace_id, boardId, userId, ctx.now()],
       )
+      await enqueueChatDeliveries(tx, res.rows.map((r) => r.id))
       return res.rowCount
     })
     return inserted ?? 0
