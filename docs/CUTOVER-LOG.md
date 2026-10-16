@@ -462,3 +462,21 @@ on the sync disk (§6).
     - the first icon inserted (Undo enabled, Saved);
     - "steam" finds 6 icons and 5 Shapes (the Steam deliverable frames).
     - Cleanup: the board in Trash.
+- **2026-10-16 12:37-12:40Z, wave R deployed** (main `ba1704c`; 0 board connections in the hour before):
+  - api `dep-db91krlg1s2s739104p0` (migrations 0035, 0036);
+  - sync `dep-db91l8jrjlhs73dtcd6g`;
+  - web `dep-db91llvf3r2c73fpo660`.
+  - Before: the env group `draftroom-staging-webhook-secret` (`evg-db91khvf3r2c73fpkng0`) created through the Render API with a random 256-bit `DRAFTROOM_WEBHOOK_SECRET` (never printed), linked to the api only.
+  - After:
+    - api `/healthz/deep` 200; sync ok; maintenance off;
+    - 0 error/FATAL lines; drift 0;
+    - live smoke 41/0, after 4ea0094b names miro.com and hooks.slack.com as text-only hosts.
+  - Live check, the owner:
+    - the dashboard Import menu offers "Lobby backup (.lobby)…", "Lobby board (.json)…" and "Import from Miro (beta)…";
+    - a backup ticket (expires in 64 s) gave a 615-byte `application/vnd.lobby.board+zip` with manifest.json and board.json, and the ticket was refused on reuse (401);
+    - the same file restored through `POST /api/workspaces/:wid/backups` gave 202, then the job done, then a new board "Wave R restored check".
+    - Cleanup: three test boards in Trash.
+  - NOT done: the NAS preview worker rebuild (the standing rule: draftroom-worker and draftroom-office are not mine to touch). So PSD/TIFF/AI previews would fail on staging, and they go behind `DRAFTROOM_DESIGN_PREVIEWS` (off) in the next api deploy.
+  - Open:
+    - the Miro probe needs a real token (until then Miro images and documents are placeholders);
+    - the Teams URL rule is unconfirmed.
