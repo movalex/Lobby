@@ -605,9 +605,7 @@ function registerBoardListCounts(app: FastifyInstance, db: Queryable) {
     try {
       const listed = (b: unknown) => b as { id?: unknown }
       // a trashed board gets none: the query keeps open boards only (status IN ('active', 'archived'))
-      const ids = boards
-        .map((b) => listed(b).id)
-        .filter((id): id is string => typeof id === 'string')
+      const ids = boards.map((b) => listed(b).id).filter((id): id is string => typeof id === 'string')
       if (ids.length === 0) return payload
       const rows = await db.query<{ board_id: string; pending: number; changes: number; approved: number }>(
         `SELECT i.board_id,
