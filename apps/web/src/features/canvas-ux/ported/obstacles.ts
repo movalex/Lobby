@@ -29,6 +29,12 @@ export const NAVIGATION_SELECTOR = '[data-lobby-slot="navigation"] > *'
  * it otherwise landed on the vote banner's "Join and vote" (the wave M integration, K3-1).
  */
 export const WORKSHOP_STACK_SELECTOR = '[data-testid="workshop-stack"] > *'
+/**
+ * The storyboard strip (wave T, features/storyboard/Strip.tsx), docked along the bottom while a panel is selected: a
+ * plain obstacle of the bar's own, as the workshop stack. The wave T integration: a panel low on the screen put the
+ * bar (and its "Play animatic") under the strip.
+ */
+export const STORYBOARD_STRIP_SELECTOR = '[data-testid="sb-strip"]'
 
 /** Registers canvas-ux's chrome (the style panel, the bottom toolbar); returns the unregister. */
 export function installChromeObstacles(doc: Document): () => void {
@@ -103,11 +109,11 @@ export function selectionHandlesRect(
 
 /**
  * The other chrome the bar keeps clear of, in client pixels: every registered obstacle but the bar and the handles,
- * the navigation panel and the workshop's bottom-centre stack.
+ * the navigation panel, the workshop's bottom-centre stack and the storyboard strip.
  */
 export function barObstacles(doc: Document): Rect[] {
   const out = obstacleRects([OBSTACLE_IDS.selectionBar, OBSTACLE_IDS.flowHandles]).map((o) => o.rect)
-  for (const selector of [NAVIGATION_SELECTOR, WORKSHOP_STACK_SELECTOR])
+  for (const selector of [NAVIGATION_SELECTOR, WORKSHOP_STACK_SELECTOR, STORYBOARD_STRIP_SELECTOR])
     for (const el of doc.querySelectorAll(selector)) {
       const r = clientRectOf(el)
       if (r) out.push(r)

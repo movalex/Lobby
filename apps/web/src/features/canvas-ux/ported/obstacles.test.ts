@@ -15,6 +15,7 @@ import {
   handlesOf,
   installChromeObstacles,
   NAVIGATION_SELECTOR,
+  STORYBOARD_STRIP_SELECTOR,
   STYLE_PANEL_SELECTOR,
   selectionHandlesRect,
   WORKSHOP_STACK_SELECTOR,
@@ -140,5 +141,10 @@ describe('what the bar keeps clear of', () => {
     expect(barObstacles(fakeDoc({ [WORKSHOP_STACK_SELECTOR]: [el(banner), el(null), el(voteBar)] }))).toEqual(
       [banner, voteBar],
     )
+  })
+
+  it('the storyboard strip (wave T): the bar keeps clear of it, so its Play animatic is never under the strip', () => {
+    const strip = { x: 154, y: 590, width: 1178, height: 240 }
+    expect(barObstacles(fakeDoc({ [STORYBOARD_STRIP_SELECTOR]: [el(strip)] }))).toEqual([strip])
   })
 })

@@ -1,8 +1,8 @@
 // OWNER: WS5 (wave T, the timeline). A timeline frame (`customData.lobby.timeline`) draws the board's cards as bars
 // from their `card:start` and `card:due` (an overlay: nothing about a bar is stored), against the real api and sync:
 //  - bars from cards: a bar per card with a due date in range (a milestone for a due date alone), none for a card out of
-//    range, the ruler and the today marker, status as a marker and a word, lanes, the scale, a click selects the card
-//    (WS4's popover is not on this branch); nothing leaves Lobby's origins; axe;
+//    range, the ruler and the today marker, status as a marker and a word, lanes, the scale, a click opens WS4's card
+//    popover; nothing leaves Lobby's origins; axe;
 //  - drag: a bar moves both dates, an edge one, a milestone its due date, the keyboard one unit; each in ONE push
 //    and ONE undo step; a viewer's drag does nothing;
 //  - a second tab sees the dates change live and pushes nothing while it only receives;
@@ -11,7 +11,7 @@
 //
 //   E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/t5-timeline.spec.ts --project=chromium --workers=1
 import AxeBuilder from '@axe-core/playwright'
-import { expectSaved, itemBounds, pushedOps, select, selection, test } from '../tests/support/canvas.ts'
+import { expectSaved, itemBounds, pushedOps, select, test } from '../tests/support/canvas.ts'
 import { downloadFrom, pdfPageTexts, readPng } from '../tests/support/present-export.ts'
 import { foreignRequests } from './ai-kit.ts'
 import { openBoardExport } from './present-kit.ts'
@@ -90,9 +90,11 @@ test('bars from cards: a bar per card in range, a milestone for a due date alone
   // T5_SHOTS=<folder> keeps a picture of the timeline, to look at (debugging only)
   if (process.env.T5_SHOTS) await tl.screenshot({ path: `${process.env.T5_SHOTS}/bars.png` })
 
-  // a click selects the card (no popover is registered on this branch)
+  // a click opens the card's popover (WS4's, since the wave T integration turned the cards switch on)
   await barOf(a.page, s.brief.id).click()
-  await expect.poll(() => selection(a.page)).toEqual([s.brief.id])
+  await expect(a.page.getByTestId('card-popover-title')).toHaveText('Write the brief')
+  await a.page.keyboard.press('Escape')
+  await expect(a.page.getByTestId('card-popover')).toHaveCount(0)
 
   // a card out of range comes in when the range is widened (the strip under the selected frame)
   await select(a.page, [s.frame])

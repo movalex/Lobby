@@ -28,7 +28,6 @@ import {
   expect,
   expectItemsEverywhere,
   focusCanvas,
-  openCard,
   popover,
   post,
   roomSays14,
@@ -60,6 +59,13 @@ async function palette(page: Page, words: string, id: string) {
   await page.keyboard.press('ControlOrMeta+k')
   await page.getByTestId('command-palette-input').fill(words)
   await page.locator(`[data-testid="command-palette-option"][data-entry-id="cmd:${id}"]`).click()
+}
+
+/** Opens a card's popover from the selection bar's status button ("To do · Details"), as a person does. */
+async function details(page: Page, id: string) {
+  await select(page, [id])
+  await page.getByTestId('selection-card-status').click()
+  await expect(popover(page)).toBeVisible()
 }
 
 const SHOTS = [
@@ -262,12 +268,12 @@ test('cards on a Kanban, a second tab live, the table and its CSV, a timeline of
     return iso(d)
   }
   await showAll(a.page)
-  await openCard(a.page, 'ti-c1')
+  await details(a.page, 'ti-c1')
   await popover(a.page).getByTestId('card-due').fill(day(10))
   await popover(a.page).getByTestId('card-start').fill(day(7))
   await expectSaved(a.page)
   await a.page.keyboard.press('Escape')
-  await openCard(a.page, 'ti-c2')
+  await details(a.page, 'ti-c2')
   await popover(a.page).getByTestId('card-due').fill(day(21))
   await expectSaved(a.page)
   await a.page.keyboard.press('Escape')
@@ -323,7 +329,7 @@ test('cards on a Kanban, a second tab live, the table and its CSV, a timeline of
     await noPlanningOverride(page)
     await expectItemsEverywhere([{ page, user: 'gina' }], ['ti-c1'])
     await showAll(page)
-    await openCard(page, 'ti-c1')
+    await details(page, 'ti-c1')
     await expect(popover(page).getByTestId('card-guest-hint')).toHaveText("Guests can't assign people.")
     await expect(popover(page).getByTestId('card-assign')).toHaveCount(0)
     await page.keyboard.press('Escape')
