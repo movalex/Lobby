@@ -1,7 +1,7 @@
 // The wave S foundation's web side (docs/WAVE-S-CONTRACTS.md §7): nothing changes for a user. Every switch is off (a
-// dev-auth page may turn them on); "My notifications" offers no review kind; the review and version clients answer
-// empty and reject writes with 'unavailable' without a request; the review viewer's shell renders nothing while its
-// switches are off, and its slots, state and layout are what WS1-WS3 build on.
+// dev-auth page may turn them on); "My notifications" offers no review kind; the version client answers empty and
+// rejects writes with 'unavailable' without a request (WS1's review client is live: ./client.test.ts); the review
+// viewer's shell renders nothing while its switches are off, and its slots, state and layout are what WS1-WS3 build on.
 import { CHAT_HOOK_KINDS } from '@draftroom/contracts'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -19,16 +19,11 @@ import { listAssetVersions, supersedesHeader } from '../review-viewer/versions/c
 import { closeReviewViewer, openReviewViewer, reviewViewerRequest } from '../review-viewer/viewer-state.ts'
 import {
   addReviewItem,
-  closeReviewRound,
   EMPTY_REVIEW,
   getReview,
   listReviewEvents,
-  patchReviewItem,
   ReviewRequestError,
-  removeReviewItem,
   reviewAvailable,
-  setReviewStatus,
-  startReviewRound,
 } from './client.ts'
 import { REVIEW_FLAG_KEYS, REVIEW_FLAGS, reviewFlags, reviewViewerEnabled } from './flags.ts'
 
@@ -70,26 +65,19 @@ describe('the wave S clients (stubs)', () => {
   })
   afterEach(() => vi.unstubAllGlobals())
 
-  const rejectsUnavailable = async (p: Promise<unknown>) => {
-    const e = await p.then(
+  it('review (WS1: live, ./client.test.ts): the reads answer empty on a refusal, the writes reject its code', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(JSON.stringify({ error: { code: 'FORBIDDEN', message: 'No.' } }), { status: 403 }),
+    )
+    expect(await getReview(B)).toEqual(EMPTY_REVIEW)
+    expect(await listReviewEvents(B, RVI)).toEqual({ events: [], nextBefore: null })
+    expect(reviewAvailable()).toBe(true)
+    const e = await addReviewItem(B, { elementId: 'frame-1', kind: 'frame', label: 'Key art' }).then(
       () => null,
       (err: unknown) => err,
     )
     expect(e).toBeInstanceOf(ReviewRequestError)
-    expect((e as ReviewRequestError).code).toBe('unavailable')
-  }
-
-  it('review: empty reads, refused writes, no request', async () => {
-    expect(reviewAvailable()).toBe(false)
-    expect(await getReview(B)).toEqual(EMPTY_REVIEW)
-    expect(await listReviewEvents(B, RVI)).toEqual({ events: [], nextBefore: null })
-    await rejectsUnavailable(addReviewItem(B, { elementId: 'frame-1', kind: 'frame', label: 'Key art' }))
-    await rejectsUnavailable(patchReviewItem(B, RVI, { label: 'x' }))
-    await rejectsUnavailable(removeReviewItem(B, RVI))
-    await rejectsUnavailable(setReviewStatus(B, RVI, { status: 'approved' }))
-    await rejectsUnavailable(startReviewRound(B, {}))
-    await rejectsUnavailable(closeReviewRound(B, 'rvr_0123456789abcdefghij'))
-    expect(fetchSpy).not.toHaveBeenCalled()
+    expect((e as ReviewRequestError).code).toBe('FORBIDDEN')
   })
 
   it('versions: no list, no request; the header Replace media will send', async () => {

@@ -6,6 +6,7 @@
 // Wave N: lead-only; the foundation registers 'visits' (WS4's) and 'board-links' (WS7's), empty. Reactions are inside
 // workshops (WS3, workshops/ported/note-reactions.ts) and Capture the room inside ai (WS5): no feature of their own.
 // Wave Q: lead-only; the foundation registers 'elements' (WS3's), contributing nothing while ELEMENTS_PANEL is false.
+// Wave S: 'review' (WS1's), contributing nothing while REVIEW_FLAGS.status is off (the one line WS1 adds here).
 import type { CanvasFeature } from '../canvas/api/index.ts'
 import { feature as mediaFeature } from '../file-card/ported/index.tsx'
 import { feature as a11yFeature } from './a11y/ported/index.tsx'
@@ -25,6 +26,7 @@ import { feature as peopleFeature } from './people/ported/index.tsx'
 import { feature as piecesFeature } from './pieces/ported/index.tsx'
 import { feature as presentLiveFeature } from './present-export/live/ported/index.tsx'
 import { feature as presentExportFeature } from './present-export/ported/index.tsx'
+import { feature as reviewFeature } from './review/index.tsx'
 import { feature as sharingFeature } from './sharing/ported/index.tsx'
 import { feature as sortFeature } from './sort/ported/index.tsx'
 import { feature as tagsFeature } from './tags/ported/index.tsx'
@@ -67,6 +69,9 @@ export const CANVAS_FEATURES: readonly CanvasFeature[] = [
   // wave N (registered empty by the foundation; WS4 and WS7 fill them): since your last visit, links between boards
   visitsFeature,
   boardLinksFeature,
+  // wave S (WS1; contributes nothing while REVIEW_FLAGS.status is off): review status (badges, the Review panel, the
+  // menu entries, the review viewer's status slot)
+  reviewFeature,
   // wave Q (registered by the foundation, hidden behind ELEMENTS_PANEL; WS3 fills it): the Elements panel
   elementsFeature,
 ]

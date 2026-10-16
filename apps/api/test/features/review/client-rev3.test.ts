@@ -3,7 +3,8 @@
 // @draftroom/contracts/fixtures/client-rev2: one 'review_status' value in either answer fails the whole answer. So the
 // api answers a request that declares revision 2 (or none) without the kind, and a PUT of an older build's chat
 // choices keeps the review_status it cannot know. A rev-3 build gets it. Also here: the foundation's other stubs that
-// a stale or a new client could reach (a comment spot is refused until WS3 stores it; the review reset is a no-op).
+// a stale or a new client could reach (a comment spot is refused until WS3 stores it). WS1's real review rows, the
+// bell's review facts and the reset are tested in ./review.test.ts and ./chat.test.ts.
 
 import {
   ChatPrefsResponse,
@@ -181,7 +182,7 @@ describe('the other foundation stubs', () => {
     )
   })
 
-  it('the new-version review reset changes nothing until WS1 implements it', async () => {
+  it('the new-version review reset leaves alone an item that is not about the asset (a frame: no asset)', async () => {
     const world = await chatWorld()
     w = world
     await reviewNotice(world, world.ben, world.owner)

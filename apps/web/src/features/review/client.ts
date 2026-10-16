@@ -1,32 +1,42 @@
-// OWNER: WS1 (wave S, review status; landed as a stub by the wave S foundation: WS1 makes it live against its routes,
-// WS4's review page and summary use it as it is). The web side of the review routes (@draftroom/contracts review.ts;
-// docs/WAVE-S-CONTRACTS.md §2).
+// OWNER: WS1 (wave S, review status; WS4's review page and summary use it as it is). The web side of the review
+// routes (@draftroom/contracts review.ts; docs/WAVE-S-CONTRACTS.md §2).
 //
-// Frozen signatures (same origin, the session cookie, LOBBY_CLIENT_HEADER through the api client; every answer parsed
-// with its contract schema). The reads never throw: a 404 from an api without the routes, a refusal, an unreadable
-// body or a network error answers empty (`reviewAvailable()` then says false for the tab):
+// Frozen signatures (same origin, the session cookie, LOBBY_CLIENT_HEADER; every answer parsed with its contract
+// schema). The reads never throw: a 404 from an api without the routes, a refusal, an unreadable body or a network
+// error answers empty (and a 404 for the board the page has open turns `reviewAvailable()` false for the tab):
 //   reviewAvailable(): boolean                                           whether the board offers any review UI
 //   getReview(boardId): Promise<GetReviewResponse>                       empty: EMPTY_REVIEW
 //   listReviewEvents(boardId, itemId, before?): Promise<ListReviewEventsResponse>
 // The writes reject with ReviewRequestError (`code`: 'unavailable', or the api's: ALREADY_IN_REVIEW, STATUS_CHANGED
-// with `item`, NEWER_VERSION with `latestVersionId`, VERSION_REQUIRED, ROUND_OPEN, REVIEW_FULL, …):
+// with `item`, NEWER_VERSION with `latestVersionId`, VERSION_REQUIRED, ROUND_OPEN, REVIEW_FULL, …; `message` the api's
+// own user-safe words when it gave them):
 //   addReviewItem(boardId, input) / patchReviewItem(boardId, itemId, input) / removeReviewItem(boardId, itemId)
 //   setReviewStatus(boardId, itemId, input): Promise<SetReviewStatusResponse>
 //   startReviewRound(boardId, input) / closeReviewRound(boardId, roundId): Promise<ReviewRoundResponse>
 //
-// Until WS1 ships, every read answers empty and every write rejects 'unavailable', without a request.
-import type {
-  AddReviewItemInput,
+// Nothing is stored here but whether the routes answered; nothing is logged.
+import {
+  type AddReviewItemInput,
   GetReviewResponse,
   ListReviewEventsResponse,
-  PatchReviewItemInput,
+  LOBBY_CLIENT_HEADER,
+  LOBBY_CLIENT_REV,
+  type PatchReviewItemInput,
   ReviewItem,
   ReviewItemResponse,
   ReviewRoundResponse,
-  SetReviewStatusInput,
+  reviewEventsPath,
+  reviewItemPath,
+  reviewItemsPath,
+  reviewPath,
+  reviewRoundClosePath,
+  reviewRoundsPath,
+  reviewStatusPath,
+  type SetReviewStatusInput,
   SetReviewStatusResponse,
-  StartReviewRoundInput,
+  type StartReviewRoundInput,
 } from '@draftroom/contracts'
+import type { z } from 'zod'
 
 /** A review request that did not happen: 'unavailable' (no api routes, offline) or the api's error code. */
 export class ReviewRequestError extends Error {
@@ -36,10 +46,12 @@ export class ReviewRequestError extends Error {
   readonly item: ReviewItem | null
   /** NEWER_VERSION: the version a status must be about */
   readonly latestVersionId: string | null
+  /** the api's own user-safe message, when it gave one */
+  readonly detail: string | null
   constructor(
     code: string,
     status: number | null = null,
-    extra: { item?: ReviewItem; latestVersionId?: string } = {},
+    extra: { item?: ReviewItem; latestVersionId?: string; detail?: string } = {},
   ) {
     super(`review request failed: ${code}`)
     this.name = 'ReviewRequestError'
@@ -47,6 +59,7 @@ export class ReviewRequestError extends Error {
     this.status = status
     this.item = extra.item ?? null
     this.latestVersionId = extra.latestVersionId ?? null
+    this.detail = extra.detail ?? null
   }
 }
 
@@ -57,56 +70,133 @@ export const EMPTY_REVIEW: GetReviewResponse = {
   can: { setStatus: false, manage: false },
 }
 
-const unavailable = <T>(): Promise<T> => Promise.reject(new ReviewRequestError('unavailable'))
+let off = false
 
-/** Whether this tab offers review UI: false until WS1 makes the client live (and while the routes are absent). */
+/** Whether this tab offers review UI: true until the api answered that the review routes are not here. */
 export function reviewAvailable(): boolean {
-  return false
+  return !off
 }
 
-export async function getReview(_boardId: string): Promise<GetReviewResponse> {
-  return EMPTY_REVIEW
+/** Test seam: forget what this tab learned about the routes. */
+export function resetReviewAvailability(): void {
+  off = false
+}
+
+const HEADERS = { accept: 'application/json', [LOBBY_CLIENT_HEADER]: String(LOBBY_CLIENT_REV) }
+
+async function send(method: string, path: string, body?: unknown): Promise<Response> {
+  if (typeof fetch !== 'function') throw new ReviewRequestError('unavailable')
+  try {
+    return await fetch(path, {
+      method,
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: body === undefined ? HEADERS : { ...HEADERS, 'content-type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    })
+  } catch {
+    throw new ReviewRequestError('unavailable')
+  }
+}
+
+async function json(res: Response): Promise<unknown> {
+  try {
+    return await res.json()
+  } catch {
+    return null
+  }
+}
+
+/** A write's answer, parsed; a refusal becomes ReviewRequestError with the api's code and extras. */
+async function write<S extends z.ZodType>(
+  method: string,
+  path: string,
+  body: unknown,
+  schema: S | null,
+): Promise<z.output<S>> {
+  const res = await send(method, path, body)
+  if (!res.ok) {
+    const raw = (await json(res)) as {
+      error?: { code?: unknown; message?: unknown }
+      item?: unknown
+      latestVersionId?: unknown
+    } | null
+    const code = typeof raw?.error?.code === 'string' ? raw.error.code : `HTTP_${res.status}`
+    const message = typeof raw?.error?.message === 'string' ? raw.error.message.slice(0, 300) : undefined
+    const item = ReviewItem.safeParse(raw?.item)
+    throw new ReviewRequestError(code, res.status, {
+      ...(item.success ? { item: item.data } : {}),
+      ...(typeof raw?.latestVersionId === 'string' ? { latestVersionId: raw.latestVersionId } : {}),
+      ...(message ? { detail: message } : {}),
+    })
+  }
+  if (schema === null) return undefined as z.output<S>
+  const parsed = schema.safeParse(await json(res))
+  if (!parsed.success) throw new ReviewRequestError('BAD_RESPONSE', res.status)
+  return parsed.data
+}
+
+export async function getReview(boardId: string): Promise<GetReviewResponse> {
+  try {
+    const res = await send('GET', reviewPath(boardId))
+    if (res.status === 404) {
+      // the board page has the board open, so a 404 here means an api without the review routes
+      off = true
+      return EMPTY_REVIEW
+    }
+    if (!res.ok) return EMPTY_REVIEW
+    const parsed = GetReviewResponse.safeParse(await json(res))
+    if (!parsed.success) return EMPTY_REVIEW
+    off = false
+    return parsed.data
+  } catch {
+    return EMPTY_REVIEW
+  }
 }
 
 export async function listReviewEvents(
-  _boardId: string,
-  _itemId: string,
-  _before?: number,
+  boardId: string,
+  itemId: string,
+  before?: number,
 ): Promise<ListReviewEventsResponse> {
-  return { events: [], nextBefore: null }
+  const empty: ListReviewEventsResponse = { events: [], nextBefore: null }
+  try {
+    const res = await send('GET', reviewEventsPath(boardId, itemId, before))
+    if (!res.ok) return empty
+    const parsed = ListReviewEventsResponse.safeParse(await json(res))
+    return parsed.success ? parsed.data : empty
+  } catch {
+    return empty
+  }
 }
 
-export function addReviewItem(_boardId: string, _input: AddReviewItemInput): Promise<ReviewItemResponse> {
-  return unavailable()
+export function addReviewItem(boardId: string, input: AddReviewItemInput) {
+  return write('POST', reviewItemsPath(boardId), input, ReviewItemResponse)
 }
 
-export function patchReviewItem(
-  _boardId: string,
-  _itemId: string,
-  _input: PatchReviewItemInput,
-): Promise<ReviewItemResponse> {
-  return unavailable()
+export function patchReviewItem(boardId: string, itemId: string, input: PatchReviewItemInput) {
+  return write('PATCH', reviewItemPath(boardId, itemId), input, ReviewItemResponse)
 }
 
-export function removeReviewItem(_boardId: string, _itemId: string): Promise<void> {
-  return unavailable()
+export async function removeReviewItem(boardId: string, itemId: string): Promise<void> {
+  await write('DELETE', reviewItemPath(boardId, itemId), undefined, null)
 }
 
 export function setReviewStatus(
-  _boardId: string,
-  _itemId: string,
-  _input: SetReviewStatusInput,
+  boardId: string,
+  itemId: string,
+  input: SetReviewStatusInput,
 ): Promise<SetReviewStatusResponse> {
-  return unavailable()
+  return write('POST', reviewStatusPath(boardId, itemId), input, SetReviewStatusResponse)
 }
 
 export function startReviewRound(
-  _boardId: string,
-  _input: StartReviewRoundInput,
+  boardId: string,
+  input: StartReviewRoundInput,
 ): Promise<ReviewRoundResponse> {
-  return unavailable()
+  return write('POST', reviewRoundsPath(boardId), input, ReviewRoundResponse)
 }
 
-export function closeReviewRound(_boardId: string, _roundId: string): Promise<ReviewRoundResponse> {
-  return unavailable()
+export function closeReviewRound(boardId: string, roundId: string): Promise<ReviewRoundResponse> {
+  return write('POST', reviewRoundClosePath(boardId, roundId), {}, ReviewRoundResponse)
 }

@@ -39,6 +39,13 @@ const row = (over: Partial<NotificationRow> = {}): NotificationRow => ({
   thread_visibility: 'everyone',
   recipient_kind: 'account',
   actor_domain: null,
+  review_kind: null,
+  review_status: null,
+  review_reason: null,
+  review_item_id: null,
+  review_item_count: null,
+  review_label: null,
+  review_round_title: null,
   ...over,
 })
 
