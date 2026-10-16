@@ -69,10 +69,10 @@ const WAVE_R_OWNERS: Record<string, string> = {
 }
 /**
  * Wave S (the foundation; docs/WAVE-S-CONTRACTS.md §1): every route of the wave, pending until its owner implements it:
- * the review routes (WS1) and the version list (WS2). Each owner deletes its keys here and in PENDING_ROUTES in the
- * change that implements them.
+ * the version list (WS2). Each owner deletes its keys here and in PENDING_ROUTES in the change that implements them
+ * (WS1 implemented the eight review routes: the refusal matrix holds them to their guard rows).
  */
-const WAVE_S_ROUTES: string[] = [...REVIEW_ROUTE_KEYS, ...ASSET_VERSION_ROUTE_KEYS]
+const WAVE_S_ROUTES: string[] = [...ASSET_VERSION_ROUTE_KEYS]
 const WAVE_S_OWNERS: Record<string, string> = {
   ...Object.fromEntries(REVIEW_ROUTE_KEYS.map((k) => [k, 'WS1'])),
   ...Object.fromEntries(ASSET_VERSION_ROUTE_KEYS.map((k) => [k, 'WS2'])),
@@ -102,7 +102,7 @@ describe('the pending list', () => {
     }
   })
 
-  it('wave S: a guest is refused exactly the five manage routes; no route has a creator row; all pending', () => {
+  it('wave S: a guest is refused exactly the five manage routes; no route has a creator row; the review routes live', () => {
     const all = [...REVIEW_ROUTE_KEYS, ...ASSET_VERSION_ROUTE_KEYS] as string[]
     const guestRows = Object.entries(GUEST_REFUSED_ROUTES).filter(([k]) => all.includes(k))
     expect(guestRows.map(([k]) => k).sort()).toEqual([...REVIEW_MANAGE_ROUTE_KEYS].sort())

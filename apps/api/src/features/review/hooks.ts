@@ -1,17 +1,30 @@
-// OWNER: WS1 (wave S; the signature is the foundation's contract with WS2, docs/WAVE-S-CONTRACTS.md §3.1). The one
-// review step another workstream's code runs inside its own transaction.
+// OWNER: WS1 (wave S; the signature is the foundation's contract with WS2, docs/WAVE-S-CONTRACTS.md §3.1). The review
+// steps another workstream's code (and the round start) runs inside its own transaction.
 //
 // resetForNewVersion: WS2's upload with X-Lobby-Supersedes calls it in the upload's one transaction, after the new
-// version row is inserted: every live review item on the asset whose status is not 'pending' goes back to 'pending'
-// (event reason 'new_version', actor = the uploader, version = the new one), with the notifications and chat outbox
-// rows of the reset in the same transaction (ONE notification per recipient for the whole reset). It returns the
-// items it changed so the caller can publish REVIEW_ITEM_EVENT for each after COMMIT (never before).
-//
-// Until WS1 implements it, it changes nothing and returns []: no review item can exist while the review routes are
-// pending, and the foundation's upload ignores the header anyway.
+// version row is inserted: every live review item on the asset whose status is not 'pending', on a board that can
+// show the new version (visibility follows the version: a board that only links v1 keeps its status about v1), goes
+// back to 'pending' (event reason 'new_version', actor = the uploader, version = the new one), with the notifications
+// and chat outbox rows of the reset in the same transaction (ONE notification per recipient per board for the whole
+// reset). It returns the items it changed so the caller can publish REVIEW_ITEM_EVENT for each after COMMIT (never
+// before). The items are locked FOR UPDATE in id order (after the caller's own row locks: the upload holds no board
+// row lock, and a status write takes an item's lock only after its board's reads).
 
 import type { ReviewItem } from '@draftroom/contracts'
 import type { Queryable } from '@draftroom/db'
+import type { BoardRow } from '../../access.ts'
+import type { CreatorLookup } from '../../auth/creator-sql.ts'
+import {
+  applyStatus,
+  type ItemRow,
+  insertEvent,
+  loadActor,
+  loadItemRows,
+  notifyReview,
+  type ReviewActorRow,
+  reviewRecipients,
+  toItem,
+} from './store.ts'
 
 export interface NewVersionReset {
   workspaceId: string
@@ -22,7 +35,111 @@ export interface NewVersionReset {
   actorId: string
 }
 
+/** The creator policy the actor's "External" tag is read with; set when the review feature registers. */
+let hookLookup: CreatorLookup | null = null
+let hookNow: () => Date = () => new Date()
+export function configureReviewHooks(opts: { lookup: CreatorLookup | null; now?: () => Date }): void {
+  hookLookup = opts.lookup
+  if (opts.now) hookNow = opts.now
+}
+
+type BoardRef = Pick<BoardRow, 'id' | 'workspace_id' | 'visibility' | 'status'>
+
+/**
+ * Resets `rows` (locked by the caller) to pending with `reason`, one event each, and ONE review_status notification
+ * per recipient about the first reset's event (or `notifyEventId` when the caller made its own, a round's). Returns
+ * the ids of the items it changed.
+ */
+export async function resetItems(
+  tx: Queryable,
+  board: BoardRef,
+  rows: readonly ItemRow[],
+  opts: {
+    reason: 'new_version' | 'new_round'
+    actor: ReviewActorRow
+    at: Date
+    versionId?: string
+    roundId?: string | null
+    /** notify about this event instead of the first reset's (null: notify nobody here) */
+    notifyEventId?: string | null
+  },
+): Promise<string[]> {
+  const changed: string[] = []
+  let first: string | null = null
+  for (const r of rows) {
+    if (r.status === 'pending') continue
+    const ev = await insertEvent(tx, {
+      board,
+      itemId: r.id,
+      roundId: opts.roundId ?? r.round_id,
+      kind: 'status',
+      status: 'pending',
+      previousStatus: r.status,
+      reason: opts.reason,
+      versionId: opts.versionId ?? null,
+      actor: opts.actor,
+      at: opts.at,
+    })
+    await applyStatus(tx, r.id, {
+      status: 'pending',
+      by: opts.actor.id,
+      at: opts.at,
+      versionId: opts.versionId,
+    })
+    first ??= ev.id
+    changed.push(r.id)
+  }
+  const eventId = opts.notifyEventId === undefined ? first : opts.notifyEventId
+  if (eventId && (changed.length > 0 || opts.notifyEventId)) {
+    const recipients = await reviewRecipients(
+      tx,
+      board,
+      rows.map((r) => r.id),
+      opts.actor.id,
+    )
+    await notifyReview(tx, { board, eventId, actorId: opts.actor.id, at: opts.at }, recipients)
+  }
+  return changed
+}
+
 /** Resets the asset's live, non-pending review items to pending. Runs in the caller's transaction (`tx`). */
-export async function resetForNewVersion(_tx: Queryable, _reset: NewVersionReset): Promise<ReviewItem[]> {
-  return []
+export async function resetForNewVersion(tx: Queryable, reset: NewVersionReset): Promise<ReviewItem[]> {
+  // the live items on the asset, on open boards that can show the new version, locked in id order
+  const locked = await tx.query<{ id: string; board_id: string }>(
+    `SELECT i.id, i.board_id FROM review_items i
+       JOIN boards b ON b.id = i.board_id AND b.workspace_id = i.workspace_id AND b.status IN ('active', 'archived')
+       JOIN asset_versions v ON v.id = $3 AND v.asset_id = i.asset_id AND v.workspace_id = i.workspace_id
+      WHERE i.workspace_id = $1 AND i.asset_id = $2 AND i.removed_at IS NULL AND i.status <> 'pending'
+        AND (v.board_id = i.board_id OR EXISTS (
+              SELECT 1 FROM board_asset_links l
+               WHERE l.workspace_id = i.workspace_id AND l.board_id = i.board_id AND l.asset_id = v.asset_id
+                 AND l.version_id = v.id))
+      ORDER BY i.id
+      FOR UPDATE OF i`,
+    [reset.workspaceId, reset.assetId, reset.versionId],
+  )
+  if (locked.rows.length === 0) return []
+  const actor = await loadActor(tx, reset.actorId, hookLookup)
+  if (!actor) return []
+  const at = hookNow()
+  const byBoard = new Map<string, string[]>()
+  for (const r of locked.rows) byBoard.set(r.board_id, [...(byBoard.get(r.board_id) ?? []), r.id])
+  const out: ReviewItem[] = []
+  for (const [boardId, ids] of byBoard) {
+    const board = await tx.maybeOne<BoardRef>(
+      `SELECT id, workspace_id, visibility, status FROM boards
+        WHERE id = $1 AND workspace_id = $2 AND status IN ('active', 'archived')`,
+      [boardId, reset.workspaceId],
+    )
+    if (!board) continue
+    const rows = await loadItemRows(tx, board, ids)
+    const changed = await resetItems(tx, board, rows, {
+      reason: 'new_version',
+      actor,
+      at,
+      versionId: reset.versionId,
+    })
+    for (const row of await loadItemRows(tx, board, changed)) out.push(toItem(row))
+  }
+  return out
 }

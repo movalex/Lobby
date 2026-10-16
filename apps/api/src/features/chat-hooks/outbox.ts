@@ -15,11 +15,21 @@ import type { Queryable } from '@draftroom/db'
 let savepointSeq = 0
 
 /** Kinds whose one event notifies several people with the same words: one message per hook per event. */
-export const MANY_RECIPIENT_KINDS = ['new_comment', 'access_request', 'outsider_joined'] as const
+// wave S (WS1): a review step (a status, a round start, a new-version reset) tells the board's owners, the people who
+// marked the items and the earlier setters: one message per hook per event too.
+export const MANY_RECIPIENT_KINDS = [
+  'new_comment',
+  'access_request',
+  'outsider_joined',
+  'review_status',
+] as const
 
-/** The event of a notification of a many-recipient kind, as SQL over `n` (NULL for the other kinds). */
+/**
+ * The event of a notification of a many-recipient kind, as SQL over `n` (NULL for the other kinds); a review_status
+ * one is keyed by its review event (wave S).
+ */
 const EVENT_KEY = `CASE WHEN n.kind = ANY ($2::text[]) THEN
-    n.kind || ':' || n.board_id || ':' || COALESCE(n.comment_id, n.thread_id, '-') || ':' || COALESCE(n.actor_id, '-')
+    n.kind || ':' || n.board_id || ':' || COALESCE(n.comment_id, n.thread_id, n.review_event_id, '-') || ':' || COALESCE(n.actor_id, '-')
       || ':' || to_char(n.created_at AT TIME ZONE 'UTC', 'YYYYMMDDHH24MISSUS') END`
 
 /**

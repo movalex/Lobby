@@ -14,13 +14,14 @@ import {
   type ChatHookProvider,
   type ChatMessage,
   type ChatNotice,
+  type ChatReview,
   cleanDisplayText,
   slackNoticePayload,
   slackPayload,
   teamsNoticePayload,
   teamsPayload,
 } from '@draftroom/contracts'
-import { type NotificationRow, snippetOf } from '../comments/notifications.ts'
+import { type NotificationRow, reviewOf, snippetOf } from '../comments/notifications.ts'
 
 const SNIPPET_KINDS: ReadonlySet<string> = new Set(['mention', 'reply', 'new_comment'])
 
@@ -55,6 +56,23 @@ export interface RenderInput {
   origin: string
 }
 
+/**
+ * Wave S (WS1): a review_status message's facts. The item's label (or the round's title) is the board's own words,
+ * like a snippet: only under the hook's switch, cut to CHAT_HOOK_LIMITS.reviewLabelChars by the sentence. It never
+ * comes from the status's note (a note is a comment thread; its text is never in a review message).
+ */
+export function chatReviewOf(r: NotificationRow, includeText: boolean): ChatReview | undefined {
+  const facts = reviewOf(r)
+  if (!facts) return undefined
+  if (facts.event === 'round_opened') {
+    const label = includeText && facts.roundTitle ? facts.roundTitle : undefined
+    return { event: 'round_opened', itemCount: facts.itemCount ?? 0, ...(label ? { label } : {}) }
+  }
+  if (!facts.status || !facts.reason) return undefined
+  const label = includeText && facts.label ? facts.label : undefined
+  return { event: 'status', status: facts.status, reason: facts.reason, ...(label ? { label } : {}) }
+}
+
 /** The event as a ChatMessage, or null for a kind that never goes to a channel. */
 export function messageFor(i: RenderInput): ChatMessage | null {
   const { row: r } = i
@@ -64,6 +82,7 @@ export function messageFor(i: RenderInput): ChatMessage | null {
       ? (r.actor_domain ?? 'unknown')
       : cleanDisplayText(r.actor_name ?? '') || 'Someone'
   const teamOnly = r.thread_visibility !== 'everyone'
+  const review = r.kind === 'review_status' ? chatReviewOf(r, i.includeText) : undefined
   const snippet =
     i.includeText && SNIPPET_KINDS.has(r.kind) && !teamOnly
       ? (snippetOf(r.comment_body) ?? undefined)
@@ -79,6 +98,7 @@ export function messageFor(i: RenderInput): ChatMessage | null {
     workspaceName: i.workspaceName,
     ...(snippet ? { snippet } : {}),
     ...(r.kind === 'access_request' && r.request_role ? { role: r.request_role } : {}),
+    ...(review ? { review } : {}),
   }
 }
 

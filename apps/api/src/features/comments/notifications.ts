@@ -5,7 +5,7 @@
 // The kinds a web build from before 0024 cannot parse (NOTIFICATION_KINDS_SINCE_REV1) are left out of its
 // list and its unread count (`rev`, @draftroom/contracts client-rev.ts), and so are the kinds a build
 // from before 0026 cannot (NOTIFICATION_KINDS_SINCE_REV2: wave J's 'outsider_joined'), and before 0037
-// (NOTIFICATION_KINDS_SINCE_REV3: wave S's 'review_status', listed with its review facts by WS1).
+// (NOTIFICATION_KINDS_SINCE_REV3: wave S's 'review_status', listed with its review facts: reviewOf, WS1).
 //
 // Wave J: a team-only thread's items are shown only to someone on the team, which now needs a confirmed
 // creator (store.ts onTeam; the caller's status comes in as `creator`). 'outsider_joined' (an account
@@ -25,6 +25,7 @@ import {
   NOTIFICATION_KINDS_SINCE_REV3,
   type NotificationItem,
   type NotificationKind,
+  type NotificationReview,
 } from '@draftroom/contracts'
 import type { Queryable } from '@draftroom/db'
 import {
@@ -71,7 +72,7 @@ export const NOTIFY_LOCK_NS = 0x44524e43
 
 type CommentNotificationKind = Exclude<
   NotificationKind,
-  'access_request' | 'access_granted' | 'outsider_joined'
+  'access_request' | 'access_granted' | 'outsider_joined' | 'review_status'
 >
 
 export interface NewNotification {
@@ -244,6 +245,14 @@ export interface NotificationRow {
   recipient_kind: string | null
   /** outsider_joined: the actor's primary stored address's domain (wave J). */
   actor_domain: string | null
+  /** review_status (wave S, WS1): the review event's facts, with its item's label or its round's title. */
+  review_kind: string | null
+  review_status: 'pending' | 'changes_requested' | 'approved' | null
+  review_reason: 'set' | 'new_version' | 'new_round' | null
+  review_item_id: string | null
+  review_item_count: number | null
+  review_label: string | null
+  review_round_title: string | null
 }
 
 /**
@@ -263,7 +272,9 @@ export const selectSql = (
        t.visibility AS thread_visibility, ru.kind AS recipient_kind,
        CASE WHEN n.kind = 'outsider_joined' THEN (
          SELECT e.domain FROM user_emails e WHERE e.user_id = n.actor_id AND e.source = ${source}::text
-          ORDER BY e.is_primary DESC, e.seen_at, e.email LIMIT 1) END AS actor_domain
+          ORDER BY e.is_primary DESC, e.seen_at, e.email LIMIT 1) END AS actor_domain,
+       re.kind AS review_kind, re.status AS review_status, re.reason AS review_reason, re.item_id AS review_item_id,
+       re.item_count AS review_item_count, ri.label AS review_label, rr.title AS review_round_title
   FROM notifications n${picked ? ' JOIN picked p ON p.id = n.id' : ''}
   JOIN boards b ON b.id = n.board_id AND b.workspace_id = n.workspace_id
   LEFT JOIN users ru ON ru.id = n.user_id
@@ -272,6 +283,9 @@ export const selectSql = (
   LEFT JOIN board_members bm ON bm.board_id = n.board_id AND bm.user_id = n.user_id
   LEFT JOIN users a ON a.id = n.actor_id
   LEFT JOIN comments c ON c.id = n.comment_id
+  LEFT JOIN review_events re ON re.id = n.review_event_id AND re.board_id = n.board_id
+  LEFT JOIN review_items ri ON ri.id = re.item_id AND ri.board_id = re.board_id
+  LEFT JOIN review_rounds rr ON rr.id = re.round_id AND rr.board_id = re.board_id
   LEFT JOIN LATERAL (
     SELECT r.role_requested, r.message, r.status FROM access_requests r
      WHERE n.kind = 'access_request' AND r.workspace_id = n.workspace_id AND r.board_id = n.board_id
@@ -315,6 +329,25 @@ export function snippetOf(body: string | null): string | null {
   return text.length > SNIPPET_MAX ? `${text.slice(0, SNIPPET_MAX - 1)}…` : text
 }
 
+/**
+ * Wave S (WS1): what a review_status notification is about, read from its review event at list time: one item's
+ * status (its label as the board names it now), or a round's start (its title and how many items). The recipient
+ * may view the board (visible), so the board's own words are theirs to read.
+ */
+export function reviewOf(r: NotificationRow): NotificationReview | null {
+  if (r.review_kind === null) return null
+  const round = r.review_kind === 'round_opened'
+  return {
+    event: round ? 'round_opened' : 'status',
+    itemId: round ? null : r.review_item_id,
+    status: round ? null : r.review_status,
+    reason: round ? null : r.review_reason,
+    label: round || r.review_label === null ? null : cleanDisplayText(r.review_label) || null,
+    roundTitle: r.review_round_title === null ? null : cleanDisplayText(r.review_round_title) || null,
+    itemCount: round ? (r.review_item_count ?? 0) : null,
+  }
+}
+
 function toItem(r: NotificationRow): NotificationItem {
   return {
     id: r.id,
@@ -344,6 +377,7 @@ function toItem(r: NotificationRow): NotificationItem {
         : null,
     accessGranted: r.kind === 'access_granted' && r.granted_role ? { role: r.granted_role } : null,
     ...(r.kind === 'outsider_joined' ? { outsiderJoined: { emailDomain: r.actor_domain } } : {}),
+    ...(r.kind === 'review_status' ? { review: reviewOf(r) } : {}),
     createdAt: r.created_at.toISOString(),
     readAt: r.read_at ? r.read_at.toISOString() : null,
   }
