@@ -257,9 +257,10 @@ export const EXCALIDRAW_SYNC_ENV: Readonly<Record<string, string>> = {
   // wave N: reactions on, as render.yaml deploys the sync (unset is off, fail-closed, and the room says 12); a spec
   // sets 'off' through syncEnv
   DRAFTROOM_REACTIONS: 'on',
-  // wave T: planning off, as render.yaml deploys the sync until the lead turns it on (unset is off too, fail-closed,
-  // and the room says 13); a planning spec sets 'on' through syncEnv until WS1 turns this on with render.yaml
-  DRAFTROOM_PLANNING: 'off',
+  // wave T: planning on (WS1's room rules have landed; the room says 14 with reactions on), as the sync is deployed once
+  // the lead turns the switch on at deploy (render.yaml); unset is off, fail-closed, and the room then says 13. A spec
+  // of the switch-off paths sets 'off' through syncEnv
+  DRAFTROOM_PLANNING: 'on',
   // wave N.1: the disk's free share, fixed (honoured with the test hooks only): a runner with a nearly full temp disk
   // would otherwise turn the sync's low-disk paths on for every spec (no backups under 20 %, the DISK notice under
   // 10 %: apps/sync/src/disk.ts); a low-disk spec sets its own through syncEnv

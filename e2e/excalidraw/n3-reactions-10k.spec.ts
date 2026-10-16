@@ -143,7 +143,7 @@ test('N3-1: rows draw on the 10k board and dragging a reacted note adds no whole
           ).__lobbyBoard?.canvas.room.contractsRev() ?? null,
       ),
     )
-    .toBe(13)
+    .toBe(14) // reactions on (and, since wave T, planning: the newest revision whose switches are on)
   await a.page.waitForTimeout(1_000)
 
   // before: the same drag with no reaction on the board
