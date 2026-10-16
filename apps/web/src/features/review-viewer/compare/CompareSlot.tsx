@@ -664,7 +664,7 @@ function VideoCompare({ ctx, assetId, a, b }: CompareProps) {
           className="lobby-cmp__range"
           min={0}
           max={Math.max(0.1, duration)}
-          step={0.04}
+          step="any"
           value={Math.min(time, duration || time)}
           aria-label="Position"
           data-testid="compare-seek"
