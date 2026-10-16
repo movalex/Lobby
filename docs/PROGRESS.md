@@ -1833,3 +1833,48 @@ cut-over on staging"; the runbook and the rehearsal: `docs/EXCALIDRAW-CUTOVER.md
     - the old Shapes-panel specs keep testing the panel-off fallback;
     - a placed-library-item marker needs the deferred rev-14 bump;
     - a scripted `updateItem` moves a note but not its bound text in the LOD bitmap (main too; drags are fine).
+- **Excalidraw wave R: "Bring the team over" (branch `wave-r/integration`, worktree `Draftroom-wrint`, from `main` db6a4dc7 = staging b804aec).**
+  - Foundation `wave-r/foundation` (contracts, migrations 0035/0036, the egress module, the sealed secret box, the import job runner, the Miro probe script, the AGENTS.md server-egress exceptions), then four workstreams merged with `--no-ff`: `notify`, `previews`, `miro` (three list conflicts, every removal kept), `backup`.
+  - **What it brings:**
+    - **Import from Miro (beta).**
+      - Each person pastes their own Miro token, kept in memory only.
+      - The api reads Miro REST v2 through the egress allowlist; sync converts the items through `packages/miro-import` into validated elements on a new board, which stays hidden (`importing`) until complete.
+      - Native: sticky notes (a colour table), shapes, text, frames, connectors with captions, groups, tags. Placeholders for docs, tables, previews and unknown items.
+      - Images and documents stay placeholders ("not imported yet") until the probe fills `MIRO_DOWNLOAD_HOSTS` (`scripts/miro-probe.mjs` needs a real token).
+      - Pause, resume and cancel; resuming after a pause between the seed and activation just activates.
+    - **Slack and Teams notifications.**
+      - Per-workspace incoming webhooks, added by admins who are creators; sealed with AES-256-GCM under `DRAFTROOM_WEBHOOK_SECRET`; only a hint is shown.
+      - Per-person opt-in; mentions, replies, new comments, access requests, outsider joins.
+      - An outbox in the same transaction; one post per hook for many-recipient events; retries; roll-ups inside the caps.
+      - Private board titles and comment text only when the admin opts in. The Teams URL rule is unverified.
+    - **Design-file previews:**
+      - PSD: the composite only, in a child process with header pre-checks; `ag-psd` 31.0.3, MIT, worker only;
+      - AI: through the PDF path;
+      - TIFF: sharp, first page;
+      - HEIC stays a download (HEVC patents), and Safari converts it to JPEG at upload.
+    - **Board backups.** A `.lobby` zip (a manifest, the v2 board.json, each original once):
+      - streamed from the api with a ticket; the export policy is enforced;
+      - restore, creators only: the upload is spooled and fully checked, then the job queued; files re-uploaded as new versions; validated; a new private board;
+      - the internal-only fence (DOMAIN-ACCESS §23): a non-owner/admin's backup omits files viewable only on internal-only boards, and a flagged backup restored outside every internal-only scope needs an owner/admin creator.
+  - **Review** (opus, adversarial), all fixed with tests that failed first:
+    - two majors: a hostile zip could force a ~2 GiB single read, now refused from the central directory and read in chunks; and the internal-only fence above;
+    - minors: duplicate channel posts (`chat_deliveries.event_key`, a unique index), the report-size measure, slots before backup plans, jobs queued only after uploads, roll-up checks and caps, restored titles cleaned.
+  - **Real Postgres** also caught two test bugs: the hook-cap race test counted wrong (the world's pre-made hook), and a jsonb CHECK test was sent `[]` as `'{}'`.
+  - **Gate** on 49c7d79f (+ test-only commits up to 5f3566dc):
+    - `pnpm lint`: 0 errors, the 4 older warnings; typecheck: 18 packages;
+    - `pnpm test`: **950 files / 11,272 tests passed, 0 failed**;
+    - real Postgres (NAS): api 247 files / 2,303 passed, db 103/103;
+    - `probe:browser` 3/3; `test:arrows` 85/85;
+    - the whole e2e on chromium twice: shard 1 546/546 both times; shard 2 524+1 and 523+1.
+    - The failures:
+      - `m3-whats-new:52`, both runs: it pinned wave Q's list and release id. Updated; m3, p-first-run, k4-feedback-card 19/19.
+      - `media-files:136` mp4, one run: 4/4 on repeat.
+  - **Deploy:**
+    - the env group `draftroom-staging-webhook-secret` was created through the Render API with a random value (never printed) and linked to the api only;
+    - api (0035, 0036), then sync (`seedMiro`), then web; the NAS worker rebuilt for ag-psd.
+    - Rolling back the api below the wave R foundation after an import has run is unsafe (the old build treats `importing` as active).
+  - **Follow-ups:**
+    - run the Miro probe with a real token, then fill `MIRO_DOWNLOAD_HOSTS`;
+    - confirm the Teams Workflows URL rule;
+    - the dashboard list refreshes only on reload after a restore;
+    - a crash in the milliseconds between the seed commit and saving its report still fails a Miro resume.
