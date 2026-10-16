@@ -9,7 +9,8 @@
 // Esc closes, Tab stays inside. On a phone the bar wraps and a tap on the picture plays or pauses.
 //
 // Test hooks on the stage (read by e2e/excalidraw/t2-*.spec.ts): data-panel-index, data-state, data-prepared and
-// data-swaps (the last swaps as JSON: panel index, performance.now() when it was drawn, the playhead, the sound's time).
+// data-swaps (the last swaps as JSON: panel index, performance.now() when it was drawn, the playhead, the sound's time),
+// data-playing-at and data-playing-from (performance.now() and the playhead when the clock last started running).
 import { formatDuration, formatRunningTime } from '@draftroom/canvas-schema/planning'
 import { originalUrl } from '@draftroom/dev-assets/shared'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
@@ -294,8 +295,16 @@ function AnimaticPlayer({ ctx, request }: { ctx: CanvasFeatureContext; request: 
       if (scrubRef.current && document.activeElement !== scrubRef.current)
         scrubRef.current.value = String(Math.round(pos))
       if (t.state !== lastState) {
+        const stage = stageRef.current
+        if (stage) {
+          stage.dataset.state = t.state
+          // when the clock started running, and from where (the swaps' wall-clock reference)
+          if (t.state === 'playing') {
+            stage.dataset.playingAt = String(Math.round(performance.now() * 10) / 10)
+            stage.dataset.playingFrom = String(Math.round(pos))
+          }
+        }
         lastState = t.state
-        if (stageRef.current) stageRef.current.dataset.state = t.state
         setState(t.state)
       }
       const ready = win.windowReady(0)

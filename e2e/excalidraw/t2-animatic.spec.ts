@@ -53,15 +53,14 @@ test.describe('T2 animatic', () => {
     await expect(player(a.page)).toHaveAttribute('aria-label', 'Animatic: Spot 30')
     await expect(a.page.getByTestId('animatic-time')).toHaveText(`0:00.0 / 0:0${TOTAL / 1000}`)
 
-    const swaps = await playThrough(a.page, TOTAL)
-    expect(swaps.map((s) => s.i)).toEqual([0, 1, 2, 3, 4, 5])
-    const first = swaps[0]
-    if (!first) throw new Error('no swap')
-    for (const s of swaps.slice(1)) {
+    const { swaps, playingAt, playingFrom } = await playThrough(a.page, TOTAL)
+    expect(swaps.map((s) => s.i)).toEqual([1, 2, 3, 4, 5])
+    for (const s of swaps) {
       const late = s.pos - (STARTS[s.i] as number)
       expect(late, `panel ${s.i + 1}: the playhead at the swap`).toBeGreaterThanOrEqual(0)
       expect(late, `panel ${s.i + 1}: the playhead at the swap`).toBeLessThan(TOLERANCE_MS)
-      const wall = s.at - first.at - ((STARTS[s.i] as number) - first.pos)
+      // the wall clock since the clock started, against the panel's own time
+      const wall = s.at - playingAt - ((STARTS[s.i] as number) - playingFrom)
       expect(Math.abs(wall), `panel ${s.i + 1}: the wall clock at the swap`).toBeLessThan(TOLERANCE_MS)
     }
     await expect(stage(a.page)).toHaveAttribute('data-panel-index', '5')
@@ -131,14 +130,22 @@ test.describe('T2 animatic', () => {
       return !!el && el.readyState >= 3
     })
 
-    const swaps = await playThrough(a.page, TOTAL)
-    expect(swaps.map((s) => s.i)).toEqual([0, 1, 2, 3, 4, 5])
-    for (const s of swaps.slice(1)) {
+    const { swaps, playingAt, playingFrom } = await playThrough(a.page, TOTAL)
+    expect(swaps.map((s) => s.i)).toEqual([1, 2, 3, 4, 5])
+    for (const s of swaps) {
       expect(s.a, `panel ${s.i + 1}: the sound's time was read`).toBeDefined()
       const late = (s.a as number) - (STARTS[s.i] as number)
       expect(late, `panel ${s.i + 1}: the sound's time at the swap`).toBeGreaterThan(-TOLERANCE_MS)
       expect(late, `panel ${s.i + 1}: the sound's time at the swap`).toBeLessThan(TOLERANCE_MS)
+      // and the wall clock between swaps (from the first one: the sound's own start latency, between its `playing`
+      // and its time moving, is the sound's, not the player's)
+      const first = swaps[0] as (typeof swaps)[number]
+      const wall = s.at - first.at - ((STARTS[s.i] as number) - (STARTS[first.i] as number))
+      expect(Math.abs(wall), `panel ${s.i + 1}: the wall clock between swaps`).toBeLessThan(TOLERANCE_MS)
     }
+    // the clock started with the sound: the first swap came about when the sound said so (its start latency apart)
+    expect(swaps[0]?.at ?? 0).toBeGreaterThan(playingAt)
+    expect(playingFrom).toBeLessThan(TOLERANCE_MS)
     // the sound stopped with the pictures
     expect(
       await a.page.evaluate(

@@ -180,10 +180,13 @@ export const stage = (page: Page) => page.getByTestId('animatic-stage')
 
 /** Opens the player on the storyboard of `panelId` through the selection bar's "Play animatic". */
 export async function openAnimatic(page: Page, panelId: string): Promise<void> {
-  await page.evaluate(
-    (id) => (window as unknown as { lobbyCanvas: { select(ids: string[]): void } }).lobbyCanvas.select([id]),
-    panelId,
-  )
+  // the whole board in view: the selection bar sits by the selection
+  await page.evaluate((id) => {
+    const c = (window as unknown as { lobbyCanvas: { select(ids: string[]): void; zoomToFit(): void } })
+      .lobbyCanvas
+    c.zoomToFit()
+    c.select([id])
+  }, panelId)
   await page.getByTestId('animatic-open').click()
   await expect(player(page)).toBeVisible()
   await expect(stage(page)).toHaveAttribute('data-prepared', 'true', { timeout: 30_000 })
@@ -193,14 +196,26 @@ export async function swapsOf(page: Page): Promise<Swap[]> {
   return JSON.parse((await stage(page).getAttribute('data-swaps')) ?? '[]') as Swap[]
 }
 
-/** Plays from the start to the end (looping off) and returns the swaps of that run. */
-export async function playThrough(page: Page, totalMs: number): Promise<Swap[]> {
+/**
+ * Plays from the start to the end (looping off) and returns the swaps of that run (the swaps to panels 2..N: panel 1
+ * is on screen before play, put there by End then Home, which the log records too).
+ */
+export async function playThrough(
+  page: Page,
+  totalMs: number,
+): Promise<{ swaps: Swap[]; playingAt: number; playingFrom: number }> {
+  await page.keyboard.press('End')
   await page.keyboard.press('Home')
+  await expect(stage(page)).toHaveAttribute('data-panel-index', '0')
   const before = (await swapsOf(page)).length
   await page.getByTestId('animatic-play').click()
   await expect(stage(page)).toHaveAttribute('data-state', 'ended', { timeout: totalMs + 15_000 })
   const all = await swapsOf(page)
-  return all.slice(before)
+  return {
+    swaps: all.slice(before),
+    playingAt: Number(await stage(page).getAttribute('data-playing-at')),
+    playingFrom: Number(await stage(page).getAttribute('data-playing-from')),
+  }
 }
 
 /** Panel starts (ms) of back-to-back durations. */
