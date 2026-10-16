@@ -138,7 +138,8 @@ describe('the kanban value', () => {
       for (const s of CARD_STATUSES) w = withLabel(w, s, word, 'x')
       expect(jsonByteLength(w)).toBeLessThanOrEqual(KANBAN_MAX_BYTES)
       expect(lobbyValueProblem('kanban', w), JSON.stringify(w).slice(0, 80)).toBeNull()
-      for (const s of CARD_STATUSES) expect(w.labels?.[s]?.isWellFormed?.() ?? true).toBe(true)
+      // encodeURIComponent throws on a lone surrogate (half a character)
+      for (const s of CARD_STATUSES) expect(() => encodeURIComponent(w.labels?.[s] ?? '')).not.toThrow()
     }
   })
 
