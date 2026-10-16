@@ -34,13 +34,10 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   // features/library: Q2-1 list and read, Q2-2 save/change/delete/restore, Q2-3 place and thumbs, Q2-4 import, Q2-5
   // folders, Q2-6 marks); to ship one hidden, add its key back.
   // wave R (the foundation; docs/WAVE-R-CONTRACTS.md §1): every route of the wave, @draftroom/contracts
-  // IMPORT_ROUTE_KEYS, MIRO_IMPORT_ROUTE_KEYS, CHAT_HOOK_ROUTE_KEYS and BACKUP_ROUTE_KEYS. WS4: backups (R4-1 download,
-  // R4-2 restore; features/backup). WS1 implemented its eight (the job routes R1-4, features/imports/routes.ts; the
-  // Miro routes R1-1, R1-2, features/imports/miro) and WS2 its seven chat hook routes (R2-1 hooks, R2-2 test, R2-3
-  // preferences; features/chat-hooks); to ship one hidden, add its key back.
-  'POST /api/boards/:bid/backup/ticket': { owner: 'WS4', item: 'R4-1' },
-  'GET /api/boards/:bid/backup': { owner: 'WS4', item: 'R4-1' },
-  'POST /api/workspaces/:wid/backups': { owner: 'WS4', item: 'R4-2' },
+  // IMPORT_ROUTE_KEYS, MIRO_IMPORT_ROUTE_KEYS, CHAT_HOOK_ROUTE_KEYS and BACKUP_ROUTE_KEYS: none left. WS1 implemented
+  // its eight (the job routes R1-4, features/imports/routes.ts; the Miro routes R1-1, R1-2, features/imports/miro), WS2
+  // its seven chat hook routes (R2-1 hooks, R2-2 test, R2-3 preferences; features/chat-hooks) and WS4 the three backup
+  // routes (R4-1 download, R4-2 restore; features/backup); to ship one hidden, add its key back.
 }
 
 export const isPendingRoute = (

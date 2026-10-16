@@ -78,6 +78,8 @@ export default defineConfig({
             'packages/icon-sets/src/**/*.test.ts',
             'packages/blob-store/src/**/*.test.ts',
             'packages/blob-store/test/**/*.test.ts',
+            // wave R (WS4): the .lobby backup's zip writer and reader
+            'packages/board-archive/src/**/*.test.ts',
             // spike B: O4's converter package
             'packages/tldraw-import/src/**/*.test.ts',
             'packages/tldraw-import/test/**/*.test.ts',

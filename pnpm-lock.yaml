@@ -175,6 +175,9 @@ importers:
       '@draftroom/blob-store':
         specifier: workspace:*
         version: link:../../packages/blob-store
+      '@draftroom/board-archive':
+        specifier: workspace:*
+        version: link:../../packages/board-archive
       '@draftroom/board-ops':
         specifier: workspace:*
         version: link:../../packages/board-ops
@@ -375,6 +378,12 @@ importers:
       aws4fetch:
         specifier: 'catalog:'
         version: 1.0.20
+
+  packages/board-archive:
+    dependencies:
+      '@draftroom/contracts':
+        specifier: workspace:*
+        version: link:../contracts
 
   packages/board-ops:
     dependencies:

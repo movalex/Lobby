@@ -52,11 +52,11 @@ const WAVE_N_ROUTES: string[] = []
 const WAVE_Q_ROUTES: string[] = []
 /**
  * Wave R (the foundation; docs/WAVE-R-CONTRACTS.md §1): every route of the wave, pending until its owner implements it
- * (WS2 chat hooks, WS4 backups; WS1 implemented the job and Miro routes). Each owner deletes its keys here and in
- * PENDING_ROUTES in the same change.
+ * (none left): WS1 implemented the job and Miro routes, WS2 the chat hooks, WS4 the three backup routes. To ship one
+ * hidden, add its key back here and in PENDING_ROUTES.
  */
-const WAVE_R_ROUTES: string[] = [...CHAT_HOOK_ROUTE_KEYS, ...BACKUP_ROUTE_KEYS]
-/** Every route of wave R, pending or live (the guard rows hold for all of them). */
+const WAVE_R_ROUTES: string[] = []
+/** Every route of wave R but the chat hooks (their own test below), pending or live (the guard rows hold for all). */
 const WAVE_R_ALL: string[] = [
   ...IMPORT_ROUTE_KEYS,
   ...MIRO_IMPORT_ROUTE_KEYS,
@@ -64,6 +64,7 @@ const WAVE_R_ALL: string[] = [
 ]
 const WAVE_R_OWNERS: Record<string, string> = {
   ...Object.fromEntries([...IMPORT_ROUTE_KEYS, ...MIRO_IMPORT_ROUTE_KEYS].map((k) => [k, 'WS1'])),
+  ...Object.fromEntries(CHAT_HOOK_ROUTE_KEYS.map((k) => [k, 'WS2'])),
   ...Object.fromEntries(BACKUP_ROUTE_KEYS.map((k) => [k, 'WS4'])),
 }
 const PENDING_NOW = [...WAVE_M_ROUTES, ...WAVE_N_ROUTES, ...WAVE_Q_ROUTES, ...WAVE_R_ROUTES]
@@ -124,6 +125,19 @@ describe('the pending list', () => {
     expect(creatorRows.map(([k]) => k).sort()).toEqual([...CHAT_HOOK_CREATOR_ROUTE_KEYS].sort())
     for (const [k, rule] of creatorRows) expect(rule, k).toEqual({ purpose: 'share', refuse: 'always' })
     expect(CHAT_HOOK_ROUTE_KEYS.filter((k) => isPendingRoute(k))).toEqual([])
+  })
+
+  it('wave R backups (WS4): the ticket and the restore refuse guests, the restore needs a creator, all three live', () => {
+    const backups = BACKUP_ROUTE_KEYS as readonly string[]
+    const guestRows = Object.entries(GUEST_REFUSED_ROUTES).filter(([k]) => backups.includes(k))
+    // the download itself is ticket-authorised: no guest row (its ticket route has one)
+    const ticketed = backups.filter((k) => k !== 'GET /api/boards/:bid/backup')
+    expect(guestRows.map(([k]) => k).sort()).toEqual(ticketed.sort())
+    for (const [k, m] of guestRows) expect(m, k).toBe(BACKUP_GUESTS_MESSAGE)
+    const creatorRows = Object.entries(CREATOR_ROUTES).filter(([k]) => backups.includes(k))
+    expect(creatorRows.map(([k]) => k)).toEqual([...BACKUP_CREATOR_ROUTE_KEYS])
+    for (const [k, rule] of creatorRows) expect(rule, k).toEqual({ purpose: 'create', refuse: 'always' })
+    expect(backups.filter((k) => isPendingRoute(k))).toEqual([])
   })
 
   it('every wave Q route has its guest row (all of them) and the eight writes their in-route creator rows, all live', () => {

@@ -1,16 +1,12 @@
 // The wave R foundation's web side (docs/WAVE-R-CONTRACTS.md §7): nothing changes for a user. The Import control is
-// today's single button while its switches are off (a dev-auth page may turn them on); the backup client answers
-// empty and rejects writes with 'unavailable', without a single request. (WS2 made the chat hook client live:
-// features/notify-settings/client.test.ts; WS1 the import job and Miro clients: import-miro/client.test.ts.)
+// today's single button while its switches are off (a dev-auth page may turn them on). Every wave R client is live:
+// the chat hooks (WS2, features/notify-settings/client.test.ts), the import job and Miro clients (WS1,
+// import-miro/client.test.ts) and the backup client (WS4, import-backup).
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { backupTicket, restoreBackup } from './import-backup/client.ts'
+import { describe, expect, it } from 'vitest'
 import { IMPORT_MENU_FLAGS, IMPORT_MENU_KEYS, importMenuFlags } from './import-menu/flags.ts'
 import { ImportMenu, importMenuEntries } from './import-menu/ImportMenu.tsx'
-import { ImportRequestError } from './imports/client.ts'
-
-const W = 'wsp_0123456789abcdefghij'
 
 describe('the Import control', () => {
   it('ships with every switch off', () => {
@@ -54,29 +50,5 @@ describe('the Import control', () => {
       'From Miro…',
     ])
     expect(importMenuEntries({ ...all, miro: false }, { miro: () => {}, backup: () => {} })).toHaveLength(2)
-  })
-})
-
-describe('the wave R clients (stubs)', () => {
-  const fetchSpy = vi.fn()
-  beforeEach(() => {
-    fetchSpy.mockReset()
-    vi.stubGlobal('fetch', fetchSpy)
-  })
-  afterEach(() => vi.unstubAllGlobals())
-
-  const rejectsUnavailable = async (p: Promise<unknown>, kind: typeof ImportRequestError) => {
-    const e = await p.then(
-      () => null,
-      (err: unknown) => err,
-    )
-    expect(e).toBeInstanceOf(kind)
-    expect((e as { code: string }).code).toBe('unavailable')
-  }
-
-  it('backup: refused writes, no request', async () => {
-    await rejectsUnavailable(backupTicket('b-abc1234567'), ImportRequestError)
-    await rejectsUnavailable(restoreBackup(W, new Blob(['PK'])), ImportRequestError)
-    expect(fetchSpy).not.toHaveBeenCalled()
   })
 })

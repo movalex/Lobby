@@ -21,11 +21,11 @@ describe('Export lives in the board menu, not the top bar (K3-3)', () => {
   it('Board menu ▸ Export ▸ "Export…" opens the export dialog (the command the icon ran)', () => {
     const entry = feature.mainMenu?.find((e) => e.id === 'export-dialog')
     expect(entry).toMatchObject({ group: 'export', label: 'Export…', command: 'present-export.export' })
-    // first in the Export ▸ group, before Export as ▸, Export all as ▸ and Export as PDF…
+    // first in the Export ▸ group, before Export as ▸, Export all as ▸, Export as PDF… and (wave R) the backup
     const group = (feature.mainMenu ?? [])
       .filter((e) => e.group === 'export')
       .sort((a, b) => a.order - b.order)
-    expect(group.map((e) => e.id)).toEqual(['export-dialog', 'export-as', 'export-all-as', 'print'])
+    expect(group.map((e) => e.id)).toEqual(['export-dialog', 'export-as', 'export-all-as', 'print', 'backup'])
     const command = feature.commands?.find((c) => c.id === 'present-export.export')
     expect(command).toMatchObject({ label: 'Export…', readOnlyAllowed: true })
     // the command asks the controller for the dialog: the request the top-bar item renders it from

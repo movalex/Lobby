@@ -20,6 +20,7 @@ import {
   slackHookUrl,
   startFakeReceiver,
 } from '../../../../../e2e/tests/support/chat-hooks.ts'
+import { makeBackup } from '../backup/support.ts'
 import { baseRecords, createFakeSync, type FakeSync, noteRec } from '../history/helpers.ts'
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
@@ -33,6 +34,8 @@ const ACCEPTED = new Set([
 ])
 /** The api's webhook key in these tests (chat hooks are off without it) */
 const WEBHOOK_SECRET = 'test-webhook-secret-0123456789abcdefghij'
+/** a valid, empty .lobby backup (wave R, WS4): a creator's restore of it is a 202 */
+const BACKUP = await makeBackup()
 const ALWAYS = Object.entries(CREATOR_ROUTES)
   .filter(([, r]) => r.refuse === 'always')
   .map(([key]) => key)
@@ -233,7 +236,7 @@ function probe(
       { token: FAKE_MIRO_TOKEN, boards: [{ miroBoardId: RETRO_ID }] },
     ],
     'POST /api/imports/:id/resume': ['POST', `/api/imports/${IMPORT_JOB}/resume`, { token: FAKE_MIRO_TOKEN }],
-    'POST /api/workspaces/:wid/backups': ['POST', `/api/workspaces/${wid}/backups`, {}],
+    'POST /api/workspaces/:wid/backups': ['POST', `/api/workspaces/${wid}/backups`, BACKUP],
     'GET /api/workspaces/:wid/chat-hooks': ['GET', `/api/workspaces/${wid}/chat-hooks`, undefined],
     'POST /api/workspaces/:wid/chat-hooks': [
       'POST',
