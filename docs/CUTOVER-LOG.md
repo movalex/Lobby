@@ -485,3 +485,14 @@ on the sync disk (§6).
   - `DRAFTROOM_DESIGN_PREVIEWS=off` was set on the api first. PSD/AI/TIFF stay attachments, as before wave R, until the NAS worker is rebuilt (`/api/auth/config` answers `designPreviews:false`).
   - Drift 0; smoke 41/0; 0 error/FATAL lines.
   - To turn the previews on: rebuild the NAS worker at main or later (the owner's approval is needed), then set the key to `on` and restart the api.
+- **2026-10-16 18:44-18:46Z, wave S deployed: client review** (main `6769e07`):
+  - api `dep-db9713jodcbs739ie5bg` (migration 0037);
+  - web `dep-db971h6k1f9s738m3mtg`;
+  - sync unchanged at ba1704c.
+  - After: api `/healthz/deep` 200; 0 error/FATAL lines; drift 0; live smoke 41/0; `/version.json` answers `{"commit":"6769e07220a6"}`.
+  - Live check, the owner on a new board:
+    - `GET /api/boards/:bid/review` gives 200 (items, rounds, openRoundId, can);
+    - `/b/:bid?view=review` opens the client review page ("Nothing is waiting for review on this board yet.").
+    - Cleanup: the board in Trash.
+  - The deeper flows (status by a guest, versions and compare, video comments, the summary PDF) are covered by `s-int` and s1-s4 in the gate.
+  - Waits for the NAS worker rebuild (owner approval): the video frame-rate probe (the viewer assumes 25 fps) and PSD/TIFF previews (`DRAFTROOM_DESIGN_PREVIEWS` off).
