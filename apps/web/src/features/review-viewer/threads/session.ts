@@ -21,9 +21,17 @@ export interface MediaSession {
   readonly seek: { readonly ms: number; readonly n: number } | null
 }
 
-const sessions = new WeakMap<FeatureRegistries, Atom<MediaSession>>()
+/** The session of each board page: one atom per viewer open (a new nonce gets a new atom, never a write in render). */
+const sessions = new WeakMap<
+  FeatureRegistries,
+  { readonly nonce: number; readonly atom: Atom<MediaSession> }
+>()
 
-const fresh = (nonce: number, at: { timeMs?: number; page?: number } | null, selected: string | null) => ({
+const fresh = (
+  nonce: number,
+  at: { timeMs?: number; page?: number } | null,
+  selected: string | null,
+): MediaSession => ({
   nonce,
   currentMs: at?.timeMs ?? 0,
   page: at?.page ?? 1,
@@ -32,7 +40,7 @@ const fresh = (nonce: number, at: { timeMs?: number; page?: number } | null, sel
   seek: at?.timeMs !== undefined ? { ms: at.timeMs, n: 1 } : null,
 })
 
-/** The session of this board page, started fresh for `request` when its nonce is new. */
+/** The session of this board page for `request` (started fresh, as a new atom, for every new nonce). */
 export function mediaSession(
   registries: FeatureRegistries,
   request: {
@@ -41,12 +49,14 @@ export function mediaSession(
     readonly threadId: string | null
   },
 ): Atom<MediaSession> {
-  let a = sessions.get(registries)
-  if (!a) {
-    a = atom<MediaSession>('review-viewer-media', fresh(request.nonce, request.at, request.threadId))
-    sessions.set(registries, a)
-  } else if (a.get().nonce !== request.nonce) a.set(fresh(request.nonce, request.at, request.threadId))
-  return a
+  const known = sessions.get(registries)
+  if (known && known.nonce === request.nonce) return known.atom
+  const created = atom<MediaSession>(
+    'review-viewer-media',
+    fresh(request.nonce, request.at, request.threadId),
+  )
+  sessions.set(registries, { nonce: request.nonce, atom: created })
+  return created
 }
 
 export function patchSession(a: Atom<MediaSession>, patch: Partial<Omit<MediaSession, 'nonce'>>): void {

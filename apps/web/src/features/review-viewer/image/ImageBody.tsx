@@ -11,6 +11,7 @@ import { patchSession } from '../threads/session.ts'
 import {
   DraftPin,
   mediaCommentsOn,
+  ReactKeys,
   SpotPin,
   STAGE_PAD,
   startComment,
@@ -29,7 +30,11 @@ const CLICK_SLOP_PX = 4
 
 export function ImageBody(props: ViewerSlotProps) {
   if (!mediaCommentsOn()) return null
-  return <Picture {...props} />
+  return (
+    <ReactKeys>
+      <Picture {...props} />
+    </ReactKeys>
+  )
 }
 
 function Picture(props: ViewerSlotProps) {

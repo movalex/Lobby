@@ -2,7 +2,8 @@
 // list) share: the comments store of the board page, this version's threads, the shared session, who may comment,
 // and the spot pins drawn on a picture.
 import type { CommentSpot } from '@draftroom/contracts'
-import { type CSSProperties, type RefObject, useLayoutEffect, useState } from 'react'
+import { type CSSProperties, type ReactNode, type RefObject, useLayoutEffect, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useAssetMeta } from '../../../assets/meta-store.ts'
 import { mediaMetaStore } from '../../../file-card/ported/meta.ts'
 import { initialsFor, safeColor } from '../../../lib/identity.ts'
@@ -103,3 +104,19 @@ export function useBoxSize(ref: RefObject<HTMLElement | null>): { w: number; h: 
 
 /** Space kept around a fitted picture in its stage (px each side; .dr-rvm-stage padding). */
 export const STAGE_PAD = 12
+
+/**
+ * The viewer's dialog stops every key press at itself (ViewerHost.tsx, a native listener, so the board's shortcuts
+ * never see one), and React listens above it, on <body> where the dialog is portalled: React's own key handlers
+ * inside the dialog would never run (the composer's Enter, the transport's keys). React also listens on a portal's
+ * container, so the slots render through a portal into a box of their own inside the dialog: their keys reach React
+ * there, and still stop at the dialog.
+ */
+export function ReactKeys({ children }: { children: ReactNode }) {
+  const [host, setHost] = useState<HTMLDivElement | null>(null)
+  return (
+    <div ref={setHost} className="dr-rvm-keys">
+      {host && createPortal(children, host)}
+    </div>
+  )
+}

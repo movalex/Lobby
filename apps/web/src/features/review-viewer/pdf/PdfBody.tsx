@@ -19,6 +19,7 @@ import { patchSession } from '../threads/session.ts'
 import {
   DraftPin,
   mediaCommentsOn,
+  ReactKeys,
   SpotPin,
   STAGE_PAD,
   startComment,
@@ -28,7 +29,11 @@ import {
 
 export function PdfBody(props: ViewerSlotProps) {
   if (!mediaCommentsOn()) return null
-  return <Pages {...props} />
+  return (
+    <ReactKeys>
+      <Pages {...props} />
+    </ReactKeys>
+  )
 }
 
 function Pages(props: ViewerSlotProps) {

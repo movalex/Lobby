@@ -438,3 +438,8 @@
   font: 700 11px / 20px var(--dr-font, sans-serif);
   pointer-events: none;
 }
+
+/* the slots' key box (shared.tsx ReactKeys): no box of its own in the layout */
+.dr-rvm-keys {
+  display: contents;
+}

@@ -25,7 +25,7 @@ import type { ViewerSlotProps } from '../slots.ts'
 import { formatClock, frameRateOrNull } from '../video/timecode.ts'
 import { type MediaPlace, type MediaThread, mediaAnchor, threadsOfAsset } from './model.ts'
 import { patchSession, requestSeek } from './session.ts'
-import { mediaCommentsOn, useMedia } from './shared.tsx'
+import { mediaCommentsOn, ReactKeys, useMedia } from './shared.tsx'
 import { useVersionNumbers } from './versions.ts'
 
 /** Where a thread is in its file, as the list and the composer say it. */
@@ -39,7 +39,11 @@ export function placeLabel(place: MediaPlace): string {
 
 export function ThreadsSlot(props: ViewerSlotProps) {
   if (!mediaCommentsOn()) return null
-  return <Threads {...props} />
+  return (
+    <ReactKeys>
+      <Threads {...props} />
+    </ReactKeys>
+  )
 }
 
 function Threads(props: ViewerSlotProps) {

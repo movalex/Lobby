@@ -12,13 +12,17 @@ import { derivativeUrl, originalUrl, usableDerivatives } from '../../../assets/c
 import type { ViewerSlotProps } from '../slots.ts'
 import { type MediaThread, spotAt, spotsShown } from '../threads/model.ts'
 import { patchSession, requestSeek } from '../threads/session.ts'
-import { DraftPin, mediaCommentsOn, SpotPin, startComment, useMedia } from '../threads/shared.tsx'
+import { DraftPin, mediaCommentsOn, ReactKeys, SpotPin, startComment, useMedia } from '../threads/shared.tsx'
 import { clusterMarkers, type MarkerCluster, timeAtX } from './markers.ts'
 import { formatClock, formatTimecode, frameRateOrNull, stepFrame, stepSecond } from './timecode.ts'
 
 export function VideoBody(props: ViewerSlotProps) {
   if (!mediaCommentsOn()) return null
-  return <Video {...props} />
+  return (
+    <ReactKeys>
+      <Video {...props} />
+    </ReactKeys>
+  )
 }
 
 function Video(props: ViewerSlotProps) {
