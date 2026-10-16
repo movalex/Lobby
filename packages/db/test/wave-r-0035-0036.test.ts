@@ -371,6 +371,28 @@ describe('0036_chat_hooks', () => {
     const test = { notification_id: null, status: 'sent', sent_at: new Date() }
     expect(await sqlstate(delivery(test))).toBe('no error')
     expect(await sqlstate(delivery({ notification_id: null, status: 'coalesced' }))).toBe('no error')
+    // one row per hook per event of a many-recipient kind (event_key): a second notification of the event is refused
+    const second = (
+      await q.one<{ id: string }>(
+        `INSERT INTO notifications (workspace_id, user_id, kind, board_id) VALUES ($1, $2, 'access_request', $3)
+         RETURNING id`,
+        [W, U, B],
+      )
+    ).id
+    const keyed = (id: string, key: string) =>
+      q.query('INSERT INTO chat_deliveries (hook_id, notification_id, recipient_id, event_key) VALUES ($1, $2, $3, $4)', [
+        HOOK,
+        id,
+        U,
+        key,
+      ])
+    const key = `access_request:${B}:-:${U2}:20261016120000000000`
+    expect(await sqlstate(keyed(second, 'access request with spaces'))).toBe('23514')
+    expect(await sqlstate(keyed(second, `x:${'a'.repeat(251)}`))).toBe('23514')
+    await q.query('UPDATE chat_deliveries SET event_key = $1 WHERE notification_id = $2', [key, ntf])
+    expect(await sqlstate(keyed(second, key))).toBe('23505')
+    expect(await sqlstate(keyed(second, `${key}1`))).toBe('no error')
+    await q.query('DELETE FROM chat_deliveries WHERE notification_id = $1', [second])
     await q.query('DELETE FROM notifications WHERE id = $1', [ntf])
     expect(await count(q, 'chat_deliveries')).toBe(2)
     await q.query('DELETE FROM chat_hooks WHERE id = $1', [HOOK])

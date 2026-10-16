@@ -7,8 +7,9 @@
 //   3. for each row, re-checks everything at send time, from current rows: the hook is still on, the person is still
 //      opted in to the kind, the notification (and its thread and comment) still exists and the person can still see it
 //      (the bell's own `visible`), else the row is `dropped`;
-//   4. holds a row back when the person already got 30 messages this hour or the workspace 600: it is `coalesced`, and
-//      a minute later the hook gets ONE "and N more" message for everything held back;
+//   4. holds a row back when the person already got 30 messages this hour or the workspace 600 (a roll-up counts as one
+//      message): it is `coalesced`, and a minute later the hook gets ONE "and N more" message for what was held back
+//      and still passes step 3's checks (the rest is dropped); a workspace past its cap holds its roll-ups too;
 //   5. renders the message, opens the sealed URL, posts through the egress module, and settles the row by what came
 //      back (policy.ts: retry with backoff, Retry-After, failed, or the hook switched off with a reason);
 //   6. hourly, purges rows older than 14 days.
@@ -85,15 +86,9 @@ interface Claimed {
 interface RolledRow {
   id: string
   notification_id: string | null
+  recipient_id: string
   attempts: number
   created_at: Date
-}
-
-interface BoardRow {
-  id: string
-  board_id: string
-  board_title: string
-  visibility: NotificationRow['visibility']
 }
 
 interface Loaded extends HookRow {
@@ -310,10 +305,15 @@ export function createChatDelivery(
     return Number(r.n)
   }
 
-  const RECIPIENT_SENT = `SELECT count(*)::int AS n FROM chat_deliveries
-     WHERE recipient_id = $1 AND status = 'sent' AND sent_at > $2 AND last_code IS DISTINCT FROM 'coalesced'`
-  const WORKSPACE_SENT = `SELECT count(*)::int AS n FROM chat_deliveries d JOIN chat_hooks h ON h.id = d.hook_id
-     WHERE h.workspace_id = $1 AND d.status = 'sent' AND d.sent_at > $2 AND d.last_code IS DISTINCT FROM 'coalesced'`
+  // Messages posted this hour: each message once, and each roll-up once (its rows were settled together, so they
+  // share their hook and sent_at), for the person (a roll-up that held any of theirs) and for the workspace.
+  const RECIPIENT_SENT = `SELECT (count(*) FILTER (WHERE last_code IS DISTINCT FROM 'coalesced')
+            + count(DISTINCT hook_id || ':' || extract(epoch FROM sent_at)::text) FILTER (WHERE last_code = 'coalesced'))::int AS n
+       FROM chat_deliveries WHERE recipient_id = $1 AND status = 'sent' AND sent_at > $2`
+  const WORKSPACE_SENT = `SELECT (count(*) FILTER (WHERE d.last_code IS DISTINCT FROM 'coalesced')
+            + count(DISTINCT d.hook_id || ':' || extract(epoch FROM d.sent_at)::text) FILTER (WHERE d.last_code = 'coalesced'))::int AS n
+       FROM chat_deliveries d JOIN chat_hooks h ON h.id = d.hook_id
+      WHERE h.workspace_id = $1 AND d.status = 'sent' AND d.sent_at > $2`
 
   async function deliver(c: Claimed, tally: TickResult): Promise<void> {
     const at = ctx.now()
@@ -366,47 +366,89 @@ export function createChatDelivery(
 
   // ---- the roll-up ----------------------------------------------------------------------------------------------------
 
+  /**
+   * The roll-up's rows checked as one message is (deliver): each row's notification is still there with its board, the
+   * person is still opted in to its kind and can still see it (`visible`, which reads the board's status too). Returns
+   * the rows that stay and their notifications; the others are dropped with their code.
+   */
+  async function stillAllowed(
+    hook: HookRow,
+    rows: readonly RolledRow[],
+    at: Date,
+    tally: TickResult,
+  ): Promise<{ kept: RolledRow[]; notes: NotificationRow[] }> {
+    const nids = rows.flatMap((r) => (r.notification_id ? [r.notification_id] : []))
+    const found = await db.query<NotificationRow & { recipient_id: string }>(
+      `WITH x AS (${selectSql('$2')} WHERE n.id IN (SELECT jsonb_array_elements_text($1::jsonb)) AND n.workspace_id = $3)
+       SELECT x.*, nn.user_id AS recipient_id FROM x JOIN notifications nn ON nn.id = x.id`,
+      [JSON.stringify(nids), ctx.identity.lookup.source, hook.workspace_id],
+    )
+    const byId = new Map(found.rows.map((n) => [n.id, n]))
+    const prefs = await db.query<{ user_id: string; kinds: string[] }>(
+      'SELECT user_id, kinds FROM chat_hook_prefs WHERE hook_id = $1',
+      [hook.id],
+    )
+    const kinds = new Map(prefs.rows.map((p) => [p.user_id, p.kinds]))
+    const creators = new Map<string, boolean>()
+    const kept: RolledRow[] = []
+    const notes: NotificationRow[] = []
+    for (const r of rows) {
+      const n = r.notification_id ? byId.get(r.notification_id) : undefined
+      let code: string | null = null
+      if (!n || n.recipient_id !== r.recipient_id) code = 'gone'
+      else if (!isChatKind(n.kind)) code = 'kind'
+      else if (!kinds.get(r.recipient_id)?.includes(n.kind)) code = 'opted-out'
+      else {
+        if (!creators.has(r.recipient_id))
+          creators.set(r.recipient_id, await ctx.identity.isCreatorUser(db, r.recipient_id))
+        if (!visible(n, creators.get(r.recipient_id) === true)) code = 'no-access'
+      }
+      if (code) {
+        await setDone(r.id, 'dropped', code, at)
+        tally.dropped += 1
+      } else if (n) {
+        kept.push(r)
+        notes.push(n)
+      }
+    }
+    return { kept, notes }
+  }
+
   async function rollUp(hookId: string, tally: TickResult): Promise<void> {
     const at = ctx.now()
-    const claimed = await db.query<RolledRow>(
-      `UPDATE chat_deliveries
-          SET status = 'sending', attempts = attempts + 1, lease_until = $3
-        WHERE id IN (SELECT id FROM chat_deliveries
-                      WHERE hook_id = $1 AND status = 'coalesced' AND next_at <= $2
-                      ORDER BY id LIMIT ${ROLLUP_BATCH} FOR UPDATE SKIP LOCKED)
-        RETURNING id::text AS id, notification_id, attempts, created_at`,
-      [hookId, at, new Date(at.getTime() + CHAT_DELIVERY.leaseMs)],
-    )
-    if (claimed.rows.length === 0) return
-    const ids = claimed.rows.map((r) => r.id)
     const hook = await db.maybeOne<HookRow & { workspace_name: string }>(
       `SELECT ${HOOK_COLUMNS}, w.name AS workspace_name
          FROM chat_hooks h LEFT JOIN users cu ON cu.id = h.created_by JOIN workspaces w ON w.id = h.workspace_id
         WHERE h.id = $1`,
       [hookId],
     )
+    // a roll-up is one message of the workspace's hour: past its cap it waits (the rows stay held)
+    if (
+      hook &&
+      !hook.disabled_at &&
+      (await sentSince(WORKSPACE_SENT, hook.workspace_id, new Date(at.getTime() - HOUR_MS))) >=
+        CHAT_DELIVERY.perWorkspacePerHour
+    )
+      return
+    const claimed = await db.query<RolledRow>(
+      `UPDATE chat_deliveries
+          SET status = 'sending', attempts = attempts + 1, lease_until = $3
+        WHERE id IN (SELECT id FROM chat_deliveries
+                      WHERE hook_id = $1 AND status = 'coalesced' AND next_at <= $2
+                      ORDER BY id LIMIT ${ROLLUP_BATCH} FOR UPDATE SKIP LOCKED)
+        RETURNING id::text AS id, notification_id, recipient_id, attempts, created_at`,
+      [hookId, at, new Date(at.getTime() + CHAT_DELIVERY.leaseMs)],
+    )
+    if (claimed.rows.length === 0) return
     if (!hook || hook.disabled_at) {
-      for (const id of ids) await setDone(id, 'dropped', 'hook-disabled', at)
-      tally.dropped += ids.length
+      for (const r of claimed.rows) await setDone(r.id, 'dropped', 'hook-disabled', at)
+      tally.dropped += claimed.rows.length
       return
     }
-    const nids = claimed.rows.flatMap((r) => (r.notification_id ? [r.notification_id] : []))
-    const boards = await db.query<BoardRow>(
-      `SELECT n.id, n.board_id, b.title AS board_title, b.visibility
-         FROM notifications n JOIN boards b ON b.id = n.board_id AND b.workspace_id = n.workspace_id
-        WHERE n.id IN (SELECT jsonb_array_elements_text($1::jsonb))`,
-      [JSON.stringify(nids)],
-    )
-    const live = new Set(boards.rows.map((b) => b.id))
-    const gone = claimed.rows
-      .filter((r) => !r.notification_id || !live.has(r.notification_id))
-      .map((r) => r.id)
-    for (const id of gone) await setDone(id, 'dropped', 'gone', at)
-    tally.dropped += gone.length
-    const kept = claimed.rows.filter((r) => !gone.includes(r.id))
+    const { kept, notes } = await stillAllowed(hook, claimed.rows, at, tally)
     if (kept.length === 0) return
-    const distinct = new Set(boards.rows.map((b) => b.board_id))
-    const first = boards.rows[0]
+    const distinct = new Set(notes.map((n) => n.board_id))
+    const first = notes[0]
     const single = distinct.size === 1 && first !== undefined
     const text = chatRollupSentence(kept.length, single ? titleFor(first, hook.include_snippets) : null)
     const url = await openUrl(hook)

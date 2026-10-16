@@ -8,7 +8,9 @@
 --   the person's workspace membership (a removal deletes it) and with its hook.
 -- - chat_deliveries: the outbox, written in the same transaction as the notification it carries (unique per hook and
 --   notification, so nothing is lost or sent twice), claimed FOR UPDATE SKIP LOCKED by the api's delivery loop, purged
---   after 14 days. A row holds no message text: the message is rendered from current rows at send time.
+--   after 14 days. A row holds no message text: the message is rendered from current rows at send time. An event many
+--   people are told of (a new comment, an access request, an outsider joining: one notification each) is one row per
+--   hook, not one per person: `event_key` names the event and is unique per hook.
 -- Additive (three new tables): rolling the api back needs no down migration, only DRAFTROOM_ALLOW_NEWER_SCHEMA=1.
 
 CREATE TABLE chat_hooks (
@@ -63,11 +65,15 @@ CREATE TABLE chat_deliveries (
   last_code text CHECK (last_code ~ '^[a-z0-9-]{1,32}$'),
   created_at timestamptz NOT NULL DEFAULT now(),
   sent_at timestamptz,
+  -- the event of a many-recipient kind (outbox.ts: kind, board, thread or comment, actor, time); NULL for the others
+  event_key text CHECK (event_key ~ '^[a-z_]{1,24}:[A-Za-z0-9_:-]{1,250}$'),
   UNIQUE (hook_id, notification_id),
   CHECK (status <> 'sending' OR lease_until IS NOT NULL),
   CHECK ((status = 'sent') = (sent_at IS NOT NULL))
 );
 CREATE INDEX chat_deliveries_due_idx ON chat_deliveries (next_at) WHERE status = 'queued';
+-- one message per hook per event of a many-recipient kind
+CREATE UNIQUE INDEX chat_deliveries_event_idx ON chat_deliveries (hook_id, event_key) WHERE event_key IS NOT NULL;
 -- the per-recipient and per-workspace caps count recent sends
 CREATE INDEX chat_deliveries_recipient_idx ON chat_deliveries (recipient_id, created_at);
 -- the 14-day purge

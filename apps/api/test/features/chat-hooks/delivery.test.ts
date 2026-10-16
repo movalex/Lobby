@@ -128,7 +128,7 @@ describe('who a message is queued for', () => {
     await createThread(w.sam, w.boardId, `${mention(w.owner)} and ${mention(w.ben)}`)
     expect((await kinds('mention'))?.d).toBe(2)
     await w.tick()
-    const said = w.receiver.posts.map((p) => p.body?.text ?? '')
+    const said = w.receiver.posts.map((p) => String(p.body?.text ?? ''))
     expect(said.filter((t) => t.includes('asked for commenter access'))).toHaveLength(1)
     expect(said.filter((t) => t.endsWith('commented on Pitch wall'))).toHaveLength(1)
     expect(said.filter((t) => t.includes('opened Pitch wall'))).toHaveLength(1)
