@@ -1,6 +1,7 @@
 // OWNER: WS4 (wave S, the client review page). The `?view=review` overlay on the board route (docs/WAVE-S-CONTRACTS.md
 // §6): a modal <dialog> filling the screen, portalled to <body> like the PDF and review viewers, over the mounted board
-// in focus mode (the board's chrome is hidden under it; the board keeps its ticket, sync session and access checks).
+// (the board keeps its ticket, sync session and access checks; the dialog is modal and opaque, so the board's chrome is
+// out of reach under it, and the board's own viewers - the PDF pages - still open over it, which focus mode would not allow).
 // It renders nothing unless the review page switch is on and the address says `?view=review`. "Open the board" and Escape
 // leave it (the address goes back to the board); keys pressed in it stop at the dialog, so the board's shortcuts and
 // Excalidraw never see them.
@@ -29,15 +30,6 @@ function ReviewDialog({ ctx }: { ctx: CanvasFeatureContext }) {
   const close = () => navigate(boardPath(ctx.board.id), { replace: true })
   const closeRef = useRef(close)
   closeRef.current = close
-
-  // Focus mode while the page is open (the board under it hides its chrome); restored as it was.
-  useEffect(() => {
-    const before = ctx.canvas.settings.get().focusMode
-    if (!before) ctx.canvas.settings.set({ focusMode: true })
-    return () => {
-      if (!before) ctx.canvas.settings.set({ focusMode: false })
-    }
-  }, [ctx.canvas])
 
   useEffect(() => {
     const dialog = ref.current

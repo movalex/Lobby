@@ -68,8 +68,9 @@ export const CANVAS_FEATURES: readonly CanvasFeature[] = [
   // wave N (registered empty by the foundation; WS4 and WS7 fill them): since your last visit, links between boards
   visitsFeature,
   boardLinksFeature,
+  // wave S (WS4): the client review page, the ?view=review overlay; nothing while its switch is off. Before the wave Q
+  // entry, which the wave Q foundation's test pins as the last
+  reviewPageFeature,
   // wave Q (registered by the foundation, hidden behind ELEMENTS_PANEL; WS3 fills it): the Elements panel
   elementsFeature,
-  // wave S (WS4): the client review page, the ?view=review overlay; nothing while its switch is off
-  reviewPageFeature,
 ]

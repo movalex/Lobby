@@ -16,29 +16,32 @@ import { type FramePictures, frameKey, previewDerivative } from './picture.ts'
 import { StatusControls } from './StatusControls.tsx'
 import { Threads } from './Threads.tsx'
 
+const RING = <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="2" />
+const STROKE = {
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 2.2,
+  strokeLinecap: 'round',
+  strokeLinejoin: 'round',
+} as const
 const ICONS = {
   approved: (
-    <path
-      d="M5 12.5l4.5 4.5L19 7.5"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.4"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
+    <>
+      {RING}
+      <path d="M7.8 12.4l3 3 5.4-6" {...STROKE} />
+    </>
   ),
   changes_requested: (
-    <path d="M12 5v8M12 17.2v.6" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+    <>
+      {RING}
+      <path d="M12 7.6v5.2M12 16.2v.2" {...STROKE} />
+    </>
   ),
   pending: (
-    <path
-      d="M12 6.5V12l3.5 2"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    />
+    <>
+      {RING}
+      <path d="M12 7.5V12l3 1.8" {...STROKE} />
+    </>
   ),
 } as const
 
