@@ -50,6 +50,7 @@ import { indexKeyBetween, isBindable, isValidIndexKey } from '@draftroom/canvas-
 import { stripEngineArtifacts } from '@draftroom/canvas-schema/groups'
 import { canonicalJson } from '@draftroom/canvas-schema/hash'
 import { checkInvariants, groupParents, type Violation } from '@draftroom/canvas-schema/invariants'
+import { isPlanningKey } from '@draftroom/canvas-schema/planning-keys'
 import { GROUP_NAMES } from '@draftroom/canvas-schema/protocol'
 import { isReactionKey } from '@draftroom/canvas-schema/reactions'
 import {
@@ -179,9 +180,17 @@ function parseBody(raw: unknown): RestoreElementsBody {
 /**
  * The restore as a server write (runs inside the write's transaction, in the room's drain). `reactions`: the sync's
  * kill switch (config.ts DRAFTROOM_REACTIONS); off, a re-created element comes back without the checkpoint's
- * reaction keys (wave N round 1), so a board strip-keys cleaned for the rollback stays clean.
+ * reaction keys (wave N round 1), so a board strip-keys cleaned for the rollback stays clean. `planning` (wave T,
+ * DRAFTROOM_PLANNING; docs/WAVE-T-CONTRACTS.md §3.3): on, the checkpoint's planning keys come back as stored (the same
+ * board and people: a `card:who` too); off, a re-created element comes back without them and a live one keeps the
+ * planning keys it has now (nothing planned is written while the switch is off).
  */
-export function applyRestoreElements(tx: ServerWriteTx, body: RestoreElementsBody, reactions = false) {
+export function applyRestoreElements(
+  tx: ServerWriteTx,
+  body: RestoreElementsBody,
+  reactions = false,
+  planning = false,
+) {
   const { store } = tx
   const leaseHolderOf = (tx as Partial<ServerWriteLeaseView>).leaseHolderOf
   const leased = (id: unknown) => typeof id === 'string' && !!leaseHolderOf && leaseHolderOf(id) !== null
@@ -310,8 +319,9 @@ export function applyRestoreElements(tx: ServerWriteTx, body: RestoreElementsBod
     let server = lobbyServerOf(copy)
     if (prevLive && prevEl) {
       const nowLobby = lobbyOf(prevEl)
-      for (const k of Object.keys(lobby)) if (isOwnMark(k) || CREATE_ONLY.has(k)) delete lobby[k]
-      for (const [k, v] of Object.entries(nowLobby)) if (isOwnMark(k) || CREATE_ONLY.has(k)) lobby[k] = v
+      const keptNow = (k: string) => isOwnMark(k) || CREATE_ONLY.has(k) || (!planning && isPlanningKey(k))
+      for (const k of Object.keys(lobby)) if (keptNow(k)) delete lobby[k]
+      for (const [k, v] of Object.entries(nowLobby)) if (keptNow(k)) lobby[k] = v
       server = lobbyServerOf(prevEl)
       if (next.type === 'text' && next.originalText !== prevEl.originalText)
         server = {
@@ -321,6 +331,7 @@ export function applyRestoreElements(tx: ServerWriteTx, body: RestoreElementsBod
         }
     } else {
       if (!reactions) for (const k of Object.keys(lobby)) if (isReactionKey(k)) delete lobby[k]
+      if (!planning) for (const k of Object.keys(lobby)) if (isPlanningKey(k)) delete lobby[k]
       server ??= lobbyServerOf(prevEl) ?? {
         createdBy: actor,
         createdAt: tx.now,
@@ -666,7 +677,7 @@ async function handle(
     res,
     200,
     await writeBoard(ctx, boardId, (tx) =>
-      applyRestoreElements(tx, body, ctx.deps.config.reactions === true),
+      applyRestoreElements(tx, body, ctx.deps.config.reactions === true, ctx.deps.config.planning === true),
     ),
   )
 }

@@ -36,9 +36,10 @@ import { checkElement, type WireElement } from '@draftroom/canvas-schema/element
 import { compareByIndex, indexKeysBetween, isValidIndexKey } from '@draftroom/canvas-schema/engine'
 import { checkInvariants } from '@draftroom/canvas-schema/invariants'
 import { MAX_ITEMS, MAX_LIVE_ELEMENTS, MAX_TAG_DEFS } from '@draftroom/canvas-schema/limits'
-import { PLANNING_KEY_CLASSES } from '@draftroom/canvas-schema/planning-keys'
+import { CARD_WHO_KEY, PLANNING_KEY_CLASSES } from '@draftroom/canvas-schema/planning-keys'
 import { REACTION_KEY_PREFIX } from '@draftroom/canvas-schema/reactions'
 import type { ImportBoardReport } from '@draftroom/contracts'
+import { createAssigneeRefsClient } from '../assignee-refs.ts'
 import type { InternalRoute, RoomExtensionContext, ServerWriteChange } from '../engine-switch.ts'
 import { readJson } from '../http/body.ts'
 import { HttpError, sendJson } from '../http/respond.ts'
@@ -131,26 +132,50 @@ function withoutReactionKeys(el: El): El {
 }
 
 /**
- * The element without its planning keys (wave T, CONTRACTS_REV 14: `card:*`, `sb:*`, `kanban`, `timeline`).
- * The wave T FOUNDATION's seed carries none, from any content, as its room takes none (custom-data.ts
- * `planningPending`): `card:who` names a person, and seeds skip merge's identity checks. WS1 replaces this with
- * the wave's rule (docs/WAVE-T-CONTRACTS.md §3.3: every key kept but `card:who`, which stays only when the
- * assignee-refs answer for the target board names it; all four classes stripped while DRAFTROOM_PLANNING is off).
+ * What seeded content keeps of the planning keys (wave T, CONTRACTS_REV 14; docs/WAVE-T-CONTRACTS.md §3.3): with
+ * DRAFTROOM_PLANNING on, every key but `card:who`, which stays only when the assignee-refs answer for the TARGET
+ * board names it an account with access (`keepAssignee`; seeds skip merge's identity checks, so this is the one
+ * place it is checked); off, none of the four classes (templates degrade to plain frames and notes). Absent: off.
  */
-function withoutPlanningKeys(el: El): El {
-  let out = el
-  for (const prefix of PLANNING_KEY_CLASSES) out = withoutLobbyKeys(out, prefix).el
-  return out
+export interface SeedPlanning {
+  readonly planning: boolean
+  readonly keepAssignee?: (uid: string) => boolean
+}
+
+/** The element with the planning keys the seed keeps (`SeedPlanning`); an emptied `lobby` is left out. */
+function withSeedPlanningKeys(el: El, rule: SeedPlanning): El {
+  if (!rule.planning) {
+    let out = el
+    for (const prefix of PLANNING_KEY_CLASSES) out = withoutLobbyKeys(out, prefix).el
+    return out
+  }
+  const who = (el.customData as { lobby?: Record<string, unknown> } | undefined)?.lobby?.[CARD_WHO_KEY]
+  if (who === undefined || (typeof who === 'string' && rule.keepAssignee?.(who) === true)) return el
+  return withoutLobbyKeys(el, CARD_WHO_KEY).el
+}
+
+/** The `card:who` uids of seeded content (to ask assignee-refs once for the target board). */
+export function seedAssigneeUids(elements: readonly unknown[]): string[] {
+  const out = new Set<string>()
+  for (const el of elements) {
+    if (!isObject(el) || !isObject(el.customData) || !isObject(el.customData.lobby)) continue
+    const who = el.customData.lobby[CARD_WHO_KEY]
+    if (typeof who === 'string') out.add(who)
+  }
+  return [...out]
 }
 
 /** Validates content for a new board; throws 400 with codes and ids only (never board text). */
-export function prepareSeedContent(raw: SeedContent): SeedContent {
+export function prepareSeedContent(
+  raw: SeedContent,
+  planning: SeedPlanning = { planning: false },
+): SeedContent {
   const seen = new Set<string>()
   const live: El[] = []
   for (const candidate of raw.elements) {
     if (!isObject(candidate)) throw invalid('Every element must be an object.')
     if (candidate.isDeleted === true) continue
-    const el = withoutPlanningKeys(withoutReactionKeys({ ...(candidate as El) }))
+    const el = withSeedPlanningKeys(withoutReactionKeys({ ...(candidate as El) }), planning)
     if (el.type === 'image') el.status = 'saved'
     if (typeof el.id !== 'string' || seen.has(el.id)) throw invalid('Element ids must be unique strings.')
     seen.add(el.id)
@@ -202,11 +227,39 @@ export async function parseSeedBody(body: unknown, now: number): Promise<SeedCon
   return { elements: body.elements as WireElement[], doc }
 }
 
+/**
+ * The seed's planning rule for `boardId` (`SeedPlanning`): the switch, and the assignee-refs answer for the target
+ * board when the content names anyone. A lookup that fails (a 404: the api seeds a new board before its row exists;
+ * an api without the route; the 3 s timeout) keeps no assignee: fail closed, the cards stay cards.
+ */
+async function seedPlanningOf(
+  ctx: RoomExtensionContext,
+  boardId: string,
+  elements: readonly unknown[],
+): Promise<SeedPlanning> {
+  if (ctx.deps.config.planning !== true) return { planning: false }
+  const uids = seedAssigneeUids(elements)
+  if (!uids.length) return { planning: true }
+  const lookup =
+    ctx.deps.assigneeRefs ??
+    createAssigneeRefsClient({
+      baseUrl: ctx.deps.config.apiInternalUrl,
+      internalSecret: ctx.deps.config.internalSecret,
+    })
+  try {
+    const accounts = new Set(await lookup(boardId, uids))
+    return { planning: true, keepAssignee: (uid) => accounts.has(uid) }
+  } catch {
+    ctx.deps.log('[seed] assignee-refs lookup failed; assignees left out', boardId, uids.length)
+    return { planning: true }
+  }
+}
+
 async function handleSeed(ctx: RoomExtensionContext, req: IncomingMessage, res: ServerResponse, raw: string) {
   const boardId = boardParam(raw)
   const now = ctx.deps.now?.() ?? Date.now()
   const parsed = await parseSeedBody(await readJson(req, SEED_LIMIT_BYTES), now)
-  const content = prepareSeedContent(parsed)
+  const content = prepareSeedContent(parsed, await seedPlanningOf(ctx, boardId, parsed.elements))
   const path = boardPath(ctx, boardId)
   if (existsSync(path) || ctx.service.roomIfOpen(boardId))
     throw new HttpError(
