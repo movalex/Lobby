@@ -23,6 +23,7 @@ export const ACTION_LABELS: Record<AiAction, string> = {
   diagram: 'Diagram from words',
   sort: 'Sort by a lens',
   score: 'Place on a 2x2',
+  storyboard: 'Break down with AI',
 }
 
 export const BUSY_LABELS: Record<AiAction, string> = {
@@ -36,6 +37,7 @@ export const BUSY_LABELS: Record<AiAction, string> = {
   diagram: 'Drawing the diagram…',
   sort: 'Sorting…',
   score: 'Placing on the 2x2…',
+  storyboard: 'Breaking down the script…',
 }
 
 /** The busy pill's words: the action's, or what the ideas are for. */

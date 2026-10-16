@@ -1,5 +1,11 @@
 // Wave T (CONTRACTS_REV 14): the planning key specs (planning-keys.ts, custom-data.ts), the per-element rules
 // checkElement holds every writer to, `relink-keep`, and the pure model of planning.ts.
+import {
+  AI_STORYBOARD_ASPECTS,
+  AI_STORYBOARD_DUR_MAX_MS,
+  AI_STORYBOARD_DUR_MIN_MS,
+  STRIP_KEYS_PREFIXES,
+} from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
 import { checkLobbyData, lobbyKeySpec, lobbyValueProblem } from './custom-data.ts'
 import { checkElement, type WireElement } from './elements.ts'
@@ -21,6 +27,7 @@ import {
   kanbanBands,
   kanbanColumns,
   needsRebalance,
+  PLANNING_KEY_CLASSES,
   PLANNING_KEYS,
   panelPosBetween,
   panelsInOrder,
@@ -28,6 +35,9 @@ import {
   planningElementProblem,
   rebalancedPositions,
   relinkKeep,
+  SB_ASPECTS,
+  SB_DUR_MAX_MS,
+  SB_DUR_MIN_MS,
   SB_KEYS,
   shotNumbers,
   snapDate,
@@ -36,6 +46,7 @@ import {
   timelineTicks,
   xToDate,
 } from './planning.ts'
+import { LOBBY_KEY_ADDITIONS } from './protocol.ts'
 import { SAMPLE_ELEMENTS } from './test-samples.ts'
 
 const el = (base: keyof typeof SAMPLE_ELEMENTS, lobby: Record<string, unknown>, id?: string) =>
@@ -356,5 +367,14 @@ describe('the planning model', () => {
       '2026-05-01',
       '2026-06-01',
     ])
+  })
+})
+
+describe('the contracts that mirror the planning keys (packages/contracts cannot import canvas-schema)', () => {
+  it('strip-keys takes every key class LOBBY_KEY_ADDITIONS names; the AI breakdown uses the storyboard aspects and durations', () => {
+    expect([...STRIP_KEYS_PREFIXES]).toEqual(LOBBY_KEY_ADDITIONS.map((a) => a.prefix))
+    for (const p of PLANNING_KEY_CLASSES) expect(STRIP_KEYS_PREFIXES as readonly string[]).toContain(p)
+    expect([...AI_STORYBOARD_ASPECTS]).toEqual([...SB_ASPECTS])
+    expect([AI_STORYBOARD_DUR_MIN_MS, AI_STORYBOARD_DUR_MAX_MS]).toEqual([SB_DUR_MIN_MS, SB_DUR_MAX_MS])
   })
 })

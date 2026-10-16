@@ -28,6 +28,7 @@ import {
   AI_THEMES_MAX,
   type AiAction,
   type AiRunInput,
+  type AiWaveTAction,
 } from '@draftroom/contracts'
 import type { ReasoningEffort } from './config.ts'
 import { estimateTokens, itemJson, type Sources } from './sources.ts'
@@ -62,8 +63,14 @@ const str = { type: 'string' }
 const ids = { type: 'array', items: str }
 const oneOf = (values: readonly string[]) => ({ type: 'string', enum: [...values] })
 
+/**
+ * A run this api builds prompts for: every action but the pending wave T ones (index.ts LIVE_AI_ACTIONS; WS2 adds
+ * `storyboard` with its prompt, schema and plan).
+ */
+type PromptInput = Exclude<AiRunInput, { action: AiWaveTAction }>
+
 /** The vote-weighted 'actions' (L1-7) has a schema of its own: each item names the items it comes from. */
-export type SchemaKey = AiAction | 'votedActions'
+export type SchemaKey = Exclude<AiAction, AiWaveTAction> | 'votedActions'
 
 /** One object schema per command op (L1-4): the closed set of contracts AiCommandOp, alias ids. */
 const OP_SCHEMAS = [
@@ -141,7 +148,7 @@ export const SCHEMAS: Record<SchemaKey, { name: string; schema: Record<string, u
 }
 
 /** Which schema a run is asked for. */
-export const schemaKeyOf = (input: AiRunInput): SchemaKey =>
+export const schemaKeyOf = (input: PromptInput): SchemaKey =>
   input.action === 'actions' && input.voteSessionId !== undefined ? 'votedActions' : input.action
 
 /**
@@ -156,7 +163,7 @@ export function themeRange(notes: number): { min: number; max: number } {
 /** The diagram's output cap (L1-5): 40 nodes and 60 edges fit in about 1k tokens. */
 export const DIAGRAM_MAX_OUTPUT_TOKENS = 1_500
 
-function task(input: AiRunInput, sources: Sources): string {
+function task(input: PromptInput, sources: Sources): string {
   switch (input.action) {
     case 'summarize':
       return [
@@ -271,7 +278,7 @@ function task(input: AiRunInput, sources: Sources): string {
   }
 }
 
-function userMessage(input: AiRunInput, sources: Sources): string {
+function userMessage(input: PromptInput, sources: Sources): string {
   const lines = [`Task: ${task(input, sources)}`]
   if (sources.frames.length)
     lines.push(`The items are on the board in: ${sources.frames.map((f) => JSON.stringify(f)).join(', ')}.`)
@@ -285,7 +292,7 @@ function userMessage(input: AiRunInput, sources: Sources): string {
 }
 
 /** The instructions' own share of the input cap (everything but the items). */
-export function overheadTokens(input: AiRunInput): number {
+export function overheadTokens(input: PromptInput): number {
   const empty: Sources = { items: [], frames: [], truncated: false }
   const { schema } = SCHEMAS[schemaKeyOf(input)]
   // Frame names are added later; 5 names of at most 120 characters.
@@ -298,7 +305,7 @@ export function overheadTokens(input: AiRunInput): number {
   )
 }
 
-export function buildPrompt(input: AiRunInput, sources: Sources): Prompt {
+export function buildPrompt(input: PromptInput, sources: Sources): Prompt {
   const { name, schema } = SCHEMAS[schemaKeyOf(input)]
   const prompt: Prompt = { system: SYSTEM, user: userMessage(input, sources), schemaName: name, schema }
   if (input.action === 'diagram') {

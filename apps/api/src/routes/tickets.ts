@@ -6,6 +6,7 @@ import {
   ACCESS_MANY_PATH,
   AccessManyRequest,
   type AccessManyResponse,
+  ASSIGNEE_REFS_ROUTE,
   BoardId,
   NEW_CANVAS_BOARD_MESSAGE,
   NEW_CANVAS_ERROR,
@@ -29,7 +30,8 @@ const AccessQuery = z.object({ boardId: BoardId, userId: UserId })
  * web-Origin (CSRF) check, as it does INTERNAL_CHECKPOINT_POSTS. Server to server, no cookie is read, and the
  * internal secret is checked before anything else (registerInternalSecretGuard runs first).
  */
-export const INTERNAL_SYNC_POSTS: ReadonlySet<string> = new Set([ACCESS_MANY_PATH])
+// wave T: the room's assignee check (routes/engine-internal.ts), matched by its route pattern
+export const INTERNAL_SYNC_POSTS: ReadonlySet<string> = new Set([ACCESS_MANY_PATH, ASSIGNEE_REFS_ROUTE])
 
 export function registerTicketRoutes(app: FastifyInstance, ctx: AppContext): void {
   const { db, config, now } = ctx

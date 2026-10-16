@@ -41,6 +41,7 @@ import {
   AI_ACTIONS,
   AI_ERROR_CODES,
   AI_RECAP_MAX_WINDOW_MS,
+  AI_WAVE_T_ACTIONS,
   type AiAction,
   type AiBudget,
   type AiOffReason,
@@ -49,6 +50,7 @@ import {
   type AiSettings,
   type AiStatus,
   type AiTopVoted,
+  type AiWaveTAction,
 } from '@draftroom/contracts'
 import { newId, type Queryable } from '@draftroom/db'
 import { can } from '@draftroom/permissions'
@@ -145,12 +147,16 @@ type AiPlan = AiResult extends infer R
   : never
 
 /**
- * The actions this api runs: since wave L (W1) all ten the contracts name. An action outside this set
- * would get the 400 BAD_REQUEST an unknown action gets, with nothing read, reserved or sent.
+ * The actions this api runs: since wave L (W1) all ten the contracts name, but wave T's `storyboard`, which is
+ * pending until WS2 lands its handler (docs/WAVE-T-CONTRACTS.md §4): an action outside this set gets the 400
+ * BAD_REQUEST an unknown action gets, with nothing read, reserved or sent. WS2 removes it from PENDING_AI_ACTIONS.
  */
-export const LIVE_AI_ACTIONS: ReadonlySet<string> = new Set<AiAction>(AI_ACTIONS)
+export const PENDING_AI_ACTIONS: ReadonlySet<string> = new Set<AiWaveTAction>(AI_WAVE_T_ACTIONS)
+export const LIVE_AI_ACTIONS: ReadonlySet<string> = new Set<AiAction>(
+  AI_ACTIONS.filter((a) => !PENDING_AI_ACTIONS.has(a)),
+)
 /** A run input of an action this api runs (see LIVE_AI_ACTIONS). */
-export type LiveAiRunInput = AiRunInput
+export type LiveAiRunInput = Exclude<AiRunInput, { action: AiWaveTAction }>
 const isLive = (input: AiRunInput): input is LiveAiRunInput => LIVE_AI_ACTIONS.has(input.action)
 
 /** A run id (contracts AiRunId: `air_` and 20 base62 characters), one per run, never stored. */

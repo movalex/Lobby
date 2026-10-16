@@ -245,8 +245,12 @@ export type AccessManyResponse = z.infer<typeof AccessManyResponse>
 // does not exist (404), like any unknown internal path.
 
 export const STRIP_KEYS_ROUTE = '/internal/maintenance/strip-keys'
-/** The key prefixes the route may strip: the wave N key classes (canvas-schema protocol.ts LOBBY_KEY_ADDITIONS). */
-export const STRIP_KEYS_PREFIXES = ['react:'] as const
+/**
+ * The key prefixes the route may strip: the key classes of canvas-schema protocol.ts LOBBY_KEY_ADDITIONS (wave N's
+ * `react:`; wave T's planning classes `card:`, `sb:`, `kanban` and `timeline`, planning-keys.ts PLANNING_KEY_CLASSES,
+ * kept equal by canvas-schema planning.test.ts). Wave T's rollback below 14 strips each of the four.
+ */
+export const STRIP_KEYS_PREFIXES = ['react:', 'card:', 'sb:', 'kanban', 'timeline'] as const
 export const StripKeysRequest = z.strictObject({ prefix: z.enum(STRIP_KEYS_PREFIXES) })
 export type StripKeysRequest = z.infer<typeof StripKeysRequest>
 const Count = z.number().int().nonnegative()
@@ -288,3 +292,39 @@ export const BoardTextLink = z.strictObject({
 export type BoardTextLink = z.infer<typeof BoardTextLink>
 export const BoardTextLinks = z.array(BoardTextLink).max(BOARD_TEXT_LINKS_MAX)
 export type BoardTextLinks = z.infer<typeof BoardTextLinks>
+
+// ---- wave T: assignee-refs (OWNER: WS1 for the sync's client; the api route is the wave T foundation's) -------------
+//
+//   POST <api>/internal/boards/:bid/assignee-refs  AssigneeRefsRequest → 200 AssigneeRefsAnswer
+//
+// sync → api only, behind the internal secret (like every internal route; exempt from the web-origin check as a
+// server-to-server POST, apps/api routes/tickets.ts INTERNAL_SYNC_POSTS). `card:who` (canvas-schema planning-keys.ts) is
+// identity-bearing: the room may store a uid there only when it names an ACCOUNT (users.kind = 'account', never a
+// name-only guest) with a role on the board now (connectionRole over loadBoardAccess: owner, editor, commenter or
+// viewer of an active or archived board). The answer lists exactly those of the asked uids (each once, in the
+// request's order); every other uid (unknown, a guest, no access, malformed) is left out, the same for all, so the
+// route is no existence oracle. A trashed or unknown board is 404 `board-not-found` (the sync then refuses the write
+// UNAVAILABLE: fail closed), a database failure 503 `unavailable`, a bad body 400 `bad-request`.
+// The room asks once per push batch for the uids it does not hold in its per-room cache (ASSIGNEE_REFS_CACHE_MS),
+// before merge, as it asks file-refs; removing an assignee needs no lookup. A separate route, not a field of
+// access-many: that answer is a strictObject an older sync would refuse with a new field.
+// Deploy: api before sync (an api without the route answers 404, and every assignment is then UNAVAILABLE).
+
+export const ASSIGNEE_REFS_ROUTE = '/internal/boards/:bid/assignee-refs'
+export const assigneeRefsPath = (boardId: string) =>
+  `/internal/boards/${encodeURIComponent(boardId)}/assignee-refs`
+/** At most this many uids per call (the room splits a bigger batch). */
+export const ASSIGNEE_REFS_MAX_UIDS = 50
+/** How long the room keeps an answer per uid (a removed member may be assigned once within it: design risk 3). */
+export const ASSIGNEE_REFS_CACHE_MS = 60_000
+/** A uid as `card:who` holds it (canvas-schema limits MAX_UID_CHARS, 60): the api decides what it names. */
+const AssigneeUid = z.string().min(1).max(60)
+export const AssigneeRefsRequest = z.strictObject({
+  uids: z.array(AssigneeUid).min(1).max(ASSIGNEE_REFS_MAX_UIDS),
+})
+export type AssigneeRefsRequest = z.infer<typeof AssigneeRefsRequest>
+export const AssigneeRefsAnswer = z.strictObject({
+  /** the asked uids that are accounts with a role on the board, each once, in the request's order */
+  accounts: z.array(AssigneeUid).max(ASSIGNEE_REFS_MAX_UIDS),
+})
+export type AssigneeRefsAnswer = z.infer<typeof AssigneeRefsAnswer>

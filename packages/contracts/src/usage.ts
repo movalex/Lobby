@@ -289,6 +289,8 @@ export const USAGE_AI_OPEN_KINDS = [
   'diagram',
   'sort',
   'score',
+  // wave T (WS2)
+  'storyboard',
   'lens',
   'expand',
   'mindmap',

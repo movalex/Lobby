@@ -38,11 +38,18 @@ export const AI_LEGACY_ACTIONS = ['summarize', 'themes', 'actions', 'ideas'] as 
  * lowercase action name since migration 0028_ai_actions, so a later action needs no migration.
  */
 export const AI_WAVE_L_ACTIONS = ['recap', 'ask', 'command', 'diagram', 'sort', 'score'] as const
-export const AI_ACTIONS = [...AI_LEGACY_ACTIONS, ...AI_WAVE_L_ACTIONS] as const
+/**
+ * Wave T (WS2, docs/WAVE-T-CONTRACTS.md §4): "Break down with AI" turns a pasted script into storyboard panels (text
+ * only: no image is generated). Pending in the api until WS2 lands its handler (apps/api features/ai LIVE_AI_ACTIONS:
+ * 400 BAD_REQUEST before anything is read or reserved); the ledger takes the name since 0028 (no migration).
+ */
+export const AI_WAVE_T_ACTIONS = ['storyboard'] as const
+export const AI_ACTIONS = [...AI_LEGACY_ACTIONS, ...AI_WAVE_L_ACTIONS, ...AI_WAVE_T_ACTIONS] as const
 export const AiAction = z.enum(AI_ACTIONS)
 export type AiAction = z.infer<typeof AiAction>
 export type AiLegacyAction = (typeof AI_LEGACY_ACTIONS)[number]
 export type AiWaveLAction = (typeof AI_WAVE_L_ACTIONS)[number]
+export type AiWaveTAction = (typeof AI_WAVE_T_ACTIONS)[number]
 /**
  * The ledger's action name rule (migration 0028_ai_actions: ai_usage.action CHECK). Every AI_ACTIONS member
  * matches it (contracts test); a new action name must too.
@@ -220,6 +227,29 @@ export const AiScoreAxis = z.object({
 })
 export type AiScoreAxis = z.infer<typeof AiScoreAxis>
 
+// ---- wave T (WS2): the storyboard breakdown ----
+/** The pasted script, in characters after trimming. */
+export const AI_STORYBOARD_SCRIPT_MAX_CHARS = 20_000
+/** The most panels one breakdown may make (the web's preview takes at most 200 from the parser). */
+export const AI_STORYBOARD_MAX_PANELS = 60
+export const AI_STORYBOARD_CAMERA_MAX_CHARS = 80
+export const AI_STORYBOARD_TEXT_MAX_CHARS = 500
+export const AI_STORYBOARD_SFX_MAX_CHARS = 200
+/** The storyboard aspects (canvas-schema planning-keys.ts SB_ASPECTS; kept equal by a test there). */
+export const AI_STORYBOARD_ASPECTS = ['16:9', '9:16', '1:1', '4:5', '2.39:1'] as const
+/** A panel's duration bounds in ms (canvas-schema SB_DUR_MIN_MS / SB_DUR_MAX_MS). */
+export const AI_STORYBOARD_DUR_MIN_MS = 100
+export const AI_STORYBOARD_DUR_MAX_MS = 600_000
+/** One panel of a breakdown, clamped by the api: camera words, action, dialogue or VO, sound, and a duration or null. */
+export const AiStoryboardPanel = z.object({
+  camera: z.string().max(AI_STORYBOARD_CAMERA_MAX_CHARS),
+  action: z.string().max(AI_STORYBOARD_TEXT_MAX_CHARS),
+  dialogue: z.string().max(AI_STORYBOARD_TEXT_MAX_CHARS),
+  sfx: z.string().max(AI_STORYBOARD_SFX_MAX_CHARS),
+  durationMs: z.number().int().min(AI_STORYBOARD_DUR_MIN_MS).max(AI_STORYBOARD_DUR_MAX_MS).nullable(),
+})
+export type AiStoryboardPanel = z.infer<typeof AiStoryboardPanel>
+
 /** Recap's window: everything edited since a time (ms since the epoch), or what is inside these shapes. */
 export const AiRecapScope = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('since'), since: z.number().int().nonnegative() }),
@@ -309,6 +339,16 @@ export const AiRunInput = z.discriminatedUnion('action', [
     action: z.literal('score'),
     shapeIds: ShapeIds.min(1),
     axes: z.tuple([AiScoreAxis, AiScoreAxis]),
+    acknowledged: Acknowledged,
+    at: At,
+  }),
+  // ---- wave T (WS2) ----
+  z.object({
+    action: z.literal('storyboard'),
+    /** the script the caller pasted (the one piece of board-independent text this action reads) */
+    script: z.string().trim().min(1).max(AI_STORYBOARD_SCRIPT_MAX_CHARS),
+    aspect: z.enum(AI_STORYBOARD_ASPECTS),
+    maxPanels: z.number().int().min(1).max(AI_STORYBOARD_MAX_PANELS),
     acknowledged: Acknowledged,
     at: At,
   }),
@@ -494,6 +534,12 @@ const aiResultMembers = <C extends z.ZodRawShape>(common: C) =>
       action: z.literal('score'),
       axes: z.tuple([AiScoreAxis, AiScoreAxis]),
       scores: z.array(AiScore),
+      ...common,
+    }),
+    // ---- wave T (WS2) ----
+    z.object({
+      action: z.literal('storyboard'),
+      panels: z.array(AiStoryboardPanel).max(AI_STORYBOARD_MAX_PANELS),
       ...common,
     }),
   ] as const

@@ -5,6 +5,7 @@
 //
 //   A1  GET /internal/boards/:bid/file-refs?ids=ver_a,ver_b,…  → 200 FileRefsResponse
 //   A2  GET /internal/boards/:bid/workshop-state               → 200 WorkshopStateBody
+//   T   POST /internal/boards/:bid/assignee-refs {uids}       → 200 AssigneeRefsAnswer (wave T, below)
 //
 // Server-to-server only (the web proxy never forwards /internal). GETs, like `touched` and
 // `/internal/access`, because the root CSRF hook refuses server-to-server POSTs. The internal secret is
@@ -28,6 +29,9 @@
 // `board-not-found` (sync fails closed: the op gets `UNAVAILABLE`), an archived one still answers.
 
 import {
+  ASSIGNEE_REFS_ROUTE,
+  type AssigneeRefsAnswer,
+  AssigneeRefsRequest,
   type FileRef,
   type FileRefsResponse,
   parseFileRefsIds,
@@ -38,7 +42,7 @@ import {
 import type { Queryable } from '@draftroom/db'
 import { type BoardStatus, can } from '@draftroom/permissions'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
-import { isBoardId } from '../access.ts'
+import { connectionRole, isBoardId, isUserId, loadBoardAccessMany, pairKey } from '../access.ts'
 import type { AppContext, Params } from '../context.ts'
 import { ApiError } from '../errors.ts'
 import { workshopStateOf } from '../features/workshops/workshop-state.ts'
@@ -56,8 +60,12 @@ const MESSAGES: Record<SyncInternalErrorCode, string> = {
 const fail = (code: SyncInternalErrorCode, message = MESSAGES[code]) =>
   new ApiError(SYNC_INTERNAL_ERROR_STATUS[code], code, message)
 
-/** The two routes with a typed error contract: the root secret guard (app.ts) answers them with `engineBadSecretBody`. */
-export const ENGINE_INTERNAL_ROUTES: ReadonlySet<string> = new Set([FILE_REFS_ROUTE, WORKSHOP_STATE_ROUTE])
+/** The routes with a typed error contract: the root secret guard (app.ts) answers them with `engineBadSecretBody`. */
+export const ENGINE_INTERNAL_ROUTES: ReadonlySet<string> = new Set([
+  FILE_REFS_ROUTE,
+  WORKSHOP_STATE_ROUTE,
+  ASSIGNEE_REFS_ROUTE,
+])
 
 /**
  * The body of 401 `bad-secret` in the contract's error shape (SyncInternalErrorBody; the status is
@@ -169,6 +177,38 @@ export async function fileRefsFor(
   return out
 }
 
+/**
+ * Wave T (docs/WAVE-T-CONTRACTS.md §5; @draftroom/contracts sync-internal.ts AssigneeRefsRequest): which of `uids` are
+ * ACCOUNTS (users.kind = 'account', never a name-only guest) with a role on `board` now, exactly as the canvas
+ * connection would get one (connectionRole over the access row: a trashed board was refused before this, an archived
+ * one gives viewers). Each once, in the request's order; any other uid is left out (unknown, a guest, no access, not a
+ * user id), the same for all. Two queries whatever the number of uids: the access rows, then the account kinds.
+ */
+export async function assigneeAccountsFor(
+  db: Queryable,
+  board: BoardRef,
+  uids: readonly string[],
+): Promise<string[]> {
+  const asked = [...new Set(uids)].filter(isUserId)
+  if (!asked.length) return []
+  const access = await loadBoardAccessMany(
+    db,
+    asked.map((userId) => ({ boardId: board.id, userId })),
+  )
+  const withRole = asked.filter(
+    (userId) => connectionRole(access.get(pairKey({ boardId: board.id, userId })) ?? null) !== null,
+  )
+  if (!withRole.length) return []
+  const accounts = new Set(
+    (
+      await db.query<{ id: string }>(`SELECT id FROM users WHERE id = ANY($1::text[]) AND kind = 'account'`, [
+        withRole,
+      ])
+    ).rows.map((r) => r.id),
+  )
+  return withRole.filter((u) => accounts.has(u))
+}
+
 export function registerEngineInternalRoutes(app: FastifyInstance, ctx: AppContext): void {
   const { db, now } = ctx
 
@@ -185,5 +225,15 @@ export function registerEngineInternalRoutes(app: FastifyInstance, ctx: AppConte
     const { bid = '' } = req.params as Params
     const board = await loadBoard(db, bid)
     return guarded(() => workshopStateOf(db, board.id, now()))
+  })
+
+  // Wave T: a POST, server to server (exempt from the web-origin check by its route pattern: routes/tickets.ts
+  // INTERNAL_SYNC_POSTS), behind the internal secret like every /internal route. Only a board someone could open.
+  app.post(ASSIGNEE_REFS_ROUTE, async (req): Promise<AssigneeRefsAnswer> => {
+    const parsed = AssigneeRefsRequest.safeParse(req.body)
+    if (!parsed.success) throw fail('bad-request', 'uids: 1-50 uids.')
+    const { bid = '' } = req.params as Params
+    const board = await loadBoard(db, bid, { openable: true })
+    return { accounts: await guarded(() => assigneeAccountsFor(db, board, parsed.data.uids)) }
   })
 }

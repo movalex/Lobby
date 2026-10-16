@@ -363,6 +363,8 @@ const NOTICE_WORDS: Record<AiAction, Omit<NoticeWords, 'title'>> = {
   diagram: { verb: 'draw the diagram', what: 'your description and the text you selected' },
   sort: { verb: 'sort the notes', what: 'the text of the notes and your lens' },
   score: { verb: 'place the notes on the 2x2', what: 'the text of the notes and the two axes' },
+  // wave T (WS2): offered only once WS2 lands "Break down with AI"
+  storyboard: { verb: 'break the script down into panels', what: 'the script you pasted' },
 }
 
 /**
@@ -444,6 +446,7 @@ const ACTION_WORDS: Record<AiAction, string> = {
   diagram: 'the diagram',
   sort: 'the notes',
   score: 'the notes',
+  storyboard: 'the script',
 }
 
 /**
