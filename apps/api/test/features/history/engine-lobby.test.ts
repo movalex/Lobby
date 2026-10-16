@@ -316,6 +316,54 @@ describe('duplicate, export and import on the Excalidraw engine', () => {
     expect(JSON.stringify(lobbySeed().elements)).not.toContain('react:')
   })
 
+  it('wave T: exports every planning key; an import drops card:who and points sb:of and sb:head.audio at the fresh ids', async () => {
+    const card = {
+      'card:status': 'doing',
+      'card:who': 'usr_assignee',
+      'card:start': '2026-10-01',
+      'card:due': '2026-10-30',
+    }
+    const head = { aspect: '16:9', fps: 24, audio: 'I' }
+    const panel = { 'sb:of': 'H', 'sb:pos': 'a0', 'sb:dur': 2500 }
+    const outside = { 'sb:of': 'elsewhere', 'sb:pos': 'a1', 'sb:dur': 1000 }
+    sync.setBoard(boardId, [
+      ...lobbyBoard(photo.versionId),
+      base('C', 'rectangle', { index: 'a5', x: 900, customData: { lobby: card } }),
+      textEl('H', 'Spot 30s', { index: 'a6', x: 1200, customData: { lobby: { 'sb:head': head } } }),
+      base('P', 'frame', { name: 'Panel', index: 'a7', x: 1500, customData: { lobby: panel } }),
+      base('Q', 'frame', { name: 'Panel', index: 'a8', x: 1700, customData: { lobby: outside } }),
+      base('K', 'frame', {
+        name: 'Board',
+        index: 'a9',
+        x: 2000,
+        customData: { lobby: { kanban: { hidden: ['blocked'], wip: { doing: 3 } } } },
+      }),
+    ])
+    const archive = (await bob.req('GET', `/api/boards/${boardId}/export`)).json()
+    const byId = (id: string) => archive.elements.find((e: El) => e.id === id)
+    expect(byId('C').customData.lobby).toEqual(card)
+    expect(byId('H').customData.lobby).toEqual({ 'sb:head': head })
+    expect(byId('P').customData.lobby).toEqual(panel)
+    expect(byId('K').customData.lobby).toEqual({ kanban: { hidden: ['blocked'], wip: { doing: 3 } } })
+
+    const res = await bob.req('POST', `/api/workspaces/${DEV_STUDIO}/boards/import?title=Copy`, archive)
+    expect(res.statusCode).toBe(201)
+    const seed = lobbySeed().elements
+    const lobbyOf = (e: El | undefined) => (e?.customData?.lobby ?? {}) as Record<string, unknown>
+    const c = seed.find((e) => e.type === 'rectangle')
+    const h = seed.find((e) => e.type === 'text' && 'sb:head' in lobbyOf(e))
+    const img = seed.find((e) => e.type === 'image')
+    const [p, q] = seed.filter((e) => e.type === 'frame' && 'sb:of' in lobbyOf(e))
+    const k = seed.find((e) => e.type === 'frame' && 'kanban' in lobbyOf(e))
+    const { 'card:who': _who, ...rest } = card
+    expect(lobbyOf(c)).toEqual(rest)
+    expect(lobbyOf(h)).toEqual({ 'sb:head': { ...head, audio: img?.id } })
+    expect(lobbyOf(p)).toEqual({ ...panel, 'sb:of': h?.id })
+    expect(lobbyOf(q)).toEqual(outside) // a head outside the archive: kept, soft
+    expect(lobbyOf(k)).toEqual({ kanban: { hidden: ['blocked'], wip: { doing: 3 } } })
+    expect(JSON.stringify(seed)).not.toContain('usr_assignee')
+  })
+
   it('refuses a v2 archive it cannot take', async () => {
     const archive = (await bob.req('GET', `/api/boards/${boardId}/export`)).json()
     const dup = { ...archive, elements: [...archive.elements, archive.elements[0]] }

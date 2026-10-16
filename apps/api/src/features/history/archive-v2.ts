@@ -11,13 +11,17 @@
 //    (fresh group ids) and the ids inside `mindmap` / `mindmapEdge` follow, and what points outside the
 //    archive is cut (a binding to nothing unbinds, a label whose container is gone becomes a free text);
 //  - server-owned and identity-stamped customData never comes from a file: `lobbyServer` goes (the seed
-//    stores none), and so do `plusOne:*`, the wave N reactions `react:*`, `ai` and `privateFrame`;
+//    stores none), and so do `plusOne:*`, the wave N reactions `react:*`, `ai`, `privateFrame` and (wave T) a
+//    card's assignee `card:who` (a uid of another deployment or workspace means nothing here); the other planning
+//    keys are kept, the element ids inside `sb:of` and `sb:head.audio` following the fresh ids (canvas-schema
+//    planning-keys.ts relinkKeep: a ref outside the archive is kept, soft, as a copy keeps it);
 //  - elements are checked with the server's own element check (canvas-schema elements.ts) and the archive
 //    caps; the sync seed checks everything again with the invariants and assigns fresh indices.
 
 import { randomBytes } from 'node:crypto'
 import { checkElement } from '@draftroom/canvas-schema/elements'
 import { ARCHIVE_MAX_ELEMENTS } from '@draftroom/canvas-schema/limits'
+import { CARD_WHO_KEY, relinkKeep, SB_HEAD_KEY, SB_OF_KEY } from '@draftroom/canvas-schema/planning-keys'
 import { identityUidOf, isReactionKey } from '@draftroom/canvas-schema/reactions'
 import {
   type Element,
@@ -107,7 +111,7 @@ function freshId(): string {
 
 const TEXT_CONTAINERS = new Set(['rectangle', 'stickynote', 'diamond', 'ellipse', 'arrow'])
 const BINDABLE = new Set(['rectangle', 'stickynote', 'diamond', 'ellipse', 'image', 'frame'])
-const IDENTITY_KEYS = new Set(['ai', 'privateFrame'])
+const IDENTITY_KEYS = new Set(['ai', 'privateFrame', CARD_WHO_KEY])
 
 export interface ImportedLobbyBoard {
   elements: Record<string, unknown>[]
@@ -239,6 +243,10 @@ function importCustomData(
   const next: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(lobby)) {
     if (identityBound(key) || IDENTITY_KEYS.has(key)) continue
+    if (key === SB_OF_KEY || key === SB_HEAD_KEY) {
+      next[key] = structuredClone(relinkKeep(key, value, ids))
+      continue
+    }
     if (key === 'mindmap' || key === 'mindmapEdge') {
       if (!isObject(value)) continue
       const refs = key === 'mindmap' ? ['rootId', 'parentId'] : ['rootId', 'parentId', 'childId']
