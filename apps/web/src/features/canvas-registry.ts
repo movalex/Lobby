@@ -7,6 +7,8 @@
 // workshops (WS3, workshops/ported/note-reactions.ts) and Capture the room inside ai (WS5): no feature of their own.
 // Wave Q: lead-only; the foundation registers 'elements' (WS3's), contributing nothing while ELEMENTS_PANEL is false.
 // Wave S: 'review' (WS1's), contributing nothing while REVIEW_FLAGS.status is off (the one line WS1 adds here).
+// Wave T: lead-only; the foundation registers 'storyboard', 'storyboard-play', 'cards', 'kanban', 'card-table' and
+// 'timeline', empty (each workstream fills its own; features/planning holds what they share).
 import type { CanvasFeature } from '../canvas/api/index.ts'
 import { feature as mediaFeature } from '../file-card/ported/index.tsx'
 import { feature as a11yFeature } from './a11y/ported/index.tsx'
@@ -15,12 +17,15 @@ import { feature as aiWorkspaceAskFeature } from './ai/workspace-ask/ported/inde
 import { feature as boardLinksFeature } from './board-links/index.tsx'
 import { feature as canvasUxFeature } from './canvas-ux/ported/index.tsx'
 import { feature as navigationFeature } from './canvas-ux/ported/navigation/index.tsx'
+import { feature as cardTableFeature } from './card-table/index.tsx'
+import { feature as cardsFeature } from './cards/index.tsx'
 import { feature as commandPaletteFeature } from './command-palette/index.tsx'
 import { feature as commentsFeature } from './comments/ported/index.tsx'
 import { feature as cursorChatFeature } from './cursor-chat/ported/index.tsx'
 import { feature as elementsFeature } from './elements/index.tsx'
 import { feature as flowFeature } from './flow/ported/index.tsx'
 import { feature as historyFeature } from './history/ported/index.tsx'
+import { feature as kanbanFeature } from './kanban/index.tsx'
 import { feature as mindmapFeature } from './mindmap/ported/index.tsx'
 import { feature as peopleFeature } from './people/ported/index.tsx'
 import { feature as piecesFeature } from './pieces/ported/index.tsx'
@@ -30,8 +35,11 @@ import { feature as reviewFeature } from './review/index.tsx'
 import { feature as reviewPageFeature } from './review-page/index.tsx'
 import { feature as sharingFeature } from './sharing/ported/index.tsx'
 import { feature as sortFeature } from './sort/ported/index.tsx'
+import { feature as storyboardFeature } from './storyboard/index.tsx'
+import { feature as storyboardPlayFeature } from './storyboard-play/index.tsx'
 import { feature as tagsFeature } from './tags/ported/index.tsx'
 import { feature as thumbnailsFeature } from './thumbnails/ported/index.tsx'
+import { feature as timelineFeature } from './timeline/index.tsx'
 import { feature as visitsFeature } from './visits/index.tsx'
 import { feature as workshopsFeature } from './workshops/ported/index.tsx'
 import { feature as wsTemplatesFeature } from './ws-templates/index.tsx'
@@ -76,6 +84,14 @@ export const CANVAS_FEATURES: readonly CanvasFeature[] = [
   // wave S (WS4): the client review page, the ?view=review overlay; nothing while its switch is off. Before the wave Q
   // entry, which the wave Q foundation's test pins as the last
   reviewPageFeature,
+  // wave T (registered empty by the foundation; each contributes nothing while its PLANNING_FLAGS switch is off):
+  // storyboards (WS2), the animatic (WS3), cards, Kanban and the card table (WS4), timelines (WS5)
+  storyboardFeature,
+  storyboardPlayFeature,
+  cardsFeature,
+  kanbanFeature,
+  cardTableFeature,
+  timelineFeature,
   // wave Q (registered by the foundation, hidden behind ELEMENTS_PANEL; WS3 fills it): the Elements panel
   elementsFeature,
 ]

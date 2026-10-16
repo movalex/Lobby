@@ -4,7 +4,7 @@
 // written element). The core leaves such a key out of every push (live flush, offline replay, an adopted queue, a
 // lost push's replay), puts the server's value back for it, and holds it until the room's `contracts` frame says
 // its revision. The FakeRoom plays the old room (`refuseUnknownKeys`).
-import { CONTRACTS_REV, type Op, REACTIONS_REV } from '@draftroom/canvas-schema/protocol'
+import { type Op, REACTIONS_REV, UNANNOUNCED_REV } from '@draftroom/canvas-schema/protocol'
 import { reactionKey } from '@draftroom/canvas-schema/reactions'
 import { describe, expect, it } from 'vitest'
 import { closePage } from '../testing/cached.ts'
@@ -249,7 +249,8 @@ describe('N1-7: a rev-12 room never gets a key it cannot take', () => {
     expect(h.room.elements.get('n1')?.backgroundColor).toBe('#ffc9c9')
     expect(REACT in lobbyOf(a.get('n1') as SceneElement)).toBe(false)
     expect(a.core.saveStatus.state).toBe('saved')
-    expect(CONTRACTS_REV).toBeLessThan(REACTIONS_REV + 1)
+    // a room that says nothing counts as UNANNOUNCED_REV once the wait is over: below the reactions revision
+    expect(UNANNOUNCED_REV).toBeLessThan(REACTIONS_REV)
   })
 })
 

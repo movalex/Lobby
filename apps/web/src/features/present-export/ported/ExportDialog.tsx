@@ -27,6 +27,7 @@ import { imagePagesSentence, pdfSizeNote, vectorPdfOffered } from '../vector-pdf
 import { exportResults } from './badges.ts'
 import type { Controller, ExportRequest } from './controller.ts'
 import { boardCsv, csvBlob, csvRowCount } from './csv.ts'
+import { exportSectionsFor } from './export-sections.ts'
 import {
   copyPng,
   ExportCancelled,
@@ -55,7 +56,8 @@ import {
 } from './report.ts'
 
 type Area = 'selection' | 'frame' | 'board'
-type BusyKind = 'png' | 'svg' | 'copy' | 'pdf' | 'csv'
+// 'section': an export of a registered section (./export-sections.ts, wave T's kind slot)
+type BusyKind = 'png' | 'svg' | 'copy' | 'pdf' | 'csv' | 'section'
 
 interface Prefs {
   scale: ImageScale
@@ -480,6 +482,14 @@ export function ExportDialog({
     })
 
   const disabled = busy !== null
+  // wave T: the sections features add (none registered: none drawn), asked as the dialog draws
+  const sections = exportSectionsFor(canvas)
+  const runSection = (task: (signal: AbortSignal) => Promise<string>) =>
+    run('section', () => {
+      const abort = new AbortController()
+      abortRef.current = abort
+      return task(abort.signal)
+    })
   const pageFormatLabel = PDF_PAGE_FORMATS.find((f) => f.id === prefs.pdfFormat)?.label ?? ''
   const pdfProgress = busy?.kind === 'pdf' && busy.total ? { done: busy.done ?? 0, total: busy.total } : null
   const nothing = shapeCount === 0
@@ -892,6 +902,17 @@ export function ExportDialog({
             </button>
           </div>
         </section>
+
+        {sections.map(({ id, Section }) => (
+          <Section
+            key={id}
+            canvas={canvas}
+            boardTitle={boardTitle}
+            selectedIds={selectedIds}
+            disabled={disabled}
+            run={runSection}
+          />
+        ))}
 
         <p
           className={`dr-pe-status${status?.tone === 'error' ? ' dr-pe-status--error' : ''}`}

@@ -6,7 +6,8 @@
 //  - a PNG exported at N× says so (one pHYs chunk: N × 72 dpi, ../png-density.ts);
 //  - a board or a selection gets a 32 px margin (F15); a single frame or a single image is its own export
 //    bounds, unpadded;
-//  - revealed vote results are drawn as on the board (./badges.ts);
+//  - revealed vote results are drawn as on the board, and so is every other overlay layer registered for exports
+//    (./badges.ts, the export-overlay registry of wave T);
 //  - a PDF can end with a vote results page and a comments appendix (RETRO-05b, ./report.ts): text pages the
 //    browser draws (any script, as a page title is) with the same searchable text layer as a frame's page;
 //  - wave N (N6-3/N6-4): a PDF's frame pages can be VECTOR pages (`pagesKind: 'vector'`): the frame's SVG with
@@ -14,7 +15,8 @@
 //    fonts (../vector/vector-page.ts). A frame the vector drawing cannot reproduce faithfully is drawn as today's
 //    image page instead, and the result names those pages (`imagePages`).
 // Hide note authors (RETRO-03a; 3f's `workshopSettingsOf(canvas).hideNoteAuthors`) needs nothing here:
-// notes on the new canvas draw no author name (CR-3F-4), exports never include overlays, and the engine's
+// notes on the new canvas draw no author name (CR-3F-4), exports draw no overlay but the registered export layers
+// (./badges.ts; none draws an author), and the engine's
 // exports embed no scene data (canvas/export/scene.ts `exportEmbedScene: false`), so the server's
 // attribution (`customData.lobbyServer`) never reaches a PNG, SVG, PDF or the clipboard, whatever the
 // setting. workshops-facilitation.spec.ts RETRO-03a checks the files.
@@ -23,14 +25,7 @@ import type { PdfTextItem } from '../pdf-build.ts'
 import type { PdfTimeLimits } from '../pdf-client.ts'
 import { PDF_RASTER, type PdfPageFormat, pdfRasterScale, planPdfPage } from '../pdf-layout.ts'
 import { setPngDensity } from '../png-density.ts'
-import {
-  drawBadges,
-  exportBadges,
-  exportOrigin,
-  exportResults,
-  shiftBadges,
-  svgWithBadges,
-} from './badges.ts'
+import { drawOverlays, exportOrigin, exportOverlaysActive, svgWithOverlays } from './badges.ts'
 import type { ElementFrameEntry } from './frames.ts'
 import {
   type FontWeight,
@@ -152,15 +147,17 @@ function originOf(
   return exportOrigin(boxes, size, opts.padding ?? 0)
 }
 
-/** The export as a bitmap with the vote badges drawn on it. */
+/** The ids an export of `t` draws (what an overlay layer draws for). */
+const exportedIds = (canvas: LobbyCanvas, t: ImageTarget) =>
+  new Set(targetElements(canvas, t).map((e) => e.id))
+
+/** The export as a bitmap with the overlay layers (vote badges, …) drawn on it. */
 async function bitmap(canvas: LobbyCanvas, t: ImageTarget, opts: ExportOptions): Promise<HTMLCanvasElement> {
   const c = await canvas.export.canvas(opts)
-  const results = exportResults(canvas)
-  if (results) {
+  if (exportOverlaysActive(canvas)) {
     const scale = opts.scale ?? 1
     const origin = originOf(canvas, t, opts, { width: c.width / scale, height: c.height / scale })
-    const badges = exportBadges(canvas, new Set(targetElements(canvas, t).map((e) => e.id)), results)
-    await drawBadges(c, shiftBadges(badges, origin), scale)
+    await drawOverlays(c, { canvas, exported: exportedIds(canvas, t), origin }, scale)
   }
   return c
 }
@@ -208,12 +205,12 @@ export async function renderSvg(
     files: opts.originals === true ? 'original' : 'display',
   }
   let svg = await canvas.export.svg(o)
-  const results = exportResults(canvas)
-  if (results) {
-    const origin = originOf(canvas, t, o, svgSize(svg))
-    const badges = exportBadges(canvas, new Set(targetElements(canvas, t).map((e) => e.id)), results)
-    svg = svgWithBadges(svg, shiftBadges(badges, origin))
-  }
+  if (exportOverlaysActive(canvas))
+    svg = svgWithOverlays(svg, {
+      canvas,
+      exported: exportedIds(canvas, t),
+      origin: originOf(canvas, t, o, svgSize(svg)),
+    })
   return new Blob([svg], { type: 'image/svg+xml' })
 }
 
@@ -531,10 +528,12 @@ type PdfOptions = {
 async function vectorSvg(canvas: LobbyCanvas, t: ImageTarget, o: ExportOptions): Promise<string> {
   const opts: ExportOptions = { ...o, background: true, theme: 'light', files: 'display', fonts: 'names' }
   const svg = await canvas.export.svg(opts)
-  const results = exportResults(canvas)
-  if (!results) return svg
-  const badges = exportBadges(canvas, new Set(targetElements(canvas, t).map((e) => e.id)), results)
-  return svgWithBadges(svg, shiftBadges(badges, originOf(canvas, t, opts, svgSize(svg))))
+  if (!exportOverlaysActive(canvas)) return svg
+  return svgWithOverlays(svg, {
+    canvas,
+    exported: exportedIds(canvas, t),
+    origin: originOf(canvas, t, opts, svgSize(svg)),
+  })
 }
 
 /**

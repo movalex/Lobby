@@ -19,6 +19,19 @@ import { REACTION_CODES } from './workshops.ts'
 
 // ---- the parameter lists -------------------------------------------------------------------------------
 
+/** Wave T's palette commands (each pending until its owner registers it: PENDING_PALETTE_COMMAND_IDS). */
+export const WAVE_T_PALETTE_COMMAND_IDS = [
+  'storyboard.new',
+  'storyboard.from-frames',
+  'storyboard.from-script',
+  'storyboard.play',
+  'storyboard.present',
+  'cards.make',
+  'kanban.new',
+  'card-table.open',
+  'timeline.new',
+] as const
+
 /**
  * The commands `palette.run:<id>` may name: every static command of the board features
  * (apps/web/src/features/canvas-registry.ts, checked by apps/web/src/lib/usage.test.ts), wave M's
@@ -241,6 +254,9 @@ export const PALETTE_COMMAND_IDS = [
   // wave S (WS1, features/review; added by the integration): the Review panel and Mark for review
   'review.open-panel',
   'review.mark',
+  // wave T (frozen by the wave T foundation, pending until their owners register them; docs/WAVE-T-CONTRACTS.md §6.4):
+  // storyboards (WS2), the animatic and Present storyboard (WS3), cards, Kanban and the card table (WS4), timelines (WS5)
+  ...WAVE_T_PALETTE_COMMAND_IDS,
 ] as const
 export type PaletteCommandId = (typeof PALETTE_COMMAND_IDS)[number]
 
@@ -254,6 +270,8 @@ export const PENDING_PALETTE_COMMAND_IDS: readonly PaletteCommandId[] = [
   // again holds the whole capture feature on the web).
   // wave Q: none left. elements.open is registered by WS3 (features/elements) since the integration turned
   // ELEMENTS_PANEL on.
+  // wave T (the foundation): every wave T command; each owner removes its own ids in the change that registers them.
+  ...WAVE_T_PALETTE_COMMAND_IDS,
 ]
 
 /**
