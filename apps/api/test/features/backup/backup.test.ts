@@ -9,13 +9,17 @@
 //   - the restore's: a non-creator is refused before a byte is read; hostile and broken backups are refused (not a
 //     ZIP, a traversal name, a newer Lobby, a bomb, a file whose bytes are not its sha256, an element with a `data:`
 //     link, over the quota), and nothing is left behind: no board, no version, no stored file, no spool.
+import { PassThrough } from 'node:stream'
 import { bufferSource, openBackup, streamZipEntry, type ZipEntry } from '@draftroom/board-archive'
 import { CONTRACTS_REV } from '@draftroom/canvas-schema/protocol'
+import { BACKUP_INTERNAL_ONLY_MESSAGE } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { spoolKey } from '../../../src/features/backup/restore.ts'
+import { BACKUP_DOWNLOADS_PER_PROCESS } from '../../../src/features/backup/index.ts'
+import { RESTORING_TITLE, spoolKey } from '../../../src/features/backup/restore.ts'
 import { importRunnerOf } from '../../../src/features/imports/index.ts'
 import { originalKey } from '../../../src/files/blobs.ts'
 import { type Client, createBoard, createTestApi, DEV_STUDIO, ORIGIN, type TestApi } from '../../helpers.ts'
+import { newProject, setProject } from '../outside/internal-only-support.ts'
 import {
   base,
   collect,
@@ -48,7 +52,23 @@ async function setup(env: Record<string, string> = {}) {
   sync.setBoard(boardId, sourceBoard(photo, doc), { startView: { x: 0, y: 0, w: 800, h: 600, frameId: 'F' } })
 }
 
-beforeEach(() => setup())
+/** every key a restore wrote under imports/ (its spool), and those the blob store still holds */
+let spooled: Set<string>
+const spooledLeft = async () => {
+  const left: string[] = []
+  for (const key of spooled) if (await api.blobs.head(key)) left.push(key)
+  return left
+}
+
+beforeEach(async () => {
+  await setup()
+  spooled = new Set()
+  const put = api.blobs.put.bind(api.blobs)
+  api.blobs.put = (key, body, opts) => {
+    if (key.startsWith('imports/')) spooled.add(key)
+    return put(key, body, opts)
+  }
+})
 afterEach(() => api.close())
 
 const runner = () => {
@@ -148,7 +168,9 @@ describe('backup and restore: the round trip', () => {
       'SELECT status, board_id, source_ref, title FROM board_imports WHERE batch_id = $1',
       [importId],
     )
-    expect(row).toMatchObject({ status: 'done', source_ref: sha256(zip), title: 'Retro' })
+    // the job names its spool (rsp_…), queued once the upload was whole and checked
+    expect(row).toMatchObject({ status: 'done', title: 'Retro' })
+    expect(row.source_ref).toMatch(/^rsp_[0-9A-Za-z]{20}$/)
     const newId = row.board_id
     expect(newId).not.toBe(boardId)
     const board = await alice.req('GET', `/api/boards/${newId}`)
@@ -227,7 +249,8 @@ describe('backup and restore: the round trip', () => {
       [photo.versionId, doc.versionId],
     ])
     expect(kept.rows).toHaveLength(2)
-    expect(await api.blobs.head(spoolKey(importId))).toBeNull()
+    expect(await api.blobs.head(spoolKey(row.source_ref))).toBeNull()
+    expect(await spooledLeft()).toEqual([])
     const audit = await api.db.one<{ detail: Record<string, unknown> }>(
       "SELECT detail FROM audit_events WHERE action = 'board.create' AND target = $1",
       [newId],
@@ -352,15 +375,12 @@ describe('the restore’s guards', () => {
     expect(res.statusCode, `${name}: ${res.body}`).toBe(status)
     expect(res.json().error.code, name).toBe(code)
     await runner().idle()
-    type Row = { status: string; error_code: string; batch_id: string; board_id: string | null }
-    const rows = await api.db.query<Row>(
-      'SELECT status, error_code, batch_id, board_id FROM board_imports ORDER BY created_at DESC LIMIT 1',
-    )
-    const row = rows.rows[0]
-    expect(row, name).toMatchObject({ status: 'failed', error_code: code, board_id: null })
-    expect(await api.blobs.head(spoolKey(row?.batch_id as string)), name).toBeNull()
+    // checked before any job is made: no job, no board, no version, and the spool removed
+    expect((await api.db.one<{ n: number }>('SELECT count(*)::int AS n FROM board_imports')).n, name).toBe(0)
+    expect(spooled.size, name).toBeGreaterThan(0)
+    expect(await spooledLeft(), name).toEqual([])
     expect(await counts(), name).toEqual(before)
-    await api.db.query('DELETE FROM board_imports')
+    spooled.clear()
   }
 
   it('hostile and broken backups are refused at once, and leave nothing behind', async () => {
@@ -532,5 +552,186 @@ describe('the restore’s guards', () => {
     const res = await restore(alice, DEV_STUDIO, zip)
     expect(res.statusCode).toBe(409)
     expect(res.json().error.code).toBe('IMPORT_BUSY')
+  })
+})
+
+describe('internal only (DOMAIN-ACCESS §23): a backup does not take an internal-only project’s files out', () => {
+  let project: string
+  beforeEach(async () => {
+    project = await newProject(alice, DEV_STUDIO, 'Secret')
+    expect((await alice.req('PATCH', `/api/boards/${boardId}`, { projectId: project })).statusCode).toBe(200)
+    expect((await setProject(alice, project, true)).statusCode).toBe(200)
+    await alice.req('PUT', `/api/boards/${boardId}/members/${carol.userId}`, { role: 'viewer' })
+  })
+  const manifestOf = async (c: Client) => {
+    const { file } = await download(c)
+    expect(file?.statusCode, file?.body).toBe(200)
+    const zip = file?.rawPayload as Buffer
+    return { zip, manifest: (await openBackup(bufferSource(zip), { contractsRev: CONTRACTS_REV })).manifest }
+  }
+
+  it('a member’s backup lists the files it can view only on that project’s boards as omitted; an owner’s includes them', async () => {
+    const mine = await manifestOf(carol)
+    expect(mine.manifest.internalOnly).toBe(true)
+    expect(mine.manifest.counts.files).toBe(0)
+    expect(mine.manifest.files.map((f) => [f.versionId, f.omitted]).sort()).toEqual(
+      [
+        [photo.versionId, true],
+        [doc.versionId, true],
+      ].sort(),
+    )
+    const owners = await manifestOf(alice)
+    expect(owners.manifest).toMatchObject({ internalOnly: true, counts: { files: 2 } })
+    // a file also shown on a board outside the project is outside the switch already: included for the member
+    const open = await createBoard(alice, DEV_STUDIO, 'Open')
+    await api.db.query(
+      'INSERT INTO board_asset_links (workspace_id, board_id, asset_id, version_id) VALUES ($1, $2, $3, $4)',
+      [DEV_STUDIO, open, photo.assetId, photo.versionId],
+    )
+    await alice.req('PUT', `/api/boards/${open}/members/${carol.userId}`, { role: 'viewer' })
+    const after = await manifestOf(carol)
+    expect(after.manifest.files.find((f) => f.versionId === photo.versionId)?.omitted).toBe(false)
+    expect(after.manifest.files.find((f) => f.versionId === doc.versionId)?.omitted).toBe(true)
+    // a board outside every internal-only scope makes a backup without the flag
+    expect((await setProject(alice, project, false)).statusCode).toBe(200)
+    expect((await manifestOf(carol)).manifest).toMatchObject({ internalOnly: false, counts: { files: 2 } })
+  })
+
+  it('a restore of an internal-only backup outside every internal-only scope needs a workspace owner or admin creator', async () => {
+    const { zip } = await manifestOf(alice)
+    const before = await counts()
+    const res = await restore(carol, DEV_STUDIO, zip)
+    expect(res.statusCode, res.body).toBe(409)
+    expect(res.json().error).toMatchObject({ code: 'INTERNAL_ONLY', message: BACKUP_INTERNAL_ONLY_MESSAGE })
+    const open = await newProject(alice, DEV_STUDIO, 'Open')
+    expect((await restore(carol, DEV_STUDIO, zip, `?projectId=${open}`)).statusCode).toBe(409)
+    expect(await counts()).toEqual(before)
+    expect((await api.db.one<{ n: number }>('SELECT count(*)::int AS n FROM board_imports')).n).toBe(0)
+    expect(spooled.size).toBe(2)
+    expect(await spooledLeft()).toEqual([])
+    // into the internal-only project: allowed
+    const inside = await restore(carol, DEV_STUDIO, zip, `?projectId=${project}`)
+    expect(inside.statusCode, inside.body).toBe(202)
+    await runner().idle()
+    // the owner (a creator) may restore it anywhere
+    const owner = await restore(alice, DEV_STUDIO, zip)
+    expect(owner.statusCode, owner.body).toBe(202)
+    await runner().idle()
+    const rows = await api.db.query<{ status: string }>('SELECT status FROM board_imports')
+    expect(rows.rows.map((r) => r.status)).toEqual(['done', 'done'])
+  })
+})
+
+describe('the backup routes’ slots (BACKUP_DOWNLOADS_PER_PROCESS)', () => {
+  /** sync's snapshot (the start of every plan) held until `open()` */
+  const gate = () => {
+    let release: () => void = () => {}
+    const opened = new Promise<void>((r) => {
+      release = r
+    })
+    const real = sync.snapshot.bind(sync)
+    let waiting = 0
+    sync.snapshot = async (id: string) => {
+      waiting++
+      await opened
+      return real(id)
+    }
+    return { open: () => release(), waiting: () => waiting }
+  }
+  const until = async (ok: () => boolean) => {
+    for (let i = 0; i < 400 && !ok(); i++) await new Promise((r) => setTimeout(r, 5))
+    expect(ok()).toBe(true)
+  }
+
+  it('tickets: a plan takes a slot before it is built; past the slots the answer is 503 at once', async () => {
+    const g = gate()
+    const first = Array.from({ length: BACKUP_DOWNLOADS_PER_PROCESS }, () =>
+      alice.req('POST', `/api/boards/${boardId}/backup/ticket`),
+    )
+    await until(() => g.waiting() === BACKUP_DOWNLOADS_PER_PROCESS)
+    const asked = alice.req('POST', `/api/boards/${boardId}/backup/ticket`)
+    const extra = await Promise.race([asked, new Promise<null>((r) => setTimeout(() => r(null), 1_000))])
+    expect(g.waiting()).toBe(BACKUP_DOWNLOADS_PER_PROCESS)
+    g.open()
+    expect(extra?.statusCode).toBe(503)
+    expect(extra?.json().error.code).toBe('TOO_MANY_BACKUPS')
+    await asked
+    for (const r of await Promise.all(first)) expect(r.statusCode).toBe(200)
+    // the slots are free again
+    expect((await alice.req('POST', `/api/boards/${boardId}/backup/ticket`)).statusCode).toBe(200)
+  })
+
+  it('downloads: the slot is taken before the plan, so concurrent downloads never build more plans than slots', async () => {
+    // a session keeps at most four tickets: the fifth from a second session of alice's
+    const again = await api.login('alice')
+    const urls: string[] = []
+    for (let i = 0; i <= BACKUP_DOWNLOADS_PER_PROCESS; i++) {
+      const c = i < BACKUP_DOWNLOADS_PER_PROCESS ? alice : again
+      urls.push(((await c.req('POST', `/api/boards/${boardId}/backup/ticket`)).json() as { url: string }).url)
+    }
+    const g = gate()
+    const all = urls.map((url) => api.app.inject({ method: 'GET', url }))
+    await until(() => g.waiting() >= BACKUP_DOWNLOADS_PER_PROCESS)
+    await new Promise((r) => setTimeout(r, 100))
+    expect(g.waiting()).toBe(BACKUP_DOWNLOADS_PER_PROCESS)
+    g.open()
+    const codes = (await Promise.all(all)).map((r) => r.statusCode).sort()
+    expect(codes).toEqual([...Array(BACKUP_DOWNLOADS_PER_PROCESS).fill(200), 503])
+    // all released: a new ticket and download work
+    const t = (await alice.req('POST', `/api/boards/${boardId}/backup/ticket`)).json() as { url: string }
+    expect((await api.app.inject({ method: 'GET', url: t.url })).statusCode).toBe(200)
+  })
+})
+
+describe('a restore’s upload', () => {
+  it('holds no import slot: the job is queued only once the whole body has arrived', async () => {
+    const zip = await makeBackup({ title: 'Slow' })
+    const body = new PassThrough()
+    const pending = api.app.inject({
+      method: 'POST',
+      url: `/api/workspaces/${DEV_STUDIO}/backups`,
+      payload: body,
+      headers: {
+        origin: ORIGIN,
+        cookie: alice.cookie,
+        'content-type': 'application/vnd.lobby.board+zip',
+        'content-length': String(zip.length),
+      },
+    })
+    body.write(zip.subarray(0, 100))
+    await new Promise((r) => setTimeout(r, 150))
+    // half an upload: no job, so no slot of the runner's (two per process) is held by it
+    expect((await api.db.one<{ n: number }>('SELECT count(*)::int AS n FROM board_imports')).n).toBe(0)
+    body.end(zip.subarray(100))
+    const res = await pending
+    expect(res.statusCode, res.body).toBe(202)
+    await runner().idle()
+    const row = await api.db.one<{ status: string; title: string }>('SELECT status, title FROM board_imports')
+    expect(row).toEqual({ status: 'done', title: 'Slow' })
+    expect(await spooledLeft()).toEqual([])
+  })
+
+  it('the title (the manifest’s or the one typed) is cleaned as a board title: NUL, bidi and control characters', async () => {
+    const zip = await makeBackup({ title: ' Pi\u0000tch‮  v2\u0007​ ' })
+    const res = await restore(alice, DEV_STUDIO, zip)
+    expect(res.statusCode, res.body).toBe(202)
+    await runner().idle()
+    const row = await api.db.one<{ board_id: string }>('SELECT board_id FROM board_imports')
+    const title = async (id: string) =>
+      (await api.db.one<{ title: string }>('SELECT title FROM boards WHERE id = $1', [id])).title
+    expect(await title(row.board_id)).toBe('Pitch v2')
+    await api.db.query('DELETE FROM board_imports')
+    const typed = await restore(alice, DEV_STUDIO, zip, `?title=${encodeURIComponent('⁧From⁩ backup\u0001')}`)
+    expect(typed.statusCode, typed.body).toBe(202)
+    await runner().idle()
+    const row2 = await api.db.one<{ board_id: string }>('SELECT board_id FROM board_imports')
+    expect(await title(row2.board_id)).toBe('From backup')
+    await api.db.query('DELETE FROM board_imports')
+    // nothing left once cleaned: the default
+    const blank = await makeBackup({ title: '‮\u0000​' })
+    expect((await restore(alice, DEV_STUDIO, blank)).statusCode).toBe(202)
+    await runner().idle()
+    const row3 = await api.db.one<{ board_id: string }>('SELECT board_id FROM board_imports')
+    expect(await title(row3.board_id)).toBe(RESTORING_TITLE)
   })
 })

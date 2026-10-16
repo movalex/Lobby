@@ -32,10 +32,14 @@ import { guestRefused } from '../guests/guard.ts'
 import { importRunnerOf } from '../imports/index.ts'
 import { routeUnlessPending } from '../pending-routes.ts'
 import { backupFileName, backupStream, planBackup } from './export.ts'
-import { createBackupSource, handleRestore, Spools, spoolKey } from './restore.ts'
+import { createBackupSource, handleRestore, spoolKey } from './restore.ts'
 import { createBackupTicketStore } from './tickets.ts'
 
-/** Downloads one api process streams at once (each holds its board.json in memory: ≤ 64 MiB). */
+/**
+ * Backup plans one api process holds at once: a ticket's check and a download each build one (the board's snapshot and
+ * its board.json in memory, ≤ 64 MiB), and a download keeps it until its stream ends. The slot is taken before the plan
+ * is built, so a burst of requests never builds more; past it the answer is 503 TOO_MANY_BACKUPS at once.
+ */
 export const BACKUP_DOWNLOADS_PER_PROCESS = 4
 /** How often finished restores' spooled uploads are removed (the job removes its own; this catches the rest). */
 export const BACKUP_SPOOL_SWEEP_MS = 60 * 60_000
@@ -54,7 +58,18 @@ export async function registerBackup(app: FastifyInstance, ctx: FeatureContext):
     ctx.now,
     'Too many backups asked for. Wait a minute and try again.',
   )
-  let streaming = 0
+  let slots = 0
+  /** a plan's slot (throws 503 when none is free); the returned release is idempotent */
+  const takeSlot = () => {
+    if (slots >= BACKUP_DOWNLOADS_PER_PROCESS) throw busy()
+    slots++
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      slots--
+    }
+  }
 
   const stopListening = ctx.sessions.onRevoked((ids) => tickets.revokeSessions(ids))
   const ticketSweep = setInterval(() => tickets.sweep(), 15_000)
@@ -76,7 +91,12 @@ export async function registerBackup(app: FastifyInstance, ctx: FeatureContext):
     const { bid = '' } = req.params as Params
     const access = await exportable(bid, user.id)
     // the limits, before the person waits for a download that cannot come
-    await planBackup(ctx, access, user.id)
+    const release = takeSlot()
+    try {
+      await planBackup(ctx, access, user.id)
+    } finally {
+      release()
+    }
     const minted = tickets.mint({ boardId: access.board.id, userId: user.id, sessionId })
     if (!minted) throw busy()
     const origin = ctx.config.eventsOrigin ?? ''
@@ -92,14 +112,13 @@ export async function registerBackup(app: FastifyInstance, ctx: FeatureContext):
     if (!claims || claims.boardId !== bid) throw unauthenticated()
     if (!(await ctx.sessions.activeIds([claims.sessionId])).has(claims.sessionId)) throw unauthenticated()
     const access = await exportable(bid, claims.userId)
-    if (streaming >= BACKUP_DOWNLOADS_PER_PROCESS) throw busy()
-    const plan = await planBackup(ctx, access, claims.userId)
-    streaming++
-    let released = false
-    const release = () => {
-      if (released) return
-      released = true
-      streaming--
+    const release = takeSlot()
+    let plan: Awaited<ReturnType<typeof planBackup>>
+    try {
+      plan = await planBackup(ctx, access, claims.userId)
+    } catch (e) {
+      release()
+      throw e
     }
     reply.raw.on('close', release)
     reply
@@ -120,27 +139,37 @@ export async function registerBackup(app: FastifyInstance, ctx: FeatureContext):
   // The restore's body is the file itself: a scope of its own whose one parser reads nothing (as the upload route's,
   // files/plugin.ts), so the handler streams the request to the blob store; the root's Origin check still applies.
   const runner = importRunnerOf(app)
-  const spools = new Spools()
-  if (runner) runner.useSource(createBackupSource(ctx, spools))
+  const uploading = new Set<string>()
+  if (runner) runner.useSource(createBackupSource(ctx))
   app.register(async (scope) => {
     scope.removeAllContentTypeParsers()
     scope.addContentTypeParser('*', (_req, _payload, done) => done(null))
     routeUnlessPending(scope, 'POST', BACKUP_ROUTES.restore, async (req, reply) => {
       if (!runner) throw new ApiError(404, 'NOT_FOUND', 'Not found.')
-      return handleRestore(ctx, runner, spools, req, reply)
+      return handleRestore(ctx, runner, uploading, req, reply)
     })
   })
 
   // finished restores' spooled uploads (the job deletes its own; a crash or an expired pause leaves one)
   const sweepSpools = async () => {
     const since = new Date(ctx.now().getTime() - SPOOL_SWEEP_DAYS * 86_400_000)
-    const rows = await db.query<{ batch_id: string }>(
-      `SELECT DISTINCT batch_id FROM board_imports
+    const rows = await db.query<{ source_ref: string }>(
+      `SELECT DISTINCT source_ref FROM board_imports
         WHERE source = 'lobby-backup' AND status IN ('done', 'failed', 'cancelled') AND finished_at >= $1
+          AND source_ref LIKE 'rsp\_%'
         LIMIT 1000`,
       [since],
     )
-    for (const r of rows.rows) await ctx.blobs.delete(spoolKey(r.batch_id)).catch(() => {})
+    for (const r of rows.rows) {
+      const key = (() => {
+        try {
+          return spoolKey(r.source_ref)
+        } catch {
+          return null
+        }
+      })()
+      if (key) await ctx.blobs.delete(key).catch(() => {})
+    }
   }
   let spoolTimer: ReturnType<typeof setInterval> | null = null
   app.addHook('onReady', async () => {

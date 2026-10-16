@@ -187,6 +187,8 @@ export interface BackupInput {
   readonly app: { contractsRev: number; engineVersion: string }
   readonly title: string
   readonly elements: number
+  /** the content is an internal-only scope's (BoardBackupManifest.internalOnly) */
+  readonly internalOnly?: boolean
   /** board.json's bytes (the v2 archive, serialised) */
   readonly board: Uint8Array
   /** every version the board shows; `omitted` ones are listed without their bytes */
@@ -211,6 +213,7 @@ export function backupManifest(input: Omit<BackupInput, 'originals'>): BoardBack
       bytes: input.board.length,
     },
     files,
+    internalOnly: input.internalOnly ?? false,
   })
 }
 

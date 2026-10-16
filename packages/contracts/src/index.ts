@@ -3,6 +3,7 @@
 
 import { BOARD_ROLES, BOARD_STATUSES, BOARD_VISIBILITIES, WORKSPACE_ROLES } from '@draftroom/permissions'
 import { z } from 'zod'
+import { BoardTitle } from './board-title.ts'
 import { AccountEmail, ME_ACCESS_LEGACY, MeAccess } from './domain-access.ts'
 import { cleanDisplayText, OutsideFields } from './outside.ts'
 
@@ -20,7 +21,7 @@ export const ProjectId = prefixed('prj')
 export const InvitationId = prefixed('inv')
 
 export const DevHandle = z.string().regex(/^[a-z0-9-]{1,32}$/)
-const Title = z.string().trim().min(1).max(120)
+const Title = BoardTitle
 const Name = z.string().trim().min(1).max(80)
 const IsoDate = z.string()
 
@@ -312,6 +313,7 @@ export type ErrorBody = z.infer<typeof ErrorBody>
 export * from './ai.ts'
 // wave R foundation (WS4 owns it after): board backup and restore (.lobby)
 export * from './board-backup.ts'
+export * from './board-title.ts'
 // wave N foundation (WS7 routes): board cards and backlinks
 export * from './board-links.ts'
 // wave M foundation (W5 owns these after it): the board-open read, usage counters, workspace templates

@@ -11,6 +11,7 @@
 // Files are read through an <input type=file>, never the File System Access picker. Same origin, the session cookie,
 // LOBBY_CLIENT_HEADER; nothing is logged or stored in the browser.
 import {
+  BACKUP_INTERNAL_ONLY_MESSAGE,
   BACKUP_MIME_TYPE,
   BackupTicketResponse,
   backupTicketPath,
@@ -84,6 +85,8 @@ export const BACKUP_ERROR_TEXT: Readonly<Record<string, string>> = {
   CREATOR_REQUIRED: 'Only people who can create boards here can restore a backup.',
   IMPORT_BUSY: 'An import is already running. Wait for it to finish, then try again.',
   IMPORT_DAILY_LIMIT: 'You started the most imports allowed for today. Try again tomorrow.',
+  INTERNAL_ONLY: BACKUP_INTERNAL_ONLY_MESSAGE,
+  TOO_MANY_BACKUPS: 'Too many backups are being made right now. Try again in a minute.',
   GUEST_ACCOUNT_REQUIRED:
     'Board backups are for people with an account. Sign in with an account to use them.',
   unavailable: 'Can’t reach Lobby. Check your connection and try again.',

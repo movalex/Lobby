@@ -7,6 +7,11 @@
 //   - the files are the versions the board shows (its own uploads and the versions linked to it: filesShownOn) that
 //     the caller may also download (keepDownloadableFiles: a version shown here but held on a board whose policy
 //     keeps it from this person is listed in the manifest as `omitted`, without its bytes);
+//   - internal only (DOMAIN-ACCESS §23, wave R): a file the caller can view only on boards of an internal-only project
+//     is `omitted` as well, unless the caller is a workspace owner or admin who is a creator (the people who may take
+//     content out of the switch, IO-1 and IO-10); the manifest's `internalOnly` says the backup holds such a scope's
+//     content (the board is in an internal-only workspace or project, or such files are included), and a restore
+//     outside every internal-only scope then needs such a person (./restore.ts);
 //   - within BACKUP_LIMITS (5,000 files, 2 GiB of originals, board.json ≤ 64 MiB): else 413 BACKUP_TOO_LARGE.
 // The originals stream from the blob store through the writer, each checked against its stored size and sha256 as it
 // passes, so memory is board.json plus one chunk; a file that does not match ends the download (never a "whole"
@@ -24,7 +29,13 @@ import type { FeatureContext } from '../context.ts'
 import { keepDownloadableFiles } from '../export-control/import-files.ts'
 import { exportLobbyArchive, LOBBY_ENGINE_VERSION } from '../history/archive-v2.ts'
 import type { ArchiveAssetRef } from '../history/board-ops.ts'
-import { archiveRef, filesShownOn, referencedElementFiles } from '../history/files.ts'
+import {
+  archiveRef,
+  filesShownOn,
+  mayTakeOutOfInternalOnly,
+  referencedElementFiles,
+  splitInternalOnlyFiles,
+} from '../history/files.ts'
 import { newCanvasBoard, viaSync } from '../history/new-board.ts'
 
 const MiB = 1024 * 1024
@@ -38,6 +49,8 @@ export const backupTooLarge = (what: string) =>
 export interface BackupPlan {
   title: string
   elements: number
+  /** the manifest's internalOnly (see the top of this file) */
+  internalOnly: boolean
   board: Buffer
   files: Omit<BackupManifestFile, 'path'>[]
   /** the bytes of each included sha256, once each */
@@ -69,7 +82,18 @@ export async function planBackup(
     await referencedElementFiles(db, lobby.elements),
   )
   const { kept } = await keepDownloadableFiles(db, board.workspace_id, userId, shown)
-  const downloadable = new Set(kept.map((f) => f.versionId))
+  // internal only: the files the caller can view only on an internal-only project's boards, and the board's own scope
+  const scope = await db.one<{ ws: boolean; project: boolean; any: boolean }>(
+    `SELECT w.internal_only AS ws,
+            COALESCE((SELECT p.internal_only FROM projects p WHERE p.id = $2 AND p.workspace_id = w.id), false) AS project,
+            EXISTS (SELECT 1 FROM projects p WHERE p.workspace_id = w.id AND p.internal_only) AS any
+       FROM workspaces w WHERE w.id = $1`,
+    [board.workspace_id, board.project_id],
+  )
+  const fenced = scope.any ? (await splitInternalOnlyFiles(db, board.workspace_id, userId, kept)).fenced : []
+  const takesOut = fenced.length > 0 && (await mayTakeOutOfInternalOnly(db, ctx, board.workspace_id, userId))
+  const fencedIds = new Set(takesOut ? [] : fenced.map((f) => f.versionId))
+  const downloadable = new Set(kept.map((f) => f.versionId).filter((v) => !fencedIds.has(v)))
   const assets: ArchiveAssetRef[] = []
   const files: BackupPlan['files'] = []
   const originals: BackupPlan['originals'] = new Map()
@@ -111,6 +135,7 @@ export async function planBackup(
   return {
     title: board.title,
     elements: archive.elements.length,
+    internalOnly: scope.ws || scope.project || takesOut,
     board: json,
     files,
     originals,
@@ -139,6 +164,7 @@ export function backupStream(ctx: FeatureContext, plan: BackupPlan): AsyncGenera
     app: { contractsRev: CONTRACTS_REV, engineVersion: LOBBY_ENGINE_VERSION },
     title: plan.title,
     elements: plan.elements,
+    internalOnly: plan.internalOnly,
     board: plan.board,
     files: plan.files,
     originals: new Map(

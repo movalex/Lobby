@@ -155,17 +155,39 @@ export async function fenceInternalOnlyFiles(
     [workspaceId, projectId],
   )
   if (!flags || flags.ws || flags.target === true || !flags.any) return all
+  if (await mayTakeOutOfInternalOnly(q, deps, workspaceId, userId)) return all
+  return splitInternalOnlyFiles(q, workspaceId, userId, files)
+}
+
+/** A workspace owner or admin who is a creator: the people who may turn the switch off (IO-1, IO-10). */
+export async function mayTakeOutOfInternalOnly(
+  q: Queryable,
+  deps: { identity: { isCreatorUser(q: Queryable, userId: string): Promise<boolean> } },
+  workspaceId: string,
+  userId: string,
+): Promise<boolean> {
   const member = await q.maybeOne<{ role: string }>(
     'SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2',
     [workspaceId, userId],
   )
-  if (
-    (member?.role === 'owner' || member?.role === 'admin') &&
-    (await deps.identity.isCreatorUser(q, userId))
+  return (
+    (member?.role === 'owner' || member?.role === 'admin') && (await deps.identity.isCreatorUser(q, userId))
   )
-    return all
-  const kept: FileRef[] = []
-  const fenced: FileRef[] = []
+}
+
+/**
+ * `files` split by where `userId` can view them: `kept`, on some board outside every internal-only project;
+ * `fenced`, only on boards of an internal-only project (or nowhere). No role or switch check: the callers decide
+ * whether the split applies (fenceInternalOnlyFiles; a backup, backup/export.ts planBackup).
+ */
+export async function splitInternalOnlyFiles<T extends FileRef>(
+  q: Queryable,
+  workspaceId: string,
+  userId: string,
+  files: readonly T[],
+): Promise<{ kept: T[]; fenced: T[] }> {
+  const kept: T[] = []
+  const fenced: T[] = []
   const outsideSwitch = new Map<string, boolean>()
   const rows = await loadVersionRows(q, files)
   for (const ref of files) {

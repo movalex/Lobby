@@ -3,15 +3,19 @@
 //
 // The route (a creator who may create in the workspace; the guard rows refuse guests and non-creators first):
 //   1. the cheap checks before any byte is read: the workspace role and creator rule, the project, Content-Length
-//      (required; ≤ BACKUP_LIMITS.restoreBytes), the workspace's room (quota, from Content-Length);
-//   2. the job is started (the runner's limits: one unfinished import per person, ten a day), so its id names the
-//      spool: the body is streamed to the blob store under `imports/<importId>/backup.lobby` (R2 on Render, never
-//      /tmp), hashed on the way;
+//      (required; ≤ BACKUP_LIMITS.restoreBytes), the workspace's room (quota, from Content-Length), and the runner's
+//      limits (one unfinished import or upload per person, the workspace's, the day's);
+//   2. the body is streamed to the blob store under `imports/restore/<rsp_…>/backup.lobby` (R2 on Render, never
+//      /tmp), BEFORE any job exists: a slow upload holds none of the runner's slots (two per process);
 //   3. the backup's structure and manifest are checked by range reads of the spooled object (board-archive
 //      openBackup): a hostile or broken file answers 400 BACKUP_INVALID (413 BACKUP_TOO_LARGE, 400
-//      BACKUP_FROM_NEWER_LOBBY) at once, and its job ends failed with that code; else 202 with the job.
+//      BACKUP_FROM_NEWER_LOBBY) at once, and no job is made; an internal-only backup (the manifest's
+//      `internalOnly`, backup/export.ts) restored outside every internal-only scope needs a workspace owner or admin
+//      who is a creator (409 INTERNAL_ONLY, BACKUP_INTERNAL_ONLY_MESSAGE; DOMAIN-ACCESS §23);
+//   4. the job is queued, its source_ref the spool's name, its title the typed one or the manifest's, cleaned as a
+//      board title (cleanBoardTitle: NUL, control, bidi and zero-width characters removed); 202 with the job.
 // The source (runBoard, in the runner, for the job's importing board):
-//   - waits for this process's spool of the job (or, resumed after a restart, finds it in the store);
+//   - finds the spool its source_ref names (a resume after a restart too);
 //   - reads board.json (its CRC-32 and sha256) through importLobbyArchive (fresh element ids, server-owned and
 //     identity-stamped customData stripped, canvas-schema's element check, the archive caps);
 //   - streams every included original (each distinct sha256 once) into a NEW asset and version of the importing
@@ -23,8 +27,9 @@
 //     missing file, as the JSON import does;
 //   - seeds sync (`lobby-elements`), whose seed validates every element again (checkElement, the invariants, no
 //     `data:`/`blob:` URL); the runner then activates the board (the creator rule again) and audits it.
-// Comments, history, votes, members and links are not part of a backup (the dialog says so). Internal-only fencing
-// (history/files.ts fenceInternalOnlyFiles) does not apply: a restore links no stored file, it uploads its own bytes.
+// Comments, history, votes, members and links are not part of a backup (the dialog says so). The files fence of an
+// import (history/files.ts fenceInternalOnlyFiles) does not apply: a restore links no stored file, it uploads its own
+// bytes; the download already left out what its maker could not take out of an internal-only project (export.ts).
 
 import { Readable } from 'node:stream'
 import {
@@ -38,17 +43,20 @@ import { versionIdOf } from '@draftroom/canvas-schema/limits'
 import { CONTRACTS_REV } from '@draftroom/canvas-schema/protocol'
 import {
   BACKUP_CODES,
+  BACKUP_INTERNAL_ONLY_MESSAGE,
   BACKUP_LIMITS,
   BACKUP_MIME_TYPE,
   IMPORT_CODES,
   IMPORT_CONCURRENCY,
+  INTERNAL_ONLY_CODE,
   type ImportBoardReport,
   type ImportReportRow,
+  cleanBoardTitle,
   importJobPath,
   RestoreBackupQuery,
   type StartImportResponse,
 } from '@draftroom/contracts'
-import type { Queryable } from '@draftroom/db'
+import { newId as newDbId, type Queryable } from '@draftroom/db'
 import {
   classifyUpload,
   maxUploadBytes,
@@ -70,6 +78,7 @@ import { SyncSeedConflict, SyncUnavailable } from '../../sync-internal.ts'
 import type { FeatureContext } from '../context.ts'
 import { importLobbyArchive } from '../history/archive-v2.ts'
 import { ArchiveError } from '../history/board-ops.ts'
+import { mayTakeOutOfInternalOnly } from '../history/files.ts'
 import { seedRefusal } from '../history/new-board.ts'
 import {
   ImportFailure,
@@ -80,29 +89,18 @@ import {
 } from '../imports/runner.ts'
 import { blobRangeSource } from './blob-source.ts'
 
-/** The title a restore's board has until its manifest is read (when the person typed none). */
+/** A restore's board title when the person typed none and the manifest's cleans to nothing. */
 export const RESTORING_TITLE = 'Restored board'
 /** Report rows kept (one per file left out); the rest are counted. */
 const REPORT_ROWS = 500
-/** How long a job's board waits for this process's route to hand it the spool it is writing. */
-const SPOOL_HANDOVER_MS = 10_000
 
-/** How long a refused restore waits for its job to end before it answers (a busy runner may hold it in its queue). */
-const JOB_SETTLE_MS = 10_000
+/** A spool's name (`rsp_…`): the job's source_ref, so a resumed job finds its upload in the store. */
+const SPOOL_REF = /^rsp_[0-9A-Za-z]{10,40}$/
 
-export const spoolKey = (importId: string) => `imports/${importId}/backup.lobby`
-
-/** Waits (bounded) until every row of the job has ended. */
-async function jobEnded(db: Queryable, importId: string, ms: number): Promise<void> {
-  const until = Date.now() + ms
-  while (Date.now() < until) {
-    const open = await db.one<{ n: number }>(
-      `SELECT count(*)::int AS n FROM board_imports WHERE batch_id = $1 AND status IN ('queued', 'running')`,
-      [importId],
-    )
-    if (open.n === 0) return
-    await new Promise((r) => setTimeout(r, 25))
-  }
+/** Where a restore's upload is spooled (R2 on Render, never /tmp), by its spool name. */
+export const spoolKey = (ref: string) => {
+  if (!SPOOL_REF.test(ref)) throw new Error('invalid spool name')
+  return `imports/restore/${ref}/backup.lobby`
 }
 
 // The body has not been read when these are thrown: close the connection instead of draining it.
@@ -116,46 +114,6 @@ const MESSAGES: Record<string, string> = {
     'This backup was made by a newer version of Lobby. Try again once this one is updated.',
 }
 
-/** What the route hands the job: where the spooled backup is, or why there is none. */
-type Spool =
-  | { ok: true; key: string; size: number; sha256: string; title: string | null }
-  | { ok: false; code: string }
-
-/** The spools this process is writing or wrote, by job: the route registers one right after the job starts. */
-export class Spools {
-  private readonly entries = new Map<string, Promise<Spool>>()
-  private readonly waiting = new Map<string, () => void>()
-
-  register(importId: string, spool: Promise<Spool>) {
-    this.entries.set(importId, spool)
-    this.waiting.get(importId)?.()
-    this.waiting.delete(importId)
-  }
-
-  /** The job's spool in this process; null when none came within `waitMs` (another process's, or none at all). */
-  async find(importId: string, waitMs: number): Promise<Spool | null> {
-    const known = this.entries.get(importId)
-    if (known) return known
-    if (waitMs <= 0) return null
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
-        this.waiting.delete(importId)
-        resolve()
-      }, waitMs)
-      timer.unref?.()
-      this.waiting.set(importId, () => {
-        clearTimeout(timer)
-        resolve()
-      })
-    })
-    return this.entries.get(importId) ?? null
-  }
-
-  drop(importId: string) {
-    this.entries.delete(importId)
-  }
-}
-
 /** Fails the job's board with the code (ImportFailure carries codes only). */
 const failWith = (e: unknown): never => {
   if (e instanceof BackupFormatError) throw new ImportFailure(e.code)
@@ -163,17 +121,37 @@ const failWith = (e: unknown): never => {
   throw e
 }
 
-const cleanTitle = (title: string | undefined | null) => {
-  const t = (title ?? '').replace(/\s+/g, ' ').trim().slice(0, 120)
-  return t || null
+/**
+ * The restore's target is inside an internal-only scope (the workspace is internal only, or the project is), or the
+ * restorer may take content out of one (a workspace owner or admin who is a creator): else an internal-only backup is
+ * refused (DOMAIN-ACCESS §23, wave R; the manifest's `internalOnly`, backup/export.ts).
+ */
+async function mayRestoreInternalOnly(
+  ctx: FeatureContext,
+  workspaceId: string,
+  projectId: string | null,
+  userId: string,
+): Promise<boolean> {
+  const scope = await ctx.db.maybeOne<{ ws: boolean; project: boolean | null }>(
+    `SELECT w.internal_only AS ws,
+            (SELECT p.internal_only FROM projects p WHERE p.id = $2 AND p.workspace_id = w.id) AS project
+       FROM workspaces w WHERE w.id = $1`,
+    [workspaceId, projectId],
+  )
+  if (scope?.ws || scope?.project === true) return true
+  return mayTakeOutOfInternalOnly(ctx.db, ctx, workspaceId, userId)
 }
 
 // ---- the route --------------------------------------------------------------------------------------------------
 
+/**
+ * POST /api/workspaces/:wid/backups. `uploading`: the people whose restore upload this process is receiving (one at a
+ * time each, as the runner's one unfinished job: an upload is not a job yet).
+ */
 export async function handleRestore(
   ctx: FeatureContext,
   runner: ImportRunner,
-  spools: Spools,
+  uploading: Set<string>,
   req: FastifyRequest,
   reply: FastifyReply,
 ): Promise<StartImportResponse> {
@@ -207,62 +185,89 @@ export async function handleRestore(
       WHERE created_by = $1 AND status IN ('queued', 'running')`,
     [user.id],
   )
-  if (open.n >= IMPORT_CONCURRENCY.perPerson)
+  if (open.n >= IMPORT_CONCURRENCY.perPerson || uploading.has(user.id))
     throw refuse(
       409,
       IMPORT_CODES.busy,
       'An import is already running. Wait for it to finish, then try again.',
     )
-
-  const title = cleanTitle(query.title)
-  const importId = await runner.start(
-    {
-      workspaceId: wid,
-      projectId: query.projectId ?? null,
-      userId: user.id,
-      source: 'lobby-backup',
-      boards: [{ sourceRef: null, title: title ?? RESTORING_TITLE }],
-    },
-    [],
+  // and the runner's other limits, so a 2 GiB upload is not received for a job that cannot start
+  const workspaceOpen = await db.one<{ n: number }>(
+    `SELECT count(DISTINCT batch_id)::int AS n FROM board_imports
+      WHERE workspace_id = $1 AND status IN ('queued', 'running')`,
+    [wid],
   )
-  let settle: (spool: Spool) => void = () => {}
-  spools.register(
-    importId,
-    new Promise<Spool>((resolve) => {
-      settle = resolve
-    }),
+  if (workspaceOpen.n >= IMPORT_CONCURRENCY.perWorkspace)
+    throw refuse(
+      409,
+      IMPORT_CODES.busy,
+      'An import is already running. Wait for it to finish, then try again.',
+    )
+  const today = await db.one<{ n: number }>(
+    `SELECT count(DISTINCT batch_id)::int AS n FROM board_imports WHERE created_by = $1 AND created_at >= $2`,
+    [user.id, new Date(ctx.now().getTime() - 86_400_000)],
   )
-  const key = spoolKey(importId)
+  if (today.n >= IMPORT_CONCURRENCY.startsPerPersonPerDay)
+    throw refuse(429, IMPORT_CODES.dailyLimit, 'You started the most imports allowed for today. Try again tomorrow.')
+  uploading.add(user.id)
   try {
-    const { bytes, sha256 } = await receiveToBlob(req.raw, ctx.blobs, key, {
+    return await receiveAndStart(ctx, runner, req, reply, { workspaceId: wid, userId: user.id, query, declared })
+  } finally {
+    uploading.delete(user.id)
+  }
+}
+
+/** The upload, then its check, then the job: a slow upload holds none of the runner's slots. */
+async function receiveAndStart(
+  ctx: FeatureContext,
+  runner: ImportRunner,
+  req: FastifyRequest,
+  reply: FastifyReply,
+  r: { workspaceId: string; userId: string; query: RestoreBackupQuery; declared: number },
+): Promise<StartImportResponse> {
+  const { workspaceId: wid, userId, query, declared } = r
+
+  const ref = newDbId('rsp')
+  const key = spoolKey(ref)
+  let opened: OpenedBackup
+  try {
+    const { bytes } = await receiveToBlob(req.raw, ctx.blobs, key, {
       declaredBytes: declared,
       maxBytes: BACKUP_LIMITS.restoreBytes,
       contentType: BACKUP_MIME_TYPE,
     })
-    const opened = await openBackup(blobRangeSource(ctx.blobs, key, bytes), { contractsRev: CONTRACTS_REV })
-    await db.query('UPDATE board_imports SET source_ref = $2, updated_at = $3 WHERE batch_id = $1', [
-      importId,
-      sha256,
-      ctx.now(),
-    ])
-    settle({ ok: true, key, size: bytes, sha256, title: title ? null : cleanTitle(opened.manifest.title) })
+    opened = await openBackup(blobRangeSource(ctx.blobs, key, bytes), { contractsRev: CONTRACTS_REV })
   } catch (e) {
-    const code =
-      e instanceof BackupFormatError
-        ? e.code
-        : e instanceof ReceiveError
-          ? e.reason === 'TOO_LARGE'
-            ? BACKUP_CODES.tooLarge
-            : BACKUP_CODES.invalid
-          : IMPORT_CODES.internal
-    settle({ ok: false, code })
     await deleteQuietly(ctx.blobs, [key], () => {})
-    // the refusal answers once its job has ended (failed with this code), so the person can try again at once
-    await jobEnded(db, importId, JOB_SETTLE_MS)
-    if (code === IMPORT_CODES.internal) throw e
-    if (e instanceof ReceiveError && e.reason !== 'TOO_LARGE')
+    if (e instanceof ReceiveError) {
+      if (e.reason === 'TOO_LARGE')
+        throw new ApiError(413, BACKUP_CODES.tooLarge, MESSAGES[BACKUP_CODES.tooLarge] as string, CLOSE)
       throw new ApiError(400, 'UPLOAD_INCOMPLETE', 'The upload ended early.', CLOSE)
-    throw new ApiError(code === BACKUP_CODES.tooLarge ? 413 : 400, code, MESSAGES[code] as string)
+    }
+    if (!(e instanceof BackupFormatError)) throw e
+    throw new ApiError(e.code === BACKUP_CODES.tooLarge ? 413 : 400, e.code, MESSAGES[e.code] as string)
+  }
+  let importId: string
+  try {
+    if (
+      opened.manifest.internalOnly &&
+      !(await mayRestoreInternalOnly(ctx, wid, query.projectId ?? null, userId))
+    )
+      throw new ApiError(409, INTERNAL_ONLY_CODE, BACKUP_INTERNAL_ONLY_MESSAGE)
+    const title = cleanBoardTitle(query.title) ?? cleanBoardTitle(opened.manifest.title) ?? RESTORING_TITLE
+    importId = await runner.start(
+      {
+        workspaceId: wid,
+        projectId: query.projectId ?? null,
+        userId,
+        source: 'lobby-backup',
+        boards: [{ sourceRef: ref, title }],
+      },
+      [],
+    )
+  } catch (e) {
+    await deleteQuietly(ctx.blobs, [key], () => {})
+    throw e
   }
   reply.code(202)
   return { importId, location: importJobPath(importId) }
@@ -364,20 +369,13 @@ export function rewriteFileRefs(elements: El[], moved: ReadonlyMap<string, Store
   return missing
 }
 
-export function createBackupSource(ctx: FeatureContext, spools: Spools): ImportSourceRunner {
-  /** The spooled backup of the step's job: this process's (waiting for its upload), or one left in the store. */
-  async function locate(step: ImportStep): Promise<Extract<Spool, { ok: true }>> {
-    const spool = await spools.find(step.importId, step.sourceRef ? 0 : SPOOL_HANDOVER_MS)
-    if (spool) {
-      if (!spool.ok) throw new ImportFailure(spool.code)
-      return spool
-    }
-    // resumed after a restart: the upload finished and was checked (source_ref holds its sha256) in a process that is
-    // gone; without that, the upload itself was cut off
-    const key = spoolKey(step.importId)
-    const head = step.sourceRef ? await ctx.blobs.head(key) : null
-    if (!step.sourceRef || !head) throw new ImportFailure(IMPORT_CODES.interrupted)
-    return { ok: true, key, size: head.contentLength, sha256: step.sourceRef, title: null }
+export function createBackupSource(ctx: FeatureContext): ImportSourceRunner {
+  /** The step's spooled backup (source_ref names it): the route queued the job once it was whole and checked. */
+  async function locate(step: ImportStep): Promise<{ key: string; size: number }> {
+    const key = step.sourceRef && SPOOL_REF.test(step.sourceRef) ? spoolKey(step.sourceRef) : null
+    const head = key ? await ctx.blobs.head(key) : null
+    if (!key || !head) throw new ImportFailure(IMPORT_CODES.interrupted)
+    return { key, size: head.contentLength }
   }
 
   async function runBoard(step: ImportStep) {
@@ -387,13 +385,6 @@ export function createBackupSource(ctx: FeatureContext, spools: Spools): ImportS
     try {
       const src = blobRangeSource(ctx.blobs, spool.key, spool.size)
       const backup = await openBackup(src, { contractsRev: CONTRACTS_REV }).catch(failWith)
-      if (spool.title) {
-        await ctx.db.query(`UPDATE boards SET title = $2 WHERE id = $1 AND status = 'importing'`, [
-          step.boardId,
-          spool.title,
-        ])
-        await ctx.db.query('UPDATE board_imports SET title = $2 WHERE id = $1', [step.rowId, spool.title])
-      }
       await step.checkpoint()
       step.progress({ phase: 'reading' })
       const archive = await readBackupBoard(src, backup).catch(failWith)
@@ -505,7 +496,6 @@ export function createBackupSource(ctx: FeatureContext, spools: Spools): ImportS
       throw e
     } finally {
       if (!keep) {
-        spools.drop(step.importId)
         await deleteQuietly(ctx.blobs, [spool.key], () => {})
       }
     }

@@ -37,11 +37,12 @@ describe.skipIf(!PG_URL)('backup and restore on real Postgres (DRAFTROOM_TEST_DA
     expect(res.statusCode, res.body).toBe(202)
     const runner = importRunnerOf(a.app)
     await runner?.idle()
-    const row = await a.db.one<{ status: string; board_id: string }>(
-      'SELECT status, board_id FROM board_imports WHERE batch_id = $1',
+    const row = await a.db.one<{ status: string; board_id: string; source_ref: string }>(
+      'SELECT status, board_id, source_ref FROM board_imports WHERE batch_id = $1',
       [(res.json() as { importId: string }).importId],
     )
     expect(row.status).toBe('done')
+    expect(await a.blobs.head(spoolKey(row.source_ref))).toBeNull()
     const versions = await a.db.query<{ sha256: string; workspace_id: string }>(
       'SELECT sha256, workspace_id FROM asset_versions WHERE board_id = $1 ORDER BY sha256',
       [row.board_id],
@@ -57,11 +58,8 @@ describe.skipIf(!PG_URL)('backup and restore on real Postgres (DRAFTROOM_TEST_DA
     expect(refused.statusCode).toBe(400)
     expect(refused.json().error.code).toBe('BACKUP_FROM_NEWER_LOBBY')
     await runner?.idle()
-    const failed = await a.db.one<{ status: string; error_code: string; batch_id: string }>(
-      "SELECT status, error_code, batch_id FROM board_imports WHERE status <> 'done'",
-    )
-    expect(failed).toMatchObject({ status: 'failed', error_code: 'BACKUP_FROM_NEWER_LOBBY' })
-    expect(await a.blobs.head(spoolKey(failed.batch_id))).toBeNull()
+    // refused before any job is made (the upload is checked first)
+    expect((await a.db.one<{ n: number }>('SELECT count(*)::int AS n FROM board_imports')).n).toBe(1)
     expect((await a.db.one<{ n: number }>('SELECT count(*)::int AS n FROM boards')).n).toBe(boards)
   })
 })

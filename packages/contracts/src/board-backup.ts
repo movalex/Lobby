@@ -19,6 +19,7 @@
 // Do not import values from ./index.ts here: index.ts re-exports this module.
 
 import { z } from 'zod'
+import { BoardTitle } from './board-title.ts'
 
 const AssetIdLike = z.string().regex(/^ast_[0-9A-Za-z]{10,40}$/)
 const VersionIdLike = z.string().regex(/^ver_[0-9A-Za-z]{10,40}$/)
@@ -103,6 +104,13 @@ export const BoardBackupManifest = z
       bytes: z.number().int().nonnegative().max(BACKUP_LIMITS.boardBytes),
     }),
     files: z.array(BackupManifestFile).max(BACKUP_LIMITS.files),
+    /**
+     * The backup holds content of an internal-only scope (DOMAIN-ACCESS §23, wave R): its board was in an internal-only
+     * workspace or project, or it includes files its maker could view only on boards of an internal-only project (only
+     * a workspace owner or admin who is a creator gets those). A restore outside every internal-only scope then needs
+     * such a person of the target workspace (409 INTERNAL_ONLY, BACKUP_INTERNAL_ONLY_MESSAGE).
+     */
+    internalOnly: z.boolean().default(false),
   })
   .refine((m) => m.files.filter((f) => !f.omitted).length === m.counts.files, 'counts.files')
   .refine(
@@ -116,6 +124,10 @@ export const BoardBackupManifest = z
   )
 export type BoardBackupManifest = z.infer<typeof BoardBackupManifest>
 
+/** 409 INTERNAL_ONLY at a restore of an internal-only backup outside every internal-only scope (see above). */
+export const BACKUP_INTERNAL_ONLY_MESSAGE =
+  'This backup holds content of an internal-only workspace or project, so only a workspace owner or admin can restore it outside one. Restore it into an internal-only project instead.'
+
 /** POST …/backup/ticket: open `url` as a download (it names the api's own origin and a one-minute ticket). */
 export const BackupTicketResponse = z.object({ url: z.string(), expiresAt: z.number().int() })
 export type BackupTicketResponse = z.infer<typeof BackupTicketResponse>
@@ -126,7 +138,8 @@ export const RestoreBackupQuery = z.strictObject({
     .string()
     .regex(/^prj_[0-9A-Za-z]{10,40}$/)
     .optional(),
-  title: z.string().trim().min(1).max(120).optional(),
+  /** as board creation takes it; the api then cleans it (cleanBoardTitle), as it cleans the manifest's */
+  title: BoardTitle.optional(),
 })
 export type RestoreBackupQuery = z.infer<typeof RestoreBackupQuery>
 
