@@ -17,6 +17,7 @@ import {
   enqueueJob,
   ensureLayout,
   LIMITS,
+  maxKindBytes,
   originalPath,
   PREVIEW_PROFILE,
   type ProbeFacts,
@@ -312,7 +313,8 @@ export async function runRemoteJob(claimed: ClaimedJob, o: RemoteJobOptions): Pr
     if (job.attempt > LIMITS.maxAttempts) {
       return await failed(new PreviewError('INTERNAL', `gave up after ${job.attempt - 1} attempts`))
     }
-    if (job.sizeBytes > LIMITS.maxBytes[job.kind]) {
+    // the largest the kind allows (a PSD is kind pdf up to 200 MiB); processJob checks the limit of the content
+    if (job.sizeBytes > maxKindBytes(job.kind)) {
       return await failed(new PreviewError('FILE_TOO_LARGE', `${job.sizeBytes} bytes`))
     }
     if (job.kind === 'other') {

@@ -89,6 +89,42 @@ DEVIATION (extra settings): `WORKER_POLL_MAX_MS` (the idle backoff cap, default 
 
 DEVIATION: kind `other` (attachments) is completed `ready` with no derivatives **without downloading the original**, because no byte of it is examined; this saves up to 250 MB of transfer per attachment. The api verified the bytes at upload. The filesystem-queue loop (`apps/worker/src/loop.ts`) was removed; `processJob` still runs each claimed job inside a temporary local layout.
 
+### 5.1 Design files (wave R, WS3; docs/WAVE-R-CONTRACTS.md §6)
+
+Photoshop, Illustrator and TIFF uploads are kind `pdf` (`packages/dev-assets` `classifyUpload`, from `DESIGN_FORMATS`) and are previewed as **flattened** pages; HEIC is kind `other` (an attachment with a hint). `processJob` routes on the **sniffed** type, never the name, and checks the size twice: against the largest the kind allows (`maxKindBytes`: 200 MiB for `pdf`) before sniffing, then against the limit of what the content is (`contentByteLimit`). The remote job's pre-download check uses `maxKindBytes` too.
+
+| Format | Route | Limits | No preview when |
+|---|---|---|---|
+| PSD (`image/vnd.adobe.photoshop`) | `psd.ts` checks the 26-byte header, then `psd-child.ts` (a separate Node process: `--max-old-space-size=768`, SIGKILL at 30 s) compacts the file in place (`psd-protocol.ts compactPsd`: no layers, only resources 1036 and 1057, only the colour channels and the merged transparency) and has `ag-psd` 31.0.3 (MIT) decode the composite; sharp (raw input) writes one page ≤ 2048 px, flattened on white | ≤ 200 MiB; version 1; ≤ 30,000 px a side and ≤ 40 MP; 8-bit RGB or greyscale; ≤ 2,000 layer records (checked before any is parsed); every section length checked against the file | PSB, 16/32-bit, CMYK and other modes: `PSD_UNSUPPORTED`. No real composite (saved without *Maximize Compatibility*): the embedded JPEG thumbnail is the cover alone (a `thumb`, no `page`: the card says "Low-resolution preview"); without a thumbnail either: `PSD_NO_COMPOSITE`. Over a limit: `DESIGN_TOO_LARGE`. Damaged or truncated: `IMAGE_INVALID` |
+| TIFF (`image/tiff`) | `tiff.ts`: sharp's TIFF loader, from the file only (`VipsForeignLoadTiffFile` is the one TIFF loader in `image.ts ALLOWED_LOADERS`), in process; page 1 (IFD 0) ≤ 2048 px, flattened on white; the page count is reported | ≤ 100 MiB; ≤ 100 MP (`limitInputPixels`, from the header); ≤ 50 pages; `failOn: 'error'`; sharp timeout 20 s | over a limit: `DESIGN_TOO_LARGE`; broken: `IMAGE_INVALID` |
+| AI (PDF-compatible) | the PDF path (`pdf.ts`, pdf.js in the PDF child): pages are the artboards | the PDF limits | a one-page file whose text is Illustrator's "saved without PDF Content" stub: `NO_PDF_CONTENT` (checked for uploaded PDFs and .ai files, not Office conversions); PostScript content (old AI, EPS): `POSTSCRIPT_NOT_SUPPORTED` |
+| HEIC/HEIF | not decoded on the server (no HEVC decoder: every npm decoder is LGPL, and HEVC decoding has patent-pool exposure no licence check clears). Safari 17+ converts the photo to JPEG in the uploader (`apps/web/src/file-card/heic.ts`, ≤ 50 MP) | the attachment limit of its row (the PDF limit) | always, on the server: the card shows the hint |
+
+The api shows the contracts' words for these codes (`apps/api/src/worker/protocol.ts FAILURE_MESSAGES` spreads `DESIGN_PREVIEW_MESSAGES`); the original is always the download (`application/octet-stream`, attachment), and no card or viewer says "editable".
+
+### 5.2 System binaries (policy)
+
+npm production trees are checked by `pnpm licence:check` (`scripts/licence-check.mjs`). The Debian packages installed in Lobby's images are not, so this is the rule for them:
+
+- **Unmodified Debian packages only**, installed with `apt-get install --no-install-recommends` from the base image's own Debian release, never built or patched by Lobby.
+- **Run as separate processes** (spawned with an argv array, never linked into Lobby's code), inside Lobby's own containers, on servers Lobby runs (Render, the NAS, later DBC's Azure).
+- **The images are never given to third parties**: they are built where they run and are never pushed to a public registry. Copyleft obligations attach to conveying the binaries; if an image is ever distributed, this policy needs a new review first (source offers for the GPL/LGPL/MPL packages).
+- **Never AGPL** (Ghostscript is not used: PostScript and EPS get no preview), and **no HEVC decoder** (libheif with libde265 or similar), whatever its licence, because of the patent pools.
+- A new package needs a row in the table below, with its licence and why it is there, in the change that adds it.
+
+| Image | Debian package | Licence (Debian `copyright`) | Why, and how it runs |
+|---|---|---|---|
+| all (`node:24.19.0-trixie-slim`) | the base image (Debian 13 base system, Node.js 24) | various DFSG-free (Debian); Node.js MIT | the runtime |
+| api, sync, worker | `tini` | MIT | PID 1: forwards signals, reaps children |
+| worker | `ffmpeg` (with `ffprobe`) | GPL-2.0-or-later as Debian builds it (LGPL-2.1-or-later core with GPL parts enabled) | video probes and posters, a separate process per job (`video.ts`) |
+| worker (run only by the office sidecar) | `libreoffice-writer-nogui`, `libreoffice-calc-nogui`, `libreoffice-impress-nogui` | MPL-2.0 (some parts LGPL-3.0-or-later, Apache-2.0) | Office to PDF, in the sidecar container with no network and no secrets (`office-sidecar.ts`) |
+| worker | `fonts-liberation2` | OFL-1.1 | metric-compatible Arial, Times New Roman, Courier New for Office layouts |
+| worker | `fonts-crosextra-carlito` | OFL-1.1 | Calibri metrics |
+| worker | `fonts-crosextra-caladea` | Apache-2.0 | Cambria metrics |
+| worker | `fonts-dejavu-core` | Bitstream Vera licence (permissive) and public domain | every other script |
+
+Wave R adds **no** system binary: PSD goes through `ag-psd` (npm, MIT, in the licence check), TIFF through sharp's bundled libvips (the reviewed LGPL allowlist entry of `scripts/licence-check.mjs`).
+
 ## 6. Configuration
 
 - api: `DRAFTROOM_BLOB_STORE=fs|r2` (default `fs`: `${DRAFTROOM_DATA_DIR}/blobs`), `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (required when `r2`), `DRAFTROOM_WORKER_TOKEN` (required; dev placeholder in `apps/api/dev.env` and `apps/worker/dev.env`, refused in production).

@@ -7,7 +7,12 @@ import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import type { Canvas, SKRSContext2D } from '@napi-rs/canvas'
 import { getDocument, type PDFPageProxy, VerbosityLevel } from 'pdfjs-dist/legacy/build/pdf.mjs'
-import { type PdfChildRequest, type PdfChildResponse, pageFileName } from './pdf-protocol.ts'
+import {
+  NO_PDF_CONTENT_RE,
+  type PdfChildRequest,
+  type PdfChildResponse,
+  pageFileName,
+} from './pdf-protocol.ts'
 
 // pdf.js logs through console.log; stdout is reserved for the single JSON response.
 const toStderr = (...a: unknown[]) => process.stderr.write(`${a.map(String).join(' ')}\n`)
@@ -60,6 +65,15 @@ async function render(req: PdfChildRequest): Promise<PdfChildResponse> {
     const pageCount = doc.numPages
     if (pageCount > req.maxPages)
       return { ok: false, reason: 'too_many_pages', name: 'LimitError', pageCount }
+    if (req.noPdfContentCheck && pageCount === 1) {
+      const first = await doc.getPage(1)
+      try {
+        const text = (await first.getTextContent()).items.map((i) => ('str' in i ? i.str : '')).join(' ')
+        if (NO_PDF_CONTENT_RE.test(text)) return { ok: false, reason: 'no_pdf_content', name: 'NoPdfContent' }
+      } finally {
+        first.cleanup()
+      }
+    }
     const cf = doc.canvasFactory as NodeCanvasFactory
     const rendered: number[] = []
     for (let n = 1; n <= Math.min(pageCount, req.pages); n++) {

@@ -20,6 +20,12 @@ export type FailureCode =
   | 'OFFICE_INVALID'
   | 'OFFICE_TOO_MANY_PAGES'
   | 'OFFICE_UNAVAILABLE'
+  // design files (wave R): the codes of @draftroom/contracts DESIGN_PREVIEW_CODES (HEIC_NO_PREVIEW is the web's)
+  | 'NO_PDF_CONTENT'
+  | 'POSTSCRIPT_NOT_SUPPORTED'
+  | 'PSD_NO_COMPOSITE'
+  | 'PSD_UNSUPPORTED'
+  | 'DESIGN_TOO_LARGE'
 
 const MESSAGES: Record<FailureCode, string> = {
   IMAGE_TOO_LARGE: 'This image is too large to preview. You can still download it.',
@@ -42,6 +48,13 @@ const MESSAGES: Record<FailureCode, string> = {
   OFFICE_TOO_MANY_PAGES: 'This document has too many pages to preview. You can still download it.',
   OFFICE_UNAVAILABLE:
     'Previews of Office documents are not available right now. You can still download the file.',
+  // Design files (psd.ts, tiff.ts, pdf.ts for Illustrator). The same words as @draftroom/contracts
+  // DESIGN_PREVIEW_MESSAGES, which the api shows (the worker does not depend on contracts; a test compares them).
+  NO_PDF_CONTENT: 'No preview: re-save it in Illustrator with “Create PDF Compatible File” on.',
+  POSTSCRIPT_NOT_SUPPORTED: 'No preview: PostScript files (old .ai and .eps) are not previewed.',
+  PSD_NO_COMPOSITE: 'No preview: re-save it in Photoshop with “Maximize Compatibility” on.',
+  PSD_UNSUPPORTED: 'No preview: Lobby previews 8-bit RGB and greyscale Photoshop files.',
+  DESIGN_TOO_LARGE: 'No preview: the file is too large to preview.',
 }
 
 /** Every failure code, e.g. to check that the api knows each one. */

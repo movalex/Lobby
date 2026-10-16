@@ -12,6 +12,7 @@ import {
   type DataLayout,
   finishJob,
   LIMITS,
+  maxKindBytes,
   originalPath,
   type ProbeFacts,
   readMeta,
@@ -36,8 +37,10 @@ import {
 import { type Derived, deriveImage } from './image.ts'
 import { deriveOffice, type OfficeConverter, officeInput } from './office.ts'
 import { derivePdf } from './pdf.ts'
+import { derivePsd } from './psd.ts'
 import { releaseJob } from './queue.ts'
-import { confirmKind, sniffFile } from './sniff.ts'
+import { confirmKind, contentByteLimit, sniffFile } from './sniff.ts'
+import { deriveTiff } from './tiff.ts'
 import { deriveVideo } from './video.ts'
 
 export interface ProcessOptions {
@@ -54,6 +57,11 @@ export interface ProcessOptions {
   office?: OfficeConverter
   /** LibreOffice's own budget per document (default LIMITS.officeConvertTimeoutMs). */
   officeTimeoutMs?: number
+  /** The Photoshop child's budget (default PSD_LIMITS.timeoutMs) and heap cap (default PSD_LIMITS.childHeapMb). */
+  psdTimeoutMs?: number
+  psdHeapMb?: number
+  /** Test hook: replacement psd child entry point. */
+  psdChildPath?: string
   /** How often the local claim file is touched while the job runs. */
   heartbeatMs?: number
   /**
@@ -108,11 +116,15 @@ async function derive(
   } catch {
     throw new PreviewError('FILE_MISSING')
   }
-  if (size > LIMITS.maxBytes[meta.kind]) throw new PreviewError('FILE_TOO_LARGE', `${size} bytes`)
+  // The largest the kind allows (a PSD is kind 'pdf' up to 200 MiB), then the limit of what the content is.
+  if (size > maxKindBytes(meta.kind)) throw new PreviewError('FILE_TOO_LARGE', `${size} bytes`)
   if (meta.kind === 'other') return { probe: {}, derivatives: [], mimeType: null }
   const empty = INVALID_EMPTY[meta.kind]
   if (size === 0 && empty) throw new PreviewError(empty, 'empty file')
   const sniffed = await sniffFile(path)
+  if (size > contentByteLimit(meta.kind, sniffed)) {
+    throw new PreviewError('FILE_TOO_LARGE', `${size} bytes of ${sniffed.mime ?? 'unknown'}`)
+  }
   // An upload of kind 'pdf' may be an Office document (dev-assets classifyUpload); its content decides.
   const office = meta.kind === 'pdf' ? await officeInput(path, sniffed) : null
   if (office) {
@@ -134,12 +146,24 @@ async function derive(
     case 'image':
       return { ...(await deriveImage(await readFile(path), writer)), mimeType }
     case 'pdf':
+      // Routed on the sniffed type, never the name: Photoshop and TIFF files are flattened pages of their own.
+      if (mimeType === 'image/vnd.adobe.photoshop') {
+        const psd = await derivePsd(path, writer, {
+          timeoutMs: opts.psdTimeoutMs,
+          childPath: opts.psdChildPath,
+          heapMb: opts.psdHeapMb,
+          signal: opts.signal,
+        })
+        return { ...psd, mimeType }
+      }
+      if (mimeType === 'image/tiff') return { ...(await deriveTiff(path, writer)), mimeType }
       return {
         ...(await derivePdf(path, writer, {
           timeoutMs: opts.pdfTimeoutMs,
           childPath: opts.pdfChildPath,
           heapMb: opts.pdfHeapMb,
           signal: opts.signal,
+          noPdfContentCheck: true,
         })),
         mimeType,
       }

@@ -3,6 +3,7 @@
 // they send is still validated: it ends up in rows the browser reads. Unknown body keys are ignored
 // (stripped), so a newer worker can send extra fields without breaking an older api.
 
+import { DESIGN_PREVIEW_MESSAGES } from '@draftroom/contracts'
 import { LIMITS, type ProbeFacts } from '@draftroom/dev-assets'
 import { z } from 'zod'
 
@@ -152,6 +153,8 @@ export const FAILURE_MESSAGES: Record<string, string> = {
   OFFICE_TOO_MANY_PAGES: 'This document has too many pages to preview. You can still download it.',
   OFFICE_UNAVAILABLE:
     'Previews of Office documents are not available right now. You can still download the file.',
+  // Design files (wave R; contracts design-previews.ts): Photoshop, Illustrator, TIFF, HEIC.
+  ...DESIGN_PREVIEW_MESSAGES,
 }
 
 /** A worker-reported failure as the { code, message } users see: unknown codes become INTERNAL. */

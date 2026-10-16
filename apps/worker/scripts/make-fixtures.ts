@@ -1,5 +1,6 @@
 // Generates the preview fixtures (milestone 0, plus the wave-4 Office documents built by
-// office-fixtures.ts) into <repo>/tests/fixtures/generated/ (gitignored).
+// office-fixtures.ts and wave R's design files built by design-fixtures.ts) into
+// <repo>/tests/fixtures/generated/ (gitignored).
 //   pnpm fixtures            create missing fixtures, print the manifest
 //   pnpm fixtures --force    regenerate everything
 // All content is synthetic and non-sensitive. Output is reproducible on one toolchain (ffmpeg
@@ -16,6 +17,7 @@ import { StandardFonts as EncryptingFonts, PDFDocument as EncryptingPDFDocument 
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'
 import sharp from 'sharp'
 import { run, stderrTail } from '../src/run.ts'
+import * as design from './design-fixtures.ts'
 import * as office from './office-fixtures.ts'
 
 export const FIXTURES_DIR = fileURLToPath(new URL('../../../tests/fixtures/generated/', import.meta.url))
@@ -361,6 +363,116 @@ const SPECS: Spec[] = [
     name: 'bomb.docx',
     description: 'zip bomb: word/document.xml inflates to 1120 MiB',
     make: () => office.bombDocx(),
+  },
+  // ---- design files (wave R; built in design-fixtures.ts) ----
+  {
+    name: 'design.psd',
+    description: '1200x800 RGB PSD: real composite with transparency, 2 layers, embedded thumbnail (ag-psd)',
+    make: () => design.psd(),
+  },
+  {
+    name: 'nocomposite.psd',
+    description: 'PSD saved without Maximize Compatibility (hasRealMergedData false) with a 160 px thumbnail',
+    make: () => design.psdWithoutComposite(true),
+  },
+  {
+    name: 'nocomposite-nothumb.psd',
+    description: 'PSD without a real composite and without a thumbnail',
+    make: () => design.psdWithoutComposite(false),
+  },
+  {
+    name: 'cmyk.psd',
+    description: 'design.psd with its header saying CMYK (mode 4)',
+    make: async () => design.patchPsdHeader(await readFile(fixturePath('design.psd')), 'mode', 4),
+  },
+  {
+    name: 'deep16.psd',
+    description: 'design.psd with its header saying 16 bits per channel',
+    make: async () => design.patchPsdHeader(await readFile(fixturePath('design.psd')), 'depth', 16),
+  },
+  {
+    name: 'large.psb',
+    description: 'PSB (large document format, version 2)',
+    make: () => design.psd({ psb: true }),
+  },
+  {
+    name: 'bomb-30000x30000.psd',
+    description: '40-byte PSD header claiming 30000x30000 (900 MP)',
+    make: async () => design.psdBombHeader(30000, 30000),
+  },
+  {
+    name: 'layers-30000.psd',
+    description: '64x64 PSD whose layer section claims 30000 layer records',
+    make: async () => design.psdManyLayers(30000),
+  },
+  {
+    name: 'truncated.psd',
+    description: 'first 60% of design.psd (the composite cut short)',
+    make: async () => {
+      const b = await readFile(fixturePath('design.psd'))
+      return b.subarray(0, Math.floor(b.length * 0.6))
+    },
+  },
+  {
+    name: 'really-png.psd',
+    description: 'image.png under a .psd name',
+    make: async () => readFile(fixturePath('image.png')),
+  },
+  { name: 'scan-lzw.tif', description: '1600x1000 RGB TIFF, LZW', make: () => design.tiff('lzw') },
+  {
+    name: 'scan-deflate.tif',
+    description: '1600x1000 RGB TIFF, Deflate',
+    make: () => design.tiff('deflate'),
+  },
+  { name: 'scan-jpeg.tif', description: '1600x1000 RGB TIFF, JPEG', make: () => design.tiff('jpeg') },
+  {
+    name: 'scan-packbits.tif',
+    description: '1600x1000 RGB TIFF, PackBits',
+    make: () => design.tiff('packbits'),
+  },
+  { name: 'scan-cmyk.tif', description: '1600x1000 CMYK TIFF, LZW', make: () => design.tiff('lzw', 'cmyk') },
+  {
+    name: 'multipage.tif',
+    description: '3-page 64x64 greyscale TIFF (hand-written IFD chain)',
+    make: async () => design.tiffPages(3),
+  },
+  {
+    name: 'pages-300.tif',
+    description: '300-page 16x16 greyscale TIFF',
+    make: async () => design.tiffPages(300, 16),
+  },
+  {
+    name: 'bomb-100000x100000.tif',
+    description: 'TIFF claiming 100000x100000 (10 GP) with a 4 KiB deflate strip',
+    make: async () => design.tiffBomb(100_000, 100_000),
+  },
+  {
+    name: 'truncated.tif',
+    description: '256x256 greyscale TIFF cut in its strip (the IFD is whole)',
+    make: async () => {
+      const b = design.tiffPages(1, 256)
+      return b.subarray(0, Math.floor(b.length * 0.6))
+    },
+  },
+  {
+    name: 'artwork.ai',
+    description: 'Illustrator file saved with PDF content: 2 artboards (pdf-lib)',
+    make: () => design.illustrator(2),
+  },
+  {
+    name: 'nopdf.ai',
+    description: 'Illustrator file saved without PDF content (one page: the notice)',
+    make: () => design.illustratorWithoutPdf(),
+  },
+  {
+    name: 'legacy.ai',
+    description: 'PostScript Illustrator 8 file (%!PS-Adobe-3.0)',
+    make: async () => design.illustratorPostScript(),
+  },
+  {
+    name: 'photo.heic',
+    description: 'ftyp heic box and filler (never decoded)',
+    make: async () => design.heic(),
   },
 ]
 

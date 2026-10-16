@@ -34,6 +34,7 @@ import { extensionLabel, formatBytes, formatDuration, pluralize } from '../../li
 import { useValue } from '../../lib/signals.ts'
 import { coverDerivative, stripPages } from '../card-model.ts'
 import '../file-card.css'
+import { cardDesignFormat, designBadgeText, designHint, isFlattenedPreview } from '../design.ts'
 import { CONVERSION_DETAIL, CONVERSION_NOTE, cardOfficeFormat, isConvertedPreview } from '../office.ts'
 import { previewPages } from '../pdf-pages.ts'
 import { downloadsAllowed } from './downloads.ts'
@@ -396,6 +397,10 @@ function CardFace({
   // Office documents are previewed through their PDF conversion (office.ts): say so on the card.
   const office = cardOfficeFormat(snap.meta, facts)
   const converted = isConvertedPreview(snap.meta)
+  // Photoshop, Illustrator and TIFF files show flattened pages; HEIC is an attachment with a hint (design.ts).
+  const design = cardDesignFormat(snap.meta, facts)
+  const flattened = design !== null && isFlattenedPreview(snap.meta, facts)
+  const hint = designHint(snap.meta, facts)
   // export-control: no Download while the board owner turned downloads off for this person (the api
   // refuses the original anyway). Previews, pages and video playback keep working.
   const kind = useUserKind()
@@ -411,9 +416,10 @@ function CardFace({
       data-status={view.status}
       data-kind={view.kind}
       data-office={office?.ext}
+      data-design={design?.kind}
       data-meta={snap.missing ? 'missing' : snap.meta ? 'loaded' : 'pending'}
       aria-label={`${view.name}, ${statusText(view)}`}
-      aria-description={cardDescriptor(view, office?.label ?? null)}
+      aria-description={cardDescriptor(view, office?.label ?? design?.label ?? null)}
       style={style}
     >
       {(view.kind !== 'other' || view.status === 'failed') && (
@@ -442,6 +448,8 @@ function CardFace({
         </div>
       )}
       {converted && !snap.missing && <ConversionNote />}
+      {flattened && design && !snap.missing && <DesignNote text={designBadgeText(design)} />}
+      {hint && !snap.missing && <DesignNote text={hint} hint />}
       <Footer view={view} original={canDownload ? original : null} />
     </figure>
   )
@@ -634,6 +642,39 @@ const ConversionNote = () => (
       />
     </svg>
     {CONVERSION_NOTE}
+  </p>
+)
+
+/**
+ * A design file's badge ("Flattened preview · PSD": the pages are a rendering, never the editable file) or its hint
+ * (HEIC has no preview; a PSD without a real composite shows only its thumbnail). One line; the whole text is the title.
+ */
+const DesignNote = ({ text, hint = false }: { text: string; hint?: boolean }) => (
+  <p
+    className={`dr-fc__note dr-fc__note--design${hint ? ' dr-fc__note--hint' : ''}`}
+    data-testid={hint ? 'file-card-design-hint' : 'file-card-design-badge'}
+    title={text}
+  >
+    <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
+      {hint ? (
+        <path
+          d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5.5M12 7.6v.1"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+        />
+      ) : (
+        <path
+          d="M12 3.5 3.5 8 12 12.5 20.5 8zM3.5 12 12 16.5 20.5 12M3.5 16 12 20.5 20.5 16"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinejoin="round"
+        />
+      )}
+    </svg>
+    <span className="dr-fc__note-text">{text}</span>
   </p>
 )
 
