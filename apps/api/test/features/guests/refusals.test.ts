@@ -45,6 +45,8 @@ const LIB_FOLDER = 'lbf_0123456789abcdefghij'
 const LIB_VER = 'ver_0123456789abcdefghij'
 const IMPORT_JOB = 'imp_0123456789abcdefghij'
 const HOOK = 'chk_0123456789abcdefghij'
+const REVIEW_ITEM = 'rvi_0123456789abcdefghij'
+const REVIEW_ROUND = 'rvr_0123456789abcdefghij'
 
 /**
  * Every refused route (its pattern first), called the way a client would, on the guest's own board
@@ -207,6 +209,22 @@ function refusedCalls(board: string, other: string, userId: string): [string, Me
     ['POST /api/workspaces/:wid/chat-hooks/:hid/test', 'POST', `${ws}/chat-hooks/${HOOK}/test`, {}],
     ['GET /api/me/chat-prefs', 'GET', `/api/me/chat-prefs?workspace=${DEV_STUDIO}`, undefined],
     ['PUT /api/me/chat-prefs', 'PUT', '/api/me/chat-prefs', { workspaceId: DEV_STUDIO, prefs: [] }],
+    // Wave S (landed by the foundation; pending until implemented): managing a review on their own board
+    [
+      'POST /api/boards/:bid/review/items',
+      'POST',
+      `${b}/review/items`,
+      { elementId: 'frame-1', kind: 'frame', label: 'Key art' },
+    ],
+    ['PATCH /api/boards/:bid/review/items/:rvi', 'PATCH', `${b}/review/items/${REVIEW_ITEM}`, { label: 'x' }],
+    ['DELETE /api/boards/:bid/review/items/:rvi', 'DELETE', `${b}/review/items/${REVIEW_ITEM}`, undefined],
+    ['POST /api/boards/:bid/review/rounds', 'POST', `${b}/review/rounds`, {}],
+    [
+      'POST /api/boards/:bid/review/rounds/:rvr/close',
+      'POST',
+      `${b}/review/rounds/${REVIEW_ROUND}/close`,
+      {},
+    ],
     // Requesting access: to their own board and to any other.
     ['POST /api/boards/:bid/access-requests', 'POST', `${b}/access-requests`, { role: 'editor' }],
     [

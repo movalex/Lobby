@@ -42,6 +42,7 @@ import {
   type ListThreadsResponse,
   LOBBY_CLIENT_HEADER,
   MarkNotificationsReadInput,
+  MEDIA_COMMENT_RULES,
   mentionedUserIds,
   rewriteMentionTokens,
   SetThreadVisibilityInput,
@@ -314,6 +315,10 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
     const user = await caller(req)
     const { bid = '' } = req.params as Params
     const input = parse(CreateThreadInput, req.body)
+    // Wave S (the foundation): a spot is WS3's to check and store (0037 spot_u / spot_v). Until then a thread that sends
+    // one is refused, never accepted with its spot dropped. WS3 replaces this line with its anchor checks.
+    if (input.spot !== undefined)
+      throw new ApiError(400, MEDIA_COMMENT_RULES.invalidAnchor, 'A spot on a file cannot be saved yet.')
     const visibility = input.visibility ?? 'everyone'
     const teamOnly = visibility === 'team'
     const { thread, board: ref } = await db.transaction(async (tx) => {

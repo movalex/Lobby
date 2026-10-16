@@ -1,4 +1,4 @@
-// Wave M foundation (and wave N's and wave Q's, the same way): the routes a wave adds, landed as contracts, guard rows and stub handlers BEFORE their owners
+// Wave M foundation (and wave N's, Q's, R's and S's, the same way): the routes a wave adds, landed as contracts, guard rows and stub handlers BEFORE their owners
 // implement them. OWNER: W5 (the guard lists and matrices are W5's after the foundation).
 //
 // A pending route is NOT registered: its path answers exactly as any unknown route does today (the root 404
@@ -38,6 +38,18 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   // its eight (the job routes R1-4, features/imports/routes.ts; the Miro routes R1-1, R1-2, features/imports/miro), WS2
   // its seven chat hook routes (R2-1 hooks, R2-2 test, R2-3 preferences; features/chat-hooks) and WS4 the three backup
   // routes (R4-1 download, R4-2 restore; features/backup); to ship one hidden, add its key back.
+  // wave S (the foundation; docs/WAVE-S-CONTRACTS.md §1): every route of the wave, @draftroom/contracts
+  // REVIEW_ROUTE_KEYS (WS1: S1-1 items, S1-2 status and history, S1-3 rounds; features/review) and
+  // ASSET_VERSION_ROUTE_KEYS (WS2: S2-1 the version list; files/versions.ts). WS3 and WS4 add no route.
+  'GET /api/boards/:bid/review': { owner: 'WS1', item: 'S1-1' },
+  'POST /api/boards/:bid/review/items': { owner: 'WS1', item: 'S1-1' },
+  'PATCH /api/boards/:bid/review/items/:rvi': { owner: 'WS1', item: 'S1-1' },
+  'DELETE /api/boards/:bid/review/items/:rvi': { owner: 'WS1', item: 'S1-1' },
+  'POST /api/boards/:bid/review/items/:rvi/status': { owner: 'WS1', item: 'S1-2' },
+  'GET /api/boards/:bid/review/items/:rvi/events': { owner: 'WS1', item: 'S1-2' },
+  'POST /api/boards/:bid/review/rounds': { owner: 'WS1', item: 'S1-3' },
+  'POST /api/boards/:bid/review/rounds/:rvr/close': { owner: 'WS1', item: 'S1-3' },
+  'GET /api/boards/:bid/asset-versions/:ast': { owner: 'WS2', item: 'S2-1' },
 }
 
 export const isPendingRoute = (

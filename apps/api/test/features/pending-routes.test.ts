@@ -3,6 +3,7 @@
 // kind of caller. The branch deploys with no behaviour change, and an old web or sync gets the 404 its downgrade
 // path expects (the wave M stale pairs (c) and (d)).
 import {
+  ASSET_VERSION_ROUTE_KEYS,
   BACKUP_CREATOR_ROUTE_KEYS,
   BACKUP_GUESTS_MESSAGE,
   BACKUP_ROUTE_KEYS,
@@ -18,6 +19,9 @@ import {
   LIBRARY_ROUTE_KEYS,
   MIRO_IMPORT_CREATOR_ROUTE_KEYS,
   MIRO_IMPORT_ROUTE_KEYS,
+  REVIEW_GUESTS_MESSAGE,
+  REVIEW_MANAGE_ROUTE_KEYS,
+  REVIEW_ROUTE_KEYS,
 } from '@draftroom/contracts'
 import Fastify from 'fastify'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -63,7 +67,17 @@ const WAVE_R_OWNERS: Record<string, string> = {
   ...Object.fromEntries(CHAT_HOOK_ROUTE_KEYS.map((k) => [k, 'WS2'])),
   ...Object.fromEntries(BACKUP_ROUTE_KEYS.map((k) => [k, 'WS4'])),
 }
-const PENDING_NOW = [...WAVE_M_ROUTES, ...WAVE_N_ROUTES, ...WAVE_Q_ROUTES, ...WAVE_R_ROUTES]
+/**
+ * Wave S (the foundation; docs/WAVE-S-CONTRACTS.md §1): every route of the wave, pending until its owner implements it:
+ * the review routes (WS1) and the version list (WS2). Each owner deletes its keys here and in PENDING_ROUTES in the
+ * change that implements them.
+ */
+const WAVE_S_ROUTES: string[] = [...REVIEW_ROUTE_KEYS, ...ASSET_VERSION_ROUTE_KEYS]
+const WAVE_S_OWNERS: Record<string, string> = {
+  ...Object.fromEntries(REVIEW_ROUTE_KEYS.map((k) => [k, 'WS1'])),
+  ...Object.fromEntries(ASSET_VERSION_ROUTE_KEYS.map((k) => [k, 'WS2'])),
+}
+const PENDING_NOW = [...WAVE_M_ROUTES, ...WAVE_N_ROUTES, ...WAVE_Q_ROUTES, ...WAVE_R_ROUTES, ...WAVE_S_ROUTES]
 
 const UNKNOWN = { error: { code: 'NOT_FOUND', message: 'Not found.' } }
 
@@ -71,17 +85,38 @@ const fill = (pattern: string, board: string) =>
   pattern.replace(':bid', board).replace(':wid', DEV_STUDIO).replace(/:\w+/g, 'x')
 
 describe('the pending list', () => {
-  it('is exactly the wave M, N, Q and R routes still pending, each with its owner and plan item', () => {
+  it('is exactly the wave M, N, Q, R and S routes still pending, each with its owner and plan item', () => {
     expect(Object.keys(PENDING_ROUTES).sort()).toEqual([...PENDING_NOW].sort())
     for (const [key, r] of Object.entries(PENDING_ROUTES)) {
       expect(['W5', 'W7', 'W8', 'WS1', 'WS2', 'WS4', 'WS5', 'WS7'], key).toContain(r.owner)
-      expect(r.item, key).toMatch(/^(M[5-8]|N[1-7]|Q[1-4]|R[1-4])-\d$/)
+      expect(r.item, key).toMatch(/^(M[5-8]|N[1-7]|Q[1-4]|R[1-4]|S[1-4])-\d$/)
     }
     for (const key of WAVE_Q_ROUTES) expect(PENDING_ROUTES[key]?.owner, key).toBe('WS2')
     for (const key of WAVE_R_ROUTES) {
       expect(PENDING_ROUTES[key]?.owner, key).toBe(WAVE_R_OWNERS[key])
       expect(PENDING_ROUTES[key]?.item.slice(0, 2), key).toBe(`R${WAVE_R_OWNERS[key]?.slice(2)}`)
     }
+    for (const key of WAVE_S_ROUTES) {
+      expect(PENDING_ROUTES[key]?.owner, key).toBe(WAVE_S_OWNERS[key])
+      expect(PENDING_ROUTES[key]?.item.slice(0, 2), key).toBe(`S${WAVE_S_OWNERS[key]?.slice(2)}`)
+    }
+  })
+
+  it('wave S: a guest is refused exactly the five manage routes; no route has a creator row; all pending', () => {
+    const all = [...REVIEW_ROUTE_KEYS, ...ASSET_VERSION_ROUTE_KEYS] as string[]
+    const guestRows = Object.entries(GUEST_REFUSED_ROUTES).filter(([k]) => all.includes(k))
+    expect(guestRows.map(([k]) => k).sort()).toEqual([...REVIEW_MANAGE_ROUTE_KEYS].sort())
+    for (const [k, m] of guestRows) expect(m, k).toBe(REVIEW_GUESTS_MESSAGE)
+    // seeing the review, its history and the versions, and setting a status, stay open to a guest's link role
+    for (const k of [
+      'GET /api/boards/:bid/review',
+      'GET /api/boards/:bid/review/items/:rvi/events',
+      'POST /api/boards/:bid/review/items/:rvi/status',
+      'GET /api/boards/:bid/asset-versions/:ast',
+    ])
+      expect(Object.hasOwn(GUEST_REFUSED_ROUTES, k), k).toBe(false)
+    expect(Object.keys(CREATOR_ROUTES).filter((k) => all.includes(k))).toEqual([])
+    for (const k of all) expect(isPendingRoute(k), k).toBe(WAVE_S_ROUTES.includes(k))
   })
 
   it('wave R: the guard lists hold exactly the contracts’ keys, every row pending until its route is', () => {
@@ -240,6 +275,9 @@ describe('in the real app, a pending route answers like an unknown route', () =>
       'chat_hooks',
       'chat_hook_prefs',
       'chat_deliveries',
+      'review_rounds',
+      'review_items',
+      'review_events',
     ]) {
       const n = await w.api.db.one<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`)
       expect(n.n, table).toBe(0)

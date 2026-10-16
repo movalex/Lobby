@@ -29,6 +29,7 @@ import {
   IMPORT_GUESTS_MESSAGE,
   LIBRARY_GUESTS_MESSAGE,
   PutMemberInput,
+  REVIEW_GUESTS_MESSAGE,
   TransferOwnershipInput,
 } from '@draftroom/contracts'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
@@ -101,6 +102,13 @@ export const LIBRARY_GUESTS = LIBRARY_GUESTS_MESSAGE
 export const IMPORT_GUESTS = IMPORT_GUESTS_MESSAGE
 export const BACKUP_GUESTS = BACKUP_GUESTS_MESSAGE
 export const CHAT_HOOK_GUESTS = CHAT_HOOK_GUESTS_MESSAGE
+
+/**
+ * Wave S (the foundation; docs/WAVE-S-CONTRACTS.md §2): managing a review (marking items, labels, order, rounds) needs
+ * an account. A name-only guest keeps what its link gives: seeing the review and, on a commenter link, setting a status
+ * (those routes have no row; WS1's route checks canSetReviewStatus).
+ */
+export const REVIEW_GUESTS = REVIEW_GUESTS_MESSAGE
 
 /** `METHOD route-pattern` → the message a signed-in guest gets (403 GUEST_ACCOUNT_REQUIRED). */
 export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {
@@ -191,6 +199,13 @@ export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {
   'POST /api/workspaces/:wid/chat-hooks/:hid/test': CHAT_HOOK_GUESTS,
   'GET /api/me/chat-prefs': CHAT_HOOK_GUESTS,
   'PUT /api/me/chat-prefs': CHAT_HOOK_GUESTS,
+  // wave S (landed by the foundation, pending until implemented: ../pending-routes.ts): the review's manage routes
+  // (@draftroom/contracts REVIEW_MANAGE_ROUTE_KEYS)
+  'POST /api/boards/:bid/review/items': REVIEW_GUESTS,
+  'PATCH /api/boards/:bid/review/items/:rvi': REVIEW_GUESTS,
+  'DELETE /api/boards/:bid/review/items/:rvi': REVIEW_GUESTS,
+  'POST /api/boards/:bid/review/rounds': REVIEW_GUESTS,
+  'POST /api/boards/:bid/review/rounds/:rvr/close': REVIEW_GUESTS,
 }
 
 export const guestRefused = (message: string) => new ApiError(403, 'GUEST_ACCOUNT_REQUIRED', message)

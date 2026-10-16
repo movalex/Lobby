@@ -1,5 +1,6 @@
 // The one place feature modules are registered (integration owner). Each feature owns its folder.
 import type { FastifyInstance } from 'fastify'
+import { registerAssetVersions } from '../files/versions.ts'
 import { registerAi } from './ai/index.ts'
 import { registerBackup } from './backup/index.ts'
 import { registerBoardLinks } from './board-links/index.ts'
@@ -16,6 +17,7 @@ import { registerImports } from './imports/index.ts'
 import { registerMiroImport } from './imports/miro/index.ts'
 import { registerLibrary } from './library/index.ts'
 import { registerLinkPreview } from './link-preview/index.ts'
+import { registerReview } from './review/index.ts'
 import { registerSearch } from './search/index.ts'
 import { registerThumbnails } from './thumbnails/index.ts'
 import { registerUsage } from './usage/index.ts'
@@ -61,4 +63,8 @@ export async function registerFeatures(
   await registerMiroImport(app, ctx)
   await registerBackup(app, ctx)
   await registerChatHooks(app, ctx)
+  // Wave S (the foundation; the lead owns this list after it): client review (WS1; WS4's review page reads it) and the
+  // version list (WS2). Their routes are pending until implemented (./pending-routes.ts).
+  await registerReview(app, ctx)
+  await registerAssetVersions(app, ctx)
 }

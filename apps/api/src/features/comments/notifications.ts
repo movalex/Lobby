@@ -4,7 +4,8 @@
 // notifications (and their comment snippets) immediately.
 // The kinds a web build from before 0024 cannot parse (NOTIFICATION_KINDS_SINCE_REV1) are left out of its
 // list and its unread count (`rev`, @draftroom/contracts client-rev.ts), and so are the kinds a build
-// from before 0026 cannot (NOTIFICATION_KINDS_SINCE_REV2: wave J's 'outsider_joined').
+// from before 0026 cannot (NOTIFICATION_KINDS_SINCE_REV2: wave J's 'outsider_joined'), and before 0037
+// (NOTIFICATION_KINDS_SINCE_REV3: wave S's 'review_status', listed with its review facts by WS1).
 //
 // Wave J: a team-only thread's items are shown only to someone on the team, which now needs a confirmed
 // creator (store.ts onTeam; the caller's status comes in as `creator`). 'outsider_joined' (an account
@@ -18,8 +19,10 @@ import {
   commentPlainText,
   knowsRev1,
   knowsRev2,
+  knowsRev3,
   NOTIFICATION_KINDS_SINCE_REV1,
   NOTIFICATION_KINDS_SINCE_REV2,
+  NOTIFICATION_KINDS_SINCE_REV3,
   type NotificationItem,
   type NotificationKind,
 } from '@draftroom/contracts'
@@ -362,6 +365,7 @@ export async function listNotifications(
   const hidden = idList([
     ...(knowsRev1(rev) ? [] : NOTIFICATION_KINDS_SINCE_REV1),
     ...(knowsRev2(rev) ? [] : NOTIFICATION_KINDS_SINCE_REV2),
+    ...(knowsRev3(rev) ? [] : NOTIFICATION_KINDS_SINCE_REV3),
   ])
   const creator = opts.creator === true
   const isVisible = (r: NotificationRow) => visible(r, creator)

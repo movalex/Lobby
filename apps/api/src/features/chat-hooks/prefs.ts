@@ -7,14 +7,23 @@
 // so is a workspace `guest`, who is not shown the names of the team's channels. Everything is off until the person turns
 // a kind on for a hook (no row, nothing sent). A hook left out of a PUT, or sent with no kinds, loses the person's row.
 // The row goes with the person's membership and with the hook (0036's foreign keys).
+//
+// Wave S (LOBBY_CLIENT_REV 3): a web build before revision 3 cannot parse the kind 'review_status'
+// (CHAT_HOOK_KINDS_SINCE_REV3; ChatPrefsResponse's whole answer would fail). Such a build is answered without it, and
+// its PUT keeps each hook's stored review_status: it cannot know the kind, so it never turns it off (a hook it sends
+// with no kinds, or leaves out, keeps its row while that kind is stored).
 
 import {
   CHAT_HOOK_GUESTS_MESSAGE,
   CHAT_HOOK_KINDS,
+  CHAT_HOOK_KINDS_SINCE_REV3,
   CHAT_HOOK_ROUTES,
   type ChatHookKind,
   ChatPrefsQuery,
   type ChatPrefsResponse,
+  clientRevOf,
+  knowsRev3,
+  LOBBY_CLIENT_HEADER,
   PutChatPrefsInput,
 } from '@draftroom/contracts'
 import { pgErrorCode, type Queryable } from '@draftroom/db'
@@ -36,8 +45,21 @@ async function requireMember(q: Queryable, workspaceId: string, user: SessionUse
 
 const ORDER = new Map<string, number>(CHAT_HOOK_KINDS.map((k, i) => [k, i]))
 
-/** The workspace's hooks and the person's choices in it. */
-export async function prefsOf(q: Queryable, workspaceId: string, userId: string): Promise<ChatPrefsResponse> {
+/** The kinds a web build of revision `rev` cannot parse (wave S: review_status before revision 3). */
+export const kindsUnknownTo = (rev: number): readonly ChatHookKind[] =>
+  knowsRev3(rev) ? [] : CHAT_HOOK_KINDS_SINCE_REV3
+
+/**
+ * The workspace's hooks and the person's choices in it, as a web build of revision `rev` can read them (the kinds it
+ * does not know left out; a hook left with none is left out too). Omitted: the newest revision.
+ */
+export async function prefsOf(
+  q: Queryable,
+  workspaceId: string,
+  userId: string,
+  rev = Number.POSITIVE_INFINITY,
+): Promise<ChatPrefsResponse> {
+  const unknown = new Set<ChatHookKind>(kindsUnknownTo(rev))
   const hooks = await q.query<{
     id: string
     name: string
@@ -59,6 +81,7 @@ export async function prefsOf(q: Queryable, workspaceId: string, userId: string)
       disabled: h.disabled_at !== null,
     })),
     prefs: prefs.rows
+      .map((p) => ({ hook_id: p.hook_id, kinds: p.kinds.filter((k) => !unknown.has(k)) }))
       .filter((p) => p.kinds.length > 0)
       .map((p) => ({
         hookId: p.hook_id,
@@ -76,7 +99,7 @@ export function registerPrefRoutes(env: ChatRouteEnv): void {
     requireBox(env)
     const { workspace } = parse(ChatPrefsQuery, req.query ?? {})
     await requireMember(db, workspace, user)
-    return prefsOf(db, workspace, user.id)
+    return prefsOf(db, workspace, user.id, clientRevOf(req.headers[LOBBY_CLIENT_HEADER]))
   })
 
   chatRoute(env, 'PUT', CHAT_HOOK_ROUTES.prefs, async (req): Promise<ChatPrefsResponse> => {
@@ -85,6 +108,8 @@ export function registerPrefRoutes(env: ChatRouteEnv): void {
     const input = parse(PutChatPrefsInput, req.body)
     const wid = input.workspaceId
     await requireMember(db, wid, user)
+    const rev = clientRevOf(req.headers[LOBBY_CLIENT_HEADER])
+    const unknown = new Set<ChatHookKind>(kindsUnknownTo(rev))
     const at = now()
     try {
       await db.transaction(async (tx) => {
@@ -96,7 +121,26 @@ export function registerPrefRoutes(env: ChatRouteEnv): void {
         )
         if (known.rows.length !== input.prefs.length)
           throw badRequest('hookId: no such chat hook in this workspace')
-        const keep = input.prefs.filter((p) => p.kinds.length > 0)
+        // an older web build's choice: what it cannot know stays as stored (wave S, see the header)
+        const kept = new Map<string, ChatHookKind[]>()
+        if (unknown.size > 0) {
+          const stored = await tx.query<{ hook_id: string; kinds: ChatHookKind[] }>(
+            'SELECT hook_id, kinds FROM chat_hook_prefs WHERE user_id = $1 AND workspace_id = $2 FOR UPDATE',
+            [user.id, wid],
+          )
+          for (const r of stored.rows) {
+            const hidden = r.kinds.filter((k) => unknown.has(k))
+            if (hidden.length > 0) kept.set(r.hook_id, hidden)
+          }
+        }
+        const merged = new Map<string, ChatHookKind[]>(kept)
+        for (const p of input.prefs) merged.set(p.hookId, [...p.kinds, ...(kept.get(p.hookId) ?? [])])
+        const keep = [...merged]
+          .map(([hookId, kinds]) => ({
+            hookId,
+            kinds: CHAT_HOOK_KINDS.filter((k) => kinds.includes(k)),
+          }))
+          .filter((p) => p.kinds.length > 0)
         await tx.query(
           `DELETE FROM chat_hook_prefs
             WHERE user_id = $1 AND workspace_id = $2
@@ -119,6 +163,6 @@ export function registerPrefRoutes(env: ChatRouteEnv): void {
       if (code === FOREIGN_KEY_VIOLATION || code === DEADLOCK_DETECTED) throw notFound()
       throw e
     }
-    return prefsOf(db, wid, user.id)
+    return prefsOf(db, wid, user.id, rev)
   })
 }
