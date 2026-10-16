@@ -39,6 +39,7 @@ import type { BlobStore } from './files/blobs.ts'
 import { filesPlugin } from './files/plugin.ts'
 import { registerStorage } from './files/storage-routes.ts'
 import { openBlobStore } from './files/store.ts'
+import { publishNewVersion } from './files/versions.ts'
 import { boardsShowingAsset, createFileAuthorizer } from './files-auth.ts'
 import { createHealth, HEALTH_DEEP_ROUTE, type HealthOptions } from './health.ts'
 import { createHttpSyncNotifier, fanOutAccessChanges, type SyncNotifier } from './notifier.ts'
@@ -595,6 +596,8 @@ async function buildServer(
       perUser: { max: config.uploads.perUserPerMinute, timeWindow: 60_000 },
       guestQuota: config.storage.guestQuota, // SEAM-02: per name-only guest (DRAFTROOM_GUEST_QUOTA_MB, …)
     },
+    // wave S (WS2): a new version of a deliverable, after its COMMIT
+    onNewVersion: (c) => publishNewVersion(events, c),
   })
 
   /** Board event 'assets.version' (M3 §4) on every board that can show the version, after commit. */

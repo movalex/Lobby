@@ -2,7 +2,8 @@
 // version or by (asset, version), never by the asset alone (audited site by site for the foundation; see
 // docs/WAVE-S-CONTRACTS.md §3.5). These tests hold the read paths a chain goes through to that: meta, the original,
 // visibility per version across boards (uploaded to it, or linked), sync's file refs (A1), and the upload, which
-// ignores X-Lobby-Supersedes until WS2 ships it (a fresh asset, exactly as before wave S).
+// honours X-Lobby-Supersedes since WS2 (the new version joins the asset: same id, supersedes; files/versions.test.ts
+// holds its refusals).
 
 import type { AssetVersionMeta } from '@draftroom/dev-assets'
 import { newId, SUPERSEDES_HEADER } from '@draftroom/dev-assets'
@@ -114,7 +115,7 @@ describe('two versions of one asset', () => {
     expect(linked.missing).toEqual([])
   })
 
-  it('until WS2 ships, an upload that names a version to supersede makes a fresh asset, as before wave S', async () => {
+  it('an upload that names a version to supersede joins its asset (WS2), and A1 answers it with that asset id', async () => {
     const w = await world()
     const res = await w.api.app.inject({
       method: 'POST',
@@ -133,11 +134,14 @@ describe('two versions of one asset', () => {
     })
     expect(res.statusCode, res.body).toBe(201)
     const made = res.json() as AssetVersionMeta
-    expect(made.assetId).not.toBe(w.v1.assetId)
+    expect(made.assetId).toBe(w.v1.assetId)
     const row = await w.api.db.one<{ supersedes: string | null }>(
       'SELECT supersedes FROM asset_versions WHERE id = $1',
       [made.versionId],
     )
-    expect(row.supersedes).toBeNull()
+    expect(row.supersedes).toBe(w.v1.versionId)
+    const boardA = { id: w.a, workspace_id: DEV_STUDIO } as Parameters<typeof fileRefsFor>[1]
+    const refs = await fileRefsFor(w.api.db, boardA, [made.versionId])
+    expect(refs.ok.map((r) => [r.versionId, r.assetId])).toEqual([[made.versionId, w.v1.assetId]])
   })
 })

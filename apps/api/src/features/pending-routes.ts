@@ -40,10 +40,9 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   // routes (R4-1 download, R4-2 restore; features/backup); to ship one hidden, add its key back.
   // wave S (the foundation; docs/WAVE-S-CONTRACTS.md §1): every route of the wave, @draftroom/contracts
   // REVIEW_ROUTE_KEYS (WS1: S1-1 items, S1-2 status and history, S1-3 rounds; features/review) and
-  // ASSET_VERSION_ROUTE_KEYS (WS2: S2-1 the version list; files/versions.ts). WS3 and WS4 add no route. WS1 implemented
-  // its eight review routes (S1-1 items, S1-2 status and history, S1-3 rounds; features/review): to ship one hidden, add
-  // its key back.
-  'GET /api/boards/:bid/asset-versions/:ast': { owner: 'WS2', item: 'S2-1' },
+  // ASSET_VERSION_ROUTE_KEYS (WS2: S2-1 the version list; files/versions.ts): none left. WS3 and WS4 add no route. WS1
+  // implemented its eight review routes (S1-1 items, S1-2 status and history, S1-3 rounds; features/review) and WS2 the
+  // version list: to ship one hidden, add its key back.
 }
 
 export const isPendingRoute = (

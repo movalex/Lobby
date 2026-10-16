@@ -1,0 +1,116 @@
+/* WS2 (wave S): the "v3" chip on a file card or image, the version list it opens, and the viewer header's picker. */
+
+.lobby-version-chip {
+  min-width: 32px;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--dr-navy, #1f3a5f);
+  color: var(--dr-on-navy, #fff);
+  font: 600 12px / 24px var(--dr-font);
+  box-shadow: 0 1px 3px rgb(27 35 48 / 30%);
+  cursor: pointer;
+  z-index: 1;
+}
+.lobby-version-chip:focus-visible {
+  outline: 2px solid var(--dr-focus, #1f3a5f);
+  outline-offset: 2px;
+}
+
+.lobby-versions {
+  position: fixed;
+  z-index: 1000;
+  width: min(328px, calc(100vw - 16px));
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--dr-line, #dcd8cc);
+  border-radius: 12px;
+  background: var(--dr-surface, #fff);
+  color: var(--dr-ink, #1b2330);
+  font-family: var(--dr-font);
+  box-shadow: 0 12px 32px rgb(27 35 48 / 22%);
+  box-sizing: border-box;
+}
+.lobby-versions__title {
+  margin: 0 0 8px;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lobby-versions__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.lobby-versions__row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 10px;
+  padding: 8px 0;
+  border-top: 1px solid var(--dr-line, #dcd8cc);
+}
+.lobby-versions__row:first-child {
+  border-top: 0;
+}
+.lobby-versions__n {
+  font-weight: 700;
+  font-size: 13px;
+  padding-top: 1px;
+}
+.lobby-versions__text {
+  min-width: 0;
+}
+.lobby-versions__name {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lobby-versions__shown {
+  font-weight: 400;
+  color: var(--dr-ink-2, #4a5566);
+}
+.lobby-versions__detail {
+  font-size: 12px;
+  color: var(--dr-ink-2, #4a5566);
+}
+.lobby-versions__actions {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.lobby-versions__actions .dr-btn {
+  height: 32px;
+  padding: 0 10px;
+  font-size: 13px;
+}
+.lobby-versions__upload {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.lobby-rv-versions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.lobby-rv-versions__pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.lobby-rv-versions__pick select {
+  min-height: 36px;
+}
+
+@media (max-width: 720px) {
+  .lobby-versions__actions .dr-btn {
+    height: 44px;
+  }
+}

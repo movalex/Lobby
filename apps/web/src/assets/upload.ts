@@ -3,11 +3,19 @@ import { type AssetVersionMeta, isId, sanitizeDisplayName, uploadUrl } from './c
 export class UploadError extends Error {
   readonly code: string
   readonly status: number
-  constructor(code: string, message: string, status: number) {
+  /** the error body's other top-level keys (wave S: VERSION_NOT_LATEST's latestVersionId) */
+  readonly details: Readonly<Record<string, unknown>>
+  constructor(
+    code: string,
+    message: string,
+    status: number,
+    details: Readonly<Record<string, unknown>> = {},
+  ) {
     super(message)
     this.name = 'UploadError'
     this.code = code
     this.status = status
+    this.details = details
   }
 }
 
@@ -16,6 +24,8 @@ export interface UploadOptions {
   file: File
   signal?: AbortSignal
   fetchImpl?: typeof fetch
+  /** more request headers (wave S: X-Lobby-Supersedes, versions/client.ts supersedesHeader) */
+  headers?: Record<string, string>
 }
 
 /**
@@ -29,6 +39,7 @@ export async function uploadFile({
   file,
   signal,
   fetchImpl = fetch,
+  headers,
 }: UploadOptions): Promise<AssetVersionMeta> {
   const url = uploadUrl(boardId)
   let res: Response
@@ -39,6 +50,7 @@ export async function uploadFile({
       signal,
       credentials: 'same-origin',
       headers: {
+        ...headers,
         'Content-Type': file.type || 'application/octet-stream',
         'X-File-Name': encodeURIComponent(sanitizeDisplayName(file.name)),
       },
@@ -68,11 +80,13 @@ async function errorFromResponse(res: Response): Promise<UploadError> {
   // Server messages are user-safe by contract; anything else gets a generic message.
   const body = (await res.json().catch(() => null)) as {
     error?: { code?: unknown; message?: unknown }
+    [key: string]: unknown
   } | null
   const code = typeof body?.error?.code === 'string' ? body.error.code : `HTTP_${res.status}`
   const message =
     typeof body?.error?.message === 'string' && body.error.message.length <= 300
       ? body.error.message
       : (FALLBACK_MESSAGES[res.status] ?? 'Upload failed.')
-  return new UploadError(code, message, res.status)
+  const { error: _error, ...details } = body && typeof body === 'object' ? body : {}
+  return new UploadError(code, message, res.status, details)
 }

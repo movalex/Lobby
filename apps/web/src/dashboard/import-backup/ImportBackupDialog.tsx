@@ -134,7 +134,8 @@ export function ImportBackupDialog({
       description={
         <>
           Into <strong>{workspaceName}</strong>, as a new private board of yours. The backup’s board and its
-          files come back; comments and history are not part of a backup.
+          files come back (the version of each file the board shows); comments and history are not part of a
+          backup, nor are older versions of a file or review status.
         </>
       }
       onClose={onClose}

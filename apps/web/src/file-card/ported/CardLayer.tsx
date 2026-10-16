@@ -17,6 +17,9 @@
 // Lobby-relative board path): features/board-links/BoardCardFace.tsx draws the target's face (title, frame name,
 // thumbnail) when this viewer can open it, else the neutral face. Link and board cards are found through the scene
 // index by their kind (`canvas.index.byKind`), so a board with none of them asks nothing of each element for them.
+//
+// Wave S (WS2): with the versions switch on, the "v3" chip of a card or image whose deliverable has more than one
+// version on this board, and the version list it opens (features/review-viewer/versions/VersionChip.tsx).
 import { BOARD_CARD_KIND } from '@draftroom/contracts'
 import { type CSSProperties, type PointerEvent, useEffect, useRef, useState } from 'react'
 import { derivativeUrl, originalUrl } from '../../assets/contract.ts'
@@ -29,6 +32,7 @@ import {
 } from '../../canvas/api/index.ts'
 import { BoardCardFace } from '../../features/board-links/BoardCardFace.tsx'
 import { boardCardOf } from '../../features/board-links/model.ts'
+import { VersionChips } from '../../features/review-viewer/versions/VersionChip.tsx'
 import { useUserKind } from '../../invite/guest.tsx'
 import { extensionLabel, formatBytes, formatDuration, pluralize } from '../../lib/format.ts'
 import { useValue } from '../../lib/signals.ts'
@@ -316,6 +320,7 @@ export function MediaSceneLayer({ ctx }: { ctx: CanvasFeatureContext }) {
           <PendingTile key={e.id} ctx={ctx} id={e.id} facts={e.facts} state={e.state} style={style} />
         )
       })}
+      <VersionChips ctx={ctx} />
     </>
   )
 }
