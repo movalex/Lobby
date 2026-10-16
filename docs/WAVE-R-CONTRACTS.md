@@ -66,7 +66,8 @@ A name-only guest is refused all six (`IMPORT_GUESTS_MESSAGE`). Path builders: `
   else interrupted, else paused, else the worst ending.
 - Progress (`ImportProgress`: phase, items read/total, files done/failed/total/bytes) is written with a heartbeat at
   most every 2 s. Reports (`ImportBoardReport`: counts by result and type, notes, ≤ 10,000 rows) are capped at
-  256 KiB (in code and by a CHECK). Error codes are upper-case words only (`IMPORT_ERROR_CODE_PATTERN`, a CHECK):
+  256 KiB of Postgres's jsonb text (the CHECK's `octet_length(report::text)`, with a space after each `:` and `,`; the
+  code measures the same, `importReportBytes`, never the compact JSON). Error codes are upper-case words only (`IMPORT_ERROR_CODE_PATTERN`, a CHECK):
   `IMPORT_CODES` (`IMPORT_BUSY`, `IMPORT_DAILY_LIMIT`, `IMPORT_TOO_LARGE`, `QUOTA_EXCEEDED`, `IMPORT_WRONG_STATE`,
   `CREATOR_REQUIRED`, `IMPORT_SEED_FAILED`, `IMPORT_INTERRUPTED`, `IMPORT_CANCELLED`, `IMPORT_EXPIRED`,
   `IMPORT_SECRET_REQUIRED`, `INTERNAL`) and each source's own (`MIRO_CODES`, `BACKUP_CODES`).
@@ -229,12 +230,17 @@ lead applies it through the Render API before the deploy that first reads it.
   the fallback `text`** (a `<!channel>` name stays text), unfurling off, a section ≤ 3,000 characters. Teams: an
   Adaptive Card 1.4, markdown characters backslash-escaped (how Teams renders `\-` is UNVERIFIED: the live check),
   only `Action.OpenUrl`, < 25 KB.
-- The outbox (`chat_deliveries`) is written in the notification's own transaction, unique per (hook, notification);
+- The outbox (`chat_deliveries`) is written in the notification's own transaction, unique per (hook, notification),
+  and for the kinds one event tells several people of (`new_comment`, `access_request`, `outsider_joined`) unique per
+  (hook, `event_key`): one channel message per event, not one per opted-in owner or admin (integration fix);
   the loop claims ≤ 20 due rows `FOR UPDATE SKIP LOCKED` every 2 s, re-checks the recipient's access, the thread and
   the hook at send time (else `dropped`), and retries per `CHAT_DELIVERY` (429 `Retry-After` ≤ 10 min; 5xx, network
   and timeouts back off 30 s, 2 min, 10 min, 30 min, 2 h; 400 `failed`; 403/404/410 disable the hook with a reason).
   Caps: 1 a second per hook, 30 an hour per recipient, 600 an hour per workspace; over a cap, `coalesced` into one
-  "and N more" message. Rows hold codes only, never the receiver's words; purged after 14 days.
+  "and N more" message. A roll-up checks each held row as a message is checked (still opted in, `visible` with the
+  board's status; the rest `dropped`), counts as one message of the hour (for each person it held and for the
+  workspace), and waits while the workspace is past its cap. Rows hold codes only, never the receiver's words; purged
+  after 14 days.
 
 ## 5. Board backup and restore (WS4; contracts `board-backup.ts`)
 
@@ -250,9 +256,20 @@ lead applies it through the Render API before the deploy that first reads it.
   `BoardBackupManifest`), `board.json` (the v2 archive, unchanged) and `files/<sha256>` (each original once, STORED).
   Any other name refuses the file (`isBackupEntryName`). Limits (`BACKUP_LIMITS`): 2 GiB and 5,000 files, `board.json`
   ≤ 64 MiB, the central directory ≤ 16 MiB, a restore body ≤ 2 GiB + 64 MiB. Codes: `BACKUP_TOO_LARGE`,
-  `BACKUP_INVALID`, `BACKUP_FROM_NEWER_LOBBY`, `EXPORT_DISABLED`. A restore spools to the blob store and reads by
-  range; every file becomes a new asset and version of the importing board (sha256-checked, then the worker's checks);
-  elements go through `importLobbyArchive` and sync's seed validation.
+  `BACKUP_INVALID`, `BACKUP_FROM_NEWER_LOBBY`, `EXPORT_DISABLED`. A deflated entry whose compressed size is past
+  what its cap could deflate to is refused from the directory, and entries are read in chunks (never one buffer of
+  their compressed bytes). A restore spools to the blob store (`imports/restore/<rsp_…>/backup.lobby`) and checks it
+  by range reads BEFORE its job is queued, so a slow upload holds none of the runner's slots (the job's `source_ref` is
+  the spool's name); its title is cleaned (`cleanBoardTitle`). Every file becomes a new asset and version of the
+  importing board (sha256-checked, then the worker's checks); elements go through `importLobbyArchive` and sync's seed
+  validation. A ticket's check and a download each take one of `BACKUP_DOWNLOADS_PER_PROCESS` (4) plan slots before
+  the plan is built (503 `TOO_MANY_BACKUPS` past them).
+- Internal only (DOMAIN-ACCESS §23, integration fix): a file the caller can view only on boards of an internal-only
+  project is `omitted` from their backup unless they are a workspace owner or admin who is a creator; the manifest's
+  `internalOnly` marks a backup of an internal-only scope's board (or one holding such files), and its restore outside
+  every internal-only scope needs an owner or admin creator of the target workspace (409 `INTERNAL_ONLY`,
+  `BACKUP_INTERNAL_ONLY_MESSAGE`). The flag is in a file anyone can edit: the download's omission is the fence, the
+  restore's refusal the courtesy.
 
 ## 6. Design-file previews (WS3; contracts `design-previews.ts`)
 
