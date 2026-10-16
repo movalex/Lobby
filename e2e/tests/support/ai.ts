@@ -158,6 +158,32 @@ export function waveLAnswer(schema: string | undefined, items: readonly FakeItem
   }
 }
 
+/**
+ * Wave T (WS2): the model's breakdown of the script between the prompt's <<<SCRIPT / SCRIPT>>> lines
+ * (lobby_storyboard): one panel per non-empty line, at most 12; the first a wide shot of 3 seconds with a line of
+ * dialogue, the rest close-ups with no duration.
+ */
+export function storyboardAnswer(user: string): unknown {
+  const open = '<<<SCRIPT\n'
+  const start = user.indexOf(open)
+  const end = user.lastIndexOf('\nSCRIPT>>>')
+  const script = start < 0 || end < 0 ? '' : user.slice(start + open.length, end)
+  const lines = script
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .slice(0, 12)
+  return {
+    panels: lines.map((l, k) => ({
+      camera: k === 0 ? 'WIDE' : 'CU',
+      action: l,
+      dialogue: k === 0 ? 'VO: It starts here.' : '',
+      sfx: '',
+      seconds: k === 0 ? 3 : null,
+    })),
+  }
+}
+
 export function defaultAnswer(req: SeenRequest): unknown {
   const items = itemsOf(req)
   const user = req.body.messages?.find((m) => m.role === 'user')?.content ?? ''
@@ -194,6 +220,8 @@ export function defaultAnswer(req: SeenRequest): unknown {
       ]
       return { ideas: Array.from({ length: n }, (_, i) => pool[i % pool.length]) }
     }
+    case 'lobby_storyboard':
+      return storyboardAnswer(user)
     default: {
       const waveL = waveLAnswer(req.body.response_format?.json_schema?.name, items)
       return waveL === undefined ? {} : waveL

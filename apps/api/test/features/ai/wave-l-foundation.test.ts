@@ -30,8 +30,8 @@ describe('wave L actions are live', () => {
   })
   afterEach(() => w.close())
 
-  it('LIVE_AI_ACTIONS is every contract action but the pending wave T one; each wave L body runs: 200, one ledger row under its own name', async () => {
-    expect([...LIVE_AI_ACTIONS].sort()).toEqual(AI_ACTIONS.filter((a) => a !== 'storyboard').sort())
+  it('LIVE_AI_ACTIONS is every contract action (the wave T storyboard too, since WS2); each wave L body runs: 200, one ledger row under its own name', async () => {
+    expect([...LIVE_AI_ACTIONS].sort()).toEqual([...AI_ACTIONS].sort())
     const now = w.api.clock.now().getTime()
     w.sync.setElements(w.board, [
       ...note('a', 'Ship the beta', { x: 0, createdAt: now }),
