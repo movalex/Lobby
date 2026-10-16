@@ -172,6 +172,7 @@ export function filesOfElements(
 /**
  * A copy of the elements for a portable archive (v2): without `lobbyServer.privateNote.author`, the
  * `plusOne:*` votes, the `react:*` reactions (wave N) and `lastEditedBy` (as today's export strips authors).
+ * Every wave T planning key is kept, `card:who` included (the board's own backup; an import drops it: archive-v2.ts).
  * Tombstones are dropped.
  */
 export function exportableElements(elements: readonly unknown[]): Element[] {
