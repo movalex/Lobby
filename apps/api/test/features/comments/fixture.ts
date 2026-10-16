@@ -3,6 +3,7 @@
 
 import type { CommentThread, ListNotificationsResponse } from '@draftroom/contracts'
 import { ListNotificationsResponse as NotificationsSchema, ThreadResponse } from '@draftroom/contracts'
+import { newId } from '@draftroom/dev-assets'
 import { type DeliveredEvent, EventHub } from '../../../src/events/hub.ts'
 import { type Client, createBoard, createTestApi, DEV_STUDIO, type TestApi } from '../../helpers.ts'
 
@@ -94,3 +95,63 @@ export async function notificationsOf(c: Client): Promise<ListNotificationsRespo
 export async function countRows(api: TestApi, table: 'comment_threads' | 'comments' | 'notifications') {
   return (await api.db.one<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`)).n
 }
+
+const MIME = {
+  image: 'image/png',
+  pdf: 'application/pdf',
+  video: 'video/mp4',
+  other: 'application/zip',
+} as const
+
+/**
+ * Wave S (WS3): a version row of `kind` uploaded to `boardId` (or a new version of `assetId`), with the probe facts
+ * the anchor checks read (pageCount, durationMs). No blob: the checks never read one.
+ */
+export async function addVersion(
+  api: TestApi,
+  by: Client,
+  boardId: string,
+  kind: keyof typeof MIME,
+  probe: { pageCount?: number | null; durationMs?: number | null } = {},
+  opts: { assetId?: string; workspaceId?: string } = {},
+): Promise<{ assetId: string; versionId: string }> {
+  const assetId = opts.assetId ?? newId('ast')
+  const versionId = newId('ver')
+  await api.db.query(
+    `INSERT INTO asset_versions (id, asset_id, workspace_id, board_id, name, declared_mime_type, mime_type, kind,
+                                 size_bytes, sha256, uploaded_by, status, probe)
+     VALUES ($1, $2, $3, $4, $5, $6, $6, $7, 10, $8, $9, 'ready', $10::jsonb)`,
+    [
+      versionId,
+      assetId,
+      opts.workspaceId ?? DEV_STUDIO,
+      boardId,
+      `file.${kind}`,
+      MIME[kind],
+      kind,
+      '0'.repeat(64),
+      by.userId,
+      JSON.stringify({
+        width: null,
+        height: null,
+        pageCount: probe.pageCount ?? null,
+        durationMs: probe.durationMs ?? null,
+        videoCodec: null,
+        audioCodec: null,
+      }),
+    ],
+  )
+  return { assetId, versionId }
+}
+
+/** An `asset` anchor on the card `shape:card1` for a version (with an optional page or time). */
+export const onFile = (
+  v: { assetId: string; versionId: string },
+  at: { page?: number; timeMs?: number } = {},
+) => ({
+  kind: 'asset' as const,
+  shapeId: 'shape:card1',
+  assetId: v.assetId,
+  versionId: v.versionId,
+  ...at,
+})

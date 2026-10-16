@@ -1,0 +1,445 @@
+/* WS3 (wave S, media comments): the review viewer's video, image and PDF bodies and its threads list. Inside the
+   shell's .dr-rv (review-viewer.css); tokens from styles.css. Targets are at least 32 px (44 px on touch). */
+
+.dr-rvm-video,
+.dr-rvm-image,
+.dr-rvm-pdf {
+  align-self: stretch;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+}
+.dr-rvm-pdf {
+  flex-direction: row;
+}
+.dr-rvm-pdf__main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.dr-rvm-video__stage,
+.dr-rvm-stage {
+  flex: 1 1 auto;
+  position: relative;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  background: var(--dr-inset, #faf9f5);
+  overflow: auto;
+}
+.dr-rvm-stage[data-zoomed] {
+  justify-content: flex-start;
+  align-items: flex-start;
+  cursor: grab;
+}
+.dr-rvm-video__stage:focus-visible,
+.dr-rvm-stage:focus-visible {
+  outline: 2px solid var(--dr-focus, #2f6fdd);
+  outline-offset: -2px;
+}
+
+.dr-rvm-frame {
+  position: relative;
+  max-width: 100%;
+  max-height: 100%;
+  display: flex;
+  cursor: crosshair;
+}
+.dr-rvm-video__el {
+  display: block;
+  max-width: 100%;
+  max-height: calc(100vh - 260px);
+  background: #000;
+}
+
+.dr-rvm-picture {
+  position: relative;
+  flex: none;
+  margin: auto;
+  cursor: crosshair;
+  box-shadow: 0 1px 4px rgb(27 35 48 / 18%);
+  background: var(--dr-surface, #fff);
+}
+.dr-rvm-picture img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  user-select: none;
+}
+
+/* a thread's pin on the picture: its bottom-left corner on the spot */
+.dr-rvm-pin {
+  position: absolute;
+  transform: translate(0, -100%);
+  min-width: 28px;
+  height: 28px;
+  padding: 0 4px;
+  border: 2px solid #fff;
+  border-radius: 14px 14px 14px 2px;
+  background: var(--pin, var(--dr-navy, #1f3a5f));
+  color: #fff;
+  font: 600 11px / 24px var(--dr-font, sans-serif);
+  box-shadow: 0 1px 4px rgb(27 35 48 / 35%);
+  cursor: pointer;
+}
+.dr-rvm-pin[data-selected] {
+  outline: 3px solid var(--dr-amber, #f0a53a);
+  z-index: 1;
+}
+.dr-rvm-pin[data-resolved] {
+  opacity: 0.6;
+}
+.dr-rvm-pin--draft {
+  background: var(--dr-amber, #f0a53a);
+  pointer-events: none;
+}
+
+.dr-rvm-note {
+  margin: 8px 16px;
+  color: var(--dr-ink-2, #4a5566);
+}
+
+.dr-rvm-bar,
+.dr-rvm-transport {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--dr-line, #dcd8cc);
+}
+.dr-rvm-transport {
+  border-top: 0;
+  border-bottom: 0;
+  flex-wrap: wrap;
+}
+.dr-rvm-spacer {
+  flex: 1 1 auto;
+}
+.dr-rvm-time,
+.dr-rvm-zoom {
+  min-width: 64px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--dr-ink, #1b2330);
+}
+.dr-rvm-hint {
+  color: var(--dr-ink-2, #4a5566);
+  font-size: 13px;
+}
+
+/* the scrubber: a track with the playhead and the comment markers */
+.dr-rvm-scrubber {
+  flex: none;
+  position: relative;
+  padding: 14px 16px 6px;
+}
+.dr-rvm-track {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--dr-chip, #eeece6);
+  cursor: pointer;
+  touch-action: none;
+}
+.dr-rvm-track__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 4px;
+  background: var(--dr-accent-line, #9fb4d1);
+  pointer-events: none;
+}
+.dr-rvm-track__head {
+  position: absolute;
+  top: -5px;
+  width: 4px;
+  height: 18px;
+  margin-left: -2px;
+  border-radius: 2px;
+  background: var(--dr-navy, #1f3a5f);
+  pointer-events: none;
+}
+.dr-rvm-marker {
+  position: absolute;
+  bottom: 10px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  margin-left: -7px;
+  border: 2px solid var(--dr-surface, #fff);
+  border-radius: 7px 7px 7px 1px;
+  background: var(--dr-amber, #f0a53a);
+  color: var(--dr-on-amber, #1b2330);
+  font: 700 9px / 10px var(--dr-font, sans-serif);
+  cursor: pointer;
+}
+.dr-rvm-marker::after {
+  /* a bigger hit area than the dot */
+  content: "";
+  position: absolute;
+  inset: -9px;
+}
+.dr-rvm-marker[data-selected] {
+  background: var(--dr-navy, #1f3a5f);
+  color: var(--dr-on-navy, #fff);
+}
+.dr-rvm-cluster {
+  position: absolute;
+  bottom: 36px;
+  z-index: 2;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  min-width: 180px;
+  border: 1px solid var(--dr-line, #dcd8cc);
+  border-radius: 8px;
+  background: var(--dr-surface, #fff);
+  box-shadow: 0 6px 20px rgb(27 35 48 / 18%);
+  transform: translateX(-50%);
+}
+.dr-rvm-cluster__item {
+  width: 100%;
+  min-height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.dr-rvm-cluster__item:hover {
+  background: var(--dr-hover, #f1efe8);
+}
+
+/* the PDF's page strip */
+.dr-rvm-rail {
+  flex: 0 0 120px;
+  overflow: auto;
+  border-right: 1px solid var(--dr-line, #dcd8cc);
+}
+.dr-rvm-rail ol {
+  margin: 0;
+  padding: 8px;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+.dr-rvm-rail__page {
+  position: relative;
+  width: 100%;
+  padding: 4px;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+.dr-rvm-rail__page[aria-current="page"] {
+  border-color: var(--dr-navy, #1f3a5f);
+}
+.dr-rvm-rail__page img {
+  display: block;
+  width: 100%;
+}
+.dr-rvm-rail__num {
+  display: block;
+  font-size: 12px;
+  color: var(--dr-ink-2, #4a5566);
+}
+.dr-rvm-rail__marker {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 10px 10px 10px 2px;
+  background: var(--dr-amber, #f0a53a);
+  color: var(--dr-on-amber, #1b2330);
+  font: 700 11px / 20px var(--dr-font, sans-serif);
+}
+
+/* the threads list */
+.dr-rvm-threads {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+.dr-rvm-threads__head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--dr-line, #dcd8cc);
+  background: var(--dr-surface, #fff);
+}
+.dr-rvm-threads__head h3 {
+  flex: 1 1 auto;
+  margin: 0;
+  font-size: 14px;
+}
+.dr-rvm-count {
+  margin-left: 4px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--dr-chip, #eeece6);
+  font-size: 12px;
+}
+.dr-rvm-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--dr-ink-2, #4a5566);
+}
+.dr-rvm-export {
+  position: relative;
+}
+.dr-rvm-export__menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 3;
+  display: grid;
+  gap: 2px;
+  min-width: 210px;
+  padding: 6px;
+  border: 1px solid var(--dr-line, #dcd8cc);
+  border-radius: 8px;
+  background: var(--dr-surface, #fff);
+  box-shadow: 0 6px 20px rgb(27 35 48 / 18%);
+}
+.dr-rvm-export__menu .dr-btn {
+  justify-content: flex-start;
+}
+.dr-rvm-compose {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--dr-line, #dcd8cc);
+  background: var(--dr-accent-tint, #f1f4f9);
+}
+.dr-rvm-compose__where {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.dr-rvm-empty {
+  margin: 12px;
+  color: var(--dr-ink-2, #4a5566);
+  font-size: 13px;
+}
+.dr-rvm-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-rvm-row {
+  border-bottom: 1px solid var(--dr-line, #dcd8cc);
+}
+.dr-rvm-row[data-open] {
+  background: var(--dr-accent-tint, #f1f4f9);
+}
+.dr-rvm-row__pick {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.dr-rvm-row__pick:hover {
+  background: var(--dr-hover, #f1efe8);
+}
+.dr-rvm-chip {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--dr-chip, #eeece6);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+.dr-rvm-row__text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.dr-rvm-row__n,
+.dr-rvm-row__tag {
+  flex: none;
+  font-size: 12px;
+  color: var(--dr-ink-2, #4a5566);
+}
+.dr-rvm-row__thread {
+  padding: 0 12px 10px;
+}
+
+@media (max-width: 720px) {
+  .dr-rvm-pdf {
+    flex-direction: column;
+  }
+  .dr-rvm-rail {
+    flex: none;
+    max-height: 92px;
+    border-right: 0;
+    border-bottom: 1px solid var(--dr-line, #dcd8cc);
+  }
+  .dr-rvm-rail ol {
+    grid-auto-flow: column;
+    grid-auto-columns: 64px;
+  }
+  .dr-rvm-row__pick,
+  .dr-rvm-cluster__item {
+    min-height: 44px;
+  }
+  .dr-rvm-video__el {
+    max-height: 40vh;
+  }
+}
+
+/* the canvas thread popover's way into the viewer (CommentsOverlay.tsx ViewerLink) */
+.dr-cthread__viewer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 0;
+}
+.dr-cthread__viewer .dr-cteam {
+  border: 0;
+  cursor: pointer;
+}
+
+/* the PDF viewer's page markers (file-card/ported/PdfViewer.tsx) */
+.dr-pv__marker {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 10px 10px 10px 2px;
+  background: var(--dr-amber, #f0a53a);
+  color: var(--dr-on-amber, #1b2330);
+  font: 700 11px / 20px var(--dr-font, sans-serif);
+  pointer-events: none;
+}
+
+/* the slots' key box (shared.tsx ReactKeys): no box of its own in the layout */
+.dr-rvm-keys {
+  display: contents;
+}

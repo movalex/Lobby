@@ -4,6 +4,9 @@
 // board" for the selected pages. Opened from a PDF card's "View pages" button (./CardLayer.tsx). The
 // same component and copy as today; the editor's parts are the canvas API's (readOnly, focus, the card's
 // facts, placing pages through transact: ./place-pages.ts).
+//
+// Wave S (WS3, the media comments switch: features/review/flags.ts): each page of the strip carries a marker with
+// the open comment threads on that page of this version (features/review-viewer/threads/model.ts threadsPerPage).
 import {
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
@@ -19,6 +22,9 @@ import { createPortal } from 'react-dom'
 import { derivativeUrl, originalUrl } from '../../assets/contract.ts'
 import { useAssetMeta } from '../../assets/meta-store.ts'
 import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
+import { controllerFor } from '../../features/comments/ported/controller.ts'
+import { reviewFlags } from '../../features/review/flags.ts'
+import { threadsOfVersion, threadsPerPage } from '../../features/review-viewer/threads/model.ts'
 import { useUserKind } from '../../invite/guest.tsx'
 import { pluralize } from '../../lib/format.ts'
 import { useValue } from '../../lib/signals.ts'
@@ -97,6 +103,16 @@ function PdfViewer({ ctx, facts, initialPage, onClose }: ViewerProps) {
   const kind = useUserKind()
   const guest = kind === null ? null : kind === 'guest'
   const canDownload = useValue('media-pdf-viewer-download', () => downloadsAllowed(ctx, guest), [ctx, guest])
+  // wave S (WS3): the open threads per page of this version (no markers with the media comments switch off)
+  const pageThreads = useValue('media-pdf-viewer-markers', () => {
+    if (!reviewFlags().mediaComments) return ''
+    const threads = Object.values(controllerFor(ctx).store.threads.get())
+    return JSON.stringify([...threadsPerPage(threadsOfVersion(threads, facts))])
+  }, [ctx, facts])
+  const markers = useMemo(
+    () => new Map<number, number>(pageThreads ? JSON.parse(pageThreads) : []),
+    [pageThreads],
+  )
 
   const [wanted, setWanted] = useState(initialPage)
   const current = validPage(available, wanted)
@@ -266,7 +282,7 @@ function PdfViewer({ ctx, facts, initialPage, onClose }: ViewerProps) {
                   className="dr-pv__thumb"
                   data-testid="pdf-viewer-thumb"
                   data-page={p.page}
-                  aria-label={`Page ${p.page}`}
+                  aria-label={`Page ${p.page}${markers.get(p.page) ? `, ${pluralize(markers.get(p.page) ?? 0, 'comment')}` : ''}`}
                   aria-current={p.page === current ? 'page' : undefined}
                   onClick={() => go(p.page)}
                 >
@@ -277,6 +293,16 @@ function PdfViewer({ ctx, facts, initialPage, onClose }: ViewerProps) {
                     decoding="async"
                     draggable={false}
                   />
+                  {(markers.get(p.page) ?? 0) > 0 && (
+                    <span
+                      className="dr-pv__marker"
+                      data-testid="pdf-viewer-marker"
+                      data-page={p.page}
+                      aria-hidden="true"
+                    >
+                      {markers.get(p.page)}
+                    </span>
+                  )}
                 </button>
                 {readonly ? (
                   <span className="dr-pv__check dr-pv__check--static" aria-hidden="true">

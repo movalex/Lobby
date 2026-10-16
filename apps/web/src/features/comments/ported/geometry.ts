@@ -7,27 +7,39 @@
 // tldraw page 2..n carries its page id; it is drawn shifted by that page's frozen offset from
 // `lb_doc.import.legacyPages` (§5.8), where the converter put that page's content. A page id the board's
 // import does not list (the first page, or a board that was never converted) is not shifted.
+//
+// Wave S (WS3, with the media comments switch on: features/review/flags.ts): an image with a Lobby file is a click
+// target like a card (an `asset` anchor on its version, with the clicked spot, and its pin drawn at that spot); a
+// placed PDF page names its page; a thread on another version than its element shows has no pin on the canvas (the
+// panel and the review viewer list it on its version) and its label says "earlier version".
 
 import { fromShapeRef, toShapeRef } from '@draftroom/canvas-schema/refs'
-import type { CommentAnchor } from '@draftroom/contracts'
+import type { CommentAnchor, CommentSpot } from '@draftroom/contracts'
 import {
   type CanvasElement,
   items as elementsApi,
   type LobbyCanvas,
   SINGLE_PAGE_ID,
 } from '../../../canvas/api/index.ts'
+import { reviewFlags } from '../../review/flags.ts'
 import { isPhoneViewport, markerCovered, revealTarget } from '../layout.ts'
 import {
   type AnchorContext,
   type AnchorPlacement,
   anchorForClick,
   anchorLabel,
+  type ClickPlacement,
   type ClickTarget,
   frameDisplayName,
   type Point,
   placeAnchor,
+  placementForClick,
   type ShapeFrame,
+  shownOnCanvas,
 } from '../model.ts'
+
+/** Wave S: the media comments switch, read when asked (a dev-auth page may set it; features/review/flags.ts). */
+const mediaComments = () => reviewFlags().mediaComments
 
 /** The tldraw shape type a comment label names for an element kind (model.ts `friendlyShapeType`). */
 function shapeTypeOf(el: CanvasElement): string | null {
@@ -157,11 +169,40 @@ export function anchorContext(
   const el = elementOf(canvas, anchor.shapeId)
   if (!el) return {}
   const frame = el.type === 'frame' ? el : el.frameId ? (canvas.get(el.frameId) ?? null) : null
+  const otherVersion =
+    anchor.kind === 'asset' && mediaComments() && !shownOnCanvas(anchor, () => versionOf(el))
   return {
     shapeType: shapeTypeOf(el),
     frameName: frame ? frameDisplayName(nameOf(frame)) : null,
     fileName: fileNameOf(el),
+    ...(otherVersion ? { otherVersion } : {}),
   }
+}
+
+/** The version an element's Lobby file shows now (`customData.lobby.file.versionId`), or null. */
+function versionOf(el: CanvasElement): string | null {
+  const file = elementsApi.lobbyValue(el, 'file') as { versionId?: unknown } | undefined
+  return typeof file?.versionId === 'string' ? file.versionId : null
+}
+
+/**
+ * Wave S (WS3): whether a thread's pin is on the canvas: with the media comments switch on, an `asset` anchor only
+ * on the version its element shows now (model.ts shownOnCanvas); every pin with the switch off (as before wave S).
+ */
+export function pinOnCanvas(canvas: LobbyCanvas, anchor: CommentAnchor): boolean {
+  if (anchor.kind !== 'asset' || !mediaComments()) return true
+  return shownOnCanvas(anchor, (ref) => {
+    const el = elementOf(canvas, ref)
+    return el ? versionOf(el) : null
+  })
+}
+
+/** Whether an `asset` anchor is on another version than its element shows now (the "v1" chip). */
+export function onEarlierVersion(canvas: LobbyCanvas, anchor: CommentAnchor): boolean {
+  if (anchor.kind !== 'asset') return false
+  const el = elementOf(canvas, anchor.shapeId)
+  const current = el ? versionOf(el) : null
+  return current !== null && current !== anchor.versionId
 }
 
 /** "Concept B · note", "In Concept B", "On the board"… (model.ts anchorLabel) for the board as it is now. */
@@ -189,10 +230,17 @@ function holdsWords(el: CanvasElement): boolean {
  * which way it goes from there); its anchor (u, v) is kept as stored. Anywhere else (a picture, a bare shape, the
  * board) the anchor itself. Null for an orphan.
  */
-export function pinPoint(canvas: LobbyCanvas, anchor: CommentAnchor): Point | null {
+export function pinPoint(canvas: LobbyCanvas, anchor: CommentAnchor, spot?: CommentSpot): Point | null {
   if (anchor.kind === 'shape') {
     const el = elementOf(canvas, anchor.shapeId)
     if (el && holdsWords(el)) return elementFrame(el).toPage({ x: el.width, y: 0 })
+  }
+  // Wave S (WS3): a spot on an image is drawn where it points (a video frame's or a PDF page's spot is in the
+  // review viewer; their pins stay on the card's corner)
+  if (anchor.kind === 'asset' && spot && anchor.page === undefined && anchor.timeMs === undefined) {
+    const el = elementOf(canvas, anchor.shapeId)
+    if (el && elementsApi.itemKindOf(el) === 'image')
+      return elementFrame(el).toPage({ x: spot.u * el.width, y: spot.v * el.height })
   }
   return anchorPoint(canvas, anchor)
 }
@@ -234,7 +282,16 @@ function targetOf(el: CanvasElement): ClickTarget {
   return {
     shapeId: toShapeRef(el.id),
     type,
-    props: type === 'dr-file-card' ? { assetId: file?.assetId, versionId: file?.versionId } : {},
+    props:
+      type === 'dr-file-card'
+        ? {
+            assetId: file?.assetId,
+            versionId: file?.versionId,
+            pdfPage: elementsApi.lobbyValue(el, 'pdfPage'),
+          }
+        : type === 'image' && file
+          ? { assetId: file.assetId, versionId: file.versionId }
+          : {},
     frame: elementFrame(el),
   }
 }
@@ -258,7 +315,15 @@ function withoutPage(anchor: CommentAnchor): CommentAnchor {
 }
 
 export function anchorAt(canvas: LobbyCanvas, point: Point): CommentAnchor {
-  return withoutPage(anchorForClick(point, commentTargetAt(canvas, point), SINGLE_PAGE_ID))
+  return placementAt(canvas, point).anchor
+}
+
+/** Wave S (WS3): a comment-tool click's anchor and, on an image with the media comments switch on, its spot. */
+export function placementAt(canvas: LobbyCanvas, point: Point): ClickPlacement {
+  const p = placementForClick(point, commentTargetAt(canvas, point), SINGLE_PAGE_ID, {
+    mediaComments: mediaComments(),
+  })
+  return { ...p, anchor: withoutPage(p.anchor) }
 }
 
 /**
@@ -273,7 +338,7 @@ export function anchorForKeyboard(canvas: LobbyCanvas): CommentAnchor {
     const el = elementsApi.containerOf(raw, (x) => canvas.get(x))
     const target = targetOf(el)
     const corner = target.frame.toPage({ x: el.width, y: 0 })
-    return withoutPage(anchorForClick(corner, target, SINGLE_PAGE_ID))
+    return withoutPage(anchorForClick(corner, target, SINGLE_PAGE_ID, { mediaComments: mediaComments() }))
   }
   const v = canvas.viewport.get()
   return withoutPage(anchorForClick({ x: v.x + v.width / 2, y: v.y + v.height / 2 }, null, SINGLE_PAGE_ID))

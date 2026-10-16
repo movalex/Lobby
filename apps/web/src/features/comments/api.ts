@@ -3,6 +3,7 @@
 
 import {
   type CommentAnchor,
+  type CommentSpot,
   type CommentThread,
   type CommentThreadVisibility,
   ListNotificationsResponse,
@@ -21,6 +22,8 @@ export interface CommentsApi {
     anchor: CommentAnchor,
     body: string,
     visibility?: CommentThreadVisibility,
+    /** wave S (WS3): a spot on the file's picture, with an `asset` anchor only (the api refuses it otherwise) */
+    spot?: CommentSpot,
   ): Promise<CommentThread>
   /** F10: a team member makes a thread team-only or visible to everyone. */
   setVisibility(threadId: string, visibility: CommentThreadVisibility): Promise<CommentThread>
@@ -57,10 +60,15 @@ export function createCommentsApi(client: ApiClient): CommentsApi {
           }),
         signal,
       ),
-    createThread: async (boardId, anchor, body, visibility) =>
+    createThread: async (boardId, anchor, body, visibility, spot) =>
       (
         await request('POST', `/api/boards/${enc(boardId)}/threads`, {
-          body: visibility === 'team' ? { anchor, body, visibility } : { anchor, body },
+          body: {
+            anchor,
+            body,
+            ...(visibility === 'team' ? { visibility } : {}),
+            ...(spot ? { spot } : {}),
+          },
           schema: ThreadResponse,
         })
       ).thread,

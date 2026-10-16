@@ -7,6 +7,7 @@
 import {
   type CommentAnchor,
   type CommentPrivacy,
+  type CommentSpot,
   CommentsDeletedEvent,
   CommentsHiddenEvent,
   CommentsThreadEvent,
@@ -96,8 +97,8 @@ export class CommentsStore {
   readonly status: Cell<'loading' | 'ready' | 'error'>
   /** The thread whose popover is open. */
   readonly openThreadId: Cell<string | null>
-  /** A new comment being written at this anchor (the composer is open). */
-  readonly pending: Cell<{ anchor: CommentAnchor } | null>
+  /** A new comment being written at this anchor (the composer is open); wave S: with a spot on an image. */
+  readonly pending: Cell<{ anchor: CommentAnchor; spot?: CommentSpot } | null>
   readonly hoverThreadId: Cell<string | null>
   readonly pinsHidden: Cell<boolean>
   readonly showResolved: Cell<boolean>
@@ -151,7 +152,7 @@ export class CommentsStore {
     this.reads = atom<Readonly<Record<string, string>>>('dr-comments.reads', {})
     this.status = atom<'loading' | 'ready' | 'error'>('dr-comments.status', 'loading')
     this.openThreadId = atom<string | null>('dr-comments.open', null)
-    this.pending = atom<{ anchor: CommentAnchor } | null>('dr-comments.pending', null)
+    this.pending = atom<{ anchor: CommentAnchor; spot?: CommentSpot } | null>('dr-comments.pending', null)
     this.hoverThreadId = atom<string | null>('dr-comments.hover', null)
     this.filter = atom<ThreadFilter>('dr-comments.filter', 'open')
     this.notifications = atom<ListNotificationsResponse>('dr-comments.notifications', {
@@ -344,9 +345,9 @@ export class CommentsStore {
     if (id) void this.markRead(id)
   }
 
-  startNewThread(anchor: CommentAnchor) {
+  startNewThread(anchor: CommentAnchor, spot?: CommentSpot) {
     this.openThreadId.set(null)
-    this.pending.set({ anchor })
+    this.pending.set(spot ? { anchor, spot } : { anchor })
     // Placing a comment while markers are hidden shows them again (you'd lose track of it otherwise).
     if (this.pinsHidden.get()) this.setPinsHidden(false)
   }
@@ -405,18 +406,29 @@ export class CommentsStore {
 
   // ---- mutations ---------------------------------------------------------------------------------
 
-  async createThread(anchor: CommentAnchor, draft: Draft): Promise<CommentThread | null> {
+  /**
+   * Posts a new thread. Wave S (WS3), `opts`: a `spot` on the file's picture; the review viewer's composer keeps its
+   * own `draftKey` and leaves the board's popover closed (`open: false`: the thread shows in the viewer's list).
+   */
+  async createThread(
+    anchor: CommentAnchor,
+    draft: Draft,
+    opts: { spot?: CommentSpot; draftKey?: string; open?: boolean } = {},
+  ): Promise<CommentThread | null> {
     const body = bodyFromDraft(draft).trim()
     if (!body) return null
     try {
       const visibility: CommentThreadVisibility = this.newThreadTeamOnly() ? 'team' : 'everyone'
-      const thread = await this.api.createThread(this.boardId, anchor, body, visibility)
-      this.clearDraft(NEW_THREAD_DRAFT)
+      // the spot only when there is one (the call stays what it was for every other comment)
+      const spot: [CommentSpot] | [] = opts.spot ? [opts.spot] : []
+      const thread = await this.api.createThread(this.boardId, anchor, body, visibility, ...spot)
+      this.clearDraft(opts.draftKey ?? NEW_THREAD_DRAFT)
       // F10: the choice went with this comment (like its draft); the next one starts from the board's
       // default, so one comment shown to the client never leaves "Team only" off for the next remark.
       this.teamOnlyChoice.set(null)
       this.applyThread(thread)
       this.reads.update((r) => ({ ...r, [thread.id]: thread.updatedAt }))
+      if (opts.open === false) return thread
       if (this.pending.get()) this.pending.set(null)
       this.openThreadId.set(thread.id)
       return thread
