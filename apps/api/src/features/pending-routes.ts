@@ -40,7 +40,8 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   // routes (R4-1 download, R4-2 restore; features/backup); to ship one hidden, add its key back.
   // wave S (the foundation; docs/WAVE-S-CONTRACTS.md §1): every route of the wave, @draftroom/contracts
   // REVIEW_ROUTE_KEYS (WS1: S1-1 items, S1-2 status and history, S1-3 rounds; features/review) and
-  // ASSET_VERSION_ROUTE_KEYS (WS2: S2-1 the version list; files/versions.ts). WS3 and WS4 add no route.
+  // ASSET_VERSION_ROUTE_KEYS (WS2: S2-1 the version list; files/versions.ts: implemented, to ship it hidden add its key
+  // back). WS3 and WS4 add no route.
   'GET /api/boards/:bid/review': { owner: 'WS1', item: 'S1-1' },
   'POST /api/boards/:bid/review/items': { owner: 'WS1', item: 'S1-1' },
   'PATCH /api/boards/:bid/review/items/:rvi': { owner: 'WS1', item: 'S1-1' },
@@ -49,7 +50,6 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   'GET /api/boards/:bid/review/items/:rvi/events': { owner: 'WS1', item: 'S1-2' },
   'POST /api/boards/:bid/review/rounds': { owner: 'WS1', item: 'S1-3' },
   'POST /api/boards/:bid/review/rounds/:rvr/close': { owner: 'WS1', item: 'S1-3' },
-  'GET /api/boards/:bid/asset-versions/:ast': { owner: 'WS2', item: 'S2-1' },
 }
 
 export const isPendingRoute = (

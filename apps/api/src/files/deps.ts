@@ -7,6 +7,7 @@ import type { FastifyRequest } from 'fastify'
 import { DEFAULT_UPLOAD_LIMITS } from '../config.ts'
 import type { BlobStore } from './blobs.ts'
 import { DEFAULT_STORAGE_CONFIG } from './storage-config.ts'
+import type { NewVersionCommitted } from './versions.ts'
 
 export type FileAction = 'view' | 'edit'
 
@@ -71,4 +72,10 @@ export interface FilesDeps {
   now?: () => Date
   /** Quota and rate limit; default DEFAULT_UPLOAD_POLICY (never unlimited). */
   uploads?: UploadPolicy
+  /**
+   * Wave S (WS2): called after the COMMIT of an upload that made a new version of a deliverable (X-Lobby-Supersedes),
+   * to publish its board events (versions.ts publishNewVersion). Absent: nothing is published. Never throws into the
+   * upload: the version is stored whatever it does.
+   */
+  onNewVersion?: (committed: NewVersionCommitted) => void
 }

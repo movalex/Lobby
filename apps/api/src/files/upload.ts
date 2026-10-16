@@ -1,22 +1,27 @@
-import type { Queryable } from '@draftroom/db'
+import { ASSET_VERSION_CODES, type ReviewItem, versionKindsCompatible } from '@draftroom/contracts'
+import { pgErrorCode, type Queryable } from '@draftroom/db'
 import {
   BOARD_ID_RE,
   classifyUpload,
+  isId,
   maxUploadBytes,
   newId,
   PREVIEW_PROFILE,
+  SUPERSEDES_HEADER,
   sanitizeDisplayName,
 } from '@draftroom/dev-assets'
 import type { FastifyReply, FastifyRequest } from 'fastify'
+import { resetForNewVersion } from '../features/review/hooks.ts'
 import { SlidingWindowLimiter } from '../rate-limit.ts'
 import { deleteQuietly, originalKey } from './blobs.ts'
 import { DEFAULT_UPLOAD_POLICY, type FilesDeps, type UploadPolicy } from './deps.ts'
 import { EMPTY_PROBE, toMeta, VERSION_COLUMNS, type VersionRow } from './meta.ts'
 import { initialServedMime, normalizeDeclaredMime, uploadLimitLabel } from './mime.ts'
 import { ReceiveError, receiveToBlob } from './receive.ts'
-import { HttpError, requireAccess, sendJson } from './respond.ts'
+import { HttpError, notFound, requireAccess, sendJson } from './respond.ts'
 import { DEFAULT_STORAGE_CONFIG } from './storage-config.ts'
 import { guestsUsage, isNameOnlyGuest, uploaderUsage, workspaceUsage } from './usage.ts'
+import { chainOnBoard, latestServable, supersedeCheck } from './versions.ts'
 
 export interface UploadRoute {
   Params: { bid: string }
@@ -24,6 +29,7 @@ export interface UploadRoute {
 
 const KIND_LABEL = { image: 'images', pdf: 'PDFs', video: 'videos', other: 'files' } as const
 const MiB = 1024 * 1024
+const UNIQUE_VIOLATION = '23505'
 const GiB = 1024 * MiB
 
 // The body has not been read when these are thrown: close the connection instead of letting Node
@@ -123,6 +129,68 @@ function parseFileName(raw: string | string[] | undefined): string {
 }
 
 /**
+ * Wave S: the version X-Lobby-Supersedes names (null: no header, a fresh asset). One version id, else 400 (a repeated
+ * header too). Read before any body byte, like X-File-Name.
+ */
+function parseSupersedes(raw: string | string[] | undefined): string | null {
+  if (raw === undefined) return null
+  if (typeof raw !== 'string' || !isId('ver', raw))
+    throw reject(400, ASSET_VERSION_CODES.badHeader, `${SUPERSEDES_HEADER} must be one version id.`)
+  return raw
+}
+
+/**
+ * 409 VERSION_NOT_LATEST. `latestVersionId` is the newest version this board serves; when it is the superseded one
+ * itself, the chain moved on on another board (a copy that shares the deliverable): this board cannot continue it.
+ */
+const notLatest = (superseded: string, latestVersionId: string, headers: Record<string, string> = {}) =>
+  new HttpError(
+    409,
+    ASSET_VERSION_CODES.notLatest,
+    latestVersionId === superseded
+      ? 'This file already has a newer version on another board.'
+      : 'A newer version of this file was uploaded meanwhile. Upload on top of the newest version instead.',
+    headers,
+    { latestVersionId },
+  )
+
+type AssetKind = ReturnType<typeof classifyUpload>
+
+interface SupersedeAt {
+  workspaceId: string
+  boardId: string
+  versionId: string
+  kind: AssetKind
+}
+
+/**
+ * The superseded version's checks (asset-versions.ts), before the body (`headers`: close the connection) and again in
+ * the upload's transaction, where the version row is read FOR SHARE (the collector cannot delete it under the new
+ * version). Returns the asset the new version joins.
+ */
+async function checkSupersede(
+  q: Queryable,
+  at: SupersedeAt,
+  opts: { lock: boolean; headers: Record<string, string> },
+): Promise<string> {
+  const check = await supersedeCheck(q, at.workspaceId, at.boardId, at.versionId, { lock: opts.lock })
+  // not a version this board serves (another workspace's, another board's, or none): the same 404 as a missing file
+  if (!check.ok && check.reason === 'missing')
+    throw new HttpError(404, 'NOT_FOUND', 'Not found.', opts.headers)
+  if (!check.ok) throw notLatest(at.versionId, check.latestVersionId, opts.headers)
+  if (!versionKindsCompatible(check.version.kind, at.kind))
+    throw new HttpError(
+      400,
+      ASSET_VERSION_CODES.kindMismatch,
+      check.version.kind === 'image'
+        ? 'Pick an image to make a new version of this image.'
+        : 'Pick a file that is not an image to make a new version of this file (images replace images).',
+      opts.headers,
+    )
+  return check.version.asset_id
+}
+
+/**
  * POST /api/boards/:bid/assets — raw body (never parsed or buffered by Fastify: see plugin.ts), streamed
  * to the blob store under `assets/<ast>/<ver>/original` while hashing; then ONE transaction inserts the
  * version (status 'queued') and its preview job. Any failure deletes the partial blob and writes no rows.
@@ -162,12 +230,17 @@ export async function handleUpload(
       `The file is larger than the ${maxBytes / MiB} MB limit for ${uploadLimitLabel(kind, declaredMimeType, name) ?? KIND_LABEL[kind]}.`,
     )
   if (declaredBytes > maxBytes) throw tooLarge()
+  // Wave S: a new version of a deliverable (the same asset id) instead of a fresh asset, checked before the body.
+  const supersedes = parseSupersedes(request.headers[SUPERSEDES_HEADER])
+  const chain: SupersedeAt | null = supersedes ? { workspaceId, boardId, versionId: supersedes, kind } : null
+  const chainAsset = chain ? await checkSupersede(deps.db, chain, { lock: false, headers: CLOSE }) : null
   // The workspace quota (and a guest's own allowance), from the declared size, before any body byte is read.
   const guest = (await isNameOnlyGuest(deps.db, userId)) ? userId : null
   await checkQuota(deps.db, workspaceId, declaredBytes, guard.policy, guest)
 
-  const assetId = newId('ast')
+  const assetId = chainAsset ?? newId('ast')
   const versionId = newId('ver')
+  let reset: ReviewItem[] = []
   const key = originalKey(assetId, versionId) // fresh ids: nothing else can be stored under this key
   let row: VersionRow
   try {
@@ -184,10 +257,14 @@ export async function handleUpload(
       // the workspace row are not blocked).
       await tx.query('SELECT id FROM workspaces WHERE id = $1 FOR NO KEY UPDATE', [workspaceId])
       await checkQuota(tx, workspaceId, bytes, guard.policy, guest)
+      // the chain may have moved on while the body was read (another upload, a board deleted, a link removed)
+      if (chain && (await checkSupersede(tx, chain, { lock: true, headers: {} })) !== assetId)
+        throw notFound()
       const inserted = await tx.one<VersionRow>(
         `INSERT INTO asset_versions AS v (id, asset_id, workspace_id, board_id, name, declared_mime_type,
-           mime_type, kind, size_bytes, sha256, uploaded_by, status, attempts, probe, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'queued', 0, $12::jsonb, $13, $13)
+           mime_type, kind, size_bytes, sha256, uploaded_by, status, attempts, probe, created_at, updated_at,
+           supersedes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'queued', 0, $12::jsonb, $13, $13, $14)
          RETURNING ${VERSION_COLUMNS}`,
         [
           versionId,
@@ -203,6 +280,7 @@ export async function handleUpload(
           userId,
           JSON.stringify(EMPTY_PROBE),
           now,
+          supersedes,
         ],
       )
       await tx.query(
@@ -210,6 +288,9 @@ export async function handleUpload(
          VALUES ($1, $2, 'queued', 0, $3, $3, $3)`,
         [versionId, PREVIEW_PROFILE, now],
       )
+      // WS1's review step in this transaction: the asset's live items go back to Awaiting review
+      if (supersedes)
+        reset = await resetForNewVersion(tx, { workspaceId, assetId, versionId, actorId: userId })
       return inserted
     })
   } catch (e) {
@@ -222,7 +303,22 @@ export async function handleUpload(
       if (e.reason === 'INCOMPLETE') throw reject(400, 'UPLOAD_INCOMPLETE', 'The upload ended early.')
       throw reject(400, 'UPLOAD_ABORTED', 'The upload was interrupted.') // nobody is listening; for the log
     }
+    // two people superseding the same version at once: the second insert fails the chain's unique index
+    if (chain && pgErrorCode(e) === UNIQUE_VIOLATION) {
+      const latest = latestServable(await chainOnBoard(deps.db, workspaceId, boardId, assetId))
+      throw notLatest(chain.versionId, latest?.id ?? chain.versionId)
+    }
     throw e // storage or database errors: a 500, logged by the error handler
+  }
+  if (supersedes) {
+    try {
+      deps.onNewVersion?.({ boardId, assetId, versionId, items: reset })
+    } catch (err) {
+      request.log.warn(
+        { err: errInfo(err), route: request.routeOptions.url },
+        'new version events not published',
+      )
+    }
   }
   return sendJson(reply, 201, toMeta(row, []))
 }
