@@ -3,6 +3,7 @@ import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useRef, 
 import { api, isApiError } from '../api/client.ts'
 import { useSession } from '../auth/session.tsx'
 import { Wordmark } from '../brand/Wordmark.tsx'
+import { landingPathFor } from '../features/review-page/landing.ts'
 import { formatDateTime } from '../lib/format.ts'
 import { boardPath, invitePath, linkClick, navigate, signInPath, workspacePath } from '../lib/routing.ts'
 import { useResource } from '../lib/useResource.ts'
@@ -89,9 +90,11 @@ export function InvitePage({ token }: { token: string }) {
       // A board invitation can add a workspace (guest) membership: refresh before navigating so the
       // dashboard and board pages see it.
       await refresh()
-      navigate(result.boardId ? boardPath(result.boardId) : workspacePath(result.workspaceId), {
-        replace: true,
-      })
+      // wave S (WS4): a link made with "Open as review page" lands on the board's review page
+      navigate(
+        result.boardId ? landingPathFor(result.boardId, result.landing) : workspacePath(result.workspaceId),
+        { replace: true },
+      )
     } catch (e) {
       if (isApiError(e) && e.kind === 'unauthorized') {
         setAccepting(false)
@@ -131,8 +134,8 @@ export function InvitePage({ token }: { token: string }) {
         seedUserKind(joined.user.id, 'guest')
         rememberGuestTab()
         await refresh()
-        // A guest lands straight on the board.
-        navigate(boardPath(joined.boardId), { replace: true })
+        // A guest lands straight on the board (or its review page, for a link made to open there).
+        navigate(landingPathFor(joined.boardId, joined.landing), { replace: true })
       } catch (e) {
         failed(e, 'You could not join right now. Try again.')
       }

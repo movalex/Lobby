@@ -31,7 +31,10 @@ describe('a review link that lands on the review page', () => {
     const { link } = await create({ role: 'commenter', landing: 'review' })
     expect(link.landing).toBe('review')
     expect(reviewLandingPath(w.board, link.landing)).toBe(`/b/${w.board}?view=review`)
-    expect((await listed()).find((i) => i.id === link.id)).toMatchObject({ kind: 'review', landing: 'review' })
+    expect((await listed()).find((i) => i.id === link.id)).toMatchObject({
+      kind: 'review',
+      landing: 'review',
+    })
     const row = await w.api.db.one<{ landing: string }>('SELECT landing FROM invitations WHERE id = $1', [
       link.id,
     ])
