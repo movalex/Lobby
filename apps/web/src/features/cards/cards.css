@@ -83,6 +83,9 @@
   white-space: nowrap;
   box-shadow: 0 1px 2px rgb(15 23 42 / 0.08);
 }
+.dr-card-chip[data-compact] {
+  padding: 0 calc(4px * var(--s, 1));
+}
 .dr-card-chip svg {
   flex: none;
   width: calc(12px * var(--s, 1));
@@ -135,11 +138,20 @@
   display: inline-flex;
   align-items: center;
 }
-.dr-card-barbtn {
+.dr-cux-selbar__btn.dr-card-barbtn {
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
+  width: auto;
+  padding: 0 8px 0 4px;
+  white-space: nowrap;
+  color: var(--dr-ink);
+  font: 600 12.5px / 1 var(--dr-font);
 }
 .dr-card-barbtn .dr-card-chip {
   --s: 1;
+  height: 22px;
+  box-shadow: none;
 }
 .dr-card-barbtn__more {
   font-weight: 600;
@@ -442,4 +454,19 @@
       transform: translateY(-4px);
     }
   }
+}
+
+/* a fieldset's legend sits on its border by default: here it is a plain label above the buttons */
+.dr-card-field > legend.dr-card-field__label {
+  float: left;
+  width: 100%;
+  margin-bottom: 6px;
+}
+.dr-card-field > legend + * {
+  clear: both;
+}
+/* an empty date reads as a hint, not as "mm/dd/yyyy" in full ink */
+.dr-card-input[type="date"][data-empty],
+.dr-ct-dateinput[data-empty] {
+  color: var(--dr-placeholder);
 }

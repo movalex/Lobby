@@ -67,8 +67,12 @@ function usePlacement(s: CardsState, req: CardPopoverRequest) {
       return { x: req.anchor.x - screen.x, y: req.anchor.y + req.anchor.h - screen.y + 6, screen }
     const b = canvas.bounds(req.id)
     if (!b) return { x: 16, y: 64, screen }
-    const p = canvas.sceneToOverlay({ x: b.x, y: b.y + b.height })
-    return { x: p.x, y: p.y + 8, screen }
+    // beside the card (the selection bar sits under it): its right, else its left, else under it
+    const tl = canvas.sceneToOverlay({ x: b.x, y: b.y })
+    const br = canvas.sceneToOverlay({ x: b.x + b.width, y: b.y + b.height })
+    if (br.x + 12 + POPOVER_W <= screen.width - 8) return { x: br.x + 12, y: tl.y, screen }
+    if (tl.x - 12 - POPOVER_W >= 8) return { x: tl.x - 12 - POPOVER_W, y: tl.y, screen }
+    return { x: tl.x, y: br.y + 56, screen }
   }, [canvas, req])
 }
 
@@ -125,7 +129,29 @@ function Popover({
 
   const result = (r: { ok: true } | { ok: false; problem: string }) => setProblem(r.ok ? null : r.problem)
   const left = Math.max(8, Math.min(at.x, at.screen.width - POPOVER_W - 8))
-  const top = Math.max(8, Math.min(at.y, at.screen.height - 120))
+  const baseTop = Math.max(8, Math.min(at.y, at.screen.height - 120))
+  // the selection bar is drawn above every overlay layer: the popover moves out of its way (under it, else above)
+  const [shift, setShift] = useState(0)
+  useLayoutEffect(() => {
+    const node = ref.current
+    const bar = node?.ownerDocument.querySelector<HTMLElement>('[data-testid="selection-bar"]')
+    let next = 0
+    if (node && bar) {
+      const p = node.getBoundingClientRect()
+      const b = bar.getBoundingClientRect()
+      const h = p.height
+      const pTop = p.top - shift
+      const overlaps =
+        b.width > 0 && p.left < b.right && p.right > b.left && pTop < b.bottom && pTop + h > b.top
+      if (overlaps) {
+        const view = node.ownerDocument.defaultView?.innerHeight ?? 0
+        if (b.bottom + 8 + Math.min(h, 360) <= view) next = b.bottom + 8 - pTop
+        else if (b.top - 8 - h >= 8) next = b.top - 8 - h - pTop
+      }
+    }
+    if (Math.abs(next - shift) > 1) setShift(next)
+  })
+  const top = baseTop + shift
   const due = dueWords(card, today)
 
   return (
@@ -269,6 +295,7 @@ function DateField({
           className="dr-card-input"
           data-card-field={field}
           data-testid={`card-${field}`}
+          data-empty={value ? undefined : ''}
           value={value ?? ''}
           min={min ?? PLANNING_DATE_MIN}
           max={max ?? PLANNING_DATE_MAX}

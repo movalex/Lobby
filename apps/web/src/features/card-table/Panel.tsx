@@ -392,6 +392,7 @@ function DateCell({
       aria-label={label}
       data-testid={testId}
       data-overdue={overdue || undefined}
+      data-empty={value ? undefined : ''}
       value={value ?? ''}
       min={min ?? PLANNING_DATE_MIN}
       max={max ?? PLANNING_DATE_MAX}

@@ -24,9 +24,6 @@
 .dr-kanban-col:not([data-first]) {
   border-left: 2px dashed color-mix(in srgb, var(--dr-line-strong) 70%, transparent);
 }
-.dr-kanban-col:nth-child(even) {
-  background: color-mix(in srgb, var(--dr-inset) 45%, transparent);
-}
 .dr-kanban-head {
   box-sizing: border-box;
   display: flex;
@@ -35,7 +32,8 @@
   gap: 6px;
   padding: 0 14px;
   border-bottom: 2px solid color-mix(in srgb, var(--dr-line-strong) 80%, transparent);
-  background: color-mix(in srgb, var(--dr-surface) 88%, transparent);
+  /* the overlay is above the canvas: the band is light enough to show what lies under it */
+  background: color-mix(in srgb, var(--dr-surface) 72%, transparent);
   color: var(--dr-ink);
   font: 600 16px / 1.2 var(--dr-font);
 }

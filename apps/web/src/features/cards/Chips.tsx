@@ -10,7 +10,7 @@ import type { CanvasFeatureContext, LobbyCanvas } from '../../canvas/api/index.t
 import { computed, type Signal, useValue } from '../../lib/signals.ts'
 import { type CardsState, cardsOf } from './bridge.ts'
 import { AlertIcon, CalendarIcon, StatusIcon } from './icons.tsx'
-import { dueWords, initialsOf, statusWords, todayLocal } from './model.ts'
+import { dateWords, dueWords, initialsOf, statusWords, todayLocal } from './model.ts'
 import { personView } from './people.ts'
 import './cards.css'
 
@@ -23,6 +23,44 @@ const TEXT_PX = 11
 /** The factor chips are drawn at in scene units: 1 from 100 % up, larger below so the words keep their size. */
 export const chipScale = (zoom: number): number =>
   zoom > 0 ? Math.max(1, Math.round((MIN_TEXT_PX / (TEXT_PX * zoom)) * 100) / 100) : 1
+
+/** How much of each chip a card's width holds (in scene units at 100 %, after the chips' scale). */
+export interface ChipFit {
+  /** the status shows its words (else its icon alone; the words stay for screen readers) */
+  readonly statusText: boolean
+  /** the due chip: its words, a short date, or its icon alone */
+  readonly due: 'text' | 'short' | 'icon'
+}
+
+const CHAR_PX = 6.3
+const textChip = (s: string) => 30 + Math.ceil([...s].length * CHAR_PX)
+const ICON_CHIP = 22
+const AVATAR = 26
+
+/**
+ * The fullest chip row that fits a card of this width (scene units) at the chips' scale: the status words first,
+ * then the due date's words, a short date, or the icons alone. Never an ellipsis in the middle of a word.
+ */
+export function chipFit(
+  width: number,
+  scale: number,
+  status: string,
+  due: { text: string; short: string } | null,
+  who: boolean,
+): ChipFit {
+  const room = width / Math.max(scale, 0.01) - 16 - (who ? AVATAR : 0)
+  const dueW = (m: ChipFit['due']) =>
+    !due ? 0 : 4 + (m === 'text' ? textChip(due.text) : m === 'short' ? textChip(due.short) : ICON_CHIP)
+  const tries: ChipFit[] = [
+    { statusText: true, due: 'text' },
+    { statusText: true, due: 'short' },
+    { statusText: false, due: 'text' },
+    { statusText: false, due: 'short' },
+    { statusText: true, due: 'icon' },
+  ]
+  for (const t of tries) if ((t.statusText ? textChip(status) : ICON_CHIP) + dueW(t.due) <= room) return t
+  return { statusText: false, due: 'icon' }
+}
 
 export interface CardBoxView {
   readonly id: string
@@ -101,7 +139,7 @@ function ChipScene({ s }: { s: CardsState }) {
       }
     >
       {boxes.map((b) => (
-        <ChipBox key={b.id} s={s} box={b} today={today} open={open === b.id} />
+        <ChipBox key={b.id} s={s} box={b} today={today} open={open === b.id} scale={chipScale(v.zoom)} />
       ))}
     </div>
   )
@@ -112,11 +150,13 @@ const ChipBox = memo(function ChipBox({
   box,
   today,
   open,
+  scale,
 }: {
   s: CardsState
   box: CardBoxView
   today: string
   open: boolean
+  scale: number
 }) {
   const who = useValue(
     'cards.chip-who',
@@ -124,6 +164,14 @@ const ChipBox = memo(function ChipBox({
     [s, box.card.who],
   )
   const due = dueWords(box.card, today)
+  const short = box.card.due ? (due?.overdue ? '!' : '') + dateWords(box.card.due, today) : ''
+  const fit = chipFit(
+    box.w,
+    scale,
+    statusWords(box.card.status),
+    due ? { text: due.text, short } : null,
+    !!who,
+  )
   const label = [
     `Card: ${statusWords(box.card.status)}`,
     due?.label,
@@ -164,9 +212,12 @@ const ChipBox = memo(function ChipBox({
           className="dr-card-chip dr-card-status"
           data-status={box.card.status}
           data-testid="card-chip-status"
+          data-compact={fit.statusText ? undefined : ''}
         >
           <StatusIcon status={box.card.status} size={12} />
-          <span className="dr-card-chip__text">{statusWords(box.card.status)}</span>
+          <span className={fit.statusText ? 'dr-card-chip__text' : 'dr-sr-only'}>
+            {statusWords(box.card.status)}
+          </span>
         </span>
         {due && (
           <span
@@ -174,9 +225,16 @@ const ChipBox = memo(function ChipBox({
             data-testid="card-chip-due"
             data-overdue={due.overdue || undefined}
             data-soon={due.soon || undefined}
+            data-compact={fit.due === 'icon' ? '' : undefined}
           >
             {due.overdue ? <AlertIcon size={12} /> : <CalendarIcon size={12} />}
-            <span className="dr-card-chip__text">{due.text}</span>
+            {fit.due === 'icon' ? (
+              <span className="dr-sr-only">{due.text}</span>
+            ) : (
+              <span className="dr-card-chip__text">
+                {fit.due === 'text' ? due.text : short.replace(/^!/, '')}
+              </span>
+            )}
           </span>
         )}
         {who && (
