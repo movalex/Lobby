@@ -89,8 +89,8 @@
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px 12px;
+  gap: 6px;
+  padding: 8px 10px 10px;
   border: 1px solid var(--dr-line);
   border-radius: 14px;
   background: var(--dr-surface);
@@ -153,7 +153,7 @@
 }
 .dr-sb-strip__list {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   margin: 0;
   padding: 4px 2px 6px;
   list-style: none;
@@ -164,7 +164,7 @@
 .dr-sb-card {
   position: relative;
   flex: none;
-  width: 156px;
+  width: 132px;
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -214,7 +214,7 @@
 .dr-sb-card__thumb {
   display: grid;
   place-items: center;
-  aspect-ratio: 16 / 10;
+  height: 72px;
   overflow: hidden;
   border-radius: 6px;
   background: color-mix(in srgb, var(--dr-chip) 70%, var(--dr-surface));
@@ -302,7 +302,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 2px;
-  padding-top: 6px;
+  padding-top: 4px;
   border-top: 1px solid var(--dr-line);
 }
 .dr-sb-strip__which {
@@ -361,6 +361,11 @@
   content: "✓";
   margin-left: auto;
   color: var(--dr-accent-ink);
+}
+
+.dr-sb-strip[data-collapsed="true"] .dr-sb-strip__list,
+.dr-sb-strip[data-collapsed="true"] .dr-sb-strip__actions {
+  display: none;
 }
 
 /* ---- the dialogs --------------------------------------------------------------------------------------------- */

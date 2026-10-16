@@ -36,7 +36,7 @@ function placed(ctx: CanvasFeatureContext): { chips: PlacedChip[]; heads: Placed
   const { canvas } = ctx
   if (!shown()) return { chips: [], heads: [] }
   const zoom = canvas.viewport.get().zoom // the camera: chips move with it
-  const scale = clamp(zoom, 0.45, 1.8)
+  const scale = clamp(zoom, 0.7, 1.6)
   const chips: PlacedChip[] = []
   const heads: PlacedHead[] = []
   for (const sb of boardsOf(canvas).values()) {

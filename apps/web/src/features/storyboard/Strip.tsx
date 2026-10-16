@@ -17,12 +17,12 @@ import {
   storyboardTimings,
 } from '@draftroom/canvas-schema/planning'
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { CanvasFeatureContext, LobbyCanvas } from '../../canvas/api/index.ts'
+import { type CanvasFeatureContext, items, type LobbyCanvas } from '../../canvas/api/index.ts'
 import { OBSTACLE_IDS } from '../../lib/overlay-obstacles.ts'
 import { useValue } from '../../lib/signals.ts'
 import { boardObstacles } from '../ai/board-chrome.ts'
 import { inPopoverLayer, usePopoverLayer } from '../ai/board-popover.tsx'
-import { anyOverlap, LAYOUTS, perRowOf, shotLabel } from './model.ts'
+import { anyOverlap, LAYOUTS, PICTURE_KIND, perRowOf, shotLabel } from './model.ts'
 import { arrange, deletePanels, duplicatePanel, insertPanel, movePanel, type Sb, setDuration } from './ops.ts'
 import { putPanelsInReview, reviewOffered } from './review.ts'
 import {
@@ -106,6 +106,7 @@ function Strip({ ctx, sb }: { ctx: CanvasFeatureContext; sb: Sb }) {
   const listRef = useRef<HTMLOListElement>(null)
   const [focusIndex, setFocusIndex] = useState(0)
   const [drag, setDrag] = useState<{ from: number; to: number; x: number } | null>(null)
+  const [collapsed, setCollapsed] = useState(false)
   const fps = sb.settings?.fps ?? 24
   const n = sb.panels.length
   const bottom = useStripBottom(canvas)
@@ -163,6 +164,7 @@ function Strip({ ctx, sb }: { ctx: CanvasFeatureContext; sb: Sb }) {
       data-testid="sb-strip"
       data-storyboard-id={sb.id}
       style={{ bottom }}
+      data-collapsed={collapsed ? 'true' : undefined}
       onPointerDown={(e) => e.stopPropagation()}
       onWheel={(e) => e.stopPropagation()}
       onKeyDown={(e) => e.stopPropagation()}
@@ -222,6 +224,25 @@ function Strip({ ctx, sb }: { ctx: CanvasFeatureContext; sb: Sb }) {
               )}
             </>
           )}
+          <button
+            type="button"
+            className="dr-iconbtn dr-iconbtn--sm"
+            aria-label={collapsed ? 'Show the panels' : 'Hide the panels'}
+            aria-expanded={!collapsed}
+            data-testid="sb-strip-collapse"
+            onClick={() => setCollapsed((v) => !v)}
+          >
+            <svg viewBox="0 0 16 16" width={14} height={14} aria-hidden="true" focusable="false">
+              <path
+                d={collapsed ? 'M4 10l4-4 4 4' : 'M4 6l4 4 4-4'}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
           <button
             type="button"
             className="dr-iconbtn dr-iconbtn--sm"
@@ -599,12 +620,18 @@ function Thumb({ canvas, panelId, n }: { canvas: LobbyCanvas; panelId: string; n
       thumbQueue = thumbQueue.then(async () => {
         if (cancelled) return
         try {
-          const blob = await canvas.export.png({
-            frameId: panelId,
-            maxSide: 320,
-            padding: 0,
-            background: true,
-          })
+          // the picture only (its slot, where a dropped image goes), else the whole panel
+          const slot = canvas.index.byFrame(panelId).find((c) => items.lobbyValue(c, 'kind') === PICTURE_KIND)
+          const blob = await canvas.export.png(
+            slot
+              ? {
+                  bounds: { x: slot.x, y: slot.y, width: slot.width, height: slot.height },
+                  maxSide: 320,
+                  padding: 0,
+                  background: true,
+                }
+              : { frameId: panelId, maxSide: 320, padding: 0, background: true },
+          )
           if (cancelled) return
           made = URL.createObjectURL(blob)
           setUrl((old) => {

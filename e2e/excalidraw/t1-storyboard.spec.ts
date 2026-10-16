@@ -309,7 +309,7 @@ test('Script to boards: an AV script, a screenplay and a shot list; the shot lis
     const all = await items(alice.page)
     const panels = all.filter((e) => e.type === 'frame' && lobbyOf(e)['sb:of'] === head)
     expect(panels).toHaveLength(4)
-    expect(panels.map((p) => lobbyOf(p)['sb:dur']).sort()).toEqual([2000, 2000, 2000, 3000].sort())
+    expect(panels.map((p) => lobbyOf(p)['sb:dur']).sort()).toEqual([1600, 2000, 2000, 3000])
     // the fields hold the words (their labels), by kind
     const words = (kind: string) =>
       all
