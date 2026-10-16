@@ -62,6 +62,12 @@ const ALLOWED_HOSTS = new Set([
   'github.com',
   'json-schema.org',
   'rolldown.rs',
+  // Wave R: text only, never requested (the browser never calls Miro, Slack or Teams; r1-*, r3-* and r-int-* assert no
+  // request leaves Lobby's origins, and the CSP allows none): the Miro dialog's board-link placeholder and the
+  // contracts' board-link parser (dashboard/import-miro, contracts miro-import.ts), and the Slack URL in the chat
+  // hook hint and error (features/notify-settings model.ts, contracts chat-hooks.ts)
+  'miro.com',
+  'hooks.slack.com',
 ])
 /**
  * Wave N (WS6, N6-1): XML namespace names of @cantoo/pdf-lib's XMP and PDF/A metadata (its api/pdfa/xmp.js and
