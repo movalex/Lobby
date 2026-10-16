@@ -9,7 +9,9 @@ class FakePicture implements Picture {
   readonly width = 160
   readonly height = 90
   closed = false
-  constructor(readonly index: number) {
+  readonly index: number
+  constructor(index: number) {
+    this.index = index
     FakePicture.open++
   }
   close() {
