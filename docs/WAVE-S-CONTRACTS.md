@@ -327,6 +327,19 @@ and `landing`; versions sharing an asset id are valid rows to it (§3.5).
 
 ## 10. Checks (the foundation's head)
 
-See the foundation's final report (the lead records the numbers in `docs/PROGRESS.md`). Not run here: the
-`*.pg.test.ts` files (they need `DRAFTROOM_TEST_DATABASE_URL`: the lead runs them on the NAS, including the updated
-`migrations.pg.test.ts` expectations).
+Run on the foundation's head, on the Windows PC (2026-10-16):
+
+| Check | Result |
+|---|---|
+| `pnpm -r typecheck` | 18 of 19 workspace projects, pass |
+| `pnpm lint` (biome) | 0 errors; 4 warnings, all in sync tests this branch does not touch (as on main) |
+| vitest `packages` | 70 files, 2,005 tests pass (1 skipped) |
+| vitest `canvas-schema`, `dev-assets`, `scripts` | 199, 11 and 26 tests pass |
+| vitest `api` (PGlite) | 226 files, 2,191 tests pass (136 skipped: the real-Postgres files) |
+| vitest `sync` | 133 files, 854 tests pass (5 skipped) |
+| vitest `web` | 471 files, 5,628 tests pass (1 skipped) |
+| `pnpm licence:check` | PASS (no new dependency) |
+| e2e (chromium, `E2E_PORT_BASE=7720`, once): `comments-*`, `k2-comments`, `media-*` | 75 passed (the preview fixtures generated first with `pnpm fixtures`) |
+
+Not run here: the `*.pg.test.ts` files (they need `DRAFTROOM_TEST_DATABASE_URL`: the lead runs them on the NAS, including
+the updated `migrations.pg.test.ts` expectations).
