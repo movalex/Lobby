@@ -11,7 +11,14 @@
 //   - an element library item shows it (library_item_files, wave Q): a deleted item's rows count too until the
 //     library's purge removes the item, 30 days after its delete (features/library/purge.ts);
 //   - its board is in the trash (a restore brings the board back with its files);
-//   - it is in flight: uploaded less than ASSET_GC_IN_FLIGHT_DAYS ago, or its preview job is running.
+//   - it is in flight: uploaded less than ASSET_GC_IN_FLIGHT_DAYS ago, or its preview job is running;
+//   - wave S (0037): a comment thread is pinned to it (an `asset` anchor naming it: the thread shows that version's
+//     previews, in the version list and the viewer, whatever version the card shows now; resolved threads too);
+//   - wave S: it is part of a CHAIN (versions sharing one asset id, asset_versions.supersedes) any other version of
+//     which is referenced by any rule above: a deliverable on a board keeps its whole history (v1 to v3 stay while v4
+//     is on the canvas). A chain goes only as a whole: under the version's row lock, a version is kept while any
+//     other version of its asset is not itself marked past the grace period (a version uploaded since the pass
+//     began is unmarked, so it holds its chain).
 // An image or video asset record counts only while a shape uses it (gc-refs.ts explains why).
 //
 // A pass marks every other version `unreferenced_since = now` and clears the mark of every marked
@@ -261,6 +268,16 @@ async function gatherReferences(deps: AssetGcDeps, workspaceId: string): Promise
       )
     ).rows,
   )
+  // wave S: the versions comment threads are pinned to (0037's comment_threads_asset_version_idx)
+  add(
+    (
+      await deps.db.query<{ version_id: string }>(
+        `SELECT DISTINCT anchor ->> 'versionId' AS version_id FROM comment_threads
+          WHERE workspace_id = $1 AND anchor ->> 'kind' = 'asset' AND anchor ->> 'versionId' IS NOT NULL`,
+        [workspaceId],
+      )
+    ).rows,
+  )
   const checkpointsFailed = await scanCheckpoints(deps, workspaceId)
   add(
     (
@@ -335,6 +352,20 @@ const heldByRow = (r: VersionGcRow, inFlightCutoff: number) =>
   r.board_status === 'importing' ||
   r.job_status === 'running'
 
+/**
+ * Wave S: the versions to keep, chains whole. `held(r)` says whether a version is referenced on its own; every
+ * version of an asset one of whose versions is held is kept too (a deliverable keeps its history). Grouped by asset
+ * within the workspace's rows (asset ids never cross a workspace: an upload's chain is checked by the upload).
+ */
+export function keptWithChains<R extends { id: string; asset_id: string }>(
+  rows: readonly R[],
+  held: (r: R) => boolean,
+): Set<string> {
+  const heldAssets = new Set<string>()
+  for (const r of rows) if (held(r)) heldAssets.add(r.asset_id)
+  return new Set(rows.filter((r) => heldAssets.has(r.asset_id)).map((r) => r.id))
+}
+
 /** Retries object deletes of versions an earlier delete-mode pass removed. */
 async function retryPendingDeletes(deps: AssetGcDeps, workspaceId: string) {
   const rows = await deps.db.query<{ blob_key: string }>(
@@ -405,12 +436,19 @@ async function deleteVersion(
            OR EXISTS (SELECT 1 FROM library_item_files WHERE workspace_id = $1 AND version_id = $2)
            OR EXISTS (SELECT 1 FROM asset_gc_snapshot_refs WHERE workspace_id = $1 AND version_id = $2)
            OR EXISTS (SELECT 1 FROM boards WHERE id = $3 AND status IN ('trashed', 'importing'))
+           -- wave S: a comment thread pinned to it (a thread insert reads the version FOR SHARE first: WS3)
+           OR EXISTS (SELECT 1 FROM comment_threads t WHERE t.workspace_id = $1 AND t.anchor ->> 'kind' = 'asset'
+                        AND t.anchor ->> 'versionId' = $2)
+           -- wave S: another version of its chain that is not itself marked past the grace period (referenced at
+           -- the last pass, uploaded since, or marked too recently): a chain goes only as a whole
+           OR EXISTS (SELECT 1 FROM asset_versions o WHERE o.workspace_id = $1 AND o.asset_id = $4 AND o.id <> $2
+                        AND (o.unreferenced_since IS NULL OR o.unreferenced_since > $5))
            OR EXISTS (SELECT 1 FROM preview_jobs WHERE version_id = $2 AND status = 'running')
            -- a checkpoint made since the scan: its body is read by the next pass first
            OR EXISTS (SELECT 1 FROM board_snapshots s WHERE s.workspace_id = $1
                         AND NOT EXISTS (SELECT 1 FROM asset_gc_snapshot_scans c WHERE c.snapshot_id = s.id))
            AS held`,
-      [workspaceId, versionId, v.board_id],
+      [workspaceId, versionId, v.board_id, v.asset_id, cutoffs.grace],
     )
     if (held.held) return null
     const derivatives = await tx.query<{ blob_key: string; bytes: number }>(
@@ -513,7 +551,9 @@ export async function collectWorkspace(
   ).rows
   const refs = await gatherReferences(deps, workspaceId)
   if (refs.stopped) return null
-  const referenced = (r: VersionGcRow) => heldByRow(r, inFlightCutoff) || refs.versions.has(r.id)
+  // wave S: chains whole (keptWithChains): one referenced version keeps every version of its asset
+  const kept = keptWithChains(rows, (r) => heldByRow(r, inFlightCutoff) || refs.versions.has(r.id))
+  const referenced = (r: VersionGcRow) => kept.has(r.id)
 
   const toClear = rows.filter((r) => r.unreferenced_since && referenced(r)).map((r) => r.id)
   const toMark = refs.complete
@@ -542,8 +582,9 @@ export async function collectWorkspace(
       if (again.stopped) return null
       if (again.complete) {
         const cutoffs = { grace: new Date(graceCutoff), inFlight: new Date(inFlightCutoff) }
+        const keptNow = keptWithChains(rows, (r) => heldByRow(r, inFlightCutoff) || again.versions.has(r.id))
         for (const r of eligible) {
-          if (again.versions.has(r.id)) {
+          if (keptNow.has(r.id)) {
             await deps.db.query('UPDATE asset_versions SET unreferenced_since = NULL WHERE id = $1', [r.id])
             continue
           }
