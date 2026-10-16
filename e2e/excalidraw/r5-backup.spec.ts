@@ -6,7 +6,8 @@
 //    the board menu, restores the file into her own workspace and opens the new board: the same items, the image
 //    loaded from the new board's own files, the PDF card ready; the original board is unchanged; every request of
 //    both pages went to Lobby's own origins;
-//  - the export policy: with downloads off for viewers, a viewer gets no backup line and the api refuses the ticket;
+//  - the export policy: a viewer has the backup line; with downloads off for viewers, none, and the api refuses the
+//    ticket;
 //  - a non-creator's restore is refused (403 CREATOR_REQUIRED) and makes nothing;
 //  - hostile files (not a ZIP, a traversal name, a truncated archive) are refused at once (400) and make nothing.
 // The dashboard's restore dialog is not opened here: its Import line is the lead's (DashboardPage); the restore goes
@@ -15,7 +16,14 @@
 //   E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e excalidraw r5-
 import type { APIRequestContext, Page } from '@playwright/test'
 import { Api } from '../tests/support/api.ts'
-import { expect, expectSaved, items, openCanvasSession, test } from '../tests/support/canvas.ts'
+import {
+  expect,
+  expectSaved,
+  items,
+  openCanvasSession,
+  test,
+  waitForCanvas,
+} from '../tests/support/canvas.ts'
 import { freshHandle } from '../tests/support/dashboard-share.ts'
 import { API_URL, SYNC_URL, WEB_URL } from '../tests/support/ports.ts'
 import { downloadFrom } from '../tests/support/present-export.ts'
@@ -171,15 +179,23 @@ test('backup round trip: a board with an image and a PDF comes back as a new boa
   }
 })
 
-test('backup export policy: with downloads off for viewers, a viewer gets no backup line and no ticket', async ({
+test('backup export policy: a viewer has the backup line; with downloads off for viewers, no line and no ticket', async ({
   canvasSession,
   board,
   users,
 }) => {
   const aliceApi = await users.api('alice')
-  const off = await aliceApi.fetch('PUT', `/api/boards/${board}/export-policy`, { exportPolicy: 'editors' })
-  expect(off.status()).toBe(200)
+  const policy = (exportPolicy: string) =>
+    aliceApi.fetch('PUT', `/api/boards/${board}/export-policy`, { exportPolicy })
+  expect((await policy('everyone')).status()).toBe(200)
   const v = await canvasSession('bob', { role: 'viewer' })
+  // viewers export while the policy lets them (the line is a menu action read-only roles get)
+  await expect(await backupLine(v.page)).toBeVisible()
+  await v.page.keyboard.press('Escape')
+  await v.page.keyboard.press('Escape')
+  expect((await policy('editors')).status()).toBe(200)
+  await v.page.reload()
+  await waitForCanvas(v.page)
   await exportMenuIfAny(v.page)
   await expect(v.page.getByTestId('main-menu.backup')).toHaveCount(0)
   const bobApi = await users.api('bob')

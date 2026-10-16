@@ -72,7 +72,13 @@ describe('the backup client', () => {
   })
 
   it('says every refusal in words', () => {
-    const codes = ['BACKUP_INVALID', 'BACKUP_TOO_LARGE', 'BACKUP_FROM_NEWER_LOBBY', 'EXPORT_DISABLED', 'unavailable']
+    const codes = [
+      'BACKUP_INVALID',
+      'BACKUP_TOO_LARGE',
+      'BACKUP_FROM_NEWER_LOBBY',
+      'EXPORT_DISABLED',
+      'unavailable',
+    ]
     for (const c of codes) expect(backupErrorText(c), c).not.toBe(backupErrorText('SOMETHING_ELSE'))
     expect(backupErrorText('BACKUP_FROM_NEWER_LOBBY')).toContain('newer version of Lobby')
   })

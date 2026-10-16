@@ -305,14 +305,15 @@ describe('the runner', () => {
     await start(bob, ['C'])
     hold.open()
     await runner.idle()
-    const backup = {
+    // (WS4 registers 'lobby-backup' on every app: a source value no code registers stands for one nobody did)
+    const unknown = {
       workspaceId: DEV_STUDIO,
       projectId: null,
       userId: alice.userId,
-      source: 'lobby-backup' as const,
-      boards: [],
+      source: 'not-a-source' as never,
+      boards: [{ sourceRef: null, title: 'X' }],
     }
-    await expect(runner.start(backup, [])).rejects.toMatchObject({ statusCode: 404 })
+    await expect(runner.start(unknown, [])).rejects.toMatchObject({ statusCode: 404 })
   })
 
   it('recover: a gone process’s rows become interrupted; the sweep removes their boards a day later', async () => {

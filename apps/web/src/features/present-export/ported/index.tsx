@@ -147,17 +147,6 @@ const COMMANDS: readonly CommandSpec[] = [
     readOnlyAllowed: true,
     run: (ctx) => controllerOf(ctx).quickExport('svg', 'board'),
   },
-  // wave R (WS4): the board and its files as a .lobby backup, from the api's own origin (dashboard/import-backup)
-  {
-    id: 'present-export.backup',
-    label: BACKUP_LABEL,
-    readOnlyAllowed: true,
-    keywords: ['backup', 'lobby', 'zip', 'archive'],
-    enabled: (ctx) => backupAllowed(ctx),
-    run: (ctx) => {
-      if (backupAllowed(ctx)) void downloadBoardBackup(ctx.board.id, ctx.notify)
-    },
-  },
 ]
 
 const exportAllowed = (ctx: CanvasFeatureContext) => controllerOf(ctx).exportAllowed()
@@ -214,14 +203,17 @@ const MAIN_MENU: readonly MenuEntrySpec[] = [
     ],
   },
   { id: 'print', group: 'export', order: 22, label: 'Export as PDF…', command: 'present-export.print' },
-  // wave R (WS4): this line is WS4's
+  // wave R (WS4; this line is WS4's): the board and its files as a .lobby backup, from the api's own origin
+  // (dashboard/import-backup). A menu action, not a palette command (PALETTE_COMMAND_IDS is the usage contract's).
   {
     id: 'backup',
     group: 'export',
     order: 23,
     label: BACKUP_LABEL,
-    command: 'present-export.backup',
     visible: (ctx) => backupAllowed(ctx),
+    run: (ctx) => {
+      if (backupAllowed(ctx)) void downloadBoardBackup(ctx.board.id, ctx.notify)
+    },
   },
 ]
 
