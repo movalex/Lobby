@@ -223,7 +223,8 @@ export async function probeBoard(client, boardId, opts = {}) {
 }
 
 /** The API path of an item's imageUrl or documentUrl (`/v2/boards/…/resources/…`), or null. */
-const RESOURCE_PATH = /^\/v2\/boards\/[A-Za-z0-9_=-]{6,64}\/resources\/(images|documents)\/[A-Za-z0-9_=-]{1,64}$/
+const RESOURCE_PATH =
+  /^\/v2\/boards\/[A-Za-z0-9_=-]{6,64}\/resources\/(images|documents)\/[A-Za-z0-9_=-]{1,64}$/
 
 export function resourcePath(raw, origin = MIRO_API) {
   try {
@@ -279,7 +280,13 @@ export async function runProbe({
     }
   }
   const hosts = [
-    ...new Set(results.flatMap((r) => Object.values(r.files ?? {}).map((f) => f.host).filter(Boolean))),
+    ...new Set(
+      results.flatMap((r) =>
+        Object.values(r.files ?? {})
+          .map((f) => f.host)
+          .filter(Boolean),
+      ),
+    ),
   ].sort()
   say(`Download hosts seen: ${hosts.join(', ') || '(none)'}`)
   say(`Rate limit: ${client.rate.remaining ?? '?'} of ${client.rate.limit ?? '?'} credits left this minute`)

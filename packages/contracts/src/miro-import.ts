@@ -85,7 +85,7 @@ export function splitMiroToken(body: unknown): { token: string | null; rest: Rec
  */
 export function parseMiroBoardLink(raw: string): string | null {
   const url = parseUrl(raw.trim())
-  if (!url || url.protocol !== 'https:') return null
+  if (url?.protocol !== 'https:') return null
   const host = url.hostname.toLowerCase()
   if (host !== 'miro.com' && !host.endsWith('.miro.com')) return null
   const m = /^\/app\/board\/([^/]+)\/?/.exec(url.pathname)

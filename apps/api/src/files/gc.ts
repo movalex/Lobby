@@ -270,14 +270,15 @@ async function gatherReferences(deps: AssetGcDeps, workspaceId: string): Promise
       )
     ).rows,
   )
-  const boards = (
+  const boards =
     // an importing board (wave R) has no canvas yet: its versions are held below (heldByRow), not scanned
-    await deps.db.query<{ id: string }>(
-      `SELECT id FROM boards
+    (
+      await deps.db.query<{ id: string }>(
+        `SELECT id FROM boards
         WHERE workspace_id = $1 AND status IN ('active', 'archived', 'trashed') ORDER BY id`,
-      [workspaceId],
-    )
-  ).rows
+        [workspaceId],
+      )
+    ).rows
   let boardsScanned = 0
   let boardsFailed = 0
   let stopped = false

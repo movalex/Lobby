@@ -252,7 +252,6 @@ function send(
   })
 }
 
-
 /** Reads a metered body to its end into one buffer. */
 export async function readBody(stream: Readable): Promise<Buffer> {
   const chunks: Buffer[] = []

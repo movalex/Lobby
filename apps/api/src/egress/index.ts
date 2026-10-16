@@ -12,7 +12,7 @@
 
 import { ApiError } from '../errors.ts'
 import { makeSystemLookup } from '../features/link-preview/dns.ts'
-import { EgressError, type EgressDeps } from './fetch.ts'
+import { type EgressDeps, EgressError } from './fetch.ts'
 import type { EgressPolicy } from './policy.ts'
 import { REDACTED, type RedactedSecret, redact } from './secret.ts'
 

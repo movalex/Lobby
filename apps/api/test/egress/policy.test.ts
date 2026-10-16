@@ -6,9 +6,9 @@ import {
   chatHookEgressPolicy,
   checkTarget,
   type EgressPolicy,
-  makeEgressPolicy,
   MIRO_API_RULE,
   MIRO_FILE_RULE,
+  makeEgressPolicy,
   miroEgressPolicy,
   signedUrlLive,
 } from '../../src/egress/index.ts'
@@ -43,6 +43,7 @@ describe('the Miro policy', () => {
   })
 
   it('no look-alike host, no suffix match, no IP literal, no other host at all', () => {
+    // (an ill-formed punycode label does not even parse: refused all the same)
     for (const host of [
       'api.miro.com.evil.example',
       'evil-api.miro.com',
@@ -54,7 +55,6 @@ describe('the Miro policy', () => {
       '[2600::1]',
       'localhost',
     ])
-      // (an ill-formed punycode label does not even parse: refused all the same)
       expect(['host', 'invalid'], host).toContain(allowed(miro, `https://${host}/v2/boards`, 'GET', true))
   })
 

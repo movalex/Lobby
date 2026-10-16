@@ -10,7 +10,6 @@ import type { ImportBoardReport } from '@draftroom/contracts'
 import { newId } from '@draftroom/dev-assets'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { egressFetch, miroEgressPolicy, RedactedSecret } from '../../../src/egress/index.ts'
-import { originalKey } from '../../../src/files/blobs.ts'
 import { importRunnerOf } from '../../../src/features/imports/index.ts'
 import {
   ImportFailure,
@@ -18,6 +17,7 @@ import {
   type ImportSourceRunner,
   type ImportStep,
 } from '../../../src/features/imports/runner.ts'
+import { originalKey } from '../../../src/files/blobs.ts'
 import { type Client, createTestApi, DEV_STUDIO, type TestApi } from '../../helpers.ts'
 
 const RAW = 'eyJtaXJvLm9yaWdpbiI6ImV1MDEifQ_SECRET-tok3n_0123456789'

@@ -50,7 +50,10 @@ describe('the secret box', () => {
     for (const i of [0, 12, s.sealed.length - 1]) {
       const bent = Buffer.from(s.sealed)
       bent[i] = (bent[i] ?? 0) ^ 1
-      expect(fails(() => box.open(bent, s.keyId, AAD)), `byte ${i}`).toBe(true)
+      expect(
+        fails(() => box.open(bent, s.keyId, AAD)),
+        `byte ${i}`,
+      ).toBe(true)
     }
     expect(fails(() => box.open(s.sealed.subarray(0, 20), s.keyId, AAD))).toBe(true)
   })
