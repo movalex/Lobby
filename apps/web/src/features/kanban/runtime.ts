@@ -107,6 +107,9 @@ export class KanbanRuntime {
         const before = this.seen.get(id)
         const now = this.remember(el)
         if (!local || !now) continue
+        // a card made here as a card (a paste, a duplicate, the card table's import) keeps the status it was made
+        // with; a new plain note made inside a Kanban becomes a card of its column
+        if (!before && cardOf(el as PlanningElement)) continue
         // moved on the board AND in its frame: a drag of the card (a dragged frame moves its cards on the board only,
         // a frame resized from its left edge moves them in the frame only: neither is a drop)
         const moved = !near(before?.x ?? Number.NaN, now.x) || !near(before?.y ?? Number.NaN, now.y)
