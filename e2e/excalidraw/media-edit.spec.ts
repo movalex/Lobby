@@ -88,6 +88,9 @@ interface Crop {
 }
 
 /** Picks `file` in the chooser the button opens. */
+/** Replace media's entry as the build ships it: since wave S (the versions switch on) it reads Upload new version. */
+const REPLACE = 'media-new-version'
+
 async function pickWith(page: Page, testId: string, file: string | FilePayload) {
   const chooser = page.waitForEvent('filechooser')
   await page.getByTestId(testId).click()
@@ -129,10 +132,10 @@ test('W5-13 Replace media: key art v1 becomes v2 in the same element (place kept
   const b = await canvasSession('bob')
   const v1 = await placeImage(a.page, board, 'key-art-v1.jpg', 1600, 900)
   await select(a.page, [v1.id])
-  await expect(a.page.getByTestId('media-replace')).toBeVisible()
+  await expect(a.page.getByTestId(REPLACE)).toBeVisible()
   const [v2] = await makeImages(a.page, [{ name: 'key-art-v2.jpg', w: 900, h: 1600 }])
   if (!v2) throw new Error('no v2')
-  await pickWith(a.page, 'media-replace', v2)
+  await pickWith(a.page, REPLACE, v2)
 
   await expect
     .poll(async () => (await fileItems(a.page)).find((f) => f.id === v1.id)?.facts.name, { timeout: 60_000 })
@@ -142,7 +145,8 @@ test('W5-13 Replace media: key art v1 becomes v2 in the same element (place kept
   // the same element: a new version, the same place (centre and longer side), the new proportions
   expect(after.fileId).toBe(after.facts.versionId)
   expect(after.facts.versionId).not.toBe(v1.facts.versionId)
-  expect(after.facts.assetId).not.toBe(v1.facts.assetId)
+  // a version of the same deliverable (wave S): the asset id stays
+  expect(after.facts.assetId).toBe(v1.facts.assetId)
   expect(after.x + after.width / 2).toBeCloseTo(v1.x + v1.width / 2, 0)
   expect(after.y + after.height / 2).toBeCloseTo(v1.y + v1.height / 2, 0)
   expect(after.height).toBeCloseTo(Math.max(v1.width, v1.height), 0)
@@ -196,7 +200,7 @@ test('W5-13 Replace media in a template slot: the new photo fills the same slot 
   await select(a.page, [placed.id])
   const [tall] = await makeImages(a.page, [{ name: 'grab-v2.jpg', w: 1080, h: 1920 }])
   if (!tall) throw new Error('no v2')
-  await pickWith(a.page, 'media-replace', tall)
+  await pickWith(a.page, REPLACE, tall)
   await expect
     .poll(async () => (await fileItems(a.page)).find((f) => f.id === placed.id)?.facts.name, {
       timeout: 60_000,
@@ -222,7 +226,7 @@ test('W5-13 Replace media on a card: a PDF card becomes the new file’s card in
   if (!card) throw new Error('no card')
   await expect(fileCard(a.page, 'document.pdf')).toHaveAttribute('data-status', 'ready', { timeout: 60_000 })
   await select(a.page, [card.id])
-  await pickWith(a.page, 'media-replace', fixture('notes.zip'))
+  await pickWith(a.page, REPLACE, fixture('notes.zip'))
   await expect(fileCard(a.page, 'notes.zip')).toHaveAttribute('data-kind', 'other', { timeout: 60_000 })
   const after = (await fileItems(a.page)).find((f) => f.id === card.id)
   expect(after?.facts).toMatchObject({ kind: 'other', name: 'notes.zip' })
@@ -234,7 +238,7 @@ test('W5-13 Replace media on a card: a PDF card becomes the new file’s card in
   await select(a.page, [card.id])
   const [png] = await makeImages(a.page, [{ name: 'oops.png', w: 200, h: 200, type: 'image/png' }])
   if (!png) throw new Error('no png')
-  await pickWith(a.page, 'media-replace', png)
+  await pickWith(a.page, REPLACE, png)
   await expect(a.page.getByText(/images replace images/)).toBeVisible()
   expect((await fileItems(a.page)).find((f) => f.id === card.id)?.facts.name).toBe('notes.zip')
 })
@@ -381,7 +385,7 @@ test('W5-13 Alternative text: the dialog writes customData.lobby.alt (one undo);
     await selectNone(v.page)
     await select(v.page, [img.id])
     await expect(v.page.getByTestId('media-download-original')).toBeVisible()
-    for (const id of ['media-replace', 'media-crop', 'media-alt-text-open'])
+    for (const id of ['media-replace', REPLACE, 'media-crop', 'media-alt-text-open'])
       await expect(v.page.getByTestId(id)).toHaveCount(0)
   })
 })
