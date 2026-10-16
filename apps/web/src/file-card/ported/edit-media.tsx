@@ -575,17 +575,10 @@ export const editMenu: readonly MenuEntrySpec[] = [
     id: 'media.replace',
     group: 'edit',
     order: 80,
-    label: 'Replace media',
+    // wave S: with the versions switch on, the same command reads "Upload new version"
+    label: () => (asVersions() ? 'Upload new version' : 'Replace media'),
     command: 'media.replace',
-    visible: (ctx, target) => !asVersions() && !!canReplace(ctx, target.ids),
-  },
-  {
-    id: 'media.new-version',
-    group: 'edit',
-    order: 80,
-    label: 'Upload new version',
-    command: 'media.replace',
-    visible: (ctx, target) => asVersions() && !!canReplace(ctx, target.ids),
+    visible: (ctx, target) => !!canReplace(ctx, target.ids),
   },
   {
     id: 'media.crop',
