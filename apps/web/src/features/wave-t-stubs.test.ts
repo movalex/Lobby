@@ -39,7 +39,7 @@ import {
 import { exportSectionsFor, registerExportSection } from './present-export/ported/export-sections.ts'
 
 /** The wave T features whose workstream has landed (they are no longer empty). */
-const LANDED = ['storyboard']
+const LANDED = ['storyboard', 'timeline']
 const WAVE_T_FEATURES = ['storyboard', 'storyboard-play', 'cards', 'kanban', 'card-table', 'timeline']
 
 describe('the wave T switches', () => {
@@ -91,7 +91,8 @@ describe('the wave T features and entries', () => {
     expect(at.every((i) => i >= 0)).toBe(true)
     expect([...at].sort((a, b) => a - b)).toEqual(at)
     expect(ids.at(-1)).toBe('elements')
-    // a workstream that landed fills its own (WS2: storyboard); the rest are still empty
+    // a workstream that landed fills its own (WS2: storyboard; WS5: timeline, pinned by features/timeline/timeline.test.ts);
+    // the rest are still empty
     for (const id of WAVE_T_FEATURES.filter((x) => !LANDED.includes(x)))
       expect(CANVAS_FEATURES.find((f) => f.id === id)).toEqual({ id })
   })
@@ -100,7 +101,9 @@ describe('the wave T features and entries', () => {
     expect(PLANNING_ENTRIES.map((e) => e.id).sort()).toEqual([...WAVE_T_PALETTE_COMMAND_IDS].sort())
     for (const id of WAVE_T_PALETTE_COMMAND_IDS) {
       expect(PALETTE_COMMAND_IDS as readonly string[]).toContain(id)
-      expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).toContain(id)
+      // (WS5 registered 'timeline.new')
+      if (id !== 'timeline.new') expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).toContain(id)
+      else expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).not.toContain(id)
     }
     for (const e of PLANNING_ENTRIES) expect(e.places.length, e.id).toBeGreaterThan(0)
   })

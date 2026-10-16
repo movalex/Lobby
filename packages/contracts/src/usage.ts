@@ -271,7 +271,8 @@ export const PENDING_PALETTE_COMMAND_IDS: readonly PaletteCommandId[] = [
   // wave Q: none left. elements.open is registered by WS3 (features/elements) since the integration turned
   // ELEMENTS_PANEL on.
   // wave T (the foundation): every wave T command; each owner removes its own ids in the change that registers them.
-  ...WAVE_T_PALETTE_COMMAND_IDS,
+  // WS5 registered 'timeline.new' (features/timeline).
+  ...WAVE_T_PALETTE_COMMAND_IDS.filter((id) => id !== 'timeline.new'),
 ]
 
 /**
