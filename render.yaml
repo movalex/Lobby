@@ -374,6 +374,14 @@ services:
       # sync. DRAFTROOM_WS_DEFLATE above stays off (the wave M hold).
       - key: DRAFTROOM_REACTIONS
         value: "on"
+      # Wave T (lead-only; landed by the wave T foundation, read by WS1's sync rules): the planning keys (cards,
+      # storyboards, Kanbans, timelines; CONTRACTS_REV 14). Unset, empty or off: every planning write is refused
+      # UNAVAILABLE, stored keys stay, seeds carry none, and the room says contracts 13 so no web offers planning
+      # (fail-closed). Off until the lead turns it on at deploy, after the api (assignee-refs) and the sync are live.
+      # The documented rollback below wave T sets it off, runs POST /internal/maintenance/strip-keys for card:, sb:,
+      # kanban and timeline, then deploys the older sync (docs/WAVE-T-CONTRACTS.md §3.4).
+      - key: DRAFTROOM_PLANNING
+        value: "off"
       # The canvas engine: Lobby's element sync (apps/sync/src/engine-switch.ts). Never roll back by
       # changing this value: a rollback deploys the bridge release R0, which ignores it
       # (docs/EXCALIDRAW-CUTOVER.md "Rollback to R0").
