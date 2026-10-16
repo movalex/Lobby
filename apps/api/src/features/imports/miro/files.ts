@@ -32,8 +32,9 @@ import type {
 import { type EgressDeps, EgressError, egressOpen } from '../../../egress/index.ts'
 import { deleteQuietly, originalKey } from '../../../files/blobs.ts'
 import { EMPTY_PROBE } from '../../../files/meta.ts'
-import { initialServedMime, normalizeDeclaredMime } from '../../../files/mime.ts'
+import { normalizeDeclaredMime } from '../../../files/mime.ts'
 import { ReceiveError, receiveToBlob } from '../../../files/receive.ts'
+import { storedServedMime } from '../../../files/stored-mime.ts'
 import { workspaceUsage } from '../../../files/usage.ts'
 import type { FeatureContext } from '../../context.ts'
 import { ImportFailure, type ImportStep } from '../runner.ts'
@@ -165,6 +166,14 @@ export async function storeMiroFile(
     await deleteQuietly(ctx.blobs, [key], () => {})
     return fail(e instanceof ReceiveError && e.reason === 'TOO_LARGE' ? 'file-too-large' : 'file-failed')
   }
+  // an attachment claiming an audio type keeps it only when its first bytes agree, as an upload (stored-mime.ts)
+  let servedMime: string
+  try {
+    servedMime = await storedServedMime(ctx.blobs, key, stored.bytes, kind, mime, name)
+  } catch {
+    await deleteQuietly(ctx.blobs, [key], () => {})
+    return fail('file-failed')
+  }
   const now = ctx.now()
   try {
     await ctx.db.transaction(async (tx) => {
@@ -188,7 +197,7 @@ export async function storeMiroFile(
           step.boardId,
           name,
           mime,
-          initialServedMime(kind, mime, name),
+          servedMime,
           kind,
           stored.bytes,
           stored.sha256,
@@ -216,7 +225,7 @@ export async function storeMiroFile(
       versionId,
       kind,
       name,
-      mimeType: initialServedMime(kind, mime, name),
+      mimeType: servedMime,
       sizeBytes: stored.bytes,
     },
   }

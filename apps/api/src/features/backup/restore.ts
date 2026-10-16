@@ -71,8 +71,9 @@ import type { Params } from '../../context.ts'
 import { ApiError, forbidden, parse } from '../../errors.ts'
 import { deleteQuietly, originalKey } from '../../files/blobs.ts'
 import { EMPTY_PROBE } from '../../files/meta.ts'
-import { initialServedMime, normalizeDeclaredMime } from '../../files/mime.ts'
+import { normalizeDeclaredMime } from '../../files/mime.ts'
 import { ReceiveError, receiveToBlob } from '../../files/receive.ts'
+import { storedServedMime } from '../../files/stored-mime.ts'
 import { workspaceUsage } from '../../files/usage.ts'
 import { SyncSeedConflict, SyncUnavailable } from '../../sync-internal.ts'
 import type { FeatureContext } from '../context.ts'
@@ -318,6 +319,8 @@ async function storeOriginal(
       contentType: 'application/octet-stream',
       contentLength: file.sizeBytes,
     })
+    // an attachment claiming an audio type keeps it only when its first bytes agree, as an upload (stored-mime.ts)
+    const servedMime = await storedServedMime(ctx.blobs, key, file.sizeBytes, kind, declared, name)
     const now = ctx.now()
     await ctx.db.transaction(async (tx) => {
       await tx.query('SELECT id FROM workspaces WHERE id = $1 FOR NO KEY UPDATE', [step.workspaceId])
@@ -333,7 +336,7 @@ async function storeOriginal(
           step.boardId,
           name,
           declared,
-          initialServedMime(kind, declared, name),
+          servedMime,
           kind,
           file.sizeBytes,
           file.sha256,

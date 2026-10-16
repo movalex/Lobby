@@ -17,16 +17,11 @@ import { SlidingWindowLimiter } from '../rate-limit.ts'
 import { deleteQuietly, originalKey } from './blobs.ts'
 import { DEFAULT_UPLOAD_POLICY, type FilesDeps, type UploadPolicy } from './deps.ts'
 import { EMPTY_PROBE, toMeta, VERSION_COLUMNS, type VersionRow } from './meta.ts'
-import {
-  AUDIO_SNIFF_BYTES,
-  initialServedMime,
-  normalizeDeclaredMime,
-  uploadLimitLabel,
-  uploadServedMime,
-} from './mime.ts'
+import { normalizeDeclaredMime, uploadLimitLabel } from './mime.ts'
 import { ReceiveError, receiveToBlob } from './receive.ts'
 import { HttpError, notFound, requireAccess, sendJson } from './respond.ts'
 import { DEFAULT_STORAGE_CONFIG } from './storage-config.ts'
+import { storedServedMime } from './stored-mime.ts'
 import { guestsUsage, isNameOnlyGuest, uploaderUsage, workspaceUsage } from './usage.ts'
 import { chainOnBoard, latestServable, supersedeCheck } from './versions.ts'
 
@@ -271,7 +266,7 @@ export async function handleUpload(
       contentType: 'application/octet-stream',
     })
     // wave T: an attachment that claims an audio type is served as that type only when its first bytes agree
-    const servedMime = await storedMime(deps, key, bytes, kind, declaredMimeType, name)
+    const servedMime = await storedServedMime(deps.blobs, key, bytes, kind, declaredMimeType, name)
     const now = deps.now?.() ?? new Date()
     row = await deps.db.transaction(async (tx) => {
       // a new version may reset review items, whose bell rows are capped: the board's notification lock before any
@@ -345,33 +340,6 @@ export async function handleUpload(
     }
   }
   return sendJson(reply, 201, toMeta(row, []))
-}
-
-/**
- * Wave T (WS3): the type the original is stored and served with. Everything but an attachment claiming one of the
- * four audio types is mime.ts `initialServedMime`, decided without the bytes, as before. Such a claim (by its declared
- * type or its extension) is checked against the stored file's first AUDIO_SNIFF_BYTES bytes (one ranged read of the
- * blob just written: the worker never looks at an attachment), and an upload whose bytes disagree is an octet-stream
- * attachment (`uploadServedMime`).
- */
-async function storedMime(
-  deps: FilesDeps,
-  key: string,
-  bytes: number,
-  kind: AssetKind,
-  declared: string,
-  name: string,
-): Promise<string> {
-  const claimed = initialServedMime(kind, declared, name)
-  if (kind !== 'other' || claimed === 'application/octet-stream') return claimed
-  if (bytes === 0) return 'application/octet-stream'
-  const end = Math.min(bytes, AUDIO_SNIFF_BYTES) - 1
-  const obj = await deps.blobs.get(key, { range: { start: 0, end } })
-  if (!obj) throw new Error('the stored upload could not be read back')
-  const chunks: Buffer[] = []
-  for await (const c of obj.body as AsyncIterable<Buffer | string>)
-    chunks.push(typeof c === 'string' ? Buffer.from(c) : Buffer.from(c))
-  return uploadServedMime(kind, declared, name, new Uint8Array(Buffer.concat(chunks)))
 }
 
 /** Name/message/code only: driver and fetch errors can carry statement parameters or URLs. */

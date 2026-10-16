@@ -457,6 +457,55 @@ describe('the restore’s guards', () => {
     expect(made.n).toBe(0)
   })
 
+  it('an HTML file named .mp3 stays an attachment; a real MP3 is audio (the upload path’s byte check)', async () => {
+    const html = Buffer.from('<!doctype html><script>alert(1)</script>')
+    const mp3 = Buffer.concat([Buffer.from('ID3'), Buffer.from([4, 0, 0, 0, 0, 0, 0]), Buffer.alloc(32, 0)])
+    const zip = await makeBackup({
+      elements: [base('I', 'image', { fileId: photo.versionId, scale: [1, 1], crop: null, status: 'saved' })],
+      files: [
+        {
+          versionId: photo.versionId,
+          assetId: photo.assetId,
+          name: 'photo.png',
+          mimeType: 'image/png',
+          kind: 'image',
+          bytes: PNG,
+        },
+        {
+          versionId: 'ver_disguised0001',
+          assetId: 'ast_disguised0001',
+          name: 'song.mp3',
+          mimeType: 'audio/mpeg',
+          kind: 'other',
+          bytes: html,
+        },
+        {
+          versionId: 'ver_realmp30001',
+          assetId: 'ast_realmp30001',
+          name: 'real.mp3',
+          mimeType: 'audio/mpeg',
+          kind: 'other',
+          bytes: mp3,
+        },
+      ],
+    })
+    const res = await restore(alice, alice.personalWorkspaceId, zip)
+    expect(res.statusCode, res.body).toBe(202)
+    await runner().idle()
+    const view = await runner().view((res.json() as { importId: string }).importId, alice.userId)
+    expect(view?.status).toBe('done')
+    const newId = view?.boards[0]?.boardId as string
+    const rows = await api.db.query<{ name: string; mime_type: string }>(
+      'SELECT name, mime_type FROM asset_versions WHERE board_id = $1 ORDER BY name',
+      [newId],
+    )
+    expect(rows.rows).toEqual([
+      { name: 'photo.png', mime_type: 'image/png' },
+      { name: 'real.mp3', mime_type: 'audio/mpeg' },
+      { name: 'song.mp3', mime_type: 'application/octet-stream' },
+    ])
+  })
+
   it('a file missing from the backup (omitted) leaves its element as a missing file; the rest is restored', async () => {
     const zip = await makeBackup({
       elements: [

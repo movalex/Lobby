@@ -13,7 +13,8 @@ import {
   importResumePath,
 } from '@draftroom/contracts'
 import { openTestDb } from '@draftroom/db/testing'
-import { EMPTY_ID, RETRO_ID, SPRINT_ID, SPRINT_IDS } from '@draftroom/miro-import/fixtures'
+import { startFakeMiro } from '@draftroom/miro-import/fake-miro'
+import { EMPTY_ID, fixtureBoards, RETRO_ID, SPRINT_ID, SPRINT_IDS } from '@draftroom/miro-import/fixtures'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DEV_STUDIO } from '../../helpers.ts'
 import { type MiroWorld, miroWorld } from './miro-support.ts'
@@ -153,6 +154,45 @@ describe('a Miro import job', () => {
     expect(lines[0]).toBe('board,source_id,type,result,element_id,note')
     expect(lines).toHaveLength(34)
     expect(csv.body).toContain(`Sprint planning,${SPRINT_IDS.cloud},shape,approximate,`)
+  })
+
+  it('a document that claims to be audio but is HTML (song.mp3) stays an attachment, as an upload would', async () => {
+    const boards = fixtureBoards().map((b) => ({
+      ...b,
+      items: b.items.map((i) =>
+        i.type === 'document' ? { ...i, data: { ...(i.data as object), title: 'song.mp3' } } : i,
+      ),
+    }))
+    const miro = await startFakeMiro({ boards })
+    try {
+      miro.behaviour.document = {
+        contentType: 'audio/mpeg',
+        bytes: Buffer.from('<!doctype html><script>alert(1)</script>'),
+      }
+      w = await miroWorld({ miro })
+      const importId = await w.start(w.alice, [{ miroBoardId: SPRINT_ID }])
+      const view = await w.until(w.alice, importId, (v) => v.status === 'done')
+      const boardId = view.boards[0]?.boardId as string
+      const rows = await w.api.db.query<{ name: string; mime_type: string }>(
+        "SELECT name, mime_type FROM asset_versions WHERE board_id = $1 AND name = 'song.mp3'",
+        [boardId],
+      )
+      expect(rows.rows).toEqual([{ name: 'song.mp3', mime_type: 'application/octet-stream' }])
+      // the element names what is stored: no audio type
+      const els = w.sync.boards.get(boardId)?.elements ?? []
+      const files = els
+        .map(
+          (e) => (e as { customData?: { lobby?: { file?: { name: string; mimeType: string } } } }).customData,
+        )
+        .map((c) => c?.lobby?.file)
+        .filter((f) => f?.name === 'song.mp3')
+      expect(files.map((f) => f?.mimeType)).toEqual(['application/octet-stream'])
+    } finally {
+      // the world first (it does not close a fake it was given), then the fake
+      await w?.close()
+      w = undefined as unknown as MiroWorld
+      await miro.close()
+    }
   })
 
   it('files off (no download host): no resource is asked for; images and documents are “not imported yet”', async () => {

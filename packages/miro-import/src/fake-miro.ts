@@ -50,6 +50,8 @@ export interface FakeMiroBehaviour {
   holdFiles: Promise<void> | null
   /** the scopes the token context lists */
   scopes: string[]
+  /** document downloads answer with this type and these bytes instead of the fixture PDF (a disguised file) */
+  document: { contentType: string; bytes: Buffer } | null
 }
 
 export interface FakeMiroRequest {
@@ -119,6 +121,7 @@ export async function startFakeMiro(opts: FakeMiroOptions = {}): Promise<FakeMir
     expired: false,
     holdFiles: null,
     scopes: ['boards:read'],
+    document: null,
   }
   let filesOrigin = ''
   const png = fixturePng()
@@ -239,9 +242,10 @@ export async function startFakeMiro(opts: FakeMiroOptions = {}): Promise<FakeMir
     const expires = Number(url.searchParams.get('Expires') ?? 0)
     if (!m || req.method !== 'GET') return error(res, 404, 'notFound')
     if (expires * 1000 < Date.now()) return error(res, 403, 'expired')
-    const bytes = m[1] === 'png' ? png : pdf
+    const doc = m[1] === 'pdf' ? behaviour.document : null
+    const bytes = doc ? doc.bytes : m[1] === 'png' ? png : pdf
     res.writeHead(200, {
-      'content-type': m[1] === 'png' ? 'image/png' : 'application/pdf',
+      'content-type': doc ? doc.contentType : m[1] === 'png' ? 'image/png' : 'application/pdf',
       'content-length': String(bytes.length),
     })
     res.end(bytes)
