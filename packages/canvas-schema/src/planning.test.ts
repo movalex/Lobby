@@ -46,6 +46,7 @@ import {
   timelineTicks,
   xToDate,
 } from './planning.ts'
+import { KANBAN_MAX_BYTES } from './planning-keys.ts'
 import { LOBBY_KEY_ADDITIONS } from './protocol.ts'
 import { SAMPLE_ELEMENTS } from './test-samples.ts'
 
@@ -119,6 +120,20 @@ describe('the planning key specs', () => {
       ['timeline', { start: '2026-01-01', end: '2026-02-01', scale: 'year', lanes: 'none' }],
     ]
     for (const [k, v] of bad) expect(lobbyValueProblem(k, v), `${k} ${JSON.stringify(v)}`).not.toBeNull()
+  })
+
+  it('a Kanban with five 40-character CJK column names, WIP limits and hidden columns fits its cap (1.25 KiB)', () => {
+    const cjk = '進行中の作業項目'.repeat(5) // 40 characters, 120 UTF-8 bytes
+    expect(cjk).toHaveLength(40)
+    const labels = { todo: cjk, doing: cjk, review: cjk, blocked: cjk, done: cjk }
+    const value = {
+      labels,
+      hidden: ['blocked'],
+      wip: { todo: 99, doing: 99, review: 99, blocked: 99, done: 99 },
+    }
+    expect(lobbyValueProblem('kanban', value)).toBeNull()
+    expect(lobbyKeySpec('kanban')?.maxBytes).toBe(KANBAN_MAX_BYTES)
+    expect(KANBAN_MAX_BYTES).toBe(1280)
   })
 
   it('a card with every field and the most tags fits the 8 KiB budget', () => {

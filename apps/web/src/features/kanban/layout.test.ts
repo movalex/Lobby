@@ -1,3 +1,6 @@
+import { lobbyValueProblem } from '@draftroom/canvas-schema/custom-data'
+import { jsonByteLength } from '@draftroom/canvas-schema/limits'
+import { CARD_STATUSES, KANBAN_MAX_BYTES, type KanbanValue } from '@draftroom/canvas-schema/planning'
 import { describe, expect, it } from 'vitest'
 import {
   appendPlacement,
@@ -117,6 +120,26 @@ describe('the kanban value', () => {
     expect(withLabel({}, 'doing', 'Shooting', 'In progress')).toEqual({ labels: { doing: 'Shooting' } })
     expect(withLabel({ labels: { doing: 'Shooting' } }, 'doing', ' In progress ', 'In progress')).toEqual({})
     expect(withLabel({}, 'todo', 'x'.repeat(60), 'To do').labels?.todo).toHaveLength(40)
+  })
+
+  it('labels are cut by bytes too: the value never passes what the room takes; five CJK names fit whole', () => {
+    const cjk = '進行中の作業項目'.repeat(5)
+    let v: KanbanValue = {
+      wip: { todo: 99, doing: 99, review: 99, blocked: 99, done: 99 },
+      hidden: ['blocked'],
+    }
+    for (const s of CARD_STATUSES) v = withLabel(v, s, cjk, 'x')
+    for (const s of CARD_STATUSES) expect(v.labels?.[s]).toBe(cjk)
+    expect(lobbyValueProblem('kanban', v)).toBeNull()
+    // labels whose JSON is far larger than their characters (control characters escape to six bytes each, astral
+    // characters take two code units): cut so the value stays within the cap, and never into half a character
+    for (const word of ['\u0001'.repeat(40), '🎬'.repeat(30), `${'a'.repeat(39)}🎬`]) {
+      let w: KanbanValue = {}
+      for (const s of CARD_STATUSES) w = withLabel(w, s, word, 'x')
+      expect(jsonByteLength(w)).toBeLessThanOrEqual(KANBAN_MAX_BYTES)
+      expect(lobbyValueProblem('kanban', w), JSON.stringify(w).slice(0, 80)).toBeNull()
+      for (const s of CARD_STATUSES) expect(w.labels?.[s]?.isWellFormed?.() ?? true).toBe(true)
+    }
   })
 
   it('hidden: one column at least stays visible', () => {

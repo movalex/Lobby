@@ -103,6 +103,11 @@ export const SB_PER_ROW_MAX = 12
 export const SB_DEFAULT_PER_ROW = 6
 export const SB_AUDIO_OFFSET_MAX_MS = 60_000
 export const KANBAN_LABEL_MAX_CHARS = 40
+/**
+ * The `kanban` value's JSON size cap: five 40-character column names in any script (a CJK label is 120 UTF-8
+ * bytes), WIP limits and hidden columns fit. The web cuts a label so the whole value stays within it.
+ */
+export const KANBAN_MAX_BYTES = 1280
 export const KANBAN_WIP_MAX = 99
 export const TIMELINE_SCALES = ['day', 'week', 'month'] as const
 export type TimelineScale = (typeof TIMELINE_SCALES)[number]
@@ -219,7 +224,7 @@ export const PLANNING_VALUES: Readonly<Record<PlanningKey, { value: z.ZodType; m
   [SB_POS_KEY]: { value: SbPosValue, maxBytes: SB_POS_MAX_CHARS + 2 },
   [SB_DUR_KEY]: { value: SbDurValue, maxBytes: 16 },
   [SB_HEAD_KEY]: { value: SbHeadValue, maxBytes: 512 },
-  [KANBAN_KEY]: { value: KanbanValue, maxBytes: 512 },
+  [KANBAN_KEY]: { value: KanbanValue, maxBytes: KANBAN_MAX_BYTES },
   [TIMELINE_KEY]: { value: TimelineValue, maxBytes: 256 },
 }
 

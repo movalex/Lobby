@@ -3,11 +3,14 @@
 // its columns are equal bands of the frame for the visible statuses (canvas-schema planning.ts `kanbanBands`), under a
 // header band drawn by the overlay. Status is canonical and position is not: nothing here infers a status for a reader.
 // Only the acting tab ever writes what these functions compute (the echo rule; ./runtime.ts).
+import { jsonByteLength } from '@draftroom/canvas-schema/limits'
 import {
   type Band,
   bandAt,
   CARD_STATUSES,
   type CardStatus,
+  KANBAN_LABEL_MAX_CHARS,
+  KANBAN_MAX_BYTES,
   type KanbanValue,
   kanbanBands,
   kanbanColumns,
@@ -177,19 +180,38 @@ export const newKanbanSize = (value: KanbanValue) => ({
 
 // ---- editing the `kanban` value (labels, hidden columns, WIP limits) ---------------------------------------------
 
-/** The value with `status`'s label set (an empty or default label removes it). */
+/** `s` cut to at most `units` UTF-16 code units, never into half a character, without trailing spaces. */
+const cutLabel = (s: string, units: number): string => {
+  let out = s.slice(0, Math.max(0, units))
+  if (/[\uD800-\uDBFF]$/.test(out)) out = out.slice(0, -1)
+  return out.trimEnd()
+}
+
+/**
+ * The value with `status`'s label set (an empty or default label removes it). The label is cut to the room's
+ * KANBAN_LABEL_MAX_CHARS code units and, when the whole value's JSON would pass KANBAN_MAX_BYTES (labels whose
+ * characters take many bytes or escapes), further, so the web never sends a value the room refuses.
+ */
 export function withLabel(
   value: KanbanValue,
   status: CardStatus,
   label: string,
   fallback: string,
 ): KanbanValue {
-  const text = label.trim().slice(0, 40)
-  const labels = { ...(value.labels ?? {}) }
-  if (!text || text === fallback) delete labels[status]
-  else labels[status] = text
-  const next: KanbanValue = { ...value, labels }
-  if (!Object.keys(labels).length) delete (next as { labels?: unknown }).labels
+  const build = (text: string): KanbanValue => {
+    const labels = { ...(value.labels ?? {}) }
+    if (!text || text === fallback) delete labels[status]
+    else labels[status] = text
+    const next: KanbanValue = { ...value, labels }
+    if (!Object.keys(labels).length) delete (next as { labels?: unknown }).labels
+    return next
+  }
+  let text = cutLabel(label.trim(), KANBAN_LABEL_MAX_CHARS)
+  let next = build(text)
+  while (text && jsonByteLength(next) > KANBAN_MAX_BYTES) {
+    text = cutLabel(text, text.length - 1)
+    next = build(text)
+  }
   return next
 }
 
