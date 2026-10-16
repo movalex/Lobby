@@ -130,7 +130,8 @@ export function cameraOf(text: string): { camera: string; rest: string } {
 // ---- durations ------------------------------------------------------------------------------------------------
 
 const HINT_IN_BRACKETS = /[([]\s*([^()[\]]{1,14}?)\s*[)\]]/g
-const HINT_AT_END = /(?:^|[\s,;–—-])((?:\d+(?:\.\d+)?\s*(?:s|sec|secs|seconds?))|(?:\d+:[0-5]\d(?:\.\d+)?)|(?:\d+\s*f))\.?\s*$/i
+const HINT_AT_END =
+  /(?:^|[\s,;–—-])((?:\d+(?:\.\d+)?\s*(?:s|sec|secs|seconds?))|(?:\d+:[0-5]\d(?:\.\d+)?)|(?:\d+\s*f))\.?\s*$/i
 const HINT_LABEL = /\b(?:dur(?:ation)?|length|time)\s*[:=]\s*([0-9:.]+\s*(?:s|sec|secs|seconds?|f)?)/i
 
 /** A duration hint in `text` ("(3s)", "[0:03]", "… 2.5s", "Duration: 4s", "36f") and the text without it. */
@@ -187,7 +188,8 @@ const AUDIO_TAG =
 /** `text` split into what we see, the dialogue/VO and the sound (by their tags), each tidied. */
 export function audioParts(text: string): { action: string; dialogue: string; sfx: string } {
   const parts: { tag: string; at: number; len: number }[] = []
-  for (const m of text.matchAll(AUDIO_TAG)) parts.push({ tag: (m[1] ?? '').toUpperCase(), at: m.index ?? 0, len: m[0].length })
+  for (const m of text.matchAll(AUDIO_TAG))
+    parts.push({ tag: (m[1] ?? '').toUpperCase(), at: m.index ?? 0, len: m[0].length })
   if (!parts.length) return { action: tidy(text), dialogue: '', sfx: '' }
   const action = text.slice(0, parts[0]?.at ?? 0)
   const dialogue: string[] = []
@@ -257,7 +259,9 @@ export function detectFormat(text: string): ScriptFormat {
   const ne = nonEmpty(lines).map((l) => l.trim())
   if (!ne.length) return 'prose'
   const headings = ne.filter((l) => SCENE_HEADING.test(l) && l === l.toUpperCase()).length
-  const cues = ne.filter((l, i) => CUE.test(l) && !SCENE_HEADING.test(l) && !TRANSITION.test(l) && i + 1 < ne.length).length
+  const cues = ne.filter(
+    (l, i) => CUE.test(l) && !SCENE_HEADING.test(l) && !TRANSITION.test(l) && i + 1 < ne.length,
+  ).length
   const items = ne.filter((l) => LIST_ITEM.test(l)).length
   if (headings >= 1 || (cues >= 2 && items < ne.length / 2)) return 'screenplay'
   if (items >= Math.max(2, ne.length * 0.3)) return 'shot-list'
@@ -387,7 +391,11 @@ function parseAv(text: string, fps: number): Beat[] {
       camera: camWords ? cameraOf(camWords).camera || camWords.toUpperCase() : fromVideo.camera,
       action: fromVideo.action,
       // the AUDIO column: tagged parts as they are; untagged words are the VO
-      dialogue: [untagged ? (/^[A-Z][A-Z0-9 .'’-]{0,30}:/.test(untagged) ? untagged : `VO: ${untagged}`) : '', tagged.dialogue, fromVideo.dialogue]
+      dialogue: [
+        untagged ? (/^[A-Z][A-Z0-9 .'’-]{0,30}:/.test(untagged) ? untagged : `VO: ${untagged}`) : '',
+        tagged.dialogue,
+        fromVideo.dialogue,
+      ]
         .filter(Boolean)
         .join('\n'),
       sfx: [cell('sfx'), tagged.sfx, fromVideo.sfx].filter(Boolean).join('; '),
@@ -395,7 +403,10 @@ function parseAv(text: string, fps: number): Beat[] {
     }
     const time = cell('time')
     beat.durationMs =
-      (time ? parseDuration(time, fps) : null) ?? fromVideo.durationMs ?? durationHint(audioText, fps).ms ?? null
+      (time ? parseDuration(time, fps) : null) ??
+      fromVideo.durationMs ??
+      durationHint(audioText, fps).ms ??
+      null
     if (beat.dialogue) beat.dialogue = durationHint(beat.dialogue, fps).rest
     beat.durationMs ??= spokenMs(beat.dialogue)
     // a row with sound only continues the shot before it
@@ -521,7 +532,9 @@ function parseScreenplay(text: string, fps: number): Beat[] {
 /** "INT. KITCHEN - DAY" as words for a panel: "Int. Kitchen – day". */
 function sceneLabel(heading: string): string {
   const lower = heading.toLowerCase()
-  return lower.replace(/(^|[\s./-])([a-z])/g, (_, a: string, b: string) => a + b.toUpperCase()).replace(/\s+-\s+/g, ' – ')
+  return lower
+    .replace(/(^|[\s./-])([a-z])/g, (_, a: string, b: string) => a + b.toUpperCase())
+    .replace(/\s+-\s+/g, ' – ')
 }
 
 // ---- shot lists and prose -------------------------------------------------------------------------------------

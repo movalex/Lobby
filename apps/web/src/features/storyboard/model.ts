@@ -231,7 +231,11 @@ export function insertKeys(
  * The `sb:pos` writes that move the panel at `from` to `to` (indices in the order as it is; `to` is where it ends
  * up): the moved panel's key only, or a rebalance of all (see insertKeys).
  */
-export function moveKeys(panels: readonly OrderedPanel[], from: number, to: number): ReadonlyMap<string, string> {
+export function moveKeys(
+  panels: readonly OrderedPanel[],
+  from: number,
+  to: number,
+): ReadonlyMap<string, string> {
   const moved = panels[from]
   if (!moved || from === to) return new Map()
   const rest = panels.filter((_, i) => i !== from)

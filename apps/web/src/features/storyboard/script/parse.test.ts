@@ -105,7 +105,13 @@ describe('golden scripts', () => {
     const r = parseScript(AV_SCRIPT)
     expect(r.format).toBe('av')
     expect(r.beats).toEqual([
-      { camera: 'WIDE', action: 'A city wakes up at dawn.', dialogue: '', sfx: 'Music: soft piano', durationMs: 3000 },
+      {
+        camera: 'WIDE',
+        action: 'A city wakes up at dawn.',
+        dialogue: '',
+        sfx: 'Music: soft piano',
+        durationMs: 3000,
+      },
       {
         camera: 'CU',
         action: 'Hands pour coffee into a mug.',
@@ -121,12 +127,20 @@ describe('golden scripts', () => {
         sfx: 'a door slams',
         durationMs: 1500,
       },
-      { camera: '', action: 'Logo on white.', dialogue: 'VO: Lobby. Plan it together.', sfx: '', durationMs: 2000 },
+      {
+        camera: '',
+        action: 'Logo on white.',
+        dialogue: 'VO: Lobby. Plan it together.',
+        sfx: '',
+        durationMs: 2000,
+      },
     ])
   })
 
   it('an AV script as a CSV with a header and a markdown table', () => {
-    const csv = parseScript('Shot,Video,Audio,Time\n1,"Wide city, dawn",VO: Hello,3\n2,CU coffee,"SFX: pour",')
+    const csv = parseScript(
+      'Shot,Video,Audio,Time\n1,"Wide city, dawn",VO: Hello,3\n2,CU coffee,"SFX: pour",',
+    )
     expect(csv.beats.map((b) => [b.camera, b.action, b.dialogue, b.sfx, b.durationMs])).toEqual([
       ['WIDE', 'City, dawn', 'VO: Hello', '', 3000],
       ['CU', 'Coffee', '', 'pour', null],
