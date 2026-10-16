@@ -1,10 +1,9 @@
 // Wave T (WS3): the storyboard PDF sheet in Node: the layout (2, 3 and 6 panels a page, everything inside the page,
 // the 100-page limit, text cut with "…" to its box), the SVG the vector path draws (read back with no problems), the
-// PDF itself (vector pages: every field's words real text, the pictures image objects, a bookmark a page), and the
-// export layer that draws the shot numbers into every export.
+// PDF itself (vector pages: every field's words real text, the pictures image objects, a bookmark a page). The export
+// layer that draws the shot numbers into every export is WS2's (features/storyboard/export-layer.test.ts).
 import { PDFDict, PDFDocument, PDFName, PDFRawStream, PDFStream } from 'pdf-lib'
 import { describe, expect, it } from 'vitest'
-import type { LobbyCanvas } from '../../../canvas/api/index.ts'
 import { storyboardById } from '../../storyboard-play/model.ts'
 import { sceneOf, storyboardEls } from '../../storyboard-play/test-kit.ts'
 import { createPdfBuilder } from '../pdf-build.ts'
@@ -23,7 +22,6 @@ import {
   type SheetInput,
   type SheetPerPage,
 } from './layout.ts'
-import { STORYBOARD_OVERLAY, shotChips, shotChipsSvg } from './overlay.ts'
 
 const measure: MeasureText = (text, size, bold) => text.length * size * (bold ? 0.58 : 0.52)
 const PNG_B64 =
@@ -246,44 +244,5 @@ describe('the sheet as vector PDF pages', () => {
     // panels 1, 2, 3 and 5 have pictures (4 does not)
     expect(images).toBe(4)
     expect(doc.catalog.lookup(PDFName.of('Outlines'))).toBeTruthy()
-  })
-})
-
-describe('the export layer: shot numbers drawn into every export', () => {
-  const els = storyboardEls('h1', [
-    { id: 'p2', pos: 'a1', dur: 1500 },
-    { id: 'p1', pos: 'a0', dur: 2500 },
-  ])
-  const scene = sceneOf(els) as unknown as LobbyCanvas
-
-  it('a chip per exported panel at its top-left, in the export’s coordinates', () => {
-    const chips = shotChips({ canvas: scene, exported: new Set(['p1', 'p2']), origin: { x: -40, y: -40 } })
-    expect(chips).toEqual([
-      // p1 is the second frame of the row (x 440) but the first shot
-      { x: 480, y: 40, text: 'SH 01 · 2.5 s' },
-      { x: 40, y: 40, text: 'SH 02 · 1.5 s' },
-    ])
-    expect(shotChips({ canvas: scene, exported: new Set(['p2']), origin: { x: 0, y: 0 } })).toHaveLength(1)
-    expect(shotChips({ canvas: scene, exported: new Set(), origin: { x: 0, y: 0 } })).toEqual([])
-  })
-
-  it('is literal SVG the vector reading takes (text as <text>), active only on a board with panels', () => {
-    const svg = shotChipsSvg([{ x: 10, y: 10, text: 'SH 01 · 2 s' }])
-    expect(svg).toContain('>SH 01 · 2 s</text>')
-    expect(svg).not.toMatch(/var\(|href=|url\(/)
-    const scene2 = readScene(
-      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" width="400" height="300"><metadata></metadata><defs><style class="style-fonts"></style><metadata id="lobby-pdf-faces">{"v":1,"faces":[]}</metadata></defs>${svg}</svg>`,
-    )
-    expect(scene2.problems).toEqual([])
-    expect(STORYBOARD_OVERLAY.active(scene)).toBe(true)
-    expect(STORYBOARD_OVERLAY.active(sceneOf([]) as unknown as LobbyCanvas)).toBe(false)
-    expect(
-      STORYBOARD_OVERLAY.svg({
-        canvas: scene,
-        exported: new Set(['p1']),
-        origin: { x: 0, y: 0 },
-        view: { minX: 0, minY: 0, width: 900, height: 300 },
-      }),
-    ).toContain('SH 01')
   })
 })

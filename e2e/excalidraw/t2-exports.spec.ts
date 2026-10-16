@@ -153,7 +153,7 @@ test.describe('T2 storyboard exports', () => {
     // an ordinary SVG export of the board draws the shot numbers
     const svg = await downloadFrom(a.page, () => dialog.getByTestId('export-svg').click())
     const svgText = svg.bytes.toString('utf8')
-    for (let n = 1; n <= 6; n++) expect(svgText).toContain(`SH 0${n} · `)
+    for (let n = 1; n <= 6; n++) expect(svgText).toContain(`>SH 0${n}</text>`)
 
     expect(await pickers()).toBe(0)
     expect(foreign).toEqual([])

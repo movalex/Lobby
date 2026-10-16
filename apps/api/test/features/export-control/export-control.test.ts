@@ -343,6 +343,43 @@ describe.each(['everyone', 'editors'] as const)("policy '%s'", (policy) => {
     }
   })
 
+  it.each(WHO)(
+    '%s: a storyboard sound track (an audio attachment) plays in an <audio> element, never as a download',
+    async (who) => {
+      // wave T: the animatic plays a byte-checked MP3/M4A/WAV/OGG attachment (policy.ts audioElementPlaysOriginal)
+      const c = client(who)
+      const mp3 = Buffer.concat([
+        Buffer.from('ID3'),
+        Buffer.from([4, 0, 0, 0, 0, 0, 0]),
+        Buffer.alloc(249, 0x55),
+      ])
+      const sound = await uploadFile(editor, board, 'voice over.mp3', 'audio/mpeg', mp3)
+      // an HTML page named .mp3 is stored as an octet-stream attachment (files/mime.ts sniffAudio)
+      const fake = await uploadFile(
+        editor,
+        board,
+        'fake.mp3',
+        'audio/mpeg',
+        Buffer.from('<!doctype html><p>x</p>'),
+      )
+      const played = await original(c, sound, { 'sec-fetch-dest': 'audio' })
+      expect(played.statusCode, `${who} <audio>`).toBe(200)
+      expect(played.headers['content-type']).toBe('audio/mpeg')
+      // the same file asked for any other way, and a disguised file or a zip in an <audio>, are downloads
+      for (const [m, dest, what] of [
+        [sound, 'image', 'mp3 as <img>'],
+        [sound, 'video', 'mp3 as <video>'],
+        [sound, 'document', 'mp3 as a download'],
+        [fake, 'audio', 'disguised mp3 in <audio>'],
+        [files.zip, 'audio', 'zip in <audio>'],
+      ] as const) {
+        const res = await original(c, m, { 'sec-fetch-dest': dest })
+        if (refused(who)) expectExportDisabled(res, `${who} ${what}`)
+        else expect(res.statusCode, `${who} ${what}`).toBe(200)
+      }
+    },
+  )
+
   it.each(WHO)('%s: previews, PDF pages and file meta always render', async (who) => {
     const c = client(who)
     const page = await c.req(

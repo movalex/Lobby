@@ -156,12 +156,12 @@ test('the card is not shown to a person who cannot create, and what it shows is 
     await openDashboard(p.page, personalWorkspace(p.me))
     const card = p.page.getByTestId('whats-new')
     await expect(card).toBeVisible()
-    // what a person who cannot create can use; the review page opens from a review link, which only creators hand out
+    // what a person who cannot create can use: all of wave T's (each is made on a board they edit, or played where they see)
     expect(
       await card
         .getByTestId('whats-new-item')
         .evaluateAll((els) => els.map((e) => e.getAttribute('data-item-id'))),
-    ).toEqual(['client-review', 'file-versions', 'media-comments', 'review-summary'])
+    ).toEqual(['storyboards', 'animatic', 'cards-kanban', 'timeline'])
   } finally {
     await p.context.close()
   }

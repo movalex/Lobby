@@ -63,7 +63,7 @@ const HINT_ITEMS: readonly WhatsNewItem[] = [
   hintItem('run-of-show', 'Run of show, spotlight and vote results', 'creators'),
 ]
 
-describe('the card’s items (wave S)', () => {
+describe('the card’s items (wave T)', () => {
   it('are three to six for a creator, each with a title, a sentence and a unique id', () => {
     expect(creator.length).toBeGreaterThanOrEqual(WHATS_NEW_MIN_ITEMS)
     expect(creator.length).toBeLessThanOrEqual(WHATS_NEW_MAX_ITEMS)
@@ -76,14 +76,13 @@ describe('the card’s items (wave S)', () => {
     }
   })
 
-  it('are wave S’s five, in the card’s order, under the version that resets the dismissed card', () => {
-    expect(WHATS_NEW_VERSION).toBe('2026-10-wave-s')
+  it('are wave T’s four, in the card’s order, under the version that resets the dismissed card', () => {
+    expect(WHATS_NEW_VERSION).toBe('2026-10-wave-t')
     expect(WHATS_NEW_ITEMS.map((i) => i.title)).toEqual([
-      'Client review: approve or request changes',
-      'Versions and compare',
-      'Comments on a video moment or a PDF page',
-      'A review page for clients',
-      'A summary PDF of the review',
+      'Storyboards, from a script too',
+      'Play a storyboard as an animatic',
+      'Work cards, Kanban and the card table',
+      'Timelines from your cards',
     ])
   })
 
@@ -128,8 +127,8 @@ describe('the card’s items (wave S)', () => {
   it('show a person only what is true for them', () => {
     // an owner or admin who can create has all of it
     expect(creator.map((i) => i.id)).toEqual(WHATS_NEW_ITEMS.map((i) => i.id))
-    // someone who cannot create: not the review page (it opens from a review link, which only creators hand out)
-    expect(ids(nobody)).toEqual(['client-review', 'file-versions', 'media-comments', 'review-summary'])
+    // someone who cannot create: all of it (each is made on a board they can edit, or played and read where they can see)
+    expect(ids(nobody)).toEqual(['storyboards', 'animatic', 'cards-kanban', 'timeline'])
     // and nobody gets an item for a thing that needs more than they have
     for (const who of [ownerCreator, nobody]) {
       for (const i of whatsNewFor(who)) {

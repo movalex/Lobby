@@ -1,4 +1,4 @@
-// "What's new" (wave K, K4-5; wave L's card, wave M, M3-3; wave P; wave Q; wave R; wave S): a dismissible card on the dashboard for people who have
+// "What's new" (wave K, K4-5; wave L's card, wave M, M3-3; wave P; wave Q; wave R; wave S; wave T): a dismissible card on the dashboard for people who have
 // been here before and says what changed since. A first visit gets the Welcome card instead (Welcome.tsx), never this
 // changelog (wave P, P-002). Each item is shown only to people it is true for; it may have a "Try it" that goes to
 // the thing: a wave L item's lands on a board they can edit with a `?try=<hint>` (features/command-palette/try-hints.ts:
@@ -12,7 +12,7 @@ import type { TryHint } from '../features/command-palette/try-hints.ts'
 import { type BoardRole, type BoardStatus, can } from '../lib/permissions.ts'
 
 /** Bump it when the card says something new: everybody sees it once more. */
-export const WHATS_NEW_VERSION = '2026-10-wave-s'
+export const WHATS_NEW_VERSION = '2026-10-wave-t'
 export const WHATS_NEW_MIN_ITEMS = 3
 export const WHATS_NEW_MAX_ITEMS = 6
 
@@ -54,40 +54,34 @@ export interface WhatsNewItem {
   for: Audience
 }
 
-// Wave S's five (client review). The review page is for creators: only they hand out the review link it opens from.
+// Wave T's four (storyboards and planning walls). Each is for everyone: a person who can edit a board makes them, and
+// anyone who can see the board plays, reads or exports what it holds.
 export const WHATS_NEW_ITEMS: readonly WhatsNewItem[] = [
   {
-    id: 'client-review',
-    title: 'Client review: approve or request changes',
-    body: 'Mark a frame or a file for review; people on a review link approve it or ask for changes, and the bell tells you.',
+    id: 'storyboards',
+    title: 'Storyboards, from a script too',
+    body: 'Make a storyboard, or paste a script to get a panel for each shot; reorder the panels and set their durations in the strip.',
     tryIt: null,
     for: 'everyone',
   },
   {
-    id: 'file-versions',
-    title: 'Versions and compare',
-    body: 'Upload a new version of a file card: its review goes back to Awaiting review, and Compare puts two versions side by side.',
+    id: 'animatic',
+    title: 'Play a storyboard as an animatic',
+    body: 'Play the panels in order with their timings and sound, or download a PDF sheet or an image sequence with an EDL.',
     tryIt: null,
     for: 'everyone',
   },
   {
-    id: 'media-comments',
-    title: 'Comments on a video moment or a PDF page',
-    body: 'Open a video or PDF from its card to comment at a time or on a page; click a comment to jump straight back to it.',
+    id: 'cards-kanban',
+    title: 'Work cards, Kanban and the card table',
+    body: 'Make a note a card with a status, an assignee and dates; drag it across Kanban columns, or edit every card in a table.',
     tryIt: null,
     for: 'everyone',
   },
   {
-    id: 'review-page',
-    title: 'A review page for clients',
-    body: 'A review link can open as a review page: one item after another, with the answer buttons and comments, made for phones.',
-    tryIt: null,
-    for: 'creators',
-  },
-  {
-    id: 'review-summary',
-    title: 'A summary PDF of the review',
-    body: 'Download a PDF of every item in review with its status, who answered and when, and its open comments.',
+    id: 'timeline',
+    title: 'Timelines from your cards',
+    body: 'Put cards with dates on a timeline by week or month; drag a bar to move its dates.',
     tryIt: null,
     for: 'everyone',
   },

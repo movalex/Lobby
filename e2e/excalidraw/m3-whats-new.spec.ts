@@ -57,7 +57,7 @@ test('a returning creator sees the wave P card and the Start row above the board
   try {
     await p.api.createBoard(p.wid, 'Planning')
     await p.api.createBoard(p.wid, 'Retro')
-    // a person who dismissed wave L's card: that version is remembered, wave S's is a new card
+    // a person who dismissed wave L's card: that version is remembered, wave T's is a new card
     await p.page.goto('/')
     await p.page.evaluate(
       ([key]) => localStorage.setItem(key as string, '2026-10-wave-l'),
@@ -66,14 +66,13 @@ test('a returning creator sees the wave P card and the Start row above the board
     await openDashboard(p.page, p.wid)
     await expect(card(p.page)).toBeVisible()
 
-    await test.step('five items, wave S, and no button that could look dead', async () => {
+    await test.step('four items, wave T, and no button that could look dead', async () => {
       const titles = await card(p.page).getByTestId('whats-new-item').locator('strong').allTextContents()
       expect(titles).toEqual([
-        'Client review: approve or request changes',
-        'Versions and compare',
-        'Comments on a video moment or a PDF page',
-        'A review page for clients',
-        'A summary PDF of the review',
+        'Storyboards, from a script too',
+        'Play a storyboard as an animatic',
+        'Work cards, Kanban and the card table',
+        'Timelines from your cards',
       ])
       await expect(card(p.page).getByTestId('whats-new-try')).toHaveCount(0)
     })
@@ -90,7 +89,7 @@ test('a returning creator sees the wave P card and the Start row above the board
       expect(news).toBeLessThan(860)
     })
 
-    await test.step('dismissing wave S’s card is remembered under its own version', async () => {
+    await test.step('dismissing wave T’s card is remembered under its own version', async () => {
       await card(p.page).getByTestId('whats-new-dismiss').click()
       await expect(card(p.page)).toHaveCount(0)
       expect(
@@ -98,7 +97,7 @@ test('a returning creator sees the wave P card and the Start row above the board
           (key) => localStorage.getItem(key),
           `draftroom:whats-new-dismissed:${p.me.user.id}`,
         ),
-      ).toBe('2026-10-wave-s')
+      ).toBe('2026-10-wave-t')
       await p.page.reload()
       await expect(p.page.getByTestId('dashboard')).toBeVisible()
       await expect(card(p.page)).toHaveCount(0)

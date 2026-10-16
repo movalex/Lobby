@@ -1,8 +1,8 @@
 // OWNER: WS3 (wave T; registered empty by the wave T foundation, docs/WAVE-T-CONTRACTS.md §1). The 'storyboard-play'
 // feature on the Excalidraw board page: the animatic player and Present storyboard (switch `animatic`), and the
 // storyboard exports (switch `storyboardExports`): the Export dialog's "Storyboard sheet (PDF)" and "Image sequence"
-// sections (present-export/storyboard-sheet, present-export/sequence) and the export layer that draws the shot
-// numbers into every export (present-export/storyboard-sheet/overlay.ts).
+// sections (present-export/storyboard-sheet, present-export/sequence). The export layer that draws the shot numbers
+// into every export is WS2's (features/storyboard/export-layer.ts, the contracts' owner of the 'storyboard' layer).
 //
 // Both only READ what a board holds (planningShown: the switch alone; no planning write anywhere here), so viewers
 // and commenters play and present storyboards too; the exports follow the board's export policy (the dialog opens
@@ -20,10 +20,8 @@ import type {
   SelectionBarItemSpec,
 } from '../../canvas/api/index.ts'
 import { planningShown } from '../planning/flags.ts'
-import { registerExportOverlay } from '../present-export/ported/badges.ts'
 import { registerExportSection } from '../present-export/ported/export-sections.ts'
 import { STORYBOARD_SEQUENCE_SECTION } from '../present-export/sequence/Section.tsx'
-import { STORYBOARD_OVERLAY } from '../present-export/storyboard-sheet/overlay.ts'
 import { STORYBOARD_SHEET_SECTION } from '../present-export/storyboard-sheet/Section.tsx'
 import { storyboardOfIds, storyboardViews } from './model.ts'
 import { AnimaticOverlay } from './Player.tsx'
@@ -125,8 +123,7 @@ const PLAY_BUTTON: SelectionBarItemSpec = {
 const ANIMATIC = planningShown('animatic')
 const EXPORTS = planningShown('storyboardExports')
 
-// the export layer (shot numbers) and the two Export sections, once per page
-if (EXPORTS || planningShown('storyboard')) registerExportOverlay(STORYBOARD_OVERLAY)
+// the two Export sections, once per page (the shot numbers' layer is WS2's: features/storyboard/export-layer.ts)
 if (EXPORTS) {
   registerExportSection(STORYBOARD_SHEET_SECTION)
   registerExportSection(STORYBOARD_SEQUENCE_SECTION)

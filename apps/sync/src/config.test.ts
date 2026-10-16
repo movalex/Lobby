@@ -329,7 +329,7 @@ describe('wave N keys (render.yaml: DRAFTROOM_REACTIONS=on)', () => {
   })
 })
 
-describe('wave T keys (render.yaml: DRAFTROOM_PLANNING=off until the lead turns it on at deploy)', () => {
+describe('wave T keys (render.yaml: DRAFTROOM_PLANNING=on since the wave T integration; the code fails closed)', () => {
   it('DRAFTROOM_PLANNING: off unless on (fail-closed: unset, empty and off are all off); anything else is refused', () => {
     expect(loadConfig(base).planning).toBe(false)
     for (const v of ['', '   ', 'off', 'OFF'])

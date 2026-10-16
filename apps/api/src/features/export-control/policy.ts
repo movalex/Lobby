@@ -176,6 +176,21 @@ export function canvasRendersOriginal(v: CanvasVersionFacts): boolean {
 }
 
 /**
+ * Wave T (the integration's decision): whether an <audio> element plays this version's ORIGINAL for a viewer who
+ * may not export: the sound track of a storyboard's animatic (apps/web/src/features/storyboard-play: the head's
+ * `sb:head.audio` names an audio attachment, played by an <audio> element). Playing is not exporting, as for a
+ * <video> card (canvasRendersOriginal), so viewers, commenters and review-link guests hear the animatic on a board
+ * whose exports are off. Only an `other` version stored with one of the four audio types (files/upload.ts keeps that
+ * type only when the file's first bytes say so; anything else is an octet-stream attachment), never a failed one, and
+ * only for a media element whose destination is `audio`: an <img> or <video> pointed at it is a download as before.
+ */
+export function audioElementPlaysOriginal(v: CanvasVersionFacts, dest: string | undefined): boolean {
+  if (dest?.toLowerCase() !== 'audio') return false
+  if (v.status === 'failed' || v.kind !== 'other') return false
+  return INLINE_MIMES.other.includes(v.mimeType)
+}
+
+/**
  * The version as the board sees it (uploaded to this board, or linked to it), or null when the board
  * does not show it.
  */
@@ -221,8 +236,9 @@ async function versionOnBoard(
 /**
  * `GET|HEAD /files/:ast/:ver/original?board=` for a caller who can view the board. Refused (false)
  * only when exporting is off for them AND the request is a download: anything but a media element
- * loading a version the canvas renders from its original (canvasRendersOriginal). Previews and PDF
- * pages (derivatives) are never asked about: they always render.
+ * loading a version the canvas renders from its original (canvasRendersOriginal) or an <audio> element
+ * playing an animatic's sound (audioElementPlaysOriginal). Previews and PDF pages (derivatives) are never
+ * asked about: they always render.
  */
 export async function originalDownloadAllowed(
   q: Queryable,
@@ -235,5 +251,10 @@ export async function originalDownloadAllowed(
   const { ast, ver } = (req.params ?? {}) as { ast?: unknown; ver?: unknown }
   if (typeof ast !== 'string' || typeof ver !== 'string') return false
   const version = await versionOnBoard(q, access, ast, ver)
-  return version !== null && canvasRendersOriginal(version)
+  if (version === null) return false
+  const dest = req.headers['sec-fetch-dest']
+  return (
+    canvasRendersOriginal(version) ||
+    audioElementPlaysOriginal(version, typeof dest === 'string' ? dest : undefined)
+  )
 }

@@ -36,16 +36,16 @@ export interface PlanningFlags {
 
 export type PlanningFlag = keyof PlanningFlags
 
-// The wave T foundation ships every switch off.
+// The wave T foundation shipped every switch off; the wave T integration turned them all on (each workstream landed).
 export const PLANNING_FLAGS: PlanningFlags = {
-  storyboard: false,
-  storyboardAi: false,
-  animatic: false,
-  storyboardExports: false,
-  cards: false,
-  kanban: false,
-  table: false,
-  timeline: false,
+  storyboard: true,
+  storyboardAi: true,
+  animatic: true,
+  storyboardExports: true,
+  cards: true,
+  kanban: true,
+  table: true,
+  timeline: true,
 }
 
 export const PLANNING_FLAG_KEYS: Readonly<Record<PlanningFlag, string>> = {

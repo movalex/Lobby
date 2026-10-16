@@ -205,10 +205,10 @@ test('render.yaml: the wave N keys (the lead applies them through the Render API
   assert.equal(api('DRAFTROOM_REACTIONS'), null)
 })
 
-test('render.yaml: the wave T key (off until the lead turns it on at deploy; the sync only)', () => {
+test('render.yaml: the wave T key (on since the wave T integration; the sync only)', () => {
   const api = (k) => envValue(RENDER_YAML, 'draftroom-staging-api', k)
   const sync = (k) => envValue(RENDER_YAML, 'draftroom-staging-sync', k)
-  assert.equal(sync('DRAFTROOM_PLANNING'), 'off')
+  assert.equal(sync('DRAFTROOM_PLANNING'), 'on')
   assert.equal(api('DRAFTROOM_PLANNING'), null)
   // the reactions switch it builds on stays on (the room says 13 with planning off, 12 with reactions off)
   assert.equal(sync('DRAFTROOM_REACTIONS'), 'on')

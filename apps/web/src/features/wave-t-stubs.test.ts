@@ -1,7 +1,8 @@
-// The wave T foundation's web side (docs/WAVE-T-CONTRACTS.md §6): every switch off, the six wave T features registered
-// empty, the room gate (planning is offered only in a rev-14 room, never read-only), the entries and their pending
-// palette ids, the card popover seam, the read model over the scene index, the export-overlay registry and the Export
-// dialog's kind slot. Each workstream extends its own tests; this file pins what they share.
+// The wave T web side shared by the workstreams (docs/WAVE-T-CONTRACTS.md §6): the switches (every one on since the
+// wave T integration), the six wave T features (each filled by its workstream), the room gate (planning is offered only
+// in a rev-14 room, never read-only), the entries and their palette ids (none pending any more), the card popover seam,
+// the read model over the scene index, the export-overlay registry and the Export dialog's kind slot. Each workstream
+// pins its own feature in its own tests; this file pins what they share.
 import { PLANNING_REV } from '@draftroom/canvas-schema/protocol'
 import {
   PALETTE_COMMAND_IDS,
@@ -19,6 +20,7 @@ import {
   PLANNING_ENTRIES,
   PLANNING_FLAG_KEYS,
   PLANNING_FLAGS,
+  type PlanningFlags,
   type PlanningScene,
   planningFlags,
   planningOffered,
@@ -38,26 +40,24 @@ import {
 } from './present-export/ported/badges.ts'
 import { exportSectionsFor, registerExportSection } from './present-export/ported/export-sections.ts'
 
-/** The wave T features whose workstream has landed (they are no longer empty). */
-const LANDED = ['storyboard', 'timeline']
 const WAVE_T_FEATURES = ['storyboard', 'storyboard-play', 'cards', 'kanban', 'card-table', 'timeline']
 
 describe('the wave T switches', () => {
-  it('ship off, and a production page ignores any override', () => {
-    expect(Object.values(PLANNING_FLAGS).every((v) => v === false)).toBe(true)
+  it('ship on (the wave T integration), and a production page ignores any override', () => {
+    expect(Object.values(PLANNING_FLAGS).every((v) => v === true)).toBe(true)
     expect(Object.keys(PLANNING_FLAG_KEYS).sort()).toEqual(Object.keys(PLANNING_FLAGS).sort())
-    expect(planningFlags(false, () => '1')).toEqual(PLANNING_FLAGS)
+    expect(planningFlags(false, () => '0')).toEqual(PLANNING_FLAGS)
   })
 
   it('a dev-auth page may turn each on or off; a blocked store keeps the shipped value', () => {
     const store: Record<string, string> = {
-      [PLANNING_FLAG_KEYS.cards]: '1',
-      [PLANNING_FLAG_KEYS.timeline]: '0',
+      [PLANNING_FLAG_KEYS.cards]: '0',
+      [PLANNING_FLAG_KEYS.timeline]: '1',
     }
     const f = planningFlags(true, (k) => store[k])
-    expect(f.cards).toBe(true)
-    expect(f.timeline).toBe(false)
-    expect(f.storyboard).toBe(false)
+    expect(f.cards).toBe(false)
+    expect(f.timeline).toBe(true)
+    expect(f.storyboard).toBe(true)
     expect(
       planningFlags(true, () => {
         throw new Error('blocked')
@@ -66,7 +66,10 @@ describe('the wave T switches', () => {
   })
 
   it('a write is offered only with its switch on, in a room of PLANNING_REV or later, and never read-only', () => {
-    const on = { ...PLANNING_FLAGS, cards: true }
+    const off = Object.fromEntries(
+      Object.keys(PLANNING_FLAGS).map((k) => [k, false]),
+    ) as unknown as PlanningFlags
+    const on = { ...off, cards: true }
     const gate = (rev: number | null, readOnly = false) => ({
       room: { contractsRev: () => rev },
       readOnly: () => readOnly,
@@ -80,30 +83,33 @@ describe('the wave T switches', () => {
     expect(planningOffered('cards', gate(null), on)).toBe(false)
     expect(planningOffered('cards', gate(14, true), on)).toBe(false)
     expect(planningOffered('kanban', gate(14), on)).toBe(false)
-    expect(planningOffered('cards', gate(14))).toBe(false)
+    expect(planningOffered('cards', gate(14), off)).toBe(false)
+    // the shipped switches
+    expect(planningOffered('cards', gate(14))).toBe(true)
+    expect(planningOffered('timeline', gate(13))).toBe(false)
   })
 })
 
 describe('the wave T features and entries', () => {
-  it('are registered empty, in order, before the Elements panel (still the last)', () => {
+  it('are registered in order, before the Elements panel (still the last), each filled by its workstream', () => {
     const ids = CANVAS_FEATURES.map((f) => f.id)
     const at = WAVE_T_FEATURES.map((id) => ids.indexOf(id))
     expect(at.every((i) => i >= 0)).toBe(true)
     expect([...at].sort((a, b) => a - b)).toEqual(at)
     expect(ids.at(-1)).toBe('elements')
-    // a workstream that landed fills its own (WS2: storyboard; WS5: timeline, pinned by features/timeline/timeline.test.ts);
-    // the rest are still empty
-    for (const id of WAVE_T_FEATURES.filter((x) => !LANDED.includes(x)))
-      expect(CANVAS_FEATURES.find((f) => f.id === id)).toEqual({ id })
+    // every workstream filled its own (its own tests pin what it contributes)
+    for (const id of WAVE_T_FEATURES)
+      expect(
+        CANVAS_FEATURES.find((f) => f.id === id),
+        id,
+      ).not.toEqual({ id })
   })
 
-  it('every entry runs one of the wave T palette ids, each pending until its owner registers it', () => {
+  it('every entry runs one of the wave T palette ids, none pending any more', () => {
     expect(PLANNING_ENTRIES.map((e) => e.id).sort()).toEqual([...WAVE_T_PALETTE_COMMAND_IDS].sort())
     for (const id of WAVE_T_PALETTE_COMMAND_IDS) {
       expect(PALETTE_COMMAND_IDS as readonly string[]).toContain(id)
-      // (WS5 registered 'timeline.new')
-      if (id !== 'timeline.new') expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).toContain(id)
-      else expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).not.toContain(id)
+      expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).not.toContain(id)
     }
     for (const e of PLANNING_ENTRIES) expect(e.places.length, e.id).toBeGreaterThan(0)
   })
@@ -178,20 +184,27 @@ describe('the planning read model (over canvas.index only)', () => {
 
 describe('the export-overlay registry', () => {
   const removals: (() => void)[] = []
+  // the layers this page registered when it loaded (votes, and the wave T layers registered at module load); a test
+  // that replaces one puts it back
+  const loaded = exportOverlayLayers()
   afterEach(() => {
     for (const r of removals.splice(0)) r()
+    for (const l of loaded) if (!exportOverlayLayers().includes(l)) registerExportOverlay(l)
   })
-  const canvas = {} as LobbyCanvas
+  // a canvas with nothing on it (no key in its index)
+  const canvas = { index: { withLobbyKey: () => [], byFrame: () => [] } } as unknown as LobbyCanvas
   const SVG = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300"><g/></svg>'
 
-  it('starts with the vote badges only; with no active layer an export is the engine’s alone', () => {
-    expect(exportOverlayLayers().map((l) => l.id)).toEqual(['votes'])
+  it('holds the vote badges and only wave T ids; on an empty canvas no layer is active (the export is the engine’s)', () => {
+    const ids = loaded.map((l) => l.id)
+    expect(ids).toContain('votes')
+    for (const id of ids) expect(['votes', 'storyboard', 'cards', 'kanban', 'timeline']).toContain(id)
     expect(VOTES_OVERLAY.order).toBe(100)
     const quiet: ExportOverlayLayer = { id: 'cards', order: 20, active: () => false, svg: () => '<x/>' }
     removals.push(registerExportOverlay(quiet))
-    // a canvas with no revealed vote and only an inactive layer: nothing to draw
     expect(VOTES_OVERLAY.active(canvas)).toBe(false)
     expect(exportOverlaysActive(canvas)).toBe(false)
+    expect(svgWithOverlays(SVG, { canvas, exported: new Set(), origin: { x: 0, y: 0 } })).toBe(SVG)
   })
 
   it('a layer draws in order, in export coordinates, before the end of the SVG; its removal takes it out', () => {
@@ -205,12 +218,9 @@ describe('the export-overlay registry', () => {
         return `<g data-layer="${id}"/>`
       },
     })
-    removals.push(
-      registerExportOverlay(layer('timeline', 40)),
-      registerExportOverlay(layer('storyboard', 10)),
-    )
-    // the vote layer is quiet for this canvas (no results provided)
-    expect(VOTES_OVERLAY.active(canvas)).toBe(false)
+    const a = layer('timeline', 40)
+    const b = layer('storyboard', 10)
+    removals.push(registerExportOverlay(a), registerExportOverlay(b))
     const out = svgWithOverlays(SVG, { canvas, exported: new Set(['a', 'b']), origin: { x: 5, y: 7 } })
     expect(out).toBe(
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300"><g/><g data-layer="storyboard"/><g data-layer="timeline"/></svg>',
@@ -222,21 +232,23 @@ describe('the export-overlay registry', () => {
       n: 2,
     })
     for (const r of removals.splice(0)) r()
-    expect(exportOverlayLayers().map((l) => l.id)).toEqual(['votes'])
+    expect(exportOverlayLayers()).not.toContain(a)
+    expect(exportOverlayLayers()).not.toContain(b)
     expect(svgWithOverlays(SVG, { canvas, exported: new Set(), origin: { x: 0, y: 0 } })).toBe(SVG)
   })
 })
 
 describe('the Export dialog’s kind slot', () => {
-  it('has no section until a feature registers one; sections are offered per canvas, in order', () => {
-    const canvas = {} as LobbyCanvas
-    expect(exportSectionsFor(canvas)).toEqual([])
+  it('offers a section per canvas, in order; a removal takes it out', () => {
+    const empty = { index: { withLobbyKey: () => [], byFrame: () => [] } } as unknown as LobbyCanvas
+    // the sections registered at load are offered only to a board that holds something for them
+    expect(exportSectionsFor(empty)).toEqual([])
     const Section = () => null
     const offA = registerExportSection({ id: 'storyboard-sequence', order: 20, offered: () => true, Section })
     const offB = registerExportSection({ id: 'storyboard-sheet', order: 10, offered: () => true, Section })
     const offC = registerExportSection({ id: 'card-table-csv', order: 30, offered: () => false, Section })
-    expect(exportSectionsFor(canvas).map((s) => s.id)).toEqual(['storyboard-sheet', 'storyboard-sequence'])
+    expect(exportSectionsFor(empty).map((s) => s.id)).toEqual(['storyboard-sheet', 'storyboard-sequence'])
     for (const off of [offA, offB, offC]) off()
-    expect(exportSectionsFor(canvas)).toEqual([])
+    expect(exportSectionsFor(empty)).toEqual([])
   })
 })

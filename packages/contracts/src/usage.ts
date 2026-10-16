@@ -19,7 +19,7 @@ import { REACTION_CODES } from './workshops.ts'
 
 // ---- the parameter lists -------------------------------------------------------------------------------
 
-/** Wave T's palette commands (each pending until its owner registers it: PENDING_PALETTE_COMMAND_IDS). */
+/** Wave T's palette commands (all live since the wave T integration; none is in PENDING_PALETTE_COMMAND_IDS). */
 export const WAVE_T_PALETTE_COMMAND_IDS = [
   'storyboard.new',
   'storyboard.from-frames',
@@ -270,9 +270,9 @@ export const PENDING_PALETTE_COMMAND_IDS: readonly PaletteCommandId[] = [
   // again holds the whole capture feature on the web).
   // wave Q: none left. elements.open is registered by WS3 (features/elements) since the integration turned
   // ELEMENTS_PANEL on.
-  // wave T (the foundation): every wave T command; each owner removes its own ids in the change that registers them.
-  // WS5 registered 'timeline.new' (features/timeline).
-  ...WAVE_T_PALETTE_COMMAND_IDS.filter((id) => id !== 'timeline.new'),
+  // wave T: none left. The foundation listed every wave T command; WS5 registered 'timeline.new' (features/timeline)
+  // and the integration, turning every PLANNING_FLAGS switch on, released the rest (WS2's storyboard.*, WS3's
+  // storyboard.play and storyboard.present, WS4's cards.make, kanban.new and card-table.open).
 ]
 
 /**
