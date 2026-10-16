@@ -130,6 +130,16 @@ function Strip({ ctx, sb }: { ctx: CanvasFeatureContext; sb: Sb }) {
   }
   const move = (from: number, to: number) => {
     if (!canEdit) return
+    const panel = sb.panels[from]
+    // a locked panel keeps its place (it takes no write: the room refuses it); the others move around it
+    if (panel && canvas.isLocked(panel.id)) {
+      ctx.notify({
+        key: 'storyboard',
+        text: `${shotLabel(from + 1)} is locked. Unlock it to move it.`,
+        testId: 'sb-locked-notice',
+      })
+      return
+    }
     if (movePanel(canvas, sb, from, to)) {
       const p = sb.panels[from]
       if (p) canvas.select([p.id])
@@ -146,6 +156,7 @@ function Strip({ ctx, sb }: { ctx: CanvasFeatureContext; sb: Sb }) {
     }
   }
   const current = active >= 0 ? active : -1
+  const currentLocked = current >= 0 && canvas.isLocked(sb.panels[current]?.id ?? '')
 
   // dragging a card: its new place follows the pointer over the cards' middles
   const dropIndex = (clientX: number): number => {
@@ -290,6 +301,7 @@ function Strip({ ctx, sb }: { ctx: CanvasFeatureContext; sb: Sb }) {
             data-drop-before={drag && drag.to === i && drag.from > i ? 'true' : undefined}
             data-drop-after={drag && drag.to === i && drag.from < i ? 'true' : undefined}
             data-dragged={drag?.from === i ? 'true' : undefined}
+            data-locked={canvas.isLocked(p.id) ? 'true' : undefined}
             tabIndex={i === (current >= 0 ? current : focusIndex) ? 0 : -1}
             aria-label={`${shotLabel(i + 1)}, ${formatDuration(timings.panels[i]?.durationMs ?? 0)}${i === current ? ', selected' : ''}`}
             aria-current={i === current ? 'true' : undefined}
@@ -317,6 +329,8 @@ function Strip({ ctx, sb }: { ctx: CanvasFeatureContext; sb: Sb }) {
             }}
             onPointerDown={(e) => {
               if (!canEdit || e.button !== 0 || (e.target as HTMLElement).closest('input, button')) return
+              // a locked panel is not dragged (it keeps its place)
+              if (canvas.isLocked(p.id)) return
               const startX = e.clientX
               const el = e.currentTarget
               let started = false
@@ -377,7 +391,7 @@ function Strip({ ctx, sb }: { ctx: CanvasFeatureContext; sb: Sb }) {
             type="button"
             className="dr-btn dr-btn--sm dr-btn--ghost"
             data-testid="sb-move-left"
-            disabled={current === 0}
+            disabled={current === 0 || currentLocked}
             onClick={() => move(current, current - 1)}
           >
             ← Move
@@ -386,7 +400,7 @@ function Strip({ ctx, sb }: { ctx: CanvasFeatureContext; sb: Sb }) {
             type="button"
             className="dr-btn dr-btn--sm dr-btn--ghost"
             data-testid="sb-move-right"
-            disabled={current === n - 1}
+            disabled={current === n - 1 || currentLocked}
             onClick={() => move(current, current + 1)}
           >
             Move →

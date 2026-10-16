@@ -188,6 +188,88 @@ describe('reorder, insert, duplicate, delete', () => {
   })
 })
 
+describe('a locked panel keeps its place', () => {
+  const lock = (f: ReturnType<typeof board>['f'], id: string) =>
+    f.els.set(id, { ...(f.els.get(id) as El), locked: true })
+  const posOf = (f: ReturnType<typeof board>['f'], id: string) => lobby(f.els.get(id))['sb:pos'] as string
+  const ascending = (keys: string[]) => keys.every((k, i) => i === 0 || (keys[i - 1] as string) < k)
+
+  it('a move across a locked panel keys the rest around it; the locked one keeps its key and its slot', () => {
+    const { f, canvas, made, sb } = board(4)
+    const [p0, p1, p2, p3] = made.panelIds as [string, string, string, string]
+    lock(f, p1)
+    const slots = sb().panels.map((p) => [p.x, p.y])
+    const lockedBefore = structuredClone(f.els.get(p1))
+    expect(movePanel(canvas, sb(), 0, 2)).toBe(true)
+    expect(f.lockedWrites).toEqual([])
+    expect(f.els.get(p1)).toEqual(lockedBefore)
+    // the locked panel stays second: the others take the slots around it
+    expect(sb().panels.map((p) => p.id)).toEqual([p2, p1, p0, p3])
+    expect(sb().panels.map((p) => [p.x, p.y])).toEqual(slots)
+    expect(ascending(sb().panels.map((p) => posOf(f, p.id)))).toBe(true)
+  })
+
+  it('a locked panel is not moved: nothing is written', () => {
+    const { f, canvas, made, sb } = board(3)
+    lock(f, made.panelIds[0] as string)
+    f.transacts.length = 0
+    expect(movePanel(canvas, sb(), 0, 2)).toBe(false)
+    expect(f.transacts).toEqual([])
+  })
+
+  it('a rebalance (keys past 48 characters) skips the locked panel and keys the rest around it', () => {
+    const { f, canvas, made, sb } = board(3)
+    const [p0, p1, p2] = made.panelIds as [string, string, string]
+    // keys that have grown long between the first two panels (past 48 characters, still valid)
+    const lo = 'a0'
+    let hi = 'a1'
+    for (let i = 0; i < 320; i++) hi = indexKeyBetween(lo, hi)
+    expect(hi.length).toBeGreaterThan(48)
+    expect(hi.length).toBeLessThanOrEqual(64)
+    const set = (id: string, pos: string) =>
+      f.els.set(id, {
+        ...(f.els.get(id) as El),
+        customData: { lobby: { ...lobby(f.els.get(id)), 'sb:pos': pos } },
+      })
+    set(p0, lo)
+    set(p1, hi)
+    set(p2, 'a2')
+    lock(f, p2)
+    // insert between the first two: a key between them would pass 48 characters (a rebalance of all, before); now
+    // the unlocked panels are keyed around the locked one, which keeps its key and its place (the third slot): the
+    // panel pushed out of the slot before it flows past it
+    const id = insertPanel(canvas, sb(), 1, {}, ids) as string
+    expect(f.lockedWrites).toEqual([])
+    expect(posOf(f, p2)).toBe('a2')
+    expect(sb().panels.map((p) => p.id)).toEqual([p0, id, p2, p1])
+    const keys = sb().panels.map((p) => posOf(f, p.id))
+    expect(ascending(keys)).toBe(true)
+    expect(keys.every((k) => k.length <= 48)).toBe(true)
+  })
+
+  it('insert and duplicate before a locked panel: it keeps its key and its slot', () => {
+    for (const run of ['insert', 'duplicate'] as const) {
+      const { f, canvas, made, sb } = board(3)
+      const p2 = made.panelIds[2] as string
+      lock(f, p2)
+      const slot = [f.els.get(p2)?.x, f.els.get(p2)?.y]
+      const lockedBefore = structuredClone(f.els.get(p2))
+      const made1 = run === 'insert' ? insertPanel(canvas, sb(), 1, {}, ids) : duplicatePanel(canvas, sb(), 0)
+      expect(made1).toBeTruthy()
+      expect(f.lockedWrites).toEqual([])
+      expect(f.els.get(p2)).toEqual(lockedBefore)
+      expect([f.els.get(p2)?.x, f.els.get(p2)?.y]).toEqual(slot)
+      expect(
+        sb()
+          .panels.map((p) => p.id)
+          .indexOf(p2),
+      ).toBe(2)
+      expect(sb().panels).toHaveLength(4)
+      expect(ascending(sb().panels.map((p) => posOf(f, p.id)))).toBe(true)
+    }
+  })
+})
+
 describe('order keys', () => {
   const at = (pos: string[]) => pos.map((p, i) => ({ id: `p${i}`, pos: p }))
   it('one key between neighbours; a rebalance past 48 characters or between equal keys', () => {

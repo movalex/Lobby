@@ -25,7 +25,19 @@ import { type CanvasElement, items, type LobbyCanvas, type LobbyTx } from '../..
 import { spotNear } from '../ai/ported/apply.ts'
 import { revealResult } from '../ai/reveal.ts'
 import { type Measure, type PanelWords, type Provenance, planHead, planPanel } from './build.ts'
-import { gridPositions, HEAD_GAP, insertKeys, moved, moveKeys, orderedOf, perRowOf } from './model.ts'
+import {
+  aroundLocked,
+  gridPositions,
+  HEAD_GAP,
+  insertKeys,
+  type KeyedSlot,
+  keysAroundLocked,
+  moved,
+  moveKeys,
+  type OrderedPanel,
+  orderedOf,
+  perRowOf,
+} from './model.ts'
 
 export type Sb = Storyboard<CanvasElement>
 
@@ -117,6 +129,79 @@ const setPos = (tx: LobbyTx, id: string, pos: string) =>
   tx.update(id, { customData: { lobby: { [SB_POS_KEY]: pos } } })
 
 const aspectOf = (sb: Sb): StoryboardAspect => sb.settings?.aspect ?? '16:9'
+
+/** The storyboard's panels as the order maths reads them, with whether each is locked (it takes no write). */
+const keyedOf = (canvas: Pick<LobbyCanvas, 'isLocked'>, sb: Sb): (OrderedPanel & { locked: boolean })[] =>
+  orderedOf(sb.panels).map((p) => ({ ...p, locked: canvas.isLocked(p.id) }))
+
+interface InsertPlan {
+  readonly newKey: string
+  readonly rewrites: ReadonlyMap<string, string>
+  /** the order after the insert (null: the new panel) */
+  readonly order: readonly (string | null)[]
+  /** where the new panel lands in it */
+  readonly at: number
+}
+
+/**
+ * The keys and the order of a new panel at `index`. With a locked panel in the storyboard, every locked panel keeps
+ * its place (its index, so its slot, and its key: it takes no write) and the new one goes in among the others: it
+ * lands at the first free place from `index`. Null when no key fits.
+ */
+function planInsert(canvas: SbCanvas, sb: Sb, index: number): InsertPlan | null {
+  const keyed = keyedOf(canvas, sb)
+  const at = Math.max(0, Math.min(keyed.length, index))
+  if (!keyed.some((k) => k.locked)) {
+    const { newKey, rewrites } = insertKeys(keyed, at)
+    const order: (string | null)[] = keyed.map((k) => k.id)
+    order.splice(at, 0, null)
+    return { newKey, rewrites, order, at }
+  }
+  const fresh: KeyedSlot = { id: null, pos: '', locked: false }
+  const unlocked = keyed.filter((k) => !k.locked)
+  const before = keyed.slice(0, at).filter((k) => !k.locked).length
+  const next = aroundLocked(keyed, (k) => k.locked, [
+    ...unlocked.slice(0, before),
+    fresh,
+    ...unlocked.slice(before),
+  ])
+  const keys = keysAroundLocked(next)
+  if (!keys?.newKey) return null
+  return {
+    newKey: keys.newKey,
+    rewrites: keys.rewrites,
+    order: next.map((k) => k.id),
+    at: next.indexOf(fresh),
+  }
+}
+
+/**
+ * The keys and the order of a move of the panel at `from` to `to`. With a locked panel in the storyboard, every
+ * locked panel keeps its place and key; the moved one goes to `to` among the others (onto a locked panel's place:
+ * the nearest free one past it). Null when nothing changes, the panel is locked or no key fits.
+ */
+function planMove(
+  canvas: SbCanvas,
+  sb: Sb,
+  from: number,
+  to: number,
+): { rewrites: ReadonlyMap<string, string>; order: readonly string[] } | null {
+  const keyed = keyedOf(canvas, sb)
+  const self = keyed[from]
+  if (!self || self.locked) return null
+  if (!keyed.some((k) => k.locked)) {
+    const order = moved(keyed, from, to).map((k) => k.id as string)
+    return { rewrites: moveKeys(keyed, from, to), order }
+  }
+  const unlocked = keyed.filter((k) => !k.locked)
+  const others = (list: readonly KeyedSlot[]) => list.filter((k) => !k.locked && k !== self).length
+  const place = to < from ? others(keyed.slice(0, to)) : others(keyed.slice(0, to + 1))
+  const next = aroundLocked(keyed, (k) => k.locked, moved(unlocked, unlocked.indexOf(self), place))
+  if (next.every((k, i) => k === keyed[i])) return null
+  const keys = keysAroundLocked(next)
+  if (!keys) return null
+  return { rewrites: keys.rewrites, order: next.map((k) => k.id as string) }
+}
 
 // ---- create ----------------------------------------------------------------------------------------------------
 
@@ -213,9 +298,9 @@ export function insertPanel(
   newId: () => string = newElementId,
 ): string | null {
   if (canvas.readOnly()) return null
-  const order = orderedOf(sb.panels)
-  const at = Math.max(0, Math.min(order.length, index))
-  const { newKey, rewrites } = insertKeys(order, at)
+  const plan = planInsert(canvas, sb, index)
+  if (!plan) return null
+  const { newKey, rewrites, at } = plan
   const measure = measureOf(canvas)
   const aspect = aspectOf(sb)
   const dry = planPanel(
@@ -223,8 +308,9 @@ export function insertPanel(
     measure,
     () => 'dry',
   )
-  const slots: Slot[] = order.map((p) => slotOf(canvas, p.id))
-  slots.splice(at, 0, { id: null, w: dry.width, h: dry.height })
+  const slots: Slot[] = plan.order.map((pid) =>
+    pid === null ? { id: null, w: dry.width, h: dry.height } : slotOf(canvas, pid),
+  )
   const pos = placeSlots(canvas, sb, slots)
   const id = newId()
   canvas.transact('insert panel', (tx) => {
@@ -257,14 +343,16 @@ export function duplicatePanel(canvas: SbCanvas, sb: Sb, index: number): string 
   if (canvas.readOnly()) return null
   const src = sb.panels[index]
   if (!src || !live(canvas.get(src.id))) return null
-  const order = orderedOf(sb.panels)
-  const { newKey, rewrites } = insertKeys(order, index + 1)
-  const slots: Slot[] = order.map((p) => slotOf(canvas, p.id))
-  const srcSlot = slots[index] as Slot
-  slots.splice(index + 1, 0, { id: null, w: srcSlot.w, h: srcSlot.h })
+  const plan = planInsert(canvas, sb, index + 1)
+  if (!plan) return null
+  const { newKey, rewrites } = plan
+  const srcSlot = slotOf(canvas, src.id)
+  const slots: Slot[] = plan.order.map((pid) =>
+    pid === null ? { id: null, w: srcSlot.w, h: srcSlot.h } : slotOf(canvas, pid),
+  )
   const pos = placeSlots(canvas, sb, slots)
   const frame = canvas.get(src.id) as CanvasElement
-  const to = pos[index + 1] ?? { x: frame.x, y: frame.y }
+  const to = pos[plan.at] ?? { x: frame.x, y: frame.y }
   let copy: string | null = null
   canvas.transact('duplicate panel', (tx) => {
     for (const [pid, key] of rewrites) setPos(tx, pid, key)
@@ -309,12 +397,12 @@ export function movePanel(canvas: SbCanvas, sb: Sb, from: number, to: number): b
   const n = sb.panels.length
   const target = Math.max(0, Math.min(n - 1, to))
   if (from === target || from < 0 || from >= n) return false
-  const keys = moveKeys(orderedOf(sb.panels), from, target)
-  const order = moved(sb.panels, from, target)
-  const slots = order.map((p) => slotOf(canvas, p.id))
+  const plan = planMove(canvas, sb, from, target)
+  if (!plan) return false
+  const slots = plan.order.map((id) => slotOf(canvas, id))
   const pos = placeSlots(canvas, sb, slots)
   canvas.transact('reorder panels', (tx) => {
-    for (const [pid, key] of keys) setPos(tx, pid, key)
+    for (const [pid, key] of plan.rewrites) setPos(tx, pid, key)
     moveIntoSlots(canvas, tx, slots, pos)
   })
   return true

@@ -10,6 +10,7 @@ import {
   SB_DEFAULT_PER_ROW,
   SB_PER_ROW_MAX,
   SB_POS_KEY,
+  SB_POS_MAX_CHARS,
   SB_POS_REBALANCE_CHARS,
   type StoryboardAspect,
 } from '@draftroom/canvas-schema/planning'
@@ -243,6 +244,122 @@ export function moveKeys(
   const out = new Map(rewrites)
   out.set(moved.id, newKey)
   return out
+}
+
+// ---- locked panels -------------------------------------------------------------------------------------------
+// A locked panel takes no write (no lock exemption: the room refuses its `sb:pos` and its move, LOCKED). So with one
+// in a storyboard, a move, an insert and a duplicate keep every locked panel at its place in the order (and so in its
+// grid slot) and key the others around it: a locked key never changes.
+
+/**
+ * The order after a reorder of the UNLOCKED panels: `order` is the storyboard as it is, `unlockedNext` the unlocked
+ * panels (and a new one) in their new order. Each locked panel keeps its index; the others fill the rest in order.
+ */
+export function aroundLocked<T>(
+  order: readonly T[],
+  locked: (t: T) => boolean,
+  unlockedNext: readonly T[],
+): T[] {
+  const fixed = new Map<number, T>()
+  order.forEach((t, i) => {
+    if (locked(t)) fixed.set(i, t)
+  })
+  const total = fixed.size + unlockedNext.length
+  const out: T[] = []
+  let u = 0
+  for (let i = 0; i < total; i++) {
+    const f = fixed.get(i)
+    if (f !== undefined) out.push(f)
+    else if (u < unlockedNext.length) out.push(unlockedNext[u++] as T)
+  }
+  // a locked panel past the end (fewer panels than its index) stays last, in order
+  for (const [i, f] of [...fixed].sort((a, b) => a[0] - b[0])) if (i >= total) out.push(f)
+  return out
+}
+
+/** `n` order keys strictly between `lo` and `hi` (null for an open end), ascending, by bisection (short keys). */
+export function keysBetween(lo: string | null, hi: string | null, n: number): string[] {
+  if (n <= 0) return []
+  const mid = Math.floor((n - 1) / 2)
+  const k = panelPosBetween(lo, hi)
+  return [...keysBetween(lo, k, mid), k, ...keysBetween(k, hi, n - mid - 1)]
+}
+
+export interface KeyedSlot {
+  /** a panel's id, or null for the one being made */
+  readonly id: string | null
+  /** its `sb:pos` now ('' for a new panel) */
+  readonly pos: string
+  readonly locked: boolean
+}
+
+/**
+ * The `sb:pos` writes that put `next` (the order wanted, locked panels where they stand) in order without writing
+ * a locked panel: between two locked neighbours each run of the others keeps the keys that still ascend (short and
+ * valid), and the rest get keys between the kept ones; a run whose new keys would pass 48 characters is keyed afresh
+ * between its locked neighbours (the rebalance, around them). `newKey` is the new panel's. Null when no valid key
+ * fits (two locked panels with equal keys and a panel between them, or keys past 64 characters).
+ */
+export function keysAroundLocked(
+  next: readonly KeyedSlot[],
+): { newKey: string | null; rewrites: ReadonlyMap<string, string> } | null {
+  const rewrites = new Map<string, string>()
+  let newKey: string | null = null
+  const assign = (s: KeyedSlot, key: string) => {
+    if (s.id === null) newKey = key
+    else if (s.pos !== key) rewrites.set(s.id, key)
+  }
+  let lo: string | null = null
+  let start = 0
+  for (let i = 0; i <= next.length; i++) {
+    const s = next[i]
+    if (s && !s.locked) continue
+    const hi = s ? s.pos : null
+    const run = next.slice(start, i)
+    if (run.length) {
+      if (lo !== null && hi !== null && !(lo < hi)) return null
+      const keys = keyRun(run, lo, hi)
+      if (!keys) return null
+      run.forEach((r, j) => {
+        assign(r, keys[j] as string)
+      })
+    }
+    // (locked panels keep their order with each other: the storyboard's order is by key)
+    if (s) lo = s.pos
+    start = i + 1
+  }
+  return { newKey, rewrites }
+}
+
+/** The keys of a run of unlocked slots between `lo` and `hi`: kept where they still ascend, else new. */
+function keyRun(run: readonly KeyedSlot[], lo: string | null, hi: string | null): string[] | null {
+  const short = (k: string) => isOrderKey(k) && k.length <= SB_POS_REBALANCE_CHARS
+  const kept: (string | null)[] = []
+  let prev = lo
+  for (const r of run) {
+    const ok = r.id !== null && short(r.pos) && (prev === null || r.pos > prev) && (hi === null || r.pos < hi)
+    kept.push(ok ? r.pos : null)
+    if (ok) prev = r.pos
+  }
+  const out: string[] = []
+  for (let i = 0; i < run.length; ) {
+    const k = kept[i]
+    if (k !== null && k !== undefined) {
+      out.push(k)
+      i++
+      continue
+    }
+    let j = i
+    while (j < run.length && kept[j] === null) j++
+    const left = out.length ? (out[out.length - 1] as string) : lo
+    const right = kept[j] ?? hi
+    out.push(...keysBetween(left, right, j - i))
+    i = j
+  }
+  if (out.every(short)) return out
+  // a fresh, evenly spread run between the locked neighbours (the rebalance, around them)
+  const fresh = keysBetween(lo, hi, run.length)
+  return fresh.every((k) => isOrderKey(k) && k.length <= SB_POS_MAX_CHARS) ? fresh : null
 }
 
 /** `list` with the item at `from` moved to `to`. */

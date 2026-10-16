@@ -9,12 +9,15 @@ export type { El }
 
 export interface FakeSbCanvas extends FakeMapCanvas {
   setRev(rev: number | null): void
+  /** the ids of LOCKED elements a transaction wrote (the room refuses each such op: LOCKED) */
+  readonly lockedWrites: string[]
 }
 
 export function fakeSbCanvas(seed: El[] = []): FakeSbCanvas {
   const fake = fakeMapCanvas(seed)
   let rev: number | null = 14
   let n = 0
+  const lockedWrites: string[] = []
   const c = fake.canvas as unknown as Record<string, unknown>
   const live = () => [...fake.els.values()].filter((e) => !e.isDeleted)
   const lobbyOf = (e: El) => (e.customData as { lobby?: Record<string, unknown> } | undefined)?.lobby ?? {}
@@ -40,6 +43,11 @@ export function fakeSbCanvas(seed: El[] = []): FakeSbCanvas {
     inner(
       label,
       (tx) => {
+        const update = tx.update as (id: string, patch: Record<string, unknown>) => void
+        tx.update = (id: string, patch: Record<string, unknown>) => {
+          if (fake.els.get(id)?.locked === true) lockedWrites.push(id)
+          update(id, patch)
+        }
         tx.duplicate = (ids: readonly string[], offset: { x: number; y: number } = { x: 0, y: 0 }) => {
           const map = new Map<string, string>()
           for (const id of ids) map.set(id, `${id}-copy${++n}`)
@@ -71,6 +79,7 @@ export function fakeSbCanvas(seed: El[] = []): FakeSbCanvas {
     )
   return {
     ...fake,
+    lockedWrites,
     setRev(v) {
       rev = v
     },
