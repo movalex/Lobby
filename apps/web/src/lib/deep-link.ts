@@ -12,6 +12,7 @@
 // viewport links move with their page's frozen offset (`lb_doc.import.legacyPages`). Pure: no DOM, no
 // engine, no tldraw (the dashboard builds links with it too).
 import { ELEMENT_ID_PATTERN } from '@draftroom/canvas-schema/limits'
+import { REVIEW_VIEW_VALUE } from '@draftroom/contracts'
 
 export const ELEMENTS_PARAM = 'el'
 export const VIEW_PARAM = 'view'
@@ -122,7 +123,7 @@ export function readDeepLink(href: string): DeepLink | null {
 export function hasDeepLinkParam(href: string): boolean {
   try {
     const p = new URL(href).searchParams
-    return DEEP_LINK_PARAMS.some((n) => p.has(n))
+    return DEEP_LINK_PARAMS.some((n) => p.has(n) && !(n === VIEW_PARAM && p.get(n) === REVIEW_VIEW_VALUE))
   } catch {
     return false
   }
@@ -248,6 +249,11 @@ export function legacyViewBounds(
 /** path + remaining query + hash, for history.replaceState (same origin by construction). */
 export function withoutParams(href: string, names: readonly string[]): string {
   const url = new URL(href)
-  for (const n of names) url.searchParams.delete(n)
+  for (const n of names) {
+    // wave S (WS4): `?view=review` is the review page's address (features/review-page), not a viewport deep link: it
+    // stays, so a reload of the page is still the page
+    if (n === VIEW_PARAM && url.searchParams.get(n) === REVIEW_VIEW_VALUE) continue
+    url.searchParams.delete(n)
+  }
   return `${url.pathname}${url.search}${url.hash}`
 }

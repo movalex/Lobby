@@ -27,6 +27,7 @@ import { feature as piecesFeature } from './pieces/ported/index.tsx'
 import { feature as presentLiveFeature } from './present-export/live/ported/index.tsx'
 import { feature as presentExportFeature } from './present-export/ported/index.tsx'
 import { feature as reviewFeature } from './review/index.tsx'
+import { feature as reviewPageFeature } from './review-page/index.tsx'
 import { feature as sharingFeature } from './sharing/ported/index.tsx'
 import { feature as sortFeature } from './sort/ported/index.tsx'
 import { feature as tagsFeature } from './tags/ported/index.tsx'
@@ -72,6 +73,9 @@ export const CANVAS_FEATURES: readonly CanvasFeature[] = [
   // wave S (WS1; contributes nothing while REVIEW_FLAGS.status is off): review status (badges, the Review panel, the
   // menu entries, the review viewer's status slot)
   reviewFeature,
+  // wave S (WS4): the client review page, the ?view=review overlay; nothing while its switch is off. Before the wave Q
+  // entry, which the wave Q foundation's test pins as the last
+  reviewPageFeature,
   // wave Q (registered by the foundation, hidden behind ELEMENTS_PANEL; WS3 fills it): the Elements panel
   elementsFeature,
 ]

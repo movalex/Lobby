@@ -52,6 +52,8 @@ import { api, isApiError } from '../api/client.ts'
 import { useSession } from '../auth/session.tsx'
 import { OutsideConfirm, OutsideStatusTag } from '../features/people/ExternalTag.tsx'
 import { useBoardOutside } from '../features/people/outside.ts'
+import { reviewFlags } from '../features/review/flags.ts'
+import { openAsReviewPageDefault } from '../features/review-page/landing.ts'
 import { announceShareChanged, SHARE_REMOTE_EVENT, sharingApi } from '../features/sharing/api.ts'
 import {
   CLOSED,
@@ -2298,6 +2300,21 @@ function ClientLinkSection({
   const [role, setRole] = useState<'viewer' | 'commenter'>(CLIENT_LINK_DEFAULTS.role)
   const [days, setDays] = useState<number>(REVIEW_LINK_DEFAULT_DAY)
   const [allowGuests, setAllowGuests] = useState<boolean>(CLIENT_LINK_DEFAULTS.allowGuests)
+  // wave S (WS4): "Open as review page": the link lands on the board's review page (?view=review). Offered only
+  // while the review page switch is on; ticked for you when the board already has review items.
+  const reviewPageOn = reviewFlags().reviewPage
+  const [reviewPage, setReviewPage] = useState(false)
+  const reviewPageTouched = useRef(false)
+  useEffect(() => {
+    if (!reviewPageOn) return
+    let live = true
+    void openAsReviewPageDefault(boardId).then((on) => {
+      if (live && !reviewPageTouched.current) setReviewPage(on)
+    })
+    return () => {
+      live = false
+    }
+  }, [reviewPageOn, boardId])
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // copied: null while the copy is being tried (it never blocks the link from showing: share-copy.ts).
@@ -2312,7 +2329,12 @@ function ClientLinkSection({
     setSaid('')
     let link: ReviewLinkCreated
     try {
-      link = await sharing.createReviewLink(boardId, { role, expiresInDays: days, allowGuests })
+      link = await sharing.createReviewLink(boardId, {
+        role,
+        expiresInDays: days,
+        allowGuests,
+        ...(reviewPageOn && reviewPage ? { landing: 'review' as const } : {}),
+      })
     } catch (e) {
       setError(isApiError(e) ? e.message : 'The review link could not be created.')
       return
@@ -2350,6 +2372,27 @@ function ClientLinkSection({
             onChange={setAllowGuests}
             openLinks={links.length}
           />
+          {reviewPageOn && (
+            <div className="dr-sharing__guests">
+              <label className="dr-sharing__check">
+                <input
+                  type="checkbox"
+                  data-testid="review-link-landing"
+                  checked={reviewPage}
+                  aria-describedby={`${roleId}-landing`}
+                  onChange={(e) => {
+                    reviewPageTouched.current = true
+                    setReviewPage(e.target.checked)
+                  }}
+                />
+                Open as review page
+              </label>
+              <p id={`${roleId}-landing`} className="dr-share__hint">
+                The link opens the items to review one by one, with their status and comments, instead of the
+                whole board.
+              </p>
+            </div>
+          )}
           <ClientExportLine boardId={boardId} />
         </>
       )}
@@ -2701,6 +2744,12 @@ function ReviewLinkRow({
               <>
                 {' · '}
                 <span data-testid="link-guests-allowed">guests can join with a name</span>
+              </>
+            )}
+            {link.landing === 'review' && (
+              <>
+                {' · '}
+                <span data-testid="link-opens-review">opens the review page</span>
               </>
             )}
           </span>

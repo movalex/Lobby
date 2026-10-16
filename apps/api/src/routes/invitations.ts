@@ -70,9 +70,11 @@ export interface InvitationRow {
   allow_guests: boolean
   /** 0021_domain_access: the one address that may accept this single-use invitation (null: unbound, gone). */
   invited_email: string | null
+  /** 0037_client_review: where a multi-use link opens, the board or its review page (wave S, WS4). */
+  landing: 'board' | 'review'
 }
 export const INVITATION_COLUMNS =
-  'i.id, i.workspace_id, i.board_id, i.role, i.created_by, i.created_at, i.expires_at, i.redeemed_by, i.revoked_at, i.multi_use, i.allow_guests, i.invited_email'
+  'i.id, i.workspace_id, i.board_id, i.role, i.created_by, i.created_at, i.expires_at, i.redeemed_by, i.revoked_at, i.multi_use, i.allow_guests, i.invited_email, i.landing'
 
 type InvitationState = 'usable' | 'redeemed_by_caller' | 'gone'
 
@@ -558,7 +560,12 @@ export function registerInvitationRoutes(app: FastifyInstance, ctx: AppContext):
         ])
         if (board?.status === 'trashed') throw boardInTrash()
       }
-      const accepted = { workspaceId: inv.workspace_id, boardId: inv.board_id }
+      // wave S (WS4): a link that opens the review page says so; absent: the board, exactly as before
+      const accepted = {
+        workspaceId: inv.workspace_id,
+        boardId: inv.board_id,
+        ...(inv.landing === 'review' && inv.board_id !== null ? { landing: 'review' as const } : {}),
+      }
       if (state === 'redeemed_by_caller') return { outcome: 'ok' as const, accepted, changed: false }
       // Domain access: only an account with the invited (verified) address accepts a locked link.
       if (inv.invited_email !== null && !callerEmails.has(inv.invited_email))
