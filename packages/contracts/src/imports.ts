@@ -147,6 +147,10 @@ export const IMPORT_CODES = {
   /** the api restarted while the board ran (resume to go on) */
   interrupted: 'IMPORT_INTERRUPTED',
   cancelled: 'IMPORT_CANCELLED',
+  /** a paused or interrupted board waited longer than IMPORT_TIMING.sweepImportingAfterMs: it was removed */
+  expired: 'IMPORT_EXPIRED',
+  /** 400: resuming a job whose source needs its secret again (a Miro token) without it */
+  secretRequired: 'IMPORT_SECRET_REQUIRED',
   /** anything else (a bug): logged by code and board id only */
   internal: 'INTERNAL',
 } as const

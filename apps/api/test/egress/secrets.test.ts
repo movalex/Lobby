@@ -100,7 +100,7 @@ describe('egress errors hold no secret, whatever the other side answers', () => 
     }
   }
 
-  it('a redirect to a URL with the token, a reset after an echo, a body past its cap, a timeout', async () => {
+  it('a redirect to a URL with the token, a reset after an echo, a body over its cap, a timeout', async () => {
     const echo = (req: IncomingMessage) => String(req.headers.authorization ?? '')
     const cases: [string, (req: IncomingMessage, res: ServerResponse) => void, string][] = [
       [

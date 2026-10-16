@@ -82,11 +82,16 @@ const CODE_RE = /^[A-Z][A-Z0-9_]{1,63}$/
  * it has one of that shape, else INTERNAL). A foreign error's message, stack and cause are dropped: another service's
  * answer, a URL or a header could be quoted in any of them.
  */
-export async function withSecrets<T>(secrets: readonly RedactedSecret[], fn: () => Promise<T>): Promise<T> {
+export async function withSecrets<T>(
+  secrets: readonly RedactedSecret[],
+  fn: () => Promise<T>,
+  /** errors of the caller's own classes that carry codes only (the runner's stop and failure): kept as they are */
+  keep: (e: unknown) => boolean = () => false,
+): Promise<T> {
   try {
     return await fn()
   } catch (e) {
-    throw secretSafe(e, secrets)
+    throw keep(e) ? e : secretSafe(e, secrets)
   }
 }
 

@@ -13,7 +13,7 @@
 
 import type { FastifyInstance, RouteHandlerMethod } from 'fastify'
 
-export type PendingOwner = 'W5' | 'W7' | 'W8' | 'WS2' | 'WS4' | 'WS5' | 'WS7'
+export type PendingOwner = 'W5' | 'W7' | 'W8' | 'WS1' | 'WS2' | 'WS4' | 'WS5' | 'WS7'
 
 export interface PendingRoute {
   /** the workstream that implements it */
@@ -33,6 +33,28 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   // wave Q: none left. WS2 implemented the element library's 16 routes (@draftroom/contracts LIBRARY_ROUTE_KEYS,
   // features/library: Q2-1 list and read, Q2-2 save/change/delete/restore, Q2-3 place and thumbs, Q2-4 import, Q2-5
   // folders, Q2-6 marks); to ship one hidden, add its key back.
+  // wave R (the foundation; docs/WAVE-R-CONTRACTS.md §1): every route of the wave, @draftroom/contracts
+  // IMPORT_ROUTE_KEYS, MIRO_IMPORT_ROUTE_KEYS, CHAT_HOOK_ROUTE_KEYS and BACKUP_ROUTE_KEYS. WS1: the job routes (R1-4,
+  // features/imports) and the Miro routes (R1-1, R1-2, features/imports/miro); WS2: chat hooks (R2-1 hooks, R2-2 test,
+  // R2-3 preferences; features/chat-hooks); WS4: backups (R4-1 download, R4-2 restore; features/backup).
+  'GET /api/imports/:id': { owner: 'WS1', item: 'R1-4' },
+  'GET /api/workspaces/:wid/imports': { owner: 'WS1', item: 'R1-4' },
+  'POST /api/imports/:id/cancel': { owner: 'WS1', item: 'R1-4' },
+  'POST /api/imports/:id/pause': { owner: 'WS1', item: 'R1-4' },
+  'POST /api/imports/:id/resume': { owner: 'WS1', item: 'R1-4' },
+  'GET /api/imports/:id/report.csv': { owner: 'WS1', item: 'R1-4' },
+  'POST /api/workspaces/:wid/imports/miro/boards': { owner: 'WS1', item: 'R1-1' },
+  'POST /api/workspaces/:wid/imports/miro': { owner: 'WS1', item: 'R1-2' },
+  'GET /api/workspaces/:wid/chat-hooks': { owner: 'WS2', item: 'R2-1' },
+  'POST /api/workspaces/:wid/chat-hooks': { owner: 'WS2', item: 'R2-1' },
+  'PATCH /api/workspaces/:wid/chat-hooks/:hid': { owner: 'WS2', item: 'R2-1' },
+  'DELETE /api/workspaces/:wid/chat-hooks/:hid': { owner: 'WS2', item: 'R2-1' },
+  'POST /api/workspaces/:wid/chat-hooks/:hid/test': { owner: 'WS2', item: 'R2-2' },
+  'GET /api/me/chat-prefs': { owner: 'WS2', item: 'R2-3' },
+  'PUT /api/me/chat-prefs': { owner: 'WS2', item: 'R2-3' },
+  'POST /api/boards/:bid/backup/ticket': { owner: 'WS4', item: 'R4-1' },
+  'GET /api/boards/:bid/backup': { owner: 'WS4', item: 'R4-1' },
+  'POST /api/workspaces/:wid/backups': { owner: 'WS4', item: 'R4-2' },
 }
 
 export const isPendingRoute = (

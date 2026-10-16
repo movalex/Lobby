@@ -43,6 +43,8 @@ const PROJECT = 'prj_0123456789abcdefghij'
 const LIB_ITEM = 'lbi_0123456789abcdefghij'
 const LIB_FOLDER = 'lbf_0123456789abcdefghij'
 const LIB_VER = 'ver_0123456789abcdefghij'
+const IMPORT_JOB = 'imp_0123456789abcdefghij'
+const HOOK = 'chk_0123456789abcdefghij'
 
 /**
  * Every refused route (its pattern first), called the way a client would, on the guest's own board
@@ -182,6 +184,29 @@ function refusedCalls(board: string, other: string, userId: string): [string, Me
       `${b}/library/items/${LIB_ITEM}/place/confirm`,
       undefined,
     ],
+    // Wave R (landed by the foundation; pending until implemented, as above): imports, backups, chat hooks
+    ['GET /api/imports/:id', 'GET', `/api/imports/${IMPORT_JOB}`, undefined],
+    ['GET /api/workspaces/:wid/imports', 'GET', `${ws}/imports?mine=1`, undefined],
+    ['POST /api/imports/:id/cancel', 'POST', `/api/imports/${IMPORT_JOB}/cancel`, {}],
+    ['POST /api/imports/:id/pause', 'POST', `/api/imports/${IMPORT_JOB}/pause`, {}],
+    ['POST /api/imports/:id/resume', 'POST', `/api/imports/${IMPORT_JOB}/resume`, {}],
+    ['GET /api/imports/:id/report.csv', 'GET', `/api/imports/${IMPORT_JOB}/report.csv`, undefined],
+    ['POST /api/workspaces/:wid/imports/miro/boards', 'POST', `${ws}/imports/miro/boards`, {}],
+    [
+      'POST /api/workspaces/:wid/imports/miro',
+      'POST',
+      `${ws}/imports/miro`,
+      { boards: [{ miroBoardId: 'uXjVOD1Ab2c=' }] },
+    ],
+    ['POST /api/boards/:bid/backup/ticket', 'POST', `${b}/backup/ticket`, {}],
+    ['POST /api/workspaces/:wid/backups', 'POST', `${ws}/backups`, {}],
+    ['GET /api/workspaces/:wid/chat-hooks', 'GET', `${ws}/chat-hooks`, undefined],
+    ['POST /api/workspaces/:wid/chat-hooks', 'POST', `${ws}/chat-hooks`, { name: 'x', provider: 'slack' }],
+    ['PATCH /api/workspaces/:wid/chat-hooks/:hid', 'PATCH', `${ws}/chat-hooks/${HOOK}`, { name: 'y' }],
+    ['DELETE /api/workspaces/:wid/chat-hooks/:hid', 'DELETE', `${ws}/chat-hooks/${HOOK}`, undefined],
+    ['POST /api/workspaces/:wid/chat-hooks/:hid/test', 'POST', `${ws}/chat-hooks/${HOOK}/test`, {}],
+    ['GET /api/me/chat-prefs', 'GET', `/api/me/chat-prefs?workspace=${DEV_STUDIO}`, undefined],
+    ['PUT /api/me/chat-prefs', 'PUT', '/api/me/chat-prefs', { workspaceId: DEV_STUDIO, prefs: [] }],
     // Requesting access: to their own board and to any other.
     ['POST /api/boards/:bid/access-requests', 'POST', `${b}/access-requests`, { role: 'editor' }],
     [

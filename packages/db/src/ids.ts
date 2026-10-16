@@ -2,7 +2,22 @@
 // @draftroom/dev-assets newId(): `<prefix>_` + 20 base62 characters from crypto.getRandomValues.
 
 // 'air' (wave L, L1-1): an AI run id (contracts ai.ts AiRunId), minted per run and never stored.
-export const ID_PREFIXES = ['usr', 'wsp', 'prj', 'inv', 'thr', 'cmt', 'snp', 'wks', 'vot', 'air'] as const
+// 'imp', 'imb' (wave R, 0035): an import job and one board row of it; 'chk' (0036): a chat hook.
+export const ID_PREFIXES = [
+  'usr',
+  'wsp',
+  'prj',
+  'inv',
+  'thr',
+  'cmt',
+  'snp',
+  'wks',
+  'vot',
+  'air',
+  'imp',
+  'imb',
+  'chk',
+] as const
 export type IdPrefix = (typeof ID_PREFIXES)[number]
 
 const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'

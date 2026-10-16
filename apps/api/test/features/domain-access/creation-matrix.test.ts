@@ -15,6 +15,9 @@ import { type Client, createBoard, createTestApi, DEV_STUDIO, devEmail, type Tes
 import { baseRecords, createFakeSync, type FakeSync, noteRec } from '../history/helpers.ts'
 
 type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+/** Wave R's job and hook ids in the probes (the routes are pending: no such rows exist) */
+const IMPORT_JOB = 'imp_0123456789abcdefghij'
+const HOOK = 'chk_0123456789abcdefghij'
 const ALWAYS = Object.entries(CREATOR_ROUTES)
   .filter(([, r]) => r.refuse === 'always')
   .map(([key]) => key)
@@ -173,6 +176,35 @@ function probe(
       `/api/workspaces/${wid}/templates/${bid}/use`,
       {},
     ],
+    // wave R (the foundation; pending until WS1, WS2 and WS4 implement them)
+    'POST /api/workspaces/:wid/imports/miro/boards': [
+      'POST',
+      `/api/workspaces/${wid}/imports/miro/boards`,
+      {},
+    ],
+    'POST /api/workspaces/:wid/imports/miro': [
+      'POST',
+      `/api/workspaces/${wid}/imports/miro`,
+      { boards: [{ miroBoardId: 'uXjVOD1Ab2c=' }] },
+    ],
+    'POST /api/imports/:id/resume': ['POST', `/api/imports/${IMPORT_JOB}/resume`, {}],
+    'POST /api/workspaces/:wid/backups': ['POST', `/api/workspaces/${wid}/backups`, {}],
+    'GET /api/workspaces/:wid/chat-hooks': ['GET', `/api/workspaces/${wid}/chat-hooks`, undefined],
+    'POST /api/workspaces/:wid/chat-hooks': [
+      'POST',
+      `/api/workspaces/${wid}/chat-hooks`,
+      { name: '#lobby', provider: 'slack', url: 'https://hooks.slack.com/services/T1/B1/abc' },
+    ],
+    'PATCH /api/workspaces/:wid/chat-hooks/:hid': [
+      'PATCH',
+      `/api/workspaces/${wid}/chat-hooks/${HOOK}`,
+      { name: '#renamed' },
+    ],
+    'POST /api/workspaces/:wid/chat-hooks/:hid/test': [
+      'POST',
+      `/api/workspaces/${wid}/chat-hooks/${HOOK}/test`,
+      {},
+    ],
   }
   const found = table[key]
   if (!found) throw new Error(`no probe for ${key}`)
@@ -223,8 +255,9 @@ describe('the creation matrix', () => {
       expect(w.api.app.hasRoute({ method, url }), key).toBe(!isPendingRoute(key))
     }
     for (const key of ALWAYS) expect(() => probe(w, key)).not.toThrow()
-    // 13 until wave M, and the three workspace-template routes (M8-3)
-    expect(ALWAYS).toHaveLength(16)
+    // 13 until wave M, the three workspace-template routes (M8-3), and wave R's eight (four that make boards: Miro's
+    // two, resume, a backup restore; four that manage chat hooks)
+    expect(ALWAYS).toHaveLength(24)
   })
 
   it('the guard: an outsider (workspace admin, board owner) gets 403 CREATOR_REQUIRED everywhere, logged "by guard"; nothing is created', async () => {
@@ -414,6 +447,10 @@ const ALLOWED_INSERTS: Record<string, number> = {
   // gated: createBoardFrom (restore, duplicate, import): the board, its owner, keep-sharing (capped at editor)
   'features/history/new-board.ts boards': 1,
   'features/history/new-board.ts board_members': 2,
+  // gated: an import job's board (wave R, features/imports/finalize.ts createImportingBoard: the workspace row, the
+  // creating role and requireCreator, as createBoardFrom; again at activation) and its creator's owner grant
+  'features/imports/finalize.ts boards': 1,
+  'features/imports/finalize.ts board_members': 1,
 }
 const ALLOWED_RAISES: Record<string, number> = {
   // gated: "+1 h" (extend)

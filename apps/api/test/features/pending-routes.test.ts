@@ -3,10 +3,21 @@
 // kind of caller. The branch deploys with no behaviour change, and an old web or sync gets the 404 its downgrade
 // path expects (the wave M stale pairs (c) and (d)).
 import {
+  BACKUP_CREATOR_ROUTE_KEYS,
+  BACKUP_GUESTS_MESSAGE,
+  BACKUP_ROUTE_KEYS,
+  CHAT_HOOK_CREATOR_ROUTE_KEYS,
+  CHAT_HOOK_GUESTS_MESSAGE,
+  CHAT_HOOK_ROUTE_KEYS,
+  IMPORT_CREATOR_ROUTE_KEYS,
+  IMPORT_GUESTS_MESSAGE,
+  IMPORT_ROUTE_KEYS,
   LIBRARY_CREATOR_IN_ROUTE_KEYS,
   LIBRARY_GUEST_ROUTE_KEYS,
   LIBRARY_GUESTS_MESSAGE,
   LIBRARY_ROUTE_KEYS,
+  MIRO_IMPORT_CREATOR_ROUTE_KEYS,
+  MIRO_IMPORT_ROUTE_KEYS,
 } from '@draftroom/contracts'
 import Fastify from 'fastify'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -39,7 +50,23 @@ const WAVE_N_ROUTES: string[] = []
  * (features/library, all 15: none left). To ship one hidden, add its key back here and in PENDING_ROUTES.
  */
 const WAVE_Q_ROUTES: string[] = []
-const PENDING_NOW = [...WAVE_M_ROUTES, ...WAVE_N_ROUTES, ...WAVE_Q_ROUTES]
+/**
+ * Wave R (the foundation; docs/WAVE-R-CONTRACTS.md §1): every route of the wave, pending until its owner implements it
+ * (WS1 the job and Miro routes, WS2 chat hooks, WS4 backups). Each owner deletes its keys here and in PENDING_ROUTES in
+ * the same change.
+ */
+const WAVE_R_ROUTES: string[] = [
+  ...IMPORT_ROUTE_KEYS,
+  ...MIRO_IMPORT_ROUTE_KEYS,
+  ...CHAT_HOOK_ROUTE_KEYS,
+  ...BACKUP_ROUTE_KEYS,
+]
+const WAVE_R_OWNERS: Record<string, string> = {
+  ...Object.fromEntries([...IMPORT_ROUTE_KEYS, ...MIRO_IMPORT_ROUTE_KEYS].map((k) => [k, 'WS1'])),
+  ...Object.fromEntries(CHAT_HOOK_ROUTE_KEYS.map((k) => [k, 'WS2'])),
+  ...Object.fromEntries(BACKUP_ROUTE_KEYS.map((k) => [k, 'WS4'])),
+}
+const PENDING_NOW = [...WAVE_M_ROUTES, ...WAVE_N_ROUTES, ...WAVE_Q_ROUTES, ...WAVE_R_ROUTES]
 
 const UNKNOWN = { error: { code: 'NOT_FOUND', message: 'Not found.' } }
 
@@ -47,13 +74,46 @@ const fill = (pattern: string, board: string) =>
   pattern.replace(':bid', board).replace(':wid', DEV_STUDIO).replace(/:\w+/g, 'x')
 
 describe('the pending list', () => {
-  it('is exactly the wave M, N and Q routes still pending, each with its owner and plan item', () => {
+  it('is exactly the wave M, N, Q and R routes still pending, each with its owner and plan item', () => {
     expect(Object.keys(PENDING_ROUTES).sort()).toEqual([...PENDING_NOW].sort())
     for (const [key, r] of Object.entries(PENDING_ROUTES)) {
-      expect(['W5', 'W7', 'W8', 'WS2', 'WS4', 'WS5', 'WS7'], key).toContain(r.owner)
-      expect(r.item, key).toMatch(/^(M[5-8]|N[1-7]|Q[1-4])-\d$/)
+      expect(['W5', 'W7', 'W8', 'WS1', 'WS2', 'WS4', 'WS5', 'WS7'], key).toContain(r.owner)
+      expect(r.item, key).toMatch(/^(M[5-8]|N[1-7]|Q[1-4]|R[1-4])-\d$/)
     }
     for (const key of WAVE_Q_ROUTES) expect(PENDING_ROUTES[key]?.owner, key).toBe('WS2')
+    for (const key of WAVE_R_ROUTES) {
+      expect(PENDING_ROUTES[key]?.owner, key).toBe(WAVE_R_OWNERS[key])
+      expect(PENDING_ROUTES[key]?.item.slice(0, 2), key).toBe(`R${WAVE_R_OWNERS[key]?.slice(2)}`)
+    }
+  })
+
+  it('wave R: the guard lists hold exactly the contracts’ keys, every row pending until its route is', () => {
+    const guestRows = Object.entries(GUEST_REFUSED_ROUTES).filter(([k]) => WAVE_R_ROUTES.includes(k))
+    // every wave R route refuses a name-only guest, except the ticket-authorised backup download
+    expect(guestRows.map(([k]) => k).sort()).toEqual(
+      WAVE_R_ROUTES.filter((k) => k !== 'GET /api/boards/:bid/backup').sort(),
+    )
+    const message = (k: string) =>
+      (CHAT_HOOK_ROUTE_KEYS as readonly string[]).includes(k)
+        ? CHAT_HOOK_GUESTS_MESSAGE
+        : (BACKUP_ROUTE_KEYS as readonly string[]).includes(k)
+          ? BACKUP_GUESTS_MESSAGE
+          : IMPORT_GUESTS_MESSAGE
+    for (const [k, m] of guestRows) expect(m, k).toBe(message(k))
+    const creatorRows = Object.entries(CREATOR_ROUTES).filter(([k]) => WAVE_R_ROUTES.includes(k))
+    const creates = [
+      ...MIRO_IMPORT_CREATOR_ROUTE_KEYS,
+      ...IMPORT_CREATOR_ROUTE_KEYS,
+      ...BACKUP_CREATOR_ROUTE_KEYS,
+    ]
+    expect(creatorRows.map(([k]) => k).sort()).toEqual([...creates, ...CHAT_HOOK_CREATOR_ROUTE_KEYS].sort())
+    for (const [k, rule] of creatorRows)
+      expect(rule, k).toEqual({
+        purpose: (creates as readonly string[]).includes(k) ? 'create' : 'share',
+        refuse: 'always',
+      })
+    for (const k of [...guestRows.map(([key]) => key), ...creatorRows.map(([key]) => key)])
+      expect(isPendingRoute(k), k).toBe(true)
   })
 
   it('every wave Q route has its guest row (all of them) and the eight writes their in-route creator rows, all live', () => {
@@ -155,6 +215,11 @@ describe('in the real app, a pending route answers like an unknown route', () =>
       'library_items',
       'library_item_files',
       'library_marks',
+      'board_imports',
+      'board_import_files',
+      'chat_hooks',
+      'chat_hook_prefs',
+      'chat_deliveries',
     ]) {
       const n = await w.api.db.one<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`)
       expect(n.n, table).toBe(0)

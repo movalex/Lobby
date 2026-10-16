@@ -23,7 +23,14 @@
 // Registered on the root instance, so Fastify binds it to every root route at ready time (like the
 // dashboard's own root hooks). The answer is the same for every board id, so it reveals nothing.
 
-import { LIBRARY_GUESTS_MESSAGE, PutMemberInput, TransferOwnershipInput } from '@draftroom/contracts'
+import {
+  BACKUP_GUESTS_MESSAGE,
+  CHAT_HOOK_GUESTS_MESSAGE,
+  IMPORT_GUESTS_MESSAGE,
+  LIBRARY_GUESTS_MESSAGE,
+  PutMemberInput,
+  TransferOwnershipInput,
+} from '@draftroom/contracts'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { isUserId, requireBoardAction } from '../../access.ts'
 import { userKind } from '../../auth/users.ts'
@@ -85,6 +92,15 @@ export const BACKLINKS_GUESTS =
  * any workspace or board check.
  */
 export const LIBRARY_GUESTS = LIBRARY_GUESTS_MESSAGE
+
+/**
+ * Wave R (the foundation; docs/WAVE-R-CONTRACTS.md): importing boards (Miro, a backup restore) makes boards, and a
+ * backup carries a board's files: account holders only. Chat notifications go to a workspace's channels: a guest never
+ * sees the workspace, nor sets them up. The backup download itself is ticket-authorised (no row): its ticket route is.
+ */
+export const IMPORT_GUESTS = IMPORT_GUESTS_MESSAGE
+export const BACKUP_GUESTS = BACKUP_GUESTS_MESSAGE
+export const CHAT_HOOK_GUESTS = CHAT_HOOK_GUESTS_MESSAGE
 
 /** `METHOD route-pattern` → the message a signed-in guest gets (403 GUEST_ACCOUNT_REQUIRED). */
 export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {
@@ -155,6 +171,26 @@ export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {
   'PUT /api/workspaces/:wid/library/marks': LIBRARY_GUESTS,
   'POST /api/boards/:bid/library/items/:id/place': LIBRARY_GUESTS,
   'POST /api/boards/:bid/library/items/:id/place/confirm': LIBRARY_GUESTS,
+  // wave R (landed by the foundation, pending until implemented: ../pending-routes.ts): import jobs and Miro import
+  // (@draftroom/contracts IMPORT_ROUTE_KEYS, MIRO_IMPORT_ROUTE_KEYS), backups (BACKUP_ROUTE_KEYS but the
+  // ticket-authorised download), chat hooks and preferences (CHAT_HOOK_ROUTE_KEYS)
+  'GET /api/imports/:id': IMPORT_GUESTS,
+  'GET /api/workspaces/:wid/imports': IMPORT_GUESTS,
+  'POST /api/imports/:id/cancel': IMPORT_GUESTS,
+  'POST /api/imports/:id/pause': IMPORT_GUESTS,
+  'POST /api/imports/:id/resume': IMPORT_GUESTS,
+  'GET /api/imports/:id/report.csv': IMPORT_GUESTS,
+  'POST /api/workspaces/:wid/imports/miro/boards': IMPORT_GUESTS,
+  'POST /api/workspaces/:wid/imports/miro': IMPORT_GUESTS,
+  'POST /api/boards/:bid/backup/ticket': BACKUP_GUESTS,
+  'POST /api/workspaces/:wid/backups': BACKUP_GUESTS,
+  'GET /api/workspaces/:wid/chat-hooks': CHAT_HOOK_GUESTS,
+  'POST /api/workspaces/:wid/chat-hooks': CHAT_HOOK_GUESTS,
+  'PATCH /api/workspaces/:wid/chat-hooks/:hid': CHAT_HOOK_GUESTS,
+  'DELETE /api/workspaces/:wid/chat-hooks/:hid': CHAT_HOOK_GUESTS,
+  'POST /api/workspaces/:wid/chat-hooks/:hid/test': CHAT_HOOK_GUESTS,
+  'GET /api/me/chat-prefs': CHAT_HOOK_GUESTS,
+  'PUT /api/me/chat-prefs': CHAT_HOOK_GUESTS,
 }
 
 export const guestRefused = (message: string) => new ApiError(403, 'GUEST_ACCOUNT_REQUIRED', message)

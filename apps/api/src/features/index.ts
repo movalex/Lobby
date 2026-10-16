@@ -1,8 +1,10 @@
 // The one place feature modules are registered (integration owner). Each feature owns its folder.
 import type { FastifyInstance } from 'fastify'
 import { registerAi } from './ai/index.ts'
+import { registerBackup } from './backup/index.ts'
 import { registerBoardLinks } from './board-links/index.ts'
 import { registerBoardOpen } from './board-open/index.ts'
+import { registerChatHooks } from './chat-hooks/index.ts'
 import { registerComments } from './comments/index.ts'
 import type { FeatureContext } from './context.ts'
 import { registerDashboard } from './dashboard/index.ts'
@@ -10,6 +12,8 @@ import { registerDomainAccess } from './domain-access/index.ts'
 import { registerExportControl } from './export-control/index.ts'
 import { registerGuests } from './guests/index.ts'
 import { registerHistory } from './history/index.ts'
+import { registerImports } from './imports/index.ts'
+import { registerMiroImport } from './imports/miro/index.ts'
 import { registerLibrary } from './library/index.ts'
 import { registerLinkPreview } from './link-preview/index.ts'
 import { registerSearch } from './search/index.ts'
@@ -50,4 +54,11 @@ export async function registerFeatures(
   // Wave Q (the foundation; WS2 owns this line after it): the element library. Its routes are pending until
   // implemented (./pending-routes.ts).
   await registerLibrary(app, ctx)
+  // Wave R (the foundation; the lead owns this list after it): import jobs (the shared runner), import from Miro
+  // (WS1), board backups (WS4) and chat notifications (WS2). Their routes are pending until implemented
+  // (./pending-routes.ts).
+  await registerImports(app, ctx)
+  await registerMiroImport(app, ctx)
+  await registerBackup(app, ctx)
+  await registerChatHooks(app, ctx)
 }

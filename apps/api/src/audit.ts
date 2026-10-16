@@ -26,11 +26,28 @@ export type AuditAction =
   | 'library.import'
   | 'library.folder.create'
   | 'library.folder.delete'
+  // wave R (the foundation's import runner, features/imports): an import job's board was started (an `importing`
+  // row nobody sees), or removed again (failed, cancelled, expired); its activation writes `board.create` with
+  // `via` (ids, sources and counts only: never a token, a URL or content)
+  | 'board.import.start'
+  | 'board.import.discard'
+  // wave R (WS2, features/chat-hooks): a chat hook added, changed or removed (ids and providers only, never a URL)
+  | 'chat_hook.create'
+  | 'chat_hook.update'
+  | 'chat_hook.delete'
 
 /** Written in the same transaction as the change it describes, so the log never disagrees with it. */
 export async function audit(
   tx: Queryable,
-  e: { workspaceId: string; actorId: string; action: AuditAction; target: string; detail?: object; at: Date },
+  e: {
+    workspaceId: string
+    /** null: no person did it (a sweep) */
+    actorId: string | null
+    action: AuditAction
+    target: string
+    detail?: object
+    at: Date
+  },
 ): Promise<void> {
   await tx.query(
     'INSERT INTO audit_events (workspace_id, actor_id, action, target, detail, at) VALUES ($1, $2, $3, $4, $5::jsonb, $6)',

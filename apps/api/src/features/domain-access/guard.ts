@@ -64,6 +64,19 @@ export const CREATOR_ROUTES: Readonly<Record<string, CreatorRoute>> = {
   'POST /api/workspaces/:wid/library/folders': { purpose: 'create', refuse: 'in-route' },
   'PATCH /api/workspaces/:wid/library/folders/:fid': { purpose: 'create', refuse: 'in-route' },
   'DELETE /api/workspaces/:wid/library/folders/:fid': { purpose: 'create', refuse: 'in-route' },
+  // wave R (landed by the foundation, pending until implemented: ../pending-routes.ts). Importing makes boards (Miro:
+  // listing a team's boards is its first step; resuming a job goes on making them; a backup restore is a new board):
+  // @draftroom/contracts MIRO_IMPORT_CREATOR_ROUTE_KEYS, IMPORT_CREATOR_ROUTE_KEYS, BACKUP_CREATOR_ROUTE_KEYS.
+  'POST /api/workspaces/:wid/imports/miro/boards': { purpose: 'create', refuse: 'always' },
+  'POST /api/workspaces/:wid/imports/miro': { purpose: 'create', refuse: 'always' },
+  'POST /api/imports/:id/resume': { purpose: 'create', refuse: 'always' },
+  'POST /api/workspaces/:wid/backups': { purpose: 'create', refuse: 'always' },
+  // A chat hook is an outbound channel for workspace data (CHAT_HOOK_CREATOR_ROUTE_KEYS): seeing, adding, changing and
+  // testing one is a creator's (the route also needs a workspace owner or admin); removing one stays open (lowering).
+  'GET /api/workspaces/:wid/chat-hooks': { purpose: 'share', refuse: 'always' },
+  'POST /api/workspaces/:wid/chat-hooks': { purpose: 'share', refuse: 'always' },
+  'PATCH /api/workspaces/:wid/chat-hooks/:hid': { purpose: 'share', refuse: 'always' },
+  'POST /api/workspaces/:wid/chat-hooks/:hid/test': { purpose: 'share', refuse: 'always' },
 }
 
 const routeKey = (req: FastifyRequest) =>
