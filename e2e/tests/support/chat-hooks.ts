@@ -10,6 +10,8 @@ import { createServer, type IncomingHttpHeaders, type Server } from 'node:http'
 import type { AddressInfo, Socket } from 'node:net'
 
 export interface ReceivedPost {
+  /** when it arrived (epoch ms) */
+  at: number
   method: string
   path: string
   query: string
@@ -65,7 +67,7 @@ export async function startFakeReceiver(port = 0, host = '127.0.0.1'): Promise<F
       } catch {
         body = null
       }
-      posts.push({ method: req.method ?? '', path, query, headers: req.headers, raw, body })
+      posts.push({ at: Date.now(), method: req.method ?? '', path, query, headers: req.headers, raw, body })
       const answer = queue.shift() ?? defaultAnswer(path)
       if (answer.stall) return
       const send = () => {

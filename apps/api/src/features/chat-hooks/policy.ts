@@ -36,7 +36,9 @@ const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n
 export function parseRetryAfter(value: string | undefined, nowMs: number): number | null {
   if (!value) return null
   const text = value.trim()
-  if (/^\d{1,7}$/.test(text)) return Number(text) * 1000
+  if (/^\d+$/.test(text)) return text.length <= 7 ? Number(text) * 1000 : null
+  // an HTTP date ("Wed, 21 Oct 2026 07:28:00 GMT"): Date.parse alone would also take a bare year or a lone number
+  if (!/^[A-Za-z]{3}, \d{1,2} [A-Za-z]{3} \d{4} /.test(text)) return null
   const at = Date.parse(text)
   return Number.isNaN(at) ? null : Math.max(0, at - nowMs)
 }

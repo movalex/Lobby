@@ -26,6 +26,7 @@ import { type ChatRouteEnv, chatRoute, requireBox } from './routes.ts'
 
 const MEMBERS_ONLY = 'Chat notifications are for members of this workspace.'
 const FOREIGN_KEY_VIOLATION = '23503'
+const DEADLOCK_DETECTED = '40P01'
 
 async function requireMember(q: Queryable, workspaceId: string, user: SessionUser): Promise<void> {
   if (user.kind === 'guest') throw guestRefused(CHAT_HOOK_GUESTS_MESSAGE)
@@ -111,8 +112,10 @@ export function registerPrefRoutes(env: ChatRouteEnv): void {
           )
       })
     } catch (e) {
-      // the person left the workspace between the check and the write (the membership foreign key)
-      if (pgErrorCode(e) === FOREIGN_KEY_VIOLATION) throw notFound()
+      // the person left the workspace between the check and the write (the membership foreign key; or the removal's
+      // cascade and this write took each other's rows: the removal wins)
+      const code = pgErrorCode(e)
+      if (code === FOREIGN_KEY_VIOLATION || code === DEADLOCK_DETECTED) throw notFound()
       throw e
     }
     return prefsOf(db, wid, user.id)
