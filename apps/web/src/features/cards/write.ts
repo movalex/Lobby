@@ -6,7 +6,7 @@
 import { type CardStatus, cardOf, type PlanningElement } from '@draftroom/canvas-schema/planning'
 import type { CanvasElement, LobbyCanvas, LobbyTx } from '../../canvas/api/index.ts'
 import { appendPlacement, bandOfBox, bandsOf } from '../kanban/layout.ts'
-import { boxesIn, kanbanAt, rectOf } from '../kanban/scene.ts'
+import { boxesIn, kanbanAt, moveCard, rectOf } from '../kanban/scene.ts'
 import { planningOffered } from '../planning/index.ts'
 import {
   dateProblem,
@@ -88,7 +88,7 @@ export function writeStatus(canvas: Canvas, tx: LobbyTx, id: string, status: Car
   const box = { id, x: el.x, y: el.y, width: el.width, height: el.height, status }
   const place = appendPlacement(rectOf(k.el), k.value, status, box, boxesIn(canvas, k.el.id))
   if (!place) return
-  tx.update(id, { x: place.at.x, y: place.at.y })
+  moveCard(canvas, tx, id, place.at)
   if (place.frameHeight !== null) tx.update(k.el.id, { height: place.frameHeight })
 }
 

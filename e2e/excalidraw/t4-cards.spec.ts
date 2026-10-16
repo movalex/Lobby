@@ -54,6 +54,19 @@ async function dragTo(page: Page, id: string, to: { x: number; y: number }) {
 
 const pushesOf = (s: { net: { sentPushes(): unknown[] } }) => s.net.sentPushes().length
 
+/** Where a card's bound label sits relative to the card, as the server stores both (a move keeps it). */
+async function labelOffset(stack: Parameters<typeof storedElement>[0], board: string, id: string) {
+  const card = (await storedElement(stack, board, id)) as {
+    x: number
+    y: number
+    boundElements?: { id: string; type: string }[] | null
+  }
+  const labelId = card.boundElements?.find((b) => b.type === 'text')?.id
+  expect(labelId).toBeTruthy()
+  const label = (await storedElement(stack, board, labelId as string)) as { x: number; y: number }
+  return { dx: Math.round(label.x - card.x), dy: Math.round(label.y - card.y) }
+}
+
 async function openTable(page: Page) {
   await focusCanvas(page)
   await page.keyboard.press('ControlOrMeta+k')
@@ -186,14 +199,17 @@ test('a drag between Kanban columns writes position and status in ONE step; one 
   await focusCanvas(a.page)
   const bobPushes = pushesOf(b)
   const before = (await storedElement(stack, board, 't4-c1')) as { x: number; y: number }
+  const offset = await labelOffset(stack, board, 't4-c1')
 
-  // drag it into "Shooting" (the second column, 300..600): it snaps into the column, its status follows
-  await dragTo(a.page, 't4-c1', { x: 450, y: 400 })
+  // drag it into "Shooting" (the second column, 300..600), off the column's slot: it snaps into the column, its
+  // status follows, and its label moves with it (the snap moves the label by the same delta)
+  await dragTo(a.page, 't4-c1', { x: 420, y: 400 })
   await expectSaved(a.page)
   await expect.poll(async () => (await storedLobby(stack, board, 't4-c1'))['card:status']).toBe('doing')
   const after = (await storedElement(stack, board, 't4-c1')) as { x: number; y: number; frameId: string }
   expect(after.x).toBe(350)
   expect(after.frameId).toBe('t4-k')
+  expect(await labelOffset(stack, board, 't4-c1')).toEqual(offset)
   await expect(chips(b.page, 't4-c1')).toHaveAttribute('data-status', 'doing')
   await expect(
     b.page.locator('[data-testid="kanban-column"][data-status="doing"] [data-testid="kanban-column-count"]'),
@@ -304,12 +320,14 @@ test('the card table: an inline status moves a Kanban card in one step; the CSV 
   await expect(rows).toHaveCount(2)
   await expect(a.page.getByTestId('card-table-summary')).toHaveText('2 cards')
 
-  // an inline status edit: the card moves to the bottom of "In review", in the same step
+  // an inline status edit: the card moves to the bottom of "In review", in the same step, its label with it
+  const offset = await labelOffset(stack, board, 't4-t2')
   await a.page
     .locator('[data-testid="card-table-row"][data-element-id="t4-t2"] [data-testid="card-table-status"]')
     .selectOption('review')
   await expect.poll(async () => (await storedLobby(stack, board, 't4-t2'))['card:status']).toBe('review')
   await expect.poll(async () => (await storedElement(stack, board, 't4-t2'))?.x).toBe(650)
+  expect(await labelOffset(stack, board, 't4-t2')).toEqual(offset)
   await expect(chips(b.page, 't4-t2')).toHaveAttribute('data-status', 'review')
   await focusCanvas(a.page)
   await a.page.keyboard.press('ControlOrMeta+z')

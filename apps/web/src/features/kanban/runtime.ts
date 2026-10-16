@@ -14,7 +14,7 @@ import type { CanvasChange, CanvasElement, LobbyCanvas } from '../../canvas/api/
 import { react, untracked } from '../../lib/signals.ts'
 import { isCardable, lobbyPatch, makeCardLobby } from '../cards/model.ts'
 import { dropPlacement } from './layout.ts'
-import { kanbanAt, kanbanUnder, rectOf } from './scene.ts'
+import { kanbanAt, kanbanUnder, moveCard, rectOf } from './scene.ts'
 
 export type RuntimeCanvas = Pick<
   LobbyCanvas,
@@ -152,7 +152,7 @@ export class KanbanRuntime {
       (tx) => {
         for (const w of writes) {
           if (w.frameId) tx.setFrame([w.id], w.frameId)
-          tx.update(w.id, { x: w.x, y: w.y, ...(w.lobby ? lobbyPatch(w.lobby) : {}) })
+          moveCard(this.canvas, tx, w.id, w, w.lobby ? lobbyPatch(w.lobby) : {})
         }
       },
       { joinPrevious: true },

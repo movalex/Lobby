@@ -6,7 +6,7 @@ import type { LobbyCanvas } from '../../canvas/api/index.ts'
 import { lobbyPatch } from '../cards/model.ts'
 import { planningOffered } from '../planning/index.ts'
 import { newKanbanSize, tidyPlan } from './layout.ts'
-import { boxesIn, kanbanAt, rectOf } from './scene.ts'
+import { boxesIn, kanbanAt, moveCard, rectOf } from './scene.ts'
 
 type Canvas = Pick<
   LobbyCanvas,
@@ -88,7 +88,7 @@ export function tidyKanban(canvas: Canvas, frameId: string): number {
   if (!moves.size && frameHeight === null) return 0
   canvas.transact('tidy kanban', (tx) => {
     if (frameHeight !== null) tx.update(frameId, { height: frameHeight })
-    for (const [id, at] of moves) tx.update(id, { x: at.x, y: at.y })
+    for (const [id, at] of moves) moveCard(canvas, tx, id, at)
   })
   return moves.size
 }

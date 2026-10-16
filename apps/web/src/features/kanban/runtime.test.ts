@@ -9,7 +9,7 @@ import { KanbanRuntime, type RuntimeCanvas } from './runtime.ts'
 type Mutable = { -readonly [K in keyof CanvasElement]: CanvasElement[K] }
 const TOP = KANBAN_HEADER_H + KANBAN_PAD
 
-function setup(opts: { kanban?: boolean; cards?: boolean; lockedFrame?: boolean } = {}) {
+function setup(opts: { kanban?: boolean; cards?: boolean; lockedFrame?: boolean; label?: boolean } = {}) {
   const els = new Map<string, Mutable>()
   const put = (e: Partial<Mutable> & { id: string; type: string }) =>
     els.set(e.id, {
@@ -42,7 +42,19 @@ function setup(opts: { kanban?: boolean; cards?: boolean; lockedFrame?: boolean 
     y: TOP,
     frameId: 'k',
     customData: { lobby: { 'card:status': 'todo' } },
-  })
+    ...(opts.label ? { boundElements: [{ id: 'c1.t', type: 'text' }] } : {}),
+  } as Partial<Mutable> & { id: string; type: string })
+  if (opts.label)
+    put({
+      id: 'c1.t',
+      type: 'text',
+      x: 60,
+      y: TOP + 10,
+      width: 180,
+      height: 30,
+      frameId: 'k',
+      containerId: 'c1',
+    } as Partial<Mutable> & { id: string; type: string })
   put({ id: 'n1', type: 'stickynote', x: 2000, y: 0 })
   const gesture = atom<'idle' | 'dragging'>('test.gesture', 'idle')
   const listeners: ((c: CanvasChange) => void)[] = []
@@ -118,6 +130,26 @@ describe('the Kanban drop runtime', () => {
     t.change('local', ['c1'])
     await settle()
     expect(t.writes).toHaveLength(1)
+  })
+
+  it('the snap moves the card’s bound label by the same delta, in the same write', async () => {
+    const t = setup({ label: true })
+    cleanup = t.stop
+    // the drag moved the card and its label together
+    t.move('c1', { x: 380, y: 300 })
+    t.move('c1.t', { x: 390, y: 310 })
+    t.change('local', ['c1', 'c1.t'])
+    await settle()
+    expect(t.writes).toEqual([
+      {
+        label: 'kanban: drop',
+        join: true,
+        ops: [
+          ['update', 'c1', { x: 350, y: 300, customData: { lobby: { 'card:status': 'doing' } } }],
+          ['update', 'c1.t', { x: 360, y: 310 }],
+        ],
+      },
+    ])
   })
 
   it('a receiving client and this tab’s own undo/redo write nothing (a mismatch stays a mismatch)', async () => {
