@@ -3,8 +3,13 @@
 // assignee, the dates and the link. Nothing here runs on a change someone else made: these are this person's own
 // edits (the echo rule). A write is offered only in a rev-14 room, never read-only, never on a locked card
 // (`cardWritable`); the room checks every key again (roles, guests, the assignee, the lock).
-import { type CardStatus, cardOf, type PlanningElement } from '@draftroom/canvas-schema/planning'
-import type { CanvasElement, LobbyCanvas, LobbyTx } from '../../canvas/api/index.ts'
+import {
+  CARD_WHO_KEY,
+  type CardStatus,
+  cardOf,
+  type PlanningElement,
+} from '@draftroom/canvas-schema/planning'
+import type { CanvasElement, CanvasFeature, LobbyCanvas, LobbyTx } from '../../canvas/api/index.ts'
 import { appendPlacement, bandOfBox, bandsOf } from '../kanban/layout.ts'
 import { boxesIn, kanbanAt, moveCard, rectOf } from '../kanban/scene.ts'
 import { planningOffered } from '../planning/index.ts'
@@ -153,3 +158,14 @@ export function setLink(
   canvas.transact('card link', (tx) => tx.update(id, { link: v }))
   return { ok: true }
 }
+
+/**
+ * The `card:who` copy rule (registered on mount): a copy a name-only guest makes (Ctrl+D, Alt-drag, paste, the
+ * storyboard's duplicate) drops the assignee (a guest never assigns; the room would strip it with a fix anyway).
+ * Anyone else's copy keeps it: the room keeps it only when that person has access to this board.
+ */
+export const cardWhoOnCopy = (guest: () => boolean): NonNullable<CanvasFeature['customData']>[number] => ({
+  id: CARD_WHO_KEY,
+  match: 'exact',
+  onDuplicate: (value) => (guest() ? undefined : structuredClone(value)),
+})

@@ -29,9 +29,10 @@ import { CARDS_OVERLAY } from './export.ts'
 import { StatusIcon } from './icons.tsx'
 import { CARD_STATUSES, isCard, statusWords } from './model.ts'
 import { CardPopoverLayer } from './Popover.tsx'
-import { People } from './people.ts'
+import { isGuest, People } from './people.ts'
 import {
   cardsWritable,
+  cardWhoOnCopy,
   cardWritable,
   makeableIn,
   makeCards,
@@ -197,11 +198,14 @@ function mount(ctx: CanvasFeatureContext): () => void {
   const s: CardsState = { ctx, people, popover: atom<CardPopoverRequest | null>('cards.popover', null) }
   setCards(ctx.canvas, s)
   const offPopover = registerCardPopover((c, req) => openPopover(c, req))
+  // a guest's copy of an assigned card drops the assignee (write.ts cardWhoOnCopy)
+  const offCopy = ctx.registries.customData.register(cardWhoOnCopy(() => isGuest(ctx)))
   const debug = window as unknown as { __lobbyCards?: CardsState }
   // e2e and debugging only, behind the same local-dev guard as the board page's debug handle
   if (DEV_AUTH_ENABLED) debug.__lobbyCards = s
   return () => {
     offPopover()
+    offCopy()
     setCards(ctx.canvas, null)
     if (debug.__lobbyCards === s) debug.__lobbyCards = undefined
   }

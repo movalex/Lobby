@@ -19,6 +19,7 @@
 // of one is UNAVAILABLE (the stored keys stay; an undelete's own keys come back with it). With it on (`checkPlanning`):
 //  - every writer who may edit writes them (viewers and commenters are READ_ONLY before this, as for every element
 //    write), name-only guests included, but for `card:who`: a guest's assignment is INVALID (its removal is not);
+//    a create carrying one from a guest, or naming someone without access, lands without it (an ack fix), never refused;
 //  - `card:who` is api-validated: an ACCOUNT with a role on the board, from the assignee-refs answer stage 0 got for
 //    this push (element-room.ts, assignee-refs.ts): not one INVALID, not known (the lookup failed, a 404) UNAVAILABLE;
 //    a removal needs no answer, and a value already stored (or an undelete's own) is no new assignment;
@@ -118,15 +119,21 @@ function checkPlanning(
   key: string,
   value: unknown,
   stored: Readonly<Record<string, unknown>>,
+  isCreate: boolean,
   ctx: CustomDataContext,
 ): Verdict<unknown> {
   if (value === null) return { ok: true, value: null } // a removal (unassigning, unmaking) is always the writer's
   if (key === CARD_WHO_KEY) {
     if (equal(stored[key], value)) return { ok: true, value } // already there: no new assignment
-    if (ctx.writer.guest) return bad('INVALID') // a name-only guest never assigns
+    // a create (a duplicate, a paste, a copy) carrying an assignee the room cannot verify (a guest's copy, someone
+    // without access to this board) is not refused: the card lands without it (null: not stored), and the ack's fix
+    // says `c:card:who: null`, as lobbyCreateOfWriter does for the keys an older writer cannot know. A patch naming
+    // one is an assignment, and stays INVALID
+    if (ctx.writer.guest) return isCreate ? { ok: true, value: null } : bad('INVALID') // a guest never assigns
     const known = ctx.assignee?.(value as string)
     if (known === undefined) return bad('UNAVAILABLE') // the lookup failed or the api had no answer: fail closed
-    return known ? { ok: true, value } : bad('INVALID')
+    if (known) return { ok: true, value }
+    return isCreate ? { ok: true, value: null } : bad('INVALID')
   }
   if (key === SB_HEAD_KEY) {
     const audio = (value as SbHeadValue).audio
@@ -157,7 +164,7 @@ function checkKey(
   // `file` on an image create read `versionId` of a string and answered UNAVAILABLE, retryable and
   // outside the abuse count (V2)
   if (value !== null && lobbyValueProblem(key, value)) return bad('INVALID')
-  if (isPlanningKey(key)) return checkPlanning(key, value, stored, ctx)
+  if (isPlanningKey(key)) return checkPlanning(key, value, stored, isCreate, ctx)
   const w = ctx.writer
   switch (spec.class) {
     case 'create-only': {

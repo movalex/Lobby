@@ -4,9 +4,10 @@
 //  - cards, panels, heads, Kanbans and timelines are written by every editing writer of rev 14 (the types and
 //    cross-key rules are checkElement's: a card key without card:status, start after due, a panel key on a note);
 //  - viewers and commenters are READ_ONLY; a name-only guest who may edit writes status, dates and panel order, but a
-//    card:who it writes is INVALID (clearing one is not);
+//    card:who it writes is INVALID (clearing one is not; a create carrying one lands without it, with a fix);
 //  - card:who is an ACCOUNT with a role on the board, from the api's assignee-refs (the fake api here): one call per
-//    push for the uids the room's cache lacks, none for a removal or a value already stored; not named INVALID,
+//    push for the uids the room's cache lacks, none for a removal or a value already stored; not named INVALID on a
+//    patch and stripped (with an ack fix) on a create (a copy of an assigned card is never refused),
 //    the api down or 404 UNAVAILABLE (fail closed; nothing written); an undelete keeps its own assignee unasked;
 //  - sb:head.audio names a live element with a `file` key when it is set (soft afterwards);
 //  - no lock exemption;
@@ -139,18 +140,18 @@ describe('who may write: roles and name-only guests', () => {
     // even a uid the api names (the guest's own): a guest never assigns, and the room does not ask
     expectRefused(await g.patch('r2', { c: { 'card:who': 'guest-1' } }), 'INVALID', g)
     expectRefused(await g.patch('r2', { c: { 'card:who': 'usr_member' } }), 'INVALID', g)
-    expectRefused(
+    // a guest's copy of an assigned card is not refused: the card lands without its assignee (the ack's fix says so)
+    const copy = expectAccepted(
       await g.createOne(
         rect('r3', { x: 900, customData: { lobby: { 'card:status': 'todo', 'card:who': 'usr_member' } } }),
       ),
-      'INVALID',
-      g,
     )
+    expect(copy.fix).toMatchObject({ 'c:card:who': null })
     expect(st.api.assigneeCalls.length, 'no lookup for a guest').toBe(calls)
     expectAccepted(await g.patch('r1', { c: { 'card:who': null } }))
     expect(await storedLobby(st, b, 'r1')).toEqual({ 'card:status': 'todo' })
     expect(await storedLobby(st, b, 'r2')).toEqual({ 'card:status': 'doing', 'card:due': '2026-10-31' })
-    await expectNotStored(st, b, ['r3'])
+    expect(await storedLobby(st, b, 'r3')).toEqual({ 'card:status': 'todo' })
   })
 })
 
@@ -183,14 +184,14 @@ describe('card:who through assignee-refs', () => {
     // not named (no access, a guest, unknown): INVALID, nothing written
     expectRefused(await a.patch('c1', { c: { 'card:who': 'usr_outsider' } }), 'INVALID', a)
     expect(await storedLobby(st, b, 'c1')).toEqual({ 'card:status': 'todo', 'card:who': 'usr_ann' })
-    expectRefused(
+    // a create (a copy, a paste) naming someone without access is not refused: the card lands unassigned, with a fix
+    const copy = expectAccepted(
       await a.createOne(
         rect('c4', { x: 900, customData: { lobby: { 'card:status': 'todo', 'card:who': 'usr_nobody' } } }),
       ),
-      'INVALID',
-      a,
     )
-    await expectNotStored(st, b, ['c4'])
+    expect(copy.fix).toMatchObject({ 'c:card:who': null })
+    expect(await storedLobby(st, b, 'c4')).toEqual({ 'card:status': 'todo' })
     // a removal and an unchanged value ask nothing
     const n = st.api.assigneeCalls.length
     expectAccepted(await a.patch('c2', { c: { 'card:who': null } }))
