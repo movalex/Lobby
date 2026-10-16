@@ -29,12 +29,27 @@
 //   VITE_DRAFTROOM_DEV_AUTH=1 GIT_COMMIT=3c83611e5c2b pnpm --filter @draftroom/web exec vite build --outDir <dist>
 //   cd <this tree>/e2e && E2E_OLD_WEB_DIST=<dist> E2E_OLD_WEB_COMMIT=3c83611 E2E_PORT_BASE=<base> \
 //     pnpm exec playwright test excalidraw/n-compat-rev12.spec.ts --project=chromium --workers=1
+//
+// Wave T (CONTRACTS_REV 14): the deployed web is 6769e07 (rev 13, wave S; frozen in
+// packages/canvas-schema/test/fixtures/rev13-6769e07, whose canvas-schema is the deployed sync ba1704c's too). Its
+// tabs are opened with `{ schemas: REV13_SCHEMAS }` or watched with `watchOldSocket(page, REV13_SCHEMAS)`
+// (WS1's t-compat-rev13.spec.ts; the run's sync needs DRAFTROOM_PLANNING=on through syncEnv for the room to say 14):
+//
+//   git archive 6769e07 | tar -x -C <dir> && cd <dir> && pnpm install --frozen-lockfile --offline --ignore-scripts
+//   VITE_DRAFTROOM_DEV_AUTH=1 GIT_COMMIT=6769e07220a6 pnpm --filter @draftroom/web exec vite build --outDir <dist>
+//   cd <this tree>/e2e && E2E_OLD_WEB_DIST=<dist> E2E_OLD_WEB_COMMIT=6769e07 E2E_PORT_BASE=<base> //     pnpm exec playwright test excalidraw/t-compat-rev13.spec.ts --project=chromium --workers=1
+//
+// The other stale pairs of the bump: the new web against the DEPLOYED sync (E2E_SYNC_ENTRY: the ba1704c tree's
+// apps/sync/src/server.ts, e2e/tests/support/stack.ts), and, at the protocol level, the sync's stale-reader and
+// rollback tests with DRAFTROOM_OLD_WEB_SRC (the 6769e07 sources with node_modules) and DRAFTROOM_OLD_SYNC_SRC (the
+// ba1704c sources).
 
 import { existsSync, statSync } from 'node:fs'
 import { extname, join, normalize, resolve, sep } from 'node:path'
 import { type Browser, type BrowserContext, expect, type Page, type WebSocketRoute } from '@playwright/test'
 import * as Rev11 from '../../packages/canvas-schema/test/fixtures/rev11-437b4e7/protocol.ts'
 import * as Rev12 from '../../packages/canvas-schema/test/fixtures/rev12-3c83611/protocol.ts'
+import * as Rev13 from '../../packages/canvas-schema/test/fixtures/rev13-6769e07/protocol.ts'
 import { CONNECT_URL } from '../spike-b/support/relay.ts'
 import { signInContext } from '../tests/support/api.ts'
 import { type CanvasSession, canvasCall, hash, waitForCanvas } from '../tests/support/canvas.ts'
@@ -98,6 +113,8 @@ export interface OldFrameSchemas {
 export const REV11_SCHEMAS: OldFrameSchemas = Rev11 as unknown as OldFrameSchemas
 /** The rev-12 web deployed since hotfix H2 (3c83611): n-compat-rev12.spec.ts. */
 export const REV12_SCHEMAS: OldFrameSchemas = Rev12 as unknown as OldFrameSchemas
+/** The rev-13 web deployed since wave S (6769e07): WS1's t-compat-rev13.spec.ts (wave T, CONTRACTS_REV 14). */
+export const REV13_SCHEMAS: OldFrameSchemas = Rev13 as unknown as OldFrameSchemas
 
 /** A frame the previous build's socket would have dropped: its type and the first schema issue. */
 export interface DroppedFrame {
