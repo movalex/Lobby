@@ -42,12 +42,9 @@ export const BACKUP_SPOOL_SWEEP_MS = 60 * 60_000
 const SPOOL_SWEEP_DAYS = 3
 
 const busy = () =>
-  new ApiError(
-    503,
-    'TOO_MANY_BACKUPS',
-    'Too many backups are being made right now. Try again in a minute.',
-    { 'retry-after': '30' },
-  )
+  new ApiError(503, 'TOO_MANY_BACKUPS', 'Too many backups are being made right now. Try again in a minute.', {
+    'retry-after': '30',
+  })
 
 export async function registerBackup(app: FastifyInstance, ctx: FeatureContext): Promise<void> {
   const { db } = ctx
@@ -95,8 +92,7 @@ export async function registerBackup(app: FastifyInstance, ctx: FeatureContext):
     if (!claims || claims.boardId !== bid) throw unauthenticated()
     if (!(await ctx.sessions.activeIds([claims.sessionId])).has(claims.sessionId)) throw unauthenticated()
     const access = await exportable(bid, claims.userId)
-    if (streaming >= BACKUP_DOWNLOADS_PER_PROCESS)
-      throw busy()
+    if (streaming >= BACKUP_DOWNLOADS_PER_PROCESS) throw busy()
     const plan = await planBackup(ctx, access, claims.userId)
     streaming++
     let released = false

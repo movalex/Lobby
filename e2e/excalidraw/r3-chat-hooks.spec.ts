@@ -9,8 +9,9 @@
 //   5. A 404 switches the hook off with its reason; "Turn back on" and the next mention reaches the channel.
 //
 //   E2E_PORT_BASE=<base> pnpm exec playwright test excalidraw/r3-chat-hooks.spec.ts --project=chromium --workers=1
-import { commentsApi, mentionToken } from '../tests/support/comments.ts'
+
 import { expect, test } from '../tests/support/canvas.ts'
+import { commentsApi, mentionToken } from '../tests/support/comments.ts'
 import { openDashboard, signedInContext } from '../tests/support/dashboard-share.ts'
 import type { Users } from '../tests/support/users.ts'
 import {
@@ -44,7 +45,11 @@ const blockText = (post: { body: Record<string, unknown> | null } | undefined) =
 async function mentionBen(users: Users, board: string, words: string) {
   const alice = await users.api('alice')
   const bob = await users.get('bob')
-  return commentsApi(alice).createThread(board, { kind: 'point', x: 10, y: 10 }, `${words} ${mentionToken('Bob Chen', bob.id)}`)
+  return commentsApi(alice).createThread(
+    board,
+    { kind: 'point', x: 10, y: 10 },
+    `${words} ${mentionToken('Bob Chen', bob.id)}`,
+  )
 }
 
 test('an admin adds a Slack channel and sends a test message; the URL never comes back and nobody outside Lobby is asked', async ({
@@ -128,7 +133,8 @@ test('Ben opts in; Ana mentions him; the receiver gets one POST without the comm
     await alice.page.getByTestId('chat-hook-edit-submit').click()
     await expect(alice.page.getByTestId('chat-hook-edit-form')).toHaveCount(0)
 
-    const title = ((await (await users.api('alice')).getBoard(board)) as { board: { title: string } }).board.title
+    const title = ((await (await users.api('alice')).getBoard(board)) as { board: { title: string } }).board
+      .title
     await mentionBen(users, board, 'The secret launch plan is attached.')
     await expect.poll(() => receiver.posts.length, { timeout: 15_000 }).toBe(2)
     const second = receiver.posts[1]
@@ -168,7 +174,10 @@ test('Ben opts out: the next mention sends nothing', async ({ browser, board, us
   }
 })
 
-test('a 500 is tried again after the first backoff (30 s) and the same message arrives', async ({ board, users }) => {
+test('a 500 is tried again after the first backoff (30 s) and the same message arrives', async ({
+  board,
+  users,
+}) => {
   test.setTimeout(150_000)
   receiver.reset()
   await users.grant(board, 'bob', 'editor')
@@ -183,7 +192,9 @@ test('a 500 is tried again after the first backoff (30 s) and the same message a
   await new Promise((r) => setTimeout(r, 4_000))
   expect(receiver.posts).toHaveLength(2)
   const alice = await users.api('alice')
-  const hooks = (await (await alice.fetch('GET', `/api/workspaces/${users.devStudioId}/chat-hooks`)).json()) as {
+  const hooks = (await (
+    await alice.fetch('GET', `/api/workspaces/${users.devStudioId}/chat-hooks`)
+  ).json()) as {
     hooks: { lastOkAt: string | null; lastErrorCode: string | null }[]
   }
   expect(hooks.hooks[0]?.lastOkAt).not.toBeNull()
@@ -206,7 +217,9 @@ test('a 404 switches the hook off with its reason; "Turn back on" and the next m
     await openDashboard(alice.page, users.devStudioId, 'all')
     await openChatDialog(alice.page, 'channels')
     const row = alice.page.getByTestId('chat-hook-row')
-    await expect(row.getByTestId('chat-hook-status')).toContainText('Switched off: Slack could not find the channel')
+    await expect(row.getByTestId('chat-hook-status')).toContainText(
+      'Switched off: Slack could not find the channel',
+    )
     // nothing more is sent while it is off
     await mentionBen(users, board, 'Still off.')
     await new Promise((r) => setTimeout(r, 5_000))

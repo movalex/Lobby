@@ -43,9 +43,10 @@ export async function prefsOf(q: Queryable, workspaceId: string, userId: string)
     name: string
     provider: 'slack' | 'teams'
     disabled_at: Date | null
-  }>('SELECT id, name, provider, disabled_at FROM chat_hooks WHERE workspace_id = $1 ORDER BY created_at, id', [
-    workspaceId,
-  ])
+  }>(
+    'SELECT id, name, provider, disabled_at FROM chat_hooks WHERE workspace_id = $1 ORDER BY created_at, id',
+    [workspaceId],
+  )
   const prefs = await q.query<{ hook_id: string; kinds: ChatHookKind[] }>(
     'SELECT hook_id, kinds FROM chat_hook_prefs WHERE user_id = $1 AND workspace_id = $2 ORDER BY hook_id',
     [userId, workspaceId],

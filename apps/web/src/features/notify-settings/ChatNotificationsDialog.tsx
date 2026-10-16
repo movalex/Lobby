@@ -77,8 +77,7 @@ export function ChatNotificationsDialog({
       )}
       <div
         id={`${idBase}-panel`}
-        role={tabs.length > 1 ? 'tabpanel' : undefined}
-        aria-labelledby={tabs.length > 1 ? `${idBase}-${tab}` : undefined}
+        {...(tabs.length > 1 ? { role: 'tabpanel', 'aria-labelledby': `${idBase}-${tab}` } : {})}
         className="dr-chat__panel"
       >
         {tab === 'mine' ? (

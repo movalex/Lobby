@@ -40,7 +40,11 @@ describe('rotating the webhook secret', () => {
     // the sealed bytes are bound to the key: another secret alone opens nothing
     const lost = await apiWith(THIRD)
     const lostLogin = await lost.login('owner')
-    const failed = await lostLogin.req('POST', `/api/workspaces/${DEV_STUDIO}/chat-hooks/${w.hookId}/test`, {})
+    const failed = await lostLogin.req(
+      'POST',
+      `/api/workspaces/${DEV_STUDIO}/chat-hooks/${w.hookId}/test`,
+      {},
+    )
     expect(failed.json()).toEqual({ status: 'failed', code: 'unsealed' })
     expect(w.receiver.posts).toEqual([])
 

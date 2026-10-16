@@ -131,16 +131,17 @@ test('backup round trip: a board with an image and a PDF comes back as a new boa
   const original = (await items(a.page)).map((e) => e.id).sort()
   const title = (await (await users.api('alice')).getBoard(board)).board.title
 
-  const file = await test.step('Board menu ▸ Export ▸ Download backup (.lobby) downloads the file', async () => {
-    const line = await backupLine(a.page)
-    await expect(line).toHaveText(/Download backup \(\.lobby\)/)
-    const got = await downloadFrom(a.page, () => line.click())
-    expect(got.name).toBe(`${title}.lobby`)
-    expect(got.bytes.subarray(0, 2).toString('latin1')).toBe('PK')
-    await expect(a.page.getByTestId('backup-download-notice')).toContainText('Your backup is downloading')
-    await testInfo.attach('board.lobby', { body: got.bytes, contentType: BACKUP_TYPE })
-    return got.bytes
-  })
+  const file =
+    await test.step('Board menu ▸ Export ▸ Download backup (.lobby) downloads the file', async () => {
+      const line = await backupLine(a.page)
+      await expect(line).toHaveText(/Download backup \(\.lobby\)/)
+      const got = await downloadFrom(a.page, () => line.click())
+      expect(got.name).toBe(`${title}.lobby`)
+      expect(got.bytes.subarray(0, 2).toString('latin1')).toBe('PK')
+      await expect(a.page.getByTestId('backup-download-notice')).toContainText('Your backup is downloading')
+      await testInfo.attach('board.lobby', { body: got.bytes, contentType: BACKUP_TYPE })
+      return got.bytes
+    })
   // the download went straight to the api's own origin, never through the page's /api proxy
   const downloads = pageUrls.filter((u) => u.includes('/backup?ticket='))
   expect(downloads).toHaveLength(1)

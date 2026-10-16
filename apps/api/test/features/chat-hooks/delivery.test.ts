@@ -75,9 +75,10 @@ describe('who a message is queued for', () => {
         { hookId: otherId, kinds: ['mention'] },
       ],
     })
-    await w.api.db.query("UPDATE chat_hooks SET disabled_at = now(), disabled_reason = 'gone' WHERE id = $1", [
-      otherId,
-    ])
+    await w.api.db.query(
+      "UPDATE chat_hooks SET disabled_at = now(), disabled_reason = 'gone' WHERE id = $1",
+      [otherId],
+    )
     await mentionBen()
     expect((await deliveries(w.api)).map((d) => d.hook_id)).toEqual([w.hookId])
   })
@@ -180,8 +181,14 @@ describe('what the message says', () => {
   })
 
   it('a name or title cannot ping a channel or break out of the link (escaped in the blocks and the fallback text)', async () => {
-    await w.api.db.query('UPDATE users SET name = $2 WHERE id = $1', [w.owner.userId, '<!channel> *Olive* <@U123|x>'])
-    await w.api.db.query('UPDATE boards SET title = $2 WHERE id = $1', [w.boardId, '<!here> & <https://evil.example|Free money>'])
+    await w.api.db.query('UPDATE users SET name = $2 WHERE id = $1', [
+      w.owner.userId,
+      '<!channel> *Olive* <@U123|x>',
+    ])
+    await w.api.db.query('UPDATE boards SET title = $2 WHERE id = $1', [
+      w.boardId,
+      '<!here> & <https://evil.example|Free money>',
+    ])
     await mentionBen()
     await w.tick()
     const post = w.receiver.posts[0]
@@ -257,9 +264,10 @@ describe('checked again at send time', () => {
 
   it('a hook switched off meanwhile: dropped', async () => {
     await mentionBen()
-    await w.api.db.query("UPDATE chat_hooks SET disabled_at = now(), disabled_reason = 'gone' WHERE id = $1", [
-      w.hookId,
-    ])
+    await w.api.db.query(
+      "UPDATE chat_hooks SET disabled_at = now(), disabled_reason = 'gone' WHERE id = $1",
+      [w.hookId],
+    )
     await w.tick()
     expect((await deliveries(w.api))[0]).toMatchObject({ status: 'dropped', last_code: 'hook-disabled' })
     expect(w.receiver.posts).toEqual([])
@@ -335,29 +343,35 @@ describe('what each answer does', () => {
     [404, 'not-found'],
     [403, 'forbidden'],
     [410, 'gone'],
-  ] as const)('a %i switches the hook off (%s), drops what waited for it, and an admin can turn it back on', async (status, reason) => {
-    await mentionBen()
-    await mentionBen('second one')
-    // the first pass takes both; the answer to the first switches the hook off, the second goes out regardless of
-    // the batch already claimed — so make the second wait: it is not due yet
-    await w.api.db.query("UPDATE chat_deliveries SET next_at = now() + interval '1 hour' WHERE id = (SELECT max(id) FROM chat_deliveries)")
-    w.receiver.next({ status })
-    await w.tick()
-    expect(await hookRow()).toMatchObject({ disabled_reason: reason, last_error_code: String(status) })
-    expect((await deliveries(w.api)).map((d) => `${d.status}:${d.last_code}`)).toEqual([
-      `failed:${status}`,
-      'dropped:hook-disabled',
-    ])
-    // nothing more is queued for it, and the list shows why
-    await mentionBen('third')
-    expect(await deliveries(w.api)).toHaveLength(2)
-    const listed = (await w.owner.req('GET', HOOKS)).json().hooks[0]
-    expect(listed).toMatchObject({ disabledReason: reason, lastErrorCode: String(status) })
-    const on = await w.owner.req('PATCH', `${HOOKS}/${w.hookId}`, { enabled: true })
-    expect(on.json()).toMatchObject({ disabledAt: null })
-    await mentionBen('fourth')
-    expect(await deliveries(w.api)).toHaveLength(3)
-  }, 30_000)
+  ] as const)(
+    'a %i switches the hook off (%s), drops what waited for it, and an admin can turn it back on',
+    async (status, reason) => {
+      await mentionBen()
+      await mentionBen('second one')
+      // the first pass takes both; the answer to the first switches the hook off, the second goes out regardless of
+      // the batch already claimed — so make the second wait: it is not due yet
+      await w.api.db.query(
+        "UPDATE chat_deliveries SET next_at = now() + interval '1 hour' WHERE id = (SELECT max(id) FROM chat_deliveries)",
+      )
+      w.receiver.next({ status })
+      await w.tick()
+      expect(await hookRow()).toMatchObject({ disabled_reason: reason, last_error_code: String(status) })
+      expect((await deliveries(w.api)).map((d) => `${d.status}:${d.last_code}`)).toEqual([
+        `failed:${status}`,
+        'dropped:hook-disabled',
+      ])
+      // nothing more is queued for it, and the list shows why
+      await mentionBen('third')
+      expect(await deliveries(w.api)).toHaveLength(2)
+      const listed = (await w.owner.req('GET', HOOKS)).json().hooks[0]
+      expect(listed).toMatchObject({ disabledReason: reason, lastErrorCode: String(status) })
+      const on = await w.owner.req('PATCH', `${HOOKS}/${w.hookId}`, { enabled: true })
+      expect(on.json()).toMatchObject({ disabledAt: null })
+      await mentionBen('fourth')
+      expect(await deliveries(w.api)).toHaveLength(3)
+    },
+    30_000,
+  )
 
   it('a 400 fails at once (no retry); a redirect is refused and switches the hook off', async () => {
     await mentionBen()
@@ -397,8 +411,9 @@ describe('what each answer does', () => {
     await w.tick()
     const post = w.teams?.posts[0]
     expect(post?.path).toContain('/powerautomate/automations/direct/workflows/')
-    const card = (post?.body?.attachments as { content: { actions: { type: string }[]; version: string } }[])[0]
-      ?.content
+    const card = (
+      (post?.body?.attachments ?? []) as { content: { actions: { type: string }[]; version: string } }[]
+    )[0]?.content
     expect(card?.version).toBe('1.4')
     expect(card?.actions.map((a) => a.type)).toEqual(['Action.OpenUrl'])
     expect(JSON.stringify(post?.body)).not.toContain('Action.Submit')

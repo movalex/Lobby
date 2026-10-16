@@ -91,9 +91,9 @@ describe('setting the choices', () => {
         ])
       ).statusCode,
     ).toBe(400)
-    expect((await w.ben.req('PUT', '/api/me/chat-prefs', { workspaceId: DEV_STUDIO, prefs: [], x: 1 })).statusCode).toBe(
-      400,
-    )
+    expect(
+      (await w.ben.req('PUT', '/api/me/chat-prefs', { workspaceId: DEV_STUDIO, prefs: [], x: 1 })).statusCode,
+    ).toBe(400)
     // a hook of another workspace (one the person has no part in) is a 400 too
     const elsewhere = await w.erin.req('POST', `/api/workspaces/${w.erin.personalWorkspaceId}/chat-hooks`, {
       name: '#mine',
@@ -116,10 +116,10 @@ describe('who may have choices', () => {
   })
 
   it('a workspace guest (a review-link visitor with an account) is not shown the team’s channels (403)', async () => {
-    await w.api.db.query("UPDATE workspace_members SET role = 'guest' WHERE workspace_id = $1 AND user_id = $2", [
-      DEV_STUDIO,
-      w.ben.userId,
-    ])
+    await w.api.db.query(
+      "UPDATE workspace_members SET role = 'guest' WHERE workspace_id = $1 AND user_id = $2",
+      [DEV_STUDIO, w.ben.userId],
+    )
     expect((await w.ben.req('GET', PREFS)).statusCode).toBe(403)
     expect(
       (await w.ben.req('PUT', '/api/me/chat-prefs', { workspaceId: DEV_STUDIO, prefs: [] })).statusCode,

@@ -3,9 +3,12 @@
 // to the list of other workspaces, and the tile wears a shield while the workspace is internal only. The panel
 // opens in the sidebar's own flow (no overlay to clip at the edge, and on a phone it simply makes the folded
 // menu longer); Escape closes it and gives the keyboard back to the tile. Everything the Internal only
-// control did, and every one of its test ids, is unchanged: only where it sits moved.
+// control did, and every one of its test ids, is unchanged: only where it sits moved. Wave R: the panel also links to
+// the chat notifications settings (Slack and Teams), the same entry as the bell's; it hides itself while chat
+// notifications are off, or for a member when the workspace has no channel.
 import type { Project, WorkspaceSummary } from '@draftroom/contracts'
 import { useEffect, useId, useRef, useState } from 'react'
+import { ChatNotificationsEntry } from '../features/notify-settings/ChatNotificationsDialog.tsx'
 import { navigate, workspacePath } from '../lib/routing.ts'
 import { useValue } from '../lib/signals.ts'
 import { InternalOnlySection, type InternalOnlyState } from './InternalOnly.tsx'
@@ -191,6 +194,13 @@ export function WorkspaceMenu({
               state={internal}
             />
           )}
+          <div className="dr-wsmenu__section" data-testid="workspace-menu-chat">
+            <ChatNotificationsEntry
+              workspaceId={workspace.id}
+              workspaceName={workspace.name}
+              canManage={workspace.role === 'owner' || workspace.role === 'admin'}
+            />
+          </div>
         </section>
       )}
     </div>

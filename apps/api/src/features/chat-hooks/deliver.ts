@@ -420,9 +420,7 @@ export function createChatDelivery(
       url,
       noticePayloadFor(hook.provider, {
         text,
-        link: single
-          ? boardLink(origin, first.board_id, null)
-          : workspaceLink(origin, hook.workspace_id),
+        link: single ? boardLink(origin, first.board_id, null) : workspaceLink(origin, hook.workspace_id),
         workspaceName: hook.workspace_name,
       }),
     )

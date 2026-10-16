@@ -2,7 +2,12 @@
 // the URL rules at the door, the cap, change and removal, the test message, and the one thing that matters most: the
 // URL leaves the server nowhere (no response, no audit row, no log line), and what is stored is sealed to its row.
 
-import { type ChatHook, CHAT_HOOK_LIMITS, ListChatHooksResponse, TestChatHookResponse } from '@draftroom/contracts'
+import {
+  CHAT_HOOK_LIMITS,
+  type ChatHook,
+  ListChatHooksResponse,
+  TestChatHookResponse,
+} from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createSecretBox } from '../../../src/crypto/sealed.ts'
 import { DEV_STUDIO } from '../../helpers.ts'
@@ -107,9 +112,9 @@ describe('who may manage hooks', () => {
 
   it('a member is refused (403), a stranger sees nothing (404), nobody signed in gets 401', async () => {
     expect((await w.sam.req('GET', HOOKS)).statusCode).toBe(403)
-    expect((await w.ben.req('POST', HOOKS, { name: '#x', provider: 'slack', url: w.hookUrl })).statusCode).toBe(
-      403,
-    )
+    expect(
+      (await w.ben.req('POST', HOOKS, { name: '#x', provider: 'slack', url: w.hookUrl })).statusCode,
+    ).toBe(403)
     expect((await w.ben.req('DELETE', `${HOOKS}/${w.hookId}`)).statusCode).toBe(403)
     expect((await w.erin.req('GET', HOOKS)).statusCode).toBe(404)
     expect((await add(w.erin)).statusCode).toBe(404)
@@ -124,7 +129,8 @@ describe('who may manage hooks', () => {
     })
     expect(put.statusCode).toBe(200)
     expect((await w.pat.req('DELETE', `${HOOKS}/${w.hookId}`)).statusCode).toBe(204)
-    const n = async (t: string) => (await w.api.db.one<{ n: number }>(`SELECT count(*)::int AS n FROM ${t}`)).n
+    const n = async (t: string) =>
+      (await w.api.db.one<{ n: number }>(`SELECT count(*)::int AS n FROM ${t}`)).n
     expect([await n('chat_hooks'), await n('chat_hook_prefs')]).toEqual([0, 0])
     expect((await w.owner.req('DELETE', `${HOOKS}/${w.hookId}`)).statusCode).toBe(404)
     const audit = await w.api.db.query<{ action: string; detail: unknown }>(
@@ -195,16 +201,21 @@ describe('adding and changing a hook', () => {
 
   it('holds at most 20 hooks per workspace (409 CHAT_HOOKS_FULL)', async () => {
     for (let i = 1; i < CHAT_HOOK_LIMITS.hooksPerWorkspace; i++)
-      expect((await w.owner.req('POST', HOOKS, body(slackHookUrl(w.receiver.origin, `hook${i}ABCDEF`)))).statusCode).toBe(
-        201,
-      )
+      expect(
+        (await w.owner.req('POST', HOOKS, body(slackHookUrl(w.receiver.origin, `hook${i}ABCDEF`))))
+          .statusCode,
+      ).toBe(201)
     const full = await w.owner.req('POST', HOOKS, body(slackHookUrl(w.receiver.origin, 'oneTooMany12')))
     expect(full.statusCode).toBe(409)
     expect(full.json().error.code).toBe('CHAT_HOOKS_FULL')
   })
 
   it('validates the body (a name, a provider, no stray keys)', async () => {
-    for (const bad of [{}, { name: '', provider: 'slack', url: w.hookUrl }, { ...body(w.hookUrl), extra: 1 }]) {
+    for (const bad of [
+      {},
+      { name: '', provider: 'slack', url: w.hookUrl },
+      { ...body(w.hookUrl), extra: 1 },
+    ]) {
       expect((await w.owner.req('POST', HOOKS, bad)).statusCode).toBe(400)
     }
     expect((await w.owner.req('PATCH', `${HOOKS}/${w.hookId}`, {})).statusCode).toBe(400)
@@ -212,7 +223,10 @@ describe('adding and changing a hook', () => {
   })
 
   it('renames, switches snippets on, and replaces the URL (checked for the same provider, a new hint)', async () => {
-    const renamed = await w.owner.req('PATCH', `${HOOKS}/${w.hookId}`, { name: '  #renamed  ', includeSnippets: true })
+    const renamed = await w.owner.req('PATCH', `${HOOKS}/${w.hookId}`, {
+      name: '  #renamed  ',
+      includeSnippets: true,
+    })
     expect(renamed.statusCode).toBe(200)
     expect(renamed.json()).toMatchObject({ name: '#renamed', includeSnippets: true })
     const moved = await w.owner.req('PATCH', `${HOOKS}/${w.hookId}`, {
@@ -270,7 +284,8 @@ describe('the test message', () => {
   })
 
   it('is rate limited per person (429 after 10 a minute)', async () => {
-    for (let i = 0; i < 10; i++) expect((await w.owner.req('POST', `${HOOKS}/${w.hookId}/test`, {})).statusCode).toBe(200)
+    for (let i = 0; i < 10; i++)
+      expect((await w.owner.req('POST', `${HOOKS}/${w.hookId}/test`, {})).statusCode).toBe(200)
     expect((await w.owner.req('POST', `${HOOKS}/${w.hookId}/test`, {})).statusCode).toBe(429)
   })
 
@@ -282,10 +297,10 @@ describe('the test message', () => {
     })
     const secondId = (other.json() as ChatHook).id
     // the first hook's ciphertext moved onto the second row: the row's identity is part of what was sealed
-    await w.api.db.query('UPDATE chat_hooks SET url_sealed = (SELECT url_sealed FROM chat_hooks WHERE id = $1) WHERE id = $2', [
-      w.hookId,
-      secondId,
-    ])
+    await w.api.db.query(
+      'UPDATE chat_hooks SET url_sealed = (SELECT url_sealed FROM chat_hooks WHERE id = $1) WHERE id = $2',
+      [w.hookId, secondId],
+    )
     const res = await w.owner.req('POST', `${HOOKS}/${secondId}/test`, {})
     expect(res.json()).toEqual({ status: 'failed', code: 'unsealed' })
     expect(w.receiver.posts).toEqual([])

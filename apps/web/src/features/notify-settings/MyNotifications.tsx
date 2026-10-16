@@ -59,7 +59,10 @@ export function MyNotificationsPanel({
       (e: unknown) => {
         if (abort.signal.aborted) return
         const err = e instanceof ChatHookRequestError ? e : new ChatHookRequestError('unavailable')
-        setLoad({ kind: 'error', text: requestErrorText(err, 'Your choices could not be loaded. Try again.') })
+        setLoad({
+          kind: 'error',
+          text: requestErrorText(err, 'Your choices could not be loaded. Try again.'),
+        })
       },
     )
     return () => abort.abort()
@@ -117,7 +120,12 @@ export function MyNotificationsPanel({
     <div className="dr-chat" data-testid="chat-prefs">
       <p className="dr-muted">{MY_NOTIFICATIONS_INTRO}</p>
       {hooks.map((hook) => (
-        <fieldset key={hook.id} className="dr-chat__hook" data-testid="chat-prefs-hook" data-hook-id={hook.id}>
+        <fieldset
+          key={hook.id}
+          className="dr-chat__hook"
+          data-testid="chat-prefs-hook"
+          data-hook-id={hook.id}
+        >
           <legend className="dr-chat__legend">
             <strong>{hook.name}</strong>
             <span className="dr-chat__badge">{PROVIDER_LABEL[hook.provider]}</span>

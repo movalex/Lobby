@@ -35,6 +35,7 @@ import { DashboardBell, useDashboardInbox } from './DashboardBell.tsx'
 import { dashboardApi, IMPORT_BODY_LIMIT_BYTES } from './dashboard-api.ts'
 import { HelpMenu } from './HelpMenu.tsx'
 import { useInternalOnly } from './InternalOnly.tsx'
+import { useImportBackup } from './import-backup/ImportBackupDialog.tsx'
 import { ImportMenu } from './import-menu/ImportMenu.tsx'
 import { useMiroImport } from './import-miro/index.tsx'
 import { internalOnlyShown } from './internal-only-model.ts'
@@ -326,12 +327,19 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
     }
   }, [pageTitle])
 
-  // wave R (WS1): "From Miro…" in the Import menu; each board an import finishes reloads the list
+  // wave R (WS1): "Import from Miro (beta)…" in the Import menu; each board an import finishes reloads the list
   const miro = useMiroImport({
     workspaceId: workspace?.id ?? workspaceId,
     projects: projectList,
     defaultProjectId: section.kind === 'project' ? section.projectId : null,
     onFinished: boards.reload,
+  })
+  // wave R (WS4): "Lobby backup (.lobby)…" in the Import menu; the dialog follows the restore to "Open board"
+  const backup = useImportBackup({
+    workspaceId: workspace?.id ?? workspaceId,
+    workspaceName: workspace?.name ?? '',
+    projects: projectList,
+    defaultProjectId: section.kind === 'project' ? section.projectId : null,
   })
 
   if (!workspace) return <NoAccessScreen thing="workspace" />
@@ -841,10 +849,11 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
                   data-testid="import-board-file"
                   onChange={(e) => void onImportFile(e)}
                 />
-                {/* wave R: one button today; a menu once WS1's or WS4's entry is on (import-menu/flags.ts) */}
+                {/* wave R: the Import menu (.lobby backup, .json, Miro); one button with its switches off (import-menu/flags.ts) */}
                 <ImportMenu
                   importing={importing}
                   onJson={() => importRef.current?.click()}
+                  onBackup={backup.open}
                   onMiro={miro.open}
                 />
                 {readPickerHidden(me.user.id) && (
@@ -1122,6 +1131,7 @@ function Dashboard({ workspaceId, section }: { workspaceId: string; section: Das
         />
       )}
       {miro.dialog}
+      {backup.dialog}
       <NoticeRegion notices={notices} onDismiss={dismiss} />
       {/* K4-5: Feedback is one click away, on the dashboard as on a board */}
       <TeamFeedbackPill />

@@ -383,8 +383,10 @@ function slackBody(
   workspaceName: string,
   snippet: string | null,
 ): Record<string, unknown> {
-  const quote = snippet ? `
->${slackEscape(snippet)}` : ''
+  const quote = snippet
+    ? `
+>${slackEscape(snippet)}`
+    : ''
   const text = `${slackEscape(sentence)} · <${slackEscape(link)}|Open in Lobby>${quote}`
   const workspace = cap(workspaceName, CHAT_HOOK_LIMITS.titleChars)
   return {

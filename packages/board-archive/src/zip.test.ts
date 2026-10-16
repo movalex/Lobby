@@ -350,5 +350,4 @@ describe('the ZIP writer and reader', () => {
     junk.fill(0xff, start, start + manifest.compressedSize)
     await expect(readZipEntry(bufferSource(junk), manifest)).rejects.toBeInstanceOf(ZipFormatError)
   })
-
 })

@@ -63,7 +63,7 @@ interface Dashboard {
   foreign: string[]
 }
 
-/** Alice's dashboard (All boards) with the Import menu's "From Miro…" switched on (a dev-auth page's switches). */
+/** Alice's dashboard (All boards) with the Import menu's "Import from Miro (beta)…" switched on (a dev-auth page's switches). */
 async function aliceDashboard(browser: Browser, users: Users): Promise<Dashboard> {
   const context = await browser.newContext()
   await context.addInitScript((flags: Record<string, string>) => {
@@ -80,7 +80,7 @@ async function aliceDashboard(browser: Browser, users: Users): Promise<Dashboard
 
 async function openMiroDialog(page: Page): Promise<Locator> {
   await page.getByTestId('import-menu').click()
-  await page.getByRole('menuitem', { name: 'From Miro…' }).click()
+  await page.getByRole('menuitem', { name: 'Import from Miro (beta)…' }).click()
   const dialog = page.getByTestId('miro-import-dialog')
   await expect(dialog).toBeVisible()
   return dialog

@@ -169,7 +169,10 @@ export async function notifyOwners(
        RETURNING id`,
       [input.workspaceId, input.boardId, input.actorId, input.at],
     )
-    await enqueueChatDeliveries(tx, res.rows.map((r) => r.id))
+    await enqueueChatDeliveries(
+      tx,
+      res.rows.map((r) => r.id),
+    )
     return res.rowCount
   })
   return inserted ?? 0

@@ -117,7 +117,11 @@ export function toggled(chosen: Chosen, hookId: string, kind: ChatHookKind, on: 
 }
 
 /** The whole choice for a workspace, as the api takes it (a hook with no kinds is left out). */
-export function prefsInput(workspaceId: string, hookIds: readonly string[], chosen: Chosen): PutChatPrefsInput {
+export function prefsInput(
+  workspaceId: string,
+  hookIds: readonly string[],
+  chosen: Chosen,
+): PutChatPrefsInput {
   return {
     workspaceId,
     prefs: hookIds.flatMap((hookId) => {

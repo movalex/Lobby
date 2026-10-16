@@ -3,7 +3,7 @@
 //
 //   Lobby backup (.lobby)…   WS4 (dashboard/import-backup): restore a backup as a new board
 //   Lobby board (.json)…     today's file input (DashboardPage), unchanged
-//   From Miro…               WS1 (dashboard/import-miro): the token, the board picker, progress, the report
+//   Import from Miro (beta)… WS1 (dashboard/import-miro): the token, the board picker, progress, the report
 //
 // Creators only, as today (the dashboard shows it only with `canCreate`). An entry whose handler is missing is left out
 // (WS1 and WS4 pass theirs), so the menu never offers what this build cannot do.
@@ -15,7 +15,7 @@ export type ImportAction = 'backup' | 'json' | 'miro'
 export const IMPORT_MENU_LABELS: Readonly<Record<ImportAction, string>> = {
   backup: 'Lobby backup (.lobby)…',
   json: 'Lobby board (.json)…',
-  miro: 'From Miro…',
+  miro: 'Import from Miro (beta)…',
 }
 
 /** The entries offered, in order; a single entry means no menu (today's button). */

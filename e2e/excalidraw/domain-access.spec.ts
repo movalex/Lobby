@@ -73,7 +73,14 @@ async function expectNoSideScroll(page: Page) {
 /** The dashboard's creation entry points are all absent (New board, Templates, Import, sample). */
 async function expectNoCreateControls(page: Page) {
   await expect(page.getByTestId('dashboard')).toBeVisible()
-  for (const id of ['create-board', 'open-templates', 'import-board', 'start-sample-board', 'create-project'])
+  for (const id of [
+    'create-board',
+    'open-templates',
+    'import-board',
+    'import-menu',
+    'start-sample-board',
+    'create-project',
+  ])
     await expect(page.getByTestId(id), id).toHaveCount(0)
 }
 

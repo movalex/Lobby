@@ -14,13 +14,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { chatDeliveryOf, enqueueChatDeliveries } from '../../../src/features/chat-hooks/index.ts'
 import { createTestApi, DEV_STUDIO, type TestApi } from '../../helpers.ts'
 import { createThread, mention } from '../comments/fixture.ts'
-import {
-  type ChatWorld,
-  chatWorld,
-  deliveries,
-  slackHookUrl,
-  WEBHOOK_SECRET,
-} from './support.ts'
+import { type ChatWorld, chatWorld, deliveries, slackHookUrl, WEBHOOK_SECRET } from './support.ts'
 
 const PG_URL = process.env.DRAFTROOM_TEST_DATABASE_URL ?? ''
 const ROUNDS = Number(process.env.DRAFTROOM_PG_STRESS_ITER ?? 3)
@@ -38,7 +32,10 @@ afterEach(async () => {
 async function secondProcess(world: ChatWorld): Promise<TestApi> {
   const api = await createTestApi({
     db: world.api.db,
-    env: { DRAFTROOM_WEBHOOK_SECRET: WEBHOOK_SECRET, DRAFTROOM_CHAT_HOOK_TEST_ORIGINS: world.receiver.origin },
+    env: {
+      DRAFTROOM_WEBHOOK_SECRET: WEBHOOK_SECRET,
+      DRAFTROOM_CHAT_HOOK_TEST_ORIGINS: world.receiver.origin,
+    },
   })
   chatDeliveryOf(api.app)?.stop()
   extra.push(api)

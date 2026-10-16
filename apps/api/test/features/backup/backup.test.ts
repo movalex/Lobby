@@ -162,13 +162,13 @@ describe('backup and restore: the round trip', () => {
     const seeded = sync.seeds.find((s) => s.boardId === newId)?.body
     expect(seeded?.format).toBe('lobby-elements')
     const restored = seeded?.elements as El[]
-    const expected = (before?.elements as El[]).map((e) => {
+    const expected = ((before?.elements ?? []) as El[]).map((e) => {
       const c = structuredClone(e)
       if (c.customData?.lobby) delete c.customData.lobby['plusOne:usr_voter']
       return c
     })
     expect(shapes(restored)).toEqual(shapes(expected))
-    const oldIds = new Set((before?.elements as El[]).map((e) => e.id))
+    const oldIds = new Set(((before?.elements ?? []) as El[]).map((e) => e.id))
     for (const el of restored) expect(oldIds.has(el.id), el.id).toBe(false)
     // the start view's frame follows the frame
     const frame = restored.find((e) => e.type === 'frame') as El

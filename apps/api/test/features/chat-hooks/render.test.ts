@@ -3,7 +3,6 @@
 
 import { CHAT_HIDDEN_BOARD_TITLE, CHAT_HOOK_LIMITS } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
-import type { NotificationRow } from '../../../src/features/comments/notifications.ts'
 import {
   boardLink,
   isChatKind,
@@ -13,6 +12,7 @@ import {
   titleFor,
   workspaceLink,
 } from '../../../src/features/chat-hooks/render.ts'
+import type { NotificationRow } from '../../../src/features/comments/notifications.ts'
 
 const row = (over: Partial<NotificationRow> = {}): NotificationRow => ({
   id: 'ntf_0123456789abcdef',

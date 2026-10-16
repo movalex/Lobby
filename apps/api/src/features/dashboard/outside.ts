@@ -845,7 +845,10 @@ export async function notifyOutsiderJoined(
          RETURNING id`,
         [board.workspace_id, boardId, userId, ctx.now()],
       )
-      await enqueueChatDeliveries(tx, res.rows.map((r) => r.id))
+      await enqueueChatDeliveries(
+        tx,
+        res.rows.map((r) => r.id),
+      )
       return res.rowCount
     })
     return inserted ?? 0

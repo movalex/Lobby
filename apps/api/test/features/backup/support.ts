@@ -258,4 +258,3 @@ export async function uploadAs(
   if (res.statusCode !== 201) throw new Error(`upload failed ${res.statusCode} ${res.body}`)
   return res.json() as { assetId: string; versionId: string }
 }
-

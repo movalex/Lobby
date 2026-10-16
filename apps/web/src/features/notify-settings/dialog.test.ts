@@ -9,7 +9,12 @@ import { AddHookForm } from './WorkspaceHooks.tsx'
 const W = 'wsp_0123456789abcdefghij'
 const dialog = (canManage: boolean) =>
   renderToStaticMarkup(
-    createElement(ChatNotificationsDialog, { workspaceId: W, workspaceName: 'DBC Pitches', canManage, onClose() {} }),
+    createElement(ChatNotificationsDialog, {
+      workspaceId: W,
+      workspaceName: 'DBC Pitches',
+      canManage,
+      onClose() {},
+    }),
   )
 
 describe('the dialog', () => {
@@ -24,7 +29,9 @@ describe('the dialog', () => {
   it('an owner or admin gets both tabs, "My notifications" first and selected', () => {
     const html = dialog(true)
     expect(html).toContain('role="tablist"')
-    expect(html).toMatch(/data-testid="chat-tab-mine"[^>]*aria-selected="true"|aria-selected="true"[^>]*data-testid="chat-tab-mine"/)
+    expect(html).toMatch(
+      /data-testid="chat-tab-mine"[^>]*aria-selected="true"|aria-selected="true"[^>]*data-testid="chat-tab-mine"/,
+    )
     expect(html).toContain('data-testid="chat-tab-channels"')
     expect(html).toContain('role="tabpanel"')
   })
@@ -32,14 +39,20 @@ describe('the dialog', () => {
   it('the entry draws nothing until the api has said chat notifications are on', () => {
     expect(
       renderToStaticMarkup(
-        createElement(ChatNotificationsEntry, { workspaceId: W, workspaceName: 'DBC Pitches', canManage: true }),
+        createElement(ChatNotificationsEntry, {
+          workspaceId: W,
+          workspaceName: 'DBC Pitches',
+          canManage: true,
+        }),
       ),
     ).toBe('')
   })
 })
 
 describe('adding a channel', () => {
-  const html = renderToStaticMarkup(createElement(AddHookForm, { workspaceId: W, api: undefined, onAdded() {} }))
+  const html = renderToStaticMarkup(
+    createElement(AddHookForm, { workspaceId: W, api: undefined, onAdded() {} }),
+  )
 
   it('takes the webhook URL in a password field that remembers nothing', () => {
     const field = /<input[^>]*data-testid="chat-hook-add-url"[^>]*>/.exec(html)?.[0] ?? ''

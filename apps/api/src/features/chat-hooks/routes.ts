@@ -18,8 +18,8 @@ import {
   CHAT_HOOK_ROUTES,
   type ChatHook,
   ChatHookId,
-  cleanDisplayText,
   CreateChatHookInput,
+  cleanDisplayText,
   type ListChatHooksResponse,
   PatchChatHookInput,
   type TestChatHookResponse,
@@ -89,8 +89,7 @@ export async function requireManager(
   if (user.kind === 'guest') throw guestRefused(CHAT_HOOK_GUESTS_MESSAGE)
   const role = await requireWorkspaceRole(q, workspaceId, user.id)
   if (!canManageWorkspace(role)) throw forbidden(NOT_MANAGER)
-  if (route !== undefined)
-    await env.ctx.identity.requireCreator(q, user.id, 'share', { route, by: 'route' })
+  if (route !== undefined) await env.ctx.identity.requireCreator(q, user.id, 'share', { route, by: 'route' })
 }
 
 const isHookId = (v: string) => ChatHookId.safeParse(v).success

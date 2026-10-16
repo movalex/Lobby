@@ -10,8 +10,8 @@ import {
   startFakeReceiver,
   teamsHookUrl,
 } from '../../../../../e2e/tests/support/chat-hooks.ts'
-import { chatDeliveryOf } from '../../../src/features/chat-hooks/index.ts'
 import type { TickResult } from '../../../src/features/chat-hooks/deliver.ts'
+import { chatDeliveryOf } from '../../../src/features/chat-hooks/index.ts'
 import { type Client, createBoard, createTestApi, DEV_STUDIO, type TestApi } from '../../helpers.ts'
 
 export const WEBHOOK_SECRET = 'test-webhook-secret-0123456789abcdefghij'
@@ -57,7 +57,9 @@ export async function chatWorld(
   const secret = opts.secret === undefined ? WEBHOOK_SECRET : opts.secret
   const logs = opts.logs
   const api = await createTestApi({
-    ...(logs ? { deps: { logger: { level: 'info' as const, stream: { write: (l: string) => void logs.push(l) } } } } : {}),
+    ...(logs
+      ? { deps: { logger: { level: 'info' as const, stream: { write: (l: string) => void logs.push(l) } } } }
+      : {}),
     env: {
       ...(secret ? { DRAFTROOM_WEBHOOK_SECRET: secret } : {}),
       DRAFTROOM_CHAT_HOOK_TEST_ORIGINS: teams ? `${receiver.origin},${teams.origin}` : receiver.origin,

@@ -58,10 +58,10 @@ export function toChatHook(r: HookRow): ChatHook {
 
 /** One hook of a workspace (null: no such hook there). */
 export function findHook(q: Queryable, workspaceId: string, hookId: string): Promise<HookRow | null> {
-  return q.maybeOne<HookRow>(
-    `SELECT ${HOOK_COLUMNS} ${HOOK_FROM} WHERE h.workspace_id = $1 AND h.id = $2`,
-    [workspaceId, hookId],
-  )
+  return q.maybeOne<HookRow>(`SELECT ${HOOK_COLUMNS} ${HOOK_FROM} WHERE h.workspace_id = $1 AND h.id = $2`, [
+    workspaceId,
+    hookId,
+  ])
 }
 
 /** Every hook of a workspace, oldest first. */

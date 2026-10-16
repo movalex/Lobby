@@ -95,7 +95,6 @@ function asRequestError(e: unknown): ChatHookRequestError {
   return new ChatHookRequestError('unavailable')
 }
 
-
 export async function listChatHooks(
   workspaceId: string,
   opts: ChatHookRequestOptions = {},

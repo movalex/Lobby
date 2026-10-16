@@ -39,7 +39,8 @@ export async function openChatDialog(page: Page, tab?: 'mine' | 'channels') {
   await entry.click()
   const dialog = page.getByTestId('chat-notifications-dialog')
   await expect(dialog).toBeVisible()
-  if (tab && (await page.getByTestId(`chat-tab-${tab}`).count())) await page.getByTestId(`chat-tab-${tab}`).click()
+  if (tab && (await page.getByTestId(`chat-tab-${tab}`).count()))
+    await page.getByTestId(`chat-tab-${tab}`).click()
   return dialog
 }
 

@@ -96,6 +96,7 @@ describe('parseRetryAfter', () => {
     const date = 'Wed, 21 Oct 2026 07:28:30 GMT'
     expect(parseRetryAfter(date, Date.parse('Wed, 21 Oct 2026 07:28:00 GMT'))).toBe(30_000)
     expect(parseRetryAfter(date, Date.parse('Thu, 22 Oct 2026 07:28:00 GMT'))).toBe(0)
-    for (const bad of [undefined, '', 'soon', '-5', '1.5', '99999999']) expect(parseRetryAfter(bad, 0)).toBeNull()
+    for (const bad of [undefined, '', 'soon', '-5', '1.5', '99999999'])
+      expect(parseRetryAfter(bad, 0)).toBeNull()
   })
 })

@@ -75,7 +75,11 @@ describe('reads', () => {
     const f = fake(() => ({ status: 200, json: { hooks: [hook()] } }))
     const hooks = await listChatHooks(W, { api: f.api })
     expect(hooks).toHaveLength(1)
-    expect(f.seen[0]).toMatchObject({ method: 'GET', url: `/api/workspaces/${W}/chat-hooks`, credentials: 'same-origin' })
+    expect(f.seen[0]).toMatchObject({
+      method: 'GET',
+      url: `/api/workspaces/${W}/chat-hooks`,
+      credentials: 'same-origin',
+    })
     expect(JSON.stringify(hooks)).not.toContain('abcdEFGH1234')
     expect(chatHooksAvailable()).toBe(true)
   })
@@ -138,7 +142,7 @@ describe('writes', () => {
     )
     expect(made.hint).toBe('hooks.slack.com/…/•••1234')
     expect(f.seen[0]).toMatchObject({ method: 'POST', url: `/api/workspaces/${W}/chat-hooks` })
-    expect((f.seen[0]?.body as { url: string }).url).toBe(URL_TEXT)
+    expect((f.seen[0]?.body as { url: string } | undefined)?.url).toBe(URL_TEXT)
     expect(JSON.stringify(made)).not.toContain('abcdEFGH1234')
     expect(f.seen[0]?.url).not.toContain('abcdEFGH1234')
   })
@@ -164,7 +168,10 @@ describe('writes', () => {
     expect((await patchChatHook(W, HOOK, { name: '#renamed' }, { api: f.api })).name).toBe('#renamed')
     await deleteChatHook(W, HOOK, { api: f.api })
     expect(await testChatHook(W, HOOK, { api: f.api })).toEqual({ status: 'sent', code: null })
-    await putChatPrefs({ workspaceId: W, prefs: [{ hookId: HOOK, kinds: ['mention', 'reply'] }] }, { api: f.api })
+    await putChatPrefs(
+      { workspaceId: W, prefs: [{ hookId: HOOK, kinds: ['mention', 'reply'] }] },
+      { api: f.api },
+    )
     expect(f.seen.map((s) => `${s.method} ${s.url}`)).toEqual([
       `PATCH /api/workspaces/${W}/chat-hooks/${HOOK}`,
       `DELETE /api/workspaces/${W}/chat-hooks/${HOOK}`,

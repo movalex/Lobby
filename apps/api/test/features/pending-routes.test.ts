@@ -57,11 +57,7 @@ const WAVE_Q_ROUTES: string[] = []
  */
 const WAVE_R_ROUTES: string[] = []
 /** Every route of wave R but the chat hooks (their own test below), pending or live (the guard rows hold for all). */
-const WAVE_R_ALL: string[] = [
-  ...IMPORT_ROUTE_KEYS,
-  ...MIRO_IMPORT_ROUTE_KEYS,
-  ...BACKUP_ROUTE_KEYS,
-]
+const WAVE_R_ALL: string[] = [...IMPORT_ROUTE_KEYS, ...MIRO_IMPORT_ROUTE_KEYS, ...BACKUP_ROUTE_KEYS]
 const WAVE_R_OWNERS: Record<string, string> = {
   ...Object.fromEntries([...IMPORT_ROUTE_KEYS, ...MIRO_IMPORT_ROUTE_KEYS].map((k) => [k, 'WS1'])),
   ...Object.fromEntries(CHAT_HOOK_ROUTE_KEYS.map((k) => [k, 'WS2'])),

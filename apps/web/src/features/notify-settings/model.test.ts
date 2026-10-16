@@ -56,9 +56,9 @@ describe('the words', () => {
     const now = new Date('2026-10-16T10:05:00.000Z')
     expect(hookStatusLine(hook(), now)).toBe('Not used yet.')
     expect(hookStatusLine(hook({ lastOkAt: '2026-10-16T10:00:00.000Z' }), now)).toBe('Last sent 5 min ago.')
-    expect(
-      hookStatusLine(hook({ lastOkAt: '2026-10-16T10:00:00.000Z', lastErrorCode: '503' }), now),
-    ).toBe('Last sent 5 min ago. Last try failed: it had a problem (503).')
+    expect(hookStatusLine(hook({ lastOkAt: '2026-10-16T10:00:00.000Z', lastErrorCode: '503' }), now)).toBe(
+      'Last sent 5 min ago. Last try failed: it had a problem (503).',
+    )
     expect(
       hookStatusLine(hook({ disabledAt: '2026-10-16T10:01:00.000Z', disabledReason: 'not-found' }), now),
     ).toBe('Switched off: Slack could not find the channel or webhook (was it deleted?).')
@@ -78,7 +78,9 @@ describe('the words', () => {
   })
 
   it('"sent" is never "delivered" (a Teams 202 only means queued there)', () => {
-    expect(testResultText({ status: 'sent', code: null }, 'slack')).toBe('Test message sent. Look for it in the channel.')
+    expect(testResultText({ status: 'sent', code: null }, 'slack')).toBe(
+      'Test message sent. Look for it in the channel.',
+    )
     expect(testResultText({ status: 'sent', code: null }, 'teams')).toMatch(/can take a minute/)
     expect(testResultText({ status: 'sent', code: null }, 'slack')).not.toMatch(/delivered/i)
     expect(testResultText({ status: 'failed', code: '404' }, 'slack')).toBe(
@@ -89,9 +91,9 @@ describe('the words', () => {
   it('an error says the api’s own words, or the off text, or a fallback', () => {
     expect(requestErrorText(new ChatHookRequestError('unavailable'), 'x')).toBe(OFF_TEXT)
     expect(requestErrorText(new ChatHookRequestError('CHAT_HOOKS_OFF', 404, 'whatever'), 'x')).toBe(OFF_TEXT)
-    expect(requestErrorText(new ChatHookRequestError('CHAT_HOOK_URL_INVALID', 400, 'Not a Slack URL.'), 'x')).toBe(
-      'Not a Slack URL.',
-    )
+    expect(
+      requestErrorText(new ChatHookRequestError('CHAT_HOOK_URL_INVALID', 400, 'Not a Slack URL.'), 'x'),
+    ).toBe('Not a Slack URL.')
     expect(requestErrorText(new ChatHookRequestError('NETWORK', 0), 'Try again.')).toBe('Try again.')
     expect(requestErrorText(new ChatHookRequestError('CREATOR_REQUIRED', 403), 'x')).toMatch(/creators/)
   })

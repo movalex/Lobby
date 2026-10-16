@@ -954,6 +954,10 @@
 .dr-wsmenu .dr-internal {
   margin: 0;
 }
+/* wave R: the chat notifications link hides itself while they are off; its section then takes no gap */
+.dr-wsmenu__section:empty {
+  display: none;
+}
 .dr-wsmenu__heading {
   margin: 0 0 4px 2px;
   color: var(--dr-ink-2);

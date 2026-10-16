@@ -32,7 +32,8 @@ type Load =
   | { kind: 'off' }
   | { kind: 'error'; text: string }
 
-const asError = (e: unknown) => (e instanceof ChatHookRequestError ? e : new ChatHookRequestError('unavailable'))
+const asError = (e: unknown) =>
+  e instanceof ChatHookRequestError ? e : new ChatHookRequestError('unavailable')
 
 export function WorkspaceHooksPanel({
   workspaceId,
@@ -54,7 +55,10 @@ export function WorkspaceHooksPanel({
       },
       (e: unknown) => {
         if (abort.signal.aborted) return
-        setLoad({ kind: 'error', text: requestErrorText(asError(e), 'The channels could not be loaded. Try again.') })
+        setLoad({
+          kind: 'error',
+          text: requestErrorText(asError(e), 'The channels could not be loaded. Try again.'),
+        })
       },
     )
     return () => abort.abort()
@@ -62,7 +66,9 @@ export function WorkspaceHooksPanel({
 
   const replace = (hook: ChatHook) =>
     setLoad((cur) =>
-      cur.kind === 'ready' ? { kind: 'ready', hooks: cur.hooks.map((h) => (h.id === hook.id ? hook : h)) } : cur,
+      cur.kind === 'ready'
+        ? { kind: 'ready', hooks: cur.hooks.map((h) => (h.id === hook.id ? hook : h)) }
+        : cur,
     )
   const added = (hook: ChatHook) =>
     setLoad((cur) => (cur.kind === 'ready' ? { kind: 'ready', hooks: [...cur.hooks, hook] } : cur))
@@ -73,7 +79,9 @@ export function WorkspaceHooksPanel({
       () => {},
     )
   const removed = (id: string) =>
-    setLoad((cur) => (cur.kind === 'ready' ? { kind: 'ready', hooks: cur.hooks.filter((h) => h.id !== id) } : cur))
+    setLoad((cur) =>
+      cur.kind === 'ready' ? { kind: 'ready', hooks: cur.hooks.filter((h) => h.id !== id) } : cur,
+    )
 
   if (load.kind === 'loading')
     return (
@@ -316,7 +324,12 @@ function EditHookForm({
   }
 
   return (
-    <form className="dr-form dr-chat__edit" onSubmit={(e) => void submit(e)} noValidate data-testid="chat-hook-edit-form">
+    <form
+      className="dr-form dr-chat__edit"
+      onSubmit={(e) => void submit(e)}
+      noValidate
+      data-testid="chat-hook-edit-form"
+    >
       <label htmlFor={nameId}>Name</label>
       <input
         id={nameId}
@@ -401,7 +414,9 @@ export function AddHookForm({
     setPending(true)
     setError(null)
     try {
-      onAdded(await createChatHook(workspaceId, { name, provider, url: pasted, includeSnippets: text }, { api }))
+      onAdded(
+        await createChatHook(workspaceId, { name, provider, url: pasted, includeSnippets: text }, { api }),
+      )
       setName('')
       setText(false)
     } catch (err) {
@@ -412,7 +427,12 @@ export function AddHookForm({
   }
 
   return (
-    <form className="dr-form dr-chat__add" onSubmit={(e) => void submit(e)} noValidate data-testid="chat-hook-add">
+    <form
+      className="dr-form dr-chat__add"
+      onSubmit={(e) => void submit(e)}
+      noValidate
+      data-testid="chat-hook-add"
+    >
       <h3 className="dr-chat__h3">Add a channel</h3>
       <label htmlFor={providerId}>Where</label>
       <select

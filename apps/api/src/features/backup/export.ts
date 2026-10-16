@@ -152,7 +152,10 @@ export function backupStream(ctx: FeatureContext, plan: BackupPlan): AsyncGenera
 
 /** "Pitch v2.lobby": the board title with characters file systems reject replaced. */
 export function backupFileName(title: string): string {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what this replaces
-  const safe = title.replace(/[\u0000-\u001f\u007f\\/:*?"<>|]+/g, '-').trim().slice(0, 100)
+  const safe = title
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what this replaces
+    .replace(/[\u0000-\u001f\u007f\\/:*?"<>|]+/g, '-')
+    .trim()
+    .slice(0, 100)
   return `${safe || 'board'}.lobby`
 }

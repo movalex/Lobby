@@ -1,5 +1,6 @@
-// The wave R foundation's web side (docs/WAVE-R-CONTRACTS.md §7): nothing changes for a user. The Import control is
-// today's single button while its switches are off (a dev-auth page may turn them on). Every wave R client is live:
+// The wave R web side (docs/WAVE-R-CONTRACTS.md §7). The Import control ships as a menu (the integration turned its
+// switches on); with them off it is the single button of before (a dev-auth page may turn each on or off). Every wave
+// R client is live:
 // the chat hooks (WS2, features/notify-settings/client.test.ts), the import job and Miro clients (WS1,
 // import-miro/client.test.ts) and the backup client (WS4, import-backup).
 import { createElement } from 'react'
@@ -9,14 +10,14 @@ import { IMPORT_MENU_FLAGS, IMPORT_MENU_KEYS, importMenuFlags } from './import-m
 import { ImportMenu, importMenuEntries } from './import-menu/ImportMenu.tsx'
 
 describe('the Import control', () => {
-  it('ships with every switch off', () => {
-    expect(IMPORT_MENU_FLAGS).toEqual({ menu: false, miro: false, backup: false })
-    expect(importMenuFlags(false, () => '1')).toEqual(IMPORT_MENU_FLAGS)
+  it('ships with every switch on', () => {
+    expect(IMPORT_MENU_FLAGS).toEqual({ menu: true, miro: true, backup: true })
+    expect(importMenuFlags(false, () => '0')).toEqual(IMPORT_MENU_FLAGS)
   })
 
   it('a dev-auth page may turn each on or off; an unreadable store keeps the shipped value', () => {
-    const store: Record<string, string> = { [IMPORT_MENU_KEYS.menu]: '1', [IMPORT_MENU_KEYS.miro]: '1' }
-    expect(importMenuFlags(true, (k) => store[k])).toEqual({ menu: true, miro: true, backup: false })
+    const store: Record<string, string> = { [IMPORT_MENU_KEYS.menu]: '1', [IMPORT_MENU_KEYS.miro]: '0' }
+    expect(importMenuFlags(true, (k) => store[k])).toEqual({ menu: true, miro: false, backup: true })
     expect(
       importMenuFlags(true, () => {
         throw new Error('blocked')
@@ -25,12 +26,17 @@ describe('the Import control', () => {
   })
 
   it('off: exactly today’s button; on: a menu of the entries whose handler is there', () => {
-    const off = renderToStaticMarkup(createElement(ImportMenu, { importing: false, onJson: () => {} }))
+    const none = { menu: false, miro: false, backup: false }
+    const off = renderToStaticMarkup(
+      createElement(ImportMenu, { importing: false, onJson: () => {}, onMiro: () => {}, flags: none }),
+    )
     expect(off).toContain('data-testid="import-board"')
     expect(off).toContain('title="Import a board exported from Lobby (.json)"')
     expect(off).toContain('>Import<')
     expect(off).not.toContain('import-menu')
-    const busy = renderToStaticMarkup(createElement(ImportMenu, { importing: true, onJson: () => {} }))
+    const busy = renderToStaticMarkup(
+      createElement(ImportMenu, { importing: true, onJson: () => {}, flags: none }),
+    )
     expect(busy).toContain('disabled=""')
     expect(busy).toContain('Importing…')
     const all = { menu: true, miro: true, backup: true }
@@ -47,7 +53,7 @@ describe('the Import control', () => {
     expect(importMenuEntries(all, { miro: () => {}, backup: () => {} }).map((e) => e.label)).toEqual([
       'Lobby backup (.lobby)…',
       'Lobby board (.json)…',
-      'From Miro…',
+      'Import from Miro (beta)…',
     ])
     expect(importMenuEntries({ ...all, miro: false }, { miro: () => {}, backup: () => {} })).toHaveLength(2)
   })
