@@ -7,7 +7,8 @@
     ".": "./src/index.ts",
     "./sources": "./src/sources.ts",
     "./notes": "./src/notes.ts",
-    "./fixtures": "./src/fixtures.ts"
+    "./fixtures": "./src/fixtures.ts",
+    "./fake-miro": "./src/fake-miro.ts"
   },
   "scripts": {
     "typecheck": "tsc -p ."

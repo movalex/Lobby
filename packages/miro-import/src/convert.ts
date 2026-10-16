@@ -974,7 +974,7 @@ class MiroConverter {
           file: {
             assetId: stored.assetId,
             versionId: stored.versionId,
-            kind: item.type === 'image' ? 'image' : stored.kind,
+            kind: stored.kind,
             name: stored.name.slice(0, MAX_FILE_NAME_CHARS),
             mimeType: stored.mimeType,
             sizeBytes: stored.sizeBytes,

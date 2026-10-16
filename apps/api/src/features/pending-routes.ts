@@ -36,15 +36,8 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   // wave R (the foundation; docs/WAVE-R-CONTRACTS.md §1): every route of the wave, @draftroom/contracts
   // IMPORT_ROUTE_KEYS, MIRO_IMPORT_ROUTE_KEYS, CHAT_HOOK_ROUTE_KEYS and BACKUP_ROUTE_KEYS. WS1: the job routes (R1-4,
   // features/imports) and the Miro routes (R1-1, R1-2, features/imports/miro); WS2: chat hooks (R2-1 hooks, R2-2 test,
-  // R2-3 preferences; features/chat-hooks); WS4: backups (R4-1 download, R4-2 restore; features/backup).
-  'GET /api/imports/:id': { owner: 'WS1', item: 'R1-4' },
-  'GET /api/workspaces/:wid/imports': { owner: 'WS1', item: 'R1-4' },
-  'POST /api/imports/:id/cancel': { owner: 'WS1', item: 'R1-4' },
-  'POST /api/imports/:id/pause': { owner: 'WS1', item: 'R1-4' },
-  'POST /api/imports/:id/resume': { owner: 'WS1', item: 'R1-4' },
-  'GET /api/imports/:id/report.csv': { owner: 'WS1', item: 'R1-4' },
-  'POST /api/workspaces/:wid/imports/miro/boards': { owner: 'WS1', item: 'R1-1' },
-  'POST /api/workspaces/:wid/imports/miro': { owner: 'WS1', item: 'R1-2' },
+  // R2-3 preferences; features/chat-hooks); WS4: backups (R4-1 download, R4-2 restore; features/backup). WS1's eight
+  // are implemented (features/imports/routes.ts, features/imports/miro); to ship one hidden, add its key back.
   'GET /api/workspaces/:wid/chat-hooks': { owner: 'WS2', item: 'R2-1' },
   'POST /api/workspaces/:wid/chat-hooks': { owner: 'WS2', item: 'R2-1' },
   'PATCH /api/workspaces/:wid/chat-hooks/:hid': { owner: 'WS2', item: 'R2-1' },

@@ -52,10 +52,12 @@ const WAVE_N_ROUTES: string[] = []
 const WAVE_Q_ROUTES: string[] = []
 /**
  * Wave R (the foundation; docs/WAVE-R-CONTRACTS.md §1): every route of the wave, pending until its owner implements it
- * (WS1 the job and Miro routes, WS2 chat hooks, WS4 backups). Each owner deletes its keys here and in PENDING_ROUTES in
- * the same change.
+ * (WS2 chat hooks, WS4 backups; WS1 implemented the job and Miro routes). Each owner deletes its keys here and in
+ * PENDING_ROUTES in the same change.
  */
-const WAVE_R_ROUTES: string[] = [
+const WAVE_R_ROUTES: string[] = [...CHAT_HOOK_ROUTE_KEYS, ...BACKUP_ROUTE_KEYS]
+/** Every route of wave R, pending or live (the guard rows hold for all of them). */
+const WAVE_R_ALL: string[] = [
   ...IMPORT_ROUTE_KEYS,
   ...MIRO_IMPORT_ROUTE_KEYS,
   ...CHAT_HOOK_ROUTE_KEYS,
@@ -88,10 +90,10 @@ describe('the pending list', () => {
   })
 
   it('wave R: the guard lists hold exactly the contracts’ keys, every row pending until its route is', () => {
-    const guestRows = Object.entries(GUEST_REFUSED_ROUTES).filter(([k]) => WAVE_R_ROUTES.includes(k))
+    const guestRows = Object.entries(GUEST_REFUSED_ROUTES).filter(([k]) => WAVE_R_ALL.includes(k))
     // every wave R route refuses a name-only guest, except the ticket-authorised backup download
     expect(guestRows.map(([k]) => k).sort()).toEqual(
-      WAVE_R_ROUTES.filter((k) => k !== 'GET /api/boards/:bid/backup').sort(),
+      WAVE_R_ALL.filter((k) => k !== 'GET /api/boards/:bid/backup').sort(),
     )
     const message = (k: string) =>
       (CHAT_HOOK_ROUTE_KEYS as readonly string[]).includes(k)
@@ -100,7 +102,7 @@ describe('the pending list', () => {
           ? BACKUP_GUESTS_MESSAGE
           : IMPORT_GUESTS_MESSAGE
     for (const [k, m] of guestRows) expect(m, k).toBe(message(k))
-    const creatorRows = Object.entries(CREATOR_ROUTES).filter(([k]) => WAVE_R_ROUTES.includes(k))
+    const creatorRows = Object.entries(CREATOR_ROUTES).filter(([k]) => WAVE_R_ALL.includes(k))
     const creates = [
       ...MIRO_IMPORT_CREATOR_ROUTE_KEYS,
       ...IMPORT_CREATOR_ROUTE_KEYS,
@@ -113,7 +115,7 @@ describe('the pending list', () => {
         refuse: 'always',
       })
     for (const k of [...guestRows.map(([key]) => key), ...creatorRows.map(([key]) => key)])
-      expect(isPendingRoute(k), k).toBe(true)
+      expect(isPendingRoute(k), k).toBe(WAVE_R_ROUTES.includes(k))
   })
 
   it('every wave Q route has its guest row (all of them) and the eight writes their in-route creator rows, all live', () => {

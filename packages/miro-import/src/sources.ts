@@ -238,9 +238,14 @@ export function readPage(body: unknown): MiroPage | null {
 
 /** What an image or document item points at: a Miro resource the api may ask for (by path, on Miro's API host). */
 export interface MiroFileRef {
-  /** the dedupe and resume key (`images/<id>` or `documents/<id>`): a board can show one file many times */
+  /**
+   * the dedupe and resume key (`image-<id>` or `document-<id>`; board_import_files.source_key's shape): a board can
+   * show one file many times
+   */
   readonly key: string
   readonly kind: 'images' | 'documents'
+  /** the resource's id in Miro */
+  readonly id: string
   /** the resource path (MIRO_RESOURCE_PATH_PATTERN), without the query */
   readonly path: string
   /** the item's title (an image's or document's name in Miro), cleaned by the api before it is stored */
@@ -276,7 +281,7 @@ export function fileRefOf(raw: unknown, boardId: string): MiroFileRef | null {
   if (board !== boardId || !id || (kind !== 'images' && kind !== 'documents')) return null
   const title =
     typeof raw.data.title === 'string' && raw.data.title.trim() ? raw.data.title.slice(0, 400) : null
-  return { key: `${kind}/${id}`, kind, path, title }
+  return { key: `${kind === 'images' ? 'image' : 'document'}-${id}`, kind, id, path, title }
 }
 
 /** The item types the converter maps (every one of MIRO_ITEM_TYPES; the converter's test checks the list). */

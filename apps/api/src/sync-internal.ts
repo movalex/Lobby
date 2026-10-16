@@ -45,6 +45,14 @@ export interface SyncInternalClient {
    */
   seed(boardId: string, snapshot: RoomSnapshotJson | LobbySeed): Promise<{ records: number }>
   /**
+   * Wave R (WS1, import from Miro): seeds a NEW board from what an import read from Miro (`format: 'miro-v2'`,
+   * packages/miro-import sources.ts MiroSeedBody). Sync converts it in a worker thread and answers with the board's
+   * report (unchecked JSON: the caller validates it). Throws SyncSeedConflict on 409, SyncUnavailable (with sync's
+   * status: 413 too large, 422 too complex, 503 busy) otherwise. Waits up to MIRO_SEED_TIMEOUT_MS (a conversion of
+   * a big board takes seconds). Optional like placeNotes.
+   */
+  seedMiro?(boardId: string, body: unknown): Promise<{ records: number; report: unknown }>
+  /**
    * Private brainstorming (workshops private-notes): writes revealed drafts into the board as note
    * shapes, in one storage transaction (POST /internal/boards/:bid/place-notes). Idempotent per draft
    * id. Optional so that test fakes without it keep compiling; the HTTP client always has it. The
@@ -151,6 +159,9 @@ async function failure(res: Response, what: string): Promise<SyncUnavailable> {
   return new SyncUnavailable(`${what} failed with ${res.status}`, res.status)
 }
 
+/** How long the api waits for a Miro seed (sync's own budget is shorter: convert-miro.ts miroSeedLimits). */
+export const MIRO_SEED_TIMEOUT_MS = 60_000
+
 export function createHttpSyncInternalClient(opts: {
   baseUrl: string
   secret: string
@@ -158,13 +169,13 @@ export function createHttpSyncInternalClient(opts: {
 }): SyncInternalClient {
   const base = opts.baseUrl.replace(/\/+$/, '')
   const timeout = opts.timeoutMs ?? 15_000
-  async function call(path: string, init: RequestInit = {}) {
+  async function call(path: string, init: RequestInit = {}, waitMs = timeout) {
     let res: Response
     try {
       res = await fetch(`${base}${path}`, {
         ...init,
         headers: { ...(init.headers ?? {}), [INTERNAL_SECRET_HEADER]: opts.secret },
-        signal: AbortSignal.timeout(timeout),
+        signal: AbortSignal.timeout(waitMs),
       })
     } catch (e) {
       throw new SyncUnavailable(`sync unreachable: ${(e as Error).name}`)
@@ -187,6 +198,23 @@ export function createHttpSyncInternalClient(opts: {
       if (!res.ok) throw new SyncUnavailable(`seed failed with ${res.status}`)
       const body = (await res.json()) as { records?: number }
       return { records: body.records ?? 0 }
+    },
+    async seedMiro(boardId, body) {
+      const res = await call(
+        `/internal/boards/${encodeURIComponent(boardId)}/seed`,
+        { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) },
+        MIRO_SEED_TIMEOUT_MS,
+      )
+      if (res.status === 409) {
+        await res.body?.cancel().catch(() => {})
+        throw new SyncSeedConflict()
+      }
+      if (!res.ok) {
+        await res.body?.cancel().catch(() => {})
+        throw new SyncUnavailable(`seed failed with ${res.status}`, res.status)
+      }
+      const answer = (await res.json()) as { records?: number; report?: unknown }
+      return { records: answer.records ?? 0, report: answer.report ?? null }
     },
     async placeNotes(boardId, body) {
       const res = await call(`/internal/boards/${encodeURIComponent(boardId)}/place-notes`, {
