@@ -17,7 +17,7 @@ import {
   streamBackupFile,
   writeBackup,
 } from './backup.ts'
-import { bufferSource } from './zip-read.ts'
+import { bufferSource, type RangeSource } from './zip-read.ts'
 import { type ZipWriteEntry, zipToBuffer } from './zip-write.ts'
 
 const tmp = mkdtempSync(join(tmpdir(), 'board-backup-'))
@@ -238,6 +238,68 @@ describe('the .lobby backup', () => {
     const m = backupManifest(input({ board: bomb, files: [], originals: new Map() }))
     const zip = await crafted([manifestEntry(m), boardEntry(bomb)])
     expect(await refusal(open(zip))).toBe(BACKUP_CODES.tooLarge)
+  })
+
+  it('a deflated entry whose compressed size no real entry could have is refused before any of it is read', async () => {
+    // a hostile .lobby: manifest.json declares 100 bytes but 1.5 GB compressed (the reviewer's probe); reading it
+    // whole would buffer 1.5 GB. Refused from the directory, and no read is larger than the directory.
+    const CSIZE = 1_500_000_000
+    const local = (name: string, method: number, csize: number, usize: number) => {
+      const n = Buffer.from(name)
+      const b = Buffer.alloc(30)
+      b.writeUInt32LE(0x04034b50, 0)
+      b.writeUInt16LE(20, 4)
+      b.writeUInt16LE(method, 8)
+      b.writeUInt32LE(csize, 18)
+      b.writeUInt32LE(usize, 22)
+      b.writeUInt16LE(n.length, 26)
+      return Buffer.concat([b, n])
+    }
+    const cd = (name: string, method: number, csize: number, usize: number, off: number) => {
+      const n = Buffer.from(name)
+      const b = Buffer.alloc(46)
+      b.writeUInt32LE(0x02014b50, 0)
+      b.writeUInt16LE(20, 4)
+      b.writeUInt16LE(20, 6)
+      b.writeUInt16LE(method, 10)
+      b.writeUInt32LE(csize, 20)
+      b.writeUInt32LE(usize, 24)
+      b.writeUInt16LE(n.length, 28)
+      b.writeUInt32LE(off, 42)
+      return Buffer.concat([b, n])
+    }
+    const lm = local('manifest.json', 8, CSIZE, 100)
+    const boardOff = lm.length + CSIZE
+    const lb = local('board.json', 0, 2, 2)
+    const cdOff = boardOff + lb.length + 2
+    const dir = Buffer.concat([cd('manifest.json', 8, CSIZE, 100, 0), cd('board.json', 0, 2, 2, boardOff)])
+    const eocd = Buffer.alloc(22)
+    eocd.writeUInt32LE(0x06054b50, 0)
+    eocd.writeUInt16LE(2, 8)
+    eocd.writeUInt16LE(2, 10)
+    eocd.writeUInt32LE(dir.length, 12)
+    eocd.writeUInt32LE(cdOff, 16)
+    const tail = Buffer.concat([dir, eocd])
+    const reads: number[] = []
+    const src: RangeSource = {
+      size: cdOff + tail.length,
+      async read(start, length) {
+        reads.push(length)
+        if (length > 1024 * 1024) throw new Error(`asked to buffer ${length} bytes in one read`)
+        if (start === 0) return lm.subarray(0, length)
+        if (start >= cdOff) return tail.subarray(start - cdOff, start - cdOff + length)
+        return Buffer.alloc(length)
+      },
+      async *stream(_start, length) {
+        for (let p = 0; p < length; p += 64 * 1024) {
+          reads.push(Math.min(64 * 1024, length - p))
+          yield Buffer.alloc(Math.min(64 * 1024, length - p))
+        }
+      },
+    }
+    expect(await refusal(openBackup(src, { contractsRev: REV }))).toBe(BACKUP_CODES.invalid)
+    expect(Math.max(...reads)).toBeLessThanOrEqual(1024 * 1024)
+    expect(reads.reduce((a, b) => a + b, 0)).toBeLessThan(1024 * 1024)
   })
 
   it('a backup that is not a ZIP at all, or empty, is invalid', async () => {

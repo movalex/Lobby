@@ -3,6 +3,7 @@
 // unknown methods, an understated size (a bomb), a ratio bomb, an EOCD comment trick, truncation, a prefix,
 // overlapping entries and too many entries.
 import { spawnSync } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -13,6 +14,7 @@ import {
   readZipDirectory,
   readZipEntry,
   streamZipEntry,
+  type RangeSource,
   type ZipEntry,
   ZipFormatError,
   type ZipReadLimits,
@@ -264,6 +266,37 @@ describe('the ZIP writer and reader', () => {
     expect(await refused(two)).toContain('two sizes')
     expect(await refused(zip, 'limit', { ...LIMITS, maxEntryBytes: () => 50_000 })).toContain('too large')
     expect(await refused(zip, 'limit', { ...LIMITS, maxTotalBytes: 100_000 })).toContain('together')
+  })
+
+  it('a deflated entry is read in chunks (never its compressed bytes in one read) and still checked', async () => {
+    const big = randomBytes(3 * 1024 * 1024)
+    const zip = await zipToBuffer([{ name: 'board.json', data: big, method: 8 }])
+    const inner = bufferSource(zip)
+    const sizes: number[] = []
+    const src: RangeSource = {
+      size: inner.size,
+      read: (start, length) => {
+        sizes.push(length)
+        return inner.read(start, length)
+      },
+      async *stream(start, length) {
+        for await (const c of inner.stream(start, length)) {
+          sizes.push(c.length)
+          yield c
+        }
+      },
+    }
+    const [entry] = await readZipDirectory(src, LIMITS)
+    expect(entry?.compressedSize).toBeGreaterThan(2 * 1024 * 1024)
+    expect((await readZipEntry(src, entry as ZipEntry)).equals(big)).toBe(true)
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(1024 * 1024)
+    // a deflated entry whose compressed size is past what its cap could deflate to: refused from the directory
+    const lie = Buffer.from(zip)
+    const rec = cdRecords(lie)[0] as number
+    lie.writeUInt32LE(2_000_000_000, rec + 20)
+    expect(await refused(lie, 'invalid', { ...LIMITS, maxEntryBytes: () => 1024 * 1024 * 1024 })).toMatch(
+      /compressed size/,
+    )
   })
 
   it('a bomb that understates its size is stopped at the declared size', async () => {

@@ -9,16 +9,20 @@
 //     `..` segment, control character), and appears once;
 //   - no encryption (bit 0, bit 6), methods 0 and 8 only, a STORED entry's two sizes equal, each declared size under
 //     its cap, their sum under `maxTotalBytes`, and a deflated entry above `ratioFloorBytes` no more than `maxRatio`
-//     times its compressed size (a bomb is refused before anything is inflated);
+//     times its compressed size (a bomb is refused before anything is inflated), and a deflated entry's compressed
+//     size no larger than its cap could deflate to (`deflatedBound`: one that is would make a reader fetch it all);
 //   - the first entry starts at byte 0 (nothing hidden in front), entries do not overlap and each lies before the
 //     central directory;
 //   - when an entry is read, its local header must agree with the central directory (signature, name, method,
 //     encryption, and the CRC and sizes unless bit 3 defers them), the bytes must fit before the next entry, inflating
 //     stops at the declared size (an understated size is refused after at most that many bytes), and the size and
-//     CRC-32 of what came out must be the declared ones.
+//     CRC-32 of what came out must be the declared ones. An entry's bytes are read in chunks (`RangeSource.stream`),
+//     never its compressed size in one buffer: only what comes out (at most its declared, capped size) is held.
 
 import { open } from 'node:fs/promises'
-import { crc32, inflateRawSync } from 'node:zlib'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
+import { crc32, createInflateRaw } from 'node:zlib'
 
 export class ZipFormatError extends Error {
   /** 'limit': a cap was exceeded (too large, not broken). */
@@ -124,6 +128,12 @@ const FLAG_STRONG_ENCRYPTION = 0x0040
 const FLAG_UTF8 = 0x0800
 const MAX_U32 = 0xffff_ffff
 
+/**
+ * The most bytes a deflate stream of `n` bytes can take: zlib's own bound (deflateBound) for a raw stream, which
+ * covers stored blocks (5 bytes per 64 KiB) and fixed-Huffman expansion of incompressible input, plus a margin.
+ */
+export const deflatedBound = (n: number) => n + (n >>> 12) + (n >>> 14) + (n >>> 25) + 64 + Math.ceil(n / 8)
+
 /** The generic name rules (on top of `acceptName`): nothing a file system could read as a path out. */
 export function unsafeEntryName(name: string): boolean {
   if (!name || name.length > 1024) return true
@@ -195,6 +205,8 @@ export async function readZipDirectory(src: RangeSource, limits: ZipReadLimits):
     if (method === 0 && compressedSize !== uncompressed)
       throw new ZipFormatError('a stored entry with two sizes')
     if (uncompressed > limits.maxEntryBytes(name)) throw new ZipFormatError('an entry is too large', 'limit')
+    if (method === 8 && compressedSize > deflatedBound(limits.maxEntryBytes(name)))
+      throw new ZipFormatError('a deflated entry with a compressed size no entry could have')
     const ratio = uncompressed > compressedSize * limits.maxRatio
     if (method === 8 && uncompressed > limits.ratioFloorBytes && ratio)
       throw new ZipFormatError('an entry compresses too well to be real', 'limit')
@@ -256,28 +268,39 @@ const localHeader = (src: RangeSource, entry: ZipEntry) =>
 /** One entry's bytes (inflated when deflated), checked: its size and CRC-32 are the declared ones. */
 export async function readZipEntry(src: RangeSource, entry: ZipEntry): Promise<Buffer> {
   const start = checkLocalHeader(await localHeader(src, entry), entry)
-  const data = await src.read(start, entry.compressedSize)
-  let out: Buffer
-  if (entry.method === 0) out = data
-  else if (entry.size === 0) {
-    out = Buffer.alloc(0)
-    try {
-      if (inflateRawSync(data, { maxOutputLength: 1 }).length !== 0) throw new Error('not empty')
-    } catch {
-      throw new ZipFormatError('an entry inflates past its declared size', 'limit')
+  const parts: Buffer[] = []
+  let out = 0
+  const keep = (chunk: Buffer) => {
+    out += chunk.length
+    if (out > entry.size) throw new ZipFormatError('an entry inflates past its declared size', 'limit')
+    parts.push(chunk)
+  }
+  let seen = 0
+  async function* compressed() {
+    for await (const chunk of src.stream(start, entry.compressedSize)) {
+      const take = chunk.subarray(0, Math.max(0, entry.compressedSize - seen))
+      if (!take.length) break
+      seen += take.length
+      yield take
+      if (seen >= entry.compressedSize) break
     }
-  } else {
+    if (seen !== entry.compressedSize) throw new ZipFormatError('unexpected end of file')
+  }
+  if (entry.method === 0) for await (const chunk of compressed()) keep(chunk)
+  else {
     try {
-      out = inflateRawSync(data, { maxOutputLength: entry.size })
+      await pipeline(Readable.from(compressed()), createInflateRaw(), async (inflated: AsyncIterable<Buffer>) => {
+        for await (const chunk of inflated) keep(chunk)
+      })
     } catch (e) {
-      if ((e as { code?: unknown })?.code === 'ERR_BUFFER_TOO_LARGE')
-        throw new ZipFormatError('an entry inflates past its declared size', 'limit')
+      if (e instanceof ZipFormatError) throw e
       throw new ZipFormatError('an entry does not inflate')
     }
   }
-  if (out.length !== entry.size) throw new ZipFormatError('an entry is not its declared size')
-  if (crc32(out) !== entry.crc32) throw new ZipFormatError('an entry fails its CRC check')
-  return out
+  const data = Buffer.concat(parts, out)
+  if (data.length !== entry.size) throw new ZipFormatError('an entry is not its declared size')
+  if (crc32(data) !== entry.crc32) throw new ZipFormatError('an entry fails its CRC check')
+  return data
 }
 
 /**
