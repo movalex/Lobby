@@ -161,9 +161,12 @@ In the upload's one transaction, after the quota re-check:
 - `versionKindsCompatible` (images replace images, the rest the rest; the web's `replaceRefusal`) → else 400
   `VERSION_KIND_MISMATCH`;
 - a second concurrent supersede of the same version fails the unique index → 409 `VERSION_NOT_LATEST`;
-- WS1's `resetForNewVersion(tx, {workspaceId, assetId, versionId, actorId})` (`features/review/hooks.ts`; a no-op
-  until WS1) resets the asset's live items; after COMMIT the board event `ASSET_VERSION_EVENT` `{assetId, versionId}`
-  and the returned items' `REVIEW_ITEM_EVENT`s.
+- WS1's `resetForNewVersion(tx, {workspaceId, boardId, assetId, versionId, actorId})` (`features/review/hooks.ts`)
+  resets the asset's live items **on the upload board only**; after COMMIT the board event `ASSET_VERSION_EVENT`
+  `{assetId, versionId}` and the returned items' `REVIEW_ITEM_EVENT`s, on that board. (Integration decision: copies of
+  a card share its asset id, but each board's review is its own. A client reviewing board B was shown v1 there, B's
+  cards still show v1, and B's "Approved" stays "approved v1" until a version is uploaded on B; the reset never
+  reaches a board that did not hear the upload. Tested in `apps/api/test/features/review/review.test.ts`.)
 
 `replaceMedia` sends the header (`versions/client.ts supersedesHeader`) with the element's current `versionId`, then
 writes as today. An older web keeps making fresh assets (that card's chain starts again at v1).

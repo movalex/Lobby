@@ -675,6 +675,7 @@ describe('the new-version reset (WS2 calls it in the upload transaction)', () =>
     const items = await world.api.db.transaction((tx) =>
       resetForNewVersion(tx, {
         workspaceId: DEV_STUDIO,
+        boardId: world.board,
         assetId: v1.assetId,
         versionId: v2.versionId,
         actorId: world.carol.userId,
@@ -691,12 +692,70 @@ describe('the new-version reset (WS2 calls it in the upload transaction)', () =>
     const again = await world.api.db.transaction((tx) =>
       resetForNewVersion(tx, {
         workspaceId: DEV_STUDIO,
+        boardId: world.board,
         assetId: v1.assetId,
         versionId: v2.versionId,
         actorId: world.carol.userId,
       }),
     )
     expect(again).toEqual([])
+  })
+
+  it('resets only the upload board: a copy of the card on another board keeps its status about v1', async () => {
+    w = await reviewWorld()
+    const world = w
+    const other = await createBoard(world.bob, DEV_STUDIO, 'Copy')
+    const v1 = await versionRow(world, world.board, { createdAt: new Date('2026-01-01T00:00:00Z') })
+    // the copy: board B links v1 (copies share the asset id)
+    await world.api.db.query(
+      'INSERT INTO board_asset_links (workspace_id, board_id, asset_id, version_id) VALUES ($1, $2, $3, $4)',
+      [DEV_STUDIO, other, v1.assetId, v1.versionId],
+    )
+    const here = await mark(world.bob, world.board, {
+      elementId: 'card-1',
+      kind: 'file',
+      assetId: v1.assetId,
+      label: 'A',
+    })
+    const there = await mark(world.bob, other, {
+      elementId: 'card-1',
+      kind: 'file',
+      assetId: v1.assetId,
+      label: 'B',
+    })
+    for (const [b, i] of [
+      [world.board, here.id],
+      [other, there.id],
+    ] as const) {
+      const res = await setStatus(world.bob, b, i, { status: 'approved', versionId: v1.versionId })
+      expect(res.statusCode, res.body).toBe(200)
+    }
+    const v2 = await versionRow(world, world.board, {
+      assetId: v1.assetId,
+      createdAt: new Date('2026-01-02T00:00:00Z'),
+    })
+    // even when board B can show v2 too (linked later), the upload on board A resets only A's item
+    await world.api.db.query(
+      'INSERT INTO board_asset_links (workspace_id, board_id, asset_id, version_id) VALUES ($1, $2, $3, $4)',
+      [DEV_STUDIO, other, v1.assetId, v2.versionId],
+    )
+    const items = await world.api.db.transaction((tx) =>
+      resetForNewVersion(tx, {
+        workspaceId: DEV_STUDIO,
+        boardId: world.board,
+        assetId: v1.assetId,
+        versionId: v2.versionId,
+        actorId: world.bob.userId,
+      }),
+    )
+    expect(items.map((i) => i.id)).toEqual([here.id])
+    const rows = await world.api.db.query<{ id: string; status: string; status_version_id: string }>(
+      'SELECT id, status, status_version_id FROM review_items ORDER BY label',
+    )
+    expect(rows.rows).toEqual([
+      { id: here.id, status: 'pending', status_version_id: v2.versionId },
+      { id: there.id, status: 'approved', status_version_id: v1.versionId },
+    ])
   })
 })
 

@@ -16,7 +16,9 @@ import { createBoard, createTestApi, DEV_STUDIO, ORIGIN, type TestApi } from '..
 const calls: { reset: NewVersionReset; versionRow: unknown }[] = []
 let answer: (reset: NewVersionReset) => ReviewItem[] = () => []
 
-vi.mock('../../src/features/review/hooks.ts', () => ({
+vi.mock('../../src/features/review/hooks.ts', async (importOriginal) => ({
+  // WS1's other hooks as they are (the review feature configures them at start-up)
+  ...(await importOriginal<typeof import('../../src/features/review/hooks.ts')>()),
   resetForNewVersion: async (tx: Queryable, reset: NewVersionReset) => {
     // the new version is already a row of this transaction
     const row = await tx.maybeOne('SELECT id, supersedes FROM asset_versions WHERE id = $1', [
@@ -83,6 +85,7 @@ describe('the review reset of a new version', () => {
       {
         reset: {
           workspaceId: DEV_STUDIO,
+          boardId: w.board,
           assetId: w.v1.assetId,
           versionId: v2.versionId,
           actorId: w.alice.userId,

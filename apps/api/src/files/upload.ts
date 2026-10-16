@@ -290,7 +290,7 @@ export async function handleUpload(
       )
       // WS1's review step in this transaction: the asset's live items go back to Awaiting review
       if (supersedes)
-        reset = await resetForNewVersion(tx, { workspaceId, assetId, versionId, actorId: userId })
+        reset = await resetForNewVersion(tx, { workspaceId, boardId, assetId, versionId, actorId: userId })
       return inserted
     })
   } catch (e) {

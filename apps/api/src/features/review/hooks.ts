@@ -2,9 +2,11 @@
 // steps another workstream's code (and the round start) runs inside its own transaction.
 //
 // resetForNewVersion: WS2's upload with X-Lobby-Supersedes calls it in the upload's one transaction, after the new
-// version row is inserted: every live review item on the asset whose status is not 'pending', on a board that can
-// show the new version (visibility follows the version: a board that only links v1 keeps its status about v1), goes
-// back to 'pending' (event reason 'new_version', actor = the uploader, version = the new one), with the notifications
+// version row is inserted: every live review item on the asset whose status is not 'pending', ON THE BOARD THE NEW
+// VERSION WAS UPLOADED TO, goes back to 'pending'. Copies of a card share its asset id, but each board's review is its
+// own: a client reviewing board B was shown v1 there, B's cards still show v1 (visibility follows the version), and
+// "Approved" on B stays "approved v1" until someone uploads a version on B itself (the integration's decision,
+// docs/WAVE-S-CONTRACTS.md §3.1). Only the upload board hears the reset's REVIEW_ITEM_EVENTs. It goes back to 'pending' (event reason 'new_version', actor = the uploader, version = the new one), with the notifications
 // and chat outbox rows of the reset in the same transaction (ONE notification per recipient per board for the whole
 // reset). It returns the items it changed so the caller can publish REVIEW_ITEM_EVENT for each after COMMIT (never
 // before). The items are locked FOR UPDATE in id order (after the caller's own row locks: the upload holds no board
@@ -28,6 +30,8 @@ import {
 
 export interface NewVersionReset {
   workspaceId: string
+  /** the board the new version was uploaded to: the only board whose items it resets */
+  boardId: string
   assetId: string
   /** the new version (what the reset events record) */
   versionId: string
@@ -104,19 +108,20 @@ export async function resetItems(
 
 /** Resets the asset's live, non-pending review items to pending. Runs in the caller's transaction (`tx`). */
 export async function resetForNewVersion(tx: Queryable, reset: NewVersionReset): Promise<ReviewItem[]> {
-  // the live items on the asset, on open boards that can show the new version, locked in id order
+  // the live items on the asset on the upload board (open, and able to show the new version), locked in id order
   const locked = await tx.query<{ id: string; board_id: string }>(
     `SELECT i.id, i.board_id FROM review_items i
        JOIN boards b ON b.id = i.board_id AND b.workspace_id = i.workspace_id AND b.status IN ('active', 'archived')
        JOIN asset_versions v ON v.id = $3 AND v.asset_id = i.asset_id AND v.workspace_id = i.workspace_id
-      WHERE i.workspace_id = $1 AND i.asset_id = $2 AND i.removed_at IS NULL AND i.status <> 'pending'
+      WHERE i.workspace_id = $1 AND i.asset_id = $2 AND i.board_id = $4 AND i.removed_at IS NULL
+        AND i.status <> 'pending'
         AND (v.board_id = i.board_id OR EXISTS (
               SELECT 1 FROM board_asset_links l
                WHERE l.workspace_id = i.workspace_id AND l.board_id = i.board_id AND l.asset_id = v.asset_id
                  AND l.version_id = v.id))
       ORDER BY i.id
       FOR UPDATE OF i`,
-    [reset.workspaceId, reset.assetId, reset.versionId],
+    [reset.workspaceId, reset.assetId, reset.versionId, reset.boardId],
   )
   if (locked.rows.length === 0) return []
   const actor = await loadActor(tx, reset.actorId, hookLookup)

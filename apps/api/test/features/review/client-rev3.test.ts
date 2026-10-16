@@ -197,6 +197,7 @@ describe('the other foundation stubs', () => {
     await reviewNotice(world, world.ben, world.owner)
     const items = await resetForNewVersion(world.api.db, {
       workspaceId: DEV_STUDIO,
+      boardId: world.board,
       assetId: 'ast_0123456789abcdefghij',
       versionId: 'ver_0123456789abcdefghij',
       actorId: world.ben.userId,
