@@ -1,7 +1,8 @@
 // The frozen fixtures the stale-pair tests parse the room's frames with (docs/EXCALIDRAW-CONTRACTS.md §0b, the
 // per-reader downgrade rule): packages/canvas-schema/test/fixtures/rev<rev>-<commit>, each written once by
 // scripts/freeze-protocol-fixture.mjs and never edited (wave N, N2-1: rev12-3c83611, the web deployed on staging
-// since hotfix H2, whose canvas-schema is byte-identical to the deployed sync 104c6e0's). Pinned here:
+// since hotfix H2, whose canvas-schema is byte-identical to the deployed sync 104c6e0's; wave T, T-0: rev13-6769e07,
+// the web deployed since wave S, whose canvas-schema is byte-identical to the deployed sync ba1704c's). Pinned here:
 //  - every file carries the script's header: the source path, the commit, the revision and the blob;
 //  - the folder's protocol.ts says the revision its name says (rev12-3c83611: CONTRACTS_REV 12);
 //  - where git can read the commit (not a shallow clone): each blob id is that path's at the commit, the body is
@@ -15,6 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import * as Rev11 from '../test/fixtures/rev11-437b4e7/protocol.ts'
 import * as Rev12 from '../test/fixtures/rev12-3c83611/protocol.ts'
+import * as Rev13 from '../test/fixtures/rev13-6769e07/protocol.ts'
 
 const FIXTURES = fileURLToPath(new URL('../test/fixtures/', import.meta.url))
 const REPO = fileURLToPath(new URL('../../../', import.meta.url))
@@ -30,6 +32,12 @@ const SOURCES: Record<string, string> = {
   'contracts-tags.ts': 'packages/contracts/src/tags.ts',
   'contracts-mindmap.ts': 'packages/contracts/src/mindmap.ts',
 }
+/** The files a freeze from wave N on adds (custom-data.ts imports reactions.ts, which reads contracts' workshops). */
+const SOURCES_SINCE_13: Record<string, string> = {
+  ...SOURCES,
+  'reactions.ts': 'packages/canvas-schema/src/reactions.ts',
+  'contracts-workshops.ts': 'packages/contracts/src/workshops.ts',
+}
 /** The script's `@draftroom/contracts` import swaps (undone here to compare with the commit's file). */
 const SWAPS: Record<string, { from: string; to: string }> = {
   'custom-data.ts': {
@@ -40,16 +48,35 @@ const SWAPS: Record<string, { from: string; to: string }> = {
     from: "import { parseTagValue } from '@draftroom/contracts'\n",
     to: "import { parseTagValue } from './contracts-tags.ts'\n",
   },
+  // in place (reactions.ts has no zod import): undone the same way, by removing each line where it stands
+  'reactions.ts': {
+    from: "import { REACTION_CODES, type ReactionCode } from '@draftroom/contracts'\n",
+    to: "import { REACTION_CODES, type ReactionCode } from './contracts-workshops.ts'\n",
+  },
 }
 
 const FOLDERS = [
+  {
+    dir: 'rev13-6769e07',
+    commit: '6769e07',
+    rev: 13,
+    which: 'the web deployed on staging since wave S',
+    sources: SOURCES_SINCE_13,
+  },
   {
     dir: 'rev12-3c83611',
     commit: '3c83611',
     rev: 12,
     which: 'the web deployed on staging since hotfix H2 (wave M)',
+    sources: SOURCES,
   },
-  { dir: 'rev11-437b4e7', commit: '437b4e7', rev: 11, which: 'the web deployed on staging since wave K' },
+  {
+    dir: 'rev11-437b4e7',
+    commit: '437b4e7',
+    rev: 11,
+    which: 'the web deployed on staging since wave K',
+    sources: SOURCES,
+  },
 ] as const
 
 const git = (...args: string[]): string | null => {
@@ -74,7 +101,8 @@ function split(text: string): { header: string[]; body: string } {
 }
 
 describe('the frozen protocol fixtures (written once by scripts/freeze-protocol-fixture.mjs, never edited)', () => {
-  it('rev12-3c83611 and rev11-437b4e7 say the revision their names say', () => {
+  it('rev13-6769e07, rev12-3c83611 and rev11-437b4e7 say the revision their names say', () => {
+    expect(Rev13.CONTRACTS_REV).toBe(13)
     expect(Rev12.CONTRACTS_REV).toBe(12)
     expect(Rev11.CONTRACTS_REV).toBe(11)
   })
@@ -85,11 +113,11 @@ describe('the frozen protocol fixtures (written once by scripts/freeze-protocol-
       const files = readdirSync(dir).sort()
 
       it('holds exactly the frozen modules, each with the header naming its source, the commit and its blob', () => {
-        expect(files).toEqual(Object.keys(SOURCES).sort())
+        expect(files).toEqual(Object.keys(f.sources).sort())
         for (const name of files) {
           const { header } = split(readFileSync(join(dir, name), 'utf8'))
           expect(header[0], name).toBe('// FROZEN FIXTURE, never edit. This is')
-          expect(header[1], name).toBe(`//   ${SOURCES[name]}`)
+          expect(header[1], name).toBe(`//   ${f.sources[name]}`)
           expect(header[2], name).toBe(`// of commit ${f.commit} (${f.which}: CONTRACTS_REV ${f.rev}), as`)
           expect(header[3], name).toMatch(
             new RegExp(`^// \`git show ${f.commit}:<that path>\` gives it \\(blob [0-9a-f]{12}\\)\\. `),
@@ -102,7 +130,7 @@ describe('the frozen protocol fixtures (written once by scripts/freeze-protocol-
         'is the commit’s files byte for byte (but the header and the import swap), added once, never changed',
         () => {
           for (const name of files) {
-            const src = SOURCES[name] as string
+            const src = f.sources[name] as string
             const text = readFileSync(join(dir, name), 'utf8')
             const { header, body } = split(text)
             const blob = /\(blob ([0-9a-f]{12})\)/.exec(header[3] ?? '')?.[1]
