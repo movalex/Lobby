@@ -607,8 +607,12 @@ describe.skipIf(!PG_URL)('every migration after 0008 on a real Postgres holding 
     // 0025_open_signin widens the M1 identities.provider CHECK ('email'; user_emails is from 0021, so its
     // source CHECK is not an existing object here).
     const m1Kinds = ['mention', 'reply', 'resolved', 'access_request']
+    // 0035_board_imports (wave R) widens the M1 board statuses ('importing'; the same text is checked on PGlite in
+    // packages/db/test/wave-r-0035-0036.test.ts).
+    const m1Statuses = ['active', 'archived', 'trashed']
     expect([...changed].sort()).toEqual(
       [
+        `constraint boards.boards_status_check: CHECK (${anyOf('status', m1Statuses)}) -> CHECK (${anyOf('status', [...m1Statuses, 'importing'])})`,
         `constraint identities.identities_provider_check: CHECK (${anyOf('provider', ['dev', 'clerk'])}) -> CHECK (${anyOf('provider', ['dev', 'clerk', 'email'])})`,
         `constraint notifications.notifications_kind_check: CHECK (${anyOf('kind', m1Kinds)}) -> CHECK (${anyOf('kind', [...m1Kinds, 'new_comment', 'access_granted', 'outsider_joined'])})`,
         `constraint notifications.notifications_check: CHECK (((kind = 'access_request'::text) OR (thread_id IS NOT NULL))) -> CHECK ((${anyOf('kind', ['access_request', 'access_granted', 'outsider_joined'])} OR (thread_id IS NOT NULL)))`,
@@ -658,21 +662,26 @@ describe.skipIf(!PG_URL)('every migration after 0008 on a real Postgres holding 
       if (t !== 'schema_migrations') expect(afterCounts[t], t).toBe(n)
     // Wave M (the foundation): 0029_usage_daily and 0030_workspace_templates are new tables only (no existing
     // object changed, checked above), empty after the upgrade.
-    expect(upgrade.slice(-6, -4)).toEqual(['0029_usage_daily', '0030_workspace_templates'])
+    expect(upgrade.slice(-8, -6)).toEqual(['0029_usage_daily', '0030_workspace_templates'])
     expect(afterCounts.usage_daily).toBe(0)
     expect(afterCounts.workspace_templates).toBe(0)
     // Wave N (the foundation): 0031_board_visits and 0032_board_links are new tables only, empty after the upgrade.
-    expect(upgrade.slice(-4, -2)).toEqual(['0031_board_visits', '0032_board_links'])
+    expect(upgrade.slice(-6, -4)).toEqual(['0031_board_visits', '0032_board_links'])
     expect(afterCounts.board_visits).toBe(0)
     expect(afterCounts.board_links).toBe(0)
     expect(afterCounts.board_link_scans).toBe(0)
     // Wave Q (the foundation): 0033_library is new tables only, empty after the upgrade.
-    expect(upgrade.slice(-2, -1)).toEqual(['0033_library'])
+    expect(upgrade.slice(-4, -3)).toEqual(['0033_library'])
     for (const t of ['library_folders', 'library_items', 'library_item_files', 'library_marks'])
       expect(afterCounts[t], t).toBe(0)
     // The wave Q review fixes: 0034_library_place is a new table and a defaulted column of 0033's library_items.
-    expect(upgrade.slice(-1)).toEqual(['0034_library_place'])
+    expect(upgrade.slice(-3, -2)).toEqual(['0034_library_place'])
     expect(afterCounts.library_place_pending).toBe(0)
+    // Wave R (the foundation): 0035_board_imports widens boards.status (no existing row changes) and adds two tables;
+    // 0036_chat_hooks adds three. All empty after the upgrade.
+    expect(upgrade.slice(-2)).toEqual(['0035_board_imports', '0036_chat_hooks'])
+    const waveR = ['board_imports', 'board_import_files', 'chat_hooks', 'chat_hook_prefs', 'chat_deliveries']
+    for (const t of waveR) expect(afterCounts[t], t).toBe(0)
   })
 
   it('the checksum guard accepts re-runs (also from a CRLF checkout) and refuses an edited file', async () => {

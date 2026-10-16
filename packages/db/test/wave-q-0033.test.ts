@@ -122,8 +122,12 @@ describe('wave Q migration', () => {
   it('is 0033_library, right after wave N’s 0032 (contiguous)', () => {
     const all = loadMigrations()
     expect(all.find((m) => m.version === 33)?.name).toBe('0033_library')
-    // the review fixes' 0034 follows (wave-q-0034.test.ts)
-    expect(all.filter((m) => m.version > 33).map((m) => m.name)).toEqual(['0034_library_place'])
+    // the review fixes' 0034 follows (wave-q-0034.test.ts), then wave R's 0035 and 0036 (wave-r-0035-0036.test.ts)
+    expect(all.filter((m) => m.version > 33).map((m) => m.name)).toEqual([
+      '0034_library_place',
+      '0035_board_imports',
+      '0036_chat_hooks',
+    ])
     expect(all.map((m) => m.version)).toEqual(all.map((_, i) => i + 1))
   })
 

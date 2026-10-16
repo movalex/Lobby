@@ -52,6 +52,8 @@ describe('wave M migrations', () => {
       '0032_board_links',
       '0033_library',
       '0034_library_place',
+      '0035_board_imports',
+      '0036_chat_hooks',
     ])
     expect(all.map((m) => m.version)).toEqual(all.map((_, i) => i + 1))
   })

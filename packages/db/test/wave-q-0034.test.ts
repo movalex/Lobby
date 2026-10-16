@@ -48,7 +48,11 @@ describe('the review fixes’ migration', () => {
   it('is 0034_library_place, right after 0033 (contiguous)', () => {
     const all = loadMigrations()
     expect(all.find((m) => m.version === 34)?.name).toBe('0034_library_place')
-    expect(all.at(-1)?.version).toBe(34)
+    // wave R's 0035 and 0036 follow (wave-r-0035-0036.test.ts)
+    expect(all.filter((m) => m.version > 34).map((m) => m.name)).toEqual([
+      '0035_board_imports',
+      '0036_chat_hooks',
+    ])
     expect(all.map((m) => m.version)).toEqual(all.map((_, i) => i + 1))
   })
 
@@ -58,7 +62,9 @@ describe('the review fixes’ migration', () => {
     const all = loadMigrations()
     await migrate(d, { migrations: all.filter((m) => m.version <= 33) })
     const before = { columns: await columnsOf(d), constraints: await constraintsOf(d) }
-    expect((await migrate(d)).applied).toEqual(['0034_library_place'])
+    expect((await migrate(d, { migrations: all.filter((m) => m.version <= 34) })).applied).toEqual([
+      '0034_library_place',
+    ])
     const after = { columns: await columnsOf(d), constraints: await constraintsOf(d) }
     // (a NOT NULL column is a pg_constraint row too on Postgres 18)
     const isNew = (k: string) =>
