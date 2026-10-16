@@ -357,6 +357,32 @@ describe('Make storyboard from frames', () => {
     expect(lobby(f.els.get(head))['sb:head']).toEqual({ aspect: '16:9', perRow: 3 })
     // a panel is not offered again
     expect(frameCandidates(canvas, ['f-a']).frames).toEqual([])
+  })
+
+  it('a Kanban or a timeline frame is never offered as a panel (a frame is one or the other)', () => {
+    const tl = { start: '2026-10-01', end: '2026-12-31', scale: 'week', lanes: 'none' }
+    const f = fakeSbCanvas([
+      {
+        id: 'k',
+        type: 'frame',
+        x: 0,
+        y: 0,
+        width: 200,
+        height: 120,
+        customData: { lobby: { kanban: {} } },
+      } as El,
+      {
+        id: 't',
+        type: 'frame',
+        x: 300,
+        y: 0,
+        width: 200,
+        height: 120,
+        customData: { lobby: { timeline: tl } },
+      } as El,
+      { id: 'p', type: 'frame', x: 600, y: 0, width: 200, height: 120 } as El,
+    ])
+    expect(frameCandidates(asCanvas(f), ['k', 't', 'p']).frames.map((x) => x.id)).toEqual(['p'])
     expect(
       readingOrder([
         { x: 5, y: 0, w: 1, h: 10 },

@@ -11,6 +11,7 @@
 // Shot numbers are never written: every tab derives them from `sb:pos` (canvas-schema `shotNumbers`).
 import { newElementId } from '@draftroom/board-ops/elements'
 import {
+  KANBAN_KEY,
   rebalancedPositions,
   SB_DEFAULT_DUR_MS,
   SB_DUR_KEY,
@@ -20,6 +21,7 @@ import {
   type SbHeadValue,
   type Storyboard,
   type StoryboardAspect,
+  TIMELINE_KEY,
 } from '@draftroom/canvas-schema/planning'
 import { type CanvasElement, items, type LobbyCanvas, type LobbyTx } from '../../canvas/api/index.ts'
 import { spotNear } from '../ai/ported/apply.ts'
@@ -441,7 +443,7 @@ export const KIT_PANEL_KINDS: Readonly<Record<string, StoryboardAspect>> = {
 }
 
 export interface FrameCandidates {
-  /** frames that are no panel yet, top level */
+  /** frames that are no panel yet (and no Kanban or timeline), top level */
   readonly frames: CanvasElement[]
   /** the Shapes kits' storyboard panels on the open canvas, each as its group's elements and bounds */
   readonly kits: {
@@ -467,7 +469,9 @@ export function frameCandidates(
     if (!live(el)) continue
     const lobby = el.customData?.lobby ?? {}
     if (el.type === 'frame') {
-      if (!(SB_OF_KEY in lobby) && !el.locked) frames.push(el)
+      // a Kanban or a timeline is never a panel too (canvas-schema planningElementProblem refuses both at once)
+      if (!(SB_OF_KEY in lobby) && !(KANBAN_KEY in lobby) && !(TIMELINE_KEY in lobby) && !el.locked)
+        frames.push(el)
       continue
     }
     const kind = lobby.kind

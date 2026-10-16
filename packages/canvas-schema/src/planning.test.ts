@@ -213,6 +213,13 @@ describe('planningElementProblem (checkElement): types and cross-key rules', () 
     expect(checkElement(el('frame', { 'sb:of': 'text-1', 'sb:pos': 'a0', 'sb:dur': 2000 })).ok).toBe(true)
     expect(checkElement(el('rectangle', { 'sb:of': 'text-1', 'sb:pos': 'a0' })).ok).toBe(false)
     expect(planningElementProblem('frame', null, { 'sb:dur': 2000 })).toMatch(/sb:of and sb:pos/)
+    // a frame is a storyboard panel OR a Kanban OR a timeline: never a panel and a wall at once
+    const PANEL = { 'sb:of': 'text-1', 'sb:pos': 'a0' }
+    const wall = { start: '2026-10-01', end: '2026-12-31', scale: 'week', lanes: 'none' }
+    expect(planningElementProblem('frame', null, { ...PANEL, kanban: {} })).toMatch(/panel/)
+    expect(planningElementProblem('frame', null, { ...PANEL, timeline: wall })).toMatch(/panel/)
+    expect(planningElementProblem('frame', null, { 'sb:dur': 2000, kanban: {} })).not.toBeNull()
+    expect(checkElement(el('frame', { ...PANEL, kanban: {} })).ok).toBe(false)
     expect(planningElementProblem('frame', null, { 'sb:of': 'h' })).toMatch(/sb:of and sb:pos/)
     expect(checkElement(el('frame', { kanban: {} })).ok).toBe(true)
     expect(checkElement(el('stickynote', { kanban: {} })).ok).toBe(false)

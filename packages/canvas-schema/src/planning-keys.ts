@@ -267,6 +267,9 @@ export function planningElementProblem(
   if ((KANBAN_KEY in lobby || TIMELINE_KEY in lobby) && type !== 'frame')
     return `kanban or timeline on a ${type}`
   if (KANBAN_KEY in lobby && TIMELINE_KEY in lobby) return 'a frame is a kanban or a timeline, not both'
+  // a frame is a storyboard panel or a planning wall, never both (its cards would be a shot's contents)
+  if (panel && (KANBAN_KEY in lobby || TIMELINE_KEY in lobby))
+    return 'a storyboard panel is no kanban or timeline'
   if (SB_HEAD_KEY in lobby && (type !== 'text' || containerId)) return 'sb:head on anything but a free text'
   return null
 }
