@@ -11,10 +11,10 @@ import { afterAll, describe, expect, it } from 'vitest'
 import {
   bufferSource,
   fileSource,
+  type RangeSource,
   readZipDirectory,
   readZipEntry,
   streamZipEntry,
-  type RangeSource,
   type ZipEntry,
   ZipFormatError,
   type ZipReadLimits,

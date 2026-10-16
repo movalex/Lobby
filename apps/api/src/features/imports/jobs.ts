@@ -296,8 +296,7 @@ export async function storedFile(q: Queryable, rowId: string, sourceKey: string)
  * file). Cleared again (setStatus `report: null`) when the row fails or is cancelled.
  */
 export async function recordSeeded(q: Queryable, rowId: string, report: ImportBoardReport, at: Date) {
-  if (importReportBytes(report) > IMPORT_REPORT_MAX_BYTES)
-    throw new Error('import report too large')
+  if (importReportBytes(report) > IMPORT_REPORT_MAX_BYTES) throw new Error('import report too large')
   await q.query(
     `UPDATE board_imports SET report = $2::jsonb, heartbeat_at = $3, updated_at = $3 WHERE id = $1 AND status = 'running'`,
     [rowId, JSON.stringify(report), at],

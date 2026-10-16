@@ -289,9 +289,13 @@ export async function readZipEntry(src: RangeSource, entry: ZipEntry): Promise<B
   if (entry.method === 0) for await (const chunk of compressed()) keep(chunk)
   else {
     try {
-      await pipeline(Readable.from(compressed()), createInflateRaw(), async (inflated: AsyncIterable<Buffer>) => {
-        for await (const chunk of inflated) keep(chunk)
-      })
+      await pipeline(
+        Readable.from(compressed()),
+        createInflateRaw(),
+        async (inflated: AsyncIterable<Buffer>) => {
+          for await (const chunk of inflated) keep(chunk)
+        },
+      )
     } catch (e) {
       if (e instanceof ZipFormatError) throw e
       throw new ZipFormatError('an entry does not inflate')

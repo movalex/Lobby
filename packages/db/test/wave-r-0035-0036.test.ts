@@ -181,7 +181,11 @@ describe('0035_board_imports', () => {
       { status: 'running', finished_at: now },
       { status: 'done', finished_at: now, report: { pad: 'x'.repeat(262_200) } },
       // the cap is the jsonb's text form (a space after each ':' and ','): compact JSON under it, Postgres's over
-      { status: 'done', finished_at: now, report: { rows: Array.from({ length: 20_000 }, () => [1, 2, 3, 4, 5]) } },
+      {
+        status: 'done',
+        finished_at: now,
+        report: { rows: Array.from({ length: 20_000 }, () => [1, 2, 3, 4, 5]) },
+      },
       { report: [] },
       { report: 'text' },
     ]
@@ -380,12 +384,10 @@ describe('0036_chat_hooks', () => {
       )
     ).id
     const keyed = (id: string, key: string) =>
-      q.query('INSERT INTO chat_deliveries (hook_id, notification_id, recipient_id, event_key) VALUES ($1, $2, $3, $4)', [
-        HOOK,
-        id,
-        U,
-        key,
-      ])
+      q.query(
+        'INSERT INTO chat_deliveries (hook_id, notification_id, recipient_id, event_key) VALUES ($1, $2, $3, $4)',
+        [HOOK, id, U, key],
+      )
     const key = `access_request:${B}:-:${U2}:20261016120000000000`
     expect(await sqlstate(keyed(second, 'access request with spaces'))).toBe('23514')
     expect(await sqlstate(keyed(second, `x:${'a'.repeat(251)}`))).toBe('23514')

@@ -143,7 +143,13 @@ export function importReportBytes(value: unknown): number {
   const json = JSON.stringify(value)
   if (json === undefined) return 0
   walk(JSON.parse(json))
-  return new TextEncoder().encode(json).length + spaces
+  // UTF-8 bytes (JSON.stringify escapes lone surrogates, so every code point here is whole)
+  let bytes = 0
+  for (const ch of json) {
+    const cp = ch.codePointAt(0) ?? 0
+    bytes += cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4
+  }
+  return bytes + spaces
 }
 
 /** Report rows (one per source item) kept for the CSV; beyond it the report says how many were left out. */

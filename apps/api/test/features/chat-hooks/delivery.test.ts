@@ -123,7 +123,12 @@ describe('who a message is queued for', () => {
        SELECT $1, u, 'outsider_joined', $2, $3, now() FROM unnest($4::text[]) AS u RETURNING id`,
       [DEV_STUDIO, w.boardId, w.pat.userId, [w.owner.userId, w.ben.userId]],
     )
-    expect(await enqueueChatDeliveries(w.api.db, notes.rows.map((r) => r.id))).toBe(1)
+    expect(
+      await enqueueChatDeliveries(
+        w.api.db,
+        notes.rows.map((r) => r.id),
+      ),
+    ).toBe(1)
     // a mention of each of two people is two messages (each names its person)
     await createThread(w.sam, w.boardId, `${mention(w.owner)} and ${mention(w.ben)}`)
     expect((await kinds('mention'))?.d).toBe(2)
@@ -587,7 +592,7 @@ describe('the roll-up checks what a message checks, and counts', () => {
         "SELECT id FROM notifications WHERE kind = 'mention' ORDER BY seq LIMIT 1",
       )
       await w.api.db.query(
-        "UPDATE comments SET deleted_at = now() WHERE id = (SELECT comment_id FROM notifications WHERE id = $1)",
+        'UPDATE comments SET deleted_at = now() WHERE id = (SELECT comment_id FROM notifications WHERE id = $1)',
         [first.id],
       )
     })

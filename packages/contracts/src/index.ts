@@ -313,11 +313,11 @@ export type ErrorBody = z.infer<typeof ErrorBody>
 export * from './ai.ts'
 // wave R foundation (WS4 owns it after): board backup and restore (.lobby)
 export * from './board-backup.ts'
-export * from './board-title.ts'
 // wave N foundation (WS7 routes): board cards and backlinks
 export * from './board-links.ts'
 // wave M foundation (W5 owns these after it): the board-open read, usage counters, workspace templates
 export * from './board-open.ts'
+export * from './board-title.ts'
 // wave R foundation (WS2 owns it after): notifications to Slack and Teams
 export * from './chat-hooks.ts'
 export * from './comments.ts'

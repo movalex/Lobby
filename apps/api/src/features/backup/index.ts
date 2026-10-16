@@ -156,7 +156,7 @@ export async function registerBackup(app: FastifyInstance, ctx: FeatureContext):
     const rows = await db.query<{ source_ref: string }>(
       `SELECT DISTINCT source_ref FROM board_imports
         WHERE source = 'lobby-backup' AND status IN ('done', 'failed', 'cancelled') AND finished_at >= $1
-          AND source_ref LIKE 'rsp\_%'
+          AND left(source_ref, 4) = 'rsp_'
         LIMIT 1000`,
       [since],
     )

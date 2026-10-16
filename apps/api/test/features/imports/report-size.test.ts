@@ -58,7 +58,9 @@ describe('the import report’s size, as the 0035 CHECK measures it', () => {
       buildReport(shortRows(50), new Map([['color-substituted', 3]])),
     ]
     for (const s of samples) {
-      const r = await db.one<{ n: number }>('SELECT octet_length($1::jsonb::text)::int AS n', [JSON.stringify(s)])
+      const r = await db.one<{ n: number }>('SELECT octet_length($1::jsonb::text)::int AS n', [
+        JSON.stringify(s),
+      ])
       expect(importReportBytes(s), JSON.stringify(s).slice(0, 60)).toBe(r.n)
     }
   })

@@ -46,12 +46,12 @@ import {
   BACKUP_INTERNAL_ONLY_MESSAGE,
   BACKUP_LIMITS,
   BACKUP_MIME_TYPE,
+  cleanBoardTitle,
   IMPORT_CODES,
   IMPORT_CONCURRENCY,
-  INTERNAL_ONLY_CODE,
   type ImportBoardReport,
   type ImportReportRow,
-  cleanBoardTitle,
+  INTERNAL_ONLY_CODE,
   importJobPath,
   RestoreBackupQuery,
   type StartImportResponse,
@@ -208,10 +208,19 @@ export async function handleRestore(
     [user.id, new Date(ctx.now().getTime() - 86_400_000)],
   )
   if (today.n >= IMPORT_CONCURRENCY.startsPerPersonPerDay)
-    throw refuse(429, IMPORT_CODES.dailyLimit, 'You started the most imports allowed for today. Try again tomorrow.')
+    throw refuse(
+      429,
+      IMPORT_CODES.dailyLimit,
+      'You started the most imports allowed for today. Try again tomorrow.',
+    )
   uploading.add(user.id)
   try {
-    return await receiveAndStart(ctx, runner, req, reply, { workspaceId: wid, userId: user.id, query, declared })
+    return await receiveAndStart(ctx, runner, req, reply, {
+      workspaceId: wid,
+      userId: user.id,
+      query,
+      declared,
+    })
   } finally {
     uploading.delete(user.id)
   }

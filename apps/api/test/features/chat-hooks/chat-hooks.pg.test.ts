@@ -134,7 +134,8 @@ describe.skipIf(!PG_URL)('chat notifications on real Postgres (DRAFTROOM_TEST_DA
     const room = CHAT_HOOK_LIMITS.hooksPerWorkspace - before
     expect(codes.filter((c) => c === 201)).toHaveLength(room)
     expect(codes.filter((c) => c === 409)).toHaveLength(results.length - room)
-    for (const r of results.filter((x) => x.statusCode === 409)) expect(r.json().error.code).toBe(CHAT_HOOK_CODES.full)
+    for (const r of results.filter((x) => x.statusCode === 409))
+      expect(r.json().error.code).toBe(CHAT_HOOK_CODES.full)
   })
 
   it('changing a person’s choices while their membership is removed never answers 5xx', async () => {
