@@ -52,6 +52,7 @@ describe('the review fixes’ migration', () => {
     expect(all.filter((m) => m.version > 34).map((m) => m.name)).toEqual([
       '0035_board_imports',
       '0036_chat_hooks',
+      '0037_client_review',
     ])
     expect(all.map((m) => m.version)).toEqual(all.map((_, i) => i + 1))
   })

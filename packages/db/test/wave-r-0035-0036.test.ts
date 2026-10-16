@@ -73,7 +73,8 @@ describe('wave R migrations', () => {
     const all = loadMigrations()
     expect(all.find((m) => m.version === 35)?.name).toBe('0035_board_imports')
     expect(all.find((m) => m.version === 36)?.name).toBe('0036_chat_hooks')
-    expect(all.at(-1)?.version).toBe(36)
+    // wave S's 0037 follows (wave-s-0037.test.ts)
+    expect(all.find((m) => m.version === 37)?.name).toBe('0037_client_review')
     expect(all.map((m) => m.version)).toEqual(all.map((_, i) => i + 1))
   })
 
@@ -85,7 +86,10 @@ describe('wave R migrations', () => {
     await seed(d)
     await d.query(BOARD_SQL, [B, W, U])
     const before = { columns: await columnsOf(d), constraints: await constraintsOf(d) }
-    expect((await migrate(d)).applied).toEqual(['0035_board_imports', '0036_chat_hooks'])
+    expect((await migrate(d, { migrations: all.filter((m) => m.version <= 36) })).applied).toEqual([
+      '0035_board_imports',
+      '0036_chat_hooks',
+    ])
     const after = { columns: await columnsOf(d), constraints: await constraintsOf(d) }
     const isNew = (k: string) => NEW_TABLES.some((t) => k.startsWith(`${t}.`))
     expect(after.columns.filter((k) => !isNew(k))).toEqual(before.columns)

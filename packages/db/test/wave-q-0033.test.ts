@@ -127,6 +127,7 @@ describe('wave Q migration', () => {
       '0034_library_place',
       '0035_board_imports',
       '0036_chat_hooks',
+      '0037_client_review',
     ])
     expect(all.map((m) => m.version)).toEqual(all.map((_, i) => i + 1))
   })
