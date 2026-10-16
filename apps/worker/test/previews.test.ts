@@ -156,6 +156,8 @@ describe('video', () => {
       videoCodec: 'h264',
       audioCodec: 'aac',
       pageCount: null,
+      // wave S (WS3): ffprobe's avg_frame_rate (the fixture is 30 fps)
+      frameRate: 30,
     })
     expect(m.mimeType).toBe('video/mp4')
     const poster = m.derivatives.find((d) => d.role === 'poster')

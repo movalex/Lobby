@@ -10,6 +10,7 @@ import type {
   DerivativeRole,
   ProbeFacts,
 } from '@draftroom/dev-assets'
+import { frameRateOf } from '../worker/protocol.ts'
 
 export interface VersionRow {
   id: string
@@ -62,7 +63,7 @@ export const EMPTY_PROBE: ProbeFacts = {
   audioCodec: null,
 }
 
-/** The stored probe as ProbeFacts: exactly its six keys, in order, missing ones null. */
+/** The stored probe as ProbeFacts: exactly its six keys, in order, missing ones null (and wave S's frameRate when stored). */
 export function probeFacts(raw: unknown): ProbeFacts {
   const src = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {}
   const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
@@ -74,6 +75,7 @@ export function probeFacts(raw: unknown): ProbeFacts {
     durationMs: num(src.durationMs),
     videoCodec: str(src.videoCodec),
     audioCodec: str(src.audioCodec),
+    ...frameRateOf(src.frameRate),
   }
 }
 

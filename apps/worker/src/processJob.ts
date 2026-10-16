@@ -94,6 +94,8 @@ function probeFacts(p: Record<string, unknown>): ProbeFacts {
     const v = p[k]
     if (v !== undefined) (out as Record<string, unknown>)[k] = v
   }
+  // wave S (WS3): the optional frame rate a video probe found (video.ts frameRateOf); absent otherwise
+  if (typeof p.frameRate === 'number' && Number.isFinite(p.frameRate)) out.frameRate = p.frameRate
   return out
 }
 

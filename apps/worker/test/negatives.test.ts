@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { userMessage } from '../src/errors.ts'
 import { lockedSharp } from '../src/image.ts'
 import { confirmKind } from '../src/sniff.ts'
-import { validate } from '../src/video.ts'
+import { frameRateOf, validate } from '../src/video.ts'
 import {
   cleanupLayouts,
   derivativeFiles,
@@ -184,6 +184,18 @@ describe('video allowlist rules (synthetic ffprobe output)', () => {
     const rotated = good()
     rotated.streams[0] = { ...rotated.streams[0], side_data_list: [{ rotation: -90 }] }
     expect(validate(rotated)).toMatchObject({ width: 1080, height: 1920 }) // phone portrait video
+  })
+
+  it('wave S: the frame rate from avg_frame_rate, only when known and sane (absent otherwise)', () => {
+    expect(frameRateOf('30/1')).toBe(30)
+    expect(frameRateOf('30000/1001')).toBe(29.97)
+    expect(frameRateOf('24000/1001')).toBe(23.976)
+    for (const bad of ['0/0', '', undefined, '30', '-25/1', '1000/1', '1/2', '25/0', 'NaN/1'])
+      expect(frameRateOf(bad)).toBeNull()
+    const p = good()
+    p.streams[0] = { ...p.streams[0], avg_frame_rate: '25/1' }
+    expect(validate(p).frameRate).toBe(25)
+    expect('frameRate' in validate(good())).toBe(false)
   })
 
   it('rejects what browsers do not play everywhere', () => {

@@ -43,6 +43,8 @@ interface ProbeStream {
   width?: number
   height?: number
   duration?: string
+  /** "30000/1001", "25/1"; "0/0" when unknown */
+  avg_frame_rate?: string
   disposition?: { attached_pic?: number }
   side_data_list?: { rotation?: number }[]
 }
@@ -154,6 +156,20 @@ export async function deriveVideo(
   return { probe: facts, derivatives }
 }
 
+/**
+ * Frames per second from ffprobe's `avg_frame_rate` ("30000/1001" → 29.97), rounded to 3 decimals; null when unknown
+ * ("0/0") or outside 1..240 (wave S, WS3: the review viewer's frame steps and hh:mm:ss:ff timecodes).
+ */
+export function frameRateOf(raw: string | undefined): number | null {
+  const m = /^(\d{1,10})\/(\d{1,10})$/.exec(raw ?? '')
+  if (!m) return null
+  const num = Number(m[1])
+  const den = Number(m[2])
+  if (!(den > 0)) return null
+  const fps = Math.round((num / den) * 1000) / 1000
+  return fps >= 1 && fps <= 240 ? fps : null
+}
+
 interface VideoFacts {
   durationMs: number | null
   width: number | null
@@ -180,6 +196,9 @@ export function validate(p: ProbeJson): VideoFacts {
     videoCodec: v?.codec_name ?? null,
     audioCodec: a?.codec_name ?? null,
   }
+  // wave S (WS3): only when known, so a probe without it keeps exactly the six keys it always had
+  const fps = frameRateOf(v?.avg_frame_rate)
+  if (fps !== null) facts.frameRate = fps
   if (!v) throw new PreviewError('VIDEO_INVALID', 'no video stream', facts)
   if (facts.durationMs === null) throw new PreviewError('VIDEO_INVALID', 'unknown duration', facts)
 

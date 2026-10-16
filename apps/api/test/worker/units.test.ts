@@ -120,6 +120,10 @@ describe('probe and failures', () => {
       videoCodec: null,
       audioCodec: null,
     })
+    // wave S (WS3): a video's frame rate is kept (3 decimals) only when it is a sane number; else no key at all
+    expect(sanitizeProbe({ durationMs: 5000, frameRate: 29.97002997 })).toMatchObject({ frameRate: 29.97 })
+    for (const bad of [0, 241, '30', Number.NaN, null])
+      expect('frameRate' in sanitizeProbe({ frameRate: bad }), String(bad)).toBe(false)
   })
 
   it('maps codes to the fixed user messages; unknown codes are INTERNAL', () => {

@@ -111,7 +111,7 @@ export type CompleteInput = z.infer<typeof CompleteInput>
 export type RetryInput = z.infer<typeof RetryInput>
 
 /**
- * ProbeFacts as stored: exactly the six known keys. Lenient on purpose (a probe value must never be the
+ * ProbeFacts as stored: exactly the six known keys, plus (wave S, WS3) `frameRate` only when it is a number in 1..240. Lenient on purpose (a probe value must never be the
  * reason a finished job cannot complete): unknown keys are dropped, numbers rounded, anything malformed
  * becomes null.
  */
@@ -129,7 +129,15 @@ export function sanitizeProbe(raw: unknown): ProbeFacts {
     durationMs: count(src.durationMs),
     videoCodec: codec(src.videoCodec),
     audioCodec: codec(src.audioCodec),
+    ...frameRateOf(src.frameRate),
   }
+}
+
+/** Wave S (WS3): a video's frames per second, kept to 3 decimals, only when sane; otherwise no key at all. */
+export function frameRateOf(v: unknown): { frameRate?: number } {
+  return typeof v === 'number' && Number.isFinite(v) && v >= 1 && v <= 240
+    ? { frameRate: Math.round(v * 1000) / 1000 }
+    : {}
 }
 
 /** The fixed, user-safe messages (same wording as apps/worker/src/errors.ts). */
