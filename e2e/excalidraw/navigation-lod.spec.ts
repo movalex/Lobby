@@ -60,6 +60,41 @@ const pixelsAt = (page: Page, at: { x: number; y: number }) =>
     return { lod: read('canvas[data-lobby-lod]'), engine: read('canvas.excalidraw__canvas.static') }
   }, at)
 
+/**
+ * The same colours after each of the next `frames` painted frames, read once that frame's animation-frame
+ * work is done (the layer's paint and the engine's static render both run there). One read right after a
+ * change can come before any frame (both canvases still hold the previous one): "never missing" reads frames.
+ */
+const pixelsOverFrames = (page: Page, at: { x: number; y: number }, frames: number) =>
+  page.evaluate(
+    async ({ x, y, frames }) => {
+      const read = (sel: string) => {
+        const c = document.querySelector<HTMLCanvasElement>(sel)
+        if (!c) return null
+        const r = c.getBoundingClientRect()
+        const sx = c.width / r.width
+        const sy = c.height / r.height
+        const d = c
+          .getContext('2d')
+          ?.getImageData(Math.round((x - r.left) * sx), Math.round((y - r.top) * sy), 1, 1)
+        return d ? Array.from(d.data) : null
+      }
+      const out: { lod: number[] | null; engine: number[] | null }[] = []
+      for (let i = 0; i < frames; i++) {
+        await new Promise<void>((done) =>
+          requestAnimationFrame(() => {
+            const after = new MessageChannel()
+            after.port1.onmessage = () => done()
+            after.port2.postMessage(null)
+          }),
+        )
+        out.push({ lod: read('canvas[data-lobby-lod]'), engine: read('canvas.excalidraw__canvas.static') })
+      }
+      return out
+    },
+    { ...at, frames },
+  )
+
 /** Waits until the pass is on and every frame's bitmap is current. */
 async function settled(page: Page, frames: number) {
   await expect
@@ -114,9 +149,12 @@ test('below zoom 0.2 a frame is one bitmap and its notes leave the engine’s re
 
   await test.step('this tab moves the note: its frame is live at once, then a bitmap again with the note at its new place', async () => {
     await updateItem(a.page, N1, { x: 700 })
-    const now = await pixelsAt(a.page, await itemCenterOnScreen(a.page, N1))
-    // drawn by the engine (the frame is stale) or already by the fresh bitmap: never missing
-    expect(inked(now.engine) || inked(now.lod)).toBe(true)
+    // the change is taken in the update's own task (the frame goes stale there) and both canvases repaint in
+    // the next animation frame, so the point is read after each of the next frames: one read at once can come
+    // before any frame and see the old frame's canvases (the wave Q flake: no frame between update and read)
+    const frames = await pixelsOverFrames(a.page, await itemCenterOnScreen(a.page, N1), 4)
+    // drawn by the engine (the frame is stale) or already by the fresh bitmap: never missing, in any frame
+    expect(frames.map((f) => inked(f.engine) || inked(f.lod))).toEqual([true, true, true, true])
     await settled(a.page, 2)
     const moved = await pixelsAt(a.page, await itemCenterOnScreen(a.page, N1))
     expect(inked(moved.lod)).toBe(true)
