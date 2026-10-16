@@ -187,6 +187,9 @@ importers:
       '@draftroom/dev-assets':
         specifier: workspace:*
         version: link:../../packages/dev-assets
+      '@draftroom/miro-import':
+        specifier: workspace:*
+        version: link:../../packages/miro-import
       '@draftroom/permissions':
         specifier: workspace:*
         version: link:../../packages/permissions
@@ -223,6 +226,9 @@ importers:
       '@draftroom/dev-assets':
         specifier: workspace:*
         version: link:../../packages/dev-assets
+      '@draftroom/miro-import':
+        specifier: workspace:*
+        version: link:../../packages/miro-import
       '@draftroom/permissions':
         specifier: workspace:*
         version: link:../../packages/permissions

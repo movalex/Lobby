@@ -18,6 +18,7 @@
     "@draftroom/canvas-schema": "workspace:*",
     "@draftroom/contracts": "workspace:*",
     "@draftroom/dev-assets": "workspace:*",
+    "@draftroom/miro-import": "workspace:*",
     "@draftroom/permissions": "workspace:*",
     "@draftroom/tldraw-import": "workspace:*",
     "ws": "catalog:",
