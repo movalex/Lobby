@@ -1,0 +1,20 @@
+{
+  "name": "@draftroom/miro-import",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./sources": "./src/sources.ts",
+    "./notes": "./src/notes.ts",
+    "./fixtures": "./src/fixtures.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@draftroom/board-ops": "workspace:*",
+    "@draftroom/canvas-schema": "workspace:*",
+    "@draftroom/contracts": "workspace:*"
+  }
+}
