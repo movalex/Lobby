@@ -1,5 +1,5 @@
-// The wave S foundation's web side (docs/WAVE-S-CONTRACTS.md §7): nothing changes for a user. Every switch is off (a
-// dev-auth page may turn them on); "My notifications" offers no review kind; WS1's review client is live
+// The wave S foundation's web side (docs/WAVE-S-CONTRACTS.md §7), as the integration ships it: every switch is on (a
+// dev-auth page may turn one off); "My notifications" offers the review kind only with the status switch on; WS1's review client is live
 // (./client.test.ts) and WS2's version list asks the api and answers null for any failure; the review viewer's shell
 // renders nothing while its switches are off, and its slots, state and layout are what WS1-WS3 build on.
 import { CHAT_HOOK_KINDS } from '@draftroom/contracts'
@@ -13,6 +13,7 @@ import {
   ReviewViewerHost,
   ReviewViewerMarkup,
   VIEWER_EMPTY_TEXT,
+  viewedFile,
   viewerLayout,
 } from '../review-viewer/ViewerHost.tsx'
 import { listAssetVersions, supersedesHeader } from '../review-viewer/versions/client.ts'
@@ -33,17 +34,24 @@ const VER = 'ver_0123456789abcdefghij'
 const RVI = 'rvi_0123456789abcdefghij'
 
 describe('the wave S switches', () => {
-  it('ship off, and a production page ignores any override', () => {
-    expect(REVIEW_FLAGS).toEqual({ status: false, versions: false, mediaComments: false, reviewPage: false })
-    expect(reviewFlags(false, () => '1')).toEqual(REVIEW_FLAGS)
-    expect(reviewViewerEnabled(REVIEW_FLAGS)).toBe(false)
+  it('ship on (the integration), and a production page ignores any override', () => {
+    expect(REVIEW_FLAGS).toEqual({ status: true, versions: true, mediaComments: true, reviewPage: true })
+    expect(reviewFlags(false, () => '0')).toEqual(REVIEW_FLAGS)
+    expect(reviewViewerEnabled(REVIEW_FLAGS)).toBe(true)
+    expect(reviewViewerEnabled({ ...REVIEW_FLAGS, versions: false, mediaComments: false })).toBe(false)
   })
 
   it('a dev-auth page may turn each on or off; a blocked store keeps the shipped value', () => {
-    const store: Record<string, string> = { [REVIEW_FLAG_KEYS.versions]: '1', [REVIEW_FLAG_KEYS.status]: '0' }
+    const store: Record<string, string> = {
+      [REVIEW_FLAG_KEYS.versions]: '1',
+      [REVIEW_FLAG_KEYS.status]: '0',
+      [REVIEW_FLAG_KEYS.mediaComments]: '0',
+    }
     const f = reviewFlags(true, (k) => store[k])
-    expect(f).toEqual({ status: false, versions: true, mediaComments: false, reviewPage: false })
+    expect(f).toEqual({ status: false, versions: true, mediaComments: false, reviewPage: true })
     expect(reviewViewerEnabled(f)).toBe(true)
+    const off = reviewFlags(true, (k) => (k === REVIEW_FLAG_KEYS.status ? null : '0'))
+    expect(reviewViewerEnabled(off)).toBe(false)
     expect(
       reviewFlags(true, () => {
         throw new Error('blocked')
@@ -178,7 +186,7 @@ describe('the review viewer shell', () => {
     }
   })
 
-  it('the host renders nothing while the switches are off, even when asked', () => {
+  it('the host renders nothing while nothing asks for it, or when the element shows another deliverable', () => {
     const registries = createFeatureRegistries()
     const element = {
       id: 'card-1',
@@ -186,9 +194,30 @@ describe('the review viewer shell', () => {
       isDeleted: false,
       customData: { lobby: { file: { assetId: AST, versionId: VER, kind: 'video', name: 'cut.mov' } } },
     }
-    const ctx = { registries, canvas: { get: () => element } } as unknown as CanvasFeatureContext
-    openReviewViewer(registries, { elementId: 'card-1', assetId: AST, versionId: VER })
+    const ctx = {
+      registries,
+      board: { id: B },
+      canvas: { get: () => element },
+    } as unknown as CanvasFeatureContext
     expect(renderToStaticMarkup(createElement(ReviewViewerHost, { ctx }))).toBe('')
-    expect(reviewViewerRequest(registries).get()).not.toBeNull()
+    openReviewViewer(registries, { elementId: 'card-1', assetId: 'ast_another0123456789', versionId: VER })
+    expect(renderToStaticMarkup(createElement(ReviewViewerHost, { ctx }))).toBe('')
+  })
+
+  it('the header names the version being viewed (its meta), not the card’s current file', () => {
+    const card = { kind: 'video', name: 'cut-3.mov', mimeType: 'video/quicktime', versionId: VER } as const
+    const V1 = 'ver_v1v1v1v1v1v1v1v1v1v1'
+    // the card's own version: its facts until the meta answers, then the meta
+    expect(viewedFile(card, VER, null)).toEqual({
+      kind: 'video',
+      name: 'cut-3.mov',
+      mimeType: 'video/quicktime',
+    })
+    // an older version: never the card's name; its own once its meta has come
+    expect(viewedFile(card, V1, null).name).toBe('')
+    const meta = { versionId: V1, name: 'cut-1.mp4', mimeType: 'video/mp4', kind: 'video' } as const
+    expect(viewedFile(card, V1, meta)).toEqual({ kind: 'video', name: 'cut-1.mp4', mimeType: 'video/mp4' })
+    // a meta of another version (a late answer) is not used
+    expect(viewedFile(card, VER, meta).name).toBe('cut-3.mov')
   })
 })

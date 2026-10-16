@@ -1,5 +1,5 @@
 // OWNER: the wave S foundation (the lead): the switches of wave S, client review (docs/WAVE-S-CONTRACTS.md §7). With
-// every switch off a user sees exactly the build before wave S: no review panel, badge, menu entry, chip, viewer or
+// every switch off a user would see exactly the build before wave S: no review panel, badge, menu entry, chip, viewer or
 // review page, and "My notifications" offers no review kind. Each workstream turns its own switch on in the change
 // that makes its feature live (the api still guards every route, and pending routes answer 404).
 //
@@ -19,11 +19,12 @@ export interface ReviewFlags {
   readonly reviewPage: boolean
 }
 
+// The wave S integration turned every switch on (all four workstreams landed). A dev-auth page may still turn one off.
 export const REVIEW_FLAGS: ReviewFlags = {
-  status: false,
-  versions: false,
-  mediaComments: false,
-  reviewPage: false,
+  status: true,
+  versions: true,
+  mediaComments: true,
+  reviewPage: true,
 }
 
 export const REVIEW_FLAG_KEYS: Readonly<Record<keyof ReviewFlags, string>> = {

@@ -156,12 +156,12 @@ test('the card is not shown to a person who cannot create, and what it shows is 
     await openDashboard(p.page, personalWorkspace(p.me))
     const card = p.page.getByTestId('whats-new')
     await expect(card).toBeVisible()
-    // what a person who cannot create can use; the Miro import and backups make boards, so they are for people who can
+    // what a person who cannot create can use; the review page opens from a review link, which only creators hand out
     expect(
       await card
         .getByTestId('whats-new-item')
         .evaluateAll((els) => els.map((e) => e.getAttribute('data-item-id'))),
-    ).toEqual(['chat-notifications', 'design-previews', 'elements-icons', 'elements-library'])
+    ).toEqual(['client-review', 'file-versions', 'media-comments', 'review-summary'])
   } finally {
     await p.context.close()
   }

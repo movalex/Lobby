@@ -1,4 +1,4 @@
-// "What's new" (wave K, K4-5; wave L's card, wave M, M3-3; wave P; wave Q; wave R): a dismissible card on the dashboard for people who have
+// "What's new" (wave K, K4-5; wave L's card, wave M, M3-3; wave P; wave Q; wave R; wave S): a dismissible card on the dashboard for people who have
 // been here before and says what changed since. A first visit gets the Welcome card instead (Welcome.tsx), never this
 // changelog (wave P, P-002). Each item is shown only to people it is true for; it may have a "Try it" that goes to
 // the thing: a wave L item's lands on a board they can edit with a `?try=<hint>` (features/command-palette/try-hints.ts:
@@ -12,7 +12,7 @@ import type { TryHint } from '../features/command-palette/try-hints.ts'
 import { type BoardRole, type BoardStatus, can } from '../lib/permissions.ts'
 
 /** Bump it when the card says something new: everybody sees it once more. */
-export const WHATS_NEW_VERSION = '2026-10-wave-r'
+export const WHATS_NEW_VERSION = '2026-10-wave-s'
 export const WHATS_NEW_MIN_ITEMS = 3
 export const WHATS_NEW_MAX_ITEMS = 6
 
@@ -54,47 +54,40 @@ export interface WhatsNewItem {
   for: Audience
 }
 
-// Wave R's four (bring the team over) first, then two of wave Q's (the Elements panel) for people who never saw that card.
+// Wave S's five (client review). The review page is for creators: only they hand out the review link it opens from.
 export const WHATS_NEW_ITEMS: readonly WhatsNewItem[] = [
   {
-    id: 'miro-import',
-    title: 'Import from Miro (beta)',
-    body: 'Bring Miro boards over: Import, then Import from Miro, rebuilds each as a new private board, with a report of what changed.',
+    id: 'client-review',
+    title: 'Client review: approve or request changes',
+    body: 'Mark a frame or a file for review; people on a review link approve it or ask for changes, and the bell tells you.',
+    tryIt: null,
+    for: 'everyone',
+  },
+  {
+    id: 'file-versions',
+    title: 'Versions and compare',
+    body: 'Upload a new version of a file card: its review goes back to Awaiting review, and Compare puts two versions side by side.',
+    tryIt: null,
+    for: 'everyone',
+  },
+  {
+    id: 'media-comments',
+    title: 'Comments on a video moment or a PDF page',
+    body: 'Open a video or PDF from its card to comment at a time or on a page; click a comment to jump straight back to it.',
+    tryIt: null,
+    for: 'everyone',
+  },
+  {
+    id: 'review-page',
+    title: 'A review page for clients',
+    body: 'A review link can open as a review page: one item after another, with the answer buttons and comments, made for phones.',
     tryIt: null,
     for: 'creators',
   },
   {
-    id: 'chat-notifications',
-    title: 'Slack and Teams notifications',
-    body: 'Mentions, replies and access requests can reach a Slack or Teams channel: see Chat notifications in the bell.',
-    tryIt: null,
-    for: 'everyone',
-  },
-  {
-    id: 'design-previews',
-    title: 'Photoshop, Illustrator and TIFF previews',
-    body: 'Upload a .psd, .ai or .tif file and its card on the board shows a preview; the original stays one click away.',
-    tryIt: null,
-    for: 'everyone',
-  },
-  {
-    id: 'board-backups',
-    title: 'Board backups',
-    body: 'Download a board as a .lobby backup from its menu, and restore one as a new board from Import on the dashboard.',
-    tryIt: null,
-    for: 'creators',
-  },
-  {
-    id: 'elements-icons',
-    title: 'Icons in the Elements panel',
-    body: 'Search thousands of Lucide and Tabler icons and add one in any of Lobby’s colours, in three sizes.',
-    tryIt: null,
-    for: 'everyone',
-  },
-  {
-    id: 'elements-library',
-    title: 'A library for your team',
-    body: 'Save a selection to your workspace’s library or your own, then place it on any board in the workspace.',
+    id: 'review-summary',
+    title: 'A summary PDF of the review',
+    body: 'Download a PDF of every item in review with its status, who answered and when, and its open comments.',
     tryIt: null,
     for: 'everyone',
   },

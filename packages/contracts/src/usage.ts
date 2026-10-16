@@ -238,6 +238,9 @@ export const PALETTE_COMMAND_IDS = [
   'ai.capture',
   // wave Q (frozen by the wave Q foundation, pending until WS3 registers it): open the Elements panel
   'elements.open',
+  // wave S (WS1, features/review; added by the integration): the Review panel and Mark for review
+  'review.open-panel',
+  'review.mark',
 ] as const
 export type PaletteCommandId = (typeof PALETTE_COMMAND_IDS)[number]
 

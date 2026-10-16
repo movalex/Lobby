@@ -63,7 +63,7 @@ const HINT_ITEMS: readonly WhatsNewItem[] = [
   hintItem('run-of-show', 'Run of show, spotlight and vote results', 'creators'),
 ]
 
-describe('the card’s items (wave R)', () => {
+describe('the card’s items (wave S)', () => {
   it('are three to six for a creator, each with a title, a sentence and a unique id', () => {
     expect(creator.length).toBeGreaterThanOrEqual(WHATS_NEW_MIN_ITEMS)
     expect(creator.length).toBeLessThanOrEqual(WHATS_NEW_MAX_ITEMS)
@@ -76,15 +76,14 @@ describe('the card’s items (wave R)', () => {
     }
   })
 
-  it('are wave R’s four and two of wave Q’s, in the card’s order, under the version that resets the dismissed card', () => {
-    expect(WHATS_NEW_VERSION).toBe('2026-10-wave-r')
+  it('are wave S’s five, in the card’s order, under the version that resets the dismissed card', () => {
+    expect(WHATS_NEW_VERSION).toBe('2026-10-wave-s')
     expect(WHATS_NEW_ITEMS.map((i) => i.title)).toEqual([
-      'Import from Miro (beta)',
-      'Slack and Teams notifications',
-      'Photoshop, Illustrator and TIFF previews',
-      'Board backups',
-      'Icons in the Elements panel',
-      'A library for your team',
+      'Client review: approve or request changes',
+      'Versions and compare',
+      'Comments on a video moment or a PDF page',
+      'A review page for clients',
+      'A summary PDF of the review',
     ])
   })
 
@@ -129,13 +128,8 @@ describe('the card’s items (wave R)', () => {
   it('show a person only what is true for them', () => {
     // an owner or admin who can create has all of it
     expect(creator.map((i) => i.id)).toEqual(WHATS_NEW_ITEMS.map((i) => i.id))
-    // someone who cannot create: not the Miro import nor backups (both make boards)
-    expect(ids(nobody)).toEqual([
-      'chat-notifications',
-      'design-previews',
-      'elements-icons',
-      'elements-library',
-    ])
+    // someone who cannot create: not the review page (it opens from a review link, which only creators hand out)
+    expect(ids(nobody)).toEqual(['client-review', 'file-versions', 'media-comments', 'review-summary'])
     // and nobody gets an item for a thing that needs more than they have
     for (const who of [ownerCreator, nobody]) {
       for (const i of whatsNewFor(who)) {
