@@ -66,15 +66,15 @@ test('a returning creator sees the wave P card and the Start row above the board
     await openDashboard(p.page, p.wid)
     await expect(card(p.page)).toBeVisible()
 
-    await test.step('six items, the Elements panel first, and no button that could look dead', async () => {
+    await test.step('six items, wave R's first, and no button that could look dead', async () => {
       const titles = await card(p.page).getByTestId('whats-new-item').locator('strong').allTextContents()
       expect(titles).toEqual([
+        'Import from Miro (beta)',
+        'Slack and Teams notifications',
+        'Photoshop, Illustrator and TIFF previews',
+        'Board backups',
         'Icons in the Elements panel',
-        'Shape and deliverable kits',
         'A library for your team',
-        'Links between boards',
-        'Capture the room',
-        'Smoother big boards',
       ])
       await expect(card(p.page).getByTestId('whats-new-try')).toHaveCount(0)
     })
