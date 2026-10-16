@@ -189,15 +189,18 @@ export class ReviewDouble {
   }
 }
 
-/** A review-page-capable context: the switch on for every page of it (a dev-auth build reads it). */
-export async function withReviewFlag(context: BrowserContext): Promise<void> {
-  await context.addInitScript((key) => {
-    try {
-      localStorage.setItem(key, '1')
-    } catch {
-      /* a blocked store keeps the shipped value */
-    }
-  }, REVIEW_PAGE_FLAG_KEY)
+/** The review page switch for every page of a context ('1' on, '0' off; a dev-auth build reads it; it ships on). */
+export async function withReviewFlag(context: BrowserContext, value: '1' | '0' = '1'): Promise<void> {
+  await context.addInitScript(
+    ([key, v]) => {
+      try {
+        localStorage.setItem(key as string, v as string)
+      } catch {
+        /* a blocked store keeps the shipped value */
+      }
+    },
+    [REVIEW_PAGE_FLAG_KEY, value],
+  )
 }
 
 /** alice (or another account) on the board, in a context of its own with the review page switch on. */
@@ -208,7 +211,7 @@ export async function openAs(
   opts: { viewport?: { width: number; height: number }; path?: string; flag?: boolean } = {},
 ): Promise<{ context: BrowserContext; page: Page }> {
   const person = await signedInContext(browser, handle, opts.viewport ? { viewport: opts.viewport } : {})
-  if (opts.flag !== false) await withReviewFlag(person.context)
+  await withReviewFlag(person.context, opts.flag === false ? '0' : '1')
   await person.page.goto(opts.path ?? `/b/${boardId}`)
   await waitForCanvas(person.page)
   return { context: person.context, page: person.page }
@@ -222,7 +225,7 @@ export async function joinThroughInvitePage(
   opts: { viewport: { width: number; height: number }; flag?: boolean; double?: ReviewDouble },
 ): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser.newContext({ viewport: opts.viewport })
-  if (opts.flag !== false) await withReviewFlag(context)
+  await withReviewFlag(context, opts.flag === false ? '0' : '1')
   if (opts.double) await opts.double.install(context)
   const page = await context.newPage()
   await page.goto(link)
