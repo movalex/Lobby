@@ -232,6 +232,12 @@ function linksGroup(yaml, service, group) {
   return false
 }
 
+test('render.yaml: design previews stay off on the api until the preview worker is current', () => {
+  assert.equal(envValue(RENDER_YAML, 'draftroom-staging-api', 'DRAFTROOM_DESIGN_PREVIEWS'), 'off')
+  // an api setting only: sync and web never read it
+  assert.equal(envValue(RENDER_YAML, 'draftroom-staging-sync', 'DRAFTROOM_DESIGN_PREVIEWS'), null)
+})
+
 test('render.yaml: the wave R key (a generated secret in its own group, linked to the api only)', () => {
   const keys = groupKeys(RENDER_YAML, 'draftroom-staging-webhook-secret')
   assert.ok(keys, 'the group exists')

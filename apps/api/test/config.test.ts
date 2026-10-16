@@ -28,6 +28,16 @@ const prodSecrets = {
 const prod = { ...base, ...prodSecrets }
 
 describe('loadConfig', () => {
+  it('DRAFTROOM_DESIGN_PREVIEWS: only "on" turns design previews on; unset, empty or "off" are off', () => {
+    expect(loadConfig({ ...base }).designPreviews).toBe(false)
+    expect(loadConfig({ ...base, DRAFTROOM_DESIGN_PREVIEWS: '' }).designPreviews).toBe(false)
+    expect(loadConfig({ ...base, DRAFTROOM_DESIGN_PREVIEWS: 'off' }).designPreviews).toBe(false)
+    expect(loadConfig({ ...base, DRAFTROOM_DESIGN_PREVIEWS: 'on' }).designPreviews).toBe(true)
+    expect(loadConfig({ ...base, DRAFTROOM_DESIGN_PREVIEWS: ' ON ' }).designPreviews).toBe(true)
+    for (const v of ['1', 'true', 'yes'])
+      expect(() => loadConfig({ ...base, DRAFTROOM_DESIGN_PREVIEWS: v })).toThrow(/must be on or off/)
+  })
+
   it('reads the development environment with contract defaults', () => {
     const c = loadConfig({ ...base, PUBLIC_ORIGIN: '', PORT: '' })
     expect(c).toMatchObject({

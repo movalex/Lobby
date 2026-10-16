@@ -1,4 +1,5 @@
 import { type AuthConfig, Me } from '@draftroom/contracts'
+import { setDesignPreviews } from '@draftroom/dev-assets'
 import {
   createContext,
   type ReactNode,
@@ -140,6 +141,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setConfigStatus('loading')
     api.authConfig(controller.signal).then(
       (c) => {
+        // Classify uploads as the server does (Photoshop, Illustrator and TIFF: previews or attachments).
+        setDesignPreviews(c.designPreviews === true)
         setConfig(c)
         setConfigStatus('ready')
       },

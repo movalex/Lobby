@@ -32,7 +32,10 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, provid
   const { db, sessions } = ctx
   const revokeAllLimit = keyedLimit(ctx.limits.revokeAll, ctx.now)
 
-  app.get('/api/auth/config', async () => provider.publicConfig())
+  app.get('/api/auth/config', async () => ({
+    ...provider.publicConfig(),
+    designPreviews: ctx.config.designPreviews,
+  }))
 
   /**
    * `kind` (wave 3, guests): 'guest' for a name-only guest, 'account' otherwise (contracts MeKind).

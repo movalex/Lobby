@@ -119,6 +119,13 @@ export interface ApiConfig {
    * refuse otherwise. Local development only: it requires DRAFTROOM_DEV_AUTH=1 (refused in production).
    */
   linkPreviewTestOrigins: readonly string[]
+  /**
+   * Wave R: DRAFTROOM_DESIGN_PREVIEWS ("on" only; unset, empty or "off" is off). On: Photoshop, Illustrator and TIFF uploads
+   * are classified for flattened-page previews (kind 'pdf', dev-assets DESIGN_FORMATS). Off: they are plain attachments
+   * (kind 'other'), as before wave R. Turn it on only once the preview worker handles those files. Also told to the web
+   * (GET /api/auth/config).
+   */
+  designPreviews: boolean
   /** Wave R: DRAFTROOM_MIRO_TEST_ORIGINS (local dev only): the fake Miro server's origins, or null. */
   miroTestOrigins: { api: string; files: string | null } | null
   /** Wave R: DRAFTROOM_CHAT_HOOK_TEST_ORIGINS (local dev only): the fake webhook receiver's origins, or null. */
@@ -386,6 +393,13 @@ function parseTestOrigins(
   }
   if (out.length > max) throw new Error(`${name} lists at most ${max} origins`)
   return out
+}
+
+/** DRAFTROOM_DESIGN_PREVIEWS: "on" turns it on; unset, empty or "off" are off; anything else is refused. */
+export function parseDesignPreviews(env: Env): boolean {
+  const raw = read(env, 'DRAFTROOM_DESIGN_PREVIEWS')?.toLowerCase() ?? 'off'
+  if (raw !== 'on' && raw !== 'off') throw new Error('DRAFTROOM_DESIGN_PREVIEWS must be on or off')
+  return raw === 'on'
 }
 
 /** DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS: exact http(s) origins, behind the local-dev guard only. */
@@ -676,6 +690,7 @@ export function loadConfig(env: Env = process.env): ApiConfig {
     ai: parseAiConfig(env, production),
     creators: parseCreatorPolicy(env),
     linkPreviewTestOrigins: parseLinkPreviewTestOrigins(env, devAuth),
+    designPreviews: parseDesignPreviews(env),
     miroTestOrigins: parseMiroTestOrigins(env, devAuth),
     chatHookTestOrigins: parseChatHookTestOrigins(env, devAuth),
     webhookSecret,

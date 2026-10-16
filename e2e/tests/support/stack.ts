@@ -334,6 +334,9 @@ export async function startStack(opts: StackOptions = {}): Promise<Stack> {
       PUBLIC_ORIGIN: WEB_URL,
       DRAFTROOM_SYNC_INTERNAL_URL: SYNC_URL,
       DRAFTROOM_WORKER_TOKEN: workerToken,
+      // The stack's preview worker is the current build: PSD, AI and TIFF uploads are flattened-page previews (a spec
+      // can set 'off' through apiEnv to see them as attachments, as on a deployment whose worker is not current).
+      DRAFTROOM_DESIGN_PREVIEWS: 'on',
       ...blobs,
       ...directEventsEnv(),
       ...opts.apiEnv,

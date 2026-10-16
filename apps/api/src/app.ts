@@ -7,7 +7,7 @@ import { type AddressInfo, Socket } from 'node:net'
 import { checkInternalSecret, INTERNAL_SECRET_HEADER } from '@draftroom/auth-tickets'
 import type { Me } from '@draftroom/contracts'
 import { type Db, isUniqueViolation, migrate, openDb } from '@draftroom/db'
-import { dataLayout } from '@draftroom/dev-assets'
+import { dataLayout, setDesignPreviews } from '@draftroom/dev-assets'
 import fastifyCookie from '@fastify/cookie'
 import fastifyRateLimit from '@fastify/rate-limit'
 import Fastify, {
@@ -332,6 +332,9 @@ async function buildServer(
   ownsDb: boolean,
   blobs: BlobStore,
 ): Promise<ApiServer> {
+  // Photoshop, Illustrator and TIFF uploads: flattened-page previews or plain attachments (DRAFTROOM_DESIGN_PREVIEWS).
+  // Read by every classifyUpload / maxUploadBytes call of this process (uploads, Miro import, backup restore).
+  setDesignPreviews(config.designPreviews)
   const now = deps.now ?? (() => new Date())
   const timeouts: RequestTimeouts = { ...DEFAULT_REQUEST_TIMEOUTS, ...deps.timeouts }
   // Request logging is ours (onResponse below): route patterns only, never URLs, so invitation tokens

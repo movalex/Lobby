@@ -127,6 +127,11 @@ export const AuthConfig = z.object({
   openSigninMethods: z.array(z.enum(['email', 'google'])).optional(),
   /** Open sign-in with Google: the public OAuth client id for Google Identity Services. */
   googleClientId: z.string().optional(),
+  /**
+   * Wave R: true when the server previews Photoshop, Illustrator and TIFF uploads as flattened pages (it classifies them
+   * 'pdf'); absent or false: they are plain attachments ('other'). The web classifies uploads the same way.
+   */
+  designPreviews: z.boolean().optional(),
 })
 export type AuthConfig = z.infer<typeof AuthConfig>
 
