@@ -11,6 +11,7 @@
 
 import { provideInserter } from '../../assets/board-media.ts'
 import type { CanvasFeature, CanvasFeatureContext, SelectionBarItemSpec } from '../../canvas/api/index.ts'
+import { ReviewViewerHost } from '../../features/review-viewer/ViewerHost.tsx'
 import { knownUserKind } from '../../invite/guest.tsx'
 import { MediaSceneLayer } from './CardLayer.tsx'
 import { downloadOriginals, openOriginal, selectedDownloads, syncExportPolicy } from './downloads.ts'
@@ -155,6 +156,8 @@ export const feature: CanvasFeature = {
     { id: 'media.faces', layer: 'scene', order: 10, pointer: 'none', component: MediaSceneLayer },
     { id: 'media.gif-chips', layer: 'scene', order: 11, pointer: 'none', component: GifPlayChips },
     { id: 'media.viewer', layer: 'screen', order: 95, pointer: 'none', component: PdfViewerHost },
+    // wave S (the foundation): the review viewer's shell; nothing while its switches are off (features/review/flags.ts)
+    { id: 'media.review-viewer', layer: 'screen', order: 95, pointer: 'none', component: ReviewViewerHost },
     { id: 'media.gif-player', layer: 'screen', order: 95, pointer: 'none', component: GifPlayerHost },
     { id: 'media.alt-text', layer: 'screen', order: 96, pointer: 'none', component: AltTextHost },
   ],
