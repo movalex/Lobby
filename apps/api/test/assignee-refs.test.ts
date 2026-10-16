@@ -42,7 +42,8 @@ describe('POST /internal/boards/:bid/assignee-refs', () => {
     api = await createTestApi()
     const bob = await api.login('bob')
     const board = await createBoard(bob, DEV_STUDIO, 'B')
-    for (const headers of [{}, { [SECRET_HEADER]: TICKET_SECRET }, { cookie: bob.cookie }]) {
+    const refused: Record<string, string>[] = [{}, { [SECRET_HEADER]: TICKET_SECRET }, { cookie: bob.cookie }]
+    for (const headers of refused) {
       const res = await refs(api, board, { uids: [bob.userId] }, headers)
       expect(res.statusCode, JSON.stringify(headers)).toBe(401)
       expect(res.json().error.code).toBe('bad-secret')
