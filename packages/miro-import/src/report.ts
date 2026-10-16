@@ -1,6 +1,7 @@
 /**
  * A Miro board's report (contracts imports.ts ImportBoardReport): counts by result and by type, the notes, and one
- * row per item for the CSV, kept within IMPORT_REPORT_MAX_ROWS and IMPORT_REPORT_MAX_BYTES (the 0035 CHECK): when the
+ * row per item for the CSV, kept within IMPORT_REPORT_MAX_ROWS and IMPORT_REPORT_MAX_BYTES as the 0035 CHECK measures
+ * it (importReportBytes: Postgres's jsonb text, not the compact JSON, which is a tenth smaller for short rows): when the
  * rows do not fit, the ones that say something (failed, placeholder, approximate, skipped) are kept before the
  * native ones, and `rowsOmitted` says how many were left out. Ids, types and codes only: never content. Pure.
  */
@@ -8,14 +9,13 @@ import {
   IMPORT_REPORT_MAX_BYTES,
   IMPORT_REPORT_MAX_ROWS,
   type ImportBoardReport,
+  importReportBytes,
   type ImportItemResult,
   type ImportReportRow,
 } from '@draftroom/contracts'
 
 export type ReportRow = ImportReportRow
 
-/** What the stored report may take (a margin under the CHECK for the summary and the JSON around the rows). */
-const ROW_BUDGET_BYTES = IMPORT_REPORT_MAX_BYTES - 24 * 1024
 const MAX_TYPE_KEYS = 48
 
 const PRIORITY: Readonly<Record<ImportItemResult, number>> = {
@@ -61,22 +61,18 @@ export function buildReport(
   const ranked = clean
     .map((r, i) => ({ r, i }))
     .sort((a, b) => PRIORITY[a.r.result] - PRIORITY[b.r.result] || a.i - b.i)
+  // the report without rows, its rowsOmitted at its widest: what is left of the cap is the rows' (each with its ", ")
+  const summary = { total: clean.length, counts, byType, notes, rows: [], rowsOmitted: clean.length }
+  const budget = IMPORT_REPORT_MAX_BYTES - importReportBytes(summary)
   const keep = new Set<number>()
   let bytes = 0
   for (const { r, i } of ranked) {
     if (keep.size >= IMPORT_REPORT_MAX_ROWS) break
-    const size = Buffer.byteLength(JSON.stringify(r)) + 1
-    if (bytes + size > ROW_BUDGET_BYTES) break
+    const size = importReportBytes(r) + (keep.size ? 2 : 0)
+    if (bytes + size > budget) break
     bytes += size
     keep.add(i)
   }
   const kept = clean.filter((_, i) => keep.has(i))
-  return {
-    total: clean.length,
-    counts,
-    byType,
-    notes,
-    rows: kept,
-    rowsOmitted: clean.length - kept.length,
-  }
+  return { ...summary, rows: kept, rowsOmitted: clean.length - kept.length }
 }

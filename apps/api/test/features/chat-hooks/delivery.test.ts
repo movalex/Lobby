@@ -83,6 +83,57 @@ describe('who a message is queued for', () => {
     expect((await deliveries(w.api)).map((d) => d.hook_id)).toEqual([w.hookId])
   })
 
+  it('an event many people are told of (an access request, a new comment) posts once per hook, not once per person', async () => {
+    // two owners of the board, both opted in to every kind on the same channel
+    await w.api.db.query(
+      `INSERT INTO board_members (board_id, user_id, role, added_by, created_at) VALUES ($1, $2, 'owner', $3, now())
+       ON CONFLICT (board_id, user_id) DO UPDATE SET role = 'owner'`,
+      [w.boardId, w.ben.userId, w.owner.userId],
+    )
+    const all = ['mention', 'new_comment', 'access_request', 'outsider_joined'] as const
+    await optIn(w.owner, w.hookId, [...all])
+    await optIn(w.ben, w.hookId, [...all])
+    await setBoard('private')
+    const asked = await w.sam.req('POST', `/api/boards/${w.boardId}/access-requests`, { role: 'commenter' })
+    expect(asked.statusCode, asked.body).toBe(202)
+    const kinds = async (kind: string) =>
+      (
+        await w.api.db.query<{ n: number; d: number }>(
+          `SELECT (SELECT count(*)::int FROM notifications WHERE kind = $1) AS n,
+                  (SELECT count(*)::int FROM chat_deliveries d JOIN notifications x ON x.id = d.notification_id
+                    WHERE x.kind = $1) AS d`,
+          [kind],
+        )
+      ).rows[0]
+    // two notifications (the bell of each owner), one delivery
+    expect(await kinds('access_request')).toEqual({ n: 2, d: 1 })
+    await setBoard('workspace_edit')
+    // a third person's new thread: both owners are told, one post
+    await createThread(w.sam, w.boardId, 'Sam starts a thread')
+    expect(await kinds('new_comment')).toEqual({ n: 2, d: 1 })
+    // the same event asked again (another call of the writer, or each owner's notification alone) adds nothing
+    const ids = (
+      await w.api.db.query<{ id: string }>("SELECT id FROM notifications WHERE kind = 'new_comment'")
+    ).rows.map((r) => r.id)
+    expect(await enqueueChatDeliveries(w.api.db, ids)).toBe(0)
+    for (const id of ids) expect(await enqueueChatDeliveries(w.api.db, [id])).toBe(0)
+    // an outsider: one notice for the two owners
+    const notes = await w.api.db.query<{ id: string }>(
+      `INSERT INTO notifications (workspace_id, user_id, kind, board_id, actor_id, created_at)
+       SELECT $1, u, 'outsider_joined', $2, $3, now() FROM unnest($4::text[]) AS u RETURNING id`,
+      [DEV_STUDIO, w.boardId, w.pat.userId, [w.owner.userId, w.ben.userId]],
+    )
+    expect(await enqueueChatDeliveries(w.api.db, notes.rows.map((r) => r.id))).toBe(1)
+    // a mention of each of two people is two messages (each names its person)
+    await createThread(w.sam, w.boardId, `${mention(w.owner)} and ${mention(w.ben)}`)
+    expect((await kinds('mention'))?.d).toBe(2)
+    await w.tick()
+    const said = w.receiver.posts.map((p) => p.body?.text ?? '')
+    expect(said.filter((t) => t.includes('asked for commenter access'))).toHaveLength(1)
+    expect(said.filter((t) => t.endsWith('commented on Pitch wall'))).toHaveLength(1)
+    expect(said.filter((t) => t.includes('opened Pitch wall'))).toHaveLength(1)
+  }, 30_000)
+
   it('is atomic with the notification: a rolled-back transaction leaves no row, and a broken outbox never fails the notification', async () => {
     await optIn(w.ben, w.hookId, ['mention', 'access_request'])
     await expect(
@@ -450,7 +501,7 @@ describe('caps and the roll-up', () => {
     expect(w.receiver.posts[0]?.body?.text).toBe('and 3 more on Pitch wall')
     const held = (await deliveries(w.api)).filter((d) => d.status === 'sent' && d.last_code === 'coalesced')
     expect(held).toHaveLength(3)
-    // the roll-up is not a message that counts against the person’s hour
+    // still over the cap (the roll-up counts as one more message of the person's hour)
     await mentionBen('four')
     expect(await w.tick()).toMatchObject({ coalesced: 1 })
   }, 30_000)
@@ -477,6 +528,98 @@ describe('caps and the roll-up', () => {
     await w.tick()
     expect(w.receiver.posts.at(-1)?.body?.text).toBe('and 2 more notifications')
   }, 30_000)
+})
+
+describe('the roll-up checks what a message checks, and counts', () => {
+  beforeEach(async () => {
+    await optIn(w.ben, w.hookId, ['mention'])
+    await setBoard('workspace_edit')
+    await w.api.db.query(
+      `INSERT INTO chat_deliveries (hook_id, recipient_id, status, attempts, last_code, sent_at)
+       SELECT $1, $2, 'sent', 1, '200', now() FROM generate_series(1, $3)`,
+      [w.hookId, w.ben.userId, CHAT_DELIVERY.perRecipientPerHour],
+    )
+  })
+  /** three mentions of Ben held back (he is at his cap), then whatever `meanwhile` does, then the roll-up's pass */
+  const heldThen = async (meanwhile: () => Promise<unknown>) => {
+    await mentionBen('one')
+    await mentionBen('two')
+    await mentionBen('three')
+    expect(await w.tick()).toMatchObject({ coalesced: 3, sent: 0 })
+    await meanwhile()
+    w.api.clock.advance(61_000)
+    return w.tick()
+  }
+  const codes = async () =>
+    (await deliveries(w.api)).filter((d) => d.last_code !== '200').map((d) => `${d.status}:${d.last_code}`)
+
+  it('a person who opted out meanwhile: their held messages are dropped, no roll-up', async () => {
+    const t = await heldThen(() => optIn(w.ben, w.hookId, ['reply']))
+    expect(t).toMatchObject({ rollups: 0, dropped: 3 })
+    expect(w.receiver.posts).toEqual([])
+    expect(await codes()).toEqual(['dropped:opted-out', 'dropped:opted-out', 'dropped:opted-out'])
+  })
+
+  it('a person who lost access meanwhile: dropped, the board’s title never posted', async () => {
+    const t = await heldThen(async () => {
+      await setBoard('private')
+      await w.api.db.query('DELETE FROM board_members WHERE board_id = $1 AND user_id = $2', [
+        w.boardId,
+        w.ben.userId,
+      ])
+    })
+    expect(t).toMatchObject({ rollups: 0, dropped: 3 })
+    expect(w.receiver.posts).toEqual([])
+    expect(await codes()).toEqual(['dropped:no-access', 'dropped:no-access', 'dropped:no-access'])
+  })
+
+  it('a board nobody may see now (being imported): dropped', async () => {
+    const t = await heldThen(() =>
+      w.api.db.query(`UPDATE boards SET status = 'importing' WHERE id = $1`, [w.boardId]),
+    )
+    expect(t).toMatchObject({ rollups: 0, dropped: 3 })
+    expect(w.receiver.posts).toEqual([])
+  })
+
+  it('only the rows still allowed are rolled up', async () => {
+    const t = await heldThen(async () => {
+      const first = await w.api.db.one<{ id: string }>(
+        "SELECT id FROM notifications WHERE kind = 'mention' ORDER BY seq LIMIT 1",
+      )
+      await w.api.db.query(
+        "UPDATE comments SET deleted_at = now() WHERE id = (SELECT comment_id FROM notifications WHERE id = $1)",
+        [first.id],
+      )
+    })
+    expect(t).toMatchObject({ rollups: 1, dropped: 1 })
+    expect(w.receiver.posts.map((p) => p.body?.text)).toEqual(['and 2 more on Pitch wall'])
+  })
+
+  it('a roll-up counts as one message in the person’s and the workspace’s hour', async () => {
+    // Ben: 29 messages and one roll-up (of 5 held rows) this hour: at his cap of 30
+    await w.api.db.query(
+      "DELETE FROM chat_deliveries WHERE id = (SELECT min(id) FROM chat_deliveries WHERE status = 'sent')",
+    )
+    await w.api.db.query(
+      `INSERT INTO chat_deliveries (hook_id, recipient_id, status, attempts, last_code, sent_at)
+       SELECT $1, $2, 'sent', 1, 'coalesced', now() - interval '5 minutes' FROM generate_series(1, 5)`,
+      [w.hookId, w.ben.userId],
+    )
+    await mentionBen('held')
+    expect(await w.tick()).toMatchObject({ coalesced: 1, sent: 0 })
+    // the workspace: 599 messages and one roll-up this hour hold the owner's message too
+    await w.api.db.query("DELETE FROM chat_deliveries WHERE status = 'sent'")
+    await optIn(w.owner, w.hookId, ['reply'])
+    await w.api.db.query(
+      `INSERT INTO chat_deliveries (hook_id, recipient_id, status, attempts, last_code, sent_at)
+       SELECT $1, $2, 'sent', 1, '200', now() FROM generate_series(1, $3)
+       UNION ALL SELECT $1, $2, 'sent', 1, 'coalesced', now() FROM generate_series(1, 4)`,
+      [w.hookId, w.erin.userId, CHAT_DELIVERY.perWorkspacePerHour - 1],
+    )
+    const thread = await createThread(w.owner, w.boardId, 'Olive asks')
+    await reply(w.ben, thread.id, 'Ben answers')
+    expect(await w.tick()).toMatchObject({ coalesced: 1, sent: 0 })
+  })
 })
 
 describe('pacing, leases and the purge', () => {

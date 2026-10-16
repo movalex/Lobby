@@ -140,7 +140,7 @@ describe('0035_board_imports', () => {
     return q.query(
       `INSERT INTO board_imports (id, batch_id, workspace_id, created_by, source, source_ref, title, status, board_id,
                                   error_code, report, finished_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)`,
       [
         r.id,
         r.batch_id,
@@ -152,7 +152,9 @@ describe('0035_board_imports', () => {
         r.status,
         r.board_id,
         r.error_code,
-        r.report,
+        // as JSON text, as the api writes it: node-postgres sends a JS array as a Postgres array literal ([] is '{}',
+        // which jsonb reads as an empty OBJECT), so the array case below passed on real Postgres and failed on PGlite
+        r.report == null ? null : JSON.stringify(r.report),
         r.finished_at,
       ],
     )
@@ -178,7 +180,10 @@ describe('0035_board_imports', () => {
       { status: 'done', finished_at: now },
       { status: 'running', finished_at: now },
       { status: 'done', finished_at: now, report: { pad: 'x'.repeat(262_200) } },
+      // the cap is the jsonb's text form (a space after each ':' and ','): compact JSON under it, Postgres's over
+      { status: 'done', finished_at: now, report: { rows: Array.from({ length: 20_000 }, () => [1, 2, 3, 4, 5]) } },
       { report: [] },
+      { report: 'text' },
     ]
     for (const over of bad)
       expect(await sqlstate(row(q, over)), JSON.stringify(over).slice(0, 80)).toBe('23514')

@@ -120,6 +120,32 @@ export const IMPORT_CONCURRENCY = {
 
 /** The stored report of one board is capped (checked in code and by a CHECK in 0035). */
 export const IMPORT_REPORT_MAX_BYTES = 262_144
+/**
+ * A report's size as the 0035 CHECK measures it: `octet_length(report::text)`, the UTF-8 bytes of Postgres's jsonb
+ * text form, which is compact JSON with one space after every `:` and every `,` (keys reordered, which does not change
+ * the length). So: the compact JSON's bytes, plus one per object key and one per separator between two members or
+ * items. Every writer of a report checks this, never the compact JSON's length (the two differ by a tenth for short
+ * rows). The value is JSON (what JSON.stringify keeps); strings escape as JSON.stringify escapes them, as Postgres does.
+ */
+export function importReportBytes(value: unknown): number {
+  let spaces = 0
+  // walked as JSON keeps it (no undefined members, toJSON applied)
+  const walk = (v: unknown) => {
+    if (Array.isArray(v)) {
+      spaces += Math.max(0, v.length - 1)
+      for (const x of v) walk(x)
+    } else if (v !== null && typeof v === 'object') {
+      const members = Object.values(v as Record<string, unknown>)
+      spaces += members.length + Math.max(0, members.length - 1)
+      for (const x of members) walk(x)
+    }
+  }
+  const json = JSON.stringify(value)
+  if (json === undefined) return 0
+  walk(JSON.parse(json))
+  return new TextEncoder().encode(json).length + spaces
+}
+
 /** Report rows (one per source item) kept for the CSV; beyond it the report says how many were left out. */
 export const IMPORT_REPORT_MAX_ROWS = 10_000
 export const IMPORT_TITLE_MAX = 120
