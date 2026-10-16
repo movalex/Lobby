@@ -3,7 +3,8 @@
 //
 // One job (imp_…, `batch_id`) is one row per board (imb_…). Rows hold no secret: a source's token lives only in the
 // runner's memory; `source_ref` is a Miro board id or a backup's sha256; `error_code` is an upper-case code (0035
-// CHECKs it); progress and the report are the contract's shapes, written by the runner only.
+// CHECKs it); progress and the report are the contract's shapes, written by the runner only. A row that is not done
+// but has a report has its board seeded already (recordSeeded): a resume activates that board and seeds nothing.
 
 import {
   EMPTY_IMPORT_PROGRESS,
@@ -151,7 +152,7 @@ export async function setStatus(
       finished ? at : null,
       errorCode,
       report !== undefined,
-      report === undefined ? null : JSON.stringify(report),
+      report == null ? null : JSON.stringify(report),
       extra.boardId !== undefined,
       extra.boardId ?? null,
     ],
@@ -228,7 +229,8 @@ function boardView(r: ImportRow): ImportBoardView {
     // the board is shown only once it is active (an importing board's id is nobody's to know)
     boardId: r.status === 'done' ? r.board_id : null,
     errorCode: r.error_code,
-    summary: r.report ? (summary as ImportBoardView['summary']) : null,
+    // a report on a row that is not done marks its seed (recordSeeded): no summary until the board is there
+    summary: r.report && r.status === 'done' ? (summary as ImportBoardView['summary']) : null,
     finishedAt: iso(r.finished_at),
   }
 }
@@ -285,6 +287,20 @@ export async function storedFile(q: Queryable, rowId: string, sourceKey: string)
     [rowId, sourceKey],
   )
   return r?.version_id ?? null
+}
+
+/**
+ * The board of a running row is seeded (sync committed it): its report is kept with the row, so a pause or a restart
+ * before the activation resumes into the activation instead of a second seed (sync refuses one: the board has its
+ * file). Cleared again (setStatus `report: null`) when the row fails or is cancelled.
+ */
+export async function recordSeeded(q: Queryable, rowId: string, report: ImportBoardReport, at: Date) {
+  if (Buffer.byteLength(JSON.stringify(report)) > IMPORT_REPORT_MAX_BYTES)
+    throw new Error('import report too large')
+  await q.query(
+    `UPDATE board_imports SET report = $2::jsonb, heartbeat_at = $3, updated_at = $3 WHERE id = $1 AND status = 'running'`,
+    [rowId, JSON.stringify(report), at],
+  )
 }
 
 export async function recordFile(

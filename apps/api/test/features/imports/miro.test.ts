@@ -385,5 +385,6 @@ describe('the token', () => {
     // and the sync seed bodies hold none either (nor a signed URL)
     expect(JSON.stringify(w.sync.miroSeeds).includes(raw)).toBe(false)
     expect(JSON.stringify(w.sync.miroSeeds)).not.toContain('Signature=')
-  })
+    // three jobs, a 429 wait and a scan of every table: about 6 s on this PC, past vitest's default 5 s
+  }, 30_000)
 })

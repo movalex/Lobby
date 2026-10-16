@@ -7,6 +7,7 @@
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { ImportBoardReport } from '@draftroom/contracts'
+import { openTestDb } from '@draftroom/db/testing'
 import { newId } from '@draftroom/dev-assets'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { egressFetch, miroEgressPolicy, RedactedSecret } from '../../../src/egress/index.ts'
@@ -314,6 +315,109 @@ describe('the runner', () => {
       boards: [{ sourceRef: null, title: 'X' }],
     }
     await expect(runner.start(unknown, [])).rejects.toMatchObject({ statusCode: 404 })
+  })
+
+  it('a pause between the seed and the activation: resume activates the seeded board, with no second seed', async () => {
+    const seeded = new Set<string>() // the board files sync holds: a second seed of one is refused, as sync does
+    let runs = 0
+    behaviour.current = async (step) => {
+      runs++
+      if (seeded.has(step.boardId)) throw new ImportFailure('IMPORT_SEED_FAILED')
+      seeded.add(step.boardId)
+      // the starter pauses while sync answers the seed: the runner sees it at its checkpoint after the source
+      await runner.pause(step.importId, step.userId)
+      return report(7)
+    }
+    const importId = await start(alice, ['Seeded, then paused'])
+    await runner.idle()
+    expect((await runner.view(importId, alice.userId))?.status).toBe('paused')
+    expect(await boardsOf('importing')).toHaveLength(1)
+    await runner.resume(importId, alice.userId, [new RedactedSecret(RAW)])
+    await runner.idle()
+    const view = await runner.view(importId, alice.userId)
+    expect(view?.boards[0]).toMatchObject({ status: 'done', errorCode: null })
+    expect(view?.boards[0]?.summary?.total).toBe(7)
+    expect(runs).toBe(1)
+    expect(await boardsOf('importing')).toEqual([])
+    expect(await boardsOf('active')).toContain(view?.boards[0]?.boardId)
+    const csv = await alice.req('GET', `/api/imports/${importId}/report.csv`)
+    expect(csv.statusCode).toBe(200)
+    expect(csv.body).toContain('sticky_note')
+  })
+
+  it('a restart between the seed and the activation: after it, resume activates the seeded board', async () => {
+    const db = await openTestDb()
+    await api.close()
+    const seeded = new Set<string>()
+    let runs = 0
+    const seeding: { current: Behaviour } = {
+      current: async (step) => {
+        runs++
+        if (seeded.has(step.boardId)) throw new ImportFailure('IMPORT_SEED_FAILED')
+        seeded.add(step.boardId)
+        // the api shuts down (a deploy) while sync answers the seed: the answer comes once the runner is closing
+        closing = first.close()
+        for (;;) {
+          const stopping = await step.checkpoint().then(
+            () => false,
+            () => true,
+          )
+          if (stopping) break
+          await new Promise((r) => setTimeout(r, 5))
+        }
+        return report(3)
+      },
+    }
+    let closing: Promise<void> = Promise.resolve()
+    const first = await createTestApi({ db })
+    const firstRunner = importRunnerOf(first.app) as ImportRunner
+    firstRunner.useSource(fakeSource(seeding))
+    const starter = await first.login('alice')
+    const importId = await firstRunner.start(
+      {
+        workspaceId: DEV_STUDIO,
+        projectId: null,
+        userId: starter.userId,
+        source: 'miro',
+        boards: [{ sourceRef: 'uXjVOD0Ab2c=', title: 'Seeded, then restarted' }],
+      },
+      [new RedactedSecret(RAW)],
+    )
+    await firstRunner.idle()
+    await closing
+    api = await createTestApi({ db })
+    const second = importRunnerOf(api.app) as ImportRunner
+    second.useSource(fakeSource(seeding))
+    expect((await second.view(importId, starter.userId))?.status).toBe('interrupted')
+    await second.resume(importId, starter.userId, [new RedactedSecret(RAW)])
+    await second.idle()
+    const view = await second.view(importId, starter.userId)
+    expect(view?.boards[0]).toMatchObject({ status: 'done', errorCode: null })
+    expect(view?.boards[0]?.summary?.total).toBe(3)
+    expect(runs).toBe(1)
+    await api.close()
+    await db.close()
+    api = { close: async () => {} } as TestApi
+  })
+
+  it('a board whose kept importing board is gone runs again from the start (its old seed is not reused)', async () => {
+    let runs = 0
+    behaviour.current = async (step) => {
+      runs++
+      if (runs === 1) await runner.pause(step.importId, step.userId)
+      return report(runs)
+    }
+    const importId = await start(alice, ['Swept while paused'])
+    await runner.idle()
+    expect((await runner.view(importId, alice.userId))?.status).toBe('paused')
+    // the sweep (or anything else) removed the importing board while the row waited
+    await api.db.query(`DELETE FROM boards WHERE status = 'importing'`)
+    await runner.resume(importId, alice.userId, [new RedactedSecret(RAW)])
+    await runner.idle()
+    const view = await runner.view(importId, alice.userId)
+    expect(view?.boards[0]).toMatchObject({ status: 'done' })
+    expect(view?.boards[0]?.summary?.total).toBe(2)
+    expect(runs).toBe(2)
   })
 
   it('recover: a gone process’s rows become interrupted; the sweep removes their boards a day later', async () => {

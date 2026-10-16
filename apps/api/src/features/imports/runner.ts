@@ -8,7 +8,11 @@
 //   2. the source runs the board (`runBoard`: read, stream files into versions of that board, seed sync), reporting
 //      progress (written with the heartbeat at most every IMPORT_PROGRESS_WRITE_MS) and calling `checkpoint()`
 //      between its requests and files, which throws ImportStopped once the starter paused or cancelled;
-//   3. the board is activated in one transaction (the guards again), and the row is `done` with its report.
+//   3. the source's report is kept with the row as soon as it returns (jobs.ts recordSeeded: sync has the board's file
+//      now), then the board is activated in one transaction (the guards again), and the row is `done` with its report.
+//      A pause or a restart that lands between the seed and the activation resumes into the activation: a row whose
+//      kept importing board has its seed recorded is not run by the source again (sync would refuse a second seed of
+//      the board, IMPORT_SEED_FAILED); a row whose importing board is gone starts over with a new one.
 // A board that fails is discarded with its files and the row is `failed` with a code; the next board still runs. A
 // cancel discards the board in hand and cancels the boards not started (finished boards stay). A pause keeps the board
 // in hand and its stored files (board_import_files) and pauses the rest; resume picks them up (a source that needs its
@@ -32,7 +36,7 @@ import {
   IMPORT_RESUMABLE_STATUSES,
   IMPORT_STALE_HEARTBEAT_MS,
   IMPORT_TIMING,
-  type ImportBoardReport,
+  ImportBoardReport,
   type ImportJobView,
   type ImportProgress,
   type ImportSource,
@@ -55,6 +59,7 @@ import {
   type NewImportBoard,
   recentJobIds,
   recordFile,
+  recordSeeded,
   requestStop,
   rowById,
   setStatus,
@@ -253,7 +258,7 @@ export function createImportRunner(ctx: FeatureContext, log: FastifyBaseLogger):
   async function settleRow(row: ImportRow, kind: 'cancel' | 'pause') {
     if (kind === 'pause') return setStatus(db, row.id, 'paused', ctx.now())
     if (row.board_id) await discardBoard(ctx, row.board_id, { actorId: row.created_by, reason: 'cancelled' })
-    await setStatus(db, row.id, 'cancelled', ctx.now())
+    await setStatus(db, row.id, 'cancelled', ctx.now(), { report: null })
   }
 
   /** Runs one board; returns how the job must go on ('cancel' and 'pause' stop the boards after it). */
@@ -285,7 +290,10 @@ export function createImportRunner(ctx: FeatureContext, log: FastifyBaseLogger):
     timer.unref()
     let boardId: string | null = null
     try {
-      boardId = await reuseOrCreateBoard(row)
+      const kept = await keptBoard(row)
+      boardId = kept ?? (await createBoardFor(row))
+      // the source seeded this board in an earlier run (paused or restarted before its activation): activate it
+      const seededReport = kept && row.report ? ImportBoardReport.safeParse(row.report) : null
       const step: ImportStep = {
         importId,
         rowId: row.id,
@@ -314,7 +322,15 @@ export function createImportRunner(ctx: FeatureContext, log: FastifyBaseLogger):
       }
       // a stop and a source's own failure carry a kind or a code only: they pass as they are
       const ours = (err: unknown) => err instanceof ImportStopped || err instanceof ImportFailure
-      const result = await withSecrets(step.secrets, () => source.runBoard(step), ours)
+      let result: ImportBoardResult
+      if (seededReport?.success) {
+        result = { report: seededReport.data, counts: { items: seededReport.data.total } }
+      } else {
+        if (row.report) await recordSeededNot(row.id)
+        result = await withSecrets(step.secrets, () => source.runBoard(step), ours)
+        // links are not kept with the seed: a source that returns some runs again after a pause here (none does)
+        if (!result.links?.length) await recordSeeded(db, row.id, result.report, ctx.now())
+      }
       await step.checkpoint()
       progress = { ...progress, phase: 'activating' }
       dirty = true
@@ -356,25 +372,33 @@ export function createImportRunner(ctx: FeatureContext, log: FastifyBaseLogger):
           ),
         )
       if (cancelled) {
-        await setStatus(db, row.id, 'cancelled', ctx.now(), { boardId: null })
+        await setStatus(db, row.id, 'cancelled', ctx.now(), { boardId: null, report: null })
         return 'cancel'
       }
       const code = failureCode(e)
       log.warn({ feature: 'imports', importRowId: row.id, code, err: errorFacts(e) }, 'import board failed')
-      await setStatus(db, row.id, 'failed', ctx.now(), { errorCode: code, boardId: null })
+      await setStatus(db, row.id, 'failed', ctx.now(), { errorCode: code, boardId: null, report: null })
       return null
     } finally {
       clearInterval(timer)
     }
   }
 
-  async function reuseOrCreateBoard(row: ImportRow): Promise<string> {
-    if (row.board_id) {
-      const kept = await db.maybeOne(`SELECT 1 AS ok FROM boards WHERE id = $1 AND status = 'importing'`, [
-        row.board_id,
-      ])
-      if (kept) return row.board_id
-    }
+  /** The importing board an earlier run of this row made, if it is still there (a pause, a restart). */
+  async function keptBoard(row: ImportRow): Promise<string | null> {
+    if (!row.board_id) return null
+    const kept = await db.maybeOne(`SELECT 1 AS ok FROM boards WHERE id = $1 AND status = 'importing'`, [
+      row.board_id,
+    ])
+    return kept ? row.board_id : null
+  }
+
+  /** A row whose seeded board is gone starts over: its old seed's report is not this board's. */
+  async function recordSeededNot(rowId: string) {
+    await db.query(`UPDATE board_imports SET report = NULL WHERE id = $1 AND status = 'running'`, [rowId])
+  }
+
+  function createBoardFor(row: ImportRow): Promise<string> {
     return createImportingBoard(ctx, {
       workspaceId: row.workspace_id,
       projectId: row.project_id,
@@ -517,6 +541,7 @@ export function createImportRunner(ctx: FeatureContext, log: FastifyBaseLogger):
             await setStatus(db, row.id, 'failed', ctx.now(), {
               errorCode: IMPORT_CODES.expired,
               boardId: null,
+              report: null,
             })
         }
       }

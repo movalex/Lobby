@@ -137,7 +137,8 @@ export async function registerImportRoutes(
       }
       const lines = [CSV_COLUMNS.join(',')]
       for (const r of rows) {
-        const report = r.report as ImportBoardReport | null
+        // a row's report is its CSV once the board is done (before, it only marks the seed: jobs.ts recordSeeded)
+        const report = r.status === 'done' ? (r.report as ImportBoardReport | null) : null
         for (const row of report?.rows ?? [])
           lines.push(
             [r.title, row.sourceId, row.type, row.result, row.elementId ?? '', row.note ?? '']
