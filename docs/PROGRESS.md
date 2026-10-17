@@ -1912,3 +1912,38 @@ cut-over on staging"; the runbook and the rehearsal: `docs/EXCALIDRAW-CUTOVER.md
     - async walkthrough recordings are dropped (storage cost);
     - a guest approval proves no identity;
     - there is no video transcoding (ProRes/HEVC may not play).
+- **Excalidraw wave T: "Storyboards and planning walls" (branch `wave-t/integration`, worktree `Draftroom-wtint`, from `main` 5e90bb69 = staging api/web 6769e07, sync ba1704c). `CONTRACTS_REV` 13 → 14.**
+  - Foundation `wave-t/foundation` (ten planning customData keys in canvas-schema; the frozen `rev13-6769e07` fixture; reader rules; the fail-closed `DRAFTROOM_PLANNING` kill switch, under which the room says 13; strip-keys for the planning prefixes; the internal `assignee-refs` route; the export-overlay registry).
+  - Five workstreams merged with `--no-ff`: `sync-rules`, `cards`, `storyboard`, `timeline`, `animatic`.
+  - **What it brings:**
+    - **Storyboards:** panels with picture, camera, action and dialogue/VO; shot numbers drawn from the order; insert, duplicate, reorder, row or grid; script-to-boards with a no-AI parser for AV, screenplay and shot lists, plus the optional `storyboard` AI action.
+    - **Animatic** playback with audio (MP3/M4A/WAV/OGG sniffed at upload; audio plays on boards with exports off, since playing isn't exporting); present as slides; a storyboard PDF sheet with 2/3/6 panels per page; an image-sequence ZIP with timings CSV and an EDL.
+    - **Cards with fields** (status, one assignee checked by the api, start/due, tags, link): Kanban (a drag writes position and status in one undo step; Tidy for rev-13 mismatches) and a Cards table (filters, inline edit, formula-safe CSV out, CSV paste in).
+    - **The timeline** (ruler, lanes, bars from the cards' dates; a drag edits the dates).
+  - **Review** (opus, adversarial): nine findings, none a security break, each fixed with a test that failed first:
+    - labels left behind on Kanban moves;
+    - copies of assigned cards refused (the server now strips an unverifiable `card:who` from creates);
+    - locked panels scrambled on reorder;
+    - the audio sniff missing in restore and Miro import;
+    - CJK column names over the cap (now 1,280 bytes, cut by bytes);
+    - overlay recomputation on big boards;
+    - new boards losing assignees;
+    - assignee-lookup flooding;
+    - Kanban + panel on one frame.
+  - **Gate** on 5c64f318 (+ 81e75985):
+    - lint (NAS): 0 errors;
+    - `pnpm test`: **1,003 files / 11,755 tests passed, 0 failed**;
+    - real Postgres (NAS): api 264 files / 2,426 passed, db 113/113;
+    - `probe:browser` 3/3; `test:arrows` 85/85.
+    - **Stale pairs:**
+      - `stale-reader-rev13` with 6769e07's own core and `rollback-rev13` under the real ba1704c sync: 6/6;
+      - `t-compat-rev13` with the real 6769e07 web: 2/2 (it ran twice);
+      - `l-compat-rev11` with the real 437b4e7: 6/6;
+      - WS1's own runs: pair (a) 84 passed, (b) 84/84 (`t-compat-old-sync`), (c) 1/1, (d) 6/6.
+    - **The first whole e2e found real regressions in both runs:** the new selection-bar buttons wrapped the phone bar onto two rows (`m1-phone-frame` ×4, `m1-toolbar:405`), lacked icons or tooltips (`p-canvas-chrome` P-020), and View ▸ Card table sat between the zoom entries (`canvas-ux-review` W5-33). They are fixed in 81e75985 with the optional `compactInMore` on `SelectionBarItemSpec`.
+    - **Re-run on 81e75985:** with `E2E_DIRECT_EVENTS=1` **1,112 passed, 0 failed**; normally 1,110 + 2 one-offs (`l6-laser`'s known 300 ms threshold; `s3-media-comments:128`, 5/5 on repeat).
+  - **Deploy (docs/DEPLOY.md):** api, then the sync with `DRAFTROOM_PLANNING=off`, then the web, then `DRAFTROOM_PLANNING=on` and a restart. Rollback: switch off, named checkpoints, strip-keys per planning class, then ba1704c.
+  - **Follow-ups:**
+    - template conversions to planning keys (Kanban / launch-timeline templates);
+    - an Elements panel tile type for planning objects;
+    - the reject detail for assignee refusals (no wire reason today).
