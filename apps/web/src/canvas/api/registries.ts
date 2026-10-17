@@ -227,6 +227,11 @@ export interface MenuEntrySpec {
 export interface SelectionBarItemSpec {
   readonly id: string
   readonly order: number
+  /**
+   * On a compact (phone) bar the item sits in the "More" row with align and distribute, so the main row stays one
+   * row (M1-4). Set it for actions that are also in the context menu or the palette; the order still sorts it.
+   */
+  readonly compactInMore?: boolean
   visible?(ctx: CanvasFeatureContext, selection: readonly string[]): boolean
   readonly component: ComponentType<{
     readonly ctx: CanvasFeatureContext

@@ -443,9 +443,12 @@ test('W5-33: Board ▸ View has the zoom entries and the minimap, Edit ▸ and t
     // the View rows are the navigation feature's, each once (the wave-5 integration found them twice)
     for (const id of ['zoom-in', 'zoom-out', 'zoom-to-100', 'zoom-to-fit', 'minimap'])
       await expect(page.getByTestId(`main-menu.navigation.view.${id}`)).toBeVisible()
-    await expect(
-      page.getByTestId('main-menu-sub.view-content').locator('[data-testid^="main-menu."]'),
-    ).toHaveCount(6)
+    const view = page.getByTestId('main-menu-sub.view-content')
+    await expect(view.locator('[data-testid^="main-menu.navigation.view."]')).toHaveCount(6)
+    // wave T: View ▸ Card table, once, after the camera entries and the minimap (never between them)
+    const rows = view.locator('[data-testid^="main-menu."]')
+    await expect(rows).toHaveCount(7)
+    await expect(rows.last()).toHaveAttribute('data-testid', 'main-menu.card-table-open')
     await page.getByTestId('main-menu.navigation.view.zoom-to-100').click()
     await expect.poll(async () => (await viewport(page)).zoom).toBeCloseTo(1, 2)
   })

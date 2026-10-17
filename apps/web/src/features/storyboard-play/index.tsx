@@ -106,16 +106,21 @@ const CONTEXT_MENU: readonly MenuEntrySpec[] = [
 const PLAY_BUTTON: SelectionBarItemSpec = {
   id: 'storyboard-play.play',
   order: 78,
+  compactInMore: true,
   visible: (ctx, selection) => inStoryboard(ctx, selection),
+  // P-020 / M1-4: a picture with a tooltip like every bar button, so the phone's compact bar keeps one row
   component: ({ ctx }) => (
     <button
       type="button"
-      className="dr-btn dr-btn--sm dr-btn--ghost"
+      className="dr-cux-selbar__btn"
       data-testid="animatic-open"
-      title="Play the storyboard's panels in order with their durations"
+      aria-label="Play animatic"
+      title="Play animatic: the storyboard's panels in order with their durations"
       onClick={() => playAnimatic(ctx)}
     >
-      Play animatic
+      <svg viewBox="0 0 16 16" width={18} height={18} aria-hidden="true" focusable="false">
+        <path d="M5 3.25v9.5L12.75 8z" fill="currentColor" />
+      </svg>
     </button>
   ),
 }

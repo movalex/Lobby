@@ -26,7 +26,7 @@ import { registerExportOverlay } from '../present-export/ported/badges.ts'
 import { type CardsState, cardsOf, setCards } from './bridge.ts'
 import { CardChipsLayer } from './Chips.tsx'
 import { CARDS_OVERLAY } from './export.ts'
-import { StatusIcon } from './icons.tsx'
+import { CardIcon, StatusIcon } from './icons.tsx'
 import { CARD_STATUSES, isCard, statusWords } from './model.ts'
 import { CardPopoverLayer } from './Popover.tsx'
 import { isGuest, People } from './people.ts'
@@ -136,21 +136,27 @@ function BarItem({ ctx }: { ctx: CanvasFeatureContext; selection: readonly strin
       const card = cardOf(ctx.canvas.get(id) as PlanningElement)
       return card ? { kind: 'card' as const, id, status: card.status as CardStatus } : null
     }
-    return makeableIn(ctx.canvas, ctx.canvas.selection).length ? { kind: 'make' as const } : null
+    const n = makeableIn(ctx.canvas, ctx.canvas.selection).length
+    return n ? { kind: 'make' as const, many: n > 1 } : null
   }, [ctx])
   if (!view) return null
+  // P-020 / M1-4: a picture with a tooltip, like every bar button, so the phone's compact bar keeps one row
+  const makeLabel = view.kind === 'make' && view.many ? 'Make cards' : 'Make a card'
+  // the status button's name is what it shows (its status and "Details"); the tooltip says the same
+  const detailsLabel = view.kind === 'card' ? `${statusWords(view.status)}: open the card's details` : ''
   return (
     <span className="dr-card-barslot">
       <span className="dr-cux-selbar__sep" aria-hidden="true" />
       {view.kind === 'make' ? (
         <button
           type="button"
-          className="dr-cux-selbar__btn dr-card-barbtn"
+          className="dr-cux-selbar__btn"
           data-testid="selection-card-make"
-          title="Make a card: a status, an assignee and dates"
+          aria-label={makeLabel}
+          title={`${makeLabel}: a status, an assignee and dates`}
           onClick={() => make(ctx, ctx.canvas.selection)}
         >
-          Make a card
+          <CardIcon />
         </button>
       ) : (
         <button
@@ -159,6 +165,7 @@ function BarItem({ ctx }: { ctx: CanvasFeatureContext; selection: readonly strin
           data-testid="selection-card-status"
           data-card-keep-popover=""
           aria-haspopup="dialog"
+          title={detailsLabel}
           onClick={() => {
             const s = cardsOf(ctx.canvas)
             if (s) s.popover.set(s.popover.get()?.id === view.id ? null : { id: view.id })
@@ -179,6 +186,7 @@ export const SELECTION_BAR: readonly SelectionBarItemSpec[] = [
   {
     id: 'cards',
     order: 56,
+    compactInMore: true,
     visible: (ctx, sel) =>
       (sel.length === 1 && isCard(ctx.canvas.get(sel[0] as string))) ||
       makeableIn(ctx.canvas, sel).length > 0,

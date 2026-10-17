@@ -42,7 +42,8 @@ export const COMMANDS: readonly CommandSpec[] = [
 ]
 
 export const MAIN_MENU: readonly MenuEntrySpec[] = [
-  { id: 'card-table-open', group: 'view', order: 40, label: 'Card table', command: 'card-table.open' },
+  // W5-33: after the navigation feature's camera entries (10-50) and the minimap (60), never between them
+  { id: 'card-table-open', group: 'view', order: 100, label: 'Card table', command: 'card-table.open' },
 ]
 
 /** The feature contexts by canvas, for the Export section (it gets the canvas only). */

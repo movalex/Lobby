@@ -607,8 +607,14 @@ export function SelectionBar({ ctx }: { ctx: CanvasFeatureContext }) {
   }, [focusTick])
   if (!view || !placement) return null
   const { items } = view
-  const main = items.filter((i) => i.order < ARRANGE_ROW_FROM)
-  const arrange = items.filter((i) => i.order >= ARRANGE_ROW_FROM)
+  // M1-4: a compact bar keeps its main row one row: the items that ask for it (wave T's planning actions) join More
+  const inMore = (i: SelectionBarItemSpec) =>
+    i.order >= ARRANGE_ROW_FROM || (compact && i.compactInMore === true)
+  const main = items.filter((i) => !inMore(i))
+  const arrange = items.filter(inMore)
+  const moreLabel = arrange.some((i) => i.order < ARRANGE_ROW_FROM)
+    ? 'More: actions, align, distribute and arrange'
+    : 'More: align, distribute and arrange'
   const { left, top, side } = placement
   const render = (list: readonly SelectionBarItemSpec[]) =>
     list.map((i) => (
@@ -653,7 +659,7 @@ export function SelectionBar({ ctx }: { ctx: CanvasFeatureContext }) {
           <>
             {main.length > 0 && <span className="dr-cux-selbar__sep" aria-hidden="true" />}
             <BarButton
-              label="More: align, distribute and arrange"
+              label={moreLabel}
               testId="selection-more"
               inflow
               expanded={moreOpen}

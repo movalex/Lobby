@@ -173,12 +173,35 @@ function FromFramesButton({ ctx, selection }: { ctx: CanvasFeatureContext; selec
         type="button"
         className="dr-cux-selbar__btn"
         data-testid="selection-sb-from-frames"
+        aria-label="Make storyboard from frames"
         title="Make storyboard from frames"
         onClick={() => makeFromFrames(ctx, selection)}
       >
-        Make storyboard
+        <StoryboardIcon />
       </button>
     </span>
+  )
+}
+
+/** P-020: the bar's button is a picture with a tooltip: three panels in a row, the first one numbered. */
+function StoryboardIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={18}
+      height={18}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.4}
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <rect x="1.25" y="4.5" width="4" height="7" rx="0.75" />
+      <rect x="6" y="4.5" width="4" height="7" rx="0.75" />
+      <rect x="10.75" y="4.5" width="4" height="7" rx="0.75" />
+      <path d="M2.5 2.5h11" strokeLinecap="round" />
+    </svg>
   )
 }
 
@@ -186,6 +209,7 @@ export const SELECTION_BAR: readonly SelectionBarItemSpec[] = [
   {
     id: 'storyboard.from-frames',
     order: 58,
+    compactInMore: true,
     visible: (ctx, sel) => shown() && fromFramesTarget(ctx, sel) !== null,
     component: FromFramesButton,
   },
