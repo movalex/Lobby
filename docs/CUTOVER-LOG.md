@@ -496,3 +496,12 @@ on the sync disk (§6).
     - Cleanup: the board in Trash.
   - The deeper flows (status by a guest, versions and compare, video comments, the summary PDF) are covered by `s-int` and s1-s4 in the gate.
   - Waits for the NAS worker rebuild (owner approval): the video frame-rate probe (the viewer assumes 25 fps) and PSD/TIFF previews (`DRAFTROOM_DESIGN_PREVIEWS` off).
+- **2026-10-17 02:14-02:23Z, wave T deployed: storyboards and planning walls, `CONTRACTS_REV` 14** (main `711dd04`; 0 board connections in the 2 h before). In the DEPLOY.md order:
+  1. `DRAFTROOM_PLANNING=off` set on the sync;
+  2. api `dep-db9djsu7bikc73fl45m0`, sync `dep-db9dk9rrjlhs73ee369g`, web `dep-db9dks5g1s2s738amq6g`;
+  3. `DRAFTROOM_PLANNING=on`. A Render restart did NOT pick up the env change (the log still said "[planning] off"), so the sync was redeployed at the same commit (`dep-db9dnq61egvs73eshln0`), which logs "[planning] on".
+  - After:
+    - api `/healthz/deep` 200; sync ok; maintenance off;
+    - 0 error/FATAL lines; drift 0; live smoke 41/0.
+  - Live check, the owner on a new board: the palette's "Kanban board" made a Kanban frame with its columns (`kanban-layer`, `kanban-column`), and "Timeline" ran; the board said Saved and Live, so the rev-14 room accepted the planning keys.
+  - Cleanup: the board in Trash.
