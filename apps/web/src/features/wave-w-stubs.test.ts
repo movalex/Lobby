@@ -81,7 +81,8 @@ describe('the wave W board features and routes', () => {
     for (const id of ['doc-cards', 'remove-bg', 'deck-import']) {
       const f = CANVAS_FEATURES.find((x) => x.id === id)
       expect(f, id).toBeDefined()
-      expect(Object.keys(f ?? {}), id).toEqual(['id'])
+      // WS1 filled 'doc-cards' (it offers nothing while its switch is off: doc-cards/feature.test.ts)
+      if (id !== 'doc-cards') expect(Object.keys(f ?? {}), id).toEqual(['id'])
     }
     expect(ids.at(-1)).toBe('elements')
     expect(ids.indexOf('deck-import')).toBe(ids.indexOf('breakouts') + 3)
@@ -94,8 +95,10 @@ describe('the wave W board features and routes', () => {
     })
   })
 
-  it('every wave W palette id is pending until its owner registers it', () => {
+  it('every wave W palette id is pending until its owner registers it (WS1: doc-card.insert, doc-card.from-text)', () => {
     for (const id of WAVE_W_PALETTE_COMMAND_IDS)
-      expect(PENDING_PALETTE_COMMAND_IDS as readonly string[], id).toContain(id)
+      if (id.startsWith('doc-card.'))
+        expect(PENDING_PALETTE_COMMAND_IDS as readonly string[], id).not.toContain(id)
+      else expect(PENDING_PALETTE_COMMAND_IDS as readonly string[], id).toContain(id)
   })
 })
