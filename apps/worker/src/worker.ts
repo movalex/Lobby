@@ -11,6 +11,7 @@ import { reportedCapabilities } from './ops/capabilities.ts'
 import { createWorkerOpsApi } from './ops/client.ts'
 import { OP_RUNNERS } from './ops/dispatch.ts'
 import { createExtractTextRunner } from './ops/extract-text.ts'
+import { configureRenderPages } from './ops/render-pages.ts'
 import { startRemoteWorker } from './remote-loop.ts'
 
 const log = (line: string) => console.log(`[worker] ${line}`)
@@ -47,6 +48,8 @@ const apiOptions = {
 const api = createWorkerApi(apiOptions)
 // Wave W: the op kinds this worker reports (a runner, WORKER_OPS, and for remove-bg a model file that passes its
 // pinned sha256; ops/capabilities.ts). None reported: the worker never calls /api/worker/ops/*.
+// WS4: render-pages converts an Office deck with the previews' converter and renders with their pdf child's heap
+configureRenderPages({ office, officeTimeoutMs: cfg.office.timeoutMs, pdfHeapMb: cfg.pdfHeapMb })
 const opsReport = reportedCapabilities({
   enabled: cfg.ops,
   runners: OP_RUNNERS,

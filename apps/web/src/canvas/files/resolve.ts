@@ -32,6 +32,15 @@ export interface FileMetaSource {
     assetId: string,
     versionId: string,
   ): Promise<{ meta: AssetVersionMeta | null; missing: boolean; error: boolean }>
+  /**
+   * Wave W (deck import): asks again for a version whose cached terminal answer may be out of date (a ready PDF whose
+   * pages 9+ a render-pages op made later), rate-limited by the store. Optional: a source without it never refreshes.
+   */
+  refresh?(
+    boardId: string,
+    assetId: string,
+    versionId: string,
+  ): Promise<{ meta: AssetVersionMeta | null; missing: boolean; error: boolean }>
 }
 
 /** Derivatives whose ids are safe to put in a URL path (meta comes from the network: never trust it). */
@@ -147,9 +156,21 @@ export class FileUrlResolver {
   ): Promise<string | null> => {
     const assetId = this.assets.get(versionId)
     if (!assetId) return null
-    const snap = await this.meta.load(this.boardId, assetId, versionId)
+    let snap = await this.meta.load(this.boardId, assetId, versionId)
     if (!snap.meta || snap.missing) return null
-    const pick = pickFor(snap.meta, { derivative, page: file.page })
+    let pick = pickFor(snap.meta, { derivative, page: file.page })
+    // wave W (deck import): a placed page of a ready PDF that the cached answer has no rendering of may have been
+    // made since (pages 9+ come from render-pages ops after the preview): ask again (the store rate-limits it)
+    if (
+      !pick &&
+      file.page !== null &&
+      snap.meta.kind === 'pdf' &&
+      snap.meta.status === 'ready' &&
+      this.meta.refresh
+    ) {
+      snap = await this.meta.refresh(this.boardId, assetId, versionId)
+      pick = snap.meta && !snap.missing ? pickFor(snap.meta, { derivative, page: file.page }) : null
+    }
     if (!pick) return null
     return pick.kind === 'original'
       ? originalUrl(this.boardId, assetId, versionId)

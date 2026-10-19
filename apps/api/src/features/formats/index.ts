@@ -11,7 +11,7 @@ import { registerRemoveBackground } from './remove-bg/index.ts'
 
 export async function registerFormats(
   app: FastifyInstance,
-  // WS2: the landed routes read the database, the session and the clock (lazily, in their handlers)
+  // WS2, WS4: the landed routes read the database, the session and the clock (lazily, in their handlers)
   ctx: FeatureContext,
   pending: Readonly<Record<string, PendingRoute>> = PENDING_ROUTES,
 ): Promise<void> {

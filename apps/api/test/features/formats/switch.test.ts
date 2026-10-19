@@ -47,7 +47,10 @@ const LANDED: string[] = [
   FORMAT_ROUTE_KEYS.removeBackground, // WS2
   FORMAT_ROUTE_KEYS.opState, // WS2
   FORMAT_ROUTE_KEYS.opCancel, // WS2
+  FORMAT_ROUTE_KEYS.renderPages, // WS4
 ]
+/** The routes still stubbed (pending in the real app); a landed one is held to its gate here and tested by its owner. */
+const STUBBED = ROUTES.filter(([key]) => Object.hasOwn(PENDING_ROUTES, key))
 
 let app: FastifyInstance | null = null
 let api: TestApi | null = null
@@ -141,7 +144,7 @@ describe('the wave W kill switches', () => {
     await registerWorkspaceAdmin(a, switchesOnly(ALL_ON), {})
     await a.ready()
     app = a
-    for (const [key] of ROUTES.filter(([k]) => !LANDED.includes(k))) {
+    for (const [key] of STUBBED) {
       const [method = 'GET', pattern = ''] = key.split(' ') as ['GET' | 'POST', string]
       const res = await a.inject({ method, url: fill(pattern) })
       expect(res.statusCode, key).toBe(501)
@@ -178,9 +181,9 @@ describe('the wave W kill switches', () => {
       expect(Object.hasOwn(PENDING_ROUTES, key), key).toBe(false)
       expect(api.app.hasRoute({ method, url: pattern }), key).toBe(true)
     }
-    for (const [key] of ROUTES.filter(([k]) => !LANDED.includes(k))) {
+    expect(STUBBED.map(([k]) => k)).toEqual(ROUTES.map(([k]) => k).filter((k) => !LANDED.includes(k)))
+    for (const [key] of STUBBED) {
       const [method = 'GET', pattern = ''] = key.split(' ') as ['GET' | 'POST', string]
-      expect(Object.hasOwn(PENDING_ROUTES, key), key).toBe(true)
       expect(api.app.hasRoute({ method, url: pattern }), key).toBe(false)
       const res = await alice.req(method, fill(pattern), method === 'GET' ? undefined : {})
       expect(res.statusCode, key).toBe(404)

@@ -76,7 +76,7 @@ describe('the wave W switches', () => {
 })
 
 describe('the wave W board features and routes', () => {
-  it('doc-cards, remove-bg and deck-import are registered (empty until landed) before the Elements panel (the last)', () => {
+  it('doc-cards, remove-bg and deck-import are registered before the Elements panel (the last)', () => {
     const ids = CANVAS_FEATURES.map((f) => f.id)
     // WS2 landed remove-bg (features/remove-bg: its tracker and its held palette command); its own suite tests it
     expect(Object.keys(CANVAS_FEATURES.find((x) => x.id === 'remove-bg') ?? {})).toEqual([
@@ -87,8 +87,9 @@ describe('the wave W board features and routes', () => {
     for (const id of ['doc-cards', 'deck-import']) {
       const f = CANVAS_FEATURES.find((x) => x.id === id)
       expect(f, id).toBeDefined()
-      // WS1 filled 'doc-cards' (it offers nothing while its switch is off: doc-cards/feature.test.ts)
-      if (id !== 'doc-cards') expect(Object.keys(f ?? {}), id).toEqual(['id'])
+      // WS1 filled 'doc-cards' (it offers nothing while its switch is off: doc-cards/feature.test.ts) and WS4
+      // 'deck-import' (features/deck-import/deck-import.test.ts pins it): neither is the empty stub any more
+      expect(Object.keys(f ?? {}).length, id).toBeGreaterThan(1)
     }
     expect(ids.at(-1)).toBe('elements')
     expect(ids.indexOf('deck-import')).toBe(ids.indexOf('breakouts') + 3)

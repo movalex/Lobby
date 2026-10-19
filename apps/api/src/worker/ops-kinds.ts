@@ -9,6 +9,7 @@
 
 import type { WorkerOpKind, WorkerOpOutputInput, WorkerOpTextInput } from '@draftroom/contracts'
 import type { Queryable } from '@draftroom/db'
+import { renderPagesKind } from '../features/formats/deck/kind.ts'
 import { removeBgKind } from '../features/formats/remove-bg/kind.ts'
 import { extractTextKind } from '../features/search/file-text-kind.ts'
 
@@ -104,5 +105,8 @@ export const OP_KINDS: Readonly<Record<WorkerOpKind, OpKindHandler>> = {
   get 'extract-text'() {
     return extractTextKind
   },
-  'render-pages': stubKind('render-pages'), // WS4: features/formats/deck/kind.ts
+  // WS4: features/formats/deck/kind.ts
+  get 'render-pages'() {
+    return renderPagesKind
+  },
 }

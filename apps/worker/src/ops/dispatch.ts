@@ -8,6 +8,7 @@ import type { WorkerApi } from '../api-client.ts'
 import type { ClaimedOp, OpLease, WorkerOpsApi } from './client.ts'
 import { createExtractTextRunner } from './extract-text.ts'
 import { removeBgRunner } from './remove-bg.ts'
+import { renderPagesRunner } from './render-pages.ts'
 
 export interface OpRunContext {
   op: ClaimedOp
@@ -58,5 +59,8 @@ export const OP_RUNNERS: Readonly<Partial<Record<WorkerOpKind, OpRunner>>> = {
   get 'extract-text'() {
     return createExtractTextRunner()
   },
-  // 'render-pages': renderPagesRunner,  WS4 (ops/render-pages.ts, reusing pdf-child.ts)
+  // WS4 (ops/render-pages.ts, reusing pdf-child.ts); worker.ts configures its office converter (configureRenderPages)
+  get 'render-pages'() {
+    return renderPagesRunner
+  },
 }

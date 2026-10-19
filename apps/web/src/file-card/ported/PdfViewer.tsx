@@ -23,6 +23,7 @@ import { derivativeUrl, originalUrl } from '../../assets/contract.ts'
 import { useAssetMeta } from '../../assets/meta-store.ts'
 import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
 import { controllerFor } from '../../features/comments/ported/controller.ts'
+import { DeckViewerButton } from '../../features/deck-import/ViewerButton.tsx'
 import { reviewFlags } from '../../features/review/flags.ts'
 import { threadsOfVersion, threadsPerPage } from '../../features/review-viewer/threads/model.ts'
 import { useUserKind } from '../../invite/guest.tsx'
@@ -235,6 +236,8 @@ function PdfViewer({ ctx, facts, initialPage, onClose }: ViewerProps) {
           </p>
         </div>
         <div className="dr-pv__head-actions">
+          {/* wave W (WS4): "Insert as slides" (features/deck-import; nothing while it is not offered) */}
+          {!snap.missing && <DeckViewerButton ctx={ctx} facts={facts} onOpen={onClose} />}
           {!snap.missing && canDownload && (
             <a
               className="dr-btn dr-btn--sm"

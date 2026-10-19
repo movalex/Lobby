@@ -117,6 +117,8 @@ const WAVE_W_LANDED: string[] = [
   FORMAT_ROUTE_KEYS.removeBackground,
   FORMAT_ROUTE_KEYS.opState,
   FORMAT_ROUTE_KEYS.opCancel,
+  // WS4 (W4-1, render a deck's pages): features/formats/deck
+  FORMAT_ROUTE_KEYS.renderPages,
 ]
 const WAVE_W_ROUTES: string[] = [
   ...Object.values(FORMAT_ROUTE_KEYS),

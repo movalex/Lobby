@@ -60,7 +60,7 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   // foundation, and hand out nothing until a browser route queues an op.
   // WS2 implemented its three (W2-1 remove a background, W2-2 an op's state and cancel; features/formats/remove-bg and
   // ops): to ship one hidden, add its key back.
-  'POST /api/files/:ver/render-pages': { owner: 'WS4', item: 'W4-1' },
+  // WS4 implemented W4-1 (render a deck's pages, features/formats/deck): to ship it hidden, add its key back.
   'GET /api/workspaces/:wid/admin/members': { owner: 'WS5', item: 'W5-1' },
   'GET /api/workspaces/:wid/admin/invitations': { owner: 'WS5', item: 'W5-1' },
   'GET /api/workspaces/:wid/admin/storage/by-board': { owner: 'WS5', item: 'W5-2' },
