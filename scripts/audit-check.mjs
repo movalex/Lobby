@@ -74,6 +74,14 @@ export const ALLOWLIST = [
     reason:
       "Reached only through @excalidraw/excalidraw > sass > chokidar > braces. sass is a build-time dependency of the Excalidraw package that neither Lobby's source nor Excalidraw's compiled dist imports, and the vulnerable pattern comes from a file-watcher glob, not from user input. No patched release exists (the advisory's range is <=3.0.3, patched <0.0.0), so there is nothing to bump to (docs/SECURITY-REVIEW-2026-10-02.md section 2).",
   },
+  {
+    ghsa: 'GHSA-68fv-2mgg-jv7q',
+    package: 'source-map-js',
+    versions: ['1.2.1'],
+    route: '@excalidraw/excalidraw>sass>source-map-js',
+    reason:
+      "Reached only through @excalidraw/excalidraw > sass > source-map-js, the same build-time-only sass as the braces entry: neither Lobby's source nor Excalidraw's compiled dist imports sass, so source-map-js never runs in the browser, the api, the sync or the worker, and it never parses a source map from user input. The fix (1.2.2) arrives with the dedicated @excalidraw/* bump PR that AGENTS.md requires; a pnpm override of a dependency inside the pinned engine is out of scope for wave W (reviewed 2026-10-19).",
+  },
 ]
 
 /**

@@ -45,7 +45,7 @@ catalog:
   '@types/ws': 8.18.1
   '@biomejs/biome': 2.5.14
   # file previews (apps/worker)
-  sharp: 0.35.4
+  sharp: 0.35.5
   pdfjs-dist: 6.3.289
   '@napi-rs/canvas': 1.0.9
   pdf-lib: 1.17.1

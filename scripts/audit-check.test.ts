@@ -1,5 +1,5 @@
 // scripts/audit-check.mjs (wave C4): the CI dependency audit's judgement of a `pnpm audit --prod --json` report.
-// The fixture is the five advisories the owner has been told about (docs/SECURITY-REVIEW-2026-10-02.md section 2),
+// The fixture is the six advisories the owner has been told about (docs/SECURITY-REVIEW-2026-10-02.md section 2),
 // in the shape pnpm 10.34.5 prints them.
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -12,6 +12,7 @@ import { ALLOWLIST, evaluate } from './audit-check.mjs'
 const SCRIPT = fileURLToPath(new URL('./audit-check.mjs', import.meta.url))
 const NANOID_PATH = 'apps__web>@excalidraw/excalidraw>@excalidraw/mermaid-to-excalidraw>nanoid'
 const BRACES_PATH = 'apps__web>@excalidraw/excalidraw>sass>chokidar>braces'
+const SOURCE_MAP_PATH = 'apps__web>@excalidraw/excalidraw>sass>source-map-js'
 
 interface Adv {
   id: number
@@ -47,20 +48,21 @@ const KNOWN = [
   adv(1139455, 'GHSA-2v37-7h3g-55p8', 'nanoid', 'high', '4.0.2', NANOID_PATH),
   adv(1153188, 'GHSA-xwg4-73v4-xw9w', 'nanoid', 'high', '4.0.2', NANOID_PATH),
   adv(1240992, 'GHSA-vfj7-8cjw-p6xm', 'braces', 'high', '3.0.3', BRACES_PATH),
+  adv(1241209, 'GHSA-68fv-2mgg-jv7q', 'source-map-js', 'high', '1.2.1', SOURCE_MAP_PATH),
 ]
 
 describe('the allowlist', () => {
-  it('lists the 5 known advisories, each with a reason', () => {
+  it('lists the 6 known advisories, each with a reason', () => {
     expect(ALLOWLIST.map((e) => e.ghsa).sort()).toEqual(KNOWN.map((a) => a.github_advisory_id).sort())
     for (const e of ALLOWLIST) expect(e.reason.length).toBeGreaterThan(80)
   })
 })
 
 describe('evaluate', () => {
-  it("passes today's report: 5 advisories (4 high, 1 moderate), all allowlisted", () => {
+  it("passes today's report: 6 advisories (5 high, 1 moderate), all allowlisted", () => {
     const r = evaluate(report(...KNOWN))
     expect(r.failures).toEqual([])
-    expect(r.allowed).toHaveLength(5)
+    expect(r.allowed).toHaveLength(6)
     expect(r.warnings).toEqual([])
     expect(r.removable).toEqual([])
   })
@@ -116,6 +118,7 @@ describe('evaluate', () => {
       'GHSA-28wg-ghj8-5hjv (nanoid)',
       'GHSA-2v37-7h3g-55p8 (nanoid)',
       'GHSA-xwg4-73v4-xw9w (nanoid)',
+      'GHSA-68fv-2mgg-jv7q (source-map-js)',
     ])
   })
 

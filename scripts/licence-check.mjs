@@ -101,7 +101,7 @@ const ALLOWLIST = [
       '@img/sharp-libvips-darwin-arm64',
       '@img/sharp-libvips-darwin-x64',
     ],
-    versions: ['1.3.3'],
+    versions: ['1.3.4'],
     licence: 'LGPL-3.0-or-later',
     apps: ['@draftroom/worker'],
     reason:
@@ -109,7 +109,7 @@ const ALLOWLIST = [
   },
   {
     names: ['@img/sharp-win32-x64', '@img/sharp-win32-arm64', '@img/sharp-win32-ia32'],
-    versions: ['0.35.4'],
+    versions: ['0.35.5'],
     licence: 'Apache-2.0 AND LGPL-3.0-or-later',
     apps: ['@draftroom/worker'],
     reason:
