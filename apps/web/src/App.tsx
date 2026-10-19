@@ -208,7 +208,13 @@ function Routes() {
  * otherwise this address is the unknown-address screen. A signal: the page appears when the config's answer arrives.
  */
 function AdminGate({ children }: { children: ReactNode }) {
+  const { configStatus, retryConfig } = useSession()
   const offered = useValue('lobby-admin-offered', () => formatsEnabled('admin'), [])
+  // The api's offer arrives with GET /api/auth/config: until then the page is neither offered nor refused, so an
+  // owner never sees "Page not found" first (the wave W integration's fix of WS5's gate).
+  if (configStatus === 'loading') return <LoadingScreen label="Loading…" testId="workspace-admin-loading" />
+  if (configStatus === 'error')
+    return <UnreachableScreen message="Lobby's settings could not be loaded." onRetry={retryConfig} />
   if (!offered) return <MessageScreen title="Page not found" body="There is nothing at this address." />
   return <>{children}</>
 }
