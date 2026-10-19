@@ -149,8 +149,8 @@ test('v4: a poll, a word cloud and breakouts in Wrap up without AI, in the Recap
     for (const k of keys) localStorage.setItem(k, '1')
   }, LIVE_FLAG_KEYS)
   await reloadBoard(a)
-  // the session's first edit: Wrap up's window starts there (window.ts sessionSince; WS2's sources keep what ran since)
-  await seed(a.page, { notes: [{ id: 'v4-agenda', x: -400, y: 0, text: 'Agenda' }] })
+  // The poll runs before anything is drawn: the board's first edit (the note below) comes after it, and Wrap up still
+  // counts it (the integration's finding: the sources read the session's whole day, ai/recap/sources.ts).
 
   await test.step('a poll with formula-like options: answered by bob and carol, revealed', async () => {
     type St = { activity: { id: string } }
@@ -176,6 +176,8 @@ test('v4: a poll, a word cloud and breakouts in Wrap up without AI, in the Recap
     )
     await json(await alice.fetch('POST', activityActionPath(aid, 'reveal')), 200)
   })
+  // the session's first edit, after the poll: Wrap up's own window (votes, AI) starts here
+  await seed(a.page, { notes: [{ id: 'v4-agenda', x: -400, y: 0, text: 'Agenda' }] })
 
   await test.step('a word cloud: case variants group, a formula-like word, revealed', async () => {
     type St = { activity: { id: string } }
