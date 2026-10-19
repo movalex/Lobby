@@ -58,12 +58,17 @@ export async function replaceEntries(
 export async function purgeBoard(q: Queryable, boardId: string): Promise<void> {
   await q.query('DELETE FROM board_search_entries WHERE board_id = $1', [boardId])
   await q.query('DELETE FROM board_search_state WHERE board_id = $1', [boardId])
+  // wave W (WS3): the files its canvas showed (a restored board is reindexed from scratch, refs included)
+  await q.query('DELETE FROM board_file_refs WHERE board_id = $1', [boardId])
 }
 
 /** Removes every trashed board from the index; returns how many boards had state. */
 export async function purgeTrashed(q: Queryable): Promise<number> {
   await q.query(
     `DELETE FROM board_search_entries e USING boards b WHERE b.id = e.board_id AND b.status = 'trashed'`,
+  )
+  await q.query(
+    `DELETE FROM board_file_refs r USING boards b WHERE b.id = r.board_id AND b.status = 'trashed'`,
   )
   const r = await q.query(
     `DELETE FROM board_search_state s USING boards b WHERE b.id = s.board_id AND b.status = 'trashed'`,
@@ -73,7 +78,8 @@ export async function purgeTrashed(q: Queryable): Promise<number> {
 
 export interface RankedRow {
   board_id: string
-  source: EntrySource
+  /** wave W (WS3): 'file', a page of a file's extracted text (object_id `file:<ver>.p<page>`) */
+  source: EntrySource | 'file'
   object_id: string
   kind: SearchHitKind
   page_id: string | null
@@ -116,11 +122,47 @@ export async function rankedHits(
      * threads, whatever the asker may read of them). Absent: every source, as the search route has it.
      */
     source?: EntrySource
+    /**
+     * Wave W (WS3, docs/WAVE-W-CONTRACTS.md §5): also the pages of files' extracted text (FILE_HITS_CTE), at most
+     * `maxPerBoard` of a board's returned hits (the rest still count in its `board_hits`). Absent (DRAFTROOM_FILE_SEARCH
+     * off): the CTE is skipped and the statement is the one before wave W.
+     */
+    files?: { maxPerBoard: number }
   },
 ): Promise<RankedRow[]> {
   if (!opts.boardIds.length || !opts.query.simple) return []
+  const params: unknown[] = [
+    opts.query.simple,
+    opts.query.english,
+    opts.workspaceId,
+    opts.boardIds,
+    opts.boards,
+    opts.perBoard,
+    opts.team,
+  ]
+  const param = (v: unknown) => {
+    params.push(v)
+    return `$${params.length}`
+  }
   // Only an asked-for source adds a condition (and a parameter): the search route's statement is unchanged.
-  const only = opts.source === undefined ? '' : ' AND e.source = $8'
+  const only = opts.source === undefined ? '' : ` AND e.source = ${param(opts.source)}`
+  const files = opts.files
+    ? `, f AS (${FILE_HITS_CTE}), fr AS (
+         SELECT f.*, row_number() OVER (PARTITION BY f.board_id ORDER BY f.rank DESC, f.object_id) AS fn FROM f
+       ), u AS (
+         SELECT m.*, true AS eligible FROM m
+         UNION ALL
+         SELECT fr.board_id, fr.source, fr.object_id, fr.kind, fr.page_id, fr.rank,
+                fr.fn <= ${param(opts.files.maxPerBoard)} AS eligible
+           FROM fr
+       )`
+    : ''
+  // with files, a board's hits are ranked among its eligible ones first (a file page past its board's file share is
+  // never returned, but counts); the best hit of a board is always eligible, so boards rank as before
+  const from = opts.files ? 'u' : 'm'
+  const order = opts.files
+    ? 'u.eligible DESC, u.rank DESC, u.source, u.object_id'
+    : 'm.rank DESC, m.source, m.object_id'
   const r = await q.query<RankedRow>(
     `WITH m AS (
        SELECT e.board_id, e.source, e.object_id, e.kind, e.page_id,
@@ -130,12 +172,12 @@ export async function rankedHits(
           AND ($7::boolean OR e.source <> 'comment' OR EXISTS (
                 SELECT 1 FROM comment_threads t
                  WHERE t.id = e.object_id AND t.board_id = e.board_id AND t.visibility = 'everyone'))
-     ), r AS (
-       SELECT m.*,
-              row_number() OVER (PARTITION BY m.board_id ORDER BY m.rank DESC, m.source, m.object_id) AS n,
-              count(*) OVER (PARTITION BY m.board_id) AS board_hits,
+     )${files}, r AS (
+       SELECT ${from}.*,
+              row_number() OVER (PARTITION BY ${from}.board_id ORDER BY ${order}) AS n,
+              count(*) OVER (PARTITION BY ${from}.board_id) AS board_hits,
               count(*) OVER () AS total_hits
-         FROM m
+         FROM ${from}
      ), top AS (
        SELECT r.board_id, r.rank AS best, count(*) OVER () AS total_boards
          FROM r
@@ -147,20 +189,71 @@ export async function rankedHits(
             r.board_hits::int AS board_hits, top.total_boards::int AS total_boards,
             r.total_hits::int AS total_hits
        FROM top
-       JOIN r ON r.board_id = top.board_id AND r.n <= $6
+       JOIN r ON r.board_id = top.board_id AND r.n <= $6${opts.files ? ' AND r.eligible' : ''}
       ORDER BY top.best DESC, top.board_id, r.n`,
-    [
-      opts.query.simple,
-      opts.query.english,
-      opts.workspaceId,
-      opts.boardIds,
-      opts.boards,
-      opts.perBoard,
-      opts.team,
-      ...(opts.source === undefined ? [] : [opts.source]),
-    ],
+    params,
   )
   return r.rows
+}
+
+/**
+ * Wave W (WS3, docs/WAVE-W-CONTRACTS.md §5): the file pages a search may return, as rows of rankedHits' `m` (board,
+ * source 'file', object `file:<ver>.p<page>`, kind 'file', no page id, rank), over the same parameters ($1/$2 the
+ * queries, $3 the workspace, $4 the boards, all of which already passed the caller's permission filter). A page counts
+ * for a board only when, at this moment:
+ * - its version's text is `done` (a version mid-extraction, failed or skipped has none to show);
+ * - the board's CANVAS shows the version (board_file_refs, refreshed at each canvas reindex: a removed card, or a
+ *   version only in "Recently deleted", never counts);
+ * - the board may serve the version, by files-auth.ts's rule: the version was uploaded to that board, or the board
+ *   holds a link to it (board_asset_links, the upload's board in the same workspace);
+ * - and everything is of the asker's workspace.
+ * Nothing of it is cached per person: a lost grant, a trashed board or a removed card count at the next query.
+ */
+export const FILE_HITS_CTE = `
+  SELECT r.board_id, 'file'::text AS source, 'file:' || p.version_id || '.p' || p.page::text AS object_id,
+         'file'::text AS kind, NULL::text AS page_id, ts_rank_cd(p.tsv, ${QUERY_SQL}, 32)::float8 AS rank
+    FROM file_text_pages p
+    JOIN file_text_state st ON st.version_id = p.version_id AND st.status = 'done'
+    JOIN board_file_refs r ON r.version_id = p.version_id AND r.workspace_id = $3 AND r.board_id = ANY($4::text[])
+    JOIN asset_versions v ON v.id = p.version_id AND v.workspace_id = $3
+   WHERE p.workspace_id = $3 AND p.tsv @@ ${QUERY_SQL}
+     AND (v.board_id = r.board_id OR EXISTS (
+           SELECT 1 FROM board_asset_links l
+             JOIN boards owner ON owner.id = v.board_id AND owner.workspace_id = l.workspace_id
+            WHERE l.workspace_id = $3 AND l.board_id = r.board_id AND l.asset_id = v.asset_id AND l.version_id = v.id))`
+
+export interface FileHeadlineRow {
+  i: number
+  body: string
+  headline: string
+  name: string
+}
+
+/** ts_headline snippets of chosen file hits, and the file's display name (in `keys` order, by index). */
+export async function fileHeadlines(
+  q: Queryable,
+  query: TsQueries,
+  workspaceId: string,
+  keys: readonly { versionId: string; page: number }[],
+): Promise<Map<number, FileHeadlineRow>> {
+  const out = new Map<number, FileHeadlineRow>()
+  if (!keys.length) return out
+  const r = await q.query<FileHeadlineRow>(
+    `SELECT k.i::int AS i, p.body, v.name, ts_headline('english', p.body, ${QUERY_SQL}, $3) AS headline
+       FROM unnest($5::text[], $6::int[]) WITH ORDINALITY AS k(version_id, page, i)
+       JOIN file_text_pages p ON p.version_id = k.version_id AND p.page = k.page AND p.workspace_id = $4
+       JOIN asset_versions v ON v.id = p.version_id AND v.workspace_id = $4`,
+    [
+      query.simple,
+      query.english,
+      HEADLINE_OPTIONS,
+      workspaceId,
+      keys.map((k) => k.versionId),
+      keys.map((k) => k.page),
+    ],
+  )
+  for (const row of r.rows) out.set(row.i - 1, row)
+  return out
 }
 
 export interface EntryKey {
