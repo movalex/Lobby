@@ -90,7 +90,9 @@ const WAVE_S_OWNERS: Record<string, string> = {
  * PENDING_ROUTES in the change that implements them; the refusal and creation matrices then hold them to their guard
  * rows, and features/live/switch.test.ts to their kill switch.
  */
-const WAVE_V_ROUTES: string[] = [...ACTIVITY_ROUTE_KEYS, ...JOIN_CODE_ROUTE_KEYS, ...BREAKOUT_ROUTE_KEYS]
+const WAVE_V_ROUTES: string[] = [...ACTIVITY_ROUTE_KEYS, ...JOIN_CODE_ROUTE_KEYS]
+/** Every wave V route, pending or landed (WS4 landed BREAKOUT_ROUTE_KEYS): the guard and creator rows hold for all. */
+const WAVE_V_ALL: string[] = [...WAVE_V_ROUTES, ...BREAKOUT_ROUTE_KEYS]
 const WAVE_V_OWNERS: Record<string, string> = {
   ...Object.fromEntries(ACTIVITY_ROUTE_KEYS.map((k) => [k, 'WS1'])),
   ...Object.fromEntries(JOIN_CODE_ROUTE_KEYS.map((k) => [k, 'WS3'])),
@@ -134,8 +136,8 @@ describe('the pending list', () => {
     }
   })
 
-  it('wave V: a guest is refused every facilitator route and the join code; only the join code has a creator row; all pending', () => {
-    const guestRows = Object.entries(GUEST_REFUSED_ROUTES).filter(([k]) => WAVE_V_ROUTES.includes(k))
+  it('wave V: a guest is refused every facilitator route and the join code; only the join code has a creator row; breakouts landed, the rest pending', () => {
+    const guestRows = Object.entries(GUEST_REFUSED_ROUTES).filter(([k]) => WAVE_V_ALL.includes(k))
     const facilitator = [...ACTIVITY_FACILITATOR_ROUTE_KEYS, ...BREAKOUT_FACILITATOR_ROUTE_KEYS] as string[]
     expect(guestRows.map(([k]) => k).sort()).toEqual([...facilitator, ...JOIN_CODE_CREATOR_ROUTE_KEYS].sort())
     for (const [k, m] of guestRows)
@@ -153,11 +155,12 @@ describe('the pending list', () => {
       'GET /api/join/:code',
     ])
       expect(Object.hasOwn(GUEST_REFUSED_ROUTES, k), k).toBe(false)
-    const creatorRows = Object.entries(CREATOR_ROUTES).filter(([k]) => WAVE_V_ROUTES.includes(k))
+    const creatorRows = Object.entries(CREATOR_ROUTES).filter(([k]) => WAVE_V_ALL.includes(k))
     expect(creatorRows).toEqual([
       ['POST /api/boards/:bid/review-links/:id/code', { purpose: 'share', refuse: 'always' }],
     ])
     for (const k of WAVE_V_ROUTES) expect(isPendingRoute(k), k).toBe(true)
+    for (const k of BREAKOUT_ROUTE_KEYS) expect(isPendingRoute(k), k).toBe(false)
   })
 
   it('wave S: a guest is refused exactly the five manage routes; no route has a creator row; every route live', () => {

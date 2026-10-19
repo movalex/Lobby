@@ -21,8 +21,10 @@ let w: World
 let sam: GuestClient
 /** bob's other boards in Dev Studio: private, workspace-view and workspace-edit (members see two). */
 let others: { priv: string; wsView: string; wsEdit: string }
+// wave V: the live switches on (as the e2e stack runs), so a landed wave V route is held to its guard row here
+const LIVE_ON = { DRAFTROOM_LIVE_ACTIVITIES: 'on', DRAFTROOM_JOIN_CODES: 'on', DRAFTROOM_BREAKOUTS: 'on' }
 beforeEach(async () => {
-  w = await setupWorld()
+  w = await setupWorld({ env: LIVE_ON })
   sam = await joinAsGuest(w.api, (await guestLink(w.bob, w.board, { role: 'commenter' })).url, 'Sam')
   const priv = await createBoard(w.bob, DEV_STUDIO, 'Private plan')
   const wsView = await createBoard(w.bob, DEV_STUDIO, 'Team view')

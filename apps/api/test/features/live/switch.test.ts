@@ -15,7 +15,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { toErrorResponse } from '../../../src/errors.ts'
 import { registerBreakouts } from '../../../src/features/breakouts/index.ts'
 import { registerJoinCodes } from '../../../src/features/join-codes/index.ts'
-import { liveOn, liveRoute, requireLive } from '../../../src/features/live/switch.ts'
+import { type LiveSwitchSource, liveOn, liveRoute, requireLive } from '../../../src/features/live/switch.ts'
 import { registerLiveActivities } from '../../../src/features/live-activities/index.ts'
 import { PENDING_ROUTES } from '../../../src/features/pending-routes.ts'
 import { createTestApi, type TestApi } from '../../helpers.ts'
@@ -24,11 +24,15 @@ const UNKNOWN = { error: { code: 'NOT_FOUND', message: 'Not found.' } }
 const ALL_OFF: LiveSwitches = { activities: false, joinCodes: false, breakouts: false }
 const ALL_ON: LiveSwitches = { activities: true, joinCodes: true, breakouts: true }
 
-const FEATURES: [LiveSwitch, readonly string[], typeof registerLiveActivities][] = [
+type Register = (app: FastifyInstance, ctx: LiveSwitchSource, pending: Record<string, never>) => Promise<void>
+const FEATURES: [LiveSwitch, readonly string[], Register][] = [
   ['activities', ACTIVITY_ROUTE_KEYS, registerLiveActivities],
   ['joinCodes', JOIN_CODE_ROUTE_KEYS, registerJoinCodes],
-  ['breakouts', BREAKOUT_ROUTE_KEYS, registerBreakouts],
+  // WS4 landed breakouts: its real module needs the whole feature context only once a handler runs (never here)
+  ['breakouts', BREAKOUT_ROUTE_KEYS, registerBreakouts as unknown as Register],
 ]
+/** The features whose routes are still the foundation's 501 stub (a landed feature's handlers need the real app). */
+const LANDED: readonly LiveSwitch[] = ['breakouts']
 
 const fill = (pattern: string) => pattern.replace(/:\w+/g, 'x1')
 
@@ -121,8 +125,9 @@ describe('the wave V kill switches', () => {
     for (const [, , register] of FEATURES) await register(a, { config: { live: ALL_ON } }, {})
     await a.ready()
     app = a
-    for (const [, keys] of FEATURES)
+    for (const [sw, keys] of FEATURES)
       for (const key of keys) {
+        if (LANDED.includes(sw)) continue
         const [method = 'GET', pattern = ''] = key.split(' ') as ['GET' | 'POST', string]
         const res = await a.inject({ method, url: fill(pattern) })
         expect(res.statusCode, key).toBe(501)

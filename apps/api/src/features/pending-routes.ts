@@ -47,7 +47,8 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   // ACTIVITY_ROUTE_KEYS (WS1: V1-1 start, state and answer; V1-2 close, reveal, extend, cancel, results, named answers;
   // V1-3 hide, placed, the past list; features/live-activities), JOIN_CODE_ROUTE_KEYS (WS3: V2-1 a link's code, V2-2
   // resolve; features/join-codes) and BREAKOUT_ROUTE_KEYS (WS4: V3-1 start, state, extend, end; V3-2 assign, shuffle,
-  // join; V3-3 broadcast, summon; features/breakouts). Once implemented, each is gated by its kill switch as well.
+  // join; V3-3 broadcast, summon; features/breakouts: all implemented, none left). Once implemented, each is gated by its
+  // kill switch as well.
   'GET /api/boards/:bid/activity': { owner: 'WS1', item: 'V1-1' },
   'POST /api/boards/:bid/activities': { owner: 'WS1', item: 'V1-1' },
   'POST /api/activities/:aid/answer': { owner: 'WS1', item: 'V1-1' },
@@ -62,15 +63,6 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   'GET /api/boards/:bid/activities': { owner: 'WS1', item: 'V1-3' },
   'POST /api/boards/:bid/review-links/:id/code': { owner: 'WS3', item: 'V2-1' },
   'GET /api/join/:code': { owner: 'WS3', item: 'V2-2' },
-  'GET /api/boards/:bid/breakouts': { owner: 'WS4', item: 'V3-1' },
-  'POST /api/boards/:bid/breakouts': { owner: 'WS4', item: 'V3-1' },
-  'POST /api/breakouts/:brk/extend': { owner: 'WS4', item: 'V3-1' },
-  'POST /api/breakouts/:brk/end': { owner: 'WS4', item: 'V3-1' },
-  'POST /api/breakouts/:brk/assign': { owner: 'WS4', item: 'V3-2' },
-  'POST /api/breakouts/:brk/shuffle': { owner: 'WS4', item: 'V3-2' },
-  'POST /api/breakouts/:brk/join': { owner: 'WS4', item: 'V3-2' },
-  'POST /api/breakouts/:brk/broadcast': { owner: 'WS4', item: 'V3-3' },
-  'POST /api/breakouts/:brk/summon': { owner: 'WS4', item: 'V3-3' },
 }
 
 export const isPendingRoute = (
