@@ -16,6 +16,8 @@ export type Route =
   | { name: 'invite'; token: string }
   /** Wave V (WS3): a join code, /j/ABCD-2345 (features/join; the page normalizes it, contracts normalizeJoinCode). */
   | { name: 'join'; code: string }
+  /** Wave W (WS5): the workspace admin page, /w/:wid/admin (features/workspace-admin; owners and admins only). */
+  | { name: 'workspace-admin'; workspaceId: string }
   /** Wave J5: the feedback inbox (features/feedback/FeedbackPage.tsx); the api decides who may read it. */
   | { name: 'feedback' }
   | { name: 'invalid-board'; raw: string }
@@ -80,6 +82,7 @@ export function matchRoute(pathname: string): Route {
       return { name: 'workspace', workspaceId, section: { kind: 'archived' } }
     if (parts.length === 3 && b === 'trash')
       return { name: 'workspace', workspaceId, section: { kind: 'trash' } }
+    if (parts.length === 3 && b === 'admin') return { name: 'workspace-admin', workspaceId }
     if (parts.length === 4 && b === 'p' && c !== undefined && PROJECT_ID_RE.test(c))
       return { name: 'workspace', workspaceId, section: { kind: 'project', projectId: c } }
   }

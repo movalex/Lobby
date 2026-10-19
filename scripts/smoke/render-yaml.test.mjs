@@ -256,6 +256,21 @@ test('render.yaml: the wave V switches are on the api only, and on (wave V deplo
   }
 })
 
+test('render.yaml: the wave W switches are on the api only, and off until the wave W deploy', () => {
+  for (const key of [
+    'DRAFTROOM_DOC_CARDS',
+    'DRAFTROOM_REMOVE_BACKGROUND',
+    'DRAFTROOM_FILE_SEARCH',
+    'DRAFTROOM_DECK_IMPORT',
+    'DRAFTROOM_WORKSPACE_ADMIN',
+  ]) {
+    assert.equal(envValue(RENDER_YAML, 'draftroom-staging-api', key), 'off', key)
+    // an api setting only: sync and web never read it
+    assert.equal(envValue(RENDER_YAML, 'draftroom-staging-sync', key), null, key)
+    assert.equal(envValue(RENDER_YAML, 'draftroom-staging-web', key), null, key)
+  }
+})
+
 test('render.yaml: the wave R key (a generated secret in its own group, linked to the api only)', () => {
   const keys = groupKeys(RENDER_YAML, 'draftroom-staging-webhook-secret')
   assert.ok(keys, 'the group exists')

@@ -347,6 +347,14 @@ export async function startStack(opts: StackOptions = {}): Promise<Stack> {
       DRAFTROOM_LIVE_ACTIVITIES: 'on',
       DRAFTROOM_JOIN_CODES: 'on',
       DRAFTROOM_BREAKOUTS: 'on',
+      // Wave W (docs/WAVE-W-CONTRACTS.md §1): the "Formats" api switches, on for every stack (each browser route is
+      // pending until its workstream lands it, every web switch is off until then, and the worker-backed three are
+      // offered only once the stack's worker reports their capability; a spec can set 'off' through apiEnv)
+      DRAFTROOM_DOC_CARDS: 'on',
+      DRAFTROOM_REMOVE_BACKGROUND: 'on',
+      DRAFTROOM_FILE_SEARCH: 'on',
+      DRAFTROOM_DECK_IMPORT: 'on',
+      DRAFTROOM_WORKSPACE_ADMIN: 'on',
       ...blobs,
       ...directEventsEnv(),
       ...opts.apiEnv,

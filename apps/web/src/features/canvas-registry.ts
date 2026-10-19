@@ -11,6 +11,8 @@
 // 'timeline', empty (each workstream fills its own; features/planning holds what they share).
 // Wave V: lead-only; the foundation registers 'live-activities' (WS2's), 'join' (WS3's) and 'breakouts' (WS4's), empty
 // (features/live holds their switches; workshops/ported/facilitate-entries.ts their Facilitate entries).
+// Wave W: lead-only; the foundation registers 'doc-cards' (WS1's), 'remove-bg' (WS2's) and 'deck-import' (WS4's), empty
+// (features/formats holds their switches).
 import type { CanvasFeature } from '../canvas/api/index.ts'
 import { feature as mediaFeature } from '../file-card/ported/index.tsx'
 import { feature as a11yFeature } from './a11y/ported/index.tsx'
@@ -25,6 +27,8 @@ import { feature as cardsFeature } from './cards/index.tsx'
 import { feature as commandPaletteFeature } from './command-palette/index.tsx'
 import { feature as commentsFeature } from './comments/ported/index.tsx'
 import { feature as cursorChatFeature } from './cursor-chat/ported/index.tsx'
+import { feature as deckImportFeature } from './deck-import/index.tsx'
+import { feature as docCardsFeature } from './doc-cards/index.tsx'
 import { feature as elementsFeature } from './elements/index.tsx'
 import { feature as flowFeature } from './flow/ported/index.tsx'
 import { feature as historyFeature } from './history/ported/index.tsx'
@@ -36,6 +40,7 @@ import { feature as peopleFeature } from './people/ported/index.tsx'
 import { feature as piecesFeature } from './pieces/ported/index.tsx'
 import { feature as presentLiveFeature } from './present-export/live/ported/index.tsx'
 import { feature as presentExportFeature } from './present-export/ported/index.tsx'
+import { feature as removeBgFeature } from './remove-bg/index.tsx'
 import { feature as reviewFeature } from './review/index.tsx'
 import { feature as reviewPageFeature } from './review-page/index.tsx'
 import { feature as sharingFeature } from './sharing/ported/index.tsx'
@@ -102,6 +107,11 @@ export const CANVAS_FEATURES: readonly CanvasFeature[] = [
   liveActivitiesFeature,
   joinFeature,
   breakoutsFeature,
+  // wave W (registered empty by the foundation; each contributes nothing while its FORMATS_FLAGS switch is off): doc
+  // cards (WS1), background removal (WS2), deck import (WS4)
+  docCardsFeature,
+  removeBgFeature,
+  deckImportFeature,
   // wave Q (registered by the foundation, hidden behind ELEMENTS_PANEL; WS3 fills it): the Elements panel
   elementsFeature,
 ]
