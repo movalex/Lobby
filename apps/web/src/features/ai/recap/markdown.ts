@@ -3,7 +3,8 @@
 // left out and the last line says so. The board's (and the AI's) words go in as plain text: line breaks become
 // spaces, and the characters Markdown or the HTML in it would read as a link, an image, code, emphasis or a tag (a
 // leading heading or list marker too, and a table cell's bar) are backslash-escaped, so a note's "[x](url)" or
-// "<b>" pasted into an email stays words.
+// "<b>" pasted into an email stays words. Wave V: the registered sources' sections (./sources.ts) follow "Planned vs
+// actual", a heading and a list each, their words escaped the same way.
 
 import type { RecapPlan } from './plan.ts'
 
@@ -53,6 +54,12 @@ export function recapMarkdown(p: RecapPlan): string {
       ...p.plannedVsActual.map(
         (r) => `| ${cell(r.name)} | ${minutes(r.plannedMin)} | ${minutes(r.actualMin)} |`,
       ),
+    )
+  // wave V: the registered sources' sections (polls and scales, word clouds, breakouts), in order
+  for (const s of p.sections)
+    list(
+      mdText(s.title),
+      s.lines.map((l) => `- ${mdText(l.text)}`),
     )
   if (!p.ai && p.aiNote) lines.push('', `_${p.aiNote}_`)
   if (p.ai) lines.push('', '_Written with AI from the board: check it before you send it._')
