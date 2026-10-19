@@ -143,6 +143,35 @@ describe('the activity tally', () => {
     expect(h.published.map((p) => p.n)).toEqual([1, 2])
   })
 
+  it('an answer whose commit lands after its window was sent waits for the next boundary: never alone, off the grid (review m1)', async () => {
+    const h = harness()
+    const W = 5_000
+    const r = h.row()
+    h.tally.started(r)
+    const b0 = Math.floor(h.now / W) * W + W
+    h.now = b0 + 1_000
+    h.tally.changed(r, snap(poll(0)), h.tally.mark())
+    // B is marked under the row lock just before the boundary; its COMMIT is slow and lands after the boundary went out
+    h.now = b0 + 4_990
+    const late = h.tally.mark()
+    await h.runTo(b0 + 5_100)
+    expect(h.published.map((p) => p.n)).toEqual([1])
+    h.tally.changed(r, snap(poll(0), poll(1)), late)
+    // neither a read right after it nor a timer sends B by itself
+    expect(counts(await h.tally.view(r, new Date(h.now + 10), live(EMPTY_SNAPSHOT)))).toBe(1)
+    await h.runTo(b0 + 2 * W - 1)
+    expect(h.published.map((p) => p.n)).toEqual([1])
+    // B goes out at the next boundary, with whatever else that window held (here C)
+    h.now = b0 + 7_000
+    h.tally.changed(r, snap(poll(0), poll(1), poll(2)), h.tally.mark())
+    await h.runTo(b0 + 3 * W)
+    expect(h.published.map((p) => ({ n: p.n, dt: p.at - b0 }))).toEqual([
+      { n: 1, dt: 5_025 },
+      { n: 3, dt: 10_025 },
+    ])
+    for (const p of h.published) expect(p.at % W).toBeLessThanOrEqual(25)
+  })
+
   it('a named activity whose results are not live counts in 1 s windows', async () => {
     const r = rowOf({ anonymous: false })
     const h = harness(r)

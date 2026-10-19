@@ -170,18 +170,29 @@ export class ActivityTally<R extends TallyRow = TallyRow> {
       this.prune()
       e = this.entry(row, snap, mark.seq, null)
       this.entries.set(row.id, e)
-      this.arm(row.id, e, mark.at)
+      this.arm(row.id, e, this.shownFrom(mark.at, e.windowMs))
       return
     }
     e.endsAt = row.ends_at ? row.ends_at.getTime() : null
     if (mark.seq <= e.baseSeq) return
-    const w = this.boundary(mark.at, e.windowMs)
+    const at = this.shownFrom(mark.at, e.windowMs)
+    const w = this.boundary(at, e.windowMs)
     // the latest change of a window is the only one ever shown: drop the earlier ones of that window
     const kept = e.pending.filter((c) => this.boundary(c.at, e.windowMs) !== w || c.seq > mark.seq)
-    if (!kept.some((c) => this.boundary(c.at, e.windowMs) === w))
-      kept.push({ seq: mark.seq, at: mark.at, snap })
+    if (!kept.some((c) => this.boundary(c.at, e.windowMs) === w)) kept.push({ seq: mark.seq, at, snap })
     e.pending = kept.sort((a, b) => a.seq - b.seq)
-    this.arm(row.id, e, mark.at)
+    this.arm(row.id, e, at)
+  }
+
+  /**
+   * The moment a change counts from: its mark's, unless the window of its mark ended before the change got here (a
+   * COMMIT slower than the rest of its window). Then now, so it waits for the NEXT boundary and goes out with that
+   * window's other answers. Without this, the passed boundary had already been sent, a timer for the past window fired
+   * a moment later, and the board was sent that one answer's count alone, off the grid (wave V review m1).
+   */
+  private shownFrom(markAt: number, windowMs: number): number {
+    const now = this.opts.now().getTime()
+    return this.boundary(now, windowMs) > this.boundary(markAt, windowMs) ? now : markAt
   }
 
   /**
