@@ -9,11 +9,14 @@
 //  - renewed through presence `editing` (the board session reads `panelEditing(lease)` with its own editor's lease,
 //    canvas/board/session.ts), so the people on the board see "Name is editing" on the card and its lease never
 //    lapses while the panel is open;
-//  - pushes the words, their layout and the card's fit through the ordinary holder path: a `transact` of the label's
-//    `text`/`originalText` (+ its laid-out size) and the card's size, laid out with Excalidraw's own
-//    `redrawTextBoundingBox` (as canvas/board/text.ts `layoutReplacement` does for `text.replace`), at most every
-//    TYPING_PUSH_MS (the in-place editor's typing pace); the engine pushes a text write only while this tab holds
-//    the lease (engine.ts pushableGroups);
+//  - pushes the words, their layout and the card's growth through the holder path `text.replace` uses: a `transact`
+//    of the label's `text`/`originalText` (+ its laid-out size) and the card's size, laid out with Excalidraw's own
+//    `redrawTextBoundingBox` (as canvas/board/text.ts `layoutReplacement`), at most every TYPING_PUSH_MS (the
+//    in-place editor's typing pace); the engine pushes a text write only while this tab holds the lease (engine.ts
+//    pushableGroups). The card's growth goes as its `height` (the shape group, re-snapping its bound arrows in the
+//    same commit), not as the conditional `fit` op: the engine sends `fit` only while Excalidraw's own editor is open
+//    on the label (its editingTextElement), and a resize by someone else meanwhile is kept (only `height` is written,
+//    and the next write lays the words out at the card's current width);
 //  - one undo step per edit session: the session's first write is a step, every later one joins it
 //    (`joinPrevious`), unless something else of this tab became a step meanwhile (then the next write starts a new
 //    one, never folding into someone's move);

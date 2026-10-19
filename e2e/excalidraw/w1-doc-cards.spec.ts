@@ -331,6 +331,57 @@ test('w1: the panel by keyboard and screen reader: format keys, the toolbar is o
   await expectSaved(a.page)
 })
 
+test('w1: a card at the 20,000-character cap: the panel stops at the cap, types, lays the words out on the card and the server stores every one', async ({
+  canvasSession,
+  stack,
+  board,
+}) => {
+  test.setTimeout(180_000)
+  const a = await withDocCards(await canvasSession('alice'))
+  const line = '- [ ] a checklist line with **bold** words and a [link](https://example.com/x)\n'
+  const words = `# Big doc\n${line.repeat(400)}`.slice(0, 20_000)
+  const id = await placeDocCard(a.page, words)
+  await expectSaved(a.page)
+  await select(a.page, [id])
+  await focusBoard(a.page)
+  await a.page.keyboard.press('Enter')
+  await expectEditing(a.page)
+  await expect(a.page.getByTestId('doc-editor-count')).toHaveText(
+    /^20,000 \/ 20,000 characters · search finds the first 4,000$/,
+  )
+  // how long the page's main thread is busy while someone types into a full card (the layout of every write)
+  await a.page.evaluate(() => {
+    const w = window as unknown as { __longTasks: number[] }
+    w.__longTasks = []
+    new PerformanceObserver((l) => {
+      for (const e of l.getEntries()) w.__longTasks.push(e.duration)
+    }).observe({ type: 'longtask', buffered: false })
+  })
+  const ta = panelText(a.page)
+  await ta.press('ControlOrMeta+End')
+  // at the cap: one more character is refused by the textarea itself
+  await a.page.keyboard.type('X')
+  await expect(ta).toHaveValue(words)
+  for (let i = 0; i < 20; i++) await a.page.keyboard.press('Backspace')
+  await a.page.keyboard.type('typed at the end', { delay: 30 })
+  const typed = await ta.inputValue()
+  expect(typed.length).toBe(20_000 - 20 + 'typed at the end'.length)
+  await a.page.getByTestId('doc-editor-done').click()
+  await expectSaved(a.page, 60_000)
+  await expect.poll(() => wordsOf(a.page, id)).toBe(typed)
+  const stored = await storedElement(stack, board, (await labelIdOf(a.page, id)) as string)
+  expect(stored?.originalText).toBe(typed)
+  // laid out on the card: the card grew to hold every wrapped line
+  const card = await item(a.page, id)
+  expect(card?.height ?? 0).toBeGreaterThan(5_000)
+  expect((stored?.height as number) ?? 0).toBeLessThanOrEqual((card?.height as number) ?? 0)
+  const long = await a.page.evaluate(() => (window as unknown as { __longTasks: number[] }).__longTasks)
+  test.info().annotations.push({
+    type: 'main-thread long tasks while typing into a 20,000-character card',
+    description: `${long.length} tasks over 50 ms, longest ${Math.round(Math.max(0, ...long))} ms`,
+  })
+})
+
 test('w1: with the switch off a doc card is a rectangle with its words: no face, no panel, edited in place under the lease', async ({
   canvasSession,
 }) => {
