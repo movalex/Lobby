@@ -8,7 +8,9 @@
       "licence": "Apache-2.0",
       "source": "https://github.com/xuebinqin/U-2-Net",
       "notice": "U-2-Net, Copyright (c) 2020 Xuebin Qin. Licensed under the Apache License, Version 2.0. The weights carry the repository's licence; the training data (DUTS-TR) terms are not stated by it (owner acknowledgement: docs/WAVE-W-CONTRACTS.md §11).",
-      "sha256": null
+      "sha256": "309c8469258dda742793dce0ebea8e6dd393174f89934733ecc8b14c76f4ddd8",
+      "bytes": 4574861,
+      "obtained": "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx (md5 8e83ca70e441ab06c318d82300c84806, as rembg publishes), owner-approved 2026-10-19"
     }
   ]
 }

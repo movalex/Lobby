@@ -5,7 +5,7 @@
 //
 // It is the REAL worker side of the op (apps/worker: the ops client, runOneOp, the remove-bg runner and its child
 // process, sharp, onnxruntime-node) with exactly one thing swapped: the model. The stack's own worker reports no
-// remove-bg capability (BG_MODEL.sha256 is null until the owner's approved u2netp file), so this process reports it
+// remove-bg capability (BG_MODEL.sha256 pins the real u2netp file, which tests never use), so this process reports it
 // with the tiny synthetic model of apps/worker/test/tiny-onnx.ts (sigmoid of the mean of the channels, the u2netp
 // shape at 320 × 320), its hash passed to the runner as the pin. Never the real model; never any network but the
 // stack's api. Logs `[w2-op-worker] <outcome>` lines the spec waits on; stops on SIGTERM or when stdin closes.

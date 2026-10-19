@@ -19,11 +19,11 @@ export const BG_MODEL = {
   /** the published file is about 4.6 MB; anything far larger is not it */
   maxBytes: 16 * 1024 * 1024,
   /**
-   * TODO(owner, wave W WS2): the sha256 of the approved u2netp.onnx, filled in when the owner has downloaded and
-   * checked the file (docs/WAVE-W-CONTRACTS.md §11, open decision 1). While it is null no file passes the check, so the
-   * remove-bg capability is never reported: background removal stays off whatever DRAFTROOM_REMOVE_BACKGROUND says.
+   * The sha256 of the approved u2netp.onnx (owner approval 2026-10-19). The file is 4,574,861 bytes, from
+   * https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx; its md5 8e83ca70e441ab06c318d82300c84806
+   * matches the one rembg publishes (rembg/sessions/u2netp.py). Keep in step with apps/worker/models/MODELS.json.
    */
-  sha256: null as string | null,
+  sha256: '309c8469258dda742793dce0ebea8e6dd393174f89934733ecc8b14c76f4ddd8' as string | null,
 } as const
 
 export type BgModelCheck =

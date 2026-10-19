@@ -59,9 +59,9 @@ describe('the background model file', () => {
   writeFileSync(path, model)
   const sha = createHash('sha256').update(model).digest('hex')
 
-  it('is never pinned in the foundation: the real hash is the owner’s TODO, so nothing passes', () => {
-    expect(BG_MODEL.sha256).toBeNull()
-    expect(checkBgModel(path)).toEqual({ ok: false, reason: 'unpinned' })
+  it('is pinned to the approved u2netp (a sha256), so any other file, the test model too, does not pass', () => {
+    expect(BG_MODEL.sha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(checkBgModel(path)).toEqual({ ok: false, reason: 'hash-mismatch' })
   })
 
   it('unset, relative, missing, a directory, too large or another file: not usable, with the reason', () => {
@@ -79,12 +79,12 @@ describe('the background model file', () => {
   it('the pinned file passes, and loadBgModel returns its bytes (re-checked)', () => {
     expect(checkBgModel(path, sha)).toEqual({ ok: true, path, sha256: sha, bytes: model.length })
     expect(Buffer.from(loadBgModel(path, sha)).equals(Buffer.from(model))).toBe(true)
-    expect(() => loadBgModel(path)).toThrow(/unusable: unpinned/)
+    expect(() => loadBgModel(path)).toThrow(/unusable: hash-mismatch/)
   })
 
   it('a capability is reported only with a runner, and remove-bg only with a usable model', () => {
     // the build's runners (WS2 remove-bg, WS3 extract-text, WS4 render-pages): only their kinds are reported, and
-    // remove-bg not while the shipped pin (null) lets no model file pass
+    // remove-bg not while the file is not the pinned model (the test model is not)
     expect(Object.keys(OP_RUNNERS)).toEqual(['remove-bg', 'extract-text', 'render-pages'])
     const none = reportedCapabilities({
       enabled: parseWorkerOps(undefined),
@@ -96,7 +96,7 @@ describe('the background model file', () => {
       WORKER_CAPABILITIES['render-pages'],
     ])
     expect(none.missing.map((m) => m.kind)).toEqual(['remove-bg'])
-    expect(none.missing[0]).toEqual({ kind: 'remove-bg', why: 'the model file is not usable (unpinned)' })
+    expect(none.missing[0]).toEqual({ kind: 'remove-bg', why: 'the model file is not usable (hash-mismatch)' })
     const fake: OpRunner = { kind: 'remove-bg', run: async () => ({ outputs: [], result: {} }) }
     const runners = { 'remove-bg': fake, 'extract-text': { ...fake, kind: 'extract-text' as const } }
     const ok = reportedCapabilities({
@@ -111,7 +111,7 @@ describe('the background model file', () => {
       bgModel: checkBgModel(path),
     })
     expect(noModel.capabilities).toEqual([WORKER_CAPABILITIES['extract-text']])
-    expect(noModel.missing).toEqual([{ kind: 'remove-bg', why: 'the model file is not usable (unpinned)' }])
+    expect(noModel.missing).toEqual([{ kind: 'remove-bg', why: 'the model file is not usable (hash-mismatch)' }])
     // WORKER_OPS narrows it further
     expect(
       reportedCapabilities({ enabled: [], runners, bgModel: checkBgModel(path, sha) }).capabilities,

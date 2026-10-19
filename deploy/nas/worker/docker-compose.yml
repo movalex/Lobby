@@ -35,8 +35,13 @@ services:
       # Office documents go to the sidecar below (office-client.ts).
       OFFICE_SOCKET: /office-jobs/office.sock
       OFFICE_JOBS_DIR: /office-jobs
+      # Background removal (wave W): the owner-approved u2netp.onnx, checked against the sha256 pinned in
+      # apps/worker/src/ops/bg-model.ts. Missing or different: the worker simply does not offer remove-bg.
+      DRAFTROOM_BG_MODEL_PATH: /models/u2netp.onnx
     volumes:
       - office-jobs:/office-jobs
+      # Placed once by hand in NAS_DIR/models (never downloaded by Lobby); read-only inside the container.
+      - ./models:/models:ro
     # Starts the sidecar too (`up worker` alone would otherwise leave Office previews without it). The
     # worker copes with a sidecar that is (re)starting: those jobs are retried.
     depends_on:
