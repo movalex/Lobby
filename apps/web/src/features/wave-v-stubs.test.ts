@@ -89,9 +89,11 @@ describe('the wave V switches', () => {
     expect(liveSwitches.get()).toEqual(LIVE_SWITCHES_OFF)
   })
 
-  it('the wave V palette commands are pending (no feature registers them yet)', () => {
+  it('the wave V palette commands are pending until their owner registers them (WS2: activities.start)', () => {
     for (const id of WAVE_V_PALETTE_COMMAND_IDS)
-      expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).toContain(id)
+      if (id === 'activities.start')
+        expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).not.toContain(id)
+      else expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).toContain(id)
   })
 })
 
@@ -102,7 +104,8 @@ describe('the wave V features', () => {
     for (const id of ['live-activities', 'join', 'breakouts']) {
       const f = CANVAS_FEATURES.find((x) => x.id === id)
       expect(f, id).toBeDefined()
-      expect(Object.keys(f ?? {}), id).toEqual(['id'])
+      // WS2 filled 'live-activities' (it offers nothing while its switch is off: live-activities/feature.test.ts)
+      if (id !== 'live-activities') expect(Object.keys(f ?? {}), id).toEqual(['id'])
       expect(at(id), id).toBeGreaterThan(at('timeline'))
       expect(at(id), id).toBeLessThan(at('elements'))
     }
