@@ -270,7 +270,12 @@ function refusedCalls(board: string, other: string, userId: string): [string, Me
     ],
     ['POST /api/breakouts/:brk/summon', 'POST', `/api/breakouts/${BREAKOUT}/summon`, { groupId: 'g1' }],
     ['POST /api/breakouts/:brk/end', 'POST', `/api/breakouts/${BREAKOUT}/end`, {}],
-    ['POST /api/boards/:bid/review-links/:id/code', 'POST', `${b}/review-links/${INVITATION}/code`, undefined],
+    [
+      'POST /api/boards/:bid/review-links/:id/code',
+      'POST',
+      `${b}/review-links/${INVITATION}/code`,
+      undefined,
+    ],
     // Requesting access: to their own board and to any other.
     ['POST /api/boards/:bid/access-requests', 'POST', `${b}/access-requests`, { role: 'editor' }],
     [

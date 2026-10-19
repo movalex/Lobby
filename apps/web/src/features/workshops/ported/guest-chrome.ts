@@ -109,7 +109,8 @@ export function facilitatePill(input: {
   if (input.voteOpen) out.push({ kind: 'vote', text: 'Vote' })
   if (input.brainstormOpen) out.push({ kind: 'brainstorm', text: 'Brainstorm' })
   if (input.hands > 0) out.push({ kind: 'hands', text: `✋ ${input.hands}`, count: input.hands })
-  for (const e of input.extras ?? []) if (e.text) out.push({ kind: 'extra', id: e.id, text: e.text, spoken: e.spoken })
+  for (const e of input.extras ?? [])
+    if (e.text) out.push({ kind: 'extra', id: e.id, text: e.text, spoken: e.spoken })
   return out
 }
 

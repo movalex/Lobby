@@ -6,11 +6,11 @@ import {
   ACTIVITY_FACILITATOR_ROUTE_KEYS,
   ACTIVITY_ROUTE_KEYS,
   ASSET_VERSION_ROUTE_KEYS,
-  BREAKOUT_FACILITATOR_ROUTE_KEYS,
-  BREAKOUT_ROUTE_KEYS,
   BACKUP_CREATOR_ROUTE_KEYS,
   BACKUP_GUESTS_MESSAGE,
   BACKUP_ROUTE_KEYS,
+  BREAKOUT_FACILITATOR_ROUTE_KEYS,
+  BREAKOUT_ROUTE_KEYS,
   CHAT_HOOK_CREATOR_ROUTE_KEYS,
   CHAT_HOOK_GUESTS_MESSAGE,
   CHAT_HOOK_ROUTE_KEYS,
@@ -154,7 +154,9 @@ describe('the pending list', () => {
     ])
       expect(Object.hasOwn(GUEST_REFUSED_ROUTES, k), k).toBe(false)
     const creatorRows = Object.entries(CREATOR_ROUTES).filter(([k]) => WAVE_V_ROUTES.includes(k))
-    expect(creatorRows).toEqual([['POST /api/boards/:bid/review-links/:id/code', { purpose: 'share', refuse: 'always' }]])
+    expect(creatorRows).toEqual([
+      ['POST /api/boards/:bid/review-links/:id/code', { purpose: 'share', refuse: 'always' }],
+    ])
     for (const k of WAVE_V_ROUTES) expect(isPendingRoute(k), k).toBe(true)
   })
 
@@ -343,6 +345,8 @@ describe('in the real app, a pending route answers like an unknown route', () =>
       expect(n.n, table).toBe(0)
     }
     // no link got a join code
-    expect((await w.api.db.query('SELECT id FROM invitations WHERE join_code_hash IS NOT NULL')).rows).toEqual([])
+    expect(
+      (await w.api.db.query('SELECT id FROM invitations WHERE join_code_hash IS NOT NULL')).rows,
+    ).toEqual([])
   })
 })

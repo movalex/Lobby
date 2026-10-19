@@ -78,7 +78,11 @@ export interface FacilitatePillExtra {
   readonly spoken: string
 }
 
-const PILL_ORDER: Readonly<Record<FacilitateExtraId, number>> = { activities: 0, 'join-code': 1, breakouts: 2 }
+const PILL_ORDER: Readonly<Record<FacilitateExtraId, number>> = {
+  activities: 0,
+  'join-code': 1,
+  breakouts: 2,
+}
 const pills = new WeakMap<object, Atom<readonly FacilitatePillExtra[]>>()
 const pillOf = (canvas: object): Atom<readonly FacilitatePillExtra[]> => {
   let a = pills.get(canvas)

@@ -694,7 +694,8 @@ describe.skipIf(!PG_URL)('every migration after 0008 on a real Postgres holding 
     for (const t of ['live_activities', 'live_answers', 'breakout_sessions', 'breakout_members'])
       expect(afterCounts[t], t).toBe(0)
     expect(
-      (await s.db.query('SELECT id FROM invitations WHERE join_code_hash IS NOT NULL OR join_code_n <> 0')).rows,
+      (await s.db.query('SELECT id FROM invitations WHERE join_code_hash IS NOT NULL OR join_code_n <> 0'))
+        .rows,
     ).toEqual([])
   })
 

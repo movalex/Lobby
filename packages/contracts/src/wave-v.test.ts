@@ -27,7 +27,7 @@ import {
   BREAKOUT_RULES,
   BreakoutBroadcastInput,
   BreakoutGroupId,
-  BreakoutState,
+  type BreakoutState,
   breakoutActionPath,
   breakoutGroupId,
   breakoutSummonApplies,
@@ -64,9 +64,9 @@ import {
   PALETTE_COMMAND_IDS,
   PENDING_PALETTE_COMMAND_IDS,
   PollConfig,
-  rankActivityResults,
-  ReviewLinkCreated,
   ResolvedJoinCode,
+  ReviewLinkCreated,
+  rankActivityResults,
   ScaleConfig,
   StartActivityInput,
   StartBreakoutsInput,
@@ -180,7 +180,7 @@ describe('live activity text', () => {
     expect(normalizeWord('ＡＧＩＬＥ')).toBe('agile') // fullwidth
     expect(normalizeWord('ﬁne')).toBe('fine') // the fi ligature
     expect(normalizeWord('team   spirit')).toBe('team spirit')
-    expect(normalizeWord('Café')).toBe(normalizeWord('Café'))
+    expect(normalizeWord('Café')).toBe(normalizeWord('Cafe\u0301'))
     expect(normalizeWord('協力')).toBe('協力')
     expect(normalizeWord('🎉')).toBe('🎉')
   })
@@ -228,7 +228,12 @@ describe('live activity setup', () => {
 
   it('the start input is strict, anonymous by default, results not live, no end time unless asked', () => {
     const v = StartActivityInput.parse({ kind: 'words', prompt: 'One word for today', config: {} })
-    expect(v).toMatchObject({ anonymous: true, resultsLive: false, durationMs: null, config: { maxWords: 3 } })
+    expect(v).toMatchObject({
+      anonymous: true,
+      resultsLive: false,
+      durationMs: null,
+      config: { maxWords: 3 },
+    })
     expect(ok(StartActivityInput, { kind: 'words', prompt: 'x', config: {}, actor: U1 })).toBe(false)
     expect(ok(StartActivityInput, { kind: 'quiz', prompt: 'x', config: {} })).toBe(false)
     expect(ok(StartActivityInput, { kind: 'poll', prompt: 'x', config: { maxWords: 3 } })).toBe(false)
@@ -238,12 +243,18 @@ describe('live activity setup', () => {
       [ACTIVITY_LIMITS.durationMaxMs, true],
       [ACTIVITY_LIMITS.durationMaxMs + 1, false],
     ] as const)
-      expect(ok(StartActivityInput, { kind: 'words', prompt: 'x', config: {}, durationMs: ms }), String(ms)).toBe(good)
+      expect(
+        ok(StartActivityInput, { kind: 'words', prompt: 'x', config: {}, durationMs: ms }),
+        String(ms),
+      ).toBe(good)
   })
 })
 
 describe('live activity answers', () => {
-  const poll = { kind: 'poll' as const, config: PollConfig.parse({ options: ['A', 'B', 'C'], maxChoices: 2 }) }
+  const poll = {
+    kind: 'poll' as const,
+    config: PollConfig.parse({ options: ['A', 'B', 'C'], maxChoices: 2 }),
+  }
   const scale = { kind: 'scale' as const, config: ScaleConfig.parse({ min: 1, max: 5 }) }
   const words = { kind: 'words' as const, config: WordsConfig.parse({ maxWords: 2 }) }
 
@@ -287,7 +298,11 @@ describe('live activity answers', () => {
       mean: 3,
       median: 3,
     })
-    expect(tallyScale(0, 10, [10, 9, 2])).toMatchObject({ mean: 7, median: 9, counts: [0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1] })
+    expect(tallyScale(0, 10, [10, 9, 2])).toMatchObject({
+      mean: 7,
+      median: 9,
+      counts: [0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1],
+    })
     expect(tallyScale(1, 7, [1, 2, 2]).mean).toBe(1.67)
   })
 
@@ -357,12 +372,23 @@ describe('live activity answers', () => {
     }
     // the caller's state carries their own answer only
     expect(Object.keys(ActivityState.shape).sort()).toEqual(
-      ['activity', 'answered', 'canManage', 'hiddenWords', 'myAnswer', 'results', 'serverNow', 'starterLeft'].sort(),
+      [
+        'activity',
+        'answered',
+        'canManage',
+        'hiddenWords',
+        'myAnswer',
+        'results',
+        'serverNow',
+        'starterLeft',
+      ].sort(),
     )
   })
 
   it('the tally window: 1 s only for a named activity without live results, else 5 s', () => {
-    expect(activityTallyWindowMs({ anonymous: false, resultsLive: false })).toBe(ACTIVITY_TALLY_WINDOW_MS.named)
+    expect(activityTallyWindowMs({ anonymous: false, resultsLive: false })).toBe(
+      ACTIVITY_TALLY_WINDOW_MS.named,
+    )
     expect(activityTallyWindowMs({ anonymous: false, resultsLive: true })).toBe(5_000)
     expect(activityTallyWindowMs({ anonymous: true, resultsLive: false })).toBe(5_000)
     expect(activityTallyWindowMs({ anonymous: true, resultsLive: true })).toBe(5_000)
@@ -390,7 +416,8 @@ describe('live activity answers', () => {
 })
 
 describe('breakouts', () => {
-  const groups = (n: number) => Array.from({ length: n }, (_, i) => ({ name: `Group ${i + 1}`, frameId: `shape:f${i}` }))
+  const groups = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ name: `Group ${i + 1}`, frameId: `shape:f${i}` }))
 
   it('2 to 20 groups, each with its own frame; a cap only when people choose', () => {
     expect(ok(StartBreakoutsInput, { groups: groups(1), mode: 'auto' })).toBe(false)
@@ -401,9 +428,12 @@ describe('breakouts', () => {
     expect(ok(StartBreakoutsInput, { groups: same, mode: 'auto' })).toBe(false)
     expect(ok(StartBreakoutsInput, { groups: groups(2), mode: 'choose', groupCap: 5 })).toBe(true)
     expect(ok(StartBreakoutsInput, { groups: groups(2), mode: 'auto', groupCap: 5 })).toBe(false)
-    expect(ok(StartBreakoutsInput, { groups: [{ name: 'x'.repeat(41), frameId: 'shape:a' }, groups(2)[1]], mode: 'auto' })).toBe(
-      false,
-    )
+    expect(
+      ok(StartBreakoutsInput, {
+        groups: [{ name: 'x'.repeat(41), frameId: 'shape:a' }, groups(2)[1]],
+        mode: 'auto',
+      }),
+    ).toBe(false)
     expect(ok(StartBreakoutsInput, { groups: groups(2), mode: 'auto', actor: U1 })).toBe(false)
   })
 
@@ -411,7 +441,8 @@ describe('breakouts', () => {
     expect(breakoutGroupId(0)).toBe('g1')
     expect(breakoutGroupId(BREAKOUT_LIMITS.groupsMax - 1)).toBe('g20')
     for (const good of ['g1', 'g9', 'g10', 'g19', 'g20']) expect(ok(BreakoutGroupId, good), good).toBe(true)
-    for (const bad of ['g0', 'g21', 'g01', 'G1', 'g', 'grp_1']) expect(ok(BreakoutGroupId, bad), bad).toBe(false)
+    for (const bad of ['g0', 'g21', 'g01', 'G1', 'g', 'grp_1'])
+      expect(ok(BreakoutGroupId, bad), bad).toBe(false)
   })
 
   it('a group summon applies only to that group of that session, never to its summoner', () => {
@@ -419,13 +450,16 @@ describe('breakouts', () => {
     expect(breakoutSummonApplies(ev, { userId: U2, sessionId: BRK, groupId: 'g2' })).toBe(true)
     expect(breakoutSummonApplies(ev, { userId: U2, sessionId: BRK, groupId: 'g1' })).toBe(false)
     expect(breakoutSummonApplies(ev, { userId: U2, sessionId: BRK, groupId: null })).toBe(false)
-    expect(breakoutSummonApplies(ev, { userId: U2, sessionId: 'brk_another000000000000', groupId: 'g2' })).toBe(false)
+    expect(
+      breakoutSummonApplies(ev, { userId: U2, sessionId: 'brk_another000000000000', groupId: 'g2' }),
+    ).toBe(false)
     expect(breakoutSummonApplies(ev, { userId: U2, sessionId: null, groupId: 'g2' })).toBe(false)
     expect(breakoutSummonApplies(ev, { userId: U1, sessionId: BRK, groupId: 'g2' })).toBe(false)
   })
 
   it('a newer state replaces an older one of the same session only', () => {
-    const s = (id: string, rev: number) => ({ session: { id, rev } }) as unknown as Pick<BreakoutState, 'session'>
+    const s = (id: string, rev: number) =>
+      ({ session: { id, rev } }) as unknown as Pick<BreakoutState, 'session'>
     expect(isNewerBreakoutState(null, s(BRK, 0))).toBe(true)
     expect(isNewerBreakoutState(s(BRK, 3), s(BRK, 2))).toBe(false)
     expect(isNewerBreakoutState(s(BRK, 3), s(BRK, 3))).toBe(true)
@@ -461,7 +495,9 @@ describe('breakouts', () => {
   it('the routes and rules; a guest is refused every facilitator route', () => {
     expect(Object.keys(BREAKOUT_RULES).sort()).toEqual([...BREAKOUT_ROUTE_KEYS].sort())
     expect([...BREAKOUT_FACILITATOR_ROUTE_KEYS].sort()).toEqual(
-      BREAKOUT_ROUTE_KEYS.filter((k) => !['GET /api/boards/:bid/breakouts', 'POST /api/breakouts/:brk/join'].includes(k)).sort(),
+      BREAKOUT_ROUTE_KEYS.filter(
+        (k) => !['GET /api/boards/:bid/breakouts', 'POST /api/breakouts/:brk/join'].includes(k),
+      ).sort(),
     )
     expect(breakoutActionPath(BRK, 'summon')).toBe(`/api/breakouts/${BRK}/summon`)
   })
@@ -506,7 +542,10 @@ describe('join codes', () => {
     ).toBe(true)
     expect(ok(JoinCode, { code: 'abcd2345', display: '', joinUrl: '', expiresAt: '' })).toBe(false)
     expect(ok(ResolvedJoinCode, { token: 'x'.repeat(43) })).toBe(true)
-    expect([...JOIN_CODE_ROUTE_KEYS]).toEqual(['POST /api/boards/:bid/review-links/:id/code', 'GET /api/join/:code'])
+    expect([...JOIN_CODE_ROUTE_KEYS]).toEqual([
+      'POST /api/boards/:bid/review-links/:id/code',
+      'GET /api/join/:code',
+    ])
     expect([...JOIN_CODE_CREATOR_ROUTE_KEYS]).toEqual(['POST /api/boards/:bid/review-links/:id/code'])
     expect(joinCodeCreatePath('b-1', 'inv_1')).toBe('/api/boards/b-1/review-links/inv_1/code')
     expect(joinCodeResolvePath('ABCD2345')).toBe('/api/join/ABCD2345')

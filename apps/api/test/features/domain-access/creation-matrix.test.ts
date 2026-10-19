@@ -255,7 +255,11 @@ function probe(
     ],
     // wave V (WS3): a workshop link's join code (the probe's link is a viewer link: WS3 makes an editor one when it
     // implements the route)
-    'POST /api/boards/:bid/review-links/:id/code': ['POST', `/api/boards/${bid}/review-links/${link}/code`, undefined],
+    'POST /api/boards/:bid/review-links/:id/code': [
+      'POST',
+      `/api/boards/${bid}/review-links/${link}/code`,
+      undefined,
+    ],
   }
   const found = table[key]
   if (!found) throw new Error(`no probe for ${key}`)

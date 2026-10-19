@@ -91,8 +91,8 @@ export const activityTallyWindowMs = (a: { anonymous: boolean; resultsLive: bool
 // read differently on screen than it is stored, zero-width joiners/spaces, the BOM, line and paragraph separators.
 // Code points, checked one at a time (no escapes needed in source).
 const FORBIDDEN = new Set([
-  0x061c, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2060, 0x2066, 0x2067,
-  0x2068, 0x2069, 0x2028, 0x2029, 0xfeff,
+  0x061c, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2060, 0x2066,
+  0x2067, 0x2068, 0x2069, 0x2028, 0x2029, 0xfeff,
 ])
 /** Whether `s` holds a character no live activity text may hold. */
 export function hasForbiddenActivityChar(s: string): boolean {
@@ -111,12 +111,18 @@ const oneLine = (max: number, empty: string, what: string) =>
   z
     .string()
     .max(max * 8) // before collapsing; the real limit is checked below
-    .transform((s) => s.replace(/[\t\n\v\f\r    -   　]+/g, ' ').trim())
+    .transform((s) => s.replace(/[\t\n\v\f\r \u00a0\u1680\u2000-\u200a\u202f\u205f\u3000]+/g, ' ').trim())
     .refine((s) => s.length > 0, { message: empty })
     .refine((s) => codePointLength(s) <= max, { message: `${what} can have at most ${max} characters.` })
-    .refine((s) => !hasForbiddenActivityChar(s), { message: `${what} contains characters that cannot be shown.` })
+    .refine((s) => !hasForbiddenActivityChar(s), {
+      message: `${what} contains characters that cannot be shown.`,
+    })
 
-export const ActivityPrompt = oneLine(ACTIVITY_LIMITS.promptMaxChars, 'Write a question for everyone.', 'The question')
+export const ActivityPrompt = oneLine(
+  ACTIVITY_LIMITS.promptMaxChars,
+  'Write a question for everyone.',
+  'The question',
+)
 export const PollOptionText = oneLine(ACTIVITY_LIMITS.optionMaxChars, 'An option needs words.', 'An option')
 export const ScaleLabel = oneLine(ACTIVITY_LIMITS.scaleLabelMaxChars, 'A label needs words.', 'A label')
 /** One entry of a word cloud, as typed (trimmed, collapsed). Grouping uses normalizeWord. */
@@ -128,11 +134,7 @@ export const WordText = oneLine(ACTIVITY_LIMITS.wordMaxChars, 'Type a word first
  * and "ＡＧＩＬＥ" are one word. The display form is chosen by tallyWords.
  */
 export function normalizeWord(raw: string): string {
-  return raw
-    .normalize('NFKC')
-    .replace(/\s+/gu, ' ')
-    .trim()
-    .toLowerCase()
+  return raw.normalize('NFKC').replace(/\s+/gu, ' ').trim().toLowerCase()
 }
 
 /** Code-point order (not UTF-16, not locale): the tie-break everywhere here. */
@@ -226,7 +228,10 @@ export const PollAnswer = z.strictObject({
     .max(ACTIVITY_LIMITS.pollOptionsMax)
     .refine((c) => new Set(c).size === c.length, { message: 'Each option once.' }),
 })
-export const ScaleAnswer = z.strictObject({ kind: z.literal('scale'), value: z.number().int().min(0).max(10) })
+export const ScaleAnswer = z.strictObject({
+  kind: z.literal('scale'),
+  value: z.number().int().min(0).max(10),
+})
 export const WordsAnswer = z.strictObject({
   kind: z.literal('words'),
   words: z
@@ -267,7 +272,9 @@ export function answerProblem(activity: ActivityConfigOf, answer: ActivityAnswer
   }
   if (activity.kind === 'words' && answer.kind === 'words') {
     if (answer.words.length > activity.config.maxWords)
-      return activity.config.maxWords === 1 ? 'Send one word.' : `Send at most ${activity.config.maxWords} words.`
+      return activity.config.maxWords === 1
+        ? 'Send one word.'
+        : `Send at most ${activity.config.maxWords} words.`
   }
   return null
 }
@@ -316,7 +323,8 @@ const round2 = (n: number) => Math.round(n * 100) / 100
 /** A poll's results from its answers' choices (pure; the api's results and the tests). */
 export function tallyPoll(optionCount: number, answers: readonly (readonly number[])[]): PollResults {
   const counts = new Array<number>(optionCount).fill(0)
-  for (const a of answers) for (const c of new Set(a)) if (c >= 0 && c < optionCount) counts[c] = (counts[c] ?? 0) + 1
+  for (const a of answers)
+    for (const c of new Set(a)) if (c >= 0 && c < optionCount) counts[c] = (counts[c] ?? 0) + 1
   return { kind: 'poll', answered: answers.length, counts }
 }
 
@@ -370,7 +378,8 @@ export function tallyWords(
   }
   const words = [...groups.values()]
     .map((g) => {
-      const text = [...g.spellings.entries()].sort((a, b) => b[1] - a[1] || byCodePoint(a[0], b[0]))[0]?.[0] ?? ''
+      const text =
+        [...g.spellings.entries()].sort((a, b) => b[1] - a[1] || byCodePoint(a[0], b[0]))[0]?.[0] ?? ''
       return { text, count: g.count }
     })
     .sort((a, b) => b.count - a.count || byCodePoint(a.text, b.text))
@@ -384,8 +393,12 @@ export function tallyWords(
 }
 
 /** Competition ranks of a poll's options by count (ties share a rank: 1, 1, 3); zero-count options rank last. */
-export function rankActivityResults(counts: readonly number[]): { option: number; count: number; rank: number }[] {
-  const sorted = counts.map((count, option) => ({ option, count })).sort((a, b) => b.count - a.count || a.option - b.option)
+export function rankActivityResults(
+  counts: readonly number[],
+): { option: number; count: number; rank: number }[] {
+  const sorted = counts
+    .map((count, option) => ({ option, count }))
+    .sort((a, b) => b.count - a.count || a.option - b.option)
   const out: { option: number; count: number; rank: number }[] = []
   sorted.forEach((t, i) => {
     const prev = out[i - 1]
@@ -566,7 +579,9 @@ export type ActivityRouteKey = (typeof ACTIVITY_ROUTE_KEYS)[number]
  * Each route's rule. GET …/results is `view` for a revealed activity and `manage` before (the route decides by status);
  * it is listed as `view` (a guest may read revealed results).
  */
-export const ACTIVITY_RULES: Readonly<Record<ActivityRouteKey, 'view' | 'participate' | 'facilitate' | 'manage'>> = {
+export const ACTIVITY_RULES: Readonly<
+  Record<ActivityRouteKey, 'view' | 'participate' | 'facilitate' | 'manage'>
+> = {
   'GET /api/boards/:bid/activity': 'view',
   'GET /api/boards/:bid/activities': 'view',
   'POST /api/boards/:bid/activities': 'facilitate',

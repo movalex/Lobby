@@ -1947,3 +1947,8 @@ cut-over on staging"; the runbook and the rehearsal: `docs/EXCALIDRAW-CUTOVER.md
     - template conversions to planning keys (Kanban / launch-timeline templates);
     - an Elements panel tile type for planning objects;
     - the reject detail for assignee refusals (no wire reason today).
+- **Excalidraw wave V: "Live sessions+" — foundation landed on `wave-v/foundation` (from `main` 5a76abd0 = staging 711dd04), not merged.** `CONTRACTS_REV` stays 14.
+  - Contracts and decisions: `docs/WAVE-V-CONTRACTS.md` (polls, scales and word clouds; join codes and the QR card with the join-cap fix; breakouts; the session summary; the permission matrix; the anonymity rules; five workstreams with file ownership).
+  - Landed: shared contracts (`live.ts`, `live-activities.ts`, `breakouts.ts`, `join-codes.ts`), migration `0038_live_sessions`, the fail-closed api switches `DRAFTROOM_LIVE_ACTIVITIES`, `DRAFTROOM_JOIN_CODES`, `DRAFTROOM_BREAKOUTS` (render.yaml: off), all 23 routes pending behind their gate with guard rows, the web switches (`LIVE_FLAGS`, all off), the Facilitate registry, the `breakout` top-centre slot, the recap sources, the `session-csv` Export id, the `/j/:code` route, `qrcode-generator` 2.0.4 (MIT, no deps, no scripts; `licence:check` PASS).
+  - The kind proof: `poll-chart`, `word-cloud` and `breakout-frame` pass `checkElement` and `ServerMessage` of the frozen rev 11/12/13 readers and of rev 14 (the deployed web and sync).
+  - Next: the five workstreams (WS1 activities api with the NAS load test, WS2 activities web, WS3 QR and codes, WS4 breakouts, WS5 summary, the 711dd04 stale pair and the gate).

@@ -47,7 +47,8 @@ describe('loadConfig', () => {
       breakouts: 'DRAFTROOM_BREAKOUTS',
     } as const
     for (const [sw, name] of Object.entries(names) as [keyof typeof names, string][]) {
-      for (const v of ['', 'off', ' OFF ']) expect(loadConfig({ ...base, [name]: v }).live[sw], `${name}=${v}`).toBe(false)
+      for (const v of ['', 'off', ' OFF '])
+        expect(loadConfig({ ...base, [name]: v }).live[sw], `${name}=${v}`).toBe(false)
       for (const v of ['on', ' On ']) {
         const live = loadConfig({ ...base, [name]: v }).live
         expect(live[sw], `${name}=${v}`).toBe(true)
@@ -55,10 +56,17 @@ describe('loadConfig', () => {
         expect(Object.values(live).filter(Boolean)).toHaveLength(1)
       }
       for (const v of ['1', 'true', 'yes', 'enabled', 'onn'])
-        expect(() => loadConfig({ ...base, [name]: v }), `${name}=${v}`).toThrow(new RegExp(`${name} must be on or off`))
+        expect(() => loadConfig({ ...base, [name]: v }), `${name}=${v}`).toThrow(
+          new RegExp(`${name} must be on or off`),
+        )
     }
     expect(
-      loadConfig({ ...prod, DRAFTROOM_LIVE_ACTIVITIES: 'on', DRAFTROOM_JOIN_CODES: 'on', DRAFTROOM_BREAKOUTS: 'on' }).live,
+      loadConfig({
+        ...prod,
+        DRAFTROOM_LIVE_ACTIVITIES: 'on',
+        DRAFTROOM_JOIN_CODES: 'on',
+        DRAFTROOM_BREAKOUTS: 'on',
+      }).live,
     ).toEqual({ activities: true, joinCodes: true, breakouts: true })
   })
 

@@ -354,18 +354,18 @@ export * from './export-control.ts'
 export * from './feedback.ts'
 export * from './guests.ts'
 export * from './history.ts'
-// wave V foundation (the lead's; WS3 reads it): join codes and the QR join card
-export * from './join-codes.ts'
 // wave Q foundation (WS1, WS2 own them after): the built-in icons' index and shards, the element library
 export * from './icons.ts'
 // wave R foundation (shared by WS1 and WS4; the lead's): import jobs
 export * from './imports.ts'
+// wave V foundation (the lead's; WS3 reads it): join codes and the QR join card
+export * from './join-codes.ts'
 export * from './library.ts'
 export * from './link-preview.ts'
+export * from './live.ts'
 // wave V foundation (the lead's): the kill switches, rules and element kinds shared by the wave; polls, scales and
 // word clouds (WS1, WS2 read it)
 export * from './live-activities.ts'
-export * from './live.ts'
 export * from './mindmap.ts'
 // wave R foundation (WS1 owns it after): import from Miro
 export * from './miro-import.ts'

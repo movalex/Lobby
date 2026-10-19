@@ -31,7 +31,12 @@ const READERS: [string, Check, Parse, KeySpec][] = [
   ['rev 11 (437b4e7)', Elements11.checkElement, Proto11.ServerMessage, Custom11.lobbyKeySpec],
   ['rev 12 (3c83611)', Elements12.checkElement, Proto12.ServerMessage, Custom12.lobbyKeySpec],
   ['rev 13 (6769e07)', Elements13.checkElement, Proto13.ServerMessage, Custom13.lobbyKeySpec],
-  ['rev 14 (this package, the deployed 711dd04)', Elements.checkElement, Proto.ServerMessage, Custom.lobbyKeySpec],
+  [
+    'rev 14 (this package, the deployed 711dd04)',
+    Elements.checkElement,
+    Proto.ServerMessage,
+    Custom.lobbyKeySpec,
+  ],
 ]
 
 const KINDS = Object.values(LIVE_ELEMENT_KINDS)
@@ -74,7 +79,8 @@ describe('wave V element kinds against every reader still in use', () => {
   it('a kind outside the word rule is still refused by the deployed check (the rule did not loosen)', () => {
     for (const bad of ['Poll-Chart', 'poll chart', `p${'x'.repeat(32)}`])
       expect(
-        Elements.checkElement(withKind(SAMPLE_ELEMENTS.frame as Record<string, unknown>, bad, 'frame-bad')).ok,
+        Elements.checkElement(withKind(SAMPLE_ELEMENTS.frame as Record<string, unknown>, bad, 'frame-bad'))
+          .ok,
         bad,
       ).toBe(false)
   })

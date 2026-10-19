@@ -15,7 +15,7 @@ import type { LiveSwitch } from '@draftroom/contracts'
 import type { FastifyInstance, onRequestHookHandler, RouteHandlerMethod } from 'fastify'
 import type { ApiConfig } from '../../config.ts'
 import { ApiError, notFound } from '../../errors.ts'
-import { isPendingRoute, type PendingMethod, PENDING_ROUTES, type PendingRoute } from '../pending-routes.ts'
+import { isPendingRoute, PENDING_ROUTES, type PendingMethod, type PendingRoute } from '../pending-routes.ts'
 
 /** What the gate reads: the config's switches (a FeatureContext has them). */
 export interface LiveSwitchSource {

@@ -54,7 +54,8 @@ export function joinCodeFromBytes(bytes: Uint8Array): string {
   let n = 0n
   for (let i = 0; i < 5; i++) n = (n << 8n) | BigInt(bytes[i] ?? 0)
   let out = ''
-  for (let i = JOIN_CODE_LENGTH - 1; i >= 0; i--) out += JOIN_CODE_ALPHABET[Number((n >> BigInt(i * 5)) & 31n)]
+  for (let i = JOIN_CODE_LENGTH - 1; i >= 0; i--)
+    out += JOIN_CODE_ALPHABET[Number((n >> BigInt(i * 5)) & 31n)]
   return out
 }
 
@@ -90,14 +91,19 @@ export const JOIN_CODE_ROUTES = {
   create: '/api/boards/:bid/review-links/:id/code',
   resolve: '/api/join/:code',
 } as const
-export const JOIN_CODE_ROUTE_KEYS = [`POST ${JOIN_CODE_ROUTES.create}`, `GET ${JOIN_CODE_ROUTES.resolve}`] as const
+export const JOIN_CODE_ROUTE_KEYS = [
+  `POST ${JOIN_CODE_ROUTES.create}`,
+  `GET ${JOIN_CODE_ROUTES.resolve}`,
+] as const
 export type JoinCodeRouteKey = (typeof JOIN_CODE_ROUTE_KEYS)[number]
 export const JOIN_CODE_RULES: Readonly<Record<JoinCodeRouteKey, 'creator' | 'anyone'>> = {
   'POST /api/boards/:bid/review-links/:id/code': 'creator',
   'GET /api/join/:code': 'anyone',
 }
 /** Making a code hands out the link's access (like extending the link): guest row and creator row (share, always). */
-export const JOIN_CODE_CREATOR_ROUTE_KEYS: readonly JoinCodeRouteKey[] = ['POST /api/boards/:bid/review-links/:id/code']
+export const JOIN_CODE_CREATOR_ROUTE_KEYS: readonly JoinCodeRouteKey[] = [
+  'POST /api/boards/:bid/review-links/:id/code',
+]
 
 const enc = encodeURIComponent
 export const joinCodeCreatePath = (bid: string, linkId: string) =>

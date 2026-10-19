@@ -48,8 +48,8 @@ export const BREAKOUT_LIMITS = {
 
 // C0/C1 controls and the bidi/zero-width controls (as live-activities.ts), checked per code point.
 const FORBIDDEN = new Set([
-  0x061c, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2060, 0x2066, 0x2067,
-  0x2068, 0x2069, 0x2028, 0x2029, 0xfeff,
+  0x061c, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2060, 0x2066,
+  0x2067, 0x2068, 0x2069, 0x2028, 0x2029, 0xfeff,
 ])
 const bad = (s: string) => {
   for (const ch of s) {
@@ -68,7 +68,11 @@ const oneLine = (max: number, empty: string, what: string) =>
     .refine((s) => !bad(s), { message: `${what} contains characters that cannot be shown.` })
 
 export const BreakoutGroupName = oneLine(BREAKOUT_LIMITS.groupNameMaxChars, 'Name the group.', 'A group name')
-export const BreakoutBroadcastText = oneLine(BREAKOUT_LIMITS.broadcastMaxChars, 'Write a message.', 'The message')
+export const BreakoutBroadcastText = oneLine(
+  BREAKOUT_LIMITS.broadcastMaxChars,
+  'Write a message.',
+  'The message',
+)
 
 export const BreakoutMode = z.enum(['auto', 'manual', 'choose'])
 export type BreakoutMode = z.infer<typeof BreakoutMode>
@@ -181,7 +185,10 @@ export const BreakoutBroadcastInput = z.strictObject({
 export type BreakoutBroadcastInput = z.input<typeof BreakoutBroadcastInput>
 
 /** POST /api/breakouts/:brk/summon (manage): bring one group to the caller (everyone: the existing summon). */
-export const BreakoutSummonInput = z.strictObject({ groupId: BreakoutGroupId, screen: SummonScreen.optional() })
+export const BreakoutSummonInput = z.strictObject({
+  groupId: BreakoutGroupId,
+  screen: SummonScreen.optional(),
+})
 export type BreakoutSummonInput = z.infer<typeof BreakoutSummonInput>
 
 export const BREAKOUT_ERROR_CODES = {
@@ -277,7 +284,9 @@ export const BREAKOUT_ROUTE_KEYS = [
 ] as const
 export type BreakoutRouteKey = (typeof BREAKOUT_ROUTE_KEYS)[number]
 
-export const BREAKOUT_RULES: Readonly<Record<BreakoutRouteKey, 'view' | 'participate' | 'facilitate' | 'manage'>> = {
+export const BREAKOUT_RULES: Readonly<
+  Record<BreakoutRouteKey, 'view' | 'participate' | 'facilitate' | 'manage'>
+> = {
   'GET /api/boards/:bid/breakouts': 'view',
   'POST /api/boards/:bid/breakouts': 'facilitate',
   'POST /api/breakouts/:brk/assign': 'manage',

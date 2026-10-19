@@ -2,7 +2,11 @@
 // the api's too), the three wave V features (registered empty), the Facilitate menu's registry (entries after the six
 // built-ins, pill parts per board page), the top-centre 'breakout' slot, the recap's sources, the Export section id and
 // the /j/:code route. Each workstream pins its own feature in its own tests; this file pins what they share.
-import { LIVE_SWITCHES_OFF, PENDING_PALETTE_COMMAND_IDS, WAVE_V_PALETTE_COMMAND_IDS } from '@draftroom/contracts'
+import {
+  LIVE_SWITCHES_OFF,
+  PENDING_PALETTE_COMMAND_IDS,
+  WAVE_V_PALETTE_COMMAND_IDS,
+} from '@draftroom/contracts'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -86,7 +90,8 @@ describe('the wave V switches', () => {
   })
 
   it('the wave V palette commands are pending (no feature registers them yet)', () => {
-    for (const id of WAVE_V_PALETTE_COMMAND_IDS) expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).toContain(id)
+    for (const id of WAVE_V_PALETTE_COMMAND_IDS)
+      expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).toContain(id)
   })
 })
 
@@ -114,7 +119,12 @@ describe('the wave V features', () => {
   })
 
   it('the Export dialog takes a session-csv section (an id of ExportSectionId: this compiles)', () => {
-    const off = registerExportSection({ id: 'session-csv', order: 50, offered: () => false, Section: () => null })
+    const off = registerExportSection({
+      id: 'session-csv',
+      order: 50,
+      offered: () => false,
+      Section: () => null,
+    })
     expect(typeof off).toBe('function')
     off()
   })
@@ -126,7 +136,13 @@ describe('the Facilitate menu registry', () => {
     ({ close }: { close(refocus: boolean): void }) =>
       createElement(
         'button',
-        { type: 'button', role: 'menuitem', className: 'dr-wk-menu__item', 'data-testid': `extra-${id}`, onClick: () => close(true) },
+        {
+          type: 'button',
+          role: 'menuitem',
+          className: 'dr-wk-menu__item',
+          'data-testid': `extra-${id}`,
+          onClick: () => close(true),
+        },
         id,
       )
   const spec = (over: Partial<FacilitateEntrySpec>): FacilitateEntrySpec => ({
@@ -141,7 +157,9 @@ describe('the Facilitate menu registry', () => {
     const kit = workshopKit()
     const input = { ctx: kit.ctx as CanvasFeatureContext, guest: false, facilitator: true }
     cleanups.push(registerFacilitateEntry(spec({ id: 'breakouts', order: 300 })))
-    cleanups.push(registerFacilitateEntry(spec({ id: 'activities', order: 100, shown: (i) => i.facilitator })))
+    cleanups.push(
+      registerFacilitateEntry(spec({ id: 'activities', order: 100, shown: (i) => i.facilitator })),
+    )
     const remove = registerFacilitateEntry(
       spec({
         id: 'join-code',
@@ -211,9 +229,11 @@ describe('the Facilitate menu registry', () => {
     })
     expect(pillText(parts)).toBe('4:58 · Vote · Group 2 · 8:30')
     // without extras the pill is as before wave V
-    expect(pillText(facilitatePill({ timer: 'idle', clock: '0:00', voteOpen: false, brainstormOpen: false, hands: 0 }))).toBe(
-      '',
-    )
+    expect(
+      pillText(
+        facilitatePill({ timer: 'idle', clock: '0:00', voteOpen: false, brainstormOpen: false, hands: 0 }),
+      ),
+    ).toBe('')
   })
 })
 

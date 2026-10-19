@@ -56,13 +56,18 @@ async function seed(q: Db) {
     `INSERT INTO users (id, name, handle, color, kind, guest_name) VALUES ($1, 'Ana (guest)', NULL, '#3355ff', 'guest', 'Ana')`,
     [G],
   )
-  for (const w of [W, W2]) await q.query(`INSERT INTO workspaces (id, name, created_by) VALUES ($1, 'Studio', $2)`, [w, U])
+  for (const w of [W, W2])
+    await q.query(`INSERT INTO workspaces (id, name, created_by) VALUES ($1, 'Studio', $2)`, [w, U])
   for (const [b, w] of [
     [B, W],
     [B2, W],
     [BX, W2],
   ])
-    await q.query(`INSERT INTO boards (id, workspace_id, title, created_by) VALUES ($1, $2, 'B', $3)`, [b, w, U])
+    await q.query(`INSERT INTO boards (id, workspace_id, title, created_by) VALUES ($1, $2, 'B', $3)`, [
+      b,
+      w,
+      U,
+    ])
 }
 
 interface ActivityRow {
@@ -185,7 +190,12 @@ describe('wave V migration', () => {
     // the new ones: the four tables' and the join code's on invitations
     const added = after.constraints.filter((k) => !before.constraints.includes(k))
     expect(added.filter((k) => !isNew(k) && !k.startsWith('invitations.')).sort()).toEqual([])
-    expect(added.filter((k) => k.startsWith('invitations.')).map((k) => k.split(':')[0]).sort()).toEqual([
+    expect(
+      added
+        .filter((k) => k.startsWith('invitations.'))
+        .map((k) => k.split(':')[0])
+        .sort(),
+    ).toEqual([
       'invitations.invitations_join_code_hash_check',
       'invitations.invitations_join_code_n_check',
       // Postgres 18 lists NOT NULL as a constraint too
@@ -236,7 +246,10 @@ describe('0038: live activities', () => {
       [{ status: 'closed', closed_at: t }, 'no error'],
       [{ status: 'cancelled', closed_at: t }, 'no error'],
       [{ status: 'revealed', closed_at: t, revealed_at: t, results: res, placed_at: t }, 'no error'],
-      [{ status: 'closed', closed_at: t, kind: 'words', config: { maxWords: 3 }, hidden: ['agile'] }, 'no error'],
+      [
+        { status: 'closed', closed_at: t, kind: 'words', config: { maxWords: 3 }, hidden: ['agile'] },
+        'no error',
+      ],
       [
         {
           status: 'closed',
@@ -259,7 +272,9 @@ describe('0038: live activities', () => {
     expect(await sqlstate(activity(q, { id: ACT2 }))).toBe('23505')
     expect(await sqlstate(activity(q, { id: ACT2, board_id: B2 }))).toBe('no error')
     expect(
-      await sqlstate(activity(q, { id: 'act_closed0000001', status: 'closed', closed_at: '2099-01-01T00:00:00Z' })),
+      await sqlstate(
+        activity(q, { id: 'act_closed0000001', status: 'closed', closed_at: '2099-01-01T00:00:00Z' }),
+      ),
     ).toBe('no error')
     await q.query(`UPDATE live_activities SET status = 'closed', closed_at = now() WHERE id = $1`, [ACT])
     expect(await sqlstate(activity(q, { id: 'act_reopen0000001' }))).toBe('no error')
@@ -280,18 +295,21 @@ describe('0038: live activities', () => {
     // a plain insert of a second answer is refused
     expect(
       await sqlstate(
-        q.query(`INSERT INTO live_answers (workspace_id, activity_id, user_id, answer) VALUES ($1, $2, $3, '{}')`, [
-          W,
-          ACT,
-          U,
-        ]),
+        q.query(
+          `INSERT INTO live_answers (workspace_id, activity_id, user_id, answer) VALUES ($1, $2, $3, '{}')`,
+          [W, ACT, U],
+        ),
       ),
     ).toBe('23505')
     expect(await sqlstate(answer(q, U, { kind: 'words', words: ['x'.repeat(3000)] }))).toBe('23514')
     expect(await sqlstate(answer(q, U, [1, 2]))).toBe('23514')
     // inside its activity's workspace only (the composite key)
-    await q.query(`INSERT INTO users (id, name, handle, color) VALUES ('usr_carol00000001', 'carol', 'carol', '#000000')`)
-    expect(await sqlstate(answer(q, 'usr_carol00000001', { kind: 'poll', choices: [0] }, ACT, W2))).toBe('23503')
+    await q.query(
+      `INSERT INTO users (id, name, handle, color) VALUES ('usr_carol00000001', 'carol', 'carol', '#000000')`,
+    )
+    expect(await sqlstate(answer(q, 'usr_carol00000001', { kind: 'poll', choices: [0] }, ACT, W2))).toBe(
+      '23503',
+    )
     // a guest who goes takes their answer along; deleting the activity (or its board) deletes the rest
     await q.query('DELETE FROM users WHERE id = $1', [G])
     expect(await count(q, 'live_answers')).toBe(1)
@@ -304,7 +322,9 @@ describe('0038: live activities', () => {
     db = await openTestDb()
     const q = db
     await seed(q)
-    await q.query(`INSERT INTO users (id, name, handle, color) VALUES ('usr_bob0000000001', 'bob', 'bob', '#000000')`)
+    await q.query(
+      `INSERT INTO users (id, name, handle, color) VALUES ('usr_bob0000000001', 'bob', 'bob', '#000000')`,
+    )
     await q.query(
       `INSERT INTO live_activities (id, workspace_id, board_id, kind, prompt, config, created_by)
        VALUES ($1, $2, $3, 'words', 'One word', '{"maxWords":3}', 'usr_bob0000000001')`,
@@ -324,7 +344,8 @@ describe('0038: breakouts', () => {
     db = await openTestDb()
     const q = db
     await seed(q)
-    const g = (n: number) => Array.from({ length: n }, (_, i) => ({ id: `g${i + 1}`, name: 'G', frameId: `shape:f${i}` }))
+    const g = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ id: `g${i + 1}`, name: 'G', frameId: `shape:f${i}` }))
     let n = 0
     const id = () => `brk_session${String(++n).padStart(6, '0')}`
     const ended = '2099-01-01T00:00:00Z'
@@ -374,7 +395,14 @@ describe('0038: join codes', () => {
     db = await openTestDb()
     const q = db
     await seed(q)
-    const inv = (id: string, role: string, multi: boolean, hash: string | null, n = 0, board: string | null = B) =>
+    const inv = (
+      id: string,
+      role: string,
+      multi: boolean,
+      hash: string | null,
+      n = 0,
+      board: string | null = B,
+    ) =>
       q.query(
         `INSERT INTO invitations (id, token_hash, workspace_id, board_id, role, created_by, expires_at, multi_use,
                                   invited_email, join_code_hash, join_code_n)

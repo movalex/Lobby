@@ -419,7 +419,9 @@ export const parseDesignPreviews = (env: Env): boolean => parseOnOff(env, 'DRAFT
 
 /** Wave V: DRAFTROOM_LIVE_ACTIVITIES, DRAFTROOM_JOIN_CODES, DRAFTROOM_BREAKOUTS, each as parseOnOff. */
 export function parseLiveSwitches(env: Env): LiveSwitches {
-  return Object.fromEntries(LIVE_SWITCHES.map((s) => [s, parseOnOff(env, LIVE_SWITCH_ENV[s])])) as LiveSwitches
+  return Object.fromEntries(
+    LIVE_SWITCHES.map((s) => [s, parseOnOff(env, LIVE_SWITCH_ENV[s])]),
+  ) as LiveSwitches
 }
 
 /** DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS: exact http(s) origins, behind the local-dev guard only. */
