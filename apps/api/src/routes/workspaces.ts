@@ -84,6 +84,7 @@ import { roleRequiresCreator } from '../auth/identity.ts'
 import { storedEmails } from '../auth/users.ts'
 import type { AppContext, Params } from '../context.ts'
 import { ApiError, badRequest, conflict, forbidden, notFound, parse } from '../errors.ts'
+import { dropLostMembers, lockForAccessLoss } from '../features/breakouts/access-loss.ts'
 import {
   anyInternalOnlyIn,
   assertMemberRaiseAllowed,
@@ -159,6 +160,11 @@ function changedBoards(
   }
   return out
 }
+
+/** `boards` and then `more`, each once (the boards a change is told for: its own, then those whose breakouts moved). */
+const withBoards = (boards: readonly string[], more: readonly string[]): string[] => [
+  ...new Set([...boards, ...more]),
+]
 
 /** `uid`'s role in the workspace, unlocked; null for a non-member and for a name-only guest account. */
 const readMember = (q: Queryable, wid: string, uid: string) =>
@@ -486,6 +492,12 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
     const result = await db.transaction(async (tx): Promise<MemberChange> => {
       const { callerRole, targetRole, personalOf } = await lockAndLoad(tx, wid, user.id, uid)
       if (targetRole === role) return { members: await listWorkspaceMembers(tx, wid), boards: [] }
+      // a lower role can lose boards (a member made a guest keeps only their grants): their running breakouts and
+      // the open activities here, locked at step 2 (breakouts/access-loss.ts)
+      const live =
+        WS_RANK[role] > WS_RANK[targetRole]
+          ? await lockForAccessLoss(tx, { workspaceId: wid, userIds: [uid] })
+          : null
       if (role === 'owner' && callerRole !== 'owner')
         throw new ApiError(403, WORKSPACE_MEMBER_CODES.ownerOnly, OWNER_ONLY_MESSAGE)
       if (targetRole === 'owner') await mayStopOwning(tx, wid, uid, personalOf)
@@ -514,7 +526,11 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
         detail: { userId: uid, role, previousRole: targetRole },
         at: now(),
       })
-      return { members: await listWorkspaceMembers(tx, wid), boards: changedBoards(boards, targetRole, role) }
+      const breakoutBoards = live ? await dropLostMembers(tx, live) : []
+      return {
+        members: await listWorkspaceMembers(tx, wid),
+        boards: withBoards(changedBoards(boards, targetRole, role), breakoutBoards),
+      }
     })
     tell(result, uid, actorOf(user))
     return { members: result.members }
@@ -526,6 +542,9 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
     const result = await db.transaction(async (tx): Promise<MemberChange> => {
       const { targetRole, personalOf } = await lockAndLoad(tx, wid, user.id, uid)
       if (targetRole === 'owner') await mayStopOwning(tx, wid, uid, personalOf)
+      // their running breakouts and the open activities in this workspace, locked at step 2 (after the workspace
+      // row, before their requests, membership and grants; breakouts/access-loss.ts)
+      const live = await lockForAccessLoss(tx, { workspaceId: wid, userIds: [uid] })
       const at = now()
       // 1) What they had in flight (requests and invitations; see the lock notes at the top).
       const left = await endPendingOf(tx, wid, uid, user.id, at)
@@ -577,7 +596,12 @@ export function registerWorkspaceRoutes(app: FastifyInstance, ctx: AppContext): 
         },
         at,
       })
-      return { members: await listWorkspaceMembers(tx, wid), boards: changedBoards(boards, targetRole, null) }
+      // with the membership and the grants gone: out of every running breakout here they can no longer view
+      const breakoutBoards = await dropLostMembers(tx, live)
+      return {
+        members: await listWorkspaceMembers(tx, wid),
+        boards: withBoards(changedBoards(boards, targetRole, null), breakoutBoards),
+      }
     })
     tell(result, uid, actorOf(user))
     return { members: result.members }

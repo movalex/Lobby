@@ -414,6 +414,10 @@ export async function registerLiveActivities(
       const locked = await lockActivity(tx, found.id)
       const at = now()
       if (!isOpenAt(locked, at)) throw notOpen()
+      // Their access again, under the activity's row lock (gate review u2): a loss of access locks this row before it
+      // commits (breakouts/access-loss.ts), so one that committed since the check above refuses the answer here.
+      const still = await requireBoardAction(tx, locked.board_id, user.id, 'view')
+      if (still.board.status !== 'active') throw readOnlyBoard()
       await tx.query(
         `INSERT INTO live_answers (workspace_id, activity_id, user_id, answer, created_at, updated_at)
          VALUES ($1, $2, $3, $4::jsonb, $5, $5)
