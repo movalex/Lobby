@@ -11,7 +11,7 @@ import { LIVE_FLAG_KEYS, setLiveSwitches } from '../live/index.ts'
 import { facilitateExtras, facilitatePillExtras } from '../workshops/ported/facilitate-entries.ts'
 import { el, fakeCanvas } from '../workshops/ported/test-kit.ts'
 import { BreakoutChip } from './Chip.tsx'
-import { groupsFromFrames, makeFrames, selectedFrames } from './frames.ts'
+import { groupsFromFrames, makeFrames, selectedFrames, startWithNewFrames } from './frames.ts'
 import { BREAKOUTS_PANEL, breakoutsCommandHeld, feature } from './index.tsx'
 import { BreakoutsPanel } from './Panel.tsx'
 import { breakoutStoreOf } from './store.ts'
@@ -289,6 +289,48 @@ describe('the frames', () => {
     // clear of what was there
     for (const f of made)
       expect(f.x >= 200 || f.y >= 200 || f.x + f.width <= 0 || f.y + f.height <= 0).toBe(true)
+  })
+
+  it('a refused start leaves no frame behind, in the same undo step; retries never pile up frames; a good start keeps them (review m4)', async () => {
+    const fake = fakeCanvas([el('n1', 'stickynote', { x: 0, y: 0, width: 200, height: 200 })])
+    const frames = () => fake.canvas.items().filter((e) => e.type === 'frame')
+    const asked: string[][] = []
+    const refused = async (groups: { frameId: string }[]) => {
+      asked.push(groups.map((g) => g.frameId))
+      // the frames exist while the api is asked (everyone's camera finds them on start)
+      expect(frames()).toHaveLength(groups.length)
+      return { ok: false as const, message: 'Someone is presenting to everyone. End the presentation first.' }
+    }
+    for (let i = 0; i < 3; i++) expect((await startWithNewFrames(fake.canvas, 4, refused)).ok).toBe(false)
+    expect(frames()).toHaveLength(0)
+    // each removal joined the step that made the frames: one undo step a try, none left over
+    expect(fake.steps).toEqual(Array.from({ length: 6 }, () => 'breakout frames'))
+    expect(fake.options.filter((_, i) => i % 2 === 1)).toEqual([
+      { joinPrevious: true },
+      { joinPrevious: true },
+      { joinPrevious: true },
+    ])
+    // a request that throws (offline) cleans up too
+    await expect(
+      startWithNewFrames(fake.canvas, 2, async () => {
+        throw new Error('offline')
+      }),
+    ).rejects.toThrow('offline')
+    expect(frames()).toHaveLength(0)
+    const ok = await startWithNewFrames(fake.canvas, 3, async () => ({ ok: true as const }))
+    expect(ok.ok).toBe(true)
+    expect(frames()).toHaveLength(3)
+    expect(new Set(asked.flat()).size).toBe(12)
+  })
+
+  it('an untimed session offers no +5 min (the api refuses it too: review m5)', async () => {
+    switchOn()
+    const p = page({ state: sample({ canManage: true, myGroupId: null, members: [] }, { endsAt: null }) })
+    await mounted(p)
+    const html = renderToStaticMarkup(createElement(BreakoutsPanel, { ctx: p.ctx, close: () => {} }))
+    expect(html).toContain('data-testid="breakouts-manage"')
+    expect(html).toContain('data-testid="breakouts-end"')
+    expect(html).not.toContain('data-testid="breakouts-extend"')
   })
 
   it('selected frames become groups top-left first, named after the frames', () => {

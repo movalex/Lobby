@@ -95,8 +95,10 @@ Three kinds (`ACTIVITY_KINDS`), one open activity per board (a dot vote may run 
   200); a hidden word leaves every result, event and placement (`results.hidden` counts them; a manager's state lists
   them in `hiddenWords`).
 - **Reveal** freezes the aggregate into `live_activities.results` in the same transaction; GET results reads it.
-- **Starter left** (as a private brainstorm): the starter, a board owner, or any account editor once the starter can no
-  longer edit the board manages it (`canManage`, `starterLeft`).
+- **Starter left**: the starter, a board owner, or any account editor once the starter left manages it (`canManage`,
+  `starterLeft`). The starter left when they can no longer edit the board (as a private brainstorm) or, since the fix
+  wave (review m6), when they have no open event stream on the board (`EventHub.hasStream`: they closed every tab of
+  it), so a co-facilitator is never stuck behind them; back on the board, it is theirs again. Owners as before.
 
 ### 2.2 Anonymity (the wire rule; WS1's anonymous wire test, WS2's placement test)
 
@@ -256,7 +258,9 @@ from that address gets its own 200 but the address's 400 caps the two together.
 - A session (`brk_…`) has 2-20 groups (`BREAKOUT_LIMITS`), ids `g1`..`g20` in the order given (`breakoutGroupId`),
   each a name (1-40 code points, one line) and its own frame (`frameId`, an api ref `shape:<element id>` as votes and
   spotlights use). Groups come from selected frames, or "Make N frames" (the facilitator's client creates them first in
-  one transact; optional `kind: 'breakout-frame'`, harmless if absent; names `breakoutGroupDefaultName`).
+  one transact, so everyone's camera finds them on start; optional `kind: 'breakout-frame'`, harmless if absent; names
+  `breakoutGroupDefaultName`). A refused or failed start removes them again in the same undo step (`frames.ts`
+  `startWithNewFrames`, `joinPrevious`; review m4), so no frame is left behind and a retry never piles them up.
 - Modes: `auto` (the api deals out everyone with an open event stream on the board, `hub.streams()`, facilitators left
   out, round robin over a shuffled list; a late joiner is placed in the smallest group at their first GET, under the
   session's row lock), `manual` (the facilitator moves people), `choose` (people `POST …/join {groupId}`, up to an
@@ -280,7 +284,7 @@ from that address gets its own 200 but the address's 400 caps the two together.
 | `POST /api/breakouts/:brk/assign` | manage | `AssignBreakoutInput` `{moves: [{userId, groupId \| null}] ≤ 200}` |
 | `POST /api/breakouts/:brk/shuffle` | manage | none (deals everyone out again) |
 | `POST /api/breakouts/:brk/join` | participate | `JoinBreakoutInput` (choose mode; 409 `BREAKOUT_NOT_CHOOSE`) |
-| `POST /api/breakouts/:brk/extend` | manage | `ExtendBreakoutInput` `{addMs ≤ 60 min}` |
+| `POST /api/breakouts/:brk/extend` | manage | `ExtendBreakoutInput` `{addMs ≤ 60 min}`; 400 on an untimed session (it stays untimed: review m5; the panel offers no "+5 min" there) |
 | `POST /api/breakouts/:brk/broadcast` | manage | `BreakoutBroadcastInput` `{text ≤ 200, groupId \| null}` → 204; never stored; one per 3 s per session |
 | `POST /api/breakouts/:brk/summon` | manage | `BreakoutSummonInput` `{groupId, screen?}` → 204; one per 3 s |
 | `POST /api/breakouts/:brk/end` | manage | → `BreakoutState`; "Return everyone" is the existing Gather everyone |
@@ -325,8 +329,8 @@ group) stays; the sync-side preference is a follow-up (a new internal route and 
 
 `view`: `can(role, 'view', status)` (an archived board's readers too). `participate`: may view an ACTIVE board.
 `facilitate`: may edit AND has an account (`workshops/facilitators.ts` `requireFacilitatorAccount`). `manage`: on one
-running activity or session: its starter, a board owner, or any account editor once the starter can no longer edit
-(`starterLeft`); always an account. `creator`: manage access on the board and a creator (`identity.requireCreator`).
+running activity or session: its starter, a board owner, or any account editor once the starter left: can no longer
+edit, or has no open event stream on the board (`starterLeft`; review m6); always an account. `creator`: manage access on the board and a creator (`identity.requireCreator`).
 `anyone`: no session.
 
 ### 6.2 The matrix

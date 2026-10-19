@@ -21,6 +21,7 @@ import {
   POLL,
   setupWorld,
   start,
+  tab,
   WORDS,
   type World,
 } from './support.ts'
@@ -110,6 +111,8 @@ describe('on an active board', () => {
 
   it('every manage route refuses everyone but its managers, and a refusal changes nothing', async () => {
     w = await setupWorld()
+    // the starter has the board open (with no tab of it, they left: activities.test.ts)
+    tab(w, w.editor)
     const aid = idOf(await start(w.editor, w.board, { ...WORDS, durationMs: 120_000 }))
     expectStatus(await answer(w.viewer, aid, { kind: 'words', words: ['hello'] }), 200)
     const before = await snapshotOfTables()

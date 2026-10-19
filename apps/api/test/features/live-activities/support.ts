@@ -163,5 +163,21 @@ export const state = async (c: Caller, board: string): Promise<ActivityState> =>
   return res.json() as ActivityState
 }
 
+let tabs = 0
+/**
+ * Opens an event stream (a tab of the board) for `c`, straight on the hub; returns its close. A starter with no tab
+ * of the board open has left it (review m6): tests where the starter is still there open one.
+ */
+export function tab(w: Pick<World, 'hub' | 'board'>, c: { userId: string }, board = w.board): () => void {
+  const r = w.hub.openStream(board, {
+    userId: c.userId,
+    sessionId: `la-tab-${++tabs}`,
+    deliver: () => {},
+    end: () => {},
+  })
+  if (!r.ok) throw new Error('stream refused')
+  return r.close
+}
+
 /** The activity events published so far. */
 export const activityEvents = (w: World) => w.events.filter((e) => e.type.startsWith('workshop.activity'))

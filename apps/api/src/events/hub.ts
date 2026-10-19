@@ -376,6 +376,12 @@ export class EventHub {
     return out
   }
 
+  /** Whether `userId` has an open stream on `boardId` (a tab of the board open in this process). */
+  hasStream(boardId: string, userId: string): boolean {
+    for (const s of this.byUser.get(userId) ?? []) if (s.boardId === boardId) return true
+    return false
+  }
+
   isOpen(stream: StreamInfo): boolean {
     return this.byBoard.get(stream.boardId)?.has(stream as Entry) ?? false
   }

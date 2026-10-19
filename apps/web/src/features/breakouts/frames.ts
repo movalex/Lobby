@@ -3,10 +3,15 @@
 // tagged with the create-only `customData.lobby.kind` 'breakout-frame': harmless to every reader since rev 11), placed
 // in free space beside what is on the board. Nothing else is written.
 import { LIVE_ELEMENT_KINDS } from '@draftroom/contracts'
-import type { CanvasElement, LobbyCanvas } from '../../canvas/api/index.ts'
+import {
+  type CanvasElement,
+  type LobbyCanvas,
+  type LobbyTx,
+  NotImplementedError,
+} from '../../canvas/api/index.ts'
 import { obstaclesOf } from '../workshops/ported/vote-board.ts'
 import { placeBeside } from '../workshops/results-plan.ts'
-import { framesPlan, groupNameOf } from './model.ts'
+import { frameElementId, framesPlan, groupNameOf } from './model.ts'
 
 const isFrame = (el: CanvasElement | undefined): el is CanvasElement =>
   !!el && el.type === 'frame' && !(el as { isDeleted?: boolean }).isDeleted
@@ -51,4 +56,42 @@ export function makeFrames(canvas: LobbyCanvas, n: number): { name: string; fram
       })
   })
   return made.map((f) => ({ name: f.name, frameId: `shape:${f.id}` }))
+}
+
+/**
+ * Removes frames `makeFrames` just made, folded into the undo step that made them (`joinPrevious`: no step is left
+ * behind for the facilitator to find and undo). A canvas with no board page has no history to join: a plain write.
+ */
+export function removeMadeFrames(canvas: LobbyCanvas, groups: readonly { frameId: string }[]): void {
+  const drop = (tx: LobbyTx) => {
+    for (const g of groups) tx.delete(frameElementId(g.frameId))
+  }
+  try {
+    canvas.transact('breakout frames', drop, { joinPrevious: true })
+  } catch (e) {
+    if (!(e instanceof NotImplementedError)) throw e
+    canvas.transact('breakout frames', drop)
+  }
+}
+
+/**
+ * "Make N frames", then the start: the frames exist before anyone hears of the session (everyone's camera goes to its
+ * group's frame on start), and when the start is refused (409 PRESENTING, SPOTLIGHT or BREAKOUTS_RUNNING, 429, offline)
+ * they go again in the same undo step, so no frame is left behind and a retry never piles up frames (review m4).
+ */
+export async function startWithNewFrames<R extends { ok: boolean }>(
+  canvas: LobbyCanvas,
+  n: number,
+  start: (groups: { name: string; frameId: string }[]) => Promise<R>,
+): Promise<R> {
+  const groups = makeFrames(canvas, n)
+  let out: R
+  try {
+    out = await start(groups)
+  } catch (e) {
+    removeMadeFrames(canvas, groups)
+    throw e
+  }
+  if (!out.ok) removeMadeFrames(canvas, groups)
+  return out
 }

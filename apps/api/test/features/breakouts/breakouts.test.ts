@@ -46,6 +46,7 @@ const world = async () => {
 describe('start and read', () => {
   it('an editor with an account starts breakouts; everyone on the board reads them and hears one whole state', async () => {
     const w = await world()
+    w.tab(w.editor) // the starter is on the board
     const s = await start(w, w.editor, {
       groups: [
         { name: '  Team\tRed ', frameId: 'shape:f1' },
@@ -332,9 +333,36 @@ describe('the modes', () => {
 })
 
 describe('managing', () => {
+  it('a starter who closed every tab of the board: any editor with an account manages; one tab open, they do not (review m6)', async () => {
+    const w = await world()
+    const tab = w.tab(w.editor)
+    const brk = (await start(w, w.editor)).session?.id ?? ''
+    expectStatus(await act(w.editor2, brk, 'shuffle'), 403)
+    expect((await state(w, w.editor2)).canManage).toBe(false)
+    // a tab of another board does not count
+    const elsewhere = w.tab(w.editor, 'b-elsewhere00')
+    tab.close()
+    expect((await state(w, w.editor2)).canManage).toBe(true)
+    expectStatus(await act(w.editor2, brk, 'shuffle'), 200)
+    // back on the board: theirs again
+    const again = w.tab(w.editor)
+    expectStatus(await act(w.editor2, brk, 'shuffle'), 403)
+    // the owner keeps the right whatever the starter does
+    expectStatus(await act(w.owner, brk, 'shuffle'), 200)
+    // still nobody without edit or an account
+    again.close()
+    elsewhere.close()
+    expectStatus(await act(w.viewer, brk, 'end'), 403)
+    const sam = await joinAsGuest(w.api, (await guestLink(w.owner, w.boardId, { role: 'editor' })).url, 'Sam')
+    expect(codeOf(await act(sam, brk, 'end'))).toBe('GUEST_ACCOUNT_REQUIRED')
+    expectStatus(await act(w.editor2, brk, 'end'), 200)
+  })
+
   it('the starter and board owners manage; another editor only once the starter can no longer edit', async () => {
     const w = await world()
-    const s = await start(w, w.editor)
+    // the starter keeps a tab of the board open throughout (with none, they left: the test above)
+    w.tab(w.editor)
+    const s = await start(w, w.editor, { durationMs: 10 * 60_000 })
     const brk = s.session?.id ?? ''
     const addTime = { addMs: 60_000 }
     expectStatus(await act(w.editor2, brk, 'extend', addTime), 403)
@@ -360,7 +388,7 @@ describe('managing', () => {
     expectStatus(await act(w.owner, 'nope', 'end'), 404)
   })
 
-  it('extend adds time (an open-ended session gets an end), capped at the longest duration from now', async () => {
+  it('extend adds time, capped at the longest duration from now; an untimed session is refused (400) and stays untimed (review m5)', async () => {
     const w = await world()
     const s = await start(w, w.owner, { durationMs: 5 * 60_000 })
     const brk = s.session?.id ?? ''
@@ -379,10 +407,12 @@ describe('managing', () => {
 
     const open = await start(w, w.owner, { durationMs: null })
     expect(open.session?.endsAt).toBeNull()
-    const ext = BreakoutState.parse(
-      (await act(w.owner, open.session?.id ?? '', 'extend', { addMs: 60_000 })).json(),
-    )
-    expect(Date.parse(ext.session?.endsAt ?? '')).toBe(w.clock.now().getTime() + 60_000)
+    const before = stateEvents(w).length
+    const refused = await act(w.owner, open.session?.id ?? '', 'extend', { addMs: 5 * 60_000 })
+    expect(refused.statusCode).toBe(400)
+    expect(codeOf(refused)).toBe('BAD_REQUEST')
+    expect(await state(w, w.owner)).toMatchObject({ session: { endsAt: null, rev: 0 } })
+    expect(stateEvents(w)).toHaveLength(before)
   })
 
   it('end: the session ends for everyone (idempotent); every manage route then says BREAKOUTS_ENDED', async () => {

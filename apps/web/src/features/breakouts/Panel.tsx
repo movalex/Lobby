@@ -24,7 +24,7 @@ import { canEditBoard } from '../workshops/workshop-context.ts'
 import { useSecondTick } from './Chip.tsx'
 import { frameExists, goToFrame } from './camera.ts'
 import { onlyMyGroupOf } from './cursors.ts'
-import { groupsFromFrames, makeFrames, selectedFrames } from './frames.ts'
+import { groupsFromFrames, selectedFrames, startWithNewFrames } from './frames.ts'
 import {
   clockText,
   countText,
@@ -112,14 +112,12 @@ function Setup({ ctx, store, run }: { ctx: Ctx; store: BreakoutStore; run: Run }
     if (busy || !capOk) return
     if (from === 'selected' && !enough) return
     setBusy(true)
-    const groups = from === 'selected' ? groupsFromFrames(frames) : makeFrames(ctx.canvas, count)
+    const start = (groups: { name: string; frameId: string }[]) =>
+      store.start({ groups, mode, durationMs: duration, groupCap: mode === 'choose' ? capValue : null })
+    // new frames are made first (so everyone's camera finds them on start) and go again, in the same undo step, when
+    // the start is refused: a retry never piles up frames (review m4)
     const ok = await run(() =>
-      store.start({
-        groups,
-        mode,
-        durationMs: duration,
-        groupCap: mode === 'choose' ? capValue : null,
-      }),
+      from === 'selected' ? start(groupsFromFrames(frames)) : startWithNewFrames(ctx.canvas, count, start),
     )
     setBusy(false)
     if (ok) ctx.canvas.select([])
@@ -387,14 +385,17 @@ function Manage({
   return (
     <div className="dr-brk-manage" data-testid="breakouts-manage">
       <div className="dr-brk-actions">
-        <button
-          type="button"
-          className="dr-btn dr-btn--sm"
-          onClick={() => void run(() => store.extend(EXTEND_MS))}
-          data-testid="breakouts-extend"
-        >
-          +5 min
-        </button>
+        {/* an untimed session stays untimed: no "+5 min" (the api refuses it too: review m5) */}
+        {session.endsAt !== null && (
+          <button
+            type="button"
+            className="dr-btn dr-btn--sm"
+            onClick={() => void run(() => store.extend(EXTEND_MS))}
+            data-testid="breakouts-extend"
+          >
+            +5 min
+          </button>
+        )}
         <button
           type="button"
           className="dr-btn dr-btn--sm"

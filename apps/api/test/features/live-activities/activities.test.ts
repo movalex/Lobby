@@ -28,6 +28,7 @@ import {
   setupWorld,
   start,
   state,
+  tab,
   WORDS,
   type World,
 } from './support.ts'
@@ -330,6 +331,7 @@ describe('a scale and a word cloud', () => {
 describe('named activities', () => {
   it('the facilitator reads who answered what after the reveal only; nobody else ever does', async () => {
     w = await setupWorld()
+    tab(w, w.owner) // the starter is on the board
     const aid = idOf(await start(w.owner, w.board, { ...POLL, anonymous: false }))
     expectStatus(await answer(w.viewer, aid, { kind: 'poll', choices: [0] }), 200)
     expectStatus(await answer(w.guest, aid, { kind: 'poll', choices: [2] }), 200)
@@ -380,6 +382,8 @@ describe('named activities', () => {
 describe('who manages', () => {
   it('the starter, a board owner, or any account editor once the starter left (ACTIVITY_NOT_YOURS before)', async () => {
     w = await setupWorld()
+    // the starter keeps a tab of the board open (with none, they left: below)
+    tab(w, w.editor)
     const aid = idOf(await start(w.editor, w.board, POLL))
     const s = await state(w.editor2, w.board)
     expect(s).toMatchObject({ canManage: false, starterLeft: false, results: null })
@@ -398,6 +402,32 @@ describe('who manages', () => {
     expect(errorCode(await act(w.guest, aid, 'close'))).toBe('GUEST_ACCOUNT_REQUIRED')
     expect((await act(w.editor, aid, 'close')).statusCode).toBe(403)
     expectStatus(await act(w.editor2, aid, 'close'), 200)
+  })
+
+  it('a starter who closed every tab of the board counts as left: any account editor may close or cancel; back on the board, theirs again (review m6)', async () => {
+    w = await setupWorld()
+    const close = tab(w, w.editor)
+    const aid = idOf(await start(w.editor, w.board, { ...POLL, durationMs: null }))
+    expect(errorCode(await act(w.editor2, aid, 'close'))).toBe('ACTIVITY_NOT_YOURS')
+    // a tab of another board does not count
+    const elsewhere = tab(w, w.editor, 'b-elsewhere00')
+    close()
+    expect(await state(w.editor2, w.board)).toMatchObject({ canManage: true, starterLeft: true })
+    const back = tab(w, w.editor)
+    expect(await state(w.editor2, w.board)).toMatchObject({ canManage: false, starterLeft: false })
+    back()
+    elsewhere()
+    // a viewer, a commenter and a name-only guest still never manage
+    for (const c of [w.viewer, w.commenter]) expect((await act(c, aid, 'close')).statusCode).toBe(403)
+    expect(errorCode(await act(w.guest, aid, 'close'))).toBe('GUEST_ACCOUNT_REQUIRED')
+    expectStatus(await act(w.editor2, aid, 'close'), 200)
+    // a new one is not blocked: and its starter left too, so the other editor cancels it
+    const next = idOf(await start(w.editor, w.board, POLL))
+    expectStatus(await act(w.editor2, next, 'cancel'), 200)
+    // the board owner keeps the right whatever the starter does
+    const third = idOf(await start(w.editor, w.board, POLL))
+    tab(w, w.editor)
+    expectStatus(await act(w.owner, third, 'close'), 200)
   })
 
   it('a starter whose account is gone counts as left', async () => {

@@ -23,9 +23,10 @@
 //   - participate: may view an ACTIVE board (viewers, commenters, clients and name-only guests answer); an archived
 //     board takes no answer (409 BOARD_READ_ONLY);
 //   - facilitate: may edit AND has an account (workshops/facilitators.ts requireFacilitatorAccount);
-//   - manage: may edit, has an account, and is the starter, a board owner, or anyone once the starter can no longer
-//     edit the board (`starterLeft`, as a private brainstorm); else 403 ACTIVITY_NOT_YOURS. The named answers are a
-//     read: an archived board's managers may still read them.
+//   - manage: may edit, has an account, and is the starter, a board owner, or anyone once the starter left: can no
+//     longer edit the board, or has no open event stream on it (`starterLeft`; the stream part is review m6, so a
+//     co-facilitator is never stuck behind a starter who closed the tab); else 403 ACTIVITY_NOT_YOURS. The named
+//     answers are a read: an archived board's managers may still read them.
 // The person is always the session's user; no body names anyone.
 //
 // Privacy (§2.2): an anonymous activity's answers never leave tied to a person. Bodies and events hold aggregates
@@ -125,7 +126,8 @@ interface ManageRight {
 
 /**
  * May the caller manage `row`? Edit on the board (as its status allows, or as if active for a read: `read`), an
- * account, and the starter, a board owner, or anyone once the starter can no longer edit the board.
+ * account, and the starter, a board owner, or anyone once the starter left: the starter can no longer edit the board,
+ * or has no open event stream on it (closed the tab: review m6, so a co-facilitator is never stuck behind them).
  */
 async function manageRight(
   q: Queryable,
@@ -133,13 +135,17 @@ async function manageRight(
   row: ActivityRow,
   userId: string,
   at: Date,
+  onBoard: (boardId: string, userId: string) => boolean,
   opts: { read?: boolean } = {},
 ): Promise<ManageRight> {
   if (!can(access.role, 'edit', opts.read ? 'active' : access.board.status))
     return { canManage: false, starterLeft: false }
   if (row.created_by === userId) return { canManage: true, starterLeft: false }
   const starter = row.created_by
-  const starterLeft = !starter || !(await allowedNow(q, row.board_id, [starter], 'edit', at)).has(starter)
+  const starterLeft =
+    !starter ||
+    !onBoard(row.board_id, starter) ||
+    !(await allowedNow(q, row.board_id, [starter], 'edit', at)).has(starter)
   if ((await userKind(q, userId)) !== 'account') return { canManage: false, starterLeft }
   return { canManage: access.role === 'owner' || starterLeft, starterLeft }
 }
@@ -156,6 +162,8 @@ export async function registerLiveActivities(
   const now = () => ctx.now()
   const starts = new SlidingWindowLimiter(ACTIVITY_LIMITS.startsPerMinute, 60_000)
   const answers = new SlidingWindowLimiter(ACTIVITY_LIMITS.answersPerMinute, 60_000)
+  /** a person still has the board open here (an event stream): the starter-left rule (review m6) */
+  const onBoard = (boardId: string, userId: string) => ctx.events.hasStream(boardId, userId)
 
   /** What the board's stream is told of `row` (aggregates; results only when everyone may see them). */
   const eventOf = (row: ActivityRow, snap: Snapshot | null, at: Date): WorkshopActivityEvent => {
@@ -227,7 +235,7 @@ export async function registerLiveActivities(
       serverNow: at.toISOString(),
     }
     if (!row || row.status === 'cancelled') return empty
-    const right = await manageRight(q, access, row, userId, at)
+    const right = await manageRight(q, access, row, userId, at, onBoard)
     const status = effectiveStatus(row, at)
     const kept = frozenOf(row, at)
     let answered = 0
@@ -426,7 +434,7 @@ export async function registerLiveActivities(
       if (access.board.status !== 'active') throw forbidden('This board is read-only.')
       if (!can(access.role, 'edit', access.board.status)) throw forbidden(MANAGE_FORBIDDEN)
       await requireFacilitatorAccount(tx, userId)
-      if (!(await manageRight(tx, access, found, userId, at)).canManage) throw notYours()
+      if (!(await manageRight(tx, access, found, userId, at, onBoard)).canManage) throw notYours()
       const locked = await lockActivity(tx, found.id)
       const changed = await transition(tx, locked, at)
       const row = changed ? await lockActivity(tx, found.id) : locked
@@ -568,7 +576,10 @@ export async function registerLiveActivities(
       return { activity: toActivity(row, at), results: withHidden(row.results, row.hidden) }
     if (status === 'cancelled') throw notFound()
     // open or closed: a manager's (they see it live, windowed), or everyone's with live results
-    if (!row.results_live && !(await manageRight(ctx.db, access, row, user.id, at, { read: true })).canManage)
+    if (
+      !row.results_live &&
+      !(await manageRight(ctx.db, access, row, user.id, at, onBoard, { read: true })).canManage
+    )
       throw notFound()
     const kept = frozenOf(row, at)
     if (kept) return { activity: toActivity(row, at), results: withHidden(kept, row.hidden) }
@@ -585,7 +596,8 @@ export async function registerLiveActivities(
     // a read: an archived board's managers may still read them
     if (!can(access.role, 'edit', 'active')) throw forbidden(MANAGE_FORBIDDEN)
     await requireFacilitatorAccount(ctx.db, user.id)
-    if (!(await manageRight(ctx.db, access, row, user.id, at, { read: true })).canManage) throw notYours()
+    if (!(await manageRight(ctx.db, access, row, user.id, at, onBoard, { read: true })).canManage)
+      throw notYours()
     if (effectiveStatus(row, at) !== 'revealed') throw notRevealed()
     return { answers: await namedAnswers(ctx.db, row.id) }
   })

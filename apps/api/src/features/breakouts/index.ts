@@ -15,8 +15,8 @@
 // Rules (contracts live.ts LiveRule; the guard rows in guests/guard.ts refuse name-only guests the seven
 // facilitate/manage routes before any of this runs): `view` may view the board; `participate` may view an ACTIVE
 // board (409 BOARD_ARCHIVED otherwise); `facilitate` may edit and has an account; `manage` may edit, has an account and
-// is the starter or a board owner, or anyone such once the starter can no longer edit the board (`starterLeft`, as a
-// private brainstorm).
+// is the starter or a board owner, or anyone such once the starter left: can no longer edit the board, or has no open
+// event stream on it (closed the tab: review m6).
 //
 // State is in Postgres: a session row (its `rev` grows with every change of it or its members, under its row lock)
 // and one member row per person. Every change publishes `workshop.breakout` (the whole state) to everyone on the board
@@ -96,6 +96,7 @@ const archived = () => conflict('BOARD_ARCHIVED', 'This board is archived. Resto
 const notYours = () =>
   forbidden('Only the person who started these breakouts or a board owner can change them.')
 const noSuchGroup = () => badRequest('There is no such group in these breakouts.')
+const noEndTime = () => badRequest('These breakouts have no end time to extend.')
 
 const expired = (row: SessionRow, at: Date) =>
   row.status === 'running' && row.ends_at !== null && row.ends_at.getTime() <= at.getTime()
@@ -219,6 +220,8 @@ export async function registerBreakouts(
     if (user.kind !== 'account' || !can(access.role, 'edit', access.board.status)) return false
     if (row.created_by === user.id || access.role === 'owner') return true
     if (row.created_by === null) return true // the starter's account is gone
+    // the starter closed every tab of the board: any editor with an account takes over (review m6)
+    if (!events.hasStream(row.board_id, row.created_by)) return true
     return !(await allowedNow(db, row.board_id, [row.created_by], 'edit', at)).has(row.created_by)
   }
 
@@ -496,10 +499,12 @@ export async function registerBreakouts(
     const { addMs } = parse(ExtendBreakoutInput, req.body)
     const { row: found } = await managed(req, user)
     if (found.status !== 'running') throw ended()
+    // an untimed session stays untimed: "+5 min" would give it an end nobody chose (review m5; as activities)
+    if (found.ends_at === null) throw noEndTime()
     const out = await change(found.id, async (_tx, row, at) => {
-      const base = row.ends_at ?? at
+      if (row.ends_at === null) throw noEndTime()
       const latest = at.getTime() + BREAKOUT_LIMITS.durationMaxMs
-      return { endsAt: new Date(Math.min(base.getTime() + addMs, latest)) }
+      return { endsAt: new Date(Math.min(row.ends_at.getTime() + addMs, latest)) }
     })
     if (out.row.status !== 'running') throw ended()
     return body(out, user.id, true)
