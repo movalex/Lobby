@@ -14,17 +14,26 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
 import { toErrorResponse } from '../../../src/errors.ts'
 import { registerBreakouts } from '../../../src/features/breakouts/index.ts'
+import type { FeatureContext } from '../../../src/features/context.ts'
 import { registerJoinCodes } from '../../../src/features/join-codes/index.ts'
 import { liveOn, liveRoute, requireLive } from '../../../src/features/live/switch.ts'
 import { registerLiveActivities } from '../../../src/features/live-activities/index.ts'
-import { PENDING_ROUTES } from '../../../src/features/pending-routes.ts'
+import { PENDING_ROUTES, type PendingRoute } from '../../../src/features/pending-routes.ts'
 import { createTestApi, type TestApi } from '../../helpers.ts'
 
 const UNKNOWN = { error: { code: 'NOT_FOUND', message: 'Not found.' } }
 const ALL_OFF: LiveSwitches = { activities: false, joinCodes: false, breakouts: false }
 const ALL_ON: LiveSwitches = { activities: true, joinCodes: true, breakouts: true }
 
-const FEATURES: [LiveSwitch, readonly string[], typeof registerLiveActivities][] = [
+type Register = (
+  app: FastifyInstance,
+  ctx: FeatureContext,
+  pending: Readonly<Record<string, PendingRoute>>,
+) => Promise<void>
+// a landed feature's handlers need the whole context; the gate needs only the switches (a route off never runs)
+const gateOnly = (live: LiveSwitches) => ({ config: { live } }) as unknown as FeatureContext
+
+const FEATURES: [LiveSwitch, readonly string[], Register][] = [
   ['activities', ACTIVITY_ROUTE_KEYS, registerLiveActivities],
   ['joinCodes', JOIN_CODE_ROUTE_KEYS, registerJoinCodes],
   ['breakouts', BREAKOUT_ROUTE_KEYS, registerBreakouts],
@@ -56,8 +65,7 @@ async function bare(live: LiveSwitches) {
     guarded.push(`${req.method} ${req.routeOptions.url}`)
     throw Object.assign(new Error('refused'), { statusCode: 403 })
   })
-  const ctx = { config: { live } }
-  for (const [, , register] of FEATURES) await register(a, ctx, {})
+  for (const [, , register] of FEATURES) await register(a, gateOnly(live), {})
   await a.ready()
   app = a
   return { a, guarded }
@@ -112,17 +120,18 @@ describe('the wave V kill switches', () => {
     }
   })
 
-  it('on, with no guard in the way, the stub is 501 NOT_IMPLEMENTED (never a feature that looks finished)', async () => {
+  it('on, with no guard in the way, a route still a stub is 501 NOT_IMPLEMENTED (never a feature that looks finished)', async () => {
     const a = Fastify()
     a.setErrorHandler((err, _req, reply) => {
       const r = toErrorResponse(err)
       return reply.code(r.status).send(r.body)
     })
-    for (const [, , register] of FEATURES) await register(a, { config: { live: ALL_ON } }, {})
+    for (const [, , register] of FEATURES) await register(a, gateOnly(ALL_ON), {})
     await a.ready()
     app = a
+    // the stubs are the routes still pending in the real app (a landed route's handler is its owner's)
     for (const [, keys] of FEATURES)
-      for (const key of keys) {
+      for (const key of keys.filter((k) => Object.hasOwn(PENDING_ROUTES, k))) {
         const [method = 'GET', pattern = ''] = key.split(' ') as ['GET' | 'POST', string]
         const res = await a.inject({ method, url: fill(pattern) })
         expect(res.statusCode, key).toBe(501)

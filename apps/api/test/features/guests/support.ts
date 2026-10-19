@@ -30,11 +30,12 @@ export interface World {
  * tests that run the sweep themselves (guestSweeper below) raise it first.
  */
 export async function setupWorld(
-  opts: { events?: EventHub; sync?: SyncInternalClient } = {},
+  opts: { events?: EventHub; sync?: SyncInternalClient; env?: Record<string, string> } = {},
 ): Promise<World> {
   const events = opts.events ?? new EventHub()
   const api = await createTestApi({
     deps: { events, ...(opts.sync ? { syncInternal: opts.sync } : {}) },
+    ...(opts.env ? { env: opts.env } : {}),
   })
   const alice = await api.login('alice')
   const bob = await api.login('bob')

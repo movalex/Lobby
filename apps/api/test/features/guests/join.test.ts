@@ -368,9 +368,10 @@ describe('joining a guest link', () => {
   it(`limits new guests per client IP (${GUEST_JOINS_PER_ADDRESS.max} per 10 minutes: a workshop room behind one office NAT gets in); other addresses are not affected`, async () => {
     const { api, bob, board } = w
     expect(GUEST_JOINS_PER_ADDRESS).toEqual({ max: 60, windowMs: 10 * 60_000 })
-    // Two links, so the per-link rate (60 per 10 minutes) is not what refuses the 61st.
+    // Two links, so the per-link rate (60 per 10 minutes) is not what refuses the 61st (two review links: a workshop
+    // link has windows of its own, wave V R1, join-burst.test.ts).
     const first = tokenOf((await guestLink(bob, board)).url)
-    const second = tokenOf((await guestLink(bob, board, { role: 'editor' })).url)
+    const second = tokenOf((await guestLink(bob, board, { role: 'viewer' })).url)
     // A 12-person workshop in one office: everyone gets in (the old limit refused the 11th).
     for (let i = 0; i < GUEST_JOINS_PER_ADDRESS.max; i++) {
       const res = await joinRequest(api, i % 2 ? second : first, { name: `Guest ${i}` }, { ip: '10.1.1.1' })

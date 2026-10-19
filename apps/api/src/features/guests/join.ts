@@ -16,6 +16,13 @@
 // - new guests per link, whatever their address (GUEST_JOINS_PER_LINK: 60 per 10 minutes), and at most
 //   GUESTS_PER_LINK guests per link (limits.ts, which accepting as a signed-in guest applies too);
 // - joins per signed-in guest (the accept limit).
+// Wave V (R1, the join-cap fix; limits.ts guestJoinWindowSettings): a WORKSHOP link (a board's multi-use editor link,
+// the QR a room scans) has windows of its own instead of the two 60s: 200 a link (limits.ts), and per address 200 on
+// that link plus 400 over every workshop link together. Every try on a workshop link from an address counts against
+// its 400 before the transaction, as every try counts against the 60 (so a full or closed link cannot be hammered for
+// free); a NEW guest counts against its address's 200 on the link only once the link let them in (under the link's row
+// lock, after its GUESTS_PER_LINK check: the 201st of one room is told the link is full, GUEST_LIMIT). The link's kind
+// is read before the transaction (it never changes); an unknown token is held to the 60, as before.
 
 import {
   GUEST_JOINS_PER_ADDRESS,
@@ -25,7 +32,7 @@ import {
 } from '@draftroom/contracts'
 import { newId } from '@draftroom/db'
 import type { FastifyInstance } from 'fastify'
-import { isSecretToken } from '../../auth/session.ts'
+import { isSecretToken, sha256hex } from '../../auth/session.ts'
 import { colorFor, userKind } from '../../auth/users.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, badRequest, conflict, notFound, parse } from '../../errors.ts'
@@ -39,7 +46,12 @@ import {
 } from '../../routes/invitations.ts'
 import type { FeatureContext } from '../context.ts'
 import { publishSharingChanged } from '../dashboard/shared.ts'
-import { assertGuestRoomOnLink, clientAddressKey } from './limits.ts'
+import {
+  assertGuestRoomOnLink,
+  clientAddressKey,
+  guestJoinWindowSettings,
+  isWorkshopInvitation,
+} from './limits.ts'
 import { guestCookieEnd, guestSessionEnd } from './sessions.ts'
 
 /** New guests per client address (an IPv6 client by its /64). */
@@ -47,6 +59,8 @@ export const DEFAULT_GUEST_CREATE_LIMIT: RouteRateLimit = {
   max: GUEST_JOINS_PER_ADDRESS.max,
   timeWindow: GUEST_JOINS_PER_ADDRESS.windowMs,
 }
+const NETWORK_RATE_MESSAGE =
+  'Too many guests joined from this network just now. Wait a few minutes and try again.'
 /** A signed-in guest's session is replaced by a longer one only when that gains at least this much. */
 const SESSION_EXTEND_MIN_MS = 60 * 60 * 1000
 
@@ -59,12 +73,20 @@ export function registerGuestJoin(
   opts: { createLimit?: RouteRateLimit } = {},
 ): void {
   const { db, sessions, notifier, now } = ctx
-  const perIp = keyedLimit(
-    opts.createLimit ?? DEFAULT_GUEST_CREATE_LIMIT,
-    now,
-    'Too many guests joined from this network just now. Wait a few minutes and try again.',
-  )
+  const perIp = keyedLimit(opts.createLimit ?? DEFAULT_GUEST_CREATE_LIMIT, now, NETWORK_RATE_MESSAGE)
   const perUser = keyedLimit(ctx.limits.invitations.acceptPerUser, now)
+  // Wave V (R1): the workshop links' windows (limits.ts guestJoinWindowSettings), apart from perIp.
+  const { perAddressPerWorkshopLink, perAddressOnWorkshopLinks } = guestJoinWindowSettings
+  const perIpOnLink = keyedLimit(
+    { max: perAddressPerWorkshopLink.max, timeWindow: perAddressPerWorkshopLink.windowMs },
+    now,
+    NETWORK_RATE_MESSAGE,
+  )
+  const perIpOnWorkshops = keyedLimit(
+    { max: perAddressOnWorkshopLinks.max, timeWindow: perAddressOnWorkshopLinks.windowMs },
+    now,
+    NETWORK_RATE_MESSAGE,
+  )
 
   app.post('/api/invitations/:token/guest', async (req, reply): Promise<GuestJoined | undefined> => {
     const { token } = req.params as Params
@@ -72,6 +94,8 @@ export function registerGuestJoin(
     const input = parse(GuestJoinInput, req.body ?? {})
     const caller = await sessions.user(req)
     let guestId: string | null = null
+    // Wave V (R1): for a new guest on a workshop link, the link it was counted on and `<address> <link id>` (its 200).
+    let workshop: { linkId: string; key: string } | null = null
     if (caller) {
       if ((await userKind(db, caller.id)) !== 'guest')
         throw conflict('SIGNED_IN', "You're signed in with an account. Accept the invitation instead.")
@@ -82,7 +106,21 @@ export function registerGuestJoin(
       // Counted before the transaction, not after it: simultaneous requests from one address would
       // otherwise all pass a check made before any of them committed. A refused join (a closed link,
       // the per-link cap) counts too.
-      perIp.take(clientAddressKey(req.ip))
+      const address = clientAddressKey(req.ip)
+      const link = await db.maybeOne<{
+        id: string
+        multi_use: boolean
+        role: string
+        board_id: string | null
+      }>('SELECT id, multi_use, role, board_id FROM invitations WHERE token_hash = $1', [sha256hex(token)])
+      if (link && isWorkshopInvitation(link)) {
+        // Wave V (R1): the address's 400 over every workshop link counts every try, as the 60 does; its 200 on this
+        // link counts in the transaction, once the link let them in (so the 201st of a room hears GUEST_LIMIT).
+        workshop = { linkId: link.id, key: `${address} ${link.id}` }
+        perIpOnWorkshops.take(address)
+      } else {
+        perIp.take(address)
+      }
     }
     const callerSessionId = caller ? sessions.idOf(req) : null
 
@@ -108,6 +146,12 @@ export function registerGuestJoin(
       if (guestId)
         await tx.one('SELECT id FROM users WHERE id = $1 AND kind = $2 FOR UPDATE', [guestId, 'guest'])
       await assertGuestRoomOnLink(tx, inv.id, guestId, at)
+      // Wave V (R1): the link let this new guest in; now their address's 200 on it, under the link's row lock (a burst
+      // cannot all pass; a refusal rolls the join back).
+      if (workshop !== null && guestId === null) {
+        if (workshop.linkId !== inv.id || !isWorkshopInvitation(inv)) throw notFound() // never: the token names it
+        perIpOnLink.take(workshop.key)
+      }
 
       let userId = guestId
       let name: string
