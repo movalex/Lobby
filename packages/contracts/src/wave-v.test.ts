@@ -126,18 +126,20 @@ describe('the wave V switches and rules', () => {
     expect(new Set(all).size).toBe(all.length)
   })
 
-  it('the open-state parts of wave V are optional and not yet in OPEN_STATE_PARTS', () => {
-    expect(OPEN_STATE_PARTS as readonly string[]).not.toContain('activity')
-    expect(OPEN_STATE_PARTS as readonly string[]).not.toContain('breakouts')
-    expect([...OPEN_STATE_PENDING_PARTS]).toEqual(['activity', 'breakouts'])
+  it('the open-state parts of wave V are optional and answered (in OPEN_STATE_PARTS since the integration)', () => {
+    expect(OPEN_STATE_PARTS as readonly string[]).toContain('activity')
+    expect(OPEN_STATE_PARTS as readonly string[]).toContain('breakouts')
+    expect([...OPEN_STATE_PENDING_PARTS]).toEqual([])
     const allNull = Object.fromEntries(OPEN_STATE_PARTS.map((p) => [p, null]))
     expect(OpenStateBody.safeParse(allNull).success).toBe(true)
     expect(OpenStateBody.safeParse({ ...allNull, activity: null, breakouts: null }).success).toBe(true)
+    // an api before wave V sends neither: still a body
+    const { activity: _a, breakouts: _b, ...older } = allNull
+    expect(OpenStateBody.safeParse(older).success).toBe(true)
   })
 
-  it('wave V palette commands are listed and every one is pending until its owner registers it', () => {
-    // registered by their owners (and so no longer pending): WS2's activities.start
-    const landed: readonly string[] = ['activities.start']
+  it('wave V palette commands are listed and none is pending (all registered since the integration)', () => {
+    const landed: readonly string[] = [...WAVE_V_PALETTE_COMMAND_IDS]
     expect([...WAVE_V_PALETTE_COMMAND_IDS]).toEqual([
       'activities.start',
       'join.show-code',

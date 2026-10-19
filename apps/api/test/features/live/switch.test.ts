@@ -131,8 +131,12 @@ describe('the wave V kill switches', () => {
     const pendingWaveV = FEATURES.flatMap(([, keys]) => keys.filter((k) => Object.hasOwn(PENDING_ROUTES, k)))
     expect(pendingWaveV).toEqual([])
     for (const [, , register] of FEATURES) await register(a, switchesOnly(ALL_ON), {})
-    expect(liveRoute(a, switchesOnly(ALL_ON), 'activities', 'POST', '/api/wave-v-stub', liveStub, {})).toBe(true)
-    expect(liveRoute(a, switchesOnly(ALL_OFF), 'breakouts', 'GET', '/api/wave-v-stub-off', liveStub, {})).toBe(true)
+    expect(liveRoute(a, switchesOnly(ALL_ON), 'activities', 'POST', '/api/wave-v-stub', liveStub, {})).toBe(
+      true,
+    )
+    expect(
+      liveRoute(a, switchesOnly(ALL_OFF), 'breakouts', 'GET', '/api/wave-v-stub-off', liveStub, {}),
+    ).toBe(true)
     await a.ready()
     app = a
     const res = await a.inject({ method: 'POST', url: '/api/wave-v-stub' })

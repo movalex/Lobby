@@ -15,6 +15,7 @@ import { downloadBoardBackup } from '../../../dashboard/import-backup/download.t
 import { knownUserKind } from '../../../invite/guest.tsx'
 import { useValue } from '../../../lib/signals.ts'
 import { workshopSettingsOf } from '../../workshops/ported/session-settings.ts'
+import { SESSION_CSV_COMMAND } from '../session-csv/Section.tsx'
 import { getController } from './controller.ts'
 import { ExportDialog } from './ExportDialog.tsx'
 import { exportFrameIds } from './export-frames.ts'
@@ -147,6 +148,8 @@ const COMMANDS: readonly CommandSpec[] = [
     readOnlyAllowed: true,
     run: (ctx) => controllerOf(ctx).quickExport('svg', 'board'),
   },
+  // wave V (the integration): the session results CSV of the Export dialog's session-csv section, from the palette
+  SESSION_CSV_COMMAND,
 ]
 
 const exportAllowed = (ctx: CanvasFeatureContext) => controllerOf(ctx).exportAllowed()

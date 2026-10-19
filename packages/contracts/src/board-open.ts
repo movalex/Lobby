@@ -82,8 +82,8 @@ export const OpenState = z.object({
   },
   /**
    * Wave V (docs/WAVE-V-CONTRACTS.md §5): GET /api/boards/:bid/activity (WS1) and GET /api/boards/:bid/breakouts (WS4).
-   * Optional, and pending (OPEN_STATE_PENDING_PARTS) until their owner provides the loader: each moves its name from
-   * there to OPEN_STATE_PARTS (one line, through the lead) in the change that implements its route. An api before that,
+   * Optional. The foundation declared them pending (OPEN_STATE_PENDING_PARTS); since the integration both are in
+   * OPEN_STATE_PARTS, answered by the loader of their own route. An api before wave V,
    * or with the feature's switch off (the loader then refuses with a 404: null), sends none, and the web makes the
    * separate read only while the switch is on (AuthConfig.live).
    */
@@ -116,6 +116,12 @@ export const OPEN_STATE_PARTS = [
   'privateBrainstorm',
   'threads',
   'ai',
+  // wave V (the integration): WS1 answers 'activity' and WS4 'breakouts' (each null while its switch is off)
+  'activity',
+  'breakouts',
 ] as const satisfies readonly OpenStatePart[]
-/** Wave V's parts, declared in OpenState but not answered yet (see OpenState.activity): their owners move them above. */
-export const OPEN_STATE_PENDING_PARTS = ['activity', 'breakouts'] as const satisfies readonly OpenStatePart[]
+/**
+ * Parts declared in OpenState but not answered yet (see OpenState.activity): their owners move them above. Empty since
+ * the wave V integration moved 'activity' and 'breakouts'; a later wave may declare a part pending here again.
+ */
+export const OPEN_STATE_PENDING_PARTS = [] as const satisfies readonly OpenStatePart[]

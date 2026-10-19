@@ -307,6 +307,10 @@ describe('in the real app, a pending route answers like an unknown route', () =>
       ['the board owner', (m, url, body) => w.bob.req(m, url, body)],
       ['a guest', (m, url, body) => sam.req(m, url, body)],
     ]
+    // setupWorld runs with the wave V switches on, so sam's workshop link may already hold its join code
+    const codes = async () =>
+      (await w.api.db.query('SELECT id FROM invitations WHERE join_code_hash IS NOT NULL ORDER BY id')).rows
+    const codesBefore = await codes()
     for (const key of PENDING_NOW) {
       const [method = 'GET', pattern = ''] = key.split(' ') as [Method, string]
       const url = fill(pattern, w.board)
@@ -349,8 +353,6 @@ describe('in the real app, a pending route answers like an unknown route', () =>
       expect(n.n, table).toBe(0)
     }
     // no link got a join code
-    expect(
-      (await w.api.db.query('SELECT id FROM invitations WHERE join_code_hash IS NOT NULL')).rows,
-    ).toEqual([])
+    expect(await codes()).toEqual(codesBefore)
   })
 })

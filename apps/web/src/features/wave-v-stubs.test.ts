@@ -53,17 +53,25 @@ const ALL_ON: LiveFlags = { activities: true, joinCodes: true, breakouts: true, 
 const SERVER_ON = { activities: true, joinCodes: true, breakouts: true }
 
 describe('the wave V switches', () => {
-  it('ship off, and a production page ignores any override', () => {
-    expect(Object.values(LIVE_FLAGS).every((v) => v === false)).toBe(true)
+  it('ship on (the integration), and a production page ignores any override', () => {
+    expect(LIVE_FLAGS).toEqual(ALL_ON)
     expect(Object.keys(LIVE_FLAG_KEYS).sort()).toEqual(Object.keys(LIVE_FLAGS).sort())
     expect(Object.keys(LIVE_FLAG_SERVER).sort()).toEqual(Object.keys(LIVE_FLAGS).sort())
     expect(liveFlags(false, () => '1')).toEqual(LIVE_FLAGS)
+    expect(liveFlags(false, () => '0')).toEqual(LIVE_FLAGS)
   })
 
   it('a dev-auth page may turn each on or off; a blocked store keeps the shipped value', () => {
     const store: Record<string, string> = { [LIVE_FLAG_KEYS.breakouts]: '1', [LIVE_FLAG_KEYS.summary]: '0' }
     const f = liveFlags(true, (k) => store[k])
-    expect(f).toEqual({ activities: false, joinCodes: false, breakouts: true, summary: false })
+    expect(f).toEqual({ activities: true, joinCodes: true, breakouts: true, summary: false })
+    const off: Record<string, string> = { [LIVE_FLAG_KEYS.activities]: '0', [LIVE_FLAG_KEYS.joinCodes]: '0' }
+    expect(liveFlags(true, (k) => off[k])).toEqual({
+      activities: false,
+      joinCodes: false,
+      breakouts: true,
+      summary: true,
+    })
     expect(
       liveFlags(true, () => {
         throw new Error('blocked')
@@ -77,10 +85,13 @@ describe('the wave V switches', () => {
     for (const flag of ['activities', 'joinCodes', 'breakouts'] as const) {
       expect(liveEnabled(flag, ALL_ON), flag).toBe(false)
       expect(liveEnabled(flag, ALL_ON, { ...LIVE_SWITCHES_OFF, [flag]: true }), flag).toBe(true)
-      expect(liveEnabled(flag, LIVE_FLAGS, SERVER_ON), flag).toBe(false)
+      // the shipped web switches are on: the api decides
+      expect(liveEnabled(flag, LIVE_FLAGS, SERVER_ON), flag).toBe(true)
+      expect(liveEnabled(flag, LIVE_FLAGS, LIVE_SWITCHES_OFF), flag).toBe(false)
+      expect(liveEnabled(flag, { ...ALL_ON, [flag]: false }, SERVER_ON), flag).toBe(false)
     }
     expect(liveEnabled('summary', ALL_ON, LIVE_SWITCHES_OFF)).toBe(true)
-    expect(liveEnabled('summary', LIVE_FLAGS, SERVER_ON)).toBe(false)
+    expect(liveEnabled('summary', { ...ALL_ON, summary: false }, SERVER_ON)).toBe(false)
     // the session sets what the api said; anything not exactly true is off
     setLiveSwitches({ activities: true, breakouts: 'yes' as unknown as boolean })
     expect(liveSwitches.get()).toEqual({ activities: true, joinCodes: false, breakouts: false })
@@ -89,11 +100,12 @@ describe('the wave V switches', () => {
     expect(liveSwitches.get()).toEqual(LIVE_SWITCHES_OFF)
   })
 
-  it('the wave V palette commands are pending until their owner registers them (WS2: activities.start)', () => {
-    for (const id of WAVE_V_PALETTE_COMMAND_IDS)
-      if (id === 'activities.start')
-        expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).not.toContain(id)
-      else expect(PENDING_PALETTE_COMMAND_IDS as readonly string[]).toContain(id)
+  it('no wave V palette command is pending: each is a registered command of a board feature', () => {
+    const registered = new Set(CANVAS_FEATURES.flatMap((f) => (f.commands ?? []).map((c) => c.id)))
+    for (const id of WAVE_V_PALETTE_COMMAND_IDS) {
+      expect(PENDING_PALETTE_COMMAND_IDS as readonly string[], id).not.toContain(id)
+      expect(registered.has(id), id).toBe(true)
+    }
   })
 })
 

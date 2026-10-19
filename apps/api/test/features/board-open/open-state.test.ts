@@ -30,7 +30,7 @@ const ROUTES: Record<OpenStatePart, (bid: string) => string> = {
   privateBrainstorm: (b) => `/api/boards/${b}/private-brainstorm`,
   threads: (b) => `/api/boards/${b}/threads?status=all`,
   ai: (b) => `/api/boards/${b}/ai`,
-  // wave V (OPEN_STATE_PENDING_PARTS: checked here once their owners move them into OPEN_STATE_PARTS)
+  // wave V (in OPEN_STATE_PARTS since the integration: WS1's and WS4's loaders)
   activity: (b) => `/api/boards/${b}/activity`,
   breakouts: (b) => `/api/boards/${b}/breakouts`,
 }
@@ -69,6 +69,8 @@ beforeAll(async () => {
   api = await createTestApi({
     db: counter.db,
     deps: { events: hub, syncInternal: new FakeSync(), now: clock.now },
+    // wave V's parts are answered (OPEN_STATE_PARTS since the integration): with their switches on, as the e2e stack
+    env: { DRAFTROOM_LIVE_ACTIVITIES: 'on', DRAFTROOM_JOIN_CODES: 'on', DRAFTROOM_BREAKOUTS: 'on' },
   })
   owner = await api.login('ada', 'Ada Owner')
   editor = await api.login('ed', 'Ed Editor')
@@ -119,6 +121,15 @@ beforeAll(async () => {
       prompt: 'What should we stop doing?',
       anonymous: false,
       target: TARGET,
+    }),
+    201,
+  )
+  // wave V: an open poll (the activity part); the breakouts part answers the board's empty state
+  ok(
+    await owner.req('POST', `/api/boards/${board}/activities`, {
+      kind: 'poll',
+      prompt: 'Which day?',
+      config: { options: ['Mon', 'Fri'] },
     }),
     201,
   )
@@ -195,6 +206,10 @@ describe('GET /api/boards/:bid/open-state: each part is its own route’s body (
     expect(o?.workshop?.timer?.status).toBe('running')
     expect(o?.presentation?.presentation).not.toBeNull()
     expect(o?.privateBrainstorm?.session).not.toBeNull()
+    expect(o?.activity?.activity?.prompt).toBe('Which day?')
+    expect(o?.activity?.canManage).toBe(true)
+    expect(v?.activity?.canManage).toBe(false)
+    expect(o?.breakouts?.session).toBeNull()
   })
 
   it('a name-only guest from a guest link (link caps) and a review-link account: their own parts', async () => {
@@ -331,7 +346,8 @@ describe('GET /api/boards/:bid/open-state with AI on (the ai part’s reads insi
     ] as const) {
       // the AI world runs on the real clock: the answers' own time is all that may differ
       const { body, refused } = await expectParity(`ai on: ${who}`, c, w.board, withoutServerNow)
-      expect(refused, who).toEqual([])
+      // the AI world runs with the wave V switches off (the default): those parts are null, as their routes are 404
+      expect(refused, who).toEqual(['activity', 'breakouts'])
       expect(body?.ai?.enabled, who).toBe(true)
     }
     const owner = (await openState(w.alice, w.board)).body

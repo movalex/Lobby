@@ -124,6 +124,8 @@ async function mounted(p: ReturnType<typeof page>) {
 
 describe('switched off', () => {
   it('the web switch off: no request, no panel, no entry, no chip (the board as before wave V)', async () => {
+    // shipped on since the integration: off is the dev-auth override
+    flags[LIVE_FLAG_KEYS.breakouts] = '0'
     setLiveSwitches({ breakouts: true })
     const p = page()
     expect(await mounted(p)).toBeUndefined()

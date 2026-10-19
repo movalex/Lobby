@@ -4,13 +4,15 @@
 // is ./JoinPage.tsx (App.tsx), the Share dialog's "Show QR" row is ./ShowQr.tsx (board/ShareDialog.tsx
 // WorkshopLinksSection), "Have a code?" is ./JoinField.tsx (auth/SignInPage.tsx). Its switch is
 // features/live/flags.ts LIVE_FLAGS.joinCodes, and the api's DRAFTROOM_JOIN_CODES must be on too (liveEnabled).
-import type { CanvasFeature } from '../../canvas/api/index.ts'
+import type { CanvasFeature, CanvasFeatureContext, CommandSpec } from '../../canvas/api/index.ts'
+import { knownUserKind } from '../../invite/guest.tsx'
 import { liveEnabled } from '../live/index.ts'
 import {
   type FacilitateEntryInput,
   type FacilitateItemProps,
   registerFacilitateEntry,
 } from '../workshops/ported/facilitate-entries.ts'
+import { canEditBoard } from '../workshops/workshop-context.ts'
 import { BoardJoinCardHost, openJoinCard } from './BoardJoinCard.tsx'
 
 /**
@@ -21,6 +23,27 @@ export function joinCodeEntryShown(input: FacilitateEntryInput): boolean {
   if (input.guest || !input.facilitator) return false
   if (input.ctx.me.access?.creator === false) return false
   return liveEnabled('joinCodes')
+}
+
+export const JOIN_CODE_COMMAND_ID = 'join.show-code'
+
+/**
+ * The palette's "Show join code" (wave V integration): the same card as the Facilitate entry, offered to the same people
+ * (an editor with an account who is not known to be a non-creator), while join codes are on. The api still decides.
+ */
+export const JOIN_CODE_COMMAND: CommandSpec = {
+  id: JOIN_CODE_COMMAND_ID,
+  label: 'Show join code',
+  group: 'Facilitate',
+  keywords: ['qr', 'qr code', 'join', 'code', 'invite', 'room', 'scan'],
+  available: () => liveEnabled('joinCodes'),
+  disabledReason: (ctx: CanvasFeatureContext) =>
+    ctx.board.status !== 'active'
+      ? 'This board is archived'
+      : !canEditBoard(ctx) || knownUserKind(ctx.me.user.id) === 'guest' || ctx.me.access?.creator === false
+        ? 'Join codes are shown by the people who share this board'
+        : null,
+  run: (ctx) => openJoinCard(ctx.canvas),
 }
 
 function ShowJoinCodeItem({ ctx, close }: FacilitateItemProps) {
@@ -64,6 +87,7 @@ function QrIcon() {
 
 export const feature: CanvasFeature = {
   id: 'join',
+  commands: [JOIN_CODE_COMMAND],
   overlays: [
     {
       id: 'join-card',

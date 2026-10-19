@@ -1,5 +1,5 @@
 // OWNER: the wave V foundation (the lead): the switches of wave V, "Live sessions+" (docs/WAVE-V-CONTRACTS.md §6.1).
-// With every switch off a user sees exactly the build before wave V: no poll, scale or word cloud entry, answer sheet,
+// With every switch off (a web switch, or the api's it needs) a user sees exactly the build before wave V: no poll, scale or word cloud entry, answer sheet,
 // results panel or chart; no join card, QR, code field or /j/ page; no breakout panel, chip or broadcast; no session
 // summary section or CSV. Each workstream turns its own switch on in the change that makes its feature live (one line,
 // through the lead).
@@ -28,12 +28,14 @@ export interface LiveFlags {
 
 export type LiveFlag = keyof LiveFlags
 
-// The wave V foundation ships every switch off.
+// The wave V foundation shipped every switch off; the integration turned all four on. Each still needs its api switch
+// (liveEnabled; render.yaml keeps the api's off until the deploy's step 3, docs/WAVE-V-CONTRACTS.md §9), so a web with
+// these on offers nothing an api has not switched on.
 export const LIVE_FLAGS: LiveFlags = {
-  activities: false,
-  joinCodes: false,
-  breakouts: false,
-  summary: false,
+  activities: true,
+  joinCodes: true,
+  breakouts: true,
+  summary: true,
 }
 
 export const LIVE_FLAG_KEYS: Readonly<Record<LiveFlag, string>> = {

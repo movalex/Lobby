@@ -33,8 +33,8 @@ export const WAVE_T_PALETTE_COMMAND_IDS = [
 ] as const
 
 /**
- * Wave V's palette commands (frozen by the wave V foundation; docs/WAVE-V-CONTRACTS.md §6.4), each pending until its
- * owner registers it: start a poll, scale or word cloud (WS2), show the join code card (WS3), start breakouts (WS4),
+ * Wave V's palette commands (frozen by the wave V foundation; docs/WAVE-V-CONTRACTS.md §6.4; all registered since the
+ * wave V integration, none in PENDING_PALETTE_COMMAND_IDS): start a poll, scale or word cloud (WS2), show the join code card (WS3), start breakouts (WS4),
  * download the session summary CSV (WS5).
  */
 export const WAVE_V_PALETTE_COMMAND_IDS = [
@@ -288,11 +288,9 @@ export const PENDING_PALETTE_COMMAND_IDS: readonly PaletteCommandId[] = [
   // wave T: none left. The foundation listed every wave T command; WS5 registered 'timeline.new' (features/timeline)
   // and the integration, turning every PLANNING_FLAGS switch on, released the rest (WS2's storyboard.*, WS3's
   // storyboard.play and storyboard.present, WS4's cards.make, kanban.new and card-table.open).
-  // wave V (the foundation): every wave V command, until its owner registers it (and deletes its line here). WS2
-  // registered 'activities.start' (features/live-activities).
-  'join.show-code',
-  'breakouts.start',
-  'session-summary.csv',
+  // wave V: none left. WS2 registered 'activities.start' (features/live-activities), WS4 'breakouts.start'
+  // (features/breakouts), and the integration 'join.show-code' (features/join) and 'session-summary.csv'
+  // (present-export/session-csv, in the present-export feature).
 ]
 
 /**

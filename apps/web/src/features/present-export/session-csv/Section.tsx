@@ -8,11 +8,12 @@
 // opens only under the board's export policy, and the file goes through ../download.ts like every other export (the
 // e2e download rule counts a File System Access picker as a download). Registered by ../../ai/recap/recap.ts.
 import { type ActivitySummary, activitiesPath, ListActivitiesResponse } from '@draftroom/contracts'
-import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
+import type { CanvasFeatureContext, CommandSpec, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { getAiCtx } from '../../ai/ported/runtime.ts'
 import { liveEnabled, liveSwitches } from '../../live/index.ts'
 import { downloadBlob } from '../download.ts'
 import { exportFilename } from '../filename.ts'
+import { getController } from '../ported/controller.ts'
 import { csvBlob } from '../ported/csv.ts'
 import type { ExportSectionProps, ExportSectionSpec } from '../ported/export-sections.ts'
 import { sessionCsv } from './csv.ts'
@@ -83,6 +84,39 @@ function SessionCsvSection({ canvas, boardTitle, disabled, run }: ExportSectionP
       </div>
     </section>
   )
+}
+
+export const SESSION_CSV_COMMAND_ID = 'session-summary.csv'
+
+/**
+ * The palette's "Download session results (CSV)" (the wave V integration; registered by the present-export feature): the
+ * same file as the section, offered while the section would be, under the same export policy (the controller says why
+ * when it refuses, as the dialog would).
+ */
+export const SESSION_CSV_COMMAND: CommandSpec = {
+  id: SESSION_CSV_COMMAND_ID,
+  label: 'Download session results (CSV)',
+  group: 'Export',
+  keywords: ['session', 'summary', 'results', 'csv', 'spreadsheet', 'poll', 'word cloud'],
+  readOnlyAllowed: true,
+  available: () => liveEnabled('summary') && liveSwitches.get().activities === true,
+  run: async (ctx) => {
+    const c = getController(ctx.canvas)
+    c.attach({ id: ctx.board.id, title: ctx.board.title, notify: ctx.notify })
+    // not allowed to export here: openExport only says why (and opens nothing)
+    if (!c.exportAllowed()) return c.openExport()
+    try {
+      const text = await downloadSessionCsv(ctx, ctx.board.title)
+      ctx.notify({ key: 'session-csv', text, testId: 'session-csv-toast' })
+    } catch {
+      ctx.notify({
+        key: 'session-csv',
+        text: 'The session results could not be downloaded. Try again.',
+        tone: 'error',
+        testId: 'session-csv-toast',
+      })
+    }
+  },
 }
 
 export const SESSION_CSV_SECTION: ExportSectionSpec = {

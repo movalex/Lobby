@@ -139,7 +139,7 @@ describe('usage events (S3, M5-5)', () => {
 
 describe('open-state (M5-1)', () => {
   it('has the eight parts the plan names, each nullable', () => {
-    // wave V's two parts are declared and pending until their owners answer them (board-open.ts)
+    // wave V added two (activity, breakouts), answered since the wave V integration (board-open.ts)
     expect([...OPEN_STATE_PARTS, ...OPEN_STATE_PENDING_PARTS].sort()).toEqual(
       Object.keys(OpenState.shape).sort(),
     )
@@ -152,7 +152,10 @@ describe('open-state (M5-1)', () => {
       'privateBrainstorm',
       'threads',
       'ai',
+      'activity',
+      'breakouts',
     ])
+    expect([...OPEN_STATE_PENDING_PARTS]).toEqual([])
     const allNull = Object.fromEntries(OPEN_STATE_PARTS.map((p) => [p, null]))
     expect(OpenState.parse(allNull)).toEqual(allNull)
   })
