@@ -25,11 +25,13 @@ import { collectDownloads, downloadFrom } from '../tests/support/present-export.
 import { aiRunRequests, foreignRequests } from './ai-kit.ts'
 import { focusCanvas } from './navigation-kit.ts'
 import { openBoardExport } from './present-kit.ts'
-import { expect, seed, test } from './workshops-kit.ts'
+import { expect, reloadBoard, seed, test } from './workshops-kit.ts'
 
 test.use({ viewport: { width: 1440, height: 900 } })
 
 const SUMMARY_KEY = 'lobby.liveSummary'
+/** Every wave V web switch (features/live/flags.ts LIVE_FLAG_KEYS), as the integration ships them on. */
+const LIVE_FLAG_KEYS = ['lobby.liveActivities', 'lobby.liveJoinCodes', 'lobby.liveBreakouts', SUMMARY_KEY]
 const setSummary = (page: Page, on: boolean) =>
   page.evaluate(([k, v]) => localStorage.setItem(k as string, v as string), [SUMMARY_KEY, on ? '1' : '0'])
 
@@ -142,7 +144,11 @@ test('v4: a poll, a word cloud and breakouts in Wrap up without AI, in the Recap
   const carol = await users.api('carol')
   const foreign = foreignRequests(a.page)
   const downloads = collectDownloads(a.page)
-  await setSummary(a.page, true)
+  // every wave V web switch on (the sources of WS2 and WS4 are offered with their features)
+  await a.page.evaluate((keys) => {
+    for (const k of keys) localStorage.setItem(k, '1')
+  }, LIVE_FLAG_KEYS)
+  await reloadBoard(a)
 
   await test.step('a poll with formula-like options: answered by bob and carol, revealed', async () => {
     type St = { activity: { id: string } }
@@ -287,8 +293,6 @@ test('v4: a poll, a word cloud and breakouts in Wrap up without AI, in the Recap
   })
   expect(foreign).toEqual([])
 })
-
-const LIVE_FLAG_KEYS = ['lobby.liveActivities', 'lobby.liveJoinCodes', 'lobby.liveBreakouts', SUMMARY_KEY]
 
 test('v4: the wave V pages ask nothing of any other origin: /j/<code> signed out, and the board with every wave V switch on', async ({
   browser,
