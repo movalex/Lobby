@@ -22,8 +22,8 @@ import * as Custom13 from '../test/fixtures/rev13-6769e07/custom-data.ts'
 import * as Elements13 from '../test/fixtures/rev13-6769e07/elements.ts'
 import * as Proto13 from '../test/fixtures/rev13-6769e07/protocol.ts'
 import * as Custom from './custom-data.ts'
-import * as Elements from './elements.ts'
 import type { WireElement } from './elements.ts'
+import * as Elements from './elements.ts'
 import { checkInvariants } from './invariants.ts'
 import { MAX_ORIGINAL_TEXT_CHARS } from './limits.ts'
 import * as Proto from './protocol.ts'
@@ -37,7 +37,12 @@ const READERS: [string, Check, Parse, KeySpec][] = [
   ['rev 11 (437b4e7)', Elements11.checkElement, Proto11.ServerMessage, Custom11.lobbyKeySpec],
   ['rev 12 (3c83611)', Elements12.checkElement, Proto12.ServerMessage, Custom12.lobbyKeySpec],
   ['rev 13 (6769e07)', Elements13.checkElement, Proto13.ServerMessage, Custom13.lobbyKeySpec],
-  ['rev 14 (this package, the deployed 7e5b4d6)', Elements.checkElement, Proto.ServerMessage, Custom.lobbyKeySpec],
+  [
+    'rev 14 (this package, the deployed 7e5b4d6)',
+    Elements.checkElement,
+    Proto.ServerMessage,
+    Custom.lobbyKeySpec,
+  ],
 ]
 
 const sample = (k: string) => SAMPLE_ELEMENTS[k] as Record<string, unknown>
@@ -45,7 +50,10 @@ const lobbyOf = (el: Record<string, unknown>) =>
   ((el.customData as { lobby?: Record<string, unknown> } | undefined)?.lobby ?? {}) as Record<string, unknown>
 const withKind = (el: Record<string, unknown>, kind: string) => ({
   ...el,
-  customData: { ...((el.customData as Record<string, unknown> | undefined) ?? {}), lobby: { ...lobbyOf(el), kind } },
+  customData: {
+    ...((el.customData as Record<string, unknown> | undefined) ?? {}),
+    lobby: { ...lobbyOf(el), kind },
+  },
 })
 
 /** A doc card: a rectangle with a white fill and a top-left label of Markdown-lite words. */
@@ -83,7 +91,14 @@ function docCard(words: string): Record<string, unknown>[] {
 /** A deck slide: a frame named "<n> · …" and the page image inside it (fileId ver_….p<n>). */
 function deckSlide(n: number, frameIndex = 'aC', imageIndex = 'aD'): Record<string, unknown>[] {
   const frame = withKind(
-    { ...sample('frame'), id: `slide-${n}`, index: frameIndex, width: 1600, height: 900, name: `${n} · Our plan` },
+    {
+      ...sample('frame'),
+      id: `slide-${n}`,
+      index: frameIndex,
+      width: 1600,
+      height: 900,
+      name: `${n} · Our plan`,
+    },
     FORMAT_ELEMENT_KINDS.deckSlide,
   )
   const image = withKind(
@@ -101,7 +116,8 @@ function deckSlide(n: number, frameIndex = 'aC', imageIndex = 'aD'): Record<stri
   return [frame, image]
 }
 
-const WORDS = '# Brief\n\n**Goal:** ship _wave W_.\n\n- [ ] one\n- [x] two\n\n> quoted\n\n---\n[link](https://example.com)'
+const WORDS =
+  '# Brief\n\n**Goal:** ship _wave W_.\n\n- [ ] one\n- [x] two\n\n> quoted\n\n---\n[link](https://example.com)'
 const PLACED = [...docCard(WORDS), ...deckSlide(9, 'aC', 'aD'), ...deckSlide(100, 'aE', 'aF')]
 
 describe('wave W element kinds against every reader still in use', () => {

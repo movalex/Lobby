@@ -36,7 +36,10 @@ export interface OrtInferenceOptions {
 /** An ORT CPU session over `model` (the bytes `loadBgModel` returned). Child process only. */
 export async function createOrtInference(model: Uint8Array, opts: OrtInferenceOptions): Promise<BgInference> {
   const ort = await import('onnxruntime-node')
-  const session = await ort.InferenceSession.create(model, { ...BG_SESSION_OPTIONS, executionProviders: ['cpu'] })
+  const session = await ort.InferenceSession.create(model, {
+    ...BG_SESSION_OPTIONS,
+    executionProviders: ['cpu'],
+  })
   const inputName = opts.inputName ?? session.inputNames[0]
   const outputName = opts.outputName ?? session.outputNames[0]
   if (!inputName || !outputName) throw new Error('the model has no input or output')
@@ -47,7 +50,7 @@ export async function createOrtInference(model: Uint8Array, opts: OrtInferenceOp
       if (input.length !== 3 * size * size) throw new Error('input is not [1, 3, size, size]')
       const out = await session.run({ [inputName]: new ort.Tensor('float32', input, [1, 3, size, size]) })
       const t = out[outputName]
-      if (!t || t.type !== 'float32' || t.data.length !== size * size) throw new Error('unexpected model output')
+      if (t?.type !== 'float32' || t.data.length !== size * size) throw new Error('unexpected model output')
       return t.data as Float32Array
     },
     async close() {

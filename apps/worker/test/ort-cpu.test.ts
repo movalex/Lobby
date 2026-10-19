@@ -17,7 +17,11 @@ describe('onnxruntime-node on the CPU, install script blocked', () => {
       expect(mask.length).toBe(size * size)
       const plane = size * size
       for (let p = 0; p < plane; p++) {
-        const want = tinyMaskOf(input[p] as number, input[plane + p] as number, input[2 * plane + p] as number)
+        const want = tinyMaskOf(
+          input[p] as number,
+          input[plane + p] as number,
+          input[2 * plane + p] as number,
+        )
         expect(Math.abs((mask[p] as number) - want)).toBeLessThan(1e-5)
       }
     } finally {

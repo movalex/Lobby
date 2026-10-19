@@ -179,7 +179,9 @@ export const WORKER_OP_MESSAGES: Readonly<Record<WorkerOpErrorCode, string>> = {
 
 /** A worker-reported code as the code users see: anything unknown becomes INTERNAL. */
 export const opFailureCode = (code: string | null | undefined): WorkerOpErrorCode =>
-  code && (WORKER_OP_ERROR_CODES as readonly string[]).includes(code) ? (code as WorkerOpErrorCode) : 'INTERNAL'
+  code && (WORKER_OP_ERROR_CODES as readonly string[]).includes(code)
+    ? (code as WorkerOpErrorCode)
+    : 'INTERNAL'
 
 // ---- the per-kind params and results (stored in worker_ops.params / .result; strict, small) ------------------------
 
@@ -188,7 +190,9 @@ export const ExtractTextParams = z.object({ maxPages: z.number().int().min(1).ma
 export const RenderPagesParams = z
   .object({ from: z.number().int().min(1).max(9999), to: z.number().int().min(1).max(9999) })
   .strict()
-  .refine((p) => p.from <= p.to && p.to - p.from < 30, { message: 'a render-pages op covers at most 30 pages' })
+  .refine((p) => p.from <= p.to && p.to - p.from < 30, {
+    message: 'a render-pages op covers at most 30 pages',
+  })
 
 export const WORKER_OP_PARAMS = {
   'remove-bg': RemoveBgParams,
@@ -216,7 +220,10 @@ export const ExtractTextResult = z
   })
   .strict()
 export const RenderPagesResult = z
-  .object({ pageCount: z.number().int().min(1).max(9999), rendered: z.array(z.number().int().min(1)).max(30) })
+  .object({
+    pageCount: z.number().int().min(1).max(9999),
+    rendered: z.array(z.number().int().min(1)).max(30),
+  })
   .strict()
 
 export const WORKER_OP_RESULTS = {

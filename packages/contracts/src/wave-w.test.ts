@@ -72,7 +72,13 @@ const OP = 'wop_0123456789abcdefghij'
 
 describe('the wave W switches', () => {
   it('five api switches, each with its env name; AuthConfig.formats is optional (an older api sends none)', () => {
-    expect([...FORMAT_SWITCHES]).toEqual(['docCards', 'removeBackground', 'fileSearch', 'deckImport', 'admin'])
+    expect([...FORMAT_SWITCHES]).toEqual([
+      'docCards',
+      'removeBackground',
+      'fileSearch',
+      'deckImport',
+      'admin',
+    ])
     expect(FORMAT_SWITCH_ENV).toEqual({
       docCards: 'DRAFTROOM_DOC_CARDS',
       removeBackground: 'DRAFTROOM_REMOVE_BACKGROUND',
@@ -128,7 +134,15 @@ describe('worker op capabilities', () => {
   })
 
   it('anything else names no kind', () => {
-    for (const c of ['remove-bg', 'remove-bg@0', 'Remove-bg@1', 'previews@1', 'remove-bg:@1', '', 'x'.repeat(80)])
+    for (const c of [
+      'remove-bg',
+      'remove-bg@0',
+      'Remove-bg@1',
+      'previews@1',
+      'remove-bg:@1',
+      '',
+      'x'.repeat(80),
+    ])
       expect(opKindOfCapability(c), c).toBeNull()
     expect(opKindOfCapability('remove-bg:isnet@2')).toBe('remove-bg')
   })
@@ -160,9 +174,9 @@ describe('worker op wire', () => {
     expect(ok(WorkerOpOutputInput, { ...base, role: 'page', page: 9 })).toBe(true)
     expect(ok(WorkerOpOutputInput, { ...base, role: 'page' })).toBe(false)
     expect(ok(WorkerOpOutputInput, { ...base, role: 'thumb' })).toBe(false)
-    expect(ok(WorkerOpOutputInput, { ...base, role: 'original', bytes: WORKER_OP_LIMITS.maxOutputBytes + 1 })).toBe(
-      false,
-    )
+    expect(
+      ok(WorkerOpOutputInput, { ...base, role: 'original', bytes: WORKER_OP_LIMITS.maxOutputBytes + 1 }),
+    ).toBe(false)
   })
 
   it('text comes in batches of at most 50 pages of at most 8,000 characters', () => {
@@ -325,14 +339,22 @@ describe('elements and search', () => {
     expect(SearchHit.parse(hit).file).toEqual(hit.file)
     const { file: _f, ...old } = hit
     expect(SearchHit.parse(old).file).toBeUndefined()
-    const response = { terms: ['brief'], groups: [], totalBoards: 0, totalHits: 0, capped: false, pendingBoards: 0 }
+    const response = {
+      terms: ['brief'],
+      groups: [],
+      totalBoards: 0,
+      totalHits: 0,
+      capped: false,
+      pendingBoards: 0,
+    }
     expect(ok(SearchResponse, response)).toBe(true)
   })
 })
 
 describe('the workspace admin page', () => {
   it('seven owner/admin routes under /api/workspaces/:wid/admin/', () => {
-    for (const k of Object.values(ADMIN_ROUTE_KEYS)) expect(k).toMatch(/^GET \/api\/workspaces\/:wid\/admin\//)
+    for (const k of Object.values(ADMIN_ROUTE_KEYS))
+      expect(k).toMatch(/^GET \/api\/workspaces\/:wid\/admin\//)
     expect(Object.keys(ADMIN_ROUTE_KEYS)).toHaveLength(7)
     expect(adminPath('wsp_0123456789', '/audit')).toBe('/api/workspaces/wsp_0123456789/admin/audit')
     expect(adminWebPath('wsp_0123456789')).toBe('/w/wsp_0123456789/admin')
@@ -343,7 +365,14 @@ describe('the workspace admin page', () => {
     expect(AdminAuditQuery.parse({ before: '42', limit: '100' })).toEqual({ before: 42, limit: 100 })
     expect(ok(AdminAuditQuery, { limit: ADMIN_LIMITS.pageSize + 1 })).toBe(false)
     expect(ok(AdminAuditQuery, { action: 'Board.Create' })).toBe(false)
-    const ev = { id: 1, at: '2026-10-19T00:00:00Z', action: 'later.action', actor: null, board: null, detail: {} }
+    const ev = {
+      id: 1,
+      at: '2026-10-19T00:00:00Z',
+      action: 'later.action',
+      actor: null,
+      board: null,
+      detail: {},
+    }
     expect(ok(AdminAuditEvent, ev)).toBe(true)
     expect(ok(AdminAuditEvent, { ...ev, detail: { nested: { a: 1 } } })).toBe(false)
     expect(ok(AdminAuditEvent, { ...ev, detail: { long: 'x'.repeat(201) } })).toBe(false)

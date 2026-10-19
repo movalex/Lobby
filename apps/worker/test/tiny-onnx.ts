@@ -33,7 +33,13 @@ function valueInfo(name: string, dims: number[]): number[] {
 }
 
 function node(op: string, input: string, output: string, attrs: number[][] = []): number[] {
-  return [...str(1, input), ...str(2, output), ...str(3, `${op}_0`), ...str(4, op), ...attrs.flatMap((a) => bytes(5, a))]
+  return [
+    ...str(1, input),
+    ...str(2, output),
+    ...str(3, `${op}_0`),
+    ...str(4, op),
+    ...attrs.flatMap((a) => bytes(5, a)),
+  ]
 }
 
 /** The model's bytes for a square input of `size` pixels (u2netp uses 320; tests use small sizes). */

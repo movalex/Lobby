@@ -57,7 +57,11 @@ async function seed(q: Db) {
     [B, W],
     [BX, W2],
   ])
-    await q.query(`INSERT INTO boards (id, workspace_id, title, created_by) VALUES ($1, $2, 'B', $3)`, [b, w, U])
+    await q.query(`INSERT INTO boards (id, workspace_id, title, created_by) VALUES ($1, $2, 'B', $3)`, [
+      b,
+      w,
+      U,
+    ])
   for (const [v, w, b] of [
     [V1, W, B],
     [V2, W, B],
@@ -91,7 +95,9 @@ const op = (q: Db, over: Record<string, unknown> = {}) => {
     ...over,
   }
   const cols = Object.keys(row)
-  const vals = cols.map((c) => (c === 'params' || c === 'result') && row[c] !== null ? JSON.stringify(row[c]) : row[c])
+  const vals = cols.map((c) =>
+    (c === 'params' || c === 'result') && row[c] !== null ? JSON.stringify(row[c]) : row[c],
+  )
   return q.query(
     `INSERT INTO worker_ops (${cols.join(', ')}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')})`,
     vals,
@@ -161,7 +167,9 @@ describe('wave W migration', () => {
         .sort(),
     ).toEqual(['asset_versions.asset_versions_derived_from_version_id_fkey'])
     // existing versions are untouched: nothing is derived
-    expect((await d.query('SELECT id FROM asset_versions WHERE derived_from_version_id IS NOT NULL')).rows).toEqual([])
+    expect(
+      (await d.query('SELECT id FROM asset_versions WHERE derived_from_version_id IS NOT NULL')).rows,
+    ).toEqual([])
     for (const t of NEW_TABLES) expect(await count(d, t), t).toBe(0)
   })
 })
@@ -218,14 +226,16 @@ describe('0039: worker ops', () => {
     await op(q, { id: 'wop_active0000001' })
     expect(await sqlstate(op(q, { id: 'wop_active0000002' }))).toBe('23505')
     expect(
-      await sqlstate(op(q, { id: 'wop_active0000003', status: 'running', lease_owner: 'w', lease_until: 'now()' })),
+      await sqlstate(
+        op(q, { id: 'wop_active0000003', status: 'running', lease_owner: 'w', lease_until: 'now()' }),
+      ),
     ).toBe('23505')
     // another kind, another source or other params are separate
     expect(await sqlstate(op(q, { id: 'wop_active0000004', kind: 'extract-text' }))).toBe('no error')
     expect(await sqlstate(op(q, { id: 'wop_active0000005', source_version_id: V2 }))).toBe('no error')
-    expect(
-      await sqlstate(op(q, { id: 'wop_active0000006', kind: 'render-pages', params_key: '9-38' })),
-    ).toBe('no error')
+    expect(await sqlstate(op(q, { id: 'wop_active0000006', kind: 'render-pages', params_key: '9-38' }))).toBe(
+      'no error',
+    )
     expect(
       await sqlstate(op(q, { id: 'wop_active0000007', kind: 'render-pages', params_key: '39-40' })),
     ).toBe('no error')
@@ -240,7 +250,12 @@ describe('0039: worker ops', () => {
     await seed(q)
     const U2 = 'usr_bob0000000001'
     await q.query(`INSERT INTO users (id, name, handle, color) VALUES ($1, 'bob', 'bob', '#3355ff')`, [U2])
-    await op(q, { status: 'done', finished_at: '2099-01-01T00:00:00Z', result_version_id: V2, requested_by: U2 })
+    await op(q, {
+      status: 'done',
+      finished_at: '2099-01-01T00:00:00Z',
+      result_version_id: V2,
+      requested_by: U2,
+    })
     await output(q)
     await q.query('DELETE FROM asset_versions WHERE id = $1', [V2])
     expect(await q.one('SELECT result_version_id FROM worker_ops')).toEqual({ result_version_id: null })
@@ -279,7 +294,9 @@ describe('0039: op outputs', () => {
       await sqlstate(output(q, { ...page, id: 'wpo_output0000005', derivative_id: null, blob_key: 'x' })),
     ).toBe('23514')
     expect(
-      await sqlstate(output(q, { ...page, id: 'wpo_output0000006', page: 10000, blob_key: `${page.blob_key}x` })),
+      await sqlstate(
+        output(q, { ...page, id: 'wpo_output0000006', page: 10000, blob_key: `${page.blob_key}x` }),
+      ),
     ).toBe('23514')
     expect(await sqlstate(output(q, { id: 'wpo_output0000007', blob_key: '../etc/passwd' }))).toBe('23514')
     // a key is used once
@@ -293,14 +310,15 @@ describe('0039: capabilities, derived versions, file text and board refs', () =>
     db = await openTestDb()
     const q = db
     const cap = (c: string) =>
-      q.query('INSERT INTO worker_capabilities_seen (capability, last_seen_at, worker_id) VALUES ($1, now(), $2)', [
-        c,
-        'nas-1',
-      ])
+      q.query(
+        'INSERT INTO worker_capabilities_seen (capability, last_seen_at, worker_id) VALUES ($1, now(), $2)',
+        [c, 'nas-1'],
+      )
     expect(await sqlstate(cap('remove-bg:u2netp@1'))).toBe('no error')
     expect(await sqlstate(cap('extract-text@1'))).toBe('no error')
     expect(await sqlstate(cap('extract-text@1'))).toBe('23505')
-    for (const bad of ['remove-bg', 'Remove-bg@1', 'x@0', 'a b@1']) expect(await sqlstate(cap(bad)), bad).toBe('23514')
+    for (const bad of ['remove-bg', 'Remove-bg@1', 'x@0', 'a b@1'])
+      expect(await sqlstate(cap(bad)), bad).toBe('23514')
   })
 
   it('derived_from_version_id names a version and is SET NULL when it goes', async () => {
@@ -308,7 +326,12 @@ describe('0039: capabilities, derived versions, file text and board refs', () =>
     const q = db
     await seed(q)
     expect(
-      await sqlstate(q.query('UPDATE asset_versions SET derived_from_version_id = $1 WHERE id = $2', ['ver_nope00000001', V2])),
+      await sqlstate(
+        q.query('UPDATE asset_versions SET derived_from_version_id = $1 WHERE id = $2', [
+          'ver_nope00000001',
+          V2,
+        ]),
+      ),
     ).toBe('23503')
     await q.query('UPDATE asset_versions SET derived_from_version_id = $1 WHERE id = $2', [V1, V2])
     await q.query('DELETE FROM asset_versions WHERE id = $1', [V1])
@@ -335,7 +358,15 @@ describe('0039: capabilities, derived versions, file text and board refs', () =>
     expect(await sqlstate(page(3, '漢'.repeat(8001)))).toBe('23514')
     expect(await sqlstate(page(4, '漢'.repeat(8000)))).toBe('no error')
     const state = (over: Record<string, unknown> = {}) => {
-      const row = { version_id: V1, workspace_id: W, status: 'done', pages: 2, bytes: 100, extractor: 'pdfjs-6.3.289', ...over }
+      const row = {
+        version_id: V1,
+        workspace_id: W,
+        status: 'done',
+        pages: 2,
+        bytes: 100,
+        extractor: 'pdfjs-6.3.289',
+        ...over,
+      }
       const cols = Object.keys(row)
       return q.query(
         `INSERT INTO file_text_state (${cols.join(', ')}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')})`,
@@ -360,7 +391,11 @@ describe('0039: capabilities, derived versions, file text and board refs', () =>
     const q = db
     await seed(q)
     const ref = (b: string, w: string, v: string) =>
-      q.query('INSERT INTO board_file_refs (board_id, workspace_id, version_id) VALUES ($1, $2, $3)', [b, w, v])
+      q.query('INSERT INTO board_file_refs (board_id, workspace_id, version_id) VALUES ($1, $2, $3)', [
+        b,
+        w,
+        v,
+      ])
     expect(await sqlstate(ref(B, W, V1))).toBe('no error')
     expect(await sqlstate(ref(B, W, V1))).toBe('23505')
     expect(await sqlstate(ref(B, W2, V2))).toBe('23503')
