@@ -69,7 +69,9 @@ Read once at boot (`ApiConfig.formats`, contracts `FormatSwitches`); a change is
 AND the api's offer (`FORMATS_FLAG_SERVER`: every flag needs one, doc cards too, so their kill switch hides them);
 `formatsOffer` is a signal the session sets from `AuthConfig.formats` (`setFormatsOffer`; anything not exactly `true` is
 off). Each workstream turns its own `FORMATS_FLAGS` line on (through the lead) in the change that makes its feature live;
-the api still decides every request.
+the api still decides every request. `fileSearch` (review nit 1, fix wave) gates every file hit the web shows: search and
+the palette drop file hits (and boards left with none), the `?file=` opener just opens the board, and Ask's file
+citations fall back to the board's elements.
 
 ## 2. Doc cards (WS1, web only; contracts `formats.ts` `FORMAT_ELEMENT_KINDS.docCard`, `DOC_CARD_LIMITS`)
 
@@ -81,18 +83,29 @@ AGENTS.md forbids). Never call the feature "doc": that is the board document `lb
   stroke; its bound label (`containerId` = the card) has `textAlign: 'left'`, `verticalAlign: 'top'`, the body font. The
   label's `originalText` holds **Markdown-lite**: `#`/`##`/`###` headings, `**bold**`, `_italic_`, `` `code` ``, `-` and
   `1.` lists, `- [ ]`/`- [x]` checklists, `>` quotes, `---` rules, `[text](url)` links (only `https:` and Lobby-relative
-  `/b/…` are made clickable, opened with `noopener`, never fetched). The words stay readable as plain text in an old
-  tab, exports, search and Ask.
+  board paths are made clickable, opened with `noopener`, never fetched). The words stay readable as plain text in an
+  old tab, exports, search and Ask. **A board path (review m5)** is clickable only if, once percent-decoded, it is
+  exactly one of the app's own shapes (`markdown-lite.ts` `LOBBY_BOARD_HREF`): `/b/<board id>`, optionally one query of
+  `?el=<ids>`, `?view=x,y,w,h`, `?file=ver_…&page=n` or `?thread=thr_…`, and an optional `#<element id>`; the decoded
+  form is the href. No further path segment, so dot segments (`.%2e`), `%2f`/`%5c`, `//` and double encoding stay
+  plain words.
 - **The face** (`features/doc-cards/DocFace.tsx`, a CardLayer-style face over visible cards only, not while editing): a
   dependency-free parser (`markdown-lite.ts`: linear time, at most `DOC_CARD_LIMITS.maxBlocks` 2,000 blocks and
   `maxInlineNodes` 20,000 inline nodes) emits **React nodes, never HTML** (no `dangerouslySetInnerHTML`, as today in
-  `apps/web/src`). Headings by weight, not size, so the server-derived height still fits; overflow is cut with a fade
+  `apps/web/src`); the lines past the block budget render as ONE pre-wrap text block (review nit 6: at most about
+  2,001 elements a face, not one per line). Headings by weight, not size, so the server-derived height still fits; overflow is cut with a fade
   and an "Open" button. The face is never in an export (WS1 decides whether PNG/PDF strip the marks through the
   export-overlay registry, `present-export/ported/badges.ts`; recommended: strip).
 - **Editing: a side panel `DocEditor`** (a textarea plus a toolbar that inserts marks), a **lease client**: it acquires
   the card's text lease through `canvas/lease` and is read-only until granted; renews through presence `editing`; pushes
   words, layout and the container's fit at `TYPING_PUSH_MS` through the existing holder path (`fit.ts`, `words.ts`);
-  closes without writing when the lease is lost; releases on close. Double-click and double-tap on a doc card open the
+  closes without writing when the lease is lost; releases on close. A panel that turns read-only (the card locked, the
+  role dropped to viewer) stops naming the card in presence and releases the lease, and a grant arriving after that is
+  given straight back (review m7). The board session writes the panel's typing not yet pushed **before** a board undo
+  or redo (`panelBeforeHistory`), so it joins the edit session's step and the undo takes it out; a board change of the
+  words under pending typing cancels the push and the textarea shows the board's words (review m6). The panel's
+  Ctrl+Alt+1/2/3 heading chord fires only without AltGraph and when `key` is the digit itself, never on `code`, so
+  AltGr text (`#` on AZERTY, `@ ~ ² ³`) always types (review M1; Cmd+Option on a Mac). Double-click and double-tap on a doc card open the
   panel (`canvas/input/dblclick.ts`, `doubleTap.ts`); the panel goes on the input guard's list with a test that it is
   never writable without a lease this tab holds (AGENTS.md). The engine's own editor path stays guarded; for a 7e5b4d6
   tab it is plain text editing under the lease, as for any label.
@@ -125,10 +138,29 @@ beside it; the preview path is untouched.
 queued ──claim──> running ──complete──> done
   ^  │              │ └──fail(retry, attempts left) / fail(release)──> queued (run_after = backoff | now)
   │  │              └──fail──> failed (error_code)
-  │  ├──(due > 15 min, or its kind's switch off: expireOps at each claim)──> failed WORKER_UNAVAILABLE
+  │  ├──(its kind's switch off; or due ≥ 10 min AND no capable worker checked in for 10 min: expireOps at each
+  │  │   claim)──> failed WORKER_UNAVAILABLE
+  │  ├──(a person's op still queued 30 min after the request)──> failed WORKER_BUSY
   │  └──(at claim: board trashed or gone)──> cancelled CANCELLED; (source version not ready)──> failed SOURCE_MISSING
   └──lease expired──┘ (reclaimed by the next claim; attempts count claims; the claim after the 3rd fails INTERNAL)
 ```
+
+**The queue (review M2, fix wave).** Age in a busy queue is never a reason to fail an op:
+
+- a claim takes **the ops a person asked for** (`requested_by` set: remove-bg, render-pages) before every op nobody
+  asked for (the backfill's and the on-ready extract-text ops), then the oldest due first;
+- a queued op fails `WORKER_UNAVAILABLE` only when it has been due `WORKER_OP_LIMITS.workerAbsentMs` (10 min) AND no
+  worker reporting its kind's current capability checked in for that long (`worker_capabilities_seen`, written by a
+  claim or a **check-in**: `POST /api/worker/ops/checkin` every `checkinEveryMs` 2 min, busy or idle, §3.2);
+- a person's op still queued `requestedQueueDeadlineMs` (**30 min**) after the request fails `WORKER_BUSY` ("The file
+  worker was busy with other requests for too long. Try again later."): requested ops go first, so only other people's
+  requests can hold one that long (a deck's four runs at their worst budgets are about 14 min). A running op keeps its
+  own budgets (the children's timeouts, the lease); this deadline is for waiting only;
+- one SQL rule says all of it (`worker/ops-jobs.ts` `overdueCodeSql`): the claim sweep (`expireOps`), the op state
+  route (an overdue op reads as failed with its code before any sweep wrote it; one merely waiting reads `queued`), and
+  both request routes (`expireOverdueOf`, under SKIP LOCKED, so the one-active-op index never holds a request back);
+- a running op of a kind whose switch went off is failed `WORKER_UNAVAILABLE` once its lease ran out, and its
+  reservations dropped (review nit 4).
 
 - Kinds `remove-bg`, `extract-text`, `render-pages` (`WORKER_OP_KINDS`), each with a strict params shape
   (`WORKER_OP_PARAMS`: `{}`; `{maxPages ≤ 300}`; `{from, to}`, at most 30 pages) and result (`WORKER_OP_RESULTS`).
@@ -140,7 +172,13 @@ queued ──claim──> running ──complete──> done
   'original'` (remove-bg's PNG: a NEW asset and version id picked at reservation, key `assets/<new ast>/<new ver>/original`)
   or `role: 'page'` (render-pages: a derivative id under the SOURCE version, key `assets/<ast>/<ver>/d/<drv>.<ext>`), at most
   32 per attempt, 32 MiB each. A reclaimed, failed, released or completed op drops its unpublished reservations; their
-  blobs are deleted after COMMIT.
+  blobs are deleted after COMMIT. Fix wave (review m9): a listed output the kind does not adopt (render-pages: a page
+  made meanwhile) is returned `unpublished` and dropped with its blob; the file collector locks a version's ops before
+  the version, keeps a version an op is running on, and deletes its ops' reserved blobs with it; the importing-board
+  cleanup deletes its ops' reserved blobs too.
+- A kind may `verify` the stored outputs before the complete transaction (no transaction open): remove-bg streams its
+  PNG and refuses a `sha256` that is not the bytes' own (409 `OUTPUT_MISMATCH`, review m10), so a version's sha256 (the
+  content key of board backups) is the api's own check, never the worker's word.
 - No I/O inside a transaction; the clock is the api's (`now`), never Postgres `now()`.
 
 ### 3.2 The worker wire (`WORKER_OP_ROUTES`; `apps/api/src/worker/ops-routes.ts`)
@@ -153,6 +191,7 @@ handed out until a browser route queues an op).
 | Route | Body (contracts) | Answer |
 |---|---|---|
 | `POST /api/worker/ops/claim` | `WorkerOpClaimInput` `{workerId, capabilities ≤ 16}` | 204 none; 200 `WorkerOpClaimed` `{op: {id, kind, capability, boardId, sourceVersionId, params, attempt, leaseMs, source: {kind, name, mimeType, sizeBytes, pageCount}}, source: {url}}` (a presigned GET, or the fs-mode grant `q.<wop>`; 900 s) |
+| `POST /api/worker/ops/checkin` (fix wave) | `WorkerOpClaimInput` | 204: records the capabilities only, hands out nothing; a worker that reports a capability calls it every `checkinEveryMs` (2 min), also while its slots are busy |
 | `POST /api/worker/ops/:op/heartbeat` | `WorkerOpLeaseInput` `{workerId, attempt}` | `{leaseMs}`; 409 `LEASE_LOST` |
 | `POST /api/worker/ops/:op/output` | `WorkerOpOutputInput` `{…, role, page?, mimeType png/webp, width, height ≤ 16,384, bytes ≤ 32 MiB}` | `WorkerOpOutputReserved` `{outputId wpo_, upload: {url, method: PUT, headers}}` (presigned PUT, or fs-mode `p.<wpo>`); the kind may refuse (`checkOutput`: 4xx with a code) |
 | `POST /api/worker/ops/:op/text` | `WorkerOpTextInput` `{…, pages: [{page 1..300, body ≤ 8,000}] 1..50}` | `{pages}`; extract-text only (the kind stores them, an upsert per page) |
@@ -173,8 +212,9 @@ and WS4 each replace their kind's line in `OP_KINDS` (through the lead).
   per 30 s each; the last worker id for operators).
 - `GET /api/auth/config` `formats` (`features/formats/offer.ts`): `docCards` and `admin` are their switches; the three
   worker-backed ones are their switch AND their current capability seen within `WORKER_OP_LIMITS.capabilityFreshMs`
-  (10 min). Cached 15 s (forgotten on each claim), fails closed (a database error offers none of the three). So until the
-  owner rebuilds the NAS worker, the web offers nothing that would only queue.
+  (10 min). Cached 15 s (forgotten when a claim or check-in wrote a capability row, at most once per 30 s per capability:
+  review nit 3), fails closed (a database error offers none of the three). So until the owner rebuilds the NAS worker,
+  the web offers nothing that would only queue.
 - The worker reports a capability only when (`apps/worker/src/ops/capabilities.ts`): its kind is enabled by `WORKER_OPS`
   (`all` or unset; `none`; a comma list), the build has a runner for it (`ops/dispatch.ts` `OP_RUNNERS`, empty in the
   foundation), and its prerequisites hold (remove-bg: the model file passes its pinned hash, §4.2). It logs at start which
@@ -185,8 +225,9 @@ and WS4 each replace their kind's line in `OP_KINDS` (through the lead).
 `{id, kind, status, boardId, sourceVersionId, resultVersionId, pagesReady, errorCode, message, createdAt, finishedAt}`:
 no person, path or URL. The `file.op` event (`FILE_OP_EVENT`, `FileOpEvent {op}`) goes after COMMIT to the **requester's**
 streams on the op's board only (`events/hub.ts` `to`), with the same body `GET /api/file-ops/:op` answers; an op without a
-requester (WS3's extract-text) has none. A queued op past its time reads as failed `WORKER_UNAVAILABLE` before any sweep
-wrote it (`opExpired`). The message is `WORKER_OP_MESSAGES[code]`, a fixed user-safe text. WS2 added (through the lead,
+requester (WS3's extract-text) has none. An overdue queued op reads as failed (`WORKER_BUSY` or `WORKER_UNAVAILABLE`,
+§3.1) before any sweep wrote it (`overdueCodeSql`); one waiting in a busy queue reads `queued`, and the web says so
+("Queued: waiting for the file worker"). The message is `WORKER_OP_MESSAGES[code]`, a fixed user-safe text. WS2 added (through the lead,
 folded in at integration) the optional `resultAssetId` (`ast_…`, a done remove-bg's NEW asset, so the web can point
 `customData.lobby.file.assetId` at it; null otherwise; optional, so the foundation's shape still parses).
 
@@ -198,9 +239,30 @@ folded in at integration) the optional `resultAssetId` (`ast_…`, a done remove
   kind's runner (`OpRunner.run(ctx)` → `{outputs, result}`) → complete. `OpFailure(code, retry)` fails with its code; any
   other error fails `INTERNAL` with a retry; a lost lease (409/404 on any call) aborts the run and sends nothing more; a
   shutdown past the grace aborts and releases (the attempt not counted).
-- An api of before wave W answers the ops claim 404: the client reports `'unsupported'`, the loop logs once "this api has
-  no worker ops: previews only" and asks again only after 10 minutes. A worker that reports no capability never calls the
+- An api of before wave W answers the ops claim **403** (its CSRF hook refuses a POST to an unknown route without an
+  Origin; the worker exemption matches route patterns only) or 404: on the claim or the check-in either one means
+  `'unsupported'` (review m3; the preview routes still read 403 as a token problem), the loop logs once "this api has no
+  worker ops: previews only" and asks again only after 10 minutes. A worker that reports no capability never calls the
   ops routes at all (a worker of before wave W is exactly that).
+- **Check-ins** (fix wave, review M2): a worker that reports a capability POSTs `/api/worker/ops/checkin` every
+  `checkinEveryMs` (2 min) on a timer outside its slots, busy or idle, so the api never takes a busy worker for an absent
+  one; one in flight at a time, other errors logged once per kind and retried at the next tick, stopped on shutdown.
+- **Children (fix wave, review M3, m8)**: `run.ts` `maxRssBytes` is a resident-memory cap. On Linux a watchdog reads
+  `/proc/<pid>/status` (VmHWM, the kernel's high-water mark, so a spike between reads counts) every 50 ms and SIGKILLs a
+  child over it: 768 MB for the pdf-text child (`FILE_TEXT_LIMITS.childRssMb`) and for the preview / render-pages pdf
+  child (`PREVIEW.pdfChildRssMb`, `WORKER_PDF_RSS_MB`), 640 MB for the bg child (`REMOVE_BG_LIMITS.childRssMb`), each on
+  top of its heap flag. Not `prlimit --as` (an address-space limit breaks V8's reservations). **On Windows and macOS the
+  watchdog is skipped** (the worker says so at start-up): there the heap flag and a container's limit are the only
+  caps. A child killed for memory, and a child that dies with no answer, fail the op `FILE_TOO_COMPLEX`, final, for
+  every kind (no retries of a file that crashes its child); a spawn error still retries. A preview child killed for
+  memory fails the job `FILE_TOO_LARGE` for good (no new preview code: the api's and web's catalogs stay as they are).
+  Logs carry the op or job id and the reason only.
+- **One Office conversion per deck** (fix wave, review M2): `ops/office-pdf-cache.ts` keeps the converted PDF of an
+  Office version by its (immutable) version id in `<WORKER_TMP_DIR>/drw-pdfc-*`: 20 min from last use, at most 4
+  entries and 512 MB (least recently used goes; an entry in use never), one conversion shared by the ops that wait on
+  it, a failure never kept, the folder swept at start-up. render-pages runs and extract-text of one deck convert once.
+  The preview pipeline stores no converted PDF (only its page pictures), so there was none to reuse. The original is
+  still downloaded on a hit (its sniff and size checks stay).
 - `ops/client.ts` uses the preview client's one POST (`api-client.ts` `createApiCall`, factored out: the token to the API
   origin only, no redirects, a timeout, errors by kind) and parses the claim with the contracts' strict `WorkerOpClaimed`.
 
@@ -276,15 +338,15 @@ The tiny synthetic model (`test/tiny-onnx.ts`, any square size) or an injected `
 capable worker are both 404; guest, viewer and commenter refusals; a version of another board 404; quota at request and at
 complete (a race); idempotent complete; a trashed board cancels at claim; the windows (one active per user, 30 an hour, 300
 a workspace a day, 3 active a workspace). The worker: alpha present and the mask non-empty on fixtures; deterministic
-within a tolerance; a decompression bomb, a truncated PNG and an animated GIF refused; the timeout kill; a heap OOM gives
-`REMOVE_BG_FAILED`, not a crash; the ORT session is never created in the parent (`createOrtInference` is reached only
+within a tolerance; a decompression bomb, a truncated PNG and an animated GIF refused; the timeout kill; a heap OOM (a
+child with no answer) gives `FILE_TOO_COMPLEX` for good since the fix wave (it was `REMOVE_BG_FAILED`), not a crash; the ORT session is never created in the parent (`createOrtInference` is reached only
 from `bg-child.ts`). The web: one undo step restores the original; a stale tab sees the `fileId` change; no
 `data:`/`blob:` URL in any element; the e2e no-outside-request assertion.
 
 ### 4.5 Limits (`REMOVE_BG_LIMITS`)
 
 Input at most 25 MiB, 40 MP and a 12,000 px long edge; output long edge ≤ 4,096 (scaled down) and ≤ 25 MiB; the child a
-256 MB V8 heap and 45 s; 2 intra-op threads (of the worker's 3 CPUs); one op per user at a time, 30 per user per hour, 300
+256 MB V8 heap, a 640 MB resident cap (Linux, §3.5; about twice the stand-in model's measured 300-315 MB) and 45 s; 2 intra-op threads (of the worker's 3 CPUs); one op per user at a time, 30 per user per hour, 300
 per workspace per day, at most 3 active per workspace (counted under a lock in the request's transaction); previews keep
 priority. Expected peak RSS about 300 MB with u2netp inside the 1.5 GB worker at concurrency 1: **WS2 measures it on the
 NAS** (cgroup reads in a throwaway container, as the office evidence did) and reports it in the gate.
@@ -294,9 +356,13 @@ NAS** (cgroup reads in a throwaway container, as the office evidence did) and re
 - **Extraction** is op `extract-text` (no requester), enqueued by the api when a `pdf`-kind version (PDF, PPTX, ODP,
   DOCX, …) becomes `ready` (one call on the `assets.version` path in `app.ts`, through the lead) and by a backfill sweep
   (`FILE_TEXT_LIMITS.backfillPerSweep` 20 versions every `backfillEveryMs` 10 min, newest first, paused while previews
-  queue, only versions without a `file_text_state` row and no active op). The worker runs `pdf-text-child.ts` (pdfjs
-  `getTextContent`, the same pdfjs as previews, 384 MB heap, 60 s) over pages 1..min(N, 300); Office goes to PDF again
-  through the no-network sidecar (≤ 120 s; one more conversion, but the preview path stays untouched). Text is cleaned
+  queue, only versions without a `file_text_state` row and no active op; fix wave, review M2: paused while an op a person
+  asked for is queued, and only up to `backfillMaxQueued` 10 queued extract-text ops in all, so it never builds a
+  backlog; a `FILE_TOO_COMPLEX` failure is for good). The worker runs `pdf-text-child.ts` (pdfjs
+  `getTextContent`, the same pdfjs as previews, 384 MB heap, a 768 MB resident cap on Linux (§3.5: a 1.5 MB PDF of
+  inflating zeros reached 3.4 GB under the heap flag alone), 60 s) over pages 1..min(N, 300); Office goes to PDF again
+  through the no-network sidecar (≤ 120 s; shared with the deck's render-pages runs through the worker's conversion
+  cache, §3.5; the preview path stays untouched). Text is cleaned
   (the `cleanText` rules), ≤ 8,000 characters a page and ≤ 512 KiB a version, written to a temp file (the child's stdout
   cap is 64 KB) and sent in `/text` batches of ≤ 50 pages; the completer writes `file_text_state` (`done`, `empty` for a
   scan: OCR is out of scope and the UI says "no text found", `failed`, or `skipped` past the workspace's
@@ -304,12 +370,20 @@ NAS** (cgroup reads in a throwaway container, as the office evidence did) and re
 - **Storage (0039)**: `file_text_pages (version_id, workspace_id, page, body, tsv)` with GIN (`tsv` = english of the body
   || simple of its folded form, computed by the api in the INSERT, as `board_search_entries`), `file_text_state`, and
   `board_file_refs (board_id, version_id)`, which the indexer refreshes from sync's existing
-  `GET /internal/boards/:bid/asset-refs` (canvas only) on each canvas reindex. Everything cascades from its version or
+  `GET /internal/boards/:bid/asset-refs` (canvas only) on each canvas reindex. A refresh asked for while one is in
+  flight never joins it: the board is marked dirty and read again once the first read is written, so a removed card is
+  never left as the last write (review m1); a failed refresh keeps the rows and is retried with a backoff of 1 min
+  doubling to 30 min, which the once-per-process walk respects (review m2). Everything cascades from its version or
   board, so GC and board deletion clean it; `purgeTrashed` also clears `board_file_refs`.
 - **The query** (`features/search/store.ts`): a second ranked CTE over `file_text_pages ⋈ board_file_refs`, restricted
   to the same `searchScope` boards AND to versions `files-auth` serves on that board, **checked at query time, never
   cached per user**. Hits keep `kind: 'file'`, add `file: {versionId, page, name}`, and `objectId` `file:<ver>.p<page>`;
-  `ts_headline` snippets as today; at most `maxFileHitsPerBoard` 2 of `SEARCH_HITS_PER_BOARD` 5 per board. The new web
+  `ts_headline` snippets as today; at most `maxFileHitsPerBoard` 2 of `SEARCH_HITS_PER_BOARD` 5 per board. **Ranking
+  (review m4)**: a file page's `ts_rank_cd` is not comparable with an entry's (a long page repeating a term beat a
+  one-word sticky, 0.94 against 0.17), so file pages are a second tier: boards matched on their own text come first,
+  in exactly the order they have without file search, then boards matched only through their files, by their best
+  page; within a board its entries come first and its file pages after, holding at most their share of its slots
+  (kept for them). The same `rankedHits` rule chooses Ask's candidate boards and per-board slots. The new web
   opens `/b/<id>?file=<ver>&page=<n>` (`FILE_HIT_QUERY`): it resolves the card through `canvas.index` by `fileId` and opens
   `PdfViewer` at that page (`file-card/ported/open-file-hit.ts`); an old web opens the board. Ctrl+K shows
   "Page 3 · Brief.pdf · Board". With `DRAFTROOM_FILE_SEARCH` off the CTE is skipped.
@@ -333,10 +407,13 @@ NAS** (cgroup reads in a throwaway container, as the office evidence did) and re
   (guests refused by the guard: 403), the version served there, `ready`, kind `pdf`; one op per `deckRenderRuns(pageCount)`
   run (pages 9..min(N, 100) in runs of ≤ 30, params `{from, to}`, `params_key` `'<from>-<to>'`) in one transaction; 202
   with the first op's state; 409 `NOTHING_TO_RENDER` for 8 pages or fewer (they exist). The worker renders with the
-  existing `pdf-child` at the same 1024 px `page` role (`render-pages.ts`; the Office PDF cached in the op's temp dir for
-  its lifetime only). The completer turns the op's page outputs into `asset_derivatives` rows of the SOURCE version
-  (positions after the existing ones), under the version's row lock and skipping pages that already have a row (§12
-  departure 5): a re-run is idempotent. The loader is unchanged, so a 7e5b4d6 web shows pages 9+ too.
+  existing `pdf-child` at the same 1024 px `page` role (`render-pages.ts`; an Office deck converted ONCE for all its runs
+  through the worker's conversion cache, §3.5; the size refused before any download). The completer turns the op's page
+  outputs into `asset_derivatives` rows of the SOURCE version (positions after the existing ones), under the version's
+  row lock and skipping pages that already have a row (§12 departure 5): a re-run is idempotent, and a skipped page's
+  output is returned `unpublished`, so its blob is deleted after COMMIT (review m9). The dialog says "Queued: waiting
+  for the file worker" while every run is queued; its own give-up timer (`DECK_WAIT_MS`, about 50 min) outlasts the
+  api's 30-minute queue deadline and the runs' budgets. The loader is unchanged, so a 7e5b4d6 web shows pages 9+ too.
 - The web places everything in **one `canvas.transact`, one undo step**: per slide a `frame` (`kind: 'deck-slide'`,
   `deckSlideName(n, first line of the slide's text)`, 1600 wide at the page's aspect) and inside it an `image`
   (`kind: 'deck-page'`, `fileId ver_….p<n>`, alt "Slide n of N"), in a 5-wide grid (`gridColumns`, `gridGap` 80) next to
@@ -377,6 +454,16 @@ the existing `DELETE /api/boards/:bid/members/:uid`. The page waits for the conf
 screen, never "Page not found" first, for an owner). The palette's `workspace.admin` (registered by the integration in
 `features/workspace-admin/index.tsx`) opens the page for the board's workspace owners and admins only.
 Limits: pages of 100, 50-row storage lists, `ADMIN_LIMITS.rate` 20 requests per 10 s per user over every admin route.
+**Paging past 100 (fix wave, review nit 8).** Invitations, links and name-only guests page like the audit log, newest
+first by a unique key: `(created_at, id)` both descending (guests: `(workspace_members.created_at, user id)`), so rows
+made while someone pages land above every cursor already handed out. The cursor `AdminCursor` is
+`<microseconds since 1970>.<id>` (computed by Postgres; exact), opaque to the page. `GET …/admin/invitations?before=`
+answers `{invitations, more, next}`; `GET …/admin/links?linksBefore=&guestsBefore=` answers `{links, guests, more,
+nextLinks, nextGuests}`: with no cursor the newest page of both; with one or both cursors only those lists, the other
+`[]` with a null next. `next*` are nullable and optional (an answer without them still parses), and `more` = some next
+is non-null. A malformed cursor is a 400 for an owner or admin; everyone else still gets the unknown route's 404 first,
+and the admin rate limit counts these reads. The tabs show "Load more" under each list (`admin-invitations-more`,
+`admin-links-more`, `admin-guests-more`) and append the page; after a change the list starts again from the newest page.
 Audit reads use `audit_events_workspace_idx (workspace_id, at DESC)`; WS5 checks the plan of the `before` page on real
 Postgres and, if it is not an index scan, asks the lead for a `(workspace_id, id DESC)` index (a new migration). Tests: the
 404 matrix (anonymous, member, workspace guest, name-only guest, another workspace, switch off); pagination under inserts;
@@ -466,13 +553,15 @@ Sync is not deployed. WS5 writes the wave W section of `docs/DEPLOY.md`.
 
 ### 9.3 Rollback
 
-- A switch off: instant (a restart); its routes 404, its queued ops fail `WORKER_UNAVAILABLE` at the next claim, Postgres
-  keeps every row. Placed doc cards and slides are plain elements; images whose background was removed point at an
+- A switch off: instant (a restart); its routes 404, its queued ops fail `WORKER_UNAVAILABLE` at the next claim (a
+  claiming worker is needed for that write: with `WORKER_OPS=none` they stay queued in Postgres, review nit 5), its
+  running ops once their lease runs out; Postgres keeps every row. Placed doc cards and slides are plain elements; images whose background was removed point at an
   ordinary version (undo restores the original).
 - The worker: `WORKER_OPS=none` (or the previous image) stops all ops; previews are unaffected.
 - The web below wave W: safe (it never calls the routes). The api below wave W: safe (0039 is additive; with
   `DRAFTROOM_ALLOW_NEWER_SCHEMA=1` that build ignores the tables and the column; queued ops stay queued and a later api
-  fails them; a wave W worker hears 404 and keeps to previews).
+  runs or fails them by §3.1; a wave W worker hears 403 (that build's CSRF answer) or 404 on the claim and check-in, and
+  keeps to previews, asking again every 10 minutes).
 
 ## 10. Migration `0039_formats`
 
@@ -481,7 +570,7 @@ Additive (`packages/db/migrations/0039_formats.sql`; tested in `packages/db/test
 
 | Table / column | Holds | Keys and CHECKs |
 |---|---|---|
-| `worker_ops` | `id` (`wop_`), `workspace_id`, `board_id`, `kind`, `source_version_id`, `params` (an object ≤ 1 KiB), `params_key`, `status`, `attempts`, `run_after`, `lease_owner`, `lease_until`, `result` (an object ≤ 4 KiB), `result_version_id`, `requested_by`, `error_code`, `created_at`, `updated_at`, `finished_at` | running needs a lease; `finished_at` iff done/failed/cancelled; `error_code` iff failed/cancelled; `result_version_id` only on a done remove-bg; one active per (kind, source, params_key) (`worker_ops_active_idx`); claim, workspace, requester and result indexes; cascades with its source version and its board (composite key: the board stays in its workspace); requester and result version SET NULL |
+| `worker_ops` | `id` (`wop_`), `workspace_id`, `board_id`, `kind`, `source_version_id`, `params` (an object ≤ 1 KiB), `params_key`, `status`, `attempts`, `run_after`, `lease_owner`, `lease_until`, `result` (an object ≤ 4 KiB), `result_version_id`, `requested_by`, `error_code`, `created_at`, `updated_at`, `finished_at` | running needs a lease; `finished_at` iff done/failed/cancelled; `error_code` iff failed/cancelled; `result_version_id` only on a done remove-bg; one active per (kind, source, params_key) (`worker_ops_active_idx`); claim, workspace, requester and result indexes, and (fix wave, review nit 2; 0039 was not deployed, so it is in 0039) `worker_ops_source_idx (source_version_id)` for every op of a version; cascades with its source version and its board (composite key: the board stays in its workspace); requester and result version SET NULL |
 | `worker_op_outputs` | `id` (`wpo_`), `op_id`, `attempt`, `role` (`original`/`page`), `page`, `width`, `height`, `mime_type` (png/webp), `bytes`, `asset_id`, `version_id`, `derivative_id`, `blob_key`, `created_at` | page iff role page; `derivative_id` iff role page; `blob_key` an `assets/…/original` or `assets/…/d/drv_….(png|webp)` key, unique; cascades with the op |
 | `worker_capabilities_seen` | `capability` (PK, the versioned word), `last_seen_at`, `worker_id` | the capability regex |
 | `asset_versions.derived_from_version_id` | the version a server-made one came from (nullable) | FK SET NULL; partial index |
@@ -535,7 +624,7 @@ No paid service, no new runtime external host and no egress exception are needed
 7. **`GET /api/file-ops/:op` and `POST …/cancel` are added** (the scout had only the `file.op` event): a reconnecting tab
    needs the state, and a requester can stop a queued op. They open with either requestable kind's switch.
 8. **A switched-off kind's queued ops fail `WORKER_UNAVAILABLE`** at the next claim (the scout: cancelled): the requester
-   is told plainly that it cannot run now, with the same code as the 15-minute rule.
+   is told plainly that it cannot run now, with the same code as the absent-worker rule (§3.1).
 9. **Extracted text goes in batches of ≤ 50 pages per `/text` call** (the scout: one call): headroom under the api's body
    limit; each page is an upsert, and the 512 KiB cap is checked at complete.
 10. **An op's source must be `ready` and its board active or archived at claim** (else failed `SOURCE_MISSING` or

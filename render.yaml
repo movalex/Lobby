@@ -492,4 +492,7 @@ services:
   #       value: "1"
   #     - key: WORKER_PDF_HEAP_MB
   #       value: "256"
+  #     # wave W: the PDF child's resident-memory cap under the 512 MB instance (the default 768 is the NAS's)
+  #     - key: WORKER_PDF_RSS_MB
+  #       value: "320"
   #     - fromGroup: draftroom-staging-worker-token
