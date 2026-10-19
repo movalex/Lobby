@@ -288,8 +288,8 @@ export const PENDING_PALETTE_COMMAND_IDS: readonly PaletteCommandId[] = [
   // wave T: none left. The foundation listed every wave T command; WS5 registered 'timeline.new' (features/timeline)
   // and the integration, turning every PLANNING_FLAGS switch on, released the rest (WS2's storyboard.*, WS3's
   // storyboard.play and storyboard.present, WS4's cards.make, kanban.new and card-table.open).
-  // wave V (the foundation): every wave V command, until its owner registers it (and deletes its line here).
-  'activities.start',
+  // wave V (the foundation): every wave V command, until its owner registers it (and deletes its line here). WS2
+  // registered 'activities.start' (features/live-activities).
   'join.show-code',
   'breakouts.start',
   'session-summary.csv',

@@ -136,6 +136,8 @@ describe('the wave V switches and rules', () => {
   })
 
   it('wave V palette commands are listed and every one is pending until its owner registers it', () => {
+    // registered by their owners (and so no longer pending): WS2's activities.start
+    const landed: readonly string[] = ['activities.start']
     expect([...WAVE_V_PALETTE_COMMAND_IDS]).toEqual([
       'activities.start',
       'join.show-code',
@@ -144,7 +146,8 @@ describe('the wave V switches and rules', () => {
     ])
     for (const id of WAVE_V_PALETTE_COMMAND_IDS) {
       expect(PALETTE_COMMAND_IDS as readonly string[], id).toContain(id)
-      expect(PENDING_PALETTE_COMMAND_IDS as readonly string[], id).toContain(id)
+      if (landed.includes(id)) expect(PENDING_PALETTE_COMMAND_IDS as readonly string[], id).not.toContain(id)
+      else expect(PENDING_PALETTE_COMMAND_IDS as readonly string[], id).toContain(id)
     }
   })
 })
