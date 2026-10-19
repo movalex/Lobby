@@ -14,6 +14,8 @@ export type Route =
   | { name: 'workspace'; workspaceId: string; section: DashboardSection }
   | { name: 'board'; boardId: string }
   | { name: 'invite'; token: string }
+  /** Wave V (WS3): a join code, /j/ABCD-2345 (features/join; the page normalizes it, contracts normalizeJoinCode). */
+  | { name: 'join'; code: string }
   /** Wave J5: the feedback inbox (features/feedback/FeedbackPage.tsx); the api decides who may read it. */
   | { name: 'feedback' }
   | { name: 'invalid-board'; raw: string }
@@ -25,6 +27,8 @@ const BOARD_ID_RE = /^[a-z0-9][a-z0-9_-]{2,63}$/
 const WORKSPACE_ID_RE = /^wsp_[0-9A-Za-z]{10,40}$/
 const PROJECT_ID_RE = /^prj_[0-9A-Za-z]{10,40}$/
 const MAX_TOKEN = 512
+/** A join code as typed or scanned: 8 characters, dashes and spaces allowed (the page reads it). */
+const MAX_JOIN_CODE = 32
 
 export const isBoardId = (v: unknown): v is string => typeof v === 'string' && BOARD_ID_RE.test(v)
 /** Lobby's api makes every board id as b- and letters or digits; anything else after /b/ is not one of its boards. */
@@ -60,6 +64,12 @@ export function matchRoute(pathname: string): Route {
     const token = decode(a)
     if (!token || token.length > MAX_TOKEN) return { name: 'not-found' }
     return { name: 'invite', token }
+  }
+
+  if (head === 'j' && a !== undefined && parts.length === 2) {
+    const code = decode(a)
+    if (!code || code.length > MAX_JOIN_CODE) return { name: 'not-found' }
+    return { name: 'join', code }
   }
 
   if (head === 'w' && a !== undefined && isWorkspaceId(a)) {

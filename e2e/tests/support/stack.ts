@@ -341,6 +341,12 @@ export async function startStack(opts: StackOptions = {}): Promise<Stack> {
       // The stack's preview worker is the current build: PSD, AI and TIFF uploads are flattened-page previews (a spec
       // can set 'off' through apiEnv to see them as attachments, as on a deployment whose worker is not current).
       DRAFTROOM_DESIGN_PREVIEWS: 'on',
+      // Wave V (docs/WAVE-V-CONTRACTS.md §1): the "Live sessions+" api switches, on for every stack (each route is
+      // pending until its workstream lands it, and every web switch is off until then; a spec can set 'off' through
+      // apiEnv to see a feature's kill switch)
+      DRAFTROOM_LIVE_ACTIVITIES: 'on',
+      DRAFTROOM_JOIN_CODES: 'on',
+      DRAFTROOM_BREAKOUTS: 'on',
       ...blobs,
       ...directEventsEnv(),
       ...opts.apiEnv,

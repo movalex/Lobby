@@ -13,11 +13,13 @@
  * "Dana is using AI" pills of runs whose area is off screen (features/ai working.tsx), which sat at a fixed spot on
  * top of the since and coach chips (and of one another); the own run's busy pill already goes under the stack.
  * P-016 follow-up adds 'timer', the running session timer's pill (features/workshops TimerBanner), which shared the
- * spotlight's box and so was one box with it; it has its own place, above the spotlight bar.
+ * spotlight's box and so was one box with it; it has its own place, above the spotlight bar. Wave V adds 'breakout',
+ * the breakouts chip ("Group 2 · 8:30 left · Go to my frame", features/breakouts), under the session timer.
  */
 export const TOP_CENTRE_SLOTS = [
   'invite',
   'timer',
+  'breakout',
   'spotlight',
   'follow',
   'since',

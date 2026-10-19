@@ -38,6 +38,14 @@ describe('matchRoute', () => {
     expect(matchRoute('/invite/AbC_-123xyz')).toEqual({ name: 'invite', token: 'AbC_-123xyz' })
   })
 
+  it('wave V: maps /j/:code (a join code as typed: the page reads it), and nothing longer or deeper', () => {
+    expect(matchRoute('/j/ABCD-2345')).toEqual({ name: 'join', code: 'ABCD-2345' })
+    expect(matchRoute('/j/abcd2345/')).toEqual({ name: 'join', code: 'abcd2345' })
+    expect(matchRoute('/j/AB%20CD%202345')).toEqual({ name: 'join', code: 'AB CD 2345' })
+    for (const p of ['/j', '/j/', `/j/${'x'.repeat(33)}`, '/j/ABCD-2345/x', '/j/%E0%A4%A'])
+      expect(matchRoute(p), p).toEqual({ name: 'not-found' })
+  })
+
   it('maps /feedback (the inbox; the api decides who may read it) and nothing under it', () => {
     expect(matchRoute('/feedback')).toEqual({ name: 'feedback' })
     expect(matchRoute('/feedback/')).toEqual({ name: 'feedback' })

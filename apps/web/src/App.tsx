@@ -8,6 +8,7 @@ import { createSignOutPurge } from './canvas/sync/adapter/offline-idb.ts'
 import { DashboardPage } from './dashboard/DashboardPage.tsx'
 import { landingWorkspace } from './dashboard/model.ts'
 import { FeedbackHost } from './features/feedback/FeedbackHost.tsx'
+import { liveFlags } from './features/live/flags.ts'
 import { GuestEndedScreen } from './invite/GuestEndedScreen.tsx'
 import { GuestKindProvider, wasGuestTab } from './invite/guest.tsx'
 import { InvitePage } from './invite/InvitePage.tsx'
@@ -82,6 +83,11 @@ const FeedbackRoute = lazy(
   ),
 )
 
+// Wave V (WS3): the /j/:code page (a join code from the QR on the join card), outside the session: someone joining
+// from a phone has none yet. A small page, loaded when opened, and only while LIVE_FLAGS.joinCodes is on (otherwise
+// /j/... is the unknown-address screen, as before wave V).
+const JoinRoute = lazy(() => import('./features/join/JoinPage.tsx'))
+
 export function App() {
   if (SpikeRoute && location.pathname.startsWith('/spike/')) {
     return (
@@ -144,6 +150,18 @@ function Routes() {
         <RequireSession loading={<BoardSkeleton boardId={route.boardId} />}>
           <BoardRoute boardId={route.boardId} />
         </RequireSession>
+      )
+    case 'join':
+      if (!liveFlags().joinCodes)
+        return <MessageScreen title="Page not found" body="There is nothing at this address." />
+      return (
+        <>
+          {/* K1-3: a join code leads to a board */}
+          <PrefetchBoardCodeWhenIdle />
+          <Suspense fallback={<LoadingScreen testId="join-loading" />}>
+            <JoinRoute code={route.code} />
+          </Suspense>
+        </>
       )
     case 'feedback':
       return (

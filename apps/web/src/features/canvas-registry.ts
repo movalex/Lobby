@@ -9,12 +9,15 @@
 // Wave S: 'review' (WS1's), contributing nothing while REVIEW_FLAGS.status is off (the one line WS1 adds here).
 // Wave T: lead-only; the foundation registers 'storyboard', 'storyboard-play', 'cards', 'kanban', 'card-table' and
 // 'timeline', empty (each workstream fills its own; features/planning holds what they share).
+// Wave V: lead-only; the foundation registers 'live-activities' (WS2's), 'join' (WS3's) and 'breakouts' (WS4's), empty
+// (features/live holds their switches; workshops/ported/facilitate-entries.ts their Facilitate entries).
 import type { CanvasFeature } from '../canvas/api/index.ts'
 import { feature as mediaFeature } from '../file-card/ported/index.tsx'
 import { feature as a11yFeature } from './a11y/ported/index.tsx'
 import { feature as aiFeature } from './ai/ported/index.tsx'
 import { feature as aiWorkspaceAskFeature } from './ai/workspace-ask/ported/index.tsx'
 import { feature as boardLinksFeature } from './board-links/index.tsx'
+import { feature as breakoutsFeature } from './breakouts/index.tsx'
 import { feature as canvasUxFeature } from './canvas-ux/ported/index.tsx'
 import { feature as navigationFeature } from './canvas-ux/ported/navigation/index.tsx'
 import { feature as cardTableFeature } from './card-table/index.tsx'
@@ -25,7 +28,9 @@ import { feature as cursorChatFeature } from './cursor-chat/ported/index.tsx'
 import { feature as elementsFeature } from './elements/index.tsx'
 import { feature as flowFeature } from './flow/ported/index.tsx'
 import { feature as historyFeature } from './history/ported/index.tsx'
+import { feature as joinFeature } from './join/index.tsx'
 import { feature as kanbanFeature } from './kanban/index.tsx'
+import { feature as liveActivitiesFeature } from './live-activities/index.tsx'
 import { feature as mindmapFeature } from './mindmap/ported/index.tsx'
 import { feature as peopleFeature } from './people/ported/index.tsx'
 import { feature as piecesFeature } from './pieces/ported/index.tsx'
@@ -92,6 +97,11 @@ export const CANVAS_FEATURES: readonly CanvasFeature[] = [
   kanbanFeature,
   cardTableFeature,
   timelineFeature,
+  // wave V (registered empty by the foundation; each contributes nothing while its LIVE_FLAGS switch is off): polls,
+  // scales and word clouds (WS2), the join card (WS3), breakouts (WS4)
+  liveActivitiesFeature,
+  joinFeature,
+  breakoutsFeature,
   // wave Q (registered by the foundation, hidden behind ELEMENTS_PANEL; WS3 fills it): the Elements panel
   elementsFeature,
 ]

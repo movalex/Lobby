@@ -10,7 +10,8 @@
 import type { ComponentType } from 'react'
 import type { LobbyCanvas } from '../../../canvas/api/index.ts'
 
-export type ExportSectionId = 'storyboard-sheet' | 'storyboard-sequence' | 'card-table-csv'
+/** Wave T's three, and wave V's session summary CSV (WS5: every activity's results, formula-safe). */
+export type ExportSectionId = 'storyboard-sheet' | 'storyboard-sequence' | 'card-table-csv' | 'session-csv'
 
 export interface ExportSectionProps {
   readonly canvas: LobbyCanvas

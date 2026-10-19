@@ -7,7 +7,8 @@
 // (`reactions-button`: the reactions bar), Raised hands (`hands-chip`), Voting (`vote-chip`: the voting
 // panel, or a new vote's setup for a facilitator) and Private brainstorm (`pn-chip`). Who sees which entry is
 // ./guest-chrome.ts `facilitateEntries`: the rules each control had in the bar. Controls are hidden for
-// people who cannot facilitate; the API refuses them anyway.
+// people who cannot facilitate; the API refuses them anyway. Wave V: entries and pill parts other features register
+// (./facilitate-entries.ts) come after the built-ins; nobody edits this file to add one.
 import { Fragment, type KeyboardEvent, useEffect, useId, useRef, useState } from 'react'
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
 import { useIsGuest } from '../../../invite/guest.tsx'
@@ -30,6 +31,7 @@ import { usePrivateNotes } from '../private-notes/hooks.ts'
 import type { WorkshopSnapshot, WorkshopStore } from '../store.ts'
 import { canEditBoard, useIsFacilitator, useNow, useWorkshop } from '../workshop-context.ts'
 import { summonScreen } from './camera.ts'
+import { type FacilitateEntrySpec, facilitateExtras, useFacilitatePill } from './facilitate-entries.ts'
 import {
   type FacilitateEntry,
   facilitateEntries,
@@ -138,6 +140,7 @@ function spokenPill(parts: readonly PillPart[], remaining: number, snap: Worksho
           : `timer ${describeClock(remaining)} left${p.state === 'paused' ? ', paused' : ''}`
       if (p.kind === 'vote') return 'a vote is open'
       if (p.kind === 'brainstorm') return 'a private brainstorm is open'
+      if (p.kind === 'extra') return p.spoken
       return handsLabel(snap)
     })
     .join(', ')
@@ -150,6 +153,8 @@ export function WorkshopBar({ ctx }: { ctx: Ctx }) {
   const brainstorm = usePrivateNotes(ctx).snap.session
   const selectedCount = useValue('dr-wk-bar-selected', () => ctx.canvas.selection.length, [ctx.canvas])
   const sessionSettings = useValue('dr-wk-bar-settings', () => workshopSettingsOf(ctx.canvas), [ctx.canvas])
+  // wave V: the registered entries' live pill parts (./facilitate-entries.ts)
+  const pillExtras = useFacilitatePill(ctx.canvas)
   const [open, setOpen] = useState<Open>(null)
   /** Which section the tools popover should bring into view and focus when it opens (null = the first). */
   const [focusSection, setFocusSection] = useState<'hands' | null>(null)
@@ -250,7 +255,10 @@ export function WorkshopBar({ ctx }: { ctx: Ctx }) {
     voteOpen: vote?.session.status === 'open',
     brainstormOpen: brainstorm?.status === 'open',
     hands: snap.hands.length,
+    extras: pillExtras,
   })
+  // wave V: the registered entries the menu shows now, after the built-ins (./facilitate-entries.ts)
+  const extras = facilitateExtras({ ctx, guest, facilitator })
   const title = facilitator ? 'Facilitate' : 'Session'
   const spoken = spokenPill(parts, remaining, snap)
   const label = spoken ? `${title}: ${spoken}` : title
@@ -289,7 +297,7 @@ export function WorkshopBar({ ctx }: { ctx: Ctx }) {
         {parts.length > 0 && (
           <span className="dr-wk-facilitate__pill" data-testid="facilitate-pill">
             {parts.map((p, i) => (
-              <Fragment key={p.kind}>
+              <Fragment key={p.kind === 'extra' ? `extra-${p.id}` : p.kind}>
                 {i > 0 && (
                   <span className="dr-wk-facilitate__sep" aria-hidden="true">
                     ·
@@ -297,7 +305,13 @@ export function WorkshopBar({ ctx }: { ctx: Ctx }) {
                 )}
                 <span
                   className={`dr-wk-facilitate__part dr-wk-facilitate__part--${p.kind}`}
-                  data-testid={p.kind === 'timer' ? 'timer-remaining' : `facilitate-pill-${p.kind}`}
+                  data-testid={
+                    p.kind === 'timer'
+                      ? 'timer-remaining'
+                      : p.kind === 'extra'
+                        ? `facilitate-pill-${p.id}`
+                        : `facilitate-pill-${p.kind}`
+                  }
                   data-state={p.kind === 'timer' ? p.state : undefined}
                   data-count={p.kind === 'hands' ? p.count : undefined}
                   data-mine={p.kind === 'hands' ? (snap.myHand ? 'true' : 'false') : undefined}
@@ -316,6 +330,8 @@ export function WorkshopBar({ ctx }: { ctx: Ctx }) {
           store={store}
           snap={snap}
           entries={entries}
+          extras={extras}
+          guest={guest}
           facilitator={facilitator}
           timer={{ display, remaining }}
           onShow={show}
@@ -369,6 +385,8 @@ export function FacilitateMenu({
   store,
   snap,
   entries,
+  extras = [],
+  guest = false,
   facilitator,
   timer,
   onShow,
@@ -379,6 +397,9 @@ export function FacilitateMenu({
   store: WorkshopStore
   snap: WorkshopSnapshot
   entries: readonly FacilitateEntry[]
+  /** wave V: the registered entries to show after the built-ins (./facilitate-entries.ts facilitateExtras) */
+  extras?: readonly FacilitateEntrySpec[]
+  guest?: boolean
   facilitator: boolean
   timer: { display: TimerDisplay; remaining: number }
   onShow(what: Open, section?: 'hands' | null): void
@@ -488,6 +509,9 @@ export function FacilitateMenu({
             return null
         }
       })}
+      {extras.map((e) => (
+        <e.Item key={e.id} ctx={ctx} guest={guest} facilitator={facilitator} close={onClose} />
+      ))}
     </div>
   )
 }
