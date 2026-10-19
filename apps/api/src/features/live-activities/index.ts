@@ -199,6 +199,9 @@ export async function registerLiveActivities(
     for (const id of ids) tally.ended(id)
   })
 
+  /** The settles in flight, by activity: reads that come together share one (`settled`). */
+  const settlingNow = new Map<string, Promise<void>>()
+
   /** The answers anyone may be shown of `row` at `at` (open: the last boundary's; else the stored ones). */
   const shownOf = (row: ActivityRow, at: Date, q: Queryable = ctx.db) =>
     tally.view(row, at, () => readSnapshot(q, row.id))
@@ -210,8 +213,18 @@ export async function registerLiveActivities(
   async function settled<T extends ActivityRow | null>(row: T): Promise<T> {
     if (row?.status !== 'open' || isOpenAt(row, now())) return row
     const id = row.id
-    await ctx.db.transaction((tx) => settleActivity(tx, id, now()))
-    tally.ended(id)
+    // Every tab asks again just after the end time (the web's end timer), so these reads come all at once: they share
+    // one settle here instead of queueing a transaction each on the activity's row lock, every one of them holding a
+    // pool connection while it waits (wave V gate, review u1). One api instance per board, so this process is all.
+    let settling = settlingNow.get(id)
+    if (!settling) {
+      settling = ctx.db
+        .transaction((tx) => settleActivity(tx, id, now()))
+        .then(() => tally.ended(id))
+        .finally(() => settlingNow.delete(id))
+      settlingNow.set(id, settling)
+    }
+    await settling
     return ((await findActivity(ctx.db, id)) ?? row) as T
   }
 

@@ -209,6 +209,32 @@ describe('the activity tally', () => {
     expect(counts(await h.tally.view(closed, new Date(h.now), live(snap(poll(0), poll(2)))))).toBe(2)
   })
 
+  it('an answer that committed before the close but reaches the tally after ended() publishes nothing (review u3)', async () => {
+    // A's mark, then B's (both under the row lock, both before the close); B's change lands, the close commits and
+    // ends the activity, and only then does A's change get here. Before the fix it made a new entry and, a window
+    // later, published A's snapshot (1 answer) after the final event (2): the web applies a same-status event's
+    // counts, so every tab showed the stale count of a closed activity.
+    const h = harness(rowOf({ anonymous: false, results_live: true }))
+    const r = h.row()
+    h.tally.started(r)
+    const a = h.tally.mark()
+    const b = h.tally.mark()
+    h.tally.changed(r, snap(poll(0), poll(1)), b)
+    h.setRow({ ...r, status: 'closed' })
+    h.tally.ended(r.id)
+    h.tally.changed(r, snap(poll(0)), a)
+    expect(h.tally.size).toBe(0)
+    await h.runTo(h.now + 10_000)
+    expect(h.published).toEqual([])
+    // a later activity on another id is counted as always
+    const next = rowOf({ id: 'act_tally000000000000001' })
+    h.setRow(next)
+    h.tally.started(next)
+    h.tally.changed(next, snap(poll(2)), h.tally.mark())
+    await h.runTo(h.now + 10_000)
+    expect(h.published.map((p) => p.n)).toEqual([1])
+  })
+
   it('an activity that ends by its end time publishes its last answers as final, then forgets it', async () => {
     const h = harness()
     const W = 5_000

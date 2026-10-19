@@ -98,6 +98,8 @@ const TIMER_SLACK_MS = 25
 
 export class ActivityTally<R extends TallyRow = TallyRow> {
   private readonly entries = new Map<string, Entry>()
+  /** activities this process ended (`ended`), with the last mark handed out then: oldest first, capped */
+  private readonly over = new Map<string, number>()
   private readonly setTimer: (fn: () => void, ms: number) => unknown
   private readonly clearTimer: (handle: unknown) => void
   private readonly inflight = new Set<Promise<void>>()
@@ -164,6 +166,8 @@ export class ActivityTally<R extends TallyRow = TallyRow> {
   /** An answer committed, leaving `snap` (read in its transaction, with `mark`). Shown once its window is over. */
   changed(row: R, snap: Snapshot, mark: TallyMark): void {
     if (this.closed) return
+    const endSeq = this.over.get(row.id)
+    if (endSeq !== undefined && mark.seq <= endSeq) return // committed before its end; the final event is out
     let e = this.entries.get(row.id)
     if (!e) {
       // First sight of a running activity (this process restarted): nothing older to show.
@@ -221,9 +225,21 @@ export class ActivityTally<R extends TallyRow = TallyRow> {
     return e.base
   }
 
-  /** The activity is no longer open (closed, revealed or cancelled): its final state is published by the caller. */
+  /**
+   * The activity is no longer open (closed, revealed or cancelled): its final state is published by the caller. Every
+   * answer it took marked before this (its mark was taken under the row lock, before the close's transaction got it),
+   * so a change whose mark is no newer is one that committed before the end and reached `changed` late: it is dropped,
+   * not made into a new entry that would publish its older snapshot after the final event (wave V gate, review u3).
+   */
   ended(activityId: string): void {
     this.forget(activityId)
+    this.over.delete(activityId)
+    this.over.set(activityId, this.seq)
+    while (this.over.size > MAX_ENTRIES) {
+      const oldest = this.over.keys().next().value
+      if (oldest === undefined) break
+      this.over.delete(oldest)
+    }
   }
 
   /** Waits for the flushes in flight (app close, tests). */
