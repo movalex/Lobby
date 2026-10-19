@@ -116,7 +116,8 @@ describe('wave S migration', () => {
   it('is 0037_client_review, right after 0036 (contiguous)', () => {
     const all = loadMigrations()
     expect(all.find((m) => m.version === 37)?.name).toBe('0037_client_review')
-    expect(all.at(-1)?.version).toBe(37)
+    // wave V's 0038 follows (wave-v-0038.test.ts)
+    expect(all.find((m) => m.version === 38)?.name).toBe('0038_live_sessions')
     expect(all.map((m) => m.version)).toEqual(all.map((_, i) => i + 1))
   })
 
@@ -146,7 +147,9 @@ describe('wave S migration', () => {
       [W, U, B, THR],
     )
     const before = { columns: await columnsOf(d), constraints: await constraintsOf(d) }
-    expect((await migrate(d)).applied).toEqual(['0037_client_review'])
+    expect((await migrate(d, { migrations: all.filter((m) => m.version <= 37) })).applied).toEqual([
+      '0037_client_review',
+    ])
     const after = { columns: await columnsOf(d), constraints: await constraintsOf(d) }
     const isNew = (k: string) => NEW_TABLES.some((t) => k.startsWith(`${t}.`))
     expect(after.columns.filter((k) => !isNew(k) && !NEW_COLUMNS.includes(k))).toEqual(before.columns)

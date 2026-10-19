@@ -4,7 +4,7 @@
 // 'air' (wave L, L1-1): an AI run id (contracts ai.ts AiRunId), minted per run and never stored.
 // 'imp', 'imb' (wave R, 0035): an import job and one board row of it; 'chk' (0036): a chat hook; 'rsp' (wave R): a
 // restore's spooled upload (its job's source_ref, backup/restore.ts). 'rvi', 'rvr', 'rve' (wave S, 0037): a review
-// item, round and event.
+// item, round and event. 'act', 'brk' (wave V, 0038): a live activity and a breakout session.
 export const ID_PREFIXES = [
   'usr',
   'wsp',
@@ -23,6 +23,8 @@ export const ID_PREFIXES = [
   'rvi',
   'rvr',
   'rve',
+  'act',
+  'brk',
 ] as const
 export type IdPrefix = (typeof ID_PREFIXES)[number]
 
