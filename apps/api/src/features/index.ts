@@ -12,6 +12,7 @@ import type { FeatureContext } from './context.ts'
 import { registerDashboard } from './dashboard/index.ts'
 import { registerDomainAccess } from './domain-access/index.ts'
 import { registerExportControl } from './export-control/index.ts'
+import { registerFormats } from './formats/index.ts'
 import { registerGuests } from './guests/index.ts'
 import { registerHistory } from './history/index.ts'
 import { registerImports } from './imports/index.ts'
@@ -26,6 +27,7 @@ import { registerThumbnails } from './thumbnails/index.ts'
 import { registerUsage } from './usage/index.ts'
 import { registerVisits } from './visits/index.ts'
 import { registerWorkshops } from './workshops/index.ts'
+import { registerWorkspaceAdmin } from './workspace-admin/index.ts'
 import { registerWsTemplates } from './ws-templates/index.ts'
 
 export async function registerFeatures(
@@ -76,4 +78,10 @@ export async function registerFeatures(
   await registerLiveActivities(app, ctx)
   await registerJoinCodes(app, ctx)
   await registerBreakouts(app, ctx)
+  // Wave W (the foundation; the lead owns this list after it): background removal and the op routes (WS2), deck import
+  // (WS4), the workspace admin page (WS5). Their routes are pending until implemented (./pending-routes.ts), then gated
+  // by their kill switches (./formats/switch.ts: DRAFTROOM_REMOVE_BACKGROUND, DRAFTROOM_DECK_IMPORT,
+  // DRAFTROOM_WORKSPACE_ADMIN). The worker side (/api/worker/ops/*) is worker/ops-routes.ts.
+  await registerFormats(app, ctx)
+  await registerWorkspaceAdmin(app, ctx)
 }

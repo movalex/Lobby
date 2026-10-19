@@ -42,6 +42,12 @@ export async function setupWorld(
       DRAFTROOM_LIVE_ACTIVITIES: 'on',
       DRAFTROOM_JOIN_CODES: 'on',
       DRAFTROOM_BREAKOUTS: 'on',
+      // wave W's too (docs/WAVE-W-CONTRACTS.md §1.1), for the same reason
+      DRAFTROOM_DOC_CARDS: 'on',
+      DRAFTROOM_REMOVE_BACKGROUND: 'on',
+      DRAFTROOM_FILE_SEARCH: 'on',
+      DRAFTROOM_DECK_IMPORT: 'on',
+      DRAFTROOM_WORKSPACE_ADMIN: 'on',
       ...opts.env,
     },
   })

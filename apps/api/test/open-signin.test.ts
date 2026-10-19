@@ -1,7 +1,7 @@
 // Open email sign-in and partner boards (docs/OPEN-SIGNIN.md): the provider, the shared workspace,
 // the partner route's guard and idempotence, and the config rules that keep it off every other server.
 
-import { AuthConfig, Me, PartnerBoard } from '@draftroom/contracts'
+import { AuthConfig, FORMAT_SWITCHES_OFF, Me, PartnerBoard } from '@draftroom/contracts'
 import type { LightMyRequestResponse } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createEmailAuthProvider } from '../src/auth/email.ts'
@@ -71,6 +71,7 @@ describe('open email sign-in', () => {
       openSigninMethods: ['email'],
       designPreviews: false,
       live: { activities: false, joinCodes: false, breakouts: false },
+      formats: FORMAT_SWITCHES_OFF,
     })
   })
 
@@ -413,6 +414,7 @@ describe('open sign-in with Google', () => {
         googleClientId: CLIENT_ID,
         designPreviews: false,
         live: { activities: false, joinCodes: false, breakouts: false },
+        formats: FORMAT_SWITCHES_OFF,
       })
       expect(
         (await g.anon('POST', '/api/auth/email/login', { email: 'a@b.test', name: 'A' })).statusCode,

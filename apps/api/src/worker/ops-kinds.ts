@@ -1,0 +1,97 @@
+// Wave W (docs/WAVE-W-CONTRACTS.md §3.2): what each worker op kind does on the api, behind one interface, so the shared
+// state machine (./ops-jobs.ts) stays the lead's and each workstream writes only its kind. OWNER: the wave W lead (this
+// registry and the stubs); WS2 replaces REMOVE_BG with features/formats/remove-bg/kind.ts, WS3 EXTRACT_TEXT with
+// features/search/file-text-kind.ts, WS4 RENDER_PAGES with features/formats/deck/kind.ts (one line each here, through
+// the lead).
+//
+// The foundation's stubs refuse every output and text call and every complete with 501 NOT_IMPLEMENTED. No deployment
+// reaches them: an op exists only once a browser route (pending until its owner lands it) or WS3's enqueue makes one.
+
+import type { WorkerOpKind, WorkerOpOutputInput, WorkerOpTextInput } from '@draftroom/contracts'
+import type { Queryable } from '@draftroom/db'
+
+/** An op under its lease (the row locked FOR UPDATE inside the caller's transaction). */
+export interface LockedOp {
+  id: string
+  kind: WorkerOpKind
+  workspaceId: string
+  boardId: string
+  sourceVersionId: string
+  sourceAssetId: string
+  params: Record<string, unknown>
+  attempt: number
+  requestedBy: string | null
+}
+
+/** One reserved output of this attempt that `complete` lists (its blob verified present with its reserved size). */
+export interface PublishedOutput {
+  id: string
+  role: 'original' | 'page'
+  page: number | null
+  width: number
+  height: number
+  mimeType: 'image/png' | 'image/webp'
+  bytes: number
+  assetId: string
+  versionId: string
+  derivativeId: string | null
+  blobKey: string
+}
+
+export interface OpCompletion {
+  /** worker_ops.result (≤ 4 KiB as JSON; the kind's WORKER_OP_RESULTS shape) */
+  result: Record<string, unknown>
+  /** remove-bg: the version it made */
+  resultVersionId?: string | null
+  /** versions whose status changed in this transaction (their `assets.version` events go out after COMMIT) */
+  versionChanges?: { versionId: string; assetId: string; boardId: string; workspaceId: string }[]
+}
+
+/** A kind's refusal of a worker call: a 4xx with a stable code (never the worker's own text). */
+export class OpRefused extends Error {
+  readonly status: number
+  readonly code: string
+  constructor(status: number, code: string, message: string) {
+    super(message)
+    this.name = 'OpRefused'
+    this.status = status
+    this.code = code
+  }
+}
+
+export interface OpKindHandler {
+  readonly kind: WorkerOpKind
+  /** May the lease holder reserve this output? Throws OpRefused when not (a page out of the op's range, a 2nd original). */
+  checkOutput(tx: Queryable, op: LockedOp, input: WorkerOpOutputInput): Promise<void>
+  /** extract-text: store a batch of pages. Others: OpRefused. */
+  acceptText(tx: Queryable, op: LockedOp, input: WorkerOpTextInput, now: Date): Promise<void>
+  /** In the complete transaction, under the lease: check `result`, write the kind's rows. Throws OpRefused to refuse. */
+  complete(
+    tx: Queryable,
+    op: LockedOp,
+    done: { outputs: PublishedOutput[]; result: Record<string, unknown>; now: Date },
+  ): Promise<OpCompletion>
+}
+
+const notYet = () => new OpRefused(501, 'NOT_IMPLEMENTED', 'This op kind is not ready yet.')
+
+/** The foundation's handler of a kind its owner has not landed: refuses everything (501). */
+export const stubKind = (kind: WorkerOpKind): OpKindHandler => ({
+  kind,
+  async checkOutput() {
+    throw notYet()
+  },
+  async acceptText() {
+    throw notYet()
+  },
+  async complete() {
+    throw notYet()
+  },
+})
+
+/** Every kind's handler (each workstream swaps its stub for its own, one line). */
+export const OP_KINDS: Readonly<Record<WorkerOpKind, OpKindHandler>> = {
+  'remove-bg': stubKind('remove-bg'), // WS2: features/formats/remove-bg/kind.ts
+  'extract-text': stubKind('extract-text'), // WS3: features/search/file-text-kind.ts
+  'render-pages': stubKind('render-pages'), // WS4: features/formats/deck/kind.ts
+}

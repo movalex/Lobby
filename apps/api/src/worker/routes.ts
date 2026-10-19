@@ -9,6 +9,7 @@
 
 import type { IncomingMessage } from 'node:http'
 import { presignedPutHeaders } from '@draftroom/blob-store'
+import { FORMAT_SWITCHES_OFF } from '@draftroom/contracts'
 import type { Db } from '@draftroom/db'
 import { isId } from '@draftroom/dev-assets'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
@@ -18,7 +19,7 @@ import { type BlobStore, deleteQuietly, originalKey } from '../files/blobs.ts'
 import { ReceiveError, receiveToBlob } from '../files/receive.ts'
 import { errInfo } from '../files/upload.ts'
 import { bearerToken, carriesCookie, createTokenCheck } from './auth.ts'
-import { type BlobUrlSigner, createBlobUrlSigner } from './blob-urls.ts'
+import { type BlobUrlKind, type BlobUrlSigner, createBlobUrlSigner } from './blob-urls.ts'
 import {
   claimJob,
   completeJob,
@@ -33,6 +34,8 @@ import {
   UnknownDerivative,
   type VersionChange,
 } from './jobs.ts'
+import { liveOpOutput, runningOpSource } from './ops-jobs.ts'
+import { type OpsDeps, registerOpRoutes } from './ops-routes.ts'
 import {
   BLOB_URL_TTL_SEC,
   ClaimInput,
@@ -63,6 +66,11 @@ export interface WorkerDeps {
   onVersionChange(change: VersionChange): Promise<void>
   /** Requests per minute per worker token (all worker routes together). Default 6000. */
   rateLimit?: { max: number; anonMax?: number; timeWindow: number }
+  /**
+   * Wave W: the worker ops protocol (./ops-routes.ts). Absent: every switch off (no op is handed out; claims still
+   * record capabilities and answer 204), and op changes are not published.
+   */
+  ops?: Pick<OpsDeps, 'switches' | 'onOpChange' | 'onVersionMade' | 'onCapabilities' | 'kinds'>
 }
 
 const TOKEN_KEY = 'worker-token'
@@ -235,6 +243,28 @@ export async function workerPlugin(app: FastifyInstance, deps: WorkerDeps): Prom
       await afterCommit(req, out.orphanKeys, [out.change])
       return { versionId: ver, status: out.status, runAfter: out.runAfter?.toISOString() ?? null }
     })
+
+    // wave W: the worker ops protocol, on the same guard, limit and error handler
+    const ops = deps.ops
+    registerOpRoutes(
+      scope,
+      {
+        db: deps.db,
+        blobs: deps.blobs,
+        now: deps.now,
+        switches: ops?.switches ?? FORMAT_SWITCHES_OFF,
+        onOpChange: ops?.onOpChange ?? (async () => {}),
+        onVersionMade: ops?.onVersionMade ?? (async () => {}),
+        ...(ops?.onCapabilities ? { onCapabilities: ops.onCapabilities } : {}),
+        ...(ops?.kinds ? { kinds: ops.kinds } : {}),
+      },
+      {
+        signer,
+        selfUrl,
+        deleteBlobs: (req, keys) =>
+          deleteQuietly(deps.blobs, keys, (_k, err) => log(req, 'worker: blob cleanup failed', err)),
+      },
+    )
   })
 
   async function originalAccess(req: FastifyRequest, assetId: string, versionId: string) {
@@ -262,17 +292,23 @@ export async function workerPlugin(app: FastifyInstance, deps: WorkerDeps): Prom
     scope.addHook('onClose', async () => {
       await Promise.allSettled(uploads.values())
     })
-    const grantOf = (req: FastifyRequest, kind: 'o' | 'd') => {
+    const grantOf = (req: FastifyRequest, kinds: readonly BlobUrlKind[]) => {
       const g = signer.verify((req.params as { opaque?: string }).opaque ?? '')
-      if (!g || g.kind !== kind) throw notFound()
+      if (!g || !kinds.includes(g.kind)) throw notFound()
       return g
     }
 
     scope.get(WORKER_ROUTES.blob, async (req, reply) => {
-      const g = grantOf(req, 'o')
-      const v = await runningOriginal(deps.db, g.id)
+      // o: a preview job's original (by version); q (wave W): a running op's source original (by op)
+      const g = grantOf(req, ['o', 'q'])
+      const v =
+        g.kind === 'o'
+          ? await runningOriginal(deps.db, g.id).then((r) =>
+              r ? { assetId: r.assetId, versionId: g.id } : null,
+            )
+          : await runningOpSource(deps.db, g.id)
       if (!v) throw notFound()
-      const obj = await deps.blobs.get(originalKey(v.assetId, g.id))
+      const obj = await deps.blobs.get(originalKey(v.assetId, v.versionId))
       if (!obj) throw notFound()
       return reply
         .code(200)
@@ -287,8 +323,9 @@ export async function workerPlugin(app: FastifyInstance, deps: WorkerDeps): Prom
     scope.put(WORKER_ROUTES.blob, (req, reply) => {
       const raw = req.raw
       const work = (async () => {
-        const g = grantOf(req, 'd')
-        const r = await liveReservation(deps.db, g.id)
+        // d: a preview job's derivative; p (wave W): a running op's reserved output
+        const g = grantOf(req, ['d', 'p'])
+        const r = g.kind === 'd' ? await liveReservation(deps.db, g.id) : await liveOpOutput(deps.db, g.id)
         if (!r) throw notFound()
         const length = req.headers['content-length']
         if (length === undefined) throw new ApiError(411, 'LENGTH_REQUIRED', 'Content-Length is required.')

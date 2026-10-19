@@ -52,6 +52,23 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   // WS3 implemented its two (V2-1 a link's code, V2-2 resolve; features/join-codes): to ship one hidden, add its key back.
   // WS4 implemented its nine (V3-1 start, state, extend, end; V3-2 assign, shuffle, join; V3-3 broadcast, summon;
   // features/breakouts): none left in wave V. To ship one hidden, add its key back.
+  // wave W (the foundation; docs/WAVE-W-CONTRACTS.md §1): every browser route of the wave, @draftroom/contracts
+  // FORMAT_ROUTE_KEYS (WS2: W2-1 remove a background, W2-2 an op's state and cancel; WS4: W4-1 render a deck's pages;
+  // features/formats) and ADMIN_ROUTE_KEYS (WS5: W5-1 members and invitations, W5-2 storage, W5-3 audit, W5-4 links,
+  // W5-5 retention; features/workspace-admin). Once implemented, each is gated by its kill switch as well. The worker
+  // routes (/api/worker/ops/*, worker/ops-routes.ts) are not on this list: they are the worker protocol, live from the
+  // foundation, and hand out nothing until a browser route queues an op.
+  'POST /api/files/:ver/remove-background': { owner: 'WS2', item: 'W2-1' },
+  'GET /api/file-ops/:op': { owner: 'WS2', item: 'W2-2' },
+  'POST /api/file-ops/:op/cancel': { owner: 'WS2', item: 'W2-2' },
+  'POST /api/files/:ver/render-pages': { owner: 'WS4', item: 'W4-1' },
+  'GET /api/workspaces/:wid/admin/members': { owner: 'WS5', item: 'W5-1' },
+  'GET /api/workspaces/:wid/admin/invitations': { owner: 'WS5', item: 'W5-1' },
+  'GET /api/workspaces/:wid/admin/storage/by-board': { owner: 'WS5', item: 'W5-2' },
+  'GET /api/workspaces/:wid/admin/storage/by-uploader': { owner: 'WS5', item: 'W5-2' },
+  'GET /api/workspaces/:wid/admin/audit': { owner: 'WS5', item: 'W5-3' },
+  'GET /api/workspaces/:wid/admin/links': { owner: 'WS5', item: 'W5-4' },
+  'GET /api/workspaces/:wid/admin/retention': { owner: 'WS5', item: 'W5-5' },
 }
 
 export const isPendingRoute = (

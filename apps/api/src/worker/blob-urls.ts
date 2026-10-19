@@ -5,6 +5,8 @@
 //
 //   <opaque> = <kind>.<id>.<expUnixSec>.<mac>     kind o = GET original (id = ver_…)
 //                                                  kind d = PUT reserved derivative (id = drv_…)
+//                                                  kind q = GET a worker op's source original (id = wop_…; wave W)
+//                                                  kind p = PUT a worker op's reserved output (id = wpo_…; wave W)
 //
 // It names ids only; the blob key, length and type are looked up in Postgres when the URL is used, so a
 // reservation dropped since (lease lost, job reclaimed) makes its URL useless. Kept short on purpose:
@@ -12,7 +14,7 @@
 
 import { createHmac, timingSafeEqual } from 'node:crypto'
 
-export type BlobUrlKind = 'o' | 'd'
+export type BlobUrlKind = 'o' | 'd' | 'q' | 'p'
 
 export interface BlobGrant {
   kind: BlobUrlKind
@@ -22,8 +24,10 @@ export interface BlobGrant {
 const ID_RE: Record<BlobUrlKind, RegExp> = {
   o: /^ver_[0-9A-Za-z]{10,40}$/,
   d: /^drv_[0-9A-Za-z]{10,40}$/,
+  q: /^wop_[0-9A-Za-z]{10,40}$/,
+  p: /^wpo_[0-9A-Za-z]{10,40}$/,
 }
-const OPAQUE_RE = /^([od])\.([A-Za-z0-9_]{14,44})\.(\d{10})\.([A-Za-z0-9_-]{22})$/
+const OPAQUE_RE = /^([odqp])\.([A-Za-z0-9_]{14,44})\.(\d{10})\.([A-Za-z0-9_-]{22})$/
 const MAC_CHARS = 22 // 132 bits of HMAC-SHA256
 
 export function createBlobUrlSigner(workerToken: string, now: () => Date) {

@@ -2,7 +2,7 @@
 // were granted through guest links, and nothing else.
 import { ListMembersResponse } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { GUEST_REFUSED_ROUTES } from '../../../src/features/guests/guard.ts'
+import { GUEST_HIDDEN_ROUTES, GUEST_REFUSED_ROUTES } from '../../../src/features/guests/guard.ts'
 import { isPendingRoute } from '../../../src/features/pending-routes.ts'
 import { createBoard, DEV_STUDIO } from '../../helpers.ts'
 import {
@@ -278,6 +278,15 @@ function refusedCalls(board: string, other: string, userId: string): [string, Me
       `${b}/review-links/${INVITATION}/code`,
       undefined,
     ],
+    // Wave W (landed by the foundation; pending until implemented): the two routes that queue a worker op, for a file
+    // on their own board
+    [
+      'POST /api/files/:ver/remove-background',
+      'POST',
+      `/api/files/${LIB_VER}/remove-background`,
+      { boardId: board },
+    ],
+    ['POST /api/files/:ver/render-pages', 'POST', `/api/files/${LIB_VER}/render-pages`, { boardId: board }],
     // Requesting access: to their own board and to any other.
     ['POST /api/boards/:bid/access-requests', 'POST', `${b}/access-requests`, { role: 'editor' }],
     [
@@ -321,6 +330,15 @@ describe('what a guest cannot do', () => {
         )
       ).n,
     ).toBe(0)
+  })
+
+  it('wave W: the workspace admin routes answer a name-only guest as an unknown route (404, never 403)', async () => {
+    for (const key of GUEST_HIDDEN_ROUTES) {
+      const [method = 'GET', pattern = ''] = key.split(' ') as [Method, string]
+      const res = await sam.req(method, pattern.replace(':wid', DEV_STUDIO))
+      expect(res.statusCode, key).toBe(404)
+      expect(res.json(), key).toEqual({ error: { code: 'NOT_FOUND', message: 'Not found.' } })
+    }
   })
 
   it('every pattern on the refusal list is a registered route (a renamed route fails here), or a pending one that is not', () => {

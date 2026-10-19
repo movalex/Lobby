@@ -5,6 +5,7 @@
 import {
   ACTIVITY_FACILITATOR_ROUTE_KEYS,
   ACTIVITY_ROUTE_KEYS,
+  ADMIN_ROUTE_KEYS,
   ASSET_VERSION_ROUTE_KEYS,
   BACKUP_CREATOR_ROUTE_KEYS,
   BACKUP_GUESTS_MESSAGE,
@@ -14,6 +15,9 @@ import {
   CHAT_HOOK_CREATOR_ROUTE_KEYS,
   CHAT_HOOK_GUESTS_MESSAGE,
   CHAT_HOOK_ROUTE_KEYS,
+  FORMAT_GUEST_REFUSED_ROUTE_KEYS,
+  FORMAT_GUESTS_MESSAGE,
+  FORMAT_ROUTE_KEYS,
   IMPORT_CREATOR_ROUTE_KEYS,
   IMPORT_GUESTS_MESSAGE,
   IMPORT_ROUTE_KEYS,
@@ -33,7 +37,7 @@ import {
 import Fastify from 'fastify'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { CREATOR_ROUTES } from '../../src/features/domain-access/guard.ts'
-import { GUEST_REFUSED_ROUTES } from '../../src/features/guests/guard.ts'
+import { GUEST_HIDDEN_ROUTES, GUEST_REFUSED_ROUTES } from '../../src/features/guests/guard.ts'
 import { isPendingRoute, PENDING_ROUTES, routeUnlessPending } from '../../src/features/pending-routes.ts'
 import { DEV_STUDIO, INTERNAL_SECRET } from '../helpers.ts'
 import {
@@ -102,6 +106,22 @@ const WAVE_V_OWNERS: Record<string, string> = {
 }
 /** The plan item's feature number of each wave V owner (V1 activities, V2 join codes, V3 breakouts). */
 const WAVE_V_ITEM: Record<string, string> = { WS1: 'V1', WS3: 'V2', WS4: 'V3' }
+/**
+ * Wave W (the foundation; docs/WAVE-W-CONTRACTS.md §1): every browser route of the wave, pending until its owner
+ * implements it: background removal and the op routes (WS2, W2-*), deck import (WS4, W4-1), the workspace admin page
+ * (WS5, W5-*). Each owner deletes its keys here and in PENDING_ROUTES in the change that implements them; the refusal
+ * matrix then holds them to their guard rows, and features/formats/switch.test.ts to their kill switch.
+ */
+const WAVE_W_ROUTES: string[] = [...Object.values(FORMAT_ROUTE_KEYS), ...Object.values(ADMIN_ROUTE_KEYS)]
+/** Every wave W route, pending or landed (the guard rows hold for all). */
+const WAVE_W_ALL: string[] = [...Object.values(FORMAT_ROUTE_KEYS), ...Object.values(ADMIN_ROUTE_KEYS)]
+const WAVE_W_OWNERS: Record<string, string> = {
+  [FORMAT_ROUTE_KEYS.removeBackground]: 'WS2',
+  [FORMAT_ROUTE_KEYS.opState]: 'WS2',
+  [FORMAT_ROUTE_KEYS.opCancel]: 'WS2',
+  [FORMAT_ROUTE_KEYS.renderPages]: 'WS4',
+  ...Object.fromEntries(Object.values(ADMIN_ROUTE_KEYS).map((k) => [k, 'WS5'])),
+}
 const PENDING_NOW = [
   ...WAVE_M_ROUTES,
   ...WAVE_N_ROUTES,
@@ -109,6 +129,7 @@ const PENDING_NOW = [
   ...WAVE_R_ROUTES,
   ...WAVE_S_ROUTES,
   ...WAVE_V_ROUTES,
+  ...WAVE_W_ROUTES,
 ]
 
 const UNKNOWN = { error: { code: 'NOT_FOUND', message: 'Not found.' } }
@@ -117,11 +138,16 @@ const fill = (pattern: string, board: string) =>
   pattern.replace(':bid', board).replace(':wid', DEV_STUDIO).replace(/:\w+/g, 'x')
 
 describe('the pending list', () => {
-  it('is exactly the wave M, N, Q, R, S and V routes still pending, each with its owner and plan item', () => {
+  it('is exactly the wave M, N, Q, R, S, V and W routes still pending, each with its owner and plan item', () => {
     expect(Object.keys(PENDING_ROUTES).sort()).toEqual([...PENDING_NOW].sort())
     for (const [key, r] of Object.entries(PENDING_ROUTES)) {
       expect(['W5', 'W7', 'W8', 'WS1', 'WS2', 'WS3', 'WS4', 'WS5', 'WS7'], key).toContain(r.owner)
-      expect(r.item, key).toMatch(/^(M[5-8]|N[1-7]|Q[1-4]|R[1-4]|S[1-4]|V[1-3])-\d$/)
+      expect(r.item, key).toMatch(/^(M[5-8]|N[1-7]|Q[1-4]|R[1-4]|S[1-4]|V[1-3]|W[1-5])-\d$/)
+    }
+    for (const key of WAVE_W_ROUTES) {
+      expect(PENDING_ROUTES[key]?.owner, key).toBe(WAVE_W_OWNERS[key])
+      // the item names its workstream: W2-* for WS2, W4-* for WS4, W5-* for WS5
+      expect(PENDING_ROUTES[key]?.item.slice(0, 2), key).toBe(`W${WAVE_W_OWNERS[key]?.slice(2)}`)
     }
     for (const key of WAVE_V_ROUTES) {
       expect(PENDING_ROUTES[key]?.owner, key).toBe(WAVE_V_OWNERS[key])
@@ -136,6 +162,21 @@ describe('the pending list', () => {
       expect(PENDING_ROUTES[key]?.owner, key).toBe(WAVE_S_OWNERS[key])
       expect(PENDING_ROUTES[key]?.item.slice(0, 2), key).toBe(`S${WAVE_S_OWNERS[key]?.slice(2)}`)
     }
+  })
+
+  it('wave W: a guest is refused the two routes that queue an op (403) and never sees the admin routes (404); no creator row', () => {
+    const guestRows = Object.entries(GUEST_REFUSED_ROUTES).filter(([k]) => WAVE_W_ALL.includes(k))
+    expect(guestRows.map(([k]) => k).sort()).toEqual([...FORMAT_GUEST_REFUSED_ROUTE_KEYS].sort())
+    for (const [k, m] of guestRows) expect(m, k).toBe(FORMAT_GUESTS_MESSAGE)
+    // the admin page answers a name-only guest as an unknown route, before any query
+    expect([...GUEST_HIDDEN_ROUTES].sort()).toEqual(Object.values(ADMIN_ROUTE_KEYS).sort())
+    for (const k of GUEST_HIDDEN_ROUTES) expect(Object.hasOwn(GUEST_REFUSED_ROUTES, k), k).toBe(false)
+    // an op's state and cancel keep no row (only its requester sees it, and a guest never requests one)
+    for (const k of [FORMAT_ROUTE_KEYS.opState, FORMAT_ROUTE_KEYS.opCancel])
+      expect(Object.hasOwn(GUEST_REFUSED_ROUTES, k), k).toBe(false)
+    // nothing of wave W makes a board or hands out access: no creator row
+    expect(Object.keys(CREATOR_ROUTES).filter((k) => WAVE_W_ALL.includes(k))).toEqual([])
+    for (const k of WAVE_W_ALL) expect(isPendingRoute(k), k).toBe(WAVE_W_ROUTES.includes(k))
   })
 
   it('wave V: a guest is refused every facilitator route and the join code; only the join code has a creator row; every route live', () => {
@@ -348,6 +389,11 @@ describe('in the real app, a pending route answers like an unknown route', () =>
       'live_answers',
       'breakout_sessions',
       'breakout_members',
+      'worker_ops',
+      'worker_op_outputs',
+      'file_text_state',
+      'file_text_pages',
+      'board_file_refs',
     ]) {
       const n = await w.api.db.one<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`)
       expect(n.n, table).toBe(0)

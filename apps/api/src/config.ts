@@ -8,6 +8,9 @@ import { isIP } from 'node:net'
 import { join } from 'node:path'
 import { checkSecret } from '@draftroom/auth-tickets'
 import {
+  FORMAT_SWITCH_ENV,
+  FORMAT_SWITCHES,
+  type FormatSwitches,
   LIVE_SWITCH_ENV,
   LIVE_SWITCHES,
   type LiveSwitches,
@@ -138,6 +141,14 @@ export interface ApiConfig {
    * (features/live/switch.ts). Also told to the web (GET /api/auth/config `live`).
    */
   live: LiveSwitches
+  /**
+   * Wave W (docs/WAVE-W-CONTRACTS.md §1): the "Formats" kill switches, each "on" only (unset, empty or "off" is off;
+   * anything else refuses to start): DRAFTROOM_DOC_CARDS, DRAFTROOM_REMOVE_BACKGROUND, DRAFTROOM_FILE_SEARCH,
+   * DRAFTROOM_DECK_IMPORT, DRAFTROOM_WORKSPACE_ADMIN. Off: every route of that feature answers as an unknown route
+   * (features/formats/switch.ts) and no op of its kind is handed to a worker. Told to the web in GET /api/auth/config
+   * `formats` (worker-backed ones only while a capable worker was seen: features/formats/offer.ts).
+   */
+  formats: FormatSwitches
   /** Wave R: DRAFTROOM_MIRO_TEST_ORIGINS (local dev only): the fake Miro server's origins, or null. */
   miroTestOrigins: { api: string; files: string | null } | null
   /** Wave R: DRAFTROOM_CHAT_HOOK_TEST_ORIGINS (local dev only): the fake webhook receiver's origins, or null. */
@@ -422,6 +433,16 @@ export function parseLiveSwitches(env: Env): LiveSwitches {
   return Object.fromEntries(
     LIVE_SWITCHES.map((s) => [s, parseOnOff(env, LIVE_SWITCH_ENV[s])]),
   ) as LiveSwitches
+}
+
+/**
+ * Wave W: DRAFTROOM_DOC_CARDS, DRAFTROOM_REMOVE_BACKGROUND, DRAFTROOM_FILE_SEARCH, DRAFTROOM_DECK_IMPORT,
+ * DRAFTROOM_WORKSPACE_ADMIN, each as parseOnOff.
+ */
+export function parseFormatSwitches(env: Env): FormatSwitches {
+  return Object.fromEntries(
+    FORMAT_SWITCHES.map((s) => [s, parseOnOff(env, FORMAT_SWITCH_ENV[s])]),
+  ) as FormatSwitches
 }
 
 /** DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS: exact http(s) origins, behind the local-dev guard only. */
@@ -714,6 +735,7 @@ export function loadConfig(env: Env = process.env): ApiConfig {
     linkPreviewTestOrigins: parseLinkPreviewTestOrigins(env, devAuth),
     designPreviews: parseDesignPreviews(env),
     live: parseLiveSwitches(env),
+    formats: parseFormatSwitches(env),
     miroTestOrigins: parseMiroTestOrigins(env, devAuth),
     chatHookTestOrigins: parseChatHookTestOrigins(env, devAuth),
     webhookSecret,
