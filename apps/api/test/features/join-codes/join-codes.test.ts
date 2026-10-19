@@ -328,52 +328,75 @@ describe('resolving a code', () => {
     expect((await resolve(w.api, open.joinCode?.code ?? '', freshIp())).statusCode).toBe(200)
   })
 
-  it(`per address: ${JOIN_CODE_LOOKUPS_PER_ADDRESS.max} misses in 10 minutes, then every lookup from it is 429 (a good code too); good lookups never count; other addresses are not held`, async () => {
+  it(`per address: ${JOIN_CODE_LOOKUPS_PER_ADDRESS.max} misses in 10 minutes, then a miss from it is 429; a good code always resolves and never counts; other addresses are not held`, async () => {
     const w = await world()
     const l = await link(w.bob, w.board)
     const good = l.joinCode?.code ?? ''
     const office = '10.42.0.1'
-    // a room behind one address resolving the good code: never held to the 30
+    // a room behind one address resolving the good code: never held to the limit
     for (let i = 0; i < JOIN_CODE_LOOKUPS_PER_ADDRESS.max + 20; i++)
       expect((await resolve(w.api, good, office)).statusCode).toBe(200)
     const guesser = '10.42.0.2'
-    for (let i = 0; i < JOIN_CODE_LOOKUPS_PER_ADDRESS.max; i++)
+    for (let i = 0; i < JOIN_CODE_LOOKUPS_PER_ADDRESS.max - 1; i++)
       expect((await resolve(w.api, `ZZZZ${String(i).padStart(4, '0')}`, guesser)).statusCode).toBe(404)
-    for (const code of ['ZZZZ-9999', good]) {
-      const res = await resolve(w.api, code, guesser)
-      expect(res.statusCode, code).toBe(429)
-      expect(res.json().error.code).toBe('RATE_LIMITED')
-      expect(Number(res.headers['retry-after'])).toBeGreaterThan(0)
-      expect(res.body).not.toContain(good)
-    }
+    // hits in between give their slot back: the last free slot is still free
+    for (let i = 0; i < 10; i++) expect((await resolve(w.api, good, guesser)).statusCode).toBe(200)
+    expect((await resolve(w.api, 'ZZZZ-9998', guesser)).json()).toEqual(UNKNOWN)
+    const refused = await resolve(w.api, 'ZZZZ-9999', guesser)
+    expect(refused.statusCode).toBe(429)
+    expect(refused.json().error.code).toBe('RATE_LIMITED')
+    expect(Number(refused.headers['retry-after'])).toBeGreaterThan(0)
+    // a full window never refuses a code that resolves (the office that mistyped still gets in, the QR still works)
+    const ok = await resolve(w.api, good, guesser)
+    expect(ok.statusCode).toBe(200)
+    expect(ResolvedJoinCode.parse(ok.json()).token).toBe(tokenOf(l.url))
     // an IPv6 client counts by its /64
     for (let i = 0; i < JOIN_CODE_LOOKUPS_PER_ADDRESS.max; i++)
       await resolve(w.api, 'ZZZZ-ZZZZ', `2001:db8:5:6::${(i + 1).toString(16)}`)
-    expect((await resolve(w.api, good, '2001:db8:5:6:ffff::1')).statusCode).toBe(429)
-    expect((await resolve(w.api, good, '2001:db8:5:7::1')).statusCode).toBe(200)
-    // the office is not held by the guesser, and the guesser is free again after 10 minutes
-    expect((await resolve(w.api, good, office)).statusCode).toBe(200)
+    expect((await resolve(w.api, 'ZZZZ-ZZZZ', '2001:db8:5:6:ffff::1')).statusCode).toBe(429)
+    expect((await resolve(w.api, good, '2001:db8:5:6:ffff::1')).statusCode).toBe(200)
+    expect((await resolve(w.api, 'ZZZZ-ZZZZ', '2001:db8:5:7::1')).statusCode).toBe(404)
+    // the office is not held by the guesser, and the guesser may miss again after 10 minutes
+    expect((await resolve(w.api, 'ZZZZ-ZZZZ', office)).statusCode).toBe(404)
     w.api.clock.advance(JOIN_CODE_LOOKUPS_PER_ADDRESS.windowMs + 1_000)
-    expect((await resolve(w.api, good, guesser)).statusCode).toBe(200)
+    expect((await resolve(w.api, 'ZZZZ-ZZZZ', guesser)).statusCode).toBe(404)
   })
 
-  it(`globally: ${JOIN_CODE_LOOKUPS_GLOBAL.max} misses a minute over every address (shrunk here), then every lookup is 429; good lookups never count`, async () => {
+  it('300 simultaneous misses from one address: exactly the limit are 404, the rest 429; then good codes resolve from it and from everyone (review M1)', async () => {
+    const w = await world()
+    const good = (await link(w.bob, w.board)).joinCode?.code ?? ''
+    const burst = Array.from({ length: 300 }, (_, i) => `ZZZZ${String(i).padStart(4, '0')}`)
+    const res = await Promise.all(burst.map((c) => resolve(w.api, c, '10.9.9.9')))
+    const by: Record<number, number> = {}
+    for (const r of res) by[r.statusCode] = (by[r.statusCode] ?? 0) + 1
+    expect(by).toEqual({ 404: JOIN_CODE_LOOKUPS_PER_ADDRESS.max, 429: 300 - JOIN_CODE_LOOKUPS_PER_ADDRESS.max })
+    for (const r of res) if (r.statusCode === 404) expect(r.json()).toEqual(UNKNOWN)
+    // the burst neither locks out the good code from that address nor uses up the api's window for others
+    expect((await resolve(w.api, good, '10.9.9.9')).statusCode).toBe(200)
+    expect((await resolve(w.api, good, '10.8.8.8')).statusCode).toBe(200)
+    expect((await resolve(w.api, 'ZZZZ-ZZZZ', '10.8.8.8')).statusCode).toBe(404)
+  })
+
+  it(`globally: ${JOIN_CODE_LOOKUPS_GLOBAL.max} misses a minute over every address (shrunk here), then a miss is 429; a good code always resolves and never counts`, async () => {
     expect(JOIN_CODE_LOOKUPS_GLOBAL).toEqual({ max: 600, windowMs: 60_000 })
-    expect(JOIN_CODE_LOOKUPS_PER_ADDRESS).toEqual({ max: 30, windowMs: 10 * 60_000 })
+    expect(JOIN_CODE_LOOKUPS_PER_ADDRESS).toEqual({ max: 120, windowMs: 10 * 60_000 })
     joinCodeLookupSettings.global = { max: 5, windowMs: 60_000 }
     const w = await world()
     const good = (await link(w.bob, w.board)).joinCode?.code ?? ''
     // one address with a good code cannot use up the api's window for everyone
     for (let i = 0; i < 20; i++) expect((await resolve(w.api, good, '10.43.0.1')).statusCode).toBe(200)
-    // a crowd of addresses guessing does
-    for (let i = 0; i < 5; i++) expect((await resolve(w.api, 'ZZZZ-ZZZZ', freshIp())).statusCode).toBe(404)
-    for (const code of [good, 'ZZZZ-ZZZZ']) {
-      const refused = await resolve(w.api, code, freshIp())
-      expect(refused.statusCode, code).toBe(429)
-      expect(refused.json().error.code).toBe('RATE_LIMITED')
-    }
-    w.api.clock.advance(61_000)
+    // a crowd of addresses guessing fills it, at the same moment too
+    const crowd = await Promise.all(Array.from({ length: 12 }, () => resolve(w.api, 'ZZZZ-ZZZZ', freshIp())))
+    expect(crowd.filter((r) => r.statusCode === 404)).toHaveLength(5)
+    expect(crowd.filter((r) => r.statusCode === 429)).toHaveLength(7)
+    const refused = await resolve(w.api, 'ZZZZ-ZZZZ', freshIp())
+    expect(refused.statusCode).toBe(429)
+    expect(refused.json().error.code).toBe('RATE_LIMITED')
+    // and a good code is answered all the same, from a new address or from one of the crowd
     expect((await resolve(w.api, good, freshIp())).statusCode).toBe(200)
+    expect((await resolve(w.api, good, '10.43.0.1')).statusCode).toBe(200)
+    w.api.clock.advance(61_000)
+    expect((await resolve(w.api, 'ZZZZ-ZZZZ', freshIp())).statusCode).toBe(404)
   })
 })
 

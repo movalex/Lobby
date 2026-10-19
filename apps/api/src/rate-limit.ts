@@ -46,6 +46,14 @@ export class SlidingWindowLimiter {
     return true
   }
 
+  /** Gives back one take of `key` made at `atMs` (a reservation that turned out not to count). */
+  untake(key: string, atMs: number): void {
+    const list = this.hits.get(key)
+    if (!list) return
+    const i = list.lastIndexOf(atMs)
+    if (i >= 0) list.splice(i, 1)
+  }
+
   /** How long until `key` may take again (0 = now). Does not count anything. */
   retryAfterMs(key: string, atMs: number): number {
     const list = (this.hits.get(key) ?? []).filter((t) => atMs - t < this.windowMs)
@@ -71,6 +79,14 @@ export interface KeyedLimit {
   check(key: string): void
   /** Counts one event for `key` without throwing (e.g. a failed verification); saturates at the limit. */
   record(key: string): void
+  /**
+   * Counts one event for `key` NOW, before the work that decides whether it should count (no await between the
+   * check and the count, so simultaneous requests cannot all pass a check made before any of them counted). Null when
+   * the key is at its limit (nothing counted). `release()` gives the event back (it turned out not to count).
+   */
+  reserve(key: string): { release(): void } | null
+  /** The 429 a key at its limit is answered (its Retry-After), without counting anything. */
+  refusal(key: string): ApiError
 }
 
 export function keyedLimit(limit: RouteRateLimit, now: () => Date, message?: string): KeyedLimit {
@@ -88,6 +104,21 @@ export function keyedLimit(limit: RouteRateLimit, now: () => Date, message?: str
     check,
     record(key) {
       window.take(key, at())
+    },
+    reserve(key) {
+      const t = at()
+      if (!window.take(key, t)) return null
+      let held = true
+      return {
+        release() {
+          if (!held) return
+          held = false
+          window.untake(key, t)
+        },
+      }
+    },
+    refusal(key) {
+      return rateLimited(window.retryAfterMs(key, at()), message)
     },
   }
 }

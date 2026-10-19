@@ -189,10 +189,26 @@ per activity; the report goes into the gate.
 | Route | Rule | Body → answer |
 |---|---|---|
 | `POST /api/boards/:bid/review-links/:id/code` | creator (manage access on the board, a creator: guard rows §6) | none → `JoinCodeResponse` `{joinCode: {code, display, joinUrl, expiresAt}}`; 404 for an unknown, expired, revoked or non-workshop link |
-| `GET /api/join/:code` | anyone (no session) | → `ResolvedJoinCode` `{token}` of an OPEN link; the same 404 `NOT_FOUND` for unknown, malformed, expired, revoked (and switch off): no oracle. 429 past `JOIN_CODE_LOOKUPS_PER_ADDRESS` (30 / 10 min per address, an IPv6 client by its /64) or `JOIN_CODE_LOOKUPS_GLOBAL` (600 / min) |
+| `GET /api/join/:code` | anyone (no session) | → `ResolvedJoinCode` `{token}` of an OPEN link; the same 404 `NOT_FOUND` for unknown, malformed, expired, revoked (and switch off): no oracle. A MISS is 429 past `JOIN_CODE_LOOKUPS_PER_ADDRESS` (120 misses / 10 min per address, an IPv6 client by its /64) or `JOIN_CODE_LOOKUPS_GLOBAL` (600 misses / min); a code that resolves is never refused |
 
 `joinUrl` = `<PUBLIC_ORIGIN>/j/<code>` (`joinCodeWebPath`). A guess succeeds with probability (open codes)/2^40 per try;
 at the global cap and 50 open codes that is about 4·10^-5 a day.
+
+**The limits** (fix wave, review M1 and m3). They count and refuse **misses only**:
+
+- A code that resolves to an open link is answered whatever either window holds, so neither a guesser nor a crowd of
+  them can keep a room with a good code (or its QR) out; a full window only slows guessing.
+- A miss under both limits answers the same 404 as before; past either it is 429 with `Retry-After`. The 429 says
+  nothing the 404 would not (that this code is not open), only "slow down".
+- Each lookup reserves its slot in the window BEFORE the database is asked (no await between the check and the count,
+  `rate-limit.ts` `reserve`) and gives it back on a hit, so 300 simultaneous misses from one address get exactly 120
+  404s and 180 429s (`join-codes.test.ts`). The address's window is reserved first: a guesser at its limit uses none
+  of the api's window.
+- 120 per address (not 30) so a 200-person room behind one office NAT can mistype, retry and scan an old QR without
+  being locked out.
+- Why this is still safe: a code is 40 bits. At the api-wide 600 misses a minute (864,000 a day) and 50 open codes, a
+  guesser finds one with probability about 4·10^-5 a day, the same as before, since a hit was never what the windows
+  bounded.
 
 ### 3.3 The web (WS3)
 

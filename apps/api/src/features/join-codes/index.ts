@@ -11,13 +11,15 @@
 //
 // Resolving is a bearer-secret lookup, so it is no oracle: an unknown, a malformed, an expired, a revoked or swept code
 // (and a code of a rotated ticket secret) all answer the same 404 NOT_FOUND as an unknown route. Limits (they bound
-// GUESSING, so they count lookups that resolve nothing): JOIN_CODE_LOOKUPS_PER_ADDRESS (30 misses per 10 minutes from
-// a client address, an IPv6 client by its /64) and JOIN_CODE_LOOKUPS_GLOBAL (600 misses a minute over the api); an
-// address, or the api, at its limit is refused every lookup (429) whether the code is good or not, so the answer never
-// says which. A room of people behind one office address resolving the same good code is not held to the 30 (the 31st
-// of them would be refused otherwise), and nobody holding a good code can use up the api's window for everyone. The code
-// is compared in constant time against its derivation, never logged (the api logs route patterns only), never put in
-// an audit row or an error message.
+// GUESSING, so they count and refuse lookups that resolve nothing): JOIN_CODE_LOOKUPS_PER_ADDRESS (120 misses per 10
+// minutes from a client address, an IPv6 client by its /64) and JOIN_CODE_LOOKUPS_GLOBAL (600 misses a minute over the
+// api). Past either, a miss is 429 instead of 404; a code that resolves to an open link is answered whatever the
+// windows hold (wave V review M1, m3): a guesser, or a crowd of them, can slow guessing but never keep a room with a
+// good code (or its QR) out, and a room behind one office address that mistypes is not locked out of the good code
+// either. The 429 says nothing a 404 would not: the code is 40 bits, so at these rates brute force stays impractical
+// (docs/WAVE-V-CONTRACTS.md §3.2). Each slot is reserved before the database is asked and given back on a hit, so
+// simultaneous misses cannot pass the limit. The code is compared in constant time against its derivation, never
+// logged (the api logs route patterns only), never put in an audit row or an error message.
 
 import {
   InvitationId,
@@ -159,13 +161,15 @@ export async function registerJoinCodes(
   const resolve: RouteHandlerMethod = async (req, reply): Promise<ResolvedJoinCode> => {
     reply.header('cache-control', 'no-store')
     const address = clientAddressKey(req.ip)
-    // Both windows count misses only, and refuse every lookup once full: the address's first (a guesser at its limit
-    // uses none of the api's window), then the api's (a crowd of addresses guessing).
-    perAddress.check(address)
-    global.check('all')
+    // Both windows count misses only, and a full one refuses misses only: a code that resolves is never refused.
+    // Each lookup reserves its slot BEFORE the database is asked (no await in between, so simultaneous misses from
+    // one address cannot all pass a check made before any of them counted: wave V review M1) and gives it back on a
+    // hit. The address's window first (a guesser at its limit uses none of the api's window), then the api's.
+    const mine = perAddress.reserve(address)
+    const all = mine ? global.reserve('all') : null
     const miss = () => {
-      perAddress.record(address)
-      global.record('all')
+      if (!mine) return perAddress.refusal(address)
+      if (!all) return global.refusal('all')
       return notFound()
     }
     const { code: raw = '' } = req.params as Params
@@ -181,6 +185,9 @@ export async function registerJoinCodes(
     if (!sameCode(deriveJoinCode(config.ticketSecret, link.id, link.join_code_n), code)) throw miss()
     const token = reviewLinkToken(config.ticketSecret, link.id)
     if (!sameCode(sha256hex(token), link.token_hash)) throw miss()
+    // a hit: it never counts, in either window
+    mine?.release()
+    all?.release()
     return { token }
   }
 

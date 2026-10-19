@@ -23,8 +23,11 @@ export const JOIN_CODE_HMAC_LABEL = 'draftroom:join-code:v1'
 /** invitations.join_code_n: bumped on the (≈2^-40) collision with another link's code; 0038 CHECKs 0..15. */
 export const JOIN_CODE_BUMP_MAX = 15
 
-/** Lookups of GET /api/join/:code: per client address (an IPv6 client by its /64), and for the whole api. 429 past. */
-export const JOIN_CODE_LOOKUPS_PER_ADDRESS = { max: 30, windowMs: 10 * 60 * 1000 } as const
+/**
+ * MISSED lookups of GET /api/join/:code: per client address (an IPv6 client by its /64), and for the whole api. A miss
+ * past either is 429; a code that resolves is never refused. 120 so a room behind one office address can mistype.
+ */
+export const JOIN_CODE_LOOKUPS_PER_ADDRESS = { max: 120, windowMs: 10 * 60 * 1000 } as const
 export const JOIN_CODE_LOOKUPS_GLOBAL = { max: 600, windowMs: 60 * 1000 } as const
 
 const CANONICAL = new RegExp(`^[${JOIN_CODE_ALPHABET}]{${JOIN_CODE_LENGTH}}$`)
