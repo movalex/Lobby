@@ -312,15 +312,15 @@ services:
       - key: DRAFTROOM_DESIGN_PREVIEWS
         value: "on"
       # Wave V "Live sessions+" kill switches (docs/WAVE-V-CONTRACTS.md §1; api only): "on" runs the feature; "off" (also
-      # unset or empty) makes every route of it answer as an unknown route; anything else stops the api at start. Off until
-      # the wave V integration: polls, scales and word clouds; join codes (the QR of the full invite URL works without);
+      # unset or empty) makes every route of it answer as an unknown route; anything else stops the api at start. On since 2026-10-19 (main 7e5b4d6):
+      # polls, scales and word clouds; join codes (the QR of the full invite URL works without);
       # breakouts. Turning one off is the instant rollback (a restart; Postgres keeps everything for when it is back on).
       - key: DRAFTROOM_LIVE_ACTIVITIES
-        value: "off"
+        value: "on"
       - key: DRAFTROOM_JOIN_CODES
-        value: "off"
+        value: "on"
       - key: DRAFTROOM_BREAKOUTS
-        value: "off"
+        value: "on"
       - fromGroup: draftroom-staging-secrets
       - fromGroup: draftroom-staging-worker-token
       # wave R: chat hook URLs are sealed with it (api only)
