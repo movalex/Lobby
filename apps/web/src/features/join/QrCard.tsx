@@ -77,7 +77,7 @@ export function JoinCard({
       <div className="dr-join-card__inner">
         <button
           type="button"
-          className="dr-btn dr-btn--ghost dr-join-card__close"
+          className="dr-btn dr-join-card__close"
           onClick={() => onCloseRef.current()}
           data-testid="join-card-close"
           aria-label="Close the join card"
