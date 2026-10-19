@@ -829,6 +829,33 @@ A wave T board file can hold planning keys, which ba1704c does not know: it refu
 
 The api rolls back as usual (no migration; the older api has no assignee-refs route, which only the wave T sync calls). The web rolls back as usual (the wave T web against the older sync reads 13, offers no planning and pushes no planning key: `t-compat-old-sync.spec.ts`).
 
+## Wave V: live sessions (polls, join codes, breakouts, the session summary)
+
+Wave V (polls, scales and word clouds; a QR and short-code join; breakouts; the session summary: docs/WAVE-V-CONTRACTS.md) changes **only the api and the web**. `CONTRACTS_REV` stays 14, no `customData` key is added, and **the sync and the worker are not redeployed**: placed charts and clouds are ordinary elements with the existing create-only `customData.lobby.kind` (`poll-chart`, `word-cloud`, `breakout-frame`), which the deployed sync already takes. One migration, `0038_live_sessions` (four new tables and two defaulted columns on `invitations`: additive).
+
+| Key | Service | Value | What it does |
+|---|---|---|---|
+| `DRAFTROOM_LIVE_ACTIVITIES` | api | `off` at the deploy, then `on` | Polls, scales and word clouds. |
+| `DRAFTROOM_JOIN_CODES` | api | `off` at the deploy, then `on` | The workshop links' short codes (`/j/ABCD-2345`) and `GET /api/join/:code`. |
+| `DRAFTROOM_BREAKOUTS` | api | `off` at the deploy, then `on` | Breakouts. |
+
+Each key: `on` turns it on; unset, empty and `off` are off; anything else (any case, trimmed) refuses to start (`… must be on or off`). Read once at boot, so a change is a restart. Off, every route of that feature answers exactly like an unknown route (404 `NOT_FOUND`) for every caller, before the body is read or any guard runs: nothing is read or written and no event goes out. The api tells the web what it runs in `GET /api/auth/config` as `live: {activities, joinCodes, breakouts}`; the web offers a feature only when its own switch (`apps/web/src/features/live/flags.ts` `LIVE_FLAGS`) and the api's are both on. The session summary (Wrap up's new sections, the Export dialog's session results CSV) has a web switch only: it shows what the board already has (its CSV needs `DRAFTROOM_LIVE_ACTIVITIES` on, since it reads the activities' list).
+
+**Deploy order: api, then web, then the switches on.**
+
+1. **api** (0038 and the routes) with all three keys `off` (render.yaml says `"off"`; `scripts/smoke/render-yaml.test.mjs` checks it). Nothing answers yet. It must go first: the deployed api refuses a usage batch naming a palette id it does not know (400), and the wave V web sends four new ones (`activities.start`, `join.show-code`, `breakouts.start`, `session-summary.csv`). Check: `GET /api/auth/config` has `"live":{"activities":false,"joinCodes":false,"breakouts":false}`, and the api is live (it applies 0038 at start; a migration that fails stops the start, and Render keeps the previous deploy).
+2. **web**, with the switches the integration turned on in `LIVE_FLAGS`. It offers nothing that needs the api until the api says on. A tab of the web deployed before wave V (711dd04) keeps working against the new api: it never calls the new routes, it strips the additive fields, it has no listener for the new events, and it renders the placed charts and clouds as plain elements (`e2e/excalidraw/v-compat-711dd04.spec.ts`).
+3. **The switches on**: `DRAFTROOM_LIVE_ACTIVITIES`, `DRAFTROOM_JOIN_CODES` and `DRAFTROOM_BREAKOUTS` = `on` on the api service through the Render API, then a restart; render.yaml follows in the same change (`"on"`, and the smoke test's expectation with it). Check `GET /api/auth/config` says `true` for each. A page already open learns the switches at its next load (the config is read once per page).
+
+**Not redeployed**: the sync (711dd04's sync takes the placements: `packages/canvas-schema/src/wave-v-kinds.test.ts`) and the preview worker (no job changed).
+
+**Rollback**, from the quickest:
+
+- **One feature off**: its key `off` and a restart (the Render API or Dashboard → Environment). Instant for every caller: the feature's routes 404, nothing is written, and Postgres keeps its rows. An open activity or a running breakout simply stops answering and comes back as it was when the key is `on` again (one that ended meanwhile by its end time is closed at the next read). Placed charts and clouds stay on the boards as plain elements. With join codes off, the QR of the full invite URL still works.
+- **The web below wave V**: Rollback as usual. It never calls the wave V routes.
+- **The api below wave V**: 0038 is additive for the older build (it ignores the four tables and the two `invitations` columns, and its inserts leave them at their defaults), so it needs only `DRAFTROOM_ALLOW_NEWER_SCHEMA=1` and Manual Deploy → *Deploy a specific commit*, not *Rollback* ([Rolling the api back past a migration](#rolling-the-api-back-past-a-migration)). Roll the web back first (or turn its switches off in a web redeploy): the older api refuses usage batches that name the wave V palette ids, and the wave V web's live features would meet its 404s. Join codes stop resolving (`/j/…` says the code does not work; the full invite URL works). Rows written meanwhile stay and are used again after the roll-forward. This procedure has not been rehearsed.
+- **The sync and the worker**: nothing to do (not deployed in wave V).
+
 ## Rollback
 
 - **How.** Dashboard → service → Deploys → *Rollback*. Render reuses the earlier build artifact (no rebuild) and that deploy's environment variables. Disks, plan and static-site settings are *not* rolled back. A Dashboard rollback also disables autodeploy, which is already off.
@@ -839,6 +866,7 @@ The api rolls back as usual (no migration; the older api has no assignee-refs ro
 - **api past wave M (migrations 0029 and 0030).** Rolling the api back to wave L's build (`4e4a549`) needs no down migration, only `DRAFTROOM_ALLOW_NEWER_SCHEMA=1` and Manual Deploy → *Deploy a specific commit*, not *Rollback* ([Rolling the api back past a migration](#rolling-the-api-back-past-a-migration)). Without the flag that build refuses to start once the database has recorded `0029_usage_daily` and `0030_workspace_templates`. Both are new tables that the older build never reads or writes, and no existing table changes. The rolled-back api has no usage, open-state, workspace-template or Ask-across-boards routes, so a wave M web must fall back on their 404s (the wave M plan requires it of every new route; check it before relying on it). Rows written meanwhile stay and are used again after the roll-forward. This procedure has not been rehearsed.
 - **api or sync past wave N.** The sync needs the reactions steps first; the api needs only the flag: [Rolling the sync back below wave N](#rolling-the-sync-back-below-wave-n-to-104c6e0).
 - **sync past wave T.** The planning switch off, named checkpoints and the strip first: [Rolling the sync back below wave T](#rolling-the-sync-back-below-wave-t-to-ba1704c).
+- **Wave V.** A feature's key `off` and a restart first; the api below wave V needs only the flag (0038 is additive), after the web: [Wave V](#wave-v-live-sessions-polls-join-codes-breakouts-the-session-summary).
 - **api past milestone 3: don't.** A milestone-1/2 api build reads files from `meta.json` on a local disk that no longer exists. It would never see R2 objects or `asset_versions` rows, and it expects its co-located worker. Fix forward instead.
 - **Workers.** Roll a worker back only to a build that speaks the api's current worker protocol. The simplest way to stop previews is to stop the workers: jobs wait in Postgres.
 - **Canvas schema.** Don't roll sync back below a canvas-schema migration. Boards already migrated on disk can't be loaded by the older server (`Incompatible schema?`), and newer clients are refused (`SERVER_TOO_OLD`). Rolling back the web client is safe while every shape migration keeps its `down`: an older client is served down-migrated records. Roll back sync only when its schema didn't change.
