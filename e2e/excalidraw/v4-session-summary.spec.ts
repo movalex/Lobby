@@ -149,6 +149,8 @@ test('v4: a poll, a word cloud and breakouts in Wrap up without AI, in the Recap
     for (const k of keys) localStorage.setItem(k, '1')
   }, LIVE_FLAG_KEYS)
   await reloadBoard(a)
+  // the session's first edit: Wrap up's window starts there (window.ts sessionSince; WS2's sources keep what ran since)
+  await seed(a.page, { notes: [{ id: 'v4-agenda', x: -400, y: 0, text: 'Agenda' }] })
 
   await test.step('a poll with formula-like options: answered by bob and carol, revealed', async () => {
     type St = { activity: { id: string } }
