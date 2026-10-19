@@ -27,6 +27,13 @@ import {
   workshopLink,
 } from './v1-kit.ts'
 
+// The fake hands its events to each page's EventSource (ai-kit injectBoardEvent: the cookie transport). Under
+// E2E_DIRECT_EVENTS=1 the api serves the stream on its own origin and the page reads it with a fetch, which nothing
+// can be handed to, so this file pins the same-origin stream, as l2-ai-pills does (the integration: both of its tests
+// timed out waiting for a start notice in that mode). The real-api specs (v1-poll, v1-word-cloud, v1-scale-keyboard)
+// run on either transport.
+test.use({ apiEnv: { DRAFTROOM_EVENTS_ORIGIN: '' } })
+
 type Json = Record<string, unknown>
 
 /** The fake: one board's activity, answers by person, the contracts' aggregates. */
