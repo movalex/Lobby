@@ -48,6 +48,9 @@ describe.skipIf(!PG_URL)('the board-open read on a pool of 5 (real Postgres)', (
         events: new EventHub({ limits: { perUserPerBoard: 50, perUser: 50, perBoard: 200, total: 500 } }),
         limits: { streamOpens: { max: 1_000, timeWindow: 60_000 } },
       },
+      // wave V's parts (activity, breakouts) are answered with their switches on; both read on the pool after the
+      // transaction, which is what this pool of 5 must survive
+      env: { DRAFTROOM_LIVE_ACTIVITIES: 'on', DRAFTROOM_JOIN_CODES: 'on', DRAFTROOM_BREAKOUTS: 'on' },
     })
     owner = await api.login('ada', 'Ada Owner')
     board = await createBoard(owner, DEV_STUDIO, 'Busy board')

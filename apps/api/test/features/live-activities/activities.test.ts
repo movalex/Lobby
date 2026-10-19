@@ -444,8 +444,8 @@ describe('the past list and the open-state part', () => {
       const res = await c.req('GET', openStatePath(w.board))
       expectStatus(res, 200)
       const body = OpenStateBody.parse(res.json()) as { activity?: unknown }
-      // the part is answered once the lead moves 'activity' into OPEN_STATE_PARTS; until then it is absent
-      if (body.activity !== undefined) expect(body.activity).toEqual(own)
+      // answered since the integration moved 'activity' into OPEN_STATE_PARTS
+      expect(body.activity).toEqual(own)
     }
   })
 })
