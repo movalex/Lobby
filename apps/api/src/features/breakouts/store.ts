@@ -86,6 +86,17 @@ export async function currentSession(q: Queryable, boardId: string, at: Date): P
   return row ? normalize(row) : null
 }
 
+/** Whether breakouts run on the board at `at` (a running session whose end time, if any, is still ahead). */
+export async function breakoutsRunning(q: Queryable, boardId: string, at: Date): Promise<boolean> {
+  const row = await q.maybeOne(
+    `SELECT 1 AS ok FROM breakout_sessions s
+       JOIN boards b ON b.id = s.board_id AND b.status IN ('active', 'archived')
+      WHERE s.board_id = $1 AND s.status = 'running' AND (s.ends_at IS NULL OR s.ends_at > $2)`,
+    [boardId, at],
+  )
+  return row !== null
+}
+
 /** A session by id (null when unknown, or its board is gone, trashed or importing). */
 export async function findSession(q: Queryable, id: string): Promise<SessionRow | null> {
   const row = await q.maybeOne<SessionRow>(

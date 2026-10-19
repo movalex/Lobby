@@ -31,6 +31,7 @@ import { requireBoardAction } from '../../access.ts'
 import type { Params } from '../../context.ts'
 import { badRequest, parse } from '../../errors.ts'
 import { rateLimited } from '../../rate-limit.ts'
+import { refuseDuringBreakouts } from '../breakouts/conflicts.ts'
 import type { FeatureContext } from '../context.ts'
 import { requireFacilitatorAccount } from './facilitators.ts'
 import type { ShapeIndex } from './shapes.ts'
@@ -229,6 +230,8 @@ export function registerSpotlightRoutes(
     const access = await requireBoardAction(db, bid, user.id, 'edit')
     await requireFacilitatorAccount(db, user.id)
     const boardId = access.board.id
+    // not while breakouts run: bringing everyone to it would pull every group out of its frame (wave V review n4)
+    await refuseDuringBreakouts(ctx, boardId)
     // A refused start (too soon, or objects that are gone) never costs a snapshot or a cooldown.
     const key = `${boardId}/${user.id}`
     const t = now().getTime()

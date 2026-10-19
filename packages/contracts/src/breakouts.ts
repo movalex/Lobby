@@ -191,6 +191,11 @@ export const BREAKOUT_ERROR_CODES = {
   /** 409: a live presentation or a spotlight is on (end it first) */
   presenting: 'PRESENTING',
   spotlight: 'SPOTLIGHT',
+  /**
+   * 409 from a presentation or spotlight START while breakouts run on the board (its follow would pull every group out
+   * of its frame): end breakouts first (review n4; the other direction of `presenting` / `spotlight`)
+   */
+  breakouts: 'BREAKOUTS',
   /** 409: choose mode, the group is full */
   groupFull: 'BREAKOUT_GROUP_FULL',
   /** 409: join is for choose mode */

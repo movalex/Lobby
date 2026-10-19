@@ -51,6 +51,7 @@ import type { Params } from '../../context.ts'
 import { ApiError, conflict, parse } from '../../errors.ts'
 import { rateLimited, SlidingWindowLimiter } from '../../rate-limit.ts'
 import { provideOpenStatePart } from '../board-open/parts.ts'
+import { refuseDuringBreakouts } from '../breakouts/conflicts.ts'
 import type { FeatureContext } from '../context.ts'
 
 const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
@@ -522,6 +523,8 @@ export function registerPresentation(app: FastifyInstance, ctx: FeatureContext):
     if ((await userKind(db, user.id)) === 'guest')
       throw new ApiError(403, 'GUEST_ACCOUNT_REQUIRED', GUEST_PRESENT)
     const boardId = access.board.id
+    // not while breakouts run: following the presenter would pull every group out of its frame (wave V review n4)
+    await refuseDuringBreakouts(ctx, boardId)
     take(controlLimit, `${boardId}/${user.id}`, 'That is a lot of presenting. Wait a moment.')
     const { tab, resumeId, takeOver, slideId, index, count } = input
     const presentation = run(() =>

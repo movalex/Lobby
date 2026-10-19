@@ -282,7 +282,11 @@ from that address gets its own 200 but the address's 400 caps the two together.
   `isNewerBreakoutState` orders states arriving by different paths. An ended session stays the board's `session` for
   `BREAKOUT_RECENT_MS` (12 h) for the chip's "Breakouts ended" and the summary.
 - Membership is not secret (names are on the board already); presence stays ephemeral and untouched.
-- Starting during a live presentation or a spotlight: 409 `PRESENTING` / `SPOTLIGHT`. A deleted group frame keeps the
+- Starting during a live presentation or a spotlight: 409 `PRESENTING` / `SPOTLIGHT`. And the other way round (fix
+  wave, review n4): while breakouts run (a running session whose end time, if any, is ahead, with `DRAFTROOM_BREAKOUTS`
+  on), starting a presentation to everyone (`POST …/presentation`) or a spotlight is 409 `BREAKOUTS`
+  (`BREAKOUT_ERROR_CODES.breakouts`; `features/breakouts/conflicts.ts`), since its follow would pull every group out of
+  its frame; the web says "End breakouts first" with an End breakouts button (`features/breakouts/conflict.ts`). A deleted group frame keeps the
   group (the chip says "Frame removed"; the facilitator picks another).
 - Editing is NOT fenced to a group's frame (a guide, not a fence: fencing would be a sync merge rule per uid; the UI
   copy says so).

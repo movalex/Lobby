@@ -191,6 +191,52 @@ describe('start and read', () => {
     await start(w, w.editor)
   })
 
+  it('the other way round: while breakouts run, starting a presentation or a spotlight is 409 BREAKOUTS; after the end, or past their end time, both start (review n4)', async () => {
+    const w = await world()
+    w.tab(w.owner)
+    w.sync.add(w.boardId, note('a'))
+    const present = (c: typeof w.owner) =>
+      c.req('POST', `/api/boards/${w.boardId}/presentation`, {
+        tab: 'tab-00000001',
+        slideId: null,
+        index: 0,
+        count: 1,
+      })
+    const spotlight = (c: typeof w.owner) =>
+      c.req('POST', `/api/boards/${w.boardId}/spotlight`, { refs: ['shape:a'] })
+    const brk = (await start(w, w.editor, { durationMs: 10 * 60_000 })).session?.id ?? ''
+    for (const res of [await present(w.owner), await spotlight(w.owner), await present(w.editor)]) {
+      expect(res.statusCode).toBe(409)
+      expect(codeOf(res)).toBe('BREAKOUTS')
+      expect(res.json().error.message).toBe('Breakouts are running on this board. End breakouts first.')
+    }
+    expect(w.events.filter((e) => e.type.startsWith('present') || e.type.includes('spotlight'))).toEqual([])
+    expectStatus(await act(w.owner, brk, 'end'), 200)
+    const p = await present(w.owner)
+    expectStatus(p, 200)
+    const id = (p.json() as { presentation: { id: string } }).presentation.id
+    expectStatus(await w.owner.req('POST', `/api/boards/${w.boardId}/presentation/stop`, { id }), 200)
+    // a session past its end time holds nothing up (it is over, whether or not anyone read it yet)
+    await start(w, w.editor, { durationMs: 5 * 60_000 })
+    w.clock.advance(5 * 60_000 + 1)
+    expectStatus(await spotlight(w.owner), 200)
+  })
+
+  it('with DRAFTROOM_BREAKOUTS off, a session left running in Postgres holds no presentation up', async () => {
+    const w = await world()
+    w.tab(w.owner)
+    await start(w, w.editor)
+    other = await createTestApi({ db: w.api.db, env: {} })
+    const owner = await other.login('ada', 'Ada Owner')
+    const res = await owner.req('POST', `/api/boards/${w.boardId}/presentation`, {
+      tab: 'tab-00000001',
+      slideId: null,
+      index: 0,
+      count: 1,
+    })
+    expectStatus(res, 200)
+  })
+
   it('an archived board: reads work, starting and choosing do not', async () => {
     const w = await world()
     const s = await start(w, w.owner, { mode: 'choose' })
