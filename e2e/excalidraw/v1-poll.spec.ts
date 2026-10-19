@@ -210,9 +210,11 @@ test('an archived board: an answer the api refuses as read-only says so, and no 
   )
   expect(refused.status()).toBe(409)
   expect(((await refused.json()) as { error: { code: string } }).error.code).toBe('BOARD_READ_ONLY')
-  // the page may have learned of the archive on its own (then the sheet is gone already); else the send meets the 409
+  // the page may have learned of the archive on its own: archiving closed the activity (the fix wave, review m2: an
+  // archived board's activities stop taking answers, and an anonymous one keeps no answer row), so the panel says
+  // answers are closed and the sheet is gone; else the send meets the 409 and the panel says the board is archived
   const send = p.getByTestId('la-answer-send')
   if (await send.isVisible()) await send.click({ timeout: 5_000 }).catch(() => {})
-  await expect(p).toContainText('This board is archived: answers are closed.')
+  await expect(p).toContainText(/This board is archived: answers are closed\.|Answers are closed\./)
   await expect(p.getByTestId('la-answer-send')).toHaveCount(0)
 })
