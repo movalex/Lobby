@@ -35,6 +35,9 @@ export async function setupWorld(
   const events = opts.events ?? new EventHub()
   const api = await createTestApi({
     deps: { events, ...(opts.sync ? { syncInternal: opts.sync } : {}) },
+    // wave V's switches on, as the e2e stack (docs/WAVE-V-CONTRACTS.md §1.1): a landed route is held to its guard
+    // rows by the refusal matrix; a pending one stays an unknown route whatever its switch says
+    env: { DRAFTROOM_LIVE_ACTIVITIES: 'on', DRAFTROOM_JOIN_CODES: 'on', DRAFTROOM_BREAKOUTS: 'on' },
   })
   const alice = await api.login('alice')
   const bob = await api.login('bob')
