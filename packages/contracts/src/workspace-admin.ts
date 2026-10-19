@@ -60,8 +60,10 @@ export const AdminMember = z.object({
   role: z.enum(['owner', 'admin', 'member', 'guest']),
   /** a creator (docs/DOMAIN-ACCESS-CONTRACTS.md): may make boards and hand out access */
   creator: z.boolean(),
-  /** the latest board visit in this workspace (board_visits), or null */
-  lastVisitAt: IsoDate.nullable(),
+  /** boards in this workspace this person holds a direct grant on */
+  boardGrants: Count,
+  // No "last visit": 0031_board_visits stores visit times on the owner's condition that nobody else ever sees who
+  // visited when (only the person's own row is read). docs/WAVE-W-CONTRACTS.md §12 departure 3.
   ...OutsideFields,
 })
 export type AdminMember = z.infer<typeof AdminMember>

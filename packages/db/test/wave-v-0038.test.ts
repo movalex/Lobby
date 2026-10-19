@@ -161,10 +161,11 @@ const NEW_TABLES = ['live_activities', 'live_answers', 'breakout_sessions', 'bre
 const NEW_COLUMNS = ['invitations.join_code_hash:text:YES', 'invitations.join_code_n:smallint:NO']
 
 describe('wave V migration', () => {
-  it('is 0038_live_sessions, right after 0037 (contiguous, the last)', () => {
+  it('is 0038_live_sessions, right after 0037 (contiguous)', () => {
     const all = loadMigrations()
     expect(all.find((m) => m.version === 38)?.name).toBe('0038_live_sessions')
-    expect(all.at(-1)?.version).toBe(38)
+    // wave W's 0039 follows (wave-w-0039.test.ts)
+    expect(all.find((m) => m.version === 39)?.name).toBe('0039_formats')
     expect(all.map((m) => m.version)).toEqual(all.map((_, i) => i + 1))
   })
 
@@ -180,7 +181,10 @@ describe('wave V migration', () => {
       [W, B, U],
     )
     const before = { columns: await columnsOf(d), constraints: await constraintsOf(d) }
-    expect((await migrate(d)).applied).toEqual(['0038_live_sessions'])
+    // up to 0038 only (wave W's 0039 adds its own tables and a column: wave-w-0039.test.ts)
+    expect((await migrate(d, { migrations: all.filter((m) => m.version <= 38) })).applied).toEqual([
+      '0038_live_sessions',
+    ])
     const after = { columns: await columnsOf(d), constraints: await constraintsOf(d) }
     const isNew = (k: string) => NEW_TABLES.some((t) => k.startsWith(`${t}.`))
     expect(after.columns.filter((k) => !isNew(k) && !NEW_COLUMNS.includes(k))).toEqual(before.columns)
