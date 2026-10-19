@@ -22,7 +22,7 @@ import {
 const KIND = 'word-cloud'
 const textOf = (e: unknown) => (e as { text?: string }).text ?? ''
 
-test('a word cloud groups case and width variants, hides a word, and goes to the board as words or as notes', async ({
+test('a word cloud groups case and width variants, hides a word before and after the reveal, and goes to the board as words or as notes', async ({
   join,
   board,
   browser,
@@ -68,14 +68,26 @@ test('a word cloud groups case and width variants, hides a word, and goes to the
       await expect(list).not.toContainText('coffee')
     }
 
+    // the integration, against the real api: a word hidden AFTER the reveal leaves everyone's results and the board too
+    await panel(alice.page)
+      .getByTestId('la-words-results')
+      .getByRole('button', { name: 'Hide the word Focus' })
+      .click()
+    await expect(panel(alice.page).getByTestId('la-hidden-words')).toContainText(/focus/i)
+    for (const page of [alice.page, bob.page, carol.page, guest.page]) {
+      const list = panel(page).getByTestId('la-words-results')
+      await expect(list.locator('li')).toHaveCount(2)
+      await expect(list).not.toContainText('Focus')
+    }
+
     await panel(alice.page).getByTestId('la-to-board').click()
     await expectSaved(alice.page)
     const els = await placed(alice.page, KIND)
     const frame = els.find((e) => e.type === 'frame')
     expect(frame).toBeDefined()
     const words = els.filter((e) => e.type === 'text' && ['Agile', 'Speed', 'Focus'].includes(textOf(e)))
-    expect(words.map(textOf).sort()).toEqual(['Agile', 'Focus', 'Speed'])
-    expect(els.some((e) => textOf(e).includes('coffee'))).toBe(false)
+    expect(words.map(textOf).sort()).toEqual(['Agile', 'Speed'])
+    expect(els.some((e) => textOf(e).includes('coffee') || textOf(e).includes('Focus'))).toBe(false)
     for (const w of words) {
       expect(w.frameId).toBe(frame?.id)
       expect(w.x).toBeGreaterThanOrEqual(frame?.x ?? 0)
@@ -85,7 +97,7 @@ test('a word cloud groups case and width variants, hides a word, and goes to the
     // the most frequent word is the biggest
     const size = (t: string) =>
       (words.find((w) => textOf(w) === t) as unknown as { fontSize: number }).fontSize
-    expect(size('Agile')).toBeGreaterThan(size('Focus'))
+    expect(size('Agile')).toBeGreaterThan(size('Speed'))
     await expect.poll(async () => (await placed(bob.page, KIND)).length).toBe(els.length)
 
     // one undo step, then the other form: one note per word with its count
@@ -95,7 +107,7 @@ test('a word cloud groups case and width variants, hides a word, and goes to the
     await panel(alice.page).getByTestId('la-to-board-notes').click()
     await expectSaved(alice.page)
     const notes = (await placed(alice.page, KIND)).filter((e) => e.type === 'stickynote')
-    expect(notes).toHaveLength(3)
+    expect(notes).toHaveLength(2)
     await expect
       .poll(async () => {
         const texts: string[] = []
@@ -111,7 +123,7 @@ test('a word cloud groups case and width variants, hides a word, and goes to the
           )
         return texts.sort()
       })
-      .toEqual(['Agile (3)', 'Focus (1)', 'Speed (2)'])
+      .toEqual(['Agile (3)', 'Speed (2)'])
   } finally {
     for (const c of opened) await c.close()
   }

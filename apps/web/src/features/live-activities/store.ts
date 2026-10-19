@@ -75,6 +75,11 @@ export interface ActivitySnapshot {
   readonly setupOpen: boolean
   /** a request this tab sent and is waiting for */
   readonly busy: ActivityAction | null
+  /**
+   * The api said the board is read-only (409 BOARD_READ_ONLY: archived since this page opened it): no answers, nothing
+   * to start or manage, until the page reloads the board.
+   */
+  readonly archived: boolean
 }
 
 /** What this tab was told while the board was open, for its notices (./index.tsx). */
@@ -90,6 +95,10 @@ const SHARING_CHANGED = 'sharing.changed'
 export const END_REFRESH_DELAY_MS = 600
 
 const OFF_MESSAGE = 'Polls and word clouds are not available on this board right now.'
+/** What a person is told when the api refuses because the board is archived (409 BOARD_READ_ONLY). */
+export const ARCHIVED_MESSAGE = 'This board is archived: answers are closed.'
+/** The api's code for a write to an archived board (live-activities answers it on an answer). */
+const BOARD_READ_ONLY = 'BOARD_READ_ONLY'
 
 function errorOf(e: unknown): ActionResult {
   const err = e as { message?: unknown; code?: unknown; status?: unknown } | null
@@ -132,6 +141,7 @@ export class ActivityStore {
   private loaded = false
   private stale = false
   private absent = false
+  private archived = false
   private offsetMs = 0
   private setupOpen = false
   private busy: ActivityAction | null = null
@@ -226,6 +236,7 @@ export class ActivityStore {
       offsetMs: this.offsetMs,
       setupOpen: this.setupOpen,
       busy: this.busy,
+      archived: this.archived,
     }
   }
 
@@ -421,13 +432,21 @@ export class ActivityStore {
       return { ok: true }
     } catch (e) {
       const r = errorOf(e)
+      // the board was archived meanwhile: say so plainly, and read what is true (the api then lets nobody manage)
+      if (r.code === BOARD_READ_ONLY) {
+        this.archived = true
+        void this.refresh()
+        return { ok: false, error: ARCHIVED_MESSAGE, code: r.code }
+      }
       // the activity moved on (closed, revealed, someone else started one) or the feature went: show what is true
       if (
         r.code === ACTIVITY_ERROR_CODES.activityOpen ||
         r.code === ACTIVITY_ERROR_CODES.notOpen ||
         r.code === ACTIVITY_ERROR_CODES.notYours ||
         r.code === 'NOT_FOUND' ||
-        r.code === 'CONFLICT'
+        r.code === 'CONFLICT' ||
+        // a manage route on a board that went read-only (403): what this person may do changed
+        r.code === 'FORBIDDEN'
       )
         void this.refresh()
       return r

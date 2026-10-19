@@ -178,7 +178,41 @@ test('a guest cannot start one, and a facilitator cannot start a second while on
     await panel(alice.page).getByTestId('la-cancel').click()
     await panel(alice.page).getByTestId('la-cancel-confirm').click()
     await expect(guest.page.getByTestId('facilitate-pill-activities')).toHaveCount(0)
+    // the integration, against the real api: the cancel answers the board without the cancelled activity (none here)
+    await expect(panel(alice.page)).toHaveAttribute('data-status', 'none')
+    const after = await alice.api.fetch('GET', `/api/boards/${board}/activity`)
+    expect(((await after.json()) as { activity: unknown }).activity).toBeNull()
   } finally {
     for (const c of opened) await c.close()
   }
+})
+
+// The integration, against the real api (WS1 answers an answer on an archived board 409 BOARD_READ_ONLY): the panel says
+// the board is archived and offers no answer sheet any more, whichever way the page learns of the archive first.
+test('an archived board: an answer the api refuses as read-only says so, and no answer sheet is offered', async ({
+  join,
+  board,
+}) => {
+  const alice = await withLive(await join('alice'))
+  const bob = await withLive(await join('bob', 'editor'))
+  await startActivity(alice.page, { kind: 'poll', prompt: 'Ship it this week?' })
+  const p = await openActivityPanel(bob.page)
+  await p.getByTestId('la-choice-0').check()
+  const archived = await alice.api.fetch('POST', `/api/boards/${board}/archive`, {})
+  expect(archived.status()).toBe(200)
+  // the api refuses the answer itself
+  const refused = await bob.api.fetch(
+    'POST',
+    `/api/activities/${await p.getAttribute('data-activity-id')}/answer`,
+    {
+      answer: { kind: 'poll', choices: [0] },
+    },
+  )
+  expect(refused.status()).toBe(409)
+  expect(((await refused.json()) as { error: { code: string } }).error.code).toBe('BOARD_READ_ONLY')
+  // the page may have learned of the archive on its own (then the sheet is gone already); else the send meets the 409
+  const send = p.getByTestId('la-answer-send')
+  if (await send.isVisible()) await send.click({ timeout: 5_000 }).catch(() => {})
+  await expect(p).toContainText('This board is archived: answers are closed.')
+  await expect(p.getByTestId('la-answer-send')).toHaveCount(0)
 })

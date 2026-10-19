@@ -13,7 +13,14 @@ import {
   type LiveActivity,
 } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { type ActivityNews, ActivityStore, effectiveStatus, type RequestFn, remainingMs } from './store.ts'
+import {
+  type ActivityNews,
+  ActivityStore,
+  ARCHIVED_MESSAGE,
+  effectiveStatus,
+  type RequestFn,
+  remainingMs,
+} from './store.ts'
 
 const BOARD = 'b-la-store01'
 const ME = 'usr_participant0001'
@@ -291,6 +298,49 @@ describe('the live activity store', () => {
     answered.events.fireResync()
     await flush()
     expect(answered.news).toEqual([])
+  })
+
+  it('the integration, against the real api: a cancel answers the board without the cancelled one (the last revealed, or none)', async () => {
+    const k = kit()
+    k.serve(() => state({ canManage: true }))
+    k.events.fireResync()
+    await flush()
+    // the api's cancel answers stateFor without the cancelled row: here the board's earlier revealed poll
+    const earlier = activity({
+      id: 'act_fedcba9876543210',
+      status: 'revealed',
+      revealedAt: '2026-10-18T09:30:00.000Z',
+    })
+    k.serve(() => state({ activity: earlier, canManage: true }))
+    expect(await k.store.cancel()).toEqual({ ok: true })
+    expect(k.store.getSnapshot()).toMatchObject({
+      status: 'revealed',
+      activity: { id: 'act_fedcba9876543210' },
+    })
+    // and with nothing before it, the empty state
+    k.serve(() => state({ canManage: true }))
+    k.events.emit(LIVE_ACTIVITY_EVENTS.activity, { activity: activity(), answered: 0, results: null })
+    await flush()
+    k.serve(() => state({ activity: null }))
+    expect(await k.store.cancel()).toEqual({ ok: true })
+    expect(k.store.getSnapshot()).toMatchObject({ activity: null, status: null })
+    expect(k.news).toEqual([])
+  })
+
+  it('an archived board (409 BOARD_READ_ONLY on an answer) says so, refetches, and offers nothing more', async () => {
+    const k = kit()
+    k.serve(() => state())
+    k.events.fireResync()
+    await flush()
+    expect(k.store.getSnapshot().archived).toBe(false)
+    k.serve((method) =>
+      method === 'POST' ? new ApiError(409, 'BOARD_READ_ONLY', 'This board is read-only.') : state(),
+    )
+    const r = await k.store.answer({ kind: 'poll', choices: [0] })
+    expect(r).toEqual({ ok: false, error: ARCHIVED_MESSAGE, code: 'BOARD_READ_ONLY' })
+    await flush()
+    expect(k.store.getSnapshot().archived).toBe(true)
+    expect(k.calls.map((c) => c.method)).toEqual(['GET', 'POST', 'GET'])
   })
 })
 

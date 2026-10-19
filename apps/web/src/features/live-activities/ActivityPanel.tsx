@@ -11,7 +11,7 @@ import { useNow } from '../workshops/workshop-context.ts'
 import { AnswerForm } from './AnswerForm.tsx'
 import { mayFacilitate, mayParticipate, useActivity } from './hooks.ts'
 import { ResultsView } from './Results.tsx'
-import { remainingMs } from './store.ts'
+import { ARCHIVED_MESSAGE, remainingMs } from './store.ts'
 import { type PlaceAs, resultsToBoard } from './to-board.ts'
 import {
   anonymityText,
@@ -99,7 +99,7 @@ export function ActivityPanel({ ctx, close }: { ctx: Ctx; close(): void }) {
     )
 
   const startButton = (label: string) =>
-    facilitator && !readOnly && ctx.board.status === 'active' ? (
+    facilitator && !readOnly && ctx.board.status === 'active' && !snap.archived ? (
       <button
         type="button"
         className="dr-btn dr-btn--primary dr-btn--sm"
@@ -122,11 +122,14 @@ export function ActivityPanel({ ctx, close }: { ctx: Ctx; close(): void }) {
       </div>
     )
 
-  const manage = snap.canManage && !readOnly
+  // the api may say the board was archived after this page opened it (snap.archived): nothing to answer or manage
+  const answering = mayParticipate(ctx) && !snap.archived
+  const manage = snap.canManage && !readOnly && !snap.archived
   const revealed = snap.status === 'revealed'
   const showResults = !!snap.results && (revealed || manage || a.resultsLive)
   const hideWord =
-    manage && a.kind === 'words' && !revealed ? (word: string) => void run(store.hide(word, true)) : undefined
+    // after the reveal too (the api takes it: a hidden word leaves the frozen results for everyone, and the board)
+    manage && a.kind === 'words' ? (word: string) => void run(store.hide(word, true)) : undefined
   const busy = snap.busy !== null
 
   return (
@@ -157,11 +160,13 @@ export function ActivityPanel({ ctx, close }: { ctx: Ctx; close(): void }) {
           {a.prompt}
         </h3>
 
-        {running && mayParticipate(ctx) && (
+        {running && answering && (
           <AnswerForm activity={a} mine={snap.myAnswer} store={store} busy={snap.busy === 'answer'} />
         )}
-        {running && !mayParticipate(ctx) && (
-          <p className="dr-muted">This board is archived: answers are closed.</p>
+        {running && !answering && (
+          <p className="dr-muted" data-testid="la-archived">
+            {ARCHIVED_MESSAGE}
+          </p>
         )}
         {snap.status === 'closed' && (
           <p className="dr-la-note" data-testid="la-closed-note">
@@ -193,17 +198,15 @@ export function ActivityPanel({ ctx, close }: { ctx: Ctx; close(): void }) {
               {snap.hiddenWords.map((w) => (
                 <li key={w}>
                   <span>{w}</span>{' '}
-                  {!revealed && (
-                    <button
-                      type="button"
-                      className="dr-linkbtn"
-                      data-testid="la-unhide-word"
-                      aria-label={`Show the word ${w} again`}
-                      onClick={() => void run(store.hide(w, false))}
-                    >
-                      Show again
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    className="dr-linkbtn"
+                    data-testid="la-unhide-word"
+                    aria-label={`Show the word ${w} again`}
+                    onClick={() => void run(store.hide(w, false))}
+                  >
+                    Show again
+                  </button>
                 </li>
               ))}
             </ul>
