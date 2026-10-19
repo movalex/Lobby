@@ -15,7 +15,13 @@ import {
 import { newId } from '@draftroom/db'
 import { afterEach, describe, expect, it } from 'vitest'
 import { EventHub } from '../../src/events/hub.ts'
-import { OP_KINDS, type OpKindHandler, OpRefused, type PublishedOutput } from '../../src/worker/ops-kinds.ts'
+import {
+  OP_KINDS,
+  type OpKindHandler,
+  OpRefused,
+  type PublishedOutput,
+  stubKind,
+} from '../../src/worker/ops-kinds.ts'
 import { claim, PNG, pathOf, type WorkerEnv, workerEnv } from './helpers.ts'
 
 const ON = {
@@ -252,7 +258,8 @@ describe('the lease', () => {
   })
 
   it('the foundation stubs refuse output, text and complete with 501 (no deployment reaches them)', async () => {
-    const s = await setup()
+    // WS2 landed remove-bg's kind (features/formats/remove-bg/kind.ts): the stub itself is what this checks
+    const s = await setup({ kinds: { ...OP_KINDS, 'remove-bg': stubKind('remove-bg') } })
     const id = await s.queue()
     await s.opsClaim()
     const lease = { workerId: 'nas-1', attempt: 1 }

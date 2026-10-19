@@ -58,9 +58,8 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   // W5-5 retention; features/workspace-admin). Once implemented, each is gated by its kill switch as well. The worker
   // routes (/api/worker/ops/*, worker/ops-routes.ts) are not on this list: they are the worker protocol, live from the
   // foundation, and hand out nothing until a browser route queues an op.
-  'POST /api/files/:ver/remove-background': { owner: 'WS2', item: 'W2-1' },
-  'GET /api/file-ops/:op': { owner: 'WS2', item: 'W2-2' },
-  'POST /api/file-ops/:op/cancel': { owner: 'WS2', item: 'W2-2' },
+  // WS2 implemented its three (W2-1 remove a background, W2-2 an op's state and cancel; features/formats/remove-bg and
+  // ops): to ship one hidden, add its key back.
   'POST /api/files/:ver/render-pages': { owner: 'WS4', item: 'W4-1' },
   'GET /api/workspaces/:wid/admin/members': { owner: 'WS5', item: 'W5-1' },
   'GET /api/workspaces/:wid/admin/invitations': { owner: 'WS5', item: 'W5-1' },

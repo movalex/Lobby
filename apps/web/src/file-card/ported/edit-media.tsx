@@ -43,6 +43,8 @@ import type {
   MenuEntrySpec,
   SelectionBarItemSpec,
 } from '../../canvas/api/index.ts'
+import { REMOVE_BG_LABEL, removeBgTarget } from '../../features/remove-bg/model.ts'
+import { startRemoveBackground } from '../../features/remove-bg/run.ts'
 import { reviewFlags } from '../../features/review/flags.ts'
 import { supersedesHeader } from '../../features/review-viewer/versions/client.ts'
 import { versionStoreOf } from '../../features/review-viewer/versions/store.ts'
@@ -598,5 +600,14 @@ export const editMenu: readonly MenuEntrySpec[] = [
     label: 'Alternative text…',
     command: 'media.alt-text',
     visible: (ctx, target) => !!canEditPicture(ctx, target.ids),
+  },
+  // wave W (WS2, features/remove-bg): on one image, while the switches and a capable worker offer it
+  {
+    id: 'media.remove-background',
+    group: 'edit',
+    order: 83,
+    label: REMOVE_BG_LABEL,
+    visible: (ctx, target) => !!removeBgTarget(ctx, target.ids),
+    run: (ctx, target) => void startRemoveBackground(ctx, target.ids),
   },
 ]

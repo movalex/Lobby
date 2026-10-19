@@ -83,15 +83,17 @@ describe('the background model file', () => {
   })
 
   it('a capability is reported only with a runner, and remove-bg only with a usable model', () => {
-    // the foundation's build has no runner at all: nothing is reported, so the api hands this worker nothing
-    expect(OP_RUNNERS).toEqual({})
+    // this build has the remove-bg runner (WS2) and no other; with the shipped pin (null) no model file passes, so
+    // nothing is reported and the api hands this worker nothing
+    expect(Object.keys(OP_RUNNERS)).toEqual(['remove-bg'])
     const none = reportedCapabilities({
       enabled: parseWorkerOps(undefined),
       runners: OP_RUNNERS,
-      bgModel: checkBgModel(path, sha),
+      bgModel: checkBgModel(path),
     })
     expect(none.capabilities).toEqual([])
     expect(none.missing.map((m) => m.kind)).toEqual(['remove-bg', 'extract-text', 'render-pages'])
+    expect(none.missing[0]).toEqual({ kind: 'remove-bg', why: 'the model file is not usable (unpinned)' })
     const fake: OpRunner = { kind: 'remove-bg', run: async () => ({ outputs: [], result: {} }) }
     const runners = { 'remove-bg': fake, 'extract-text': { ...fake, kind: 'extract-text' as const } }
     const ok = reportedCapabilities({

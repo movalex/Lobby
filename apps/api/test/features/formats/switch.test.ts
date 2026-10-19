@@ -13,6 +13,7 @@ import {
 import Fastify, { type FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
 import { toErrorResponse } from '../../../src/errors.ts'
+import type { FeatureContext } from '../../../src/features/context.ts'
 import { registerFormats } from '../../../src/features/formats/index.ts'
 import { formatsOn, formatsRoute, formatsStub, requireFormats } from '../../../src/features/formats/switch.ts'
 import { PENDING_ROUTES } from '../../../src/features/pending-routes.ts'
@@ -39,7 +40,14 @@ const ROUTES: [string, FormatSwitch[]][] = [
 ]
 
 const fill = (pattern: string) => pattern.replace(/:\w+/g, 'x1')
-const switchesOnly = (formats: FormatSwitches) => ({ config: { formats } })
+/** A bare app's context: the switches only (a landed feature reads the rest lazily, in its handlers). */
+const switchesOnly = (formats: FormatSwitches) => ({ config: { formats } }) as unknown as FeatureContext
+/** The routes their owners implemented (no longer the 501 stub; their own suites test them). */
+const LANDED: string[] = [
+  FORMAT_ROUTE_KEYS.removeBackground, // WS2
+  FORMAT_ROUTE_KEYS.opState, // WS2
+  FORMAT_ROUTE_KEYS.opCancel, // WS2
+]
 
 let app: FastifyInstance | null = null
 let api: TestApi | null = null
@@ -133,7 +141,7 @@ describe('the wave W kill switches', () => {
     await registerWorkspaceAdmin(a, switchesOnly(ALL_ON), {})
     await a.ready()
     app = a
-    for (const [key] of ROUTES) {
+    for (const [key] of ROUTES.filter(([k]) => !LANDED.includes(k))) {
       const [method = 'GET', pattern = ''] = key.split(' ') as ['GET' | 'POST', string]
       const res = await a.inject({ method, url: fill(pattern) })
       expect(res.statusCode, key).toBe(501)
@@ -153,7 +161,7 @@ describe('the wave W kill switches', () => {
     expect((await a.inject({ method: 'GET', url: '/q' })).json()).toEqual({ ok: 2 })
   })
 
-  it('in the real app with every switch on, every wave W route is still pending: not registered, an unknown route', async () => {
+  it('in the real app with every switch on, the landed routes are registered and every other wave W route is still pending', async () => {
     api = await createTestApi({
       env: {
         DRAFTROOM_DOC_CARDS: 'on',
@@ -165,7 +173,12 @@ describe('the wave W kill switches', () => {
     })
     expect(api.config.formats).toEqual(ALL_ON)
     const alice = await api.login('alice')
-    for (const [key] of ROUTES) {
+    for (const key of LANDED) {
+      const [method = 'GET', pattern = ''] = key.split(' ') as ['GET' | 'POST', string]
+      expect(Object.hasOwn(PENDING_ROUTES, key), key).toBe(false)
+      expect(api.app.hasRoute({ method, url: pattern }), key).toBe(true)
+    }
+    for (const [key] of ROUTES.filter(([k]) => !LANDED.includes(k))) {
       const [method = 'GET', pattern = ''] = key.split(' ') as ['GET' | 'POST', string]
       expect(Object.hasOwn(PENDING_ROUTES, key), key).toBe(true)
       expect(api.app.hasRoute({ method, url: pattern }), key).toBe(false)

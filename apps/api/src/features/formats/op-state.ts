@@ -25,6 +25,8 @@ interface StateRow {
   board_id: string
   source_version_id: string
   result_version_id: string | null
+  /** WS2: the result version's asset (remove-bg) */
+  result_asset_id: string | null
   result: Record<string, unknown> | null
   error_code: WorkerOpErrorCode | null
   requested_by: string | null
@@ -47,9 +49,11 @@ export async function fileOpState(
   now: Date,
 ): Promise<{ state: FileOpState; requestedBy: string | null } | null> {
   const row = await q.maybeOne<StateRow>(
-    `SELECT id, kind, status, board_id, source_version_id, result_version_id, result, error_code, requested_by,
-            run_after, created_at, finished_at
-       FROM worker_ops WHERE id = $1`,
+    `SELECT o.id, o.kind, o.status, o.board_id, o.source_version_id, o.result_version_id,
+            rv.asset_id AS result_asset_id, o.result, o.error_code, o.requested_by, o.run_after, o.created_at,
+            o.finished_at
+       FROM worker_ops o LEFT JOIN asset_versions rv ON rv.id = o.result_version_id
+      WHERE o.id = $1`,
     [opId],
   )
   if (!row) return null
@@ -65,6 +69,7 @@ export async function fileOpState(
       boardId: row.board_id,
       sourceVersionId: row.source_version_id,
       resultVersionId: status === 'done' ? row.result_version_id : null,
+      resultAssetId: status === 'done' && row.result_version_id ? row.result_asset_id : null,
       pagesReady: pagesReadyOf(row),
       errorCode,
       message: errorCode ? WORKER_OP_MESSAGES[errorCode] : null,
