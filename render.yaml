@@ -328,15 +328,16 @@ services:
       # NAS worker with their capability is seen (after the owner-approved worker rebuild). Turning one off is the instant
       # rollback (a restart; Postgres keeps everything).
       - key: DRAFTROOM_DOC_CARDS
-        value: "off"
+        value: "on"
+      # off until the owner approves the u2netp model download (docs/DEPLOY.md wave W step 4)
       - key: DRAFTROOM_REMOVE_BACKGROUND
         value: "off"
       - key: DRAFTROOM_FILE_SEARCH
-        value: "off"
+        value: "on"
       - key: DRAFTROOM_DECK_IMPORT
-        value: "off"
+        value: "on"
       - key: DRAFTROOM_WORKSPACE_ADMIN
-        value: "off"
+        value: "on"
       - fromGroup: draftroom-staging-secrets
       - fromGroup: draftroom-staging-worker-token
       # wave R: chat hook URLs are sealed with it (api only)
