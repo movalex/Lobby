@@ -3,7 +3,7 @@
 // DRAFTROOM_LIVE_ACTIVITIES=on), a name-only guest on a workshop link (a phone at 375 px by default), starting an
 // activity from the Facilitate menu, answering in the panel, and reads of what was placed on the board.
 import type { Browser, BrowserContext, Locator, Page } from '@playwright/test'
-import { items } from '../tests/support/canvas.ts'
+import { expectSaved, items } from '../tests/support/canvas.ts'
 import { API_URL, WEB_URL } from '../tests/support/ports.ts'
 import { openFacilitate } from '../tests/support/workshops.ts'
 import {
@@ -205,3 +205,89 @@ export const stringsIn = (v: unknown): string[] =>
       : v && typeof v === 'object'
         ? Object.values(v).flatMap(stringsIn)
         : []
+
+// ---- the keyboard run (v1-scale-keyboard, and the web half against the fake api) ---------------------------------
+
+/**
+ * A named 1-5 scale with end labels, set up by `alice` and answered by `bob` with the keyboard only (both pages have
+ * the switch on and nothing running); the reveal, the facilitator's named answers (never the participant's), and
+ * Results to board.
+ */
+export async function namedScaleByKeyboard(
+  alice: WorkshopCanvasSession,
+  bob: WorkshopCanvasSession,
+): Promise<void> {
+  const a = alice.page
+
+  // the Facilitate menu by keyboard: the button, Enter, arrow down to the entry, Enter
+  await a.getByTestId('facilitate-button').focus()
+  await a.keyboard.press('Enter')
+  await expect(a.getByTestId('facilitate-menu')).toBeVisible()
+  for (let i = 0; i < 12; i++) {
+    const at = await a.evaluate(() => document.activeElement?.getAttribute('data-testid'))
+    if (at === 'facilitate-activities') break
+    await a.keyboard.press('ArrowDown')
+  }
+  await expect(a.getByTestId('facilitate-activities')).toBeFocused()
+  await a.keyboard.press('Enter')
+  const d = a.getByTestId('la-setup-dialog')
+  await expect(d).toBeVisible()
+  // the dialog opens on the question; the kind is the radio group before it
+  await expect(d.getByTestId('la-prompt-input')).toBeFocused()
+  await a.keyboard.type('How confident are you in the plan?')
+  await a.keyboard.press('Shift+Tab')
+  await a.keyboard.press('ArrowRight')
+  await expect(d.getByTestId('la-kind-scale')).toBeChecked()
+  await d.getByTestId('la-min-label').focus()
+  await a.keyboard.type('Not at all')
+  await a.keyboard.press('Tab')
+  await a.keyboard.type('Completely')
+  // Anonymous off: the dialog says what the facilitator will see
+  await d.getByTestId('la-anonymous').focus()
+  await a.keyboard.press('Space')
+  await expect(d.getByTestId('la-anonymous-hint')).toContainText(
+    'Answers show who gave them to you after the reveal',
+  )
+  await d.getByTestId('la-setup-submit').focus()
+  await a.keyboard.press('Enter')
+  await expect(d).toHaveCount(0)
+  await expect(panel(a)).toHaveAttribute('data-kind', 'scale')
+
+  // the participant: the notice's Answer, then Tab into the numbers and the arrows
+  const b = bob.page
+  const answer = b.getByTestId('la-start-toast-answer')
+  await answer.focus()
+  await b.keyboard.press('Enter')
+  const sheet = panel(b)
+  await expect(sheet.getByTestId('la-anonymity')).toContainText('Named')
+  await expect(sheet.getByRole('radio', { name: '5, Completely' })).toBeAttached()
+  await expect(sheet.getByRole('radio', { name: '1, Not at all' })).toBeAttached()
+  await sheet.getByRole('radio', { name: '1, Not at all' }).focus()
+  await b.keyboard.press('ArrowRight')
+  await b.keyboard.press('ArrowRight')
+  await b.keyboard.press('ArrowRight')
+  await expect(sheet.getByTestId('la-scale-4')).toBeChecked()
+  await sheet.getByTestId('la-answer-send').focus()
+  await b.keyboard.press('Enter')
+  await expect(sheet.getByTestId('la-answer-status')).toContainText('Your answer is in')
+
+  await expectAnswered(a, 1)
+  await panel(a).getByTestId('la-reveal').click()
+  await expect(panel(a).getByTestId('la-scale-summary')).toHaveText('Average 4 · median 4')
+  await expect(panel(b).getByTestId('la-scale-summary')).toHaveText('Average 4 · median 4')
+
+  // who answered what: the facilitator, after the reveal; never the participant
+  await panel(a).getByTestId('la-named').locator('summary').click()
+  await expect(panel(a).getByTestId('la-named-list')).toContainText(`${bob.name}: 4`)
+  await expect(panel(b).getByTestId('la-named')).toHaveCount(0)
+  await expect(panel(b)).not.toContainText(bob.name)
+
+  await panel(a).getByTestId('la-to-board').click()
+  await expectSaved(a)
+  const chart = await placed(a, 'poll-chart')
+  expect(chart.filter((e) => e.type === 'rectangle')).toHaveLength(1)
+  // a named activity's chart still names nobody: it is the aggregate
+  const texts = chart.map((e) => (e as unknown as { text?: string }).text ?? '').join('\n')
+  expect(texts).not.toContain(bob.name)
+  expect(texts).toContain('5 = Completely')
+}

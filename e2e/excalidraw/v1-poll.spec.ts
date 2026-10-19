@@ -108,9 +108,10 @@ test('a poll: three people answer (a guest on a 375 px phone), reveal, Results t
     expect(stored).toHaveLength(mine.length)
     const people = [bob.id, carol.id, guest.id, bob.name, carol.name, guest.name]
     for (const e of stored) {
-      expect((e.customData as { lobbyServer?: { createdBy?: unknown } }).lobbyServer?.createdBy, e.id).toBe(
-        alice.id,
-      )
+      expect(
+        (e.customData as { lobbyServer?: { createdBy?: { uid?: unknown } } }).lobbyServer?.createdBy?.uid,
+        e.id,
+      ).toBe(alice.id)
       const all = stringsIn(e).join('\n')
       for (const who of people) expect(all, e.id).not.toContain(who)
       expect(all).not.toMatch(/data:|blob:/)

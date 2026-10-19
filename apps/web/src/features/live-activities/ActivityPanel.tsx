@@ -188,7 +188,7 @@ export function ActivityPanel({ ctx, close }: { ctx: Ctx; close(): void }) {
 
         {manage && a.kind === 'words' && snap.hiddenWords.length > 0 && (
           <div className="dr-la-hidden" data-testid="la-hidden-words">
-            <p className="dr-la-hidden__title">Hidden words (nobody sees them, on the board neither)</p>
+            <p className="dr-la-hidden__title">Hidden words (left out of the results and the board)</p>
             <ul>
               {snap.hiddenWords.map((w) => (
                 <li key={w}>
