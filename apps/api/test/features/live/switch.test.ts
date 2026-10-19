@@ -130,7 +130,7 @@ describe('the wave V kill switches', () => {
       }
   })
 
-  it('liveRoute registers nothing for a pending route; every wave V route is pending in the real list', async () => {
+  it('liveRoute registers nothing for a pending route', async () => {
     const a = Fastify()
     const pending = { 'GET /p': { owner: 'WS1' as const, item: 'V1-1' } }
     const ctx = { config: { live: ALL_ON } }
@@ -140,17 +140,33 @@ describe('the wave V kill switches', () => {
     app = a
     expect((await a.inject({ method: 'GET', url: '/p' })).statusCode).toBe(404)
     expect((await a.inject({ method: 'GET', url: '/q' })).json()).toEqual({ ok: 2 })
-    for (const [, keys] of FEATURES) for (const key of keys) expect(Object.hasOwn(PENDING_ROUTES, key), key).toBe(true)
   })
 
-  it('in the real app (switches on), every wave V route is still an unknown route: pending until its owner lands it', async () => {
+  it('in the real app with every switch off (the default), every wave V route, pending or landed, is an unknown route for everyone', async () => {
+    api = await createTestApi()
+    expect(api.config.live).toEqual(ALL_OFF)
+    const alice = await api.login('alice')
+    for (const [, keys] of FEATURES)
+      for (const key of keys) {
+        const [method = 'GET', pattern = ''] = key.split(' ') as ['GET' | 'POST', string]
+        for (const [who, res] of [
+          ['anonymous', await api.anon(method, fill(pattern), method === 'GET' ? undefined : {})],
+          ['owner', await alice.req(method, fill(pattern), method === 'GET' ? undefined : {})],
+        ] as const) {
+          expect(res.statusCode, `${key} ${who}`).toBe(404)
+          expect(res.json(), `${key} ${who}`).toEqual(UNKNOWN)
+        }
+      }
+  })
+
+  it('in the real app with the switches on, a route still pending is an unknown route (its owner has not landed it)', async () => {
     api = await createTestApi({
       env: { DRAFTROOM_LIVE_ACTIVITIES: 'on', DRAFTROOM_JOIN_CODES: 'on', DRAFTROOM_BREAKOUTS: 'on' },
     })
     expect(api.config.live).toEqual(ALL_ON)
     const alice = await api.login('alice')
     for (const [, keys] of FEATURES)
-      for (const key of keys) {
+      for (const key of keys.filter((k) => Object.hasOwn(PENDING_ROUTES, k))) {
         const [method = 'GET', pattern = ''] = key.split(' ') as ['GET' | 'POST', string]
         expect(api.app.hasRoute({ method, url: pattern }), key).toBe(false)
         const res = await alice.req(method, fill(pattern), method === 'GET' ? undefined : {})

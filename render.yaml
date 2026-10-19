@@ -311,6 +311,16 @@ services:
       # attachments, as before wave R. On since 2026-10-18: the NAS preview worker runs the wave R build (main 2f6f0479).
       - key: DRAFTROOM_DESIGN_PREVIEWS
         value: "on"
+      # Wave V "Live sessions+" kill switches (docs/WAVE-V-CONTRACTS.md §1; api only): "on" runs the feature; "off" (also
+      # unset or empty) makes every route of it answer as an unknown route; anything else stops the api at start. Off until
+      # the wave V integration: polls, scales and word clouds; join codes (the QR of the full invite URL works without);
+      # breakouts. Turning one off is the instant rollback (a restart; Postgres keeps everything for when it is back on).
+      - key: DRAFTROOM_LIVE_ACTIVITIES
+        value: "off"
+      - key: DRAFTROOM_JOIN_CODES
+        value: "off"
+      - key: DRAFTROOM_BREAKOUTS
+        value: "off"
       - fromGroup: draftroom-staging-secrets
       - fromGroup: draftroom-staging-worker-token
       # wave R: chat hook URLs are sealed with it (api only)
