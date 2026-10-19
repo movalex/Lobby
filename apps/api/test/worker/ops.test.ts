@@ -15,6 +15,7 @@ import {
 import { newId } from '@draftroom/db'
 import { afterEach, describe, expect, it } from 'vitest'
 import { EventHub } from '../../src/events/hub.ts'
+import { expireOps } from '../../src/worker/ops-jobs.ts'
 import {
   OP_KINDS,
   type OpKindHandler,
@@ -95,6 +96,8 @@ async function setup(
   }
   const opsClaim = (capabilities: string[] = ALL_CAPS, workerId = 'nas-1') =>
     e.worker('POST', '/api/worker/ops/claim', { workerId, capabilities })
+  const opsCheckin = (capabilities: string[] = ALL_CAPS, workerId = 'nas-1') =>
+    e.worker('POST', '/api/worker/ops/checkin', { workerId, capabilities })
   const op = (id: string) =>
     e.api.db.one<{ status: string; attempts: number; error_code: string | null; lease_owner: string | null }>(
       'SELECT status, attempts, error_code, lease_owner FROM worker_ops WHERE id = $1',
@@ -107,7 +110,9 @@ async function setup(
     bob,
     queue,
     opsClaim,
+    opsCheckin,
     op,
+    now: () => now,
     tick: (ms: number) => {
       now = new Date(now.getTime() + ms)
     },
@@ -206,10 +211,20 @@ describe('claim', () => {
     expect(await s.op(id)).toMatchObject({ status: 'failed', error_code: 'WORKER_UNAVAILABLE' })
   })
 
-  it('a queued op due longer than 15 minutes fails WORKER_UNAVAILABLE at the next claim; its requester hears it', async () => {
+  it('a queued op fails WORKER_UNAVAILABLE only once no capable worker checked in for 10 minutes; its requester hears it', async () => {
     const s = await setup()
     const id = await s.queue('remove-bg')
-    s.tick(WORKER_OP_LIMITS.staleQueuedMs + 1_000)
+    // a worker that cannot do it keeps claiming: the op waits, and reads queued, until the window is over
+    s.tick(WORKER_OP_LIMITS.workerAbsentMs - 1_000)
+    expect((await s.opsClaim([])).statusCode).toBe(204)
+    expect(await s.op(id)).toMatchObject({ status: 'queued' })
+    expect((await s.e.bob.req('GET', `/api/file-ops/${id}`)).json()).toMatchObject({ status: 'queued' })
+    s.tick(2_000)
+    // the state route says so before any claim wrote it
+    expect((await s.e.bob.req('GET', `/api/file-ops/${id}`)).json()).toMatchObject({
+      status: 'failed',
+      errorCode: 'WORKER_UNAVAILABLE',
+    })
     expect((await s.opsClaim([])).statusCode).toBe(204)
     expect(await s.op(id)).toMatchObject({ status: 'failed', error_code: 'WORKER_UNAVAILABLE' })
     const ev = s.sent.filter((x) => x.type === FILE_OP_EVENT)
@@ -251,6 +266,168 @@ describe('claim', () => {
     expect(
       (await s.e.worker('POST', '/api/worker/ops/claim', body, { cookie: 'dr_session=x' })).statusCode,
     ).toBe(403)
+  })
+})
+
+/** A kind whose completer accepts any result and makes no rows (the queue tests need ops that finish). */
+const doneKind = (kind: WorkerOpKind): OpKindHandler => ({
+  kind,
+  async checkOutput() {},
+  async acceptText() {},
+  async complete() {
+    return { result: {} }
+  },
+})
+
+describe('a busy queue (review M2)', () => {
+  const DECK_RUNS = [
+    [9, 38],
+    [39, 68],
+    [69, 98],
+    [99, 100],
+  ] as const
+
+  it('the ops a person asked for go before the backfill, and none expires while a capable worker drains the queue', async () => {
+    const s = await setup({
+      kinds: {
+        ...OP_KINDS,
+        'extract-text': doneKind('extract-text'),
+        'render-pages': doneKind('render-pages'),
+      },
+    })
+    // the backfill's (and the uploads') extract-text ops, nobody's: queued first
+    const backlog: string[] = []
+    for (let i = 0; i < 12; i++)
+      backlog.push(await s.queue('extract-text', { requested_by: null, params_key: `b${i}` }))
+    s.tick(1_000)
+    // then "Insert as slides" on a 100-slide deck: four runs, bob's
+    const runs: string[] = []
+    for (const [from, to] of DECK_RUNS) {
+      // the request route makes them a millisecond apart, so they go in page order
+      s.tick(1)
+      runs.push(await s.queue('render-pages', { params: { from, to }, params_key: `${from}-${to}` }))
+    }
+    // a slow worker: every op takes 6 minutes (heartbeats each minute); it checks in while it works
+    const claimed: string[] = []
+    for (let i = 0; i < runs.length; i++) {
+      const c = WorkerOpClaimed.parse((await s.opsClaim()).json())
+      claimed.push(c.op.id)
+      for (let m = 0; m < 6; m++) {
+        s.tick(60_000)
+        const beat = await s.e.worker('POST', `/api/worker/ops/${c.op.id}/heartbeat`, {
+          workerId: 'nas-1',
+          attempt: c.op.attempt,
+        })
+        expect(beat.statusCode, beat.body).toBe(200)
+        if (m === 3) expect((await s.opsCheckin()).statusCode).toBe(204)
+      }
+      const done = await s.e.worker('POST', `/api/worker/ops/${c.op.id}/complete`, {
+        workerId: 'nas-1',
+        attempt: c.op.attempt,
+        result: {},
+      })
+      expect(done.json()).toMatchObject({ status: 'done' })
+    }
+    // the four runs first, in page order; the last one waited 18 minutes (the old 15-minute rule failed it here)
+    expect(claimed).toEqual(runs)
+    for (const id of runs) expect(await s.op(id)).toMatchObject({ status: 'done' })
+    // 24 minutes in, the backlog still waits, none of it failed; it is claimed next
+    for (const id of backlog) expect(await s.op(id)).toMatchObject({ status: 'queued' })
+    expect(backlog).toContain(WorkerOpClaimed.parse((await s.opsClaim()).json()).op.id)
+    // nobody was told anything failed
+    const failed = s.sent
+      .filter((x) => x.type === FILE_OP_EVENT)
+      .map((x) => FileOpEvent.parse(x.data).op)
+      .filter((o) => o.status === 'failed')
+    expect(failed).toEqual([])
+  })
+
+  it('a checked-in worker busy with previews keeps a queued op alive; past 30 minutes it fails WORKER_BUSY', async () => {
+    const s = await setup()
+    const id = await s.queue('render-pages', { params: { from: 9, to: 38 }, params_key: '9-38' })
+    // the worker never claims (its slot is busy) but checks in every 2 minutes
+    for (let t = 0; t < 29; t += 2) {
+      expect((await s.opsCheckin()).statusCode).toBe(204)
+      s.tick(2 * 60_000)
+    }
+    // 30 minutes after the request (29:59 now): still queued, as the requester reads it
+    s.tick(WORKER_OP_LIMITS.requestedQueueDeadlineMs - 30 * 60_000 - 1_000)
+    expect((await s.e.bob.req('GET', `/api/file-ops/${id}`)).json()).toMatchObject({ status: 'queued' })
+    s.tick(2_000)
+    const read = (await s.e.bob.req('GET', `/api/file-ops/${id}`)).json()
+    expect(read).toMatchObject({ status: 'failed', errorCode: 'WORKER_BUSY' })
+    expect(read.message).toMatch(/busy/)
+    expect((await s.opsClaim(['extract-text@1'])).statusCode).toBe(204)
+    expect(await s.op(id)).toMatchObject({ status: 'failed', error_code: 'WORKER_BUSY' })
+  })
+
+  it('an op nobody asked for has no deadline: it waits while a capable worker checks in', async () => {
+    const s = await setup()
+    const id = await s.queue('extract-text', { requested_by: null })
+    for (let t = 0; t < 60; t += 2) {
+      expect((await s.opsCheckin()).statusCode).toBe(204)
+      s.tick(2 * 60_000)
+    }
+    expect((await s.opsClaim(['remove-bg:u2netp@1'])).statusCode).toBe(204)
+    expect(await s.op(id)).toMatchObject({ status: 'queued' })
+  })
+
+  it('check-in records the capabilities, hands out nothing, and keeps the token rules', async () => {
+    const s = await setup()
+    const id = await s.queue('remove-bg')
+    const r = await s.opsCheckin(['remove-bg:u2netp@1'], 'nas-9')
+    expect(r.statusCode).toBe(204)
+    expect(await s.op(id)).toMatchObject({ status: 'queued', attempts: 0 })
+    expect(
+      (
+        await s.e.api.db.query<{ capability: string; worker_id: string }>(
+          'SELECT capability, worker_id FROM worker_capabilities_seen',
+        )
+      ).rows,
+    ).toEqual([{ capability: 'remove-bg:u2netp@1', worker_id: 'nas-9' }])
+    const anon = await s.e.api.app.inject({
+      method: 'POST',
+      url: '/api/worker/ops/checkin',
+      payload: { workerId: 'nas-9', capabilities: [] },
+    })
+    expect(anon.statusCode).toBe(401)
+  })
+
+  it('a running op of a kind switched off is failed once its lease runs out, and its outputs dropped (nit 4)', async () => {
+    const s = await setup({ kinds: { ...OP_KINDS, 'remove-bg': doneKind('remove-bg') } })
+    const id = await s.queue('remove-bg')
+    expect((await s.opsClaim()).statusCode).toBe(200)
+    const out = await s.e.worker('POST', `/api/worker/ops/${id}/output`, {
+      workerId: 'nas-1',
+      attempt: 1,
+      role: 'original',
+      mimeType: 'image/png',
+      width: 10,
+      height: 10,
+      bytes: 10,
+    })
+    expect(out.statusCode, out.body).toBe(200)
+    // the worker died; then the api restarts with DRAFTROOM_REMOVE_BACKGROUND off (the same database): its claim sweep
+    s.tick(WORKER_OP_LIMITS.leaseMs + 1)
+    const swept = await expireOps(s.e.api.db, s.now(), {
+      docCards: true,
+      removeBackground: false,
+      fileSearch: true,
+      deckImport: true,
+      admin: true,
+    })
+    expect(swept.changes.map((c) => [c.opId, c.status])).toEqual([[id, 'failed']])
+    expect(swept.orphanKeys).toHaveLength(1)
+    expect(await s.op(id)).toMatchObject({ status: 'failed', error_code: 'WORKER_UNAVAILABLE' })
+    expect((await s.e.api.db.one<{ n: number }>('SELECT count(*)::int AS n FROM worker_op_outputs')).n).toBe(
+      0,
+    )
+    // a running op whose lease is still held is left alone
+    const other = await s.queue('extract-text')
+    expect((await s.opsClaim()).statusCode).toBe(200)
+    const off = { docCards: true, removeBackground: true, fileSearch: false, deckImport: true, admin: true }
+    expect((await expireOps(s.e.api.db, s.now(), off)).changes).toEqual([])
+    expect(await s.op(other)).toMatchObject({ status: 'running' })
   })
 })
 

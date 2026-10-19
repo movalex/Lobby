@@ -29,7 +29,6 @@ import {
   FORMAT_ERROR_CODES,
   FORMAT_ROUTE_KEYS,
   REMOVE_BG_LIMITS,
-  WORKER_OP_LIMITS,
 } from '@draftroom/contracts'
 import { isUniqueViolation, newId, type Queryable } from '@draftroom/db'
 import { can } from '@draftroom/permissions'
@@ -41,10 +40,11 @@ import { probeFacts } from '../../../files/meta.ts'
 import { isNameOnlyGuest } from '../../../files/usage.ts'
 import { isAssetLinked } from '../../../files-auth.ts'
 import { guestAccountRequired } from '../../../routes/invitations.ts'
+import { expireOverdueOf, type OpChange, overdueCodeSql, overdueCutoffs } from '../../../worker/ops-jobs.ts'
 import type { FeatureContext } from '../../context.ts'
 import { PENDING_ROUTES, type PendingMethod, type PendingRoute } from '../../pending-routes.ts'
 import { freshCapabilityKinds } from '../offer.ts'
-import { fileOpState } from '../op-state.ts'
+import { fileOpState, publishOpChange } from '../op-state.ts'
 import { formatsRoute } from '../switch.ts'
 import { hasRoom, removeBgQuota } from './kind.ts'
 
@@ -86,9 +86,12 @@ interface SourceRow {
   probe: unknown
 }
 
-/** A queued op past its time no longer counts as active (it reads as failed WORKER_UNAVAILABLE: ops-jobs opExpired). */
-const ACTIVE_SQL = `(status = 'running' OR (status = 'queued' AND run_after >= $STALE))`
-const active = (stale: string) => ACTIVE_SQL.replace('$STALE', stale)
+/**
+ * An overdue queued op no longer counts as active (it reads as failed already: ops-jobs overdueCodeSql); one merely
+ * waiting in a busy queue does. `$3`/`$4` are overdueCutoffs' deadline and absent.
+ */
+const active = () =>
+  `(status = 'running' OR (status = 'queued' AND ${overdueCodeSql('worker_ops', '$3', '$4')} IS NULL))`
 
 /** The windows of REMOVE_BG_LIMITS, counted under the workspace row lock; the first one that is full, or null. */
 async function fullWindow(
@@ -97,18 +100,18 @@ async function fullWindow(
   userId: string,
   now: Date,
 ): Promise<string | null> {
-  const stale = new Date(now.getTime() - WORKER_OP_LIMITS.staleQueuedMs)
+  const { deadline, absent } = overdueCutoffs(now)
   const r = await q.one<{ mine_active: number; mine_hour: number; ws_day: number; ws_active: number }>(
     `SELECT
        (SELECT count(*)::int FROM worker_ops
-         WHERE kind = 'remove-bg' AND requested_by = $2 AND ${active('$3')}) AS mine_active,
+         WHERE kind = 'remove-bg' AND requested_by = $2 AND ${active()}) AS mine_active,
        (SELECT count(*)::int FROM worker_ops
-         WHERE kind = 'remove-bg' AND requested_by = $2 AND created_at > $4) AS mine_hour,
+         WHERE kind = 'remove-bg' AND requested_by = $2 AND created_at > $5) AS mine_hour,
        (SELECT count(*)::int FROM worker_ops
-         WHERE kind = 'remove-bg' AND workspace_id = $1 AND created_at > $5) AS ws_day,
+         WHERE kind = 'remove-bg' AND workspace_id = $1 AND created_at > $6) AS ws_day,
        (SELECT count(*)::int FROM worker_ops
-         WHERE kind = 'remove-bg' AND workspace_id = $1 AND ${active('$3')}) AS ws_active`,
-    [workspaceId, userId, stale, new Date(now.getTime() - HOUR), new Date(now.getTime() - DAY)],
+         WHERE kind = 'remove-bg' AND workspace_id = $1 AND ${active()}) AS ws_active`,
+    [workspaceId, userId, deadline, absent, new Date(now.getTime() - HOUR), new Date(now.getTime() - DAY)],
   )
   if (r.mine_active >= REMOVE_BG_LIMITS.perUserActive) return REMOVE_BG_MESSAGES.oneAtATime
   if (r.mine_hour >= REMOVE_BG_LIMITS.perUserPerHour) return REMOVE_BG_MESSAGES.perHour
@@ -123,13 +126,13 @@ async function activeOpOf(
   versionId: string,
   now: Date,
 ): Promise<{ id: string; requested_by: string | null } | null> {
-  const stale = new Date(now.getTime() - WORKER_OP_LIMITS.staleQueuedMs)
+  const { deadline, absent } = overdueCutoffs(now)
   return q.maybeOne<{ id: string; requested_by: string | null }>(
     `SELECT id, requested_by FROM worker_ops
-      WHERE kind = 'remove-bg' AND source_version_id = $1 AND params_key = '-' AND status IN ('queued', 'running')
-        AND ${active('$2')}
+      WHERE kind = 'remove-bg' AND source_version_id = $1 AND params_key = $2 AND status IN ('queued', 'running')
+        AND ${active()}
       LIMIT 1`,
-    [versionId, stale],
+    [versionId, '-', deadline, absent],
   )
 }
 
@@ -221,17 +224,13 @@ export async function registerRemoveBackground(
     if (await activeOpOf(db, versionId, now)) return busy()
     // 7.
     const opId = newId('wop')
-    const stale = new Date(now.getTime() - WORKER_OP_LIMITS.staleQueuedMs)
+    let expired: OpChange[] = []
     try {
       await db.transaction(async (tx) => {
         await tx.query('SELECT id FROM workspaces WHERE id = $1 FOR NO KEY UPDATE', [workspaceId])
-        // a queued op of this file nobody could run is over (it reads so already: ops-jobs opExpired); written now,
-        // so it does not hold the one-active-op index against this request
-        await tx.query(
-          `UPDATE worker_ops SET status = 'failed', error_code = 'WORKER_UNAVAILABLE', finished_at = $3, updated_at = $3
-            WHERE kind = 'remove-bg' AND source_version_id = $1 AND status = 'queued' AND run_after < $2`,
-          [versionId, stale, now],
-        )
+        // an overdue queued op of this file is over (it reads so already: ops-jobs overdueCodeSql); written now, so
+        // it does not hold the one-active-op index against this request (its requester is told after COMMIT)
+        expired = await expireOverdueOf(tx, now, 'remove-bg', versionId)
         if (
           !(await hasRoom(tx, workspaceId, Math.min(Number(v.size_bytes), REMOVE_BG_LIMITS.maxOutputBytes)))
         )
@@ -249,6 +248,7 @@ export async function registerRemoveBackground(
       if (isUniqueViolation(e)) return busy()
       throw e
     }
+    for (const c of expired) await publishOpChange(db, ctx.events, c, now)
     const state = await fileOpState(db, opId, now)
     if (!state) throw notFound() // the board or the file went in between
     reply.code(202)

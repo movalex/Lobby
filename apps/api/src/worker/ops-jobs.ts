@@ -22,6 +22,8 @@ import {
   type FormatSwitches,
   opFailureCode,
   WORKER_CAPABILITIES,
+  WORKER_CAPABILITY_RE,
+  WORKER_OP_KINDS,
   WORKER_OP_LIMITS,
   WORKER_OP_SWITCH,
   type WorkerOpCompleteInput,
@@ -36,7 +38,14 @@ import { type Db, newId, type Queryable } from '@draftroom/db'
 import { newId as newAssetId } from '@draftroom/dev-assets'
 import { DERIVATIVE_EXT, derivativeKey, originalKey } from '../files/blobs.ts'
 import { type BlobHead, LeaseLost } from './jobs.ts'
-import { type LockedOp, OP_KINDS, type OpKindHandler, OpRefused, type PublishedOutput } from './ops-kinds.ts'
+import {
+  type LockedOp,
+  OP_KINDS,
+  type OpKindHandler,
+  OpRefused,
+  type OutputReader,
+  type PublishedOutput,
+} from './ops-kinds.ts'
 import { backoffMs } from './protocol.ts'
 
 /** What the browser side needs after a committed status change (the requester's `file.op` event). */
@@ -113,12 +122,64 @@ const lockedOf = (o: OpRow): LockedOp => ({
 export const enabledKinds = (switches: FormatSwitches): WorkerOpKind[] =>
   (Object.keys(WORKER_OP_SWITCH) as WorkerOpKind[]).filter((k) => switches[WORKER_OP_SWITCH[k]] === true)
 
+/** The SQL of `<alias>.kind`'s current capability (contracts WORKER_CAPABILITIES; constant, regex-checked words). */
+function capabilityOfSql(alias: string): string {
+  const arms = WORKER_OP_KINDS.map((k) => {
+    const cap = WORKER_CAPABILITIES[k]
+    if (!/^[a-z-]+$/.test(k) || !WORKER_CAPABILITY_RE.test(cap)) throw new Error('unexpected capability word')
+    return `WHEN '${k}' THEN '${cap}'`
+  })
+  return `CASE ${alias}.kind ${arms.join(' ')} END`
+}
+
+/** The two cutoffs of overdueCodeSql at `now`. */
+export const overdueCutoffs = (now: Date): { deadline: Date; absent: Date } => ({
+  deadline: new Date(now.getTime() - WORKER_OP_LIMITS.requestedQueueDeadlineMs),
+  absent: new Date(now.getTime() - WORKER_OP_LIMITS.workerAbsentMs),
+})
+
 /**
- * A queued op nobody could run: due for longer than WORKER_OP_LIMITS.staleQueuedMs (no capable worker claimed it).
- * The op state route reports it failed WORKER_UNAVAILABLE by the same rule before any sweep wrote it.
+ * SQL: the code a QUEUED op `<alias>` has run into by now, or NULL (review M2: age in a busy queue is never a reason).
+ *   - WORKER_BUSY: a person asked for it (`requested_by`) and it is still queued requestedQueueDeadlineMs after the
+ *     request (requested ops are claimed first, so only other people's requests can keep it waiting that long);
+ *   - WORKER_UNAVAILABLE: it has been due for workerAbsentMs AND no worker reporting its kind's current capability has
+ *     checked in (a claim or a check-in: worker_capabilities_seen) for workerAbsentMs.
+ * `deadline` and `absent` are the SQL of overdueCutoffs(now)'s two values (parameters).
  */
-export const opExpired = (op: { status: WorkerOpStatus; runAfter: Date }, now: Date): boolean =>
-  op.status === 'queued' && now.getTime() - op.runAfter.getTime() > WORKER_OP_LIMITS.staleQueuedMs
+export function overdueCodeSql(alias: string, deadline: string, absent: string): string {
+  return `(CASE WHEN ${alias}.status <> 'queued' THEN NULL
+     WHEN ${alias}.requested_by IS NOT NULL AND ${alias}.created_at < ${deadline} THEN 'WORKER_BUSY'
+     WHEN ${alias}.run_after < ${absent} AND NOT EXISTS (
+            SELECT 1 FROM worker_capabilities_seen cs
+             WHERE cs.capability = ${capabilityOfSql(alias)} AND cs.last_seen_at >= ${absent})
+       THEN 'WORKER_UNAVAILABLE'
+     END)`
+}
+
+/**
+ * Writes the overdue queued ops of one kind and source version as failed (a request route, before it checks for an
+ * active op, so an op that reads as failed does not hold the one-active-op index against a new request). Returns the
+ * changes for the requesters' events.
+ */
+export async function expireOverdueOf(
+  tx: Queryable,
+  now: Date,
+  kind: WorkerOpKind,
+  versionId: string,
+): Promise<OpChange[]> {
+  const { deadline, absent } = overdueCutoffs(now)
+  const overdue = overdueCodeSql('o', '$3', '$4')
+  // SKIP LOCKED: an op a claim holds is being claimed, not over
+  const rows = await tx.query<OpRow & { code: WorkerOpErrorCode }>(
+    `SELECT ${OP_COLUMNS}, ${overdue} AS code
+       FROM worker_ops o JOIN asset_versions v ON v.id = o.source_version_id
+      WHERE o.kind = $1 AND o.source_version_id = $2 AND o.status = 'queued' AND ${overdue} IS NOT NULL
+      FOR UPDATE OF o SKIP LOCKED`,
+    [kind, versionId, deadline, absent],
+  )
+  for (const o of rows.rows) await finish(tx, o, now, 'failed', o.code)
+  return rows.rows.map((o) => changeOf(o, 'failed'))
+}
 
 /** The op row locked for update, only while `workerId` holds its lease for `attempt`. */
 async function lockLease(
@@ -161,42 +222,60 @@ async function finish(
 
 /**
  * Records the capabilities a worker reported (well-formed ones; at most WORKER_OP_LIMITS.maxCapabilities), at most one
- * write per capability every 30 s.
+ * write per capability every 30 s. Returns how many rows it wrote (0: nothing the offer could read differently).
  */
 export async function recordCapabilities(
   db: Queryable,
   now: Date,
   workerId: string,
   capabilities: readonly string[],
-): Promise<void> {
+): Promise<number> {
   const caps = [...new Set(capabilities)].slice(0, WORKER_OP_LIMITS.maxCapabilities)
-  if (!caps.length) return
-  await db.query(
+  if (!caps.length) return 0
+  const r = await db.query(
     `INSERT INTO worker_capabilities_seen (capability, last_seen_at, worker_id)
        SELECT c, $2, $3 FROM unnest($1::text[]) AS c
      ON CONFLICT (capability) DO UPDATE SET last_seen_at = EXCLUDED.last_seen_at, worker_id = EXCLUDED.worker_id
        WHERE worker_capabilities_seen.last_seen_at < $2 - interval '30 seconds'`,
     [caps, now, workerId],
   )
+  return r.rowCount
+}
+
+export interface OpExpireOutcome {
+  changes: OpChange[]
+  /** blobs of the outputs of running ops it failed (delete after commit) */
+  orphanKeys: string[]
 }
 
 /**
- * Fails every queued op that cannot run: its kind's switch is off, or it was due longer than staleQueuedMs ago
- * (WORKER_UNAVAILABLE). Run on each claim; returns the changes for the requesters' events.
+ * Fails every op that cannot run (run on each claim; the changes go to the requesters' events):
+ *   - a queued op of a kind whose switch is off (WORKER_UNAVAILABLE), or one overdueCodeSql names (WORKER_BUSY,
+ *     WORKER_UNAVAILABLE);
+ *   - a running op of a kind whose switch is off once its lease has run out (no claim may reclaim it; its reserved
+ *     outputs are dropped instead of waiting for the switch to come back: review nit 4).
  */
-export async function expireOps(db: Db, now: Date, switches: FormatSwitches): Promise<OpChange[]> {
+export async function expireOps(db: Db, now: Date, switches: FormatSwitches): Promise<OpExpireOutcome> {
   const on = enabledKinds(switches)
-  const staleBefore = new Date(now.getTime() - WORKER_OP_LIMITS.staleQueuedMs)
+  const { deadline, absent } = overdueCutoffs(now)
+  const overdue = overdueCodeSql('o', '$2', '$3')
   return db.transaction(async (tx) => {
-    const rows = await tx.query<OpRow>(
-      `SELECT ${OP_COLUMNS} FROM worker_ops o JOIN asset_versions v ON v.id = o.source_version_id
-        WHERE o.status = 'queued' AND (o.run_after < $1 OR NOT (o.kind = ANY($2::text[])))
+    const rows = await tx.query<OpRow & { code: WorkerOpErrorCode | null }>(
+      `SELECT ${OP_COLUMNS},
+              CASE WHEN NOT (o.kind = ANY($1::text[])) THEN 'WORKER_UNAVAILABLE' ELSE ${overdue} END AS code
+         FROM worker_ops o JOIN asset_versions v ON v.id = o.source_version_id
+        WHERE (o.status = 'queued' AND (NOT (o.kind = ANY($1::text[])) OR ${overdue} IS NOT NULL))
+           OR (o.status = 'running' AND o.lease_until < $4 AND NOT (o.kind = ANY($1::text[])))
         ORDER BY o.run_after LIMIT 100
         FOR UPDATE OF o SKIP LOCKED`,
-      [staleBefore, on],
+      [on, deadline, absent, now],
     )
-    for (const o of rows.rows) await finish(tx, o, now, 'failed', 'WORKER_UNAVAILABLE')
-    return rows.rows.map((o) => changeOf(o, 'failed'))
+    const orphanKeys: string[] = []
+    for (const o of rows.rows) {
+      if (o.status === 'running') orphanKeys.push(...(await dropOutputs(tx, o.id)))
+      await finish(tx, o, now, 'failed', o.code ?? 'WORKER_UNAVAILABLE')
+    }
+    return { changes: rows.rows.map((o) => changeOf(o, 'failed')), orphanKeys }
   })
 }
 
@@ -246,7 +325,9 @@ export async function claimOp(
            JOIN boards b ON b.workspace_id = o.workspace_id AND b.id = o.board_id
           WHERE o.kind = ANY($2::text[])
             AND ((o.status = 'queued' AND o.run_after <= $1) OR (o.status = 'running' AND o.lease_until < $1))
-          ORDER BY o.run_after, o.created_at, o.id
+          -- review M2: an op a person asked for before every op nobody asked for (the backfill's and the on-ready
+          -- extract-text ops), then the oldest due first
+          ORDER BY (o.requested_by IS NULL), o.run_after, o.created_at, o.id
           LIMIT 1
           FOR UPDATE OF o SKIP LOCKED`,
         [now, kinds],
@@ -438,7 +519,7 @@ interface OutputRow {
  */
 export async function completeOp(
   db: Db,
-  blobs: BlobHead,
+  blobs: BlobHead & OutputReader,
   now: Date,
   opId: string,
   input: WorkerOpCompleteInput,
@@ -448,10 +529,12 @@ export async function completeOp(
     o && o.status === 'done' && o.lease_owner === input.workerId && o.attempts === input.attempt
       ? { status: o.status, repeated: true, change: null, orphanKeys: [], versionChanges: [] }
       : null
-  const current = await db.maybeOne<{ status: WorkerOpStatus; lease_owner: string | null; attempts: number }>(
-    'SELECT status, lease_owner, attempts FROM worker_ops WHERE id = $1',
-    [opId],
-  )
+  const current = await db.maybeOne<{
+    status: WorkerOpStatus
+    lease_owner: string | null
+    attempts: number
+    kind: WorkerOpKind
+  }>('SELECT status, lease_owner, attempts, kind FROM worker_ops WHERE id = $1', [opId])
   const repeated = repeatOf(current)
   if (repeated) return repeated
   if (
@@ -508,6 +591,9 @@ export async function completeOp(
       blobKey: r.blob_key,
     }
   })
+  // the kind's own check of the stored bytes (remove-bg: their sha256), outside the transaction like the heads above
+  const kind = kinds[current.kind]
+  if (kind.verify) await kind.verify(blobs, { outputs: published, result: input.result })
 
   return db.transaction(async (tx) => {
     const o = await lockLease(tx, opId, input.workerId, input.attempt)
@@ -535,8 +621,14 @@ export async function completeOp(
         WHERE id = $1`,
       [opId, stored, done.resultVersionId ?? null, now],
     )
-    // published outputs became the kind's rows; every other reservation is dropped (its blob deleted after commit)
-    const orphanKeys = await dropOutputs(tx, opId, listed)
+    // published outputs became the kind's rows; every other reservation (unlisted, or listed but not adopted by the
+    // kind) is dropped and its blob deleted after commit
+    const unpublished = new Set(done.unpublished ?? [])
+    const orphanKeys = await dropOutputs(
+      tx,
+      opId,
+      listed.filter((id) => !unpublished.has(id)),
+    )
     await tx.query('DELETE FROM worker_op_outputs WHERE op_id = $1', [opId])
     return {
       status: 'done' as const,

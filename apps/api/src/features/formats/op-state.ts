@@ -2,8 +2,9 @@
 // event. OWNER: the wave W lead; WS2's GET /api/file-ops/:op and WS4 read it as it is.
 //
 // The event goes to the REQUESTER's streams on the op's board only (events/hub.ts `to`), after COMMIT, with the same
-// body GET answers. An op without a requester (WS3's extract-text) has no event. A queued op past its time reads as
-// failed WORKER_UNAVAILABLE (worker/ops-jobs.ts opExpired) before any sweep wrote it.
+// body GET answers. An op without a requester (WS3's extract-text) has no event. A queued op that is overdue reads as
+// failed with its code (WORKER_BUSY or WORKER_UNAVAILABLE: worker/ops-jobs.ts overdueCodeSql) before any sweep wrote
+// it; one that is merely waiting in a busy queue reads `queued`.
 
 import {
   FILE_OP_EVENT,
@@ -16,7 +17,7 @@ import {
 } from '@draftroom/contracts'
 import type { Queryable } from '@draftroom/db'
 import type { EventHub } from '../../events/hub.ts'
-import { type OpChange, opExpired } from '../../worker/ops-jobs.ts'
+import { type OpChange, overdueCodeSql, overdueCutoffs } from '../../worker/ops-jobs.ts'
 
 interface StateRow {
   id: string
@@ -30,7 +31,8 @@ interface StateRow {
   result: Record<string, unknown> | null
   error_code: WorkerOpErrorCode | null
   requested_by: string | null
-  run_after: Date
+  /** the code an overdue queued op has run into by now (overdueCodeSql), else null */
+  overdue: WorkerOpErrorCode | null
   created_at: Date
   finished_at: Date | null
 }
@@ -48,18 +50,19 @@ export async function fileOpState(
   opId: string,
   now: Date,
 ): Promise<{ state: FileOpState; requestedBy: string | null } | null> {
+  const { deadline, absent } = overdueCutoffs(now)
   const row = await q.maybeOne<StateRow>(
     `SELECT o.id, o.kind, o.status, o.board_id, o.source_version_id, o.result_version_id,
-            rv.asset_id AS result_asset_id, o.result, o.error_code, o.requested_by, o.run_after, o.created_at,
-            o.finished_at
+            rv.asset_id AS result_asset_id, o.result, o.error_code, o.requested_by,
+            ${overdueCodeSql('o', '$2', '$3')} AS overdue, o.created_at, o.finished_at
        FROM worker_ops o LEFT JOIN asset_versions rv ON rv.id = o.result_version_id
       WHERE o.id = $1`,
-    [opId],
+    [opId, deadline, absent],
   )
   if (!row) return null
-  const expired = opExpired({ status: row.status, runAfter: row.run_after }, now)
+  const expired = row.overdue !== null
   const status: WorkerOpStatus = expired ? 'failed' : row.status
-  const errorCode: WorkerOpErrorCode | null = expired ? 'WORKER_UNAVAILABLE' : row.error_code
+  const errorCode: WorkerOpErrorCode | null = row.overdue ?? row.error_code
   return {
     requestedBy: row.requested_by,
     state: {

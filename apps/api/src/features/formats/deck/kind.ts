@@ -8,7 +8,8 @@
 //     a second reservation of one page in one attempt (409 DUPLICATE_PAGE), a page outside the op's run or past the
 //     document's page count (400 PAGE_OUT_OF_RANGE), and anything but a `page` of the preview pages' width;
 //   - the completer takes the version's row lock and skips every page that has a row by then, so a double complete
-//     (answered `repeated` by ops-jobs before it gets here), a re-run and two overlapping ops all leave one row a page.
+//     (answered `repeated` by ops-jobs before it gets here), a re-run and two overlapping ops all leave one row a page;
+//     a skipped page's output is returned `unpublished`, so ops-jobs deletes its blob after COMMIT (review m9).
 // The stored result lists the pages of the run the version has after this commit (RenderPagesResult), which is what
 // the requester's `file.op` reports as `pagesReady` (features/formats/op-state.ts).
 
@@ -99,9 +100,14 @@ export const renderPagesKind: OpKindHandler = {
       [op.sourceVersionId],
     )
     let position = Number(last)
+    const unpublished: string[] = []
     for (const o of [...done.outputs].sort((a, b) => (a.page ?? 0) - (b.page ?? 0))) {
       const page = o.page as number
-      if (have.has(page)) continue // made meanwhile (a re-run, another op): one row a page
+      if (have.has(page)) {
+        // made meanwhile (a re-run, another op): one row a page; this output's blob goes (review m9)
+        unpublished.push(o.id)
+        continue
+      }
       await tx.query(
         `INSERT INTO asset_derivatives (id, version_id, position, role, page, width, height, mime_type, bytes, blob_key,
                                         created_at)
@@ -124,6 +130,6 @@ export const renderPagesKind: OpKindHandler = {
     const total = v.pages ?? reported.data.pageCount
     const ready: number[] = []
     for (let n = from; n <= Math.min(to, total); n++) if (have.has(n)) ready.push(n)
-    return { result: { pageCount: total, rendered: ready } }
+    return { result: { pageCount: total, rendered: ready }, unpublished }
   },
 }

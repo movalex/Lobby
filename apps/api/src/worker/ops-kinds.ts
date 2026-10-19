@@ -48,6 +48,16 @@ export interface OpCompletion {
   resultVersionId?: string | null
   /** versions whose status changed in this transaction (their `assets.version` events go out after COMMIT) */
   versionChanges?: { versionId: string; assetId: string; boardId: string; workspaceId: string }[]
+  /**
+   * Listed outputs the kind did NOT turn into rows (render-pages: a page made meanwhile by another run). Their
+   * reservations are dropped with the rest and their blobs deleted after COMMIT (review m9: else nothing names them).
+   */
+  unpublished?: string[]
+}
+
+/** What a kind's `verify` may read: the stored outputs, streamed (outside any transaction). */
+export interface OutputReader {
+  get(key: string): Promise<{ body: NodeJS.ReadableStream } | null>
 }
 
 /** A kind's refusal of a worker call: a 4xx with a stable code (never the worker's own text). */
@@ -68,6 +78,14 @@ export interface OpKindHandler {
   checkOutput(tx: Queryable, op: LockedOp, input: WorkerOpOutputInput): Promise<void>
   /** extract-text: store a batch of pages. Others: OpRefused. */
   acceptText(tx: Queryable, op: LockedOp, input: WorkerOpTextInput, now: Date): Promise<void>
+  /**
+   * Optional, before the complete transaction (no transaction is open: it may stream the outputs): checks the stored
+   * outputs against the worker's `result` (remove-bg: the PNG's sha256, review m10). Throws OpRefused to refuse.
+   */
+  verify?(
+    blobs: OutputReader,
+    done: { outputs: PublishedOutput[]; result: Record<string, unknown> },
+  ): Promise<void>
   /** In the complete transaction, under the lease: check `result`, write the kind's rows. Throws OpRefused to refuse. */
   complete(
     tx: Queryable,

@@ -447,10 +447,20 @@ describe('the render-pages kind', () => {
     expect(new Set(w.refused.map((x) => x.code))).toEqual(new Set(['PAGE_EXISTS']))
     // meanwhile another op published page 11 too: the completer skips it under the version's lock
     await s.pageRow(m, 11, 40)
+    const skipped = await s.db.one<{ blob_key: string }>(
+      'SELECT blob_key FROM worker_op_outputs WHERE op_id = $1 AND page = 11',
+      [w.op.id],
+    )
+    expect(await s.e.api.blobs.head(skipped.blob_key)).not.toBeNull()
     const done = await w.complete()
     expect(done.json()).toMatchObject({ status: 'done', repeated: false })
     const pages = await s.pagesOf(m.versionId)
     expect(pages.map((p) => p.page)).toEqual(range(1, 14))
+    // review m9: the skipped page's blob is not left behind with nothing naming it
+    expect(await s.e.api.blobs.head(skipped.blob_key)).toBeNull()
+    expect(
+      (await s.db.query('SELECT 1 FROM asset_derivatives WHERE blob_key = $1', [skipped.blob_key])).rowCount,
+    ).toBe(0)
     const events = s.sent.filter((x) => x.type === FILE_OP_EVENT).map((x) => FileOpEvent.parse(x.data).op)
     expect(events.at(-1)).toMatchObject({ status: 'done', pagesReady: 14 })
   })

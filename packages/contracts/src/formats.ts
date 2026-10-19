@@ -134,10 +134,25 @@ export const WORKER_OP_LIMITS = {
   /** output reservations per op attempt (render-pages renders ≤ 30 pages per op) */
   maxOutputsPerOp: 32,
   maxOutputBytes: 32 * 1024 * 1024,
-  /** a queued op nobody capable claimed for this long fails WORKER_UNAVAILABLE */
-  staleQueuedMs: 15 * 60_000,
+  /**
+   * A queued op fails WORKER_UNAVAILABLE only when it has waited this long AND no worker reporting its kind's current
+   * capability has checked in for this long (`worker_capabilities_seen`). Age in a busy queue is never a reason.
+   */
+  workerAbsentMs: 10 * 60_000,
+  /**
+   * The overall deadline of an op a person asked for (`requested_by` set): still queued this long after it was
+   * requested, it fails WORKER_BUSY. Requested ops are claimed before the backfill's extract-text ops, so this is
+   * reached only when other people's requests fill the worker for that long. A running op keeps its own budgets.
+   */
+  requestedQueueDeadlineMs: 30 * 60_000,
   /** a capability counts as present while a worker reported it within this window */
   capabilityFreshMs: 10 * 60_000,
+  /**
+   * A worker that reports capabilities checks in (`POST /api/worker/ops/checkin`) at least this often, also while its
+   * slots are busy with previews or ops (an ops claim is made only from an idle slot), so a busy worker never reads as
+   * absent (workerAbsentMs, capabilityFreshMs).
+   */
+  checkinEveryMs: 2 * 60_000,
   /** capabilities per claim */
   maxCapabilities: 16,
   /** pages per `/text` call (an op sends several; each page is an upsert) */
@@ -158,6 +173,10 @@ export const WORKER_OP_ERROR_CODES = [
   'TIMEOUT',
   'CANCELLED',
   'INTERNAL',
+  /** the worker was busy with other people's requests past WORKER_OP_LIMITS.requestedQueueDeadlineMs */
+  'WORKER_BUSY',
+  /** the file drove its child over the resident-memory cap (or crashed it): final for that file, never retried */
+  'FILE_TOO_COMPLEX',
 ] as const
 export const WorkerOpErrorCode = z.enum(WORKER_OP_ERROR_CODES)
 export type WorkerOpErrorCode = z.infer<typeof WorkerOpErrorCode>
@@ -175,6 +194,8 @@ export const WORKER_OP_MESSAGES: Readonly<Record<WorkerOpErrorCode, string>> = {
   TIMEOUT: 'This took too long and was stopped.',
   CANCELLED: 'Cancelled.',
   INTERNAL: 'Something went wrong. Try again.',
+  WORKER_BUSY: 'The file worker was busy with other requests for too long. Try again later.',
+  FILE_TOO_COMPLEX: 'This file is too complex to process here. You can still download it.',
 }
 
 /** A worker-reported code as the code users see: anything unknown becomes INTERNAL. */
@@ -237,6 +258,8 @@ export const WORKER_OP_RESULTS = {
 /** The worker routes of the ops protocol (beside the preview routes, which do not change). */
 export const WORKER_OP_ROUTES = {
   claim: '/api/worker/ops/claim',
+  /** WorkerOpClaimInput → 204: records the capabilities only (hands out nothing); every checkinEveryMs */
+  checkin: '/api/worker/ops/checkin',
   heartbeat: '/api/worker/ops/:op/heartbeat',
   output: '/api/worker/ops/:op/output',
   text: '/api/worker/ops/:op/text',
@@ -435,6 +458,11 @@ export const REMOVE_BG_LIMITS = {
   /** the model's square input (u2netp) */
   modelSize: 320,
   childHeapMb: 256,
+  /**
+   * The child's resident-memory cap (the worker polls its RSS and SIGKILLs it over this; the heap flag bounds only the
+   * V8 heap, not libvips or ONNX Runtime). About twice the measured ~300-315 MB peak with a u2netp-shaped model.
+   */
+  childRssMb: 640,
   childTimeoutMs: 45_000,
   intraOpThreads: 2,
   perUserActive: 1,
@@ -458,10 +486,20 @@ export const FILE_TEXT_LIMITS = {
   /** body bytes of file text kept per workspace; past it new extractions store nothing ("index full") */
   maxWorkspaceBytes: 200 * 1024 * 1024,
   childHeapMb: 384,
+  /**
+   * The pdf-text child's resident-memory cap (the worker polls its RSS and SIGKILLs it over this): pdf.js keeps
+   * decompressed streams outside the V8 heap, so the heap flag alone does not bound it (a 1.5 MB PDF reached 3.4 GB).
+   */
+  childRssMb: 768,
   childTimeoutMs: 60_000,
   officeTimeoutMs: 120_000,
   backfillPerSweep: 20,
   backfillEveryMs: 10 * 60_000,
+  /**
+   * A sweep enqueues only while fewer than this many extract-text ops are queued (and at most up to it), and never
+   * while an op a person asked for is queued: the backfill never builds a backlog in front of people's requests.
+   */
+  backfillMaxQueued: 10,
   /** file hits per board among SEARCH_HITS_PER_BOARD */
   maxFileHitsPerBoard: 2,
   /** Ask across boards: the characters of file text among the 12k source cap */

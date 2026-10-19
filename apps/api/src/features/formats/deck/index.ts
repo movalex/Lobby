@@ -43,9 +43,10 @@ import type { Params } from '../../../context.ts'
 import { ApiError, conflict, forbidden, notFound, parse } from '../../../errors.ts'
 import { isAssetLinked } from '../../../files-auth.ts'
 import { type KeyedLimit, keyedLimit } from '../../../rate-limit.ts'
+import { expireOverdueOf, type OpChange } from '../../../worker/ops-jobs.ts'
 import type { FeatureContext } from '../../context.ts'
 import { PENDING_ROUTES, type PendingMethod, type PendingRoute } from '../../pending-routes.ts'
-import { fileOpState } from '../op-state.ts'
+import { fileOpState, publishOpChange } from '../op-state.ts'
 import { formatsRoute } from '../switch.ts'
 
 /** The confirmed types a deck may have (dev-assets OFFICE_FORMATS' presentations, and PDF). */
@@ -102,6 +103,7 @@ export async function registerDeckImport(
     const input = parse(FileOpInput, req.body ?? {})
     rateOf().check(user.id)
     const now = ctx.now()
+    let expired: OpChange[] = []
     const first = await ctx.db.transaction(async (tx) => {
       const access = await requireBoardAction(tx, input.boardId, user.id, 'view')
       if (access.board.status === 'archived') throw conflict('BOARD_ARCHIVED', DECK_MESSAGES.archived)
@@ -141,6 +143,9 @@ export async function registerDeckImport(
         return false
       })
       if (!missing.length) throw conflict(FORMAT_ERROR_CODES.nothingToRender, DECK_MESSAGES.nothing)
+      // an overdue queued run (it reads as failed already: ops-jobs overdueCodeSql) is written failed now, so it does
+      // not hold its run against this request (its requester is told after COMMIT)
+      expired = await expireOverdueOf(tx, now, 'render-pages', v.id)
       const active = new Set(
         (
           await tx.query<{ params_key: string }>(
@@ -179,6 +184,7 @@ export async function registerDeckImport(
       return ids[0] as string
     })
     rateOf().record(user.id)
+    for (const c of expired) await publishOpChange(ctx.db, ctx.events, c, now)
     const s = await fileOpState(ctx.db, first, now)
     if (!s) throw notFound()
     return reply.code(202).send(s.state)

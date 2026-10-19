@@ -395,6 +395,43 @@ describe('deleting (delete mode)', () => {
     expect((await w.api.db.query('SELECT 1 FROM asset_gc_pending_deletes')).rowCount).toBe(0)
     del.mockRestore()
   })
+
+  it('wave W: a version a worker op is running on is kept; once it ends, its op outputs go with it (review m9)', async () => {
+    const w = await world()
+    const m = await upload(w.api, w.alice, w.board, 'deck.png')
+    w.api.clock.advance(8 * DAY)
+    await w.collect('delete')
+    w.api.clock.advance(31 * DAY)
+    // a render-pages-like op holds a reserved page blob of this version
+    const op = newDbId('wop')
+    await w.api.db.query(
+      `INSERT INTO worker_ops (id, workspace_id, board_id, kind, source_version_id, params, params_key, status,
+                               attempts, lease_owner, lease_until)
+       VALUES ($1, $2, $3, 'render-pages', $4, '{"from": 9, "to": 12}'::jsonb, '9-12', 'running', 1, 'nas-1', $5)`,
+      [op, DEV_STUDIO, w.board, m.versionId, new Date(w.api.clock.now().getTime() + 60_000)],
+    )
+    const drv = newId('drv')
+    const key = derivativeKey(m.assetId, m.versionId, drv, 'webp')
+    await w.api.blobs.put(key, Buffer.alloc(50, 3), { contentType: 'image/webp', contentLength: 50 })
+    await w.api.db.query(
+      `INSERT INTO worker_op_outputs (id, op_id, attempt, role, page, width, height, mime_type, bytes, asset_id,
+                                      version_id, derivative_id, blob_key)
+       VALUES ($1, $2, 1, 'page', 9, 10, 10, 'image/webp', 50, $3, $4, $5, $6)`,
+      [newDbId('wpo'), op, m.assetId, m.versionId, drv, key],
+    )
+    expect((await w.collect('delete'))?.deleted.versions).toBe(0) // held: the op is running
+    expect(await exists(w, originalKey(m.assetId, m.versionId))).toBe(true)
+    // the op is over but its row kept a reservation (a crash between the two writes): the collector names its blob
+    await w.api.db.query(
+      `UPDATE worker_ops SET status = 'failed', error_code = 'INTERNAL', lease_owner = NULL, lease_until = NULL,
+              finished_at = $2 WHERE id = $1`,
+      [op, w.api.clock.now()],
+    )
+    expect((await w.collect('delete'))?.deleted.versions).toBe(1)
+    expect(await exists(w, originalKey(m.assetId, m.versionId))).toBe(false)
+    expect(await exists(w, key)).toBe(false)
+    expect((await w.api.db.query('SELECT 1 FROM worker_ops WHERE id = $1', [op])).rowCount).toBe(0)
+  })
 })
 
 describe('storage routes', () => {

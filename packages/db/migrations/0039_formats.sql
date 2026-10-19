@@ -21,7 +21,8 @@
 -- it (it never writes derived_from_version_id, so it stays null).
 --
 -- ROLLBACK of the api to a build before 0039 (with DRAFTROOM_ALLOW_NEWER_SCHEMA=1): nothing to undo. That build has no
--- route for any of it: queued ops stay queued (a later api fails them WORKER_UNAVAILABLE after 15 minutes), a
+-- route for any of it: queued ops stay queued (a later api runs them, or fails them by its rules: WORKER_BUSY for a
+-- person's op still queued 30 minutes after the request, WORKER_UNAVAILABLE once no capable worker checked in for 10), a
 -- worker's /api/worker/ops/claim gets 404 (the worker reads that as "no ops"), file text is not searched, and versions
 -- already made by remove-bg are ordinary images.
 
@@ -65,6 +66,9 @@ CREATE INDEX worker_ops_claim_idx ON worker_ops (status, run_after) WHERE status
 CREATE INDEX worker_ops_workspace_idx ON worker_ops (workspace_id, created_at DESC);
 CREATE INDEX worker_ops_requester_idx ON worker_ops (requested_by, created_at DESC) WHERE requested_by IS NOT NULL;
 CREATE INDEX worker_ops_result_idx ON worker_ops (result_version_id) WHERE result_version_id IS NOT NULL;
+-- every op of a version, finished ones too: the cascade of a version delete, the file collector's look-ups and the
+-- backfill's NOT EXISTS read it (the active index covers queued and running rows only)
+CREATE INDEX worker_ops_source_idx ON worker_ops (source_version_id);
 
 CREATE TABLE worker_op_outputs (
   id text PRIMARY KEY CHECK (id ~ '^wpo_[0-9A-Za-z]{10,40}$'),

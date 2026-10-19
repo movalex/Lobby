@@ -11,7 +11,12 @@ import {
   ADMIN_TABS,
   AdminAuditEvent,
   AdminAuditQuery,
+  AdminCursor,
   AdminGuest,
+  AdminInvitationsQuery,
+  AdminInvitationsResponse,
+  AdminLinksQuery,
+  AdminLinksResponse,
   AdminRetentionFact,
   AuthConfig,
   adminPath,
@@ -223,6 +228,25 @@ describe('worker op wire', () => {
     expect(opFailureCode(null)).toBe('INTERNAL')
     expect([...ACTIVE_WORKER_OP_STATUSES]).toEqual(['queued', 'running'])
   })
+
+  it('the review fixes: the queue rules, the check-in, the memory caps and the two new codes', () => {
+    // M2: a busy queue is never a reason to fail; absence is measured on check-ins, which come well inside it
+    expect(WORKER_OP_LIMITS.workerAbsentMs).toBe(10 * 60_000)
+    expect(WORKER_OP_LIMITS.checkinEveryMs * 3).toBeLessThanOrEqual(WORKER_OP_LIMITS.workerAbsentMs)
+    expect(WORKER_OP_LIMITS.requestedQueueDeadlineMs).toBe(30 * 60_000)
+    expect(WORKER_OP_LIMITS).not.toHaveProperty('staleQueuedMs')
+    expect(WORKER_OP_ROUTES.checkin).toBe('/api/worker/ops/checkin')
+    expect(FILE_TEXT_LIMITS.backfillMaxQueued).toBeLessThan(FILE_TEXT_LIMITS.backfillPerSweep)
+    // M3: resident-memory caps, above the heap caps
+    expect(FILE_TEXT_LIMITS.childRssMb).toBe(768)
+    expect(FILE_TEXT_LIMITS.childRssMb).toBeGreaterThan(FILE_TEXT_LIMITS.childHeapMb)
+    expect(REMOVE_BG_LIMITS.childRssMb).toBe(640)
+    expect(REMOVE_BG_LIMITS.childRssMb).toBeGreaterThan(REMOVE_BG_LIMITS.childHeapMb)
+    for (const code of ['WORKER_BUSY', 'FILE_TOO_COMPLEX'] as const) {
+      expect(WORKER_OP_ERROR_CODES).toContain(code)
+      expect(opFailureCode(code)).toBe(code)
+    }
+  })
 })
 
 describe('the browser routes', () => {
@@ -394,6 +418,41 @@ describe('the workspace admin page', () => {
     const parsed = AdminGuest.safeParse(guest)
     expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true)
     expect(ok(AdminGuest, { ...guest, boards: [{ id: 'not a board', title: 'x' }] })).toBe(false)
+  })
+
+  it('invitations, links and guests page on past 100 by cursor; an answer without the cursors still parses', () => {
+    const cursor = '1792400000123456.inv_0123456789abcdefghij'
+    for (const good of [cursor, '0.usr_0123456789abcdefghij']) expect(ok(AdminCursor, good), good).toBe(true)
+    for (const bad of [
+      'nonsense',
+      '1792400000123456',
+      '1792400000123456.',
+      '-1.inv_0123456789abcdefghij',
+      '1.5.inv_0123456789abcdefghij',
+      '1792400000123456.brd_0123456789abcdefghij',
+      '1792400000123456.inv_short',
+      '123456789012345678.inv_0123456789abcdefghij',
+    ])
+      expect(ok(AdminCursor, bad), bad).toBe(false)
+    expect(AdminInvitationsQuery.parse({ before: cursor })).toEqual({ before: cursor })
+    expect(AdminInvitationsQuery.parse({})).toEqual({})
+    expect(ok(AdminInvitationsQuery, { before: 'nonsense' })).toBe(false)
+    expect(AdminLinksQuery.parse({ linksBefore: cursor })).toEqual({ linksBefore: cursor })
+    expect(ok(AdminLinksQuery, { guestsBefore: 42 })).toBe(false)
+    // the new fields parse and are kept; the first shape (no cursors) still parses
+    expect(AdminInvitationsResponse.parse({ invitations: [], more: true, next: cursor }).next).toBe(cursor)
+    expect(AdminInvitationsResponse.parse({ invitations: [], more: false, next: null }).next).toBeNull()
+    expect(ok(AdminInvitationsResponse, { invitations: [], more: false })).toBe(true)
+    expect(ok(AdminInvitationsResponse, { invitations: [], more: true, next: 'nonsense' })).toBe(false)
+    const links = AdminLinksResponse.parse({
+      links: [],
+      guests: [],
+      more: true,
+      nextLinks: cursor,
+      nextGuests: null,
+    })
+    expect([links.nextLinks, links.nextGuests]).toEqual([cursor, null])
+    expect(ok(AdminLinksResponse, { links: [], guests: [], more: false })).toBe(true)
   })
 
   it('retention is facts only, with stable ids', () => {

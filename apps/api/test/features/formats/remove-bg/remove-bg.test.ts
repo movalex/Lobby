@@ -311,15 +311,21 @@ describe('the request: who may, and on what', () => {
     })
   })
 
-  it('a queued op nobody could run for 15 minutes reads as failed, and the file may be asked for again', async () => {
+  it('a queued op whose capable worker went away for 10 minutes reads as failed, and the file may be asked for again', async () => {
     const s = await setup()
     await s.seeWorker()
     const first = FileOpState.parse((await s.ask(s.e.bob)).json())
-    s.tick(WORKER_OP_LIMITS.staleQueuedMs + 1)
-    await s.seeWorker() // still reported: it just never got to it
+    s.tick(WORKER_OP_LIMITS.workerAbsentMs + 1)
     const read = FileOpState.parse((await s.e.bob.req('GET', `/api/file-ops/${first.id}`)).json())
     expect(read).toMatchObject({ status: 'failed', errorCode: 'WORKER_UNAVAILABLE' })
-    // the worker's claim above expired it already; a new request is a new op
+    // another worker's claim writes it failed; then a capable worker checks in again and a new request is a new op
+    await s.seeWorker(['extract-text@1'])
+    expect(await s.op(first.id)).toMatchObject({ status: 'failed', error_code: 'WORKER_UNAVAILABLE' })
+    const back = await s.e.worker('POST', '/api/worker/ops/checkin', {
+      workerId: 'nas-1',
+      capabilities: [CAP],
+    })
+    expect(back.statusCode).toBe(204)
     const next = await s.ask(s.e.bob)
     expect(next.statusCode, next.body).toBe(202)
     expect(FileOpState.parse(next.json()).id).not.toBe(first.id)
@@ -545,6 +551,30 @@ describe('the worker’s run and the completer', () => {
     }
     expect((await s.op(state.id)).status).toBe('running')
     expect(await s.versions()).toBe(before)
+  })
+
+  it('the api hashes the stored PNG itself: a well-formed but wrong sha256 is refused (review m10)', async () => {
+    const s = await setup()
+    await s.seeWorker()
+    const state = FileOpState.parse((await s.ask(s.e.bob)).json())
+    await s.opsClaim()
+    const outputId = await s.upload(state.id)
+    const before = await s.versions()
+    // the sha256 of another file (a backup packs originals by sha256: this would ship that file's bytes for both)
+    const other = createHash('sha256').update('some other file').digest('hex')
+    const r = await s.complete(state.id, [outputId], { sha256: other })
+    expect(r.statusCode, r.body).toBe(409)
+    expect(r.json().error.code).toBe('OUTPUT_MISMATCH')
+    expect((await s.op(state.id)).status).toBe('running')
+    expect(await s.versions()).toBe(before)
+    // the true hash completes, and the new version carries it
+    const ok = await s.complete(state.id, [outputId])
+    expect(ok.json()).toMatchObject({ status: 'done' })
+    const made = await s.op(state.id)
+    const v = await s.e.api.db.one<{ sha256: string }>('SELECT sha256 FROM asset_versions WHERE id = $1', [
+      made.result_version_id,
+    ])
+    expect(v.sha256).toBe(OUT_SHA)
   })
 
   it('the quota filled up while the worker ran: 409 QUOTA_EXCEEDED, nothing made; the worker then fails the op with it', async () => {

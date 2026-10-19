@@ -3,8 +3,10 @@
 // for every worker route), its error shape and its pattern-only logging. OWNER: the wave W lead.
 //
 // The preview routes do not change: a worker before wave W never calls these and never sees an op. A worker of wave W
-// calls `claim` only when its preview claim came back empty (previews keep priority). This api before wave W has no
-// such route: the worker reads its 404 as "no ops here" and backs off.
+// calls `claim` only when its preview claim came back empty (previews keep priority), and `checkin` on a timer. An api
+// before wave W has no such route: its CSRF hook answers a POST to an unknown route without an Origin 403 FORBIDDEN
+// (the worker exemption matches route patterns only), and the worker reads 403 or 404 on these two as "no ops here"
+// and backs off (review m3).
 
 import { presignedPutHeaders } from '@draftroom/blob-store'
 import {
@@ -54,7 +56,7 @@ export interface OpsDeps {
     boardId: string
     workspaceId: string
   }): Promise<void>
-  /** A claim that recorded capabilities (the auth config's offer cache forgets). */
+  /** A claim or check-in that wrote a capability row (the auth config's offer cache forgets). */
   onCapabilities?(): void
   /** The kinds (tests swap them; the app uses OP_KINDS). */
   kinds?: Readonly<Record<string, OpKindHandler>>
@@ -101,13 +103,27 @@ export function registerOpRoutes(scope: FastifyInstance, deps: OpsDeps, h: OpsHe
     for (const c of changes) if (c) await deps.onOpChange(c)
   }
 
+  // a claim or a check-in that wrote a row (at most one per capability every 30 s) is what the offer cache forgets on
+  // (review nit 3: not every claim)
+  const record = async (input: WorkerOpClaimInput, now: Date) => {
+    if ((await recordCapabilities(deps.db, now, input.workerId, input.capabilities)) > 0)
+      deps.onCapabilities?.()
+  }
+
+  // review M2: a worker checks in every WORKER_OP_LIMITS.checkinEveryMs, busy or not, so a worker whose slots are all
+  // busy (it claims ops only from an idle slot) never reads as absent; it is handed nothing here
+  scope.post(WORKER_OP_ROUTES.checkin, async (req, reply) => {
+    const input = parseBody(WorkerOpClaimInput, req.body)
+    await record(input, deps.now())
+    return reply.code(204).send()
+  })
+
   scope.post(WORKER_OP_ROUTES.claim, async (req, reply) => {
     const input = parseBody(WorkerOpClaimInput, req.body)
     const now = deps.now()
-    await recordCapabilities(deps.db, now, input.workerId, input.capabilities)
-    deps.onCapabilities?.()
+    await record(input, now)
     const expired = await expireOps(deps.db, now, deps.switches)
-    await after(req, [], expired)
+    await after(req, expired.orphanKeys, expired.changes)
     const out = await claimOp(deps.db, now, input.workerId, input.capabilities, deps.switches)
     await after(req, out.orphanKeys, out.changes)
     const op = out.op

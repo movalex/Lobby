@@ -14,9 +14,12 @@
 //                those op codes as the op's end (apps/worker ops/loop.ts), so the requester is told why.
 //
 // The new version is announced after COMMIT (`assets.version`, the op's requester gets `file.op`): worker/ops-routes.ts.
-// The sha256 is the worker's (it computed it over the bytes it PUT; the blob's size was verified by completeOp). Never
-// base64: the result exists only as a stored blob under its own `ver_` id.
+//   verify       before that transaction (review m10): the api streams the stored PNG and hashes it itself; the
+//                worker's sha256 must equal it, else 409 OUTPUT_MISMATCH (the version's sha256 is the content key of
+//                board backups: a wrong one would pack one file's bytes for another). Never base64: the result exists
+//                only as a stored blob under its own `ver_` id.
 
+import { createHash } from 'node:crypto'
 import {
   noBackgroundName,
   REMOVE_BG_LIMITS,
@@ -32,7 +35,13 @@ import { EMPTY_PROBE } from '../../../files/meta.ts'
 import { workspaceUsage } from '../../../files/usage.ts'
 // Types only: worker/ops-kinds.ts registers this kind (its OP_KINDS imports this module), so a value import back would
 // be a cycle that breaks whichever module loads first; OpRefused is loaded when a refusal is made (refuse() below).
-import type { LockedOp, OpCompletion, OpKindHandler, PublishedOutput } from '../../../worker/ops-kinds.ts'
+import type {
+  LockedOp,
+  OpCompletion,
+  OpKindHandler,
+  OutputReader,
+  PublishedOutput,
+} from '../../../worker/ops-kinds.ts'
 
 /**
  * The workspace quota the completer re-checks (the upload route's: DRAFTROOM_WORKSPACE_QUOTA_MB and
@@ -77,6 +86,26 @@ export const removeBgKind: OpKindHandler = {
 
   async acceptText(): Promise<void> {
     throw await refuse('TEXT_NOT_ALLOWED', 'Background removal has no text.')
+  },
+
+  async verify(blobs: OutputReader, done: { outputs: PublishedOutput[]; result: Record<string, unknown> }) {
+    const [out] = done.outputs
+    const parsed = RemoveBgResult.safeParse(done.result)
+    if (!out || !parsed.success) return // complete refuses these, with its own codes
+    const got = await blobs.get(out.blobKey)
+    if (!got)
+      throw await refuse('OUTPUT_MISSING', 'A listed output was not uploaded with its reserved size.', 409)
+    const hash = createHash('sha256')
+    let bytes = 0
+    for await (const chunk of got.body as AsyncIterable<Buffer>) {
+      bytes += chunk.length
+      if (bytes > out.bytes) break
+      hash.update(chunk)
+    }
+    if (bytes !== out.bytes || hash.digest('hex') !== parsed.data.sha256) {
+      ;(got.body as { destroy?: () => void }).destroy?.()
+      throw await refuse('OUTPUT_MISMATCH', 'The result does not match its PNG.', 409)
+    }
   },
 
   async complete(
