@@ -10,6 +10,7 @@ import { checkBgModel } from './ops/bg-model.ts'
 import { reportedCapabilities } from './ops/capabilities.ts'
 import { createWorkerOpsApi } from './ops/client.ts'
 import { OP_RUNNERS } from './ops/dispatch.ts'
+import { createExtractTextRunner } from './ops/extract-text.ts'
 import { startRemoteWorker } from './remote-loop.ts'
 
 const log = (line: string) => console.log(`[worker] ${line}`)
@@ -52,7 +53,12 @@ const opsReport = reportedCapabilities({
   bgModel: checkBgModel(cfg.bgModelPath),
 })
 const worker = startRemoteWorker({
-  ops: { api: createWorkerOpsApi(createApiCall(apiOptions)), capabilities: opsReport.capabilities },
+  ops: {
+    api: createWorkerOpsApi(createApiCall(apiOptions)),
+    capabilities: opsReport.capabilities,
+    // wave W (WS3): extract-text reads Office documents through the same converter as previews (the sidecar)
+    runners: { ...OP_RUNNERS, 'extract-text': createExtractTextRunner({ office }) },
+  },
   api,
   concurrency: cfg.concurrency,
   pollMs: cfg.pollMs,

@@ -140,6 +140,13 @@
   flex: none;
   align-self: center;
 }
+/* wave W (WS3): "Page 3 · Brief.pdf": a long file name is cut, never widens the row */
+.dr-csearch__file {
+  min-width: 0;
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .dr-csearch__kind[data-kind="note"] svg {
   color: var(--dr-amber-ink);
 }

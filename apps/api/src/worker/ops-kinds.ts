@@ -10,6 +10,7 @@
 import type { WorkerOpKind, WorkerOpOutputInput, WorkerOpTextInput } from '@draftroom/contracts'
 import type { Queryable } from '@draftroom/db'
 import { removeBgKind } from '../features/formats/remove-bg/kind.ts'
+import { extractTextKind } from '../features/search/file-text-kind.ts'
 
 /** An op under its lease (the row locked FOR UPDATE inside the caller's transaction). */
 export interface LockedOp {
@@ -90,9 +91,18 @@ export const stubKind = (kind: WorkerOpKind): OpKindHandler => ({
   },
 })
 
-/** Every kind's handler (each workstream swaps its stub for its own, one line). */
+/**
+ * Every kind's handler (each workstream swaps its stub for its own, one line). Getters: each kind's module imports this
+ * one (OpRefused, the types), so whichever of the two loads first, a binding is read only once both have run.
+ */
 export const OP_KINDS: Readonly<Record<WorkerOpKind, OpKindHandler>> = {
-  'remove-bg': removeBgKind, // WS2: features/formats/remove-bg/kind.ts
-  'extract-text': stubKind('extract-text'), // WS3: features/search/file-text-kind.ts
+  // WS2: features/formats/remove-bg/kind.ts
+  get 'remove-bg'() {
+    return removeBgKind
+  },
+  // WS3: features/search/file-text-kind.ts
+  get 'extract-text'() {
+    return extractTextKind
+  },
   'render-pages': stubKind('render-pages'), // WS4: features/formats/deck/kind.ts
 }

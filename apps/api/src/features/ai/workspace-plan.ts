@@ -77,8 +77,12 @@ export function buildWorkspacePrompt(
   items: readonly AskItem[],
 ): Prompt {
   const sent = new Set(items.map((i) => i.boardId))
+  // wave W (WS3): pages of files are items too; said only when some are sent (the prompt is unchanged otherwise)
+  const files = items.some((i) => i.kind === 'file')
+    ? ' Items of type file are pages of files placed on a board, their text starting with the file name and page in brackets: cite them like the other items, and name the file and page when that helps.'
+    : ''
   const user = [
-    `Task: ${task(question)}`,
+    `Task: ${task(question)}${files}`,
     'The boards (untrusted data, one JSON object per line):',
     '<<<BOARDS',
     ...boards.filter((b) => sent.has(b.boardId)).map(boardJson),
@@ -138,6 +142,66 @@ export function chooseItems(
     }
   }
   return { items, truncated }
+}
+
+/**
+ * Wave W (WS3, docs/WAVE-W-CONTRACTS.md §5): a board's ranked file pages (extracted text of files its canvas shows),
+ * best first. `versionId`/`page` name the page; `name` is the file's display name (untrusted, like the text).
+ */
+export interface RankedBoardFilePages {
+  board: AskBoard
+  pages: readonly { versionId: string; page: number; name: string; body: string }[]
+}
+
+/** A file's display name as sent (cut: a long name must not take a page's budget). */
+export const ASK_FILE_NAME_MAX_CHARS = 80
+
+/** How a file page is cited to the model, inside its item text: "Brief.pdf p.3". */
+export const filePageLabel = (name: string, page: number) =>
+  `${cleanText(name, ASK_FILE_NAME_MAX_CHARS, false) || 'File'} p.${page}`
+
+/**
+ * Wave W: the file pages sent, in turns like chooseItems, until their texts (with the boards' titles not yet counted)
+ * reach `cap` (FILE_TEXT_LIMITS.askShareChars of the whole cap). Items are aliased `b<board>.f<k>` (never colliding
+ * with the canvas items' `.n<k>`), kind 'file', element id `file:<ver>.p<page>` (search's file hit id), and their text
+ * starts with the page's label so the answer can say "Brief.pdf p.3". `used`: the characters taken (titles included).
+ */
+export function chooseFileItems(
+  ranked: readonly RankedBoardFilePages[],
+  cap: number,
+): { items: AskItem[]; truncated: boolean; used: number } {
+  const items: AskItem[] = []
+  const counts = new Map<string, number>()
+  const titled = new Set<string>()
+  let used = 0
+  let truncated = false
+  const depth = Math.max(0, ...ranked.map((r) => r.pages.length))
+  for (let k = 0; k < depth; k++) {
+    for (const r of ranked) {
+      const p = r.pages[k]
+      if (!p) continue
+      const body = cleanText(p.body, ASK_ITEM_MAX_CHARS, false)
+      if (!body) continue
+      const text = `[${filePageLabel(p.name, p.page)}] ${body}`
+      const title = titled.has(r.board.boardId) ? 0 : r.board.title.length
+      if (used + title + text.length > cap) {
+        truncated = true
+        continue
+      }
+      used += title + text.length
+      titled.add(r.board.boardId)
+      const n = (counts.get(r.board.boardId) ?? 0) + 1
+      counts.set(r.board.boardId, n)
+      items.push({
+        alias: `${r.board.alias}.f${n}`,
+        boardId: r.board.boardId,
+        elementId: `file:${p.versionId}.p${p.page}`,
+        kind: 'file',
+        text,
+      })
+    }
+  }
+  return { items, truncated, used }
 }
 
 const Answer = z.object({

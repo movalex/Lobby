@@ -37,6 +37,7 @@ import { createFormatsOffer } from './features/formats/offer.ts'
 import { publishOpChange } from './features/formats/op-state.ts'
 import { INTERNAL_CHECKPOINT_POSTS } from './features/history/checkpoint-all.ts'
 import { registerFeatures } from './features/index.ts'
+import { enqueueFileText } from './features/search/file-backfill.ts'
 import type { BlobStore } from './files/blobs.ts'
 import { filesPlugin } from './files/plugin.ts'
 import { registerStorage } from './files/storage-routes.ts'
@@ -625,6 +626,12 @@ async function buildServer(
       const e = err as { name?: unknown; message?: unknown }
       app.log.warn({ err: { name: e?.name, message: e?.message } }, 'assets.version event not published')
     }
+    // wave W (WS3): a ready PDF or Office document gets its text read (features/search/file-backfill.ts)
+    if (c.status === 'ready')
+      await enqueueFileText(ctx, c.versionId, now()).catch((err: unknown) => {
+        const e = err as { name?: unknown; message?: unknown }
+        app.log.warn({ err: { name: e?.name, message: e?.message } }, 'file text not queued')
+      })
   }
   await app.register(workerPlugin, {
     db,

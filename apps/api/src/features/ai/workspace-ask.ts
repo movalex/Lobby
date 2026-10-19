@@ -32,11 +32,19 @@
 // (mayExport) and none is internal only (dashboard/outside.ts boardInternalOnly): the answer may carry any sent
 // board's words, cited or not, and the board it would be added to may have people outside.
 // Nothing found (no word to look for, no board left, no matching text): `found: 'no'` without any call or charge.
+// Wave W (WS3, docs/WAVE-W-CONTRACTS.md §5): while DRAFTROOM_FILE_SEARCH is on, the pages of files the boards show are a
+// third source, ranked with the canvas entries (search/store.ts FILE_HITS_CTE: the canvas shows the version and the board
+// may serve it, now), at most FILE_TEXT_LIMITS.askShareChars of the input cap, only from boards that passed the gate
+// AND mayExport for this person (said again for file text), sent as items `b<n>.f<k>` of type file whose text starts
+// with "[Brief.pdf p.3]", and cited by the file hit's id `file:<ver>.p<page>`.
 // Logs carry counts only: never the question, board text, titles, ids or the answer.
 
 import {
   AI_ERROR_CODES,
+  FILE_TEXT_LIMITS,
+  parseFileHitObjectId,
   WORKSPACE_ASK_ELEMENT_ID_PATTERN,
+  WORKSPACE_ASK_INPUT_CAP_CHARS,
   WORKSPACE_ASK_LEDGER_ACTION,
   WORKSPACE_ASK_MAX_BOARDS,
   WORKSPACE_ASK_MAX_ENTRIES_PER_BOARD,
@@ -54,11 +62,13 @@ import type { KeyedLimit } from '../../rate-limit.ts'
 import type { FeatureContext } from '../context.ts'
 import { boardInternalOnly } from '../dashboard/outside.ts'
 import { mayExport } from '../export-control/policy.ts'
+import { formatsOn } from '../formats/switch.ts'
 import { isPendingRoute } from '../pending-routes.ts'
+import { filePageBodies } from '../search/file-text.ts'
 import { searchIndexerOf } from '../search/index.ts'
 import { parseQuestion } from '../search/query.ts'
 import { type ScopedBoard, searchScope } from '../search/scope.ts'
-import { entryBodies, rankedHits } from '../search/store.ts'
+import { entryBodies, type RankedRow, rankedHits } from '../search/store.ts'
 import type { AiLedger, InFlight } from './budget.ts'
 import { aiConfigured } from './config.ts'
 import type { AiLoaders } from './index.ts'
@@ -72,8 +82,10 @@ import {
   type AskBoard,
   type AskItem,
   buildWorkspacePrompt,
+  chooseFileItems,
   chooseItems,
   type RankedBoardEntries,
+  type RankedBoardFilePages,
   workspaceAskPlan,
 } from './workspace-plan.ts'
 
@@ -88,6 +100,8 @@ export interface WorkspaceAskDeps {
 
 /** Boards ranked before the AI gate: some may be left out by it, so a few more than are sent. */
 export const WORKSPACE_ASK_CANDIDATE_BOARDS = WORKSPACE_ASK_MAX_BOARDS * 2
+/** Wave W (WS3): file pages ranked per board (within FILE_TEXT_LIMITS.askShareChars in all). */
+export const ASK_FILE_PAGES_PER_BOARD = 4
 
 const ASKING_ROLES: ReadonlySet<WorkspaceRole> = new Set<WorkspaceRole>(['owner', 'admin', 'member'])
 const WORKSPACE_GUEST_MESSAGE =
@@ -184,6 +198,8 @@ export function registerWorkspaceAsk(
   }
 
   const scopeOf = (a: Asker) => searchScope(db, { ...a, status: 'active', projectId: null })
+  // wave W (WS3): file pages are a source only while DRAFTROOM_FILE_SEARCH is on (read once at boot)
+  const fileSearch = formatsOn(ctx, 'fileSearch')
 
   /** The boards to ask, best first: ranked within the scope, each through the per-board AI gate. */
   async function gather(
@@ -211,11 +227,13 @@ export function registerWorkspaceAsk(
       perBoard: WORKSPACE_ASK_MAX_ENTRIES_PER_BOARD,
       team: false, // canvas entries only: the comment rule never applies
       source: 'canvas',
+      // wave W (WS3): and pages of the files the boards show, while file search runs (store.ts FILE_HITS_CTE)
+      ...(fileSearch ? { files: { maxPerBoard: ASK_FILE_PAGES_PER_BOARD } } : {}),
     })
     const order: string[] = []
     const hitsOf = new Map<string, typeof ranked>()
     for (const r of ranked) {
-      if (!byId.has(r.board_id) || r.source !== 'canvas') continue // by construction never
+      if (!byId.has(r.board_id) || (r.source !== 'canvas' && r.source !== 'file')) continue // by construction never
       if (!hitsOf.has(r.board_id)) {
         order.push(r.board_id)
         hitsOf.set(r.board_id, [])
@@ -239,8 +257,9 @@ export function registerWorkspaceAsk(
       })
     }
     if (!boards.length) return none
+    const canvasHits = (boardId: string) => (hitsOf.get(boardId) ?? []).filter((h) => h.source === 'canvas')
     const keys = boards.flatMap((b) =>
-      (hitsOf.get(b.boardId) ?? []).map((h) => ({
+      canvasHits(b.boardId).map((h) => ({
         boardId: b.boardId,
         source: 'canvas' as const,
         objectId: h.object_id,
@@ -250,7 +269,7 @@ export function registerWorkspaceAsk(
     let k = 0
     const perBoard: RankedBoardEntries[] = boards.map((b) => {
       const entries: RankedBoardEntries['entries'][number][] = []
-      for (const h of hitsOf.get(b.boardId) ?? []) {
+      for (const h of canvasHits(b.boardId)) {
         const body = bodies.get(k++)
         const elementId = elementIdOf(h.object_id)
         if (body === undefined || elementId === null) continue
@@ -258,8 +277,50 @@ export function registerWorkspaceAsk(
       }
       return { board: b, entries }
     })
-    const { items, truncated } = chooseItems(perBoard)
-    return { boards, accesses, items, truncated }
+    // wave W (WS3): file pages, a capped share of the input (FILE_TEXT_LIMITS.askShareChars), only of boards whose
+    // owner lets this person copy out of them (mayExport: aiGateFor checks it too; said again here for file text)
+    const files = fileSearch ? await filePagesOf(a, boards, accesses, hitsOf) : []
+    const fileChoice = chooseFileItems(files, FILE_TEXT_LIMITS.askShareChars)
+    const canvasChoice = chooseItems(perBoard, WORKSPACE_ASK_INPUT_CAP_CHARS - fileChoice.used)
+    return {
+      boards,
+      accesses,
+      items: [...canvasChoice.items, ...fileChoice.items],
+      truncated: canvasChoice.truncated || fileChoice.truncated,
+    }
+  }
+
+  /** Wave W: the ranked file pages of the gated boards (those whose exports are on for the asker), with their text. */
+  async function filePagesOf(
+    a: Asker,
+    boards: readonly AskBoard[],
+    accesses: ReadonlyMap<string, BoardAccess>,
+    hitsOf: ReadonlyMap<string, RankedRow[]>,
+  ): Promise<RankedBoardFilePages[]> {
+    const allowed: AskBoard[] = []
+    for (const b of boards) {
+      const access = accesses.get(b.boardId)
+      if (access && (await mayExport(db, access, a.userId))) allowed.push(b)
+    }
+    const keys: { boardId: string; versionId: string; page: number }[] = []
+    const of = new Map<string, { at: number; versionId: string; page: number }[]>()
+    for (const b of allowed) {
+      const list: { at: number; versionId: string; page: number }[] = []
+      for (const h of hitsOf.get(b.boardId) ?? []) {
+        const ref = h.source === 'file' ? parseFileHitObjectId(h.object_id) : null
+        if (!ref) continue
+        list.push({ at: keys.push({ boardId: b.boardId, ...ref }) - 1, ...ref })
+      }
+      of.set(b.boardId, list)
+    }
+    const texts = await filePageBodies(db, a.workspaceId, keys)
+    return allowed.map((board) => ({
+      board,
+      pages: (of.get(board.boardId) ?? []).flatMap((p) => {
+        const t = texts.get(p.at)
+        return t ? [{ versionId: p.versionId, page: p.page, name: t.name, body: t.body }] : []
+      }),
+    }))
   }
 
   const nothing = (): WorkspaceAskResponse => ({
