@@ -51,10 +51,11 @@ describe('abuse limits cannot be side-stepped', () => {
   }
 
   it(`a burst of simultaneous joins from one address still lets in at most ${GUEST_JOINS_PER_ADDRESS.max} new guests`, async () => {
-    // Two links, so the per-link rate is not what stops the burst.
+    // Two links, so the per-link rate is not what stops the burst (two review links: a workshop link has windows of
+    // its own, wave V R1, join-burst.test.ts).
     const tokens = [
       tokenOf((await guestLink(w.bob, w.board)).url),
-      tokenOf((await guestLink(w.bob, w.board, { role: 'editor' })).url),
+      tokenOf((await guestLink(w.bob, w.board, { role: 'viewer' })).url),
     ]
     slowTransactions()
     const total = GUEST_JOINS_PER_ADDRESS.max + 10
@@ -92,9 +93,10 @@ describe('abuse limits cannot be side-stepped', () => {
   })
 
   it('addresses in one IPv6 /64 share the per-address limit (a client picks any address in its /64)', async () => {
+    // two review links (a workshop link has windows of its own: join-burst.test.ts)
     const tokens = [
       tokenOf((await guestLink(w.bob, w.board)).url),
-      tokenOf((await guestLink(w.bob, w.board, { role: 'editor' })).url),
+      tokenOf((await guestLink(w.bob, w.board, { role: 'viewer' })).url),
     ]
     for (let i = 0; i < GUEST_JOINS_PER_ADDRESS.max; i++) {
       const res = await joinRequest(

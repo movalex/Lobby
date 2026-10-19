@@ -22,6 +22,8 @@ let sam: GuestClient
 /** bob's other boards in Dev Studio: private, workspace-view and workspace-edit (members see two). */
 let others: { priv: string; wsView: string; wsEdit: string }
 beforeEach(async () => {
+  // wave V: setupWorld turns all three switches on, so every landed wave V route runs and is held to its guard rows
+  // here (with its switch off it is an unknown route for everyone, a guest too: live/switch.test.ts)
   w = await setupWorld()
   sam = await joinAsGuest(w.api, (await guestLink(w.bob, w.board, { role: 'commenter' })).url, 'Sam')
   const priv = await createBoard(w.bob, DEV_STUDIO, 'Private plan')

@@ -90,8 +90,9 @@ const WAVE_S_OWNERS: Record<string, string> = {
  * PENDING_ROUTES in the change that implements them; the refusal and creation matrices then hold them to their guard
  * rows, and features/live/switch.test.ts to their kill switch.
  */
-const WAVE_V_ROUTES: string[] = [...JOIN_CODE_ROUTE_KEYS, ...BREAKOUT_ROUTE_KEYS]
-/** Every route of wave V, pending or live (the guard rows hold for all). WS1 implemented the activity routes. */
+// WS1 implemented the activity routes (V1-*) and WS3 the join code routes (V2-1, V2-2): no longer pending.
+const WAVE_V_ROUTES: string[] = [...BREAKOUT_ROUTE_KEYS]
+/** Every wave V route, pending or landed (the guard rows hold for both). */
 const WAVE_V_ALL: string[] = [...ACTIVITY_ROUTE_KEYS, ...JOIN_CODE_ROUTE_KEYS, ...BREAKOUT_ROUTE_KEYS]
 const WAVE_V_OWNERS: Record<string, string> = {
   ...Object.fromEntries(ACTIVITY_ROUTE_KEYS.map((k) => [k, 'WS1'])),

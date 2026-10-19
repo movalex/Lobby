@@ -38,6 +38,9 @@ import type { FeatureContext } from '../context.ts'
 import { publishExportPolicy } from '../export-control/index.ts'
 import { limitExportForClientLink } from '../export-control/policy.ts'
 import { extendGuestSessions } from '../guests/sessions.ts'
+// Wave V (WS3): a workshop link's join code (features/join-codes), shown with the link while DRAFTROOM_JOIN_CODES is on
+import { codeForNewLink, isWorkshopLink, joinCodeBody, storedJoinCode } from '../join-codes/code.ts'
+import { liveOn } from '../live/switch.ts'
 import { assertLinksAllowed, lockBoardWorkspace } from './outside.ts'
 import { publishSharingChanged } from './shared.ts'
 
@@ -227,6 +230,10 @@ interface InvitationListRow {
   creator_id: string
   creator_name: string
   invited_email: string | null
+  /** 0038 (wave V, WS3): a workshop link's join code (its sha256) and bump. */
+  board_id: string | null
+  join_code_hash: string | null
+  join_code_n: number
 }
 
 export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureContext): void {
@@ -248,7 +255,8 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
       const mayShare = await ctx.identity.isCreatorUser(db, user.id)
       const rows = await db.query<InvitationListRow>(
         `SELECT i.id, i.role, i.multi_use, i.allow_guests, i.landing, i.max_uses, i.use_count, i.created_at, i.expires_at, i.token_hash,
-              u.id AS creator_id, u.name AS creator_name, i.invited_email
+              u.id AS creator_id, u.name AS creator_name, i.invited_email,
+              i.board_id, i.join_code_hash, i.join_code_n
          FROM invitations i JOIN users u ON u.id = i.created_by
         WHERE i.board_id = $1 AND i.workspace_id = $2 AND i.revoked_at IS NULL AND i.redeemed_by IS NULL
           AND i.expires_at > $3
@@ -256,6 +264,7 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
         LIMIT 200`,
         [bid, access.board.workspace_id, now()],
       )
+      const codesOn = liveOn(ctx, 'joinCodes')
       const invitations: PendingInvitation[] = rows.rows.map((r) => {
         let url: string | null = null
         if (r.multi_use && mayShare) {
@@ -263,6 +272,9 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
           // A rotated secret cannot rebuild the link: say so (null) instead of showing a dead URL.
           if (sha256hex(token) === r.token_hash) url = linkUrl(token)
         }
+        // Wave V (WS3): a workshop link's join code, to exactly whom the URL is shown, while the switch is on.
+        const code =
+          url !== null && codesOn && isWorkshopLink(r) ? storedJoinCode(config.ticketSecret, r) : null
         return {
           id: r.id,
           kind: r.multi_use ? 'review' : 'invite',
@@ -282,6 +294,8 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
           // Domain access: the full address a single-use invitation is locked to (this manager-only list is
           // the one response that carries it).
           email: r.multi_use ? null : r.invited_email,
+          // wave V (WS3): absent for every other link, as from an older api
+          ...(code ? { joinCode: joinCodeBody(config.publicOrigin, code, r.expires_at) } : {}),
         }
       })
       return { invitations }
@@ -375,10 +389,18 @@ export function registerReviewLinkRoutes(app: FastifyInstance, ctx: FeatureConte
       }
     })
     const { limitedExport, ...link } = created
+    // Wave V (WS3): a workshop link gets its join code with it while DRAFTROOM_JOIN_CODES is on (best effort, after
+    // the link committed; the code route makes it on the next ask otherwise).
+    const code =
+      input.role === 'editor' && liveOn(ctx, 'joinCodes')
+        ? await codeForNewLink(db, config.ticketSecret, bid, link.id)
+        : null
     if (limitedExport) publishExportPolicy(ctx, bid, 'editors')
     publishSharingChanged(ctx, bid, 'review-link-created')
     reply.code(201)
-    return link
+    return code
+      ? { ...link, joinCode: joinCodeBody(config.publicOrigin, code, new Date(link.expiresAt)) }
+      : link
   })
 
   app.post('/api/boards/:bid/review-links/:id/revoke', async (req) => {

@@ -18,14 +18,19 @@ import type { FeatureContext } from '../../../src/features/context.ts'
 import { registerJoinCodes } from '../../../src/features/join-codes/index.ts'
 import { liveOn, liveRoute, requireLive } from '../../../src/features/live/switch.ts'
 import { registerLiveActivities } from '../../../src/features/live-activities/index.ts'
-import { PENDING_ROUTES } from '../../../src/features/pending-routes.ts'
+import { PENDING_ROUTES, type PendingRoute } from '../../../src/features/pending-routes.ts'
 import { createTestApi, type TestApi } from '../../helpers.ts'
 
 const UNKNOWN = { error: { code: 'NOT_FOUND', message: 'Not found.' } }
 const ALL_OFF: LiveSwitches = { activities: false, joinCodes: false, breakouts: false }
 const ALL_ON: LiveSwitches = { activities: true, joinCodes: true, breakouts: true }
 
-const FEATURES: [LiveSwitch, readonly string[], typeof registerLiveActivities][] = [
+type Register = (
+  app: FastifyInstance,
+  ctx: FeatureContext,
+  pending: Readonly<Record<string, PendingRoute>>,
+) => Promise<void>
+const FEATURES: [LiveSwitch, readonly string[], Register][] = [
   ['activities', ACTIVITY_ROUTE_KEYS, registerLiveActivities],
   ['joinCodes', JOIN_CODE_ROUTE_KEYS, registerJoinCodes],
   ['breakouts', BREAKOUT_ROUTE_KEYS, registerBreakouts],

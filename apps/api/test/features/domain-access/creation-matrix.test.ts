@@ -65,6 +65,8 @@ interface World {
   project: string
   snapshot: string
   link: string
+  /** wave V (WS3): a workshop (editor) link of board, for the join code probe */
+  workshop: string
   request: string
   archive: unknown
 }
@@ -80,6 +82,8 @@ async function world(opts: { guard?: boolean } = {}): Promise<World> {
       DRAFTROOM_WEBHOOK_SECRET: WEBHOOK_SECRET,
       DRAFTROOM_CHAT_HOOK_TEST_ORIGINS: receiver.origin,
       DRAFTROOM_MIRO_TEST_ORIGINS: `${miro.api},${miro.files}`,
+      // wave V (WS3): the join code route runs (off, it is an unknown route for everyone)
+      DRAFTROOM_JOIN_CODES: 'on',
     },
     deps: {
       syncInternal: sync,
@@ -121,6 +125,8 @@ async function world(opts: { guard?: boolean } = {}): Promise<World> {
     .id as string
   const link = (await alice.req('POST', `/api/boards/${board}/review-links`, { role: 'viewer' })).json()
     .id as string
+  const workshop = (await alice.req('POST', `/api/boards/${board}/review-links`, { role: 'editor' })).json()
+    .id as string
   // the client link limited copying to editors (DANA2-01); its owner lets everyone copy again, so the board may be
   // a workspace template (ws-templates refuses a board limited to its editors)
   expect(
@@ -157,6 +163,7 @@ async function world(opts: { guard?: boolean } = {}): Promise<World> {
     project,
     snapshot,
     link,
+    workshop,
     request,
     archive,
   }
@@ -253,11 +260,10 @@ function probe(
       `/api/workspaces/${wid}/chat-hooks/${w.hook}/test`,
       {},
     ],
-    // wave V (WS3): a workshop link's join code (the probe's link is a viewer link: WS3 makes an editor one when it
-    // implements the route)
+    // wave V (WS3): a workshop link's join code (an editor link: a review link has none, 404)
     'POST /api/boards/:bid/review-links/:id/code': [
       'POST',
-      `/api/boards/${bid}/review-links/${link}/code`,
+      `/api/boards/${bid}/review-links/${ids.id ?? w.workshop}/code`,
       undefined,
     ],
   }

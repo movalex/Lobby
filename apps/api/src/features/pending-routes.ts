@@ -49,8 +49,7 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   // resolve; features/join-codes) and BREAKOUT_ROUTE_KEYS (WS4: V3-1 start, state, extend, end; V3-2 assign, shuffle,
   // join; V3-3 broadcast, summon; features/breakouts). Once implemented, each is gated by its kill switch as well.
   // WS1's twelve activity routes are implemented (features/live-activities); to ship one hidden, add its key back.
-  'POST /api/boards/:bid/review-links/:id/code': { owner: 'WS3', item: 'V2-1' },
-  'GET /api/join/:code': { owner: 'WS3', item: 'V2-2' },
+  // WS3 implemented its two (V2-1 a link's code, V2-2 resolve; features/join-codes): to ship one hidden, add its key back.
   'GET /api/boards/:bid/breakouts': { owner: 'WS4', item: 'V3-1' },
   'POST /api/boards/:bid/breakouts': { owner: 'WS4', item: 'V3-1' },
   'POST /api/breakouts/:brk/extend': { owner: 'WS4', item: 'V3-1' },
