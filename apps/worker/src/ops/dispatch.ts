@@ -6,6 +6,7 @@
 import type { WorkerOpErrorCode, WorkerOpKind } from '@draftroom/contracts'
 import type { WorkerApi } from '../api-client.ts'
 import type { ClaimedOp, OpLease, WorkerOpsApi } from './client.ts'
+import { createExtractTextRunner } from './extract-text.ts'
 
 export interface OpRunContext {
   op: ClaimedOp
@@ -46,6 +47,8 @@ export interface OpRunner {
 /** The runners this worker build has (none in the foundation). */
 export const OP_RUNNERS: Readonly<Partial<Record<WorkerOpKind, OpRunner>>> = {
   // 'remove-bg': removeBgRunner,        WS2 (ops/remove-bg.ts, the model in a child: ops/bg-child.ts)
-  // 'extract-text': extractTextRunner,  WS3 (ops/extract-text.ts, ops/pdf-text-child.ts)
+  // WS3 (ops/extract-text.ts, ops/pdf-text-child.ts): PDFs here; worker.ts gives it the office converter. A function
+  // declaration, so this line is safe whichever of the two modules loads first.
+  'extract-text': createExtractTextRunner(),
   // 'render-pages': renderPagesRunner,  WS4 (ops/render-pages.ts, reusing pdf-child.ts)
 }
