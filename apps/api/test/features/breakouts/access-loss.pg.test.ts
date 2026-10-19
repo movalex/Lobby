@@ -43,7 +43,7 @@ const members = async (w: BreakoutWorld, brk: string) =>
 /** assign's own lock of the session (store.ts lockSession) */
 const ASSIGN_LOCK = /FROM breakout_sessions s WHERE s\.id = \$1 FOR UPDATE OF s/
 /** a loss of access locking the board's running sessions (access-loss.ts lockForAccessLoss, board scope) */
-const LOSS_LOCK = /FROM breakout_sessions s\s+WHERE s\.board_id = \$1/
+const LOSS_LOCK = /FROM breakout_sessions\s+WHERE board_id = \$1 AND status = 'running'/
 
 describe.skipIf(!PG)('a loss of access against a placement in a group (real Postgres)', () => {
   it('assign holds the session: the removal waits, then takes out the person assign placed', async () => {

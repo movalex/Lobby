@@ -44,40 +44,30 @@ const usersOf = (scope: AccessLossScope): string[] | null =>
 export async function lockForAccessLoss(tx: Queryable, scope: AccessLossScope): Promise<AccessLossLocks> {
   const users = usersOf(scope)
   if (users !== null && users.length === 0) return { scope, sessions: [] }
-  const where =
+  // EVERY running session of the scope's boards, whoever is in it now: a placement of these people that has not
+  // committed yet is invisible here, and only the lock makes it wait or be waited for (a filter on the current members
+  // would leave exactly that session unlocked; the real-Postgres test caught it). At most one per board.
+  // `anywhere` (a guest's grants swept): the boards they hold a grant on, the only ones such a guest can be on.
+  const boards =
     'boardId' in scope
-      ? 's.board_id = $1'
+      ? { sql: 'board_id = $1', key: scope.boardId as unknown }
       : 'workspaceId' in scope
-        ? 's.workspace_id = $1'
-        : '$1::text IS NULL'
-  const key = 'boardId' in scope ? scope.boardId : 'workspaceId' in scope ? scope.workspaceId : null
-  // only sessions that hold one of `users` (all of the board's when the scope names nobody)
+        ? { sql: 'workspace_id = $1', key: scope.workspaceId as unknown }
+        : {
+            sql: 'board_id IN (SELECT bm.board_id FROM board_members bm WHERE bm.user_id = ANY($1::text[]))',
+            key: users as unknown,
+          }
   const sessions = await tx.query<{ id: string; board_id: string }>(
-    `SELECT s.id, s.board_id FROM breakout_sessions s
-      WHERE ${where} AND s.status = 'running'
-        AND ($2::text[] IS NULL OR EXISTS (
-              SELECT 1 FROM breakout_members m WHERE m.session_id = s.id AND m.user_id = ANY($2::text[])))
-      ORDER BY s.id
-        FOR UPDATE OF s`,
-    [key, users],
+    `SELECT id, board_id FROM breakout_sessions
+      WHERE ${boards.sql} AND status = 'running'
+      ORDER BY id
+        FOR UPDATE`,
+    [boards.key],
   )
-  const activityWhere =
-    'boardId' in scope ? 'board_id = $1' : 'workspaceId' in scope ? 'workspace_id = $1' : null
-  if (activityWhere)
-    await tx.query(
-      `SELECT id FROM live_activities WHERE ${activityWhere} AND status = 'open' ORDER BY id FOR UPDATE`,
-      [key],
-    )
-  // anywhere: the open activities of the boards these people are on (a guest's: only their granted boards)
-  else
-    await tx.query(
-      `SELECT a.id FROM live_activities a
-        WHERE a.status = 'open'
-          AND a.board_id IN (SELECT bm.board_id FROM board_members bm WHERE bm.user_id = ANY($1::text[]))
-        ORDER BY a.id
-          FOR UPDATE OF a`,
-      [users],
-    )
+  await tx.query(
+    `SELECT id FROM live_activities WHERE ${boards.sql} AND status = 'open' ORDER BY id FOR UPDATE`,
+    [boards.key],
+  )
   return { scope, sessions: sessions.rows }
 }
 
