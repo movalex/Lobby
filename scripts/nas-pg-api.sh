@@ -108,8 +108,9 @@ free_gb="$(nas "df -Pk /volume3 | awk 'NR==2 {print int(\$4/1048576)}'" | tail -
 avail_mb="$(nas "awk '/^MemAvailable:/ {print int(\$2/1024)}' /proc/meminfo" | tail -1)"
 log "free on /volume3: ${free_gb} GB; memory available: ${avail_mb} MB"
 if [[ "$DRY_RUN" == "0" ]]; then
-  [[ "$free_gb" =~ ^[0-9]+$ ]] && (( free_gb >= MIN_FREE_GB )) || { log "STOP: less than ${MIN_FREE_GB} GB free"; exit 1; }
-  [[ "$avail_mb" =~ ^[0-9]+$ ]] && (( avail_mb >= MIN_AVAIL_MB )) || { log "STOP: less than ${MIN_AVAIL_MB} MB available"; exit 1; }
+  # a STOP here leaves everything as it is (trap - EXIT): what is there may be another run's, which its own cleanup removes
+  [[ "$free_gb" =~ ^[0-9]+$ ]] && (( free_gb >= MIN_FREE_GB )) || { trap - EXIT; log "STOP: less than ${MIN_FREE_GB} GB free"; exit 1; }
+  [[ "$avail_mb" =~ ^[0-9]+$ ]] && (( avail_mb >= MIN_AVAIL_MB )) || { trap - EXIT; log "STOP: less than ${MIN_AVAIL_MB} MB available"; exit 1; }
   left="$(nas "docker ps -a --filter name=^draftroom-pg --format '{{.Names}}'; docker network ls --filter name=^draftroom-pg --format '{{.Name}}'; if test -e $S; then echo folder; fi")"
   [[ -z "$left" ]] || { trap - EXIT; log "STOP: draftroom-pg* already there (another run?): $left"; exit 1; }
 fi

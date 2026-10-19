@@ -104,9 +104,10 @@ describe('the wave V features', () => {
     for (const id of ['live-activities', 'join', 'breakouts']) {
       const f = CANVAS_FEATURES.find((x) => x.id === id)
       expect(f, id).toBeDefined()
-      // WS2 filled 'live-activities' (it offers nothing while its switch is off: live-activities/feature.test.ts);
-      // WS3 landed 'join' (its card overlay and Facilitate entry: features/join/join.test.ts)
-      if (!['live-activities', 'join'].includes(id)) expect(Object.keys(f ?? {}), id).toEqual(['id'])
+      // every wave V feature is filled: WS2 'live-activities' (it offers nothing while its switch is off:
+      // live-activities/feature.test.ts), WS3 'join' (features/join/join.test.ts), WS4 'breakouts'
+      // (features/breakouts/feature.test.ts)
+      expect(Object.keys(f ?? {}).length, id).toBeGreaterThan(1)
       expect(at(id), id).toBeGreaterThan(at('timeline'))
       expect(at(id), id).toBeLessThan(at('elements'))
     }

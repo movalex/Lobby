@@ -50,15 +50,8 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   // join; V3-3 broadcast, summon; features/breakouts). Once implemented, each is gated by its kill switch as well.
   // WS1's twelve activity routes are implemented (features/live-activities); to ship one hidden, add its key back.
   // WS3 implemented its two (V2-1 a link's code, V2-2 resolve; features/join-codes): to ship one hidden, add its key back.
-  'GET /api/boards/:bid/breakouts': { owner: 'WS4', item: 'V3-1' },
-  'POST /api/boards/:bid/breakouts': { owner: 'WS4', item: 'V3-1' },
-  'POST /api/breakouts/:brk/extend': { owner: 'WS4', item: 'V3-1' },
-  'POST /api/breakouts/:brk/end': { owner: 'WS4', item: 'V3-1' },
-  'POST /api/breakouts/:brk/assign': { owner: 'WS4', item: 'V3-2' },
-  'POST /api/breakouts/:brk/shuffle': { owner: 'WS4', item: 'V3-2' },
-  'POST /api/breakouts/:brk/join': { owner: 'WS4', item: 'V3-2' },
-  'POST /api/breakouts/:brk/broadcast': { owner: 'WS4', item: 'V3-3' },
-  'POST /api/breakouts/:brk/summon': { owner: 'WS4', item: 'V3-3' },
+  // WS4 implemented its nine (V3-1 start, state, extend, end; V3-2 assign, shuffle, join; V3-3 broadcast, summon;
+  // features/breakouts): none left in wave V. To ship one hidden, add its key back.
 }
 
 export const isPendingRoute = (

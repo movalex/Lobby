@@ -1,7 +1,7 @@
 // Wave V (the foundation; docs/WAVE-V-CONTRACTS.md §1): the kill switches gate every route of their feature. With its
 // switch off a route answers exactly like an unknown route (the root 404) for every caller, before its body is parsed
-// and before the root guards (a preHandler that would refuse), and its handler never runs. The real stub modules are
-// registered here with nothing pending, to show their gate; in the real app they are pending (pending-routes.test.ts).
+// and before the root guards (a preHandler that would refuse), and its handler never runs. The three real feature
+// modules are registered here with nothing pending, to show their gate; every wave V route has landed (none pending).
 import {
   ACTIVITY_ROUTE_KEYS,
   BREAKOUT_ROUTE_KEYS,
@@ -16,7 +16,7 @@ import { toErrorResponse } from '../../../src/errors.ts'
 import { registerBreakouts } from '../../../src/features/breakouts/index.ts'
 import type { FeatureContext } from '../../../src/features/context.ts'
 import { registerJoinCodes } from '../../../src/features/join-codes/index.ts'
-import { liveOn, liveRoute, requireLive } from '../../../src/features/live/switch.ts'
+import { liveOn, liveRoute, liveStub, requireLive } from '../../../src/features/live/switch.ts'
 import { registerLiveActivities } from '../../../src/features/live-activities/index.ts'
 import { PENDING_ROUTES, type PendingRoute } from '../../../src/features/pending-routes.ts'
 import { createTestApi, type TestApi } from '../../helpers.ts'
@@ -104,7 +104,7 @@ describe('the wave V kill switches', () => {
     expect(guarded).toEqual([])
   })
 
-  it('each switch gates only its own feature; on, the foundation stub answers 501 (after the guards)', async () => {
+  it('each switch gates only its own feature; on, the route reaches the guards (403 here)', async () => {
     for (const [on] of FEATURES) {
       const { a, guarded } = await bare({ ...ALL_OFF, [on]: true })
       for (const [sw, keys] of FEATURES)
@@ -126,17 +126,22 @@ describe('the wave V kill switches', () => {
       const r = toErrorResponse(err)
       return reply.code(r.status).send(r.body)
     })
+    // every wave V route has landed (none is pending in the real app), so none reaches the stub; the stub itself
+    // stays for a route a later change ships hidden, and is held to its 501 here through liveRoute
+    const pendingWaveV = FEATURES.flatMap(([, keys]) => keys.filter((k) => Object.hasOwn(PENDING_ROUTES, k)))
+    expect(pendingWaveV).toEqual([])
     for (const [, , register] of FEATURES) await register(a, switchesOnly(ALL_ON), {})
+    expect(liveRoute(a, switchesOnly(ALL_ON), 'activities', 'POST', '/api/wave-v-stub', liveStub, {})).toBe(true)
+    expect(liveRoute(a, switchesOnly(ALL_OFF), 'breakouts', 'GET', '/api/wave-v-stub-off', liveStub, {})).toBe(true)
     await a.ready()
     app = a
-    // a landed route (no longer pending in the real app) runs its own handler; its own tests hold it to its rules
-    for (const [, keys] of FEATURES)
-      for (const key of keys.filter((k) => Object.hasOwn(PENDING_ROUTES, k))) {
-        const [method = 'GET', pattern = ''] = key.split(' ') as ['GET' | 'POST', string]
-        const res = await a.inject({ method, url: fill(pattern) })
-        expect(res.statusCode, key).toBe(501)
-        expect(res.json().error.code, key).toBe('NOT_IMPLEMENTED')
-      }
+    const res = await a.inject({ method: 'POST', url: '/api/wave-v-stub' })
+    expect(res.statusCode).toBe(501)
+    expect(res.json().error.code).toBe('NOT_IMPLEMENTED')
+    // its switch off, a stubbed route is the unknown route like any other
+    const off = await a.inject({ method: 'GET', url: '/api/wave-v-stub-off' })
+    expect(off.statusCode).toBe(404)
+    expect(off.json()).toEqual(UNKNOWN)
   })
 
   it('liveRoute registers nothing for a pending route', async () => {
@@ -168,19 +173,16 @@ describe('the wave V kill switches', () => {
       }
   })
 
-  it('in the real app with the switches on, a route still pending is an unknown route (its owner has not landed it)', async () => {
+  it('in the real app with the switches on, every wave V route is registered (none is pending: every owner landed it)', async () => {
     api = await createTestApi({
       env: { DRAFTROOM_LIVE_ACTIVITIES: 'on', DRAFTROOM_JOIN_CODES: 'on', DRAFTROOM_BREAKOUTS: 'on' },
     })
     expect(api.config.live).toEqual(ALL_ON)
-    const alice = await api.login('alice')
     for (const [, keys] of FEATURES)
-      for (const key of keys.filter((k) => Object.hasOwn(PENDING_ROUTES, k))) {
+      for (const key of keys) {
         const [method = 'GET', pattern = ''] = key.split(' ') as ['GET' | 'POST', string]
-        expect(api.app.hasRoute({ method, url: pattern }), key).toBe(false)
-        const res = await alice.req(method, fill(pattern), method === 'GET' ? undefined : {})
-        expect(res.statusCode, key).toBe(404)
-        expect(res.json(), key).toEqual(UNKNOWN)
+        expect(Object.hasOwn(PENDING_ROUTES, key), key).toBe(false)
+        expect(api.app.hasRoute({ method, url: pattern }), key).toBe(true)
       }
   })
 })
