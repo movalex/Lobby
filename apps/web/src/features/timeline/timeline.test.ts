@@ -535,7 +535,9 @@ describe('the layer', () => {
       api: { listMembers: async () => [] },
       board: { id: 'b1' },
     } as unknown as CanvasFeatureContext
-    return { canvas, out: renderToStaticMarkup(createElement(TimelineLayer, { ctx })) }
+    // a fixed clock (the fixture's dates are in October 2026): the today marker and "overdue" do not follow the calendar
+    const now = () => new Date(2026, 9, 14, 12)
+    return { canvas, out: renderToStaticMarkup(createElement(TimelineLayer, { ctx, now })) }
   }
   const els = () => [
     frameEl('tl', 40, 60, T),
