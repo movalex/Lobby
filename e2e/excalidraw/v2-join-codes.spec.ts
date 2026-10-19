@@ -47,6 +47,8 @@ test('a phone joins from the join card’s QR in under 10 s; the card is one inl
     await expect(card.getByTestId('join-card-code')).toHaveText(display)
     await expect(card.getByTestId('join-card-expiry')).toHaveText(/^Expires /)
     await expect(card).toContainText(new URL(WEB_URL).host)
+    // the integration: the Share dialog hands the card the board's title (the fixture names the board after the test)
+    await expect(card.locator('.dr-join-card__board')).toHaveText(/^A phone joins from the join card/)
     const qr = await qrOf(card.getByTestId('join-qr'))
     expect(qr.url).toBe(`${WEB_URL}/j/${display.replace('-', '')}`)
     // presentable: the QR is most of a 860 px high window

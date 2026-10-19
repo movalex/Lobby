@@ -467,6 +467,7 @@ export function ShareDialog({
   const workshopSection = (
     <WorkshopLinksSection
       boardId={board.id}
+      boardTitle={board.title}
       focusAsk={workshopAsk}
       links={workshopLinks}
       canCreate={!internalOnly}
@@ -703,6 +704,7 @@ export function ShareDialog({
         {reduceOnly && workshopLinks.length > 0 && (
           <WorkshopLinksSection
             boardId={board.id}
+            boardTitle={board.title}
             links={workshopLinks}
             canCreate={false}
             onChange={() => {
@@ -2132,12 +2134,15 @@ function InviteLinkSection({
  */
 function WorkshopLinksSection({
   boardId,
+  boardTitle,
   focusAsk = 0,
   links,
   canCreate,
   onChange,
 }: {
   boardId: string
+  /** the board's title: the Show QR card names the board (wave V) */
+  boardTitle: string
   /** R2-11: bumped by "Workshop link (guests can edit)": let guests in, and bring Create into view. */
   focusAsk?: number
   links: readonly PendingInvitation[]
@@ -2274,7 +2279,7 @@ function WorkshopLinksSection({
             />,
             // Wave V (WS3): the link's join code and its full-screen QR card (only while join codes are on, and only
             // for people the link's URL is shown to)
-            <ShowQrRow key={`${l.id}-qr`} boardId={boardId} link={l} />,
+            <ShowQrRow key={`${l.id}-qr`} boardId={boardId} link={l} boardTitle={boardTitle} />,
           ])}
         </ul>
       )}
