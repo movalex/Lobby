@@ -100,6 +100,9 @@ const RETRY_BASE_S = 15
 const RETRY_MAX_S = 30 * 60
 /** How long closing the app waits for running refreshes. */
 const CLOSE_WAIT_MS = 3_000
+/** Wave W (review m2): the first retry of a failed refs refresh, doubling per failure up to the max. */
+export const REFS_RETRY_BASE_MS = 60_000
+export const REFS_RETRY_MAX_MS = 30 * 60_000
 /** N7-4: while the sync answers without `links` (older than wave N), the links backfill waits this long. */
 export const LINKS_BACKFILL_PAUSE_MS = 10 * 60_000
 
@@ -217,8 +220,10 @@ export class SearchIndexer {
   private linksBackfillPausedUntil = 0
   /** Wave W (WS3): refreshes a board's board_file_refs (./file-refs.ts); absent while file search is off. */
   private readonly fileRefs: ((boardId: string) => Promise<FileRefsResult>) | null
-  /** Wave W: boards whose refs refresh failed (retried by the next pass). */
-  private readonly refsRetry = new Set<string>()
+  /** Wave W: boards whose refs refresh failed: how often in a row, and when a pass may retry them (review m2). */
+  private readonly refsRetry = new Map<string, { failures: number; dueAt: number }>()
+  /** Wave W: boards with a refs refresh in flight; true once another was asked for meanwhile (review m1). */
+  private readonly refsDirty = new Map<string, boolean>()
   /** Wave W: the once-per-process walk over the boards that may show a file (its last board id; null once done). */
   private refsWalkAfter: string | null = ''
 
@@ -246,18 +251,50 @@ export class SearchIndexer {
   refreshFileRefs(boardId: string): Promise<RefreshResult> {
     const refresh = this.fileRefs
     if (!refresh) return Promise.resolve('unchanged')
-    return this.dedupe(`files:${boardId}`, async () => {
-      let r: FileRefsResult
+    // Review m1: a refresh asked for while one is in flight must not join it (that one may have read the canvas before
+    // the change the caller saw, and would be the last write). It marks the board dirty instead; the running loop
+    // reads again once its read is written, and every caller gets the answer of a read that began after its call.
+    const key = `files:${boardId}`
+    if (this.refsDirty.has(boardId)) {
+      this.refsDirty.set(boardId, true)
+      return this.inflight.get(key) as Promise<RefreshResult>
+    }
+    this.refsDirty.set(boardId, false)
+    const p = (async (): Promise<RefreshResult> => {
+      let out: RefreshResult = 'unchanged'
       try {
-        r = await refresh(boardId)
-      } catch (e) {
-        this.warn(e, 'search could not index the files of a board', boardId)
-        r = 'failed'
+        do {
+          this.refsDirty.set(boardId, false)
+          let r: FileRefsResult
+          try {
+            r = await refresh(boardId)
+          } catch (e) {
+            this.warn(e, 'search could not index the files of a board', boardId)
+            r = 'failed'
+          }
+          if (r === 'failed') this.refsFailed(boardId)
+          else this.refsRetry.delete(boardId)
+          out = r === 'refreshed' ? 'indexed' : r
+        } while (this.refsDirty.get(boardId) === true && !this.stopped)
+      } finally {
+        this.refsDirty.delete(boardId)
+        this.inflight.delete(key)
       }
-      if (r === 'failed') this.refsRetry.add(boardId)
-      else this.refsRetry.delete(boardId)
-      return r === 'refreshed' ? 'indexed' : r
-    })
+      return out
+    })()
+    this.inflight.set(key, p)
+    return p
+  }
+
+  /**
+   * Review m2: a board whose refresh failed is retried by the passes with a backoff (REFS_RETRY_BASE_MS doubling per
+   * failure, at most REFS_RETRY_MAX_MS), so a sync outage or an answer it does not trust costs one read per board per
+   * backoff, not one per pass.
+   */
+  private refsFailed(boardId: string): void {
+    const failures = (this.refsRetry.get(boardId)?.failures ?? 0) + 1
+    const wait = Math.min(REFS_RETRY_MAX_MS, REFS_RETRY_BASE_MS * 2 ** (failures - 1))
+    this.refsRetry.set(boardId, { failures, dueAt: this.now().getTime() + wait })
   }
 
   /**
@@ -267,7 +304,11 @@ export class SearchIndexer {
    */
   private async backfillFileRefs(): Promise<number> {
     if (!this.fileRefs || this.stopped) return 0
-    const boards = [...this.refsRetry].slice(0, this.settings.batch)
+    const at = this.now().getTime()
+    const boards = [...this.refsRetry]
+      .filter(([, r]) => r.dueAt <= at)
+      .map(([id]) => id)
+      .slice(0, this.settings.batch)
     if (boards.length < this.settings.batch && this.refsWalkAfter !== null) {
       const next = await boardsMaybeShowingFiles(
         this.db,
@@ -276,7 +317,8 @@ export class SearchIndexer {
       )
       if (next.length < this.settings.batch - boards.length) this.refsWalkAfter = null
       else this.refsWalkAfter = next.at(-1)?.id ?? null
-      for (const b of next) if (!boards.includes(b.id)) boards.push(b.id)
+      // a board waiting out its retry backoff is not read early by the walk
+      for (const b of next) if (!boards.includes(b.id) && !this.refsRetry.has(b.id)) boards.push(b.id)
     }
     let read = 0
     for (const id of boards) {

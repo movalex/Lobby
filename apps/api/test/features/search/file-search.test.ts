@@ -10,6 +10,8 @@
 
 import { SEARCH_HITS_PER_BOARD, SearchResponse } from '@draftroom/contracts'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { parseQuery } from '../../../src/features/search/query.ts'
+import { rankedHits } from '../../../src/features/search/store.ts'
 import { type Client, createBoard, DEV_STUDIO } from '../../helpers.ts'
 import { type GuestClient, guestLink, joinAsGuest } from '../guests/support.ts'
 import {
@@ -100,10 +102,11 @@ describe('file hits: what a hit says', () => {
     expect(fileHitsOf(r)).toContain(`${b.W} ${fileObject(v.W?.versionId as string, 2)}`)
   })
 
-  it('at most two file pages of a board among its five hits; the rest counts in `more`', async () => {
+  it('at most two file pages of a board among its five hits, after its own text; the rest counts in `more`', async () => {
     const extra = await addPdf(w.api, b.Q, bob, 'Many.pdf')
     await extract(w.api, extra, {
-      // the file pages rank above the notes: a cap, not luck, keeps them to two
+      // the file pages have the higher ts_rank: their tier, not their rank, puts them after the notes, and a cap
+      // keeps them to two
       1: 'zymurgy zymurgy zymurgy one',
       2: 'zymurgy zymurgy zymurgy two',
       3: 'zymurgy zymurgy zymurgy three',
@@ -119,11 +122,46 @@ describe('file hits: what a hit says', () => {
     const r = await searchFiles(bob, DEV_STUDIO, 'zymurgy')
     const g = r.groups.find((x) => x.board.id === b.Q)
     expect(g?.hits).toHaveLength(SEARCH_HITS_PER_BOARD)
-    // the best hit is a file page (the board ranks by it), and only two of them are returned
-    expect(g?.hits[0]?.file).toBeTruthy()
-    expect(g?.hits.filter((h) => h.file)).toHaveLength(2)
+    // the board's own text first (3 notes), then its two best file pages (the slots a board keeps for them)
+    expect(g?.hits.map((h) => (h.file ? 'file' : 'note'))).toEqual(['note', 'note', 'note', 'file', 'file'])
     expect(g?.more).toBe(8 - SEARCH_HITS_PER_BOARD)
     expect(r.totalHits).toBe(8)
+  })
+
+  it('a file page never outranks canvas text: boards matched on their text keep their order (review m4)', async () => {
+    // three boards: two match on a sticky (one word each), one only through a long page that repeats the word
+    const texty1 = await createBoard(bob, DEV_STUDIO, 'Texty one')
+    const texty2 = await createBoard(bob, DEV_STUDIO, 'Texty two')
+    const filey = await createBoard(bob, DEV_STUDIO, 'Filey')
+    w.sync.setText(texty1, [note('t1', 'bilby')])
+    w.sync.setText(texty2, [note('t2', 'a bilby and another bilby')])
+    w.sync.setText(filey, [note('f0', 'nothing to see')])
+    await touch(w.api, texty1)
+    await touch(w.api, texty2)
+    const long = await addPdf(w.api, filey, bob, 'Bilby report.pdf')
+    await extract(w.api, long, { 1: `${'bilby habitat bilby diet '.repeat(40)}end` })
+    await place(w, filey, [long])
+    const r = await searchFiles(bob, DEV_STUDIO, 'bilby')
+    const order = r.groups.map((g) => g.board.id)
+    // the canvas boards first, in their order without file search (the two-word note ranks above the one-word one),
+    // then the board found only through its file
+    expect(order).toEqual([texty2, texty1, filey])
+    expect(r.groups[2]?.hits.every((h) => h.file)).toBe(true)
+    // with a page of one board's PDF only (Ask's call shape: canvas entries plus file pages), the same tiers
+    const ranked = await rankedHits(w.api.db, {
+      workspaceId: DEV_STUDIO,
+      boardIds: [texty1, texty2, filey],
+      query: parseQuery('bilby'),
+      boards: 10,
+      perBoard: 30,
+      team: false,
+      source: 'canvas',
+      files: { maxPerBoard: 4 },
+    })
+    expect([...new Set(ranked.map((x) => x.board_id))]).toEqual([texty2, texty1, filey])
+    // and the long page's raw rank is the highest of all: only its tier keeps it last
+    const best = (id: string) => Math.max(...ranked.filter((x) => x.board_id === id).map((x) => x.rank))
+    expect(best(filey)).toBeGreaterThan(best(texty2))
   })
 
   it('finds a CJK word at the start of a run of text (the simple configuration)', async () => {

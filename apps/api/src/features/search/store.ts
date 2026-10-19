@@ -146,23 +146,43 @@ export async function rankedHits(
   }
   // Only an asked-for source adds a condition (and a parameter): the search route's statement is unchanged.
   const only = opts.source === undefined ? '' : ` AND e.source = ${param(opts.source)}`
+  if (opts.files && opts.files.maxPerBoard >= opts.perBoard)
+    throw new Error('rankedHits: the file share must leave a board at least one slot for its own text')
+  // Wave W (review m4): a file page's rank (ts_rank_cd over a long page that repeats a term) is not comparable with an
+  // entry's, so file pages form a second tier. A file page never outranks canvas text: boards matched on their own
+  // text come first, in exactly the order they have without file search; boards matched only through their files
+  // follow, by their best page. Within a board the entries come first and its file pages after them, holding at most
+  // `maxPerBoard` of its `perBoard` slots (those slots are kept for them, so a board's best pages still show).
   const files = opts.files
     ? `, f AS (${FILE_HITS_CTE}), fr AS (
          SELECT f.*, row_number() OVER (PARTITION BY f.board_id ORDER BY f.rank DESC, f.object_id) AS fn FROM f
+       ), fk AS (
+         SELECT fr.board_id, LEAST(count(*), ${param(opts.files.maxPerBoard)}) AS k FROM fr GROUP BY fr.board_id
+       ), mc AS (
+         SELECT m.*, row_number() OVER (PARTITION BY m.board_id ORDER BY m.rank DESC, m.source, m.object_id) AS cn
+           FROM m
        ), u AS (
-         SELECT m.*, true AS eligible FROM m
+         SELECT mc.board_id, mc.source, mc.object_id, mc.kind, mc.page_id, mc.rank, 0 AS tier,
+                mc.cn <= $6 - COALESCE(fk.k, 0) AS eligible
+           FROM mc LEFT JOIN fk ON fk.board_id = mc.board_id
          UNION ALL
-         SELECT fr.board_id, fr.source, fr.object_id, fr.kind, fr.page_id, fr.rank,
-                fr.fn <= ${param(opts.files.maxPerBoard)} AS eligible
-           FROM fr
+         SELECT fr.board_id, fr.source, fr.object_id, fr.kind, fr.page_id, fr.rank, 1 AS tier,
+                fr.fn <= COALESCE(fk.k, 0) AS eligible
+           FROM fr LEFT JOIN fk ON fk.board_id = fr.board_id
        )`
     : ''
-  // with files, a board's hits are ranked among its eligible ones first (a file page past its board's file share is
-  // never returned, but counts); the best hit of a board is always eligible, so boards rank as before
+  // with files, a board's hits are its eligible ones first (an entry or a file page past its share is never returned,
+  // but counts in board_hits), entries before file pages; its best hit is an entry whenever it has one
   const from = opts.files ? 'u' : 'm'
   const order = opts.files
-    ? 'u.eligible DESC, u.rank DESC, u.source, u.object_id'
+    ? 'u.eligible DESC, u.tier, u.rank DESC, u.source, u.object_id'
     : 'm.rank DESC, m.source, m.object_id'
+  // file search off: the statement before wave W, word for word
+  const topCols = opts.files ? 'r.board_id, r.tier, r.rank AS best' : 'r.board_id, r.rank AS best'
+  const topOrder = opts.files ? 'r.tier, r.rank DESC, r.board_id' : 'r.rank DESC, r.board_id'
+  const outOrder = opts.files
+    ? 'top.tier, top.best DESC, top.board_id, r.n'
+    : 'top.best DESC, top.board_id, r.n'
   const r = await q.query<RankedRow>(
     `WITH m AS (
        SELECT e.board_id, e.source, e.object_id, e.kind, e.page_id,
@@ -179,10 +199,10 @@ export async function rankedHits(
               count(*) OVER () AS total_hits
          FROM ${from}
      ), top AS (
-       SELECT r.board_id, r.rank AS best, count(*) OVER () AS total_boards
+       SELECT ${topCols}, count(*) OVER () AS total_boards
          FROM r
         WHERE r.n = 1
-        ORDER BY r.rank DESC, r.board_id
+        ORDER BY ${topOrder}
         LIMIT $5
      )
      SELECT r.board_id, r.source, r.object_id, r.kind, r.page_id, r.rank,
@@ -190,7 +210,7 @@ export async function rankedHits(
             r.total_hits::int AS total_hits
        FROM top
        JOIN r ON r.board_id = top.board_id AND r.n <= $6${opts.files ? ' AND r.eligible' : ''}
-      ORDER BY top.best DESC, top.board_id, r.n`,
+      ORDER BY ${outOrder}`,
     params,
   )
   return r.rows

@@ -5,8 +5,10 @@
 //   becomes `ready`, one op is queued for it (the `assets.version` path in app.ts calls enqueueFileText).
 // - The backfill: every FILE_TEXT_LIMITS.backfillEveryMs, at most backfillPerSweep versions, newest first, that have no
 //   file_text_state row, no active op and no op that failed for good (WORKER_UNAVAILABLE is not for good: no capable
-//   worker was there, so they are tried again). Paused while preview jobs queue (previews keep priority), and while no
-//   capable worker was seen recently (formatsOffer: it would only queue ops that expire). It also clears the pages an
+//   worker was there, so they are tried again; FILE_TOO_COMPLEX is). Paused while preview jobs queue (previews keep
+//   priority), while no capable worker was seen recently (formatsOffer: it would only queue ops that expire), while an
+//   op a person asked for is queued, and up to backfillMaxQueued queued extract-text ops in all (review M2: it never
+//   builds a backlog; requested ops are claimed first anyway, worker/ops-jobs.ts claimOp). It also clears the pages an
 //   op left behind without a state (a run that failed after some `/text` batches), a bounded batch per sweep.
 // Both only while DRAFTROOM_FILE_SEARCH is on (each checks formatsOn), and only for versions whose own board is open
 // (an op belongs to its version's board, and the claim cancels it on a trashed one). The one-active-op rule
@@ -81,8 +83,11 @@ export async function enqueueFileText(
 export interface BackfillResult {
   queued: number
   orphansCleared: number
-  /** why nothing was queued: no capable worker, previews waiting */
-  paused: 'no-worker' | 'previews' | null
+  /**
+   * why nothing was queued: no capable worker, previews waiting, an op a person asked for waiting, or
+   * FILE_TEXT_LIMITS.backfillMaxQueued extract-text ops queued already
+   */
+  paused: 'no-worker' | 'previews' | 'requests' | 'backlog' | null
 }
 
 /** One backfill sweep (see the top of this file). */
@@ -102,11 +107,26 @@ export async function backfillFileText(
     out.paused = 'previews'
     return out
   }
+  // review M2: the backfill never builds a backlog in front of people's requests. Nothing while an op a person asked
+  // for is queued; otherwise only up to FILE_TEXT_LIMITS.backfillMaxQueued queued extract-text ops in all.
+  const queue = await ctx.db.one<{ asked: boolean; text: number }>(
+    `SELECT EXISTS (SELECT 1 FROM worker_ops WHERE status = 'queued' AND requested_by IS NOT NULL) AS asked,
+            (SELECT count(*)::int FROM worker_ops WHERE status = 'queued' AND kind = 'extract-text') AS text`,
+  )
+  if (queue.asked) {
+    out.paused = 'requests'
+    return out
+  }
+  const room = Math.min(FILE_TEXT_LIMITS.backfillPerSweep, FILE_TEXT_LIMITS.backfillMaxQueued - queue.text)
+  if (room <= 0) {
+    out.paused = 'backlog'
+    return out
+  }
   const rows = await ctx.db.query<{ id: string; workspace_id: string; board_id: string }>(
     `SELECT v.id, v.workspace_id, v.board_id ${ELIGIBLE}
       ORDER BY v.created_at DESC, v.id DESC
       LIMIT $2`,
-    [FILE_TEXT_MIME_TYPES, FILE_TEXT_LIMITS.backfillPerSweep],
+    [FILE_TEXT_MIME_TYPES, room],
   )
   out.queued = await insertOps(ctx.db, rows.rows, now)
   return out

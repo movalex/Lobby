@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { createFormatsOffer } from '../../../src/features/formats/offer.ts'
 import { backfillFileText, enqueueFileText } from '../../../src/features/search/file-backfill.ts'
 import { boardsMaybeShowingFiles } from '../../../src/features/search/file-refs.ts'
+import { REFS_RETRY_BASE_MS } from '../../../src/features/search/indexer.ts'
 import { type Client, createBoard, DEV_STUDIO } from '../../helpers.ts'
 import { workerEnv } from '../../worker/helpers.ts'
 import {
@@ -303,7 +304,7 @@ describe('queueing extract-text', () => {
     }
   })
 
-  it('the backfill: newest first, at most 20, not while previews wait or without a worker; skips what is done', async () => {
+  it('the backfill: newest first, at most 10 queued, not while previews or requests wait or without a worker; skips what is done', async () => {
     const s = await setup()
     const ctx = ctxOf(s.api)
     const made: string[] = []
@@ -341,17 +342,46 @@ describe('queueing extract-text', () => {
     await failed(made[21] as string, 'TEXT_EXTRACT_FAILED')
     await failed(made[20] as string, 'WORKER_UNAVAILABLE')
     const image = await addPdf(s.api, s.board, s.bob, 'p.psd', { mime: 'image/vnd.adobe.photoshop' })
-    const r = await backfillFileText(ctx, s.api.clock.now())
-    expect(r).toMatchObject({ queued: FILE_TEXT_LIMITS.backfillPerSweep, paused: null })
-    const queued = (
-      await s.api.db.query<{ source_version_id: string }>(
-        "SELECT source_version_id FROM worker_ops WHERE kind = 'extract-text' AND status = 'queued'",
+    const queuedNow = async () =>
+      (
+        await s.api.db.query<{ source_version_id: string }>(
+          "SELECT source_version_id FROM worker_ops WHERE kind = 'extract-text' AND status = 'queued'",
+        )
+      ).rows.map((x) => x.source_version_id)
+    // the worker drains what is queued (the test marks it done)
+    const drain = () =>
+      s.api.db.query(
+        `UPDATE worker_ops SET status = 'done', finished_at = $1, updated_at = $1
+          WHERE kind = 'extract-text' AND status = 'queued'`,
+        [s.api.clock.now()],
       )
-    ).rows.map((x) => x.source_version_id)
-    // newest first: f20 (no worker then: tried again) … f1; never f22 (has text), f21 (failed for good), the PSD
-    expect(queued.sort()).toEqual(made.slice(1, 21).sort())
-    expect(queued).not.toContain(image.versionId)
-    // a second sweep makes no second op for any of them (one active op per version), and finds f0
+    // review M2: never more than backfillMaxQueued (10) queued extract-text ops, so at most 10 of the 20 a sweep may take
+    expect(FILE_TEXT_LIMITS.backfillMaxQueued).toBeLessThan(FILE_TEXT_LIMITS.backfillPerSweep)
+    const r = await backfillFileText(ctx, s.api.clock.now())
+    expect(r).toMatchObject({ queued: FILE_TEXT_LIMITS.backfillMaxQueued, paused: null })
+    // newest first: f20 (no worker then: tried again) … f11; never f22 (has text), f21 (failed for good), the PSD
+    expect((await queuedNow()).sort()).toEqual(made.slice(11, 21).sort())
+    expect(await queuedNow()).not.toContain(image.versionId)
+    // while 10 are queued, a sweep adds nothing
+    expect(await backfillFileText(ctx, s.api.clock.now())).toMatchObject({ queued: 0, paused: 'backlog' })
+    // nor while an op a person asked for waits, whatever the backlog
+    await drain()
+    const asked = newId('wop')
+    await s.api.db.query(
+      `INSERT INTO worker_ops (id, workspace_id, board_id, kind, source_version_id, params, params_key, requested_by)
+       VALUES ($1, $2, $3, 'render-pages', $4, '{"from": 9, "to": 12}'::jsonb, '9-12', $5)`,
+      [asked, DEV_STUDIO, s.board, made[0], s.bob.userId],
+    )
+    expect(await backfillFileText(ctx, s.api.clock.now())).toMatchObject({ queued: 0, paused: 'requests' })
+    await s.api.db.query(
+      `UPDATE worker_ops SET status = 'cancelled', error_code = 'CANCELLED', finished_at = $2 WHERE id = $1`,
+      [asked, s.api.clock.now()],
+    )
+    const next = await backfillFileText(ctx, s.api.clock.now())
+    expect(next.queued).toBe(10)
+    expect((await queuedNow()).sort()).toEqual(made.slice(1, 11).sort())
+    await drain()
+    // a last sweep makes no second op for any of them, and finds f0
     const again = await backfillFileText(ctx, s.api.clock.now())
     expect(again.queued).toBe(1)
     expect(
@@ -393,6 +423,8 @@ describe('board_file_refs', () => {
     await s.w.indexer.runPass()
     expect(s.w.indexer.fileRefsWalkFinished()).toBe(false)
     s.w.sync.refsFailing = false
+    // tried again once its backoff is over (review m2)
+    s.api.clock.advance(REFS_RETRY_BASE_MS)
     await s.w.indexer.runPass()
     const rows = await s.api.db.query('SELECT version_id FROM board_file_refs WHERE board_id = $1', [s.board])
     expect(rows.rows).toEqual([{ version_id: v.versionId }])
@@ -402,5 +434,66 @@ describe('board_file_refs', () => {
     const walked = (await boardsMaybeShowingFiles(s.api.db, '', 100)).map((r) => r.id)
     expect(walked).toContain(s.board)
     expect(walked).not.toContain(plain)
+  })
+
+  it('a refresh asked for while one is in flight reads again after it: a removed card never comes back (review m1)', async () => {
+    const s = await setup()
+    const v = await addPdf(s.api, s.board, s.bob)
+    s.w.sync.setRefs(s.board, [v])
+    const original = s.w.sync.assetRefs
+    if (!original) throw new Error('the fake sync answers asset refs')
+    const read = original.bind(s.w.sync)
+    let release: () => void = () => {}
+    let gate: Promise<void> | null = new Promise<void>((r) => {
+      release = r
+    })
+    // the first read sees the card, then waits (a slow sync answer)
+    s.w.sync.assetRefs = async (boardId: string) => {
+      const answer = await read(boardId)
+      if (gate) await gate
+      return answer
+    }
+    const before = s.w.sync.refsCalls.length
+    const first = s.w.indexer.refreshFileRefs(s.board)
+    await new Promise((r) => setTimeout(r, 10))
+    // the card is deleted, and the canvas reindex asks for the refs again while the first read is in flight
+    s.w.sync.setRefs(s.board, [], { deleted: [v] })
+    const second = s.w.indexer.refreshFileRefs(s.board)
+    const third = s.w.indexer.refreshFileRefs(s.board)
+    gate = null
+    release()
+    await Promise.all([first, second, third])
+    // two reads, not one (the asks during the first coalesce into one more), and the last write is the new canvas
+    expect(s.w.sync.refsCalls.length - before).toBe(2)
+    const rows = await s.api.db.query('SELECT version_id FROM board_file_refs WHERE board_id = $1', [s.board])
+    expect(rows.rows).toEqual([])
+  })
+
+  it('a failed refresh is retried with a backoff, not by every pass (review m2)', async () => {
+    const s = await setup()
+    const v = await addPdf(s.api, s.board, s.bob)
+    s.w.sync.setRefs(s.board, [v])
+    // the walk is done, so only the retry list reads boards
+    await s.w.indexer.runPass()
+    expect(s.w.indexer.fileRefsWalkFinished()).toBe(true)
+    s.w.sync.refsFailing = true
+    await s.w.indexer.refreshFileRefs(s.board)
+    const calls = () => s.w.sync.refsCalls.filter((b) => b === s.board).length
+    const n0 = calls()
+    await s.w.indexer.runPass()
+    await s.w.indexer.runPass()
+    expect(calls()).toBe(n0)
+    s.api.clock.advance(REFS_RETRY_BASE_MS)
+    await s.w.indexer.runPass()
+    expect(calls()).toBe(n0 + 1)
+    // failed again: the next wait is twice as long
+    s.api.clock.advance(REFS_RETRY_BASE_MS)
+    await s.w.indexer.runPass()
+    expect(calls()).toBe(n0 + 1)
+    s.api.clock.advance(REFS_RETRY_BASE_MS)
+    s.w.sync.refsFailing = false
+    await s.w.indexer.runPass()
+    expect(calls()).toBe(n0 + 2)
+    expect(s.w.indexer.fileRefsWalkFinished()).toBe(true)
   })
 })
