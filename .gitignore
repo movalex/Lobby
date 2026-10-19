@@ -28,3 +28,6 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 .vitest/
+
+# tour video renders (e2e/video on branch video/tour)
+.video-out/
