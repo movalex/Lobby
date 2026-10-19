@@ -31,13 +31,13 @@ const ALL_ON: FormatsFlags = {
 }
 
 describe('the wave W switches', () => {
-  it('ship off, and a production page ignores any override', () => {
+  it('ship on but background removal (the integration; its model is not approved), and a production page ignores any override', () => {
     expect(FORMATS_FLAGS).toEqual({
-      docCards: false,
+      docCards: true,
       removeBackground: false,
-      fileSearch: false,
-      deckImport: false,
-      admin: false,
+      fileSearch: true,
+      deckImport: true,
+      admin: true,
     })
     expect(Object.keys(FORMATS_FLAG_KEYS).sort()).toEqual(Object.keys(FORMATS_FLAGS).sort())
     expect(Object.keys(FORMATS_FLAG_SERVER).sort()).toEqual(Object.keys(FORMATS_FLAGS).sort())
@@ -46,7 +46,8 @@ describe('the wave W switches', () => {
 
   it('a dev-auth page may turn each on or off; a blocked store keeps the shipped value', () => {
     expect(formatsFlags(true, () => '1')).toEqual(ALL_ON)
-    expect(formatsFlags(true, () => '0')).toEqual(FORMATS_FLAGS)
+    expect(formatsFlags(true, () => '0')).toEqual({ ...FORMAT_SWITCHES_OFF })
+    expect(formatsFlags(true, () => null)).toEqual(FORMATS_FLAGS)
     expect(formatsFlags(true, (k) => (k === FORMATS_FLAG_KEYS.admin ? '1' : null)).admin).toBe(true)
     expect(
       formatsFlags(true, () => {
@@ -68,10 +69,15 @@ describe('the wave W switches', () => {
     expect(formatsEnabled('docCards', ALL_ON, offer)).toBe(true)
     expect(formatsEnabled('fileSearch', ALL_ON, offer)).toBe(true)
     expect(formatsEnabled('removeBackground', ALL_ON, offer)).toBe(false)
-    expect(formatsEnabled('docCards', FORMATS_FLAGS, offer)).toBe(false)
-    // the shipped switches are off: nothing is offered whatever the api says
-    for (const f of Object.keys(FORMATS_FLAGS) as (keyof FormatsFlags)[])
-      expect(formatsEnabled(f, FORMATS_FLAGS, { ...FORMAT_SWITCHES_OFF, [f]: true }), f).toBe(false)
+    expect(formatsEnabled('docCards', { ...ALL_ON, docCards: false }, offer)).toBe(false)
+    // the shipped switches: each is offered once the api offers it, but background removal never (its model is not
+    // approved yet); and nothing is offered while the api offers nothing
+    for (const f of Object.keys(FORMATS_FLAGS) as (keyof FormatsFlags)[]) {
+      expect(formatsEnabled(f, FORMATS_FLAGS, { ...FORMAT_SWITCHES_OFF, [f]: true }), f).toBe(
+        f !== 'removeBackground',
+      )
+      expect(formatsEnabled(f, FORMATS_FLAGS, FORMAT_SWITCHES_OFF), f).toBe(false)
+    }
   })
 })
 
@@ -102,10 +108,12 @@ describe('the wave W board features and routes', () => {
     })
   })
 
-  it('every wave W palette id is pending until its owner registers it (WS1: doc-card.insert, doc-card.from-text)', () => {
-    for (const id of WAVE_W_PALETTE_COMMAND_IDS)
-      if (id.startsWith('doc-card.'))
-        expect(PENDING_PALETTE_COMMAND_IDS as readonly string[], id).not.toContain(id)
-      else expect(PENDING_PALETTE_COMMAND_IDS as readonly string[], id).toContain(id)
+  it('every wave W palette id is registered but image.remove-background, held until its model is approved', () => {
+    const commands = new Set(CANVAS_FEATURES.flatMap((f) => (f.commands ?? []).map((c) => c.id)))
+    for (const id of WAVE_W_PALETTE_COMMAND_IDS) {
+      const held = id === 'image.remove-background'
+      expect((PENDING_PALETTE_COMMAND_IDS as readonly string[]).includes(id), id).toBe(held)
+      expect(commands.has(id), id).toBe(!held)
+    }
   })
 })

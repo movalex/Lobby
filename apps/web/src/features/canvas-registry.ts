@@ -12,7 +12,7 @@
 // Wave V: lead-only; the foundation registers 'live-activities' (WS2's), 'join' (WS3's) and 'breakouts' (WS4's), empty
 // (features/live holds their switches; workshops/ported/facilitate-entries.ts their Facilitate entries).
 // Wave W: lead-only; the foundation registers 'doc-cards' (WS1's), 'remove-bg' (WS2's) and 'deck-import' (WS4's), empty
-// (features/formats holds their switches).
+// (features/formats holds their switches); the integration adds 'workspace-admin' (the 'workspace.admin' command).
 import type { CanvasFeature } from '../canvas/api/index.ts'
 import { feature as mediaFeature } from '../file-card/ported/index.tsx'
 import { feature as a11yFeature } from './a11y/ported/index.tsx'
@@ -52,6 +52,7 @@ import { feature as thumbnailsFeature } from './thumbnails/ported/index.tsx'
 import { feature as timelineFeature } from './timeline/index.tsx'
 import { feature as visitsFeature } from './visits/index.tsx'
 import { feature as workshopsFeature } from './workshops/ported/index.tsx'
+import { feature as workspaceAdminFeature } from './workspace-admin/index.tsx'
 import { feature as wsTemplatesFeature } from './ws-templates/index.tsx'
 
 export const CANVAS_FEATURES: readonly CanvasFeature[] = [
@@ -112,6 +113,8 @@ export const CANVAS_FEATURES: readonly CanvasFeature[] = [
   docCardsFeature,
   removeBgFeature,
   deckImportFeature,
+  // wave W (the integration): the 'workspace.admin' palette command (WS5's page; owners and admins only)
+  workspaceAdminFeature,
   // wave Q (registered by the foundation, hidden behind ELEMENTS_PANEL; WS3 fills it): the Elements panel
   elementsFeature,
 ]

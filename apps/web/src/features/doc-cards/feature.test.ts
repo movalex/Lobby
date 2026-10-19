@@ -4,7 +4,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { CanvasElement, LobbyCanvas } from '../../canvas/api/index.ts'
-import { setFormatsOffer } from '../formats/flags.ts'
+import { FORMATS_FLAGS, setFormatsOffer } from '../formats/flags.ts'
 import { DocBlocks } from './DocBlocks.tsx'
 import { docCardSvg, segmentsOf } from './export.ts'
 import { COMMANDS, feature, OVERLAYS, PANELS } from './index.tsx'
@@ -99,8 +99,11 @@ describe('the switch', () => {
     expect(OVERLAYS.map((o) => o.id)).toEqual(['doc-cards.faces'])
   })
 
-  it('the shipped web switch keeps it off even when the api offers it (the lead turns FORMATS_FLAGS.docCards on)', () => {
+  it('the shipped web switch is on (the wave W integration): the api offer alone decides', () => {
+    expect(FORMATS_FLAGS.docCards).toBe(true)
     setFormatsOffer({ docCards: true })
+    for (const c of COMMANDS) expect(c.available?.({} as never), c.id).toBe(true)
+    setFormatsOffer({ docCards: false })
     for (const c of COMMANDS) expect(c.available?.({} as never), c.id).toBe(false)
   })
 })

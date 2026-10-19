@@ -11,6 +11,7 @@ import {
   ADMIN_TABS,
   AdminAuditEvent,
   AdminAuditQuery,
+  AdminGuest,
   AdminRetentionFact,
   AuthConfig,
   adminPath,
@@ -262,6 +263,10 @@ describe('the browser routes', () => {
     expect(ok(FileOpState, state)).toBe(true)
     for (const k of Object.keys(FileOpState.shape)) expect(k).not.toMatch(/user|by|name|url|path|email/i)
     expect(FILE_OP_EVENT).toBe('file.op')
+    // WS2's addition (folded in by the integration): the result's NEW asset, optional so the foundation's shape parses
+    expect(ok(FileOpState, { ...state, resultAssetId: 'ast_0123456789abcdefghij' })).toBe(true)
+    expect(ok(FileOpState, { ...state, resultAssetId: null })).toBe(true)
+    expect(ok(FileOpState, { ...state, resultAssetId: 'ver_0123456789abcdefghij' })).toBe(false)
   })
 })
 
@@ -378,6 +383,19 @@ describe('the workspace admin page', () => {
     expect(ok(AdminAuditEvent, { ...ev, detail: { long: 'x'.repeat(201) } })).toBe(false)
   })
 
+  it('a name-only guest on the links tab names the boards it may be taken off (WS5, folded in by the integration)', () => {
+    expect(ADMIN_LIMITS.guestBoards).toBe(20)
+    const guest = {
+      user: { id: 'usr_0123456789abcdefghij', name: 'Guest' },
+      grants: 2,
+      boards: [{ id: 'b-0123456789', title: 'Launch' }],
+      joinedAt: '2026-10-19T00:00:00.000Z',
+    }
+    const parsed = AdminGuest.safeParse(guest)
+    expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true)
+    expect(ok(AdminGuest, { ...guest, boards: [{ id: 'not a board', title: 'x' }] })).toBe(false)
+  })
+
   it('retention is facts only, with stable ids', () => {
     for (const id of ADMIN_RETENTION_FACT_IDS)
       expect(ok(AdminRetentionFact, { id, label: 'L', value: 'V', source: 'code' }), id).toBe(true)
@@ -394,8 +412,14 @@ describe('palette ids', () => {
       'deck.insert-slides',
       'workspace.admin',
     ])
-    // WS1 registered its two (features/doc-cards)
-    const registered = new Set(['doc-card.insert', 'doc-card.from-text'])
+    // WS1 registered its two (features/doc-cards), WS4 its one (features/deck-import), the integration
+    // 'workspace.admin' (features/workspace-admin); 'image.remove-background' stays held until the model is approved
+    const registered = new Set([
+      'doc-card.insert',
+      'doc-card.from-text',
+      'deck.insert-slides',
+      'workspace.admin',
+    ])
     for (const id of WAVE_W_PALETTE_COMMAND_IDS) {
       expect(PALETTE_COMMAND_IDS as readonly string[], id).toContain(id)
       if (registered.has(id)) expect(PENDING_PALETTE_COMMAND_IDS as readonly string[], id).not.toContain(id)

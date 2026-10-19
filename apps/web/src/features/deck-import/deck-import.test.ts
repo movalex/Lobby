@@ -537,8 +537,11 @@ describe('the deck-import feature', () => {
     expect(deckCardOf(ctx, ['card', 'note'])).toBeNull()
     const entry = feature.contextMenu?.find((m) => m.id === 'deck-import.insert-slides')
     const target = { ids: ['card'], point: null, hit: null }
-    // the shipped web switch is off: never offered, whatever the api says
+    // the shipped web switch is on (the wave W integration): the api's offer decides
     setFormatsOffer({ ...FORMAT_SWITCHES_OFF, deckImport: true })
+    expect(entry?.visible?.(ctx, target)).toBe(true)
+    expect(entry?.visible?.(ctx, { ...target, ids: ['note'] })).toBe(false)
+    setFormatsOffer({ ...FORMAT_SWITCHES_OFF })
     expect(entry?.visible?.(ctx, target)).toBe(false)
   })
 

@@ -91,7 +91,10 @@ describe('the background model file', () => {
       runners: OP_RUNNERS,
       bgModel: checkBgModel(path),
     })
-    expect(none.capabilities).toEqual([WORKER_CAPABILITIES['extract-text'], WORKER_CAPABILITIES['render-pages']])
+    expect(none.capabilities).toEqual([
+      WORKER_CAPABILITIES['extract-text'],
+      WORKER_CAPABILITIES['render-pages'],
+    ])
     expect(none.missing.map((m) => m.kind)).toEqual(['remove-bg'])
     expect(none.missing[0]).toEqual({ kind: 'remove-bg', why: 'the model file is not usable (unpinned)' })
     const fake: OpRunner = { kind: 'remove-bg', run: async () => ({ outputs: [], result: {} }) }

@@ -29,13 +29,15 @@ export interface FormatsFlags {
 
 export type FormatsFlag = keyof FormatsFlags
 
-// The wave W foundation ships every switch off.
+// The wave W foundation shipped every switch off; the integration turned on the four that are live. Background
+// removal stays off until the owner approves the model file (its sha256 pin is null: docs/WAVE-W-CONTRACTS.md §4.2).
+// Each still needs the api's offer (its kill switch, and for file search and deck import a capable worker).
 export const FORMATS_FLAGS: FormatsFlags = {
-  docCards: false,
+  docCards: true,
   removeBackground: false,
-  fileSearch: false,
-  deckImport: false,
-  admin: false,
+  fileSearch: true,
+  deckImport: true,
+  admin: true,
 }
 
 export const FORMATS_FLAG_KEYS: Readonly<Record<FormatsFlag, string>> = {
