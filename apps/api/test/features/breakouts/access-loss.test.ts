@@ -35,13 +35,16 @@ async function placed(world: BreakoutWorld, who: readonly { userId: string }[]):
   return brk
 }
 
+/** The session's member ids, sorted here (a real Postgres's collation orders mixed-case ids unlike JS) */
 const memberRows = async (world: BreakoutWorld, brk: string) =>
   (
     await world.api.db.query<{ user_id: string }>(
-      'SELECT user_id FROM breakout_members WHERE session_id = $1 ORDER BY user_id',
+      'SELECT user_id FROM breakout_members WHERE session_id = $1',
       [brk],
     )
-  ).rows.map((r) => r.user_id)
+  ).rows
+    .map((r) => r.user_id)
+    .sort()
 
 const revOf = async (world: BreakoutWorld, brk: string) =>
   (await world.api.db.one<{ rev: number }>('SELECT rev FROM breakout_sessions WHERE id = $1', [brk])).rev
