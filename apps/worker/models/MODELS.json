@@ -1,0 +1,14 @@
+{
+  "$comment": "Every model a Lobby process may load (docs/WAVE-W-CONTRACTS.md §4.2; checked by scripts/licence-check.mjs). The weights are NOT in this repository and are never downloaded by Lobby: the owner places the approved file and the worker loads it from DRAFTROOM_BG_MODEL_PATH, checked against apps/worker/src/ops/bg-model.ts BG_MODEL.sha256. sha256 null = not pinned yet: no file passes, the capability is never reported. Keep this entry and BG_MODEL in step.",
+  "models": [
+    {
+      "id": "u2netp",
+      "file": "u2netp.onnx",
+      "use": "background removal (wave W WS2), worker child process only (apps/worker/src/ops/bg-child.ts)",
+      "licence": "Apache-2.0",
+      "source": "https://github.com/xuebinqin/U-2-Net",
+      "notice": "U-2-Net, Copyright (c) 2020 Xuebin Qin. Licensed under the Apache License, Version 2.0. The weights carry the repository's licence; the training data (DUTS-TR) terms are not stated by it (owner acknowledgement: docs/WAVE-W-CONTRACTS.md §11).",
+      "sha256": null
+    }
+  ]
+}

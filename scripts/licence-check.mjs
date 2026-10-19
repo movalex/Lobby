@@ -32,7 +32,7 @@
 
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -116,6 +116,73 @@ const ALLOWLIST = [
       'The Windows build of sharp with libvips bundled (development machines only; the worker images are Linux). Same terms as the libvips entry above.',
   },
 ]
+
+// ---- Model files (wave W, docs/WAVE-W-CONTRACTS.md §4.2) -----------------------------------------------------------
+// Machine-learning weights are not npm packages, so pnpm's listing never sees them. The rule: every model a Lobby
+// process may load is named in MODELS_MANIFEST with its licence (permissive, by the same rules as packages), its
+// source and its sha256; and any weights file inside the repository (MODEL_EXT, outside node_modules) must be one of
+// them, byte for byte. Wave W's model (u2netp) is NOT in the repository: the owner places it and the worker loads it
+// from DRAFTROOM_BG_MODEL_PATH, checked against apps/worker/src/ops/bg-model.ts's pinned hash.
+
+export const MODELS_MANIFEST = 'apps/worker/models/MODELS.json'
+export const MODEL_EXT = /\.(onnx|ort|pth|pt|safetensors|tflite|ckpt|h5|pb|gguf|mlmodel)$/i
+const MODEL_SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', 'test-results'])
+
+/** Model weights files under `root` (relative paths, forward slashes), node_modules and build output skipped. */
+export function findModelFiles(root, dir = '') {
+  const out = []
+  for (const entry of readdirSync(join(root, dir), { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (!MODEL_SKIP_DIRS.has(entry.name) && !entry.name.startsWith('.'))
+        out.push(...findModelFiles(root, dir ? `${dir}/${entry.name}` : entry.name))
+    } else if (MODEL_EXT.test(entry.name)) out.push(dir ? `${dir}/${entry.name}` : entry.name)
+  }
+  return out.sort()
+}
+
+/**
+ * The findings of the model rule (pure): `files` are the weights files found in the repository with their sha256;
+ * `manifest` is MODELS_MANIFEST's parsed content ({models: [{id, licence, source, sha256, path?}]}).
+ */
+export function modelFindings(files, manifest) {
+  const fail = []
+  const models = Array.isArray(manifest?.models) ? manifest.models : null
+  if (!models)
+    return [{ path: MODELS_MANIFEST, why: 'the models manifest is missing or has no "models" list' }]
+  for (const m of models) {
+    const id = typeof m?.id === 'string' ? m.id : '(no id)'
+    if (typeof m?.licence !== 'string' || classifyLicence(m.licence) !== 'permissive')
+      fail.push({ path: MODELS_MANIFEST, why: `model ${id}: licence "${m?.licence}" is not permissive` })
+    if (typeof m?.source !== 'string' || !/^https:\/\//.test(m.source))
+      fail.push({ path: MODELS_MANIFEST, why: `model ${id}: no https source` })
+    if (m?.sha256 !== null && !/^[0-9a-f]{64}$/.test(String(m?.sha256)))
+      fail.push({
+        path: MODELS_MANIFEST,
+        why: `model ${id}: sha256 is neither null (not yet pinned) nor a hash`,
+      })
+  }
+  for (const f of files) {
+    const entry = models.find((m) => m?.path === f.path)
+    if (!entry) fail.push({ path: f.path, why: 'a model weights file that is not in the models manifest' })
+    else if (entry.sha256 !== f.sha256)
+      fail.push({ path: f.path, why: `its sha256 is not the manifest's for model ${entry.id}` })
+  }
+  return fail
+}
+
+function checkModels() {
+  let manifest = null
+  try {
+    manifest = JSON.parse(readFileSync(join(ROOT, MODELS_MANIFEST), 'utf8'))
+  } catch {}
+  const files = findModelFiles(ROOT).map((path) => ({
+    path,
+    sha256: createHash('sha256')
+      .update(readFileSync(join(ROOT, path)))
+      .digest('hex'),
+  }))
+  return { files, models: manifest?.models ?? [], fail: modelFindings(files, manifest) }
+}
 
 function parseArgs(argv) {
   const opts = { json: null }
@@ -418,6 +485,11 @@ async function main() {
 
   const unusedAllowlist = ALLOWLIST.filter((e) => !usedAllowlist.has(e)).map((e) => e.names.join(', '))
 
+  // wave W: model files (not npm packages)
+  const models = checkModels()
+  for (const f of models.fail)
+    fail.push({ name: f.path, version: 'model', apps: [], importers: [], why: f.why })
+
   // ---- Report ----
   const line = (s = '') => console.log(s)
   const where = (r) => `apps: ${r.apps.join(', ')}; via ${r.importers.join(', ')}`
@@ -433,6 +505,9 @@ async function main() {
     line(`  ${app}: ${recs.length} packages (workspace: ${appClosures.get(app).join(', ')})`)
     line(`    ${hist.join('; ')}`)
   }
+  line(
+    `  models (${MODELS_MANIFEST}): ${models.models.map((m) => `${m.id} ${m.licence}${m.sha256 ? '' : ' (not pinned yet: never loaded)'}`).join('; ') || 'none'}; weights files in the repository: ${models.files.length}`,
+  )
   line()
   line(`FAIL (${fail.length})`)
   for (const r of fail) line(`  - ${r.name}@${r.version}: ${r.why} [${where(r)}]`)

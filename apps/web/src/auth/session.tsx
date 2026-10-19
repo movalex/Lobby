@@ -11,6 +11,7 @@ import {
   useState,
 } from 'react'
 import { api, isApiError, setUnauthorizedHandler } from '../api/client.ts'
+import { setFormatsOffer } from '../features/formats/flags.ts'
 import { setLiveSwitches } from '../features/live/flags.ts'
 import { navigate, signInPath } from '../lib/routing.ts'
 import './auth.css'
@@ -146,6 +147,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setDesignPreviews(c.designPreviews === true)
         // Wave V: which "Live sessions+" features this api runs (absent: an api before wave V, all off).
         setLiveSwitches(c.live)
+        // Wave W: which "Formats" features this api offers now (absent: an api before wave W, all off).
+        setFormatsOffer(c.formats)
         setConfig(c)
         setConfigStatus('ready')
       },

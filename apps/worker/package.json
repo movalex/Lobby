@@ -10,10 +10,12 @@
     "typecheck": "tsc -p ."
   },
   "dependencies": {
+    "@draftroom/contracts": "workspace:*",
     "@draftroom/dev-assets": "workspace:*",
     "@napi-rs/canvas": "catalog:",
     "ag-psd": "catalog:",
     "file-type": "catalog:",
+    "onnxruntime-node": "catalog:",
     "pdfjs-dist": "catalog:",
     "sharp": "catalog:"
   },

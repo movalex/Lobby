@@ -8,6 +8,7 @@ import { createSignOutPurge } from './canvas/sync/adapter/offline-idb.ts'
 import { DashboardPage } from './dashboard/DashboardPage.tsx'
 import { landingWorkspace } from './dashboard/model.ts'
 import { FeedbackHost } from './features/feedback/FeedbackHost.tsx'
+import { formatsEnabled, formatsFlags } from './features/formats/flags.ts'
 import { liveFlags } from './features/live/flags.ts'
 import { GuestEndedScreen } from './invite/GuestEndedScreen.tsx'
 import { GuestKindProvider, wasGuestTab } from './invite/guest.tsx'
@@ -22,6 +23,7 @@ import {
   startBoardCodeFor,
 } from './lib/prefetch-board.ts'
 import { matchRoute, navigate, signInPath, useLocationKey, workspacePath } from './lib/routing.ts'
+import { useValue } from './lib/signals.ts'
 import { installStaleChunkRecovery, recoverChunk, reloadWhenOnline, staleChunks } from './lib/stale-chunk.ts'
 import { readLastWorkspace } from './lib/storage.ts'
 import { installVersionCheck } from './lib/version-check.ts'
@@ -87,6 +89,11 @@ const FeedbackRoute = lazy(
 // from a phone has none yet. A small page, loaded when opened, and only while LIVE_FLAGS.joinCodes is on (otherwise
 // /j/... is the unknown-address screen, as before wave V).
 const JoinRoute = lazy(() => import('./features/join/JoinPage.tsx'))
+
+// Wave W (WS5): the workspace admin page /w/:wid/admin, inside the session, loaded when opened and only while
+// FORMATS_FLAGS.admin is on AND the api offers it (otherwise /w/:wid/admin is the unknown-address screen, as before
+// wave W). The api answers its routes 404 for anyone but the workspace's owners and admins.
+const AdminRoute = lazy(() => import('./features/workspace-admin/AdminPage.tsx'))
 
 export function App() {
   if (SpikeRoute && location.pathname.startsWith('/spike/')) {
@@ -163,6 +170,18 @@ function Routes() {
           </Suspense>
         </>
       )
+    case 'workspace-admin':
+      if (!formatsFlags().admin)
+        return <MessageScreen title="Page not found" body="There is nothing at this address." />
+      return (
+        <RequireSession>
+          <AdminGate>
+            <Suspense fallback={<LoadingScreen label="Loading…" testId="workspace-admin-loading" />}>
+              <AdminRoute workspaceId={route.workspaceId} />
+            </Suspense>
+          </AdminGate>
+        </RequireSession>
+      )
     case 'feedback':
       return (
         <RequireSession>
@@ -182,6 +201,22 @@ function Routes() {
     default:
       return <MessageScreen title="Page not found" body="There is nothing at this address." />
   }
+}
+
+/**
+ * Wave W: the admin page is drawn only while the api offers it (AuthConfig.formats.admin, DRAFTROOM_WORKSPACE_ADMIN);
+ * otherwise this address is the unknown-address screen. A signal: the page appears when the config's answer arrives.
+ */
+function AdminGate({ children }: { children: ReactNode }) {
+  const { configStatus, retryConfig } = useSession()
+  const offered = useValue('lobby-admin-offered', () => formatsEnabled('admin'), [])
+  // The api's offer arrives with GET /api/auth/config: until then the page is neither offered nor refused, so an
+  // owner never sees "Page not found" first (the wave W integration's fix of WS5's gate).
+  if (configStatus === 'loading') return <LoadingScreen label="Loading…" testId="workspace-admin-loading" />
+  if (configStatus === 'error')
+    return <UnreachableScreen message="Lobby's settings could not be loaded." onRetry={retryConfig} />
+  if (!offered) return <MessageScreen title="Page not found" body="There is nothing at this address." />
+  return <>{children}</>
 }
 
 /**

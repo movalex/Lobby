@@ -1,5 +1,6 @@
 // PDF previews: pages 1..min(pageCount, LIMITS.eagerPdfPages) rendered by pdf-child.ts in a separate
-// Node process with a heap cap and a SIGKILL timeout; the worker only turns page 1 into the thumb.
+// Node process with a heap cap, a resident-memory cap (Linux: run.ts's watchdog) and a SIGKILL timeout; the worker
+// only turns page 1 into the thumb.
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,9 +11,10 @@ import { AbortedError, PreviewError, TransientError } from './errors.ts'
 import type { Derived } from './image.ts'
 import { lockedSharp, toWebp } from './image.ts'
 import { type PdfChildRequest, type PdfChildResponse, pageFileName } from './pdf-protocol.ts'
-import { run, stderrTail } from './run.ts'
+import { type RssReader, run, stderrTail } from './run.ts'
 
 export const PDF_CHILD = fileURLToPath(new URL('./pdf-child.ts', import.meta.url))
+const MiB = 1024 * 1024
 
 export interface PdfOptions {
   timeoutMs?: number
@@ -20,6 +22,10 @@ export interface PdfOptions {
   childPath?: string
   /** V8 heap cap of the child in MB (WORKER_PDF_HEAP_MB); default PREVIEW.pdfChildHeapMb. */
   heapMb?: number
+  /** Resident-memory cap of the child in MB (WORKER_PDF_RSS_MB; Linux only, run.ts); default PREVIEW.pdfChildRssMb. */
+  rssMb?: number
+  /** Test hook: run.ts's resident-set reader (lets the memory kill run off Linux too). */
+  readRss?: RssReader | null
   signal?: AbortSignal
   /** Refuse Illustrator's "saved without PDF Content" stub (NO_PDF_CONTENT): uploaded PDFs and .ai files. */
   noPdfContentCheck?: boolean
@@ -44,13 +50,29 @@ export async function derivePdf(
   }
   // One budget for the whole child run (import + load + every eager page).
   const timeoutMs = opts.timeoutMs ?? LIMITS.jobTimeoutMs
+  const rssMb = opts.rssMb ?? PREVIEW.pdfChildRssMb
   const r = await run(
     process.execPath,
     [`--max-old-space-size=${opts.heapMb ?? PREVIEW.pdfChildHeapMb}`, opts.childPath ?? PDF_CHILD],
-    { timeoutMs, maxStdoutBytes: 64 * 1024, stdin: JSON.stringify(req), signal: opts.signal },
+    {
+      timeoutMs,
+      maxStdoutBytes: 64 * 1024,
+      stdin: JSON.stringify(req),
+      signal: opts.signal,
+      maxRssBytes: rssMb * MiB,
+      ...(opts.readRss !== undefined ? { readRss: opts.readRss } : {}),
+    },
   )
   if (r.aborted) throw new AbortedError()
   if (r.timedOut) throw new PreviewError('TIMEOUT', `pdf child killed after ${r.ms} ms`)
+  // Over its resident-memory cap (review M3): the file itself does it, so it fails for good (a PreviewError is never
+  // retried). FILE_TOO_LARGE ("larger than the preview limit") rather than a new preview code, which the api's and the
+  // web's catalogs would have to learn first. The detail (the worker log only) is the reason and numbers, no name.
+  if (r.memoryExceeded)
+    throw new PreviewError(
+      'FILE_TOO_LARGE',
+      `pdf child over its ${rssMb} MB memory cap (read ${Math.round((r.peakRssBytes ?? 0) / MiB)} MB), killed`,
+    )
   if (r.spawnError) throw new TransientError(`pdf child spawn failed: ${r.spawnError}`)
   let res: PdfChildResponse
   try {

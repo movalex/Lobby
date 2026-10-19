@@ -1,4 +1,4 @@
-import { AuthConfig, Me } from '@draftroom/contracts'
+import { AuthConfig, FORMAT_SWITCHES_OFF, Me, WORKER_CAPABILITIES } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createClerkAuthProvider } from '../src/auth/clerk.ts'
 import { sha256hex } from '../src/auth/session.ts'
@@ -208,6 +208,7 @@ describe('auth config and rate limit', () => {
       providers: ['dev'],
       designPreviews: false,
       live: { activities: false, joinCodes: false, breakouts: false },
+      formats: FORMAT_SWITCHES_OFF,
     })
   })
 
@@ -218,6 +219,7 @@ describe('auth config and rate limit', () => {
         providers: ['dev'],
         designPreviews: true,
         live: { activities: false, joinCodes: false, breakouts: false },
+        formats: FORMAT_SWITCHES_OFF,
       })
     } finally {
       await on.close()
@@ -229,6 +231,50 @@ describe('auth config and rate limit', () => {
       } finally {
         await off.close()
       }
+    }
+  })
+
+  it('GET /api/auth/config offers the wave W features: doc cards and admin by their switch, the worker-backed three only with a capable worker seen in 10 min', async () => {
+    let now = new Date('2026-10-19T12:00:00Z')
+    const on = await createTestApi({
+      env: {
+        DRAFTROOM_DOC_CARDS: 'on',
+        DRAFTROOM_REMOVE_BACKGROUND: 'on',
+        DRAFTROOM_FILE_SEARCH: 'on',
+        DRAFTROOM_DECK_IMPORT: 'off',
+        DRAFTROOM_WORKSPACE_ADMIN: 'on',
+      },
+      deps: { now: () => now },
+    })
+    try {
+      const formats = async () => AuthConfig.parse((await on.anon('GET', '/api/auth/config')).json()).formats
+      // no worker has reported anything: only the two switch-only features
+      expect(await formats()).toEqual({
+        docCards: true,
+        removeBackground: false,
+        fileSearch: false,
+        deckImport: false,
+        admin: true,
+      })
+      // a worker reports remove-bg and render-pages (deck import is off) and an OLD extract-text capability
+      await on.db.query(
+        `INSERT INTO worker_capabilities_seen (capability, last_seen_at, worker_id)
+         VALUES ($1, $4, 'nas-1'), ($2, $4, 'nas-1'), ($3, $4, 'nas-1')`,
+        [WORKER_CAPABILITIES['remove-bg'], WORKER_CAPABILITIES['render-pages'], 'extract-text:old@1', now],
+      )
+      now = new Date(now.getTime() + 20_000) // past the 15 s cache
+      expect(await formats()).toEqual({
+        docCards: true,
+        removeBackground: true,
+        fileSearch: false,
+        deckImport: false,
+        admin: true,
+      })
+      // ten minutes later without a claim, the worker counts as gone
+      now = new Date(now.getTime() + 10 * 60_000)
+      expect((await formats())?.removeBackground).toBe(false)
+    } finally {
+      await on.close()
     }
   })
 
@@ -282,6 +328,7 @@ describe('auth config and rate limit', () => {
         clerkPublishableKey: 'pk_test_unused',
         designPreviews: false,
         live: { activities: false, joinCodes: false, breakouts: false },
+        formats: FORMAT_SWITCHES_OFF,
       })
     } finally {
       await clerk.close()

@@ -1,6 +1,51 @@
-// Child-process helper: argv array (never a shell), hard SIGKILL timeout, bounded stdout, minimal env.
+// Child-process helper: argv array (never a shell), hard SIGKILL timeout, bounded stdout, minimal env, and (Linux) a
+// resident-memory cap.
+//
+// The memory cap (wave W review M3). `--max-old-space-size` bounds only a child's V8 heap: pdf.js keeps decompressed
+// streams (fonts, page content) in buffers outside it, and libvips and ONNX Runtime allocate natively, so a 1.5 MB PDF
+// whose one stream inflates to zeros drove a "384 MB" child to 3.4 GB. `maxRssBytes` is the real bound:
+//   - Linux: a watchdog reads `/proc/<pid>/status` every RSS_POLL_MS (50 ms) and SIGKILLs the child (its whole process
+//     group with `killTree`) as soon as its resident set is over the cap; the result says `memoryExceeded`. It decides
+//     on VmHWM (the kernel's own high-water mark of VmRSS), so a spike that came and went between two reads still
+//     counts. 50 ms: a read is one small procfs file (microseconds, so 20 reads a second cost nothing), and the review's
+//     file grew its child to 3.3 GB in about 3 s (Windows, 2026-10-19), about 55 MB per 50 ms on average, so the child
+//     ends a few tens of MB past the cap (bursts more), inside the container's headroom; the requirement is ≤ 100 ms.
+//   - Not `prlimit --as` / RLIMIT_AS: V8 reserves far more address space than it uses, and an address-space limit makes
+//     a healthy Node child fail at start-up or at its first large reservation.
+//   - Other platforms (the Windows dev machine, macOS): there is no cheap per-poll read, so the watchdog is SKIPPED and
+//     `memoryExceeded` is never set: the heap flag and, in a container, its memory limit are the only caps there. Tests
+//     inject `readRss` to exercise the kill path everywhere.
+// Only the direct child's resident set is read (the pdf, pdf-text and bg children start no helpers of their own).
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { performance } from 'node:perf_hooks'
+
+/** How often the Linux watchdog reads a capped child's resident set (≤ 100 ms by contract; see the header). */
+export const RSS_POLL_MS = 50
+
+/** A process's resident set in bytes (its high-water mark where known), or null when it cannot be read (gone). */
+export type RssReader = (pid: number) => number | null
+
+/** Linux: VmHWM (peak resident) of /proc/<pid>/status, else VmRSS; null when the process is gone or unreadable. */
+export function procStatusRss(pid: number): number | null {
+  let text: string
+  try {
+    text = readFileSync(`/proc/${pid}/status`, 'utf8')
+  } catch {
+    return null
+  }
+  const kb = (name: string) => {
+    const m = new RegExp(`^${name}:\\s+(\\d+)\\s+kB`, 'm').exec(text)
+    return m ? Number(m[1]) * 1024 : null
+  }
+  return kb('VmHWM') ?? kb('VmRSS')
+}
+
+/** The platform's reader: /proc on Linux, none elsewhere (the watchdog is then skipped; see the header). */
+export const defaultRssReader: RssReader | null = process.platform === 'linux' ? procStatusRss : null
+
+/** True where `maxRssBytes` is enforced by default (Linux). */
+export const rssCapEnforced = defaultRssReader !== null
 
 export interface RunOptions {
   timeoutMs: number
@@ -17,6 +62,15 @@ export interface RunOptions {
    * group once the direct child has exited.
    */
   killTree?: boolean
+  /**
+   * The child's resident-memory cap in bytes: over it, the child is SIGKILLed and `memoryExceeded` is set. Enforced on
+   * Linux only (the header): elsewhere it is ignored unless a test passes `readRss`.
+   */
+  maxRssBytes?: number
+  /** Test hook: the resident-set reader (default `defaultRssReader`, null off Linux). */
+  readRss?: RssReader | null
+  /** Test hook: the watchdog's period (default RSS_POLL_MS). */
+  rssPollMs?: number
 }
 
 export interface RunResult {
@@ -28,6 +82,10 @@ export interface RunResult {
   overflow: boolean
   /** We killed it because `signal` aborted. */
   aborted: boolean
+  /** We killed it because its resident set went over `maxRssBytes` (Linux, or a test's `readRss`). */
+  memoryExceeded: boolean
+  /** The largest resident set the watchdog read (bytes), null when no watchdog ran or nothing was read. */
+  peakRssBytes: number | null
   /** The executable could not be started (e.g. ENOENT); `code` is null. */
   spawnError: string | null
   stdout: Buffer
@@ -56,6 +114,8 @@ export function run(cmd: string, args: string[], opts: RunOptions): Promise<RunR
       timedOut: false,
       overflow: false,
       aborted: false,
+      memoryExceeded: false,
+      peakRssBytes: null,
       spawnError: null,
       stdout: Buffer.alloc(0),
       stderr: '',
@@ -91,9 +151,31 @@ export function run(cmd: string, args: string[], opts: RunOptions): Promise<RunR
       kill()
     }
     opts.signal?.addEventListener('abort', onAbort, { once: true })
+    // The resident-memory watchdog (the header): Linux by default, a test's reader elsewhere.
+    const readRss = opts.readRss === undefined ? defaultRssReader : opts.readRss
+    const cap = opts.maxRssBytes
+    let watchdog: NodeJS.Timeout | null = null
+    const stopWatchdog = () => {
+      if (watchdog) clearInterval(watchdog)
+      watchdog = null
+    }
+    if (cap !== undefined && cap > 0 && readRss && child.pid !== undefined) {
+      const pid = child.pid
+      watchdog = setInterval(() => {
+        const rss = readRss(pid)
+        if (rss === null) return
+        if (res.peakRssBytes === null || rss > res.peakRssBytes) res.peakRssBytes = rss
+        if (rss > cap && !res.memoryExceeded) {
+          res.memoryExceeded = true
+          stopWatchdog()
+          kill()
+        }
+      }, opts.rssPollMs ?? RSS_POLL_MS)
+    }
     const settle = () => {
       if (settled) return
       settled = true
+      stopWatchdog()
       clearTimeout(timer)
       opts.signal?.removeEventListener('abort', onAbort)
       res.stdout = Buffer.concat(out)
@@ -120,6 +202,7 @@ export function run(cmd: string, args: string[], opts: RunOptions): Promise<RunR
       }
     })
     child.on('exit', () => {
+      stopWatchdog() // its pid may be reused from here on
       // A helper that outlives the direct child could keep the stdio pipes (and so 'close') open for ever.
       if (tree && process.platform !== 'win32') killGroup(child.pid)
       // One that escaped even that (its own session, or an orphan taskkill /T no longer finds) still

@@ -3,9 +3,18 @@
 // guest finds only their own links' boards). On a board, that board's hits are left to its "On this board"
 // group. A hit opens its board at the object (lib/deep-link.ts elementsLink, `?el=<id>`), which the board's
 // first view selects and brings into view. No canvas here (the dashboard's palette chunk imports it).
+// Wave W (WS3): a hit inside a file (SearchHit.file) reads "Page 3 · Brief.pdf · Board" and opens
+// `/b/<id>?file=<ver>&page=<n>` (file-card/ported/open-file-hit.ts opens the file's pages there), this board's too.
 import type { SearchBoardGroup, SearchHit, SnippetPart } from '@draftroom/contracts'
 import { type ApiClient, isApiError } from '../../api/client.ts'
-import { hitHref, isSearchable, kindLabel, searchApi } from '../../dashboard/search/content-search.ts'
+import {
+  fileHitLabel,
+  fileOfHit,
+  hitHref,
+  isSearchable,
+  kindLabel,
+  searchApi,
+} from '../../dashboard/search/content-search.ts'
 import { navigate } from '../../lib/routing.ts'
 import type { PaletteEntry, PaletteSearch } from './model.ts'
 
@@ -23,14 +32,19 @@ export function workspaceEntries(
 ): PaletteEntry[] {
   const out: PaletteEntry[] = []
   for (const g of groups) {
-    if (g.board.id === boardId) continue
     for (const hit of g.hits as readonly SearchHit[]) {
+      // wave W (WS3): a page of a file says where it is ("Page 3 · Brief.pdf · Board") and opens the file there. It
+      // stays for this board too: "On this board" searches the canvas, not the text inside files.
+      const file = fileOfHit(hit)
+      if (g.board.id === boardId && !file) continue
       const href = hitHref(g.board.id, hit)
       out.push({
         id: `ws:${g.board.id}:${hit.objectId}`,
         label: snippetText(hit.snippet, hit.cutStart, hit.cutEnd) || kindLabel(hit.kind),
         group: 'In this workspace',
-        detail: `${kindLabel(hit.kind)} · ${g.board.title}`,
+        detail: file
+          ? `${fileHitLabel(file)} · ${g.board.title}`
+          : `${kindLabel(hit.kind)} · ${g.board.title}`,
         run: () => open(href),
       })
       if (out.length >= WORKSPACE_HITS_MAX) return out

@@ -249,6 +249,7 @@ describe('shipped migrations', () => {
       '0036_chat_hooks',
       '0037_client_review',
       '0038_live_sessions',
+      '0039_formats',
     ])
   })
 
@@ -293,6 +294,7 @@ describe('shipped migrations', () => {
       '0036_chat_hooks',
       '0037_client_review',
       '0038_live_sessions',
+      '0039_formats',
     ])
     expect(await migrate(db)).toEqual({ applied: [], newer: [] })
     expect(await tableNames()).toEqual([
@@ -311,6 +313,7 @@ describe('shipped migrations', () => {
       'board_asset_links',
       'board_checkpoint_state',
       'board_export_policies',
+      'board_file_refs',
       'board_import_files',
       'board_imports',
       'board_link_scans',
@@ -334,6 +337,8 @@ describe('shipped migrations', () => {
       'comment_threads',
       'comments',
       'feedback',
+      'file_text_pages',
+      'file_text_state',
       'identities',
       'invitation_redemptions',
       'invitations',
@@ -360,6 +365,9 @@ describe('shipped migrations', () => {
       'vote_done',
       'vote_sessions',
       'votes',
+      'worker_capabilities_seen',
+      'worker_op_outputs',
+      'worker_ops',
       'workshop_timers',
       'workspace_ai_settings',
       'workspace_members',
@@ -423,6 +431,7 @@ describe('shipped migrations', () => {
       '0036_chat_hooks',
       '0037_client_review',
       '0038_live_sessions',
+      '0039_formats',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))
     const inv = await db.one<{ multi_use: boolean; use_count: number }>(

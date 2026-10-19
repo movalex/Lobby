@@ -33,6 +33,7 @@ describe('loadWorkerEnv', () => {
       pollMs: 2_000,
       pollMaxMs: 15_000,
       pdfHeapMb: 384,
+      pdfRssMb: 768,
       shutdownGraceMs: 10_000,
       tmpDir: tmpdir(),
       unusedSecrets: [],
@@ -61,6 +62,7 @@ describe('loadWorkerEnv', () => {
       WORKER_POLL_MS: '100',
       WORKER_POLL_MAX_MS: '500',
       WORKER_PDF_HEAP_MB: '256',
+      WORKER_PDF_RSS_MB: '400',
       WORKER_SHUTDOWN_GRACE_MS: '0',
       FFMPEG_PATH: '/usr/bin/ffmpeg',
       FFPROBE_PATH: '/usr/bin/ffprobe',
@@ -72,6 +74,7 @@ describe('loadWorkerEnv', () => {
       pollMs: 100,
       pollMaxMs: 500,
       pdfHeapMb: 256,
+      pdfRssMb: 400,
       shutdownGraceMs: 0,
       ffmpegPath: '/usr/bin/ffmpeg',
       ffprobePath: '/usr/bin/ffprobe',
@@ -135,6 +138,7 @@ describe('loadWorkerEnv', () => {
       /WORKER_POLL_MAX_MS/,
     )
     expect(refusal({ ...base, WORKER_PDF_HEAP_MB: '16' })).toMatch(/WORKER_PDF_HEAP_MB/)
+    expect(refusal({ ...base, WORKER_PDF_RSS_MB: '64' })).toMatch(/WORKER_PDF_RSS_MB/)
     expect(refusal({ ...base, WORKER_TMP_DIR: 'relative/dir' })).toMatch(/absolute/)
     expect(loadWorkerEnv({ ...base, WORKER_POLL_MS: '20000' }).pollMaxMs).toBe(20_000) // cap never below poll
   })

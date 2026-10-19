@@ -57,6 +57,12 @@ import { UndoController } from '../history/controller.ts'
 import { CanvasInput } from '../input/CanvasInput.ts'
 import { LeaseClient } from '../lease/client.ts'
 import type { EditNotice, EditState } from '../lease/editorLease.ts'
+import {
+  attachPanelLeaseHost,
+  panelBeforeHistory,
+  panelEditing,
+  panelInPlaceChanged,
+} from '../lease/panelEditor.ts'
 import { leaseThingOf, typingIn } from '../lease/words.ts'
 import { installLod } from '../lod/index.ts'
 import { installBoardOverrides, overridesLodTarget } from '../overrides.ts'
@@ -881,6 +887,8 @@ export class LobbyBoardSession {
     // V1 P1; the spike page had this, the board page did not)
     this.core.holdSaved('editor-buffer', s.phase !== 'idle' && s.phase !== 'open' && s.buffered > 0)
     this.handlesExtra?.editStateChanged(s.phase, s.leaseId)
+    // wave W (WS1): a doc card's panel on the card the in-place editor opens on hands it over
+    panelInPlaceChanged(this.lease, s.phase, s.leaseId)
     const editing = s.phase === 'open' ? s.leaseId : null
     if (editing !== this.lastEditing) {
       this.lastEditing = editing
@@ -1066,6 +1074,12 @@ export class LobbyBoardSession {
     const resendView = () =>
       presence.onPointer(lastSample ?? { pointer: null, button: 'up', source: 'view', pointerType: 'mouse' })
 
+    // presence `editing` (it renews the lease): the in-place editor's lease, else a doc card panel's (wave W, WS1)
+    const editingNow = () => {
+      const el = this.input.editorLease
+      return el && el.phase !== 'idle' ? el.leaseId : panelEditing(this.lease)
+    }
+
     // the canvas's size and place as the engine last measured them (CR-3A-10: a window resize changes
     // `viewport.screenRect()` and the scene rectangle without a scroll, so readers were never told)
     let lastBox = ''
@@ -1102,8 +1116,7 @@ export class LobbyBoardSession {
         }
         presence.onGesture(g)
         this.gestureNow = g
-        const el = this.input.editorLease
-        presence.setEditing(el && el.phase !== 'idle' ? el.leaseId : null)
+        presence.setEditing(editingNow())
         const tool = port.tool()
         if (tool !== this.lastTool) {
           this.lastTool = tool
@@ -1224,6 +1237,18 @@ export class LobbyBoardSession {
     offs.push(this.settings.subscribe(() => this.concern('settings')))
     offs.push(this.settings.subscribe(() => this.applyFocusFrames(api)))
     this.handle = createLobbyCanvas({ port, registries: this.registries, board: handles })
+    // wave W (WS1): a doc card's side panel is a lease client of this tab's lease (canvas/lease/panelEditor.ts)
+    offs.push(
+      attachPanelLeaseHost(this.handle.canvas, {
+        lease: this.lease,
+        inPlaceLease: () => {
+          const el = this.input.editorLease
+          return el && el.phase !== 'idle' ? el.leaseId : null
+        },
+        refreshPresence: () => presence.setEditing(editingNow()),
+        holdSaved: (on) => this.core.holdSaved('doc-card-panel', on),
+      }),
+    )
     // the change stream (after the scan) and undo's availability. Registered after the LobbyCanvas, whose scene index
     // listens to the same `changed` (port listeners run in registration order): a `change` listener reads an index
     // that already answers for its batch (N1-6)
@@ -1450,6 +1475,9 @@ export class LobbyBoardSession {
   // ---- undo ------------------------------------------------------------------------------------------------
 
   runUndo(dir: 'undo' | 'redo'): void {
+    // wave W (review m6): a doc card panel writes its typing not yet pushed first, so the step the undo takes includes
+    // it and the pending push cannot overwrite what the undo restored
+    panelBeforeHistory(this.lease)
     const out = dir === 'undo' ? this.undo?.undo() : this.undo?.redo()
     this.concern('history')
     if (!out || out.kept === 0) return

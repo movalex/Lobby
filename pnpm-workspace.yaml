@@ -78,6 +78,14 @@ catalog:
   # replaced). MIT, no dependencies, no install scripts (published 2025-08-07; checked 2026-10-18). The web draws the
   # module matrix as an inline <svg>: no canvas, data: or blob: URL.
   qrcode-generator: 2.0.4
+  # Background removal inference (wave W WS2; apps/worker only, loaded only by apps/worker/src/ops/bg-child.ts behind
+  # the BgInference interface, CPU execution provider). MIT (Microsoft); deps onnxruntime-common (MIT), adm-zip (MIT)
+  # and global-agent (BSD-3-Clause, with its MIT/ISC tree), the last two used only by its install script. Its
+  # postinstall (script/install) would fetch CUDA binaries on linux x64, so allowBuilds below blocks it: the CPU
+  # binaries ship in the tarball (bin/napi-v6/<platform>/<arch>). Published 2026-09-14; checked on the npm registry
+  # 2026-10-19 (301 MB unpacked: every platform's binaries; the worker image keeps linux/x64 only, docs/WAVE-W-CONTRACTS.md
+  # §4.3). The model file is never downloaded at build or run time (DRAFTROOM_BG_MODEL_PATH, sha256-pinned).
+  onnxruntime-node: 1.30.0
 
 # `pnpm add` must use a catalog version when one exists.
 catalogMode: strict
@@ -91,7 +99,10 @@ minimumReleaseAgeExclude:
 # pnpm 10 blocks dependency lifecycle scripts by default. allowBuilds (map form) is accepted by
 # pnpm 10.34.5 and is the only form in pnpm 11+. true = may run install scripts, false = skip silently.
 # Nothing in this dependency set needs a build script today.
-allowBuilds: {}
+# onnxruntime-node (wave W, apps/worker): its postinstall downloads GPU (CUDA) binaries from the internet on linux x64;
+# Lobby runs the CPU provider, whose binaries are in the package itself, so the script never runs.
+allowBuilds:
+  onnxruntime-node: false
 
 # Fail the install if a dependency with an unapproved build script shows up.
 strictDepBuilds: true

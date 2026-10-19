@@ -152,13 +152,14 @@ export async function discardBoard(
       [boardId],
     )
     const ids = versions.rows.map((v) => v.id)
-    const derived = ids.length
-      ? await tx.query<{ blob_key: string }>(
-          `SELECT blob_key FROM asset_derivatives WHERE version_id = ANY($1::text[])
-           UNION SELECT blob_key FROM asset_derivative_reservations WHERE version_id = ANY($1::text[])`,
-          [ids],
-        )
-      : { rows: [] }
+    // wave W (review m9): and the unpublished outputs of the worker ops that go with the board or its versions
+    const derived = await tx.query<{ blob_key: string }>(
+      `SELECT blob_key FROM asset_derivatives WHERE version_id = ANY($1::text[])
+       UNION SELECT blob_key FROM asset_derivative_reservations WHERE version_id = ANY($1::text[])
+       UNION SELECT r.blob_key FROM worker_op_outputs r JOIN worker_ops o ON o.id = r.op_id
+              WHERE o.board_id = $2 OR o.source_version_id = ANY($1::text[])`,
+      [ids, boardId],
+    )
     const keys = [
       ...versions.rows.map((v) => originalKey(v.asset_id, v.id)),
       ...derived.rows.map((d) => d.blob_key),

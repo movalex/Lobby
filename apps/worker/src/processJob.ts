@@ -49,6 +49,8 @@ export interface ProcessOptions {
   pdfTimeoutMs?: number
   /** --max-old-space-size of the PDF child (WORKER_PDF_HEAP_MB). */
   pdfHeapMb?: number
+  /** Resident-memory cap of the PDF child in MB (WORKER_PDF_RSS_MB; Linux only, run.ts). */
+  pdfRssMb?: number
   probeTimeoutMs?: number
   posterTimeoutMs?: number
   /** Test hook: replacement pdf child entry point. */
@@ -137,6 +139,7 @@ async function derive(
         pdfTimeoutMs: opts.pdfTimeoutMs,
         pdfChildPath: opts.pdfChildPath,
         pdfHeapMb: opts.pdfHeapMb,
+        pdfRssMb: opts.pdfRssMb,
         signal: opts.signal,
       })),
       mimeType: office.mime,
@@ -164,6 +167,7 @@ async function derive(
           timeoutMs: opts.pdfTimeoutMs,
           childPath: opts.pdfChildPath,
           heapMb: opts.pdfHeapMb,
+          rssMb: opts.pdfRssMb,
           signal: opts.signal,
           noPdfContentCheck: true,
         })),

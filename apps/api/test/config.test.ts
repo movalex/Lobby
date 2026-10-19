@@ -38,6 +38,47 @@ describe('loadConfig', () => {
       expect(() => loadConfig({ ...base, DRAFTROOM_DESIGN_PREVIEWS: v })).toThrow(/must be on or off/)
   })
 
+  it('wave W: the five Formats switches are each on only with "on" (fail closed), unset meaning off', () => {
+    const off = {
+      docCards: false,
+      removeBackground: false,
+      fileSearch: false,
+      deckImport: false,
+      admin: false,
+    }
+    expect(loadConfig({ ...base }).formats).toEqual(off)
+    expect(loadConfig({ ...prod }).formats).toEqual(off)
+    const names = {
+      docCards: 'DRAFTROOM_DOC_CARDS',
+      removeBackground: 'DRAFTROOM_REMOVE_BACKGROUND',
+      fileSearch: 'DRAFTROOM_FILE_SEARCH',
+      deckImport: 'DRAFTROOM_DECK_IMPORT',
+      admin: 'DRAFTROOM_WORKSPACE_ADMIN',
+    } as const
+    for (const [sw, name] of Object.entries(names) as [keyof typeof names, string][]) {
+      for (const v of ['', 'off', ' OFF '])
+        expect(loadConfig({ ...base, [name]: v }).formats[sw], `${name}=${v}`).toBe(false)
+      for (const v of ['on', ' On ']) {
+        const formats = loadConfig({ ...base, [name]: v }).formats
+        expect(formats[sw], `${name}=${v}`).toBe(true)
+        // the others stay off
+        expect(Object.values(formats).filter(Boolean)).toHaveLength(1)
+      }
+      for (const v of ['1', 'true', 'yes', 'enabled', 'onn'])
+        expect(() => loadConfig({ ...base, [name]: v }), `${name}=${v}`).toThrow(
+          new RegExp(`${name} must be on or off`),
+        )
+    }
+    const all = Object.fromEntries(Object.values(names).map((n) => [n, 'on']))
+    expect(loadConfig({ ...prod, ...all }).formats).toEqual({
+      docCards: true,
+      removeBackground: true,
+      fileSearch: true,
+      deckImport: true,
+      admin: true,
+    })
+  })
+
   it('wave V: DRAFTROOM_LIVE_ACTIVITIES, DRAFTROOM_JOIN_CODES and DRAFTROOM_BREAKOUTS are each on only with "on" (fail closed)', () => {
     expect(loadConfig({ ...base }).live).toEqual({ activities: false, joinCodes: false, breakouts: false })
     expect(loadConfig({ ...prod }).live).toEqual({ activities: false, joinCodes: false, breakouts: false })

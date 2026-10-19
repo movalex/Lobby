@@ -46,6 +46,7 @@ import type {
 } from '@draftroom/contracts'
 import { ASSET_GC_GRACE_DAYS, ASSET_GC_IN_FLIGHT_DAYS, ASSET_GC_REPORT_LIMIT } from '@draftroom/contracts'
 import { type Db, pgErrorCode, type Queryable } from '@draftroom/db'
+import { audit } from '../audit.ts'
 import { type CanvasEngineProbe, TLDRAW_ONLY } from '../canvas-engine.ts'
 import { snapshotBodies } from '../features/history/snapshot-store.ts'
 import type { BlobStore } from './blobs.ts'
@@ -413,6 +414,9 @@ async function deleteVersion(
     // hold the version and wait for the job (it cascades), while the claim holds the job and waits for
     // the version. A version without a job (none queued yet) has nothing to take.
     await tx.query('SELECT version_id FROM preview_jobs WHERE version_id = $1 FOR UPDATE', [versionId])
+    // Wave W (review m9): the version's worker ops the same way, before the version (the ops routes lock an op, then
+    // the version: a render-pages complete takes it FOR UPDATE, a remove-bg complete's new version references it)
+    await tx.query('SELECT id FROM worker_ops WHERE source_version_id = $1 FOR UPDATE', [versionId])
     const v = await tx.maybeOne<{
       id: string
       asset_id: string
@@ -444,6 +448,8 @@ async function deleteVersion(
            OR EXISTS (SELECT 1 FROM asset_versions o WHERE o.workspace_id = $1 AND o.asset_id = $4 AND o.id <> $2
                         AND (o.unreferenced_since IS NULL OR o.unreferenced_since > $5))
            OR EXISTS (SELECT 1 FROM preview_jobs WHERE version_id = $2 AND status = 'running')
+           -- wave W: a worker op running on it (its outputs are being uploaded; the next pass deletes it)
+           OR EXISTS (SELECT 1 FROM worker_ops WHERE source_version_id = $2 AND status = 'running')
            -- a checkpoint made since the scan: its body is read by the next pass first
            OR EXISTS (SELECT 1 FROM board_snapshots s WHERE s.workspace_id = $1
                         AND NOT EXISTS (SELECT 1 FROM asset_gc_snapshot_scans c WHERE c.snapshot_id = s.id))
@@ -459,10 +465,16 @@ async function deleteVersion(
       'SELECT blob_key FROM asset_derivative_reservations WHERE version_id = $1',
       [versionId],
     )
+    // wave W (review m9): the outputs its ops reserved and never published (they cascade away with the ops)
+    const opOutputs = await tx.query<{ blob_key: string }>(
+      `SELECT r.blob_key FROM worker_op_outputs r JOIN worker_ops o ON o.id = r.op_id WHERE o.source_version_id = $1`,
+      [versionId],
+    )
     const keys = [
       originalKey(v.asset_id, v.id),
       ...derivatives.rows.map((d) => d.blob_key),
       ...reservations.rows.map((d) => d.blob_key),
+      ...opOutputs.rows.map((d) => d.blob_key),
     ]
     const bytes = Number(v.size_bytes) + derivatives.rows.reduce((n, d) => n + Number(d.bytes), 0)
     await tx.query(
@@ -471,24 +483,22 @@ async function deleteVersion(
       [keys, workspaceId, at],
     )
     await tx.query('DELETE FROM asset_versions WHERE id = $1', [versionId])
-    await tx.query(
-      `INSERT INTO audit_events (workspace_id, actor_id, action, target, detail, at)
-       VALUES ($1, NULL, 'asset.gc_delete', $2, $3::jsonb, $4)`,
-      [
-        workspaceId,
-        versionId,
-        JSON.stringify({
-          assetId: v.asset_id,
-          boardId: v.board_id,
-          name: v.name,
-          kind: v.kind,
-          bytes,
-          unreferencedSince: v.unreferenced_since.toISOString(),
-          uploadedAt: v.created_at.toISOString(),
-        }),
-        at,
-      ],
-    )
+    await audit(tx, {
+      workspaceId,
+      actorId: null,
+      action: 'asset.gc_delete',
+      target: versionId,
+      detail: {
+        assetId: v.asset_id,
+        boardId: v.board_id,
+        name: v.name,
+        kind: v.kind,
+        bytes,
+        unreferencedSince: v.unreferenced_since.toISOString(),
+        uploadedAt: v.created_at.toISOString(),
+      },
+      at,
+    })
     return { keys, bytes }
   })
   if (!done) return null

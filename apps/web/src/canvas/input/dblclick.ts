@@ -78,3 +78,68 @@ export function classifyDoubleClick(v: DblClickView): DblClickVerdict {
   if (v.selectedLinear?.isEditing) return { kind: 'forward', reason: 'linear-editing' }
   return { kind: 'text' }
 }
+
+// ---- Lobby's own text editors (wave W, WS1) ------------------------------------------------------------------------
+//
+// The guard's list of the text editors that are NOT Excalidraw's. Each is a lease client of this tab's one
+// LeaseClient with Excalidraw's editor's rule (AGENTS.md: never writable unless its element is that of a lease this
+// tab holds): read-only until granted, read-only again the moment the lease is lost, released on close. Its adapter
+// is named here and pinned by ./dblclick.test.ts.
+//
+// The double-click row: a double-click on an element such an editor owns (the element, or its bound label) opens that
+// editor, never Excalidraw's. Its feature takes the board's `double-click` input event before this layer
+// (canvas/board/input.ts runs on the board's root in the capture phase; `handled()` stops and prevents it), and
+// CanvasInput.onDblClick never starts the lease flow for a prevented event. With the feature's switch off nothing
+// takes it, and the double-click is Excalidraw's label editor under the lease, as for any shape. The double-tap row
+// is ./doubleTap.ts's.
+
+export interface PanelTextEditor {
+  /** the editor's name in traces and tests */
+  readonly id: string
+  /** the `customData.lobby.kind` of the elements it edits */
+  readonly kind: string
+  /** its lease client (canvas/lease/) */
+  readonly adapter: string
+  /** every way it opens (each is the feature's: none is Excalidraw's editor path) */
+  readonly opens: readonly ('double-click' | 'double-tap' | 'enter' | 'menu' | 'palette' | 'face')[]
+}
+
+export const PANEL_TEXT_EDITORS: readonly PanelTextEditor[] = [
+  {
+    id: 'doc-card-panel',
+    kind: 'doc-card',
+    adapter: 'canvas/lease/panelEditor.ts',
+    opens: ['double-click', 'double-tap', 'enter', 'menu', 'palette', 'face'],
+  },
+]
+
+/** What a double-click (or double-tap) target needs for `panelEditorTarget`. */
+export interface PanelHitElement {
+  readonly id: string
+  readonly type: string
+  readonly containerId?: string | null
+  readonly customData?: unknown
+  readonly isDeleted?: boolean
+}
+
+const kindOf = (el: PanelHitElement | undefined): string | null => {
+  const k = (el?.customData as { lobby?: { kind?: unknown } } | undefined)?.lobby?.kind
+  return typeof k === 'string' ? k : null
+}
+
+/**
+ * Which panel editor a double-click on `hit` opens, and on what: the element itself when one of
+ * PANEL_TEXT_EDITORS edits its kind, else its container's when `hit` is a bound label; null otherwise (the
+ * double-click is classifyDoubleClick's). `get` reads an element by id.
+ */
+export function panelEditorTarget(
+  hit: PanelHitElement | null | undefined,
+  get: (id: string) => PanelHitElement | undefined,
+): { readonly editor: string; readonly id: string } | null {
+  if (!hit || hit.isDeleted) return null
+  const owner = hit.type === 'text' && hit.containerId ? get(hit.containerId) : hit
+  if (!owner || owner.isDeleted) return null
+  const kind = kindOf(owner)
+  const editor = kind ? PANEL_TEXT_EDITORS.find((e) => e.kind === kind) : undefined
+  return editor ? { editor: editor.id, id: owner.id } : null
+}

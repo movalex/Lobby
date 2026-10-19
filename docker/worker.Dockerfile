@@ -41,6 +41,17 @@ COPY --from=manifests /out/ ./
 # into node_modules, where Node refuses to strip TypeScript (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING).
 RUN --mount=type=cache,id=draftroom-pnpm-store,target=/pnpm/store \
   pnpm install --frozen-lockfile --prod --store-dir /pnpm/store --filter "@draftroom/worker..."
+# Wave W (WS2): onnxruntime-node (background removal, worker child only) ships its CPU binaries for every platform in
+# bin/napi-v6/{darwin,linux,win32}/<arch> (about 290 MB); this image loads only linux/<its own arch> (its loader requires
+# bin/napi-v6/${process.platform}/${process.arch}), so the rest goes. Its install script, which would fetch GPU binaries,
+# never runs (pnpm-workspace.yaml allowBuilds). The build fails if the binary this image needs is not there.
+RUN set -eu; arch="$(node -p process.arch)"; found=0; \
+  for d in /app/node_modules/.pnpm/onnxruntime-node@*/node_modules/onnxruntime-node/bin/napi-v6; do \
+    [ -d "$d" ] || continue; found=1; \
+    find "$d" -mindepth 1 -maxdepth 1 ! -name linux -exec rm -rf {} +; \
+    find "$d/linux" -mindepth 1 -maxdepth 1 ! -name "$arch" -exec rm -rf {} +; \
+    test -f "$d/linux/$arch/onnxruntime_binding.node"; test -f "$d/linux/$arch/libonnxruntime.so.1"; \
+  done; test "$found" = 1
 
 FROM base
 # tini is PID 1: forwards SIGTERM to the worker (it finishes or releases its current job) and reaps

@@ -5,6 +5,7 @@ import { BOARD_ROLES, BOARD_STATUSES, BOARD_VISIBILITIES, WORKSPACE_ROLES } from
 import { z } from 'zod'
 import { BoardTitle } from './board-title.ts'
 import { AccountEmail, ME_ACCESS_LEGACY, MeAccess } from './domain-access.ts'
+import { FormatsOffer } from './formats.ts'
 import { LiveSwitches } from './live.ts'
 import { cleanDisplayText, OutsideFields } from './outside.ts'
 import { ReviewLanding } from './review-status.ts'
@@ -140,6 +141,12 @@ export const AuthConfig = z.object({
    * on AND its own switch (apps/web/src/features/live/flags.ts) is on.
    */
   live: LiveSwitches.optional(),
+  /**
+   * Wave W: which "Formats" features the web may offer now (./formats.ts FormatsOffer: DRAFTROOM_DOC_CARDS,
+   * DRAFTROOM_REMOVE_BACKGROUND, DRAFTROOM_FILE_SEARCH, DRAFTROOM_DECK_IMPORT, DRAFTROOM_WORKSPACE_ADMIN; the three
+   * worker-backed ones only while a capable worker was seen recently). Absent (an api before wave W): all off.
+   */
+  formats: FormatsOffer.optional(),
 })
 export type AuthConfig = z.infer<typeof AuthConfig>
 
@@ -352,6 +359,8 @@ export * from './domain-access.ts'
 export * from './elements-panel.ts'
 export * from './export-control.ts'
 export * from './feedback.ts'
+// wave W foundation (the lead's; WS1-WS4 read it): the "Formats" switches, element kinds, worker ops and limits
+export * from './formats.ts'
 export * from './guests.ts'
 export * from './history.ts'
 // wave Q foundation (WS1, WS2 own them after): the built-in icons' index and shards, the element library
@@ -382,4 +391,6 @@ export * from './usage.ts'
 // wave N foundation (WS4): private visit markers (since your last visit)
 export * from './visits.ts'
 export * from './workshops.ts'
+// wave W foundation (the lead's; WS5 reads it): the workspace admin page
+export * from './workspace-admin.ts'
 export * from './ws-templates.ts'

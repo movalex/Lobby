@@ -15,8 +15,17 @@
 //   dropped from the index when they are trashed.
 // Limits: at most SEARCH_MAX_QUERY_CHARS characters (400 otherwise), SEARCH_RATE_LIMIT per user (429),
 // and the per-board text caps of the indexer. Nothing here publishes board events.
+//
+// Wave W (WS3, docs/WAVE-W-CONTRACTS.md §5): while DRAFTROOM_FILE_SEARCH is on, a search also finds the pages of
+// files' extracted text (./file-text.ts, the extract-text op: ./file-text-kind.ts, ./file-backfill.ts). A file page
+// hits on a board only when that board is in the person's scope now (the same filter), its canvas shows the version
+// (./file-refs.ts) and it may serve the version (files-auth.ts's rule): store.ts FILE_HITS_CTE, at query time. Such a
+// hit keeps kind 'file' and adds `file: {versionId, page, name}` (objectId `file:<ver>.p<page>`), at most
+// FILE_TEXT_LIMITS.maxFileHitsPerBoard of a board's SEARCH_HITS_PER_BOARD. Off: no file text is read.
 
 import {
+  FILE_TEXT_LIMITS,
+  parseFileHitObjectId,
   SEARCH_DEFAULT_LIMIT,
   SEARCH_HITS_PER_BOARD,
   SEARCH_MAX_QUERY_CHARS,
@@ -34,10 +43,20 @@ import { ApiError, parse } from '../../errors.ts'
 import { keyedLimit } from '../../rate-limit.ts'
 import { isTeamMember } from '../comments/store.ts'
 import type { FeatureContext } from '../context.ts'
+import { formatsOn } from '../formats/switch.ts'
+import { startFileTextBackfill } from './file-backfill.ts'
+import { refreshFileRefs } from './file-refs.ts'
 import { SearchIndexer, searchSettings } from './indexer.ts'
 import { parseQuery, snippetFromHeadline } from './query.ts'
 import { searchScope } from './scope.ts'
-import { headlines, type RankedRow, rankedHits } from './store.ts'
+import {
+  type EntrySource,
+  type FileHeadlineRow,
+  fileHeadlines,
+  headlines,
+  type RankedRow,
+  rankedHits,
+} from './store.ts'
 
 export { searchSettings } from './indexer.ts'
 
@@ -52,9 +71,21 @@ export function searchIndexerOf(app: FastifyInstance): SearchIndexer | undefined
 
 export async function registerSearch(app: FastifyInstance, ctx: FeatureContext): Promise<void> {
   const { db, now } = ctx
-  const indexer = new SearchIndexer({ db, sync: ctx.sync, now, log: app.log, settings: searchSettings })
+  const fileSearch = formatsOn(ctx, 'fileSearch')
+  const indexer = new SearchIndexer({
+    db,
+    sync: ctx.sync,
+    now,
+    log: app.log,
+    settings: searchSettings,
+    // wave W (WS3): which files each board's canvas shows, refreshed with its canvas text (only while file search
+    // runs: off, nothing reads board_file_refs)
+    ...(fileSearch ? { fileRefs: (boardId: string) => refreshFileRefs(db, ctx.sync, boardId, now()) } : {}),
+  })
   indexers.set(app, indexer)
   indexer.start(app)
+  // wave W (WS3): extract-text ops for the files whose text was never read (only while file search runs)
+  if (fileSearch) startFileTextBackfill(app, ctx)
   const perUser = keyedLimit(
     SEARCH_RATE_LIMIT,
     now,
@@ -132,6 +163,8 @@ async function search(
       lookup: ctx.identity.lookup,
       now: ctx.now(),
     }),
+    // wave W (WS3): pages of files' text, only while DRAFTROOM_FILE_SEARCH is on (off: the statement before wave W)
+    ...(formatsOn(ctx, 'fileSearch') ? { files: { maxPerBoard: FILE_TEXT_LIMITS.maxFileHitsPerBoard } } : {}),
   })
   // Rows come board by board, best board first, each board's hits best first.
   const grouped = new Map<string, RankedRow[]>()
@@ -142,20 +175,31 @@ async function search(
     grouped.set(r.board_id, list)
   }
   const chosen = [...grouped.entries()]
-  const keys = chosen.flatMap(([boardId, hits]) =>
-    hits.map((h) => ({ boardId, source: h.source, objectId: h.object_id })),
-  )
+  // canvas and comment entries get their snippets from the index, file pages (wave W) from the file text
+  const keys: { boardId: string; source: EntrySource; objectId: string }[] = []
+  const fileKeys: { versionId: string; page: number }[] = []
+  const slot = new Map<RankedRow, number>()
+  for (const [boardId, hits] of chosen)
+    for (const h of hits) {
+      if (h.source === 'file') {
+        const ref = parseFileHitObjectId(h.object_id)
+        if (!ref) continue
+        slot.set(h, fileKeys.push(ref) - 1)
+      } else slot.set(h, keys.push({ boardId, source: h.source, objectId: h.object_id }) - 1)
+    }
   const heads = await headlines(ctx.db, parsed, keys)
-  let k = 0
+  const fileHeads = await fileHeadlines(ctx.db, parsed, opts.workspaceId, fileKeys)
   const groups: SearchBoardGroup[] = []
   for (const [boardId, hits] of chosen) {
     const board = byId.get(boardId)
     if (!board) continue
     const shown: SearchHit[] = []
     for (const h of hits) {
-      const head = heads.get(k++)
+      const at = slot.get(h)
+      const head = at === undefined ? undefined : h.source === 'file' ? fileHeads.get(at) : heads.get(at)
       if (!head) continue // re-indexed between the two queries: the object is gone
       const snippet = snippetFromHeadline(head.headline, head.body, parsed.terms)
+      const file = h.source === 'file' && at !== undefined ? fileKeys[at] : undefined
       shown.push({
         kind: h.kind,
         objectId: h.object_id,
@@ -163,6 +207,7 @@ async function search(
         cutStart: snippet.cutStart,
         cutEnd: snippet.cutEnd,
         snippet: snippet.parts,
+        ...(file ? { file: { ...file, name: (head as FileHeadlineRow).name } } : {}),
       })
     }
     if (!shown.length) continue

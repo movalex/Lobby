@@ -5,8 +5,12 @@
 import { mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { WORKER_OP_LIMITS } from '@draftroom/contracts'
 import type { ClaimedJob, WorkerApi } from './api-client.ts'
 import { WORKER } from './config.ts'
+import type { WorkerOpsApi } from './ops/client.ts'
+import { type RunOpOptions, type RunOpOutcome, runOneOp } from './ops/loop.ts'
+import { PDF_CACHE_PREFIX } from './ops/office-pdf-cache.ts'
 import type { ProcessOptions } from './processJob.ts'
 import { type RemoteOutcome, runRemoteJob, TMP_PREFIX } from './remote-job.ts'
 
@@ -26,6 +30,20 @@ export interface RemoteWorkerOptions {
   onOutcome?: (versionId: string, outcome: RemoteOutcome) => void
   /** Test hook for the jitter. */
   random?: () => number
+  /**
+   * Wave W (ops/loop.ts): worker ops, asked for only when a preview claim came back empty (previews keep priority), in
+   * the same slot. Absent, or no capability to report: the worker never calls /api/worker/ops/* (a worker of before).
+   */
+  ops?: {
+    api: WorkerOpsApi
+    capabilities: readonly string[]
+    runners?: RunOpOptions['runners']
+    /** after an api answered that it has no ops routes (404, or a pre-wave-W 403), ask again only this much later (default 10 min) */
+    unsupportedBackoffMs?: number
+    /** the capability check-in's period (default WORKER_OP_LIMITS.checkinEveryMs) */
+    checkinEveryMs?: number
+    onOutcome?: (outcome: RunOpOutcome) => void
+  }
 }
 
 export interface RemoteWorkerHandle {
@@ -48,7 +66,8 @@ export function idleDelay(streak: number, pollMs: number, maxMs: number, random:
 
 /**
  * Removes job directories a crashed process left behind (a container restart keeps its writable layer,
- * so they would pile up). Only `drw-job-XXXXXX` entries older than `ageMs` are touched, so a directory
+ * so they would pile up). Only `drw-job-XXXXXX` (and `drw-pdfc-XXXXXX`, a process's Office PDF cache, touched on
+ * every use) entries older than `ageMs` are touched, so a directory
  * of a job running in another worker process on the same machine is never removed.
  */
 export function sweepTmp(dir: string, ageMs: number, now = Date.now()): number {
@@ -59,7 +78,8 @@ export function sweepTmp(dir: string, ageMs: number, now = Date.now()): number {
   } catch {
     return 0
   }
-  const re = new RegExp(`^${TMP_PREFIX}[A-Za-z0-9]{6}$`)
+  // the jobs' and ops' directories, and (wave W) a stopped process's Office PDF cache (ops/office-pdf-cache.ts)
+  const re = new RegExp(`^(?:${TMP_PREFIX}|${PDF_CACHE_PREFIX})[A-Za-z0-9]{6}$`)
   for (const n of names) {
     if (!re.test(n)) continue
     const p = join(dir, n)
@@ -111,6 +131,87 @@ export function startRemoteWorker(o: RemoteWorkerOptions): RemoteWorkerHandle {
     } catch {}
   }
 
+  // wave W: an api without ops routes is asked again only after a long pause; trouble is logged once
+  let opsPausedUntil = 0
+  let opsTrouble: string | null = null
+  const opsUnsupported = () => {
+    if (opsPausedUntil === 0) log('this api has no worker ops: previews only')
+    opsPausedUntil = Date.now() + (o.ops?.unsupportedBackoffMs ?? 10 * 60_000)
+  }
+
+  // Wave W (review M2): the capability check-in. A worker that reports capabilities tells the api so every
+  // checkinEveryMs, whatever its slots are doing (an ops claim comes only from an idle slot, so a worker busy with
+  // previews for a long while would otherwise read as absent and its kinds' queued ops would fail WORKER_UNAVAILABLE).
+  // Off the slots: never blocks or delays a preview or an op. 403/404: no ops on this api (the claim's pause). Any other
+  // failure is logged once per kind and tried again at the next tick. The timer is unref'd and stopped by stop().
+  let checkinTimer: NodeJS.Timeout | null = null
+  // stop() also cancels a check-in in flight, so none outlives the loop
+  const checkinStop = new AbortController()
+  let checkinBusy = false
+  let checkinTrouble: string | null = null
+  async function checkin() {
+    const ops = o.ops
+    if (!ops?.api.checkin || stopping || checkinBusy || Date.now() < opsPausedUntil) return
+    checkinBusy = true
+    try {
+      const r = await ops.api.checkin(ops.capabilities, checkinStop.signal)
+      if (checkinTrouble) log('ops check-in ok again')
+      checkinTrouble = null
+      if (r === 'unsupported') opsUnsupported()
+    } catch (e) {
+      const err = e as Error & { kind?: string }
+      if (err.kind !== 'aborted') {
+        const what = `ops check-in failed (${err.message})`
+        if (what !== checkinTrouble) log(what)
+        checkinTrouble = what
+      }
+    } finally {
+      checkinBusy = false
+    }
+  }
+  if (o.ops?.capabilities.length && o.ops.api.checkin) {
+    void checkin()
+    checkinTimer = setInterval(() => void checkin(), o.ops.checkinEveryMs ?? WORKER_OP_LIMITS.checkinEveryMs)
+    checkinTimer.unref()
+  }
+  const stopCheckin = () => {
+    if (checkinTimer) clearInterval(checkinTimer)
+    checkinTimer = null
+    checkinStop.abort('worker stopping')
+  }
+  /** One op, if the worker has capabilities and the api has ops. True when an op was claimed (whatever its outcome). */
+  async function tryOp(): Promise<boolean> {
+    const ops = o.ops
+    if (!ops?.capabilities.length || Date.now() < opsPausedUntil) return false
+    let outcome: RunOpOutcome
+    try {
+      outcome = await runOneOp({
+        ops: ops.api,
+        api,
+        capabilities: ops.capabilities,
+        ...(ops.runners ? { runners: ops.runners } : {}),
+        tmpDir,
+        signal: shutdown.signal,
+        heartbeatMs: o.heartbeatMs,
+        log,
+      })
+      opsTrouble = null
+    } catch (e) {
+      const err = e as Error & { kind?: string }
+      if (err.kind === 'aborted') return false
+      const what = `ops claim failed (${err.message})`
+      if (what !== opsTrouble) log(what)
+      opsTrouble = what
+      return false
+    }
+    ops.onOutcome?.(outcome)
+    if (outcome.kind === 'unsupported') {
+      opsUnsupported()
+      return false
+    }
+    return outcome.kind !== 'none'
+  }
+
   async function slot() {
     let idle = 0
     while (!stopping) {
@@ -137,6 +238,11 @@ export function startRemoteWorker(o: RemoteWorkerOptions): RemoteWorkerHandle {
         continue
       }
       if (!claimed) {
+        // wave W: no preview to make, so ask for one op (previews keep priority)
+        if (!stopping && (await tryOp())) {
+          idle = 0
+          continue
+        }
         if (!stopping) await sleep(idleDelay(idle++, pollMs, pollMaxMs, random))
         continue
       }
@@ -169,9 +275,11 @@ export function startRemoteWorker(o: RemoteWorkerOptions): RemoteWorkerHandle {
 
   const done = Promise.all(Array.from({ length: concurrency }, () => slot())).then(
     () => {
+      stopCheckin()
       if (graceTimer) clearTimeout(graceTimer)
     },
     (e) => {
+      stopCheckin()
       if (graceTimer) clearTimeout(graceTimer)
       throw e
     },
@@ -182,6 +290,7 @@ export function startRemoteWorker(o: RemoteWorkerOptions): RemoteWorkerHandle {
     currentJobs: () => [...current],
     stop(graceMs = WORKER.shutdownGraceMs) {
       stopping = true
+      stopCheckin()
       for (const wake of [...wakers]) wake()
       const at = Date.now() + graceMs
       if (at < abortAt) {

@@ -76,7 +76,9 @@ async function render(req: PdfChildRequest): Promise<PdfChildResponse> {
     }
     const cf = doc.canvasFactory as NodeCanvasFactory
     const rendered: number[] = []
-    for (let n = 1; n <= Math.min(pageCount, req.pages); n++) {
+    const first =
+      Number.isSafeInteger(req.firstPage) && (req.firstPage as number) > 1 ? (req.firstPage as number) : 1
+    for (let n = first; n <= Math.min(pageCount, req.pages); n++) {
       const page = await doc.getPage(n)
       try {
         const base = page.getViewport({ scale: 1 }) // PDF points, /Rotate applied

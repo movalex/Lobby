@@ -284,6 +284,12 @@ export interface StackOptions {
   syncEnv?: Record<string, string>
   /** Extra preview worker env, e.g. the office-previews suite's SOFFICE_PATH stand-in. */
   workerEnv?: Record<string, string>
+  /**
+   * Another build's preview worker entry (opt-in, a stale-pair run only), e.g. the deployed worker's
+   * apps/worker/src/worker.ts in a tree with its own install (w-compat-old-worker.spec.ts: E2E_OLD_WORKER_ENTRY).
+   * Default: this build's worker.
+   */
+  workerEntry?: string
   /** Extra api env, e.g. the ai-assist suite's OPENAI_BASE_URL pointing at a local fake. */
   apiEnv?: Record<string, string>
 }
@@ -347,6 +353,14 @@ export async function startStack(opts: StackOptions = {}): Promise<Stack> {
       DRAFTROOM_LIVE_ACTIVITIES: 'on',
       DRAFTROOM_JOIN_CODES: 'on',
       DRAFTROOM_BREAKOUTS: 'on',
+      // Wave W (docs/WAVE-W-CONTRACTS.md §1): the "Formats" api switches, on for every stack (each browser route is
+      // pending until its workstream lands it, every web switch is off until then, and the worker-backed three are
+      // offered only once the stack's worker reports their capability; a spec can set 'off' through apiEnv)
+      DRAFTROOM_DOC_CARDS: 'on',
+      DRAFTROOM_REMOVE_BACKGROUND: 'on',
+      DRAFTROOM_FILE_SEARCH: 'on',
+      DRAFTROOM_DECK_IMPORT: 'on',
+      DRAFTROOM_WORKSPACE_ADMIN: 'on',
       ...blobs,
       ...directEventsEnv(),
       ...opts.apiEnv,
@@ -385,7 +399,7 @@ export async function startStack(opts: StackOptions = {}): Promise<Stack> {
 
   const worker = managed({
     name: 'worker',
-    entry: WORKER_ENTRY,
+    entry: opts.workerEntry || WORKER_ENTRY,
     killTree: true,
     // HTTP mode, like `pnpm dev`: no data dir, no database, no storage credentials.
     env: () => ({

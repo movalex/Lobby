@@ -38,6 +38,13 @@ describe('matchRoute', () => {
     expect(matchRoute('/invite/AbC_-123xyz')).toEqual({ name: 'invite', token: 'AbC_-123xyz' })
   })
 
+  it('wave W: maps /w/:wid/admin (the workspace admin page), and nothing deeper or on a malformed workspace id', () => {
+    expect(matchRoute(`/w/${WS}/admin`)).toEqual({ name: 'workspace-admin', workspaceId: WS })
+    expect(matchRoute(`/w/${WS}/admin/`)).toEqual({ name: 'workspace-admin', workspaceId: WS })
+    for (const p of [`/w/${WS}/admin/audit`, '/w/wsp_x/admin', '/admin', `/w/${WS}/Admin`])
+      expect(matchRoute(p), p).toEqual({ name: 'not-found' })
+  })
+
   it('wave V: maps /j/:code (a join code as typed: the page reads it), and nothing longer or deeper', () => {
     expect(matchRoute('/j/ABCD-2345')).toEqual({ name: 'join', code: 'ABCD-2345' })
     expect(matchRoute('/j/abcd2345/')).toEqual({ name: 'join', code: 'abcd2345' })

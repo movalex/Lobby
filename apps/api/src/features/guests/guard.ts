@@ -24,8 +24,10 @@
 // dashboard's own root hooks). The answer is the same for every board id, so it reveals nothing.
 
 import {
+  ADMIN_ROUTE_KEYS,
   BACKUP_GUESTS_MESSAGE,
   CHAT_HOOK_GUESTS_MESSAGE,
+  FORMAT_GUESTS_MESSAGE,
   IMPORT_GUESTS_MESSAGE,
   LIBRARY_GUESTS_MESSAGE,
   LIVE_FACILITATE_GUESTS_MESSAGE,
@@ -118,6 +120,20 @@ export const REVIEW_GUESTS = REVIEW_GUESTS_MESSAGE
  * its link's access: it has the INVITE row (and a creator row, domain-access/guard.ts); resolving one has none.
  */
 export const LIVE_GUESTS = LIVE_FACILITATE_GUESTS_MESSAGE
+
+/**
+ * Wave W (the foundation; docs/WAVE-W-CONTRACTS.md §8): removing a background and rendering a deck's slides queue work
+ * on the NAS worker and (remove-bg) make a new file in the workspace's quota: editors with an account only, like a
+ * link preview. A guest still places files and decks of up to eight pages (no op needed). Op state and cancel keep no
+ * row (only the requester sees an op, and a guest never requests one).
+ */
+export const FORMAT_GUESTS = FORMAT_GUESTS_MESSAGE
+
+/**
+ * Routes a signed-in name-only guest gets the unknown route's 404 for (not a 403): the workspace admin page (wave W
+ * WS5) is not to be known to anyone but the workspace's owners and admins. Checked before any query, like the 403 rows.
+ */
+export const GUEST_HIDDEN_ROUTES: ReadonlySet<string> = new Set(Object.values(ADMIN_ROUTE_KEYS))
 
 /** `METHOD route-pattern` → the message a signed-in guest gets (403 GUEST_ACCOUNT_REQUIRED). */
 export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {
@@ -234,6 +250,10 @@ export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {
   'POST /api/breakouts/:brk/summon': LIVE_GUESTS,
   'POST /api/breakouts/:brk/end': LIVE_GUESTS,
   'POST /api/boards/:bid/review-links/:id/code': INVITE,
+  // wave W (landed by the foundation, pending until implemented: ../pending-routes.ts): the two routes that queue a
+  // worker op (@draftroom/contracts FORMAT_GUEST_REFUSED_ROUTE_KEYS)
+  'POST /api/files/:ver/remove-background': FORMAT_GUESTS,
+  'POST /api/files/:ver/render-pages': FORMAT_GUESTS,
 }
 
 export const guestRefused = (message: string) => new ApiError(403, 'GUEST_ACCOUNT_REQUIRED', message)
@@ -264,12 +284,14 @@ export function registerGuestGuard(app: FastifyInstance, ctx: FeatureContext): v
   app.addHook('preHandler', async (req) => {
     const key = routeKey(req)
     const refused = GUEST_REFUSED_ROUTES[key] ?? boardPatchRefusal(key, req.body)
+    const hidden = GUEST_HIDDEN_ROUTES.has(key)
     const target =
       key === 'PUT /api/boards/:bid/members/:uid' || key === 'POST /api/boards/:bid/transfer-ownership'
-    if (refused === undefined && !target) return
+    if (refused === undefined && !hidden && !target) return
     // Not signed in: the route answers 401 itself. (sessions.user is cached for the request.)
     const caller = await sessions.user(req)
     if (!caller) return
+    if (hidden && (await userKind(db, caller.id)) === 'guest') throw notFound()
     if (refused !== undefined && (await userKind(db, caller.id)) === 'guest') throw guestRefused(refused)
     if (target) await checkGuestTarget(ctx, req, caller.id)
   })

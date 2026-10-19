@@ -45,6 +45,19 @@ export const WAVE_V_PALETTE_COMMAND_IDS = [
 ] as const
 
 /**
+ * Wave W's palette commands (frozen by the wave W foundation; docs/WAVE-W-CONTRACTS.md §8.3; pending until their owners
+ * register them): insert a doc card and turn a text into one (WS1), remove an image's background (WS2), insert a deck
+ * as slides (WS4), open the workspace admin page (WS5).
+ */
+export const WAVE_W_PALETTE_COMMAND_IDS = [
+  'doc-card.insert',
+  'doc-card.from-text',
+  'image.remove-background',
+  'deck.insert-slides',
+  'workspace.admin',
+] as const
+
+/**
  * The commands `palette.run:<id>` may name: every static command of the board features
  * (apps/web/src/features/canvas-registry.ts, checked by apps/web/src/lib/usage.test.ts), wave M's
  * 'ai.askWorkspace' and 'ws-templates.save' (W8) included.
@@ -272,6 +285,9 @@ export const PALETTE_COMMAND_IDS = [
   // wave V (frozen by the wave V foundation, pending until their owners register them): live activities (WS2), the
   // join card (WS3), breakouts (WS4), the session summary (WS5)
   ...WAVE_V_PALETTE_COMMAND_IDS,
+  // wave W (frozen by the wave W foundation, pending until their owners register them): doc cards (WS1), background
+  // removal (WS2), deck import (WS4), the workspace admin page (WS5)
+  ...WAVE_W_PALETTE_COMMAND_IDS,
 ] as const
 export type PaletteCommandId = (typeof PALETTE_COMMAND_IDS)[number]
 
@@ -291,6 +307,15 @@ export const PENDING_PALETTE_COMMAND_IDS: readonly PaletteCommandId[] = [
   // wave V: none left. WS2 registered 'activities.start' (features/live-activities), WS4 'breakouts.start'
   // (features/breakouts), and the integration 'join.show-code' (features/join) and 'session-summary.csv'
   // (present-export/session-csv, in the present-export feature).
+  // wave W (the foundation): every wave W command, until its owner registers it (each removes its own line, through the
+  // lead): WS1 'doc-card.insert' and 'doc-card.from-text', WS2 'image.remove-background', WS4 'deck.insert-slides',
+  // WS5 'workspace.admin'. WS1 registered 'doc-card.insert' and 'doc-card.from-text' (features/doc-cards), WS4
+  // 'deck.insert-slides' (features/deck-import), and the integration 'workspace.admin' (features/workspace-admin).
+  // Still held: WS2's 'image.remove-background'. Background removal stays hidden until the owner approves the model
+  // file's one-time download and its sha256 is pinned (apps/worker/src/ops/bg-model.ts BG_MODEL.sha256 and
+  // apps/worker/models/MODELS.json; docs/WAVE-W-CONTRACTS.md §4.2, §11.1); listing it here keeps the palette from
+  // offering it before then (features/remove-bg removeBgCommandHeld). Release it in the change that pins the hash.
+  'image.remove-background',
 ]
 
 /**

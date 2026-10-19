@@ -4,6 +4,7 @@ import type { IdentityService } from './auth/identity.ts'
 import type { SessionStore, SessionUser } from './auth/session.ts'
 import type { CanvasEngineProbe } from './canvas-engine.ts'
 import type { ApiConfig } from './config.ts'
+import type { FormatsOfferSource } from './features/formats/offer.ts'
 import type { SyncNotifier } from './notifier.ts'
 import type { RouteRateLimit } from './rate-limit.ts'
 
@@ -73,6 +74,11 @@ export interface AppContext {
    * (`boards.new_canvas`, `body_version` 2) and R0's refusals of it do not apply. Absent = tldraw.
    */
   canvas?: CanvasEngineProbe
+  /**
+   * Wave W (features/formats/offer.ts): what the web may offer now (AuthConfig.formats): the switches, the three
+   * worker-backed ones only while a capable worker was seen recently. Cached; fails closed.
+   */
+  formatsOffer: FormatsOfferSource
 }
 
 /** Route params arrive untyped; every route validates them (a malformed id is a 404, like a missing one). */

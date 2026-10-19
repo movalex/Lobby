@@ -174,6 +174,8 @@ export interface OfficeDeriveOptions {
   pdfTimeoutMs?: number
   pdfChildPath?: string
   pdfHeapMb?: number
+  /** the pdf child's resident-memory cap (WORKER_PDF_RSS_MB), default PREVIEW.pdfChildRssMb */
+  pdfRssMb?: number
   signal?: AbortSignal
 }
 
@@ -212,6 +214,7 @@ export async function deriveOffice(
       timeoutMs: o.pdfTimeoutMs,
       childPath: o.pdfChildPath,
       heapMb: o.pdfHeapMb,
+      rssMb: o.pdfRssMb,
       signal: o.signal,
     })
   } catch (e) {

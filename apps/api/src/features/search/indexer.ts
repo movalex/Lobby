@@ -45,6 +45,7 @@ import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import type { SyncInternalClient } from '../../sync-internal.ts'
 import { replaceBoardLinks } from '../board-links/store.ts'
+import { boardsMaybeShowingFiles, type FileRefsResult } from './file-refs.ts'
 import { cleanIndexText } from './query.ts'
 import { freshness, type ScopedBoard } from './scope.ts'
 import {
@@ -99,6 +100,9 @@ const RETRY_BASE_S = 15
 const RETRY_MAX_S = 30 * 60
 /** How long closing the app waits for running refreshes. */
 const CLOSE_WAIT_MS = 3_000
+/** Wave W (review m2): the first retry of a failed refs refresh, doubling per failure up to the max. */
+export const REFS_RETRY_BASE_MS = 60_000
+export const REFS_RETRY_MAX_MS = 30 * 60_000
 /** N7-4: while the sync answers without `links` (older than wave N), the links backfill waits this long. */
 export const LINKS_BACKFILL_PAUSE_MS = 10 * 60_000
 
@@ -158,6 +162,8 @@ export interface PassResult {
   looked: number
   /** N7-4: boards the links backfill fetched in this pass (a full batch means there may be more). */
   linksBackfill: number
+  /** Wave W (WS3): boards whose file refs this pass read (a full batch means there may be more). */
+  fileRefs: number
 }
 
 interface Log {
@@ -212,6 +218,14 @@ export class SearchIndexer {
   private linksBackfillDone = false
   /** N7-4: the backfill waits until then (the sync answered without links: older than wave N). */
   private linksBackfillPausedUntil = 0
+  /** Wave W (WS3): refreshes a board's board_file_refs (./file-refs.ts); absent while file search is off. */
+  private readonly fileRefs: ((boardId: string) => Promise<FileRefsResult>) | null
+  /** Wave W: boards whose refs refresh failed: how often in a row, and when a pass may retry them (review m2). */
+  private readonly refsRetry = new Map<string, { failures: number; dueAt: number }>()
+  /** Wave W: boards with a refs refresh in flight; true once another was asked for meanwhile (review m1). */
+  private readonly refsDirty = new Map<string, boolean>()
+  /** Wave W: the once-per-process walk over the boards that may show a file (its last board id; null once done). */
+  private refsWalkAfter: string | null = ''
 
   constructor(opts: {
     db: Db
@@ -219,12 +233,105 @@ export class SearchIndexer {
     now: () => Date
     log: Log
     settings: SearchSettings
+    fileRefs?: (boardId: string) => Promise<FileRefsResult>
   }) {
     this.db = opts.db
     this.sync = opts.sync
     this.now = opts.now
     this.log = opts.log
     this.settings = opts.settings
+    this.fileRefs = opts.fileRefs ?? null
+  }
+
+  /**
+   * Wave W (WS3): re-reads which files the board's canvas shows, after its canvas text changed (so a removed card stops
+   * hitting with the same reindex). Never throws: a failure is logged (the board id only), keeps the rows, and the
+   * board is retried by the next pass.
+   */
+  refreshFileRefs(boardId: string): Promise<RefreshResult> {
+    const refresh = this.fileRefs
+    if (!refresh) return Promise.resolve('unchanged')
+    // Review m1: a refresh asked for while one is in flight must not join it (that one may have read the canvas before
+    // the change the caller saw, and would be the last write). It marks the board dirty instead; the running loop
+    // reads again once its read is written, and every caller gets the answer of a read that began after its call.
+    const key = `files:${boardId}`
+    if (this.refsDirty.has(boardId)) {
+      this.refsDirty.set(boardId, true)
+      return this.inflight.get(key) as Promise<RefreshResult>
+    }
+    this.refsDirty.set(boardId, false)
+    const p = (async (): Promise<RefreshResult> => {
+      let out: RefreshResult = 'unchanged'
+      try {
+        do {
+          this.refsDirty.set(boardId, false)
+          let r: FileRefsResult
+          try {
+            r = await refresh(boardId)
+          } catch (e) {
+            this.warn(e, 'search could not index the files of a board', boardId)
+            r = 'failed'
+          }
+          if (r === 'failed') this.refsFailed(boardId)
+          else this.refsRetry.delete(boardId)
+          out = r === 'refreshed' ? 'indexed' : r
+        } while (this.refsDirty.get(boardId) === true && !this.stopped)
+      } finally {
+        this.refsDirty.delete(boardId)
+        this.inflight.delete(key)
+      }
+      return out
+    })()
+    this.inflight.set(key, p)
+    return p
+  }
+
+  /**
+   * Review m2: a board whose refresh failed is retried by the passes with a backoff (REFS_RETRY_BASE_MS doubling per
+   * failure, at most REFS_RETRY_MAX_MS), so a sync outage or an answer it does not trust costs one read per board per
+   * backoff, not one per pass.
+   */
+  private refsFailed(boardId: string): void {
+    const failures = (this.refsRetry.get(boardId)?.failures ?? 0) + 1
+    const wait = Math.min(REFS_RETRY_MAX_MS, REFS_RETRY_BASE_MS * 2 ** (failures - 1))
+    this.refsRetry.set(boardId, { failures, dueAt: this.now().getTime() + wait })
+  }
+
+  /**
+   * Wave W: the refs a pass refreshes: the boards whose refresh failed, then (once per process) the boards that may
+   * show a file, in id order, a batch per pass, whose rows were written before this process (or never). Returns how
+   * many boards it read.
+   */
+  private async backfillFileRefs(): Promise<number> {
+    if (!this.fileRefs || this.stopped) return 0
+    const at = this.now().getTime()
+    const boards = [...this.refsRetry]
+      .filter(([, r]) => r.dueAt <= at)
+      .map(([id]) => id)
+      .slice(0, this.settings.batch)
+    if (boards.length < this.settings.batch && this.refsWalkAfter !== null) {
+      const next = await boardsMaybeShowingFiles(
+        this.db,
+        this.refsWalkAfter,
+        this.settings.batch - boards.length,
+      )
+      if (next.length < this.settings.batch - boards.length) this.refsWalkAfter = null
+      else this.refsWalkAfter = next.at(-1)?.id ?? null
+      // a board waiting out its retry backoff is not read early by the walk
+      for (const b of next) if (!boards.includes(b.id) && !this.refsRetry.has(b.id)) boards.push(b.id)
+    }
+    let read = 0
+    for (const id of boards) {
+      if (this.stopped) break
+      await this.refreshFileRefs(id)
+      read++
+    }
+    return read
+  }
+
+  /** Wave W (tests): whether the once-per-process walk over the boards that may show a file has finished. */
+  fileRefsWalkFinished(): boolean {
+    return this.refsWalkAfter === null && this.refsRetry.size === 0
   }
 
   /** Background passes while the app runs; the last one (and every refresh) finishes before close. */
@@ -248,7 +355,12 @@ export class SearchIndexer {
     this.timer = setTimeout(() => {
       this.timer = null
       void this.runPass()
-        .then((r) => r.looked >= this.settings.batch || r.linksBackfill >= this.settings.batch)
+        .then(
+          (r) =>
+            r.looked >= this.settings.batch ||
+            r.linksBackfill >= this.settings.batch ||
+            r.fileRefs >= this.settings.batch,
+        )
         .catch((e: unknown) => {
           this.warn(e, 'search index pass failed')
           return false
@@ -386,6 +498,8 @@ export class SearchIndexer {
     })
     if (result === 'indexed' && links)
       await this.writeLinks(boardId, row.workspace_id, links, { clock: answer.clock, sourceAt, askedAt })
+    // wave W (WS3): the canvas changed, so may the files it shows
+    if (result === 'indexed') await this.refreshFileRefs(boardId)
     return result
   }
 
@@ -642,7 +756,14 @@ export class SearchIndexer {
         LIMIT $2`,
       [now, this.settings.batch],
     )
-    const out: PassResult = { canvas: 0, comments: 0, purged, looked: rows.rows.length, linksBackfill: 0 }
+    const out: PassResult = {
+      canvas: 0,
+      comments: 0,
+      purged,
+      looked: rows.rows.length,
+      linksBackfill: 0,
+      fileRefs: 0,
+    }
     for (const r of rows.rows) {
       if (this.stopped) break
       const fr = freshness(
@@ -669,6 +790,8 @@ export class SearchIndexer {
     }
     // N7-4: after the stale boards, the boards whose links were never scanned (until none is left)
     out.linksBackfill = await this.backfillLinks()
+    // wave W (WS3): then the files boards show (failed refreshes, and once per process the boards with files)
+    out.fileRefs = await this.backfillFileRefs()
     return out
   }
 }

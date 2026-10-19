@@ -87,12 +87,21 @@ export class WorkerApiError extends Error {
   readonly status: number | null
   /** Set for a claim whose body was invalid but still named a valid version (so it can be handed back). */
   readonly versionId: string | null
-  constructor(kind: ApiErrorKind, status: number | null, detail: string, versionId: string | null = null) {
+  /** The API's error code when it sent one (`QUOTA_EXCEEDED`), else ''. Wave W: an ops refusal ends the op with it. */
+  readonly code: string
+  constructor(
+    kind: ApiErrorKind,
+    status: number | null,
+    detail: string,
+    versionId: string | null = null,
+    code = '',
+  ) {
     super(detail)
     this.name = 'WorkerApiError'
     this.kind = kind
     this.status = status
     this.versionId = versionId
+    this.code = code
   }
 }
 
@@ -223,12 +232,22 @@ function parseReservation(body: unknown): Reservation {
   }
 }
 
-export function createWorkerApi(o: WorkerApiOptions): WorkerApi {
-  const base = new URL(o.baseUrl)
-  const origin = base.origin
-  const auth = `Bearer ${o.token}`
+/** One JSON POST to the API under the bearer token (the preview client's and, wave W, the ops client's). */
+export type ApiCall = (
+  path: string,
+  body: Record<string, unknown>,
+  signal: AbortSignal | undefined,
+  jobRoute: boolean,
+) => Promise<{ status: number; json: unknown }>
 
-  async function call(
+/**
+ * The POST every /api/worker/* call makes: `workerId` added to the body, the token sent to the API origin only, no
+ * redirects, a timeout, and errors classified by kind (WorkerApiError). Shared by createWorkerApi and ops/client.ts.
+ */
+export function createApiCall(o: WorkerApiOptions): ApiCall {
+  const origin = new URL(o.baseUrl).origin
+  const auth = `Bearer ${o.token}`
+  return async function call(
     path: string,
     body: Record<string, unknown>,
     signal: AbortSignal | undefined,
@@ -276,6 +295,8 @@ export function createWorkerApi(o: WorkerApiOptions): WorkerApi {
         kindForStatus(res.status, jobRoute, code),
         res.status,
         `HTTP ${res.status}${code ? ` ${code}` : ''}`,
+        null,
+        code,
       )
     }
     try {
@@ -284,6 +305,13 @@ export function createWorkerApi(o: WorkerApiOptions): WorkerApi {
       throw new WorkerApiError('protocol', res.status, 'response is not JSON')
     }
   }
+}
+
+export function createWorkerApi(o: WorkerApiOptions): WorkerApi {
+  const base = new URL(o.baseUrl)
+  const origin = base.origin
+  const auth = `Bearer ${o.token}`
+  const call = createApiCall(o)
 
   const jobPath = (lease: LeaseRef, action: string) => {
     if (!isId('ver', lease.versionId)) throw new WorkerApiError('rejected', null, 'invalid version id')

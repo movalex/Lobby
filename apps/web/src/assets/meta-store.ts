@@ -49,6 +49,8 @@ const MISSING: MetaSnapshot = Object.freeze({ meta: null, missing: true, error: 
 
 export const DEFAULT_MAX_CONCURRENT_META = 6
 export const DEFAULT_META_RETRY_DELAYS_MS: readonly number[] = [500, 1000, 2000]
+/** refresh(): a terminal answer is asked for again at most this often per version. */
+export const REFRESH_MIN_INTERVAL_MS = 5_000
 
 /**
  * Per-version cache + poller for the dev meta route. Versions are immutable, so a terminal meta
@@ -121,6 +123,26 @@ export class AssetMetaStore {
       if (!e.snap.error || isTerminal(e.snap)) break
       await (e.inflight ?? this.fetchOnce(e))
     }
+    return e.snap
+  }
+
+  /**
+   * Wave W (WS4, deck import): asks the api again for a version whose cached answer may be out of date although it is
+   * terminal: a ready PDF gains page renderings after its preview (render-pages ops make pages 9+), so a placed page
+   * the cached meta does not list is asked for again rather than given up. At most once per `minIntervalMs` per
+   * version (a fresher answer is returned as it is); subscribers hear a changed answer. A version that is not
+   * terminal yet is left to its poller (load).
+   */
+  async refresh(
+    boardId: string,
+    assetId: string,
+    versionId: string,
+    minIntervalMs = REFRESH_MIN_INTERVAL_MS,
+  ): Promise<MetaSnapshot> {
+    const e = this.entry(boardId, assetId, versionId)
+    if (!isTerminal(e.snap) || e.snap.missing) return this.load(boardId, assetId, versionId)
+    if (e.inflight) await e.inflight
+    else if (this.now() - e.fetchedAt >= minIntervalMs) await this.fetchOnce(e)
     return e.snap
   }
 

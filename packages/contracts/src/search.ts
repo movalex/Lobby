@@ -87,6 +87,19 @@ export const SearchHit = z.object({
   cutStart: z.boolean(),
   cutEnd: z.boolean(),
   snippet: z.array(SnippetPart),
+  /**
+   * Wave W (WS3, docs/WAVE-W-CONTRACTS.md §5): a hit in a file's extracted text. `kind` stays 'file' (no enum value
+   * is added, so LOBBY_CLIENT_REV stays 3), `objectId` is `file:<ver>.p<page>` (formats.ts fileHitObjectId), and this
+   * names the version, the page and the file's display name. Optional: an older api sends none, an older web strips
+   * it and opens the board. Only versions served on the hit's board AND placed on its canvas, checked at query time.
+   */
+  file: z
+    .object({
+      versionId: z.string().regex(/^ver_[0-9A-Za-z]{10,40}$/),
+      page: z.number().int().min(1),
+      name: z.string(),
+    })
+    .optional(),
 })
 export type SearchHit = z.infer<typeof SearchHit>
 

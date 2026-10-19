@@ -89,6 +89,7 @@ The env file holds only the three variables above. The compose file sets the non
 |---|---|---|
 | `WORKER_CONCURRENCY` | `1` | Jobs at once. The 1.5 GB memory cap is sized for 1. Raise it together with `mem_limit`. |
 | `WORKER_PDF_HEAP_MB` | `384` | V8 heap of the PDF renderer child. |
+| `WORKER_PDF_RSS_MB` | `768` | Resident-memory cap of the PDF renderer child (wave W): polled every 50 ms, killed over it (a preview then fails `FILE_TOO_LARGE`, never retried). The text child (768 MB) and the background-removal child (640 MB) have fixed caps. Unset in the compose file: the default. |
 | `WORKER_POLL_MS` / `WORKER_POLL_MAX_MS` | `2000` / `15000` | Idle polling: doubles with jitter up to the max, and resets when work arrives. |
 | `WORKER_SHUTDOWN_GRACE_MS` | `10000` | How long a stopping worker may finish its job before handing it back. It must stay below `stop_grace_period` (30 s). |
 | `OFFICE_SOCKET` / `OFFICE_JOBS_DIR` | `/office-jobs/office.sock` / `/office-jobs` | Set on both containers: where the worker stages documents and reaches the sidecar. Without them (and in production) Office previews are off. |

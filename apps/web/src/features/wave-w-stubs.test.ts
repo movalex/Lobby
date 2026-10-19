@@ -1,0 +1,119 @@
+// The wave W web side shared by the workstreams (docs/WAVE-W-CONTRACTS.md §1.3, §8): the switches (all off; a web switch
+// needs the api's offer too), the three wave W board features (registered empty), the /w/:wid/admin route and the
+// pending palette ids. Each workstream pins its own feature in its own tests; this file pins what they share.
+import {
+  FORMAT_SWITCHES_OFF,
+  PENDING_PALETTE_COMMAND_IDS,
+  WAVE_W_PALETTE_COMMAND_IDS,
+} from '@draftroom/contracts'
+import { afterEach, describe, expect, it } from 'vitest'
+import { matchRoute } from '../lib/routing.ts'
+import { CANVAS_FEATURES } from './canvas-registry.ts'
+import {
+  FORMATS_FLAG_KEYS,
+  FORMATS_FLAG_SERVER,
+  FORMATS_FLAGS,
+  type FormatsFlags,
+  formatsEnabled,
+  formatsFlags,
+  formatsOffer,
+  setFormatsOffer,
+} from './formats/flags.ts'
+
+afterEach(() => setFormatsOffer(null))
+
+const ALL_ON: FormatsFlags = {
+  docCards: true,
+  removeBackground: true,
+  fileSearch: true,
+  deckImport: true,
+  admin: true,
+}
+
+describe('the wave W switches', () => {
+  it('ship on but background removal (the integration; its model is not approved), and a production page ignores any override', () => {
+    expect(FORMATS_FLAGS).toEqual({
+      docCards: true,
+      removeBackground: false,
+      fileSearch: true,
+      deckImport: true,
+      admin: true,
+    })
+    expect(Object.keys(FORMATS_FLAG_KEYS).sort()).toEqual(Object.keys(FORMATS_FLAGS).sort())
+    expect(Object.keys(FORMATS_FLAG_SERVER).sort()).toEqual(Object.keys(FORMATS_FLAGS).sort())
+    expect(formatsFlags(false, () => '1')).toEqual(FORMATS_FLAGS)
+  })
+
+  it('a dev-auth page may turn each on or off; a blocked store keeps the shipped value', () => {
+    expect(formatsFlags(true, () => '1')).toEqual(ALL_ON)
+    expect(formatsFlags(true, () => '0')).toEqual({ ...FORMAT_SWITCHES_OFF })
+    expect(formatsFlags(true, () => null)).toEqual(FORMATS_FLAGS)
+    expect(formatsFlags(true, (k) => (k === FORMATS_FLAG_KEYS.admin ? '1' : null)).admin).toBe(true)
+    expect(
+      formatsFlags(true, () => {
+        throw new Error('blocked')
+      }),
+    ).toEqual(FORMATS_FLAGS)
+  })
+
+  it('the api offer starts all off; anything not exactly true is off; an api before wave W sends none', () => {
+    expect(formatsOffer.get()).toEqual(FORMAT_SWITCHES_OFF)
+    setFormatsOffer({ docCards: true, removeBackground: 'yes' as unknown as boolean, admin: true })
+    expect(formatsOffer.get()).toEqual({ ...FORMAT_SWITCHES_OFF, docCards: true, admin: true })
+    setFormatsOffer(undefined)
+    expect(formatsOffer.get()).toEqual(FORMAT_SWITCHES_OFF)
+  })
+
+  it('a feature is offered only when its web switch AND the api offer say on', () => {
+    const offer = { ...FORMAT_SWITCHES_OFF, docCards: true, fileSearch: true }
+    expect(formatsEnabled('docCards', ALL_ON, offer)).toBe(true)
+    expect(formatsEnabled('fileSearch', ALL_ON, offer)).toBe(true)
+    expect(formatsEnabled('removeBackground', ALL_ON, offer)).toBe(false)
+    expect(formatsEnabled('docCards', { ...ALL_ON, docCards: false }, offer)).toBe(false)
+    // the shipped switches: each is offered once the api offers it, but background removal never (its model is not
+    // approved yet); and nothing is offered while the api offers nothing
+    for (const f of Object.keys(FORMATS_FLAGS) as (keyof FormatsFlags)[]) {
+      expect(formatsEnabled(f, FORMATS_FLAGS, { ...FORMAT_SWITCHES_OFF, [f]: true }), f).toBe(
+        f !== 'removeBackground',
+      )
+      expect(formatsEnabled(f, FORMATS_FLAGS, FORMAT_SWITCHES_OFF), f).toBe(false)
+    }
+  })
+})
+
+describe('the wave W board features and routes', () => {
+  it('doc-cards, remove-bg and deck-import are registered before the Elements panel (the last)', () => {
+    const ids = CANVAS_FEATURES.map((f) => f.id)
+    // WS2 landed remove-bg (features/remove-bg: its tracker and its held palette command); its own suite tests it
+    expect(Object.keys(CANVAS_FEATURES.find((x) => x.id === 'remove-bg') ?? {})).toEqual([
+      'id',
+      'commands',
+      'onMount',
+    ])
+    for (const id of ['doc-cards', 'deck-import']) {
+      const f = CANVAS_FEATURES.find((x) => x.id === id)
+      expect(f, id).toBeDefined()
+      // WS1 filled 'doc-cards' (it offers nothing while its switch is off: doc-cards/feature.test.ts) and WS4
+      // 'deck-import' (features/deck-import/deck-import.test.ts pins it): neither is the empty stub any more
+      expect(Object.keys(f ?? {}).length, id).toBeGreaterThan(1)
+    }
+    expect(ids.at(-1)).toBe('elements')
+    expect(ids.indexOf('deck-import')).toBe(ids.indexOf('breakouts') + 3)
+  })
+
+  it('/w/:wid/admin is its own route', () => {
+    expect(matchRoute('/w/wsp_0123456789abcdefghij/admin')).toEqual({
+      name: 'workspace-admin',
+      workspaceId: 'wsp_0123456789abcdefghij',
+    })
+  })
+
+  it('every wave W palette id is registered but image.remove-background, held until its model is approved', () => {
+    const commands = new Set(CANVAS_FEATURES.flatMap((f) => (f.commands ?? []).map((c) => c.id)))
+    for (const id of WAVE_W_PALETTE_COMMAND_IDS) {
+      const held = id === 'image.remove-background'
+      expect((PENDING_PALETTE_COMMAND_IDS as readonly string[]).includes(id), id).toBe(held)
+      expect(commands.has(id), id).toBe(!held)
+    }
+  })
+})

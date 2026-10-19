@@ -113,7 +113,7 @@ export async function drawBadges(
 // ---- the export-overlay registry (wave T foundation) -------------------------------------------------------------
 
 /** The overlay layers an export draws (each workstream adds its own id here through the lead). */
-export type ExportOverlayId = 'votes' | 'storyboard' | 'cards' | 'kanban' | 'timeline'
+export type ExportOverlayId = 'votes' | 'storyboard' | 'cards' | 'kanban' | 'timeline' | 'doc-cards'
 
 /** One export, as a layer sees it. */
 export interface ExportOverlayInput {

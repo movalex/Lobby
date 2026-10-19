@@ -129,6 +129,7 @@ describe('wave Q migration', () => {
       '0036_chat_hooks',
       '0037_client_review',
       '0038_live_sessions',
+      '0039_formats',
     ])
     expect(all.map((m) => m.version)).toEqual(all.map((_, i) => i + 1))
   })

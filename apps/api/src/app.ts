@@ -33,8 +33,11 @@ import { EventHub } from './events/hub.ts'
 import { registerEventRoutes } from './events/routes.ts'
 import type { FeatureContext } from './features/context.ts'
 import { registerFeedback } from './features/feedback/index.ts'
+import { createFormatsOffer } from './features/formats/offer.ts'
+import { publishOpChange } from './features/formats/op-state.ts'
 import { INTERNAL_CHECKPOINT_POSTS } from './features/history/checkpoint-all.ts'
 import { registerFeatures } from './features/index.ts'
+import { enqueueFileText } from './features/search/file-backfill.ts'
 import type { BlobStore } from './files/blobs.ts'
 import { filesPlugin } from './files/plugin.ts'
 import { registerStorage } from './files/storage-routes.ts'
@@ -136,6 +139,11 @@ export interface ApiDeps {
   domainAccessGuard?: boolean
   /** GET /healthz/deep's thresholds and timeouts (health.ts DEFAULT_HEALTH; tests lower them). */
   health?: Partial<HealthOptions>
+  /**
+   * TEST-ONLY seam (wave W, worker/ops-kinds.ts): replaces the op kinds' handlers, to drive the shared ops protocol
+   * through a kind the test writes. Never set outside tests (the app uses OP_KINDS).
+   */
+  workerOpKinds?: NonNullable<WorkerDeps['ops']>['kinds']
 }
 
 export interface ApiServer {
@@ -425,6 +433,7 @@ async function buildServer(
     limits,
     identity,
     canvas,
+    formatsOffer: createFormatsOffer({ db, now, switches: config.formats }),
     async requireUser(req) {
       const user = await sessions.user(req)
       if (!user) throw unauthenticated()
@@ -617,6 +626,12 @@ async function buildServer(
       const e = err as { name?: unknown; message?: unknown }
       app.log.warn({ err: { name: e?.name, message: e?.message } }, 'assets.version event not published')
     }
+    // wave W (WS3): a ready PDF or Office document gets its text read (features/search/file-backfill.ts)
+    if (c.status === 'ready')
+      await enqueueFileText(ctx, c.versionId, now()).catch((err: unknown) => {
+        const e = err as { name?: unknown; message?: unknown }
+        app.log.warn({ err: { name: e?.name, message: e?.message } }, 'file text not queued')
+      })
   }
   await app.register(workerPlugin, {
     db,
@@ -625,6 +640,15 @@ async function buildServer(
     now,
     onVersionChange,
     rateLimit: deps.workerRateLimit,
+    // wave W: the worker ops protocol (worker/ops-routes.ts): the switches decide which kinds are handed out; a status
+    // change reaches its requester only (file.op); a version a kind made is announced like an upload's
+    ops: {
+      switches: config.formats,
+      onOpChange: (c) => publishOpChange(db, events, c, now()),
+      onVersionMade: (v) => onVersionChange({ ...v, status: 'queued' }),
+      onCapabilities: () => ctx.formatsOffer.invalidate(),
+      ...(deps.workerOpKinds ? { kinds: deps.workerOpKinds } : {}),
+    },
   })
 
   // Liveness only (no database, no auth): for Render health checks and local tooling.

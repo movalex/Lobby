@@ -1,0 +1,319 @@
+/* OWNER: WS1 (wave W, doc cards). The face of a doc card on the board (./DocFace.tsx) and its side panel
+   (./DocEditor.tsx). The face is a box in the overlay's scene layer, in scene units scaled with the zoom: its font
+   size and line height are the label's, so it is as tall as the words the canvas laid out under it. The layer takes
+   no pointer events; the links, the checklist boxes and Open do (.dr-interactive). */
+
+.lobby-doc {
+  box-sizing: border-box;
+  overflow: hidden;
+  margin: 0;
+  pointer-events: none;
+  -webkit-font-smoothing: antialiased;
+}
+.lobby-doc .dr-interactive {
+  pointer-events: auto;
+}
+.lobby-doc__body {
+  box-sizing: border-box;
+  height: 100%;
+  overflow: hidden;
+  padding: var(--lobby-doc-pad, 5px);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.lobby-doc__line,
+.lobby-doc__heading,
+.lobby-doc__quote,
+.lobby-doc__list,
+.lobby-doc__item {
+  margin: 0;
+  padding: 0;
+}
+.lobby-doc__blank {
+  min-height: 1lh;
+}
+/* headings by weight, never by size: the canvas laid the words out at one size */
+.lobby-doc__heading[data-level="1"] {
+  font-weight: 800;
+}
+.lobby-doc__heading[data-level="2"] {
+  font-weight: 700;
+}
+.lobby-doc__heading[data-level="3"] {
+  font-weight: 650;
+  text-transform: none;
+  opacity: 0.85;
+}
+.lobby-doc__list {
+  list-style: none;
+}
+.lobby-doc__marker,
+.lobby-doc__box {
+  display: inline-block;
+  min-width: 1em;
+  text-align: center;
+}
+.lobby-doc__check {
+  width: 0.95em;
+  height: 0.95em;
+  margin: 0 0.05em;
+  vertical-align: -0.12em;
+  accent-color: #2f6f4f;
+  cursor: pointer;
+}
+.lobby-doc__done {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+.lobby-doc__quote {
+  border-left: 3px solid #c4bfb0;
+  padding-left: 0.6em;
+  color: #5f6b7a;
+  font-style: italic;
+}
+.lobby-doc__rule {
+  border: 0;
+  margin: 0;
+  height: 1lh;
+  background: linear-gradient(
+    transparent calc(50% - 0.5px),
+    #c4bfb0 calc(50% - 0.5px),
+    #c4bfb0 calc(50% + 0.5px),
+    transparent calc(50% + 0.5px)
+  );
+}
+.lobby-doc__code {
+  font-family: Cascadia, var(--dr-mono, monospace);
+  font-size: 0.92em;
+  background: rgb(27 35 48 / 7%);
+  border-radius: 3px;
+  padding: 0 0.15em;
+}
+.lobby-doc__link {
+  color: #1c6fd1;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.lobby-doc__nolink {
+  text-decoration: underline dotted;
+}
+/* what does not fit: cut with a fade, and Open shows it all */
+.lobby-doc__fade {
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 3.5em;
+  /* premultiplied interpolation: transparent to the card's fill, no grey band */
+  background: linear-gradient(transparent, var(--lobby-doc-fill, #fff) 80%);
+  pointer-events: none;
+}
+.lobby-doc__open {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  font: 600 13px / 1 var(--dr-font, system-ui, sans-serif);
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid #c4bfb0;
+  background: #ffffff;
+  color: #1b2330;
+  box-shadow: 0 1px 3px rgb(27 35 48 / 18%);
+  cursor: pointer;
+}
+.lobby-doc__open:hover {
+  background: #f1efe8;
+}
+.lobby-doc__open:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+/* ---- the side panel ------------------------------------------------------------------------------------------- */
+
+.lobby-doc-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  min-height: 0;
+  padding: 8px 12px 12px;
+  box-sizing: border-box;
+  color: var(--dr-ink);
+}
+.lobby-doc-editor__head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.lobby-doc-editor__title {
+  margin: 0;
+  font-weight: 700;
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lobby-doc-editor__status {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dr-ink-2);
+}
+.lobby-doc-editor[data-phase="denied"] .lobby-doc-editor__status,
+.lobby-doc-editor[data-phase="lost"] .lobby-doc-editor__status {
+  color: var(--dr-warn);
+}
+.lobby-doc-editor__lost {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--dr-warn-bg);
+  border: 1px solid var(--dr-warn-line);
+  color: var(--dr-warn);
+  font-size: 13px;
+}
+.lobby-doc-editor__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.lobby-doc-editor__tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+.lobby-doc-editor__tool {
+  min-width: 30px;
+  height: 30px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dr-ink);
+  font: 600 13px / 1 var(--dr-font);
+  cursor: pointer;
+}
+.lobby-doc-editor__tool:hover:not(:disabled) {
+  background: var(--dr-hover);
+}
+.lobby-doc-editor__tool:focus-visible,
+.lobby-doc-editor__tab:focus-visible,
+.lobby-doc-editor__area:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+.lobby-doc-editor__tool:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.lobby-doc-editor__tool [data-tool="bold"] {
+  font-weight: 800;
+}
+.lobby-doc-editor__tool [data-tool="italic"] {
+  font-style: italic;
+  font-family: Georgia, serif;
+}
+.lobby-doc-editor__tabs {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--dr-chip);
+}
+.lobby-doc-editor__tab {
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dr-ink-2);
+  font: 600 12px / 1 var(--dr-font);
+  cursor: pointer;
+}
+.lobby-doc-editor__tab[aria-selected="true"] {
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  box-shadow: 0 1px 2px rgb(27 35 48 / 12%);
+}
+.lobby-doc-editor__area {
+  flex: 1 1 auto;
+  min-height: 240px;
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  padding: 10px;
+  border: 1px solid var(--dr-field-line);
+  border-radius: 8px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 14px / 1.5 var(--dr-mono);
+  tab-size: 2;
+}
+.lobby-doc-editor__area[readonly] {
+  background: var(--dr-inset);
+  color: var(--dr-ink-2);
+}
+.lobby-doc-editor__preview {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 240px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--dr-line);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #1b2330;
+  font:
+    15px / 1.45 Nunito,
+    var(--dr-font);
+  pointer-events: auto;
+  white-space: pre-wrap;
+}
+.lobby-doc-editor__preview .lobby-doc__link:focus-visible,
+.lobby-doc-editor__preview .lobby-doc__check:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+.lobby-doc-editor__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.lobby-doc-editor__count {
+  margin: 0;
+  font-size: 12px;
+  color: var(--dr-ink-2);
+}
+.lobby-doc-editor__actions {
+  display: flex;
+  gap: 6px;
+}
+.lobby-doc-barslot {
+  display: contents;
+}
+
+/* phones and touch: bigger targets (the dock opens the panel as a full-width sheet below 600 px) */
+@media (pointer: coarse) {
+  .lobby-doc-editor__tool,
+  .lobby-doc-editor__tab {
+    min-width: 44px;
+    height: 44px;
+  }
+  .lobby-doc-editor__area {
+    font-size: 16px;
+  }
+  .lobby-doc__open {
+    padding: 10px 16px;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .lobby-doc-editor__tool,
+  .lobby-doc-editor__tab {
+    transition: background-color 0.12s ease;
+  }
+}

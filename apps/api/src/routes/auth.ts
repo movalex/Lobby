@@ -37,6 +37,8 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, provid
     designPreviews: ctx.config.designPreviews,
     // wave V: which "Live sessions+" features run (contracts AuthConfig.live)
     live: { ...ctx.config.live },
+    // wave W: which "Formats" features the web may offer now (contracts AuthConfig.formats; features/formats/offer.ts)
+    formats: await ctx.formatsOffer(),
   }))
 
   /**

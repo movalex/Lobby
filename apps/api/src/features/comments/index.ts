@@ -56,6 +56,7 @@ import {
 import { isId, newId, type Queryable } from '@draftroom/db'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { type BoardAccess, type BoardRow, requireBoardAction } from '../../access.ts'
+import { audit } from '../../audit.ts'
 import type { CreatorLookup } from '../../auth/creator-sql.ts'
 import type { Params } from '../../context.ts'
 import { ApiError, badRequest, conflict, forbidden, notFound, parse } from '../../errors.ts'
@@ -524,21 +525,14 @@ export async function registerComments(app: FastifyInstance, ctx: FeatureContext
       await touchThread(tx, comment.thread_id, at)
       if (moderating) {
         // Moderation is audited; the body is not copied into the log.
-        await tx.query(
-          `INSERT INTO audit_events (workspace_id, actor_id, action, target, detail, at)
-           VALUES ($1, $2, 'comment.moderate_delete', $3, $4::jsonb, $5)`,
-          [
-            comment.workspace_id,
-            user.id,
-            comment.board_id,
-            JSON.stringify({
-              commentId: comment.id,
-              threadId: comment.thread_id,
-              authorId: comment.author_id,
-            }),
-            at,
-          ],
-        )
+        await audit(tx, {
+          workspaceId: comment.workspace_id,
+          actorId: user.id,
+          action: 'comment.moderate_delete',
+          target: comment.board_id,
+          detail: { commentId: comment.id, threadId: comment.thread_id, authorId: comment.author_id },
+          at,
+        })
       }
       return {
         board: { id: comment.board_id, workspace_id: comment.workspace_id },

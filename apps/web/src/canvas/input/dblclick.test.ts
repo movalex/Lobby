@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { classifyDoubleClick, type DblClickElement, type DblClickView } from './dblclick.ts'
+import * as PanelEditorModule from '../lease/panelEditor.ts'
+import {
+  classifyDoubleClick,
+  type DblClickElement,
+  type DblClickView,
+  PANEL_TEXT_EDITORS,
+  panelEditorTarget,
+} from './dblclick.ts'
 
 const el = (id: string, type: string, extra: Partial<DblClickElement> = {}): DblClickElement => ({
   id,
@@ -104,5 +111,37 @@ describe('classifyDoubleClick (mirrors handleCanvasDoubleClick, index.js:44726-4
 
   it('autoshape double-clicks are text paths (P8; Lobby never activates autoshape anyway)', () => {
     expect(classifyDoubleClick({ ...base, activeToolType: 'autoshape' })).toEqual({ kind: 'text' })
+  })
+})
+
+describe('the panel text editors (wave W, the guard list)', () => {
+  const card = { id: 'card', type: 'rectangle', customData: { lobby: { kind: 'doc-card' } } }
+  const label = { id: 'card.t', type: 'text', containerId: 'card' }
+  const plain = { id: 'r', type: 'rectangle' }
+  const get = (id: string) => [card, label, plain].find((e) => e.id === id)
+
+  it('a doc card, or its bound label, opens the doc card panel; anything else is the engine path', () => {
+    expect(panelEditorTarget(card, get)).toEqual({ editor: 'doc-card-panel', id: 'card' })
+    expect(panelEditorTarget(label, get)).toEqual({ editor: 'doc-card-panel', id: 'card' })
+    expect(panelEditorTarget(plain, get)).toBeNull()
+    expect(panelEditorTarget(null, get)).toBeNull()
+    expect(panelEditorTarget({ ...card, isDeleted: true }, get)).toBeNull()
+    expect(panelEditorTarget({ id: 'x', type: 'text', containerId: 'gone' }, get)).toBeNull()
+  })
+
+  it('every listed editor names a lease client that exists and is guarded by isWritable', () => {
+    const adapters: Record<string, Record<string, unknown>> = {
+      'canvas/lease/panelEditor.ts': PanelEditorModule,
+    }
+    expect(PANEL_TEXT_EDITORS.map((e) => e.id)).toEqual(['doc-card-panel'])
+    for (const e of PANEL_TEXT_EDITORS) {
+      const mod = adapters[e.adapter]
+      expect(mod, e.adapter).toBeDefined()
+      const Lease = mod?.PanelEditorLease as { prototype: Record<string, unknown> } | undefined
+      expect(typeof Lease?.prototype.isWritable, e.id).toBe('function')
+      // its double-click and double-tap are the feature's, never Excalidraw's editor
+      expect(e.opens).toContain('double-click')
+      expect(e.opens).toContain('double-tap')
+    }
   })
 })

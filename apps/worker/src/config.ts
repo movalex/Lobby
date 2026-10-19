@@ -14,6 +14,13 @@ export const PREVIEW = {
   sharpTimeoutSeconds: 20,
   /** Default V8 heap cap of the PDF child (--max-old-space-size); WORKER_PDF_HEAP_MB overrides it. */
   pdfChildHeapMb: 384,
+  /**
+   * Default resident-memory cap of the PDF child (previews and render-pages), WORKER_PDF_RSS_MB overrides it. The heap
+   * flag bounds only V8: pdf.js keeps decompressed streams outside it (a 1.5 MB PDF reached 3.3 GB). Enforced on Linux
+   * only (run.ts): a child over it is killed and the file fails for good. The same 768 MB as the pdf-text child's
+   * FILE_TEXT_LIMITS.childRssMb.
+   */
+  pdfChildRssMb: 768,
   pdfEmbeddedImagePixels: 100_000_000,
   probeTimeoutMs: 15_000,
   posterTimeoutMs: 30_000,

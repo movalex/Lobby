@@ -321,6 +321,22 @@ services:
         value: "on"
       - key: DRAFTROOM_BREAKOUTS
         value: "on"
+      # Wave W "Formats" kill switches (docs/WAVE-W-CONTRACTS.md §1; api only): "on" runs the feature; "off" (also unset or
+      # empty) makes every route of it answer as an unknown route and hands no op of it to a worker; anything else stops
+      # the api at start. Off until the wave W deploy's switch step (§9): doc cards, background removal, search inside
+      # files, deck import, the workspace admin page. The three worker-backed ones are offered to the web only while a
+      # NAS worker with their capability is seen (after the owner-approved worker rebuild). Turning one off is the instant
+      # rollback (a restart; Postgres keeps everything).
+      - key: DRAFTROOM_DOC_CARDS
+        value: "off"
+      - key: DRAFTROOM_REMOVE_BACKGROUND
+        value: "off"
+      - key: DRAFTROOM_FILE_SEARCH
+        value: "off"
+      - key: DRAFTROOM_DECK_IMPORT
+        value: "off"
+      - key: DRAFTROOM_WORKSPACE_ADMIN
+        value: "off"
       - fromGroup: draftroom-staging-secrets
       - fromGroup: draftroom-staging-worker-token
       # wave R: chat hook URLs are sealed with it (api only)
@@ -476,4 +492,7 @@ services:
   #       value: "1"
   #     - key: WORKER_PDF_HEAP_MB
   #       value: "256"
+  #     # wave W: the PDF child's resident-memory cap under the 512 MB instance (the default 768 is the NAS's)
+  #     - key: WORKER_PDF_RSS_MB
+  #       value: "320"
   #     - fromGroup: draftroom-staging-worker-token

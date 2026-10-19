@@ -6,13 +6,16 @@
 // question is asked of this board instead. "Add answer to board" only when the answer says every cited board allows
 // copying out of it (`exportAllowed`). Nothing is written but that note; the answer is never stored or sent.
 
-import { AI_ERROR_CODES } from '@draftroom/contracts'
+import { AI_ERROR_CODES, parseFileHitObjectId } from '@draftroom/contracts'
 import { isApiError } from '../../../api/client.ts'
 import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
+import { fileHitHref } from '../../../dashboard/search/content-search.ts'
+import { type FileHitLink, openFileHit } from '../../../file-card/ported/open-file-hit.ts'
 import { elementsLink } from '../../../lib/deep-link.ts'
 import { boardPath } from '../../../lib/routing.ts'
 import { type Atom, atom } from '../../../lib/signals.ts'
 import { countUsage } from '../../../lib/usage.ts'
+import { formatsEnabled } from '../../formats/flags.ts'
 import { cut } from '../copy.ts'
 import {
   askWorkspace,
@@ -21,7 +24,7 @@ import {
 } from '../workspace-ask/client.ts'
 import { askNotice, NOTICE_TITLES, offerUndoFor } from './actions.ts'
 import { applyNotes } from './apply.ts'
-import { aiAnswer, answerText, askBoard, WHOLE_BOARD } from './ask.ts'
+import { aiAnswer, answerText, askBoard, showSources, WHOLE_BOARD } from './ask.ts'
 import { aiStatus, openingPrivatePanel, perCanvas, registerPrivatePanel } from './runtime.ts'
 import { NONE } from './target.ts'
 
@@ -110,11 +113,50 @@ export async function askAllBoards(ctx: CanvasFeatureContext, question: string):
   aiWorkspaceAnswer(canvas).set({ ...mine, status: 'done', result })
 }
 
-/** A cited board's link: the board at its cited elements (`?el=`), as the dashboard's search links them. */
+/**
+ * The page inside a file a citation leads with (wave W, WS3: Ask across boards cites file text by the file hit's id
+ * `file:<ver>.p<page>`), or null when its first id is a canvas element. Such an id is never an element of the board.
+ * Null too while this page does not offer file search (`formatsEnabled('fileSearch')`): the chip then opens the board
+ * at its canvas elements, as the `?file=` opener would do nothing.
+ */
+export function citedFilePage(
+  c: { readonly elementIds: readonly string[] },
+  fileSearchOn: boolean = formatsEnabled('fileSearch'),
+): FileHitLink | null {
+  const first = c.elementIds[0]
+  return first === undefined || !fileSearchOn ? null : parseFileHitObjectId(first)
+}
+
+/** The canvas elements a citation names (its file page ids left out: they name no element). */
+export const citedElementIds = (c: { readonly elementIds: readonly string[] }): string[] =>
+  c.elementIds.filter((id) => parseFileHitObjectId(id) === null)
+
+/**
+ * A cited board's link: a citation that leads with a page inside a file opens that file at its page (the search's
+ * `?file=<ver>&page=<n>`, file-card/ported/open-file-hit.ts); any other opens the board at its cited elements (`?el=`),
+ * as the dashboard's search links them.
+ */
 export const citationHref = (c: {
   readonly boardId: string
   readonly elementIds: readonly string[]
-}): string => elementsLink(boardPath(c.boardId), c.elementIds)
+}): string => {
+  const file = citedFilePage(c)
+  if (file) return fileHitHref(c.boardId, file.versionId, file.page)
+  return elementsLink(boardPath(c.boardId), citedElementIds(c))
+}
+
+/**
+ * A citation of the board open here: a page inside a file opens that file's viewer at the page (as its `?file=` link
+ * would); otherwise, or when the board no longer shows that file, its canvas elements are selected and shown.
+ */
+export function showCitationHere(
+  ctx: CanvasFeatureContext,
+  c: { readonly elementIds: readonly string[] },
+): boolean {
+  const file = citedFilePage(c)
+  if (file && openFileHit(ctx, file)) return true
+  return showSources(ctx.canvas, citedElementIds(c))
+}
 
 /** Whether "Add answer to board" may run: an answer that says something, every cited board allowing it, an editor. */
 export function canAddWorkspaceAnswer(canvas: LobbyCanvas, state: WorkspaceAnswerState | null): boolean {
