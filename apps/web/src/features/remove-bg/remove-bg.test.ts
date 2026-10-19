@@ -208,11 +208,11 @@ describe('what is offered', () => {
     expect(row?.visible?.(f.ctx, { ids: ['img'] } as never)).toBe(false)
   })
 
-  it('the palette command is held while the contracts list it pending', () => {
-    expect(PENDING_PALETTE_COMMAND_IDS).toContain(REMOVE_BG_COMMAND_ID)
-    expect(removeBgCommandHeld()).toBe(true)
-    expect(feature.commands).toEqual([])
-    expect(removeBgCommandHeld([])).toBe(false)
+  it('the palette command is registered now that the contracts no longer list it pending (and would be held if they did)', () => {
+    expect(PENDING_PALETTE_COMMAND_IDS).not.toContain(REMOVE_BG_COMMAND_ID)
+    expect(removeBgCommandHeld()).toBe(false)
+    expect(feature.commands?.map((c) => c.id)).toEqual([REMOVE_BG_COMMAND_ID])
+    expect(removeBgCommandHeld([REMOVE_BG_COMMAND_ID])).toBe(true)
     expect(REMOVE_BG_COMMANDS.map((c) => c.id)).toEqual([REMOVE_BG_COMMAND_ID])
   })
 })

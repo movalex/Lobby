@@ -311,11 +311,7 @@ export const PENDING_PALETTE_COMMAND_IDS: readonly PaletteCommandId[] = [
   // lead): WS1 'doc-card.insert' and 'doc-card.from-text', WS2 'image.remove-background', WS4 'deck.insert-slides',
   // WS5 'workspace.admin'. WS1 registered 'doc-card.insert' and 'doc-card.from-text' (features/doc-cards), WS4
   // 'deck.insert-slides' (features/deck-import), and the integration 'workspace.admin' (features/workspace-admin).
-  // Still held: WS2's 'image.remove-background'. Background removal stays hidden until the owner approves the model
-  // file's one-time download and its sha256 is pinned (apps/worker/src/ops/bg-model.ts BG_MODEL.sha256 and
-  // apps/worker/models/MODELS.json; docs/WAVE-W-CONTRACTS.md §4.2, §11.1); listing it here keeps the palette from
-  // offering it before then (features/remove-bg removeBgCommandHeld). Release it in the change that pins the hash.
-  'image.remove-background',
+  // WS2's 'image.remove-background' was released on 2026-10-19 with the model's sha256 pin (owner-approved download).
 ]
 
 /**

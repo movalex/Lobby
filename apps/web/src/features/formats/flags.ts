@@ -29,12 +29,12 @@ export interface FormatsFlags {
 
 export type FormatsFlag = keyof FormatsFlags
 
-// The wave W foundation shipped every switch off; the integration turned on the four that are live. Background
-// removal stays off until the owner approves the model file (its sha256 pin is null: docs/WAVE-W-CONTRACTS.md §4.2).
+// The wave W foundation shipped every switch off; the integration turned on four, and background removal followed on
+// 2026-10-19 once the owner-approved model was pinned (apps/worker/src/ops/bg-model.ts).
 // Each still needs the api's offer (its kill switch, and for file search and deck import a capable worker).
 export const FORMATS_FLAGS: FormatsFlags = {
   docCards: true,
-  removeBackground: false,
+  removeBackground: true,
   fileSearch: true,
   deckImport: true,
   admin: true,

@@ -256,10 +256,10 @@ test('render.yaml: the wave V switches are on the api only, and on (wave V deplo
   }
 })
 
-test('render.yaml: the wave W switches are on the api only; on since the wave W deploy, except remove background (no approved model yet)', () => {
+test('render.yaml: the wave W switches are on the api only, and all on (remove background since its model was pinned)', () => {
   for (const [key, value] of [
     ['DRAFTROOM_DOC_CARDS', 'on'],
-    ['DRAFTROOM_REMOVE_BACKGROUND', 'off'],
+    ['DRAFTROOM_REMOVE_BACKGROUND', 'on'],
     ['DRAFTROOM_FILE_SEARCH', 'on'],
     ['DRAFTROOM_DECK_IMPORT', 'on'],
     ['DRAFTROOM_WORKSPACE_ADMIN', 'on'],

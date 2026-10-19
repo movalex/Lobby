@@ -329,9 +329,9 @@ services:
       # rollback (a restart; Postgres keeps everything).
       - key: DRAFTROOM_DOC_CARDS
         value: "on"
-      # off until the owner approves the u2netp model download (docs/DEPLOY.md wave W step 4)
+      # on since 2026-10-19: the owner-approved u2netp model is pinned and placed on the NAS worker
       - key: DRAFTROOM_REMOVE_BACKGROUND
-        value: "off"
+        value: "on"
       - key: DRAFTROOM_FILE_SEARCH
         value: "on"
       - key: DRAFTROOM_DECK_IMPORT

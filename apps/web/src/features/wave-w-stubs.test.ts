@@ -31,10 +31,10 @@ const ALL_ON: FormatsFlags = {
 }
 
 describe('the wave W switches', () => {
-  it('ship on but background removal (the integration; its model is not approved), and a production page ignores any override', () => {
+  it('ship all on (background removal since its model was pinned), and a production page ignores any override', () => {
     expect(FORMATS_FLAGS).toEqual({
       docCards: true,
-      removeBackground: false,
+      removeBackground: true,
       fileSearch: true,
       deckImport: true,
       admin: true,
@@ -70,12 +70,9 @@ describe('the wave W switches', () => {
     expect(formatsEnabled('fileSearch', ALL_ON, offer)).toBe(true)
     expect(formatsEnabled('removeBackground', ALL_ON, offer)).toBe(false)
     expect(formatsEnabled('docCards', { ...ALL_ON, docCards: false }, offer)).toBe(false)
-    // the shipped switches: each is offered once the api offers it, but background removal never (its model is not
-    // approved yet); and nothing is offered while the api offers nothing
+    // the shipped switches: each is offered once the api offers it, and nothing while the api offers nothing
     for (const f of Object.keys(FORMATS_FLAGS) as (keyof FormatsFlags)[]) {
-      expect(formatsEnabled(f, FORMATS_FLAGS, { ...FORMAT_SWITCHES_OFF, [f]: true }), f).toBe(
-        f !== 'removeBackground',
-      )
+      expect(formatsEnabled(f, FORMATS_FLAGS, { ...FORMAT_SWITCHES_OFF, [f]: true }), f).toBe(true)
       expect(formatsEnabled(f, FORMATS_FLAGS, FORMAT_SWITCHES_OFF), f).toBe(false)
     }
   })
@@ -108,12 +105,11 @@ describe('the wave W board features and routes', () => {
     })
   })
 
-  it('every wave W palette id is registered but image.remove-background, held until its model is approved', () => {
+  it('every wave W palette id is registered and none is pending', () => {
     const commands = new Set(CANVAS_FEATURES.flatMap((f) => (f.commands ?? []).map((c) => c.id)))
     for (const id of WAVE_W_PALETTE_COMMAND_IDS) {
-      const held = id === 'image.remove-background'
-      expect((PENDING_PALETTE_COMMAND_IDS as readonly string[]).includes(id), id).toBe(held)
-      expect(commands.has(id), id).toBe(!held)
+      expect((PENDING_PALETTE_COMMAND_IDS as readonly string[]).includes(id), id).toBe(false)
+      expect(commands.has(id), id).toBe(true)
     }
   })
 })

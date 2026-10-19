@@ -463,7 +463,7 @@ describe('the workspace admin page', () => {
 })
 
 describe('palette ids', () => {
-  it('five wave W commands, known to the usage list and pending until their owners register them', () => {
+  it('five wave W commands, known to the usage list, and none pending any more', () => {
     expect([...WAVE_W_PALETTE_COMMAND_IDS]).toEqual([
       'doc-card.insert',
       'doc-card.from-text',
@@ -472,10 +472,11 @@ describe('palette ids', () => {
       'workspace.admin',
     ])
     // WS1 registered its two (features/doc-cards), WS4 its one (features/deck-import), the integration
-    // 'workspace.admin' (features/workspace-admin); 'image.remove-background' stays held until the model is approved
+    // 'workspace.admin' (features/workspace-admin); 'image.remove-background' was released with the model pin (2026-10-19)
     const registered = new Set([
       'doc-card.insert',
       'doc-card.from-text',
+      'image.remove-background',
       'deck.insert-slides',
       'workspace.admin',
     ])
