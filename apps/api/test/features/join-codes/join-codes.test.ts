@@ -208,6 +208,31 @@ describe('making a code', () => {
     expect((await askCode(w.bob, w.board, 'not-an-id')).statusCode).toBe(404)
   })
 
+  it('an archived board gets no join code: the code route is 409 BOARD_ARCHIVED and a new workshop link comes without one (review n1)', async () => {
+    const w = await world()
+    const l = await link(w.bob, w.board)
+    await w.api.db.query('UPDATE invitations SET join_code_hash = NULL WHERE id = $1', [l.id])
+    expect((await w.bob.req('POST', `/api/boards/${w.board}/archive`)).statusCode).toBe(200)
+    const res = await askCode(w.bob, w.board, l.id)
+    expect(res.statusCode).toBe(409)
+    expect(res.json().error.code).toBe('BOARD_ARCHIVED')
+    const h = await w.api.db.one<{ h: string | null }>(
+      'SELECT join_code_hash AS h FROM invitations WHERE id = $1',
+      [l.id],
+    )
+    expect(h.h).toBeNull()
+    const made = await w.bob.req('POST', `/api/boards/${w.board}/review-links`, {
+      role: 'editor',
+      allowGuests: true,
+    })
+    // an owner may still make a link on an archived board (it lets people read it): just no code with it
+    expect(made.statusCode, made.body).toBe(201)
+    expect(ReviewLinkCreated.parse(made.json()).joinCode).toBeUndefined()
+    // restored: codes again
+    expect((await w.bob.req('POST', `/api/boards/${w.board}/restore`)).statusCode).toBe(200)
+    expect((await askCode(w.bob, w.board, l.id)).statusCode).toBe(200)
+  })
+
   it('who may: the creator who manages the board; not an editor, a member without access, an outsider, a guest or anonymous', async () => {
     const w = await world()
     const l = await link(w.bob, w.board)

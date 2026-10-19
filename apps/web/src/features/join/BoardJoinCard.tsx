@@ -9,7 +9,7 @@ import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
 import { type Atom, atom, useValue } from '../../lib/signals.ts'
 import { Dialog } from '../../ui/Dialog.tsx'
 import { joinApi } from './api.ts'
-import { type JoinTarget, joinTarget, workshopLinksToShow } from './model.ts'
+import { type JoinTarget, joinCardStart, joinTarget } from './model.ts'
 import { JoinCard } from './QrCard.tsx'
 
 /** A new workshop link from the card: the Share dialog's default (3 h), guests may join with a name. */
@@ -65,12 +65,12 @@ function BoardJoinCard({ ctx, onClose }: { ctx: CanvasFeatureContext; onClose():
     void (async () => {
       try {
         const list = await joinApi(ctx.api).invitations(ctx.board.id, controller.signal)
-        const link = workshopLinksToShow(list, Date.now())[0]
-        if (!link?.url) {
-          setState({ kind: 'none' })
+        const start = joinCardStart(list, Date.now(), ctx.me.access?.creator === true)
+        if (start === 'make' || start === 'refused') {
+          setState({ kind: start === 'make' ? 'none' : 'refused' })
           return
         }
-        const ready = await targetOf(ctx, { ...link, url: link.url })
+        const ready = await targetOf(ctx, start.link)
         if (!controller.signal.aborted) setState({ kind: 'ready', ...ready })
       } catch (e) {
         if (controller.signal.aborted) return

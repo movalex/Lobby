@@ -232,7 +232,11 @@ at the global cap and 50 open codes that is about 4·10^-5 a day.
   `blob:` URL or an external reference. The QR encodes `joinUrl` when the link has a code (a version 2-3 QR), else the
   full invite URL.
 - The join card ("Show join code" in the Facilitate menu, §6.2; "Show QR" in the Share dialog's `WorkshopLinksSection`):
-  full screen and presentable, the QR, the code in large type, the host name, "Expires 14:30". The e2e follows the
+  full screen and presentable, the QR, the code in large type, the host name, "Expires 14:30". The Facilitate entry,
+  the palette command and the card's "Make a workshop link" are offered only to someone known to be a creator
+  (`me.access.creator === true`); anyone else who opens the card is told whom to ask (`joinCardStart`; review n2). An
+  archived board gets no code: `POST …/code` is 409 `BOARD_ARCHIVED` and a new workshop link on it comes without one
+  (review n1). The e2e follows the
   `data-join-url` the QR was made from (no small MIT decoder is in the tree).
 - `/j/:code` (`lib/routing.ts` route `join`; `App.tsx` loads `features/join/JoinPage.tsx` lazily, outside the session,
   only while `LIVE_FLAGS.joinCodes` is on) resolves the code and continues at `/invite/:token`, whose name-only join is
@@ -251,7 +255,9 @@ Today a 200-person QR session stalls at 60 joins per 10 minutes, per link and pe
 | total | `GUESTS_PER_LINK` 200 (unchanged) | the same |
 
 Workshop joins never consume the 60-per-address window of the other links, and other links' joins never consume the
-workshop windows. Still bounding abuse: a link lets in at most 200 guests ever; only creators make workshop links; the
+workshop windows. These windows have **no switch** of their own (review n3, decided: none is added): they apply whatever
+`DRAFTROOM_JOIN_CODES` says (the full invite URL's QR needs them too), and rolling them back is an api deploy of the
+previous build (DEPLOY.md, wave V rollback). Still bounding abuse: a link lets in at most 200 guests ever; only creators make workshop links; the
 board's guest item budget and the per-link stream (`GUEST_LINK_STREAMS` 400), reaction and summon caps hold. Tests
 (WS3, `apps/api/test/features/guests/join-burst.test.ts`): 200 joins from one address on one workshop link within 2
 min succeed, the 201st is `GUEST_LIMIT`; a review link from the same address still meets its 60; a second workshop link

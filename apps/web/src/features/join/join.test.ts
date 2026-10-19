@@ -10,7 +10,7 @@ import { LIVE_FLAG_KEYS, setLiveSwitches } from '../live/index.ts'
 import { feature, joinCodeEntryShown } from './index.tsx'
 import { HaveACode, JoinCodeField } from './JoinField.tsx'
 import JoinPage, { invitePathOf } from './JoinPage.tsx'
-import { expiresLabel, hostOf, joinPathOf, joinTarget, workshopLinksToShow } from './model.ts'
+import { expiresLabel, hostOf, joinCardStart, joinPathOf, joinTarget, workshopLinksToShow } from './model.ts'
 import { JoinCard, QrSvg } from './QrCard.tsx'
 import { QR_QUIET_ZONE, qrMatrix, qrPath, qrSide, qrVersion } from './qr.ts'
 import { ShowQrRow } from './ShowQr.tsx'
@@ -231,6 +231,18 @@ describe('the model', () => {
     ])
   })
 
+  it('joinCardStart: the newest link it may show; with none, Make a workshop link for a creator only, else whom to ask (review n2)', () => {
+    const now = Date.parse('2026-10-18T12:00:00.000Z')
+    const open = inv({ id: 'inv_new0000000000000000a', createdAt: '2026-10-18T11:00:00.000Z' })
+    expect(joinCardStart([open], now, true)).toEqual({ link: open })
+    // a non-creator manager's list carries the links without their URL (api): the card refuses, offers nothing
+    const hidden = inv({ id: 'inv_nourl00000000000000a', url: null })
+    expect(joinCardStart([hidden], now, false)).toBe('refused')
+    expect(joinCardStart([], now, false)).toBe('refused')
+    expect(joinCardStart([], now, true)).toBe('make')
+    expect(joinCardStart([hidden], now, true)).toBe('make')
+  })
+
   it('expiresLabel: the time today, the weekday and time on another day, Expired once past', () => {
     const now = new Date(2026, 9, 18, 12, 0)
     expect(expiresLabel(new Date(2026, 9, 18, 14, 30).toISOString(), now, 'en-GB')).toBe('Expires 14:30')
@@ -275,7 +287,8 @@ describe('the offers', () => {
     expect(joinCodeEntryShown(input)).toBe(false) // the api's switch off
     on(true)
     expect(joinCodeEntryShown(input)).toBe(true)
-    expect(joinCodeEntryShown({ ...input, ctx: ctx(undefined) })).toBe(true) // an api before domain access
+    // not known to be a creator (no access block): not offered, since only creators may show or make links (review n2)
+    expect(joinCodeEntryShown({ ...input, ctx: ctx(undefined) })).toBe(false)
     expect(joinCodeEntryShown({ ...input, ctx: ctx(false) })).toBe(false)
     expect(joinCodeEntryShown({ ...input, guest: true })).toBe(false)
     expect(joinCodeEntryShown({ ...input, facilitator: false })).toBe(false)

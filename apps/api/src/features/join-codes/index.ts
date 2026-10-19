@@ -38,7 +38,7 @@ import { audit } from '../../audit.ts'
 import { sha256hex } from '../../auth/session.ts'
 import { userKind } from '../../auth/users.ts'
 import type { Params } from '../../context.ts'
-import { notFound } from '../../errors.ts'
+import { conflict, notFound } from '../../errors.ts'
 import { keyedLimit } from '../../rate-limit.ts'
 import { guestAccountRequired } from '../../routes/invitations.ts'
 import type { FeatureContext } from '../context.ts'
@@ -57,6 +57,9 @@ import {
   joinCodeHash,
   sameCode,
 } from './code.ts'
+
+const boardArchived = () =>
+  conflict('BOARD_ARCHIVED', 'This board is archived. Restore it to make a join code.')
 
 export const LOOKUP_RATE_MESSAGE =
   'Too many join codes were tried from this network. Wait a few minutes and try again.'
@@ -119,6 +122,8 @@ export async function registerJoinCodes(
           route: req.routeOptions.url ?? '',
           by: 'route',
         })
+        // Not on an archived board (the §6.2 matrix: review n1): it takes nobody in to work together.
+        if (access.board.status !== 'active') throw boardArchived()
         // Not while the board's workspace or project is internal only (409 INTERNAL_ONLY), as "+1 h".
         await assertLinksAllowed(tx, bid)
         if (!InvitationId.safeParse(id).success) throw notFound()

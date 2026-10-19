@@ -57,6 +57,22 @@ export function workshopLinksToShow(
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
 }
 
+/**
+ * What the board's join card opens on: the newest open workshop link it may show (a link whose URL the list gave this
+ * person), else `make` for a creator (the card offers "Make a workshop link"), else `refused`: the api shows links and
+ * makes them for creators who manage access only, so anyone else is told whom to ask instead of being offered a
+ * button that fails (review n2).
+ */
+export function joinCardStart(
+  invitations: readonly PendingInvitation[],
+  now: number,
+  creator: boolean,
+): { link: PendingInvitation & { url: string } } | 'make' | 'refused' {
+  const link = workshopLinksToShow(invitations, now)[0]
+  if (link?.url) return { link: { ...link, url: link.url } }
+  return creator ? 'make' : 'refused'
+}
+
 /** "Expires 14:30" today, "Expires Tue 09:00" on another day; "Expired" once past. */
 export function expiresLabel(iso: string, now: Date = new Date(), locale?: string): string {
   const at = new Date(iso)

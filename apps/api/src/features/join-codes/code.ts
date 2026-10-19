@@ -90,6 +90,11 @@ export async function codeForNewLink(
   try {
     return await db.transaction(async (tx) => {
       await lockBoardRow(tx, boardId)
+      // an archived board gets no join code (the §6.2 matrix; the code route refuses it too: review n1)
+      const board = await tx.maybeOne<{ status: string }>('SELECT status FROM boards WHERE id = $1', [
+        boardId,
+      ])
+      if (board?.status !== 'active') return null
       const row = await tx.maybeOne<CodeColumns & WorkshopShape>(
         `SELECT id, multi_use, role, board_id, join_code_hash, join_code_n FROM invitations
           WHERE id = $1 AND board_id = $2 AND multi_use AND revoked_at IS NULL FOR UPDATE`,

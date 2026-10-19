@@ -16,12 +16,13 @@ import { canEditBoard } from '../workshops/workshop-context.ts'
 import { BoardJoinCardHost, openJoinCard } from './BoardJoinCard.tsx'
 
 /**
- * Whether the Facilitate menu offers "Show join code": a facilitator with an account who is a creator (only creators
- * hand out links; the api decides, this only keeps the entry from people it would refuse), with join codes on.
+ * Whether the Facilitate menu offers "Show join code": a facilitator with an account who is known to be a creator
+ * (only creators show and hand out links; the api decides, this only keeps the entry, and its offer to make a link,
+ * from people it would refuse: review n2), with join codes on.
  */
 export function joinCodeEntryShown(input: FacilitateEntryInput): boolean {
   if (input.guest || !input.facilitator) return false
-  if (input.ctx.me.access?.creator === false) return false
+  if (input.ctx.me.access?.creator !== true) return false
   return liveEnabled('joinCodes')
 }
 
@@ -29,7 +30,7 @@ export const JOIN_CODE_COMMAND_ID = 'join.show-code'
 
 /**
  * The palette's "Show join code" (wave V integration): the same card as the Facilitate entry, offered to the same people
- * (an editor with an account who is not known to be a non-creator), while join codes are on. The api still decides.
+ * (an editor with an account who is known to be a creator), while join codes are on. The api still decides.
  */
 export const JOIN_CODE_COMMAND: CommandSpec = {
   id: JOIN_CODE_COMMAND_ID,
@@ -40,7 +41,7 @@ export const JOIN_CODE_COMMAND: CommandSpec = {
   disabledReason: (ctx: CanvasFeatureContext) =>
     ctx.board.status !== 'active'
       ? 'This board is archived'
-      : !canEditBoard(ctx) || knownUserKind(ctx.me.user.id) === 'guest' || ctx.me.access?.creator === false
+      : !canEditBoard(ctx) || knownUserKind(ctx.me.user.id) === 'guest' || ctx.me.access?.creator !== true
         ? 'Join codes are shown by the people who share this board'
         : null,
   run: (ctx) => openJoinCard(ctx.canvas),
