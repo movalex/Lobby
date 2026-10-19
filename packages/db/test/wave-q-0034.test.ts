@@ -53,6 +53,7 @@ describe('the review fixes’ migration', () => {
       '0035_board_imports',
       '0036_chat_hooks',
       '0037_client_review',
+      '0038_live_sessions',
     ])
     expect(all.map((m) => m.version)).toEqual(all.map((_, i) => i + 1))
   })

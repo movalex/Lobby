@@ -7,7 +7,12 @@
 import { isIP } from 'node:net'
 import { join } from 'node:path'
 import { checkSecret } from '@draftroom/auth-tickets'
-import { VISITS_RETENTION_DAYS_DEFAULT } from '@draftroom/contracts'
+import {
+  LIVE_SWITCH_ENV,
+  LIVE_SWITCHES,
+  type LiveSwitches,
+  VISITS_RETENTION_DAYS_DEFAULT,
+} from '@draftroom/contracts'
 import { resolveDataDir } from '@draftroom/dev-assets'
 import { type CreatorPolicy, parseCreatorPolicy } from './auth/creators.ts'
 import { type AiConfig, parseAiConfig } from './features/ai/config.ts'
@@ -126,6 +131,13 @@ export interface ApiConfig {
    * (GET /api/auth/config).
    */
   designPreviews: boolean
+  /**
+   * Wave V (docs/WAVE-V-CONTRACTS.md §1): the "Live sessions+" kill switches, each "on" only (unset, empty or "off" is
+   * off; anything else refuses to start): DRAFTROOM_LIVE_ACTIVITIES (polls, scales, word clouds), DRAFTROOM_JOIN_CODES
+   * (join codes), DRAFTROOM_BREAKOUTS (breakouts). Off: every route of that feature answers as an unknown route
+   * (features/live/switch.ts). Also told to the web (GET /api/auth/config `live`).
+   */
+  live: LiveSwitches
   /** Wave R: DRAFTROOM_MIRO_TEST_ORIGINS (local dev only): the fake Miro server's origins, or null. */
   miroTestOrigins: { api: string; files: string | null } | null
   /** Wave R: DRAFTROOM_CHAT_HOOK_TEST_ORIGINS (local dev only): the fake webhook receiver's origins, or null. */
@@ -395,11 +407,21 @@ function parseTestOrigins(
   return out
 }
 
-/** DRAFTROOM_DESIGN_PREVIEWS: "on" turns it on; unset, empty or "off" are off; anything else is refused. */
-export function parseDesignPreviews(env: Env): boolean {
-  const raw = read(env, 'DRAFTROOM_DESIGN_PREVIEWS')?.toLowerCase() ?? 'off'
-  if (raw !== 'on' && raw !== 'off') throw new Error('DRAFTROOM_DESIGN_PREVIEWS must be on or off')
+/** A fail-closed switch: "on" turns it on; unset, empty or "off" are off; anything else is refused (any case, trimmed). */
+export function parseOnOff(env: Env, name: string): boolean {
+  const raw = read(env, name)?.toLowerCase() ?? 'off'
+  if (raw !== 'on' && raw !== 'off') throw new Error(`${name} must be on or off`)
   return raw === 'on'
+}
+
+/** DRAFTROOM_DESIGN_PREVIEWS: "on" turns it on; unset, empty or "off" are off; anything else is refused. */
+export const parseDesignPreviews = (env: Env): boolean => parseOnOff(env, 'DRAFTROOM_DESIGN_PREVIEWS')
+
+/** Wave V: DRAFTROOM_LIVE_ACTIVITIES, DRAFTROOM_JOIN_CODES, DRAFTROOM_BREAKOUTS, each as parseOnOff. */
+export function parseLiveSwitches(env: Env): LiveSwitches {
+  return Object.fromEntries(
+    LIVE_SWITCHES.map((s) => [s, parseOnOff(env, LIVE_SWITCH_ENV[s])]),
+  ) as LiveSwitches
 }
 
 /** DRAFTROOM_LINK_PREVIEW_TEST_ORIGINS: exact http(s) origins, behind the local-dev guard only. */
@@ -691,6 +713,7 @@ export function loadConfig(env: Env = process.env): ApiConfig {
     creators: parseCreatorPolicy(env),
     linkPreviewTestOrigins: parseLinkPreviewTestOrigins(env, devAuth),
     designPreviews: parseDesignPreviews(env),
+    live: parseLiveSwitches(env),
     miroTestOrigins: parseMiroTestOrigins(env, devAuth),
     chatHookTestOrigins: parseChatHookTestOrigins(env, devAuth),
     webhookSecret,

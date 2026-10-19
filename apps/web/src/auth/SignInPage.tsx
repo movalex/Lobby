@@ -2,6 +2,7 @@ import { AccountEmail } from '@draftroom/contracts'
 import { type FormEvent, lazy, type ReactNode, Suspense, useEffect, useId, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { Wordmark } from '../brand/Wordmark.tsx'
+import { HaveACode } from '../features/join/JoinField.tsx'
 import { fetchInvitation, type GuestAwarePreview } from '../invite/guest.tsx'
 import { signInHeading } from '../invite/model.ts'
 import { colorForUser, DEV_HANDLE_RE, DEV_QUICK_PICKS, initialsFor } from '../lib/identity.ts'
@@ -145,6 +146,8 @@ export function SignInPage() {
             </div>
           )}
           {body}
+          {/* Wave V (WS3): a join code from a workshop's join card (only while join codes are on) */}
+          <HaveACode />
         </section>
       </div>
     </main>

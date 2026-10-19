@@ -50,6 +50,7 @@ import {
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { useSession } from '../auth/session.tsx'
+import { ShowQrRow } from '../features/join/ShowQr.tsx'
 import { OutsideConfirm, OutsideStatusTag } from '../features/people/ExternalTag.tsx'
 import { useBoardOutside } from '../features/people/outside.ts'
 import { reviewFlags } from '../features/review/flags.ts'
@@ -466,6 +467,7 @@ export function ShareDialog({
   const workshopSection = (
     <WorkshopLinksSection
       boardId={board.id}
+      boardTitle={board.title}
       focusAsk={workshopAsk}
       links={workshopLinks}
       canCreate={!internalOnly}
@@ -702,6 +704,7 @@ export function ShareDialog({
         {reduceOnly && workshopLinks.length > 0 && (
           <WorkshopLinksSection
             boardId={board.id}
+            boardTitle={board.title}
             links={workshopLinks}
             canCreate={false}
             onChange={() => {
@@ -2131,12 +2134,15 @@ function InviteLinkSection({
  */
 function WorkshopLinksSection({
   boardId,
+  boardTitle,
   focusAsk = 0,
   links,
   canCreate,
   onChange,
 }: {
   boardId: string
+  /** the board's title: the Show QR card names the board (wave V) */
+  boardTitle: string
   /** R2-11: bumped by "Workshop link (guests can edit)": let guests in, and bring Create into view. */
   focusAsk?: number
   links: readonly PendingInvitation[]
@@ -2261,7 +2267,7 @@ function WorkshopLinksSection({
       )}
       {links.length > 0 && (
         <ul className="dr-sharing__links" aria-label="Open workshop links">
-          {links.map((l) => (
+          {links.flatMap((l) => [
             <ReviewLinkRow
               key={l.id}
               boardId={boardId}
@@ -2270,8 +2276,11 @@ function WorkshopLinksSection({
               canShare={canCreate}
               copiedOnCreate={justCreated?.id === l.id ? justCreated.copied : null}
               onChange={onChange}
-            />
-          ))}
+            />,
+            // Wave V (WS3): the link's join code and its full-screen QR card (only while join codes are on, and only
+            // for people the link's URL is shown to)
+            <ShowQrRow key={`${l.id}-qr`} boardId={boardId} link={l} boardTitle={boardTitle} />,
+          ])}
         </ul>
       )}
     </section>

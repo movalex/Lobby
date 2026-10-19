@@ -5,10 +5,14 @@
 //  - A citation click only moves this tab's camera: the push counter stays at 0.
 //  - The Markdown matches the golden file (recap.golden.md) and is bounded at 20 KB.
 //  - Catch me up's window: the previous visit on this device, else 24 h, also when localStorage throws.
+//  - Wave V (WS5): with the summary's switch on, the registered sources' sections (./sources.ts) are asked beside
+//    the AI call, never through it (AI off: still no /ai request), and are in the panel, the Markdown (the golden
+//    file) and the Recap frame with no AI provenance; with it off no source is asked.
 import { readFileSync } from 'node:fs'
 import { AI_RECAP_MAX_WINDOW_MS } from '@draftroom/contracts'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { exportGate } from '../../canvas-ux/ported/export-gate.ts'
+import { LIVE_FLAG_KEYS } from '../../live/index.ts'
 import { aiAnswer, askBoard, showSources, WHOLE_BOARD } from '../ported/ask.ts'
 import { aiKindWord, aiOf } from '../ported/provenance.ts'
 import {
@@ -24,14 +28,28 @@ import { AI_ON, aiKit, note, renderIn } from '../ported/test-kit.ts'
 import { revealResult } from '../reveal.ts'
 import { applyRecap } from './apply.ts'
 import { mdText, RECAP_MARKDOWN_MAX_BYTES, recapMarkdown } from './markdown.ts'
-import { type RecapPlan, recapPlan, recapWhen } from './plan.ts'
+import {
+  RECAP_SECTION_LINE_MAX,
+  type RecapPlan,
+  recapIsEmpty,
+  recapPlan,
+  recapSourceSections,
+  recapWhen,
+} from './plan.ts'
 import { AiRecapOverlay } from './RecapPanel.tsx'
 import { aiRecap, inSelection, runRecap } from './recap.ts'
+import {
+  type RecapSourceInput,
+  type RecapSourceSpec,
+  recapSourceSince,
+  registerRecapSource,
+} from './sources.ts'
 import {
   catchUpSince,
   DAY_MS,
   firstEditToday,
   lastVisitKey,
+  midnightOf,
   noteVisit,
   readLastVisit,
   resetVisits,
@@ -370,6 +388,23 @@ describe('Copy as Markdown', () => {
       { name: 'Warm-up | intro', plannedMin: 10, actualMin: 12 },
       { name: 'Brainstorm', plannedMin: null, actualMin: 25 },
     ],
+    // wave V: the registered sources' sections (the escaping of their words included)
+    sections: [
+      {
+        id: 'activities',
+        title: 'Polls and scales',
+        lines: [
+          { text: 'Which launch city? 14 answers: Lisbon 8, Oslo 6', ids: [] },
+          { text: 'How ready are we (1-5)? 9 answers, mean 3.8', ids: ['c1'] },
+        ],
+      },
+      {
+        id: 'word-clouds',
+        title: 'Word clouds',
+        lines: [{ text: 'One word for the brief: *bold* 5, warm 3', ids: [] }],
+      },
+      { id: 'breakouts', title: 'Breakouts', lines: [{ text: '3 groups of 4, 15 min', ids: [] }] },
+    ],
     windowFrom: null,
     runId: RUN,
   }
@@ -603,5 +638,200 @@ describe('one private panel at a time', () => {
     await askBoard(k.ctx, 'Winter?', WHOLE_BOARD)
     expect(aiRecap(k.canvas).get()).toBeNull()
     expect(aiAnswer(k.canvas).get()?.question).toBe('Winter?')
+  })
+})
+
+describe('the session summary (wave V): the registered sources in Wrap up', () => {
+  const AI_OFF = { status: { ...AI_ON, enabled: false, reason: 'board-off' as const, canSummarize: false } }
+  const cleanups: (() => void)[] = []
+  /** the summary's web switch, as a dev-auth page sets it (features/live/flags.ts) */
+  const summary = (on: boolean) => {
+    // the shipped switch is on since the integration: off is the dev-auth override '0'
+    const store = new Map<string, string>([[LIVE_FLAG_KEYS.summary, on ? '1' : '0']])
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, String(v)),
+      removeItem: (k: string) => void store.delete(k),
+    })
+  }
+  const polls = (seen: RecapSourceInput[] = []): RecapSourceSpec => ({
+    id: 'activities',
+    order: 10,
+    collect: async (input) => {
+      seen.push(input)
+      return {
+        id: 'activities',
+        title: 'Polls and scales',
+        lines: [{ text: 'Which launch city? 14 answers: Lisbon 8, Oslo 6' }, { text: '   ' }],
+      }
+    },
+  })
+  afterEach(() => {
+    for (const c of cleanups.splice(0)) c()
+  })
+  /** the panel as the board page draws it (a commands registry without the export command) */
+  const panel = (k: ReturnType<typeof aiKit>) => {
+    const ctx = k.ctx as unknown as { registries: Record<string, unknown> }
+    ctx.registries = { ...ctx.registries, commands: new Map() }
+    return renderIn(k, AiRecapOverlay)
+  }
+
+  it('with the switch on and AI off, the sources sections are in the plan, the panel, the Markdown and the frame, and no /ai request is made', async () => {
+    summary(true)
+    const seen: RecapSourceInput[] = []
+    cleanups.push(registerRecapSource(polls(seen)))
+    cleanups.push(
+      registerRecapSource({
+        id: 'breakouts',
+        order: 30,
+        collect: async () => ({
+          id: 'breakouts',
+          title: 'Breakouts',
+          lines: [{ text: '3 groups of 4, 15 min' }],
+        }),
+      }),
+    )
+    const k = aiKit(board(), AI_OFF)
+    const state = await runRecap(k.ctx, 'session', NOW)
+    expect(k.requests).toEqual([])
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toMatchObject({ scope: 'session', now: NOW })
+    expect(seen[0]?.ctx).toBe(k.ctx)
+    const plan = state?.plan as RecapPlan
+    expect(plan.ai).toBe(false)
+    expect(plan.sections).toEqual([
+      {
+        id: 'activities',
+        title: 'Polls and scales',
+        lines: [{ text: 'Which launch city? 14 answers: Lisbon 8, Oslo 6', ids: [] }],
+      },
+      { id: 'breakouts', title: 'Breakouts', lines: [{ text: '3 groups of 4, 15 min', ids: [] }] },
+    ])
+    expect(recapIsEmpty(plan)).toBe(false)
+    const html = panel(k)
+    expect(html).toContain('data-testid="recap-source-activities"')
+    expect(html).toContain('data-testid="recap-source-breakouts"')
+    expect(html).toContain('Which launch city? 14 answers: Lisbon 8, Oslo 6')
+    expect(html).not.toContain('data-testid="recap-empty"')
+    const md = recapMarkdown(plan)
+    expect(md).toContain('## Polls and scales\n- Which launch city? 14 answers: Lisbon 8, Oslo 6\n')
+    expect(md).toContain('## Breakouts\n- 3 groups of 4, 15 min\n')
+    // collecting, drawing and copying write nothing
+    expect(k.pushes).toEqual([])
+    const made = applyRecap(k.canvas, plan, 'usr_ana')
+    const texts = made.ids.map((id) => k.els.get(id)).filter((e) => e?.type === 'text')
+    const words = texts.map((e) => String(e?.originalText ?? ''))
+    expect(words).toContain('Polls and scales')
+    expect(words).toContain('• Which launch city? 14 answers: Lisbon 8, Oslo 6')
+    expect(words).toContain('• 3 groups of 4, 15 min')
+    for (const id of made.ids) expect(aiOf(k.els.get(id) as never), id).toBeNull()
+  })
+
+  it('with AI on, the sources run beside the one recap call (never through it), and a failing source is left out', async () => {
+    summary(true)
+    cleanups.push(registerRecapSource(polls()))
+    cleanups.push(
+      registerRecapSource({
+        id: 'word-clouds',
+        order: 20,
+        collect: async () => {
+          throw new Error('down')
+        },
+      }),
+    )
+    const k = aiKit(board())
+    k.answer(recapAnswer)
+    const state = await runRecap(k.ctx, 'session', NOW)
+    expect(k.requests).toHaveLength(1)
+    expect(k.requests[0]?.body).toMatchObject({ action: 'recap' })
+    expect(state?.plan?.ai).toBe(true)
+    expect(state?.plan?.sections.map((s) => s.id)).toEqual(['activities'])
+  })
+
+  it('with the switch off no source is asked and the recap is as before wave V', async () => {
+    summary(false)
+    const seen: RecapSourceInput[] = []
+    cleanups.push(registerRecapSource(polls(seen)))
+    const k = aiKit(board(), AI_OFF)
+    const state = await runRecap(k.ctx, 'session', NOW)
+    expect(seen).toEqual([])
+    expect(state?.plan?.sections).toEqual([])
+    expect(panel(k)).not.toContain('recap-source-')
+  })
+
+  it('This session: the sources read the session’s whole day, so a poll run before anything was drawn is in', async () => {
+    summary(true)
+    const seen: RecapSourceInput[] = []
+    cleanups.push(registerRecapSource(polls(seen)))
+    // the board's first edit today is an hour ago: the recap's own window (votes, AI) starts there
+    const drawn = NOW - 3_600_000
+    const stamp = {
+      createdBy: { uid: 'usr_bo', name: 'Bo', guest: false },
+      createdAt: drawn,
+      lastEditedBy: null,
+      lastEditedAt: drawn,
+    }
+    const els = note('n1', 0, 0, 'Drawn an hour ago', { customData: { lobbyServer: stamp } } as never)
+    expect(sessionSince(els as never[], NOW, null)).toBe(drawn)
+    const k = aiKit(els, AI_OFF)
+    await runRecap(k.ctx, 'session', NOW)
+    // a poll run at 09:00, before that edit, is in the sources' window
+    expect(seen[0]?.since).toBe(midnightOf(NOW))
+    // the rule: This session widens to midnight (and keeps a run of show that began before it); Catch me up keeps its
+    // visit window; a selection has none
+    expect(recapSourceSince('session', drawn, NOW)).toBe(midnightOf(NOW))
+    expect(recapSourceSince('session', midnightOf(NOW) - 600_000, NOW)).toBe(midnightOf(NOW) - 600_000)
+    expect(recapSourceSince('session', null, NOW)).toBe(midnightOf(NOW))
+    expect(recapSourceSince('catch-up', drawn, NOW)).toBe(drawn)
+    expect(recapSourceSince('selection', null, NOW)).toBeNull()
+  })
+
+  it('a recap replaced while its sources are out keeps none of them', async () => {
+    summary(true)
+    let release: () => void = () => {}
+    cleanups.push(
+      registerRecapSource({
+        id: 'activities',
+        order: 10,
+        collect: (input) =>
+          new Promise((resolve) => {
+            void input
+            release = () => resolve({ id: 'activities', title: 'Late', lines: [{ text: 'late' }] })
+          }),
+      }),
+    )
+    const k = aiKit(board(), AI_OFF)
+    const first = runRecap(k.ctx, 'session', NOW)
+    await Promise.resolve()
+    aiRecap(k.canvas).set(null) // closed
+    release()
+    expect(await first).toBeNull()
+    expect(aiRecap(k.canvas).get()).toBeNull()
+  })
+
+  it('the sections are plain one-line words, cut to their bounds, each source once, empty ones left out', () => {
+    const long = 'x'.repeat(RECAP_SECTION_LINE_MAX + 50)
+    expect(
+      recapSourceSections([
+        {
+          id: 'activities',
+          title: '  Polls\n and scales ',
+          lines: [{ text: 'a\n b', ids: ['e1'] }, { text: long }],
+        },
+        { id: 'activities', title: 'Again', lines: [{ text: 'dropped: the same source twice' }] },
+        { id: 'word-clouds', title: 'Word clouds', lines: [{ text: ' \n ' }] },
+        { id: 'breakouts', title: '   ', lines: [{ text: 'no title' }] },
+      ]),
+    ).toEqual([
+      {
+        id: 'activities',
+        title: 'Polls and scales',
+        lines: [
+          { text: 'a b', ids: ['e1'] },
+          { text: `${'x'.repeat(RECAP_SECTION_LINE_MAX - 1)}…`, ids: [] },
+        ],
+      },
+    ])
+    expect(recapSourceSections(undefined)).toEqual([])
   })
 })

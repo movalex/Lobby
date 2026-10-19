@@ -5,6 +5,7 @@ import { BOARD_ROLES, BOARD_STATUSES, BOARD_VISIBILITIES, WORKSPACE_ROLES } from
 import { z } from 'zod'
 import { BoardTitle } from './board-title.ts'
 import { AccountEmail, ME_ACCESS_LEGACY, MeAccess } from './domain-access.ts'
+import { LiveSwitches } from './live.ts'
 import { cleanDisplayText, OutsideFields } from './outside.ts'
 import { ReviewLanding } from './review-status.ts'
 
@@ -133,6 +134,12 @@ export const AuthConfig = z.object({
    * 'pdf'); absent or false: they are plain attachments ('other'). The web classifies uploads the same way.
    */
   designPreviews: z.boolean().optional(),
+  /**
+   * Wave V: which "Live sessions+" features this api runs (DRAFTROOM_LIVE_ACTIVITIES, DRAFTROOM_JOIN_CODES,
+   * DRAFTROOM_BREAKOUTS; ./live.ts). Absent (an api before wave V): all off. The web offers a feature only when this says
+   * on AND its own switch (apps/web/src/features/live/flags.ts) is on.
+   */
+  live: LiveSwitches.optional(),
 })
 export type AuthConfig = z.infer<typeof AuthConfig>
 
@@ -331,6 +338,8 @@ export * from './board-links.ts'
 // wave M foundation (W5 owns these after it): the board-open read, usage counters, workspace templates
 export * from './board-open.ts'
 export * from './board-title.ts'
+// wave V foundation (the lead's; WS4 reads it): breakouts
+export * from './breakouts.ts'
 // wave R foundation (WS2 owns it after): notifications to Slack and Teams
 export * from './chat-hooks.ts'
 export * from './comments.ts'
@@ -349,8 +358,14 @@ export * from './history.ts'
 export * from './icons.ts'
 // wave R foundation (shared by WS1 and WS4; the lead's): import jobs
 export * from './imports.ts'
+// wave V foundation (the lead's; WS3 reads it): join codes and the QR join card
+export * from './join-codes.ts'
 export * from './library.ts'
 export * from './link-preview.ts'
+export * from './live.ts'
+// wave V foundation (the lead's): the kill switches, rules and element kinds shared by the wave; polls, scales and
+// word clouds (WS1, WS2 read it)
+export * from './live-activities.ts'
 export * from './mindmap.ts'
 // wave R foundation (WS1 owns it after): import from Miro
 export * from './miro-import.ts'

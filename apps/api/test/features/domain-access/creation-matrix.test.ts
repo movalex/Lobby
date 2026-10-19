@@ -65,6 +65,8 @@ interface World {
   project: string
   snapshot: string
   link: string
+  /** wave V (WS3): a workshop (editor) link of board, for the join code probe */
+  workshop: string
   request: string
   archive: unknown
 }
@@ -80,6 +82,8 @@ async function world(opts: { guard?: boolean } = {}): Promise<World> {
       DRAFTROOM_WEBHOOK_SECRET: WEBHOOK_SECRET,
       DRAFTROOM_CHAT_HOOK_TEST_ORIGINS: receiver.origin,
       DRAFTROOM_MIRO_TEST_ORIGINS: `${miro.api},${miro.files}`,
+      // wave V (WS3): the join code route runs (off, it is an unknown route for everyone)
+      DRAFTROOM_JOIN_CODES: 'on',
     },
     deps: {
       syncInternal: sync,
@@ -121,6 +125,8 @@ async function world(opts: { guard?: boolean } = {}): Promise<World> {
     .id as string
   const link = (await alice.req('POST', `/api/boards/${board}/review-links`, { role: 'viewer' })).json()
     .id as string
+  const workshop = (await alice.req('POST', `/api/boards/${board}/review-links`, { role: 'editor' })).json()
+    .id as string
   // the client link limited copying to editors (DANA2-01); its owner lets everyone copy again, so the board may be
   // a workspace template (ws-templates refuses a board limited to its editors)
   expect(
@@ -157,6 +163,7 @@ async function world(opts: { guard?: boolean } = {}): Promise<World> {
     project,
     snapshot,
     link,
+    workshop,
     request,
     archive,
   }
@@ -253,6 +260,12 @@ function probe(
       `/api/workspaces/${wid}/chat-hooks/${w.hook}/test`,
       {},
     ],
+    // wave V (WS3): a workshop link's join code (an editor link: a review link has none, 404)
+    'POST /api/boards/:bid/review-links/:id/code': [
+      'POST',
+      `/api/boards/${bid}/review-links/${ids.id ?? w.workshop}/code`,
+      undefined,
+    ],
   }
   const found = table[key]
   if (!found) throw new Error(`no probe for ${key}`)
@@ -307,9 +320,9 @@ describe('the creation matrix', () => {
       expect(w.api.app.hasRoute({ method, url }), key).toBe(!isPendingRoute(key))
     }
     for (const key of ALWAYS) expect(() => probe(w, key)).not.toThrow()
-    // 13 until wave M, the three workspace-template routes (M8-3), and wave R's eight (four that make boards: Miro's
-    // two, resume, a backup restore; four that manage chat hooks)
-    expect(ALWAYS).toHaveLength(24)
+    // 13 until wave M, the three workspace-template routes (M8-3), wave R's eight (four that make boards: Miro's
+    // two, resume, a backup restore; four that manage chat hooks), and wave V's join code (a link's access)
+    expect(ALWAYS).toHaveLength(25)
   })
 
   it('the guard: an outsider (workspace admin, board owner) gets 403 CREATOR_REQUIRED everywhere, logged "by guard"; nothing is created', async () => {

@@ -1,6 +1,7 @@
 // OWNER: W2 (wave L, L2-3). The private recap panel (a screen layer of the AI feature, shown to everyone who opens
 // a recap, AI or not): the headline, decisions, actions with owners and open questions with their sources (a
-// chip only moves this tab's camera), the top voted items, planned vs actual, and the actions: "Add as Recap
+// chip only moves this tab's camera), the top voted items, planned vs actual, wave V's source sections (polls and
+// scales, word clouds, breakouts: ./sources.ts; a chip when a line names elements), and the actions: "Add as Recap
 // frame" (editors, one undo step), "Copy as Markdown" (lib/clipboard.ts, bounded; only while this person may copy
 // here: the board's export policy covers copying, canvas-ux export-gate.ts) and "Export recap as PDF" (the
 // export dialog for the recap frame, W5's 'present-export.export'; only while this person may export).
@@ -20,6 +21,7 @@ import { plural } from '../copy.ts'
 import { SparkIcon } from '../icons.tsx'
 import { offerUndoFor } from '../ported/actions.ts'
 import { showSources } from '../ported/ask.ts'
+import { refOf } from '../ported/target.ts'
 import { revealResult } from '../reveal.ts'
 import { applyRecap, latestRecapFrame } from './apply.ts'
 import { recapMarkdown } from './markdown.ts'
@@ -149,6 +151,18 @@ function Body({ plan }: { plan: RecapPlan }) {
           </table>
         </Section>
       )}
+      {/* wave V: the registered sources' sections (polls and scales, word clouds, breakouts), aggregates only */}
+      {plan.sections.map((s) => (
+        <Section key={s.id} title={s.title} testId={`recap-source-${s.id}`}>
+          <ul>
+            {s.lines.map((l, i) => (
+              <li key={i} data-testid="recap-source-line">
+                {l.text} {cite(l.ids.map(refOf))}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      ))}
       {recapIsEmpty(plan) && (
         <p className="dr-ai-panel__text" data-testid="recap-empty">
           Nothing to recap yet: nothing changed on the board in this window.

@@ -8,7 +8,8 @@
 // same step: CR-3H-3, as ../ported/apply.ts does). Kinds: 'ai-recap' (the frame), 'ai-recap-heading',
 // 'ai-recap-item' (the AI's parts, with `lobby.ai` and the run id) and 'recap-table' / 'recap-item' (the room's
 // own results, no AI provenance); with AI off the frame and heading are 'recap' and 'recap-heading'. Only plain
-// text goes in.
+// text goes in. Wave V: the registered sources' sections (polls and scales, word clouds, breakouts) follow the top
+// voted lines, as 'recap-item' texts (the room's own aggregates: never a participant's name or answer).
 
 import { LOBBY_INK, LOBBY_PALETTE } from '@draftroom/board-ops/elements'
 import { type CanvasElement, items, type LobbyCanvas } from '../../../canvas/api/index.ts'
@@ -112,6 +113,14 @@ function layout(canvas: LobbyCanvas, plan: RecapPlan) {
     false,
     'item',
   )
+  // wave V: the registered sources' sections (the room's own aggregates: no AI provenance)
+  for (const s of plan.sections)
+    section(
+      s.title,
+      s.lines.map((l) => `• ${l.text}`),
+      false,
+      'item',
+    )
   section(
     'Decisions',
     plan.decisions.map((d) => `• ${d.text}`),

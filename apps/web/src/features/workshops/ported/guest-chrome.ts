@@ -86,6 +86,8 @@ export type PillPart =
   | { kind: 'vote'; text: 'Vote' }
   | { kind: 'brainstorm'; text: 'Brainstorm' }
   | { kind: 'hands'; text: string; count: number }
+  /** wave V: a registered entry's live part (./facilitate-entries.ts setFacilitatePill), after the built-in ones */
+  | { kind: 'extra'; id: string; text: string; spoken: string }
 
 /**
  * What the Facilitate button's pill says: only what is live, in this order. Nothing when idle; "4:58 · Vote"
@@ -97,6 +99,8 @@ export function facilitatePill(input: {
   voteOpen: boolean
   brainstormOpen: boolean
   hands: number
+  /** wave V: the registered entries' live parts, in their order (./facilitate-entries.ts); none when left out */
+  extras?: readonly { id: string; text: string; spoken: string }[]
 }): PillPart[] {
   const out: PillPart[] = []
   // a finished timer reads 0:00 in red for its alert (the canvas flash says "Time's up": RETRO-23a, one message)
@@ -105,6 +109,8 @@ export function facilitatePill(input: {
   if (input.voteOpen) out.push({ kind: 'vote', text: 'Vote' })
   if (input.brainstormOpen) out.push({ kind: 'brainstorm', text: 'Brainstorm' })
   if (input.hands > 0) out.push({ kind: 'hands', text: `✋ ${input.hands}`, count: input.hands })
+  for (const e of input.extras ?? [])
+    if (e.text) out.push({ kind: 'extra', id: e.id, text: e.text, spoken: e.spoken })
   return out
 }
 

@@ -77,6 +77,10 @@ export const CREATOR_ROUTES: Readonly<Record<string, CreatorRoute>> = {
   'POST /api/workspaces/:wid/chat-hooks': { purpose: 'share', refuse: 'always' },
   'PATCH /api/workspaces/:wid/chat-hooks/:hid': { purpose: 'share', refuse: 'always' },
   'POST /api/workspaces/:wid/chat-hooks/:hid/test': { purpose: 'share', refuse: 'always' },
+  // wave V (landed by the foundation, pending until implemented: ../pending-routes.ts): a workshop link's join code hands
+  // out the link's access, like extending it (@draftroom/contracts JOIN_CODE_CREATOR_ROUTE_KEYS; WS3 also checks it in
+  // the route). Live activities and breakouts create nothing and hand out nothing: no row.
+  'POST /api/boards/:bid/review-links/:id/code': { purpose: 'share', refuse: 'always' },
 }
 
 const routeKey = (req: FastifyRequest) =>

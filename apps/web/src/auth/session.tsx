@@ -11,6 +11,7 @@ import {
   useState,
 } from 'react'
 import { api, isApiError, setUnauthorizedHandler } from '../api/client.ts'
+import { setLiveSwitches } from '../features/live/flags.ts'
 import { navigate, signInPath } from '../lib/routing.ts'
 import './auth.css'
 import { runSignOut, type SignOutOutcome, type SignOutProblem, sessionEnded } from './signOut.ts'
@@ -143,6 +144,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       (c) => {
         // Classify uploads as the server does (Photoshop, Illustrator and TIFF: previews or attachments).
         setDesignPreviews(c.designPreviews === true)
+        // Wave V: which "Live sessions+" features this api runs (absent: an api before wave V, all off).
+        setLiveSwitches(c.live)
         setConfig(c)
         setConfigStatus('ready')
       },

@@ -22,6 +22,7 @@ import {
   InternalUsageResponse,
   isUsageEvent,
   OPEN_STATE_PARTS,
+  OPEN_STATE_PENDING_PARTS,
   OpenState,
   PALETTE_COMMAND_IDS,
   PENDING_PALETTE_COMMAND_IDS,
@@ -138,7 +139,10 @@ describe('usage events (S3, M5-5)', () => {
 
 describe('open-state (M5-1)', () => {
   it('has the eight parts the plan names, each nullable', () => {
-    expect([...OPEN_STATE_PARTS].sort()).toEqual(Object.keys(OpenState.shape).sort())
+    // wave V added two (activity, breakouts), answered since the wave V integration (board-open.ts)
+    expect([...OPEN_STATE_PARTS, ...OPEN_STATE_PENDING_PARTS].sort()).toEqual(
+      Object.keys(OpenState.shape).sort(),
+    )
     expect(OPEN_STATE_PARTS).toEqual([
       'exportPolicy',
       'outside',
@@ -148,7 +152,10 @@ describe('open-state (M5-1)', () => {
       'privateBrainstorm',
       'threads',
       'ai',
+      'activity',
+      'breakouts',
     ])
+    expect([...OPEN_STATE_PENDING_PARTS]).toEqual([])
     const allNull = Object.fromEntries(OPEN_STATE_PARTS.map((p) => [p, null]))
     expect(OpenState.parse(allNull)).toEqual(allNull)
   })

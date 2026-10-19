@@ -30,11 +30,20 @@ export interface World {
  * tests that run the sweep themselves (guestSweeper below) raise it first.
  */
 export async function setupWorld(
-  opts: { events?: EventHub; sync?: SyncInternalClient } = {},
+  opts: { events?: EventHub; sync?: SyncInternalClient; env?: Record<string, string> } = {},
 ): Promise<World> {
   const events = opts.events ?? new EventHub()
   const api = await createTestApi({
     deps: { events, ...(opts.sync ? { syncInternal: opts.sync } : {}) },
+    // wave V's switches on, as the e2e stack (docs/WAVE-V-CONTRACTS.md §1.1): a landed route is held to its guard
+    // rows by the refusal matrix; a pending one stays an unknown route whatever its switch says. `opts.env` may
+    // turn one off (or add any other variable).
+    env: {
+      DRAFTROOM_LIVE_ACTIVITIES: 'on',
+      DRAFTROOM_JOIN_CODES: 'on',
+      DRAFTROOM_BREAKOUTS: 'on',
+      ...opts.env,
+    },
   })
   const alice = await api.login('alice')
   const bob = await api.login('bob')

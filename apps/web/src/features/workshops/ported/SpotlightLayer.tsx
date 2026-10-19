@@ -15,6 +15,7 @@ import { useValue } from '../../../lib/signals.ts'
 import { countUsage } from '../../../lib/usage.ts'
 import { useMediaQuery } from '../../../ui/useMedia.ts'
 import { announcerFor } from '../../a11y/ported/announcer.ts'
+import { noticeEndBreakoutsFirst } from '../../breakouts/conflict.ts'
 import { spotlightKey, type WorkshopStore } from '../store.ts'
 import { TopCentreItem } from '../top-centre.ts'
 import { storeFor, useWorkshop } from '../workshop-context.ts'
@@ -59,8 +60,10 @@ export async function spotlightIds(ctx: Ctx, ids: readonly string[]): Promise<bo
     return false
   }
   const r = await storeFor(ctx).startSpotlight(refs, true)
-  if (!r.ok) note(startRefusedText(r.code, r.error))
-  else countUsage('spotlight.start')
+  // 409 BREAKOUTS: "End breakouts first", with an End button (wave V review n4)
+  if (!r.ok) {
+    if (!noticeEndBreakoutsFirst(ctx, 'spotlight', r.code)) note(startRefusedText(r.code, r.error))
+  } else countUsage('spotlight.start')
   return r.ok
 }
 

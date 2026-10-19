@@ -10,6 +10,7 @@ import { BOARD_ROLES, BOARD_VISIBILITIES, WORKSPACE_ROLES } from '@draftroom/per
 import { z } from 'zod'
 import { ACCOUNT_EMAIL_MAX_LENGTH, AccountEmail } from './domain-access.ts'
 import { BoardWithRole, InvitationId, User, UserId } from './index.ts'
+import { JoinCode } from './join-codes.ts'
 import { cleanDisplayText, OutsideFields } from './outside.ts'
 import { ReviewLanding } from './review-status.ts'
 
@@ -206,6 +207,11 @@ export const ReviewLinkCreated = z.object({
   allowGuests: z.boolean().default(false),
   /** Wave S (WS4): where the link opens (absent: the board, as from an older api). */
   landing: ReviewLanding.optional(),
+  /**
+   * Wave V (WS3): the workshop link's join code, when it has one (join-codes.ts). Absent from an api before wave V, with
+   * DRAFTROOM_JOIN_CODES off, and for every link that is not a workshop link.
+   */
+  joinCode: JoinCode.optional(),
 })
 export type ReviewLinkCreated = z.infer<typeof ReviewLinkCreated>
 
@@ -235,6 +241,8 @@ export const PendingInvitation = z.object({
   email: z.string().nullable().default(null),
   /** Wave S (WS4): where a multi-use link opens (absent: the board, as from an older api and for single-use invitations). */
   landing: ReviewLanding.optional(),
+  /** Wave V (WS3): a workshop link's join code, for people who may manage access (as `url`); absent otherwise. */
+  joinCode: JoinCode.optional(),
 })
 export type PendingInvitation = z.infer<typeof PendingInvitation>
 

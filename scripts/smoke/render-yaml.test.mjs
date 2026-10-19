@@ -247,6 +247,15 @@ test('render.yaml: design previews are on on the api (the NAS preview worker run
   assert.equal(envValue(RENDER_YAML, 'draftroom-staging-sync', 'DRAFTROOM_DESIGN_PREVIEWS'), null)
 })
 
+test('render.yaml: the wave V switches are on the api only, and off until the wave V integration', () => {
+  for (const key of ['DRAFTROOM_LIVE_ACTIVITIES', 'DRAFTROOM_JOIN_CODES', 'DRAFTROOM_BREAKOUTS']) {
+    assert.equal(envValue(RENDER_YAML, 'draftroom-staging-api', key), 'off', key)
+    // an api setting only: sync and web never read it
+    assert.equal(envValue(RENDER_YAML, 'draftroom-staging-sync', key), null, key)
+    assert.equal(envValue(RENDER_YAML, 'draftroom-staging-web', key), null, key)
+  }
+})
+
 test('render.yaml: the wave R key (a generated secret in its own group, linked to the api only)', () => {
   const keys = groupKeys(RENDER_YAML, 'draftroom-staging-webhook-secret')
   assert.ok(keys, 'the group exists')

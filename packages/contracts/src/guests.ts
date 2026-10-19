@@ -29,6 +29,20 @@ export const GUEST_JOINS_PER_ADDRESS = { max: 60, windowMs: 10 * 60 * 1000 } as 
  * Counted from the link's recorded redemptions (the database), so it holds across restarts.
  */
 export const GUEST_JOINS_PER_LINK = { max: 60, windowMs: 10 * 60 * 1000 } as const
+/**
+ * Wave V (R1, the join-cap fix; WS3 applies it in apps/api/src/features/guests/join.ts; docs/WAVE-V-CONTRACTS.md §3.4):
+ * a WORKSHOP link (multi-use, role editor) is how a room of people joins from one QR at once, so its joins are counted
+ * apart from the two windows above:
+ *  - per link, GUEST_JOINS_PER_WORKSHOP_LINK instead of GUEST_JOINS_PER_LINK (GUESTS_PER_LINK still caps the total);
+ *  - per client address AND link, GUEST_JOINS_PER_ADDRESS_PER_WORKSHOP_LINK, instead of the address's own window: the
+ *    office NAT a room shares lets the whole room in;
+ *  - per client address over every workshop link together, GUEST_JOINS_PER_ADDRESS_ON_WORKSHOP_LINKS (two full rooms),
+ *    so holding several workshop links multiplies nothing past it.
+ * Joins through any other link keep GUEST_JOINS_PER_ADDRESS and GUEST_JOINS_PER_LINK, untouched by workshop joins.
+ */
+export const GUEST_JOINS_PER_WORKSHOP_LINK = { max: 200, windowMs: 10 * 60 * 1000 } as const
+export const GUEST_JOINS_PER_ADDRESS_PER_WORKSHOP_LINK = { max: 200, windowMs: 10 * 60 * 1000 } as const
+export const GUEST_JOINS_PER_ADDRESS_ON_WORKSHOP_LINKS = { max: 400, windowMs: 10 * 60 * 1000 } as const
 
 // Per-link caps (SEAM-05). A guest identity costs nothing but a name, so a cap per person multiplies
 // by the guests one person can create. The name-only guests of one link therefore SHARE caps on what

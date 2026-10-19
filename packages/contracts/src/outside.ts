@@ -237,6 +237,16 @@ const joinable = (ch: string | undefined): boolean => {
   return cp > 0x9f && !INVISIBLE.has(cp) && !JOINERS.has(cp) && !WHITESPACE.test(ch)
 }
 
+/** Whether `cp` is a joiner (ZWNJ U+200C or ZWJ U+200D). */
+export const isJoiner = (cp: number): boolean => JOINERS.has(cp)
+
+/**
+ * Whether a joiner between `prev` and `next` joins something (both sides `joinable`: an emoji sequence, Persian or
+ * Indic spelling), the one place a ZWJ or ZWNJ may stand in a text people type for others (wave V fix wave, m7).
+ */
+export const joinerJoins = (prev: string | undefined, next: string | undefined): boolean =>
+  joinable(prev) && joinable(next)
+
 /**
  * Text a person typed for others to read (a display name, an access request's message): every
  * control, bidi and zero-width character removed (tabs and line breaks become one space), runs of

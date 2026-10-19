@@ -204,7 +204,11 @@ describe('CSRF', () => {
 describe('auth config and rate limit', () => {
   it('GET /api/auth/config names the dev provider', async () => {
     const res = await api.anon('GET', '/api/auth/config')
-    expect(AuthConfig.parse(res.json())).toEqual({ providers: ['dev'], designPreviews: false })
+    expect(AuthConfig.parse(res.json())).toEqual({
+      providers: ['dev'],
+      designPreviews: false,
+      live: { activities: false, joinCodes: false, breakouts: false },
+    })
   })
 
   it('GET /api/auth/config tells the web whether design files are previewed (DRAFTROOM_DESIGN_PREVIEWS)', async () => {
@@ -213,6 +217,7 @@ describe('auth config and rate limit', () => {
       expect(AuthConfig.parse((await on.anon('GET', '/api/auth/config')).json())).toEqual({
         providers: ['dev'],
         designPreviews: true,
+        live: { activities: false, joinCodes: false, breakouts: false },
       })
     } finally {
       await on.close()
@@ -224,6 +229,21 @@ describe('auth config and rate limit', () => {
       } finally {
         await off.close()
       }
+    }
+  })
+
+  it('GET /api/auth/config tells the web which wave V features run (DRAFTROOM_LIVE_ACTIVITIES, _JOIN_CODES, _BREAKOUTS)', async () => {
+    const on = await createTestApi({
+      env: { DRAFTROOM_LIVE_ACTIVITIES: 'on', DRAFTROOM_JOIN_CODES: 'off', DRAFTROOM_BREAKOUTS: 'ON' },
+    })
+    try {
+      expect(AuthConfig.parse((await on.anon('GET', '/api/auth/config')).json()).live).toEqual({
+        activities: true,
+        joinCodes: false,
+        breakouts: true,
+      })
+    } finally {
+      await on.close()
     }
   })
 
@@ -261,6 +281,7 @@ describe('auth config and rate limit', () => {
         providers: ['clerk'],
         clerkPublishableKey: 'pk_test_unused',
         designPreviews: false,
+        live: { activities: false, joinCodes: false, breakouts: false },
       })
     } finally {
       await clerk.close()

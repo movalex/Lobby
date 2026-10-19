@@ -1,0 +1,292 @@
+/* Wave V (WS4): breakouts. The chip in the top-centre stack (slot 'breakout') and the Breakouts dock panel. Only --dr-*
+   tokens, so both themes work. The chip wraps at phone width; on a touch screen every button is 44 px. */
+
+.dr-brk-chip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 8px;
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 4px 4px 4px 14px;
+  border: 1px solid var(--dr-accent-line);
+  border-radius: 18px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  box-shadow: var(--dr-shadow-pop);
+  font: 13px / 1.3 var(--dr-font);
+  pointer-events: auto;
+}
+.dr-brk-chip__title {
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.dr-brk-chip__time {
+  color: var(--dr-ink-2);
+  font-variant-numeric: tabular-nums;
+}
+.dr-brk-chip__warn {
+  color: var(--dr-danger);
+  font-weight: 600;
+}
+.dr-brk-chip__btn {
+  padding: 4px 12px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 999px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: 600 12.5px / 1.2 var(--dr-font);
+  cursor: pointer;
+}
+.dr-brk-chip__btn--go {
+  border-color: transparent;
+  background: var(--dr-accent-bg);
+  color: var(--dr-accent-ink);
+}
+.dr-brk-chip__btn:hover {
+  background: var(--dr-hover);
+}
+.dr-brk-chip__btn--go:hover {
+  background: var(--dr-accent-bg);
+  filter: brightness(0.96);
+}
+.dr-brk-chip__x {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dr-ink-2);
+  font: 600 16px / 1 var(--dr-font);
+  cursor: pointer;
+}
+.dr-brk-chip__btn:focus-visible,
+.dr-brk-chip__x:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+@media (max-width: 560px) {
+  .dr-brk-chip {
+    border-radius: 14px;
+    padding-left: 10px;
+  }
+}
+
+/* ---- the panel ---------------------------------------------------------------------------------------------------- */
+
+.dr-brk-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 12px 14px 16px;
+  color: var(--dr-ink);
+  font: 13.5px / 1.4 var(--dr-font);
+}
+.dr-brk-panel__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+.dr-brk-h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+}
+.dr-brk-hint {
+  margin: 0;
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+}
+.dr-brk-hint--block {
+  display: block;
+}
+.dr-brk-error {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--dr-danger);
+  border-radius: 8px;
+  color: var(--dr-danger);
+  font-size: 12.5px;
+}
+.dr-brk-setup,
+.dr-brk-running,
+.dr-brk-manage {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.dr-brk-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.dr-brk-fieldset legend {
+  margin-bottom: 4px;
+  padding: 0;
+  font-weight: 650;
+}
+.dr-brk-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+.dr-brk-choice input {
+  margin-top: 3px;
+}
+.dr-brk-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.dr-brk-field input,
+.dr-brk-field select,
+.dr-brk-broadcast input,
+.dr-brk-broadcast select,
+.dr-brk-person select {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid var(--dr-line-strong);
+  border-radius: 8px;
+  background: var(--dr-surface);
+  color: var(--dr-ink);
+  font: inherit;
+}
+.dr-brk-field input:focus-visible,
+.dr-brk-field select:focus-visible,
+.dr-brk-broadcast input:focus-visible,
+.dr-brk-broadcast select:focus-visible,
+.dr-brk-person select:focus-visible {
+  outline: 2px solid var(--dr-focus);
+  outline-offset: 1px;
+}
+.dr-brk-wide {
+  width: 100%;
+}
+.dr-brk-status {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.dr-brk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dr-brk-danger {
+  color: var(--dr-danger);
+}
+.dr-brk-mine {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--dr-accent-line);
+  border-radius: 10px;
+  background: var(--dr-accent-bg);
+}
+.dr-brk-mine__name {
+  margin: 0;
+}
+.dr-brk-broadcast {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dr-brk-broadcast input {
+  width: 100%;
+}
+.dr-brk-list,
+.dr-brk-people {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dr-brk-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.dr-brk-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--dr-line);
+  border-radius: 10px;
+}
+.dr-brk-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.dr-brk-row__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.dr-brk-row__meta {
+  color: var(--dr-ink-2);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.dr-brk-person {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.dr-brk-person__name {
+  flex: 1 1 8em;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.dr-brk-person select {
+  flex: 0 1 11em;
+}
+.dr-brk-broadcast .dr-brk-actions select {
+  flex: 1 1 8em;
+}
+.dr-brk-cursors {
+  padding-top: 4px;
+  border-top: 1px solid var(--dr-line);
+}
+
+/* A finger needs 40 to 44 px. */
+@media (pointer: coarse) {
+  .dr-brk-chip .dr-brk-chip__btn {
+    min-height: 44px;
+    padding: 0 14px;
+  }
+  .dr-brk-chip .dr-brk-chip__x {
+    width: 44px;
+    height: 44px;
+  }
+  .dr-brk-panel .dr-btn,
+  .dr-brk-panel input[type="text"],
+  .dr-brk-panel input[type="number"],
+  .dr-brk-panel select {
+    min-height: 44px;
+  }
+  .dr-brk-choice input {
+    width: 20px;
+    height: 20px;
+  }
+}

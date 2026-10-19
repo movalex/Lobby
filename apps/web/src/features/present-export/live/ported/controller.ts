@@ -24,6 +24,7 @@ import {
 } from '../../../../canvas/api/index.ts'
 import { type BoardRole, can } from '../../../../lib/permissions.ts'
 import { type Atom, atom, react } from '../../../../lib/signals.ts'
+import { noticeEndBreakoutsFirst } from '../../../breakouts/conflict.ts'
 import { LOBBY_SIGNALS } from '../../../comments/cells.ts'
 import { noteFeedbackMoment } from '../../../feedback/prompt-moments.ts'
 import { type LiveResult, LiveStore } from '../store.ts'
@@ -435,6 +436,8 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
           say('Everyone on the board can now join your presentation.')
           return
         }
+        // 409 BREAKOUTS: "End breakouts first", with an End button (wave V review n4)
+        if (noticeEndBreakoutsFirst(ctx, 'present-live', r.code)) return
         say(startRefusedText(r.code, r.message), r.code === 'PRESENTER_AWAY' ? 'take-over' : undefined)
       }),
     join,
@@ -456,6 +459,7 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
       offerWithdrawn = false
       try {
         const r = await withBusy(() => store.start({ slide: slideOf(presenter) }))
+        if (!r.ok) noticeEndBreakoutsFirst(ctx, 'present-live', r.code)
         // K3-5: left present mode while the offer was on its way: the presentation it made ends now
         const p = store.presentation.get()
         if (
@@ -505,7 +509,7 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
         const r = await store.start({ slide: slideOf(presenter) })
         if (!r.ok) {
           if (startedHere) presenter.stop({ reason: 'remote' })
-          notify(r.message)
+          if (!noticeEndBreakoutsFirst(ctx, 'present-live', r.code)) notify(r.message)
         }
       }),
     takeOver: () =>
@@ -526,7 +530,7 @@ export function mountLive(ctx: CanvasFeatureContext, presenter: LivePresenter): 
         const r = await store.start({ slide: slideOf(presenter), takeOver: true })
         if (r.ok) return
         if (startedHere) presenter.stop({ reason: 'remote' })
-        notify(startRefusedText(r.code, r.message))
+        if (!noticeEndBreakoutsFirst(ctx, 'present-live', r.code)) notify(startRefusedText(r.code, r.message))
       }),
     dispose() {
       if (disposed) return

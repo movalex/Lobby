@@ -114,7 +114,8 @@ interface Gesture {
   moved: boolean
 }
 
-export function TimelineLayer({ ctx }: { ctx: CanvasFeatureContext }) {
+/** `now`: the clock of the today marker and of "overdue" (the viewer's own; a test passes a fixed one). */
+export function TimelineLayer({ ctx, now }: { ctx: CanvasFeatureContext; now?: () => Date }) {
   const { canvas } = ctx
   const shown = planningShown('timeline')
   const timelines = useValue('timeline.frames', () => (shown ? timelinesOn(canvas) : []), [canvas, shown])
@@ -124,7 +125,7 @@ export function TimelineLayer({ ctx }: { ctx: CanvasFeatureContext }) {
   return (
     <>
       {timelines.map((t) => (
-        <TimelineView key={t.el.id} ctx={ctx} frameId={t.el.id} names={names} />
+        <TimelineView key={t.el.id} ctx={ctx} frameId={t.el.id} names={names} now={now} />
       ))}
     </>
   )
@@ -134,15 +135,17 @@ function TimelineView({
   ctx,
   frameId,
   names,
+  now,
 }: {
   ctx: CanvasFeatureContext
   frameId: string
   names: ReadonlyMap<string, string> | null
+  now?: (() => Date) | undefined
 }) {
   const { canvas } = ctx
   const dark = useValue('timeline.theme', () => canvas.theme() === 'dark', [canvas])
   const palette: Palette = dark ? DARK : LIGHT
-  const today = todayOf()
+  const today = todayOf(now?.())
 
   // what the frame says (its value and size); the layout does not depend on the camera
   const frame = useValue(

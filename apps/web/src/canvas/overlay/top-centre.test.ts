@@ -12,10 +12,11 @@ import {
 } from './top-centre.ts'
 
 describe('the stack: the order and the gaps', () => {
-  it('holds, top to bottom: the invitation, the session timer (P-016), the spotlight bar, the follow pill, the since chip, the coach chip, the AI pills (P-047), the feedback prompt', () => {
+  it('holds, top to bottom: the invitation, the session timer (P-016), the breakouts chip (wave V), the spotlight bar, the follow pill, the since chip, the coach chip, the AI pills (P-047), the feedback prompt', () => {
     expect(TOP_CENTRE_SLOTS).toEqual([
       'invite',
       'timer',
+      'breakout',
       'spotlight',
       'follow',
       'since',
@@ -23,7 +24,7 @@ describe('the stack: the order and the gaps', () => {
       'ai',
       'feedback',
     ])
-    expect(TOP_CENTRE_SLOTS.map(slotOrder)).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
+    expect(TOP_CENTRE_SLOTS.map(slotOrder)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8])
   })
 
   it('P-016: the timer pill and the spotlight bar shown together are two boxes, the timer above, 8 px apart', () => {

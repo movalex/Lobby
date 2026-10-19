@@ -248,6 +248,7 @@ describe('shipped migrations', () => {
       '0035_board_imports',
       '0036_chat_hooks',
       '0037_client_review',
+      '0038_live_sessions',
     ])
   })
 
@@ -291,6 +292,7 @@ describe('shipped migrations', () => {
       '0035_board_imports',
       '0036_chat_hooks',
       '0037_client_review',
+      '0038_live_sessions',
     ])
     expect(await migrate(db)).toEqual({ applied: [], newer: [] })
     expect(await tableNames()).toEqual([
@@ -322,6 +324,8 @@ describe('shipped migrations', () => {
       'board_thumbnails',
       'board_visits',
       'boards',
+      'breakout_members',
+      'breakout_sessions',
       'chat_deliveries',
       'chat_hook_prefs',
       'chat_hooks',
@@ -338,6 +342,8 @@ describe('shipped migrations', () => {
       'library_items',
       'library_marks',
       'library_place_pending',
+      'live_activities',
+      'live_answers',
       'notifications',
       'preview_jobs',
       'private_brainstorms',
@@ -416,6 +422,7 @@ describe('shipped migrations', () => {
       '0035_board_imports',
       '0036_chat_hooks',
       '0037_client_review',
+      '0038_live_sessions',
     ])
     expect(await recorded()).toEqual(shipped.map((m) => m.name))
     const inv = await db.one<{ multi_use: boolean; use_count: number }>(

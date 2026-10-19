@@ -28,6 +28,7 @@
     "@excalidraw/fractional-indexing": "catalog:",
     "@excalidraw/math": "catalog:",
     "@pdf-lib/fontkit": "catalog:",
+    "qrcode-generator": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
     "zod": "catalog:"

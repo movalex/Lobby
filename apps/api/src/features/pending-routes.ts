@@ -1,4 +1,4 @@
-// Wave M foundation (and wave N's, Q's, R's and S's, the same way): the routes a wave adds, landed as contracts, guard rows and stub handlers BEFORE their owners
+// Wave M foundation (and wave N's, Q's, R's, S's and V's, the same way): the routes a wave adds, landed as contracts, guard rows and stub handlers BEFORE their owners
 // implement them. OWNER: W5 (the guard lists and matrices are W5's after the foundation).
 //
 // A pending route is NOT registered: its path answers exactly as any unknown route does today (the root 404
@@ -13,7 +13,7 @@
 
 import type { FastifyInstance, RouteHandlerMethod } from 'fastify'
 
-export type PendingOwner = 'W5' | 'W7' | 'W8' | 'WS1' | 'WS2' | 'WS4' | 'WS5' | 'WS7'
+export type PendingOwner = 'W5' | 'W7' | 'W8' | 'WS1' | 'WS2' | 'WS3' | 'WS4' | 'WS5' | 'WS7'
 
 export interface PendingRoute {
   /** the workstream that implements it */
@@ -43,6 +43,15 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   // ASSET_VERSION_ROUTE_KEYS (WS2: S2-1 the version list; files/versions.ts): none left. WS3 and WS4 add no route. WS1
   // implemented its eight review routes (S1-1 items, S1-2 status and history, S1-3 rounds; features/review) and WS2 the
   // version list: to ship one hidden, add its key back.
+  // wave V (the foundation; docs/WAVE-V-CONTRACTS.md §1): every route of the wave, @draftroom/contracts
+  // ACTIVITY_ROUTE_KEYS (WS1: V1-1 start, state and answer; V1-2 close, reveal, extend, cancel, results, named answers;
+  // V1-3 hide, placed, the past list; features/live-activities), JOIN_CODE_ROUTE_KEYS (WS3: V2-1 a link's code, V2-2
+  // resolve; features/join-codes) and BREAKOUT_ROUTE_KEYS (WS4: V3-1 start, state, extend, end; V3-2 assign, shuffle,
+  // join; V3-3 broadcast, summon; features/breakouts). Once implemented, each is gated by its kill switch as well.
+  // WS1's twelve activity routes are implemented (features/live-activities); to ship one hidden, add its key back.
+  // WS3 implemented its two (V2-1 a link's code, V2-2 resolve; features/join-codes): to ship one hidden, add its key back.
+  // WS4 implemented its nine (V3-1 start, state, extend, end; V3-2 assign, shuffle, join; V3-3 broadcast, summon;
+  // features/breakouts): none left in wave V. To ship one hidden, add its key back.
 }
 
 export const isPendingRoute = (

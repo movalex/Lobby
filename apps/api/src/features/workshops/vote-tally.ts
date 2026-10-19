@@ -143,6 +143,7 @@ export class VoteTally {
    */
   changed(row: SessionRow, agg: Aggregates, mark: TallyMark): void {
     if (this.closed) return
+    const at = this.shownFrom(mark.at)
     let e = this.entries.get(row.id)
     if (!e) {
       // First sight of a running vote (this process restarted): nothing older to show.
@@ -157,18 +158,28 @@ export class VoteTally {
         endsAt: row.ends_at ? row.ends_at.getTime() : null,
       }
       this.entries.set(row.id, e)
-      this.arm(row.id, e, mark.at)
+      this.arm(row.id, e, at)
       return
     }
     e.endsAt = row.ends_at ? row.ends_at.getTime() : null
     if (mark.seq <= e.baseSeq) return
-    const w = this.boundary(mark.at)
+    const w = this.boundary(at)
     // the latest change of a window is the only one ever shown: drop the earlier ones of that window
     const kept = e.pending.filter((c) => this.boundary(c.at) !== w || c.seq > mark.seq)
-    if (!kept.some((c) => this.boundary(c.at) === w))
-      kept.push({ seq: mark.seq, at: mark.at, agg: copy(agg) })
+    if (!kept.some((c) => this.boundary(c.at) === w)) kept.push({ seq: mark.seq, at, agg: copy(agg) })
     e.pending = kept.sort((a, b) => a.seq - b.seq)
-    this.arm(row.id, e, mark.at)
+    this.arm(row.id, e, at)
+  }
+
+  /**
+   * The moment a change counts from. Its mark's, unless the window of its mark ended before the change got here (a
+   * COMMIT slower than the rest of its window): then now, so it waits for the NEXT boundary and goes out with that
+   * window's other changes. Without this its window's boundary had already been sent, a timer for the past window
+   * fired a moment later, and the board was sent the one late ballot alone, off the grid (wave V review m1).
+   */
+  private shownFrom(markAt: number): number {
+    const now = this.opts.now().getTime()
+    return this.boundary(now) > this.boundary(markAt) ? now : markAt
   }
 
   /**

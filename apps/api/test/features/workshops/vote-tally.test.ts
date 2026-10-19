@@ -139,6 +139,32 @@ describe('the vote tally (RT-03)', () => {
     expect(h.published.map((p) => p.agg.totalVotesCast)).toEqual([1, 2])
   })
 
+  it('a cast whose commit lands after its window was sent waits for the next boundary: never alone, off the grid (wave V review m1)', async () => {
+    const h = harness()
+    const r = h.row()
+    h.tally.started(r, agg(0, 0))
+    const b0 = Math.floor(h.now / W) * W + W
+    h.now = b0 + 1_000
+    h.tally.changed(r, agg(1, 1), h.tally.mark())
+    // B is marked under the row lock just before the boundary; its COMMIT lands after the boundary went out
+    h.now = b0 + W - 10
+    const late = h.tally.mark()
+    await h.runTo(b0 + W + 100)
+    expect(h.published.map((p) => p.agg.totalVotesCast)).toEqual([1])
+    h.tally.changed(r, agg(2, 2), late)
+    expect(await h.tally.view(r, new Date(h.now + 10), live(agg(99)))).toEqual(agg(1, 1))
+    await h.runTo(b0 + 2 * W - 1)
+    expect(h.published.map((p) => p.agg.totalVotesCast)).toEqual([1])
+    h.now = b0 + W + 2_000
+    h.tally.changed(r, agg(3, 3), h.tally.mark())
+    await h.runTo(b0 + 3 * W)
+    expect(h.published.map((p) => ({ n: p.agg.totalVotesCast, dt: p.at - b0 }))).toEqual([
+      { n: 1, dt: W + 25 },
+      { n: 3, dt: 2 * W + 25 },
+    ])
+    for (const p of h.published) expect(p.at % W).toBeLessThanOrEqual(25)
+  })
+
   it('commit order wins over arrival order (the mark is taken under the row lock)', async () => {
     const h = harness()
     const r = h.row()
