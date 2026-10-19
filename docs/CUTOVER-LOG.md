@@ -527,3 +527,16 @@ on the sync disk (§6).
     - Breakouts were not driven live, because they need real frames on a board. The e2e suite covers them (v3, both event modes).
     - Cleanup: the board in Trash.
   - Gate (wave-v/int at 1a79a536): e2e chromium 1,128/1/8 normal (the one failure was an outdated K3-3 menu test, updated) and 1,129/0/8 with direct events; probe:browser pass; test:arrows 85/85; vitest 12,059/0; real Postgres db 123 and api 2,559 (1 link-preview race that also happens on main). NAS load test with 200 participants: poll answer ack p95 19 ms, 200/200 counted, 0 leaks.
+- **2026-10-19 17:28-17:40Z, wave W deployed: formats** (merge `adbc2ce7`, sharp 0.35.5 `fc2281c`, switches `91d2a4f`; `CONTRACTS_REV` 14; sync not redeployed).
+  1. api `dep-dbb56ie1egvs7395alvg` (migration 0039) with all five keys off; `formats` all false; `/healthz/deep` 200.
+  2. web `dep-dbb574ijnfac73f1hst0`; `/version.json` `fc2281ca583a`.
+  3. NAS worker and office rebuilt from main (`deploy/nas/deploy-worker.sh deploy`, standing OK). The start log reports the child memory caps enforced (pdf 768 MB, pdf-text 768 MB, remove-bg 640 MB) and offers `extract-text@1, render-pages@1`; remove-bg is not offered (no model).
+  4. `DRAFTROOM_DOC_CARDS`, `DRAFTROOM_FILE_SEARCH`, `DRAFTROOM_DECK_IMPORT` and `DRAFTROOM_WORKSPACE_ADMIN` set to `on` and `DRAFTROOM_REMOVE_BACKGROUND` to `off` via the Render API, then an api redeploy (`dep-dbb588rncjis73dgvo40`). `formats` now reports docCards, fileSearch, deckImport and admin true, removeBackground false.
+  - After: drift 0; live smoke 41/0; `/healthz/deep` 200; signed out, `/admin/members` answers 404.
+  - Live check, the owner on a new board:
+    - the admin members, storage/by-board and audit routes answered 200;
+    - a one-page PDF dropped on the board got its preview on `nas-1` (1.8 s), then an extract-text op ran (`done`), and a workspace search for a word only in the PDF returned it as a `file` hit on that board, page 1, with a snippet.
+    - Doc cards and deck import were not driven live; the gate covers them (w1/w4 e2e, both event modes).
+    - Cleanup: the board in Trash.
+  - Gate (wave-w/int at b98d0916): e2e 1,149/0 normal; 1,148/1 with direct events (the l6-laser lag flake also happens on main); probe:browser pass; arrows 85/85; vitest 12,479/0; real Postgres db 134 and api 2,680. Linux memory cap: a 1.5 MB hostile PDF was killed at about 800 MB (it used to reach about 3.3 GB). `audit:prod` passes after sharp 0.35.5 and the reviewed build-time source-map-js entry.
+  - Open: background removal waits for the owner to approve the u2netp model download.
