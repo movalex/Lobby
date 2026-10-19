@@ -339,6 +339,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@draftroom/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@draftroom/dev-assets':
         specifier: workspace:*
         version: link:../../packages/dev-assets

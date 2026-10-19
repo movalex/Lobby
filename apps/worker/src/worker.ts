@@ -1,11 +1,15 @@
 // Preview worker process (milestone 3): `node src/worker.ts`. An HTTP client of the API's /api/worker/*
 // routes (docs/M3-STORAGE-CONTRACTS.md §4-§5): it holds only DRAFTROOM_WORKER_TOKEN, no database or
 // storage credentials, and runs the same against the local api (fs mode), the Render api or from the NAS.
-import { createWorkerApi } from './api-client.ts'
+import { createApiCall, createWorkerApi } from './api-client.ts'
 import { WORKER } from './config.ts'
 import { loadWorkerEnv } from './env.ts'
 import { localOfficeConverter, officeOff, sofficeCommand } from './office.ts'
 import { socketOfficeConverter, sweepOfficeJobs } from './office-client.ts'
+import { checkBgModel } from './ops/bg-model.ts'
+import { reportedCapabilities } from './ops/capabilities.ts'
+import { createWorkerOpsApi } from './ops/client.ts'
+import { OP_RUNNERS } from './ops/dispatch.ts'
 import { startRemoteWorker } from './remote-loop.ts'
 
 const log = (line: string) => console.log(`[worker] ${line}`)
@@ -32,14 +36,23 @@ const office =
 // Documents a killed worker left staged in the shared volume (it outlives the containers).
 const staleStages =
   cfg.office.mode === 'socket' ? sweepOfficeJobs(cfg.office.jobsDir, WORKER.tmpSweepAgeMs) : 0
-const api = createWorkerApi({
+const apiOptions = {
   baseUrl: cfg.apiUrl,
   token: cfg.token,
   workerId: cfg.workerId,
   requestTimeoutMs: WORKER.requestTimeoutMs,
   requireHttpsBlobs: cfg.production,
+}
+const api = createWorkerApi(apiOptions)
+// Wave W: the op kinds this worker reports (a runner, WORKER_OPS, and for remove-bg a model file that passes its
+// pinned sha256; ops/capabilities.ts). None reported: the worker never calls /api/worker/ops/*.
+const opsReport = reportedCapabilities({
+  enabled: cfg.ops,
+  runners: OP_RUNNERS,
+  bgModel: checkBgModel(cfg.bgModelPath),
 })
 const worker = startRemoteWorker({
+  ops: { api: createWorkerOpsApi(createApiCall(apiOptions)), capabilities: opsReport.capabilities },
   api,
   concurrency: cfg.concurrency,
   pollMs: cfg.pollMs,
@@ -63,6 +76,9 @@ if (staleStages) {
   )
 }
 log(`office previews: ${office.describe}`)
+log(
+  `worker ops: ${opsReport.capabilities.length ? opsReport.capabilities.join(', ') : 'none'}${opsReport.missing.length ? ` (not offered: ${opsReport.missing.map((m) => `${m.kind}: ${m.why}`).join('; ')})` : ''}`,
+)
 if (cfg.unusedSecrets.length) {
   log(
     `note: ${cfg.unusedSecrets.join(', ')} ${cfg.unusedSecrets.length === 1 ? 'is' : 'are'} set but never used by the worker; remove from its environment`,

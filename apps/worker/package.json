@@ -10,6 +10,7 @@
     "typecheck": "tsc -p ."
   },
   "dependencies": {
+    "@draftroom/contracts": "workspace:*",
     "@draftroom/dev-assets": "workspace:*",
     "@napi-rs/canvas": "catalog:",
     "ag-psd": "catalog:",

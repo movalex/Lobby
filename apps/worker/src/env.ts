@@ -4,10 +4,19 @@
 import { isIP } from 'node:net'
 import { hostname, tmpdir } from 'node:os'
 import { isAbsolute, resolve } from 'node:path'
+import type { WorkerOpKind } from '@draftroom/contracts'
 import { LIMITS } from '@draftroom/dev-assets'
 import { PREVIEW, WORKER } from './config.ts'
+import { parseWorkerOps } from './ops/capabilities.ts'
 
 type Env = Record<string, string | undefined>
+
+/** DRAFTROOM_BG_MODEL_PATH: an absolute path, or unset (background removal is then never reported). */
+export function parseBgModelPath(raw: string | undefined): string | null {
+  if (raw === undefined) return null
+  if (!isAbsolute(raw)) throw new Error('DRAFTROOM_BG_MODEL_PATH must be an absolute path')
+  return resolve(raw)
+}
 
 export type NodeEnv = 'production' | 'development' | 'test'
 /**
@@ -41,6 +50,13 @@ export interface WorkerEnv {
   ffmpegPath: string | undefined
   ffprobePath: string | undefined
   office: OfficeEnv
+  /**
+   * Wave W: WORKER_OPS, the op kinds this worker may take (ops/capabilities.ts parseWorkerOps: unset = all its build
+   * has; `none`). A kind is reported only with a runner and its prerequisites as well.
+   */
+  ops: WorkerOpKind[]
+  /** Wave W: DRAFTROOM_BG_MODEL_PATH, the background-removal model file (absolute; sha256-checked, ops/bg-model.ts). */
+  bgModelPath: string | null
   /** Names (never values) of credentials present in the environment that the worker never uses. */
   unusedSecrets: string[]
 }
@@ -208,6 +224,8 @@ export function loadWorkerEnv(env: Env = process.env): WorkerEnv {
     ffmpegPath: read(env, 'FFMPEG_PATH'),
     ffprobePath: read(env, 'FFPROBE_PATH'),
     office: loadOfficeEnv(env, production),
+    ops: parseWorkerOps(read(env, 'WORKER_OPS')),
+    bgModelPath: parseBgModelPath(read(env, 'DRAFTROOM_BG_MODEL_PATH')),
     unusedSecrets: FOREIGN_SECRETS.filter((n) => read(env, n) !== undefined),
   }
 }

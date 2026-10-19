@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ClaimedJob, WorkerApi } from './api-client.ts'
 import { WORKER } from './config.ts'
+import type { WorkerOpsApi } from './ops/client.ts'
+import { type RunOpOptions, type RunOpOutcome, runOneOp } from './ops/loop.ts'
 import type { ProcessOptions } from './processJob.ts'
 import { type RemoteOutcome, runRemoteJob, TMP_PREFIX } from './remote-job.ts'
 
@@ -26,6 +28,18 @@ export interface RemoteWorkerOptions {
   onOutcome?: (versionId: string, outcome: RemoteOutcome) => void
   /** Test hook for the jitter. */
   random?: () => number
+  /**
+   * Wave W (ops/loop.ts): worker ops, asked for only when a preview claim came back empty (previews keep priority), in
+   * the same slot. Absent, or no capability to report: the worker never calls /api/worker/ops/* (a worker of before).
+   */
+  ops?: {
+    api: WorkerOpsApi
+    capabilities: readonly string[]
+    runners?: RunOpOptions['runners']
+    /** after an api answered that it has no ops routes (404), ask again only this much later (default 10 min) */
+    unsupportedBackoffMs?: number
+    onOutcome?: (outcome: RunOpOutcome) => void
+  }
 }
 
 export interface RemoteWorkerHandle {
@@ -111,6 +125,43 @@ export function startRemoteWorker(o: RemoteWorkerOptions): RemoteWorkerHandle {
     } catch {}
   }
 
+  // wave W: an api without ops routes is asked again only after a long pause; trouble is logged once
+  let opsPausedUntil = 0
+  let opsTrouble: string | null = null
+  /** One op, if the worker has capabilities and the api has ops. True when an op was claimed (whatever its outcome). */
+  async function tryOp(): Promise<boolean> {
+    const ops = o.ops
+    if (!ops?.capabilities.length || Date.now() < opsPausedUntil) return false
+    let outcome: RunOpOutcome
+    try {
+      outcome = await runOneOp({
+        ops: ops.api,
+        api,
+        capabilities: ops.capabilities,
+        ...(ops.runners ? { runners: ops.runners } : {}),
+        tmpDir,
+        signal: shutdown.signal,
+        heartbeatMs: o.heartbeatMs,
+        log,
+      })
+      opsTrouble = null
+    } catch (e) {
+      const err = e as Error & { kind?: string }
+      if (err.kind === 'aborted') return false
+      const what = `ops claim failed (${err.message})`
+      if (what !== opsTrouble) log(what)
+      opsTrouble = what
+      return false
+    }
+    ops.onOutcome?.(outcome)
+    if (outcome.kind === 'unsupported') {
+      if (opsPausedUntil === 0) log('this api has no worker ops: previews only')
+      opsPausedUntil = Date.now() + (ops.unsupportedBackoffMs ?? 10 * 60_000)
+      return false
+    }
+    return outcome.kind !== 'none'
+  }
+
   async function slot() {
     let idle = 0
     while (!stopping) {
@@ -137,6 +188,11 @@ export function startRemoteWorker(o: RemoteWorkerOptions): RemoteWorkerHandle {
         continue
       }
       if (!claimed) {
+        // wave W: no preview to make, so ask for one op (previews keep priority)
+        if (!stopping && (await tryOp())) {
+          idle = 0
+          continue
+        }
         if (!stopping) await sleep(idleDelay(idle++, pollMs, pollMaxMs, random))
         continue
       }
