@@ -129,16 +129,17 @@ export function DocEditorPanel({ ctx, close }: { ctx: CanvasFeatureContext; clos
 
   /** Hands a new value to the lease client; refused (and the shown words kept) unless writable. */
   const put = (value: string, sel?: { start: number; end: number }) => {
+    const ta = area.current
     if (!panel.input(value)) {
-      const ta = area.current
       if (ta && ta.value !== panel.state().text) ta.value = panel.state().text
       return
     }
-    if (sel)
-      requestAnimationFrame(() => {
-        const ta = area.current
-        if (ta) ta.setSelectionRange(sel.start, sel.end)
-      })
+    // the new value and its selection go into the textarea now, before the next key (React's render then finds the
+    // value it already has and leaves the selection alone)
+    if (ta && sel) {
+      if (ta.value !== value) ta.value = value
+      ta.setSelectionRange(sel.start, sel.end)
+    }
   }
 
   const format = (action: FormatAction) => {
