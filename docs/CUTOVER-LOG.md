@@ -540,3 +540,7 @@ on the sync disk (§6).
     - Cleanup: the board in Trash.
   - Gate (wave-w/int at b98d0916): e2e 1,149/0 normal; 1,148/1 with direct events (the l6-laser lag flake also happens on main); probe:browser pass; arrows 85/85; vitest 12,479/0; real Postgres db 134 and api 2,680. Linux memory cap: a 1.5 MB hostile PDF was killed at about 800 MB (it used to reach about 3.3 GB). `audit:prod` passes after sharp 0.35.5 and the reviewed build-time source-map-js entry.
   - Open: background removal waits for the owner to approve the u2netp model download.
+- **2026-10-19 18:44-18:53Z, background removal on** (owner's approval in chat). `u2netp.onnx` (4,574,861 bytes) was downloaded once from rembg's v0.0.0 release. Its md5 `8e83ca70e441ab06c318d82300c84806` matches the md5 rembg publishes; sha256 `309c8469…ddd8` is pinned in `bg-model.ts` and `MODELS.json` (`1da6816`). The file is placed read-only on the NAS at `draftroom-worker/models/` and mounted at `/models`.
+  - The rebuilt worker reports `remove-bg:u2netp@1, extract-text@1, render-pages@1`.
+  - `98b7724`: web switch on, palette command released, render.yaml set. `DRAFTROOM_REMOVE_BACKGROUND=on`; api `dep-dbb6c8ks728c73fffmug` and web `dep-dbb6clrncjis73dkhlbg`. `formats` is now all true.
+  - Live check, the owner on a new board: a dropped 320×240 PNG → `POST /api/files/:ver/remove-background` 202 → op `done` with a new result version in about 10 s on `nas-1`. Cleanup: the board in Trash.
