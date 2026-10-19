@@ -505,3 +505,12 @@ on the sync disk (§6).
     - 0 error/FATAL lines; drift 0; live smoke 41/0.
   - Live check, the owner on a new board: the palette's "Kanban board" made a Kanban frame with its columns (`kanban-layer`, `kanban-column`), and "Timeline" ran; the board said Saved and Live, so the rev-14 room accepted the planning keys.
   - Cleanup: the board in Trash.
+- **2026-10-19 03:5x-04:02Z, the NAS preview worker rebuilt, and design previews on** (owner's approval, 2026-10-18):
+  - NAS: `deploy/nas/deploy-worker.sh check-env` ok, then `deploy` from main `2f6f0479`. draftroom-worker and draftroom-office run the new image (restarts 0); the worker logs "office previews: LibreOffice sidecar", and the office sidecar logs "listening".
+  - api: `DRAFTROOM_DESIGN_PREVIEWS=on` set through the Render API, render.yaml and its test updated (`cd41796`), then the api redeployed (`dep-dbapa6m1egvs73bjmn9g`; a restart does not apply env changes). `/api/auth/config` answers `designPreviews:true`.
+  - After: drift 0; live smoke 41/0 (the usual sync-socket warning).
+  - Live check, the owner on a new board:
+    - a 24×16 TIFF dropped on the board was claimed by `nas-1` and became a flattened page preview (kind `pdf`, 1 page, a webp derivative) in about 3 s;
+    - a 1 s 30 fps H.264 MP4 got a poster and a thumb, and its probe reports `frameRate: 30` (the review viewer no longer assumes 25 fps).
+    - Not checked live: a real PSD or AI file. Those go through the same worker path and are covered by the worker's tests.
+    - Cleanup: the board in Trash.
