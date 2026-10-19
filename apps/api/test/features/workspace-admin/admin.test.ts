@@ -57,6 +57,67 @@ async function makeWorkspaceGuest(): Promise<void> {
   expect(role.role).toBe('guest')
 }
 
+/**
+ * `n` rows made `aheadMs` from now on the test clock. Their times tie in pairs and differ by single microseconds,
+ * which a millisecond cursor would lose (and a cursor on time alone would skip or repeat).
+ */
+const seedTime = (aheadMs: number) =>
+  `($3::timestamptz + ${aheadMs} * interval '1 millisecond' - (n / 2) * interval '1 microsecond')`
+
+/** `n` pending single-use workspace invitations (`inv_seed<tag>…`), each locked to an address. */
+async function seedInvitations(tag: string, n: number, aheadMs = 0): Promise<void> {
+  await w.api.db.query(
+    `INSERT INTO invitations (id, token_hash, workspace_id, board_id, role, created_by, created_at, expires_at,
+                              invited_email)
+     SELECT 'inv_seed' || $4 || lpad(n::text, 6, '0'), md5($4 || n) || md5('t' || $4 || n), $1, NULL, 'member', $2,
+            ${seedTime(aheadMs)}, $3::timestamptz + interval '7 days', 'p' || n || '@client.example'
+       FROM generate_series(1, $5::int) AS n`,
+    [DEV_STUDIO, w.alice.userId, w.api.clock.now(), tag, n],
+  )
+}
+
+/** `n` open review links on bob's board (`inv_seed<tag>…`). */
+async function seedLinks(tag: string, n: number, aheadMs = 0): Promise<void> {
+  await w.api.db.query(
+    `INSERT INTO invitations (id, token_hash, workspace_id, board_id, role, created_by, created_at, expires_at,
+                              multi_use, allow_guests)
+     SELECT 'inv_seed' || $4 || lpad(n::text, 6, '0'), md5($4 || n) || md5('t' || $4 || n), $1, $6, 'viewer', $2,
+            ${seedTime(aheadMs)}, $3::timestamptz + interval '7 days', true, true
+       FROM generate_series(1, $5::int) AS n`,
+    [DEV_STUDIO, w.bob.userId, w.api.clock.now(), tag, n, w.board],
+  )
+}
+
+/** `n` name-only guests (`usr_seed<tag>…`) who joined Dev Studio and can open bob's board. */
+async function seedGuests(tag: string, n: number, aheadMs = 0): Promise<void> {
+  await w.api.db.query(
+    `INSERT INTO users (id, name, color, kind, guest_name)
+     SELECT 'usr_seed' || $1 || lpad(n::text, 6, '0'), $1 || n || ' (guest)', '#1d4ed8', 'guest', $1 || n
+       FROM generate_series(1, $2::int) AS n`,
+    [tag, n],
+  )
+  // seedTime reads its base as $3
+  await w.api.db.query(
+    `INSERT INTO workspace_members (workspace_id, user_id, role, created_at)
+     SELECT $1, 'usr_seed' || $2 || lpad(n::text, 6, '0'), 'guest', ${seedTime(aheadMs)}
+       FROM generate_series(1, $4::int) AS n`,
+    [DEV_STUDIO, tag, w.api.clock.now(), n],
+  )
+  await w.api.db.query(
+    `INSERT INTO board_members (board_id, user_id, role)
+     SELECT $1, 'usr_seed' || $2 || lpad(n::text, 6, '0'), 'viewer' FROM generate_series(1, $3::int) AS n`,
+    [w.board, tag, n],
+  )
+}
+
+/** The seeded invitation ids `where` picks, newest first by (created_at, id). */
+async function seededOrder(where: string): Promise<string[]> {
+  const rows = await w.api.db.query<{ id: string }>(
+    `SELECT i.id FROM invitations i WHERE ${where} ORDER BY i.created_at DESC, i.id DESC`,
+  )
+  return rows.rows.map((r) => r.id)
+}
+
 describe('who may see the admin page', () => {
   let sam: GuestClient
   beforeEach(async () => {
@@ -106,6 +167,37 @@ describe('who may see the admin page', () => {
     expect((await get(w.carol, 'members')).statusCode).toBe(404)
   })
 
+  it('a paging cursor, good or malformed, changes nothing for anyone else: still the unknown route 404', async () => {
+    const tails = [
+      'invitations?before=1792400000123456.inv_0123456789abcdefghij',
+      'invitations?before=nonsense',
+      'links?linksBefore=1792400000123456.inv_0123456789abcdefghij',
+      'links?guestsBefore=1792400000123456.usr_0123456789abcdefghij',
+      'links?linksBefore=nonsense&guestsBefore=nonsense',
+    ]
+    const refused: [string, (m: Method, u: string) => Promise<{ statusCode: number; json(): unknown }>][] = [
+      ['signed out', (m, u) => w.api.anon(m, u)],
+      ['a member', (m, u) => w.bob.req(m, u)],
+      ['a workspace guest with an account', (m, u) => w.erin.req(m, u)],
+      ['a name-only guest', (m, u) => sam.req(m, u)],
+      [
+        'the owner of another workspace',
+        (m, u) => w.alice.req(m, u.replace(DEV_STUDIO, w.bob.personalWorkspaceId)),
+      ],
+    ]
+    for (const [who, call] of refused)
+      for (const tail of tails) {
+        const res = await call('GET', `/api/workspaces/${DEV_STUDIO}/admin/${tail}`)
+        expect({ who, tail, status: res.statusCode }).toEqual({ who, tail, status: 404 })
+        expect(res.json(), `${who} ${tail}`).toEqual(UNKNOWN)
+      }
+    // the owner: a good cursor is a page, a malformed one a 400
+    expect((await get(w.alice, tails[0] ?? '')).statusCode).toBe(200)
+    expect((await get(w.alice, tails[1] ?? '')).statusCode).toBe(400)
+    expect((await get(w.alice, tails[2] ?? '')).statusCode).toBe(200)
+    expect((await get(w.alice, tails[4] ?? '')).statusCode).toBe(400)
+  })
+
   it('the rate limit counts owners and admins only (a member never sees a 429)', async () => {
     for (let i = 0; i < ADMIN_LIMITS.rate.max + 5; i++)
       expect((await get(w.bob, 'retention')).statusCode).toBe(404)
@@ -123,6 +215,14 @@ describe('the switch', () => {
     for (const key of ROUTES) {
       const res = await w.alice.req('GET', path(key, DEV_STUDIO))
       expect(res.statusCode, key).toBe(404)
+      expect(res.json()).toEqual(UNKNOWN)
+    }
+    for (const tail of [
+      'invitations?before=1792400000123456.inv_0123456789abcdefghij',
+      'links?linksBefore=nonsense',
+    ]) {
+      const res = await get(w.alice, tail)
+      expect(res.statusCode, tail).toBe(404)
       expect(res.json()).toEqual(UNKNOWN)
     }
   })
@@ -511,6 +611,108 @@ describe('the tabs', () => {
     // the audit log says who did it, as for any revoke
     const log = AdminAuditResponse.parse((await get(w.alice, 'audit?action=invitation.revoke')).json())
     expect(log.events[0]).toMatchObject({ actor: { id: w.alice.userId }, board: { id: w.board } })
+  })
+
+  it('invitations: page 1 (100) and page 2 of 150, no duplicate or gap, also when invitations are made between the calls', async () => {
+    await seedInvitations('I', 150)
+    const expected = await seededOrder("i.id LIKE 'inv_seedI%'")
+    expect(expected).toHaveLength(150)
+    const first = AdminInvitationsResponse.parse((await get(w.alice, 'invitations')).json())
+    expect(first.invitations).toHaveLength(ADMIN_LIMITS.pageSize)
+    expect(first.more).toBe(true)
+    expect(typeof first.next).toBe('string')
+    // someone sends five more while the admin reads: they go on top, never into page 2
+    await seedInvitations('J', 5, 1000)
+    const res = await get(w.alice, `invitations?before=${encodeURIComponent(first.next ?? '')}`)
+    expect(res.statusCode, res.body).toBe(200)
+    const second = AdminInvitationsResponse.parse(res.json())
+    expect(second.more).toBe(false)
+    expect(second.next).toBeNull()
+    const seen = [...first.invitations, ...second.invitations].map((i) => i.id)
+    expect(seen).toEqual(expected)
+    expect(new Set(seen).size).toBe(150)
+    // the newest page now starts with the five made meanwhile
+    const again = AdminInvitationsResponse.parse((await get(w.alice, 'invitations')).json())
+    expect(again.invitations.slice(0, 5).every((i) => i.id.startsWith('inv_seedJ'))).toBe(true)
+    // only the hint ever: never an address
+    expect(res.body).not.toMatch(/p\d+@client/)
+    expect(second.invitations[0]?.emailHint).toBe('p•••@client.example')
+  })
+
+  it('links and guests: each list pages apart past 100, stable while links and guests are added between the calls', async () => {
+    await seedLinks('L', 150)
+    await seedGuests('G', 150)
+    const expectedLinks = await seededOrder("i.id LIKE 'inv_seedL%'")
+    const expectedGuests = (
+      await w.api.db.query<{ id: string }>(
+        `SELECT wm.user_id AS id FROM workspace_members wm
+          WHERE wm.workspace_id = $1 AND wm.user_id LIKE 'usr_seedG%'
+          ORDER BY wm.created_at DESC, wm.user_id DESC`,
+        [DEV_STUDIO],
+      )
+    ).rows.map((r) => r.id)
+    const first = AdminLinksResponse.parse((await get(w.alice, 'links')).json())
+    expect(first.links).toHaveLength(ADMIN_LIMITS.pageSize)
+    expect(first.guests).toHaveLength(ADMIN_LIMITS.pageSize)
+    expect(first.more).toBe(true)
+    expect(typeof first.nextLinks).toBe('string')
+    expect(typeof first.nextGuests).toBe('string')
+    // a link is made and a guest joins while the admin reads
+    await seedLinks('M', 3, 1000)
+    await seedGuests('H', 3, 1000)
+    const links2 = AdminLinksResponse.parse(
+      (await get(w.alice, `links?linksBefore=${encodeURIComponent(first.nextLinks ?? '')}`)).json(),
+    )
+    // only the list given a cursor is read
+    expect(links2.guests).toEqual([])
+    expect(links2.nextGuests).toBeNull()
+    expect(links2.nextLinks).toBeNull()
+    expect(links2.more).toBe(false)
+    const seenLinks = [...first.links, ...links2.links].map((l) => l.id)
+    expect(seenLinks).toEqual(expectedLinks)
+    expect(new Set(seenLinks).size).toBe(150)
+    const guests2 = AdminLinksResponse.parse(
+      (await get(w.alice, `links?guestsBefore=${encodeURIComponent(first.nextGuests ?? '')}`)).json(),
+    )
+    expect(guests2.links).toEqual([])
+    expect(guests2.nextLinks).toBeNull()
+    expect(guests2.nextGuests).toBeNull()
+    const seenGuests = [...first.guests, ...guests2.guests].map((g) => g.user.id)
+    expect(seenGuests).toEqual(expectedGuests)
+    expect(new Set(seenGuests).size).toBe(150)
+    // each paged guest still names its board
+    expect(guests2.guests[0]?.boards).toEqual([{ id: w.board, title: 'Client review' }])
+    // both cursors at once: both lists go on
+    const both = AdminLinksResponse.parse(
+      (
+        await get(
+          w.alice,
+          `links?linksBefore=${encodeURIComponent(first.nextLinks ?? '')}&guestsBefore=${encodeURIComponent(first.nextGuests ?? '')}`,
+        )
+      ).json(),
+    )
+    expect(both.links.map((l) => l.id)).toEqual(links2.links.map((l) => l.id))
+    expect(both.guests.map((g) => g.user.id)).toEqual(guests2.guests.map((g) => g.user.id))
+  })
+
+  it('a malformed cursor is the caller mistake (400 for an owner); a cursor of the right form that matches no row ends the list', async () => {
+    for (const tail of [
+      'invitations?before=nonsense',
+      'invitations?before=12.inv_short',
+      'invitations?before=1792400000123456.brd_0123456789abcdefghij',
+      'invitations?before=-5.inv_0123456789abcdefghij',
+      'links?linksBefore=1792400000123456',
+      'links?guestsBefore=x.usr_0123456789abcdefghij',
+    ]) {
+      const res = await get(w.alice, tail)
+      expect(res.statusCode, `${tail}: ${res.body}`).toBe(400)
+    }
+    w.api.clock.advance(ADMIN_LIMITS.rate.timeWindow + 1)
+    // the oldest possible time: nothing is older
+    const none = AdminInvitationsResponse.parse(
+      (await get(w.alice, 'invitations?before=0.inv_0123456789abcdefghij')).json(),
+    )
+    expect(none).toEqual({ invitations: [], more: false, next: null })
   })
 
   it('retention: read-only facts, every documented id, nothing that deletes', async () => {

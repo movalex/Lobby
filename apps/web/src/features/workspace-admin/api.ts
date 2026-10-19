@@ -10,7 +10,9 @@
 import {
   type AdminAuditQuery,
   AdminAuditResponse,
+  type AdminInvitationsQuery,
   AdminInvitationsResponse,
+  type AdminLinksQuery,
   AdminLinksResponse,
   AdminMembersResponse,
   AdminRetentionResponse,
@@ -26,13 +28,23 @@ type Requester = Pick<ApiClient, 'request'>
 export type WorkspaceRole = 'owner' | 'admin' | 'member' | 'guest'
 const enc = encodeURIComponent
 
+/** `?a=1&b=2` of the given values, or '' when none is. */
+function search(params: Record<string, string | undefined>): string {
+  const qs = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) if (v !== undefined) qs.set(k, v)
+  const s = qs.toString()
+  return s ? `?${s}` : ''
+}
+
 export function adminApi(workspaceId: string, client: Requester = defaultApi) {
   const r = client.request
   const read = <S extends z.ZodType>(tail: string, schema: S, signal?: AbortSignal) =>
     r('GET', adminPath(workspaceId, tail), { schema, signal })
   return {
     members: (signal?: AbortSignal) => read('members', AdminMembersResponse, signal),
-    invitations: (signal?: AbortSignal) => read('invitations', AdminInvitationsResponse, signal),
+    /** the newest page, or the page after `before` (the answer's `next`) */
+    invitations: (query: AdminInvitationsQuery = {}, signal?: AbortSignal) =>
+      read(`invitations${search({ before: query.before })}`, AdminInvitationsResponse, signal),
     storage: (by: 'board' | 'uploader', signal?: AbortSignal) =>
       read(`storage/by-${by}`, AdminStorageResponse, signal),
     audit: (query: AdminAuditQuery, signal?: AbortSignal) => {
@@ -44,7 +56,13 @@ export function adminApi(workspaceId: string, client: Requester = defaultApi) {
       const s = qs.toString()
       return read(`audit${s ? `?${s}` : ''}`, AdminAuditResponse, signal)
     },
-    links: (signal?: AbortSignal) => read('links', AdminLinksResponse, signal),
+    /** both newest pages; with a cursor, only that list's next page (the other comes back empty) */
+    links: (query: AdminLinksQuery = {}, signal?: AbortSignal) =>
+      read(
+        `links${search({ linksBefore: query.linksBefore, guestsBefore: query.guestsBefore })}`,
+        AdminLinksResponse,
+        signal,
+      ),
     retention: (signal?: AbortSignal) => read('retention', AdminRetentionResponse, signal),
 
     // ---- the existing routes ----

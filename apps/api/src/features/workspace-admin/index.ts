@@ -1,11 +1,11 @@
 // OWNER: WS5 (wave W, the workspace admin page). docs/WAVE-W-CONTRACTS.md §7.
 //
 //   GET /api/workspaces/:wid/admin/members              → AdminMembersResponse       W5-1
-//   GET /api/workspaces/:wid/admin/invitations          → AdminInvitationsResponse   W5-1
+//   GET /api/workspaces/:wid/admin/invitations?before=  → AdminInvitationsResponse   W5-1 (paged: AdminCursor)
 //   GET /api/workspaces/:wid/admin/storage/by-board     → AdminStorageResponse       W5-2
 //   GET /api/workspaces/:wid/admin/storage/by-uploader  → AdminStorageResponse       W5-2
 //   GET /api/workspaces/:wid/admin/audit                → AdminAuditResponse         W5-3
-//   GET /api/workspaces/:wid/admin/links                → AdminLinksResponse         W5-4
+//   GET /api/workspaces/:wid/admin/links?linksBefore=&guestsBefore=  → AdminLinksResponse  W5-4 (each list paged)
 //   GET /api/workspaces/:wid/admin/retention            → AdminRetentionResponse     W5-5
 //
 // Owner or admin of the workspace only. Everyone else gets the unknown route's 404 (never a 401 or a 403): someone
@@ -24,7 +24,9 @@ import {
   ADMIN_ROUTE_KEYS,
   AdminAuditQuery,
   type AdminAuditResponse,
+  AdminInvitationsQuery,
   type AdminInvitationsResponse,
+  AdminLinksQuery,
   type AdminLinksResponse,
   type AdminMembersResponse,
   type AdminRetentionResponse,
@@ -81,7 +83,9 @@ export async function registerWorkspaceAdmin(
     },
     invitations: async (req): Promise<AdminInvitationsResponse> => {
       const { wid } = await adminOf(req)
-      return adminInvitations(ctx.db, wid, ctx.now())
+      // parsed only once the caller is known: a malformed cursor is a 400 for an owner or admin, a 404 for anyone else
+      const query = parse(AdminInvitationsQuery, req.query ?? {})
+      return adminInvitations(ctx.db, wid, ctx.now(), query.before)
     },
     storageByBoard: async (req): Promise<AdminStorageResponse> => {
       const { wid } = await adminOf(req)
@@ -98,7 +102,7 @@ export async function registerWorkspaceAdmin(
     },
     links: async (req): Promise<AdminLinksResponse> => {
       const { wid } = await adminOf(req)
-      return adminLinks(ctx.db, wid, ctx.now())
+      return adminLinks(ctx.db, wid, ctx.now(), parse(AdminLinksQuery, req.query ?? {}))
     },
     retention: async (req): Promise<AdminRetentionResponse> => {
       await adminOf(req)

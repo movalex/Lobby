@@ -7,9 +7,11 @@ import {
   ADMIN_LIMITS,
   type AdminAuditEvent,
   type AdminAuditQuery,
+  type AdminCursor,
   type AdminGuest,
   type AdminInvitation,
   type AdminLink,
+  type AdminLinksQuery,
   type AdminMember,
   type AdminRetentionFact,
   type AdminStorageResponse,
@@ -67,15 +69,46 @@ export async function adminMembers(q: Queryable, ctx: FeatureContext, wid: strin
     .sort((a, b) => WS_RANK[a.role] - WS_RANK[b.role] || a.user.name.localeCompare(b.user.name))
 }
 
+// ---- paging (invitations, links, guests) ----------------------------------------------------------------------------
+
+/**
+ * The three lists page by AdminCursor: newest first by (time, id), both descending, a unique key, so a row made while
+ * someone pages lands above every cursor already handed out. The time travels as whole microseconds since 1970,
+ * computed by Postgres (`extract(epoch …)` is numeric, exact): a JS Date would lose the microseconds, and rows that
+ * differ by less than a millisecond would be skipped or repeated.
+ */
+const cursorOf = (time: string, id: string) =>
+  `(extract(epoch FROM ${time}) * 1000000)::bigint::text || '.' || ${id}`
+
+/** The page's condition after `cursor` (its two parts pushed onto `params`), or none for the newest page. */
+function afterCursor(cursor: AdminCursor | undefined, time: string, id: string, params: unknown[]): string {
+  if (cursor === undefined) return ''
+  const dot = cursor.indexOf('.')
+  params.push(cursor.slice(0, dot), cursor.slice(dot + 1))
+  const us = `$${params.length - 1}`
+  const last = `$${params.length}`
+  return `AND (${time}, ${id}) < (timestamptz 'epoch' + ${us}::bigint * interval '1 microsecond', ${last}::text)`
+}
+
+/** One page of `rows` (fetched one longer than a page) and the cursor of its last row, or null at the end. */
+function pageOf<R extends { cursor: string }>(rows: R[]): { page: R[]; next: AdminCursor | null } {
+  const page = rows.slice(0, ADMIN_LIMITS.pageSize)
+  return { page, next: rows.length > ADMIN_LIMITS.pageSize ? (page.at(-1)?.cursor ?? null) : null }
+}
+
 /**
  * Pending single-use invitations, to the workspace or to one of its boards (not in the trash): nobody used, revoked or
- * outlived them. The address only as its hint ("j•••@client.example"), never the token.
+ * outlived them, one page after `before` (AdminCursor). The address only as its hint ("j•••@client.example"), never
+ * the token.
  */
 export async function adminInvitations(
   q: Queryable,
   wid: string,
   now: Date,
-): Promise<{ invitations: AdminInvitation[]; more: boolean }> {
+  before?: AdminCursor,
+): Promise<{ invitations: AdminInvitation[]; more: boolean; next: AdminCursor | null }> {
+  const params: unknown[] = [wid, now]
+  const after = afterCursor(before, 'i.created_at', 'i.id', params)
   const rows = await q.query<{
     id: string
     board_id: string | null
@@ -86,20 +119,23 @@ export async function adminInvitations(
     creator_name: string
     created_at: Date
     expires_at: Date
+    cursor: string
   }>(
     `SELECT i.id, i.board_id, b.title, i.role, i.invited_email, i.created_by, u.name AS creator_name,
-            i.created_at, i.expires_at
+            i.created_at, i.expires_at, ${cursorOf('i.created_at', 'i.id')} AS cursor
        FROM invitations i
        JOIN users u ON u.id = i.created_by
        LEFT JOIN boards b ON b.id = i.board_id AND b.workspace_id = i.workspace_id
       WHERE i.workspace_id = $1 AND NOT i.multi_use AND i.redeemed_by IS NULL AND i.revoked_at IS NULL
         AND i.expires_at > $2
         AND (i.board_id IS NULL OR (b.id IS NOT NULL AND ${LIVE_BOARD}))
-      ORDER BY i.created_at DESC, i.id
+        ${after}
+      ORDER BY i.created_at DESC, i.id DESC
       LIMIT ${ADMIN_LIMITS.pageSize + 1}`,
-    [wid, now],
+    params,
   )
-  const invitations = rows.rows.slice(0, ADMIN_LIMITS.pageSize).map(
+  const { page, next } = pageOf(rows.rows)
+  const invitations = page.map(
     (r): AdminInvitation => ({
       id: r.id,
       scope: r.board_id === null ? 'workspace' : 'board',
@@ -111,7 +147,7 @@ export async function adminInvitations(
       expiresAt: r.expires_at.toISOString(),
     }),
   )
-  return { invitations, more: rows.rows.length > ADMIN_LIMITS.pageSize }
+  return { invitations, more: next !== null, next }
 }
 
 // ---- storage (W5-2) -------------------------------------------------------------------------------------------------
@@ -341,53 +377,29 @@ function linkKind(role: string, landing: string): AdminLink['kind'] {
 /**
  * Every open multi-use link of the workspace's boards (not in the trash; the same rows each board's Share dialog
  * lists: GET /api/boards/:bid/invitations), and the name-only guests who still hold a grant here, with those boards.
- * Never a link's token, URL or join code (whether it has one only).
+ * Never a link's token, URL or join code (whether it has one only). The two lists page apart (AdminLinksQuery): with
+ * no cursor, the newest page of both; with one or both, only the list(s) given a cursor, the other empty.
  */
 export async function adminLinks(
   q: Queryable,
   wid: string,
   now: Date,
-): Promise<{ links: AdminLink[]; guests: AdminGuest[]; more: boolean }> {
-  const links = await q.query<{
-    id: string
-    board_id: string
-    title: string
-    role: string
-    landing: string
-    allow_guests: boolean
-    has_code: boolean
-    created_by: string
-    creator_name: string
-    created_at: Date
-    expires_at: Date
-    use_count: number
-    max_uses: number | null
-  }>(
-    `SELECT i.id, i.board_id, b.title, i.role, i.landing, i.allow_guests, i.join_code_hash IS NOT NULL AS has_code,
-            i.created_by, u.name AS creator_name, i.created_at, i.expires_at, i.use_count, i.max_uses
-       FROM invitations i
-       JOIN boards b ON b.id = i.board_id AND b.workspace_id = i.workspace_id
-       JOIN users u ON u.id = i.created_by
-      WHERE i.workspace_id = $1 AND i.multi_use AND i.revoked_at IS NULL AND i.redeemed_by IS NULL
-        AND i.expires_at > $2 AND ${LIVE_BOARD}
-      ORDER BY i.created_at DESC, i.id
-      LIMIT ${ADMIN_LIMITS.pageSize + 1}`,
-    [wid, now],
-  )
-  const guests = await q.query<{ id: string; name: string; joined_at: Date; grants: number }>(
-    `SELECT u.id, u.name, wm.created_at AS joined_at, count(*)::int AS grants
-       FROM workspace_members wm
-       JOIN users u ON u.id = wm.user_id AND u.kind = 'guest'
-       JOIN board_members bm ON bm.user_id = u.id
-       JOIN boards b ON b.id = bm.board_id AND b.workspace_id = wm.workspace_id
-      WHERE wm.workspace_id = $1 AND ${LIVE_BOARD}
-      GROUP BY u.id, u.name, wm.created_at
-      ORDER BY wm.created_at DESC, u.id
-      LIMIT ${ADMIN_LIMITS.pageSize + 1}`,
-    [wid],
-  )
-  const shownGuests = guests.rows.slice(0, ADMIN_LIMITS.pageSize)
-  const boards = shownGuests.length
+  query: AdminLinksQuery = {},
+): Promise<{
+  links: AdminLink[]
+  guests: AdminGuest[]
+  more: boolean
+  nextLinks: AdminCursor | null
+  nextGuests: AdminCursor | null
+}> {
+  const paging = query.linksBefore !== undefined || query.guestsBefore !== undefined
+  const links =
+    !paging || query.linksBefore !== undefined ? await linkRows(q, wid, now, query.linksBefore) : []
+  const guests =
+    !paging || query.guestsBefore !== undefined ? await guestRows(q, wid, query.guestsBefore) : []
+  const shownLinks = pageOf(links)
+  const shownGuests = pageOf(guests)
+  const boards = shownGuests.page.length
     ? await q.query<{ user_id: string; id: string; title: string; n: number }>(
         `SELECT g.user_id, g.id, g.title, g.n FROM (
            SELECT bm.user_id, b.id, b.title,
@@ -396,11 +408,11 @@ export async function adminLinks(
             WHERE b.workspace_id = $1 AND ${LIVE_BOARD} AND bm.user_id = ANY($2::text[])
          ) g WHERE g.n <= ${ADMIN_LIMITS.guestBoards}
          ORDER BY g.user_id, g.n`,
-        [wid, shownGuests.map((g) => g.id)],
+        [wid, shownGuests.page.map((g) => g.id)],
       )
     : { rows: [] }
   return {
-    links: links.rows.slice(0, ADMIN_LIMITS.pageSize).map(
+    links: shownLinks.page.map(
       (r): AdminLink => ({
         id: r.id,
         board: { id: r.board_id, title: r.title },
@@ -415,7 +427,7 @@ export async function adminLinks(
         maxUses: r.max_uses,
       }),
     ),
-    guests: shownGuests.map(
+    guests: shownGuests.page.map(
       (g): AdminGuest => ({
         user: { id: g.id, name: cleanName(g.name) },
         grants: Number(g.grants),
@@ -423,8 +435,67 @@ export async function adminLinks(
         joinedAt: g.joined_at.toISOString(),
       }),
     ),
-    more: links.rows.length > ADMIN_LIMITS.pageSize || guests.rows.length > ADMIN_LIMITS.pageSize,
+    more: shownLinks.next !== null || shownGuests.next !== null,
+    nextLinks: shownLinks.next,
+    nextGuests: shownGuests.next,
   }
+}
+
+/** One page (and one row more) of the open links after `before`. */
+async function linkRows(q: Queryable, wid: string, now: Date, before: AdminCursor | undefined) {
+  const params: unknown[] = [wid, now]
+  const after = afterCursor(before, 'i.created_at', 'i.id', params)
+  const links = await q.query<{
+    id: string
+    board_id: string
+    title: string
+    role: string
+    landing: string
+    allow_guests: boolean
+    has_code: boolean
+    created_by: string
+    creator_name: string
+    created_at: Date
+    expires_at: Date
+    use_count: number
+    max_uses: number | null
+    cursor: string
+  }>(
+    `SELECT i.id, i.board_id, b.title, i.role, i.landing, i.allow_guests, i.join_code_hash IS NOT NULL AS has_code,
+            i.created_by, u.name AS creator_name, i.created_at, i.expires_at, i.use_count, i.max_uses,
+            ${cursorOf('i.created_at', 'i.id')} AS cursor
+       FROM invitations i
+       JOIN boards b ON b.id = i.board_id AND b.workspace_id = i.workspace_id
+       JOIN users u ON u.id = i.created_by
+      WHERE i.workspace_id = $1 AND i.multi_use AND i.revoked_at IS NULL AND i.redeemed_by IS NULL
+        AND i.expires_at > $2 AND ${LIVE_BOARD}
+        ${after}
+      ORDER BY i.created_at DESC, i.id DESC
+      LIMIT ${ADMIN_LIMITS.pageSize + 1}`,
+    params,
+  )
+  return links.rows
+}
+
+/** One page (and one row more) of the name-only guests who still hold a grant here, newest to join first. */
+async function guestRows(q: Queryable, wid: string, before: AdminCursor | undefined) {
+  const params: unknown[] = [wid]
+  const after = afterCursor(before, 'wm.created_at', 'u.id', params)
+  const guests = await q.query<{ id: string; name: string; joined_at: Date; grants: number; cursor: string }>(
+    `SELECT u.id, u.name, wm.created_at AS joined_at, count(*)::int AS grants,
+            ${cursorOf('wm.created_at', 'u.id')} AS cursor
+       FROM workspace_members wm
+       JOIN users u ON u.id = wm.user_id AND u.kind = 'guest'
+       JOIN board_members bm ON bm.user_id = u.id
+       JOIN boards b ON b.id = bm.board_id AND b.workspace_id = wm.workspace_id
+      WHERE wm.workspace_id = $1 AND ${LIVE_BOARD}
+        ${after}
+      GROUP BY u.id, u.name, wm.created_at
+      ORDER BY wm.created_at DESC, u.id DESC
+      LIMIT ${ADMIN_LIMITS.pageSize + 1}`,
+    params,
+  )
+  return guests.rows
 }
 
 // ---- retention (W5-5) -----------------------------------------------------------------------------------------------

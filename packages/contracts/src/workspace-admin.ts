@@ -43,7 +43,7 @@ export const ADMIN_TABS = ['members', 'storage', 'audit', 'links', 'retention'] 
 export type AdminTab = (typeof ADMIN_TABS)[number]
 
 export const ADMIN_LIMITS = {
-  /** rows per page of the audit log, invitations and links */
+  /** rows per page of the audit log, invitations, links and name-only guests (each pages on: AdminCursor) */
   pageSize: 100,
   /** rows of the by-board and by-uploader storage lists */
   topRows: 50,
@@ -54,6 +54,16 @@ export const ADMIN_LIMITS = {
 } as const
 
 const Person = z.object({ id: UserIdLike, name: z.string() })
+
+/**
+ * Where a newest-first list of invitations, links or name-only guests goes on (wave W, the review's nit 8): the last
+ * row of the page before, as its time in microseconds since 1970, a dot, and its id (`1792400000123456.inv_…`). The
+ * lists are ordered by (time, id), both descending, a unique key, so a row made while someone pages lands above the
+ * cursor and never shifts a later page. Opaque to the page: it passes back what the api gave it. A malformed one is a
+ * 400 (only for an owner or admin: everyone else still gets the 404 first).
+ */
+export const AdminCursor = z.string().regex(/^[0-9]{1,17}\.(inv|usr)_[0-9A-Za-z]{10,40}$/)
+export type AdminCursor = z.infer<typeof AdminCursor>
 
 // ---- members --------------------------------------------------------------------------------------------------------
 
@@ -84,7 +94,16 @@ export const AdminInvitation = z.object({
   expiresAt: IsoDate.nullable(),
 })
 export type AdminInvitation = z.infer<typeof AdminInvitation>
-export const AdminInvitationsResponse = z.object({ invitations: z.array(AdminInvitation), more: z.boolean() })
+/** `GET …/admin/invitations?before=`: absent, the newest page; else the page after that cursor. */
+export const AdminInvitationsQuery = z.object({ before: AdminCursor.optional() })
+export type AdminInvitationsQuery = z.infer<typeof AdminInvitationsQuery>
+export const AdminInvitationsResponse = z.object({
+  invitations: z.array(AdminInvitation),
+  /** another page follows (kept from the first shape: `next !== null`) */
+  more: z.boolean(),
+  /** pass as `before` for the next page; null at the end (optional: an answer from before paging has none) */
+  next: AdminCursor.nullable().optional(),
+})
 export type AdminInvitationsResponse = z.infer<typeof AdminInvitationsResponse>
 
 // ---- storage --------------------------------------------------------------------------------------------------------
@@ -174,10 +193,25 @@ export const AdminGuest = z.object({
 })
 export type AdminGuest = z.infer<typeof AdminGuest>
 
+/**
+ * `GET …/admin/links?linksBefore=&guestsBefore=`: the two lists page apart. Neither given: the newest page of both.
+ * Either given: only the list(s) given a cursor are read, from there; the other comes back empty with a null next.
+ */
+export const AdminLinksQuery = z.object({
+  linksBefore: AdminCursor.optional(),
+  guestsBefore: AdminCursor.optional(),
+})
+export type AdminLinksQuery = z.infer<typeof AdminLinksQuery>
+
 export const AdminLinksResponse = z.object({
   links: z.array(AdminLink),
   guests: z.array(AdminGuest),
+  /** another page of either list follows (kept from the first shape) */
   more: z.boolean(),
+  /** pass as `linksBefore` for the next page of links; null at the end (optional: absent from the first shape) */
+  nextLinks: AdminCursor.nullable().optional(),
+  /** pass as `guestsBefore` for the next page of guests; null at the end */
+  nextGuests: AdminCursor.nullable().optional(),
 })
 export type AdminLinksResponse = z.infer<typeof AdminLinksResponse>
 

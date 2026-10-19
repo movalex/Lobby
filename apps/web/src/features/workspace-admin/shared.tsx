@@ -1,9 +1,10 @@
 // OWNER: WS5 (wave W, the workspace admin page). What the five tabs share: who is looking, the loading and error
 // states, the 404 that turns the page into the unknown-address screen, and the in-place confirm.
-import { type ReactNode, useEffect, useRef } from 'react'
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { isApiError } from '../../api/client.ts'
 import { type Resource, useResource } from '../../lib/useResource.ts'
 import type { WorkspaceRole } from './api.ts'
+import { appendPage } from './model.ts'
 
 /** The person on the page (from the session; the api decides every request again). */
 export interface AdminViewer {
@@ -24,6 +25,96 @@ export function useAdminResource<T>(
     if (denied) onDenied()
   }, [denied, onDenied])
   return res
+}
+
+/** A paged list's "Load more" state, as the lists render it. */
+export interface MoreControl {
+  /** the cursor of the next page; null at the end */
+  next: string | null
+  busy: boolean
+  error: string | null
+  loadMore(): void
+}
+
+/**
+ * A list the api pages by cursor (invitations, links, guests), with the pages "Load more" appended after the first.
+ * `first` is the first page as the resource holds it: when the resource loads again (after a revoke, a removal) a new
+ * `first` starts the list over from the newest page, so it never shows a row that changed meanwhile.
+ */
+export function useMorePages<T>(
+  first: { items: readonly T[]; next: string | null } | null,
+  loadNext: (cursor: string, signal: AbortSignal) => Promise<{ items: readonly T[]; next: string | null }>,
+  key: (item: T) => string,
+  onDenied: () => void,
+): { items: readonly T[] } & MoreControl {
+  const [pages, setPages] = useState<{ from: unknown; items: readonly T[]; next: string | null } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const pending = useRef<AbortController | null>(null)
+  // pages loaded on another first page do not belong to this one
+  const current = pages && pages.from === first ? pages : null
+  const items = current?.items ?? first?.items ?? []
+  const next = current ? current.next : (first?.next ?? null)
+  useEffect(() => {
+    void first
+    return () => {
+      pending.current?.abort()
+      pending.current = null
+      setBusy(false)
+      setError(null)
+    }
+  }, [first])
+  const loadMore = useCallback(() => {
+    if (next === null || pending.current) return
+    const c = new AbortController()
+    pending.current = c
+    setBusy(true)
+    setError(null)
+    loadNext(next, c.signal)
+      .then(
+        (page) => {
+          if (c.signal.aborted) return
+          setPages({ from: first, items: appendPage(items, page.items, key), next: page.next })
+        },
+        (e: unknown) => {
+          if (c.signal.aborted) return
+          if (isApiError(e) && e.kind === 'not-found') return onDenied()
+          setError(errorText(e, 'Lobby could not load more.'))
+        },
+      )
+      .finally(() => {
+        if (pending.current !== c) return
+        pending.current = null
+        setBusy(false)
+      })
+  }, [first, items, next, loadNext, key, onDenied])
+  return { items, next, busy, error, loadMore }
+}
+
+/** "Load more" under a paged list, and why the last try failed. Nothing at the end of the list. */
+export function LoadMore({ more, testId }: { more: MoreControl; testId: string }) {
+  return (
+    <>
+      {more.error && (
+        <p className="dr-field-error" role="alert">
+          {more.error}
+        </p>
+      )}
+      {more.next !== null && (
+        <div className="dr-admin__more">
+          <button
+            type="button"
+            className="dr-btn"
+            data-testid={testId}
+            disabled={more.busy}
+            onClick={more.loadMore}
+          >
+            {more.busy ? 'Loading…' : 'Load more'}
+          </button>
+        </div>
+      )}
+    </>
+  )
 }
 
 /** The message of a failed change, as the api said it (its messages are user-safe), or `fallback`. */

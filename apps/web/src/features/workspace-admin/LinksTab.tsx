@@ -1,9 +1,10 @@
 // OWNER: WS5 (wave W, W5-4). Every open link of the workspace's boards (review, workshop and client review page
-// links) and every name-only guest who can still open a board here. Revoke, "+1 h" and taking a guest off a board are
+// links) and every name-only guest who can still open a board here, 100 of each at a time ("Load more" under each
+// list pages it on by itself). Revoke, "+1 h" and taking a guest off a board are
 // the Share dialog's own routes (api.ts): a workspace owner or admin is an owner of every board of the workspace there.
 // Never a link's address or its join code (whether it has one only): copy those from the board's Share dialog.
 import type { AdminGuest, AdminLink } from '@draftroom/contracts'
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { formatDateTime, formatRelativeTime } from '../../lib/format.ts'
 import { boardPath, linkClick } from '../../lib/routing.ts'
 import type { AdminApi } from './api.ts'
@@ -14,8 +15,11 @@ import {
   errorText,
   LoadFailed,
   Loading,
+  LoadMore,
+  type MoreControl,
   Tag,
   useAdminResource,
+  useMorePages,
 } from './shared.tsx'
 
 export function LinksTab({
@@ -28,51 +32,130 @@ export function LinksTab({
   onDenied(): void
 }) {
   const res = useAdminResource(
-    useCallback((signal: AbortSignal) => api.links(signal), [api]),
+    useCallback((signal: AbortSignal) => api.links({}, signal), [api]),
+    onDenied,
+  )
+  // the two lists page apart: "Load more" under each asks for that list's next page only
+  const first = res.status === 'ready' ? res.data : null
+  const links = useMorePages(
+    useMemo(() => first && { items: first.links, next: first.nextLinks ?? null }, [first]),
+    useCallback(
+      async (linksBefore: string, signal: AbortSignal) => {
+        const page = await api.links({ linksBefore }, signal)
+        return { items: page.links, next: page.nextLinks ?? null }
+      },
+      [api],
+    ),
+    linkKey,
+    onDenied,
+  )
+  const guests = useMorePages(
+    useMemo(() => first && { items: first.guests, next: first.nextGuests ?? null }, [first]),
+    useCallback(
+      async (guestsBefore: string, signal: AbortSignal) => {
+        const page = await api.links({ guestsBefore }, signal)
+        return { items: page.guests, next: page.nextGuests ?? null }
+      },
+      [api],
+    ),
+    guestKey,
     onDenied,
   )
   if (res.status === 'loading') return <Loading label="Loading links and guests…" />
   if (res.status === 'error') return <LoadFailed message={res.error.message} onRetry={res.reload} />
-  const { links, guests, more } = res.data
   return (
     <div className="dr-admin__stack">
       <section aria-labelledby="admin-links-h">
         <h2 id="admin-links-h" className="dr-admin__h2">
-          Open links <span className="dr-admin__count">{links.length}</span>
+          Open links <Count shown={links.items.length} more={links.next !== null} />
         </h2>
-        {links.length === 0 ? (
-          <p className="dr-admin__empty dr-muted" data-testid="admin-links-empty">
-            No board of this workspace has an open link.
-          </p>
-        ) : (
-          <ul className="dr-admin__list" data-testid="admin-links">
-            {links.map((l) => (
-              <LinkRow key={l.id} link={l} api={api} viewer={viewer} onChanged={res.reload} />
-            ))}
-          </ul>
-        )}
+        <LinkList links={links.items} api={api} viewer={viewer} onChanged={res.reload} more={links} />
       </section>
       <section aria-labelledby="admin-guests-h">
         <h2 id="admin-guests-h" className="dr-admin__h2">
-          Guests by name <span className="dr-admin__count">{guests.length}</span>
+          Guests by name <Count shown={guests.items.length} more={guests.next !== null} />
         </h2>
         <p className="dr-admin__note dr-muted">
           People who joined through a link with just a name, and can still open a board here.
         </p>
-        {guests.length === 0 ? (
-          <p className="dr-admin__empty dr-muted" data-testid="admin-guests-empty">
-            No guests can open a board here.
-          </p>
-        ) : (
-          <ul className="dr-admin__list" data-testid="admin-guests">
-            {guests.map((g) => (
-              <GuestRow key={g.user.id} guest={g} api={api} onChanged={res.reload} />
-            ))}
-          </ul>
-        )}
+        <GuestList guests={guests.items} api={api} onChanged={res.reload} more={guests} />
       </section>
-      {more && <p className="dr-admin__note dr-muted">Showing the newest 100 of each.</p>}
     </div>
+  )
+}
+
+const linkKey = (l: AdminLink) => l.id
+const guestKey = (g: AdminGuest) => g.user.id
+
+/** How many rows are shown, "100+" while the api has more. */
+function Count({ shown, more }: { shown: number; more: boolean }) {
+  return (
+    <span className="dr-admin__count">
+      {shown}
+      {more && '+'}
+    </span>
+  )
+}
+
+/** The open links shown so far, and "Load more" while the api has older ones. */
+export function LinkList({
+  links,
+  api,
+  viewer,
+  onChanged,
+  more,
+}: {
+  links: readonly AdminLink[]
+  api: AdminApi
+  viewer: AdminViewer
+  onChanged(): void
+  more: MoreControl
+}) {
+  if (links.length === 0 && more.next === null)
+    return (
+      <p className="dr-admin__empty dr-muted" data-testid="admin-links-empty">
+        No board of this workspace has an open link.
+      </p>
+    )
+  return (
+    <>
+      <ul className="dr-admin__list" data-testid="admin-links">
+        {links.map((l) => (
+          <LinkRow key={l.id} link={l} api={api} viewer={viewer} onChanged={onChanged} />
+        ))}
+      </ul>
+      <LoadMore more={more} testId="admin-links-more" />
+    </>
+  )
+}
+
+/** The name-only guests shown so far, and "Load more" while the api has older ones. */
+export function GuestList({
+  guests,
+  api,
+  onChanged,
+  more,
+}: {
+  guests: readonly AdminGuest[]
+  api: AdminApi
+  onChanged(): void
+  more: MoreControl
+}) {
+  if (guests.length === 0 && more.next === null)
+    return (
+      <p className="dr-admin__empty dr-muted" data-testid="admin-guests-empty">
+        No guests can open a board here.
+      </p>
+    )
+  return (
+    <>
+      <ul className="dr-admin__list" data-testid="admin-guests">
+        {guests.map((g) => (
+          <GuestRow key={g.user.id} guest={g} api={api} onChanged={onChanged} />
+        ))}
+      </ul>
+      <LoadMore more={more} testId="admin-guests-more" />
+    </>
   )
 }
 

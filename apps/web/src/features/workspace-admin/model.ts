@@ -174,6 +174,15 @@ export function quotaPercent(used: number, quota: number): number {
   return Math.min(100, Math.round((used / quota) * 100))
 }
 
+/**
+ * A list with its next page appended (invitations, links, guests: the api pages them by cursor, newest first). A row
+ * already shown is not added again, should the lists ever overlap.
+ */
+export function appendPage<T>(shown: readonly T[], page: readonly T[], key: (item: T) => string): T[] {
+  const seen = new Set(shown.map(key))
+  return [...shown, ...page.filter((item) => !seen.has(key(item)))]
+}
+
 /** The tab a `?tab=` names, or the first. */
 export function tabFromSearch(search: string, tabs: readonly AdminTab[]): AdminTab {
   const raw = new URLSearchParams(search).get('tab')

@@ -1,10 +1,10 @@
 // OWNER: WS5 (wave W, W5-1). The members tab: everyone with an account in the workspace (name-only guests are on the
 // links tab), their role, whether they are a creator, how many boards they hold a direct grant on, and the outside
-// markers; then the pending invitations. A role change and a removal go through the existing member routes, where
+// markers; then the pending invitations (100 at a time, "Load more" for older ones). A role change and a removal go through the existing member routes, where
 // the creator rule and the last-owner rule stay; revoking an invitation is the existing DELETE /api/invitations/:id.
 // No "last visit": visit times are private to each person (migration 0031's promise).
 import type { AdminInvitation, AdminMember } from '@draftroom/contracts'
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { formatDateTime } from '../../lib/format.ts'
 import { boardPath, linkClick } from '../../lib/routing.ts'
 import type { AdminApi, WorkspaceRole } from './api.ts'
@@ -15,8 +15,11 @@ import {
   errorText,
   LoadFailed,
   Loading,
+  LoadMore,
+  type MoreControl,
   Tag,
   useAdminResource,
+  useMorePages,
 } from './shared.tsx'
 
 const ROLE_OPTIONS: readonly { role: WorkspaceRole; label: string }[] = [
@@ -43,7 +46,23 @@ export function MembersTab({
     onDenied,
   )
   const invitations = useAdminResource(
-    useCallback((signal: AbortSignal) => api.invitations(signal), [api]),
+    useCallback((signal: AbortSignal) => api.invitations({}, signal), [api]),
+    onDenied,
+  )
+  const firstInvitations = invitations.status === 'ready' ? invitations.data : null
+  const pagedInvitations = useMorePages(
+    useMemo(
+      () => firstInvitations && { items: firstInvitations.invitations, next: firstInvitations.next ?? null },
+      [firstInvitations],
+    ),
+    useCallback(
+      async (before: string, signal: AbortSignal) => {
+        const page = await api.invitations({ before }, signal)
+        return { items: page.invitations, next: page.next ?? null }
+      },
+      [api],
+    ),
+    invitationKey,
     onDenied,
   )
   return (
@@ -76,29 +95,60 @@ export function MembersTab({
       </section>
       <section aria-labelledby="admin-invitations-h">
         <h2 id="admin-invitations-h" className="dr-admin__h2">
-          Pending invitations
+          Pending invitations{' '}
+          {invitations.status === 'ready' && pagedInvitations.items.length > 0 && (
+            <span className="dr-admin__count">
+              {pagedInvitations.items.length}
+              {pagedInvitations.next !== null && '+'}
+            </span>
+          )}
         </h2>
         {invitations.status === 'loading' && <Loading label="Loading invitations…" />}
         {invitations.status === 'error' && (
           <LoadFailed message={invitations.error.message} onRetry={invitations.reload} />
         )}
-        {invitations.status === 'ready' && invitations.data.invitations.length === 0 && (
-          <p className="dr-admin__empty dr-muted" data-testid="admin-invitations-empty">
-            No invitations are waiting to be accepted.
-          </p>
-        )}
-        {invitations.status === 'ready' && invitations.data.invitations.length > 0 && (
-          <ul className="dr-admin__list" data-testid="admin-invitations">
-            {invitations.data.invitations.map((i) => (
-              <InvitationRow key={i.id} invitation={i} api={api} onChanged={invitations.reload} />
-            ))}
-          </ul>
-        )}
-        {invitations.status === 'ready' && invitations.data.more && (
-          <p className="dr-admin__note dr-muted">Showing the newest 100.</p>
+        {invitations.status === 'ready' && (
+          <InvitationList
+            invitations={pagedInvitations.items}
+            api={api}
+            onChanged={invitations.reload}
+            more={pagedInvitations}
+          />
         )}
       </section>
     </div>
+  )
+}
+
+const invitationKey = (i: AdminInvitation) => i.id
+
+/** The pending invitations shown so far, and "Load more" while the api has older ones. */
+export function InvitationList({
+  invitations,
+  api,
+  onChanged,
+  more,
+}: {
+  invitations: readonly AdminInvitation[]
+  api: AdminApi
+  onChanged(): void
+  more: MoreControl
+}) {
+  if (invitations.length === 0 && more.next === null)
+    return (
+      <p className="dr-admin__empty dr-muted" data-testid="admin-invitations-empty">
+        No invitations are waiting to be accepted.
+      </p>
+    )
+  return (
+    <>
+      <ul className="dr-admin__list" data-testid="admin-invitations">
+        {invitations.map((i) => (
+          <InvitationRow key={i.id} invitation={i} api={api} onChanged={onChanged} />
+        ))}
+      </ul>
+      <LoadMore more={more} testId="admin-invitations-more" />
+    </>
   )
 }
 
