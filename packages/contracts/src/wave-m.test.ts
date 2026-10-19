@@ -22,6 +22,7 @@ import {
   InternalUsageResponse,
   isUsageEvent,
   OPEN_STATE_PARTS,
+  OPEN_STATE_PENDING_PARTS,
   OpenState,
   PALETTE_COMMAND_IDS,
   PENDING_PALETTE_COMMAND_IDS,
@@ -138,7 +139,8 @@ describe('usage events (S3, M5-5)', () => {
 
 describe('open-state (M5-1)', () => {
   it('has the eight parts the plan names, each nullable', () => {
-    expect([...OPEN_STATE_PARTS].sort()).toEqual(Object.keys(OpenState.shape).sort())
+    // wave V's two parts are declared and pending until their owners answer them (board-open.ts)
+    expect([...OPEN_STATE_PARTS, ...OPEN_STATE_PENDING_PARTS].sort()).toEqual(Object.keys(OpenState.shape).sort())
     expect(OPEN_STATE_PARTS).toEqual([
       'exportPolicy',
       'outside',

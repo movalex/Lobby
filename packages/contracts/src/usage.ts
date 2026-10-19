@@ -33,6 +33,18 @@ export const WAVE_T_PALETTE_COMMAND_IDS = [
 ] as const
 
 /**
+ * Wave V's palette commands (frozen by the wave V foundation; docs/WAVE-V-CONTRACTS.md §6.4), each pending until its
+ * owner registers it: start a poll, scale or word cloud (WS2), show the join code card (WS3), start breakouts (WS4),
+ * download the session summary CSV (WS5).
+ */
+export const WAVE_V_PALETTE_COMMAND_IDS = [
+  'activities.start',
+  'join.show-code',
+  'breakouts.start',
+  'session-summary.csv',
+] as const
+
+/**
  * The commands `palette.run:<id>` may name: every static command of the board features
  * (apps/web/src/features/canvas-registry.ts, checked by apps/web/src/lib/usage.test.ts), wave M's
  * 'ai.askWorkspace' and 'ws-templates.save' (W8) included.
@@ -257,6 +269,9 @@ export const PALETTE_COMMAND_IDS = [
   // wave T (frozen by the wave T foundation, pending until their owners register them; docs/WAVE-T-CONTRACTS.md §6.4):
   // storyboards (WS2), the animatic and Present storyboard (WS3), cards, Kanban and the card table (WS4), timelines (WS5)
   ...WAVE_T_PALETTE_COMMAND_IDS,
+  // wave V (frozen by the wave V foundation, pending until their owners register them): live activities (WS2), the
+  // join card (WS3), breakouts (WS4), the session summary (WS5)
+  ...WAVE_V_PALETTE_COMMAND_IDS,
 ] as const
 export type PaletteCommandId = (typeof PALETTE_COMMAND_IDS)[number]
 
@@ -273,6 +288,11 @@ export const PENDING_PALETTE_COMMAND_IDS: readonly PaletteCommandId[] = [
   // wave T: none left. The foundation listed every wave T command; WS5 registered 'timeline.new' (features/timeline)
   // and the integration, turning every PLANNING_FLAGS switch on, released the rest (WS2's storyboard.*, WS3's
   // storyboard.play and storyboard.present, WS4's cards.make, kanban.new and card-table.open).
+  // wave V (the foundation): every wave V command, until its owner registers it (and deletes its line here).
+  'activities.start',
+  'join.show-code',
+  'breakouts.start',
+  'session-summary.csv',
 ]
 
 /**

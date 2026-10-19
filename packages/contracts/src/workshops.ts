@@ -463,6 +463,16 @@ export const WORKSHOP_EVENTS = {
   hand: 'workshop.hand',
   /** wave L (L5-2): the board's spotlight, whole (WorkshopSpotlightEvent) */
   spotlight: 'workshop.spotlight',
+  /** wave V (WS1): a poll, scale or word cloud changed (live-activities.ts WorkshopActivityEvent) */
+  activity: 'workshop.activity',
+  /** wave V (WS1): an activity's results, once, at the reveal (WorkshopActivityResultsEvent) */
+  activityResults: 'workshop.activity.results',
+  /** wave V (WS4): the breakouts, whole (breakouts.ts WorkshopBreakoutEvent) */
+  breakout: 'workshop.breakout',
+  /** wave V (WS4): a facilitator's line, to one group's streams only or to everyone (WorkshopBreakoutBroadcastEvent) */
+  breakoutBroadcast: 'workshop.breakout.broadcast',
+  /** wave V (WS4): bring one group to the facilitator, to that group's streams only (WorkshopBreakoutSummonEvent) */
+  breakoutSummon: 'workshop.breakout.summon',
 } as const
 
 /** Someone on the board reacted (a hint to animate; nothing is stored). */

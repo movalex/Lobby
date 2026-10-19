@@ -27,9 +27,11 @@
 
 import { z } from 'zod'
 import { AiStatus } from './ai.ts'
+import { BreakoutState } from './breakouts.ts'
 import { ListThreadsResponse } from './comments.ts'
 import { ShareState } from './dashboard.ts'
 import { ExportPolicyState } from './export-control.ts'
+import { ActivityState } from './live-activities.ts'
 import { BoardOutsidePeople } from './outside.ts'
 import { PresentLiveState } from './present-live.ts'
 import { PrivateBrainstormState, WorkshopState } from './workshops.ts'
@@ -78,6 +80,19 @@ export const OpenState = z.object({
   get ai() {
     return AiStatus.nullable()
   },
+  /**
+   * Wave V (docs/WAVE-V-CONTRACTS.md §5): GET /api/boards/:bid/activity (WS1) and GET /api/boards/:bid/breakouts (WS4).
+   * Optional, and pending (OPEN_STATE_PENDING_PARTS) until their owner provides the loader: each moves its name from
+   * there to OPEN_STATE_PARTS (one line, through the lead) in the change that implements its route. An api before that,
+   * or with the feature's switch off (the loader then refuses with a 404: null), sends none, and the web makes the
+   * separate read only while the switch is on (AuthConfig.live).
+   */
+  get activity() {
+    return ActivityState.nullable().optional()
+  },
+  get breakouts() {
+    return BreakoutState.nullable().optional()
+  },
 })
 export type OpenState = z.infer<typeof OpenState>
 
@@ -102,3 +117,5 @@ export const OPEN_STATE_PARTS = [
   'threads',
   'ai',
 ] as const satisfies readonly OpenStatePart[]
+/** Wave V's parts, declared in OpenState but not answered yet (see OpenState.activity): their owners move them above. */
+export const OPEN_STATE_PENDING_PARTS = ['activity', 'breakouts'] as const satisfies readonly OpenStatePart[]
