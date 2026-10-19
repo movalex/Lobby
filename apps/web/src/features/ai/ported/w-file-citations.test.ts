@@ -3,10 +3,11 @@
 // (the search's `?file=` deep link, file-card/ported/open-file-hit.ts) instead of looking for an unknown element.
 
 import { fileHitObjectId } from '@draftroom/contracts'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { CanvasElement, CanvasFeatureContext, FeatureRegistries } from '../../../canvas/api/index.ts'
 import { readFileHit } from '../../../file-card/ported/open-file-hit.ts'
 import { pdfViewerRequest } from '../../../file-card/ported/viewer-state.ts'
+import { setFormatsOffer } from '../../formats/flags.ts'
 import { citationHref, citedElementIds, citedFilePage, showCitationHere } from './ask-all.ts'
 
 const VER = 'ver_0123456789abcdefghij'
@@ -47,6 +48,22 @@ function fakeCtx(files: CanvasElement[], elements: string[] = []) {
 }
 
 describe('a citation of a page inside a file', () => {
+  // the shipped web switch is on: the api offer decides
+  beforeEach(() => setFormatsOffer({ fileSearch: true }))
+  afterEach(() => setFormatsOffer(null))
+
+  it('with file search not offered: the chip opens the board at the cited elements, never the file', () => {
+    setFormatsOffer(null)
+    const c = { boardId: BOARD, elementIds: [fileHitObjectId(VER, 3), 'n1'] }
+    expect(citedFilePage(c)).toBeNull()
+    expect(citationHref(c)).toBe(`/b/${BOARD}?el=n1`)
+    expect(citedFilePage(c, false)).toBeNull()
+    expect(citedFilePage(c, true)).toEqual({ versionId: VER, page: 3 })
+    const { ctx, registries } = fakeCtx([card('card', VER)], ['n1'])
+    expect(showCitationHere(ctx, { elementIds: [fileHitObjectId(VER, 5), 'n1'] })).toBe(true)
+    expect(pdfViewerRequest(registries).get()).toBeNull()
+  })
+
   it('leads with the file page: its link opens the file at that page, read back by the board', () => {
     const c = { boardId: BOARD, elementIds: [fileHitObjectId(VER, 3), 'n1'] }
     expect(citedFilePage(c)).toEqual({ versionId: VER, page: 3 })

@@ -9,6 +9,8 @@ import {
   type FileOpState,
   FORMAT_ELEMENT_KINDS,
   FORMAT_SWITCHES_OFF,
+  WORKER_OP_LIMITS,
+  WORKER_OP_MESSAGES,
 } from '@draftroom/contracts'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client.ts'
@@ -20,7 +22,7 @@ import type { FileFacts } from '../../file-card/ported/model.ts'
 import { FORMATS_FLAG_KEYS, setFormatsOffer } from '../formats/flags.ts'
 import { el, fakeCanvas } from '../workshops/ported/test-kit.ts'
 import { deckCardOf, deckCommandHeld, feature } from './index.tsx'
-import { type DeckJobDeps, prepareDeck } from './job.ts'
+import { DECK_WAIT_MS, type DeckJobDeps, prepareDeck } from './job.ts'
 import {
   DECK_COPY,
   deckKindOf,
@@ -30,6 +32,7 @@ import {
   renderProgress,
   slideAlt,
   slidePagesOf,
+  workingText,
 } from './model.ts'
 import { placeDeck } from './place.ts'
 
@@ -273,6 +276,8 @@ function job(o: {
   post?: () => Promise<unknown>
   get?: () => Promise<unknown>
   slides?: number
+  /** the job's own default time limit (DECK_WAIT_MS) instead of the tests' minute */
+  defaultWait?: boolean
 }) {
   const events = fakeEvents()
   const ac = new AbortController()
@@ -283,7 +288,7 @@ function job(o: {
     i++
     return { meta: m, missing: false, error: false }
   })
-  const progress: { ready: number; of: number }[] = []
+  const progress: { ready: number; of: number; stage: string }[] = []
   const deps: DeckJobDeps = {
     request: (async (method: string, path: string, opts: { body?: unknown }) => {
       calls.push({ method, path, body: opts.body })
@@ -298,7 +303,7 @@ function job(o: {
     signal: ac.signal,
     onProgress: (p) => progress.push(p),
     pollMs: 1_000,
-    waitMs: 60_000,
+    ...(o.defaultWait ? {} : { waitMs: 60_000 }),
   }
   return { deps, events, ac, calls, refresh, progress, run: () => prepareDeck(deps) }
 }
@@ -335,7 +340,7 @@ describe('getting the pages ready', () => {
     const out = await p
     expect(out.kind).toBe('ready')
     expect(out.kind === 'ready' && out.pages).toHaveLength(12)
-    expect(j.progress.at(-1)).toEqual({ ready: 4, of: 4 })
+    expect(j.progress.at(-1)).toMatchObject({ ready: 4, of: 4 })
     // nothing left listening or polling
     expect(j.events.count(FILE_OP_EVENT)).toBe(0)
     expect(vi.getTimerCount()).toBe(0)
@@ -431,6 +436,69 @@ describe('getting the pages ready', () => {
     await vi.advanceTimersByTimeAsync(0)
     stop.ac.abort()
     expect(await q).toEqual({ kind: 'cancelled' })
+    expect(vi.getTimerCount()).toBe(0)
+  })
+})
+
+describe('waiting honestly for the file worker', () => {
+  it('says queued while the ops wait for the worker, then shows the pages being made once one runs', async () => {
+    vi.useFakeTimers()
+    const j = job({ metas: [meta(40, range(1, 8))], slides: 40 })
+    const p = j.run()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(j.progress.at(-1)).toEqual({ ready: 0, of: 32, stage: 'queued' })
+    expect(workingText({ ready: 0, of: 32, stage: 'queued' })).toBe(
+      'Queued: waiting for the file worker… 0 of 32 ready',
+    )
+    j.events.emit(FILE_OP_EVENT, { op: opState({ status: 'running' }) })
+    expect(j.progress.at(-1)).toEqual({ ready: 0, of: 32, stage: 'running' })
+    expect(workingText({ ready: 3, of: 32, stage: 'running' })).toBe('Making slides… 3 of 32 ready')
+    j.ac.abort()
+    expect(await p).toEqual({ kind: 'cancelled' })
+  })
+
+  it('the new codes show their contract messages (from the event or the op route, whatever the api sent)', async () => {
+    vi.useFakeTimers()
+    const busy = job({ metas: [meta(12, range(1, 8))] })
+    const p = busy.run()
+    await vi.advanceTimersByTimeAsync(0)
+    busy.events.emit(FILE_OP_EVENT, {
+      op: opState({ status: 'failed', errorCode: 'WORKER_BUSY', message: null }),
+    })
+    expect(await p).toMatchObject({ kind: 'error', message: WORKER_OP_MESSAGES.WORKER_BUSY })
+    const complex = job({
+      metas: [meta(12, range(1, 8))],
+      get: async () => opState({ status: 'failed', errorCode: 'FILE_TOO_COMPLEX', message: 'older words' }),
+    })
+    const q = complex.run()
+    await vi.advanceTimersByTimeAsync(4_000)
+    expect(await q).toMatchObject({ kind: 'error', message: WORKER_OP_MESSAGES.FILE_TOO_COMPLEX })
+  })
+
+  it('the local time limit never fires before the api decides a queued request (WORKER_BUSY at 30 min)', async () => {
+    expect(DECK_WAIT_MS).toBeGreaterThan(
+      WORKER_OP_LIMITS.requestedQueueDeadlineMs + WORKER_OP_LIMITS.maxAttempts * WORKER_OP_LIMITS.leaseMs,
+    )
+    vi.useFakeTimers()
+    const j = job({
+      metas: [meta(12, range(1, 8))],
+      get: async () => opState({ status: 'queued' }),
+      defaultWait: true,
+    })
+    let out: unknown = null
+    void j.run().then((o) => {
+      out = o
+    })
+    // a queue busy for 35 minutes, the op still queued: the dialog keeps waiting and says so
+    await vi.advanceTimersByTimeAsync(35 * 60_000)
+    expect(out).toBeNull()
+    expect(j.progress.at(-1)).toMatchObject({ stage: 'queued' })
+    // the api's answer ends it with its message
+    j.events.emit(FILE_OP_EVENT, {
+      op: opState({ status: 'failed', errorCode: 'WORKER_BUSY', message: null }),
+    })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(out).toMatchObject({ kind: 'error', message: WORKER_OP_MESSAGES.WORKER_BUSY })
     expect(vi.getTimerCount()).toBe(0)
   })
 })

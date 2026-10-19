@@ -57,7 +57,12 @@ import { UndoController } from '../history/controller.ts'
 import { CanvasInput } from '../input/CanvasInput.ts'
 import { LeaseClient } from '../lease/client.ts'
 import type { EditNotice, EditState } from '../lease/editorLease.ts'
-import { attachPanelLeaseHost, panelEditing, panelInPlaceChanged } from '../lease/panelEditor.ts'
+import {
+  attachPanelLeaseHost,
+  panelBeforeHistory,
+  panelEditing,
+  panelInPlaceChanged,
+} from '../lease/panelEditor.ts'
 import { leaseThingOf, typingIn } from '../lease/words.ts'
 import { installLod } from '../lod/index.ts'
 import { installBoardOverrides, overridesLodTarget } from '../overrides.ts'
@@ -1470,6 +1475,9 @@ export class LobbyBoardSession {
   // ---- undo ------------------------------------------------------------------------------------------------
 
   runUndo(dir: 'undo' | 'redo'): void {
+    // wave W (review m6): a doc card panel writes its typing not yet pushed first, so the step the undo takes includes
+    // it and the pending push cannot overwrite what the undo restored
+    panelBeforeHistory(this.lease)
     const out = dir === 'undo' ? this.undo?.undo() : this.undo?.redo()
     this.concern('history')
     if (!out || out.kept === 0) return

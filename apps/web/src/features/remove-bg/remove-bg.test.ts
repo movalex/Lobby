@@ -3,8 +3,13 @@
 // the tracker following this tab's op by its events (and by reading it again when an event may have been missed), and
 // the palette command held while the contracts list it pending.
 
-import { FILE_OP_EVENT, type FileOpState, PENDING_PALETTE_COMMAND_IDS } from '@draftroom/contracts'
-import { describe, expect, it } from 'vitest'
+import {
+  FILE_OP_EVENT,
+  type FileOpState,
+  PENDING_PALETTE_COMMAND_IDS,
+  WORKER_OP_MESSAGES,
+} from '@draftroom/contracts'
+import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '../../api/client.ts'
 import type { AssetVersionMeta } from '../../assets/contract.ts'
 import type { CanvasFeatureContext } from '../../canvas/api/index.ts'
@@ -352,6 +357,46 @@ describe('the tracker', () => {
     await flush()
     expect(t?.pendingIds()).toEqual([])
     expect(f.transacts).toEqual([])
+    unmount()
+  })
+
+  it('queued says it waits for the file worker; running says it is removing; no local give-up', async () => {
+    vi.useFakeTimers()
+    try {
+      const f = fakeCtx([image('img')])
+      let status: 'queued' | 'running' = 'queued'
+      const unmount = mountTracker(f.ctx, deps({ read: async () => state({ status }), pollMs: 5_000 }))
+      const t = trackerOf(f.ctx.registries as never)
+      t?.track(state(), 'img', image('img').customData.lobby.file)
+      expect(f.notices.at(-1)).toMatchObject({
+        testId: 'remove-bg-progress',
+        text: 'Queued: waiting for the file worker to remove the background of Key art.png… (beta)',
+      })
+      // a busy queue for 40 minutes: still followed, still saying queued, no failure of its own
+      await vi.advanceTimersByTimeAsync(40 * 60_000)
+      expect(t?.pendingIds()).toEqual([OP])
+      expect(f.notices.some((n) => n.testId === 'remove-bg-failed')).toBe(false)
+      expect(f.notices.at(-1)?.text).toMatch(/^Queued: waiting for the file worker/)
+      status = 'running'
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(f.notices.at(-1)?.text).toBe('Removing the background of Key art.png… (beta)')
+      unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('the new codes show their contract messages, whatever words the api sent', async () => {
+    const f = fakeCtx([image('img')])
+    const unmount = mountTracker(f.ctx, deps())
+    const t = trackerOf(f.ctx.registries as never)
+    for (const [i, code] of (['WORKER_BUSY', 'FILE_TOO_COMPLEX'] as const).entries()) {
+      const id = `wop_code${i}000000000000000`
+      t?.track(state({ id }), 'img', image('img').customData.lobby.file)
+      f.emit(FILE_OP_EVENT, { op: state({ id, status: 'failed', errorCode: code, message: null }) })
+      await flush()
+      expect(f.notices.at(-1)).toMatchObject({ testId: 'remove-bg-failed', text: WORKER_OP_MESSAGES[code] })
+    }
     unmount()
   })
 

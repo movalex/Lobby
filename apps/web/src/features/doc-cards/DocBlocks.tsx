@@ -166,13 +166,23 @@ export const DocBlocks = memo(function DocBlocks({ doc, mode, onToggle }: DocBlo
       case 'blank':
         out.push(<p key={b.line} className="lobby-doc__line lobby-doc__blank" aria-hidden="true" />)
         break
-      case 'plain':
+      case 'plain': {
+        // past a budget (DOC_CARD_LIMITS): every remaining line is ONE paragraph of text (the face is pre-wrap, so
+        // its line breaks stay), never one node per line, so the budgets cap the face's DOM nodes too
+        let j = i
+        const rest: string[] = []
+        while (j < blocks.length && (blocks[j] as Block).t === 'plain') {
+          rest.push((blocks[j] as Extract<Block, { t: 'plain' }>).s)
+          j++
+        }
         out.push(
-          <p key={b.line} className="lobby-doc__line">
-            {b.s}
+          <p key={`p${b.line}`} className="lobby-doc__line lobby-doc__rest" data-testid="doc-card-rest">
+            {rest.join('\n')}
           </p>,
         )
+        i = j - 1
         break
+      }
     }
   }
   return <>{out}</>

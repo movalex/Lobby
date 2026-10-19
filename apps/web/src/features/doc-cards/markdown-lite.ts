@@ -80,9 +80,31 @@ function depthOf(indent: string): number {
   return Math.min(MAX_INDENT, Math.floor(cols / 2))
 }
 
+// A Lobby board path, exactly the shapes the app itself makes, and nothing else (no further path segment, so no dot
+// segment or encoded slash can ever reach another route):
+//   /b/<board id>                      contracts BOARD_ID_PATTERN
+//   ?el=<id>[,<id>…]                   an element link (board-links BOARD_LINK_PATH_PATTERN; lib/deep-link.ts `el`)
+//   ?view=<x>,<y>,<w>,<h>              a scene rectangle (lib/deep-link.ts `view`)
+//   ?file=<ver>&page=<n>               a search hit inside a file (contracts FILE_HIT_QUERY)
+//   ?thread=<thr id>                   a comment thread (notifications)
+//   #<fragment>                        the element id charset
+const LOBBY_BOARD_ID = '[a-z0-9][a-z0-9_-]{2,63}'
+const LOBBY_ELEMENT_ID = '[A-Za-z0-9_.:-]{1,120}'
+const LOBBY_NUM = '-?\\d{1,10}(?:\\.\\d{1,6})?'
+const LOBBY_QUERY = [
+  `el=${LOBBY_ELEMENT_ID}(?:,${LOBBY_ELEMENT_ID}){0,49}`,
+  `view=${LOBBY_NUM},${LOBBY_NUM},${LOBBY_NUM},${LOBBY_NUM}`,
+  'file=ver_[0-9A-Za-z]{10,40}&page=[1-9][0-9]{0,3}',
+  'thread=thr_[0-9A-Za-z]{10,40}',
+].join('|')
+export const LOBBY_BOARD_HREF = new RegExp(
+  `^/b/${LOBBY_BOARD_ID}(?:\\?(?:${LOBBY_QUERY}))?(?:#${LOBBY_ELEMENT_ID})?$`,
+)
+
 /**
- * The link targets made clickable: an absolute `https:` URL (no credentials), or a Lobby-relative board path
- * (`/b/<id>`, optionally with a query or hash, never `//` or a backslash). Everything else is null.
+ * The link targets made clickable: an absolute `https:` URL (no credentials), or a Lobby-relative board path that,
+ * once percent-decoded, is exactly one of the app's own board shapes (`LOBBY_BOARD_HREF`); the decoded form is the
+ * href. Everything else (another same-origin route, `.%2e` dot segments, `%2f`/`%5c`, `//`) is null: plain words.
  */
 export function safeHref(raw: string): string | null {
   const url = raw.trim()
@@ -90,9 +112,15 @@ export function safeHref(raw: string): string | null {
   // control characters and spaces never belong in a target (a `java\tscript:` trick, a smuggled newline)
   // biome-ignore lint/suspicious/noControlCharactersInRegex: refusing control characters is the point
   if (/[\u0000- \u007f\\]/.test(url)) return null
-  if (url.startsWith('/b/')) {
-    if (url.startsWith('//') || url.includes('/../') || url.endsWith('/..')) return null
-    return /^\/b\/[A-Za-z0-9_-]+(?:[/?#][^\s]*)?$/.test(url) ? url : null
+  if (url.startsWith('/')) {
+    let decoded: string
+    try {
+      decoded = decodeURIComponent(url)
+    } catch {
+      return null
+    }
+    // the strict shape has no `%`, so a doubly encoded target (`%252e`) is refused too
+    return LOBBY_BOARD_HREF.test(decoded) ? decoded : null
   }
   if (!/^https:\/\//i.test(url)) return null
   try {

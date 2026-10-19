@@ -175,10 +175,64 @@ export class PanelEditorLease {
     return this.o.board.editable(id) && this.o.board.words(id) !== null
   }
 
-  /** The lease id presence must name while this panel asks for or holds a card's lease (it renews it), else null. */
+  /**
+   * The lease id presence must name while this panel asks for or holds a card's lease (it renews it), else null.
+   * A panel that can no longer edit the card (it was locked, the role dropped to viewer: `board.editable` false)
+   * names nothing, so the lease stops being renewed, and it turns read-only and gives the lease back (on the next
+   * microtask: presence is reading this right now).
+   */
   editingLease(): string | null {
     const { phase, cardId } = this.s
-    return cardId && (phase === 'pending' || phase === 'open') ? cardId : null
+    if (!cardId || (phase !== 'pending' && phase !== 'open')) return null
+    if (this.o.board.live(cardId) && !this.o.board.editable(cardId)) {
+      queueMicrotask(() => this.demoteIfReadOnly())
+      return null
+    }
+    return cardId
+  }
+
+  /**
+   * The card cannot be edited by this tab any more while the panel asks for or holds its lease: the panel turns
+   * read-only (`reading`, what was typed and not written offered as `unsaved`), writes nothing, and gives the lease
+   * back (unless the in-place editor holds it). A deleted card is `lose`'s case, not this.
+   */
+  private demoteIfReadOnly(): void {
+    const { cardId: id, phase } = this.s
+    if (!id || (phase !== 'pending' && phase !== 'open')) return
+    if (!this.o.board.live(id) || this.o.board.editable(id)) return
+    this.clearTimer()
+    const typed = this.pendingText
+    this.pendingText = null
+    this.ask++
+    const release = this.o.host.inPlaceLease() !== id && (phase === 'open' || this.o.host.lease.isHeld(id))
+    this.set({
+      phase: 'reading',
+      pending: false,
+      unsaved: typed,
+      text: this.o.board.words(id) ?? this.s.text,
+      reason: this.cannotEdit(id),
+    })
+    this.o.host.holdSaved(false)
+    this.o.host.refreshPresence()
+    if (release) {
+      this.releasing = true
+      try {
+        this.o.host.lease.release(id)
+      } finally {
+        this.releasing = false
+      }
+    }
+  }
+
+  /**
+   * The board is about to undo or redo (the board session calls this through `panelBeforeHistory` before its
+   * undo controller steps): typing not written yet is written now, as the undo controller treats any change not
+   * recorded yet (its `step` runs a boundary first: "anything not recorded yet is its own step first"). It joins the
+   * session's step (or starts one), so the undo that follows takes it out with the rest, and a redo puts it back,
+   * instead of the pending push writing the whole textarea over the undo ~500 ms later.
+   */
+  beforeHistory(): void {
+    if (this.s.phase === 'open' && this.pendingText !== null) this.flush()
   }
 
   // ---- opening and closing -------------------------------------------------------------------------------------
@@ -221,9 +275,9 @@ export class PanelEditorLease {
     void this.o.host.lease.acquire(id).then((out) => {
       if (ask !== this.ask || this.s.cardId !== id || this.s.phase !== 'pending') {
         // a stale answer: a grant nobody waits for any more is given straight back (never while another of this
-        // tab's editors relies on it)
-        if (out.granted && this.s.cardId !== id && this.o.host.inPlaceLease() !== id)
-          this.o.host.lease.release(id)
+        // tab's editors relies on it, nor while this panel asks for or holds the same card again)
+        const wanted = this.s.cardId === id && (this.s.phase === 'pending' || this.s.phase === 'open')
+        if (out.granted && !wanted && this.o.host.inPlaceLease() !== id) this.o.host.lease.release(id)
         return
       }
       if (!out.granted) {
@@ -239,6 +293,11 @@ export class PanelEditorLease {
       // the card changed while the request was out (someone's last words before they let go): show the stored words
       this.written = this.o.board.words(id) ?? ''
       this.set({ phase: 'open', text: this.written, holder: null, reason: null })
+      // locked, or the role dropped, while the request was out: read-only, and the grant goes straight back
+      if (this.o.board.live(id) && !this.o.board.editable(id)) {
+        this.demoteIfReadOnly()
+        return
+      }
       this.o.host.refreshPresence()
     })
   }
@@ -423,13 +482,31 @@ export class PanelEditorLease {
       this.lose(null)
       return
     }
+    // locked while the panel asks for or holds the lease: read-only, the lease given back (editingLease covers a
+    // role change, which is no element change)
+    if (
+      (this.s.phase === 'open' || this.s.phase === 'pending') &&
+      this.o.board.live(id) &&
+      !this.o.board.editable(id)
+    ) {
+      this.demoteIfReadOnly()
+      return
+    }
     const stored = this.o.board.words(id)
     if (stored === null) return
     if (this.s.phase === 'open') {
-      // an undo (or a server fix) changed the words under an idle panel: show them; typing in flight wins
-      if (this.pendingText === null && stored !== this.written) {
+      // the board changed the words under the panel (an undo or a redo, a server fix: never this panel's own write,
+      // `writing` above): the board wins, as Lobby's undo does. Typing not written yet would otherwise be pushed ~500 ms
+      // later as the whole textarea and write over the undo; it is dropped (the board session flushes it before an
+      // undo through `panelBeforeHistory`, so an undo takes it out with the session's step and a redo puts it back;
+      // this is the guarantee for any other write), and the textarea shows the board's words.
+      if (stored !== this.written) {
+        this.clearTimer()
+        const dropped = this.pendingText !== null
+        this.pendingText = null
         this.written = stored
-        this.set({ text: stored })
+        this.set({ text: stored, pending: false })
+        if (dropped) this.o.host.holdSaved(false)
       }
       return
     }
@@ -683,6 +760,14 @@ export function panelEditorOf(
 /** The lease id a panel of this board session asks for or holds (presence `editing` renews it), else null. */
 export function panelEditing(lease: object): string | null {
   return byLease.get(lease)?.editor?.editingLease() ?? null
+}
+
+/**
+ * The board session is about to undo or redo (`runUndo`, before its undo controller steps): a panel's typing not
+ * written yet is written first, so the undo takes it out instead of being written over (`beforeHistory`).
+ */
+export function panelBeforeHistory(lease: object): void {
+  byLease.get(lease)?.editor?.beforeHistory()
 }
 
 /** The board session's in-place editor changed state (EditorLease onState): a panel on that card hands over. */

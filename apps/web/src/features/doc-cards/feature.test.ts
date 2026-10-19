@@ -1,5 +1,6 @@
 // The doc cards feature in Node: what it offers with its switch off and on, the two writes that make a card (one
 // transact each), the face's React nodes (never HTML), and the export layer (marks taken out, the face never drawn).
+import { DOC_CARD_LIMITS } from '@draftroom/contracts'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -189,6 +190,18 @@ describe('the face draws React nodes, never HTML', () => {
     expect(out).toContain('href="/b/brd_1"')
     expect(out).toMatch(/rel="noopener noreferrer"/)
     expect(out).toContain('data-testid="doc-card-nolink"')
+  })
+
+  it('past the block budget the rest of the words are one text node, not one node per line', () => {
+    const words = Array.from({ length: 12_000 }, (_, i) => (i % 2 ? '' : 'x')).join('\n')
+    const out = html(words)
+    const tags = (out.match(/<[a-z][a-z0-9]*[\s>]/g) ?? []).length
+    // 2,000 blocks of the budget, plus one paragraph for the rest
+    expect(tags).toBeLessThanOrEqual(DOC_CARD_LIMITS.maxBlocks + 1)
+    expect((out.match(/data-testid="doc-card-rest"/g) ?? []).length).toBe(1)
+    // every line is still there, in order
+    const rest = /data-testid="doc-card-rest">([^<]*)<\/p>/.exec(out)?.[1] ?? ''
+    expect(rest.split('\n')).toHaveLength(12_000 - DOC_CARD_LIMITS.maxBlocks)
   })
 
   it('headings, lists and checklists are real structure; boxes are inputs only for editors', () => {

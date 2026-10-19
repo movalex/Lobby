@@ -18,6 +18,7 @@ import {
   type LobbyCanvas,
   roomReadyOf,
 } from '../../canvas/api/index.ts'
+import { formatsEnabled } from '../../features/formats/flags.ts'
 import { withoutParams } from '../../lib/deep-link.ts'
 import { useLocationKey } from '../../lib/routing.ts'
 import { useValue } from '../../lib/signals.ts'
@@ -48,6 +49,17 @@ export function readFileHit(href: string): FileHitLink | null {
   const raw = url.searchParams.get(FILE_HIT_QUERY.page) ?? ''
   const n = /^[1-9][0-9]{0,3}$/.test(raw) ? Number(raw) : 1
   return { versionId, page: Math.min(n, MAX_PAGE) }
+}
+
+/**
+ * The file hit the opener acts on: the address's (`readFileHit`), only while this page offers file search (the web
+ * `fileSearch` switch AND the api's offer, features/formats/flags.ts). Off, nothing: the board just opens.
+ */
+export function fileHitToOpen(
+  href: string,
+  fileSearchOn: boolean = formatsEnabled('fileSearch'),
+): FileHitLink | null {
+  return fileSearchOn ? readFileHit(href) : null
 }
 
 /**
@@ -92,10 +104,12 @@ export function openFileHit(ctx: CanvasFeatureContext, hit: FileHitLink): boolea
 export function FileHitOpener({ ctx }: { ctx: CanvasFeatureContext }): null {
   const location = useLocationKey()
   const ready = useValue('media-file-hit-ready', () => roomReadyOf(ctx.canvas).get(), [ctx])
+  // the offer is a signal: a config that arrives after the board does re-runs this
+  const on = useValue('media-file-hit-on', () => formatsEnabled('fileSearch'), [])
   useEffect(() => {
     // `location` re-runs this on every navigation (a hit of the board already open)
     if (!location || !ready) return
-    const hit = readFileHit(window.location.href)
+    const hit = fileHitToOpen(window.location.href, on)
     if (!hit) return
     if (openFileHit(ctx, hit)) {
       dropFileHitParams()
@@ -125,6 +139,6 @@ export function FileHitOpener({ ctx }: { ctx: CanvasFeatureContext }): null {
       off()
       clearTimeout(timer)
     }
-  }, [ctx, location, ready])
+  }, [ctx, location, ready, on])
   return null
 }

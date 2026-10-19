@@ -4,7 +4,13 @@
 import { describe, expect, it } from 'vitest'
 import { LeaseClient } from './client.ts'
 import { FakeLeaseServer } from './fakeServer.ts'
-import { type PanelBoard, PanelEditorLease } from './panelEditor.ts'
+import {
+  attachPanelLeaseHost,
+  type PanelBoard,
+  PanelEditorLease,
+  panelBeforeHistory,
+  panelEditorOf,
+} from './panelEditor.ts'
 
 const ME = { sid: 'u1:tab1', uid: 'u1', name: 'Me' }
 const DANA = { sid: 'u2:tab9', uid: 'u2', name: 'Dana' }
@@ -283,6 +289,121 @@ describe('the doc card panel is a lease client', () => {
     t.setWords('remote words')
     t.emit('remote', [`${CARD}.t`])
     expect(t.editor.state().text).toBe('remote words')
+  })
+
+  it('a board undo under typing not yet written wins: the pending push is dropped and the textarea shows the undo', async () => {
+    const t = setup()
+    t.editor.open(CARD, { edit: true })
+    await t.grant()
+    t.editor.input('a')
+    t.tick()
+    // typing within the push interval: not written yet
+    t.editor.input('ab')
+    expect(t.editor.state().pending).toBe(true)
+    // the board undo of the session step lands before the push tick
+    t.setWords('# Plan\n- [ ] one')
+    t.emit('history', [CARD, `${CARD}.t`])
+    expect(t.editor.state()).toMatchObject({ text: '# Plan\n- [ ] one', pending: false })
+    expect(t.saved.at(-1)).toBe(false)
+    t.tick()
+    t.editor.flush()
+    expect(t.writes.map((w) => w.text)).toEqual(['a'])
+    // typing on goes on from the undone words, as its own step
+    t.editor.input('# Plan\n- [ ] one!')
+    t.tick()
+    expect(t.writes.at(-1)).toEqual({ text: '# Plan\n- [ ] one!', join: false, held: true })
+  })
+
+  it('before a board undo the typing not yet written is written, joined to the session step the undo takes out', async () => {
+    const t = setup()
+    const host = {
+      lease: t.lease,
+      inPlaceLease: () => null,
+      refreshPresence: () => {},
+      holdSaved: () => {},
+    }
+    const canvas = {}
+    const detach = attachPanelLeaseHost(canvas as never, host)
+    const writes: { text: string; join: boolean }[] = []
+    let words = 'start'
+    const board: PanelBoard = {
+      words: () => words,
+      editable: () => true,
+      live: () => true,
+      write(_id, text, join) {
+        writes.push({ text, join })
+        words = text
+      },
+      ownIds: () => [CARD],
+      stamp: () => words,
+      onChange: () => () => {},
+    }
+    const timers: (() => void)[] = []
+    const panel = panelEditorOf(canvas as never, () => ({
+      board,
+      maxChars: 100,
+      setTimer: (fn) => timers.push(fn),
+      clearTimer: () => {
+        timers.length = 0
+      },
+    }))
+    if (!panel) throw new Error('no panel')
+    panel.open(CARD, { edit: true })
+    await t.grant()
+    panel.input('start a')
+    for (const fn of timers.splice(0)) fn()
+    panel.input('start ab')
+    panelBeforeHistory(t.lease)
+    expect(writes).toEqual([
+      { text: 'start a', join: false },
+      { text: 'start ab', join: true },
+    ])
+    expect(panel.state().pending).toBe(false)
+    // nothing left to push over the undo
+    expect(timers).toHaveLength(0)
+    detach()
+  })
+
+  it('a card locked while the panel holds its lease: read-only, the typing offered, the lease given back and not renewed', async () => {
+    const t = setup()
+    t.editor.open(CARD, { edit: true })
+    await t.grant()
+    expect(t.editor.editingLease()).toBe(CARD)
+    t.editor.input('typed')
+    t.setEditable(false)
+    t.emit('local', [CARD])
+    expect(t.editor.state()).toMatchObject({ phase: 'reading', unsaved: 'typed', pending: false })
+    expect(t.editor.state().reason).toBe('You can read this doc card but not edit it.')
+    expect(t.editor.editingLease()).toBeNull()
+    expect(t.released()).toBe(1)
+    expect(t.lease.isHeld(CARD)).toBe(false)
+    t.tick()
+    expect(t.writes).toEqual([])
+  })
+
+  it('a role dropped to viewer (no element change): presence stops naming the card and the lease goes back', async () => {
+    const t = setup()
+    t.editor.open(CARD, { edit: true })
+    await t.grant()
+    t.setEditable(false)
+    expect(t.editor.editingLease()).toBeNull()
+    await Promise.resolve()
+    expect(t.editor.state().phase).toBe('reading')
+    expect(t.editor.isWritable()).toBe(false)
+    expect(t.released()).toBe(1)
+  })
+
+  it('a role dropped while the lease is asked for: the late grant is given straight back', async () => {
+    const t = setup()
+    t.editor.open(CARD, { edit: true })
+    t.setEditable(false)
+    expect(t.editor.editingLease()).toBeNull()
+    await Promise.resolve()
+    expect(t.editor.state().phase).toBe('reading')
+    await t.grant()
+    expect(t.editor.state().phase).toBe('reading')
+    expect(t.lease.isHeld(CARD)).toBe(false)
+    expect(t.released()).toBe(1)
   })
 
   it('presence follows the panel: the card while asking and holding, nothing after', async () => {

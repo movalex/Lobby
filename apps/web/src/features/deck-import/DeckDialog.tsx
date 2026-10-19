@@ -19,8 +19,16 @@ import { knownUserKind } from '../../invite/guest.tsx'
 import { pluralize } from '../../lib/format.ts'
 import { useValue } from '../../lib/signals.ts'
 import { Dialog } from '../../ui/Dialog.tsx'
-import { prepareDeck } from './job.ts'
-import { DECK_COPY, deckKindOf, deckPlan, renderText, slidePagesOf, truncatedText } from './model.ts'
+import { type DeckStage, prepareDeck } from './job.ts'
+import {
+  DECK_COPY,
+  deckKindOf,
+  deckPlan,
+  renderText,
+  slidePagesOf,
+  truncatedText,
+  workingText,
+} from './model.ts'
 import { placeDeck } from './place.ts'
 import { closeDeckImport, deckImportRequest } from './state.ts'
 
@@ -51,7 +59,7 @@ export function DeckDialogHost({ ctx }: { ctx: CanvasFeatureContext }) {
 
 type Phase =
   | { readonly kind: 'intro' }
-  | { readonly kind: 'working'; readonly ready: number; readonly of: number }
+  | { readonly kind: 'working'; readonly ready: number; readonly of: number; readonly stage: DeckStage }
   | { readonly kind: 'error'; readonly message: string; readonly pages: PreviewPage[] }
 
 function DeckDialog({
@@ -107,7 +115,7 @@ function DeckDialog({
     }
     const ac = new AbortController()
     abort.current = ac
-    setPhase({ kind: 'working', ready: 0, of: slides - DECK_LIMITS.eagerPages })
+    setPhase({ kind: 'working', ready: 0, of: slides - DECK_LIMITS.eagerPages, stage: 'queued' })
     const out = await prepareDeck({
       request: ctx.api.request,
       events: ctx.events,
@@ -189,11 +197,9 @@ function DeckDialog({
         </p>
       )}
       {phase.kind === 'working' && (
-        <div className="dr-row" role="status" data-testid="deck-import-progress">
+        <div className="dr-row" role="status" data-testid="deck-import-progress" data-stage={phase.stage}>
           <progress max={Math.max(1, phase.of)} value={phase.ready} aria-label="Slides being made" />
-          <span>
-            Making slides… {phase.ready} of {phase.of} ready
-          </span>
+          <span>{workingText(phase)}</span>
         </div>
       )}
       {phase.kind === 'error' && (

@@ -15,6 +15,7 @@ import { elementsLink } from '../../../lib/deep-link.ts'
 import { boardPath } from '../../../lib/routing.ts'
 import { type Atom, atom } from '../../../lib/signals.ts'
 import { countUsage } from '../../../lib/usage.ts'
+import { formatsEnabled } from '../../formats/flags.ts'
 import { cut } from '../copy.ts'
 import {
   askWorkspace,
@@ -115,10 +116,15 @@ export async function askAllBoards(ctx: CanvasFeatureContext, question: string):
 /**
  * The page inside a file a citation leads with (wave W, WS3: Ask across boards cites file text by the file hit's id
  * `file:<ver>.p<page>`), or null when its first id is a canvas element. Such an id is never an element of the board.
+ * Null too while this page does not offer file search (`formatsEnabled('fileSearch')`): the chip then opens the board
+ * at its canvas elements, as the `?file=` opener would do nothing.
  */
-export function citedFilePage(c: { readonly elementIds: readonly string[] }): FileHitLink | null {
+export function citedFilePage(
+  c: { readonly elementIds: readonly string[] },
+  fileSearchOn: boolean = formatsEnabled('fileSearch'),
+): FileHitLink | null {
   const first = c.elementIds[0]
-  return first === undefined ? null : parseFileHitObjectId(first)
+  return first === undefined || !fileSearchOn ? null : parseFileHitObjectId(first)
 }
 
 /** The canvas elements a citation names (its file page ids left out: they name no element). */

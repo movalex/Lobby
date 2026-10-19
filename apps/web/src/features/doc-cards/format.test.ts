@@ -84,6 +84,7 @@ describe('the format keys', () => {
       metaKey: false,
       altKey: false,
       shiftKey: false,
+      altGraph: false,
       mac: false,
       ...o,
     })
@@ -98,5 +99,42 @@ describe('the format keys', () => {
     // AltGr (Ctrl+Alt on Windows) typing a character is typing, not a mark
     expect(k({ key: '@', code: 'KeyQ', ctrlKey: true, altKey: true })).toBeNull()
     expect(k({ key: 'b' })).toBeNull()
+  })
+
+  // Windows reports AltGr as Ctrl+Alt: AltGr text must always type (AGENTS.md)
+  const altGr = (key: string, code: string, altGraph: boolean) =>
+    k({ key, code, ctrlKey: true, altKey: true, altGraph })
+
+  it('AltGr+3 on French AZERTY types # and is no heading', () => {
+    expect(altGr('#', 'Digit3', true)).toBeNull()
+    expect(altGr('#', 'Digit3', false)).toBeNull()
+  })
+
+  it('AltGr digit characters of other layouts type, with or without the AltGraph state', () => {
+    for (const altGraph of [true, false]) {
+      expect(altGr('@', 'Digit2', altGraph)).toBeNull() // Swiss-German
+      expect(altGr('~', 'Digit2', altGraph)).toBeNull() // French AZERTY
+      expect(altGr('~', 'Digit1', altGraph)).toBeNull() // Hungarian
+      expect(altGr('²', 'Digit2', altGraph)).toBeNull() // German
+      expect(altGr('³', 'Digit3', altGraph)).toBeNull() // German
+    }
+  })
+
+  it('AltGr held with a digit key is still typing, never a heading', () => {
+    expect(altGr('1', 'Digit1', true)).toBeNull()
+    expect(k({ key: 'b', code: 'KeyB', ctrlKey: true, altGraph: true })).toBeNull()
+  })
+
+  it('the real Ctrl+Alt+1/2/3 still makes a heading, matched on the key', () => {
+    expect(altGr('1', 'Digit1', false)).toBe('h1')
+    expect(altGr('2', 'Digit2', false)).toBe('h2')
+    expect(altGr('3', 'Digit3', false)).toBe('h3')
+    // a digit key on another key position (a numpad or a remapped layout) is the digit the person meant
+    expect(altGr('1', 'Numpad1', false)).toBe('h1')
+  })
+
+  it('Cmd+Option+1 on a Mac is a heading (Cmd never inserts text; Option changes the key)', () => {
+    expect(k({ key: '¡', code: 'Digit1', metaKey: true, altKey: true, mac: true })).toBe('h1')
+    expect(k({ key: '™', code: 'Digit2', metaKey: true, altKey: true, mac: true, altGraph: true })).toBe('h2')
   })
 })

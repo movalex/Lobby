@@ -142,6 +142,56 @@ describe('markdown-lite links', () => {
       expect(safeHref(bad), bad).toBeNull()
   })
 
+  it('a board path is clickable only as one of the app shapes, after percent-decoding', () => {
+    for (const good of [
+      '/b/b-abc123',
+      '/b/b-abc123?el=el_1',
+      '/b/b-abc123?el=a.b:c,d-e',
+      '/b/b-abc123#x',
+      '/b/b-abc123?el=xyz#top',
+      '/b/b-abc123?view=-10.5,20,300,400',
+      '/b/b-abc123?file=ver_0123456789ab&page=3',
+      '/b/b-abc123?thread=thr_0123456789ab',
+    ])
+      expect(safeHref(good), good).toBe(good)
+    for (const bad of [
+      // the review: encoded dot segments resolve to another route
+      '/b/x/.%2e/.%2e/api/me',
+      '/b/x/%2e%2e/%2e%2e//evil.com',
+      '/b/b-abc123/.%2E/.%2E/api/me',
+      '/b/b-abc123/%2E%2E',
+      '/b/b-abc123/..',
+      '/b/b-abc123/',
+      '/b/b-abc123/x',
+      // the review: checked and refused
+      '/b/..%2f..',
+      '/b/\\evil.com',
+      '/\\evil.com',
+      '/b/%2F%2Fevil',
+      '/b/b-abc123%2f..%2fapi',
+      '/b/b-abc123%5c..',
+      '//evil.com',
+      '/b//evil.com',
+      '/b/b-abc123%252e',
+      '/b/%zz',
+      // not a board id, not an app query
+      '/b/AB',
+      '/b/ab',
+      '/b/b-abc123?download=1',
+      '/b/b-abc123?el=',
+      '/b/b-abc123?el=x&download=1',
+      '/b/b-abc123?file=ver_0123456789ab',
+      '/b/b-abc123?view=1,2,3',
+      '/b/b-abc123#a/b',
+      '/b/b-abc123#%2F',
+      '/api/me',
+      '/files/ver_0123456789ab',
+    ])
+      expect(safeHref(bad), bad).toBeNull()
+    // an encoded character of the shape itself is the same link, given decoded
+    expect(safeHref('/b/b%2Dabc123?el=x')).toBe('/b/b-abc123?el=x')
+  })
+
   it('a refused target keeps the words, with no href', () => {
     for (const href of ['javascript:alert`1`', 'data:text/html,x', 'http://x.y', 'JaVaScRiPt:void 0'])
       expect(inl(`[click](${href})`), href).toEqual([

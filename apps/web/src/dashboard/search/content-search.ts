@@ -14,6 +14,7 @@ import {
   type SearchStatus,
 } from '@draftroom/contracts'
 import type { ApiClient } from '../../api/client.ts'
+import { formatsEnabled } from '../../features/formats/flags.ts'
 import { NEW_CANVAS_BOARD_PAGE } from '../../lib/board-engine.ts'
 import { elementsLink, legacyShapesLink } from '../../lib/deep-link.ts'
 import { boardPath, type DashboardSection } from '../../lib/routing.ts'
@@ -167,16 +168,56 @@ export function searchKey(workspaceId: string, scope: SearchScope, query: string
   return `${workspaceId}|${scope.status}|${scope.projectId ?? ''}|${query.trim().toLowerCase()}`
 }
 
-export function searchApi(api: ApiClient) {
+/** A hit inside a file's text (wave W): it has the file field, or a file hit's object id. */
+const isFileTextHit = (hit: Pick<SearchHit, 'objectId'> & Partial<Pick<SearchHit, 'file'>>): boolean =>
+  hit.file != null || parseFileHitObjectId(hit.objectId) !== null
+
+/**
+ * The answer without hits inside files (the web's `fileSearch` switch off while the api still sends them): a board
+ * left with no hit goes, and the totals drop by what was taken out (the boards past the page are counted as sent).
+ */
+export function withoutFileHits(r: SearchResponse): SearchResponse {
+  let hits = 0
+  let boards = 0
+  const groups: SearchResponse['groups'] = []
+  for (const g of r.groups) {
+    const kept = g.hits.filter((h) => !isFileTextHit(h))
+    hits += g.hits.length - kept.length
+    if (kept.length === 0) {
+      boards++
+      continue
+    }
+    groups.push(kept.length === g.hits.length ? g : { ...g, hits: kept })
+  }
+  if (hits === 0) return r
   return {
-    search: (workspaceId: string, scope: SearchScope, q: string, signal?: AbortSignal) => {
+    ...r,
+    groups,
+    totalHits: Math.max(0, r.totalHits - hits),
+    totalBoards: Math.max(0, r.totalBoards - boards),
+  }
+}
+
+/**
+ * The workspace search (the dashboard's "Inside boards", the palette's "In this workspace"). Hits inside files are
+ * shown only while this page offers file search (`formatsEnabled('fileSearch')`: the web switch AND the api's offer,
+ * features/formats/flags.ts); off, the answer is taken as if it had none.
+ */
+export function searchApi(api: ApiClient, fileSearchOn: () => boolean = () => formatsEnabled('fileSearch')) {
+  return {
+    search: async (workspaceId: string, scope: SearchScope, q: string, signal?: AbortSignal) => {
       const params = new URLSearchParams({ q: q.trim() })
       if (scope.status !== 'active') params.set('status', scope.status)
       if (scope.projectId) params.set('projectId', scope.projectId)
-      return api.request('GET', `/api/workspaces/${encodeURIComponent(workspaceId)}/search?${params}`, {
-        schema: SearchResponse,
-        signal,
-      })
+      const r = await api.request(
+        'GET',
+        `/api/workspaces/${encodeURIComponent(workspaceId)}/search?${params}`,
+        {
+          schema: SearchResponse,
+          signal,
+        },
+      )
+      return fileSearchOn() ? r : withoutFileHits(r)
     },
   }
 }

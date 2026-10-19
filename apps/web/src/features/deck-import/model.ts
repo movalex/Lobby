@@ -132,5 +132,17 @@ export const DECK_COPY = {
 
 export const truncatedText = (total: number) =>
   `This file has ${total} pages: the first ${DECK_LIMITS.maxSlides} become slides.`
+/** Where a request's pages are: `queued` (its ops wait for the file worker), `running` (a worker is making them). */
+export type DeckStage = 'queued' | 'running'
+
+/**
+ * The dialog's line while pages are made: waiting for the file worker while every op of the request is still queued
+ * (the api claims a person's request before the background indexing, and fails it WORKER_BUSY only 30 minutes on),
+ * then the pages as they come.
+ */
+export const workingText = (p: { ready: number; of: number; stage: DeckStage }) =>
+  p.stage === 'queued'
+    ? `Queued: waiting for the file worker… ${p.ready} of ${p.of} ready`
+    : `Making slides… ${p.ready} of ${p.of} ready`
 export const renderText = (slides: number) =>
   `Pages ${DECK_LIMITS.eagerPages + 1} to ${slides} are made first. This can take a minute or two.`

@@ -184,7 +184,18 @@ export function continueList(e: TextEdit): TextEdit | null {
   }
 }
 
-/** The format keys inside the panel's textarea (Ctrl on Windows and Linux, Cmd on a Mac). */
+const HEADING_KEYS: Readonly<Record<string, FormatAction>> = { '1': 'h1', '2': 'h2', '3': 'h3' }
+
+/**
+ * The format keys inside the panel's textarea (Ctrl on Windows and Linux, Cmd on a Mac).
+ *
+ * AltGr text input always types (AGENTS.md): Windows reports AltGr as Ctrl+Alt, so on Windows and Linux the
+ * Ctrl+Alt digit (heading) chord fires only when AltGr is NOT held (`altGraph`, from
+ * `getModifierState('AltGraph')`) AND `key` is the digit itself; it is never matched on `code`, which would take
+ * AltGr+3 (`#` on French AZERTY) or AltGr+2 (`@` Swiss-German, `²` German, `~` French) for a heading. On a Mac the
+ * chord is Cmd+Option, which never inserts text (Cmd suppresses it, and Option alone has no Cmd), and Option makes
+ * `key` the Option character, so there it stays on `code`.
+ */
 export function formatKey(e: {
   key: string
   code: string
@@ -192,17 +203,24 @@ export function formatKey(e: {
   metaKey: boolean
   altKey: boolean
   shiftKey: boolean
+  altGraph: boolean
   mac: boolean
 }): FormatAction | null {
   const mod = e.mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey
   if (!mod) return null
   const k = e.key.toLowerCase()
   if (e.altKey && !e.shiftKey) {
-    if (e.code === 'Digit1') return 'h1'
-    if (e.code === 'Digit2') return 'h2'
-    if (e.code === 'Digit3') return 'h3'
-    return null
+    if (e.mac) {
+      if (e.code === 'Digit1') return 'h1'
+      if (e.code === 'Digit2') return 'h2'
+      if (e.code === 'Digit3') return 'h3'
+      return null
+    }
+    if (e.altGraph) return null
+    return HEADING_KEYS[e.key] ?? null
   }
+  // AltGr held without Alt reported (a layout or browser that reports it alone) is typing too
+  if (!e.mac && e.altGraph) return null
   if (e.altKey) return null
   if (e.shiftKey) {
     if (e.code === 'Digit7') return 'number'

@@ -2,10 +2,19 @@
 // "Inside boards": where a hit is ("Page 3 · Brief.pdf · Board"), and where it opens (`?file=<ver>&page=<n>`). The
 // hits of the board already open stay when they are inside a file ("On this board" searches the canvas only).
 
-import type { SearchBoardGroup, SearchHit } from '@draftroom/contracts'
-import { describe, expect, it } from 'vitest'
-import { fileHitHref, fileHitLabel, fileOfHit, hitHref } from '../../dashboard/search/content-search.ts'
-import { readFileHit } from '../../file-card/ported/open-file-hit.ts'
+import type { SearchBoardGroup, SearchHit, SearchResponse } from '@draftroom/contracts'
+import { afterEach, describe, expect, it } from 'vitest'
+import type { ApiClient } from '../../api/client.ts'
+import {
+  fileHitHref,
+  fileHitLabel,
+  fileOfHit,
+  hitHref,
+  searchApi,
+  withoutFileHits,
+} from '../../dashboard/search/content-search.ts'
+import { fileHitToOpen, readFileHit } from '../../file-card/ported/open-file-hit.ts'
+import { setFormatsOffer } from '../formats/flags.ts'
 import { workspaceEntries } from './workspace-search.ts'
 
 const VER = 'ver_0123456789abcdefghij'
@@ -77,6 +86,63 @@ describe('file hits', () => {
     list[0]?.run()
     list[1]?.run()
     expect(opened).toEqual([`/b/brd-here?file=${VER}&page=4`, `/b/brd-there?file=${VER}&page=3`])
+  })
+})
+
+describe('the fileSearch switch', () => {
+  afterEach(() => setFormatsOffer(null))
+
+  const answer = (): SearchResponse => ({
+    terms: ['pricing'],
+    groups: [
+      group('brd-mixed', 'Mixed', [noteHit('a1'), fileHit(4, 'Here.pdf')]),
+      group('brd-files', 'Files', [fileHit(3)]),
+    ],
+    totalBoards: 2,
+    totalHits: 3,
+    capped: false,
+    pendingBoards: 0,
+  })
+  const fakeApi = (r: SearchResponse) => ({ request: async () => r }) as unknown as ApiClient
+
+  it('on (the web switch and the api offer): hits inside files are shown and open the file', async () => {
+    setFormatsOffer({ fileSearch: true })
+    const r = await searchApi(fakeApi(answer())).search(
+      'wsp_1',
+      { status: 'active', projectId: null },
+      'pricing',
+    )
+    expect(r.groups.flatMap((g) => g.hits.map((h) => h.objectId))).toEqual([
+      'shape:a1',
+      `file:${VER}.p4`,
+      `file:${VER}.p3`,
+    ])
+    expect(fileHitToOpen(`http://x/b/brd-files?file=${VER}&page=3`)).toEqual({ versionId: VER, page: 3 })
+  })
+
+  it('off (no api offer, or the web switch off): no hit inside a file in search or the palette, and no opener', async () => {
+    for (const webSwitchOff of [false, true]) {
+      // the api not offering it; or the api offering it and the web switch off
+      setFormatsOffer({ fileSearch: webSwitchOff })
+      const searcher = webSwitchOff ? searchApi(fakeApi(answer()), () => false) : searchApi(fakeApi(answer()))
+      const r = await searcher.search('wsp_1', { status: 'active', projectId: null }, 'pricing')
+      expect(r.groups.map((g) => g.board.id)).toEqual(['brd-mixed'])
+      expect(r.groups[0]?.hits.map((h) => h.objectId)).toEqual(['shape:a1'])
+      expect(r).toMatchObject({ totalBoards: 1, totalHits: 1 })
+      expect(workspaceEntries(r.groups, null).map((e) => e.detail)).toEqual(['Note · Mixed'])
+    }
+    setFormatsOffer({ fileSearch: false })
+    expect(fileHitToOpen(`http://x/b/brd-files?file=${VER}&page=3`)).toBeNull()
+    expect(fileHitToOpen(`http://x/b/brd-files?file=${VER}&page=3`, false)).toBeNull()
+    expect(fileHitToOpen(`http://x/b/brd-files?file=${VER}&page=3`, true)).toEqual({
+      versionId: VER,
+      page: 3,
+    })
+  })
+
+  it('an answer with no file hits is passed on as it came', () => {
+    const r = { ...answer(), groups: [group('brd-a', 'A', [noteHit('a1')])] }
+    expect(withoutFileHits(r)).toBe(r)
   })
 })
 

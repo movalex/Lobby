@@ -22,6 +22,7 @@ import {
   fileOpCancelPath,
   fileOpPath,
   removeBackgroundPath,
+  WORKER_OP_MESSAGES,
 } from '@draftroom/contracts'
 import { isApiError } from '../../api/client.ts'
 import { type AssetVersionMeta, metaUrl } from '../../assets/contract.ts'
@@ -34,6 +35,28 @@ type Ctx = CanvasFeatureContext
 
 /** How often a pending op is re-read while its events may have been missed. */
 export const POLL_MS = 5_000
+
+/**
+ * The notice while the op is followed: `queued` waits for the file worker (the api claims a person's request before
+ * the background indexing), `running` is the removal itself. There is no local give-up timer: the api answers every
+ * wait (a request still queued `WORKER_OP_LIMITS.requestedQueueDeadlineMs` after it was made fails WORKER_BUSY, a
+ * queued op with no capable worker checked in for `workerAbsentMs` fails WORKER_UNAVAILABLE, a running one has its
+ * lease and budgets), and the tracker reads the op on every event, reconnect and POLL_MS until it does.
+ */
+export function removeBgProgressText(name: string, status: 'queued' | 'running'): string {
+  return status === 'queued'
+    ? `Queued: waiting for the file worker to remove the background of ${name}… (beta)`
+    : `Removing the background of ${name}… (beta)`
+}
+
+/** A failed op's words: its code's fixed contract message (WORKER_OP_MESSAGES), else the api's, else a plain one. */
+export function removeBgFailureText(op: Pick<FileOpState, 'errorCode' | 'message'>): string {
+  return (
+    (op.errorCode ? WORKER_OP_MESSAGES[op.errorCode] : null) ??
+    op.message ??
+    'The background could not be removed from this image.'
+  )
+}
 
 export interface RemoveBgDeps {
   request(ctx: Ctx, versionId: string): Promise<FileOpState>
@@ -157,7 +180,7 @@ export class RemoveBgTracker {
       this.ctx.dismiss(p.key)
       this.ctx.notify({
         key: `${p.key}:failed`,
-        text: op.message ?? 'The background could not be removed from this image.',
+        text: removeBgFailureText(op),
         tone: 'error',
         testId: 'remove-bg-failed',
       })
@@ -208,10 +231,7 @@ export class RemoveBgTracker {
   private progress(p: Pending, status: 'queued' | 'running'): void {
     this.ctx.notify({
       key: p.key,
-      text:
-        status === 'queued'
-          ? `Waiting to remove the background of ${p.name}… (beta)`
-          : `Removing the background of ${p.name}… (beta)`,
+      text: removeBgProgressText(p.name, status),
       timeoutMs: null,
       testId: 'remove-bg-progress',
       ...(status === 'queued'

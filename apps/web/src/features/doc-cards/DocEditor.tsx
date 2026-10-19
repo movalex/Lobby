@@ -159,6 +159,7 @@ export function DocEditorPanel({ ctx, close }: { ctx: CanvasFeatureContext; clos
       metaKey: e.metaKey,
       altKey: e.altKey,
       shiftKey: e.shiftKey,
+      altGraph: e.getModifierState('AltGraph'),
       mac: isMac(),
     })
     if (action) {
