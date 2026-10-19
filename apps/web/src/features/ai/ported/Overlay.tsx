@@ -67,6 +67,7 @@ import {
   askAllBoards,
   canAddWorkspaceAnswer,
   citationHref,
+  showCitationHere,
   type WorkspaceAnswerState,
 } from './ask-all.ts'
 import { canBuildWithAi } from './gate.ts'
@@ -1296,7 +1297,8 @@ function WorkspaceAnswerView({ state }: { state: WorkspaceAnswerState }) {
         onClick={(e) => {
           if (here) {
             e.preventDefault()
-            showSources(canvas, c.elementIds)
+            // a page inside a file opens that file at its page (wave W); else the citation's canvas elements
+            showCitationHere(ctx, c)
             return
           }
           linkClick(href)(e)
