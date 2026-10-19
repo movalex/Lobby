@@ -357,15 +357,21 @@ describe('resolving a code', () => {
     expect((await resolve(w.api, good, guesser)).statusCode).toBe(200)
   })
 
-  it(`globally: ${JOIN_CODE_LOOKUPS_GLOBAL.max} lookups a minute over every address (shrunk here), then 429`, async () => {
+  it(`globally: ${JOIN_CODE_LOOKUPS_GLOBAL.max} misses a minute over every address (shrunk here), then every lookup is 429; good lookups never count`, async () => {
     expect(JOIN_CODE_LOOKUPS_GLOBAL).toEqual({ max: 600, windowMs: 60_000 })
     expect(JOIN_CODE_LOOKUPS_PER_ADDRESS).toEqual({ max: 30, windowMs: 10 * 60_000 })
     joinCodeLookupSettings.global = { max: 5, windowMs: 60_000 }
     const w = await world()
     const good = (await link(w.bob, w.board)).joinCode?.code ?? ''
-    for (let i = 0; i < 5; i++) expect((await resolve(w.api, good, freshIp())).statusCode).toBe(200)
-    const refused = await resolve(w.api, good, freshIp())
-    expect(refused.statusCode).toBe(429)
+    // one address with a good code cannot use up the api's window for everyone
+    for (let i = 0; i < 20; i++) expect((await resolve(w.api, good, '10.43.0.1')).statusCode).toBe(200)
+    // a crowd of addresses guessing does
+    for (let i = 0; i < 5; i++) expect((await resolve(w.api, 'ZZZZ-ZZZZ', freshIp())).statusCode).toBe(404)
+    for (const code of [good, 'ZZZZ-ZZZZ']) {
+      const refused = await resolve(w.api, code, freshIp())
+      expect(refused.statusCode, code).toBe(429)
+      expect(refused.json().error.code).toBe('RATE_LIMITED')
+    }
     w.api.clock.advance(61_000)
     expect((await resolve(w.api, good, freshIp())).statusCode).toBe(200)
   })

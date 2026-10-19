@@ -10,11 +10,12 @@
 // checked here again, under the locks, as creating and extending a link are. Resolving has no row: anyone with the code.
 //
 // Resolving is a bearer-secret lookup, so it is no oracle: an unknown, a malformed, an expired, a revoked or swept code
-// (and a code of a rotated ticket secret) all answer the same 404 NOT_FOUND as an unknown route. Limits: every lookup
-// counts against JOIN_CODE_LOOKUPS_GLOBAL; a lookup that resolves nothing counts against the client address's
-// JOIN_CODE_LOOKUPS_PER_ADDRESS (an IPv6 client by its /64), and an address at its limit is refused every lookup (429)
-// whether its code is good or not, so the answer never says which. A room of people behind one office address
-// resolving the same good code is not held to the 30 (each of them would be refused by the 31st otherwise). The code
+// (and a code of a rotated ticket secret) all answer the same 404 NOT_FOUND as an unknown route. Limits (they bound
+// GUESSING, so they count lookups that resolve nothing): JOIN_CODE_LOOKUPS_PER_ADDRESS (30 misses per 10 minutes from
+// a client address, an IPv6 client by its /64) and JOIN_CODE_LOOKUPS_GLOBAL (600 misses a minute over the api); an
+// address, or the api, at its limit is refused every lookup (429) whether the code is good or not, so the answer never
+// says which. A room of people behind one office address resolving the same good code is not held to the 30 (the 31st
+// of them would be refused otherwise), and nobody holding a good code can use up the api's window for everyone. The code
 // is compared in constant time against its derivation, never logged (the api logs route patterns only), never put in
 // an audit row or an error message.
 
@@ -158,10 +159,13 @@ export async function registerJoinCodes(
   const resolve: RouteHandlerMethod = async (req, reply): Promise<ResolvedJoinCode> => {
     reply.header('cache-control', 'no-store')
     const address = clientAddressKey(req.ip)
-    global.take('all')
+    // Both windows count misses only, and refuse every lookup once full: the address's first (a guesser at its limit
+    // uses none of the api's window), then the api's (a crowd of addresses guessing).
     perAddress.check(address)
+    global.check('all')
     const miss = () => {
       perAddress.record(address)
+      global.record('all')
       return notFound()
     }
     const { code: raw = '' } = req.params as Params
