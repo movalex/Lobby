@@ -6,9 +6,15 @@
 // votes on what is in the selected frames (and their sections of the run of show: ./recap.ts); votes from this
 // tab's last revealed vote are titled as that ("Top voted (last vote)"), since they are not windowed. Catch me up
 // names its window by date, and says when the api clamped it to AI_RECAP_MAX_WINDOW_MS.
+//
+// Wave V (WS5, the session summary): the registered sources' sections (./sources.ts: polls and scales, word clouds,
+// breakouts; aggregates only, collected by ./recap.ts with no AI call) follow the room's own results, each as its
+// title and a few one-line texts, in the sources' order. A plan built without them (the summary's switch off, or no
+// source had anything to say) is exactly the plan before wave V.
 
 import { AI_RECAP_MAX_WINDOW_MS, type AiResult } from '@draftroom/contracts'
 import { cut } from '../copy.ts'
+import type { RecapSection, RecapSourceId } from './sources.ts'
 import type { RecapScopeName } from './window.ts'
 
 export type RecapResult = Extract<AiResult, { action: 'recap' }>
@@ -38,6 +44,17 @@ export interface RecapRow {
   readonly actualMin: number
 }
 
+/** One registered source's section as the recap shows it (plain, one-line texts). */
+export interface RecapSourceSection {
+  readonly id: RecapSourceId
+  readonly title: string
+  readonly lines: readonly { readonly text: string; readonly ids: readonly string[] }[]
+}
+
+/** A section title's and a line's most code points (the panel, the Markdown and the frame show the same words). */
+export const RECAP_SECTION_TITLE_MAX = 60
+export const RECAP_SECTION_LINE_MAX = 200
+
 export interface RecapPlan {
   /** "Recap · 8 Oct": the frame's name and the Markdown's heading */
   readonly title: string
@@ -60,6 +77,8 @@ export interface RecapPlan {
   readonly topVotedTitle: string
   /** null: no "Planned vs actual" (no run of show recorded in this tab) */
   readonly plannedVsActual: readonly RecapRow[] | null
+  /** wave V: the registered sources' sections, in order ([]: none, as before wave V) */
+  readonly sections: readonly RecapSourceSection[]
   readonly windowFrom: number | null
   readonly runId: string | null
 }
@@ -82,6 +101,8 @@ export interface RecapInput {
   readonly revealed: { readonly results: readonly { ref: string; count: number; rank: number }[] } | null
   /** the words of an element by its ref (for vote lines); '' when it is gone */
   readonly textOf: (ref: string) => string
+  /** wave V: what the registered sources said (./sources.ts collectRecapSections); none when absent */
+  readonly sections?: readonly RecapSection[]
 }
 
 const SCOPE_LABELS: Record<RecapScopeName, string> = {
@@ -116,6 +137,23 @@ export function recapTitle(now: number): string {
 }
 
 const flat = (s: string) => s.replace(/\s+/g, ' ').trim()
+
+/** The sources' sections as plain one-line words: empty lines and empty sections left out, each source once. */
+export function recapSourceSections(sections: readonly RecapSection[] | undefined): RecapSourceSection[] {
+  const seen = new Set<RecapSourceId>()
+  const out: RecapSourceSection[] = []
+  for (const s of sections ?? []) {
+    if (seen.has(s.id)) continue
+    const lines = s.lines
+      .map((l) => ({ text: cut(flat(l.text), RECAP_SECTION_LINE_MAX), ids: [...(l.ids ?? [])] }))
+      .filter((l) => l.text)
+    const title = cut(flat(s.title), RECAP_SECTION_TITLE_MAX)
+    if (!lines.length || !title) continue
+    seen.add(s.id)
+    out.push({ id: s.id, title, lines })
+  }
+  return out
+}
 
 export function recapPlan(input: RecapInput): RecapPlan {
   const r = input.result
@@ -167,6 +205,7 @@ export function recapPlan(input: RecapInput): RecapPlan {
     topVoted,
     topVotedTitle: r ? 'Top voted' : 'Top voted (last vote)',
     plannedVsActual,
+    sections: recapSourceSections(input.sections),
     windowFrom: from,
     runId: r?.runId ?? null,
   }
@@ -179,4 +218,5 @@ export const recapIsEmpty = (p: RecapPlan) =>
   !p.actions.length &&
   !p.questions.length &&
   !p.topVoted.length &&
-  !p.plannedVsActual?.length
+  !p.plannedVsActual?.length &&
+  !p.sections.length

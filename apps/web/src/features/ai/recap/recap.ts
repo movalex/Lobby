@@ -7,17 +7,29 @@
 //
 // Entry points: the command 'ai.recap' (args AiRecapArgs; W5's Facilitate > Wrap up and the coach run it), the AI
 // menu ("Wrap up"), the context menu's AI submenu, and the board menu ("Catch me up").
+//
+// Wave V (WS5, the session summary; docs/WAVE-V-CONTRACTS.md §5): while the summary's switch is on
+// (features/live liveEnabled('summary'): a web switch only, it needs no api switch), the recap also asks every
+// registered source (./sources.ts: polls and scales, word clouds, breakouts) for its section, at the same time as the
+// AI call and never through it: those sections are the board's own aggregates, read from the features' own routes,
+// so they are there with AI off, for a guest and when the AI call is refused. A late or failing source is left out.
+// The Export dialog's "Session results (CSV)" section (../../present-export/session-csv) is registered here, with the
+// recap it belongs to.
 
 import type { AiStatus } from '@draftroom/contracts'
 import type { CanvasFeatureContext, LobbyCanvas } from '../../../canvas/api/index.ts'
 import { knownUserKind } from '../../../invite/guest.tsx'
 import { type Atom, atom } from '../../../lib/signals.ts'
+import { liveEnabled } from '../../live/index.ts'
 import { agendaActuals } from '../../present-export/live/agenda.ts'
+import { registerExportSection } from '../../present-export/ported/export-sections.ts'
+import { SESSION_CSV_SECTION } from '../../present-export/session-csv/Section.tsx'
 import { lastRevealedResults } from '../../workshops/store.ts'
 import { ensureAiStatus, runPublic } from '../ported/actions.ts'
 import { aiStatus, openingPrivatePanel, perCanvas, registerPrivatePanel } from '../ported/runtime.ts'
 import { idOfRef, refOf } from '../ported/target.ts'
 import { type RecapPlan, type RecapResult, recapPlan } from './plan.ts'
+import { collectRecapSections, type RecapSection } from './sources.ts'
 import { apiScope, catchUpWindow, type RecapScopeName, sessionSince } from './window.ts'
 
 export interface RecapState {
@@ -36,6 +48,8 @@ export const aiRecap = perCanvas<Atom<RecapState | null>>(() =>
 )
 
 registerPrivatePanel('recap', (canvas) => aiRecap(canvas).set(null))
+// offered only while the summary's and the activities' switches are on (its own `offered`)
+registerExportSection(SESSION_CSV_SECTION)
 
 /** Why the recap has no AI part (the panel and the Markdown say so). */
 export function aiOffNote(status: AiStatus | null, guest: boolean): string {
@@ -104,6 +118,12 @@ export async function runRecap(
   const since = visit ? visit.since : scope === 'session' ? sessionSince(canvas.items(), now, actuals) : null
   // a selection recap: only the votes on what is in the selected frames, and only their sections of the run of show
   const inScope = scope === 'selection' ? inSelection(canvas, about) : undefined
+  // wave V: the sources' sections, asked now (beside the AI call, never through it); aborted when this recap is
+  // replaced or closed (checked below)
+  const sourcesCtl = new AbortController()
+  const sectionsOf: Promise<RecapSection[]> = liveEnabled('summary')
+    ? collectRecapSections({ ctx, scope, since, now, signal: sourcesCtl.signal })
+    : Promise.resolve([])
   await ensureAiStatus(canvas)
   const status = aiStatus(canvas).get()
   const guest = knownUserKind(ctx.me.user.id) === 'guest' || status?.reason === 'guest'
@@ -115,7 +135,12 @@ export async function runRecap(
     if (r?.action === 'recap') result = r
     else aiNote = 'Without AI this time: here is what the board itself knows.'
   } else aiNote = aiOffNote(status, guest)
-  if (slot.get() !== mine) return null // replaced or closed meanwhile
+  if (slot.get() !== mine) {
+    sourcesCtl.abort()
+    return null // replaced or closed meanwhile
+  }
+  const sections = await sectionsOf
+  if (slot.get() !== mine) return null
   const plan = recapPlan({
     scope,
     now,
@@ -127,6 +152,7 @@ export async function runRecap(
     actuals: inScope ? (actuals?.filter((a) => inScope(refOf(a.frameId))) ?? null) : actuals,
     revealed: lastRevealedResults(ctx.events),
     textOf: (ref) => canvas.text.of(idOfRef(ref)),
+    sections,
   })
   const done: RecapState = { status: 'done', scope, plan, about, frameId: null }
   slot.set(done)
