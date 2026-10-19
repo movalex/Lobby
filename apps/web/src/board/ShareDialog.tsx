@@ -50,6 +50,7 @@ import {
 import { type ReactNode, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { api, isApiError } from '../api/client.ts'
 import { useSession } from '../auth/session.tsx'
+import { ShowQrRow } from '../features/join/ShowQr.tsx'
 import { OutsideConfirm, OutsideStatusTag } from '../features/people/ExternalTag.tsx'
 import { useBoardOutside } from '../features/people/outside.ts'
 import { reviewFlags } from '../features/review/flags.ts'
@@ -2261,7 +2262,7 @@ function WorkshopLinksSection({
       )}
       {links.length > 0 && (
         <ul className="dr-sharing__links" aria-label="Open workshop links">
-          {links.map((l) => (
+          {links.flatMap((l) => [
             <ReviewLinkRow
               key={l.id}
               boardId={boardId}
@@ -2270,8 +2271,11 @@ function WorkshopLinksSection({
               canShare={canCreate}
               copiedOnCreate={justCreated?.id === l.id ? justCreated.copied : null}
               onChange={onChange}
-            />
-          ))}
+            />,
+            // Wave V (WS3): the link's join code and its full-screen QR card (only while join codes are on, and only
+            // for people the link's URL is shown to)
+            <ShowQrRow key={`${l.id}-qr`} boardId={boardId} link={l} />,
+          ])}
         </ul>
       )}
     </section>

@@ -102,7 +102,8 @@ describe('the wave V features', () => {
     for (const id of ['live-activities', 'join', 'breakouts']) {
       const f = CANVAS_FEATURES.find((x) => x.id === id)
       expect(f, id).toBeDefined()
-      expect(Object.keys(f ?? {}), id).toEqual(['id'])
+      // WS3 landed 'join' (its card overlay and Facilitate entry: features/join/join.test.ts)
+      if (id !== 'join') expect(Object.keys(f ?? {}), id).toEqual(['id'])
       expect(at(id), id).toBeGreaterThan(at('timeline'))
       expect(at(id), id).toBeLessThan(at('elements'))
     }
