@@ -6,10 +6,12 @@
 #   DRY_RUN=1 (the default): every SSH/Docker command is printed, nothing touches the NAS.
 #   DRY_RUN=0: under the standing NAS approval for throwaway draftroom-* names.
 # Usage: DRY_RUN=0 bash scripts/nas-pg-api.sh <commit> [--max-workers N] [--only api|db] [--keep]
-#        DRY_RUN=0 bash scripts/nas-pg-api.sh --remove <run-id>     (what a --keep run left, and its lock if it holds it)
+#        DRY_RUN=0 bash scripts/nas-pg-api.sh --remove <run-id>     (what a --keep run left: under the NAS lock, and
+#                                                                   never while that run is live)
 #
 # Two runs at once (wave V: two workstreams' runs removed each other's containers and folder, which had fixed names):
-#   - every run has its own id (RUN_ID, default <utc time>-<pid>-<random>), in all it creates: the containers
+#   - every run has its own id (RUN_ID, default r-<utc time>-<pid><random>; strict: r-<14 digits>-<4-16 of a-z0-9>,
+#     so it is never `lock` and no id's -install/-test/-net name is another id's: review m8), in all it creates: the containers
 #     draftroom-pg-<run>, draftroom-pg-<run>-install and draftroom-pg-<run>-test, the network draftroom-pg-<run>-net
 #     and the folder /volume3/Apps/draftroom-pg-runs/<run>;
 #   - a run takes the NAS lock first: `mkdir /volume3/Apps/draftroom-pg-runs/lock` (atomic), holding "<run> <epoch>"
@@ -17,8 +19,10 @@
 #     LOCK_STALE_S (default 6 h) whose run has no container left is stale: it is removed and taken (one mkdir wins);
 #   - a run made by the script before run ids (the fixed names draftroom-pg, draftroom-pg-net, the folder
 #     /volume3/Apps/draftroom-pg) counts as live: this run STOPS;
-#   - the cleanup removes only what carries this run's id (each name is checked against it), and the lock only while
-#     this run holds it. Other draftroom-pg* names are listed, never touched.
+#   - the cleanup removes only the four names this run's id gives (each name is checked against them), and the lock
+#     only while this invocation holds it. Other draftroom-pg* names are listed, never touched;
+#   - --remove takes the same lock (as its own id) and STOPs while another run holds it, or while the run to remove
+#     holds it and is live (a fresh lock, or its test container running).
 #
 # What it does, in order: preflight (df, MemAvailable; a STOP here leaves everything as it is), the lock, the commit's
 # tracked source (git archive; refused if it would hold .env*, .data, node_modules or test-results) into the run's
@@ -80,14 +84,30 @@ fi
 [[ "$MW" =~ ^[0-9]+$ ]] || { log "--max-workers takes a number"; exit 2; }
 [[ -z "$ONLY" || "$ONLY" == api || "$ONLY" == db ]] || { log "--only takes api or db"; exit 2; }
 
-# this run's id: lower-case letters, digits and dashes (a Docker name and a folder name)
-RUN="${REMOVE:-${RUN_ID:-$(date -u +%Y%m%d%H%M%S)-$$-$((RANDOM % 10000))}}"
-[[ "$RUN" =~ ^[a-z0-9][a-z0-9-]{3,62}$ ]] || { log "a run id is 4-63 of a-z, 0-9 and -: $RUN"; exit 2; }
+# A run id is `r-<14 digits of UTC time>-<4-16 of a-z0-9>` (the default: r-<time>-<pid><random>), exactly two dashes:
+#   - it can never be `lock` (the lock's folder beside the runs) or any other name the script keeps there;
+#   - no id plus -install, -test or -net is another valid id, so no run's container or network name is another run's
+#     (wave V review m8: run `x`'s draftroom-pg-x-install was run `x-install`'s Postgres).
+# --remove also takes the ids of the script before this rule (`<14 digits>-<pid>-<random>`: the same two dashes), so
+# what a --keep run of it left can still be removed.
+RUN_ID_RE='^r-[0-9]{14}-[a-z0-9]{4,16}$'
+LEGACY_RUN_ID_RE='^[0-9]{14}-[0-9]{1,10}-[0-9]{1,4}$'
+new_run_id() { printf 'r-%s-%s%04d' "$(date -u +%Y%m%d%H%M%S)" "$$" "$((RANDOM % 10000))"; }
+RUN="${REMOVE:-${RUN_ID:-$(new_run_id)}}"
+if [[ -n "$REMOVE" ]]; then
+  [[ "$RUN" =~ $RUN_ID_RE || "$RUN" =~ $LEGACY_RUN_ID_RE ]] || { log "not a run id (r-<14 digits>-<4-16 of a-z0-9>): $RUN"; exit 2; }
+else
+  [[ "$RUN" =~ $RUN_ID_RE ]] || { log "a run id is r-<14 digits>-<4-16 of a-z0-9>: $RUN"; exit 2; }
+fi
 S="$RUNS/$RUN"
 NET="draftroom-pg-$RUN-net"
 C_PG="draftroom-pg-$RUN"
 C_INSTALL="draftroom-pg-$RUN-install"
 C_TEST="draftroom-pg-$RUN-test"
+# who holds the NAS lock for this invocation: the run itself, or for --remove the remover (its own id), so removing a
+# run takes the same lock as running one and never releases a lock it did not take
+HOLDER="$RUN"
+[[ -z "$REMOVE" ]] || HOLDER="$(new_run_id)"
 
 nas() {
   if [[ "$DRY_RUN" != "0" ]]; then
@@ -104,8 +124,8 @@ nas_stdin() {
   fi
   ssh -i "$NAS_KEY" -o BatchMode=yes -o ConnectTimeout=10 "$NAS_USER@$NAS_HOST" "$*"
 }
-# a name this run may remove: a draftroom-pg name that carries this run's id, nothing else
-is_run_name() { [[ "$1" == "draftroom-pg-$RUN" || "$1" == "draftroom-pg-$RUN-"* ]] && [[ "$1" =~ ^draftroom-pg-[a-z0-9-]+$ ]]; }
+# a name this run may remove: exactly one of the four names this run's id gives, nothing else
+is_run_name() { [[ "$1" == "$C_PG" || "$1" == "$C_INSTALL" || "$1" == "$C_TEST" || "$1" == "$NET" ]]; }
 list_pg() {
   nas "docker ps -a --filter name=^draftroom-pg --format '{{.Names}}\t{{.Status}}'; echo '--- networks'; docker network ls --filter name=^draftroom-pg --format '{{.Name}}'; echo '--- volumes'; docker volume ls --filter name=^draftroom-pg --format '{{.Name}}'; echo '--- runs'; ls -1 $RUNS 2>/dev/null; cat $LOCK/owner 2>/dev/null || true"
 }
@@ -119,16 +139,49 @@ remove_container() {
 }
 # the lock's owner line ("<run> <epoch>"), or nothing
 lock_owner() { nas "cat $LOCK/owner 2>/dev/null || true" | tail -1; }
-# while this run holds the lock: its time is now (a long suite does not make it look stale)
+# while this invocation holds the lock: its time is now (a long suite does not make it look stale)
 lock_touch() {
-  nas "if [ \"\$(cut -d' ' -f1 $LOCK/owner 2>/dev/null)\" = '$RUN' ]; then echo '$RUN '\$(date +%s) > $LOCK/owner; fi" || true
+  nas "if [ \"\$(cut -d' ' -f1 $LOCK/owner 2>/dev/null)\" = '$HOLDER' ]; then echo '$HOLDER '\$(date +%s) > $LOCK/owner; fi" || true
 }
 lock_release() {
-  nas "if [ \"\$(cut -d' ' -f1 $LOCK/owner 2>/dev/null)\" = '$RUN' ]; then rm -rf -- $LOCK && echo 'lock released'; fi" | tee -a "$LOG" || true
+  nas "if [ \"\$(cut -d' ' -f1 $LOCK/owner 2>/dev/null)\" = '$HOLDER' ]; then rm -rf -- $LOCK && echo 'lock released'; fi" | tee -a "$LOG" || true
 }
 # takes the lock (atomic mkdir); prints "acquired", or the holder's line
 lock_try() {
-  nas "mkdir -p $RUNS && if mkdir $LOCK 2>/dev/null; then echo '$RUN '\$(date +%s) > $LOCK/owner && echo acquired; else cat $LOCK/owner 2>/dev/null || echo 'unknown 0'; fi" | tail -1
+  nas "mkdir -p $RUNS && if mkdir $LOCK 2>/dev/null; then echo '$HOLDER '\$(date +%s) > $LOCK/owner && echo acquired; else cat $LOCK/owner 2>/dev/null || echo 'unknown 0'; fi" | tail -1
+}
+# Takes the NAS lock for HOLDER, or STOPs (exit 1) touching nothing. A lock older than LOCK_STALE_S whose run is not
+# alive is taken over (compare-before-remove: a run that took it meanwhile keeps it). Alive: for an ordinary holder,
+# any container of its id; for --remove of the run that holds the lock, its test container running (a run that holds
+# a fresh lock is live: --remove refuses it, review m8).
+acquire_lock() {
+  local got holder since age alive
+  got="$(lock_try)"
+  [[ "$got" == acquired ]] && return 0
+  holder="${got%% *}"
+  since="${got##* }"
+  [[ "$holder" =~ ^[a-z0-9-]{1,80}$ ]] || holder=unknown
+  [[ "$since" =~ ^[0-9]+$ ]] || since=0
+  age=$(( $(date +%s) - since ))
+  if [[ -n "$REMOVE" && "$holder" == "$RUN" ]]; then
+    alive="$(nas "docker ps --filter name=^$C_TEST\$ --filter status=running --format '{{.Names}}'" | grep -x -- "$C_TEST" || true)"
+  else
+    alive="$(nas "docker ps -a --filter name=^draftroom-pg-$holder --format '{{.Names}}'" | grep -E "^draftroom-pg-$holder(-|$)" || true)"
+  fi
+  if (( age > LOCK_STALE_S )) && [[ -z "$alive" ]]; then
+    log "the lock of run $holder is stale (${age} s, not alive): taking it over"
+    # only the lock as it was read (a run that took it meanwhile keeps it); a lock with no owner line reads 'unknown 0'
+    nas "o=\$(cat $LOCK/owner 2>/dev/null || echo 'unknown 0'); if [ \"\$o\" = '$got' ]; then rm -rf -- $LOCK; fi"
+    got="$(lock_try)"
+    [[ "$got" == acquired ]] && return 0
+  fi
+  trap - EXIT
+  if [[ -n "$REMOVE" && "$holder" == "$RUN" ]]; then
+    log "STOP: run $RUN is live: it holds the NAS lock (${age} s old); --remove waits for it to end"
+  else
+    log "STOP: another run holds the NAS lock: ${got} (${age} s old; containers: ${alive:-none})"
+  fi
+  exit 1
 }
 cleanup() {
   log "cleanup of run $RUN: before"
@@ -146,8 +199,12 @@ cleanup() {
 }
 
 if [[ -n "$REMOVE" ]]; then
-  log "removing what run $RUN left (DRY_RUN=$DRY_RUN)"
+  # the same lock as a run (review m8): never while that run, or any other, is live; the remover holds it as $HOLDER
+  log "removing what run $RUN left (DRY_RUN=$DRY_RUN; the lock as $HOLDER)"
+  if [[ "$DRY_RUN" == "0" ]]; then acquire_lock; else lock_try >/dev/null; fi
+  trap lock_release EXIT
   cleanup
+  trap - EXIT
   exit 0
 fi
 
@@ -168,21 +225,7 @@ fi
 
 # 2. the lock (one run at a time; a stale lock is taken over, see the header)
 if [[ "$DRY_RUN" == "0" ]]; then
-  got="$(lock_try)"
-  if [[ "$got" != acquired ]]; then
-    holder="${got%% *}"
-    since="${got##* }"
-    [[ "$since" =~ ^[0-9]+$ ]] || since=0
-    age=$(( $(date +%s) - since ))
-    alive="$(nas "docker ps -a --filter name=^draftroom-pg-$holder --format '{{.Names}}'" | grep -E "^draftroom-pg-$holder(-|$)" || true)"
-    if (( age > LOCK_STALE_S )) && [[ -z "$alive" ]]; then
-      log "the lock of run $holder is stale (${age} s, no container left): taking it over"
-      # only the lock as it was read (a run that took it meanwhile keeps it); a lock with no owner line reads 'unknown 0'
-      nas "o=\$(cat $LOCK/owner 2>/dev/null || echo 'unknown 0'); if [ \"\$o\" = '$got' ]; then rm -rf -- $LOCK; fi"
-      got="$(lock_try)"
-    fi
-    [[ "$got" == acquired ]] || { trap - EXIT; log "STOP: another run holds the NAS lock: ${got} (${age} s old; containers: ${alive:-none})"; exit 1; }
-  fi
+  acquire_lock
   log "lock taken by run $RUN"
 else
   lock_try >/dev/null
