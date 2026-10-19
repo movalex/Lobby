@@ -18,6 +18,8 @@
 .dr-admin__home {
   display: inline-flex;
   border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
 }
 .dr-admin__main {
   max-width: 920px;
@@ -271,7 +273,7 @@
   font-weight: 650;
 }
 .dr-admin__meter,
-.dr-admin__bar {
+.dr-admin__share {
   display: block;
   overflow: hidden;
   border-radius: 999px;
@@ -282,7 +284,7 @@
   margin-bottom: 8px;
 }
 .dr-admin__meter > span,
-.dr-admin__bar > span {
+.dr-admin__share > span {
   display: block;
   height: 100%;
   background: var(--dr-navy);
@@ -301,7 +303,7 @@
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
-.dr-admin__bar {
+.dr-admin__share {
   height: 6px;
 }
 .dr-admin__seg {
@@ -387,10 +389,15 @@
 }
 .dr-admin__boards li {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 2px;
+  gap: 2px 6px;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+.dr-admin__boards .dr-btn {
+  flex: none;
+  white-space: nowrap;
 }
 
 /* ---- retention ---- */

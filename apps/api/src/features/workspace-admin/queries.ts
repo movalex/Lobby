@@ -239,6 +239,7 @@ export async function auditPage(
     target: string
     detail: unknown
   }>(text, params)
+  const page = rows.rows.slice(0, limit)
   // The people and boards the shown details name, and every target that is a board, in two queries.
   const refs: DetailRefs = { users: new Set(), boards: new Set() }
   for (const r of page) {
@@ -458,7 +459,7 @@ export function retentionFacts(ctx: FeatureContext): AdminRetentionFact[] {
     {
       id: 'checkpoints.weekly',
       label: 'Automatic checkpoints, older',
-      value: `One a week until ${plural(CHECKPOINT_RETENTION.weeklyDays, 'day')}, then removed. Named checkpoints are kept.`,
+      value: `One a week until ${plural(CHECKPOINT_RETENTION.weeklyDays, 'day')}, then removed. Checkpoints saved by hand are kept.`,
       source: 'code',
     },
     {

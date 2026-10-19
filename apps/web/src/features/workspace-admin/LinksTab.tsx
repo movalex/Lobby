@@ -214,9 +214,8 @@ function GuestRow({ guest: g, api, onChanged }: { guest: AdminGuest; api: AdminA
   return (
     <li className="dr-admin__row" data-testid="admin-guest" data-user-id={g.user.id}>
       <div className="dr-admin__who">
-        <span className="dr-admin__name">
-          {g.user.name} <Tag>Guest</Tag>
-        </span>
+        {/* a name-only guest's name already says " (guest)" (contracts guests.ts guestDisplayName) */}
+        <span className="dr-admin__name">{g.user.name}</span>
         <span className="dr-admin__meta dr-muted">
           <span>
             Joined{' '}

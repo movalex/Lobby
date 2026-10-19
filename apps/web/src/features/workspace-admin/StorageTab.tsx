@@ -129,7 +129,7 @@ function StorageRow({ row, total }: { row: AdminStorageRow; total: number }) {
         <span className="dr-admin__bytes" data-testid="admin-storage-bytes">
           {formatBytes(row.bytes)}
         </span>
-        <span className="dr-admin__bar" aria-hidden="true">
+        <span className="dr-admin__share" aria-hidden="true">
           <span style={{ width: `${share}%` }} />
         </span>
       </div>

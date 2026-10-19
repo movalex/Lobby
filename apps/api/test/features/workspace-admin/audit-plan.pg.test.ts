@@ -27,7 +27,8 @@ interface PlanNode {
 }
 
 function scansOf(node: PlanNode, out: { type: string; index?: string }[] = []) {
-  if (node['Relation Name'] === 'audit_events') out.push({ type: node['Node Type'], index: node['Index Name'] })
+  if (node['Relation Name'] === 'audit_events')
+    out.push({ type: node['Node Type'], index: node['Index Name'] })
   for (const p of node.Plans ?? []) scansOf(p, out)
   return out
 }
