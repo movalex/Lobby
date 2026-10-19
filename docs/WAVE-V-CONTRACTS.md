@@ -179,7 +179,10 @@ and a client that only receives pushes nothing ("a receiving client pushes nothi
 `e2e/load/activities.ts`: 200 virtual participants with guest sessions answering a poll and a word cloud in 10 s bursts,
 on the NAS in `draftroom-load-*` throwaway containers with a throwaway Postgres (AGENTS.md NAS rules: no image built, no
 published port, LAN-only, cleaned after). Pass: answer ack p95 < 1 s; at most one `workshop.activity` event per window
-per activity; the report goes into the gate.
+per activity; the report goes into the gate. Reports: `ws1` ee0bab69 (ack p95 45 ms poll / 27 ms words) and, after
+the fix wave's tally and retention changes, d3517d71 (ack p95 19 ms poll / 29 ms words; at most 1 event per window; 0
+wire leaks; pass): docs/PROGRESS.md, wave V. The script runs under its own run id and the NAS lock (`activities-nas.sh`,
+as `scripts/nas-pg-api.sh`).
 
 ## 3. Join codes and the QR card (V2: WS3; contracts `join-codes.ts`)
 
