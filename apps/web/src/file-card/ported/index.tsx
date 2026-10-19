@@ -30,6 +30,7 @@ import { insertFiles } from './insert.ts'
 import { linkContentHandler } from './link-cards.tsx'
 import { disposeLocalPreviews } from './local-previews.ts'
 import { fileItemKind } from './model.ts'
+import { FileHitOpener } from './open-file-hit.ts'
 import { PdfViewerHost } from './PdfViewer.tsx'
 
 const guestOf = (ctx: CanvasFeatureContext): boolean | null => {
@@ -156,6 +157,8 @@ export const feature: CanvasFeature = {
     { id: 'media.faces', layer: 'scene', order: 10, pointer: 'none', component: MediaSceneLayer },
     { id: 'media.gif-chips', layer: 'scene', order: 11, pointer: 'none', component: GifPlayChips },
     { id: 'media.viewer', layer: 'screen', order: 95, pointer: 'none', component: PdfViewerHost },
+    // wave W (WS3): a search hit inside a file (`?file=<ver>&page=<n>`) opens that file's pages at the page
+    { id: 'media.file-hit', layer: 'screen', order: 95, pointer: 'none', component: FileHitOpener },
     // wave S (the foundation): the review viewer's shell; nothing while its switches are off (features/review/flags.ts)
     { id: 'media.review-viewer', layer: 'screen', order: 95, pointer: 'none', component: ReviewViewerHost },
     { id: 'media.gif-player', layer: 'screen', order: 95, pointer: 'none', component: GifPlayerHost },

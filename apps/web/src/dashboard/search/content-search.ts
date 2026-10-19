@@ -4,6 +4,8 @@
 
 import { fromShapeRef } from '@draftroom/canvas-schema/refs'
 import {
+  FILE_HIT_QUERY,
+  parseFileHitObjectId,
   SEARCH_MAX_QUERY_CHARS,
   SEARCH_MIN_TERM_CHARS,
   type SearchHit,
@@ -97,10 +99,13 @@ export const HIT_LINK_FORMAT: HitLinkFormat = NEW_CANVAS_BOARD_PAGE ? 'el' : 'd'
  */
 export function hitHref(
   boardId: string,
-  hit: Pick<SearchHit, 'kind' | 'objectId'>,
+  hit: Pick<SearchHit, 'kind' | 'objectId'> & Partial<Pick<SearchHit, 'file'>>,
   format: HitLinkFormat = HIT_LINK_FORMAT,
 ): string {
   const base = boardPath(boardId)
+  // wave W (WS3): a page of a file's text opens the file at that page (file-card/ported/open-file-hit.ts)
+  const file = fileOfHit(hit)
+  if (file) return fileHitHref(boardId, file.versionId, file.page)
   if (hit.kind === 'comment' || hit.kind === 'resolved-comment')
     return `${base}?${new URLSearchParams({ thread: hit.objectId })}`
   if (hit.objectId.startsWith('shape:')) {
@@ -111,6 +116,35 @@ export function hitHref(
     return `${base}?${new URLSearchParams({ d: shapesDeepLink([hit.objectId]) })}`
   }
   return base
+}
+
+// ---- wave W (WS3, docs/WAVE-W-CONTRACTS.md §5): hits inside files -------------------------------------------------
+
+/**
+ * The file and page of a hit in a file's extracted text: its `file` field (the server's), checked against its object id
+ * (`file:<ver>.p<page>`, contracts parseFileHitObjectId), or null for every other hit (and for a malformed one).
+ */
+export function fileOfHit(
+  hit: Pick<SearchHit, 'kind' | 'objectId'> & Partial<Pick<SearchHit, 'file'>>,
+): { versionId: string; page: number; name: string } | null {
+  if (hit.kind !== 'file' || !hit.file) return null
+  const ref = parseFileHitObjectId(hit.objectId)
+  if (!ref || ref.versionId !== hit.file.versionId || ref.page !== hit.file.page) return null
+  return { versionId: ref.versionId, page: ref.page, name: hit.file.name }
+}
+
+/** `/b/<id>?file=<ver>&page=<n>` (FILE_HIT_QUERY): the board opens the file's pages at that page. */
+export function fileHitHref(boardId: string, versionId: string, page: number): string {
+  return `${boardPath(boardId)}?${new URLSearchParams({
+    [FILE_HIT_QUERY.file]: versionId,
+    [FILE_HIT_QUERY.page]: String(page),
+  })}`
+}
+
+/** "Page 3 · Brief.pdf": where in which file a hit is (a name the server sent, shown as text). */
+export function fileHitLabel(file: { page: number; name: string }): string {
+  const name = file.name.replace(/\s+/g, ' ').trim() || 'File'
+  return `Page ${file.page} · ${name}`
 }
 
 /** "7 matches in 3 boards" (with "400+" when the server stopped counting). */

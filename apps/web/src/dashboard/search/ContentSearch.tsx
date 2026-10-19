@@ -21,6 +21,8 @@ import { type RefObject, useEffect, useId, useRef, useState } from 'react'
 import { api, isApiError } from '../../api/client.ts'
 import { boardPath, type DashboardSection, linkClick } from '../../lib/routing.ts'
 import {
+  fileHitLabel,
+  fileOfHit,
   hitHref,
   isSearchable,
   kindLabel,
@@ -301,6 +303,8 @@ function snippetNodes(parts: readonly SnippetPart[]) {
 
 function HitItem({ boardId, boardTitle, hit }: { boardId: string; boardTitle: string; hit: SearchHit }) {
   const href = hitHref(boardId, hit)
+  // wave W (WS3): a hit inside a file says where: "Page 3 · Brief.pdf"
+  const file = fileOfHit(hit)
   return (
     <li>
       <a
@@ -312,9 +316,13 @@ function HitItem({ boardId, boardTitle, hit }: { boardId: string; boardTitle: st
         data-kind={hit.kind}
         data-object-id={hit.objectId}
       >
-        <span className="dr-csearch__kind" data-kind={hit.kind}>
+        <span
+          className="dr-csearch__kind"
+          data-kind={hit.kind}
+          {...(file ? { 'data-file-page': file.page } : {})}
+        >
           <KindIcon kind={hit.kind} />
-          {kindLabel(hit.kind)}
+          {file ? <span className="dr-csearch__file">{fileHitLabel(file)}</span> : kindLabel(hit.kind)}
         </span>
         <span className="dr-csearch__snippet">
           {hit.cutStart && '…'}
