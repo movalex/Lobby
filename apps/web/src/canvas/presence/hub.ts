@@ -19,7 +19,8 @@
  *    `contracts` frame named PRESENCE_LASER_REV or later: a rev-11 room refuses both (strict); this tab
  *    sends one message at once when that frame comes, so the room knows it reads the laser fields. Whether
  *    the laser is the active tool comes from the canvas API (./laser.ts `laserToolOn`, keyed by the core);
- *    M2-6 (wave M): while the laser is pressed, (1) the hub spaces its messages by the 20 Hz interval itself and
+ *    M2-6 (wave M): while the laser is pressed, (1) the hub spaces its messages by the core's 20 Hz slot (the press's
+ *    first message goes at once: `laserWait`) and
  *    keeps the samples that arrive meanwhile for the next one, so the core never has to coalesce a laser message
  *    (it replaces a pending message by the newest, and the trail of the replaced one was lost), and (2) a laser
  *    held still re-sends its last point every LASER_RESEND_MS (the fields above only), so the others do not
@@ -168,6 +169,12 @@ export class PresenceHub {
   private pendingTrail: PresencePoint[] = []
   /** M2-6: when the hub last handed the core a message (the hub's clock) */
   private lastHandover = Number.NEGATIVE_INFINITY
+  /** this press of the laser has handed the core a message (its first one goes at once: `laserWait`) */
+  private laserHanded = false
+  /** the latest handover carried `t: 'laser'` */
+  private handedLaser = false
+  /** the latest handover ended a laser press (`t: null` after `t: 'laser'`) */
+  private handedRelease = false
   /** M2-6: the timer of a laser message waiting for its 20 Hz slot */
   private parkTimer: unknown = null
   /** M2-6: the timer that re-sends a held laser */
@@ -199,6 +206,7 @@ export class PresenceHub {
             this.lasers.clear()
             this.pendingTrail = []
             this.laserDown = false
+            this.laserHanded = this.handedLaser = this.handedRelease = false
             this.stopLaserTimers()
             for (const sid of [...this.remoteDrags.keys()]) this.endRemoteDrag(sid)
             this.onPresence([], [], m.drags)
@@ -401,6 +409,7 @@ export class PresenceHub {
     // the samples since the last message go with the next one (a selection-tool press never carries `t`)
     const was = this.laserDown
     this.laserDown = this.rev12 && s.button === 'down' && s.pointer !== null && laserToolOn(this.o.core)
+    if (!this.laserDown || !was) this.laserHanded = false
     if (!this.laserDown) this.pendingTrail = []
     else if (was) {
       // a point that was to go as a message's `pointer` and was replaced by a newer sample is a point of the path
@@ -513,8 +522,8 @@ export class PresenceHub {
     // for its slot (the samples it would have carried stay in `pendingTrail`, the pointer and the view are read
     // when it goes), instead of being handed to a core that would hold it and let a newer message replace it.
     if (drag === undefined && this.laserDown) {
-      const wait = this.lastHandover + LASER_SEND_INTERVAL_MS - this.clock()
-      if (wait > LASER_GATE_SLACK_MS) {
+      const wait = this.laserWait()
+      if (wait > 0) {
         if (this.parkTimer === null) {
           const setT = this.o.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms))
           this.parkTimer = setT(() => {
@@ -526,6 +535,28 @@ export class PresenceHub {
       }
     }
     this.handOver(drag)
+  }
+
+  /**
+   * How long a laser message waits before it is handed over (0: at once). The 20 Hz slot is the core's (its cap holds
+   * a message that comes sooner, and a newer one replaces it): when the core sent a message later than the hub
+   * handed it over (a hover move the core held just before the press), a slot counted from the hub's own handover came
+   * too early, and the core held the laser message for up to one more interval (l6-laser: the first laser message
+   * reached the room 50 to 100 ms after the press). So:
+   *  - the press's first message goes at once: it carries no trail, and what it replaces in the core (a hover or
+   *    selection message, superseded by the press anyway) is nothing the others need, except a release of the press
+   *    before, which waits for its slot (the stroke before must end first);
+   *  - every later one goes only when the core would send it at once: never while the core holds a message (it would
+   *    replace that one, and its samples with it), and no sooner than the core's slot (LASER_GATE_SLACK_MS early).
+   * A core without `presenceSlot` (a test's) is timed by the hub's own handovers.
+   */
+  private laserWait(): number {
+    const core = this.o.core as { presenceSlot?: () => { ms: number; held: boolean } }
+    const slot = typeof core.presenceSlot === 'function' ? core.presenceSlot() : null
+    if (!this.laserHanded) return slot?.held && this.handedRelease ? Math.max(1, slot.ms) : 0
+    if (slot?.held) return Math.max(1, slot.ms)
+    const wait = Math.max(this.lastHandover + LASER_SEND_INTERVAL_MS - this.clock(), slot?.ms ?? 0)
+    return wait > LASER_GATE_SLACK_MS ? wait : 0
   }
 
   /** Cancels a parked laser message and the held laser's re-send. */
@@ -580,6 +611,10 @@ export class PresenceHub {
     const laser = this.rev12
     const trail = laser && this.laserDown ? laserTrailOut(this.pendingTrail, this.pointer) : []
     this.pendingTrail = []
+    const tLaser = laser && this.laserDown
+    this.handedRelease = this.handedLaser && !tLaser
+    this.handedLaser = tLaser
+    if (tLaser) this.laserHanded = true
     this.o.core.sendPresence({
       pointer: this.pointer,
       button: this.button,
