@@ -65,17 +65,36 @@ test('K3-3: one Facilitate button: its menu holds the tools, its pill shows only
       })
     })
 
-    await test.step('the menu: Timer, Reactions and raise hand, Voting, by keyboard too; Escape gives the button back', async () => {
+    await test.step('the menu: Timer, Reactions and raise hand, Voting, then the wave V entries, by keyboard too; Escape gives the button back', async () => {
+      // Wave V adds its entries after the built-ins (workshops/ported/facilitate-entries.ts: Poll or word cloud,
+      // Show join code, Breakouts). Each shows once its feature's store has loaded, so the menu is read until all
+      // are there; then the keyboard part runs on a menu that is complete.
+      const ALICE_MENU = [
+        'timer-pill',
+        'reactions-button',
+        'vote-chip',
+        'facilitate-activities',
+        'facilitate-join-code',
+        'breakouts-entry',
+      ]
+      await expect
+        .poll(async () => {
+          await openFacilitate(a.page)
+          const ids = await menuIds(a.page)
+          await closeFacilitate(a.page)
+          return ids
+        })
+        .toEqual(ALICE_MENU)
       await a.page.getByTestId('facilitate-button').focus()
       await a.page.keyboard.press('Enter')
       await expect(a.page.getByTestId('facilitate-menu')).toBeVisible()
-      expect(await menuIds(a.page)).toEqual(['timer-pill', 'reactions-button', 'vote-chip'])
+      expect(await menuIds(a.page)).toEqual(ALICE_MENU)
       await expect(a.page.getByTestId('timer-pill')).toBeFocused()
       await a.page.keyboard.press('ArrowDown')
       await expect(a.page.getByTestId('reactions-button')).toBeFocused()
       await a.page.keyboard.press('ArrowUp')
       await a.page.keyboard.press('ArrowUp') // wraps to the last
-      await expect(a.page.getByTestId('vote-chip')).toBeFocused()
+      await expect(a.page.getByTestId('breakouts-entry')).toBeFocused()
       await a.page.screenshot({ path: testInfo.outputPath('k3-facilitate-menu.png') })
       await a.page.keyboard.press('Escape')
       await expect(a.page.getByTestId('facilitate-menu')).toHaveCount(0)
