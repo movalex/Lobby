@@ -6,8 +6,13 @@ export interface PdfChildRequest {
   input: string
   /** Scratch dir the child writes p<N>.webp into. */
   outDir: string
-  /** Render pages 1..min(pageCount, pages). */
+  /** Render pages firstPage..min(pageCount, pages). */
   pages: number
+  /**
+   * Wave W (WS4, deck import: ops/render-pages.ts): the first page to render, default 1. Previews leave it out (pages
+   * 1..8); a render-pages op asks for its own run (9..38, 39..68, …) at the same width.
+   */
+  firstPage?: number
   pageWidth: number
   maxEdge: number
   quality: number

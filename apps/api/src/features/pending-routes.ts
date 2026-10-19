@@ -61,7 +61,7 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   'POST /api/files/:ver/remove-background': { owner: 'WS2', item: 'W2-1' },
   'GET /api/file-ops/:op': { owner: 'WS2', item: 'W2-2' },
   'POST /api/file-ops/:op/cancel': { owner: 'WS2', item: 'W2-2' },
-  'POST /api/files/:ver/render-pages': { owner: 'WS4', item: 'W4-1' },
+  // WS4 implemented W4-1 (render a deck's pages, features/formats/deck): to ship it hidden, add its key back.
   'GET /api/workspaces/:wid/admin/members': { owner: 'WS5', item: 'W5-1' },
   'GET /api/workspaces/:wid/admin/invitations': { owner: 'WS5', item: 'W5-1' },
   'GET /api/workspaces/:wid/admin/storage/by-board': { owner: 'WS5', item: 'W5-2' },

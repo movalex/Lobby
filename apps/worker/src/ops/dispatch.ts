@@ -6,6 +6,7 @@
 import type { WorkerOpErrorCode, WorkerOpKind } from '@draftroom/contracts'
 import type { WorkerApi } from '../api-client.ts'
 import type { ClaimedOp, OpLease, WorkerOpsApi } from './client.ts'
+import { renderPagesRunner } from './render-pages.ts'
 
 export interface OpRunContext {
   op: ClaimedOp
@@ -47,5 +48,9 @@ export interface OpRunner {
 export const OP_RUNNERS: Readonly<Partial<Record<WorkerOpKind, OpRunner>>> = {
   // 'remove-bg': removeBgRunner,        WS2 (ops/remove-bg.ts, the model in a child: ops/bg-child.ts)
   // 'extract-text': extractTextRunner,  WS3 (ops/extract-text.ts, ops/pdf-text-child.ts)
-  // 'render-pages': renderPagesRunner,  WS4 (ops/render-pages.ts, reusing pdf-child.ts)
+  // WS4 (ops/render-pages.ts, reusing pdf-child.ts); a getter: render-pages.ts imports this module (OpFailure), so
+  // whichever of the two loads first, the binding is read only once both have run
+  get 'render-pages'() {
+    return renderPagesRunner
+  },
 }

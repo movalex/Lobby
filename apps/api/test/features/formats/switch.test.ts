@@ -13,6 +13,7 @@ import {
 import Fastify, { type FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
 import { toErrorResponse } from '../../../src/errors.ts'
+import type { FeatureContext } from '../../../src/features/context.ts'
 import { registerFormats } from '../../../src/features/formats/index.ts'
 import { formatsOn, formatsRoute, formatsStub, requireFormats } from '../../../src/features/formats/switch.ts'
 import { PENDING_ROUTES } from '../../../src/features/pending-routes.ts'
@@ -39,7 +40,9 @@ const ROUTES: [string, FormatSwitch[]][] = [
 ]
 
 const fill = (pattern: string) => pattern.replace(/:\w+/g, 'x1')
-const switchesOnly = (formats: FormatSwitches) => ({ config: { formats } })
+const switchesOnly = (formats: FormatSwitches) => ({ config: { formats } }) as unknown as FeatureContext
+/** The routes still stubbed (pending in the real app); a landed one is held to its gate here and tested by its owner. */
+const STUBBED = ROUTES.filter(([key]) => Object.hasOwn(PENDING_ROUTES, key))
 
 let app: FastifyInstance | null = null
 let api: TestApi | null = null
@@ -133,7 +136,7 @@ describe('the wave W kill switches', () => {
     await registerWorkspaceAdmin(a, switchesOnly(ALL_ON), {})
     await a.ready()
     app = a
-    for (const [key] of ROUTES) {
+    for (const [key] of STUBBED) {
       const [method = 'GET', pattern = ''] = key.split(' ') as ['GET' | 'POST', string]
       const res = await a.inject({ method, url: fill(pattern) })
       expect(res.statusCode, key).toBe(501)
@@ -153,7 +156,7 @@ describe('the wave W kill switches', () => {
     expect((await a.inject({ method: 'GET', url: '/q' })).json()).toEqual({ ok: 2 })
   })
 
-  it('in the real app with every switch on, every wave W route is still pending: not registered, an unknown route', async () => {
+  it('in the real app with every switch on, every wave W route still pending is not registered: an unknown route', async () => {
     api = await createTestApi({
       env: {
         DRAFTROOM_DOC_CARDS: 'on',
@@ -165,9 +168,8 @@ describe('the wave W kill switches', () => {
     })
     expect(api.config.formats).toEqual(ALL_ON)
     const alice = await api.login('alice')
-    for (const [key] of ROUTES) {
+    for (const [key] of STUBBED) {
       const [method = 'GET', pattern = ''] = key.split(' ') as ['GET' | 'POST', string]
-      expect(Object.hasOwn(PENDING_ROUTES, key), key).toBe(true)
       expect(api.app.hasRoute({ method, url: pattern }), key).toBe(false)
       const res = await alice.req(method, fill(pattern), method === 'GET' ? undefined : {})
       expect(res.statusCode, key).toBe(404)

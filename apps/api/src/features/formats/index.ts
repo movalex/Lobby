@@ -3,15 +3,15 @@
 // route of its own (it lives in features/search and the worker ops), and doc cards (WS1) none at all.
 
 import type { FastifyInstance } from 'fastify'
+import type { FeatureContext } from '../context.ts'
 import { PENDING_ROUTES, type PendingRoute } from '../pending-routes.ts'
 import { registerDeckImport } from './deck/index.ts'
 import { registerFileOps } from './ops/index.ts'
 import { registerRemoveBackground } from './remove-bg/index.ts'
-import type { FormatSwitchSource } from './switch.ts'
 
 export async function registerFormats(
   app: FastifyInstance,
-  ctx: FormatSwitchSource,
+  ctx: FeatureContext,
   pending: Readonly<Record<string, PendingRoute>> = PENDING_ROUTES,
 ): Promise<void> {
   await registerRemoveBackground(app, ctx, pending)
