@@ -87,12 +87,21 @@ export class WorkerApiError extends Error {
   readonly status: number | null
   /** Set for a claim whose body was invalid but still named a valid version (so it can be handed back). */
   readonly versionId: string | null
-  constructor(kind: ApiErrorKind, status: number | null, detail: string, versionId: string | null = null) {
+  /** The API's error code when it sent one (`QUOTA_EXCEEDED`), else ''. Wave W: an ops refusal ends the op with it. */
+  readonly code: string
+  constructor(
+    kind: ApiErrorKind,
+    status: number | null,
+    detail: string,
+    versionId: string | null = null,
+    code = '',
+  ) {
     super(detail)
     this.name = 'WorkerApiError'
     this.kind = kind
     this.status = status
     this.versionId = versionId
+    this.code = code
   }
 }
 
@@ -286,6 +295,8 @@ export function createApiCall(o: WorkerApiOptions): ApiCall {
         kindForStatus(res.status, jobRoute, code),
         res.status,
         `HTTP ${res.status}${code ? ` ${code}` : ''}`,
+        null,
+        code,
       )
     }
     try {

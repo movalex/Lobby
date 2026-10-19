@@ -9,6 +9,7 @@
 
 import type { WorkerOpKind, WorkerOpOutputInput, WorkerOpTextInput } from '@draftroom/contracts'
 import type { Queryable } from '@draftroom/db'
+import { removeBgKind } from '../features/formats/remove-bg/kind.ts'
 
 /** An op under its lease (the row locked FOR UPDATE inside the caller's transaction). */
 export interface LockedOp {
@@ -91,7 +92,7 @@ export const stubKind = (kind: WorkerOpKind): OpKindHandler => ({
 
 /** Every kind's handler (each workstream swaps its stub for its own, one line). */
 export const OP_KINDS: Readonly<Record<WorkerOpKind, OpKindHandler>> = {
-  'remove-bg': stubKind('remove-bg'), // WS2: features/formats/remove-bg/kind.ts
+  'remove-bg': removeBgKind, // WS2: features/formats/remove-bg/kind.ts
   'extract-text': stubKind('extract-text'), // WS3: features/search/file-text-kind.ts
   'render-pages': stubKind('render-pages'), // WS4: features/formats/deck/kind.ts
 }

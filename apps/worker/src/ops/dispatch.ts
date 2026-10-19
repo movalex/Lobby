@@ -6,6 +6,7 @@
 import type { WorkerOpErrorCode, WorkerOpKind } from '@draftroom/contracts'
 import type { WorkerApi } from '../api-client.ts'
 import type { ClaimedOp, OpLease, WorkerOpsApi } from './client.ts'
+import { removeBgRunner } from './remove-bg.ts'
 
 export interface OpRunContext {
   op: ClaimedOp
@@ -43,9 +44,9 @@ export interface OpRunner {
   run(ctx: OpRunContext): Promise<OpRunResult>
 }
 
-/** The runners this worker build has (none in the foundation). */
+/** The runners this worker build has. */
 export const OP_RUNNERS: Readonly<Partial<Record<WorkerOpKind, OpRunner>>> = {
-  // 'remove-bg': removeBgRunner,        WS2 (ops/remove-bg.ts, the model in a child: ops/bg-child.ts)
+  'remove-bg': removeBgRunner, // WS2 (ops/remove-bg.ts, the model in a child: ops/bg-child.ts)
   // 'extract-text': extractTextRunner,  WS3 (ops/extract-text.ts, ops/pdf-text-child.ts)
   // 'render-pages': renderPagesRunner,  WS4 (ops/render-pages.ts, reusing pdf-child.ts)
 }

@@ -387,6 +387,11 @@ export const FileOpState = z.object({
   sourceVersionId: VersionIdLike,
   /** remove-bg: the new version once done */
   resultVersionId: VersionIdLike.nullable(),
+  /**
+   * remove-bg (WS2): the new version's asset once done (a NEW asset, so the web can point the image at it:
+   * `customData.lobby.file.assetId`). Optional: additive to the foundation's shape.
+   */
+  resultAssetId: prefixed('ast').nullable().optional(),
   /** render-pages: the pages made available (the source's `page` derivatives now cover 1..this) */
   pagesReady: z.number().int().min(0).nullable(),
   errorCode: WorkerOpErrorCode.nullable(),

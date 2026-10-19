@@ -11,6 +11,7 @@
 
 import { mkdtempSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { WORKER_OP_ERROR_CODES, type WorkerOpErrorCode } from '@draftroom/contracts'
 import { type WorkerApi, WorkerApiError } from '../api-client.ts'
 import { WORKER } from '../config.ts'
 import { TMP_PREFIX } from '../remote-job.ts'
@@ -41,6 +42,18 @@ const beatEvery = (leaseMs: number, override?: number) =>
   override ?? Math.max(WORKER.heartbeatMinMs, Math.min(WORKER.heartbeatMaxMs, Math.floor(leaseMs / 4)))
 
 const isLease = (e: unknown) => e instanceof WorkerApiError && e.kind === 'lease'
+
+/**
+ * WS2: the api refused a lease-bound call (complete, output) with an op code users know (a remove-bg complete that
+ * found no quota room left: 409 QUOTA_EXCEEDED; a board no longer active: 409 CANCELLED): the op fails with that code
+ * at once, rather than retrying work the api will refuse again.
+ */
+const refusedWith = (e: unknown): OpFailure | null =>
+  e instanceof WorkerApiError &&
+  e.kind === 'rejected' &&
+  (WORKER_OP_ERROR_CODES as readonly string[]).includes(e.code)
+    ? new OpFailure(e.code as WorkerOpErrorCode)
+    : null
 
 /** Claims one op for `capabilities` and runs it to the end. */
 export async function runOneOp(o: RunOpOptions): Promise<RunOpOutcome> {
@@ -85,7 +98,7 @@ export async function runClaimedOp(op: ClaimedOp, o: RunOpOptions): Promise<RunO
       await o.ops.fail(lease, 'INTERNAL', { release: true }).catch(() => {})
       return { kind: 'released', opId: op.id }
     }
-    const failure = e instanceof OpFailure ? e : new OpFailure('INTERNAL', true)
+    const failure = e instanceof OpFailure ? e : (refusedWith(e) ?? new OpFailure('INTERNAL', true))
     o.log(`${op.id} failed (${failure.code}${failure.retry ? ', will retry' : ''})`)
     await o.ops.fail(lease, failure.code, failure.retry ? { retry: true } : {}).catch(() => {})
     return { kind: 'failed', opId: op.id, code: failure.code }

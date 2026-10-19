@@ -112,7 +112,16 @@ const WAVE_V_ITEM: Record<string, string> = { WS1: 'V1', WS3: 'V2', WS4: 'V3' }
  * (WS5, W5-*). Each owner deletes its keys here and in PENDING_ROUTES in the change that implements them; the refusal
  * matrix then holds them to their guard rows, and features/formats/switch.test.ts to their kill switch.
  */
-const WAVE_W_ROUTES: string[] = [...Object.values(FORMAT_ROUTE_KEYS), ...Object.values(ADMIN_ROUTE_KEYS)]
+const WAVE_W_LANDED: string[] = [
+  // WS2 (W2-1, W2-2): features/formats/remove-bg and ops
+  FORMAT_ROUTE_KEYS.removeBackground,
+  FORMAT_ROUTE_KEYS.opState,
+  FORMAT_ROUTE_KEYS.opCancel,
+]
+const WAVE_W_ROUTES: string[] = [
+  ...Object.values(FORMAT_ROUTE_KEYS),
+  ...Object.values(ADMIN_ROUTE_KEYS),
+].filter((k) => !WAVE_W_LANDED.includes(k))
 /** Every wave W route, pending or landed (the guard rows hold for all). */
 const WAVE_W_ALL: string[] = [...Object.values(FORMAT_ROUTE_KEYS), ...Object.values(ADMIN_ROUTE_KEYS)]
 const WAVE_W_OWNERS: Record<string, string> = {
