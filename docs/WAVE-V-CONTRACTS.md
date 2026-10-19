@@ -445,7 +445,25 @@ Pinned by: `packages/contracts/src/{wave-v.test.ts, wave-m.test.ts}`, `packages/
 auth.test.ts, open-signin.test.ts, migrations.pg.test.ts}`, `apps/api/test/features/{live/switch.test.ts,
 pending-routes.test.ts, guests/refusals.test.ts, domain-access/creation-matrix.test.ts, board-open/open-state.test.ts}`,
 `apps/web/src/features/wave-v-stubs.test.ts`, `apps/web/src/{lib/routing.test.ts, canvas/overlay/top-centre.test.ts}`,
-`scripts/smoke/render-yaml.test.mjs`, `pnpm licence:check`. The foundation's report gives the counts.
+`scripts/smoke/render-yaml.test.mjs`, `pnpm licence:check`.
+
+Run on the foundation (the Windows PC and the NAS, 2026-10-18/19; tests on c01b57e7, the same code as the head):
+
+| Check | Result |
+|---|---|
+| `pnpm -r typecheck` | 18 of 18 workspace projects, pass |
+| `biome check .` (local) | 0 errors; the 4 older warnings in sync tests this branch does not touch (as on main) |
+| vitest `packages`, `dev-assets`, `scripts` | 79 files, 2,088 passed (1 skipped) |
+| vitest contracts / canvas-schema / db (PGlite) | 23 files / 216; 16 / 247; 17 / 123: all pass |
+| vitest `sync` | 140 files, 883 passed (9 skipped) |
+| vitest `web` (root config) | 501 files, 5,895 passed, 1 failed: `timeline.test.ts` "draws an svg over the frame", which fails on main too (date-dependent fixture) |
+| vitest `api` (PGlite) | 2,212 passed and 65 timed out on a loaded machine (5 s test / 10 s hook limits); the 57 files rerun with 4 workers: 622 / 622 pass |
+| real Postgres 18 on the NAS (`nas-pg-api.sh --only db`, `--only api`) | db 17 files / 123 passed; api 265 files / 2,436 passed (1 skipped), `migrations.pg` included |
+| `node --test scripts/smoke/render-yaml.test.mjs` | 10 / 10 |
+| `pnpm licence:check` | PASS (FAIL 0; the web's tree 302 packages, qrcode-generator MIT) |
+
+Not run by the foundation: e2e (nothing user-visible changed: every switch is off and every route pending),
+`probe:browser`, `test:arrows` (no engine or sync change).
 
 The gate (WS5, at integration): `pnpm lint`, `pnpm typecheck`, `pnpm test`, the real-Postgres api and db suites on the
 NAS (`bash scripts/nas-pg-api.sh <sha> --only api|db`), `probe:browser`, `test:arrows`, the whole e2e on chromium twice
