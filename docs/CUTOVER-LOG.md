@@ -544,3 +544,12 @@ on the sync disk (§6).
   - The rebuilt worker reports `remove-bg:u2netp@1, extract-text@1, render-pages@1`.
   - `98b7724`: web switch on, palette command released, render.yaml set. `DRAFTROOM_REMOVE_BACKGROUND=on`; api `dep-dbb6c8ks728c73fffmug` and web `dep-dbb6clrncjis73dkhlbg`. `formats` is now all true.
   - Live check, the owner on a new board: a dropped 320×240 PNG → `POST /api/files/:ver/remove-background` 202 → op `done` with a new result version in about 10 s on `nas-1`. Cleanup: the board in Trash.
+- **2026-10-19 22:43-22:46Z, the post-V/W cleanup deployed** (merge `84c50a1`; no migration; sync and worker unchanged).
+  - Deploys: api `dep-dbb9q1uq1p3s73bq1gng`, then web `dep-dbb9qiu7bikc73focrtg`.
+  - The cleanup:
+    - breakout memberships now end when someone loses access to the board;
+    - the link-preview deadline is deterministic;
+    - the laser's first send is earlier;
+    - worker_ops retention is 30 days, keeping the backfill skips.
+  - After: `/healthz/deep` 200; `/version.json` `84c50a102cc0`; drift 0; live smoke 41/0; `live` and `formats` all true.
+- **2026-10-19 21:44Z, theater Lobby:** the web was rebuilt from its own deployed sources with only `nginx.conf` changed (`a5c237e`). The access log now records the path without the query string, so the `/connect` ticket no longer reaches the logs. Recreating the container also cleared the old logs. Theater smoke passes. The theater's api, sync and worker are untouched, still at their build from 12 days earlier.
