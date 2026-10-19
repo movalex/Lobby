@@ -2,7 +2,9 @@
 //
 //   the claimed op's source (an image the api checked) → download it with the transfer.ts caps (its exact size)
 //   → `node --max-old-space-size=256 bg-child.ts` (a request JSON on stdin, the minimal env, a 45 s SIGKILL, 64 KB of
-//     stdout): decode, the model, the mask as alpha, a PNG RGBA written to this op's temp dir
+//     stdout, and on Linux a REMOVE_BG_LIMITS.childRssMb resident-memory SIGKILL, run.ts): decode, the model, the mask
+//     as alpha, a PNG RGBA written to this op's temp dir. Killed over its memory cap, or dead without an answer:
+//     FILE_TOO_COMPLEX, never retried (the same rule as extract-text and render-pages)
 //   → re-read that PNG here (the child parsed hostile input, so its output is checked, never trusted)
 //   → reserve one `original` output, PUT the bytes, and hand complete `RemoveBgResult {sha256, width, height, bytes}`.
 //
@@ -20,7 +22,7 @@ import { fileURLToPath } from 'node:url'
 import { REMOVE_BG_LIMITS, type WorkerOpErrorCode } from '@draftroom/contracts'
 import { WORKER } from '../config.ts'
 import { lockedSharp } from '../image.ts'
-import { run } from '../run.ts'
+import { type RssReader, run } from '../run.ts'
 import { downloadOriginal, TransferError, uploadBlob } from '../transfer.ts'
 import { BG_MODEL } from './bg-model.ts'
 // Types only: dispatch.ts registers this runner (its OP_RUNNERS imports this module), so a value import back would be
@@ -62,6 +64,10 @@ export interface RemoveBgOptions {
   /** test hooks: another child entry (one that hangs, crashes or runs out of heap), its heap and time budget */
   childPath?: string
   heapMb?: number
+  /** the child's resident-memory cap in MB (default REMOVE_BG_LIMITS.childRssMb; Linux only, run.ts) */
+  rssMb?: number
+  /** test hook: run.ts's resident-set reader (lets the memory kill run off Linux too) */
+  readRss?: RssReader | null
   timeoutMs?: number
   downloadStallMs?: number
   downloadTimeoutMs?: number
@@ -141,6 +147,7 @@ export function createRemoveBgRunner(o: RemoveBgOptions = {}): OpRunner {
         maxOutputEdge: REMOVE_BG_LIMITS.maxOutputEdge,
         sharpTimeoutSeconds: 20,
       }
+      const rssMb = o.rssMb ?? REMOVE_BG_LIMITS.childRssMb
       const r = await run(
         process.execPath,
         [`--max-old-space-size=${o.heapMb ?? REMOVE_BG_LIMITS.childHeapMb}`, o.childPath ?? BG_CHILD],
@@ -149,18 +156,27 @@ export function createRemoveBgRunner(o: RemoveBgOptions = {}): OpRunner {
           maxStdoutBytes: 64 * 1024,
           stdin: JSON.stringify(req),
           signal,
+          maxRssBytes: rssMb * 1024 * 1024,
+          ...(o.readRss !== undefined ? { readRss: o.readRss } : {}),
         },
       )
       if (r.aborted) throw new Error('aborted')
       if (r.timedOut) throw await failure('TIMEOUT')
+      // a spawn error is this machine (the executable, a pid limit), not the file: tried again
       if (r.spawnError) throw await failure('INTERNAL', true)
+      // Review M3/m8, the same rule for every op kind: a child killed over its resident-memory cap, or one that died
+      // with no answer (a native abort, a V8 heap out of memory, the kernel's OOM killer), is FILE_TOO_COMPLEX, final:
+      // the same file would do it again.
+      if (r.memoryExceeded) {
+        ctx.log(`${op.id} remove-bg child over its ${rssMb} MB memory cap, killed`)
+        throw await failure('FILE_TOO_COMPLEX')
+      }
       let res: BgChildResponse
       try {
         res = JSON.parse(r.stdout.toString('utf8')) as BgChildResponse
       } catch {
-        // no answer: the child died (a native abort, a V8 heap out of memory, a kill from outside). The same file
-        // would do it again, so no retry.
-        throw await failure('REMOVE_BG_FAILED')
+        ctx.log(`${op.id} remove-bg child gave no answer (exit ${r.code ?? r.signal})`)
+        throw await failure('FILE_TOO_COMPLEX')
       }
       if (!res || typeof res !== 'object') throw await failure('REMOVE_BG_FAILED')
       if (!res.ok) throw await failure(childFailureCode(res.reason))

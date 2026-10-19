@@ -1,6 +1,7 @@
 // Preview worker process (milestone 3): `node src/worker.ts`. An HTTP client of the API's /api/worker/*
 // routes (docs/M3-STORAGE-CONTRACTS.md §4-§5): it holds only DRAFTROOM_WORKER_TOKEN, no database or
 // storage credentials, and runs the same against the local api (fs mode), the Render api or from the NAS.
+import { FILE_TEXT_LIMITS, REMOVE_BG_LIMITS } from '@draftroom/contracts'
 import { createApiCall, createWorkerApi } from './api-client.ts'
 import { WORKER } from './config.ts'
 import { loadWorkerEnv } from './env.ts'
@@ -11,8 +12,10 @@ import { reportedCapabilities } from './ops/capabilities.ts'
 import { createWorkerOpsApi } from './ops/client.ts'
 import { OP_RUNNERS } from './ops/dispatch.ts'
 import { createExtractTextRunner } from './ops/extract-text.ts'
+import { createOfficePdfCache } from './ops/office-pdf-cache.ts'
 import { configureRenderPages } from './ops/render-pages.ts'
 import { startRemoteWorker } from './remote-loop.ts'
+import { rssCapEnforced } from './run.ts'
 
 const log = (line: string) => console.log(`[worker] ${line}`)
 
@@ -48,8 +51,17 @@ const apiOptions = {
 const api = createWorkerApi(apiOptions)
 // Wave W: the op kinds this worker reports (a runner, WORKER_OPS, and for remove-bg a model file that passes its
 // pinned sha256; ops/capabilities.ts). None reported: the worker never calls /api/worker/ops/*.
-// WS4: render-pages converts an Office deck with the previews' converter and renders with their pdf child's heap
-configureRenderPages({ office, officeTimeoutMs: cfg.office.timeoutMs, pdfHeapMb: cfg.pdfHeapMb })
+// Review M2: an Office file's converted PDF, kept a short while per version for its render-pages runs and its
+// extract-text op (ops/office-pdf-cache.ts), under WORKER_TMP_DIR (a stopped process's is swept at start-up)
+const officePdfs = createOfficePdfCache({ root: cfg.tmpDir })
+// WS4: render-pages converts an Office deck with the previews' converter and renders with their pdf child's caps
+configureRenderPages({
+  office,
+  officeTimeoutMs: cfg.office.timeoutMs,
+  pdfHeapMb: cfg.pdfHeapMb,
+  pdfRssMb: cfg.pdfRssMb,
+  pdfCache: officePdfs,
+})
 const opsReport = reportedCapabilities({
   enabled: cfg.ops,
   runners: OP_RUNNERS,
@@ -60,7 +72,7 @@ const worker = startRemoteWorker({
     api: createWorkerOpsApi(createApiCall(apiOptions)),
     capabilities: opsReport.capabilities,
     // wave W (WS3): extract-text reads Office documents through the same converter as previews (the sidecar)
-    runners: { ...OP_RUNNERS, 'extract-text': createExtractTextRunner({ office }) },
+    runners: { ...OP_RUNNERS, 'extract-text': createExtractTextRunner({ office, pdfCache: officePdfs }) },
   },
   api,
   concurrency: cfg.concurrency,
@@ -71,6 +83,7 @@ const worker = startRemoteWorker({
     ffmpegPath: cfg.ffmpegPath,
     ffprobePath: cfg.ffprobePath,
     pdfHeapMb: cfg.pdfHeapMb,
+    pdfRssMb: cfg.pdfRssMb,
     office,
     officeTimeoutMs: cfg.office.timeoutMs,
   },
@@ -78,7 +91,9 @@ const worker = startRemoteWorker({
 })
 // The origin only: DRAFTROOM_API_URL is refused with credentials, a path or a query (env.ts).
 log(`started (api: ${cfg.apiUrl}, poll ${cfg.pollMs} ms)`)
-log(`id ${cfg.workerId}, concurrency ${cfg.concurrency}, pdf heap ${cfg.pdfHeapMb} MB`)
+log(
+  `id ${cfg.workerId}, concurrency ${cfg.concurrency}, pdf heap ${cfg.pdfHeapMb} MB, child memory caps ${rssCapEnforced ? `enforced (pdf ${cfg.pdfRssMb} MB, pdf-text ${FILE_TEXT_LIMITS.childRssMb} MB, remove-bg ${REMOVE_BG_LIMITS.childRssMb} MB)` : 'not enforced on this platform (Linux only): the heap flags and any container limit are the only caps'}`,
+)
 if (staleStages) {
   log(
     `removed ${staleStages} leftover Office staging director${staleStages === 1 ? 'y' : 'ies'} (a worker stopped mid-conversion)`,
@@ -119,5 +134,6 @@ if (process.send) {
 }
 
 await worker.done
+await officePdfs.close()
 log('stopped')
 if (process.connected) process.disconnect()

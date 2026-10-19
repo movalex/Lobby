@@ -45,6 +45,8 @@ export interface WorkerEnv {
   pollMs: number
   pollMaxMs: number
   pdfHeapMb: number
+  /** WORKER_PDF_RSS_MB: the PDF child's resident-memory cap (Linux only, run.ts); default PREVIEW.pdfChildRssMb. */
+  pdfRssMb: number
   shutdownGraceMs: number
   tmpDir: string
   ffmpegPath: string | undefined
@@ -219,6 +221,7 @@ export function loadWorkerEnv(env: Env = process.env): WorkerEnv {
     pollMs,
     pollMaxMs: int(env, 'WORKER_POLL_MAX_MS', Math.max(pollMs, WORKER.pollMaxMs), pollMs, 600_000),
     pdfHeapMb: int(env, 'WORKER_PDF_HEAP_MB', PREVIEW.pdfChildHeapMb, 64, 16_384),
+    pdfRssMb: int(env, 'WORKER_PDF_RSS_MB', PREVIEW.pdfChildRssMb, 128, 16_384),
     shutdownGraceMs: int(env, 'WORKER_SHUTDOWN_GRACE_MS', WORKER.shutdownGraceMs, 0, 600_000),
     tmpDir: tmpRaw ? resolve(tmpRaw) : tmpdir(),
     ffmpegPath: read(env, 'FFMPEG_PATH'),

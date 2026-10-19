@@ -2,26 +2,31 @@
 // real pdf child, with a fake ops api and a local server standing in for the blob store (the original's GET, the
 // pages' PUTs). Pages from..to come out at the previews' width as webp, a page the api already has is skipped, an
 // Office deck goes through the converter, and every failure is a code users may see.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { WORKER_CAPABILITIES } from '@draftroom/contracts'
+import { maxKindBytes } from '@draftroom/dev-assets'
 import { PDFDocument, StandardFonts } from 'pdf-lib'
 import sharp from 'sharp'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { createWorkerApi, WorkerApiError } from '../src/api-client.ts'
 import { PREVIEW } from '../src/config.ts'
+import { PreviewError } from '../src/errors.ts'
 import type { OfficeConverter } from '../src/office.ts'
 import type { ClaimedOp, OpLease, WorkerOpsApi } from '../src/ops/client.ts'
 import { OP_RUNNERS, OpFailure, type OpRunContext } from '../src/ops/dispatch.ts'
+import { createExtractTextRunner } from '../src/ops/extract-text.ts'
 import { runClaimedOp } from '../src/ops/loop.ts'
+import { createOfficePdfCache, OFFICE_PDF_CACHE, type OfficePdfCache } from '../src/ops/office-pdf-cache.ts'
 import { createRenderPagesRunner, PAGE_EXISTS, type RenderPagesDeps } from '../src/ops/render-pages.ts'
 import { ensureFixtures, fixturePath } from './helpers.ts'
 
 const HANG_CHILD = fileURLToPath(new URL('./children/hang-child.ts', import.meta.url))
+const CRASH_CHILD = fileURLToPath(new URL('./children/crash-child.ts', import.meta.url))
 
 /** A PDF of `pages` pages, each saying its number; page sizes alternate landscape and portrait. */
 async function deckPdf(pages: number): Promise<Buffer> {
@@ -40,11 +45,13 @@ let server: Server
 let origin = ''
 let original: Buffer | null = Buffer.alloc(0)
 const puts = new Map<string, Buffer>()
+let originalGets = 0
 
 beforeAll(async () => {
   await ensureFixtures()
   server = createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/original') {
+      originalGets++
       if (!original) {
         res.writeHead(404).end()
         return
@@ -155,18 +162,25 @@ function opOf(params: Record<string, unknown>, source: Partial<ClaimedOp['source
 
 async function runIt(
   params: Record<string, unknown>,
-  o: { exists?: number[]; deps?: RenderPagesDeps; source?: Partial<ClaimedOp['source']> } = {},
+  o: {
+    exists?: number[]
+    deps?: RenderPagesDeps
+    source?: Partial<ClaimedOp['source']>
+    versionId?: string
+    logs?: string[]
+  } = {},
 ) {
   const ops = fakeOps(o.exists)
   const runner = createRenderPagesRunner(() => o.deps ?? {})
+  const op = opOf(params, o.source)
   const ctx: OpRunContext = {
-    op: opOf(params, o.source),
+    op: o.versionId ? { ...op, sourceVersionId: o.versionId } : op,
     lease: { opId: 'wop_0123456789abcdefghij', attempt: 1 },
     ops: ops.api,
     api: workerApi(),
     tmpDir: tmp(),
     signal: new AbortController().signal,
-    log: () => {},
+    log: (l) => o.logs?.push(l),
   }
   return { ops, out: runner.run(ctx) }
 }
@@ -288,6 +302,40 @@ describe('render-pages', () => {
     expect(await failureOf(out)).toEqual({ code: 'TIMEOUT', retry: false })
   }, 20_000)
 
+  it('a child that dies with no answer is FILE_TOO_COMPLEX and never retried (review m8)', async () => {
+    original = await deckPdf(12)
+    const logs: string[] = []
+    const { out } = await runIt({ from: 9, to: 12 }, { deps: { pdfChildPath: CRASH_CHILD }, logs })
+    expect(await failureOf(out)).toEqual({ code: 'FILE_TOO_COMPLEX', retry: false })
+    expect(logs).toEqual(['wop_0123456789abcdefghij pdf child gave no answer (exit 3)'])
+  }, 20_000)
+
+  it('a child over its resident-memory cap is killed: FILE_TOO_COMPLEX, never retried (the reader injected: any platform)', async () => {
+    original = await deckPdf(12)
+    const { out } = await runIt(
+      { from: 9, to: 12 },
+      { deps: { pdfChildPath: HANG_CHILD, readRss: () => 2048 * 1024 * 1024 } },
+    )
+    expect(await failureOf(out)).toEqual({ code: 'FILE_TOO_COMPLEX', retry: false })
+  }, 20_000)
+
+  it('refuses a size no deck may have before downloading a byte (review nit 7)', async () => {
+    original = await deckPdf(12)
+    const before = originalGets
+    for (const [sizeBytes, code] of [
+      [maxKindBytes('pdf') + 1, 'SOURCE_UNSUPPORTED'],
+      [0, 'RENDER_PAGES_FAILED'],
+    ] as const)
+      expect(await failureOf((await runIt({ from: 9, to: 12 }, { source: { sizeBytes } })).out)).toEqual({
+        code,
+        retry: false,
+      })
+    expect(originalGets).toBe(before)
+    // a deck of a normal size is downloaded once
+    await (await runIt({ from: 9, to: 9 })).out
+    expect(originalGets).toBe(before + 1)
+  })
+
   it('through the op loop: the run completes with its outputs and result', async () => {
     original = await deckPdf(9)
     const ops = fakeOps()
@@ -307,4 +355,115 @@ describe('render-pages', () => {
       { outputs: ['wpo_out0000000001'], result: { pageCount: 9, rendered: [9] } },
     ])
   })
+})
+
+describe('one Office conversion per deck (review M2: the worker cache of the converted PDF)', () => {
+  const VER = 'ver_0123456789abcdefghij'
+  /** A converter that counts its calls; `fail` makes the next ones throw OFFICE_INVALID. */
+  function countingConverter(pages = 11, o: { delayMs?: number } = {}) {
+    const state = { calls: 0, fail: 0 }
+    const office: OfficeConverter = {
+      describe: 'counting converter',
+      async convert(_input, _format, outDir) {
+        state.calls++
+        if (o.delayMs) await new Promise((r) => setTimeout(r, o.delayMs))
+        if (state.fail > 0) {
+          state.fail--
+          throw new PreviewError('OFFICE_INVALID', 'conversion failed')
+        }
+        const pdf = join(outDir, 'converted.pdf')
+        writeFileSync(pdf, await deckPdf(pages))
+        return pdf
+      },
+    }
+    return { office, state }
+  }
+  const caches: OfficePdfCache[] = []
+  afterEach(async () => {
+    for (const c of caches.splice(0)) await c.close()
+  })
+  const cacheOf = (now?: () => number) => {
+    const c = createOfficePdfCache({ root: tmp(), ...(now ? { now } : {}) })
+    caches.push(c)
+    return c
+  }
+
+  /** The extract-text runner over the same served original, with the same converter and cache. */
+  async function extractText(deps: RenderPagesDeps, versionId = VER) {
+    const ops = fakeOps()
+    const op: ClaimedOp = {
+      ...opOf({ maxPages: 300 }),
+      kind: 'extract-text',
+      capability: WORKER_CAPABILITIES['extract-text'],
+      sourceVersionId: versionId,
+    }
+    return createExtractTextRunner({
+      ...(deps.office ? { office: deps.office } : {}),
+      ...(deps.pdfCache ? { pdfCache: deps.pdfCache } : {}),
+    }).run({
+      op,
+      lease: { opId: op.id, attempt: 1 },
+      ops: ops.api,
+      api: workerApi(),
+      tmpDir: tmp(),
+      signal: new AbortController().signal,
+      log: () => {},
+    })
+  }
+
+  it('the runs of one deck and its extract-text op convert it once, also when two start together', async () => {
+    original = readFileSync(fixturePath('slides.pptx'))
+    const { office, state } = countingConverter(11, { delayMs: 200 })
+    const deps: RenderPagesDeps = { office, pdfCache: cacheOf() }
+    const logs: string[] = []
+    // two runs at once: the second waits for the first one's conversion
+    const [a, b] = await Promise.all([
+      (await runIt({ from: 9, to: 10 }, { deps, versionId: VER, logs })).out,
+      (await runIt({ from: 11, to: 11 }, { deps, versionId: VER, logs })).out,
+    ])
+    expect(a.result).toEqual({ pageCount: 11, rendered: [9, 10] })
+    expect(b.result).toEqual({ pageCount: 11, rendered: [11] })
+    // a third run later, and the deck's extract-text op
+    expect((await (await runIt({ from: 9, to: 9 }, { deps, versionId: VER, logs })).out).result).toEqual({
+      pageCount: 11,
+      rendered: [9],
+    })
+    expect((await extractText(deps)).result).toMatchObject({ pages: 11 })
+    expect(state.calls).toBe(1)
+    expect(logs.filter((l) => l === 'wop_0123456789abcdefghij reused the converted PDF')).toHaveLength(2)
+    // another version is another conversion
+    await (await runIt({ from: 9, to: 9 }, { deps, versionId: 'ver_abcdefghij0123456789' })).out
+    expect(state.calls).toBe(2)
+  }, 60_000)
+
+  it('an entry past its 20 minutes converts again', async () => {
+    original = readFileSync(fixturePath('slides.pptx'))
+    let t = 1_000_000
+    const { office, state } = countingConverter()
+    const deps: RenderPagesDeps = { office, pdfCache: cacheOf(() => t) }
+    await (await runIt({ from: 9, to: 9 }, { deps, versionId: VER })).out
+    t += OFFICE_PDF_CACHE.ttlMs - 1
+    await (await runIt({ from: 10, to: 10 }, { deps, versionId: VER })).out
+    expect(state.calls).toBe(1)
+    t += OFFICE_PDF_CACHE.ttlMs // 20 minutes since that last use
+    await (await runIt({ from: 11, to: 11 }, { deps, versionId: VER })).out
+    expect(state.calls).toBe(2)
+  }, 60_000)
+
+  it('a failed conversion is never cached: the next run converts again', async () => {
+    original = readFileSync(fixturePath('slides.pptx'))
+    const { office, state } = countingConverter()
+    const deps: RenderPagesDeps = { office, pdfCache: cacheOf() }
+    state.fail = 1
+    expect(await failureOf((await runIt({ from: 9, to: 9 }, { deps, versionId: VER })).out)).toEqual({
+      code: 'RENDER_PAGES_FAILED',
+      retry: false,
+    })
+    expect(deps.pdfCache?.stats().entries).toBe(0)
+    expect((await (await runIt({ from: 9, to: 9 }, { deps, versionId: VER })).out).result).toEqual({
+      pageCount: 11,
+      rendered: [9],
+    })
+    expect(state.calls).toBe(2)
+  }, 60_000)
 })

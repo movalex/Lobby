@@ -3,7 +3,8 @@
 // three channels, the u2netp shape), so a bright subject on a dark background is kept and the background goes clear.
 // Checked: alpha present and the mask non-empty on fixtures; deterministic within a tolerance; the output scaled to a
 // long edge of 4,096; a decompression bomb, a truncated PNG, an animated image, a GIF and a flat mask refused with the
-// right codes; the 45 s kill (shortened here); a V8 heap out of memory gives REMOVE_BG_FAILED and the worker lives on;
+// right codes; the 45 s kill (shortened here); a V8 heap out of memory, or the resident-memory cap, gives
+// FILE_TOO_COMPLEX (review M3/m8: the same final code for every op kind) and the worker lives on;
 // the model's hash re-checked in the child; and the ORT session is only ever created by the child.
 
 import { createHash } from 'node:crypto'
@@ -511,7 +512,7 @@ describe('the remove-bg runner (a real child process, the tiny model)', () => {
     }
   })
 
-  it('a child that runs out of V8 heap: REMOVE_BG_FAILED (no retry), and this process carries on', async () => {
+  it('a child that runs out of V8 heap: FILE_TOO_COMPLEX (no retry, as every op kind), and this process carries on', async () => {
     const oom = join(tmpRoot(), 'oom-child.mjs')
     writeFileSync(
       oom,
@@ -538,12 +539,40 @@ describe('the remove-bg runner (a real child process, the tiny model)', () => {
         })
         .catch((e: unknown) => e)
       expect(err).toBeInstanceOf(OpFailure)
-      expect((err as OpFailure).code).toBe('REMOVE_BG_FAILED')
+      expect((err as OpFailure).code).toBe('FILE_TOO_COMPLEX')
       expect((err as OpFailure).retry).toBe(false)
     } finally {
       h.restore()
     }
   })
+
+  it('a child over its resident-memory cap (640 MB) is killed: FILE_TOO_COMPLEX, no retry (the reader injected: any platform)', async () => {
+    const h = harness(await subject(32, 32, 'png'))
+    h.install()
+    try {
+      const err = await createRemoveBgRunner({
+        modelPath: () => modelPath,
+        modelSha256: modelSha,
+        childPath: join(import.meta.dirname, 'children', 'hang-child.ts'),
+        readRss: () => (REMOVE_BG_LIMITS.childRssMb + 1) * 1024 * 1024,
+      })
+        .run({
+          op: h.op,
+          lease: LEASE,
+          ops: h.ops,
+          api: h.api,
+          tmpDir: tmpRoot(),
+          signal: new AbortController().signal,
+          log: () => {},
+        })
+        .catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(OpFailure)
+      expect([(err as OpFailure).code, (err as OpFailure).retry]).toEqual(['FILE_TOO_COMPLEX', false])
+      expect(h.calls).toEqual([])
+    } finally {
+      h.restore()
+    }
+  }, 30_000)
 
   it('a missing source (404) is SOURCE_MISSING; an upload that fails is retried later (INTERNAL, retry)', async () => {
     const missing = harness(Buffer.from('x'))

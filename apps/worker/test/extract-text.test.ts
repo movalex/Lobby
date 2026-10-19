@@ -318,19 +318,27 @@ describe('the runner on real files', () => {
     expect((await failureOf(createExtractTextRunner().run(ctx))).code).toBe('SOURCE_MISSING')
   })
 
-  it('a child that hangs is killed at its timeout; one that crashes or runs out of heap fails, the worker lives', async () => {
+  it('a child that hangs is killed at its timeout; one that crashes or runs out of heap is FILE_TOO_COMPLEX, the worker lives', async () => {
     const pdf = fixturePath('document.pdf')
     expect(await failureOf(runOn(pdf, { childPath: HANG_CHILD, timeoutMs: 1_000 }))).toEqual({
       code: 'TIMEOUT',
       retry: false,
     })
+    // review m8: no answer is the same final code for every op kind
     expect(await failureOf(runOn(pdf, { childPath: CRASH_CHILD }))).toEqual({
-      code: 'TEXT_EXTRACT_FAILED',
+      code: 'FILE_TOO_COMPLEX',
       retry: false,
     })
     const big = await textPdf(200, (i) => `${i} ${'z'.repeat(8_000)}`)
-    expect((await failureOf(runOn(big, { heapMb: 8 }))).code).toBe('TEXT_EXTRACT_FAILED')
+    expect(await failureOf(runOn(big, { heapMb: 8 }))).toEqual({ code: 'FILE_TOO_COMPLEX', retry: false })
   }, 60_000)
+
+  it('a child over its resident-memory cap is killed: FILE_TOO_COMPLEX, never retried (the reader injected: any platform)', async () => {
+    const r = await failureOf(
+      runOn(fixturePath('document.pdf'), { childPath: HANG_CHILD, readRss: () => 2048 * 1024 * 1024 }),
+    )
+    expect(r).toEqual({ code: 'FILE_TOO_COMPLEX', retry: false })
+  }, 30_000)
 })
 
 describe('the pieces', () => {

@@ -4,10 +4,13 @@
 //
 //   download the original (transfer.ts caps: its exact recorded size, a deadline, a stall timer)
 //   → sniff it: a PDF is read as it is; an Office document passes the container checks (office.ts: zip bombs,
-//     encryption, macros) and is converted (≤ FILE_TEXT_LIMITS.officeTimeoutMs); anything else is SOURCE_UNSUPPORTED
+//     encryption, macros) and is converted (≤ FILE_TEXT_LIMITS.officeTimeoutMs) once per version: the converted PDF
+//     goes to the worker's short-lived cache shared with render-pages (ops/office-pdf-cache.ts, review M2); anything
+//     else is SOURCE_UNSUPPORTED
 //   → pdf-text-child.ts in a child process: pdf.js getTextContent over pages 1..min(N, maxPages), a
-//     FILE_TEXT_LIMITS.childHeapMb heap and a childTimeoutMs SIGKILL, ≤ maxPageChars a page and ≤ maxVersionBytes in all,
-//     written to a file in the op's temp dir
+//     FILE_TEXT_LIMITS.childHeapMb heap, a childRssMb resident-memory SIGKILL (Linux, run.ts) and a childTimeoutMs
+//     SIGKILL, ≤ maxPageChars a page and ≤ maxVersionBytes in all, written to a file in the op's temp dir; killed over
+//     its memory cap or dead without an answer: FILE_TOO_COMPLEX, never retried (as render-pages and remove-bg)
 //   → the pages re-read and re-checked here (the child parsed hostile input), then sent over `/text` in ascending order,
 //     ≤ 50 pages and ≤ TEXT_BATCH_BYTES of JSON a call (the api's JSON body limit is 256 KiB), the first batch always
 //     starting with page 1 (an empty body when page 1 holds no text: it tells the api a run starts afresh)
@@ -23,10 +26,11 @@ import { LIMITS, officeFormatByMime } from '@draftroom/dev-assets'
 import { WORKER } from '../config.ts'
 import { AbortedError, PreviewError, TransientError } from '../errors.ts'
 import { checkOfficeContainer, type OfficeConverter, officeOff } from '../office.ts'
-import { run } from '../run.ts'
+import { type RssReader, run } from '../run.ts'
 import { sniffFile } from '../sniff.ts'
 import { downloadOriginal, TransferError } from '../transfer.ts'
 import { OpFailure, type OpRunContext, type OpRunner, type OpRunResult } from './dispatch.ts'
+import type { OfficePdfCache } from './office-pdf-cache.ts'
 import { cleanPageText, type PdfTextRequest, type PdfTextResponse } from './pdf-text-protocol.ts'
 
 export const PDF_TEXT_CHILD = fileURLToPath(new URL('./pdf-text-child.ts', import.meta.url))
@@ -43,8 +47,14 @@ export interface ExtractTextOptions {
   /** the child's timeout and heap (FILE_TEXT_LIMITS by default) */
   timeoutMs?: number
   heapMb?: number
+  /** the child's resident-memory cap in MB (default FILE_TEXT_LIMITS.childRssMb; Linux only, run.ts) */
+  rssMb?: number
+  /** test hook: run.ts's resident-set reader (lets the memory kill run off Linux too) */
+  readRss?: RssReader | null
   /** test hook: another child entry (one that hangs or crashes) */
   childPath?: string
+  /** the converted-PDF cache shared with render-pages (worker.ts); absent: the Office file converts in the op's dir */
+  pdfCache?: OfficePdfCache
 }
 
 export interface TextPage {
@@ -174,15 +184,24 @@ export function createExtractTextRunner(o: ExtractTextOptions = {}): OpRunner {
       }
       const sniffed = await sniffFile(original)
       let pdf = original
+      let release = () => {}
       const format = officeFormatByMime(sniffed.mime)
       if (format) {
         if ((await stat(original)).size > LIMITS.maxOfficeBytes) throw new OpFailure('SOURCE_UNSUPPORTED')
         try {
           await checkOfficeContainer(original, format)
-          pdf = await (o.office ?? officeOff()).convert(original, format, ctx.tmpDir, {
-            timeoutMs: o.officeTimeoutMs ?? FILE_TEXT_LIMITS.officeTimeoutMs,
-            signal: ctx.signal,
-          })
+          const convert = (outDir: string) =>
+            (o.office ?? officeOff()).convert(original, format, outDir, {
+              timeoutMs: o.officeTimeoutMs ?? FILE_TEXT_LIMITS.officeTimeoutMs,
+              signal: ctx.signal,
+            })
+          if (o.pdfCache) {
+            // review M2: one conversion per version, shared with its deck's render-pages runs
+            const held = await o.pdfCache.acquire(op.sourceVersionId, convert, ctx.signal)
+            if (held.shared) ctx.log(`${op.id} reused the converted PDF`)
+            pdf = held.path
+            release = held.release
+          } else pdf = await convert(ctx.tmpDir)
         } catch (e) {
           officeFailure(e)
         }
@@ -190,48 +209,72 @@ export function createExtractTextRunner(o: ExtractTextOptions = {}): OpRunner {
         // a Photoshop or TIFF file is kind 'pdf' too (flattened pages): it has no text to read
         throw new OpFailure('SOURCE_UNSUPPORTED')
       }
-      const output = join(ctx.tmpDir, 'pages.json')
-      const req: PdfTextRequest = {
-        input: pdf,
-        output,
-        maxPages,
-        maxPageChars: FILE_TEXT_LIMITS.maxPageChars,
-        maxBytes: FILE_TEXT_LIMITS.maxVersionBytes,
-      }
-      const r = await run(
-        process.execPath,
-        [`--max-old-space-size=${o.heapMb ?? FILE_TEXT_LIMITS.childHeapMb}`, o.childPath ?? PDF_TEXT_CHILD],
-        {
-          timeoutMs: o.timeoutMs ?? FILE_TEXT_LIMITS.childTimeoutMs,
-          maxStdoutBytes: 64 * 1024,
-          stdin: JSON.stringify(req),
-          signal: ctx.signal,
-        },
-      )
-      if (r.aborted) throw new AbortedError()
-      if (r.timedOut) throw new OpFailure('TIMEOUT')
-      if (r.spawnError) throw new OpFailure('INTERNAL', true)
-      let res: PdfTextResponse
       try {
-        res = JSON.parse(r.stdout.toString('utf8')) as PdfTextResponse
-      } catch {
-        // no answer: the child crashed (a heap exhausted by a hostile file, a native abort) or was killed from outside
-        throw new OpFailure('TEXT_EXTRACT_FAILED')
+        return await readText(ctx, o, pdf, maxPages)
+      } finally {
+        release()
       }
-      if (!res.ok)
-        throw new OpFailure(res.reason === 'encrypted' ? 'SOURCE_UNSUPPORTED' : 'TEXT_EXTRACT_FAILED')
-      if ((await stat(output)).size > PAGES_FILE_MAX_BYTES) throw new OpFailure('TEXT_EXTRACT_FAILED')
-      const read = checkedPages(await readFile(output, 'utf8'), maxPages)
-      for (const batch of textBatches(read.pages)) await ctx.ops.text(ctx.lease, batch, ctx.signal)
-      return {
-        outputs: [],
-        result: {
-          pages: read.pages.length,
-          bytes: read.bytes,
-          truncated: res.truncated || read.truncated,
-          extractor: FILE_TEXT_LIMITS.extractor,
-        },
-      }
+    },
+  }
+}
+
+/** The child over `pdf`, its pages checked and sent; the op's result. */
+async function readText(
+  ctx: OpRunContext,
+  o: ExtractTextOptions,
+  pdf: string,
+  maxPages: number,
+): Promise<OpRunResult> {
+  const { op } = ctx
+  const output = join(ctx.tmpDir, 'pages.json')
+  const req: PdfTextRequest = {
+    input: pdf,
+    output,
+    maxPages,
+    maxPageChars: FILE_TEXT_LIMITS.maxPageChars,
+    maxBytes: FILE_TEXT_LIMITS.maxVersionBytes,
+  }
+  const rssMb = o.rssMb ?? FILE_TEXT_LIMITS.childRssMb
+  const r = await run(
+    process.execPath,
+    [`--max-old-space-size=${o.heapMb ?? FILE_TEXT_LIMITS.childHeapMb}`, o.childPath ?? PDF_TEXT_CHILD],
+    {
+      timeoutMs: o.timeoutMs ?? FILE_TEXT_LIMITS.childTimeoutMs,
+      maxStdoutBytes: 64 * 1024,
+      stdin: JSON.stringify(req),
+      signal: ctx.signal,
+      maxRssBytes: rssMb * 1024 * 1024,
+      ...(o.readRss !== undefined ? { readRss: o.readRss } : {}),
+    },
+  )
+  if (r.aborted) throw new AbortedError()
+  if (r.timedOut) throw new OpFailure('TIMEOUT')
+  // the child could not be started: this machine, not the file (tried again)
+  if (r.spawnError) throw new OpFailure('INTERNAL', true)
+  // Review M3/m8, the same rule for every op kind: over its resident-memory cap, or dead with no answer (a heap exhausted
+  // by a hostile file, a native abort, the kernel's OOM killer): FILE_TOO_COMPLEX, final (the same file would do it again).
+  if (r.memoryExceeded) {
+    ctx.log(`${op.id} pdf-text child over its ${rssMb} MB memory cap, killed`)
+    throw new OpFailure('FILE_TOO_COMPLEX')
+  }
+  let res: PdfTextResponse
+  try {
+    res = JSON.parse(r.stdout.toString('utf8')) as PdfTextResponse
+  } catch {
+    ctx.log(`${op.id} pdf-text child gave no answer (exit ${r.code ?? r.signal})`)
+    throw new OpFailure('FILE_TOO_COMPLEX')
+  }
+  if (!res.ok) throw new OpFailure(res.reason === 'encrypted' ? 'SOURCE_UNSUPPORTED' : 'TEXT_EXTRACT_FAILED')
+  if ((await stat(output)).size > PAGES_FILE_MAX_BYTES) throw new OpFailure('TEXT_EXTRACT_FAILED')
+  const read = checkedPages(await readFile(output, 'utf8'), maxPages)
+  for (const batch of textBatches(read.pages)) await ctx.ops.text(ctx.lease, batch, ctx.signal)
+  return {
+    outputs: [],
+    result: {
+      pages: read.pages.length,
+      bytes: read.bytes,
+      truncated: res.truncated || read.truncated,
+      extractor: FILE_TEXT_LIMITS.extractor,
     },
   }
 }

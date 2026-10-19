@@ -311,9 +311,11 @@ describe('the preview loop with ops, against an api of before wave W (no ops rou
       requestTimeoutMs: 5_000,
     })
     const outcomes: string[] = []
+    // the claim path (the check-in hears the same 404 first otherwise: ops-compat.test.ts)
+    const { checkin: _checkin, ...claimOnly } = createWorkerOpsApi(call)
     w = runWorker(fake, {
       ops: {
-        api: createWorkerOpsApi(call),
+        api: claimOnly,
         capabilities: ['extract-text@1'],
         onOutcome: (o) => outcomes.push(o.kind),
       },
