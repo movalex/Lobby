@@ -29,6 +29,20 @@ export async function docCardsOn(context: BrowserContext): Promise<void> {
   }, DOC_CARDS_KEY)
 }
 
+/**
+ * Turns the switch OFF for every page of `context` (from its next navigation): the shipped switch is on since the
+ * wave W integration, so a spec of the switch-off case forces it ('0', the dev-auth override).
+ */
+export async function docCardsOff(context: BrowserContext): Promise<void> {
+  await context.addInitScript((key: string) => {
+    try {
+      localStorage.setItem(key, '0')
+    } catch {
+      // a blocked store: the shipped switch (on) stays, and the spec fails on what it looks for
+    }
+  }, DOC_CARDS_KEY)
+}
+
 /** A session with the switch on: the init script, then a reload of its board. */
 export async function withDocCards(s: CanvasSession): Promise<CanvasSession> {
   await docCardsOn(s.context)

@@ -34,6 +34,7 @@ import { downloadFrom } from '../tests/support/present-export.ts'
 import { withCanvas } from './canvas-ux-kit.ts'
 import { openBoardExport } from './present-kit.ts'
 import {
+  docCardsOff,
   docCardsOn,
   expectEditing,
   expectNoInPlaceEditor,
@@ -386,6 +387,10 @@ test('w1: with the switch off a doc card is a rectangle with its words: no face,
   canvasSession,
 }) => {
   const a = await canvasSession('alice')
+  // the shipped switch is on (the integration): this case forces it off for the page
+  await docCardsOff(a.context)
+  await a.page.reload()
+  await waitForCanvas(a.page)
   const id = await placeDocCard(a.page, '# Plain\n- words')
   await expectSaved(a.page)
   await expect(face(a.page, id)).toHaveCount(0)

@@ -8,7 +8,9 @@
 //  - a member, a name-only guest and someone of another workspace each get the unknown-address screen, and the api
 //    answers each of them 404 on every admin route;
 //  - at phone width no tab scrolls sideways; no request leaves Lobby's origins.
-// The web switch (FORMATS_FLAGS.admin, shipped off until the lead turns it on) is set per context through the dev-auth
+//  - (the integration) opened directly while the config is slow, the owner sees the loading screen, never "Page not
+//    found" first.
+// The web switch (FORMATS_FLAGS.admin, on since the integration) is also set per context through the dev-auth
 // localStorage key; the e2e stack turns DRAFTROOM_WORKSPACE_ADMIN on.
 //
 //   E2E_PORT_BASE=<base> pnpm --filter @draftroom/e2e test -- w5-admin
@@ -269,6 +271,37 @@ test('a member, a name-only guest and someone of another workspace get the unkno
   } finally {
     await bob.context.close()
     await guestContext.close()
+  }
+})
+
+test('opened directly while the config is slow, the owner sees the loading screen, never Page not found first', async ({
+  browser,
+  users,
+}) => {
+  const alice = await signedIn(browser, 'alice')
+  try {
+    // the offer arrives with GET /api/auth/config: hold it back, and record every screen the page shows meanwhile
+    await alice.page.route('**/api/auth/config', async (route) => {
+      await new Promise((r) => setTimeout(r, 1_500))
+      await route.continue()
+    })
+    await alice.page.addInitScript(() => {
+      const w = window as unknown as { __notFound?: boolean; __loading?: boolean }
+      const look = () => {
+        if (document.body?.textContent?.includes('Page not found')) w.__notFound = true
+        if (document.querySelector('[data-testid="workspace-admin-loading"]')) w.__loading = true
+      }
+      new MutationObserver(look).observe(document, { childList: true, subtree: true, characterData: true })
+    })
+    await alice.page.goto(adminUrl(users.devStudioId))
+    await expect(alice.page.getByTestId('workspace-admin')).toBeVisible({ timeout: 20_000 })
+    const seen = await alice.page.evaluate(() => {
+      const w = window as unknown as { __notFound?: boolean; __loading?: boolean }
+      return { notFound: w.__notFound === true, loading: w.__loading === true }
+    })
+    expect(seen).toEqual({ notFound: false, loading: true })
+  } finally {
+    await alice.context.close()
   }
 })
 
