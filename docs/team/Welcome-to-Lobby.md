@@ -1,6 +1,6 @@
 # Welcome to Lobby
 
-Lobby is Dark Burn's own whiteboard: a place for brainstorms, storyboards, retros, planning walls and client reviews, the way you used Miro, built and run by us.
+Lobby is Dark Burn's own whiteboard: a place for brainstorms, storyboards, retros, workshops and client reviews, the way you used Miro, built and run by us.
 
 ## Getting in
 
@@ -13,7 +13,7 @@ Lobby is Dark Burn's own whiteboard: a place for brainstorms, storyboards, retro
 - **Sticky notes:** press **N**, click to place, type. Pick colours and sizes from the Styles button.
 - **Shapes, text, arrows:** the toolbar at the bottom. Select a shape and just start typing to label it. Arrows stick to the notes they connect.
 - **Frames:** group a section of the board (and they become slides when you present).
-- **Images and files:** drag them onto the board. PDFs, Office files, Photoshop, Illustrator and TIFF files get page previews. Videos get a poster frame.
+- **Images and files:** drag them onto the board. PDFs, Office files, Photoshop, Illustrator and TIFF files get page previews. Videos get a poster frame. Right-click a picture and choose **Remove background (beta)** to cut it out.
 - **Find anything:** **Ctrl+K** searches the board and runs any command ("make the yellow notes blue" works).
 - **Undo** with **Ctrl+Z**. Everything saves as you go.
 
@@ -24,10 +24,9 @@ Lobby is Dark Burn's own whiteboard: a place for brainstorms, storyboards, retro
 - **Shapes:** arrows, callouts, status stamps, retro and SWOT kits, device frames and storyboard panels. There are also deliverable frames at exact sizes with safe zones (Steam capsules, YouTube banner, stories and reels, social posts).
 - **Library:** select anything you made (a logo, a sticker, a frame layout) and choose **Save to library**. Save it for the whole workspace or just for you, in folders, with tags. Anyone on the team can then drop it onto any board.
 
-## Storyboards and planning walls
+## Storyboards
 
 - **Storyboards:** Ctrl+K → "Storyboard" lays out numbered panels with shot notes. You can also paste a script and let Lobby draft the panels. Already drew your frames? Select them and choose **Make storyboard from frames**.
-- **Kanban board** and **Timeline:** Ctrl+K → "Kanban board" or "Timeline". Drag cards between columns, assign people and set dates. **View ▸ Card table** lists every card on the board in one table.
 
 ## Working together
 
