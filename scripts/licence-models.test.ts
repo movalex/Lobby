@@ -5,6 +5,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { BG_MODEL } from '../apps/worker/src/ops/bg-model.ts'
 import { findModelFiles, MODEL_EXT, MODELS_MANIFEST, modelFindings } from './licence-check.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
@@ -12,9 +13,11 @@ const manifest = JSON.parse(readFileSync(new URL(`../${MODELS_MANIFEST}`, import
 const SHA = 'a'.repeat(64)
 
 describe('the model rule', () => {
-  it('the real manifest names u2netp (Apache-2.0, not pinned yet) and the repository has no weights file', () => {
+  it('the real manifest names u2netp (Apache-2.0, pinned as the worker pins it) and the repository has no weights file', () => {
     expect(manifest.models.map((m: { id: string }) => m.id)).toEqual(['u2netp'])
-    expect(manifest.models[0]).toMatchObject({ licence: 'Apache-2.0', sha256: null })
+    // pinned since the owner approved the file (1da6816f); the manifest and BG_MODEL stay in step
+    expect(manifest.models[0]).toMatchObject({ licence: 'Apache-2.0', sha256: BG_MODEL.sha256 })
+    expect(manifest.models[0].sha256).toMatch(/^[0-9a-f]{64}$/)
     expect(findModelFiles(ROOT)).toEqual([])
     expect(modelFindings([], manifest)).toEqual([])
   })
