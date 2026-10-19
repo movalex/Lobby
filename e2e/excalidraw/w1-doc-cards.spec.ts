@@ -173,6 +173,37 @@ test('w1: Enter on the selected card opens its panel; Escape closes it and the b
   await expectSaved(a.page)
 })
 
+test('w1: a board undo right after panel typing undoes that typing, and the pending push never writes it back (review m6)', async ({
+  canvasSession,
+  stack,
+  board,
+}) => {
+  const a = await withDocCards(await canvasSession('alice'))
+  const id = await placeDocCard(a.page, '# Notes')
+  await expectSaved(a.page)
+  await dblclickItem(a.page, id)
+  await expectEditing(a.page)
+  // typing, then at once (well inside the panel's 500 ms push) the board's Undo
+  await typeInPanel(a.page, ' quick')
+  await focusBoard(a.page)
+  await a.page.keyboard.press('ControlOrMeta+z')
+  // the undo takes the typing out (it was written first, as the edit session's step), not the card
+  await expect.poll(() => wordsOf(a.page, id)).toBe('# Notes')
+  expect((await item(a.page, id))?.isDeleted ?? false).toBe(false)
+  // nothing writes the typing back afterwards, and the panel shows what the board has
+  await a.page.waitForTimeout(1_500)
+  expect(await wordsOf(a.page, id)).toBe('# Notes')
+  await expect(panelText(a.page)).toHaveValue('# Notes')
+  await expectSaved(a.page)
+  expect((await storedElement(stack, board, (await labelIdOf(a.page, id)) as string))?.originalText).toBe(
+    '# Notes',
+  )
+  // and redo brings it back
+  await focusBoard(a.page)
+  await a.page.keyboard.press('ControlOrMeta+Shift+z')
+  await expect.poll(() => wordsOf(a.page, id)).toBe('# Notes quick')
+})
+
 test('w1: Text to doc card in one undo step; ticking a box on the face writes the tick in one undo step', async ({
   canvasSession,
 }) => {
