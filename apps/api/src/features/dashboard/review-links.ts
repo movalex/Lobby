@@ -34,6 +34,7 @@ import type { Params } from '../../context.ts'
 import { conflict, notFound, parse } from '../../errors.ts'
 import { actorOf } from '../../notifier.ts'
 import { guestAccountRequired } from '../../routes/invitations.ts'
+import { dropLostMembers, lockForAccessLoss } from '../breakouts/access-loss.ts'
 import type { FeatureContext } from '../context.ts'
 import { publishExportPolicy } from '../export-control/index.ts'
 import { limitExportForClientLink } from '../export-control/policy.ts'
@@ -108,6 +109,8 @@ interface JoinedRow {
  * marks the link swept, with the board row locked.
  */
 export async function removeReviewLinkGrants(tx: Queryable, link: LinkRow, at: Date): Promise<string[]> {
+  // the board's running breakouts and open activity, rows of the board like the link's (breakouts/access-loss.ts)
+  const live = await lockForAccessLoss(tx, { boardId: link.board_id })
   const rows = await tx.query<JoinedRow>(
     `SELECT r.user_id, bm.role AS grant, r.previous_role, u.kind = 'guest' AS guest,
             EXISTS (
@@ -166,6 +169,9 @@ export async function removeReviewLinkGrants(tx: Queryable, link: LinkRow, at: D
     }
     affected.push(row.user_id)
   }
+  // whoever this left without a view of the board leaves its running breakouts (the callers tell each of them)
+  if (affected.length)
+    await dropLostMembers(tx, { ...live, scope: { boardId: link.board_id, userIds: affected } })
   return affected
 }
 

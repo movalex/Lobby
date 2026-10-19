@@ -8,7 +8,7 @@ import type { AddressInfo } from 'node:net'
 import { PassThrough } from 'node:stream'
 import { gzipSync } from 'node:zlib'
 import { GuestJoined, ReviewLinkCreated } from '@draftroom/contracts'
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseLinkPreviewTestOrigins } from '../../../src/config.ts'
 import { FetchRefused, guardedFetch } from '../../../src/features/link-preview/fetch.ts'
 import { LINK_PREVIEW_LIMITS, readPreview } from '../../../src/features/link-preview/index.ts'
@@ -307,6 +307,55 @@ describe('the guarded fetch', () => {
       icon: null,
     })
     expect(hits).toEqual(['/page', '/big.png', '/favicon.ico'])
+  })
+
+  it('a page still sending at the deadline is a timeout, never a truncated page (one deadline wins)', async () => {
+    // The race the wave V gate found: the hop's own timer and the body reader's both fire at the
+    // deadline. When the hop's fired first it destroyed the request, the socket broke the body stream, and
+    // the reader kept the partial head as a truncated page. With fake timers both are due at the same
+    // instant, the hop's first (it was armed first), so the old code lost every time.
+    vi.useFakeTimers()
+    try {
+      let destroyed: unknown = 'not destroyed'
+      const fakeRequest = ((_opts: Record<string, unknown>, cb: (res: IncomingMessage) => void) => {
+        const res = Object.assign(new PassThrough(), {
+          statusCode: 200,
+          headers: { 'content-type': 'text/html' },
+        })
+        const req = Object.assign(new EventEmitter(), {
+          end() {
+            cb(res as unknown as IncomingMessage)
+            res.write('<html><head><title>Half')
+            // never ends
+          },
+          // as node's request does: destroying it breaks the response's stream with an error
+          destroy(err?: Error) {
+            destroyed = err ?? null
+            res.destroy(err ?? new Error('aborted'))
+            if (err) req.emit('error', err)
+            req.emit('close')
+          },
+        })
+        return req
+      }) as never
+      const outcome = guardedFetch(
+        { policy: NONE, lookup: async () => [{ address: '93.184.216.34', family: 4 }], request: fakeRequest },
+        'https://slow.example.com/',
+        '*/*',
+        { ...LIMITS, timeoutMs: 400 },
+      ).then(
+        (got) => ({ got }),
+        (err: unknown) => ({ err }),
+      )
+      await vi.advanceTimersByTimeAsync(399)
+      expect(destroyed).toBe('not destroyed')
+      await vi.advanceTimersByTimeAsync(1)
+      const settled = await outcome
+      expect(settled).not.toHaveProperty('got')
+      expect(settled).toMatchObject({ err: { reason: 'timeout' } })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('connects to the vetted address, whatever a second lookup would say (no DNS rebinding)', async () => {

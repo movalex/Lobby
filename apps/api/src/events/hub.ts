@@ -144,6 +144,8 @@ export class EventHub {
     .padStart(8, '0')
   private generation = 0
   private revalidator: StreamRevalidator | null = null
+  /** Features told of every access change after it committed (a board's breakouts republish their members). */
+  private readonly accessListeners = new Set<(boardId: string) => void>()
 
   constructor(opts: { limits?: Partial<StreamLimits> } = {}) {
     const l = { ...DEFAULT_STREAM_LIMITS, ...opts.limits }
@@ -253,6 +255,24 @@ export class EventHub {
     void this.recheck(affected)
     // after the re-check has taken hold of the streams: the name waits behind it, in order
     if (change.actor) this.accessChangedBy(change, change.actor)
+    for (const fn of this.accessListeners) {
+      try {
+        fn(change.boardId)
+      } catch {
+        // a feature's listener never breaks the caller's access change
+      }
+    }
+  }
+
+  /**
+   * Calls `fn(boardId)` after every `accessChanged` (so after the change committed), once the affected streams'
+   * re-check has started. Returns the unsubscribe function.
+   */
+  onAccessChanged(fn: (boardId: string) => void): () => void {
+    this.accessListeners.add(fn)
+    return () => {
+      this.accessListeners.delete(fn)
+    }
   }
 
   /**

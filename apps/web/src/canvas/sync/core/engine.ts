@@ -4185,6 +4185,18 @@ export class LobbyEngineCore implements EngineCore {
       }, wait)
   }
 
+  /**
+   * When a presence message handed over now would go (the 20 Hz cap's slot, this core's clock): `ms` until the slot (0:
+   * at once), and `held` while a message waits for it (one handed over now would replace that one). The presence hub
+   * spaces the shared laser's messages by this slot, not by its own handovers: a message this core held (a hover move
+   * just before the press) moves the slot on, and a laser message timed by the hub alone then waited here for up to
+   * another interval (the l6-laser lag).
+   */
+  presenceSlot(): { ms: number; held: boolean } {
+    const wait = this.presenceLast + 1000 / PRESENCE_IN_HZ - this.now()
+    return { ms: Math.max(0, wait), held: this.presencePending !== null }
+  }
+
   private sendPresenceNow(): void {
     const p = this.presencePending
     this.presencePending = null

@@ -32,16 +32,23 @@ const PARAMS = JSON.stringify({ maxPages: FILE_TEXT_LIMITS.maxPages })
 /** Orphaned pages' versions cleared per sweep. */
 const ORPHAN_BATCH = 20
 
+/**
+ * SQL: whether the op `<alias>` keeps its source version out of the backfill (while the version has no
+ * file_text_state): an active or done extract-text op, or one that failed for good (every code but WORKER_UNAVAILABLE).
+ * The finished ops' retention (worker/ops-retention.ts) keeps exactly these rows, so a purge never makes the backfill
+ * try a file again.
+ */
+export const extractTextHoldsSql = (alias: string): string =>
+  `(${alias}.kind = 'extract-text' AND (${alias}.status IN ('queued', 'running', 'done')
+     OR (${alias}.status = 'failed' AND ${alias}.error_code <> 'WORKER_UNAVAILABLE')))`
+
 /** The versions (of `candidates`, or every version when null) that may get an extract-text op now. */
 const ELIGIBLE = `
   FROM asset_versions v
   JOIN boards b ON b.workspace_id = v.workspace_id AND b.id = v.board_id AND b.status IN ('active', 'archived')
  WHERE v.kind = 'pdf' AND v.status = 'ready' AND v.mime_type = ANY($1::text[])
    AND NOT EXISTS (SELECT 1 FROM file_text_state s WHERE s.version_id = v.id)
-   AND NOT EXISTS (SELECT 1 FROM worker_ops o
-                    WHERE o.kind = 'extract-text' AND o.source_version_id = v.id
-                      AND (o.status IN ('queued', 'running', 'done')
-                        OR (o.status = 'failed' AND o.error_code <> 'WORKER_UNAVAILABLE')))`
+   AND NOT EXISTS (SELECT 1 FROM worker_ops o WHERE o.source_version_id = v.id AND ${extractTextHoldsSql('o')})`
 
 async function insertOps(
   q: Queryable,

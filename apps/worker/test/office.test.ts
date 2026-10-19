@@ -3,7 +3,8 @@
 // processJob. LibreOffice itself is not installed on the dev PC: soffice is played by
 // test/children/fake-soffice.ts, which takes the same command line and writes a real PDF. The real
 // LibreOffice runs on the NAS (deploy/nas/README.md "Office previews").
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -62,14 +63,77 @@ const alive = (pid: number) => {
   }
 }
 
+// The teardown flake of wave W (EPERM on a drw-office-* folder): the escape test's helper runs with its
+// working directory inside a scratch folder. On Windows a kill only starts its termination, and the dying
+// process holds that directory for about 15 ms more, although `process.kill(pid, 0)` already says it is
+// gone; a removal in that window fails with EPERM. So the helper is killed and waited for, and a scratch
+// folder is removed with retries (rmSync retries EPERM and EBUSY), never once.
+
+/** Kills a process the stand-in let escape and waits until the OS says it is gone. */
+async function killAndWait(pid: number, ms = 10_000): Promise<boolean> {
+  try {
+    process.kill(pid, 'SIGKILL')
+  } catch {}
+  const until = Date.now() + ms
+  while (alive(pid) && Date.now() < until) await new Promise((r) => setTimeout(r, 25))
+  return !alive(pid)
+}
+/** helpers that left the process tree on purpose, killed before any scratch folder is removed */
+const escapedHelpers = new Set<number>()
+/**
+ * Removes a scratch folder, riding out the moment a just-killed process still holds it. Its own retry
+ * loop: Node 24's native rmSync fails at once on Windows whatever `maxRetries` says (tried).
+ */
+async function removeScratch(d: string, ms = 10_000): Promise<void> {
+  const until = Date.now() + ms
+  for (;;) {
+    try {
+      rmSync(d, { recursive: true, force: true })
+      return
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code
+      if ((code !== 'EPERM' && code !== 'EBUSY') || Date.now() > until) throw e
+      await new Promise((r) => setTimeout(r, 20))
+    }
+  }
+}
+
 let l: DataLayout
 beforeAll(async () => {
   await ensureFixtures()
   l = tempLayout()
 })
-afterAll(() => {
+afterAll(async () => {
+  for (const pid of escapedHelpers) await killAndWait(pid)
+  escapedHelpers.clear()
   cleanupLayouts()
-  for (const d of scratchRoots.splice(0)) rmSync(d, { recursive: true, force: true })
+  for (const d of scratchRoots.splice(0)) await removeScratch(d)
+})
+
+describe('the test teardown', () => {
+  it('removes a scratch folder that a just-killed helper had as its working directory', async () => {
+    const d = mkdtempSync(join(tmpdir(), 'drw-office-'))
+    const cwd = join(d, 'scratch')
+    mkdirSync(cwd)
+    const helper = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30_000)'], {
+      detached: true,
+      stdio: 'ignore',
+      cwd,
+    })
+    helper.unref()
+    try {
+      await new Promise((r) => setTimeout(r, 200))
+      expect(await killAndWait(helper.pid as number)).toBe(true)
+      // straight after the kill, as afterAll does it
+      await removeScratch(d)
+      expect(existsSync(d)).toBe(false)
+    } finally {
+      try {
+        process.kill(helper.pid as number, 'SIGKILL')
+      } catch {}
+      scratchRoots.push(d)
+    }
+  })
 })
 
 const DOCS = [
@@ -343,10 +407,16 @@ describe('the LibreOffice runner (soffice.ts)', () => {
       ).rejects.toMatchObject({ code: 'OFFICE_INVALID' }) // exited 0 without output
       expect(Date.now() - t0).toBeLessThan(10_000) // not the helper's 30 s
     } finally {
+      let helper: number | undefined
       try {
-        const { helper } = JSON.parse(readFileSync(join(out, 'fake-pids.json'), 'utf8')) as { helper: number }
-        process.kill(helper, 'SIGKILL')
+        ;({ helper } = JSON.parse(readFileSync(join(out, 'fake-pids.json'), 'utf8')) as { helper: number })
       } catch {}
+      if (helper) {
+        escapedHelpers.add(helper)
+        // gone before afterAll removes the scratch folder it may still be holding
+        expect(await killAndWait(helper)).toBe(true)
+        escapedHelpers.delete(helper)
+      }
     }
   })
 

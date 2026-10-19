@@ -70,6 +70,11 @@ function oneHop(
   return new Promise((resolve, reject) => {
     const left = deadline - Date.now()
     if (left <= 0) return reject(new FetchRefused('timeout'))
+    // The hop's own time limits (this timer and the socket's idle timeout) guard only the wait for the
+    // response's head. Once the head is in, the body's reader owns the one deadline: were these still armed,
+    // the one that fired first at the deadline destroyed the socket and the reader saw a broken stream,
+    // which it keeps as a truncated page instead of the timeout it is.
+    let answered = false
     const host = url.hostname.replace(/^\[|\]$/g, '')
     const r = req(
       {
@@ -89,11 +94,17 @@ function oneHop(
         agent: false,
         timeout: left,
       },
-      (res) => resolve({ res, done: () => r.destroy() }),
+      (res) => {
+        answered = true
+        clearTimeout(timer)
+        resolve({ res, done: () => r.destroy() })
+      },
     )
     const timer = setTimeout(() => r.destroy(new FetchRefused('timeout')), left)
     r.on('close', () => clearTimeout(timer))
-    r.on('timeout', () => r.destroy(new FetchRefused('timeout')))
+    r.on('timeout', () => {
+      if (!answered) r.destroy(new FetchRefused('timeout'))
+    })
     r.on('error', (e) => reject(e instanceof FetchRefused ? e : new FetchRefused('network')))
     r.end()
   })
@@ -141,15 +152,15 @@ function readCapped(
       // a copy of what was read: the page's limit-sized buffer is not kept
       resolve({ body: Buffer.from(buf.subarray(0, size)), truncated })
     }
-    const timer = setTimeout(
-      () => {
-        if (settled) return
-        settled = true
-        res.destroy()
-        reject(new FetchRefused('timeout'))
-      },
-      Math.max(0, deadline - Date.now()),
-    )
+    const timeout = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      res.destroy()
+      reject(new FetchRefused('timeout'))
+    }
+    // the fetch's one deadline from here on (the hop's own limits stop at the response's head)
+    const timer = setTimeout(timeout, Math.max(0, deadline - Date.now()))
     stream.on('data', (chunk: Buffer) => {
       if (settled) return
       const take = Math.min(chunk.length, max - size)
@@ -164,6 +175,8 @@ function readCapped(
     stream.on('end', () => finish(false))
     stream.on('error', () => {
       if (settled) return
+      // a stream that breaks at or after the deadline is the timeout, whatever broke it
+      if (Date.now() >= deadline) return timeout()
       // a broken compressed stream: whatever was read so far is still usable
       finish(true)
     })

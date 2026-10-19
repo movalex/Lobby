@@ -13,10 +13,11 @@
 // The webkit and firefox projects (playwright.config.ts) run only this file; chromium runs it with the rest.
 // A failure here that chromium does not show is a real cross-browser finding: record it, do not skip it.
 //
-// Where it can run: Linux (CI's `xbrowser` job: `playwright install --with-deps webkit firefox`) and a Mac. Not on
-// the Windows development PC, where Smart App Control blocks Playwright's unsigned WebKit DLLs (brotlienc.dll) and
-// Firefox's (softokn3.dll), so neither browser starts there (wave C4 found this; the chromium control passes).
-import type { Page } from '@playwright/test'
+// Where it can run: Linux (CI's `xbrowser` job: `playwright install --with-deps webkit firefox`) and a Mac. On the
+// Windows development PC (Smart App Control on) WebKit starts since wave V, but Firefox does not: `spawn UNKNOWN`,
+// because Windows cannot build firefox.exe's activation context (Application log, SideBySide event 33: "Dependent
+// Assembly mozglue ... could not be found", although the unsigned mozglue.dll and its manifest are there). Wave C4
+// saw Smart App Control block Firefox's softokn3.dll; turning it off is a system-wide change, so it stays on.
 import { signInContext } from '../tests/support/api.ts'
 import { signInThroughUi } from '../tests/support/board.ts'
 import {
@@ -34,13 +35,9 @@ import { PHONE } from './a11y-kit.ts'
 import { focusBoard, settled } from './board-kit.ts'
 import { clickScene, labelText, notes, waitForCanvasUx } from './canvas-ux-kit.ts'
 import { noHorizontalScroll, waitForLobbyBoard } from './guests-kit.ts'
-
-/** Uncaught exceptions in the page, collected from now on. */
-function pageErrors(page: Page): string[] {
-  const errors: string[] = []
-  page.on('pageerror', (e) => errors.push(`${e.name}: ${e.message}`))
-  return errors
-}
+// Uncaught exceptions in the page, collected from the call on. WebKit's ResizeObserver loop notice, matched exactly,
+// is not one (a browser notice, not a throw; see BENIGN_PAGE_ERRORS); every other page error fails the test.
+import { pageErrors } from './support/page-errors.ts'
 
 test('sign in, the dashboard, a new board, a note typed through the lease, and a reload that keeps it', async ({
   browser,

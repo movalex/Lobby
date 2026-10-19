@@ -30,6 +30,11 @@
 // facilitator took them out of every group (kept in this process's memory: a restart forgets it). A session past its
 // `endsAt` is ended by the first read or change that sees it (and by a timer in this process), with `endedAt` = its
 // end time.
+//
+// Losing the board (gate review u2): every transaction that can take someone's view of a board away takes them out of
+// its running breakouts in the same transaction (./access-loss.ts), and every placement re-checks access under the
+// session's row lock, which that transaction takes too; the new members go out after COMMIT through the event hub's
+// access-change listener below.
 
 import {
   AssignBreakoutInput,
@@ -61,10 +66,11 @@ import { badRequest, conflict, forbidden, notFound, parse } from '../../errors.t
 import { rateLimited, SlidingWindowLimiter } from '../../rate-limit.ts'
 import { openStatePartsOf, provideOpenStatePart } from '../board-open/parts.ts'
 import type { FeatureContext } from '../context.ts'
-import { liveRoute, requireLive } from '../live/switch.ts'
+import { liveOn, liveRoute, requireLive } from '../live/switch.ts'
 import { PENDING_ROUTES, type PendingMethod, type PendingRoute } from '../pending-routes.ts'
 import { requireFacilitatorAccount } from '../workshops/facilitators.ts'
 import { allowedNow } from '../workshops/private-notes.ts'
+import { dropLostMembers, lockForAccessLoss } from './access-loss.ts'
 import { deal, smallestGroup } from './deal.ts'
 import {
   bumpSession,
@@ -129,7 +135,24 @@ export async function registerBreakouts(
   const removed = new Map<string, Set<string>>()
   /** per running session with an end time: the timer that ends it in this process */
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** per running session: the `rev` of the last state this process published */
+  const publishedRev = new Map<string, number>()
+  // An access change committed (./access-loss.ts may have removed members in it): a running session whose `rev` moved
+  // past the last state published here goes out again, so every tab drops whoever left. One read per change.
+  const listener = (boardId: string) => {
+    if (!liveOn(ctx, 'breakouts')) return
+    void republish(boardId).catch((e) =>
+      app.log.warn(
+        { err: { message: (e as Error)?.message } },
+        'breakouts: republish after an access change failed',
+      ),
+    )
+  }
+  // (the switch tests register the feature with a bare context: no hub to listen to)
+  const stopListening =
+    typeof events?.onAccessChanged === 'function' ? events.onAccessChanged(listener) : () => {}
   app.addHook('onClose', async () => {
+    stopListening()
     for (const t of timers.values()) clearTimeout(t)
     timers.clear()
   })
@@ -151,8 +174,16 @@ export async function registerBreakouts(
     if (c.changed) {
       const data: WorkshopBreakoutEvent = { session: toSession(c.row), members: c.members.map(toMember) }
       events.publish(c.row.board_id, { type: BREAKOUT_EVENTS.state, data })
+      publishedRev.set(c.row.id, Math.max(c.row.rev, publishedRev.get(c.row.id) ?? 0))
     }
     arm(c.row)
+  }
+
+  async function republish(boardId: string): Promise<void> {
+    const row = await currentSession(db, boardId, now())
+    // (the web keeps the newer of two states, so a read that a later change overtakes does no harm)
+    if (row?.status !== 'running' || (publishedRev.get(row.id) ?? -1) >= row.rev) return
+    published({ row, members: await membersOf(db, row.id), changed: true })
   }
 
   function arm(row: SessionRow): void {
@@ -161,6 +192,7 @@ export async function registerBreakouts(
     timers.delete(row.id)
     if (row.status !== 'running') {
       removed.delete(row.id)
+      publishedRev.delete(row.id)
       return
     }
     if (!row.ends_at) return
@@ -312,6 +344,8 @@ export async function registerBreakouts(
           [locked.id, user.id],
         )
         if (mine) return null
+        // re-checked under the session lock: a loss of access that committed since the read above took them off
+        if (!(await allowedNow(tx, locked.board_id, [user.id], 'view', t)).has(user.id)) return null
         const g = smallestGroup(
           locked.groups.map((x) => x.id),
           counts,
@@ -392,8 +426,10 @@ export async function registerBreakouts(
           createdAt: at,
           endsAt: input.durationMs === null ? null : new Date(at.getTime() + input.durationMs),
         })
+        // under the board row lock: nobody who lost the board since `dealable` read it is dealt out
+        const still = await allowedNow(tx, access.board.id, people, 'view', at)
         const dealt = deal(
-          people,
+          people.filter((u) => still.has(u)),
           groups.map((g) => g.id),
           rand,
         )
@@ -404,6 +440,18 @@ export async function registerBreakouts(
       // two facilitators started at the same moment: the partial unique index picked one
       if (isUniqueViolation(e)) throw conflict(E.running, 'Breakouts are already running on this board.')
       throw e
+    }
+    // A loss of access that does not take the board row (a workspace member removed or lowered, a guest swept) can
+    // commit between the check above and this COMMIT without seeing the new session to lock: look once more now that
+    // it is visible (./access-loss.ts). One that commits later locks the session itself.
+    if (out.members.length) {
+      const dropped = await db.transaction(async (tx) =>
+        dropLostMembers(tx, await lockForAccessLoss(tx, { boardId: out.row.board_id })),
+      )
+      if (dropped.length) {
+        const row = (await findSession(db, out.row.id)) ?? out.row
+        out = { row, members: await membersOf(db, row.id), changed: true }
+      }
     }
     if (prior.ended) published(prior.ended)
     published(out)
@@ -422,6 +470,10 @@ export async function registerBreakouts(
     const present = await allowedNow(db, found.board_id, placing, 'view', now())
     if (placing.some((u) => !present.has(u))) throw badRequest('Someone in the list cannot open this board.')
     const out = await change(found.id, async (tx, row, at) => {
+      // Again under the session's row lock (gate review u2): a loss of access that committed after the check above
+      // (it locks this row, ./access-loss.ts) refuses the move; one that comes later removes what this places.
+      const still = await allowedNow(tx, row.board_id, placing, 'view', at)
+      if (placing.some((u) => !still.has(u))) throw badRequest('Someone in the list cannot open this board.')
       const moves = new Map(
         input.moves.filter((m) => m.groupId !== null).map((m) => [m.userId, m.groupId as string]),
       )
@@ -448,7 +500,10 @@ export async function registerBreakouts(
     const current = (await membersOf(db, found.id)).map((m) => m.user_id)
     const out = await change(found.id, async (tx, row, at) => {
       const taken = removed.get(row.id)
-      const everyone = [...new Set([...current, ...here])].filter((u) => !taken?.has(u))
+      const candidates = [...new Set([...current, ...here])].filter((u) => !taken?.has(u))
+      // under the session's row lock: nobody who lost the board since the reads above is dealt back in
+      const still = await allowedNow(tx, row.board_id, candidates, 'view', at)
+      const everyone = candidates.filter((u) => still.has(u))
       await clearMembers(tx, row.id)
       await placeMembers(
         tx,
@@ -482,6 +537,8 @@ export async function registerBreakouts(
         [row.id, user.id],
       )
       if (mine?.group_id === groupId) return null
+      // under the session's row lock: a loss of access that committed since the check above refuses the join
+      if (!(await allowedNow(tx, row.board_id, [user.id], 'view', at)).has(user.id)) throw notFound()
       const counts = await groupCounts(tx, row.id)
       if (row.group_cap !== null && (counts.get(groupId) ?? 0) >= row.group_cap)
         throw conflict(E.groupFull, 'That group is full. Pick another one.')

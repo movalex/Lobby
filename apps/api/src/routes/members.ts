@@ -25,6 +25,7 @@ import { roleRequiresCreator } from '../auth/identity.ts'
 import { storedEmails } from '../auth/users.ts'
 import type { AppContext, Params } from '../context.ts'
 import { conflict, notFound, parse } from '../errors.ts'
+import { dropLostMembers, lockForAccessLoss } from '../features/breakouts/access-loss.ts'
 import { assertRaiseAllowed, lockBoardWorkspace } from '../features/dashboard/outside.ts'
 import { actorOf } from '../notifier.ts'
 import { toUser, type UserRow } from '../serialize.ts'
@@ -251,12 +252,16 @@ export function registerMemberRoutes(app: FastifyInstance, ctx: AppContext): voi
       // read (lock order, access.ts: the board row, then rows of the board, then the membership, then the
       // grant). A refused removal (404, LAST_OWNER) rolls it back with the rest.
       const left = await endPendingOnBoard(tx, access, uid, user.id, at)
+      // their running breakouts and open activities here, locked as rows of the board (breakouts/access-loss.ts)
+      const live = await lockForAccessLoss(tx, { boardId: bid, userIds: [uid] })
       const target = await loadTarget(tx, access, uid)
       if (target.board_grant === 'owner' && (await otherOwners(tx, access, uid)) === 0)
         throw conflict('LAST_OWNER', LAST_OWNER_MESSAGE)
       const changed = target.board_grant !== null
       if (changed) {
         await tx.query('DELETE FROM board_members WHERE board_id = $1 AND user_id = $2', [bid, uid])
+        // without the grant they may no longer view it (no visibility reaches them): out of its breakouts now
+        await dropLostMembers(tx, live)
         await audit(tx, {
           workspaceId: access.board.workspace_id,
           actorId: user.id,

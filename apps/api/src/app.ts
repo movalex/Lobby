@@ -61,6 +61,7 @@ import { registerWorkspaceRoutes } from './routes/workspaces.ts'
 import { sessionUserToUser } from './serialize.ts'
 import { checkedSnapshots, createHttpSyncInternalClient, type SyncInternalClient } from './sync-internal.ts'
 import type { VersionChange } from './worker/jobs.ts'
+import { startOpRetention } from './worker/ops-retention.ts'
 import { WORKER_PREFIX, type WorkerDeps, workerPlugin } from './worker/routes.ts'
 
 /**
@@ -650,6 +651,8 @@ async function buildServer(
       ...(deps.workerOpKinds ? { kinds: deps.workerOpKinds } : {}),
     },
   })
+  // finished worker ops older than 30 days go, but the ones that keep a file out of the text backfill
+  startOpRetention(app, { db, now })
 
   // Liveness only (no database, no auth): for Render health checks and local tooling.
   app.get('/healthz', async (_req, reply) => reply.type('text/plain').send('ok'))

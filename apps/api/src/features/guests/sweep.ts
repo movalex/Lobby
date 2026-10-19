@@ -15,6 +15,7 @@
 import type { Queryable } from '@draftroom/db'
 import type { FastifyInstance } from 'fastify'
 import { audit } from '../../audit.ts'
+import { dropLostMembers, lockForAccessLoss } from '../breakouts/access-loss.ts'
 import type { FeatureContext } from '../context.ts'
 import { publishSharingChanged } from '../dashboard/shared.ts'
 
@@ -74,6 +75,9 @@ export async function sweepGuests(ctx: FeatureContext): Promise<GuestSweepResult
 
   for (const userId of found.noSession) {
     const boards = await db.transaction(async (tx) => {
+      // their running breakouts and the open activities of their boards: step 2 of the lock order, before the guest's
+      // user row (step 3; breakouts/access-loss.ts)
+      const breakouts = await lockForAccessLoss(tx, { anywhere: true, userIds: [userId] })
       await tx.query("SELECT id FROM users WHERE id = $1 AND kind = 'guest' FOR UPDATE", [userId])
       const at = now()
       const live = await tx.maybeOne(
@@ -97,6 +101,8 @@ export async function sweepGuests(ctx: FeatureContext): Promise<GuestSweepResult
           detail: { userId, previousRole: row.role, via: 'guest_session_ended' },
           at,
         })
+      // no grant left, so no board: out of every running breakout (each board is told below)
+      if (r.rows.length) await dropLostMembers(tx, breakouts)
       return r.rows.map((row) => row.board_id)
     })
     if (!boards.length) continue

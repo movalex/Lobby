@@ -370,7 +370,10 @@ function meeting() {
   // the sender (Alice = ME): her core coalesces like the real one, and relays to Bob
   const alice = fakeCore()
   const flushed: Record<string, unknown>[] = []
+  /** per flushed message: when it went and how long the core held it (since the handover that it is) */
+  const flushes: { at: number; held: number; t: unknown }[] = []
   let pending: Record<string, unknown> | null = null
+  let pendingSince = 0
   let last = Number.NEGATIVE_INFINITY
   let coreTimer: number | null = null
   const flush = () => {
@@ -379,11 +382,13 @@ function meeting() {
     if (!p) return
     last = t
     flushed.push(p)
+    flushes.push({ at: t, held: t - pendingSince, t: p.t })
     const { drag: _drag, type: _type, ...rest } = p
     bob.deliver({ type: 'presence', peers: [{ sid: ME, ...rest }] })
   }
   alice.core.sendPresence = (p: Record<string, unknown>) => {
     pending = { type: 'presence', ...p }
+    pendingSince = t
     const wait = last + 1000 / 20 - t
     if (wait <= 0) return flush()
     if (coreTimer === null)
@@ -392,6 +397,11 @@ function meeting() {
         flush()
       }, wait)
   }
+  // the real core's slot (engine.ts presenceSlot)
+  ;(alice.core as Record<string, unknown>).presenceSlot = () => ({
+    ms: Math.max(0, last + 1000 / 20 - t),
+    held: pending !== null,
+  })
   let tool = 'laser'
   const offTool = setLaserToolSource(alice.core, () => tool === 'laser')
   const aliceHub = new PresenceHub({
@@ -422,6 +432,7 @@ function meeting() {
     aliceHub,
     bob,
     flushed,
+    flushes,
     advance,
     now: () => t,
     sample,
@@ -608,7 +619,8 @@ describe('M2-6: a laser message is never coalesced away', () => {
     m.aliceHub.onPointer(sample)
     m.advance(100)
     const trails = m.flushed.flatMap((p) => (p.trail as { x: number }[] | undefined)?.map((q) => q.x) ?? [])
-    expect(trails).toEqual([100, 110, 130, 150])
+    // the press went as its own message (its point is that message's pointer), the samples after it as one trail
+    expect(trails).toEqual([110, 130, 150])
     // and the peer's laser has the whole path to the last point
     expect(m.seen()?.points.map((p) => p.x)).toEqual([100, 110, 130, 150, 160])
     m.dispose()
@@ -632,6 +644,39 @@ describe('M2-6: a laser message is never coalesced away', () => {
     for (const p of m.flushed) expect((p.trail as unknown[] | undefined)?.length ?? 0).toBeLessThanOrEqual(6)
     // the peer ends where she is
     expect(m.seen()?.points.at(-1)).toMatchObject({ x: 500, y: 1 })
+    m.dispose()
+  })
+
+  // l6-laser lag: a hover move the core held just before the press moved the core's slot past the hub's own; the hub
+  // parked the press behind that hover and then handed it over too early, and the core held it again (the first
+  // laser message reached the room 50 to 100 ms after the press, every later one up to 50 ms late)
+  it('a press right after a hover move goes with the core next slot, and no laser message waits in the core', () => {
+    const m = meeting()
+    m.advance(60)
+    // hovering: one move goes, the next (20 ms later) is held by the core for its slot
+    m.aliceHub.onPointer(m.sample(0, 'up'))
+    m.advance(20)
+    m.aliceHub.onPointer(m.sample(5, 'up'))
+    m.advance(5)
+    const pressAt = m.now()
+    m.aliceHub.onPointer(m.sample(10, 'down'))
+    // the pointer listener's samples at 20 Hz from the press, each with the moves between (125 a second)
+    let x = 10
+    for (let k = 1; k <= 6; k++) {
+      m.advance(50)
+      const trail = Array.from({ length: 5 }, (_, i) => ({ x: x + (i + 1) * 2, y: 1 }))
+      x += 12
+      m.aliceHub.onPointer(m.sample(x, 'down', trail))
+    }
+    m.advance(200)
+    const lasers = m.flushes.filter((f) => f.t === 'laser')
+    // the press goes with the slot the core already had (it replaces the held hover move), not one interval later
+    expect((lasers[0]?.at ?? Number.POSITIVE_INFINITY) - pressAt).toBeLessThanOrEqual(25)
+    // the core never holds a laser message for more than the gate's slack (it never waits a second interval)
+    for (const f of lasers.slice(1)) expect(f.held).toBeLessThanOrEqual(5)
+    // and nothing of the path is lost: the peer has every point up to the last
+    expect(m.seen()?.points.length).toBe(1 + 6 * 6)
+    expect(m.seen()?.points.at(-1)).toMatchObject({ x, y: 1 })
     m.dispose()
   })
 

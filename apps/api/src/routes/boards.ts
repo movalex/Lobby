@@ -29,6 +29,7 @@ import { audit } from '../audit.ts'
 import { onNewCanvas, showsR0Marks } from '../canvas-engine.ts'
 import type { AppContext, Params } from '../context.ts'
 import { conflict, forbidden, notFound, parse } from '../errors.ts'
+import { dropLostMembers, lockForAccessLoss } from '../features/breakouts/access-loss.ts'
 import {
   assertProjectMoveAllowed,
   assertVisibilityRaiseAllowed,
@@ -210,6 +211,12 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
       const access = await requireVisibleBoard(tx, bid, user.id, 'view', { forUpdate: true })
       const { workspace_id } = access.board
       permitted(access)
+      // a lower visibility can take the board from workspace members without a grant: its running breakouts and open
+      // activity, rows of the board, locked now (breakouts/access-loss.ts)
+      const lowering =
+        input.visibility !== undefined &&
+        visibilityRank(input.visibility) < visibilityRank(access.board.visibility)
+      const live = lowering ? await lockForAccessLoss(tx, { boardId: bid }) : null
       // Domain access (D4): raising the visibility hands out access, so only a creator may; lowering
       // (or keeping it) stays open to whoever may change it.
       if (
@@ -258,6 +265,8 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
         ],
       )
       const visibilityChanged = row.visibility !== access.board.visibility
+      // whoever the lower visibility no longer reaches leaves its running breakouts (everyone here is told below)
+      if (live) await dropLostMembers(tx, live)
       if (visibilityChanged)
         await audit(tx, {
           workspaceId: workspace_id,

@@ -293,6 +293,13 @@ from that address gets its own 200 but the address's 400 caps the two together.
   group (the chip says "Frame removed"; the facilitator picks another).
 - Editing is NOT fenced to a group's frame (a guide, not a fence: fencing would be a sync merge rule per uid; the UI
   copy says so).
+- Losing the board (post-wave cleanup, gate review u2): every transaction that can take someone's view of a board away
+  (a board member removed, a workspace member removed or lowered, a link revoked with removal or expired, a guest's
+  grants swept, the board's visibility lowered) locks the board's running sessions and open activity at step 2 of the
+  lock order and, after its change, deletes the members who may no longer view it, in the same transaction
+  (`features/breakouts/access-loss.ts`); every placement and every answer re-checks access under the row it locks, so a
+  loss that lands between a route's check and its write refuses it. Ended sessions keep their members (the summary's
+  record). The new state goes out after COMMIT (the event hub's access-change listener).
 
 ### 4.2 Routes (`BREAKOUT_ROUTE_KEYS`, `BREAKOUT_RULES`; `breakoutsPath`, `breakoutActionPath`)
 
