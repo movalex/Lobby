@@ -360,7 +360,7 @@ export function SetupDialog({ ctx, store, onClose }: { ctx: Ctx; store: Activity
         </label>
         <p id={`${id}-anon-hint`} className="dr-la-hint" data-testid="la-anonymous-hint">
           {anonymous
-            ? 'Nobody, you included, ever sees who answered what. Answers are deleted once the results are revealed.'
+            ? 'Nobody, you included, ever sees who answered what. Answers are deleted once it closes; only the totals are kept.'
             : 'Answers show who gave them to you after the reveal. Nobody else sees names.'}
           {kind === 'words' ? ' A rare word can still tell who wrote it.' : ''}
         </p>

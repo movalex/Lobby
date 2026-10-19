@@ -76,6 +76,15 @@ export function toActivity(row: ActivityRow, at: Date): LiveActivity {
   } as LiveActivity
 }
 
+/**
+ * The aggregate stored for `row`: frozen at its reveal, or at the close of an anonymous activity (whose answers are
+ * gone then). Null while it is open, for a cancelled one, and for a closed named one (its answers are still kept).
+ */
+export function frozenOf(row: ActivityRow, at: Date): ActivityResults | null {
+  const status = effectiveStatus(row, at)
+  return status === 'closed' || status === 'revealed' ? row.results : null
+}
+
 export const configOf = (row: Pick<ActivityRow, 'kind' | 'config'>): ActivityConfigOf =>
   ({ kind: row.kind, config: row.config }) as ActivityConfigOf
 
@@ -195,11 +204,90 @@ export async function recentActivities(
   return rows.rows
 }
 
-/** An open activity of the board past its end time is closed now (closed_at = its end), so a new one may start. */
-export async function closeEndedByTime(tx: Queryable, boardId: string, at: Date): Promise<void> {
-  await tx.query(
-    `UPDATE live_activities SET status = 'closed', closed_at = ends_at
-      WHERE board_id = $1 AND status = 'open' AND ends_at IS NOT NULL AND ends_at <= $2`,
-    [boardId, at],
+// ---- settling: an activity that stopped taking answers (wave V review m2) -----------------------------------------
+//
+// Whenever an activity stops taking answers it is SETTLED: an open one is closed (closed_at = its end time when that
+// passed, else now), and an ANONYMOUS one that is not open has its aggregate frozen into `results` (a closed one, if
+// not yet: a revealed one froze at its reveal, a cancelled one has no results) and every answer row deleted, in the
+// same transaction. So no row ties a person to an answer once it stopped taking them, whichever way it stopped: the
+// close, the reveal, a cancel (the routes), its end time passing (the first read after it, through `settleEnded`, or
+// the sweep), a new activity superseding it (the start), and its board being archived or trashed (routes/boards.ts,
+// in the transaction that changes the board's status). A NAMED activity keeps its answers (GET …/answers).
+
+/** Which activities may need settling: an open one past its end (or any open one with `closeOpen`), and an anonymous
+ * one that is not open and still has answers or no frozen aggregate. */
+const UNSETTLED = `(
+    (a.status = 'open' AND (($2::boolean) OR (a.ends_at IS NOT NULL AND a.ends_at <= $3)))
+    OR (a.anonymous AND a.status <> 'open'
+        AND ((a.status = 'closed' AND a.results IS NULL)
+             OR EXISTS (SELECT 1 FROM live_answers x WHERE x.activity_id = a.id)))
+  )`
+
+/** Settles one activity under its row lock. Returns whether it changed anything. */
+export async function settleActivity(
+  tx: Queryable,
+  activityId: string,
+  at: Date,
+  opts: { closeOpen?: boolean } = {},
+): Promise<boolean> {
+  const row = await tx.maybeOne<ActivityRow>(
+    `SELECT ${ACTIVITY_COLUMNS} FROM live_activities WHERE id = $1 FOR UPDATE`,
+    [activityId],
   )
+  if (!row) return false
+  let status = row.status
+  let closedAt = row.closed_at
+  if (status === 'open') {
+    const ended = row.ends_at !== null && row.ends_at.getTime() <= at.getTime()
+    if (!ended && !opts.closeOpen) return false
+    status = 'closed'
+    closedAt = ended && row.ends_at ? row.ends_at : at
+  }
+  if (!row.anonymous) {
+    if (status === row.status) return false
+    await tx.query("UPDATE live_activities SET status = 'closed', closed_at = $2 WHERE id = $1", [
+      row.id,
+      closedAt,
+    ])
+    return true
+  }
+  let results = row.results
+  if (status === 'closed' && results === null)
+    results = tallyOf(row, (await readSnapshot(tx, row.id)).answers, row.hidden)
+  const answers = await tx.query('DELETE FROM live_answers WHERE activity_id = $1', [row.id])
+  if (status === row.status && results === row.results) return answers.rowCount > 0
+  await tx.query(
+    'UPDATE live_activities SET status = $2, closed_at = $3, results = $4::jsonb WHERE id = $1',
+    [row.id, status, closedAt, results === null ? null : JSON.stringify(results)],
+  )
+  return true
+}
+
+/**
+ * Settles every activity of `scope` that needs it (each under its own row lock, in id order), in `tx`. With
+ * `closeOpen`, an open one is closed now whatever its end time (its board is being archived or trashed). Returns the
+ * ids it changed.
+ */
+export async function settleActivities(
+  tx: Queryable,
+  scope: { boardId: string },
+  at: Date,
+  opts: { closeOpen?: boolean } = {},
+): Promise<string[]> {
+  const ids = await tx.query<{ id: string }>(
+    `SELECT a.id FROM live_activities a WHERE a.board_id = $1 AND ${UNSETTLED} ORDER BY a.id`,
+    [scope.boardId, opts.closeOpen === true, at],
+  )
+  const changed: string[] = []
+  for (const { id } of ids.rows) if (await settleActivity(tx, id, at, opts)) changed.push(id)
+  return changed
+}
+
+/** Up to `limit` activities anywhere that need settling (the sweep settles each in its own transaction). */
+export async function unsettledActivities(q: Queryable, at: Date, limit: number): Promise<string[]> {
+  const ids = await q.query<{ id: string }>(
+    `SELECT a.id FROM live_activities a WHERE $1::int > 0 AND ${UNSETTLED} ORDER BY a.id LIMIT $1`,
+    [limit, false, at],
+  )
+  return ids.rows.map((r) => r.id)
 }

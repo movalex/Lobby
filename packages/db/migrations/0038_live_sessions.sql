@@ -3,10 +3,12 @@
 --
 -- - live_activities, live_answers: polls, scales and word clouds (WS1). At most one open activity per board (a dot vote
 --   may run beside it). One answer per person, replaced on change. `user_id` is kept only to enforce that while it is
---   open (and, for a NAMED activity, to show its facilitator who answered what after the reveal): at the reveal or the
---   cancel of an ANONYMOUS activity the api deletes its answers in the same transaction and keeps only the aggregate
---   (`results`), so afterwards no row ties a person to an answer. `hidden` holds the words a facilitator hid
---   (normalized, contracts normalizeWord).
+--   open (and, for a NAMED activity, to show its facilitator who answered what after the reveal): whenever an
+--   ANONYMOUS activity stops taking answers (closed, ended by its time, revealed, cancelled, its board archived or
+--   trashed) the api deletes its answers in the same transaction and keeps only the aggregate (`results`, frozen at
+--   its close; none for a cancelled one), so afterwards no row ties a person to an answer. `hidden` holds the words a
+--   facilitator hid (normalized, contracts normalizeWord). (Edited in the wave V fix wave, before 0038 ever shipped:
+--   `results` may be set on a closed activity.)
 -- - breakout_sessions, breakout_members: breakouts (WS4). At most one running session per board; `rev` grows with
 --   every change of the session or its members (contracts BreakoutSession.rev). Members are not secret.
 -- - invitations.join_code_hash, join_code_n: a workshop link's short join code (WS3): only its sha256 is stored
@@ -34,7 +36,7 @@ CREATE TABLE live_activities (
   status text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed', 'revealed', 'cancelled')),
   -- words a facilitator hid (normalized; word clouds only)
   hidden text[] NOT NULL DEFAULT '{}' CHECK (cardinality(hidden) <= 200),
-  -- the aggregate, frozen at the reveal (contracts ActivityResults)
+  -- the aggregate (contracts ActivityResults), frozen at the reveal, or at the close of an anonymous activity
   results jsonb CHECK (results IS NULL OR (jsonb_typeof(results) = 'object' AND octet_length(results::text) <= 16384)),
   created_by text REFERENCES users (id) ON DELETE SET NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -46,7 +48,8 @@ CREATE TABLE live_activities (
   FOREIGN KEY (workspace_id, board_id) REFERENCES boards (workspace_id, id) ON DELETE CASCADE,
   CHECK ((status = 'open') = (closed_at IS NULL)),
   CHECK ((status = 'revealed') = (revealed_at IS NOT NULL)),
-  CHECK ((status = 'revealed') = (results IS NOT NULL)),
+  CHECK (status <> 'revealed' OR results IS NOT NULL),
+  CHECK (results IS NULL OR status IN ('closed', 'revealed')),
   CHECK (placed_at IS NULL OR status = 'revealed'),
   CHECK (kind = 'words' OR cardinality(hidden) = 0),
   CHECK (ends_at IS NULL OR ends_at > created_at),

@@ -369,7 +369,10 @@ describe('resolving a code', () => {
     const res = await Promise.all(burst.map((c) => resolve(w.api, c, '10.9.9.9')))
     const by: Record<number, number> = {}
     for (const r of res) by[r.statusCode] = (by[r.statusCode] ?? 0) + 1
-    expect(by).toEqual({ 404: JOIN_CODE_LOOKUPS_PER_ADDRESS.max, 429: 300 - JOIN_CODE_LOOKUPS_PER_ADDRESS.max })
+    expect(by).toEqual({
+      404: JOIN_CODE_LOOKUPS_PER_ADDRESS.max,
+      429: 300 - JOIN_CODE_LOOKUPS_PER_ADDRESS.max,
+    })
     for (const r of res) if (r.statusCode === 404) expect(r.json()).toEqual(UNKNOWN)
     // the burst neither locks out the good code from that address nor uses up the api's window for others
     expect((await resolve(w.api, good, '10.9.9.9')).statusCode).toBe(200)

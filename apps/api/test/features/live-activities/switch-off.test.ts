@@ -101,7 +101,9 @@ describe('the live activities switch', () => {
     expect(await tables(db)).toBe(before)
     expect(published).toEqual([])
 
-    // on again, after its end time: it reads as it was, closed by its time; the answer is there
+    // on again, after its end time: it reads as it was, closed by its time, with its count; being anonymous, the
+    // first read settled it (review m2): the aggregate is frozen and no answer row is kept, so nobody's answer is
+    // given back to them any more
     t += 61_000
     const on2 = await createTestApi({ db, env: ON, deps: { now } })
     apis.push(on2)
@@ -114,9 +116,14 @@ describe('the live activities switch', () => {
       answered: 1,
       results: { kind: 'poll', counts: [0, 1, 0] },
     })
-    expect((await v2.req('GET', activityPath(board))).json()).toMatchObject({
-      myAnswer: { kind: 'poll', choices: [1] },
-    })
+    expect((await v2.req('GET', activityPath(board))).json()).toMatchObject({ myAnswer: null, answered: 1 })
+    expect(
+      (
+        await db.one<{ n: number }>('SELECT count(*)::int AS n FROM live_answers WHERE activity_id = $1', [
+          aid,
+        ])
+      ).n,
+    ).toBe(0)
     // and a new one may start (the ended one is closed under the lock)
     expect((await o2.req('POST', activitiesPath(board), POLL)).statusCode).toBe(201)
   })

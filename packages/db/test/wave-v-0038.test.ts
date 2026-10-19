@@ -238,7 +238,10 @@ describe('0038: live activities', () => {
     for (const [over, want] of [
       [{ status: 'open', closed_at: t }, '23514'],
       [{ status: 'closed' }, '23514'],
-      [{ status: 'closed', closed_at: t, results: res }, '23514'],
+      // an anonymous activity's aggregate is frozen at its close (its answers go): results on a closed one
+      [{ status: 'closed', closed_at: t, results: res }, 'no error'],
+      [{ status: 'open', results: res }, '23514'],
+      [{ status: 'cancelled', closed_at: t, results: res }, '23514'],
       [{ status: 'revealed', closed_at: t, results: res }, '23514'],
       [{ status: 'revealed', closed_at: t, revealed_at: t }, '23514'],
       [{ status: 'closed', closed_at: t, placed_at: t }, '23514'],

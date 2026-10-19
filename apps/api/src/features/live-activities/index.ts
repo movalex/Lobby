@@ -30,10 +30,12 @@
 //
 // Privacy (§2.2): an anonymous activity's answers never leave tied to a person. Bodies and events hold aggregates
 // (contracts tallyPoll/tallyScale/tallyWords) plus the CALLER's own answer; the only account id is the starter's
-// (`createdBy`). While it is open, every count shown is the one at the last tally window boundary (./tally.ts). At the
-// reveal and at the cancel of an anonymous activity its answers are deleted in the same transaction; the frozen
-// aggregate (live_activities.results) is all that stays. Nothing here logs a body or an answer. Events go out after
-// COMMIT, the same body for every viewer.
+// (`createdBy`). While it is open, every count shown is the one at the last tally window boundary (./tally.ts).
+// Whenever an anonymous activity stops taking answers (close, its end time passing, a new start superseding it,
+// reveal, cancel, its board archived or trashed) its aggregate is frozen into live_activities.results and its answers
+// are deleted in the same transaction (store.ts settleActivity; ./sweep.ts for boards nobody reads; review m2): the
+// frozen aggregate is all that stays, and the reveal shows it. Nothing here logs a body or an answer. Events go out
+// after COMMIT, the same body for every viewer.
 
 import {
   ACTIVITY_ERROR_CODES,
@@ -73,20 +75,23 @@ import { allowedNow } from '../workshops/private-notes.ts'
 import {
   ACTIVITY_COLUMNS,
   type ActivityRow,
-  closeEndedByTime,
   configOf,
   currentActivity,
   effectiveStatus,
   findActivity,
+  frozenOf,
   lockActivity,
   myAnswerOf,
   namedAnswers,
   readSnapshot,
   recentActivities,
+  settleActivities,
+  settleActivity,
   tallyOf,
   toActivity,
   withHidden,
 } from './store.ts'
+import { startActivitiesSweeper } from './sweep.ts'
 import { ActivityTally, isOpenAt, type Snapshot } from './tally.ts'
 
 export interface LiveActivitiesOptions {
@@ -155,15 +160,16 @@ export async function registerLiveActivities(
   /** What the board's stream is told of `row` (aggregates; results only when everyone may see them). */
   const eventOf = (row: ActivityRow, snap: Snapshot | null, at: Date): WorkshopActivityEvent => {
     const status = effectiveStatus(row, at)
-    const revealed = status === 'revealed' && row.results
+    const kept = frozenOf(row, at)
     return {
       activity: toActivity(row, at),
-      answered: revealed ? (row.results?.answered ?? 0) : (snap?.answers.length ?? 0),
-      results: revealed
-        ? withHidden(row.results as ActivityResults, row.hidden)
-        : row.results_live && snap && status !== 'cancelled'
-          ? tallyOf(row, snap.answers, row.hidden)
-          : null,
+      answered: kept ? kept.answered : (snap?.answers.length ?? 0),
+      results:
+        kept && (status === 'revealed' || row.results_live)
+          ? withHidden(kept, row.hidden)
+          : row.results_live && snap && status !== 'cancelled'
+            ? tallyOf(row, snap.answers, row.hidden)
+            : null,
     }
   }
   const publish = (row: ActivityRow, snap: Snapshot | null, at: Date) =>
@@ -180,10 +186,26 @@ export async function registerLiveActivities(
     tally.close()
     await tally.drain()
   })
+  // activities that ended by their time on boards nobody reads are settled too (review m2)
+  startActivitiesSweeper(app, ctx, (ids) => {
+    for (const id of ids) tally.ended(id)
+  })
 
   /** The answers anyone may be shown of `row` at `at` (open: the last boundary's; else the stored ones). */
   const shownOf = (row: ActivityRow, at: Date, q: Queryable = ctx.db) =>
     tally.view(row, at, () => readSnapshot(q, row.id))
+
+  /**
+   * `row` as it stands once settled: an open activity past its end time is closed (and an anonymous one's answers
+   * frozen and deleted) by the first read that sees it (review m2; the sweep does it too, for boards nobody reads).
+   */
+  async function settled<T extends ActivityRow | null>(row: T): Promise<T> {
+    if (row?.status !== 'open' || isOpenAt(row, now())) return row
+    const id = row.id
+    await ctx.db.transaction((tx) => settleActivity(tx, id, now()))
+    tally.ended(id)
+    return ((await findActivity(ctx.db, id)) ?? row) as T
+  }
 
   /** The caller's view of the board's activity (GET …/activity, every mutation's answer, the open-state part). */
   async function stateFor(
@@ -192,8 +214,8 @@ export async function registerLiveActivities(
     userId: string,
     found?: ActivityRow | null,
   ): Promise<ActivityState> {
+    const row = await settled(found === undefined ? await currentActivity(q, access.board.id) : found)
     const at = now()
-    const row = found === undefined ? await currentActivity(q, access.board.id) : found
     const empty: ActivityState = {
       activity: null,
       answered: 0,
@@ -207,11 +229,13 @@ export async function registerLiveActivities(
     if (!row || row.status === 'cancelled') return empty
     const right = await manageRight(q, access, row, userId, at)
     const status = effectiveStatus(row, at)
+    const kept = frozenOf(row, at)
     let answered = 0
     let results: ActivityResults | null = null
-    if (status === 'revealed' && row.results) {
-      answered = row.results.answered
-      results = withHidden(row.results, row.hidden)
+    if (kept) {
+      // revealed (everyone), or an anonymous one frozen at its close (its manager, or everyone with live results)
+      answered = kept.answered
+      if (status === 'revealed' || right.canManage || row.results_live) results = withHidden(kept, row.hidden)
     } else {
       const snap = await shownOf(row, at, q)
       answered = snap.answers.length
@@ -247,11 +271,12 @@ export async function registerLiveActivities(
   ) {
     const { aid = '' } = req.params as Params
     if (!ACTIVITY_ID_PATTERN.test(aid)) throw notFound()
-    const row = await findActivity(q, aid)
-    if (!row) throw notFound()
-    const access = await requireBoardAction(q, row.board_id, userId, action)
-    if (access.board.workspace_id !== row.workspace_id) throw notFound()
-    return { row, access }
+    const found = await findActivity(q, aid)
+    if (!found) throw notFound()
+    const access = await requireBoardAction(q, found.board_id, userId, action)
+    if (access.board.workspace_id !== found.workspace_id) throw notFound()
+    // ended by its time since anyone looked: settled now (review m2), after the access check
+    return { row: await settled(found), access }
   }
 
   const take = (limiter: SlidingWindowLimiter, key: string, message: string) => {
@@ -278,20 +303,22 @@ export async function registerLiveActivities(
     const user = await ctx.requireUser(req)
     const { bid = '' } = req.params as Params
     const access = await requireBoardAction(ctx.db, bid, user.id, 'view')
+    let rows = await recentActivities(ctx.db, access.board.id, ACTIVITY_LIMITS.pastListMax)
+    // one that ended by its time is settled first (review m2): then it is listed with its frozen count
+    const ended = rows.find((r) => r.status === 'open' && !isOpenAt(r, now()))
+    if (ended) {
+      await settled<ActivityRow>(ended)
+      rows = await recentActivities(ctx.db, access.board.id, ACTIVITY_LIMITS.pastListMax)
+    }
     const at = now()
-    const rows = await recentActivities(ctx.db, access.board.id, ACTIVITY_LIMITS.pastListMax)
     const out: ActivitySummary[] = []
-    for (const { answers: kept, ...row } of rows) {
+    for (const { answers: count, ...row } of rows) {
       const status = effectiveStatus(row, at)
-      const revealed = status === 'revealed' && row.results
+      const kept = frozenOf(row, at)
       out.push({
         activity: toActivity(row, at),
-        answered: revealed
-          ? (row.results?.answered ?? 0)
-          : status === 'open'
-            ? (await shownOf(row, at)).answers.length
-            : kept,
-        results: revealed ? withHidden(row.results as ActivityResults, row.hidden) : null,
+        answered: kept ? kept.answered : status === 'open' ? (await shownOf(row, at)).answers.length : count,
+        results: kept && status === 'revealed' ? withHidden(kept, row.hidden) : null,
       })
     }
     return { activities: out }
@@ -303,14 +330,16 @@ export async function registerLiveActivities(
     const input = parse(StartActivityInput, req.body)
     const at = now()
     let row: ActivityRow
+    let superseded: string[] = []
     try {
       row = await ctx.db.transaction(async (tx) => {
         // the board row lock serializes starts on one board (step 1 of access.ts's lock order)
         const access = await requireBoardAction(tx, bid, user.id, 'edit', { forUpdate: true })
         // name-only guests take part but never run one (final review R3; the guard refused them already)
         await requireFacilitatorAccount(tx, user.id)
-        // an open activity past its end time is over: record that, so a new one can start
-        await closeEndedByTime(tx, access.board.id, at)
+        // an open activity past its end time is over: settle it (closed; an anonymous one's answers frozen and
+        // deleted: review m2), so a new one can start
+        superseded = await settleActivities(tx, { boardId: access.board.id }, at)
         const open = await tx.maybeOne(
           "SELECT 1 AS ok FROM live_activities WHERE board_id = $1 AND status = 'open'",
           [access.board.id],
@@ -342,6 +371,7 @@ export async function registerLiveActivities(
       if (isUniqueViolation(e)) throw activityOpen()
       throw e
     }
+    for (const id of superseded) tally.ended(id)
     tally.started(row)
     publish(row, null, at)
     const access = await requireBoardAction(ctx.db, row.board_id, user.id, 'view')
@@ -415,6 +445,8 @@ export async function registerLiveActivities(
         r.id,
         closedAt,
       ])
+      // anonymous: its aggregate is frozen and its answers go now, not at a reveal that may never come (review m2)
+      await settleActivity(tx, r.id, t)
       return true
     })
     // answering has stopped: the final counts are shown as they are
@@ -428,8 +460,8 @@ export async function registerLiveActivities(
     const { row, changed, access, at } = await manage(req, user.id, async (tx, r, t) => {
       if (r.status === 'revealed') return false // idempotent: pressing it twice gives one result
       if (r.status === 'cancelled') throw notOpen()
-      const snap = await readSnapshot(tx, r.id)
-      const results = tallyOf(r, snap.answers, r.hidden)
+      // an anonymous one closed before: the aggregate frozen at its close (its answers are gone)
+      const results = r.results ?? tallyOf(r, (await readSnapshot(tx, r.id)).answers, r.hidden)
       const closedAt = r.closed_at ?? (isOpenAt(r, t) ? t : r.ends_at)
       await tx.query(
         `UPDATE live_activities SET status = 'revealed', closed_at = $2, revealed_at = $3, results = $4::jsonb
@@ -476,10 +508,11 @@ export async function registerLiveActivities(
       if (r.status === 'revealed')
         throw conflict(C.notOpen, 'The results of this activity are already revealed.')
       const closedAt = r.closed_at ?? (isOpenAt(r, t) ? t : r.ends_at)
-      await tx.query("UPDATE live_activities SET status = 'cancelled', closed_at = $2 WHERE id = $1", [
-        r.id,
-        closedAt,
-      ])
+      // no results (a frozen aggregate of a closed anonymous one goes too)
+      await tx.query(
+        "UPDATE live_activities SET status = 'cancelled', closed_at = $2, results = NULL WHERE id = $1",
+        [r.id, closedAt],
+      )
       // anonymous: its answers go with it (§2.2 rule 4)
       if (r.anonymous) await tx.query('DELETE FROM live_answers WHERE activity_id = $1', [r.id])
       return true
@@ -537,6 +570,8 @@ export async function registerLiveActivities(
     // open or closed: a manager's (they see it live, windowed), or everyone's with live results
     if (!row.results_live && !(await manageRight(ctx.db, access, row, user.id, at, { read: true })).canManage)
       throw notFound()
+    const kept = frozenOf(row, at)
+    if (kept) return { activity: toActivity(row, at), results: withHidden(kept, row.hidden) }
     const snap = await shownOf(row, at)
     return { activity: toActivity(row, at), results: tallyOf(row, snap.answers, row.hidden) }
   })

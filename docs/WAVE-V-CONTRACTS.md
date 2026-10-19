@@ -113,9 +113,15 @@ Three kinds (`ACTIVITY_KINDS`), one open activity per board (a dot vote may run 
 3. **Words** are shown to participants only after the reveal, or live when the facilitator turned `resultsLive` on
    (then windowed), and never with their author. The facilitator sees windowed live results while it is open (that is
    why anonymous is 5 s).
-4. **Retention**: at the reveal and at a cancel of an anonymous activity the api deletes its `live_answers` rows in the
-   same transaction; afterwards no row ties a person to an answer (`myAnswer` is then null). A named activity keeps them
-   (with the board) for `GET …/answers`.
+4. **Retention** (widened in the fix wave, review m2): whenever an anonymous activity stops taking answers the api
+   freezes its aggregate into `live_activities.results` and deletes its `live_answers` rows in the same transaction
+   (`store.ts settleActivity`): at the close, its end time passing (the first read after it, or the settle sweep
+   `sweep.ts` every minute for boards nobody reads, while the switch is on), a new start superseding it, the reveal,
+   a cancel (no aggregate is kept: a cancelled one has no results), and its board being archived or trashed (in the
+   transaction that changes the board's status, whatever the switch says). Afterwards no row ties a person to an
+   answer (`myAnswer` is then null); the reveal of a closed one shows the aggregate frozen at its close (a word hidden
+   after it still leaves it; one hidden before it cannot come back). A named activity keeps its answers (with the
+   board) for `GET …/answers`. Tests: `live-activities/retention.test.ts` (one per path, and the invariant).
 5. **Named** (`anonymous: false`) is opt-in and labelled in the setup dialog ("Answers show who gave them to you after
    the reveal"); the facilitator (manage) sees who answered what after the reveal only; other participants never see
    names. The setup dialog also says that a rare word can identify its author by its content (R2).
@@ -130,8 +136,8 @@ Three kinds (`ACTIVITY_KINDS`), one open activity per board (a dot vote may run 
 | `GET /api/boards/:bid/activities` | view | → `ListActivitiesResponse` (≤ 50, newest first; `ActivitySummary`: results only once revealed) |
 | `POST /api/boards/:bid/activities` | facilitate | `StartActivityInput` → 201 `ActivityState`; 409 `ACTIVITY_OPEN` |
 | `POST /api/activities/:aid/answer` | participate | `AnswerActivityInput` → `ActivityState`; 409 `ACTIVITY_NOT_OPEN`; 400 `ACTIVITY_BAD_ANSWER` (`answerProblem`) |
-| `POST /api/activities/:aid/close` | manage | → `ActivityState` |
-| `POST /api/activities/:aid/reveal` | manage | → `ActivityState` (from open or closed; freezes `results`; deletes an anonymous one's answers) |
+| `POST /api/activities/:aid/close` | manage | → `ActivityState` (an anonymous one: freezes `results`, deletes its answers) |
+| `POST /api/activities/:aid/reveal` | manage | → `ActivityState` (from open or closed; freezes `results`, or keeps the one frozen at the close; deletes an anonymous one's answers) |
 | `POST /api/activities/:aid/extend` | manage | `ExtendActivityInput` `{addMs ≤ 30 min}` → `ActivityState`; 409 `ACTIVITY_NOT_OPEN` |
 | `POST /api/activities/:aid/cancel` | manage | → `ActivityState` (deletes an anonymous one's answers) |
 | `POST /api/activities/:aid/hide` | manage | `HideWordInput` (word clouds only, else 400) → `ActivityState` |
@@ -372,7 +378,7 @@ real-Postgres `apps/api/test/migrations.pg.test.ts`):
 
 | Table / column | Holds | Keys and CHECKs |
 |---|---|---|
-| `live_activities` | `id` (`act_`), `workspace_id`, `board_id`, `kind`, `prompt` (1-200), `config` (an object ≤ 4 KiB), `anonymous` (default true), `results_live` (default false), `status`, `hidden text[]` (≤ 200, words only), `results` (the frozen aggregate, ≤ 16 KiB), `created_by` (SET NULL), `created_at`, `ends_at`, `closed_at`, `revealed_at`, `placed_at` | `(status = 'open') = (closed_at IS NULL)`; `(status = 'revealed') = (revealed_at IS NOT NULL) = (results IS NOT NULL)`; `placed_at` only when revealed; one open per board (`live_activities_open_idx`); `(board_id, created_at DESC)`; cascades with the board |
+| `live_activities` | `id` (`act_`), `workspace_id`, `board_id`, `kind`, `prompt` (1-200), `config` (an object ≤ 4 KiB), `anonymous` (default true), `results_live` (default false), `status`, `hidden text[]` (≤ 200, words only), `results` (the frozen aggregate, ≤ 16 KiB: at the reveal, or at the close of an anonymous one), `created_by` (SET NULL), `created_at`, `ends_at`, `closed_at`, `revealed_at`, `placed_at` | `(status = 'open') = (closed_at IS NULL)`; `(status = 'revealed') = (revealed_at IS NOT NULL)`; revealed needs `results`, and `results` only on a closed or revealed one (edited in the fix wave before 0038 shipped); `placed_at` only when revealed; one open per board (`live_activities_open_idx`); `(board_id, created_at DESC)`; cascades with the board |
 | `live_answers` | `workspace_id`, `activity_id`, `user_id`, `answer` (an object ≤ 2 KiB), `created_at`, `updated_at` | PK `(activity_id, user_id)`; `(workspace_id, activity_id)` → `live_activities` CASCADE; the user CASCADE |
 | `breakout_sessions` | `id` (`brk_`), `workspace_id`, `board_id`, `mode`, `groups` (a 2-20 array ≤ 16 KiB), `group_cap` (1-200, choose only), `status` (`running`/`ended`), `rev`, `created_by` (SET NULL), `created_at`, `ends_at`, `ended_at` | `(status = 'ended') = (ended_at IS NOT NULL)`; one running per board (`breakout_sessions_running_idx`); cascades with the board |
 | `breakout_members` | `workspace_id`, `session_id`, `user_id`, `group_id` (`g1`..`g20`), `assigned_by` (`auto`/`facilitator`/`self`), `assigned_at` | PK `(session_id, user_id)`; `(session_id, group_id)`; cascades with the session and the user |
@@ -435,7 +441,8 @@ before WS2's e2e (WS2 unit-tests against a fake api); WS3 and WS4 are independen
 5. **The six built-in Facilitate entries stay code**; the registry is for added entries, after them (the scout made the
    built-ins registrations too): their order, test ids and K3 behaviour cannot move, and no workstream edits
    `WorkshopBar.tsx` either way.
-6. **An anonymous activity's answers are deleted at its reveal or cancel**, and the aggregate is frozen in
+6. **An anonymous activity's answers are deleted as soon as it stops taking answers** (the foundation said at its
+   reveal or cancel; the fix wave widened it to every way it stops, §2.2 rule 4), and the aggregate is frozen in
    `live_activities.results` (the scout kept `user_id` only to enforce one answer): afterwards nothing ties a person to
    an answer, and the summary stays stable after guests are swept.
 7. **Hidden words are a `hidden text[]` column**, not `config.hidden`: the setup stays immutable and checkable.

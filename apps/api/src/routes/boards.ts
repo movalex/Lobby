@@ -37,6 +37,7 @@ import {
   scopeIn,
   visibilityReachesOutside,
 } from '../features/dashboard/outside.ts'
+import { settleActivities } from '../features/live-activities/store.ts'
 import { assertBoardRoom } from '../files/usage.ts'
 import { actorOf } from '../notifier.ts'
 import { type BoardMarks, toBoard, toBoardWithRole } from '../serialize.ts'
@@ -312,6 +313,10 @@ export function registerBoardRoutes(app: FastifyInstance, ctx: AppContext): void
           throw forbidden()
         }
         const at = now()
+        // An archived or trashed board takes no answers and its activities can no longer be managed: each is closed
+        // now, and an anonymous one's aggregate frozen and its answers deleted, before the status changes (wave V
+        // review m2; whatever DRAFTROOM_LIVE_ACTIVITIES says, since this only removes per-person rows).
+        if (target !== 'active') await settleActivities(tx, { boardId: bid }, at, { closeOpen: true })
         const row = await tx.one<BoardRow>(
           `UPDATE boards SET status = $2, trashed_at = $3, updated_at = $4 WHERE id = $1 RETURNING ${BOARD_RETURNING}`,
           [bid, target, target === 'trashed' ? at : null, at],
