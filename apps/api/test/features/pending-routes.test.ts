@@ -119,7 +119,10 @@ const WAVE_W_LANDED: string[] = [
   FORMAT_ROUTE_KEYS.opCancel,
   // WS4 (W4-1, render a deck's pages): features/formats/deck
   FORMAT_ROUTE_KEYS.renderPages,
+  // WS5 (W5-*): the seven admin routes, features/workspace-admin
+  ...Object.values(ADMIN_ROUTE_KEYS),
 ]
+/** The wave W routes still pending: none (every owner landed its routes). */
 const WAVE_W_ROUTES: string[] = [
   ...Object.values(FORMAT_ROUTE_KEYS),
   ...Object.values(ADMIN_ROUTE_KEYS),

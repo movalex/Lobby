@@ -48,6 +48,7 @@ const LANDED: string[] = [
   FORMAT_ROUTE_KEYS.opState, // WS2
   FORMAT_ROUTE_KEYS.opCancel, // WS2
   FORMAT_ROUTE_KEYS.renderPages, // WS4
+  ...Object.values(ADMIN_ROUTE_KEYS), // WS5
 ]
 /** The routes still stubbed (pending in the real app); a landed one is held to its gate here and tested by its owner. */
 const STUBBED = ROUTES.filter(([key]) => Object.hasOwn(PENDING_ROUTES, key))
@@ -144,6 +145,7 @@ describe('the wave W kill switches', () => {
     await registerWorkspaceAdmin(a, switchesOnly(ALL_ON), {})
     await a.ready()
     app = a
+    // every wave W route has landed, so STUBBED is empty now; the loop holds a route added pending later
     for (const [key] of STUBBED) {
       const [method = 'GET', pattern = ''] = key.split(' ') as ['GET' | 'POST', string]
       const res = await a.inject({ method, url: fill(pattern) })
@@ -164,7 +166,7 @@ describe('the wave W kill switches', () => {
     expect((await a.inject({ method: 'GET', url: '/q' })).json()).toEqual({ ok: 2 })
   })
 
-  it('in the real app with every switch on, the landed routes are registered and every other wave W route is still pending', async () => {
+  it('in the real app with every switch on, a landed wave W route is registered and a pending one is not; both answer unknown ids as an unknown route', async () => {
     api = await createTestApi({
       env: {
         DRAFTROOM_DOC_CARDS: 'on',
@@ -182,9 +184,12 @@ describe('the wave W kill switches', () => {
       expect(api.app.hasRoute({ method, url: pattern }), key).toBe(true)
     }
     expect(STUBBED.map(([k]) => k)).toEqual(ROUTES.map(([k]) => k).filter((k) => !LANDED.includes(k)))
-    for (const [key] of STUBBED) {
+    for (const [key] of ROUTES) {
       const [method = 'GET', pattern = ''] = key.split(' ') as ['GET' | 'POST', string]
-      expect(api.app.hasRoute({ method, url: pattern }), key).toBe(false)
+      const pending = Object.hasOwn(PENDING_ROUTES, key)
+      expect(api.app.hasRoute({ method, url: pattern }), key).toBe(!pending)
+      // pending or landed, an unknown workspace, version or op answers as an unknown route (a landed format route:
+      // no capable worker has checked in, or the op is not the caller's)
       const res = await alice.req(method, fill(pattern), method === 'GET' ? undefined : {})
       expect(res.statusCode, key).toBe(404)
       expect(res.json(), key).toEqual(UNKNOWN)

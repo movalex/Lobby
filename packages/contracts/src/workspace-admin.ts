@@ -47,6 +47,8 @@ export const ADMIN_LIMITS = {
   pageSize: 100,
   /** rows of the by-board and by-uploader storage lists */
   topRows: 50,
+  /** boards listed per name-only guest on the links tab (WS5; `grants` counts them all) */
+  guestBoards: 20,
   /** requests per user over every admin route */
   rate: { max: 20, timeWindow: 10_000 },
 } as const
@@ -163,6 +165,11 @@ export const AdminGuest = z.object({
   user: Person,
   /** boards this name-only guest holds a grant on */
   grants: Count,
+  /**
+   * WS5: those boards (at most ADMIN_LIMITS.guestBoards, the newest grants first), so the page can take the guest off
+   * one through the existing DELETE /api/boards/:bid/members/:uid
+   */
+  boards: z.array(z.object({ id: BoardIdLike, title: z.string() })),
   joinedAt: IsoDate,
 })
 export type AdminGuest = z.infer<typeof AdminGuest>
