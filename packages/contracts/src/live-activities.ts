@@ -19,6 +19,7 @@
 // Do not import values from ./index.ts here: index.ts re-exports this module.
 
 import { z } from 'zod'
+import { isJoiner, joinerJoins } from './outside.ts'
 import { codePointLength } from './workshops.ts'
 
 const IsoDate = z.string()
@@ -88,17 +89,24 @@ export const activityTallyWindowMs = (a: { anonymous: boolean; resultsLive: bool
 // ---- text rules ----------------------------------------------------------------------------------------------------
 
 // C0 and C1 controls (newline and tab included: every text here is one line), DEL, the bidi controls that make a text
-// read differently on screen than it is stored, zero-width joiners/spaces, the BOM, line and paragraph separators.
-// Code points, checked one at a time (no escapes needed in source).
+// read differently on screen than it is stored, zero-width spaces, the word joiner, the BOM, line and paragraph
+// separators. Code points, checked one at a time (no escapes needed in source). ZWNJ and ZWJ (U+200C, U+200D) are not
+// here: they spell emoji sequences (a person and a laptop, a rainbow flag) and Persian or Indic words, so they are
+// allowed where they join two such characters (outside.ts joinerJoins), and refused anywhere else (next to ASCII, a
+// space, an end or another invisible character: there they only hide). The emoji variation selectors (U+FE0E, U+FE0F)
+// are ordinary characters here. (Wave V fix wave, review m7.)
 const FORBIDDEN = new Set([
-  0x061c, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2060, 0x2066,
-  0x2067, 0x2068, 0x2069, 0x2028, 0x2029, 0xfeff,
+  0x061c, 0x200b, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2060, 0x2066, 0x2067, 0x2068,
+  0x2069, 0x2028, 0x2029, 0xfeff,
 ])
-/** Whether `s` holds a character no live activity text may hold. */
+/** Whether `s` holds a character no live activity or breakout text may hold. */
 export function hasForbiddenActivityChar(s: string): boolean {
-  for (const ch of s) {
-    const cp = ch.codePointAt(0) ?? 0
-    if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f) || FORBIDDEN.has(cp)) return true
+  const chars = [...s]
+  for (let i = 0; i < chars.length; i++) {
+    const cp = chars[i]?.codePointAt(0) ?? 0
+    if (isJoiner(cp)) {
+      if (!joinerJoins(chars[i - 1], chars[i + 1])) return true
+    } else if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f) || FORBIDDEN.has(cp)) return true
   }
   return false
 }

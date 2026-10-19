@@ -6,6 +6,7 @@ import {
   type BreakoutMember,
   type BreakoutState,
   breakoutGroupDefaultName,
+  cleanDisplayText,
 } from '@draftroom/contracts'
 
 /** "8:30", "1:05:00" (rounded up to the second: 0.2 s left still reads 0:01). */
@@ -197,10 +198,15 @@ export function framesPlan(n: number): { frames: PlannedFrame[]; width: number; 
   }
 }
 
-/** A frame's name as a group name: one line, at most 40 characters, "Group n" when it has none. */
+/**
+ * A frame's name as a group name: one line, at most 40 characters, "Group n" when it has none. Cleaned as any text
+ * people type for others (contracts cleanDisplayText: controls, bidi and zero-width characters out; ZWJ and ZWNJ kept
+ * where they join an emoji or a word), also after the cut (it must not end on a joiner), so a frame named "👩‍💻 Devs"
+ * or with a stray control character always gives a name the api takes (review m7).
+ */
 export function groupNameOf(frameName: string | null | undefined, n: number): string {
-  const one = (frameName ?? '').replace(/\s+/gu, ' ').trim()
-  const cut = [...one].slice(0, BREAKOUT_LIMITS.groupNameMaxChars).join('')
+  const one = cleanDisplayText((frameName ?? '').replace(/\s+/gu, ' '))
+  const cut = cleanDisplayText([...one].slice(0, BREAKOUT_LIMITS.groupNameMaxChars).join(''))
   return cut || breakoutGroupDefaultName(n)
 }
 

@@ -263,6 +263,31 @@ describe('a scale and a word cloud', () => {
     expect(s.results).toEqual({ kind: 'scale', answered: 4, counts: [1, 0, 0, 2, 1], mean: 3.5, median: 4 })
   })
 
+  it('ZWJ emoji, a flag with its variation selector and a Persian word are taken as words, options and prompts (review m7)', async () => {
+    w = await setupWorld()
+    const s = (...cps: number[]) => String.fromCodePoint(...cps)
+    const coder = s(0x1f469, 0x200d, 0x1f4bb)
+    const rainbow = s(0x1f3f3, 0xfe0f, 0x200d, 0x1f308)
+    const persian = s(0x0645, 0x06cc, 0x200c, 0x062e, 0x0648, 0x0627, 0x0647, 0x0645)
+    const poll = idOf(
+      await start(w.owner, w.board, {
+        kind: 'poll',
+        prompt: `${rainbow} ${persian}?`,
+        config: { options: [coder, rainbow, persian] },
+      }),
+    )
+    expectStatus(await act(w.owner, poll, 'cancel'), 200)
+    const aid = idOf(await start(w.owner, w.board, WORDS))
+    expectStatus(await answer(w.viewer, aid, { kind: 'words', words: [coder, rainbow, persian] }), 200)
+    expect(errorCode(await answer(w.commenter, aid, { kind: 'words', words: [`Bo${s(0x200d)}b`] }))).toBe(
+      'BAD_REQUEST',
+    )
+    const revealed = parseState(await act(w.owner, aid, 'reveal'))
+    expect(
+      revealed.results?.kind === 'words' ? revealed.results.words.map((x) => x.text).sort() : [],
+    ).toEqual([coder, rainbow, persian].sort())
+  })
+
   it('words group by their normalized form, one person counts a word once, and a hidden word leaves every result', async () => {
     w = await setupWorld()
     const s = await start(w.owner, w.board, { ...WORDS, resultsLive: true })

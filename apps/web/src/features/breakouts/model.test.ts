@@ -1,5 +1,5 @@
 // Wave V (WS4): what the breakouts chip, pill and recap say, the "Make N frames" grid, and the cursor choice (pure).
-import { BREAKOUT_LIMITS } from '@draftroom/contracts'
+import { BREAKOUT_LIMITS, BreakoutGroupName } from '@draftroom/contracts'
 import { describe, expect, it } from 'vitest'
 import { cursorFilter, visibleUsers } from './cursors.ts'
 import {
@@ -120,6 +120,24 @@ describe('Make N frames', () => {
     expect(groupNameOf('', 3)).toBe('Group 3')
     expect(groupNameOf(null, 2)).toBe('Group 2')
     expect([...groupNameOf('ab😀'.repeat(20), 1)]).toHaveLength(40)
+  })
+
+  it('a frame named with a ZWJ emoji or a Persian word keeps it; stray invisible characters go, so the api takes every name (review m7)', () => {
+    const s = (...cps: number[]) => String.fromCodePoint(...cps)
+    const coder = `${s(0x1f469, 0x200d, 0x1f4bb)} Devs`
+    const rainbow = `${s(0x1f3f3, 0xfe0f, 0x200d, 0x1f308)} Team`
+    const persian = s(0x0645, 0x06cc, 0x200c, 0x062e, 0x0648, 0x0627, 0x0647, 0x0645)
+    for (const name of [coder, rainbow, persian]) {
+      expect(groupNameOf(name, 1)).toBe(name)
+      expect(BreakoutGroupName.safeParse(groupNameOf(name, 1)).success).toBe(true)
+    }
+    // a bidi control, a zero-width space, a joiner next to ASCII: out
+    expect(groupNameOf(`Re${s(0x202e)}d${s(0x200b)} Bo${s(0x200d)}b`, 1)).toBe('Red Bob')
+    // a cut that would end on a joiner drops it
+    const long = `${'x'.repeat(39)}${s(0x1f469, 0x200d, 0x1f4bb)}`
+    const cut = groupNameOf(long, 1)
+    expect(BreakoutGroupName.safeParse(cut).success).toBe(true)
+    expect(cut).toBe(`${'x'.repeat(39)}${s(0x1f469)}`)
   })
 
   it('counts read as people, or "n of cap"', () => {

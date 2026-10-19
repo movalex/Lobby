@@ -80,7 +80,13 @@ Three kinds (`ACTIVITY_KINDS`), one open activity per board (a dot vote may run 
 - **Text rules** (prompt ≤ 200, options, labels, words; `ActivityPrompt`, `PollOptionText`, `ScaleLabel`, `WordText`):
   one line (whitespace runs, newlines and tabs collapse to one space; trimmed); lengths in **code points** (an emoji or
   a CJK character is one, as Postgres `char_length`); C0/C1 controls, DEL, bidi controls (U+061C, U+200E/F,
-  U+202A-E, U+2066-9), zero-width characters (U+200B-D, U+2060, U+FEFF) and line/paragraph separators refused.
+  U+202A-E, U+2066-9), zero-width characters (U+200B, U+2060, U+FEFF) and line/paragraph separators refused. ZWNJ and
+  ZWJ (U+200C, U+200D) are taken where they join two characters (an emoji sequence such as a woman and a laptop or the
+  rainbow flag, a Persian or Indic word: `outside.ts joinerJoins`, the rule of display names) and refused anywhere else
+  (next to ASCII, a space, an end, another invisible character); the emoji variation selectors are ordinary characters
+  (fix wave, review m7). Breakout group names and broadcasts use the same rule (`hasForbiddenActivityChar`), and a group
+  name taken from a frame is cleaned first (`groupNameOf` through `cleanDisplayText`, again after the 40-character cut),
+  so "Use the selected frames" never fails on a frame's name.
 - **Words** group by `normalizeWord`: NFKC (fullwidth forms and ligatures fold), whitespace collapsed, lower-cased
   (locale-free). One person's same word counts once. A word is shown in its most frequent original spelling (ties:
   code-point order), so `tallyWords` is deterministic whatever order answers arrive in. Pure: `tallyPoll`, `tallyScale`,

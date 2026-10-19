@@ -16,6 +16,7 @@
 // Do not import values from ./index.ts here: index.ts re-exports this module.
 
 import { z } from 'zod'
+import { hasForbiddenActivityChar } from './live-activities.ts'
 import { codePointLength, SummonScreen, VoteShapeId } from './workshops.ts'
 
 const IsoDate = z.string()
@@ -46,18 +47,9 @@ export const BREAKOUT_LIMITS = {
   summonWindow: { max: 1, windowMs: 3_000 },
 } as const
 
-// C0/C1 controls and the bidi/zero-width controls (as live-activities.ts), checked per code point.
-const FORBIDDEN = new Set([
-  0x061c, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x202a, 0x202b, 0x202c, 0x202d, 0x202e, 0x2060, 0x2066,
-  0x2067, 0x2068, 0x2069, 0x2028, 0x2029, 0xfeff,
-])
-const bad = (s: string) => {
-  for (const ch of s) {
-    const cp = ch.codePointAt(0) ?? 0
-    if (cp < 0x20 || (cp >= 0x7f && cp <= 0x9f) || FORBIDDEN.has(cp)) return true
-  }
-  return false
-}
+// C0/C1 controls and the bidi/zero-width controls, with ZWJ and ZWNJ allowed where they join (an emoji sequence, a
+// Persian word): the one rule of live-activities.ts (review m7).
+const bad = hasForbiddenActivityChar
 const oneLine = (max: number, empty: string, what: string) =>
   z
     .string()

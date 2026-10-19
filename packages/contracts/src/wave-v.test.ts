@@ -27,6 +27,7 @@ import {
   BREAKOUT_RULES,
   BreakoutBroadcastInput,
   BreakoutGroupId,
+  BreakoutGroupName,
   type BreakoutState,
   breakoutActionPath,
   breakoutGroupId,
@@ -39,6 +40,7 @@ import {
   GUEST_JOINS_PER_WORKSHOP_LINK,
   GUESTS_PER_LINK,
   HideWordInput,
+  hasForbiddenActivityChar,
   isNewerBreakoutState,
   JOIN_CODE_ALPHABET,
   JOIN_CODE_CREATOR_ROUTE_KEYS,
@@ -64,10 +66,12 @@ import {
   PALETTE_COMMAND_IDS,
   PENDING_PALETTE_COMMAND_IDS,
   PollConfig,
+  PollOptionText,
   ResolvedJoinCode,
   ReviewLinkCreated,
   rankActivityResults,
   ScaleConfig,
+  ScaleLabel,
   StartActivityInput,
   StartBreakoutsInput,
   tallyPoll,
@@ -75,6 +79,7 @@ import {
   tallyWords,
   WAVE_V_PALETTE_COMMAND_IDS,
   WORKSHOP_EVENTS,
+  WordsAnswer,
   WordsConfig,
   WordText,
   WorkshopActivityEvent,
@@ -169,6 +174,39 @@ describe('live activity text', () => {
       expect(ok(WordText, `ab${cp(bad)}c`), bad.toString(16)).toBe(false)
     expect(WordText.parse(`a${cp(0x0a)}b`)).toBe('a b')
     expect(WordText.parse(`a${cp(0x3000)}b`)).toBe('a b')
+  })
+
+  it('takes ZWJ and ZWNJ where they join (emoji sequences, a Persian word) and the variation selectors; refuses them anywhere else (review m7)', () => {
+    const s = (...cps: number[]) => String.fromCodePoint(...cps)
+    const coder = s(0x1f469, 0x200d, 0x1f4bb) // a woman and a laptop
+    const rainbow = s(0x1f3f3, 0xfe0f, 0x200d, 0x1f308) // the rainbow flag (with its variation selector)
+    const family = s(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467)
+    const persian = s(0x0645, 0x06cc, 0x200c, 0x062e, 0x0648, 0x0627, 0x0647, 0x0645) // "I want", with a ZWNJ
+    const heart = s(0x2764, 0xfe0f)
+    for (const text of [coder, rainbow, family, persian, heart, `${coder} Devs`, `${rainbow} Team`]) {
+      for (const schema of [WordText, ActivityPrompt, PollOptionText, ScaleLabel, BreakoutGroupName])
+        expect(schema.parse(text), text).toBe(text)
+      expect(hasForbiddenActivityChar(text), text).toBe(false)
+    }
+    expect(ok(WordsAnswer, { kind: 'words', words: [coder, persian] })).toBe(true)
+    // still refused: a joiner next to ASCII, a space or an end, two in a row, and every other invisible character
+    for (const bad of [
+      `Bo${s(0x200d)}b`,
+      `Bo${s(0x200c)}b`,
+      `${s(0x200d)}${s(0x1f4bb)}`,
+      `${s(0x1f469)}${s(0x200d)}`,
+      `${s(0x1f469)} ${s(0x200d)}${s(0x1f4bb)}`,
+      `${s(0x1f469)}${s(0x200d, 0x200d)}${s(0x1f4bb)}`,
+      `${s(0x1f469)}${s(0x200b)}${s(0x1f4bb)}`,
+      `${s(0x1f469)}${s(0x202e)}${s(0x200d)}${s(0x1f4bb)}`,
+      `a${s(0x2060)}b`,
+    ]) {
+      expect(ok(WordText, bad), JSON.stringify(bad)).toBe(false)
+      expect(ok(BreakoutGroupName, bad), JSON.stringify(bad)).toBe(false)
+    }
+    expect(ok(WordText, `a${s(0xfeff)}b`)).toBe(false)
+    // a group name folds every whitespace (the BOM counts as one there) into a plain space, as before
+    expect(BreakoutGroupName.parse(`a${s(0xfeff)}b`)).toBe('a b')
   })
 
   it('a word is 1 to 30 code points, emoji and CJK included', () => {

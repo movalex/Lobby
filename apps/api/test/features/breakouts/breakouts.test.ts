@@ -133,6 +133,24 @@ describe('start and read', () => {
     expect((await start(w, w.owner, { groups: frames(20) })).session?.groups.at(-1)?.id).toBe('g20')
   })
 
+  it('group names with ZWJ emoji, a flag with its variation selector or a Persian word start fine (review m7)', async () => {
+    const w = await world()
+    const s = (...cps: number[]) => String.fromCodePoint(...cps)
+    const names = [
+      `${s(0x1f469, 0x200d, 0x1f4bb)} Devs`,
+      `${s(0x1f3f3, 0xfe0f, 0x200d, 0x1f308)} Team`,
+      s(0x0645, 0x06cc, 0x200c, 0x062e, 0x0648, 0x0627, 0x0647, 0x0645),
+    ]
+    const started = await start(w, w.owner, {
+      groups: names.map((name, i) => ({ name, frameId: `shape:f${i + 1}` })),
+    })
+    expect(started.session?.groups.map((g) => g.name)).toEqual(names)
+    // a joiner that joins nothing is still refused
+    const stray = [{ name: `Bo${s(0x200d)}b`, frameId: 'shape:a' }, ...frames(1)]
+    expectStatus(await act(w.owner, started.session?.id ?? '', 'end'), 200)
+    expectStatus(await w.owner.req('POST', breakoutsPath(w.boardId), { groups: stray, mode: 'manual' }), 400)
+  })
+
   it('one running session per board (409 BREAKOUTS_RUNNING); one past its end time is ended by the next start', async () => {
     const w = await world()
     const first = await start(w, w.owner, { durationMs: 60_000 })
