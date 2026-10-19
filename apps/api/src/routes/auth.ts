@@ -35,6 +35,8 @@ export function registerAuthRoutes(app: FastifyInstance, ctx: AppContext, provid
   app.get('/api/auth/config', async () => ({
     ...provider.publicConfig(),
     designPreviews: ctx.config.designPreviews,
+    // wave V: which "Live sessions+" features run (contracts AuthConfig.live)
+    live: { ...ctx.config.live },
   }))
 
   /**

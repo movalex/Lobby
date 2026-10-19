@@ -3,7 +3,11 @@
 // kind of caller. The branch deploys with no behaviour change, and an old web or sync gets the 404 its downgrade
 // path expects (the wave M stale pairs (c) and (d)).
 import {
+  ACTIVITY_FACILITATOR_ROUTE_KEYS,
+  ACTIVITY_ROUTE_KEYS,
   ASSET_VERSION_ROUTE_KEYS,
+  BREAKOUT_FACILITATOR_ROUTE_KEYS,
+  BREAKOUT_ROUTE_KEYS,
   BACKUP_CREATOR_ROUTE_KEYS,
   BACKUP_GUESTS_MESSAGE,
   BACKUP_ROUTE_KEYS,
@@ -13,10 +17,13 @@ import {
   IMPORT_CREATOR_ROUTE_KEYS,
   IMPORT_GUESTS_MESSAGE,
   IMPORT_ROUTE_KEYS,
+  JOIN_CODE_CREATOR_ROUTE_KEYS,
+  JOIN_CODE_ROUTE_KEYS,
   LIBRARY_CREATOR_IN_ROUTE_KEYS,
   LIBRARY_GUEST_ROUTE_KEYS,
   LIBRARY_GUESTS_MESSAGE,
   LIBRARY_ROUTE_KEYS,
+  LIVE_FACILITATE_GUESTS_MESSAGE,
   MIRO_IMPORT_CREATOR_ROUTE_KEYS,
   MIRO_IMPORT_ROUTE_KEYS,
   REVIEW_GUESTS_MESSAGE,
@@ -77,7 +84,28 @@ const WAVE_S_OWNERS: Record<string, string> = {
   ...Object.fromEntries(REVIEW_ROUTE_KEYS.map((k) => [k, 'WS1'])),
   ...Object.fromEntries(ASSET_VERSION_ROUTE_KEYS.map((k) => [k, 'WS2'])),
 }
-const PENDING_NOW = [...WAVE_M_ROUTES, ...WAVE_N_ROUTES, ...WAVE_Q_ROUTES, ...WAVE_R_ROUTES, ...WAVE_S_ROUTES]
+/**
+ * Wave V (the foundation; docs/WAVE-V-CONTRACTS.md §1): every route of the wave, pending until its owner implements it:
+ * live activities (WS1, V1-*), join codes (WS3, V2-*), breakouts (WS4, V3-*). Each owner deletes its keys here and in
+ * PENDING_ROUTES in the change that implements them; the refusal and creation matrices then hold them to their guard
+ * rows, and features/live/switch.test.ts to their kill switch.
+ */
+const WAVE_V_ROUTES: string[] = [...ACTIVITY_ROUTE_KEYS, ...JOIN_CODE_ROUTE_KEYS, ...BREAKOUT_ROUTE_KEYS]
+const WAVE_V_OWNERS: Record<string, string> = {
+  ...Object.fromEntries(ACTIVITY_ROUTE_KEYS.map((k) => [k, 'WS1'])),
+  ...Object.fromEntries(JOIN_CODE_ROUTE_KEYS.map((k) => [k, 'WS3'])),
+  ...Object.fromEntries(BREAKOUT_ROUTE_KEYS.map((k) => [k, 'WS4'])),
+}
+/** The plan item's feature number of each wave V owner (V1 activities, V2 join codes, V3 breakouts). */
+const WAVE_V_ITEM: Record<string, string> = { WS1: 'V1', WS3: 'V2', WS4: 'V3' }
+const PENDING_NOW = [
+  ...WAVE_M_ROUTES,
+  ...WAVE_N_ROUTES,
+  ...WAVE_Q_ROUTES,
+  ...WAVE_R_ROUTES,
+  ...WAVE_S_ROUTES,
+  ...WAVE_V_ROUTES,
+]
 
 const UNKNOWN = { error: { code: 'NOT_FOUND', message: 'Not found.' } }
 
@@ -85,11 +113,15 @@ const fill = (pattern: string, board: string) =>
   pattern.replace(':bid', board).replace(':wid', DEV_STUDIO).replace(/:\w+/g, 'x')
 
 describe('the pending list', () => {
-  it('is exactly the wave M, N, Q, R and S routes still pending, each with its owner and plan item', () => {
+  it('is exactly the wave M, N, Q, R, S and V routes still pending, each with its owner and plan item', () => {
     expect(Object.keys(PENDING_ROUTES).sort()).toEqual([...PENDING_NOW].sort())
     for (const [key, r] of Object.entries(PENDING_ROUTES)) {
-      expect(['W5', 'W7', 'W8', 'WS1', 'WS2', 'WS4', 'WS5', 'WS7'], key).toContain(r.owner)
-      expect(r.item, key).toMatch(/^(M[5-8]|N[1-7]|Q[1-4]|R[1-4]|S[1-4])-\d$/)
+      expect(['W5', 'W7', 'W8', 'WS1', 'WS2', 'WS3', 'WS4', 'WS5', 'WS7'], key).toContain(r.owner)
+      expect(r.item, key).toMatch(/^(M[5-8]|N[1-7]|Q[1-4]|R[1-4]|S[1-4]|V[1-3])-\d$/)
+    }
+    for (const key of WAVE_V_ROUTES) {
+      expect(PENDING_ROUTES[key]?.owner, key).toBe(WAVE_V_OWNERS[key])
+      expect(PENDING_ROUTES[key]?.item.slice(0, 2), key).toBe(WAVE_V_ITEM[WAVE_V_OWNERS[key] ?? ''])
     }
     for (const key of WAVE_Q_ROUTES) expect(PENDING_ROUTES[key]?.owner, key).toBe('WS2')
     for (const key of WAVE_R_ROUTES) {
@@ -100,6 +132,30 @@ describe('the pending list', () => {
       expect(PENDING_ROUTES[key]?.owner, key).toBe(WAVE_S_OWNERS[key])
       expect(PENDING_ROUTES[key]?.item.slice(0, 2), key).toBe(`S${WAVE_S_OWNERS[key]?.slice(2)}`)
     }
+  })
+
+  it('wave V: a guest is refused every facilitator route and the join code; only the join code has a creator row; all pending', () => {
+    const guestRows = Object.entries(GUEST_REFUSED_ROUTES).filter(([k]) => WAVE_V_ROUTES.includes(k))
+    const facilitator = [...ACTIVITY_FACILITATOR_ROUTE_KEYS, ...BREAKOUT_FACILITATOR_ROUTE_KEYS] as string[]
+    expect(guestRows.map(([k]) => k).sort()).toEqual([...facilitator, ...JOIN_CODE_CREATOR_ROUTE_KEYS].sort())
+    for (const [k, m] of guestRows)
+      if (facilitator.includes(k)) expect(m, k).toBe(LIVE_FACILITATE_GUESTS_MESSAGE)
+      else expect(m, k).toBe(GUEST_REFUSED_ROUTES['POST /api/boards/:bid/review-links'])
+    // taking part and reading keep no row: answering, choosing a group, the state, the lists, the revealed results and
+    // resolving a join code (anyone with the code)
+    for (const k of [
+      'GET /api/boards/:bid/activity',
+      'GET /api/boards/:bid/activities',
+      'POST /api/activities/:aid/answer',
+      'GET /api/activities/:aid/results',
+      'GET /api/boards/:bid/breakouts',
+      'POST /api/breakouts/:brk/join',
+      'GET /api/join/:code',
+    ])
+      expect(Object.hasOwn(GUEST_REFUSED_ROUTES, k), k).toBe(false)
+    const creatorRows = Object.entries(CREATOR_ROUTES).filter(([k]) => WAVE_V_ROUTES.includes(k))
+    expect(creatorRows).toEqual([['POST /api/boards/:bid/review-links/:id/code', { purpose: 'share', refuse: 'always' }]])
+    for (const k of WAVE_V_ROUTES) expect(isPendingRoute(k), k).toBe(true)
   })
 
   it('wave S: a guest is refused exactly the five manage routes; no route has a creator row; every route live', () => {
@@ -278,9 +334,15 @@ describe('in the real app, a pending route answers like an unknown route', () =>
       'review_rounds',
       'review_items',
       'review_events',
+      'live_activities',
+      'live_answers',
+      'breakout_sessions',
+      'breakout_members',
     ]) {
       const n = await w.api.db.one<{ n: number }>(`SELECT count(*)::int AS n FROM ${table}`)
       expect(n.n, table).toBe(0)
     }
+    // no link got a join code
+    expect((await w.api.db.query('SELECT id FROM invitations WHERE join_code_hash IS NOT NULL')).rows).toEqual([])
   })
 })

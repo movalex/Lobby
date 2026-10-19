@@ -5,6 +5,7 @@ import { registerAi } from './ai/index.ts'
 import { registerBackup } from './backup/index.ts'
 import { registerBoardLinks } from './board-links/index.ts'
 import { registerBoardOpen } from './board-open/index.ts'
+import { registerBreakouts } from './breakouts/index.ts'
 import { registerChatHooks } from './chat-hooks/index.ts'
 import { registerComments } from './comments/index.ts'
 import type { FeatureContext } from './context.ts'
@@ -15,8 +16,10 @@ import { registerGuests } from './guests/index.ts'
 import { registerHistory } from './history/index.ts'
 import { registerImports } from './imports/index.ts'
 import { registerMiroImport } from './imports/miro/index.ts'
+import { registerJoinCodes } from './join-codes/index.ts'
 import { registerLibrary } from './library/index.ts'
 import { registerLinkPreview } from './link-preview/index.ts'
+import { registerLiveActivities } from './live-activities/index.ts'
 import { registerReview } from './review/index.ts'
 import { registerSearch } from './search/index.ts'
 import { registerThumbnails } from './thumbnails/index.ts'
@@ -67,4 +70,10 @@ export async function registerFeatures(
   // version list (WS2). Their routes are pending until implemented (./pending-routes.ts).
   await registerReview(app, ctx)
   await registerAssetVersions(app, ctx)
+  // Wave V (the foundation; the lead owns this list after it): live activities (WS1), join codes (WS3), breakouts (WS4).
+  // Their routes are pending until implemented (./pending-routes.ts), then gated by their kill switches
+  // (./live/switch.ts: DRAFTROOM_LIVE_ACTIVITIES, DRAFTROOM_JOIN_CODES, DRAFTROOM_BREAKOUTS).
+  await registerLiveActivities(app, ctx)
+  await registerJoinCodes(app, ctx)
+  await registerBreakouts(app, ctx)
 }

@@ -70,6 +70,7 @@ describe('open email sign-in', () => {
       sharedWorkspaceName: 'Banzerini House',
       openSigninMethods: ['email'],
       designPreviews: false,
+      live: { activities: false, joinCodes: false, breakouts: false },
     })
   })
 
@@ -411,6 +412,7 @@ describe('open sign-in with Google', () => {
         openSigninMethods: ['google'],
         googleClientId: CLIENT_ID,
         designPreviews: false,
+        live: { activities: false, joinCodes: false, breakouts: false },
       })
       expect(
         (await g.anon('POST', '/api/auth/email/login', { email: 'a@b.test', name: 'A' })).statusCode,

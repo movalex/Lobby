@@ -28,6 +28,7 @@ import {
   CHAT_HOOK_GUESTS_MESSAGE,
   IMPORT_GUESTS_MESSAGE,
   LIBRARY_GUESTS_MESSAGE,
+  LIVE_FACILITATE_GUESTS_MESSAGE,
   PutMemberInput,
   REVIEW_GUESTS_MESSAGE,
   TransferOwnershipInput,
@@ -109,6 +110,14 @@ export const CHAT_HOOK_GUESTS = CHAT_HOOK_GUESTS_MESSAGE
  * (those routes have no row; WS1's route checks canSetReviewStatus).
  */
 export const REVIEW_GUESTS = REVIEW_GUESTS_MESSAGE
+
+/**
+ * Wave V (the foundation; docs/WAVE-V-CONTRACTS.md §6): polls, scales, word clouds and breakouts are run by facilitators
+ * (editors with an account), like the timer, votes and the spotlight. A name-only guest takes part: answering, choosing a
+ * group and every read keep no row (contracts ACTIVITY_RULES, BREAKOUT_RULES: participate, view). A join code hands out
+ * its link's access: it has the INVITE row (and a creator row, domain-access/guard.ts); resolving one has none.
+ */
+export const LIVE_GUESTS = LIVE_FACILITATE_GUESTS_MESSAGE
 
 /** `METHOD route-pattern` → the message a signed-in guest gets (403 GUEST_ACCOUNT_REQUIRED). */
 export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {
@@ -206,6 +215,25 @@ export const GUEST_REFUSED_ROUTES: Readonly<Record<string, string>> = {
   'DELETE /api/boards/:bid/review/items/:rvi': REVIEW_GUESTS,
   'POST /api/boards/:bid/review/rounds': REVIEW_GUESTS,
   'POST /api/boards/:bid/review/rounds/:rvr/close': REVIEW_GUESTS,
+  // wave V (landed by the foundation, pending until implemented: ../pending-routes.ts): the facilitator routes of live
+  // activities and breakouts (@draftroom/contracts ACTIVITY_FACILITATOR_ROUTE_KEYS, BREAKOUT_FACILITATOR_ROUTE_KEYS),
+  // and a workshop link's join code (JOIN_CODE_CREATOR_ROUTE_KEYS)
+  'POST /api/boards/:bid/activities': LIVE_GUESTS,
+  'POST /api/activities/:aid/close': LIVE_GUESTS,
+  'POST /api/activities/:aid/reveal': LIVE_GUESTS,
+  'POST /api/activities/:aid/extend': LIVE_GUESTS,
+  'POST /api/activities/:aid/cancel': LIVE_GUESTS,
+  'POST /api/activities/:aid/hide': LIVE_GUESTS,
+  'POST /api/activities/:aid/placed': LIVE_GUESTS,
+  'GET /api/activities/:aid/answers': LIVE_GUESTS,
+  'POST /api/boards/:bid/breakouts': LIVE_GUESTS,
+  'POST /api/breakouts/:brk/assign': LIVE_GUESTS,
+  'POST /api/breakouts/:brk/shuffle': LIVE_GUESTS,
+  'POST /api/breakouts/:brk/extend': LIVE_GUESTS,
+  'POST /api/breakouts/:brk/broadcast': LIVE_GUESTS,
+  'POST /api/breakouts/:brk/summon': LIVE_GUESTS,
+  'POST /api/breakouts/:brk/end': LIVE_GUESTS,
+  'POST /api/boards/:bid/review-links/:id/code': INVITE,
 }
 
 export const guestRefused = (message: string) => new ApiError(403, 'GUEST_ACCOUNT_REQUIRED', message)

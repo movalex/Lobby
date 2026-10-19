@@ -253,6 +253,9 @@ function probe(
       `/api/workspaces/${wid}/chat-hooks/${w.hook}/test`,
       {},
     ],
+    // wave V (WS3): a workshop link's join code (the probe's link is a viewer link: WS3 makes an editor one when it
+    // implements the route)
+    'POST /api/boards/:bid/review-links/:id/code': ['POST', `/api/boards/${bid}/review-links/${link}/code`, undefined],
   }
   const found = table[key]
   if (!found) throw new Error(`no probe for ${key}`)
@@ -307,9 +310,9 @@ describe('the creation matrix', () => {
       expect(w.api.app.hasRoute({ method, url }), key).toBe(!isPendingRoute(key))
     }
     for (const key of ALWAYS) expect(() => probe(w, key)).not.toThrow()
-    // 13 until wave M, the three workspace-template routes (M8-3), and wave R's eight (four that make boards: Miro's
-    // two, resume, a backup restore; four that manage chat hooks)
-    expect(ALWAYS).toHaveLength(24)
+    // 13 until wave M, the three workspace-template routes (M8-3), wave R's eight (four that make boards: Miro's
+    // two, resume, a backup restore; four that manage chat hooks), and wave V's join code (a link's access)
+    expect(ALWAYS).toHaveLength(25)
   })
 
   it('the guard: an outsider (workspace admin, board owner) gets 403 CREATOR_REQUIRED everywhere, logged "by guard"; nothing is created', async () => {

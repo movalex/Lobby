@@ -47,6 +47,8 @@ const IMPORT_JOB = 'imp_0123456789abcdefghij'
 const HOOK = 'chk_0123456789abcdefghij'
 const REVIEW_ITEM = 'rvi_0123456789abcdefghij'
 const REVIEW_ROUND = 'rvr_0123456789abcdefghij'
+const ACTIVITY = 'act_0123456789abcdefghij'
+const BREAKOUT = 'brk_0123456789abcdefghij'
 
 /**
  * Every refused route (its pattern first), called the way a client would, on the guest's own board
@@ -225,6 +227,50 @@ function refusedCalls(board: string, other: string, userId: string): [string, Me
       `${b}/review/rounds/${REVIEW_ROUND}/close`,
       {},
     ],
+    // Wave V (landed by the foundation; pending until implemented): running polls, word clouds and breakouts, and a
+    // workshop link's join code, on their own board
+    [
+      'POST /api/boards/:bid/activities',
+      'POST',
+      `${b}/activities`,
+      { kind: 'poll', prompt: 'Which one?', config: { options: ['A', 'B'] } },
+    ],
+    ['POST /api/activities/:aid/close', 'POST', `/api/activities/${ACTIVITY}/close`, {}],
+    ['POST /api/activities/:aid/reveal', 'POST', `/api/activities/${ACTIVITY}/reveal`, {}],
+    ['POST /api/activities/:aid/extend', 'POST', `/api/activities/${ACTIVITY}/extend`, { addMs: 60_000 }],
+    ['POST /api/activities/:aid/cancel', 'POST', `/api/activities/${ACTIVITY}/cancel`, {}],
+    ['POST /api/activities/:aid/hide', 'POST', `/api/activities/${ACTIVITY}/hide`, { word: 'rude' }],
+    ['POST /api/activities/:aid/placed', 'POST', `/api/activities/${ACTIVITY}/placed`, {}],
+    ['GET /api/activities/:aid/answers', 'GET', `/api/activities/${ACTIVITY}/answers`, undefined],
+    [
+      'POST /api/boards/:bid/breakouts',
+      'POST',
+      `${b}/breakouts`,
+      {
+        mode: 'auto',
+        groups: [
+          { name: 'One', frameId: 'shape:f1' },
+          { name: 'Two', frameId: 'shape:f2' },
+        ],
+      },
+    ],
+    [
+      'POST /api/breakouts/:brk/assign',
+      'POST',
+      `/api/breakouts/${BREAKOUT}/assign`,
+      { moves: [{ userId, groupId: 'g1' }] },
+    ],
+    ['POST /api/breakouts/:brk/shuffle', 'POST', `/api/breakouts/${BREAKOUT}/shuffle`, {}],
+    ['POST /api/breakouts/:brk/extend', 'POST', `/api/breakouts/${BREAKOUT}/extend`, { addMs: 60_000 }],
+    [
+      'POST /api/breakouts/:brk/broadcast',
+      'POST',
+      `/api/breakouts/${BREAKOUT}/broadcast`,
+      { text: 'Five minutes', groupId: null },
+    ],
+    ['POST /api/breakouts/:brk/summon', 'POST', `/api/breakouts/${BREAKOUT}/summon`, { groupId: 'g1' }],
+    ['POST /api/breakouts/:brk/end', 'POST', `/api/breakouts/${BREAKOUT}/end`, {}],
+    ['POST /api/boards/:bid/review-links/:id/code', 'POST', `${b}/review-links/${INVITATION}/code`, undefined],
     // Requesting access: to their own board and to any other.
     ['POST /api/boards/:bid/access-requests', 'POST', `${b}/access-requests`, { role: 'editor' }],
     [

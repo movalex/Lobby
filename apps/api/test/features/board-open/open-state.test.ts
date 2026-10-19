@@ -30,6 +30,9 @@ const ROUTES: Record<OpenStatePart, (bid: string) => string> = {
   privateBrainstorm: (b) => `/api/boards/${b}/private-brainstorm`,
   threads: (b) => `/api/boards/${b}/threads?status=all`,
   ai: (b) => `/api/boards/${b}/ai`,
+  // wave V (OPEN_STATE_PENDING_PARTS: checked here once their owners move them into OPEN_STATE_PARTS)
+  activity: (b) => `/api/boards/${b}/activity`,
+  breakouts: (b) => `/api/boards/${b}/breakouts`,
 }
 
 const REV = { [LOBBY_CLIENT_HEADER]: String(LOBBY_CLIENT_REV) }
