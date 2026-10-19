@@ -186,7 +186,9 @@ and WS4 each replace their kind's line in `OP_KINDS` (through the lead).
 no person, path or URL. The `file.op` event (`FILE_OP_EVENT`, `FileOpEvent {op}`) goes after COMMIT to the **requester's**
 streams on the op's board only (`events/hub.ts` `to`), with the same body `GET /api/file-ops/:op` answers; an op without a
 requester (WS3's extract-text) has none. A queued op past its time reads as failed `WORKER_UNAVAILABLE` before any sweep
-wrote it (`opExpired`). The message is `WORKER_OP_MESSAGES[code]`, a fixed user-safe text.
+wrote it (`opExpired`). The message is `WORKER_OP_MESSAGES[code]`, a fixed user-safe text. WS2 added (through the lead,
+folded in at integration) the optional `resultAssetId` (`ast_…`, a done remove-bg's NEW asset, so the web can point
+`customData.lobby.file.assetId` at it; null otherwise; optional, so the foundation's shape still parses).
 
 ### 3.5 The worker side (`apps/worker/src/ops/{client,loop,dispatch,capabilities,bg-model,bg-inference}.ts`)
 
@@ -340,6 +342,10 @@ NAS** (cgroup reads in a throwaway container, as the office evidence did) and re
   (`kind: 'deck-page'`, `fileId ver_….p<n>`, alt "Slide n of N"), in a 5-wide grid (`gridColumns`, `gridGap` 80) next to
   the card, so Present walks them in frame order. 100 slides are 200 creates: within `MAX_OPS_PER_PUSH` 500 and 512 KiB.
   More than 100 pages: the first 100, with a notice. Guests may place decks of 8 pages or fewer (no op needed).
+- **A per-person window** (the integration): `DECK_LIMITS.requestRate`, 20 render-pages requests that queued ops per
+  person an hour (each queues at most 4 ops of at most 92 pages), checked before the transaction and counted after its
+  COMMIT (an empty or refused request is free); over it 429 `RATE_LIMITED` with `Retry-After`. In memory, one api
+  instance, like the other keyed limits.
 - "New board from deck" is deferred (it would add `'deck'` to `IMPORT_SOURCES`, a response enum: `LOBBY_CLIENT_REV` 4).
 - **Tests (WS4)**: idempotent complete (a double complete, a re-run); the output cap; pages 9..100 rendered; 101 pages
   gives the notice; placement is one undo step, frames in order, Present walks them; the old web renders slides 9+; a
@@ -365,6 +371,11 @@ someone of another workspace; a name-only guest is answered 404 by the guest gua
 | `GET …/admin/links` | `AdminLinksResponse`: every open multi-use link (review, workshop with `hasJoinCode`, never the code; role, creator, expiry, uses) and name-only guests with grant counts, from `outsideAccessIn`'s queries without its Internal-only condition. Revoke and extend call the existing per-board routes; workspace owners and admins act as board owner there | W5-4 |
 | `GET …/admin/retention` | `AdminRetentionResponse`: read-only facts (`ADMIN_RETENTION_FACT_IDS`): trash "kept until restored", the checkpoint tiers (`CHECKPOINT_RETENTION`), the GC mode and grace, visits 180 days, the library purge 30 days, imports listed 30 days, the chat outbox 14 days, audit "kept" (no purge), board backups as documented (sync's settings are not visible to the api). **No control that deletes anything** (lead decision e) | W5-5 |
 
+The links tab's name-only guests carry `AdminGuest.boards` (WS5, folded in at integration: at most
+`ADMIN_LIMITS.guestBoards` 20 boards, newest grant first, `{id, title}`), so a guest can be taken off one board through
+the existing `DELETE /api/boards/:bid/members/:uid`. The page waits for the config before it decides (the loading
+screen, never "Page not found" first, for an owner). The palette's `workspace.admin` (registered by the integration in
+`features/workspace-admin/index.tsx`) opens the page for the board's workspace owners and admins only.
 Limits: pages of 100, 50-row storage lists, `ADMIN_LIMITS.rate` 20 requests per 10 s per user over every admin route.
 Audit reads use `audit_events_workspace_idx (workspace_id, at DESC)`; WS5 checks the plan of the `before` page on real
 Postgres and, if it is not an index scan, asks the lead for a `(workspace_id, id DESC)` index (a new migration). Tests: the
@@ -410,7 +421,8 @@ page images, so file snippets reveal nothing new to them.
   route; a landed one is held to its row) and `creation-matrix.test.ts` (unchanged: 25 always rows).
 - Palette ids (frozen, pending: `WAVE_W_PALETTE_COMMAND_IDS`): `doc-card.insert`, `doc-card.from-text` (WS1),
   `image.remove-background` (WS2), `deck.insert-slides` (WS4), `workspace.admin` (WS5). The deployed api refuses a usage
-  batch naming an unknown id, so the api deploys before the web (§9.2).
+  batch naming an unknown id, so the api deploys before the web (§9.2). At integration all are registered but
+  `image.remove-background`, still in `PENDING_PALETTE_COMMAND_IDS` until the owner approves the model file (§4.2, §11.1).
 
 ## 9. Compatibility, deploy order and rollback
 
@@ -433,6 +445,9 @@ page images, so file snippets reveal nothing new to them.
   queued, an old worker's claim gets a preview job, completes it and then 204: it never sees an op; the existing preview
   protocol suites `lifecycle`, `leases`, `auth`, `units`, `r2-mode`, `rate-limit-required` pass unchanged). The worker of
   wave W against an api of before wave W: one 404 on the ops claim, then previews only (`apps/worker/test/ops.test.ts`).
+  The integration ran the deployed worker itself (its tree, `E2E_OLD_WORKER_ENTRY`) as the e2e stack's worker
+  (`e2e/excalidraw/w-compat-old-worker.spec.ts`): its previews are made, nothing worker-backed is offered and the two
+  op requests answer 404 until a worker of this build checks in.
 - **The stale proof (WS1)**: `e2e/excalidraw/w-compat-7e5b4d6.spec.ts` with the real 7e5b4d6 web (§2).
 
 ### 9.2 Deploy order
