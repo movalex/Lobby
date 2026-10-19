@@ -80,6 +80,7 @@ import {
   loadBoardAccess,
   requireBoardAction,
 } from '../../access.ts'
+import { audit } from '../../audit.ts'
 import {
   type CreatorLookup,
   isOpenLookup,
@@ -765,7 +766,7 @@ export async function outsideAccessIn(
   }
 }
 
-/** An audit row for a switch change (audit.ts lists the M1 actions; this writes the same table). */
+/** An audit row for a switch change (audit.ts AUDIT_ACTIONS: `workspace.internal_only`, `project.internal_only`). */
 export async function auditInternalOnly(
   tx: Queryable,
   e: {
@@ -777,18 +778,14 @@ export async function auditInternalOnly(
     at: Date
   },
 ): Promise<void> {
-  await tx.query(
-    `INSERT INTO audit_events (workspace_id, actor_id, action, target, detail, at)
-     VALUES ($1, $2, $3, $4, $5::jsonb, $6)`,
-    [
-      e.workspaceId,
-      e.actorId,
-      e.scope === 'workspace' ? 'workspace.internal_only' : 'project.internal_only',
-      e.target,
-      JSON.stringify({ internalOnly: e.on }),
-      e.at,
-    ],
-  )
+  await audit(tx, {
+    workspaceId: e.workspaceId,
+    actorId: e.actorId,
+    action: e.scope === 'workspace' ? 'workspace.internal_only' : 'project.internal_only',
+    target: e.target,
+    detail: { internalOnly: e.on },
+    at: e.at,
+  })
 }
 
 // ---- the bell notice: an outside account joined a board ------------------------------------------

@@ -5,10 +5,12 @@
 // menu longer); Escape closes it and gives the keyboard back to the tile. Everything the Internal only
 // control did, and every one of its test ids, is unchanged: only where it sits moved. Wave R: the panel also links to
 // the chat notifications settings (Slack and Teams), the same entry as the bell's; it hides itself while chat
-// notifications are off, or for a member when the workspace has no channel.
+// notifications are off, or for a member when the workspace has no channel. Wave W (WS5): owners and admins also find
+// the workspace admin page here, while it is offered.
 import type { Project, WorkspaceSummary } from '@draftroom/contracts'
 import { useEffect, useId, useRef, useState } from 'react'
 import { ChatNotificationsEntry } from '../features/notify-settings/ChatNotificationsDialog.tsx'
+import { AdminMenuEntry, useAdminEntryShown } from '../features/workspace-admin/AdminMenuEntry.tsx'
 import { navigate, workspacePath } from '../lib/routing.ts'
 import { useValue } from '../lib/signals.ts'
 import { InternalOnlySection, type InternalOnlyState } from './InternalOnly.tsx'
@@ -79,7 +81,8 @@ export function WorkspaceMenu({
   // the What's new card's "Try it" asks for the panel (a request made before this mounted is not replayed)
   const asked = useValue(workspaceMenuRequests)
   const seen = useRef(asked)
-  const hasMenu = others.length > 0 || showInternal
+  const showAdmin = useAdminEntryShown(workspace.role)
+  const hasMenu = others.length > 0 || showInternal || showAdmin
   useEffect(() => {
     if (asked === seen.current) return
     seen.current = asked
@@ -194,6 +197,7 @@ export function WorkspaceMenu({
               state={internal}
             />
           )}
+          {showAdmin && <AdminMenuEntry workspaceId={workspace.id} onOpen={() => setOpen(false)} />}
           <div className="dr-wsmenu__section" data-testid="workspace-menu-chat">
             <ChatNotificationsEntry
               workspaceId={workspace.id}

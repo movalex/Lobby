@@ -13,6 +13,7 @@ import {
 import Fastify, { type FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
 import { toErrorResponse } from '../../../src/errors.ts'
+import type { FeatureContext } from '../../../src/features/context.ts'
 import { registerFormats } from '../../../src/features/formats/index.ts'
 import { formatsOn, formatsRoute, formatsStub, requireFormats } from '../../../src/features/formats/switch.ts'
 import { PENDING_ROUTES } from '../../../src/features/pending-routes.ts'
@@ -40,6 +41,10 @@ const ROUTES: [string, FormatSwitch[]][] = [
 
 const fill = (pattern: string) => pattern.replace(/:\w+/g, 'x1')
 const switchesOnly = (formats: FormatSwitches) => ({ config: { formats } })
+/** A landed feature's context in a bare app: the switches only (it reads the rest lazily, in its handlers). */
+const asFeatures = (formats: FormatSwitches) => switchesOnly(formats) as unknown as FeatureContext
+/** The routes still pending in the real app (a stub until their owner lands them). */
+const STUBBED = ROUTES.filter(([key]) => Object.hasOwn(PENDING_ROUTES, key))
 
 let app: FastifyInstance | null = null
 let api: TestApi | null = null
@@ -65,7 +70,7 @@ async function bare(formats: FormatSwitches) {
     throw Object.assign(new Error('refused'), { statusCode: 403 })
   })
   await registerFormats(a, switchesOnly(formats), {})
-  await registerWorkspaceAdmin(a, switchesOnly(formats), {})
+  await registerWorkspaceAdmin(a, asFeatures(formats), {})
   await a.ready()
   app = a
   return { a, guarded }
@@ -130,10 +135,11 @@ describe('the wave W kill switches', () => {
       return reply.code(r.status).send(r.body)
     })
     await registerFormats(a, switchesOnly(ALL_ON), {})
-    await registerWorkspaceAdmin(a, switchesOnly(ALL_ON), {})
+    await registerWorkspaceAdmin(a, asFeatures(ALL_ON), {})
     await a.ready()
     app = a
-    for (const [key] of ROUTES) {
+    // WS5's admin routes have landed (features/workspace-admin): only the routes still pending are stubs
+    for (const [key] of STUBBED) {
       const [method = 'GET', pattern = ''] = key.split(' ') as ['GET' | 'POST', string]
       const res = await a.inject({ method, url: fill(pattern) })
       expect(res.statusCode, key).toBe(501)
@@ -153,7 +159,7 @@ describe('the wave W kill switches', () => {
     expect((await a.inject({ method: 'GET', url: '/q' })).json()).toEqual({ ok: 2 })
   })
 
-  it('in the real app with every switch on, every wave W route is still pending: not registered, an unknown route', async () => {
+  it('in the real app with every switch on, a pending wave W route is not registered; a landed one is; both answer an unknown workspace as an unknown route', async () => {
     api = await createTestApi({
       env: {
         DRAFTROOM_DOC_CARDS: 'on',
@@ -167,8 +173,10 @@ describe('the wave W kill switches', () => {
     const alice = await api.login('alice')
     for (const [key] of ROUTES) {
       const [method = 'GET', pattern = ''] = key.split(' ') as ['GET' | 'POST', string]
-      expect(Object.hasOwn(PENDING_ROUTES, key), key).toBe(true)
-      expect(api.app.hasRoute({ method, url: pattern }), key).toBe(false)
+      const pending = Object.hasOwn(PENDING_ROUTES, key)
+      // WS5 landed the admin routes; the format routes stay pending until WS2 and WS4 land theirs
+      expect(pending, key).toBe(!(Object.values(ADMIN_ROUTE_KEYS) as string[]).includes(key))
+      expect(api.app.hasRoute({ method, url: pattern }), key).toBe(!pending)
       const res = await alice.req(method, fill(pattern), method === 'GET' ? undefined : {})
       expect(res.statusCode, key).toBe(404)
       expect(res.json(), key).toEqual(UNKNOWN)

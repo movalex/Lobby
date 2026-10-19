@@ -46,6 +46,7 @@ import type {
 } from '@draftroom/contracts'
 import { ASSET_GC_GRACE_DAYS, ASSET_GC_IN_FLIGHT_DAYS, ASSET_GC_REPORT_LIMIT } from '@draftroom/contracts'
 import { type Db, pgErrorCode, type Queryable } from '@draftroom/db'
+import { audit } from '../audit.ts'
 import { type CanvasEngineProbe, TLDRAW_ONLY } from '../canvas-engine.ts'
 import { snapshotBodies } from '../features/history/snapshot-store.ts'
 import type { BlobStore } from './blobs.ts'
@@ -471,24 +472,22 @@ async function deleteVersion(
       [keys, workspaceId, at],
     )
     await tx.query('DELETE FROM asset_versions WHERE id = $1', [versionId])
-    await tx.query(
-      `INSERT INTO audit_events (workspace_id, actor_id, action, target, detail, at)
-       VALUES ($1, NULL, 'asset.gc_delete', $2, $3::jsonb, $4)`,
-      [
-        workspaceId,
-        versionId,
-        JSON.stringify({
-          assetId: v.asset_id,
-          boardId: v.board_id,
-          name: v.name,
-          kind: v.kind,
-          bytes,
-          unreferencedSince: v.unreferenced_since.toISOString(),
-          uploadedAt: v.created_at.toISOString(),
-        }),
-        at,
-      ],
-    )
+    await audit(tx, {
+      workspaceId,
+      actorId: null,
+      action: 'asset.gc_delete',
+      target: versionId,
+      detail: {
+        assetId: v.asset_id,
+        boardId: v.board_id,
+        name: v.name,
+        kind: v.kind,
+        bytes,
+        unreferencedSince: v.unreferenced_since.toISOString(),
+        uploadedAt: v.created_at.toISOString(),
+      },
+      at,
+    })
     return { keys, bytes }
   })
   if (!done) return null

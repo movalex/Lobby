@@ -62,13 +62,8 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   'GET /api/file-ops/:op': { owner: 'WS2', item: 'W2-2' },
   'POST /api/file-ops/:op/cancel': { owner: 'WS2', item: 'W2-2' },
   'POST /api/files/:ver/render-pages': { owner: 'WS4', item: 'W4-1' },
-  'GET /api/workspaces/:wid/admin/members': { owner: 'WS5', item: 'W5-1' },
-  'GET /api/workspaces/:wid/admin/invitations': { owner: 'WS5', item: 'W5-1' },
-  'GET /api/workspaces/:wid/admin/storage/by-board': { owner: 'WS5', item: 'W5-2' },
-  'GET /api/workspaces/:wid/admin/storage/by-uploader': { owner: 'WS5', item: 'W5-2' },
-  'GET /api/workspaces/:wid/admin/audit': { owner: 'WS5', item: 'W5-3' },
-  'GET /api/workspaces/:wid/admin/links': { owner: 'WS5', item: 'W5-4' },
-  'GET /api/workspaces/:wid/admin/retention': { owner: 'WS5', item: 'W5-5' },
+  // WS5 implemented its seven admin routes (W5-1 members and invitations, W5-2 storage, W5-3 audit, W5-4 links, W5-5
+  // retention; features/workspace-admin): to ship one hidden, add its key back.
 }
 
 export const isPendingRoute = (
