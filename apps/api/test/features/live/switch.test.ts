@@ -14,6 +14,7 @@ import Fastify, { type FastifyInstance } from 'fastify'
 import { afterEach, describe, expect, it } from 'vitest'
 import { toErrorResponse } from '../../../src/errors.ts'
 import { registerBreakouts } from '../../../src/features/breakouts/index.ts'
+import type { FeatureContext } from '../../../src/features/context.ts'
 import { registerJoinCodes } from '../../../src/features/join-codes/index.ts'
 import { liveOn, liveRoute, requireLive } from '../../../src/features/live/switch.ts'
 import { registerLiveActivities } from '../../../src/features/live-activities/index.ts'
@@ -31,6 +32,8 @@ const FEATURES: [LiveSwitch, readonly string[], typeof registerLiveActivities][]
 ]
 
 const fill = (pattern: string) => pattern.replace(/:\w+/g, 'x1')
+/** A bare app's context: the switches only (a landed feature reads the rest lazily, in its handlers). */
+const switchesOnly = (live: LiveSwitches) => ({ config: { live } }) as unknown as FeatureContext
 
 let app: FastifyInstance | null = null
 let api: TestApi | null = null
@@ -56,7 +59,7 @@ async function bare(live: LiveSwitches) {
     guarded.push(`${req.method} ${req.routeOptions.url}`)
     throw Object.assign(new Error('refused'), { statusCode: 403 })
   })
-  const ctx = { config: { live } }
+  const ctx = switchesOnly(live)
   for (const [, , register] of FEATURES) await register(a, ctx, {})
   await a.ready()
   app = a
@@ -112,17 +115,18 @@ describe('the wave V kill switches', () => {
     }
   })
 
-  it('on, with no guard in the way, the stub is 501 NOT_IMPLEMENTED (never a feature that looks finished)', async () => {
+  it('on, with no guard in the way, a route still stubbed is 501 NOT_IMPLEMENTED (never a feature that looks finished)', async () => {
     const a = Fastify()
     a.setErrorHandler((err, _req, reply) => {
       const r = toErrorResponse(err)
       return reply.code(r.status).send(r.body)
     })
-    for (const [, , register] of FEATURES) await register(a, { config: { live: ALL_ON } }, {})
+    for (const [, , register] of FEATURES) await register(a, switchesOnly(ALL_ON), {})
     await a.ready()
     app = a
+    // a landed route (no longer pending in the real app) runs its own handler; its own tests hold it to its rules
     for (const [, keys] of FEATURES)
-      for (const key of keys) {
+      for (const key of keys.filter((k) => Object.hasOwn(PENDING_ROUTES, k))) {
         const [method = 'GET', pattern = ''] = key.split(' ') as ['GET' | 'POST', string]
         const res = await a.inject({ method, url: fill(pattern) })
         expect(res.statusCode, key).toBe(501)

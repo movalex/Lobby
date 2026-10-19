@@ -48,18 +48,7 @@ export const PENDING_ROUTES: Readonly<Record<string, PendingRoute>> = {
   // V1-3 hide, placed, the past list; features/live-activities), JOIN_CODE_ROUTE_KEYS (WS3: V2-1 a link's code, V2-2
   // resolve; features/join-codes) and BREAKOUT_ROUTE_KEYS (WS4: V3-1 start, state, extend, end; V3-2 assign, shuffle,
   // join; V3-3 broadcast, summon; features/breakouts). Once implemented, each is gated by its kill switch as well.
-  'GET /api/boards/:bid/activity': { owner: 'WS1', item: 'V1-1' },
-  'POST /api/boards/:bid/activities': { owner: 'WS1', item: 'V1-1' },
-  'POST /api/activities/:aid/answer': { owner: 'WS1', item: 'V1-1' },
-  'POST /api/activities/:aid/close': { owner: 'WS1', item: 'V1-2' },
-  'POST /api/activities/:aid/reveal': { owner: 'WS1', item: 'V1-2' },
-  'POST /api/activities/:aid/extend': { owner: 'WS1', item: 'V1-2' },
-  'POST /api/activities/:aid/cancel': { owner: 'WS1', item: 'V1-2' },
-  'GET /api/activities/:aid/results': { owner: 'WS1', item: 'V1-2' },
-  'GET /api/activities/:aid/answers': { owner: 'WS1', item: 'V1-2' },
-  'POST /api/activities/:aid/hide': { owner: 'WS1', item: 'V1-3' },
-  'POST /api/activities/:aid/placed': { owner: 'WS1', item: 'V1-3' },
-  'GET /api/boards/:bid/activities': { owner: 'WS1', item: 'V1-3' },
+  // WS1's twelve activity routes are implemented (features/live-activities); to ship one hidden, add its key back.
   'POST /api/boards/:bid/review-links/:id/code': { owner: 'WS3', item: 'V2-1' },
   'GET /api/join/:code': { owner: 'WS3', item: 'V2-2' },
   'GET /api/boards/:bid/breakouts': { owner: 'WS4', item: 'V3-1' },
