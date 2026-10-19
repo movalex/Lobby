@@ -14,6 +14,7 @@
     "@napi-rs/canvas": "catalog:",
     "ag-psd": "catalog:",
     "file-type": "catalog:",
+    "onnxruntime-node": "catalog:",
     "pdfjs-dist": "catalog:",
     "sharp": "catalog:"
   },
