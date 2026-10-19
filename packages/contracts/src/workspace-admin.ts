@@ -1,4 +1,4 @@
-// Wave W, the workspace admin page (WS5; docs/WAVE-W-CONTRACTS.md §6). OWNER: the wave W lead (packages/contracts is
+// Wave W, the workspace admin page (WS5; docs/WAVE-W-CONTRACTS.md §7). OWNER: the wave W lead (packages/contracts is
 // lead-only). `/w/:wid/admin` in the web, five tabs, each backed by an owner/admin route under
 // /api/workspaces/:wid/admin/ (apps/api/src/features/workspace-admin/**). Everyone else, a member, a workspace guest, a
 // name-only guest, someone of another workspace, gets the unknown route's 404 (never a 403: the page does not tell

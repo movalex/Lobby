@@ -12,7 +12,7 @@
 // exactly like an unknown route (apps/api/src/features/formats/switch.ts). The api tells the web in GET
 // /api/auth/config (`AuthConfig.formats`, optional: an api before wave W sends none, read as all off). A worker-backed
 // feature is told on only while its switch is on AND a worker that has its capability claimed within
-// WORKER_OP_LIMITS.capabilityFreshMs (§3 of the contracts doc), so the web never offers what would queue forever.
+// WORKER_OP_LIMITS.capabilityFreshMs (docs/WAVE-W-CONTRACTS.md §3.3), so the web never offers what would queue forever.
 //
 // Nothing of wave W changes the sync protocol (CONTRACTS_REV stays 14), an element field, a customData key or
 // LOBBY_CLIENT_REV (3): no existing response enum gains a value. New placements are ordinary elements carrying the
@@ -351,7 +351,7 @@ export const FORMAT_ROUTE_KEYS = {
 } as const
 export type FormatRouteName = keyof typeof FORMAT_ROUTE_KEYS
 
-/** Who may call each (§7 of the contracts doc; checked server-side by each route). */
+/** Who may call each (docs/WAVE-W-CONTRACTS.md §8; checked server-side by each route). */
 export const FORMAT_RULES: Readonly<Record<FormatRouteName, 'edit-account' | 'requester'>> = {
   removeBackground: 'edit-account',
   renderPages: 'edit-account',
