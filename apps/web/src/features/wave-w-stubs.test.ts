@@ -76,9 +76,15 @@ describe('the wave W switches', () => {
 })
 
 describe('the wave W board features and routes', () => {
-  it('doc-cards, remove-bg and deck-import are registered, empty, before the Elements panel (the last)', () => {
+  it('doc-cards, remove-bg and deck-import are registered (empty until landed) before the Elements panel (the last)', () => {
     const ids = CANVAS_FEATURES.map((f) => f.id)
-    for (const id of ['doc-cards', 'remove-bg', 'deck-import']) {
+    // WS2 landed remove-bg (features/remove-bg: its tracker and its held palette command); its own suite tests it
+    expect(Object.keys(CANVAS_FEATURES.find((x) => x.id === 'remove-bg') ?? {})).toEqual([
+      'id',
+      'commands',
+      'onMount',
+    ])
+    for (const id of ['doc-cards', 'deck-import']) {
       const f = CANVAS_FEATURES.find((x) => x.id === id)
       expect(f, id).toBeDefined()
       expect(Object.keys(f ?? {}), id).toEqual(['id'])
