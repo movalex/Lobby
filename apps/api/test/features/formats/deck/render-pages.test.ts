@@ -338,6 +338,33 @@ describe('POST /api/files/:ver/render-pages', () => {
     expect(res.statusCode).toBe(404)
     expect(res.json()).toEqual({ error: { code: 'NOT_FOUND', message: 'Not found.' } })
   })
+
+  it('the integration: at most 20 requests that queue ops per person an hour (429 RATE_LIMITED); empty ones are free', async () => {
+    const s = await setup()
+    const { max, timeWindow } = DECK_LIMITS.requestRate
+    expect({ max, timeWindow }).toEqual({ max: 20, timeWindow: 3_600_000 })
+    // an empty request (8 pages: nothing to make) does not count, however often
+    const small = await s.deck(8)
+    for (let i = 0; i < 3; i++) expect((await s.request(s.e.bob, small.versionId)).statusCode).toBe(409)
+    const decks = []
+    for (let i = 0; i <= max; i++) decks.push(await s.deck(12, { name: `deck-${i}.pdf` }))
+    for (const d of decks.slice(0, max)) {
+      const r = await s.request(s.e.bob, d.versionId)
+      expect(r.statusCode, r.body).toBe(202)
+    }
+    const last = decks[max]
+    if (!last) throw new Error('no deck')
+    const over = await s.request(s.e.bob, last.versionId)
+    expect(over.statusCode).toBe(429)
+    expect(over.json().error).toEqual({ code: 'RATE_LIMITED', message: DECK_MESSAGES.rate })
+    expect(Number(over.headers['retry-after'])).toBeGreaterThan(0)
+    expect(await s.ops(last.versionId)).toEqual([])
+    // an hour later bob may again (the worker asks again so its capability is fresh; the ops queued an hour ago are
+    // past their 15 minutes and fail WORKER_UNAVAILABLE at that claim, so it gets nothing)
+    s.tick(timeWindow + 1)
+    expect((await s.opsClaim()).statusCode).toBe(204)
+    expect((await s.request(s.e.bob, last.versionId)).statusCode).toBe(202)
+  })
 })
 
 describe('the render-pages kind', () => {

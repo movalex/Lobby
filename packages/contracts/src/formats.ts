@@ -481,6 +481,12 @@ export const DECK_LIMITS = {
   slideWidth: 1600,
   gridColumns: 5,
   gridGap: 80,
+  /**
+   * render-pages requests that queue ops, per person (the integration's limit; in memory, one api instance): each
+   * queues at most 4 ops of at most 92 pages, so a person keeps the NAS worker busy with at most 20 decks an hour.
+   * A refused or empty request (409 NOTHING_TO_RENDER, FILE_OP_ACTIVE, …) does not count. Over it: 429 RATE_LIMITED.
+   */
+  requestRate: { max: 20, timeWindow: 3_600_000 },
 } as const
 
 /** The render-pages ops a deck of `pageCount` pages needs (pages 9..min(N, 100) in runs of ≤ 30). */

@@ -18,6 +18,8 @@
 //     and the web places the slides at once; a run already queued or running (anyone's) is left to finish, and when
 //     every missing run is active the answer is 409 FILE_OP_ACTIVE (the web then waits for the pages on the meta
 //     route: a run made for someone else is not theirs to see, features/formats/op-state.ts);
+//   - (the integration) DECK_LIMITS.requestRate per person: 20 requests that queued ops an hour, else 429
+//     RATE_LIMITED (checked before the transaction, counted after its COMMIT; an empty or refused request is free);
 // then one worker_ops row per missing, inactive run (requested_by = the caller) and 202 with the FIRST op's state; the
 // requester follows each by its `file.op` events (after COMMIT, to their own streams only) and GET /api/file-ops/:op.
 //
@@ -40,6 +42,7 @@ import { requireBoardAction } from '../../../access.ts'
 import type { Params } from '../../../context.ts'
 import { ApiError, conflict, forbidden, notFound, parse } from '../../../errors.ts'
 import { isAssetLinked } from '../../../files-auth.ts'
+import { type KeyedLimit, keyedLimit } from '../../../rate-limit.ts'
 import type { FeatureContext } from '../../context.ts'
 import { PENDING_ROUTES, type PendingMethod, type PendingRoute } from '../../pending-routes.ts'
 import { fileOpState } from '../op-state.ts'
@@ -60,6 +63,7 @@ export const DECK_MESSAGES = {
   nothing: 'Every slide of this file is ready to place.',
   active: 'The slides of this file are being made already. They can be placed when they are ready.',
   archived: 'This board is archived. Restore it to add slides.',
+  rate: 'You have asked for the slides of many decks in the last hour. Try again later.',
 } as const
 
 const runKey = (r: { from: number; to: number }) => `${r.from}-${r.to}`
@@ -81,6 +85,13 @@ export async function registerDeckImport(
   pending: Readonly<Record<string, PendingRoute>> = PENDING_ROUTES,
 ): Promise<void> {
   const [method, url] = FORMAT_ROUTE_KEYS.renderPages.split(' ') as [PendingMethod, string]
+  // the integration: DECK_LIMITS.requestRate per person, counting only requests that queued ops (read lazily: a bare
+  // test app gives only the switches)
+  let rate: KeyedLimit | null = null
+  const rateOf = () => {
+    rate ??= keyedLimit(DECK_LIMITS.requestRate, () => ctx.now(), DECK_MESSAGES.rate)
+    return rate
+  }
 
   async function renderPages(req: FastifyRequest, reply: FastifyReply) {
     // the switch is the gate; a worker that can do it must have asked recently too (else nothing would run it)
@@ -89,6 +100,7 @@ export async function registerDeckImport(
     const ver = (req.params as Params).ver
     if (typeof ver !== 'string' || !VERSION_RE.test(ver)) throw notFound()
     const input = parse(FileOpInput, req.body ?? {})
+    rateOf().check(user.id)
     const now = ctx.now()
     const first = await ctx.db.transaction(async (tx) => {
       const access = await requireBoardAction(tx, input.boardId, user.id, 'view')
@@ -166,6 +178,7 @@ export async function registerDeckImport(
       }
       return ids[0] as string
     })
+    rateOf().record(user.id)
     const s = await fileOpState(ctx.db, first, now)
     if (!s) throw notFound()
     return reply.code(202).send(s.state)
