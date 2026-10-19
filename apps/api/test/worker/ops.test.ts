@@ -119,6 +119,7 @@ describe('an old worker (the preview protocol only)', () => {
     const s = await setup()
     await s.queue('remove-bg')
     await s.queue('extract-text')
+    await s.queue('render-pages', { params: { from: 9, to: 12 }, params_key: '9-12' })
     const fresh = await s.e.upload('second.png')
     const c = await claim(s.e, 'old-worker')
     expect(c?.job.versionId).toBe(fresh.versionId)
@@ -139,7 +140,19 @@ describe('an old worker (the preview protocol only)', () => {
           "SELECT count(*)::int AS n FROM worker_ops WHERE status = 'queued'",
         )
       ).n,
-    ).toBe(2)
+    ).toBe(3)
+    // the integration: it reports no capability (it never calls the ops routes), so nothing worker-backed is offered
+    // with every switch on, and the requests that would queue an op answer as unknown routes
+    expect(
+      (await s.e.api.db.one<{ n: number }>('SELECT count(*)::int AS n FROM worker_capabilities_seen')).n,
+    ).toBe(0)
+    const config = (await s.e.api.app.inject({ method: 'GET', url: '/api/auth/config' })).json()
+    expect(config.formats).toMatchObject({ removeBackground: false, fileSearch: false, deckImport: false })
+    for (const path of ['remove-background', 'render-pages']) {
+      const r = await s.e.bob.req('POST', `/api/files/${s.m.versionId}/${path}`, { boardId: s.e.board })
+      expect(r.statusCode, path).toBe(404)
+      expect(r.json().error.code, path).toBe('NOT_FOUND')
+    }
   })
 })
 
