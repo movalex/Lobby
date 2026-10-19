@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { PANEL_TEXT_EDITORS, panelEditorTarget } from './dblclick.ts'
 import { DOUBLE_TAP_POSITION_THRESHOLD, DoubleTapMirror, TAP_TWICE_TIMEOUT } from './doubleTap.ts'
 
 const one = (time: number, x: number, y: number) => ({ time, touches: [{ clientX: x, clientY: y }] })
@@ -57,5 +58,21 @@ describe('DoubleTapMirror (mirrors App.onTouchStart, index.js:43477-43517)', () 
     const m = new DoubleTapMirror()
     expect(m.onTouchStart(two(0)).kind).toBe('pass')
     expect(m.onTouchStart(one(50, 10, 10)).kind).toBe('pass')
+  })
+})
+
+describe('the panel editors take a double-tap on what they own (wave W, the guard list)', () => {
+  it('the swallowed double on a doc card (or its label) is the doc card panel, never the engine editor', () => {
+    const card = { id: 'card', type: 'rectangle', customData: { lobby: { kind: 'doc-card' } } }
+    const label = { id: 'card.t', type: 'text', containerId: 'card' }
+    const get = (id: string) => [card, label].find((e) => e.id === id)
+    const m = new DoubleTapMirror()
+    m.onTouchStart(one(0, 100, 100))
+    const second = m.onTouchStart(one(120, 104, 102))
+    expect(second.kind).toBe('double')
+    // what CanvasInput.runDoubleTap offers the features first: the element under the tap
+    for (const hit of [card, label])
+      expect(panelEditorTarget(hit, get)).toEqual({ editor: 'doc-card-panel', id: 'card' })
+    expect(PANEL_TEXT_EDITORS.find((e) => e.id === 'doc-card-panel')?.opens).toContain('double-tap')
   })
 })

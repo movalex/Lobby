@@ -60,6 +60,12 @@ export class DoubleTapMirror {
     return { kind: 'pass' }
   }
 }
+// Wave W (WS1), the panel editors' double-tap row (./dblclick.ts PANEL_TEXT_EDITORS): a swallowed double on an
+// element a panel editor owns (a doc card, or its label) is offered to the features first (CanvasInput.runDoubleTap →
+// `onDoubleTap` → the board's `double-click` input event, CR-W5-3G-4), and the feature that owns the editor takes it
+// (`panelEditorTarget`), so the panel opens and Excalidraw's editor never does. A double on a panning tool (Hand)
+// waits for both touches to end as taps first, as for any element.
+
 // Note: after a swallowed double, Excalidraw's didTapTwice stays true until its timer; a third quick tap
 // near the first one would pair again there, so the mirror keeps pairing too and Lobby swallows it again.
 

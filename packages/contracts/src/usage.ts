@@ -309,8 +309,8 @@ export const PENDING_PALETTE_COMMAND_IDS: readonly PaletteCommandId[] = [
   // (present-export/session-csv, in the present-export feature).
   // wave W (the foundation): every wave W command, until its owner registers it (each removes its own line, through the
   // lead): WS1 'doc-card.insert' and 'doc-card.from-text', WS2 'image.remove-background', WS4 'deck.insert-slides',
-  // WS5 'workspace.admin'.
-  ...WAVE_W_PALETTE_COMMAND_IDS,
+  // WS5 'workspace.admin'. WS1 registered 'doc-card.insert' and 'doc-card.from-text' (features/doc-cards).
+  ...WAVE_W_PALETTE_COMMAND_IDS.filter((id) => id !== 'doc-card.insert' && id !== 'doc-card.from-text'),
 ]
 
 /**

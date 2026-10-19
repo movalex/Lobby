@@ -394,9 +394,12 @@ describe('palette ids', () => {
       'deck.insert-slides',
       'workspace.admin',
     ])
+    // WS1 registered its two (features/doc-cards)
+    const registered = new Set(['doc-card.insert', 'doc-card.from-text'])
     for (const id of WAVE_W_PALETTE_COMMAND_IDS) {
       expect(PALETTE_COMMAND_IDS as readonly string[], id).toContain(id)
-      expect(PENDING_PALETTE_COMMAND_IDS as readonly string[], id).toContain(id)
+      if (registered.has(id)) expect(PENDING_PALETTE_COMMAND_IDS as readonly string[], id).not.toContain(id)
+      else expect(PENDING_PALETTE_COMMAND_IDS as readonly string[], id).toContain(id)
     }
   })
 })
