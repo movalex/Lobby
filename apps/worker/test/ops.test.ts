@@ -96,7 +96,10 @@ describe('the background model file', () => {
       WORKER_CAPABILITIES['render-pages'],
     ])
     expect(none.missing.map((m) => m.kind)).toEqual(['remove-bg'])
-    expect(none.missing[0]).toEqual({ kind: 'remove-bg', why: 'the model file is not usable (hash-mismatch)' })
+    expect(none.missing[0]).toEqual({
+      kind: 'remove-bg',
+      why: 'the model file is not usable (hash-mismatch)',
+    })
     const fake: OpRunner = { kind: 'remove-bg', run: async () => ({ outputs: [], result: {} }) }
     const runners = { 'remove-bg': fake, 'extract-text': { ...fake, kind: 'extract-text' as const } }
     const ok = reportedCapabilities({
@@ -111,7 +114,9 @@ describe('the background model file', () => {
       bgModel: checkBgModel(path),
     })
     expect(noModel.capabilities).toEqual([WORKER_CAPABILITIES['extract-text']])
-    expect(noModel.missing).toEqual([{ kind: 'remove-bg', why: 'the model file is not usable (hash-mismatch)' }])
+    expect(noModel.missing).toEqual([
+      { kind: 'remove-bg', why: 'the model file is not usable (hash-mismatch)' },
+    ])
     // WORKER_OPS narrows it further
     expect(
       reportedCapabilities({ enabled: [], runners, bgModel: checkBgModel(path, sha) }).capabilities,
