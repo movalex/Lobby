@@ -159,7 +159,7 @@ interface Sock {
 
 async function openSocket(sync: string, ticket: string, tab: string): Promise<Sock> {
   const protocols = ticketProtocols(ticket)
-  const query = protocols ? { sessionId: tab } : { sessionId: tab, ticket }
+  const query: Record<string, string> = protocols ? { sessionId: tab } : { sessionId: tab, ticket }
   const url = `${sync.replace(/^http/, 'ws')}/connect/${BOARD}?${new URLSearchParams(query)}`
   const ws = protocols ? new WebSocket(url, protocols) : new WebSocket(url)
   ws.binaryType = 'arraybuffer'
@@ -309,7 +309,8 @@ async function main() {
   const seeded = await seedElements(
     {
       send: (m) => seeder.send(m),
-      next: (type) =>
+      // the seeder only ever waits for acks
+      next: () =>
         new Promise((resolve) => {
           acks.push((m) => resolve(m as never))
         }) as never,
