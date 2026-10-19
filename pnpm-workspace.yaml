@@ -74,6 +74,10 @@ catalog:
   # Tabler MIT; both licence texts ship in packages/icon-sets/licenses.
   lucide-static: 1.49.0
   '@tabler/icons': 3.48.0
+  # QR codes for the join card (wave V WS3; apps/web only, wrapped by apps/web/src/features/join/qr.ts so it can be
+  # replaced). MIT, no dependencies, no install scripts (published 2025-08-07; checked 2026-10-18). The web draws the
+  # module matrix as an inline <svg>: no canvas, data: or blob: URL.
+  qrcode-generator: 2.0.4
 
 # `pnpm add` must use a catalog version when one exists.
 catalogMode: strict
