@@ -24,9 +24,13 @@ export const DOC_CARD_KIND = FORMAT_ELEMENT_KINDS.docCard
 export const DOC_CARD_W = DOC_CARD_LIMITS.width
 export const DOC_CARD_H = DOC_CARD_LIMITS.height
 /**
- * The words a card holds at most: DOC_CARD_LIMITS.maxChars (canvas-schema MAX_ORIGINAL_TEXT_CHARS). The NAS
- * measurement of the room's commit and relayout cost decides whether wave W ships 20,000 or 12,000
- * (docs/WAVE-W-CONTRACTS.md §2 Risks; the WS1 gate report).
+ * The words a card holds at most: DOC_CARD_LIMITS.maxChars (canvas-schema MAX_ORIGINAL_TEXT_CHARS), 20,000. Kept at
+ * 20,000 by the NAS measurement (docs/WAVE-W-CONTRACTS.md §2 Risks; e2e/load/doc-cards-nas.sh, 2026-10-19, the sync at
+ * 0.5 CPU and 512 MB, 30 watchers, a full card's 41 KB push every 500 ms): one typist, ack p95 33 ms (p99 83), the
+ * event loop's p99 22 ms, 4 % of the CPU quota on average; five typists at once, ack p95 93 ms (p99 111), loop p99 24
+ * ms, 17 % (max 57 %); all inside the §2.13 targets (ack p95 ≤ 150, p99 ≤ 400, loop p99 ≤ 50 ms, CPU ≤ 80 %). The
+ * server's relayout of a full card (rule 6, only when a holder's lease lapses after a move) takes 77 ms (p95 96) at
+ * that CPU, 28 ms (p95 80) at 12,000: rare, and not cured by the lower cap.
  */
 export const DOC_MAX_CHARS = DOC_CARD_LIMITS.maxChars
 /** What search indexes of each card (apps/sync board-text ENTRY_MAX_CHARS; raising it is a sync change). */

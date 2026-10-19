@@ -5,7 +5,7 @@
 // Each source line is one line of the face, at the label's own font size and line height, so the face is as tall as
 // the words Excalidraw laid out on the card (headings by weight, not size). Consecutive items are one list (a list
 // for screen readers), nested by their indent.
-import type { ReactNode } from 'react'
+import { memo, type ReactNode } from 'react'
 import { type Block, type Inline, itemMarker, type ParsedDoc } from './markdown-lite.ts'
 
 export interface DocBlocksProps {
@@ -104,8 +104,11 @@ function ItemLine({
   )
 }
 
-/** The blocks, consecutive items grouped into one list. */
-export function DocBlocks({ doc, mode, onToggle }: DocBlocksProps) {
+/**
+ * The blocks, consecutive items grouped into one list. Memoized: the same parsed words (state.ts caches them by
+ * text), mode and toggle give the same nodes, so a face that only moves with the camera renders nothing again.
+ */
+export const DocBlocks = memo(function DocBlocks({ doc, mode, onToggle }: DocBlocksProps) {
   const out: ReactNode[] = []
   const blocks = doc.blocks
   for (let i = 0; i < blocks.length; i++) {
@@ -173,4 +176,4 @@ export function DocBlocks({ doc, mode, onToggle }: DocBlocksProps) {
     }
   }
   return <>{out}</>
-}
+})

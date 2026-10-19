@@ -11,7 +11,7 @@
 //  - What does not fit the card is cut with a fade and an Open button (the panel shows it all).
 //  - In the dark theme the face takes the canvas's own filter, so it looks exactly as the card does.
 import { isAllowedColor } from '@draftroom/canvas-schema/limits'
-import { type CSSProperties, useLayoutEffect, useRef, useState } from 'react'
+import { type CSSProperties, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CanvasFeatureContext, LobbyCanvas } from '../../canvas/api/index.ts'
 import { type Box, Occluders } from '../../file-card/ported/occluders.ts'
 import { useValue } from '../../lib/signals.ts'
@@ -182,7 +182,12 @@ function DocFace({
     if (!el) return
     setOverflow(el.scrollHeight > el.clientHeight + 1)
   }, [entry.words, entry.box.w, entry.box.h, entry.fontSize])
-  const title = docTitle(entry.words) || 'Untitled doc'
+  // the words' nodes are made again only when the words change (the layer re-renders on every camera move)
+  const title = useMemo(() => docTitle(entry.words) || 'Untitled doc', [entry.words])
+  const onToggle = useMemo(
+    () => (canTick ? (line: number) => void toggleDocCheck(ctx, entry.id, line) : null),
+    [canTick, ctx, entry.id],
+  )
   const panelOn = useValue('doc-face-panel', () => docState(ctx.canvas).target.get() === entry.id, [
     ctx,
     entry.id,
@@ -198,11 +203,7 @@ function DocFace({
       style={style}
     >
       <div ref={body} className="lobby-doc__body">
-        <DocBlocks
-          doc={doc}
-          mode="face"
-          onToggle={canTick ? (line) => void toggleDocCheck(ctx, entry.id, line) : null}
-        />
+        <DocBlocks doc={doc} mode="face" onToggle={onToggle} />
       </div>
       {overflow && <div className="lobby-doc__fade" aria-hidden="true" />}
       {(overflow || selected) && !panelOn && (
