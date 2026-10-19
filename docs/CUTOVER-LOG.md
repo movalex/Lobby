@@ -514,3 +514,16 @@ on the sync disk (§6).
     - a 1 s 30 fps H.264 MP4 got a poster and a thumb, and its probe reports `frameRate: 30` (the review viewer no longer assumes 25 fps).
     - Not checked live: a real PSD or AI file. Those go through the same worker path and are covered by the worker's tests.
     - Cleanup: the board in Trash.
+- **2026-10-19 10:39-10:46Z, wave V deployed: live sessions+** (merge `7e5b4d6`, switches `604bf50`; `CONTRACTS_REV` stays 14; sync and worker not redeployed). In the DEPLOY.md order:
+  1. api `dep-dbav6mjncjis73ai9hc0` (migration 0038) with the three keys off. `/api/auth/config` reported `live` all false, and `/healthz/deep` returned 200.
+  2. web `dep-dbav78vbtjjs738o6pmg`; `/version.json` reports `7e5b4d6bb672`.
+  3. `DRAFTROOM_LIVE_ACTIVITIES`, `DRAFTROOM_JOIN_CODES` and `DRAFTROOM_BREAKOUTS` set to `on` through the Render API, then an api redeploy (`dep-dbav7vm1egvs73c95sng`, not a restart). `live` is now all true.
+  - After: drift 0; live smoke 41/0 (the usual sync-socket warning); `/healthz/deep` 200; an unknown join code got 404.
+  - Live check, the owner on a new board, through the api:
+    - a poll started (201) and was revealed;
+    - a word cloud took an anonymous answer containing 👩‍💻 (200) and was revealed with the right counts, with no participant ids in the reveal;
+    - a workshop link got an 8-character join code (200), and `/api/join/<code>` returned its token.
+    - My first answer call used the wrong body shape (400; the answer must be wrapped in `answer`), so that poll revealed with 0 answers. That was a check error, not a bug.
+    - Breakouts were not driven live, because they need real frames on a board. The e2e suite covers them (v3, both event modes).
+    - Cleanup: the board in Trash.
+  - Gate (wave-v/int at 1a79a536): e2e chromium 1,128/1/8 normal (the one failure was an outdated K3-3 menu test, updated) and 1,129/0/8 with direct events; probe:browser pass; test:arrows 85/85; vitest 12,059/0; real Postgres db 123 and api 2,559 (1 link-preview race that also happens on main). NAS load test with 200 participants: poll answer ack p95 19 ms, 200/200 counted, 0 leaks.
