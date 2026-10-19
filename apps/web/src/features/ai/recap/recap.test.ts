@@ -38,12 +38,18 @@ import {
 } from './plan.ts'
 import { AiRecapOverlay } from './RecapPanel.tsx'
 import { aiRecap, inSelection, runRecap } from './recap.ts'
-import { type RecapSourceInput, type RecapSourceSpec, registerRecapSource } from './sources.ts'
+import {
+  type RecapSourceInput,
+  type RecapSourceSpec,
+  recapSourceSince,
+  registerRecapSource,
+} from './sources.ts'
 import {
   catchUpSince,
   DAY_MS,
   firstEditToday,
   lastVisitKey,
+  midnightOf,
   noteVisit,
   readLastVisit,
   resetVisits,
@@ -640,7 +646,8 @@ describe('the session summary (wave V): the registered sources in Wrap up', () =
   const cleanups: (() => void)[] = []
   /** the summary's web switch, as a dev-auth page sets it (features/live/flags.ts) */
   const summary = (on: boolean) => {
-    const store = new Map<string, string>(on ? [[LIVE_FLAG_KEYS.summary, '1']] : [])
+    // the shipped switch is on since the integration: off is the dev-auth override '0'
+    const store = new Map<string, string>([[LIVE_FLAG_KEYS.summary, on ? '1' : '0']])
     vi.stubGlobal('localStorage', {
       getItem: (k: string) => store.get(k) ?? null,
       setItem: (k: string, v: string) => void store.set(k, String(v)),
@@ -750,6 +757,33 @@ describe('the session summary (wave V): the registered sources in Wrap up', () =
     expect(seen).toEqual([])
     expect(state?.plan?.sections).toEqual([])
     expect(panel(k)).not.toContain('recap-source-')
+  })
+
+  it('This session: the sources read the session’s whole day, so a poll run before anything was drawn is in', async () => {
+    summary(true)
+    const seen: RecapSourceInput[] = []
+    cleanups.push(registerRecapSource(polls(seen)))
+    // the board's first edit today is an hour ago: the recap's own window (votes, AI) starts there
+    const drawn = NOW - 3_600_000
+    const stamp = {
+      createdBy: { uid: 'usr_bo', name: 'Bo', guest: false },
+      createdAt: drawn,
+      lastEditedBy: null,
+      lastEditedAt: drawn,
+    }
+    const els = note('n1', 0, 0, 'Drawn an hour ago', { customData: { lobbyServer: stamp } } as never)
+    expect(sessionSince(els as never[], NOW, null)).toBe(drawn)
+    const k = aiKit(els, AI_OFF)
+    await runRecap(k.ctx, 'session', NOW)
+    // a poll run at 09:00, before that edit, is in the sources' window
+    expect(seen[0]?.since).toBe(midnightOf(NOW))
+    // the rule: This session widens to midnight (and keeps a run of show that began before it); Catch me up keeps its
+    // visit window; a selection has none
+    expect(recapSourceSince('session', drawn, NOW)).toBe(midnightOf(NOW))
+    expect(recapSourceSince('session', midnightOf(NOW) - 600_000, NOW)).toBe(midnightOf(NOW) - 600_000)
+    expect(recapSourceSince('session', null, NOW)).toBe(midnightOf(NOW))
+    expect(recapSourceSince('catch-up', drawn, NOW)).toBe(drawn)
+    expect(recapSourceSince('selection', null, NOW)).toBeNull()
   })
 
   it('a recap replaced while its sources are out keeps none of them', async () => {

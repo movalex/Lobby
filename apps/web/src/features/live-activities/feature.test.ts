@@ -15,6 +15,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { NoticeInput } from '../../board/board-context.ts'
+import { recapSourceSince } from '../ai/recap/sources.ts'
 import { LIVE_FLAG_KEYS, setLiveSwitches } from '../live/flags.ts'
 import { workshopKit } from '../workshops/ported/ctx-kit.ts'
 import { facilitateExtras, facilitatePillExtras } from '../workshops/ported/facilitate-entries.ts'
@@ -22,7 +23,7 @@ import { ActivityPanel } from './ActivityPanel.tsx'
 import { answerOf } from './AnswerForm.tsx'
 import { ActivityDialogsLayer, entryWords } from './Entry.tsx'
 import { mountLiveActivities, panelVisible, START_COMMAND } from './index.tsx'
-import { sectionOf } from './recap.ts'
+import { inWindow, sectionOf } from './recap.ts'
 import { setupInput, setupProblem } from './SetupDialog.tsx'
 import { existingActivityStore } from './store.ts'
 import { recapLine } from './words.ts'
@@ -376,6 +377,38 @@ describe('the pure pieces', () => {
     })
     expect(sectionOf('activities', list, Date.parse('2026-10-18T10:30:00.000Z'))?.lines).toHaveLength(1)
     expect(sectionOf('word-clouds', [], null)).toBeNull()
+    // the integration: an activity that ran in the window is in, even when it started before it (a poll started
+    // before the session's first edit, revealed after; one still open)
+    const before = Date.parse('2026-10-18T10:30:00.000Z')
+    const ranInto = [
+      sum(
+        {
+          id: 'act_ffffffffffffffff',
+          status: 'revealed',
+          createdAt: '2026-10-18T10:00:00.000Z',
+          closedAt: '2026-10-18T10:20:00.000Z',
+          revealedAt: '2026-10-18T10:40:00.000Z',
+        },
+        { kind: 'poll', answered: 4, counts: [1, 3] },
+      ),
+      sum({ id: 'act_gggggggggggggggg', status: 'open', createdAt: '2026-10-18T10:10:00.000Z' }, null, 1),
+      sum(
+        {
+          id: 'act_hhhhhhhhhhhhhhhh',
+          status: 'revealed',
+          createdAt: '2026-10-18T09:00:00.000Z',
+          closedAt: '2026-10-18T09:10:00.000Z',
+          revealedAt: '2026-10-18T09:15:00.000Z',
+        },
+        { kind: 'poll', answered: 2, counts: [2, 0] },
+      ),
+    ]
+    expect(inWindow(ranInto, before).map((s) => s.activity.id)).toEqual([
+      'act_ffffffffffffffff',
+      'act_gggggggggggggggg',
+    ])
+    // This session reads the session's whole day (ai/recap/sources.ts recapSourceSince): all three are in
+    expect(inWindow(ranInto, recapSourceSince('session', before, before))).toHaveLength(3)
     for (const s of list) expect(recapLine(s) ?? '').not.toMatch(/usr_/)
   })
 

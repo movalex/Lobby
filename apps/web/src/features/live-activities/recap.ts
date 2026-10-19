@@ -8,11 +8,29 @@ import type { RecapSection, RecapSourceInput, RecapSourceSpec } from '../ai/reca
 import { liveActivitiesOn } from './hooks.ts'
 import { recapLine } from './words.ts'
 
-/** The activities of the window, oldest first (cancelled ones say nothing). */
+/**
+ * When an activity last changed (its reveal, else its close, else the time it ran out: an open activity past endsAt is
+ * reported closed), or null while it is open.
+ */
+const endedAt = (s: ActivitySummary): number | null => {
+  const a = s.activity
+  if (a.status === 'open') return null
+  return Date.parse(a.revealedAt ?? a.closedAt ?? a.endsAt ?? a.createdAt)
+}
+
+/**
+ * The activities of the window, oldest first (cancelled ones say nothing): every one that ran in it: started in it,
+ * still open, or closed or revealed in it (one started before the window and revealed inside it is in). The window is
+ * the sources' (ai/recap/sources.ts recapSourceSince: for This session, the session's whole day).
+ */
 export function inWindow(list: readonly ActivitySummary[], since: number | null): ActivitySummary[] {
   return list
     .filter((s) => s.activity.status !== 'cancelled')
-    .filter((s) => since === null || Date.parse(s.activity.createdAt) >= since)
+    .filter((s) => {
+      if (since === null || Date.parse(s.activity.createdAt) >= since) return true
+      const ended = endedAt(s)
+      return ended === null || ended >= since
+    })
     .slice()
     .sort((a, b) => Date.parse(a.activity.createdAt) - Date.parse(b.activity.createdAt))
 }

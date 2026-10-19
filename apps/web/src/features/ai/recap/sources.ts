@@ -10,7 +10,7 @@
 // once, each within RECAP_SOURCE_TIMEOUT_MS; one that fails or is late is left out (the recap never waits on it, and
 // never says why): the recap's own sections (votes, planned vs actual, AI) stand alone.
 import type { CanvasFeatureContext } from '../../../canvas/api/index.ts'
-import type { RecapScopeName } from './window.ts'
+import { midnightOf, type RecapScopeName } from './window.ts'
 
 /** The registered sources' ids (one line each here, through the lead). */
 export type RecapSourceId = 'activities' | 'word-clouds' | 'breakouts'
@@ -18,7 +18,7 @@ export type RecapSourceId = 'activities' | 'word-clouds' | 'breakouts'
 export interface RecapSourceInput {
   readonly ctx: CanvasFeatureContext
   readonly scope: RecapScopeName
-  /** the recap's window start (ms), null: no start (the whole board) */
+  /** the sources' window start (ms; recapSourceSince), null: no start (the whole board) */
   readonly since: number | null
   readonly now: number
   /** aborted when the recap is replaced or closed, or the source is late */
@@ -44,6 +44,21 @@ export interface RecapSourceSpec {
   /** order among the sources (low first): the sections show after the recap's own, in this order */
   readonly order: number
   collect(input: RecapSourceInput): Promise<RecapSection | null>
+}
+
+/**
+ * The window the sources read (the wave V integration's decision). A live activity or a breakout is not a board edit,
+ * so "This session"'s start (the run of show's start, else the first server-stamped edit today, else midnight:
+ * ./window.ts sessionSince) can fall after a poll that ran before anything was drawn, and the poll would be left out.
+ * For 'session' the sources read from the EARLIER of that start and local midnight: every activity and breakout of the
+ * session's day, and of a run of show that began before midnight. A source counts what ran in the window: started in
+ * it, or still running, or ended in it. 'catch-up' keeps its visit window (what happened since you were here), and
+ * 'selection' has none (null: the sources say what the board has).
+ */
+export function recapSourceSince(scope: RecapScopeName, since: number | null, now: number): number | null {
+  if (scope !== 'session') return since
+  const midnight = midnightOf(now)
+  return since === null ? midnight : Math.min(since, midnight)
 }
 
 /** How long a source may take before the recap goes on without it. */

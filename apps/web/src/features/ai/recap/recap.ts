@@ -29,7 +29,7 @@ import { ensureAiStatus, runPublic } from '../ported/actions.ts'
 import { aiStatus, openingPrivatePanel, perCanvas, registerPrivatePanel } from '../ported/runtime.ts'
 import { idOfRef, refOf } from '../ported/target.ts'
 import { type RecapPlan, type RecapResult, recapPlan } from './plan.ts'
-import { collectRecapSections, type RecapSection } from './sources.ts'
+import { collectRecapSections, type RecapSection, recapSourceSince } from './sources.ts'
 import { apiScope, catchUpWindow, type RecapScopeName, sessionSince } from './window.ts'
 
 export interface RecapState {
@@ -122,7 +122,14 @@ export async function runRecap(
   // replaced or closed (checked below)
   const sourcesCtl = new AbortController()
   const sectionsOf: Promise<RecapSection[]> = liveEnabled('summary')
-    ? collectRecapSections({ ctx, scope, since, now, signal: sourcesCtl.signal })
+    ? collectRecapSections({
+        ctx,
+        scope,
+        // the session's whole day for the live sources: a poll run before anything was drawn is in (./sources.ts)
+        since: recapSourceSince(scope, since, now),
+        now,
+        signal: sourcesCtl.signal,
+      })
     : Promise.resolve([])
   await ensureAiStatus(canvas)
   const status = aiStatus(canvas).get()
