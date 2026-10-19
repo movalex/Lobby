@@ -308,9 +308,9 @@ services:
         value: "180"
       # Wave R design previews: with "on" the api classifies Photoshop, Illustrator and TIFF uploads for flattened-page
       # previews (the worker must handle them: apps/worker/src/{psd,tiff}.ts); "off" (also unset or empty) keeps them plain
-      # attachments, as before wave R. Turn it on only after the NAS preview worker runs the wave R build.
+      # attachments, as before wave R. On since 2026-10-18: the NAS preview worker runs the wave R build (main 2f6f0479).
       - key: DRAFTROOM_DESIGN_PREVIEWS
-        value: "off"
+        value: "on"
       - fromGroup: draftroom-staging-secrets
       - fromGroup: draftroom-staging-worker-token
       # wave R: chat hook URLs are sealed with it (api only)

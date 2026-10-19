@@ -241,8 +241,8 @@ function linksGroup(yaml, service, group) {
   return false
 }
 
-test('render.yaml: design previews stay off on the api until the preview worker is current', () => {
-  assert.equal(envValue(RENDER_YAML, 'draftroom-staging-api', 'DRAFTROOM_DESIGN_PREVIEWS'), 'off')
+test('render.yaml: design previews are on on the api (the NAS preview worker runs the wave R build)', () => {
+  assert.equal(envValue(RENDER_YAML, 'draftroom-staging-api', 'DRAFTROOM_DESIGN_PREVIEWS'), 'on')
   // an api setting only: sync and web never read it
   assert.equal(envValue(RENDER_YAML, 'draftroom-staging-sync', 'DRAFTROOM_DESIGN_PREVIEWS'), null)
 })
