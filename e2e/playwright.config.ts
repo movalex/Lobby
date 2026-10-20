@@ -24,8 +24,11 @@ import type { StackEngine } from './tests/support/stack.ts'
 // different E2E_PORT_BASE values must not build into, or serve, each other's files.
 const WEB_OUT_DIR = `dist/${RUN_TAG}`
 
-/** The one spec the non-chromium projects run. */
-const XBROWSER_SMOKE = /xbrowser-smoke\.spec\.ts$/
+/**
+ * The one spec the non-chromium projects run, unless E2E_XBROWSER_ALL=1 (opt-in, scripts/nas-xbrowser.sh): then
+ * webkit and firefox take whatever spec files the command line names, like chromium. Unset, nothing changes.
+ */
+const XBROWSER_SMOKE = process.env.E2E_XBROWSER_ALL === '1' ? /.*\.spec\.ts$/ : /xbrowser-smoke\.spec\.ts$/
 
 export default defineConfig<Record<never, never>, { engine: StackEngine }>({
   testDir: './excalidraw',
