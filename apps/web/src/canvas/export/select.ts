@@ -51,3 +51,14 @@ export function exportElements<T extends ExportableElement>(
 export function withoutLinks<T extends object>(elements: readonly T[]): T[] {
   return elements.map((e) => ((e as { link?: unknown }).link ? ({ ...e, link: null } as T) : e))
 }
+
+/**
+ * The `id` an SVG export's files-map entry carries (fix/firefox): Excalidraw's `exportToSvg` names each image's
+ * `<symbol>` `image-<file id>` and first looks it up with `querySelector('#image-<file id>')`, which throws on a CSS
+ * character, so an image shown from its display file (`ver_X@display`: the derivative swap, any 2x screen, a Retina
+ * Mac in Safari) was left out of the SVG, with only a console error. Letters, digits and `_` stay; every other
+ * character becomes `-<hex>-` (`-` itself too, so two file ids never share one). The map stays keyed by the
+ * element's own `fileId`: only the symbol's name changes.
+ */
+export const svgFileSymbolId = (fileId: string): string =>
+  fileId.replace(/[^A-Za-z0-9_]/g, (c) => `-${(c.codePointAt(0) ?? 0).toString(16)}-`)

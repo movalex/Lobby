@@ -158,6 +158,13 @@ export class PresenceHub {
     y0: number
     sentIds: boolean
   } | null = null
+  /**
+   * Where the selection's anchor was at the last scene change before a drag (fix/firefox): a drag's offset counts
+   * from there. The first dragging frame already holds the first pointer step, or every step when the browser
+   * coalesced the moves (WebKit hands a quick drag over in one frame), so an origin read from that frame lagged the
+   * drag by its first step, or by all of it: the others saw the note stand still until the drop.
+   */
+  private restAnchor: { id: string; x: number; y: number } | null = null
   private renewTimer: unknown = null
   private readonly off: (() => void)[] = []
   private version = 0
@@ -457,14 +464,18 @@ export class PresenceHub {
         const anchor = g.selectedElementIds.find((id) => byId.has(id)) as string | undefined
         const a = anchor ? byId.get(anchor) : undefined
         if (!anchor || !a) return
+        // the anchor's place before the drag (see restAnchor); a selection made by this very frame (an alt-drag's
+        // copies) has none: its first frame is the origin, as before
+        const rest = this.restAnchor?.id === anchor ? this.restAnchor : null
         this.localDrag = {
           d: ++this.dragSeq,
           ids: ids.slice(0, MAX_DRAG_IDS),
           anchor,
-          x0: a.x as number,
-          y0: a.y as number,
+          x0: rest ? rest.x : (a.x as number),
+          y0: rest ? rest.y : (a.y as number),
           sentIds: false,
         }
+        this.restAnchor = null
       }
       const drag = this.localDrag
       const a = byId.get(drag.anchor)
@@ -476,12 +487,33 @@ export class PresenceHub {
       this.send(first ? { d: drag.d, ids: drag.ids, dx, dy } : { d: drag.d, dx, dy })
       return
     }
+    this.noteRestAnchor(g)
     if (this.localDrag) {
       this.localDrag = null
       this.send(null)
       return
     }
     if (selChanged) this.send()
+  }
+
+  /**
+   * Outside a drag: where the selection's anchor (the drag's anchor rule: its first id in the scene) is now. One map
+   * lookup per selected id up to the first one found, only with a selection and the engine's own map (N1-6: no walk
+   * per scene change; a page without the map, a test's, keeps the first dragging frame as the origin).
+   */
+  private noteRestAnchor(g: GestureState): void {
+    const byId = g.selectedElementIds.length && !this.o.readOnly() ? this.o.elementMap?.() : undefined
+    if (!byId) {
+      this.restAnchor = null
+      return
+    }
+    for (const id of g.selectedElementIds) {
+      const el = byId.get(id)
+      if (!el) continue
+      this.restAnchor = { id, x: el.x as number, y: el.y as number }
+      return
+    }
+    this.restAnchor = null
   }
 
   /** The scene by id from `elements` (a page that gives no `elementMap`): one walk. */

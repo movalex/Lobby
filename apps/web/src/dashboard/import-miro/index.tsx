@@ -4,9 +4,11 @@
 // which drops the token it held.
 import type { Project } from '@draftroom/contracts'
 import { lazy, type ReactNode, Suspense, useCallback, useState } from 'react'
+import { ownedImport } from '../../lib/stale-chunk.ts'
 import { LazyDialogBoundary } from '../LazyDialogBoundary.tsx'
 
-const MiroImportDialog = lazy(() => import('./MiroImportDialog.tsx'))
+// owned: a chunk that is gone gets the boundary's notice, not a reload (lib/stale-chunk.ts ownedImport)
+const MiroImportDialog = lazy(ownedImport(() => import('./MiroImportDialog.tsx')))
 
 export function useMiroImport({
   workspaceId,

@@ -14,7 +14,7 @@ import {
   selfContainedProblems,
   woff2DataUrl,
 } from './fonts.ts'
-import { exportElements, withoutLinks } from './select.ts'
+import { exportElements, svgFileSymbolId, withoutLinks } from './select.ts'
 
 describe('exportElements', () => {
   const els = [
@@ -181,5 +181,29 @@ describe('selfContainedProblems: an exported SVG must stand alone', () => {
       '/x.png',
       'https://esm.sh/font.woff2',
     ])
+  })
+})
+
+describe('svgFileSymbolId (fix/firefox): an image symbol name a CSS selector can find', () => {
+  // exportToSvg looks each image's <symbol> up with querySelector(`#image-${id}`): an `@` threw (the display file of
+  // an upgraded image, `ver_X@display`, on any 2x screen) and the image was left out of the SVG
+  const ids = [
+    'ver_abcdefghij',
+    'ver_abcdefghij@display',
+    'ver_abcdefghij@thumb',
+    'ver_abcdefghij.p3',
+    'ver_abcdefghij.p3@display',
+    'a-b',
+    'a-2d-b',
+    'a@b',
+    'a-40-b',
+  ]
+  it('keeps letters, digits and _; nothing else is left in a name (a CSS identifier after `#image-`)', () => {
+    expect(svgFileSymbolId('ver_abcdefghij')).toBe('ver_abcdefghij')
+    expect(svgFileSymbolId('ver_abcdefghij@display')).toBe('ver_abcdefghij-40-display')
+    for (const id of ids) expect(`image-${svgFileSymbolId(id)}`).toMatch(/^[A-Za-z][A-Za-z0-9_-]*$/)
+  })
+  it('two file ids never share a name (`-` is escaped too)', () => {
+    expect(new Set(ids.map(svgFileSymbolId)).size).toBe(ids.length)
   })
 })

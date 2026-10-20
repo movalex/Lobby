@@ -237,6 +237,7 @@ test("W5-28: what alice has selected is outlined in her colour on bob's canvas, 
     const start = await outline.boundingBox()
     if (!start) throw new Error('no outline')
     const zb = (await viewport(b.page)).zoom
+    const za = (await viewport(a.page)).zoom
     const from = await itemBounds(a.page, note)
     if (!from) throw new Error('no bounds')
     const c = await itemCenterOnScreen(a.page, note)
@@ -244,15 +245,21 @@ test("W5-28: what alice has selected is outlined in her colour on bob's canvas, 
     await a.page.mouse.down()
     await a.page.mouse.move(c.x + 160, c.y + 40, { steps: 8 })
     // still dragging: bob's outline is where his canvas previews the note (the relayed drag offset, through
-    // his zoom), and it has moved right (the preview lags the first pointer step: the relay's offset starts
-    // from where the note was at the drag's first frame)
+    // his zoom), and the offset is the whole move, counted from where the note was before the drag (fix/firefox:
+    // it counted from the first dragging frame, so it lagged the first pointer step here, and in WebKit, which
+    // hands the 8 steps over in one frame, it stayed 0 until the drop)
     const offset = () =>
       b.page.evaluate(
         (id) =>
           (window as unknown as BoardWindow).__lobbyBoard?.session.presenceHub?.dragOffsetOf(id) ?? null,
         note,
       )
-    await expect.poll(async () => (await offset())?.x ?? 0).toBeGreaterThan(100)
+    await expect
+      .poll(async () => {
+        const o = await offset()
+        return o ? [Math.round(o.x * za), Math.round(o.y * za)] : null
+      })
+      .toEqual([160, 40])
     await expect
       .poll(async () => {
         const [box, off] = await Promise.all([outline.boundingBox(), offset()])
