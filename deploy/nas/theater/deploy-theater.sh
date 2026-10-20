@@ -138,7 +138,7 @@ compose ps -a
 if [ ! -s secrets/tunnel.env ]; then echo "(no secrets/tunnel.env yet: the tunnel is not running, nothing is reachable from the internet)"; fi
 ids=\$(compose ps -q)
 [ -n "\$ids" ] && docker stats --no-stream --format '{{.Name}}  cpu={{.CPUPerc}}  mem={{.MemUsage}}' \$ids
-for svc in api sync web worker tunnel; do
+for svc in api sync web worker office tunnel; do
   id=\$(compose ps -q "\$svc" 2>/dev/null)
   [ -n "\$id" ] || continue
   echo "--- \$svc: \$(docker inspect --format 'state={{.State.Status}} restarts={{.RestartCount}} oom={{.State.OOMKilled}}' "\$id")"
@@ -149,7 +149,7 @@ REMOTE
 
 cmd_logs() {
   local svc=${1:-} n=${2:-100}
-  [[ $svc =~ ^(db|api|sync|web|worker|tunnel)$ ]] || die "logs takes a service: db, api, sync, web, worker or tunnel"
+  [[ $svc =~ ^(db|api|sync|web|worker|office|tunnel)$ ]] || die "logs takes a service: db, api, sync, web, worker, office or tunnel"
   local follow=()
   if [ "$n" = -f ]; then
     follow=(-f)
@@ -220,15 +220,25 @@ cmd_deploy() {
 set -eu
 dir=$1
 docker compose version >/dev/null
-mkdir -p "$dir/secrets"
+mkdir -p "$dir/secrets" "$dir/models"
 # Owner-only (the Apps share's inherited ACL would let every NAS account edit what Docker runs as root).
 chmod 700 "$dir" "$dir/secrets"
+# The background-removal model is placed by hand (README "Background removal"); the worker runs without it.
+[ -s "$dir/models/u2netp.onnx" ] || echo "note: models/u2netp.onnx is missing: background removal stays off"
 REMOTE
 
   say "uploading"
   remote "cat > '$NAS_DIR/bundle.tgz.part' && mv '$NAS_DIR/bundle.tgz.part' '$NAS_DIR/bundle.tgz'" <"$bundle"
   remote "cat > '$NAS_DIR/docker-compose.yml.part' && mv '$NAS_DIR/docker-compose.yml.part' '$NAS_DIR/docker-compose.yml'" <"$COMPOSE_FILE"
-  tr -d '\r' <"$SETTINGS_FILE" | remote "cat > '$NAS_DIR/.env.part' && mv '$NAS_DIR/.env.part' '$NAS_DIR/.env'"
+  # settings.env plus the commit being deployed (the web build's /version.json); "-dirty" when the working
+  # tree has uncommitted changes, so a hand-patched build is never mistaken for a commit.
+  local commit
+  commit=$(git -C "$REPO" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+  if [ "$commit" != unknown ] && [ -n "$(git -C "$REPO" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+    commit="$commit-dirty"
+  fi
+  { tr -d '\r' <"$SETTINGS_FILE"; printf 'LOBBY_COMMIT=%s\n' "$commit"; } |
+    remote "cat > '$NAS_DIR/.env.part' && mv '$NAS_DIR/.env.part' '$NAS_DIR/.env'"
   if [ "$have_tunnel" = 1 ]; then
     tr -d '\r' <"$TUNNEL_FILE" | remote "umask 077 && cat > '$NAS_DIR/secrets/tunnel.env.part' && mv '$NAS_DIR/secrets/tunnel.env.part' '$NAS_DIR/secrets/tunnel.env'"
   fi
@@ -258,6 +268,11 @@ elif [ ! -s secrets/db.env ] || [ ! -s secrets/api.env ]; then
 elif [ ! -s secrets/worker.env ]; then
   grep '^DRAFTROOM_WORKER_TOKEN=' secrets/api.env > secrets/worker.env
   echo "recreated secrets/worker.env from secrets/api.env"
+fi
+# Secrets added by later Lobby versions: appended once to an existing api.env, never regenerated.
+if ! grep -q '^DRAFTROOM_WEBHOOK_SECRET=' secrets/api.env; then
+  printf 'DRAFTROOM_WEBHOOK_SECRET=%s\n' "\$(rand)" >> secrets/api.env
+  echo "added DRAFTROOM_WEBHOOK_SECRET to secrets/api.env (chat hooks)"
 fi
 chmod 600 secrets/*.env
 # Sources readable by everyone INSIDE the images (the apps run as the unprivileged node user, and COPY

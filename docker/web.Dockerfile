@@ -11,7 +11,11 @@ WORKDIR /src
 COPY . .
 RUN --mount=type=cache,id=draftroom-pnpm-store,target=/pnpm/store \
   pnpm install --frozen-lockfile --store-dir /pnpm/store --filter "@draftroom/web..."
-RUN pnpm --filter @draftroom/web build
+# Build-time values (docker-compose.yml build.args): the public origin (og:image, recognising pasted links to
+# this Lobby's boards) and the commit (/version.json and __LOBBY_COMMIT__; there is no .git in this context).
+ARG VITE_PUBLIC_ORIGIN=
+ARG GIT_COMMIT=unknown
+RUN VITE_PUBLIC_ORIGIN="$VITE_PUBLIC_ORIGIN" GIT_COMMIT="$GIT_COMMIT" pnpm --filter @draftroom/web build
 
 FROM nginx:1.27-alpine
 COPY deploy/nas/theater/nginx.conf /etc/nginx/nginx.conf

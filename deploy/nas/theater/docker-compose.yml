@@ -50,7 +50,7 @@ services:
       dockerfile: docker/api.Dockerfile
     env_file:
       - ./secrets/shared.env # DRAFTROOM_TICKET_SECRET, DRAFTROOM_INTERNAL_SECRET
-      - ./secrets/api.env # DATABASE_URL, DRAFTROOM_WORKER_TOKEN, DRAFTROOM_PARTNER_TOKEN
+      - ./secrets/api.env # DATABASE_URL, DRAFTROOM_WORKER_TOKEN, DRAFTROOM_PARTNER_TOKEN, DRAFTROOM_WEBHOOK_SECRET
     environment:
       NODE_ENV: production
       PORT: "5859"
@@ -65,6 +65,19 @@ services:
       # settings.env: email (anyone types any address) and/or google ("Continue with Google").
       DRAFTROOM_OPEN_SIGNIN_METHODS: ${LOBBY_SIGNIN_METHODS:-email}
       DRAFTROOM_GOOGLE_CLIENT_ID: ${LOBBY_GOOGLE_CLIENT_ID:-}
+      # Uploads stay on the NAS (1.8 TB free): a roomier per-workspace quota than staging's 5 GB.
+      DRAFTROOM_WORKSPACE_QUOTA_MB: "10240"
+      # The feature switches staging turns on (render.yaml), each "on" or off. They all default to off.
+      # The AI features (DRAFTROOM_AI_VISION, DRAFTROOM_FILE_SEARCH) stay off: they need OPENAI_API_KEY,
+      # which costs money, and the theater has none.
+      DRAFTROOM_DESIGN_PREVIEWS: "on" # Photoshop, Illustrator and TIFF previews
+      DRAFTROOM_LIVE_ACTIVITIES: "on" # polls, scales, word clouds
+      DRAFTROOM_JOIN_CODES: "on"
+      DRAFTROOM_BREAKOUTS: "on"
+      DRAFTROOM_DOC_CARDS: "on"
+      DRAFTROOM_REMOVE_BACKGROUND: "on" # needs the worker's model (models/u2netp.onnx)
+      DRAFTROOM_DECK_IMPORT: "on" # PowerPoint decks, through the office sidecar
+      DRAFTROOM_WORKSPACE_ADMIN: "on"
     volumes:
       - files:/var/data
     depends_on:
@@ -92,6 +105,10 @@ services:
       ALLOWED_ORIGINS: ${LOBBY_ORIGIN:?LOBBY_ORIGIN missing from .env}
       ACCESS_RECHECK_MS: "10000"
       DRAFTROOM_ENGINE: excalidraw
+      # Kill switches that are fail-closed: anything but "on" refuses those writes (as on staging).
+      DRAFTROOM_REACTIONS: "on" # emoji reactions on notes
+      DRAFTROOM_PLANNING: "on" # planning items
+      DRAFTROOM_WS_DEFLATE: "off" # as on staging
     volumes:
       - rooms:/var/data
     depends_on:
@@ -110,6 +127,11 @@ services:
     build:
       context: ./src
       dockerfile: docker/web.Dockerfile
+      args:
+        # Inlined at build time: link previews (og:image) and recognising pasted links to this Lobby's
+        # boards; the commit for /version.json, so open tabs learn about a new build.
+        VITE_PUBLIC_ORIGIN: ${LOBBY_ORIGIN:?LOBBY_ORIGIN missing from .env}
+        GIT_COMMIT: ${LOBBY_COMMIT:-unknown}
     read_only: true
     tmpfs:
       - /tmp:size=32m
@@ -119,7 +141,8 @@ services:
     mem_limit: 128m
     cpus: 1
 
-  # Thumbnails, PDF pages and video posters (Office documents stay downloadable without a preview).
+  # Thumbnails, PDF pages, video posters, Office previews and deck import (through `office`), and background
+  # removal (with models/u2netp.onnx; without it the worker simply does not offer it).
   worker:
     <<: *hardening
     image: lobby-theater-worker:latest
@@ -133,18 +156,54 @@ services:
       WORKER_ID: nas-theater-1
       WORKER_CONCURRENCY: "1"
       WORKER_PDF_HEAP_MB: "384"
-      WORKER_OFFICE: "off"
+      OFFICE_SOCKET: /office-jobs/office.sock
+      OFFICE_JOBS_DIR: /office-jobs
+      DRAFTROOM_BG_MODEL_PATH: /models/u2netp.onnx
+    volumes:
+      - office-jobs:/office-jobs
+      # Placed once by hand (never downloaded by Lobby); sha256-checked by the worker; read-only here.
+      - ./models:/models:ro
     user: node
     init: true
     entrypoint: ["node", "apps/worker/src/worker.ts"]
     depends_on:
       api:
         condition: service_healthy
+      office:
+        condition: service_started
     cap_drop:
       - ALL
     pids_limit: 256
     mem_limit: 1000m
     memswap_limit: 1000m
+    cpus: 2
+
+  # The Office-document converter (LibreOffice), the worker image's other entry point, as in deploy/nas/worker:
+  # no network, read-only, and only the office-jobs volume shared with the worker.
+  office:
+    <<: *hardening
+    image: lobby-theater-worker:latest
+    pull_policy: never
+    environment:
+      NODE_ENV: production
+      OFFICE_SOCKET: /office-jobs/office.sock
+      OFFICE_JOBS_DIR: /office-jobs
+      OFFICE_WORK_DIR: /tmp
+    volumes:
+      - office-jobs:/office-jobs
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    user: node
+    init: true
+    entrypoint: ["node", "apps/worker/src/office-sidecar.ts"]
+    stop_grace_period: 30s
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 1g
+    memswap_limit: 1g
     cpus: 2
 
   tunnel:
@@ -161,3 +220,4 @@ volumes:
   pg:
   rooms:
   files:
+  office-jobs:

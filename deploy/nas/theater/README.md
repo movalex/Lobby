@@ -15,7 +15,8 @@ Compose project `lobby-theater`, folder `/volume3/Apps/lobby-theater/` (mode 700
 | `api` | `docker/api.Dockerfile`; uploads on volume `lobby-theater_files` (`DRAFTROOM_BLOB_STORE=fs`); runs the migrations on start | 768 MB |
 | `sync` | `docker/sync.Dockerfile`; the board rooms (SQLite) on volume `lobby-theater_rooms` | 768 MB |
 | `web` | `docker/web.Dockerfile`: nginx with the built web app, proxying `/api`, `/files` and the board socket `/connect` to api and sync (one origin) | 128 MB |
-| `worker` | `docker/worker.Dockerfile`: thumbnails, PDF pages, video posters (`WORKER_OFFICE=off`: Office files stay downloadable) | 1 GB |
+| `worker` | `docker/worker.Dockerfile`: thumbnails, PDF pages, video posters, Office previews and deck import (through `office`), background removal (with `models/u2netp.onnx`) | 1 GB |
+| `office` | the same image's LibreOffice converter: **no network**, read-only, shares only the `office-jobs` volume with the worker | 1 GB |
 | `tunnel` | `cloudflare/cloudflared`, started only once `secrets/tunnel.env` exists | 128 MB |
 
 The volumes are Docker's own storage on the NAS's disks (never a network share: `AGENTS.md`).
@@ -44,6 +45,27 @@ A different address: change `LOBBY_ORIGIN` in `settings.env`, and use that host 
 2. **OAuth consent screen / Audience**: user type *External*, publishing status **In production**, so any Google
    account can sign in (in *Testing* only listed test users can).
 3. In `settings.env`: `LOBBY_SIGNIN_METHODS=google` and `LOBBY_GOOGLE_CLIENT_ID=<the client id>`, then deploy.
+
+## Features
+
+The api and sync turn on the same feature switches as staging (`render.yaml`); in `docker-compose.yml` each is `"on"`
+or off, and all of them default to off:
+
+- **api**: design previews (Photoshop, Illustrator, TIFF), live activities (polls, scales, word clouds), join codes,
+  breakouts, doc cards, background removal, deck import, workspace admin.
+- **sync**: reactions and planning. These are fail-closed kill switches: anything but `on` refuses those writes.
+- **Off on purpose**: the AI features (`DRAFTROOM_AI_VISION`, `DRAFTROOM_FILE_SEARCH` and the rest of AI). They need
+  `OPENAI_API_KEY`, which costs money. Chat hooks work: the deploy adds `DRAFTROOM_WEBHOOK_SECRET` to `secrets/api.env`
+  once.
+
+When Lobby adds a switch, compare `render.yaml` with `docker-compose.yml` and mirror it.
+
+## Background removal
+
+The worker removes backgrounds only with the approved model at `models/u2netp.onnx`. Its sha256 is pinned in
+`apps/worker/src/ops/bg-model.ts`; anything else is ignored and the feature is not offered. It was copied on
+2026-10-20 from the DBC worker's approved copy (`/volume3/Apps/draftroom-worker/models/`). The deploy creates
+`models/` and says when the file is missing; Lobby never downloads it.
 
 ## Deploy / update
 
