@@ -35,7 +35,7 @@ import {
   woff2DataUrl,
 } from './fonts.ts'
 
-import { exportElements as selectForExport, withoutLinks } from './select.ts'
+import { exportElements as selectForExport, svgFileSymbolId, withoutLinks } from './select.ts'
 
 export { selfContainedProblems }
 
@@ -127,7 +127,12 @@ export async function exportFilesMap(
         continue
       }
     }
-    out[id] = { ...f, dataURL: dataURL as BinaryFileData['dataURL'] }
+    // the symbol's name goes through a CSS selector in exportToSvg (select.ts svgFileSymbolId)
+    out[id] = {
+      ...f,
+      id: svgFileSymbolId(id) as BinaryFileData['id'],
+      dataURL: dataURL as BinaryFileData['dataURL'],
+    }
     embedded.push(id)
   }
   return { files: out, embedded }

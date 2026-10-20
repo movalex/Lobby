@@ -24,6 +24,7 @@ import {
   select,
   selection,
   selectNone,
+  setViewport,
   test,
   waitForCanvas,
   zoomToFit,
@@ -367,6 +368,47 @@ test.describe('image exports', () => {
     await expect(dialog.getByTestId('export-status')).toHaveText('Copied as PNG. Paste it into any app.')
     const frame = await clipboardPng()
     expect({ w: frame.width, h: frame.height }).toEqual({ w: 1600, h: 1200 })
+  })
+
+  // fix/firefox (the NAS WebKit run): Desktop Safari is a 2x screen, so the image there is shown from its display
+  // file (`ver_X@display`, the derivative swap), and exportToSvg's querySelector('#image-ver_X@display') threw: the
+  // SVG came out without the image (a console error only). A zoom does the same on any screen.
+  test('an image shown from its display file (zoomed in, or any 2× screen) is still embedded in the SVG', async ({
+    canvasSession,
+    users,
+    board,
+  }) => {
+    const a = await canvasSession('alice')
+    await seedDeck(a.page, DECK)
+    const image = await placeUploadedImage(a.page, users, board, INTRO, { x: 40, y: 330, w: 400, h: 225 })
+    // 400 scene px at zoom 2: 800 device px, past the 512 a thumb is drawn at
+    await setViewport(a.page, { x: 0, y: 300, zoom: 2 })
+    const sceneFileId = () =>
+      a.page.evaluate(
+        (id) =>
+          (
+            window as unknown as {
+              __lobbyBoard: { api: { getSceneElements(): { id: string; fileId?: string | null }[] } }
+            }
+          ).__lobbyBoard.api
+            .getSceneElements()
+            .find((e) => e.id === id)?.fileId ?? null,
+        image,
+      )
+    await expect.poll(sceneFileId).toMatch(/@display$/)
+    const dialog = a.page.getByTestId('export-dialog')
+    await openBoardExport(a.page, { expand: true })
+    await dialog.getByTestId('export-frame').selectOption(F.intro)
+    await expect(dialog.getByTestId('export-svg-originals')).not.toBeChecked()
+    const svg = await downloadFrom(a.page, () => dialog.getByTestId('export-svg').click())
+    const text = svg.bytes.toString('utf8')
+    expect(svgEmbeddedImages(text).map((e) => e.mime)).toEqual(['image/webp'])
+    // the picture is drawn: its <use> points at the <symbol> that holds the image
+    const ref = text.match(/<use href="#([^"]+)"/)?.[1]
+    expect(ref).toBeTruthy()
+    expect(text).toMatch(new RegExp(`<symbol id="${ref}"[^>]*><image `))
+    // and the board is untouched: the element still shows its display file
+    expect(await sceneFileId()).toMatch(/@display$/)
   })
 })
 

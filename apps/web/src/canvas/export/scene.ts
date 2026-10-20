@@ -42,7 +42,7 @@ import {
   planExport,
   reparentToBounds,
 } from './plan.ts'
-import { withoutLinks } from './select.ts'
+import { svgFileSymbolId, withoutLinks } from './select.ts'
 import { fontFaceRules, namedFaces } from './svg.ts'
 
 /** Which bytes an export draws for an uploaded image (see the header). */
@@ -201,6 +201,10 @@ export async function exportFiles(
       for (let next = queue.shift(); next; next = queue.shift()) await one(next[0], next[1])
     }),
   )
+  // an SVG names each image's <symbol> after the entry's id, through a CSS selector (select.ts svgFileSymbolId)
+  if (encode === 'data')
+    for (const [k, f] of Object.entries(files))
+      files[k] = { ...f, id: svgFileSymbolId(k) as BinaryFileData['id'] }
   return {
     files,
     fetched,
