@@ -60,7 +60,7 @@ const removals = (cmds: string[]) =>
 const lockTakenAt = (cmds: string[]) => cmds.findIndex((c) => c.includes(`mkdir ${LOCK} 2>/dev/null`))
 
 describe.skipIf(!hasBash || !hasGit)(
-  'nas-xbrowser.sh: one run never touches another, and the browsers have no network',
+  'nas-xbrowser.sh: one run never touches another, and the browsers have no route out',
   () => {
     it('names everything after its run id, takes the lock before it makes anything, removes only its own', () => {
       const { cmds } = dryOk(['HEAD', '--specs', 'xbrowser-smoke.spec.ts'], RUN_A)
@@ -69,29 +69,41 @@ describe.skipIf(!hasBash || !hasGit)(
       expect(lockAt).toBeGreaterThan(-1)
       expect(firstMade).toBeGreaterThan(lockAt)
       const made = cmds.flatMap((c) => [...c.matchAll(/--name (\S+)/g)].map((m) => m[1] ?? ''))
-      expect(made.sort()).toEqual([`draftroom-load-ff-${RUN_A}-install`, `draftroom-load-ff-${RUN_A}-test`])
+      const nets = cmds.flatMap((c) =>
+        [...c.matchAll(/docker network create (--internal )?(\S+)/g)].map(
+          (m) => `${m[1] ?? ''}${m[2] ?? ''}`,
+        ),
+      )
+      expect([...made, ...nets].sort()).toEqual([
+        `--internal draftroom-load-ff-${RUN_A}-net`,
+        `draftroom-load-ff-${RUN_A}-install`,
+        `draftroom-load-ff-${RUN_A}-test`,
+      ])
       for (const name of removals(cmds))
         expect([
           `draftroom-load-ff-${RUN_A}-install`,
           `draftroom-load-ff-${RUN_A}-test`,
+          `draftroom-load-ff-${RUN_A}-net`,
           `${RUNS}/${RUN_A}`,
           LOCK,
         ]).toContain(name)
       const lockRemoval = cmds.filter((c) => c.includes(`rm -rf -- ${LOCK}`))
       expect(lockRemoval).toHaveLength(1)
       expect(lockRemoval[0]).toContain(`= '${RUN_A}' ]`)
-      expect(cmds.join('\n')).not.toMatch(
-        /prune|docker ps -aq|compose down|systemctl|docker rmi|network create/,
-      )
+      expect(cmds.join('\n')).not.toMatch(/prune|docker ps -aq|compose down|systemctl|docker rmi/)
     })
 
-    it('only the install has network; the test container runs with --network none and publishes nothing', () => {
+    it('only the install has a route out; the test container is on its run’s --internal network and publishes nothing', () => {
       const { cmds } = dryOk(['HEAD'], RUN_A)
       const runs = cmds.filter((c) => c.includes('docker run'))
       expect(runs).toHaveLength(2)
       const test = runs.find((c) => c.includes(`--name draftroom-load-ff-${RUN_A}-test`)) ?? ''
       const install = runs.find((c) => c.includes(`--name draftroom-load-ff-${RUN_A}-install`)) ?? ''
-      expect(test).toContain('--network none')
+      // an --internal network has no gateway (not --network none: Chromium and WebKit would report offline there)
+      expect(test).toContain(`--network draftroom-load-ff-${RUN_A}-net `)
+      expect(
+        cmds.some((c) => c.includes(`docker network create --internal draftroom-load-ff-${RUN_A}-net`)),
+      ).toBe(true)
       expect(install).not.toContain('--network')
       for (const c of runs)
         expect(c).not.toMatch(/\s(-p|--publish|--publish-all|-P)\s|--network host|--privileged/)
@@ -164,6 +176,7 @@ describe.skipIf(!hasBash || !hasGit)(
         LOCK,
         `${RUNS}/${RUN_B}`,
         `draftroom-load-ff-${RUN_B}-install`,
+        `draftroom-load-ff-${RUN_B}-net`,
         `draftroom-load-ff-${RUN_B}-test`,
       ])
       const lockRemoval = cmds.filter((c) => c.includes(`rm -rf -- ${LOCK}`))

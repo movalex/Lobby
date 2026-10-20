@@ -4,7 +4,8 @@
 # result needs Linux. Everything runs in throwaway containers of the official Playwright image whose version is the
 # commit's exact @playwright/test pin (mcr.microsoft.com/playwright:v<ver>-noble: the browsers and their system
 # libraries built in). The stack is the e2e suite's own (api with PGlite, sync, the preview worker, vite preview with
-# dev auth, all on 127.0.0.1 inside one container with --network none: nothing is published, nothing leaves).
+# dev auth, all on 127.0.0.1 inside one container on an --internal network of its own: nothing is published, nothing leaves;
+# not --network none, where Chromium and WebKit report navigator.onLine false and Lobby takes its offline paths).
 #
 #   DRY_RUN=1 (the default): every SSH/Docker command is printed, nothing touches the NAS.
 #   DRY_RUN=0: under the standing NAS approval for throwaway draftroom-load-* names.
@@ -22,7 +23,7 @@
 #
 # Run ids, the lock and the cleanup are those of scripts/nas-pg-api.sh (wave V: two runs removed each other's
 # containers): an id is r-<14 digits>-<4-16 of a-z0-9>; every name a run makes carries it (the containers
-# draftroom-load-ff-<run>-install and draftroom-load-ff-<run>-test, the folder /volume3/Apps/draftroom-load-ff-runs/<run>);
+# draftroom-load-ff-<run>-install and draftroom-load-ff-<run>-test, the network draftroom-load-ff-<run>-net, the folder /volume3/Apps/draftroom-load-ff-runs/<run>);
 # a run takes the lock `mkdir /volume3/Apps/draftroom-load-ff-runs/lock` (atomic, "<run> <epoch>", refreshed at every
 # step) before it makes anything, and STOPS touching nothing while another run holds it; a lock older than
 # LOCK_STALE_S (default 6 h) whose run has no container left is taken over; the cleanup removes only this run's names
@@ -32,7 +33,7 @@
 # source (git archive; refused if it would hold .env*, .data, node_modules or test-results) into the run's folder, one
 # install container (the only one with network: the default bridge) that downloads Ubuntu's own ffmpeg packages
 # (apt-get --download-only, for the preview worker and `pnpm fixtures`) and runs `pnpm install --frozen-lockfile`, then
-# one test container (--network none, capped CPU and memory) that installs those packages offline, generates the
+# one test container (the internal network, capped CPU and memory) that installs those packages offline, generates the
 # synthetic fixtures and runs Playwright as the NAS user. The folder is capped (MAX_FOLDER_GB) after each step. The
 # Playwright image is pulled only if absent and then removed by this run's cleanup only if this run pulled it and no
 # container uses it (KEEP_IMAGE=1 keeps it). Never `prune`, `rm $(docker ps -aq)`, a Docker restart, or anything that is
@@ -115,6 +116,7 @@ if [[ -n "$REUSE" ]]; then RUN="$REUSE"; else RUN="${REMOVE:-${RUN_ID:-$(new_run
 S="$RUNS/$RUN"
 C_INSTALL="draftroom-load-ff-$RUN-install"
 C_TEST="draftroom-load-ff-$RUN-test"
+NET="draftroom-load-ff-$RUN-net"
 # who holds the NAS lock for this invocation: the run itself, or for --remove the remover (its own id)
 HOLDER="$RUN"
 [[ -z "$REMOVE" ]] || HOLDER="$(new_run_id)"
@@ -134,10 +136,10 @@ nas_stdin() {
   fi
   ssh -i "$NAS_KEY" -o BatchMode=yes -o ConnectTimeout=10 "$NAS_USER@$NAS_HOST" "$*"
 }
-# a name this run may remove: exactly one of the two container names this run's id gives, nothing else
-is_run_name() { [[ "$1" == "$C_INSTALL" || "$1" == "$C_TEST" ]]; }
+# a name this run may remove: exactly one of the three names this run's id gives, nothing else
+is_run_name() { [[ "$1" == "$C_INSTALL" || "$1" == "$C_TEST" || "$1" == "$NET" ]]; }
 list_ff() {
-  nas "docker ps -a --filter name=^draftroom-load-ff --format '{{.Names}}\t{{.Status}}'; echo '--- runs'; ls -1 $RUNS 2>/dev/null; cat $LOCK/owner 2>/dev/null || true"
+  nas "docker ps -a --filter name=^draftroom-load-ff --format '{{.Names}}\t{{.Status}}'; echo '--- networks'; docker network ls --filter name=^draftroom-load-ff --format '{{.Name}}'; echo '--- runs'; ls -1 $RUNS 2>/dev/null; cat $LOCK/owner 2>/dev/null || true"
 }
 remove_container() {
   local name="$1" listed
@@ -201,6 +203,10 @@ cleanup() {
   log "cleanup of run $RUN: before"
   list_ff | tee -a "$LOG" || true
   for c in "$C_TEST" "$C_INSTALL"; do remove_container "$c" || true; done
+  if [[ "$DRY_RUN" != "0" ]]; then nas "docker network rm $NET"
+  elif nas "docker network ls --filter name=^draftroom-load-ff --format '{{.Name}}'" | grep -qx -- "$NET"; then
+    is_run_name "$NET" && nas "docker network rm $NET" >/dev/null && log "removed network $NET"
+  fi
   remove_pulled_image || true
   # the run's own folder only (its name is this run's id, under the runs folder). Files the root half of the test
   # container wrote (none expected: it drops to the NAS user before anything runs) would be removed the same way.
@@ -297,7 +303,7 @@ else
 fi
 folder_cap
 
-# 6. the run: --network none (loopback only), the packages installed offline, then the NAS user runs the fixtures and
+# 6. the run: on the run's --internal network (no route out, no published port), the packages installed offline, then the NAS user runs the fixtures and
 #    Playwright. E2E_XBROWSER_ALL lets the webkit/firefox projects take the named specs.
 #    Two small scripts go into the folder (no argument crosses a shell unquoted: printf %q).
 PW_ARGS=()
@@ -326,7 +332,8 @@ nas_stdin "cat > $S/src/.xb-inner.sh" <"$EVIDENCE_DIR/xb-inner-$RUN.sh"
 log "playwright: ${PW_ARGS[*]}"
 lock_touch
 code=0
-nas "docker run --rm --name $C_TEST --network none --cpus=6 --memory=3g --memory-swap=6g --shm-size=1g -v $S/src:/app -w /app '$IMG' bash /app/.xb-outer.sh" \
+nas "docker network ls --filter name=^draftroom-load-ff --format '{{.Name}}' | grep -qx -- $NET || docker network create --internal $NET >/dev/null"
+nas "docker run --rm --name $C_TEST --network $NET --cpus=6 --memory=3g --memory-swap=6g --shm-size=1g -v $S/src:/app -w /app '$IMG' bash /app/.xb-outer.sh" \
   >"$EVIDENCE_DIR/playwright-$RUN.log" 2>&1 || code=$?
 lock_touch
 if [[ "$DRY_RUN" == "0" ]]; then
