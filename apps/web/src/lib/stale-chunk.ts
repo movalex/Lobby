@@ -575,8 +575,59 @@ interface ChunkWindow {
 }
 
 /**
+ * fix/firefox: lazy parts that say themselves what happens when their chunk is gone. The dashboard's dialogs (Share,
+ * the command palette, the Miro import) sit in a LazyDialogBoundary: "… could not open", Reload, and the dashboard
+ * stays (K4). Vite's preloadError reached the handler too, which outside a board reloads the page: the person who
+ * chose Share saw the dashboard reload instead. Chromium hid it while a speculative board-code prefetch was under way
+ * (its `ignore` takes every failure in that time), so whether a stale Share reloaded or said so depended on timing;
+ * Firefox, whose prefetch was done by then, reloaded every time (the NAS cross-browser run).
+ */
+export interface ChunkOwners {
+  /** an owned import is under way */
+  pending(): boolean
+  /** this failure was an owned import's: its own part handles it */
+  claimed(error: unknown): boolean
+}
+
+let ownedPending = 0
+const claimedFailures = new WeakSet<object>()
+export const chunkOwners: ChunkOwners = {
+  pending: () => ownedPending > 0,
+  claimed: (e) => typeof e === 'object' && e !== null && claimedFailures.has(e),
+}
+
+/**
+ * An import whose failure its caller handles (see ChunkOwners): it rejects as before, and the page's handler leaves
+ * that failure alone. Vite dispatches its preloadError before the import's promise rejects with the same error, so the
+ * handler waits one task while an owned import is under way (`installStaleChunkRecovery`).
+ */
+export function ownedImport<T>(load: () => Promise<T>): () => Promise<T> {
+  return () => {
+    ownedPending++
+    let p: Promise<T>
+    try {
+      p = load()
+    } catch (e) {
+      ownedPending--
+      throw e
+    }
+    return p.then(
+      (m) => {
+        ownedPending--
+        return m
+      },
+      (e: unknown) => {
+        ownedPending--
+        if (typeof e === 'object' && e !== null) claimedFailures.add(e)
+        throw e
+      },
+    )
+  }
+}
+
+/**
  * Listens once per page (App.tsx): Vite's `vite:preloadError` (unless `ignore` says it is nobody's: a
- * speculative prefetch), and a stale chunk error that nobody caught.
+ * speculative prefetch, or an owned import claims it: `ownedImport`), and a stale chunk error that nobody caught.
  * The event is not cancelled: the import still rejects, so the code that asked for the chunk handles it as
  * a failure (an export says it failed) rather than going on with nothing. Returns the uninstall.
  */
@@ -585,11 +636,23 @@ export function installStaleChunkRecovery(
   handler: Pick<StaleChunkHandler, 'report'> = staleChunks,
   /** a failure that is nobody's to report (a speculative prefetch: lib/prefetch-board.ts) */
   ignore: (error: unknown) => boolean = () => false,
+  owners: ChunkOwners = chunkOwners,
+  /** runs `fn` one task later (an owned import's rejection, a microtask after the event, has claimed it by then) */
+  later: (fn: () => void) => void = (fn) => {
+    setTimeout(fn, 0)
+  },
 ): () => void {
   if (!win || typeof win.addEventListener !== 'function') return () => {}
   const onPreload = (e: Event) => {
     const payload = (e as Event & { payload?: unknown }).payload
-    if (!ignore(payload)) handler.report(payload)
+    if (ignore(payload)) return
+    if (!owners.pending()) {
+      handler.report(payload)
+      return
+    }
+    later(() => {
+      if (!owners.claimed(payload)) handler.report(payload)
+    })
   }
   const onRejection = (e: Event) => {
     const reason = (e as Event & { reason?: unknown }).reason

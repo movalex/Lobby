@@ -4,12 +4,14 @@
 import { describe, expect, it } from 'vitest'
 import { createBoardCode } from './prefetch-board.ts'
 import {
+  chunkOwners,
   createStaleChunkHandler,
   EDITING_RECHECK_MS,
   installStaleChunkRecovery,
   isStaleChunkError,
   OFFLINE_CHUNK_TEXT,
   OFFLINE_RETURN_TEXT,
+  ownedImport,
   RELOAD_GUARD_MS,
   RELOAD_KEY,
   recoverChunk,
@@ -582,5 +584,102 @@ describe('the board code prefetch is nobody’s to report (lib/prefetch-board.ts
     const app = readFileSync(new URL('../App.tsx', import.meta.url), 'utf8')
     const top = app.slice(0, app.indexOf('export function App('))
     expect(top).toContain('installStaleChunkRecovery(window, staleChunks, isBoardCodePrefetch)')
+  })
+})
+
+describe('fix/firefox: an owned import (a dashboard dialog in its LazyDialogBoundary) keeps its failure', () => {
+  function fakeWindow() {
+    const listeners = new Map<string, (e: Event) => void>()
+    return {
+      listeners,
+      addEventListener: (t: string, fn: (e: Event) => void) => listeners.set(t, fn),
+      removeEventListener: (t: string) => listeners.delete(t),
+    }
+  }
+  /** What Vite's preload helper does with a chunk that is gone: the event first, then the import rejects with it. */
+  const viteImport = (win: ReturnType<typeof fakeWindow>, error: Error) => () =>
+    Promise.resolve().then(() => {
+      win.listeners.get('vite:preloadError')?.(
+        Object.assign(new Event('vite:preloadError'), { payload: error }),
+      )
+      throw error
+    })
+  function setup() {
+    const win = fakeWindow()
+    const reports: unknown[] = []
+    const queued: (() => void)[] = []
+    const off = installStaleChunkRecovery(
+      win,
+      {
+        report: (e) => {
+          reports.push(e)
+          return 'reload'
+        },
+      },
+      () => false,
+      chunkOwners,
+      (fn) => queued.push(fn),
+    )
+    const runLater = () => {
+      for (const fn of queued.splice(0)) fn()
+    }
+    return { win, reports, runLater, off }
+  }
+
+  it('the Share chunk that is gone still rejects (the boundary shows its notice) and is never reported (no reload)', async () => {
+    const { win, reports, runLater, off } = setup()
+    const share = ownedImport(viteImport(win, STALE))
+    await expect(share()).rejects.toBe(STALE)
+    expect(reports).toEqual([])
+    runLater()
+    expect(reports).toEqual([])
+    expect(chunkOwners.pending()).toBe(false)
+    off()
+  })
+
+  it('another chunk that fails while an owned import is under way is reported, one task later', async () => {
+    const { win, reports, runLater, off } = setup()
+    let finish: (v: { default: string }) => void = () => {}
+    const share = ownedImport(() => new Promise<{ default: string }>((r) => (finish = r)))
+    const opened = share()
+    expect(chunkOwners.pending()).toBe(true)
+    win.listeners.get('vite:preloadError')?.(
+      Object.assign(new Event('vite:preloadError'), { payload: STALE_OTHER }),
+    )
+    expect(reports).toEqual([])
+    runLater()
+    expect(reports).toEqual([STALE_OTHER])
+    finish({ default: 'ShareDialog' })
+    expect(await opened).toEqual({ default: 'ShareDialog' })
+    expect(chunkOwners.pending()).toBe(false)
+    // with no owned import under way a failure is reported at once, as before
+    win.listeners.get('vite:preloadError')?.(
+      Object.assign(new Event('vite:preloadError'), { payload: SAFARI }),
+    )
+    expect(reports).toEqual([STALE_OTHER, SAFARI])
+    off()
+  })
+
+  it('an unowned import that fails is still reported (the board route, an export)', async () => {
+    const { win, reports, runLater, off } = setup()
+    await expect(viteImport(win, STALE)()).rejects.toBe(STALE)
+    runLater()
+    expect(reports).toEqual([STALE])
+    off()
+  })
+
+  it('the dashboard’s boundary-guarded dialogs are owned: Share, the command palette and the Miro import', async () => {
+    const { readFileSync } = await import('node:fs')
+    const page = readFileSync(new URL('../dashboard/DashboardPage.tsx', import.meta.url), 'utf8')
+    expect(page).toMatch(
+      /const ShareDialog = lazy\(\s*ownedImport\(\(\) => import\('\.\.\/board\/ShareDialog\.tsx'\)/,
+    )
+    expect(page).toContain(
+      "const DashboardPalette = lazy(ownedImport(() => import('../features/command-palette/dashboard.tsx')))",
+    )
+    const miro = readFileSync(new URL('../dashboard/import-miro/index.tsx', import.meta.url), 'utf8')
+    expect(miro).toContain(
+      "const MiroImportDialog = lazy(ownedImport(() => import('./MiroImportDialog.tsx')))",
+    )
   })
 })

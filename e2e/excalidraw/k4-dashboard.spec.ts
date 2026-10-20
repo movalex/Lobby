@@ -458,6 +458,48 @@ test('a Share chunk that is gone (a tab left open across a deploy) shows a notic
   }
 })
 
+// fix/firefox (the NAS Firefox run): the test above clicks Share while the dashboard's idle board-code prefetch is
+// still under way, and the page's stale-chunk handler ignored every failure in that time; once it was done, the
+// handler took the Share chunk's failure as its own and reloaded the dashboard (Firefox, every time; Chromium too,
+// when the prefetch had finished). The Share import is the dialog's (ownedImport): the notice, and no reload.
+test('a Share chunk that is gone, once the dashboard is idle (its prefetch done): the notice, and no reload', async ({
+  browser,
+}) => {
+  const p = await creator(browser, 'Idle Tab')
+  try {
+    const board = await p.api.createBoard(p.wid, 'Share me idle')
+    let loads = 0
+    p.page.on('load', () => loads++)
+    // the idle prefetch of the board code (lib/prefetch-board.ts K1-3): its page chunk, loaded
+    const boardCode = p.page.waitForEvent('requestfinished', {
+      predicate: (r) => /\/assets\/LobbyBoardPage-[\w-]+\.js$/.test(new URL(r.url()).pathname),
+      timeout: 30_000,
+    })
+    await openDashboard(p.page, p.wid)
+    const card = mainCard(p.page, board.id)
+    await expect(card).toBeVisible()
+    await boardCode
+    // and nothing else is loading (the chunks it imports are in too)
+    await p.page.waitForLoadState('networkidle')
+    const loadsBefore = loads
+    await p.page.route('**/*ShareDialog*', (route) => route.abort())
+    await card.getByTestId('board-card-menu').click()
+    await card.locator('[role="menuitem"][data-action="share"]').click()
+    const notice = p.page.getByTestId('lazy-dialog-failed')
+    await expect(notice).toBeVisible({ timeout: 15_000 })
+    await expect(notice).toContainText('Share could not open')
+    await expect(notice.getByTestId('lazy-dialog-reload')).toBeVisible()
+    // nothing reloaded under the person who chose Share
+    expect(loads).toBe(loadsBefore)
+    expect(await p.page.evaluate(() => sessionStorage.getItem('lobby:stale-chunk-reload'))).toBeNull()
+    await p.page.keyboard.press('Escape')
+    await expect(notice).toHaveCount(0)
+    await expect(card).toBeVisible()
+  } finally {
+    await p.context.close()
+  }
+})
+
 test('Escape closes the workspace menu from inside it, and leaves a field elsewhere on the page alone', async ({
   browser,
 }) => {

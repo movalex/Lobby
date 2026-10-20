@@ -64,7 +64,8 @@ describe('the dashboard’s initial import graph', () => {
 
   it('asks for the Share dialog in exactly one place on the dashboard: a lazy import()', () => {
     const page = readFileSync(resolve(SRC, 'dashboard/DashboardPage.tsx'), 'utf8')
-    expect(page).toMatch(/lazy\(\(\) =>\s*import\('\.\.\/board\/ShareDialog\.tsx'\)/)
+    // fix/firefox: owned (lib/stale-chunk.ts ownedImport), so a chunk that is gone gets the boundary's notice
+    expect(page).toMatch(/lazy\(\s*ownedImport\(\(\) =>\s*import\('\.\.\/board\/ShareDialog\.tsx'\)/)
     expect(page).not.toMatch(/^import\s[^\n]*ShareDialog[^\n]*from/m)
     expect(page.match(/ShareDialog\.tsx/g)?.length).toBe(1)
   })

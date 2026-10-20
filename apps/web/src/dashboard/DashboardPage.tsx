@@ -22,6 +22,7 @@ import { ChatNotificationsEntry } from '../features/notify-settings/ChatNotifica
 import { useIsGuest } from '../invite/guest.tsx'
 import { absoluteUrl, copyText } from '../lib/clipboard.ts'
 import { boardPath, type DashboardSection, navigate, workspacePath } from '../lib/routing.ts'
+import { ownedImport } from '../lib/stale-chunk.ts'
 import { writeLastWorkspace } from '../lib/storage.ts'
 import { countUsage } from '../lib/usage.ts'
 import { useResource } from '../lib/useResource.ts'
@@ -104,10 +105,13 @@ const dash = dashboardApi(api)
 
 // K4-6: the Share dialog (about 43 KB with its sharing code) is fetched when someone chooses Share on a card,
 // not with the dashboard: most visits never open it. dashboard-bundle.test.ts keeps it out of the page's
-// static imports.
-const ShareDialog = lazy(() => import('../board/ShareDialog.tsx').then((m) => ({ default: m.ShareDialog })))
+// static imports. Owned (lib/stale-chunk.ts ownedImport): a chunk that is gone gets the LazyDialogBoundary's notice below,
+// not a reload of the dashboard.
+const ShareDialog = lazy(
+  ownedImport(() => import('../board/ShareDialog.tsx').then((m) => ({ default: m.ShareDialog }))),
+)
 // Wave L (W3, L3-2): the command palette, its own chunk, fetched the first time Ctrl/Cmd+K is pressed here
-const DashboardPalette = lazy(() => import('../features/command-palette/dashboard.tsx'))
+const DashboardPalette = lazy(ownedImport(() => import('../features/command-palette/dashboard.tsx')))
 
 // A11Y-17: whether the person has clicked, tapped or pressed a key in this tab yet. After they have
 // (signing in, a link in the folded phone menu), a dashboard that leaves the focus nowhere moves it to
