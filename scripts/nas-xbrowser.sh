@@ -272,8 +272,22 @@ else
   nas "docker image inspect '$IMG' >/dev/null 2>&1 || { docker pull '$IMG' >/dev/null && echo '$IMG' > $S/pulled-image && echo 'pulled $IMG'; }"
 
   # 5. the install (the only container with network): Ubuntu's ffmpeg packages, downloaded only; pnpm into the folder;
-  #    the workspace install. Root inside (apt), and the folder handed back to the NAS user at the end.
-  nas "docker run --rm --name $C_INSTALL --cpus=4 --memory=3g -e CI=true -e PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 -e HOME=/app/.home -v $S/src:/app -w /app '$IMG' bash -c 'set -e; mkdir -p /app/.debs/partial /app/.home /app/.tools; apt-get update -qq; apt-get install -y -qq --download-only --no-install-recommends -o Dir::Cache::archives=/app/.debs ffmpeg >/dev/null; rm -rf /app/.debs/partial /app/.debs/lock; echo debs: \$(ls /app/.debs | wc -l); npm install -g --prefix /app/.tools --no-fund --no-audit pnpm@$PNPM_VERSION >/dev/null; /app/.tools/bin/pnpm install --frozen-lockfile --store-dir /app/.pnpm-store --reporter=append-only 2>&1 | tail -4; chown -R $U /app'" 2>&1 | tail -8 | tee -a "$LOG"
+  #    the workspace install. Root only for apt; pnpm and the install run as the NAS user (files root writes onto the
+  #    share's ACLs come out mode 000 for everyone else: the first run's node_modules could not be read).
+  {
+    echo '#!/bin/bash'
+    echo 'set -euo pipefail'
+    echo 'mkdir -p /app/.debs/partial'
+    echo 'apt-get update -qq'
+    echo 'apt-get install -y -qq --download-only --no-install-recommends -o Dir::Cache::archives=/app/.debs ffmpeg >/dev/null'
+    echo 'rm -rf /app/.debs/partial /app/.debs/lock'
+    printf 'chown -R %q /app/.debs && chmod -R u+rwX,go+rX /app/.debs\n' "$U"
+    echo 'echo "debs: $(ls /app/.debs | wc -l)"'
+    printf 'exec setpriv --reuid=%q --regid=%q --clear-groups env HOME=/app/.home bash -c %q\n' "${U%%:*}" "${U##*:}" \
+      "set -euo pipefail; mkdir -p /app/.home /app/.tools; npm install -g --prefix /app/.tools --no-fund --no-audit pnpm@$PNPM_VERSION >/dev/null; /app/.tools/bin/pnpm install --frozen-lockfile --store-dir /app/.pnpm-store --reporter=append-only 2>&1 | tail -4"
+  } >"$EVIDENCE_DIR/xb-install-$RUN.sh"
+  nas_stdin "cat > $S/src/.xb-install.sh" <"$EVIDENCE_DIR/xb-install-$RUN.sh"
+  nas "docker run --rm --name $C_INSTALL --cpus=4 --memory=3g -e CI=true -e PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 -v $S/src:/app -w /app '$IMG' bash /app/.xb-install.sh" 2>&1 | tail -8 | tee -a "$LOG"
   lock_touch
 fi
 folder_cap
