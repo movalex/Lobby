@@ -30,6 +30,15 @@ const WEB_OUT_DIR = `dist/${RUN_TAG}`
  */
 const XBROWSER_SMOKE = process.env.E2E_XBROWSER_ALL === '1' ? /.*\.spec\.ts$/ : /xbrowser-smoke\.spec\.ts$/
 
+/**
+ * E2E_DPR=1|2|3 (opt-in): every project's device pixel ratio. Desktop Safari is 2 and Desktop Chrome and Firefox are
+ * 1, so a WebKit-only failure can be a 2× screen's (an image upgraded to its display file, a screenshot read in CSS
+ * pixels): E2E_DPR tells the two apart. A spec's own test.use({ deviceScaleFactor }) still wins. Unset, each device's.
+ */
+const DPR = process.env.E2E_DPR ? Number(process.env.E2E_DPR) : null
+if (DPR !== null && ![1, 2, 3].includes(DPR)) throw new Error('E2E_DPR must be 1, 2 or 3')
+const dpr = DPR === null ? {} : { deviceScaleFactor: DPR }
+
 export default defineConfig<Record<never, never>, { engine: StackEngine }>({
   testDir: './excalidraw',
   testMatch: /.*\.spec\.ts$/,
@@ -54,9 +63,9 @@ export default defineConfig<Record<never, never>, { engine: StackEngine }>({
     engine: 'excalidraw',
   },
   projects: [
-    { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
-    { name: 'webkit', testMatch: XBROWSER_SMOKE, use: { ...devices['Desktop Safari'] } },
-    { name: 'firefox', testMatch: XBROWSER_SMOKE, use: { ...devices['Desktop Firefox'] } },
+    { name: 'chromium', use: { ...devices['Desktop Chrome'], ...dpr } },
+    { name: 'webkit', testMatch: XBROWSER_SMOKE, use: { ...devices['Desktop Safari'], ...dpr } },
+    { name: 'firefox', testMatch: XBROWSER_SMOKE, use: { ...devices['Desktop Firefox'], ...dpr } },
   ],
   // The api, sync server and preview worker are started (and killed) by the tests' own fixture
   // (tests/support/stack.ts); only the static web build is served here.

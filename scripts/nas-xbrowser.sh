@@ -9,12 +9,14 @@
 #   DRY_RUN=1 (the default): every SSH/Docker command is printed, nothing touches the NAS.
 #   DRY_RUN=0: under the standing NAS approval for throwaway draftroom-load-* names.
 # Usage: DRY_RUN=0 bash scripts/nas-xbrowser.sh <commit> [--browsers firefox,webkit] [--specs "a.spec.ts b.spec.ts"]
-#                                                [--grep <re>] [--repeat-each N] [--keep] [--reuse <run-id>]
+#                                                [--grep <re>] [--repeat-each N] [--dpr 1|2|3] [--keep]
+#                                                [--reuse <run-id>]
 #        DRY_RUN=0 bash scripts/nas-xbrowser.sh --remove <run-id>  (what a --keep run left: under the NAS lock, and
 #                                                                  never while that run is live)
 #   --specs  spec files under e2e/excalidraw (default: CORE_SPECS below, a normal user's path);
 #   --browsers  any of chromium, firefox, webkit (default firefox,webkit); E2E_XBROWSER_ALL=1 lets the webkit and
 #            firefox projects run any named spec (playwright.config.ts), not only the smoke;
+#   --dpr    every project's device pixel ratio (E2E_DPR, playwright.config.ts; Desktop Safari is 2, the others 1);
 #   --reuse  a run that --keep left: its folder (source, install, ffmpeg) is used again, no new archive or install;
 #            the commit must be the one that run archived.
 #
@@ -65,7 +67,7 @@ board-presence.spec.ts people-follow.spec.ts sharing-share-dialog.spec.ts guests
 present-export-present.spec.ts present-export-files.spec.ts w1-doc-cards.spec.ts v1-poll.spec.ts
 q3-elements-insert.spec.ts q3-elements-phone.spec.ts media-drops.spec.ts"
 
-usage='usage: nas-xbrowser.sh <commit> [--browsers b,..] [--specs "..."] [--grep re] [--repeat-each N] [--keep] [--reuse <run-id>] | --remove <run-id>'
+usage='usage: nas-xbrowser.sh <commit> [--browsers b,..] [--specs "..."] [--grep re] [--repeat-each N] [--dpr N] [--keep] [--reuse <run-id>] | --remove <run-id>'
 REMOVE=
 if [[ "${1:-}" == --remove ]]; then
   REMOVE="${2:?$usage}"
@@ -78,6 +80,7 @@ BROWSERS=firefox,webkit
 SPECS="$CORE_SPECS"
 GREP=
 REPEAT=1
+DPR=
 KEEP=0
 REUSE=
 if [[ -z "$REMOVE" ]]; then
@@ -87,6 +90,7 @@ if [[ -z "$REMOVE" ]]; then
       --specs) SPECS="$2"; shift ;;
       --grep) GREP="$2"; shift ;;
       --repeat-each) REPEAT="$2"; shift ;;
+      --dpr) DPR="$2"; shift ;;
       --keep) KEEP=1 ;;
       --reuse) REUSE="$2"; shift ;;
       *) log "unknown option $1"; exit 2 ;;
@@ -95,6 +99,7 @@ if [[ -z "$REMOVE" ]]; then
   done
 fi
 [[ "$REPEAT" =~ ^[0-9]{1,2}$ ]] && ((REPEAT >= 1)) || { log "--repeat-each takes 1-99"; exit 2; }
+[[ -z "$DPR" || "$DPR" =~ ^[123]$ ]] || { log "--dpr takes 1, 2 or 3"; exit 2; }
 [[ "$BROWSERS" =~ ^(chromium|firefox|webkit)(,(chromium|firefox|webkit))*$ ]] || { log "--browsers takes chromium,firefox,webkit"; exit 2; }
 SPECS="$(tr '\n' ' ' <<<"$SPECS")"
 for f in $SPECS; do
@@ -305,7 +310,7 @@ PW_ARGS+=("--repeat-each=$REPEAT" --reporter=list,json)
   echo 'set -euo pipefail'
   echo 'dpkg -i /app/.debs/*.deb >/tmp/dpkg.log 2>&1 || { tail -20 /tmp/dpkg.log; exit 1; }'
   echo 'ffprobe -version | head -1'
-  printf 'exec setpriv --reuid=%q --regid=%q --clear-groups env HOME=/app/.home PATH=/app/.tools/bin:$PATH E2E_XBROWSER_ALL=1 NODE_OPTIONS=--max-old-space-size=2560 bash /app/.xb-inner.sh\n' "${U%%:*}" "${U##*:}"
+  printf 'exec setpriv --reuid=%q --regid=%q --clear-groups env HOME=/app/.home PATH=/app/.tools/bin:$PATH E2E_XBROWSER_ALL=1 E2E_DPR=%s NODE_OPTIONS=--max-old-space-size=2560 bash /app/.xb-inner.sh\n' "${U%%:*}" "${U##*:}" "$DPR"
 } >"$EVIDENCE_DIR/xb-outer-$RUN.sh"
 {
   echo '#!/bin/bash'
