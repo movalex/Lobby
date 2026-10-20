@@ -287,7 +287,7 @@ else
       "set -euo pipefail; mkdir -p /app/.home /app/.tools; npm install -g --prefix /app/.tools --no-fund --no-audit pnpm@$PNPM_VERSION >/dev/null; /app/.tools/bin/pnpm install --frozen-lockfile --store-dir /app/.pnpm-store --reporter=append-only 2>&1 | tail -4"
   } >"$EVIDENCE_DIR/xb-install-$RUN.sh"
   nas_stdin "cat > $S/src/.xb-install.sh" <"$EVIDENCE_DIR/xb-install-$RUN.sh"
-  nas "docker run --rm --name $C_INSTALL --cpus=4 --memory=3g -e CI=true -e PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 -v $S/src:/app -w /app '$IMG' bash /app/.xb-install.sh" 2>&1 | tail -8 | tee -a "$LOG"
+  nas "docker run --rm --name $C_INSTALL --cpus=4 --memory=3g -e CI=true -e PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 -v $S/src:/app -w /app '$IMG' bash /app/.xb-install.sh" | tail -8 | tee -a "$LOG"
   lock_touch
 fi
 folder_cap
