@@ -553,3 +553,9 @@ on the sync disk (§6).
     - worker_ops retention is 30 days, keeping the backfill skips.
   - After: `/healthz/deep` 200; `/version.json` `84c50a102cc0`; drift 0; live smoke 41/0; `live` and `formats` all true.
 - **2026-10-19 21:44Z, theater Lobby:** the web was rebuilt from its own deployed sources with only `nginx.conf` changed (`a5c237e`). The access log now records the path without the query string, so the `/connect` ticket no longer reaches the logs. Recreating the container also cleared the old logs. Theater smoke passes. The theater's api, sync and worker are untouched, still at their build from 12 days earlier.
+- **2026-10-20 06:10-06:12Z, web at `fc9bf66`: the Firefox/WebKit fixes** (web `dep-dbbgbrjbc2fs73b42cag`; api, sync and worker unchanged). These are the first Firefox and WebKit runs (NAS, `scripts/nas-xbrowser.sh`). Firefox passed 133 of 147 and WebKit 131 of 147. Every failure left is a test that assumes Chromium, the environment, or a measurement artifact.
+  - Three real bugs fixed:
+    - remote viewers saw a dragged item lag one mouse step behind (in WebKit it didn't move until the drop);
+    - the SVG export dropped images shown at higher resolution;
+    - on a stale tab, Share, the palette and Miro import reloaded the page instead of showing their own notice.
+  - After: web vitest 6,189/0; `/version.json` `fc9bf664cf91`; live smoke 41/0.
