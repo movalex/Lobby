@@ -54,9 +54,12 @@ or off, and all of them default to off:
 - **api**: design previews (Photoshop, Illustrator, TIFF), live activities (polls, scales, word clouds), join codes,
   breakouts, doc cards, background removal, deck import, workspace admin.
 - **sync**: reactions and planning. These are fail-closed kill switches: anything but `on` refuses those writes.
-- **Off on purpose**: the AI features (`DRAFTROOM_AI_VISION`, `DRAFTROOM_FILE_SEARCH` and the rest of AI). They need
-  `OPENAI_API_KEY`, which costs money. Chat hooks work: the deploy adds `DRAFTROOM_WEBHOOK_SECRET` to `secrets/api.env`
-  once.
+- **AI** (owner, 2026-10-20) runs on theaitre-bot's OpenAI key, `OPENAI_API_KEY` in `secrets/api.env`. It was copied once from
+  theaitre-bot's `.env` and is never printed. To rotate it, replace that line and run `start` or deploy. Model
+  `gpt-5.4-mini`, AI vision and file search on. Lobby's token budgets cap the spend: 400k a workspace, 150k a
+  person, 2M in all, per UTC day. The capture limits are staging's. Board owners and workspace admins can turn AI
+  off per board or for the workspace.
+- **Chat hooks**: the deploy adds `DRAFTROOM_WEBHOOK_SECRET` to `secrets/api.env` once.
 
 When Lobby adds a switch, compare `render.yaml` with `docker-compose.yml` and mirror it.
 
@@ -88,7 +91,8 @@ All of them are created on the NAS by the first deploy, kept across deploys, mod
 
 - `secrets/shared.env`: ticket and internal secrets (api + sync).
 - `secrets/db.env`: the Postgres password.
-- `secrets/api.env`: `DATABASE_URL` (the same password), the worker token, and **`DRAFTROOM_PARTNER_TOKEN`**.
+- `secrets/api.env`: `DATABASE_URL` (the same password), the worker token, **`DRAFTROOM_PARTNER_TOKEN`**,
+  `DRAFTROOM_WEBHOOK_SECRET` and `OPENAI_API_KEY` (theaitre-bot's, added by hand).
 - `secrets/worker.env`: the worker token.
 - `secrets/tunnel.env`: yours, from `.env.tunnel`.
 

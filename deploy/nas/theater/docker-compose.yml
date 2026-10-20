@@ -68,8 +68,6 @@ services:
       # Uploads stay on the NAS (1.8 TB free): a roomier per-workspace quota than staging's 5 GB.
       DRAFTROOM_WORKSPACE_QUOTA_MB: "10240"
       # The feature switches staging turns on (render.yaml), each "on" or off. They all default to off.
-      # The AI features (DRAFTROOM_AI_VISION, DRAFTROOM_FILE_SEARCH) stay off: they need OPENAI_API_KEY,
-      # which costs money, and the theater has none.
       DRAFTROOM_DESIGN_PREVIEWS: "on" # Photoshop, Illustrator and TIFF previews
       DRAFTROOM_LIVE_ACTIVITIES: "on" # polls, scales, word clouds
       DRAFTROOM_JOIN_CODES: "on"
@@ -78,6 +76,17 @@ services:
       DRAFTROOM_REMOVE_BACKGROUND: "on" # needs the worker's model (models/u2netp.onnx)
       DRAFTROOM_DECK_IMPORT: "on" # PowerPoint decks, through the office sidecar
       DRAFTROOM_WORKSPACE_ADMIN: "on"
+      # AI (owner, 2026-10-20: use theaitre-bot's OpenAI key, OPENAI_API_KEY in secrets/api.env). The token
+      # budgets keep Lobby's defaults (400k a workspace, 150k a person, 2M in all, per UTC day); the capture
+      # limits are staging's. AI is on for every board unless a board owner or workspace admin turns it off.
+      OPENAI_MODEL: gpt-5.4-mini
+      DRAFTROOM_FILE_SEARCH: "on" # "Ask the workspace" reads file pages too
+      DRAFTROOM_AI_VISION: "on" # photos and board images to notes
+      DRAFTROOM_AI_VISION_USER_DAILY: "10"
+      DRAFTROOM_AI_VISION_GLOBAL_DAILY: "150"
+      DRAFTROOM_AI_VISION_TIMEOUT_MS: "60000"
+      DRAFTROOM_AI_TRANSCRIPT_MAX_CHARS: "60000"
+      DRAFTROOM_AI_TRANSCRIPT_USER_DAILY: "10"
     volumes:
       - files:/var/data
     depends_on:
