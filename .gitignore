@@ -31,3 +31,7 @@ Thumbs.db
 
 # tour video renders (e2e/video on branch video/tour)
 .video-out/
+
+# per-app local development settings: dev.env is created from dev.env.example by `pnpm dev`
+*.env
+!*.env.example

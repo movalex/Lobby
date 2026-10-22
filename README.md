@@ -26,7 +26,7 @@ pnpm fixtures
 pnpm dev
 ```
 
-Open http://127.0.0.1:5173. Local development uses explicit **dev identities** (no passwords) that exist only behind the `DRAFTROOM_DEV_AUTH=1` guard in `dev.env` files — never in a deployment. Manual walkthrough: [`docs/DEMO.md`](docs/DEMO.md).
+Open http://127.0.0.1:5173. Local development uses explicit **dev identities** (no passwords) that exist only behind the `DRAFTROOM_DEV_AUTH=1` guard in `dev.env` files — never in a deployment. `pnpm dev` creates each app's `dev.env` from its `dev.env.example` on first run; `dev.env` is ignored by git. Manual walkthrough: [`docs/DEMO.md`](docs/DEMO.md).
 
 ## Checks
 

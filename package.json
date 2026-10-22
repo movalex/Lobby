@@ -7,7 +7,7 @@
     "node": ">=24.15.0 <25"
   },
   "scripts": {
-    "dev": "pnpm -r --parallel --filter \"./apps/*\" dev",
+    "dev": "node scripts/dev-env.mjs && pnpm -r --parallel --filter \"./apps/*\" dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run",
