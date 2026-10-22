@@ -230,7 +230,8 @@ describe('Miro import', () => {
   })
 })
 
-const SLACK = 'https://hooks.slack.com/services/T0001ABCD/B0002EFGH/abcdefGHIJKL1234mnopWXYZ'
+// Deliberately unlike a real webhook (short ids, short token) so secret scanning does not flag the literal.
+const SLACK = 'https://hooks.slack.com/services/T0/B0/fakeTOKENfakeWXYZ'
 const TEAMS =
   'https://default1234abcd.ab.environment.api.powerplatform.com/powerautomate/automations/direct/workflows/0123456789abcdef0123456789abcdef/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=SIGabcdefghijklmnopqrstuvwxyz9876'
 

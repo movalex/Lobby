@@ -9,7 +9,8 @@ import { testEnv } from '../helpers.ts'
 
 const A = 'webhook-secret-A-0123456789abcdefghijklmnop'
 const B = 'webhook-secret-B-0123456789abcdefghijklmnop'
-const URL_ = 'https://hooks.slack.com/services/T0001ABCD/B0002EFGH/abcdefGHIJKL1234mnopWXYZ'
+// Deliberately unlike a real webhook (short ids, short token) so secret scanning does not flag the literal.
+const URL_ = 'https://hooks.slack.com/services/T0/B0/fakeTOKENfakeWXYZ'
 const AAD = chatHookAad('wsp_0123456789abcdefghij', 'chk_0123456789abcdefghij')
 
 describe('the secret box', () => {
