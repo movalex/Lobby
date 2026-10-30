@@ -23,6 +23,9 @@ Okta and DNS. New to the codebase? Read [`docs/DEVELOPER-HANDOFF.md`](DEVELOPER-
 - `docs/EXCALIDRAW-CUTOVER.md`: the runbook pattern this plan reuses.
 - `docs/DOMAIN-ACCESS-CONTRACTS.md`: who may create boards.
 - `deploy/nas/README.md`: today's preview worker and Office sidecar.
+- `docs/AZURE-INSTALL-AGENT.md`: the step-by-step install of a rehearsal on two VMs and DBC's existing Flexible Server
+  `dbcpsql` (PostgreSQL 16), written for a local Claude Code session with the Azure CLI, with a gate before every step
+  that creates or costs something (2026-10-30).
 
 **The owner's decision (2026-10-05):**
 
