@@ -120,7 +120,9 @@ is how Azure works):
 
 - All 39 migrations apply, in about 0.6 s.
 - `deploy/azure/sql/create-lobby-db.sql` works when run by a non-superuser admin that has CREATEDB and CREATEROLE.
-- The whole api test suite against PostgreSQL 16: see [`docs/PROGRESS.md`](PROGRESS.md), entry 2026-10-30.
+- The whole api test suite passed against PostgreSQL 16: 2,703 tests, with 1 file skipped (live R2). It ran with
+  collation `C.UTF-8` and Node 22, not dbcpsql's `en_US.utf8` and the pinned Node 24; details in
+  [`docs/PROGRESS.md`](PROGRESS.md), entry 2026-10-30.
 - Not tested: restoring a PostgreSQL **18** dump (Render's) into 16. That only matters for the later data move;
   `docs/GO-LIVE-AZURE.md` §6 has the fallback.
 
